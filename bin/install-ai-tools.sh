@@ -67,6 +67,13 @@ install_opencode() {
   fi
 
   opencode_bin="$(command -v opencode || true)"
+  if [[ "${opencode_bin}" == "/usr/local/bin/opencode" ]]; then
+    # On a re-provision the symlink we manage is already on PATH, so command -v
+    # reports it back to us. Ignore it here and resolve the real install
+    # location below; otherwise we would symlink /usr/local/bin/opencode to
+    # itself (a circular symlink) and opencode-serve fails with 203/EXEC.
+    opencode_bin=""
+  fi
   if [[ -z "${opencode_bin}" ]]; then
     # The installer drops the binary under $HOME (root when run via sudo).
     for candidate in \
@@ -89,6 +96,13 @@ install_opencode() {
     exit 1
   fi
 
+  # Resolve through any intermediate symlinks so the link target is the real
+  # binary, and never point the symlink at itself.
+  opencode_bin="$(readlink -f "${opencode_bin}" 2>/dev/null || echo "${opencode_bin}")"
+  if [[ "${opencode_bin}" == "/usr/local/bin/opencode" || ! -x "${opencode_bin}" ]]; then
+    warn "refusing to create opencode symlink: resolved path is invalid (${opencode_bin})"
+    exit 1
+  fi
   ln -sf "${opencode_bin}" /usr/local/bin/opencode
 
   # Seed the global opencode config (permission=allow) BEFORE starting the
