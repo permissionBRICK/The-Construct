@@ -12,7 +12,7 @@
         disk after a confirmation, then create fresh), or quit.
     3. Creates a Gen-2 VM with the same processor count and settings as the
        existing agent-vm.
-    4. Prompts for VM RAM (default: half host RAM, capped at 24 GB) and virtual
+    4. Prompts for VM RAM (default: a third of host RAM, capped at 24 GB) and virtual
        disk size (default 50 GB), and for an Ubuntu Server ISO. The RAM and disk
        prompts are skipped when -MemoryGB / -DiskSizeGB are supplied.
     5. Boots the VM from the ISO so the user can install the OS.
@@ -20,7 +20,7 @@
        and removes the DVD drive.
 
 .PARAMETER MemoryGB
-    VM RAM in GB. If omitted (0), a recommendation (half the host RAM, capped at
+    VM RAM in GB. If omitted (0), a recommendation (a third of the host RAM, capped at
     24 GB) is calculated and the user is prompted.
 
 .PARAMETER DiskSizeGB
@@ -167,14 +167,14 @@ if (Get-VM -Name $VmName -ErrorAction SilentlyContinue) {
     }
 }
 
-# ── 3. VM RAM (recommend half of host, max 24 GB; prompt unless passed in) ────
+# ── 3. VM RAM (recommend a third of host, max 24 GB; prompt unless passed in) ─
 Write-Step "Memory allocation"
 
 $totalBytes     = (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory
-$halfBytes      = [math]::Floor($totalBytes / 2)
+$thirdBytes     = [math]::Floor($totalBytes / 3)
 $maxBytes       = 24GB
-# Recommend half the host RAM, capped at 24 GB but never below 4 GB.
-$recommendBytes = [math]::Max([math]::Min($halfBytes, $maxBytes), 4GB)
+# Recommend a third of the host RAM, capped at 24 GB but never below 4 GB.
+$recommendBytes = [math]::Max([math]::Min($thirdBytes, $maxBytes), 4GB)
 # Round down to nearest 2 MB boundary (Hyper-V requirement)
 $recommendBytes = $recommendBytes - ($recommendBytes % 2MB)
 $recommendGB    = [math]::Round($recommendBytes / 1GB, 1)
