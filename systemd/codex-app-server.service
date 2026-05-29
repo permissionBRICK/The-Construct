@@ -1,0 +1,16 @@
+[Unit]
+Description=Codex Experimental App Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/construct/config.env
+WorkingDirectory=/root/repos
+ExecStart=/usr/local/bin/codex app-server --listen ws://${CODEX_HOST}:${CODEX_PORT} --ws-auth capability-token --ws-token-file ${CODEX_TOKEN_FILE}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

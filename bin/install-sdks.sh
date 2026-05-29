@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+#
+# Install the language runtimes/SDKs that the selected project profiles declare,
+# directly on the VM host (so claude/codex can build & test in the SSH session).
+#
+# Reads the merged `.sdks` object from runtime/generated.json (produced by
+# generate-runtime-config.sh) and installs the runtimes it recognizes:
+#   - node    -> NodeSource apt repo for the requested major version
+#   - python  -> python3 + venv + pip (version is best-effort)
+#   - dotnet  -> .NET SDK via Microsoft's dotnet-install.sh (channel = version)
+#
+# Idempotent; safe to re-run. Run as root.
+#
+set -euo pipefail
+
+# Colourised logging helpers. Emit ANSI colour when either stream is a terminal
+# or the caller forces it (the SSH provisioning stream sets FORCE_COLOR/
+# CLICOLOR_FORCE, which child processes inherit); otherwise stay plain so
+# redirected/piped logs aren't littered with escape codes.
+if [[ -t 1 || -t 2 || -n "${FORCE_COLOR:-}" || -n "${CLICOLOR_FORCE:-}" ]]; then
+  _C_STEP=$'\033[1;36m'   # bold cyan - step headers
+  _C_OK=$'\033[32m'       # green     - completion / success
+  _C_WARN=$'\033[33m'     # yellow    - warnings (run continues)
+  _C_ERR=$'\033[31m'      # red       - fatal errors (before exit)
+  _C_DIM=$'\033[2m'       # dim       - idempotent "nothing to do" / detail
+  _C_RESET=$'\033[0m'
+else
+  _C_STEP=''; _C_OK=''; _C_WARN=''; _C_ERR=''; _C_DIM=''; _C_RESET=''
+fi
+step() { printf '%s==> %s%s\n' "${_C_STEP}" "$*" "${_C_RESET}"; }
+ok()   { printf '%s%s%s\n'     "${_C_OK}"   "$*" "${_C_RESET}"; }
+warn() { printf '%s%s%s\n'     "${_C_WARN}" "$*" "${_C_RESET}" >&2; }
+err()  { printf '%s%s%s\n'     "${_C_ERR}"  "$*" "${_C_RESET}" >&2; }
+note() { printf '%s%s%s\n'     "${_C_DIM}"  "$*" "${_C_RESET}"; }
+
+AGENT_HOME="${AGENT_HOME:-/opt/construct}"
+GENERATED_JSON="${GENERATED_JSON:-${AGENT_HOME}/runtime/generated.json}"
+
+if [[ "${EUID}" -ne 0 ]]; then
+  err "Run with sudo: sudo bash ${AGENT_HOME}/repo/bin/install-sdks.sh"
+  exit 1
+fi
+
+if ! command -v jq >/dev/null 2>&1; then
+  err "jq is required (installed by bootstrap.sh)."
+  exit 1
+fi
+
+if [[ ! -f "${GENERATED_JSON}" ]]; then
+  note "No ${GENERATED_JSON}; run generate-runtime-config.sh first. Nothing to install."
+  exit 0
+fi
+
+# Does the merged config request runtime <key>?
+want() { jq -e --arg k "$1" '(.sdks // {}) | has($k)' "${GENERATED_JSON}" >/dev/null 2>&1; }
+
+# First requested version for <key> (handles string or array), else empty.
+first_ver() {
+  jq -r --arg k "$1" '
+    (.sdks // {})[$k] // empty
+    | if type == "array" then (.[0] // "") else tostring end
+  ' "${GENERATED_JSON}"
+}
+
+install_node() {
+  local ver="$1" major
+  major="${ver%%.*}"; major="${major:-22}"
+  if command -v node >/dev/null 2>&1 \
+     && [[ "$(node -v 2>/dev/null | sed 's/^v\([0-9]*\).*/\1/')" == "${major}" ]]; then
+    note "Node.js ${major}.x already installed"
+    return
+  fi
+  step "Installing Node.js ${major}.x (NodeSource)"
+  curl -fsSL "https://deb.nodesource.com/setup_${major}.x" | bash -
+  apt-get install -y nodejs
+}
+
+install_python() {
+  local ver="${1:-3}"
+  step "Installing Python 3 toolchain (requested: ${ver})"
+  apt-get update
+  apt-get install -y python3 python3-venv python3-pip
+}
+
+install_dotnet() {
+  local ver="${1:-10.0}" channel
+  # Normalize a bare major ("10") to a channel ("10.0").
+  case "${ver}" in
+    *.*) channel="${ver}" ;;
+    *)   channel="${ver}.0" ;;
+  esac
+  local major="${channel%%.*}"
+  if command -v dotnet >/dev/null 2>&1 \
+     && dotnet --list-sdks 2>/dev/null | grep -q "^${major}\."; then
+    note ".NET SDK ${major}.x already installed"
+    return
+  fi
+  step "Installing .NET SDK channel ${channel}"
+  local script=/tmp/dotnet-install.sh
+  curl -fsSL https://dot.net/v1/dotnet-install.sh -o "${script}"
+  bash "${script}" --channel "${channel}" --install-dir /usr/lib/dotnet
+  rm -f "${script}"
+  ln -sf /usr/lib/dotnet/dotnet /usr/local/bin/dotnet
+  cat >/etc/profile.d/dotnet.sh <<'EOF'
+export DOTNET_ROOT=/usr/lib/dotnet
+case ":$PATH:" in *":/usr/lib/dotnet:"*) ;; *) export PATH="$PATH:/usr/lib/dotnet" ;; esac
+EOF
+  chmod 0644 /etc/profile.d/dotnet.sh
+}
+
+installed_any=false
+if want node;   then install_node   "$(first_ver node)";   installed_any=true; fi
+if want python; then install_python "$(first_ver python)"; installed_any=true; fi
+if want dotnet; then install_dotnet "$(first_ver dotnet)"; installed_any=true; fi
+
+if [[ "${installed_any}" != "true" ]]; then
+  note "No node/python/dotnet runtimes requested by the selected projects."
+fi

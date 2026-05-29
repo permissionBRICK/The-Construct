@@ -1,0 +1,13 @@
+[Unit]
+Description=Update The Construct Login Banner
+DefaultDependencies=no
+After=network-online.target
+Before=getty.target getty@tty1.service serial-getty@ttyS0.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/construct/repo/bin/update-login-banner.sh
+
+[Install]
+WantedBy=getty.target

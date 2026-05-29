@@ -1,0 +1,25 @@
+{
+  "name": "customer-portal",
+  "repos": [
+    {
+      "url": "git@github.com:YOUR_ORG/customer-portal.git",
+      "directory": "customer-portal"
+    },
+    {
+      "url": "git@github.com:YOUR_ORG/customer-portal-api.git",
+      "directory": "customer-portal-api"
+    }
+  ],
+  "sdks": {
+    "node": ["22"],
+    "python": ["3.12"]
+  },
+  "mcp": ["filesystem", "browser", "github"],
+  "hostPackages": [],
+  "tests": {
+    "web": {
+      "runner": "playwright",
+      "command": "npm test"
+    }
+  }
+}
