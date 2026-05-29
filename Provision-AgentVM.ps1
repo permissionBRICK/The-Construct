@@ -272,6 +272,47 @@ function Test-KeyAuth {
     return $ok
 }
 
+function Test-Sudo {
+    # True if $SeedPassword (or NOPASSWD) currently lets us run sudo as $SeedUser.
+    # `-k` first clears any cached sudo timestamp so this reflects the password,
+    # not a prior successful sudo; NOPASSWD VMs still pass regardless of password.
+    param([Parameter(Mandatory)][string]$Password)
+    $escPw = $Password.Replace("'", "'\''")
+    $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+    & ssh.exe @script:SshOpts "$SeedUser@$VmHost" "printf '%s\n' '$escPw' | sudo -k -S -p '' true" 2>$null | Out-Null
+    $ok = ($LASTEXITCODE -eq 0)
+    $ErrorActionPreference = $prevEAP
+    return $ok
+}
+
+function Ensure-Sudo {
+    # Make sure sudo works before any privileged step runs. The seed password may
+    # no longer be the agent user's password -- the optional custom password set
+    # at the end of a previous provision changes it -- which makes every later
+    # `sudo -S` fail (exit 1) on the very first command. If the seed password is
+    # rejected, prompt for the current one and retry, updating $script:SeedPassword
+    # so the rest of the run uses it. VMs provisioned with passwordless sudo never
+    # reach the prompt. (Going forward this is rarely hit: provision.sh now grants
+    # the seed user NOPASSWD sudo.)
+    if (Test-Sudo $SeedPassword) { Write-Ok "sudo access confirmed"; return }
+
+    Write-Warning "Could not use sudo as '$SeedUser' with the default password."
+    Write-Host "    The agent login password may have been changed on a previous install." -ForegroundColor Yellow
+    for ($i = 1; $i -le 3; $i++) {
+        $sec = Read-Host "    Current login password for '$SeedUser' (attempt $i/3)" -AsSecureString
+        $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
+        try   { $pw = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
+        finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+        if (Test-Sudo $pw) {
+            $script:SeedPassword = $pw
+            Write-Ok "sudo access confirmed"
+            return
+        }
+        Write-Warning "That password was not accepted for sudo."
+    }
+    throw "Cannot obtain sudo on the VM as '$SeedUser'. Verify the agent login password, then re-run."
+}
+
 function Throw-BootstrapKeyHelp {
     # Last-resort fallback: the password attempt didn't authenticate either (e.g.
     # the VM disallows password login, or the password isn't the default). Tell
@@ -548,6 +589,12 @@ if (Test-KeyAuth) {
     if (-not (Test-KeyAuth)) { Throw-BootstrapKeyHelp }
     Write-Ok "Key authentication working"
 }
+
+# Confirm we can sudo before any privileged step. On a re-provision the agent
+# login password may differ from the seed default (a custom password set on a
+# previous run), which would otherwise make the first sudo command below fail.
+Write-Step "Checking sudo access"
+Ensure-Sudo
 
 # Upload the archive via SCP (remove any stale copy owned by root from a previous run).
 Write-Step "Uploading repo archive to $RemoteArchive"
