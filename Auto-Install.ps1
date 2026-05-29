@@ -54,7 +54,7 @@
 
 .PARAMETER VmMemoryGB
     VM RAM in GB to pass to Create-AgentVM.ps1. If omitted, you are prompted up
-    front (recommendation: half the host RAM, capped at 24 GB).
+    front (recommendation: a third of the host RAM, capped at 24 GB).
 
 .PARAMETER VmDiskGB
     Virtual disk size in GB to pass to Create-AgentVM.ps1. If omitted, you are
@@ -88,6 +88,11 @@
     Rebuild the autoinstall ISO even if it already exists. By default, if the
     target autoinstall ISO is already in the folder, both the Ubuntu download
     and the WSL build are skipped and the script goes straight to creating the VM.
+
+.PARAMETER Redownload
+    Force a fresh download of the latest Ubuntu Server ISO (overwriting any local
+    copy) and a rebuild of the autoinstall ISO, instead of reusing what's already
+    on disk. Implies -Force. Also offered as a menu choice when the VM exists.
 #>
 [CmdletBinding()]
 param(
@@ -109,7 +114,8 @@ param(
     [string]$GitEmail,
     [switch]$SkipChecksum,
     [switch]$SkipCreateVm,
-    [switch]$Force
+    [switch]$Force,
+    [switch]$Redownload
 )
 
 $ErrorActionPreference = "Stop"
@@ -342,6 +348,11 @@ function Select-Projects {
 # (-SkipCreateVm) and when Hyper-V isn't present yet (no VM can exist, and
 # Create-AgentVM.ps1 installs Hyper-V on the fresh path). $HyperVmName must match
 # $VmName in Create-AgentVM.ps1.
+# Force a fresh Ubuntu download + autoinstall rebuild (overwriting local ISOs)
+# rather than reusing what's on disk. Set by -Redownload or the matching menu
+# choice; folded into $needBuild below.
+$forceDownload = [bool]$Redownload
+
 $HyperVmName = "Agent-VM"
 if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -and
     (Get-VM -Name $HyperVmName -ErrorAction SilentlyContinue)) {
@@ -351,7 +362,8 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
 
     $choice = Show-Menu -Title "What would you like to do?" -Options @(
         "Reprovision    re-run provisioning on the existing VM (keeps all data)",
-        "Reinstall      DELETE the VM and its disk, then build + install fresh",
+        "Reinstall      DELETE the VM and its disk, then build + install fresh (reuse downloaded ISOs)",
+        "Redownload     DELETE the VM, re-download the latest Ubuntu ISO, rebuild + install fresh",
         "Quit           make no changes and exit"
     ) -Default 0
 
@@ -399,16 +411,23 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         }
         return
     }
-    elseif ($choice -eq 1) {
+    elseif ($choice -eq 1 -or $choice -eq 2) {
         # Complete reinstall: confirm the irreversible delete (defaults to NO),
         # tear the VM down, then fall through to the normal fresh-install flow.
+        # Choice 2 additionally forces a fresh Ubuntu download + autoinstall
+        # rebuild (overwriting the local ISOs) instead of reusing what's on disk.
+        if ($choice -eq 2) { $forceDownload = $true }
         if (-not (Confirm-Reinstall -VmName $HyperVmName)) {
             Write-Note "Reinstall cancelled. No changes made."
             Write-Host ""; Read-Host "Press Enter to exit"
             return
         }
         Remove-AgentVm -VmName $HyperVmName
-        Write-Note "Existing VM removed; continuing with a fresh install."
+        if ($forceDownload) {
+            Write-Note "Existing VM removed; will re-download the latest Ubuntu ISO and rebuild."
+        } else {
+            Write-Note "Existing VM removed; continuing with a fresh install."
+        }
     }
     else {
         Write-Note "No changes made."
@@ -433,14 +452,14 @@ if (-not $SkipCreateVm) {
     Write-Step "Setup choices"
     Write-Note "Answered now so the rest of the install can run unattended."
 
-    # VM RAM -- recommend half the host RAM (capped at 24 GB), but let the user
+    # VM RAM -- recommend a third of the host RAM (capped at 24 GB), but let the user
     # choose (mirrors the disk-size prompt).
     if (-not $PSBoundParameters.ContainsKey('VmMemoryGB')) {
         $totalBytes = (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory
-        $halfBytes  = [math]::Floor($totalBytes / 2)
+        $thirdBytes = [math]::Floor($totalBytes / 3)
         $maxBytes   = 24GB
-        # Recommend half the host RAM, capped at 24 GB but never below 4 GB.
-        $recBytes   = [math]::Max([math]::Min($halfBytes, $maxBytes), 4GB)
+        # Recommend a third of the host RAM, capped at 24 GB but never below 4 GB.
+        $recBytes   = [math]::Max([math]::Min($thirdBytes, $maxBytes), 4GB)
         $recBytes   = $recBytes - ($recBytes % 2MB)
         $recGB      = [math]::Round($recBytes / 1GB, 1)
         Write-Host ("    System RAM: {0:N1} GB    Recommended VM RAM: {1} GB" -f ($totalBytes / 1GB), $recGB) -ForegroundColor White
@@ -499,8 +518,9 @@ if (-not $SkipCreateVm) {
 }
 
 # If the target autoinstall ISO is already here, skip both the Ubuntu download
-# and the WSL build entirely and go straight to creating the VM (-Force rebuilds).
-$needBuild = $Force -or -not (Test-Path -LiteralPath $OutputIso)
+# and the WSL build entirely and go straight to creating the VM (-Force / the
+# Redownload choice rebuild instead).
+$needBuild = $Force -or $forceDownload -or -not (Test-Path -LiteralPath $OutputIso)
 if (-not $needBuild) {
     Write-Step "Autoinstall ISO already present"
     Write-Ok "Found $OutputIso"
@@ -611,6 +631,12 @@ if ($IsoPath) {
     }
 
     $srcIso = Join-Path $PSScriptRoot $isoName
+    # The Redownload choice (or -Redownload) forces a fresh fetch: drop any local
+    # copy so the reuse branch below doesn't short-circuit it.
+    if ($forceDownload -and (Test-Path -LiteralPath $srcIso)) {
+        Write-Note "Re-downloading the source ISO (overwriting the local copy): $srcIso"
+        Remove-Item -LiteralPath $srcIso -Force -ErrorAction SilentlyContinue
+    }
     if (Test-Path -LiteralPath $srcIso) {
         Write-Ok "ISO already downloaded: $srcIso"
     } else {
