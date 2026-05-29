@@ -58,6 +58,35 @@ has_tool() {
   esac
 }
 
+# Path to the system prompt shipped in the repo, plus the DNS name this VM is
+# reachable under from the user's machine. The DNS is derived from the live
+# hostname (Hyper-V publishes "<hostname>.mshome.net"), matching what
+# print-connection-info.sh advertises.
+AGENT_SYSTEM_PROMPT_SRC="${REPO_DIR}/config/systemprompt.md"
+AGENT_DNS="$(hostname).mshome.net"
+
+# Render the shipped system prompt (substituting the live DNS name) into a tool's
+# GLOBAL agent-instructions file so it applies to every repo the agent touches
+# under that user. We overwrite the destination: it is a managed file owned by
+# the provisioning flow, regenerated on every (re-)provision so the hostname and
+# wording stay current. Relies on AGENT_SYSTEM_PROMPT_SRC existing.
+install_agent_system_prompt() {
+  local dest_file="$1"
+  local owner="$2"
+  local dest_dir
+  dest_dir="$(dirname "${dest_file}")"
+
+  if [[ ! -f "${AGENT_SYSTEM_PROMPT_SRC}" ]]; then
+    warn "WARNING: system prompt not found at ${AGENT_SYSTEM_PROMPT_SRC}; skipping ${dest_file}"
+    return 0
+  fi
+
+  step "Installing global agent system prompt to ${dest_file}"
+  install -d -m 0755 "${dest_dir}"
+  sed "s|__AGENT_DNS__|${AGENT_DNS}|g" "${AGENT_SYSTEM_PROMPT_SRC}" >"${dest_file}"
+  chown "${owner}:${owner}" "${dest_file}" 2>/dev/null || true
+}
+
 install_opencode() {
   step "Installing opencode CLI"
   # Always run the official installer: on a fresh VM it installs opencode, and on
@@ -118,8 +147,10 @@ install_opencode() {
   # root, so root's config is what the service reads; also seed the TARGET_USER's
   # config (if different) for interactive SSH use.
   configure_opencode_settings "/root" "root"
+  install_agent_system_prompt "/root/.config/opencode/AGENTS.md" "root"
   if [[ "${TARGET_USER}" != "root" ]] && id "${TARGET_USER}" >/dev/null 2>&1; then
     configure_opencode_settings "/home/${TARGET_USER}" "${TARGET_USER}"
+    install_agent_system_prompt "/home/${TARGET_USER}/.config/opencode/AGENTS.md" "${TARGET_USER}"
   fi
 
   # The service's WorkingDirectory must exist or systemd fails to start it
@@ -263,6 +294,7 @@ install_claude_code() {
   fi
   configure_claude_sandbox_setting "${claude_home}" "${claude_owner}"
   configure_claude_vscode_setting "${claude_home}" "${claude_owner}"
+  install_agent_system_prompt "${claude_home}/.claude/CLAUDE.md" "${claude_owner}"
 }
 
 # Set a top-level TOML key idempotently: replace the existing assignment if the
@@ -368,6 +400,7 @@ install_codex() {
     codex_owner="root"
   fi
   configure_codex_settings "${codex_home}" "${codex_owner}"
+  install_agent_system_prompt "${codex_home}/.codex/AGENTS.md" "${codex_owner}"
 }
 
 if has_tool opencode; then
