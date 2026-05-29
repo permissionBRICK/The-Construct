@@ -1,0 +1,41 @@
+services:
+  agent:
+    build:
+      context: ./agent-runtime
+    image: ${AGENT_IMAGE:-construct-local:latest}
+    container_name: construct
+    restart: unless-stopped
+    env_file:
+      - /etc/construct/config.env
+      - /opt/construct/runtime/generated.env
+    volumes:
+      - ${WORKSPACE_ROOT:-/root/repos}:/workspaces
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./projects:/opt/construct/projects:ro
+      - /opt/construct/runtime:/opt/construct/runtime:ro
+    working_dir: /workspaces
+
+  mcp-filesystem:
+    image: ${MCP_FILESYSTEM_IMAGE:-ghcr.io/YOUR_ORG/mcp-filesystem:latest}
+    container_name: mcp-filesystem
+    restart: unless-stopped
+    profiles: ["filesystem"]
+    volumes:
+      - ${WORKSPACE_ROOT:-/root/repos}:/workspaces
+
+  mcp-github:
+    image: ${MCP_GITHUB_IMAGE:-ghcr.io/YOUR_ORG/mcp-github:latest}
+    container_name: mcp-github
+    restart: unless-stopped
+    profiles: ["github"]
+    env_file:
+      - /etc/construct/config.env
+
+  playwright:
+    image: mcr.microsoft.com/playwright:v1.52.0-noble
+    container_name: playwright-runner
+    restart: unless-stopped
+    profiles: ["browser"]
+    volumes:
+      - ${WORKSPACE_ROOT:-/root/repos}:/workspaces
+    working_dir: /workspaces

@@ -1,0 +1,16 @@
+[Unit]
+Description=OpenCode HTTP Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/construct/config.env
+WorkingDirectory=/root/repos
+ExecStart=/usr/local/bin/opencode serve --hostname ${OPENCODE_HOST} --port ${OPENCODE_PORT}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
