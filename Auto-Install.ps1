@@ -369,7 +369,8 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         Write-Step "Reprovisioning the existing VM"
         # Reprovision keeps the existing password; only honour an explicit
         # -AgentPassword passed on the command line (this path has no prompt).
-        $reprovArgs = @{ VmHost = $VmHostname; HostAlias = $HyperVmName.ToLower(); Projects = $reprovProjects }
+        # -Auto: the finally below owns the pause, so the provisioner stays quiet.
+        $reprovArgs = @{ VmHost = $VmHostname; HostAlias = $HyperVmName.ToLower(); Projects = $reprovProjects; Auto = $true }
         if ($PSBoundParameters.ContainsKey('AgentPassword')) { $reprovArgs['AgentPassword'] = $AgentPassword }
         try {
             & $provisionScript @reprovArgs
@@ -698,6 +699,9 @@ $createArgs = @{
     DiskSizeGB    = $chosenDiskGB
     Projects      = $chosenProjects
     AgentPassword = $chosenAgentPassword
+    # -Auto: the try/finally below owns the final pause, so neither
+    # Create-AgentVM.ps1 nor the Provision-AgentVM.ps1 it chains into pauses too.
+    Auto          = $true
 }
 try {
     & $createScript @createArgs
