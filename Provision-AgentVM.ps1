@@ -45,7 +45,12 @@ param(
     [string]$AgentName    = "",
     [string]$LocalKeyName = "agent_vm_ed25519",
     [int]$OpencodePort    = 4096,
-    [switch]$IncludeGit
+    [switch]$IncludeGit,
+    # Set when this script is launched by an upper script (Auto-Install.ps1 /
+    # Create-AgentVM.ps1), which owns the final "Press Enter" pause. When run on
+    # its own this stays off and the script pauses at the end so a self-launched
+    # window doesn't vanish before the output can be read.
+    [switch]$Auto
 )
 
 $ErrorActionPreference = "Stop"
@@ -553,6 +558,12 @@ function Select-Projects {
 # Main
 # ============================================================================
 
+# Run the whole flow inside try/finally so that, when launched on its own (not
+# -Auto), the window pauses at the end -- on success OR error -- instead of
+# closing before the output can be read. In -Auto mode the calling script owns
+# the pause, so we stay silent here.
+try {
+
 Write-Host ""
 Write-Host "The Construct VM provisioner" -ForegroundColor White
 Write-Host "Target: $VmHost  |  seed user: $SeedUser  |  final user: $RemoteUser" -ForegroundColor DarkGray
@@ -688,3 +699,12 @@ if (",$AiTools," -like "*,codex,*") {
     Write-Host "    3. Log into your Codex account again on the remote" -ForegroundColor DarkGray
 }
 Write-Host ""
+
+}
+finally {
+    # Only pause when run standalone; an upper script (-Auto) does its own pause.
+    if (-not $Auto) {
+        Write-Host ""
+        Read-Host "Press Enter to exit"
+    }
+}

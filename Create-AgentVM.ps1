@@ -40,7 +40,12 @@ param(
     [double]$MemoryGB  = 0,
     [int]$DiskSizeGB   = 0,
     [string]$Projects,
-    [string]$AgentPassword
+    [string]$AgentPassword,
+    # Set when launched by an upper script (Auto-Install.ps1), which owns the
+    # final "Press Enter" pause. When run on its own this stays off and the
+    # script pauses at the end -- important because a direct run self-elevates
+    # into a fresh window that would otherwise vanish before it can be read.
+    [switch]$Auto
 )
 
 # ── Self-elevate to Administrator ────────────────────────────────────────────
@@ -83,6 +88,13 @@ $CheckpointType    = "Standard"
 $AutoStart         = "StartIfRunning"
 $AutoStop          = "Save"
 
+# Run the whole create/provision flow inside try/finally so that, when this
+# script is run on its own (not -Auto from Auto-Install.ps1), the window pauses
+# at the very end -- on success, an early return (reprovision/quit), or an error
+# -- instead of vanishing. A direct run self-elevates into a fresh window, so
+# without this the output would disappear the instant the work finishes.
+try {
+
 # ── 0. Ensure OpenSSH client ─────────────────────────────────────────────────
 Write-Step "Checking OpenSSH client"
 
@@ -124,7 +136,9 @@ if (Get-VM -Name $VmName -ErrorAction SilentlyContinue) {
         $provisionScript = Join-Path $PSScriptRoot "Provision-AgentVM.ps1"
         if (-not (Test-Path -LiteralPath $provisionScript)) { throw "Provision-AgentVM.ps1 not found in $PSScriptRoot." }
         $VmHostname = "$($VmName.ToLower()).mshome.net"
-        $provArgs = @{ VmHost = $VmHostname; HostAlias = $VmName.ToLower() }
+        # Always -Auto: this script (or its caller) owns the final pause, so the
+        # provisioner shouldn't add its own.
+        $provArgs = @{ VmHost = $VmHostname; HostAlias = $VmName.ToLower(); Auto = $true }
         if ($PSBoundParameters.ContainsKey('Projects'))      { $provArgs['Projects']      = $Projects }
         if ($PSBoundParameters.ContainsKey('AgentPassword')) { $provArgs['AgentPassword'] = $AgentPassword }
         & $provisionScript @provArgs
@@ -390,7 +404,9 @@ if ($isAutoinstall) {
     if (-not (Test-Path $provisionScript)) {
         Write-Warning "Provision-AgentVM.ps1 not found in $PSScriptRoot. Skipping provisioning."
     } else {
-        $provArgs = @{ VmHost = $VmHostname; HostAlias = $VmName.ToLower() }
+        # Always -Auto: this script (or its caller) owns the final pause, so the
+        # provisioner shouldn't add its own.
+        $provArgs = @{ VmHost = $VmHostname; HostAlias = $VmName.ToLower(); Auto = $true }
         # Forward the project selection if we were given one (from Auto-Install.ps1
         # or the caller) so Provision-AgentVM.ps1 skips its own project prompt.
         if ($PSBoundParameters.ContainsKey('Projects'))      { $provArgs['Projects']      = $Projects }
@@ -403,4 +419,13 @@ if ($isAutoinstall) {
     Write-Host "    Hostname for SSH: $VmHostname" -ForegroundColor White
     Write-Host "    You can now run Provision-AgentVM.ps1 to provision the agent." -ForegroundColor White
     Write-Host ""
+}
+
+}
+finally {
+    # Only pause when run standalone; an upper script (-Auto) does its own pause.
+    if (-not $Auto) {
+        Write-Host ""
+        Read-Host "Press Enter to exit"
+    }
 }
