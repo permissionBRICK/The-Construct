@@ -39,6 +39,11 @@ param(
     # setup. Manual-fallback login only -- root access is via pubkey and is
     # unaffected. Empty or equal to $SeedPassword leaves the password unchanged.
     [string]$AgentPassword = "",
+    # Optional git identity to apply as the VM's GLOBAL git config (user.name /
+    # user.email). When not supplied, prompted with defaults from the saved
+    # settings file and this host's own git identity. Empty leaves it unchanged.
+    [string]$GitUserName,
+    [string]$GitEmail,
     [string]$RemoteUser   = "root",
     [string]$AiTools      = "opencode,claude-code,codex",
     [string]$Projects     = "default",
@@ -89,6 +94,11 @@ $BootstrapPubKey = Join-Path $PSScriptRoot "keys\bootstrap_ed25519.pub"
 
 function Write-Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)   { Write-Host "    $msg" -ForegroundColor Green }
+
+# Shared helpers: persisted settings + git-identity resolution. Optional -- if the
+# lib isn't alongside this script we fall back to the passed-in values below.
+$commonLib = Join-Path $PSScriptRoot "lib\AgentVm.Common.ps1"
+if (Test-Path -LiteralPath $commonLib) { . $commonLib }
 
 # --- Dependencies -----------------------------------------------------------
 
@@ -392,7 +402,7 @@ function New-RepoArchive {
     if (Test-Path $tarPath) { Remove-Item $tarPath -Force }
 
     $names = @(Get-ChildItem -Force -LiteralPath $repoDir |
-               Where-Object { ($IncludeGit -or $_.Name -ne ".git") -and $_.Extension -ne ".iso" }).Name
+               Where-Object { ($IncludeGit -or $_.Name -ne ".git") -and $_.Extension -ne ".iso" -and $_.Name -ne ".construct-settings.json" }).Name
     Write-Step "Packing repo ($repoDir) -> $tarPath"
     & tar.exe -czf $tarPath -C $repoDir @names
     if ($LASTEXITCODE -ne 0) { throw "tar failed packing the repo (exit $LASTEXITCODE)." }
@@ -575,6 +585,24 @@ if (-not $PSBoundParameters.ContainsKey('Projects')) {
 }
 Write-Ok "Projects: $Projects"
 
+# Resolve the git identity to apply on the VM. Defaults come from the saved
+# settings file then this host's own git identity; the choice is saved so future
+# reprovisions don't need to re-specify it. When an upper script already supplied
+# both values they're used as-is (no prompt). Falls back to the raw params if the
+# shared lib wasn't found.
+if (Get-Command Resolve-GitIdentity -ErrorAction SilentlyContinue) {
+    $giParams = @{ Dir = $PSScriptRoot }
+    if ($PSBoundParameters.ContainsKey('GitUserName')) { $giParams['Name']  = $GitUserName }
+    if ($PSBoundParameters.ContainsKey('GitEmail'))    { $giParams['Email'] = $GitEmail }
+    if ($giParams.ContainsKey('Name') -and $giParams.ContainsKey('Email')) { $giParams['NoPrompt'] = $true }
+    $gitIdentity = Resolve-GitIdentity @giParams
+} else {
+    $gitIdentity = @{ Name = $GitUserName; Email = $GitEmail }
+}
+if ($gitIdentity.Name -or $gitIdentity.Email) {
+    Write-Ok ("Git identity: {0} <{1}>" -f $gitIdentity.Name, $gitIdentity.Email)
+}
+
 Ensure-Tar
 Ensure-OpenSSH
 Ensure-BootstrapKey
@@ -621,7 +649,11 @@ Write-Ok "Repo in place at /opt/construct/repo"
 # Run the non-interactive provisioner.
 Write-Step "Provisioning the VM (this can take several minutes)"
 $agentNameArg = if ($AgentName) { $AgentName } else { "$HostAlias-agent" }
-$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser'"
+# Git identity is base64-encoded so values with spaces/apostrophes survive the
+# env -> SSH -> bash layers untouched (empty -> left unchanged on the VM).
+$gitNameB64  = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$gitIdentity.Name))
+$gitEmailB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$gitIdentity.Email))
+$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64'"
 Write-Host "  --- live provisioning output ---" -ForegroundColor DarkGray
 Invoke-SshStream -Sudo -Command "$envPrefix bash /opt/construct/repo/bin/provision.sh"
 Write-Host "  --- end provisioning output ---" -ForegroundColor DarkGray
