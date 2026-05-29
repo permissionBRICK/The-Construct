@@ -60,10 +60,18 @@ has_tool() {
 
 install_opencode() {
   step "Installing opencode CLI"
-  if ! command -v opencode >/dev/null 2>&1; then
-    curl -fsSL https://opencode.ai/install | bash
+  # Always run the official installer: on a fresh VM it installs opencode, and on
+  # a re-provision it updates an existing install to the latest version (the
+  # installer fetches the newest release). When opencode is already present a
+  # failed update (e.g. no network) is non-fatal -- we keep the working copy
+  # rather than aborting provisioning.
+  if command -v opencode >/dev/null 2>&1; then
+    note "opencode already installed; updating to the latest version"
+    if ! curl -fsSL https://opencode.ai/install | bash; then
+      warn "opencode update failed; keeping the existing version"
+    fi
   else
-    note "opencode already installed"
+    curl -fsSL https://opencode.ai/install | bash
   fi
 
   opencode_bin="$(command -v opencode || true)"
