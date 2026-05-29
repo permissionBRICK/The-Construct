@@ -9,9 +9,15 @@
         irm https://raw.githubusercontent.com/permissionBRICK/The-Construct/main/install.ps1 | iex
 
     It downloads this repository's latest source archive from GitHub, extracts
-    it to a temp folder, and runs Auto-Install.ps1 from there. Auto-Install.ps1
-    then self-elevates to Administrator, builds the Ubuntu autoinstall ISO, and
-    creates + provisions the Hyper-V agent VM.
+    it to a stable per-repo/ref folder under %LOCALAPPDATA%, and runs
+    Auto-Install.ps1 from there. Auto-Install.ps1 then self-elevates to
+    Administrator, builds the Ubuntu autoinstall ISO, and creates + provisions
+    the Hyper-V agent VM.
+
+    The extraction path is fixed (not a timestamped temp folder) on purpose: the
+    large Ubuntu / autoinstall ISOs that Auto-Install.ps1 writes next to itself
+    are kept across runs, so re-running the one-liner reuses them instead of
+    re-downloading and rebuilding.
 
     We extract to disk and run the real .ps1 file (rather than piping it into
     iex) on purpose: Auto-Install.ps1 self-elevates with
@@ -41,15 +47,27 @@ try { Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force } catch 
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
 
 $zipUrl = "https://codeload.github.com/$Repo/zip/refs/heads/$Ref"
-$work   = Join-Path $env:TEMP ("construct-" + [DateTime]::Now.ToString("yyyyMMdd-HHmmss"))
-$zip    = "$work.zip"
+
+# Extract to a STABLE, per-repo/ref path (not a timestamped temp folder) so the
+# large Ubuntu/autoinstall ISOs that Auto-Install.ps1 writes next to itself
+# survive between runs and get reused. We anchor under %LOCALAPPDATA% (which,
+# unlike %TEMP%, isn't periodically swept) and key the folder on owner-name-ref
+# so different repos/branches don't collide. Expand-Archive -Force refreshes the
+# repo files in place while leaving the downloaded ISOs (not part of the archive)
+# untouched.
+$base = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:TEMP }
+$slug = ($Repo + "-" + $Ref) -replace '[^A-Za-z0-9._-]', '-'
+$work = Join-Path $base (Join-Path "The-Construct" $slug)
+$zip  = Join-Path $base ("construct-download.zip")
+
+if (-not (Test-Path -LiteralPath $work)) { New-Item -ItemType Directory -Path $work -Force | Out-Null }
 
 Write-Host "==> Downloading $Repo ($Ref) ..." -ForegroundColor Cyan
 $oldPP = $ProgressPreference; $ProgressPreference = "SilentlyContinue"
 try { Invoke-WebRequest -Uri $zipUrl -OutFile $zip -UseBasicParsing }
 finally { $ProgressPreference = $oldPP }
 
-Write-Host "==> Extracting ..." -ForegroundColor Cyan
+Write-Host "==> Extracting to $work" -ForegroundColor Cyan
 Expand-Archive -LiteralPath $zip -DestinationPath $work -Force
 Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
 
