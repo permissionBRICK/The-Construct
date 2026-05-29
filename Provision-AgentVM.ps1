@@ -733,6 +733,14 @@ if (",$AiTools," -like "*,codex,*") {
 Write-Host ""
 
 }
+catch {
+    # Standalone: show the failure above our own pause (readable even on a
+    # double-click run). Chained (-Auto): rethrow so the upper script owns the
+    # single error display + pause.
+    if ($Auto) { throw }
+    Write-Host ""
+    Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
+}
 finally {
     # Only pause when run standalone; an upper script (-Auto) does its own pause.
     if (-not $Auto) {
