@@ -58,6 +58,18 @@ INSTALL_SDKS="${INSTALL_SDKS:-true}"
 CHECKOUT_PROJECTS="${CHECKOUT_PROJECTS:-false}"
 START_SERVICE="${START_SERVICE:-true}"
 
+# Optional global git identity to set on the VM. Passed base64-encoded (see
+# Provision-AgentVM.ps1) so names/emails with spaces or apostrophes survive the
+# SSH/shell layers untouched. Empty when not supplied -- left unchanged on the VM.
+GIT_USER_NAME=""
+GIT_USER_EMAIL=""
+if [[ -n "${GIT_USER_NAME_B64:-}" ]]; then
+  GIT_USER_NAME="$(printf '%s' "${GIT_USER_NAME_B64}" | base64 -d 2>/dev/null || true)"
+fi
+if [[ -n "${GIT_USER_EMAIL_B64:-}" ]]; then
+  GIT_USER_EMAIL="$(printf '%s' "${GIT_USER_EMAIL_B64}" | base64 -d 2>/dev/null || true)"
+fi
+
 step "provision.sh starting (non-interactive)"
 note "    AGENT_NAME=${AGENT_NAME}"
 note "    PROJECTS=${PROJECTS}"
@@ -105,6 +117,34 @@ cfg AI_TOOLS "${AI_TOOLS}"
 cfg ALLOW_HOST_PACKAGES "${ALLOW_HOST_PACKAGES}"
 cfg WORKSPACE_ROOT "${WORKSPACE_ROOT}"
 install -d -m 0755 "${WORKSPACE_ROOT}"
+
+# 2b. Global git identity for the users that operate on the VM: CLAUDE_USER
+#     (root -- used by VS Code Remote-SSH and the AI tools) and the SSH/seed user
+#     (interactive logins). Values arrive from the host, defaulted there to the
+#     host's own git identity; empty values are left unchanged. Recorded in
+#     config.env too so a later manual provision keeps them.
+if [[ -n "${GIT_USER_NAME}" ]];  then cfg GIT_USER_NAME  "${GIT_USER_NAME}";  fi
+if [[ -n "${GIT_USER_EMAIL}" ]]; then cfg GIT_USER_EMAIL "${GIT_USER_EMAIL}"; fi
+if [[ -n "${GIT_USER_NAME}" || -n "${GIT_USER_EMAIL}" ]]; then
+  step "Configuring global git identity"
+  _git_seen=""
+  for _gu in "${CLAUDE_USER}" "${SSH_USER}"; do
+    [[ -n "${_gu}" ]] || continue
+    case " ${_git_seen} " in *" ${_gu} "*) continue ;; esac
+    _git_seen="${_git_seen} ${_gu}"
+    _gu_home="$(getent passwd "${_gu}" | cut -d: -f6)"
+    if [[ -z "${_gu_home}" ]]; then warn "  skipping ${_gu}: no home directory"; continue; fi
+    if [[ -n "${GIT_USER_NAME}" ]]; then
+      sudo -H -u "${_gu}" git config --global user.name "${GIT_USER_NAME}" \
+        || warn "  could not set user.name for ${_gu}"
+    fi
+    if [[ -n "${GIT_USER_EMAIL}" ]]; then
+      sudo -H -u "${_gu}" git config --global user.email "${GIT_USER_EMAIL}" \
+        || warn "  could not set user.email for ${_gu}"
+    fi
+    ok "  ${_gu}: ${GIT_USER_NAME:-(unchanged)} <${GIT_USER_EMAIL:-(unchanged)}>"
+  done
+fi
 
 # 3. Root SSH key so the host (VS Code Remote-SSH) can log in as root by key.
 if [[ "${SETUP_ROOT_SSH_KEY}" == "true" ]]; then

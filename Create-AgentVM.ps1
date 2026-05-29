@@ -41,6 +41,11 @@ param(
     [int]$DiskSizeGB   = 0,
     [string]$Projects,
     [string]$AgentPassword,
+    # Optional git identity forwarded to Provision-AgentVM.ps1 (applied as the
+    # VM's global git config). When omitted, the provisioner prompts with
+    # host/saved defaults.
+    [string]$GitUserName,
+    [string]$GitEmail,
     # Set when launched by an upper script (Auto-Install.ps1), which owns the
     # final "Press Enter" pause. When run on its own this stays off and the
     # script pauses at the end -- important because a direct run self-elevates
@@ -141,6 +146,8 @@ if (Get-VM -Name $VmName -ErrorAction SilentlyContinue) {
         $provArgs = @{ VmHost = $VmHostname; HostAlias = $VmName.ToLower(); Auto = $true }
         if ($PSBoundParameters.ContainsKey('Projects'))      { $provArgs['Projects']      = $Projects }
         if ($PSBoundParameters.ContainsKey('AgentPassword')) { $provArgs['AgentPassword'] = $AgentPassword }
+        if ($PSBoundParameters.ContainsKey('GitUserName'))   { $provArgs['GitUserName']   = $GitUserName }
+        if ($PSBoundParameters.ContainsKey('GitEmail'))      { $provArgs['GitEmail']      = $GitEmail }
         & $provisionScript @provArgs
         return
     }
@@ -411,6 +418,8 @@ if ($isAutoinstall) {
         # or the caller) so Provision-AgentVM.ps1 skips its own project prompt.
         if ($PSBoundParameters.ContainsKey('Projects'))      { $provArgs['Projects']      = $Projects }
         if ($PSBoundParameters.ContainsKey('AgentPassword')) { $provArgs['AgentPassword'] = $AgentPassword }
+        if ($PSBoundParameters.ContainsKey('GitUserName'))   { $provArgs['GitUserName']   = $GitUserName }
+        if ($PSBoundParameters.ContainsKey('GitEmail'))      { $provArgs['GitEmail']      = $GitEmail }
         & $provisionScript @provArgs
     }
 } else {

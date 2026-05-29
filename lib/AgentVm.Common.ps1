@@ -338,3 +338,109 @@ function Remove-AgentVm {
     foreach ($f in $diffDisks) { Remove-FileWithRetry -Path $f }
     foreach ($f in $baseDisks) { Remove-FileWithRetry -Path $f }
 }
+
+# ── Persisted setup settings + git identity ──────────────────────────────────
+# A small JSON file kept NEXT TO the scripts ($PSScriptRoot of the caller) that
+# remembers host-side choices across runs -- notably the git identity to apply
+# to the VM -- so a reprovision doesn't have to re-specify them. For the web
+# (iex) installer this folder is the extracted repo under %LOCALAPPDATA%, which
+# Expand-Archive -Force refreshes WITHOUT deleting files that aren't part of the
+# archive, so this file survives re-runs.
+
+function Get-ConstructSettingsPath {
+    param([Parameter(Mandatory)][string]$Dir)
+    return (Join-Path $Dir ".construct-settings.json")
+}
+
+function Read-ConstructSettings {
+    # Saved settings as a PSCustomObject, or $null if none/unreadable.
+    param([Parameter(Mandatory)][string]$Dir)
+    $path = Get-ConstructSettingsPath -Dir $Dir
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+    try { return (Get-Content -LiteralPath $path -Raw | ConvertFrom-Json) } catch { return $null }
+}
+
+function Save-ConstructSettings {
+    # Merge the given keys into the saved settings file, preserving other keys.
+    # Best-effort: a write failure only warns.
+    param(
+        [Parameter(Mandatory)][string]$Dir,
+        [Parameter(Mandatory)][hashtable]$Values
+    )
+    $path = Get-ConstructSettingsPath -Dir $Dir
+    $merged = [ordered]@{}
+    $existing = Read-ConstructSettings -Dir $Dir
+    if ($existing) { foreach ($p in $existing.PSObject.Properties) { $merged[$p.Name] = $p.Value } }
+    foreach ($k in $Values.Keys) { $merged[$k] = $Values[$k] }
+    try {
+        ([pscustomobject]$merged | ConvertTo-Json -Depth 10) | Set-Content -LiteralPath $path -Encoding UTF8
+    } catch {
+        Write-Warning "Could not save settings to $path : $($_.Exception.Message)"
+    }
+}
+
+function Get-HostGitIdentity {
+    # This host's own global git identity, or empty strings if git isn't
+    # installed or the values aren't set.
+    $name = ""; $email = ""
+    if (Get-Command git -ErrorAction SilentlyContinue) {
+        $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+        try {
+            $name  = (& git config --global user.name)  2>$null
+            $email = (& git config --global user.email) 2>$null
+        } catch { }
+        $ErrorActionPreference = $prev
+    }
+    return @{ Name = ("$name").Trim(); Email = ("$email").Trim() }
+}
+
+function Resolve-GitIdentity {
+    <#
+        Decide the git user.name / user.email to apply to the VM as its global
+        git config, and persist the choice next to the scripts.
+
+        Defaults, highest priority first:
+          1. A value passed in -Name / -Email (e.g. forwarded from an upper script).
+          2. The saved settings file in -Dir (a previous run's choice).
+          3. This host's own global git identity.
+
+        Unless -NoPrompt, the user is prompted for each value with the resolved
+        default offered on Enter. The final values are saved back to -Dir.
+        Returns @{ Name = <string>; Email = <string> } (either may be "").
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Dir,
+        [string]$Name,
+        [string]$Email,
+        [switch]$NoPrompt
+    )
+
+    $saved   = Read-ConstructSettings -Dir $Dir
+    $hostGit = Get-HostGitIdentity
+
+    $defName  = if     ($Name)                              { $Name }
+                elseif ($saved -and $saved.gitUserName)     { [string]$saved.gitUserName }
+                elseif ($hostGit.Name)                      { $hostGit.Name }
+                else                                        { "" }
+    $defEmail = if     ($Email)                             { $Email }
+                elseif ($saved -and $saved.gitEmail)        { [string]$saved.gitEmail }
+                elseif ($hostGit.Email)                     { $hostGit.Email }
+                else                                        { "" }
+
+    $resName  = $defName
+    $resEmail = $defEmail
+
+    if (-not $NoPrompt) {
+        Write-Step "Git identity (applied as the VM's global git config)"
+        $hint = if ($defName)  { " (press Enter for '$defName')" }  else { " (leave blank to skip)" }
+        $ans  = Read-Host "    Git user name$hint"
+        if (-not [string]::IsNullOrWhiteSpace($ans)) { $resName = $ans.Trim() }
+        $hint = if ($defEmail) { " (press Enter for '$defEmail')" } else { " (leave blank to skip)" }
+        $ans  = Read-Host "    Git email$hint"
+        if (-not [string]::IsNullOrWhiteSpace($ans)) { $resEmail = $ans.Trim() }
+    }
+
+    Save-ConstructSettings -Dir $Dir -Values @{ gitUserName = $resName; gitEmail = $resEmail }
+    return @{ Name = $resName; Email = $resEmail }
+}

@@ -70,6 +70,12 @@
     are prompted up front; pressing Enter keeps the default 'agent'. A non-default
     value is applied to the agent user at the end of provisioning.
 
+.PARAMETER GitUserName / GitEmail
+    Git identity to apply as the VM's global git config (user.name / user.email).
+    If omitted, you are prompted up front, defaulting to the saved value from a
+    previous run and then to this host's own git global identity. The choice is
+    saved next to the scripts so a later reprovision doesn't need it re-specified.
+
 .PARAMETER SkipChecksum
     Skip SHA256 verification of the downloaded ISO.
 
@@ -99,6 +105,8 @@ param(
     [int]$VmDiskGB = 0,
     [string]$Projects,
     [string]$AgentPassword,
+    [string]$GitUserName,
+    [string]$GitEmail,
     [switch]$SkipChecksum,
     [switch]$SkipCreateVm,
     [switch]$Force
@@ -354,6 +362,14 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         if (-not $PSBoundParameters.ContainsKey('Projects')) { $reprovProjects = Select-Projects }
         Write-Ok "Projects: $reprovProjects"
 
+        # Git identity to (re)apply. Defaults to the saved value, then this host's
+        # git identity; saved so it sticks across reprovisions.
+        $giParams = @{ Dir = $PSScriptRoot }
+        if ($PSBoundParameters.ContainsKey('GitUserName')) { $giParams['Name']  = $GitUserName }
+        if ($PSBoundParameters.ContainsKey('GitEmail'))    { $giParams['Email'] = $GitEmail }
+        if ($giParams.ContainsKey('Name') -and $giParams.ContainsKey('Email')) { $giParams['NoPrompt'] = $true }
+        $reprovGit = Resolve-GitIdentity @giParams
+
         # No download/build/create on this path -- just re-run the provisioner
         # against the existing VM, so no long time estimate.
         Show-Banner @(
@@ -371,6 +387,9 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         # -AgentPassword passed on the command line (this path has no prompt).
         # -Auto: the finally below owns the pause, so the provisioner stays quiet.
         $reprovArgs = @{ VmHost = $VmHostname; HostAlias = $HyperVmName.ToLower(); Projects = $reprovProjects; Auto = $true }
+        # Pass both git values (even if empty) so the provisioner doesn't re-prompt.
+        $reprovArgs['GitUserName'] = $reprovGit.Name
+        $reprovArgs['GitEmail']    = $reprovGit.Email
         if ($PSBoundParameters.ContainsKey('AgentPassword')) { $reprovArgs['AgentPassword'] = $AgentPassword }
         try {
             & $provisionScript @reprovArgs
@@ -407,6 +426,8 @@ $chosenMemGB         = $VmMemoryGB
 $chosenDiskGB        = $VmDiskGB
 $chosenProjects      = $Projects
 $chosenAgentPassword = $AgentPassword
+$chosenGitName       = $GitUserName
+$chosenGitEmail      = $GitEmail
 
 if (-not $SkipCreateVm) {
     Write-Step "Setup choices"
@@ -455,8 +476,20 @@ if (-not $SkipCreateVm) {
         $chosenAgentPassword = if ([string]::IsNullOrWhiteSpace($ans)) { "agent" } else { $ans }
     }
 
+    # Git identity for the VM's global git config. Defaults to the saved value,
+    # then this host's git identity; saved for future reprovisions.
+    $giParams = @{ Dir = $PSScriptRoot }
+    if ($PSBoundParameters.ContainsKey('GitUserName')) { $giParams['Name']  = $GitUserName }
+    if ($PSBoundParameters.ContainsKey('GitEmail'))    { $giParams['Email'] = $GitEmail }
+    if ($giParams.ContainsKey('Name') -and $giParams.ContainsKey('Email')) { $giParams['NoPrompt'] = $true }
+    $gitId = Resolve-GitIdentity @giParams
+    $chosenGitName  = $gitId.Name
+    $chosenGitEmail = $gitId.Email
+
     $pwLabel = if ($chosenAgentPassword -and $chosenAgentPassword -ne "agent") { "custom" } else { "default" }
     Write-Ok ("VM RAM: {0} GB  |  Disk: {1} GB  |  Projects: {2}  |  agent password: {3}" -f $chosenMemGB, $chosenDiskGB, $chosenProjects, $pwLabel)
+    $gitLabel = if ($chosenGitName -or $chosenGitEmail) { "$chosenGitName <$chosenGitEmail>" } else { "(unset)" }
+    Write-Ok ("Git identity: {0}" -f $gitLabel)
 
     # Confirm the host can actually run the VM BEFORE the long download. This
     # enables Hyper-V + the platform features (rebooting if needed) or aborts
@@ -699,6 +732,8 @@ $createArgs = @{
     DiskSizeGB    = $chosenDiskGB
     Projects      = $chosenProjects
     AgentPassword = $chosenAgentPassword
+    GitUserName   = $chosenGitName
+    GitEmail      = $chosenGitEmail
     # -Auto: the try/finally below owns the final pause, so neither
     # Create-AgentVM.ps1 nor the Provision-AgentVM.ps1 it chains into pauses too.
     Auto          = $true
