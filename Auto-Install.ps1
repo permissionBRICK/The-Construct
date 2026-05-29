@@ -545,11 +545,16 @@ if (-not $SkipCreateVm) {
 # ── 2. Acquire the source Ubuntu Server ISO ──────────────────────────────────
 Write-Step "Source Ubuntu Server ISO"
 
+# Track whether WE downloaded the source ISO. A user-supplied -IsoPath is left
+# untouched; only an ISO we fetched is deleted after a successful build.
+$srcIsoWasDownloaded = $false
+
 if ($IsoPath) {
     if (-not (Test-Path -LiteralPath $IsoPath)) { throw "IsoPath not found: $IsoPath" }
     $srcIso = (Resolve-Path -LiteralPath $IsoPath).Path
     Write-Ok "Using provided ISO: $srcIso"
 } else {
+    $srcIsoWasDownloaded = $true
     # Discover the exact point-release file name from the release directory
     # listing unless an explicit URL was given.
     $baseUrl = "https://releases.ubuntu.com/$UbuntuRelease/"
@@ -653,6 +658,19 @@ try {
 if ($buildExit -ne 0) { throw "autoinstall ISO build failed inside WSL (exit $buildExit)." }
 if (-not (Test-Path -LiteralPath $OutputIso)) { throw "Build reported success but $OutputIso is missing." }
 Write-Ok "Built: $OutputIso"
+
+# The autoinstall ISO is built and verified present, so the large source ISO is
+# no longer needed -- delete it to reclaim ~2-3 GB. Only remove an ISO we
+# downloaded ourselves; a user-supplied -IsoPath is always left in place.
+if ($srcIsoWasDownloaded -and (Test-Path -LiteralPath $srcIso)) {
+    Write-Step "Cleaning up source Ubuntu ISO"
+    try {
+        Remove-Item -LiteralPath $srcIso -Force
+        Write-Ok "Deleted downloaded source ISO: $srcIso"
+    } catch {
+        Write-Warning "Could not delete source ISO ($srcIso): $($_.Exception.Message)"
+    }
+}
 }  # end if ($needBuild)
 
 # ── 4. Create + provision the VM ─────────────────────────────────────────────
