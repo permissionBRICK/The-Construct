@@ -4,7 +4,7 @@ This... is the Construct. It's our loading program.
 
 We can load anything, from Claude Code, to Codex, and even Opencode... bypass mode, root-access, anything we need.
 
-The Construct is a single-command script that delivers a sandboxed vibecoding Ubuntu VM setup for unattended root access inside a VM in without any permission prompts, isolated completely inside Hyper-V on Windows, at minimal risk to the host pc.
+The Construct is a single-command script that delivers a sandboxed vibecoding Ubuntu VM setup for unattended root access without any permission prompts, isolated inside Hyper-V on Windows, at minimal risk to the host pc.
 
 Supports the following Tools with zero configuration required:
 - VS Code Remote with Claude Code Extension
