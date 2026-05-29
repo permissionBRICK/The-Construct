@@ -69,6 +69,9 @@ fi
 if [[ -n "${GIT_USER_EMAIL_B64:-}" ]]; then
   GIT_USER_EMAIL="$(printf '%s' "${GIT_USER_EMAIL_B64}" | base64 -d 2>/dev/null || true)"
 fi
+# Whether to enable git's plaintext credential store (credential.helper store) so
+# pushes/pulls don't re-prompt. "true"/"false"/"" (empty = leave unchanged).
+GIT_CREDENTIAL_STORE="${GIT_CREDENTIAL_STORE:-}"
 
 step "provision.sh starting (non-interactive)"
 note "    AGENT_NAME=${AGENT_NAME}"
@@ -134,7 +137,9 @@ install -d -m 0755 "${WORKSPACE_ROOT}"
 #     host's own git identity; empty values are left unchanged. Deliberately NOT
 #     written to config.env (it is `source`-d by other scripts, and a name with a
 #     space would break that) -- `git config --global` is the store on the VM.
-if [[ -n "${GIT_USER_NAME}" || -n "${GIT_USER_EMAIL}" ]]; then
+#     Optionally also enables git's plaintext credential store (the host warns
+#     about the security trade-off before this is requested).
+if [[ -n "${GIT_USER_NAME}" || -n "${GIT_USER_EMAIL}" || -n "${GIT_CREDENTIAL_STORE}" ]]; then
   step "Configuring global git identity"
   _git_seen=""
   for _gu in "${CLAUDE_USER}" "${SSH_USER}"; do
@@ -151,7 +156,19 @@ if [[ -n "${GIT_USER_NAME}" || -n "${GIT_USER_EMAIL}" ]]; then
       sudo -H -u "${_gu}" git config --global user.email "${GIT_USER_EMAIL}" \
         || warn "  could not set user.email for ${_gu}"
     fi
-    ok "  ${_gu}: ${GIT_USER_NAME:-(unchanged)} <${GIT_USER_EMAIL:-(unchanged)}>"
+    # Plaintext credential store: enable when requested; when explicitly declined,
+    # remove only a store helper we may have set before (don't clobber another).
+    _cred="(unchanged)"
+    if [[ "${GIT_CREDENTIAL_STORE}" == "true" ]]; then
+      if sudo -H -u "${_gu}" git config --global credential.helper store; then _cred="store (plaintext)"
+      else warn "  could not enable credential.helper for ${_gu}"; fi
+    elif [[ "${GIT_CREDENTIAL_STORE}" == "false" ]]; then
+      if [[ "$(sudo -H -u "${_gu}" git config --global credential.helper 2>/dev/null || true)" == "store" ]]; then
+        sudo -H -u "${_gu}" git config --global --unset-all credential.helper || true
+        _cred="disabled"
+      fi
+    fi
+    ok "  ${_gu}: ${GIT_USER_NAME:-(unchanged)} <${GIT_USER_EMAIL:-(unchanged)}>  credentials: ${_cred}"
   done
 fi
 

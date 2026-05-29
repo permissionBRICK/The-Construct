@@ -404,20 +404,28 @@ function Resolve-GitIdentity {
           2. The saved settings file in -Dir (a previous run's choice).
           3. This host's own global git identity.
 
+        Also decides whether to enable git's plaintext credential store on the VM
+        (credential.helper store) so pushes/pulls don't re-prompt -- default yes,
+        with a security warning. Its default comes from -CredentialStore ("yes" /
+        "no"), then the saved setting, then yes.
+
         Unless -NoPrompt, the user is prompted for each value with the resolved
         default offered on Enter. The final values are saved back to -Dir.
-        Returns @{ Name = <string>; Email = <string> } (either may be "").
+        Returns @{ Name = <string>; Email = <string>; CredentialStore = <bool> }
+        (Name / Email may be "").
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Dir,
         [string]$Name,
         [string]$Email,
+        [string]$CredentialStore,
         [switch]$NoPrompt
     )
 
     $saved   = Read-ConstructSettings -Dir $Dir
     $hostGit = Get-HostGitIdentity
+    $savedHasCred = $saved -and ($saved.PSObject.Properties.Name -contains 'gitCredentialStore')
 
     $defName  = if     ($Name)                              { $Name }
                 elseif ($saved -and $saved.gitUserName)     { [string]$saved.gitUserName }
@@ -427,9 +435,13 @@ function Resolve-GitIdentity {
                 elseif ($saved -and $saved.gitEmail)        { [string]$saved.gitEmail }
                 elseif ($hostGit.Email)                     { $hostGit.Email }
                 else                                        { "" }
+    $defCred  = if     ($CredentialStore)                   { $CredentialStore -eq 'yes' }
+                elseif ($savedHasCred)                      { [bool]$saved.gitCredentialStore }
+                else                                        { $true }
 
     $resName  = $defName
     $resEmail = $defEmail
+    $resCred  = $defCred
 
     if (-not $NoPrompt) {
         Write-Step "Git identity (applied as the VM's global git config)"
@@ -439,8 +451,16 @@ function Resolve-GitIdentity {
         $hint = if ($defEmail) { " (press Enter for '$defEmail')" } else { " (leave blank to skip)" }
         $ans  = Read-Host "    Git email$hint"
         if (-not [string]::IsNullOrWhiteSpace($ans)) { $resEmail = $ans.Trim() }
+
+        Write-Host "    Store git credentials on the VM so pushes/pulls don't re-prompt?" -ForegroundColor White
+        Write-Host "      WARNING: credentials are saved in PLAINTEXT (~/.git-credentials) and are" -ForegroundColor Yellow
+        Write-Host "      readable by anything on the VM -- including the AI agents, so a prompt-" -ForegroundColor Yellow
+        Write-Host "      injection attack could exfiltrate them." -ForegroundColor Yellow
+        $credHint = if ($defCred) { "[Y/n]" } else { "[y/N]" }
+        $ans = Read-Host "    Store git credentials? $credHint"
+        if (-not [string]::IsNullOrWhiteSpace($ans)) { $resCred = ($ans.Trim() -match '^(y|yes)$') }
     }
 
-    Save-ConstructSettings -Dir $Dir -Values @{ gitUserName = $resName; gitEmail = $resEmail }
-    return @{ Name = $resName; Email = $resEmail }
+    Save-ConstructSettings -Dir $Dir -Values @{ gitUserName = $resName; gitEmail = $resEmail; gitCredentialStore = $resCred }
+    return @{ Name = $resName; Email = $resEmail; CredentialStore = $resCred }
 }
