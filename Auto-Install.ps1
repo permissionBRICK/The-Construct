@@ -405,6 +405,13 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         if ($PSBoundParameters.ContainsKey('AgentPassword')) { $reprovArgs['AgentPassword'] = $AgentPassword }
         try {
             & $provisionScript @reprovArgs
+        } catch {
+            # Show the failure ABOVE the pause so it's readable even when the
+            # window was launched by double-click / right-click "Run with
+            # PowerShell" (where it closes the instant the pause returns).
+            Write-Host ""
+            Write-Host "ERROR: provisioning failed." -ForegroundColor Red
+            Write-Host "    $($_.Exception.Message)" -ForegroundColor Red
         } finally {
             Write-Host ""
             Read-Host "Press Enter to exit"
@@ -766,6 +773,12 @@ $createArgs = @{
 }
 try {
     & $createScript @createArgs
+} catch {
+    # Show the failure ABOVE the pause so it's readable even when the window was
+    # launched by double-click / right-click "Run with PowerShell".
+    Write-Host ""
+    Write-Host "ERROR: install failed." -ForegroundColor Red
+    Write-Host "    $($_.Exception.Message)" -ForegroundColor Red
 } finally {
     Write-Host ""
     Read-Host "Press Enter to exit"
