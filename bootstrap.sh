@@ -79,7 +79,16 @@ fi
 
 step "Creating directories"
 mkdir -p "${AGENT_HOME}" "${WORKSPACE_ROOT}" "${CONFIG_DIR}" "${RUNTIME_DIR}"
-chown -R "${TARGET_USER}:${TARGET_USER}" "${AGENT_HOME}" "${WORKSPACE_ROOT}" || true
+chown -R "${TARGET_USER}:${TARGET_USER}" "${AGENT_HOME}" || true
+
+# WORKSPACE_ROOT (default /root/repos) holds the user's checked-out repos and is
+# used by whoever connects to the VM -- root, via VS Code Remote-SSH / the agent
+# -- which is NOT necessarily the user running provisioning via sudo. Derive its
+# owner from the directory it lives under (/root -> root, /home/x -> x) instead
+# of from TARGET_USER, so a re-provision over SSH as 'agent' doesn't hand root's
+# repos to agent (and heals a VM where a previous run already did).
+WORKSPACE_OWNER="$(stat -c '%U' "$(dirname "${WORKSPACE_ROOT}")" 2>/dev/null || echo "${TARGET_USER}")"
+chown -R "${WORKSPACE_OWNER}:${WORKSPACE_OWNER}" "${WORKSPACE_ROOT}" 2>/dev/null || true
 
 step "Creating local config if missing"
 if [[ ! -f "${CONFIG_FILE}" ]]; then
