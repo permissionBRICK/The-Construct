@@ -577,10 +577,21 @@ if ($IsoPath) {
     } else {
         Write-Note "Downloading $IsoUrl"
         Write-Note "(this is ~2-3 GB; using BITS if available)"
+        $downloaded = $false
         $bits = Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue
         if ($bits) {
-            Start-BitsTransfer -Source $IsoUrl -Destination $srcIso -Description "Ubuntu Server $UbuntuRelease"
-        } else {
+            try {
+                Start-BitsTransfer -Source $IsoUrl -Destination $srcIso -Description "Ubuntu Server $UbuntuRelease" -ErrorAction Stop
+                $downloaded = $true
+            } catch {
+                # BITS can fail at runtime even when present — e.g. "The handle is
+                # invalid (E_HANDLE)" in non-interactive / remoting / detached
+                # sessions, or when the BITS service is disabled. Fall back below.
+                Write-Warning "BITS transfer failed ($($_.Exception.Message)); falling back to Invoke-WebRequest."
+                if (Test-Path -LiteralPath $srcIso) { Remove-Item -LiteralPath $srcIso -Force -ErrorAction SilentlyContinue }
+            }
+        }
+        if (-not $downloaded) {
             # Fallback: disable the progress bar (it cripples Invoke-WebRequest throughput).
             $oldPref = $ProgressPreference; $ProgressPreference = "SilentlyContinue"
             try { Invoke-WebRequest -Uri $IsoUrl -OutFile $srcIso -UseBasicParsing }
