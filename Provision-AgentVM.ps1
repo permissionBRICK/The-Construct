@@ -523,6 +523,77 @@ function Set-VsCodeRemotePlatform {
     Write-Ok "Set $key -> { $HostAlias = linux } in VS Code settings"
 }
 
+function Set-OpenCodeRemote {
+    # Register this VM's OpenCode remote-server URL in the OpenCode GUI desktop
+    # app so the user doesn't have to add the server by hand. The app keeps its
+    # state in %APPDATA%\ai.opencode.desktop\opencode.global.dat: a JSON object
+    # whose "server" value is itself a JSON-ENCODED STRING holding a "list" of
+    # saved servers, each shaped like { type, displayName, http: { url } }. We
+    # add an entry for $Url only if no server with that exact url exists yet
+    # (idempotent across re-provisions) and leave every other key -- and any
+    # servers the user added themselves -- untouched.
+    param(
+        [Parameter(Mandatory)][string]$Url,
+        [Parameter(Mandatory)][string]$DisplayName
+    )
+
+    $cfgPath = Join-Path $env:APPDATA "ai.opencode.desktop\opencode.global.dat"
+    if (-not (Test-Path -LiteralPath $cfgPath)) {
+        Write-Warning "OpenCode GUI config not found ($cfgPath); skipping. Add the server manually: $Url"
+        return
+    }
+
+    # Parse the outer object. Bail out WITHOUT touching the file if it isn't the
+    # JSON we expect, so a format change in the app can never corrupt its state.
+    try {
+        $raw = Get-Content -LiteralPath $cfgPath -Raw
+        $top = $raw | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        Write-Warning "Could not parse OpenCode config ($cfgPath); not modifying it. Add the server manually: $Url"
+        return
+    }
+
+    # Parse the inner "server" object out of its JSON string; synthesize a fresh
+    # one if the key is missing/empty/garbled.
+    $server = $null
+    if (($top.PSObject.Properties.Name -contains "server") -and $top.server) {
+        try { $server = $top.server | ConvertFrom-Json -ErrorAction Stop } catch { $server = $null }
+    }
+    if (-not $server) { $server = [pscustomobject]@{ list = @() } }
+    if (-not ($server.PSObject.Properties.Name -contains "list") -or $null -eq $server.list) {
+        $server | Add-Member -NotePropertyName list -NotePropertyValue @() -Force
+    }
+
+    # Already present? Match on the exact url so this is a no-op on re-provision.
+    $existing = @($server.list) | Where-Object { $_.http -and $_.http.url -eq $Url }
+    if ($existing.Count -gt 0) {
+        Write-Ok "OpenCode server already configured ($Url)"
+        return
+    }
+
+    # Append and write back: the inner object as a COMPACT JSON string (the shape
+    # the app stores), then the whole file with NO BOM -- Electron's JSON.parse
+    # throws on a leading byte-order mark.
+    $entry = [pscustomobject]@{
+        type        = "http"
+        displayName = $DisplayName
+        http        = [pscustomobject]@{ url = $Url }
+    }
+    $server.list = @($server.list) + $entry
+
+    Copy-Item -LiteralPath $cfgPath "$cfgPath.bak" -Force
+    $serverJson = $server | ConvertTo-Json -Depth 30 -Compress
+    if ($top.PSObject.Properties.Name -contains "server") {
+        $top.server = $serverJson
+    } else {
+        $top | Add-Member -NotePropertyName server -NotePropertyValue $serverJson
+    }
+    $json = $top | ConvertTo-Json -Depth 30
+    [System.IO.File]::WriteAllText($cfgPath, $json, (New-Object System.Text.UTF8Encoding $false))
+    Write-Ok "Added OpenCode server '$DisplayName' ($Url)"
+    Write-Host "    Fully quit and reopen the OpenCode GUI app to pick it up (if it's open now, it may overwrite this on exit)." -ForegroundColor DarkGray
+}
+
 function Select-Projects {
     # Prompt the user to pick which project profiles from projects/ to load.
     # Returns a comma-separated PROJECTS value (or "default" if none chosen).
@@ -697,6 +768,9 @@ Write-Ok "Bootstrap key removed; VM will reboot in a few seconds"
 Write-Step "Configuring the Windows host (~\.ssh and VS Code)"
 $keyPath = Set-HostSshConfig -PrivateKeyText $m.Value
 Set-VsCodeRemotePlatform
+if (",$AiTools," -like "*,opencode,*") {
+    Set-OpenCodeRemote -Url "http://${VmHost}:${OpencodePort}" -DisplayName $HostAlias
+}
 
 # Clean up temporary known_hosts.
 Remove-Item "$env:TEMP\construct-known_hosts" -Force -ErrorAction SilentlyContinue
@@ -721,8 +795,8 @@ if (",$AiTools," -like "*,opencode,*") {
     Write-Host ""
     Write-Host "OpenCode remote URL:" -ForegroundColor White
     Write-Host "    http://${VmHost}:${OpencodePort}" -ForegroundColor Yellow
-    Write-Host "Use this URL to connect the OpenCode GUI App to the agent VM, by adding it as a remote host" -ForegroundColor DarkGray
-    Write-Host "    -> Manage Servers -> Add Server. Just paste the hostname, leave user and pw unchanged." -ForegroundColor DarkGray
+    Write-Host "This was added to the OpenCode GUI app automatically (if its config was present)." -ForegroundColor DarkGray
+    Write-Host "    If not, add it by hand -> Manage Servers -> Add Server. Paste the hostname, leave user and pw unchanged." -ForegroundColor DarkGray
 }
 if (",$AiTools," -like "*,codex,*") {
     Write-Host ""
