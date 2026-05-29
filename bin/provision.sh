@@ -69,6 +69,26 @@ note "    CLAUDE_USER=${CLAUDE_USER}"
 # executable before anything tries to run them.
 chmod +x "${REPO_DIR}/bootstrap.sh" "${REPO_DIR}/bin/"*.sh 2>/dev/null || true
 
+# Grant the SSH/seed user passwordless sudo. Provisioning -- and especially
+# RE-provisioning -- runs its privileged steps over SSH as this user via
+# `sudo -S` fed the seed login password. If that login password was later
+# changed (the optional custom agent password applied at the end of the first
+# run), the seed password stops working and every sudo step fails. A NOPASSWD
+# drop-in makes provisioning depend on the bootstrap/root key alone and never on
+# the login password -- matching the sandbox's "unattended root, no prompts"
+# design. Validated with visudo before install so a bad file can't lock sudo.
+step "Granting ${SSH_USER} passwordless sudo"
+_sudoers_tmp="$(mktemp)"
+printf '%s ALL=(ALL) NOPASSWD:ALL\n' "${SSH_USER}" >"${_sudoers_tmp}"
+chmod 0440 "${_sudoers_tmp}"
+if visudo -cf "${_sudoers_tmp}" >/dev/null 2>&1; then
+  install -m 0440 "${_sudoers_tmp}" "/etc/sudoers.d/90-construct-${SSH_USER}"
+  ok "passwordless sudo configured for ${SSH_USER}"
+else
+  warn "WARNING: sudoers drop-in failed validation; leaving sudo unchanged"
+fi
+rm -f "${_sudoers_tmp}"
+
 # 1. Base host setup: packages, Docker, dirs, default config, systemd units.
 #    Forced non-interactive so it never launches the ui-setup workflow.
 step "Running bootstrap.sh"
