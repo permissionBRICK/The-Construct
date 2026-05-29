@@ -6,7 +6,9 @@ CONFIG_FILE="${CONFIG_FILE:-/etc/construct/config.env}"
 if [[ -f "${CONFIG_FILE}" ]]; then
   set -a
   # shellcheck disable=SC1090
-  . "${CONFIG_FILE}"
+  # Tolerate a malformed config (e.g. a legacy unquoted value): this runs from
+  # the login banner and the bootstrap step, and a bad line must not abort either.
+  . "${CONFIG_FILE}" 2>/dev/null || true
   set +a
 fi
 

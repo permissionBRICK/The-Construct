@@ -101,6 +101,16 @@ else
 fi
 rm -f "${_sudoers_tmp}"
 
+# Heal a config.env poisoned by a pre-fix run that wrote an unquoted git name
+# with a space (e.g. GIT_USER_NAME=Christoph Ambrosch), which makes every later
+# `. config.env` abort with exit 127 -- including bootstrap.sh's login-banner
+# step, before we'd ever rewrite the file. We no longer store git identity in
+# config.env (it's set via `git config --global` below), so just drop any legacy
+# GIT_USER_* lines before anything sources the file.
+if [[ -f "${CONFIG_FILE}" ]]; then
+  sed -i -E '/^GIT_USER_(NAME|EMAIL)=/d' "${CONFIG_FILE}" || true
+fi
+
 # 1. Base host setup: packages, Docker, dirs, default config, systemd units.
 #    Forced non-interactive so it never launches the ui-setup workflow.
 step "Running bootstrap.sh"
@@ -121,10 +131,9 @@ install -d -m 0755 "${WORKSPACE_ROOT}"
 # 2b. Global git identity for the users that operate on the VM: CLAUDE_USER
 #     (root -- used by VS Code Remote-SSH and the AI tools) and the SSH/seed user
 #     (interactive logins). Values arrive from the host, defaulted there to the
-#     host's own git identity; empty values are left unchanged. Recorded in
-#     config.env too so a later manual provision keeps them.
-if [[ -n "${GIT_USER_NAME}" ]];  then cfg GIT_USER_NAME  "${GIT_USER_NAME}";  fi
-if [[ -n "${GIT_USER_EMAIL}" ]]; then cfg GIT_USER_EMAIL "${GIT_USER_EMAIL}"; fi
+#     host's own git identity; empty values are left unchanged. Deliberately NOT
+#     written to config.env (it is `source`-d by other scripts, and a name with a
+#     space would break that) -- `git config --global` is the store on the VM.
 if [[ -n "${GIT_USER_NAME}" || -n "${GIT_USER_EMAIL}" ]]; then
   step "Configuring global git identity"
   _git_seen=""
