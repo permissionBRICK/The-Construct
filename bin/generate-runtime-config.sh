@@ -41,29 +41,71 @@ ALLOW_HOST_PACKAGES="${ALLOW_HOST_PACKAGES:-false}"
 
 mkdir -p "${RUNTIME_DIR}"
 
+# Persistent on-VM project profile store. The repo's projects/ is replaced on
+# every provision (Provision-AgentVM.ps1 wipes /opt/construct/repo), and a
+# reprovision driven from the PUBLIC repo carries no custom profiles. So we keep
+# a copy of every profile under ${AGENT_HOME}/projects -- which survives
+# reprovisions, since only .../repo is wiped. Custom profiles saved by an earlier
+# deploy are never deleted, so a later reprovision from the public repo can still
+# resolve them. The repo's copy is the source of truth (it is the most up to
+# date): it refreshes the stored copy on every run, and is always preferred at
+# resolution time -- the store is only a fallback for profiles the current repo
+# doesn't ship.
+PROJECTS_STORE="${PROJECTS_STORE:-${AGENT_HOME}/projects}"
+mkdir -p "${PROJECTS_STORE}"
+if [[ -d "${REPO_DIR}/projects" ]]; then
+  shopt -s nullglob
+  for src in "${REPO_DIR}/projects/"*.json; do
+    # The *.json glob already excludes *.json.sample; also skip the schema file,
+    # which is not a project profile.
+    [[ "$(basename "${src}")" == "project.schema.json" ]] && continue
+    cp -f "${src}" "${PROJECTS_STORE}/"
+  done
+  shopt -u nullglob
+fi
+
 project_json_args=()
 IFS=',' read -ra project_names <<<"${PROJECTS}"
 for raw_name in "${project_names[@]}"; do
   name="$(printf '%s' "${raw_name}" | xargs)"
   [[ -n "${name}" ]] || continue
-  file="${REPO_DIR}/projects/${name}.json"
-  if [[ ! -f "${file}" ]]; then
-    # Sample profiles ship as ${name}.json.sample and are not active projects
-    # (they may reference placeholder images/repos). Skip rather than abort so a
-    # stale PROJECTS list that names a sample still provisions cleanly.
-    if [[ -f "${file}.sample" ]]; then
+  # Prefer the repo's (public) copy -- it is the most up to date. Fall back to
+  # the persisted store only when the current repo doesn't ship this profile
+  # (e.g. a custom profile when reprovisioning from the public repo).
+  if [[ -f "${REPO_DIR}/projects/${name}.json" ]]; then
+    file="${REPO_DIR}/projects/${name}.json"
+  elif [[ -f "${PROJECTS_STORE}/${name}.json" ]]; then
+    file="${PROJECTS_STORE}/${name}.json"
+    note "Using persisted project profile (not in this repo): ${name}"
+  else
+    # A sample-only profile must be enabled by renaming; anything else is just
+    # skipped (warn, never abort) so one missing name -- e.g. a custom profile
+    # absent from the public repo and not yet persisted -- can't block the rest
+    # of provisioning (AI tools, services, ...).
+    if [[ -f "${REPO_DIR}/projects/${name}.json.sample" ]]; then
       warn "Skipping sample project profile: ${name} (rename ${name}.json.sample to ${name}.json to enable it)"
-      continue
+    else
+      warn "Project profile not found, skipping: ${name} (no ${name}.json in repo or ${PROJECTS_STORE})"
     fi
-    err "Project profile not found: ${file}"
-    exit 1
+    continue
   fi
   project_json_args+=("${file}")
 done
 
 if [[ "${#project_json_args[@]}" -eq 0 ]]; then
-  err "No project profiles selected in PROJECTS=${PROJECTS}"
-  exit 1
+  # Nothing resolved -- fall back to the default profile rather than aborting the
+  # whole provision, so the VM still comes up with AI tools and services. Prefer
+  # the repo's default over a persisted one for the same reason.
+  if [[ -f "${REPO_DIR}/projects/default.json" ]]; then
+    warn "No requested project profiles found (PROJECTS=${PROJECTS}); falling back to 'default'."
+    project_json_args+=("${REPO_DIR}/projects/default.json")
+  elif [[ -f "${PROJECTS_STORE}/default.json" ]]; then
+    warn "No requested project profiles found (PROJECTS=${PROJECTS}); falling back to persisted 'default'."
+    project_json_args+=("${PROJECTS_STORE}/default.json")
+  else
+    err "No project profiles selected in PROJECTS=${PROJECTS} and no default profile available."
+    exit 1
+  fi
 fi
 
 jq -s '
