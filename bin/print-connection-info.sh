@@ -122,7 +122,9 @@ if systemctl is-enabled --quiet code-serve-web 2>/dev/null \
     elif systemctl is-enabled --quiet code-serve-web 2>/dev/null; then
         sw_state="enabled (not running)"
     fi
-    sw_url="http://${hyperv_dns}:${VSCODE_SERVE_WEB_PORT}"
+    # serve-web authenticates only via a localhost origin, so show the localhost
+    # URL you actually open (reach the port via your own forward/tunnel).
+    sw_url="http://localhost:${VSCODE_SERVE_WEB_PORT}"
     cat <<EOF
 
 VS Code Server (serve-web):
