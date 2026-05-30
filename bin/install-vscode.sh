@@ -112,19 +112,28 @@ install_vscode_cli() {
     return 0
   fi
 
-  local arch dl tmp
+  local arch tmp got
   case "$(uname -m)" in
     x86_64|amd64)  arch="x64" ;;
     aarch64|arm64) arch="arm64" ;;
     armv7l)        arch="armhf" ;;
     *) arch="x64"; warn "unknown architecture $(uname -m); defaulting to x64" ;;
   esac
-  dl="https://code.visualstudio.com/sha/download?build=stable&os=cli-linux-${arch}"
 
   step "Downloading VS Code CLI (cli-linux-${arch})"
   tmp="$(mktemp -d)"
-  if ! curl -fsSL "${dl}" -o "${tmp}/vscode-cli.tar.gz"; then
-    warn "failed to download the VS Code CLI; skipping"
+  # Use update.code.visualstudio.com -- the older code.visualstudio.com/sha/download
+  # endpoint 404s for the cli-linux-* identifiers. Try the glibc build first, then
+  # fall back to the statically-linked alpine build (which also runs on glibc).
+  got=""
+  for variant in "linux-${arch}" "alpine-${arch}"; do
+    if curl -fsSL "https://update.code.visualstudio.com/latest/cli-${variant}/stable" -o "${tmp}/vscode-cli.tar.gz"; then
+      got="${variant}"; break
+    fi
+    note "  cli-${variant} download failed; trying next"
+  done
+  if [[ -z "${got}" ]]; then
+    warn "failed to download the VS Code CLI from update.code.visualstudio.com; skipping"
     rm -rf "${tmp}"
     return 1
   fi
@@ -319,8 +328,11 @@ fi
 
 step "Installing VS Code CLI (server)"
 if ! install_vscode_cli; then
+  # Make this visible: provision.sh surfaces a non-zero exit as a warning. Without
+  # the CLI, neither serve-web nor the tunnel can be set up.
+  err "VS Code CLI install failed; serve-web and tunnel cannot be set up."
   write_status
-  exit 0
+  exit 1
 fi
 note "Remote-SSH will use this binary; 'code serve-web' / 'code tunnel' are available."
 

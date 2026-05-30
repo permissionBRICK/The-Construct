@@ -122,16 +122,14 @@ if systemctl is-enabled --quiet code-serve-web 2>/dev/null \
     elif systemctl is-enabled --quiet code-serve-web 2>/dev/null; then
         sw_state="enabled (not running)"
     fi
-    sw_token=""
-    [[ -s "${VSCODE_SERVE_WEB_TOKEN_FILE}" ]] && sw_token="$(tr -d ' \n' <"${VSCODE_SERVE_WEB_TOKEN_FILE}" 2>/dev/null || true)"
     sw_url="http://${hyperv_dns}:${VSCODE_SERVE_WEB_PORT}"
     cat <<EOF
 
 VS Code Server (serve-web):
   Service:   code-serve-web (${sw_state})
   Bind:      ${VSCODE_SERVE_WEB_HOST}:${VSCODE_SERVE_WEB_PORT}
-  Open:      ${sw_url}/?tkn=${sw_token}
-  Token in:  ${VSCODE_SERVE_WEB_TOKEN_FILE}
+  Open:      ${sw_url}/?tkn=<token>
+  Token:     cat ${VSCODE_SERVE_WEB_TOKEN_FILE}
 EOF
 fi
 
