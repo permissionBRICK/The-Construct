@@ -210,6 +210,16 @@ setup_serve_web() {
   SERVE_WEB_TOKEN="$(tr -d ' \n' <"${VSCODE_SERVE_WEB_TOKEN_FILE}")"
   SERVE_WEB_URL="http://${AGENT_DNS}:${VSCODE_SERVE_WEB_PORT}"
 
+  # Persist the resolved bind settings into config.env so the systemd unit's
+  # EnvironmentFile actually carries the host/port/token-file it references.
+  # bootstrap.sh only seeds these on first-time config.env creation; a VM with a
+  # pre-existing or older config.env would otherwise leave ${VSCODE_SERVE_WEB_HOST}
+  # / ${VSCODE_SERVE_WEB_PORT} empty in ExecStart, so serve-web never binds where
+  # expected. Writing them here makes serve-web self-healing on every provision.
+  bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" VSCODE_SERVE_WEB_HOST "${VSCODE_SERVE_WEB_HOST}"
+  bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" VSCODE_SERVE_WEB_PORT "${VSCODE_SERVE_WEB_PORT}"
+  bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" VSCODE_SERVE_WEB_TOKEN_FILE "${VSCODE_SERVE_WEB_TOKEN_FILE}"
+
   warn "WARNING: code serve-web exposes a root-level browser IDE on ${VSCODE_SERVE_WEB_HOST}:${VSCODE_SERVE_WEB_PORT}; it is protected by a connection token. Expose only on trusted VM networks."
 
   install -d -m 0700 "${VSCODE_SERVE_WEB_DATA_DIR}"
