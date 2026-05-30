@@ -208,7 +208,10 @@ setup_serve_web() {
     chmod 0600 "${VSCODE_SERVE_WEB_TOKEN_FILE}"
   fi
   SERVE_WEB_TOKEN="$(tr -d ' \n' <"${VSCODE_SERVE_WEB_TOKEN_FILE}")"
-  SERVE_WEB_URL="http://${AGENT_DNS}:${VSCODE_SERVE_WEB_PORT}"
+  # serve-web only authenticates via a localhost origin, so the URL you actually
+  # open is the localhost one (reach the port via your own forward/tunnel), not
+  # the agent-vm address.
+  SERVE_WEB_URL="http://localhost:${VSCODE_SERVE_WEB_PORT}"
 
   # Persist the resolved bind settings into config.env so the systemd unit's
   # EnvironmentFile actually carries the host/port/token-file it references.
