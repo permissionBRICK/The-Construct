@@ -1,0 +1,19 @@
+[Unit]
+Description=VS Code Server (serve-web)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/construct/config.env
+# Browser-based VS Code served directly over HTTP (no Microsoft relay, no account
+# sign-in). Access is gated by a connection token (--connection-token-file); reach
+# it at http://<host>:<port>/?tkn=<token>. Data dir is pinned so the downloaded
+# server is reused across restarts.
+ExecStart=/usr/local/bin/code serve-web --accept-server-license-terms --host ${VSCODE_SERVE_WEB_HOST} --port ${VSCODE_SERVE_WEB_PORT} --connection-token-file ${VSCODE_SERVE_WEB_TOKEN_FILE} --cli-data-dir /var/lib/vscode-serve-web --server-data-dir /var/lib/vscode-serve-web
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
