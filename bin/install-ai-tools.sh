@@ -50,6 +50,11 @@ OPENCODE_PORT="${OPENCODE_PORT:-4096}"
 CODEX_HOST="${CODEX_HOST:-0.0.0.0}"
 CODEX_PORT="${CODEX_PORT:-4500}"
 CODEX_TOKEN_FILE="${CODEX_TOKEN_FILE:-/etc/construct/codex-app-server.token}"
+# The local `code serve-web` server on the VM keeps its data (incl. Machine-scope
+# settings) here; used to seed the Claude Code bypass defaults for the browser IDE
+# too, not just the Remote-SSH server. Mirrors install-vscode.sh's default.
+VSCODE_SERVE_WEB="${VSCODE_SERVE_WEB:-true}"
+VSCODE_SERVE_WEB_DATA_DIR="${VSCODE_SERVE_WEB_DATA_DIR:-/var/lib/vscode-serve-web}"
 
 has_tool() {
   case ",${AI_TOOLS}," in
@@ -239,9 +244,12 @@ configure_claude_sandbox_setting() {
 # means the extension comes up in bypass mode without manual UI configuration.
 # Existing settings are preserved. Relies on jq (installed by bootstrap.sh).
 configure_claude_vscode_setting() {
-  local home_dir="$1"
+  local settings_dir="$1"
   local owner="$2"
-  local settings_dir="${home_dir}/.vscode-server/data/Machine"
+  # Tree to chown -R after writing (defaults to the settings dir). For the
+  # Remote-SSH case pass the whole ~/.vscode-server so a freshly-created tree ends
+  # up owned by the connecting user.
+  local chown_root="${3:-${settings_dir}}"
   local settings_file="${settings_dir}/settings.json"
 
   step "Setting Claude Code extension bypass defaults in ${settings_file}"
@@ -261,8 +269,7 @@ configure_claude_vscode_setting() {
   fi
   rm -f "${tmp}"
 
-  # Own the whole .vscode-server tree if we created it; harmless if it predates us.
-  chown -R "${owner}:${owner}" "${home_dir}/.vscode-server" 2>/dev/null || true
+  chown -R "${owner}:${owner}" "${chown_root}" 2>/dev/null || true
 }
 
 install_claude_code() {
@@ -293,7 +300,15 @@ install_claude_code() {
     claude_owner="root"
   fi
   configure_claude_sandbox_setting "${claude_home}" "${claude_owner}"
-  configure_claude_vscode_setting "${claude_home}" "${claude_owner}"
+  # Remote-SSH server (machine scope): applies when VS Code connects via Remote-SSH.
+  configure_claude_vscode_setting "${claude_home}/.vscode-server/data/Machine" "${claude_owner}" "${claude_home}/.vscode-server"
+  # Local `code serve-web` server on the VM (runs as root): seed the SAME
+  # skip-permission defaults into its machine-scope settings so the browser IDE
+  # behaves identically, not just Remote-SSH. (User-scope settings in the web
+  # client live in the browser, so machine scope is the reliable on-disk seed.)
+  if [[ "${VSCODE_SERVE_WEB}" == "true" ]]; then
+    configure_claude_vscode_setting "${VSCODE_SERVE_WEB_DATA_DIR}/data/Machine" "root"
+  fi
   install_agent_system_prompt "${claude_home}/.claude/CLAUDE.md" "${claude_owner}"
 }
 
