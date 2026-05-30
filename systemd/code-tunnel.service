@@ -1,0 +1,19 @@
+[Unit]
+Description=VS Code Remote Tunnel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/construct/config.env
+# --accept-server-license-terms avoids the interactive license prompt; the CLI
+# data dir is pinned to a stable location so the sign-in token survives restarts
+# and re-provisions (first run still needs a one-time browser sign-in -- the
+# device-login link is emitted to this unit's journal).
+ExecStart=/usr/local/bin/code tunnel --accept-server-license-terms --name ${VSCODE_TUNNEL_NAME} --cli-data-dir /var/lib/vscode-tunnel
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

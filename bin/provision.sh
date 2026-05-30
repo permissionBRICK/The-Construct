@@ -57,6 +57,22 @@ SETUP_ROOT_SSH_KEY="${SETUP_ROOT_SSH_KEY:-true}"
 INSTALL_SDKS="${INSTALL_SDKS:-true}"
 CHECKOUT_PROJECTS="${CHECKOUT_PROJECTS:-false}"
 START_SERVICE="${START_SERVICE:-true}"
+# Always install the VS Code CLI ("VS Code Server") so VS Code Remote-SSH works
+# out of the box. Opt out with VSCODE_SERVER=false.
+VSCODE_SERVER="${VSCODE_SERVER:-true}"
+# Autostart `code serve-web` (browser VS Code over HTTP, gated by a connection
+# token; bound to 0.0.0.0). On by default; set VSCODE_SERVE_WEB=false to skip.
+VSCODE_SERVE_WEB="${VSCODE_SERVE_WEB:-true}"
+# Set up + register a `code tunnel` only when SELECTED -- via this env/param or a
+# VSCODE_TUNNEL=true line in an existing config.env. Precedence: explicit env/param
+# > saved config value > default (false). (The install script still redeploys the
+# tunnel SERVICE unconditionally when a prior deployment/registration exists, so a
+# registered VM keeps autostarting the tunnel even without the flag.)
+_vscode_tunnel_saved=""
+if [[ -f "${CONFIG_FILE}" ]]; then
+  _vscode_tunnel_saved="$(sed -n 's/^VSCODE_TUNNEL=//p' "${CONFIG_FILE}" | head -1)"
+fi
+VSCODE_TUNNEL="${VSCODE_TUNNEL:-${_vscode_tunnel_saved:-false}}"
 
 # Optional global git identity to set on the VM. Passed base64-encoded (see
 # Provision-AgentVM.ps1) so names/emails with spaces or apostrophes survive the
@@ -79,6 +95,9 @@ note "    PROJECTS=${PROJECTS}"
 note "    SSH_USER=${SSH_USER}"
 note "    AI_TOOLS=${AI_TOOLS}"
 note "    CLAUDE_USER=${CLAUDE_USER}"
+note "    VSCODE_SERVER=${VSCODE_SERVER}"
+note "    VSCODE_SERVE_WEB=${VSCODE_SERVE_WEB}"
+note "    VSCODE_TUNNEL=${VSCODE_TUNNEL}"
 
 # A zip upload does not preserve Unix exec bits, so make the repo scripts
 # executable before anything tries to run them.
@@ -129,6 +148,9 @@ cfg SSH_USER "${SSH_USER}"
 cfg AI_TOOLS "${AI_TOOLS}"
 cfg ALLOW_HOST_PACKAGES "${ALLOW_HOST_PACKAGES}"
 cfg WORKSPACE_ROOT "${WORKSPACE_ROOT}"
+cfg VSCODE_SERVER "${VSCODE_SERVER}"
+cfg VSCODE_SERVE_WEB "${VSCODE_SERVE_WEB}"
+cfg VSCODE_TUNNEL "${VSCODE_TUNNEL}"
 install -d -m 0755 "${WORKSPACE_ROOT}"
 
 # 2b. Global git identity for the users that operate on the VM: CLAUDE_USER
@@ -204,6 +226,18 @@ fi
 if [[ "${START_SERVICE}" == "true" ]]; then
   step "Starting construct service"
   systemctl start construct
+fi
+
+# 8. Install the VS Code CLI ("VS Code Server", for Remote-SSH) and -- when the
+#    tunnel is selected or already registered/deployed -- (re)deploy the
+#    code-tunnel service. Kept LAST so any device sign-in link is the final thing
+#    the (streamed) provisioning output shows; the host script then pauses for the
+#    sign-in before rebooting.
+if [[ "${VSCODE_SERVER}" == "true" ]]; then
+  step "Setting up VS Code server / serve-web / tunnel"
+  VSCODE_SERVER="${VSCODE_SERVER}" VSCODE_SERVE_WEB="${VSCODE_SERVE_WEB}" VSCODE_TUNNEL="${VSCODE_TUNNEL}" \
+    bash "${REPO_DIR}/bin/install-vscode.sh" \
+    || warn "WARNING: VS Code setup failed; continuing"
 fi
 
 ok "provision.sh complete"

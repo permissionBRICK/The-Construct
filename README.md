@@ -93,7 +93,7 @@ Then run `Provision-AgentVM.ps1` — it needs no admin access.
 | 1 | `Create-AgentVM.ps1` | Ensures OpenSSH + Hyper-V, creates a Gen-2 VM (half host RAM ≤ 24 GB, Secure Boot off), boots the autoinstall ISO, waits for SSH, then calls `Provision-AgentVM.ps1`. |
 | 2 | autoinstall ISO (built by `bin/build-autoinstall-iso.sh`) | Installs a blank **minimized** Ubuntu unattended: user/host preset, SSH on, the committed bootstrap key authorized, and a console hint to run the provisioner. |
 | 3 | `Provision-AgentVM.ps1` | Uploads the repo, runs `bin/provision.sh` via sudo, retrieves the VM's root key, removes the bootstrap key, configures the host's `~\.ssh\` + VS Code, and reboots the VM. |
-| 4 | `bin/provision.sh` (on the VM) | `bootstrap.sh` → write `config.env` → root SSH key → install AI tools → generate runtime config → install selected projects' runtimes → start the `construct` service. |
+| 4 | `bin/provision.sh` (on the VM) | `bootstrap.sh` → write `config.env` → root SSH key → install AI tools → generate runtime config → install selected projects' runtimes → start the `construct` service → install the VS Code CLI/server (and, when selected, deploy + register the `code tunnel`). |
 
 Defaults line up across all of these: user `agent`, password `agent`, hostname `agent-vm`
 (→ `agent-vm.mshome.net` on Hyper-V NAT), and `root` as the VS Code connection user.
@@ -207,7 +207,10 @@ Recognized variables: `AGENT_NAME`, `PROJECTS`, `SSH_USER`, `AI_TOOLS` (default
 `opencode,claude-code,codex`), `ALLOW_HOST_PACKAGES`, `WORKSPACE_ROOT` (default `/root/repos`),
 `CLAUDE_USER` (default `root` — the user Claude Code's CLI and VS Code extension settings are
 written for), `SETUP_ROOT_SSH_KEY` (default `true`), `INSTALL_SDKS` (default `true`),
-`CHECKOUT_PROJECTS` (default `false`), `START_SERVICE` (default `true`).
+`CHECKOUT_PROJECTS` (default `false`), `START_SERVICE` (default `true`), `VSCODE_SERVER`
+(default `true` — install the VS Code CLI / server for Remote-SSH), `VSCODE_SERVE_WEB`
+(default `true` — autostart browser-based `code serve-web`), `VSCODE_TUNNEL`
+(default `false` — opt in to also set up + register a `code tunnel`).
 
 ### Project profiles & runtimes
 
@@ -359,7 +362,45 @@ OPENCODE_PORT=4096
 CODEX_HOST=0.0.0.0
 CODEX_PORT=4500
 CODEX_TOKEN_FILE=/etc/construct/codex-app-server.token
+VSCODE_SERVER=true
+VSCODE_SERVE_WEB=true
+VSCODE_SERVE_WEB_HOST=0.0.0.0
+VSCODE_SERVE_WEB_PORT=8000
+VSCODE_SERVE_WEB_TOKEN_FILE=/etc/construct/vscode-serve-web.token
+VSCODE_TUNNEL=false
+VSCODE_TUNNEL_NAME=
 ```
+
+### VS Code server & remote access
+
+Independent of `AI_TOOLS`, provisioning installs the standalone VS Code CLI ("VS Code Server") to
+`/usr/local/bin/code` **by default** (`VSCODE_SERVER=true`) so VS Code Remote-SSH works out of the
+box and `code serve-web` / `code tunnel` are available. Two browser-reachable front ends sit on top
+of it:
+
+**`code serve-web`** — browser-based VS Code served directly over HTTP, **on by default**
+(`VSCODE_SERVE_WEB=true`) via `code-serve-web.service`. It binds `0.0.0.0:8000`
+(`VSCODE_SERVE_WEB_HOST`/`PORT`) and is reachable at `http://<dns>:<port>/?tkn=<token>`. There is no
+account sign-in; access is gated by a **connection token** generated into
+`VSCODE_SERVE_WEB_TOKEN_FILE`. Note this is a root-level IDE (terminal + filesystem) — keep it on
+trusted VM networks. (To require an SSH tunnel instead of network exposure, set
+`VSCODE_SERVE_WEB_HOST=127.0.0.1` and reach it via `ssh -L 8000:127.0.0.1:8000`.)
+
+**`code tunnel`** (reachable through `https://vscode.dev/tunnel/<name>` with **no inbound port**)
+is opt-in — enable it with `VSCODE_TUNNEL=true` (a config-file line or `-VsCodeTunnel true` on the
+host script). `VSCODE_TUNNEL_NAME` is the tunnel identifier; left blank it is derived from the
+hostname (lowercased, `[a-z0-9-]`). The CLI data dir and sign-in token live at
+`/var/lib/vscode-tunnel`, so registration survives restarts and re-provisions.
+
+- **First-time registration** needs a **one-time** browser sign-in (GitHub/Microsoft). When you
+  select the tunnel, `code-tunnel.service` starts and emits a device-login link; the host
+  provisioner (`Provision-AgentVM.ps1`) reads it back and **pauses before the reboot** so you can
+  sign in against a still-valid code, then press Enter to continue. (Running headless? Read the
+  link with `journalctl -u code-tunnel -n 50`.)
+- **Re-provisioning** always re-deploys the `code-tunnel` service when it was previously deployed
+  or is still registered — so a registered VM keeps autostarting the tunnel even with
+  `VSCODE_TUNNEL=false`. The interactive sign-in is only re-run when `VSCODE_TUNNEL=true` **and**
+  the VM isn't already registered.
 
 The VM writes connection info to `/etc/issue.d/construct.issue` via
 `construct-console-info.service`, so getty shows it on the physical console before the login
@@ -414,6 +455,10 @@ agent runtime is available.
 ```bash
 sudo systemctl start|stop|restart|status construct
 ```
+
+Provisioning also manages these units (when their tools are selected): `opencode-serve`,
+`codex-app-server`, `code-serve-web` (browser VS Code), and `code-tunnel` (the VS Code remote
+tunnel). Inspect any of them with `systemctl status <unit>` / `journalctl -u <unit>`.
 
 Container logs:
 

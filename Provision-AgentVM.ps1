@@ -50,6 +50,17 @@ param(
     [string]$AgentName    = "",
     [string]$LocalKeyName = "agent_vm_ed25519",
     [int]$OpencodePort    = 4096,
+    # Always install the VS Code CLI ("VS Code Server") on the VM so VS Code
+    # Remote-SSH works out of the box. "true"/"false".
+    [string]$VsCodeServer = "true",
+    # Autostart `code serve-web` (browser VS Code over HTTP, gated by a connection
+    # token, bound to 0.0.0.0). On by default. "true"/"false".
+    [string]$VsCodeServeWeb = "true",
+    # Opt in to also set up + register a `code tunnel` (reachable via vscode.dev
+    # with no inbound port). When enabled, the script pauses after provisioning so
+    # you can complete the one-time device sign-in, then continues to the reboot.
+    # "true"/"false".
+    [string]$VsCodeTunnel = "false",
     [switch]$IncludeGit,
     # Set when this script is launched by an upper script (Auto-Install.ps1 /
     # Create-AgentVM.ps1), which owns the final "Press Enter" pause. When run on
@@ -725,7 +736,7 @@ $agentNameArg = if ($AgentName) { $AgentName } else { "$HostAlias-agent" }
 $gitNameB64  = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$gitIdentity.Name))
 $gitEmailB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$gitIdentity.Email))
 $gitCredStore = if ($gitIdentity.CredentialStore) { "true" } else { "false" }
-$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore'"
+$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel'"
 Write-Host "  --- live provisioning output ---" -ForegroundColor DarkGray
 Invoke-SshStream -Sudo -Command "$envPrefix bash /opt/construct/repo/bin/provision.sh"
 Write-Host "  --- end provisioning output ---" -ForegroundColor DarkGray
@@ -737,6 +748,59 @@ $keyText = Invoke-Ssh -Sudo -Command "cat $RemoteKeyPath"
 $m = [regex]::Match($keyText, "(?s)-----BEGIN[^-]*PRIVATE KEY-----.*?-----END[^-]*PRIVATE KEY-----")
 if (-not $m.Success) { throw "Could not find a private key in the output of: cat $RemoteKeyPath" }
 Write-Ok "Retrieved private key"
+
+# Read the VS Code tunnel status back from the VM NOW -- while SSH is still up and
+# before the reboot below -- so we can (a) pause for the one-time device sign-in
+# if a registration is pending, and (b) report tunnel state in the final summary.
+$tunnelStatus = @{}
+if ($VsCodeServer -eq "true") {
+    try {
+        $raw = Invoke-Ssh -Sudo -Command "cat /etc/construct/vscode-status 2>/dev/null || true"
+        foreach ($line in ($raw -split "`n")) {
+            if ($line -match '^\s*([A-Z_]+)=(.*)$') { $tunnelStatus[$matches[1]] = $matches[2].Trim() }
+        }
+    } catch { }
+}
+
+function Get-TunnelLoginLine {
+    # Pull the current device-login instruction line from the VM's journal. Used
+    # as a fallback if the status file didn't capture one yet (the service may
+    # need another moment to emit it). The VM is still up here (pre-reboot).
+    for ($i = 0; $i -lt 15; $i++) {
+        try {
+            $out = Invoke-Ssh -Sudo -Command "journalctl -u code-tunnel -o cat --no-pager -n 200 2>/dev/null | grep -Ei 'github.com/login/device|microsoft.com/devicelogin|use code|grant access' | tail -n1 || true"
+            $line = ($out | Out-String).Trim()
+            if ($line) { return $line }
+        } catch { }
+        Start-Sleep -Seconds 2
+    }
+    return ""
+}
+
+# If the tunnel needs its one-time device sign-in, do it NOW -- before the reboot.
+# The VM is still up and the code-tunnel service is polling for the device code,
+# so pausing here lets the user complete the GitHub/Microsoft sign-in against a
+# code that is still valid. (Rebooting first would rotate the code.)
+if ($tunnelStatus['VSCODE_TUNNEL_NEEDS_SIGNIN'] -eq "yes") {
+    $loginLine = ""
+    if ($tunnelStatus['VSCODE_TUNNEL_LOGIN_B64']) {
+        try { $loginLine = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($tunnelStatus['VSCODE_TUNNEL_LOGIN_B64'])) } catch { }
+    }
+    if (-not $loginLine) { $loginLine = Get-TunnelLoginLine }
+
+    Write-Host ""
+    Write-Step "VS Code tunnel: one-time device sign-in required"
+    Write-Host "    Register the tunnel now, BEFORE the reboot:" -ForegroundColor Yellow
+    if ($loginLine) {
+        Write-Host "      $loginLine" -ForegroundColor Cyan
+    } else {
+        Write-Host "      Could not read the device code automatically. In another window run:" -ForegroundColor Yellow
+        Write-Host "        ssh $SeedUser@$VmHost `"sudo journalctl -u code-tunnel -n 50`"" -ForegroundColor Cyan
+        Write-Host "      and use the github.com/login/device link shown there." -ForegroundColor Cyan
+    }
+    Write-Host "    Open the link, enter the code, and authorize access." -ForegroundColor White
+    Read-Host "    Press Enter once sign-in is complete to finish setup and reboot the VM"
+}
 
 # Remove the bootstrap public key from the agent user's authorized_keys AND
 # reboot — in one authenticated session. Once the key is gone we can't
@@ -804,6 +868,42 @@ if (",$AiTools," -like "*,codex,*") {
     Write-Host "    1. Open Codex -> Settings -> Connections" -ForegroundColor DarkGray
     Write-Host "    2. Add SSH connection, then pick the VM ($HostAlias) from the list" -ForegroundColor DarkGray
     Write-Host "    3. Log into your Codex account again on the remote" -ForegroundColor DarkGray
+}
+if ($VsCodeServer -eq "true") {
+    Write-Host ""
+    Write-Host "VS Code Remote-SSH:" -ForegroundColor White
+    Write-Host "    Server installed -- connect via Remote Explorer -> SSH -> $HostAlias." -ForegroundColor DarkGray
+}
+if ($tunnelStatus['VSCODE_SERVE_WEB_ENABLED'] -eq "yes") {
+    $swUrl = $tunnelStatus['VSCODE_SERVE_WEB_URL']
+    $swTok = $tunnelStatus['VSCODE_SERVE_WEB_TOKEN']
+    Write-Host ""
+    Write-Host "VS Code Server (serve-web, browser):" -ForegroundColor White
+    if ($swUrl -and $swTok) {
+        Write-Host "    $swUrl/?tkn=$swTok" -ForegroundColor Yellow
+    } elseif ($swUrl) {
+        Write-Host "    $swUrl  (token: ssh $HostAlias `"sudo cat /etc/construct/vscode-serve-web.token`")" -ForegroundColor Yellow
+    }
+    Write-Host "    Browser VS Code over HTTP, gated by the connection token above." -ForegroundColor DarkGray
+}
+if ($tunnelStatus['VSCODE_TUNNEL_DEPLOYED'] -eq "yes") {
+    $tunnelName = ($HostAlias.ToLower() -replace '[^a-z0-9-]', '-') -replace '-+', '-'
+    $tunnelName = $tunnelName.Trim('-')
+    if ($tunnelStatus['VSCODE_TUNNEL_NAME']) { $tunnelName = $tunnelStatus['VSCODE_TUNNEL_NAME'] }
+    $tunnelUrl = if ($tunnelStatus['VSCODE_TUNNEL_URL']) { $tunnelStatus['VSCODE_TUNNEL_URL'] } else { "https://vscode.dev/tunnel/$tunnelName" }
+
+    Write-Host ""
+    Write-Host "VS Code Remote Tunnel:" -ForegroundColor White
+    Write-Host "    Open: $tunnelUrl" -ForegroundColor Yellow
+    if ($tunnelStatus['VSCODE_TUNNEL_NEEDS_SIGNIN'] -eq "yes") {
+        # The user completed (or was prompted for) the device sign-in in the pause
+        # above; once that's done the tunnel comes up automatically after reboot.
+        Write-Host "    You completed the one-time sign-in above -- the tunnel comes up after the reboot." -ForegroundColor Green
+    } elseif ($tunnelStatus['VSCODE_TUNNEL_AUTHED'] -eq "yes") {
+        Write-Host "    Status: registered and live -- open the URL in a browser or VS Code Remote Explorer." -ForegroundColor Green
+    } else {
+        Write-Host "    Service is deployed. If the tunnel isn't registered yet, re-run with -VsCodeTunnel true to sign in." -ForegroundColor DarkGray
+    }
 }
 Write-Host ""
 

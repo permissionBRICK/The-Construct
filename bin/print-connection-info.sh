@@ -18,6 +18,12 @@ OPENCODE_HOST="${OPENCODE_HOST:-0.0.0.0}"
 CODEX_PORT="${CODEX_PORT:-4500}"
 CODEX_HOST="${CODEX_HOST:-0.0.0.0}"
 CODEX_TOKEN_FILE="${CODEX_TOKEN_FILE:-/etc/construct/codex-app-server.token}"
+VSCODE_TUNNEL="${VSCODE_TUNNEL:-}"
+VSCODE_TUNNEL_NAME="${VSCODE_TUNNEL_NAME:-}"
+VSCODE_SERVE_WEB="${VSCODE_SERVE_WEB:-}"
+VSCODE_SERVE_WEB_HOST="${VSCODE_SERVE_WEB_HOST:-0.0.0.0}"
+VSCODE_SERVE_WEB_PORT="${VSCODE_SERVE_WEB_PORT:-8000}"
+VSCODE_SERVE_WEB_TOKEN_FILE="${VSCODE_SERVE_WEB_TOKEN_FILE:-/etc/construct/vscode-serve-web.token}"
 
 lan_ip="$(ip -o -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($i == "src") {print $(i+1); exit}}' || true)"
 if [[ -z "${lan_ip}" ]]; then
@@ -94,6 +100,61 @@ Codex experimental app-server:
   Token file on VM:       ${CODEX_TOKEN_FILE}
   Connect CLI:            CODEX_REMOTE_TOKEN=<token> codex --remote ws://${hyperv_dns}:${CODEX_PORT} --remote-auth-token-env CODEX_REMOTE_TOKEN
   Optional tunnel:        ssh -L ${CODEX_PORT}:127.0.0.1:${CODEX_PORT} ${ssh_user}@${hyperv_dns}
+EOF
+fi
+
+# The VS Code CLI is installed by default, so connecting via Remote-SSH just works.
+if command -v code >/dev/null 2>&1; then
+    cat <<EOF
+
+VS Code Remote-SSH:
+  Server installed; connect via Remote Explorer -> SSH -> ${hyperv_dns}
+EOF
+fi
+
+# Browser VS Code (serve-web): shown when its service is deployed or selected.
+if systemctl is-enabled --quiet code-serve-web 2>/dev/null \
+   || systemctl is-active --quiet code-serve-web 2>/dev/null \
+   || [[ "${VSCODE_SERVE_WEB}" == "true" ]]; then
+    sw_state="not started"
+    if systemctl is-active --quiet code-serve-web 2>/dev/null; then
+        sw_state="running"
+    elif systemctl is-enabled --quiet code-serve-web 2>/dev/null; then
+        sw_state="enabled (not running)"
+    fi
+    sw_token=""
+    [[ -s "${VSCODE_SERVE_WEB_TOKEN_FILE}" ]] && sw_token="$(tr -d ' \n' <"${VSCODE_SERVE_WEB_TOKEN_FILE}" 2>/dev/null || true)"
+    sw_url="http://${hyperv_dns}:${VSCODE_SERVE_WEB_PORT}"
+    cat <<EOF
+
+VS Code Server (serve-web):
+  Service:   code-serve-web (${sw_state})
+  Bind:      ${VSCODE_SERVE_WEB_HOST}:${VSCODE_SERVE_WEB_PORT}
+  Open:      ${sw_url}/?tkn=${sw_token}
+  Token in:  ${VSCODE_SERVE_WEB_TOKEN_FILE}
+EOF
+fi
+
+# Show the tunnel only when its service is actually deployed (enabled/active) or
+# explicitly selected -- not merely because the CLI is present.
+if systemctl is-enabled --quiet code-tunnel 2>/dev/null \
+   || systemctl is-active --quiet code-tunnel 2>/dev/null \
+   || [[ "${VSCODE_TUNNEL}" == "true" ]]; then
+    tunnel_name="${VSCODE_TUNNEL_NAME:-$(hostname)}"
+    if systemctl is-active --quiet code-tunnel 2>/dev/null; then
+        tunnel_state="running"
+    elif systemctl is-enabled --quiet code-tunnel 2>/dev/null; then
+        tunnel_state="enabled (not running)"
+    else
+        tunnel_state="not started"
+    fi
+    cat <<EOF
+
+VS Code Remote Tunnel:
+  Service:          code-tunnel (${tunnel_state})
+  Open in browser:  https://vscode.dev/tunnel/${tunnel_name}
+  Or in VS Code:    Remote Explorer -> Tunnels -> ${tunnel_name}
+  First-time login: journalctl -u code-tunnel -n 50  (use the github.com/login/device link)
 EOF
 fi
 
