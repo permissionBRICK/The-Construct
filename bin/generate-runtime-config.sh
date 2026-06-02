@@ -121,6 +121,11 @@ jq -s '
     repos: map(.repos // []) | add | unique_by(.url),
     sdks: merge_sdks,
     mcp: (map(.mcp // []) | add | unique_strings),
+    mcpServers: (
+      map(.mcp // []) | add
+      | map(select(type == "object" and ((.name // "") | length) > 0))
+      | map({ (.name): . }) | add // {}
+    ),
     hostPackages: (map(.hostPackages // []) | add | unique_strings),
     tests: map({(.name): (.tests // {})}) | add
   }
