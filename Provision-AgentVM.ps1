@@ -9,14 +9,23 @@
     machine. The script:
 
       1. Packs this repo folder (the folder the script lives in) into a tar.gz.
-      2. Connects to the VM over SSH using a pre-seeded bootstrap key (baked
-         into the autoinstall ISO for the agent user). If the key is not yet
-         authorized (e.g. a hand-installed VM), prints a PuTTY command to
-         authorize it and stops so you can run it and re-launch.
+      2. Connects to the VM over SSH. When re-provisioning an existing VM, it
+         first tries the root key saved from a previous run (~\.ssh\<LocalKeyName>):
+         if that still authorizes us as root, the whole run uses it -- every
+         command runs directly as root (no bootstrap key, no agent password, no
+         sudo) and the VM's root key is left untouched (not regenerated). Only
+         if that doesn't work does it fall back to the pre-seeded bootstrap key
+         (baked into the autoinstall ISO for the agent user); if the bootstrap
+         key isn't authorized either, it offers to install it via the agent
+         password, and as a last resort prints a PuTTY command and stops.
       3. Uploads the archive, unpacks it to /opt/construct/repo, and runs the
-         non-interactive provisioner (bin/provision.sh) via sudo.
-      4. Retrieves the root SSH private key generated on the VM.
+         non-interactive provisioner (bin/provision.sh) -- as root directly on
+         the fast path, otherwise via sudo.
+      4. Obtains the root SSH private key: reuses the saved copy on the fast
+         path, otherwise retrieves the one generated on the VM.
       5. Removes the bootstrap public key from the agent user's authorized_keys.
+         The fast path never installs it, but still strips any leftover copy
+         from a failed/manual prior run so it can't remain a standing credential.
       6. Configures the Windows host: ~\.ssh\ (private key + known_hosts +
          config Host entry) and VS Code's remote.SSH.remotePlatform.
 
@@ -215,16 +224,33 @@ $script:SshOpts = @(
     "-o", "ConnectTimeout=15"
 )
 
+# Identity used for the provisioning SSH/SCP connection. Defaults to the seed
+# (agent) user reached via the bootstrap key; the re-provision fast path
+# (Enter-RootKeyFastPath) can switch this to root once it confirms the saved
+# root key still works, after which every command runs directly as root (no
+# sudo) and the VM's existing root key is left untouched.
+$script:ConnectUser       = $SeedUser
+$script:UseRootKey        = $false
+$script:LocalRootKeyPath  = $null
+$script:SecureRootKeyPath = $null
+
 function Invoke-Ssh {
     param([Parameter(Mandatory)][string]$Command, [switch]$Sudo)
-    $toRun = $Command
-    if ($Sudo) {
+    if ($script:UseRootKey) {
+        # Connected as root via the saved key: run the command directly (no sudo)
+        # but through a login shell so PATH matches the sudo path -- e.g. so the
+        # reboot/chpasswd in /usr/sbin resolve the same way they do under sudo.
+        $escCmd = $Command.Replace("'", "'\''")
+        $toRun  = "bash -lc '$escCmd'"
+    } elseif ($Sudo) {
         $escPw  = $SeedPassword.Replace("'", "'\''")
         $escCmd = $Command.Replace("'", "'\''")
         $toRun  = "printf '%s\n' '$escPw' | sudo -S -p '' bash -lc '$escCmd'"
+    } else {
+        $toRun = $Command
     }
     $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-    $output = & ssh.exe @script:SshOpts "$SeedUser@$VmHost" $toRun 2>$null
+    $output = & ssh.exe @script:SshOpts "$($script:ConnectUser)@$VmHost" $toRun 2>$null
     $exitCode = $LASTEXITCODE
     $ErrorActionPreference = $prevEAP
     if ($exitCode -ne 0) {
@@ -244,7 +270,9 @@ function Invoke-SshStream {
     # (so they still skip animated progress bars). DEBIAN_FRONTEND keeps apt quiet.
     $envPrefix = "env TERM=xterm-256color FORCE_COLOR=1 CLICOLOR_FORCE=1 DEBIAN_FRONTEND=noninteractive"
     $escCmd = $Command.Replace("'", "'\''")
-    if ($Sudo) {
+    # When connected as root via the saved key we're already root, so drop the
+    # sudo wrapper and run the command straight through the login shell.
+    if ($Sudo -and -not $script:UseRootKey) {
         $escPw = $SeedPassword.Replace("'", "'\''")
         $toRun = "printf '%s\n' '$escPw' | sudo -S -p '' $envPrefix bash -lc '$escCmd'"
     } else {
@@ -260,7 +288,7 @@ function Invoke-SshStream {
     $esc    = [char]27
     $ansiRe = [regex]([regex]::Escape($esc) + '\[[0-9;?]*[ -/]*[@-ln-~]')
     $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-    & ssh.exe @script:SshOpts "$SeedUser@$VmHost" $toRun 2>&1 | ForEach-Object {
+    & ssh.exe @script:SshOpts "$($script:ConnectUser)@$VmHost" $toRun 2>&1 | ForEach-Object {
         Write-Host ((([string]$_) -replace "`r", "") -replace $ansiRe, "")
     }
     $exitCode = $LASTEXITCODE
@@ -276,7 +304,7 @@ function Invoke-Scp {
         [Parameter(Mandatory)][string]$RemotePath
     )
     $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-    & scp.exe @script:SshOpts $LocalPath "${SeedUser}@${VmHost}:${RemotePath}" 2>$null
+    & scp.exe @script:SshOpts $LocalPath "$($script:ConnectUser)@${VmHost}:${RemotePath}" 2>$null
     $exitCode = $LASTEXITCODE
     $ErrorActionPreference = $prevEAP
     if ($exitCode -ne 0) {
@@ -403,6 +431,64 @@ function Install-BootstrapKeyViaPassword {
         $ErrorActionPreference = $prevEAP
     }
     return $false
+}
+
+# --- Re-provision fast path: connect straight in as root with the saved key --
+
+function Enter-RootKeyFastPath {
+    # On a re-provision of an existing VM the root private key from the previous
+    # run is already saved on this host (~\.ssh\$LocalKeyName) and its public key
+    # is still authorized for root on the VM. If that key lets us in as root, we
+    # switch the whole run onto it: every later SSH/SCP command runs directly as
+    # root over this key -- no bootstrap key, no agent password, no sudo -- and
+    # provision.sh is told not to regenerate the VM's root key, so this saved key
+    # stays valid. Returns $true once script state has been switched to root;
+    # $false otherwise (no saved key, or it no longer authenticates), in which
+    # case the caller falls back to the bootstrap-key / agent-password path.
+    $localKey = Join-Path $HOME ".ssh\$LocalKeyName"
+    if (-not (Test-Path -LiteralPath $localKey)) {
+        Write-Ok "No saved root key at $localKey -- using the bootstrap-key path"
+        return $false
+    }
+
+    # Windows OpenSSH silently ignores a private key whose ACL is "too open" (auth
+    # then fails even though the public key is authorized). Copy it to TEMP with
+    # owner-only ACLs and use that copy -- the same treatment the bootstrap key
+    # gets in Ensure-BootstrapKey.
+    $secureKey = Join-Path $env:TEMP "ca_root_$LocalKeyName"
+    Remove-Item -LiteralPath $secureKey -Force -ErrorAction SilentlyContinue
+    Copy-Item -LiteralPath $localKey -Destination $secureKey -Force
+    & icacls $secureKey /inheritance:r | Out-Null
+    & icacls $secureKey /grant:r "$($env:USERNAME):F" | Out-Null
+
+    $opts = @(
+        "-i", $secureKey,
+        "-o", "IdentitiesOnly=yes",
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "UserKnownHostsFile=$env:TEMP\construct-known_hosts",
+        "-o", "BatchMode=yes",
+        "-o", "ConnectTimeout=15"
+    )
+
+    # Probe as the remote (root) user. Lower ErrorActionPreference so ssh's benign
+    # stderr isn't promoted to a terminating error by the script-wide 'Stop'.
+    $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+    & ssh.exe @opts "$RemoteUser@$VmHost" "true" 2>&1 | Out-Null
+    $ok = ($LASTEXITCODE -eq 0)
+    $ErrorActionPreference = $prevEAP
+
+    if (-not $ok) {
+        Remove-Item -LiteralPath $secureKey -Force -ErrorAction SilentlyContinue
+        Write-Ok "Saved root key did not authenticate -- falling back to the bootstrap-key path"
+        return $false
+    }
+
+    $script:SshOpts           = $opts
+    $script:ConnectUser       = $RemoteUser
+    $script:UseRootKey        = $true
+    $script:LocalRootKeyPath  = $localKey
+    $script:SecureRootKeyPath = $secureKey
+    return $true
 }
 
 # --- Step 1: pack this repo -------------------------------------------------
@@ -687,7 +773,6 @@ if ($gitIdentity.Name -or $gitIdentity.Email) {
 
 Ensure-Tar
 Ensure-OpenSSH
-Ensure-BootstrapKey
 $archivePath = New-RepoArchive
 Ensure-VmReachable
 
@@ -698,24 +783,35 @@ $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
 $ErrorActionPreference = $prevEAP
 Write-Ok "Host key stored"
 
-# Ensure key auth works. Autoinstall VMs already have the bootstrap key; a
-# hand-installed VM does not — try installing it via the seed password (you'll
-# be prompted; default is 'agent'), and if that can't authenticate, fall back to
-# the manual PuTTY instructions.
-Write-Step "Checking bootstrap key authentication"
-if (Test-KeyAuth) {
-    Write-Ok "Bootstrap key accepted"
+# Re-provision fast path: if the root key saved from a previous run still lets us
+# in as root, use it for the whole run -- no bootstrap key, no agent password, no
+# sudo -- and leave the VM's root key untouched. Only if that doesn't work do we
+# fall back to the bootstrap-key path below.
+Write-Step "Checking for a saved root key (re-provision fast path)"
+if (Enter-RootKeyFastPath) {
+    Write-Ok "Connected as root with the saved key ($script:LocalRootKeyPath)"
 } else {
-    Install-BootstrapKeyViaPassword | Out-Null
-    if (-not (Test-KeyAuth)) { Throw-BootstrapKeyHelp }
-    Write-Ok "Key authentication working"
-}
+    # Fall back to the bootstrap key. Autoinstall VMs already have it authorized;
+    # a hand-installed (or freshly recreated) VM does not — try installing it via
+    # the seed password (you'll be prompted; default is 'agent'), and if that
+    # can't authenticate, fall back to the manual PuTTY instructions.
+    Ensure-BootstrapKey
 
-# Confirm we can sudo before any privileged step. On a re-provision the agent
-# login password may differ from the seed default (a custom password set on a
-# previous run), which would otherwise make the first sudo command below fail.
-Write-Step "Checking sudo access"
-Ensure-Sudo
+    Write-Step "Checking bootstrap key authentication"
+    if (Test-KeyAuth) {
+        Write-Ok "Bootstrap key accepted"
+    } else {
+        Install-BootstrapKeyViaPassword | Out-Null
+        if (-not (Test-KeyAuth)) { Throw-BootstrapKeyHelp }
+        Write-Ok "Key authentication working"
+    }
+
+    # Confirm we can sudo before any privileged step. On a re-provision the agent
+    # login password may differ from the seed default (a custom password set on a
+    # previous run), which would otherwise make the first sudo command below fail.
+    Write-Step "Checking sudo access"
+    Ensure-Sudo
+}
 
 # Upload the archive via SCP (remove any stale copy owned by root from a previous run).
 Write-Step "Uploading repo archive to $RemoteArchive"
@@ -736,18 +832,32 @@ $agentNameArg = if ($AgentName) { $AgentName } else { "$HostAlias-agent" }
 $gitNameB64  = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$gitIdentity.Name))
 $gitEmailB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$gitIdentity.Email))
 $gitCredStore = if ($gitIdentity.CredentialStore) { "true" } else { "false" }
-$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel'"
+# When we connected over the saved root key, that key must keep working after the
+# run, so tell provision.sh NOT to regenerate the VM's root key. (setup-root-ssh-key.sh
+# already preserves an existing key, but skipping it entirely also avoids re-emitting
+# the key to the provisioning log.)
+$setupRootKeyArg = if ($script:UseRootKey) { "false" } else { "true" }
+$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel'"
 Write-Host "  --- live provisioning output ---" -ForegroundColor DarkGray
 Invoke-SshStream -Sudo -Command "$envPrefix bash /opt/construct/repo/bin/provision.sh"
 Write-Host "  --- end provisioning output ---" -ForegroundColor DarkGray
 Write-Ok "Provisioning finished"
 
-# Retrieve the generated root private key.
-Write-Step "Retrieving root SSH private key from the VM"
-$keyText = Invoke-Ssh -Sudo -Command "cat $RemoteKeyPath"
-$m = [regex]::Match($keyText, "(?s)-----BEGIN[^-]*PRIVATE KEY-----.*?-----END[^-]*PRIVATE KEY-----")
-if (-not $m.Success) { throw "Could not find a private key in the output of: cat $RemoteKeyPath" }
-Write-Ok "Retrieved private key"
+# Get the root private key for the host-side config below. On the fast path we
+# already hold it locally (and told the VM not to regenerate it), so reuse the
+# saved copy; otherwise retrieve the freshly generated one from the VM.
+if ($script:UseRootKey) {
+    Write-Step "Reusing the saved root SSH private key (VM key left unchanged)"
+    $privateKeyText = [System.IO.File]::ReadAllText($script:LocalRootKeyPath)
+    Write-Ok "Using existing key $script:LocalRootKeyPath"
+} else {
+    Write-Step "Retrieving root SSH private key from the VM"
+    $keyText = Invoke-Ssh -Sudo -Command "cat $RemoteKeyPath"
+    $m = [regex]::Match($keyText, "(?s)-----BEGIN[^-]*PRIVATE KEY-----.*?-----END[^-]*PRIVATE KEY-----")
+    if (-not $m.Success) { throw "Could not find a private key in the output of: cat $RemoteKeyPath" }
+    $privateKeyText = $m.Value
+    Write-Ok "Retrieved private key"
+}
 
 # Read the VS Code tunnel status back from the VM NOW -- while SSH is still up and
 # before the reboot below -- so we can (a) pause for the one-time device sign-in
@@ -794,30 +904,47 @@ if ($tunnelStatus['VSCODE_TUNNEL_NEEDS_SIGNIN'] -eq "yes") {
     if ($loginLine) {
         Write-Host "      $loginLine" -ForegroundColor Cyan
     } else {
+        $journalCmd = if ($script:UseRootKey) { "journalctl -u code-tunnel -n 50" } else { "sudo journalctl -u code-tunnel -n 50" }
         Write-Host "      Could not read the device code automatically. In another window run:" -ForegroundColor Yellow
-        Write-Host "        ssh $SeedUser@$VmHost `"sudo journalctl -u code-tunnel -n 50`"" -ForegroundColor Cyan
+        Write-Host "        ssh $($script:ConnectUser)@$VmHost `"$journalCmd`"" -ForegroundColor Cyan
         Write-Host "      and use the github.com/login/device link shown there." -ForegroundColor Cyan
     }
     Write-Host "    Open the link, enter the code, and authorize access." -ForegroundColor White
     Read-Host "    Press Enter once sign-in is complete to finish setup and reboot the VM"
 }
 
-# Remove the bootstrap public key from the agent user's authorized_keys AND
-# reboot — in one authenticated session. Once the key is gone we can't
-# reconnect, so the earlier "remove then reboot in a separate call" silently
-# failed to authenticate. The session stays valid after the key is removed
-# (auth already happened); the reboot is backgrounded with a short delay so the
-# SSH command returns cleanly before the VM goes down.
-Write-Step "Removing bootstrap key and rebooting the VM"
-$pubKeyContent = (Get-Content $BootstrapPubKey -Raw).Trim()
-$escPubKey = $pubKeyContent.Replace("/", "\/")
+# Remove the bootstrap public key from the agent user's authorized_keys, then
+# reboot — in one authenticated session. On the bootstrap path the removal and
+# reboot MUST share one session: once the key is gone we can't reconnect, so
+# removing it in a separate call would silently fail to authenticate. The
+# session stays valid after the key is removed (auth already happened); the
+# reboot is backgrounded with a short delay so the SSH command returns cleanly
+# before the VM goes down. On the fast path we connected as root and never
+# authorized the bootstrap key this run, but a leftover copy from a failed or
+# manual prior run would remain a standing credential (and provision.sh grants
+# that agent user passwordless sudo), so we strip it opportunistically there too
+# whenever the committed public key is available — root can do this without the
+# bootstrap key.
+$rmBootstrapCmd = ""
+if (Test-Path -LiteralPath $BootstrapPubKey) {
+    $pubKeyContent  = (Get-Content $BootstrapPubKey -Raw).Trim()
+    $escPubKey      = $pubKeyContent.Replace("/", "\/")
+    # `|| true` so a missing/empty authorized_keys (possible on the fast path)
+    # doesn't abort the chain before the reboot.
+    $rmBootstrapCmd = "sed -i '/$escPubKey/d' /home/${SeedUser}/.ssh/authorized_keys 2>/dev/null || true; "
+}
+
+if ($rmBootstrapCmd) {
+    Write-Step "Removing bootstrap key and rebooting the VM"
+} else {
+    Write-Step "Rebooting the VM"
+}
 
 # Optionally set the agent user's login password as the LAST thing before the
 # reboot. It's only a manual-fallback credential (root logs in by pubkey), and
-# we change it inside the same sudo session that has ALREADY authenticated with
-# the old password, so it can never lock provisioning out mid-run. The new
-# password is base64-encoded so any characters survive the SSH/shell layers
-# untouched; chpasswd (run as root via sudo) then sets it.
+# we change it inside the same already-authenticated session, so it can never
+# lock provisioning out mid-run. The new password is base64-encoded so any
+# characters survive the SSH/shell layers untouched; chpasswd (run as root) sets it.
 $pwChangeCmd = ""
 if ($AgentPassword -and ($AgentPassword -ne $SeedPassword)) {
     $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("${SeedUser}:${AgentPassword}"))
@@ -825,12 +952,16 @@ if ($AgentPassword -and ($AgentPassword -ne $SeedPassword)) {
     Write-Ok "Setting a custom login password for '$SeedUser'"
 }
 
-Invoke-Ssh -Sudo -Command "${pwChangeCmd}sed -i '/$escPubKey/d' /home/${SeedUser}/.ssh/authorized_keys; nohup sh -c 'sleep 3; reboot' >/dev/null 2>&1 &"
-Write-Ok "Bootstrap key removed; VM will reboot in a few seconds"
+Invoke-Ssh -Sudo -Command "${pwChangeCmd}${rmBootstrapCmd}nohup sh -c 'sleep 3; reboot' >/dev/null 2>&1 &"
+if ($rmBootstrapCmd) {
+    Write-Ok "Bootstrap key removed; VM will reboot in a few seconds"
+} else {
+    Write-Ok "VM will reboot in a few seconds"
+}
 
 # Configure the Windows host (local — no VM connection needed).
 Write-Step "Configuring the Windows host (~\.ssh and VS Code)"
-$keyPath = Set-HostSshConfig -PrivateKeyText $m.Value
+$keyPath = Set-HostSshConfig -PrivateKeyText $privateKeyText
 Set-VsCodeRemotePlatform
 if (",$AiTools," -like "*,opencode,*") {
     Set-OpenCodeRemote -Url "http://${VmHost}:${OpencodePort}" -DisplayName $HostAlias
@@ -839,9 +970,12 @@ if (",$AiTools," -like "*,opencode,*") {
 # Clean up temporary known_hosts.
 Remove-Item "$env:TEMP\construct-known_hosts" -Force -ErrorAction SilentlyContinue
 
-# Remove the temporary copy of the bootstrap private key (last SSH op is done).
+# Remove the temporary owner-only copies of the private keys (last SSH op is done).
 if ($script:SecureKeyPath) {
     Remove-Item -LiteralPath $script:SecureKeyPath -Force -ErrorAction SilentlyContinue
+}
+if ($script:SecureRootKeyPath) {
+    Remove-Item -LiteralPath $script:SecureRootKeyPath -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host ""

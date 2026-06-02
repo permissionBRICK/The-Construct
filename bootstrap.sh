@@ -32,7 +32,12 @@ WORKSPACE_ROOT="${WORKSPACE_ROOT:-/root/repos}"
 CONFIG_DIR="/etc/construct"
 CONFIG_FILE="${CONFIG_DIR}/config.env"
 RUNTIME_DIR="${AGENT_HOME}/runtime"
-TARGET_USER="${SUDO_USER:-root}"
+# The user that owns /opt/construct and joins the docker group. Prefer an
+# explicit SSH_USER (provision.sh passes the seed user, e.g. agent) so this is
+# stable whether provisioning runs via `sudo` (SUDO_USER set) or directly as
+# root (the re-provision root-key fast path, where SUDO_USER is unset). Falls
+# back to SUDO_USER for a standalone `sudo bash bootstrap.sh`, then root.
+TARGET_USER="${SSH_USER:-${SUDO_USER:-root}}"
 
 step "Checking OS"
 if command -v lsb_release >/dev/null 2>&1; then
