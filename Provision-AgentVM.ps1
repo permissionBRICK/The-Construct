@@ -71,6 +71,31 @@ param(
     # "true"/"false".
     [string]$VsCodeTunnel = "false",
     [switch]$IncludeGit,
+    # What this run does:
+    #   provision (default) -- the normal full provision. With -RestoreDir it also
+    #                          restores a saved config onto the VM after setup.
+    #   export              -- connect to an already-installed VM and pull its
+    #                          current agent config back to -BackupDir (no
+    #                          provisioning, no reboot). With -ScanReposOnly it
+    #                          only scans the project repos for unsaved work.
+    [ValidateSet("provision", "export")]
+    [string]$Action = "provision",
+    # Where to write the exported backup (-Action export). A folder; receives
+    # backup.tar.gz, an extracted/ copy, and repo-scan.json.
+    [string]$BackupDir = "",
+    # -Action export only: scan the project repos for uncommitted/unpushed work
+    # and write repo-scan.json, without exporting the (much larger) config.
+    [switch]$ScanReposOnly,
+    # Restore a previously exported backup (a -BackupDir from a prior export run)
+    # onto the VM at the end of provisioning. Used by the reinstall auto-restore.
+    [string]$RestoreDir = "",
+    # Optional git credentials for cloning private project repos during setup,
+    # base64-encoded newline-separated `https://user:token@host` lines (see
+    # Resolve-GitCloneCredential). Passed to provision.sh as GIT_CLONE_CREDENTIALS_B64.
+    [string]$GitCloneCredentialsB64 = "",
+    # Force the project repo checkout on/off ("true"/"false"). Empty = auto: on
+    # when the selected projects declare any repos, off otherwise.
+    [string]$CheckoutProjects = "",
     # Set when this script is launched by an upper script (Auto-Install.ps1 /
     # Create-AgentVM.ps1), which owns the final "Press Enter" pause. When run on
     # its own this stays off and the script pauses at the end so a self-launched
@@ -312,6 +337,22 @@ function Invoke-Scp {
     }
 }
 
+function Invoke-ScpFrom {
+    # Download a file FROM the VM to the host (the reverse of Invoke-Scp). Used by
+    # -Action export to pull the config backup / repo scan back to the host.
+    param(
+        [Parameter(Mandatory)][string]$RemotePath,
+        [Parameter(Mandatory)][string]$LocalPath
+    )
+    $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+    & scp.exe @script:SshOpts "$($script:ConnectUser)@${VmHost}:${RemotePath}" $LocalPath 2>$null
+    $exitCode = $LASTEXITCODE
+    $ErrorActionPreference = $prevEAP
+    if ($exitCode -ne 0) {
+        throw "SCP download failed (exit $exitCode): ${RemotePath} -> $LocalPath"
+    }
+}
+
 # --- Bootstrap-key install via password (fallback for non-autoinstall VMs) --
 
 function Test-KeyAuth {
@@ -498,8 +539,11 @@ function New-RepoArchive {
     $tarPath = Join-Path $env:TEMP "construct-repo.tar.gz"
     if (Test-Path $tarPath) { Remove-Item $tarPath -Force }
 
+    # Exclude .git (unless -IncludeGit), ISOs, the host-only settings file, and the
+    # saved config backup (.construct-backup holds plaintext secrets and must never
+    # be uploaded into the VM's repo copy).
     $names = @(Get-ChildItem -Force -LiteralPath $repoDir |
-               Where-Object { ($IncludeGit -or $_.Name -ne ".git") -and $_.Extension -ne ".iso" -and $_.Name -ne ".construct-settings.json" }).Name
+               Where-Object { ($IncludeGit -or $_.Name -ne ".git") -and $_.Extension -ne ".iso" -and $_.Name -ne ".construct-settings.json" -and $_.Name -ne ".construct-backup" }).Name
     Write-Step "Packing repo ($repoDir) -> $tarPath"
     & tar.exe -czf $tarPath -C $repoDir @names
     if ($LASTEXITCODE -ne 0) { throw "tar failed packing the repo (exit $LASTEXITCODE)." }
@@ -747,28 +791,33 @@ Write-Host "The Construct VM provisioner" -ForegroundColor White
 Write-Host "Target: $VmHost  |  seed user: $SeedUser  |  final user: $RemoteUser" -ForegroundColor DarkGray
 Write-Host ""
 
-# Let the user pick project profiles unless -Projects was passed explicitly.
-if (-not $PSBoundParameters.ContainsKey('Projects')) {
-    $Projects = Select-Projects
-}
-Write-Ok "Projects: $Projects"
+# Project selection + git identity are only meaningful for a real provision;
+# -Action export just pulls the current config back and must not prompt for them.
+$gitIdentity = @{ Name = ""; Email = "" }
+if ($Action -eq 'provision') {
+    # Let the user pick project profiles unless -Projects was passed explicitly.
+    if (-not $PSBoundParameters.ContainsKey('Projects')) {
+        $Projects = Select-Projects
+    }
+    Write-Ok "Projects: $Projects"
 
-# Resolve the git identity to apply on the VM. Defaults come from the saved
-# settings file then this host's own git identity; the choice is saved so future
-# reprovisions don't need to re-specify it. When an upper script already supplied
-# both values they're used as-is (no prompt). Falls back to the raw params if the
-# shared lib wasn't found.
-if (Get-Command Resolve-GitIdentity -ErrorAction SilentlyContinue) {
-    $giParams = @{ Dir = $PSScriptRoot }
-    if ($PSBoundParameters.ContainsKey('GitUserName')) { $giParams['Name']  = $GitUserName }
-    if ($PSBoundParameters.ContainsKey('GitEmail'))    { $giParams['Email'] = $GitEmail }
-    if ($giParams.ContainsKey('Name') -and $giParams.ContainsKey('Email')) { $giParams['NoPrompt'] = $true }
-    $gitIdentity = Resolve-GitIdentity @giParams
-} else {
-    $gitIdentity = @{ Name = $GitUserName; Email = $GitEmail }
-}
-if ($gitIdentity.Name -or $gitIdentity.Email) {
-    Write-Ok ("Git identity: {0} <{1}>" -f $gitIdentity.Name, $gitIdentity.Email)
+    # Resolve the git identity to apply on the VM. Defaults come from the saved
+    # settings file then this host's own git identity; the choice is saved so future
+    # reprovisions don't need to re-specify it. When an upper script already supplied
+    # both values they're used as-is (no prompt). Falls back to the raw params if the
+    # shared lib wasn't found.
+    if (Get-Command Resolve-GitIdentity -ErrorAction SilentlyContinue) {
+        $giParams = @{ Dir = $PSScriptRoot }
+        if ($PSBoundParameters.ContainsKey('GitUserName')) { $giParams['Name']  = $GitUserName }
+        if ($PSBoundParameters.ContainsKey('GitEmail'))    { $giParams['Email'] = $GitEmail }
+        if ($giParams.ContainsKey('Name') -and $giParams.ContainsKey('Email')) { $giParams['NoPrompt'] = $true }
+        $gitIdentity = Resolve-GitIdentity @giParams
+    } else {
+        $gitIdentity = @{ Name = $GitUserName; Email = $GitEmail }
+    }
+    if ($gitIdentity.Name -or $gitIdentity.Email) {
+        Write-Ok ("Git identity: {0} <{1}>" -f $gitIdentity.Name, $gitIdentity.Email)
+    }
 }
 
 Ensure-Tar
@@ -824,6 +873,84 @@ Write-Step "Unpacking repo on the VM"
 Invoke-Ssh -Sudo -Command "mkdir -p /opt/construct && rm -rf /opt/construct/repo && mkdir -p /opt/construct/repo && tar -xzf $RemoteArchive -C /opt/construct/repo && chown -R ${SeedUser}:${SeedUser} /opt/construct"
 Write-Ok "Repo in place at /opt/construct/repo"
 
+# ── -Action export: pull the current config back to the host, then stop ──────
+# The repo (with the current export/scan scripts) is now on the VM. We connected
+# above exactly like a provision would; from here we only read, never change the
+# VM, and we never reboot.
+if ($Action -eq 'export') {
+    if (-not $BackupDir) { throw "-Action export requires -BackupDir." }
+    New-Item -ItemType Directory -Force -Path $BackupDir | Out-Null
+
+    if ($ScanReposOnly) {
+        Write-Step "Scanning project repos for unsaved work"
+        # Redirect to a file on the VM so any login-shell banner can't pollute the
+        # JSON; `&&` so a failed scan propagates (it doesn't get masked by chmod)
+        # and chmod runs only on success (so the seed user can pull it on the
+        # bootstrap path). The finally always removes the VM-side file.
+        try {
+            Invoke-Ssh -Sudo -Command "bash /opt/construct/repo/bin/scan-repos.sh > /tmp/construct-repo-scan.json 2>/dev/null && chmod 644 /tmp/construct-repo-scan.json"
+            Invoke-ScpFrom -RemotePath "/tmp/construct-repo-scan.json" -LocalPath (Join-Path $BackupDir "repo-scan.json")
+        } finally {
+            try { Invoke-Ssh -Sudo -Command "rm -f /tmp/construct-repo-scan.json" } catch { }
+        }
+        Write-Ok "Repo scan saved to $(Join-Path $BackupDir 'repo-scan.json')"
+    } else {
+        Write-Step "Exporting agent config from the VM"
+        # The tarball holds plaintext secrets, so the finally ALWAYS removes the
+        # VM-side copy -- even if the export, download, or extract throws. The
+        # `&& chmod` keeps a failed export from being reported as success.
+        $tgz = Join-Path $BackupDir "backup.tar.gz"
+        try {
+            Write-Host "  --- live export output ---" -ForegroundColor DarkGray
+            Invoke-SshStream -Sudo -Command "EXPORT_HOME=/root INCLUDE_AUTH=true OUT=/tmp/construct-config-backup.tar.gz CONFIG_FILE=/etc/construct/config.env REPO_DIR=/opt/construct/repo PROJECTS_STORE=/opt/construct/projects bash /opt/construct/repo/bin/export-config.sh && chmod 644 /tmp/construct-config-backup.tar.gz"
+            Write-Host "  --- end export output ---" -ForegroundColor DarkGray
+            Invoke-ScpFrom -RemotePath "/tmp/construct-config-backup.tar.gz" -LocalPath $tgz
+        } finally {
+            try { Invoke-Ssh -Sudo -Command "rm -f /tmp/construct-config-backup.tar.gz" } catch { }
+        }
+        Write-Ok "Backup saved to $tgz"
+
+        # Extract on the host for the project-profile merge below + inspection.
+        $extract = Join-Path $BackupDir "extracted"
+        if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
+        New-Item -ItemType Directory -Force -Path $extract | Out-Null
+        & tar.exe -xzf $tgz -C $extract
+        if ($LASTEXITCODE -ne 0) { throw "Failed to extract the backup ($tgz)." }
+
+        # Merge generated project profiles into projects/, never overwriting an
+        # existing profile of the same name.
+        $genDir  = Join-Path $extract "projects"
+        $projDir = Join-Path $PSScriptRoot "projects"
+        $added = @()
+        if (Test-Path -LiteralPath $genDir) {
+            if (-not (Test-Path -LiteralPath $projDir)) { New-Item -ItemType Directory -Force -Path $projDir | Out-Null }
+            foreach ($pf in @(Get-ChildItem -LiteralPath $genDir -Filter *.json -File -ErrorAction SilentlyContinue)) {
+                $dest = Join-Path $projDir $pf.Name
+                if (Test-Path -LiteralPath $dest) {
+                    Write-Host "    project profile already exists, keeping: $($pf.BaseName)" -ForegroundColor DarkGray
+                    continue
+                }
+                Copy-Item -LiteralPath $pf.FullName -Destination $dest
+                $added += $pf.BaseName
+            }
+        }
+        if ($added.Count -gt 0) {
+            Write-Ok ("Added project profile(s): {0}" -f ($added -join ", "))
+        } else {
+            Write-Ok "No new project profiles to add"
+        }
+    }
+
+    # Local cleanup (mirrors the end-of-provision cleanup) and stop here -- export
+    # mode never provisions or reboots. The finally block owns the optional pause.
+    Remove-Item "$env:TEMP\construct-known_hosts" -Force -ErrorAction SilentlyContinue
+    if ($script:SecureKeyPath)     { Remove-Item -LiteralPath $script:SecureKeyPath     -Force -ErrorAction SilentlyContinue }
+    if ($script:SecureRootKeyPath) { Remove-Item -LiteralPath $script:SecureRootKeyPath -Force -ErrorAction SilentlyContinue }
+    Write-Host ""
+    Write-Host "Done (config export)." -ForegroundColor Green
+    return
+}
+
 # Run the non-interactive provisioner.
 Write-Step "Provisioning the VM (this can take several minutes)"
 $agentNameArg = if ($AgentName) { $AgentName } else { "$HostAlias-agent" }
@@ -837,11 +964,59 @@ $gitCredStore = if ($gitIdentity.CredentialStore) { "true" } else { "false" }
 # already preserves an existing key, but skipping it entirely also avoids re-emitting
 # the key to the provisioning log.)
 $setupRootKeyArg = if ($script:UseRootKey) { "false" } else { "true" }
-$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel'"
+# Feature 2: clone the selected projects' repos during provisioning. Credentials
+# for private repos come from -GitCloneCredentialsB64 (the up-front prompt), or on
+# a restore from the saved backup's git-credentials so the checkout can authenticate.
+$cloneCredB64 = $GitCloneCredentialsB64
+if (-not $cloneCredB64 -and $RestoreDir) {
+    $restoredCreds = Join-Path $RestoreDir "extracted\home\.git-credentials"
+    if (Test-Path -LiteralPath $restoredCreds) {
+        $credLines = @(Get-Content -LiteralPath $restoredCreds | Where-Object { $_.Trim() })
+        if ($credLines.Count -gt 0) {
+            $cloneCredB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($credLines -join "`n")))
+        }
+    }
+}
+# Auto-decide the checkout when not forced: on iff the selected projects declare repos.
+$checkoutArg = $CheckoutProjects
+if (-not $checkoutArg) {
+    $repoUrls = @()
+    if (Get-Command Get-ProjectRepoUrls -ErrorAction SilentlyContinue) {
+        $repoUrls = @(Get-ProjectRepoUrls -ProjectsDir (Join-Path $PSScriptRoot 'projects') -Names $Projects)
+    }
+    $checkoutArg = if ($repoUrls.Count -gt 0) { "true" } else { "false" }
+}
+$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel'"
 Write-Host "  --- live provisioning output ---" -ForegroundColor DarkGray
 Invoke-SshStream -Sudo -Command "$envPrefix bash /opt/construct/repo/bin/provision.sh"
 Write-Host "  --- end provisioning output ---" -ForegroundColor DarkGray
 Write-Ok "Provisioning finished"
+
+# Restore a saved config onto the freshly provisioned VM (the reinstall
+# auto-restore). Done AFTER provision.sh so the user's saved instruction/config
+# files overwrite the freshly generated ones and auth/memory/skills come back;
+# the project checkout inside provision.sh already used the restored git
+# credentials (passed via the env above), so private repos cloned.
+if ($RestoreDir) {
+    $restoreTgz = Join-Path $RestoreDir "backup.tar.gz"
+    if (Test-Path -LiteralPath $restoreTgz) {
+        Write-Step "Restoring saved agent config onto the VM"
+        Invoke-Ssh -Sudo -Command "rm -f /tmp/construct-config-restore.tar.gz"
+        # The upload is INSIDE the try so the finally still removes the (plaintext
+        # secret) tarball even if scp fails mid-transfer. restore-config.sh is the
+        # only command in the stream, so its non-zero exit propagates (a failed
+        # restore throws and "Saved config restored" is NOT printed).
+        try {
+            Invoke-Scp -LocalPath $restoreTgz -RemotePath "/tmp/construct-config-restore.tar.gz"
+            Invoke-SshStream -Sudo -Command "EXPORT_HOME=/root BACKUP_TGZ=/tmp/construct-config-restore.tar.gz bash /opt/construct/repo/bin/restore-config.sh"
+        } finally {
+            try { Invoke-Ssh -Sudo -Command "rm -f /tmp/construct-config-restore.tar.gz" } catch { }
+        }
+        Write-Ok "Saved config restored"
+    } else {
+        Write-Host "    -RestoreDir set but no backup.tar.gz in $RestoreDir -- skipping restore." -ForegroundColor DarkGray
+    }
+}
 
 # Get the root private key for the host-side config below. On the fast path we
 # already hold it locally (and told the VM not to regenerate it), so reuse the
