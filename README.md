@@ -92,7 +92,7 @@ Then run `Provision-AgentVM.ps1` — it needs no admin access.
 |------|--------|--------|
 | 1 | `Create-AgentVM.ps1` | Ensures OpenSSH + Hyper-V, creates a Gen-2 VM (half host RAM ≤ 24 GB, Secure Boot off), boots the autoinstall ISO, waits for SSH, then calls `Provision-AgentVM.ps1`. |
 | 2 | autoinstall ISO (built by `bin/build-autoinstall-iso.sh`) | Installs a blank **minimized** Ubuntu unattended: user/host preset, SSH on, the committed bootstrap key authorized, and a console hint to run the provisioner. |
-| 3 | `Provision-AgentVM.ps1` | Uploads the repo, runs `bin/provision.sh` via sudo, retrieves the VM's root key, removes the bootstrap key, configures the host's `~\.ssh\` + VS Code, and reboots the VM. |
+| 3 | `Provision-AgentVM.ps1` | Connects (re-using the saved root key when re-provisioning an existing VM, otherwise the bootstrap key), uploads the repo, runs `bin/provision.sh`, obtains the VM's root key, removes the bootstrap key, configures the host's `~\.ssh\` + VS Code, and reboots the VM. |
 | 4 | `bin/provision.sh` (on the VM) | `bootstrap.sh` → write `config.env` → root SSH key → install AI tools → generate runtime config → install selected projects' runtimes → start the `construct` service → install the VS Code CLI/server (and, when selected, deploy + register the `code tunnel`). |
 
 Defaults line up across all of these: user `agent`, password `agent`, hostname `agent-vm`
@@ -155,12 +155,21 @@ What it does:
 
 1. Packs this repo folder into a `tar.gz` (excludes `.git` and `*.iso`).
 2. Waits for the VM on port 22, re-prompting for the Hyper-V hostname if it can't connect.
-3. Connects over SSH as `agent` using the committed bootstrap key (`keys/bootstrap_ed25519`),
-   which the autoinstall ISO authorized — no password prompt. The seed password is still used
-   for `sudo` on the VM.
-4. Uploads the archive to `/opt/construct/repo` and runs `bin/provision.sh` via `sudo`.
-5. Retrieves the root SSH private key the VM generated.
-6. Removes the bootstrap public key from the `agent` user's `authorized_keys`.
+3. Picks how to connect:
+   - **Re-provision fast path** — if the root key from a previous run is saved on this host
+     (`~\.ssh\agent_vm_ed25519`) and still authorizes `root` on the VM, it's used for the whole
+     run. Every command then runs directly as `root` (no bootstrap key, no agent password, no
+     `sudo`) and the VM's root key is left untouched (`SETUP_ROOT_SSH_KEY=false`, not regenerated).
+   - **Bootstrap path (fallback)** — otherwise connect as `agent` with the committed bootstrap key
+     (`keys/bootstrap_ed25519`), which the autoinstall ISO authorized; if it isn't authorized yet
+     (hand-installed or freshly recreated VM), it's installed via the seed password, falling back
+     to PuTTY instructions. The seed password is used for `sudo` on this path.
+4. Uploads the archive to `/opt/construct/repo` and runs `bin/provision.sh` (directly as `root`
+   on the fast path, otherwise via `sudo`).
+5. Obtains the root SSH private key — reuses the saved copy on the fast path, otherwise retrieves
+   the one the VM generated.
+6. Removes the bootstrap public key from the `agent` user's `authorized_keys` (the fast path never
+   installs it, but still strips any leftover copy from a failed/manual prior run).
 7. Configures the Windows host: `~\.ssh\` (private key, `known_hosts`, and a `Host` entry in
    `~\.ssh\config`) and sets `remote.SSH.remotePlatform` in VS Code so Remote-SSH connects to
    `agent-vm` as `root` without prompts; then reboots the VM.
