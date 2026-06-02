@@ -226,6 +226,7 @@ bash "${REPO_DIR}/bin/generate-runtime-config.sh"
 #     the AI tools are installed (step 4) and the runtime config exists (step 5).
 step "Configuring MCP servers for the AI tools"
 AI_TOOLS="${AI_TOOLS}" CLAUDE_USER="${CLAUDE_USER}" AGENT_HOME="${AGENT_HOME:-/opt/construct}" \
+  WORKSPACE_ROOT="${WORKSPACE_ROOT}" \
   bash "${REPO_DIR}/bin/configure-mcp.sh" \
   || warn "WARNING: MCP configuration failed; continuing"
 

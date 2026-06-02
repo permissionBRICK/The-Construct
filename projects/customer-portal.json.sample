@@ -30,7 +30,16 @@
       "type": "http",
       "url": "https://mcp.sentry.dev/mcp",
       "headers": { "Authorization": "Bearer YOUR_TOKEN" },
-      "bearerTokenEnvVar": "SENTRY_MCP_TOKEN"
+      "bearerTokenEnvVar": "SENTRY_MCP_TOKEN",
+      "agents": ["claude-code", "opencode"]
+    },
+    {
+      "name": "playwright",
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"],
+      "agents": ["codex"],
+      "enabled": false
     }
   ],
   "hostPackages": [],
