@@ -88,6 +88,14 @@ fi
 # Whether to enable git's plaintext credential store (credential.helper store) so
 # pushes/pulls don't re-prompt. "true"/"false"/"" (empty = leave unchanged).
 GIT_CREDENTIAL_STORE="${GIT_CREDENTIAL_STORE:-}"
+# Optional git credentials for cloning private project repos, base64-encoded
+# newline-separated `https://user:token@host` lines (see Provision-AgentVM.ps1 /
+# Auto-Install.ps1). Used only for the checkout below; persisted into the users'
+# ~/.git-credentials only when GIT_CREDENTIAL_STORE=true.
+GIT_CLONE_CREDENTIALS=""
+if [[ -n "${GIT_CLONE_CREDENTIALS_B64:-}" ]]; then
+  GIT_CLONE_CREDENTIALS="$(printf '%s' "${GIT_CLONE_CREDENTIALS_B64}" | base64 -d 2>/dev/null || true)"
+fi
 
 step "provision.sh starting (non-interactive)"
 note "    AGENT_NAME=${AGENT_NAME}"
@@ -219,12 +227,60 @@ if [[ "${INSTALL_SDKS}" == "true" ]]; then
   bash "${REPO_DIR}/bin/install-sdks.sh"
 fi
 
-# 6. Optionally check out project repos (needs Git auth on the VM).
+# 5c. Seed git credentials for cloning private repos, if the host supplied any.
+#     Written to a temp file consulted ONLY for the checkout below (via a
+#     per-invocation `store --file=` helper), so they are not persisted by
+#     default. When GIT_CREDENTIAL_STORE=true they are ALSO merged into the
+#     operating users' ~/.git-credentials so they survive for later pushes/pulls
+#     (and are captured by a future config export).
+_clone_creds_file=""
+if [[ -n "${GIT_CLONE_CREDENTIALS}" ]]; then
+  step "Seeding git credentials for repo checkout"
+  _clone_creds_file="$(mktemp)"
+  chmod 600 "${_clone_creds_file}"
+  printf '%s\n' "${GIT_CLONE_CREDENTIALS}" >"${_clone_creds_file}"
+  if [[ "${GIT_CREDENTIAL_STORE}" == "true" ]]; then
+    _cred_seen=""
+    for _gu in "${CLAUDE_USER}" "${SSH_USER}"; do
+      [[ -n "${_gu}" ]] || continue
+      case " ${_cred_seen} " in *" ${_gu} "*) continue ;; esac
+      _cred_seen="${_cred_seen} ${_gu}"
+      _gu_home="$(getent passwd "${_gu}" | cut -d: -f6)"
+      [[ -n "${_gu_home}" ]] || continue
+      _cf="${_gu_home}/.git-credentials"
+      touch "${_cf}"; chmod 600 "${_cf}"; chown "${_gu}:${_gu}" "${_cf}" 2>/dev/null || true
+      while IFS= read -r _line; do
+        [[ -n "${_line}" ]] || continue
+        grep -qxF "${_line}" "${_cf}" 2>/dev/null || printf '%s\n' "${_line}" >>"${_cf}"
+      done <"${_clone_creds_file}"
+    done
+    ok "git credentials stored for:${_cred_seen}"
+  else
+    note "git credentials will be used for checkout only (not persisted)"
+  fi
+fi
+
+# 6. Optionally check out project repos (needs Git auth on the VM). When clone
+#    credentials were seeded, point a one-shot credential.helper at the temp file
+#    via GIT_CONFIG_* so the clone authenticates without an interactive prompt
+#    and without depending on a persisted store.
 if [[ "${CHECKOUT_PROJECTS}" == "true" ]]; then
   step "Checking out project repos"
-  bash "${REPO_DIR}/bin/checkout-projects.sh" \
-    || warn "WARNING: project checkout failed (Git auth not configured?)"
+  if [[ -n "${_clone_creds_file}" ]]; then
+    GIT_CONFIG_COUNT=1 \
+    GIT_CONFIG_KEY_0=credential.helper \
+    GIT_CONFIG_VALUE_0="store --file=${_clone_creds_file}" \
+      bash "${REPO_DIR}/bin/checkout-projects.sh" \
+      || warn "WARNING: project checkout failed (Git auth not configured?)"
+  else
+    bash "${REPO_DIR}/bin/checkout-projects.sh" \
+      || warn "WARNING: project checkout failed (Git auth not configured?)"
+  fi
 fi
+
+# Drop the transient clone-credentials temp file (created above, used only for
+# the checkout). Persisted copies, if any, live in ~/.git-credentials.
+[[ -n "${_clone_creds_file}" ]] && rm -f "${_clone_creds_file}"
 
 # 7. Start the agent service.
 if [[ "${START_SERVICE}" == "true" ]]; then
