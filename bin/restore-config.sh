@@ -50,6 +50,7 @@ for f in \
   ".claude.json" \
   ".codex/auth.json" \
   ".local/share/opencode/auth.json" \
+  ".config/gh/hosts.yml" \
   ".git-credentials"; do
   if [[ -e "${EXPORT_HOME}/${f}" ]]; then
     chmod 600 "${EXPORT_HOME}/${f}" 2>/dev/null || true

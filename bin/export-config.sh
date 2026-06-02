@@ -88,9 +88,11 @@ has_agent() { case ",${agents}," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
 
 printf '==> Exporting agent config from %s\n' "${EXPORT_HOME}"
 
-# ── Global git config + credentials ──────────────────────────────────────────
+# ── Global git config + credentials, GitHub CLI login ────────────────────────
 add ".gitconfig"
 add ".git-credentials"
+# GitHub CLI: hosts.yml holds the login/OAuth token, config.yml the settings.
+add ".config/gh"
 
 # ── Claude Code ──────────────────────────────────────────────────────────────
 if has_agent "claude-code" || [[ -d "${EXPORT_HOME}/.claude" ]]; then
