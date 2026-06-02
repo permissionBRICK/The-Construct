@@ -46,6 +46,13 @@ param(
     # host/saved defaults.
     [string]$GitUserName,
     [string]$GitEmail,
+    # Forwarded to Provision-AgentVM.ps1 for the save/restore + clone-credential
+    # features. RestoreDir restores a saved config after provisioning;
+    # GitCloneCredentialsB64 supplies credentials for cloning private project
+    # repos; CheckoutProjects forces the repo checkout on/off.
+    [string]$RestoreDir,
+    [string]$GitCloneCredentialsB64,
+    [string]$CheckoutProjects,
     # Set when launched by an upper script (Auto-Install.ps1), which owns the
     # final "Press Enter" pause. When run on its own this stays off and the
     # script pauses at the end -- important because a direct run self-elevates
@@ -148,6 +155,9 @@ if (Get-VM -Name $VmName -ErrorAction SilentlyContinue) {
         if ($PSBoundParameters.ContainsKey('AgentPassword')) { $provArgs['AgentPassword'] = $AgentPassword }
         if ($PSBoundParameters.ContainsKey('GitUserName'))   { $provArgs['GitUserName']   = $GitUserName }
         if ($PSBoundParameters.ContainsKey('GitEmail'))      { $provArgs['GitEmail']      = $GitEmail }
+        if ($PSBoundParameters.ContainsKey('RestoreDir'))             { $provArgs['RestoreDir']             = $RestoreDir }
+        if ($PSBoundParameters.ContainsKey('GitCloneCredentialsB64')) { $provArgs['GitCloneCredentialsB64'] = $GitCloneCredentialsB64 }
+        if ($PSBoundParameters.ContainsKey('CheckoutProjects'))       { $provArgs['CheckoutProjects']       = $CheckoutProjects }
         & $provisionScript @provArgs
         return
     }
@@ -420,6 +430,11 @@ if ($isAutoinstall) {
         if ($PSBoundParameters.ContainsKey('AgentPassword')) { $provArgs['AgentPassword'] = $AgentPassword }
         if ($PSBoundParameters.ContainsKey('GitUserName'))   { $provArgs['GitUserName']   = $GitUserName }
         if ($PSBoundParameters.ContainsKey('GitEmail'))      { $provArgs['GitEmail']      = $GitEmail }
+        # Save/restore + clone-credential handoff (set by Auto-Install.ps1 on the
+        # reinstall auto-restore path; absent on a plain create).
+        if ($PSBoundParameters.ContainsKey('RestoreDir'))             { $provArgs['RestoreDir']             = $RestoreDir }
+        if ($PSBoundParameters.ContainsKey('GitCloneCredentialsB64')) { $provArgs['GitCloneCredentialsB64'] = $GitCloneCredentialsB64 }
+        if ($PSBoundParameters.ContainsKey('CheckoutProjects'))       { $provArgs['CheckoutProjects']       = $CheckoutProjects }
         & $provisionScript @provArgs
     }
 } else {
