@@ -977,6 +977,21 @@ if (-not $cloneCredB64 -and $RestoreDir) {
         }
     }
 }
+# Preserve the VS Code serve-web connection token across the reinstall so the
+# browser ?tkn= URL stays the same. It rides in the backup outside home (at
+# etc/construct/vscode-serve-web.token) and must be in place BEFORE serve-web
+# starts -- so pass it (base64) into provision.sh -> install-vscode.sh here,
+# rather than via restore-config.sh, which runs after serve-web is already up.
+$serveWebTokenB64 = ""
+if ($RestoreDir) {
+    $savedSwTok = Join-Path $RestoreDir "extracted\etc\construct\vscode-serve-web.token"
+    if (Test-Path -LiteralPath $savedSwTok) {
+        $swTokText = (Get-Content -LiteralPath $savedSwTok -Raw).Trim()
+        if ($swTokText) {
+            $serveWebTokenB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($swTokText))
+        }
+    }
+}
 # Auto-decide the checkout when not forced: on iff the selected projects declare repos.
 $checkoutArg = $CheckoutProjects
 if (-not $checkoutArg) {
@@ -986,7 +1001,7 @@ if (-not $checkoutArg) {
     }
     $checkoutArg = if ($repoUrls.Count -gt 0) { "true" } else { "false" }
 }
-$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel'"
+$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64'"
 Write-Host "  --- live provisioning output ---" -ForegroundColor DarkGray
 Invoke-SshStream -Sudo -Command "$envPrefix bash /opt/construct/repo/bin/provision.sh"
 Write-Host "  --- end provisioning output ---" -ForegroundColor DarkGray

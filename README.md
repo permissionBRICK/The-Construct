@@ -549,6 +549,13 @@ project repos):
 - **npm registry auth**: `~/.npmrc`, so `npm publish`/installs from private registries keep
   working after a reinstall (it holds the registry `_authToken`). Saved only when auth is
   included — `INCLUDE_AUTH=false` omits it.
+- **VS Code serve-web connection token**, so the browser `?tkn=` URL stays the same after a
+  reinstall instead of regenerating. Unlike everything else here it lives outside home
+  (`/etc/construct/vscode-serve-web.token`), so it rides in the backup at
+  `etc/construct/vscode-serve-web.token`. On restore the host threads it into
+  `install-vscode.sh` *before* serve-web starts (`restore-config.sh` runs too late — the
+  token would already have been regenerated and the service started), and a token already
+  on the VM wins on a reprovision. Saved only when auth is included.
 - Project profiles: the VM's stored profiles (`/opt/construct/projects/*.json`,
   which carry your MCP servers and other per-project config), plus a generated
   profile for every cloned repo under `/root/repos` whose remote isn't already

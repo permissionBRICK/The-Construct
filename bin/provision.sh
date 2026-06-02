@@ -305,6 +305,7 @@ fi
 if [[ "${VSCODE_SERVER}" == "true" ]]; then
   step "Setting up VS Code server / serve-web / tunnel"
   VSCODE_SERVER="${VSCODE_SERVER}" VSCODE_SERVE_WEB="${VSCODE_SERVE_WEB}" VSCODE_TUNNEL="${VSCODE_TUNNEL}" \
+    VSCODE_SERVE_WEB_TOKEN_B64="${VSCODE_SERVE_WEB_TOKEN_B64:-}" \
     bash "${REPO_DIR}/bin/install-vscode.sh" \
     || warn "WARNING: VS Code setup failed; continuing"
 fi
