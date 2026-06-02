@@ -497,6 +497,8 @@ project repos):
   `~/.claude/.credentials.json`, `~/.claude.json`, `~/.codex/auth.json`,
   `~/.local/share/opencode/auth.json`.
 - Global git config + credentials: `~/.gitconfig`, `~/.git-credentials`.
+- GitHub CLI login + config: `~/.config/gh/` (`hosts.yml` holds the `gh auth` token).
+  The `gh` CLI is installed by default during provisioning.
 - A generated project profile (`projects/<repo>.json`) for every repo cloned under
   `/root/repos` whose remote isn't already covered by an existing profile, so the
   reinstall re-clones them.

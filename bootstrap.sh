@@ -69,7 +69,7 @@ fi
 
 step "Installing base packages"
 apt-get update
-apt-get install -y ca-certificates curl git jq ripgrep unzip gnupg lsb-release
+apt-get install -y ca-certificates curl git gh jq ripgrep unzip gnupg lsb-release
 
 step "Installing Docker if needed"
 if ! command -v docker >/dev/null 2>&1; then
