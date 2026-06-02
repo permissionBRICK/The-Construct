@@ -45,11 +45,15 @@ mkdir -p "${EXPORT_HOME}"
 cp -a "${BACKUP_DIR}/home/." "${EXPORT_HOME}/"
 
 # Tighten permissions on the secrets so the agents (and ssh, for git) accept them.
+# Includes the per-agent MCP server OAuth stores (.codex/.credentials.json,
+# opencode mcp-auth.json) alongside the subscription-auth files.
 for f in \
   ".claude/.credentials.json" \
   ".claude.json" \
   ".codex/auth.json" \
+  ".codex/.credentials.json" \
   ".local/share/opencode/auth.json" \
+  ".local/share/opencode/mcp-auth.json" \
   ".config/gh/hosts.yml" \
   ".git-credentials"; do
   if [[ -e "${EXPORT_HOME}/${f}" ]]; then
