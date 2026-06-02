@@ -26,8 +26,12 @@ This downloads the latest repo and launches the guided installer (`Auto-Install.
 elevates to Administrator (required for Hyper-V), builds the Ubuntu autoinstall ISO, then
 creates and provisions the VM. You answer a few questions up front (RAM, disk size,
 projects); everything after that runs unattended. If the VM already exists, you get a
-reprovision / reset / quit menu — reprovision re-runs the config but keeps your data; reset
-wipes the VM and reinstalls it from ISO.
+menu — **reprovision** re-runs the config but keeps your data; **reinstall / redownload**
+wipe the VM and reinstall it from ISO (offering first to save the current agent config and
+auto-restore it afterwards, and warning about any uncommitted/unpushed work in the repos);
+**export config** saves the current agent config to the host without reprovisioning or
+rebooting the VM. See
+[Saving & restoring config](#saving--restoring-config-across-reinstalls).
 
 > Installs from `permissionBRICK/The-Construct`; pass `-Repo owner/name` for a fork.
 > Requires WSL with a Linux distro for the ISO build — if it's missing, the installer tells
@@ -153,7 +157,8 @@ reachable autoinstall VM.
 
 What it does:
 
-1. Packs this repo folder into a `tar.gz` (excludes `.git` and `*.iso`).
+1. Packs this repo folder into a `tar.gz` (excludes `.git`, `*.iso`, the host-only
+   `.construct-settings.json`, and the secret-bearing `.construct-backup/`).
 2. Waits for the VM on port 22, re-prompting for the Hyper-V hostname if it can't connect.
 3. Picks how to connect:
    - **Re-provision fast path** — if the root key from a previous run is saved on this host
@@ -454,13 +459,72 @@ The generated files are written to `/opt/construct/runtime/generated.json` and
 
 ## Checkout Projects
 
-After Git auth is configured:
+When the selected projects declare repos, the provisioner checks them out
+automatically during setup (it passes `CHECKOUT_PROJECTS=true`). To run it by hand:
 
 ```bash
 /opt/construct/repo/bin/checkout-projects.sh
 ```
 
 Repos are cloned under `/root/repos`.
+
+**Credentials for private repos.** If any selected project's repos use `https://`
+URLs, the installer asks **once** up front for a git username + token (press Enter to
+skip if the repos are public). The credentials are written to a temporary file used as a
+one-shot `store --file=` credential helper for the checkout, so all repos clone without
+re-prompting. They are persisted into `~/.git-credentials` only if you also opted into
+"store git credentials" — otherwise they are used for the checkout and discarded. (SSH
+`git@…` URLs don't trigger the prompt — a username/token can't authenticate them; they
+rely on whatever SSH auth is already configured on the VM.)
+
+## Saving & restoring config across reinstalls
+
+A reinstall wipes the VM disk, so the installer can save the VM's current agent
+configuration to the host and restore it onto the fresh VM. The backup lives in a
+git-ignored `.construct-backup/` folder next to the scripts.
+
+**What is saved** (for the installed agents, from `root`'s home — never from inside the
+project repos):
+
+- Instruction files: `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`,
+  `~/.config/opencode/AGENTS.md` (+ any other `*.md`).
+- User-level memory and skills: `~/.claude/projects/<slug>/{memory,MEMORY.md}`,
+  `~/.codex/{memories,memories_*.sqlite*}`, `~/.codex/skills` (minus the bundled system
+  skills), `~/.claude/skills`.
+- Agent settings: `~/.claude/settings.json`, `~/.codex/config.toml`,
+  `~/.config/opencode/opencode.json`.
+- **Subscription auth**, so you don't re-authenticate after a reinstall:
+  `~/.claude/.credentials.json`, `~/.claude.json`, `~/.codex/auth.json`,
+  `~/.local/share/opencode/auth.json`.
+- Global git config + credentials: `~/.gitconfig`, `~/.git-credentials`.
+- A generated project profile (`projects/<repo>.json`) for every repo cloned under
+  `/root/repos` whose remote isn't already covered by an existing profile, so the
+  reinstall re-clones them.
+
+> ⚠️ The backup contains **plaintext** auth tokens and git credentials. It is git-ignored
+> and stays on your host; treat `.construct-backup/` as a secret.
+
+**Triggering it from the installer** (`Auto-Install.ps1`, when the VM already exists):
+
+- **Export config** — saves the current config to `.construct-backup/` and exits without
+  reprovisioning or rebooting the VM. (It does briefly upload the repo and write/remove
+  temp files on the VM, but leaves the agent setup unchanged.)
+- **Reinstall / Redownload** — first scans the repos under `/root/repos` and warns about
+  any uncommitted or unpushed work (you can abort), then asks **"Save and auto-restore?"**
+  (default yes). If yes, it exports before wiping and restores onto the fresh VM after
+  provisioning; the generated project profiles are folded into the selection so their
+  repos are re-cloned, using the saved git credentials.
+
+**By hand**, the same building blocks run on the VM:
+
+```bash
+# export to a tarball (INCLUDE_AUTH=false to omit the auth tokens)
+sudo OUT=/tmp/construct-config-backup.tar.gz /opt/construct/repo/bin/export-config.sh
+# restore from one
+sudo BACKUP_TGZ=/tmp/construct-config-backup.tar.gz /opt/construct/repo/bin/restore-config.sh
+# scan repos for unsaved work (JSON)
+/opt/construct/repo/bin/scan-repos.sh
+```
 
 ## Agent Runtime
 
