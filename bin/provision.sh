@@ -221,6 +221,14 @@ TARGET_USER="${CLAUDE_USER}" bash "${REPO_DIR}/bin/install-ai-tools.sh"
 step "Generating runtime config"
 bash "${REPO_DIR}/bin/generate-runtime-config.sh"
 
+# 5a. Configure the agent-native MCP servers the selected projects declare into
+#     Claude / Codex / Opencode (reads generated.json -> .mcpServers). Runs after
+#     the AI tools are installed (step 4) and the runtime config exists (step 5).
+step "Configuring MCP servers for the AI tools"
+AI_TOOLS="${AI_TOOLS}" CLAUDE_USER="${CLAUDE_USER}" AGENT_HOME="${AGENT_HOME:-/opt/construct}" \
+  bash "${REPO_DIR}/bin/configure-mcp.sh" \
+  || warn "WARNING: MCP configuration failed; continuing"
+
 # 5b. Install the runtimes (node/python/dotnet) the selected projects declare.
 if [[ "${INSTALL_SDKS}" == "true" ]]; then
   step "Installing project SDKs/runtimes"
