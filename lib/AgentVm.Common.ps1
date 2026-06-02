@@ -464,3 +464,129 @@ function Resolve-GitIdentity {
     Save-ConstructSettings -Dir $Dir -Values @{ gitUserName = $resName; gitEmail = $resEmail; gitCredentialStore = $resCred }
     return @{ Name = $resName; Email = $resEmail; CredentialStore = $resCred }
 }
+
+# ── Saved agent-config backup (export/restore across reinstall) ──────────────
+# Helpers for the "save current config and restore it after a reinstall" feature
+# and the Feature-2 clone-credential prompt. The export/restore SSH work itself
+# lives in Provision-AgentVM.ps1; these are the host-side bits shared with
+# Auto-Install.ps1.
+
+function Get-ConstructBackupDir {
+    # Directory NEXT TO the scripts where an exported VM config backup is saved
+    # (and read back from on restore). Gitignored -- it holds plaintext secrets
+    # (subscription auth tokens, git credentials).
+    param([Parameter(Mandatory)][string]$Dir)
+    return (Join-Path $Dir ".construct-backup")
+}
+
+function Get-ProjectRepoUrls {
+    # Every repo URL declared by the named project profiles (a comma-separated
+    # string or an array of names), read from <ProjectsDir>\<name>.json. Missing
+    # files / profiles without repos are skipped. Returns a (possibly empty)
+    # array of unique URL strings.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ProjectsDir,
+        [Parameter(Mandatory)][AllowNull()]$Names
+    )
+    $list = New-Object System.Collections.Generic.List[string]
+    $nameArr = if ($Names -is [string]) { $Names -split ',' } else { @($Names) }
+    foreach ($n in $nameArr) {
+        $name = ("$n").Trim()
+        if (-not $name) { continue }
+        $file = Join-Path $ProjectsDir "$name.json"
+        if (-not (Test-Path -LiteralPath $file)) { continue }
+        try { $json = Get-Content -LiteralPath $file -Raw | ConvertFrom-Json } catch { continue }
+        if ($json.repos) {
+            foreach ($r in $json.repos) { if ($r.url) { $list.Add([string]$r.url) } }
+        }
+    }
+    return @($list | Select-Object -Unique)
+}
+
+function Resolve-GitCloneCredential {
+    <#
+        If any of the selected project profiles declare http(s) repo URLs, prompt
+        ONCE for a git username + token to use for cloning them during
+        provisioning (Enter on the username skips entirely). Builds one
+        `<proto>://<user>:<token>@<host>` credential line per distinct http(s)
+        host found, URL-encoding the user/token, and returns them base64-encoded
+        (newline-joined) for handoff to the VM (env GIT_CLONE_CREDENTIALS_B64).
+
+        Returns "" when skipped, when there are no repos, or when the only repo
+        URLs are ssh:// / git@ forms (a username/token can't authenticate those,
+        so they don't trigger the prompt).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ProjectsDir,
+        [Parameter(Mandatory)][AllowNull()]$Names,
+        [switch]$NoPrompt
+    )
+    if ($NoPrompt) { return "" }
+    $urls = Get-ProjectRepoUrls -ProjectsDir $ProjectsDir -Names $Names
+    if (-not $urls -or @($urls).Count -eq 0) { return "" }
+
+    # Distinct http(s) hosts (with port, minus any embedded userinfo) and the
+    # scheme each was first seen with.
+    $hostProto = [ordered]@{}
+    foreach ($u in $urls) {
+        if ($u -match '^(https?)://(?:[^/@]+@)?([^/]+)') {
+            $h = $matches[2]
+            if (-not $hostProto.Contains($h)) { $hostProto[$h] = $matches[1] }
+        }
+    }
+    if ($hostProto.Count -eq 0) { return "" }   # only ssh/git@ URLs -- nothing to prompt for
+    $hostList = @($hostProto.Keys)
+
+    Write-Step "Git credentials for cloning project repos"
+    Write-Host "    The selected projects clone repos from: $($hostList -join ', ')" -ForegroundColor White
+    Write-Host "    Enter credentials to use for the clone, or press Enter to skip" -ForegroundColor White
+    Write-Host "    (skip if the repos are public or you'll authenticate another way)." -ForegroundColor DarkGray
+    $user = Read-Host "    Git username (press Enter to skip)"
+    if ([string]::IsNullOrWhiteSpace($user)) { Write-Note "No clone credentials entered -- skipping."; return "" }
+    $secure = Read-Host "    Git token / password" -AsSecureString
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+    try   { $token = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
+    finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+    if ([string]::IsNullOrWhiteSpace($token)) { Write-Note "No token entered -- skipping."; return "" }
+
+    $encUser = [uri]::EscapeDataString($user.Trim())
+    $encTok  = [uri]::EscapeDataString($token)
+    $lines = foreach ($h in $hostList) { "{0}://{1}:{2}@{3}" -f $hostProto[$h], $encUser, $encTok, $h }
+    Write-Ok ("Clone credentials set for: {0}" -f ($hostList -join ', '))
+    return [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($lines -join "`n")))
+}
+
+function Confirm-RepoScan {
+    <#
+        Given the project-repo scan (parsed from scan-repos.sh JSON), warn about
+        any repo with uncommitted or unpushed work that a reinstall would destroy,
+        and ask whether to continue. Returns $true to proceed (no risky repos, or
+        the user confirmed) and $false to abort. Defaults to NO when there is risk.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][AllowNull()]$Repos)
+
+    $risky = @()
+    if ($Repos) { $risky = @($Repos | Where-Object { [int]$_.dirty -gt 0 -or [int]$_.unpushed -gt 0 }) }
+    if ($risky.Count -eq 0) { return $true }
+
+    Write-Host ""
+    Write-Host "  *********************  UNCOMMITTED / UNPUSHED WORK  *********************" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "   A reinstall DELETES the VM disk. These repos in the workspace have work"  -ForegroundColor Yellow
+    Write-Host "   that is not safely on a remote and would be LOST:"                        -ForegroundColor Yellow
+    Write-Host ""
+    foreach ($r in $risky) {
+        $bits = @()
+        if ([int]$r.dirty    -gt 0) { $bits += "$($r.dirty) uncommitted" }
+        if ([int]$r.unpushed -gt 0) { $bits += "$($r.unpushed) unpushed" }
+        $remote = if ($r.url) { $r.url } else { "(no remote!)" }
+        Write-Host ("     - {0}: {1}   {2}" -f $r.name, ($bits -join ", "), $remote) -ForegroundColor White
+    }
+    Write-Host ""
+    Write-Host "   Consider committing/pushing inside the VM first." -ForegroundColor Yellow
+    $ans = Read-Host "   Continue with the reinstall and lose this work? [y/N]"
+    return ($ans.Trim().ToLowerInvariant() -match '^(y|yes)$')
+}
