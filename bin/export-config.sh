@@ -12,6 +12,13 @@
 #   - Subscription auth (INCLUDE_AUTH): ~/.claude/.credentials.json, ~/.claude.json,
 #                                       ~/.codex/auth.json,
 #                                       ~/.local/share/opencode/auth.json
+#   - MCP server auth (INCLUDE_AUTH)  : OAuth tokens/state each agent saves after
+#                                       authenticating to a remote MCP server:
+#                                         Claude  ~/.claude/.credentials.json holds
+#                                                 the tokens (captured above) +
+#                                                 ~/.claude/mcp-needs-auth-cache.json
+#                                         Codex   ~/.codex/.credentials.json
+#                                         Opencode ~/.local/share/opencode/mcp-auth.json
 #   - Agent settings/config           : ~/.claude/settings.json, ~/.codex/config.toml,
 #                                       ~/.config/opencode/opencode.json
 #   - Global git config + credentials : ~/.gitconfig, ~/.git-credentials
@@ -102,6 +109,11 @@ if has_agent "claude-code" || [[ -d "${EXPORT_HOME}/.claude" ]]; then
   if [[ "${INCLUDE_AUTH}" == "true" ]]; then
     add ".claude.json"
     add ".claude/.credentials.json"
+    # MCP server OAuth tokens for user-added remote servers live INSIDE
+    # .credentials.json (captured just above). This cache records which MCP
+    # servers still await an interactive /mcp auth -- keep it so the restored VM
+    # doesn't forget. (claude.ai connectors are auth'd server-side, nothing local.)
+    add ".claude/mcp-needs-auth-cache.json"
   fi
   # Per-project memory only -- never the session transcripts, caches, or the
   # cloned project repos themselves. Memory lives under
@@ -125,6 +137,10 @@ if has_agent "codex" || [[ -d "${EXPORT_HOME}/.codex" ]]; then
   add_glob ".codex/memories_*.sqlite*"
   if [[ "${INCLUDE_AUTH}" == "true" ]]; then
     add ".codex/auth.json"
+    # Per-MCP-server OAuth tokens (access/refresh, keyed by server). Codex keeps
+    # these in the OS keyring when available, else this file-backed fallback --
+    # which is what a headless VM uses, so it's the file to carry across.
+    add ".codex/.credentials.json"
   fi
   # Skills, minus the bundled system skills (re-created on install).
   add ".codex/skills"
@@ -138,6 +154,8 @@ if has_agent "opencode" || [[ -d "${EXPORT_HOME}/.config/opencode" ]]; then
   add_glob ".config/opencode/*.md"
   if [[ "${INCLUDE_AUTH}" == "true" ]]; then
     add ".local/share/opencode/auth.json"
+    # Per-MCP-server OAuth state (client registration + tokens) for remote servers.
+    add ".local/share/opencode/mcp-auth.json"
   fi
 fi
 

@@ -536,6 +536,13 @@ project repos):
 - **Subscription auth**, so you don't re-authenticate after a reinstall:
   `~/.claude/.credentials.json`, `~/.claude.json`, `~/.codex/auth.json`,
   `~/.local/share/opencode/auth.json`.
+- **MCP server auth**, so connected MCP servers stay logged in across a reinstall:
+  the OAuth tokens each agent saves after authenticating to a remote MCP server.
+  Claude keeps them inside `~/.claude/.credentials.json` (saved above) plus an
+  `~/.claude/mcp-needs-auth-cache.json` state cache; Codex in `~/.codex/.credentials.json`;
+  Opencode in `~/.local/share/opencode/mcp-auth.json`. (`claude.ai` connectors are
+  authenticated server-side against your Anthropic account, so there is nothing local
+  to save for them.)
 - Global git config + credentials: `~/.gitconfig`, `~/.git-credentials`.
 - GitHub CLI login + config: `~/.config/gh/` (`hosts.yml` holds the `gh auth` token).
   The `gh` CLI is installed by default during provisioning.
