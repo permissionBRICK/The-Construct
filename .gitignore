@@ -5,3 +5,6 @@ runtime/
 # Host-side persisted setup choices (git identity, ...), kept next to the scripts
 # so reprovisions don't re-prompt. Local to each machine; never committed.
 .construct-settings.json
+# Saved agent config exported from the VM (auth tokens, memory, skills, project
+# profiles) for restore-after-reinstall. Contains PLAINTEXT secrets; never committed.
+.construct-backup/
