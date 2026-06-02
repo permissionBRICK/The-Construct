@@ -19,6 +19,7 @@
 #                                                 ~/.claude/mcp-needs-auth-cache.json
 #                                         Codex   ~/.codex/.credentials.json
 #                                         Opencode ~/.local/share/opencode/mcp-auth.json
+#   - npm registry auth (INCLUDE_AUTH): ~/.npmrc (registry _authToken / _auth)
 #   - Agent settings/config           : ~/.claude/settings.json, ~/.codex/config.toml,
 #                                       ~/.config/opencode/opencode.json
 #   - Global git config + credentials : ~/.gitconfig, ~/.git-credentials
@@ -100,6 +101,15 @@ add ".gitconfig"
 add ".git-credentials"
 # GitHub CLI: hosts.yml holds the login/OAuth token, config.yml the settings.
 add ".config/gh"
+
+# ── npm registry auth ────────────────────────────────────────────────────────
+# ~/.npmrc is npm's user config; it also carries registry auth tokens
+# (//registry/:_authToken=, _auth=, :_password=). It's pure auth, so gate it on
+# INCLUDE_AUTH -- a sanitized backup must omit the token. (Unlike git creds,
+# nothing in provisioning needs it before restore, so it doesn't go unconditional.)
+if [[ "${INCLUDE_AUTH}" == "true" ]]; then
+  add ".npmrc"
+fi
 
 # ── Claude Code ──────────────────────────────────────────────────────────────
 if has_agent "claude-code" || [[ -d "${EXPORT_HOME}/.claude" ]]; then

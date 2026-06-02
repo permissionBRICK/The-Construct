@@ -55,7 +55,8 @@ for f in \
   ".local/share/opencode/auth.json" \
   ".local/share/opencode/mcp-auth.json" \
   ".config/gh/hosts.yml" \
-  ".git-credentials"; do
+  ".git-credentials" \
+  ".npmrc"; do
   if [[ -e "${EXPORT_HOME}/${f}" ]]; then
     chmod 600 "${EXPORT_HOME}/${f}" 2>/dev/null || true
     log "restored ${f}"
