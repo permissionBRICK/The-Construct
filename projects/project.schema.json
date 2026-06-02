@@ -48,8 +48,45 @@
     "mcp": {
       "type": "array",
       "items": {
-        "type": "string",
-        "enum": ["filesystem", "browser", "github"]
+        "oneOf": [
+          {
+            "comment": "Legacy enum: selects a docker-compose MCP container profile.",
+            "type": "string",
+            "enum": ["filesystem", "browser", "github"]
+          },
+          {
+            "comment": "stdio (e.g. npx) MCP server written into each agent's config.",
+            "type": "object",
+            "required": ["name", "command"],
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "type": { "type": "string", "enum": ["stdio"] },
+              "command": { "type": "string", "minLength": 1 },
+              "args": { "type": "array", "items": { "type": "string" } },
+              "env": {
+                "type": "object",
+                "additionalProperties": { "type": "string" }
+              }
+            }
+          },
+          {
+            "comment": "http MCP server written into each agent's config.",
+            "type": "object",
+            "required": ["name", "url"],
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "type": { "type": "string", "enum": ["http"] },
+              "url": { "type": "string", "minLength": 1 },
+              "headers": {
+                "type": "object",
+                "additionalProperties": { "type": "string" }
+              },
+              "bearerTokenEnvVar": { "type": "string", "minLength": 1 }
+            }
+          }
+        ]
       }
     },
     "hostPackages": {

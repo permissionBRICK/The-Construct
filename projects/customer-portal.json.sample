@@ -14,7 +14,25 @@
     "node": ["22"],
     "python": ["3.12"]
   },
-  "mcp": ["filesystem", "browser", "github"],
+  "mcp": [
+    "filesystem",
+    "browser",
+    "github",
+    {
+      "name": "context7",
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"],
+      "env": { "DEFAULT_MINIMUM_TOKENS": "5000" }
+    },
+    {
+      "name": "sentry",
+      "type": "http",
+      "url": "https://mcp.sentry.dev/mcp",
+      "headers": { "Authorization": "Bearer YOUR_TOKEN" },
+      "bearerTokenEnvVar": "SENTRY_MCP_TOKEN"
+    }
+  ],
   "hostPackages": [],
   "tests": {
     "web": {
