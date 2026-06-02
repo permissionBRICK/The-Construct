@@ -135,8 +135,12 @@ fi
 
 # 1. Base host setup: packages, Docker, dirs, default config, systemd units.
 #    Forced non-interactive so it never launches the ui-setup workflow.
+#    Pass SSH_USER explicitly so bootstrap.sh derives its TARGET_USER (docker
+#    group, /opt/construct ownership) from the seed user rather than SUDO_USER --
+#    provisioning may run directly as root (the re-provision root-key fast path),
+#    where SUDO_USER is unset and would otherwise flip TARGET_USER to root.
 step "Running bootstrap.sh"
-CONSTRUCT_NONINTERACTIVE=true bash "${REPO_DIR}/bootstrap.sh"
+SSH_USER="${SSH_USER}" CONSTRUCT_NONINTERACTIVE=true bash "${REPO_DIR}/bootstrap.sh"
 
 # 2. Apply configuration to /etc/construct/config.env (idempotent merge that
 #    preserves any other keys bootstrap wrote).
