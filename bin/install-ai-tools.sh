@@ -210,7 +210,12 @@ configure_opencode_settings() {
 # Merge the sandbox defaults into a user's Claude Code settings.json, preserving
 # any existing settings. Sets IS_SANDBOX=1, bypassPermissions mode, and accepts
 # the one-time bypass-mode confirmation dialog so the VM is fully
-# non-interactive. Creates the file if missing. Relies on jq (installed by
+# non-interactive. Also sets the `attribution` object to empty strings so Claude
+# Code adds no AI attribution to commits or PRs (no "Co-Authored-By: Claude"
+# trailer, no "Generated with Claude Code" footer). Empty strings are preserved
+# by Claude's `attribution.commit ?? default` lookup, so they fully suppress the
+# defaults; `attribution` is the current key (`includeCoAuthoredBy` is
+# deprecated). Creates the file if missing. Relies on jq (installed by
 # bootstrap.sh).
 configure_claude_sandbox_setting() {
   local home_dir="$1"
@@ -218,7 +223,7 @@ configure_claude_sandbox_setting() {
   local settings_dir="${home_dir}/.claude"
   local settings_file="${settings_dir}/settings.json"
 
-  step "Setting IS_SANDBOX=1 and bypassPermissions mode in ${settings_file}"
+  step "Setting IS_SANDBOX=1, bypassPermissions mode, and empty AI attribution in ${settings_file}"
   install -d -m 0755 "${settings_dir}"
   if [[ ! -s "${settings_file}" ]]; then
     echo '{}' >"${settings_file}"
@@ -226,12 +231,12 @@ configure_claude_sandbox_setting() {
 
   local tmp
   tmp="$(mktemp)"
-  if jq '.env.IS_SANDBOX = "1" | .permissions.defaultMode = "bypassPermissions" | .skipDangerousModePermissionPrompt = true' \
+  if jq '.env.IS_SANDBOX = "1" | .permissions.defaultMode = "bypassPermissions" | .skipDangerousModePermissionPrompt = true | .attribution.commit = "" | .attribution.pr = ""' \
     "${settings_file}" >"${tmp}" 2>/dev/null; then
     cat "${tmp}" >"${settings_file}"
   else
     warn "WARNING: ${settings_file} was not valid JSON; writing minimal settings"
-    printf '{\n  "env": {\n    "IS_SANDBOX": "1"\n  },\n  "permissions": {\n    "defaultMode": "bypassPermissions"\n  },\n  "skipDangerousModePermissionPrompt": true\n}\n' >"${settings_file}"
+    printf '{\n  "env": {\n    "IS_SANDBOX": "1"\n  },\n  "permissions": {\n    "defaultMode": "bypassPermissions"\n  },\n  "skipDangerousModePermissionPrompt": true,\n  "attribution": {\n    "commit": "",\n    "pr": ""\n  }\n}\n' >"${settings_file}"
   fi
   rm -f "${tmp}"
 
@@ -330,14 +335,17 @@ set_toml_top_key() {
 
 # Seed Codex's permission-skip settings into the user's config.toml so it runs
 # unattended -- no approval prompts and full filesystem access -- matching the
-# host configuration. Any other existing keys in the file are preserved.
+# host configuration. Also disables AI attribution: an empty commit_attribution
+# suppresses the "Co-authored-by: Codex <noreply@openai.com>" commit trailer
+# (the dedicated, forward-compatible key whether or not the codex_git_commit
+# feature is active). Any other existing keys in the file are preserved.
 configure_codex_settings() {
   local home_dir="$1"
   local owner="$2"
   local config_dir="${home_dir}/.codex"
   local config_file="${config_dir}/config.toml"
 
-  step "Seeding Codex permission + trusted-project settings in ${config_file}"
+  step "Seeding Codex permission, attribution, and trusted-project settings in ${config_file}"
   install -d -m 0700 "${config_dir}"
   [[ -f "${config_file}" ]] || : >"${config_file}"
 
@@ -345,6 +353,8 @@ configure_codex_settings() {
   set_toml_top_key "${config_file}" "default_permissions" '":danger-full-access"'
   set_toml_top_key "${config_file}" "sandbox_mode"        '"danger-full-access"'
   set_toml_top_key "${config_file}" "approval_policy"     '"never"'
+  # Empty string disables the AI commit co-author trailer.
+  set_toml_top_key "${config_file}" "commit_attribution"  '""'
 
   # Mark the workspace repos directory as a trusted project so Codex doesn't
   # prompt for trust on first use. Appended as its own TOML table after the

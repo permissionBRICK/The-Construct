@@ -278,12 +278,22 @@ runs `bin/install-ai-tools.sh`. When `claude-code` is selected, it **automatical
 sandbox bypass defaults** for the user that runs it — no manual config:
 
 - `~/.claude/settings.json` (CLI): `env.IS_SANDBOX="1"`,
-  `permissions.defaultMode="bypassPermissions"`, `skipDangerousModePermissionPrompt=true`.
+  `permissions.defaultMode="bypassPermissions"`, `skipDangerousModePermissionPrompt=true`, and
+  `attribution.commit=""` / `attribution.pr=""` (see attribution note below).
 - `~/.vscode-server/data/Machine/settings.json` (VS Code extension, machine scope):
   `claudeCode.allowDangerouslySkipPermissions=true`,
   `claudeCode.initialPermissionMode="bypassPermissions"`.
 
 Both are merged with `jq`, preserving existing settings, and re-applied on every run.
+
+> **No AI attribution.** Provisioning also turns off AI attribution by default so commits and PRs
+> read as authored solely by you:
+>
+> - Claude Code (`~/.claude/settings.json`): `attribution.commit=""` and `attribution.pr=""` — empty
+>   strings suppress the `Co-Authored-By: Claude …` commit trailer and the "Generated with Claude
+>   Code" PR footer. (`attribution` is the current key; the older `includeCoAuthoredBy` is deprecated.)
+> - Codex (`~/.codex/config.toml`): `commit_attribution = ""` — suppresses the
+>   `Co-authored-by: Codex <noreply@openai.com>` commit trailer.
 
 > Bypass mode runs agent tools without permission prompts. It's appropriate for a disposable,
 > isolated sandbox VM (which `IS_SANDBOX=1` flags) and risky anywhere holding real credentials
