@@ -443,7 +443,7 @@ Project profiles live in `projects/*.json`; the schema is documented in
 
 - repos to clone
 - SDK versions needed by project containers
-- MCP servers to enable
+- MCP servers (see below)
 - optional host packages (disabled by default)
 - test commands and notes
 
@@ -456,6 +456,46 @@ sudo /opt/construct/repo/bin/generate-runtime-config.sh
 
 The generated files are written to `/opt/construct/runtime/generated.json` and
 `/opt/construct/runtime/generated.env`.
+
+### MCP servers
+
+The `mcp` array takes two kinds of entry:
+
+- A **string** (`"filesystem"`, `"browser"`, `"github"`) — a docker-compose MCP
+  container profile (the original mechanism; see `docker-compose.yaml`).
+- An **object** — an MCP server written directly into each coding agent's own
+  config (Claude Code, Codex, Opencode) by `bin/configure-mcp.sh` during
+  provisioning. Two transports:
+
+  ```jsonc
+  // stdio (e.g. an npx server)
+  { "name": "context7", "type": "stdio", "command": "npx",
+    "args": ["-y", "@upstash/context7-mcp"], "env": { "KEY": "val" } }
+
+  // http
+  { "name": "sentry", "type": "http", "url": "https://mcp.sentry.dev/mcp",
+    "headers": { "Authorization": "Bearer ..." }, "bearerTokenEnvVar": "SENTRY_MCP_TOKEN" }
+  ```
+
+  Optional on either form:
+  - `"agents"`: subset of `["claude", "claude-code", "codex", "opencode"]` — only
+    configure the server into those agents (default: all). List the same `name`
+    twice with different `agents` to give an agent a different config.
+  - `"enabled"`: set `false` to add the server **flagged disabled** (default
+    true) so you can toggle it on in the agent UI. Opencode (`enabled: false`)
+    and Codex (`enabled = false`) store a present-but-disabled entry; Claude has
+    no global disable, so it is disabled per directory
+    (`projects.<dir>.disabledMcpServers`) for the workspace and every repo dir.
+
+  Servers are written **globally** (user scope) for all agents. Notes: Codex http
+  supports only the URL plus an optional bearer-token env var — arbitrary
+  `headers` are applied to Claude/Opencode only. Servers you list are upserted by
+  name; unrelated/hand-added servers are left untouched.
+
+Because MCP servers are declared in the project JSON, they are preserved across a
+reinstall: the [save/restore](#saving--restoring-config-across-reinstalls) flow
+backs up the VM's stored project profiles and restores any the host doesn't
+already have.
 
 ## Checkout Projects
 
@@ -499,9 +539,11 @@ project repos):
 - Global git config + credentials: `~/.gitconfig`, `~/.git-credentials`.
 - GitHub CLI login + config: `~/.config/gh/` (`hosts.yml` holds the `gh auth` token).
   The `gh` CLI is installed by default during provisioning.
-- A generated project profile (`projects/<repo>.json`) for every repo cloned under
-  `/root/repos` whose remote isn't already covered by an existing profile, so the
-  reinstall re-clones them.
+- Project profiles: the VM's stored profiles (`/opt/construct/projects/*.json`,
+  which carry your MCP servers and other per-project config), plus a generated
+  profile for every cloned repo under `/root/repos` whose remote isn't already
+  covered. On restore the host keeps any profile it already has and adds the rest,
+  then re-provisions them (re-cloning repos and reconfiguring MCP servers).
 
 > ⚠️ The backup contains **plaintext** auth tokens and git credentials. It is git-ignored
 > and stays on your host; treat `.construct-backup/` as a secret.

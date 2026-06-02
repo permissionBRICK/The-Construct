@@ -141,9 +141,26 @@ if has_agent "opencode" || [[ -d "${EXPORT_HOME}/.config/opencode" ]]; then
   fi
 fi
 
-# ── Generate project profiles for cloned repos not yet covered ───────────────
-# Build the set of repo URLs already declared by an existing project profile
-# (repo copy + persisted store), so we only emit profiles for "loose" repos.
+# ── Back up stored project profiles + generate profiles for loose repos ──────
+# The VM's persisted project profiles (PROJECTS_STORE) carry the real config the
+# user added -- notably MCP servers (which live in the project JSON) -- so copy
+# them into the backup. On restore the host merges them into its projects/ dir,
+# keeping any it already has. Then, for cloned repos not covered by ANY profile,
+# generate a minimal profile so the repo is re-cloned after a reinstall.
+
+# 1. Copy the stored profiles verbatim (skip the schema file).
+if [[ -d "${PROJECTS_STORE}" ]]; then
+  shopt -s nullglob
+  for pj in "${PROJECTS_STORE}"/*.json; do
+    base="$(basename "${pj}")"
+    [[ "${base}" == "project.schema.json" ]] && continue
+    cp -f "${pj}" "${PROJOUT}/${base}"
+    log "+ project profile (stored): ${base%.json}"
+  done
+  shopt -u nullglob
+fi
+
+# 2. Set of repo URLs already covered by a profile (repo copy + persisted store).
 covered="$(mktemp)"
 : >"${covered}"
 for dir in "${REPO_DIR}/projects" "${PROJECTS_STORE}"; do
@@ -156,7 +173,7 @@ for dir in "${REPO_DIR}/projects" "${PROJECTS_STORE}"; do
   shopt -u nullglob
 done
 
-generated=()
+# 3. Generate a profile for each cloned repo whose remote isn't covered yet.
 if [[ -d "${WORKSPACE_ROOT}" ]]; then
   shopt -s nullglob
   for repo in "${WORKSPACE_ROOT}"/*/; do
@@ -168,12 +185,12 @@ if [[ -d "${WORKSPACE_ROOT}" ]]; then
       log "= ${name}: already covered by a project profile"
       continue
     fi
+    [[ -e "${PROJOUT}/${name}.json" ]] && { log "= ${name}: profile already captured"; continue; }
     jq -n --arg name "${name}" --arg url "${url}" --arg dir "${name}" '
       { name: $name,
         repos: [ { url: $url, directory: $dir } ],
         sdks: {}, mcp: [], hostPackages: [], tests: {} }' \
       >"${PROJOUT}/${name}.json"
-    generated+=("${name}")
     log "* generated project profile: ${name} -> ${url}"
   done
   shopt -u nullglob
@@ -181,9 +198,20 @@ fi
 rm -f "${covered}"
 
 # ── Metadata for the host ────────────────────────────────────────────────────
+# addedProjects = every captured profile except the builtin default, so the host
+# can union them into PROJECTS on restore and re-provision them (re-cloning their
+# repos and reconfiguring their MCP servers).
+added_list=()
+shopt -s nullglob
+for pj in "${PROJOUT}"/*.json; do
+  b="$(basename "${pj}" .json)"
+  [[ "${b}" == "default" ]] && continue
+  added_list+=("${b}")
+done
+shopt -u nullglob
 gen_json='[]'
-if [[ "${#generated[@]}" -gt 0 ]]; then
-  gen_json="$(printf '%s\n' "${generated[@]}" | jq -R . | jq -cs .)"
+if [[ "${#added_list[@]}" -gt 0 ]]; then
+  gen_json="$(printf '%s\n' "${added_list[@]}" | jq -R . | jq -cs 'unique')"
 fi
 jq -n \
   --arg created "$(date -Iseconds 2>/dev/null || true)" \
@@ -202,6 +230,6 @@ tar -czf "${OUT}" -C "${STAGE}" .
 rm -rf "${STAGE}"
 
 printf '==> Export complete: %s (%s)\n' "${OUT}" "$(du -h "${OUT}" 2>/dev/null | cut -f1)"
-if [[ "${#generated[@]}" -gt 0 ]]; then
-  printf '    Generated %s project profile(s): %s\n' "${#generated[@]}" "${generated[*]}"
+if [[ "${#added_list[@]}" -gt 0 ]]; then
+  printf '    Captured %s project profile(s): %s\n' "${#added_list[@]}" "${added_list[*]}"
 fi
