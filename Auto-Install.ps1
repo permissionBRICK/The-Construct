@@ -342,6 +342,46 @@ function Select-Projects {
     return ($uniq -join ",")
 }
 
+# Run Provision-AgentVM.ps1 in export mode against the existing VM: either a full
+# config export to -BackupDir, or (-ScanReposOnly) just a scan of the project
+# repos for unsaved work. Throws if the provisioner does (e.g. the VM is
+# unreachable); callers decide how to handle that.
+function Invoke-VmConfigExport {
+    param(
+        [Parameter(Mandatory)][string]$VmName,
+        [Parameter(Mandatory)][string]$BackupDir,
+        [switch]$ScanReposOnly
+    )
+    $ps = Join-Path $PSScriptRoot "Provision-AgentVM.ps1"
+    if (-not (Test-Path -LiteralPath $ps)) { throw "Provision-AgentVM.ps1 not found in $PSScriptRoot." }
+    $a = @{
+        Action    = 'export'
+        BackupDir = $BackupDir
+        VmHost    = "$($VmName.ToLower()).mshome.net"
+        HostAlias = $VmName.ToLower()
+        Auto      = $true
+    }
+    if ($ScanReposOnly) { $a['ScanReposOnly'] = $true }
+    & $ps @a
+}
+
+# Quick, non-interactive TCP probe of the VM's SSH port. Used to gate the
+# scan/export calls so a powered-off or broken VM doesn't trap the user in the
+# provisioner's interactive "enter the hostname" reachability retry loop.
+function Test-VmReachable {
+    param([Parameter(Mandatory)][string]$VmName, [int]$TimeoutMs = 5000)
+    $client = New-Object System.Net.Sockets.TcpClient
+    try {
+        $iar = $client.BeginConnect("$($VmName.ToLower()).mshome.net", 22, $null, $null)
+        if ($iar.AsyncWaitHandle.WaitOne($TimeoutMs)) { $client.EndConnect($iar); return $true }
+        return $false
+    } catch {
+        return $false
+    } finally {
+        $client.Close()
+    }
+}
+
 # ── Handle an already-installed VM (reprovision / reinstall / quit) ──────────
 # Checked up front -- before the long download/build -- so the user isn't forced
 # to wait just to pick "reprovision" or "quit". Skipped in ISO-only mode
@@ -352,6 +392,13 @@ function Select-Projects {
 # rather than reusing what's on disk. Set by -Redownload or the matching menu
 # choice; folded into $needBuild below.
 $forceDownload = [bool]$Redownload
+
+# Save/restore state, carried from the reinstall menu branch down to the create
+# call so a saved config is auto-restored after the fresh install.
+$bk                   = Get-ConstructBackupDir -Dir $PSScriptRoot
+$restoreDir           = ""     # set when the reinstall flow saves a config to restore
+$restoredProjectNames = @()    # project profiles that save generated, to re-provision
+$chosenCloneCredB64   = ""     # git credentials for cloning private project repos
 
 $HyperVmName = "Agent-VM"
 if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -and
@@ -364,6 +411,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         "Reprovision    re-run provisioning on the existing VM (keeps all data)",
         "Reinstall      DELETE the VM and its disk, then build + install fresh (reuse downloaded ISOs)",
         "Redownload     DELETE the VM, re-download the latest Ubuntu ISO, rebuild + install fresh",
+        "Export config  save the VM's current agent config + auth to this host (no changes to the VM)",
         "Quit           make no changes and exit"
     ) -Default 0
 
@@ -381,6 +429,12 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         if ($PSBoundParameters.ContainsKey('GitEmail'))    { $giParams['Email'] = $GitEmail }
         if ($giParams.ContainsKey('Name') -and $giParams.ContainsKey('Email')) { $giParams['NoPrompt'] = $true }
         $reprovGit = Resolve-GitIdentity @giParams
+
+        # Feature 2: if the selected projects clone repos, ask once for credentials.
+        $reprovCloneCredB64 = ""
+        if (Get-Command Resolve-GitCloneCredential -ErrorAction SilentlyContinue) {
+            $reprovCloneCredB64 = Resolve-GitCloneCredential -ProjectsDir (Join-Path $PSScriptRoot 'projects') -Names $reprovProjects
+        }
 
         # No download/build/create on this path -- just re-run the provisioner
         # against the existing VM, so no long time estimate.
@@ -403,6 +457,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         $reprovArgs['GitUserName'] = $reprovGit.Name
         $reprovArgs['GitEmail']    = $reprovGit.Email
         if ($PSBoundParameters.ContainsKey('AgentPassword')) { $reprovArgs['AgentPassword'] = $AgentPassword }
+        if ($reprovCloneCredB64) { $reprovArgs['GitCloneCredentialsB64'] = $reprovCloneCredB64 }
         try {
             & $provisionScript @reprovArgs
         } catch {
@@ -424,6 +479,67 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         # Choice 2 additionally forces a fresh Ubuntu download + autoinstall
         # rebuild (overwriting the local ISOs) instead of reusing what's on disk.
         if ($choice -eq 2) { $forceDownload = $true }
+
+        # The scan + save talk to the VM. Skip them (with a warning) when it isn't
+        # reachable -- e.g. it's powered off or broken, which may be why the user is
+        # reinstalling -- so a dead VM can't trap them in the provisioner's
+        # interactive reachability retry loop.
+        if (Test-VmReachable -VmName $HyperVmName) {
+            # Before wiping: scan the VM's repos for uncommitted/unpushed work that
+            # the reinstall would destroy, and let the user bail. Best-effort.
+            try {
+                Invoke-VmConfigExport -VmName $HyperVmName -BackupDir $bk -ScanReposOnly
+                $scanFile = Join-Path $bk "repo-scan.json"
+                $repos = $null
+                if (Test-Path -LiteralPath $scanFile) {
+                    try { $repos = Get-Content -LiteralPath $scanFile -Raw | ConvertFrom-Json } catch { $repos = $null }
+                }
+                if (-not (Confirm-RepoScan -Repos $repos)) {
+                    Write-Note "Reinstall cancelled (unsaved work in the VM's repos)."
+                    Write-Host ""; Read-Host "Press Enter to exit"
+                    return
+                }
+            } catch {
+                Write-Warning "Could not scan the VM's repos: $($_.Exception.Message)"
+                Write-Host "    Proceeding without the unsaved-work check." -ForegroundColor DarkGray
+            }
+
+            # Offer to save the current config and auto-restore it after the
+            # reinstall (default yes). On success $restoreDir is handed to the
+            # create/provision chain below, and the project profiles the export
+            # generated are folded into the selection so their repos are re-cloned.
+            Write-Host ""
+            Write-Host "    Save the VM's current agent config (auth, memory, skills, instruction" -ForegroundColor White
+            Write-Host "    files, project setup) and auto-restore it after the reinstall?" -ForegroundColor White
+            $ans = Read-Host "    Save and auto-restore? [Y/n]"
+            $doSave = [string]::IsNullOrWhiteSpace($ans) -or ($ans.Trim() -match '^(y|yes)$')
+            if ($doSave) {
+                try {
+                    Invoke-VmConfigExport -VmName $HyperVmName -BackupDir $bk
+                    $restoreDir = $bk
+                    $infoFile = Join-Path $bk "extracted\backup-info.json"
+                    if (Test-Path -LiteralPath $infoFile) {
+                        try {
+                            $info = Get-Content -LiteralPath $infoFile -Raw | ConvertFrom-Json
+                            if ($info.addedProjects) { $restoredProjectNames = @($info.addedProjects) }
+                        } catch { }
+                    }
+                    Write-Ok "Config saved; it will be restored automatically after the reinstall."
+                } catch {
+                    Write-Warning "Saving the config failed: $($_.Exception.Message)"
+                    $ans2 = Read-Host "    Continue with the reinstall WITHOUT a saved config? [y/N]"
+                    if (-not ($ans2.Trim() -match '^(y|yes)$')) {
+                        Write-Note "Reinstall cancelled."
+                        Write-Host ""; Read-Host "Press Enter to exit"
+                        return
+                    }
+                }
+            }
+        } else {
+            Write-Warning "The VM isn't reachable over SSH -- skipping the unsaved-work scan and config save."
+            Write-Host "    (Start the VM first if you want to save its config before reinstalling.)" -ForegroundColor DarkGray
+        }
+
         if (-not (Confirm-Reinstall -VmName $HyperVmName)) {
             Write-Note "Reinstall cancelled. No changes made."
             Write-Host ""; Read-Host "Press Enter to exit"
@@ -435,6 +551,36 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         } else {
             Write-Note "Existing VM removed; continuing with a fresh install."
         }
+    }
+    elseif ($choice -eq 3) {
+        # Export & save the current config to this host -- no changes to the VM.
+        if (-not (Test-VmReachable -VmName $HyperVmName)) {
+            Write-Warning "The VM isn't reachable over SSH. Start it, then re-run to export its config."
+            Write-Host ""; Read-Host "Press Enter to exit"
+            return
+        }
+        try {
+            Invoke-VmConfigExport -VmName $HyperVmName -BackupDir $bk
+            Write-Host ""
+            Write-Ok "Saved the VM's current agent config to:"
+            Write-Host "      $bk" -ForegroundColor White
+            $infoFile = Join-Path $bk "extracted\backup-info.json"
+            if (Test-Path -LiteralPath $infoFile) {
+                try {
+                    $info = Get-Content -LiteralPath $infoFile -Raw | ConvertFrom-Json
+                    if ($info.addedProjects -and @($info.addedProjects).Count -gt 0) {
+                        Write-Host "      Project profiles captured: $((@($info.addedProjects)) -join ', ')" -ForegroundColor White
+                    }
+                } catch { }
+            }
+            Write-Note "It will be auto-restored if you later pick Reinstall and choose to save."
+        } catch {
+            Write-Host ""
+            Write-Host "ERROR: config export failed." -ForegroundColor Red
+            Write-Host "    $($_.Exception.Message)" -ForegroundColor Red
+        }
+        Write-Host ""; Read-Host "Press Enter to exit"
+        return
     }
     else {
         Write-Note "No changes made."
@@ -490,6 +636,21 @@ if (-not $SkipCreateVm) {
     # Project profiles to provision.
     if (-not $PSBoundParameters.ContainsKey('Projects')) {
         $chosenProjects = Select-Projects
+    }
+
+    # Fold in any project profiles a pre-reinstall save generated, so their repos
+    # are re-provisioned (and re-cloned) on the fresh VM.
+    if ($restoredProjectNames.Count -gt 0) {
+        $names = @(($chosenProjects -split ',') + $restoredProjectNames |
+                   ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
+        $chosenProjects = $names -join ','
+        Write-Ok "Including restored project profile(s): $($restoredProjectNames -join ', ')"
+    }
+
+    # Feature 2: if any selected project clones repos, ask once for credentials
+    # (Enter skips; a restore falls back to the saved git-credentials).
+    if (Get-Command Resolve-GitCloneCredential -ErrorAction SilentlyContinue) {
+        $chosenCloneCredB64 = Resolve-GitCloneCredential -ProjectsDir (Join-Path $PSScriptRoot 'projects') -Names $chosenProjects
     }
 
     # Optional login password for the agent user. This is only a manual-fallback
@@ -771,6 +932,11 @@ $createArgs = @{
     # Create-AgentVM.ps1 nor the Provision-AgentVM.ps1 it chains into pauses too.
     Auto          = $true
 }
+# Auto-restore a saved config after the fresh install, and hand down any git
+# credentials for cloning private project repos (both set above on the reinstall
+# / decisions paths; absent for a plain fresh install with no repos).
+if ($restoreDir)         { $createArgs['RestoreDir']             = $restoreDir }
+if ($chosenCloneCredB64) { $createArgs['GitCloneCredentialsB64'] = $chosenCloneCredB64 }
 try {
     & $createScript @createArgs
 } catch {
