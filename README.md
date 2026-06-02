@@ -546,6 +546,9 @@ project repos):
 - Global git config + credentials: `~/.gitconfig`, `~/.git-credentials`.
 - GitHub CLI login + config: `~/.config/gh/` (`hosts.yml` holds the `gh auth` token).
   The `gh` CLI is installed by default during provisioning.
+- **npm registry auth**: `~/.npmrc`, so `npm publish`/installs from private registries keep
+  working after a reinstall (it holds the registry `_authToken`). Saved only when auth is
+  included — `INCLUDE_AUTH=false` omits it.
 - Project profiles: the VM's stored profiles (`/opt/construct/projects/*.json`,
   which carry your MCP servers and other per-project config), plus a generated
   profile for every cloned repo under `/root/repos` whose remote isn't already
