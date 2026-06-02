@@ -27,9 +27,17 @@
 #                                       WORKSPACE_ROOT whose remote isn't already
 #                                       covered by an existing project profile.
 #
+# One captured secret lives OUTSIDE home: the VS Code serve-web connection token
+# (INCLUDE_AUTH) at ${VSCODE_SERVE_WEB_TOKEN_FILE} (default
+# /etc/construct/vscode-serve-web.token). It rides in the tarball at
+# etc/construct/vscode-serve-web.token so a reinstall can keep the same ?tkn= URL;
+# the host reads it back and threads it into install-vscode.sh before serve-web
+# starts (restore-config.sh runs too late -- serve-web is already up by then).
+#
 # The tarball root contains:
 #   home/      mirrors the target home -- restore copies it back with `cp -a`
 #   projects/  generated project profiles -- the host merges these into projects/
+#   etc/       a few captured files from outside home (e.g. the serve-web token)
 #   backup-info.json / MANIFEST.txt  metadata for the host
 #
 # Inputs (all via environment, with defaults):
@@ -109,6 +117,24 @@ add ".config/gh"
 # nothing in provisioning needs it before restore, so it doesn't go unconditional.)
 if [[ "${INCLUDE_AUTH}" == "true" ]]; then
   add ".npmrc"
+fi
+
+# ── VS Code serve-web connection token ───────────────────────────────────────
+# The ?tkn= secret that gates browser VS Code. It lives OUTSIDE home (default
+# /etc/construct/vscode-serve-web.token), so the home-relative `add` can't reach
+# it -- copy it into an etc/ tree in the tarball. It's pure auth, so gate it on
+# INCLUDE_AUTH. install-vscode.sh only mints a token when none exists, so getting
+# this file back in place before serve-web starts keeps the URL stable; the host
+# does that by threading it into install-vscode.sh (restore-config.sh runs too
+# late). VSCODE_SERVE_WEB_TOKEN_FILE comes from config.env, sourced above.
+if [[ "${INCLUDE_AUTH}" == "true" ]]; then
+  sw_token_file="${VSCODE_SERVE_WEB_TOKEN_FILE:-/etc/construct/vscode-serve-web.token}"
+  if [[ -s "${sw_token_file}" ]]; then
+    mkdir -p "${STAGE}/etc/construct"
+    cp -a "${sw_token_file}" "${STAGE}/etc/construct/vscode-serve-web.token"
+    printf 'etc/construct/vscode-serve-web.token\n' >>"${MANIFEST}"
+    log "+ etc/construct/vscode-serve-web.token"
+  fi
 fi
 
 # ── Claude Code ──────────────────────────────────────────────────────────────

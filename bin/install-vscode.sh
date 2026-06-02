@@ -67,6 +67,15 @@ VSCODE_SERVE_WEB="${VSCODE_SERVE_WEB:-true}"
 VSCODE_SERVE_WEB_HOST="${VSCODE_SERVE_WEB_HOST:-0.0.0.0}"
 VSCODE_SERVE_WEB_PORT="${VSCODE_SERVE_WEB_PORT:-8000}"
 VSCODE_SERVE_WEB_TOKEN_FILE="${VSCODE_SERVE_WEB_TOKEN_FILE:-/etc/construct/vscode-serve-web.token}"
+# Connection user whose Remote-SSH server (~/.vscode-server) gets the agent
+# editor extensions pre-installed, plus which agents are installed (used to
+# derive the default extension set).
+CLAUDE_USER="${CLAUDE_USER:-root}"
+AI_TOOLS="${AI_TOOLS:-claude-code,codex,opencode}"
+# Comma-separated VS Code extension IDs to pre-install into the Remote-SSH
+# server. Empty = derive from AI_TOOLS (claude-code -> anthropic.claude-code,
+# codex -> openai.chatgpt); "none" = skip.
+VSCODE_EXTENSIONS="${VSCODE_EXTENSIONS:-}"
 
 # DNS name this VM is reachable under from the user's machine (Hyper-V publishes
 # "<hostname>.mshome.net"), matching print-connection-info.sh.
@@ -148,6 +157,116 @@ install_vscode_cli() {
   ok "VS Code CLI installed: $(/usr/local/bin/code --version 2>/dev/null | head -n1 || echo code)"
 }
 
+# Map `uname -m` to VS Code's server arch slug.
+vscode_server_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64)  echo "x64" ;;
+    aarch64|arm64) echo "arm64" ;;
+    armv7l)        echo "armhf" ;;
+    *)             echo "x64" ;;
+  esac
+}
+
+# Resolve a usable `code-server` binary into the CODE_SERVER_BIN global (return
+# 0), or return 1 if none is available. Reuses one already on disk (any mode's
+# server -- they share the same install format), else downloads the REH server
+# matching this CLI's commit. Sets globals rather than printing so the caller can
+# invoke it WITHOUT command substitution: a subshell would discard PREINSTALL_TMP
+# and leak the downloaded tree. On download, PREINSTALL_TMP is the dir to rm -rf.
+CODE_SERVER_BIN=""
+PREINSTALL_TMP=""
+find_or_fetch_code_server() {
+  local user_data_dir="$1" bin commit arch url tmp
+  CODE_SERVER_BIN=""; PREINSTALL_TMP=""
+  # 1. Reuse any server binary already present (Remote-SSH / serve-web / tunnel).
+  bin="$(find "${user_data_dir}/cli/servers" /var/lib/vscode-serve-web /var/lib/vscode-tunnel \
+           -type f -name code-server 2>/dev/null | head -n1)"
+  if [[ -n "${bin}" && -x "${bin}" ]]; then
+    CODE_SERVER_BIN="${bin}"; return 0
+  fi
+  # 2. Download the server build matching the installed CLI commit.
+  commit="$(/usr/local/bin/code --version 2>/dev/null | sed -n 's/.*commit \([0-9a-f]\{8,\}\).*/\1/p')"
+  [[ -n "${commit}" ]] || return 1
+  arch="$(vscode_server_arch)"
+  url="https://update.code.visualstudio.com/commit:${commit}/server-linux-${arch}/stable"
+  tmp="$(mktemp -d)"
+  if curl -fsSL "${url}" -o "${tmp}/server.tar.gz" && tar -xzf "${tmp}/server.tar.gz" -C "${tmp}"; then
+    bin="$(find "${tmp}" -type f -name code-server 2>/dev/null | head -n1)"
+    if [[ -n "${bin}" && -x "${bin}" ]]; then
+      PREINSTALL_TMP="${tmp}"; CODE_SERVER_BIN="${bin}"; return 0
+    fi
+  fi
+  rm -rf "${tmp}"
+  return 1
+}
+
+# ----------------------------------------------------------------------------
+# Pre-install the agents' VS Code extensions into the Remote-SSH server so a
+# freshly (re)provisioned VM already has them when the user connects -- no
+# waiting for the first interactive install.
+#
+# Targets the connection user's shared Remote-SSH extensions dir
+# (~CLAUDE_USER/.vscode-server/extensions), which every downloaded server commit
+# reuses. We drive a real `code-server` binary with explicit --extensions-dir /
+# --server-data-dir rather than `code ext install`: the latter only works when
+# SSH_CONNECTION is set (it isn't under sudo) and ignores --extensions-dir.
+#
+# Best-effort: a download/marketplace failure warns but never aborts provisioning.
+# ----------------------------------------------------------------------------
+preinstall_extensions() {
+  local user home data_dir ext_dir exts srv ext out rc=0
+  local -a derived=() arr=()
+
+  user="${CLAUDE_USER:-root}"
+  home="$(getent passwd "${user}" | cut -d: -f6)"
+  [[ -n "${home}" ]] || home="/root"
+  data_dir="${home}/.vscode-server"
+  ext_dir="${data_dir}/extensions"
+
+  # Resolve the extension list: explicit override, else derive from AI_TOOLS.
+  exts="${VSCODE_EXTENSIONS:-}"
+  if [[ -z "${exts}" ]]; then
+    case ",${AI_TOOLS}," in *",claude-code,"*) derived+=("anthropic.claude-code") ;; esac
+    case ",${AI_TOOLS}," in *",codex,"*)       derived+=("openai.chatgpt") ;; esac
+    exts="$(IFS=,; printf '%s' "${derived[*]}")"
+  fi
+  if [[ -z "${exts}" || "${exts}" == "none" ]]; then
+    note "VS Code extension pre-install: nothing to do (VSCODE_EXTENSIONS='${exts}')"
+    return 0
+  fi
+
+  step "Pre-installing VS Code extensions for Remote-SSH (user ${user}): ${exts//,/ }"
+
+  # Call WITHOUT command substitution so the helper's globals (CODE_SERVER_BIN,
+  # PREINSTALL_TMP) survive into this scope and the temp dir gets cleaned up.
+  if ! find_or_fetch_code_server "${data_dir}"; then
+    warn "  WARNING: no code-server binary available (download failed?); skipping extension pre-install"
+    return 0
+  fi
+  srv="${CODE_SERVER_BIN}"
+
+  install -d -m 0755 "${ext_dir}"
+  IFS=',' read -ra arr <<<"${exts}"
+  for ext in "${arr[@]}"; do
+    ext="${ext// /}"; [[ -n "${ext}" ]] || continue
+    if out="$("${srv}" --install-extension "${ext}" --force \
+                --extensions-dir "${ext_dir}" --server-data-dir "${data_dir}" 2>&1)"; then
+      ok "  installed ${ext}"
+    else
+      warn "  WARNING: failed to install ${ext}"
+      printf '%s\n' "${out}" | tail -n3 >&2
+      rc=1
+    fi
+  done
+
+  # We ran as root; hand the tree back to the connection user.
+  chown -R "${user}:${user}" "${data_dir}" 2>/dev/null || true
+  [[ -n "${PREINSTALL_TMP}" ]] && rm -rf "${PREINSTALL_TMP}"
+
+  if [[ "${rc}" -eq 0 ]]; then ok "  VS Code extensions ready in ${ext_dir}"; else note "  Some extensions failed; see warnings above"; fi
+  return 0
+}
+
 # Best-effort "is this VM already registered?" check: an auth/registration file
 # left in the CLI data dir by a previous successful sign-in, or the CLI reporting
 # a signed-in tunnel user.
@@ -200,6 +319,23 @@ setup_serve_web() {
   fi
 
   step "Deploying code serve-web service"
+  # Seed a preserved connection token from a saved backup so the ?tkn= URL stays
+  # the same across a reinstall. The host passes the old token (base64) in
+  # VSCODE_SERVE_WEB_TOKEN_B64 BEFORE we run -- restore-config.sh runs too late,
+  # since serve-web is already up (and its token already read back) by then. Only
+  # seed when no token file exists yet, so a token already on the VM (reprovision)
+  # always wins; a bad/empty payload is dropped so the generator below still mints
+  # a fresh one.
+  if [[ -n "${VSCODE_SERVE_WEB_TOKEN_B64:-}" && ! -s "${VSCODE_SERVE_WEB_TOKEN_FILE}" ]]; then
+    install -d -m 0700 "$(dirname "${VSCODE_SERVE_WEB_TOKEN_FILE}")"
+    if printf '%s' "${VSCODE_SERVE_WEB_TOKEN_B64}" | base64 -d 2>/dev/null | tr -d ' \n' >"${VSCODE_SERVE_WEB_TOKEN_FILE}" \
+       && [[ -s "${VSCODE_SERVE_WEB_TOKEN_FILE}" ]]; then
+      chmod 0600 "${VSCODE_SERVE_WEB_TOKEN_FILE}"
+      note "Reusing preserved serve-web connection token from backup"
+    else
+      rm -f "${VSCODE_SERVE_WEB_TOKEN_FILE}"
+    fi
+  fi
   # Generate a connection token once (no trailing newline -- it's the exact secret
   # the server expects and that goes in the ?tkn= URL).
   if [[ ! -s "${VSCODE_SERVE_WEB_TOKEN_FILE}" ]]; then
@@ -349,6 +485,7 @@ if ! install_vscode_cli; then
 fi
 note "Remote-SSH will use this binary; 'code serve-web' / 'code tunnel' are available."
 
+preinstall_extensions || true   # best-effort: never let it abort serve-web/tunnel
 setup_serve_web
 setup_tunnel
 
