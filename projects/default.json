@@ -7,5 +7,6 @@
   },
   "mcp": [],
   "hostPackages": [],
+  "provisionCommands": [],
   "tests": {}
 }

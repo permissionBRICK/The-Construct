@@ -291,6 +291,15 @@ fi
 # the checkout). Persisted copies, if any, live in ~/.git-credentials.
 [[ -n "${_clone_creds_file}" ]] && rm -f "${_clone_creds_file}"
 
+# 6b. Run the custom provisioning commands the selected projects declare. Placed
+#     after the checkout so each command runs from inside its project's cloned
+#     repo, and after the SDKs (step 5b) so build/install steps find their
+#     runtimes. Runs every provision; a failing command warns but never aborts.
+step "Running project provisioning commands"
+WORKSPACE_ROOT="${WORKSPACE_ROOT}" AGENT_HOME="${AGENT_HOME:-/opt/construct}" \
+  bash "${REPO_DIR}/bin/run-provision-commands.sh" \
+  || warn "WARNING: one or more project provisioning commands failed; continuing"
+
 # 7. Start the agent service.
 if [[ "${START_SERVICE}" == "true" ]]; then
   step "Starting construct service"

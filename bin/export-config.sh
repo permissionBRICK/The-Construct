@@ -243,7 +243,7 @@ if [[ -d "${WORKSPACE_ROOT}" ]]; then
     jq -n --arg name "${name}" --arg url "${url}" --arg dir "${name}" '
       { name: $name,
         repos: [ { url: $url, directory: $dir } ],
-        sdks: {}, mcp: [], hostPackages: [], tests: {} }' \
+        sdks: {}, mcp: [], hostPackages: [], provisionCommands: [], tests: {} }' \
       >"${PROJOUT}/${name}.json"
     log "* generated project profile: ${name} -> ${url}"
   done
