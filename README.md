@@ -233,8 +233,13 @@ pulls in its declared repos and `sdks`. When `INSTALL_SDKS=true`, `bin/install-s
 installs the merged runtimes on the VM host: `node` (via NodeSource), `python` (apt python3
 toolchain), and `dotnet` (via Microsoft's `dotnet-install.sh`).
 
-`Provision-AgentVM.ps1` prompts which profiles to load (it lists `projects/*.json`) unless you
-pass `-Projects`. The non-interactive `provision.sh` takes them via `PROJECTS=`.
+`Provision-AgentVM.ps1` (and `Auto-Install.ps1`) shows an interactive checkbox menu of the
+`projects/*.json` profiles — Up/Down to move, Space to toggle, Enter to activate a row — with
+every loaded profile selected by default, plus rows to open the `projects/` folder in Explorer
+and to continue. The list refreshes in place if you drop a new profile into the folder while
+the menu is open. With no profiles present it still shows, noting the VM will be built from the
+default blank config. Pass `-Projects` to skip the menu. The non-interactive `provision.sh`
+takes them via `PROJECTS=`.
 
 ## Manual Setup on a Blank Ubuntu VM
 
