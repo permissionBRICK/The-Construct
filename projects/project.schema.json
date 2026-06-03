@@ -116,6 +116,14 @@
         "minLength": 1
       }
     },
+    "provisionCommands": {
+      "comment": "Custom bash commands run, in array order, on EVERY provision -- AFTER this profile's repos are cloned and the SDKs installed. The working directory is this profile's first repo checkout (WORKSPACE_ROOT/<dir>), or WORKSPACE_ROOT when the profile declares no repo. Across multiple selected profiles they run in profile order. Run as root; must be idempotent. A failing command is logged but does not abort provisioning or the remaining commands.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
     "tests": {
       "type": "object"
     }

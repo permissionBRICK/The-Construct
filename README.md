@@ -206,7 +206,8 @@ connect with `ssh agent-vm` or via the VS Code Remote Explorer.
 PowerShell script invokes, and you can also run it directly over SSH or in cloud-init. It
 reads all inputs from environment variables (with sensible defaults) and runs the full chain:
 `bootstrap.sh` → write `config.env` → root SSH key → `install-ai-tools.sh` →
-`generate-runtime-config.sh` → `install-sdks.sh` → start the service.
+`generate-runtime-config.sh` → `install-sdks.sh` → check out repos →
+`run-provision-commands.sh` → start the service.
 
 ```bash
 sudo env \
@@ -450,6 +451,7 @@ Project profiles live in `projects/*.json`; the schema is documented in
 - SDK versions needed by project containers
 - MCP servers (see below)
 - optional host packages (disabled by default)
+- custom provisioning commands run on every provision (see below)
 - test commands and notes
 
 Selected projects are read from `PROJECTS` in `/etc/construct/config.env`. Requirements are
@@ -501,6 +503,44 @@ Because MCP servers are declared in the project JSON, they are preserved across 
 reinstall: the [save/restore](#saving--restoring-config-across-reinstalls) flow
 backs up the VM's stored project profiles and restores any the host doesn't
 already have.
+
+### Provisioning commands
+
+A profile may declare `provisionCommands` — a list of bash commands run on **every**
+provision, as the project's "every-time" setup hook (build steps, fetching deps,
+seeding a local `.env`, …):
+
+```jsonc
+{
+  "name": "customer-portal",
+  "repos": [{ "url": "git@github.com:acme/customer-portal.git", "directory": "customer-portal" }],
+  "provisionCommands": [
+    "npm ci",
+    "cp -n .env.example .env || true"
+  ]
+}
+```
+
+Behaviour:
+
+- **When** — `bin/run-provision-commands.sh` runs late in the provision, **after** the
+  profile's repos are checked out **and** after the SDKs/runtimes (`node`, `python`,
+  `dotnet`) are installed, so build steps find both their source and their toolchains.
+- **Order** — commands run top-to-bottom; across several selected profiles they run in
+  profile order.
+- **Working directory** — each command runs from the profile's **first repo checkout**
+  (`/root/repos/<directory>`), so `npm ci` / `dotnet restore` just work. Profiles with no
+  repo (or whose repo isn't on disk — e.g. `CHECKOUT_PROJECTS=false` or a failed clone)
+  run from the workspace root instead.
+- **Idempotency** — they run every time, so they must be safe to re-run. Prefer
+  idempotent forms (`npm ci`, `cp -n`, `… || true`).
+- **Failure** — a command that exits non-zero is logged but does **not** abort the
+  provision or the remaining commands (same as repo checkout and MCP setup).
+- **Environment** — runs as root with `config.env` sourced and the merged `AGENT_*`
+  vars derived from `generated.json`, so `WORKSPACE_ROOT`, `AGENT_PROJECTS`,
+  `AGENT_REPOS_JSON` (valid JSON), `AGENT_SDKS_JSON`, `AGENT_MCP`, etc. are available.
+
+Run them by hand with `sudo /opt/construct/repo/bin/run-provision-commands.sh`.
 
 ## Checkout Projects
 

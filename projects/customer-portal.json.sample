@@ -43,6 +43,10 @@
     }
   ],
   "hostPackages": [],
+  "provisionCommands": [
+    "npm ci",
+    "cp -n .env.example .env || true"
+  ],
   "tests": {
     "web": {
       "runner": "playwright",

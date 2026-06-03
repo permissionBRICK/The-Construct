@@ -126,6 +126,26 @@ jq -s '
       | map(select(type == "object" and ((.name // "") | length) > 0))
     ),
     hostPackages: (map(.hostPackages // []) | add | unique_strings),
+    provisionCommands: (
+      # One {dir, command} per command, in profile order then array order. dir
+      # is each profile FIRST repo checkout directory (resolved the same way
+      # checkout-projects.sh does: explicit "directory", else the repo basename
+      # without .git) so the runner can cd into the cloned repo before running it.
+      # Empty when the profile declares no repos -> runner falls back to the
+      # workspace root.
+      map(
+        (
+          (.repos // [])[0] as $repo
+          | if $repo == null then ""
+            else ($repo.directory // ($repo.url | sub("\\.git$"; "") | sub(".*/"; "")))
+            end
+        ) as $dir
+        | ((.provisionCommands // [])
+           | map(select(type == "string" and length > 0))
+           | map({ dir: $dir, command: . }))
+      )
+      | add
+    ),
     tests: map({(.name): (.tests // {})}) | add
   }
 ' "${project_json_args[@]}" >"${RUNTIME_DIR}/generated.json"
