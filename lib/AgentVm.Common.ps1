@@ -2,8 +2,9 @@
 <#
 .SYNOPSIS
     Shared helpers for the Windows agent-VM scripts (Auto-Install.ps1 and
-    Create-AgentVM.ps1): an interactive arrow-key menu, a destructive-action
-    confirmation, Hyper-V / virtualization validation, and Hyper-V VM teardown.
+    Create-AgentVM.ps1): an interactive arrow-key menu, a checkbox-style project
+    selector, a destructive-action confirmation, Hyper-V / virtualization
+    validation, and Hyper-V VM teardown.
 
 .NOTES
     Dot-source this file from the calling script:
@@ -177,6 +178,204 @@ function Show-Menu {
                 'UpArrow'   { $selected = ($selected - 1 + $Options.Count) % $Options.Count }
                 'DownArrow' { $selected = ($selected + 1) % $Options.Count }
                 'Enter'     { return $selected }
+            }
+        }
+    } finally {
+        try { [Console]::CursorVisible = $true } catch { }
+        Write-Host ""
+    }
+}
+
+function Select-ProjectProfiles {
+    <#
+        Interactive checkbox-style selector for the project profiles in
+        projects/ (every *.json except the blank "default" and "project.schema").
+        Built on the same in-place terminal redraw as Show-Menu: Up/Down moves
+        the highlight, Space toggles the highlighted profile on/off, and the list
+        ends with two action rows -- "Open projects config folder" (launches
+        Explorer, leaving the menu open) and "Continue". Every loaded profile
+        starts selected.
+
+        The folder is watched while the menu is open: dropping a new *.json in
+        (or removing one) refreshes the list in place, with any newly added
+        profile defaulting to selected. When no profiles are present the menu
+        still shows -- with a note that the VM will be built from the default
+        blank config -- offering only the two actions.
+
+        Returns a comma-separated list of the chosen profile base names, or
+        "default" when none are selected. On a non-interactive host (input
+        redirected) it can't drive the menu, so it returns every available
+        profile (or "default" if there are none) -- matching the all-selected
+        default state.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string] $ProjectsDir)
+
+    $skip = @("default", "project.schema")
+
+    # Snapshot the selectable profile base names: every *.json in the folder,
+    # sorted, minus the blank default + schema. .sample files don't match *.json.
+    $scan = {
+        if (-not (Test-Path -LiteralPath $ProjectsDir)) { return @() }
+        @(Get-ChildItem -LiteralPath $ProjectsDir -Filter *.json -File -ErrorAction SilentlyContinue |
+          Where-Object { $skip -notcontains $_.BaseName } |
+          Sort-Object Name | ForEach-Object { $_.BaseName })
+    }
+
+    $names = @(& $scan)
+
+    # Non-interactive host: can't read keys, so fall back to the all-selected
+    # default (install everything, or "default" when nothing is configured).
+    if ([Console]::IsInputRedirected) {
+        if ($names.Count -eq 0) { return "default" }
+        return ($names -join ",")
+    }
+
+    # Selection state keyed by profile name; every loaded profile starts on.
+    $selected = @{}
+    foreach ($n in $names) { $selected[$n] = $true }
+
+    Write-Host ""
+    Write-Host "  Select project configs to install" -ForegroundColor Cyan
+    Write-Host "  (Up/Down to move, Space to toggle, Enter to activate a row)" -ForegroundColor DarkGray
+    Write-Host ""
+
+    # Start on the first profile, or on "Continue" when there's nothing to toggle.
+    $cursor      = if ($names.Count -eq 0) { 1 } else { 0 }
+    $listTop     = [Console]::CursorTop
+    $prevLines   = 0    # rows drawn last pass, so we can clear leftovers on shrink
+    $maxBarWidth = 0    # only grows, so a narrowing list still clears cleanly
+    try { [Console]::CursorVisible = $false } catch { }
+
+    try {
+        while ($true) {
+            # Re-scan; if the folder changed, rebuild selection state preserving
+            # existing toggles and defaulting any newly added profile to selected.
+            $current = @(& $scan)
+            if (($current -join "`n") -ne ($names -join "`n")) {
+                $newSel = @{}
+                foreach ($n in $current) {
+                    $newSel[$n] = if ($selected.ContainsKey($n)) { $selected[$n] } else { $true }
+                }
+                $selected = $newSel
+                $names    = $current
+            }
+
+            # Rows = one per profile, then the two action buttons.
+            $rowCount = $names.Count + 2
+            $idxOpen  = $names.Count        # "Open projects config folder"
+            $idxCont  = $names.Count + 1    # "Continue"
+            if ($cursor -ge $rowCount) { $cursor = $rowCount - 1 }
+            if ($cursor -lt 0)         { $cursor = 0 }
+
+            # Width of the highlight bar = longest row content + prefix + padding.
+            # The empty-folder note lines are far longer than any row, so fold
+            # them into the width too -- otherwise, after the menu has been empty,
+            # the narrower profile/action rows wouldn't fully overwrite the note
+            # text on the auto-refresh redraw, leaving stale characters behind.
+            $emptyNote = "    (No project configs found -- the VM will be built from the default blank config.)"
+            $emptyHint = "    Drop *.json profiles into the folder below and they'll appear here."
+            $contents = New-Object System.Collections.Generic.List[string]
+            foreach ($n in $names) { $contents.Add("[x] $n") }
+            $contents.Add("Open projects config folder")
+            $contents.Add("Continue")
+            $longest = 0
+            foreach ($c in $contents) { if ($c.Length -gt $longest) { $longest = $c.Length } }
+            $barWidth = $longest + 6
+            if ($names.Count -eq 0) {
+                foreach ($noteLine in @($emptyNote, $emptyHint)) {
+                    if ($noteLine.Length -gt $barWidth) { $barWidth = $noteLine.Length }
+                }
+            }
+            if ($barWidth -gt $maxBarWidth) { $maxBarWidth = $barWidth }
+
+            try { [Console]::SetCursorPosition(0, $listTop) } catch { }
+            $linesPrinted = 0
+
+            # Empty-folder note (drawn in place of the profile rows).
+            if ($names.Count -eq 0) {
+                Write-Host $emptyNote.PadRight($maxBarWidth) -ForegroundColor DarkYellow
+                Write-Host $emptyHint.PadRight($maxBarWidth) -ForegroundColor DarkGray
+                Write-Host ("").PadRight($maxBarWidth)
+                $linesPrinted += 3
+            }
+
+            # Profile rows: [x]/[ ] checkbox, highlighted row inverted.
+            for ($i = 0; $i -lt $names.Count; $i++) {
+                $n      = $names[$i]
+                $mark   = if ($selected[$n]) { "[x]" } else { "[ ]" }
+                $prefix = if ($i -eq $cursor) { "  > " } else { "    " }
+                $line   = ($prefix + "$mark $n").PadRight($maxBarWidth)
+                if ($i -eq $cursor) {
+                    Write-Host $line -ForegroundColor Black -BackgroundColor White
+                } elseif ($selected[$n]) {
+                    Write-Host $line -ForegroundColor White
+                } else {
+                    Write-Host $line -ForegroundColor DarkGray
+                }
+                $linesPrinted++
+            }
+
+            # Blank separator, then the two action rows.
+            Write-Host ("").PadRight($maxBarWidth)
+            $linesPrinted++
+            foreach ($act in @(@{ Idx = $idxOpen; Text = "Open projects config folder" },
+                               @{ Idx = $idxCont; Text = "Continue" })) {
+                $prefix = if ($act.Idx -eq $cursor) { "  > " } else { "    " }
+                $line   = ($prefix + $act.Text).PadRight($maxBarWidth)
+                if ($act.Idx -eq $cursor) {
+                    Write-Host $line -ForegroundColor Black -BackgroundColor White
+                } else {
+                    Write-Host $line -ForegroundColor Cyan
+                }
+                $linesPrinted++
+            }
+
+            # Clear any rows left over from a previous, taller render (file removed).
+            if ($prevLines -gt $linesPrinted) {
+                $blank = " " * $maxBarWidth
+                for ($k = 0; $k -lt ($prevLines - $linesPrinted); $k++) { Write-Host $blank }
+            }
+            $prevLines = $linesPrinted
+
+            # Wait for a key, but wake periodically so a folder change redraws the
+            # list even while no key is pressed.
+            $sig = ($names -join "`n")
+            $key = $null
+            while ($true) {
+                if ([Console]::KeyAvailable) { $key = [Console]::ReadKey($true); break }
+                Start-Sleep -Milliseconds 200
+                if ((@(& $scan) -join "`n") -ne $sig) { break }   # folder changed -> redraw
+            }
+            if ($null -eq $key) { continue }   # woke for a refresh, not a keypress
+
+            switch ($key.Key) {
+                'UpArrow'   { $cursor = ($cursor - 1 + $rowCount) % $rowCount }
+                'DownArrow' { $cursor = ($cursor + 1) % $rowCount }
+                'Spacebar'  {
+                    if ($cursor -lt $names.Count) {
+                        $n = $names[$cursor]; $selected[$n] = -not $selected[$n]
+                    }
+                }
+                'Enter' {
+                    if ($cursor -lt $names.Count) {
+                        # Enter on a profile toggles it too (handy alongside Space).
+                        $n = $names[$cursor]; $selected[$n] = -not $selected[$n]
+                    } elseif ($cursor -eq $idxOpen) {
+                        # Open Explorer to the folder, leaving the menu running so
+                        # the user can add profiles and watch them appear.
+                        if (-not (Test-Path -LiteralPath $ProjectsDir)) {
+                            New-Item -ItemType Directory -Path $ProjectsDir -Force | Out-Null
+                        }
+                        $full = (Resolve-Path -LiteralPath $ProjectsDir).Path
+                        try { Start-Process -FilePath explorer.exe -ArgumentList $full } catch { }
+                    } else {
+                        # Continue: return the chosen profiles.
+                        $chosen = @($names | Where-Object { $selected[$_] })
+                        if ($chosen.Count -eq 0) { return "default" }
+                        return ($chosen -join ",")
+                    }
+                }
             }
         }
     } finally {

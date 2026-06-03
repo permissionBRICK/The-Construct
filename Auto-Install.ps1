@@ -300,11 +300,18 @@ function ConvertTo-WslPath([string]$winPath) {
 }
 
 # Prompt the user to pick which project profiles from projects/ to load.
-# Returns a comma-separated PROJECTS value (or "default" if none chosen).
+# Returns a comma-separated PROJECTS value (or "default" if none chosen). The
+# real UI is the checkbox-style Select-ProjectProfiles in the shared lib; the
+# comma prompt below is only a fallback for when that lib isn't loaded.
 # Mirrors Select-Projects in Provision-AgentVM.ps1 so the choice can be made up
 # front here and passed straight through.
 function Select-Projects {
     $projDir = Join-Path $PSScriptRoot "projects"
+    if (Get-Command Select-ProjectProfiles -ErrorAction SilentlyContinue) {
+        return (Select-ProjectProfiles -ProjectsDir $projDir)
+    }
+
+    # --- Fallback (shared lib unavailable): plain comma-list prompt -----------
     if (-not (Test-Path $projDir)) { return "default" }
     $skip = @("default", "project.schema")
     $available = @(Get-ChildItem -LiteralPath $projDir -Filter *.json -File |
