@@ -999,6 +999,29 @@ if ($RestoreDir) {
         }
     }
 }
+# Detect the desktop VS Code client's commit so the VM can pre-seed the exact
+# matching Remote-SSH server (~/.vscode-server) during provisioning -- that makes
+# the FIRST connect after a reinstall as fast as the second (no server download).
+# Blank when `code` isn't on PATH or the output is unexpected; the VM then seeds
+# latest stable instead, and a mismatch just falls back to Remote-SSH's normal
+# on-demand download.
+$vsCodeCommit = ""
+try {
+    $codeCmd = Get-Command code -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($codeCmd) {
+        # Desktop `code --version` prints three lines (version / commit sha /
+        # arch); the standalone CLI prints one line with "(commit <sha>)".
+        $verText = ((& $codeCmd.Source --version 2>$null) -join "`n")
+        if ($verText -match '(?m)^([0-9a-f]{40})$') {
+            $vsCodeCommit = $Matches[1]
+        } elseif ($verText -match 'commit\s+([0-9a-f]{40})') {
+            $vsCodeCommit = $Matches[1]
+        }
+    }
+} catch { }
+if ($vsCodeCommit) {
+    Write-Host "  Desktop VS Code commit: $vsCodeCommit (pre-seeding the matching Remote-SSH server)" -ForegroundColor DarkGray
+}
 # Auto-decide the checkout when not forced: on iff the selected projects declare repos.
 $checkoutArg = $CheckoutProjects
 if (-not $checkoutArg) {
@@ -1008,7 +1031,7 @@ if (-not $checkoutArg) {
     }
     $checkoutArg = if ($repoUrls.Count -gt 0) { "true" } else { "false" }
 }
-$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64'"
+$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit'"
 Write-Host "  --- live provisioning output ---" -ForegroundColor DarkGray
 Invoke-SshStream -Sudo -Command "$envPrefix bash /opt/construct/repo/bin/provision.sh"
 Write-Host "  --- end provisioning output ---" -ForegroundColor DarkGray
