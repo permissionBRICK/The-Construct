@@ -194,7 +194,8 @@ function Select-ProjectProfiles {
         the highlight, Space toggles the highlighted profile on/off, and the list
         ends with two action rows -- "Open projects config folder" (launches
         Explorer, leaving the menu open) and "Continue". Every loaded profile
-        starts selected.
+        starts selected and the cursor starts on "Continue", so a bare Enter
+        accepts the all-selected default.
 
         The folder is watched while the menu is open: dropping a new *.json in
         (or removing one) refreshes the list in place, with any newly added
@@ -240,8 +241,9 @@ function Select-ProjectProfiles {
     Write-Host "  (Up/Down to move, Space to toggle, Enter to activate a row)" -ForegroundColor DarkGray
     Write-Host ""
 
-    # Start on the first profile, or on "Continue" when there's nothing to toggle.
-    $cursor      = if ($names.Count -eq 0) { 1 } else { 0 }
+    # Start on "Continue": every profile defaults to selected, so a plain Enter
+    # accepts the all-selected state without any cursor travel.
+    $cursor      = $names.Count + 1
     $listTop     = [Console]::CursorTop
     $prevLines   = 0    # rows drawn last pass, so we can clear leftovers on shrink
     $maxBarWidth = 0    # only grows, so a narrowing list still clears cleanly

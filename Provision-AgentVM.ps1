@@ -909,7 +909,7 @@ if ($Action -eq 'export') {
         $tgz = Join-Path $BackupDir "backup.tar.gz"
         try {
             Write-Host "  --- live export output ---" -ForegroundColor DarkGray
-            Invoke-SshStream -Sudo -Command "EXPORT_HOME=/root INCLUDE_AUTH=true OUT=/tmp/construct-config-backup.tar.gz CONFIG_FILE=/etc/construct/config.env REPO_DIR=/opt/construct/repo PROJECTS_STORE=/opt/construct/projects bash /opt/construct/repo/bin/export-config.sh && chmod 644 /tmp/construct-config-backup.tar.gz"
+            Invoke-SshStream -Sudo -Command "EXPORT_HOME=/root INCLUDE_AUTH=true INCLUDE_HISTORY=true OUT=/tmp/construct-config-backup.tar.gz CONFIG_FILE=/etc/construct/config.env REPO_DIR=/opt/construct/repo PROJECTS_STORE=/opt/construct/projects bash /opt/construct/repo/bin/export-config.sh && chmod 644 /tmp/construct-config-backup.tar.gz"
             Write-Host "  --- end export output ---" -ForegroundColor DarkGray
             Invoke-ScpFrom -RemotePath "/tmp/construct-config-backup.tar.gz" -LocalPath $tgz
         } finally {

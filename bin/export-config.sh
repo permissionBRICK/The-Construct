@@ -9,6 +9,16 @@
 #   - User-level memory + skills      : ~/.claude/projects/<slug>/{memory,MEMORY.md},
 #                                       ~/.codex/{memories,memories_*.sqlite*,skills},
 #                                       NOT anything inside the project repos.
+#   - Chat history (INCLUDE_HISTORY)  : per-agent session transcripts so past
+#                                       conversations survive the reinstall:
+#                                         Claude  ~/.claude/projects/<slug>/ (the
+#                                                 session *.jsonl + subagent dirs)
+#                                                 and ~/.claude/history.jsonl
+#                                         Codex   ~/.codex/sessions/ plus the
+#                                                 session_index.jsonl/history.jsonl
+#                                                 indexes
+#                                         Opencode ~/.local/share/opencode/storage/
+#                                                 and opencode.db*
 #   - Subscription auth (INCLUDE_AUTH): ~/.claude/.credentials.json, ~/.claude.json,
 #                                       ~/.codex/auth.json,
 #                                       ~/.local/share/opencode/auth.json
@@ -43,6 +53,7 @@
 # Inputs (all via environment, with defaults):
 #   EXPORT_HOME    home to export from         (default /root)
 #   INCLUDE_AUTH   include subscription auth    (default true)
+#   INCLUDE_HISTORY include chat history        (default true)
 #   OUT            output tarball path          (default /tmp/construct-config-backup.tar.gz)
 #   CONFIG_FILE    construct config.env         (default /etc/construct/config.env)
 #   WORKSPACE_ROOT where repos are cloned       (default from config / /root/repos)
@@ -53,6 +64,7 @@ set -euo pipefail
 
 EXPORT_HOME="${EXPORT_HOME:-/root}"
 INCLUDE_AUTH="${INCLUDE_AUTH:-true}"
+INCLUDE_HISTORY="${INCLUDE_HISTORY:-true}"
 OUT="${OUT:-/tmp/construct-config-backup.tar.gz}"
 CONFIG_FILE="${CONFIG_FILE:-/etc/construct/config.env}"
 REPO_DIR="${REPO_DIR:-/opt/construct/repo}"
@@ -151,17 +163,28 @@ if has_agent "claude-code" || [[ -d "${EXPORT_HOME}/.claude" ]]; then
     # doesn't forget. (claude.ai connectors are auth'd server-side, nothing local.)
     add ".claude/mcp-needs-auth-cache.json"
   fi
-  # Per-project memory only -- never the session transcripts, caches, or the
-  # cloned project repos themselves. Memory lives under
-  # ~/.claude/projects/<slug>/{memory/,MEMORY.md}.
+  # Per-project memory and (with INCLUDE_HISTORY) chat history. Both live under
+  # ~/.claude/projects/<slug>/: memory in {memory/,MEMORY.md}, history as the
+  # session *.jsonl transcripts plus per-session dirs (subagent transcripts).
+  # With history on we take the whole slug dir -- one copy, and it must NOT be
+  # combined with the piecewise adds (add() would nest into the existing dest).
+  # Never the cloned project repos themselves.
   if [[ -d "${EXPORT_HOME}/.claude/projects" ]]; then
     shopt -s nullglob
     for slug in "${EXPORT_HOME}/.claude/projects"/*/; do
       rel=".claude/projects/$(basename "${slug}")"
-      [[ -d "${slug}memory" ]]   && add "${rel}/memory"
-      [[ -f "${slug}MEMORY.md" ]] && add "${rel}/MEMORY.md"
+      if [[ "${INCLUDE_HISTORY}" == "true" ]]; then
+        add "${rel}"
+      else
+        [[ -d "${slug}memory" ]]   && add "${rel}/memory"
+        [[ -f "${slug}MEMORY.md" ]] && add "${rel}/MEMORY.md"
+      fi
     done
     shopt -u nullglob
+  fi
+  # Global prompt history (the cross-project history picker).
+  if [[ "${INCLUDE_HISTORY}" == "true" ]]; then
+    add ".claude/history.jsonl"
   fi
 fi
 
@@ -181,6 +204,15 @@ if has_agent "codex" || [[ -d "${EXPORT_HOME}/.codex" ]]; then
   # Skills, minus the bundled system skills (re-created on install).
   add ".codex/skills"
   rm -rf "${HOMEROOT}/.codex/skills/.system" 2>/dev/null || true
+  # Chat history: rollout transcripts under sessions/YYYY/MM/DD/ plus the
+  # indexes the resume picker reads (session_index.jsonl on current Codex,
+  # history.jsonl on older versions -- add() no-ops on whichever is absent).
+  if [[ "${INCLUDE_HISTORY}" == "true" ]]; then
+    add ".codex/sessions"
+    add ".codex/archived_sessions"
+    add ".codex/session_index.jsonl"
+    add ".codex/history.jsonl"
+  fi
 fi
 
 # ── Opencode ─────────────────────────────────────────────────────────────────
@@ -192,6 +224,15 @@ if has_agent "opencode" || [[ -d "${EXPORT_HOME}/.config/opencode" ]]; then
     add ".local/share/opencode/auth.json"
     # Per-MCP-server OAuth state (client registration + tokens) for remote servers.
     add ".local/share/opencode/mcp-auth.json"
+  fi
+  # Chat history: sessions/messages live in storage/ (JSON files) and, on newer
+  # versions, the opencode.db sqlite database (take its -wal/-shm too so an
+  # un-checkpointed write isn't lost). project/ held per-project session data on
+  # older versions. NOT log/, snapshot/, or the downloaded binaries.
+  if [[ "${INCLUDE_HISTORY}" == "true" ]]; then
+    add ".local/share/opencode/storage"
+    add ".local/share/opencode/project"
+    add_glob ".local/share/opencode/opencode.db*"
   fi
 fi
 
@@ -272,9 +313,11 @@ jq -n \
   --arg host "$(hostname 2>/dev/null || true)" \
   --arg agents "${agents}" \
   --argjson includeAuth "$([[ "${INCLUDE_AUTH}" == "true" ]] && echo true || echo false)" \
+  --argjson includeHistory "$([[ "${INCLUDE_HISTORY}" == "true" ]] && echo true || echo false)" \
   --argjson addedProjects "${gen_json}" '
   { created: $created, host: $host, agents: ($agents | split(",")),
-    includeAuth: $includeAuth, addedProjects: $addedProjects }' \
+    includeAuth: $includeAuth, includeHistory: $includeHistory,
+    addedProjects: $addedProjects }' \
   >"${STAGE}/backup-info.json"
 
 # ── Pack ─────────────────────────────────────────────────────────────────────
