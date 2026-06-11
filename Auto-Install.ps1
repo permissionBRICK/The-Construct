@@ -516,8 +516,8 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
             # create/provision chain below, and the project profiles the export
             # generated are folded into the selection so their repos are re-cloned.
             Write-Host ""
-            Write-Host "    Save the VM's current agent config (auth, memory, skills, instruction" -ForegroundColor White
-            Write-Host "    files, project setup) and auto-restore it after the reinstall?" -ForegroundColor White
+            Write-Host "    Save the VM's current agent config (auth, memory, chat history, skills," -ForegroundColor White
+            Write-Host "    instruction files, project setup) and auto-restore it after the reinstall?" -ForegroundColor White
             $ans = Read-Host "    Save and auto-restore? [Y/n]"
             $doSave = [string]::IsNullOrWhiteSpace($ans) -or ($ans.Trim() -match '^(y|yes)$')
             if ($doSave) {

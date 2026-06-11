@@ -68,6 +68,12 @@ for f in ".claude/CLAUDE.md" ".codex/AGENTS.md" ".config/opencode/AGENTS.md"; do
   [[ -e "${EXPORT_HOME}/${f}" ]] && log "restored ${f}"
 done
 
+# Report restored chat history (captured when the export ran with
+# INCLUDE_HISTORY=true), so the provisioning log shows it came back.
+for f in ".claude/history.jsonl" ".codex/sessions" ".local/share/opencode/storage"; do
+  [[ -e "${EXPORT_HOME}/${f}" ]] && log "restored chat history: ${f}"
+done
+
 if [[ -f "${BACKUP_DIR}/backup-info.json" ]]; then
   log "backup metadata: $(tr -d '\n' <"${BACKUP_DIR}/backup-info.json")"
 fi
