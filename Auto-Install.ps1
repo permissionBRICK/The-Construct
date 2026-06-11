@@ -372,6 +372,20 @@ function Invoke-VmConfigExport {
     & $ps @a
 }
 
+# Read the project profile names recorded in a saved backup's
+# extracted\backup-info.json, so they can be folded back into the project
+# selection after a restore. Returns @() when the file is missing or unreadable.
+function Get-BackupProjectNames {
+    param([Parameter(Mandatory)][string]$BackupDir)
+    $infoFile = Join-Path $BackupDir "extracted\backup-info.json"
+    if (-not (Test-Path -LiteralPath $infoFile)) { return @() }
+    try {
+        $info = Get-Content -LiteralPath $infoFile -Raw | ConvertFrom-Json
+        if ($info.addedProjects) { return @($info.addedProjects) }
+    } catch { }
+    return @()
+}
+
 # Quick, non-interactive TCP probe of the VM's SSH port. Used to gate the
 # scan/export calls so a powered-off or broken VM doesn't trap the user in the
 # provisioner's interactive "enter the hostname" reachability retry loop.
@@ -491,6 +505,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         # reachable -- e.g. it's powered off or broken, which may be why the user is
         # reinstalling -- so a dead VM can't trap them in the provisioner's
         # interactive reachability retry loop.
+        $doSave = $false
         if (Test-VmReachable -VmName $HyperVmName) {
             # Before wiping: scan the VM's repos for uncommitted/unpushed work that
             # the reinstall would destroy, and let the user bail. Best-effort.
@@ -524,13 +539,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
                 try {
                     Invoke-VmConfigExport -VmName $HyperVmName -BackupDir $bk
                     $restoreDir = $bk
-                    $infoFile = Join-Path $bk "extracted\backup-info.json"
-                    if (Test-Path -LiteralPath $infoFile) {
-                        try {
-                            $info = Get-Content -LiteralPath $infoFile -Raw | ConvertFrom-Json
-                            if ($info.addedProjects) { $restoredProjectNames = @($info.addedProjects) }
-                        } catch { }
-                    }
+                    $restoredProjectNames = Get-BackupProjectNames -BackupDir $bk
                     Write-Ok "Config saved; it will be restored automatically after the reinstall."
                 } catch {
                     Write-Warning "Saving the config failed: $($_.Exception.Message)"
@@ -545,6 +554,22 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         } else {
             Write-Warning "The VM isn't reachable over SSH -- skipping the unsaved-work scan and config save."
             Write-Host "    (Start the VM first if you want to save its config before reinstalling.)" -ForegroundColor DarkGray
+        }
+
+        # No fresh save -- but if an earlier run left a backup on this host, offer
+        # to restore that instead (default yes), so the saved config still comes
+        # back after the reinstall even when the VM is dead or the save was skipped.
+        if (-not $doSave -and (Test-Path -LiteralPath (Join-Path $bk "extracted\backup-info.json"))) {
+            Write-Host ""
+            Write-Host "    A previously saved config backup exists on this host." -ForegroundColor White
+            Write-Host "    Restore that agent config (auth, memory, chat history, skills," -ForegroundColor White
+            Write-Host "    instruction files, project setup) automatically after the reinstall?" -ForegroundColor White
+            $ans = Read-Host "    Auto-restore? [Y/n]"
+            if ([string]::IsNullOrWhiteSpace($ans) -or ($ans.Trim() -match '^(y|yes)$')) {
+                $restoreDir = $bk
+                $restoredProjectNames = Get-BackupProjectNames -BackupDir $bk
+                Write-Ok "Saved config loaded; it will be restored automatically after the reinstall."
+            }
         }
 
         if (-not (Confirm-Reinstall -VmName $HyperVmName)) {
@@ -571,16 +596,11 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
             Write-Host ""
             Write-Ok "Saved the VM's current agent config to:"
             Write-Host "      $bk" -ForegroundColor White
-            $infoFile = Join-Path $bk "extracted\backup-info.json"
-            if (Test-Path -LiteralPath $infoFile) {
-                try {
-                    $info = Get-Content -LiteralPath $infoFile -Raw | ConvertFrom-Json
-                    if ($info.addedProjects -and @($info.addedProjects).Count -gt 0) {
-                        Write-Host "      Project profiles captured: $((@($info.addedProjects)) -join ', ')" -ForegroundColor White
-                    }
-                } catch { }
+            $names = Get-BackupProjectNames -BackupDir $bk
+            if ($names.Count -gt 0) {
+                Write-Host "      Project profiles captured: $($names -join ', ')" -ForegroundColor White
             }
-            Write-Note "It will be auto-restored if you later pick Reinstall and choose to save."
+            Write-Note "It can be auto-restored when you later pick Reinstall."
         } catch {
             Write-Host ""
             Write-Host "ERROR: config export failed." -ForegroundColor Red
