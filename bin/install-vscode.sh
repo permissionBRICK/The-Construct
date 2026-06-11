@@ -6,6 +6,10 @@ set -euo pipefail
 #
 #   * The CLI is installed unconditionally (VSCODE_SERVER=true, the default) so
 #     VS Code Remote-SSH, `code serve-web`, and `code tunnel` all have the binary.
+#   * The Remote-SSH server (CLI + REH build) is pre-seeded into the connection
+#     user's ~/.vscode-server for the desktop client's commit
+#     (VSCODE_CLIENT_COMMIT, detected on the host; blank = latest stable), so
+#     even the FIRST connect after a reinstall skips the download/unpack wait.
 #   * `code serve-web` (browser-based VS Code over plain HTTP, gated by a
 #     connection token -- no account sign-in) autostarts by default
 #     (VSCODE_SERVE_WEB=true), bound to 0.0.0.0:${VSCODE_SERVE_WEB_PORT}.
@@ -76,6 +80,12 @@ AI_TOOLS="${AI_TOOLS:-claude-code,codex,opencode}"
 # server. Empty = derive from AI_TOOLS (claude-code -> anthropic.claude-code,
 # codex -> openai.chatgpt); "none" = skip.
 VSCODE_EXTENSIONS="${VSCODE_EXTENSIONS:-}"
+# Commit of the *desktop* VS Code client that will Remote-SSH into this VM
+# (full 40-char sha, detected on the host by Provision-AgentVM.ps1). The
+# Remote-SSH server is version-locked to the client, so pre-seeding only skips
+# the first-connect download when the commits match. Blank = assume the client
+# is current and use the installed CLI's commit (latest stable).
+VSCODE_CLIENT_COMMIT="${VSCODE_CLIENT_COMMIT:-}"
 
 # DNS name this VM is reachable under from the user's machine (Hyper-V publishes
 # "<hostname>.mshome.net"), matching print-connection-info.sh.
@@ -165,6 +175,102 @@ vscode_server_arch() {
     armv7l)        echo "armhf" ;;
     *)             echo "x64" ;;
   esac
+}
+
+# ----------------------------------------------------------------------------
+# Pre-seed the Remote-SSH server so the FIRST connect from the desktop client is
+# as fast as the second. On a fresh VM, Remote-SSH's bootstrap downloads and
+# unpacks two things into the connection user's ~/.vscode-server -- that is the
+# 10-15s "Setting up SSH host" wait -- so we put both in place up front:
+#
+#   code-<commit>                          the VS Code CLI, named after the
+#                                          CLIENT's commit (the bootstrap execs
+#                                          this as its "exec server")
+#   cli/servers/Stable-<commit>/server/    the full REH server build the CLI
+#                                          would otherwise download on demand
+#
+# Both are version-locked to the desktop client's commit, so this only helps
+# when VSCODE_CLIENT_COMMIT (detected on the host) -- or, failing that, latest
+# stable -- matches the connecting client. On a mismatch nothing breaks:
+# Remote-SSH just downloads its own build on first connect as before.
+#
+# Best-effort: a download failure warns but never aborts provisioning.
+# ----------------------------------------------------------------------------
+preinstall_remote_ssh_server() {
+  local user home data_dir cli_commit commit arch tmp srv_dir lru
+  user="${CLAUDE_USER:-root}"
+  home="$(getent passwd "${user}" | cut -d: -f6)"
+  [[ -n "${home}" ]] || home="/root"
+  data_dir="${home}/.vscode-server"
+
+  cli_commit="$(/usr/local/bin/code --version 2>/dev/null | sed -n 's/.*commit \([0-9a-f]\{8,\}\).*/\1/p')"
+  commit="${VSCODE_CLIENT_COMMIT}"
+  if [[ ! "${commit}" =~ ^[0-9a-f]{40}$ ]]; then
+    [[ -n "${commit}" ]] && warn "  WARNING: VSCODE_CLIENT_COMMIT='${commit}' is not a 40-char sha; falling back to the CLI's commit"
+    commit="${cli_commit}"
+  fi
+  if [[ -z "${commit}" ]]; then
+    warn "  WARNING: could not determine a VS Code commit; skipping Remote-SSH server pre-seed"
+    return 0
+  fi
+
+  step "Pre-seeding the Remote-SSH server (commit ${commit:0:10}, user ${user})"
+  arch="$(vscode_server_arch)"
+
+  # 1. The CLI at ~/.vscode-server/code-<commit>. Reuse the installed CLI when
+  #    its commit matches; otherwise fetch the commit-pinned build.
+  if [[ ! -x "${data_dir}/code-${commit}" ]]; then
+    install -d -m 0755 "${data_dir}"
+    if [[ "${commit}" == "${cli_commit}" ]]; then
+      install -m 0755 /usr/local/bin/code "${data_dir}/code-${commit}"
+      ok "  CLI seeded from /usr/local/bin/code -> code-${commit:0:10}"
+    else
+      tmp="$(mktemp -d)"
+      if curl -fsSL "https://update.code.visualstudio.com/commit:${commit}/cli-linux-${arch}/stable" -o "${tmp}/cli.tar.gz" \
+         && tar -xzf "${tmp}/cli.tar.gz" -C "${tmp}" && [[ -x "${tmp}/code" ]]; then
+        install -m 0755 "${tmp}/code" "${data_dir}/code-${commit}"
+        ok "  CLI downloaded for client commit -> code-${commit:0:10}"
+      else
+        warn "  WARNING: failed to download the VS Code CLI for commit ${commit:0:10}; Remote-SSH will fetch it on first connect"
+      fi
+      rm -rf "${tmp}"
+    fi
+  else
+    note "  CLI already present: code-${commit:0:10}"
+  fi
+
+  # 2. The REH server at ~/.vscode-server/cli/servers/Stable-<commit>/server/.
+  srv_dir="${data_dir}/cli/servers/Stable-${commit}/server"
+  if [[ ! -x "${srv_dir}/bin/code-server" ]]; then
+    tmp="$(mktemp -d)"
+    if curl -fsSL "https://update.code.visualstudio.com/commit:${commit}/server-linux-${arch}/stable" -o "${tmp}/server.tar.gz"; then
+      install -d -m 0700 "${data_dir}/cli"
+      install -d -m 0755 "${data_dir}/cli/servers" "${srv_dir%/server}" "${srv_dir}"
+      if tar -xzf "${tmp}/server.tar.gz" -C "${srv_dir}" --strip-components=1 \
+         && [[ -x "${srv_dir}/bin/code-server" ]]; then
+        ok "  REH server unpacked into cli/servers/Stable-${commit:0:10}/server"
+      else
+        warn "  WARNING: server archive for commit ${commit:0:10} did not unpack cleanly; removing partial tree"
+        rm -rf "${srv_dir%/server}"
+      fi
+    else
+      warn "  WARNING: failed to download the REH server for commit ${commit:0:10}; Remote-SSH will fetch it on first connect"
+    fi
+    rm -rf "${tmp}"
+  else
+    note "  REH server already present for commit ${commit:0:10}"
+  fi
+
+  # 3. lru.json so the CLI's server bookkeeping knows about the seeded build.
+  lru="${data_dir}/cli/servers/lru.json"
+  if [[ -d "${srv_dir}" && ! -f "${lru}" ]]; then
+    printf '["Stable-%s"]' "${commit}" >"${lru}"
+    chmod 0644 "${lru}"
+  fi
+
+  # We ran as root; hand the tree back to the connection user.
+  chown -R "${user}:${user}" "${data_dir}" 2>/dev/null || true
+  return 0
 }
 
 # Resolve a usable `code-server` binary into the CODE_SERVER_BIN global (return
@@ -485,7 +591,10 @@ if ! install_vscode_cli; then
 fi
 note "Remote-SSH will use this binary; 'code serve-web' / 'code tunnel' are available."
 
-preinstall_extensions || true   # best-effort: never let it abort serve-web/tunnel
+# Seed the server first: preinstall_extensions then reuses the unpacked REH
+# build (via find_or_fetch_code_server) instead of downloading its own copy.
+preinstall_remote_ssh_server || true   # best-effort: never let it abort serve-web/tunnel
+preinstall_extensions || true          # best-effort: never let it abort serve-web/tunnel
 setup_serve_web
 setup_tunnel
 

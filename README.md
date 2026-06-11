@@ -331,8 +331,12 @@ docker ps
 
 ### 8. Connect from VS Code (Remote-SSH)
 
-Add the VM as a Remote-SSH host and connect. VS Code installs its server under
-`~/.vscode-server/` on first connect; because step 3 already seeded the machine-scope settings,
+Add the VM as a Remote-SSH host and connect. Provisioning pre-seeds the Remote-SSH server
+(CLI + REH build) and the agent extensions under `~/.vscode-server/`, so even the first
+connect skips VS Code's usual server download/unpack wait — it's pinned to the desktop
+client's commit when `Provision-AgentVM.ps1` can detect it (`code` on the host PATH),
+otherwise to latest stable; on a version mismatch VS Code simply downloads its own build
+on first connect as before. Because step 3 already seeded the machine-scope settings,
 the Claude Code extension comes up in bypass mode automatically.
 
 ## Target Host
