@@ -16,7 +16,8 @@ irm https://raw.githubusercontent.com/permissionBRICK/The-Construct/main/install
 This downloads the latest repo and launches the guided installer (`Auto-Install.ps1`): it
 elevates to Administrator (required for Hyper-V), builds the Ubuntu autoinstall ISO, then
 creates and provisions the VM. You answer a few questions up front (RAM, disk size,
-projects); everything after that runs unattended.
+projects) through full-screen terminal menus — one screen per choice — and once the
+"all set" banner appears, everything after that runs unattended with normal log output.
 
 If the VM already exists, you get a menu:
 

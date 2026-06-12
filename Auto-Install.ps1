@@ -120,6 +120,17 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Any terminating error NOT handled by a try/catch below (e.g. missing WSL,
+# virtualization disabled in firmware) would normally close the self-elevated
+# window before its guidance can be read. Hold the window open instead.
+trap {
+    Write-Host ""
+    Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host ""
+    Read-Host "Press Enter to exit"
+    exit 1
+}
+
 # ── Self-elevate to Administrator from the start ─────────────────────────────
 # Creating + provisioning the Hyper-V VM needs admin rights, so we elevate up
 # front -- before the long download/build -- and run the whole chain (this
@@ -142,7 +153,28 @@ if (-not $SkipCreateVm) {
                 $argList += "-$($kv.Key)"; $argList += "`"$($kv.Value)`""
             }
         }
-        Start-Process powershell.exe -Verb RunAs -ArgumentList $argList
+        $elevated = Start-Process powershell.exe -Verb RunAs -ArgumentList $argList -PassThru
+        # Bring the new elevated console to the foreground (best-effort): after
+        # the UAC prompt it can open behind this window. We wait briefly for its
+        # main window handle to appear, then focus it. With Windows Terminal as
+        # the default host the window belongs to WindowsTerminal.exe (handle
+        # stays 0 here), so this quietly does nothing -- hence best-effort.
+        try {
+            Add-Type -Namespace ConstructWin32 -Name Focus -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+'@
+            $deadline = (Get-Date).AddSeconds(10)
+            while ((Get-Date) -lt $deadline -and -not $elevated.HasExited) {
+                $elevated.Refresh()
+                if ($elevated.MainWindowHandle -ne [IntPtr]::Zero) {
+                    [ConstructWin32.Focus]::ShowWindow($elevated.MainWindowHandle, 9) | Out-Null   # SW_RESTORE
+                    [ConstructWin32.Focus]::SetForegroundWindow($elevated.MainWindowHandle) | Out-Null
+                    break
+                }
+                Start-Sleep -Milliseconds 200
+            }
+        } catch { }
         exit
     }
 }
@@ -181,45 +213,31 @@ function Show-Banner([string[]]$Lines) {
     Write-Host ""
 }
 
-# Matrix-style launch header: green "digital rain" (random 0/1 -- ASCII only, so
-# it aligns and renders on any console code page, no katakana to mangle) framing
-# the project title. Purely cosmetic; shown once when the elevated run begins.
-function Show-ConstructHeader {
-    $w    = 56
-    $rain = { param([int]$n) -join (1..$n | ForEach-Object { @('0', '1')[(Get-Random -Maximum 2)] }) }
-    $cent = {
-        param([string]$s)
-        $p = [int](($w - $s.Length) / 2)
-        (" " * $p) + $s + (" " * ($w - $p - $s.Length))
-    }
-    $body = @(
-        (& $cent ""),
-        (& $cent "T H E   C O N S T R U C T"),
-        (& $cent "agent sandbox loader"),
-        (& $cent "")
-    )
-    Write-Host ""
-    Write-Host ("   " + (& $rain ($w + 4))) -ForegroundColor DarkGreen
-    Write-Host ("   " + (& $rain ($w + 4))) -ForegroundColor Green
-    foreach ($l in $body) {
-        Write-Host "   "          -NoNewline
-        Write-Host (& $rain 1)    -ForegroundColor DarkGreen -NoNewline
-        Write-Host " "            -NoNewline
-        Write-Host $l             -ForegroundColor Green     -NoNewline
-        Write-Host " "            -NoNewline
-        Write-Host (& $rain 1)    -ForegroundColor DarkGreen
-    }
-    Write-Host ("   " + (& $rain ($w + 4))) -ForegroundColor Green
-    Write-Host ("   " + (& $rain ($w + 4))) -ForegroundColor DarkGreen
-    Write-Host ""
-}
-
-Show-ConstructHeader
-
-# Shared helpers: interactive menu, reinstall confirmation, VM teardown.
+# Shared helpers: TUI screens, interactive menu, reinstall confirmation,
+# VM teardown, and the Matrix-style Show-ConstructHeader.
 $commonLib = Join-Path $PSScriptRoot "lib\AgentVm.Common.ps1"
 if (-not (Test-Path -LiteralPath $commonLib)) { throw "Required helper not found: $commonLib" }
 . $commonLib
+
+# Full-window TUI for the whole interactive phase: every choice below runs as
+# its own screen (wipe + header + the current menu only). Show-AllSet turns it
+# back off at the "all set" banner, after which output scrolls as a normal log.
+# ISO-only mode (-SkipCreateVm) has no prompts, so it keeps plain log output.
+if (-not $SkipCreateVm) { Enable-ConstructTui }
+
+Show-ConstructHeader
+
+# The "all set" banner marks the end of the interactive phase: draw it on a
+# fresh screen, then drop out of TUI mode so everything after it -- download,
+# build, create, provision -- scrolls as a normal log.
+function Show-AllSet([string[]]$Lines) {
+    if (Test-ConstructTui) { Clear-Host; Show-ConstructHeader }
+    Show-Banner $Lines
+    Disable-ConstructTui
+    # Echo the collected setup choices as the first log lines (the TUI screens
+    # they were entered on are gone by now).
+    foreach ($s in @($script:chosenSummary)) { if ($s) { Write-Ok $s } }
+}
 
 # Release line used if the latest LTS can't be polled (offline, source changed).
 $FallbackUbuntuLts = "24.04"
@@ -425,8 +443,7 @@ $HyperVmName = "Agent-VM"
 if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -and
     (Get-VM -Name $HyperVmName -ErrorAction SilentlyContinue)) {
 
-    Write-Host ""
-    Write-Warning "The agent VM '$HyperVmName' is already installed on this host."
+    Show-TuiScreen -Title "The agent VM '$HyperVmName' is already installed on this host."
 
     $choice = Show-Menu -Title "What would you like to do?" -Options @(
         "Reprovision    re-run provisioning on the existing VM (keeps all data)",
@@ -459,7 +476,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
 
         # No download/build/create on this path -- just re-run the provisioner
         # against the existing VM, so no long time estimate.
-        Show-Banner @(
+        Show-AllSet @(
             "All set -- reprovisioning the existing VM now.",
             "",
             "This re-runs setup on your current VM and keeps all its data.",
@@ -510,6 +527,9 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
             # Before wiping: scan the VM's repos for uncommitted/unpushed work that
             # the reinstall would destroy, and let the user bail. Best-effort.
             try {
+                Show-TuiScreen -Title "Checking the VM's repos for unsaved work" -Body @(
+                    "Scanning $HyperVmName for uncommitted or unpushed changes the reinstall would destroy..."
+                )
                 Invoke-VmConfigExport -VmName $HyperVmName -BackupDir $bk -ScanReposOnly
                 $scanFile = Join-Path $bk "repo-scan.json"
                 $repos = $null
@@ -530,21 +550,30 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
             # reinstall (default yes). On success $restoreDir is handed to the
             # create/provision chain below, and the project profiles the export
             # generated are folded into the selection so their repos are re-cloned.
-            Write-Host ""
-            Write-Host "    Save the VM's current agent config (auth, memory, chat history, skills," -ForegroundColor White
-            Write-Host "    instruction files, project setup) and auto-restore it after the reinstall?" -ForegroundColor White
-            $ans = Read-Host "    Save and auto-restore? [Y/n]"
-            $doSave = [string]::IsNullOrWhiteSpace($ans) -or ($ans.Trim() -match '^(y|yes)$')
+            $doSave = Invoke-TuiConfirm -ScreenTitle "Save & restore the agent config" -Body @(
+                "The VM's current agent config (auth, memory, chat history, skills,",
+                "instruction files, project setup) can be saved to this host and",
+                "restored automatically onto the freshly reinstalled VM."
+            ) -Question "Save and auto-restore the config?" `
+              -YesLabel "Yes  save it now and restore it after the reinstall (recommended)" `
+              -NoLabel  "No   reinstall completely blank"
             if ($doSave) {
                 try {
+                    Show-TuiScreen -Title "Saving the VM's agent config" -Body @(
+                        "Exporting auth, memory, skills, instruction files, and project setup to this host..."
+                    )
                     Invoke-VmConfigExport -VmName $HyperVmName -BackupDir $bk
                     $restoreDir = $bk
                     $restoredProjectNames = Get-BackupProjectNames -BackupDir $bk
                     Write-Ok "Config saved; it will be restored automatically after the reinstall."
                 } catch {
                     Write-Warning "Saving the config failed: $($_.Exception.Message)"
-                    $ans2 = Read-Host "    Continue with the reinstall WITHOUT a saved config? [y/N]"
-                    if (-not ($ans2.Trim() -match '^(y|yes)$')) {
+                    # Same screen -- the failure above is context the user needs.
+                    $goOn = Invoke-TuiConfirm -NoScreen -DefaultNo `
+                        -Question "Continue with the reinstall WITHOUT a saved config?" `
+                        -YesLabel "Continue  reinstall blank; the old config is lost" `
+                        -NoLabel  "Cancel    keep the VM as it is"
+                    if (-not $goOn) {
                         Write-Note "Reinstall cancelled."
                         Write-Host ""; Read-Host "Press Enter to exit"
                         return
@@ -560,12 +589,14 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         # to restore that instead (default yes), so the saved config still comes
         # back after the reinstall even when the VM is dead or the save was skipped.
         if (-not $doSave -and (Test-Path -LiteralPath (Join-Path $bk "extracted\backup-info.json"))) {
-            Write-Host ""
-            Write-Host "    A previously saved config backup exists on this host." -ForegroundColor White
-            Write-Host "    Restore that agent config (auth, memory, chat history, skills," -ForegroundColor White
-            Write-Host "    instruction files, project setup) automatically after the reinstall?" -ForegroundColor White
-            $ans = Read-Host "    Auto-restore? [Y/n]"
-            if ([string]::IsNullOrWhiteSpace($ans) -or ($ans.Trim() -match '^(y|yes)$')) {
+            $useBackup = Invoke-TuiConfirm -ScreenTitle "Restore a previously saved config?" -Body @(
+                "A config backup from an earlier run exists on this host. It can restore",
+                "the agent config (auth, memory, chat history, skills, instruction files,",
+                "project setup) automatically after the reinstall."
+            ) -Question "Auto-restore the saved config?" `
+              -YesLabel "Yes  restore it onto the fresh VM (recommended)" `
+              -NoLabel  "No   reinstall completely blank"
+            if ($useBackup) {
                 $restoreDir = $bk
                 $restoredProjectNames = Get-BackupProjectNames -BackupDir $bk
                 Write-Ok "Saved config loaded; it will be restored automatically after the reinstall."
@@ -577,6 +608,9 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
             Write-Host ""; Read-Host "Press Enter to exit"
             return
         }
+        Show-TuiScreen -Title "Removing the existing VM" -Body @(
+            "Powering off '$HyperVmName' and deleting its virtual disk..."
+        )
         Remove-AgentVm -VmName $HyperVmName
         if ($forceDownload) {
             Write-Note "Existing VM removed; will re-download the latest Ubuntu ISO and rebuild."
@@ -587,11 +621,16 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
     elseif ($choice -eq 3) {
         # Export & save the current config to this host -- no changes to the VM.
         if (-not (Test-VmReachable -VmName $HyperVmName)) {
-            Write-Warning "The VM isn't reachable over SSH. Start it, then re-run to export its config."
+            Show-TuiScreen -Title "The VM isn't reachable over SSH" -Body @(
+                "Start the VM, then re-run this script to export its config."
+            )
             Write-Host ""; Read-Host "Press Enter to exit"
             return
         }
         try {
+            Show-TuiScreen -Title "Exporting the VM's agent config" -Body @(
+                "Saving auth, memory, skills, instruction files, and project setup to this host..."
+            )
             Invoke-VmConfigExport -VmName $HyperVmName -BackupDir $bk
             Write-Host ""
             Write-Ok "Saved the VM's current agent config to:"
@@ -629,8 +668,8 @@ $chosenGitName       = $GitUserName
 $chosenGitEmail      = $GitEmail
 
 if (-not $SkipCreateVm) {
-    Write-Step "Setup choices"
-    Write-Note "Answered now so the rest of the install can run unattended."
+    # All decisions the create-vm + provision scripts need are asked now, one
+    # TUI screen per choice, so the rest of the install can run unattended.
 
     # VM RAM -- recommend a third of the host RAM (capped at 24 GB), but let the user
     # choose (mirrors the disk-size prompt).
@@ -642,22 +681,21 @@ if (-not $SkipCreateVm) {
         $recBytes   = [math]::Max([math]::Min($thirdBytes, $maxBytes), 4GB)
         $recBytes   = $recBytes - ($recBytes % 2MB)
         $recGB      = [math]::Round($recBytes / 1GB, 1)
-        Write-Host ("    System RAM: {0:N1} GB    Recommended VM RAM: {1} GB" -f ($totalBytes / 1GB), $recGB) -ForegroundColor White
-        $ans = Read-Host "    Enter VM RAM in GB (press Enter for $recGB)"
-        $chosenMemGB = if ([string]::IsNullOrWhiteSpace($ans)) { $recGB } else { [double]$ans }
+        $ans = Invoke-TuiInput -ScreenTitle "VM memory" -Body @(
+            ("System RAM: {0:N1} GB" -f ($totalBytes / 1GB)),
+            "Recommended VM RAM: $recGB GB (a third of the host RAM, capped at 24 GB)"
+        ) -Prompt "Enter VM RAM in GB (press Enter for $recGB)" -Default "$recGB"
+        $chosenMemGB = [double]$ans
     }
 
     # Virtual disk size (default 50 GB).
     if (-not $PSBoundParameters.ContainsKey('VmDiskGB')) {
         $defDisk = 50
-        Write-Host "    Recommended disk size: $defDisk GB" -ForegroundColor White
-        $ans = Read-Host "    Enter disk size in GB (press Enter for $defDisk)"
-        if ([string]::IsNullOrWhiteSpace($ans)) {
-            $chosenDiskGB = $defDisk
-        } else {
-            $chosenDiskGB = [int]$ans
-            if ($chosenDiskGB -lt 10) { Write-Warning "Minimum disk size is 10 GB. Using 10 GB."; $chosenDiskGB = 10 }
-        }
+        $ans = Invoke-TuiInput -ScreenTitle "VM disk size" -Body @(
+            "Recommended disk size: $defDisk GB (grows on demand; this is the cap)"
+        ) -Prompt "Enter disk size in GB (press Enter for $defDisk)" -Default "$defDisk"
+        $chosenDiskGB = [int]$ans
+        if ($chosenDiskGB -lt 10) { Write-Warning "Minimum disk size is 10 GB. Using 10 GB."; $chosenDiskGB = 10 }
     }
 
     # Project profiles to provision.
@@ -685,9 +723,10 @@ if (-not $SkipCreateVm) {
     # defaults to the seeded password 'agent'. A different value is applied to the
     # agent user at the very end of provisioning.
     if (-not $PSBoundParameters.ContainsKey('AgentPassword')) {
-        Write-Host "    Optional: login password for the 'agent' user (manual-fallback login only)." -ForegroundColor White
-        $ans = Read-Host "    Enter agent password (press Enter to keep default 'agent')"
-        $chosenAgentPassword = if ([string]::IsNullOrWhiteSpace($ans)) { "agent" } else { $ans }
+        $chosenAgentPassword = Invoke-TuiInput -ScreenTitle "Agent user password" -Body @(
+            "Optional: login password for the 'agent' user. This is a manual-fallback",
+            "credential only -- normal access is as root over the pre-seeded SSH key."
+        ) -Prompt "Enter agent password (press Enter to keep default 'agent')" -Default "agent"
     }
 
     # Git identity for the VM's global git config. Defaults to the saved value,
@@ -700,10 +739,14 @@ if (-not $SkipCreateVm) {
     $chosenGitName  = $gitId.Name
     $chosenGitEmail = $gitId.Email
 
+    # Summary of the choices, echoed into the log right after the "all set"
+    # banner (printing it here would be wiped by the next TUI screen).
     $pwLabel = if ($chosenAgentPassword -and $chosenAgentPassword -ne "agent") { "custom" } else { "default" }
-    Write-Ok ("VM RAM: {0} GB  |  Disk: {1} GB  |  Projects: {2}  |  agent password: {3}" -f $chosenMemGB, $chosenDiskGB, $chosenProjects, $pwLabel)
     $gitLabel = if ($chosenGitName -or $chosenGitEmail) { "$chosenGitName <$chosenGitEmail>" } else { "(unset)" }
-    Write-Ok ("Git identity: {0}" -f $gitLabel)
+    $chosenSummary = @(
+        ("VM RAM: {0} GB  |  Disk: {1} GB  |  Projects: {2}  |  agent password: {3}" -f $chosenMemGB, $chosenDiskGB, $chosenProjects, $pwLabel),
+        ("Git identity: {0}" -f $gitLabel)
+    )
 
     # Confirm the host can actually run the VM BEFORE the long download. This
     # enables Hyper-V + the platform features (rebooting if needed) or aborts
@@ -717,13 +760,10 @@ if (-not $SkipCreateVm) {
 # Redownload choice rebuild instead).
 $needBuild = $Force -or $forceDownload -or -not (Test-Path -LiteralPath $OutputIso)
 if (-not $needBuild) {
-    Write-Step "Autoinstall ISO already present"
-    Write-Ok "Found $OutputIso"
-    Write-Note "Skipping Ubuntu download and ISO build (pass -Force to rebuild)."
-
     # ISO is ready: nothing to download/build, so from here it's all unattended.
+    # The banner ends the TUI phase; the notes below open the normal log.
     if (-not $SkipCreateVm) {
-        Show-Banner @(
+        Show-AllSet @(
             "All set -- sit back and relax!",
             "",
             "The autoinstall ISO is ready, so everything from here is automated:",
@@ -731,9 +771,19 @@ if (-not $needBuild) {
             "This takes about 10 minutes total, with no further input needed."
         )
     }
+
+    Write-Step "Autoinstall ISO already present"
+    Write-Ok "Found $OutputIso"
+    Write-Note "Skipping Ubuntu download and ISO build (pass -Force to rebuild)."
 }
 
 if ($needBuild) {
+# One screen for the whole pre-build phase: the WSL/xorriso checks below log
+# beneath it, and the "all set" banner that follows ends the TUI phase.
+Show-TuiScreen -Title "Preparing the unattended install" -Body @(
+    "Checking the build prerequisites (repo files, WSL, xorriso)..."
+)
+
 # ── 0. Sanity: required repo files present ───────────────────────────────────
 Write-Step "Checking repo files"
 foreach ($f in @($buildScript, $bootstrapPubKey)) {
@@ -782,7 +832,7 @@ Write-Ok "xorriso + whois present in WSL"
 # run unattended now -- tell the user they can step away (unless we're only
 # building the ISO, in which case there's nothing to sit through afterwards).
 if (-not $SkipCreateVm) {
-    Show-Banner @(
+    Show-AllSet @(
         "All set -- sit back and relax!",
         "",
         "Everything from here is automated: downloading Ubuntu, building",

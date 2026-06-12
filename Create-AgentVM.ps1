@@ -75,7 +75,27 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
             $argList += "-$($kv.Key)"; $argList += "`"$($kv.Value)`""
         }
     }
-    Start-Process powershell.exe -Verb RunAs -ArgumentList $argList
+    $elevated = Start-Process powershell.exe -Verb RunAs -ArgumentList $argList -PassThru
+    # Bring the new elevated console to the foreground (best-effort): after the
+    # UAC prompt it can open behind this window. Under Windows Terminal the
+    # window belongs to WindowsTerminal.exe (handle stays 0), so this quietly
+    # does nothing.
+    try {
+        Add-Type -Namespace ConstructWin32 -Name Focus -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+'@
+        $deadline = (Get-Date).AddSeconds(10)
+        while ((Get-Date) -lt $deadline -and -not $elevated.HasExited) {
+            $elevated.Refresh()
+            if ($elevated.MainWindowHandle -ne [IntPtr]::Zero) {
+                [ConstructWin32.Focus]::ShowWindow($elevated.MainWindowHandle, 9) | Out-Null   # SW_RESTORE
+                [ConstructWin32.Focus]::SetForegroundWindow($elevated.MainWindowHandle) | Out-Null
+                break
+            }
+            Start-Sleep -Milliseconds 200
+        }
+    } catch { }
     exit
 }
 
