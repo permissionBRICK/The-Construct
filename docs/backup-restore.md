@@ -1,0 +1,74 @@
+# Saving & restoring config across reinstalls
+
+A reinstall wipes the VM disk, so the installer can save the VM's current agent
+configuration to the host and restore it onto the fresh VM. The backup lives in a
+git-ignored `.construct-backup/` folder next to the scripts.
+
+## What is saved
+
+For the installed agents, from `root`'s home — never from inside the project repos:
+
+- Instruction files: `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`,
+  `~/.config/opencode/AGENTS.md` (+ any other `*.md`).
+- User-level memory and skills: `~/.claude/projects/<slug>/{memory,MEMORY.md}`,
+  `~/.codex/{memories,memories_*.sqlite*}`, `~/.codex/skills` (minus the bundled system
+  skills), `~/.claude/skills`.
+- Agent settings: `~/.claude/settings.json`, `~/.codex/config.toml`,
+  `~/.config/opencode/opencode.json`.
+- **Subscription auth**, so you don't re-authenticate after a reinstall:
+  `~/.claude/.credentials.json`, `~/.claude.json`, `~/.codex/auth.json`,
+  `~/.local/share/opencode/auth.json`.
+- **MCP server auth**, so connected MCP servers stay logged in across a reinstall:
+  the OAuth tokens each agent saves after authenticating to a remote MCP server.
+  Claude keeps them inside `~/.claude/.credentials.json` (saved above) plus an
+  `~/.claude/mcp-needs-auth-cache.json` state cache; Codex in `~/.codex/.credentials.json`;
+  Opencode in `~/.local/share/opencode/mcp-auth.json`. (`claude.ai` connectors are
+  authenticated server-side against your Anthropic account, so there is nothing local
+  to save for them.)
+- Global git config + credentials: `~/.gitconfig`, `~/.git-credentials`.
+- GitHub CLI login + config: `~/.config/gh/` (`hosts.yml` holds the `gh auth` token).
+  The `gh` CLI is installed by default during provisioning.
+- **npm registry auth**: `~/.npmrc`, so `npm publish`/installs from private registries keep
+  working after a reinstall (it holds the registry `_authToken`). Saved only when auth is
+  included — `INCLUDE_AUTH=false` omits it.
+- **VS Code serve-web connection token**, so the browser `?tkn=` URL stays the same after a
+  reinstall instead of regenerating. Unlike everything else here it lives outside home
+  (`/etc/construct/vscode-serve-web.token`), so it rides in the backup at
+  `etc/construct/vscode-serve-web.token`. On restore the host threads it into
+  `install-vscode.sh` *before* serve-web starts (`restore-config.sh` runs too late — the
+  token would already have been regenerated and the service started), and a token already
+  on the VM wins on a reprovision. Saved only when auth is included.
+- Project profiles: the VM's stored profiles (`/opt/construct/projects/*.json`,
+  which carry your MCP servers and other per-project config), plus a generated
+  profile for every cloned repo under `/root/repos` whose remote isn't already
+  covered. On restore the host keeps any profile it already has and adds the rest,
+  then re-provisions them (re-cloning repos and reconfiguring MCP servers).
+
+> ⚠️ The backup contains **plaintext** auth tokens and git credentials. It is git-ignored
+> and stays on your host; treat `.construct-backup/` as a secret.
+
+## Triggering it from the installer
+
+From `Auto-Install.ps1`, when the VM already exists:
+
+- **Export config** — saves the current config to `.construct-backup/` and exits without
+  reprovisioning or rebooting the VM. (It does briefly upload the repo and write/remove
+  temp files on the VM, but leaves the agent setup unchanged.)
+- **Reinstall / Redownload** — first scans the repos under `/root/repos` and warns about
+  any uncommitted or unpushed work (you can abort), then asks **"Save and auto-restore?"**
+  (default yes). If yes, it exports before wiping and restores onto the fresh VM after
+  provisioning; the generated project profiles are folded into the selection so their
+  repos are re-cloned, using the saved git credentials.
+
+## By hand
+
+The same building blocks run on the VM:
+
+```bash
+# export to a tarball (INCLUDE_AUTH=false to omit the auth tokens)
+sudo OUT=/tmp/construct-config-backup.tar.gz /opt/construct/repo/bin/export-config.sh
+# restore from one
+sudo BACKUP_TGZ=/tmp/construct-config-backup.tar.gz /opt/construct/repo/bin/restore-config.sh
+# scan repos for unsaved work (JSON)
+/opt/construct/repo/bin/scan-repos.sh
+```
