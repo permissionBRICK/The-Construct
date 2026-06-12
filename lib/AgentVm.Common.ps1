@@ -15,6 +15,132 @@
     (both callers define them with the same signatures), resolved at call time.
 #>
 
+# ── Full-screen TUI mode ──────────────────────────────────────────────────────
+# When enabled (Auto-Install.ps1 turns it on for its interactive phase), every
+# prompt below runs as a full-window "screen": the console is wiped and redrawn
+# with the Construct header plus only the current step, so the window never
+# shows more than one menu at a time. The caller disables it at the "all set"
+# banner, after which output scrolls as a normal log. Because the lib is
+# dot-sourced, the flag lives in each calling script's own scope -- enabling it
+# in Auto-Install.ps1 doesn't change Provision-AgentVM.ps1's behaviour.
+
+$script:ConstructTuiActive = $false
+
+function Enable-ConstructTui  { $script:ConstructTuiActive = $true }
+function Disable-ConstructTui { $script:ConstructTuiActive = $false }
+
+function Test-ConstructTui {
+    # TUI screens need a real interactive console to wipe and redraw.
+    return ($script:ConstructTuiActive -and -not [Console]::IsInputRedirected)
+}
+
+function Show-ConstructHeader {
+    <#
+        Matrix-style header: green "digital rain" (random 0/1 -- ASCII only, so
+        it aligns and renders on any console code page, no katakana to mangle)
+        framing the project title. Drawn at the top of every TUI screen and once
+        at launch.
+    #>
+    $w    = 56
+    $rain = { param([int]$n) -join (1..$n | ForEach-Object { @('0', '1')[(Get-Random -Maximum 2)] }) }
+    $cent = {
+        param([string]$s)
+        $p = [int](($w - $s.Length) / 2)
+        (" " * $p) + $s + (" " * ($w - $p - $s.Length))
+    }
+    $body = @(
+        (& $cent ""),
+        (& $cent "T H E   C O N S T R U C T"),
+        (& $cent "agent sandbox loader"),
+        (& $cent "")
+    )
+    Write-Host ""
+    Write-Host ("   " + (& $rain ($w + 4))) -ForegroundColor DarkGreen
+    Write-Host ("   " + (& $rain ($w + 4))) -ForegroundColor Green
+    foreach ($l in $body) {
+        Write-Host "   "          -NoNewline
+        Write-Host (& $rain 1)    -ForegroundColor DarkGreen -NoNewline
+        Write-Host " "            -NoNewline
+        Write-Host $l             -ForegroundColor Green     -NoNewline
+        Write-Host " "            -NoNewline
+        Write-Host (& $rain 1)    -ForegroundColor DarkGreen
+    }
+    Write-Host ("   " + (& $rain ($w + 4))) -ForegroundColor Green
+    Write-Host ("   " + (& $rain ($w + 4))) -ForegroundColor DarkGreen
+    Write-Host ""
+}
+
+function Show-TuiScreen {
+    <#
+        Start a new TUI screen: wipe the console and redraw the Construct header,
+        then the given step title and optional body lines. Subsequent output
+        (menus, prompts, progress) belongs to this screen until the next call.
+        With TUI off it degrades to the normal scrolling Write-Step output, so
+        call sites don't need to branch.
+    #>
+    [CmdletBinding()]
+    param(
+        [string]   $Title,
+        [string[]] $Body
+    )
+    if (-not (Test-ConstructTui)) {
+        if ($Title) { Write-Host "`n==> $Title" -ForegroundColor Cyan }
+        foreach ($b in @($Body)) { if ($null -ne $b) { Write-Host "    $b" -ForegroundColor White } }
+        return
+    }
+    Clear-Host
+    Show-ConstructHeader
+    if ($Title) {
+        Write-Host "  $Title" -ForegroundColor Cyan
+        Write-Host ""
+    }
+    foreach ($b in @($Body)) { if ($null -ne $b) { Write-Host "  $b" -ForegroundColor White } }
+    if (@($Body).Count -gt 0) { Write-Host "" }
+}
+
+function Invoke-TuiConfirm {
+    <#
+        Yes/no decision as an arrow-key menu (replacing [Y/n] Read-Host prompts).
+        Starts its own TUI screen unless -NoScreen (use that when the question
+        belongs to a screen that's already showing context the user still needs).
+        On a non-interactive host it returns the default without blocking.
+        Returns $true for yes.
+    #>
+    [CmdletBinding()]
+    param(
+        [string]   $ScreenTitle,
+        [string[]] $Body,
+        [Parameter(Mandatory)][string] $Question,
+        [string]   $YesLabel = "Yes",
+        [string]   $NoLabel  = "No",
+        [switch]   $DefaultNo,
+        [switch]   $NoScreen
+    )
+    if ([Console]::IsInputRedirected) { return (-not $DefaultNo) }
+    if (-not $NoScreen) { Show-TuiScreen -Title $ScreenTitle -Body $Body }
+    $def = if ($DefaultNo) { 1 } else { 0 }
+    return ((Show-Menu -Title $Question -Options @($YesLabel, $NoLabel) -Default $def) -eq 0)
+}
+
+function Invoke-TuiInput {
+    <#
+        Free-text prompt on its own TUI screen (unless -NoScreen). An empty
+        answer returns -Default. Returns the trimmed string.
+    #>
+    [CmdletBinding()]
+    param(
+        [string]   $ScreenTitle,
+        [string[]] $Body,
+        [Parameter(Mandatory)][string] $Prompt,
+        [string]   $Default = "",
+        [switch]   $NoScreen
+    )
+    if (-not $NoScreen) { Show-TuiScreen -Title $ScreenTitle -Body $Body }
+    $ans = Read-Host "  $Prompt"
+    if ([string]::IsNullOrWhiteSpace($ans)) { return $Default }
+    return $ans.Trim()
+}
+
 function Ensure-HyperV {
     <#
         Validate (and where possible enable) the host's virtualization stack so
@@ -32,7 +158,9 @@ function Ensure-HyperV {
     [CmdletBinding()]
     param()
 
-    Write-Step "Checking Hyper-V installation"
+    Show-TuiScreen -Title "Checking Hyper-V installation" -Body @(
+        "Validating hardware virtualization and the required Windows features..."
+    )
 
     # 1. Hardware virtualization. If a hypervisor is already running it's
     #    obviously enabled; otherwise read the CPU firmware flag and block ONLY
@@ -121,9 +249,17 @@ function Ensure-HyperV {
     if ($rebootNeeded) {
         Write-Host ""
         Write-Warning "A reboot is required to finish enabling the virtualization features."
-        Write-Host "    Please reboot, then re-run this script." -ForegroundColor Yellow
-        Read-Host "Press Enter to reboot now (or Ctrl+C to cancel)"
-        Restart-Computer -Force
+        Write-Host "    After the reboot, re-run this script to continue." -ForegroundColor Yellow
+        if (Test-ConstructTui) {
+            $r = Show-Menu -Title "Reboot now?" -Options @(
+                "Reboot now      restart Windows immediately, then re-run this script",
+                "Exit            reboot later yourself, then re-run this script"
+            ) -Default 0
+            if ($r -eq 0) { Restart-Computer -Force }
+        } else {
+            Read-Host "Press Enter to reboot now (or Ctrl+C to cancel)"
+            Restart-Computer -Force
+        }
         exit
     }
 }
@@ -235,6 +371,9 @@ function Select-ProjectProfiles {
     # Selection state keyed by profile name; every loaded profile starts on.
     $selected = @{}
     foreach ($n in $names) { $selected[$n] = $true }
+
+    # In TUI mode this selector is a screen of its own.
+    if (Test-ConstructTui) { Clear-Host; Show-ConstructHeader }
 
     Write-Host ""
     Write-Host "  Select project configs to install" -ForegroundColor Cyan
@@ -394,6 +533,9 @@ function Confirm-Reinstall {
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$VmName)
+
+    # The last-chance warning gets a screen of its own in TUI mode.
+    if (Test-ConstructTui) { Clear-Host; Show-ConstructHeader }
 
     Write-Host ""
     Write-Host "  ******************************  WARNING  ******************************" -ForegroundColor Red
@@ -645,7 +787,9 @@ function Resolve-GitIdentity {
     $resCred  = $defCred
 
     if (-not $NoPrompt) {
-        Write-Step "Git identity (applied as the VM's global git config)"
+        Show-TuiScreen -Title "Git identity (applied as the VM's global git config)" -Body @(
+            "Used for commits made inside the VM. Press Enter to accept each default."
+        )
         $hint = if ($defName)  { " (press Enter for '$defName')" }  else { " (leave blank to skip)" }
         $ans  = Read-Host "    Git user name$hint"
         if (-not [string]::IsNullOrWhiteSpace($ans)) { $resName = $ans.Trim() }
@@ -653,13 +797,20 @@ function Resolve-GitIdentity {
         $ans  = Read-Host "    Git email$hint"
         if (-not [string]::IsNullOrWhiteSpace($ans)) { $resEmail = $ans.Trim() }
 
+        Write-Host ""
         Write-Host "    Store git credentials on the VM so pushes/pulls don't re-prompt?" -ForegroundColor White
         Write-Host "      WARNING: credentials are saved in PLAINTEXT (~/.git-credentials) and are" -ForegroundColor Yellow
         Write-Host "      readable by anything on the VM -- including the AI agents, so a prompt-" -ForegroundColor Yellow
         Write-Host "      injection attack could exfiltrate them." -ForegroundColor Yellow
-        $credHint = if ($defCred) { "[Y/n]" } else { "[y/N]" }
-        $ans = Read-Host "    Store git credentials? $credHint"
-        if (-not [string]::IsNullOrWhiteSpace($ans)) { $resCred = ($ans.Trim() -match '^(y|yes)$') }
+        if ([Console]::IsInputRedirected) {
+            # Can't drive a menu: keep the resolved default.
+        } else {
+            # Same screen -- the warning above is context the user still needs.
+            $resCred = Invoke-TuiConfirm -NoScreen -DefaultNo:(-not $defCred) `
+                -Question "Store git credentials on the VM?" `
+                -YesLabel "Yes  store them (convenient, plaintext)" `
+                -NoLabel  "No   re-authenticate per push/pull"
+        }
     }
 
     Save-ConstructSettings -Dir $Dir -Values @{ gitUserName = $resName; gitEmail = $resEmail; gitCredentialStore = $resCred }
@@ -740,10 +891,11 @@ function Resolve-GitCloneCredential {
     if ($hostProto.Count -eq 0) { return "" }   # only ssh/git@ URLs -- nothing to prompt for
     $hostList = @($hostProto.Keys)
 
-    Write-Step "Git credentials for cloning project repos"
-    Write-Host "    The selected projects clone repos from: $($hostList -join ', ')" -ForegroundColor White
-    Write-Host "    Enter credentials to use for the clone, or press Enter to skip" -ForegroundColor White
-    Write-Host "    (skip if the repos are public or you'll authenticate another way)." -ForegroundColor DarkGray
+    Show-TuiScreen -Title "Git credentials for cloning project repos" -Body @(
+        "The selected projects clone repos from: $($hostList -join ', ')",
+        "Enter credentials to use for the clone, or press Enter to skip",
+        "(skip if the repos are public or you'll authenticate another way)."
+    )
     $user = Read-Host "    Git username (press Enter to skip)"
     if ([string]::IsNullOrWhiteSpace($user)) { Write-Note "No clone credentials entered -- skipping."; return "" }
     $secure = Read-Host "    Git token / password" -AsSecureString
@@ -773,6 +925,9 @@ function Confirm-RepoScan {
     if ($Repos) { $risky = @($Repos | Where-Object { [int]$_.dirty -gt 0 -or [int]$_.unpushed -gt 0 }) }
     if ($risky.Count -eq 0) { return $true }
 
+    # The data-loss warning gets a screen of its own in TUI mode.
+    if (Test-ConstructTui) { Clear-Host; Show-ConstructHeader }
+
     Write-Host ""
     Write-Host "  *********************  UNCOMMITTED / UNPUSHED WORK  *********************" -ForegroundColor Yellow
     Write-Host ""
@@ -788,6 +943,10 @@ function Confirm-RepoScan {
     }
     Write-Host ""
     Write-Host "   Consider committing/pushing inside the VM first." -ForegroundColor Yellow
-    $ans = Read-Host "   Continue with the reinstall and lose this work? [y/N]"
-    return ($ans.Trim().ToLowerInvariant() -match '^(y|yes)$')
+    if ([Console]::IsInputRedirected) { return $false }
+    $c = Show-Menu -Title "Continue with the reinstall and lose this work?" -Options @(
+        "Abort     keep my work; cancel the reinstall (recommended)",
+        "Continue  reinstall anyway and LOSE the work listed above"
+    ) -Default 0
+    return ($c -eq 1)
 }

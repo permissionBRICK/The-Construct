@@ -45,16 +45,15 @@ projects) — then just hit connect.
 - 🤖 **Agents preinstalled, zero config** — Claude Code, Codex, and Opencode CLIs installed
   and configured for **unattended bypass mode**: no permission prompts, running as root,
   flagged as a sandbox (`IS_SANDBOX=1`).
-- 🔒 **Sandboxed by design** — everything runs inside a throwaway Hyper-V VM. Agents get a
-  real root shell; your host PC stays out of reach.
+- 🔒 **Sandboxed by design** — everything runs inside a throwaway Hyper-V VM. Agents get a real root shell; your host PC stays out of reach.
+- ♻️ **Disposable, but almost persistent** — reinstalls can save and auto-restore your agent config, you won't even notice you just formatted your entire VM:
+  instruction files, memory, skills, subscription auth, git/GitHub credentials, MCP logins.
 - 🖥️ **Connect your way** — VS Code Remote-SSH, browser VS Code, vscode.dev tunnels, Codex
   App, Opencode serve, or plain SSH. All wired up automatically.
 - 📦 **Project profiles** — declare repos, SDKs (`node`, `python`, `dotnet`), MCP servers,
   and setup commands in a JSON file; provisioning checks out and builds everything.
 - 🔌 **MCP servers everywhere** — declare a server once and it's written into Claude Code,
   Codex, and Opencode configs alike, stdio or HTTP.
-- ♻️ **Disposable, not forgetful** — reinstalls can save and auto-restore your agent config:
-  instruction files, memory, skills, subscription auth, git/GitHub credentials, MCP logins.
 - ✍️ **Your commits, your name** — AI attribution trailers are turned off by default.
 - 🚀 **Fast reconnects** — the VS Code server and agent extensions are pre-seeded, so even
   the first Remote-SSH connect skips the usual download wait.
