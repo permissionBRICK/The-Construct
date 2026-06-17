@@ -57,8 +57,12 @@ net use Z: \\agent-vm.mshome.net\repo /user:dev <password> /savecred /persistent
 
 - **On by default.** Turn it off per provision with `Provision-AgentVM.ps1 -SmbShare false`,
   or persistently with `SMB_SHARE=false` in `/etc/construct/config.env`. Skip only the
-  host-side auto-mount (leave the server running) with `-MountRepoShare false`. Pick the drive
-  letter with `-SmbDriveLetter` (default `Z`; the next free letter is used if it's taken).
+  host-side auto-mount (leave the server running) with `-MountRepoShare false`.
+- **Drive letter.** Defaults to `Z` (`-SmbDriveLetter`). It's used without asking when `Z` is
+  free or already mapped to this VM's share. If `Z` is in use by something else (another
+  network share or a local disk), the installer prompts you to pick another free letter (or
+  skip); a non-interactive run falls back to the next free letter automatically. If a prior
+  run mapped the share to a different letter, that mapping is detected and refreshed in place.
 - **Access as root.** The share is configured with `force user = root`, so the host reads and
   writes the repos as **root** — the same identity the coding agents use. The host
   authenticates as the SMB user (`SMB_USER`, default `dev`); that account exists only for SMB
