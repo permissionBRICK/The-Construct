@@ -78,8 +78,10 @@ param(
     # `net use` (/savecred /persistent:yes), so the repos appear as a drive.
     # "true"/"false". Ignored when -SmbShare false. Only runs on -Action provision.
     [string]$MountRepoShare = "true",
-    # Drive letter to map the workspace share to (no colon). If it's already in
-    # use by something else, the next free letter (downward) is chosen instead.
+    # Drive letter to map the workspace share to (no colon). Used as-is when it's
+    # free or already mapped to this VM's share; if it's in use by something else,
+    # you're prompted to pick another free letter (a non-interactive run falls back
+    # to the next free letter automatically).
     [string]$SmbDriveLetter = "Z",
     [switch]$IncludeGit,
     # What this run does:
@@ -746,34 +748,95 @@ function Set-OpenCodeRemote {
     Write-Host "    Fully quit and reopen the OpenCode GUI app to pick it up (if it's open now, it may overwrite this on exit)." -ForegroundColor DarkGray
 }
 
-function Get-FreeDriveLetter {
-    # Return the requested drive letter if it's free, otherwise the next free one
-    # scanning downward (Z..D). `net use` can only manage NETWORK drives, so a
-    # letter already taken by a local disk would make the mapping fail -- avoid it
-    # by checking every kind of drive PowerShell knows about. Returns $null if the
-    # whole D..Z range is occupied.
-    param([string]$Preferred = "Z")
+function Invoke-Net {
+    # Run net.exe tolerating non-zero exits and stderr WITHOUT them becoming
+    # terminating errors. This script sets $ErrorActionPreference = 'Stop', and on
+    # PowerShell 7.4+ ($PSNativeCommandUseErrorActionPreference defaults to $true)
+    # a native command that exits non-zero then THROWS under 'Stop' -- which is how
+    # an expected failure like `net use Z: /delete` on an unmapped drive ("The
+    # network connection could not be found") could abort the whole provision.
+    # Returns @{ Code = <int>; Output = <string> }.
+    param([Parameter(ValueFromRemainingArguments)][string[]]$NetArgs)
 
-    $used = @{}
-    foreach ($d in (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
-        if ($d.Name.Length -eq 1) { $used[$d.Name.ToUpper()] = $true }
-    }
-    # Also catch network mappings (incl. disconnected ones) that may not surface
-    # as PSDrives, by parsing `net use` -- its lines start with "<X>:".
+    # These LOCAL overrides shadow the script's prefs for this function's scope
+    # only (auto-reverting on return), so an expected non-zero exit -- e.g. `net
+    # use Z: /delete` on an unmapped drive -- can't become a terminating error.
+    # PS 7.4+ would otherwise throw under the script's $ErrorActionPreference =
+    # 'Stop'; on Windows PowerShell 5.1 the PSNative* variable doesn't exist and
+    # assigning a harmless local is a no-op.
+    $ErrorActionPreference = 'Continue'
+    $PSNativeCommandUseErrorActionPreference = $false
     try {
-        foreach ($line in (& net.exe use 2>$null)) {
-            if ($line -match '([A-Za-z]):\s') { $used[$matches[1].ToUpper()] = $true }
-        }
-    } catch { }
-
-    $pref = ($Preferred.TrimEnd(':')).ToUpper()
-    if ($pref -and -not $used.ContainsKey($pref)) { return $pref }
-
-    foreach ($code in (90..68)) {            # 'Z' (90) down to 'D' (68)
-        $letter = [char]$code
-        if (-not $used.ContainsKey([string]$letter)) { return [string]$letter }
+        $raw  = & net.exe @NetArgs 2>&1
+        $code = $LASTEXITCODE
+    } catch {
+        $raw  = $_.Exception.Message
+        $code = 1
     }
-    return $null
+    return @{ Code = $code; Output = (@($raw | ForEach-Object { "$_" }) -join "`n") }
+}
+
+function Get-DriveMaps {
+    # One snapshot of drive-letter usage, so we don't shell out per letter.
+    # Returns @{ Net = @{ <L> = <remote UNC> }; Local = @{ <L> = $true } }, where
+    # Net covers network mappings (from `net use`, incl. disconnected ones) and
+    # Local covers every filesystem drive PowerShell sees (local disks + mappings).
+    $net = @{}
+    foreach ($line in ((Invoke-Net use).Output -split "`n")) {
+        # e.g. "OK           Z:        \\host\share   Microsoft Windows Network"
+        if ($line -match '\b([A-Za-z]):\s+(\\\\\S+)') { $net[$matches[1].ToUpper()] = $matches[2] }
+    }
+    $local = @{}
+    foreach ($d in (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
+        if ($d.Name.Length -eq 1) { $local[$d.Name.ToUpper()] = $true }
+    }
+    return @{ Net = $net; Local = $local }
+}
+
+function Get-DriveState {
+    # Classify a single drive letter against a snapshot from Get-DriveMaps and our
+    # target UNC: 'ours' (a mapping to THIS share), 'other' (a different share or a
+    # local disk), or 'free'.
+    param([string]$Letter, [hashtable]$Maps, [string]$OurUnc)
+    $L = ($Letter.TrimEnd(':')).ToUpper()
+    if ($Maps.Net.ContainsKey($L)) {
+        if ($Maps.Net[$L].TrimEnd('\') -ieq $OurUnc.TrimEnd('\')) { return 'ours' }
+        return 'other'
+    }
+    if ($Maps.Local.ContainsKey($L)) { return 'other' }
+    return 'free'
+}
+
+function Select-AlternateDriveLetter {
+    # The preferred letter is taken by something that isn't our share. Ask which
+    # free letter to use instead (arrow-key menu, like the rest of the installer),
+    # offering a "skip" choice. On a non-interactive host, don't block -- take the
+    # first free letter (or skip if none). Returns a bare letter, or $null to skip.
+    param([string]$Preferred, [string]$OccupiedBy, [hashtable]$Maps, [string]$OurUnc)
+
+    $free = @()
+    foreach ($code in (90..68)) {           # 'Z'..'D'
+        $l = [string][char]$code
+        if ((Get-DriveState -Letter $l -Maps $Maps -OurUnc $OurUnc) -eq 'free') { $free += $l }
+    }
+    if ($free.Count -eq 0) {
+        Write-Warning "Drive ${Preferred}: is in use ($OccupiedBy) and no other drive letter is free; skipping the share mount."
+        return $null
+    }
+
+    $haveMenu = [bool](Get-Command Show-Menu -ErrorAction SilentlyContinue)
+    if ([Console]::IsInputRedirected -or -not $haveMenu) {
+        Write-Warning "Drive ${Preferred}: is in use ($OccupiedBy); using $($free[0]): for the workspace share."
+        return $free[0]
+    }
+
+    Write-Host ""
+    Write-Host "Drive ${Preferred}: is already in use by $OccupiedBy (not the agent VM share)." -ForegroundColor Yellow
+    $opts = @($free | ForEach-Object { "Map the workspace share to ${_}:" })
+    $opts += "Skip - don't map the share now"
+    $idx = Show-Menu -Title "Which drive letter should the workspace share use?" -Options $opts -Default 0
+    if ($idx -ge $free.Count) { return $null }   # chose "Skip"
+    return $free[$idx]
 }
 
 function Mount-RepoShare {
@@ -789,46 +852,88 @@ function Mount-RepoShare {
         [string]$Preferred = "Z"
     )
 
-    # If the preferred letter is already mapped to THIS share (a previous run),
-    # reuse that letter and just refresh it -- don't strand the old mapping by
-    # picking a different free letter. Otherwise take the preferred letter if free,
-    # else the next free one downward.
-    $prefDevice = "$(($Preferred.TrimEnd(':')).ToUpper()):"
-    $existingRemote = ""
-    try {
-        foreach ($line in (& net.exe use $prefDevice 2>$null)) {
-            if ($line -match 'Remote name\s+(\S+)') { $existingRemote = $matches[1] }
-        }
-    } catch { }
+    # Decide which drive letter to use:
+    #   - If some drive ALREADY maps to this share (e.g. a prior run that picked a
+    #     non-default letter), reuse it and just refresh the credentials.
+    #   - Else if the preferred letter is free, use it (no prompt).
+    #   - Else the preferred letter is taken by something that isn't our share, so
+    #     ask the user which free letter to use instead (or skip).
+    $maps = Get-DriveMaps
+    $pref = ($Preferred.TrimEnd(':')).ToUpper()
 
-    if ($existingRemote -and ($existingRemote.TrimEnd('\') -ieq $UncPath.TrimEnd('\'))) {
-        $device = $prefDevice
+    $existing = ""
+    foreach ($code in (90..68)) {           # 'Z'..'D'
+        $l = [string][char]$code
+        if ((Get-DriveState -Letter $l -Maps $maps -OurUnc $UncPath) -eq 'ours') { $existing = $l; break }
+    }
+
+    if ($existing) {
+        $device = "${existing}:"
     } else {
-        $letter = Get-FreeDriveLetter -Preferred $Preferred
-        if (-not $letter) {
-            Write-Warning "No free drive letter to map $UncPath. Map it manually with 'net use'."
-            return $null
+        $prefState = Get-DriveState -Letter $pref -Maps $maps -OurUnc $UncPath
+        if ($prefState -eq 'free') {
+            $device = "${pref}:"
+        } else {
+            $occupiedBy = if ($maps.Net.ContainsKey($pref)) { $maps.Net[$pref] } else { "a local drive" }
+            $alt = Select-AlternateDriveLetter -Preferred $pref -OccupiedBy $occupiedBy -Maps $maps -OurUnc $UncPath
+            if (-not $alt) {
+                Write-Warning "Skipping the workspace-share mount. Map it later from this host with:"
+                Write-Host "      net use <drive>: $UncPath /user:$SmbUser <password> /savecred /persistent:yes" -ForegroundColor Cyan
+                return $null
+            }
+            $device = "${alt}:"
         }
-        $device = "${letter}:"
     }
 
     # Drop any existing mapping on the chosen letter first, so we can recreate it
     # with fresh credentials (our own stale mapping, or a leftover from before).
-    & net.exe use $device /delete /y 2>$null | Out-Null
+    # Expected to "fail" when nothing is mapped -- Invoke-Net swallows that.
+    Invoke-Net use $device /delete /y | Out-Null
+
+    # Pre-seed the credential in Windows Credential Manager keyed to the server, so
+    # the saved login survives even if `net use` itself is finicky about combining
+    # an inline password with /savecred on some Windows builds. Best-effort.
+    $server = $UncPath.TrimStart('\').Split('\')[0]
+    if ($server) {
+        $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+        try { & cmdkey.exe /add:$server /user:$SmbUser /pass:$SmbPassword 2>&1 | Out-Null } catch { }
+        $ErrorActionPreference = $prevEAP
+    }
 
     # net use <device> <unc> <password> /user:<user> /savecred /persistent:yes
     # Generated SMB passwords are alphanumeric, so no embedded quotes/spaces to
     # escape. /savecred stores the credential in Windows Credential Manager;
     # /persistent:yes restores the mapping at logon and reconnects when the VM
-    # (briefly down during the post-provision reboot) comes back.
-    $out = & net.exe use $device $UncPath $SmbPassword "/user:$SmbUser" /savecred /persistent:yes 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        Write-Ok "Mounted $UncPath -> $device (credentials saved, persistent)"
-        return $device
+    # (briefly down during the post-provision reboot) comes back. Retry a few times
+    # in case the share isn't answering the instant we ask (service still starting).
+    $last = ""
+    for ($attempt = 1; $attempt -le 4; $attempt++) {
+        # Form A -- the requested form: inline password + /savecred.
+        $r = Invoke-Net use $device $UncPath $SmbPassword "/user:$SmbUser" /savecred /persistent:yes
+        if ($r.Code -eq 0) {
+            Write-Ok "Mounted $UncPath -> $device (credentials saved, persistent)"
+            return $device
+        }
+        $last = $r.Output
+        Invoke-Net use $device /delete /y | Out-Null
+        # Form B -- some Windows builds reject an inline password together with
+        # /savecred; fall back to mapping with the cmdkey-stored credential.
+        $r = Invoke-Net use $device $UncPath /persistent:yes
+        if ($r.Code -eq 0) {
+            Write-Ok "Mounted $UncPath -> $device (credentials saved, persistent)"
+            return $device
+        }
+        $last = $r.Output
+        # Clean up a half-made mapping before retrying so the letter is free.
+        Invoke-Net use $device /delete /y | Out-Null
+        if ($attempt -lt 4) {
+            Write-Host "    Share not ready yet (attempt $attempt/4); retrying..." -ForegroundColor DarkGray
+            Start-Sleep -Seconds 3
+        }
     }
 
-    Write-Warning "Could not auto-mount $UncPath ($($out -join ' '))."
-    Write-Host "    Map it manually from this host:" -ForegroundColor DarkGray
+    Write-Warning "Could not auto-mount $UncPath ($($last -replace '\s+', ' '))."
+    Write-Host "    The share is set up on the VM; map it from this host once it's reachable:" -ForegroundColor DarkGray
     Write-Host "      net use ${device} $UncPath /user:$SmbUser <password> /savecred /persistent:yes" -ForegroundColor Cyan
     return $null
 }
@@ -1216,7 +1321,14 @@ if ($Action -eq "provision" -and $smbStatus['SMB_ENABLED'] -eq "yes" -and $Mount
     $smbUnc = "\\$smbHost\$smbShareName"
     if ($smbPass) {
         Write-Step "Mounting the VM workspace share on this host"
-        $smbMountedDrive = Mount-RepoShare -UncPath $smbUnc -SmbUser $smbUser -SmbPassword $smbPass -Preferred $SmbDriveLetter
+        # Belt-and-suspenders: the mount is a convenience and must NEVER abort the
+        # provision (the repos are already set up on the VM). Mount-RepoShare is
+        # already non-throwing, but guard the call too so nothing here is fatal.
+        try {
+            $smbMountedDrive = Mount-RepoShare -UncPath $smbUnc -SmbUser $smbUser -SmbPassword $smbPass -Preferred $SmbDriveLetter
+        } catch {
+            Write-Warning "Auto-mount of $smbUnc failed ($($_.Exception.Message)); the share is still available on the VM."
+        }
     } else {
         Write-Warning "VM reported the SMB share enabled but no password; skipping host mount."
     }
