@@ -106,6 +106,7 @@ note "    CLAUDE_USER=${CLAUDE_USER}"
 note "    VSCODE_SERVER=${VSCODE_SERVER}"
 note "    VSCODE_SERVE_WEB=${VSCODE_SERVE_WEB}"
 note "    VSCODE_TUNNEL=${VSCODE_TUNNEL}"
+note "    SMB_SHARE=${SMB_SHARE:-(saved/default)}"
 
 # A zip upload does not preserve Unix exec bits, so make the repo scripts
 # executable before anything tries to run them.
@@ -205,6 +206,19 @@ if [[ -n "${GIT_USER_NAME}" || -n "${GIT_USER_EMAIL}" || -n "${GIT_CREDENTIAL_ST
     ok "  ${_gu}: ${GIT_USER_NAME:-(unchanged)} <${GIT_USER_EMAIL:-(unchanged)}>  credentials: ${_cred}"
   done
 fi
+
+# 2c. SMB share of the workspace for the host PC. On by default; the host then
+#     auto-mounts it (net use ... /savecred /persistent:yes). Credentials are
+#     generated once and persisted into config.env, so re-provisions keep the
+#     same login the host already saved. setup-smb-share.sh resolves the
+#     SMB_SHARE/SMB_USER/... precedence (env/param > saved config > default), so
+#     forward whatever the host passed (empty = use saved/default).
+step "Setting up SMB share for the host"
+env SMB_SHARE="${SMB_SHARE:-}" SMB_USER="${SMB_USER:-}" \
+  SMB_SHARE_NAME="${SMB_SHARE_NAME:-}" SMB_PASSWORD="${SMB_PASSWORD:-}" \
+  WORKSPACE_ROOT="${WORKSPACE_ROOT}" CONFIG_FILE="${CONFIG_FILE}" REPO_DIR="${REPO_DIR}" \
+  bash "${REPO_DIR}/bin/setup-smb-share.sh" \
+  || warn "WARNING: SMB share setup failed; continuing"
 
 # 3. Root SSH key so the host (VS Code Remote-SSH) can log in as root by key.
 if [[ "${SETUP_ROOT_SSH_KEY}" == "true" ]]; then

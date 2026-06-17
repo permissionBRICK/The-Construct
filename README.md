@@ -50,6 +50,10 @@ projects) — then just hit connect.
   instruction files, memory, skills, subscription auth, git/GitHub credentials, MCP logins.
 - 🖥️ **Connect your way** — VS Code Remote-SSH, browser VS Code, vscode.dev tunnels, Codex
   App, Opencode serve, or plain SSH. All wired up automatically.
+- 🗂️ **Repos as a Windows drive** — provisioning stands up an SMB share of the repos folder
+  and auto-mounts it on your host (`net use … /savecred /persistent:yes`). Credentials are
+  generated once and reused on every reprovision; the host edits files as **root**, the same
+  identity the agents use.
 - 📦 **Project profiles** — declare repos, SDKs (`node`, `python`, `dotnet`), MCP servers,
   and setup commands in a JSON file; provisioning checks out and builds everything.
 - 🔌 **MCP servers everywhere** — declare a server once and it's written into Claude Code,
@@ -70,6 +74,7 @@ After install, every connection target is ready — the VM is reachable as
 | **vscode.dev tunnel** | `https://vscode.dev/tunnel/<name>` | Opt-in (`VSCODE_TUNNEL=true`); no inbound port needed |
 | **Codex App** | Add `agent-vm` as an SSH host | Root key authorized during provisioning |
 | **Opencode** | `agent-vm.mshome.net:4096` | `opencode serve` autostarts as a service |
+| **Windows file share** | `Z:` → `\\agent-vm.mshome.net\repo` | SMB share of the repos folder, auto-mounted on the host with saved credentials; opens as root |
 | **Terminal** | `ssh agent-vm` | Direct root access |
 
 Details in [Remote access & services](docs/remote-access.md).

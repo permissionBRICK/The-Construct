@@ -24,6 +24,10 @@ VSCODE_SERVE_WEB="${VSCODE_SERVE_WEB:-}"
 VSCODE_SERVE_WEB_HOST="${VSCODE_SERVE_WEB_HOST:-0.0.0.0}"
 VSCODE_SERVE_WEB_PORT="${VSCODE_SERVE_WEB_PORT:-8000}"
 VSCODE_SERVE_WEB_TOKEN_FILE="${VSCODE_SERVE_WEB_TOKEN_FILE:-/etc/construct/vscode-serve-web.token}"
+SMB_SHARE="${SMB_SHARE:-}"
+SMB_USER="${SMB_USER:-dev}"
+SMB_SHARE_NAME="${SMB_SHARE_NAME:-repo}"
+WORKSPACE_ROOT="${WORKSPACE_ROOT:-/root/repos}"
 
 lan_ip="$(ip -o -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($i == "src") {print $(i+1); exit}}' || true)"
 if [[ -z "${lan_ip}" ]]; then
@@ -155,6 +159,20 @@ VS Code Remote Tunnel:
   Open in browser:  https://vscode.dev/tunnel/${tunnel_name}
   Or in VS Code:    Remote Explorer -> Tunnels -> ${tunnel_name}
   First-time login: journalctl -u code-tunnel -n 50  (use the github.com/login/device link)
+EOF
+fi
+
+# Workspace file share (SMB): shown when its service is active or selected.
+if systemctl is-active --quiet smbd 2>/dev/null || [[ "${SMB_SHARE}" == "true" ]]; then
+    cat <<EOF
+
+Workspace file share (SMB):
+  Share:    \\\\${hyperv_dns}\\${SMB_SHARE_NAME}  (or \\\\${lan_ip}\\${SMB_SHARE_NAME})
+  Path:     ${WORKSPACE_ROOT} (host accesses it as root)
+  User:     ${SMB_USER}
+  Password: sudo cat /etc/construct/config.env | grep '^SMB_PASSWORD='
+  Mount on Windows:
+    net use Z: \\\\${hyperv_dns}\\${SMB_SHARE_NAME} /user:${SMB_USER} <password> /savecred /persistent:yes
 EOF
 fi
 

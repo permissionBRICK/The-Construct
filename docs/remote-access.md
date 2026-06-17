@@ -45,6 +45,39 @@ The VM writes connection info to `/etc/issue.d/construct.issue` via
 prompt. On Hyper-V NAT, the banner uses `<hostname>.mshome.net` (e.g. `agent-vm.mshome.net`)
 and prints the current IP only as a fallback.
 
+## Workspace file share (SMB)
+
+Provisioning runs a Samba/SMB server on the VM (`bin/setup-smb-share.sh`, managed unit `smbd`)
+that exposes the workspace (`WORKSPACE_ROOT`, default `/root/repos`) to the host PC, and the
+host-side provisioner auto-mounts it as a drive:
+
+```powershell
+net use Z: \\agent-vm.mshome.net\repo /user:dev <password> /savecred /persistent:yes
+```
+
+- **On by default.** Turn it off per provision with `Provision-AgentVM.ps1 -SmbShare false`,
+  or persistently with `SMB_SHARE=false` in `/etc/construct/config.env`. Skip only the
+  host-side auto-mount (leave the server running) with `-MountRepoShare false`. Pick the drive
+  letter with `-SmbDriveLetter` (default `Z`; the next free letter is used if it's taken).
+- **Access as root.** The share is configured with `force user = root`, so the host reads and
+  writes the repos as **root** — the same identity the coding agents use. The host
+  authenticates as the SMB user (`SMB_USER`, default `dev`); that account exists only for SMB
+  login and has no shell.
+- **Stable credentials.** The password is generated once and stored in
+  `/etc/construct/config.env` (`SMB_USER` / `SMB_PASSWORD` / `SMB_SHARE_NAME`). Every reprovision
+  reuses it, so the host's saved mapping keeps working without re-entering anything. Clear
+  `SMB_PASSWORD` (or pass a new value via the environment) to rotate it on the next provision.
+- The host maps the share over the stable `agent-vm.mshome.net` DNS name (not the VM's DHCP
+  IP), so the persistent mapping survives the VM's address changing. `/savecred` stores the
+  login in Windows Credential Manager; `/persistent:yes` reconnects it at logon and after the
+  VM's post-provision reboot.
+
+Read back the details on the VM from the login banner, or:
+
+```bash
+ssh agent-vm "sudo cat /etc/construct/smb-status"
+```
+
 ## Codex remote
 
 For Codex, prefer the supported SSH host workflow in Codex App: configure the VM as an SSH host,
@@ -65,9 +98,10 @@ agent runtime is available.
 sudo systemctl start|stop|restart|status construct
 ```
 
-Provisioning also manages these units (when their tools are selected): `opencode-serve`,
-`codex-app-server`, `code-serve-web` (browser VS Code), and `code-tunnel` (the VS Code remote
-tunnel). Inspect any of them with `systemctl status <unit>` / `journalctl -u <unit>`.
+Provisioning also manages these units (when their tools/features are selected): `opencode-serve`,
+`codex-app-server`, `code-serve-web` (browser VS Code), `code-tunnel` (the VS Code remote
+tunnel), and `smbd` (the workspace file share). Inspect any of them with
+`systemctl status <unit>` / `journalctl -u <unit>`.
 
 Container logs:
 
