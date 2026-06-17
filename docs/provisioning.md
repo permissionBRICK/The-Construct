@@ -100,6 +100,10 @@ Recognized variables:
 | `VSCODE_SERVER` | `true` | Install the VS Code CLI / server for Remote-SSH |
 | `VSCODE_SERVE_WEB` | `true` | Autostart browser-based `code serve-web` |
 | `VSCODE_TUNNEL` | `false` | Opt in to also set up + register a `code tunnel` |
+| `SMB_SHARE` | `true` | Run an SMB server sharing `WORKSPACE_ROOT` to the host |
+| `SMB_USER` | `dev` | SMB login name (file access on the share runs as root) |
+| `SMB_SHARE_NAME` | `repo` | Share name in the UNC path `\\<vm>\<name>` |
+| `SMB_PASSWORD` | _generated_ | Generated once and persisted; reused on reprovision |
 
 ### Project runtimes (SDKs)
 
@@ -149,6 +153,10 @@ VSCODE_SERVE_WEB_PORT=8000
 VSCODE_SERVE_WEB_TOKEN_FILE=/etc/construct/vscode-serve-web.token
 VSCODE_TUNNEL=false
 VSCODE_TUNNEL_NAME=
+SMB_SHARE=true
+SMB_USER=dev
+SMB_SHARE_NAME=repo
+SMB_PASSWORD=
 ```
 
 ### Bypass-mode defaults

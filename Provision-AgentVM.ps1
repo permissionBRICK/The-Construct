@@ -70,6 +70,17 @@ param(
     # you can complete the one-time device sign-in, then continues to the reboot.
     # "true"/"false".
     [string]$VsCodeTunnel = "false",
+    # Set up a Samba/SMB server on the VM that shares the workspace (the repos
+    # folder) to this host. Credentials are generated once on the VM and persisted
+    # in its config, so re-provisions keep the same login. "true"/"false".
+    [string]$SmbShare = "true",
+    # After provisioning, auto-mount the VM's workspace share on this host with
+    # `net use` (/savecred /persistent:yes), so the repos appear as a drive.
+    # "true"/"false". Ignored when -SmbShare false. Only runs on -Action provision.
+    [string]$MountRepoShare = "true",
+    # Drive letter to map the workspace share to (no colon). If it's already in
+    # use by something else, the next free letter (downward) is chosen instead.
+    [string]$SmbDriveLetter = "Z",
     [switch]$IncludeGit,
     # What this run does:
     #   provision (default) -- the normal full provision. With -RestoreDir it also
@@ -735,6 +746,93 @@ function Set-OpenCodeRemote {
     Write-Host "    Fully quit and reopen the OpenCode GUI app to pick it up (if it's open now, it may overwrite this on exit)." -ForegroundColor DarkGray
 }
 
+function Get-FreeDriveLetter {
+    # Return the requested drive letter if it's free, otherwise the next free one
+    # scanning downward (Z..D). `net use` can only manage NETWORK drives, so a
+    # letter already taken by a local disk would make the mapping fail -- avoid it
+    # by checking every kind of drive PowerShell knows about. Returns $null if the
+    # whole D..Z range is occupied.
+    param([string]$Preferred = "Z")
+
+    $used = @{}
+    foreach ($d in (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
+        if ($d.Name.Length -eq 1) { $used[$d.Name.ToUpper()] = $true }
+    }
+    # Also catch network mappings (incl. disconnected ones) that may not surface
+    # as PSDrives, by parsing `net use` -- its lines start with "<X>:".
+    try {
+        foreach ($line in (& net.exe use 2>$null)) {
+            if ($line -match '([A-Za-z]):\s') { $used[$matches[1].ToUpper()] = $true }
+        }
+    } catch { }
+
+    $pref = ($Preferred.TrimEnd(':')).ToUpper()
+    if ($pref -and -not $used.ContainsKey($pref)) { return $pref }
+
+    foreach ($code in (90..68)) {            # 'Z' (90) down to 'D' (68)
+        $letter = [char]$code
+        if (-not $used.ContainsKey([string]$letter)) { return [string]$letter }
+    }
+    return $null
+}
+
+function Mount-RepoShare {
+    # Map the VM's workspace SMB share to a drive letter on this host, saving the
+    # credentials so it reconnects automatically (across logon/reboot). Mirrors the
+    # other host-config helpers: best-effort, never throws -- on failure it prints
+    # the manual `net use` command and moves on. Returns the mapped "Z:" string on
+    # success, otherwise $null.
+    param(
+        [Parameter(Mandatory)][string]$UncPath,   # \\host\share
+        [Parameter(Mandatory)][string]$SmbUser,
+        [Parameter(Mandatory)][string]$SmbPassword,
+        [string]$Preferred = "Z"
+    )
+
+    # If the preferred letter is already mapped to THIS share (a previous run),
+    # reuse that letter and just refresh it -- don't strand the old mapping by
+    # picking a different free letter. Otherwise take the preferred letter if free,
+    # else the next free one downward.
+    $prefDevice = "$(($Preferred.TrimEnd(':')).ToUpper()):"
+    $existingRemote = ""
+    try {
+        foreach ($line in (& net.exe use $prefDevice 2>$null)) {
+            if ($line -match 'Remote name\s+(\S+)') { $existingRemote = $matches[1] }
+        }
+    } catch { }
+
+    if ($existingRemote -and ($existingRemote.TrimEnd('\') -ieq $UncPath.TrimEnd('\'))) {
+        $device = $prefDevice
+    } else {
+        $letter = Get-FreeDriveLetter -Preferred $Preferred
+        if (-not $letter) {
+            Write-Warning "No free drive letter to map $UncPath. Map it manually with 'net use'."
+            return $null
+        }
+        $device = "${letter}:"
+    }
+
+    # Drop any existing mapping on the chosen letter first, so we can recreate it
+    # with fresh credentials (our own stale mapping, or a leftover from before).
+    & net.exe use $device /delete /y 2>$null | Out-Null
+
+    # net use <device> <unc> <password> /user:<user> /savecred /persistent:yes
+    # Generated SMB passwords are alphanumeric, so no embedded quotes/spaces to
+    # escape. /savecred stores the credential in Windows Credential Manager;
+    # /persistent:yes restores the mapping at logon and reconnects when the VM
+    # (briefly down during the post-provision reboot) comes back.
+    $out = & net.exe use $device $UncPath $SmbPassword "/user:$SmbUser" /savecred /persistent:yes 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-Ok "Mounted $UncPath -> $device (credentials saved, persistent)"
+        return $device
+    }
+
+    Write-Warning "Could not auto-mount $UncPath ($($out -join ' '))."
+    Write-Host "    Map it manually from this host:" -ForegroundColor DarkGray
+    Write-Host "      net use ${device} $UncPath /user:$SmbUser <password> /savecred /persistent:yes" -ForegroundColor Cyan
+    return $null
+}
+
 function Select-Projects {
     # Prompt the user to pick which project profiles from projects/ to load.
     # Returns a comma-separated PROJECTS value (or "default" if none chosen). The
@@ -1031,7 +1129,7 @@ if (-not $checkoutArg) {
     }
     $checkoutArg = if ($repoUrls.Count -gt 0) { "true" } else { "false" }
 }
-$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit'"
+$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit' SMB_SHARE='$SmbShare'"
 Write-Host "  --- live provisioning output ---" -ForegroundColor DarkGray
 Invoke-SshStream -Sudo -Command "$envPrefix bash /opt/construct/repo/bin/provision.sh"
 Write-Host "  --- end provisioning output ---" -ForegroundColor DarkGray
@@ -1090,6 +1188,38 @@ if ($VsCodeServer -eq "true") {
             if ($line -match '^\s*([A-Z_]+)=(.*)$') { $tunnelStatus[$matches[1]] = $matches[2].Trim() }
         }
     } catch { }
+}
+
+# Read the workspace SMB-share details back from the VM (set up by
+# setup-smb-share.sh) and, when enabled, auto-mount the share on THIS host. Done
+# NOW -- while the VM is still up and before the reboot below -- because `net use`
+# needs the share reachable at map time; once mapped with /persistent:yes it
+# survives the reboot and reconnects on its own. $smbMountedDrive feeds the
+# summary at the end.
+$smbStatus = @{}
+$smbMountedDrive = $null
+try {
+    $raw = Invoke-Ssh -Sudo -Command "cat /etc/construct/smb-status 2>/dev/null || true"
+    foreach ($line in ($raw -split "`n")) {
+        if ($line -match '^\s*([A-Z_]+)=(.*)$') { $smbStatus[$matches[1]] = $matches[2].Trim() }
+    }
+} catch { }
+
+if ($Action -eq "provision" -and $smbStatus['SMB_ENABLED'] -eq "yes" -and $MountRepoShare -eq "true") {
+    $smbShareName = if ($smbStatus['SMB_SHARE_NAME']) { $smbStatus['SMB_SHARE_NAME'] } else { "repo" }
+    $smbUser      = if ($smbStatus['SMB_USER'])       { $smbStatus['SMB_USER'] }       else { "dev" }
+    $smbPass      = $smbStatus['SMB_PASSWORD']
+    # Prefer the stable DNS name (survives the VM's DHCP address changing, which
+    # matters for a persistent mapping); fall back to the reported LAN IP.
+    $smbHost = $VmHost
+    if (-not $smbHost -and $smbStatus['SMB_IP']) { $smbHost = $smbStatus['SMB_IP'] }
+    $smbUnc = "\\$smbHost\$smbShareName"
+    if ($smbPass) {
+        Write-Step "Mounting the VM workspace share on this host"
+        $smbMountedDrive = Mount-RepoShare -UncPath $smbUnc -SmbUser $smbUser -SmbPassword $smbPass -Preferred $SmbDriveLetter
+    } else {
+        Write-Warning "VM reported the SMB share enabled but no password; skipping host mount."
+    }
 }
 
 function Get-TunnelLoginLine {
@@ -1257,6 +1387,23 @@ if ($tunnelStatus['VSCODE_TUNNEL_DEPLOYED'] -eq "yes") {
         Write-Host "    Status: registered and live -- open the URL in a browser or VS Code Remote Explorer." -ForegroundColor Green
     } else {
         Write-Host "    Service is deployed. If the tunnel isn't registered yet, re-run with -VsCodeTunnel true to sign in." -ForegroundColor DarkGray
+    }
+}
+if ($smbStatus['SMB_ENABLED'] -eq "yes") {
+    $smbShareName = if ($smbStatus['SMB_SHARE_NAME']) { $smbStatus['SMB_SHARE_NAME'] } else { "repo" }
+    $smbUser      = if ($smbStatus['SMB_USER'])       { $smbStatus['SMB_USER'] }       else { "dev" }
+    $smbUnc       = "\\$VmHost\$smbShareName"
+    Write-Host ""
+    Write-Host "Workspace file share (SMB):" -ForegroundColor White
+    if ($smbMountedDrive) {
+        Write-Host "    Mounted at $smbMountedDrive  ($smbUnc)" -ForegroundColor Yellow
+        Write-Host "    Credentials saved + persistent -- it reconnects after the VM reboots." -ForegroundColor DarkGray
+        Write-Host "    The repos folder opens as root, the same identity the agents use." -ForegroundColor DarkGray
+    } else {
+        Write-Host "    Share: $smbUnc  (user $smbUser, files accessed as root)" -ForegroundColor Yellow
+        Write-Host "    Mount it from this host:" -ForegroundColor DarkGray
+        Write-Host "      net use Z: $smbUnc /user:$smbUser <password> /savecred /persistent:yes" -ForegroundColor Cyan
+        Write-Host "      password: ssh $HostAlias `"sudo sed -n 's/^SMB_PASSWORD=//p' /etc/construct/config.env`"" -ForegroundColor DarkGray
     }
 }
 Write-Host ""
