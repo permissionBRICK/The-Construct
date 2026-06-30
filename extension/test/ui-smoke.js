@@ -141,9 +141,30 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("offline clears project chips", (await page.locator("#projChips .chip").innerText()).trim() === "—");
   check("offline keeps known host", (await page.locator("#sysHost").innerText()) === "h.example.net");
 
-  // panel degrades without horizontal overflow when dragged narrow
+  // connect button: shows only when the VM is online AND this window isn't already on it
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, connected: false } }, "*"));
+  await page.waitForTimeout(60);
+  check("panel: connect shows when online + not connected", await page.locator("#connectBtn").isVisible());
+  await page.click("#connectBtn");
+  posted = await page.evaluate(() => window.__posted);
+  check("panel: connect posts command", posted.some((m) => m.type === "command" && m.id === "connect"));
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, connected: true } }, "*"));
+  await page.waitForTimeout(60);
+  check("panel: connect hidden when already connected", !(await page.locator("#connectBtn").isVisible()));
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: false, connected: false } }, "*"));
+  await page.waitForTimeout(60);
+  check("panel: connect hidden when offline", !(await page.locator("#connectBtn").isVisible()));
+  // strict ===: an undefined `connected` (legacy/foreign state) must keep it hidden.
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true } }, "*"));
+  await page.waitForTimeout(60);
+  check("panel: connect hidden when `connected` is unknown", !(await page.locator("#connectBtn").isVisible()));
+
+  // panel degrades without horizontal overflow when dragged narrow — measured with the
+  // connect button VISIBLE (the widest status-strip state).
   await page.setViewportSize({ width: 300, height: 1400 });
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, connected: false } }, "*"));
   await page.waitForTimeout(80);
+  check("panel: connect button visible at 300px", await page.locator("#connectBtn").isVisible());
   const panelOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   check("panel: no horizontal overflow at 300px", panelOverflow <= 1, `overflow=${panelOverflow}px`);
 
@@ -166,6 +187,26 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: false, host: "h.example.net" } }, "*"));
   await page.waitForTimeout(60);
   check("launcher: offline dot", (await page.getAttribute("#lDot", "class")).includes("offline"));
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h.example.net", connected: false } }, "*"));
+  await page.waitForTimeout(60);
+  check("launcher: connect shows when online + not connected", await page.locator("#lConnect").isVisible());
+  await page.click("#lConnect");
+  lposted = await page.evaluate(() => window.__posted);
+  check("launcher: connect posts command", lposted.some((m) => m.type === "command" && m.id === "connect"));
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h.example.net", connected: true } }, "*"));
+  await page.waitForTimeout(60);
+  check("launcher: connect hidden when already connected", !(await page.locator("#lConnect").isVisible()));
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: false, host: "h.example.net", connected: false } }, "*"));
+  await page.waitForTimeout(60);
+  check("launcher: connect hidden when offline", !(await page.locator("#lConnect").isVisible()));
+  // strict ===: undefined `connected` keeps it hidden.
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h.example.net" } }, "*"));
+  await page.waitForTimeout(60);
+  check("launcher: connect hidden when `connected` is unknown", !(await page.locator("#lConnect").isVisible()));
+  // measure overflow with the connect button visible.
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h.example.net", connected: false } }, "*"));
+  await page.waitForTimeout(60);
+  check("launcher: connect button visible at 300px", await page.locator("#lConnect").isVisible());
   const launcherOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   check("launcher: no horizontal overflow at 300px", launcherOverflow <= 1, `overflow=${launcherOverflow}px`);
   check("launcher: no console/page errors", errors.length === 0, errors.join(" | "));

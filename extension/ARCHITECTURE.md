@@ -46,6 +46,9 @@ extension/
   src/
     ssh.js            system-ssh runner (buildSshArgs/runRemote/runRemoteScript/isReachable)
     probe.js          REMOTE_PROBE + parseProbe/extractVersion/toState/probe()
+    remote.js         open the VM over Remote-SSH: isConnectedToVm(remoteAuthority) +
+                      vscode-remote://ssh-remote+agent-vm/<path> URIs; openOnVm (vscode.openFolder,
+                      reuse/new window); needs the ms-vscode-remote.remote-ssh extension
     host.js           locate the scripts dir (newest %LOCALAPPDATA%\The-Construct\*\* with
                       Auto-Install.ps1, or the construct.scriptsDir override) + read/write
                       .construct-settings.json (form<->disk mapping; pure fs/path, no vscode)
@@ -67,9 +70,10 @@ extension/
     construct-audio-enable.sh    install shim + apply remoteName-guard patch
     construct-audio-disable.sh   remove shim + revert patch
   test/
-    ui-smoke.js       Playwright headless-Chromium webview test (42 checks: panel + launcher + narrow overflow + settings round-trip + unwired-control honesty)
+    ui-smoke.js       Playwright headless-Chromium webview test (54 checks: panel + launcher + narrow overflow + settings round-trip + unwired-control honesty + connect button)
     probe.test.js     plain-node ssh-arg + probe-parse units (21 checks)
     host.test.js      plain-node scripts-dir resolution + settings merge units (32 checks; fake %LOCALAPPDATA% tree)
+    remote.test.js    plain-node Remote-SSH helpers — isConnectedToVm + remoteFolderUri (12 checks)
     lifecycle.test.js plain-node buildInvocation + winQuoteArg/quoting/elevation units (48 checks)
     updates.test.js   plain-node update-check units — Construct compare/cache + agent semver/latest/script + fetchJson redirects/per-host Accept, injected fetch+clock+http (62 checks)
 ```
@@ -83,7 +87,7 @@ Defined in `extension.js` (handleMessage), `media/panel.js` and `media/launcher.
 - `{type:'command', id, project?}` — ids: `reprovision`, `exportConfig`,
   `redownload`, `reinstall`, `updateConstruct`, `updateAgents`, `refresh`,
   `openProjectFolder`, `selectProfiles`, `exportUsage`, `importProjects`,
-  `editProject` (+`project`).
+  `editProject` (+`project`), `connect` (open the VM over Remote-SSH).
 - `{type:'setAudio', enabled}` — live mic-passthrough toggle (console switch only).
 - `{type:'openPanel'}` — open the wide editor-tab panel.
 - `{type:'saveSettings', settings}` — persist the settings form.
@@ -97,7 +101,7 @@ Defined in `extension.js` (handleMessage), `media/panel.js` and `media/launcher.
 **state shape** (every field optional; `render()` guards each, and clears
 VM-derived fields when `online===false` or `probeError`):
 ```
-{ online, host, hostShort, vmName, ubuntu, resources, constructRev,
+{ online, connected, host, hostShort, vmName, ubuntu, resources, constructRev,
   installed, reprovisioned, update:{available,behind},
   agents:[{id,name,detail,version,updateAvailable,latest}],
   projects:[{name,selected}],
@@ -108,6 +112,16 @@ VM-derived fields when `online===false` or `probeError`):
 ## Design decisions
 
 - **Packaging = folder copy** (no `vsce`/.vsix, no Node on the host).
+- **Remote-SSH open** (`src/remote.js`). The Connect button opens the VM workspace
+  (`/root/repos`) in VS Code over Remote-SSH via `vscode.openFolder` + a
+  `vscode-remote://ssh-remote+agent-vm/<path>` URI (the `agent-vm` SSH Host alias the
+  provisioner writes), reusing the current window. The button shows only when the VM
+  is reachable (`online`) and this window isn't already on it — `connected` is computed
+  host-side from `vscode.env.remoteAuthority` (matched against the alias/hostname) and
+  folded into the pushed state. Needs the `ms-vscode-remote.remote-ssh` extension
+  (warns if absent). [Planned: morph to "Start & connect" when the VM is installed but
+  stopped (elevated `Start-VM` + a host `Get-VM` state probe), and a "Shutdown" button
+  (`poweroff` over SSH); add-project clone+open and per-chip open.]
 - **Lifecycle launch = host console via `child_process`, never the integrated
   terminal.** A UI extension's Node code runs on the local Windows host even when
   the window is Remote-SSH'd into the VM, but `createTerminal()` targets the
@@ -253,6 +267,43 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
      The script uses `set -uo pipefail` + a `rc` accumulator + `exit $rc`, so its exit
      code (which drives the success/failure toast) is non-zero iff an attempted update
      actually failed — verified through bash with a mocked PATH.
+3.5. **Remote open / VM control** (user-requested, inserted; `src/remote.js` + installer).
+   Decision-complete spec so it can resume without re-asking:
+   - ✓ **DONE — Connect** — open `/root/repos` over Remote-SSH, REUSING the current
+     window (`vscode.openFolder` + `vscode-remote://ssh-remote+agent-vm/root/repos`);
+     gated on `online && connected===false` (`connected` from `vscode.env.remoteAuthority`).
+     `remote.test.js` (12) + ui-smoke connect checks.
+   - **TODO — VM power state** — add a host Hyper-V probe `Get-VM -Name Agent-VM` with
+     CAPTURED stdout (child_process, NOT a fire-and-forget console) → `vmState`:
+     `running`|`off`|`absent`|`unknown`, folded into pushed state. Morph the control:
+     `online&&!connected` → **Connect**; `vmState==='off'` (installed but stopped) →
+     **"Start & connect"** = elevated `Start-VM -Name Agent-VM` (Start-Process -Verb RunAs),
+     then poll reachability and `openOnVm` when up; `online` → also a **"Shutdown"** button
+     = `poweroff` over SSH as root (`ssh.runRemote`). VM name `Agent-VM` (Auto-Install
+     `$HyperVmName`). `Get-VM` may need admin/Hyper-V-Administrators → on failure
+     `vmState='unknown'` (fall back to showing Connect when online). The SSH probe can't
+     tell stopped-vs-absent, so this host query is required.
+   - **TODO — Add project** — input a git URL; clone into `/root/repos/<name>` on the VM
+     over SSH, INJECTION-SAFE (base64-encode the URL into the remote script;
+     `git clone -- "$url" "$dest"`); `name` = basename(url) minus `.git`; handle an
+     existing dir + clone failure (progress + error toast); open `/root/repos/<name>` in
+     a **NEW** remote window. Button in the Projects module actions row.
+   - **TODO — Open project (per-chip)** — a small inline **▷** button on each project
+     chip (chip-body click stays reserved for the edit modal, Projects batch); opens in a
+     **NEW** window the profile's single repo folder (`repo.directory` else basename(url)
+     minus `.git`, mirroring `bin/checkout-projects.sh`) when it has exactly one repo,
+     else `/root/repos`. Reads the host-side profile `<scriptsDir>/projects/<name>.json`.
+   - **TODO — Installer support** (host PowerShell; pairs with item 8) — ensure VS Code
+     is installed on the host AND the `ms-vscode-remote.remote-ssh` extension
+     (`code --install-extension ms-vscode-remote.remote-ssh`), so Connect works. At the
+     END of the initial install, print a clickable deep link to open VS Code Remote onto
+     the repo folder (`vscode://vscode-remote/ssh-remote+agent-vm/root/repos`), ideally one
+     that ALSO opens the large Construct dashboard (investigate: a `vscode://` UriHandler
+     the extension registers, or open-folder + auto-open the panel on activate).
+   - **Decisions**: Connect = current window; Add + Open-project = NEW window; per-chip =
+     inline ▷ (edit stays on chip-body, later); Shutdown = `poweroff` over SSH; Start =
+     elevated `Start-VM`. Requires the Remote-SSH extension + the `agent-vm` SSH Host
+     alias (the provisioner writes it).
 4. **Projects** — `src/projects.js`: `importProjects` runs the repo scan
    (`-Action export -ScanReposOnly`) to discover checked-out repos and write/merge
    profiles; `selectProfiles` updates `PROJECTS`; `editProject` opens a modal
@@ -283,7 +334,8 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
 - `3b483e1` host helper (`src/host.js`) + settings persistence + open-folder; `construct.scriptsDir` setting; `host.test.js`
 - `106a349` lifecycle launchers (`src/lifecycle.js`) + `Auto-Install.ps1 -Action/-BackupMode` pre-select; host-console launch via child_process; `lifecycle.test.js`
 - `043e63c` Construct self-update (`src/updates.js`) + `install.ps1 -RefreshOnly` marker write; update banner folded into state; `lifecycle.launchHostScript` extracted; `updates.test.js`
-- (this batch) agent update detection (npm/GitHub latest → per-agent badges) + `updateAgents` force-update over SSH; `buildAgentUpdateScript`
+- `3cc6d92` agent update detection (npm/GitHub latest → per-agent badges) + `updateAgents` force-update over SSH; `buildAgentUpdateScript`
+- (this batch) Remote-SSH Connect button (`src/remote.js`) — open `/root/repos` on the VM, gated on reachable + not-already-connected; both surfaces; `remote.test.js`
 
 ## Build/verify tooling (on this dev VM)
 

@@ -20,6 +20,7 @@ const ssh = require("./src/ssh");
 const host = require("./src/host");
 const lifecycle = require("./src/lifecycle");
 const updates = require("./src/updates");
+const remote = require("./src/remote");
 
 /** The single editor-tab panel instance, if open. */
 let panel; // vscode.WebviewPanel | undefined
@@ -59,11 +60,19 @@ async function augmentUpdates(state) {
   } catch (_) { return state; }
 }
 
+/** Add window-local fields (whether THIS window is already on the VM) to a probed
+ *  state. Synchronous, so it rides the first push. */
+function withLocalState(state) {
+  let connected = false;
+  try { connected = remote.isConnectedToVm(vscode.env.remoteAuthority); } catch (_) { /* default false */ }
+  return { ...state, connected };
+}
+
 /** Probe the VM and push fresh state to one webview, then push the update-augmented
  *  state once the (cached, best-effort) GitHub check resolves. */
 async function refreshState(webview) {
   if (!webview) return;
-  const state = await probeOnce();
+  const state = withLocalState(await probeOnce());
   safePost(webview, { type: "state", state });
   const aug = await augmentUpdates(state);
   if (aug !== state) safePost(webview, { type: "state", state: aug });
@@ -73,7 +82,7 @@ async function refreshState(webview) {
  *  the update-augmented state. */
 async function refreshAll() {
   if (liveWebviews.size === 0) return;
-  const state = await probeOnce();
+  const state = withLocalState(await probeOnce());
   for (const w of liveWebviews) safePost(w, { type: "state", state });
   const aug = await augmentUpdates(state);
   if (aug !== state) for (const w of liveWebviews) safePost(w, { type: "state", state: aug });
@@ -209,6 +218,7 @@ function handleMessage(message, webview, context) {
       if (id === "refresh") { refreshState(webview); return; }
       if (id === "openProjectFolder") { openProjectFolder(); return; }
       if (id === "updateAgents") { runUpdateAgents(); return; }
+      if (id === "connect") { remote.openOnVm({ path: "/root/repos", newWindow: false }); return; }
       if (id === "reprovision" || id === "exportConfig" || id === "reinstall" || id === "redownload") {
         const scriptsDir = resolveScriptsDir();
         if (!scriptsDir) { warnNoScriptsDir(); return; }

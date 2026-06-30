@@ -16,6 +16,11 @@
     if (st) { st.textContent = online ? "VM online" : "VM offline"; st.style.color = online ? "var(--rain)" : "var(--crit)"; }
     if (s.host) $("lHost").textContent = s.host;
 
+    // Offer "Open on VM" only when the VM is reachable and this window isn't
+    // already connected to it.
+    const conn = $("lConnect");
+    if (conn) conn.hidden = !(online && s.connected === false);
+
     const agentsEl = $("lAgents");
     if (!online) { if (agentsEl) agentsEl.textContent = "unavailable"; $("lMeta").textContent = ""; return; }
 
