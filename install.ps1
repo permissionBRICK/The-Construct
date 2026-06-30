@@ -84,27 +84,23 @@ if (-not $root) { throw "Downloaded archive looked empty: $work" }
 
 if ($RefreshOnly) {
     # Control-panel "Update Construct": the repo files are now refreshed in place.
-    # Record what we fetched (so the panel's update banner clears) and stop --
-    # don't launch the install menu or rebuild the VM.
-    $sha = ""
-    try {
-        $sha = (Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/commits/$Ref" `
-                  -Headers @{ "User-Agent" = "construct-control-panel" } -UseBasicParsing).sha
-    } catch {
-        Write-Host "    (couldn't fetch the commit id for the update marker: $($_.Exception.Message))" -ForegroundColor DarkGray
-    }
-    # Always record installedCommit -- even as "" when the SHA lookup failed -- so a
-    # successful file refresh can't leave a STALE older commit behind (which would
-    # keep the panel's banner wrong). The control panel treats "" as "no marker"
-    # (banner hidden) rather than a bogus comparison base.
-    $values = @{ constructRepo = $Repo; constructRef = $Ref; installedCommit = $sha }
-    try {
-        . (Join-Path $root.FullName "lib\AgentVm.Common.ps1")
-        Save-ConstructSettings -Dir $root.FullName -Values $values
+    # Record what we fetched (so the panel's update banner clears) AND refresh the
+    # installed control-panel extension, then stop -- don't rebuild the VM.
+    try { . (Join-Path $root.FullName "lib\AgentVm.Common.ps1") }
+    catch { Write-Warning "Could not load helpers: $($_.Exception.Message)" }
+
+    # Set-ConstructInstalledMarker always records installedCommit -- even as "" when
+    # the SHA lookup fails -- so a successful file refresh can't leave a STALE older
+    # commit behind (the panel treats "" as "no marker", banner hidden).
+    if (Get-Command Set-ConstructInstalledMarker -ErrorAction SilentlyContinue) {
+        $sha = Set-ConstructInstalledMarker -Root $root.FullName -Repo $Repo -Ref $Ref
         Write-Host "==> Updated Construct files in $($root.FullName)" -ForegroundColor Green
         if ($sha) { Write-Host "    installed commit: $sha" -ForegroundColor DarkGray }
-    } catch {
-        Write-Warning "Refreshed the files but couldn't record the update marker: $($_.Exception.Message)"
+    } else {
+        Write-Warning "Refreshed the files but couldn't record the update marker (helpers unavailable)."
+    }
+    if (Get-Command Install-ControlPanelExtension -ErrorAction SilentlyContinue) {
+        Install-ControlPanelExtension -SourceRoot $root.FullName | Out-Null
     }
     Write-Host ""
     Write-Host "Update complete. Reopen or refresh the control panel to re-check for updates." -ForegroundColor Cyan
@@ -114,15 +110,21 @@ if ($RefreshOnly) {
 $auto = Join-Path $root.FullName "Auto-Install.ps1"
 if (-not (Test-Path -LiteralPath $auto)) { throw "Auto-Install.ps1 not found in $($root.FullName)." }
 
-# Make sure VS Code + the Remote-SSH extension are present so the control panel's
-# "Open on VM" / project-open buttons and Auto-Install's end-of-install deep link
-# work. Done HERE (non-elevated, winget user scope) before Auto-Install self-elevates
-# -- winget is unreliable in an elevated session. Best-effort: never blocks the install.
+# Prepare the host for the control panel, all NON-elevated (winget user scope; the
+# user-profile extensions dir) BEFORE Auto-Install self-elevates -- winget and the
+# per-user extensions dir are unreliable in an elevated session. Best-effort: a
+# failure only warns and never blocks the install. (-RefreshOnly returned earlier,
+# so this runs on a fresh install / re-run of the one-liner.)
+#   1. record the update marker so the panel's "Update Construct" banner has a base,
+#   2. ensure VS Code + the Remote-SSH extension (powers Open-on-VM + the deep link),
+#   3. install the control-panel extension so the panel loads (and auto-opens on connect).
 try {
     . (Join-Path $root.FullName "lib\AgentVm.Common.ps1")
+    Set-ConstructInstalledMarker -Root $root.FullName -Repo $Repo -Ref $Ref | Out-Null
     Ensure-VSCodeRemoteSsh | Out-Null
+    Install-ControlPanelExtension -SourceRoot $root.FullName | Out-Null
 } catch {
-    Write-Warning "Could not ensure VS Code / Remote-SSH (continuing): $($_.Exception.Message)"
+    Write-Warning "Could not finish host setup for the control panel (continuing): $($_.Exception.Message)"
 }
 
 Write-Host "==> Launching Auto-Install.ps1" -ForegroundColor Cyan

@@ -78,6 +78,64 @@ $okCase = Test-EnsureWithShim -ExitCode 0
 ok "ensure: a zero exit raises no warning" (@($okCase.Warnings).Count -eq 0)
 ok "ensure: success path returns `$true" ($okCase.Result -eq $true)
 
+# ── Get-VSCodeExtensionDir / Install-ControlPanelExtension ───────────────────
+# Build a fake repo (extension/ with runtime files + a dev-only test/ carrying a
+# node_modules) and a fake USERPROFILE, then assert the install copies the runtime
+# files but NOT test/ or node_modules (which would otherwise drag in Playwright).
+$fakeProfile = Join-Path ([System.IO.Path]::GetTempPath()) ("cp-home-" + [guid]::NewGuid().ToString("N"))
+$fakeRepo    = Join-Path ([System.IO.Path]::GetTempPath()) ("cp-repo-" + [guid]::NewGuid().ToString("N"))
+$savedProfile = $env:USERPROFILE
+try {
+    $ext = Join-Path $fakeRepo "extension"
+    New-Item -ItemType Directory -Path (Join-Path $ext "src") -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $ext "media") -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $ext "test\node_modules\playwright") -Force | Out-Null
+    Set-Content -Path (Join-Path $ext "package.json") -Value '{"name":"construct-control-panel"}'
+    Set-Content -Path (Join-Path $ext "extension.js") -Value '// entry'
+    Set-Content -Path (Join-Path $ext "src\remote.js") -Value '// src'
+    Set-Content -Path (Join-Path $ext "media\panel.css") -Value '/* css */'
+    Set-Content -Path (Join-Path $ext "test\ui-smoke.js") -Value '// dev-only'
+    Set-Content -Path (Join-Path $ext "test\node_modules\playwright\huge.js") -Value '// huge dep'
+
+    $env:USERPROFILE = $fakeProfile
+    $expectDir = Join-Path $fakeProfile ".vscode\extensions\construct-control-panel"
+    ok "Get-VSCodeExtensionDir: under USERPROFILE\.vscode\extensions" ((Get-VSCodeExtensionDir) -eq $expectDir)
+
+    $r = Install-ControlPanelExtension -SourceRoot $fakeRepo
+    ok "install: returns `$true on success" ($r -eq $true)
+    ok "install: copies package.json" (Test-Path -LiteralPath (Join-Path $expectDir "package.json"))
+    ok "install: copies extension.js + src + media" (
+        (Test-Path -LiteralPath (Join-Path $expectDir "extension.js")) -and
+        (Test-Path -LiteralPath (Join-Path $expectDir "src\remote.js")) -and
+        (Test-Path -LiteralPath (Join-Path $expectDir "media\panel.css")))
+    ok "install: EXCLUDES the dev-only test/ folder" (-not (Test-Path -LiteralPath (Join-Path $expectDir "test")))
+
+    # Idempotent re-run must refresh BOTH a top-level file AND a NESTED src/ file,
+    # with NO double-nesting (regression for the Windows PowerShell 5.1 Copy-Item
+    # -Recurse quirk that would land updates at src\src\ and leave src\ stale). NB:
+    # this suite runs on pwsh 7 where Copy-Item merges; the staging-then-swap impl is
+    # what makes the result platform-independent, and these assertions lock it in.
+    Set-Content -Path (Join-Path $ext "extension.js") -Value '// entry v2'
+    Set-Content -Path (Join-Path $ext "src\remote.js") -Value '// src v2'
+    Install-ControlPanelExtension -SourceRoot $fakeRepo | Out-Null
+    ok "install: re-run refreshes a TOP-LEVEL file" ((Get-Content -LiteralPath (Join-Path $expectDir "extension.js") -Raw).Trim() -eq '// entry v2')
+    ok "install: re-run refreshes a NESTED src/ file" ((Get-Content -LiteralPath (Join-Path $expectDir "src\remote.js") -Raw).Trim() -eq '// src v2')
+    ok "install: re-run does NOT double-nest (no src\src)" (-not (Test-Path -LiteralPath (Join-Path $expectDir "src\src")))
+    ok "install: leaves no staging dirs behind" (
+        @(Get-ChildItem -LiteralPath (Join-Path $fakeProfile ".vscode\extensions") -Directory -ErrorAction SilentlyContinue |
+          Where-Object { $_.Name -like '.construct-cp-staging-*' }).Count -eq 0)
+
+    # Missing extension source -> warns, returns $false, does not throw.
+    $emptyRepo = Join-Path ([System.IO.Path]::GetTempPath()) ("cp-empty-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $emptyRepo -Force | Out-Null
+    ok "install: missing source -> `$false (no throw)" ((Install-ControlPanelExtension -SourceRoot $emptyRepo -WarningAction SilentlyContinue) -eq $false)
+    Remove-Item -LiteralPath $emptyRepo -Recurse -Force -ErrorAction SilentlyContinue
+} finally {
+    $env:USERPROFILE = $savedProfile
+    Remove-Item -LiteralPath $fakeProfile -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $fakeRepo -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 Write-Host ""
 Write-Host ("  host-lib unit tests — {0}/{1} passed" -f $script:pass, ($script:pass + $script:fail))
 Write-Host ""

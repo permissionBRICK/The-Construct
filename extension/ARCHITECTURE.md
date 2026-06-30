@@ -356,9 +356,23 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
 7. **Audio — VM side** — `vm/` scripts pushed over SSH on enable: `rec`/`arecord`
    shim (streams tunnel PCM, dies on SIGTERM) into `/usr/local/bin`; apply the
    remoteName-guard patch; disable removes both. Verify the shim + patch on this VM.
-8. **Install integration** — `Provision-AgentVM.ps1` host step copies `extension/`
-   into `%USERPROFILE%\.vscode\extensions\`. Record `installedCommit` for update
-   checks.
+8. ✓ **DONE — Install integration** (`install.ps1` + `lib/AgentVm.Common.ps1`).
+   `install.ps1` (non-elevated, before Auto-Install self-elevates; on both the fresh
+   path and `-RefreshOnly`) records the update marker via `Set-ConstructInstalledMarker`
+   (fetch SHA best-effort → `installedCommit`/`constructRepo`/`constructRef`, so the
+   panel's update banner has a base after a fresh install) and copies the extension via
+   `Install-ControlPanelExtension` into `Get-VSCodeExtensionDir`
+   (`%USERPROFILE%\.vscode\extensions\construct-control-panel`), excluding the dev-only
+   `test/` (+ any `node_modules`) so Playwright isn't dragged in. "Update Construct"
+   (`-RefreshOnly`) now also refreshes the installed extension. The copy builds into a
+   FRESH staging dir then swaps into place (remove old → move): copying into an empty dir
+   avoids Windows PowerShell 5.1's `Copy-Item -Recurse` nesting quirk (a dir copied into a
+   parent that already has a same-named child lands at `src\src\…` instead of merging,
+   which would leave `src/`+`media/` stale on every update), and staging-swap keeps the
+   old install intact if the copy fails. `test/host-lib.test.ps1` covers the copy +
+   `test/` exclusion + a re-run refreshing a NESTED `src/` file with no double-nesting +
+   no leftover staging + missing-source. NOTE: the extension copy lives in `install.ps1`
+   (non-elevated, has %USERPROFILE%), not `Provision-AgentVM.ps1` as originally sketched.
 9. **Docs** — `docs/` page + README section; convert/trim this file as needed.
 
 ## Committed so far
@@ -377,7 +391,8 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
 - `3a02609` VM power control (`src/vmpower.js`) — host `Get-VM` state probe → `vmState`; "Start & connect" (elevated Start-VM + poll/open) and "Shutdown" (`poweroff` over SSH) buttons on both surfaces; `vmpower.test.js`
 - `f2080075` Add project (`src/remote.js` clone helpers + `runAddProject`) — git URL → injection-safe `git clone` into `/root/repos/<name>` over SSH → open in a new window; "+ add project" button; `remote.test.js` extended
 - `0e15f4f` Open project per-chip (`host.readProjectProfile` + `remote.projectOpenPath` + `runOpenProject`) — inline ▷ on each project chip opens its single-repo folder (else `/root/repos`) in a new window; `remoteFolderUri` percent-encodes path segments; `host.test.js` + `remote.test.js` extended
-- (this batch) Installer support (`lib/AgentVm.Common.ps1` `Ensure-VSCodeRemoteSsh`/`Add-HyperVAdminMembership`/`Get-RemoteOpenLink`; `install.ps1` ensure VS Code+Remote-SSH non-elevated; `Auto-Install.ps1` Hyper-V Admin add + end-of-install deep link; `extension.js` `maybeAutoOpenPanel` + `remote.shouldAutoOpenPanel`) — pwsh-parsed + `Get-RemoteOpenLink`/`shouldAutoOpenPanel` unit-tested
+- `fd44c435` Installer support (`lib/AgentVm.Common.ps1` `Ensure-VSCodeRemoteSsh`/`Add-HyperVAdminMembership`/`Get-RemoteOpenLink`; `install.ps1` ensure VS Code+Remote-SSH non-elevated; `Auto-Install.ps1` Hyper-V Admin add + end-of-install deep link; `extension.js` `maybeAutoOpenPanel` + `remote.shouldAutoOpenPanel`) — `test/host-lib.test.ps1` (pwsh) + `shouldAutoOpenPanel`
+- (this batch) Install integration (`lib` `Get-VSCodeExtensionDir`/`Install-ControlPanelExtension`/`Set-ConstructInstalledMarker`; `install.ps1` copies the extension into `%USERPROFILE%\.vscode\extensions\` + records `installedCommit` on fresh install, and `-RefreshOnly` refreshes the extension too) — `test/host-lib.test.ps1` extended (copy + `test/` exclusion)
 
 ## Build/verify tooling (on this dev VM)
 
