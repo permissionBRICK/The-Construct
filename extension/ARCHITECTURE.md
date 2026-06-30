@@ -49,7 +49,9 @@ extension/
     host.js           locate the scripts dir (newest %LOCALAPPDATA%\The-Construct\*\* with
                       Auto-Install.ps1, or the construct.scriptsDir override) + read/write
                       .construct-settings.json (form<->disk mapping; pure fs/path, no vscode)
-    lifecycle.js      [planned] reprovision/reinstall/redownload/export launchers
+    lifecycle.js      reprovision/export -> Provision-AgentVM.ps1; reinstall/redownload ->
+                      Auto-Install.ps1 -Action/-BackupMode; launches a host console via
+                      child_process (pure buildInvocation/buildHostLaunch; vscode lazy-required)
     updates.js        [planned] Construct + agent update checks/actions
     projects.js       [planned] import-from-VM, select, per-project edit
     usage.js          [planned] ccusage over SSH + cost
@@ -59,9 +61,10 @@ extension/
     construct-audio-enable.sh    install shim + apply remoteName-guard patch
     construct-audio-disable.sh   remove shim + revert patch
   test/
-    ui-smoke.js       Playwright headless-Chromium webview test (40 checks: panel + launcher + narrow overflow + settings round-trip)
+    ui-smoke.js       Playwright headless-Chromium webview test (42 checks: panel + launcher + narrow overflow + settings round-trip + unwired-control honesty)
     probe.test.js     plain-node ssh-arg + probe-parse units (21 checks)
     host.test.js      plain-node scripts-dir resolution + settings merge units (32 checks; fake %LOCALAPPDATA% tree)
+    lifecycle.test.js plain-node buildInvocation + winQuoteArg/quoting/elevation units (48 checks)
 ```
 
 ## Webview ↔ extension message protocol
@@ -98,6 +101,32 @@ VM-derived fields when `online===false` or `probeError`):
 ## Design decisions
 
 - **Packaging = folder copy** (no `vsce`/.vsix, no Node on the host).
+- **Lifecycle launch = host console via `child_process`, never the integrated
+  terminal.** A UI extension's Node code runs on the local Windows host even when
+  the window is Remote-SSH'd into the VM, but `createTerminal()` targets the
+  *window's* context (the VM, where there's no `powershell.exe`). So `lifecycle.js`
+  spawns a local `powershell.exe` whose `Start-Process …` opens a new visible
+  console window, detached so it outlives VS Code. Quoting (verified through real
+  PowerShell): the outer command is handed to the spawned shell via
+  `-EncodedCommand` (base64 UTF-16LE) so there's NO Node↔shell quoting layer; the
+  child argv is canonically Windows-quoted (`winQuoteArg`) and forwarded as a
+  **single-string** `-ArgumentList` (an array would be space-joined without
+  re-quoting, splitting a spaced path or a two-word `-GitUserName`). Settings
+  values reach the script as data, not commands, so they can't inject.
+- **UAC: don't elevate the extension host.** Reprovision/Export touch no Hyper-V →
+  launched non-elevated. Reinstall/Redownload delete+recreate the VM → launched
+  with `Start-Process -Verb RunAs` so UAC consent fires once and a single elevated
+  console does the work (`Auto-Install.ps1` also self-elevates, so manual runs
+  still work). A `process.platform !== 'win32'` guard fails loudly off-Windows.
+- **Reinstall/Redownload pre-selection** rides a new `Auto-Install.ps1`
+  `-Action`/`-BackupMode` (see key references). The two safety gates — the
+  dirty-repo scan and the "type yes" delete — stay interactive in the elevated
+  console; only the menu choice + save/restore policy are automated. The agent
+  password is NOT passed on the command line (process-list exposure); the script
+  prompts for it, and the settings form shows it as console-entered (a note, not
+  an input). Project selection is likewise left to the script's selector until the
+  Projects batch, and the settings lead copy says both are still entered in the
+  console (so the UI doesn't over-promise an unattended run).
 - **Mic passthrough is on-demand.** Claude spawns `rec` only while recording and
   SIGTERMs it on stop, so the VM-side shim's tunnel connection *is* the
   record-window signal — the host opens the mic on connect, releases on disconnect.
@@ -140,8 +169,12 @@ VM-derived fields when `online===false` or `probeError`):
     `-RestoreDir`, `-ScanReposOnly`, `-Projects`, `-AiTools`, `-VmHost`, `-HostAlias`,
     `-GitUserName`, `-GitEmail`. The reprovision entrypoint.
   - `Auto-Install.ps1` — web-install + reinstall/reprovision menu; params incl.
-    `-VmDiskGB`, `-Projects`, `-AgentPassword`, `-GitUserName`, `-GitEmail`, `-Force`,
-    `-Redownload`, `-SkipCreateVm`. Reinstall deletes the VM + disk.
+    `-VmDiskGB`, `-VmMemoryGB`, `-Projects`, `-AgentPassword`, `-GitUserName`,
+    `-GitEmail`, `-Force`, `-Redownload`, `-SkipCreateVm`. Reinstall deletes the
+    VM + disk. **`-Action reprovision|reinstall|redownload|export`** bypasses the
+    interactive menu (added for the panel); with reinstall/redownload,
+    **`-BackupMode save|existing|wipe`** pre-answers the save/restore prompts. The
+    dirty-repo scan and the `Confirm-Reinstall` "type yes" delete still run.
   - `install.ps1` — downloads the repo zip to
     `%LOCALAPPDATA%\The-Construct\<owner-repo-ref>\<repo>-<ref>\` and runs Auto-Install.
     Default repo `permissionBRICK/The-Construct`, ref `main`.
@@ -171,13 +204,17 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
    pushes `{type:'settings'}`. `host.test.js` covers resolution + merge against a
    fake LOCALAPPDATA tree. (See the Settings-persistence design decision for the
    on-disk schema.)
-2. **Lifecycle launchers** — `src/lifecycle.js`: build the PowerShell invocation for
-   each action and run it in a dedicated integrated terminal (these can't be silent;
-   they need elevation + show output). Reinstall/Redownload orchestrate
-   scan→export→(re)install→restore via `-Action`/`-BackupDir`/`-RestoreDir`;
-   confirm modal + dirty-repo warning (`-Action export -ScanReposOnly`). Redownload
-   adds the Ubuntu re-fetch (`-Redownload`). Failure → offer retry reusing the
-   just-made backup. customRebuild honors save/existing/wipe.
+2. ✓ **DONE — Lifecycle launchers** — `src/lifecycle.js`: reprovision/export call
+   `Provision-AgentVM.ps1` (`-Action provision` / `-Action export -BackupDir`)
+   directly; reinstall/redownload call `Auto-Install.ps1 -Action … -BackupMode …`
+   (the pre-select param added this batch), which owns the existing
+   scan→export→delete→rebuild→restore orchestration + the dirty-repo and "type yes"
+   gates. Launch is a host console via `child_process` + `Start-Process` (see the
+   launch-model design decisions); reinstall/redownload elevate + show a modal
+   confirm first. `customRebuild` maps to `-BackupMode save|existing|wipe`.
+   Deferred to later batches: passing `-Projects` (Projects batch) and the failure
+   → backup-reuse retry (the PS save/restore flow already handles a failed save by
+   offering to continue/cancel in-console). `lifecycle.test.js` covers it.
 3. **Update checks** — `src/updates.js`: Construct = GitHub API latest commit on
    `<ref>` vs a stored marker in settings (`installedCommit`); show header banner +
    `behind`. `updateConstruct` re-runs `install.ps1` refresh-only (download+extract,
@@ -211,13 +248,15 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
 - `a8bd4ce` SSH runner + live status/version probe (+ stale-data fix)
 - `cd754f6` architecture + roadmap doc (this file)
 - `a5f4932` sidebar launcher + fullscreen-panel split + responsive narrow layout + WebviewPanelSerializer
-- (this batch) host helper (`src/host.js`) + settings persistence + open-folder; `construct.scriptsDir` setting; `host.test.js`
+- `3b483e1` host helper (`src/host.js`) + settings persistence + open-folder; `construct.scriptsDir` setting; `host.test.js`
+- (this batch) lifecycle launchers (`src/lifecycle.js`) + `Auto-Install.ps1 -Action/-BackupMode` pre-select; host-console launch via child_process; `lifecycle.test.js`
 
 ## Build/verify tooling (on this dev VM)
 
 - `pwsh` installed → parse-check .ps1 edits.
 - Playwright + Chromium installed under the session scratchpad (not committed);
   run the webview test with `NODE_PATH=<scratch>/uitest/node_modules node test/ui-smoke.js`.
-- `node test/probe.test.js` and `node test/host.test.js` for the plain-node units.
+- `node test/probe.test.js`, `node test/host.test.js`, `node test/lifecycle.test.js`
+  for the plain-node units.
 - Auto-review: single reviewer, serial; only the main agent calls `request_review`.
   Pre-review every batch with parallel adversarial subagents (Workflow) first.

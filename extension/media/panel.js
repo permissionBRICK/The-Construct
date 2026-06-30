@@ -110,19 +110,6 @@
   $("openTabBtn") && $("openTabBtn").addEventListener("click", () => post({ type: "openPanel" }));
 
   // ── Chips ─────────────────────────────────────────────────────────────────--
-  function toggleChip(c) {
-    c.classList.toggle("on");
-    const chk = c.querySelector(".check");
-    if (c.classList.contains("on") && !chk) {
-      const s = document.createElement("span"); s.className = "check"; s.textContent = "✓ ";
-      c.prepend(s);
-    } else if (!c.classList.contains("on") && chk) {
-      chk.remove();
-    }
-  }
-  document.querySelectorAll("#setAgents .chip, #setProjects .chip").forEach((c) =>
-    c.addEventListener("click", () => toggleChip(c)));
-
   // Main-view project chips open the per-project editor.
   function wireProjectChips() {
     document.querySelectorAll("#projChips .chip").forEach((c) =>
@@ -134,12 +121,12 @@
   // ── Save settings ───────────────────────────────────────────────────────────
   function val(id) { const e = $(id); return e ? e.value : ""; }
   function gatherSettings() {
-    const agents = Array.from(document.querySelectorAll("#setAgents .chip.on")).map((c) => c.dataset.agent);
-    const projects = Array.from(document.querySelectorAll("#setProjects .chip.on")).map((c) => c.textContent.replace("✓", "").trim());
+    // Coding-agents / project-profile selection isn't persisted yet (it's entered
+    // in the console during reprovision/reinstall), so it's intentionally not
+    // gathered here — see the deferred note in the settings view.
     return {
       gitName: val("setGitName"), gitEmail: val("setGitEmail"), gitCred: swOn($("setGitCred")),
-      agents, projects,
-      ram: val("setRam"), disk: val("setDisk"), ubuntu: val("setUbuntu"), password: val("setPassword"),
+      ram: val("setRam"), disk: val("setDisk"), ubuntu: val("setUbuntu"),
       serveWeb: swOn($("setServeWeb")), tunnel: swOn($("setTunnel")), smb: swOn($("setSmb")), mic: swOn($("setMic")),
     };
   }
@@ -290,7 +277,7 @@
     // must leave that toggle's HTML default alone, not force it off.
     const setSw = (id, v) => { if (typeof v === "boolean") setSwitch($(id), v); };
     setVal("setGitName", s.gitName); setVal("setGitEmail", s.gitEmail);
-    setVal("setRam", s.ram); setVal("setDisk", s.disk); setVal("setPassword", s.password);
+    setVal("setRam", s.ram); setVal("setDisk", s.disk);
     setVal("setUbuntu", s.ubuntu);
     setSw("setGitCred", s.gitCred); setSw("setServeWeb", s.serveWeb);
     setSw("setTunnel", s.tunnel); setSw("setSmb", s.smb); setSw("setMic", s.mic);

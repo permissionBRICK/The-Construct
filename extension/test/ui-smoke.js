@@ -102,7 +102,12 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   // save -> extension: gather the form and post saveSettings.
   await page.click("#saveBtn");
   const savePosted = await page.evaluate(() => window.__posted);
-  check("save posts saveSettings carrying the form", savePosted.some((m) => m.type === "saveSettings" && m.settings && m.settings.gitName === "Neo"));
+  const savedMsg = savePosted.find((m) => m.type === "saveSettings");
+  check("save posts saveSettings carrying the form", savedMsg && savedMsg.settings && savedMsg.settings.gitName === "Neo");
+  // Honesty: agents/projects aren't wired yet, so they must NOT be gathered, and
+  // the settings view must not present ignored interactive agent/project chips.
+  check("save omits unwired agents/projects", savedMsg && !("agents" in savedMsg.settings) && !("projects" in savedMsg.settings));
+  check("settings: no ignored agent/project chip controls", (await page.locator("#setAgents, #setProjects").count()) === 0);
 
   await page.click("#backBtn");
 

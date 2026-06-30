@@ -115,7 +115,19 @@ param(
     [switch]$SkipChecksum,
     [switch]$SkipCreateVm,
     [switch]$Force,
-    [switch]$Redownload
+    [switch]$Redownload,
+    # Pre-select the existing-VM action instead of showing the interactive menu
+    # (used by the control-panel extension to drive a chosen action unattended).
+    # Maps 1:1 to the menu. The destructive confirmations -- the dirty-repo scan
+    # and the "type yes" delete -- still run; only the up-front choice is automated.
+    [ValidateSet("reprovision", "reinstall", "redownload", "export")]
+    [string]$Action,
+    # With -Action reinstall/redownload, pre-answer the save/restore prompts:
+    #   save     export the current config now and restore it afterwards (default)
+    #   existing skip the new export; restore a previously saved backup if present
+    #   wipe     no save and no restore -- reinstall completely blank
+    [ValidateSet("save", "existing", "wipe")]
+    [string]$BackupMode
 )
 
 $ErrorActionPreference = "Stop"
@@ -447,13 +459,24 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
     $existingVmHandled = $true
     Show-TuiScreen -Title "The agent VM '$HyperVmName' is already installed on this host."
 
-    $choice = Show-Menu -Title "What would you like to do?" -Options @(
-        "Reprovision    re-run provisioning on the existing VM (keeps all data)",
-        "Reinstall      DELETE the VM and its disk, then build + install fresh (reuse downloaded ISOs)",
-        "Redownload     DELETE the VM, re-download the latest Ubuntu ISO, rebuild + install fresh",
-        "Export config  save the VM's current agent config + auth to this host (no changes to the VM)",
-        "Quit           make no changes and exit"
-    ) -Default 0
+    if ($PSBoundParameters.ContainsKey('Action')) {
+        # The control panel pre-selects the action; skip the interactive menu.
+        $choice = switch ($Action) {
+            'reprovision' { 0 }
+            'reinstall'   { 1 }
+            'redownload'  { 2 }
+            'export'      { 3 }
+        }
+        Write-Note "Action selected by the control panel: $Action"
+    } else {
+        $choice = Show-Menu -Title "What would you like to do?" -Options @(
+            "Reprovision    re-run provisioning on the existing VM (keeps all data)",
+            "Reinstall      DELETE the VM and its disk, then build + install fresh (reuse downloaded ISOs)",
+            "Redownload     DELETE the VM, re-download the latest Ubuntu ISO, rebuild + install fresh",
+            "Export config  save the VM's current agent config + auth to this host (no changes to the VM)",
+            "Quit           make no changes and exit"
+        ) -Default 0
+    }
 
     if ($choice -eq 0) {
         # Reprovision only: we just need the project selection, then run the
@@ -552,13 +575,18 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
             # reinstall (default yes). On success $restoreDir is handed to the
             # create/provision chain below, and the project profiles the export
             # generated are folded into the selection so their repos are re-cloned.
-            $doSave = Invoke-TuiConfirm -ScreenTitle "Save & restore the agent config" -Body @(
-                "The VM's current agent config (auth, memory, chat history, skills,",
-                "instruction files, project setup) can be saved to this host and",
-                "restored automatically onto the freshly reinstalled VM."
-            ) -Question "Save and auto-restore the config?" `
-              -YesLabel "Yes  save it now and restore it after the reinstall (recommended)" `
-              -NoLabel  "No   reinstall completely blank"
+            if ($BackupMode) {
+                # Control-panel run: the backup choice was made in the panel.
+                $doSave = ($BackupMode -eq 'save')
+            } else {
+                $doSave = Invoke-TuiConfirm -ScreenTitle "Save & restore the agent config" -Body @(
+                    "The VM's current agent config (auth, memory, chat history, skills,",
+                    "instruction files, project setup) can be saved to this host and",
+                    "restored automatically onto the freshly reinstalled VM."
+                ) -Question "Save and auto-restore the config?" `
+                  -YesLabel "Yes  save it now and restore it after the reinstall (recommended)" `
+                  -NoLabel  "No   reinstall completely blank"
+            }
             if ($doSave) {
                 try {
                     Show-TuiScreen -Title "Saving the VM's agent config" -Body @(
@@ -591,13 +619,20 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         # to restore that instead (default yes), so the saved config still comes
         # back after the reinstall even when the VM is dead or the save was skipped.
         if (-not $doSave -and (Test-Path -LiteralPath (Join-Path $bk "extracted\backup-info.json"))) {
-            $useBackup = Invoke-TuiConfirm -ScreenTitle "Restore a previously saved config?" -Body @(
-                "A config backup from an earlier run exists on this host. It can restore",
-                "the agent config (auth, memory, chat history, skills, instruction files,",
-                "project setup) automatically after the reinstall."
-            ) -Question "Auto-restore the saved config?" `
-              -YesLabel "Yes  restore it onto the fresh VM (recommended)" `
-              -NoLabel  "No   reinstall completely blank"
+            $useBackup = if ($BackupMode) {
+                # Restore the earlier backup for both 'save' (the fresh save was
+                # skipped/failed -- e.g. VM unreachable) and 'existing'; only a
+                # 'wipe' reinstalls blank. Matches the interactive default (yes).
+                ($BackupMode -ne 'wipe')
+            } else {
+                Invoke-TuiConfirm -ScreenTitle "Restore a previously saved config?" -Body @(
+                    "A config backup from an earlier run exists on this host. It can restore",
+                    "the agent config (auth, memory, chat history, skills, instruction files,",
+                    "project setup) automatically after the reinstall."
+                ) -Question "Auto-restore the saved config?" `
+                  -YesLabel "Yes  restore it onto the fresh VM (recommended)" `
+                  -NoLabel  "No   reinstall completely blank"
+            }
             if ($useBackup) {
                 $restoreDir = $bk
                 $restoredProjectNames = Get-BackupProjectNames -BackupDir $bk
@@ -665,14 +700,18 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
 # checkout can authenticate instead of silently failing into an empty repos dir.
 if (-not $SkipCreateVm -and -not $existingVmHandled -and
     (Test-Path -LiteralPath (Join-Path $bk "extracted\backup-info.json"))) {
-    $useBackup = Invoke-TuiConfirm -ScreenTitle "Restore a previously saved config?" -Body @(
-        "No agent VM is installed, but a config backup from an earlier run exists",
-        "on this host. It can restore the agent config (auth, memory, chat history,",
-        "skills, instruction files, project setup, and the credentials used to clone",
-        "private repos) automatically onto the freshly installed VM."
-    ) -Question "Auto-restore the saved config?" `
-      -YesLabel "Yes  restore it onto the new VM (recommended)" `
-      -NoLabel  "No   install completely blank"
+    $useBackup = if ($BackupMode) {
+        ($BackupMode -ne 'wipe')
+    } else {
+        Invoke-TuiConfirm -ScreenTitle "Restore a previously saved config?" -Body @(
+            "No agent VM is installed, but a config backup from an earlier run exists",
+            "on this host. It can restore the agent config (auth, memory, chat history,",
+            "skills, instruction files, project setup, and the credentials used to clone",
+            "private repos) automatically onto the freshly installed VM."
+        ) -Question "Auto-restore the saved config?" `
+          -YesLabel "Yes  restore it onto the new VM (recommended)" `
+          -NoLabel  "No   install completely blank"
+    }
     if ($useBackup) {
         $restoreDir = $bk
         $restoredProjectNames = Get-BackupProjectNames -BackupDir $bk
