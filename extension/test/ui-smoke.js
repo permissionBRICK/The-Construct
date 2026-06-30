@@ -124,6 +124,12 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("state render: agent version", (await page.locator("#agentList .agent").first().innerText()).includes("2.1.196"));
   check("state render: project chips", (await page.locator("#projChips .chip").count()) === 2);
 
+  // add-project: the Projects action posts the addProject command (the extension
+  // then prompts for a URL, clones over SSH, and opens the result in a new window).
+  await page.click('[data-cmd="addProject"]');
+  posted = await page.evaluate(() => window.__posted);
+  check("panel: add-project posts command", posted.some((m) => m.type === "command" && m.id === "addProject"));
+
   await page.evaluate(() => window.postMessage({ type: "audio", enabled: true, capturing: false, tunnel: "vm:8767" }, "*"));
   await page.waitForTimeout(80);
   check("audio render: voice switch on", (await page.getAttribute("#voiceSwitch", "aria-checked")) === "true");
