@@ -166,6 +166,39 @@ function Ensure-Tar {
     }
 }
 
+function Remove-TreeRobust {
+    # Delete a directory tree even when it holds paths longer than Windows'
+    # 260-char MAX_PATH. PowerShell's `Remove-Item -Recurse` throws
+    # "Could not find a part of the path '...'" on such paths -- and an extracted
+    # config backup contains deep agent-session transcripts that blow past it. So
+    # if the plain delete fails, empty the tree by mirroring an empty directory
+    # onto it with robocopy (which handles long paths natively), then remove the
+    # now-shallow directory.
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    try {
+        Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+        return
+    } catch {
+        $origErr = $_.Exception.Message
+        if (Get-Command robocopy.exe -ErrorAction SilentlyContinue) {
+            $empty = Join-Path ([System.IO.Path]::GetTempPath()) ("construct-empty-" + [Guid]::NewGuid().ToString("N"))
+            New-Item -ItemType Directory -Force -Path $empty | Out-Null
+            try {
+                # robocopy exit codes 0-7 are success; only treat the call as
+                # advisory and check the result with Test-Path afterwards.
+                & robocopy.exe $empty $Path /MIR /NJH /NJS /NFL /NDL /NP /R:0 /W:0 | Out-Null
+                Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue
+            } finally {
+                Remove-Item -LiteralPath $empty -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+        if (Test-Path -LiteralPath $Path) {
+            throw "Could not remove '$Path' (long-path delete failed): $origErr"
+        }
+    }
+}
+
 function Ensure-OpenSSH {
     if (Get-Command ssh.exe -ErrorAction SilentlyContinue) { return }
     Write-Step "OpenSSH client not found. Installing via winget..."
@@ -1122,7 +1155,11 @@ if ($Action -eq 'export') {
 
         # Extract on the host for the project-profile merge below + inspection.
         $extract = Join-Path $BackupDir "extracted"
-        if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
+        # A prior extract holds deep agent-session transcripts whose paths exceed
+        # Windows MAX_PATH; a plain Remove-Item -Recurse chokes on them with
+        # "Could not find a part of the path '...jsonl'". Remove-TreeRobust falls
+        # back to a robocopy mirror-empty that handles long paths.
+        Remove-TreeRobust -Path $extract
         New-Item -ItemType Directory -Force -Path $extract | Out-Null
         & tar.exe -xzf $tgz -C $extract
         if ($LASTEXITCODE -ne 0) { throw "Failed to extract the backup ($tgz)." }

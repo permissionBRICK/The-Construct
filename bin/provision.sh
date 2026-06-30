@@ -289,15 +289,23 @@ fi
 #    and without depending on a persisted store.
 if [[ "${CHECKOUT_PROJECTS}" == "true" ]]; then
   step "Checking out project repos"
+  _checkout_rc=0
   if [[ -n "${_clone_creds_file}" ]]; then
     GIT_CONFIG_COUNT=1 \
     GIT_CONFIG_KEY_0=credential.helper \
     GIT_CONFIG_VALUE_0="store --file=${_clone_creds_file}" \
-      bash "${REPO_DIR}/bin/checkout-projects.sh" \
-      || warn "WARNING: project checkout failed (Git auth not configured?)"
+      bash "${REPO_DIR}/bin/checkout-projects.sh" || _checkout_rc=$?
   else
-    bash "${REPO_DIR}/bin/checkout-projects.sh" \
-      || warn "WARNING: project checkout failed (Git auth not configured?)"
+    bash "${REPO_DIR}/bin/checkout-projects.sh" || _checkout_rc=$?
+  fi
+  if [[ "${_checkout_rc}" -ne 0 ]]; then
+    # Report on stdout (not only via warn -> stderr, which the provisioning log
+    # can drop) so a failed checkout is impossible to miss. The per-repo reasons
+    # were already streamed above by checkout-projects.sh.
+    step "Project checkout FAILED (exit ${_checkout_rc}) -- see the clone errors above"
+    note "    Most common cause: missing or invalid Git credentials for the private repo host."
+    note "    Fix the credentials, then re-run: bash ${REPO_DIR}/bin/checkout-projects.sh"
+    warn "WARNING: project checkout failed (Git auth not configured?)"
   fi
 fi
 
