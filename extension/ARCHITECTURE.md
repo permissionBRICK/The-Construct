@@ -52,7 +52,9 @@ extension/
     lifecycle.js      reprovision/export -> Provision-AgentVM.ps1; reinstall/redownload ->
                       Auto-Install.ps1 -Action/-BackupMode; launches a host console via
                       child_process (pure buildInvocation/buildHostLaunch; vscode lazy-required)
-    updates.js        [planned] Construct + agent update checks/actions
+    updates.js        Construct update check: GitHub compare(installedCommit...ref) -> {update:
+                      {available,behind}} folded into state (best-effort, cached, injectable fetch);
+                      constructRefreshArgs for install.ps1 -RefreshOnly. [agent checks: next batch]
     projects.js       [planned] import-from-VM, select, per-project edit
     usage.js          [planned] ccusage over SSH + cost
     audio.js          [planned] mic capture + ssh -R tunnel + on-demand gating
@@ -65,6 +67,7 @@ extension/
     probe.test.js     plain-node ssh-arg + probe-parse units (21 checks)
     host.test.js      plain-node scripts-dir resolution + settings merge units (32 checks; fake %LOCALAPPDATA% tree)
     lifecycle.test.js plain-node buildInvocation + winQuoteArg/quoting/elevation units (48 checks)
+    updates.test.js   plain-node Construct update check units — markers/compare/augment/cache, injected fetch+clock (28 checks)
 ```
 
 ## Webview ↔ extension message protocol
@@ -127,6 +130,17 @@ VM-derived fields when `online===false` or `probeError`):
   an input). Project selection is likewise left to the script's selector until the
   Projects batch, and the settings lead copy says both are still entered in the
   console (so the UI doesn't over-promise an unattended run).
+- **Construct update check = a recorded commit marker + GitHub compare.** The
+  installed commit lives in `.construct-settings.json` as `installedCommit` (with
+  `constructRepo`/`constructRef`), written by `install.ps1 -RefreshOnly` (and, at
+  install time, by the Install-integration batch). `updates.augment` compares
+  `installedCommit...ref` via the GitHub API and folds `{update:{available,behind}}`
+  + a `constructRev` label into the state. It's BEST-EFFORT and CACHED (10 min for
+  a real result; 60 s for a failure, so a transient blip doesn't hide the banner for
+  10 min): no marker, offline, or rate-limited → no `update` key → banner hidden.
+  `updateConstruct` launches `install.ps1 -RefreshOnly` on the host (non-elevated,
+  download-only), which re-records the marker so the banner clears. Agent update
+  detection + the `updateAgents` action are the next batch.
 - **Mic passthrough is on-demand.** Claude spawns `rec` only while recording and
   SIGTERMs it on stop, so the VM-side shim's tunnel connection *is* the
   record-window signal — the host opens the mic on connect, releases on disconnect.
@@ -177,7 +191,10 @@ VM-derived fields when `online===false` or `probeError`):
     dirty-repo scan and the `Confirm-Reinstall` "type yes" delete still run.
   - `install.ps1` — downloads the repo zip to
     `%LOCALAPPDATA%\The-Construct\<owner-repo-ref>\<repo>-<ref>\` and runs Auto-Install.
-    Default repo `permissionBRICK/The-Construct`, ref `main`.
+    Default repo `permissionBRICK/The-Construct`, ref `main`. **`-RefreshOnly`** (added
+    for the panel's Update Construct) re-downloads + extracts in place, records the
+    update marker (`installedCommit` from the GitHub commits API + `constructRepo`/
+    `constructRef`) via the repo's own `Save-ConstructSettings`, and skips the menu.
   - `Get-AgentUsage.ps1` — ccusage over SSH → combined JSON; SSH connection logic
     (key `~/.ssh/agent_vm_ed25519` else `agent-vm` alias) mirrored in `src/ssh.js`.
   - `lib/AgentVm.Common.ps1` — `Get-ConstructSettingsPath` (`.construct-settings.json`
@@ -215,12 +232,16 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
    Deferred to later batches: passing `-Projects` (Projects batch) and the failure
    → backup-reuse retry (the PS save/restore flow already handles a failed save by
    offering to continue/cancel in-console). `lifecycle.test.js` covers it.
-3. **Update checks** — `src/updates.js`: Construct = GitHub API latest commit on
-   `<ref>` vs a stored marker in settings (`installedCommit`); show header banner +
-   `behind`. `updateConstruct` re-runs `install.ps1` refresh-only (download+extract,
-   no auto-menu) then updates the marker. Agents = compare VM `--version` to latest
-   (npm/GitHub); `updateAgents` force-reinstalls over SSH (`claude update`, re-run
-   installers). Fold update fields into the probe state.
+3. **Update checks** (split into 3a/3b):
+   - 3a ✓ **DONE — Construct self-update** — `src/updates.js`: GitHub
+     compare(`installedCommit...ref`) vs the marker in settings → header banner +
+     `behind`, folded into state (best-effort, cached). `updateConstruct` launches
+     `install.ps1 -RefreshOnly` (download+extract, no menu) which re-records the
+     marker. `updates.test.js` covers it.
+   - 3b **TODO — Agent updates**: compare VM `--version` to latest (npm/GitHub,
+     best-effort per agent); `updateAgents` force-updates over SSH (`claude update`,
+     re-run codex/opencode installers). Fold per-agent `updateAvailable/latest`
+     into state.
 4. **Projects** — `src/projects.js`: `importProjects` runs the repo scan
    (`-Action export -ScanReposOnly`) to discover checked-out repos and write/merge
    profiles; `selectProfiles` updates `PROJECTS`; `editProject` opens a modal
@@ -249,7 +270,8 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
 - `cd754f6` architecture + roadmap doc (this file)
 - `a5f4932` sidebar launcher + fullscreen-panel split + responsive narrow layout + WebviewPanelSerializer
 - `3b483e1` host helper (`src/host.js`) + settings persistence + open-folder; `construct.scriptsDir` setting; `host.test.js`
-- (this batch) lifecycle launchers (`src/lifecycle.js`) + `Auto-Install.ps1 -Action/-BackupMode` pre-select; host-console launch via child_process; `lifecycle.test.js`
+- `106a349` lifecycle launchers (`src/lifecycle.js`) + `Auto-Install.ps1 -Action/-BackupMode` pre-select; host-console launch via child_process; `lifecycle.test.js`
+- (this batch) Construct self-update (`src/updates.js`) + `install.ps1 -RefreshOnly` marker write; update banner folded into state; `lifecycle.launchHostScript` extracted; `updates.test.js`
 
 ## Build/verify tooling (on this dev VM)
 

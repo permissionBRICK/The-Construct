@@ -18,6 +18,7 @@ const crypto = require("crypto");
 const probe = require("./src/probe");
 const host = require("./src/host");
 const lifecycle = require("./src/lifecycle");
+const updates = require("./src/updates");
 
 /** The single editor-tab panel instance, if open. */
 let panel; // vscode.WebviewPanel | undefined
@@ -47,18 +48,34 @@ function probeOnce() {
   return inflightProbe;
 }
 
-/** Probe the VM and push fresh state to one webview. */
+/** Fold host-side update info (GitHub) into a probed state. Best-effort: returns
+ *  the same object reference when nothing was added, so callers can skip a re-push. */
+async function augmentUpdates(state) {
+  try {
+    const scriptsDir = resolveScriptsDir();
+    const raw = scriptsDir ? host.readRawSettings(scriptsDir) : {};
+    return await updates.augment(state, raw);
+  } catch (_) { return state; }
+}
+
+/** Probe the VM and push fresh state to one webview, then push the update-augmented
+ *  state once the (cached, best-effort) GitHub check resolves. */
 async function refreshState(webview) {
   if (!webview) return;
   const state = await probeOnce();
   safePost(webview, { type: "state", state });
+  const aug = await augmentUpdates(state);
+  if (aug !== state) safePost(webview, { type: "state", state: aug });
 }
 
-/** Probe once and broadcast the same state to every live webview. */
+/** Probe once and broadcast the same state to every live webview, then broadcast
+ *  the update-augmented state. */
 async function refreshAll() {
   if (liveWebviews.size === 0) return;
   const state = await probeOnce();
   for (const w of liveWebviews) safePost(w, { type: "state", state });
+  const aug = await augmentUpdates(state);
+  if (aug !== state) for (const w of liveWebviews) safePost(w, { type: "state", state: aug });
 }
 
 /** Locate the host-side scripts dir, honoring the `construct.scriptsDir` override. */
@@ -174,6 +191,16 @@ function handleMessage(message, webview, context) {
         const scriptsDir = resolveScriptsDir();
         if (!scriptsDir) { warnNoScriptsDir(); return; }
         lifecycle.run(id, { scriptsDir });
+        return;
+      }
+      if (id === "updateConstruct") {
+        const scriptsDir = resolveScriptsDir();
+        if (!scriptsDir) { warnNoScriptsDir(); return; }
+        const markers = updates.readMarkers(host.readRawSettings(scriptsDir));
+        lifecycle.launchHostScript({
+          scriptsDir, script: "install.ps1", args: updates.constructRefreshArgs(markers),
+          elevate: false, label: "Update Construct",
+        });
         return;
       }
       vscode.window.showInformationMessage(

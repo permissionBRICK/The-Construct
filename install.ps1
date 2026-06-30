@@ -31,11 +31,18 @@
 
 .PARAMETER Ref
     Branch or tag to install (default: main).
+
+.PARAMETER RefreshOnly
+    Re-download and extract the repo in place, record the update marker
+    (installedCommit / constructRepo / constructRef) in .construct-settings.json,
+    and DO NOT launch Auto-Install.ps1. Used by the control-panel "Update
+    Construct" action to pull the latest scripts without rebuilding the VM.
 #>
 [CmdletBinding()]
 param(
     [string]$Repo = "permissionBRICK/The-Construct",
-    [string]$Ref  = "main"
+    [string]$Ref  = "main",
+    [switch]$RefreshOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -74,6 +81,36 @@ Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
 # A GitHub source archive unpacks to a single top-level folder: <name>-<ref>.
 $root = Get-ChildItem -LiteralPath $work -Directory | Select-Object -First 1
 if (-not $root) { throw "Downloaded archive looked empty: $work" }
+
+if ($RefreshOnly) {
+    # Control-panel "Update Construct": the repo files are now refreshed in place.
+    # Record what we fetched (so the panel's update banner clears) and stop --
+    # don't launch the install menu or rebuild the VM.
+    $sha = ""
+    try {
+        $sha = (Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/commits/$Ref" `
+                  -Headers @{ "User-Agent" = "construct-control-panel" } -UseBasicParsing).sha
+    } catch {
+        Write-Host "    (couldn't fetch the commit id for the update marker: $($_.Exception.Message))" -ForegroundColor DarkGray
+    }
+    # Always record installedCommit -- even as "" when the SHA lookup failed -- so a
+    # successful file refresh can't leave a STALE older commit behind (which would
+    # keep the panel's banner wrong). The control panel treats "" as "no marker"
+    # (banner hidden) rather than a bogus comparison base.
+    $values = @{ constructRepo = $Repo; constructRef = $Ref; installedCommit = $sha }
+    try {
+        . (Join-Path $root.FullName "lib\AgentVm.Common.ps1")
+        Save-ConstructSettings -Dir $root.FullName -Values $values
+        Write-Host "==> Updated Construct files in $($root.FullName)" -ForegroundColor Green
+        if ($sha) { Write-Host "    installed commit: $sha" -ForegroundColor DarkGray }
+    } catch {
+        Write-Warning "Refreshed the files but couldn't record the update marker: $($_.Exception.Message)"
+    }
+    Write-Host ""
+    Write-Host "Update complete. Reopen or refresh the control panel to re-check for updates." -ForegroundColor Cyan
+    return
+}
+
 $auto = Join-Path $root.FullName "Auto-Install.ps1"
 if (-not (Test-Path -LiteralPath $auto)) { throw "Auto-Install.ps1 not found in $($root.FullName)." }
 
