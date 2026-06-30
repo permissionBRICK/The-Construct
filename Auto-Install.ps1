@@ -438,11 +438,13 @@ $bk                   = Get-ConstructBackupDir -Dir $PSScriptRoot
 $restoreDir           = ""     # set when the reinstall flow saves a config to restore
 $restoredProjectNames = @()    # project profiles that save generated, to re-provision
 $chosenCloneCredB64   = ""     # git credentials for cloning private project repos
+$existingVmHandled    = $false # set once the existing-VM menu runs, so the fresh-install restore offer below is skipped
 
 $HyperVmName = "Agent-VM"
 if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -and
     (Get-VM -Name $HyperVmName -ErrorAction SilentlyContinue)) {
 
+    $existingVmHandled = $true
     Show-TuiScreen -Title "The agent VM '$HyperVmName' is already installed on this host."
 
     $choice = Show-Menu -Title "What would you like to do?" -Options @(
@@ -652,6 +654,29 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         Write-Note "No changes made."
         Write-Host ""; Read-Host "Press Enter to exit"
         return
+    }
+}
+
+# ── No existing VM: offer to restore a config backup left by an earlier run ──
+# A fresh install (the existing-VM menu above was skipped -- e.g. the VM was
+# deleted by hand) can still pick up a backup cached on this host, exactly like
+# the reinstall path's "declined the save" branch. This brings back the saved
+# auth/memory/skills AND the git-credentials used to clone private repos, so the
+# checkout can authenticate instead of silently failing into an empty repos dir.
+if (-not $SkipCreateVm -and -not $existingVmHandled -and
+    (Test-Path -LiteralPath (Join-Path $bk "extracted\backup-info.json"))) {
+    $useBackup = Invoke-TuiConfirm -ScreenTitle "Restore a previously saved config?" -Body @(
+        "No agent VM is installed, but a config backup from an earlier run exists",
+        "on this host. It can restore the agent config (auth, memory, chat history,",
+        "skills, instruction files, project setup, and the credentials used to clone",
+        "private repos) automatically onto the freshly installed VM."
+    ) -Question "Auto-restore the saved config?" `
+      -YesLabel "Yes  restore it onto the new VM (recommended)" `
+      -NoLabel  "No   install completely blank"
+    if ($useBackup) {
+        $restoreDir = $bk
+        $restoredProjectNames = Get-BackupProjectNames -BackupDir $bk
+        Write-Ok "Saved config loaded; it will be restored automatically after the install."
     }
 }
 
