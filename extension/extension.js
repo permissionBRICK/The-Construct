@@ -472,6 +472,23 @@ function activate(context) {
       })
     );
   }
+  maybeAutoOpenPanel(context);
+}
+
+/** When a window comes up attached to the VM (the installer's end-of-install deep
+ *  link, or a Connect), surface the control panel once so the operator console is
+ *  right there. Guarded per-workspace via workspaceState so reloads (or the user
+ *  closing it) don't reopen it. */
+function maybeAutoOpenPanel(context) {
+  const KEY = "construct.autoOpenedPanel";
+  // Best-effort: the whole body is guarded so an auto-open failure (incl. a throw
+  // from openPanel/createWebviewPanel) can never break extension activation. The
+  // flag is set BEFORE openPanel, so even a throw won't reopen on the next reload.
+  try {
+    if (!remote.shouldAutoOpenPanel(vscode.env.remoteAuthority, context.workspaceState.get(KEY))) return;
+    context.workspaceState.update(KEY, true);
+    openPanel(context);
+  } catch (_) { /* never break activation for an optional convenience */ }
 }
 
 function deactivate() {}

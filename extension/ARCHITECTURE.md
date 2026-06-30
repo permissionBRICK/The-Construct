@@ -73,7 +73,7 @@ extension/
     ui-smoke.js       Playwright headless-Chromium webview test (73 checks: panel + launcher + narrow overflow + settings round-trip + unwired-control honesty + connect/start/shutdown power buttons + add-project + per-chip open)
     probe.test.js     plain-node ssh-arg + probe-parse units (21 checks)
     host.test.js      plain-node scripts-dir resolution + settings merge + readProjectProfile units (40 checks; fake %LOCALAPPDATA% tree)
-    remote.test.js    plain-node Remote-SSH helpers — isConnectedToVm/remoteFolderUri + repoNameFromUrl/isLikelyGitUrl/buildCloneScript/projectOpenPath + URI percent-encoding (65 checks)
+    remote.test.js    plain-node Remote-SSH helpers — isConnectedToVm/remoteFolderUri + repoNameFromUrl/isLikelyGitUrl/buildCloneScript/projectOpenPath/shouldAutoOpenPanel + URI percent-encoding (71 checks)
     lifecycle.test.js plain-node buildInvocation + winQuoteArg/quoting/elevation units (48 checks)
     updates.test.js   plain-node update-check units — Construct compare/cache + agent semver/latest/script + fetchJson redirects/per-host Accept, injected fetch+clock+http (62 checks)
     vmpower.test.js   plain-node Hyper-V power units — Get-VM probe/parse + Start-VM/elevated launch builders + injected-spawn queryVmState (38 checks)
@@ -128,7 +128,13 @@ VM-derived fields when `online===false` or `probeError`):
   `Get-VM` probe (captured stdout, run only when offline) yields `vmState`, so a
   stopped-but-installed VM shows "Start & connect" (elevated `Start-VM` + UAC, then
   poll reachability and open) and a reachable VM shows "Shutdown" (`systemctl poweroff
-  --no-block` over SSH). [Planned: add-project clone+open and per-chip open.]
+  --no-block` over SSH). "+ add project" clones a git URL onto the VM (injection-safe,
+  base64-as-data) and opens it in a new window; an inline ▷ per chip opens that
+  project's single-repo folder (mirroring `bin/checkout-projects.sh`) in a new window.
+  The installer (host PowerShell) ensures VS Code + the Remote-SSH extension, adds the
+  user to Hyper-V Administrators, and prints an end-of-install deep link; the dashboard
+  opens alongside via `maybeAutoOpenPanel` on first VM-connected activation. URI paths
+  are percent-encoded per segment so a folder name with `?`/`#` survives `Uri.parse`.
 - **Lifecycle launch = host console via `child_process`, never the integrated
   terminal.** A UI extension's Node code runs on the local Windows host even when
   the window is Remote-SSH'd into the VM, but `createTerminal()` targets the
@@ -310,21 +316,32 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
      `.git`) when the profile has exactly one repo, else `/root/repos`. Falls back to
      `/root/repos` for a missing/0/multi-repo profile. `host.test.js` (40) +
      `remote.test.js` projectOpenPath + ui-smoke ▷ checks.
-   - **TODO — Installer support** (host PowerShell; pairs with item 8) — ensure VS Code
-     is installed on the host AND the `ms-vscode-remote.remote-ssh` extension
-     (`code --install-extension ms-vscode-remote.remote-ssh`), so Connect works. Also add
-     the install user to the **Hyper-V Administrators** local group so the non-elevated
-     extension host's `Get-VM` state probe (and thus "Start & connect" for a stopped VM)
-     works without a UAC prompt — otherwise `queryVmState` returns `unknown` and only the
-     elevated Start-VM path (the button) is unavailable until then. At the
-     END of the initial install, print a clickable deep link to open VS Code Remote onto
-     the repo folder (`vscode://vscode-remote/ssh-remote+agent-vm/root/repos`), ideally one
-     that ALSO opens the large Construct dashboard (investigate: a `vscode://` UriHandler
-     the extension registers, or open-folder + auto-open the panel on activate).
+   - ✓ **DONE — Installer support** (host PowerShell + extension; `lib/AgentVm.Common.ps1`
+     helpers). `install.ps1` (non-elevated, before Auto-Install self-elevates) calls
+     `Ensure-VSCodeRemoteSsh`: detects `code`, else `winget install --id
+     Microsoft.VisualStudioCode --scope user` (skips with a manual hint if winget is
+     absent), then `code --install-extension ms-vscode-remote.remote-ssh` (idempotent).
+     `Auto-Install.ps1`, after a successful create, calls `Add-HyperVAdminMembership`
+     (adds the user to **Hyper-V Administrators** by well-known SID S-1-5-32-578 so the
+     non-elevated `Get-VM` probe → "Start & connect" works without UAC; effective at next
+     sign-in) and prints the `Get-RemoteOpenLink` deep link
+     (`vscode://vscode-remote/ssh-remote+agent-vm/root/repos`). The dashboard opens
+     ALONGSIDE via the extension: `activate()` → `maybeAutoOpenPanel` opens the panel once
+     per workspace when `remote.shouldAutoOpenPanel(remoteAuthority, alreadyOpened)` (i.e.
+     connected to the VM and not yet auto-opened). All host helpers are best-effort (never
+     abort the install); `Ensure-VSCodeRemoteSsh` checks `$LASTEXITCODE` from
+     `code --install-extension` (a non-zero native exit doesn't throw in PS 5.1) so it
+     can't falsely report success. Tested by `test/host-lib.test.ps1` (pwsh: link shape,
+     Find-VSCodeCli null-base safety, the exit-code shim) + `shouldAutoOpenPanel`
+     (`remote.test.js`).
    - **Decisions**: Connect = current window; Add + Open-project = NEW window; per-chip =
      inline ▷ (edit stays on chip-body, later); Shutdown = `poweroff` over SSH; Start =
-     elevated `Start-VM`. Requires the Remote-SSH extension + the `agent-vm` SSH Host
-     alias (the provisioner writes it).
+     elevated `Start-VM`; VS Code install = winget (user scope) else skip+link; dashboard
+     alongside = auto-open the panel on first VM-connected activation. Requires the
+     Remote-SSH extension + the `agent-vm` SSH Host alias (the provisioner writes it).
+   - **NOTE** — this completes the extension/host side of remote-open. Still separate:
+     item 8 copies `extension/` into `%USERPROFILE%\.vscode\extensions\` so the panel (and
+     thus the auto-open-on-connect) is actually installed on the host.
 4. **Projects** — `src/projects.js`: `importProjects` runs the repo scan
    (`-Action export -ScanReposOnly`) to discover checked-out repos and write/merge
    profiles; `selectProfiles` updates `PROJECTS`; `editProject` opens a modal
@@ -359,7 +376,8 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
 - `374b06d` Remote-SSH Connect button (`src/remote.js`) — open `/root/repos` on the VM, gated on reachable + not-already-connected; both surfaces; `remote.test.js`
 - `3a02609` VM power control (`src/vmpower.js`) — host `Get-VM` state probe → `vmState`; "Start & connect" (elevated Start-VM + poll/open) and "Shutdown" (`poweroff` over SSH) buttons on both surfaces; `vmpower.test.js`
 - `f2080075` Add project (`src/remote.js` clone helpers + `runAddProject`) — git URL → injection-safe `git clone` into `/root/repos/<name>` over SSH → open in a new window; "+ add project" button; `remote.test.js` extended
-- (this batch) Open project per-chip (`host.readProjectProfile` + `remote.projectOpenPath` + `runOpenProject`) — inline ▷ on each project chip opens its single-repo folder (else `/root/repos`) in a new window; `host.test.js` + `remote.test.js` extended
+- `0e15f4f` Open project per-chip (`host.readProjectProfile` + `remote.projectOpenPath` + `runOpenProject`) — inline ▷ on each project chip opens its single-repo folder (else `/root/repos`) in a new window; `remoteFolderUri` percent-encodes path segments; `host.test.js` + `remote.test.js` extended
+- (this batch) Installer support (`lib/AgentVm.Common.ps1` `Ensure-VSCodeRemoteSsh`/`Add-HyperVAdminMembership`/`Get-RemoteOpenLink`; `install.ps1` ensure VS Code+Remote-SSH non-elevated; `Auto-Install.ps1` Hyper-V Admin add + end-of-install deep link; `extension.js` `maybeAutoOpenPanel` + `remote.shouldAutoOpenPanel`) — pwsh-parsed + `Get-RemoteOpenLink`/`shouldAutoOpenPanel` unit-tested
 
 ## Build/verify tooling (on this dev VM)
 

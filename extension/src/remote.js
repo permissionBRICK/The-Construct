@@ -146,6 +146,15 @@ function projectOpenPath(profile) {
   return WORKSPACE_ROOT;
 }
 
+/** Should the control panel auto-open when a window comes up attached to the VM?
+ *  True only when this window is connected to the VM (so the operator console is
+ *  surfaced — e.g. via the installer's end-of-install deep link or Connect) AND it
+ *  hasn't already been auto-opened for this workspace (so reloads don't reopen it).
+ *  Pure. */
+function shouldAutoOpenPanel(remoteAuthority, alreadyOpened, cfg) {
+  return !alreadyOpened && isConnectedToVm(remoteAuthority, cfg);
+}
+
 /** Whether the Remote-SSH extension (needed to resolve the authority) is installed. */
 function hasRemoteSsh() {
   const vscode = vsc();
@@ -171,5 +180,5 @@ function openOnVm(opts = {}) {
 
 module.exports = {
   REMOTE_SSH_EXT, WORKSPACE_ROOT, isConnectedToVm, remoteFolderUri, hasRemoteSsh, openOnVm,
-  repoNameFromUrl, isLikelyGitUrl, buildCloneScript, projectOpenPath,
+  repoNameFromUrl, isLikelyGitUrl, buildCloneScript, projectOpenPath, shouldAutoOpenPanel,
 };
