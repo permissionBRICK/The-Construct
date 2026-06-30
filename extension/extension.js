@@ -17,6 +17,7 @@ const path = require("path");
 const crypto = require("crypto");
 const probe = require("./src/probe");
 const host = require("./src/host");
+const lifecycle = require("./src/lifecycle");
 
 /** The single editor-tab panel instance, if open. */
 let panel; // vscode.WebviewPanel | undefined
@@ -66,6 +67,14 @@ function resolveScriptsDir() {
   return host.resolveScriptsDir({ scriptsDir: override, env: process.env });
 }
 
+/** Shared warning when the Construct install folder can't be located. */
+function warnNoScriptsDir() {
+  vscode.window.showWarningMessage(
+    "Couldn't find the Construct install folder. Set \"construct.scriptsDir\" to the folder " +
+      "that holds Auto-Install.ps1, then try again."
+  );
+}
+
 /** Read the persisted settings and push them to one webview (no-op when the
  *  install folder can't be found — the panel keeps its HTML defaults). */
 function pushSettings(webview) {
@@ -81,13 +90,7 @@ function pushSettings(webview) {
  *  if needed (the installer's selector creates it the same way on first use). */
 function openProjectFolder() {
   const scriptsDir = resolveScriptsDir();
-  if (!scriptsDir) {
-    vscode.window.showWarningMessage(
-      "Couldn't find the Construct install folder. Set \"construct.scriptsDir\" to the folder " +
-        "that holds Auto-Install.ps1, then try again."
-    );
-    return;
-  }
+  if (!scriptsDir) { warnNoScriptsDir(); return; }
   const dir = host.projectsDir(scriptsDir);
   try { fs.mkdirSync(dir, { recursive: true }); } catch (_) { /* reveal will surface a real failure */ }
   vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(dir));
@@ -144,13 +147,7 @@ function handleMessage(message, webview, context) {
 
     case "saveSettings": {
       const scriptsDir = resolveScriptsDir();
-      if (!scriptsDir) {
-        vscode.window.showWarningMessage(
-          "Couldn't find the Construct install folder. Set \"construct.scriptsDir\" to the folder " +
-            "that holds Auto-Install.ps1, then try again."
-        );
-        return;
-      }
+      if (!scriptsDir) { warnNoScriptsDir(); return; }
       try {
         host.saveSettings(scriptsDir, message.settings);
         vscode.window.showInformationMessage("Construct settings saved.");
@@ -161,20 +158,29 @@ function handleMessage(message, webview, context) {
       return;
     }
 
-    case "customRebuild":
-      vscode.window.showInformationMessage(
-        `Custom ${message.mode === "redownload" ? "redownload" : "reinstall"} (` +
-          `${message.backup}) will be available in an upcoming build of the control panel.`
-      );
+    case "customRebuild": {
+      const scriptsDir = resolveScriptsDir();
+      if (!scriptsDir) { warnNoScriptsDir(); return; }
+      const action = message.mode === "redownload" ? "redownload" : "reinstall";
+      lifecycle.run(action, { scriptsDir, backupMode: message.backup });
       return;
+    }
 
-    case "command":
-      if (message.id === "refresh") { refreshState(webview); return; }
-      if (message.id === "openProjectFolder") { openProjectFolder(); return; }
+    case "command": {
+      const id = message.id;
+      if (id === "refresh") { refreshState(webview); return; }
+      if (id === "openProjectFolder") { openProjectFolder(); return; }
+      if (id === "reprovision" || id === "exportConfig" || id === "reinstall" || id === "redownload") {
+        const scriptsDir = resolveScriptsDir();
+        if (!scriptsDir) { warnNoScriptsDir(); return; }
+        lifecycle.run(id, { scriptsDir });
+        return;
+      }
       vscode.window.showInformationMessage(
-        `"${message.id}" will be available in an upcoming build of the control panel.`
+        `"${id}" will be available in an upcoming build of the control panel.`
       );
       return;
+    }
 
     default:
       return;
