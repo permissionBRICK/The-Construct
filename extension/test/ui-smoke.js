@@ -103,6 +103,17 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("audio render: substatus shown", await page.locator("#voiceSub").isVisible());
   check("audio render: not busy anymore", !(await page.getAttribute("#voiceSwitch", "class")).includes("busy"));
 
+  // stale-data: after a successful probe, an offline/failed refresh must CLEAR the
+  // VM-derived fields rather than leave the prior values on screen.
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: false, host: "h.example.net", hostShort: "agent-vm" } }, "*"));
+  await page.waitForTimeout(80);
+  check("offline clears vm name", (await page.locator("#sysVm").innerText()) === "—");
+  check("offline clears resources", (await page.locator("#sysResources").innerText()) === "—");
+  check("offline shows OFFLINE pill", /OFFLINE/.test(await page.locator("#pillStatus").innerText()));
+  check("offline clears agent versions", (await page.locator("#agentList .agent .ver").first().innerText()).trim() === "");
+  check("offline clears project chips", (await page.locator("#projChips .chip").innerText()).trim() === "—");
+  check("offline keeps known host", (await page.locator("#sysHost").innerText()) === "h.example.net");
+
   await browser.close();
   server.close();
 
