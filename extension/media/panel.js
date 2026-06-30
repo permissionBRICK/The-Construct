@@ -161,6 +161,11 @@
     const online = s.online !== false;
     setOnline(online);
 
+    // "Open on VM" shows only when the VM is reachable and this window isn't
+    // already connected to it over Remote-SSH.
+    const conn = $("connectBtn");
+    if (conn) conn.hidden = !(online && s.connected === false);
+
     // Unreachable, or reachable but the probe script failed: we have no trustworthy
     // VM data, so clear it rather than show stale values.
     if (!online || s.probeError) { clearLiveVmData(); return; }
