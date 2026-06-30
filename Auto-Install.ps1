@@ -239,42 +239,6 @@ function Show-AllSet([string[]]$Lines) {
     foreach ($s in @($script:chosenSummary)) { if ($s) { Write-Ok $s } }
 }
 
-function Add-ConstructDesktopShortcut {
-    <#
-        Create a desktop shortcut that relaunches the tool through install.ps1
-        (the web bootstrapper sitting next to this script, which refreshes the
-        source from GitHub and chains into Auto-Install.ps1). Returns the .lnk
-        path; throws on failure so the caller can warn. Initial-install
-        convenience only.
-    #>
-    [CmdletBinding()]
-    param()
-    $installScript = Join-Path $PSScriptRoot "install.ps1"
-    if (-not (Test-Path -LiteralPath $installScript)) {
-        throw "install.ps1 not found next to Auto-Install.ps1 ($PSScriptRoot)."
-    }
-    $desktop = [Environment]::GetFolderPath('Desktop')
-    if ([string]::IsNullOrWhiteSpace($desktop)) { throw "Could not resolve the Desktop folder." }
-    $lnkPath = Join-Path $desktop "The Construct.lnk"
-    # Windows PowerShell is always present, install.ps1 is 5.1-compatible, and it
-    # self-elevates via Auto-Install.ps1 -- so the shortcut needn't request admin.
-    $psExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
-    $ws = New-Object -ComObject WScript.Shell
-    try {
-        $lnk = $ws.CreateShortcut($lnkPath)
-        $lnk.TargetPath       = $psExe
-        $lnk.Arguments        = "-NoProfile -ExecutionPolicy Bypass -File `"$installScript`""
-        $lnk.WorkingDirectory = $PSScriptRoot
-        $lnk.IconLocation     = "$psExe,0"
-        $lnk.Description       = "The Construct -- agent sandbox loader"
-        $lnk.Save()
-    } finally {
-        [void][Runtime.InteropServices.Marshal]::ReleaseComObject($ws)
-    }
-    if (-not (Test-Path -LiteralPath $lnkPath)) { throw "Shortcut was not written to $lnkPath." }
-    return $lnkPath
-}
-
 # Release line used if the latest LTS can't be polled (offline, source changed).
 $FallbackUbuntuLts = "24.04"
 
@@ -808,29 +772,6 @@ if (-not $SkipCreateVm) {
         ("VM RAM: {0} GB  |  Disk: {1} GB  |  Projects: {2}  |  agent password: {3}" -f $chosenMemGB, $chosenDiskGB, $chosenProjects, $pwLabel),
         ("Git identity: {0}" -f $gitLabel)
     )
-
-    # Initial install only (skipped on reinstall, where $existingVmHandled is set):
-    # offer a desktop shortcut that relaunches the tool. Asked here -- the last
-    # interactive step before the unattended phase -- so the "all set" banner still
-    # means "no further input needed". Skipped on non-interactive hosts so
-    # unattended runs don't litter the desktop. The outcome rides $chosenSummary
-    # into the post-banner log (the TUI screen it's asked on is wiped by Show-AllSet).
-    if (-not $existingVmHandled -and -not [Console]::IsInputRedirected) {
-        $mkLink = Invoke-TuiConfirm -ScreenTitle "Add a desktop shortcut?" -Body @(
-            "Create a desktop shortcut that relaunches The Construct installer --",
-            "handy for reprovisioning, reinstalling, or updating later."
-        ) -Question "Add a 'The Construct' shortcut to your desktop?" `
-          -YesLabel "Yes  add a desktop shortcut (recommended)" `
-          -NoLabel  "No   don't add a shortcut"
-        if ($mkLink) {
-            try {
-                $lnkPath = Add-ConstructDesktopShortcut
-                $chosenSummary += "Desktop shortcut: created -> $lnkPath"
-            } catch {
-                $chosenSummary += "Desktop shortcut: could not be created -- $($_.Exception.Message)"
-            }
-        }
-    }
 
     # Confirm the host can actually run the VM BEFORE the long download. This
     # enables Hyper-V + the platform features (rebooting if needed) or aborts
