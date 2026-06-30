@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src {{cspSource}} data:; style-src {{cspSource}} 'unsafe-inline'; font-src {{cspSource}}; script-src 'nonce-{{nonce}}'; base-uri 'none'; form-action 'none'; object-src 'none';" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="{{styleUri}}" />
+  <title>The Construct — Control Panel</title>
+</head>
+<body>
+<div class="shell">
+  <header>
+    <canvas id="rain" aria-hidden="true"></canvas>
+    <div class="header-inner">
+      <div class="brand">
+        <p class="eyebrow">loading program</p>
+        <h1 class="title">THE&nbsp;CONSTRUCT</h1>
+        <p class="subtitle">operator console</p>
+      </div>
+      <div class="header-right">
+        <div class="header-tools">
+          <button class="gear" id="openTabBtn" title="Open as editor tab">&#x2922; Tab</button>
+          <button class="gear" id="gearBtn">&#x2699; Settings</button>
+        </div>
+        <div class="update-banner" id="updateBanner" hidden>
+          <span class="ub-text"><span class="ub-dot"></span> Construct update available <small id="updateBehind"></small></span>
+          <button class="ub-btn" data-cmd="updateConstruct">Update Construct</button>
+        </div>
+        <span class="promptline">
+          <span class="usr">root@<span id="hostShort">agent-vm</span></span><span>:~$</span>
+          <span class="cmd">construct status</span>
+          <span class="cursor" aria-hidden="true"></span>
+        </span>
+      </div>
+    </div>
+  </header>
+
+  <!-- MAIN VIEW -->
+  <div id="mainView">
+    <section class="actionbar">
+      <div class="label-row"><h2 class="seclabel">Lifecycle</h2><span class="meta" id="constructRev">—</span></div>
+      <div class="action-grid">
+        <button class="act primary" data-cmd="reprovision"><span class="t"><span class="gl">&#x27F3;</span>Reprovision</span><small>re-run setup &middot; keep all data</small></button>
+        <button class="act" data-cmd="exportConfig"><span class="t"><span class="gl">&#x238B;</span>Export config</span><small>save auth, creds, profiles</small></button>
+        <button class="act danger" data-cmd="redownload"><span class="t"><span class="gl">&#x21BB;</span>Redownload</span><small>fresh Ubuntu ISO, then rebuild</small></button>
+        <button class="act danger" data-cmd="reinstall"><span class="t"><span class="gl">&#x2297;</span>Reinstall</span><small>rebuild from current ISO</small></button>
+      </div>
+    </section>
+
+    <div class="strip" id="statusStrip">
+      <span class="pill" id="pillStatus"><span class="dot live"></span> VM ONLINE</span>
+      <span class="pill" id="pillHost">agent-vm.mshome.net</span>
+      <span class="pill" id="pillInstalled">installed —</span>
+      <span class="pill" id="pillReprovisioned">reprovisioned —</span>
+    </div>
+
+    <div class="cols">
+      <div class="col">
+        <section class="module">
+          <div class="mhead"><h2 class="seclabel">System</h2><button class="btn ghost" data-cmd="refresh">refresh</button></div>
+          <div class="row"><span class="k">Hyper-V VM</span><span class="v"><b id="sysVm">—</b></span></div>
+          <div class="row"><span class="k">Reachable at</span><span class="v" id="sysHost">—</span></div>
+          <div class="row"><span class="k">RAM / disk</span><span class="v" id="sysResources">—</span></div>
+          <div class="row"><span class="k">Ubuntu</span><span class="v" id="sysUbuntu">—</span></div>
+        </section>
+
+        <section class="module voice">
+          <div class="mhead"><h2 class="seclabel">Voice input &middot; microphone passthrough</h2></div>
+          <div class="toggle-row">
+            <div><div class="label">Microphone passthrough</div><div class="state" id="voiceState">disabled</div></div>
+            <div class="switch" id="voiceSwitch" role="switch" aria-checked="false" tabindex="0" aria-label="Toggle microphone passthrough"><span class="knob"></span></div>
+          </div>
+          <p class="desc">Streams your <span class="sans-dim">local</span> mic to the VM over the SSH tunnel so <span class="sans-dim">/voice</span> works in the terminal and the chat panel's mic button reappears. The mic is only live while you're recording.</p>
+          <div class="substatus" id="voiceSub" hidden>
+            <div class="sub"><span class="dot"></span> Reverse tunnel <span class="muted" id="voiceTunnel">vm:8767 &rarr; host mic</span></div>
+            <div class="sub"><span class="dot"></span> rec/arecord shim installed</div>
+            <div class="sub"><span class="dot"></span> chat mic button enabled <span class="muted">(remote-gate patched)</span></div>
+          </div>
+        </section>
+      </div>
+
+      <div class="col">
+        <section class="module">
+          <div class="mhead"><h2 class="seclabel">Coding agents</h2><button class="btn" data-cmd="updateAgents">update all</button></div>
+          <div id="agentList">
+            <div class="agent"><span class="name">Claude Code <small>CLI + VS Code extension</small></span><span class="ver">—</span><span class="tag">—</span></div>
+            <div class="agent"><span class="name">Codex <small>app-server :4500</small></span><span class="ver">—</span><span class="tag">—</span></div>
+            <div class="agent"><span class="name">OpenCode <small>serve :4096</small></span><span class="ver">—</span><span class="tag">—</span></div>
+          </div>
+        </section>
+
+        <section class="module">
+          <div class="mhead"><h2 class="seclabel">Projects</h2></div>
+          <div class="chips" id="projChips">
+            <span class="chip on"><span class="check">&#x2713;</span> default</span>
+          </div>
+          <div class="proj-actions"><button class="btn" data-cmd="importProjects">import from VM</button><button class="btn ghost" data-cmd="openProjectFolder">open config folder</button><button class="btn ghost" data-cmd="selectProfiles">select profiles</button></div>
+          <p class="cost-note" style="margin-top:10px">Click a project to edit its repos, runtimes &amp; MCP servers.</p>
+        </section>
+      </div>
+    </div>
+
+    <section class="module" style="margin-top:14px">
+      <div class="mhead"><h2 class="seclabel">Token usage &amp; cost <span style="color:var(--faint);font-weight:400;letter-spacing:1px"> &middot; this week &middot; ccusage</span></h2><button class="btn ghost" data-cmd="exportUsage">export json</button></div>
+      <div class="usage-head"><span>agent</span><span>share</span><span>tokens</span><span>cost</span></div>
+      <div id="usageRows">
+        <div class="usage-row"><span class="ulabel">Claude Code</span><span class="bar"><span style="width:0%"></span></span><span class="utok">—</span><span class="ucost">—</span></div>
+        <div class="usage-row"><span class="ulabel">Codex</span><span class="bar"><span style="width:0%"></span></span><span class="utok">—</span><span class="ucost">—</span></div>
+        <div class="usage-row"><span class="ulabel">OpenCode</span><span class="bar"><span style="width:0%"></span></span><span class="utok">—</span><span class="ucost">—</span></div>
+      </div>
+      <div class="usage-total"><span class="tt">total</span><b id="usageTotalTok">—</b><span class="cost" id="usageTotalCost">—</span></div>
+      <p class="cost-note">Estimated from ccusage model pricing — token counts are exact, cost is an estimate.</p>
+    </section>
+  </div>
+
+  <!-- SETTINGS VIEW -->
+  <div id="settingsView" hidden>
+    <div class="settings-top">
+      <div>
+        <h2 class="seclabel">Settings</h2>
+        <p class="lead">These replace the installer's prompts. Once set, Reprovision / Reinstall / Redownload run unattended — only an "Are you sure?" and a dirty-repo warning can interrupt.</p>
+      </div>
+      <button class="btn ghost" id="backBtn">&larr; back to console</button>
+    </div>
+
+    <section class="setgroup">
+      <div class="gh"><h2 class="seclabel">Identity &amp; credentials</h2><span class="applies">applied on reprovision</span></div>
+      <div class="field"><label>Git user name</label><div class="ctl"><input type="text" id="setGitName" /></div></div>
+      <div class="field"><label>Git email</label><div class="ctl"><input type="text" id="setGitEmail" /></div></div>
+      <div class="field"><label>Store git credentials on VM<span class="hint">saved in plaintext (~/.git-credentials)</span></label><div class="ctl"><div class="switch sm" id="setGitCred" role="switch" aria-checked="true" tabindex="0"><span class="knob"></span></div></div></div>
+    </section>
+
+    <section class="setgroup">
+      <div class="gh"><h2 class="seclabel">Agents &amp; projects</h2><span class="applies">applied on reprovision</span></div>
+      <div class="field"><label>Coding agents</label><div class="ctl" id="setAgents"><span class="chip on" data-agent="claude-code"><span class="check">&#x2713;</span> Claude Code</span><span class="chip on" data-agent="codex"><span class="check">&#x2713;</span> Codex</span><span class="chip on" data-agent="opencode"><span class="check">&#x2713;</span> OpenCode</span></div></div>
+      <div class="field"><label>Project profiles</label><div class="ctl" id="setProjects" style="flex-wrap:wrap"><span class="chip on"><span class="check">&#x2713;</span> default</span></div></div>
+    </section>
+
+    <section class="setgroup">
+      <div class="gh"><h2 class="seclabel">VM resources</h2><span class="applies reinstall">applied on reinstall / redownload</span></div>
+      <div class="field"><label>Memory (RAM)</label><div class="ctl"><input type="number" id="setRam" value="8" style="max-width:90px" /><span class="suffix">GB</span></div></div>
+      <div class="field"><label>Disk size</label><div class="ctl"><input type="number" id="setDisk" value="80" style="max-width:90px" /><span class="suffix">GB</span></div></div>
+      <div class="field"><label>Ubuntu release<span class="hint">used when Redownloading the ISO</span></label><div class="ctl"><select id="setUbuntu"><option value="24.04">24.04 LTS (latest)</option><option value="22.04">22.04 LTS</option></select></div></div>
+      <div class="field"><label>Agent login password</label><div class="ctl"><input type="password" id="setPassword" /></div></div>
+    </section>
+
+    <section class="setgroup">
+      <div class="gh"><h2 class="seclabel">Access &amp; services</h2><span class="applies">applied on reprovision</span></div>
+      <div class="field"><label>VS Code serve-web<span class="hint">browser IDE, token-gated</span></label><div class="ctl"><div class="switch sm" id="setServeWeb" role="switch" aria-checked="true" tabindex="0"><span class="knob"></span></div><span class="suffix">port 8000</span></div></div>
+      <div class="field"><label>VS Code tunnel<span class="hint">vscode.dev, no inbound port</span></label><div class="ctl"><div class="switch sm" id="setTunnel" role="switch" aria-checked="false" tabindex="0"><span class="knob"></span></div></div></div>
+      <div class="field"><label>SMB workspace share</label><div class="ctl"><div class="switch sm" id="setSmb" role="switch" aria-checked="true" tabindex="0"><span class="knob"></span></div><span class="suffix">drive Z:</span></div></div>
+      <div class="field"><label>Microphone passthrough<span class="hint">stream host mic for voice input</span></label><div class="ctl"><div class="switch sm" id="setMic" role="switch" aria-checked="false" tabindex="0"><span class="knob"></span></div></div></div>
+    </section>
+
+    <div class="settings-actions" style="margin-bottom:18px"><button class="btn ghost" id="cancelBtn">cancel</button><button class="save-btn" id="saveBtn">Save settings</button></div>
+
+    <section class="setgroup" style="border-color:rgba(255,93,93,0.28)">
+      <div class="gh"><h2 class="seclabel" style="color:#ff8a8a">Custom reinstall / redownload</h2><span class="applies reinstall">one-time action</span></div>
+      <p class="lead" style="margin:0 0 13px">A one-off rebuild with a backup choice for this run only. It does not change what the regular <b style="color:var(--dim)">Reinstall</b> / <b style="color:var(--dim)">Redownload</b> buttons do (those always save &amp; restore).</p>
+      <div class="radio-card sel" data-backup="save"><span class="rdot"></span><div><div class="rc-t">Save &amp; restore</div><div class="rc-d">Back up the current config (auth, git creds, profiles, instructions, memory) now, then restore it onto the fresh VM.</div></div></div>
+      <div class="radio-card" data-backup="existing"><span class="rdot"></span><div><div class="rc-t">Restore from an existing backup</div><div class="rc-d">Skip making a new backup; reinstall and restore a previously saved one.</div></div></div>
+      <div class="backup-pick"><span>using:</span><select id="backupPick" style="max-width:320px"><option>(no backups found)</option></select></div>
+      <div class="radio-card danger" data-backup="wipe" style="margin-top:8px"><span class="rdot"></span><div><div class="rc-t">Clean wipe</div><div class="rc-d">Reinstall completely blank — no backup, no restore. All settings, auth and history are lost.</div></div></div>
+      <div class="settings-actions" style="margin-top:14px">
+        <button class="btn danger" data-cmd="customRedownload">&#x21BB; Redownload with these settings</button>
+        <button class="btn danger" data-cmd="customReinstall">&#x2297; Reinstall with these settings</button>
+      </div>
+    </section>
+  </div>
+
+  <footer>THE CONSTRUCT &middot; disposable agent VM &nbsp;&middot;&nbsp; <a href="https://github.com/permissionBRICK/The-Construct#readme">readme</a> &middot; <a href="https://github.com/permissionBRICK/The-Construct/tree/main/docs">docs</a> &middot; <a href="https://github.com/permissionBRICK/The-Construct">github</a></footer>
+</div>
+<script nonce="{{nonce}}" src="{{scriptUri}}"></script>
+</body>
+</html>
