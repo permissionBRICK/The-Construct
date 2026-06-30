@@ -292,7 +292,12 @@ $script:SshOpts = @(
     "-o", "StrictHostKeyChecking=accept-new",
     "-o", "UserKnownHostsFile=$env:TEMP\construct-known_hosts",
     "-o", "BatchMode=yes",
-    "-o", "ConnectTimeout=15"
+    "-o", "ConnectTimeout=15",
+    # Detect a dead connection (e.g. the VM going down during the post-provision
+    # reboot) within ~1 min instead of waiting out the multi-hour TCP timeout --
+    # otherwise ssh.exe can hang indefinitely on a severed session.
+    "-o", "ServerAliveInterval=15",
+    "-o", "ServerAliveCountMax=4"
 )
 
 # Identity used for the provisioning SSH/SCP connection. Defaults to the seed
@@ -321,7 +326,10 @@ function Invoke-Ssh {
         $toRun = $Command
     }
     $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-    $output = & ssh.exe @script:SshOpts "$($script:ConnectUser)@$VmHost" $toRun 2>$null
+    # -n: read stdin from /dev/null so ssh.exe never attaches to the host console.
+    # Without it ssh can block (and fail to terminate) waiting on console stdin --
+    # no remote command here reads local stdin (passwords are piped in remotely).
+    $output = & ssh.exe -n @script:SshOpts "$($script:ConnectUser)@$VmHost" $toRun 2>$null
     $exitCode = $LASTEXITCODE
     $ErrorActionPreference = $prevEAP
     if ($exitCode -ne 0) {
@@ -359,7 +367,7 @@ function Invoke-SshStream {
     $esc    = [char]27
     $ansiRe = [regex]([regex]::Escape($esc) + '\[[0-9;?]*[ -/]*[@-ln-~]')
     $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-    & ssh.exe @script:SshOpts "$($script:ConnectUser)@$VmHost" $toRun 2>&1 | ForEach-Object {
+    & ssh.exe -n @script:SshOpts "$($script:ConnectUser)@$VmHost" $toRun 2>&1 | ForEach-Object {
         Write-Host ((([string]$_) -replace "`r", "") -replace $ansiRe, "")
     }
     $exitCode = $LASTEXITCODE
@@ -407,7 +415,7 @@ function Test-KeyAuth {
     # added ... to known hosts") isn't promoted to a terminating error by the
     # script-wide 'Stop' setting.
     $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-    & ssh.exe @script:SshOpts "$SeedUser@$VmHost" "true" 2>&1 | Out-Null
+    & ssh.exe -n @script:SshOpts "$SeedUser@$VmHost" "true" 2>&1 | Out-Null
     $ok = ($LASTEXITCODE -eq 0)
     $ErrorActionPreference = $prevEAP
     return $ok
@@ -420,7 +428,7 @@ function Test-Sudo {
     param([Parameter(Mandatory)][string]$Password)
     $escPw = $Password.Replace("'", "'\''")
     $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-    & ssh.exe @script:SshOpts "$SeedUser@$VmHost" "printf '%s\n' '$escPw' | sudo -k -S -p '' true" 2>$null | Out-Null
+    & ssh.exe -n @script:SshOpts "$SeedUser@$VmHost" "printf '%s\n' '$escPw' | sudo -k -S -p '' true" 2>$null | Out-Null
     $ok = ($LASTEXITCODE -eq 0)
     $ErrorActionPreference = $prevEAP
     return $ok
@@ -554,13 +562,15 @@ function Enter-RootKeyFastPath {
         "-o", "StrictHostKeyChecking=accept-new",
         "-o", "UserKnownHostsFile=$env:TEMP\construct-known_hosts",
         "-o", "BatchMode=yes",
-        "-o", "ConnectTimeout=15"
+        "-o", "ConnectTimeout=15",
+        "-o", "ServerAliveInterval=15",
+        "-o", "ServerAliveCountMax=4"
     )
 
     # Probe as the remote (root) user. Lower ErrorActionPreference so ssh's benign
     # stderr isn't promoted to a terminating error by the script-wide 'Stop'.
     $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-    & ssh.exe @opts "$RemoteUser@$VmHost" "true" 2>&1 | Out-Null
+    & ssh.exe -n @opts "$RemoteUser@$VmHost" "true" 2>&1 | Out-Null
     $ok = ($LASTEXITCODE -eq 0)
     $ErrorActionPreference = $prevEAP
 
@@ -621,7 +631,10 @@ function Set-HostSshConfig {
     $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
     & ssh-keygen -R $VmHost    2>$null
     & ssh-keygen -R $HostAlias 2>$null
-    & ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -i $keyPath "$RemoteUser@$VmHost" "exit" 2>$null
+    # -n + a connect timeout: this runs right after the reboot was kicked off, so
+    # the VM may be on its way down -- don't attach to console stdin and don't sit
+    # on a long TCP timeout if it's already gone (a stale/missing key just warns below).
+    & ssh -n -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=10 -i $keyPath "$RemoteUser@$VmHost" "exit" 2>$null
     $ErrorActionPreference = $prevEAP
     $kh = Join-Path $sshDir "known_hosts"
     $have = (Test-Path $kh) -and (Select-String -Path $kh -Pattern ([regex]::Escape($VmHost)) -Quiet)
@@ -1451,7 +1464,10 @@ if ($AgentPassword -and ($AgentPassword -ne $SeedPassword)) {
     Write-Ok "Setting a custom login password for '$SeedUser'"
 }
 
-Invoke-Ssh -Sudo -Command "${pwChangeCmd}${rmBootstrapCmd}nohup sh -c 'sleep 3; reboot' >/dev/null 2>&1 &"
+# Redirect the backgrounded reboot's stdin too (</dev/null), not just stdout/stderr:
+# otherwise it inherits and holds the SSH channel's stdin open, so ssh.exe never
+# sees the session close and hangs (the VM then reboots out from under it).
+Invoke-Ssh -Sudo -Command "${pwChangeCmd}${rmBootstrapCmd}nohup sh -c 'sleep 3; reboot' </dev/null >/dev/null 2>&1 &"
 if ($rmBootstrapCmd) {
     Write-Ok "Bootstrap key removed; VM will reboot in a few seconds"
 } else {
