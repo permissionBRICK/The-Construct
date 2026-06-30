@@ -124,6 +124,22 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("state render: agent version", (await page.locator("#agentList .agent").first().innerText()).includes("2.1.196"));
   check("state render: project chips", (await page.locator("#projChips .chip").count()) === 2);
 
+  // per-chip open: each chip carries an inline ▷ button that opens that project on
+  // the VM; the chip body still opens the edit modal, and ▷ must NOT bubble to it.
+  check("state render: each chip has a ▷ open button", (await page.locator("#projChips .chip .openbtn").count()) === 2);
+  await page.evaluate(() => { window.__posted.length = 0; });
+  await page.click('#projChips .chip[data-project="billing"] .openbtn');
+  posted = await page.evaluate(() => window.__posted);
+  check("panel: chip ▷ posts openProject with the project name",
+    posted.some((m) => m.type === "command" && m.id === "openProject" && m.project === "billing"));
+  check("panel: chip ▷ does not also post editProject (stopPropagation)",
+    !posted.some((m) => m.type === "command" && m.id === "editProject"));
+  // clicking the chip body (not the ▷) still opens the editor.
+  await page.evaluate(() => { window.__posted.length = 0; });
+  await page.click('#projChips .chip[data-project="billing"]');
+  posted = await page.evaluate(() => window.__posted);
+  check("panel: chip body posts editProject", posted.some((m) => m.type === "command" && m.id === "editProject" && m.project === "billing"));
+
   // add-project: the Projects action posts the addProject command (the extension
   // then prompts for a URL, clones over SSH, and opens the result in a new window).
   await page.click('[data-cmd="addProject"]');

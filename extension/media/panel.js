@@ -232,6 +232,19 @@
       chip.dataset.project = p.name;
       if (p.selected) { const ck = document.createElement("span"); ck.className = "check"; ck.textContent = "✓ "; chip.appendChild(ck); }
       chip.appendChild(document.createTextNode(p.name));
+      // Inline ▷ opens the project on the VM in a new window. stopPropagation so it
+      // doesn't also trigger the chip-body click (which opens the edit modal).
+      const open = document.createElement("button");
+      open.type = "button";
+      open.className = "openbtn";
+      open.textContent = "▷";
+      open.title = "Open " + p.name + " on the VM";
+      open.setAttribute("aria-label", "Open " + p.name + " on the VM");
+      open.addEventListener("click", (e) => {
+        e.stopPropagation();
+        post({ type: "command", id: "openProject", project: p.name });
+      });
+      chip.appendChild(open);
       host.appendChild(chip);
     });
     wireProjectChips();

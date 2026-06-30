@@ -123,6 +123,28 @@ try {
     const f = host.readSettings(newDir);
     return f.gitName === "Neo" && f.serveWeb === true;
   })());
+
+  // ── readProjectProfile ─────────────────────────────────────────────────────
+  const projDir = mk(newDir, "projects");
+  fs.writeFileSync(path.join(projDir, "customer-portal.json"),
+    JSON.stringify({ name: "customer-portal", repos: [{ url: "git@github.com:o/cp.git", directory: "cp" }] }));
+  fs.writeFileSync(path.join(projDir, "bom.json"),
+    "\uFEFF" + JSON.stringify({ name: "bom", repos: [] }));
+  fs.writeFileSync(path.join(projDir, "broken.json"), "{ not json ]");
+  fs.writeFileSync(path.join(projDir, "arr.json"), "[1,2,3]");
+
+  ok("profile: reads a valid profile",
+    (() => { const p = host.readProjectProfile(newDir, "customer-portal"); return p && p.name === "customer-portal" && p.repos[0].directory === "cp"; })());
+  ok("profile: strips a UTF-8 BOM", (() => { const p = host.readProjectProfile(newDir, "bom"); return p && p.name === "bom"; })());
+  ok("profile: missing file -> null", host.readProjectProfile(newDir, "nope") === null);
+  ok("profile: malformed JSON -> null", host.readProjectProfile(newDir, "broken") === null);
+  ok("profile: a JSON array (not an object) -> null", host.readProjectProfile(newDir, "arr") === null);
+  ok("profile: no scripts dir -> null", host.readProjectProfile(null, "customer-portal") === null);
+  ok("profile: a traversing name is rejected -> null",
+    host.readProjectProfile(newDir, "../.construct-settings") === null &&
+    host.readProjectProfile(newDir, "..\\x") === null &&
+    host.readProjectProfile(newDir, "sub/x") === null);
+  ok("profile: empty name -> null", host.readProjectProfile(newDir, "") === null && host.readProjectProfile(newDir, null) === null);
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }

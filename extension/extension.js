@@ -222,6 +222,21 @@ async function runShutdown() {
   );
 }
 
+/** Open a project on the VM in a NEW remote window. Opens the profile's single
+ *  repo folder when it has exactly one repo, else the workspace root — reading the
+ *  host-side profile `<scriptsDir>/projects/<name>.json`. */
+function runOpenProject(name) {
+  if (!remote.hasRemoteSsh()) {
+    vscode.window.showWarningMessage(
+      "The Remote-SSH extension (ms-vscode-remote.remote-ssh) isn't installed, so the project can't be opened here. Install it, then try again."
+    );
+    return;
+  }
+  const scriptsDir = resolveScriptsDir();
+  const profile = scriptsDir ? host.readProjectProfile(scriptsDir, name) : null;
+  remote.openOnVm({ path: remote.projectOpenPath(profile), newWindow: true });
+}
+
 /** Clone a git URL into /root/repos on the VM over SSH, then open it in a NEW
  *  remote window. The URL is validated loosely and passed to `git clone` as data
  *  (never interpolated into the shell — see remote.buildCloneScript). */
@@ -362,6 +377,7 @@ function handleMessage(message, webview, context) {
       if (id === "refresh") { refreshState(webview); return; }
       if (id === "openProjectFolder") { openProjectFolder(); return; }
       if (id === "addProject") { runAddProject(); return; }
+      if (id === "openProject") { runOpenProject(message.project); return; }
       if (id === "updateAgents") { runUpdateAgents(); return; }
       if (id === "connect") { remote.openOnVm({ path: "/root/repos", newWindow: false }); return; }
       if (id === "startConnect") { runStartAndConnect(); return; }
