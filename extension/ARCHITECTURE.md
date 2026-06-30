@@ -21,20 +21,27 @@ passthrough** so voice input works over Remote-SSH.
   - **VM** — status/versions/usage gathered over `ssh` (the `agent-vm` key/alias).
 - **No build step.** Plain JS. The installer copies this folder into
   `%USERPROFILE%\.vscode\extensions\construct-control-panel\`; VS Code loads it.
-- **Two surfaces, one HTML.** An activity-bar webview *view* (sidebar) and a wide
-  editor-tab webview *panel* (`construct.openPanel`) share `media/panel.html`.
-  The 2-column layout is responsive (collapses under 760px for the sidebar).
+- **Two surfaces.** The activity-bar webview *view* (sidebar) renders a compact
+  **launcher** (`launcher.html`/`launcher.js`) — status + three quick lifecycle
+  actions + an "Open Control Panel" button. The full control panel
+  (`panel.html`/`panel.js`) opens on demand as a wide editor-tab *panel*
+  (`construct.openPanel`) and is restored across reloads via a registered
+  `WebviewPanelSerializer`. Both surfaces share `media/panel.css` and the same
+  message protocol; the full panel's 2-column layout is responsive and collapses to
+  one column (with compact icon-only lifecycle buttons) when narrow.
 
 ## File layout
 
 ```
 extension/
   package.json        manifest: activity-bar container, webview view, commands
-  extension.js        activation; webview wiring; message router; probe refresh
+  extension.js        activation; launcher + panel wiring; serializer; message router; probe refresh
   media/
-    panel.html        webview doc (CSP + {{nonce}}/{{styleUri}}/{{scriptUri}}/{{cspSource}})
-    panel.css         Matrix theme (tokens from assets/banner.svg)
-    panel.js          webview controller: rain, controls, postMessage, render(state)
+    launcher.html     sidebar launcher doc (status + 3 quick actions + Open button)
+    launcher.js       launcher controller: postMessage, render(state)
+    panel.html        full-panel doc (CSP + {{nonce}}/{{styleUri}}/{{scriptUri}}/{{cspSource}})
+    panel.css         Matrix theme shared by launcher + panel (tokens from assets/banner.svg)
+    panel.js          panel controller: rain, controls, postMessage, render(state)
     icon.svg          activity-bar glyph (filled, currentColor)
   src/
     ssh.js            system-ssh runner (buildSshArgs/runRemote/runRemoteScript/isReachable)
@@ -50,13 +57,13 @@ extension/
     construct-audio-enable.sh    install shim + apply remoteName-guard patch
     construct-audio-disable.sh   remove shim + revert patch
   test/
-    ui-smoke.js       Playwright headless-Chromium webview test (25 checks)
+    ui-smoke.js       Playwright headless-Chromium webview test (35 checks: panel + launcher + narrow overflow)
     probe.test.js     plain-node ssh-arg + probe-parse units (21 checks)
 ```
 
 ## Webview ↔ extension message protocol
 
-Defined in `extension.js` (handleMessage) and `media/panel.js`.
+Defined in `extension.js` (handleMessage), `media/panel.js` and `media/launcher.js`.
 
 **webview → extension**
 - `{type:'ready'}` — webview loaded; triggers a probe + state push.
@@ -185,6 +192,8 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
 - `d01e420` extension scaffold + webview + Playwright UI test
 - `c2d1ec7` remove desktop-shortcut prompt
 - `a8bd4ce` SSH runner + live status/version probe (+ stale-data fix)
+- `cd754f6` architecture + roadmap doc (this file)
+- (this batch) sidebar launcher + fullscreen-panel split + responsive narrow layout + WebviewPanelSerializer
 
 ## Build/verify tooling (on this dev VM)
 

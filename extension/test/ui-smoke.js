@@ -11,28 +11,28 @@ const path = require("path");
 
 const MEDIA = path.join(__dirname, "..", "media");
 
-function buildIndex() {
-  let html = fs.readFileSync(path.join(MEDIA, "panel.html"), "utf8");
+function buildPage(htmlFile, scriptFile) {
+  let html = fs.readFileSync(path.join(MEDIA, htmlFile), "utf8");
   // Strip the CSP for the harness (CSP correctness is reviewed separately); this
   // lets us inject the mock vscode API inline.
   html = html.replace(/<meta http-equiv="Content-Security-Policy"[\s\S]*?\/>/, "");
   html = html.replace(/{{cspSource}}/g, "").replace(/{{styleUri}}/g, "panel.css")
-             .replace(/{{scriptUri}}/g, "panel.js").replace(/{{nonce}}/g, "test");
+             .replace(/{{scriptUri}}/g, scriptFile).replace(/{{nonce}}/g, "test");
   const mock =
     '<script>window.__posted=[];window.acquireVsCodeApi=function(){return{' +
     'postMessage:function(m){window.__posted.push(m);},getState:function(){},setState:function(){}};};</script>';
-  html = html.replace('<script nonce="test" src="panel.js"></script>',
-    mock + '\n<script src="panel.js"></script>');
-  return html;
+  return html.replace(`<script nonce="test" src="${scriptFile}"></script>`,
+    mock + `\n<script src="${scriptFile}"></script>`);
 }
 
 function serve() {
-  const index = buildIndex();
-  const types = { "/panel.css": "text/css", "/panel.js": "text/javascript" };
+  const pages = { "/": buildPage("panel.html", "panel.js"), "/launcher": buildPage("launcher.html", "launcher.js") };
+  const types = { ".css": "text/css", ".js": "text/javascript" };
   const server = http.createServer((req, res) => {
     const url = req.url.split("?")[0];
-    if (url === "/" || url === "/index.html") { res.writeHead(200, { "Content-Type": "text/html" }); return res.end(index); }
-    if (types[url]) { res.writeHead(200, { "Content-Type": types[url] }); return res.end(fs.readFileSync(path.join(MEDIA, path.basename(url)))); }
+    if (pages[url]) { res.writeHead(200, { "Content-Type": "text/html" }); return res.end(pages[url]); }
+    const ext = path.extname(url);
+    if (types[ext]) { res.writeHead(200, { "Content-Type": types[ext] }); return res.end(fs.readFileSync(path.join(MEDIA, path.basename(url)))); }
     res.writeHead(404); res.end("nf");
   });
   return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve({ server, port: server.address().port })));
@@ -113,6 +113,35 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("offline clears agent versions", (await page.locator("#agentList .agent .ver").first().innerText()).trim() === "");
   check("offline clears project chips", (await page.locator("#projChips .chip").innerText()).trim() === "—");
   check("offline keeps known host", (await page.locator("#sysHost").innerText()) === "h.example.net");
+
+  // panel degrades without horizontal overflow when dragged narrow
+  await page.setViewportSize({ width: 300, height: 1400 });
+  await page.waitForTimeout(80);
+  const panelOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  check("panel: no horizontal overflow at 300px", panelOverflow <= 1, `overflow=${panelOverflow}px`);
+
+  // ── Launcher (sidebar) surface ──────────────────────────────────────────────
+  await page.setViewportSize({ width: 300, height: 1000 });
+  await page.goto(`http://127.0.0.1:${port}/launcher`, { waitUntil: "networkidle" });
+  await page.waitForTimeout(120);
+  check("launcher: 3 lifecycle buttons", (await page.locator(".laction").count()) === 3);
+  await page.click("#lOpen");
+  let lposted = await page.evaluate(() => window.__posted);
+  check("launcher: open posts openPanel", lposted.some((m) => m.type === "openPanel"));
+  await page.click('.laction[data-cmd="reinstall"]');
+  lposted = await page.evaluate(() => window.__posted);
+  check("launcher: reinstall posts command", lposted.some((m) => m.type === "command" && m.id === "reinstall"));
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h.example.net", agents: [{ name: "Claude Code", version: "2.1.196", updateAvailable: true }], installed: "2026-06-12", reprovisioned: "1d ago" } }, "*"));
+  await page.waitForTimeout(80);
+  check("launcher: host rendered", (await page.locator("#lHost").innerText()) === "h.example.net");
+  check("launcher: agent version rendered", (await page.locator("#lAgents").innerText()).includes("2.1.196"));
+  check("launcher: online dot", !(await page.getAttribute("#lDot", "class")).includes("offline"));
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: false, host: "h.example.net" } }, "*"));
+  await page.waitForTimeout(60);
+  check("launcher: offline dot", (await page.getAttribute("#lDot", "class")).includes("offline"));
+  const launcherOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  check("launcher: no horizontal overflow at 300px", launcherOverflow <= 1, `overflow=${launcherOverflow}px`);
+  check("launcher: no console/page errors", errors.length === 0, errors.join(" | "));
 
   await browser.close();
   server.close();

@@ -15,9 +15,12 @@ vantage point lets it drive both sides:
   and the local microphone;
 - the **VM** — status, versions and usage gathered over SSH (`agent-vm`).
 
-The activity-bar icon opens the panel in the sidebar; the **⤢ Tab** button (or the
-`The Construct: Open Control Panel` command) opens it as a wide editor tab where the
-two-column layout has room to breathe.
+The activity-bar icon opens a compact **launcher** in the sidebar — live status,
+three quick lifecycle actions (Reprovision / Redownload / Reinstall), and an **Open
+Control Panel** button. The full panel (settings, usage, projects, all lifecycle)
+opens on demand as a wide **editor tab** via that button or the `The Construct: Open
+Control Panel` command, where the two-column layout has room to breathe. The tab is
+restored across window reloads.
 
 ## Install
 
@@ -30,8 +33,10 @@ To develop locally, open this folder in VS Code and press F5.
 | Path | Role |
 | --- | --- |
 | `package.json` | manifest: activity-bar container, webview view, commands |
-| `extension.js` | activation, webview wiring, host/VM bridges |
-| `media/panel.html` · `panel.css` · `panel.js` | the webview (one document, shared by the sidebar view and the editor-tab panel) |
+| `extension.js` | activation, launcher + panel wiring, serializer, host/VM bridges |
+| `media/launcher.html` · `launcher.js` | the sidebar launcher (status + quick actions) |
+| `media/panel.html` · `panel.js` | the full control panel (editor tab) |
+| `media/panel.css` | Matrix theme shared by both surfaces |
 | `media/icon.svg` | activity-bar icon |
 
 The webview talks to the extension over `postMessage`; the message contract lives at

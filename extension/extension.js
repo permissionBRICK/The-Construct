@@ -66,15 +66,14 @@ function getNonce() {
 }
 
 /** Build the webview HTML for either surface from the shared template. */
-function buildHtml(webview, extensionUri) {
+function buildHtml(webview, extensionUri, htmlFile, scriptFile) {
   const mediaUri = (file) => webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", file));
-  const htmlPath = path.join(extensionUri.fsPath, "media", "panel.html");
-  let html = fs.readFileSync(htmlPath, "utf8");
+  const html = fs.readFileSync(path.join(extensionUri.fsPath, "media", htmlFile), "utf8");
   const nonce = getNonce();
   return html
     .replace(/{{cspSource}}/g, webview.cspSource)
     .replace(/{{styleUri}}/g, mediaUri("panel.css").toString())
-    .replace(/{{scriptUri}}/g, mediaUri("panel.js").toString())
+    .replace(/{{scriptUri}}/g, mediaUri(scriptFile).toString())
     .replace(/{{nonce}}/g, nonce);
 }
 
@@ -141,38 +140,43 @@ class ConstructViewProvider {
   resolveWebviewView(webviewView) {
     const { extensionUri } = this.context;
     webviewView.webview.options = webviewOptions(extensionUri);
-    webviewView.webview.html = buildHtml(webviewView.webview, extensionUri);
-    // Tie the listener to the webview's own lifetime (not context.subscriptions):
-    // the disposable is released when the view is destroyed, so a re-resolve can't
-    // accumulate stale listeners.
+    // The sidebar is a compact launcher: status + quick lifecycle actions + a
+    // button to pop the full panel (settings / usage / projects) as an editor tab.
+    webviewView.webview.html = buildHtml(webviewView.webview, extensionUri, "launcher.html", "launcher.js");
+    // The listener is tied to the webview's own lifetime (not context.subscriptions);
+    // its disposable is released when the view is destroyed.
     webviewView.webview.onDidReceiveMessage((m) => handleMessage(m, webviewView.webview, this.context));
     liveWebviews.add(webviewView.webview);
     this.context.subscriptions.push(webviewView.onDidDispose(() => liveWebviews.delete(webviewView.webview)));
   }
 }
 
-/** Open (or reveal) the wide editor-tab panel. */
-function openPanel(context) {
+/** Configure a new or restored control-panel editor-tab webview. */
+function setupPanel(p, context) {
   const { extensionUri } = context;
-  if (panel) {
-    panel.reveal(vscode.ViewColumn.Active);
-    return;
-  }
-  panel = vscode.window.createWebviewPanel(
+  panel = p;
+  p.webview.options = webviewOptions(extensionUri);
+  p.iconPath = vscode.Uri.joinPath(extensionUri, "media", "icon.svg");
+  p.webview.html = buildHtml(p.webview, extensionUri, "panel.html", "panel.js");
+  // Tie listeners to this panel instance's own lifetime: the disposables are
+  // released when the webview is destroyed (so reopen/restore can't accumulate
+  // stale listeners), and the dispose handler operates on the captured `p` rather
+  // than the module-level `panel`, which may have been reassigned.
+  p.webview.onDidReceiveMessage((m) => handleMessage(m, p.webview, context));
+  liveWebviews.add(p.webview);
+  p.onDidDispose(() => { liveWebviews.delete(p.webview); if (panel === p) panel = undefined; });
+}
+
+/** Open (or reveal) the full control panel as a wide editor tab. */
+function openPanel(context) {
+  if (panel) { panel.reveal(vscode.ViewColumn.Active); return; }
+  const p = vscode.window.createWebviewPanel(
     "construct.controlPanel",
     "The Construct",
     vscode.ViewColumn.Active,
-    { ...webviewOptions(extensionUri), retainContextWhenHidden: true }
+    { ...webviewOptions(context.extensionUri), retainContextWhenHidden: true }
   );
-  panel.iconPath = vscode.Uri.joinPath(extensionUri, "media", "icon.svg");
-  panel.webview.html = buildHtml(panel.webview, extensionUri);
-  panel.webview.onDidReceiveMessage(
-    (m) => handleMessage(m, panel.webview, context),
-    undefined,
-    context.subscriptions
-  );
-  liveWebviews.add(panel.webview);
-  panel.onDidDispose(() => { liveWebviews.delete(panel.webview); panel = undefined; }, undefined, context.subscriptions);
+  setupPanel(p, context);
 }
 
 function activate(context) {
@@ -183,6 +187,14 @@ function activate(context) {
     vscode.commands.registerCommand("construct.openPanel", () => openPanel(context)),
     vscode.commands.registerCommand("construct.refresh", () => refreshAll())
   );
+  // Restore the editor-tab panel across reloads instead of leaving a dead webview.
+  if (vscode.window.registerWebviewPanelSerializer) {
+    context.subscriptions.push(
+      vscode.window.registerWebviewPanelSerializer("construct.controlPanel", {
+        deserializeWebviewPanel(p) { setupPanel(p, context); return Promise.resolve(); },
+      })
+    );
+  }
 }
 
 function deactivate() {}
