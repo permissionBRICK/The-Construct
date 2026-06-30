@@ -16,6 +16,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const probe = require("./src/probe");
+const ssh = require("./src/ssh");
 const host = require("./src/host");
 const lifecycle = require("./src/lifecycle");
 const updates = require("./src/updates");
@@ -103,6 +104,26 @@ function pushSettings(webview) {
   safePost(webview, { type: "settings", settings });
 }
 
+/** Force-update the coding agents on the VM over SSH, with a progress notification,
+ *  then re-probe so the new versions + cleared badges show. */
+function runUpdateAgents() {
+  const script = updates.buildAgentUpdateScript();
+  vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: "Updating coding agents on the VM…", cancellable: false },
+    async () => {
+      const r = await ssh.runRemoteScript(script, { timeoutMs: 300000 });
+      if (r.code === 0) {
+        vscode.window.showInformationMessage("Coding agents updated.");
+      } else {
+        vscode.window.showErrorMessage(
+          `Updating agents failed (exit ${r.code}). ${(r.stderr || "").slice(0, 200)}`.trim()
+        );
+      }
+      refreshAll(); // re-probe versions + clear the update badges
+    }
+  );
+}
+
 /** Reveal the project-profiles config folder in the OS file manager, creating it
  *  if needed (the installer's selector creates it the same way on first use). */
 function openProjectFolder() {
@@ -187,6 +208,7 @@ function handleMessage(message, webview, context) {
       const id = message.id;
       if (id === "refresh") { refreshState(webview); return; }
       if (id === "openProjectFolder") { openProjectFolder(); return; }
+      if (id === "updateAgents") { runUpdateAgents(); return; }
       if (id === "reprovision" || id === "exportConfig" || id === "reinstall" || id === "redownload") {
         const scriptsDir = resolveScriptsDir();
         if (!scriptsDir) { warnNoScriptsDir(); return; }
