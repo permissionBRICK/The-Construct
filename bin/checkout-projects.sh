@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Never block on an interactive credential prompt. This runs over ssh during
+# provisioning with no tty, so a missing credential would otherwise leave git
+# hanging (or failing with an opaque error). Forcing prompts off turns that into
+# an immediate, explicit "could not read Username" failure we can surface.
+export GIT_TERMINAL_PROMPT=0
+
 CONFIG_FILE="${CONFIG_FILE:-/etc/construct/config.env}"
 
 if [[ ! -f "${CONFIG_FILE}" ]]; then
@@ -45,22 +51,29 @@ while IFS=$'\t' read -r url directory; do
   fi
 
   target="${WORKSPACE_ROOT}/${directory}"
+  # NOTE: `2>&1` merges git's own messages (which it writes to stderr) into this
+  # script's stdout, so the reason for any failure rides the SAME stream as the
+  # progress lines below. The provisioning log can drop the separate stderr
+  # channel, which is how a failed checkout previously looked like a success.
   if [[ -d "${target}/.git" ]]; then
     echo "Already cloned: ${target}"
-    if ! git -C "${target}" fetch --all --prune; then
-      echo "WARNING: fetch failed for ${target}" >&2
+    if ! git -C "${target}" fetch --all --prune 2>&1; then
+      echo "ERROR: fetch failed for ${target}"
       failed=$((failed + 1))
     fi
   else
     echo "Cloning ${url} -> ${target}"
-    if ! git clone "${url}" "${target}"; then
-      echo "WARNING: clone failed for ${url}" >&2
+    if ! git clone "${url}" "${target}" 2>&1; then
+      echo "ERROR: clone failed for ${url}"
       failed=$((failed + 1))
     fi
   fi
 done <"${repos_tsv}"
 
 if [[ "${failed}" -gt 0 ]]; then
+  # On stdout so it shows in the provisioning log; also on stderr so a non-zero
+  # exit carries a reason for any caller capturing the error stream.
+  echo "ERROR: ${failed} repo(s) failed to check out (see the per-repo errors above)"
   echo "${failed} repo(s) failed to check out" >&2
   exit 1
 fi
