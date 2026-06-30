@@ -82,6 +82,28 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("settings switch toggles locally", before !== after);
   const setAudioCount = await page.evaluate(() => window.__posted.filter((m) => m.type === "setAudio").length);
   check("settings serve-web does NOT post setAudio", setAudioCount === 1, `setAudio count=${setAudioCount}`);
+
+  // settings <- extension: a full payload populates the form...
+  await page.evaluate(() => window.postMessage({ type: "settings", settings: {
+    gitName: "Trinity", gitEmail: "trin@zion.io", gitCred: false,
+    ram: "16", disk: "120", ubuntu: "22.04", serveWeb: false, tunnel: true, smb: false, mic: true,
+  } }, "*"));
+  await page.waitForTimeout(60);
+  check("settings populate: text fields", (await page.inputValue("#setGitName")) === "Trinity" && (await page.inputValue("#setRam")) === "16");
+  check("settings populate: switches driven", (await page.getAttribute("#setMic", "aria-checked")) === "true" && (await page.getAttribute("#setSmb", "aria-checked")) === "false");
+
+  // ...and a PARTIAL payload (e.g. a file the installer wrote with just the git
+  // keys) must NOT force the switches it omits to off — regression for applySettings.
+  await page.evaluate(() => window.postMessage({ type: "settings", settings: { gitName: "Neo" } }, "*"));
+  await page.waitForTimeout(60);
+  check("settings partial: omitted switch keeps its value", (await page.getAttribute("#setMic", "aria-checked")) === "true");
+  check("settings partial: present field updates", (await page.inputValue("#setGitName")) === "Neo");
+
+  // save -> extension: gather the form and post saveSettings.
+  await page.click("#saveBtn");
+  const savePosted = await page.evaluate(() => window.__posted);
+  check("save posts saveSettings carrying the form", savePosted.some((m) => m.type === "saveSettings" && m.settings && m.settings.gitName === "Neo"));
+
   await page.click("#backBtn");
 
   await page.evaluate(() => window.postMessage({ type: "state", state: {

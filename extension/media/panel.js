@@ -285,11 +285,15 @@
   function applySettings(s) {
     if (!s) return;
     const setVal = (id, v) => { const e = $(id); if (e && v != null) e.value = v; };
+    // Only drive a switch when the field is an actual boolean: a settings payload
+    // that omits a key (e.g. one the installer wrote with just the git fields)
+    // must leave that toggle's HTML default alone, not force it off.
+    const setSw = (id, v) => { if (typeof v === "boolean") setSwitch($(id), v); };
     setVal("setGitName", s.gitName); setVal("setGitEmail", s.gitEmail);
     setVal("setRam", s.ram); setVal("setDisk", s.disk); setVal("setPassword", s.password);
     setVal("setUbuntu", s.ubuntu);
-    setSwitch($("setGitCred"), s.gitCred); setSwitch($("setServeWeb"), s.serveWeb);
-    setSwitch($("setTunnel"), s.tunnel); setSwitch($("setSmb"), s.smb); setSwitch($("setMic"), s.mic);
+    setSw("setGitCred", s.gitCred); setSw("setServeWeb", s.serveWeb);
+    setSw("setTunnel", s.tunnel); setSw("setSmb", s.smb); setSw("setMic", s.mic);
   }
 
   // Ask the extension for the current state once the webview is live.
