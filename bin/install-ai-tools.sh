@@ -293,6 +293,20 @@ install_claude_code() {
     fi
   fi
 
+  # Voice dictation -- the CLI `/voice` command and the VS Code chat mic button --
+  # records audio through SoX's `rec` (or ALSA `arecord`). Install SoX so the
+  # recording backend is present on the VM; the Construct control-panel VS Code
+  # extension streams the host's microphone into it over SSH when microphone
+  # passthrough is enabled. Idle and harmless when voice input isn't used.
+  if ! dpkg -s sox >/dev/null 2>&1; then
+    step "Installing SoX (voice dictation audio backend)"
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y sox
+  else
+    note "SoX already installed"
+  fi
+
   # Apply the sandbox defaults for whichever user runs Claude Code, regardless of
   # whether we just installed it or it was already present. Covers both the CLI
   # (~/.claude/settings.json) and the VS Code extension (Remote-SSH machine scope).
