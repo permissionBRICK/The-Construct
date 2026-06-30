@@ -21,6 +21,7 @@ const host = require("./src/host");
 const lifecycle = require("./src/lifecycle");
 const updates = require("./src/updates");
 const remote = require("./src/remote");
+const vmpower = require("./src/vmpower");
 
 /** The single editor-tab panel instance, if open. */
 let panel; // vscode.WebviewPanel | undefined
@@ -68,11 +69,26 @@ function withLocalState(state) {
   return { ...state, connected };
 }
 
+/** Fold the VM's Hyper-V power state into a probed state. When the VM answers SSH
+ *  it is by definition running, so we skip the (possibly elevation-gated) host
+ *  Get-VM query and only run it when offline — that's the only case where we need
+ *  to tell "stopped" (→ Start & connect) apart from "not installed". Best-effort:
+ *  any failure leaves vmState 'unknown', which the UI treats as "no power button". */
+async function withVmState(state) {
+  try {
+    if (state && state.online) return { ...state, vmState: "running" };
+    const vmState = await vmpower.queryVmState();
+    return { ...state, vmState };
+  } catch (_) {
+    return { ...state, vmState: "unknown" };
+  }
+}
+
 /** Probe the VM and push fresh state to one webview, then push the update-augmented
  *  state once the (cached, best-effort) GitHub check resolves. */
 async function refreshState(webview) {
   if (!webview) return;
-  const state = withLocalState(await probeOnce());
+  const state = await withVmState(withLocalState(await probeOnce()));
   safePost(webview, { type: "state", state });
   const aug = await augmentUpdates(state);
   if (aug !== state) safePost(webview, { type: "state", state: aug });
@@ -82,7 +98,7 @@ async function refreshState(webview) {
  *  the update-augmented state. */
 async function refreshAll() {
   if (liveWebviews.size === 0) return;
-  const state = withLocalState(await probeOnce());
+  const state = await withVmState(withLocalState(await probeOnce()));
   for (const w of liveWebviews) safePost(w, { type: "state", state });
   const aug = await augmentUpdates(state);
   if (aug !== state) for (const w of liveWebviews) safePost(w, { type: "state", state: aug });
@@ -129,6 +145,79 @@ function runUpdateAgents() {
         );
       }
       refreshAll(); // re-probe versions + clear the update badges
+    }
+  );
+}
+
+const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Start the (stopped) VM via an elevated Hyper-V Start-VM, then poll SSH until it
+ *  answers and open it in this window. Mirrors the "Start & connect" affordance the
+ *  webview shows when the VM is installed but off. */
+function runStartAndConnect() {
+  if (process.platform !== "win32") {
+    vscode.window.showWarningMessage("Starting the Construct VM runs on the Windows host, which isn't available here.");
+    return;
+  }
+  if (!remote.hasRemoteSsh()) {
+    vscode.window.showWarningMessage(
+      "The Remote-SSH extension (ms-vscode-remote.remote-ssh) isn't installed, so the VM can't be opened here. Install it, then try again."
+    );
+    return;
+  }
+  if (!vmpower.startVm()) return; // startVm surfaces its own failure
+  vscode.window.showInformationMessage("Starting the Construct VM — approve the UAC prompt.");
+  vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: "Waiting for the Construct VM to come online…", cancellable: true },
+    async (_progress, token) => {
+      const intervalMs = 4000, maxMs = 150000;
+      let waited = 0;
+      while (waited < maxMs) {
+        if (token.isCancellationRequested) return;
+        if (await ssh.isReachable({ timeoutMs: 6000 })) {
+          remote.openOnVm({ path: "/root/repos", newWindow: false });
+          refreshAll();
+          return;
+        }
+        await delay(intervalMs);
+        waited += intervalMs;
+      }
+      vscode.window.showWarningMessage("The VM didn't come online in time. Once it's up, use “Open on VM”.");
+      refreshAll();
+    }
+  );
+}
+
+/** Power the VM off over SSH (root → systemctl poweroff). Confirms first; warns
+ *  that an attached remote window will lose its connection. */
+async function runShutdown() {
+  const connectedHere = (() => {
+    try { return remote.isConnectedToVm(vscode.env.remoteAuthority); } catch (_) { return false; }
+  })();
+  const detail = connectedHere
+    ? "This window is connected to the VM over Remote-SSH, so its connection will drop when the VM powers off."
+    : "The VM will power off. You can bring it back with “Start & connect”.";
+  const pick = await vscode.window.showWarningMessage(
+    "Shut down the Construct VM?", { modal: true, detail }, "Shut down"
+  );
+  if (pick !== "Shut down") return;
+  vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: "Shutting down the Construct VM…", cancellable: false },
+    async () => {
+      const r = await ssh.runRemote(vmpower.SHUTDOWN_CMD, { timeoutMs: 20000 });
+      if (r.code === 0) {
+        vscode.window.showInformationMessage("The Construct VM is shutting down.");
+      } else {
+        // poweroff can tear the SSH session down before it reports success, so a
+        // non-zero/teardown exit doesn't necessarily mean the command was rejected.
+        vscode.window.showWarningMessage(
+          `Sent the shutdown command (ssh exited ${r.code}). ${(r.stderr || "").slice(0, 160)}`.trim()
+        );
+      }
+      // Give the VM a moment to drop off the network, then re-probe so the UI flips
+      // to offline and offers "Start & connect".
+      await delay(8000);
+      refreshAll();
     }
   );
 }
@@ -219,6 +308,8 @@ function handleMessage(message, webview, context) {
       if (id === "openProjectFolder") { openProjectFolder(); return; }
       if (id === "updateAgents") { runUpdateAgents(); return; }
       if (id === "connect") { remote.openOnVm({ path: "/root/repos", newWindow: false }); return; }
+      if (id === "startConnect") { runStartAndConnect(); return; }
+      if (id === "shutdown") { runShutdown(); return; }
       if (id === "reprovision" || id === "exportConfig" || id === "reinstall" || id === "redownload") {
         const scriptsDir = resolveScriptsDir();
         if (!scriptsDir) { warnNoScriptsDir(); return; }

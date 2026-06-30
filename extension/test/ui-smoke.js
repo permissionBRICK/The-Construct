@@ -159,12 +159,33 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await page.waitForTimeout(60);
   check("panel: connect hidden when `connected` is unknown", !(await page.locator("#connectBtn").isVisible()));
 
+  // power controls: Start & connect (offline + VM stopped) and Shutdown (online).
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: false, vmState: "off" } }, "*"));
+  await page.waitForTimeout(60);
+  check("panel: start&connect shows when offline + VM stopped", await page.locator("#startBtn").isVisible());
+  check("panel: shutdown hidden when offline", !(await page.locator("#shutdownBtn").isVisible()));
+  await page.click("#startBtn");
+  posted = await page.evaluate(() => window.__posted);
+  check("panel: start&connect posts startConnect", posted.some((m) => m.type === "command" && m.id === "startConnect"));
+  // strict: an unknown/absent vmState (offline, not installed or query failed) shows no Start button.
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: false, vmState: "absent" } }, "*"));
+  await page.waitForTimeout(60);
+  check("panel: start hidden when VM absent / state unknown", !(await page.locator("#startBtn").isVisible()));
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, connected: true, vmState: "running" } }, "*"));
+  await page.waitForTimeout(60);
+  check("panel: shutdown shows when online", await page.locator("#shutdownBtn").isVisible());
+  check("panel: start hidden when online", !(await page.locator("#startBtn").isVisible()));
+  await page.click("#shutdownBtn");
+  posted = await page.evaluate(() => window.__posted);
+  check("panel: shutdown posts shutdown", posted.some((m) => m.type === "command" && m.id === "shutdown"));
+
   // panel degrades without horizontal overflow when dragged narrow — measured with the
-  // connect button VISIBLE (the widest status-strip state).
+  // connect AND shutdown buttons VISIBLE (the widest status-strip state: online, not connected).
   await page.setViewportSize({ width: 300, height: 1400 });
-  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, connected: false } }, "*"));
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, connected: false, vmState: "running" } }, "*"));
   await page.waitForTimeout(80);
   check("panel: connect button visible at 300px", await page.locator("#connectBtn").isVisible());
+  check("panel: shutdown button visible at 300px", await page.locator("#shutdownBtn").isVisible());
   const panelOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   check("panel: no horizontal overflow at 300px", panelOverflow <= 1, `overflow=${panelOverflow}px`);
 
@@ -203,8 +224,25 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h.example.net" } }, "*"));
   await page.waitForTimeout(60);
   check("launcher: connect hidden when `connected` is unknown", !(await page.locator("#lConnect").isVisible()));
-  // measure overflow with the connect button visible.
-  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h.example.net", connected: false } }, "*"));
+
+  // launcher power controls: Start & connect (offline + stopped) and Shutdown (online).
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: false, host: "h.example.net", vmState: "off" } }, "*"));
+  await page.waitForTimeout(60);
+  check("launcher: start&connect shows when offline + VM stopped", await page.locator("#lStart").isVisible());
+  check("launcher: shutdown hidden when offline", !(await page.locator("#lShutdown").isVisible()));
+  await page.click("#lStart");
+  lposted = await page.evaluate(() => window.__posted);
+  check("launcher: start&connect posts startConnect", lposted.some((m) => m.type === "command" && m.id === "startConnect"));
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h.example.net", connected: true, vmState: "running" } }, "*"));
+  await page.waitForTimeout(60);
+  check("launcher: shutdown shows when online", await page.locator("#lShutdown").isVisible());
+  check("launcher: start hidden when online", !(await page.locator("#lStart").isVisible()));
+  await page.click("#lShutdown");
+  lposted = await page.evaluate(() => window.__posted);
+  check("launcher: shutdown posts shutdown", lposted.some((m) => m.type === "command" && m.id === "shutdown"));
+
+  // measure overflow with the connect + shutdown buttons visible.
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h.example.net", connected: false, vmState: "running" } }, "*"));
   await page.waitForTimeout(60);
   check("launcher: connect button visible at 300px", await page.locator("#lConnect").isVisible());
   const launcherOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);

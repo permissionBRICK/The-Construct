@@ -161,10 +161,16 @@
     const online = s.online !== false;
     setOnline(online);
 
-    // "Open on VM" shows only when the VM is reachable and this window isn't
-    // already connected to it over Remote-SSH.
+    // Power controls. "Open on VM" shows when the VM is reachable and this window
+    // isn't already connected to it. "Start & connect" replaces it when the VM is
+    // installed but stopped (offline + Hyper-V reports it off). "Shutdown" shows
+    // whenever the VM is reachable. All set before the offline early-return below.
     const conn = $("connectBtn");
     if (conn) conn.hidden = !(online && s.connected === false);
+    const start = $("startBtn");
+    if (start) start.hidden = !(!online && s.vmState === "off");
+    const sd = $("shutdownBtn");
+    if (sd) sd.hidden = !online;
 
     // Unreachable, or reachable but the probe script failed: we have no trustworthy
     // VM data, so clear it rather than show stale values.

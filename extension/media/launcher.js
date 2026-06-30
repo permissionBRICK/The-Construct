@@ -16,10 +16,15 @@
     if (st) { st.textContent = online ? "VM online" : "VM offline"; st.style.color = online ? "var(--rain)" : "var(--crit)"; }
     if (s.host) $("lHost").textContent = s.host;
 
-    // Offer "Open on VM" only when the VM is reachable and this window isn't
-    // already connected to it.
+    // Power controls (set before the offline early-return below). "Open on VM"
+    // shows when reachable + not already connected here; "Start & connect" replaces
+    // it when the VM is installed but stopped; "Shutdown" shows whenever reachable.
     const conn = $("lConnect");
     if (conn) conn.hidden = !(online && s.connected === false);
+    const start = $("lStart");
+    if (start) start.hidden = !(!online && s.vmState === "off");
+    const sd = $("lShutdown");
+    if (sd) sd.hidden = !online;
 
     const agentsEl = $("lAgents");
     if (!online) { if (agentsEl) agentsEl.textContent = "unavailable"; $("lMeta").textContent = ""; return; }

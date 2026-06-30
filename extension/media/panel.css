@@ -184,6 +184,8 @@ h1.title {
 .btn.danger:hover { background: rgba(255,93,93,0.08); box-shadow: 0 0 10px rgba(255,93,93,0.18); }
 .btn.connect { color: var(--void); background: linear-gradient(180deg, var(--rain), var(--accent)); border: 0; font-weight: 700; box-shadow: 0 0 14px rgba(0,255,102,0.25); }
 .btn.connect:hover { background: linear-gradient(180deg, var(--rain), var(--accent)); box-shadow: 0 0 22px rgba(0,255,102,0.45); }
+.btn.start { color: var(--void); background: linear-gradient(180deg, var(--warn), #e6a72f); border: 0; font-weight: 700; box-shadow: 0 0 14px rgba(255,194,77,0.22); }
+.btn.start:hover { box-shadow: 0 0 22px rgba(255,194,77,0.4); }
 
 /* Settings view */
 #settingsView[hidden], #mainView[hidden] { display: none; }
@@ -309,3 +311,9 @@ body.launcher { font-size: 12px; }
 .lconnect { font-family: var(--mono); font-size: 12px; letter-spacing: 0.5px; font-weight: 700; color: var(--rain); background: rgba(0,255,102,0.08); border: 1px solid var(--rain); border-radius: 6px; padding: 9px; cursor: pointer; box-shadow: 0 0 10px rgba(0,255,102,0.15); }
 .lconnect:hover { background: rgba(0,255,102,0.16); box-shadow: 0 0 18px rgba(0,255,102,0.3); }
 .lconnect:focus-visible { outline: 2px solid var(--rain); outline-offset: 2px; }
+.lstart { font-family: var(--mono); font-size: 12px; letter-spacing: 0.5px; font-weight: 700; color: var(--warn); background: rgba(255,194,77,0.08); border: 1px solid var(--warn); border-radius: 6px; padding: 9px; cursor: pointer; box-shadow: 0 0 10px rgba(255,194,77,0.15); }
+.lstart:hover { background: rgba(255,194,77,0.16); box-shadow: 0 0 18px rgba(255,194,77,0.3); }
+.lstart:focus-visible { outline: 2px solid var(--warn); outline-offset: 2px; }
+.lshutdown { font-family: var(--mono); font-size: 12px; letter-spacing: 0.5px; color: #ff8a8a; background: rgba(255,93,93,0.06); border: 1px solid rgba(255,93,93,0.5); border-radius: 6px; padding: 8px; cursor: pointer; }
+.lshutdown:hover { background: rgba(255,93,93,0.12); box-shadow: 0 0 14px rgba(255,93,93,0.22); }
+.lshutdown:focus-visible { outline: 2px solid var(--crit); outline-offset: 2px; }
