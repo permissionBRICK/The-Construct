@@ -46,7 +46,9 @@ extension/
   src/
     ssh.js            system-ssh runner (buildSshArgs/runRemote/runRemoteScript/isReachable)
     probe.js          REMOTE_PROBE + parseProbe/extractVersion/toState/probe()
-    host.js           [planned] locate scripts/settings/backups; read/write settings
+    host.js           locate the scripts dir (newest %LOCALAPPDATA%\The-Construct\*\* with
+                      Auto-Install.ps1, or the construct.scriptsDir override) + read/write
+                      .construct-settings.json (form<->disk mapping; pure fs/path, no vscode)
     lifecycle.js      [planned] reprovision/reinstall/redownload/export launchers
     updates.js        [planned] Construct + agent update checks/actions
     projects.js       [planned] import-from-VM, select, per-project edit
@@ -57,8 +59,9 @@ extension/
     construct-audio-enable.sh    install shim + apply remoteName-guard patch
     construct-audio-disable.sh   remove shim + revert patch
   test/
-    ui-smoke.js       Playwright headless-Chromium webview test (35 checks: panel + launcher + narrow overflow)
+    ui-smoke.js       Playwright headless-Chromium webview test (40 checks: panel + launcher + narrow overflow + settings round-trip)
     probe.test.js     plain-node ssh-arg + probe-parse units (21 checks)
+    host.test.js      plain-node scripts-dir resolution + settings merge units (32 checks; fake %LOCALAPPDATA% tree)
 ```
 
 ## Webview ↔ extension message protocol
@@ -108,6 +111,18 @@ VM-derived fields when `online===false` or `probeError`):
 - **Settings persistence** uses the same `.construct-settings.json` the installer
   uses (interop keys `gitUserName`/`gitEmail`/`gitCredentialStore`). **Do NOT
   persist the agent password** to that file (plaintext); pass it at reinstall time.
+  `src/host.js` owns the file: `mapFromForm` writes the git interop keys plus
+  forward-compat keys the installer can adopt later (`vmMemoryGB`, `vmDiskGB`,
+  `ubuntuRelease`, `vsCodeServeWeb`, `vsCodeTunnel`, `smbShare`, `micPassthrough`),
+  and `saveSettings` merges over the existing file so unmanaged keys (e.g. the
+  update marker `installedCommit`) survive. Empty text/number fields are omitted
+  (don't clobber a stored value with a blank); booleans always write (toggle-off
+  persists). Reads strip a UTF-8 BOM (Windows PS 5.1 `Set-Content -Encoding UTF8`).
+  `agents`/`projects` are deferred to the Projects batch — the settings-form chips
+  aren't hydrated from live state yet, so writing them now would clobber the real
+  selection with the static all-on defaults. The panel's `applySettings` only
+  drives a switch when the value is a real boolean, so a partial payload (e.g. the
+  installer's git-only file) leaves the other toggles' HTML defaults intact.
 - **Destructive flows default to save→restore**; one-time overrides (existing
   backup / clean wipe) live in Settings → Custom reinstall, not as a persisted
   policy. On failure, offer a retry reusing the backup already taken.
@@ -148,12 +163,14 @@ VM-derived fields when `online===false` or `probeError`):
 Each batch: build → 3-lens adversarial pre-review (Workflow) → fix → `request_review`.
 Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits.
 
-1. **Host helper + settings + open-folder** — `src/host.js`: resolve scriptsDir
-   (`%LOCALAPPDATA%\The-Construct\*\*` newest with Auto-Install.ps1; setting override
-   `construct.scriptsDir`), projectsDir, settings read/write (merge; interop git
-   keys; exclude password). Wire `saveSettings` (persist + toast), `openProjectFolder`
-   (revealFileInOS), and push `{type:'settings'}` on load. Test: path resolution +
-   settings merge against a fake LOCALAPPDATA tree.
+1. ✓ **DONE — Host helper + settings + open-folder** — `src/host.js`: resolves
+   scriptsDir (`%LOCALAPPDATA%\The-Construct\*\*` newest with Auto-Install.ps1;
+   setting override `construct.scriptsDir`), projectsDir, settings read/write
+   (merge; interop git keys; exclude password). `saveSettings` persists + toasts +
+   re-pushes; `openProjectFolder` reveals (and creates) the projects dir; `ready`
+   pushes `{type:'settings'}`. `host.test.js` covers resolution + merge against a
+   fake LOCALAPPDATA tree. (See the Settings-persistence design decision for the
+   on-disk schema.)
 2. **Lifecycle launchers** — `src/lifecycle.js`: build the PowerShell invocation for
    each action and run it in a dedicated integrated terminal (these can't be silent;
    they need elevation + show output). Reinstall/Redownload orchestrate
@@ -193,13 +210,14 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
 - `c2d1ec7` remove desktop-shortcut prompt
 - `a8bd4ce` SSH runner + live status/version probe (+ stale-data fix)
 - `cd754f6` architecture + roadmap doc (this file)
-- (this batch) sidebar launcher + fullscreen-panel split + responsive narrow layout + WebviewPanelSerializer
+- `a5f4932` sidebar launcher + fullscreen-panel split + responsive narrow layout + WebviewPanelSerializer
+- (this batch) host helper (`src/host.js`) + settings persistence + open-folder; `construct.scriptsDir` setting; `host.test.js`
 
 ## Build/verify tooling (on this dev VM)
 
 - `pwsh` installed → parse-check .ps1 edits.
 - Playwright + Chromium installed under the session scratchpad (not committed);
   run the webview test with `NODE_PATH=<scratch>/uitest/node_modules node test/ui-smoke.js`.
-- `node test/probe.test.js` for the unit tests.
+- `node test/probe.test.js` and `node test/host.test.js` for the plain-node units.
 - Auto-review: single reviewer, serial; only the main agent calls `request_review`.
   Pre-review every batch with parallel adversarial subagents (Workflow) first.

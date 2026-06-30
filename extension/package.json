@@ -48,6 +48,16 @@
         "title": "Refresh Status",
         "category": "The Construct"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "The Construct",
+      "properties": {
+        "construct.scriptsDir": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Folder that holds the Construct PowerShell lifecycle scripts (`Auto-Install.ps1`, `projects/`, `.construct-settings.json`). Leave empty to auto-detect the newest install under `%LOCALAPPDATA%\\The-Construct`."
+        }
+      }
+    }
   }
 }
