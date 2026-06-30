@@ -1070,3 +1070,92 @@ function Get-RemoteOpenLink {
     $path  = if ($WorkspaceRoot.StartsWith("/")) { $WorkspaceRoot } else { "/$WorkspaceRoot" }
     return "vscode://vscode-remote/ssh-remote+$alias$path"
 }
+
+function Get-VSCodeExtensionDir {
+    # Where the control-panel extension is installed on the host: a fixed folder
+    # under the user's VS Code extensions dir. VS Code scans every subfolder of
+    # ~/.vscode/extensions and loads any with a valid package.json, so a stable
+    # (un-versioned) name lets updates overwrite in place. Pure given $env:USERPROFILE.
+    [CmdletBinding()]
+    param([string]$Name = "construct-control-panel")
+    $base = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
+    return (Join-Path (Join-Path (Join-Path $base ".vscode") "extensions") $Name)
+}
+
+function Install-ControlPanelExtension {
+    <#
+        Copy the control-panel extension from <SourceRoot>\extension into the host's
+        VS Code extensions folder so it loads as a UI extension (and the deep link's
+        auto-open works). Idempotent: a re-run fully replaces the install. The dev-only
+        test/ folder (Playwright + node_modules) and any node_modules are excluded --
+        only the runtime files (package.json, extension.js, src/, media/) are needed.
+        Best-effort: never throws. Returns $true on success.
+
+        We build into a FRESH staging dir and then swap it into place rather than
+        copying over the existing install. Two reasons: (1) Windows PowerShell 5.1's
+        `Copy-Item -Recurse` copies a directory INTO a parent that already has a
+        same-named child by NESTING it (dest\src\src\...) instead of merging, so a
+        copy-over-existing would leave src/ + media/ stale on every update -- copying
+        into an empty dir avoids that; (2) staging-then-swap keeps the existing install
+        intact if the copy fails partway.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$SourceRoot)
+
+    $src = Join-Path $SourceRoot "extension"
+    if (-not (Test-Path -LiteralPath (Join-Path $src "package.json"))) {
+        Write-Warning "Control-panel extension not found at $src; skipping its install."
+        return $false
+    }
+    $dest    = Get-VSCodeExtensionDir
+    $staging = Join-Path (Split-Path -Parent $dest) (".construct-cp-staging-" + [guid]::NewGuid().ToString("N"))
+    try {
+        New-Item -ItemType Directory -Path $staging -Force | Out-Null
+        # Into the EMPTY staging dir: copying a dir where no same-named child exists
+        # creates it correctly on both Windows PowerShell 5.1 and PowerShell 7+.
+        Get-ChildItem -LiteralPath $src -Force |
+            Where-Object { $_.Name -ne 'test' -and $_.Name -ne 'node_modules' } |
+            ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $staging -Recurse -Force }
+        # Swap into place only after staging is fully built.
+        if (Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest -Recurse -Force }
+        Move-Item -LiteralPath $staging -Destination $dest -Force
+        Write-Host "==> Installed the Construct control panel into VS Code." -ForegroundColor Cyan
+        Write-Host "    $dest" -ForegroundColor DarkGray
+        return $true
+    } catch {
+        Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Warning "Could not install the control-panel extension: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+function Set-ConstructInstalledMarker {
+    <#
+        Record which Construct repo/ref/commit is installed on this host, so the
+        control panel's update check has a base to diff against. The commit SHA is
+        best-effort -- recorded as "" when it can't be fetched, which the panel treats
+        as "no marker" (banner hidden) rather than a stale comparison base. Returns the
+        SHA ("" on failure). Never throws.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][string]$Repo,
+        [Parameter(Mandatory)][string]$Ref
+    )
+    $sha = ""
+    try {
+        # -TimeoutSec so a slow/unreachable GitHub can't stall the install (this now
+        # runs on the fresh-install path too, before Auto-Install launches).
+        $sha = (Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/commits/$Ref" `
+                  -Headers @{ "User-Agent" = "construct-control-panel" } -UseBasicParsing -TimeoutSec 20).sha
+    } catch {
+        Write-Host "    (couldn't fetch the commit id for the update marker: $($_.Exception.Message))" -ForegroundColor DarkGray
+    }
+    try {
+        Save-ConstructSettings -Dir $Root -Values @{ constructRepo = $Repo; constructRef = $Ref; installedCommit = $sha }
+    } catch {
+        Write-Warning "Could not record the update marker: $($_.Exception.Message)"
+    }
+    return $sha
+}
