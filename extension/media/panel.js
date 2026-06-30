@@ -148,33 +148,46 @@
   // ── Render state pushed from the extension ──────────────────────────────────
   function text(id, v) { const e = $(id); if (e && v != null) e.textContent = v; }
 
+  function setOnline(online) {
+    const pill = $("pillStatus");
+    if (!pill) return;
+    pill.classList.toggle("offline", !online);
+    pill.innerHTML = online
+      ? '<span class="dot live"></span> VM ONLINE'
+      : '<span class="dot"></span> VM OFFLINE';
+  }
+
+  // Blank the VM-derived live fields so an offline/failed refresh never leaves
+  // stale values from a previous successful probe on screen.
+  function clearLiveVmData() {
+    text("sysVm", "—"); text("sysResources", "—"); text("sysUbuntu", "—");
+    renderAgents([]); renderProjects([]);
+  }
+
   function render(s) {
     if (!s) return;
+    // host/hostShort come from local config, so they are known even when the VM
+    // is unreachable.
     if (s.hostShort) text("hostShort", s.hostShort);
     if (s.host) { text("pillHost", s.host); text("sysHost", s.host); }
-    if (s.vmName) text("sysVm", s.vmName);
-    if (s.resources) text("sysResources", s.resources);
-    if (s.ubuntu) text("sysUbuntu", s.ubuntu);
+
+    const online = s.online !== false;
+    setOnline(online);
+
+    // Unreachable, or reachable but the probe script failed: we have no trustworthy
+    // VM data, so clear it rather than show stale values.
+    if (!online || s.probeError) { clearLiveVmData(); return; }
+
+    if (s.vmName != null) text("sysVm", s.vmName || "—");
+    if (s.resources != null) text("sysResources", s.resources || "—");
+    if (s.ubuntu != null) text("sysUbuntu", s.ubuntu || "—");
     if (s.constructRev) text("constructRev", s.constructRev);
     if (s.installed) text("pillInstalled", "installed " + s.installed);
     if (s.reprovisioned) text("pillReprovisioned", "reprovisioned " + s.reprovisioned);
 
-    if (typeof s.online === "boolean") {
-      const pill = $("pillStatus");
-      if (pill) {
-        pill.classList.toggle("offline", !s.online);
-        pill.innerHTML = s.online
-          ? '<span class="dot live"></span> VM ONLINE'
-          : '<span class="dot"></span> VM OFFLINE';
-      }
-    }
-
-    if (s.update && s.update.available) {
-      const b = $("updateBanner"); if (b) b.hidden = false;
-      text("updateBehind", s.update.behind || "");
-    } else {
-      const b = $("updateBanner"); if (b) b.hidden = true;
-    }
+    const b = $("updateBanner");
+    if (s.update && s.update.available) { if (b) b.hidden = false; text("updateBehind", s.update.behind || ""); }
+    else if (s.update && b) { b.hidden = true; }
 
     if (Array.isArray(s.agents)) renderAgents(s.agents);
     if (Array.isArray(s.projects)) renderProjects(s.projects);
@@ -185,6 +198,13 @@
   function renderAgents(agents) {
     const host = $("agentList"); if (!host) return;
     host.innerHTML = "";
+    if (!agents || !agents.length) {
+      const d = document.createElement("div");
+      d.className = "agent";
+      d.innerHTML = '<span class="name" style="color:var(--dim)">—</span><span class="ver"></span><span class="tag"></span>';
+      host.appendChild(d);
+      return;
+    }
     agents.forEach((a) => {
       const tagCls = a.updateAvailable ? "tag upd" : "tag ok";
       const tagTxt = a.updateAvailable ? (a.latest || "update") + " ↑" : "up to date";
@@ -204,6 +224,10 @@
   function renderProjects(projects) {
     const host = $("projChips"); if (!host) return;
     host.innerHTML = "";
+    if (!projects || !projects.length) {
+      const s = document.createElement("span"); s.className = "chip"; s.textContent = "—"; host.appendChild(s);
+      return;
+    }
     projects.forEach((p) => {
       const chip = document.createElement("span");
       chip.className = "chip" + (p.selected ? " on" : "");

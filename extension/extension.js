@@ -15,9 +15,49 @@ const vscode = require("vscode");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const probe = require("./src/probe");
 
 /** The single editor-tab panel instance, if open. */
 let panel; // vscode.WebviewPanel | undefined
+
+/** Every currently-live webview (sidebar view + editor panel) for broadcast refresh. */
+const liveWebviews = new Set();
+
+/** Post to a webview, surviving both a synchronous throw and an async rejection
+ *  if it was disposed mid-flight (postMessage returns a Thenable<boolean>). */
+function safePost(webview, msg) {
+  try {
+    const p = webview.postMessage(msg);
+    if (p && typeof p.then === "function") p.then(undefined, () => {});
+  } catch (_) { /* webview disposed */ }
+}
+
+// Coalesce overlapping probes: concurrent refresh triggers (e.g. both surfaces
+// firing 'ready', or rapid refresh commands) share one in-flight ssh probe.
+let inflightProbe = null;
+function probeOnce() {
+  if (!inflightProbe) {
+    const p = probe.probe().then((s) => s, () => ({ online: false }));
+    inflightProbe = p;
+    const clear = () => { if (inflightProbe === p) inflightProbe = null; };
+    p.then(clear, clear);
+  }
+  return inflightProbe;
+}
+
+/** Probe the VM and push fresh state to one webview. */
+async function refreshState(webview) {
+  if (!webview) return;
+  const state = await probeOnce();
+  safePost(webview, { type: "state", state });
+}
+
+/** Probe once and broadcast the same state to every live webview. */
+async function refreshAll() {
+  if (liveWebviews.size === 0) return;
+  const state = await probeOnce();
+  for (const w of liveWebviews) safePost(w, { type: "state", state });
+}
 
 // A per-render CSP nonce: it is the sole gate between the trusted bundled script
 // and any injected inline script, so it must come from a CSPRNG, not Math.random.
@@ -53,9 +93,7 @@ function handleMessage(message, webview, context) {
 
   switch (message.type) {
     case "ready":
-      // Backend status probing (SSH reachability, versions, usage, audio state)
-      // is wired in the following batches; the shell renders its placeholders
-      // until then.
+      refreshState(webview);
       return;
 
     case "openPanel":
@@ -67,7 +105,7 @@ function handleMessage(message, webview, context) {
         "Microphone passthrough will be available in an upcoming build of the control panel."
       );
       // Reset the optimistic/busy switch back to off until the feature lands.
-      webview.postMessage({ type: "audio", enabled: false });
+      safePost(webview, { type: "audio", enabled: false });
       return;
 
     case "saveSettings":
@@ -84,6 +122,7 @@ function handleMessage(message, webview, context) {
       return;
 
     case "command":
+      if (message.id === "refresh") { refreshState(webview); return; }
       vscode.window.showInformationMessage(
         `"${message.id}" will be available in an upcoming build of the control panel.`
       );
@@ -107,6 +146,8 @@ class ConstructViewProvider {
     // the disposable is released when the view is destroyed, so a re-resolve can't
     // accumulate stale listeners.
     webviewView.webview.onDidReceiveMessage((m) => handleMessage(m, webviewView.webview, this.context));
+    liveWebviews.add(webviewView.webview);
+    this.context.subscriptions.push(webviewView.onDidDispose(() => liveWebviews.delete(webviewView.webview)));
   }
 }
 
@@ -130,7 +171,8 @@ function openPanel(context) {
     undefined,
     context.subscriptions
   );
-  panel.onDidDispose(() => { panel = undefined; }, undefined, context.subscriptions);
+  liveWebviews.add(panel.webview);
+  panel.onDidDispose(() => { liveWebviews.delete(panel.webview); panel = undefined; }, undefined, context.subscriptions);
 }
 
 function activate(context) {
@@ -139,9 +181,7 @@ function activate(context) {
       webviewOptions: { retainContextWhenHidden: true },
     }),
     vscode.commands.registerCommand("construct.openPanel", () => openPanel(context)),
-    vscode.commands.registerCommand("construct.refresh", () =>
-      vscode.window.showInformationMessage("Status refresh will be available in an upcoming build of the control panel.")
-    )
+    vscode.commands.registerCommand("construct.refresh", () => refreshAll())
   );
 }
 
