@@ -165,20 +165,31 @@ async function confirmDestructive(inv) {
   return pick === inv.label;
 }
 
-/** Spawn the host console for an invocation. */
-function launch(scriptsDir, inv) {
+/**
+ * Spawn a host console running <scriptsDir>/<script> with the given args, opening
+ * a new (optionally elevated) window. Shared by the lifecycle actions and the
+ * Construct update refresh. Guards off-Windows. `opts`:
+ * { scriptsDir, script, args, elevate, label }. Returns true if spawned.
+ */
+function launchHostScript(opts) {
   const vscode = vsc();
-  const scriptPath = path.join(scriptsDir, inv.script);
-  const { file, spawnArgs } = buildHostLaunch(scriptPath, inv.args, { elevate: inv.elevate });
+  if (process.platform !== "win32") {
+    vscode.window.showWarningMessage("Construct actions run on the Windows host, which isn't available here.");
+    return false;
+  }
+  const scriptPath = path.join(opts.scriptsDir, opts.script);
+  const { file, spawnArgs } = buildHostLaunch(scriptPath, opts.args || [], { elevate: !!opts.elevate });
   try {
-    const child = cp.spawn(file, spawnArgs, { cwd: scriptsDir, windowsHide: true, detached: true, stdio: "ignore" });
-    child.on("error", (e) => vscode.window.showErrorMessage(`Couldn't launch ${inv.label}: ${e.message}`));
+    const child = cp.spawn(file, spawnArgs, { cwd: opts.scriptsDir, windowsHide: true, detached: true, stdio: "ignore" });
+    child.on("error", (e) => vscode.window.showErrorMessage(`Couldn't launch ${opts.label}: ${e.message}`));
     child.unref();
     vscode.window.showInformationMessage(
-      `${inv.label} launched in a console window on the host${inv.elevate ? " — approve the UAC prompt." : "."}`
+      `${opts.label} launched in a console window on the host${opts.elevate ? " — approve the UAC prompt." : "."}`
     );
+    return true;
   } catch (e) {
-    vscode.window.showErrorMessage(`Couldn't launch ${inv.label}: ${e && e.message ? e.message : e}`);
+    vscode.window.showErrorMessage(`Couldn't launch ${opts.label}: ${e && e.message ? e.message : e}`);
+    return false;
   }
 }
 
@@ -202,12 +213,13 @@ function run(action, opts = {}) {
   });
   if (!inv) return;
   Promise.resolve(inv.destructive ? confirmDestructive(inv) : true).then((ok) => {
-    if (ok) launch(scriptsDir, inv);
+    if (ok) launchHostScript({ scriptsDir, script: inv.script, args: inv.args, elevate: inv.elevate, label: inv.label });
   });
 }
 
 module.exports = {
   PROVISION, AUTO_INSTALL, BACKUP_DIR_NAME,
   normalizeBackupMode, buildInvocation,
-  psSingleQuote, winQuoteArg, buildChildCommandLine, buildOuterCommand, buildHostLaunch, run,
+  psSingleQuote, winQuoteArg, buildChildCommandLine, buildOuterCommand, buildHostLaunch,
+  launchHostScript, run,
 };
