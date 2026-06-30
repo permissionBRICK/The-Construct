@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src {{cspSource}} data:; style-src {{cspSource}} 'unsafe-inline'; font-src {{cspSource}}; script-src 'nonce-{{nonce}}'; base-uri 'none'; form-action 'none'; object-src 'none';" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="{{styleUri}}" />
+  <title>The Construct</title>
+</head>
+<body class="launcher">
+  <div class="lshell">
+    <div class="lbrand"><span class="ldot offline" id="lDot"></span> THE&nbsp;CONSTRUCT</div>
+    <div class="lstatus" id="lStatusText">connecting…</div>
+    <div class="lhost" id="lHost"></div>
+
+    <div class="lactions">
+      <button class="laction" data-cmd="reprovision" title="Reprovision — re-run setup, keep all data"><span class="lglyph">&#x27F3;</span><span>Reprovision</span></button>
+      <button class="laction danger" data-cmd="redownload" title="Redownload — fresh Ubuntu ISO, then rebuild"><span class="lglyph">&#x21BB;</span><span>Redownload</span></button>
+      <button class="laction danger" data-cmd="reinstall" title="Reinstall — rebuild from current ISO"><span class="lglyph">&#x2297;</span><span>Reinstall</span></button>
+    </div>
+
+    <button class="lopen" id="lOpen">&#x2922; Open Control Panel</button>
+
+    <div class="lcard">
+      <div class="lcard-h">Coding agents</div>
+      <div id="lAgents" class="lagents">—</div>
+    </div>
+    <div class="lmeta" id="lMeta"></div>
+    <button class="lrefresh" data-cmd="refresh">refresh status</button>
+  </div>
+  <script nonce="{{nonce}}" src="{{scriptUri}}"></script>
+</body>
+</html>
