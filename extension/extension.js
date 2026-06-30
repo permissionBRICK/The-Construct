@@ -222,6 +222,61 @@ async function runShutdown() {
   );
 }
 
+/** Clone a git URL into /root/repos on the VM over SSH, then open it in a NEW
+ *  remote window. The URL is validated loosely and passed to `git clone` as data
+ *  (never interpolated into the shell — see remote.buildCloneScript). */
+async function runAddProject() {
+  if (!remote.hasRemoteSsh()) {
+    vscode.window.showWarningMessage(
+      "The Remote-SSH extension (ms-vscode-remote.remote-ssh) isn't installed, so the cloned project can't be opened here. Install it, then try again."
+    );
+    return;
+  }
+  const raw = await vscode.window.showInputBox({
+    title: "Add project — clone a git repo onto the Construct VM",
+    prompt: "Git URL to clone into /root/repos on the VM",
+    placeHolder: "https://github.com/owner/repo.git",
+    ignoreFocusOut: true,
+    validateInput: (v) =>
+      remote.isLikelyGitUrl(v) ? null : "Enter an https://, ssh:// or git@host:path git URL.",
+  });
+  if (raw == null) return; // cancelled
+  // Normalize once at the boundary: validation, name derivation, the clone, and the
+  // opened folder must all use the same value. The input box trims for display but
+  // hands back the raw text, and isLikelyGitUrl/repoNameFromUrl trim internally — so
+  // without this a pasted "  https://…  " would clone the spaced (and thus failing) URL.
+  const url = raw.trim();
+  if (!url) return;
+  const name = remote.repoNameFromUrl(url);
+  if (!name || name === "." || name === "..") {
+    vscode.window.showErrorMessage("Couldn't derive a folder name from that URL.");
+    return;
+  }
+  const dest = `${remote.WORKSPACE_ROOT}/${name}`;
+  vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: `Cloning ${name} onto the VM…`, cancellable: false },
+    async () => {
+      const r = await ssh.runRemoteScript(remote.buildCloneScript(url, name), { timeoutMs: 300000 });
+      if (r.code === 0) {
+        vscode.window.showInformationMessage(`Cloned ${name} — opening it on the VM…`);
+        remote.openOnVm({ path: dest, newWindow: true });
+        refreshAll(); // the repo now exists on the VM
+      } else if (r.code === 3) {
+        const pick = await vscode.window.showWarningMessage(
+          `${dest} already exists on the VM.`, "Open it", "Cancel"
+        );
+        if (pick === "Open it") remote.openOnVm({ path: dest, newWindow: true });
+      } else if (r.code < 0) {
+        vscode.window.showErrorMessage("Couldn't reach the VM to clone. Is it running?");
+      } else {
+        vscode.window.showErrorMessage(
+          `Cloning ${name} failed (exit ${r.code}). ${(r.stderr || "").slice(0, 200)}`.trim()
+        );
+      }
+    }
+  );
+}
+
 /** Reveal the project-profiles config folder in the OS file manager, creating it
  *  if needed (the installer's selector creates it the same way on first use). */
 function openProjectFolder() {
@@ -306,6 +361,7 @@ function handleMessage(message, webview, context) {
       const id = message.id;
       if (id === "refresh") { refreshState(webview); return; }
       if (id === "openProjectFolder") { openProjectFolder(); return; }
+      if (id === "addProject") { runAddProject(); return; }
       if (id === "updateAgents") { runUpdateAgents(); return; }
       if (id === "connect") { remote.openOnVm({ path: "/root/repos", newWindow: false }); return; }
       if (id === "startConnect") { runStartAndConnect(); return; }

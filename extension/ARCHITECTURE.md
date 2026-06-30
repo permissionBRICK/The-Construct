@@ -70,10 +70,10 @@ extension/
     construct-audio-enable.sh    install shim + apply remoteName-guard patch
     construct-audio-disable.sh   remove shim + revert patch
   test/
-    ui-smoke.js       Playwright headless-Chromium webview test (68 checks: panel + launcher + narrow overflow + settings round-trip + unwired-control honesty + connect/start/shutdown power buttons)
+    ui-smoke.js       Playwright headless-Chromium webview test (69 checks: panel + launcher + narrow overflow + settings round-trip + unwired-control honesty + connect/start/shutdown power buttons + add-project)
     probe.test.js     plain-node ssh-arg + probe-parse units (21 checks)
     host.test.js      plain-node scripts-dir resolution + settings merge units (32 checks; fake %LOCALAPPDATA% tree)
-    remote.test.js    plain-node Remote-SSH helpers — isConnectedToVm + remoteFolderUri (12 checks)
+    remote.test.js    plain-node Remote-SSH helpers — isConnectedToVm/remoteFolderUri + repoNameFromUrl/isLikelyGitUrl/buildCloneScript (43 checks)
     lifecycle.test.js plain-node buildInvocation + winQuoteArg/quoting/elevation units (48 checks)
     updates.test.js   plain-node update-check units — Construct compare/cache + agent semver/latest/script + fetchJson redirects/per-host Accept, injected fetch+clock+http (62 checks)
     vmpower.test.js   plain-node Hyper-V power units — Get-VM probe/parse + Start-VM/elevated launch builders + injected-spawn queryVmState (38 checks)
@@ -89,7 +89,8 @@ Defined in `extension.js` (handleMessage), `media/panel.js` and `media/launcher.
   `redownload`, `reinstall`, `updateConstruct`, `updateAgents`, `refresh`,
   `openProjectFolder`, `selectProfiles`, `exportUsage`, `importProjects`,
   `editProject` (+`project`), `connect` (open the VM over Remote-SSH),
-  `startConnect` (elevated Start-VM then poll+open), `shutdown` (poweroff over SSH).
+  `startConnect` (elevated Start-VM then poll+open), `shutdown` (poweroff over SSH),
+  `addProject` (prompt a git URL → clone over SSH → open in a new window).
 - `{type:'setAudio', enabled}` — live mic-passthrough toggle (console switch only).
 - `{type:'openPanel'}` — open the wide editor-tab panel.
 - `{type:'saveSettings', settings}` — persist the settings form.
@@ -291,11 +292,14 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
      over SSH; warns if THIS window is attached). Both surfaces; `vmpower.test.js` (38) +
      ui-smoke power-button checks. Graceful: `vmState==='unknown'`/`absent` shows no Start
      button; off-Windows `queryVmState` resolves `unknown` without spawning.
-   - **TODO — Add project** — input a git URL; clone into `/root/repos/<name>` on the VM
-     over SSH, INJECTION-SAFE (base64-encode the URL into the remote script;
-     `git clone -- "$url" "$dest"`); `name` = basename(url) minus `.git`; handle an
-     existing dir + clone failure (progress + error toast); open `/root/repos/<name>` in
-     a **NEW** remote window. Button in the Projects module actions row.
+   - ✓ **DONE — Add project** (`src/remote.js` + `runAddProject`) — "+ add project" in
+     the Projects actions row → `showInputBox` (validated by `isLikelyGitUrl`) → clone
+     into `/root/repos/<name>` over SSH, INJECTION-SAFE: `buildCloneScript` base64-embeds
+     the URL + dest and decodes them ON the VM, then `git clone -- "$url" "$target"` (data,
+     never shell). `name` = `repoNameFromUrl` (last segment minus `.git`). Existing dir →
+     exit 3 → "Open it?"; unreachable (code<0) → "couldn't reach the VM"; other → error
+     toast. Success opens `/root/repos/<name>` in a **NEW** window. `remote.test.js` (43,
+     incl. a hostile-URL non-injection proof) + ui-smoke add-project check.
    - **TODO — Open project (per-chip)** — a small inline **▷** button on each project
      chip (chip-body click stays reserved for the edit modal, Projects batch); opens in a
      **NEW** window the profile's single repo folder (`repo.directory` else basename(url)
@@ -348,7 +352,8 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
 - `043e63c` Construct self-update (`src/updates.js`) + `install.ps1 -RefreshOnly` marker write; update banner folded into state; `lifecycle.launchHostScript` extracted; `updates.test.js`
 - `3cc6d92` agent update detection (npm/GitHub latest → per-agent badges) + `updateAgents` force-update over SSH; `buildAgentUpdateScript`
 - `374b06d` Remote-SSH Connect button (`src/remote.js`) — open `/root/repos` on the VM, gated on reachable + not-already-connected; both surfaces; `remote.test.js`
-- (this batch) VM power control (`src/vmpower.js`) — host `Get-VM` state probe → `vmState`; "Start & connect" (elevated Start-VM + poll/open) and "Shutdown" (`poweroff` over SSH) buttons on both surfaces; `vmpower.test.js`
+- `3a02609` VM power control (`src/vmpower.js`) — host `Get-VM` state probe → `vmState`; "Start & connect" (elevated Start-VM + poll/open) and "Shutdown" (`poweroff` over SSH) buttons on both surfaces; `vmpower.test.js`
+- (this batch) Add project (`src/remote.js` clone helpers + `runAddProject`) — git URL → injection-safe `git clone` into `/root/repos/<name>` over SSH → open in a new window; "+ add project" button; `remote.test.js` extended
 
 ## Build/verify tooling (on this dev VM)
 
