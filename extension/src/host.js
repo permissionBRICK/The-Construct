@@ -97,6 +97,26 @@ function readRawSettings(scriptsDir) {
   } catch (_) { return {}; }
 }
 
+/**
+ * Read a project profile JSON (`<scriptsDir>/projects/<name>.json`) as a plain
+ * object, or null if missing / unreadable / not an object. The name is treated as
+ * a single filename — anything with a path separator or ".." is rejected so a
+ * project name (which ultimately comes from the VM) can't escape the projects dir.
+ * Strips a UTF-8 BOM like readRawSettings.
+ */
+function readProjectProfile(scriptsDir, name) {
+  if (!scriptsDir) return null;
+  const safe = String(name == null ? "" : name);
+  if (!safe || /[\/\\]/.test(safe) || safe.includes("..")) return null;
+  let txt;
+  try { txt = fs.readFileSync(path.join(projectsDir(scriptsDir), safe + ".json"), "utf8"); }
+  catch (_) { return null; }
+  try {
+    const o = JSON.parse(txt.replace(/^\uFEFF/, ""));
+    return (o && typeof o === "object" && !Array.isArray(o)) ? o : null;
+  } catch (_) { return null; }
+}
+
 function writeRawSettings(scriptsDir, obj) {
   // BOM-less UTF-8 with a trailing newline. PowerShell's ConvertFrom-Json reads
   // it fine; the formatting keeps the file diff-friendly if hand-inspected.
@@ -189,5 +209,5 @@ module.exports = {
   localAppData, findScriptsDir, resolveScriptsDir,
   settingsPath, projectsDir,
   readRawSettings, writeRawSettings, mapToForm, mapFromForm,
-  readSettings, saveSettings,
+  readSettings, saveSettings, readProjectProfile,
 };

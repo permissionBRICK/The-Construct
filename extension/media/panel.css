@@ -158,6 +158,9 @@ h1.title {
 .chip { font-size: 12px; padding: 5px 11px; border-radius: 5px; border: 1px solid var(--line); color: var(--dim); background: rgba(0,0,0,0.2); display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
 .chip.on { color: var(--title); border-color: var(--line-strong); background: rgba(0,255,102,0.08); }
 .chip.on .check { color: var(--rain); }
+.chip .openbtn { font-family: var(--mono); font-size: 11px; line-height: 1; color: var(--dim); background: transparent; border: 0; border-left: 1px solid var(--line); margin-left: 2px; padding: 1px 0 1px 7px; cursor: pointer; }
+.chip .openbtn:hover { color: var(--rain); text-shadow: 0 0 8px rgba(0,255,102,0.5); }
+.chip .openbtn:focus-visible { outline: 2px solid var(--rain); outline-offset: 2px; }
 .proj-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 .usage-head, .usage-row { display: grid; grid-template-columns: 110px 1fr 70px 72px; gap: 12px; align-items: center; }

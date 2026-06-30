@@ -30,11 +30,20 @@ function isConnectedToVm(remoteAuthority, cfg) {
   return host === String(c.hostAlias).toLowerCase() || host === String(c.vmHost).toLowerCase();
 }
 
-/** Build the `vscode-remote://ssh-remote+<alias><path>` URI string for a VM path. */
+/**
+ * Build the `vscode-remote://ssh-remote+<alias><path>` URI string for a VM path.
+ * Each path segment is percent-encoded so URI-significant characters in a folder
+ * name — `?`, `#`, space, etc., which a project's checkout dir can legitimately
+ * contain — survive `vscode.Uri.parse` as PATH rather than being split off as a
+ * query/fragment (which would open the wrong, truncated folder). `/` separators are
+ * preserved (we encode between them); a normal path is returned byte-for-byte.
+ */
 function remoteFolderUri(cfg, posixPath) {
   const c = ssh.resolveCfg({ cfg });
   const p = String(posixPath || WORKSPACE_ROOT);
-  return `vscode-remote://ssh-remote+${c.hostAlias}${p.startsWith("/") ? p : "/" + p}`;
+  const norm = p.startsWith("/") ? p : "/" + p;
+  const encoded = norm.split("/").map(encodeURIComponent).join("/");
+  return `vscode-remote://ssh-remote+${c.hostAlias}${encoded}`;
 }
 
 /**
@@ -95,6 +104,48 @@ function buildCloneScript(url, dest, root) {
   ].join("\n");
 }
 
+/**
+ * `basename "$url" .git` — exactly as bin/checkout-projects.sh derives a checkout
+ * dir from a repo URL when the profile omits `directory`: drop trailing slashes,
+ * take the last `/`-segment (basename splits on `/` ONLY — not `:`), then strip a
+ * trailing ".git" suffix (exact case). Pure. (Distinct from repoNameFromUrl, which
+ * also splits on `:` for the add-project UX; here we must match the VM's clone path
+ * byte-for-byte so the folder we open is the folder that was actually checked out.)
+ */
+function basenameDotGit(url) {
+  let s = String(url || "").replace(/\/+$/, "");
+  const i = s.lastIndexOf("/");
+  if (i >= 0) s = s.slice(i + 1);
+  if (s.slice(-4) === ".git") s = s.slice(0, -4);
+  return s;
+}
+
+/** A relative path that stays inside the workspace: not absolute and with no empty,
+ *  "." or ".." segment (so a profile can't point the open at, say, /etc or ../..). */
+function isContainedRelPath(dir) {
+  if (!dir || dir.startsWith("/") || dir.startsWith("\\")) return false;
+  return dir.split(/[\/\\]/).every((s) => s !== "" && s !== "." && s !== "..");
+}
+
+/**
+ * The VM folder to open for a project profile: the single repo's checkout dir when
+ * the profile has EXACTLY one repo, otherwise the workspace root. The dir is taken
+ * VERBATIM from `repos[0].directory` when set (incl. nested `a/b`), else derived as
+ * `basename(url) .git` — mirroring bin/checkout-projects.sh byte-for-byte so the
+ * opened folder is exactly where the repo was cloned. A zero/multi-repo profile, a
+ * null profile, an empty derived name, or a dir that would escape the workspace
+ * (absolute or containing a ".." segment) all fall back to WORKSPACE_ROOT. Pure.
+ */
+function projectOpenPath(profile) {
+  const repos = profile && Array.isArray(profile.repos) ? profile.repos : [];
+  if (repos.length === 1 && repos[0]) {
+    let dir = repos[0].directory != null ? String(repos[0].directory) : "";
+    if (!dir) dir = basenameDotGit(repos[0].url); // checkout-projects.sh: directory||basename
+    if (isContainedRelPath(dir)) return WORKSPACE_ROOT + "/" + dir;
+  }
+  return WORKSPACE_ROOT;
+}
+
 /** Whether the Remote-SSH extension (needed to resolve the authority) is installed. */
 function hasRemoteSsh() {
   const vscode = vsc();
@@ -120,5 +171,5 @@ function openOnVm(opts = {}) {
 
 module.exports = {
   REMOTE_SSH_EXT, WORKSPACE_ROOT, isConnectedToVm, remoteFolderUri, hasRemoteSsh, openOnVm,
-  repoNameFromUrl, isLikelyGitUrl, buildCloneScript,
+  repoNameFromUrl, isLikelyGitUrl, buildCloneScript, projectOpenPath,
 };
