@@ -1,0 +1,12 @@
+{
+  "name": "construct-panel-uitest",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Headless-Chromium smoke test for the Construct control-panel webview.",
+  "scripts": {
+    "test": "node ui-smoke.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.40.0"
+  }
+}

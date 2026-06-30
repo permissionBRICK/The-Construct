@@ -1,0 +1,53 @@
+{
+  "name": "construct-control-panel",
+  "displayName": "The Construct",
+  "description": "Operator console for a Construct agent VM — lifecycle, updates, usage, projects, and microphone passthrough, from inside VS Code.",
+  "version": "0.1.0",
+  "publisher": "permissionbrick",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./extension.js",
+  "extensionKind": [
+    "ui"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "construct",
+          "title": "The Construct",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "construct": [
+        {
+          "id": "construct.panel",
+          "name": "Control Panel",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "construct.openPanel",
+        "title": "Open Control Panel",
+        "category": "The Construct"
+      },
+      {
+        "command": "construct.refresh",
+        "title": "Refresh Status",
+        "category": "The Construct"
+      }
+    ]
+  }
+}
