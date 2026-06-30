@@ -1080,6 +1080,22 @@ if ($restoreDir)         { $createArgs['RestoreDir']             = $restoreDir }
 if ($chosenCloneCredB64) { $createArgs['GitCloneCredentialsB64'] = $chosenCloneCredB64 }
 try {
     & $createScript @createArgs
+
+    # Host-side finalization for the control panel's Remote-SSH features (best-effort;
+    # these never throw). Add the user to Hyper-V Administrators so the non-elevated
+    # extension can read VM power state without a UAC prompt, then show a deep link
+    # that opens the VM in VS Code Remote-SSH (the control panel opens alongside it,
+    # the first time the extension activates in that remote window).
+    Add-HyperVAdminMembership
+    $openLink = Get-RemoteOpenLink -VmHost $VmHost -WorkspaceRoot "/root/repos"
+    Show-Banner @(
+        "Your Construct VM is ready.",
+        "",
+        "Open it in VS Code (Remote-SSH) -- the control panel opens alongside:",
+        "",
+        "  $openLink"
+    )
+    Write-Note "Tip: paste that link into a browser, or run:  start `"$openLink`""
 } catch {
     # Show the failure ABOVE the pause so it's readable even when the window was
     # launched by double-click / right-click "Run with PowerShell".

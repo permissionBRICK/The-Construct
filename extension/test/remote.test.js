@@ -125,5 +125,13 @@ ok("open: traversing nested directory is rejected -> workspace root", remote.pro
 ok("open: absolute directory is rejected -> workspace root", remote.projectOpenPath({ repos: [{ url: "https://h/x.git", directory: "/etc" }] }) === "/root/repos");
 ok("open: unusable url (no basename) -> workspace root", remote.projectOpenPath({ repos: [{ url: "" }] }) === "/root/repos");
 
+// ── shouldAutoOpenPanel ──────────────────────────────────────────────────────
+ok("autoopen: connected to VM + not yet opened -> true", remote.shouldAutoOpenPanel("ssh-remote+agent-vm", false) === true);
+ok("autoopen: connected via full hostname -> true", remote.shouldAutoOpenPanel("ssh-remote+agent-vm.mshome.net", undefined) === true);
+ok("autoopen: connected but already opened -> false", remote.shouldAutoOpenPanel("ssh-remote+agent-vm", true) === false);
+ok("autoopen: local window (not connected) -> false", remote.shouldAutoOpenPanel("", false) === false);
+ok("autoopen: a different SSH host -> false", remote.shouldAutoOpenPanel("ssh-remote+other-box", false) === false);
+ok("autoopen: honors a cfg alias override", remote.shouldAutoOpenPanel("ssh-remote+myvm", false, { hostAlias: "myvm" }) === true);
+
 console.log(`\n  remote-open unit tests — ${pass}/${pass + fail} passed\n`);
 process.exit(fail ? 1 : 0);

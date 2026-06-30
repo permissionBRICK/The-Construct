@@ -950,3 +950,123 @@ function Confirm-RepoScan {
     ) -Default 0
     return ($c -eq 1)
 }
+
+# ── Remote-SSH / control-panel host support ──────────────────────────────────
+# Helpers that make the host ready for the control-panel extension's Remote-SSH
+# features (the "Open on VM" / project-open buttons, the VM-power probe, and the
+# end-of-install deep link). All best-effort: a failure warns but never aborts the
+# install. Ensure-VSCodeRemoteSsh is meant to run NON-elevated (winget user scope);
+# Add-HyperVAdminMembership needs admin (the installer is already elevated).
+
+function Find-VSCodeCli {
+    # Locate the `code` CLI: PATH first, then the standard user/system install
+    # locations (a fresh winget install isn't on the current session's PATH yet).
+    # Each (base, subpath) pair guards its base for $null FIRST -- Join-Path with a
+    # null -Path is a terminating error under EAP=Stop (e.g. ${env:ProgramFiles(x86)}
+    # is undefined on 32-bit Windows), and this must never throw.
+    $cmd = Get-Command code -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    $cands = @(
+        @($env:LOCALAPPDATA,        'Programs\Microsoft VS Code\bin\code.cmd'),
+        @($env:ProgramFiles,        'Microsoft VS Code\bin\code.cmd'),
+        @(${env:ProgramFiles(x86)}, 'Microsoft VS Code\bin\code.cmd')
+    )
+    foreach ($pair in $cands) {
+        $base = $pair[0]
+        if (-not $base) { continue }
+        $c = Join-Path $base $pair[1]
+        if (Test-Path -LiteralPath $c) { return $c }
+    }
+    return $null
+}
+
+function Ensure-VSCodeRemoteSsh {
+    <#
+        Make sure VS Code and the Remote-SSH extension are installed on the host so
+        the control panel's "Open on VM" / project-open buttons and the end-of-install
+        deep link work. Idempotent: detects an existing install, else tries winget
+        (user scope; no elevation -- run this BEFORE Auto-Install self-elevates), then
+        installs the ms-vscode-remote.remote-ssh extension. If winget is unavailable it
+        prints a manual hint and moves on. Never throws. Returns $true if VS Code is
+        present afterwards, else $false.
+    #>
+    [CmdletBinding()]
+    param()
+
+    $code = Find-VSCodeCli
+    if (-not $code) {
+        if (Get-Command winget -ErrorAction SilentlyContinue) {
+            Write-Host "==> Installing VS Code (winget)..." -ForegroundColor Cyan
+            try {
+                & winget install --id Microsoft.VisualStudioCode -e --silent `
+                    --accept-package-agreements --accept-source-agreements --scope user 2>&1 | Out-Null
+            } catch {
+                Write-Warning "winget could not install VS Code: $($_.Exception.Message)"
+            }
+            $code = Find-VSCodeCli
+        }
+    }
+    if (-not $code) {
+        Write-Warning "VS Code isn't installed and couldn't be installed automatically."
+        Write-Host "    Install it from https://code.visualstudio.com/ , then run:" -ForegroundColor DarkGray
+        Write-Host "        code --install-extension ms-vscode-remote.remote-ssh" -ForegroundColor DarkGray
+        return $false
+    }
+    Write-Host "==> Ensuring the VS Code Remote-SSH extension..." -ForegroundColor Cyan
+    try {
+        # Idempotent: a no-op (exit 0) when the extension is already installed. A
+        # native command's non-zero exit does NOT throw in Windows PowerShell 5.1,
+        # so the catch can't see an install failure -- inspect $LASTEXITCODE instead,
+        # or we'd falsely report success when the extension didn't install.
+        & $code --install-extension ms-vscode-remote.remote-ssh 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "    Remote-SSH extension present." -ForegroundColor Green
+        } else {
+            Write-Warning "code --install-extension exited $LASTEXITCODE; the Remote-SSH extension may not be installed."
+            Write-Host "    Install it manually:  code --install-extension ms-vscode-remote.remote-ssh" -ForegroundColor DarkGray
+        }
+    } catch {
+        Write-Warning "Could not install the Remote-SSH extension: $($_.Exception.Message)"
+    }
+    return $true
+}
+
+function Add-HyperVAdminMembership {
+    <#
+        Add the current user to the local "Hyper-V Administrators" group so the
+        (non-elevated) control-panel extension can read VM power state via Get-VM --
+        and thus offer "Start & connect" for a stopped VM -- without a UAC prompt on
+        every status refresh. Needs admin (the installer is already elevated). The
+        group is resolved by its well-known SID (S-1-5-32-578) so it works on
+        non-English Windows. Idempotent and best-effort; never throws. Membership
+        takes effect at the user's next sign-in.
+    #>
+    [CmdletBinding()]
+    param()
+
+    try {
+        $sid = [System.Security.Principal.SecurityIdentifier]'S-1-5-32-578'
+        $grp = Get-LocalGroup -SID $sid -ErrorAction Stop
+        $mySid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+        $already = @(Get-LocalGroupMember -Group $grp -ErrorAction Stop |
+                     Where-Object { $_.SID.Value -eq $mySid })
+        if ($already.Count -gt 0) { Write-Note "Already in '$($grp.Name)'."; return }
+        # -Member accepts a SID string; -SID on this cmdlet would identify the GROUP.
+        Add-LocalGroupMember -Group $grp -Member $mySid -ErrorAction Stop
+        Write-Ok "Added you to '$($grp.Name)' (effective at next sign-in)."
+    } catch {
+        Write-Note "Could not update Hyper-V Administrators membership: $($_.Exception.Message)"
+    }
+}
+
+function Get-RemoteOpenLink {
+    # Build the `vscode://vscode-remote/ssh-remote+<alias><path>` deep link that opens
+    # the VM's workspace in VS Code over Remote-SSH. The alias is the VM host's first
+    # DNS label (agent-vm.mshome.net -> agent-vm), matching the SSH Host alias the
+    # provisioner writes and the extension's own URIs. Pure.
+    [CmdletBinding()]
+    param([string]$VmHost = "agent-vm", [string]$WorkspaceRoot = "/root/repos")
+    $alias = ($VmHost -split '\.')[0]
+    $path  = if ($WorkspaceRoot.StartsWith("/")) { $WorkspaceRoot } else { "/$WorkspaceRoot" }
+    return "vscode://vscode-remote/ssh-remote+$alias$path"
+}

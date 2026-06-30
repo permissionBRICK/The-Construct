@@ -114,6 +114,17 @@ if ($RefreshOnly) {
 $auto = Join-Path $root.FullName "Auto-Install.ps1"
 if (-not (Test-Path -LiteralPath $auto)) { throw "Auto-Install.ps1 not found in $($root.FullName)." }
 
+# Make sure VS Code + the Remote-SSH extension are present so the control panel's
+# "Open on VM" / project-open buttons and Auto-Install's end-of-install deep link
+# work. Done HERE (non-elevated, winget user scope) before Auto-Install self-elevates
+# -- winget is unreliable in an elevated session. Best-effort: never blocks the install.
+try {
+    . (Join-Path $root.FullName "lib\AgentVm.Common.ps1")
+    Ensure-VSCodeRemoteSsh | Out-Null
+} catch {
+    Write-Warning "Could not ensure VS Code / Remote-SSH (continuing): $($_.Exception.Message)"
+}
+
 Write-Host "==> Launching Auto-Install.ps1" -ForegroundColor Cyan
 Write-Host "    $auto" -ForegroundColor DarkGray
 & $auto
