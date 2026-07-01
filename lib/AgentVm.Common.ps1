@@ -831,6 +831,27 @@ function Get-ConstructBackupDir {
     return (Join-Path $Dir ".construct-backup")
 }
 
+function Test-BackupHasGitCredentials {
+    <#
+        $true when a saved config backup holds a non-empty git-credentials file
+        (extracted\home\.git-credentials). This is exactly the credential
+        Provision-AgentVM.ps1 falls back to for cloning private project repos on a
+        restore, so when it's present the up-front clone-credential prompt is
+        redundant and can be skipped -- the checkout still authenticates from the
+        restored credentials. (Path mirrors the restore fallback in
+        Provision-AgentVM.ps1.)
+    #>
+    [CmdletBinding()]
+    param([AllowEmptyString()][AllowNull()][string]$BackupDir)
+    if ([string]::IsNullOrWhiteSpace($BackupDir)) { return $false }
+    $credFile = Join-Path $BackupDir "extracted\home\.git-credentials"
+    if (-not (Test-Path -LiteralPath $credFile)) { return $false }
+    try {
+        $lines = @(Get-Content -LiteralPath $credFile -ErrorAction Stop | Where-Object { $_.Trim() })
+        return ($lines.Count -gt 0)
+    } catch { return $false }
+}
+
 function Get-ProjectRepoUrls {
     # Every repo URL declared by the named project profiles (a comma-separated
     # string or an array of names), read from <ProjectsDir>\<name>.json. Missing

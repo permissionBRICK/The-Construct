@@ -850,8 +850,21 @@ if (-not $SkipCreateVm) {
 
     # Feature 2: if any selected project clones repos, ask once for credentials
     # (Enter skips; a restore falls back to the saved git-credentials).
+    #
+    # But when a restore is in play AND its backup already carries stored git
+    # credentials, those get reused for the clone (Provision-AgentVM.ps1 falls back
+    # to them), so the prompt is redundant -- skip it. It's the stray prompt that
+    # otherwise interrupts the unattended control-panel reinstall. With no stored
+    # credentials available (e.g. a clean-wipe reinstall), still prompt so private
+    # repos can be cloned during provisioning.
     if (Get-Command Resolve-GitCloneCredential -ErrorAction SilentlyContinue) {
-        $chosenCloneCredB64 = Resolve-GitCloneCredential -ProjectsDir (Join-Path $PSScriptRoot 'projects') -Names $chosenProjects
+        $ccParams = @{ ProjectsDir = (Join-Path $PSScriptRoot 'projects'); Names = $chosenProjects }
+        if ($restoreDir -and (Get-Command Test-BackupHasGitCredentials -ErrorAction SilentlyContinue) `
+                        -and (Test-BackupHasGitCredentials -BackupDir $restoreDir)) {
+            $ccParams['NoPrompt'] = $true
+            Write-Note "Reusing the saved git credentials from the restore for cloning -- skipping the credential prompt."
+        }
+        $chosenCloneCredB64 = Resolve-GitCloneCredential @ccParams
     }
 
     # Optional login password for the agent user. This is only a manual-fallback
