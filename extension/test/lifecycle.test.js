@@ -35,7 +35,13 @@ ok("reprovision: git identity", has(repro.args, "-GitUserName", "Neo") && has(re
 ok("reprovision: bools as true/false strings", has(repro.args, "-VsCodeServeWeb", "true") && has(repro.args, "-VsCodeTunnel", "false") && has(repro.args, "-SmbShare", "true"));
 
 const reproEmpty = life.buildInvocation("reprovision", { settings: {} });
-ok("reprovision: omits unset fields", reproEmpty.args.join(" ") === "-Action provision");
+ok("reprovision: omits unset fields (still -NonInteractive)", reproEmpty.args.join(" ") === "-Action provision -NonInteractive");
+// Panel launch is non-interactive: don't re-prompt for the SMB drive letter etc.
+ok("reprovision: passes -NonInteractive", repro.args.includes("-NonInteractive"));
+// Project selection from the control panel is passed so the console doesn't re-prompt.
+const reproProj = life.buildInvocation("reprovision", { settings: {}, projects: ["web", "api"] });
+ok("reprovision: passes -Projects from the selection", has(reproProj.args, "-Projects", "web,api"));
+ok("reprovision: no -Projects when nothing selected", !reproEmpty.args.includes("-Projects"));
 
 // ── exportConfig ─────────────────────────────────────────────────────────────
 const exp = life.buildInvocation("exportConfig", { backupDir: "C:\\T\\.construct-backup" });
@@ -52,6 +58,8 @@ ok("reinstall: -Action reinstall -BackupMode save (default)", has(rei.args, "-Ac
 ok("reinstall: VM resources from settings", has(rei.args, "-VmMemoryGB", "16") && has(rei.args, "-VmDiskGB", "80"));
 ok("reinstall: no -UbuntuRelease (reuses ISO)", !rei.args.includes("-UbuntuRelease"));
 
+const reiProj = life.buildInvocation("reinstall", { settings: {}, projects: ["web"] });
+ok("reinstall: passes -Projects (Auto-Install forwards it to Provision)", has(reiProj.args, "-Projects", "web"));
 const reiWipe = life.buildInvocation("reinstall", { settings: {}, backupMode: "wipe" });
 ok("reinstall: honors backupMode wipe", has(reiWipe.args, "-BackupMode", "wipe"));
 const reiBad = life.buildInvocation("reinstall", { settings: {}, backupMode: "bogus" });
@@ -78,7 +86,8 @@ ok("winQuoteArg: trailing backslash before close doubled", life.winQuoteArg("C:\
 
 // ── buildChildCommandLine: spaced path / value stay single tokens ────────────
 const child = life.buildChildCommandLine("C:\\Program Files\\The-Construct\\Auto-Install.ps1", ["-Action", "reinstall", "-GitUserName", "John Smith"]);
-ok("child: -NoProfile -File preamble", child.startsWith("-NoProfile -ExecutionPolicy Bypass -NoExit -File "));
+ok("child: -NoProfile -File preamble (NO -NoExit — window closes after the script's own pause)",
+  child.startsWith("-NoProfile -ExecutionPolicy Bypass -File ") && !child.includes("-NoExit"));
 ok("child: spaced script path is ONE quoted token", child.includes('"C:\\Program Files\\The-Construct\\Auto-Install.ps1"'));
 ok("child: spaced value is ONE quoted token", child.includes('-GitUserName "John Smith"'));
 ok("child: plain args left unquoted", child.includes("-Action reinstall"));

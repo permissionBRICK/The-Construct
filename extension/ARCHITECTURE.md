@@ -350,9 +350,17 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
    gates. Launch is a host console via `child_process` + `Start-Process` (see the
    launch-model design decisions); reinstall/redownload elevate + show a modal
    confirm first. `customRebuild` maps to `-BackupMode save|existing|wipe`.
-   Deferred to later batches: passing `-Projects` (Projects batch) and the failure
-   → backup-reuse retry (the PS save/restore flow already handles a failed save by
-   offering to continue/cancel in-console). `lifecycle.test.js` covers it.
+   **Non-interactive from the panel:** `run` reads the persisted project selection
+   (`host.readSelectedProjects`) and passes `-Projects <csv>` when non-empty (so the
+   console doesn't re-prompt; omitted when nothing is selected, leaving the script's
+   own default); reprovision also passes `-NonInteractive` so `Provision-AgentVM.ps1`
+   auto-picks the SMB drive letter instead of prompting (reinstall/redownload get this
+   via Auto-Install's `-Auto` into Provision). The child argv has **NO `-NoExit`** — the
+   scripts pause themselves at the end ("Press Enter to exit", try/finally on success OR
+   error; `Update-Construct.ps1` gained the same), so the window stays readable and then
+   CLOSES on Enter rather than dropping to an interactive PowerShell prompt.
+   Deferred: the failure → backup-reuse retry (the PS save/restore flow already handles a
+   failed save by offering to continue/cancel in-console). `lifecycle.test.js` covers it.
 3. **Update checks** (split into 3a/3b):
    - 3a ✓ **DONE — Construct self-update** — `src/updates.js`: GitHub
      compare(`installedCommit...ref`) vs the marker in settings → header banner +

@@ -120,7 +120,12 @@ param(
     # Create-AgentVM.ps1), which owns the final "Press Enter" pause. When run on
     # its own this stays off and the script pauses at the end so a self-launched
     # window doesn't vanish before the output can be read.
-    [switch]$Auto
+    [switch]$Auto,
+    # Suppress interactive config prompts (e.g. the alternate SMB drive-letter menu)
+    # when launched from the control panel — the choices come from params instead.
+    # UNLIKE -Auto, this still lets the end-of-run pause fire (so the window stays
+    # readable, then closes). Implied by -Auto (an upper script pre-answers everything).
+    [switch]$NonInteractive
 )
 
 $ErrorActionPreference = "Stop"
@@ -877,8 +882,10 @@ function Select-AlternateDriveLetter {
         return $null
     }
 
+    # Auto-pick (don't prompt) when there's no interactive console, no menu helper, or
+    # the caller asked for non-interactive/auto (control-panel or upper-script launch).
     $haveMenu = [bool](Get-Command Show-Menu -ErrorAction SilentlyContinue)
-    if ([Console]::IsInputRedirected -or -not $haveMenu) {
+    if ([Console]::IsInputRedirected -or -not $haveMenu -or $Auto -or $NonInteractive) {
         Write-Warning "Drive ${Preferred}: is in use ($OccupiedBy); using $($free[0]): for the workspace share."
         return $free[0]
     }

@@ -13,6 +13,10 @@ param(
 $ErrorActionPreference = "Stop"
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
 
+# Wrap the whole run so the panel-launched window (no -NoExit) pauses at the end — on
+# success OR error — then closes on Enter, instead of vanishing before it can be read.
+try {
+
 $base = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:TEMP }
 $slug = ($Repo + "-" + $Ref) -replace '[^A-Za-z0-9._-]', '-'
 $work = Join-Path $base (Join-Path "The-Construct" $slug)
@@ -47,3 +51,9 @@ if (Get-Command Install-ControlPanelExtension -ErrorAction SilentlyContinue) {
 }
 Write-Host ""
 Write-Host "Update complete. Reload/restart VS Code to pick up the refreshed panel." -ForegroundColor Cyan
+
+} finally {
+    # Pause so the panel-launched window (no -NoExit) stays readable, then closes on
+    # Enter. Skip when input is redirected (non-interactive / automated runs).
+    if (-not [Console]::IsInputRedirected) { Write-Host ""; Read-Host "Press Enter to close" | Out-Null }
+}
