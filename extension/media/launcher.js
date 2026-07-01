@@ -41,6 +41,18 @@
       if (showUpd) { const bh = $("lUpdateBehind"); if (bh) bh.textContent = s.update.behind || ""; }
     }
 
+    // Provision-stale nudge (mirrors the panel): the VM was provisioned with an older
+    // Construct than the installed one — colour Reprovision yellow. Marker-based, so set
+    // before the offline early-return below.
+    const lrep = document.querySelector('.lactions [data-cmd="reprovision"]');
+    if (lrep) {
+      const stale = !!s.provisionStale;
+      lrep.classList.toggle("stale", stale);
+      lrep.title = stale
+        ? "The VM was provisioned with an older Construct — reprovision to apply the update."
+        : "Reprovision — re-run setup, keep all data";
+    }
+
     const agentsEl = $("lAgents");
     if (!online) { if (agentsEl) agentsEl.textContent = "unavailable"; $("lMeta").textContent = ""; return; }
 

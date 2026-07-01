@@ -326,6 +326,21 @@
     const sd = $("shutdownBtn");
     if (sd) sd.hidden = !online;
 
+    // Provision-stale nudge: the VM was provisioned with an OLDER Construct than the one
+    // now installed on the host, so a reprovision would apply the update to the VM. Colour
+    // the Reprovision button yellow + say so in its subtext/tooltip. Marker-based (host
+    // settings), so it's known regardless of VM reachability — set before the early-return.
+    const reprov = document.querySelector('.action-grid [data-cmd="reprovision"]');
+    if (reprov) {
+      const stale = !!s.provisionStale;
+      reprov.classList.toggle("stale", stale);
+      reprov.title = stale
+        ? "The VM was provisioned with an older Construct — reprovision to apply the update to the VM."
+        : "Reprovision — re-run setup, keep all data";
+      const sub = reprov.querySelector("small");
+      if (sub) sub.textContent = stale ? "update pending · reprovision to apply" : "re-run setup · keep all data";
+    }
+
     // Unreachable, or reachable but the probe script failed: we have no trustworthy
     // VM data, so clear it rather than show stale values.
     if (!online || s.probeError) { clearLiveVmData(); return; }

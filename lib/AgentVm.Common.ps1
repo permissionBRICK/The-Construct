@@ -1412,3 +1412,29 @@ function Set-ConstructInstalledMarker {
     }
     return $sha
 }
+
+function Set-ConstructProvisionedMarker {
+    <#
+        Record which commit the VM was LAST PROVISIONED with, in a SEPARATE key
+        (provisionedCommit) from installedCommit. installedCommit tracks the installed
+        Construct (extension + scripts, set by install/update); provisionedCommit tracks
+        what the VM actually ran with. The panel flags the Provision button when they
+        differ (VM behind the installed Construct). We mirror the CURRENT installedCommit
+        -- i.e. the version of the scripts doing this provision -- rather than a fresh
+        fetch, so it can't claim a newer commit than what's actually installed. Best-effort;
+        never throws. Returns the recorded sha ("" if no installedCommit is known yet).
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Dir)
+    $sha = ""
+    try {
+        $existing = Read-ConstructSettings -Dir $Dir
+        if ($existing -and $existing.installedCommit) { $sha = [string]$existing.installedCommit }
+    } catch { }
+    try {
+        Save-ConstructSettings -Dir $Dir -Values @{ provisionedCommit = $sha }
+    } catch {
+        Write-Warning "Could not record the provisioned marker: $($_.Exception.Message)"
+    }
+    return $sha
+}

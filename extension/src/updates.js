@@ -22,14 +22,26 @@ const TTL_MS = 10 * 60 * 1000; // cache a successful result for 10 min (GitHub u
 const NEG_TTL_MS = 60 * 1000;  // cache a FAILURE (null) only briefly, so a transient
                                // offline/rate-limit blip doesn't hide the banner for 10 min
 
-/** Read the Construct update markers from raw settings, applying defaults. */
+/** Read the Construct update markers from raw settings, applying defaults.
+ *  installedCommit = the installed Construct (extension + scripts; set by install/update).
+ *  provisionedCommit = what the VM was last provisioned with (set by Provision). */
 function readMarkers(raw) {
   raw = raw || {};
   return {
     repo: (raw.constructRepo && String(raw.constructRepo).trim()) || DEFAULT_REPO,
     ref: (raw.constructRef && String(raw.constructRef).trim()) || DEFAULT_REF,
     installedCommit: raw.installedCommit ? String(raw.installedCommit).trim() : "",
+    provisionedCommit: raw.provisionedCommit ? String(raw.provisionedCommit).trim() : "",
   };
+}
+
+/** Whether the VM was provisioned with a DIFFERENT commit than the installed Construct
+ *  (so a reprovision would apply the update to the VM). Conservative: only true when BOTH
+ *  markers are known and differ — an unknown provisionedCommit (a VM provisioned before
+ *  this tracking existed) is not flagged until its next reprovision records one. */
+function isProvisionStale(markers) {
+  return !!(markers && markers.installedCommit && markers.provisionedCommit &&
+            markers.installedCommit !== markers.provisionedCommit);
 }
 
 /** GET a URL and parse JSON, FOLLOWING redirects (up to opts.maxRedirects, default 3)
@@ -213,6 +225,10 @@ async function augment(state, raw, opts = {}) {
     if (markers.installedCommit) {
       next = { ...next, constructRev: `${markers.ref}@${markers.installedCommit.slice(0, 7)}` };
     }
+    // The VM is behind the installed Construct → the panel flags the Provision button.
+    // Only set it when TRUE (keep the "no marker → unchanged" fast path; the webview
+    // treats an absent flag as not-stale and re-toggles the class on every render).
+    if (isProvisionStale(markers)) next = { ...next, provisionStale: true };
     const c = await checkConstructCached(markers, opts);
     if (c) next = { ...next, update: { available: c.available, behind: behindText(c.count) } };
     // Agent update detection (only when the VM is online with probed agents).
@@ -234,6 +250,6 @@ function constructRefreshArgs(markers) {
 module.exports = {
   DEFAULT_REPO, DEFAULT_REF, TTL_MS, NEG_TTL_MS, AGENT_LATEST,
   readMarkers, acceptFor, fetchJson, constructUpdateFromCompare, checkConstruct, checkConstructCached,
-  behindText, semverParts, isNewer, fetchAgentLatest, augmentAgents, buildAgentUpdateScript,
+  behindText, semverParts, isNewer, isProvisionStale, fetchAgentLatest, augmentAgents, buildAgentUpdateScript,
   augment, constructRefreshArgs,
 };

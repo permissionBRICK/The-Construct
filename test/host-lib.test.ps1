@@ -265,6 +265,25 @@ ok "marker: param-less reprovision preserves the recorded pair" ($mReprov.Repo -
 $mFresh = Resolve-MarkerSource -Repo "permissionBRICK/The-Construct" -Ref "main" -RepoSupplied $false -RefSupplied $false -ExistingRepo "" -ExistingRef ""
 ok "marker: no explicit + no existing -> defaults" ($mFresh.Repo -eq "permissionBRICK/The-Construct" -and $mFresh.Ref -eq "main")
 
+# ── Set-ConstructProvisionedMarker: mirrors installedCommit -> provisionedCommit ──
+# installedCommit tracks the installed Construct (install/update); provisionedCommit
+# records what the VM was provisioned with, mirrored from the CURRENT installedCommit
+# (not a fresh fetch), so the panel can flag "VM behind installed" without ever claiming
+# a newer commit than what's installed. Merges (preserves other keys).
+$pvDir = Join-Path ([System.IO.Path]::GetTempPath()) ("pv-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $pvDir | Out-Null
+try {
+    Save-ConstructSettings -Dir $pvDir -Values @{ installedCommit = "abc123"; gitUserName = "Neo" }
+    $pv = Set-ConstructProvisionedMarker -Dir $pvDir
+    $after = Read-ConstructSettings -Dir $pvDir
+    ok "provisioned: mirrors installedCommit" ($pv -eq "abc123" -and $after.provisionedCommit -eq "abc123")
+    ok "provisioned: merge preserves other keys" ($after.installedCommit -eq "abc123" -and $after.gitUserName -eq "Neo")
+    $pvEmpty = Join-Path ([System.IO.Path]::GetTempPath()) ("pv2-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $pvEmpty | Out-Null
+    try { ok "provisioned: no installedCommit -> empty, no throw" ((Set-ConstructProvisionedMarker -Dir $pvEmpty) -eq "") }
+    finally { Remove-Item -LiteralPath $pvEmpty -Recurse -Force -ErrorAction SilentlyContinue }
+} finally { Remove-Item -LiteralPath $pvDir -Recurse -Force -ErrorAction SilentlyContinue }
+
 # ── Regression guard: no non-ASCII INSIDE a string literal in shipped .ps1 ────
 # Windows PowerShell 5.1 reads a BOM-less .ps1 as the ANSI code page, so a UTF-8
 # em-dash (etc.) inside a STRING mangles into a smart-quote that closes the string

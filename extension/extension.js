@@ -659,17 +659,20 @@ function enableAudio(context, webview, opts = {}) {
       vscode.window.showErrorMessage(why + (r.detail ? " " + String(r.detail).slice(0, 160) : ""));
     } else if (!opts.auto) {
       // The guard patch is now on the VM, but the already-running Claude Code extension
-      // still has the pre-patch code in memory — its mic button won't appear until the
-      // window reloads. Offer it (only when the gate actually patched; passthrough is
-      // now the persisted preference, so auto-arm re-establishes it after the reload).
-      if (hostAudio && hostAudio.gatePatched) {
+      // still has the pre-patch code in memory — its MICROPHONE ICON won't appear until
+      // the window reloads / VS Code restarts. Notify the user (with a one-click Reload).
+      // Skip the hint only when we KNOW the gate wasn't patched (gatePatched === false):
+      // then the icon won't appear regardless (unrecognised Claude build — the panel's
+      // audio substatus already says so). passthrough is the persisted preference, so
+      // auto-arm re-establishes it after the reload.
+      if (hostAudio && hostAudio.gatePatched === false) {
+        vscode.window.showInformationMessage("Microphone passthrough enabled — the mic opens only while you're recording.");
+      } else {
         const RELOAD = "Reload window";
         vscode.window.showInformationMessage(
-          "Microphone passthrough enabled. Reload the window so Claude Code shows the mic button (passthrough re-arms automatically).",
+          "Microphone passthrough enabled. If the microphone icon doesn't appear in Claude Code, reload (or restart) VS Code so its extension picks up the change — passthrough re-arms automatically.",
           RELOAD
         ).then((pick) => { if (pick === RELOAD) vscode.commands.executeCommand("workbench.action.reloadWindow"); });
-      } else {
-        vscode.window.showInformationMessage("Microphone passthrough enabled — the mic opens only while you're recording.");
       }
     }
   };
