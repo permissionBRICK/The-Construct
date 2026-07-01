@@ -127,6 +127,16 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("state render: agent version", (await page.locator("#agentList .agent").first().innerText()).includes("2.1.196"));
   check("state render: project chips", (await page.locator("#projChips .chip").count()) === 2);
 
+  // provision-stale: Reprovision goes yellow (class "stale") + subtext when the VM was
+  // provisioned with an older Construct than the installed one; cleared when in sync.
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h", provisionStale: true } }, "*"));
+  await page.waitForTimeout(60);
+  check("panel: reprovision marked stale when VM behind", await page.locator('.action-grid [data-cmd="reprovision"]').evaluate((el) => el.classList.contains("stale")));
+  check("panel: reprovision stale subtext", (await page.locator('.action-grid [data-cmd="reprovision"] small').innerText()).toLowerCase().includes("update pending"));
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h" } }, "*"));
+  await page.waitForTimeout(60);
+  check("panel: reprovision not stale when in sync", !(await page.locator('.action-grid [data-cmd="reprovision"]').evaluate((el) => el.classList.contains("stale"))));
+
   // per-chip open: each chip carries an inline ▷ button that opens that project on
   // the VM; the chip body still opens the edit modal, and ▷ must NOT bubble to it.
   check("state render: each chip has a ▷ open button", (await page.locator("#projChips .chip .openbtn").count()) === 2);
@@ -386,6 +396,14 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: false, host: "h.example.net", update: { available: true } } }, "*"));
   await page.waitForTimeout(60);
   check("launcher: update banner hidden when offline", !(await page.locator("#lUpdate").isVisible()));
+
+  // provision-stale in the launcher: the Reprovision laction gets the "stale" class.
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h.example.net", provisionStale: true } }, "*"));
+  await page.waitForTimeout(60);
+  check("launcher: reprovision marked stale when VM behind", await page.locator('.lactions [data-cmd="reprovision"]').evaluate((el) => el.classList.contains("stale")));
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h.example.net" } }, "*"));
+  await page.waitForTimeout(60);
+  check("launcher: reprovision not stale when in sync", !(await page.locator('.lactions [data-cmd="reprovision"]').evaluate((el) => el.classList.contains("stale"))));
 
   // measure overflow with the shutdown button visible (connect stays hidden by design).
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h.example.net", connected: false, vmState: "running" } }, "*"));

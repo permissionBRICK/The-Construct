@@ -251,12 +251,21 @@ VM-derived fields when `online===false` or `probeError`):
   fresh each render. `probe.test.js` covers the emit/parse/format + the omit-when-absent
   contract. (Reprovision = `Provision-AgentVM.ps1 -Action provision`, which runs
   `provision.sh` on the VM, so the same marker step covers first install and reprovision.)
-- **Construct update check = a recorded commit marker + GitHub compare.** The
-  installed commit lives in `.construct-settings.json` as `installedCommit` (with
-  `constructRepo`/`constructRef`), written by `Provision-AgentVM.ps1` at install time
-  and by `Update-Construct.ps1` on refresh. `updates.augment` compares
-  `installedCommit...ref` via the GitHub API and folds `{update:{available,behind}}`
-  + a `constructRev` label into the state. It's BEST-EFFORT and CACHED (10 min for
+- **Two commit markers: installed vs provisioned.** `.construct-settings.json` records
+  TWO commits. `installedCommit` = the installed Construct (extension + scripts) — written
+  by the INSTALL path (`Auto-Install.ps1`'s non-elevated pre-step, right after it installs
+  the vsix) and by `Update-Construct.ps1` on refresh; it drives the "update available"
+  banner (`updates.augment` compares `installedCommit...ref` via GitHub → `{update:{available,
+  behind}}` + a `constructRev` label). `provisionedCommit` = what the VM was last provisioned
+  with — written by `Provision-AgentVM.ps1` (`Set-ConstructProvisionedMarker`), MIRRORING the
+  current `installedCommit` (not a fresh fetch, so it can't claim a newer commit than the
+  scripts actually are). Provision does NOT touch `installedCommit`, so a reprovision can't
+  wrongly clear the update banner. When the two differ (`updates.isProvisionStale`), the
+  panel + launcher mark the **Reprovision** button yellow (`.stale`) + "update pending"
+  subtext/tooltip — "the VM is behind the installed Construct; reprovision to apply it."
+  Conservative: only when BOTH markers are known and differ (an unknown `provisionedCommit`
+  — a VM provisioned before this tracking — isn't flagged until its next reprovision records
+  one). It's BEST-EFFORT and CACHED (10 min for
   a real result; 60 s for a failure, so a transient blip doesn't hide the banner for
   10 min): no marker, offline, or rate-limited → no `update` key → banner hidden.
   `updateConstruct` (`runUpdateConstruct`) launches `Update-Construct.ps1` on the host
@@ -566,12 +575,13 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
      local copy can't drift. The host setup that MUST run non-elevated (per-user
      `%USERPROFILE%` + winget) — `Ensure-VSCodeRemoteSsh` + `Install-ControlPanelExtension`
      — runs in `Auto-Install.ps1`'s pre-elevation step, so running `Auto-Install.ps1`
-     directly (Option A / a desktop shortcut) installs the panel too. The installed-commit
-     marker (`Set-ConstructInstalledMarker`) moved to `Provision-AgentVM.ps1`, recorded at
-     the end of a successful provision (writes the scripts dir, not `%USERPROFILE%`, so
-     elevated is fine). `-Repo`/`-Ref` thread install.ps1→Auto-Install→Create-AgentVM→
-     Provision as a PAIR (`Resolve-MarkerSource`): explicit wins, else preserve existing
-     settings on a param-less reprovision, else canonical defaults.
+     directly (Option A / a desktop shortcut) installs the panel too. That pre-step ALSO
+     records `installedCommit` (`Set-ConstructInstalledMarker`) right after the vsix install
+     — the installed Construct's version. `Provision-AgentVM.ps1` records the SEPARATE
+     `provisionedCommit` (`Set-ConstructProvisionedMarker`, mirroring installedCommit) at the
+     end of a successful provision; it no longer writes installedCommit. `-Repo`/`-Ref`
+     thread install.ps1→Auto-Install as a PAIR (`Resolve-MarkerSource`): explicit wins, else
+     preserve existing settings, else canonical defaults.
    - `Update-Construct.ps1` (the panel's "Update Construct", launched by `updateConstruct`)
      re-downloads the repo, records the marker, and reinstalls the vsix directly — it never
      launches Auto-Install, so it never rebuilds the VM. `install.ps1` itself is now a THIN

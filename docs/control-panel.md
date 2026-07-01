@@ -41,8 +41,14 @@ automatically.
 
 The **Coding agents** module lists Claude Code, Codex, and Opencode with their live
 versions. Update checks are best-effort and cached: a header banner appears when Construct
-itself is behind its git ref (**Update Construct** re-downloads in place), and a per-agent
+itself is behind its git ref (**Update Construct** re-downloads the extension + scripts in
+place and records the new version, so the banner clears once it's done), and a per-agent
 badge marks an available update (**update all** force-updates them over SSH, then re-probes).
+
+Construct tracks two versions separately: the **installed** Construct (extension + scripts,
+bumped by install / Update Construct) and the version the **VM was last provisioned with**.
+When the VM is behind the installed Construct, the **Reprovision** button turns **yellow**
+("update pending") — reprovision to apply the update to the VM. It clears once you reprovision.
 
 ## Lifecycle
 

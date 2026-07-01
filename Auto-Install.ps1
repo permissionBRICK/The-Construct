@@ -172,6 +172,18 @@ if (-not $SkipCreateVm) {
             . (Join-Path $PSScriptRoot "lib\AgentVm.Common.ps1")
             if (Get-Command Ensure-VSCodeRemoteSsh -ErrorAction SilentlyContinue) { Ensure-VSCodeRemoteSsh | Out-Null }
             if (Get-Command Install-ControlPanelExtension -ErrorAction SilentlyContinue) { Install-ControlPanelExtension -SourceRoot $PSScriptRoot | Out-Null }
+            # Record the installed Construct commit (extension + scripts) so the panel's
+            # update banner has a base to diff against -- this is the INSTALL side of the
+            # marker (Provision records the separate provisionedCommit). Resolve repo/ref as
+            # a pair (explicit wins; else preserve the recorded source; else defaults).
+            if (Get-Command Set-ConstructInstalledMarker -ErrorAction SilentlyContinue) {
+                $exR = ""; $exF = ""
+                try { $s = Read-ConstructSettings -Dir $PSScriptRoot; if ($s) { $exR = [string]$s.constructRepo; $exF = [string]$s.constructRef } } catch { }
+                $mk = if (Get-Command Resolve-MarkerSource -ErrorAction SilentlyContinue) {
+                    Resolve-MarkerSource -Repo $Repo -Ref $Ref -RepoSupplied ($PSBoundParameters.ContainsKey('Repo')) -RefSupplied ($PSBoundParameters.ContainsKey('Ref')) -ExistingRepo $exR -ExistingRef $exF
+                } else { @{ Repo = $Repo; Ref = $Ref } }
+                Set-ConstructInstalledMarker -Root $PSScriptRoot -Repo $mk.Repo -Ref $mk.Ref | Out-Null
+            }
             # ffmpeg powers host-side microphone passthrough (the panel spawns it locally
             # to capture the mic -- a VS Code webview can't). Best-effort user-scope install.
             if (Get-Command Ensure-Ffmpeg -ErrorAction SilentlyContinue) { Ensure-Ffmpeg | Out-Null }

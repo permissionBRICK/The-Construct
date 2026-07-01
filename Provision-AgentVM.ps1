@@ -1508,35 +1508,21 @@ if ($script:SecureRootKeyPath) {
 }
 
 Write-Host ""
-# Record the installed-commit marker now that the provision has SUCCEEDED -- the last
-# step of a good install (moved here from install.ps1 so it reflects a COMPLETED
-# provision, not merely a started download). It writes the scripts dir, not
-# %USERPROFILE%, so the elevated provision context is fine. Prefer an explicit
-# -Repo/-Ref (threaded from install.ps1, incl. forks); on a param-less reprovision
-# keep what the settings file already records, so we refresh installedCommit without
-# resetting the source. Best-effort: guarded + never fatal.
-if ($Action -eq "provision" -and (Get-Command Set-ConstructInstalledMarker -ErrorAction SilentlyContinue)) {
-    # Read any existing recorded source (used ONLY on a truly param-less reprovision).
-    $exRepo = ""; $exRef = ""
-    if (Get-Command Read-ConstructSettings -ErrorAction SilentlyContinue) {
-        try {
-            $curSettings = Read-ConstructSettings -Dir $PSScriptRoot
-            if ($curSettings) { $exRepo = [string]$curSettings.constructRepo; $exRef = [string]$curSettings.constructRef }
-        } catch { }
-    }
-    # Resolve repo/ref as a PAIR (see Resolve-MarkerSource): explicit -Repo/-Ref win as
-    # the effective pair; otherwise preserve the recorded source; otherwise defaults.
-    $mk = if (Get-Command Resolve-MarkerSource -ErrorAction SilentlyContinue) {
-        Resolve-MarkerSource -Repo $Repo -Ref $Ref `
-            -RepoSupplied ($PSBoundParameters.ContainsKey('Repo')) -RefSupplied ($PSBoundParameters.ContainsKey('Ref')) `
-            -ExistingRepo $exRepo -ExistingRef $exRef
-    } else { @{ Repo = $Repo; Ref = $Ref } }
+# Record the PROVISIONED-commit marker now that the provision has SUCCEEDED. This is a
+# SEPARATE key from installedCommit: installedCommit tracks the installed Construct
+# (extension + scripts -- recorded by install / Update-Construct), while provisionedCommit
+# records the version the VM was actually provisioned with (mirrors the current
+# installedCommit -- the scripts doing this provision). The panel flags the Provision
+# button when they differ (the installed Construct is newer than what the VM ran with).
+# We do NOT touch installedCommit here, so a reprovision can't wrongly clear the
+# "update available" banner. Best-effort: guarded + never fatal.
+if ($Action -eq "provision" -and (Get-Command Set-ConstructProvisionedMarker -ErrorAction SilentlyContinue)) {
     try {
-        $mkSha = Set-ConstructInstalledMarker -Root $PSScriptRoot -Repo $mk.Repo -Ref $mk.Ref
+        $pvSha = Set-ConstructProvisionedMarker -Dir $PSScriptRoot
         Write-Host ""
-        Write-Host "Recorded installed commit for the control panel: $mkSha ($($mk.Repo)@$($mk.Ref))" -ForegroundColor DarkGray
+        Write-Host "Recorded provisioned commit for the control panel: $pvSha" -ForegroundColor DarkGray
     } catch {
-        Write-Warning "Could not record the update marker: $($_.Exception.Message)"
+        Write-Warning "Could not record the provisioned marker: $($_.Exception.Message)"
     }
 }
 

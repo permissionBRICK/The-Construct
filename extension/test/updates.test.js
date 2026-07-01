@@ -65,6 +65,18 @@ function ok(name, cond, detail) {
   const a3 = await updates.augment(base, {}, { fetchJson: fakeFetch({ ahead_by: 6 }), noCache: true });
   ok("augment: no marker -> unchanged (same ref, no update/constructRev)", a3 === base);
 
+  // ── provisionStale (installedCommit vs provisionedCommit) ────────────────────
+  ok("stale: installed != provisioned -> stale", updates.isProvisionStale({ installedCommit: "aaa", provisionedCommit: "bbb" }) === true);
+  ok("stale: installed == provisioned -> not stale", updates.isProvisionStale({ installedCommit: "aaa", provisionedCommit: "aaa" }) === false);
+  ok("stale: missing provisioned -> not stale (conservative)", updates.isProvisionStale({ installedCommit: "aaa", provisionedCommit: "" }) === false);
+  ok("stale: missing installed -> not stale", updates.isProvisionStale({ installedCommit: "", provisionedCommit: "bbb" }) === false);
+  ok("markers: reads provisionedCommit", updates.readMarkers({ provisionedCommit: " ccc " }).provisionedCommit === "ccc");
+  // augment folds provisionStale ONLY when stale (so the no-marker fast path above holds).
+  const aStale = await updates.augment(base, { installedCommit: "aaaaaaa", provisionedCommit: "bbbbbbb", constructRef: "main" }, { fetchJson: fakeFetch({ ahead_by: 0 }), noCache: true });
+  ok("augment: stale VM -> provisionStale true", aStale.provisionStale === true);
+  const aFresh = await updates.augment(base, { installedCommit: "aaaaaaa", provisionedCommit: "aaaaaaa", constructRef: "main" }, { fetchJson: fakeFetch({ ahead_by: 0 }), noCache: true });
+  ok("augment: in-sync VM -> no provisionStale key", aFresh.provisionStale === undefined);
+
   const a4 = await updates.augment(base, { installedCommit: "abc1234567" }, { fetchJson: async () => null, noCache: true });
   ok("augment: network fail still sets constructRev, no update", a4.constructRev === "main@abc1234" && a4.update === undefined);
 

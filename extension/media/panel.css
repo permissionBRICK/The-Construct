@@ -97,6 +97,10 @@ h1.title {
 .act.primary .t, .act.primary .t .gl { color: var(--title); }
 .act.danger:hover { border-color: rgba(255,93,93,0.5); box-shadow: 0 0 12px rgba(255,93,93,0.15); }
 .act.danger .t .gl { color: var(--crit); }
+/* Provision-stale: VM behind the installed Construct. Yellow overrides .act.primary's green. */
+.act.stale { background: linear-gradient(180deg, rgba(255,194,77,0.16), rgba(255,194,77,0.05)); border-color: var(--warn); box-shadow: 0 0 16px rgba(255,194,77,0.18); }
+.act.stale .t .gl { color: var(--warn); }
+.act.stale small { color: var(--warn); opacity: 0.95; }
 
 /* Status strip */
 .strip { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
@@ -333,6 +337,8 @@ body.launcher { font-size: 12px; }
 .laction .lglyph { font-size: 17px; color: var(--accent); line-height: 1; }
 .laction.danger .lglyph { color: #ff8a8a; }
 .laction.danger:hover { border-color: rgba(255,93,93,0.5); box-shadow: 0 0 10px rgba(255,93,93,0.15); }
+.laction.stale { border-color: var(--warn); box-shadow: 0 0 10px rgba(255,194,77,0.18); }
+.laction.stale .lglyph { color: var(--warn); }
 .lopen {
   font-family: var(--mono); font-size: 12.5px; letter-spacing: 0.5px; font-weight: 700; color: var(--void);
   background: linear-gradient(180deg, var(--rain), var(--accent)); border: 0; border-radius: 6px;
