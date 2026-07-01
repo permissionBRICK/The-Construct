@@ -56,6 +56,11 @@
           "type": "string",
           "default": "",
           "markdownDescription": "Folder that holds the Construct PowerShell lifecycle scripts (`Auto-Install.ps1`, `projects/`, `.construct-settings.json`). Leave empty to auto-detect the newest install under `%LOCALAPPDATA%\\The-Construct`."
+        },
+        "construct.micDevice": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Windows microphone passthrough: the exact DirectShow capture-device name to record from. Leave empty to auto-detect the first audio device. List devices with `ffmpeg -list_devices true -f dshow -i dummy` and copy a name from the DirectShow audio section (e.g. `Microphone (Realtek(R) Audio)`)."
         }
       }
     }

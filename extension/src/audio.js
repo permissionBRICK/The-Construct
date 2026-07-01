@@ -58,6 +58,101 @@ const BYTES_PER_FRAME = FORMAT.channels * (FORMAT.bitDepth / 8);
 const REC_ARGV = ["-q", "--buffer", "1024", "-t", "raw", "-r", "16000", "-e", "signed", "-b", "16", "-c", "1", "-"];
 const ARECORD_ARGV = ["-q", "-f", "S16_LE", "-r", "16000", "-c", "1", "-t", "raw"];
 
+// ── Host-side mic capture (the REAL capture path) ───────────────────────────────
+// A VS Code webview CANNOT open the local mic: VS Code embeds every webview in an
+// iframe whose Permissions-Policy `allow` attribute is fixed to
+//   allow="cross-origin-isolated; autoplay; local-network-access; clipboard-read; clipboard-write;"
+// — with NO `microphone`. The extension has no way to add `microphone` to that
+// embedder-controlled attribute, so `getUserMedia({audio:true})` inside the webview
+// is rejected with NotAllowedError and no PCM ever flows (the shim then reads a
+// connected-but-empty socket → the "completely silent signal" symptom). So we
+// capture on the HOST with a native recorder instead — the UI extension's Node runs
+// locally, so it can spawn one — emitting the exact recorder contract on stdout.
+//
+// We reproduce Claude's own recorder contract byte-for-byte: raw PCM, signed 16-bit
+// little-endian, 16 kHz, MONO. Prefer ffmpeg (ships on the Construct host toolchain,
+// cross-platform, default input device via dshow/avfoundation/pulse); fall back to
+// sox `rec` (already bundled for provisioning). Both write raw PCM to stdout so the
+// bytes are identical to what the VM shim would otherwise forward.
+//
+// buildHostRecorder is PURE (returns {file, args} for a given tool + platform) so the
+// argv is unit-tested without spawning anything; the actual spawn is a caller seam.
+
+// ffmpeg's input-device selector differs per OS. On Windows dshow needs an EXACT
+// capture-device NAME (there is NO `audio=default` pseudo-device — passing it fails
+// to open, so the recorder exits and the mic is silent). `device` is that resolved
+// name (from resolveWinMicDevice / the construct.micDevice override); it is a single
+// argv token, so no shell quoting is needed even for names with spaces/parens. macOS
+// avfoundation and Linux pulse/alsa DO accept a default selector. When no Windows
+// device is known we fall back to `audio=default` only as a last resort (it will
+// likely fail to open → honest "no audio", never silence-forever).
+function ffmpegInputArgs(platform, device) {
+  if (platform === "win32") return ["-f", "dshow", "-i", "audio=" + (device || "default")];
+  if (platform === "darwin") return ["-f", "avfoundation", "-i", (device ? (":" + device) : ":default")];
+  return ["-f", "pulse", "-i", device || "default"];
+}
+
+// argv for a device-listing probe: `ffmpeg -list_devices true -f dshow -i dummy`
+// prints the host's DirectShow devices to STDERR then exits non-zero (expected). Pure.
+function buildDshowListArgs() {
+  return ["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"];
+}
+
+// Parse the friendly audio-device names out of `ffmpeg -list_devices` stderr. Handles
+// BOTH historical formats: modern ffmpeg tags each name line with a `(audio)`/`(video)`
+// suffix; older ffmpeg groups them under "DirectShow audio devices" section headers.
+// "Alternative name" lines are skipped (they're the @device_... moniker, not a name).
+// Returns the audio device names in listed order (first = the one we default to). Pure.
+function parseDshowAudioDevices(text) {
+  const names = [];
+  let section = null; // 'audio' | 'video' | null (older-format section tracking)
+  for (const raw of String(text || "").split(/\r?\n/)) {
+    const line = raw.trim();
+    if (/DirectShow audio devices/i.test(line)) { section = "audio"; continue; }
+    if (/DirectShow video devices/i.test(line)) { section = "video"; continue; }
+    if (/Alternative name/i.test(line)) continue; // the @device_... moniker line
+    const m = line.match(/"([^"]+)"/);
+    if (!m) continue;
+    const isAudio = /\(audio\)\s*$/i.test(line);
+    const isVideo = /\(video\)\s*$/i.test(line);
+    // Modern format: trust the explicit (audio) tag. Older format: no tag → use the
+    // current section header. A video-tagged line is never an audio device.
+    if (isAudio || (!isVideo && section === "audio")) names.push(m[1]);
+  }
+  return names;
+}
+
+/**
+ * Build the argv for a native host-side recorder that emits the recorder contract
+ * (raw S16LE / 16 kHz / mono) on stdout. `tool` is "ffmpeg" (default) or "sox".
+ * `platform` selects the OS input device (default process.platform). Pure — returns
+ * { file, args }; the caller spawns it and pipes stdout to the tunnel socket.
+ *
+ * ffmpeg: `-f s16le -acodec pcm_s16le -ar 16000 -ac 1 -` after the input selector,
+ * `-loglevel quiet -nostats` so stdout is PURE PCM (no banner/progress chatter that
+ * would corrupt the stream). sox: `rec` with the recorder argv (REC_ARGV) which
+ * already targets raw/16k/S16/mono to stdout. */
+function buildHostRecorder(tool, platform, device) {
+  const plat = platform || process.platform;
+  if (tool === "sox") {
+    // sox `rec` reads the default capture device and honours REC_ARGV's output format.
+    return { file: "rec", args: REC_ARGV.slice() };
+  }
+  // ffmpeg (default). Input selector first, then the pinned raw-PCM output on stdout.
+  return {
+    file: "ffmpeg",
+    args: [
+      "-hide_banner", "-loglevel", "quiet", "-nostats",
+      ...ffmpegInputArgs(plat, device),
+      "-ac", "1",            // mono
+      "-ar", "16000",        // 16 kHz
+      "-f", "s16le",         // raw signed 16-bit little-endian container
+      "-acodec", "pcm_s16le",// …explicit codec so the bytes are unambiguous
+      "-",                   // stdout
+    ],
+  };
+}
+
 // ── Ports ────────────────────────────────────────────────────────────────────
 // vmPort — the loopback port on the VM the shim connects to; the reverse tunnel
 // binds it. hostPort — the local TCP server the tunnel forwards to. hostPort=0
@@ -623,6 +718,143 @@ function defaultReadScript(basename) {
   return fs.readFileSync(require("path").join(vmScriptsDir(), basename), "utf8");
 }
 
+// ── Host mic provider (AudioSession.onCapture) ──────────────────────────────────
+/**
+ * Build the mic provider AudioSession/HostAudio arm on each shim connection: it
+ * spawns a native host recorder, pipes its raw-PCM stdout to the tunnel socket, and
+ * returns a stop function that kills the recorder on disconnect (so the mic is open
+ * ONLY while Claude is recording — the on-demand contract). This REPLACES the old
+ * webview capture, which could never work (VS Code's webview iframe Permissions-
+ * Policy omits `microphone`, so getUserMedia is always rejected → silence).
+ *
+ * The provider shape is `(writeChunk, done) => stopFn` (exactly AudioSession's
+ * onCapture): writeChunk(buf) pushes one PCM chunk to the shim; done() ends the
+ * capture (recorder exited / couldn't start), which closes the socket so the shim
+ * reports "no audio" instead of feeding silence forever.
+ *
+ * opts (all optional, all test seams):
+ *   _spawn     child_process.spawn (default). Signature (file,args,opts)=>child.
+ *   _platform  process.platform override (picks the ffmpeg input device).
+ *   tools      ordered recorder preference, default ["ffmpeg","sox"]; on a spawn
+ *              ENOENT (tool not installed) we try the next one so a host with only
+ *              sox (bundled for provisioning) still works.
+ *   device     explicit dshow capture-device name (the construct.micDevice override);
+ *              when set, skips enumeration and uses it verbatim.
+ *   enumerate  resolve the Windows dshow device via `ffmpeg -list_devices` (default
+ *              true); set false to skip straight to sox when no override is given.
+ *   onError    (reason) => void, for honest status. reasons: "no-recorder" (neither
+ *              ffmpeg nor sox is installed) | "no-device" (ffmpeg is present but no
+ *              usable Windows capture device — the user needs to plug in / pick a mic).
+ */
+function makeHostMicProvider(opts = {}) {
+  const spawn = opts._spawn || require("child_process").spawn;
+  const platform = opts._platform || process.platform;
+  const tools = Array.isArray(opts.tools) && opts.tools.length ? opts.tools.slice() : ["ffmpeg", "sox"];
+  const onError = typeof opts.onError === "function" ? opts.onError : () => {};
+  const explicitDevice = opts.device || "";
+  const enumerate = opts.enumerate !== false;
+  // Cache the resolved dshow device for the lifetime of the provider (a session): the
+  // device rarely changes and re-listing on every record-start would add latency. Toggle
+  // mic off/on to re-enumerate (that rebuilds HostAudio → a fresh provider).
+  let cachedDevice = explicitDevice || null;
+  let resolvedOnce = !!explicitDevice;
+
+  return (writeChunk, done) => {
+    let child = null;
+    let stopped = false;
+
+    const spawnRecorder = (idx, device) => {
+      if (stopped) return;
+      const { file, args } = buildHostRecorder(tools[idx], platform, device);
+      let c;
+      try {
+        c = spawn(file, args, { windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
+      } catch (_) {
+        tryTool(idx + 1); // spawn threw synchronously (rare) — next tool
+        return;
+      }
+      child = c;
+      // ENOENT (tool not installed) arrives async on 'error'. Fall through to the
+      // next recorder rather than failing the whole capture.
+      if (c.on) {
+        c.on("error", () => {
+          if (stopped) return;
+          if (child === c) child = null;
+          tryTool(idx + 1);
+        });
+        // A recorder that exits on its own (device busy, no usable device) ends the
+        // capture — but ONLY if it was the one still in use (not a superseded fallback).
+        c.on("exit", () => {
+          if (stopped || child !== c) return;
+          child = null;
+          done();
+        });
+      }
+      if (c.stdout && c.stdout.on) {
+        c.stdout.on("data", (buf) => { if (!stopped) writeChunk(buf); });
+      }
+    };
+
+    const tryTool = (idx) => {
+      if (stopped) return;
+      if (idx >= tools.length) { onError("no-recorder"); done(); return; } // exhausted
+      // Windows ffmpeg needs an EXACT dshow device name — there's no `audio=default`.
+      if (tools[idx] === "ffmpeg" && platform === "win32") {
+        if (!resolvedOnce && enumerate) {
+          resolveWinMicDevice(spawn, (dev) => {
+            resolvedOnce = true;
+            cachedDevice = dev;
+            if (stopped) return;
+            if (!dev) { onError("no-device"); tryTool(idx + 1); return; } // no mic → try sox
+            spawnRecorder(idx, dev);
+          });
+          return;
+        }
+        if (!cachedDevice) { onError("no-device"); tryTool(idx + 1); return; } // enumeration off/failed
+        spawnRecorder(idx, cachedDevice);
+        return;
+      }
+      // macOS/Linux ffmpeg (default selector) or sox (device ignored).
+      spawnRecorder(idx, cachedDevice);
+    };
+
+    tryTool(0);
+
+    // Stop fn AudioSession calls on disconnect: kill the recorder, release the mic.
+    return () => {
+      stopped = true;
+      const c = child;
+      child = null;
+      if (c && c.kill) { try { c.kill("SIGTERM"); } catch (_) {} }
+    };
+  };
+}
+
+/**
+ * Resolve the Windows dshow capture device ONCE by running the `ffmpeg -list_devices`
+ * probe and parsing its stderr. `spawn` is injected. Calls cb(name|null): the first
+ * audio device, or null if ffmpeg is missing or lists no audio device. Never throws —
+ * a spawn error (ffmpeg not installed) or an empty list resolves null so the caller
+ * falls back to sox and reports honest "no-device"/"no-recorder" status.
+ */
+function resolveWinMicDevice(spawn, cb) {
+  let done = false;
+  const finish = (d) => { if (done) return; done = true; cb(d || null); };
+  let c;
+  try {
+    c = spawn("ffmpeg", buildDshowListArgs(), { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
+  } catch (_) { finish(null); return; }
+  let err = "";
+  if (c.stderr && c.stderr.on) c.stderr.on("data", (b) => { err += b.toString(); });
+  if (c.on) {
+    c.on("error", () => finish(null));   // ffmpeg not installed
+    c.on("close", () => {                // ffmpeg exits non-zero after listing (expected)
+      const list = parseDshowAudioDevices(err);
+      finish(list.length ? list[0] : null);
+    });
+  }
+}
+
 module.exports = {
   FORMAT, BYTES_PER_FRAME, REC_ARGV, ARECORD_ARGV,
   DEFAULT_VM_PORT, REC_SHIM_PATH, ARECORD_SHIM_PATH,
@@ -630,5 +862,7 @@ module.exports = {
   isGuardPatched, hasGuardGate, applyGuardPatch, revertGuardPatch,
   b64, buildEnableScript, buildDisableScript, vmScriptsDir, defaultReadScript,
   buildTunnelArgs, normalizePort,
+  ffmpegInputArgs, buildDshowListArgs, parseDshowAudioDevices,
+  buildHostRecorder, resolveWinMicDevice, makeHostMicProvider,
   AudioSession, HostAudio,
 };

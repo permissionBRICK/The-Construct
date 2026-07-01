@@ -172,6 +172,9 @@ if (-not $SkipCreateVm) {
             . (Join-Path $PSScriptRoot "lib\AgentVm.Common.ps1")
             if (Get-Command Ensure-VSCodeRemoteSsh -ErrorAction SilentlyContinue) { Ensure-VSCodeRemoteSsh | Out-Null }
             if (Get-Command Install-ControlPanelExtension -ErrorAction SilentlyContinue) { Install-ControlPanelExtension -SourceRoot $PSScriptRoot | Out-Null }
+            # ffmpeg powers host-side microphone passthrough (the panel spawns it locally
+            # to capture the mic -- a VS Code webview can't). Best-effort user-scope install.
+            if (Get-Command Ensure-Ffmpeg -ErrorAction SilentlyContinue) { Ensure-Ffmpeg | Out-Null }
         } catch {
             Write-Warning "Could not set up the control panel on the host (continuing): $($_.Exception.Message)"
         }

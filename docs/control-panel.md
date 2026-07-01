@@ -87,15 +87,25 @@ toggle re-enables it by streaming your **local** microphone to the VM on demand:
 - Enabling installs a small `rec`/`arecord` shim on the VM, applies a **reversible** patch
   that lifts only the remote speech gate in the installed Claude Code extension, and opens
   an `ssh -R` reverse tunnel from the VM back to your host mic.
+- Your **local** microphone is captured by a native recorder the panel runs on your host
+  (**ffmpeg**, or `sox` `rec` as a fallback). A VS Code webview can't reach the microphone,
+  so this is done by the extension's host process instead. The installer sets ffmpeg up for
+  you (`winget install Gyan.FFmpeg`); if it isn't found, install it and restart VS Code.
 - The mic is opened **only while you're actually recording** (the VM shim connects when
   Claude records and disconnects when it stops) — it is never hot continuously.
 - Disabling removes the shim and reverts the patch. Turning it off (or closing VS Code)
   releases the mic and tears down the tunnel.
 
-The panel is honest about the patch: the "chat mic button" line reflects whether the guard
-patch actually applied. On a Claude Code build the patch doesn't recognise, it says so
-rather than claiming the button is unlocked. `/voice` in the terminal works regardless of
-the button.
+The panel is honest about the patch and the recorder: the "chat mic button" line reflects
+whether the guard patch actually applied, and if no recorder or no capture device is found
+you get a one-time warning (never silent-but-broken). On a Claude Code build the patch
+doesn't recognise, it says so rather than claiming the button is unlocked. `/voice` in the
+terminal works regardless of the button.
+
+**Windows: picking the right microphone.** ffmpeg's DirectShow capture needs an exact
+device name — the panel auto-detects the first one, but if that's the wrong input, list your
+devices with `ffmpeg -list_devices true -f dshow -i dummy` and set **`construct.micDevice`**
+(in VS Code settings) to the device name you want (e.g. `Microphone (Realtek(R) Audio)`).
 
 ## Settings
 
