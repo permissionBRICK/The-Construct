@@ -10,7 +10,7 @@ minimal risk to your host PC.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-00cc66.svg?style=flat-square)](LICENSE.md)
 [![Platform](https://img.shields.io/badge/Host-Windows%2010%2F11%20%2B%20Hyper--V-0078d4.svg?style=flat-square)](docs/installation.md)
-[![Guest](https://img.shields.io/badge/Guest-Ubuntu%20Server%2024.04-e95420.svg?style=flat-square)](docs/installation.md)
+[![Guest](https://img.shields.io/badge/Guest-Ubuntu%20Server%20%28latest%29-e95420.svg?style=flat-square)](docs/installation.md)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-00cc66.svg?style=flat-square)](https://github.com/permissionBRICK/The-Construct/pulls)
 
 [Install](#-load-the-construct) · [Features](#-features) · [Connect](#-jack-in) ·
