@@ -116,6 +116,10 @@ param(
     # Code extension so it streams partial assistant messages over Remote-SSH.
     # Default on; "false" reverts the extension to stock. "true"/"false".
     [string]$ClaudePartialStreaming = "true",
+    # Forwarded down (Create-AgentVM.ps1 -> Provision-AgentVM.ps1): patch the Claude
+    # Code extension for microphone passthrough so the mic button survives a rebuild.
+    # Off by default; "true"/"false".
+    [string]$MicPassthrough = "false",
     [switch]$SkipChecksum,
     [switch]$SkipCreateVm,
     [switch]$Force,
@@ -579,6 +583,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         $reprovArgs['GitUserName'] = $reprovGit.Name
         $reprovArgs['GitEmail']    = $reprovGit.Email
         $reprovArgs['ClaudePartialStreaming'] = $ClaudePartialStreaming
+        $reprovArgs['MicPassthrough'] = $MicPassthrough
         if ($PSBoundParameters.ContainsKey('AgentPassword')) { $reprovArgs['AgentPassword'] = $AgentPassword }
         if ($reprovCloneCredB64) { $reprovArgs['GitCloneCredentialsB64'] = $reprovCloneCredB64 }
         try {
@@ -1149,6 +1154,7 @@ $createArgs = @{
     GitUserName   = $chosenGitName
     GitEmail      = $chosenGitEmail
     ClaudePartialStreaming = $ClaudePartialStreaming
+    MicPassthrough = $MicPassthrough
     # -Auto: the try/finally below owns the final pause, so neither
     # Create-AgentVM.ps1 nor the Provision-AgentVM.ps1 it chains into pauses too.
     Auto          = $true

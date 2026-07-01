@@ -105,6 +105,7 @@ Recognized variables:
 | `VSCODE_SERVE_WEB` | `true` | Autostart browser-based `code serve-web` |
 | `VSCODE_TUNNEL` | `false` | Opt in to also set up + register a `code tunnel` |
 | `CLAUDE_PARTIAL_STREAMING` | `true` | Patch the Claude Code extension so it streams partial assistant messages over Remote-SSH (stock disables this on remote, so the chat panel looks frozen until each turn finishes). `false` keeps stock |
+| `MIC_PASSTHROUGH` | `false` | Patch the Claude Code extension for microphone passthrough (recorder shim + chat-mic gate) so the chat mic button is present on first start after a (re)provision. Opt-in; mirrors the control panel's mic toggle |
 | `SMB_SHARE` | `true` | Run an SMB server sharing `WORKSPACE_ROOT` to the host |
 | `SMB_USER` | `dev` | SMB login name (file access on the share runs as root) |
 | `SMB_SHARE_NAME` | `repo` | Share name in the UNC path `\\<vm>\<name>` |
@@ -159,6 +160,7 @@ VSCODE_SERVE_WEB_TOKEN_FILE=/etc/construct/vscode-serve-web.token
 VSCODE_TUNNEL=false
 VSCODE_TUNNEL_NAME=
 CLAUDE_PARTIAL_STREAMING=true
+MIC_PASSTHROUGH=false
 SMB_SHARE=true
 SMB_USER=dev
 SMB_SHARE_NAME=repo

@@ -78,6 +78,11 @@ VSCODE_TUNNEL="${VSCODE_TUNNEL:-${_vscode_tunnel_saved:-false}}"
 # frozen until each turn finishes generating). On by default; CLAUDE_PARTIAL_STREAMING=false
 # keeps the stock behaviour. Forwarded to install-vscode.sh, which applies the patch.
 CLAUDE_PARTIAL_STREAMING="${CLAUDE_PARTIAL_STREAMING:-true}"
+# Patch the Claude Code extension for microphone passthrough (recorder shim + chat-mic
+# gate) when the saved preference is on, so the mic button survives a reprovision.
+# Off by default (opt-in); MIC_PASSTHROUGH=false reverts to stock. Forwarded to
+# install-vscode.sh, which applies the patch.
+MIC_PASSTHROUGH="${MIC_PASSTHROUGH:-false}"
 
 # Optional global git identity to set on the VM. Passed base64-encoded (see
 # Provision-AgentVM.ps1) so names/emails with spaces or apostrophes survive the
@@ -112,6 +117,7 @@ note "    VSCODE_SERVER=${VSCODE_SERVER}"
 note "    VSCODE_SERVE_WEB=${VSCODE_SERVE_WEB}"
 note "    VSCODE_TUNNEL=${VSCODE_TUNNEL}"
 note "    CLAUDE_PARTIAL_STREAMING=${CLAUDE_PARTIAL_STREAMING}"
+note "    MIC_PASSTHROUGH=${MIC_PASSTHROUGH}"
 note "    SMB_SHARE=${SMB_SHARE:-(saved/default)}"
 
 # A zip upload does not preserve Unix exec bits, so make the repo scripts
@@ -171,6 +177,7 @@ cfg VSCODE_SERVER "${VSCODE_SERVER}"
 cfg VSCODE_SERVE_WEB "${VSCODE_SERVE_WEB}"
 cfg VSCODE_TUNNEL "${VSCODE_TUNNEL}"
 cfg CLAUDE_PARTIAL_STREAMING "${CLAUDE_PARTIAL_STREAMING}"
+cfg MIC_PASSTHROUGH "${MIC_PASSTHROUGH}"
 install -d -m 0755 "${WORKSPACE_ROOT}"
 
 # 2b. Global git identity for the users that operate on the VM: CLAUDE_USER
@@ -352,6 +359,7 @@ if [[ "${VSCODE_SERVER}" == "true" ]]; then
     VSCODE_SERVE_WEB_TOKEN_B64="${VSCODE_SERVE_WEB_TOKEN_B64:-}" \
     VSCODE_CLIENT_COMMIT="${VSCODE_CLIENT_COMMIT:-}" \
     CLAUDE_PARTIAL_STREAMING="${CLAUDE_PARTIAL_STREAMING}" \
+    MIC_PASSTHROUGH="${MIC_PASSTHROUGH}" \
     bash "${REPO_DIR}/bin/install-vscode.sh" \
     || warn "WARNING: VS Code setup failed; continuing"
 fi
