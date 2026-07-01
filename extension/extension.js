@@ -241,6 +241,43 @@ function runUpdateAgents() {
   );
 }
 
+/** Launch the host "Update Construct" self-update, then AUTO-RELOAD this window when it
+ *  finishes so the refreshed panel loads (no manual reopen). The detached host console
+ *  can't reload VS Code itself, so Update-Construct.ps1 writes a tiny result file we poll:
+ *  "ok" -> reload; "fail" -> the script's console already paused with a reopen message, so
+ *  we just surface a toast. Times out quietly (the console stays up either way). */
+function runUpdateConstruct() {
+  const scriptsDir = resolveScriptsDir();
+  if (!scriptsDir) { warnNoScriptsDir(); return; }
+  const markers = updates.readMarkers(host.readRawSettings(scriptsDir));
+  const resultFile = path.join(os.tmpdir(), `construct-update-${Date.now()}.result`);
+  try { fs.unlinkSync(resultFile); } catch (_) {}
+  const ok = lifecycle.launchHostScript({
+    scriptsDir, script: "Update-Construct.ps1",
+    args: [...updates.constructRefreshArgs(markers), "-ResultFile", resultFile],
+    elevate: false, label: "Update Construct",
+  });
+  if (!ok) return;
+  vscode.window.showInformationMessage("Updating Construct — this window reloads automatically when it's done.");
+  const startedAt = Date.now();
+  const timer = setInterval(() => {
+    let res = null;
+    try { res = fs.readFileSync(resultFile, "utf8").trim(); } catch (_) { /* not written yet */ }
+    if (res === "ok") {
+      clearInterval(timer);
+      try { fs.unlinkSync(resultFile); } catch (_) {}
+      vscode.commands.executeCommand("workbench.action.reloadWindow");
+    } else if (res === "fail") {
+      clearInterval(timer);
+      try { fs.unlinkSync(resultFile); } catch (_) {}
+      vscode.window.showWarningMessage("Construct update didn't complete — see the update console, then reopen VS Code.");
+    } else if (Date.now() - startedAt > 10 * 60 * 1000) {
+      clearInterval(timer); // gave up waiting; the console is still there to show status
+      try { fs.unlinkSync(resultFile); } catch (_) {}
+    }
+  }, 1500);
+}
+
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** Start the (stopped) VM via an elevated Hyper-V Start-VM, then poll SSH until it
@@ -806,16 +843,7 @@ function handleMessage(message, webview, context) {
         lifecycle.run(id, { scriptsDir });
         return;
       }
-      if (id === "updateConstruct") {
-        const scriptsDir = resolveScriptsDir();
-        if (!scriptsDir) { warnNoScriptsDir(); return; }
-        const markers = updates.readMarkers(host.readRawSettings(scriptsDir));
-        lifecycle.launchHostScript({
-          scriptsDir, script: "Update-Construct.ps1", args: updates.constructRefreshArgs(markers),
-          elevate: false, label: "Update Construct",
-        });
-        return;
-      }
+      if (id === "updateConstruct") { runUpdateConstruct(); return; }
       vscode.window.showInformationMessage(
         `"${id}" will be available in an upcoming build of the control panel.`
       );
