@@ -892,7 +892,15 @@ function setupPanel(p, context) {
 
 /** Open (or reveal) the full control panel as a wide editor tab. */
 function openPanel(context) {
-  if (panel) { panel.reveal(vscode.ViewColumn.Active); return; }
+  if (panel) {
+    // Bring the EXISTING panel to the front. Use reveal() with no column so it surfaces
+    // in the column it already occupies — `reveal(ViewColumn.Active)` MOVES the panel to
+    // the active column, which fails to surface a hidden panel when focus is on the
+    // sidebar (the reported "no window appears on second open"). If the reference is
+    // stale/disposed (a dispose that raced a reload), recreate it below.
+    try { panel.reveal(); return; }
+    catch (_) { panel = undefined; }
+  }
   const p = vscode.window.createWebviewPanel(
     "construct.controlPanel",
     "The Construct",
