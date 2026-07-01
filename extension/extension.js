@@ -41,6 +41,28 @@ let micWarnedReasons = new Set();
 /** Every currently-live webview (sidebar view + editor panel) for broadcast refresh. */
 const liveWebviews = new Set();
 
+// ── Diagnostics log ─────────────────────────────────────────────────────────────
+// A "Construct" Output channel + a log file, so what the panel does (esp. the EXACT
+// host command it launches, resolved paths, args, env, spawn result) is visible and
+// shareable even when a launched console flashes closed. Pairs with the `construct.debug`
+// setting, which keeps launched consoles open (-NoExit) so their own errors stay readable.
+let logChannel;
+function logFilePath() { return path.join(os.tmpdir(), "construct-panel.log"); }
+function logLine(msg) {
+  const line = `[${new Date().toISOString()}] ${msg}`;
+  try { if (!logChannel) logChannel = vscode.window.createOutputChannel("Construct"); logChannel.appendLine(line); } catch (_) {}
+  try { fs.appendFileSync(logFilePath(), line + "\n"); } catch (_) {}
+}
+/** Reveal the Construct Output channel (and note the on-disk log path). */
+function showLogs() {
+  try { if (!logChannel) logChannel = vscode.window.createOutputChannel("Construct"); logChannel.show(true); } catch (_) {}
+  logLine(`(diagnostics log file: ${logFilePath()})`);
+}
+/** Whether verbose/keep-console-open debugging is enabled. */
+function debugEnabled() {
+  try { return !!vscode.workspace.getConfiguration("construct").get("debug"); } catch (_) { return false; }
+}
+
 /** Post to a webview, surviving both a synchronous throw and an async rejection
  *  if it was disposed mid-flight (postMessage returns a Thenable<boolean>). */
 function safePost(webview, msg) {
@@ -293,14 +315,17 @@ function runUpdateConstruct() {
     if (res === "ok") {
       clearInterval(timer);
       try { fs.unlinkSync(resultFile); } catch (_) {}
+      logLine("update: result=ok → reloading window");
       vscode.commands.executeCommand("workbench.action.reloadWindow");
     } else if (res === "fail") {
       clearInterval(timer);
       try { fs.unlinkSync(resultFile); } catch (_) {}
+      logLine("update: result=fail (see the update console)");
       vscode.window.showWarningMessage("Construct update didn't complete — see the update console, then reopen VS Code.");
     } else if (Date.now() - startedAt > 10 * 60 * 1000) {
       clearInterval(timer); // gave up waiting; the console is still there to show status
       try { fs.unlinkSync(resultFile); } catch (_) {}
+      logLine("update: timed out waiting for a result (an older script doesn't signal — the update likely still applied; reload manually)");
     }
   }, 1500);
 }
@@ -852,6 +877,8 @@ function handleMessage(message, webview, context) {
 
     case "command": {
       const id = message.id;
+      logLine(`command: ${id}${message.project ? " (" + message.project + ")" : ""}`);
+      if (id === "showLogs") { showLogs(); return; }
       if (id === "refresh") { refreshState(webview); return; }
       if (id === "openProjectFolder") { openProjectFolder(); return; }
       if (id === "addProject") { runAddProject(); return; }
@@ -946,12 +973,17 @@ function openPanel(context) {
 }
 
 function activate(context) {
+  // Route lifecycle/update launch logging into the Construct Output channel, and let
+  // `construct.debug` keep launched consoles open so errors are readable.
+  lifecycle.configure({ log: logLine, isDebug: debugEnabled });
+  logLine(`activate: remoteAuthority=${vscode.env.remoteAuthority || "(local)"} debug=${debugEnabled()}`);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider("construct.panel", new ConstructViewProvider(context), {
       webviewOptions: { retainContextWhenHidden: true },
     }),
     vscode.commands.registerCommand("construct.openPanel", () => openPanel(context)),
-    vscode.commands.registerCommand("construct.refresh", () => refreshAll())
+    vscode.commands.registerCommand("construct.refresh", () => refreshAll()),
+    vscode.commands.registerCommand("construct.showLogs", () => showLogs())
   );
   // Restore the editor-tab panel across reloads instead of leaving a dead webview.
   if (vscode.window.registerWebviewPanelSerializer) {

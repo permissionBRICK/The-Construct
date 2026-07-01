@@ -394,6 +394,12 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("launcher: shutdown visible at 300px", await page.locator("#lShutdown").isVisible());
   const launcherOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   check("launcher: no horizontal overflow at 300px", launcherOverflow <= 1, `overflow=${launcherOverflow}px`);
+
+  // diagnostics: the logs button posts showLogs (opens the Construct Output channel).
+  await page.click('[data-cmd="showLogs"]');
+  lposted = await page.evaluate(() => window.__posted);
+  check("launcher: logs button posts showLogs", lposted.some((m) => m.type === "command" && m.id === "showLogs"));
+
   check("launcher: no console/page errors", errors.length === 0, errors.join(" | "));
 
   await browser.close();

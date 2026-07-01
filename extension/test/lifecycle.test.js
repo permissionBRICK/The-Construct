@@ -197,5 +197,28 @@ ok("launchHostScript: off-Windows guard returns false without spawning",
   life.launchHostScript({ scriptsDir: "C:\\x", script: life.PROVISION, args: [], label: "Reprovision",
     _spawn: () => { throw new Error("should not spawn off-Windows"); }, _vscode: fakeVscode, _platform: "linux" }) === false);
 
+// ── debug keep-open (-NoExit so errors stay readable) ────────────────────────
+ok("child: keepOpen adds -NoExit", life.buildChildCommandLine("C:\\x\\s.ps1", [], { keepOpen: true }).includes("-NoExit"));
+ok("child: no -NoExit by default", !life.buildChildCommandLine("C:\\x\\s.ps1", []).includes("-NoExit"));
+const dbgN = life.buildHostLaunch("C:\\x\\Provision-AgentVM.ps1", ["-Action", "provision"], { elevate: false, keepOpen: true });
+ok("launch(non-elevated,debug): -NoExit on the console powershell", dbgN.spawnArgs.includes("-NoExit"));
+const dbgE = life.buildHostLaunch("C:\\x\\Auto-Install.ps1", ["-Action", "reinstall"], { elevate: true, keepOpen: true });
+ok("launch(elevated,debug): -NoExit rides the elevated child, not the launcher",
+  !dbgE.spawnArgs.includes("-NoExit") && dbgE.command.includes("-NoExit"));
+
+// ── configure(): logger + debug-flag hook ────────────────────────────────────
+const logged = [];
+life.configure({ log: (m) => logged.push(m), isDebug: () => true });
+let dbgSpawned = null;
+life.launchHostScript({
+  scriptsDir: "C:\\x", script: life.PROVISION, args: ["-Action", "provision"], label: "Reprovision",
+  _spawn: (file, args, options) => { dbgSpawned = { file, args, options }; return { on() {}, unref() {} }; },
+  _vscode: fakeVscode, _platform: "win32",
+});
+ok("configure: launch is logged (with the decoded command)", logged.some((m) => m.includes("command:") && m.includes("Provision-AgentVM.ps1")));
+ok("configure: isDebug() drives keepOpen (-NoExit) without an explicit opts.debug",
+  dbgSpawned && Buffer.from(dbgSpawned.args[dbgSpawned.args.length - 1], "base64").toString("utf16le").length > 0 && dbgSpawned.args.includes("-NoExit"));
+life.configure({ log: () => {}, isDebug: () => false }); // reset so it doesn't leak to other checks
+
 console.log(`\n  lifecycle launcher unit tests — ${pass}/${pass + fail} passed\n`);
 process.exit(fail ? 1 : 0);

@@ -203,6 +203,16 @@ VM-derived fields when `online===false` or `probeError`):
   (incl. `[int]` coercion) and is injection-safe (quotes doubled — proven via pwsh).
   `vmpower.startVm` (the elevated "Start & connect") uses the Start-Process wrapper too.
   The launched console outlives VS Code (its own process).
+- **Diagnostics (so a flashing console is debuggable).** A "Construct" Output channel +
+  `%TEMP%\construct-panel.log` record every launch — the DECODED powershell command, the
+  resolved script path, args, env keys, and spawn result — so version skew / wrong paths /
+  bad args are visible even when the console closes fast (`lifecycle.configure({log,isDebug})`
+  wires the logger + debug getter into `launchHostScript`; the webviews expose a **logs**
+  button → `showLogs`, and there's a **The Construct: Show Logs** command). The
+  `construct.debug` setting keeps launched consoles OPEN (`-NoExit` — on the non-elevated
+  console directly, on the elevated child via `buildChildCommandLine({keepOpen})`) so an
+  error that happens BEFORE the script's own pause (e.g. a parameter-binding error) stays
+  on screen instead of flashing away.
   Quoting (verified through real PowerShell): the outer command is handed to the
   spawned shell via `-EncodedCommand` (base64 UTF-16LE) so there's NO Node↔shell
   quoting layer; the child argv is canonically Windows-quoted (`winQuoteArg`) and

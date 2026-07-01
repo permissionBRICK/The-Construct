@@ -347,6 +347,7 @@ body.launcher { font-size: 12px; }
 .lagent .lver { font-variant-numeric: tabular-nums; color: var(--title); white-space: nowrap; }
 .lagent .lver.upd { color: var(--warn); }
 .lmeta { color: var(--faint); font-size: 10.5px; line-height: 1.5; }
+.lfoot { display: flex; gap: 8px; }
 .lrefresh { align-self: flex-start; font-family: var(--mono); font-size: 11px; color: var(--dim); background: transparent; border: 1px solid var(--line); border-radius: 5px; padding: 5px 11px; cursor: pointer; }
 .lrefresh:hover { color: var(--text); background: rgba(0,255,102,0.05); }
 .lconnect { font-family: var(--mono); font-size: 12px; letter-spacing: 0.5px; font-weight: 700; color: var(--rain); background: rgba(0,255,102,0.08); border: 1px solid var(--rain); border-radius: 6px; padding: 9px; cursor: pointer; box-shadow: 0 0 10px rgba(0,255,102,0.15); }
