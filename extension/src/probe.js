@@ -23,9 +23,14 @@ if [ -r "$mark" ]; then
   emit INSTALLED_AT "$(sed -n 's/^INSTALLED_AT=//p' "$mark" | head -1)"
   emit REPROVISIONED_AT "$(sed -n 's/^REPROVISIONED_AT=//p' "$mark" | head -1)"
 fi
-command -v claude   >/dev/null 2>&1 && emit V_CLAUDE   "$(claude --version 2>/dev/null | head -1)"
-command -v codex    >/dev/null 2>&1 && emit V_CODEX    "$(codex --version 2>/dev/null | head -1)"
-command -v opencode >/dev/null 2>&1 && emit V_OPENCODE "$(opencode --version 2>/dev/null | head -1)"
+# Version detection. Capture BOTH stdout and stderr (some CLIs -- e.g. codex -- print
+# --version to stderr, which the old '2>/dev/null | head -1' dropped, showing "-") and
+# pull the first semver from ANYWHERE in the output, so a leading banner or a stderr-only
+# version still resolves. '[.]' avoids a backslash in this JS template literal.
+ver(){ "$1" --version 2>&1 | grep -oE '[0-9]+[.][0-9]+[.][0-9]+([-.][0-9A-Za-z.]+)?' | head -1; }
+command -v claude   >/dev/null 2>&1 && emit V_CLAUDE   "$(ver claude)"
+command -v codex    >/dev/null 2>&1 && emit V_CODEX    "$(ver codex)"
+command -v opencode >/dev/null 2>&1 && emit V_OPENCODE "$(ver opencode)"
 `;
 
 /** Pull the first semver out of a version string, e.g. "codex-cli 0.142.4" -> "0.142.4". */

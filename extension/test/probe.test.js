@@ -87,5 +87,11 @@ ok("probe script reads provisioned.env", /provisioned\.env/.test(probe.REMOTE_PR
 ok("probe script emits INSTALLED_AT", /emit INSTALLED_AT/.test(probe.REMOTE_PROBE));
 ok("probe script emits REPROVISIONED_AT", /emit REPROVISIONED_AT/.test(probe.REMOTE_PROBE));
 
+// Version detection captures stderr (codex prints --version there) and greps the semver
+// from anywhere in the output — not just stdout line 1 (which showed "—" for codex).
+ok("probe script captures stderr for --version (2>&1)", /--version 2>&1/.test(probe.REMOTE_PROBE));
+ok("probe script greps a semver from version output", /grep -oE '\[0-9\]/.test(probe.REMOTE_PROBE));
+ok("probe script detects all three agents' versions", /ver claude/.test(probe.REMOTE_PROBE) && /ver codex/.test(probe.REMOTE_PROBE) && /ver opencode/.test(probe.REMOTE_PROBE));
+
 console.log(`\n  probe/ssh unit tests — ${pass}/${pass + fail} passed\n`);
 process.exit(fail ? 1 : 0);
