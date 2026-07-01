@@ -140,9 +140,16 @@ function shouldShowStart(online, vmState) {
  * with no console of its own, so without this the inner powershell can inherit "no
  * console" and run windowless — the "toast fires, nothing happens" symptom. It
  * coexists with -Verb RunAs.
+ *
+ * NO -NoExit by default: the child runs its inline command and EXITS (closing the
+ * console) instead of dropping to an interactive prompt — the reported "leaves an
+ * interactive PowerShell window" bug. `opts.keepOpen` (debug) adds it back so errors
+ * stay readable. (The command itself can still pause on FAILURE — see buildStartCommand.)
  */
-function buildElevatedCommandLaunch(commandText) {
-  const childArgv = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-Command", commandText];
+function buildElevatedCommandLaunch(commandText, opts = {}) {
+  const childArgv = ["-NoProfile", "-ExecutionPolicy", "Bypass"];
+  if (opts.keepOpen) childArgv.push("-NoExit");
+  childArgv.push("-Command", commandText);
   const childLine = childArgv.map(lifecycle.winQuoteArg).join(" ");
   const command = `Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Normal -ArgumentList ${lifecycle.psSingleQuote(childLine)}`;
   const encoded = Buffer.from(command, "utf16le").toString("base64");
@@ -158,13 +165,16 @@ function buildElevatedCommandLaunch(commandText) {
   };
 }
 
-/** The elevated child command that starts the VM and reports the result. Pure. */
+/** The elevated child command that starts the VM and reports the result. On SUCCESS the
+ *  console closes (no -NoExit; the extension polls reachability + opens the VM, so that's
+ *  the real feedback). On FAILURE it PAUSES so the error is readable before closing. Pure. */
 function buildStartCommand(vmName) {
   const n = lifecycle.psSingleQuote(vmName || VM_NAME);
   return (
     "Start-VM -Name " + n + "; " +
     "if ($?) { Write-Host 'Construct VM started.' -ForegroundColor Green } " +
-    "else { Write-Host 'Failed to start the Construct VM.' -ForegroundColor Red }"
+    "else { Write-Host 'Failed to start the Construct VM.' -ForegroundColor Red; " +
+    "if (-not [Console]::IsInputRedirected) { [void](Read-Host 'Press Enter to close') } }"
   );
 }
 
@@ -179,7 +189,7 @@ function startVm(opts = {}) {
     vscode.window.showWarningMessage("Starting the Construct VM runs on the Windows host, which isn't available here.");
     return false;
   }
-  const { file, spawnArgs } = buildElevatedCommandLaunch(buildStartCommand(opts.vmName));
+  const { file, spawnArgs } = buildElevatedCommandLaunch(buildStartCommand(opts.vmName), { keepOpen: !!opts.debug });
   try {
     // No windowsHide: it sets CREATE_NO_WINDOW on this launcher, which suppresses the
     // console the inner Start-Process opens (same bug the lifecycle buttons had).

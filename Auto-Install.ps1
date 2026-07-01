@@ -184,9 +184,9 @@ if (-not $SkipCreateVm) {
                 } else { @{ Repo = $Repo; Ref = $Ref } }
                 Set-ConstructInstalledMarker -Root $PSScriptRoot -Repo $mk.Repo -Ref $mk.Ref | Out-Null
             }
-            # ffmpeg powers host-side microphone passthrough (the panel spawns it locally
-            # to capture the mic -- a VS Code webview can't). Best-effort user-scope install.
-            if (Get-Command Ensure-Ffmpeg -ErrorAction SilentlyContinue) { Ensure-Ffmpeg | Out-Null }
+            # NOTE: ffmpeg (for mic passthrough) is installed at the END of provisioning
+            # (Provision-AgentVM.ps1), not here — winget can be slow and this pre-step runs
+            # BEFORE the user's install prompts, so it shouldn't block the flow up front.
         } catch {
             Write-Warning "Could not set up the control panel on the host (continuing): $($_.Exception.Message)"
         }

@@ -1526,6 +1526,17 @@ if ($Action -eq "provision" -and (Get-Command Set-ConstructProvisionedMarker -Er
     }
 }
 
+# Install ffmpeg on the HOST for microphone passthrough (the panel spawns it locally to
+# capture the mic -- a VS Code webview can't). Done HERE, at the very end, rather than
+# up-front in Auto-Install's pre-step: winget can be slow and shouldn't block the user's
+# install prompts. Runs in Provision's context -- elevated for install/reinstall, the user
+# for a panel reprovision; either way winget --scope user targets the current user, and it's
+# idempotent (a no-op when ffmpeg is already present). Best-effort: never fails the provision.
+if ($Action -eq "provision" -and (Get-Command Ensure-Ffmpeg -ErrorAction SilentlyContinue)) {
+    try { Ensure-Ffmpeg | Out-Null }
+    catch { Write-Warning "Could not ensure ffmpeg (mic passthrough) -- continuing: $($_.Exception.Message)" }
+}
+
 Write-Host "Done." -ForegroundColor Green
 Write-Host "Connect from a terminal:" -ForegroundColor White
 Write-Host "    ssh $VmHost" -ForegroundColor Yellow

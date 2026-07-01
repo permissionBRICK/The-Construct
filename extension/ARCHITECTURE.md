@@ -201,7 +201,9 @@ VM-derived fields when `online===false` or `probeError`):
   launcher there is NOT `-NonInteractive` so the script's end-of-run pause/prompts work.
   All target params are `[string]/[int]/[switch]`, so `&` with single-quoted values binds
   (incl. `[int]` coercion) and is injection-safe (quotes doubled — proven via pwsh).
-  `vmpower.startVm` (the elevated "Start & connect") uses the Start-Process wrapper too.
+  `vmpower.startVm` (the elevated "Start & connect") uses the Start-Process wrapper too;
+  its elevated child has NO `-NoExit` (it runs Start-VM and EXITS instead of leaving an
+  interactive prompt — it pauses only on FAILURE; `construct.debug` adds `-NoExit` back).
   The launched console outlives VS Code (its own process).
 - **Diagnostics (so a flashing console is debuggable).** A "Construct" Output channel +
   `%TEMP%\construct-panel.log` record every launch — the DECODED powershell command, the
@@ -534,9 +536,11 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
    enumeration). No device → `onError('no-device')` → fall back to sox; no ffmpeg/sox →
    `onError('no-recorder')`. Both surface one honest warning per enable (deduped) so the UI
    never pretends to work. **Provisioning:** `Ensure-Ffmpeg` (`lib/AgentVm.Common.ps1`,
-   best-effort `winget install Gyan.FFmpeg --scope user`) runs in `Auto-Install.ps1`'s
-   non-elevated pre-step alongside `Ensure-VSCodeRemoteSsh`, so the one-liner install puts
-   ffmpeg on the host (VS Code restart needed for the new PATH). `audio.test.js`.
+   best-effort `winget install Gyan.FFmpeg --scope user`, idempotent) runs at the END of
+   `Provision-AgentVM.ps1` (NOT Auto-Install's up-front pre-step — winget is slow and
+   shouldn't block the user's install prompts). It runs in Provision's context (elevated for
+   install/reinstall, the user for a panel reprovision); `--scope user` targets the current
+   user either way. VS Code restart needed for the new PATH. `audio.test.js`.
 7. ✓ **DONE — Audio VM side** — `vm/` scripts pushed over SSH on enable (injection-safe,
    base64-as-data): `construct-rec-shim.sh` (rec/arecord shim streaming tunnel PCM, dies
    on SIGTERM) into `/usr/local/bin`; `construct-audio-enable.sh` installs it + applies the
