@@ -118,6 +118,148 @@
   }
   wireProjectChips();
 
+  // ── Project edit modal ──────────────────────────────────────────────────────
+  // Opened by an ext->webview {type:'editProject', name, profile} message (posted
+  // when the extension has read the host-side profile). The modal edits the profile
+  // in structured controls, then posts {type:'saveProject', name, profile} back; the
+  // extension re-sanitizes to the schema before writing, so this side is free to be
+  // lenient (blank rows, whitespace) — anything malformed is coerced/dropped there.
+  const modal = $("projModal");
+  let editName = ""; // the profile name being edited (the file identity; not renamed here)
+  // The `tests` block isn't edited in the modal (it's an open-ended object), so we
+  // stash it from the opened profile and carry it back on save — otherwise every
+  // edit would silently drop an existing tests config.
+  let editTests = null;
+
+  function openModal(on) {
+    if (modal) modal.hidden = !on;
+    // Focus the first field when opening so keyboard users land inside the dialog.
+    if (on) { const f = modal && modal.querySelector("input, textarea"); if (f) f.focus(); }
+  }
+  function closeModal() { openModal(false); }
+
+  // Build one repo row (url + directory + remove). `repo` may be {} for a blank add.
+  function repoRow(repo) {
+    repo = repo || {};
+    const row = document.createElement("div");
+    row.className = "pm-repo";
+    row.innerHTML =
+      '<input type="text" class="pm-url" placeholder="https://github.com/owner/repo.git" />' +
+      '<input type="text" class="pm-dir" placeholder="directory (optional)" />' +
+      '<button type="button" class="pm-del" title="Remove repo" aria-label="Remove repo">&times;</button>';
+    row.querySelector(".pm-url").value = repo.url || "";
+    row.querySelector(".pm-dir").value = repo.directory || "";
+    row.querySelector(".pm-del").addEventListener("click", () => row.remove());
+    return row;
+  }
+
+  // sdks object -> "name = v1, v2" lines. Values may be a string or an array.
+  function sdksToText(sdks) {
+    if (!sdks || typeof sdks !== "object") return "";
+    return Object.keys(sdks).map((k) => {
+      const v = sdks[k];
+      const vals = Array.isArray(v) ? v.join(", ") : String(v == null ? "" : v);
+      return k + " = " + vals;
+    }).join("\n");
+  }
+  // "name = v1, v2" lines -> sdks object. A single value stays a string; multiple
+  // become an array (mirrors default.json's {node:["26"]} vs a scalar). Blank/keyless
+  // lines are ignored. The extension sanitizes again, so lenient parsing is fine.
+  function textToSdks(text) {
+    const out = {};
+    String(text || "").split("\n").forEach((line) => {
+      const eq = line.indexOf("=");
+      if (eq < 0) return;
+      const key = line.slice(0, eq).trim();
+      if (!key) return;
+      const vals = line.slice(eq + 1).split(",").map((s) => s.trim()).filter(Boolean);
+      if (!vals.length) return;
+      out[key] = vals.length === 1 ? vals[0] : vals;
+    });
+    return out;
+  }
+
+  // A textarea's lines -> a trimmed non-empty string array (host packages / commands).
+  function linesToArray(text) {
+    return String(text || "").split("\n").map((s) => s.trim()).filter(Boolean);
+  }
+
+  function populateModal(name, profile) {
+    editName = name || "";
+    profile = profile || {};
+    editTests = (profile.tests && typeof profile.tests === "object" && !Array.isArray(profile.tests)) ? profile.tests : null;
+    const t = $("pmTitle"); if (t) t.textContent = "Edit project · " + editName;
+    const reposHost = $("pmRepos");
+    if (reposHost) {
+      reposHost.innerHTML = "";
+      const repos = Array.isArray(profile.repos) ? profile.repos : [];
+      if (repos.length) repos.forEach((r) => reposHost.appendChild(repoRow(r)));
+      else reposHost.appendChild(repoRow({})); // one blank row to start
+    }
+    const setTa = (id, v) => { const e = $(id); if (e) e.value = v; };
+    setTa("pmSdks", sdksToText(profile.sdks));
+    // MCP stays as raw JSON: it's the one genuinely complex, open-ended field, so an
+    // honest raw-JSON editor beats a half-form that can't express every server shape.
+    setTa("pmMcp", JSON.stringify(Array.isArray(profile.mcp) ? profile.mcp : [], null, 2));
+    setTa("pmHostPkgs", (Array.isArray(profile.hostPackages) ? profile.hostPackages : []).join("\n"));
+    setTa("pmProvision", (Array.isArray(profile.provisionCommands) ? profile.provisionCommands : []).join("\n"));
+    const err = $("pmMcpErr"); if (err) err.hidden = true;
+    openModal(true);
+  }
+
+  // Gather the modal into a profile object. Returns null (and shows the MCP error)
+  // when the MCP JSON doesn't parse — the only hard-stop; everything else is lenient.
+  function gatherProfile() {
+    const repos = [];
+    document.querySelectorAll("#pmRepos .pm-repo").forEach((row) => {
+      const url = (row.querySelector(".pm-url").value || "").trim();
+      const dir = (row.querySelector(".pm-dir").value || "").trim();
+      if (!url) return; // a blank/removed row is skipped (url is required)
+      const entry = { url };
+      if (dir) entry.directory = dir;
+      repos.push(entry);
+    });
+    let mcp = [];
+    const mcpRaw = ($("pmMcp") && $("pmMcp").value || "").trim();
+    if (mcpRaw) {
+      try {
+        const parsed = JSON.parse(mcpRaw);
+        if (!Array.isArray(parsed)) throw new Error("not an array");
+        mcp = parsed;
+      } catch (_) {
+        const err = $("pmMcpErr"); if (err) err.hidden = false;
+        return null;
+      }
+    }
+    const out = {
+      name: editName,
+      repos: repos,
+      sdks: textToSdks($("pmSdks") && $("pmSdks").value),
+      mcp: mcp,
+      hostPackages: linesToArray($("pmHostPkgs") && $("pmHostPkgs").value),
+      provisionCommands: linesToArray($("pmProvision") && $("pmProvision").value),
+    };
+    // Preserve the un-edited tests block so a save doesn't drop it.
+    if (editTests) out.tests = editTests;
+    return out;
+  }
+
+  $("pmAddRepo") && $("pmAddRepo").addEventListener("click", () => {
+    const reposHost = $("pmRepos"); if (reposHost) reposHost.appendChild(repoRow({}));
+  });
+  $("pmClose") && $("pmClose").addEventListener("click", closeModal);
+  $("pmCancel") && $("pmCancel").addEventListener("click", closeModal);
+  // Click the dimmed backdrop (but not the dialog itself) to dismiss.
+  modal && modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
+  // Esc closes the modal when it's open.
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && modal && !modal.hidden) closeModal(); });
+  $("pmSave") && $("pmSave").addEventListener("click", () => {
+    const profile = gatherProfile();
+    if (!profile) return; // invalid MCP JSON — error already shown
+    post({ type: "saveProject", name: editName, profile: profile });
+    closeModal();
+  });
+
   // ── Save settings ───────────────────────────────────────────────────────────
   function val(id) { const e = $(id); return e ? e.value : ""; }
   function gatherSettings() {
@@ -283,6 +425,17 @@
     }
     const sub = $("voiceSub"); if (sub) sub.hidden = !on;
     if (a.tunnel) text("voiceTunnel", a.tunnel);
+    // Honesty: the guard patch is best-effort — the VM's Claude build may not carry the
+    // known speech gate, in which case the chat mic button stays hidden. Reflect the
+    // real result (gatePatched) rather than always claiming the button is unlocked; when
+    // gatePatched is absent (unknown), keep neutral copy that doesn't assert a patch.
+    const gate = $("voiceGate"), gnote = $("voiceGateNote"), grow = $("voiceGateRow");
+    if (gate && gnote) {
+      if (a.gatePatched === true) { gate.textContent = "chat mic button enabled"; gnote.textContent = "(remote-gate patched)"; }
+      else if (a.gatePatched === false) { gate.textContent = "chat mic gate not patched"; gnote.textContent = "(unrecognised Claude build)"; }
+      else { gate.textContent = "chat mic button"; gnote.textContent = "(gate patched if a known build)"; }
+      if (grow) grow.classList.toggle("warn", a.gatePatched === false);
+    }
   }
 
   window.addEventListener("message", (ev) => {
@@ -291,6 +444,7 @@
     if (m.type === "state") render(m.state);
     else if (m.type === "audio") renderAudio(m);
     else if (m.type === "settings") applySettings(m.settings);
+    else if (m.type === "editProject") populateModal(m.name, m.profile);
   });
 
   function applySettings(s) {
