@@ -233,19 +233,74 @@ async function refreshAll() {
 // Construct self-update (which swaps the extension itself). The timer runs ONLY while a
 // dashboard is open: started when the first webview goes live, stopped when the last one
 // closes, so we don't SSH-probe the VM when nothing is showing.
-const AUTO_REFRESH_MS = 30000;
+const AUTO_REFRESH_MS = 30000;              // normal cadence while a dashboard is open
+const FAST_REFRESH_MS = 5000;               // faster cadence while a reprovision is in flight
+const FAST_REFRESH_MAX_MS = 5 * 60 * 1000;  // safety cap: never fast-poll longer than this
 let autoRefreshTimer = null;
+let autoRefreshMs = 0;                       // interval the live timer is currently running at
+// Reprovision fast-poll: the provisioned-commit hash captured when a reprovision starts.
+// We poll at 5s until it changes (the finished reprovision recorded a new one) or the cap
+// elapses, then fall back to 30s. null = not fast-polling. A plain reprovision that lands
+// the same commit relies on the cap; the common case (reprovision after a Construct update)
+// changes the commit and reverts promptly.
+let reprovisionBaselineCommit = null;
+let fastRefreshDeadline = 0;
+
+/** The provisioned-commit hash the provisioner writes to the host settings at the end of a
+ *  run ("" if unknown). Cheap local file read — the same marker isProvisionStale/augment use. */
+function provisionedCommitNow() {
+  try {
+    const dir = resolveScriptsDir();
+    return dir ? (updates.readMarkers(host.readRawSettings(dir)).provisionedCommit || "") : "";
+  } catch (_) { return ""; }
+}
+
+/** True while we're in the post-reprovision fast-poll window. */
+function fastRefreshActive() { return reprovisionBaselineCommit !== null; }
+
+/** Enter the 5s fast-poll after a reprovision starts. Ends (see refreshTick) when the
+ *  provisioned commit changes or FAST_REFRESH_MAX_MS elapses. */
+function beginReprovisionFastRefresh() {
+  reprovisionBaselineCommit = provisionedCommitNow();
+  fastRefreshDeadline = Date.now() + FAST_REFRESH_MAX_MS;
+  syncAutoRefresh(); // switch the live timer to the fast cadence
+}
+
+/** Leave fast-poll and return to the normal cadence. */
+function endReprovisionFastRefresh() {
+  reprovisionBaselineCommit = null;
+  fastRefreshDeadline = 0;
+  syncAutoRefresh();
+}
+
+/** One refresh tick. While fast-polling, first check whether the reprovision recorded a
+ *  new provisioned commit (or the cap elapsed) and, if so, drop back to the normal
+ *  cadence — then push fresh state to the open dashboards either way. */
+function refreshTick() {
+  if (fastRefreshActive()) {
+    const now = provisionedCommitNow();
+    if ((now && now !== reprovisionBaselineCommit) || Date.now() >= fastRefreshDeadline) {
+      endReprovisionFastRefresh();
+    }
+  }
+  refreshAll();
+}
+
+/** Keep the auto-refresh timer in sync with whether a dashboard is open and which cadence
+ *  applies (5s while a reprovision is in flight, else 30s). Started when the first webview
+ *  goes live, stopped when the last closes, recreated when the cadence changes. */
 function syncAutoRefresh() {
-  if (liveWebviews.size > 0 && !autoRefreshTimer) {
-    autoRefreshTimer = setInterval(() => { refreshAll(); }, AUTO_REFRESH_MS);
-  } else if (liveWebviews.size === 0 && autoRefreshTimer) {
-    clearInterval(autoRefreshTimer);
-    autoRefreshTimer = null;
+  if (liveWebviews.size === 0) { stopAutoRefresh(); return; }
+  const wantMs = fastRefreshActive() ? FAST_REFRESH_MS : AUTO_REFRESH_MS;
+  if (!autoRefreshTimer || autoRefreshMs !== wantMs) {
+    if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+    autoRefreshMs = wantMs;
+    autoRefreshTimer = setInterval(refreshTick, wantMs);
   }
 }
 /** Stop the auto-refresh timer unconditionally (extension deactivate). */
 function stopAutoRefresh() {
-  if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
+  if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; autoRefreshMs = 0; }
 }
 
 /** Locate the host-side scripts dir, honoring the `construct.scriptsDir` override. */
@@ -937,6 +992,9 @@ function handleMessage(message, webview, context) {
         // Pass the effective project selection so the console doesn't re-prompt (and a
         // reprovision keeps the current projects instead of dropping to "default").
         effectiveProjects().then((projects) => lifecycle.run(id, { scriptsDir, projects }));
+        // Fast-poll (5s) so the dashboards reflect the finished reprovision quickly,
+        // reverting to the normal cadence once it records a new provisioned commit.
+        if (id === "reprovision") beginReprovisionFastRefresh();
         return;
       }
       if (id === "updateConstruct") { runUpdateConstruct(); return; }

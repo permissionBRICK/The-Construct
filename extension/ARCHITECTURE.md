@@ -37,7 +37,8 @@ passthrough** so voice input works over Remote-SSH.
 extension/
   package.json        manifest: activity-bar container, webview view, commands
   extension.js        activation; launcher + panel wiring; serializer; message router; probe refresh
-                      (incl. a 30s periodic auto-refresh while a dashboard is open)
+                      (30s periodic auto-refresh while a dashboard is open; 5s while a reprovision
+                      is in flight, until the provisioned commit changes or a cap elapses)
   media/
     launcher.html     sidebar launcher doc (status + update banner + 3 quick actions + Open button)
     launcher.js       launcher controller: postMessage, render(state)
@@ -285,8 +286,11 @@ VM-derived fields when `online===false` or `probeError`):
   detached host console can't reload VS Code itself); on `fail` the script's console pauses
   with a "reopen VS Code" message and the panel shows a toast. The full window reload is
   reserved for a self-update (it swaps the extension itself); ordinary VM-side changes (a
-  reprovision, power on/off) are picked up by `syncAutoRefresh`'s 30s `refreshAll` timer,
-  which runs only while a dashboard is open — no reload needed. An old script (no env read)
+  reprovision, power on/off) are picked up by `syncAutoRefresh`'s `refreshAll` timer,
+  which runs only while a dashboard is open — no reload needed. It ticks every 30s
+  normally; when the panel launches a reprovision, `beginReprovisionFastRefresh` drops
+  it to 5s and `refreshTick` reverts to 30s once the host `provisionedCommit` marker
+  changes (the finished reprovision recorded a new one) or a 5-minute cap elapses. An old script (no env read)
   just pauses on completion and the poll times out — the update still applied, no auto-reload
   that once. Run by hand (no result path) it pauses on success too. Agent updates
   work the same way: per-agent latest (npm/GitHub releases) vs the probed version →
