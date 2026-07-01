@@ -35,7 +35,7 @@ ok("reprovision: git identity", has(repro.args, "-GitUserName", "Neo") && has(re
 ok("reprovision: bools as true/false strings", has(repro.args, "-VsCodeServeWeb", "true") && has(repro.args, "-VsCodeTunnel", "false") && has(repro.args, "-SmbShare", "true"));
 
 const reproEmpty = life.buildInvocation("reprovision", { settings: {} });
-ok("reprovision: omits unset fields (still -NonInteractive)", reproEmpty.args.join(" ") === "-Action provision -NonInteractive");
+ok("reprovision: omits unset fields (-FromPanel + -NonInteractive)", reproEmpty.args.join(" ") === "-FromPanel -Action provision -NonInteractive");
 // Panel launch is non-interactive: don't re-prompt for the SMB drive letter etc.
 ok("reprovision: passes -NonInteractive", repro.args.includes("-NonInteractive"));
 // Project selection from the control panel is passed so the console doesn't re-prompt.
@@ -74,6 +74,12 @@ const redNoRel = life.buildInvocation("redownload", { settings: {} });
 ok("redownload: omits -UbuntuRelease when unset", !redNoRel.args.includes("-UbuntuRelease"));
 
 ok("unknown action -> null", life.buildInvocation("bogus", {}) === null);
+
+// ── -FromPanel: every panel launch skips the script's end-of-run pause ───────
+ok("reprovision: passes -FromPanel", repro.args.includes("-FromPanel"));
+ok("export: passes -FromPanel", exp.args.includes("-FromPanel"));
+ok("reinstall: passes -FromPanel", rei.args.includes("-FromPanel"));
+ok("redownload: passes -FromPanel", red.args.includes("-FromPanel"));
 
 // ── winQuoteArg (canonical Windows command-line quoting) ─────────────────────
 // These exact outputs were validated to parse correctly through real PowerShell

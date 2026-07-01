@@ -52,6 +52,12 @@ function normalizeBackupMode(bm) {
 function buildInvocation(action, opts = {}) {
   const s = opts.settings || {};
   const args = [];
+  // Panel-launched scripts skip their end-of-run "Press Enter" pause: the dashboard
+  // shows the result (and auto-refreshes), so the console just closes when done. In
+  // debug the launcher still keeps it open via -NoExit. A direct PowerShell run (no
+  // -FromPanel) keeps the pause so the window stays readable. Passed as a param (not
+  // an env var) so it survives the UAC boundary for the elevated reinstall/redownload.
+  args.push("-FromPanel");
   const pushPair = (flag, val) => { if (val != null && String(val).trim() !== "") args.push(flag, String(val)); };
   const pushBool = (flag, val) => { if (typeof val === "boolean") args.push(flag, val ? "true" : "false"); };
   // The control panel's project selection (persisted `projects`), so the script uses
