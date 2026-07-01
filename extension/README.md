@@ -33,11 +33,19 @@ To develop locally, open this folder in VS Code and press F5.
 | Path | Role |
 | --- | --- |
 | `package.json` | manifest: activity-bar container, webview view, commands |
-| `extension.js` | activation, launcher + panel wiring, serializer, host/VM bridges |
+| `extension.js` | activation, launcher + panel wiring, serializer, host/VM bridges, message router |
 | `media/launcher.html` · `launcher.js` | the sidebar launcher (status + quick actions) |
-| `media/panel.html` · `panel.js` | the full control panel (editor tab) |
+| `media/panel.html` · `panel.js` | the full control panel (editor tab), incl. the project edit modal |
 | `media/panel.css` | Matrix theme shared by both surfaces |
+| `media/audio.html` · `audio-capture.js` · `audio-worklet.js` | hidden mic-capture webview (getUserMedia → 16 kHz mono PCM) |
 | `media/icon.svg` | activity-bar icon |
+| `src/ssh.js` · `probe.js` | SSH runner + the live status/version probe |
+| `src/host.js` · `lifecycle.js` | host scripts-dir + settings + project profiles; lifecycle launchers |
+| `src/updates.js` · `remote.js` · `vmpower.js` | update checks; Remote-SSH open + add/open project; Hyper-V power |
+| `src/projects.js` · `usage.js` · `audio.js` | Projects import/select/edit; ccusage usage+cost; mic-passthrough orchestrator |
+| `vm/*.sh` | the rec/arecord shim + audio enable/disable scripts pushed to the VM |
+| `test/*.test.js` · `ui-smoke.js` | plain-node unit suites + the Playwright webview smoke test |
 
 The webview talks to the extension over `postMessage`; the message contract lives at
-the top of `extension.js`.
+the top of `extension.js` (and in `ARCHITECTURE.md`). Run the tests with
+`node test/<name>.test.js` (and `NODE_PATH=<playwright> node test/ui-smoke.js`).

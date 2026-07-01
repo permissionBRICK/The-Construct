@@ -62,21 +62,40 @@ extension/
                       into state by augment(). fetchJson follows 3xx redirects (a moved GitHub
                       repo resolves via its 301) + picks the Accept header per host (npm needs
                       application/json, not vnd.github+json). constructRefreshArgs for install.ps1 -RefreshOnly.
-    projects.js       [planned] import-from-VM, select, per-project edit
-    usage.js          [planned] ccusage over SSH + cost
-    audio.js          [planned] mic capture + ssh -R tunnel + on-demand gating
-  vm/                 [planned] scripts pushed to the VM over SSH by audio.js
-    construct-rec-shim.sh        rec/arecord shim (streams tunnel PCM)
-    construct-audio-enable.sh    install shim + apply remoteName-guard patch
-    construct-audio-disable.sh   remove shim + revert patch
+    projects.js       import-from-VM + select + per-project edit — PURE transforms only
+                      (buildScanScript/parseScan, planImport merge, reconcileSelection,
+                      sanitizeProfile, toChips). Profile file I/O lives in host.js; the SSH
+                      round-trip, edit modal and QuickPick live in extension.js.
+    usage.js          ccusage over SSH -> per-agent tokens + estimated cost. buildUsageScript
+                      (base64-as-data), parseUsage/parseToolUsage (totals.totalCost|costUSD),
+                      number/cost formatting, augment(state) (best-effort + cached like updates),
+                      collectRaw/buildExportPayload/exportFileName for the JSON export.
+    audio.js          on-demand mic passthrough. HostAudio: push vm/ scripts + apply the guard
+                      patch over SSH, open a local TCP server + a persistent `ssh -R` tunnel
+                      CONFIRMED by a settle window (an ssh that dies early = tunnel-failed, roll
+                      back both sides); parses CONSTRUCT_GATE_PATCHED so the UI is honest.
+                      AudioSession: per-connection arm/disarm (mic hot only while recording).
+                      Guard patch apply/revert/idempotent. All pure builders; ssh/spawn/net injected for tests.
+  vm/                 scripts pushed to the VM over SSH by audio.js on enable
+    construct-rec-shim.sh        rec/arecord shim (streams tunnel PCM, dies on SIGTERM)
+    construct-audio-enable.sh    install shim + apply remoteName-guard patch; prints CONSTRUCT_GATE_PATCHED=0/1
+    construct-audio-disable.sh   remove shim + revert patch (restore the .bak)
+  media/ (audio)      audio.html + audio-capture.js + audio-worklet.js — the hidden capture
+                      webview: getUserMedia -> 16 kHz mono S16LE (AudioWorklet) -> PCM to the extension
   test/
-    ui-smoke.js       Playwright headless-Chromium webview test (73 checks: panel + launcher + narrow overflow + settings round-trip + unwired-control honesty + connect/start/shutdown power buttons + add-project + per-chip open)
+    ui-smoke.js       Playwright headless-Chromium webview test (107 checks: panel + launcher +
+                      narrow overflow + settings round-trip + honesty + power buttons + add-project +
+                      per-chip open + project edit modal + usage table + audio substatus incl. gate-patch state)
     probe.test.js     plain-node ssh-arg + probe-parse units (21 checks)
-    host.test.js      plain-node scripts-dir resolution + settings merge + readProjectProfile units (40 checks; fake %LOCALAPPDATA% tree)
+    host.test.js      plain-node scripts-dir resolution + settings merge + readProjectProfile +
+                      project-profile list/write/select + traversal (61 checks; fake %LOCALAPPDATA% tree)
     remote.test.js    plain-node Remote-SSH helpers — isConnectedToVm/remoteFolderUri + repoNameFromUrl/isLikelyGitUrl/buildCloneScript/projectOpenPath/shouldAutoOpenPanel + URI percent-encoding (71 checks)
     lifecycle.test.js plain-node buildInvocation + winQuoteArg/quoting/elevation units (48 checks)
     updates.test.js   plain-node update-check units — Construct compare/cache + agent semver/latest/script + fetchJson redirects/per-host Accept, injected fetch+clock+http (62 checks)
     vmpower.test.js   plain-node Hyper-V power units — Get-VM probe/parse + Start-VM/elevated launch builders + injected-spawn queryVmState (38 checks)
+    projects.test.js  plain-node scan builder/parser + planImport merge + reconcileSelection + sanitizeProfile (injection + prototype-pollution) (77 checks)
+    usage.test.js     plain-node ccusage script + parse (totalCost/costUSD/missing/error/zero/array) + formatting + cache TTL/coalesce + export payload, injected ssh+clock (88 checks)
+    audio.test.js     plain-node guard-patch apply/revert/idempotency + VM script builders (injection proofs) + ssh -R argv + AudioSession gating + HostAudio enable/disable/rollback + tunnel settle-window (async early death + later death) (134 checks)
 ```
 
 ## Webview ↔ extension message protocol
@@ -87,19 +106,25 @@ Defined in `extension.js` (handleMessage), `media/panel.js` and `media/launcher.
 - `{type:'ready'}` — webview loaded; triggers a probe + state push.
 - `{type:'command', id, project?}` — ids: `reprovision`, `exportConfig`,
   `redownload`, `reinstall`, `updateConstruct`, `updateAgents`, `refresh`,
-  `openProjectFolder`, `selectProfiles`, `exportUsage`, `importProjects`,
-  `editProject` (+`project`), `connect` (open the VM over Remote-SSH),
+  `openProjectFolder`, `selectProfiles` (multi-select QuickPick → persist),
+  `exportUsage` (collect ccusage → Save dialog), `importProjects` (SSH repo scan →
+  write/merge profiles), `editProject` (+`project`; opens the edit modal),
+  `connect` (open the VM over Remote-SSH),
   `startConnect` (elevated Start-VM then poll+open), `shutdown` (poweroff over SSH),
   `addProject` (prompt a git URL → clone over SSH → open in a new window),
   `openProject` (+`project`; open that project's folder on the VM in a new window).
 - `{type:'setAudio', enabled}` — live mic-passthrough toggle (console switch only).
+- `{type:'saveProject', name, profile}` — the edited profile posted back from the modal
+  (sanitized + written to `projects/<name>.json`).
 - `{type:'openPanel'}` — open the wide editor-tab panel.
 - `{type:'saveSettings', settings}` — persist the settings form.
 - `{type:'customRebuild', mode:'reinstall'|'redownload', backup:'save'|'existing'|'wipe', backupId}`.
 
 **extension → webview**
 - `{type:'state', state}` — full render (see shape below).
-- `{type:'audio', enabled, capturing, tunnel}` — live audio status (flips the switch).
+- `{type:'audio', enabled, capturing, tunnel, gatePatched}` — live audio status (flips the
+  switch; `gatePatched` drives the honest "chat mic button" substatus line).
+- `{type:'editProject', name, profile}` — open + populate the project edit modal.
 - `{type:'settings', settings}` — populate the settings form from disk.
 
 **state shape** (every field optional; `render()` guards each, and clears
@@ -366,16 +391,31 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
    `withProjects`), seeded from the live VM `PROJECTS=` list until the user saves one.
    `host.test.js` (list/write/select + traversal) + `projects.test.js` (scan/parse/
    plan/reconcile/sanitize incl. injection+pollution) + ui-smoke modal checks.
-5. **Usage** — `src/usage.js`: run the ccusage-over-SSH collector (reuse the
-   Get-AgentUsage remote script), parse tokens + `costUSD`, render the usage table
-   incl. estimated cost; `exportUsage` saves JSON.
-6. **Audio — host side** — `src/audio.js`: hidden-webview `getUserMedia` → 16 kHz
-   mono S16LE (AudioWorklet) → extension → local TCP server; `ssh -R
-   <vmPort>:127.0.0.1:<hostPort> agent-vm`. Capture only while a tunnel client is
-   connected (on-demand). Fallback to bundled sox if webview mic is blocked.
-7. **Audio — VM side** — `vm/` scripts pushed over SSH on enable: `rec`/`arecord`
-   shim (streams tunnel PCM, dies on SIGTERM) into `/usr/local/bin`; apply the
-   remoteName-guard patch; disable removes both. Verify the shim + patch on this VM.
+5. ✓ **DONE — Usage** — `src/usage.js`: `buildUsageScript` runs ccusage over SSH
+   (base64-as-data, mirroring `Get-AgentUsage.ps1`) for claude/codex/opencode;
+   `parseUsage`/`parseToolUsage` read `totals.totalCost` (claude/opencode) or
+   `costUSD` (codex) into per-agent rows (exact tokens + estimated cost) + a total;
+   `augment(state)` folds it in as a SEPARATE slow best-effort+cached pass (ccusage may
+   self-install on first run, so it rides after the base+update pushes). `exportUsage`
+   collects the raw combined document and saves it via a Save dialog
+   (`collectRaw`/`buildExportPayload`). `usage.test.js` (88). renderUsage already
+   consumed the shape, so no webview change was needed.
+6. ✓ **DONE — Audio host side** — `src/audio.js` `HostAudio`: on enable, push the shim +
+   apply the guard patch over SSH, open a local TCP server, and spawn a persistent
+   `ssh -R <vmPort>:127.0.0.1:<hostPort>` — CONFIRMED by a settle window (an ssh that
+   dies early = tunnel-failed → roll back BOTH sides). `AudioSession` arms the mic only
+   while a tunnel client (the VM shim) is connected and disarms on disconnect (mic never
+   hot idle). The hidden capture webview (`media/audio.html`+`audio-capture.js`+
+   `audio-worklet.js`) does `getUserMedia` → 16 kHz mono S16LE → PCM to the extension →
+   the tunnel socket. Mic-blocked ends the capture cleanly (honest: no audio); a bundled-sox
+   host fallback is scaffolded but not wired (noted). `audio.test.js` (134).
+7. ✓ **DONE — Audio VM side** — `vm/` scripts pushed over SSH on enable (injection-safe,
+   base64-as-data): `construct-rec-shim.sh` (rec/arecord shim streaming tunnel PCM, dies
+   on SIGTERM) into `/usr/local/bin`; `construct-audio-enable.sh` installs it + applies the
+   reversible `remoteName`-guard patch (a precise, idempotent substring swap) and prints
+   `CONSTRUCT_GATE_PATCHED=0/1` so the host reports the truth; `construct-audio-disable.sh`
+   removes the shim + restores the backup. Confirmed on THIS VM the real gate is
+   `if(le.env.remoteName)return!1` in claude-code 2.1.196/2.1.197 (minified prefix `le.env.`).
 8. ✓ **DONE — Install integration** (`install.ps1` + `lib/AgentVm.Common.ps1`).
    `install.ps1` (non-elevated, before Auto-Install self-elevates; on both the fresh
    path and `-RefreshOnly`) records the update marker via `Set-ConstructInstalledMarker`
@@ -393,7 +433,12 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
    `test/` exclusion + a re-run refreshing a NESTED `src/` file with no double-nesting +
    no leftover staging + missing-source. NOTE: the extension copy lives in `install.ps1`
    (non-elevated, has %USERPROFILE%), not `Provision-AgentVM.ps1` as originally sketched.
-9. **Docs** — `docs/` page + README section; convert/trim this file as needed.
+9. ✓ **DONE — Docs** — user-facing `docs/control-panel.md` (a full tour of the panel:
+   status, lifecycle, connect/power, updates, projects, usage, mic passthrough) + a
+   README feature bullet and Documentation-table row; `extension/README.md` refreshed;
+   this file kept current as the developer/design source of truth.
+
+**🎉 The control-panel roadmap (items 1–9, plus the inserted 3.5) is COMPLETE.**
 
 ## Committed so far
 
@@ -413,7 +458,16 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
 - `0e15f4f` Open project per-chip (`host.readProjectProfile` + `remote.projectOpenPath` + `runOpenProject`) — inline ▷ on each project chip opens its single-repo folder (else `/root/repos`) in a new window; `remoteFolderUri` percent-encodes path segments; `host.test.js` + `remote.test.js` extended
 - `fd44c435` Installer support (`lib/AgentVm.Common.ps1` `Ensure-VSCodeRemoteSsh`/`Add-HyperVAdminMembership`/`Get-RemoteOpenLink`; `install.ps1` ensure VS Code+Remote-SSH non-elevated; `Auto-Install.ps1` Hyper-V Admin add + end-of-install deep link; `extension.js` `maybeAutoOpenPanel` + `remote.shouldAutoOpenPanel`) — `test/host-lib.test.ps1` (pwsh) + `shouldAutoOpenPanel`
 - (this batch) Install integration (`lib` `Get-VSCodeExtensionDir`/`Install-ControlPanelExtension`/`Set-ConstructInstalledMarker`; `install.ps1` copies the extension into `%USERPROFILE%\.vscode\extensions\` + records `installedCommit` on fresh install, and `-RefreshOnly` refreshes the extension too) — `test/host-lib.test.ps1` extended (copy + `test/` exclusion)
-- (this batch) Projects (`src/projects.js` scan/parse/import-merge/select-reconcile/schema-sanitize; `host.js` `listProjectProfiles`/`writeProjectProfile`/`read`+`saveSelectedProjects`/`safeProfileName`; `extension.js` `runImportProjects`/`runSelectProfiles`/`runEditProject`/`runSaveProject` + `withProjects` folds local profiles+selection into state; panel edit modal in panel.html/js/css) — `projects.test.js` (77) + `host.test.js` extended (61) + ui-smoke modal checks (93)
+- `fcdbd3d` **Projects + Usage + Audio (items 4, 5, 6/7)** — built in parallel git
+  worktrees, merged (only `extension.js` + `test/ui-smoke.js` needed hand resolution),
+  adversarially pre-reviewed (3 findings fixed) and auto-review approved (incl. a
+  tunnel-startup settle-window fix). Projects: `src/projects.js` (scan/parse/import-merge/
+  select-reconcile/schema-sanitize) + `host.js` profile helpers + a panel edit modal.
+  Usage: `src/usage.js` (ccusage over SSH → tokens+cost, cached augment, JSON export).
+  Audio: `src/audio.js` (`HostAudio` tunnel w/ settle-window confirm + rollback,
+  `AudioSession` on-demand gating, guard-patch) + `vm/*.sh` + the `media/audio*` capture
+  webview; enable.sh reports `CONSTRUCT_GATE_PATCHED` so the UI is honest. Tests:
+  projects 77, usage 88, audio 134, host 61, ui-smoke 107 — all green.
 
 ## Build/verify tooling (on this dev VM)
 
