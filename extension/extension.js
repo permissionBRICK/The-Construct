@@ -509,8 +509,12 @@ function makeMicProvider() {
 }
 
 /** Enable mic passthrough. Optimistic switch is already "busy" in the webview; we
- *  flip it authoritatively via {type:'audio'} once enable resolves. */
-function enableAudio(context, webview) {
+ *  flip it authoritatively via {type:'audio'} once enable resolves. `opts.auto` marks
+ *  a startup auto-arm (from the saved micPassthrough preference): it runs FULLY SILENT —
+ *  no notification progress, no success toast, no failure toast (the switch visibly
+ *  reflects the result; a down VM or a second window that already holds the tunnel
+ *  shouldn't nag on every launch). A manual toggle keeps the progress spinner + toasts. */
+function enableAudio(context, webview, opts = {}) {
   if (hostAudio && hostAudio.enabled) { broadcastAudio({ enabled: true, capturing: hostAudio.capturing }); return; }
   micWarnedReasons = new Set(); // fresh enable: allow one warning per failure reason again
   hostAudio = new audio.HostAudio({
@@ -518,26 +522,49 @@ function enableAudio(context, webview) {
     mic: makeMicProvider(),
     onStatus: (s) => broadcastAudio(s),
   });
+  const handle = (r) => {
+    if (!r.ok) {
+      // Reset the switch to off on every surface.
+      hostAudio = undefined;
+      safePost(webview, { type: "audio", enabled: false, capturing: false });
+      broadcastAudio({ enabled: false, capturing: false });
+      if (opts.auto) return; // best-effort startup arm: stay silent, the switch shows off
+      const why = {
+        unreachable: "Couldn't reach the VM. Is it running?",
+        "enable-failed": "The VM couldn't install the recorder shim / patch.",
+        "server-failed": "Couldn't open the local audio port.",
+        "tunnel-failed": "Couldn't open the SSH tunnel to the VM.",
+      }[r.error] || "Couldn't enable microphone passthrough.";
+      vscode.window.showErrorMessage(why + (r.detail ? " " + String(r.detail).slice(0, 160) : ""));
+    } else if (!opts.auto) {
+      vscode.window.showInformationMessage("Microphone passthrough enabled — the mic opens only while you're recording.");
+    }
+  };
+  if (opts.auto) {
+    // No notification progress on startup — auto-arm must be invisible until it succeeds.
+    hostAudio.enable().then(handle, () => handle({ ok: false, error: "enable-failed" }));
+    return;
+  }
   vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: "Enabling microphone passthrough…", cancellable: false },
-    async () => {
-      const r = await hostAudio.enable();
-      if (!r.ok) {
-        // Honest, specific failure; reset the switch to off.
-        const why = {
-          unreachable: "Couldn't reach the VM. Is it running?",
-          "enable-failed": "The VM couldn't install the recorder shim / patch.",
-          "server-failed": "Couldn't open the local audio port.",
-          "tunnel-failed": "Couldn't open the SSH tunnel to the VM.",
-        }[r.error] || "Couldn't enable microphone passthrough.";
-        vscode.window.showErrorMessage(why + (r.detail ? " " + String(r.detail).slice(0, 160) : ""));
-        hostAudio = undefined;
-        safePost(webview, { type: "audio", enabled: false, capturing: false });
-      } else {
-        vscode.window.showInformationMessage("Microphone passthrough enabled — the mic opens only while you're recording.");
-      }
-    }
+    async () => { handle(await hostAudio.enable()); }
   );
+}
+
+/** Auto-arm mic passthrough on startup when the saved preference (micPassthrough in
+ *  .construct-settings.json, the settings-form "Microphone passthrough" toggle) is on.
+ *  Best-effort and QUIET: gated on the VM being reachable so a down VM never toasts;
+ *  the user can still toggle manually. */
+async function maybeAutoEnableAudio(context) {
+  try {
+    if (hostAudio && hostAudio.enabled) return;
+    const scriptsDir = resolveScriptsDir();
+    if (!scriptsDir) return;
+    const raw = host.readRawSettings(scriptsDir);
+    if (!raw || raw.micPassthrough !== true) return;
+    if (!(await ssh.isReachable({ timeoutMs: 6000 }))) return; // VM down — stay off silently
+    enableAudio(context, undefined, { auto: true });
+  } catch (_) { /* best-effort: never block activation */ }
 }
 
 /**
@@ -695,6 +722,12 @@ function handleMessage(message, webview, context) {
         host.saveSettings(scriptsDir, message.settings);
         vscode.window.showInformationMessage("Construct settings saved.");
         pushSettings(webview); // reflect the normalized, merged on-disk state
+        // The "Microphone passthrough" toggle is a live preference: honor it now, not
+        // just on next startup, so changing the setting actually does something.
+        const wantMic = message.settings && message.settings.mic === true;
+        const micOn = !!(hostAudio && hostAudio.enabled);
+        if (wantMic && !micOn) enableAudio(context, webview);
+        else if (!wantMic && micOn) disableAudio();
       } catch (e) {
         vscode.window.showErrorMessage("Couldn't save Construct settings: " + (e && e.message ? e.message : e));
       }
@@ -819,6 +852,7 @@ function activate(context) {
     );
   }
   maybeAutoOpenPanel(context);
+  maybeAutoEnableAudio(context); // arm mic passthrough now if the saved preference is on
 }
 
 /** When a window comes up attached to the VM (the installer's end-of-install deep

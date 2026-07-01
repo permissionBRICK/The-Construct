@@ -247,6 +247,15 @@ VM-derived fields when `online===false` or `probeError`):
   record-window signal — the host opens the mic on connect, releases on disconnect.
   The mic is never hot continuously. (snd-aloop was rejected for requiring a
   constant feed.)
+- **Mic auto-arm.** The settings-form "Microphone passthrough" toggle (`#setMic` →
+  `micPassthrough` in `.construct-settings.json`) is a saved AUTO-ENABLE preference,
+  distinct from the live `#voiceSwitch` console control. `activate()` →
+  `maybeAutoEnableAudio` reads it and, if on AND the VM is reachable, arms passthrough
+  at startup (`enableAudio(..., {auto:true})` — QUIET: no success toast, no failure
+  toast, since the switch visibly reflects the result and a down VM/second window
+  shouldn't nag). Saving the settings form also reconciles live state immediately (arm
+  if newly on, disarm if newly off), so the toggle isn't a no-op until next launch. Not
+  unit-testable here (no VS Code `activate()` runtime) — logic-reviewed + syntax-checked.
 - **Guard patch is reversible + version-generic.** Neutralize only the speech gate
   by rewriting `…env.remoteName)return!1` → `…env.remoteName&&!1)return!1` in the
   VM's installed `anthropic.claude-code-*/extension.js`. Applied on audio-enable,
