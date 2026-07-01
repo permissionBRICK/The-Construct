@@ -265,8 +265,30 @@ ok "marker: param-less reprovision preserves the recorded pair" ($mReprov.Repo -
 $mFresh = Resolve-MarkerSource -Repo "permissionBRICK/The-Construct" -Ref "main" -RepoSupplied $false -RefSupplied $false -ExistingRepo "" -ExistingRef ""
 ok "marker: no explicit + no existing -> defaults" ($mFresh.Repo -eq "permissionBRICK/The-Construct" -and $mFresh.Ref -eq "main")
 
+# ── Regression guard: no non-ASCII INSIDE a string literal in shipped .ps1 ────
+# Windows PowerShell 5.1 reads a BOM-less .ps1 as the ANSI code page, so a UTF-8
+# em-dash (etc.) inside a STRING mangles into a smart-quote that closes the string
+# early -> "string is missing the terminator" (it crashed Update-Construct.ps1).
+# Comment separators (the box-drawing lines) are fine -- they're ignored. Parse each
+# shipped script and fail if any string-literal token carries a non-ASCII char.
+$repoRoot = Split-Path -Parent $here
+$shipped = @("install.ps1","Auto-Install.ps1","Create-AgentVM.ps1","Provision-AgentVM.ps1",
+             "Update-Construct.ps1","Get-AgentUsage.ps1","lib/AgentVm.Common.ps1")
+foreach ($rel in $shipped) {
+    $p = Join-Path $repoRoot $rel
+    if (-not (Test-Path -LiteralPath $p)) { continue }
+    $errs = $null; $toks = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($p, [ref]$toks, [ref]$errs)
+    $strs = $ast.FindAll({ param($n)
+        $n -is [System.Management.Automation.Language.StringConstantExpressionAst] -or
+        $n -is [System.Management.Automation.Language.ExpandableStringExpressionAst] }, $true)
+    $bad = @($strs | Where-Object { $_.Extent.Text -match '[^\x00-\x7F]' })
+    ok "ascii: $rel has no non-ASCII inside string literals (WinPS 5.1-safe)" ($bad.Count -eq 0)
+    if ($bad.Count -gt 0) { $bad | Select-Object -First 3 | ForEach-Object { Write-Host ("        line {0}: {1}" -f $_.Extent.StartLineNumber, $_.Extent.Text) -ForegroundColor DarkYellow } }
+}
+
 Write-Host ""
-Write-Host ("  host-lib unit tests — {0}/{1} passed" -f $script:pass, ($script:pass + $script:fail))
+Write-Host ("  host-lib unit tests - {0}/{1} passed" -f $script:pass, ($script:pass + $script:fail))
 Write-Host ""
 if ($script:fail -gt 0) { exit 1 }
 exit 0

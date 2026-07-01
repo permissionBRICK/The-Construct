@@ -6,7 +6,7 @@
     the source (default: the canonical repo / main).
 
     Result signal: when the panel launches this, it passes a path (via the
-    CONSTRUCT_UPDATE_RESULT env var — an env var, not a parameter, so an OLDER copy of
+    CONSTRUCT_UPDATE_RESULT env var - an env var, not a parameter, so an OLDER copy of
     this script simply ignores it instead of erroring on an unknown argument) that we
     write "ok"/"fail" to at the end. The panel polls it and, on "ok", RELOADS the VS Code
     window so the refreshed panel loads automatically (a detached console can't reload VS
@@ -57,7 +57,7 @@ try {
     }
 
     # Reinstall the control-panel extension (repackage + code --install-extension). Both a
-    # MISSING helper (the dot-source above failed) and a falsey return are real failures —
+    # MISSING helper (the dot-source above failed) and a falsey return are real failures -
     # otherwise the panel would reload into the OLD panel thinking the update succeeded.
     if (-not (Get-Command Install-ControlPanelExtension -ErrorAction SilentlyContinue)) {
         throw "Update helpers didn't load, so the control-panel extension couldn't be reinstalled."
@@ -78,9 +78,9 @@ if ($ResultFile) {
 Write-Host ""
 if ($ok) {
     if ($ResultFile) {
-        # The panel is polling; it will reload this window. No pause — the reload is the
+        # The panel is polling; it will reload this window. No pause - the reload is the
         # feedback (and the window closes because it's launched without -NoExit).
-        Write-Host "Update complete — reloading VS Code to load the refreshed panel..." -ForegroundColor Green
+        Write-Host "Update complete - reloading VS Code to load the refreshed panel..." -ForegroundColor Green
     } else {
         Write-Host "Update complete. Reload/restart VS Code to pick up the refreshed panel." -ForegroundColor Cyan
         if (-not [Console]::IsInputRedirected) { Read-Host "Press Enter to close" | Out-Null }
