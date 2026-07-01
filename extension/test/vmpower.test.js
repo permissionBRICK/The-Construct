@@ -78,6 +78,10 @@ ok("elevated: child runs an inline -Command (not -File <script>)", el.command.in
 // 'Agent-VM' quotes are doubled — assert the actually-escaped form.
 ok("elevated: carries the inner Start-VM command (quotes PS-escaped)", el.command.includes("Start-VM -Name ''Agent-VM''"));
 ok("elevated: uses -EncodedCommand", el.spawnArgs.includes("-EncodedCommand"));
+// Regression: launch through `cmd /c start` so the elevated Start-Process actually gets
+// a console/UAC window (VS Code's extension host is console-less; a plain powershell spawn
+// opens nothing — the same bug the lifecycle buttons had).
+ok("elevated: spawns via cmd.exe /c start", el.file === "cmd.exe" && el.spawnArgs[1] === "start" && el.spawnArgs[3] === "powershell.exe");
 ok("elevated: base64 decodes (utf16le) back to the outer command",
   Buffer.from(el.spawnArgs[el.spawnArgs.length - 1], "base64").toString("utf16le") === el.command);
 

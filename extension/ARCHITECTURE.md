@@ -183,13 +183,17 @@ VM-derived fields when `online===false` or `probeError`):
   terminal.** A UI extension's Node code runs on the local Windows host even when
   the window is Remote-SSH'd into the VM, but `createTerminal()` targets the
   *window's* context (the VM, where there's no `powershell.exe`). So `lifecycle.js`
-  spawns a local `powershell.exe` whose `Start-Process …` opens a new visible
-  console window, detached so it outlives VS Code. **The launcher is spawned WITHOUT
-  `windowsHide` and the inner `Start-Process` passes `-WindowStyle Normal`.**
-  `windowsHide:true` sets `CREATE_NO_WINDOW` on the launcher, whose no-console state
-  the inner console can inherit → the "toast fires, no window, nothing happens" bug
-  the four lifecycle buttons had (and `vmpower.startVm`, since fixed the same way);
-  `detached` gives the launcher no console of its own without suppressing the child's.
+  launches via **`cmd.exe /c start "" powershell.exe -EncodedCommand …`** so a new
+  console appears. **Why `cmd /c start`:** VS Code's extension host is a GUI process
+  with NO console; a powershell.exe spawned from it inherits none, and Node's
+  child_process can't request `CREATE_NEW_CONSOLE` (`detached` sets the OPPOSITE,
+  `DETACHED_PROCESS`). A console-less launcher's `Start-Process` opens NO visible
+  window — the "toast fires, no window, nothing happens" bug. Removing `windowsHide`
+  did NOT fix it (detached still suppressed the console); `start` is the reliable Win32
+  primitive that forces a new console. Only argv-safe tokens (the fixed powershell flags
+  + the base64 blob) pass through cmd — no paths/user values — so `start` adds no new
+  quoting surface. `vmpower.startVm` (the "Start & connect" UAC launch) uses the same
+  wrapper for the same reason. The launched console outlives VS Code (its own process).
   Quoting (verified through real PowerShell): the outer command is handed to the
   spawned shell via `-EncodedCommand` (base64 UTF-16LE) so there's NO Node↔shell
   quoting layer; the child argv is canonically Windows-quoted (`winQuoteArg`) and
@@ -247,15 +251,20 @@ VM-derived fields when `online===false` or `probeError`):
   record-window signal — the host opens the mic on connect, releases on disconnect.
   The mic is never hot continuously. (snd-aloop was rejected for requiring a
   constant feed.)
-- **Mic auto-arm.** The settings-form "Microphone passthrough" toggle (`#setMic` →
-  `micPassthrough` in `.construct-settings.json`) is a saved AUTO-ENABLE preference,
-  distinct from the live `#voiceSwitch` console control. `activate()` →
-  `maybeAutoEnableAudio` reads it and, if on AND the VM is reachable, arms passthrough
-  at startup (`enableAudio(..., {auto:true})` — QUIET: no success toast, no failure
-  toast, since the switch visibly reflects the result and a down VM/second window
-  shouldn't nag). Saving the settings form also reconciles live state immediately (arm
-  if newly on, disarm if newly off), so the toggle isn't a no-op until next launch. Not
-  unit-testable here (no VS Code `activate()` runtime) — logic-reviewed + syntax-checked.
+- **Mic passthrough = ONE persistent setting.** Both switches — the console
+  `#voiceSwitch` and the settings `#setMic` — drive the SAME `micPassthrough` key in
+  `.construct-settings.json`. Toggling the console switch persists it (`persistMicPreference`
+  → `host.saveSettings({mic})`, merge-only) and `broadcastSettings` keeps `#setMic` in
+  sync; saving the settings form reconciles live audio immediately (arm if newly on,
+  disarm if newly off) and `broadcastAudio` keeps `#voiceSwitch` in sync. So "enable on
+  the main page" sticks. `activate()` → `maybeAutoEnableAudio` reads `micPassthrough` and,
+  if on AND the VM is reachable, arms at startup via `enableAudio(..., {auto:true})` —
+  FULLY SILENT (no notification progress, no toasts; the switch reflects the result, and a
+  down VM / a second window that already holds the tunnel shouldn't nag). A manual enable
+  whose gate patched offers a **"Reload window"** (the running Claude Code still has the
+  pre-patch code in memory, so its mic button only appears after a reload; passthrough
+  re-arms itself post-reload via auto-arm). Not unit-testable here (no VS Code `activate()`
+  runtime) — logic-reviewed + syntax-checked.
 - **Guard patch is reversible + version-generic.** Neutralize only the speech gate
   by rewriting `…env.remoteName)return!1` → `…env.remoteName&&!1)return!1` in the
   VM's installed `anthropic.claude-code-*/extension.js`. Applied on audio-enable,

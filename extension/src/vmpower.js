@@ -146,9 +146,14 @@ function buildElevatedCommandLaunch(commandText) {
   const childLine = childArgv.map(lifecycle.winQuoteArg).join(" ");
   const command = `Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Normal -ArgumentList ${lifecycle.psSingleQuote(childLine)}`;
   const encoded = Buffer.from(command, "utf16le").toString("base64");
+  const psArgs = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded];
+  // Launch through `cmd /c start` (same reason as lifecycle.buildHostLaunch): from
+  // VS Code's console-less extension host a plain powershell spawn gets no console, so
+  // its Start-Process -Verb RunAs opens no visible/UAC window. `start` forces a new
+  // console. Only argv-safe tokens (flags + base64) pass through cmd.
   return {
-    file: "powershell.exe",
-    spawnArgs: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
+    file: "cmd.exe",
+    spawnArgs: ["/c", "start", "", "powershell.exe", ...psArgs],
     command,
   };
 }

@@ -197,6 +197,30 @@ function pushSettings(webview) {
   safePost(webview, { type: "settings", settings });
 }
 
+/** Push the on-disk settings to EVERY live surface (so both mic switches — the
+ *  console #voiceSwitch and the settings #setMic — reflect the same persisted value). */
+function broadcastSettings() {
+  const scriptsDir = resolveScriptsDir();
+  if (!scriptsDir) return;
+  let settings;
+  try { settings = host.readSettings(scriptsDir); } catch (_) { return; }
+  for (const w of liveWebviews) safePost(w, { type: "settings", settings });
+}
+
+/** Persist the mic-passthrough preference (micPassthrough in .construct-settings.json).
+ *  The live console toggle IS this persistent setting — enabling on the main page makes
+ *  it auto-arm next session (see maybeAutoEnableAudio). Merges (touches only that key).
+ *  Best-effort: a missing scripts dir just means no persistence (the live toggle still
+ *  works this session). Re-broadcasts settings so the settings-form switch stays in sync. */
+function persistMicPreference(enabled) {
+  try {
+    const scriptsDir = resolveScriptsDir();
+    if (!scriptsDir) return;
+    host.saveSettings(scriptsDir, { mic: !!enabled });
+    broadcastSettings();
+  } catch (_) { /* best-effort */ }
+}
+
 /** Force-update the coding agents on the VM over SSH, with a progress notification,
  *  then re-probe so the new versions + cleared badges show. */
 function runUpdateAgents() {
@@ -537,7 +561,19 @@ function enableAudio(context, webview, opts = {}) {
       }[r.error] || "Couldn't enable microphone passthrough.";
       vscode.window.showErrorMessage(why + (r.detail ? " " + String(r.detail).slice(0, 160) : ""));
     } else if (!opts.auto) {
-      vscode.window.showInformationMessage("Microphone passthrough enabled — the mic opens only while you're recording.");
+      // The guard patch is now on the VM, but the already-running Claude Code extension
+      // still has the pre-patch code in memory — its mic button won't appear until the
+      // window reloads. Offer it (only when the gate actually patched; passthrough is
+      // now the persisted preference, so auto-arm re-establishes it after the reload).
+      if (hostAudio && hostAudio.gatePatched) {
+        const RELOAD = "Reload window";
+        vscode.window.showInformationMessage(
+          "Microphone passthrough enabled. Reload the window so Claude Code shows the mic button (passthrough re-arms automatically).",
+          RELOAD
+        ).then((pick) => { if (pick === RELOAD) vscode.commands.executeCommand("workbench.action.reloadWindow"); });
+      } else {
+        vscode.window.showInformationMessage("Microphone passthrough enabled — the mic opens only while you're recording.");
+      }
     }
   };
   if (opts.auto) {
@@ -711,6 +747,9 @@ function handleMessage(message, webview, context) {
       return;
 
     case "setAudio":
+      // The console toggle IS the persistent preference: persist it so passthrough
+      // auto-arms next session (unifies the two mic switches into one setting).
+      persistMicPreference(message.enabled);
       if (message.enabled) enableAudio(context, webview);
       else disableAudio();
       return;

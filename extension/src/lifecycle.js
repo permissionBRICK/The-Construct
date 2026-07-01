@@ -138,20 +138,32 @@ function buildOuterCommand(childCommandLine, opts = {}) {
 
 /**
  * Build the child_process invocation that opens a new host console running the
- * script. Pure (returns the argv; the caller spawns it). The outer command is
- * passed via -EncodedCommand (base64 UTF-16LE) so there is NO shell-quoting layer
- * between Node and the outer powershell.exe — base64 is argv-safe. The inner argv
- * is quoted by winQuoteArg and forwarded as a single-string -ArgumentList, so
- * spaced/quoted paths and settings values reach the script intact (and can't
- * break out: a -File invocation treats them as data, not commands). `command` is
- * the decoded outer command, exposed for inspection/tests.
+ * script. Pure (returns the argv; the caller spawns it).
+ *
+ * WHY `cmd /c start`: VS Code's extension host is a GUI process with NO console.
+ * A powershell.exe spawned from it gets no console either (there's none to inherit,
+ * and Node's child_process can't request CREATE_NEW_CONSOLE — `detached` sets the
+ * OPPOSITE, DETACHED_PROCESS). A console-less launcher's `Start-Process` then opens
+ * NO visible window — the "toast fires, no window, nothing happens" bug that removing
+ * windowsHide alone did NOT fix (detached still suppressed the console). `start` is
+ * the reliable Win32 primitive that forces a NEW CONSOLE for its target, so the
+ * launcher powershell (and thus its inner Start-Process work window) is visible.
+ *
+ * Quoting is unchanged and still verified: the launcher powershell runs the SAME
+ * outer command via -EncodedCommand (base64 UTF-16LE — argv-safe), whose inner argv
+ * is winQuoteArg'd and forwarded as a single-string -ArgumentList to a -File call
+ * (data, not commands). Only argv-safe tokens (the fixed powershell flags + the
+ * base64 blob) pass through cmd — no paths or user values — so `start` adds no new
+ * quoting surface. The empty "" is start's window-title slot, so the powershell path
+ * can't be mistaken for a title. `command` is the decoded outer command (for tests).
  */
 function buildHostLaunch(scriptPath, args, opts = {}) {
   const command = buildOuterCommand(buildChildCommandLine(scriptPath, args), opts);
   const encoded = Buffer.from(command, "utf16le").toString("base64");
+  const psArgs = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded];
   return {
-    file: "powershell.exe",
-    spawnArgs: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
+    file: "cmd.exe",
+    spawnArgs: ["/c", "start", "", "powershell.exe", ...psArgs],
     command,
   };
 }
@@ -170,11 +182,11 @@ async function confirmDestructive(inv) {
   return pick === inv.label;
 }
 
-// Spawn options for the host-console launcher. Deliberately WITHOUT windowsHide:
-// windowsHide sets CREATE_NO_WINDOW on this launcher, which suppresses the console
-// the inner Start-Process opens (see buildOuterCommand's note). `detached` gives
-// the launcher no console of its own (so it doesn't flash) and lets the console
-// outlive VS Code. Exposed for the regression test that pins "no windowsHide".
+// Spawn options for the `cmd /c start` launcher. No windowsHide: it would set
+// CREATE_NO_WINDOW on cmd, which could suppress the console `start` allocates.
+// `detached` + unref let cmd (which exits the moment `start` fires) not tie to VS
+// Code; the started console is its own process and outlives VS Code regardless.
+// Exposed for the regression test that pins "no windowsHide".
 function hostLaunchSpawnOptions(cwd) {
   return { cwd, detached: true, stdio: "ignore" };
 }
