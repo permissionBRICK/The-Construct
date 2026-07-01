@@ -76,13 +76,21 @@ extension/
                       CONFIRMED by a settle window (an ssh that dies early = tunnel-failed, roll
                       back both sides); parses CONSTRUCT_GATE_PATCHED so the UI is honest.
                       AudioSession: per-connection arm/disarm (mic hot only while recording).
-                      Guard patch apply/revert/idempotent. All pure builders; ssh/spawn/net injected for tests.
+                      makeHostMicProvider: spawns a NATIVE host recorder (ffmpeg, sox `rec`
+                      fallback) that emits raw 16 kHz mono S16LE PCM on stdout and pipes it to
+                      the tunnel socket — a webview CANNOT reach the mic (VS Code's webview
+                      iframe Permissions-Policy `allow` omits `microphone`, so getUserMedia is
+                      always rejected → silence). On Windows dshow needs an EXACT device name
+                      (there is no `audio=default`): resolveWinMicDevice runs `ffmpeg
+                      -list_devices` once (cached), parseDshowAudioDevices picks the first audio
+                      device; the `construct.micDevice` setting overrides it; no device →
+                      onError('no-device'); no ffmpeg/sox → onError('no-recorder') (honest, one
+                      warning per enable). Guard patch apply/revert/idempotent. All pure
+                      builders; ssh/spawn/net injected for tests.
   vm/                 scripts pushed to the VM over SSH by audio.js on enable
     construct-rec-shim.sh        rec/arecord shim (streams tunnel PCM, dies on SIGTERM)
     construct-audio-enable.sh    install shim + apply remoteName-guard patch; prints CONSTRUCT_GATE_PATCHED=0/1
     construct-audio-disable.sh   remove shim + revert patch (restore the .bak)
-  media/ (audio)      audio.html + audio-capture.js + audio-worklet.js — the hidden capture
-                      webview: getUserMedia -> 16 kHz mono S16LE (AudioWorklet) -> PCM to the extension
   test/
     ui-smoke.js       Playwright headless-Chromium webview test (107 checks: panel + launcher +
                       narrow overflow + settings round-trip + honesty + power buttons + add-project +
@@ -442,10 +450,23 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
    `ssh -R <vmPort>:127.0.0.1:<hostPort>` — CONFIRMED by a settle window (an ssh that
    dies early = tunnel-failed → roll back BOTH sides). `AudioSession` arms the mic only
    while a tunnel client (the VM shim) is connected and disarms on disconnect (mic never
-   hot idle). The hidden capture webview (`media/audio.html`+`audio-capture.js`+
-   `audio-worklet.js`) does `getUserMedia` → 16 kHz mono S16LE → PCM to the extension →
-   the tunnel socket. Mic-blocked ends the capture cleanly (honest: no audio); a bundled-sox
-   host fallback is scaffolded but not wired (noted). `audio.test.js` (134).
+   hot idle). Capture is a NATIVE host recorder (`makeHostMicProvider`): ffmpeg with a
+   sox `rec` fallback, emitting raw 16 kHz mono S16LE PCM on stdout piped to the tunnel
+   socket. **A webview cannot capture the mic** — VS Code embeds every webview in an
+   iframe whose Permissions-Policy `allow` attribute is fixed (`cross-origin-isolated;
+   autoplay; local-network-access; clipboard-read; clipboard-write;`) with NO
+   `microphone`, so `getUserMedia` is always rejected (NotAllowedError) → dead silence;
+   the old `media/audio*` capture webview was removed. **Windows dshow device selection:**
+   there is NO `audio=default` pseudo-device, so `resolveWinMicDevice` runs `ffmpeg
+   -list_devices true -f dshow -i dummy` ONCE (parsed by `parseDshowAudioDevices`, both the
+   modern `(audio)`-tagged and the older section-header formats), caches the first audio
+   device, and records `-i audio=<name>`; `construct.micDevice` overrides it (skips
+   enumeration). No device → `onError('no-device')` → fall back to sox; no ffmpeg/sox →
+   `onError('no-recorder')`. Both surface one honest warning per enable (deduped) so the UI
+   never pretends to work. **Provisioning:** `Ensure-Ffmpeg` (`lib/AgentVm.Common.ps1`,
+   best-effort `winget install Gyan.FFmpeg --scope user`) runs in `Auto-Install.ps1`'s
+   non-elevated pre-step alongside `Ensure-VSCodeRemoteSsh`, so the one-liner install puts
+   ffmpeg on the host (VS Code restart needed for the new PATH). `audio.test.js`.
 7. ✓ **DONE — Audio VM side** — `vm/` scripts pushed over SSH on enable (injection-safe,
    base64-as-data): `construct-rec-shim.sh` (rec/arecord shim streaming tunnel PCM, dies
    on SIGTERM) into `/usr/local/bin`; `construct-audio-enable.sh` installs it + applies the

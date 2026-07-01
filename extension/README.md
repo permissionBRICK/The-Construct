@@ -39,7 +39,7 @@ To develop locally, open this folder in VS Code and press F5.
 | `media/launcher.html` · `launcher.js` | the sidebar launcher (status + quick actions) |
 | `media/panel.html` · `panel.js` | the full control panel (editor tab), incl. the project edit modal |
 | `media/panel.css` | Matrix theme shared by both surfaces |
-| `media/audio.html` · `audio-capture.js` · `audio-worklet.js` | hidden mic-capture webview (getUserMedia → 16 kHz mono PCM) |
+| `src/audio.js` (`makeHostMicProvider`) | native host mic capture (ffmpeg/sox `rec` → raw 16 kHz mono S16LE PCM on stdout) — a webview can't reach the mic (VS Code's webview iframe Permissions-Policy omits `microphone`) |
 | `media/icon.svg` | activity-bar icon |
 | `src/ssh.js` · `probe.js` | SSH runner + the live status/version probe |
 | `src/host.js` · `lifecycle.js` | host scripts-dir + settings + project profiles; lifecycle launchers |

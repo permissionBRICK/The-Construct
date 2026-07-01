@@ -225,6 +225,244 @@ function fakeSocket() {
   return s;
 }
 
+// ── Native host recorder argv (the REAL capture path) ───────────────────────────
+// A webview cannot open the mic (VS Code's webview iframe Permissions-Policy omits
+// `microphone`, so getUserMedia is rejected → silence). Capture is a native host
+// recorder instead; these prove the argv matches the recorder contract byte-format.
+(() => {
+  // Per-OS default input device selector.
+  ok("ffmpegInput win32 -> dshow default", JSON.stringify(a.ffmpegInputArgs("win32")) === JSON.stringify(["-f", "dshow", "-i", "audio=default"]));
+  ok("ffmpegInput darwin -> avfoundation default", JSON.stringify(a.ffmpegInputArgs("darwin")) === JSON.stringify(["-f", "avfoundation", "-i", ":default"]));
+  ok("ffmpegInput linux -> pulse default", JSON.stringify(a.ffmpegInputArgs("linux")) === JSON.stringify(["-f", "pulse", "-i", "default"]));
+
+  // ffmpeg recorder: pins the exact recorder contract (raw S16LE / 16k / mono, stdout).
+  const ff = a.buildHostRecorder("ffmpeg", "win32");
+  eq("buildHostRecorder ffmpeg: file", ff.file, "ffmpeg");
+  ok("buildHostRecorder ffmpeg: mono (-ac 1)", ff.args.join(" ").indexOf("-ac 1") !== -1);
+  ok("buildHostRecorder ffmpeg: 16 kHz (-ar 16000)", ff.args.join(" ").indexOf("-ar 16000") !== -1);
+  ok("buildHostRecorder ffmpeg: raw s16le container", ff.args.indexOf("s16le") !== -1);
+  ok("buildHostRecorder ffmpeg: pcm_s16le codec", ff.args.indexOf("pcm_s16le") !== -1);
+  ok("buildHostRecorder ffmpeg: stdout sink (trailing '-')", ff.args[ff.args.length - 1] === "-");
+  ok("buildHostRecorder ffmpeg: quiet (no banner/chatter on stdout)", ff.args.indexOf("quiet") !== -1 && ff.args.indexOf("-hide_banner") !== -1);
+  ok("buildHostRecorder ffmpeg: uses the OS input selector", ff.args.indexOf("dshow") !== -1);
+
+  // sox fallback reuses the pinned REC_ARGV (already raw/16k/S16/mono to stdout).
+  const sx = a.buildHostRecorder("sox", "win32");
+  eq("buildHostRecorder sox: file is rec", sx.file, "rec");
+  ok("buildHostRecorder sox: argv == REC_ARGV", JSON.stringify(sx.args) === JSON.stringify(a.REC_ARGV));
+
+  // Default tool is ffmpeg.
+  eq("buildHostRecorder default tool: ffmpeg", a.buildHostRecorder(undefined, "linux").file, "ffmpeg");
+})();
+
+// ── makeHostMicProvider — on-demand spawn/pipe/kill + fallback ───────────────────
+(() => {
+  // A fake spawned recorder child: EventEmitter with a stdout EventEmitter + kill().
+  function fakeRec() {
+    const c = new EventEmitter();
+    c.stdout = new EventEmitter();
+    c.killed = false;
+    c.kill = (sig) => { c.killed = true; c.killSig = sig; c.emit("exit", 0, sig); };
+    return c;
+  }
+
+  // Happy path: spawns ffmpeg, pipes stdout → writeChunk, kill on stop.
+  {
+    const spawned = [];
+    const spawn = (file, args) => { const c = fakeRec(); spawned.push({ file, args, c }); return c; };
+    const provider = a.makeHostMicProvider({ _spawn: spawn, _platform: "win32", device: "Mic" });
+    const chunks = [];
+    let doneCalled = false;
+    const stop = provider((b) => chunks.push(b), () => { doneCalled = true; });
+    eq("provider: spawned exactly one recorder", spawned.length, 1);
+    eq("provider: spawned ffmpeg first", spawned[0].file, "ffmpeg");
+    // PCM emitted on stdout reaches writeChunk verbatim.
+    spawned[0].c.stdout.emit("data", Buffer.from([1, 2, 3, 4]));
+    ok("provider: stdout PCM piped to writeChunk", chunks.length === 1 && chunks[0].length === 4);
+    ok("provider: done not called while streaming", doneCalled === false);
+    // Stop (disconnect) kills the recorder — mic released, on-demand.
+    stop();
+    ok("provider: stop() SIGTERMs the recorder", spawned[0].c.killed === true && spawned[0].c.killSig === "SIGTERM");
+  }
+
+  // Fallback: ffmpeg not installed (ENOENT on 'error') → try sox `rec`.
+  {
+    const spawned = [];
+    const spawn = (file, args) => { const c = fakeRec(); spawned.push({ file, args, c }); return c; };
+    const provider = a.makeHostMicProvider({ _spawn: spawn, _platform: "linux" });
+    let doneCalled = false;
+    provider(() => {}, () => { doneCalled = true; });
+    // ffmpeg child errors (not installed).
+    spawned[0].c.emit("error", new Error("spawn ffmpeg ENOENT"));
+    eq("provider: falls back to a second recorder on ENOENT", spawned.length, 2);
+    eq("provider: fallback is sox rec", spawned[1].file, "rec");
+    ok("provider: done NOT called while a fallback remains", doneCalled === false);
+  }
+
+  // No recorder at all: both tools ENOENT → done() + onError('no-recorder'), so the
+  // socket closes and the shim reports "no audio" (never silence forever).
+  {
+    const spawned = [];
+    const spawn = (file) => { const c = fakeRec(); spawned.push({ file, c }); return c; };
+    let doneCalled = false, errReason = null;
+    const provider = a.makeHostMicProvider({ _spawn: spawn, _platform: "linux", onError: (r) => { errReason = r; } });
+    provider(() => {}, () => { doneCalled = true; });
+    spawned[0].c.emit("error", new Error("ENOENT")); // ffmpeg missing
+    spawned[1].c.emit("error", new Error("ENOENT")); // sox missing
+    ok("provider: exhausted recorders -> done() ends the capture", doneCalled === true);
+    eq("provider: exhausted recorders -> onError('no-recorder')", errReason, "no-recorder");
+  }
+
+  // A recorder that exits on its own (device busy) ends the capture via done().
+  {
+    const spawned = [];
+    const spawn = (file) => { const c = fakeRec(); spawned.push(c); return c; };
+    const provider = a.makeHostMicProvider({ _spawn: spawn, _platform: "win32", device: "Mic" });
+    let doneCalled = false;
+    provider(() => {}, () => { doneCalled = true; });
+    spawned[0].emit("exit", 1, null); // recorder died unexpectedly
+    ok("provider: recorder self-exit -> done() (honest: capture ended)", doneCalled === true);
+  }
+
+  // After stop(), a late stdout chunk is NOT forwarded (no writes to a dead socket).
+  {
+    const spawned = [];
+    const spawn = (file) => { const c = fakeRec(); spawned.push(c); return c; };
+    const provider = a.makeHostMicProvider({ _spawn: spawn, _platform: "win32", device: "Mic" });
+    const chunks = [];
+    const stop = provider((b) => chunks.push(b), () => {});
+    stop();
+    spawned[0].stdout.emit("data", Buffer.from([9, 9])); // arrives after teardown
+    eq("provider: no PCM forwarded after stop()", chunks.length, 0);
+  }
+
+  // A custom single-tool preference list is honored (only sox tried).
+  {
+    const spawned = [];
+    const spawn = (file) => { const c = fakeRec(); spawned.push(file); return c; };
+    const provider = a.makeHostMicProvider({ _spawn: spawn, _platform: "linux", tools: ["sox"] });
+    provider(() => {}, () => {});
+    eq("provider: honors a custom tools list (sox only)", spawned[0], "rec");
+    eq("provider: custom tools list length respected", spawned.length, 1);
+  }
+})();
+
+// ── Windows dshow device enumeration (the "audio=default is invalid" fix) ────────
+(() => {
+  // Modern ffmpeg tags each device line with (audio)/(video).
+  const modern = [
+    '[dshow @ 0] "Integrated Camera" (video)',
+    '[dshow @ 0]   Alternative name "@device_pnp_cam"',
+    '[dshow @ 0] "Microphone (Realtek Audio)" (audio)',
+    '[dshow @ 0]   Alternative name "@device_cm_mic"',
+    '[dshow @ 0] "Line In (Realtek)" (audio)',
+  ].join("\n");
+  const md = a.parseDshowAudioDevices(modern);
+  eq("dshow parse (modern): audio device count", md.length, 2);
+  eq("dshow parse (modern): first is the mic", md[0], "Microphone (Realtek Audio)");
+  ok("dshow parse (modern): ignores the video device", md.indexOf("Integrated Camera") === -1);
+  ok("dshow parse (modern): skips Alternative name lines", md.every((n) => n.indexOf("@device") === -1));
+
+  // Older ffmpeg groups devices under section headers (no (audio) tag).
+  const older = [
+    "[dshow @ 0] DirectShow video devices",
+    '[dshow @ 0]  "Integrated Camera"',
+    "[dshow @ 0] DirectShow audio devices",
+    '[dshow @ 0]  "Microphone (HD Webcam)"',
+    '[dshow @ 0]   Alternative name "@device_cm_x"',
+  ].join("\n");
+  const od = a.parseDshowAudioDevices(older);
+  eq("dshow parse (older): only audio-section devices", od.length, 1);
+  eq("dshow parse (older): the audio device", od[0], "Microphone (HD Webcam)");
+  eq("dshow parse: empty input -> []", a.parseDshowAudioDevices("").length, 0);
+
+  // List-probe argv.
+  const la = a.buildDshowListArgs();
+  ok("dshow list args: -list_devices true", la.join(" ").indexOf("-list_devices true") !== -1);
+  ok("dshow list args: dshow dummy input", la.indexOf("dshow") !== -1 && la.indexOf("dummy") !== -1);
+
+  // Device-aware input selector + recorder argv (a name with spaces/parens is one token).
+  eq("ffmpegInput win32 + device", JSON.stringify(a.ffmpegInputArgs("win32", "Mic (X)")), JSON.stringify(["-f", "dshow", "-i", "audio=Mic (X)"]));
+  ok("buildHostRecorder win32 + device embeds audio=<name>", a.buildHostRecorder("ffmpeg", "win32", "Mic (X)").args.indexOf("audio=Mic (X)") !== -1);
+
+  // resolveWinMicDevice: a list child that emits stderr then closes.
+  function listChild(stderrText) {
+    const c = new EventEmitter(); c.stderr = new EventEmitter();
+    c._drive = () => { if (stderrText) c.stderr.emit("data", Buffer.from(stderrText)); c.emit("close", 1); };
+    return c;
+  }
+  {
+    let child; const spawn = () => (child = listChild(modern));
+    let got = "unset"; a.resolveWinMicDevice(spawn, (d) => { got = d; });
+    child._drive();
+    eq("resolveWinMicDevice: returns the first audio device", got, "Microphone (Realtek Audio)");
+  }
+  {
+    const spawn = () => { throw new Error("spawn ffmpeg ENOENT"); };
+    let got = "unset"; a.resolveWinMicDevice(spawn, (d) => { got = d; });
+    eq("resolveWinMicDevice: ffmpeg missing -> null", got, null);
+  }
+  {
+    let child; const spawn = () => (child = listChild("no devices listed"));
+    let got = "unset"; a.resolveWinMicDevice(spawn, (d) => { got = d; });
+    child._drive();
+    eq("resolveWinMicDevice: empty list -> null", got, null);
+  }
+
+  // A fake recorder child (stdout + kill/exit).
+  function fakeRec2() {
+    const c = new EventEmitter(); c.stdout = new EventEmitter();
+    c.kill = (s) => { c.killed = true; c.emit("exit", 0, s); };
+    return c;
+  }
+
+  // Provider (win32): enumerates the device, then records with it; caches across connects.
+  {
+    const spawned = [];
+    const spawn = (file, args) => {
+      const isList = (args || []).indexOf("-list_devices") !== -1;
+      const c = isList ? listChild(modern) : fakeRec2();
+      spawned.push({ file, args, isList, c });
+      return c;
+    };
+    const provider = a.makeHostMicProvider({ _spawn: spawn, _platform: "win32" });
+    provider(() => {}, () => {});
+    ok("provider(win32): first spawn is the device-list probe", spawned[0].isList === true);
+    spawned[0].c._drive();
+    eq("provider(win32): then spawns the recorder", spawned[1].file, "ffmpeg");
+    ok("provider(win32): recorder uses the enumerated device", spawned[1].args.indexOf("audio=Microphone (Realtek Audio)") !== -1);
+    provider(() => {}, () => {}); // second connection
+    ok("provider(win32): caches the device (no re-enumeration)", spawned[2].isList === false && spawned[2].file === "ffmpeg");
+  }
+
+  // Provider (win32): no capture device found -> onError('no-device') + fall back to sox.
+  {
+    const spawned = [];
+    const spawn = (file, args) => {
+      const isList = (args || []).indexOf("-list_devices") !== -1;
+      const c = isList ? listChild("no audio devices at all") : fakeRec2();
+      spawned.push({ file, args, isList, c });
+      return c;
+    };
+    let reason = null;
+    const provider = a.makeHostMicProvider({ _spawn: spawn, _platform: "win32", onError: (r) => { reason = r; } });
+    provider(() => {}, () => {});
+    spawned[0].c._drive();
+    eq("provider(win32,no device): onError('no-device')", reason, "no-device");
+    eq("provider(win32,no device): falls back to sox rec", spawned[1].file, "rec");
+  }
+
+  // Provider (win32): an explicit device override skips enumeration entirely.
+  {
+    const spawned = [];
+    const spawn = (file, args) => { const c = fakeRec2(); spawned.push({ file, args }); return c; };
+    const provider = a.makeHostMicProvider({ _spawn: spawn, _platform: "win32", device: "USB Mic" });
+    provider(() => {}, () => {});
+    eq("provider(win32,override): no list probe, spawns ffmpeg directly", spawned.length, 1);
+    ok("provider(win32,override): uses the override device", spawned[0].args.indexOf("audio=USB Mic") !== -1);
+  }
+})();
+
 (async () => {
   // listen resolves the OS-chosen port.
   {

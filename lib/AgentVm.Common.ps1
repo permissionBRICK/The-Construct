@@ -1088,6 +1088,47 @@ function Ensure-VSCodeRemoteSsh {
     return $true
 }
 
+function Ensure-Ffmpeg {
+    <#
+        Make sure ffmpeg is on the host so the control panel's microphone passthrough
+        can capture the mic. The panel spawns ffmpeg LOCALLY (a UI extension runs on the
+        host) to read the default DirectShow capture device -- a VS Code webview can't
+        reach the mic (its iframe Permissions-Policy omits `microphone`), so a native
+        host recorder is the only capture path that works. Idempotent: a no-op if ffmpeg
+        is already on PATH; else tries winget (user scope, no elevation -- run BEFORE
+        Auto-Install self-elevates). If winget is unavailable it prints a manual hint and
+        moves on. Best-effort: never throws, never blocks the install. Returns $true if
+        ffmpeg is present afterwards, else $false.
+    #>
+    [CmdletBinding()]
+    param()
+
+    if (Get-Command ffmpeg -ErrorAction SilentlyContinue) {
+        Write-Host "==> ffmpeg present (microphone passthrough ready)." -ForegroundColor Green
+        return $true
+    }
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        Write-Host "==> Installing ffmpeg for microphone passthrough (winget)..." -ForegroundColor Cyan
+        try {
+            # Gyan.FFmpeg is the standard Windows ffmpeg package. User scope needs no
+            # elevation. A stderr write here doesn't fail the run (own try/catch; the
+            # PATH re-check below is the real verdict). winget updates PATH for NEW
+            # sessions, so ffmpeg may only resolve after VS Code is (re)started.
+            & winget install --id Gyan.FFmpeg -e --silent `
+                --accept-package-agreements --accept-source-agreements --scope user 2>&1 | Out-Null
+        } catch {
+            Write-Warning "winget could not install ffmpeg: $($_.Exception.Message)"
+        }
+    }
+    if (Get-Command ffmpeg -ErrorAction SilentlyContinue) {
+        Write-Host "    ffmpeg installed (restart VS Code so it's on PATH for the panel)." -ForegroundColor Green
+        return $true
+    }
+    Write-Warning "ffmpeg isn't installed, so microphone passthrough can't capture the mic yet."
+    Write-Host "    Install it, then restart VS Code:  winget install Gyan.FFmpeg" -ForegroundColor DarkGray
+    return $false
+}
+
 function Add-HyperVAdminMembership {
     <#
         Add the current user to the local "Hyper-V Administrators" group so the

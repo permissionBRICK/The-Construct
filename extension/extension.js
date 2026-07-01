@@ -34,9 +34,9 @@ let panel; // vscode.WebviewPanel | undefined
  *  passthrough is enabled. */
 let hostAudio; // audio.HostAudio | undefined
 
-/** The hidden capture webview panel (getUserMedia lives here); created lazily on
- *  enable and disposed on disable/deactivate. */
-let captureWebview; // vscode.WebviewPanel | undefined
+/** Recorder-failure reasons already surfaced this enable, so we warn once (not on
+ *  every record-start). Reset in enableAudio. */
+let micWarnedReasons = new Set();
 
 /** Every currently-live webview (sidebar view + editor panel) for broadcast refresh. */
 const liveWebviews = new Set();
@@ -469,75 +469,53 @@ function broadcastAudio(status) {
   for (const w of liveWebviews) safePost(w, msg);
 }
 
-/** Create (or reveal) the hidden capture webview that owns getUserMedia. It is a
- *  real WebviewPanel because a UI extension has no other surface that can open the
- *  local mic; kept in a background column and disposed with the session. Returns the
- *  panel, or undefined if creation failed. */
-function ensureCaptureWebview(context) {
-  if (captureWebview) return captureWebview;
-  try {
-    const { extensionUri } = context;
-    const p = vscode.window.createWebviewPanel(
-      "construct.audioCapture",
-      "Construct — mic",
-      { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
-      { ...webviewOptions(extensionUri), retainContextWhenHidden: true }
-    );
-    const workletUri = p.webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "audio-worklet.js")).toString();
-    // Inject the worklet URI as a global the capture script reads (CSP allows our
-    // nonce'd inline + the media root). buildHtml handles nonce/cspSource/scriptUri.
-    let html = buildHtml(p.webview, extensionUri, "audio.html", "audio-capture.js");
-    const nonce = /nonce="([^"]+)"/.exec(html);
-    const inject = `<script nonce="${nonce ? nonce[1] : ""}">window.__workletUri=${JSON.stringify(workletUri)};</script>`;
-    html = html.replace("</head>", inject + "</head>");
-    p.webview.html = html;
-    p.onDidDispose(() => { if (captureWebview === p) captureWebview = undefined; });
-    captureWebview = p;
-    return p;
-  } catch (_) {
-    return undefined;
-  }
-}
-
-/** Dispose the hidden capture webview if present. */
-function disposeCaptureWebview() {
-  if (captureWebview) { try { captureWebview.dispose(); } catch (_) {} captureWebview = undefined; }
-}
-
 /** The mic-capture provider handed to HostAudio (AudioSession.onCapture): armed when
- *  the VM shim connects, released (disarmed) on disconnect. Bridges the hidden
- *  webview's PCM messages to the tunnel socket. Falls back to nothing here (the sox
- *  fallback is a runtime concern documented in limitations); if the webview can't be
- *  created or the mic is blocked, done() ends the socket so the shim reports no audio. */
-function makeMicProvider(context) {
-  return (writeChunk, done) => {
-    const wv = ensureCaptureWebview(context);
-    if (!wv) { done(); return () => {}; }
-    // Route PCM from the webview to the tunnel for the lifetime of this capture.
-    const sub = wv.webview.onDidReceiveMessage((m) => {
-      if (!m || typeof m.type !== "string") return;
-      if (m.type === "pcm" && m.data != null) {
-        try { writeChunk(Buffer.from(m.data)); } catch (_) { /* socket gone */ }
-      } else if (m.type === "error") {
-        done(); // mic blocked / no device — end the capture (honest: no audio)
+ *  the VM shim connects, released on disconnect. It spawns a native HOST recorder
+ *  (ffmpeg, falling back to sox `rec`) that emits the recorder contract (raw S16LE /
+ *  16 kHz / mono) on stdout and pipes it to the tunnel socket.
+ *
+ *  WHY NOT A WEBVIEW — a UI extension's only in-window surface is a webview, but VS
+ *  Code embeds webviews in an iframe whose Permissions-Policy `allow` attribute is
+ *  fixed and omits `microphone`, so getUserMedia is always rejected (NotAllowedError)
+ *  and no audio ever flows — that was the "completely silent signal" bug. The
+ *  extension host runs locally, so a native recorder is the capture path that
+ *  actually works and stays on-demand (spawned per shim connection, killed on
+ *  disconnect). If no recorder is installed, done() ends the socket so the shim
+ *  reports "no audio" honestly rather than feeding silence. */
+function makeMicProvider() {
+  // Optional override for hosts where the auto-detected Windows capture device is
+  // wrong/ambiguous: construct.micDevice = the exact dshow device name (see
+  // `ffmpeg -list_devices true -f dshow -i dummy`). Empty ⇒ auto-detect.
+  let device = "";
+  try { device = (vscode.workspace.getConfiguration("construct").get("micDevice") || "").trim(); } catch (_) {}
+  return audio.makeHostMicProvider({
+    device,
+    onError: (reason) => {
+      // Dedupe: onError can fire on every record-start while the mic is broken; warn once
+      // per enable (micWarnedReasons is reset in enableAudio).
+      if (micWarnedReasons.has(reason)) return;
+      micWarnedReasons.add(reason);
+      if (reason === "no-recorder") {
+        vscode.window.showWarningMessage(
+          "Microphone passthrough is on, but no host recorder (ffmpeg or sox) was found. Install ffmpeg (winget install Gyan.FFmpeg) so the mic can be captured."
+        );
+      } else if (reason === "no-device") {
+        vscode.window.showWarningMessage(
+          "Microphone passthrough is on, but no Windows capture device was found. Plug in a microphone, or set construct.micDevice to a device from `ffmpeg -list_devices true -f dshow -i dummy`."
+        );
       }
-    });
-    safePost(wv.webview, { type: "arm" });
-    // The stop function AudioSession calls on disconnect: disarm the mic + detach.
-    return () => {
-      try { sub.dispose(); } catch (_) {}
-      safePost(wv.webview, { type: "disarm" });
-    };
-  };
+    },
+  });
 }
 
 /** Enable mic passthrough. Optimistic switch is already "busy" in the webview; we
  *  flip it authoritatively via {type:'audio'} once enable resolves. */
 function enableAudio(context, webview) {
   if (hostAudio && hostAudio.enabled) { broadcastAudio({ enabled: true, capturing: hostAudio.capturing }); return; }
+  micWarnedReasons = new Set(); // fresh enable: allow one warning per failure reason again
   hostAudio = new audio.HostAudio({
     cfg: undefined,
-    mic: makeMicProvider(context),
+    mic: makeMicProvider(),
     onStatus: (s) => broadcastAudio(s),
   });
   vscode.window.withProgress(
@@ -553,7 +531,6 @@ function enableAudio(context, webview) {
           "tunnel-failed": "Couldn't open the SSH tunnel to the VM.",
         }[r.error] || "Couldn't enable microphone passthrough.";
         vscode.window.showErrorMessage(why + (r.detail ? " " + String(r.detail).slice(0, 160) : ""));
-        disposeCaptureWebview();
         hostAudio = undefined;
         safePost(webview, { type: "audio", enabled: false, capturing: false });
       } else {
@@ -644,7 +621,6 @@ function runSaveProject(name, profileObj) {
 
 /** Disable mic passthrough: stop capture + tunnel, revert the VM shim + patch. */
 function disableAudio() {
-  disposeCaptureWebview();
   if (!hostAudio) { broadcastAudio({ enabled: false, capturing: false }); return; }
   const inst = hostAudio;
   hostAudio = undefined;
@@ -864,12 +840,11 @@ function maybeAutoOpenPanel(context) {
 function deactivate() {
   // Release the mic + kill the reverse tunnel on shutdown. Best-effort and
   // synchronous (deactivate can't reliably await): dispose() tears down the local
-  // side (tunnel child + server + capture webview). The VM shim only streams while a
-  // tunnel exists — which it no longer does — so leaving it until the next explicit
-  // disable is harmless; the guard patch is likewise inert without the shim.
+  // side (tunnel child + server + any active native recorder). The VM shim only
+  // streams while a tunnel exists — which it no longer does — so leaving it until the
+  // next explicit disable is harmless; the guard patch is likewise inert without the shim.
   try { if (hostAudio) hostAudio.dispose(); } catch (_) {}
   hostAudio = undefined;
-  disposeCaptureWebview();
 }
 
 module.exports = { activate, deactivate };
