@@ -63,6 +63,14 @@ function debugEnabled() {
   try { return !!vscode.workspace.getConfiguration("construct").get("debug"); } catch (_) { return false; }
 }
 
+/** Read vscode.env.remoteAuthority DEFENSIVELY. On some VS Code builds it's gated behind
+ *  the `resolvers` proposed API and its getter THROWS for a normally-installed extension —
+ *  a raw access in activate() would crash the whole extension. Everywhere we read it, degrade
+ *  to undefined (treated as "local / not connected") instead of letting activation die. */
+function safeRemoteAuthority() {
+  try { return vscode.env.remoteAuthority; } catch (_) { return undefined; }
+}
+
 /** Post to a webview, surviving both a synchronous throw and an async rejection
  *  if it was disposed mid-flight (postMessage returns a Thenable<boolean>). */
 function safePost(webview, msg) {
@@ -110,7 +118,7 @@ async function augmentUsage(state) {
  *  state. Synchronous, so it rides the first push. */
 function withLocalState(state) {
   let connected = false;
-  try { connected = remote.isConnectedToVm(vscode.env.remoteAuthority); } catch (_) { /* default false */ }
+  try { connected = remote.isConnectedToVm(safeRemoteAuthority()); } catch (_) { /* default false */ }
   return { ...state, connected };
 }
 
@@ -373,7 +381,7 @@ function runStartAndConnect() {
  *  that an attached remote window will lose its connection. */
 async function runShutdown() {
   const connectedHere = (() => {
-    try { return remote.isConnectedToVm(vscode.env.remoteAuthority); } catch (_) { return false; }
+    try { return remote.isConnectedToVm(safeRemoteAuthority()); } catch (_) { return false; }
   })();
   const detail = connectedHere
     ? "This window is connected to the VM over Remote-SSH, so its connection will drop when the VM powers off."
@@ -976,7 +984,7 @@ function activate(context) {
   // Route lifecycle/update launch logging into the Construct Output channel, and let
   // `construct.debug` keep launched consoles open so errors are readable.
   lifecycle.configure({ log: logLine, isDebug: debugEnabled });
-  logLine(`activate: remoteAuthority=${vscode.env.remoteAuthority || "(local)"} debug=${debugEnabled()}`);
+  logLine(`activate: remoteAuthority=${safeRemoteAuthority() || "(local)"} debug=${debugEnabled()}`);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider("construct.panel", new ConstructViewProvider(context), {
       webviewOptions: { retainContextWhenHidden: true },
@@ -1007,7 +1015,7 @@ function maybeAutoOpenPanel(context) {
   // from openPanel/createWebviewPanel) can never break extension activation. The
   // flag is set BEFORE openPanel, so even a throw won't reopen on the next reload.
   try {
-    if (!remote.shouldAutoOpenPanel(vscode.env.remoteAuthority, context.workspaceState.get(KEY))) return;
+    if (!remote.shouldAutoOpenPanel(safeRemoteAuthority(), context.workspaceState.get(KEY))) return;
     context.workspaceState.update(KEY, true);
     openPanel(context);
   } catch (_) { /* never break activation for an optional convenience */ }
