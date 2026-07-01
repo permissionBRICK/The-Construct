@@ -289,6 +289,120 @@ function sanitizeStringArray(arr) {
   return arr.filter((s) => typeof s === "string" && s.trim() !== "");
 }
 
+// ── Reserved names / strict validation / canonical serialization ─────────────
+// (config-sync v2, docs/config-sync.md) Three shared primitives used by the panel,
+// the host sync engine and the VM-side `construct project set` helper. They live
+// here — next to sanitizeProfile, whose field order they inherit — so every writer
+// agrees on one canonical byte form and one definition of "valid".
+
+// The names that are never user profiles: `default` is the shipped read-only seed
+// and `project.schema` is the schema file (docs/config-sync.md §4). Compared
+// case-insensitively on the trimmed base name (no .json extension).
+const RESERVED_PROFILE_NAMES = ["default", "project.schema"];
+function isReservedProfileName(name) {
+  const s = String(name == null ? "" : name).trim().toLowerCase();
+  return RESERVED_PROFILE_NAMES.includes(s);
+}
+
+/**
+ * STRICT validator mirroring projects/project.schema.json — the detect-side twin
+ * of the coercive sanitizeProfile (which silently repairs). Used by the sync
+ * engine's validation gates (§6 steps 2/5) and the VM helper, where an invalid
+ * file must be SKIPPED WITH A REPORT, never silently fixed. Returns
+ * { ok, errors: [string] }. Two deliberate deviations from the letter of the
+ * schema, both stricter: minLength-1 strings must be non-blank after trim (a
+ * whitespace-only url is garbage that sanitize would silently drop), and when the
+ * `name` argument is non-empty the object's own `name` must equal it (a
+ * filename/name mismatch would make merges ambiguous). Pure.
+ */
+function validateProfile(name, obj) {
+  const errors = [];
+  const str = (v) => typeof v === "string" && v.trim() !== "";
+  if (!isPlainObject(obj)) return { ok: false, errors: ["profile is not a JSON object"] };
+  const KNOWN = ["name", "repos", "sdks", "mcp", "hostPackages", "provisionCommands", "tests"];
+  for (const k of Object.keys(obj)) {
+    if (!KNOWN.includes(k)) errors.push(`unknown key "${k}"`);
+  }
+  if (!str(obj.name)) errors.push('"name" must be a non-empty string');
+  else {
+    const want = String(name == null ? "" : name).trim();
+    if (want && obj.name !== want) errors.push(`"name" is "${obj.name}" but the profile file is "${want}"`);
+  }
+  if ("repos" in obj) {
+    if (!Array.isArray(obj.repos)) errors.push('"repos" must be an array');
+    else obj.repos.forEach((r, i) => {
+      if (!isPlainObject(r)) { errors.push(`repos[${i}] must be an object`); return; }
+      for (const k of Object.keys(r)) { if (k !== "url" && k !== "directory") errors.push(`repos[${i}] unknown key "${k}"`); }
+      if (!str(r.url)) errors.push(`repos[${i}].url must be a non-empty string`);
+      if ("directory" in r && !str(r.directory)) errors.push(`repos[${i}].directory must be a non-empty string`);
+    });
+  }
+  if ("sdks" in obj) {
+    if (!isPlainObject(obj.sdks)) errors.push('"sdks" must be an object');
+    else for (const k of Object.keys(obj.sdks)) {
+      const v = obj.sdks[k];
+      const okStr = str(v);
+      const okArr = Array.isArray(v) && v.every(str);
+      if (!okStr && !okArr) errors.push(`sdks.${k} must be a non-empty string or an array of non-empty strings`);
+    }
+  }
+  if ("mcp" in obj) {
+    if (!Array.isArray(obj.mcp)) errors.push('"mcp" must be an array');
+    else obj.mcp.forEach((m, i) => {
+      if (typeof m === "string") {
+        if (!MCP_LEGACY_ENUM.includes(m)) errors.push(`mcp[${i}] "${m}" is not one of ${MCP_LEGACY_ENUM.join("/")}`);
+        return;
+      }
+      if (!isPlainObject(m)) { errors.push(`mcp[${i}] must be a string or an object`); return; }
+      if (!str(m.name)) errors.push(`mcp[${i}].name must be a non-empty string`);
+      // Branch selection mirrors sanitizeMcpEntry: explicit type wins, else infer.
+      let type = m.type === "stdio" || m.type === "http" ? m.type : null;
+      if (m.type != null && !type) { errors.push(`mcp[${i}].type must be "stdio" or "http"`); return; }
+      if (!type) { if (str(m.command)) type = "stdio"; else if (str(m.url)) type = "http"; }
+      if (!type) { errors.push(`mcp[${i}] needs a "command" (stdio) or "url" (http)`); return; }
+      const common = ["name", "type", "agents", "enabled"];
+      const allowed = type === "stdio" ? common.concat(["command", "args", "env"]) : common.concat(["url", "headers", "bearerTokenEnvVar"]);
+      for (const k of Object.keys(m)) { if (!allowed.includes(k)) errors.push(`mcp[${i}] unknown key "${k}" for a ${type} server`); }
+      const strMapOk = (v) => isPlainObject(v) && Object.keys(v).every((k) => typeof v[k] === "string");
+      if (type === "stdio") {
+        if (!str(m.command)) errors.push(`mcp[${i}].command must be a non-empty string`);
+        if ("args" in m && !(Array.isArray(m.args) && m.args.every((a) => typeof a === "string"))) errors.push(`mcp[${i}].args must be an array of strings`);
+        if ("env" in m && !strMapOk(m.env)) errors.push(`mcp[${i}].env must be an object of string values`);
+      } else {
+        if (!str(m.url)) errors.push(`mcp[${i}].url must be a non-empty string`);
+        if ("headers" in m && !strMapOk(m.headers)) errors.push(`mcp[${i}].headers must be an object of string values`);
+        if ("bearerTokenEnvVar" in m && !str(m.bearerTokenEnvVar)) errors.push(`mcp[${i}].bearerTokenEnvVar must be a non-empty string`);
+      }
+      if ("agents" in m) {
+        const ok = Array.isArray(m.agents) && m.agents.length > 0 && m.agents.every((a) => MCP_AGENTS.includes(a));
+        if (!ok) errors.push(`mcp[${i}].agents must be a non-empty array from ${MCP_AGENTS.join("/")}`);
+      }
+      if ("enabled" in m && typeof m.enabled !== "boolean") errors.push(`mcp[${i}].enabled must be a boolean`);
+    });
+  }
+  for (const key of ["hostPackages", "provisionCommands"]) {
+    if (key in obj) {
+      const ok = Array.isArray(obj[key]) && obj[key].every(str);
+      if (!ok) errors.push(`"${key}" must be an array of non-empty strings`);
+    }
+  }
+  if ("tests" in obj && !isPlainObject(obj.tests)) errors.push('"tests" must be an object');
+  return { ok: errors.length === 0, errors };
+}
+
+/**
+ * THE canonical byte form of a profile (docs/config-sync.md §6): sanitizeProfile's
+ * fixed key order, 2-space indent, one array element per line, trailing newline,
+ * BOM-less. Every writer — the panel, the sync engine's write-back, the import
+ * path, the VM `construct project set` helper — must emit exactly this, so git
+ * diffs stay semantic and the PowerShell serializer can byte-match it. Returns
+ * null when the name is empty (sanitizeProfile's one rejection). Pure.
+ */
+function canonicalProfileJson(name, obj) {
+  const clean = sanitizeProfile(name, obj);
+  return clean == null ? null : JSON.stringify(clean, null, 2) + "\n";
+}
+
 /**
  * Coerce an arbitrary object into a schema-valid project profile. `name` is the
  * authoritative profile name (the filename target), taken as an argument rather
@@ -315,9 +429,10 @@ function sanitizeProfile(name, obj) {
 }
 
 module.exports = {
-  WORKSPACE_ROOT, MCP_LEGACY_ENUM, MCP_AGENTS,
+  WORKSPACE_ROOT, MCP_LEGACY_ENUM, MCP_AGENTS, RESERVED_PROFILE_NAMES,
   buildScanScript, parseScan,
   buildDiscoveredProfile, coveredUrls, planImport,
   toChips, reconcileSelection,
   sanitizeRepos, sanitizeSdks, sanitizeMcp, sanitizeMcpEntry, sanitizeStringArray, sanitizeProfile,
+  isReservedProfileName, validateProfile, canonicalProfileJson,
 };

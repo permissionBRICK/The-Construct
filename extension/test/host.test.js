@@ -63,6 +63,23 @@ try {
     host.projectsDir(newDir) === path.join(newDir, "projects") &&
     host.settingsPath(newDir) === path.join(newDir, ".construct-settings.json"));
 
+  // ── configDir: the machine-wide config location (config-sync §4) ───────────
+  ok("configDir: LOCALAPPDATA\\The-Construct\\config",
+    host.configDir({ LOCALAPPDATA: base }) === path.join(base, host.CONTAINER, "config"));
+  ok("configDir: TEMP fallback mirrors localAppData()",
+    host.configDir({ TEMP: base }) === path.join(base, host.CONTAINER, "config"));
+  ok("configDir: no base -> null", host.configDir({}) === null);
+  ok("configDir: NOT slug-scoped (independent of installed checkouts)",
+    !host.configDir({ LOCALAPPDATA: base }).includes("permissionBRICK"));
+  ok("configDir: profile helpers work against it (projects/ subdir)", (() => {
+    const cfg = host.configDir({ LOCALAPPDATA: base });
+    fs.mkdirSync(path.join(cfg, "projects"), { recursive: true });
+    host.writeProjectProfile(cfg, "cfgtest", { name: "cfgtest", repos: [] });
+    const names = host.listProjectProfiles(cfg);
+    const back = host.readProjectProfile(cfg, "cfgtest");
+    return names.includes("cfgtest") && back && back.name === "cfgtest";
+  })());
+
   // ── Settings: read robustness ──────────────────────────────────────────────
   ok("read: missing settings file -> {}", JSON.stringify(host.readRawSettings(newDir)) === "{}");
 
