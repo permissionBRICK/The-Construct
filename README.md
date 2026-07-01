@@ -42,7 +42,7 @@ projects) — then just hit connect.
 
 <div align="center">
 
-<img src="docs/construct.png" alt="The Construct operator console — the one-screen VS Code control panel" width="100%">
+<img src="https://i.imgur.com/Z1YKRJr.png" alt="The Construct operator console — the one-screen VS Code control panel" width="100%">
 
 <sub>*The operator console: lifecycle, live agent versions, mic passthrough, and project profiles on one screen.*</sub>
 
