@@ -34,9 +34,13 @@ const TOOLS = [
   { id: "opencode", tool: "opencode", label: "OpenCode" },
 ];
 
-// ccusage report granularities. The panel header says "this week", so default weekly.
-const REPORTS = ["session", "daily", "weekly", "monthly"];
-const DEFAULT_REPORT = "weekly";
+// The two period VIEWS the panel offers, doubling as the ccusage granularity for each.
+// We deliberately DON'T expose "weekly": `ccusage codex` supports session/daily/monthly
+// but NOT weekly, so a weekly report errors for Codex and drops it from the table. daily
+// and monthly are supported by all three agents. Each view is scoped to the CURRENT
+// period (today / this calendar month) — see buildUsageScript. Default to daily.
+const REPORTS = ["daily", "monthly"];
+const DEFAULT_REPORT = "daily";
 
 const TTL_MS = 5 * 60 * 1000;  // trust a real usage result for 5 min (the round-trip is slow)
 const NEG_TTL_MS = 60 * 1000;  // cache a FAILURE (null) only briefly so a transient blip recovers fast
@@ -47,6 +51,15 @@ function normalizeReport(report) {
   return REPORTS.indexOf(report) >= 0 ? report : DEFAULT_REPORT;
 }
 
+/** True iff a just-finished collection for `collectedReport` still matches the live
+ *  selection `currentReport`. The extension calls this to DISCARD a slow, stale usage
+ *  collection (e.g. a daily run that lands after the user switched to monthly) instead of
+ *  clobbering the current view with the wrong period's numbers. Both sides are normalized
+ *  so an unsupported/blank value compares as the default. */
+function isCurrentReport(collectedReport, currentReport) {
+  return normalizeReport(collectedReport) === normalizeReport(currentReport);
+}
+
 /**
  * The remote bash collector, mirroring Get-AgentUsage.ps1's `$remoteScript`: ensure a
  * ccusage runner is available (existing ccusage / bunx / npx, else install via npm or a
@@ -54,6 +67,13 @@ function normalizeReport(report) {
  * assemble ONE combined JSON object on stdout via jq. All installer/diagnostic noise
  * goes to stderr so stdout stays pure JSON; each tool that fails yields a small
  * {error,...} object rather than aborting the whole report.
+ *
+ * Each report is scoped to the CURRENT period — today for `daily`, this calendar month
+ * for `monthly`. ccusage's grand `totals` block is a LIFETIME sum regardless of the
+ * granularity, so on its own daily and monthly would show the same number; we constrain
+ * it with --since/--until (YYYYMMDD) computed from the VM's OWN clock so the `totals`
+ * reflect only the chosen window. Those dates come from `date`, never from caller input,
+ * so there's nothing to inject there.
  *
  * `report` is validated by the caller (collect) against REPORTS, but we also normalize
  * here so a direct call can't inject — the value is substituted into a bash string,
@@ -63,6 +83,12 @@ function buildUsageScript(report) {
   const r = normalizeReport(report);
   return `set -u
 REPORT="${r}"
+
+# Scope the report to the current period from the VM's own clock (data, not injectable).
+# daily -> just today; monthly -> from the 1st of this month through today.
+TODAY="\$(date +%Y%m%d)"
+if [ "\$REPORT" = monthly ]; then SINCE="\$(date +%Y%m01)"; else SINCE="\$TODAY"; fi
+UNTIL="\$TODAY"
 
 CC=()
 ensure_ccusage() {
@@ -99,7 +125,7 @@ capture() {
     return
   fi
   errfile="\$(mktemp)"
-  out="\$("\${CC[@]}" "\$tool" "\$REPORT" --json 2>"\$errfile")"; rc=\$?
+  out="\$("\${CC[@]}" "\$tool" "\$REPORT" --since "\$SINCE" --until "\$UNTIL" --json 2>"\$errfile")"; rc=\$?
   if [ "\$rc" -ne 0 ] || ! printf '%s' "\$out" | jq -e . >/dev/null 2>&1; then
     local detail; detail="\$(tr '\\n' ' ' <"\$errfile" | head -c 500)"
     jq -n --arg t "\$tool" --arg d "\$detail" \\
@@ -119,6 +145,8 @@ opencode_json="\$(capture opencode)"
 jq -n \\
   --arg host "\$(hostname)" \\
   --arg report "\$REPORT" \\
+  --arg since "\$SINCE" \\
+  --arg until "\$UNTIL" \\
   --argjson claude "\$claude_json" \\
   --argjson codex "\$codex_json" \\
   --argjson opencode "\$opencode_json" \\
@@ -126,6 +154,8 @@ jq -n \\
      generatedAt: (now | todate),
      vmHost: \$host,
      report: \$report,
+     since: \$since,
+     until: \$until,
      tools: { claude: \$claude, codex: \$codex, opencode: \$opencode }
    }'
 `;
@@ -168,7 +198,8 @@ function formatCost(n) {
 
 /**
  * Extract {tokens, cost} from one tool's ccusage JSON. ccusage puts a `totals`
- * object at the top level of every report granularity (session/daily/weekly/monthly).
+ * object at the top level of every report granularity (here scoped to the current
+ * period via --since/--until, so `totals` is that window's sum, not a lifetime sum).
  * Token counts live in `totals.totalTokens`; the COST field name differs between
  * tools — Claude Code and OpenCode use `totals.totalCost`, but Codex uses
  * `totals.costUSD` (the roadmap's "costUSD"). We accept either.
@@ -231,12 +262,15 @@ function parseUsage(combined) {
 
 // ── Collection over SSH (best-effort, cached) ────────────────────────────────
 
-// Memoize the (slow) collection. A success is trusted for TTL_MS; a failure (null) is
-// held only briefly so a transient offline/ccusage-installing blip recovers quickly.
-// opts.now (clock) and opts.noCache are for tests; a single in-flight collection is
-// shared so overlapping refreshes don't launch parallel ccusage runs.
-let _cache = null;       // { at, value } | null
-let _inflight = null;    // Promise | null
+// Memoize the (slow) collection, keyed BY REPORT. A success is trusted for TTL_MS; a
+// failure (null) is held only briefly so a transient offline/ccusage-installing blip
+// recovers quickly. opts.now (clock) and opts.noCache are for tests; a single in-flight
+// collection PER report is shared so overlapping refreshes don't launch parallel ccusage
+// runs. Keying by report means switching the daily/monthly view collects that period
+// fresh (never serving the other period's numbers), while toggling back to a still-fresh
+// period is instant. Only two keys ever exist, so the maps stay tiny.
+const _cache = new Map();    // report -> { at, value }
+const _inflight = new Map(); // report -> Promise
 
 /**
  * Run the collector on the VM and parse it into usage state. Never rejects; resolves
@@ -266,22 +300,25 @@ async function collectOnce(opts = {}) {
  */
 function collect(opts = {}) {
   if (opts.noCache) return collectOnce(opts);
+  const report = normalizeReport(opts.report);
   const now = opts.now ? opts.now() : Date.now();
-  if (_cache && now - _cache.at < (_cache.value == null ? NEG_TTL_MS : TTL_MS)) {
-    return Promise.resolve(_cache.value);
+  const hit = _cache.get(report);
+  if (hit && now - hit.at < (hit.value == null ? NEG_TTL_MS : TTL_MS)) {
+    return Promise.resolve(hit.value);
   }
-  if (_inflight) return _inflight;
+  const flying = _inflight.get(report);
+  if (flying) return flying;
   const p = collectOnce(opts).then(
-    (value) => { _cache = { at: (opts.now ? opts.now() : Date.now()), value }; return value; },
-    () => { _cache = { at: (opts.now ? opts.now() : Date.now()), value: null }; return null; }
-  ).then((v) => { if (_inflight === p) _inflight = null; return v; },
-         (e) => { if (_inflight === p) _inflight = null; throw e; });
-  _inflight = p;
+    (value) => { _cache.set(report, { at: (opts.now ? opts.now() : Date.now()), value }); return value; },
+    () => { _cache.set(report, { at: (opts.now ? opts.now() : Date.now()), value: null }); return null; }
+  ).then((v) => { if (_inflight.get(report) === p) _inflight.delete(report); return v; },
+         (e) => { if (_inflight.get(report) === p) _inflight.delete(report); throw e; });
+  _inflight.set(report, p);
   return p;
 }
 
 /** Clear the module cache (tests / a forced refresh). */
-function clearCache() { _cache = null; _inflight = null; }
+function clearCache() { _cache.clear(); _inflight.clear(); }
 
 /**
  * Return a copy of `state` with the usage table folded in, mirroring updates.augment:
@@ -356,7 +393,7 @@ async function collectRaw(opts = {}) {
 
 module.exports = {
   TOOLS, REPORTS, DEFAULT_REPORT, TTL_MS, NEG_TTL_MS,
-  normalizeReport, buildUsageScript,
+  normalizeReport, isCurrentReport, buildUsageScript,
   formatTokens, formatCost, parseToolUsage, parseUsage,
   collectOnce, collect, collectRaw, clearCache, augment,
   buildExportPayload, exportFileName,

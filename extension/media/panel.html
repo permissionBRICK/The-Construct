@@ -103,7 +103,16 @@
     </div>
 
     <section class="module" style="margin-top:14px">
-      <div class="mhead"><h2 class="seclabel">Token usage &amp; cost <span style="color:var(--faint);font-weight:400;letter-spacing:1px"> &middot; this week &middot; ccusage</span></h2><button class="btn ghost" data-cmd="exportUsage">export json</button></div>
+      <div class="mhead">
+        <h2 class="seclabel">Token usage &amp; cost <span id="usageSub" style="color:var(--faint);font-weight:400;letter-spacing:1px"> &middot; today &middot; ccusage</span></h2>
+        <div class="mhead-right">
+          <div class="usage-tabs" role="tablist" aria-label="Usage period">
+            <button type="button" class="utab sel" data-period="daily" role="tab" aria-selected="true">daily</button>
+            <button type="button" class="utab" data-period="monthly" role="tab" aria-selected="false">monthly</button>
+          </div>
+          <button class="btn ghost" data-cmd="exportUsage">export json</button>
+        </div>
+      </div>
       <div class="usage-head"><span>agent</span><span>share</span><span>tokens</span><span>cost</span></div>
       <div id="usageRows">
         <div class="usage-row"><span class="ulabel">Claude Code</span><span class="bar"><span style="width:0%"></span></span><span class="utok">—</span><span class="ucost">—</span></div>

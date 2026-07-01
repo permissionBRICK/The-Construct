@@ -109,6 +109,47 @@
   $("cancelBtn") && $("cancelBtn").addEventListener("click", () => showSettings(false));
   $("openTabBtn") && $("openTabBtn").addEventListener("click", () => post({ type: "openPanel" }));
 
+  // ── Usage period tabs (daily / monthly) ─────────────────────────────────────
+  // Two views scoped to the CURRENT period: daily = today, monthly = this month.
+  // Clicking a tab flips it optimistically, blanks the other period's numbers, and
+  // asks the extension to re-collect the scoped usage (pushed back as state.usage +
+  // state.usagePeriod). render() keeps the highlight in sync with the pushed period.
+  const usageTabs = Array.from(document.querySelectorAll(".utab"));
+  // The period whose numbers are currently displayed in the table (null = none/blanked).
+  // render() uses it to blank the table when the active period changes but fresh usage
+  // isn't in the push yet — so we never show one period's numbers under the other's
+  // heading, on ANY surface, and even if the new period has no data / the collect fails.
+  let shownUsagePeriod = null;
+  function setUsageTab(period) {
+    const p = period === "monthly" ? "monthly" : "daily";
+    usageTabs.forEach((t) => {
+      const on = t.getAttribute("data-period") === p;
+      t.classList.toggle("sel", on);
+      t.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    const sub = $("usageSub");
+    if (sub) sub.innerHTML = " &middot; " + (p === "monthly" ? "this month" : "today") + " &middot; ccusage";
+  }
+  // Reset the visible rows/total to placeholders so we never show one period's numbers
+  // under the other period's tab while the fresh collection is in flight.
+  function clearUsageRows() {
+    const host = $("usageRows");
+    if (host) host.querySelectorAll(".usage-row").forEach((row) => {
+      const tok = row.querySelector(".utok"); if (tok) tok.textContent = "—";
+      const cost = row.querySelector(".ucost"); if (cost) cost.textContent = "—";
+      const bar = row.querySelector(".bar > span"); if (bar) bar.style.width = "0%";
+    });
+    text("usageTotalTok", "—"); text("usageTotalCost", "—");
+  }
+  usageTabs.forEach((t) => t.addEventListener("click", () => {
+    if (t.classList.contains("sel")) return; // already active
+    const period = t.getAttribute("data-period") === "monthly" ? "monthly" : "daily";
+    setUsageTab(period);
+    clearUsageRows();
+    shownUsagePeriod = null; // nothing valid shown until the scoped collection returns
+    post({ type: "setUsagePeriod", period: period });
+  }));
+
   // ── Chips ─────────────────────────────────────────────────────────────────--
   // Main-view project chips open the per-project editor.
   function wireProjectChips() {
@@ -327,6 +368,14 @@
     const sd = $("shutdownBtn");
     if (sd) sd.hidden = !online;
 
+    // Usage-period tab reflects the extension's shared selection (a local preference,
+    // so sync it even on the offline path before the early-return below). If the active
+    // period changed but this push carries no fresh usage yet, blank the table so stale
+    // numbers never sit under the new heading (covers every surface + an empty/failed
+    // collection, not just the webview that was clicked).
+    if (s.usagePeriod) setUsageTab(s.usagePeriod);
+    if (s.usagePeriod && s.usagePeriod !== shownUsagePeriod && !s.usage) { clearUsageRows(); shownUsagePeriod = null; }
+
     // Provision-stale nudge: the VM was provisioned with an OLDER Construct than the one
     // now installed on the host, so a reprovision would apply the update to the VM. Colour
     // the Reprovision button yellow + say so in its subtext/tooltip. Marker-based (host
@@ -361,7 +410,7 @@
 
     if (Array.isArray(s.agents)) renderAgents(s.agents);
     if (Array.isArray(s.projects)) renderProjects(s.projects);
-    if (s.usage) renderUsage(s.usage);
+    if (s.usage) { renderUsage(s.usage); shownUsagePeriod = s.usagePeriod || shownUsagePeriod; }
     if (s.audio) renderAudio(s.audio);
   }
 

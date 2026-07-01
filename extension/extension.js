@@ -41,6 +41,11 @@ let micWarnedReasons = new Set();
 /** Every currently-live webview (sidebar view + editor panel) for broadcast refresh. */
 const liveWebviews = new Set();
 
+// The currently selected token-usage period ("daily"|"monthly"), shared across every
+// dashboard. Drives both the ccusage window we collect and the active tab the panel
+// highlights; the webview flips it via a {type:'setUsagePeriod'} message.
+let usageReport = usage.DEFAULT_REPORT;
+
 // ── Diagnostics log ─────────────────────────────────────────────────────────────
 // A "Construct" Output channel + a log file, so what the panel does (esp. the EXACT
 // host command it launches, resolved paths, args, env, spawn result) is visible and
@@ -108,9 +113,9 @@ async function augmentUpdates(state) {
  *  SSH + ccusage round-trip (ccusage may even install itself the first time), so this
  *  runs after the base + update pushes and folds usage in as its own state message.
  *  Returns the same object reference when nothing was added, so callers skip a re-push. */
-async function augmentUsage(state) {
+async function augmentUsage(state, report) {
   try {
-    return await usage.augment(state);
+    return await usage.augment(state, { report });
   } catch (_) { return state; }
 }
 
@@ -120,6 +125,14 @@ function withLocalState(state) {
   let connected = false;
   try { connected = remote.isConnectedToVm(safeRemoteAuthority()); } catch (_) { /* default false */ }
   return { ...state, connected };
+}
+
+/** Post a state to a webview, stamping the CURRENT usage period at SEND time. usageReport
+ *  is the single source of truth for the active daily/monthly tab, so every render (even
+ *  a slow/stale refresh landing late) reflects the live selection and can never re-select
+ *  an out-of-date tab. The panel highlights the tab from this field on the sync push. */
+function postState(target, state) {
+  safePost(target, { type: "state", state: { ...state, usagePeriod: usageReport } });
 }
 
 /** Fold the VM's Hyper-V power state into a probed state. When the VM answers SSH
@@ -204,13 +217,15 @@ async function effectiveProjects() {
 async function refreshState(webview) {
   if (!webview) return;
   const state = withProjects(await withVmState(withLocalState(await probeOnce())));
-  safePost(webview, { type: "state", state });
+  postState(webview, state);
   const aug = await augmentUpdates(state);
-  if (aug !== state) safePost(webview, { type: "state", state: aug });
-  // Usage is a slower SSH+ccusage round-trip: fold it into the latest state (so the
-  // update badges survive) and push once more if it actually added anything.
-  const withUsage = await augmentUsage(aug);
-  if (withUsage !== aug) safePost(webview, { type: "state", state: withUsage });
+  if (aug !== state) postState(webview, aug);
+  // Usage is a slower SSH+ccusage round-trip: BIND it to the report we start with and
+  // DISCARD the result if the user switched the period meanwhile (a stale daily run must
+  // never land as monthly's numbers). postState always stamps the CURRENT usagePeriod.
+  const report = usageReport;
+  const withUsage = await augmentUsage(aug, report);
+  if (withUsage !== aug && usageReport === report) postState(webview, withUsage);
 }
 
 /** Probe once and broadcast the same state to every live webview, then broadcast
@@ -218,11 +233,13 @@ async function refreshState(webview) {
 async function refreshAll() {
   if (liveWebviews.size === 0) return;
   const state = withProjects(await withVmState(withLocalState(await probeOnce())));
-  for (const w of liveWebviews) safePost(w, { type: "state", state });
+  for (const w of liveWebviews) postState(w, state);
   const aug = await augmentUpdates(state);
-  if (aug !== state) for (const w of liveWebviews) safePost(w, { type: "state", state: aug });
-  const withUsage = await augmentUsage(aug);
-  if (withUsage !== aug) for (const w of liveWebviews) safePost(w, { type: "state", state: withUsage });
+  if (aug !== state) for (const w of liveWebviews) postState(w, aug);
+  // Bind + discard on period switch (see refreshState).
+  const report = usageReport;
+  const withUsage = await augmentUsage(aug, report);
+  if (withUsage !== aug && usageReport === report) for (const w of liveWebviews) postState(w, withUsage);
 }
 
 // ── Periodic auto-refresh ────────────────────────────────────────────────────
@@ -568,7 +585,7 @@ function runExportUsage() {
   vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: "Collecting usage from the VM…", cancellable: false },
     async () => {
-      const rawText = await usage.collectRaw({});
+      const rawText = await usage.collectRaw({ report: usageReport });
       if (!rawText) {
         vscode.window.showErrorMessage(
           "Couldn't collect usage from the VM. Make sure it's running and reachable, then try again."
@@ -580,7 +597,7 @@ function runExportUsage() {
         filters: { JSON: ["json"], "All files": ["*"] },
         // Default into the home dir; a bare filename in showSaveDialog resolves against
         // the last-used location, so pin it under home for a predictable first save.
-        defaultUri: vscode.Uri.file(path.join(os.homedir(), usage.exportFileName(usage.DEFAULT_REPORT))),
+        defaultUri: vscode.Uri.file(path.join(os.homedir(), usage.exportFileName(usageReport))),
       });
       if (!uri) return; // cancelled — nothing written
       const payload = usage.buildExportPayload(rawText);
@@ -956,6 +973,17 @@ function handleMessage(message, webview, context) {
       if (!scriptsDir) { warnNoScriptsDir(); return; }
       const action = message.mode === "redownload" ? "redownload" : "reinstall";
       effectiveProjects().then((projects) => lifecycle.run(action, { scriptsDir, backupMode: message.backup, projects }));
+      return;
+    }
+
+    case "setUsagePeriod": {
+      // Switch the token-usage view between daily (today) and monthly (this month).
+      // Validate against the allow-list, remember it for every dashboard + subsequent
+      // auto-refresh, then re-collect and broadcast the scoped numbers. The webview has
+      // already flipped the tab optimistically; refreshAll re-pushes usagePeriod too.
+      const next = usage.normalizeReport(message.period);
+      if (next !== usageReport) usageReport = next;
+      refreshAll();
       return;
     }
 
