@@ -31,7 +31,11 @@ What it does:
    installs it, but still strips any leftover copy from a failed/manual prior run).
 7. Configures the Windows host: `~\.ssh\` (private key, `known_hosts`, and a `Host` entry in
    `~\.ssh\config`) and sets `remote.SSH.remotePlatform` in VS Code so Remote-SSH connects to
-   `agent-vm` as `root` without prompts; then reboots the VM.
+   `agent-vm` as `root` without prompts; then, on a full install/reinstall, reboots the VM.
+   A reprovision of an already-provisioned VM is left running — every provisioning step
+   applies its change live (services are restarted, config is re-read, no kernel is
+   replaced) — unless the VM itself reports a pending reboot (`/var/run/reboot-required`,
+   e.g. a project command installed a new kernel).
 
 From a checkout of this repo on Windows:
 

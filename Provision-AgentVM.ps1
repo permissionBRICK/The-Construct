@@ -1413,10 +1413,11 @@ function Get-TunnelLoginLine {
     return ""
 }
 
-# If the tunnel needs its one-time device sign-in, do it NOW -- before the reboot.
-# The VM is still up and the code-tunnel service is polling for the device code,
-# so pausing here lets the user complete the GitHub/Microsoft sign-in against a
-# code that is still valid. (Rebooting first would rotate the code.)
+# If the tunnel needs its one-time device sign-in, do it NOW -- before we finish
+# setup. The VM is still up and the code-tunnel service is polling for the device
+# code, so pausing here lets the user complete the GitHub/Microsoft sign-in against
+# a code that is still valid. (On a full install we reboot at the end, which would
+# rotate the code, so it must be done here.)
 if ($tunnelStatus['VSCODE_TUNNEL_NEEDS_SIGNIN'] -eq "yes") {
     $loginLine = ""
     if ($tunnelStatus['VSCODE_TUNNEL_LOGIN_B64']) {
@@ -1426,7 +1427,7 @@ if ($tunnelStatus['VSCODE_TUNNEL_NEEDS_SIGNIN'] -eq "yes") {
 
     Write-Host ""
     Write-Step "VS Code tunnel: one-time device sign-in required"
-    Write-Host "    Register the tunnel now, BEFORE the reboot:" -ForegroundColor Yellow
+    Write-Host "    Register the tunnel now, before finishing setup:" -ForegroundColor Yellow
     if ($loginLine) {
         Write-Host "      $loginLine" -ForegroundColor Cyan
     } else {
@@ -1436,41 +1437,67 @@ if ($tunnelStatus['VSCODE_TUNNEL_NEEDS_SIGNIN'] -eq "yes") {
         Write-Host "      and use the github.com/login/device link shown there." -ForegroundColor Cyan
     }
     Write-Host "    Open the link, enter the code, and authorize access." -ForegroundColor White
-    Read-Host "    Press Enter once sign-in is complete to finish setup and reboot the VM"
+    Read-Host "    Press Enter once sign-in is complete to finish setup"
 }
 
-# Remove the bootstrap public key from the agent user's authorized_keys, then
-# reboot — in one authenticated session. On the bootstrap path the removal and
-# reboot MUST share one session: once the key is gone we can't reconnect, so
-# removing it in a separate call would silently fail to authenticate. The
-# session stays valid after the key is removed (auth already happened); the
-# reboot is backgrounded with a short delay so the SSH command returns cleanly
-# before the VM goes down. On the fast path we connected as root and never
-# authorized the bootstrap key this run, but a leftover copy from a failed or
-# manual prior run would remain a standing credential (and provision.sh grants
-# that agent user passwordless sudo), so we strip it opportunistically there too
-# whenever the committed public key is available — root can do this without the
-# bootstrap key.
+# Decide whether to reboot the VM at the end of provisioning. We only reboot when
+# it actually earns its downtime:
+#
+#   * Full install / reinstall — the bootstrap or seed-password path (NOT
+#     $script:UseRootKey). A bootstrap key was authorized on the VM THIS run and
+#     must be stripped; the strip and reboot MUST share the one authenticated agent
+#     session (once the key is gone we can't reconnect as agent to reboot
+#     separately), and a freshly built OS gets its clean first restart.
+#   * A reprovision where the VM reports a genuinely pending reboot — e.g. a project
+#     provisioning command or an ALLOW_HOST_PACKAGES host package pulled a new
+#     kernel. Ubuntu drops /var/run/reboot-required for exactly that; we probe it
+#     over the still-open session and honour it.
+#
+# A plain reprovision of an already-provisioned, still-running VM (the root-key fast
+# path, nothing pending) is left UP. An audit of the whole provisioning chain
+# confirmed every step applies its effect live: systemd units are daemon-reloaded
+# and (re)started during the run (provision.sh restarts construct so the compose
+# stack re-reads its regenerated config), config files are re-read at the next tool
+# launch, the docker group is picked up by the fresh post-run SSH login, and there
+# is no apt upgrade so the running kernel is never replaced — so a reboot here would
+# only add downtime.
+$doReboot = -not $script:UseRootKey
+if (-not $doReboot) {
+    # Fast path (reprovision of a running VM): reboot only if the VM itself flags
+    # one as required. `|| echo no` keeps the probe from throwing on a clean VM.
+    try {
+        $rebootRequired = (Invoke-Ssh -Sudo -Command "test -e /var/run/reboot-required && echo yes || echo no").Trim()
+        if ($rebootRequired -eq "yes") {
+            $doReboot = $true
+            Write-Host "    VM reports a pending reboot (/var/run/reboot-required) -- rebooting to apply it." -ForegroundColor DarkGray
+        }
+    } catch { }
+}
+
+# Remove the bootstrap public key from the agent user's authorized_keys. When a
+# reboot follows (the bootstrap path) this MUST share the one authenticated
+# session: once the key is gone we can't reconnect, so removing it in a separate
+# call would silently fail to authenticate; the session stays valid after removal
+# (auth already happened). On the fast path we connected as root and never
+# authorized the bootstrap key this run, but a leftover copy from a failed or manual
+# prior run would remain a standing credential (and provision.sh grants that agent
+# user passwordless sudo), so we strip it opportunistically there too whenever the
+# committed public key is available — root can do this without the bootstrap key,
+# and the sed applies live (no reboot needed).
 $rmBootstrapCmd = ""
 if (Test-Path -LiteralPath $BootstrapPubKey) {
     $pubKeyContent  = (Get-Content $BootstrapPubKey -Raw).Trim()
     $escPubKey      = $pubKeyContent.Replace("/", "\/")
     # `|| true` so a missing/empty authorized_keys (possible on the fast path)
-    # doesn't abort the chain before the reboot.
+    # doesn't abort the chain.
     $rmBootstrapCmd = "sed -i '/$escPubKey/d' /home/${SeedUser}/.ssh/authorized_keys 2>/dev/null || true; "
 }
 
-if ($rmBootstrapCmd) {
-    Write-Step "Removing bootstrap key and rebooting the VM"
-} else {
-    Write-Step "Rebooting the VM"
-}
-
-# Optionally set the agent user's login password as the LAST thing before the
-# reboot. It's only a manual-fallback credential (root logs in by pubkey), and
-# we change it inside the same already-authenticated session, so it can never
-# lock provisioning out mid-run. The new password is base64-encoded so any
-# characters survive the SSH/shell layers untouched; chpasswd (run as root) sets it.
+# Optionally set the agent user's login password. It's only a manual-fallback
+# credential (root logs in by pubkey), and we change it inside the same already-
+# authenticated session, so it can never lock provisioning out mid-run. The new
+# password is base64-encoded so any characters survive the SSH/shell layers
+# untouched; chpasswd (run as root) sets it — live for subsequent logins.
 $pwChangeCmd = ""
 if ($AgentPassword -and ($AgentPassword -ne $SeedPassword)) {
     $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("${SeedUser}:${AgentPassword}"))
@@ -1478,14 +1505,36 @@ if ($AgentPassword -and ($AgentPassword -ne $SeedPassword)) {
     Write-Ok "Setting a custom login password for '$SeedUser'"
 }
 
-# Redirect the backgrounded reboot's stdin too (</dev/null), not just stdout/stderr:
-# otherwise it inherits and holds the SSH channel's stdin open, so ssh.exe never
-# sees the session close and hangs (the VM then reboots out from under it).
-Invoke-Ssh -Sudo -Command "${pwChangeCmd}${rmBootstrapCmd}nohup sh -c 'sleep 3; reboot' </dev/null >/dev/null 2>&1 &"
-if ($rmBootstrapCmd) {
-    Write-Ok "Bootstrap key removed; VM will reboot in a few seconds"
+if ($doReboot) {
+    if ($rmBootstrapCmd) {
+        Write-Step "Removing bootstrap key and rebooting the VM"
+    } else {
+        Write-Step "Rebooting the VM"
+    }
+    # Redirect the backgrounded reboot's stdin too (</dev/null), not just
+    # stdout/stderr: otherwise it inherits and holds the SSH channel's stdin open,
+    # so ssh.exe never sees the session close and hangs (the VM then reboots out
+    # from under it).
+    Invoke-Ssh -Sudo -Command "${pwChangeCmd}${rmBootstrapCmd}nohup sh -c 'sleep 3; reboot' </dev/null >/dev/null 2>&1 &"
+    if ($rmBootstrapCmd) {
+        Write-Ok "Bootstrap key removed; VM will reboot in a few seconds"
+    } else {
+        Write-Ok "VM will reboot in a few seconds"
+    }
 } else {
-    Write-Ok "VM will reboot in a few seconds"
+    # Reprovision, no reboot: still apply the credential-hygiene commands live over
+    # the open session, then leave the VM running (its services are already up and
+    # the host's persistent SMB mapping stays connected). Skip the SSH call when
+    # there's nothing to run; the trailing `true` keeps the command valid + exit 0.
+    Write-Step "Finishing up (no reboot -- reprovision leaves the VM running)"
+    if ($pwChangeCmd -or $rmBootstrapCmd) {
+        Invoke-Ssh -Sudo -Command "${pwChangeCmd}${rmBootstrapCmd}true"
+    }
+    if ($rmBootstrapCmd) {
+        Write-Ok "Any stray bootstrap key removed; VM left running"
+    } else {
+        Write-Ok "VM left running -- reprovision applied live, no reboot needed"
+    }
 }
 
 # Configure the Windows host (local — no VM connection needed).
@@ -1589,8 +1638,14 @@ if ($tunnelStatus['VSCODE_TUNNEL_DEPLOYED'] -eq "yes") {
     Write-Host "    Open: $tunnelUrl" -ForegroundColor Yellow
     if ($tunnelStatus['VSCODE_TUNNEL_NEEDS_SIGNIN'] -eq "yes") {
         # The user completed (or was prompted for) the device sign-in in the pause
-        # above; once that's done the tunnel comes up automatically after reboot.
-        Write-Host "    You completed the one-time sign-in above -- the tunnel comes up after the reboot." -ForegroundColor Green
+        # above; once that's done the tunnel comes up automatically -- after the
+        # reboot on a full install, or immediately on a no-reboot reprovision (the
+        # code-tunnel service is already running).
+        if ($doReboot) {
+            Write-Host "    You completed the one-time sign-in above -- the tunnel comes up after the reboot." -ForegroundColor Green
+        } else {
+            Write-Host "    You completed the one-time sign-in above -- the tunnel is coming up now." -ForegroundColor Green
+        }
     } elseif ($tunnelStatus['VSCODE_TUNNEL_AUTHED'] -eq "yes") {
         Write-Host "    Status: registered and live -- open the URL in a browser or VS Code Remote Explorer." -ForegroundColor Green
     } else {
@@ -1605,7 +1660,7 @@ if ($smbStatus['SMB_ENABLED'] -eq "yes") {
     Write-Host "Workspace file share (SMB):" -ForegroundColor White
     if ($smbMountedDrive) {
         Write-Host "    Mounted at $smbMountedDrive  ($smbUnc)" -ForegroundColor Yellow
-        Write-Host "    Credentials saved + persistent -- it reconnects after the VM reboots." -ForegroundColor DarkGray
+        Write-Host "    Credentials saved + persistent -- it reconnects at logon and after any VM reboot." -ForegroundColor DarkGray
         Write-Host "    The repos folder opens as root, the same identity the agents use." -ForegroundColor DarkGray
     } else {
         Write-Host "    Share: $smbUnc  (user $smbUser, files accessed as root)" -ForegroundColor Yellow

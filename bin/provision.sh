@@ -322,17 +322,23 @@ WORKSPACE_ROOT="${WORKSPACE_ROOT}" AGENT_HOME="${AGENT_HOME:-/opt/construct}" \
   bash "${REPO_DIR}/bin/run-provision-commands.sh" \
   || warn "WARNING: one or more project provisioning commands failed; continuing"
 
-# 7. Start the agent service.
+# 7. (Re)start the agent service. Use restart, NOT start: construct.service is
+#    Type=oneshot + RemainAfterExit=yes, so on a reprovision it is already "active"
+#    and a plain `start` is a no-op that would NOT re-run ExecStartPre
+#    (generate-runtime-config.sh) or `docker compose up -d`. A reprovision no longer
+#    reboots the VM (only a full install/reinstall does), so restart here re-applies
+#    the freshly regenerated runtime/compose config live -- the job the post-provision
+#    reboot used to do. On a fresh install the unit is inactive and restart just starts it.
 if [[ "${START_SERVICE}" == "true" ]]; then
-  step "Starting construct service"
-  systemctl start construct
+  step "(Re)starting construct service"
+  systemctl restart construct
 fi
 
 # 8. Install the VS Code CLI ("VS Code Server", for Remote-SSH) and -- when the
 #    tunnel is selected or already registered/deployed -- (re)deploy the
 #    code-tunnel service. Kept LAST so any device sign-in link is the final thing
 #    the (streamed) provisioning output shows; the host script then pauses for the
-#    sign-in before rebooting.
+#    sign-in before finishing (and, on a full install/reinstall, rebooting).
 if [[ "${VSCODE_SERVER}" == "true" ]]; then
   step "Setting up VS Code server / serve-web / tunnel"
   VSCODE_SERVER="${VSCODE_SERVER}" VSCODE_SERVE_WEB="${VSCODE_SERVE_WEB}" VSCODE_TUNNEL="${VSCODE_TUNNEL}" \
