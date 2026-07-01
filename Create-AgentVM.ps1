@@ -53,6 +53,10 @@ param(
     [string]$RestoreDir,
     [string]$GitCloneCredentialsB64,
     [string]$CheckoutProjects,
+    # Source repo/ref, forwarded to Provision-AgentVM.ps1 so it can record the
+    # installed-commit update marker for the control panel. Passed only when set.
+    [string]$Repo,
+    [string]$Ref,
     # Set when launched by an upper script (Auto-Install.ps1), which owns the
     # final "Press Enter" pause. When run on its own this stays off and the
     # script pauses at the end -- important because a direct run self-elevates
@@ -178,6 +182,11 @@ if (Get-VM -Name $VmName -ErrorAction SilentlyContinue) {
         if ($PSBoundParameters.ContainsKey('RestoreDir'))             { $provArgs['RestoreDir']             = $RestoreDir }
         if ($PSBoundParameters.ContainsKey('GitCloneCredentialsB64')) { $provArgs['GitCloneCredentialsB64'] = $GitCloneCredentialsB64 }
         if ($PSBoundParameters.ContainsKey('CheckoutProjects'))       { $provArgs['CheckoutProjects']       = $CheckoutProjects }
+        # Source repo/ref PAIR for the installed-commit marker: if either was set,
+        # forward both effective values so the recorded pair matches the install.
+        if ($PSBoundParameters.ContainsKey('Repo') -or $PSBoundParameters.ContainsKey('Ref')) {
+            $provArgs['Repo'] = $Repo; $provArgs['Ref'] = $Ref
+        }
         & $provisionScript @provArgs
         return
     }
@@ -455,6 +464,11 @@ if ($isAutoinstall) {
         if ($PSBoundParameters.ContainsKey('RestoreDir'))             { $provArgs['RestoreDir']             = $RestoreDir }
         if ($PSBoundParameters.ContainsKey('GitCloneCredentialsB64')) { $provArgs['GitCloneCredentialsB64'] = $GitCloneCredentialsB64 }
         if ($PSBoundParameters.ContainsKey('CheckoutProjects'))       { $provArgs['CheckoutProjects']       = $CheckoutProjects }
+        # Source repo/ref PAIR for the installed-commit marker: if either was set,
+        # forward both effective values so the recorded pair matches the install.
+        if ($PSBoundParameters.ContainsKey('Repo') -or $PSBoundParameters.ContainsKey('Ref')) {
+            $provArgs['Repo'] = $Repo; $provArgs['Ref'] = $Ref
+        }
         & $provisionScript @provArgs
     }
 } else {

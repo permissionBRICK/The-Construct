@@ -431,8 +431,18 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
    which would leave `src/`+`media/` stale on every update), and staging-swap keeps the
    old install intact if the copy fails. `test/host-lib.test.ps1` covers the copy +
    `test/` exclusion + a re-run refreshing a NESTED `src/` file with no double-nesting +
-   no leftover staging + missing-source. NOTE: the extension copy lives in `install.ps1`
-   (non-elevated, has %USERPROFILE%), not `Provision-AgentVM.ps1` as originally sketched.
+   no leftover staging + missing-source. **Placement (revised):** `install.ps1` is now
+   a THIN downloader (download repo → launch `Auto-Install.ps1`, forwarding `-Repo`/`-Ref`
+   only when explicit) so a stale local copy can't drift. The host setup that MUST run
+   non-elevated (per-user `%USERPROFILE%` + winget) — `Ensure-VSCodeRemoteSsh` +
+   `Install-ControlPanelExtension` — moved to `Auto-Install.ps1`'s pre-elevation step, so
+   running `Auto-Install.ps1` directly (Option A / a desktop shortcut) installs the panel
+   too. The installed-commit marker moved to `Provision-AgentVM.ps1`, recorded at the end
+   of a successful provision (it writes the scripts dir, not `%USERPROFILE%`, so the
+   elevated context is fine; `-Repo`/`-Ref` thread install.ps1→Auto-Install→Create-AgentVM
+   →Provision, defaulting to canonical and preserving existing settings on a param-less
+   reprovision). `install.ps1 -RefreshOnly` (the panel's "Update Construct") keeps its own
+   marker + extension refresh, since it never launches Auto-Install.
 9. ✓ **DONE — Docs** — user-facing `docs/control-panel.md` (a full tour of the panel:
    status, lifecycle, connect/power, updates, projects, usage, mic passthrough) + a
    README feature bullet and Documentation-table row; `extension/README.md` refreshed;

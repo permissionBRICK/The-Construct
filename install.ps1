@@ -110,23 +110,25 @@ if ($RefreshOnly) {
 $auto = Join-Path $root.FullName "Auto-Install.ps1"
 if (-not (Test-Path -LiteralPath $auto)) { throw "Auto-Install.ps1 not found in $($root.FullName)." }
 
-# Prepare the host for the control panel, all NON-elevated (winget user scope; the
-# user-profile extensions dir) BEFORE Auto-Install self-elevates -- winget and the
-# per-user extensions dir are unreliable in an elevated session. Best-effort: a
-# failure only warns and never blocks the install. (-RefreshOnly returned earlier,
-# so this runs on a fresh install / re-run of the one-liner.)
-#   1. record the update marker so the panel's "Update Construct" banner has a base,
-#   2. ensure VS Code + the Remote-SSH extension (powers Open-on-VM + the deep link),
-#   3. install the control-panel extension so the panel loads (and auto-opens on connect).
-try {
-    . (Join-Path $root.FullName "lib\AgentVm.Common.ps1")
-    Set-ConstructInstalledMarker -Root $root.FullName -Repo $Repo -Ref $Ref | Out-Null
-    Ensure-VSCodeRemoteSsh | Out-Null
-    Install-ControlPanelExtension -SourceRoot $root.FullName | Out-Null
-} catch {
-    Write-Warning "Could not finish host setup for the control panel (continuing): $($_.Exception.Message)"
-}
-
+# install.ps1 is intentionally THIN: download the repo, then hand off to
+# Auto-Install.ps1. It does NO host setup of its own. All of that now lives with the
+# code it belongs to, so running Auto-Install.ps1 directly (Option A / the desktop
+# shortcut / a local copy) gets the same treatment -- and a stale local install.ps1
+# can't drift out of sync with logic it no longer carries:
+#   - the VS Code + Remote-SSH ensure and the control-panel extension copy run in
+#     Auto-Install.ps1's non-elevated pre-step (they must be non-elevated: per-user
+#     %USERPROFILE% + winget user scope);
+#   - the installed-commit marker is recorded by Provision-AgentVM.ps1 at the end of
+#     a successful provision (it writes the scripts dir, so elevation is fine).
+# Repo/Ref are a SOURCE PAIR. If the caller set EITHER (e.g. a fork/mirror), forward
+# BOTH effective values -- the default filled the other, and that pair is exactly what
+# we just downloaded from, so the marker can't end up recording a mismatched pair
+# (e.g. -Repo fork while an OLD constructRef leaks in). A plain install sets neither
+# and forwards neither, leaving repo/ref to the defaults / preserved settings downstream.
 Write-Host "==> Launching Auto-Install.ps1" -ForegroundColor Cyan
 Write-Host "    $auto" -ForegroundColor DarkGray
-& $auto
+$fwd = @{}
+if ($PSBoundParameters.ContainsKey('Repo') -or $PSBoundParameters.ContainsKey('Ref')) {
+    $fwd['Repo'] = $Repo; $fwd['Ref'] = $Ref
+}
+& $auto @fwd

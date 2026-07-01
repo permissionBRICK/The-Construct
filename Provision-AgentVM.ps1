@@ -53,6 +53,13 @@ param(
     # settings file and this host's own git identity. Empty leaves it unchanged.
     [string]$GitUserName,
     [string]$GitEmail,
+    # Source repo/ref this install came from (threaded from install.ps1 via
+    # Auto-Install / Create-AgentVM). Used to record the installed-commit update
+    # marker for the control panel at the end of a successful provision. Default to
+    # the canonical repo; a param-less run (e.g. a panel reprovision) keeps whatever
+    # the settings file already records instead of resetting it.
+    [string]$Repo = "permissionBRICK/The-Construct",
+    [string]$Ref  = "main",
     [string]$RemoteUser   = "root",
     [string]$AiTools      = "opencode,claude-code,codex",
     [string]$Projects     = "default",
@@ -1494,6 +1501,38 @@ if ($script:SecureRootKeyPath) {
 }
 
 Write-Host ""
+# Record the installed-commit marker now that the provision has SUCCEEDED -- the last
+# step of a good install (moved here from install.ps1 so it reflects a COMPLETED
+# provision, not merely a started download). It writes the scripts dir, not
+# %USERPROFILE%, so the elevated provision context is fine. Prefer an explicit
+# -Repo/-Ref (threaded from install.ps1, incl. forks); on a param-less reprovision
+# keep what the settings file already records, so we refresh installedCommit without
+# resetting the source. Best-effort: guarded + never fatal.
+if ($Action -eq "provision" -and (Get-Command Set-ConstructInstalledMarker -ErrorAction SilentlyContinue)) {
+    # Read any existing recorded source (used ONLY on a truly param-less reprovision).
+    $exRepo = ""; $exRef = ""
+    if (Get-Command Read-ConstructSettings -ErrorAction SilentlyContinue) {
+        try {
+            $curSettings = Read-ConstructSettings -Dir $PSScriptRoot
+            if ($curSettings) { $exRepo = [string]$curSettings.constructRepo; $exRef = [string]$curSettings.constructRef }
+        } catch { }
+    }
+    # Resolve repo/ref as a PAIR (see Resolve-MarkerSource): explicit -Repo/-Ref win as
+    # the effective pair; otherwise preserve the recorded source; otherwise defaults.
+    $mk = if (Get-Command Resolve-MarkerSource -ErrorAction SilentlyContinue) {
+        Resolve-MarkerSource -Repo $Repo -Ref $Ref `
+            -RepoSupplied ($PSBoundParameters.ContainsKey('Repo')) -RefSupplied ($PSBoundParameters.ContainsKey('Ref')) `
+            -ExistingRepo $exRepo -ExistingRef $exRef
+    } else { @{ Repo = $Repo; Ref = $Ref } }
+    try {
+        $mkSha = Set-ConstructInstalledMarker -Root $PSScriptRoot -Repo $mk.Repo -Ref $mk.Ref
+        Write-Host ""
+        Write-Host "Recorded installed commit for the control panel: $mkSha ($($mk.Repo)@$($mk.Ref))" -ForegroundColor DarkGray
+    } catch {
+        Write-Warning "Could not record the update marker: $($_.Exception.Message)"
+    }
+}
+
 Write-Host "Done." -ForegroundColor Green
 Write-Host "Connect from a terminal:" -ForegroundColor White
 Write-Host "    ssh $VmHost" -ForegroundColor Yellow

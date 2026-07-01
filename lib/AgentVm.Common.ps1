@@ -1129,6 +1129,34 @@ function Install-ControlPanelExtension {
     }
 }
 
+function Resolve-MarkerSource {
+    <#
+        Decide which repo/ref to record in the installed-commit marker, treating them
+        as a SOURCE PAIR. Rules:
+          - If EITHER was supplied explicitly (an install/create path), record the full
+            EFFECTIVE pair as given -- the default filled the other side, and that pair
+            is what was actually downloaded/provisioned, so we never mix an explicit
+            repo with a stale ref (or vice-versa).
+          - Only when NEITHER was supplied (a truly param-less reprovision) do we
+            preserve whatever the settings file already records, so a reprovision
+            refreshes installedCommit without resetting the source. Missing existing
+            values fall back to the passed defaults.
+        Pure. Returns @{ Repo = <string>; Ref = <string> }.
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$Repo, [string]$Ref,
+        [bool]$RepoSupplied, [bool]$RefSupplied,
+        [string]$ExistingRepo = "", [string]$ExistingRef = ""
+    )
+    if ($RepoSupplied -or $RefSupplied) {
+        return @{ Repo = $Repo; Ref = $Ref }
+    }
+    return @{
+        Repo = $(if ($ExistingRepo) { $ExistingRepo } else { $Repo })
+        Ref  = $(if ($ExistingRef)  { $ExistingRef }  else { $Ref })
+    }
+}
 function Set-ConstructInstalledMarker {
     <#
         Record which Construct repo/ref/commit is installed on this host, so the
