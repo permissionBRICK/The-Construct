@@ -115,7 +115,10 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     vmName: "agent-vm-01", host: "h.example.net", online: true,
     agents: [{ name: "Claude Code", detail: "CLI", version: "2.1.196", updateAvailable: true, latest: "2.1.210" }],
     projects: [{ name: "default", selected: true }, { name: "billing", selected: false }],
-    usage: { tools: [{ label: "Claude Code", tokens: 100, tokensText: "14.2M", costText: "$38" }], totalTokensText: "14.2M", totalCostText: "$38" },
+    usage: { tools: [
+      { label: "Claude Code", tokens: 100, tokensText: "14.2M", costText: "$38.00" },
+      { label: "Codex", tokens: 50, tokensText: "6.1M", costText: "$12.00" },
+    ], totalTokensText: "20.3M", totalCostText: "$50.00" },
     update: { available: true, behind: "6 behind" },
   } }, "*"));
   await page.waitForTimeout(80);
@@ -140,6 +143,86 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   posted = await page.evaluate(() => window.__posted);
   check("panel: chip body posts editProject", posted.some((m) => m.type === "command" && m.id === "editProject" && m.project === "billing"));
 
+  // project edit modal: the extension replies with {type:'editProject', name, profile};
+  // the modal opens, populates its structured controls, and Save posts saveProject.
+  check("modal: hidden before an editProject message", await page.locator("#projModal").isHidden());
+  await page.evaluate(() => window.postMessage({ type: "editProject", name: "billing", profile: {
+    name: "billing",
+    repos: [{ url: "https://h/o/billing.git", directory: "billing" }, { url: "https://h/o/api.git" }],
+    sdks: { node: ["22", "24"], python: "3.12" }, mcp: ["github"],
+    hostPackages: ["build-essential"], provisionCommands: ["npm ci", "cp .env.example .env"],
+    tests: { web: { runner: "playwright", command: "npm test" } },
+  } }, "*"));
+  await page.waitForTimeout(80);
+  check("modal: opens on editProject message", await page.locator("#projModal").isVisible());
+  check("modal: title carries the project name", /billing/i.test(await page.locator("#pmTitle").innerText()));
+  check("modal: repo rows populated", (await page.locator("#pmRepos .pm-repo").count()) === 2);
+  check("modal: first repo url populated", (await page.inputValue('#pmRepos .pm-repo:first-child .pm-url')) === "https://h/o/billing.git");
+  check("modal: sdks rendered as name=values lines", (await page.inputValue("#pmSdks")).includes("node = 22, 24") && (await page.inputValue("#pmSdks")).includes("python = 3.12"));
+  check("modal: mcp rendered as JSON", (await page.inputValue("#pmMcp")).includes('"github"'));
+  check("modal: provision commands one per line", (await page.inputValue("#pmProvision")) === "npm ci\ncp .env.example .env");
+
+  // add + remove a repo row.
+  await page.click("#pmAddRepo");
+  check("modal: add-repo adds a row", (await page.locator("#pmRepos .pm-repo").count()) === 3);
+  await page.click('#pmRepos .pm-repo:last-child .pm-del');
+  check("modal: remove-repo drops a row", (await page.locator("#pmRepos .pm-repo").count()) === 2);
+
+  // invalid MCP JSON blocks Save (and surfaces an inline error).
+  await page.fill("#pmMcp", "{ not json");
+  await page.evaluate(() => { window.__posted.length = 0; });
+  await page.click("#pmSave");
+  check("modal: invalid MCP JSON shows an error", await page.locator("#pmMcpErr").isVisible());
+  posted = await page.evaluate(() => window.__posted);
+  check("modal: invalid MCP JSON does NOT post saveProject", !posted.some((m) => m.type === "saveProject"));
+  check("modal: stays open on invalid save", await page.locator("#projModal").isVisible());
+
+  // fix the MCP + Save: posts a well-formed saveProject and closes the modal.
+  await page.fill("#pmMcp", '["github"]');
+  await page.evaluate(() => { window.__posted.length = 0; });
+  await page.click("#pmSave");
+  posted = await page.evaluate(() => window.__posted);
+  const saveProjMsg = posted.find((m) => m.type === "saveProject");
+  check("modal: valid Save posts saveProject with the name", saveProjMsg && saveProjMsg.name === "billing");
+  check("modal: saved profile carries repos + parsed sdks + mcp", saveProjMsg &&
+    Array.isArray(saveProjMsg.profile.repos) && saveProjMsg.profile.repos.length === 2 &&
+    saveProjMsg.profile.sdks.node && Array.isArray(saveProjMsg.profile.mcp) && saveProjMsg.profile.mcp[0] === "github");
+  // the un-edited `tests` block must survive the round-trip (not silently dropped).
+  check("modal: saved profile preserves the un-edited tests block", saveProjMsg &&
+    saveProjMsg.profile.tests && saveProjMsg.profile.tests.web && saveProjMsg.profile.tests.web.runner === "playwright");
+  check("modal: closes after a valid save", await page.locator("#projModal").isHidden());
+
+  // Esc + backdrop dismissal.
+  await page.evaluate(() => window.postMessage({ type: "editProject", name: "x", profile: { name: "x", repos: [] } }, "*"));
+  await page.waitForTimeout(60);
+  await page.keyboard.press("Escape");
+  check("modal: Escape closes it", await page.locator("#projModal").isHidden());
+
+  // select-profiles action posts the command (the extension then shows the picker).
+  await page.evaluate(() => { window.__posted.length = 0; });
+  await page.click('[data-cmd="selectProfiles"]');
+  posted = await page.evaluate(() => window.__posted);
+  check("panel: select-profiles posts command", posted.some((m) => m.type === "command" && m.id === "selectProfiles"));
+  // import-from-VM action posts the command.
+  await page.click('[data-cmd="importProjects"]');
+  posted = await page.evaluate(() => window.__posted);
+  check("panel: import-projects posts command", posted.some((m) => m.type === "command" && m.id === "importProjects"));
+
+  // usage: the token-usage table renders a row per agent (bar + tokens + cost) and a
+  // total row from the pushed usage state (renderUsage consumes {tools,totalTokensText,totalCostText}).
+  check("usage: renders a row per agent", (await page.locator("#usageRows .usage-row").count()) === 2);
+  check("usage: first row label + tokens + cost", (await page.locator("#usageRows .usage-row").first().innerText()).includes("Claude Code")
+    && (await page.locator("#usageRows .usage-row .utok").first().innerText()) === "14.2M"
+    && (await page.locator("#usageRows .usage-row .ucost").first().innerText()) === "$38.00");
+  check("usage: total tokens + estimated cost", (await page.locator("#usageTotalTok").innerText()) === "20.3M"
+    && (await page.locator("#usageTotalCost").innerText()) === "$50.00");
+  // export json: the button posts the exportUsage command (the extension then collects
+  // over SSH and saves via a Save dialog).
+  await page.evaluate(() => { window.__posted.length = 0; });
+  await page.click('[data-cmd="exportUsage"]');
+  posted = await page.evaluate(() => window.__posted);
+  check("usage: export button posts exportUsage command", posted.some((m) => m.type === "command" && m.id === "exportUsage"));
+
   // add-project: the Projects action posts the addProject command (the extension
   // then prompts for a URL, clones over SSH, and opens the result in a new window).
   await page.click('[data-cmd="addProject"]');
@@ -151,6 +234,30 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("audio render: voice switch on", (await page.getAttribute("#voiceSwitch", "aria-checked")) === "true");
   check("audio render: substatus shown", await page.locator("#voiceSub").isVisible());
   check("audio render: not busy anymore", !(await page.getAttribute("#voiceSwitch", "class")).includes("busy"));
+  // textContent (not innerText) — the label is CSS-uppercased, so read raw case.
+  check("audio render: enabled+idle reads 'armed · idle'", /armed/.test(await page.locator("#voiceState").textContent()));
+  // honesty: with no gatePatched signal the gate line stays NEUTRAL (doesn't assert a patch).
+  check("audio render: unknown gate stays neutral", (await page.locator("#voiceGateNote").textContent()).includes("if a known build"));
+  // gate patched -> asserts the mic button is unlocked; not patched -> says so (warns).
+  await page.evaluate(() => window.postMessage({ type: "audio", enabled: true, capturing: false, tunnel: "vm:8767", gatePatched: true }, "*"));
+  await page.waitForTimeout(60);
+  check("audio render: gatePatched=true reads 'enabled'", (await page.locator("#voiceGate").textContent()).includes("enabled")
+    && (await page.locator("#voiceGateNote").textContent()).includes("patched"));
+  await page.evaluate(() => window.postMessage({ type: "audio", enabled: true, capturing: false, tunnel: "vm:8767", gatePatched: false }, "*"));
+  await page.waitForTimeout(60);
+  check("audio render: gatePatched=false says 'not patched'", (await page.locator("#voiceGate").textContent()).includes("not patched"));
+  check("audio render: gatePatched=false warns", (await page.getAttribute("#voiceGateRow", "class")).includes("warn"));
+  // on-demand capture: while the VM shim is connected (Claude recording), state goes live.
+  await page.evaluate(() => window.postMessage({ type: "audio", enabled: true, capturing: true, tunnel: "vm:8767", gatePatched: true }, "*"));
+  await page.waitForTimeout(60);
+  check("audio render: capturing reads 'live · capturing'", /capturing/.test(await page.locator("#voiceState").textContent()));
+  check("audio render: still on while capturing", (await page.getAttribute("#voiceSwitch", "aria-checked")) === "true");
+  // disable: switch goes off, substatus hidden, state 'disabled'.
+  await page.evaluate(() => window.postMessage({ type: "audio", enabled: false, capturing: false }, "*"));
+  await page.waitForTimeout(60);
+  check("audio render: disabled turns the switch off", (await page.getAttribute("#voiceSwitch", "aria-checked")) === "false");
+  check("audio render: disabled hides substatus", !(await page.locator("#voiceSub").isVisible()));
+  check("audio render: disabled reads 'disabled'", /disabled/.test(await page.locator("#voiceState").textContent()));
 
   // stale-data: after a successful probe, an offline/failed refresh must CLEAR the
   // VM-derived fields rather than leave the prior values on screen.

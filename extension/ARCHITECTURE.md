@@ -342,10 +342,30 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
    - **NOTE** — this completes the extension/host side of remote-open. Still separate:
      item 8 copies `extension/` into `%USERPROFILE%\.vscode\extensions\` so the panel (and
      thus the auto-open-on-connect) is actually installed on the host.
-4. **Projects** — `src/projects.js`: `importProjects` runs the repo scan
-   (`-Action export -ScanReposOnly`) to discover checked-out repos and write/merge
-   profiles; `selectProfiles` updates `PROJECTS`; `editProject` opens a modal
-   (repos/runtimes/MCP/setup) editing `projects/<name>.json`.
+4. ✓ **DONE — Projects** — `src/projects.js` (pure) + host profile helpers.
+   `importProjects` scans the VM's checked-out repos OVER SSH (a jq-free TSV walk,
+   `buildScanScript`/`parseScan`, mirroring bin/scan-repos.sh's core — chosen over
+   `Provision-AgentVM.ps1 -ScanReposOnly` because that first uploads a repo archive
+   and mutates the VM; here we only READ) and `planImport` writes a minimal profile
+   for each repo not already covered by an existing profile's `repos[].url` or name
+   (merge, never overwrite — same rule as bin/export-config.sh; repos with no origin
+   remote are reported skipped). `selectProfiles` = a multi-select QuickPick that
+   persists the ticked set as the forward-compat `projects` key in
+   `.construct-settings.json` (`host.saveSelectedProjects`, mirroring `vmMemoryGB`
+   etc. for the installer/`-Projects` to adopt) and reflects it in the chips — HONEST:
+   it records the selection for the next Reprovision/Reinstall, it does NOT re-apply
+   to the running VM (the QuickPick copy says so). `editProject` reads the host
+   profile (`host.readProjectProfile`), posts it as `{type:'editProject'}`, and the
+   panel opens a modal (repos rows / SDK lines / MCP JSON / host-pkgs+provision-cmds
+   textareas) that posts `{type:'saveProject'}` back; `host.writeProjectProfile`
+   (traversal-safe, BOM-less pretty JSON) writes it after `projects.sanitizeProfile`
+   coerces it to `project.schema.json` (drops unknown keys, enforces types, name from
+   the arg not the object so it can't rename/traverse; the modal round-trips the
+   un-edited `tests` block so a save can't drop it). Chips now come from the LOCAL
+   profile files (`host.listProjectProfiles`) + the persisted selection (folded in by
+   `withProjects`), seeded from the live VM `PROJECTS=` list until the user saves one.
+   `host.test.js` (list/write/select + traversal) + `projects.test.js` (scan/parse/
+   plan/reconcile/sanitize incl. injection+pollution) + ui-smoke modal checks.
 5. **Usage** — `src/usage.js`: run the ccusage-over-SSH collector (reuse the
    Get-AgentUsage remote script), parse tokens + `costUSD`, render the usage table
    incl. estimated cost; `exportUsage` saves JSON.
@@ -393,6 +413,7 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
 - `0e15f4f` Open project per-chip (`host.readProjectProfile` + `remote.projectOpenPath` + `runOpenProject`) — inline ▷ on each project chip opens its single-repo folder (else `/root/repos`) in a new window; `remoteFolderUri` percent-encodes path segments; `host.test.js` + `remote.test.js` extended
 - `fd44c435` Installer support (`lib/AgentVm.Common.ps1` `Ensure-VSCodeRemoteSsh`/`Add-HyperVAdminMembership`/`Get-RemoteOpenLink`; `install.ps1` ensure VS Code+Remote-SSH non-elevated; `Auto-Install.ps1` Hyper-V Admin add + end-of-install deep link; `extension.js` `maybeAutoOpenPanel` + `remote.shouldAutoOpenPanel`) — `test/host-lib.test.ps1` (pwsh) + `shouldAutoOpenPanel`
 - (this batch) Install integration (`lib` `Get-VSCodeExtensionDir`/`Install-ControlPanelExtension`/`Set-ConstructInstalledMarker`; `install.ps1` copies the extension into `%USERPROFILE%\.vscode\extensions\` + records `installedCommit` on fresh install, and `-RefreshOnly` refreshes the extension too) — `test/host-lib.test.ps1` extended (copy + `test/` exclusion)
+- (this batch) Projects (`src/projects.js` scan/parse/import-merge/select-reconcile/schema-sanitize; `host.js` `listProjectProfiles`/`writeProjectProfile`/`read`+`saveSelectedProjects`/`safeProfileName`; `extension.js` `runImportProjects`/`runSelectProfiles`/`runEditProject`/`runSaveProject` + `withProjects` folds local profiles+selection into state; panel edit modal in panel.html/js/css) — `projects.test.js` (77) + `host.test.js` extended (61) + ui-smoke modal checks (93)
 
 ## Build/verify tooling (on this dev VM)
 

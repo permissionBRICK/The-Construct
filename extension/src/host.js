@@ -123,6 +123,95 @@ function writeRawSettings(scriptsDir, obj) {
   fs.writeFileSync(settingsPath(scriptsDir), JSON.stringify(obj, null, 2) + "\n", "utf8");
 }
 
+// ── Project profiles: list / write / selection ──────────────────────────────--
+// The Projects panel edits the per-project profile JSONs the installer's selector
+// and the VM's generate-runtime-config.sh both read (<scriptsDir>/projects/*.json).
+// These helpers stay in this pure fs/path module (no vscode) so they unit-test the
+// same way readProjectProfile does, against a fake scripts dir.
+
+// A project name must be a single, safe filename: no path separator, no "..", and
+// nothing that would let a VM-supplied or webview-supplied name escape the projects
+// dir. Mirrors the guard in readProjectProfile. Pure; returns the trimmed name or "".
+function safeProfileName(name) {
+  const s = String(name == null ? "" : name).trim();
+  if (!s || /[\/\\]/.test(s) || s.includes("..")) return "";
+  return s;
+}
+
+/**
+ * List the project-profile base names present under <scriptsDir>/projects — every
+ * `*.json` except the schema file — sorted. Mirrors the installer's selector scan
+ * (Select-ProjectProfiles) so the panel shows the same set. The blank builtin
+ * "default" is INCLUDED here (unlike the console selector, which hides it) so the
+ * user can see and edit it; callers that treat it specially do so themselves.
+ * Best-effort: an unreadable dir yields []. Pure.
+ */
+function listProjectProfiles(scriptsDir) {
+  if (!scriptsDir) return [];
+  let entries;
+  try { entries = fs.readdirSync(projectsDir(scriptsDir), { withFileTypes: true }); }
+  catch (_) { return []; }
+  return entries
+    .filter((e) => e.isFile() && e.name.toLowerCase().endsWith(".json") && e.name !== "project.schema.json")
+    .map((e) => e.name.slice(0, -5)) // strip ".json"
+    .sort();
+}
+
+/**
+ * Write a project profile object to <scriptsDir>/projects/<name>.json, traversal-safe
+ * (the name is rejected if it isn't a bare filename) and BOM-less pretty JSON with a
+ * trailing newline — exactly like writeRawSettings, so the file interops with the
+ * installer + the VM's jq readers. Creates the projects dir if absent. The name is
+ * taken from the sanitized argument (NOT from obj.name) so the on-disk filename and
+ * the requested target always agree. Throws on a bad name or a write failure.
+ */
+function writeProjectProfile(scriptsDir, name, obj) {
+  if (!scriptsDir) throw new Error("No Construct scripts directory resolved");
+  const safe = safeProfileName(name);
+  if (!safe) throw new Error("Invalid project name");
+  const dir = projectsDir(scriptsDir);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, safe + ".json"), JSON.stringify(obj, null, 2) + "\n", "utf8");
+}
+
+/**
+ * The persisted project SELECTION: the base names the user has ticked, kept as a
+ * forward-compat `projects` array in .construct-settings.json (mirroring how
+ * mapFromForm writes `vmMemoryGB` etc. for the installer to adopt later — the
+ * installer's `-Projects` / PROJECTS= list can read it). Returns a de-duplicated
+ * array of clean string names, or [] when the key is absent/malformed. Pure.
+ */
+function readSelectedProjects(scriptsDir) {
+  const raw = readRawSettings(scriptsDir);
+  const arr = Array.isArray(raw.projects) ? raw.projects : [];
+  const out = [];
+  for (const v of arr) {
+    const s = safeProfileName(v);
+    if (s && !out.includes(s)) out.push(s);
+  }
+  return out;
+}
+
+/**
+ * Persist the project selection into .construct-settings.json under `projects`,
+ * merging over the existing file so unmanaged keys (git identity, installedCommit,
+ * vmMemoryGB, …) survive — same discipline as saveSettings. `names` is sanitized +
+ * de-duplicated; a non-array clears the key to []. Returns the merged object.
+ * Throws if there is no scripts dir.
+ */
+function saveSelectedProjects(scriptsDir, names) {
+  if (!scriptsDir) throw new Error("No Construct scripts directory resolved");
+  const list = Array.isArray(names) ? names : [];
+  const clean = [];
+  for (const v of list) {
+    const s = safeProfileName(v);
+    if (s && !clean.includes(s)) clean.push(s);
+  }
+  const merged = { ...readRawSettings(scriptsDir), projects: clean };
+  writeRawSettings(scriptsDir, merged);
+  return merged;
+}
+
 /**
  * Translate the on-disk settings into the webview form shape. Only keys that are
  * actually present (and well-typed) are emitted, so the panel's applySettings can
@@ -210,4 +299,6 @@ module.exports = {
   settingsPath, projectsDir,
   readRawSettings, writeRawSettings, mapToForm, mapFromForm,
   readSettings, saveSettings, readProjectProfile,
+  safeProfileName, listProjectProfiles, writeProjectProfile,
+  readSelectedProjects, saveSelectedProjects,
 };

@@ -77,7 +77,7 @@
           <div class="substatus" id="voiceSub" hidden>
             <div class="sub"><span class="dot"></span> Reverse tunnel <span class="muted" id="voiceTunnel">vm:8767 &rarr; host mic</span></div>
             <div class="sub"><span class="dot"></span> rec/arecord shim installed</div>
-            <div class="sub"><span class="dot"></span> chat mic button enabled <span class="muted">(remote-gate patched)</span></div>
+            <div class="sub" id="voiceGateRow"><span class="dot"></span> <span id="voiceGate">chat mic button</span> <span class="muted" id="voiceGateNote">(gate patched if a known build)</span></div>
           </div>
         </section>
       </div>
@@ -121,7 +121,7 @@
     <div class="settings-top">
       <div>
         <h2 class="seclabel">Settings</h2>
-        <p class="lead">These pre-fill the installer's prompts so Reprovision / Reinstall / Redownload run with your saved choices. The agent password and project selection are still entered in the elevated console, and a reinstall always stops there for a dirty-repo warning and an "Are you sure?" delete confirmation.</p>
+        <p class="lead">These pre-fill the installer's prompts so Reprovision / Reinstall / Redownload run with your saved choices. Project profiles are managed in the Projects panel; the agent password is still entered in the elevated console, and a reinstall always stops there for a dirty-repo warning and an "Are you sure?" delete confirmation.</p>
       </div>
       <button class="btn ghost" id="backBtn">&larr; back to console</button>
     </div>
@@ -136,7 +136,7 @@
     <section class="setgroup">
       <div class="gh"><h2 class="seclabel">Agents &amp; projects</h2><span class="applies">entered in the console for now</span></div>
       <div class="field"><label>Coding agents</label><div class="ctl"><span class="cost-note" style="margin:0">Chosen in the elevated console during reprovision / reinstall.</span></div></div>
-      <div class="field"><label>Project profiles</label><div class="ctl"><span class="cost-note" style="margin:0">Selected in the console for now — the Projects panel will manage these in an upcoming build.</span></div></div>
+      <div class="field"><label>Project profiles</label><div class="ctl"><span class="cost-note" style="margin:0">Managed in the Projects panel (import / select / edit); the selection is recorded for the next Reprovision / Reinstall.</span></div></div>
     </section>
 
     <section class="setgroup">
@@ -152,7 +152,7 @@
       <div class="field"><label>VS Code serve-web<span class="hint">browser IDE, token-gated</span></label><div class="ctl"><div class="switch sm" id="setServeWeb" role="switch" aria-checked="true" tabindex="0"><span class="knob"></span></div><span class="suffix">port 8000</span></div></div>
       <div class="field"><label>VS Code tunnel<span class="hint">vscode.dev, no inbound port</span></label><div class="ctl"><div class="switch sm" id="setTunnel" role="switch" aria-checked="false" tabindex="0"><span class="knob"></span></div></div></div>
       <div class="field"><label>SMB workspace share</label><div class="ctl"><div class="switch sm" id="setSmb" role="switch" aria-checked="true" tabindex="0"><span class="knob"></span></div><span class="suffix">drive Z:</span></div></div>
-      <div class="field"><label>Microphone passthrough<span class="hint">saved preference — used by mic passthrough (coming soon)</span></label><div class="ctl"><div class="switch sm" id="setMic" role="switch" aria-checked="false" tabindex="0"><span class="knob"></span></div></div></div>
+      <div class="field"><label>Microphone passthrough<span class="hint">saved preference — passthrough is toggled live from the console mic switch</span></label><div class="ctl"><div class="switch sm" id="setMic" role="switch" aria-checked="false" tabindex="0"><span class="knob"></span></div></div></div>
     </section>
 
     <div class="settings-actions" style="margin-bottom:18px"><button class="btn ghost" id="cancelBtn">cancel</button><button class="save-btn" id="saveBtn">Save settings</button></div>
@@ -172,6 +172,52 @@
   </div>
 
   <footer>THE CONSTRUCT &middot; disposable agent VM &nbsp;&middot;&nbsp; <a href="https://github.com/permissionBRICK/The-Construct#readme">readme</a> &middot; <a href="https://github.com/permissionBRICK/The-Construct/tree/main/docs">docs</a> &middot; <a href="https://github.com/permissionBRICK/The-Construct">github</a></footer>
+</div>
+
+<!-- PROJECT EDIT MODAL — populated + shown from an ext->webview editProject message -->
+<div class="modal-overlay" id="projModal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pmTitle">
+    <div class="modal-head">
+      <h2 class="seclabel" id="pmTitle">Edit project</h2>
+      <button class="modal-x" id="pmClose" type="button" title="Close" aria-label="Close">&times;</button>
+    </div>
+    <p class="lead" id="pmLead">Edit this project's repos, runtimes &amp; MCP servers. Saved to <code>projects/&lt;name&gt;.json</code> on the host; applied on the next Reprovision / Reinstall.</p>
+
+    <div class="modal-body">
+      <section class="pm-sec">
+        <h3 class="pm-h">Repositories</h3>
+        <p class="pm-note">Cloned into <code>/root/repos/&lt;directory&gt;</code> on provision. Leave the directory blank to derive it from the URL.</p>
+        <div id="pmRepos"></div>
+        <button class="btn ghost" id="pmAddRepo" type="button">+ add repo</button>
+      </section>
+
+      <section class="pm-sec">
+        <h3 class="pm-h">Runtimes (SDKs)</h3>
+        <p class="pm-note">One per line as <code>name = version</code> or <code>name = v1, v2</code> (e.g. <code>node = 22</code>, <code>python = 3.12, 3.13</code>).</p>
+        <textarea id="pmSdks" class="pm-ta" rows="3" spellcheck="false" placeholder="node = 22&#10;python = 3.12"></textarea>
+      </section>
+
+      <section class="pm-sec">
+        <h3 class="pm-h">MCP servers</h3>
+        <p class="pm-note">A JSON array of the profile's <code>mcp</code> entries — legacy strings (<code>"filesystem"</code>, <code>"browser"</code>, <code>"github"</code>) and/or stdio/http server objects (per the project schema). Invalid entries are dropped on save.</p>
+        <textarea id="pmMcp" class="pm-ta mono" rows="5" spellcheck="false" placeholder="[]"></textarea>
+        <div class="pm-err" id="pmMcpErr" hidden>Not valid JSON — fix it or clear it before saving.</div>
+      </section>
+
+      <section class="pm-sec">
+        <h3 class="pm-h">Setup</h3>
+        <p class="pm-note">Host packages — one apt package per line.</p>
+        <textarea id="pmHostPkgs" class="pm-ta" rows="2" spellcheck="false" placeholder="build-essential"></textarea>
+        <p class="pm-note" style="margin-top:10px">Provision commands — one bash command per line, run in order after clone (must be idempotent).</p>
+        <textarea id="pmProvision" class="pm-ta mono" rows="3" spellcheck="false" placeholder="npm ci"></textarea>
+      </section>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn ghost" id="pmCancel" type="button">cancel</button>
+      <button class="save-btn" id="pmSave" type="button">Save project</button>
+    </div>
+  </div>
 </div>
 <script nonce="{{nonce}}" src="{{scriptUri}}"></script>
 </body>

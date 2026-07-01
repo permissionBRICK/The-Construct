@@ -145,6 +145,79 @@ try {
     host.readProjectProfile(newDir, "..\\x") === null &&
     host.readProjectProfile(newDir, "sub/x") === null);
   ok("profile: empty name -> null", host.readProjectProfile(newDir, "") === null && host.readProjectProfile(newDir, null) === null);
+
+  // ── listProjectProfiles ────────────────────────────────────────────────────
+  // projDir already has: customer-portal.json, bom.json, broken.json, arr.json.
+  // Add the schema file (must be excluded) + a .sample (not *.json, excluded).
+  fs.writeFileSync(path.join(projDir, "project.schema.json"), "{}");
+  fs.writeFileSync(path.join(projDir, "example.json.sample"), "{}");
+  fs.writeFileSync(path.join(projDir, "default.json"), JSON.stringify({ name: "default", repos: [] }));
+  ok("list: base names, sorted, schema excluded, .sample excluded", (() => {
+    const l = host.listProjectProfiles(newDir);
+    return JSON.stringify(l) === JSON.stringify(["arr", "bom", "broken", "customer-portal", "default"]);
+  })());
+  ok("list: no scripts dir -> []", JSON.stringify(host.listProjectProfiles(null)) === "[]");
+  ok("list: missing projects dir -> []", (() => {
+    const empty = mk(root, "no-projects"); writeMarker(empty);
+    return JSON.stringify(host.listProjectProfiles(empty)) === "[]";
+  })());
+
+  // ── writeProjectProfile (traversal-safe, BOM-less pretty JSON) ──────────────
+  host.writeProjectProfile(newDir, "billing", { name: "billing", repos: [{ url: "https://h/b.git" }] });
+  ok("write: round-trips through readProjectProfile",
+    (() => { const p = host.readProjectProfile(newDir, "billing"); return p && p.name === "billing" && p.repos[0].url === "https://h/b.git"; })());
+  ok("write: on-disk file is pretty + BOM-less + trailing newline", (() => {
+    const raw = fs.readFileSync(path.join(projDir, "billing.json"), "utf8");
+    return raw[0] === "{" && raw.includes('\n  "name"') && raw.endsWith("}\n");
+  })());
+  ok("write: creates the projects dir if absent", (() => {
+    const fresh = mk(root, "fresh-write"); writeMarker(fresh);
+    host.writeProjectProfile(fresh, "p", { name: "p" });
+    return host.readProjectProfile(fresh, "p").name === "p";
+  })());
+  ok("write: uses the ARG name for the filename, not obj.name", (() => {
+    host.writeProjectProfile(newDir, "real-name", { name: "spoofed" });
+    return fs.existsSync(path.join(projDir, "real-name.json")) && !fs.existsSync(path.join(projDir, "spoofed.json"));
+  })());
+  const badWrite = (n) => { try { host.writeProjectProfile(newDir, n, {}); return false; } catch (_) { return true; } };
+  ok("write: rejects a traversing name", badWrite("../evil") && badWrite("..\\evil") && badWrite("sub/x") && badWrite(".."));
+  ok("write: rejects an empty name", badWrite("") && badWrite("   ") && badWrite(null));
+  ok("write: no scripts dir -> throws", (() => { try { host.writeProjectProfile(null, "x", {}); return false; } catch (_) { return true; } })());
+  ok("write: a traversing name never wrote a file outside projects/",
+    !fs.existsSync(path.join(newDir, "evil.json")) && !fs.existsSync(path.join(newDir, "..", "evil.json")));
+
+  // ── safeProfileName ────────────────────────────────────────────────────────
+  ok("safeName: trims a valid name", host.safeProfileName("  billing  ") === "billing");
+  ok("safeName: rejects separators / .. / empty",
+    host.safeProfileName("a/b") === "" && host.safeProfileName("a\\b") === "" &&
+    host.safeProfileName("..") === "" && host.safeProfileName("a..b") === "" &&
+    host.safeProfileName("") === "" && host.safeProfileName(null) === "");
+
+  // ── read/save SelectedProjects (forward-compat `projects` key) ─────────────-
+  // Start from a clean settings file so prior git keys don't confuse the merge check.
+  fs.writeFileSync(host.settingsPath(newDir), JSON.stringify({ installedCommit: "sha1", gitUserName: "Neo" }));
+  ok("select: absent `projects` key -> []", JSON.stringify(host.readSelectedProjects(newDir)) === "[]");
+  const selMerged = host.saveSelectedProjects(newDir, ["billing", "billing", "customer-portal", "a/b", ""]);
+  ok("select: save de-dupes + drops unsafe names",
+    JSON.stringify(selMerged.projects) === JSON.stringify(["billing", "customer-portal"]));
+  ok("select: save preserves unmanaged keys", selMerged.installedCommit === "sha1" && selMerged.gitUserName === "Neo");
+  ok("select: read reflects the saved selection",
+    JSON.stringify(host.readSelectedProjects(newDir)) === JSON.stringify(["billing", "customer-portal"]));
+  ok("select: read tolerates a malformed (non-array) value", (() => {
+    fs.writeFileSync(host.settingsPath(newDir), JSON.stringify({ projects: "nope" }));
+    return JSON.stringify(host.readSelectedProjects(newDir)) === "[]";
+  })());
+  ok("select: read drops unsafe/empty stored names (keeps safe ones)", (() => {
+    // "../evil" and "a/b" are traversal/separator names and dropped; "" is dropped;
+    // a bare number stringifies to a legal filename ("5") and is kept.
+    fs.writeFileSync(host.settingsPath(newDir), JSON.stringify({ projects: ["ok", "../evil", "a/b", 5, ""] }));
+    return JSON.stringify(host.readSelectedProjects(newDir)) === JSON.stringify(["ok", "5"]);
+  })());
+  ok("select: save non-array clears to []", (() => {
+    const m = host.saveSelectedProjects(newDir, "nope");
+    return JSON.stringify(m.projects) === "[]";
+  })());
+  ok("select: save no scripts dir -> throws", (() => { try { host.saveSelectedProjects(null, []); return false; } catch (_) { return true; } })());
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }
