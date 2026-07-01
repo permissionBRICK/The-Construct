@@ -51,8 +51,7 @@ projects) — then just hit connect.
 ## ✨ Features
 
 - 🤖 **Agents preinstalled, zero config** — Claude Code, Codex, and Opencode CLIs installed
-  and configured for **unattended bypass mode**: no permission prompts, running as root,
-  flagged as a sandbox (`IS_SANDBOX=1`).
+  and configured for **unattended bypass mode**: no permission prompts, running as root.
 - 🔒 **Sandboxed by design** — everything runs inside a throwaway Hyper-V VM. Agents get a real root shell; your host PC stays out of reach.
 - 🎤 **Microphone passthrough** — makes Voice-Input work seamlessly in the VSCode Claude Code extension, even over a Remote-SSH connection.
 - ♻️ **Disposable, but almost persistent** — reinstalls can save and auto-restore your agent config, you won't even notice you just formatted your entire VM:
