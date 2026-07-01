@@ -48,6 +48,11 @@ projects) — then just hit connect.
 - 🔒 **Sandboxed by design** — everything runs inside a throwaway Hyper-V VM. Agents get a real root shell; your host PC stays out of reach.
 - ♻️ **Disposable, but almost persistent** — reinstalls can save and auto-restore your agent config, you won't even notice you just formatted your entire VM:
   instruction files, memory, skills, subscription auth, git/GitHub credentials, MCP logins.
+- 🎛️ **One-screen control panel** — a VS Code extension (installed on your host by the
+  one-liner) that operates the VM from a single panel: live status, one-click **Connect /
+  Start & connect / Shutdown**, lifecycle (reprovision / reinstall / redownload / export),
+  update checks for Construct and the agents, **project profiles** (import / select / edit),
+  **token usage & cost**, and **microphone passthrough** so voice input works over Remote-SSH.
 - 🖥️ **Connect your way** — VS Code Remote-SSH, browser VS Code, vscode.dev tunnels, Codex
   App, Opencode serve, or plain SSH. All wired up automatically.
 - 🗂️ **Repos as a Windows drive** — provisioning stands up an SMB share of the repos folder
@@ -114,6 +119,7 @@ Everything else — env vars, MCP transports, SDK installs, checkout credentials
 | [Manual setup](docs/manual-setup.md) | Taking a blank Ubuntu VM to ready state by hand — no Windows scripts |
 | [Project profiles & configuration](docs/projects.md) | `config.env`, profile schema, MCP servers, provision commands, repo checkout |
 | [Remote access & services](docs/remote-access.md) | VS Code server / serve-web / tunnels, Codex remote, service lifecycle, agent runtime |
+| [Control panel](docs/control-panel.md) | The VS Code operator console: status, connect/power, lifecycle, updates, projects, usage, mic passthrough |
 | [Backup & restore](docs/backup-restore.md) | Saving agent config, auth, and projects across VM reinstalls |
 
 ## 🔐 Security model
