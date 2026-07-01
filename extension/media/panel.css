@@ -358,3 +358,9 @@ body.launcher { font-size: 12px; }
 .lshutdown { font-family: var(--mono); font-size: 12px; letter-spacing: 0.5px; color: #ff8a8a; background: rgba(255,93,93,0.06); border: 1px solid rgba(255,93,93,0.5); border-radius: 6px; padding: 8px; cursor: pointer; }
 .lshutdown:hover { background: rgba(255,93,93,0.12); box-shadow: 0 0 14px rgba(255,93,93,0.22); }
 .lshutdown:focus-visible { outline: 2px solid var(--crit); outline-offset: 2px; }
+.lupdate { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.3px; color: var(--warn); background: rgba(255,194,77,0.08); border: 1px solid rgba(255,194,77,0.5); border-radius: 6px; padding: 8px 10px; cursor: pointer; text-align: left; transition: background .15s, box-shadow .15s; }
+.lupdate[hidden] { display: none; }
+.lupdate:hover { background: rgba(255,194,77,0.16); box-shadow: 0 0 14px rgba(255,194,77,0.28); }
+.lupdate:focus-visible { outline: 2px solid var(--warn); outline-offset: 2px; }
+.lupdate small { color: var(--dim); font-size: 10px; margin-left: auto; }
+.lupd-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 8px var(--warn); flex: none; }

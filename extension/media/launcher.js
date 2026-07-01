@@ -31,6 +31,16 @@
     const sd = $("lShutdown");
     if (sd) sd.hidden = !online;
 
+    // Construct self-update nudge — same banner intent as the full panel, compact here.
+    // `s.update` is folded in only when online, so gate on it; clicking runs the same
+    // updateConstruct flow (download + reinstall + auto-reload) via the [data-cmd] handler.
+    const upd = $("lUpdate");
+    if (upd) {
+      const showUpd = !!(online && s.update && s.update.available);
+      upd.hidden = !showUpd;
+      if (showUpd) { const bh = $("lUpdateBehind"); if (bh) bh.textContent = s.update.behind || ""; }
+    }
+
     const agentsEl = $("lAgents");
     if (!online) { if (agentsEl) agentsEl.textContent = "unavailable"; $("lMeta").textContent = ""; return; }
 

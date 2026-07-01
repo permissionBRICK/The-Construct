@@ -38,7 +38,7 @@ extension/
   package.json        manifest: activity-bar container, webview view, commands
   extension.js        activation; launcher + panel wiring; serializer; message router; probe refresh
   media/
-    launcher.html     sidebar launcher doc (status + 3 quick actions + Open button)
+    launcher.html     sidebar launcher doc (status + update banner + 3 quick actions + Open button)
     launcher.js       launcher controller: postMessage, render(state)
     panel.html        full-panel doc (CSP + {{nonce}}/{{styleUri}}/{{scriptUri}}/{{cspSource}})
     panel.css         Matrix theme shared by launcher + panel (tokens from assets/banner.svg)
@@ -92,9 +92,10 @@ extension/
     construct-audio-enable.sh    install shim + apply remoteName-guard patch; prints CONSTRUCT_GATE_PATCHED=0/1
     construct-audio-disable.sh   remove shim + revert patch (restore the .bak)
   test/
-    ui-smoke.js       Playwright headless-Chromium webview test (107 checks: panel + launcher +
+    ui-smoke.js       Playwright headless-Chromium webview test (112 checks: panel + launcher +
                       narrow overflow + settings round-trip + honesty + power buttons + add-project +
-                      per-chip open + project edit modal + usage table + audio substatus incl. gate-patch state)
+                      per-chip open + project edit modal + usage table + audio substatus incl. gate-patch state +
+                      launcher update banner)
     probe.test.js     plain-node ssh-arg + probe-parse units (21 checks)
     host.test.js      plain-node scripts-dir resolution + settings merge + readProjectProfile +
                       project-profile list/write/select + traversal (61 checks; fake %LOCALAPPDATA% tree)
