@@ -2,8 +2,8 @@
 // Update checks for the control panel.
 //
 // This batch: Construct self-update. Compare the installed Construct commit
-// (recorded in .construct-settings.json by `install.ps1 -RefreshOnly` / the
-// install step) against the latest commit on the tracked ref via the GitHub API,
+// (recorded in .construct-settings.json by Provision-AgentVM.ps1 at install time /
+// by Update-Construct.ps1 on refresh) against the latest commit on the tracked ref via the GitHub API,
 // and fold {update:{available,behind}} (+ a constructRev label) into the state.
 // Agent update detection + the update actions land in the next batch.
 //
@@ -226,7 +226,9 @@ async function augment(state, raw, opts = {}) {
 
 /** install.ps1 args for the control-panel "Update Construct" refresh. */
 function constructRefreshArgs(markers) {
-  return ["-RefreshOnly", "-Repo", markers.repo, "-Ref", markers.ref];
+  // Args for Update-Construct.ps1 (the self-update script the panel launches): it IS
+  // the refresh, so there's no -RefreshOnly flag — just the source repo/ref to pull.
+  return ["-Repo", markers.repo, "-Ref", markers.ref];
 }
 
 module.exports = {

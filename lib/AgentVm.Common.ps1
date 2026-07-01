@@ -1082,50 +1082,173 @@ function Get-VSCodeExtensionDir {
     return (Join-Path (Join-Path (Join-Path $base ".vscode") "extensions") $Name)
 }
 
+function Build-ControlPanelVsix {
+    <#
+        Package the control-panel extension at <SourceRoot>\extension into a .vsix at
+        <OutFile>, WITHOUT vsce / Node: we generate the OPC package by hand -- the
+        extension/ payload plus `extension.vsixmanifest` and `[Content_Types].xml` at
+        the root -- and zip it with .NET. This exists because modern VS Code only loads
+        extensions installed through `code --install-extension`; a bare folder copied
+        into ~/.vscode/extensions is ignored (never registered in extensions.json).
+        Dev-only files (test/, node_modules, ARCHITECTURE.md, .vscode, .gitignore) are
+        excluded -- the same set .vscodeignore lists. Best-effort: returns the OutFile
+        path on success, or $null (never throws). Pure w.r.t. VS Code (no `code` needed).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$SourceRoot,
+        [Parameter(Mandatory)][string]$OutFile
+    )
+    $staging = $null
+    try {
+        $src = Join-Path $SourceRoot "extension"
+        $pkgPath = Join-Path $src "package.json"
+        if (-not (Test-Path -LiteralPath $pkgPath)) {
+            Write-Warning "Control-panel extension not found at $src; can't package it."
+            return $null
+        }
+        $pkg = Get-Content -LiteralPath $pkgPath -Raw | ConvertFrom-Json
+
+        # Stage: extension/<payload> + the two OPC files at the package root.
+        $staging = Join-Path ([System.IO.Path]::GetTempPath()) (".construct-vsix-" + [guid]::NewGuid().ToString("N"))
+        $payload = Join-Path $staging "extension"
+        New-Item -ItemType Directory -Path $payload -Force | Out-Null
+        Get-ChildItem -LiteralPath $src -Force |
+            Where-Object { $_.Name -notin @('test', 'node_modules', '.vscode', '.gitignore', 'ARCHITECTURE.md') } |
+            ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $payload -Recurse -Force }
+
+        # [Content_Types].xml: one <Default> per distinct file extension actually in the
+        # payload (a missing type makes some OPC readers reject the package), plus the
+        # manifest's own .vsixmanifest.
+        $ctMap = @{
+            '.js' = 'application/javascript'; '.json' = 'application/json'; '.css' = 'text/css';
+            '.html' = 'text/html'; '.svg' = 'image/svg+xml'; '.sh' = 'application/x-sh';
+            '.md' = 'text/markdown'; '.vsixmanifest' = 'text/xml'
+        }
+        $exts = @(Get-ChildItem -LiteralPath $payload -Recurse -File |
+                  ForEach-Object { $_.Extension.ToLowerInvariant() } |
+                  Where-Object { $_ } | Sort-Object -Unique)
+        if ($exts -notcontains '.vsixmanifest') { $exts += '.vsixmanifest' }
+        $defaults = ($exts | ForEach-Object {
+            $ct = if ($ctMap.ContainsKey($_)) { $ctMap[$_] } else { 'application/octet-stream' }
+            '<Default Extension="{0}" ContentType="{1}"/>' -f $_, $ct
+        }) -join ''
+        $contentTypes = '<?xml version="1.0" encoding="utf-8"?>' +
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' + $defaults + '</Types>'
+        Set-Content -LiteralPath (Join-Path $staging '[Content_Types].xml') -Value $contentTypes -Encoding UTF8 -NoNewline
+
+        # extension.vsixmanifest, templated from package.json. Compute the raw values
+        # first (an `if` is a statement, so it can't sit in an argument position), then
+        # XML-escape each so a stray &, <, >, or quote in package.json can't break the XML.
+        $rawId        = if ($pkg.name) { $pkg.name } else { 'construct-control-panel' }
+        $rawVer       = if ($pkg.version) { $pkg.version } else { '0.0.0' }
+        $rawPublisher = if ($pkg.publisher) { $pkg.publisher } else { 'unknown' }
+        $rawDisplay   = if ($pkg.displayName) { $pkg.displayName } else { $rawId }
+        $rawDesc      = if ($pkg.description) { $pkg.description } else { '' }
+        $rawEngine    = if ($pkg.engines -and $pkg.engines.vscode) { $pkg.engines.vscode } else { '*' }
+        $rawKind      = if ($pkg.extensionKind) { @($pkg.extensionKind)[0] } else { 'ui' }
+        $id        = [System.Security.SecurityElement]::Escape([string]$rawId)
+        $ver       = [System.Security.SecurityElement]::Escape([string]$rawVer)
+        $publisher = [System.Security.SecurityElement]::Escape([string]$rawPublisher)
+        $display   = [System.Security.SecurityElement]::Escape([string]$rawDisplay)
+        $desc      = [System.Security.SecurityElement]::Escape([string]$rawDesc)
+        $engine    = [System.Security.SecurityElement]::Escape([string]$rawEngine)
+        $kind      = [System.Security.SecurityElement]::Escape([string]$rawKind)
+        $manifest = @"
+<?xml version="1.0" encoding="utf-8"?>
+<PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
+  <Metadata>
+    <Identity Language="en-US" Id="$id" Version="$ver" Publisher="$publisher" />
+    <DisplayName>$display</DisplayName>
+    <Description xml:space="preserve">$desc</Description>
+    <Tags></Tags>
+    <Categories>Other</Categories>
+    <GalleryFlags>Public</GalleryFlags>
+    <Properties>
+      <Property Id="Microsoft.VisualStudio.Code.Engine" Value="$engine" />
+      <Property Id="Microsoft.VisualStudio.Code.ExtensionKind" Value="$kind" />
+      <Property Id="Microsoft.VisualStudio.Code.ExecutesCode" Value="true" />
+    </Properties>
+  </Metadata>
+  <Installation>
+    <InstallationTarget Id="Microsoft.VisualStudio.Code"/>
+  </Installation>
+  <Dependencies/>
+  <Assets>
+    <Asset Type="Microsoft.VisualStudio.Code.Manifest" Path="extension/package.json" Addressable="true" />
+  </Assets>
+</PackageManifest>
+"@
+        Set-Content -LiteralPath (Join-Path $staging 'extension.vsixmanifest') -Value $manifest -Encoding UTF8
+
+        # Zip with EXPLICIT forward-slash entry names -- .NET Framework's
+        # ZipFile.CreateFromDirectory has historically used backslashes on Windows,
+        # which breaks OPC/VSIX readers; building entries by hand avoids that.
+        if (Test-Path -LiteralPath $OutFile) { Remove-Item -LiteralPath $OutFile -Force }
+        Add-Type -AssemblyName System.IO.Compression | Out-Null
+        Add-Type -AssemblyName System.IO.Compression.FileSystem | Out-Null
+        $fs = [System.IO.File]::Open($OutFile, [System.IO.FileMode]::Create)
+        try {
+            $zip = New-Object System.IO.Compression.ZipArchive($fs, [System.IO.Compression.ZipArchiveMode]::Create)
+            try {
+                $baseLen = ((Resolve-Path -LiteralPath $staging).Path.TrimEnd('\', '/')).Length
+                foreach ($f in Get-ChildItem -LiteralPath $staging -Recurse -File) {
+                    $rel = $f.FullName.Substring($baseLen).TrimStart('\', '/').Replace('\', '/')
+                    [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $f.FullName, $rel) | Out-Null
+                }
+            } finally { $zip.Dispose() }
+        } finally { $fs.Dispose() }
+        return $OutFile
+    } catch {
+        Write-Warning "Could not package the control-panel extension: $($_.Exception.Message)"
+        return $null
+    } finally {
+        if ($staging -and (Test-Path -LiteralPath $staging)) {
+            Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
 function Install-ControlPanelExtension {
     <#
-        Copy the control-panel extension from <SourceRoot>\extension into the host's
-        VS Code extensions folder so it loads as a UI extension (and the deep link's
-        auto-open works). Idempotent: a re-run fully replaces the install. The dev-only
-        test/ folder (Playwright + node_modules) and any node_modules are excluded --
-        only the runtime files (package.json, extension.js, src/, media/) are needed.
-        Best-effort: never throws. Returns $true on success.
-
-        We build into a FRESH staging dir and then swap it into place rather than
-        copying over the existing install. Two reasons: (1) Windows PowerShell 5.1's
-        `Copy-Item -Recurse` copies a directory INTO a parent that already has a
-        same-named child by NESTING it (dest\src\src\...) instead of merging, so a
-        copy-over-existing would leave src/ + media/ stale on every update -- copying
-        into an empty dir avoids that; (2) staging-then-swap keeps the existing install
-        intact if the copy fails partway.
+        Install the control-panel extension into VS Code the SUPPORTED way: package it
+        to a .vsix (Build-ControlPanelVsix -- no vsce/Node) and run
+        `code --install-extension --force`. This replaced the old folder-copy, which
+        modern VS Code ignores (a bare folder in ~/.vscode/extensions is never
+        registered in extensions.json, so it silently doesn't load). Idempotent:
+        --force reinstalls the same version, so "Update Construct" refreshes. Also
+        removes any stale folder-copy left by the old approach. Best-effort: never
+        throws; returns $true only on a confirmed install.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$SourceRoot)
 
-    $src = Join-Path $SourceRoot "extension"
-    if (-not (Test-Path -LiteralPath (Join-Path $src "package.json"))) {
-        Write-Warning "Control-panel extension not found at $src; skipping its install."
+    $code = Find-VSCodeCli
+    if (-not $code) {
+        Write-Warning "VS Code CLI not found, so the control panel can't be installed. Install VS Code and re-run (or run: code --install-extension <the .vsix>)."
         return $false
     }
-    $dest    = Get-VSCodeExtensionDir
-    $staging = Join-Path (Split-Path -Parent $dest) (".construct-cp-staging-" + [guid]::NewGuid().ToString("N"))
+    $vsix = Join-Path ([System.IO.Path]::GetTempPath()) ("construct-control-panel-" + [guid]::NewGuid().ToString("N") + ".vsix")
+    if (-not (Build-ControlPanelVsix -SourceRoot $SourceRoot -OutFile $vsix)) { return $false }
     try {
-        New-Item -ItemType Directory -Path $staging -Force | Out-Null
-        # Into the EMPTY staging dir: copying a dir where no same-named child exists
-        # creates it correctly on both Windows PowerShell 5.1 and PowerShell 7+.
-        Get-ChildItem -LiteralPath $src -Force |
-            Where-Object { $_.Name -ne 'test' -and $_.Name -ne 'node_modules' } |
-            ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $staging -Recurse -Force }
-        # Swap into place only after staging is fully built.
-        if (Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest -Recurse -Force }
-        Move-Item -LiteralPath $staging -Destination $dest -Force
-        Write-Host "==> Installed the Construct control panel into VS Code." -ForegroundColor Cyan
-        Write-Host "    $dest" -ForegroundColor DarkGray
+        # Drop the stale unregistered folder-copy (old install approach) so it can't sit
+        # dead alongside the properly-installed extension.
+        $stale = Get-VSCodeExtensionDir
+        if (Test-Path -LiteralPath $stale) { Remove-Item -LiteralPath $stale -Recurse -Force -ErrorAction SilentlyContinue }
+
+        # `code` is a native command: a non-zero exit does NOT throw, so check
+        # $LASTEXITCODE rather than trusting the pipeline for success.
+        & $code --install-extension $vsix --force 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "VS Code rejected the control-panel install (code --install-extension exit $LASTEXITCODE)."
+            return $false
+        }
+        Write-Host "==> Installed the Construct control panel into VS Code (reload/restart VS Code to see it)." -ForegroundColor Cyan
         return $true
     } catch {
-        Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
         Write-Warning "Could not install the control-panel extension: $($_.Exception.Message)"
         return $false
+    } finally {
+        Remove-Item -LiteralPath $vsix -Force -ErrorAction SilentlyContinue
     }
 }
 

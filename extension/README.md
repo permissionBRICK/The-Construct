@@ -24,8 +24,10 @@ restored across window reloads.
 
 ## Install
 
-No build step — it is plain JavaScript. Provisioning copies this folder into
-`%USERPROFILE%\.vscode\extensions\` on the host; VS Code loads it on next launch.
+No build step — it is plain JavaScript. The installer packages this folder into a
+`.vsix` (`Build-ControlPanelVsix`, no vsce/Node) and installs it with
+`code --install-extension`; VS Code loads it on next launch. (A bare folder copied into
+`.vscode\extensions` isn't loaded by current VS Code — it must be a registered install.)
 To develop locally, open this folder in VS Code and press F5.
 
 ## Layout

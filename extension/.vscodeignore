@@ -1,3 +1,6 @@
 .vscode/**
 **/*.map
 .gitignore
+test/**
+**/node_modules/**
+ARCHITECTURE.md

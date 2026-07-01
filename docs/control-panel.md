@@ -5,10 +5,10 @@ turns the agent VM into a one-screen operator console. It runs on your **local m
 (a UI extension), so it can reach both sides at once: the Windows **host** (the PowerShell
 lifecycle scripts and your microphone) and the **VM** (status, versions, usage over SSH).
 
-The one-liner installer copies it into `%USERPROFILE%\.vscode\extensions\` and installs
-VS Code + the Remote-SSH extension for you, so it's there on next launch. "Update Construct"
-refreshes the panel along with the scripts. (No build step — it's plain JavaScript; to hack
-on it, open `extension/` and press F5.)
+The installer packages it into a `.vsix` and installs it with `code --install-extension`
+(and sets up VS Code + the Remote-SSH extension for you), so it's registered and loads on
+the next VS Code start. "Update Construct" re-downloads and reinstalls the panel. (No build
+step — it's plain JavaScript; to hack on it, open `extension/` and press F5.)
 
 ## Two surfaces
 
