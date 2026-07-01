@@ -19,8 +19,10 @@
     // Power controls (set before the offline early-return below). "Open on VM"
     // shows when reachable + not already connected here; "Start & connect" replaces
     // it when the VM is installed but stopped; "Shutdown" shows whenever reachable.
+    // "Open on VM" is hidden for now: the "only when this window isn't already
+    // connected" gate (s.connected) isn't reliable, so keep it out of the UI.
     const conn = $("lConnect");
-    if (conn) conn.hidden = !(online && s.connected === false);
+    if (conn) conn.hidden = true;
     const start = $("lStart");
     if (start) start.hidden = !(!online && s.vmState === "off");
     const sd = $("lShutdown");
