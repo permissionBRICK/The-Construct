@@ -46,6 +46,7 @@ projects) — then just hit connect.
   and configured for **unattended bypass mode**: no permission prompts, running as root,
   flagged as a sandbox (`IS_SANDBOX=1`).
 - 🔒 **Sandboxed by design** — everything runs inside a throwaway Hyper-V VM. Agents get a real root shell; your host PC stays out of reach.
+- 🎤 **Microphone passthrough** — makes Voice-Input work seamlessly in the VSCode Claude Code extension even over a RemoteSSH connection.
 - ♻️ **Disposable, but almost persistent** — reinstalls can save and auto-restore your agent config, you won't even notice you just formatted your entire VM:
   instruction files, memory, skills, subscription auth, git/GitHub credentials, MCP logins.
 - 🎛️ **One-screen control panel** — a VS Code extension (installed on your host by the
