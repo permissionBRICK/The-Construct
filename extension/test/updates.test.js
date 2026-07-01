@@ -18,7 +18,7 @@ function ok(name, cond, detail) {
   const m = updates.readMarkers({ constructRepo: " me/fork ", constructRef: " dev ", installedCommit: " abc123 " });
   ok("markers: honors + trims overrides", m.repo === "me/fork" && m.ref === "dev" && m.installedCommit === "abc123");
   ok("markers: null raw -> defaults", updates.readMarkers(null).repo === updates.DEFAULT_REPO);
-  // A cleared marker (installedCommit:"" — what install.ps1 -RefreshOnly writes when
+  // A cleared marker (installedCommit:"" — what Set-ConstructInstalledMarker writes when
   // the SHA lookup fails) must read as "no marker" while repo/ref are still honored,
   // so a refreshed install never compares against a stale commit.
   const cleared = updates.readMarkers({ installedCommit: "", constructRepo: "me/fork", constructRef: "dev" });
@@ -151,7 +151,7 @@ function ok(name, cond, detail) {
 
   // ── constructRefreshArgs ────────────────────────────────────────────────────
   const args = updates.constructRefreshArgs({ repo: "me/fork", ref: "dev", installedCommit: "x" });
-  ok("refreshArgs: -RefreshOnly -Repo -Ref", args.join(" ") === "-RefreshOnly -Repo me/fork -Ref dev");
+  ok("refreshArgs: -Repo -Ref (no -RefreshOnly; Update-Construct.ps1 is the refresh)", args.join(" ") === "-Repo me/fork -Ref dev");
 
   // ── semver compare ──────────────────────────────────────────────────────────
   ok("isNewer: patch bump", updates.isNewer("2.1.197", "2.1.196") === true);

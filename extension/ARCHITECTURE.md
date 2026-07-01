@@ -19,8 +19,9 @@ passthrough** so voice input works over Remote-SSH.
   - **host** — PowerShell lifecycle scripts in `%LOCALAPPDATA%\The-Construct\…`,
     and the local microphone;
   - **VM** — status/versions/usage gathered over `ssh` (the `agent-vm` key/alias).
-- **No build step.** Plain JS. The installer copies this folder into
-  `%USERPROFILE%\.vscode\extensions\construct-control-panel\`; VS Code loads it.
+- **No build step.** Plain JS. The installer packages this folder into a `.vsix`
+  (`Build-ControlPanelVsix`, no vsce/Node) and installs it with `code --install-extension`
+  (a bare folder copy into `.vscode\extensions` isn't loaded by current VS Code).
 - **Two surfaces.** The activity-bar webview *view* (sidebar) renders a compact
   **launcher** (`launcher.html`/`launcher.js`) — status + three quick lifecycle
   actions + an "Open Control Panel" button. The full control panel
@@ -61,7 +62,7 @@ extension/
                       updateAvailable}; buildAgentUpdateScript (SSH force-update); both folded
                       into state by augment(). fetchJson follows 3xx redirects (a moved GitHub
                       repo resolves via its 301) + picks the Accept header per host (npm needs
-                      application/json, not vnd.github+json). constructRefreshArgs for install.ps1 -RefreshOnly.
+                      application/json, not vnd.github+json). constructRefreshArgs for Update-Construct.ps1.
     projects.js       import-from-VM + select + per-project edit — PURE transforms only
                       (buildScanScript/parseScan, planImport merge, reconcileSelection,
                       sanitizeProfile, toChips). Profile file I/O lives in host.js; the SSH
@@ -141,7 +142,11 @@ VM-derived fields when `online===false` or `probeError`):
 
 ## Design decisions
 
-- **Packaging = folder copy** (no `vsce`/.vsix, no Node on the host).
+- **Packaging = a PowerShell-generated `.vsix` installed via `code --install-extension`**
+  (no `vsce`/Node on the host). Modern VS Code ignores a bare folder dropped into
+  `~/.vscode/extensions` (it's never registered in `extensions.json`), so
+  `Build-ControlPanelVsix` hand-builds the OPC package and `Install-ControlPanelExtension`
+  installs it with `--force`.
 - **Remote-SSH open** (`src/remote.js`). The Connect button opens the VM workspace
   (`/root/repos`) in VS Code over Remote-SSH via `vscode.openFolder` + a
   `vscode-remote://ssh-remote+agent-vm/<path>` URI (the `agent-vm` SSH Host alias the
@@ -188,14 +193,15 @@ VM-derived fields when `online===false` or `probeError`):
   console (so the UI doesn't over-promise an unattended run).
 - **Construct update check = a recorded commit marker + GitHub compare.** The
   installed commit lives in `.construct-settings.json` as `installedCommit` (with
-  `constructRepo`/`constructRef`), written by `install.ps1 -RefreshOnly` (and, at
-  install time, by the Install-integration batch). `updates.augment` compares
+  `constructRepo`/`constructRef`), written by `Provision-AgentVM.ps1` at install time
+  and by `Update-Construct.ps1` on refresh. `updates.augment` compares
   `installedCommit...ref` via the GitHub API and folds `{update:{available,behind}}`
   + a `constructRev` label into the state. It's BEST-EFFORT and CACHED (10 min for
   a real result; 60 s for a failure, so a transient blip doesn't hide the banner for
   10 min): no marker, offline, or rate-limited → no `update` key → banner hidden.
-  `updateConstruct` launches `install.ps1 -RefreshOnly` on the host (non-elevated,
-  download-only), which re-records the marker so the banner clears. Agent updates
+  `updateConstruct` launches `Update-Construct.ps1` on the host (non-elevated,
+  download + reinstall the panel, no VM rebuild), which re-records the marker so the
+  banner clears. Agent updates
   work the same way: per-agent latest (npm/GitHub releases) vs the probed version →
   `{latest, updateAvailable}` folded into `state.agents`; `updateAgents` force-updates
   over SSH (`claude update` + re-run installers) with a progress notification.
@@ -247,12 +253,14 @@ VM-derived fields when `online===false` or `probeError`):
     interactive menu (added for the panel); with reinstall/redownload,
     **`-BackupMode save|existing|wipe`** pre-answers the save/restore prompts. The
     dirty-repo scan and the `Confirm-Reinstall` "type yes" delete still run.
-  - `install.ps1` — downloads the repo zip to
+  - `install.ps1` — THIN web bootstrapper: downloads the repo zip to
     `%LOCALAPPDATA%\The-Construct\<owner-repo-ref>\<repo>-<ref>\` and runs Auto-Install.
-    Default repo `permissionBRICK/The-Construct`, ref `main`. **`-RefreshOnly`** (added
-    for the panel's Update Construct) re-downloads + extracts in place, records the
-    update marker (`installedCommit` from the GitHub commits API + `constructRepo`/
-    `constructRef`) via the repo's own `Save-ConstructSettings`, and skips the menu.
+    Default repo `permissionBRICK/The-Construct`, ref `main` (forwards `-Repo`/`-Ref`
+    only when explicit). No host setup of its own.
+  - `Update-Construct.ps1` — the panel's "Update Construct" self-update: re-download the
+    repo in place, record the update marker (`installedCommit` from the GitHub commits
+    API + `constructRepo`/`constructRef` via `Set-ConstructInstalledMarker`), and
+    reinstall the control-panel extension. Does NOT rebuild the VM.
   - `Get-AgentUsage.ps1` — ccusage over SSH → combined JSON; SSH connection logic
     (key `~/.ssh/agent_vm_ed25519` else `agent-vm` alias) mirrored in `src/ssh.js`.
   - `lib/AgentVm.Common.ps1` — `Get-ConstructSettingsPath` (`.construct-settings.json`
@@ -294,8 +302,8 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
    - 3a ✓ **DONE — Construct self-update** — `src/updates.js`: GitHub
      compare(`installedCommit...ref`) vs the marker in settings → header banner +
      `behind`, folded into state (best-effort, cached). `updateConstruct` launches
-     `install.ps1 -RefreshOnly` (download+extract, no menu) which re-records the
-     marker. `updates.test.js` covers it.
+     `Update-Construct.ps1` (download + reinstall the panel, no VM rebuild) which
+     re-records the marker. `updates.test.js` covers it.
    - 3b ✓ **DONE — Agent updates** — `updates.js`: per-agent latest from npm
      (`@anthropic-ai/claude-code`) / GitHub releases (`openai/codex`, `sst/opencode`),
      compared (major.minor.patch) to the probed version → `{latest, updateAvailable}`
@@ -416,33 +424,39 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
    `CONSTRUCT_GATE_PATCHED=0/1` so the host reports the truth; `construct-audio-disable.sh`
    removes the shim + restores the backup. Confirmed on THIS VM the real gate is
    `if(le.env.remoteName)return!1` in claude-code 2.1.196/2.1.197 (minified prefix `le.env.`).
-8. ✓ **DONE — Install integration** (`install.ps1` + `lib/AgentVm.Common.ps1`).
-   `install.ps1` (non-elevated, before Auto-Install self-elevates; on both the fresh
-   path and `-RefreshOnly`) records the update marker via `Set-ConstructInstalledMarker`
-   (fetch SHA best-effort → `installedCommit`/`constructRepo`/`constructRef`, so the
-   panel's update banner has a base after a fresh install) and copies the extension via
-   `Install-ControlPanelExtension` into `Get-VSCodeExtensionDir`
-   (`%USERPROFILE%\.vscode\extensions\construct-control-panel`), excluding the dev-only
-   `test/` (+ any `node_modules`) so Playwright isn't dragged in. "Update Construct"
-   (`-RefreshOnly`) now also refreshes the installed extension. The copy builds into a
-   FRESH staging dir then swaps into place (remove old → move): copying into an empty dir
-   avoids Windows PowerShell 5.1's `Copy-Item -Recurse` nesting quirk (a dir copied into a
-   parent that already has a same-named child lands at `src\src\…` instead of merging,
-   which would leave `src/`+`media/` stale on every update), and staging-swap keeps the
-   old install intact if the copy fails. `test/host-lib.test.ps1` covers the copy +
-   `test/` exclusion + a re-run refreshing a NESTED `src/` file with no double-nesting +
-   no leftover staging + missing-source. **Placement (revised):** `install.ps1` is now
-   a THIN downloader (download repo → launch `Auto-Install.ps1`, forwarding `-Repo`/`-Ref`
-   only when explicit) so a stale local copy can't drift. The host setup that MUST run
-   non-elevated (per-user `%USERPROFILE%` + winget) — `Ensure-VSCodeRemoteSsh` +
-   `Install-ControlPanelExtension` — moved to `Auto-Install.ps1`'s pre-elevation step, so
-   running `Auto-Install.ps1` directly (Option A / a desktop shortcut) installs the panel
-   too. The installed-commit marker moved to `Provision-AgentVM.ps1`, recorded at the end
-   of a successful provision (it writes the scripts dir, not `%USERPROFILE%`, so the
-   elevated context is fine; `-Repo`/`-Ref` thread install.ps1→Auto-Install→Create-AgentVM
-   →Provision, defaulting to canonical and preserving existing settings on a param-less
-   reprovision). `install.ps1 -RefreshOnly` (the panel's "Update Construct") keeps its own
-   marker + extension refresh, since it never launches Auto-Install.
+8. ✓ **DONE — Install integration** (`install.ps1` / `Auto-Install.ps1` / `Provision` +
+   `lib/AgentVm.Common.ps1`). Two things get set up: the control-panel extension is
+   INSTALLED into VS Code, and the update marker is recorded.
+   - **Install method = a real `.vsix`, not a folder copy.** Modern VS Code (verified on
+     1.126) does NOT load a bare folder dropped into `%USERPROFILE%\.vscode\extensions`
+     — it only loads extensions registered via `code --install-extension` (tracked in
+     `extensions.json`). So `Build-ControlPanelVsix` packages the extension by hand
+     (no `vsce`/Node): it stages the `extension/` payload (excluding `test/`,
+     `node_modules`, `ARCHITECTURE.md`, dotfiles) plus a generated `extension.vsixmanifest`
+     (templated from `package.json`, values XML-escaped) and `[Content_Types].xml` (a
+     `<Default>` per file extension present), then zips them with .NET using EXPLICIT
+     forward-slash entry names (the .NET-Framework backslash-entry pitfall breaks OPC
+     readers). `Install-ControlPanelExtension` then runs `code --install-extension
+     <vsix> --force` (checks `$LASTEXITCODE`, not the pipeline) and removes any stale
+     folder-copy from the old approach. `test/host-lib.test.ps1` asserts the vsix
+     structure (both OPC parts, forward-slash entries, `test/`/`node_modules` excluded,
+     Identity/engine/kind from `package.json`). NOTE: `code --install-extension` itself
+     can't run in the Linux CI box, so only the packaging is unit-tested.
+   - **Placement.** `install.ps1` is a THIN downloader (download repo → launch
+     `Auto-Install.ps1`; forwards the `-Repo`/`-Ref` PAIR only when explicit) so a stale
+     local copy can't drift. The host setup that MUST run non-elevated (per-user
+     `%USERPROFILE%` + winget) — `Ensure-VSCodeRemoteSsh` + `Install-ControlPanelExtension`
+     — runs in `Auto-Install.ps1`'s pre-elevation step, so running `Auto-Install.ps1`
+     directly (Option A / a desktop shortcut) installs the panel too. The installed-commit
+     marker (`Set-ConstructInstalledMarker`) moved to `Provision-AgentVM.ps1`, recorded at
+     the end of a successful provision (writes the scripts dir, not `%USERPROFILE%`, so
+     elevated is fine). `-Repo`/`-Ref` thread install.ps1→Auto-Install→Create-AgentVM→
+     Provision as a PAIR (`Resolve-MarkerSource`): explicit wins, else preserve existing
+     settings on a param-less reprovision, else canonical defaults.
+   - `Update-Construct.ps1` (the panel's "Update Construct", launched by `updateConstruct`)
+     re-downloads the repo, records the marker, and reinstalls the vsix directly — it never
+     launches Auto-Install, so it never rebuilds the VM. `install.ps1` itself is now a THIN
+     download-and-launch bootstrapper with no host setup / no `-RefreshOnly`.
 9. ✓ **DONE — Docs** — user-facing `docs/control-panel.md` (a full tour of the panel:
    status, lifecycle, connect/power, updates, projects, usage, mic passthrough) + a
    README feature bullet and Documentation-table row; `extension/README.md` refreshed;
@@ -467,7 +481,7 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
 - `f2080075` Add project (`src/remote.js` clone helpers + `runAddProject`) — git URL → injection-safe `git clone` into `/root/repos/<name>` over SSH → open in a new window; "+ add project" button; `remote.test.js` extended
 - `0e15f4f` Open project per-chip (`host.readProjectProfile` + `remote.projectOpenPath` + `runOpenProject`) — inline ▷ on each project chip opens its single-repo folder (else `/root/repos`) in a new window; `remoteFolderUri` percent-encodes path segments; `host.test.js` + `remote.test.js` extended
 - `fd44c435` Installer support (`lib/AgentVm.Common.ps1` `Ensure-VSCodeRemoteSsh`/`Add-HyperVAdminMembership`/`Get-RemoteOpenLink`; `install.ps1` ensure VS Code+Remote-SSH non-elevated; `Auto-Install.ps1` Hyper-V Admin add + end-of-install deep link; `extension.js` `maybeAutoOpenPanel` + `remote.shouldAutoOpenPanel`) — `test/host-lib.test.ps1` (pwsh) + `shouldAutoOpenPanel`
-- (this batch) Install integration (`lib` `Get-VSCodeExtensionDir`/`Install-ControlPanelExtension`/`Set-ConstructInstalledMarker`; `install.ps1` copies the extension into `%USERPROFILE%\.vscode\extensions\` + records `installedCommit` on fresh install, and `-RefreshOnly` refreshes the extension too) — `test/host-lib.test.ps1` extended (copy + `test/` exclusion)
+- Install integration (`lib` `Get-VSCodeExtensionDir`/`Build-ControlPanelVsix`/`Install-ControlPanelExtension`/`Set-ConstructInstalledMarker`) — the panel installs as a PowerShell-built `.vsix` via `code --install-extension` (the old folder-copy was dropped: current VS Code doesn't load an unregistered folder). Placement: `Ensure-VSCodeRemoteSsh` + the vsix install run in `Auto-Install.ps1`'s non-elevated pre-step; `Set-ConstructInstalledMarker` runs at the end of `Provision-AgentVM.ps1`; `install.ps1` is a thin download-and-launch bootstrapper; `Update-Construct.ps1` is the panel's self-update. `test/host-lib.test.ps1` (vsix packaging + marker-pair resolution).
 - `fcdbd3d` **Projects + Usage + Audio (items 4, 5, 6/7)** — built in parallel git
   worktrees, merged (only `extension.js` + `test/ui-smoke.js` needed hand resolution),
   adversarially pre-reviewed (3 findings fixed) and auto-review approved (incl. a

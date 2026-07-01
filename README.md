@@ -49,7 +49,7 @@ projects) — then just hit connect.
 - ♻️ **Disposable, but almost persistent** — reinstalls can save and auto-restore your agent config, you won't even notice you just formatted your entire VM:
   instruction files, memory, skills, subscription auth, git/GitHub credentials, MCP logins.
 - 🎛️ **One-screen control panel** — a VS Code extension (installed on your host by the
-  one-liner) that operates the VM from a single panel: live status, one-click **Connect /
+  script) that operates the VM from a single panel: live status, one-click **Connect /
   Start & connect / Shutdown**, lifecycle (reprovision / reinstall / redownload / export),
   update checks for Construct and the agents, **project profiles** (import / select / edit),
   **token usage & cost**, and **microphone passthrough** so voice input works over Remote-SSH.

@@ -759,7 +759,7 @@ function handleMessage(message, webview, context) {
         if (!scriptsDir) { warnNoScriptsDir(); return; }
         const markers = updates.readMarkers(host.readRawSettings(scriptsDir));
         lifecycle.launchHostScript({
-          scriptsDir, script: "install.ps1", args: updates.constructRefreshArgs(markers),
+          scriptsDir, script: "Update-Construct.ps1", args: updates.constructRefreshArgs(markers),
           elevate: false, label: "Update Construct",
         });
         return;

@@ -78,62 +78,75 @@ $okCase = Test-EnsureWithShim -ExitCode 0
 ok "ensure: a zero exit raises no warning" (@($okCase.Warnings).Count -eq 0)
 ok "ensure: success path returns `$true" ($okCase.Result -eq $true)
 
-# ── Get-VSCodeExtensionDir / Install-ControlPanelExtension ───────────────────
-# Build a fake repo (extension/ with runtime files + a dev-only test/ carrying a
-# node_modules) and a fake USERPROFILE, then assert the install copies the runtime
-# files but NOT test/ or node_modules (which would otherwise drag in Playwright).
+# ── Get-VSCodeExtensionDir + Build-ControlPanelVsix ──────────────────────────
+# Modern VS Code ignores a bare folder copied into ~/.vscode/extensions, so the
+# installer now PACKAGES the extension to a .vsix (Build-ControlPanelVsix -- no
+# vsce/Node) and installs it with `code --install-extension`. `code` can't run here,
+# so we test the packaging: a valid OPC/VSIX (forward-slash entries, both root parts,
+# the extension/ payload), test/ + node_modules excluded, and a manifest whose Identity
+# mirrors package.json. Paths use [IO.Path]::Combine so nesting is real on Linux too.
+Add-Type -AssemblyName System.IO.Compression | Out-Null
+Add-Type -AssemblyName System.IO.Compression.FileSystem | Out-Null
+
 $fakeProfile = Join-Path ([System.IO.Path]::GetTempPath()) ("cp-home-" + [guid]::NewGuid().ToString("N"))
 $fakeRepo    = Join-Path ([System.IO.Path]::GetTempPath()) ("cp-repo-" + [guid]::NewGuid().ToString("N"))
+$vsixOut     = Join-Path ([System.IO.Path]::GetTempPath()) ("cp-" + [guid]::NewGuid().ToString("N") + ".vsix")
 $savedProfile = $env:USERPROFILE
 try {
     $ext = Join-Path $fakeRepo "extension"
     New-Item -ItemType Directory -Path (Join-Path $ext "src") -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $ext "media") -Force | Out-Null
-    New-Item -ItemType Directory -Path (Join-Path $ext "test\node_modules\playwright") -Force | Out-Null
-    Set-Content -Path (Join-Path $ext "package.json") -Value '{"name":"construct-control-panel"}'
+    New-Item -ItemType Directory -Path ([System.IO.Path]::Combine($ext, "test", "node_modules", "playwright")) -Force | Out-Null
+    Set-Content -Path (Join-Path $ext "package.json") -Value '{"name":"construct-control-panel","version":"0.1.0","publisher":"permissionbrick","displayName":"The Construct","engines":{"vscode":"^1.80.0"},"extensionKind":["ui"]}'
     Set-Content -Path (Join-Path $ext "extension.js") -Value '// entry'
-    Set-Content -Path (Join-Path $ext "src\remote.js") -Value '// src'
-    Set-Content -Path (Join-Path $ext "media\panel.css") -Value '/* css */'
-    Set-Content -Path (Join-Path $ext "test\ui-smoke.js") -Value '// dev-only'
-    Set-Content -Path (Join-Path $ext "test\node_modules\playwright\huge.js") -Value '// huge dep'
+    Set-Content -Path ([System.IO.Path]::Combine($ext, "src", "remote.js")) -Value '// src'
+    Set-Content -Path ([System.IO.Path]::Combine($ext, "media", "panel.css")) -Value '/* css */'
+    Set-Content -Path ([System.IO.Path]::Combine($ext, "test", "ui-smoke.js")) -Value '// dev-only'
+    Set-Content -Path ([System.IO.Path]::Combine($ext, "test", "node_modules", "playwright", "huge.js")) -Value '// huge dep'
 
     $env:USERPROFILE = $fakeProfile
     $expectDir = Join-Path $fakeProfile ".vscode\extensions\construct-control-panel"
     ok "Get-VSCodeExtensionDir: under USERPROFILE\.vscode\extensions" ((Get-VSCodeExtensionDir) -eq $expectDir)
 
-    $r = Install-ControlPanelExtension -SourceRoot $fakeRepo
-    ok "install: returns `$true on success" ($r -eq $true)
-    ok "install: copies package.json" (Test-Path -LiteralPath (Join-Path $expectDir "package.json"))
-    ok "install: copies extension.js + src + media" (
-        (Test-Path -LiteralPath (Join-Path $expectDir "extension.js")) -and
-        (Test-Path -LiteralPath (Join-Path $expectDir "src\remote.js")) -and
-        (Test-Path -LiteralPath (Join-Path $expectDir "media\panel.css")))
-    ok "install: EXCLUDES the dev-only test/ folder" (-not (Test-Path -LiteralPath (Join-Path $expectDir "test")))
+    $built = Build-ControlPanelVsix -SourceRoot $fakeRepo -OutFile $vsixOut
+    ok "vsix: returns the out path on success" ($built -eq $vsixOut)
+    ok "vsix: file exists" (Test-Path -LiteralPath $vsixOut)
 
-    # Idempotent re-run must refresh BOTH a top-level file AND a NESTED src/ file,
-    # with NO double-nesting (regression for the Windows PowerShell 5.1 Copy-Item
-    # -Recurse quirk that would land updates at src\src\ and leave src\ stale). NB:
-    # this suite runs on pwsh 7 where Copy-Item merges; the staging-then-swap impl is
-    # what makes the result platform-independent, and these assertions lock it in.
-    Set-Content -Path (Join-Path $ext "extension.js") -Value '// entry v2'
-    Set-Content -Path (Join-Path $ext "src\remote.js") -Value '// src v2'
-    Install-ControlPanelExtension -SourceRoot $fakeRepo | Out-Null
-    ok "install: re-run refreshes a TOP-LEVEL file" ((Get-Content -LiteralPath (Join-Path $expectDir "extension.js") -Raw).Trim() -eq '// entry v2')
-    ok "install: re-run refreshes a NESTED src/ file" ((Get-Content -LiteralPath (Join-Path $expectDir "src\remote.js") -Raw).Trim() -eq '// src v2')
-    ok "install: re-run does NOT double-nest (no src\src)" (-not (Test-Path -LiteralPath (Join-Path $expectDir "src\src")))
-    ok "install: leaves no staging dirs behind" (
-        @(Get-ChildItem -LiteralPath (Join-Path $fakeProfile ".vscode\extensions") -Directory -ErrorAction SilentlyContinue |
-          Where-Object { $_.Name -like '.construct-cp-staging-*' }).Count -eq 0)
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($vsixOut)
+    try { $names = @($zip.Entries | ForEach-Object { $_.FullName }) } finally { $zip.Dispose() }
+    ok "vsix: extension.vsixmanifest at root" ($names -contains 'extension.vsixmanifest')
+    ok "vsix: [Content_Types].xml at root" ($names -contains '[Content_Types].xml')
+    ok "vsix: payload under extension/ (package.json + extension.js + src)" (
+        ($names -contains 'extension/package.json') -and
+        ($names -contains 'extension/extension.js') -and
+        ($names -contains 'extension/src/remote.js'))
+    ok "vsix: forward-slash entry names only (no backslashes)" (-not ($names -match '\\'))
+    ok "vsix: EXCLUDES dev-only test/ + node_modules" (
+        -not @($names | Where-Object { $_ -like 'extension/test/*' -or $_ -like '*node_modules*' }).Count)
 
-    # Missing extension source -> warns, returns $false, does not throw.
+    # Manifest Identity mirrors package.json; Content_Types covers the payload types.
+    $tmpx = Join-Path ([System.IO.Path]::GetTempPath()) ("cp-x-" + [guid]::NewGuid().ToString("N"))
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($vsixOut, $tmpx)
+    try {
+        $vmText = Get-Content -LiteralPath (Join-Path $tmpx "extension.vsixmanifest") -Raw
+        ok "vsix: manifest Identity matches package.json" (
+            ($vmText -match 'Id="construct-control-panel"') -and ($vmText -match 'Version="0\.1\.0"') -and ($vmText -match 'Publisher="permissionbrick"'))
+        ok "vsix: manifest carries the engine + ui kind" (
+            ($vmText -match 'Engine"\s+Value="\^1\.80\.0"') -and ($vmText -match 'ExtensionKind"\s+Value="ui"'))
+        $ctText = Get-Content -LiteralPath (Join-Path $tmpx '[Content_Types].xml') -Raw
+        ok "vsix: Content_Types covers .js and .json" (($ctText -match 'Extension="\.js"') -and ($ctText -match 'Extension="\.json"'))
+    } finally { Remove-Item -LiteralPath $tmpx -Recurse -Force -ErrorAction SilentlyContinue }
+
+    # Missing extension source -> warns, returns $null, does not throw.
     $emptyRepo = Join-Path ([System.IO.Path]::GetTempPath()) ("cp-empty-" + [guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Path $emptyRepo -Force | Out-Null
-    ok "install: missing source -> `$false (no throw)" ((Install-ControlPanelExtension -SourceRoot $emptyRepo -WarningAction SilentlyContinue) -eq $false)
+    ok "vsix: missing source -> `$null (no throw)" ($null -eq (Build-ControlPanelVsix -SourceRoot $emptyRepo -OutFile $vsixOut -WarningAction SilentlyContinue))
     Remove-Item -LiteralPath $emptyRepo -Recurse -Force -ErrorAction SilentlyContinue
 } finally {
     $env:USERPROFILE = $savedProfile
     Remove-Item -LiteralPath $fakeProfile -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $fakeRepo -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $vsixOut -Force -ErrorAction SilentlyContinue
 }
 
 # ── Resolve-MarkerSource: repo/ref treated as a SOURCE PAIR ──────────────────
