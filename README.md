@@ -33,7 +33,7 @@ where they can't touch your host PC.
   replayed on every (re)provision.
 - 🎤 **Microphone passthrough** — voice input in the Claude Code extension works, even over
   Remote-SSH.
-- 🤷 **It just works™** — pre-configured system prompts make agents just install whatever they need for the task automatically
+- 🤷 **It just works™** — system prompts make agents just install whatever tool they need for the task automatically
 
 <sub>Bonus: auto-deploy MCP servers to all three agents · patched Claude Code extension for faster UI updates · no AI attribution by default.</sub>
 
