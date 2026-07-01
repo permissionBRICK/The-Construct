@@ -70,12 +70,12 @@ extension/
                       sanitizeProfile, toChips). Profile file I/O lives in host.js; the SSH
                       round-trip, edit modal and QuickPick live in extension.js.
     usage.js          ccusage over SSH -> per-agent tokens + estimated cost. buildUsageScript
-                      (base64-as-data) scopes each tool to the CURRENT period via --since/--until
-                      from the VM clock (daily=today, monthly=this month) — reports are daily|monthly
-                      only (codex has no weekly report), default daily; parseUsage/parseToolUsage
-                      (totals.totalCost|costUSD, now window-scoped), number/cost formatting,
-                      augment(state,{report}) (best-effort + cached-per-report like updates),
-                      collectRaw/buildExportPayload/exportFileName for the JSON export.
+                      (base64-as-data) maps each VIEW to a ccusage window via --since/--until from
+                      the VM clock — daily=today, monthly=this-month, total=all-time (no window);
+                      reports are daily|monthly|total only (codex has no weekly report), default
+                      daily; parseUsage/parseToolUsage (totals.totalCost|costUSD, window-scoped),
+                      number/cost formatting, augment(state,{report}) (best-effort + cached-per-
+                      report like updates), collectRaw/buildExportPayload/exportFileName for export.
     audio.js          on-demand mic passthrough. HostAudio: push vm/ scripts + apply the guard
                       patch over SSH, open a local TCP server + a persistent `ssh -R` tunnel
                       CONFIRMED by a settle window (an ssh that dies early = tunnel-failed, roll
@@ -99,7 +99,7 @@ extension/
   test/
     ui-smoke.js       Playwright headless-Chromium webview test (128 checks: panel + launcher +
                       narrow overflow + settings round-trip + honesty + power buttons + add-project +
-                      per-chip open + project edit modal + usage table + daily/monthly period tabs
+                      per-chip open + project edit modal + usage table + daily/monthly/total period tabs
                       (incl. period-change-without-usage blanks the table, same-period keeps it) +
                       audio substatus incl. gate-patch state + launcher update banner)
     probe.test.js     plain-node ssh-arg + probe-parse units (21 checks)
@@ -110,7 +110,7 @@ extension/
     updates.test.js   plain-node update-check units — Construct compare/cache + agent semver/latest/script + fetchJson redirects/per-host Accept, injected fetch+clock+http (62 checks)
     vmpower.test.js   plain-node Hyper-V power units — Get-VM probe/parse + Start-VM/elevated launch builders + injected-spawn queryVmState (38 checks)
     projects.test.js  plain-node scan builder/parser + planImport merge + reconcileSelection + sanitizeProfile (injection + prototype-pollution) (77 checks)
-    usage.test.js     plain-node ccusage script (daily/monthly window scoping) + parse (totalCost/costUSD/missing/error/zero/array) + formatting + per-report cache TTL/coalesce + isCurrentReport stale-collection ordering + export payload, injected ssh+clock (103 checks)
+    usage.test.js     plain-node ccusage script (daily/monthly/total window mapping) + parse (totalCost/costUSD/missing/error/zero/array) + formatting + per-report cache TTL/coalesce + isCurrentReport stale-collection ordering + export payload, injected ssh+clock (105 checks)
     audio.test.js     plain-node guard-patch apply/revert/idempotency + VM script builders (injection proofs) + ssh -R argv + AudioSession gating + HostAudio enable/disable/rollback + tunnel settle-window (async early death + later death) (134 checks)
 ```
 
@@ -130,7 +130,7 @@ Defined in `extension.js` (handleMessage), `media/panel.js` and `media/launcher.
   `addProject` (prompt a git URL → clone over SSH → open in a new window),
   `openProject` (+`project`; open that project's folder on the VM in a new window).
 - `{type:'setAudio', enabled}` — live mic-passthrough toggle (console switch only).
-- `{type:'setUsagePeriod', period:'daily'|'monthly'}` — switch the token-usage window
+- `{type:'setUsagePeriod', period:'daily'|'monthly'|'total'}` — switch the token-usage window
   (validated + remembered in `usageReport`; triggers a `refreshAll` that re-collects the
   scoped numbers and re-broadcasts `usagePeriod`).
 - `{type:'saveProject', name, profile}` — the edited profile posted back from the modal
@@ -154,7 +154,7 @@ VM-derived fields when `online===false` or `probeError`):
   installed, reprovisioned, update:{available,behind},
   agents:[{id,name,detail,version,updateAvailable,latest}],
   projects:[{name,selected}],
-  usagePeriod:'daily'|'monthly',   // active token-usage tab (rides the sync first push)
+  usagePeriod:'daily'|'monthly'|'total',   // active token-usage tab (rides the sync first push)
   usage:{tools:[{label,tokens,tokensText,costText}], totalTokensText, totalCostText},
   audio:{enabled,capturing,tunnel}, probeError }
 ```
@@ -531,21 +531,23 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
    `augment(state,{report})` folds it in as a SEPARATE slow best-effort+cached pass
    (ccusage may self-install on first run, so it rides after the base+update pushes).
    `exportUsage` collects the raw combined document and saves it via a Save dialog
-   (`collectRaw`/`buildExportPayload`). `usage.test.js` (98). renderUsage already
+   (`collectRaw`/`buildExportPayload`). `usage.test.js` (105). renderUsage already
    consumed the shape.
-   - **Daily/monthly period tabs (default daily).** The panel offers a `.utab` toggle
-     (`daily`|`monthly`); the two are the ONLY views because `ccusage codex` supports
-     session/daily/monthly but NOT weekly — a weekly report errors for Codex and drops it
-     from the table (the reported "Codex missing from the dashboard" bug; the old default
-     WAS weekly). Each view is scoped to the CURRENT period with `--since/--until` computed
-     from the VM's own clock (`totals` is a LIFETIME sum regardless of granularity, so
-     without a window daily and monthly would be identical). The selected period lives in
-     `extension.js` `usageReport` (shared across surfaces, folded into state as
-     `usagePeriod` by `withLocalState` so the tab highlights on the sync push);
-     `{type:'setUsagePeriod'}` updates it + `refreshAll`s. The usage cache is keyed
-     per-report so a toggle collects that period fresh and toggling back is instant. The
-     webview flips the tab optimistically + blanks the stale numbers until the scoped
-     collection returns. **Async race:** usage collection is slow, so a refresh BINDS to
+   - **Daily/monthly/total period tabs (default daily).** The panel offers a 3-way `.utab`
+     toggle: `daily` = today, `monthly` = this calendar month, `total` = all-time. `weekly`
+     is deliberately NOT offered because `ccusage codex` supports session/daily/monthly but
+     NOT weekly — a weekly report errors for Codex and drops it from the table (the reported
+     "Codex missing from the dashboard" bug; the old default WAS weekly). daily/monthly are
+     scoped with `--since/--until` computed from the VM's own clock; total runs with NO window
+     (`totals` is a LIFETIME sum regardless of granularity, so without a window daily/monthly
+     would just equal total — and daily==monthly on the 1st of the month, which is why the
+     always-distinct `total` view was added). The selected period lives in `extension.js`
+     `usageReport` (shared across surfaces, stamped into state as `usagePeriod` by `postState`
+     at SEND time so the tab highlights correctly even on a late push); `{type:'setUsagePeriod'}`
+     updates it + `refreshAll`s. The usage cache is keyed per-report so a toggle collects that
+     view fresh and toggling back is instant. The webview flips the tab optimistically + blanks
+     the stale numbers until the scoped collection returns. **Async race:** usage collection is
+     slow, so a refresh BINDS to
      the report it started with and is DISCARDED on resolution if the live `usageReport`
      changed meanwhile (`usage.isCurrentReport`) — a stale daily run can't land as
      monthly's numbers; and every state is posted through `postState`, which stamps the

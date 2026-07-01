@@ -109,11 +109,14 @@
   $("cancelBtn") && $("cancelBtn").addEventListener("click", () => showSettings(false));
   $("openTabBtn") && $("openTabBtn").addEventListener("click", () => post({ type: "openPanel" }));
 
-  // ── Usage period tabs (daily / monthly) ─────────────────────────────────────
-  // Two views scoped to the CURRENT period: daily = today, monthly = this month.
-  // Clicking a tab flips it optimistically, blanks the other period's numbers, and
-  // asks the extension to re-collect the scoped usage (pushed back as state.usage +
-  // state.usagePeriod). render() keeps the highlight in sync with the pushed period.
+  // ── Usage period tabs (daily / monthly / total) ─────────────────────────────
+  // Three views: daily = usage so far today, monthly = this calendar month, total =
+  // all-time lifetime usage. Clicking a tab flips it optimistically, blanks the other
+  // view's numbers, and asks the extension to re-collect the scoped usage (pushed back
+  // as state.usage + state.usagePeriod). render() keeps the highlight in sync.
+  const USAGE_PERIODS = ["daily", "monthly", "total"];
+  const USAGE_SUBLABEL = { daily: "today", monthly: "this month", total: "all-time" };
+  const normPeriod = (p) => (USAGE_PERIODS.indexOf(p) >= 0 ? p : "daily");
   const usageTabs = Array.from(document.querySelectorAll(".utab"));
   // The period whose numbers are currently displayed in the table (null = none/blanked).
   // render() uses it to blank the table when the active period changes but fresh usage
@@ -121,14 +124,14 @@
   // heading, on ANY surface, and even if the new period has no data / the collect fails.
   let shownUsagePeriod = null;
   function setUsageTab(period) {
-    const p = period === "monthly" ? "monthly" : "daily";
+    const p = normPeriod(period);
     usageTabs.forEach((t) => {
       const on = t.getAttribute("data-period") === p;
       t.classList.toggle("sel", on);
       t.setAttribute("aria-selected", on ? "true" : "false");
     });
     const sub = $("usageSub");
-    if (sub) sub.innerHTML = " &middot; " + (p === "monthly" ? "this month" : "today") + " &middot; ccusage";
+    if (sub) sub.innerHTML = " &middot; " + USAGE_SUBLABEL[p] + " &middot; ccusage";
   }
   // Reset the visible rows/total to placeholders so we never show one period's numbers
   // under the other period's tab while the fresh collection is in flight.
@@ -143,7 +146,7 @@
   }
   usageTabs.forEach((t) => t.addEventListener("click", () => {
     if (t.classList.contains("sel")) return; // already active
-    const period = t.getAttribute("data-period") === "monthly" ? "monthly" : "daily";
+    const period = normPeriod(t.getAttribute("data-period"));
     setUsageTab(period);
     clearUsageRows();
     shownUsagePeriod = null; // nothing valid shown until the scoped collection returns
