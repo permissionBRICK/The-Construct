@@ -34,12 +34,13 @@ const TOOLS = [
   { id: "opencode", tool: "opencode", label: "OpenCode" },
 ];
 
-// The two period VIEWS the panel offers, doubling as the ccusage granularity for each.
-// We deliberately DON'T expose "weekly": `ccusage codex` supports session/daily/monthly
-// but NOT weekly, so a weekly report errors for Codex and drops it from the table. daily
-// and monthly are supported by all three agents. Each view is scoped to the CURRENT
-// period (today / this calendar month) — see buildUsageScript. Default to daily.
-const REPORTS = ["daily", "monthly"];
+// The three VIEWS the panel offers: "daily" = usage so far TODAY, "monthly" = usage this
+// calendar month (month-to-date), "total" = all-time lifetime usage (what raw ccusage
+// reports). daily and monthly coincide on the 1st of the month; total is always distinct
+// (unless every bit of usage is from today). Each uses a ccusage subcommand supported by
+// all three agents — we avoid "weekly", which `ccusage codex` doesn't support (that was
+// the original "Codex missing" bug). See buildUsageScript. Default to daily (today).
+const REPORTS = ["daily", "monthly", "total"];
 const DEFAULT_REPORT = "daily";
 
 const TTL_MS = 5 * 60 * 1000;  // trust a real usage result for 5 min (the round-trip is slow)
@@ -68,12 +69,12 @@ function isCurrentReport(collectedReport, currentReport) {
  * goes to stderr so stdout stays pure JSON; each tool that fails yields a small
  * {error,...} object rather than aborting the whole report.
  *
- * Each report is scoped to the CURRENT period — today for `daily`, this calendar month
- * for `monthly`. ccusage's grand `totals` block is a LIFETIME sum regardless of the
- * granularity, so on its own daily and monthly would show the same number; we constrain
- * it with --since/--until (YYYYMMDD) computed from the VM's OWN clock so the `totals`
- * reflect only the chosen window. Those dates come from `date`, never from caller input,
- * so there's nothing to inject there.
+ * The `daily`/`monthly` views are scoped with ccusage --since/--until (YYYYMMDD) computed
+ * from the VM's OWN clock — ccusage's grand `totals` is a LIFETIME sum regardless of
+ * granularity, so without a window they'd just equal `total`. `daily` = today, `monthly`
+ * = the 1st of this month through today, `total` = NO window (all-time). All use the
+ * `daily`/`monthly` subcommands, which all three agents support. The window dates come
+ * from `date`, never from caller input, so there's nothing to inject there.
  *
  * `report` is validated by the caller (collect) against REPORTS, but we also normalize
  * here so a direct call can't inject — the value is substituted into a bash string,
@@ -84,11 +85,14 @@ function buildUsageScript(report) {
   return `set -u
 REPORT="${r}"
 
-# Scope the report to the current period from the VM's own clock (data, not injectable).
-# daily -> just today; monthly -> from the 1st of this month through today.
+# daily -> today's window; monthly -> from the 1st of this month; total -> no window
+# (all-time). Window dates come from the VM's own clock (data, not injectable).
 TODAY="\$(date +%Y%m%d)"
-if [ "\$REPORT" = monthly ]; then SINCE="\$(date +%Y%m01)"; else SINCE="\$TODAY"; fi
-UNTIL="\$TODAY"
+case "\$REPORT" in
+  total)   ARGS=(monthly) ;;
+  monthly) ARGS=(monthly --since "\$(date +%Y%m01)" --until "\$TODAY") ;;
+  *)       ARGS=(daily --since "\$TODAY" --until "\$TODAY") ;;
+esac
 
 CC=()
 ensure_ccusage() {
@@ -125,7 +129,7 @@ capture() {
     return
   fi
   errfile="\$(mktemp)"
-  out="\$("\${CC[@]}" "\$tool" "\$REPORT" --since "\$SINCE" --until "\$UNTIL" --json 2>"\$errfile")"; rc=\$?
+  out="\$("\${CC[@]}" "\$tool" "\${ARGS[@]}" --json 2>"\$errfile")"; rc=\$?
   if [ "\$rc" -ne 0 ] || ! printf '%s' "\$out" | jq -e . >/dev/null 2>&1; then
     local detail; detail="\$(tr '\\n' ' ' <"\$errfile" | head -c 500)"
     jq -n --arg t "\$tool" --arg d "\$detail" \\
@@ -145,8 +149,7 @@ opencode_json="\$(capture opencode)"
 jq -n \\
   --arg host "\$(hostname)" \\
   --arg report "\$REPORT" \\
-  --arg since "\$SINCE" \\
-  --arg until "\$UNTIL" \\
+  --arg window "\${ARGS[*]}" \\
   --argjson claude "\$claude_json" \\
   --argjson codex "\$codex_json" \\
   --argjson opencode "\$opencode_json" \\
@@ -154,8 +157,7 @@ jq -n \\
      generatedAt: (now | todate),
      vmHost: \$host,
      report: \$report,
-     since: \$since,
-     until: \$until,
+     window: \$window,
      tools: { claude: \$claude, codex: \$codex, opencode: \$opencode }
    }'
 `;
@@ -198,9 +200,9 @@ function formatCost(n) {
 
 /**
  * Extract {tokens, cost} from one tool's ccusage JSON. ccusage puts a `totals`
- * object at the top level of every report granularity (here scoped to the current
- * period via --since/--until, so `totals` is that window's sum, not a lifetime sum).
- * Token counts live in `totals.totalTokens`; the COST field name differs between
+ * object at the top level of every report (for `daily`/`monthly` it's the today/this-month
+ * window; for `total` it's the all-time lifetime sum). Token counts live in
+ * `totals.totalTokens`; the COST field name differs between
  * tools — Claude Code and OpenCode use `totals.totalCost`, but Codex uses
  * `totals.costUSD` (the roadmap's "costUSD"). We accept either.
  *

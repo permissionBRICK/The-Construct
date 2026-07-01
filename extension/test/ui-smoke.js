@@ -57,7 +57,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("hero title renders", /CONSTRUCT/.test(await page.locator("h1.title").innerText()));
   check("rain canvas present", (await page.locator("#rain").count()) === 1);
   // Usage-period tabs default to daily ("today") before any state is pushed.
-  check("usage: two period tabs (daily/monthly)", (await page.locator(".usage-tabs .utab").count()) === 2);
+  check("usage: three period tabs (daily/monthly/total)", (await page.locator(".usage-tabs .utab").count()) === 3);
   check("usage: daily tab active by default", (await page.locator('.utab[data-period="daily"]').getAttribute("aria-selected")) === "true"
     && (await page.locator("#usageSub").textContent()).includes("today"));
 
@@ -119,7 +119,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     vmName: "agent-vm-01", host: "h.example.net", online: true,
     agents: [{ name: "Claude Code", detail: "CLI", version: "2.1.196", updateAvailable: true, latest: "2.1.210" }],
     projects: [{ name: "default", selected: true }, { name: "billing", selected: false }],
-    usagePeriod: "monthly",
+    usagePeriod: "total",
     usage: { tools: [
       { label: "Claude Code", tokens: 100, tokensText: "14.2M", costText: "$38.00" },
       { label: "Codex", tokens: 50, tokensText: "6.1M", costText: "$12.00" },
@@ -231,20 +231,21 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     && (await page.locator("#usageRows .usage-row .ucost").first().innerText()) === "$38.00");
   check("usage: total tokens + estimated cost", (await page.locator("#usageTotalTok").innerText()) === "20.3M"
     && (await page.locator("#usageTotalCost").innerText()) === "$50.00");
-  // usage period tabs: the pushed usagePeriod ("monthly") highlights the matching tab
-  // and updates the subheader; clicking the other tab flips optimistically, blanks the
-  // stale numbers, and posts setUsagePeriod (the extension re-collects the scoped window).
-  check("usage: pushed usagePeriod highlights monthly tab",
-    (await page.locator('.utab[data-period="monthly"]').getAttribute("aria-selected")) === "true"
+  // usage period tabs: the pushed usagePeriod ("total") highlights the matching tab and
+  // updates the subheader; clicking another tab flips optimistically, blanks the stale
+  // numbers, and posts setUsagePeriod (the extension re-collects the scoped window).
+  check("usage: pushed usagePeriod highlights total tab",
+    (await page.locator('.utab[data-period="total"]').getAttribute("aria-selected")) === "true"
     && (await page.locator('.utab[data-period="daily"]').getAttribute("aria-selected")) === "false"
-    && (await page.locator("#usageSub").textContent()).includes("this month"));
+    && (await page.locator("#usageSub").textContent()).includes("all-time"));
   await page.evaluate(() => { window.__posted.length = 0; });
-  await page.click('.utab[data-period="daily"]');
+  await page.click('.utab[data-period="monthly"]');
   posted = await page.evaluate(() => window.__posted);
-  check("usage: clicking a tab posts setUsagePeriod", posted.some((m) => m.type === "setUsagePeriod" && m.period === "daily"));
+  check("usage: clicking the monthly tab posts setUsagePeriod", posted.some((m) => m.type === "setUsagePeriod" && m.period === "monthly"));
   check("usage: clicked tab activates + subheader updates",
-    (await page.locator('.utab[data-period="daily"]').getAttribute("aria-selected")) === "true"
-    && (await page.locator("#usageSub").textContent()).includes("today"));
+    (await page.locator('.utab[data-period="monthly"]').getAttribute("aria-selected")) === "true"
+    && (await page.locator('.utab[data-period="total"]').getAttribute("aria-selected")) === "false"
+    && (await page.locator("#usageSub").textContent()).includes("this month"));
   check("usage: switching period blanks stale numbers until re-collect", (await page.locator("#usageTotalTok").innerText()) === "—");
   // Renderer robustness: a period-change state that arrives WITHOUT usage (slow/empty/
   // failed collection, or a second surface that didn't get the local click-clear) must

@@ -301,6 +301,9 @@ footer a:hover { color: var(--accent); }
   /* usage: drop the share bar, keep agent / tokens / cost */
   .usage-head, .usage-row { grid-template-columns: 1fr auto auto; gap: 8px; }
   .usage-head span:nth-child(2), .bar { display: none; }
+  /* usage header: let the 3 period tabs + export wrap under the heading (no h-overflow) */
+  .mhead-right { flex-wrap: wrap; gap: 6px; }
+  .utab { padding: 5px 9px; }
 
   /* settings: single-column fields, full-width controls + buttons */
   .settings-top { flex-direction: column; gap: 8px; align-items: flex-start; }
