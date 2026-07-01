@@ -124,3 +124,16 @@ serve-web / tunnel / SMB) so your next Reprovision / Reinstall runs with your sa
 The agent password is never stored — it's entered in the elevated console at reinstall time.
 See [Project profiles & configuration](projects.md) and [Provisioning](provisioning.md) for
 what each setting maps to.
+
+## Troubleshooting
+
+If a lifecycle action doesn't behave as expected:
+
+- **Logs.** The **logs** button in the sidebar (or **The Construct: Show Logs** from the
+  command palette) opens the **Construct** Output channel, which records each action with the
+  exact host command it launched, the resolved script path, the arguments, and the result —
+  also written to `%TEMP%\construct-panel.log`. This is the first place to look (and the
+  easiest thing to copy when reporting an issue).
+- **Keep consoles open.** Turn on **`construct.debug`** in VS Code settings to launch the host
+  PowerShell consoles with `-NoExit` so they stay open instead of closing — any error stays on
+  screen to read. Turn it back off for normal use.

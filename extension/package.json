@@ -47,6 +47,11 @@
         "command": "construct.refresh",
         "title": "Refresh Status",
         "category": "The Construct"
+      },
+      {
+        "command": "construct.showLogs",
+        "title": "Show Logs (diagnostics)",
+        "category": "The Construct"
       }
     ],
     "configuration": {
@@ -56,6 +61,11 @@
           "type": "string",
           "default": "",
           "markdownDescription": "Folder that holds the Construct PowerShell lifecycle scripts (`Auto-Install.ps1`, `projects/`, `.construct-settings.json`). Leave empty to auto-detect the newest install under `%LOCALAPPDATA%\\The-Construct`."
+        },
+        "construct.debug": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Diagnostics: keep launched host consoles OPEN (`-NoExit`) so errors stay readable instead of flashing closed, and log verbosely. Every launch is also recorded (with the exact command, resolved paths, args, and result) to the **Construct** Output channel — run **The Construct: Show Logs** to view it."
         },
         "construct.micDevice": {
           "type": "string",

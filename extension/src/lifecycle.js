@@ -130,8 +130,10 @@ function winQuoteArg(arg) {
  *  success OR error via try/finally), so the window stays readable — and WITHOUT
  *  -NoExit it then CLOSES on that Enter instead of dropping to an interactive
  *  PowerShell prompt (the reported "returns to a PowerShell thing" annoyance). */
-function buildChildCommandLine(scriptPath, args) {
-  const argv = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath, ...args];
+function buildChildCommandLine(scriptPath, args, opts = {}) {
+  const argv = ["-NoProfile", "-ExecutionPolicy", "Bypass"];
+  if (opts.keepOpen) argv.push("-NoExit"); // debug: keep the (elevated) console open so errors stay readable
+  argv.push("-File", scriptPath, ...args);
   return argv.map(winQuoteArg).join(" ");
 }
 
@@ -188,21 +190,36 @@ function buildCallCommand(scriptPath, args) {
  */
 function buildHostLaunch(scriptPath, args, opts = {}) {
   const elevate = !!opts.elevate;
+  const keepOpen = !!opts.keepOpen; // debug: keep the console open on exit (errors stay readable)
   const command = elevate
-    ? buildOuterCommand(buildChildCommandLine(scriptPath, args), opts)  // Start-Process -Verb RunAs -File …
-    : buildCallCommand(scriptPath, args);                               // & 'script' … (this console)
+    ? buildOuterCommand(buildChildCommandLine(scriptPath, args, { keepOpen }), opts) // -NoExit rides the elevated child
+    : buildCallCommand(scriptPath, args);                                             // & 'script' … (this console)
   const encoded = Buffer.from(command, "utf16le").toString("base64");
   // -NonInteractive only for the elevated launcher (it just fires Start-Process). The
   // non-elevated console RUNS the script here, so it must stay interactive for the
   // script's end-of-run "Press Enter to close" pause (and any in-console confirmation).
-  const psArgs = elevate
-    ? ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded]
-    : ["-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded];
+  const base = elevate
+    ? ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass"]
+    : ["-NoProfile", "-ExecutionPolicy", "Bypass"];
+  // Non-elevated debug: -NoExit on THIS console (it runs the script). Elevated debug keeps
+  // its console open via the child's -NoExit (above), not the transient launcher.
+  if (keepOpen && !elevate) base.push("-NoExit");
+  const psArgs = [...base, "-EncodedCommand", encoded];
   return {
     file: "cmd.exe",
     spawnArgs: ["/c", "start", "", "powershell.exe", ...psArgs],
     command,
   };
+}
+
+// Optional logger + debug-flag getter the extension wires in via configure(); lets the
+// pure builders stay dependency-free while launchHostScript reports what it launched.
+let _log = null;
+let _isDebug = null;
+/** Wire in a logger (fn(msg)) and a debug-flag getter (fn()->bool). Both optional. */
+function configure(opts = {}) {
+  if (opts && typeof opts.log === "function") _log = opts.log;
+  if (opts && typeof opts.isDebug === "function") _isDebug = opts.isDebug;
 }
 
 /** Modal confirm for a destructive (VM-deleting) action. Resolves true to go. */
@@ -246,21 +263,31 @@ function launchHostScript(opts) {
   const vscode = opts._vscode || vsc();
   const spawn = opts._spawn || cp.spawn;
   const platform = opts._platform || process.platform;
+  const log = opts.log || _log || (() => {});
+  const debug = typeof opts.debug === "boolean" ? opts.debug : (_isDebug ? !!_isDebug() : false);
   if (platform !== "win32") {
+    log(`launch ${opts.label}: skipped — not on Windows (platform=${platform})`);
     vscode.window.showWarningMessage("Construct actions run on the Windows host, which isn't available here.");
     return false;
   }
   const scriptPath = path.join(opts.scriptsDir, opts.script);
-  const { file, spawnArgs } = buildHostLaunch(scriptPath, opts.args || [], { elevate: !!opts.elevate });
+  const { file, spawnArgs, command } = buildHostLaunch(scriptPath, opts.args || [], { elevate: !!opts.elevate, keepOpen: debug });
+  // Deterministic record of exactly WHAT we launch (reveals version skew / wrong paths /
+  // bad args). The decoded command shows the real script path + args reaching powershell.
+  log(`launch ${opts.label}: elevate=${!!opts.elevate} debug=${debug} script=${scriptPath}`);
+  log(`  command: ${command}`);
+  if (opts.env) log(`  env: ${Object.keys(opts.env).join(", ")}`);
   try {
     const child = spawn(file, spawnArgs, hostLaunchSpawnOptions(opts.scriptsDir, opts.env));
-    child.on("error", (e) => vscode.window.showErrorMessage(`Couldn't launch ${opts.label}: ${e.message}`));
+    child.on("error", (e) => { log(`launch ${opts.label}: spawn error — ${e.message}`); vscode.window.showErrorMessage(`Couldn't launch ${opts.label}: ${e.message}`); });
     child.unref();
+    log(`launch ${opts.label}: spawned (${file})`);
     vscode.window.showInformationMessage(
       `${opts.label} launched in a console window on the host${opts.elevate ? " — approve the UAC prompt." : "."}`
     );
     return true;
   } catch (e) {
+    log(`launch ${opts.label}: threw — ${e && e.message ? e.message : e}`);
     vscode.window.showErrorMessage(`Couldn't launch ${opts.label}: ${e && e.message ? e.message : e}`);
     return false;
   }
@@ -299,5 +326,5 @@ module.exports = {
   PROVISION, AUTO_INSTALL, BACKUP_DIR_NAME,
   normalizeBackupMode, buildInvocation,
   psSingleQuote, winQuoteArg, buildChildCommandLine, buildOuterCommand, buildCallCommand, buildHostLaunch,
-  hostLaunchSpawnOptions, launchHostScript, run,
+  hostLaunchSpawnOptions, launchHostScript, run, configure,
 };
