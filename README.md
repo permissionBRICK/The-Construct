@@ -50,10 +50,7 @@ projects) — then just hit connect.
 - ♻️ **Disposable, but almost persistent** — reinstalls can save and auto-restore your agent config, you won't even notice you just formatted your entire VM:
   instruction files, memory, skills, subscription auth, git/GitHub credentials, MCP logins.
 - 🎛️ **One-screen control panel** — a VS Code extension (installed on your host by the
-  script) that operates the VM from a single panel: live status, one-click **Connect /
-  Start & connect / Shutdown**, lifecycle (reprovision / reinstall / redownload / export),
-  update checks for Construct and the agents, **project profiles** (import / select / edit),
-  **token usage & cost**, and **microphone passthrough** so voice input works over Remote-SSH.
+  script) that operates the VM from a single panel: lifecycle (reprovision / reinstall / redownload / export), **project profiles** (import / select / edit), and much more.
 - 🖥️ **Connect your way** — VS Code Remote-SSH, browser VS Code, vscode.dev tunnels, Codex
   App, Opencode serve, or plain SSH. All wired up automatically.
 - 🗂️ **Repos as a Windows drive** — provisioning stands up an SMB share of the repos folder
