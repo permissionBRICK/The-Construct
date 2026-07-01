@@ -225,6 +225,29 @@ async function refreshAll() {
   if (withUsage !== aug) for (const w of liveWebviews) safePost(w, { type: "state", state: withUsage });
 }
 
+// ── Periodic auto-refresh ────────────────────────────────────────────────────
+// Re-probe the VM and push fresh state to the open dashboards on an interval, so
+// versions / power state / provisioning markers stay current after a reprovision (or
+// any VM-side change) without a manual refresh or a full window reload. This is the
+// lightweight alternative to reloading VS Code — that heavier reload is reserved for a
+// Construct self-update (which swaps the extension itself). The timer runs ONLY while a
+// dashboard is open: started when the first webview goes live, stopped when the last one
+// closes, so we don't SSH-probe the VM when nothing is showing.
+const AUTO_REFRESH_MS = 30000;
+let autoRefreshTimer = null;
+function syncAutoRefresh() {
+  if (liveWebviews.size > 0 && !autoRefreshTimer) {
+    autoRefreshTimer = setInterval(() => { refreshAll(); }, AUTO_REFRESH_MS);
+  } else if (liveWebviews.size === 0 && autoRefreshTimer) {
+    clearInterval(autoRefreshTimer);
+    autoRefreshTimer = null;
+  }
+}
+/** Stop the auto-refresh timer unconditionally (extension deactivate). */
+function stopAutoRefresh() {
+  if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
+}
+
 /** Locate the host-side scripts dir, honoring the `construct.scriptsDir` override. */
 function resolveScriptsDir() {
   const override = vscode.workspace.getConfiguration("construct").get("scriptsDir");
@@ -943,7 +966,8 @@ class ConstructViewProvider {
     // its disposable is released when the view is destroyed.
     webviewView.webview.onDidReceiveMessage((m) => handleMessage(m, webviewView.webview, this.context));
     liveWebviews.add(webviewView.webview);
-    this.context.subscriptions.push(webviewView.onDidDispose(() => liveWebviews.delete(webviewView.webview)));
+    syncAutoRefresh();
+    this.context.subscriptions.push(webviewView.onDidDispose(() => { liveWebviews.delete(webviewView.webview); syncAutoRefresh(); }));
   }
 }
 
@@ -960,7 +984,8 @@ function setupPanel(p, context) {
   // than the module-level `panel`, which may have been reassigned.
   p.webview.onDidReceiveMessage((m) => handleMessage(m, p.webview, context));
   liveWebviews.add(p.webview);
-  p.onDidDispose(() => { liveWebviews.delete(p.webview); if (panel === p) panel = undefined; });
+  syncAutoRefresh();
+  p.onDidDispose(() => { liveWebviews.delete(p.webview); if (panel === p) panel = undefined; syncAutoRefresh(); });
 }
 
 /** Open (or reveal) the full control panel as a wide editor tab. */
@@ -1032,6 +1057,7 @@ function deactivate() {
   // next explicit disable is harmless; the guard patch is likewise inert without the shim.
   try { if (hostAudio) hostAudio.dispose(); } catch (_) {}
   hostAudio = undefined;
+  stopAutoRefresh();
 }
 
 module.exports = { activate, deactivate };
