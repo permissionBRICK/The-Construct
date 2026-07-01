@@ -4,21 +4,38 @@
 
 ### *"This… is the Construct. Our loading program. We can load anything."*
 
-**A disposable, sandboxed Ubuntu VM for unattended AI coding agents — Claude Code, Codex,
-even Opencode. Bypass mode, root access, anything we need. Isolated inside Hyper-V, at
-minimal risk to your host PC.**
+**A disposable Ubuntu VM for unattended AI coding agents.**
+Claude Code, Codex, and Opencode running as root in bypass mode — sealed inside Hyper-V,
+where they can't touch your host PC.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-00cc66.svg?style=flat-square)](LICENSE.md)
 [![Platform](https://img.shields.io/badge/Host-Windows%2010%2F11%20%2B%20Hyper--V-0078d4.svg?style=flat-square)](docs/installation.md)
 [![Guest](https://img.shields.io/badge/Guest-Ubuntu%20Server%20%28latest%29-e95420.svg?style=flat-square)](docs/installation.md)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-00cc66.svg?style=flat-square)](https://github.com/permissionBRICK/The-Construct/pulls)
 
-[Install](#-load-the-construct) · [Features](#-features) · [Connect](#-jack-in) ·
-[Configuration](#%EF%B8%8F-configuration) · [Documentation](#-documentation)
+[Features](#-features) · [Install](#-load-the-construct) · [Connect](#-jack-in) ·
+[Configure](#-configure) · [Docs](#-documentation)
 
 </div>
 
 ---
+
+## ✨ Features
+
+- 🤖 **Agents preinstalled, zero config** — Claude Code, Codex & Opencode, ready in
+  unattended bypass mode: no permission prompts, real root shell.
+- 🔒 **Sandboxed by design** — a throwaway Hyper-V VM stands between the agents and your PC.
+- 🎛️ **One-screen control panel** — a VS Code extension on your host runs the whole VM:
+  status, power, lifecycle, projects, updates, usage.
+- ♻️ **Disposable, not amnesiac** — reinstall the VM and your agent config comes back on its
+  own: instructions, memory, skills, subscription auth, git & MCP credentials.
+- 📦 **Project profiles** — repos, SDKs, MCP servers, and setup commands in one JSON file,
+  replayed on every (re)provision.
+- 🎤 **Microphone passthrough** — voice input in the Claude Code extension works, even over
+  Remote-SSH.
+- 🤷 **It just works™** — pre-configured system prompts make agents just install whatever they need for the task automatically
+
+<sub>Bonus: auto-deploy MCP servers to all three agents · patched Claude Code extension for faster UI updates · no AI attribution by default.</sub>
 
 ## ⚡ Load the Construct
 
@@ -28,16 +45,14 @@ Open **PowerShell** on Windows and paste:
 irm https://raw.githubusercontent.com/permissionBRICK/The-Construct/main/install.ps1 | iex
 ```
 
-One command, zero VM interaction: it elevates to Administrator, builds an Ubuntu autoinstall
-ISO, creates a Hyper-V VM, installs Ubuntu unattended, provisions the full agent stack, and
-wires up your host's SSH + VS Code config. Answer a few questions up front (RAM, disk,
-projects) — then just hit connect.
+One command, zero VM interaction: it builds an Ubuntu autoinstall ISO, creates the Hyper-V
+VM, installs Ubuntu unattended, provisions the full agent stack, and wires up your host's
+SSH + VS Code config. Answer a few questions up front — then just hit connect.
 
-> **Requirements:** Windows 10/11 with Hyper-V, and WSL with a Linux distro for the ISO
-> build (`wsl --install -d Ubuntu` if missing). Installs from `permissionBRICK/The-Construct`;
-> pass `-Repo owner/name` for a fork. Already have a VM? The installer offers
-> **reprovision**, **reinstall** (with [config save & restore](docs/backup-restore.md)), and
-> **export config**. Other paths — bundled ISO, BYO VM, no-admin — are in the
+> **Requirements:** Windows 10/11 with Hyper-V, and WSL for the ISO build
+> (`wsl --install -d Ubuntu` if missing). Already have a VM? The installer offers
+> **reprovision**, **reinstall** (with [config save & restore](docs/backup-restore.md)),
+> and **export config**. Other paths — bundled ISO, BYO VM, no-admin — are in the
 > [installation guide](docs/installation.md).
 
 <div align="center">
@@ -48,54 +63,24 @@ projects) — then just hit connect.
 
 </div>
 
-## ✨ Features
-
-- 🤖 **Agents preinstalled, zero config** — Claude Code, Codex, and Opencode CLIs installed
-  and configured for **unattended bypass mode**: no permission prompts, running as root.
-- 🔒 **Sandboxed by design** — everything runs inside a throwaway Hyper-V VM. Agents get a real root shell; your host PC stays out of reach.
-- 🎤 **Microphone passthrough** — makes Voice-Input work seamlessly in the VSCode Claude Code extension, even over a Remote-SSH connection.
-- ♻️ **Disposable, but almost persistent** — reinstalls can save and auto-restore your agent config, you won't even notice you just formatted your entire VM:
-  instruction files, memory, skills, subscription auth, git/GitHub credentials, MCP logins.
-- 🎛️ **One-screen control panel** — a VS Code extension (installed on your host by the
-  script) that operates the VM from a single panel: lifecycle (reprovision / reinstall / redownload / export), **project profiles** (import / select / edit), and much more.
-- 🖥️ **Connect your way** — VS Code Remote-SSH, browser VS Code, vscode.dev tunnels, Codex
-  App, Opencode serve, or plain SSH. All wired up automatically.
-- 🗂️ **Repos as a Windows drive** — auto-mount the repos folder as a network-share on your host (optional).
-- 📦 **Project profiles** — declare repos, SDKs (`node`, `python`, `dotnet`), MCP servers,
-  and setup commands in a JSON file; provisioning checks out and builds everything.
-- 🔌 **MCP servers everywhere** — declare a server once and it's written into Claude Code,
-  Codex, and Opencode configs alike, stdio or HTTP.
-- ✍️ **Your commits, your name** — AI attribution trailers are turned off by default.
-- 🚀 **Fast reconnects** — the VS Code server and agent extensions are pre-seeded, so even
-  the first Remote-SSH connect skips the usual download wait.
-
 ## 🔌 Jack in
 
-After install, every connection target is ready — the VM is reachable as
-`agent-vm.mshome.net` (alias `agent-vm`):
+The VM answers as `agent-vm.mshome.net` (alias `agent-vm`); every target below is wired up
+during install:
 
-| Client | How | Notes |
-|--------|-----|-------|
-| **VS Code Remote-SSH** | Remote Explorer → `agent-vm` | Host entry, key, and platform pre-configured; Claude Code extension starts in bypass mode |
-| **VS Code in the browser** | `http://agent-vm.mshome.net:8000/?tkn=<token>` | On by default via `code serve-web`; token-gated |
-| **vscode.dev tunnel** | `https://vscode.dev/tunnel/<name>` | Opt-in (`VSCODE_TUNNEL=true`); no inbound port needed |
-| **Codex App** | Add `agent-vm` as an SSH host | Root key authorized during provisioning |
-| **Opencode** | `agent-vm.mshome.net:4096` | `opencode serve` autostarts as a service |
-| **Windows file share** | `\\agent-vm.mshome.net\repo` | SMB share of the repos folder; opens as root. Map it to a drive (`Z:`) by opting in with `-MountRepoShare true` |
-| **Terminal** | `ssh agent-vm` | Direct root access |
+| Client | How |
+|--------|-----|
+| **VS Code Remote-SSH** | Remote Explorer → `agent-vm` — Claude Code starts in bypass mode |
+| **VS Code in the browser** | `http://agent-vm.mshome.net:8000/?tkn=<token>` — on by default, token-gated |
+| **vscode.dev tunnel** | `https://vscode.dev/tunnel/<name>` — opt-in (`VSCODE_TUNNEL=true`) |
+| **Codex App** | Add `agent-vm` as an SSH host |
+| **Opencode** | `agent-vm.mshome.net:4096` — `opencode serve` autostarts |
+| **Windows file share** | `\\agent-vm.mshome.net\repo` — map to a drive with `-MountRepoShare true` |
+| **Terminal** | `ssh agent-vm` — direct root access |
 
 Details in [Remote access & services](docs/remote-access.md).
 
-## ⚙️ Configuration
-
-Host-local settings live on the VM at `/etc/construct/config.env`:
-
-```env
-AGENT_NAME=agent-vm-01
-PROJECTS=default,your-project
-AI_TOOLS=opencode,claude-code,codex
-WORKSPACE_ROOT=/root/repos
-```
+## ⚙️ Configure
 
 Per-project setup is declared once in `projects/*.json` and reused on every (re)provision:
 
@@ -109,41 +94,34 @@ Per-project setup is declared once in `projects/*.json` and reused on every (re)
 }
 ```
 
-Everything else — env vars, MCP transports, SDK installs, checkout credentials — is in
-[Project profiles & configuration](docs/projects.md) and [Provisioning](docs/provisioning.md).
+VM-level settings live at `/etc/construct/config.env` (agent name, projects, tools,
+workspace root). Full reference: [Project profiles & configuration](docs/projects.md) and
+[Provisioning](docs/provisioning.md).
+
+## 🔐 Know the trade
+
+The Construct swaps guardrails for isolation:
+
+- **Bypass mode is sandbox-only** — root, no prompts. Great in a throwaway VM, a terrible
+  idea anywhere holding real credentials or data.
+- **The bootstrap key is burned** — a repo-committed keypair authorizes first contact and is
+  removed after provisioning, but anyone with the repo can reach an *un-provisioned* VM.
+- **Backups hold plaintext secrets** — treat the git-ignored `.construct-backup/` folder as
+  a secret.
+- **`code serve-web` is a root IDE over HTTP** — token-gated, but keep it on trusted
+  networks.
 
 ## 📚 Documentation
 
 | Guide | What's inside |
 |-------|---------------|
-| [Installation](docs/installation.md) | One-liner details, install options A–D, the automated flow, building the autoinstall ISO |
-| [Provisioning](docs/provisioning.md) | `Provision-AgentVM.ps1`, the non-interactive `provision.sh` + all env vars, AI tool setup, bypass-mode defaults |
-| [Manual setup](docs/manual-setup.md) | Taking a blank Ubuntu VM to ready state by hand — no Windows scripts |
-| [Project profiles & configuration](docs/projects.md) | `config.env`, profile schema, MCP servers, provision commands, repo checkout |
-| [Remote access & services](docs/remote-access.md) | VS Code server / serve-web / tunnels, Codex remote, service lifecycle, agent runtime |
-| [Control panel](docs/control-panel.md) | The VS Code operator console: status, connect/power, lifecycle, updates, projects, usage, mic passthrough |
-| [Backup & restore](docs/backup-restore.md) | Saving agent config, auth, and projects across VM reinstalls |
-
-## 🔐 Security model
-
-The Construct trades guardrails for isolation — know what that means:
-
-- **Bypass mode is sandbox-only.** Agents run as root with no permission prompts. That's the
-  point of a disposable VM, and a terrible idea anywhere holding real credentials or data.
-- **The bootstrap key is burned.** A keypair committed to this repo authorizes first contact
-  with a fresh VM; it's removed at the end of provisioning, but anyone with the repo can log
-  into an *un-provisioned* VM.
-- **Backups hold plaintext secrets.** The git-ignored `.construct-backup/` folder contains
-  auth tokens and git credentials — treat it as a secret.
-- **`code serve-web` is a root IDE over HTTP.** Token-gated, but keep it on trusted networks
-  or bind it to localhost and tunnel in.
-
-## 🧭 Principles
-
-- Keep Ubuntu minimal — use Docker for project-specific tools.
-- Keep setup logic in Git — project profiles instead of manual setup notes.
-- Avoid global SDK installs unless unavoidable; avoid secrets in VM images.
-- Make VMs disposable and setup repeatable.
+| [Installation](docs/installation.md) | One-liner details, install options A–D, the autoinstall ISO |
+| [Provisioning](docs/provisioning.md) | `Provision-AgentVM.ps1`, `provision.sh` + env vars, agent setup |
+| [Manual setup](docs/manual-setup.md) | Blank Ubuntu VM to ready state by hand |
+| [Project profiles & configuration](docs/projects.md) | `config.env`, profile schema, MCP servers, checkouts |
+| [Remote access & services](docs/remote-access.md) | serve-web, tunnels, Codex remote, service lifecycle |
+| [Control panel](docs/control-panel.md) | The VS Code operator console, module by module |
+| [Backup & restore](docs/backup-restore.md) | Carrying agent config and auth across reinstalls |
 
 ## 📄 License
 
