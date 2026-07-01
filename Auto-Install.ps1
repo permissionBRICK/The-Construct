@@ -133,10 +133,22 @@ param(
     # control panel at the end of a successful provision. Defaults to the canonical
     # repo; install.ps1 forwards these only when the caller chose a fork/mirror.
     [string]$Repo = "permissionBRICK/The-Construct",
-    [string]$Ref  = "main"
+    [string]$Ref  = "main",
+    # Launched from the control-panel extension: skip the end-of-run "Press Enter to
+    # exit" pauses so the console closes on its own and the dashboard (which auto-
+    # refreshes) shows the result. In debug the launcher keeps the console open with
+    # -NoExit regardless. A direct PowerShell run leaves this off and pauses so the
+    # window stays readable. Forwarded across the self-elevation relaunch below.
+    [switch]$FromPanel
 )
 
 $ErrorActionPreference = "Stop"
+
+# End-of-run pause. Skipped when launched from the control panel (-FromPanel): the
+# console closes on its own and the dashboard shows the result (in debug the launcher
+# keeps it open with -NoExit). A direct PowerShell run pauses so the window stays
+# readable. Used for every "Press Enter to exit" exit point below.
+function Wait-Exit { if (-not $FromPanel) { Read-Host "Press Enter to exit" | Out-Null } }
 
 # Any terminating error NOT handled by a try/catch below (e.g. missing WSL,
 # virtualization disabled in firmware) would normally close the self-elevated
@@ -145,7 +157,7 @@ trap {
     Write-Host ""
     Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
     Write-Host ""
-    Read-Host "Press Enter to exit"
+    Wait-Exit
     exit 1
 }
 
@@ -568,7 +580,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
             Write-Host "    $($_.Exception.Message)" -ForegroundColor Red
         } finally {
             Write-Host ""
-            Read-Host "Press Enter to exit"
+            Wait-Exit
         }
         return
     }
@@ -599,7 +611,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
                 }
                 if (-not (Confirm-RepoScan -Repos $repos)) {
                     Write-Note "Reinstall cancelled (unsaved work in the VM's repos)."
-                    Write-Host ""; Read-Host "Press Enter to exit"
+                    Write-Host ""; Wait-Exit
                     return
                 }
             } catch {
@@ -641,7 +653,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
                         -NoLabel  "Cancel    keep the VM as it is"
                     if (-not $goOn) {
                         Write-Note "Reinstall cancelled."
-                        Write-Host ""; Read-Host "Press Enter to exit"
+                        Write-Host ""; Wait-Exit
                         return
                     }
                 }
@@ -678,7 +690,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
 
         if (-not (Confirm-Reinstall -VmName $HyperVmName)) {
             Write-Note "Reinstall cancelled. No changes made."
-            Write-Host ""; Read-Host "Press Enter to exit"
+            Write-Host ""; Wait-Exit
             return
         }
         Show-TuiScreen -Title "Removing the existing VM" -Body @(
@@ -697,7 +709,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
             Show-TuiScreen -Title "The VM isn't reachable over SSH" -Body @(
                 "Start the VM, then re-run this script to export its config."
             )
-            Write-Host ""; Read-Host "Press Enter to exit"
+            Write-Host ""; Wait-Exit
             return
         }
         try {
@@ -718,12 +730,12 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
             Write-Host "ERROR: config export failed." -ForegroundColor Red
             Write-Host "    $($_.Exception.Message)" -ForegroundColor Red
         }
-        Write-Host ""; Read-Host "Press Enter to exit"
+        Write-Host ""; Wait-Exit
         return
     }
     else {
         Write-Note "No changes made."
-        Write-Host ""; Read-Host "Press Enter to exit"
+        Write-Host ""; Wait-Exit
         return
     }
 }
@@ -1147,5 +1159,5 @@ try {
     Write-Host "    $($_.Exception.Message)" -ForegroundColor Red
 } finally {
     Write-Host ""
-    Read-Host "Press Enter to exit"
+    Wait-Exit
 }

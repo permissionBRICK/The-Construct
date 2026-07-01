@@ -123,9 +123,15 @@ param(
     [switch]$Auto,
     # Suppress interactive config prompts (e.g. the alternate SMB drive-letter menu)
     # when launched from the control panel — the choices come from params instead.
-    # UNLIKE -Auto, this still lets the end-of-run pause fire (so the window stays
-    # readable, then closes). Implied by -Auto (an upper script pre-answers everything).
-    [switch]$NonInteractive
+    # (The end-of-run pause is controlled separately by -FromPanel.) Implied by -Auto
+    # (an upper script pre-answers everything).
+    [switch]$NonInteractive,
+    # Launched from the control-panel extension: skip the end-of-run "Press Enter to
+    # exit" pause so the console closes on its own and the dashboard (which auto-
+    # refreshes) shows the result. In debug the launcher keeps the console open with
+    # -NoExit regardless. A direct PowerShell run leaves this off and pauses so the
+    # window stays readable before it closes.
+    [switch]$FromPanel
 )
 
 $ErrorActionPreference = "Stop"
@@ -1681,8 +1687,11 @@ catch {
     Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
 }
 finally {
-    # Only pause when run standalone; an upper script (-Auto) does its own pause.
-    if (-not $Auto) {
+    # Pause only for a direct PowerShell run so the window stays readable. An upper
+    # script (-Auto) owns its own pause, and a control-panel launch (-FromPanel) skips
+    # it entirely: the console closes and the dashboard shows the result (in debug the
+    # launcher's -NoExit keeps the console open regardless).
+    if (-not $Auto -and -not $FromPanel) {
         Write-Host ""
         Read-Host "Press Enter to exit"
     }
