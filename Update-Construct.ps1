@@ -4,56 +4,85 @@
     place, record the update marker, and reinstall the control-panel extension. Does
     NOT rebuild the VM. Launched by the panel; also runnable by hand. -Repo/-Ref pick
     the source (default: the canonical repo / main).
+
+    -ResultFile: when the panel launches this, it passes a path we write "ok"/"fail"
+    to at the end. The panel polls it and, on "ok", RELOADS the VS Code window so the
+    refreshed panel loads automatically (a detached console can't reload VS Code). On
+    success with a -ResultFile we therefore DON'T pause (the reload is the feedback);
+    on failure we pause and tell the user to reopen VS Code. Run by hand (no
+    -ResultFile) it pauses on success too so the output stays readable.
 #>
 [CmdletBinding()]
 param(
     [string]$Repo = "permissionBRICK/The-Construct",
-    [string]$Ref  = "main"
+    [string]$Ref  = "main",
+    [string]$ResultFile = ""
 )
 $ErrorActionPreference = "Stop"
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
 
-# Wrap the whole run so the panel-launched window (no -NoExit) pauses at the end — on
-# success OR error — then closes on Enter, instead of vanishing before it can be read.
+$ok = $false
 try {
+    $base = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:TEMP }
+    $slug = ($Repo + "-" + $Ref) -replace '[^A-Za-z0-9._-]', '-'
+    $work = Join-Path $base (Join-Path "The-Construct" $slug)
+    $zip  = Join-Path $base "construct-download.zip"
+    if (-not (Test-Path -LiteralPath $work)) { New-Item -ItemType Directory -Path $work -Force | Out-Null }
 
-$base = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:TEMP }
-$slug = ($Repo + "-" + $Ref) -replace '[^A-Za-z0-9._-]', '-'
-$work = Join-Path $base (Join-Path "The-Construct" $slug)
-$zip  = Join-Path $base "construct-download.zip"
-if (-not (Test-Path -LiteralPath $work)) { New-Item -ItemType Directory -Path $work -Force | Out-Null }
+    Write-Host "==> Downloading $Repo ($Ref) ..." -ForegroundColor Cyan
+    $oldPP = $ProgressPreference; $ProgressPreference = "SilentlyContinue"
+    try { Invoke-WebRequest -Uri "https://codeload.github.com/$Repo/zip/refs/heads/$Ref" -OutFile $zip -UseBasicParsing }
+    finally { $ProgressPreference = $oldPP }
+    Expand-Archive -LiteralPath $zip -DestinationPath $work -Force
+    Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
 
-Write-Host "==> Downloading $Repo ($Ref) ..." -ForegroundColor Cyan
-$oldPP = $ProgressPreference; $ProgressPreference = "SilentlyContinue"
-try { Invoke-WebRequest -Uri "https://codeload.github.com/$Repo/zip/refs/heads/$Ref" -OutFile $zip -UseBasicParsing }
-finally { $ProgressPreference = $oldPP }
-Expand-Archive -LiteralPath $zip -DestinationPath $work -Force
-Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+    $root = Get-ChildItem -LiteralPath $work -Directory | Select-Object -First 1
+    if (-not $root) { throw "Downloaded archive looked empty: $work" }
 
-$root = Get-ChildItem -LiteralPath $work -Directory | Select-Object -First 1
-if (-not $root) { throw "Downloaded archive looked empty: $work" }
+    try { . (Join-Path $root.FullName "lib\AgentVm.Common.ps1") }
+    catch { Write-Warning "Could not load helpers: $($_.Exception.Message)" }
 
-try { . (Join-Path $root.FullName "lib\AgentVm.Common.ps1") }
-catch { Write-Warning "Could not load helpers: $($_.Exception.Message)" }
+    # Record what we fetched (installedCommit "" on failure -> the panel treats it as no
+    # marker and hides the banner, rather than diffing against a stale commit).
+    if (Get-Command Set-ConstructInstalledMarker -ErrorAction SilentlyContinue) {
+        $sha = Set-ConstructInstalledMarker -Root $root.FullName -Repo $Repo -Ref $Ref
+        Write-Host "==> Updated Construct files in $($root.FullName)" -ForegroundColor Green
+        if ($sha) { Write-Host "    installed commit: $sha" -ForegroundColor DarkGray }
+    } else {
+        Write-Warning "Refreshed the files but couldn't record the update marker (helpers unavailable)."
+    }
 
-# Record what we fetched (installedCommit "" on failure -> the panel treats it as no
-# marker and hides the banner, rather than diffing against a stale commit).
-if (Get-Command Set-ConstructInstalledMarker -ErrorAction SilentlyContinue) {
-    $sha = Set-ConstructInstalledMarker -Root $root.FullName -Repo $Repo -Ref $Ref
-    Write-Host "==> Updated Construct files in $($root.FullName)" -ForegroundColor Green
-    if ($sha) { Write-Host "    installed commit: $sha" -ForegroundColor DarkGray }
-} else {
-    Write-Warning "Refreshed the files but couldn't record the update marker (helpers unavailable)."
+    # Reinstall the control-panel extension (repackage + code --install-extension). Both a
+    # MISSING helper (the dot-source above failed) and a falsey return are real failures —
+    # otherwise the panel would reload into the OLD panel thinking the update succeeded.
+    if (-not (Get-Command Install-ControlPanelExtension -ErrorAction SilentlyContinue)) {
+        throw "Update helpers didn't load, so the control-panel extension couldn't be reinstalled."
+    }
+    if (-not [bool](Install-ControlPanelExtension -SourceRoot $root.FullName)) {
+        throw "The control-panel extension didn't install."
+    }
+    $ok = $true
+} catch {
+    Write-Warning "Update failed: $($_.Exception.Message)"
 }
-# Reinstall the control-panel extension (repackage + code --install-extension).
-if (Get-Command Install-ControlPanelExtension -ErrorAction SilentlyContinue) {
-    Install-ControlPanelExtension -SourceRoot $root.FullName | Out-Null
+
+# Signal the panel (if it launched us) so it can reload on success / warn on failure.
+if ($ResultFile) {
+    try { Set-Content -LiteralPath $ResultFile -Value $(if ($ok) { "ok" } else { "fail" }) -Encoding ASCII -Force } catch { }
 }
+
 Write-Host ""
-Write-Host "Update complete. Reload/restart VS Code to pick up the refreshed panel." -ForegroundColor Cyan
-
-} finally {
-    # Pause so the panel-launched window (no -NoExit) stays readable, then closes on
-    # Enter. Skip when input is redirected (non-interactive / automated runs).
-    if (-not [Console]::IsInputRedirected) { Write-Host ""; Read-Host "Press Enter to close" | Out-Null }
+if ($ok) {
+    if ($ResultFile) {
+        # The panel is polling; it will reload this window. No pause — the reload is the
+        # feedback (and the window closes because it's launched without -NoExit).
+        Write-Host "Update complete — reloading VS Code to load the refreshed panel..." -ForegroundColor Green
+    } else {
+        Write-Host "Update complete. Reload/restart VS Code to pick up the refreshed panel." -ForegroundColor Cyan
+        if (-not [Console]::IsInputRedirected) { Read-Host "Press Enter to close" | Out-Null }
+    }
+} else {
+    Write-Host "The update did not complete. Please reopen VS Code, then try the update again." -ForegroundColor Yellow
+    if (-not [Console]::IsInputRedirected) { Read-Host "Press Enter to close" | Out-Null }
+    exit 1
 }

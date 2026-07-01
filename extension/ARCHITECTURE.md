@@ -240,9 +240,16 @@ VM-derived fields when `online===false` or `probeError`):
   + a `constructRev` label into the state. It's BEST-EFFORT and CACHED (10 min for
   a real result; 60 s for a failure, so a transient blip doesn't hide the banner for
   10 min): no marker, offline, or rate-limited → no `update` key → banner hidden.
-  `updateConstruct` launches `Update-Construct.ps1` on the host (non-elevated,
-  download + reinstall the panel, no VM rebuild), which re-records the marker so the
-  banner clears. Agent updates
+  `updateConstruct` (`runUpdateConstruct`) launches `Update-Construct.ps1` on the host
+  (non-elevated, download + reinstall the panel, no VM rebuild), which re-records the
+  marker so the banner clears. **Auto-reload:** the panel passes `-ResultFile <tmp>`;
+  the script writes `ok`/`fail` at the very end (after the vsix reinstall — a falsey
+  `Install-ControlPanelExtension` counts as fail) and, on success WITH a result file,
+  does NOT pause (the reload is the feedback). `runUpdateConstruct` polls the file and,
+  on `ok`, runs `workbench.action.reloadWindow` so the refreshed panel loads with no
+  manual reopen (a detached host console can't reload VS Code itself); on `fail` the
+  script's console pauses with a "reopen VS Code" message and the panel shows a toast.
+  Run by hand (no `-ResultFile`) it pauses on success too. Agent updates
   work the same way: per-agent latest (npm/GitHub releases) vs the probed version →
   `{latest, updateAvailable}` folded into `state.agents`; `updateAgents` force-updates
   over SSH (`claude update` + re-run installers) with a progress notification.
