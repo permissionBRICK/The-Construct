@@ -358,10 +358,14 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
    gates. Launch is a host console via `child_process` + `Start-Process` (see the
    launch-model design decisions); reinstall/redownload elevate + show a modal
    confirm first. `customRebuild` maps to `-BackupMode save|existing|wipe`.
-   **Non-interactive from the panel:** `run` reads the persisted project selection
-   (`host.readSelectedProjects`) and passes `-Projects <csv>` when non-empty (so the
-   console doesn't re-prompt; omitted when nothing is selected, leaving the script's
-   own default); reprovision also passes `-NonInteractive` so `Provision-AgentVM.ps1`
+   **Non-interactive from the panel:** the extension passes the EFFECTIVE project
+   selection as `-Projects <csv>` (`effectiveProjects()`: the persisted
+   `host.readSelectedProjects` if any, ELSE the VM's CURRENT projects via a quick
+   `probeOnce` — so a reprovision KEEPS what's installed instead of the console
+   re-prompting and defaulting to "default", which would drop them). `run` prefers the
+   caller's list, falling back to the saved selection; omitted only when we truly can't
+   tell (offline + nothing saved), where the script keeps its own prompt. Reprovision
+   also passes `-NonInteractive` so `Provision-AgentVM.ps1`
    auto-picks the SMB drive letter instead of prompting (reinstall/redownload get this
    via Auto-Install's `-Auto` into Provision). The child argv has **NO `-NoExit`** — the
    scripts pause themselves at the end ("Press Enter to exit", try/finally on success OR

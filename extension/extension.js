@@ -146,6 +146,29 @@ function withProjects(state) {
   return { ...state, projects: projects.toChips(available, selected) };
 }
 
+/** The projects a lifecycle action should pass as -Projects so the console doesn't
+ *  re-prompt (and doesn't silently drop to "default", which would DROP the VM's
+ *  projects). Prefer the user's saved selection; otherwise reuse the VM's CURRENT
+ *  projects (a quick probe) so a reprovision keeps what's installed — matching the
+ *  panel, whose chips default to all current projects. Empty only when we genuinely
+ *  can't tell (offline + nothing saved), where the script keeps its own prompt. */
+async function effectiveProjects() {
+  try {
+    const scriptsDir = resolveScriptsDir();
+    if (scriptsDir) {
+      const saved = host.readSelectedProjects(scriptsDir);
+      if (saved && saved.length) return saved;
+    }
+  } catch (_) { /* fall through to the live set */ }
+  try {
+    const st = await probeOnce();
+    if (st && Array.isArray(st.projects)) {
+      return st.projects.filter((p) => p && p.selected !== false).map((p) => p.name).filter(Boolean);
+    }
+  } catch (_) { /* offline / probe failed → let the script prompt */ }
+  return [];
+}
+
 /** Probe the VM and push fresh state to one webview, then push the update-augmented
  *  state once the (cached, best-effort) GitHub check resolves. */
 async function refreshState(webview) {
@@ -814,7 +837,7 @@ function handleMessage(message, webview, context) {
       const scriptsDir = resolveScriptsDir();
       if (!scriptsDir) { warnNoScriptsDir(); return; }
       const action = message.mode === "redownload" ? "redownload" : "reinstall";
-      lifecycle.run(action, { scriptsDir, backupMode: message.backup });
+      effectiveProjects().then((projects) => lifecycle.run(action, { scriptsDir, backupMode: message.backup, projects }));
       return;
     }
 
@@ -837,10 +860,18 @@ function handleMessage(message, webview, context) {
       if (id === "connect") { remote.openOnVm({ path: "/root/repos", newWindow: false }); return; }
       if (id === "startConnect") { runStartAndConnect(); return; }
       if (id === "shutdown") { runShutdown(); return; }
-      if (id === "reprovision" || id === "exportConfig" || id === "reinstall" || id === "redownload") {
+      if (id === "exportConfig") {
         const scriptsDir = resolveScriptsDir();
         if (!scriptsDir) { warnNoScriptsDir(); return; }
-        lifecycle.run(id, { scriptsDir });
+        lifecycle.run(id, { scriptsDir }); // export doesn't touch project selection
+        return;
+      }
+      if (id === "reprovision" || id === "reinstall" || id === "redownload") {
+        const scriptsDir = resolveScriptsDir();
+        if (!scriptsDir) { warnNoScriptsDir(); return; }
+        // Pass the effective project selection so the console doesn't re-prompt (and a
+        // reprovision keeps the current projects instead of dropping to "default").
+        effectiveProjects().then((projects) => lifecycle.run(id, { scriptsDir, projects }));
         return;
       }
       if (id === "updateConstruct") { runUpdateConstruct(); return; }
