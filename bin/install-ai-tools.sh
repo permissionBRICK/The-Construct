@@ -398,6 +398,14 @@ install_codex() {
   fi
 
   codex_bin="$(command -v codex || true)"
+  if [[ "${codex_bin}" == "/usr/local/bin/codex" ]]; then
+    # On a re-provision the symlink we manage is already on PATH, so command -v
+    # reports it back to us. Ignore it here and resolve the real install location
+    # below; otherwise we would symlink /usr/local/bin/codex to itself (a circular
+    # symlink) -- codex --version then fails with ELOOP (the panel shows "—") and
+    # codex-app-server fails with 203/EXEC. Mirrors the opencode/claude handling.
+    codex_bin=""
+  fi
   if [[ -z "${codex_bin}" && -x /root/.local/bin/codex ]]; then
     codex_bin=/root/.local/bin/codex
   fi
@@ -405,10 +413,21 @@ install_codex() {
     codex_bin=/root/.codex/bin/codex
   fi
   if [[ -z "${codex_bin}" ]]; then
+    # Last resort: search common install roots for the real binary (never a symlink).
+    codex_bin="$(find /root /home /usr/local -maxdepth 4 -type f -name codex -perm -u+x 2>/dev/null | head -n1 || true)"
+  fi
+  if [[ -z "${codex_bin}" ]]; then
     warn "Codex install completed, but binary was not found in PATH or common root locations"
     exit 1
   fi
 
+  # Resolve through any intermediate symlinks so the link target is the real
+  # binary, and never point the symlink at itself.
+  codex_bin="$(readlink -f "${codex_bin}" 2>/dev/null || echo "${codex_bin}")"
+  if [[ "${codex_bin}" == "/usr/local/bin/codex" || ! -x "${codex_bin}" ]]; then
+    warn "refusing to create codex symlink: resolved path is invalid (${codex_bin})"
+    exit 1
+  fi
   ln -sf "${codex_bin}" /usr/local/bin/codex
 
   if [[ ! -f "${CODEX_TOKEN_FILE}" ]]; then
