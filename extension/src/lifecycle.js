@@ -54,15 +54,26 @@ function buildInvocation(action, opts = {}) {
   const args = [];
   const pushPair = (flag, val) => { if (val != null && String(val).trim() !== "") args.push(flag, String(val)); };
   const pushBool = (flag, val) => { if (typeof val === "boolean") args.push(flag, val ? "true" : "false"); };
+  // The control panel's project selection (persisted `projects`), so the script uses
+  // it instead of re-prompting in the console. Only when a selection exists — with none
+  // persisted, let the script keep its own default/prompt rather than force "default".
+  const pushProjects = () => {
+    const p = Array.isArray(opts.projects) ? opts.projects.filter(Boolean) : [];
+    if (p.length) args.push("-Projects", p.join(","));
+  };
 
   switch (action) {
     case "reprovision":
       args.push("-Action", "provision");
+      pushProjects();
       pushPair("-GitUserName", s.gitName);
       pushPair("-GitEmail", s.gitEmail);
       pushBool("-VsCodeServeWeb", s.serveWeb);
       pushBool("-VsCodeTunnel", s.tunnel);
       pushBool("-SmbShare", s.smb);
+      // Launched from the panel: don't prompt for the SMB drive letter etc. (still pauses
+      // at the end so output is readable — -NonInteractive is NOT -Auto).
+      args.push("-NonInteractive");
       return { script: PROVISION, args, destructive: false, elevate: false, label: "Reprovision" };
 
     case "exportConfig":
@@ -72,6 +83,7 @@ function buildInvocation(action, opts = {}) {
     case "reinstall":
     case "redownload": {
       args.push("-Action", action, "-BackupMode", normalizeBackupMode(opts.backupMode));
+      pushProjects(); // Auto-Install forwards -Projects to Provision (-Auto gates its prompts)
       pushPair("-VmMemoryGB", s.ram);
       pushPair("-VmDiskGB", s.disk);
       if (action === "redownload") pushPair("-UbuntuRelease", s.ubuntu);
@@ -113,9 +125,13 @@ function winQuoteArg(arg) {
   return out + "\\".repeat(bs * 2) + '"';
 }
 
-/** The child powershell.exe command line: its argv, each canonically quoted. */
+/** The child powershell.exe command line: its argv, each canonically quoted.
+ *  NO -NoExit: the scripts pause at the end themselves ("Press Enter to exit", on
+ *  success OR error via try/finally), so the window stays readable — and WITHOUT
+ *  -NoExit it then CLOSES on that Enter instead of dropping to an interactive
+ *  PowerShell prompt (the reported "returns to a PowerShell thing" annoyance). */
 function buildChildCommandLine(scriptPath, args) {
-  const argv = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-File", scriptPath, ...args];
+  const argv = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath, ...args];
   return argv.map(winQuoteArg).join(" ");
 }
 
@@ -236,10 +252,13 @@ function run(action, opts = {}) {
   }
   const scriptsDir = opts.scriptsDir;
   if (!scriptsDir) return; // caller warns when it can't resolve the scripts dir
+  let projects = [];
+  try { projects = host.readSelectedProjects(scriptsDir); } catch (_) { projects = []; }
   const inv = buildInvocation(action, {
     settings: host.readSettings(scriptsDir),
     backupDir: path.join(scriptsDir, BACKUP_DIR_NAME),
     backupMode: opts.backupMode,
+    projects,
   });
   if (!inv) return;
   Promise.resolve(inv.destructive ? confirmDestructive(inv) : true).then((ok) => {
