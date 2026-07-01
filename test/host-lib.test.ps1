@@ -284,6 +284,27 @@ try {
     finally { Remove-Item -LiteralPath $pvEmpty -Recurse -Force -ErrorAction SilentlyContinue }
 } finally { Remove-Item -LiteralPath $pvDir -Recurse -Force -ErrorAction SilentlyContinue }
 
+# ── Test-BackupHasGitCredentials: gates the redundant clone-credential prompt ──
+# When a restore backup already carries a non-empty .git-credentials, Auto-Install
+# skips the up-front clone-credential prompt (Provision reuses those creds), so the
+# unattended control-panel reinstall no longer stops for input. No stored creds
+# (blank dir / clean wipe) -> still prompt so private repos can be cloned.
+ok "backup-creds: empty BackupDir -> false" (-not (Test-BackupHasGitCredentials -BackupDir ""))
+ok "backup-creds: null BackupDir -> false"  (-not (Test-BackupHasGitCredentials -BackupDir $null))
+$bkTest = Join-Path ([System.IO.Path]::GetTempPath()) ("bk-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $bkTest | Out-Null
+try {
+    ok "backup-creds: no .git-credentials file -> false" (-not (Test-BackupHasGitCredentials -BackupDir $bkTest))
+    # Build the path exactly as the helper does so this works on both Windows
+    # (nested extracted\home\) and the Linux CI box (one backslash-named leaf).
+    $credFile = Join-Path $bkTest "extracted\home\.git-credentials"
+    New-Item -ItemType Directory -Path (Split-Path -Parent $credFile) -Force | Out-Null
+    Set-Content -LiteralPath $credFile -Value "   `n  " -Encoding UTF8
+    ok "backup-creds: whitespace-only file -> false" (-not (Test-BackupHasGitCredentials -BackupDir $bkTest))
+    Set-Content -LiteralPath $credFile -Value "https://user:token@github.com" -Encoding UTF8
+    ok "backup-creds: non-empty file -> true" (Test-BackupHasGitCredentials -BackupDir $bkTest)
+} finally { Remove-Item -LiteralPath $bkTest -Recurse -Force -ErrorAction SilentlyContinue }
+
 # ── Regression guard: no non-ASCII INSIDE a string literal in shipped .ps1 ────
 # Windows PowerShell 5.1 reads a BOM-less .ps1 as the ANSI code page, so a UTF-8
 # em-dash (etc.) inside a STRING mangles into a smart-quote that closes the string
