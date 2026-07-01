@@ -70,8 +70,11 @@ extension/
                       sanitizeProfile, toChips). Profile file I/O lives in host.js; the SSH
                       round-trip, edit modal and QuickPick live in extension.js.
     usage.js          ccusage over SSH -> per-agent tokens + estimated cost. buildUsageScript
-                      (base64-as-data), parseUsage/parseToolUsage (totals.totalCost|costUSD),
-                      number/cost formatting, augment(state) (best-effort + cached like updates),
+                      (base64-as-data) scopes each tool to the CURRENT period via --since/--until
+                      from the VM clock (daily=today, monthly=this month) — reports are daily|monthly
+                      only (codex has no weekly report), default daily; parseUsage/parseToolUsage
+                      (totals.totalCost|costUSD, now window-scoped), number/cost formatting,
+                      augment(state,{report}) (best-effort + cached-per-report like updates),
                       collectRaw/buildExportPayload/exportFileName for the JSON export.
     audio.js          on-demand mic passthrough. HostAudio: push vm/ scripts + apply the guard
                       patch over SSH, open a local TCP server + a persistent `ssh -R` tunnel
@@ -94,10 +97,11 @@ extension/
     construct-audio-enable.sh    install shim + apply remoteName-guard patch; prints CONSTRUCT_GATE_PATCHED=0/1
     construct-audio-disable.sh   remove shim + revert patch (restore the .bak)
   test/
-    ui-smoke.js       Playwright headless-Chromium webview test (112 checks: panel + launcher +
+    ui-smoke.js       Playwright headless-Chromium webview test (128 checks: panel + launcher +
                       narrow overflow + settings round-trip + honesty + power buttons + add-project +
-                      per-chip open + project edit modal + usage table + audio substatus incl. gate-patch state +
-                      launcher update banner)
+                      per-chip open + project edit modal + usage table + daily/monthly period tabs
+                      (incl. period-change-without-usage blanks the table, same-period keeps it) +
+                      audio substatus incl. gate-patch state + launcher update banner)
     probe.test.js     plain-node ssh-arg + probe-parse units (21 checks)
     host.test.js      plain-node scripts-dir resolution + settings merge + readProjectProfile +
                       project-profile list/write/select + traversal (61 checks; fake %LOCALAPPDATA% tree)
@@ -106,7 +110,7 @@ extension/
     updates.test.js   plain-node update-check units — Construct compare/cache + agent semver/latest/script + fetchJson redirects/per-host Accept, injected fetch+clock+http (62 checks)
     vmpower.test.js   plain-node Hyper-V power units — Get-VM probe/parse + Start-VM/elevated launch builders + injected-spawn queryVmState (38 checks)
     projects.test.js  plain-node scan builder/parser + planImport merge + reconcileSelection + sanitizeProfile (injection + prototype-pollution) (77 checks)
-    usage.test.js     plain-node ccusage script + parse (totalCost/costUSD/missing/error/zero/array) + formatting + cache TTL/coalesce + export payload, injected ssh+clock (88 checks)
+    usage.test.js     plain-node ccusage script (daily/monthly window scoping) + parse (totalCost/costUSD/missing/error/zero/array) + formatting + per-report cache TTL/coalesce + isCurrentReport stale-collection ordering + export payload, injected ssh+clock (103 checks)
     audio.test.js     plain-node guard-patch apply/revert/idempotency + VM script builders (injection proofs) + ssh -R argv + AudioSession gating + HostAudio enable/disable/rollback + tunnel settle-window (async early death + later death) (134 checks)
 ```
 
@@ -126,6 +130,9 @@ Defined in `extension.js` (handleMessage), `media/panel.js` and `media/launcher.
   `addProject` (prompt a git URL → clone over SSH → open in a new window),
   `openProject` (+`project`; open that project's folder on the VM in a new window).
 - `{type:'setAudio', enabled}` — live mic-passthrough toggle (console switch only).
+- `{type:'setUsagePeriod', period:'daily'|'monthly'}` — switch the token-usage window
+  (validated + remembered in `usageReport`; triggers a `refreshAll` that re-collects the
+  scoped numbers and re-broadcasts `usagePeriod`).
 - `{type:'saveProject', name, profile}` — the edited profile posted back from the modal
   (sanitized + written to `projects/<name>.json`).
 - `{type:'openPanel'}` — open the wide editor-tab panel.
@@ -147,6 +154,7 @@ VM-derived fields when `online===false` or `probeError`):
   installed, reprovisioned, update:{available,behind},
   agents:[{id,name,detail,version,updateAvailable,latest}],
   projects:[{name,selected}],
+  usagePeriod:'daily'|'monthly',   // active token-usage tab (rides the sync first push)
   usage:{tools:[{label,tokens,tokensText,costText}], totalTokensText, totalCostText},
   audio:{enabled,capturing,tunnel}, probeError }
 ```
@@ -520,11 +528,33 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
    (base64-as-data, mirroring `Get-AgentUsage.ps1`) for claude/codex/opencode;
    `parseUsage`/`parseToolUsage` read `totals.totalCost` (claude/opencode) or
    `costUSD` (codex) into per-agent rows (exact tokens + estimated cost) + a total;
-   `augment(state)` folds it in as a SEPARATE slow best-effort+cached pass (ccusage may
-   self-install on first run, so it rides after the base+update pushes). `exportUsage`
-   collects the raw combined document and saves it via a Save dialog
-   (`collectRaw`/`buildExportPayload`). `usage.test.js` (88). renderUsage already
-   consumed the shape, so no webview change was needed.
+   `augment(state,{report})` folds it in as a SEPARATE slow best-effort+cached pass
+   (ccusage may self-install on first run, so it rides after the base+update pushes).
+   `exportUsage` collects the raw combined document and saves it via a Save dialog
+   (`collectRaw`/`buildExportPayload`). `usage.test.js` (98). renderUsage already
+   consumed the shape.
+   - **Daily/monthly period tabs (default daily).** The panel offers a `.utab` toggle
+     (`daily`|`monthly`); the two are the ONLY views because `ccusage codex` supports
+     session/daily/monthly but NOT weekly — a weekly report errors for Codex and drops it
+     from the table (the reported "Codex missing from the dashboard" bug; the old default
+     WAS weekly). Each view is scoped to the CURRENT period with `--since/--until` computed
+     from the VM's own clock (`totals` is a LIFETIME sum regardless of granularity, so
+     without a window daily and monthly would be identical). The selected period lives in
+     `extension.js` `usageReport` (shared across surfaces, folded into state as
+     `usagePeriod` by `withLocalState` so the tab highlights on the sync push);
+     `{type:'setUsagePeriod'}` updates it + `refreshAll`s. The usage cache is keyed
+     per-report so a toggle collects that period fresh and toggling back is instant. The
+     webview flips the tab optimistically + blanks the stale numbers until the scoped
+     collection returns. **Async race:** usage collection is slow, so a refresh BINDS to
+     the report it started with and is DISCARDED on resolution if the live `usageReport`
+     changed meanwhile (`usage.isCurrentReport`) — a stale daily run can't land as
+     monthly's numbers; and every state is posted through `postState`, which stamps the
+     CURRENT `usagePeriod` at send time so a late push never re-selects an out-of-date tab.
+     The RENDERER also blanks the table whenever the active period changes but the push
+     carries no fresh `usage` (a period with no data, a failed collect, or a surface that
+     didn't get the local click-clear) — `panel.js` tracks the period whose numbers are on
+     screen (`shownUsagePeriod`) and clears on a mismatch; a SAME-period push without usage
+     keeps the numbers. `usage.test.js` (incl. an async ordering test) + ui-smoke tab checks.
 6. ✓ **DONE — Audio host side** — `src/audio.js` `HostAudio`: on enable, push the shim +
    apply the guard patch over SSH, open a local TCP server, and spawn a persistent
    `ssh -R <vmPort>:127.0.0.1:<hostPort>` — CONFIRMED by a settle window (an ssh that

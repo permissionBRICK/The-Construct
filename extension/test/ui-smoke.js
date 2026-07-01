@@ -56,6 +56,10 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("title mentions Construct", /Construct/.test(await page.title()));
   check("hero title renders", /CONSTRUCT/.test(await page.locator("h1.title").innerText()));
   check("rain canvas present", (await page.locator("#rain").count()) === 1);
+  // Usage-period tabs default to daily ("today") before any state is pushed.
+  check("usage: two period tabs (daily/monthly)", (await page.locator(".usage-tabs .utab").count()) === 2);
+  check("usage: daily tab active by default", (await page.locator('.utab[data-period="daily"]').getAttribute("aria-selected")) === "true"
+    && (await page.locator("#usageSub").textContent()).includes("today"));
 
   await page.click("#gearBtn");
   check("settings shows on gear", (await page.locator("#settingsView").isVisible()) && !(await page.locator("#mainView").isVisible()));
@@ -115,6 +119,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     vmName: "agent-vm-01", host: "h.example.net", online: true,
     agents: [{ name: "Claude Code", detail: "CLI", version: "2.1.196", updateAvailable: true, latest: "2.1.210" }],
     projects: [{ name: "default", selected: true }, { name: "billing", selected: false }],
+    usagePeriod: "monthly",
     usage: { tools: [
       { label: "Claude Code", tokens: 100, tokensText: "14.2M", costText: "$38.00" },
       { label: "Codex", tokens: 50, tokensText: "6.1M", costText: "$12.00" },
@@ -226,6 +231,43 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     && (await page.locator("#usageRows .usage-row .ucost").first().innerText()) === "$38.00");
   check("usage: total tokens + estimated cost", (await page.locator("#usageTotalTok").innerText()) === "20.3M"
     && (await page.locator("#usageTotalCost").innerText()) === "$50.00");
+  // usage period tabs: the pushed usagePeriod ("monthly") highlights the matching tab
+  // and updates the subheader; clicking the other tab flips optimistically, blanks the
+  // stale numbers, and posts setUsagePeriod (the extension re-collects the scoped window).
+  check("usage: pushed usagePeriod highlights monthly tab",
+    (await page.locator('.utab[data-period="monthly"]').getAttribute("aria-selected")) === "true"
+    && (await page.locator('.utab[data-period="daily"]').getAttribute("aria-selected")) === "false"
+    && (await page.locator("#usageSub").textContent()).includes("this month"));
+  await page.evaluate(() => { window.__posted.length = 0; });
+  await page.click('.utab[data-period="daily"]');
+  posted = await page.evaluate(() => window.__posted);
+  check("usage: clicking a tab posts setUsagePeriod", posted.some((m) => m.type === "setUsagePeriod" && m.period === "daily"));
+  check("usage: clicked tab activates + subheader updates",
+    (await page.locator('.utab[data-period="daily"]').getAttribute("aria-selected")) === "true"
+    && (await page.locator("#usageSub").textContent()).includes("today"));
+  check("usage: switching period blanks stale numbers until re-collect", (await page.locator("#usageTotalTok").innerText()) === "—");
+  // Renderer robustness: a period-change state that arrives WITHOUT usage (slow/empty/
+  // failed collection, or a second surface that didn't get the local click-clear) must
+  // blank the table rather than leave the previous period's numbers under the new heading.
+  // First render fresh daily numbers, then push {usagePeriod:'monthly'} with no usage.
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, usagePeriod: "daily",
+    usage: { tools: [{ label: "Claude Code", tokens: 100, tokensText: "9.9M", costText: "$9.00" }], totalTokensText: "9.9M", totalCostText: "$9.00" } } }, "*"));
+  await page.waitForTimeout(60);
+  check("usage: daily numbers render (pre-condition)", (await page.locator("#usageTotalTok").innerText()) === "9.9M");
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, usagePeriod: "monthly" } }, "*"));
+  await page.waitForTimeout(60);
+  check("usage: period-change push without usage blanks the table",
+    (await page.locator("#usageTotalTok").innerText()) === "—"
+    && (await page.locator("#usageRows .usage-row .utok").first().innerText()) === "—");
+  check("usage: period-change push still activates the new tab",
+    (await page.locator('.utab[data-period="monthly"]').getAttribute("aria-selected")) === "true");
+  // A same-period push without usage must NOT wipe the shown numbers.
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, usagePeriod: "monthly",
+    usage: { tools: [{ label: "Codex", tokens: 5, tokensText: "5.0M", costText: "$5.00" }], totalTokensText: "5.0M", totalCostText: "$5.00" } } }, "*"));
+  await page.waitForTimeout(60);
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, usagePeriod: "monthly" } }, "*"));
+  await page.waitForTimeout(60);
+  check("usage: same-period push without usage keeps the numbers", (await page.locator("#usageTotalTok").innerText()) === "5.0M");
   // export json: the button posts the exportUsage command (the extension then collects
   // over SSH and saves via a Save dialog).
   await page.evaluate(() => { window.__posted.length = 0; });

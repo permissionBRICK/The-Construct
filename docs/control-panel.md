@@ -82,8 +82,15 @@ The **Token usage & cost** module runs [ccusage](https://github.com/ryoppippi/cc
 SSH and shows a per-agent breakdown — a share bar, exact token counts, and an **estimated**
 cost — plus a total. (Token counts are exact; cost is an estimate from ccusage's model
 pricing.) It's a slower round-trip, so it fills in a moment after the rest of the status.
-**export json** saves the full raw usage document to a file you pick. The first run can be
-slow if ccusage installs itself on the VM.
+
+Use the **daily / monthly** tabs to switch the window: **daily** shows usage so far today,
+**monthly** shows usage this calendar month (both per agent). Daily is the default. An agent
+with no usage in the selected window is simply left out of the table. (We deliberately don't
+offer a *weekly* view — `ccusage` doesn't support a weekly report for Codex, which would drop
+Codex from the table; daily and monthly are supported by all three agents.)
+
+**export json** saves the full raw usage document — scoped to the current tab — to a file you
+pick. The first run can be slow if ccusage installs itself on the VM.
 
 ## Microphone passthrough (voice input)
 
