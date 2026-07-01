@@ -153,6 +153,19 @@ function buildOuterCommand(childCommandLine, opts = {}) {
 }
 
 /**
+ * The PowerShell call-operator invocation `& '<script>' <args>` used for the
+ * NON-elevated single-console launch: the script runs directly in the console `start`
+ * allocates (no inner Start-Process → no second window). Parameter NAMES stay bare and
+ * VALUES are single-quoted; our values never start with '-', so the /^-/ test cleanly
+ * splits names from values. All target params are [string]/[int]/[switch], so a quoted
+ * string value binds (incl. [int] coercion, verified) and a bare -Switch sets it. Pure.
+ */
+function buildCallCommand(scriptPath, args) {
+  const toks = (args || []).map((a) => /^-/.test(String(a)) ? String(a) : psSingleQuote(a));
+  return "& " + psSingleQuote(scriptPath) + (toks.length ? " " + toks.join(" ") : "");
+}
+
+/**
  * Build the child_process invocation that opens a new host console running the
  * script. Pure (returns the argv; the caller spawns it).
  *
@@ -162,21 +175,29 @@ function buildOuterCommand(childCommandLine, opts = {}) {
  * OPPOSITE, DETACHED_PROCESS). A console-less launcher's `Start-Process` then opens
  * NO visible window — the "toast fires, no window, nothing happens" bug that removing
  * windowsHide alone did NOT fix (detached still suppressed the console). `start` is
- * the reliable Win32 primitive that forces a NEW CONSOLE for its target, so the
- * launcher powershell (and thus its inner Start-Process work window) is visible.
+ * the reliable Win32 primitive that forces a NEW CONSOLE for its target.
  *
- * Quoting is unchanged and still verified: the launcher powershell runs the SAME
- * outer command via -EncodedCommand (base64 UTF-16LE — argv-safe), whose inner argv
- * is winQuoteArg'd and forwarded as a single-string -ArgumentList to a -File call
- * (data, not commands). Only argv-safe tokens (the fixed powershell flags + the
- * base64 blob) pass through cmd — no paths or user values — so `start` adds no new
- * quoting surface. The empty "" is start's window-title slot, so the powershell path
- * can't be mistaken for a title. `command` is the decoded outer command (for tests).
+ * ELEVATED (reinstall/redownload): the console runs `Start-Process -Verb RunAs …` to
+ * raise the UAC prompt + open the elevated console (so there's a brief launcher window
+ * + the elevated one — unavoidable for UAC). NON-ELEVATED (reprovision/export/update):
+ * the console runs the script DIRECTLY via `& '<script>' <args>` — ONE window, no inner
+ * Start-Process (that second window was the reported "two popups"). Only argv-safe
+ * tokens (fixed powershell flags + the base64 blob) pass through cmd — no paths/user
+ * values — so `start` adds no quoting surface; the empty "" is start's title slot.
+ * `command` is the decoded inner command (for tests).
  */
 function buildHostLaunch(scriptPath, args, opts = {}) {
-  const command = buildOuterCommand(buildChildCommandLine(scriptPath, args), opts);
+  const elevate = !!opts.elevate;
+  const command = elevate
+    ? buildOuterCommand(buildChildCommandLine(scriptPath, args), opts)  // Start-Process -Verb RunAs -File …
+    : buildCallCommand(scriptPath, args);                               // & 'script' … (this console)
   const encoded = Buffer.from(command, "utf16le").toString("base64");
-  const psArgs = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded];
+  // -NonInteractive only for the elevated launcher (it just fires Start-Process). The
+  // non-elevated console RUNS the script here, so it must stay interactive for the
+  // script's end-of-run "Press Enter to close" pause (and any in-console confirmation).
+  const psArgs = elevate
+    ? ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded]
+    : ["-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded];
   return {
     file: "cmd.exe",
     spawnArgs: ["/c", "start", "", "powershell.exe", ...psArgs],
@@ -202,18 +223,24 @@ async function confirmDestructive(inv) {
 // CREATE_NO_WINDOW on cmd, which could suppress the console `start` allocates.
 // `detached` + unref let cmd (which exits the moment `start` fires) not tie to VS
 // Code; the started console is its own process and outlives VS Code regardless.
+// `extraEnv` (optional) is merged over the inherited environment and reaches the
+// launched console (and, when elevated, the Start-Process child) — used to pass a
+// result-file path to the script without adding a parameter old scripts would reject.
 // Exposed for the regression test that pins "no windowsHide".
-function hostLaunchSpawnOptions(cwd) {
-  return { cwd, detached: true, stdio: "ignore" };
+function hostLaunchSpawnOptions(cwd, extraEnv) {
+  const o = { cwd, detached: true, stdio: "ignore" };
+  if (extraEnv && typeof extraEnv === "object") o.env = { ...process.env, ...extraEnv };
+  return o;
 }
 
 /**
  * Spawn a host console running <scriptsDir>/<script> with the given args, opening
  * a new (optionally elevated) window. Shared by the lifecycle actions and the
  * Construct update refresh. Guards off-Windows. `opts`:
- * { scriptsDir, script, args, elevate, label }. `opts._spawn`/`_vscode`/`_platform`
- * are test seams (default child_process.spawn / the real vscode / process.platform).
- * Returns true if spawned.
+ * { scriptsDir, script, args, elevate, label, env? }. `env` is merged into the launched
+ * process environment (reaches the script). `opts._spawn`/`_vscode`/`_platform` are test
+ * seams (default child_process.spawn / the real vscode / process.platform). Returns true
+ * if spawned.
  */
 function launchHostScript(opts) {
   const vscode = opts._vscode || vsc();
@@ -226,7 +253,7 @@ function launchHostScript(opts) {
   const scriptPath = path.join(opts.scriptsDir, opts.script);
   const { file, spawnArgs } = buildHostLaunch(scriptPath, opts.args || [], { elevate: !!opts.elevate });
   try {
-    const child = spawn(file, spawnArgs, hostLaunchSpawnOptions(opts.scriptsDir));
+    const child = spawn(file, spawnArgs, hostLaunchSpawnOptions(opts.scriptsDir, opts.env));
     child.on("error", (e) => vscode.window.showErrorMessage(`Couldn't launch ${opts.label}: ${e.message}`));
     child.unref();
     vscode.window.showInformationMessage(
@@ -271,6 +298,6 @@ function run(action, opts = {}) {
 module.exports = {
   PROVISION, AUTO_INSTALL, BACKUP_DIR_NAME,
   normalizeBackupMode, buildInvocation,
-  psSingleQuote, winQuoteArg, buildChildCommandLine, buildOuterCommand, buildHostLaunch,
+  psSingleQuote, winQuoteArg, buildChildCommandLine, buildOuterCommand, buildCallCommand, buildHostLaunch,
   hostLaunchSpawnOptions, launchHostScript, run,
 };
