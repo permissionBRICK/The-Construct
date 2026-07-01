@@ -80,6 +80,10 @@ extension/
                       patch over SSH, open a local TCP server + a persistent `ssh -R` tunnel
                       CONFIRMED by a settle window (an ssh that dies early = tunnel-failed, roll
                       back both sides); parses CONSTRUCT_GATE_PATCHED so the UI is honest.
+                      MULTI-WINDOW: the VM side is a port RANGE (8767..+8) — each window binds
+                      the first free port (CONSTRUCT_PORTS_BUSY report + bind-race retry), the
+                      shim scans for a live tunnel, and the disable script only removes the
+                      shared shim/patch when the last window is out (see the design decision).
                       AudioSession: per-connection arm/disarm (mic hot only while recording).
                       makeHostMicProvider: spawns a NATIVE host recorder (ffmpeg, sox `rec`
                       fallback) that emits raw 16 kHz mono S16LE PCM on stdout and pipes it to
@@ -93,9 +97,12 @@ extension/
                       warning per enable). Guard patch apply/revert/idempotent. All pure
                       builders; ssh/spawn/net injected for tests.
   vm/                 scripts pushed to the VM over SSH by audio.js on enable
-    construct-rec-shim.sh        rec/arecord shim (streams tunnel PCM, dies on SIGTERM)
-    construct-audio-enable.sh    install shim + apply remoteName-guard patch; prints CONSTRUCT_GATE_PATCHED=0/1
-    construct-audio-disable.sh   remove shim + revert patch (restore the .bak)
+    construct-rec-shim.sh        rec/arecord shim (scans the tunnel-port range via `ss -ltn`,
+                                 streams the first live tunnel's PCM, dies on SIGTERM)
+    construct-audio-enable.sh    install shim + apply remoteName-guard patch; prints
+                                 CONSTRUCT_GATE_PATCHED=0/1 + CONSTRUCT_PORTS_BUSY=<csv>
+    construct-audio-disable.sh   remove shim + revert patch (restore the .bak) — SKIPPED while
+                                 another window's tunnel is live (last-window-out guard)
   test/
     ui-smoke.js       Playwright headless-Chromium webview test (128 checks: panel + launcher +
                       narrow overflow + settings round-trip + honesty + power buttons + add-project +
@@ -111,7 +118,7 @@ extension/
     vmpower.test.js   plain-node Hyper-V power units — Get-VM probe/parse + Start-VM/elevated launch builders + injected-spawn queryVmState (38 checks)
     projects.test.js  plain-node scan builder/parser + planImport merge + reconcileSelection + sanitizeProfile (injection + prototype-pollution) (77 checks)
     usage.test.js     plain-node ccusage script (daily/monthly/total window mapping) + parse (totalCost/costUSD/missing/error/zero/array) + formatting + per-report cache TTL/coalesce + isCurrentReport stale-collection ordering + export payload, injected ssh+clock (105 checks)
-    audio.test.js     plain-node guard-patch apply/revert/idempotency + VM script builders (injection proofs) + ssh -R argv + AudioSession gating + HostAudio enable/disable/rollback + tunnel settle-window (async early death + later death) (134 checks)
+    audio.test.js     plain-node guard-patch apply/revert/idempotency + VM script builders (injection proofs) + ssh -R argv + AudioSession gating + HostAudio enable/disable/rollback + tunnel settle-window (async early death + later death) + multi-window port range (busy-skip/bind-race retry/no-free-port/self-port disable) (233 checks)
 ```
 
 ## Webview ↔ extension message protocol
@@ -309,6 +316,30 @@ VM-derived fields when `online===false` or `probeError`):
   record-window signal — the host opens the mic on connect, releases on disconnect.
   The mic is never hot continuously. (snd-aloop was rejected for requiring a
   constant feed.)
+- **Mic passthrough is multi-window safe (a tunnel-port RANGE, not one port).**
+  Every VS Code window runs its own extension host → its own HostAudio, and an
+  `ssh -R` bind is exclusive per port — with the old single fixed 8767 a second
+  window's tunnel died on ExitOnForwardFailure AND its rollback ran the VM disable
+  script, ripping the shared shim + gate patch out from under the first window (the
+  "mic only works in one window" bug: auto-arm in window B silently broke window A).
+  Now: the VM side is `[8767, 8767+8)` (`DEFAULT_VM_PORT`/`DEFAULT_VM_PORT_COUNT`).
+  The enable script reports `CONSTRUCT_PORTS_BUSY=<csv>` (range ports with a
+  listener = other windows' live tunnels, via `ss -ltn` — NEVER a test connection,
+  which would arm that window's mic as a false record-start); `enable()` skips those
+  and treats an early ssh death as "next candidate" (two windows racing the same
+  free port: the loser advances), exposing the winner as `boundPort` (shown in the
+  tunnel label). Exhausted range → honest `no-free-port`. The shim scans the same
+  range for the first LISTENING port at record time — all windows come from the same
+  physical host, so any live tunnel reaches the same microphone. The disable script
+  is guarded ("last window out turns off the lights"): given
+  `CONSTRUCT_TUNNEL_SELF_PORT` (the caller's own port — waited on ≤3s to clear,
+  since the just-killed ssh's listener can linger) it leaves the shared shim + patch
+  in place while any OTHER range port still listens, so a disable/rollback in one
+  window can no longer break the rest. Known limits (accepted): two windows
+  RECORDING at the same instant share the first live tunnel (AudioSession's
+  newest-wins drops the older stream — one physical mic anyway), and a second
+  physical client machine attached to the same VM would reach the first machine's
+  mic (Construct is a per-user, per-host VM).
 - **Mic passthrough = ONE persistent setting.** Both switches — the console
   `#voiceSwitch` and the settings `#setMic` — drive the SAME `micPassthrough` key in
   `.construct-settings.json`. Toggling the console switch persists it (`persistMicPreference`
@@ -318,7 +349,8 @@ VM-derived fields when `online===false` or `probeError`):
   the main page" sticks. `activate()` → `maybeAutoEnableAudio` reads `micPassthrough` and,
   if on AND the VM is reachable, arms at startup via `enableAudio(..., {auto:true})` —
   FULLY SILENT (no notification progress, no toasts; the switch reflects the result, and a
-  down VM / a second window that already holds the tunnel shouldn't nag). A manual enable
+  down VM shouldn't nag on every launch — each window arms its own range port, see the
+  multi-window decision). A manual enable
   whose gate patched offers a **"Reload window"** (the running Claude Code still has the
   pre-patch code in memory, so its mic button only appears after a reload; passthrough
   re-arms itself post-reload via auto-arm). Not unit-testable here (no VS Code `activate()`
