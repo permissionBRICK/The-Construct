@@ -89,8 +89,11 @@ param(
     [string]$SmbShare = "true",
     # After provisioning, auto-mount the VM's workspace share on this host with
     # `net use` (/savecred /persistent:yes), so the repos appear as a drive.
-    # "true"/"false". Ignored when -SmbShare false. Only runs on -Action provision.
-    [string]$MountRepoShare = "true",
+    # "true"/"false". OFF by default: the SMB server still runs on the VM (see
+    # -SmbShare) so the repos stay reachable at \\<host>\repo, but the host does
+    # not map a drive letter unless you opt in with -MountRepoShare true.
+    # Ignored when -SmbShare false. Only runs on -Action provision.
+    [string]$MountRepoShare = "false",
     # Drive letter to map the workspace share to (no colon). Used as-is when it's
     # free or already mapped to this VM's share; if it's in use by something else,
     # you're prompted to pick another free letter (a non-interactive run falls back

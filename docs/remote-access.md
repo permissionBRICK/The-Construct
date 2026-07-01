@@ -48,16 +48,18 @@ and prints the current IP only as a fallback.
 ## Workspace file share (SMB)
 
 Provisioning runs a Samba/SMB server on the VM (`bin/setup-smb-share.sh`, managed unit `smbd`)
-that exposes the workspace (`WORKSPACE_ROOT`, default `/root/repos`) to the host PC, and the
-host-side provisioner auto-mounts it as a drive:
+that exposes the workspace (`WORKSPACE_ROOT`, default `/root/repos`) to the host PC. The repos
+are reachable at `\\agent-vm.mshome.net\repo`, but the host does **not** map a drive letter by
+default. Opt in to the host-side auto-mount with `-MountRepoShare true`:
 
 ```powershell
 net use Z: \\agent-vm.mshome.net\repo /user:dev <password> /savecred /persistent:yes
 ```
 
-- **On by default.** Turn it off per provision with `Provision-AgentVM.ps1 -SmbShare false`,
-  or persistently with `SMB_SHARE=false` in `/etc/construct/config.env`. Skip only the
-  host-side auto-mount (leave the server running) with `-MountRepoShare false`.
+- **Server on by default; drive mount off by default.** The SMB server runs unless you turn it
+  off per provision with `Provision-AgentVM.ps1 -SmbShare false`, or persistently with
+  `SMB_SHARE=false` in `/etc/construct/config.env`. The host-side auto-mount is off unless you
+  ask for it with `-MountRepoShare true` (the repos stay reachable via the UNC path either way).
 - **Drive letter.** Defaults to `Z` (`-SmbDriveLetter`). It's used without asking when `Z` is
   free or already mapped to this VM's share. If `Z` is in use by something else (another
   network share or a local disk), the installer prompts you to pick another free letter (or
