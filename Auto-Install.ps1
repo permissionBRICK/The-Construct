@@ -127,7 +127,13 @@ param(
     #   existing skip the new export; restore a previously saved backup if present
     #   wipe     no save and no restore -- reinstall completely blank
     [ValidateSet("save", "existing", "wipe")]
-    [string]$BackupMode
+    [string]$BackupMode,
+    # GitHub owner/name + ref this install came from. Forwarded down to
+    # Provision-AgentVM.ps1, which records the installed-commit update marker for the
+    # control panel at the end of a successful provision. Defaults to the canonical
+    # repo; install.ps1 forwards these only when the caller chose a fork/mirror.
+    [string]$Repo = "permissionBRICK/The-Construct",
+    [string]$Ref  = "main"
 )
 
 $ErrorActionPreference = "Stop"
@@ -154,6 +160,21 @@ if (-not $SkipCreateVm) {
     $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
                ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     if (-not $isAdmin) {
+        # Set up the HOST side of the control panel now -- while we are still the real
+        # (non-admin) user -- BEFORE relaunching elevated. The VS Code extensions dir
+        # and winget are per-user: in the elevated session $env:USERPROFILE is the
+        # admin's profile, so the panel would land where the user's VS Code never looks.
+        # This mirrors install.ps1's non-elevated pre-step, so running Auto-Install.ps1
+        # directly (Option A / the autoinstall path) -- not only the install.ps1
+        # one-liner -- still installs the panel + Remote-SSH. Best-effort: warns, never
+        # blocks the install. (The elevated relaunch is admin, so it skips this branch.)
+        try {
+            . (Join-Path $PSScriptRoot "lib\AgentVm.Common.ps1")
+            if (Get-Command Ensure-VSCodeRemoteSsh -ErrorAction SilentlyContinue) { Ensure-VSCodeRemoteSsh | Out-Null }
+            if (Get-Command Install-ControlPanelExtension -ErrorAction SilentlyContinue) { Install-ControlPanelExtension -SourceRoot $PSScriptRoot | Out-Null }
+        } catch {
+            Write-Warning "Could not set up the control panel on the host (continuing): $($_.Exception.Message)"
+        }
         Write-Host "Relaunching as Administrator..." -ForegroundColor Yellow
         # Forward every bound parameter so the elevated copy keeps the caller's
         # choices (release, ISO paths, RAM/disk/projects, switches, ...).
@@ -1078,6 +1099,13 @@ $createArgs = @{
 # / decisions paths; absent for a plain fresh install with no repos).
 if ($restoreDir)         { $createArgs['RestoreDir']             = $restoreDir }
 if ($chosenCloneCredB64) { $createArgs['GitCloneCredentialsB64'] = $chosenCloneCredB64 }
+# Pass the source repo/ref PAIR down to the provisioner (for the installed-commit
+# marker) when the caller set EITHER -- forward both effective values so the recorded
+# pair matches what was installed. A plain run forwards neither, leaving the
+# provisioner's defaults / preserved settings to win.
+if ($PSBoundParameters.ContainsKey('Repo') -or $PSBoundParameters.ContainsKey('Ref')) {
+    $createArgs['Repo'] = $Repo; $createArgs['Ref'] = $Ref
+}
 try {
     & $createScript @createArgs
 
