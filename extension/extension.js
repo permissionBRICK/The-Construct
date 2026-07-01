@@ -750,6 +750,7 @@ function enableAudio(context, webview, opts = {}) {
         "enable-failed": "The VM couldn't install the recorder shim / patch.",
         "server-failed": "Couldn't open the local audio port.",
         "tunnel-failed": "Couldn't open the SSH tunnel to the VM.",
+        "no-free-port": "Every Construct audio tunnel port is already in use by other VS Code windows.",
       }[r.error] || "Couldn't enable microphone passthrough.";
       vscode.window.showErrorMessage(why + (r.detail ? " " + String(r.detail).slice(0, 160) : ""));
     } else if (!opts.auto) {

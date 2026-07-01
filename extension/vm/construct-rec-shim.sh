@@ -17,13 +17,44 @@
 # NOT parse the argv (rec/arecord flags differ and Claude pins the format on both
 # ends already) — every invocation just means "stream 16k/mono/S16LE now".
 #
-# CONFIG — CONSTRUCT_VM_PORT (loopback TCP port to read from); defaults to 8767 to
-# match the panel. All diagnostics go to stderr so stdout stays pure PCM.
+# CONFIG — CONSTRUCT_VM_PORT pins one exact loopback port (debug override). Normally
+# it is unset and we SCAN the range CONSTRUCT_VM_PORT_BASE..+COUNT-1 (defaults
+# 8767/8, baked in by construct-audio-enable.sh) for the first port with a LISTENING
+# reverse tunnel: every VS Code window holds its own `ssh -R` on one port of the
+# range, and all windows come from the same physical host, so any live tunnel
+# reaches the same microphone. The scan reads `ss -ltn` output rather than test-
+# connecting — a connect IS the host's "start recording" signal, so probing by
+# connecting would falsely blip a window's mic. All diagnostics go to stderr so
+# stdout stays pure PCM.
 
 set -u
 
-PORT="${CONSTRUCT_VM_PORT:-8767}"
+BASE="${CONSTRUCT_VM_PORT_BASE:-8767}"
+COUNT="${CONSTRUCT_VM_PORT_COUNT:-8}"
+PORT="${CONSTRUCT_VM_PORT:-}"
 HOSTIP="127.0.0.1"
+
+# Defensive: the baked/env values are host-validated integers, but a mangled env
+# must not break the arithmetic below.
+case "$BASE" in ''|*[!0-9]*) BASE=8767;; esac
+case "$COUNT" in ''|*[!0-9]*) COUNT=8;; esac
+
+if [ -z "$PORT" ]; then
+  # First LISTENING port in the range wins (deterministic; same mic either way).
+  listeners="$(ss -ltn 2>/dev/null || true)"
+  i=0
+  while [ "$i" -lt "$COUNT" ]; do
+    p=$((BASE + i))
+    if printf '%s\n' "$listeners" | grep -qE "[:.]${p}([[:space:]]|\$)"; then
+      PORT="$p"
+      break
+    fi
+    i=$((i + 1))
+  done
+  # No listener found (passthrough off / tunnel down / no ss): fall back to the base
+  # port so the connect fails fast and Claude reports no audio instead of hanging.
+  PORT="${PORT:-$BASE}"
+fi
 
 # Reap the reader child on SIGTERM/SIGINT/SIGHUP so we die promptly and don't leave
 # a dangling connection (which would keep the host mic armed). `exec` in the reader

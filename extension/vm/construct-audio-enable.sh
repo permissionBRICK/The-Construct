@@ -9,8 +9,15 @@
 #
 # INPUT (from the host, via env vars the builder sets — see src/audio.js
 # buildEnableScript; all data is base64-embedded, never interpolated into a shell):
-#   CONSTRUCT_SHIM_B64   base64 of construct-rec-shim.sh (the shim contents)
-#   CONSTRUCT_VM_PORT    loopback TCP port the shim reads (a validated integer)
+#   CONSTRUCT_SHIM_B64        base64 of construct-rec-shim.sh (the shim contents)
+#   CONSTRUCT_VM_PORT_BASE    first loopback TCP port of the tunnel range (validated int)
+#   CONSTRUCT_VM_PORT_COUNT   size of the range (validated int) — each VS Code window
+#                             binds ONE port of [BASE, BASE+COUNT) for its own tunnel
+#
+# OUTPUT (stdout, machine-readable for src/audio.js enable()):
+#   CONSTRUCT_GATE_PATCHED=0/1   whether the chat-mic speech gate is neutralised
+#   CONSTRUCT_PORTS_BUSY=<csv>   range ports that already have a listener (= other
+#                                windows' live tunnels) so the host picks a free one
 #
 # Best-effort + honest: the shim install always runs; the patch is applied only to a
 # copy that actually contains the known gate (unknown builds are left untouched and
@@ -19,10 +26,15 @@
 
 set -u
 
-VM_PORT="${CONSTRUCT_VM_PORT:-8767}"
+VM_BASE="${CONSTRUCT_VM_PORT_BASE:-8767}"
+VM_COUNT="${CONSTRUCT_VM_PORT_COUNT:-8}"
 SHIM_B64="${CONSTRUCT_SHIM_B64:-}"
 REC_PATH="/usr/local/bin/rec"
 ARECORD_PATH="/usr/local/bin/arecord"
+
+# Defensive re-validation (the host already coerced these to integers).
+case "$VM_BASE" in ''|*[!0-9]*) VM_BASE=8767;; esac
+case "$VM_COUNT" in ''|*[!0-9]*) VM_COUNT=8;; esac
 
 log() { printf '%s\n' "construct-audio-enable: $*" >&2; }
 
@@ -42,17 +54,40 @@ if ! printf %s "$SHIM_B64" | base64 -d > "$tmp_shim"; then
   rm -f "$tmp_shim"
   exit 2
 fi
-# Pin the default port into the shim so a bare `rec` invocation still finds the
-# tunnel. We rewrite ONLY the documented default in the `:-8767` fallback; a numeric
-# port is safe to sed in (validated host-side).
-if printf %s "$VM_PORT" | grep -qE '^[0-9]{1,5}$'; then
-  sed -i "s/CONSTRUCT_VM_PORT:-8767/CONSTRUCT_VM_PORT:-${VM_PORT}/" "$tmp_shim" || true
+# Pin the tunnel port RANGE into the shim so a bare `rec` invocation (Claude spawns
+# it with no construct env) still finds a live tunnel. We rewrite ONLY the documented
+# defaults in the `:-8767` / `:-8` fallbacks; numeric values are safe to sed in
+# (validated host-side + re-validated above).
+if printf %s "$VM_BASE" | grep -qE '^[0-9]{1,5}$'; then
+  sed -i "s/CONSTRUCT_VM_PORT_BASE:-8767/CONSTRUCT_VM_PORT_BASE:-${VM_BASE}/" "$tmp_shim" || true
+fi
+if printf %s "$VM_COUNT" | grep -qE '^[0-9]{1,2}$'; then
+  sed -i "s/CONSTRUCT_VM_PORT_COUNT:-8/CONSTRUCT_VM_PORT_COUNT:-${VM_COUNT}/" "$tmp_shim" || true
 fi
 chmod 0755 "$tmp_shim"
 mv -f "$tmp_shim" "$REC_PATH"
 # arecord is the same shim (it self-detects nothing — every call means "stream now").
 ln -sf "$REC_PATH" "$ARECORD_PATH"
-log "installed recorder shim at $REC_PATH (+ arecord symlink), port $VM_PORT."
+log "installed recorder shim at $REC_PATH (+ arecord symlink), ports ${VM_BASE}..$((VM_BASE + VM_COUNT - 1))."
+
+# Report which range ports already have a LISTENER — those are other windows' live
+# reverse tunnels, so the host must bind a different one. `ss` only, never a test
+# connection (a connect is the "start recording" signal and would blip that window's
+# mic). Best-effort: no ss → empty report → the host still discovers a collision via
+# ExitOnForwardFailure and tries the next port.
+busy=""
+if command -v ss >/dev/null 2>&1; then
+  listeners="$(ss -ltn 2>/dev/null || true)"
+  i=0
+  while [ "$i" -lt "$VM_COUNT" ]; do
+    p=$((VM_BASE + i))
+    if printf '%s\n' "$listeners" | grep -qE "[:.]${p}([[:space:]]|\$)"; then
+      busy="${busy:+${busy},}${p}"
+    fi
+    i=$((i + 1))
+  done
+fi
+printf 'CONSTRUCT_PORTS_BUSY=%s\n' "$busy"
 
 # Best-effort: ensure socat, the shim's most robust TCP client for binary streaming.
 # The shim falls back to nc, then pure-bash /dev/tcp, so this is an optimisation, not

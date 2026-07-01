@@ -158,10 +158,20 @@ function buildHostRecorder(tool, platform, device) {
 // binds it. hostPort — the local TCP server the tunnel forwards to. hostPort=0
 // lets the OS pick a free ephemeral port (learned after listen), which we then
 // plug into the `ssh -R` argv, so two windows don't collide on a fixed local port.
-// vmPort is fixed (8767, matching the panel's copy) because the shim, installed on
-// the VM, must know it ahead of time; it is loopback-only on the VM so it doesn't
-// clash with anything user-facing.
+//
+// MULTI-WINDOW — every VS Code window runs its own extension host and therefore
+// its own HostAudio, and an `ssh -R` bind is EXCLUSIVE per port, so a single fixed
+// vmPort can only ever serve one window (the second window's tunnel died on
+// ExitOnForwardFailure — and its rollback used to rip the shared shim/patch out
+// from under the first). The VM side is therefore a small port RANGE
+// [DEFAULT_VM_PORT, DEFAULT_VM_PORT+COUNT): each window binds the first free port
+// (the enable script reports which are busy; a bind race falls through to the next
+// candidate), and the shim scans the same range for a LISTENING tunnel at record
+// time. Every window belongs to the same physical host (Construct is a per-user
+// VM), so whichever live tunnel the shim picks reaches the same microphone. The
+// range is loopback-only on the VM so it doesn't clash with anything user-facing.
 const DEFAULT_VM_PORT = 8767;
+const DEFAULT_VM_PORT_COUNT = 8;
 
 /** The VM-side install locations, referenced by the enable/disable scripts + tests. */
 const REC_SHIM_PATH = "/usr/local/bin/rec";
@@ -248,15 +258,20 @@ function b64(s) {
  * arecord symlink), chmod +x, and applies the guard patch to the claude-code
  * extension.js. `shimText` is the literal contents of construct-rec-shim.sh;
  * `enableText` is construct-audio-enable.sh. Both are embedded base64 and decoded
- * on the VM. `vmPort` is passed as an env var (a bare integer we control, but we
- * still validate it's an integer so a bad caller can't inject). Pure. */
-function buildEnableScript(enableText, shimText, vmPort) {
+ * on the VM. `vmPort`/`portCount` describe the tunnel port RANGE (each window binds
+ * one port of it) and are passed as env vars — bare integers we control, but we
+ * still validate them so a bad caller can't inject. The script also reports which
+ * range ports already have a listener (CONSTRUCT_PORTS_BUSY=<csv> on stdout — other
+ * windows' live tunnels) so enable() can pick a free one. Pure. */
+function buildEnableScript(enableText, shimText, vmPort, portCount) {
   const p = normalizePort(vmPort, DEFAULT_VM_PORT);
+  const n = normalizeCount(portCount, DEFAULT_VM_PORT_COUNT);
   // The shim contents ride as base64-as-data; the enable script decodes it to the
-  // install path. CONSTRUCT_VM_PORT is a validated integer literal (no quoting risk).
+  // install path. The port range rides as validated integer literals (no quoting risk).
   return [
     "set -eu",
-    "export CONSTRUCT_VM_PORT=" + p,
+    "export CONSTRUCT_VM_PORT_BASE=" + p,
+    "export CONSTRUCT_VM_PORT_COUNT=" + n,
     "CONSTRUCT_SHIM_B64='" + b64(shimText) + "'",
     "export CONSTRUCT_SHIM_B64",
     // Hand the enable script itself to bash via the same base64-as-data channel so
@@ -268,10 +283,22 @@ function buildEnableScript(enableText, shimText, vmPort) {
 
 /**
  * Build the remote disable script: removes the shim (+ symlink) and reverts the
- * guard patch. `disableText` is construct-audio-disable.sh, embedded base64. Pure. */
-function buildDisableScript(disableText) {
+ * guard patch — but ONLY when this window was the last one using them: the script
+ * skips both steps while any OTHER range port still has a live tunnel listener
+ * (another window's passthrough). `selfPort` is the port THIS window's tunnel held
+ * (0 = none — e.g. an enable() rollback whose tunnel never bound); the script waits
+ * briefly for it to clear before counting, since our just-killed ssh's listener can
+ * linger a moment. `disableText` is construct-audio-disable.sh, embedded base64;
+ * ports are validated integers. Pure. */
+function buildDisableScript(disableText, selfPort, vmPort, portCount) {
+  const self = normalizePort(selfPort, 0);
+  const p = normalizePort(vmPort, DEFAULT_VM_PORT);
+  const n = normalizeCount(portCount, DEFAULT_VM_PORT_COUNT);
   return [
     "set -eu",
+    "export CONSTRUCT_TUNNEL_SELF_PORT=" + self,
+    "export CONSTRUCT_VM_PORT_BASE=" + p,
+    "export CONSTRUCT_VM_PORT_COUNT=" + n,
     "CONSTRUCT_DISABLE_B64='" + b64(disableText) + "'",
     'f=$(mktemp) && printf %s "$CONSTRUCT_DISABLE_B64" | base64 -d > "$f" && bash "$f"; rc=$?; rm -f "$f"; exit $rc',
   ].join("\n");
@@ -324,6 +351,46 @@ function buildTunnelArgs(ssh, cfg, vmPort, hostPort, hasKey) {
 function normalizePort(port, dflt) {
   if (typeof port !== "number" || !Number.isInteger(port) || port < 0 || port > 65535) return dflt;
   return port;
+}
+
+/** Coerce a tunnel-port-range size to a safe small integer in [1,16]; fall back to
+ *  `dflt` otherwise. Same injection rationale as normalizePort (the value reaches a
+ *  shell as CONSTRUCT_VM_PORT_COUNT=<n>); capped small so base+count stays a sane
+ *  loopback range. Pure. */
+function normalizeCount(count, dflt) {
+  if (typeof count !== "number" || !Number.isInteger(count) || count < 1 || count > 16) return dflt;
+  return count;
+}
+
+/** Parse the CONSTRUCT_PORTS_BUSY=<csv> line the enable script prints — the range
+ *  ports that already have a listener on the VM, i.e. other windows' live tunnels.
+ *  Missing line / blank / non-numeric tokens → []. Pure. */
+function parseBusyPorts(stdout) {
+  const m = String(stdout == null ? "" : stdout).match(/CONSTRUCT_PORTS_BUSY=([0-9,]*)/);
+  if (!m) return [];
+  const out = [];
+  for (const tok of m[1].split(",")) {
+    if (!/^[0-9]{1,5}$/.test(tok)) continue;
+    const p = Number(tok);
+    if (p <= 65535) out.push(p);
+  }
+  return out;
+}
+
+/** The VM ports this window may try to bind, in preference order: the range
+ *  [base, base+count) minus the reported-busy ports (those are other windows' live
+ *  tunnels — retrying them would just fail the bind). All-busy → []. Pure. */
+function portCandidates(base, count, busyList) {
+  const b = normalizePort(base, DEFAULT_VM_PORT);
+  const n = normalizeCount(count, DEFAULT_VM_PORT_COUNT);
+  const busy = new Set(Array.isArray(busyList) ? busyList : []);
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const p = b + i;
+    if (p > 65535) break;
+    if (!busy.has(p)) out.push(p);
+  }
+  return out;
 }
 
 // ── On-demand capture gating (host TCP server + tunnel + mic arming) ────────────
@@ -504,7 +571,11 @@ class HostAudio {
       catch (_) { return false; }
     });
     this.cfg = opts.cfg;
+    // vmPort is the BASE of the tunnel-port range; each window binds ONE port of
+    // [vmPort, vmPort+vmPortCount). boundPort records which one THIS window holds.
     this.vmPort = normalizePort(opts.vmPort, DEFAULT_VM_PORT);
+    this.vmPortCount = normalizeCount(opts.vmPortCount, DEFAULT_VM_PORT_COUNT);
+    this.boundPort = null;
     // Status sink: (info) => void, where info is {enabled?,capturing?,tunnel?,error?}.
     this.onStatus = typeof opts.onStatus === "function" ? opts.onStatus : () => {};
     // Mic provider: onCapture for AudioSession. May be set after construction.
@@ -522,9 +593,11 @@ class HostAudio {
     this._tunnelSettleMs = opts._tunnelSettleMs != null ? opts._tunnelSettleMs : 1200;
   }
 
-  /** Human-readable tunnel label for the status line, e.g. "vm:8767 → host mic". */
+  /** Human-readable tunnel label for the status line, e.g. "vm:8767 → host mic".
+   *  Shows the port THIS window's tunnel actually bound (the range base before one is). */
   tunnelLabel(hostPort) {
-    return `vm:${this.vmPort} → host mic` + (hostPort ? ` (:${hostPort})` : "");
+    const vp = this.boundPort != null ? this.boundPort : this.vmPort;
+    return `vm:${vp} → host mic` + (hostPort ? ` (:${hostPort})` : "");
   }
 
   /**
@@ -545,7 +618,7 @@ class HostAudio {
       // 1) Push scripts + run enable on the VM. The shim + port ride as base64 data.
       const shimText = this._readScript("construct-rec-shim.sh");
       const enableText = this._readScript("construct-audio-enable.sh");
-      const script = buildEnableScript(enableText, shimText, this.vmPort);
+      const script = buildEnableScript(enableText, shimText, this.vmPort, this.vmPortCount);
       const r = await this._ssh.runRemoteScript(script, { timeoutMs: 60000, cfg: this.cfg });
       if (!r || r.code !== 0) {
         this._enabling = false;
@@ -559,6 +632,9 @@ class HostAudio {
       // it prints CONSTRUCT_GATE_PATCHED=1/0 on stdout; we surface that honestly rather
       // than always claiming the mic button is unlocked.
       this.gatePatched = /CONSTRUCT_GATE_PATCHED=1(?![0-9])/.test((r && r.stdout) || "");
+      // Which range ports other windows' tunnels already hold — enable() skips them
+      // when picking THIS window's port.
+      const busyPorts = parseBusyPorts((r && r.stdout) || "");
 
       // 2) Start the local TCP server (on-demand mic arming happens per connection).
       this.session = new AudioSession({
@@ -579,15 +655,26 @@ class HostAudio {
       // 3) Spawn the persistent reverse tunnel (ssh -R vmPort:127.0.0.1:hostPort) and
       //    CONFIRM it stays up — an ssh that dies right after spawn (missing binary,
       //    connect failure, ExitOnForwardFailure on a busy port) is a startup failure,
-      //    not a live tunnel. On failure roll back BOTH sides (the remote enable ran).
-      const ok = await this._startTunnel(hostPort);
-      if (!ok) {
+      //    not a live tunnel. MULTI-WINDOW: an -R bind is exclusive, so each window
+      //    takes its own port from the range — skip the reported-busy ones and treat
+      //    an early death as "next candidate" (a simultaneous enable in two windows
+      //    races to the same 'free' port; the loser just moves on). On total failure
+      //    roll back BOTH sides (the remote disable is guarded on the VM: it leaves
+      //    the shared shim/patch alone while another window's tunnel is live).
+      const candidates = portCandidates(this.vmPort, this.vmPortCount, busyPorts);
+      let bound = null;
+      for (const p of candidates) {
+        if (await this._startTunnel(hostPort, p)) { bound = p; break; }
+      }
+      if (bound == null) {
         this._enabling = false;
         await this._teardownLocal();
-        await this._remoteDisable(); // step 1 mutated the VM; revert it
-        this.onStatus({ enabled: false, capturing: false, error: "tunnel-failed" });
-        return { ok: false, error: "tunnel-failed" };
+        await this._remoteDisable(); // step 1 mutated the VM; revert it (guarded)
+        const error = candidates.length ? "tunnel-failed" : "no-free-port";
+        this.onStatus({ enabled: false, capturing: false, error });
+        return { ok: false, error };
       }
+      this.boundPort = bound;
 
       this.enabled = true;
       this._enabling = false;
@@ -602,13 +689,14 @@ class HostAudio {
     }
   }
 
-  /** Spawn the reverse-tunnel child and confirm it survives a short settle window.
-   *  Resolves true only if ssh is still up after the window; an early error/exit (the
-   *  async way ssh reports a missing binary, connect failure, or ExitOnForwardFailure)
-   *  resolves false so enable() can treat it as a real failure and roll back. On a
-   *  successful start, wires persistent handlers so a LATER death flips state honestly. */
-  async _startTunnel(hostPort) {
-    const args = buildTunnelArgs(this._ssh, this.cfg, this.vmPort, hostPort, this._hasKey());
+  /** Spawn the reverse-tunnel child on `vmPort` and confirm it survives a short
+   *  settle window. Resolves true only if ssh is still up after the window; an early
+   *  error/exit (the async way ssh reports a missing binary, connect failure, or
+   *  ExitOnForwardFailure on a port another window just took) resolves false so
+   *  enable() can try the next range port / roll back. On a successful start, wires
+   *  persistent handlers so a LATER death flips state honestly. */
+  async _startTunnel(hostPort, vmPort) {
+    const args = buildTunnelArgs(this._ssh, this.cfg, vmPort, hostPort, this._hasKey());
     let child;
     try {
       child = this._spawn("ssh", args, { windowsHide: true, stdio: "ignore" });
@@ -650,6 +738,7 @@ class HostAudio {
     this.tunnel = null;
     if (!this.enabled) return; // a disable() is already tearing down
     this.enabled = false;
+    this.boundPort = null;
     if (this.session) { try { this.session.close(); } catch (_) {} this.session = null; }
     this.capturing = false;
     this.onStatus({ enabled: false, capturing: false, error: "tunnel-down", gatePatched: this.gatePatched });
@@ -668,6 +757,7 @@ class HostAudio {
     if (this.tunnel) { try { this.tunnel.kill && this.tunnel.kill("SIGTERM"); } catch (_) {} this.tunnel = null; }
     if (this.session) { try { this.session.close(); } catch (_) {} this.session = null; }
     this.capturing = false;
+    this.boundPort = null;
   }
 
   /**
@@ -680,20 +770,27 @@ class HostAudio {
     const was = this.enabled || !!this.tunnel || !!this.session;
     this.enabled = false;
     this.gatePatched = false;
+    // Capture which range port OUR tunnel held before teardown clears it — the VM
+    // disable script waits for that one to vanish, then only cleans up the shared
+    // shim/patch if no OTHER window's tunnel is still listening (last one out).
+    const selfPort = this.boundPort;
     await this._teardownLocal();
-    const ok = await this._remoteDisable();
+    const ok = await this._remoteDisable(selfPort);
     this.onStatus({ enabled: false, capturing: false });
     return { ok, was };
   }
 
-  /** Run the remote disable script over SSH (remove shim + revert the gate patch).
+  /** Run the remote disable script over SSH (remove shim + revert the gate patch —
+   *  skipped VM-side while another window's tunnel is live; see buildDisableScript).
    *  Best-effort; never rejects. Returns true iff it ran and the VM reported success.
-   *  Used both by disable() and by enable()'s rollback when a local step fails after
-   *  the remote enable already mutated the VM. Idempotent on the VM side. */
-  async _remoteDisable() {
+   *  Used both by disable() (selfPort = the port our tunnel held) and by enable()'s
+   *  rollback when a local step fails after the remote enable already mutated the VM
+   *  (no selfPort — our tunnel never bound). Idempotent on the VM side. */
+  async _remoteDisable(selfPort) {
     try {
       const disableText = this._readScript("construct-audio-disable.sh");
-      const r = await this._ssh.runRemoteScript(buildDisableScript(disableText), { timeoutMs: 60000, cfg: this.cfg });
+      const script = buildDisableScript(disableText, selfPort, this.vmPort, this.vmPortCount);
+      const r = await this._ssh.runRemoteScript(script, { timeoutMs: 60000, cfg: this.cfg });
       return !!(r && r.code === 0);
     } catch (_) {
       return false; // best-effort; the local side is already released
@@ -709,6 +806,7 @@ class HostAudio {
     if (this.tunnel) { try { this.tunnel.kill && this.tunnel.kill("SIGTERM"); } catch (_) {} this.tunnel = null; }
     if (this.session) { try { this.session.close(); } catch (_) {} this.session = null; }
     this.capturing = false;
+    this.boundPort = null;
   }
 }
 
@@ -857,11 +955,11 @@ function resolveWinMicDevice(spawn, cb) {
 
 module.exports = {
   FORMAT, BYTES_PER_FRAME, REC_ARGV, ARECORD_ARGV,
-  DEFAULT_VM_PORT, REC_SHIM_PATH, ARECORD_SHIM_PATH,
+  DEFAULT_VM_PORT, DEFAULT_VM_PORT_COUNT, REC_SHIM_PATH, ARECORD_SHIM_PATH,
   GATE_ANCHOR, GATE_PATCHED,
   isGuardPatched, hasGuardGate, applyGuardPatch, revertGuardPatch,
   b64, buildEnableScript, buildDisableScript, vmScriptsDir, defaultReadScript,
-  buildTunnelArgs, normalizePort,
+  buildTunnelArgs, normalizePort, normalizeCount, parseBusyPorts, portCandidates,
   ffmpegInputArgs, buildDshowListArgs, parseDshowAudioDevices,
   buildHostRecorder, resolveWinMicDevice, makeHostMicProvider,
   AudioSession, HostAudio,

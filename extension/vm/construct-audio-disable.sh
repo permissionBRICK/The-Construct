@@ -8,8 +8,15 @@
 #      the .construct-audio.bak backup if present (byte-for-byte), else by reverting
 #      the neutralised substring in place.
 #
-# Takes no input. Best-effort: a missing shim / already-reverted gate is a no-op, so
-# re-running is harmless. Prints status to stderr; exit 0.
+# INPUT (from the host, via env vars the builder sets — see src/audio.js
+# buildDisableScript; validated integers):
+#   CONSTRUCT_TUNNEL_SELF_PORT   the range port THIS window's tunnel held (0 = none,
+#                                e.g. an enable() rollback whose tunnel never bound)
+#   CONSTRUCT_VM_PORT_BASE       first port of the tunnel range
+#   CONSTRUCT_VM_PORT_COUNT      size of the range
+#
+# Best-effort: a missing shim / already-reverted gate is a no-op, so re-running is
+# harmless. Prints status to stderr; exit 0.
 
 set -u
 
@@ -17,8 +24,47 @@ REC_PATH="/usr/local/bin/rec"
 ARECORD_PATH="/usr/local/bin/arecord"
 ANCHOR='remoteName)return!1'
 PATCHED='remoteName&&!1)return!1'
+SELF_PORT="${CONSTRUCT_TUNNEL_SELF_PORT:-0}"
+VM_BASE="${CONSTRUCT_VM_PORT_BASE:-8767}"
+VM_COUNT="${CONSTRUCT_VM_PORT_COUNT:-8}"
 
 log() { printf '%s\n' "construct-audio-disable: $*" >&2; }
+
+# Defensive re-validation (the host already coerced these to integers).
+case "$SELF_PORT" in ''|*[!0-9]*) SELF_PORT=0;; esac
+case "$VM_BASE" in ''|*[!0-9]*) VM_BASE=8767;; esac
+case "$VM_COUNT" in ''|*[!0-9]*) VM_COUNT=8;; esac
+
+# ── 0) multi-window guard: only the LAST window out removes shared state ──────
+# The shim + gate patch are shared by every window; each window only owns its own
+# reverse tunnel. If any OTHER range port still has a listener once our own tunnel
+# is gone, another window's passthrough is live — leave both steps in place (that
+# window's disable, or the final one, cleans up). Our own listener can linger a
+# moment after the host killed its ssh, so wait for SELF_PORT to clear (≤3s) before
+# counting. `ss` only — a test connection would blip the other window's mic.
+port_listening() { ss -ltn 2>/dev/null | grep -qE "[:.]${1}([[:space:]]|\$)"; }
+if command -v ss >/dev/null 2>&1; then
+  if [ "$SELF_PORT" -gt 0 ]; then
+    tries=0
+    while [ "$tries" -lt 30 ] && port_listening "$SELF_PORT"; do
+      sleep 0.1
+      tries=$((tries + 1))
+    done
+  fi
+  others=""
+  i=0
+  while [ "$i" -lt "$VM_COUNT" ]; do
+    p=$((VM_BASE + i))
+    if [ "$p" != "$SELF_PORT" ] && port_listening "$p"; then
+      others="${others:+${others},}${p}"
+    fi
+    i=$((i + 1))
+  done
+  if [ -n "$others" ]; then
+    log "other window tunnel(s) still live on port(s) $others — leaving the shim + gate patch in place."
+    exit 0
+  fi
+fi
 
 # ── 1) remove the shim ─────────────────────────────────────────────────────────
 # Only remove OUR shim: guard that /usr/local/bin/rec is the construct shim (not a
