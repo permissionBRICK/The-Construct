@@ -270,6 +270,7 @@
       gitName: val("setGitName"), gitEmail: val("setGitEmail"), gitCred: swOn($("setGitCred")),
       ram: val("setRam"), disk: val("setDisk"), ubuntu: val("setUbuntu"),
       serveWeb: swOn($("setServeWeb")), tunnel: swOn($("setTunnel")), smb: swOn($("setSmb")), mic: swOn($("setMic")),
+      partialStreaming: swOn($("setPartialStreaming")),
     };
   }
   $("saveBtn") && $("saveBtn").addEventListener("click", () => post({ type: "saveSettings", settings: gatherSettings() }));
@@ -488,6 +489,7 @@
     setVal("setUbuntu", s.ubuntu);
     setSw("setGitCred", s.gitCred); setSw("setServeWeb", s.serveWeb);
     setSw("setTunnel", s.tunnel); setSw("setSmb", s.smb); setSw("setMic", s.mic);
+    setSw("setPartialStreaming", s.partialStreaming);
   }
 
   // Ask the extension for the current state once the webview is live.

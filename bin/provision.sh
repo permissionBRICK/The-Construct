@@ -73,6 +73,11 @@ if [[ -f "${CONFIG_FILE}" ]]; then
   _vscode_tunnel_saved="$(sed -n 's/^VSCODE_TUNNEL=//p' "${CONFIG_FILE}" | head -1)"
 fi
 VSCODE_TUNNEL="${VSCODE_TUNNEL:-${_vscode_tunnel_saved:-false}}"
+# Patch the Claude Code VS Code extension so it streams partial assistant messages
+# over Remote-SSH (the stock build disables that on remote, so the chat panel looks
+# frozen until each turn finishes generating). On by default; CLAUDE_PARTIAL_STREAMING=false
+# keeps the stock behaviour. Forwarded to install-vscode.sh, which applies the patch.
+CLAUDE_PARTIAL_STREAMING="${CLAUDE_PARTIAL_STREAMING:-true}"
 
 # Optional global git identity to set on the VM. Passed base64-encoded (see
 # Provision-AgentVM.ps1) so names/emails with spaces or apostrophes survive the
@@ -106,6 +111,7 @@ note "    CLAUDE_USER=${CLAUDE_USER}"
 note "    VSCODE_SERVER=${VSCODE_SERVER}"
 note "    VSCODE_SERVE_WEB=${VSCODE_SERVE_WEB}"
 note "    VSCODE_TUNNEL=${VSCODE_TUNNEL}"
+note "    CLAUDE_PARTIAL_STREAMING=${CLAUDE_PARTIAL_STREAMING}"
 note "    SMB_SHARE=${SMB_SHARE:-(saved/default)}"
 
 # A zip upload does not preserve Unix exec bits, so make the repo scripts
@@ -164,6 +170,7 @@ cfg WORKSPACE_ROOT "${WORKSPACE_ROOT}"
 cfg VSCODE_SERVER "${VSCODE_SERVER}"
 cfg VSCODE_SERVE_WEB "${VSCODE_SERVE_WEB}"
 cfg VSCODE_TUNNEL "${VSCODE_TUNNEL}"
+cfg CLAUDE_PARTIAL_STREAMING "${CLAUDE_PARTIAL_STREAMING}"
 install -d -m 0755 "${WORKSPACE_ROOT}"
 
 # 2b. Global git identity for the users that operate on the VM: CLAUDE_USER
@@ -344,6 +351,7 @@ if [[ "${VSCODE_SERVER}" == "true" ]]; then
   VSCODE_SERVER="${VSCODE_SERVER}" VSCODE_SERVE_WEB="${VSCODE_SERVE_WEB}" VSCODE_TUNNEL="${VSCODE_TUNNEL}" \
     VSCODE_SERVE_WEB_TOKEN_B64="${VSCODE_SERVE_WEB_TOKEN_B64:-}" \
     VSCODE_CLIENT_COMMIT="${VSCODE_CLIENT_COMMIT:-}" \
+    CLAUDE_PARTIAL_STREAMING="${CLAUDE_PARTIAL_STREAMING}" \
     bash "${REPO_DIR}/bin/install-vscode.sh" \
     || warn "WARNING: VS Code setup failed; continuing"
 fi

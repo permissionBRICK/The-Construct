@@ -46,6 +46,10 @@ param(
     # host/saved defaults.
     [string]$GitUserName,
     [string]$GitEmail,
+    # Forwarded to Provision-AgentVM.ps1: patch the Claude Code extension so it
+    # streams partial assistant messages over Remote-SSH. Default on; "false"
+    # reverts to stock. "true"/"false".
+    [string]$ClaudePartialStreaming = "true",
     # Forwarded to Provision-AgentVM.ps1 for the save/restore + clone-credential
     # features. RestoreDir restores a saved config after provisioning;
     # GitCloneCredentialsB64 supplies credentials for cloning private project
@@ -179,6 +183,7 @@ if (Get-VM -Name $VmName -ErrorAction SilentlyContinue) {
         if ($PSBoundParameters.ContainsKey('AgentPassword')) { $provArgs['AgentPassword'] = $AgentPassword }
         if ($PSBoundParameters.ContainsKey('GitUserName'))   { $provArgs['GitUserName']   = $GitUserName }
         if ($PSBoundParameters.ContainsKey('GitEmail'))      { $provArgs['GitEmail']      = $GitEmail }
+        if ($PSBoundParameters.ContainsKey('ClaudePartialStreaming')) { $provArgs['ClaudePartialStreaming'] = $ClaudePartialStreaming }
         if ($PSBoundParameters.ContainsKey('RestoreDir'))             { $provArgs['RestoreDir']             = $RestoreDir }
         if ($PSBoundParameters.ContainsKey('GitCloneCredentialsB64')) { $provArgs['GitCloneCredentialsB64'] = $GitCloneCredentialsB64 }
         if ($PSBoundParameters.ContainsKey('CheckoutProjects'))       { $provArgs['CheckoutProjects']       = $CheckoutProjects }
@@ -459,6 +464,7 @@ if ($isAutoinstall) {
         if ($PSBoundParameters.ContainsKey('AgentPassword')) { $provArgs['AgentPassword'] = $AgentPassword }
         if ($PSBoundParameters.ContainsKey('GitUserName'))   { $provArgs['GitUserName']   = $GitUserName }
         if ($PSBoundParameters.ContainsKey('GitEmail'))      { $provArgs['GitEmail']      = $GitEmail }
+        if ($PSBoundParameters.ContainsKey('ClaudePartialStreaming')) { $provArgs['ClaudePartialStreaming'] = $ClaudePartialStreaming }
         # Save/restore + clone-credential handoff (set by Auto-Install.ps1 on the
         # reinstall auto-restore path; absent on a plain create).
         if ($PSBoundParameters.ContainsKey('RestoreDir'))             { $provArgs['RestoreDir']             = $RestoreDir }

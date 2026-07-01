@@ -112,6 +112,10 @@ param(
     [string]$AgentPassword,
     [string]$GitUserName,
     [string]$GitEmail,
+    # Forwarded down (Create-AgentVM.ps1 -> Provision-AgentVM.ps1): patch the Claude
+    # Code extension so it streams partial assistant messages over Remote-SSH.
+    # Default on; "false" reverts the extension to stock. "true"/"false".
+    [string]$ClaudePartialStreaming = "true",
     [switch]$SkipChecksum,
     [switch]$SkipCreateVm,
     [switch]$Force,
@@ -574,6 +578,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         # Pass both git values (even if empty) so the provisioner doesn't re-prompt.
         $reprovArgs['GitUserName'] = $reprovGit.Name
         $reprovArgs['GitEmail']    = $reprovGit.Email
+        $reprovArgs['ClaudePartialStreaming'] = $ClaudePartialStreaming
         if ($PSBoundParameters.ContainsKey('AgentPassword')) { $reprovArgs['AgentPassword'] = $AgentPassword }
         if ($reprovCloneCredB64) { $reprovArgs['GitCloneCredentialsB64'] = $reprovCloneCredB64 }
         try {
@@ -1143,6 +1148,7 @@ $createArgs = @{
     AgentPassword = $chosenAgentPassword
     GitUserName   = $chosenGitName
     GitEmail      = $chosenGitEmail
+    ClaudePartialStreaming = $ClaudePartialStreaming
     # -Auto: the try/finally below owns the final pause, so neither
     # Create-AgentVM.ps1 nor the Provision-AgentVM.ps1 it chains into pauses too.
     Auto          = $true
