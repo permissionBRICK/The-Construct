@@ -79,6 +79,7 @@ function buildInvocation(action, opts = {}) {
       pushBool("-VsCodeServeWeb", s.serveWeb);
       pushBool("-VsCodeTunnel", s.tunnel);
       pushBool("-SmbShare", s.smb);
+      pushBool("-ClaudePartialStreaming", s.partialStreaming);
       // Launched from the panel: don't prompt for the SMB drive letter etc. (still pauses
       // at the end so output is readable — -NonInteractive is NOT -Auto).
       args.push("-NonInteractive");
@@ -97,6 +98,11 @@ function buildInvocation(action, opts = {}) {
       if (action === "redownload") pushPair("-UbuntuRelease", s.ubuntu);
       pushPair("-GitUserName", s.gitName);
       pushPair("-GitEmail", s.gitEmail);
+      // A destructive rebuild provisions a fresh VM, so carry the saved streaming
+      // preference through Auto-Install -> Create-AgentVM -> Provision (the panel's
+      // "…with these settings" buttons must honour an explicit off, not silently
+      // fall back to the provisioner's default-on).
+      pushBool("-ClaudePartialStreaming", s.partialStreaming);
       return {
         script: AUTO_INSTALL, args, destructive: true, elevate: true,
         label: action === "redownload" ? "Redownload" : "Reinstall",

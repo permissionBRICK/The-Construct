@@ -78,10 +78,11 @@ try {
     gitUserName: "Neo", gitEmail: "neo@zion.io", gitCredentialStore: false,
     vmMemoryGB: 16, vmDiskGB: 120, ubuntuRelease: "24.04",
     vsCodeServeWeb: true, vsCodeTunnel: false, smbShare: true, micPassthrough: true,
+    claudePartialStreaming: false,
   });
   ok("mapToForm: git interop keys -> form", form.gitName === "Neo" && form.gitEmail === "neo@zion.io" && form.gitCred === false);
   ok("mapToForm: numbers stringified for inputs", form.ram === "16" && form.disk === "120");
-  ok("mapToForm: booleans pass through", form.serveWeb === true && form.tunnel === false && form.smb === true && form.mic === true);
+  ok("mapToForm: booleans pass through", form.serveWeb === true && form.tunnel === false && form.smb === true && form.mic === true && form.partialStreaming === false);
 
   ok("mapToForm: absent keys are omitted (no clobber)",
     !("serveWeb" in host.mapToForm({ gitUserName: "Neo" })) && !("gitCred" in host.mapToForm({ gitUserName: "Neo" })));
@@ -89,10 +90,11 @@ try {
   const disk = host.mapFromForm({
     gitName: " Neo ", gitEmail: "neo@zion.io", gitCred: true,
     ram: "16", disk: "120.5", ubuntu: "22.04",
-    serveWeb: false, tunnel: true, smb: false, mic: true,
+    serveWeb: false, tunnel: true, smb: false, mic: true, partialStreaming: true,
     password: "s3cret", agents: ["claude-code"], projects: ["default"],
   });
   ok("mapFromForm: git identity uses interop keys", disk.gitUserName === "Neo" && disk.gitEmail === "neo@zion.io" && disk.gitCredentialStore === true);
+  ok("mapFromForm: partial-streaming toggle persists", disk.claudePartialStreaming === true);
   ok("mapFromForm: trims string values", disk.gitUserName === "Neo");
   ok("mapFromForm: numeric coercion (int + float)", disk.vmMemoryGB === 16 && disk.vmDiskGB === 120.5);
   const exotic = host.mapFromForm({ ram: "1e3", disk: "+8" });

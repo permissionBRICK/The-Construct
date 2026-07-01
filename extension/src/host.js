@@ -232,6 +232,7 @@ function mapToForm(raw) {
   if (typeof raw.vsCodeTunnel === "boolean") form.tunnel = raw.vsCodeTunnel;
   if (typeof raw.smbShare === "boolean") form.smb = raw.smbShare;
   if (typeof raw.micPassthrough === "boolean") form.mic = raw.micPassthrough;
+  if (typeof raw.claudePartialStreaming === "boolean") form.partialStreaming = raw.claudePartialStreaming;
   return form;
 }
 
@@ -274,6 +275,7 @@ function mapFromForm(form) {
   setBool("vsCodeServeWeb", form.serveWeb);
   setBool("vsCodeTunnel", form.tunnel);
   setBool("smbShare", form.smb);
+  setBool("claudePartialStreaming", form.partialStreaming);
   setBool("micPassthrough", form.mic);
   return out;
 }

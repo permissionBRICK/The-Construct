@@ -80,6 +80,11 @@ AI_TOOLS="${AI_TOOLS:-claude-code,codex,opencode}"
 # server. Empty = derive from AI_TOOLS (claude-code -> anthropic.claude-code,
 # codex -> openai.chatgpt); "none" = skip.
 VSCODE_EXTENSIONS="${VSCODE_EXTENSIONS:-}"
+# Force Claude Code partial-message streaming on over Remote-SSH by patching the
+# pre-installed anthropic.claude-code extension (its stock build gates streaming on
+# !remoteName, so over Remote-SSH the chat panel looks frozen until each turn is
+# fully generated). On by default; set CLAUDE_PARTIAL_STREAMING=false to keep stock.
+CLAUDE_PARTIAL_STREAMING="${CLAUDE_PARTIAL_STREAMING:-true}"
 # Commit of the *desktop* VS Code client that will Remote-SSH into this VM
 # (full 40-char sha, detected on the host by Provision-AgentVM.ps1). The
 # Remote-SSH server is version-locked to the client, so pre-seeding only skips
@@ -364,6 +369,28 @@ preinstall_extensions() {
       rc=1
     fi
   done
+
+  # Force Claude Code partial-message streaming on over Remote-SSH. The stock
+  # anthropic.claude-code extension gates it on !remoteName, so over Remote-SSH the
+  # chat panel shows nothing until each assistant turn is fully generated — it reads
+  # as "stuck before the thinking block even starts". Patch the freshly-installed
+  # extension.js so it streams as the turn is produced (reversible; honours
+  # CLAUDE_PARTIAL_STREAMING, default on). Run with the connection user's HOME so it
+  # targets the right extensions dir; done before the chown so any rewritten files
+  # (and the .bak) get re-homed to the user too.
+  case ",${exts}," in
+    *",anthropic.claude-code,"*)
+      if [[ "${CLAUDE_PARTIAL_STREAMING}" == "true" ]]; then
+        step "  Enabling Claude Code partial-message streaming over Remote-SSH"
+        HOME="${home}" bash "${REPO_DIR}/extension/vm/construct-partial-streaming-enable.sh" \
+          || warn "  WARNING: partial-streaming enable patch failed; continuing"
+      else
+        note "  Reverting Claude Code partial-message streaming to stock (CLAUDE_PARTIAL_STREAMING=false)"
+        HOME="${home}" bash "${REPO_DIR}/extension/vm/construct-partial-streaming-disable.sh" \
+          || warn "  WARNING: partial-streaming disable patch failed; continuing"
+      fi
+      ;;
+  esac
 
   # We ran as root; hand the tree back to the connection user.
   chown -R "${user}:${user}" "${data_dir}" 2>/dev/null || true

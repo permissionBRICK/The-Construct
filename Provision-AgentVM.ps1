@@ -77,6 +77,12 @@ param(
     # you can complete the one-time device sign-in, then continues to the reboot.
     # "true"/"false".
     [string]$VsCodeTunnel = "false",
+    # Patch the Claude Code VS Code extension on the VM so it streams partial
+    # assistant messages over Remote-SSH. The stock extension turns streaming OFF on
+    # any remote, so the chat panel shows nothing until each turn is fully generated
+    # (reads as "stuck before the thinking block"). This VM is reached over a local
+    # link where the per-delta volume is a non-issue, so default it on. "true"/"false".
+    [string]$ClaudePartialStreaming = "true",
     # Set up a Samba/SMB server on the VM that shares the workspace (the repos
     # folder) to this host. Credentials are generated once on the VM and persisted
     # in its config, so re-provisions keep the same login. "true"/"false".
@@ -1304,7 +1310,7 @@ if (-not $checkoutArg) {
     }
     $checkoutArg = if ($repoUrls.Count -gt 0) { "true" } else { "false" }
 }
-$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit' SMB_SHARE='$SmbShare'"
+$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit' SMB_SHARE='$SmbShare' CLAUDE_PARTIAL_STREAMING='$ClaudePartialStreaming'"
 Write-Host "  --- live provisioning output ---" -ForegroundColor DarkGray
 Invoke-SshStream -Sudo -Command "$envPrefix bash /opt/construct/repo/bin/provision.sh"
 Write-Host "  --- end provisioning output ---" -ForegroundColor DarkGray
