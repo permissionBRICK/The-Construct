@@ -354,7 +354,7 @@ function runStartAndConnect() {
     );
     return;
   }
-  if (!vmpower.startVm()) return; // startVm surfaces its own failure
+  if (!vmpower.startVm({ debug: debugEnabled() })) return; // startVm surfaces its own failure
   vscode.window.showInformationMessage("Starting the Construct VM — approve the UAC prompt.");
   vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: "Waiting for the Construct VM to come online…", cancellable: true },

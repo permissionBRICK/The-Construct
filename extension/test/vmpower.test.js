@@ -66,6 +66,9 @@ ok("probe launch: base64 decodes (utf16le) back to the command",
 // ── buildStartCommand / buildElevatedCommandLaunch ───────────────────────────
 ok("start cmd: starts the right VM", vm.buildStartCommand().includes("Start-VM -Name 'Agent-VM'"));
 ok("start cmd: reports success/failure", vm.buildStartCommand().includes("$?"));
+// On SUCCESS the console closes (no pause); only FAILURE pauses (readable) — so the
+// window exits cleanly on a good start instead of leaving an interactive prompt.
+ok("start cmd: pauses only on failure (Read-Host after the failure branch)", /Failed to start[\s\S]*Read-Host/.test(vm.buildStartCommand()));
 const el = vm.buildElevatedCommandLaunch(vm.buildStartCommand());
 ok("elevated: outer is Start-Process RunAs", el.command.includes("Start-Process") && el.command.includes("-Verb RunAs"));
 // Regression: the elevated launcher is spawned detached (no console), so the outer
@@ -73,7 +76,12 @@ ok("elevated: outer is Start-Process RunAs", el.command.includes("Start-Process"
 // and Start-VM runs windowless — the same "toast fires, nothing happens" symptom the
 // lifecycle buttons had. Assert -WindowStyle Normal coexists with -Verb RunAs.
 ok("elevated: requests a visible window (-WindowStyle Normal)", el.command.includes("-WindowStyle Normal"));
-ok("elevated: child runs an inline -Command (not -File <script>)", el.command.includes('-NoExit -Command "Start-VM'));
+ok("elevated: child runs an inline -Command (not -File <script>)", el.command.includes('-Command "Start-VM'));
+// NO -NoExit by default: the Start-VM console EXITS instead of dropping to an interactive
+// prompt (the reported bug). Debug (keepOpen) adds it back so errors stay readable.
+ok("elevated: no -NoExit by default (console exits)", !el.command.includes("-NoExit"));
+const elDbg = vm.buildElevatedCommandLaunch(vm.buildStartCommand(), { keepOpen: true });
+ok("elevated: keepOpen (debug) adds -NoExit", elDbg.command.includes("-NoExit"));
 // psSingleQuote wraps the child line in a PS single-quoted literal, so the inner
 // 'Agent-VM' quotes are doubled — assert the actually-escaped form.
 ok("elevated: carries the inner Start-VM command (quotes PS-escaped)", el.command.includes("Start-VM -Name ''Agent-VM''"));
