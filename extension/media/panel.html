@@ -120,7 +120,7 @@
     <div class="settings-top">
       <div>
         <h2 class="seclabel">Settings</h2>
-        <p class="lead">These pre-fill the installer's prompts so Reprovision / Reinstall / Redownload run with your saved choices. Project profiles are managed in the Projects panel; the agent password is still entered in the elevated console, and a reinstall always stops there for a dirty-repo warning and an "Are you sure?" delete confirmation.</p>
+        <p class="lead">These pre-fill the installer's prompts so Reprovision / Reinstall / Redownload run with your saved choices, without stopping for input. Project profiles are managed in the Projects panel. A reinstall started here still pauses only if the VM has uncommitted or unpushed work that would be lost.</p>
       </div>
       <button class="btn ghost" id="backBtn">&larr; back to console</button>
     </div>
@@ -143,7 +143,7 @@
       <div class="field"><label>Memory (RAM)</label><div class="ctl"><input type="number" id="setRam" value="8" style="max-width:90px" /><span class="suffix">GB</span></div></div>
       <div class="field"><label>Disk size</label><div class="ctl"><input type="number" id="setDisk" value="80" style="max-width:90px" /><span class="suffix">GB</span></div></div>
       <div class="field"><label>Ubuntu release<span class="hint">used when Redownloading the ISO</span></label><div class="ctl"><select id="setUbuntu"><option value="24.04">24.04 LTS (latest)</option><option value="22.04">22.04 LTS</option></select></div></div>
-      <div class="field"><label>Agent login password</label><div class="ctl"><span class="cost-note" style="margin:0">Entered in the elevated console during reinstall — never saved to disk.</span></div></div>
+      <div class="field"><label>Agent login password</label><div class="ctl"><span class="cost-note" style="margin:0">Reinstalling from here keeps the default 'agent' login (a manual fallback — normal access is as root over SSH). Set a custom one via a direct console run.</span></div></div>
     </section>
 
     <section class="setgroup">

@@ -44,10 +44,12 @@ function normalizeBackupMode(bm) {
  *   redownload   -> Auto-Install.ps1 -Action redownload -BackupMode <mode>
  * Returns { script, args, destructive, elevate, label } or null for an unknown action.
  *
- * The agent password is deliberately NOT passed (it would be visible on the
- * process command line); Auto-Install.ps1 prompts for it in the console, which
- * keeps "pass it at reinstall time" without exposing it. Project selection is
- * likewise left to the script's own selector until the Projects batch wires it.
+ * The agent password is deliberately NOT collected, stored, or passed (it would be
+ * visible on the process command line and is only a manual-fallback login — normal
+ * access is as root over the pre-seeded SSH key). Launched from the panel
+ * (-FromPanel), Auto-Install.ps1 keeps the seeded default 'agent' without prompting.
+ * Project selection is likewise left to the script's own selector until the Projects
+ * batch wires it.
  */
 function buildInvocation(action, opts = {}) {
   const s = opts.settings || {};
@@ -236,7 +238,7 @@ async function confirmDestructive(inv) {
     : "This DELETES the VM and its virtual disk, then rebuilds and reinstalls from the current ISO.";
   const pick = await vscode.window.showWarningMessage(
     `${inv.label} the Construct VM?`,
-    { modal: true, detail: detail + " You'll still confirm the irreversible delete in the elevated console." },
+    { modal: true, detail: detail + " This is irreversible and cannot be undone." },
     inv.label
   );
   return pick === inv.label;

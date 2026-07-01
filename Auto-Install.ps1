@@ -118,8 +118,10 @@ param(
     [switch]$Redownload,
     # Pre-select the existing-VM action instead of showing the interactive menu
     # (used by the control-panel extension to drive a chosen action unattended).
-    # Maps 1:1 to the menu. The destructive confirmations -- the dirty-repo scan
-    # and the "type yes" delete -- still run; only the up-front choice is automated.
+    # Maps 1:1 to the menu, automating the up-front choice. When paired with
+    # -FromPanel the redundant confirmations are skipped too (the "type yes" delete,
+    # the git-identity prompt and the agent-password prompt -- all already handled by
+    # the panel); the dirty-repo scan still warns if the VM has unsaved work.
     [ValidateSet("reprovision", "reinstall", "redownload", "export")]
     [string]$Action,
     # With -Action reinstall/redownload, pre-answer the save/restore prompts:
@@ -134,11 +136,16 @@ param(
     # repo; install.ps1 forwards these only when the caller chose a fork/mirror.
     [string]$Repo = "permissionBRICK/The-Construct",
     [string]$Ref  = "main",
-    # Launched from the control-panel extension: skip the end-of-run "Press Enter to
-    # exit" pauses so the console closes on its own and the dashboard (which auto-
-    # refreshes) shows the result. In debug the launcher keeps the console open with
-    # -NoExit regardless. A direct PowerShell run leaves this off and pauses so the
-    # window stays readable. Forwarded across the self-elevation relaunch below.
+    # Launched from the control-panel extension. Two effects:
+    #   1. Skips the end-of-run "Press Enter to exit" pauses so the console closes on
+    #      its own and the dashboard (which auto-refreshes) shows the result. In debug
+    #      the launcher keeps the console open with -NoExit regardless.
+    #   2. Skips the confirmations/prompts the panel already handled: the "type yes"
+    #      delete (confirmed in the panel's modal), the git-identity prompt and the
+    #      agent-password prompt (both owned by the settings page). The dirty-repo
+    #      scan still warns if the VM has uncommitted/unpushed work.
+    # A direct PowerShell run leaves this off: it pauses and asks for each of these.
+    # Forwarded across the self-elevation relaunch below.
     [switch]$FromPanel
 )
 
@@ -688,7 +695,14 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
             }
         }
 
-        if (-not (Confirm-Reinstall -VmName $HyperVmName)) {
+        # Last-chance "type yes" confirmation for the irreversible delete. Skipped
+        # when launched from the control panel (-FromPanel): the user already
+        # confirmed the delete in the panel's modal before this console opened, so
+        # re-typing "yes" here is just a second confirmation of the same choice. A
+        # direct PowerShell run still requires the typed "yes".
+        if ($FromPanel) {
+            Write-Note "Delete confirmed in the control panel; proceeding with the reinstall."
+        } elseif (-not (Confirm-Reinstall -VmName $HyperVmName)) {
             Write-Note "Reinstall cancelled. No changes made."
             Write-Host ""; Wait-Exit
             return
@@ -835,10 +849,18 @@ if (-not $SkipCreateVm) {
     # defaults to the seeded password 'agent'. A different value is applied to the
     # agent user at the very end of provisioning.
     if (-not $PSBoundParameters.ContainsKey('AgentPassword')) {
-        $chosenAgentPassword = Invoke-TuiInput -ScreenTitle "Agent user password" -Body @(
-            "Optional: login password for the 'agent' user. This is a manual-fallback",
-            "credential only -- normal access is as root over the pre-seeded SSH key."
-        ) -Prompt "Enter agent password (press Enter to keep default 'agent')" -Default "agent"
+        if ($FromPanel) {
+            # Launched from the control panel: don't prompt. The panel deliberately
+            # doesn't collect or store this credential (it's a manual-fallback login
+            # only -- normal access is as root over the pre-seeded SSH key), so keep
+            # the seeded default 'agent', exactly as pressing Enter would.
+            $chosenAgentPassword = "agent"
+        } else {
+            $chosenAgentPassword = Invoke-TuiInput -ScreenTitle "Agent user password" -Body @(
+                "Optional: login password for the 'agent' user. This is a manual-fallback",
+                "credential only -- normal access is as root over the pre-seeded SSH key."
+            ) -Prompt "Enter agent password (press Enter to keep default 'agent')" -Default "agent"
+        }
     }
 
     # Git identity for the VM's global git config. Defaults to the saved value,
@@ -847,6 +869,10 @@ if (-not $SkipCreateVm) {
     if ($PSBoundParameters.ContainsKey('GitUserName')) { $giParams['Name']  = $GitUserName }
     if ($PSBoundParameters.ContainsKey('GitEmail'))    { $giParams['Email'] = $GitEmail }
     if ($giParams.ContainsKey('Name') -and $giParams.ContainsKey('Email')) { $giParams['NoPrompt'] = $true }
+    # Launched from the control panel: never prompt for git identity -- the settings
+    # page owns it. Resolve silently from the passed values, else the saved settings,
+    # else this host's git identity (even if only one of name/email was passed).
+    if ($FromPanel) { $giParams['NoPrompt'] = $true }
     $gitId = Resolve-GitIdentity @giParams
     $chosenGitName  = $gitId.Name
     $chosenGitEmail = $gitId.Email
