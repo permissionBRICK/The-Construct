@@ -252,8 +252,10 @@ function run(action, opts = {}) {
   }
   const scriptsDir = opts.scriptsDir;
   if (!scriptsDir) return; // caller warns when it can't resolve the scripts dir
-  let projects = [];
-  try { projects = host.readSelectedProjects(scriptsDir); } catch (_) { projects = []; }
+  // Prefer the caller-supplied selection (the extension computes the EFFECTIVE set —
+  // saved selection, else the VM's current projects); fall back to the saved selection.
+  let projects = Array.isArray(opts.projects) ? opts.projects : null;
+  if (!projects) { try { projects = host.readSelectedProjects(scriptsDir); } catch (_) { projects = []; } }
   const inv = buildInvocation(action, {
     settings: host.readSettings(scriptsDir),
     backupDir: path.join(scriptsDir, BACKUP_DIR_NAME),
