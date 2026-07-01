@@ -99,10 +99,16 @@ ok("outer: non-elevate is Start-Process ... -WindowStyle Normal -ArgumentList", 
 const aposOuter = life.buildOuterCommand(life.buildChildCommandLine("C:\\Users\\O'Neil\\Auto-Install.ps1", []), {});
 ok("outer: apostrophe in path doubled in the PS literal", aposOuter.includes("O''Neil"));
 
-// ── buildHostLaunch: -EncodedCommand (no Node<->shell quoting layer) ─────────
+// ── buildHostLaunch: cmd /c start (forces a NEW CONSOLE) + -EncodedCommand ────
 const hl = life.buildHostLaunch("C:\\x\\Auto-Install.ps1", ["-Action", "reinstall", "-BackupMode", "save"], { elevate: true });
-ok("launch: spawns powershell.exe", hl.file === "powershell.exe");
+ok("launch: spawns via cmd.exe (start allocates the console)", hl.file === "cmd.exe");
+ok("launch: cmd runs `start \"\" powershell.exe` (empty title, then the launcher)",
+  hl.spawnArgs[0] === "/c" && hl.spawnArgs[1] === "start" && hl.spawnArgs[2] === "" && hl.spawnArgs[3] === "powershell.exe");
 ok("launch: uses -EncodedCommand, not -Command", hl.spawnArgs.includes("-EncodedCommand") && !hl.spawnArgs.includes("-Command"));
+// Only argv-safe tokens pass through cmd (fixed flags + the base64 blob) — no paths
+// or user values, so `start` adds no new quoting surface.
+ok("launch: nothing but flags + base64 reaches cmd (no raw script path/args)",
+  !hl.spawnArgs.some((a) => a.includes("\\") || a.includes(".ps1")));
 const b64 = hl.spawnArgs[hl.spawnArgs.length - 1];
 ok("launch: encoded payload is pure base64 (argv-safe)", /^[A-Za-z0-9+/]+=*$/.test(b64));
 ok("launch: base64 decodes (utf16le) back to the outer command", Buffer.from(b64, "base64").toString("utf16le") === hl.command);
@@ -118,10 +124,9 @@ ok("launch: the whole arg payload stays one -ArgumentList literal", /-ArgumentLi
 ok("psSingleQuote: wraps + escapes", life.psSingleQuote("a'b") === "'a''b'");
 
 // ── hostLaunchSpawnOptions: NO windowsHide (the actual "no window" bug) ───────
-// windowsHide:true sets CREATE_NO_WINDOW on the launcher, which suppresses the
-// console the inner Start-Process opens — the reported "toast fires, no window,
-// nothing happens". The launcher must be detached (outlive VS Code, no own console
-// so it doesn't flash) but must NOT hide the window.
+// windowsHide:true sets CREATE_NO_WINDOW on cmd, which could suppress the console
+// `start` allocates — the reported "toast fires, no window, nothing happens". cmd
+// exits the moment start fires, so detached just avoids tying it to VS Code.
 const spawnOpts = life.hostLaunchSpawnOptions("C:\\x");
 ok("spawnOpts: does NOT set windowsHide (would hide the console)", spawnOpts.windowsHide !== true);
 ok("spawnOpts: detached true (outlives VS Code, launcher has no own console)", spawnOpts.detached === true);
@@ -143,7 +148,7 @@ const launched = life.launchHostScript({
   _spawn: fakeSpawn, _vscode: fakeVscode, _platform: "win32",
 });
 ok("launchHostScript: returns true when spawned", launched === true);
-ok("launchHostScript: spawns powershell.exe", spawned && spawned.file === "powershell.exe");
+ok("launchHostScript: spawns via cmd.exe /c start", spawned && spawned.file === "cmd.exe" && spawned.args[1] === "start");
 ok("launchHostScript: spawn options carry NO windowsHide", spawned && spawned.options.windowsHide !== true);
 ok("launchHostScript: spawn options are detached (outlive VS Code)", spawned && spawned.options.detached === true);
 ok("launchHostScript: the launched command opens a VISIBLE window",
