@@ -307,8 +307,10 @@
     // isn't already connected to it. "Start & connect" replaces it when the VM is
     // installed but stopped (offline + Hyper-V reports it off). "Shutdown" shows
     // whenever the VM is reachable. All set before the offline early-return below.
+    // "Open on VM" is hidden for now: the "only when this window isn't already
+    // connected" gate (s.connected) isn't reliable, so keep it out of the UI.
     const conn = $("connectBtn");
-    if (conn) conn.hidden = !(online && s.connected === false);
+    if (conn) conn.hidden = true;
     const start = $("startBtn");
     if (start) start.hidden = !(!online && s.vmState === "off");
     const sd = $("shutdownBtn");
