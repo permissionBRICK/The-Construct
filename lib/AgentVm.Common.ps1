@@ -980,6 +980,63 @@ function Find-VSCodeCli {
     return $null
 }
 
+function Invoke-VSCodeCli {
+    <#
+        Run the `code` CLI and return ONLY its exit code (0 = success), leaving the
+        caller to decide success/failure from that. WHY this exists: `code` is a Node
+        program that writes to stderr even when it succeeds -- e.g. the DEP0169
+        `url.parse()` DeprecationWarning. In Windows PowerShell 5.1 a native command's
+        stderr captured with `2>&1` becomes ErrorRecord objects in the pipeline, and
+        under $ErrorActionPreference='Stop' (which install.ps1/Auto-Install.ps1 set)
+        the FIRST such record is promoted to a TERMINATING error whose .Exception
+        .Message is the stderr line. That made a successful `--install-extension`
+        (exit 0, warning on stderr) throw and be reported as "Could not install ...:
+        <the deprecation warning>" -- a false negative that may leave the panel
+        installed yet the user told it failed.
+
+        The fix, robust across PowerShell editions:
+          * pin $ErrorActionPreference='Continue' for the call so a stderr write can
+            NEVER be promoted to a terminating error (this is the actual trigger --
+            the redirect operator alone isn't enough on 5.1);
+          * send stderr to $null so the Node warning noise doesn't clutter the console
+            (a REAL failure is still surfaced by the caller via the non-zero exit code);
+          * set NODE_OPTIONS=--no-deprecation for the child so `code`'s own Node process
+            suppresses deprecation warnings at the source (belt-and-suspenders).
+        Success/failure is decided ONLY by the returned $LASTEXITCODE, never by whether
+        anything was written to stderr.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Code,
+        [Parameter(Mandatory)][string[]]$CodeArgs
+    )
+    $prevEap = $ErrorActionPreference
+    $prevNodeOpts = $env:NODE_OPTIONS
+    # Prepend --no-deprecation without clobbering any pre-existing NODE_OPTIONS.
+    $env:NODE_OPTIONS = ("--no-deprecation " + ($(if ($prevNodeOpts) { $prevNodeOpts } else { "" }))).Trim()
+    $ErrorActionPreference = 'Continue'
+    # Sentinel so a failure-to-LAUNCH is reported as failure, not success. A native
+    # command that actually runs overwrites $LASTEXITCODE with its real exit code; but
+    # if `code` can't be invoked at all (missing/deleted/unrunnable path), no process
+    # runs, so $LASTEXITCODE would keep a STALE value -- possibly 0 (false success),
+    # which is exactly what EAP=Continue would otherwise let slip through. Pre-seed a
+    # non-zero sentinel. Use $global: so the engine's post-run update (it targets the
+    # global $LASTEXITCODE) is what we read back, not a shadowed local copy.
+    $global:LASTEXITCODE = 127
+    try {
+        & $Code @CodeArgs 2>$null | Out-Null
+        return $global:LASTEXITCODE
+    } catch {
+        # A terminating failure to invoke the CLI (e.g. command-not-found) -- NOT a
+        # native stderr write, which EAP=Continue keeps non-terminating. Report failure.
+        return 127
+    } finally {
+        $ErrorActionPreference = $prevEap
+        if ($null -eq $prevNodeOpts) { Remove-Item Env:\NODE_OPTIONS -ErrorAction SilentlyContinue }
+        else { $env:NODE_OPTIONS = $prevNodeOpts }
+    }
+}
+
 function Ensure-VSCodeRemoteSsh {
     <#
         Make sure VS Code and the Remote-SSH extension are installed on the host so
@@ -1014,15 +1071,15 @@ function Ensure-VSCodeRemoteSsh {
     }
     Write-Host "==> Ensuring the VS Code Remote-SSH extension..." -ForegroundColor Cyan
     try {
-        # Idempotent: a no-op (exit 0) when the extension is already installed. A
-        # native command's non-zero exit does NOT throw in Windows PowerShell 5.1,
-        # so the catch can't see an install failure -- inspect $LASTEXITCODE instead,
-        # or we'd falsely report success when the extension didn't install.
-        & $code --install-extension ms-vscode-remote.remote-ssh 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) {
+        # Idempotent: a no-op (exit 0) when the extension is already installed. Decide
+        # success ONLY by the exit code -- a native command's non-zero exit does NOT
+        # throw in Windows PowerShell 5.1, and (via Invoke-VSCodeCli) a stderr write
+        # such as `code`'s DEP0169 deprecation warning is NOT treated as failure.
+        $exit = Invoke-VSCodeCli -Code $code -CodeArgs @('--install-extension', 'ms-vscode-remote.remote-ssh')
+        if ($exit -eq 0) {
             Write-Host "    Remote-SSH extension present." -ForegroundColor Green
         } else {
-            Write-Warning "code --install-extension exited $LASTEXITCODE; the Remote-SSH extension may not be installed."
+            Write-Warning "code --install-extension exited $exit; the Remote-SSH extension may not be installed."
             Write-Host "    Install it manually:  code --install-extension ms-vscode-remote.remote-ssh" -ForegroundColor DarkGray
         }
     } catch {
@@ -1235,11 +1292,15 @@ function Install-ControlPanelExtension {
         $stale = Get-VSCodeExtensionDir
         if (Test-Path -LiteralPath $stale) { Remove-Item -LiteralPath $stale -Recurse -Force -ErrorAction SilentlyContinue }
 
-        # `code` is a native command: a non-zero exit does NOT throw, so check
-        # $LASTEXITCODE rather than trusting the pipeline for success.
-        & $code --install-extension $vsix --force 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warning "VS Code rejected the control-panel install (code --install-extension exit $LASTEXITCODE)."
+        # `code` is a native command: decide success ONLY by its exit code. A non-zero
+        # exit does NOT throw, and (via Invoke-VSCodeCli) `code`'s DEP0169 deprecation
+        # warning on stderr is NOT mistaken for a failure -- previously, under
+        # $ErrorActionPreference='Stop', that stderr write was promoted to a terminating
+        # error and reported as "Could not install ...: <the warning>" even though the
+        # panel installed (exit 0).
+        $exit = Invoke-VSCodeCli -Code $code -CodeArgs @('--install-extension', $vsix, '--force')
+        if ($exit -ne 0) {
+            Write-Warning "VS Code rejected the control-panel install (code --install-extension exit $exit)."
             return $false
         }
         Write-Host "==> Installed the Construct control panel into VS Code (reload/restart VS Code to see it)." -ForegroundColor Cyan

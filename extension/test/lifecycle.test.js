@@ -85,9 +85,17 @@ ok("child: plain args left unquoted", child.includes("-Action reinstall"));
 
 // ── buildOuterCommand: SINGLE-string -ArgumentList (not an array) ────────────
 const outer = life.buildOuterCommand(child, { elevate: true });
-ok("outer: elevate adds -Verb RunAs", /^Start-Process -FilePath 'powershell\.exe' -Verb RunAs -ArgumentList '/.test(outer));
+ok("outer: elevate adds -Verb RunAs", /^Start-Process -FilePath 'powershell\.exe' -Verb RunAs -WindowStyle Normal -ArgumentList '/.test(outer));
 ok("outer: -ArgumentList is one quoted string, not a comma array", !/-ArgumentList '[^']*',/.test(outer));
-ok("outer: non-elevate omits -Verb RunAs", !/-Verb RunAs/.test(life.buildOuterCommand(child, {})));
+const outerPlain = life.buildOuterCommand(child, {});
+ok("outer: non-elevate omits -Verb RunAs", !/-Verb RunAs/.test(outerPlain));
+// Regression: the launcher runs DETACHED (no console of its own); without an
+// explicit visible window on the inner Start-Process the child inherits "no
+// console" and runs windowless — the "toast fires, no window, nothing happens"
+// bug. Pin -WindowStyle Normal on BOTH the elevated and non-elevated commands.
+ok("outer: elevate opens a VISIBLE window (-WindowStyle Normal)", outer.includes(" -WindowStyle Normal "));
+ok("outer: non-elevate opens a VISIBLE window (-WindowStyle Normal)", outerPlain.includes(" -WindowStyle Normal "));
+ok("outer: non-elevate is Start-Process ... -WindowStyle Normal -ArgumentList", /^Start-Process -FilePath 'powershell\.exe' -WindowStyle Normal -ArgumentList '/.test(outerPlain));
 const aposOuter = life.buildOuterCommand(life.buildChildCommandLine("C:\\Users\\O'Neil\\Auto-Install.ps1", []), {});
 ok("outer: apostrophe in path doubled in the PS literal", aposOuter.includes("O''Neil"));
 
@@ -108,6 +116,41 @@ ok("launch: the whole arg payload stays one -ArgumentList literal", /-ArgumentLi
 
 // ── psSingleQuote ────────────────────────────────────────────────────────────
 ok("psSingleQuote: wraps + escapes", life.psSingleQuote("a'b") === "'a''b'");
+
+// ── hostLaunchSpawnOptions: NO windowsHide (the actual "no window" bug) ───────
+// windowsHide:true sets CREATE_NO_WINDOW on the launcher, which suppresses the
+// console the inner Start-Process opens — the reported "toast fires, no window,
+// nothing happens". The launcher must be detached (outlive VS Code, no own console
+// so it doesn't flash) but must NOT hide the window.
+const spawnOpts = life.hostLaunchSpawnOptions("C:\\x");
+ok("spawnOpts: does NOT set windowsHide (would hide the console)", spawnOpts.windowsHide !== true);
+ok("spawnOpts: detached true (outlives VS Code, launcher has no own console)", spawnOpts.detached === true);
+ok("spawnOpts: stdio ignore", spawnOpts.stdio === "ignore");
+ok("spawnOpts: cwd threaded through", spawnOpts.cwd === "C:\\x");
+
+// ── launchHostScript: spawns with the corrected (no-windowsHide) options ──────
+// Drive the impure launcher with test seams (fake spawn/vscode + forced platform)
+// so we pin the end-to-end spawn shape without a real Windows host.
+let spawned = null;
+const fakeSpawn = (file, args, options) => {
+  spawned = { file, args, options };
+  return { on() {}, unref() {} };
+};
+const fakeVscode = { window: { showInformationMessage() {}, showWarningMessage() {}, showErrorMessage() {} } };
+const launched = life.launchHostScript({
+  scriptsDir: "C:\\x", script: life.PROVISION, args: ["-Action", "provision"],
+  elevate: false, label: "Reprovision",
+  _spawn: fakeSpawn, _vscode: fakeVscode, _platform: "win32",
+});
+ok("launchHostScript: returns true when spawned", launched === true);
+ok("launchHostScript: spawns powershell.exe", spawned && spawned.file === "powershell.exe");
+ok("launchHostScript: spawn options carry NO windowsHide", spawned && spawned.options.windowsHide !== true);
+ok("launchHostScript: spawn options are detached (outlive VS Code)", spawned && spawned.options.detached === true);
+ok("launchHostScript: the launched command opens a VISIBLE window",
+  spawned && Buffer.from(spawned.args[spawned.args.length - 1], "base64").toString("utf16le").includes("-WindowStyle Normal"));
+ok("launchHostScript: off-Windows guard returns false without spawning",
+  life.launchHostScript({ scriptsDir: "C:\\x", script: life.PROVISION, args: [], label: "Reprovision",
+    _spawn: () => { throw new Error("should not spawn off-Windows"); }, _vscode: fakeVscode, _platform: "linux" }) === false);
 
 console.log(`\n  lifecycle launcher unit tests — ${pass}/${pass + fail} passed\n`);
 process.exit(fail ? 1 : 0);

@@ -68,6 +68,11 @@ ok("start cmd: starts the right VM", vm.buildStartCommand().includes("Start-VM -
 ok("start cmd: reports success/failure", vm.buildStartCommand().includes("$?"));
 const el = vm.buildElevatedCommandLaunch(vm.buildStartCommand());
 ok("elevated: outer is Start-Process RunAs", el.command.includes("Start-Process") && el.command.includes("-Verb RunAs"));
+// Regression: the elevated launcher is spawned detached (no console), so the outer
+// command must request a VISIBLE window or the inner powershell inherits "no console"
+// and Start-VM runs windowless — the same "toast fires, nothing happens" symptom the
+// lifecycle buttons had. Assert -WindowStyle Normal coexists with -Verb RunAs.
+ok("elevated: requests a visible window (-WindowStyle Normal)", el.command.includes("-WindowStyle Normal"));
 ok("elevated: child runs an inline -Command (not -File <script>)", el.command.includes('-NoExit -Command "Start-VM'));
 // psSingleQuote wraps the child line in a PS single-quoted literal, so the inner
 // 'Agent-VM' quotes are doubled — assert the actually-escaped form.
@@ -75,6 +80,19 @@ ok("elevated: carries the inner Start-VM command (quotes PS-escaped)", el.comman
 ok("elevated: uses -EncodedCommand", el.spawnArgs.includes("-EncodedCommand"));
 ok("elevated: base64 decodes (utf16le) back to the outer command",
   Buffer.from(el.spawnArgs[el.spawnArgs.length - 1], "base64").toString("utf16le") === el.command);
+
+// ── shouldShowStart (the "Start & connect" gate the webviews inline) ─────────
+// Regression: a stopped VM whose non-elevated Get-VM probe is permission-denied
+// reads back 'unknown', not 'off'. The button MUST still show for 'unknown' (the
+// Start action self-elevates), otherwise it's hidden forever until the user signs
+// out/in for the Hyper-V Administrators membership to take effect.
+ok("gate: offline + off -> show", vm.shouldShowStart(false, "off") === true);
+ok("gate: offline + unknown -> show (permission-denied probe)", vm.shouldShowStart(false, "unknown") === true);
+ok("gate: offline + absent -> hide (VM not installed)", vm.shouldShowStart(false, "absent") === false);
+ok("gate: offline + running -> hide (contradiction; prefer no Start)", vm.shouldShowStart(false, "running") === false);
+ok("gate: online + off -> hide (reachable = running)", vm.shouldShowStart(true, "off") === false);
+ok("gate: online + unknown -> hide", vm.shouldShowStart(true, "unknown") === false);
+ok("gate: offline + undefined vmState -> show (no probe yet)", vm.shouldShowStart(false, undefined) === true);
 
 // ── constants ────────────────────────────────────────────────────────────────
 ok("VM_NAME is Agent-VM", vm.VM_NAME === "Agent-VM");

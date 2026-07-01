@@ -23,8 +23,11 @@
     // connected" gate (s.connected) isn't reliable, so keep it out of the UI.
     const conn = $("lConnect");
     if (conn) conn.hidden = true;
+    // Offline + not known-absent → offer Start (see panel.js for the full rationale:
+    // the non-elevated Get-VM probe is permission-gated, so a stopped VM usually reads
+    // "unknown"; the elevated Start-VM works anyway, so show it for off/unknown alike).
     const start = $("lStart");
-    if (start) start.hidden = !(!online && s.vmState === "off");
+    if (start) start.hidden = !(!online && s.vmState !== "absent" && s.vmState !== "running");
     const sd = $("lShutdown");
     if (sd) sd.hidden = !online;
 

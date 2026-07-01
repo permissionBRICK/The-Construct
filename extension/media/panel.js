@@ -290,6 +290,9 @@
   // stale values from a previous successful probe on screen.
   function clearLiveVmData() {
     text("sysVm", "—"); text("sysResources", "—"); text("sysUbuntu", "—");
+    // The install/reprovision markers are VM-derived too, so drop them back to the
+    // "—" placeholder when we have no trustworthy VM data (offline / probe failed).
+    text("pillInstalled", "installed —"); text("pillReprovisioned", "reprovisioned —");
     renderAgents([]); renderProjects([]);
   }
 
@@ -311,8 +314,15 @@
     // connected" gate (s.connected) isn't reliable, so keep it out of the UI.
     const conn = $("connectBtn");
     if (conn) conn.hidden = true;
+    // Show "Start & connect" whenever the VM is offline and NOT known to be absent.
+    // The non-elevated Get-VM probe is Hyper-V-permission gated (the installer's
+    // Hyper-V Administrators membership only takes effect at the next sign-in), so a
+    // genuinely stopped VM commonly reads back as "unknown", not "off". Since the
+    // Start action self-elevates (UAC Start-VM), it works regardless of the probe's
+    // permission — so we offer it for "off" AND "unknown", hiding it only when the
+    // probe positively determined the VM doesn't exist ("absent") or it's running.
     const start = $("startBtn");
-    if (start) start.hidden = !(!online && s.vmState === "off");
+    if (start) start.hidden = !(!online && s.vmState !== "absent" && s.vmState !== "running");
     const sd = $("shutdownBtn");
     if (sd) sd.hidden = !online;
 
@@ -324,8 +334,10 @@
     if (s.resources != null) text("sysResources", s.resources || "—");
     if (s.ubuntu != null) text("sysUbuntu", s.ubuntu || "—");
     if (s.constructRev) text("constructRev", s.constructRev);
-    if (s.installed) text("pillInstalled", "installed " + s.installed);
-    if (s.reprovisioned) text("pillReprovisioned", "reprovisioned " + s.reprovisioned);
+    // Authoritative on the online path: a value shows the date, an absent marker
+    // (older VM, or unreadable /etc/construct/provisioned.env) falls back to "—".
+    text("pillInstalled", "installed " + (s.installed || "—"));
+    text("pillReprovisioned", "reprovisioned " + (s.reprovisioned || "—"));
 
     const b = $("updateBanner");
     if (s.update && s.update.available) { if (b) b.hidden = false; text("updateBehind", s.update.behind || ""); }

@@ -41,26 +41,39 @@ finally { ${env:ProgramFiles(x86)} = $savedX86 }
 # Put a fake `code` on PATH so Find-VSCodeCli resolves it; the shim's exit code
 # drives the extension-install branch. A non-zero exit must surface a WARNING (not
 # the "present" success line); a zero exit must be quiet.
-function New-CodeShim([int]$ExitCode) {
+function New-CodeShim([int]$ExitCode, [switch]$EmitStderrWarning) {
+    # -EmitStderrWarning makes the shim write a Node-style DEP0169 deprecation warning
+    # to STDERR before exiting -- exactly what the real `code` CLI does even on success.
+    # In Windows PowerShell 5.1 that stderr, captured with 2>&1 under EAP=Stop, used to
+    # be promoted to a terminating error and mistaken for an install failure (the bug).
+    $warn = "(node:34672) [DEP0169] DeprecationWarning: url.parse() behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead."
     $dir = Join-Path ([System.IO.Path]::GetTempPath()) ("code-shim-" + [guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Path $dir | Out-Null
     if ($IsWindows -or $env:OS -eq "Windows_NT") {
-        Set-Content -Path (Join-Path $dir "code.cmd") -Value "@echo off`r`nexit /b $ExitCode" -Encoding ASCII
+        $lines = @("@echo off")
+        if ($EmitStderrWarning) { $lines += "echo $warn 1>&2" }
+        $lines += "exit /b $ExitCode"
+        Set-Content -Path (Join-Path $dir "code.cmd") -Value ($lines -join "`r`n") -Encoding ASCII
     } else {
         $shim = Join-Path $dir "code"
-        Set-Content -Path $shim -Value "#!/bin/sh`nexit $ExitCode`n" -NoNewline
+        $body = "#!/bin/sh`n"
+        if ($EmitStderrWarning) { $body += "echo '$warn' 1>&2`n" }
+        $body += "exit $ExitCode`n"
+        Set-Content -Path $shim -Value $body -NoNewline
         & chmod +x $shim
     }
     return $dir
 }
 
-function Test-EnsureWithShim([int]$ExitCode) {
-    $dir = New-CodeShim -ExitCode $ExitCode
+function Test-EnsureWithShim([int]$ExitCode, [switch]$EmitStderrWarning) {
+    $dir = New-CodeShim -ExitCode $ExitCode -EmitStderrWarning:$EmitStderrWarning
     $savedPath = $env:PATH
     $env:PATH = $dir + [System.IO.Path]::PathSeparator + $env:PATH
     try {
         $warns = @()
         # 6>$null swallows the Write-Host status lines; warnings are captured in $warns.
+        # $ErrorActionPreference stays Stop (as the installers set it) so the shim's
+        # stderr write goes through the same promotion path the real one-liner hits.
         $r = Ensure-VSCodeRemoteSsh -WarningVariable warns -WarningAction SilentlyContinue 6>$null
         return [pscustomobject]@{ Result = $r; Warnings = @($warns) }
     } finally {
@@ -77,6 +90,88 @@ ok "ensure: VS Code being present still returns `$true" ($failCase.Result -eq $t
 $okCase = Test-EnsureWithShim -ExitCode 0
 ok "ensure: a zero exit raises no warning" (@($okCase.Warnings).Count -eq 0)
 ok "ensure: success path returns `$true" ($okCase.Result -eq $true)
+
+# REGRESSION (Issue 5): `code` exits 0 but writes a DEP0169 deprecation warning to
+# stderr. Under EAP=Stop the old `& code ... 2>&1 | Out-Null` promoted that stderr to
+# a terminating error and reported a FALSE failure. Success must be decided by the
+# exit code alone -- a stderr-only warning on exit 0 raises NO warning.
+$okNoisy = Test-EnsureWithShim -ExitCode 0 -EmitStderrWarning
+ok "ensure: exit 0 + stderr deprecation warning is NOT a failure (no warning)" (@($okNoisy.Warnings).Count -eq 0)
+ok "ensure: exit 0 + stderr warning still returns `$true" ($okNoisy.Result -eq $true)
+
+# And a REAL failure (non-zero exit) must still be reported even when stderr also
+# carries the deprecation noise -- the exit code, not the stderr text, is the verdict.
+$failNoisy = Test-EnsureWithShim -ExitCode 1 -EmitStderrWarning
+ok "ensure: non-zero exit + stderr warning is reported as a failure" (
+    @($failNoisy.Warnings | Where-Object { $_ -match "install-extension|may not be installed" }).Count -gt 0)
+
+# ── Invoke-VSCodeCli: returns the exit code and never throws on stderr ─────────
+# The core of the Issue-5 fix. A shim that writes a stderr warning and exits 0 must
+# return 0 (success) WITHOUT throwing, even with $ErrorActionPreference=Stop set (as
+# the installers do); a shim that exits non-zero returns that code.
+function Test-InvokeWithShim([int]$ExitCode, [switch]$EmitStderrWarning) {
+    $dir = New-CodeShim -ExitCode $ExitCode -EmitStderrWarning:$EmitStderrWarning
+    $code = if ($IsWindows -or $env:OS -eq "Windows_NT") { Join-Path $dir "code.cmd" } else { Join-Path $dir "code" }
+    try {
+        $ErrorActionPreference = "Stop"
+        return Invoke-VSCodeCli -Code $code -CodeArgs @('--install-extension', 'x')
+    } finally {
+        Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+$threw = $false
+try { $rc = Test-InvokeWithShim -ExitCode 0 -EmitStderrWarning } catch { $threw = $true }
+ok "invoke: exit 0 + stderr warning does not throw" (-not $threw)
+ok "invoke: exit 0 + stderr warning returns 0" ($rc -eq 0)
+ok "invoke: non-zero exit is returned faithfully" ((Test-InvokeWithShim -ExitCode 7) -eq 7)
+
+# Regression: if `code` can't be launched at all (path found by Find-VSCodeCli but
+# since deleted/unrunnable), the invocation runs no process, so under EAP=Continue
+# $LASTEXITCODE keeps a stale value (a prior 0 = false success). A baseline of 0
+# reproduces the trap; Invoke-VSCodeCli must still return NON-ZERO for a bad path.
+$missing = Join-Path ([System.IO.Path]::GetTempPath()) ("no-such-code-" + [guid]::NewGuid().ToString("N"))
+$badThrew = $false
+$global:LASTEXITCODE = 0  # prime the stale-zero trap the reviewer flagged
+try {
+    $ErrorActionPreference = "Stop"
+    $rcMissing = Invoke-VSCodeCli -Code $missing -CodeArgs @('--version')
+} catch { $badThrew = $true }
+ok "invoke: missing/uninvokable code path does not throw" (-not $badThrew)
+ok "invoke: missing/uninvokable code path returns non-zero (not stale 0)" ($rcMissing -ne 0)
+
+# NODE_OPTIONS is restored (not leaked) after the call.
+$savedNode = $env:NODE_OPTIONS
+$env:NODE_OPTIONS = "--max-old-space-size=256"
+$null = Test-InvokeWithShim -ExitCode 0 -EmitStderrWarning
+ok "invoke: restores a pre-existing NODE_OPTIONS" ($env:NODE_OPTIONS -eq "--max-old-space-size=256")
+Remove-Item Env:\NODE_OPTIONS -ErrorAction SilentlyContinue
+$null = Test-InvokeWithShim -ExitCode 0 -EmitStderrWarning
+ok "invoke: leaves NODE_OPTIONS unset when it started unset" (-not $env:NODE_OPTIONS)
+if ($null -ne $savedNode) { $env:NODE_OPTIONS = $savedNode } else { Remove-Item Env:\NODE_OPTIONS -ErrorAction SilentlyContinue }
+
+# ── The exact Windows-PowerShell-5.1 mechanism this fix neutralizes ───────────
+# On 5.1, native stderr captured via 2>&1 becomes ErrorRecord objects in the pipeline;
+# under EAP=Stop the first is promoted to a TERMINATING error. pwsh 7.x doesn't
+# reproduce the native-stderr half, but the promotion half is identical: an ErrorRecord
+# flowing into a cmdlet under EAP=Stop throws. Assert (a) the pre-fix construct still
+# throws so this test is meaningful, and (b) pinning EAP=Continue (what Invoke-VSCodeCli
+# does) neutralizes it -- proving the fix addresses the real trigger, not just the exit
+# code.
+$mechThrew = $false
+$ErrorActionPreference = "Stop"
+try { & { Write-Error "(node:1) [DEP0169] DeprecationWarning: url.parse() ..." } 2>&1 | Out-Null }
+catch { $mechThrew = $true }
+ok "mechanism: an ErrorRecord in the pipeline under EAP=Stop throws (the 5.1 trigger)" $mechThrew
+
+$fixThrew = $false
+$ErrorActionPreference = "Stop"
+try {
+    $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try { & { Write-Error "(node:1) [DEP0169] DeprecationWarning: url.parse() ..." } 2>&1 | Out-Null }
+    finally { $ErrorActionPreference = $eap }
+} catch { $fixThrew = $true }
+ok "mechanism: pinning EAP=Continue (the fix) neutralizes the promotion" (-not $fixThrew)
+ok "mechanism: EAP is restored to Stop afterwards" ($ErrorActionPreference -eq 'Stop')
 
 # ── Get-VSCodeExtensionDir + Build-ControlPanelVsix ──────────────────────────
 # Modern VS Code ignores a bare folder copied into ~/.vscode/extensions, so the

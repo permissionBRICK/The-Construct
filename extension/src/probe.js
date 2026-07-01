@@ -18,6 +18,11 @@ if [ -r "$cfg" ]; then
   emit PROJECTS "$(sed -n 's/^PROJECTS=//p' "$cfg" | head -1)"
   emit AI_TOOLS "$(sed -n 's/^AI_TOOLS=//p' "$cfg" | head -1)"
 fi
+mark=/etc/construct/provisioned.env
+if [ -r "$mark" ]; then
+  emit INSTALLED_AT "$(sed -n 's/^INSTALLED_AT=//p' "$mark" | head -1)"
+  emit REPROVISIONED_AT "$(sed -n 's/^REPROVISIONED_AT=//p' "$mark" | head -1)"
+fi
 command -v claude   >/dev/null 2>&1 && emit V_CLAUDE   "$(claude --version 2>/dev/null | head -1)"
 command -v codex    >/dev/null 2>&1 && emit V_CODEX    "$(codex --version 2>/dev/null | head -1)"
 command -v opencode >/dev/null 2>&1 && emit V_OPENCODE "$(opencode --version 2>/dev/null | head -1)"
@@ -28,6 +33,23 @@ function extractVersion(s) {
   if (!s) return "";
   const m = String(s).match(/\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.]+)?/);
   return m ? m[0] : String(s).trim();
+}
+
+/**
+ * Format a provisioning marker timestamp for the status pills. The VM records it
+ * as ISO-8601 UTC (e.g. "2026-07-01T03:44:06Z"); we surface the date part
+ * ("2026-07-01"), which is the useful signal ("when was this VM last set up"). A
+ * value we can't parse is passed through trimmed (so a hand-edited marker still
+ * shows *something*); an empty/missing marker yields "" so the caller omits the
+ * field and the pill keeps its "—" placeholder. Pure, no timezone surprises: we
+ * slice the ISO date rather than construct a Date (whose local-time rendering
+ * would drift the day near midnight).
+ */
+function formatMarker(s) {
+  const v = String(s == null ? "" : s).trim();
+  if (!v) return "";
+  const m = v.match(/^(\d{4}-\d{2}-\d{2})T/);
+  return m ? m[1] : v;
 }
 
 /** Parse TAB-separated KEY\tVALUE lines into a map. */
@@ -59,7 +81,15 @@ function toState(map) {
   const disk = (map.DISK_USED && map.DISK_SIZE) ? `${map.DISK_USED} / ${map.DISK_SIZE} disk` : "";
   const resources = [mem, disk].filter(Boolean).join(" · ");
 
-  return { vmName: map.AGENT_NAME || "", ubuntu: map.UBUNTU || "", resources, agents, projects };
+  const installed = formatMarker(map.INSTALLED_AT);
+  const reprovisioned = formatMarker(map.REPROVISIONED_AT);
+
+  const out = { vmName: map.AGENT_NAME || "", ubuntu: map.UBUNTU || "", resources, agents, projects };
+  // Only emit these when the VM actually reported a marker — the webview shows the
+  // "installed —" / "reprovisioned —" placeholder for an absent/unknown value.
+  if (installed) out.installed = installed;
+  if (reprovisioned) out.reprovisioned = reprovisioned;
+  return out;
 }
 
 /** Probe the VM. Resolves a partial state object suitable for postMessage({type:'state'}). */
@@ -74,4 +104,4 @@ async function probe(opts = {}) {
   return { online: true, host, hostShort, ...toState(parseProbe(r.stdout)) };
 }
 
-module.exports = { REMOTE_PROBE, extractVersion, parseProbe, toState, probe };
+module.exports = { REMOTE_PROBE, extractVersion, formatMarker, parseProbe, toState, probe };

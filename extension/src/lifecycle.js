@@ -125,10 +125,15 @@ function buildChildCommandLine(scriptPath, args) {
  * ArgumentList to the child verbatim, whereas an ARRAY is space-joined WITHOUT
  * re-quoting (so a spaced script path or a two-word -GitUserName would be split
  * apart). The string is embedded in a single-quoted PS literal (only `'` doubled).
+ *
+ * `-WindowStyle Normal` is explicit so the child gets a VISIBLE console. The
+ * launcher is spawned DETACHED (no console of its own), so without this the inner
+ * powershell can inherit "no console" and run windowless — the exact "toast fires,
+ * no window, nothing happens" symptom. `-WindowStyle` coexists with `-Verb RunAs`.
  */
 function buildOuterCommand(childCommandLine, opts = {}) {
   const verb = opts.elevate ? " -Verb RunAs" : "";
-  return `Start-Process -FilePath 'powershell.exe'${verb} -ArgumentList ${psSingleQuote(childCommandLine)}`;
+  return `Start-Process -FilePath 'powershell.exe'${verb} -WindowStyle Normal -ArgumentList ${psSingleQuote(childCommandLine)}`;
 }
 
 /**
@@ -165,22 +170,35 @@ async function confirmDestructive(inv) {
   return pick === inv.label;
 }
 
+// Spawn options for the host-console launcher. Deliberately WITHOUT windowsHide:
+// windowsHide sets CREATE_NO_WINDOW on this launcher, which suppresses the console
+// the inner Start-Process opens (see buildOuterCommand's note). `detached` gives
+// the launcher no console of its own (so it doesn't flash) and lets the console
+// outlive VS Code. Exposed for the regression test that pins "no windowsHide".
+function hostLaunchSpawnOptions(cwd) {
+  return { cwd, detached: true, stdio: "ignore" };
+}
+
 /**
  * Spawn a host console running <scriptsDir>/<script> with the given args, opening
  * a new (optionally elevated) window. Shared by the lifecycle actions and the
  * Construct update refresh. Guards off-Windows. `opts`:
- * { scriptsDir, script, args, elevate, label }. Returns true if spawned.
+ * { scriptsDir, script, args, elevate, label }. `opts._spawn`/`_vscode`/`_platform`
+ * are test seams (default child_process.spawn / the real vscode / process.platform).
+ * Returns true if spawned.
  */
 function launchHostScript(opts) {
-  const vscode = vsc();
-  if (process.platform !== "win32") {
+  const vscode = opts._vscode || vsc();
+  const spawn = opts._spawn || cp.spawn;
+  const platform = opts._platform || process.platform;
+  if (platform !== "win32") {
     vscode.window.showWarningMessage("Construct actions run on the Windows host, which isn't available here.");
     return false;
   }
   const scriptPath = path.join(opts.scriptsDir, opts.script);
   const { file, spawnArgs } = buildHostLaunch(scriptPath, opts.args || [], { elevate: !!opts.elevate });
   try {
-    const child = cp.spawn(file, spawnArgs, { cwd: opts.scriptsDir, windowsHide: true, detached: true, stdio: "ignore" });
+    const child = spawn(file, spawnArgs, hostLaunchSpawnOptions(opts.scriptsDir));
     child.on("error", (e) => vscode.window.showErrorMessage(`Couldn't launch ${opts.label}: ${e.message}`));
     child.unref();
     vscode.window.showInformationMessage(
@@ -221,5 +239,5 @@ module.exports = {
   PROVISION, AUTO_INSTALL, BACKUP_DIR_NAME,
   normalizeBackupMode, buildInvocation,
   psSingleQuote, winQuoteArg, buildChildCommandLine, buildOuterCommand, buildHostLaunch,
-  launchHostScript, run,
+  hostLaunchSpawnOptions, launchHostScript, run,
 };
