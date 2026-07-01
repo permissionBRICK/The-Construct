@@ -83,6 +83,20 @@ function resolveScriptsDir(opts = {}) {
 function settingsPath(scriptsDir) { return path.join(scriptsDir, SETTINGS_FILE); }
 function projectsDir(scriptsDir) { return path.join(scriptsDir, PROJECTS_DIR); }
 
+/**
+ * The dedicated host config dir (docs/config-sync.md §4): a single, machine-wide
+ * location OUTSIDE any zip checkout — %LOCALAPPDATA%\The-Construct\config — shared
+ * across installed repo/ref slugs, so self-update's Expand-Archive never touches
+ * live config. Deliberately NOT slug-scoped (unlike findScriptsDir). Profiles live
+ * under its projects/ subdir, so the existing profile helpers work against it
+ * unchanged: listProjectProfiles(configDir), readProjectProfile(configDir, name), …
+ * Returns null when no base dir is resolvable. Pure path math, no fs.
+ */
+function configDir(env) {
+  const base = localAppData(env);
+  return base ? path.join(base, CONTAINER, "config") : null;
+}
+
 // ── Settings read/write ─────────────────────────────────────────────────────--
 
 /** Raw settings object from disk, or {} if absent/unreadable. Strips a UTF-8 BOM
@@ -298,7 +312,7 @@ function saveSettings(scriptsDir, form) {
 module.exports = {
   CONTAINER, MARKER, SETTINGS_FILE,
   localAppData, findScriptsDir, resolveScriptsDir,
-  settingsPath, projectsDir,
+  settingsPath, projectsDir, configDir,
   readRawSettings, writeRawSettings, mapToForm, mapFromForm,
   readSettings, saveSettings, readProjectProfile,
   safeProfileName, listProjectProfiles, writeProjectProfile,

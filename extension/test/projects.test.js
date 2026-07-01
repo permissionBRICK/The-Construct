@@ -208,5 +208,81 @@ ok("profile: a non-object tests becomes {}", eq(projects.sanitizeProfile("x", { 
   ok("profile: sanitizeSdks doesn't pollute Object.prototype", ({}).polluted === before);
 })();
 
+// ── isReservedProfileName (config-sync §4) ────────────────────────────────────
+ok("reserved: default", projects.isReservedProfileName("default"));
+ok("reserved: case/whitespace-insensitive", projects.isReservedProfileName("  Default "));
+ok("reserved: project.schema", projects.isReservedProfileName("project.schema"));
+ok("reserved: ordinary names are not", !projects.isReservedProfileName("base") && !projects.isReservedProfileName("customer-portal"));
+ok("reserved: empty/null are not", !projects.isReservedProfileName("") && !projects.isReservedProfileName(null));
+ok("reserved: default.json (with extension) is NOT the base name", !projects.isReservedProfileName("default.json"));
+
+// ── validateProfile (strict schema mirror; config-sync §6 gates) ──────────────
+(function () {
+  const full = {
+    name: "web",
+    repos: [{ url: "https://h/x.git", directory: "x" }, { url: "https://h/y.git" }],
+    sdks: { node: ["26"], python: "3.14" },
+    mcp: ["browser", { name: "s", type: "stdio", command: "npx", args: ["-y", "p"], env: { A: "1" } },
+      { name: "h", type: "http", url: "https://m", headers: { X: "y" }, bearerTokenEnvVar: "TOK", agents: ["claude"], enabled: false }],
+    hostPackages: ["jq"],
+    provisionCommands: ["make setup"],
+    tests: { anything: ["goes"] },
+  };
+  ok("validate: full valid profile passes", projects.validateProfile("web", full).ok,
+    JSON.stringify(projects.validateProfile("web", full).errors));
+  ok("validate: minimal {name} passes", projects.validateProfile("m", { name: "m" }).ok);
+  ok("validate: empty name arg skips the filename check", projects.validateProfile("", { name: "whatever" }).ok);
+  ok("validate: non-object rejected", !projects.validateProfile("x", []).ok && !projects.validateProfile("x", "s").ok && !projects.validateProfile("x", null).ok);
+  ok("validate: missing name rejected", !projects.validateProfile("x", {}).ok);
+  ok("validate: blank name rejected", !projects.validateProfile("x", { name: "   " }).ok);
+  ok("validate: filename/name mismatch rejected", !projects.validateProfile("x", { name: "y" }).ok);
+  const unk = projects.validateProfile("x", { name: "x", extra: 1 });
+  ok("validate: unknown top-level key rejected with its name", !unk.ok && unk.errors.some((e) => e.includes('"extra"')));
+  ok("validate: repos non-array rejected", !projects.validateProfile("x", { name: "x", repos: {} }).ok);
+  ok("validate: repo entry without url rejected", !projects.validateProfile("x", { name: "x", repos: [{ directory: "d" }] }).ok);
+  ok("validate: whitespace-only url rejected (stricter than minLength)", !projects.validateProfile("x", { name: "x", repos: [{ url: "  " }] }).ok);
+  ok("validate: repo unknown key rejected", !projects.validateProfile("x", { name: "x", repos: [{ url: "u", branch: "b" }] }).ok);
+  ok("validate: sdks string/array values pass", projects.validateProfile("x", { name: "x", sdks: { a: "1", b: ["2"] } }).ok);
+  ok("validate: sdks numeric value rejected", !projects.validateProfile("x", { name: "x", sdks: { a: 1 } }).ok);
+  ok("validate: sdks array with blank entry rejected", !projects.validateProfile("x", { name: "x", sdks: { a: ["", "1"] } }).ok);
+  ok("validate: mcp legacy enum passes", projects.validateProfile("x", { name: "x", mcp: ["filesystem"] }).ok);
+  ok("validate: mcp unknown legacy string rejected", !projects.validateProfile("x", { name: "x", mcp: ["bogus"] }).ok);
+  ok("validate: mcp stdio type inferred from command", projects.validateProfile("x", { name: "x", mcp: [{ name: "s", command: "c" }] }).ok);
+  ok("validate: mcp http type inferred from url", projects.validateProfile("x", { name: "x", mcp: [{ name: "h", url: "u" }] }).ok);
+  ok("validate: mcp with both command AND url rejected (oneOf)", !projects.validateProfile("x", { name: "x", mcp: [{ name: "b", command: "c", url: "u" }] }).ok);
+  ok("validate: mcp explicit stdio with url key rejected", !projects.validateProfile("x", { name: "x", mcp: [{ name: "b", type: "stdio", command: "c", url: "u" }] }).ok);
+  ok("validate: mcp bad explicit type rejected", !projects.validateProfile("x", { name: "x", mcp: [{ name: "b", type: "tcp", command: "c" }] }).ok);
+  ok("validate: mcp neither command nor url rejected", !projects.validateProfile("x", { name: "x", mcp: [{ name: "b" }] }).ok);
+  ok("validate: mcp empty agents rejected (minItems 1)", !projects.validateProfile("x", { name: "x", mcp: [{ name: "s", command: "c", agents: [] }] }).ok);
+  ok("validate: mcp foreign agent rejected", !projects.validateProfile("x", { name: "x", mcp: [{ name: "s", command: "c", agents: ["gemini"] }] }).ok);
+  ok("validate: mcp non-boolean enabled rejected", !projects.validateProfile("x", { name: "x", mcp: [{ name: "s", command: "c", enabled: "yes" }] }).ok);
+  ok("validate: mcp non-string env value rejected", !projects.validateProfile("x", { name: "x", mcp: [{ name: "s", command: "c", env: { A: 1 } }] }).ok);
+  ok("validate: hostPackages non-string entry rejected", !projects.validateProfile("x", { name: "x", hostPackages: [1] }).ok);
+  ok("validate: provisionCommands blank entry rejected", !projects.validateProfile("x", { name: "x", provisionCommands: [" "] }).ok);
+  ok("validate: tests non-object rejected", !projects.validateProfile("x", { name: "x", tests: [] }).ok);
+  ok("validate: errors accumulate (several reported at once)",
+    projects.validateProfile("x", { name: "y", repos: {}, junk: 1 }).errors.length >= 3);
+})();
+
+// ── canonicalProfileJson (config-sync §6 canonical byte form) ─────────────────
+(function () {
+  const messy = { tests: {}, provisionCommands: ["a"], name: "IGNORED", sdks: { node: "26" }, repos: [{ directory: "d", url: "u" }], junk: 1 };
+  const out = projects.canonicalProfileJson("web", messy);
+  ok("canonical: trailing newline", out.endsWith("}\n"));
+  ok("canonical: 2-space indent", out.includes('\n  "name": "web"'));
+  ok("canonical: fixed top-level key order", eq(Object.keys(JSON.parse(out)),
+    ["name", "repos", "sdks", "mcp", "hostPackages", "provisionCommands", "tests"]));
+  ok("canonical: repo entry key order url,directory", out.indexOf('"url"') < out.indexOf('"directory"'));
+  ok("canonical: one array element per line", /\[\n\s+\{/.test(out));
+  ok("canonical: unknown keys dropped", !out.includes("junk"));
+  ok("canonical: name comes from the arg", JSON.parse(out).name === "web");
+  ok("canonical: empty name -> null", projects.canonicalProfileJson("", messy) === null);
+  ok("canonical: idempotent (canonical of canonical is byte-identical)",
+    projects.canonicalProfileJson("web", JSON.parse(out)) === out);
+  ok("canonical: output re-validates strictly", projects.validateProfile("web", JSON.parse(out)).ok);
+  ok("canonical: matches writeProjectProfile's byte form (stringify+\\n)",
+    out === JSON.stringify(JSON.parse(out), null, 2) + "\n");
+})();
+
 console.log(`\n  project-profile unit tests — ${pass}/${pass + fail} passed\n`);
 process.exit(fail ? 1 : 0);
