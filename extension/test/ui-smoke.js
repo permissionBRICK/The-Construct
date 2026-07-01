@@ -372,6 +372,21 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   lposted = await page.evaluate(() => window.__posted);
   check("launcher: shutdown posts shutdown", lposted.some((m) => m.type === "command" && m.id === "shutdown"));
 
+  // update banner: shows when an update is available, posts updateConstruct, hidden otherwise.
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h.example.net", update: { available: true, behind: "3 behind" } } }, "*"));
+  await page.waitForTimeout(60);
+  check("launcher: update banner shows when available", await page.locator("#lUpdate").isVisible());
+  check("launcher: update banner shows the behind count", (await page.locator("#lUpdateBehind").innerText()).includes("3 behind"));
+  await page.click("#lUpdate");
+  lposted = await page.evaluate(() => window.__posted);
+  check("launcher: update banner posts updateConstruct", lposted.some((m) => m.type === "command" && m.id === "updateConstruct"));
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h.example.net", update: { available: false } } }, "*"));
+  await page.waitForTimeout(60);
+  check("launcher: update banner hidden when no update", !(await page.locator("#lUpdate").isVisible()));
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: false, host: "h.example.net", update: { available: true } } }, "*"));
+  await page.waitForTimeout(60);
+  check("launcher: update banner hidden when offline", !(await page.locator("#lUpdate").isVisible()));
+
   // measure overflow with the shutdown button visible (connect stays hidden by design).
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h.example.net", connected: false, vmState: "running" } }, "*"));
   await page.waitForTimeout(60);
