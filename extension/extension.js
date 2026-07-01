@@ -268,7 +268,10 @@ function runUpdateAgents() {
  *  finishes so the refreshed panel loads (no manual reopen). The detached host console
  *  can't reload VS Code itself, so Update-Construct.ps1 writes a tiny result file we poll:
  *  "ok" -> reload; "fail" -> the script's console already paused with a reopen message, so
- *  we just surface a toast. Times out quietly (the console stays up either way). */
+ *  we just surface a toast. Times out quietly (the console stays up either way). The result
+ *  path is passed via an ENV VAR (not a -ResultFile arg): an OLDER installed script simply
+ *  ignores it and runs normally (pausing on completion), instead of erroring on an unknown
+ *  argument — which would trap the user, since it'd fail before downloading the fix. */
 function runUpdateConstruct() {
   const scriptsDir = resolveScriptsDir();
   if (!scriptsDir) { warnNoScriptsDir(); return; }
@@ -277,7 +280,8 @@ function runUpdateConstruct() {
   try { fs.unlinkSync(resultFile); } catch (_) {}
   const ok = lifecycle.launchHostScript({
     scriptsDir, script: "Update-Construct.ps1",
-    args: [...updates.constructRefreshArgs(markers), "-ResultFile", resultFile],
+    args: updates.constructRefreshArgs(markers),
+    env: { CONSTRUCT_UPDATE_RESULT: resultFile },
     elevate: false, label: "Update Construct",
   });
   if (!ok) return;

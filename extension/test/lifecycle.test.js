@@ -108,26 +108,45 @@ ok("outer: non-elevate is Start-Process ... -WindowStyle Normal -ArgumentList", 
 const aposOuter = life.buildOuterCommand(life.buildChildCommandLine("C:\\Users\\O'Neil\\Auto-Install.ps1", []), {});
 ok("outer: apostrophe in path doubled in the PS literal", aposOuter.includes("O''Neil"));
 
-// ── buildHostLaunch: cmd /c start (forces a NEW CONSOLE) + -EncodedCommand ────
+// ── buildCallCommand: non-elevated single-console `& 'script' args` ──────────
+const call = life.buildCallCommand("C:\\x\\Provision-AgentVM.ps1", ["-Action", "provision", "-VmDiskGB", "80", "-NonInteractive"]);
+ok("call: uses the & call operator on the quoted script", call.startsWith("& 'C:\\x\\Provision-AgentVM.ps1'"));
+ok("call: parameter NAMES stay bare", call.includes(" -Action ") && call.endsWith(" -NonInteractive"));
+ok("call: VALUES are single-quoted", call.includes(" -Action 'provision' ") && call.includes(" -VmDiskGB '80' "));
+
+// ── buildHostLaunch (ELEVATED): cmd /c start + Start-Process -Verb RunAs ──────
 const hl = life.buildHostLaunch("C:\\x\\Auto-Install.ps1", ["-Action", "reinstall", "-BackupMode", "save"], { elevate: true });
-ok("launch: spawns via cmd.exe (start allocates the console)", hl.file === "cmd.exe");
-ok("launch: cmd runs `start \"\" powershell.exe` (empty title, then the launcher)",
+ok("launch(elevated): spawns via cmd.exe (start allocates the console)", hl.file === "cmd.exe");
+ok("launch(elevated): cmd runs `start \"\" powershell.exe` (empty title, then the launcher)",
   hl.spawnArgs[0] === "/c" && hl.spawnArgs[1] === "start" && hl.spawnArgs[2] === "" && hl.spawnArgs[3] === "powershell.exe");
-ok("launch: uses -EncodedCommand, not -Command", hl.spawnArgs.includes("-EncodedCommand") && !hl.spawnArgs.includes("-Command"));
-// Only argv-safe tokens pass through cmd (fixed flags + the base64 blob) — no paths
-// or user values, so `start` adds no new quoting surface.
-ok("launch: nothing but flags + base64 reaches cmd (no raw script path/args)",
+ok("launch(elevated): uses -EncodedCommand, not -Command", hl.spawnArgs.includes("-EncodedCommand") && !hl.spawnArgs.includes("-Command"));
+ok("launch(elevated): launcher is -NonInteractive (it only fires Start-Process)", hl.spawnArgs.includes("-NonInteractive"));
+ok("launch(elevated): nothing but flags + base64 reaches cmd (no raw script path/args)",
   !hl.spawnArgs.some((a) => a.includes("\\") || a.includes(".ps1")));
 const b64 = hl.spawnArgs[hl.spawnArgs.length - 1];
-ok("launch: encoded payload is pure base64 (argv-safe)", /^[A-Za-z0-9+/]+=*$/.test(b64));
-ok("launch: base64 decodes (utf16le) back to the outer command", Buffer.from(b64, "base64").toString("utf16le") === hl.command);
-ok("launch: command equals buildOuterCommand(buildChildCommandLine(...))",
-  hl.command === life.buildOuterCommand(life.buildChildCommandLine("C:\\x\\Auto-Install.ps1", ["-Action", "reinstall", "-BackupMode", "save"]), { elevate: true }));
+ok("launch(elevated): encoded payload is pure base64 (argv-safe)", /^[A-Za-z0-9+/]+=*$/.test(b64));
+ok("launch(elevated): base64 decodes (utf16le) back to the command", Buffer.from(b64, "base64").toString("utf16le") === hl.command);
+ok("launch(elevated): command is Start-Process -Verb RunAs (UAC)", hl.command.includes("Start-Process") && hl.command.includes("-Verb RunAs"));
+
+// ── buildHostLaunch (NON-elevated): single console runs the script directly ───
+const hlp = life.buildHostLaunch("C:\\x\\Provision-AgentVM.ps1", ["-Action", "provision"], { elevate: false });
+ok("launch(non-elevated): still cmd.exe /c start", hlp.file === "cmd.exe" && hlp.spawnArgs[1] === "start");
+ok("launch(non-elevated): runs the script via & (no inner Start-Process → single window)",
+  hlp.command.startsWith("& '") && !hlp.command.includes("Start-Process"));
+// The script RUNS in this console, so the launcher must NOT be -NonInteractive (the
+// script's "Press Enter to close" pause + any confirmation need an interactive host).
+ok("launch(non-elevated): launcher is NOT -NonInteractive", !hlp.spawnArgs.includes("-NonInteractive"));
+ok("launch(non-elevated): base64 decodes back to the & command",
+  Buffer.from(hlp.spawnArgs[hlp.spawnArgs.length - 1], "base64").toString("utf16le") === hlp.command);
 
 // ── injection-safety: a quote/semicolon in a settings value can't break out ──
-const inj = life.buildHostLaunch("C:\\x\\Provision-AgentVM.ps1", ["-GitUserName", "x'; Start-Process calc; '"], { elevate: false });
-ok("launch: single quotes in a value are doubled (no PS-literal breakout)", inj.command.includes("''"));
-ok("launch: the whole arg payload stays one -ArgumentList literal", /-ArgumentList '([^']|'')*'$/.test(inj.command));
+// Elevated path (Start-Process -ArgumentList literal): the outer psSingleQuote doubles quotes.
+const injE = life.buildHostLaunch("C:\\x\\Auto-Install.ps1", ["-GitUserName", "x'; Start-Process calc; '"], { elevate: true });
+ok("launch(elevated): quotes doubled + one -ArgumentList literal", injE.command.includes("''") && /-ArgumentList '([^']|'')*'$/.test(injE.command));
+// Non-elevated path (& 'script' -Name 'value'): the value is one single-quoted literal.
+const injN = life.buildHostLaunch("C:\\x\\Provision-AgentVM.ps1", ["-GitUserName", "x'; Start-Process calc; '"], { elevate: false });
+ok("launch(non-elevated): value stays one single-quoted literal (quotes doubled)",
+  injN.command.includes("''") && /-GitUserName '([^']|'')*'$/.test(injN.command));
 
 // ── psSingleQuote ────────────────────────────────────────────────────────────
 ok("psSingleQuote: wraps + escapes", life.psSingleQuote("a'b") === "'a''b'");
@@ -157,11 +176,23 @@ const launched = life.launchHostScript({
   _spawn: fakeSpawn, _vscode: fakeVscode, _platform: "win32",
 });
 ok("launchHostScript: returns true when spawned", launched === true);
-ok("launchHostScript: spawns via cmd.exe /c start", spawned && spawned.file === "cmd.exe" && spawned.args[1] === "start");
+ok("launchHostScript: spawns via cmd.exe /c start (start gives the visible console)", spawned && spawned.file === "cmd.exe" && spawned.args[1] === "start");
 ok("launchHostScript: spawn options carry NO windowsHide", spawned && spawned.options.windowsHide !== true);
 ok("launchHostScript: spawn options are detached (outlive VS Code)", spawned && spawned.options.detached === true);
-ok("launchHostScript: the launched command opens a VISIBLE window",
-  spawned && Buffer.from(spawned.args[spawned.args.length - 1], "base64").toString("utf16le").includes("-WindowStyle Normal"));
+ok("launchHostScript(non-elevated): runs the script directly in the started console (& )",
+  spawned && Buffer.from(spawned.args[spawned.args.length - 1], "base64").toString("utf16le").startsWith("& '"));
+
+// env passthrough: opts.env is merged over process.env and reaches the launched console.
+let envSpawned = null;
+life.launchHostScript({
+  scriptsDir: "C:\\x", script: "Update-Construct.ps1", args: ["-Repo", "a/b"],
+  elevate: false, label: "Update Construct", env: { CONSTRUCT_UPDATE_RESULT: "C:\\t\\r.result" },
+  _spawn: (file, args, options) => { envSpawned = { file, args, options }; return { on() {}, unref() {} }; },
+  _vscode: fakeVscode, _platform: "win32",
+});
+ok("launchHostScript: opts.env merged into the spawn env", envSpawned && envSpawned.options.env && envSpawned.options.env.CONSTRUCT_UPDATE_RESULT === "C:\\t\\r.result");
+ok("launchHostScript: env merge keeps the inherited environment", envSpawned && envSpawned.options.env.PATH === process.env.PATH);
+
 ok("launchHostScript: off-Windows guard returns false without spawning",
   life.launchHostScript({ scriptsDir: "C:\\x", script: life.PROVISION, args: [], label: "Reprovision",
     _spawn: () => { throw new Error("should not spawn off-Windows"); }, _vscode: fakeVscode, _platform: "linux" }) === false);

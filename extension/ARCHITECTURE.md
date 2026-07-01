@@ -193,8 +193,16 @@ VM-derived fields when `online===false` or `probeError`):
   did NOT fix it (detached still suppressed the console); `start` is the reliable Win32
   primitive that forces a new console. Only argv-safe tokens (the fixed powershell flags
   + the base64 blob) pass through cmd — no paths/user values — so `start` adds no new
-  quoting surface. `vmpower.startVm` (the "Start & connect" UAC launch) uses the same
-  wrapper for the same reason. The launched console outlives VS Code (its own process).
+  quoting surface. **Elevated vs non-elevated:** the elevated actions run
+  `Start-Process -Verb RunAs …` in the started console (UAC prompt + elevated console —
+  so a brief launcher window plus the elevated one). Non-elevated actions run the script
+  DIRECTLY via `& '<script>' <args>` (`buildCallCommand`) in the started console — ONE
+  window, no inner Start-Process (that second window was the reported "two popups"); the
+  launcher there is NOT `-NonInteractive` so the script's end-of-run pause/prompts work.
+  All target params are `[string]/[int]/[switch]`, so `&` with single-quoted values binds
+  (incl. `[int]` coercion) and is injection-safe (quotes doubled — proven via pwsh).
+  `vmpower.startVm` (the elevated "Start & connect") uses the Start-Process wrapper too.
+  The launched console outlives VS Code (its own process).
   Quoting (verified through real PowerShell): the outer command is handed to the
   spawned shell via `-EncodedCommand` (base64 UTF-16LE) so there's NO Node↔shell
   quoting layer; the child argv is canonically Windows-quoted (`winQuoteArg`) and
@@ -243,14 +251,19 @@ VM-derived fields when `online===false` or `probeError`):
   10 min): no marker, offline, or rate-limited → no `update` key → banner hidden.
   `updateConstruct` (`runUpdateConstruct`) launches `Update-Construct.ps1` on the host
   (non-elevated, download + reinstall the panel, no VM rebuild), which re-records the
-  marker so the banner clears. **Auto-reload:** the panel passes `-ResultFile <tmp>`;
-  the script writes `ok`/`fail` at the very end (after the vsix reinstall — a falsey
-  `Install-ControlPanelExtension` counts as fail) and, on success WITH a result file,
-  does NOT pause (the reload is the feedback). `runUpdateConstruct` polls the file and,
-  on `ok`, runs `workbench.action.reloadWindow` so the refreshed panel loads with no
-  manual reopen (a detached host console can't reload VS Code itself); on `fail` the
-  script's console pauses with a "reopen VS Code" message and the panel shows a toast.
-  Run by hand (no `-ResultFile`) it pauses on success too. Agent updates
+  marker so the banner clears. **Auto-reload:** the panel passes the result path via the
+  `CONSTRUCT_UPDATE_RESULT` ENV VAR (NOT a `-ResultFile` arg — an OLDER installed script
+  ignores an unknown env var but would ERROR on an unknown parameter, and since it errors
+  before downloading the fix that would permanently trap the button; the script reads the
+  env var, `-ResultFile` still accepted for compat). The script writes `ok`/`fail` at the
+  very end (after the vsix reinstall — a missing OR falsey `Install-ControlPanelExtension`
+  counts as fail) and, on success WITH a result path, does NOT pause (the reload is the
+  feedback). `runUpdateConstruct` polls the file and, on `ok`, runs
+  `workbench.action.reloadWindow` so the refreshed panel loads with no manual reopen (a
+  detached host console can't reload VS Code itself); on `fail` the script's console pauses
+  with a "reopen VS Code" message and the panel shows a toast. An old script (no env read)
+  just pauses on completion and the poll times out — the update still applied, no auto-reload
+  that once. Run by hand (no result path) it pauses on success too. Agent updates
   work the same way: per-agent latest (npm/GitHub releases) vs the probed version →
   `{latest, updateAvailable}` folded into `state.agents`; `updateAgents` force-updates
   over SSH (`claude update` + re-run installers) with a progress notification.

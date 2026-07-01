@@ -5,12 +5,15 @@
     NOT rebuild the VM. Launched by the panel; also runnable by hand. -Repo/-Ref pick
     the source (default: the canonical repo / main).
 
-    -ResultFile: when the panel launches this, it passes a path we write "ok"/"fail"
-    to at the end. The panel polls it and, on "ok", RELOADS the VS Code window so the
-    refreshed panel loads automatically (a detached console can't reload VS Code). On
-    success with a -ResultFile we therefore DON'T pause (the reload is the feedback);
-    on failure we pause and tell the user to reopen VS Code. Run by hand (no
-    -ResultFile) it pauses on success too so the output stays readable.
+    Result signal: when the panel launches this, it passes a path (via the
+    CONSTRUCT_UPDATE_RESULT env var — an env var, not a parameter, so an OLDER copy of
+    this script simply ignores it instead of erroring on an unknown argument) that we
+    write "ok"/"fail" to at the end. The panel polls it and, on "ok", RELOADS the VS Code
+    window so the refreshed panel loads automatically (a detached console can't reload VS
+    Code). On success with a result path we therefore DON'T pause (the reload is the
+    feedback); on failure we pause and tell the user to reopen VS Code. Run by hand (no
+    result path) it pauses on success too so the output stays readable. -ResultFile is
+    still accepted for compatibility and takes precedence over the env var.
 #>
 [CmdletBinding()]
 param(
@@ -19,6 +22,7 @@ param(
     [string]$ResultFile = ""
 )
 $ErrorActionPreference = "Stop"
+if (-not $ResultFile) { $ResultFile = $env:CONSTRUCT_UPDATE_RESULT }
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
 
 $ok = $false
