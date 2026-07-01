@@ -30,8 +30,8 @@ so registration survives restarts and re-provisions.
 
 - **First-time registration** needs a **one-time** browser sign-in (GitHub/Microsoft). When you
   select the tunnel, `code-tunnel.service` starts and emits a device-login link; the host
-  provisioner (`Provision-AgentVM.ps1`) reads it back and **pauses before the reboot** so you can
-  sign in against a still-valid code, then press Enter to continue. (Running headless? Read the
+  provisioner (`Provision-AgentVM.ps1`) reads it back and **pauses so you can sign in** against a
+  still-valid code, then press Enter to finish setup. (Running headless? Read the
   link with `journalctl -u code-tunnel -n 50`.)
 - **Re-provisioning** always re-deploys the `code-tunnel` service when it was previously deployed
   or is still registered — so a registered VM keeps autostarting the tunnel even with
@@ -73,8 +73,8 @@ net use Z: \\agent-vm.mshome.net\repo /user:dev <password> /savecred /persistent
   `SMB_PASSWORD` (or pass a new value via the environment) to rotate it on the next provision.
 - The host maps the share over the stable `agent-vm.mshome.net` DNS name (not the VM's DHCP
   IP), so the persistent mapping survives the VM's address changing. `/savecred` stores the
-  login in Windows Credential Manager; `/persistent:yes` reconnects it at logon and after the
-  VM's post-provision reboot.
+  login in Windows Credential Manager; `/persistent:yes` reconnects it at logon and after any
+  VM reboot.
 
 Read back the details on the VM from the login banner, or:
 

@@ -545,7 +545,7 @@ setup_tunnel() {
 
   if [[ "${want}" == "yes" && "${TUNNEL_STATE}" == "needs" ]]; then
     # Fresh registration required. The host provisioner displays this and pauses
-    # for sign-in before rebooting.
+    # for sign-in before finishing (and rebooting on a full install/reinstall).
     TUNNEL_AUTHED="no"; TUNNEL_NEEDS_SIGNIN="yes"; TUNNEL_LOGIN="${TUNNEL_LOGIN_LINE}"
     printf '\n'
     warn "  ONE-TIME SIGN-IN required to register this tunnel:"
@@ -554,7 +554,7 @@ setup_tunnel() {
     else
       printf '    Run:  journalctl -u code-tunnel -n 50   (look for the github.com/login/device link)\n'
     fi
-    printf '    The provisioner will pause for you to complete this before rebooting.\n'
+    printf '    The provisioner will pause for you to complete this before finishing.\n'
   elif [[ "${TUNNEL_STATE}" == "live" ]]; then
     TUNNEL_AUTHED="yes"; TUNNEL_NEEDS_SIGNIN="no"
     ok "  Tunnel is registered and live."

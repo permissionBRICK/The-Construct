@@ -40,6 +40,14 @@ projects) — then just hit connect.
 > **export config**. Other paths — bundled ISO, BYO VM, no-admin — are in the
 > [installation guide](docs/installation.md).
 
+<div align="center">
+
+<img src="docs/construct.png" alt="The Construct operator console — the one-screen VS Code control panel" width="100%">
+
+<sub>*The operator console: lifecycle, live agent versions, mic passthrough, and project profiles on one screen.*</sub>
+
+</div>
+
 ## ✨ Features
 
 - 🤖 **Agents preinstalled, zero config** — Claude Code, Codex, and Opencode CLIs installed
