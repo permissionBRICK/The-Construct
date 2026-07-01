@@ -80,6 +80,7 @@ function buildInvocation(action, opts = {}) {
       pushBool("-VsCodeTunnel", s.tunnel);
       pushBool("-SmbShare", s.smb);
       pushBool("-ClaudePartialStreaming", s.partialStreaming);
+      pushBool("-MicPassthrough", s.mic);
       // Launched from the panel: don't prompt for the SMB drive letter etc. (still pauses
       // at the end so output is readable — -NonInteractive is NOT -Auto).
       args.push("-NonInteractive");
@@ -103,6 +104,7 @@ function buildInvocation(action, opts = {}) {
       // "…with these settings" buttons must honour an explicit off, not silently
       // fall back to the provisioner's default-on).
       pushBool("-ClaudePartialStreaming", s.partialStreaming);
+      pushBool("-MicPassthrough", s.mic);
       return {
         script: AUTO_INSTALL, args, destructive: true, elevate: true,
         label: action === "redownload" ? "Redownload" : "Reinstall",

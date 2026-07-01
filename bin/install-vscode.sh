@@ -85,6 +85,10 @@ VSCODE_EXTENSIONS="${VSCODE_EXTENSIONS:-}"
 # !remoteName, so over Remote-SSH the chat panel looks frozen until each turn is
 # fully generated). On by default; set CLAUDE_PARTIAL_STREAMING=false to keep stock.
 CLAUDE_PARTIAL_STREAMING="${CLAUDE_PARTIAL_STREAMING:-true}"
+# Apply the mic-passthrough VM patch (recorder shim + chat-mic gate) to the same
+# extension when the saved preference is on, so the chat mic button survives a
+# reprovision (the --force reinstall below wipes any on-demand patch). Off by default.
+MIC_PASSTHROUGH="${MIC_PASSTHROUGH:-false}"
 # Commit of the *desktop* VS Code client that will Remote-SSH into this VM
 # (full 40-char sha, detected on the host by Provision-AgentVM.ps1). The
 # Remote-SSH server is version-locked to the client, so pre-seeding only skips
@@ -370,16 +374,21 @@ preinstall_extensions() {
     fi
   done
 
-  # Force Claude Code partial-message streaming on over Remote-SSH. The stock
-  # anthropic.claude-code extension gates it on !remoteName, so over Remote-SSH the
-  # chat panel shows nothing until each assistant turn is fully generated — it reads
-  # as "stuck before the thinking block even starts". Patch the freshly-installed
-  # extension.js so it streams as the turn is produced (reversible; honours
-  # CLAUDE_PARTIAL_STREAMING, default on). Run with the connection user's HOME so it
-  # targets the right extensions dir; done before the chown so any rewritten files
-  # (and the .bak) get re-homed to the user too.
+  # The extension was just (re)installed with --force, which replaces extension.js and
+  # invalidates any patch backups from a prior provision. Drop them so the enable steps
+  # below back up THIS build, never stale bytes a later revert could wrongly restore.
+  rm -f "${ext_dir}"/anthropic.claude-code-*/extension.js.construct-*.bak \
+        "${ext_dir}"/anthropic.claude-code-*/dist/extension.js.construct-*.bak 2>/dev/null || true
+
+  # Apply Construct's Remote-SSH extension patches to the freshly-installed
+  # anthropic.claude-code build. Each is reversible + idempotent; run with the
+  # connection user's HOME so they target the right extensions dir, and before the
+  # chown so any rewritten files (and .bak backups) get re-homed to the user.
   case ",${exts}," in
     *",anthropic.claude-code,"*)
+      # 1) Partial-message streaming. The stock build gates it on !remoteName, so over
+      #    Remote-SSH the chat panel shows nothing until each assistant turn is fully
+      #    generated ("stuck before the thinking block"). On by default.
       if [[ "${CLAUDE_PARTIAL_STREAMING}" == "true" ]]; then
         step "  Enabling Claude Code partial-message streaming over Remote-SSH"
         HOME="${home}" bash "${REPO_DIR}/extension/vm/construct-partial-streaming-enable.sh" \
@@ -388,6 +397,21 @@ preinstall_extensions() {
         note "  Reverting Claude Code partial-message streaming to stock (CLAUDE_PARTIAL_STREAMING=false)"
         HOME="${home}" bash "${REPO_DIR}/extension/vm/construct-partial-streaming-disable.sh" \
           || warn "  WARNING: partial-streaming disable patch failed; continuing"
+      fi
+      # 2) Microphone passthrough (recorder shim + chat-mic speech gate). The --force
+      #    reinstall above wipes any on-demand mic patch, so re-apply it here when the
+      #    saved preference is on — otherwise the chat mic button is gone on the first
+      #    start after a reprovision. Off by default (opt-in); false reverts to stock.
+      #    The recorder shim is embedded from the repo (base64, as the host does).
+      if [[ "${MIC_PASSTHROUGH}" == "true" ]]; then
+        step "  Enabling Claude Code microphone passthrough (recorder shim + chat-mic gate)"
+        CONSTRUCT_SHIM_B64="$(base64 -w0 "${REPO_DIR}/extension/vm/construct-rec-shim.sh" 2>/dev/null)" \
+          HOME="${home}" bash "${REPO_DIR}/extension/vm/construct-audio-enable.sh" \
+          || warn "  WARNING: mic passthrough enable failed; continuing"
+      else
+        note "  Microphone passthrough off (MIC_PASSTHROUGH=false) — reverting any prior patch"
+        HOME="${home}" bash "${REPO_DIR}/extension/vm/construct-audio-disable.sh" \
+          || warn "  WARNING: mic passthrough disable failed; continuing"
       fi
       ;;
   esac
