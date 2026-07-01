@@ -29,6 +29,14 @@ ok("version: opencode", probe.extractVersion("1.17.11") === "1.17.11");
 ok("version: empty", probe.extractVersion("") === "");
 ok("version: prerelease", probe.extractVersion("v2.1.196-beta.1") === "2.1.196-beta.1");
 
+// ── formatMarker ──────────────────────────────────────────────────────────────
+ok("marker: ISO -> date", probe.formatMarker("2026-07-01T03:44:06Z") === "2026-07-01");
+ok("marker: ISO w/o Z still yields date", probe.formatMarker("2026-12-31T23:59:59") === "2026-12-31");
+ok("marker: empty -> empty", probe.formatMarker("") === "");
+ok("marker: null -> empty", probe.formatMarker(null) === "");
+ok("marker: whitespace -> empty", probe.formatMarker("   ") === "");
+ok("marker: unparseable passed through (trimmed)", probe.formatMarker("  never  ") === "never");
+
 // ── parseProbe + toState ──────────────────────────────────────────────────────
 const sample = [
   "HOSTNAME\tagent-vm",
@@ -42,6 +50,8 @@ const sample = [
   "V_CLAUDE\t2.1.196 (Claude Code)",
   "V_CODEX\tcodex-cli 0.142.4",
   "V_OPENCODE\t1.17.11",
+  "INSTALLED_AT\t2026-06-01T10:15:00Z",
+  "REPROVISIONED_AT\t2026-07-01T03:44:06Z",
   "",
 ].join("\n");
 
@@ -54,10 +64,28 @@ ok("state: claude version", st.agents.find((a) => a.id === "claude-code").versio
 ok("state: codex version", st.agents.find((a) => a.id === "codex").version === "0.142.4");
 ok("state: opencode version", st.agents.find((a) => a.id === "opencode").version === "1.17.11");
 ok("state: 2 selected projects", st.projects.length === 2 && st.projects.every((p) => p.selected));
+ok("state: installed marker mapped + formatted", st.installed === "2026-06-01", st.installed);
+ok("state: reprovisioned marker mapped + formatted", st.reprovisioned === "2026-07-01", st.reprovisioned);
 
 // agent listed even if version missing but tool selected
 const partial = probe.toState(probe.parseProbe("AI_TOOLS\tclaude-code\n"));
 ok("state: selected tool without version still listed", partial.agents.length === 1 && partial.agents[0].version === "—");
+
+// No marker (older VM / unreadable provisioned.env): the fields are OMITTED so the
+// webview keeps its "installed —" / "reprovisioned —" placeholders.
+const noMarker = probe.toState(probe.parseProbe("AGENT_NAME\tagent-vm-01\n"));
+ok("state: installed omitted when no marker", !("installed" in noMarker));
+ok("state: reprovisioned omitted when no marker", !("reprovisioned" in noMarker));
+
+// A reprovision-only marker (installed empty for whatever reason) still surfaces
+// reprovisioned, and omits installed rather than showing a bogus value.
+const reOnly = probe.toState(probe.parseProbe("INSTALLED_AT\t\nREPROVISIONED_AT\t2026-07-01T03:44:06Z\n"));
+ok("state: reprovisioned surfaced when installed blank", reOnly.reprovisioned === "2026-07-01" && !("installed" in reOnly));
+
+// The REMOTE_PROBE script emits the marker keys from /etc/construct/provisioned.env.
+ok("probe script reads provisioned.env", /provisioned\.env/.test(probe.REMOTE_PROBE));
+ok("probe script emits INSTALLED_AT", /emit INSTALLED_AT/.test(probe.REMOTE_PROBE));
+ok("probe script emits REPROVISIONED_AT", /emit REPROVISIONED_AT/.test(probe.REMOTE_PROBE));
 
 console.log(`\n  probe/ssh unit tests — ${pass}/${pass + fail} passed\n`);
 process.exit(fail ? 1 : 0);

@@ -270,23 +270,17 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("offline clears project chips", (await page.locator("#projChips .chip").innerText()).trim() === "—");
   check("offline keeps known host", (await page.locator("#sysHost").innerText()) === "h.example.net");
 
-  // connect button: shows only when the VM is online AND this window isn't already on it
+  // connect button: intentionally hidden in the UI for now (the "not already
+  // connected" gate isn't reliable), so it must stay hidden in every state.
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, connected: false } }, "*"));
   await page.waitForTimeout(60);
-  check("panel: connect shows when online + not connected", await page.locator("#connectBtn").isVisible());
-  await page.click("#connectBtn");
-  posted = await page.evaluate(() => window.__posted);
-  check("panel: connect posts command", posted.some((m) => m.type === "command" && m.id === "connect"));
+  check("panel: connect hidden when online + not connected", !(await page.locator("#connectBtn").isVisible()));
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, connected: true } }, "*"));
   await page.waitForTimeout(60);
   check("panel: connect hidden when already connected", !(await page.locator("#connectBtn").isVisible()));
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: false, connected: false } }, "*"));
   await page.waitForTimeout(60);
   check("panel: connect hidden when offline", !(await page.locator("#connectBtn").isVisible()));
-  // strict ===: an undefined `connected` (legacy/foreign state) must keep it hidden.
-  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true } }, "*"));
-  await page.waitForTimeout(60);
-  check("panel: connect hidden when `connected` is unknown", !(await page.locator("#connectBtn").isVisible()));
 
   // power controls: Start & connect (offline + VM stopped) and Shutdown (online).
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: false, vmState: "off" } }, "*"));
@@ -296,10 +290,16 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await page.click("#startBtn");
   posted = await page.evaluate(() => window.__posted);
   check("panel: start&connect posts startConnect", posted.some((m) => m.type === "command" && m.id === "startConnect"));
-  // strict: an unknown/absent vmState (offline, not installed or query failed) shows no Start button.
+  // offline + 'unknown' (the non-elevated Get-VM probe was permission-denied) STILL
+  // shows Start — the elevated Start-VM works regardless, so the button must not be
+  // hidden just because the probe couldn't read the state (regression: it never showed).
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: false, vmState: "unknown" } }, "*"));
+  await page.waitForTimeout(60);
+  check("panel: start&connect shows when offline + probe unknown", await page.locator("#startBtn").isVisible());
+  // strict: only a positively-'absent' vmState (a privileged probe said the VM isn't installed) hides Start.
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: false, vmState: "absent" } }, "*"));
   await page.waitForTimeout(60);
-  check("panel: start hidden when VM absent / state unknown", !(await page.locator("#startBtn").isVisible()));
+  check("panel: start hidden when VM absent", !(await page.locator("#startBtn").isVisible()));
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, connected: true, vmState: "running" } }, "*"));
   await page.waitForTimeout(60);
   check("panel: shutdown shows when online", await page.locator("#shutdownBtn").isVisible());
@@ -309,11 +309,11 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("panel: shutdown posts shutdown", posted.some((m) => m.type === "command" && m.id === "shutdown"));
 
   // panel degrades without horizontal overflow when dragged narrow — measured with the
-  // connect AND shutdown buttons VISIBLE (the widest status-strip state: online, not connected).
+  // shutdown button VISIBLE at narrow width (online); connect stays hidden by design.
   await page.setViewportSize({ width: 300, height: 1400 });
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, connected: false, vmState: "running" } }, "*"));
   await page.waitForTimeout(80);
-  check("panel: connect button visible at 300px", await page.locator("#connectBtn").isVisible());
+  check("panel: connect hidden at 300px", !(await page.locator("#connectBtn").isVisible()));
   check("panel: shutdown button visible at 300px", await page.locator("#shutdownBtn").isVisible());
   const panelOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   check("panel: no horizontal overflow at 300px", panelOverflow <= 1, `overflow=${panelOverflow}px`);
@@ -339,10 +339,8 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("launcher: offline dot", (await page.getAttribute("#lDot", "class")).includes("offline"));
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h.example.net", connected: false } }, "*"));
   await page.waitForTimeout(60);
-  check("launcher: connect shows when online + not connected", await page.locator("#lConnect").isVisible());
-  await page.click("#lConnect");
-  lposted = await page.evaluate(() => window.__posted);
-  check("launcher: connect posts command", lposted.some((m) => m.type === "command" && m.id === "connect"));
+  // connect (lConnect) is intentionally hidden in the UI for now: stays hidden always.
+  check("launcher: connect hidden when online + not connected", !(await page.locator("#lConnect").isVisible()));
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h.example.net", connected: true } }, "*"));
   await page.waitForTimeout(60);
   check("launcher: connect hidden when already connected", !(await page.locator("#lConnect").isVisible()));
@@ -362,6 +360,10 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await page.click("#lStart");
   lposted = await page.evaluate(() => window.__posted);
   check("launcher: start&connect posts startConnect", lposted.some((m) => m.type === "command" && m.id === "startConnect"));
+  // offline + 'unknown' (permission-denied probe) still shows Start (see panel.js rationale).
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: false, host: "h.example.net", vmState: "unknown" } }, "*"));
+  await page.waitForTimeout(60);
+  check("launcher: start&connect shows when offline + probe unknown", await page.locator("#lStart").isVisible());
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h.example.net", connected: true, vmState: "running" } }, "*"));
   await page.waitForTimeout(60);
   check("launcher: shutdown shows when online", await page.locator("#lShutdown").isVisible());
@@ -370,10 +372,11 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   lposted = await page.evaluate(() => window.__posted);
   check("launcher: shutdown posts shutdown", lposted.some((m) => m.type === "command" && m.id === "shutdown"));
 
-  // measure overflow with the connect + shutdown buttons visible.
+  // measure overflow with the shutdown button visible (connect stays hidden by design).
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h.example.net", connected: false, vmState: "running" } }, "*"));
   await page.waitForTimeout(60);
-  check("launcher: connect button visible at 300px", await page.locator("#lConnect").isVisible());
+  check("launcher: connect hidden at 300px", !(await page.locator("#lConnect").isVisible()));
+  check("launcher: shutdown visible at 300px", await page.locator("#lShutdown").isVisible());
   const launcherOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   check("launcher: no horizontal overflow at 300px", launcherOverflow <= 1, `overflow=${launcherOverflow}px`);
   check("launcher: no console/page errors", errors.length === 0, errors.join(" | "));

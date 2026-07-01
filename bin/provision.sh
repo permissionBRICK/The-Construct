@@ -342,4 +342,24 @@ if [[ "${VSCODE_SERVER}" == "true" ]]; then
     || warn "WARNING: VS Code setup failed; continuing"
 fi
 
+# 9. Record provisioning timestamps so the control panel can surface when this VM
+#    was first installed and last (re)provisioned. INSTALLED_AT is written once and
+#    preserved across reprovisions (a fresh install has no marker yet); it also
+#    heals a VM provisioned before this marker existed by seeding it now.
+#    REPROVISIONED_AT is rewritten on EVERY successful run, so a reprovision moves
+#    it. Written last so it only records a provision that reached the end. The file
+#    is a config.env-style KEY=VALUE so config-set.sh's idempotent merge and the
+#    control panel's sed reader both handle it. Best-effort: never abort the run.
+step "Recording provisioning timestamps"
+MARKER_FILE="${MARKER_FILE:-/etc/construct/provisioned.env}"
+_now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+mark() { bash "${REPO_DIR}/bin/config-set.sh" "${MARKER_FILE}" "$1" "$2"; }
+if [[ -f "${MARKER_FILE}" ]] && grep -Eq '^INSTALLED_AT=.+' "${MARKER_FILE}"; then
+  note "    INSTALLED_AT preserved (first install unchanged)"
+else
+  mark INSTALLED_AT "${_now}" && note "    INSTALLED_AT=${_now}"
+fi
+mark REPROVISIONED_AT "${_now}" && note "    REPROVISIONED_AT=${_now}"
+chmod 0644 "${MARKER_FILE}" 2>/dev/null || true
+
 ok "provision.sh complete"

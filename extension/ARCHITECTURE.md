@@ -158,7 +158,13 @@ VM-derived fields when `online===false` or `probeError`):
   `Get-VM` probe (captured stdout, run only when offline) yields `vmState`, so a
   stopped-but-installed VM shows "Start & connect" (elevated `Start-VM` + UAC, then
   poll reachability and open) and a reachable VM shows "Shutdown" (`systemctl poweroff
-  --no-block` over SSH). "+ add project" clones a git URL onto the VM (injection-safe,
+  --no-block` over SSH). **The Start gate (`vmpower.shouldShowStart`) shows for offline
+  vmState `off` OR `unknown`, not `off` alone** — the non-elevated `Get-VM` probe is
+  Hyper-V-permission-gated (the installer's Hyper-V Administrators membership only takes
+  effect at next sign-in), so a stopped VM commonly probes back `unknown`; only a
+  positively-`absent` (privileged) probe hides Start. The Start action self-elevates, so
+  offering it for `unknown` is safe. Both webviews inline the identical predicate;
+  `vmpower.test.js` locks the canonical `shouldShowStart` so the two copies can't drift. "+ add project" clones a git URL onto the VM (injection-safe,
   base64-as-data) and opens it in a new window; an inline ▷ per chip opens that
   project's single-repo folder (mirroring `bin/checkout-projects.sh`) in a new window.
   The installer (host PowerShell) ensures VS Code + the Remote-SSH extension, adds the
@@ -170,13 +176,19 @@ VM-derived fields when `online===false` or `probeError`):
   the window is Remote-SSH'd into the VM, but `createTerminal()` targets the
   *window's* context (the VM, where there's no `powershell.exe`). So `lifecycle.js`
   spawns a local `powershell.exe` whose `Start-Process …` opens a new visible
-  console window, detached so it outlives VS Code. Quoting (verified through real
-  PowerShell): the outer command is handed to the spawned shell via
-  `-EncodedCommand` (base64 UTF-16LE) so there's NO Node↔shell quoting layer; the
-  child argv is canonically Windows-quoted (`winQuoteArg`) and forwarded as a
-  **single-string** `-ArgumentList` (an array would be space-joined without
-  re-quoting, splitting a spaced path or a two-word `-GitUserName`). Settings
-  values reach the script as data, not commands, so they can't inject.
+  console window, detached so it outlives VS Code. **The launcher is spawned WITHOUT
+  `windowsHide` and the inner `Start-Process` passes `-WindowStyle Normal`.**
+  `windowsHide:true` sets `CREATE_NO_WINDOW` on the launcher, whose no-console state
+  the inner console can inherit → the "toast fires, no window, nothing happens" bug
+  the four lifecycle buttons had (and `vmpower.startVm`, since fixed the same way);
+  `detached` gives the launcher no console of its own without suppressing the child's.
+  Quoting (verified through real PowerShell): the outer command is handed to the
+  spawned shell via `-EncodedCommand` (base64 UTF-16LE) so there's NO Node↔shell
+  quoting layer; the child argv is canonically Windows-quoted (`winQuoteArg`) and
+  forwarded as a **single-string** `-ArgumentList` (an array would be space-joined
+  without re-quoting, splitting a spaced path or a two-word `-GitUserName`). Settings
+  values reach the script as data, not commands, so they can't inject. (The "launched"
+  toast is optimistic — it can't detect a UAC decline or a missing script path.)
 - **UAC: don't elevate the extension host.** Reprovision/Export touch no Hyper-V →
   launched non-elevated. Reinstall/Redownload delete+recreate the VM → launched
   with `Start-Process -Verb RunAs` so UAC consent fires once and a single elevated
@@ -191,6 +203,23 @@ VM-derived fields when `online===false` or `probeError`):
   an input). Project selection is likewise left to the script's selector until the
   Projects batch, and the settings lead copy says both are still entered in the
   console (so the UI doesn't over-promise an unattended run).
+- **Install / reprovision pills = a VM-side timestamp marker.** The status strip's
+  `installed —` / `reprovisioned —` pills are fed by `state.installed` /
+  `state.reprovisioned`, produced by the live probe (NOT host-side) so they reflect
+  the ACTUAL VM and a reprovision moves them. `bin/provision.sh` records
+  `/etc/construct/provisioned.env` as its last step on a SUCCESSFUL run:
+  `INSTALLED_AT` written once and preserved across reprovisions (and back-filled on a
+  VM provisioned before the marker existed), `REPROVISIONED_AT` rewritten every run —
+  both ISO-8601 UTC, via the same idempotent `config-set.sh` merge. `REMOTE_PROBE`
+  reads the two keys with `sed` (like config.env); `probe.toState` formats each to its
+  date part (`formatMarker`, a pure ISO-date slice — no `Date`, so no midnight-drift)
+  and OMITS the field when the marker is absent/blank, so the webview keeps the `—`
+  placeholder for a truly-unknown value. `panel.js` renders the pills authoritatively
+  on the online path (`installed <date>` else `—`) and resets them in
+  `clearLiveVmData()` when offline / probe-failed; `launcher.js` rebuilds its meta line
+  fresh each render. `probe.test.js` covers the emit/parse/format + the omit-when-absent
+  contract. (Reprovision = `Provision-AgentVM.ps1 -Action provision`, which runs
+  `provision.sh` on the VM, so the same marker step covers first install and reprovision.)
 - **Construct update check = a recorded commit marker + GitHub compare.** The
   installed commit lives in `.construct-settings.json` as `installedCommit` (with
   `constructRepo`/`constructRef`), written by `Provision-AgentVM.ps1` at install time
@@ -438,10 +467,18 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
      forward-slash entry names (the .NET-Framework backslash-entry pitfall breaks OPC
      readers). `Install-ControlPanelExtension` then runs `code --install-extension
      <vsix> --force` (checks `$LASTEXITCODE`, not the pipeline) and removes any stale
-     folder-copy from the old approach. `test/host-lib.test.ps1` asserts the vsix
-     structure (both OPC parts, forward-slash entries, `test/`/`node_modules` excluded,
-     Identity/engine/kind from `package.json`). NOTE: `code --install-extension` itself
-     can't run in the Linux CI box, so only the packaging is unit-tested.
+     folder-copy from the old approach. **Both `code` invocations go through
+     `Invoke-VSCodeCli`, which decides success by `$LASTEXITCODE` ONLY:** it pins
+     `$ErrorActionPreference='Continue'` (so under WinPS 5.1, a native stderr write can't
+     be promoted to a terminating error — the bug where `code`'s DEP0169 `url.parse`
+     deprecation warning was reported as "Could not install the control-panel extension"
+     even though it exited 0), redirects the CLI's stderr to `$null`, and sets
+     `NODE_OPTIONS=--no-deprecation` (restored after). A real non-zero exit is still
+     surfaced. `test/host-lib.test.ps1` asserts the vsix structure (both OPC parts,
+     forward-slash entries, `test/`/`node_modules` excluded, Identity/engine/kind from
+     `package.json`) and that success/failure honors the exit code, not stderr. NOTE:
+     `code --install-extension` itself can't run in the Linux CI box, so only the
+     packaging + the exit-code decision logic are unit-tested.
    - **Placement.** `install.ps1` is a THIN downloader (download repo → launch
      `Auto-Install.ps1`; forwards the `-Repo`/`-Ref` PAIR only when explicit) so a stale
      local copy can't drift. The host setup that MUST run non-elevated (per-user

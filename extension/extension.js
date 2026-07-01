@@ -95,8 +95,12 @@ function withLocalState(state) {
 /** Fold the VM's Hyper-V power state into a probed state. When the VM answers SSH
  *  it is by definition running, so we skip the (possibly elevation-gated) host
  *  Get-VM query and only run it when offline — that's the only case where we need
- *  to tell "stopped" (→ Start & connect) apart from "not installed". Best-effort:
- *  any failure leaves vmState 'unknown', which the UI treats as "no power button". */
+ *  to tell "not installed" ('absent') apart from everything else. Best-effort: any
+ *  failure (including the common Hyper-V-permission denial, since the installer's
+ *  Hyper-V Administrators membership is only effective at next sign-in) leaves
+ *  vmState 'unknown'. The UI still offers "Start & connect" for 'unknown' (the
+ *  elevated Start-VM self-elevates via UAC), hiding it only for 'absent'/'running' —
+ *  see vmpower.shouldShowStart. */
 async function withVmState(state) {
   try {
     if (state && state.online) return { ...state, vmState: "running" };

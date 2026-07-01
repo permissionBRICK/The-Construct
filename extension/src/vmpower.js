@@ -110,16 +110,41 @@ function queryVmState(opts = {}) {
 }
 
 /**
+ * Whether the "Start & connect" affordance should be shown for a given probed state.
+ * The webviews (media/panel.js, media/launcher.js) can't require() this module, so
+ * they inline the SAME predicate — this is the canonical definition the unit tests
+ * lock so the two copies can't silently drift.
+ *
+ * Show Start only when the VM is OFFLINE (SSH-unreachable) and NOT known to be absent
+ * or running: i.e. vmState is 'off' OR 'unknown'. 'unknown' is included deliberately —
+ * the non-elevated Get-VM probe is Hyper-V-permission gated (the installer's Hyper-V
+ * Administrators membership is only effective at the next sign-in), so a genuinely
+ * stopped VM very commonly reads back 'unknown' rather than 'off'. The Start action
+ * self-elevates (UAC Start-VM), so it works regardless of the probe's permission; the
+ * only offline case we suppress it for is 'absent' (a privileged probe positively
+ * reported the VM doesn't exist). Pure.
+ */
+function shouldShowStart(online, vmState) {
+  return !online && vmState !== "absent" && vmState !== "running";
+}
+
+/**
  * argv that opens an ELEVATED host console running `commandText` (UAC via
  * Start-Process -Verb RunAs). The child is `-Command <text>` (not -File): the
  * inner argv is canonically quoted (winQuoteArg) and forwarded as a single-string
  * -ArgumentList so a VM name with a space/quote survives. Pure; mirrors
  * lifecycle.buildHostLaunch but for an inline command instead of a script file.
+ *
+ * `-WindowStyle Normal` is explicit so the elevated child gets a VISIBLE console
+ * (same rationale as lifecycle.buildOuterCommand): the launcher is spawned DETACHED
+ * with no console of its own, so without this the inner powershell can inherit "no
+ * console" and run windowless — the "toast fires, nothing happens" symptom. It
+ * coexists with -Verb RunAs.
  */
 function buildElevatedCommandLaunch(commandText) {
   const childArgv = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-Command", commandText];
   const childLine = childArgv.map(lifecycle.winQuoteArg).join(" ");
-  const command = `Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList ${lifecycle.psSingleQuote(childLine)}`;
+  const command = `Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Normal -ArgumentList ${lifecycle.psSingleQuote(childLine)}`;
   const encoded = Buffer.from(command, "utf16le").toString("base64");
   return {
     file: "powershell.exe",
@@ -151,7 +176,11 @@ function startVm(opts = {}) {
   }
   const { file, spawnArgs } = buildElevatedCommandLaunch(buildStartCommand(opts.vmName));
   try {
-    const child = cp.spawn(file, spawnArgs, { windowsHide: true, detached: true, stdio: "ignore" });
+    // No windowsHide: it sets CREATE_NO_WINDOW on this launcher, which suppresses the
+    // console the inner Start-Process opens (same bug the lifecycle buttons had).
+    // `detached` gives the launcher no console of its own and lets the UAC console
+    // outlive VS Code.
+    const child = cp.spawn(file, spawnArgs, { detached: true, stdio: "ignore" });
     child.on("error", (e) => vscode.window.showErrorMessage(`Couldn't start the VM: ${e.message}`));
     child.unref();
     return true;
@@ -164,5 +193,6 @@ function startVm(opts = {}) {
 module.exports = {
   VM_NAME, SHUTDOWN_CMD,
   buildStateProbeCommand, buildStateProbeLaunch, parseVmState, queryVmState,
+  shouldShowStart,
   buildElevatedCommandLaunch, buildStartCommand, startVm,
 };
