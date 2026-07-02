@@ -325,6 +325,13 @@ function validateProfile(name, obj) {
   }
   if (!str(obj.name)) errors.push('"name" must be a non-empty string');
   else {
+    const nm = String(obj.name);
+    // Reject names containing path separators or traversal sequences — a name
+    // must be a safe single-segment filename, never a path. This is the primary
+    // defense against VM-to-host path traversal (Finding 8).
+    if (/[/\\]/.test(nm) || nm === "." || nm === ".." || nm.includes("..")) {
+      errors.push('"name" contains illegal path characters');
+    }
     const want = String(name == null ? "" : name).trim();
     if (want && obj.name !== want) errors.push(`"name" is "${obj.name}" but the profile file is "${want}"`);
   }
@@ -428,6 +435,69 @@ function sanitizeProfile(name, obj) {
   return out;
 }
 
+// ── Share builders (config-sync §12/§13, C4 contract) ────────────────────────
+// Pure functions that generate the shareable install commands and deploy scripts.
+// These are consumed by the extension UI (share action) and tested in
+// projects.test.js. They encode the fork-correct install URL and only append
+// -Repo/-Ref when the installed fork differs from the canonical default.
+
+/** The canonical default repo + ref for install.ps1 (permissionBRICK/The-Construct, main). */
+const DEFAULT_INSTALL_REPO = "permissionBRICK/The-Construct";
+const DEFAULT_INSTALL_REF = "main";
+
+/** Escape a value for safe interpolation into a PowerShell single-quoted string.
+ *  The only character that needs escaping inside PS single quotes is the single
+ *  quote itself, which is doubled. */
+function psQuote(s) {
+  return "'" + String(s).replace(/'/g, "''") + "'";
+}
+
+/** Build the raw URL for install.ps1 on a given repo/ref (GitHub raw content). */
+function installUrlFor(repo, ref) {
+  return "https://raw.githubusercontent.com/" + repo + "/" + ref + "/install.ps1";
+}
+
+/**
+ * Build the §12 shareable one-liner: a scriptblock that pipes install.ps1 through
+ * iex, with -ConfigRepo, -ImportConfigs (comma-separated, no spaces), and
+ * -Action add-config. Appends -Repo/-Ref ONLY when they differ from the
+ * canonical defaults.
+ *
+ * configRepoUrl: the git URL of the config repo
+ * names: array of profile names to import
+ * installRepo: the installed Construct repo (e.g. "permissionBRICK/The-Construct")
+ * installRef:  the installed Construct ref (e.g. "main")
+ */
+function buildShareCommand({ configRepoUrl, names, installRepo, installRef }) {
+  const repo = installRepo || DEFAULT_INSTALL_REPO;
+  const ref = installRef || DEFAULT_INSTALL_REF;
+  const url = installUrlFor(repo, ref);
+  const namesCsv = (names || []).join(",");
+  let cmd = "& ([scriptblock]::Create((irm " + psQuote(url) + ")))";
+  cmd += " -ConfigRepo " + psQuote(configRepoUrl);
+  cmd += " -ImportConfigs " + psQuote(namesCsv);
+  cmd += " -Action add-config";
+  if (repo !== DEFAULT_INSTALL_REPO) cmd += " -Repo " + psQuote(repo);
+  if (ref !== DEFAULT_INSTALL_REF) cmd += " -Ref " + psQuote(ref);
+  return cmd;
+}
+
+/**
+ * Build the §13 deploy.ps1 template: a comment + the scriptblock one-liner
+ * that downloads install.ps1 (fork-correct) and runs it with -ConfigDir
+ * "$PSScriptRoot" -Action add-config. Appends -Repo/-Ref only when non-default.
+ */
+function buildDeployPs1({ installRepo, installRef }) {
+  const repo = installRepo || DEFAULT_INSTALL_REPO;
+  const ref = installRef || DEFAULT_INSTALL_REF;
+  const url = installUrlFor(repo, ref);
+  let line = "& ([scriptblock]::Create((irm " + psQuote(url) + ")))";
+  line += ' -ConfigDir "$PSScriptRoot" -Action add-config';
+  if (repo !== DEFAULT_INSTALL_REPO) line += " -Repo " + psQuote(repo);
+  if (ref !== DEFAULT_INSTALL_REF) line += " -Ref " + psQuote(ref);
+  return "# Bootstraps Construct and imports the config files bundled next to this script.\n" + line + "\n";
+}
+
 module.exports = {
   WORKSPACE_ROOT, MCP_LEGACY_ENUM, MCP_AGENTS, RESERVED_PROFILE_NAMES,
   buildScanScript, parseScan,
@@ -435,4 +505,5 @@ module.exports = {
   toChips, reconcileSelection,
   sanitizeRepos, sanitizeSdks, sanitizeMcp, sanitizeMcpEntry, sanitizeStringArray, sanitizeProfile,
   isReservedProfileName, validateProfile, canonicalProfileJson,
+  DEFAULT_INSTALL_REPO, DEFAULT_INSTALL_REF, installUrlFor, buildShareCommand, buildDeployPs1,
 };

