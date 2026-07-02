@@ -96,39 +96,40 @@ just the first), so anything you add there must tolerate being re-run — see
 
 ## MCP servers
 
-The `mcp` array takes two kinds of entry:
+Each `mcp` entry is an **object** — an MCP server written directly into each
+coding agent's own config (Claude Code, Codex, Opencode) by
+`bin/configure-mcp.sh` during provisioning. Two transports:
 
-- A **string** (`"filesystem"`, `"browser"`, `"github"`) — a docker-compose MCP
-  container profile (the original mechanism; see `docker-compose.yaml`).
-- An **object** — an MCP server written directly into each coding agent's own
-  config (Claude Code, Codex, Opencode) by `bin/configure-mcp.sh` during
-  provisioning. Two transports:
+```jsonc
+// stdio (e.g. an npx server)
+{ "name": "context7", "type": "stdio", "command": "npx",
+  "args": ["-y", "@upstash/context7-mcp"], "env": { "KEY": "val" } }
 
-  ```jsonc
-  // stdio (e.g. an npx server)
-  { "name": "context7", "type": "stdio", "command": "npx",
-    "args": ["-y", "@upstash/context7-mcp"], "env": { "KEY": "val" } }
+// http
+{ "name": "sentry", "type": "http", "url": "https://mcp.sentry.dev/mcp",
+  "headers": { "Authorization": "Bearer ..." }, "bearerTokenEnvVar": "SENTRY_MCP_TOKEN" }
+```
 
-  // http
-  { "name": "sentry", "type": "http", "url": "https://mcp.sentry.dev/mcp",
-    "headers": { "Authorization": "Bearer ..." }, "bearerTokenEnvVar": "SENTRY_MCP_TOKEN" }
-  ```
+Bare strings are **not** valid entries — a server's *name* alone tells
+provisioning nothing about how to run it. (Strings used to select the
+docker-compose MCP container profiles of the original template; that vestigial
+mechanism was never wired into any agent and has been removed.)
 
-  Optional on either form:
+Optional on either form:
 
-  - `"agents"`: subset of `["claude", "claude-code", "codex", "opencode"]` — only
-    configure the server into those agents (default: all). List the same `name`
-    twice with different `agents` to give an agent a different config.
-  - `"enabled"`: set `false` to add the server **flagged disabled** (default
-    true) so you can toggle it on in the agent UI. Opencode (`enabled: false`)
-    and Codex (`enabled = false`) store a present-but-disabled entry; Claude has
-    no global disable, so it is disabled per directory
-    (`projects.<dir>.disabledMcpServers`) for the workspace and every repo dir.
+- `"agents"`: subset of `["claude", "claude-code", "codex", "opencode"]` — only
+  configure the server into those agents (default: all). List the same `name`
+  twice with different `agents` to give an agent a different config.
+- `"enabled"`: set `false` to add the server **flagged disabled** (default
+  true) so you can toggle it on in the agent UI. Opencode (`enabled: false`)
+  and Codex (`enabled = false`) store a present-but-disabled entry; Claude has
+  no global disable, so it is disabled per directory
+  (`projects.<dir>.disabledMcpServers`) for the workspace and every repo dir.
 
-  Servers are written **globally** (user scope) for all agents. Notes: Codex http
-  supports only the URL plus an optional bearer-token env var — arbitrary
-  `headers` are applied to Claude/Opencode only. Servers you list are upserted by
-  name; unrelated/hand-added servers are left untouched.
+Servers are written **globally** (user scope) for all agents. Notes: Codex http
+supports only the URL plus an optional bearer-token env var — arbitrary
+`headers` are applied to Claude/Opencode only. Servers you list are upserted by
+name; unrelated/hand-added servers are left untouched.
 
 Because MCP servers are declared in the project JSON, they are preserved across a
 reinstall: profiles are versioned on the host by [config sync](config-sync.md), so a
@@ -169,7 +170,7 @@ Behaviour:
   provision or the remaining commands (same as repo checkout and MCP setup).
 - **Environment** — runs as root with `config.env` sourced and the merged `AGENT_*`
   vars derived from `generated.json`, so `WORKSPACE_ROOT`, `AGENT_PROJECTS`,
-  `AGENT_REPOS_JSON` (valid JSON), `AGENT_SDKS_JSON`, `AGENT_MCP`, etc. are available.
+  `AGENT_REPOS_JSON` (valid JSON), `AGENT_SDKS_JSON`, etc. are available.
 
 Run them by hand with `sudo /opt/construct/repo/bin/run-provision-commands.sh`.
 

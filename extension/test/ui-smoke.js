@@ -168,7 +168,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await page.evaluate(() => window.postMessage({ type: "editProject", name: "billing", profile: {
     name: "billing",
     repos: [{ url: "https://h/o/billing.git", directory: "billing" }, { url: "https://h/o/api.git" }],
-    sdks: { node: ["22", "24"], python: "3.12" }, mcp: ["github"],
+    sdks: { node: ["22", "24"], python: "3.12" }, mcp: [{ name: "gh", type: "stdio", command: "npx" }],
     hostPackages: ["build-essential"], provisionCommands: ["npm ci", "cp .env.example .env"],
     tests: { web: { runner: "playwright", command: "npm test" } },
   } }, "*"));
@@ -178,7 +178,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("modal: repo rows populated", (await page.locator("#pmRepos .pm-repo").count()) === 2);
   check("modal: first repo url populated", (await page.inputValue('#pmRepos .pm-repo:first-child .pm-url')) === "https://h/o/billing.git");
   check("modal: sdks rendered as name=values lines", (await page.inputValue("#pmSdks")).includes("node = 22, 24") && (await page.inputValue("#pmSdks")).includes("python = 3.12"));
-  check("modal: mcp rendered as JSON", (await page.inputValue("#pmMcp")).includes('"github"'));
+  check("modal: mcp rendered as JSON", (await page.inputValue("#pmMcp")).includes('"gh"'));
   check("modal: provision commands one per line", (await page.inputValue("#pmProvision")) === "npm ci\ncp .env.example .env");
 
   // add + remove a repo row.
@@ -197,7 +197,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("modal: stays open on invalid save", await page.locator("#projModal").isVisible());
 
   // fix the MCP + Save: posts a well-formed saveProject and closes the modal.
-  await page.fill("#pmMcp", '["github"]');
+  await page.fill("#pmMcp", '[{"name":"gh","type":"stdio","command":"npx"}]');
   await page.evaluate(() => { window.__posted.length = 0; });
   await page.click("#pmSave");
   posted = await page.evaluate(() => window.__posted);
@@ -205,7 +205,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("modal: valid Save posts saveProject with the name", saveProjMsg && saveProjMsg.name === "billing");
   check("modal: saved profile carries repos + parsed sdks + mcp", saveProjMsg &&
     Array.isArray(saveProjMsg.profile.repos) && saveProjMsg.profile.repos.length === 2 &&
-    saveProjMsg.profile.sdks.node && Array.isArray(saveProjMsg.profile.mcp) && saveProjMsg.profile.mcp[0] === "github");
+    saveProjMsg.profile.sdks.node && Array.isArray(saveProjMsg.profile.mcp) && saveProjMsg.profile.mcp[0] && saveProjMsg.profile.mcp[0].name === "gh");
   // the un-edited `tests` block must survive the round-trip (not silently dropped).
   check("modal: saved profile preserves the un-edited tests block", saveProjMsg &&
     saveProjMsg.profile.tests && saveProjMsg.profile.tests.web && saveProjMsg.profile.tests.web.runner === "playwright");

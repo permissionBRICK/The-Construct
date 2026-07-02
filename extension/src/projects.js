@@ -24,8 +24,6 @@
 
 const WORKSPACE_ROOT = "/root/repos"; // WORKSPACE_ROOT in bin/provision.sh
 
-// The set of MCP legacy-enum values the schema allows as bare strings.
-const MCP_LEGACY_ENUM = ["filesystem", "browser", "github"];
 // The agents an MCP server can be scoped to (schema `agents` enum).
 const MCP_AGENTS = ["claude", "claude-code", "codex", "opencode"];
 
@@ -230,10 +228,9 @@ function sanitizeSdks(sdks) {
   return out;
 }
 
-/** Sanitize one MCP entry (string legacy-enum, or a stdio/http server object).
+/** Sanitize one MCP entry (a stdio/http server object).
  *  Returns the cleaned entry or null to drop it. Pure. */
 function sanitizeMcpEntry(m) {
-  if (typeof m === "string") return MCP_LEGACY_ENUM.includes(m) ? m : null;
   if (!isPlainObject(m)) return null;
   const name = nonEmptyString(m.name);
   if (!name) return null;
@@ -356,11 +353,7 @@ function validateProfile(name, obj) {
   if ("mcp" in obj) {
     if (!Array.isArray(obj.mcp)) errors.push('"mcp" must be an array');
     else obj.mcp.forEach((m, i) => {
-      if (typeof m === "string") {
-        if (!MCP_LEGACY_ENUM.includes(m)) errors.push(`mcp[${i}] "${m}": a bare string must be a built-in docker-compose MCP (${MCP_LEGACY_ENUM.join("/")}); a custom server must be an object with "command" (stdio) or "url" (http); see docs/projects.md`);
-        return;
-      }
-      if (!isPlainObject(m)) { errors.push(`mcp[${i}] must be a string or an object`); return; }
+      if (!isPlainObject(m)) { errors.push(`mcp[${i}] must be an object with "name" plus "command" (stdio) or "url" (http); see docs/projects.md`); return; }
       if (!str(m.name)) errors.push(`mcp[${i}].name must be a non-empty string`);
       // Branch selection mirrors sanitizeMcpEntry: explicit type wins, else infer.
       let type = m.type === "stdio" || m.type === "http" ? m.type : null;
@@ -499,7 +492,7 @@ function buildDeployPs1({ installRepo, installRef }) {
 }
 
 module.exports = {
-  WORKSPACE_ROOT, MCP_LEGACY_ENUM, MCP_AGENTS, RESERVED_PROFILE_NAMES,
+  WORKSPACE_ROOT, MCP_AGENTS, RESERVED_PROFILE_NAMES,
   buildScanScript, parseScan,
   buildDiscoveredProfile, coveredUrls, planImport,
   toChips, reconcileSelection,

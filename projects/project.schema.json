@@ -50,11 +50,6 @@
       "items": {
         "oneOf": [
           {
-            "comment": "Legacy enum: selects a docker-compose MCP container profile.",
-            "type": "string",
-            "enum": ["filesystem", "browser", "github"]
-          },
-          {
             "comment": "stdio (e.g. npx) MCP server written into each agent's config.",
             "type": "object",
             "required": ["name", "command"],

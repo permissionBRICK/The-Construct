@@ -85,7 +85,8 @@ if (-not $nodeAvailable) {
         Write-Host "    JS: $($jsResult1.Substring(0, [Math]::Min(200, $jsResult1.Length)))" -ForegroundColor DarkYellow
     }
 
-    # Fixture 2: full profile with all MCP shapes.
+    # Fixture 2: full profile with all MCP shapes (the bare string is invalid —
+    # legacy enum removed — and must be DROPPED identically by both engines).
     $fixture2Json = @'
 {
   "name": "full-test",
@@ -730,13 +731,13 @@ if ($nodeAvailable) {
     ok "case-sensitive: MCP type STDIO rejected by JS" (-not $jsCsType.ok)
     ok "case-sensitive: MCP type STDIO agrees" ($psCsType.Ok -eq $jsCsType.ok)
 
-    # Legacy enum "FILESYSTEM" (uppercase) should be rejected.
+    # Any bare string (legacy enum removed) should be rejected.
     $csEnumJson = '{"name":"csenum","mcp":["FILESYSTEM"]}'
     $csEnumObj = $csEnumJson | ConvertFrom-Json
     $psCsEnum = Test-ConstructProfile -Name "csenum" -Object $csEnumObj
     $jsCsEnum = Get-JsValidation "csenum" $csEnumJson
-    ok "case-sensitive: legacy enum FILESYSTEM rejected by PS" (-not $psCsEnum.Ok)
-    ok "case-sensitive: legacy enum FILESYSTEM agrees" ($psCsEnum.Ok -eq $jsCsEnum.ok)
+    ok "string entry: FILESYSTEM rejected by PS" (-not $psCsEnum.Ok)
+    ok "string entry: FILESYSTEM agrees" ($psCsEnum.Ok -eq $jsCsEnum.ok)
 
     # Agents "CLAUDE" (uppercase) should be rejected.
     $csAgentJson = '{"name":"csagent","mcp":[{"name":"s","type":"stdio","command":"foo","agents":["CLAUDE"]}]}'
@@ -751,9 +752,9 @@ if ($nodeAvailable) {
     $sanStdio = Invoke-ConstructSanitizeProfile -Name "san" -Object ($csTypeJson | ConvertFrom-Json)
     ok "case-sensitive: sanitize infers stdio from command despite STDIO type" ($sanStdio.mcp.Count -eq 1 -and $sanStdio.mcp[0].type -ceq "stdio")
 
-    # Sanitize: FILESYSTEM legacy enum stripped.
+    # Sanitize: string entry stripped (legacy enum removed).
     $sanEnum = Invoke-ConstructSanitizeProfile -Name "san" -Object ($csEnumJson | ConvertFrom-Json)
-    ok "case-sensitive: sanitize strips FILESYSTEM legacy enum" ($sanEnum.mcp.Count -eq 0)
+    ok "string entry: sanitize strips FILESYSTEM" ($sanEnum.mcp.Count -eq 0)
 }
 
 # ── Integer key ordering in free-form maps (fix 7) ──────────────────────
