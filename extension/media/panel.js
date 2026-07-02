@@ -352,20 +352,12 @@
     let title = "Checking VM state";
     let disabled = true;
 
-    if (s && s.online !== false) {
-      if (s.connected === false) {
-        cls.push("connect");
-        cmd = "connect";
-        label = "\u2192 Open on VM";
-        title = "Open this workspace on the VM";
-        disabled = false;
-      } else {
-        cls.push("danger");
-        cmd = "shutdown";
-        label = "\u23FB Shutdown";
-        title = "Shutdown the VM";
-        disabled = false;
-      }
+    if (s && (s.online === true || s.vmState === "running")) {
+      cls.push("danger");
+      cmd = "shutdown";
+      label = "\u23FB Shutdown";
+      title = "Shutdown the VM";
+      disabled = false;
     } else if (s && s.vmState !== "absent" && s.vmState !== "running") {
       cls.push("start");
       cmd = "startConnect";

@@ -330,10 +330,10 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   // power button: one stable slot changes command/label, but never disappears.
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, connected: false } }, "*"));
   await page.waitForTimeout(60);
-  check("panel: connect shows when online + not connected", await page.locator("#powerBtn").innerText() === "→ Open on VM");
+  check("panel: shutdown wins when online + connected false", await page.locator("#powerBtn").innerText() === "⏻ Shutdown");
   await page.click("#powerBtn");
   posted = await page.evaluate(() => window.__posted);
-  check("panel: connect posts connect", posted.some((m) => m.type === "command" && m.id === "connect"));
+  check("panel: online power button posts shutdown", posted.some((m) => m.type === "command" && m.id === "shutdown"));
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, connected: true } }, "*"));
   await page.waitForTimeout(60);
   check("panel: shutdown shows when already connected", await page.locator("#powerBtn").innerText() === "⏻ Shutdown");
@@ -360,6 +360,9 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await page.waitForTimeout(60);
   check("panel: power button still present when VM absent", await page.locator("#powerBtn").isVisible());
   check("panel: power button disabled when VM absent", await page.locator("#powerBtn").isDisabled());
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: false, connected: false, vmState: "running" } }, "*"));
+  await page.waitForTimeout(60);
+  check("panel: shutdown wins when vmState is running", await page.locator("#powerBtn").innerText() === "⏻ Shutdown");
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, connected: true, vmState: "running" } }, "*"));
   await page.waitForTimeout(60);
   check("panel: shutdown shows when online", await page.locator("#powerBtn").innerText() === "⏻ Shutdown");
@@ -399,10 +402,10 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("launcher: offline dot", (await page.getAttribute("#lDot", "class")).includes("offline"));
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h.example.net", connected: false } }, "*"));
   await page.waitForTimeout(60);
-  check("launcher: connect shows when online + not connected", await page.locator("#lPowerBtn").innerText() === "→ Open on VM");
+  check("launcher: shutdown wins when online + connected false", await page.locator("#lPowerBtn").innerText() === "⏻ Shutdown");
   await page.click("#lPowerBtn");
   lposted = await page.evaluate(() => window.__posted);
-  check("launcher: connect posts connect", lposted.some((m) => m.type === "command" && m.id === "connect"));
+  check("launcher: online power button posts shutdown", lposted.some((m) => m.type === "command" && m.id === "shutdown"));
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h.example.net", connected: true } }, "*"));
   await page.waitForTimeout(60);
   check("launcher: shutdown shows when already connected", await page.locator("#lPowerBtn").innerText() === "⏻ Shutdown");
@@ -426,6 +429,9 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: false, host: "h.example.net", vmState: "unknown" } }, "*"));
   await page.waitForTimeout(60);
   check("launcher: start&connect shows when offline + probe unknown", await page.locator("#lPowerBtn").innerText() === "▶ Start & connect");
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: false, host: "h.example.net", connected: false, vmState: "running" } }, "*"));
+  await page.waitForTimeout(60);
+  check("launcher: shutdown wins when vmState is running", await page.locator("#lPowerBtn").innerText() === "⏻ Shutdown");
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h.example.net", connected: true, vmState: "running" } }, "*"));
   await page.waitForTimeout(60);
   check("launcher: shutdown shows when online", await page.locator("#lPowerBtn").innerText() === "⏻ Shutdown");
