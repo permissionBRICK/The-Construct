@@ -15,9 +15,6 @@
     "python": ["3.12"]
   },
   "mcp": [
-    "filesystem",
-    "browser",
-    "github",
     {
       "name": "context7",
       "type": "stdio",

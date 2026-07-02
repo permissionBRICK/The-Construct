@@ -89,8 +89,7 @@ fi
 AGENT_PROJECTS="$(jq -r '.projects | join(",")' "${GENERATED_JSON}")"
 AGENT_REPOS_JSON="$(jq -c '.repos' "${GENERATED_JSON}")"
 AGENT_SDKS_JSON="$(jq -c '.sdks' "${GENERATED_JSON}")"
-AGENT_MCP="$(jq -r '.mcp | join(",")' "${GENERATED_JSON}")"
-export AGENT_PROJECTS AGENT_REPOS_JSON AGENT_SDKS_JSON AGENT_MCP
+export AGENT_PROJECTS AGENT_REPOS_JSON AGENT_SDKS_JSON
 
 count="$(jq -r '(.provisionCommands // []) | length' "${GENERATED_JSON}")"
 if [[ "${count}" -eq 0 ]]; then

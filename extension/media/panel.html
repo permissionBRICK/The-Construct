@@ -233,7 +233,7 @@
 
       <section class="pm-sec">
         <h3 class="pm-h">MCP servers</h3>
-        <p class="pm-note">A JSON array of the profile's <code>mcp</code> entries — legacy strings (<code>"filesystem"</code>, <code>"browser"</code>, <code>"github"</code>) and/or stdio/http server objects (per the project schema). Invalid entries are dropped on save.</p>
+        <p class="pm-note">A JSON array of the profile's <code>mcp</code> entries — server objects with <code>"name"</code> plus <code>"command"</code> (stdio) or <code>"url"</code> (http), per the project schema. Invalid entries are dropped on save.</p>
         <textarea id="pmMcp" class="pm-ta mono" rows="5" spellcheck="false" placeholder="[]"></textarea>
         <div class="pm-err" id="pmMcpErr" hidden>Not valid JSON — fix it or clear it before saving.</div>
       </section>

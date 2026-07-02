@@ -2001,8 +2001,6 @@ function Invoke-ConstructSanitizeProfile {
         $o = New-Object pscustomobject
     }
 
-    # Known MCP legacy-enum values.
-    $MCP_LEGACY_ENUM = @("filesystem", "browser", "github")
     $MCP_AGENTS = @("claude", "claude-code", "codex", "opencode")
 
     # Helper: non-empty string after trim.
@@ -2051,10 +2049,6 @@ function Invoke-ConstructSanitizeProfile {
     if ($o.PSObject.Properties.Name -contains 'mcp') { $rawMcp = $o.mcp }
     if ($rawMcp -is [array] -or $rawMcp -is [System.Collections.IList]) {
         foreach ($m in @($rawMcp)) {
-            if ($m -is [string]) {
-                if ($MCP_LEGACY_ENUM -ccontains $m) { $mcp += $m }
-                continue
-            }
             if ($null -eq $m -or -not (& $isObj $m)) { continue }
             $mcpName = & $nonEmpty $m.name
             if (-not $mcpName) { continue }
@@ -2197,7 +2191,6 @@ function Test-ConstructProfile {
     )
 
     $errors = New-Object System.Collections.Generic.List[string]
-    $MCP_LEGACY_ENUM = @("filesystem", "browser", "github")
     $MCP_AGENTS = @("claude", "claude-code", "codex", "opencode")
 
     $str = { param($v) $v -is [string] -and $v.Trim() -ne "" }
@@ -2276,13 +2269,7 @@ function Test-ConstructProfile {
         } else {
             for ($i = 0; $i -lt @($mp).Count; $i++) {
                 $m = @($mp)[$i]
-                if ($m -is [string]) {
-                    if ($MCP_LEGACY_ENUM -cnotcontains $m) {
-                        $errors.Add("mcp[$i] `"$m`": a bare string must be a built-in docker-compose MCP ($($MCP_LEGACY_ENUM -join '/')); a custom server must be an object with `"command`" (stdio) or `"url`" (http); see docs/projects.md")
-                    }
-                    continue
-                }
-                if (-not (& $isObj $m)) { $errors.Add("mcp[$i] must be a string or an object"); continue }
+                if (-not (& $isObj $m)) { $errors.Add("mcp[$i] must be an object with `"name`" plus `"command`" (stdio) or `"url`" (http); see docs/projects.md"); continue }
                 if (-not (& $str $m.name)) { $errors.Add("mcp[$i].name must be a non-empty string") }
 
                 $type = $null

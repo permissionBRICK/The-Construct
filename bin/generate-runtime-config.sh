@@ -149,7 +149,6 @@ jq -s '
     projects: map(.name) | unique_strings,
     repos: map(.repos // []) | add | unique_by(.url),
     sdks: merge_sdks,
-    mcp: (map(.mcp // []) | add | unique_strings),
     mcpServers: (
       map(.mcp // []) | add
       | map(select(type == "object" and ((.name // "") | length) > 0))
@@ -181,7 +180,6 @@ jq -s '
 
 repos_json="$(jq -c '.repos' "${RUNTIME_DIR}/generated.json")"
 sdks_json="$(jq -c '.sdks' "${RUNTIME_DIR}/generated.json")"
-mcp_csv="$(jq -r '.mcp | join(",")' "${RUNTIME_DIR}/generated.json")"
 projects_csv="$(jq -r '.projects | join(",")' "${RUNTIME_DIR}/generated.json")"
 host_packages="$(jq -r '.hostPackages | join(" ")' "${RUNTIME_DIR}/generated.json")"
 
@@ -189,8 +187,6 @@ cat >"${RUNTIME_DIR}/generated.env" <<EOF
 AGENT_PROJECTS=${projects_csv}
 AGENT_REPOS_JSON=${repos_json}
 AGENT_SDKS_JSON=${sdks_json}
-AGENT_MCP=${mcp_csv}
-COMPOSE_PROFILES=${mcp_csv}
 EOF
 
 if [[ -n "${host_packages}" ]]; then

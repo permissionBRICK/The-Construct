@@ -132,8 +132,7 @@ ok("sdks: non-string/array value dropped", eq(projects.sanitizeSdks({ a: 5, b: {
 ok("sdks: non-object -> {}", eq(projects.sanitizeSdks("nope"), {}) && eq(projects.sanitizeSdks(null), {}));
 
 // ── sanitizeMcp ───────────────────────────────────────────────────────────────
-ok("mcp: legacy enum strings kept", eq(projects.sanitizeMcp(["filesystem", "browser", "github"]), ["filesystem", "browser", "github"]));
-ok("mcp: an unknown legacy string is dropped", eq(projects.sanitizeMcp(["nope", "filesystem"]), ["filesystem"]));
+ok("mcp: string entries are dropped (legacy enum removed)", eq(projects.sanitizeMcp(["filesystem", "browser", "github", "nope"]), []));
 ok("mcp: stdio server (command) kept with args/env", eq(
   projects.sanitizeMcp([{ name: "c7", type: "stdio", command: "npx", args: ["-y", "@x/c7"], env: { K: "v" } }]),
   [{ name: "c7", type: "stdio", command: "npx", args: ["-y", "@x/c7"], env: { K: "v" } }]));
@@ -158,7 +157,7 @@ ok("mcp: agents all-invalid -> key omitted", eq(
 ok("mcp: enabled only kept as a boolean", eq(
   projects.sanitizeMcp([{ name: "x", command: "c", enabled: "yes" }]), [{ name: "x", type: "stdio", command: "c" }]));
 ok("mcp: non-array -> []", eq(projects.sanitizeMcp("nope"), []) && eq(projects.sanitizeMcp(null), []));
-ok("mcp: junk entries (number/null) dropped", eq(projects.sanitizeMcp([5, null, "filesystem"]), ["filesystem"]));
+ok("mcp: junk entries (number/null/string) dropped", eq(projects.sanitizeMcp([5, null, "filesystem", { name: "x", command: "c" }]), [{ name: "x", type: "stdio", command: "c" }]));
 
 // ── sanitizeStringArray ───────────────────────────────────────────────────────
 ok("strarr: trims-blank filter, order preserved", eq(
@@ -170,11 +169,11 @@ ok("strarr: non-array -> []", eq(projects.sanitizeStringArray(null), []));
 ok("profile: coerces a full object to the schema shape", eq(
   projects.sanitizeProfile("customer-portal", {
     name: "IGNORED-in-object", repos: [{ url: "https://h/x.git", directory: "cp" }],
-    sdks: { node: "22" }, mcp: ["github"], hostPackages: ["build-essential"],
+    sdks: { node: "22" }, mcp: [{ name: "gh", command: "npx" }], hostPackages: ["build-essential"],
     provisionCommands: ["npm ci"], tests: { web: { runner: "playwright" } },
   }),
   { name: "customer-portal", repos: [{ url: "https://h/x.git", directory: "cp" }], sdks: { node: "22" },
-    mcp: ["github"], hostPackages: ["build-essential"], provisionCommands: ["npm ci"], tests: { web: { runner: "playwright" } } }));
+    mcp: [{ name: "gh", type: "stdio", command: "npx" }], hostPackages: ["build-essential"], provisionCommands: ["npm ci"], tests: { web: { runner: "playwright" } } }));
 ok("profile: name comes from the ARG, not the object (can't rename the file)",
   projects.sanitizeProfile("real", { name: "spoofed" }).name === "real");
 ok("profile: an empty name -> null", projects.sanitizeProfile("", {}) === null && projects.sanitizeProfile("   ", {}) === null && projects.sanitizeProfile(null, {}) === null);
@@ -222,7 +221,7 @@ ok("reserved: default.json (with extension) is NOT the base name", !projects.isR
     name: "web",
     repos: [{ url: "https://h/x.git", directory: "x" }, { url: "https://h/y.git" }],
     sdks: { node: ["26"], python: "3.14" },
-    mcp: ["browser", { name: "s", type: "stdio", command: "npx", args: ["-y", "p"], env: { A: "1" } },
+    mcp: [{ name: "s", type: "stdio", command: "npx", args: ["-y", "p"], env: { A: "1" } },
       { name: "h", type: "http", url: "https://m", headers: { X: "y" }, bearerTokenEnvVar: "TOK", agents: ["claude"], enabled: false }],
     hostPackages: ["jq"],
     provisionCommands: ["make setup"],
@@ -245,8 +244,8 @@ ok("reserved: default.json (with extension) is NOT the base name", !projects.isR
   ok("validate: sdks string/array values pass", projects.validateProfile("x", { name: "x", sdks: { a: "1", b: ["2"] } }).ok);
   ok("validate: sdks numeric value rejected", !projects.validateProfile("x", { name: "x", sdks: { a: 1 } }).ok);
   ok("validate: sdks array with blank entry rejected", !projects.validateProfile("x", { name: "x", sdks: { a: ["", "1"] } }).ok);
-  ok("validate: mcp legacy enum passes", projects.validateProfile("x", { name: "x", mcp: ["filesystem"] }).ok);
-  ok("validate: mcp unknown legacy string rejected", !projects.validateProfile("x", { name: "x", mcp: ["bogus"] }).ok);
+  ok("validate: mcp string entry rejected (legacy enum removed)", !projects.validateProfile("x", { name: "x", mcp: ["filesystem"] }).ok);
+  ok("validate: mcp arbitrary string rejected", !projects.validateProfile("x", { name: "x", mcp: ["bogus"] }).ok);
   ok("validate: mcp stdio type inferred from command", projects.validateProfile("x", { name: "x", mcp: [{ name: "s", command: "c" }] }).ok);
   ok("validate: mcp http type inferred from url", projects.validateProfile("x", { name: "x", mcp: [{ name: "h", url: "u" }] }).ok);
   ok("validate: mcp with both command AND url rejected (oneOf)", !projects.validateProfile("x", { name: "x", mcp: [{ name: "b", command: "c", url: "u" }] }).ok);
