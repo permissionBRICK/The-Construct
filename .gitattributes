@@ -1,0 +1,7 @@
+# Scripts that run on the Linux VM (uploaded via tar during provisioning) MUST
+# stay LF regardless of the host's git core.autocrlf, or bash rejects them with
+# "\r: command not found". These are authored LF, so this is protective (no
+# renormalization/diff), it just pins checkout on Windows.
+*.sh        text eol=lf
+/bin/construct text eol=lf
+bootstrap.sh   text eol=lf

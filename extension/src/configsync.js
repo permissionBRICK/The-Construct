@@ -123,9 +123,53 @@ function migrateLegacyProfiles(configDir, legacyProjectsDir) {
 
 // ── Git identity args (per-invocation, never global config) ──────────────────
 
-const GIT_IDENTITY = ["-c", "user.name=The Construct", "-c", "user.email=construct@construct.local"];
+// Identity + hardening flags prefixed onto every git invocation that may create a
+// commit. The config dir is a machine-local bookkeeping repo created with
+// `git init`, so it inherits the user's GLOBAL git settings — and two of those
+// routinely break the engine's headless commits on Windows:
+//   • commit.gpgsign=true (a "verified commits" setup) makes every `git commit`
+//     fail with a non-zero exit when no signing key is reachable. A cleanly
+//     auto-merged `merge --no-ff --no-commit` is then left uncommitted, and the
+//     panel reports a phantom "unresolved merge" the user has to commit by hand
+//     even though nothing actually conflicted.
+//   • a global core.hooksPath pointing at a failing pre-commit hook does the same.
+// `-c commit.gpgsign=false -c core.hooksPath=` neutralises both per-invocation, so
+// they can't wedge the sync tick regardless of the host's global git config. The
+// two flags are inert on non-commit operations (add/merge/reset), so prefixing
+// them everywhere is safe.
+const GIT_IDENTITY = [
+  "-c", "user.name=The Construct",
+  "-c", "user.email=construct@construct.local",
+  "-c", "commit.gpgsign=false",
+  "-c", "core.hooksPath=",
+];
 
 // ── Repo init (lazy, idempotent) ─────────────────────────────────────────────
+
+/**
+ * Make the config repo commit hermetic and line-ending-stable, idempotently.
+ * The GIT_IDENTITY prefix already disables signing/hooks for the ENGINE's own
+ * commits; this persists the same repo-locally so the user's manual commits
+ * (e.g. resolving a merge in VS Code) in this bookkeeping repo behave the same,
+ * and pins LF so the canonical-LF profiles never round-trip through CRLF (which
+ * would make every unchanged file look modified and churn the write-back).
+ * Best-effort: every step is allowed to fail silently (git absent mid-run, a
+ * read-only FS, …) — the per-invocation GIT_IDENTITY flags are the hard guarantee.
+ */
+async function hardenConfigRepo(runGit, configDir) {
+  await runGit(["config", "commit.gpgsign", "false"], { cwd: configDir });
+  // Empty hooksPath bypasses any inherited (global) hooks — so the user's own
+  // manual commits in this repo (e.g. resolving a merge in VS Code) also can't be
+  // broken by a global pre-commit hook, matching the engine's per-invocation guard.
+  await runGit(["config", "core.hooksPath", ""], { cwd: configDir });
+  await runGit(["config", "core.autocrlf", "false"], { cwd: configDir });
+  const ga = path.join(configDir, ".gitattributes");
+  // A .gitattributes present in the working tree is honoured by git even while
+  // untracked; the new-repo path's `add -A` versions it, existing repos keep it
+  // as a working-tree file (commitHostDirtyFiles only stages projects/).
+  try { fs.accessSync(ga); }
+  catch (_) { try { fs.writeFileSync(ga, "* text=auto eol=lf\n", "utf8"); } catch (_) { /* best-effort */ } }
+}
 
 /**
  * Lazy git init per D1: init, add -A, commit, rename branch to main, create vm
@@ -145,6 +189,10 @@ async function ensureRepo(runGit, configDir) {
     const target = configDir.replace(/\/$/, "");
     // On Windows git may return forward-slash paths; normalise for comparison.
     if (path.resolve(toplevel) === path.resolve(target)) {
+      // Re-apply the repo-local hardening every run so a repo created before this
+      // fix (or one the user re-created) is repaired: signing/hooks off for the
+      // user's own commits too, and LF line endings pinned.
+      await hardenConfigRepo(runGit, configDir);
       return { repo: true, initialized: false };
     }
     // The repo belongs to an ancestor directory — ignore it and init our own.
@@ -153,6 +201,10 @@ async function ensureRepo(runGit, configDir) {
   // Try to init.
   const init = await runGit(["init"], { cwd: configDir });
   if (init.code !== 0) return { repo: false };
+
+  // Harden BEFORE the initial commit: sets core.autocrlf=false and drops the
+  // .gitattributes into the tree so the initial `add -A` versions it.
+  await hardenConfigRepo(runGit, configDir);
 
   // Initial commit with whatever is in the tree.
   await runGit([...GIT_IDENTITY, "add", "-A"], { cwd: configDir });

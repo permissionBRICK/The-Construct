@@ -1465,6 +1465,85 @@ async function runTests() {
     ok("manifest: excludes remotes.json", !("remotes" in man));
   } finally { fs.rmSync(manRoot, { recursive: true, force: true }); }
 
+  // ── Commit hardening: a clean merge auto-commits even under enforced signing ─
+  // Regression for the "always shows merge conflicts" bug: the config repo
+  // inherits the user's global git config, and commit.gpgsign=true with no
+  // reachable key makes every headless `git commit` fail — a cleanly auto-merged
+  // `merge --no-commit` is then left uncommitted (MERGE_HEAD present) and the
+  // panel reports a phantom unresolved merge. The engine must commit hermetically.
+  const signRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cs-sign-"));
+  try {
+    const configDir = mk(signRoot, "config");
+    const storeDir = path.join(signRoot, "store");
+    cs.ensureConfigTree(configDir);
+    writeProfile(configDir, "web", { name: "web", repos: [{ url: "https://h/w.git" }] });
+    await cs.ensureRepo(runGit, configDir);
+
+    // ensureRepo hardens the repo: signing off locally + a .gitattributes.
+    const gpgLocal = await runGit(["config", "--local", "commit.gpgsign"], { cwd: configDir });
+    ok("harden: ensureRepo set commit.gpgsign=false locally", gpgLocal.stdout.trim() === "false");
+    ok("harden: ensureRepo set core.autocrlf=false locally",
+      (await runGit(["config", "--local", "core.autocrlf"], { cwd: configDir })).stdout.trim() === "false");
+    const hooksLocal = await runGit(["config", "--local", "core.hooksPath"], { cwd: configDir });
+    ok("harden: ensureRepo emptied core.hooksPath locally", hooksLocal.code === 0 && hooksLocal.stdout.trim() === "");
+    ok("harden: .gitattributes pins LF", fs.readFileSync(path.join(configDir, ".gitattributes"), "utf8").includes("eol=lf"));
+    // A manual commit (no engine -c flags) must survive an inherited failing hook,
+    // because the empty hooksPath is now persisted repo-locally.
+    const gh = mk(signRoot, "globalhooks");
+    fs.writeFileSync(path.join(gh, "pre-commit"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    await runGit(["config", "--local", "core.hooksPath", gh], { cwd: configDir }); // simulate the inherited hook
+    await runGit(["config", "--local", "core.hooksPath"], { cwd: configDir });
+    await cs.ensureRepo(runGit, configDir); // re-harden should re-empty it
+    fs.writeFileSync(path.join(configDir, "projects", "hooktest.json"),
+      projects.canonicalProfileJson("hooktest", { name: "hooktest", repos: [] }), "utf8");
+    const manualAdd = await runGit(["-c", "user.name=u", "-c", "user.email=u@u", "add", "-A"], { cwd: configDir });
+    const manualCommit = await runGit(["-c", "user.name=u", "-c", "user.email=u@u", "commit", "-m", "manual"], { cwd: configDir });
+    ok("harden: manual commit survives an inherited failing hook", manualAdd.code === 0 && manualCommit.code === 0);
+
+    await cs.syncTick({ runGit, configDir, readStore: makeReadStore(storeDir), writeStore: makeWriteStore(), storeRoot: storeDir });
+
+    // Now simulate a host whose git ENFORCES signing with no working key: a
+    // signing attempt must fail (gpg.program that always errors). Without the
+    // GIT_IDENTITY `-c commit.gpgsign=false` override the merge commit would fail.
+    await runGit(["config", "commit.gpgsign", "true"], { cwd: configDir });
+    await runGit(["config", "gpg.program", "/bin/false"], { cwd: configDir });
+
+    // A non-conflicting VM-side edit forces a real merge on the next tick.
+    writeStoreProfile(storeDir, "web", { name: "web", repos: [{ url: "https://h/w.git" }], sdks: { node: "22" } });
+    const result = await cs.syncTick({ runGit, configDir, readStore: makeReadStore(storeDir), writeStore: makeWriteStore(), storeRoot: storeDir });
+
+    ok("sign: merge completed under enforced signing", result.merged === true);
+    ok("sign: tick ok, not blocked/conflict", result.ok === true && !result.blocked && !result.conflict);
+    const mh = await runGit(["rev-parse", "--verify", "MERGE_HEAD"], { cwd: configDir });
+    ok("sign: no MERGE_HEAD left behind (merge auto-committed)", mh.code !== 0);
+    const hostProfile = readProfile(configDir, "web");
+    ok("sign: host received the VM edit", hostProfile && hostProfile.sdks && hostProfile.sdks.node === "22");
+
+    // Recovery path (completePendingMerge, the fn band-aided in 6a28c18): a repo
+    // ALREADY stuck mid-clean-merge (the exact state the old bug produced) must be
+    // finished by the next tick, under enforced signing. Craft that state by hand.
+    const SETUP = ["-c", "user.name=x", "-c", "user.email=x@y", "-c", "commit.gpgsign=false"];
+    await runGit([...SETUP, "checkout", "vm"], { cwd: configDir });
+    writeProfile(configDir, "fromvm", { name: "fromvm", repos: [{ url: "https://h/v.git" }] });
+    await runGit([...SETUP, "add", "-A"], { cwd: configDir });
+    await runGit([...SETUP, "commit", "-m", "vm side"], { cwd: configDir });
+    await runGit([...SETUP, "checkout", "main"], { cwd: configDir });
+    writeProfile(configDir, "frommain", { name: "frommain", repos: [{ url: "https://h/m.git" }] });
+    await runGit([...SETUP, "add", "-A"], { cwd: configDir });
+    await runGit([...SETUP, "commit", "-m", "main side"], { cwd: configDir });
+    // Leave a CLEAN pending merge (no --commit): staged, no conflict, MERGE_HEAD set.
+    await runGit([...SETUP, "merge", "--no-ff", "--no-commit", "vm"], { cwd: configDir });
+    ok("sign: setup left a clean pending merge",
+      (await runGit(["rev-parse", "--verify", "MERGE_HEAD"], { cwd: configDir })).code === 0 &&
+      (await runGit(["ls-files", "-u"], { cwd: configDir })).stdout.trim() === "");
+    // Re-enforce signing (checkout/merge above ran with it off for setup only).
+    await runGit(["config", "commit.gpgsign", "true"], { cwd: configDir });
+    await runGit(["config", "gpg.program", "/bin/false"], { cwd: configDir });
+    const recov = await cs.syncTick({ runGit, configDir, readStore: makeReadStore(storeDir), writeStore: makeWriteStore(), storeRoot: storeDir });
+    const mh2 = await runGit(["rev-parse", "--verify", "MERGE_HEAD"], { cwd: configDir });
+    ok("sign: recovery tick completed the pending merge", recov.merged === true && mh2.code !== 0 && !recov.conflict);
+  } finally { fs.rmSync(signRoot, { recursive: true, force: true }); }
+
   // Print summary.
   console.log(`\n  config-sync unit tests — ${pass}/${pass + fail} passed\n`);
   process.exit(fail ? 1 : 0);

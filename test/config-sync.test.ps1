@@ -328,6 +328,36 @@ try {
     $hasBranches = ("$branches" -match 'main') -and ("$branches" -match 'vm')
     ok "sync: main + vm branches exist" $hasBranches
 
+    # Repo hardening (regression: the config repo inherits the host's global git
+    # config; commit.gpgsign=true with no key made every headless commit fail and
+    # left phantom "unresolved merges"). Initialize-ConstructConfigRepo must pin
+    # signing off and LF locally.
+    $gpgLocal = (& git -C $configDir config --local commit.gpgsign 2>$null)
+    ok "harden: commit.gpgsign=false locally" ("$gpgLocal".Trim() -eq "false")
+    $crlfLocal = (& git -C $configDir config --local core.autocrlf 2>$null)
+    ok "harden: core.autocrlf=false locally" ("$crlfLocal".Trim() -eq "false")
+    & git -C $configDir config --local core.hooksPath 2>$null | Out-Null
+    ok "harden: core.hooksPath emptied locally" ($LASTEXITCODE -eq 0)
+    ok "harden: .gitattributes pins LF" (Test-Path -LiteralPath (Join-Path $configDir ".gitattributes"))
+    # A manual commit (no engine $gitArgs) must survive an inherited failing hook,
+    # because the empty hooksPath is persisted repo-locally by the hardening step.
+    # Run in a throwaway repo so it can't perturb the scenario repo below.
+    $hookRepo = Join-Path $tmpBase "hookrepo"
+    New-Item -ItemType Directory -Path (Join-Path $hookRepo "projects") -Force | Out-Null
+    $ghDir = Join-Path $tmpBase "globalhooks"
+    New-Item -ItemType Directory -Path $ghDir -Force | Out-Null
+    $hardenEnc = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText((Join-Path $ghDir "pre-commit"), "#!/bin/sh`nexit 1`n", $hardenEnc)
+    if ($IsLinux -or $IsMacOS) { & chmod +x (Join-Path $ghDir "pre-commit") 2>$null | Out-Null }
+    $null = Initialize-ConstructConfigRepo -ConfigDir $hookRepo
+    & git -C $hookRepo config --local core.hooksPath $ghDir 2>$null | Out-Null   # simulate the inherited hook
+    Set-ConstructConfigRepoHardening -ConfigDir $hookRepo                         # re-harden empties it
+    [System.IO.File]::WriteAllText((Join-Path $hookRepo "projects/hooktest.json"),
+        (ConvertTo-ConstructCanonicalJson -Name "hooktest" -Object ([pscustomobject]@{ name = "hooktest" })), $hardenEnc)
+    & git -C $hookRepo @("-c","user.name=u","-c","user.email=u@u") add -A 2>$null | Out-Null
+    & git -C $hookRepo @("-c","user.name=u","-c","user.email=u@u") commit -m "manual" 2>$null | Out-Null
+    ok "harden: manual commit survives an inherited failing hook" ($LASTEXITCODE -eq 0)
+
     # ── Scenario 1: Host adds a profile, VM store empty -> seed ──────────────
     $profile1 = @'
 {
@@ -409,10 +439,14 @@ try {
     ok "sync: pending clean merge has no unmerged files" ($pendingUnmerged.Count -eq 0)
 
     [System.IO.File]::WriteAllText((Join-Path $vmStoreDir "vm-pending.json"), $vmPendingContent, $utf8NoBom)
+    # Enforce commit signing with no working key — the exact host state that used to
+    # leave the merge stuck. The recovery commit must still succeed (hermetically).
+    & git -C $configDir config commit.gpgsign true 2>$null | Out-Null
+    & git -C $configDir config gpg.program /bin/false 2>$null | Out-Null
     $r3b = Invoke-ConstructConfigSync -ConfigDir $configDir -VmHost "dummy" `
         -SshReadInvoker $sshRead -SshWriteInvoker $sshWrite
-    ok "sync: pending clean merge recovered" $r3b.Ok
-    ok "sync: pending clean merge committed" (-not (Test-Path -LiteralPath (Join-Path $configDir ".git/MERGE_HEAD")))
+    ok "sync: pending clean merge recovered (under enforced signing)" $r3b.Ok
+    ok "sync: pending clean merge committed (under enforced signing)" (-not (Test-Path -LiteralPath (Join-Path $configDir ".git/MERGE_HEAD")))
     $hostAfterPending = [System.IO.File]::ReadAllText((Join-Path $configDir "projects/host-pending.json"), [System.Text.Encoding]::UTF8)
     $vmAfterPendingContent = [System.IO.File]::ReadAllText((Join-Path $configDir "projects/vm-pending.json"), [System.Text.Encoding]::UTF8)
     ok "sync: pending clean merge kept host side" ($hostAfterPending -match "npm ci")
