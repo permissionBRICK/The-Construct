@@ -1695,6 +1695,35 @@ function Ensure-ConstructGit {
 
 # ── Git repo initialisation ──────────────────────────────────────────────────
 
+function Set-ConstructConfigRepoHardening {
+    <#
+        .SYNOPSIS
+        Make the config repo's commits hermetic and line-ending-stable (idempotent).
+        The config dir is a machine-local bookkeeping repo created by `git init`, so
+        it inherits the user's GLOBAL git settings. commit.gpgsign=true (a verified-
+        commits setup) or a failing global core.hooksPath makes every headless
+        `git commit` fail, leaving a cleanly auto-merged merge uncommitted -- the
+        phantom "unresolved merge" the panel reports. The $gitArgs prefix already
+        disables both per-invocation for the ENGINE; this persists them repo-locally
+        so the user's own commits (e.g. resolving in VS Code) behave the same, and
+        pins LF so canonical-LF profiles never round-trip through CRLF. Best-effort.
+    #>
+    param([Parameter(Mandatory)][string]$ConfigDir)
+    $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+    try {
+        & git -C $ConfigDir config commit.gpgsign false 2>$null | Out-Null
+        # Empty hooksPath bypasses any inherited (global) hooks so the user's own
+        # manual commits in this repo can't be broken by a global pre-commit hook.
+        & git -C $ConfigDir config core.hooksPath "" 2>$null | Out-Null
+        & git -C $ConfigDir config core.autocrlf false 2>$null | Out-Null
+        $ga = Join-Path $ConfigDir ".gitattributes"
+        if (-not (Test-Path -LiteralPath $ga)) {
+            [System.IO.File]::WriteAllText($ga, "* text=auto eol=lf`n")
+        }
+    } catch { }
+    $ErrorActionPreference = $prev
+}
+
 function Initialize-ConstructConfigRepo {
     <#
         Lazy git init per D1: create a git repo in the config dir with main + vm
@@ -1711,7 +1740,9 @@ function Initialize-ConstructConfigRepo {
 
     $gitDir = Join-Path $ConfigDir ".git"
     if (Test-Path -LiteralPath $gitDir) {
-        # Already initialised -- ensure vm branch exists.
+        # Already initialised -- ensure vm branch exists, and re-apply the
+        # repo-local hardening every run so a repo created before this fix is
+        # repaired (signing/hooks off, LF pinned).
         $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
         try {
             $null = & git -C $ConfigDir rev-parse --verify refs/heads/vm 2>$null
@@ -1719,6 +1750,7 @@ function Initialize-ConstructConfigRepo {
                 & git -C $ConfigDir branch vm 2>$null | Out-Null
             }
         } catch { }
+        Set-ConstructConfigRepoHardening -ConfigDir $ConfigDir
         $ErrorActionPreference = $prev
         return $true
     }
@@ -1745,11 +1777,14 @@ function Initialize-ConstructConfigRepo {
         }
     }
 
-    $gitArgs = @("-c", "user.name=The Construct", "-c", "user.email=construct@construct.local")
+    $gitArgs = @("-c", "user.name=The Construct", "-c", "user.email=construct@construct.local", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=")
 
     $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
     try {
         & git -C $ConfigDir init 2>$null | Out-Null
+        # Harden BEFORE the initial add so core.autocrlf=false is in effect and the
+        # .gitattributes is versioned by the initial commit.
+        Set-ConstructConfigRepoHardening -ConfigDir $ConfigDir
         & git -C $ConfigDir @gitArgs add -A 2>$null | Out-Null
         # Exclude reserved names from the initial commit (D1/D5: NEVER
         # default.json / project.schema.json in the repo).
@@ -2537,7 +2572,7 @@ function Invoke-ConstructConfigSync {
     $warnings = New-Object System.Collections.Generic.List[string]
     $skippedInvalid = @()
 
-    $gitArgs = @("-c", "user.name=The Construct", "-c", "user.email=construct@construct.local")
+    $gitArgs = @("-c", "user.name=The Construct", "-c", "user.email=construct@construct.local", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=")
     $hasGit = Test-ConstructGitAvailable
     $projDir = Join-Path $ConfigDir "projects"
     if (-not (Test-Path -LiteralPath $projDir)) {
@@ -3349,7 +3384,7 @@ function Import-ConstructConfigAs {
 
     if (Test-ConstructGitAvailable) {
         $srcBase = [System.IO.Path]::GetFileNameWithoutExtension($SourceFile)
-        $gitArgs = @("-c", "user.name=The Construct", "-c", "user.email=construct@construct.local")
+        $gitArgs = @("-c", "user.name=The Construct", "-c", "user.email=construct@construct.local", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=")
         $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
         try {
             & git -C $ConfigDir add -A 2>$null | Out-Null
@@ -3556,7 +3591,7 @@ function Import-ConstructConfigs {
 
     # Commit the import.
     if ($imported.Count -gt 0 -and (Test-ConstructGitAvailable)) {
-        $gitArgs = @("-c", "user.name=The Construct", "-c", "user.email=construct@construct.local")
+        $gitArgs = @("-c", "user.name=The Construct", "-c", "user.email=construct@construct.local", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=")
         $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
         try {
             & git -C $ConfigDir add -A 2>$null | Out-Null
@@ -3637,7 +3672,7 @@ function Push-ConstructConfigUpstream {
         }
     }
 
-    $gitArgs = @("-c", "user.name=The Construct", "-c", "user.email=construct@construct.local")
+    $gitArgs = @("-c", "user.name=The Construct", "-c", "user.email=construct@construct.local", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=")
     $branchName = "construct-config-update-" + (Get-Date -Format "yyyyMMdd-HHmm")
 
     $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
