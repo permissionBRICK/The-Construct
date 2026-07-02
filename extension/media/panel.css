@@ -201,8 +201,6 @@ h1.title {
 .btn.ghost:hover { color: var(--text); background: rgba(0,255,102,0.05); box-shadow: none; }
 .btn.danger { border-color: rgba(255,93,93,0.5); color: #ff8a8a; }
 .btn.danger:hover { background: rgba(255,93,93,0.08); box-shadow: 0 0 10px rgba(255,93,93,0.18); }
-.btn.connect { color: var(--void); background: linear-gradient(180deg, var(--rain), var(--accent)); border: 0; font-weight: 700; box-shadow: 0 0 14px rgba(0,255,102,0.25); }
-.btn.connect:hover { background: linear-gradient(180deg, var(--rain), var(--accent)); box-shadow: 0 0 22px rgba(0,255,102,0.45); }
 .btn.start { color: var(--void); background: linear-gradient(180deg, var(--warn), #e6a72f); border: 0; font-weight: 700; box-shadow: 0 0 14px rgba(255,194,77,0.22); }
 .btn.start:hover { box-shadow: 0 0 22px rgba(255,194,77,0.4); }
 #powerBtn { min-width: 146px; text-align: center; }
@@ -402,9 +400,6 @@ body.launcher { font-size: 12px; }
 .lrefresh { align-self: flex-start; font-family: var(--mono); font-size: 11px; color: var(--dim); background: transparent; border: 1px solid var(--line); border-radius: 5px; padding: 5px 11px; cursor: pointer; }
 .lrefresh:hover { color: var(--text); background: rgba(0,255,102,0.05); }
 .lpower { font-family: var(--mono); font-size: 12px; letter-spacing: 0.5px; border-radius: 6px; padding: 9px; cursor: pointer; min-height: 36px; min-width: 146px; }
-.lpower.connect { font-weight: 700; color: var(--rain); background: rgba(0,255,102,0.08); border: 1px solid var(--rain); box-shadow: 0 0 10px rgba(0,255,102,0.15); }
-.lpower.connect:hover { background: rgba(0,255,102,0.16); box-shadow: 0 0 18px rgba(0,255,102,0.3); }
-.lpower.connect:focus-visible { outline: 2px solid var(--rain); outline-offset: 2px; }
 .lpower.start { font-weight: 700; color: var(--warn); background: rgba(255,194,77,0.08); border: 1px solid var(--warn); box-shadow: 0 0 10px rgba(255,194,77,0.15); }
 .lpower.start:hover { background: rgba(255,194,77,0.16); box-shadow: 0 0 18px rgba(255,194,77,0.3); }
 .lpower.start:focus-visible { outline: 2px solid var(--warn); outline-offset: 2px; }
