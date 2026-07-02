@@ -591,9 +591,25 @@
       if (cs.warnings && cs.warnings.length) result.title = cs.warnings.join("\n");
       else result.title = "";
     }
-    // Conflict banner.
+    // Conflict / blocked banner. A true conflict (unmerged paths) gets the
+    // resolve-and-commit text; a blocked tick or a pending validation-gate
+    // merge (mergeInProgress, NO unmerged paths — opening the repo shows no
+    // conflicts, typically just an uncommitted invalid profile) gets the
+    // engine's blockedReason so the banner names the actual problem.
     const conflict = $("csConflict");
-    if (conflict) conflict.hidden = !(cs.conflict || cs.mergeInProgress);
+    if (conflict) {
+      const showBanner = !!(cs.conflict || cs.mergeInProgress || cs.lastResult === "blocked");
+      conflict.hidden = !showBanner;
+      const txt = $("csConflictText");
+      if (txt && showBanner) {
+        if (cs.conflict) {
+          txt.textContent = "Config merge conflict — resolve it in the config repo, then commit.";
+        } else {
+          txt.textContent = "Config sync blocked — " +
+            (cs.blockedReason || "a pending merge in the config repo needs attention");
+        }
+      }
+    }
     // Git-missing notice.
     const gitMissing = $("csGitMissing");
     if (gitMissing) gitMissing.hidden = cs.gitPresent !== false;
