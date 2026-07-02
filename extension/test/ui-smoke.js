@@ -144,7 +144,9 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
 
   // per-chip open: each chip carries an inline ▷ button that opens that project on
   // the VM; the chip body still opens the edit modal, and ▷ must NOT bubble to it.
-  check("state render: each chip has a ▷ open button", (await page.locator("#projChips .chip .openbtn").count()) === 2);
+  // Default chip is locked (no openbtn); the billing chip has one — so 1 total open
+  // button, not 2 (D11: reserved names have no open button).
+  check("state render: non-reserved chips have open buttons", (await page.locator("#projChips .chip .openbtn").count()) === 1);
   await page.evaluate(() => { window.__posted.length = 0; });
   await page.click('#projChips .chip[data-project="billing"] .openbtn');
   posted = await page.evaluate(() => window.__posted);
@@ -462,6 +464,95 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("launcher: logs button posts showLogs", lposted.some((m) => m.type === "command" && m.id === "showLogs"));
 
   check("launcher: no console/page errors", errors.length === 0, errors.join(" | "));
+
+  // ── Config-sync UI checks (panel surface) ────────────────────────────────
+  // Navigate back to the panel to test the config-sync strip.
+  await page.setViewportSize({ width: 1000, height: 1400 });
+  await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "networkidle" });
+  await page.waitForTimeout(120);
+
+  // configSync absent: strip should be hidden.
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h" } }, "*"));
+  await page.waitForTimeout(60);
+  check("config-sync: strip hidden when configSync absent", !(await page.locator("#csStrip").isVisible()));
+
+  // gitPresent:false -> install-git notice visible.
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h",
+    configSync: { gitPresent: false, repoReady: false, conflict: false, conflictFiles: [], mergeInProgress: false, lastSyncAt: null, lastResult: null, warnings: [], remotes: [] }
+  } }, "*"));
+  await page.waitForTimeout(60);
+  check("config-sync: strip visible with configSync present", await page.locator("#csStrip").isVisible());
+  check("config-sync: git-missing notice visible when !gitPresent", await page.locator("#csGitMissing").isVisible());
+  check("config-sync: conflict banner hidden when no conflict", !(await page.locator("#csConflict").isVisible()));
+
+  // conflict:true -> banner visible + open-repo button.
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h",
+    configSync: { gitPresent: true, repoReady: true, conflict: true, conflictFiles: ["projects/foo.json"], mergeInProgress: true, lastSyncAt: Date.now(), lastResult: "conflict", warnings: [], remotes: [] }
+  } }, "*"));
+  await page.waitForTimeout(60);
+  check("config-sync: conflict banner visible", await page.locator("#csConflict").isVisible());
+  check("config-sync: open-repo button in conflict banner", (await page.locator('#csConflict [data-cmd="openConfigRepo"]').count()) === 1);
+  check("config-sync: git-missing hidden when gitPresent", !(await page.locator("#csGitMissing").isVisible()));
+
+  // Remotes list renders rows.
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h",
+    configSync: { gitPresent: true, repoReady: true, conflict: false, conflictFiles: [], mergeInProgress: false, lastSyncAt: Date.now(), lastResult: "ok", warnings: ["test warning"],
+      remotes: [{ url: "https://github.com/org/config.git" }, { url: "https://github.com/org/config2.git" }] }
+  } }, "*"));
+  await page.waitForTimeout(60);
+  check("config-sync: remotes section visible with remotes", await page.locator("#csRemotes").isVisible());
+  check("config-sync: remote rows rendered", (await page.locator("#csRemotesList .cs-remote-row").count()) === 2);
+  check("config-sync: remote URL text", (await page.locator("#csRemotesList .cs-remote-url").first().textContent()).includes("github.com"));
+  check("config-sync: remove button on each remote", (await page.locator("#csRemotesList .cs-remote-rm").count()) === 2);
+  check("config-sync: push button on each remote", (await page.locator("#csRemotesList .cs-remote-push").count()) === 2);
+  check("config-sync: status line shows result + warning count", (await page.locator("#csResult").textContent()).includes("warning"));
+
+  // sync-now button posts syncConfigNow.
+  await page.evaluate(() => { window.__posted.length = 0; });
+  await page.click('[data-cmd="syncConfigNow"]');
+  posted = await page.evaluate(() => window.__posted);
+  check("config-sync: sync-now posts syncConfigNow", posted.some((m) => m.type === "command" && m.id === "syncConfigNow"));
+
+  // installGit button posts installGit.
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h",
+    configSync: { gitPresent: false, repoReady: false, conflict: false, conflictFiles: [], mergeInProgress: false, lastSyncAt: null, lastResult: null, warnings: [], remotes: [] }
+  } }, "*"));
+  await page.waitForTimeout(60);
+  await page.evaluate(() => { window.__posted.length = 0; });
+  await page.click('[data-cmd="installGit"]');
+  posted = await page.evaluate(() => window.__posted);
+  check("config-sync: installGit button posts installGit", posted.some((m) => m.type === "command" && m.id === "installGit"));
+
+  // Default chip is locked (no modal on click).
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h",
+    projects: [{ name: "default", selected: true }, { name: "billing", selected: false }]
+  } }, "*"));
+  await page.waitForTimeout(60);
+  check("default-chip: default chip has .locked class", await page.locator('#projChips .chip[data-project="default"]').evaluate((el) => el.classList.contains("locked")));
+  check("default-chip: default chip has no openbtn", (await page.locator('#projChips .chip[data-project="default"] .openbtn').count()) === 0);
+  // Click the default chip and verify NO editProject is posted.
+  await page.evaluate(() => { window.__posted.length = 0; });
+  await page.click('#projChips .chip[data-project="default"]');
+  posted = await page.evaluate(() => window.__posted);
+  check("default-chip: clicking default chip does NOT post editProject",
+    !posted.some((m) => m.type === "command" && m.id === "editProject"));
+  // Non-default chip should still post editProject.
+  await page.click('#projChips .chip[data-project="billing"]');
+  posted = await page.evaluate(() => window.__posted);
+  check("default-chip: clicking billing chip still posts editProject",
+    posted.some((m) => m.type === "command" && m.id === "editProject" && m.project === "billing"));
+
+  // configSync survives offline (NOT cleared by clearLiveVmData).
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h",
+    configSync: { gitPresent: true, repoReady: true, conflict: false, conflictFiles: [], mergeInProgress: false, lastSyncAt: Date.now(), lastResult: "ok", warnings: [], remotes: [{ url: "https://x" }] }
+  } }, "*"));
+  await page.waitForTimeout(60);
+  check("config-sync: strip visible before offline", await page.locator("#csStrip").isVisible());
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: false, host: "h" } }, "*"));
+  await page.waitForTimeout(60);
+  // The strip should still be visible even though we went offline (configSync is NOT
+  // pushed in this state, but the previously rendered strip should remain).
+  check("config-sync: strip remains visible after offline (not cleared by clearLiveVmData)", await page.locator("#csStrip").isVisible());
 
   await browser.close();
   server.close();

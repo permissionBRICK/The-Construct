@@ -26,6 +26,9 @@ const remote = require("./src/remote");
 const vmpower = require("./src/vmpower");
 const projects = require("./src/projects");
 const audio = require("./src/audio");
+const configsync = require("./src/configsync");
+const importui = require("./src/importui");
+const zip = require("./src/zip");
 
 /** The single editor-tab panel instance, if open. */
 let panel; // vscode.WebviewPanel | undefined
@@ -45,6 +48,24 @@ const liveWebviews = new Set();
 // dashboard. Drives both the ccusage window we collect and the active tab the panel
 // highlights; the webview flips it via a {type:'setUsagePeriod'} message.
 let usageReport = usage.DEFAULT_REPORT;
+
+// ── Config-sync engine state ────────────────────────────────────────────────
+// The sync tick (docs/config-sync.md D8) reconciles host profiles (cfgDir) with
+// the VM store (/opt/construct/projects) via a git-merge-based flow. It piggybacks
+// the existing 30s refresh timer but self-throttles to >=5 min between automatic
+// ticks; immediate triggers are: the panel "sync now" button, an fs.watch event
+// on cfgDir/projects (debounced 2s), and once at activation when a dashboard opens.
+// state.configSync (D9) is host-derived: NOT cleared by clearLiveVmData.
+let cfgDir = null;           // host.configDir(process.env), resolved once at activation
+let runGit = null;           // configsync.makeGitRunner, created once
+let gitDetected = null;      // cached {present, version} with TTL
+let gitDetectedAt = 0;       // ms when gitDetected was cached
+const GIT_DETECT_TTL = 5 * 60 * 1000; // 5 min cache like augmentUpdates
+let lastSyncTickAt = 0;      // ms: last automatic tick (for the 5-min throttle)
+const SYNC_TICK_MIN_MS = 5 * 60 * 1000;
+let syncTickInFlight = false; // prevent concurrent ticks
+let lastSyncResult = null;    // most recent TickResult (for state.configSync)
+let configWatcher = null;     // fs.watch handle on cfgDir/projects
 
 // ── Diagnostics log ─────────────────────────────────────────────────────────────
 // A "Construct" Output channel + a log file, so what the panel does (esp. the EXACT
@@ -131,8 +152,13 @@ function withLocalState(state) {
  *  is the single source of truth for the active daily/monthly tab, so every render (even
  *  a slow/stale refresh landing late) reflects the live selection and can never re-select
  *  an out-of-date tab. The panel highlights the tab from this field on the sync push. */
+/** Cached configSync state for postState. */
+let cachedConfigSync = null;
+
 function postState(target, state) {
-  safePost(target, { type: "state", state: { ...state, usagePeriod: usageReport } });
+  const extra = { usagePeriod: usageReport };
+  if (cachedConfigSync) extra.configSync = cachedConfigSync;
+  safePost(target, { type: "state", state: { ...state, ...extra } });
 }
 
 /** Fold the VM's Hyper-V power state into a probed state. When the VM answers SSH
@@ -173,16 +199,21 @@ async function withVmState(state) {
  * was added, so callers can skip a re-push.
  */
 function withProjects(state) {
-  let scriptsDir;
-  try { scriptsDir = resolveScriptsDir(); } catch (_) { return state; }
-  if (!scriptsDir) return state;
+  // Prefer cfgDir (the config-sync location); fall back to scriptsDir when cfgDir
+  // is null (no LOCALAPPDATA / TEMP).
+  let projRoot;
+  try {
+    const dir = cfgDir || host.configDir(process.env);
+    if (dir) { projRoot = dir; } else { projRoot = resolveScriptsDir(); }
+  } catch (_) { return state; }
+  if (!projRoot) return state;
   let available, selected;
   try {
-    available = host.listProjectProfiles(scriptsDir);
-    selected = host.readSelectedProjects(scriptsDir);
+    available = host.listProjectProfiles(projRoot);
+    const scriptsDir = resolveScriptsDir();
+    selected = scriptsDir ? host.readSelectedProjects(scriptsDir) : [];
   } catch (_) { return state; }
-  if (!available.length) return state; // nothing local to show; keep the probe's list
-  // Seed from the live VM selection when the user hasn't saved one yet.
+  if (!available.length) return state;
   if (!selected.length && state && Array.isArray(state.projects)) {
     selected = state.projects.filter((p) => p && p.selected).map((p) => p.name);
   }
@@ -236,10 +267,17 @@ async function refreshAll() {
   for (const w of liveWebviews) postState(w, state);
   const aug = await augmentUpdates(state);
   if (aug !== state) for (const w of liveWebviews) postState(w, aug);
-  // Bind + discard on period switch (see refreshState).
   const report = usageReport;
   const withUsage = await augmentUsage(aug, report);
   if (withUsage !== aug && usageReport === report) for (const w of liveWebviews) postState(w, withUsage);
+  // Config-sync: update the cached state and run a throttled tick. Best-effort.
+  try {
+    cachedConfigSync = await buildConfigSyncState();
+    for (const w of liveWebviews) postState(w, withUsage !== aug ? withUsage : aug);
+    await maybeAutoSync();
+    cachedConfigSync = await buildConfigSyncState();
+    for (const w of liveWebviews) postState(w, withUsage !== aug ? withUsage : aug);
+  } catch (_) { /* best-effort */ }
 }
 
 // ── Periodic auto-refresh ────────────────────────────────────────────────────
@@ -324,6 +362,127 @@ function stopAutoRefresh() {
 function resolveScriptsDir() {
   const override = vscode.workspace.getConfiguration("construct").get("scriptsDir");
   return host.resolveScriptsDir({ scriptsDir: override, env: process.env });
+}
+
+/** Resolve the config dir. Falls back to null when LOCALAPPDATA/TEMP absent. */
+function resolveCfgDir() {
+  if (cfgDir === null) cfgDir = host.configDir(process.env) || null;
+  return cfgDir;
+}
+
+/** Ensure git detection is fresh; caches with GIT_DETECT_TTL. */
+async function detectGitCached() {
+  if (gitDetected && (Date.now() - gitDetectedAt) < GIT_DETECT_TTL) return gitDetected;
+  if (!runGit) runGit = configsync.makeGitRunner({ spawn: require("child_process").spawn });
+  try {
+    gitDetected = await configsync.detectGit(runGit);
+    gitDetectedAt = Date.now();
+  } catch (_) {
+    gitDetected = { present: false, version: null };
+    gitDetectedAt = Date.now();
+  }
+  return gitDetected;
+}
+
+/** Build state.configSync (D9) from the current engine state. Host-derived. */
+async function buildConfigSyncState() {
+  const dir = resolveCfgDir();
+  const git = await detectGitCached();
+  const out = {
+    gitPresent: git.present,
+    repoReady: false, conflict: false, conflictFiles: [], mergeInProgress: false,
+    lastSyncAt: lastSyncTickAt || null,
+    lastResult: lastSyncResult ? (lastSyncResult.ok ? "ok" : (lastSyncResult.conflict ? "conflict" : (lastSyncResult.blocked ? "blocked" : "error"))) : null,
+    warnings: lastSyncResult ? (lastSyncResult.warnings || []) : [],
+    remotes: [],
+  };
+  if (dir && git.present && runGit) {
+    try {
+      var rs = await configsync.repoState(runGit, dir);
+      out.repoReady = rs.repo; out.conflict = rs.conflict;
+      out.conflictFiles = rs.conflictFiles || []; out.mergeInProgress = rs.mergeInProgress;
+    } catch (_) {}
+    try { out.remotes = configsync.readRemotes(dir); } catch (_) {}
+  }
+  return out;
+}
+
+/** Run a single sync tick. Guard: skip when git absent, cfgDir null, or in flight. */
+async function runConfigSync() {
+  var dir = resolveCfgDir();
+  if (!dir) return null;
+  var git = await detectGitCached();
+  if (!git.present) return null;
+  if (syncTickInFlight) return null;
+  syncTickInFlight = true;
+  try {
+    configsync.ensureConfigTree(dir);
+    await configsync.ensureRepo(runGit, dir);
+    var scriptsDir = resolveScriptsDir();
+    var legacyDir = scriptsDir ? host.projectsDir(scriptsDir) : null;
+    if (legacyDir) { try { configsync.migrateLegacyProfiles(dir, legacyDir); } catch (_) {} }
+    var readStore = async function () {
+      try {
+        var r = await ssh.runRemoteScript(configsync.buildReadStoreScript(), { timeoutMs: 30000 });
+        if (r.code < 0) return null;
+        return r.stdout || null;
+      } catch (_) { return null; }
+    };
+    var writeStore = async function (script) {
+      try {
+        var r = await ssh.runRemoteScript(script, { timeoutMs: 30000 });
+        if (r.code < 0) return null;
+        return r.stdout || null;
+      } catch (_) { return null; }
+    };
+    var result = await configsync.syncTick({
+      runGit: runGit, configDir: dir, readStore: readStore, writeStore: writeStore,
+      log: function (level, msg) { logLine("[configsync] [" + level + "] " + msg); },
+    });
+    lastSyncResult = result;
+    lastSyncTickAt = Date.now();
+    if (result) {
+      var parts = [];
+      if (result.ok) parts.push("ok");
+      if (result.conflict) parts.push("CONFLICT");
+      if (result.blocked) parts.push("blocked: " + (result.blockedReason || ""));
+      if (result.merged) parts.push("merged");
+      if (result.seeded) parts.push("seeded");
+      if (result.warnings && result.warnings.length) parts.push("warnings: " + result.warnings.join("; "));
+      logLine("sync tick: " + parts.join(" | "));
+    }
+    return result;
+  } finally { syncTickInFlight = false; }
+}
+
+/** Throttled sync tick for auto-refresh: only runs if >=5 min since last. */
+async function maybeAutoSync() {
+  if (Date.now() - lastSyncTickAt < SYNC_TICK_MIN_MS) return;
+  await runConfigSync();
+}
+
+/** Set up fs.watch on cfgDir/projects (debounced 2s). Tolerates watcher errors. */
+function startConfigWatcher() {
+  if (configWatcher) return;
+  var dir = resolveCfgDir();
+  if (!dir) return;
+  var projDir = path.join(dir, "projects");
+  try { fs.mkdirSync(projDir, { recursive: true }); } catch (_) {}
+  var debounce = null;
+  try {
+    configWatcher = fs.watch(projDir, { persistent: false }, function () {
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(function () {
+        debounce = null;
+        runConfigSync().then(function () { refreshAll(); });
+      }, 2000);
+    });
+    configWatcher.on("error", function () {});
+  } catch (_) {}
+}
+
+function stopConfigWatcher() {
+  if (configWatcher) { try { configWatcher.close(); } catch (_) {} configWatcher = null; }
 }
 
 /** Shared warning when the Construct install folder can't be located. */
@@ -516,8 +675,8 @@ function runOpenProject(name) {
     );
     return;
   }
-  const scriptsDir = resolveScriptsDir();
-  const profile = scriptsDir ? host.readProjectProfile(scriptsDir, name) : null;
+  const projRoot = resolveCfgDir() || resolveScriptsDir();
+  const profile = projRoot ? host.readProjectProfile(projRoot, name) : null;
   remote.openOnVm({ path: remote.projectOpenPath(profile), newWindow: true });
 }
 
@@ -614,10 +773,10 @@ function runExportUsage() {
 /** Reveal the project-profiles config folder in the OS file manager, creating it
  *  if needed (the installer's selector creates it the same way on first use). */
 function openProjectFolder() {
-  const scriptsDir = resolveScriptsDir();
-  if (!scriptsDir) { warnNoScriptsDir(); return; }
-  const dir = host.projectsDir(scriptsDir);
-  try { fs.mkdirSync(dir, { recursive: true }); } catch (_) { /* reveal will surface a real failure */ }
+  const projRoot = resolveCfgDir() || resolveScriptsDir();
+  if (!projRoot) { warnNoScriptsDir(); return; }
+  const dir = host.projectsDir(projRoot);
+  try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {}
   vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(dir));
 }
 
@@ -629,8 +788,8 @@ function openProjectFolder() {
  * src/projects.js; here we do the SSH round-trip + the writes + the toasts.
  */
 function runImportProjects() {
-  const scriptsDir = resolveScriptsDir();
-  if (!scriptsDir) { warnNoScriptsDir(); return; }
+  const projRoot = resolveCfgDir() || resolveScriptsDir();
+  if (!projRoot) { warnNoScriptsDir(); return; }
   vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: "Scanning the VM for project repos…", cancellable: false },
     async () => {
@@ -644,15 +803,15 @@ function runImportProjects() {
       if (scan == null) { vscode.window.showErrorMessage("The repo scan returned incomplete output; nothing was imported."); return; }
       // Read every existing profile so planImport can skip a repo already covered.
       const existing = {};
-      for (const name of host.listProjectProfiles(scriptsDir)) {
-        const p = host.readProjectProfile(scriptsDir, name);
+      for (const name of host.listProjectProfiles(projRoot)) {
+        const p = host.readProjectProfile(projRoot, name);
         if (p) existing[name] = p;
       }
       const plan = projects.planImport(scan, existing);
       let written = 0;
       const failed = [];
       for (const item of plan.toWrite) {
-        try { host.writeProjectProfile(scriptsDir, item.name, item.profile); written++; }
+        try { host.writeProjectProfile(projRoot, item.name, item.profile); written++; }
         catch (_) { failed.push(item.name); }
       }
       if (written > 0) {
@@ -810,7 +969,10 @@ async function maybeAutoEnableAudio(context) {
 async function runSelectProfiles() {
   const scriptsDir = resolveScriptsDir();
   if (!scriptsDir) { warnNoScriptsDir(); return; }
-  const available = host.listProjectProfiles(scriptsDir);
+  // Profile listing comes from cfgDir (where profiles now live); the selection
+  // storage (readSelectedProjects/saveSelectedProjects) stays in scriptsDir.
+  const profileRoot = resolveCfgDir() || scriptsDir;
+  const available = host.listProjectProfiles(profileRoot);
   if (!available.length) {
     vscode.window.showInformationMessage("No project profiles found. Use “import from VM” or “+ add project” first.");
     return;
@@ -844,14 +1006,16 @@ async function runSelectProfiles() {
  * webview posts the edited profile back as {type:'saveProject'}.
  */
 function runEditProject(name, webview) {
-  const scriptsDir = resolveScriptsDir();
-  if (!scriptsDir) { warnNoScriptsDir(); return; }
   const safe = host.safeProfileName(name);
   if (!safe) { vscode.window.showErrorMessage("Invalid project name."); return; }
-  // A profile that exists on disk is read; otherwise seed an empty, schema-shaped
-  // profile so the user can fill in a brand-new one (importProjects/addProject may
-  // have added the chip but a hand-added chip could lack a file).
-  const existing = host.readProjectProfile(scriptsDir, safe);
+  // D11: reserved names (default, project.schema) cannot be edited.
+  if (projects.isReservedProfileName(safe)) {
+    vscode.window.showInformationMessage('"' + safe + '" is a reserved profile -- create a named profile instead.');
+    return;
+  }
+  const projRoot = resolveCfgDir() || resolveScriptsDir();
+  if (!projRoot) { warnNoScriptsDir(); return; }
+  const existing = host.readProjectProfile(projRoot, safe);
   const profile = projects.sanitizeProfile(safe, existing || {});
   safePost(webview, { type: "editProject", name: safe, profile });
 }
@@ -863,16 +1027,21 @@ function runEditProject(name, webview) {
  * profile file. Traversal-safe (host.writeProjectProfile rejects a bad name).
  */
 function runSaveProject(name, profileObj) {
-  const scriptsDir = resolveScriptsDir();
-  if (!scriptsDir) { warnNoScriptsDir(); return; }
   const safe = host.safeProfileName(name);
   if (!safe) { vscode.window.showErrorMessage("Invalid project name."); return; }
+  // D11: refuse reserved names with an information toast.
+  if (projects.isReservedProfileName(safe)) {
+    vscode.window.showInformationMessage('"' + safe + '" is reserved -- create a named profile instead.');
+    return;
+  }
+  const projRoot = resolveCfgDir() || resolveScriptsDir();
+  if (!projRoot) { warnNoScriptsDir(); return; }
   const clean = projects.sanitizeProfile(safe, profileObj);
   if (!clean) { vscode.window.showErrorMessage("Couldn't save the project profile (invalid name)."); return; }
   try {
-    host.writeProjectProfile(scriptsDir, safe, clean);
-    vscode.window.showInformationMessage(`Saved project “${safe}”.`);
-    refreshAll(); // the profile set may now include a newly created profile
+    host.writeProjectProfile(projRoot, safe, clean);
+    vscode.window.showInformationMessage("Saved project \"" + safe + "\".");
+    refreshAll();
   } catch (e) {
     vscode.window.showErrorMessage("Couldn't save the project profile: " + (e && e.message ? e.message : e));
   }
@@ -973,7 +1142,21 @@ function handleMessage(message, webview, context) {
       const scriptsDir = resolveScriptsDir();
       if (!scriptsDir) { warnNoScriptsDir(); return; }
       const action = message.mode === "redownload" ? "redownload" : "reinstall";
-      effectiveProjects().then((projects) => lifecycle.run(action, { scriptsDir, backupMode: message.backup, projects }));
+      (async () => {
+        try {
+          var dir = resolveCfgDir();
+          var git = await detectGitCached();
+          if (dir && git.present && runGit) {
+            var rs = await configsync.repoState(runGit, dir);
+            if (rs.conflict || rs.mergeInProgress) {
+              vscode.window.showErrorMessage("Resolve the config merge first -- open the config repo and commit the merge, then try again.", "Open config repo")
+                .then(function (pick) { if (pick === "Open config repo") vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(dir), true); });
+              return;
+            }
+          }
+        } catch (_) {}
+        effectiveProjects().then(function (projects) { lifecycle.run(action, { scriptsDir: scriptsDir, backupMode: message.backup, projects: projects }); });
+      })();
       return;
     }
 
@@ -1018,15 +1201,331 @@ function handleMessage(message, webview, context) {
       if (id === "reprovision" || id === "reinstall" || id === "redownload") {
         const scriptsDir = resolveScriptsDir();
         if (!scriptsDir) { warnNoScriptsDir(); return; }
-        // Pass the effective project selection so the console doesn't re-prompt (and a
-        // reprovision keeps the current projects instead of dropping to "default").
-        effectiveProjects().then((projects) => lifecycle.run(id, { scriptsDir, projects }));
-        // Fast-poll (5s) so the dashboards reflect the finished reprovision quickly,
-        // reverting to the normal cadence once it records a new provisioned commit.
-        if (id === "reprovision") beginReprovisionFastRefresh();
+        // Reprovision gate: check if the config repo is in a conflict/merge state.
+        (async () => {
+          try {
+            var dir = resolveCfgDir();
+            var git = await detectGitCached();
+            if (dir && git.present && runGit) {
+              var rs = await configsync.repoState(runGit, dir);
+              if (rs.conflict || rs.mergeInProgress) {
+                vscode.window.showErrorMessage(
+                  "Resolve the config merge first -- open the config repo and commit the merge, then try again.",
+                  "Open config repo"
+                ).then(function (pick) { if (pick === "Open config repo") vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(dir), true); });
+                return;
+              }
+            }
+          } catch (_) {}
+          effectiveProjects().then(function (projects) { lifecycle.run(id, { scriptsDir: scriptsDir, projects: projects }); });
+          if (id === "reprovision") beginReprovisionFastRefresh();
+        })();
         return;
       }
       if (id === "updateConstruct") { runUpdateConstruct(); return; }
+      // ── Config-sync commands (C6) ─────────────────────────────────────
+      if (id === "syncConfigNow") {
+        runConfigSync().then(function () {
+          return buildConfigSyncState();
+        }).then(function (cs) {
+          cachedConfigSync = cs; refreshAll();
+        }).catch(function (e) {
+          vscode.window.showErrorMessage("Config sync failed: " + (e && e.message ? e.message : e));
+        });
+        return;
+      }
+      if (id === "addConfigRemote") {
+        vscode.window.showInputBox({
+          title: "Add a remote config repository",
+          prompt: "Git URL of the remote config repo",
+          placeHolder: "https://github.com/org/construct-config.git",
+          ignoreFocusOut: true,
+          validateInput: function (v) { return remote.isLikelyGitUrl(v) ? null : "Enter an https://, ssh:// or git@host:path git URL."; },
+        }).then(function (url) {
+          if (!url) return;
+          var dir = resolveCfgDir();
+          if (!dir) { warnNoScriptsDir(); return; }
+          var existing = configsync.readRemotes(dir);
+          if (existing.some(function (r) { return r.url === url.trim(); })) {
+            vscode.window.showInformationMessage("That remote is already linked.");
+            return;
+          }
+          existing.push({ url: url.trim() });
+          configsync.writeRemotes(dir, existing);
+          detectGitCached().then(function (git) {
+            if (git.present && runGit) {
+              configsync.ensureStagingClone(runGit, configsync.stagingRoot(process.env), url.trim()).catch(function () {});
+            }
+          });
+          vscode.window.showInformationMessage("Remote config repo added: " + url.trim());
+          buildConfigSyncState().then(function (cs) { cachedConfigSync = cs; refreshAll(); });
+        });
+        return;
+      }
+      if (id === "removeConfigRemote") {
+        var rmUrl = message.url;
+        if (!rmUrl) return;
+        vscode.window.showWarningMessage("Remove the remote config repo?\n" + rmUrl, { modal: true }, "Remove").then(function (pick) {
+          if (pick !== "Remove") return;
+          var dir = resolveCfgDir();
+          if (!dir) return;
+          var existing = configsync.readRemotes(dir);
+          configsync.writeRemotes(dir, existing.filter(function (r) { return r.url !== rmUrl; }));
+          buildConfigSyncState().then(function (cs) { cachedConfigSync = cs; refreshAll(); });
+        });
+        return;
+      }
+      if (id === "importRemoteConfigs") {
+        (async () => {
+          var dir = resolveCfgDir();
+          if (!dir) { warnNoScriptsDir(); return; }
+          var git = await detectGitCached();
+          if (!git.present) { vscode.window.showWarningMessage("Git is not available. Install git first."); return; }
+          var remotes = configsync.readRemotes(dir);
+          if (!remotes.length) { vscode.window.showInformationMessage("No remote config repos linked yet. Add one first."); return; }
+          var staging = configsync.stagingRoot(process.env);
+          var allItems = [];
+          for (var ri = 0; ri < remotes.length; ri++) {
+            var clone = await configsync.ensureStagingClone(runGit, staging, remotes[ri].url);
+            if (!clone.ok) continue;
+            var candidates = configsync.listImportCandidates(clone.dir);
+            for (var ci = 0; ci < candidates.length; ci++) {
+              allItems.push({ label: candidates[ci].name + " -- " + remotes[ri].url, remoteUrl: remotes[ri].url, relPath: candidates[ci].relPath, name: candidates[ci].name, dir: clone.dir });
+            }
+          }
+          if (!allItems.length) { vscode.window.showInformationMessage("No importable project profiles found in the linked remote repos."); return; }
+          var picks = await vscode.window.showQuickPick(
+            allItems.map(function (item) { return { label: item.label, item: item }; }),
+            { canPickMany: true, title: "Import remote config profiles", placeHolder: "Select profiles to import (none pre-selected)" }
+          );
+          if (!picks || !picks.length) return;
+          var selected = [];
+          for (var pi = 0; pi < picks.length; pi++) {
+            var item = picks[pi].item;
+            try {
+              var content = fs.readFileSync(path.join(item.dir, item.relPath), "utf8");
+              selected.push({ remoteUrl: item.remoteUrl, ref: "HEAD", relPath: item.relPath, name: item.name, content: content });
+            } catch (_) {}
+          }
+          if (!selected.length) return;
+          var manifest = configsync.readImportManifest(dir);
+          var existingNames = new Set(host.listProjectProfiles(dir));
+          var plan = configsync.planUpstreamImport({ selected: selected, manifest: manifest, existingNames: existingNames });
+          var imported = 0;
+          // creates
+          for (var ci2 = 0; ci2 < (plan.creates || []).length; ci2++) {
+            var c = plan.creates[ci2];
+            try {
+              var parsed = JSON.parse(c.content);
+              var canonical = projects.canonicalProfileJson(c.name, parsed);
+              if (canonical) {
+                fs.mkdirSync(path.join(dir, "projects"), { recursive: true });
+                fs.writeFileSync(path.join(dir, "projects", c.name + ".json"), canonical, "utf8");
+              }
+              if (c.manifestEntry) {
+                fs.mkdirSync(path.join(dir, "manifest"), { recursive: true });
+                fs.writeFileSync(path.join(dir, "manifest", c.name + ".json"), JSON.stringify(c.manifestEntry, null, 2) + "\n", "utf8");
+              }
+              fs.mkdirSync(path.join(dir, "bases"), { recursive: true });
+              fs.writeFileSync(path.join(dir, "bases", c.name + ".json"), c.content, "utf8");
+              imported++;
+            } catch (_) {}
+          }
+          // updates (3-way merge)
+          for (var ui = 0; ui < (plan.updates || []).length; ui++) {
+            var u = plan.updates[ui];
+            try {
+              var oursC = ""; try { oursC = fs.readFileSync(path.join(dir, "projects", u.name + ".json"), "utf8"); } catch (_) {}
+              var baseC = ""; try { baseC = fs.readFileSync(path.join(dir, "bases", u.name + ".json"), "utf8"); } catch (_) {}
+              var mergeResult = await configsync.mergeFile(runGit, { ours: oursC, base: baseC, theirs: u.theirsContent || "" });
+              if (mergeResult.conflict) { vscode.window.showWarningMessage("Merge conflict for \"" + u.name + "\" -- keeping local version."); continue; }
+              if (mergeResult.ok && mergeResult.content != null) {
+                var mp = JSON.parse(mergeResult.content);
+                var v = projects.validateProfile(u.name, mp);
+                if (!v.ok) { vscode.window.showWarningMessage("Merged \"" + u.name + "\" is invalid -- keeping local version."); continue; }
+                var mc = projects.canonicalProfileJson(u.name, mp);
+                if (mc) fs.writeFileSync(path.join(dir, "projects", u.name + ".json"), mc, "utf8");
+                if (u.manifestEntry) fs.writeFileSync(path.join(dir, "manifest", u.name + ".json"), JSON.stringify(u.manifestEntry, null, 2) + "\n", "utf8");
+                fs.writeFileSync(path.join(dir, "bases", u.name + ".json"), u.theirsContent || "", "utf8");
+                imported++;
+              }
+            } catch (_) {}
+          }
+          // collisions -- rename prompts. A renamed import is a full first-class
+          // import: the target name must be safe, non-reserved and NOT already
+          // taken (re-prompt otherwise, so one profile can't silently overwrite
+          // another), and it gets the same provenance treatment as a create —
+          // canonical profile + manifest (preserving remoteUrl/ref/pathInRemote,
+          // importedAs=<newName>) + stored base — so it is tracked (shareable via
+          // the remote command, pushable, and 3-way-updatable on the next import).
+          // The decision core is the pure importui.planRenamedImport (unit-tested).
+          var takenNames = new Set(host.listProjectProfiles(dir));
+          var REJECT_MSG = {
+            reserved: "is reserved. Choose another name.",
+            unsafe: "is not a valid profile name (no path separators or \"..\").",
+            taken: "already exists. Choose another name.",
+            invalid: "is not a valid profile; skipped.",
+            unparseable: "could not be read; skipped.",
+          };
+          for (var coi = 0; coi < (plan.collisions || []).length; coi++) {
+            var col = plan.collisions[coi];
+            var orig = selected.find(function (s) { return s.name === col.name; });
+            if (!orig) continue;
+            var suggestion = col.suggested || (col.name + "-2");
+            var accepted = false;
+            while (!accepted) {
+              var newNameRaw = await vscode.window.showInputBox({
+                title: "Name collision: \"" + col.name + "\" already exists",
+                prompt: "Enter a new name for the imported profile (or leave empty to skip)",
+                value: suggestion,
+                ignoreFocusOut: true,
+              });
+              if (!newNameRaw || !newNameRaw.trim()) break; // skip this file
+              var rp = importui.planRenamedImport(newNameRaw, orig, takenNames);
+              if (!rp.ok) {
+                // empty was handled above; only re-promptable/terminal errors here.
+                if (rp.error === "unparseable" || rp.error === "invalid") {
+                  vscode.window.showWarningMessage("\"" + col.name + "\" " + REJECT_MSG[rp.error]);
+                  break;
+                }
+                vscode.window.showWarningMessage("\"" + newNameRaw.trim() + "\" " + (REJECT_MSG[rp.error] || "is not allowed."));
+                continue;
+              }
+              try {
+                fs.mkdirSync(path.join(dir, "projects"), { recursive: true });
+                fs.writeFileSync(path.join(dir, "projects", rp.name + ".json"), rp.profileJson, "utf8");
+                fs.mkdirSync(path.join(dir, "manifest"), { recursive: true });
+                fs.writeFileSync(path.join(dir, "manifest", rp.name + ".json"), JSON.stringify(rp.manifestEntry, null, 2) + "\n", "utf8");
+                fs.mkdirSync(path.join(dir, "bases"), { recursive: true });
+                fs.writeFileSync(path.join(dir, "bases", rp.name + ".json"), rp.baseContent, "utf8");
+                takenNames.add(rp.name);
+                imported++;
+                accepted = true;
+              } catch (_) { break; }
+            }
+          }
+          if (imported > 0) {
+            var remoteUrl = selected[0] ? selected[0].remoteUrl : "remote";
+            await configsync.commitAll(runGit, dir, "import from " + remoteUrl);
+            await runConfigSync();
+          }
+          vscode.window.showInformationMessage("Imported " + imported + " profile(s) from remote config repos.");
+          refreshAll();
+        })().catch(function (e) { vscode.window.showErrorMessage("Import failed: " + (e && e.message ? e.message : e)); });
+        return;
+      }
+      if (id === "shareConfigs") {
+        (async () => {
+          var dir = resolveCfgDir();
+          if (!dir) { warnNoScriptsDir(); return; }
+          var available = host.listProjectProfiles(dir).filter(function (n) { return !projects.isReservedProfileName(n); });
+          if (!available.length) { vscode.window.showInformationMessage("No shareable project profiles found."); return; }
+          var picks = await vscode.window.showQuickPick(
+            available.map(function (n) { return { label: n, picked: false }; }),
+            { canPickMany: true, title: "Share project profiles", placeHolder: "Select profiles to share" }
+          );
+          if (!picks || !picks.length) return;
+          var names = picks.map(function (p) { return p.label; });
+          var manifest = configsync.readImportManifest(dir);
+          var remoteUrls = new Set();
+          var allTracked = true;
+          for (var ni = 0; ni < names.length; ni++) {
+            if (manifest[names[ni]] && manifest[names[ni]].remoteUrl) remoteUrls.add(manifest[names[ni]].remoteUrl);
+            else allTracked = false;
+          }
+          if (allTracked && remoteUrls.size === 1) {
+            var url = [...remoteUrls][0];
+            // D18: include -Repo/-Ref when the user has non-default values configured,
+            // matching the C4 contract signature buildShareCommand({configRepoUrl, names, installRepo, installRef}).
+            var scScriptsDir = resolveScriptsDir();
+            var scRawSettings = scScriptsDir ? host.readRawSettings(scScriptsDir) : {};
+            var scInstallRepo = scRawSettings.constructRepo || projects.DEFAULT_INSTALL_REPO;
+            var scInstallRef = scRawSettings.constructRef || projects.DEFAULT_INSTALL_REF;
+            var cmd = projects.buildShareCommand({ configRepoUrl: url, names: names, installRepo: scInstallRepo, installRef: scInstallRef });
+            await vscode.env.clipboard.writeText(cmd);
+            vscode.window.showInformationMessage("Share command copied to clipboard.");
+          } else {
+            var scriptsDir = resolveScriptsDir();
+            var rawSettings = scriptsDir ? host.readRawSettings(scriptsDir) : {};
+            var installRepo = rawSettings.constructRepo || projects.DEFAULT_INSTALL_REPO;
+            var installRef = rawSettings.constructRef || projects.DEFAULT_INSTALL_REF;
+            var entries = [{ path: "deploy.ps1", data: projects.buildDeployPs1({ installRepo: installRepo, installRef: installRef }) }];
+            for (var ei = 0; ei < names.length; ei++) {
+              var profile = host.readProjectProfile(dir, names[ei]);
+              if (profile) {
+                var canonical = projects.canonicalProfileJson(names[ei], profile);
+                if (canonical) entries.push({ path: "projects/" + names[ei] + ".json", data: canonical });
+              }
+            }
+            var buf = zip.buildZip(entries);
+            var uri = await vscode.window.showSaveDialog({
+              title: "Save shared config bundle",
+              filters: { "Zip archive": ["zip"] },
+              defaultUri: vscode.Uri.file(path.join(os.homedir(), "construct-config.zip")),
+            });
+            if (!uri) return;
+            await fs.promises.writeFile(uri.fsPath, buf);
+            vscode.window.showInformationMessage("Config bundle saved to " + uri.fsPath);
+          }
+        })().catch(function (e) { vscode.window.showErrorMessage("Could not create the share bundle: " + (e && e.message ? e.message : e)); });
+        return;
+      }
+      if (id === "pushConfigUpstream") {
+        var pushUrl = message.url;
+        if (!pushUrl) return;
+        vscode.window.showWarningMessage(
+          "This commits your local versions of the files imported from " + pushUrl + " to a new branch and pushes.",
+          { modal: true }, "Push"
+        ).then(function (pick) {
+          if (pick !== "Push") return;
+          var now = new Date();
+          var pad = function (n) { return String(n).padStart(2, "0"); };
+          var branch = "construct-config-update-" + now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate()) + "-" + pad(now.getHours()) + pad(now.getMinutes());
+          // D19: gather the local versions of profiles tracked to this remote from
+          // the import manifest — each entry whose remoteUrl matches pushUrl becomes
+          // an {absSource, pathInRemote} pair so the staging clone receives real content.
+          var puDir = resolveCfgDir();
+          var puManifest = puDir ? configsync.readImportManifest(puDir) : {};
+          var puFiles = [];
+          var puNames = Object.keys(puManifest);
+          for (var pi = 0; pi < puNames.length; pi++) {
+            var puEntry = puManifest[puNames[pi]];
+            if (puEntry && puEntry.remoteUrl === pushUrl) {
+              puFiles.push({ absSource: path.join(puDir, "projects", puNames[pi] + ".json"), pathInRemote: puEntry.pathInRemote });
+            }
+          }
+          configsync.pushUpstream(runGit, {
+            stagingDir: path.join(configsync.stagingRoot(process.env), configsync.remoteSlug(pushUrl)),
+            files: puFiles, branch: branch,
+            message: "config update from The Construct (" + branch + ")",
+          }).then(function (result) {
+            if (result.ok) vscode.window.showInformationMessage("Pushed to branch \"" + result.branch + "\" -- create a PR from that branch.");
+            else vscode.window.showErrorMessage("Push failed: " + (result.output || "").slice(0, 200));
+          }).catch(function (e) { vscode.window.showErrorMessage("Push failed: " + (e && e.message ? e.message : e)); });
+        });
+        return;
+      }
+      if (id === "installGit") {
+        if (process.platform !== "win32") {
+          vscode.window.showWarningMessage("Git installation runs on the Windows host, which isn't available here.");
+          return;
+        }
+        try {
+          var igCmd = "winget install --id Git.Git -e --source winget";
+          var igEncoded = Buffer.from(igCmd, "utf16le").toString("base64");
+          var igCp = require("child_process");
+          igCp.spawn("cmd.exe", ["/c", "start", "", "powershell.exe", "-EncodedCommand", igEncoded], { detached: true, stdio: "ignore" });
+          vscode.window.showInformationMessage("Installing git -- approve any prompts in the console window. Restart VS Code after it finishes.");
+          gitDetected = null; gitDetectedAt = 0;
+        } catch (e) { vscode.window.showErrorMessage("Could not launch the git installer: " + (e && e.message ? e.message : e)); }
+        return;
+      }
+      if (id === "openConfigRepo") {
+        var ocDir = resolveCfgDir();
+        if (!ocDir) { warnNoScriptsDir(); return; }
+        vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(ocDir), true);
+        return;
+      }
       vscode.window.showInformationMessage(
         `"${id}" will be available in an upcoming build of the control panel.`
       );
@@ -1117,7 +1616,18 @@ function activate(context) {
     );
   }
   maybeAutoOpenPanel(context);
-  maybeAutoEnableAudio(context); // arm mic passthrough now if the saved preference is on
+  maybeAutoEnableAudio(context);
+  // Config-sync engine bootstrap (D8).
+  try {
+    cfgDir = host.configDir(process.env) || null;
+    if (cfgDir) {
+      runGit = configsync.makeGitRunner({ spawn: require("child_process").spawn });
+      configsync.ensureConfigTree(cfgDir);
+      var sd = resolveScriptsDir();
+      if (sd) { try { configsync.migrateLegacyProfiles(cfgDir, host.projectsDir(sd)); } catch (_) {} }
+      startConfigWatcher();
+    }
+  } catch (_) {}
 }
 
 /** When a window comes up attached to the VM (the installer's end-of-install deep
@@ -1145,6 +1655,7 @@ function deactivate() {
   try { if (hostAudio) hostAudio.dispose(); } catch (_) {}
   hostAudio = undefined;
   stopAutoRefresh();
+  stopConfigWatcher();
 }
 
 module.exports = { activate, deactivate };
