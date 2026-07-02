@@ -382,7 +382,7 @@ function Select-ProjectProfiles {
 
     # Start on "Continue": every profile defaults to selected, so a plain Enter
     # accepts the all-selected state without any cursor travel.
-    $cursor      = $names.Count + 1
+    $cursor      = $names.Count + 2
     $listTop     = [Console]::CursorTop
     $prevLines   = 0    # rows drawn last pass, so we can clear leftovers on shrink
     $maxBarWidth = 0    # only grows, so a narrowing list still clears cleanly
@@ -402,10 +402,11 @@ function Select-ProjectProfiles {
                 $names    = $current
             }
 
-            # Rows = one per profile, then the two action buttons.
-            $rowCount = $names.Count + 2
+            # Rows = one per profile, then the three action buttons.
+            $rowCount = $names.Count + 3
             $idxOpen  = $names.Count        # "Open projects config folder"
-            $idxCont  = $names.Count + 1    # "Continue"
+            $idxLink  = $names.Count + 1    # "Link a remote config repo..."
+            $idxCont  = $names.Count + 2    # "Continue"
             if ($cursor -ge $rowCount) { $cursor = $rowCount - 1 }
             if ($cursor -lt 0)         { $cursor = 0 }
 
@@ -419,6 +420,7 @@ function Select-ProjectProfiles {
             $contents = New-Object System.Collections.Generic.List[string]
             foreach ($n in $names) { $contents.Add("[x] $n") }
             $contents.Add("Open projects config folder")
+            $contents.Add("Link a remote config repo...")
             $contents.Add("Continue")
             $longest = 0
             foreach ($c in $contents) { if ($c.Length -gt $longest) { $longest = $c.Length } }
@@ -461,6 +463,7 @@ function Select-ProjectProfiles {
             Write-Host ("").PadRight($maxBarWidth)
             $linesPrinted++
             foreach ($act in @(@{ Idx = $idxOpen; Text = "Open projects config folder" },
+                               @{ Idx = $idxLink; Text = "Link a remote config repo..." },
                                @{ Idx = $idxCont; Text = "Continue" })) {
                 $prefix = if ($act.Idx -eq $cursor) { "  > " } else { "    " }
                 $line   = ($prefix + $act.Text).PadRight($maxBarWidth)
@@ -510,6 +513,100 @@ function Select-ProjectProfiles {
                         }
                         $full = (Resolve-Path -LiteralPath $ProjectsDir).Path
                         try { Start-Process -FilePath explorer.exe -ArgumentList $full } catch { }
+                    } elseif ($cursor -eq $idxLink) {
+                        # Link a remote config repo: prompt for URL, ensure git,
+                        # clone to staging ONCE, then import per candidate so a
+                        # name collision on one candidate never aborts the rest
+                        # (interactive contract: prompt for a rename instead of
+                        # throwing; the CLI keeps the hard-error contract).
+                        Write-Host ""
+                        $repoUrl = Read-Host "  Git repo URL"
+                        if (-not [string]::IsNullOrWhiteSpace($repoUrl)) {
+                            $repoUrl = $repoUrl.Trim()
+                            if (-not (Ensure-ConstructGit)) {
+                                Write-Host "    git is required for remote config repos." -ForegroundColor Yellow
+                                Start-Sleep -Seconds 2
+                            } else {
+                                $configDir = Get-ConstructConfigDir
+                                $null = Initialize-ConstructConfigStore -ScriptsDir (Split-Path -Parent $ProjectsDir)
+                                try {
+                                    $cloneDir = Update-ConstructStagingClone -SourceRepo $repoUrl
+                                    $importCands = @(Get-ConstructImportCandidates -SourceDir $cloneDir)
+                                    if ($importCands.Count -eq 0) {
+                                        Write-Host "    No importable profiles found in the repo." -ForegroundColor Yellow
+                                    }
+                                    $srcHasProjSubdir = Test-Path -LiteralPath (Join-Path $cloneDir "projects")
+
+                                    foreach ($cand in $importCands) {
+                                        $candName = $cand.BaseName
+                                        try {
+                                            # -NoFetch: the staging clone was refreshed above.
+                                            $importResult = Import-ConstructConfigs -ConfigDir $configDir -SourceRepo $repoUrl `
+                                                -Names @($candName) -NoFetch
+                                            foreach ($imp in @($importResult.Imported)) {
+                                                Write-Host "    Imported: $imp" -ForegroundColor Green
+                                                # Default newly imported profiles to selected.
+                                                $selected[$imp] = $true
+                                            }
+                                            foreach ($e in @($importResult.Errors)) {
+                                                Write-Host "    $e" -ForegroundColor Yellow
+                                            }
+                                        } catch {
+                                            $errMsg = $_.Exception.Message
+                                            if ($errMsg -notmatch "Name collision") {
+                                                Write-Host "    ${candName}: $errMsg" -ForegroundColor Red
+                                                continue
+                                            }
+                                            # Collision (D17 interactive): prompt for a rename,
+                                            # validating the target -- reserved names and
+                                            # already-existing profiles are refused (never a
+                                            # silent overwrite), with a re-prompt on refusal.
+                                            $relPath = if ($srcHasProjSubdir) { "projects/$($cand.Name)" } else { $cand.Name }
+                                            $suggestName = "$candName-2"
+                                            $suffix = 2
+                                            while (-not (Test-ConstructRenameTarget -ConfigDir $configDir -NewName $suggestName `
+                                                         -RemoteUrl $repoUrl -PathInRemote $relPath).Ok) {
+                                                $suffix++
+                                                $suggestName = "$candName-$suffix"
+                                            }
+                                            Write-Host "    A profile named '$candName' already exists." -ForegroundColor Yellow
+                                            while ($true) {
+                                                $newName = Read-Host "  Rename to (Enter for '$suggestName', '-' to skip)"
+                                                if ([string]::IsNullOrWhiteSpace($newName)) { $newName = $suggestName }
+                                                $newName = $newName.Trim()
+                                                if ($newName -eq '-') {
+                                                    Write-Host "    Skipped '$candName'." -ForegroundColor DarkGray
+                                                    break
+                                                }
+                                                $target = Test-ConstructRenameTarget -ConfigDir $configDir -NewName $newName `
+                                                    -RemoteUrl $repoUrl -PathInRemote $relPath
+                                                if (-not $target.Ok) {
+                                                    Write-Host "    $($target.Reason)" -ForegroundColor Yellow
+                                                    continue
+                                                }
+                                                $renamed = Import-ConstructConfigAs -ConfigDir $configDir -SourceFile $cand.FullName `
+                                                    -NewName $newName -RemoteUrl $repoUrl -PathInRemote $relPath -CloneDir $cloneDir
+                                                if ($renamed.Ok) {
+                                                    Write-Host "    Imported as '$newName'." -ForegroundColor Green
+                                                    $selected[$newName] = $true
+                                                } else {
+                                                    Write-Host "    $($renamed.Error)" -ForegroundColor Red
+                                                }
+                                                break
+                                            }
+                                        }
+                                    }
+                                    # Record the linked remote even when every candidate
+                                    # collided or was skipped -- the link itself succeeded.
+                                    Register-ConstructConfigRemote -ConfigDir $configDir -RemoteUrl $repoUrl
+                                } catch {
+                                    Write-Host "    $($_.Exception.Message)" -ForegroundColor Red
+                                }
+                                Start-Sleep -Seconds 2
+                            }
+                        }
+                        # Force a rescan on the next loop iteration.
+                        $names = @()
                     } else {
                         # Continue: return the chosen profiles.
                         $chosen = @($names | Where-Object { $selected[$_] })
@@ -1458,4 +1555,2097 @@ function Set-ConstructProvisionedMarker {
         Write-Warning "Could not record the provisioned marker: $($_.Exception.Message)"
     }
     return $sha
+}
+
+# ── Config-sync v2 engine (docs/config-sync.md) ─────────────────────────────
+# A host-side sync engine that keeps project profiles in a local git repo
+# (%LOCALAPPDATA%\The-Construct\config) and synchronises them with the VM's
+# /opt/construct/projects store over SSH. Mirrors the JS engine in
+# extension/src/configsync.js -- same layout, same branch scheme, same merge
+# semantics -- so both surfaces produce identical repos. All functions are
+# Windows PowerShell 5.1-compatible (#Requires -Version 5.1 discipline: no
+# ternary, no ??, no Test-Json, no -AsHashtable, no PS6+ syntax).
+
+# ── Reserved names ───────────────────────────────────────────────────────────
+# 'default' is the shipped read-only seed, 'project.schema' is the schema file.
+# Case-insensitive, trimmed. Matches JS isReservedProfileName exactly.
+$script:RESERVED_PROFILE_NAMES = @("default", "project.schema")
+
+# ── Config dir ───────────────────────────────────────────────────────────────
+
+function Get-ConstructConfigDir {
+    <#
+        The dedicated host config directory: a single machine-wide location
+        OUTSIDE any per-slug zip checkout. %LOCALAPPDATA%\The-Construct\config
+        (or %TEMP%\The-Construct\config when LOCALAPPDATA is absent). Pure path
+        math, no side effects. Mirrors host.js configDir().
+    #>
+    $base = $env:LOCALAPPDATA
+    if (-not $base) { $base = $env:TEMP }
+    if (-not $base) { $base = [System.IO.Path]::GetTempPath() }
+    return (Join-Path (Join-Path $base "The-Construct") "config")
+}
+
+function Initialize-ConstructConfigStore {
+    <#
+        Ensure the config tree exists (projects/, manifest/, bases/) and perform
+        a one-time legacy migration: copy user *.json (not reserved/sample/existing)
+        from <ScriptsDir>\projects into the config projects dir. Returns the
+        config dir path.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$ScriptsDir)
+
+    $configDir = Get-ConstructConfigDir
+    $projDir   = Join-Path $configDir "projects"
+    $manifDir  = Join-Path $configDir "manifest"
+    $basesDir  = Join-Path $configDir "bases"
+    foreach ($d in @($projDir, $manifDir, $basesDir)) {
+        if (-not (Test-Path -LiteralPath $d)) {
+            New-Item -ItemType Directory -Path $d -Force | Out-Null
+        }
+    }
+
+    # One-time legacy migration: copy from the shipped projects/ folder.
+    $legacyDir = Join-Path $ScriptsDir "projects"
+    $marker    = Join-Path $configDir ".migrated"
+    if ((Test-Path -LiteralPath $legacyDir) -and -not (Test-Path -LiteralPath $marker)) {
+        $files = @(Get-ChildItem -LiteralPath $legacyDir -Filter *.json -File -ErrorAction SilentlyContinue |
+                   Where-Object { $_.Extension -eq '.json' -and
+                                  $script:RESERVED_PROFILE_NAMES -notcontains $_.BaseName.ToLowerInvariant() -and
+                                  $_.BaseName -notlike '*.sample' })
+        foreach ($f in $files) {
+            $dest = Join-Path $projDir $f.Name
+            if (-not (Test-Path -LiteralPath $dest)) {
+                Copy-Item -LiteralPath $f.FullName -Destination $dest -Force
+            }
+        }
+        Set-Content -LiteralPath $marker -Value (Get-Date -Format o) -Encoding UTF8
+    }
+    return $configDir
+}
+
+function Get-ConstructConfigProjectsDir {
+    <#
+        Returns the live projects directory: config\projects when it exists
+        (initializing if needed), legacy fallback otherwise.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$ScriptsDir)
+
+    $configDir = Get-ConstructConfigDir
+    $projDir   = Join-Path $configDir "projects"
+    if (Test-Path -LiteralPath $projDir) { return $projDir }
+    # Fallback: try initializing, then check again.
+    $null = Initialize-ConstructConfigStore -ScriptsDir $ScriptsDir
+    if (Test-Path -LiteralPath $projDir) { return $projDir }
+    # Last resort: the legacy shipped projects/ folder.
+    $legacy = Join-Path $ScriptsDir "projects"
+    if (Test-Path -LiteralPath $legacy) { return $legacy }
+    return $projDir
+}
+
+# ── Git availability ─────────────────────────────────────────────────────────
+
+function Test-ConstructGitAvailable {
+    <# Returns $true when git.exe is on PATH. #>
+    return ($null -ne (Get-Command git -ErrorAction SilentlyContinue))
+}
+
+function Ensure-ConstructGit {
+    <#
+        Make sure git is installed on the host. Follows the Ensure-Ffmpeg winget
+        pattern: check PATH, else try winget --id Git.Git, else print a manual
+        hint. -AutoMode attempts silently and returns $false on failure (caller
+        aborts loudly). Never throws.
+    #>
+    [CmdletBinding()]
+    param([switch]$AutoMode)
+
+    if (Test-ConstructGitAvailable) { return $true }
+
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        if (-not $AutoMode) {
+            Write-Host "==> Installing git (winget --id Git.Git)..." -ForegroundColor Cyan
+        }
+        try {
+            & winget install --id Git.Git -e --silent `
+                --accept-package-agreements --accept-source-agreements --scope user 2>&1 | Out-Null
+        } catch {
+            if (-not $AutoMode) {
+                Write-Warning "winget could not install git: $($_.Exception.Message)"
+            }
+        }
+        # Refresh PATH for this session (winget updates PATH for new sessions).
+        $machPath = [Environment]::GetEnvironmentVariable("PATH", "Machine")
+        $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+        if ($machPath -and $userPath) { $env:PATH = "$userPath;$machPath" }
+        if (Test-ConstructGitAvailable) {
+            if (-not $AutoMode) { Write-Host "    git installed." -ForegroundColor Green }
+            return $true
+        }
+    }
+
+    if (-not $AutoMode) {
+        Write-Warning "git is not installed and could not be installed automatically."
+        Write-Host "    Install it from https://git-scm.com/ or run:  winget install --id Git.Git" -ForegroundColor DarkGray
+    }
+    return $false
+}
+
+# ── Git repo initialisation ──────────────────────────────────────────────────
+
+function Initialize-ConstructConfigRepo {
+    <#
+        Lazy git init per D1: create a git repo in the config dir with main + vm
+        branches if it does not exist yet. Optionally seeds from -SeedDir (shipped
+        projects). Returns $true when the repo is ready. Idempotent.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ConfigDir,
+        [string]$SeedDir
+    )
+
+    if (-not (Test-ConstructGitAvailable)) { return $false }
+
+    $gitDir = Join-Path $ConfigDir ".git"
+    if (Test-Path -LiteralPath $gitDir) {
+        # Already initialised -- ensure vm branch exists.
+        $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+        try {
+            $null = & git -C $ConfigDir rev-parse --verify refs/heads/vm 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                & git -C $ConfigDir branch vm 2>$null | Out-Null
+            }
+        } catch { }
+        $ErrorActionPreference = $prev
+        return $true
+    }
+
+    # Ensure directories.
+    foreach ($d in @("projects","manifest","bases")) {
+        $p = Join-Path $ConfigDir $d
+        if (-not (Test-Path -LiteralPath $p)) {
+            New-Item -ItemType Directory -Path $p -Force | Out-Null
+        }
+    }
+
+    # Seed from shipped projects if given.
+    if ($SeedDir -and (Test-Path -LiteralPath $SeedDir)) {
+        $projDir = Join-Path $ConfigDir "projects"
+        foreach ($f in @(Get-ChildItem -LiteralPath $SeedDir -Filter *.json -File -ErrorAction SilentlyContinue)) {
+            $lower = $f.BaseName.ToLowerInvariant()
+            if ($script:RESERVED_PROFILE_NAMES -contains $lower) { continue }
+            if ($f.BaseName -like '*.sample') { continue }
+            $dest = Join-Path $projDir $f.Name
+            if (-not (Test-Path -LiteralPath $dest)) {
+                Copy-Item -LiteralPath $f.FullName -Destination $dest -Force
+            }
+        }
+    }
+
+    $gitArgs = @("-c", "user.name=The Construct", "-c", "user.email=construct@construct.local")
+
+    $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+    try {
+        & git -C $ConfigDir init 2>$null | Out-Null
+        & git -C $ConfigDir @gitArgs add -A 2>$null | Out-Null
+        # Exclude reserved names from the initial commit (D1/D5: NEVER
+        # default.json / project.schema.json in the repo).
+        foreach ($rn in $script:RESERVED_PROFILE_NAMES) {
+            & git -C $ConfigDir reset HEAD -- "projects/$rn.json" 2>$null | Out-Null
+        }
+        & git -C $ConfigDir @gitArgs commit --allow-empty -m "initial config" 2>$null | Out-Null
+        & git -C $ConfigDir branch -M main 2>$null | Out-Null
+        & git -C $ConfigDir branch vm 2>$null | Out-Null
+    } catch { }
+    $ErrorActionPreference = $prev
+
+    return (Test-Path -LiteralPath $gitDir)
+}
+
+# ── Canonical JSON serializer ────────────────────────────────────────────────
+# Hand-rolled to byte-match JSON.stringify(sanitizeProfile(name,obj),null,2)+"\n"
+# from extension/src/projects.js. ConvertTo-Json is NOT used (wrong indent,
+# escaping and key order). Replicates JSON.stringify's escape rules exactly:
+# \b \t \n \f \r shortcuts, other chars < 0x20 as \u00xx (lowercase hex, 4
+# digits), non-ASCII emitted raw (UTF-8). Empty array [] and empty object {}
+# are inline. 2-space indent, LF line endings, trailing newline.
+
+function ConvertTo-ConstructJsonString {
+    <# Escape a string value exactly as JSON.stringify does. Pure. #>
+    [CmdletBinding()]
+    param([AllowEmptyString()][AllowNull()][string]$Value)
+    if ($null -eq $Value) { return '""' }
+    $sb = New-Object System.Text.StringBuilder
+    $null = $sb.Append('"')
+    for ($i = 0; $i -lt $Value.Length; $i++) {
+        $c = $Value[$i]
+        $code = [int]$c
+        if     ($c -eq '"')  { $null = $sb.Append('\"') }
+        elseif ($c -eq '\')  { $null = $sb.Append('\\') }
+        elseif ($code -eq 8)  { $null = $sb.Append('\b') }
+        elseif ($code -eq 9)  { $null = $sb.Append('\t') }
+        elseif ($code -eq 10) { $null = $sb.Append('\n') }
+        elseif ($code -eq 12) { $null = $sb.Append('\f') }
+        elseif ($code -eq 13) { $null = $sb.Append('\r') }
+        elseif ($code -lt 32) {
+            # Other control chars: \u00xx with lowercase hex, 4 digits.
+            $null = $sb.Append(('\u{0:x4}' -f $code))
+        }
+        else {
+            # Non-ASCII emitted raw (UTF-8) just like JSON.stringify.
+            $null = $sb.Append($c)
+        }
+    }
+    $null = $sb.Append('"')
+    return $sb.ToString()
+}
+
+function ConvertTo-ConstructJsonValue {
+    <#
+        Serialize an arbitrary PS value to JSON matching JSON.stringify(v,null,2)
+        output exactly. Recursive. $Depth is the current indent depth (number of
+        2-space levels). Pure.
+    #>
+    [CmdletBinding()]
+    param($Value, [int]$Depth = 0)
+
+    if ($null -eq $Value) { return "null" }
+    if ($Value -is [bool]) {
+        return $(if ($Value) { "true" } else { "false" })
+    }
+    if ($Value -is [int] -or $Value -is [long] -or $Value -is [double] -or $Value -is [decimal] -or $Value -is [float]) {
+        return "$Value"
+    }
+    if ($Value -is [string]) {
+        return (ConvertTo-ConstructJsonString -Value $Value)
+    }
+    if ($Value -is [array] -or $Value -is [System.Collections.IList]) {
+        $arr = @($Value)
+        if ($arr.Count -eq 0) { return "[]" }
+        $indent    = "  " * ($Depth + 1)
+        $endIndent = "  " * $Depth
+        $lines = New-Object System.Collections.Generic.List[string]
+        for ($i = 0; $i -lt $arr.Count; $i++) {
+            $val = ConvertTo-ConstructJsonValue -Value $arr[$i] -Depth ($Depth + 1)
+            if ($i -lt ($arr.Count - 1)) {
+                $lines.Add("$indent$val,")
+            } else {
+                $lines.Add("$indent$val")
+            }
+        }
+        return ("[`n" + ($lines -join "`n") + "`n$endIndent]")
+    }
+    # Object (PSCustomObject or hashtable or ordered dictionary).
+    $keys = $null
+    if ($Value -is [System.Collections.IDictionary]) {
+        $keys = @($Value.Keys)
+    } elseif ($Value -is [pscustomobject]) {
+        $keys = @($Value.PSObject.Properties | ForEach-Object { $_.Name })
+    } else {
+        # Fallback: try PSObject properties.
+        $keys = @($Value.PSObject.Properties | ForEach-Object { $_.Name })
+    }
+    if ($null -eq $keys -or $keys.Count -eq 0) { return "{}" }
+
+    # Replicate JavaScript's JSON.stringify key ordering: integer-like keys
+    # (canonical array-index strings: non-negative integers whose string form
+    # round-trips, i.e. [string][uint32]$k -ceq $k and [uint32]$k -lt 2^32-1)
+    # sort first in ascending numeric order, then remaining keys in insertion
+    # order. This matters for free-form maps like sdks and tests.
+    $intKeys = New-Object System.Collections.Generic.List[object]
+    $strKeys = New-Object System.Collections.Generic.List[string]
+    foreach ($k in $keys) {
+        $asUint = 0
+        $isArrayIndex = $false
+        if ($k -match '^\d+$') {
+            try {
+                $asUint = [uint32]$k
+                # Must be < 2^32-1 (4294967295) and round-trip.
+                if ($asUint -lt 4294967295 -and [string]$asUint -ceq "$k") {
+                    $isArrayIndex = $true
+                }
+            } catch { }
+        }
+        if ($isArrayIndex) {
+            $intKeys.Add(@{ Key = $k; Num = $asUint })
+        } else {
+            $strKeys.Add($k)
+        }
+    }
+    if ($intKeys.Count -gt 0) {
+        $intKeys = @($intKeys | Sort-Object { $_.Num })
+        $keys = @(@($intKeys | ForEach-Object { $_.Key }) + @($strKeys))
+    }
+    $indent    = "  " * ($Depth + 1)
+    $endIndent = "  " * $Depth
+    $lines = New-Object System.Collections.Generic.List[string]
+    for ($i = 0; $i -lt $keys.Count; $i++) {
+        $k = $keys[$i]
+        $v = $null
+        if ($Value -is [System.Collections.IDictionary]) {
+            $v = $Value[$k]
+        } else {
+            $v = $Value.$k
+        }
+        $keyStr = ConvertTo-ConstructJsonString -Value $k
+        $valStr = ConvertTo-ConstructJsonValue -Value $v -Depth ($Depth + 1)
+        $sep = if ($i -lt ($keys.Count - 1)) { "," } else { "" }
+        $lines.Add("$indent$keyStr`: $valStr$sep")
+    }
+    return ("{`n" + ($lines -join "`n") + "`n$endIndent}")
+}
+
+# ── Profile sanitisation (mirrors extension/src/projects.js sanitizeProfile) ─
+
+function Invoke-ConstructSanitizeProfile {
+    <#
+        Coerce an arbitrary object into a schema-valid project profile, mirroring
+        sanitizeProfile in extension/src/projects.js exactly: same key order, same
+        coercion rules, same MCP type inference, same stripping of unknown keys.
+        Returns the cleaned PSCustomObject, or $null if name is empty.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowEmptyString()][AllowNull()][string]$Name,
+        $Object
+    )
+
+    $nm = if ($null -ne $Name) { "$Name".Trim() } else { "" }
+    if (-not $nm) { return $null }
+    $o = $Object
+    if ($null -eq $o -or $o -isnot [pscustomobject]) {
+        $o = New-Object pscustomobject
+    }
+
+    # Known MCP legacy-enum values.
+    $MCP_LEGACY_ENUM = @("filesystem", "browser", "github")
+    $MCP_AGENTS = @("claude", "claude-code", "codex", "opencode")
+
+    # Helper: non-empty string after trim.
+    $nonEmpty = { param($v) if ($v -is [string] -and $v.Trim() -ne "") { $v } else { $null } }
+
+    # Helper: is plain object (PSCustomObject, not array/primitive).
+    $isObj = { param($v) $null -ne $v -and $v -is [pscustomobject] }
+
+    # sanitizeRepos
+    $repos = @()
+    $rawRepos = $null
+    if ($o.PSObject.Properties.Name -contains 'repos') { $rawRepos = $o.repos }
+    if ($rawRepos -is [array] -or $rawRepos -is [System.Collections.IList]) {
+        foreach ($r in @($rawRepos)) {
+            if ($null -eq $r -or -not (& $isObj $r)) { continue }
+            $url = & $nonEmpty $r.url
+            if (-not $url) { continue }
+            $entry = [ordered]@{ url = $url }
+            if ($r.PSObject.Properties.Name -contains 'directory') {
+                $dir = & $nonEmpty $r.directory
+                if ($dir) { $entry['directory'] = $dir }
+            }
+            $repos += [pscustomobject]$entry
+        }
+    }
+
+    # sanitizeSdks (free-form map, author key order preserved)
+    $sdks = [ordered]@{}
+    $rawSdks = $null
+    if ($o.PSObject.Properties.Name -contains 'sdks') { $rawSdks = $o.sdks }
+    if (& $isObj $rawSdks) {
+        foreach ($p in $rawSdks.PSObject.Properties) {
+            $v = $p.Value
+            if ($v -is [string]) {
+                if ($v.Trim() -ne "") { $sdks[$p.Name] = $v }
+            } elseif ($v -is [array] -or $v -is [System.Collections.IList]) {
+                $arr = @($v | Where-Object { $_ -is [string] -and $_.Trim() -ne "" })
+                if ($arr.Count -gt 0) { $sdks[$p.Name] = $arr }
+            }
+        }
+    }
+
+    # sanitizeMcp
+    $mcp = @()
+    $rawMcp = $null
+    if ($o.PSObject.Properties.Name -contains 'mcp') { $rawMcp = $o.mcp }
+    if ($rawMcp -is [array] -or $rawMcp -is [System.Collections.IList]) {
+        foreach ($m in @($rawMcp)) {
+            if ($m -is [string]) {
+                if ($MCP_LEGACY_ENUM -ccontains $m) { $mcp += $m }
+                continue
+            }
+            if ($null -eq $m -or -not (& $isObj $m)) { continue }
+            $mcpName = & $nonEmpty $m.name
+            if (-not $mcpName) { continue }
+
+            # Type: explicit "stdio"/"http", else inferred. Case-sensitive to
+            # match JS ===.
+            $type = $null
+            if ($m.PSObject.Properties.Name -contains 'type') {
+                if ($m.type -ceq "stdio" -or $m.type -ceq "http") { $type = $m.type }
+            }
+            if (-not $type) {
+                if (& $nonEmpty $m.command) { $type = "stdio" }
+                elseif (& $nonEmpty $m.url) { $type = "http" }
+            }
+
+            $entry = [ordered]@{ name = $mcpName; type = $type }
+
+            # strMap helper
+            $strMap = {
+                param($src)
+                if ($null -eq $src -or -not (& $isObj $src)) { return $null }
+                $map = [ordered]@{}
+                foreach ($p2 in $src.PSObject.Properties) {
+                    if ($p2.Value -is [string]) { $map[$p2.Name] = $p2.Value }
+                }
+                if ($map.Count -gt 0) { return [pscustomobject]$map }
+                return $null
+            }
+
+            if ($type -eq "stdio") {
+                $cmd = & $nonEmpty $m.command
+                if (-not $cmd) { continue }
+                $entry['command'] = $cmd
+                if ($m.PSObject.Properties.Name -contains 'args' -and
+                    ($m.args -is [array] -or $m.args -is [System.Collections.IList])) {
+                    $args2 = @($m.args | Where-Object { $_ -is [string] })
+                    if ($args2.Count -gt 0) { $entry['args'] = $args2 }
+                }
+                $env2 = & $strMap $m.env
+                if ($null -ne $env2) { $entry['env'] = $env2 }
+            } elseif ($type -eq "http") {
+                $url2 = & $nonEmpty $m.url
+                if (-not $url2) { continue }
+                $entry['url'] = $url2
+                $headers = & $strMap $m.headers
+                if ($null -ne $headers) { $entry['headers'] = $headers }
+                $bt = & $nonEmpty $m.bearerTokenEnvVar
+                if ($bt) { $entry['bearerTokenEnvVar'] = $bt }
+            } else {
+                continue   # could not determine a valid server type
+            }
+
+            # agents (case-sensitive to match JS ===)
+            if ($m.PSObject.Properties.Name -contains 'agents' -and
+                ($m.agents -is [array] -or $m.agents -is [System.Collections.IList])) {
+                $agents = @($m.agents | Where-Object { $MCP_AGENTS -ccontains $_ })
+                if ($agents.Count -gt 0) { $entry['agents'] = $agents }
+            }
+            # enabled
+            if ($m.PSObject.Properties.Name -contains 'enabled' -and $m.enabled -is [bool]) {
+                $entry['enabled'] = $m.enabled
+            }
+
+            $mcp += [pscustomobject]$entry
+        }
+    }
+
+    # sanitizeStringArray (hostPackages / provisionCommands): inline because
+    # returning @() from a scriptblock via & unwraps to $null in PowerShell.
+    $rawHP = $null; $rawPC = $null
+    if ($o.PSObject.Properties.Name -contains 'hostPackages')      { $rawHP = $o.hostPackages }
+    if ($o.PSObject.Properties.Name -contains 'provisionCommands') { $rawPC = $o.provisionCommands }
+    # Force through @() to re-wrap scalars that PS 5.1 ConvertFrom-Json may
+    # have unwrapped from single-element JSON arrays.
+    if ($null -ne $rawHP) {
+        $hostPackages = @(@($rawHP) | Where-Object { $_ -is [string] -and $_.Trim() -ne "" })
+    } else {
+        $hostPackages = @()
+    }
+    if ($null -ne $rawPC) {
+        $provisionCommands = @(@($rawPC) | Where-Object { $_ -is [string] -and $_.Trim() -ne "" })
+    } else {
+        $provisionCommands = @()
+    }
+
+    # tests: opaque object, pass through if plain object, else empty.
+    $tests = [ordered]@{}
+    if ($o.PSObject.Properties.Name -contains 'tests') {
+        $rawTests = $o.tests
+        if (& $isObj $rawTests) {
+            foreach ($tp in $rawTests.PSObject.Properties) {
+                $tests[$tp.Name] = $tp.Value
+            }
+        }
+    }
+
+    # Build the output in FIXED key order (D3).
+    $result = [ordered]@{
+        name              = $nm
+        repos             = $repos
+        sdks              = [pscustomobject]$sdks
+        mcp               = $mcp
+        hostPackages      = $hostPackages
+        provisionCommands = $provisionCommands
+        tests             = [pscustomobject]$tests
+    }
+    return [pscustomobject]$result
+}
+
+function ConvertTo-ConstructCanonicalJson {
+    <#
+        THE canonical byte form of a profile: sanitize, then serialize with the
+        hand-rolled JSON serializer. Byte-matches JS canonicalProfileJson for any
+        valid profile. Returns the JSON string (with trailing LF), or $null when
+        name is empty. LF line endings throughout (no CRLF).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Name,
+        [Parameter(Mandatory)]$Object
+    )
+
+    $clean = Invoke-ConstructSanitizeProfile -Name $Name -Object $Object
+    if ($null -eq $clean) { return $null }
+    $json = ConvertTo-ConstructJsonValue -Value $clean -Depth 0
+    # Ensure LF line endings (no CRLF), trailing newline.
+    $json = $json.Replace("`r`n", "`n")
+    return "$json`n"
+}
+
+# ── Profile validation ───────────────────────────────────────────────────────
+# Mirrors validateProfile in extension/src/projects.js exactly: same error
+# messages, same strictness rules. Returns @{Ok=[bool]; Errors=[string[]]}.
+
+function Test-ConstructProfile {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Name,
+        [Parameter(Mandatory)]$Object
+    )
+
+    $errors = New-Object System.Collections.Generic.List[string]
+    $MCP_LEGACY_ENUM = @("filesystem", "browser", "github")
+    $MCP_AGENTS = @("claude", "claude-code", "codex", "opencode")
+
+    $str = { param($v) $v -is [string] -and $v.Trim() -ne "" }
+    $isObj = { param($v) $null -ne $v -and $v -is [pscustomobject] }
+    $strMapOk = { param($v) (& $isObj $v) -and @($v.PSObject.Properties | Where-Object { $_.Value -isnot [string] }).Count -eq 0 }
+
+    if (-not (& $isObj $Object)) {
+        return [pscustomobject]@{ Ok = $false; Errors = @("profile is not a JSON object") }
+    }
+
+    $KNOWN = @("name", "repos", "sdks", "mcp", "hostPackages", "provisionCommands", "tests")
+    foreach ($p in $Object.PSObject.Properties) {
+        if ($KNOWN -notcontains $p.Name) {
+            $errors.Add("unknown key `"$($p.Name)`"")
+        }
+    }
+
+    # name
+    $hasName = $Object.PSObject.Properties.Name -contains 'name'
+    if (-not $hasName -or -not (& $str $Object.name)) {
+        $errors.Add('"name" must be a non-empty string')
+    } else {
+        $want = if ($null -ne $Name) { "$Name".Trim() } else { "" }
+        if ($want -and $Object.name -ne $want) {
+            $errors.Add("`"name`" is `"$($Object.name)`" but the profile file is `"$want`"")
+        }
+    }
+
+    # repos
+    if ($Object.PSObject.Properties.Name -contains 'repos') {
+        $rp = $Object.repos
+        if (-not ($rp -is [array] -or $rp -is [System.Collections.IList])) {
+            $errors.Add('"repos" must be an array')
+        } else {
+            for ($i = 0; $i -lt @($rp).Count; $i++) {
+                $r = @($rp)[$i]
+                if (-not (& $isObj $r)) { $errors.Add("repos[$i] must be an object"); continue }
+                foreach ($rk in $r.PSObject.Properties) {
+                    if ($rk.Name -ne "url" -and $rk.Name -ne "directory") {
+                        $errors.Add("repos[$i] unknown key `"$($rk.Name)`"")
+                    }
+                }
+                if (-not (& $str $r.url)) { $errors.Add("repos[$i].url must be a non-empty string") }
+                if ($r.PSObject.Properties.Name -contains 'directory' -and -not (& $str $r.directory)) {
+                    $errors.Add("repos[$i].directory must be a non-empty string")
+                }
+            }
+        }
+    }
+
+    # sdks
+    if ($Object.PSObject.Properties.Name -contains 'sdks') {
+        $sk = $Object.sdks
+        if (-not (& $isObj $sk)) {
+            $errors.Add('"sdks" must be an object')
+        } else {
+            foreach ($sp in $sk.PSObject.Properties) {
+                $v = $sp.Value
+                $okStr = & $str $v
+                # An EMPTY array is valid (JS: Array.isArray(v) && v.every(str)
+                # is vacuously true for []; project.schema.json has no minItems).
+                $okArr = ($v -is [array] -or $v -is [System.Collections.IList]) -and
+                         @($v | Where-Object { -not (& $str $_) }).Count -eq 0
+                if (-not $okStr -and -not $okArr) {
+                    $errors.Add("sdks.$($sp.Name) must be a non-empty string or an array of non-empty strings")
+                }
+            }
+        }
+    }
+
+    # mcp
+    if ($Object.PSObject.Properties.Name -contains 'mcp') {
+        $mp = $Object.mcp
+        if (-not ($mp -is [array] -or $mp -is [System.Collections.IList])) {
+            $errors.Add('"mcp" must be an array')
+        } else {
+            for ($i = 0; $i -lt @($mp).Count; $i++) {
+                $m = @($mp)[$i]
+                if ($m -is [string]) {
+                    if ($MCP_LEGACY_ENUM -cnotcontains $m) {
+                        $errors.Add("mcp[$i] `"$m`" is not one of $($MCP_LEGACY_ENUM -join '/')")
+                    }
+                    continue
+                }
+                if (-not (& $isObj $m)) { $errors.Add("mcp[$i] must be a string or an object"); continue }
+                if (-not (& $str $m.name)) { $errors.Add("mcp[$i].name must be a non-empty string") }
+
+                $type = $null
+                $hasType = $m.PSObject.Properties.Name -contains 'type'
+                if ($hasType) {
+                    if ($m.type -ceq "stdio" -or $m.type -ceq "http") { $type = $m.type }
+                    elseif ($null -ne $m.type) { $errors.Add("mcp[$i].type must be `"stdio`" or `"http`""); continue }
+                }
+                if (-not $type) {
+                    if (& $str $m.command) { $type = "stdio" }
+                    elseif (& $str $m.url) { $type = "http" }
+                }
+                if (-not $type) { $errors.Add("mcp[$i] needs a `"command`" (stdio) or `"url`" (http)"); continue }
+
+                $common  = @("name","type","agents","enabled")
+                $allowed = if ($type -eq "stdio") { $common + @("command","args","env") }
+                           else { $common + @("url","headers","bearerTokenEnvVar") }
+                foreach ($mk in $m.PSObject.Properties) {
+                    if ($allowed -notcontains $mk.Name) {
+                        $errors.Add("mcp[$i] unknown key `"$($mk.Name)`" for a $type server")
+                    }
+                }
+
+                if ($type -eq "stdio") {
+                    if (-not (& $str $m.command)) { $errors.Add("mcp[$i].command must be a non-empty string") }
+                    if ($m.PSObject.Properties.Name -contains 'args') {
+                        $argsOk = ($m.args -is [array] -or $m.args -is [System.Collections.IList]) -and
+                                  @($m.args | Where-Object { $_ -isnot [string] }).Count -eq 0
+                        if (-not $argsOk) { $errors.Add("mcp[$i].args must be an array of strings") }
+                    }
+                    if ($m.PSObject.Properties.Name -contains 'env') {
+                        if (-not (& $strMapOk $m.env)) { $errors.Add("mcp[$i].env must be an object of string values") }
+                    }
+                } else {
+                    if (-not (& $str $m.url)) { $errors.Add("mcp[$i].url must be a non-empty string") }
+                    if ($m.PSObject.Properties.Name -contains 'headers') {
+                        if (-not (& $strMapOk $m.headers)) { $errors.Add("mcp[$i].headers must be an object of string values") }
+                    }
+                    if ($m.PSObject.Properties.Name -contains 'bearerTokenEnvVar') {
+                        if (-not (& $str $m.bearerTokenEnvVar)) {
+                            $errors.Add("mcp[$i].bearerTokenEnvVar must be a non-empty string")
+                        }
+                    }
+                }
+
+                if ($m.PSObject.Properties.Name -contains 'agents') {
+                    $agOk = ($m.agents -is [array] -or $m.agents -is [System.Collections.IList]) -and
+                            @($m.agents).Count -gt 0 -and
+                            @($m.agents | Where-Object { $MCP_AGENTS -cnotcontains $_ }).Count -eq 0
+                    if (-not $agOk) {
+                        $errors.Add("mcp[$i].agents must be a non-empty array from $($MCP_AGENTS -join '/')")
+                    }
+                }
+                if ($m.PSObject.Properties.Name -contains 'enabled' -and $m.enabled -isnot [bool]) {
+                    $errors.Add("mcp[$i].enabled must be a boolean")
+                }
+            }
+        }
+    }
+
+    # hostPackages / provisionCommands
+    foreach ($key in @("hostPackages", "provisionCommands")) {
+        if ($Object.PSObject.Properties.Name -contains $key) {
+            $val = $Object.$key
+            $ok = ($val -is [array] -or $val -is [System.Collections.IList]) -and
+                  @($val | Where-Object { -not (& $str $_) }).Count -eq 0
+            if (-not $ok) { $errors.Add("`"$key`" must be an array of non-empty strings") }
+        }
+    }
+
+    # tests
+    if ($Object.PSObject.Properties.Name -contains 'tests') {
+        if (-not (& $isObj $Object.tests)) { $errors.Add('"tests" must be an object') }
+    }
+
+    return [pscustomobject]@{
+        Ok     = ($errors.Count -eq 0)
+        Errors = @($errors)
+    }
+}
+
+# ── SSH to the VM ────────────────────────────────────────────────────────────
+# Mirrors Get-AgentUsage.ps1's connection pattern: prefer the explicit root key
+# ~/.ssh/agent_vm_ed25519, else the agent-vm Host alias. BatchMode-style
+# non-interactive flags so a password prompt never stalls the tick.
+
+function Invoke-ConstructVmSsh {
+    <#
+        Run a single command on the VM over SSH and return the exit code + output.
+        Never throws: returns Code=-1 + empty Output when ssh is not on PATH or
+        the connection fails.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$VmHost,
+        [Parameter(Mandatory)][string]$Command
+    )
+
+    $sshExe = Get-Command ssh -ErrorAction SilentlyContinue
+    if (-not $sshExe) {
+        return [pscustomobject]@{ Code = -1; Output = "" }
+    }
+
+    # Build connection args: prefer the explicit key the provisioner wrote.
+    $keyPath = Join-Path $HOME ".ssh/agent_vm_ed25519"
+    if (Test-Path -LiteralPath $keyPath) {
+        $target  = "root@$VmHost"
+        $sshOpts = @(
+            "-i", $keyPath,
+            "-o", "IdentitiesOnly=yes",
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=15"
+        )
+    } else {
+        # Fall back to the Host alias in ~/.ssh/config.
+        $alias = ($VmHost -split '\.')[0]
+        $target  = $alias
+        $sshOpts = @(
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=15"
+        )
+    }
+
+    # Transport the command base64-encoded (mktemp + base64 -d | bash), exactly
+    # the Get-AgentUsage.ps1 Invoke-RemoteCollector pattern. Under WinPS 5.1 the
+    # Legacy native-argument passing strips embedded double quotes and splits the
+    # argument, silently corrupting multi-line scripts passed as a bare ssh arg.
+    $scriptLf = ($Command -replace "`r`n", "`n")
+    $b64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($scriptLf))
+    $remoteCmd = "f=`$(mktemp) && printf %s '$b64' | base64 -d > `"`$f`" && bash `"`$f`"; rc=`$?; rm -f `"`$f`"; exit `$rc"
+
+    $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+    try {
+        $output = & ssh @sshOpts $target $remoteCmd 2>$null
+        $code = $LASTEXITCODE
+        if ($null -eq $code) { $code = -1 }
+        $outStr = if ($null -ne $output) { ($output -join "`n") } else { "" }
+        return [pscustomobject]@{ Code = $code; Output = $outStr }
+    } catch {
+        return [pscustomobject]@{ Code = -1; Output = "" }
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+}
+
+function Get-ConstructVmProjects {
+    <#
+        Read the PROJECTS list from /etc/construct/config.env on the VM.
+        Returns a string array of project names, or $null when unreachable.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$VmHost)
+
+    $result = Invoke-ConstructVmSsh -VmHost $VmHost -Command 'cat /etc/construct/config.env 2>/dev/null'
+    if ($result.Code -ne 0) { return $null }
+    foreach ($line in ($result.Output -split "`n")) {
+        if ($line -match '^\s*PROJECTS\s*=\s*"?([^"]*)"?\s*$') {
+            $val = $matches[1].Trim()
+            if (-not $val) { return @() }
+            return @($val -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        }
+    }
+    return $null
+}
+
+# ── VM store read/write ──────────────────────────────────────────────────────
+# The same wire format as the JS engine: name<TAB>base64 lines + END sentinel
+# for reading; a guarded bash script for writing.
+
+function Read-ConstructVmStore {
+    <#
+        Read all /opt/construct/projects/*.json from the VM as a hashtable of
+        name -> content (string). Returns $null when unreachable or the sentinel
+        is missing.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$VmHost,
+        [scriptblock]$SshInvoker
+    )
+
+    # The read script emits a NOSTORE marker when /opt/construct/projects does
+    # not exist, so the caller can disambiguate "empty store" (all files deleted)
+    # from "fresh VM where the store dir was never created" (D13).
+    $readScript = @'
+set -u
+store='/opt/construct/projects'
+if [ ! -d "$store" ]; then
+  printf 'NOSTORE\n'
+fi
+if [ -d "$store" ]; then
+  for f in "$store"/*.json; do
+    [ -f "$f" ] || continue
+    name="$(basename "$f" .json)"
+    b64="$(base64 < "$f" | tr -d '\n')"
+    printf '%s\t%s\n' "$name" "$b64"
+  done
+fi
+printf 'END\n'
+'@
+
+    $result = $null
+    if ($null -ne $SshInvoker) {
+        $result = & $SshInvoker $readScript
+    } else {
+        $result = Invoke-ConstructVmSsh -VmHost $VmHost -Command $readScript
+    }
+
+    if ($null -eq $result -or $result.Code -ne 0) { return $null }
+
+    $lines = $result.Output -split "`n"
+    $sawEnd = $false
+    $sawNoStore = $false
+    $store = @{}
+    foreach ($line in $lines) {
+        if ($line -eq "END") { $sawEnd = $true; continue }
+        if ($line -eq "NOSTORE") { $sawNoStore = $true; continue }
+        $parts = $line -split "`t", 2
+        if ($parts.Count -lt 2) { continue }
+        $name = $parts[0].Trim()
+        if (-not $name) { continue }
+        try {
+            $bytes = [Convert]::FromBase64String($parts[1])
+            $content = [System.Text.Encoding]::UTF8.GetString($bytes)
+            $store[$name] = $content
+        } catch { continue }
+    }
+    if (-not $sawEnd) { return $null }
+    # Return a PSObject with the store hashtable and whether the store dir existed.
+    return [pscustomobject]@{ Files = $store; StoreDirExists = (-not $sawNoStore) }
+}
+
+function Write-ConstructVmStore {
+    <#
+        Guarded write-back to the VM store. Each operation writes only when the
+        current content matches the expected base64 (or is absent when expected
+        absent). Returns a PSObject with Done and Skipped string arrays, or $null
+        on failure.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$VmHost,
+        [Parameter(Mandatory)][array]$Ops,
+        [scriptblock]$SshInvoker
+    )
+
+    if ($Ops.Count -eq 0) {
+        return [pscustomobject]@{ Done = @(); Skipped = @() }
+    }
+
+    # Build a bash script that performs guarded writes.
+    $sb = New-Object System.Text.StringBuilder
+    $null = $sb.AppendLine("set -u")
+    $null = $sb.AppendLine("store='/opt/construct/projects'")
+    $null = $sb.AppendLine("mkdir -p ""`$store""")
+
+    foreach ($op in $Ops) {
+        # Escape the profile name for safe embedding in bash single quotes,
+        # mirroring the JS buildWriteStoreScript pattern: replace ' with '\''
+        $q = $op.Name -replace "'", "'\''"
+        # Use single quotes around the name portion to prevent bash metacharacter
+        # expansion ($, backtick, double-quote). $store is still expanded via
+        # double quotes. Matches JS: const file = '"$store"' + "/'" + safeName + ".json'"
+        $file = "`"`$store`"/'$q.json'"
+        if ($op.Action -eq "delete") {
+            if ($null -ne $op.Expect -and $op.Expect -ne "") {
+                $null = $sb.AppendLine("cur=`$(base64 < $file 2>/dev/null | tr -d '\n' || true)")
+                $null = $sb.AppendLine("if [ ""`$cur"" = '$($op.Expect)' ]; then rm -f $file; printf '%s\tdone\n' '$q'; else printf '%s\tskipped\n' '$q'; fi")
+            } else {
+                $null = $sb.AppendLine("rm -f $file; printf '%s\tdone\n' '$q'")
+            }
+        } else {
+            $contentB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($op.Content))
+            if ($null -ne $op.Expect -and $op.Expect -ne "") {
+                $null = $sb.AppendLine("cur=`$(base64 < $file 2>/dev/null | tr -d '\n' || true)")
+                $null = $sb.AppendLine("if [ ""`$cur"" = '$($op.Expect)' ]; then printf '%s' '$contentB64' | base64 -d > $file; printf '%s\tdone\n' '$q'; else printf '%s\tskipped\n' '$q'; fi")
+            } elseif ($op.ExpectAbsent) {
+                $null = $sb.AppendLine("if [ ! -f $file ]; then printf '%s' '$contentB64' | base64 -d > $file; printf '%s\tdone\n' '$q'; else printf '%s\tskipped\n' '$q'; fi")
+            } else {
+                $null = $sb.AppendLine("printf '%s' '$contentB64' | base64 -d > $file; printf '%s\tdone\n' '$q'")
+            }
+        }
+    }
+    $null = $sb.AppendLine("printf 'END\n'")
+
+    $bashScript = $sb.ToString()
+
+    $result = $null
+    if ($null -ne $SshInvoker) {
+        $result = & $SshInvoker $bashScript
+    } else {
+        $result = Invoke-ConstructVmSsh -VmHost $VmHost -Command $bashScript
+    }
+
+    if ($null -eq $result -or $result.Code -ne 0) { return $null }
+
+    $lines = $result.Output -split "`n"
+    $sawEnd = $false
+    $done = @(); $skipped = @()
+    foreach ($line in $lines) {
+        if ($line -eq "END") { $sawEnd = $true; continue }
+        $parts = $line -split "`t", 2
+        if ($parts.Count -lt 2) { continue }
+        if ($parts[1].Trim() -eq "done") { $done += $parts[0] }
+        else { $skipped += $parts[0] }
+    }
+    if (-not $sawEnd) { return $null }
+    return [pscustomobject]@{ Done = $done; Skipped = $skipped }
+}
+
+# ── The sync tick (D6) ───────────────────────────────────────────────────────
+
+function Invoke-ConstructConfigSync {
+    <#
+        Full D6 sync tick: commit host changes, read the VM store, commit a VM
+        snapshot, merge, guarded write-back, advance vm ref. With -SeedOnly (D13)
+        just seed the VM with main profiles. Degraded mode (no git): additive
+        seed only.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ConfigDir,
+        [Parameter(Mandatory)][string]$VmHost,
+        [ValidateSet("ours","theirs")]
+        [string]$AutoResolve,
+        [switch]$SeedOnly,
+        [scriptblock]$SshReadInvoker,
+        [scriptblock]$SshWriteInvoker
+    )
+
+    $warnings = New-Object System.Collections.Generic.List[string]
+    $skippedInvalid = @()
+
+    $gitArgs = @("-c", "user.name=The Construct", "-c", "user.email=construct@construct.local")
+    $hasGit = Test-ConstructGitAvailable
+    $projDir = Join-Path $ConfigDir "projects"
+    if (-not (Test-Path -LiteralPath $projDir)) {
+        New-Item -ItemType Directory -Path $projDir -Force | Out-Null
+    }
+
+    # Read local profiles from disk.
+    $localProfiles = @{}
+    foreach ($f in @(Get-ChildItem -LiteralPath $projDir -Filter *.json -File -ErrorAction SilentlyContinue)) {
+        $bname = $f.BaseName
+        if ($script:RESERVED_PROFILE_NAMES -contains $bname.ToLowerInvariant()) { continue }
+        try {
+            $content = [System.IO.File]::ReadAllText($f.FullName, [System.Text.Encoding]::UTF8)
+            $localProfiles[$bname] = $content
+        } catch { }
+    }
+
+    # ── Degraded mode (no git) ────────────────────────────────────────────────
+    if (-not $hasGit) {
+        # Additive seed only: write profiles absent on the VM store.
+        $vmStoreResult = Read-ConstructVmStore -VmHost $VmHost -SshInvoker $SshReadInvoker
+        if ($null -eq $vmStoreResult) {
+            $warnings.Add("VM unreachable; skipped VM sync (degraded / no git).")
+            return [pscustomobject]@{
+                Ok = $true; Ran = $true; Conflict = $false; Blocked = $false
+                Reason = ""; SkippedInvalid = @(); Merged = $false; Seeded = $false
+                Warnings = @($warnings); WriteBack = $null
+            }
+        }
+        $vmStoreFiles = $vmStoreResult.Files
+        $seedOps = @()
+        foreach ($name in $localProfiles.Keys) {
+            if (-not $vmStoreFiles.ContainsKey($name)) {
+                # Canonicalize the content before seeding (D3).
+                $seedContent = $localProfiles[$name]
+                try {
+                    $seedObj = $seedContent | ConvertFrom-Json
+                    $seedCanon = ConvertTo-ConstructCanonicalJson -Name $name -Object $seedObj
+                    if ($null -ne $seedCanon) { $seedContent = $seedCanon }
+                } catch { }
+                $seedOps += @{
+                    Name = $name; Action = "write"; Content = $seedContent
+                    Expect = $null; ExpectAbsent = $true
+                }
+            }
+        }
+        $wb = $null
+        if ($seedOps.Count -gt 0) {
+            $wb = Write-ConstructVmStore -VmHost $VmHost -Ops $seedOps -SshInvoker $SshWriteInvoker
+        }
+        return [pscustomobject]@{
+            Ok = $true; Ran = $true; Conflict = $false; Blocked = $false
+            Reason = "degraded-no-git"; SkippedInvalid = @(); Merged = $false
+            Seeded = ($seedOps.Count -gt 0); Warnings = @($warnings)
+            WriteBack = $wb
+        }
+    }
+
+    # ── Ensure repo is initialised ────────────────────────────────────────────
+    $repoReady = Initialize-ConstructConfigRepo -ConfigDir $ConfigDir
+    if (-not $repoReady) {
+        $warnings.Add("Could not initialise config repo.")
+        return [pscustomobject]@{
+            Ok = $false; Ran = $false; Conflict = $false; Blocked = $false
+            Reason = "repo-init-failed"; SkippedInvalid = @(); Merged = $false
+            Seeded = $false; Warnings = @($warnings); WriteBack = $null
+        }
+    }
+
+    # ── Step 1: Check for ongoing merge/conflict ──────────────────────────────
+    $mergeHead = Join-Path $ConfigDir ".git/MERGE_HEAD"
+    if (Test-Path -LiteralPath $mergeHead) {
+        if ($AutoResolve) {
+            $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+            try {
+                & git -C $ConfigDir checkout "--$AutoResolve" -- . 2>$null | Out-Null
+                & git -C $ConfigDir add -A 2>$null | Out-Null
+            } catch { }
+            $ErrorActionPreference = $prev
+            # Post-merge validation gate (D7): even after AutoResolve, the
+            # merged content must validate before we commit. For a merge left
+            # uncommitted by the gate (clean line-merge into invalid JSON),
+            # checkout --ours/--theirs touches nothing if there are no
+            # unmerged paths, so the invalid merged content would be committed
+            # without this re-validation.
+            $autoGateOk = $true
+            $autoGateReason = ""
+            foreach ($af in @(Get-ChildItem -LiteralPath $projDir -Filter *.json -File -ErrorAction SilentlyContinue)) {
+                $abname = $af.BaseName
+                if ($script:RESERVED_PROFILE_NAMES -contains $abname.ToLowerInvariant()) { continue }
+                try {
+                    $araw = [System.IO.File]::ReadAllText($af.FullName, [System.Text.Encoding]::UTF8)
+                    $aobj = $araw | ConvertFrom-Json
+                    $av = Test-ConstructProfile -Name $abname -Object $aobj
+                    if (-not $av.Ok) {
+                        $autoGateOk = $false
+                        $autoGateReason = "Invalid merged profile '$abname' after auto-resolve: $($av.Errors -join '; ')"
+                    }
+                } catch {
+                    $autoGateOk = $false
+                    $autoGateReason = "Unparseable merged profile '$abname' after auto-resolve"
+                }
+            }
+            if ($autoGateOk) {
+                $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+                try {
+                    & git -C $ConfigDir @gitArgs commit -m "auto-resolve ($AutoResolve)" 2>$null | Out-Null
+                } catch { }
+                $ErrorActionPreference = $prev
+            }
+            if (Test-Path -LiteralPath $mergeHead) {
+                $reason = if (-not $autoGateOk) { $autoGateReason } else { "auto-resolve-failed" }
+                return [pscustomobject]@{
+                    Ok = $false; Ran = $false; Conflict = $true; Blocked = $true
+                    Reason = $reason; SkippedInvalid = @()
+                    Merged = $false; Seeded = $false; Warnings = @($warnings)
+                    WriteBack = $null
+                }
+            }
+        } else {
+            return [pscustomobject]@{
+                Ok = $false; Ran = $false; Conflict = $true; Blocked = $false
+                Reason = "merge-in-progress"; SkippedInvalid = @()
+                Merged = $false; Seeded = $false; Warnings = @($warnings)
+                WriteBack = $null
+            }
+        }
+    }
+
+    # ── Step 2: Commit host-side working-tree changes ─────────────────────────
+    $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+    try {
+        & git -C $ConfigDir add -A -- projects/ 2>$null | Out-Null
+        $diffIndex = & git -C $ConfigDir diff --cached --name-only 2>$null
+        if ($diffIndex) {
+            # Validate changed profile files before committing.
+            # Also exclude reserved names (D1/D5): default.json and
+            # project.schema.json must NEVER be tracked in the config repo.
+            $invalidPaths = @()
+            foreach ($d in @($diffIndex)) {
+                $d = "$d".Trim()
+                if (-not ($d -like 'projects/*.json')) { continue }
+                $bname = [System.IO.Path]::GetFileNameWithoutExtension([System.IO.Path]::GetFileName($d))
+                if ($script:RESERVED_PROFILE_NAMES -contains $bname.ToLowerInvariant()) {
+                    $invalidPaths += $d
+                    $warnings.Add("Reserved name '$bname' in projects/ (unstaged): NEVER tracked in the config repo.")
+                    continue
+                }
+                $fp = Join-Path $ConfigDir $d
+                if (-not (Test-Path -LiteralPath $fp)) { continue }   # deletions are ok
+                try {
+                    $raw = [System.IO.File]::ReadAllText($fp, [System.Text.Encoding]::UTF8)
+                    $obj = $raw | ConvertFrom-Json
+                    $v = Test-ConstructProfile -Name $bname -Object $obj
+                    if (-not $v.Ok) {
+                        $invalidPaths += $d
+                        $warnings.Add("Invalid host file $d (skipped commit): $($v.Errors -join '; ')")
+                    }
+                } catch {
+                    $invalidPaths += $d
+                    $warnings.Add("Unparseable host file $d (skipped commit): $($_.Exception.Message)")
+                }
+            }
+            foreach ($ip in $invalidPaths) {
+                & git -C $ConfigDir reset HEAD -- $ip 2>$null | Out-Null
+            }
+            # Re-check if anything is still staged.
+            $remaining = & git -C $ConfigDir diff --cached --name-only 2>$null
+            if ($remaining) {
+                & git -C $ConfigDir @gitArgs commit -m "host sync" 2>$null | Out-Null
+            }
+        }
+    } catch { }
+    $ErrorActionPreference = $prev
+
+    # ── Step 3: Read the VM store ─────────────────────────────────────────────
+    $vmStoreResult = Read-ConstructVmStore -VmHost $VmHost -SshInvoker $SshReadInvoker
+    if ($null -eq $vmStoreResult) {
+        $warnings.Add("VM unreachable; skipped VM side.")
+        return [pscustomobject]@{
+            Ok = $true; Ran = $true; Conflict = $false; Blocked = $false
+            Reason = ""; SkippedInvalid = @(); Merged = $false; Seeded = $false
+            Warnings = @($warnings); WriteBack = $null
+        }
+    }
+    $vmStore = $vmStoreResult.Files
+    $vmStoreDirExists = $vmStoreResult.StoreDirExists
+
+    # ── SeedOnly / fresh-VM path (D13) ────────────────────────────────────────
+    # D13 disambiguation: take the fresh-VM seed path when the VM store is empty
+    # AND (the store dir does not exist OR vm branch has 0 profiles OR -SeedOnly).
+    # Without the NOSTORE marker, a plain tick after a VM wipe would commit an
+    # empty vm snapshot and the merge would DELETE every host profile from main.
+    $vmStoreEmpty = $vmStore.Count -eq 0
+    if ($SeedOnly -or $vmStoreEmpty) {
+        $vmTreeEmpty = $true
+        $freshVm = $false
+
+        if (-not $vmStoreDirExists) {
+            # Store dir doesn't exist -> definitely a fresh/wiped VM.
+            $freshVm = $true
+        }
+
+        $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+        try {
+            $vmTreeFiles = & git -C $ConfigDir ls-tree --name-only vm -- projects/ 2>$null
+            if ($vmTreeFiles) { $vmTreeEmpty = $false }
+        } catch { }
+        $ErrorActionPreference = $prev
+
+        if (-not $freshVm -and $vmStoreEmpty -and ($vmTreeEmpty -or $SeedOnly)) {
+            $freshVm = $true
+        }
+
+        if ($freshVm) {
+            $seedOps = @()
+            foreach ($f in @(Get-ChildItem -LiteralPath $projDir -Filter *.json -File -ErrorAction SilentlyContinue)) {
+                $bname = $f.BaseName
+                if ($script:RESERVED_PROFILE_NAMES -contains $bname.ToLowerInvariant()) { continue }
+                try {
+                    $content = [System.IO.File]::ReadAllText($f.FullName, [System.Text.Encoding]::UTF8)
+                    # Canonicalize before seeding (D3).
+                    try {
+                        $seedObj2 = $content | ConvertFrom-Json
+                        $seedCanon2 = ConvertTo-ConstructCanonicalJson -Name $bname -Object $seedObj2
+                        if ($null -ne $seedCanon2) { $content = $seedCanon2 }
+                    } catch { }
+                    $seedOps += @{
+                        Name = $bname; Action = "write"; Content = $content
+                        Expect = $null; ExpectAbsent = $true
+                    }
+                } catch { }
+            }
+            $wb = $null
+            if ($seedOps.Count -gt 0) {
+                $wb = Write-ConstructVmStore -VmHost $VmHost -Ops $seedOps -SshInvoker $SshWriteInvoker
+            }
+            # Advance vm ref to main so the next tick starts from a common base.
+            $prev2 = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+            try {
+                & git -C $ConfigDir update-ref refs/heads/vm refs/heads/main 2>$null | Out-Null
+            } catch { }
+            $ErrorActionPreference = $prev2
+            return [pscustomobject]@{
+                Ok = $true; Ran = $true; Conflict = $false; Blocked = $false
+                Reason = ""; SkippedInvalid = @(); Merged = $false
+                Seeded = $true; Warnings = @($warnings); WriteBack = $wb
+            }
+        }
+    }
+
+    # ── Step 4/5: Validate VM files and commit VM snapshot ────────────────────
+    $validVm = @{}
+    foreach ($name in @($vmStore.Keys)) {
+        $lower = "$name".ToLowerInvariant()
+        if ($script:RESERVED_PROFILE_NAMES -contains $lower) {
+            $warnings.Add("Reserved name '$name' in VM store; skipped.")
+            continue
+        }
+        try {
+            $obj = $vmStore[$name] | ConvertFrom-Json
+            $v = Test-ConstructProfile -Name $name -Object $obj
+            if (-not $v.Ok) {
+                $skippedInvalid += @{ Name = $name; Reason = ($v.Errors -join '; ') }
+                $warnings.Add("Invalid VM file '$name': $($v.Errors -join '; ')")
+                continue
+            }
+            $validVm[$name] = $vmStore[$name]
+        } catch {
+            $skippedInvalid += @{ Name = $name; Reason = "Unparseable JSON" }
+            $warnings.Add("Unparseable VM file '$name'.")
+        }
+    }
+
+    # Temp-index VM commit (D6 step 5).
+    $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+    $vmCommitted = $false
+    try {
+        $tmpIndex = Join-Path ([System.IO.Path]::GetTempPath()) ("construct-idx-" + [guid]::NewGuid().ToString("N"))
+        $savedIndex = $env:GIT_INDEX_FILE
+        try {
+            $env:GIT_INDEX_FILE = $tmpIndex
+            & git -C $ConfigDir read-tree vm 2>$null | Out-Null
+
+            # Names read from the VM but SKIPPED (invalid) or RESERVED must NOT be
+            # read as deletions: an invalid file is skipped and 'never enters the
+            # repo' (spec section 6.2), so the vm branch keeps its last agreed-valid
+            # copy for that name rather than committing a spurious deletion that the
+            # merge would propagate to main and wipe a previously-synced profile.
+            # Only names genuinely absent from the VM read are deletions.
+            $preserveNames = @{}
+            foreach ($si in $skippedInvalid) { $preserveNames[$si.Name] = $true }
+            foreach ($name in @($vmStore.Keys)) {
+                if ($script:RESERVED_PROFILE_NAMES -contains ("$name".ToLowerInvariant())) { $preserveNames[$name] = $true }
+            }
+
+            # Remove projects/* entries from the temp index EXCEPT the preserved ones,
+            # so the tree is rebuilt from the fresh VM read without losing skipped names.
+            $existingEntries = & git -C $ConfigDir ls-files --cached -- "projects/" 2>$null
+            if ($existingEntries) {
+                foreach ($entry in @($existingEntries)) {
+                    $base = "$entry".Substring("projects/".Length)
+                    if ($base.EndsWith(".json")) { $entryName = $base.Substring(0, $base.Length - 5) } else { $entryName = $base }
+                    if ($preserveNames.ContainsKey($entryName)) { continue }
+                    & git -C $ConfigDir update-index --force-remove -- "$entry" 2>$null | Out-Null
+                }
+            }
+
+            # Add valid VM files. Each file is canonicalized (D3 'canonical JSON
+            # everywhere') before being committed to the vm branch, keeping the
+            # raw-bytes guard expect (write-back uses the RAW bytes read this tick).
+            foreach ($name in $validVm.Keys) {
+                $rawContent = $validVm[$name]
+                # Canonicalize: parse, sanitize+serialize to the canonical byte form.
+                $canonContent = $rawContent
+                try {
+                    $vmObj = $rawContent | ConvertFrom-Json
+                    $canon = ConvertTo-ConstructCanonicalJson -Name $name -Object $vmObj
+                    if ($null -ne $canon) { $canonContent = $canon }
+                } catch { }   # if parse fails, use raw (the validator already accepted it)
+                $contentBytes = [System.Text.Encoding]::UTF8.GetBytes($canonContent)
+                # Write blob via a temp file (piping to --stdin is unreliable across PS versions).
+                $tmpFile = Join-Path ([System.IO.Path]::GetTempPath()) ("construct-blob-" + [guid]::NewGuid().ToString("N"))
+                [System.IO.File]::WriteAllBytes($tmpFile, $contentBytes)
+                $sha = & git -C $ConfigDir hash-object -w $tmpFile 2>$null
+                Remove-Item -LiteralPath $tmpFile -Force -ErrorAction SilentlyContinue
+                if ($sha) {
+                    $sha = "$sha".Trim()
+                    & git -C $ConfigDir update-index --add --cacheinfo "100644,$sha,projects/$name.json" 2>$null | Out-Null
+                }
+            }
+
+            $newTree = (& git -C $ConfigDir write-tree 2>$null)
+            if ($newTree) {
+                $newTree = "$newTree".Trim()
+                # Restore the real index before comparing trees (rev-parse reads .git, not the index).
+                $vmTipTree = $null
+                $origIdx = $env:GIT_INDEX_FILE
+                if ($null -eq $savedIndex) {
+                    Remove-Item Env:\GIT_INDEX_FILE -ErrorAction SilentlyContinue
+                } else {
+                    $env:GIT_INDEX_FILE = $savedIndex
+                }
+                $vmTipTree = (& git -C $ConfigDir rev-parse "vm^{tree}" 2>$null)
+                $env:GIT_INDEX_FILE = $origIdx
+                if ($vmTipTree) { $vmTipTree = "$vmTipTree".Trim() }
+                if ($newTree -ne $vmTipTree) {
+                    $vmTip = $null
+                    $origIdx2 = $env:GIT_INDEX_FILE
+                    if ($null -eq $savedIndex) {
+                        Remove-Item Env:\GIT_INDEX_FILE -ErrorAction SilentlyContinue
+                    } else {
+                        $env:GIT_INDEX_FILE = $savedIndex
+                    }
+                    $vmTip = (& git -C $ConfigDir rev-parse vm 2>$null)
+                    $env:GIT_INDEX_FILE = $origIdx2
+                    if ($vmTip) { $vmTip = "$vmTip".Trim() }
+                    $newCommit = (& git -C $ConfigDir @gitArgs commit-tree $newTree -p $vmTip -m "vm sync" 2>$null)
+                    if ($newCommit) {
+                        $newCommit = "$newCommit".Trim()
+                        & git -C $ConfigDir update-ref refs/heads/vm $newCommit 2>$null | Out-Null
+                        $vmCommitted = $true
+                    }
+                }
+            }
+        } finally {
+            if ($null -eq $savedIndex) {
+                Remove-Item Env:\GIT_INDEX_FILE -ErrorAction SilentlyContinue
+            } else {
+                $env:GIT_INDEX_FILE = $savedIndex
+            }
+            if (Test-Path -LiteralPath $tmpIndex) {
+                Remove-Item -LiteralPath $tmpIndex -Force -ErrorAction SilentlyContinue
+            }
+        }
+    } catch {
+        $warnings.Add("VM commit failed: $($_.Exception.Message)")
+    }
+    $ErrorActionPreference = $prev
+
+    # ── Step 6: Merge vm into main ────────────────────────────────────────────
+    $merged = $false
+    $conflict = $false
+    $blocked = $false
+    $blockedReason = ""
+    $needsMerge = $true
+
+    $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+    try {
+        $mainTree = (& git -C $ConfigDir rev-parse "main^{tree}" 2>$null)
+        $vmTree   = (& git -C $ConfigDir rev-parse "vm^{tree}" 2>$null)
+        if ($mainTree) { $mainTree = "$mainTree".Trim() }
+        if ($vmTree)   { $vmTree   = "$vmTree".Trim() }
+
+        if ($mainTree -eq $vmTree) { $needsMerge = $false }
+        if ($needsMerge) {
+            & git -C $ConfigDir merge-base --is-ancestor vm main 2>$null
+            if ($LASTEXITCODE -eq 0) { $needsMerge = $false }
+        }
+
+        if ($needsMerge) {
+            & git -C $ConfigDir merge --no-ff --no-commit vm 2>$null | Out-Null
+            $mergeExitCode = $LASTEXITCODE
+
+            if ($mergeExitCode -ne 0) {
+                $conflictFiles = @(& git -C $ConfigDir diff --name-only --diff-filter=U 2>$null)
+                if ($conflictFiles.Count -gt 0) {
+                    if ($AutoResolve) {
+                        & git -C $ConfigDir checkout "--$AutoResolve" -- . 2>$null | Out-Null
+                        & git -C $ConfigDir add -A 2>$null | Out-Null
+                    } else {
+                        $conflict = $true
+                    }
+                }
+            }
+
+            if (-not $conflict) {
+                # Post-merge validation gate.
+                $gateOk = $true
+                $gateReason = ""
+                foreach ($f in @(Get-ChildItem -LiteralPath $projDir -Filter *.json -File -ErrorAction SilentlyContinue)) {
+                    $bname = $f.BaseName
+                    if ($script:RESERVED_PROFILE_NAMES -contains $bname.ToLowerInvariant()) { continue }
+                    try {
+                        $raw = [System.IO.File]::ReadAllText($f.FullName, [System.Text.Encoding]::UTF8)
+                        $obj = $raw | ConvertFrom-Json
+                        $v = Test-ConstructProfile -Name $bname -Object $obj
+                        if (-not $v.Ok) {
+                            $gateOk = $false
+                            $gateReason = "Invalid merged profile '$bname': $($v.Errors -join '; ')"
+                        }
+                    } catch {
+                        $gateOk = $false
+                        $gateReason = "Unparseable merged profile '$bname'"
+                    }
+                }
+                if ($gateOk) {
+                    & git -C $ConfigDir @gitArgs commit -m "merge vm" 2>$null | Out-Null
+                    $merged = $true
+                } else {
+                    $blocked = $true
+                    $blockedReason = $gateReason
+                }
+            }
+        }
+    } catch {
+        $warnings.Add("Merge step failed: $($_.Exception.Message)")
+    }
+    $ErrorActionPreference = $prev
+
+    if ($conflict -or $blocked) {
+        return [pscustomobject]@{
+            Ok = (-not $conflict -and -not $blocked); Ran = $true
+            Conflict = $conflict; Blocked = $blocked
+            Reason = $(if ($blocked) { $blockedReason } else { "conflict" })
+            SkippedInvalid = $skippedInvalid; Merged = $false; Seeded = $false
+            Warnings = @($warnings); WriteBack = $null
+        }
+    }
+
+    # ── Step 7: Guarded write-back ────────────────────────────────────────────
+    # Build a set of VM names that were skipped as invalid or reserved (D6.4):
+    # these must NOT be written to or deleted on the VM store — invalid files
+    # are SKIPPED with a warning, not destroyed.
+    $skippedVmNames = @{}
+    foreach ($si in $skippedInvalid) { $skippedVmNames[$si.Name] = $true }
+    foreach ($name in @($vmStore.Keys)) {
+        if ($script:RESERVED_PROFILE_NAMES -contains "$name".ToLowerInvariant()) {
+            $skippedVmNames[$name] = $true
+        }
+    }
+
+    $mainFiles = @{}
+    foreach ($f in @(Get-ChildItem -LiteralPath $projDir -Filter *.json -File -ErrorAction SilentlyContinue)) {
+        $bname = $f.BaseName
+        if ($script:RESERVED_PROFILE_NAMES -contains $bname.ToLowerInvariant()) { continue }
+        try {
+            $mainFiles[$bname] = [System.IO.File]::ReadAllText($f.FullName, [System.Text.Encoding]::UTF8)
+        } catch { }
+    }
+
+    $writeOps = @()
+    foreach ($name in $mainFiles.Keys) {
+        if ($skippedVmNames.ContainsKey($name)) { continue }
+        $mainContent = $mainFiles[$name]
+        $vmContent = if ($vmStore.ContainsKey($name)) { $vmStore[$name] } else { $null }
+        if ($mainContent -ne $vmContent) {
+            if ($null -ne $vmContent) {
+                $expectB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($vmContent))
+                $writeOps += @{
+                    Name = $name; Action = "write"; Content = $mainContent
+                    Expect = $expectB64; ExpectAbsent = $false
+                }
+            } else {
+                $writeOps += @{
+                    Name = $name; Action = "write"; Content = $mainContent
+                    Expect = $null; ExpectAbsent = $true
+                }
+            }
+        }
+    }
+    foreach ($name in @($vmStore.Keys)) {
+        if ($skippedVmNames.ContainsKey($name)) { continue }
+        if (-not $mainFiles.ContainsKey($name)) {
+            $expectB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($vmStore[$name]))
+            $writeOps += @{
+                Name = $name; Action = "delete"; Expect = $expectB64; ExpectAbsent = $false
+            }
+        }
+    }
+
+    $wb = $null
+    if ($writeOps.Count -gt 0) {
+        $wb = Write-ConstructVmStore -VmHost $VmHost -Ops $writeOps -SshInvoker $SshWriteInvoker
+    }
+
+    # ── Step 8: Advance vm ref (D6.8) ───────────────────────────────────────────
+    # Advance vm to main ONLY when the merge committed AND write-back actually
+    # ran successfully (writeOps empty means nothing to write = success; or
+    # Write-ConstructVmStore returned non-null). Without this guard, a failed
+    # write-back causes the next tick to re-read the stale VM content as a
+    # fresh vm-side change, silently reverting the host's committed edit.
+    $writeBackRan = ($writeOps.Count -eq 0) -or ($null -ne $wb)
+    if (($merged -or -not $needsMerge) -and $writeBackRan) {
+        $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+        try {
+            & git -C $ConfigDir update-ref refs/heads/vm refs/heads/main 2>$null | Out-Null
+        } catch { }
+        $ErrorActionPreference = $prev
+    }
+
+    return [pscustomobject]@{
+        Ok = $true; Ran = $true; Conflict = $false; Blocked = $false
+        Reason = ""; SkippedInvalid = $skippedInvalid; Merged = $merged
+        Seeded = $false; Warnings = @($warnings); WriteBack = $wb
+    }
+}
+
+# ── Import from remote config repo / local dir ──────────────────────────────
+
+function Update-ConstructStagingClone {
+    <#
+        Clone (or fetch + hard-reset) a remote config repo into the D2 staging
+        cache: <LOCALAPPDATA||TEMP>\The-Construct\cache\config-remotes\<slug>.
+        -NoFetch skips the network round-trip when the clone already exists
+        (used by the per-candidate interactive import, which refreshes once
+        up front). Returns the clone directory path; throws when the clone
+        cannot be created.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$SourceRepo,
+        [switch]$NoFetch
+    )
+
+    $cacheBase = $null
+    if ($env:LOCALAPPDATA) { $cacheBase = $env:LOCALAPPDATA }
+    elseif ($env:TEMP) { $cacheBase = $env:TEMP }
+    else { $cacheBase = [System.IO.Path]::GetTempPath() }
+    $stagingRoot = Join-Path (Join-Path $cacheBase "The-Construct") "cache/config-remotes"
+    # Slug: replace non-alnum/dot/dash/underscore with - (same rule as JS).
+    $slug = ($SourceRepo -replace '[^A-Za-z0-9._-]', '-')
+    $cloneDir = Join-Path $stagingRoot $slug
+
+    # Fail CLOSED: a fetch/reset that fails must NOT silently fall back to stale
+    # cached content (which could import an out-of-date profile). Every git step
+    # is checked via $LASTEXITCODE and any failure throws — the caller then aborts
+    # the import rather than proceeding with the old clone. -NoFetch is the only
+    # sanctioned way to reuse an existing clone without a network round-trip.
+    $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+    $err = $null
+    try {
+        if (Test-Path -LiteralPath (Join-Path $cloneDir ".git")) {
+            if (-not $NoFetch) {
+                & git -C $cloneDir fetch origin 2>$null | Out-Null
+                if ($LASTEXITCODE -ne 0) { throw "git fetch failed for config repo '$SourceRepo'." }
+                $defaultBranch = & git -C $cloneDir symbolic-ref refs/remotes/origin/HEAD 2>$null
+                if ($LASTEXITCODE -ne 0 -or -not $defaultBranch) { $defaultBranch = "refs/remotes/origin/main" }
+                $defaultBranch = "$defaultBranch".Trim()
+                & git -C $cloneDir reset --hard $defaultBranch 2>$null | Out-Null
+                if ($LASTEXITCODE -ne 0) { throw "git reset --hard '$defaultBranch' failed for config repo '$SourceRepo'." }
+            }
+        } else {
+            if (-not (Test-Path -LiteralPath $stagingRoot)) {
+                New-Item -ItemType Directory -Path $stagingRoot -Force | Out-Null
+            }
+            & git clone $SourceRepo $cloneDir 2>$null | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "git clone failed for config repo '$SourceRepo'." }
+        }
+    } catch {
+        $err = $_.Exception.Message
+    }
+    $ErrorActionPreference = $prev
+
+    if ($err) { throw $err }
+    if (-not (Test-Path -LiteralPath (Join-Path $cloneDir ".git"))) {
+        throw "Failed to clone/fetch config repo '$SourceRepo'."
+    }
+    return $cloneDir
+}
+
+function Get-ConstructImportCandidates {
+    <#
+        D16 candidate discovery: files matching projects/*.json when that
+        subdir exists, else top-level *.json; reserved names and *.sample
+        always excluded. Returns FileInfo objects (may be empty).
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$SourceDir)
+
+    $scanDir = $SourceDir
+    $srcProjDir = Join-Path $SourceDir "projects"
+    if (Test-Path -LiteralPath $srcProjDir) { $scanDir = $srcProjDir }
+    return @(Get-ChildItem -LiteralPath $scanDir -Filter *.json -File -ErrorAction SilentlyContinue |
+             Where-Object { $script:RESERVED_PROFILE_NAMES -notcontains $_.BaseName.ToLowerInvariant() -and
+                            $_.BaseName -notlike '*.sample' })
+}
+
+function Register-ConstructConfigRemote {
+    <#
+        Record a linked remote config repo in manifest/remotes.json
+        ([{url}, ...], D1). Idempotent: an already-present URL is a no-op.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ConfigDir,
+        [Parameter(Mandatory)][string]$RemoteUrl
+    )
+
+    $manifDir = Join-Path $ConfigDir "manifest"
+    if (-not (Test-Path -LiteralPath $manifDir)) {
+        New-Item -ItemType Directory -Path $manifDir -Force | Out-Null
+    }
+    $remotesFile = Join-Path $manifDir "remotes.json"
+    $remotes = @()
+    if (Test-Path -LiteralPath $remotesFile) {
+        try { $remotes = @((Get-Content -LiteralPath $remotesFile -Raw | ConvertFrom-Json)) } catch { $remotes = @() }
+    }
+    foreach ($r in $remotes) {
+        if ($r.url -eq $RemoteUrl) { return }
+    }
+    $remotes += [pscustomobject]@{ url = $RemoteUrl }
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    $json = ConvertTo-ConstructJsonValue -Value $remotes -Depth 0
+    [System.IO.File]::WriteAllText($remotesFile, "$json`n", $utf8NoBom)
+}
+
+function Test-ConstructRenameTarget {
+    <#
+        Validate a proposed rename target for an interactive import collision
+        (D17): the new name must be non-empty and filename-safe, must not be a
+        reserved name (default / project.schema -- D1/D5: never written, never
+        committed), and projects/<NewName>.json must not already exist -- an
+        import never silently overwrites. The one exception: when the existing
+        file is a SAME-PROVENANCE import (manifest remoteUrl + pathInRemote
+        both match), the rename is an update of our own earlier import, not an
+        overwrite. Returns @{Ok:[bool]; Reason:[string]}.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ConfigDir,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$NewName,
+        [string]$RemoteUrl,
+        [string]$PathInRemote
+    )
+
+    $nm = "$NewName".Trim()
+    if (-not $nm) {
+        return [pscustomobject]@{ Ok = $false; Reason = "Profile name must be non-empty." }
+    }
+    if ($nm -match '[\\/:*?"<>|]' -or $nm -match '[\x00-\x1f]') {
+        return [pscustomobject]@{ Ok = $false; Reason = "Profile name '$nm' contains filename-unsafe characters." }
+    }
+    if ($script:RESERVED_PROFILE_NAMES -contains $nm.ToLowerInvariant()) {
+        return [pscustomobject]@{ Ok = $false; Reason = "'$nm' is a reserved name -- choose another." }
+    }
+    $destFile = Join-Path (Join-Path $ConfigDir "projects") "$nm.json"
+    if (Test-Path -LiteralPath $destFile) {
+        # Allowed only as a same-provenance update (manifest matches).
+        if ($RemoteUrl) {
+            $manifFile = Join-Path (Join-Path $ConfigDir "manifest") "$nm.json"
+            if (Test-Path -LiteralPath $manifFile) {
+                try {
+                    $manifObj = Get-Content -LiteralPath $manifFile -Raw | ConvertFrom-Json
+                    if ($manifObj.remoteUrl -eq $RemoteUrl -and $manifObj.pathInRemote -eq $PathInRemote) {
+                        return [pscustomobject]@{ Ok = $true; Reason = "" }
+                    }
+                } catch { }
+            }
+        }
+        return [pscustomobject]@{ Ok = $false; Reason = "A profile named '$nm' already exists -- choose another." }
+    }
+    return [pscustomobject]@{ Ok = $true; Reason = "" }
+}
+
+function Import-ConstructConfigAs {
+    <#
+        Import ONE upstream profile file under a DIFFERENT local name (the
+        interactive rename path of D17). Validates the target name first via
+        Test-ConstructRenameTarget (reserved names refused, existing files
+        never silently overwritten), injects the new name, runs the
+        validate + canonicalize gate, writes projects/ + manifest/ + bases/,
+        and commits. Returns @{Ok:[bool]; Name:[string]; Error:[string]}.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ConfigDir,
+        [Parameter(Mandatory)][string]$SourceFile,
+        [Parameter(Mandatory)][string]$NewName,
+        [string]$RemoteUrl,
+        [string]$PathInRemote,
+        [string]$CloneDir
+    )
+
+    $nm = "$NewName".Trim()
+    $tv = Test-ConstructRenameTarget -ConfigDir $ConfigDir -NewName $nm -RemoteUrl $RemoteUrl -PathInRemote $PathInRemote
+    if (-not $tv.Ok) {
+        return [pscustomobject]@{ Ok = $false; Name = $nm; Error = $tv.Reason }
+    }
+    if (-not (Test-Path -LiteralPath $SourceFile)) {
+        return [pscustomobject]@{ Ok = $false; Name = $nm; Error = "Source file '$SourceFile' not found." }
+    }
+
+    $projDir  = Join-Path $ConfigDir "projects"
+    $manifDir = Join-Path $ConfigDir "manifest"
+    $basesDir = Join-Path $ConfigDir "bases"
+    foreach ($d in @($projDir, $manifDir, $basesDir)) {
+        if (-not (Test-Path -LiteralPath $d)) {
+            New-Item -ItemType Directory -Path $d -Force | Out-Null
+        }
+    }
+
+    try {
+        $raw = [System.IO.File]::ReadAllText($SourceFile, [System.Text.Encoding]::UTF8)
+        $obj = $raw | ConvertFrom-Json
+    } catch {
+        return [pscustomobject]@{ Ok = $false; Name = $nm; Error = "Cannot parse '$SourceFile': $($_.Exception.Message)" }
+    }
+
+    # Inject the new name, then run the D17 validate + canonicalize gate.
+    if ($obj -isnot [pscustomobject]) {
+        return [pscustomobject]@{ Ok = $false; Name = $nm; Error = "'$SourceFile' is not a JSON object." }
+    }
+    if ($obj.PSObject.Properties.Name -contains 'name') { $obj.name = $nm }
+    else { $obj | Add-Member -NotePropertyName 'name' -NotePropertyValue $nm -Force }
+
+    $v = Test-ConstructProfile -Name $nm -Object $obj
+    if (-not $v.Ok) {
+        return [pscustomobject]@{ Ok = $false; Name = $nm; Error = "Invalid profile: $($v.Errors -join '; ')" }
+    }
+    $canonical = ConvertTo-ConstructCanonicalJson -Name $nm -Object $obj
+    if ($null -eq $canonical) {
+        return [pscustomobject]@{ Ok = $false; Name = $nm; Error = "Could not canonicalize '$nm'." }
+    }
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText((Join-Path $projDir "$nm.json"), $canonical, $utf8NoBom)
+
+    if ($RemoteUrl) {
+        # Provenance (D1): ref + baseCommit + baseBlobSha from the staging clone.
+        $manifRef = ""; $manifBaseCommit = ""; $manifBaseBlobSha = ""
+        $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+        try {
+            if ($CloneDir -and (Test-Path -LiteralPath (Join-Path $CloneDir ".git"))) {
+                $manifBaseCommit = "$(& git -C $CloneDir rev-parse HEAD 2>$null)".Trim()
+                $rawRef = "$(& git -C $CloneDir symbolic-ref --short HEAD 2>$null)".Trim()
+                if ($rawRef) { $manifRef = $rawRef }
+                $manifBaseBlobSha = "$(& git -C $CloneDir hash-object -- $SourceFile 2>$null)".Trim()
+            }
+        } catch { }
+        $ErrorActionPreference = $prev
+
+        $manifEntry = [ordered]@{
+            remoteUrl    = $RemoteUrl
+            ref          = $manifRef
+            pathInRemote = $PathInRemote
+            importedAs   = $nm
+            baseCommit   = $manifBaseCommit
+            baseBlobSha  = $manifBaseBlobSha
+        }
+        $manifJson = ConvertTo-ConstructJsonValue -Value ([pscustomobject]$manifEntry) -Depth 0
+        [System.IO.File]::WriteAllText((Join-Path $manifDir "$nm.json"), "$manifJson`n", $utf8NoBom)
+        [System.IO.File]::WriteAllText((Join-Path $basesDir "$nm.json"), $canonical, $utf8NoBom)
+    }
+
+    if (Test-ConstructGitAvailable) {
+        $srcBase = [System.IO.Path]::GetFileNameWithoutExtension($SourceFile)
+        $gitArgs = @("-c", "user.name=The Construct", "-c", "user.email=construct@construct.local")
+        $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+        try {
+            & git -C $ConfigDir add -A 2>$null | Out-Null
+            & git -C $ConfigDir @gitArgs commit -m "import: $nm (renamed from $srcBase)" 2>$null | Out-Null
+        } catch { }
+        $ErrorActionPreference = $prev
+    }
+
+    return [pscustomobject]@{ Ok = $true; Name = $nm; Error = "" }
+}
+
+function Import-ConstructConfigs {
+    <#
+        Import project profiles from a remote git repo or a local directory into
+        the config store. D16 discovery: files matching projects/*.json if that
+        subdir exists, else top-level *.json; always exclude reserved names and
+        *.sample. CLI collisions THROW. Returns @{Imported; Errors}.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ConfigDir,
+        [string]$SourceRepo,
+        [string]$SourceDir,
+        [string[]]$Names,
+        [switch]$NoFetch
+    )
+
+    $projDir  = Join-Path $ConfigDir "projects"
+    $manifDir = Join-Path $ConfigDir "manifest"
+    $basesDir = Join-Path $ConfigDir "bases"
+    foreach ($d in @($projDir, $manifDir, $basesDir)) {
+        if (-not (Test-Path -LiteralPath $d)) {
+            New-Item -ItemType Directory -Path $d -Force | Out-Null
+        }
+    }
+
+    $srcDir = $null
+    $remoteUrl = $null
+
+    if ($SourceRepo) {
+        $remoteUrl = $SourceRepo
+        # Clone/fetch to the D2 staging cache.
+        $srcDir = Update-ConstructStagingClone -SourceRepo $SourceRepo -NoFetch:$NoFetch
+    } elseif ($SourceDir) {
+        if (-not (Test-Path -LiteralPath $SourceDir)) {
+            throw "Source directory '$SourceDir' does not exist."
+        }
+        $srcDir = $SourceDir
+    } else {
+        throw "Either -SourceRepo or -SourceDir must be specified."
+    }
+
+    # D16 candidate discovery.
+    $candidates = @(Get-ConstructImportCandidates -SourceDir $srcDir)
+
+    if ($Names -and $Names.Count -gt 0) {
+        $candidates = @($candidates | Where-Object { $Names -contains $_.BaseName })
+    }
+
+    $imported = @()
+    $errors   = @()
+
+    foreach ($f in $candidates) {
+        $name = $f.BaseName
+
+        try {
+            $raw = [System.IO.File]::ReadAllText($f.FullName, [System.Text.Encoding]::UTF8)
+            $obj = $raw | ConvertFrom-Json
+        } catch {
+            $errors += "Cannot parse '$($f.Name)': $($_.Exception.Message)"
+            continue
+        }
+
+        $v = Test-ConstructProfile -Name $name -Object $obj
+        if (-not $v.Ok) {
+            $errors += "Invalid profile '$name': $($v.Errors -join '; ')"
+            continue
+        }
+
+        $canonical = ConvertTo-ConstructCanonicalJson -Name $name -Object $obj
+        if ($null -eq $canonical) {
+            $errors += "Could not canonicalize '$name'."
+            continue
+        }
+
+        $destFile  = Join-Path $projDir "$name.json"
+        $manifFile = Join-Path $manifDir "$name.json"
+        $baseFile  = Join-Path $basesDir "$name.json"
+
+        if (Test-Path -LiteralPath $destFile) {
+            $hasManifest = Test-Path -LiteralPath $manifFile
+            if ($hasManifest -and $remoteUrl) {
+                try {
+                    $manifObj = Get-Content -LiteralPath $manifFile -Raw | ConvertFrom-Json
+                    if ($manifObj.remoteUrl -eq $remoteUrl) {
+                        # 3-way merge: base = stored base, ours = local, theirs = upstream.
+                        $baseContent = ""
+                        if (Test-Path -LiteralPath $baseFile) {
+                            $baseContent = [System.IO.File]::ReadAllText($baseFile, [System.Text.Encoding]::UTF8)
+                        }
+                        $oursContent = [System.IO.File]::ReadAllText($destFile, [System.Text.Encoding]::UTF8)
+                        $theirsContent = $canonical
+
+                        $tmpOurs   = Join-Path ([System.IO.Path]::GetTempPath()) ("merge-ours-" + [guid]::NewGuid().ToString("N"))
+                        $tmpBase   = Join-Path ([System.IO.Path]::GetTempPath()) ("merge-base-" + [guid]::NewGuid().ToString("N"))
+                        $tmpTheirs = Join-Path ([System.IO.Path]::GetTempPath()) ("merge-theirs-" + [guid]::NewGuid().ToString("N"))
+                        $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+                        [System.IO.File]::WriteAllText($tmpOurs, $oursContent, $utf8NoBom)
+                        [System.IO.File]::WriteAllText($tmpBase, $baseContent, $utf8NoBom)
+                        [System.IO.File]::WriteAllText($tmpTheirs, $theirsContent, $utf8NoBom)
+
+                        $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+                        $mergedContent = & git merge-file -p $tmpOurs $tmpBase $tmpTheirs 2>$null
+                        $mergeResult = $LASTEXITCODE
+                        $ErrorActionPreference = $prev
+
+                        Remove-Item -LiteralPath $tmpOurs, $tmpBase, $tmpTheirs -Force -ErrorAction SilentlyContinue
+
+                        if ($mergeResult -eq 0 -or $mergeResult -eq $null) {
+                            # Pipeline capture of 'git merge-file -p' drops the
+                            # trailing LF, so restore it. Then run the D17
+                            # canonical+validate gate: parse, validate, re-serialize.
+                            $mergedStr = if ($mergedContent) { ($mergedContent -join "`n") } else { $oursContent }
+                            if ($mergedStr -and -not $mergedStr.EndsWith("`n")) {
+                                $mergedStr = "$mergedStr`n"
+                            }
+                            # D17 gate: merged text must parse, validate, and
+                            # re-canonicalize; otherwise treat as conflict.
+                            $mergeGateOk = $false
+                            try {
+                                $mergedObj = $mergedStr | ConvertFrom-Json
+                                $mergedV = Test-ConstructProfile -Name $name -Object $mergedObj
+                                if ($mergedV.Ok) {
+                                    $mergedCanon = ConvertTo-ConstructCanonicalJson -Name $name -Object $mergedObj
+                                    if ($null -ne $mergedCanon) {
+                                        $mergedStr = $mergedCanon
+                                        $mergeGateOk = $true
+                                    }
+                                }
+                            } catch { }
+                            if (-not $mergeGateOk) {
+                                $errors += "3-way merge for '$name' produced invalid JSON; treat as conflict."
+                                continue
+                            }
+                            [System.IO.File]::WriteAllText($destFile, $mergedStr, $utf8NoBom)
+                        } else {
+                            $errors += "3-way merge conflict for '$name'; resolve manually."
+                            continue
+                        }
+                    } else {
+                        throw "Name collision: '$name' exists with different provenance (existing: $($manifObj.remoteUrl), import: $remoteUrl)."
+                    }
+                } catch {
+                    if ($_.Exception.Message -match "Name collision") { throw }
+                    $errors += "Failed to process manifest for '$name': $($_.Exception.Message)"
+                    continue
+                }
+            } else {
+                throw "Name collision: a profile named '$name' already exists. Rename one to avoid ambiguity (suggestion: '$name-2')."
+            }
+        } else {
+            $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+            [System.IO.File]::WriteAllText($destFile, $canonical, $utf8NoBom)
+        }
+
+        # Write/update provenance manifest + base.
+        if ($remoteUrl) {
+            $relPath = if (Test-Path -LiteralPath (Join-Path $srcDir "projects")) {
+                "projects/$($f.Name)"
+            } else { $f.Name }
+
+            # Full D1 provenance: ref, baseCommit (staging clone HEAD sha),
+            # baseBlobSha (git hash-object of the imported blob).
+            $manifRef = ""
+            $manifBaseCommit = ""
+            $manifBaseBlobSha = ""
+            $prev2 = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+            try {
+                if ($null -ne $srcDir -and (Test-Path -LiteralPath (Join-Path $srcDir ".git"))) {
+                    $manifBaseCommit = "$(& git -C $srcDir rev-parse HEAD 2>$null)".Trim()
+                    $rawRef = "$(& git -C $srcDir symbolic-ref --short HEAD 2>$null)".Trim()
+                    if ($rawRef) { $manifRef = $rawRef }
+                    $manifBaseBlobSha = "$(& git -C $srcDir hash-object -- $f.FullName 2>$null)".Trim()
+                }
+            } catch { }
+            $ErrorActionPreference = $prev2
+
+            $manifEntry = [ordered]@{
+                remoteUrl    = $remoteUrl
+                ref          = $manifRef
+                pathInRemote = $relPath
+                importedAs   = $name
+                baseCommit   = $manifBaseCommit
+                baseBlobSha  = $manifBaseBlobSha
+            }
+            $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+            $manifJson = ConvertTo-ConstructJsonValue -Value ([pscustomobject]$manifEntry) -Depth 0
+            [System.IO.File]::WriteAllText($manifFile, "$manifJson`n", $utf8NoBom)
+            [System.IO.File]::WriteAllText($baseFile, $canonical, $utf8NoBom)
+        }
+
+        $imported += $name
+    }
+
+    # Commit the import.
+    if ($imported.Count -gt 0 -and (Test-ConstructGitAvailable)) {
+        $gitArgs = @("-c", "user.name=The Construct", "-c", "user.email=construct@construct.local")
+        $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+        try {
+            & git -C $ConfigDir add -A 2>$null | Out-Null
+            & git -C $ConfigDir @gitArgs commit -m "import: $($imported -join ', ')" 2>$null | Out-Null
+        } catch { }
+        $ErrorActionPreference = $prev
+    }
+
+    # Write/update remotes manifest.
+    if ($remoteUrl) {
+        Register-ConstructConfigRemote -ConfigDir $ConfigDir -RemoteUrl $remoteUrl
+    }
+
+    return [pscustomobject]@{
+        Imported = $imported
+        Errors   = $errors
+    }
+}
+
+# ── Push upstream ────────────────────────────────────────────────────────────
+
+function Push-ConstructConfigUpstream {
+    <#
+        Per-remote push-back (D19): copy local versions of tracked files into the
+        staging clone at their pathInRemote, commit on a timestamped branch, push.
+        Returns @{Ok; Branch; Output}.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ConfigDir,
+        [Parameter(Mandatory)][string]$RemoteUrl
+    )
+
+    $manifDir = Join-Path $ConfigDir "manifest"
+    $projDir  = Join-Path $ConfigDir "projects"
+
+    $tracked = @()
+    foreach ($f in @(Get-ChildItem -LiteralPath $manifDir -Filter *.json -File -ErrorAction SilentlyContinue)) {
+        if ($f.Name -eq "remotes.json") { continue }
+        try {
+            $entry = Get-Content -LiteralPath $f.FullName -Raw | ConvertFrom-Json
+            if ($entry.remoteUrl -eq $RemoteUrl) {
+                $tracked += @{
+                    Name = $f.BaseName
+                    PathInRemote = $entry.pathInRemote
+                }
+            }
+        } catch { continue }
+    }
+
+    if ($tracked.Count -eq 0) {
+        return [pscustomobject]@{ Ok = $false; Branch = ""; Output = "No tracked files for '$RemoteUrl'." }
+    }
+
+    $cacheBase = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA }
+                 elseif ($env:TEMP) { $env:TEMP }
+                 else { [System.IO.Path]::GetTempPath() }
+    $stagingRoot = Join-Path (Join-Path $cacheBase "The-Construct") "cache/config-remotes"
+    $slug = ($RemoteUrl -replace '[^A-Za-z0-9._-]', '-')
+    $cloneDir = Join-Path $stagingRoot $slug
+
+    if (-not (Test-Path -LiteralPath (Join-Path $cloneDir ".git"))) {
+        return [pscustomobject]@{ Ok = $false; Branch = ""; Output = "Staging clone not found for '$RemoteUrl'. Run an import first." }
+    }
+
+    # Pre-validate all tracked PathInRemote values before touching the clone.
+    # This containment check runs BEFORE the git try/catch (which uses
+    # SilentlyContinue) so the throw propagates to the caller.
+    $resolvedCloneDir = [System.IO.Path]::GetFullPath($cloneDir)
+    if (-not $resolvedCloneDir.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+        $resolvedCloneDir += [System.IO.Path]::DirectorySeparatorChar
+    }
+    foreach ($t in $tracked) {
+        $dest = Join-Path $cloneDir $t.PathInRemote
+        $resolvedDest = [System.IO.Path]::GetFullPath($dest)
+        if (-not $resolvedDest.StartsWith($resolvedCloneDir, [System.StringComparison]::Ordinal)) {
+            throw "Path traversal blocked: PathInRemote '$($t.PathInRemote)' for profile '$($t.Name)' escapes the clone directory."
+        }
+    }
+
+    $gitArgs = @("-c", "user.name=The Construct", "-c", "user.email=construct@construct.local")
+    $branchName = "construct-config-update-" + (Get-Date -Format "yyyyMMdd-HHmm")
+
+    $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+    try {
+        & git -C $cloneDir fetch origin 2>$null | Out-Null
+        $defaultBranch = & git -C $cloneDir symbolic-ref refs/remotes/origin/HEAD 2>$null
+        if (-not $defaultBranch) { $defaultBranch = "refs/remotes/origin/main" }
+        $defaultBranch = "$defaultBranch".Trim()
+        & git -C $cloneDir reset --hard $defaultBranch 2>$null | Out-Null
+        & git -C $cloneDir checkout -b $branchName 2>$null | Out-Null
+
+        foreach ($t in $tracked) {
+            $src = Join-Path $projDir "$($t.Name).json"
+            if (-not (Test-Path -LiteralPath $src)) { continue }
+            $dest = Join-Path $cloneDir $t.PathInRemote
+            $destDir = Split-Path -Parent $dest
+            if (-not (Test-Path -LiteralPath $destDir)) {
+                New-Item -ItemType Directory -Path $destDir -Force | Out-Null
+            }
+            Copy-Item -LiteralPath $src -Destination $dest -Force
+        }
+
+        & git -C $cloneDir add -A 2>$null | Out-Null
+        & git -C $cloneDir @gitArgs commit -m "construct config update" 2>$null | Out-Null
+        $pushOutput = & git -C $cloneDir push origin $branchName 2>&1
+    } catch { }
+    $ErrorActionPreference = $prev
+
+    $outStr = if ($pushOutput) { "$pushOutput" } else { "" }
+    return [pscustomobject]@{
+        Ok     = ($LASTEXITCODE -eq 0)
+        Branch = $branchName
+        Output = $outStr
+    }
 }
