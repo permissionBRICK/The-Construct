@@ -5,7 +5,8 @@
 #
 # Idempotent + honest: prefers the byte-for-byte .construct-partial.bak backup the
 # enable step made; if there is no backup it reverts the known transform
-#   includePartialMessages:!le.env.remoteName||!0  ->  includePartialMessages:!le.env.remoteName
+#   includePartialMessages:!<vscode>.env.remoteName||!0
+#     -> includePartialMessages:!<vscode>.env.remoteName
 # A copy that carries neither the patch nor a backup is left untouched. Prints status
 # to stderr; exit 0 on success (best-effort, never fails).
 
@@ -13,8 +14,9 @@ set -u
 
 log() { printf '%s\n' "construct-partial-streaming-disable: $*" >&2; }
 
-PATCHED='includePartialMessages:!le.env.remoteName||!0'
-ORIG='includePartialMessages:!le.env.remoteName'
+has_patched_gate() {
+  perl -0777 -ne 'exit(/includePartialMessages:\s*!\s*[A-Za-z_\$][A-Za-z0-9_\$]*\.env\.remoteName\|\|!0/ ? 0 : 1)' "$1"
+}
 
 revert_file() {
   f="$1"
@@ -30,11 +32,9 @@ revert_file() {
     log "WARNING: failed to restore $f from $bak."
     return 0
   fi
-  if grep -qF "$PATCHED" "$f"; then
-    if PATCHED="$PATCHED" ORIG="$ORIG" perl -0777 -pi -e '
-        my ($p,$o)=($ENV{PATCHED},$ENV{ORIG});
-        my $i=index($_,$p);
-        if ($i>=0) { substr($_,$i,length($p))=$o; }
+  if has_patched_gate "$f"; then
+    if perl -0777 -pi -e '
+        s/(includePartialMessages:\s*!\s*[A-Za-z_\$][A-Za-z0-9_\$]*\.env\.remoteName)\|\|!0/$1/;
       ' "$f"; then
       log "reverted the partial-message patch in $f (no backup was present)."
     else

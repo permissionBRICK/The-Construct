@@ -15,11 +15,14 @@
 # remoteName.
 #
 # WHAT. Neutralise the gate in the installed extension.js so the flag is always on:
-#   includePartialMessages:!le.env.remoteName   ->   includePartialMessages:!le.env.remoteName||!0
+#   includePartialMessages:!<vscode>.env.remoteName
+#     -> includePartialMessages:!<vscode>.env.remoteName||!0
 # `(!remoteName)||true` is always true, so the original expression is preserved
-# byte-for-byte (trivial, reversible) and the flag is forced on. Idempotent: a copy
-# that already carries the `||!0` suffix is skipped; a build without the known gate is
-# left untouched and reported. construct-partial-streaming-disable.sh undoes it.
+# byte-for-byte (trivial, reversible) and the flag is forced on. The `<vscode>`
+# import name is minifier-controlled, so match it generically instead of pinning a
+# single build's `le.env.` spelling. Idempotent: a copy that already carries the
+# `||!0` suffix is skipped; a build without the known gate is left untouched and
+# reported. construct-partial-streaming-disable.sh undoes it.
 #
 # Prints a short status to stderr; a machine-readable CONSTRUCT_PARTIAL_PATCHED=<0|1>
 # to stdout; exit 0 on success (best-effort, never fails provisioning).
@@ -28,33 +31,39 @@ set -u
 
 log() { printf '%s\n' "construct-partial-streaming-enable: $*" >&2; }
 
-ANCHOR='includePartialMessages:!le.env.remoteName'
-PATCHED='includePartialMessages:!le.env.remoteName||!0'
 patched_any=0
 found_ext=0
+
+has_patched_gate() {
+  perl -0777 -ne 'exit(/includePartialMessages:\s*!\s*[A-Za-z_\$][A-Za-z0-9_\$]*\.env\.remoteName\|\|!0/ ? 0 : 1)' "$1"
+}
+
+has_stock_gate() {
+  perl -0777 -ne 'exit(/includePartialMessages:\s*!\s*[A-Za-z_\$][A-Za-z0-9_\$]*\.env\.remoteName(?!\|\|!0)/ ? 0 : 1)' "$1"
+}
 
 apply_patch_to() {
   f="$1"
   [ -f "$f" ] || return 0
-  if grep -qF "$PATCHED" "$f"; then
+  if has_patched_gate "$f"; then
     log "partial-message gate already neutralised in $f (idempotent skip)."
     patched_any=1
     return 0
   fi
-  if ! grep -qF "$ANCHOR" "$f"; then
+  if ! has_stock_gate "$f"; then
     log "no known partial-message gate in $f (unrecognised build) — left untouched."
     return 0
   fi
   # Back up once (don't clobber an existing backup, so disable can always restore the
-  # true original even if enable is run twice). Replace ONLY the first match via an
-  # exact perl substitution over fixed, self-owned constants (no regex surprises).
+  # true original even if enable is run twice). Replace ONLY the first matching
+  # includePartialMessages remoteName gate. The VS Code import identifier is
+  # minifier-controlled, so keep it in a capture group and append the reversible
+  # always-true suffix.
   [ -f "${f}.construct-partial.bak" ] || cp -p "$f" "${f}.construct-partial.bak"
-  if ANCHOR="$ANCHOR" PATCHED="$PATCHED" perl -0777 -pi -e '
-      my ($a,$p)=($ENV{ANCHOR},$ENV{PATCHED});
-      my $i=index($_,$a);
-      if ($i>=0) { substr($_,$i,length($a))=$p; }
+  if perl -0777 -pi -e '
+      s/(includePartialMessages:\s*!\s*[A-Za-z_\$][A-Za-z0-9_\$]*\.env\.remoteName)(?!\|\|!0)/$1||!0/;
     ' "$f"; then
-    if grep -qF "$PATCHED" "$f"; then
+    if has_patched_gate "$f"; then
       log "neutralised the partial-message remoteName gate in $f."
       patched_any=1
     else
