@@ -33,7 +33,10 @@ See [Saving & restoring config](backup-restore.md) for what gets saved and resto
 > Installs from `permissionBRICK/The-Construct`; pass `-Repo owner/name` for a fork.
 > Requires WSL with a Linux distro for the ISO build — if it's missing, the installer tells
 > you to run `wsl --install -d Ubuntu`, reboot, and re-run. The one-liner sets execution
-> policy `Bypass` for its own process only.
+> policy `Bypass` for its own process only. `install.ps1` doesn't declare most params
+> itself — it forwards unknown args straight through to `Auto-Install.ps1` generically, so
+> new Auto-Install options (like the config-sync ones below) work through the one-liner for
+> free.
 
 ## Option A — from scratch (`Auto-Install.ps1`)
 
@@ -82,6 +85,67 @@ a plain Ubuntu ISO, configure:
 Then run `Provision-AgentVM.ps1` — it needs no admin access. See
 [Provisioning](provisioning.md) for details, or [Manual setup](manual-setup.md) to skip
 the Windows scripts entirely.
+
+## Option E — add project config (`-Action add-config`)
+
+Bring project requirements from a shared config repo or a local folder onto a Construct
+install — new or existing — in one command:
+
+```powershell
+.\Auto-Install.ps1 -Action add-config -ConfigRepo https://git.company.com/vm-config.git -ImportConfigs customer-portal,billing-api
+```
+
+- **Construct not installed** → runs the full install (build ISO, create VM, provision)
+  with the imported configs already selected.
+- **Construct already installed** → an additive reprovision: existing project selections
+  and checked-out repos are kept (`PROJECTS` becomes the union of what's already there and
+  what you imported), only the new repos clone.
+
+Params:
+
+| Param | Meaning |
+|-------|---------|
+| `-Action add-config` | Trigger this mode |
+| `-ConfigRepo <url>` | Remote source — clones to a local staging cache and imports from it |
+| `-ConfigDir <path>` | Local source — imports config files from `<path>\projects\*.json` |
+| `-ImportConfigs a,b` | Which config files to import, by name. Omit it to import **every** config file discovered in the source — this applies to both `-ConfigRepo` and `-ConfigDir`; pass names only to cherry-pick a subset |
+| `-AutoResolve ours\|theirs` | Non-interactive conflict resolution if the host config repo has a pending merge conflict when this runs (see [Config sync](config-sync.md#8-conflict-resolution)) |
+
+Name collisions with an existing profile of different provenance are a hard error naming
+the collision — this path never silently overwrites. See [Config sync](config-sync.md) for
+the full import/collision/provenance model.
+
+### Sharing a config as a one-liner
+
+Piping to `iex` can't carry arguments, so a shareable one-liner that needs params uses the
+scriptblock idiom instead:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/permissionBRICK/The-Construct/main/install.ps1))) `
+    -ConfigRepo https://git.company.com/vm-config.git -ImportConfigs customer-portal,billing-api -Action add-config
+```
+
+The control panel's **Share** action (see [Control panel](control-panel.md)) generates
+exactly this form for you, fork-correct (`-Repo`/`-Ref` filled in when you're on a fork),
+copied to the clipboard. A selection that includes local-only (not remote-backed) profiles
+is shared as a zip instead, since there's no URL to point the command at.
+
+### Git on the host
+
+Host `git` powers config sync and remote config-repo clones, but it's **never required**
+just to install Construct:
+
+| When | Needs host git? |
+|---|---|
+| Plain install, no config params | No — never prompted |
+| `-ConfigRepo` | Yes, at install time — interactive installs prompt to install it (winget); unattended runs attempt it silently and abort loudly on failure |
+| `-ConfigDir` / a shared zip bundle | No — plain file copy; picked up by sync later once git exists |
+| Ongoing sync between the VM and host | Yes, for merging — without it, sync degrades to the old additive-only [backup/restore](backup-restore.md) behavior |
+
+Whenever git first becomes available, the next sync tick lazily initializes the host config
+repo — there's no separate migration step. See
+[Config sync §10](config-sync.md#10-git-on-the-host--never-required-strictly-an-upgrade) for
+the full table.
 
 ## What the automated flow does
 

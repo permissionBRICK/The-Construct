@@ -38,11 +38,16 @@ For the installed agents, from `root`'s home — never from inside the project r
   `install-vscode.sh` *before* serve-web starts (`restore-config.sh` runs too late — the
   token would already have been regenerated and the service started), and a token already
   on the VM wins on a reprovision. Saved only when auth is included.
-- Project profiles: the VM's stored profiles (`/opt/construct/projects/*.json`,
-  which carry your MCP servers and other per-project config), plus a generated
-  profile for every cloned repo under `/root/repos` whose remote isn't already
-  covered. On restore the host keeps any profile it already has and adds the rest,
-  then re-provisions them (re-cloning repos and reconfiguring MCP servers).
+- Project profiles: **normally versioned separately.** With git on the host, profile
+  persistence goes through the [config sync](config-sync.md) engine — a sync tick runs
+  before any wipe, so VM-side edits (including to *existing* profiles) are carried home
+  first, and the fresh VM is re-seeded from the host's config repo. This backup/restore
+  flow is the **degraded-mode fallback** for profiles: without git on the host (or if the
+  sync tick can't run), it captures the VM's stored profiles (`/opt/construct/projects/*.json`,
+  which carry your MCP servers and other per-project config), plus a generated profile for
+  every cloned repo under `/root/repos` whose remote isn't already covered. On restore it's
+  **additive and never overwrites** — the host keeps any profile it already has and adds
+  only the rest, then re-provisions them (re-cloning repos and reconfiguring MCP servers).
 
 > ⚠️ The backup contains **plaintext** auth tokens and git credentials. It is git-ignored
 > and stays on your host; treat `.construct-backup/` as a secret.

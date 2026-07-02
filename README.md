@@ -30,7 +30,9 @@ where they can't touch your host PC.
 - ♻️ **Disposable, not amnesiac** — reinstall the VM and your agent config comes back on its
   own: instructions, memory, skills, subscription auth, git & MCP credentials.
 - 📦 **Project profiles** — repos, SDKs, MCP servers, and setup commands in one JSON file,
-  replayed on every (re)provision.
+  applied on every (re)provision.
+- 🔁 **Config sync** — project requirements an agent records on the VM survive reinstall:
+  git-versioned on the host, shareable with a teammate via a one-liner or a zip.
 - 🎤 **Microphone passthrough** — voice input in the Claude Code extension works, even over
   Remote-SSH.
 - 🤷 **It just works™** — system prompts make agents just install whatever tool they need for the task automatically
@@ -122,6 +124,7 @@ The Construct swaps guardrails for isolation:
 | [Remote access & services](docs/remote-access.md) | serve-web, tunnels, Codex remote, service lifecycle |
 | [Control panel](docs/control-panel.md) | The VS Code operator console, module by module |
 | [Backup & restore](docs/backup-restore.md) | Carrying agent config and auth across reinstalls |
+| [Config sync](docs/config-sync.md) | How project profiles survive a reinstall and sync between VM and host |
 
 ## 📄 License
 

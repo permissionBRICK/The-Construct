@@ -55,7 +55,6 @@ When the VM is behind the installed Construct, the **Reprovision** button turns 
 The **Lifecycle** actions each launch a host console window (never the VM's terminal):
 
 - **Reprovision** — re-run setup, keep all data.
-- **Export config** — save auth, credentials, and profiles.
 - **Redownload** / **Reinstall** — rebuild the VM (fresh ISO, or current ISO). These delete
   and recreate the VM, so they launch elevated and always stop in the console for the
   dirty-repo warning and the "type yes" delete confirmation. **Settings → Custom
@@ -63,18 +62,61 @@ The **Lifecycle** actions each launch a host console window (never the VM's term
 
 ## Projects
 
-The **Projects** module manages the project profiles in `<scripts>\projects\*.json`:
+The **Projects** module manages project profiles, versioned on the host in a dedicated
+config directory (`%LOCALAPPDATA%\The-Construct\config`, git-versioned when git is present)
+and kept in sync with the VM's live store (`/opt/construct/projects`) by the
+[config-sync](config-sync.md) engine. The panel's open-folder button opens the `projects/`
+subdirectory of that config directory.
 
+- **export config** — save auth, credentials, and profiles (launches a host console window).
 - **+ add project** — paste a git URL; it's cloned into `/root/repos` on the VM (safely,
   never through the shell) and opened in a new Remote-SSH window.
 - **import from VM** — scans the repos already checked out on the VM and writes a minimal
   profile for each one not already covered (it never overwrites an existing profile).
 - Click a chip to **edit** its profile in a modal — repos, SDKs (`node`/`python`/…), MCP
   servers (raw JSON, validated before save), host packages, and provision commands. The
-  inline **▷** on a chip opens that project's folder on the VM in a new window.
+  inline **▷** on a chip opens that project's folder on the VM in a new window. The
+  **default** chip shows a lock icon and refuses the edit modal — it's a reserved,
+  read-only seed; customize it by creating a named profile instead.
 - **select profiles** — tick which profiles are active. The selection is recorded (in
   `.construct-settings.json`) for the **next** Reprovision / Reinstall; it does not
-  re-provision a running VM.
+  re-provision a running VM. Profile *edits* made on the VM, though, reach the host
+  automatically between reprovisions via the sync tick below — you don't need to reprovision
+  just to pick up a VM-side change.
+
+### Sync status
+
+A status strip shows the current [config-sync](config-sync.md) state:
+
+- **Sync now** — runs an immediate tick instead of waiting for the next automatic one.
+- **Conflict banner** — appears when the host and VM diverged in a way git couldn't
+  auto-merge. **Open config repo** opens the config directory in a new VS Code window, where
+  the built-in merge editor handles the conflict like any other git merge; sync pauses and
+  resumes automatically once you resolve and commit.
+- **Install git notice** — shown instead, persistently, when git isn't present on the host.
+  Config sync and versioning are **disabled** until git is installed: the panel's tick does
+  nothing without it, so the config repo, merging, and remote-config features stay off. (A
+  reinstall/reprovision from PowerShell still preserves profiles through the additive
+  backup/restore fallback — see [Project profiles](projects.md#degraded-mode-no-git-on-the-host)
+  — but that path is separate from this panel.) A one-click button runs the git installer for you.
+
+### Remote config repos
+
+A separate section links the Projects tab to shared, upstream config repos (a company git
+host with baseline configs for several projects):
+
+- **Add / remove a remote** — link or unlink a repo by URL. Linked remotes are fetched into
+  a disposable local cache in the background.
+- **Import** — a picker lists the config files found across all linked repos, grouped by
+  repo, **none ticked by default**; importing pulls the selected files in, merges them with
+  anything already tracked from the same repo/path, and runs them through the same
+  validation as any other profile write.
+- **Share** — pick profiles to hand to someone else. A selection backed by a linked remote
+  is shared as the [install one-liner](installation.md#sharing-a-config-as-a-one-liner)
+  (command carrier); a selection containing local-only profiles is shared as a zip bundle
+  instead (a small `deploy.ps1` plus the profile files).
+- **Push back** — manually push your local versions of a remote's tracked files to a branch
+  on that remote for review; never automatic, since shared config affects other people's VMs.
 
 ## Token usage & cost
 
