@@ -41,67 +41,96 @@ ALLOW_HOST_PACKAGES="${ALLOW_HOST_PACKAGES:-false}"
 
 mkdir -p "${RUNTIME_DIR}"
 
-# Persistent on-VM project profile store. The repo's projects/ is replaced on
-# every provision (Provision-AgentVM.ps1 wipes /opt/construct/repo), and a
-# reprovision driven from the PUBLIC repo carries no custom profiles. So we keep
-# a copy of every profile under ${AGENT_HOME}/projects -- which survives
-# reprovisions, since only .../repo is wiped. Custom profiles saved by an earlier
-# deploy are never deleted, so a later reprovision from the public repo can still
-# resolve them. The repo's copy is the source of truth (it is the most up to
-# date): it refreshes the stored copy on every run, and is always preferred at
-# resolution time -- the store is only a fallback for profiles the current repo
-# doesn't ship.
+# On-VM project profile store — the SINGLE SOURCE OF TRUTH for user-created
+# profiles (docs/config-sync.md). The host's sync engine (§6) keeps this
+# directory up to date: it writes validated, canonical profile JSON over SSH on
+# every sync tick. This script ONLY READS the store, never writes to it.
+#
+# Resolution rules per name in PROJECTS:
+#   'default'          => ALWAYS ${REPO_DIR}/projects/default.json (shipped,
+#                         read-only, reserved — never the store).
+#   'project.schema'   => warn + skip (reserved file, not a profile).
+#   anything else      => ${PROJECTS_STORE}/<name>.json ONLY. When missing:
+#                         warn + skip (never abort; keep the .sample hint for
+#                         names that match a shipped sample).
+#
+# Empty-resolution fallback: the shipped default.json only. The store's
+# default.json is NEVER used (a stale copy there is ignored with a warning, not
+# deleted — the host sync engine owns deletions).
+#
+# Per-file validation: before including ANY store file in the jq merge we run
+# `jq empty <file>`. Invalid JSON => warn + skip. The host sync tick (§6) is the
+# real validation gate (it runs the strict schema validator before writing to the
+# store); this is the VM-side last line of defence so provisioning is never
+# blocked by a corrupt file an agent wrote between ticks.
 PROJECTS_STORE="${PROJECTS_STORE:-${AGENT_HOME}/projects}"
 mkdir -p "${PROJECTS_STORE}"
-if [[ -d "${REPO_DIR}/projects" ]]; then
-  shopt -s nullglob
-  for src in "${REPO_DIR}/projects/"*.json; do
-    # The *.json glob already excludes *.json.sample; also skip the schema file,
-    # which is not a project profile.
-    [[ "$(basename "${src}")" == "project.schema.json" ]] && continue
-    cp -f "${src}" "${PROJECTS_STORE}/"
-  done
-  shopt -u nullglob
-fi
 
 project_json_args=()
 IFS=',' read -ra project_names <<<"${PROJECTS}"
 for raw_name in "${project_names[@]}"; do
   name="$(printf '%s' "${raw_name}" | xargs)"
   [[ -n "${name}" ]] || continue
-  # Prefer the repo's (public) copy -- it is the most up to date. Fall back to
-  # the persisted store only when the current repo doesn't ship this profile
-  # (e.g. a custom profile when reprovisioning from the public repo).
-  if [[ -f "${REPO_DIR}/projects/${name}.json" ]]; then
-    file="${REPO_DIR}/projects/${name}.json"
-  elif [[ -f "${PROJECTS_STORE}/${name}.json" ]]; then
-    file="${PROJECTS_STORE}/${name}.json"
-    note "Using persisted project profile (not in this repo): ${name}"
-  else
-    # A sample-only profile must be enabled by renaming; anything else is just
-    # skipped (warn, never abort) so one missing name -- e.g. a custom profile
-    # absent from the public repo and not yet persisted -- can't block the rest
-    # of provisioning (AI tools, services, ...).
-    if [[ -f "${REPO_DIR}/projects/${name}.json.sample" ]]; then
-      warn "Skipping sample project profile: ${name} (rename ${name}.json.sample to ${name}.json to enable it)"
+
+  # Reject filename-unsafe names before building "${PROJECTS_STORE}/${name}.json"
+  # (mirror the JS validateProfile guard): a profile name must be a single path
+  # component — no separators, no "..", not "."/"..", no control characters — so a
+  # crafted PROJECTS entry can't resolve a file outside the store. Warn + skip.
+  if [[ "${name}" == "." || "${name}" == ".." || "${name}" == */* || "${name}" == *'\'* || "${name}" == *'..'* || "${name}" == *[[:cntrl:]]* ]]; then
+    warn "Skipping unsafe project name: ${name} (must be a single filename, no path separators or '..')"
+    continue
+  fi
+
+  # Reserved names: 'default' resolves from the shipped repo copy exclusively;
+  # 'project.schema' is the schema file, never a profile — skip it.
+  if [[ "${name,,}" == "default" ]]; then
+    if [[ -f "${REPO_DIR}/projects/default.json" ]]; then
+      project_json_args+=("${REPO_DIR}/projects/default.json")
     else
-      warn "Project profile not found, skipping: ${name} (no ${name}.json in repo or ${PROJECTS_STORE})"
+      err "Shipped default.json missing from ${REPO_DIR}/projects/ — the repo may be corrupt."
+      exit 1
+    fi
+    # Warn (but do nothing) if a stale default.json lingers in the store.
+    if [[ -f "${PROJECTS_STORE}/default.json" ]]; then
+      warn "Ignoring stale default.json in ${PROJECTS_STORE} (reserved; using shipped copy)"
     fi
     continue
   fi
-  project_json_args+=("${file}")
+  if [[ "${name,,}" == "project.schema" ]]; then
+    warn "Skipping reserved name: project.schema (not a project profile)"
+    continue
+  fi
+
+  # Non-reserved: resolve from the store only.
+  if [[ -f "${PROJECTS_STORE}/${name}.json" ]]; then
+    file="${PROJECTS_STORE}/${name}.json"
+    # Validate JSON before including — invalid => warn + skip.
+    if ! jq empty "${file}" 2>/dev/null; then
+      warn "Invalid JSON in ${file}, skipping (the host sync tick will repair or replace it)"
+      continue
+    fi
+    project_json_args+=("${file}")
+  else
+    # A sample-only profile must be enabled by renaming; anything else is just
+    # skipped (warn, never abort) so one missing name -- e.g. a custom profile
+    # absent from the store and not yet synced -- can't block the rest of
+    # provisioning (AI tools, services, ...).
+    if [[ -f "${REPO_DIR}/projects/${name}.json.sample" ]]; then
+      warn "Skipping sample project profile: ${name} (rename ${name}.json.sample to ${name}.json to enable it)"
+    else
+      warn "Project profile not found, skipping: ${name} (no ${name}.json in ${PROJECTS_STORE})"
+    fi
+    continue
+  fi
 done
 
 if [[ "${#project_json_args[@]}" -eq 0 ]]; then
-  # Nothing resolved -- fall back to the default profile rather than aborting the
-  # whole provision, so the VM still comes up with AI tools and services. Prefer
-  # the repo's default over a persisted one for the same reason.
+  # Nothing resolved -- fall back to the shipped default profile rather than
+  # aborting the whole provision, so the VM still comes up with AI tools and
+  # services. The store's default.json is never used (reserved, shipped only).
   if [[ -f "${REPO_DIR}/projects/default.json" ]]; then
-    warn "No requested project profiles found (PROJECTS=${PROJECTS}); falling back to 'default'."
+    warn "No requested project profiles found (PROJECTS=${PROJECTS}); falling back to shipped 'default'."
     project_json_args+=("${REPO_DIR}/projects/default.json")
-  elif [[ -f "${PROJECTS_STORE}/default.json" ]]; then
-    warn "No requested project profiles found (PROJECTS=${PROJECTS}); falling back to persisted 'default'."
-    project_json_args+=("${PROJECTS_STORE}/default.json")
   else
     err "No project profiles selected in PROJECTS=${PROJECTS} and no default profile available."
     exit 1
