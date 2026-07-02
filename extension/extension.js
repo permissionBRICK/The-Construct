@@ -425,11 +425,10 @@ async function runConfigSync() {
   if (syncTickInFlight) return null;
   syncTickInFlight = true;
   try {
+    // Everything that touches the repo happens inside syncTick, under the
+    // cross-process lock (ensureRepo is its step 1) — nothing here may mutate
+    // the repo, or two windows could race it.
     configsync.ensureConfigTree(dir);
-    await configsync.ensureRepo(runGit, dir);
-    var scriptsDir = resolveScriptsDir();
-    var legacyDir = scriptsDir ? host.projectsDir(scriptsDir) : null;
-    if (legacyDir) { try { configsync.migrateLegacyProfiles(dir, legacyDir); } catch (_) {} }
     var readStore = async function () {
       try {
         var r = await ssh.runRemoteScript(configsync.buildReadStoreScript(), { timeoutMs: 30000 });
@@ -453,6 +452,7 @@ async function runConfigSync() {
     if (result) {
       var parts = [];
       if (result.ok) parts.push("ok");
+      if (result.lockBusy) parts.push("lock busy; skipped");
       if (result.conflict) parts.push("CONFLICT");
       if (result.blocked) parts.push("blocked: " + (result.blockedReason || ""));
       if (result.merged) parts.push("merged");
@@ -1650,8 +1650,6 @@ function activate(context) {
     if (cfgDir) {
       runGit = configsync.makeGitRunner({ spawn: require("child_process").spawn });
       configsync.ensureConfigTree(cfgDir);
-      var sd = resolveScriptsDir();
-      if (sd) { try { configsync.migrateLegacyProfiles(cfgDir, host.projectsDir(sd)); } catch (_) {} }
       startConfigWatcher();
     }
   } catch (_) {}

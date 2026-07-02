@@ -127,32 +127,33 @@ async function runTests() {
     ok("ensureConfigTree: idempotent", fs.statSync(path.join(treeRoot, "projects")).isDirectory());
   } finally { fs.rmSync(treeRoot, { recursive: true, force: true }); }
 
-  // ── migrateLegacyProfiles ──────────────────────────────────────────────────
-  const migRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cs-mig-"));
+  // ── cross-process sync lock ────────────────────────────────────────────────
+  const lockRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cs-lock-"));
   try {
-    const legacy = mk(migRoot, "legacy", "projects");
-    const cfg = mk(migRoot, "config");
-    mk(cfg, "projects");
-    // Write some legacy profiles.
-    fs.writeFileSync(path.join(legacy, "web.json"), '{"name":"web"}');
-    fs.writeFileSync(path.join(legacy, "api.json"), '{"name":"api"}');
-    fs.writeFileSync(path.join(legacy, "default.json"), '{"name":"default"}'); // reserved
-    fs.writeFileSync(path.join(legacy, "project.schema.json"), '{}'); // reserved
-    fs.writeFileSync(path.join(legacy, "example.json.sample"), '{}'); // sample
-    // Pre-existing in target (should not be overwritten).
-    fs.writeFileSync(path.join(cfg, "projects", "api.json"), '{"name":"api-local"}');
-
-    const copied = cs.migrateLegacyProfiles(cfg, legacy);
-    ok("migrate: copies non-reserved profiles", copied.includes("web"));
-    ok("migrate: skips reserved default", !copied.includes("default"));
-    ok("migrate: skips schema file", !copied.includes("project.schema"));
-    ok("migrate: skips .sample", !copied.includes("example.json"));
-    ok("migrate: does not overwrite existing", (() => {
-      const c = fs.readFileSync(path.join(cfg, "projects", "api.json"), "utf8");
-      return c.includes("api-local");
-    })());
-    ok("migrate: returns only copied names", copied.length === 1 && copied[0] === "web");
-  } finally { fs.rmSync(migRoot, { recursive: true, force: true }); }
+    const cfg = mk(lockRoot, "config");
+    const lp = path.join(cfg, cs.SYNC_LOCK_FILE);
+    const t1 = cs.acquireSyncLock(cfg);
+    ok("lock: acquire returns a token", typeof t1 === "string" && t1.length > 0);
+    ok("lock: file exists while held", fs.existsSync(lp));
+    ok("lock: second acquire fails while held", cs.acquireSyncLock(cfg) === null);
+    cs.releaseSyncLock(cfg, t1);
+    ok("lock: file gone after release", !fs.existsSync(lp));
+    const t2 = cs.acquireSyncLock(cfg);
+    ok("lock: re-acquire after release", !!t2);
+    // Stale takeover: backdate the lock past the stale threshold.
+    const old = new Date(Date.now() - 10 * 60 * 1000);
+    fs.utimesSync(lp, old, old);
+    const t3 = cs.acquireSyncLock(cfg);
+    ok("lock: stale lock is broken and re-acquired", !!t3 && t3 !== t2);
+    // Ownership: the broken holder's release must NOT delete the new holder's
+    // lock — its token no longer matches.
+    cs.releaseSyncLock(cfg, t2);
+    ok("lock: stale ex-holder's release leaves the new lock alone", fs.existsSync(lp));
+    ok("lock: new lock still excludes others", cs.acquireSyncLock(cfg) === null);
+    cs.releaseSyncLock(cfg, t3);
+    ok("lock: owner release removes it", !fs.existsSync(lp));
+    ok("lock: double release is harmless", (() => { cs.releaseSyncLock(cfg, t3); return true; })());
+  } finally { fs.rmSync(lockRoot, { recursive: true, force: true }); }
 
   // ── ensureRepo: lazy init + idempotence ────────────────────────────────────
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cs-repo-"));
@@ -509,6 +510,52 @@ async function runTests() {
     ok("vm-del: api deleted from host", readProfile(configDir, "api") === null);
     // web should still be there.
     ok("vm-del: web still on host", readProfile(configDir, "web") !== null);
+
+    // ── Mass-deletion guard ──────────────────────────────────────────────────
+    // Empty the store entirely (dir stays). The vm branch has profiles, so this
+    // must NOT be read as "user deleted everything" — the tick refuses with a
+    // warning and main keeps its profiles.
+    fs.unlinkSync(path.join(storeDir, "web.json"));
+    const massDel = await cs.syncTick({
+      runGit, configDir,
+      readStore: makeReadStore(storeDir),
+      writeStore: makeWriteStore(),
+      storeRoot: storeDir,
+    });
+    ok("mass-del: tick ok", massDel.ok);
+    ok("mass-del: warned about refusing", massDel.warnings.some((w) => w.includes("mass deletion")));
+    ok("mass-del: web survives on host", readProfile(configDir, "web") !== null);
+
+    // Same guard when the store holds only an INVALID file (zero valid reads).
+    fs.writeFileSync(path.join(storeDir, "web.json"), "{ not json");
+    const invOnly = await cs.syncTick({
+      runGit, configDir,
+      readStore: makeReadStore(storeDir),
+      writeStore: makeWriteStore(),
+      storeRoot: storeDir,
+    });
+    ok("mass-del: invalid-only store also refused", invOnly.ok && invOnly.warnings.some((w) => w.includes("mass deletion")));
+    ok("mass-del: web still on host after invalid-only read", readProfile(configDir, "web") !== null);
+
+    // ── syncTick honors the cross-process lock ───────────────────────────────
+    const tickToken = cs.acquireSyncLock(configDir);
+    ok("tick-lock: acquire externally", !!tickToken);
+    const busy = await cs.syncTick({
+      runGit, configDir,
+      readStore: makeReadStore(storeDir),
+      writeStore: makeWriteStore(),
+      storeRoot: storeDir,
+    });
+    ok("tick-lock: busy tick skipped", busy.ok && busy.lockBusy === true && busy.ran === false);
+    cs.releaseSyncLock(configDir, tickToken);
+    const after = await cs.syncTick({
+      runGit, configDir,
+      readStore: makeReadStore(storeDir),
+      writeStore: makeWriteStore(),
+      storeRoot: storeDir,
+    });
+    ok("tick-lock: runs after release", after.ran === true && !after.lockBusy);
+    ok("tick-lock: lock released after tick", !fs.existsSync(path.join(configDir, cs.SYNC_LOCK_FILE)));
   } finally { fs.rmSync(vmDelRoot, { recursive: true, force: true }); }
 
   // ── Host deletion propagates to store (guarded) ────────────────────────────
@@ -547,10 +594,13 @@ async function runTests() {
     ok("host-del: web still in store", readStoreProfile(storeDir, "web") !== null);
   } finally { fs.rmSync(hostDelRoot, { recursive: true, force: true }); }
 
-  // ── VM single-profile deletion propagates to main (D13 fix 2) ────────────
-  // When the VM has a single profile and the user deletes it (store dir exists
-  // but empty), the deletion must propagate to main — NOT resurrect the profile
-  // via the seed path. This pins the D13 converse case.
+  // ── VM deletion of the LAST profile is refused (mass-deletion guard) ──────
+  // Store dir exists but is empty while the vm branch has profiles. This state
+  // is indistinguishable from a half-provisioned store (observed in the field
+  // mass-deleting profiles), so the tick must neither seed (the old D13 fix 2
+  // pinned that — resurrection) NOR propagate the deletion (the guard): it
+  // skips the VM side with a warning. Deleting the last profile is done from
+  // the host/panel side instead.
   const vmSingleDelRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cs-vmsingle-"));
   try {
     const configDir = mk(vmSingleDelRoot, "config");
@@ -587,12 +637,13 @@ async function runTests() {
       writeStore: makeWriteStore(),
       storeRoot: storeDir,
     });
-    // Must NOT seed (would resurrect the deleted profile).
+    // Must NOT seed (would resurrect the deleted profile on the VM)...
     ok("vm-single-del: not seeded (not a fresh VM)", !result2.seeded);
     ok("vm-single-del: tick ok", result2.ok);
-    ok("vm-single-del: merged (deletion)", result2.merged);
-    // The profile must be gone from main.
-    ok("vm-single-del: profile deleted from main", readProfile(configDir, "web") === null);
+    // ...and must NOT propagate a to-zero deletion either: guard refuses.
+    ok("vm-single-del: refused with mass-deletion warning", result2.warnings.some((w) => w.includes("mass deletion")));
+    ok("vm-single-del: profile kept on main", readProfile(configDir, "web") !== null);
+    ok("vm-single-del: store stays empty (no resurrection)", readStoreProfile(storeDir, "web") === null);
   } finally { fs.rmSync(vmSingleDelRoot, { recursive: true, force: true }); }
 
   // ── D13 store-absent after host-only commit (regression: Fix 1) ────────────

@@ -347,6 +347,7 @@ try {
     if (Test-Path -LiteralPath $excPath) { $excText = [System.IO.File]::ReadAllText($excPath) }
     ok "harden: .git/info/exclude ignores .gitattributes" ($excText -match '(?m)^\.gitattributes$')
     ok "harden: .git/info/exclude ignores .migrated" ($excText -match '(?m)^\.migrated$')
+    ok "harden: .git/info/exclude ignores .sync.lock" ($excText -match '(?m)^\.sync\.lock$')
     [System.IO.File]::WriteAllText((Join-Path $configDir ".migrated"), "1")
     $porcelain = @(& git -C $configDir status --porcelain 2>$null | Where-Object { $_ -match '\.migrated|\.gitattributes' })
     ok "harden: git status hides the ignored bookkeeping files" ($porcelain.Count -eq 0)
@@ -580,6 +581,53 @@ try {
     ok "stale-invalid: recovery tick ok" $r11.Ok
     $hostAfterFix = [System.IO.File]::ReadAllText((Join-Path $configDir "projects/proj-a.json"), [System.Text.Encoding]::UTF8)
     ok "stale-invalid: fixed edit synced to host" ($hostAfterFix -match "wget")
+
+    # ── Scenario 11: mass-deletion guard ─────────────────────────────────────
+    # Empty the store entirely (dir stays). The vm branch has profiles, so the
+    # tick must refuse to propagate the to-zero deletion.
+    Remove-Item -Path (Join-Path $vmStoreDir "*.json") -Force -ErrorAction SilentlyContinue
+    $rMd = Invoke-ConstructConfigSync -ConfigDir $configDir -VmHost "dummy" `
+        -SshReadInvoker $sshRead -SshWriteInvoker $sshWrite
+    ok "mass-del: tick ok" $rMd.Ok
+    ok "mass-del: refused with warning" (@($rMd.Warnings | Where-Object { $_ -match "mass deletion" }).Count -gt 0)
+    ok "mass-del: host proj-a preserved" (Test-Path -LiteralPath (Join-Path $configDir "projects/proj-a.json"))
+    # Restore the store copy for anything that follows.
+    [System.IO.File]::WriteAllText($vmFile9, $projAFixed, $utf8NoBom)
+
+    # ── Scenario 12: cross-process sync lock ─────────────────────────────────
+    $lockTok1 = Lock-ConstructConfigSync -ConfigDir $configDir
+    ok "lock: acquire returns a token" ($lockTok1 -is [string] -and $lockTok1.Length -gt 0)
+    $lockPath = Join-Path $configDir ".sync.lock"
+    ok "lock: lock file exists while held" (Test-Path -LiteralPath $lockPath)
+    ok "lock: second acquire fails while held" ($null -eq (Lock-ConstructConfigSync -ConfigDir $configDir))
+    $rBusy = Invoke-ConstructConfigSync -ConfigDir $configDir -VmHost "dummy" `
+        -SshReadInvoker $sshRead -SshWriteInvoker $sshWrite -LockWaitSeconds 0
+    ok "lock: busy tick skipped (LockBusy, not Ran)" ($rBusy.Ok -and $rBusy.LockBusy -and -not $rBusy.Ran)
+    Unlock-ConstructConfigSync -ConfigDir $configDir -Token $lockTok1
+    ok "lock: file gone after unlock" (-not (Test-Path -LiteralPath $lockPath))
+    # A stale lock (crashed engine) is broken and re-acquired. (-Force: dotfiles
+    # count as Hidden on non-Windows pwsh and plain Get-Item refuses them.)
+    $lockTok2 = Lock-ConstructConfigSync -ConfigDir $configDir
+    (Get-Item -LiteralPath $lockPath -Force).LastWriteTime = (Get-Date).AddMinutes(-10)
+    $lockTok3 = Lock-ConstructConfigSync -ConfigDir $configDir
+    ok "lock: stale lock broken and re-acquired" ($lockTok3 -and $lockTok3 -ne $lockTok2)
+    # Ownership: the broken holder's release must NOT delete the new holder's
+    # lock -- its token no longer matches.
+    Unlock-ConstructConfigSync -ConfigDir $configDir -Token $lockTok2
+    ok "lock: stale ex-holder's release leaves the new lock alone" (Test-Path -LiteralPath $lockPath)
+    ok "lock: new lock still excludes others" ($null -eq (Lock-ConstructConfigSync -ConfigDir $configDir))
+    Unlock-ConstructConfigSync -ConfigDir $configDir -Token $lockTok3
+    ok "lock: owner release removes it" (-not (Test-Path -LiteralPath $lockPath))
+    $rUnlocked = Invoke-ConstructConfigSync -ConfigDir $configDir -VmHost "dummy" `
+        -SshReadInvoker $sshRead -SshWriteInvoker $sshWrite
+    ok "lock: tick runs after unlock" $rUnlocked.Ran
+    ok "lock: released after the tick" (-not (Test-Path -LiteralPath $lockPath))
+    # Cross-engine mutual exclusion: both engines must use the same file name.
+    if ($nodeAvailable) {
+        $csJs = (Join-Path $repoRoot "extension/src/configsync.js") -replace '\\', '/'
+        $jsLockName = & node -e "process.stdout.write(require('$csJs').SYNC_LOCK_FILE)" 2>$null
+        ok "lock: JS and PS engines agree on the lock file name" ($jsLockName -ceq ".sync.lock")
+    }
 
 } finally {
     Remove-Item -LiteralPath $tmpBase -Recurse -Force -ErrorAction SilentlyContinue

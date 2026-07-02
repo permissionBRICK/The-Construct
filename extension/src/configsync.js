@@ -12,7 +12,9 @@
 //     projects.js buildScanScript;
 //   - remote/upstream helpers (manifest, staging clones, import planning,
 //     mergeFile, pushUpstream) per D16/D17/D19;
-//   - ensureConfigTree / migrateLegacyProfiles for the config-dir bootstrap.
+//   - ensureConfigTree for the config-dir bootstrap, and the cross-process
+//     sync lock (acquireSyncLock/releaseSyncLock) that serializes ticks across
+//     VS Code windows and the PowerShell engine.
 
 const fs = require("fs");
 const path = require("path");
@@ -90,35 +92,66 @@ function ensureConfigTree(configDir) {
   }
 }
 
+// ── Cross-process sync lock ──────────────────────────────────────────────────
+// Serializes whole sync ticks across every engine that can touch the config
+// repo: each VS Code window runs its own extension host (extensionKind "ui"),
+// and the PowerShell engine (Invoke-ConstructConfigSync) runs during provisions
+// — none of them share a process, so an in-process flag is not enough. Without
+// this, two concurrent ticks interleave read-store → commit → merge → write-back
+// and a tick holding a stale store read commits spurious deletions of files the
+// other tick just added. The lock file lives at <configDir>/.sync.lock and both
+// engines use the same name and stale rule (Lock-ConstructConfigSync in
+// AgentVm.Common.ps1 must match).
+
+const SYNC_LOCK_FILE = ".sync.lock";
+// A tick is seconds of work (two 30s-capped SSH calls + local git). A lock older
+// than this belongs to a crashed/killed process and may be broken.
+const SYNC_LOCK_STALE_MS = 5 * 60 * 1000;
+
 /**
- * One-time migration: copy user *.json profiles from a legacy scriptsDir/projects
- * into the config dir's projects/ folder. Skips reserved names, *.sample files,
- * and files that already exist in the target. Returns the list of names copied.
+ * Try to take the sync lock. Atomic create (O_EXCL); a lock whose mtime is
+ * older than the stale threshold is treated as abandoned and broken. Returns
+ * an ownership token (string) when acquired, null when another live engine
+ * holds it. Pass the token to releaseSyncLock — release is a no-op unless the
+ * lock file still carries it, so a holder that outlived the stale threshold
+ * and was broken cannot delete the next holder's lock on its way out.
  */
-function migrateLegacyProfiles(configDir, legacyProjectsDir) {
-  const copied = [];
-  if (!legacyProjectsDir || !configDir) return copied;
-  const target = path.join(configDir, "projects");
-  fs.mkdirSync(target, { recursive: true });
-  let entries;
-  try { entries = fs.readdirSync(legacyProjectsDir, { withFileTypes: true }); }
-  catch (_) { return copied; }
-  for (const e of entries) {
-    if (!e.isFile()) continue;
-    const lower = e.name.toLowerCase();
-    if (!lower.endsWith(".json")) continue;
-    if (lower.endsWith(".sample")) continue;
-    const base = e.name.slice(0, -5);
-    if (projects.isReservedProfileName(base)) continue;
-    if (e.name === "project.schema.json") continue;
-    const dest = path.join(target, e.name);
-    try { fs.statSync(dest); continue; } catch (_) { /* does not exist, good */ }
+function acquireSyncLock(configDir, opts) {
+  const staleMs = (opts && opts.staleMs) || SYNC_LOCK_STALE_MS;
+  const lockPath = path.join(configDir, SYNC_LOCK_FILE);
+  const token = crypto.randomBytes(16).toString("hex");
+  for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      fs.copyFileSync(path.join(legacyProjectsDir, e.name), dest);
-      copied.push(base);
-    } catch (_) { /* skip on error */ }
+      const fd = fs.openSync(lockPath, "wx");
+      try { fs.writeSync(fd, JSON.stringify({ token, pid: process.pid, at: new Date().toISOString() })); }
+      finally { fs.closeSync(fd); }
+      return token;
+    } catch (e) {
+      if (!e || e.code !== "EEXIST") return null;
+      let st;
+      try { st = fs.statSync(lockPath); }
+      catch (_) { continue; } // holder released between open and stat — retry
+      if (Date.now() - st.mtimeMs <= staleMs) return null; // live holder
+      try { fs.unlinkSync(lockPath); } catch (_) { /* lost the break race */ }
+      // retry the create once; if a rival re-created it first, report busy
+    }
   }
-  return copied;
+  return null;
+}
+
+/**
+ * Release the sync lock, but only if it is still ours: the file must exist and
+ * carry the given token. A missing/unreadable/foreign-token file is left alone
+ * (best-effort — a break-then-recreate between the read and the unlink is
+ * theoretically possible but needs a second stale-break inside the window).
+ */
+function releaseSyncLock(configDir, token) {
+  const lockPath = path.join(configDir, SYNC_LOCK_FILE);
+  try {
+    const cur = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+    if (!token || cur.token !== token) return; // not ours (or ownership unknown) — leave it
+    fs.unlinkSync(lockPath);
+  } catch (_) { /* already gone or unreadable — leave it */ }
 }
 
 // ── Git identity args (per-invocation, never global config) ──────────────────
@@ -174,7 +207,7 @@ async function hardenConfigRepo(runGit, configDir) {
   // `git merge` refuse ("untracked working tree files would be overwritten"),
   // which the tick then reports as a blocked/phantom "merge conflict". Ignoring
   // them via .git/info/exclude (local, itself untracked) fixes both.
-  ensureRepoExclude(configDir, [".gitattributes", ".migrated"]);
+  ensureRepoExclude(configDir, [".gitattributes", ".migrated", SYNC_LOCK_FILE]);
 }
 
 /** Append the given names to <configDir>/.git/info/exclude if absent. Best-effort. */
@@ -486,13 +519,32 @@ function parseWriteResult(stdout) {
 // ── Sync tick (D6 steps 1-8) ─────────────────────────────────────────────────
 
 /**
- * The core sync tick. Implements D6 steps 1-8 exactly.
+ * The sync tick, serialized by the cross-process lock. When another engine
+ * (a second VS Code window, or the PowerShell engine during a provision) holds
+ * the lock, the tick is skipped — `{ok:true, ran:false, lockBusy:true}` — and
+ * the next timer tick simply retries. Never throws on lock contention.
  *
  * readStore:  () => Promise<string|null>  (raw stdout; null = SSH unreachable)
  * writeStore: (script) => Promise<string|null>
  * log:        (level, msg) => void
  */
-async function syncTick({ runGit, configDir, readStore, writeStore, log, storeRoot }) {
+async function syncTick(opts) {
+  const lockToken = acquireSyncLock(opts.configDir);
+  if (!lockToken) {
+    if (opts.log) opts.log("info", "sync lock held by another window/engine; tick skipped");
+    return {
+      ok: true, ran: false, lockBusy: true, conflict: false, blocked: false,
+      blockedReason: null, skippedInvalid: [], merged: false, seeded: false,
+      writeBack: { done: [], skipped: [] }, warnings: [],
+    };
+  }
+  try { return await syncTickLocked(opts); }
+  finally { releaseSyncLock(opts.configDir, lockToken); }
+}
+
+/** The core tick body. Implements D6 steps 1-8 exactly. Callers go through
+ *  syncTick (the lock); tests may call this directly to bypass it. */
+async function syncTickLocked({ runGit, configDir, readStore, writeStore, log, storeRoot }) {
   const warn = (msg) => log && log("warn", msg);
   const info = (msg) => log && log("info", msg);
   const result = {
@@ -616,6 +668,21 @@ async function syncTick({ runGit, configDir, readStore, writeStore, log, storeRo
       }
     }
     await runGit(["update-ref", "refs/heads/vm", "refs/heads/main"], { cwd: configDir });
+    result.ok = true;
+    return result;
+  }
+
+  // Mass-deletion guard: the store EXISTS but yielded zero valid profiles while
+  // the vm branch has some. The spec read this as "the user deleted every
+  // profile on the VM intentionally" — but in practice it is far more likely a
+  // half-provisioned store (dir created before seeding finished) or a store
+  // whose files all failed validation, and propagating it would wipe main
+  // (observed in the field: a reinstall-morning tick mass-deleted profiles that
+  // then kept resurrecting). Deleting ALL profiles via sync is never worth that
+  // risk: skip the VM side with a warning; individual deletions still propagate
+  // normally, and a real delete-all can be done per profile or from the panel.
+  if (noValidVmFiles && vmTipProfiles > 0) {
+    addWarning(`VM store has no valid profiles but the vm branch has ${vmTipProfiles}; refusing to propagate a mass deletion (delete profiles individually if intended)`);
     result.ok = true;
     return result;
   }
@@ -1197,7 +1264,8 @@ async function pushUpstream(runGit, { stagingDir, files, branch, message }) {
 
 module.exports = {
   makeGitRunner, detectGit,
-  ensureConfigTree, migrateLegacyProfiles,
+  ensureConfigTree,
+  acquireSyncLock, releaseSyncLock, SYNC_LOCK_FILE,
   ensureRepo, repoState, completePendingMerge,
   buildReadStoreScript, parseReadStore,
   planWriteBack, buildWriteStoreScript, parseWriteResult,

@@ -1617,10 +1617,11 @@ function Get-ConstructConfigDir {
 
 function Initialize-ConstructConfigStore {
     <#
-        Ensure the config tree exists (projects/, manifest/, bases/) and perform
-        a one-time legacy migration: copy user *.json (not reserved/sample/existing)
-        from <ScriptsDir>\projects into the config projects dir. Returns the
-        config dir path.
+        Ensure the config tree exists (projects/, manifest/, bases/). Returns the
+        config dir path. ($ScriptsDir is kept for call-site compatibility; the
+        legacy pre-v2 migration that used it was removed -- it re-copied stale
+        profiles from the shipped projects/ folder whenever a file vanished from
+        the config dir, resurrecting deleted/outdated profiles forever.)
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$ScriptsDir)
@@ -1635,22 +1636,6 @@ function Initialize-ConstructConfigStore {
         }
     }
 
-    # One-time legacy migration: copy from the shipped projects/ folder.
-    $legacyDir = Join-Path $ScriptsDir "projects"
-    $marker    = Join-Path $configDir ".migrated"
-    if ((Test-Path -LiteralPath $legacyDir) -and -not (Test-Path -LiteralPath $marker)) {
-        $files = @(Get-ChildItem -LiteralPath $legacyDir -Filter *.json -File -ErrorAction SilentlyContinue |
-                   Where-Object { $_.Extension -eq '.json' -and
-                                  $script:RESERVED_PROFILE_NAMES -notcontains $_.BaseName.ToLowerInvariant() -and
-                                  $_.BaseName -notlike '*.sample' })
-        foreach ($f in $files) {
-            $dest = Join-Path $projDir $f.Name
-            if (-not (Test-Path -LiteralPath $dest)) {
-                Copy-Item -LiteralPath $f.FullName -Destination $dest -Force
-            }
-        }
-        Set-Content -LiteralPath $marker -Value (Get-Date -Format o) -Encoding UTF8
-    }
     return $configDir
 }
 
@@ -1759,7 +1744,7 @@ function Set-ConstructConfigRepoHardening {
         $cur = ""
         if (Test-Path -LiteralPath $exFile) { $cur = [System.IO.File]::ReadAllText($exFile) }
         $have = @($cur -split "`r?`n" | ForEach-Object { $_.Trim() })
-        $missing = @(@(".gitattributes", ".migrated") | Where-Object { $have -notcontains $_ })
+        $missing = @(@(".gitattributes", ".migrated", ".sync.lock") | Where-Object { $have -notcontains $_ })
         if ($missing.Count -gt 0) {
             if (-not (Test-Path -LiteralPath $exDir)) { New-Item -ItemType Directory -Path $exDir -Force | Out-Null }
             $prefix = ""
@@ -2584,12 +2569,136 @@ function Write-ConstructVmStore {
 
 # ── The sync tick (D6) ───────────────────────────────────────────────────────
 
+# ── Cross-process sync lock ──────────────────────────────────────────────────
+# Serializes whole sync ticks across every engine that can touch the config
+# repo: each VS Code window runs its own extension host, and this PowerShell
+# engine runs during provisions -- none share a process. Two concurrent ticks
+# interleave read-store -> commit -> merge -> write-back, and a tick holding a
+# stale store read commits spurious deletions of files the other tick just
+# added. Same file name and stale rule as the JS engine (SYNC_LOCK_FILE in
+# extension/src/configsync.js must match).
+
+$script:CONSTRUCT_SYNC_LOCK_FILE = ".sync.lock"
+$script:CONSTRUCT_SYNC_LOCK_STALE_SEC = 300
+
+function Lock-ConstructConfigSync {
+    <#
+        Try to take the cross-process sync lock: atomic CreateNew of
+        <ConfigDir>\.sync.lock. A lock older than $StaleSeconds belongs to a
+        crashed/killed process and is broken. Returns an ownership TOKEN
+        (string) when acquired, $null when another live engine holds it. Pass
+        the token to Unlock-ConstructConfigSync -- release is a no-op unless
+        the lock file still carries it, so a holder that outlived the stale
+        threshold and was broken cannot delete the next holder's lock.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ConfigDir,
+        [int]$StaleSeconds = $script:CONSTRUCT_SYNC_LOCK_STALE_SEC
+    )
+    $lockPath = Join-Path $ConfigDir $script:CONSTRUCT_SYNC_LOCK_FILE
+    $token = [guid]::NewGuid().ToString("N")
+    for ($attempt = 0; $attempt -lt 2; $attempt++) {
+        try {
+            $fsm = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::CreateNew,
+                                          [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+            try {
+                $bytes = [System.Text.Encoding]::UTF8.GetBytes('{"token":"' + $token + '","pid":' + $PID + ',"at":"' + (Get-Date -Format o) + '"}')
+                $fsm.Write($bytes, 0, $bytes.Length)
+            } finally { $fsm.Dispose() }
+            return $token
+        } catch [System.IO.IOException] {
+            # Already exists (or transient IO): stale-check the holder.
+            # -Force: on non-Windows pwsh a dotfile counts as Hidden and a plain
+            # Get-Item refuses it ("could not find item") even though it exists.
+            $st = $null
+            try { $st = Get-Item -LiteralPath $lockPath -Force -ErrorAction Stop } catch { continue } # vanished -- retry
+            $age = ((Get-Date) - $st.LastWriteTime).TotalSeconds
+            if ($age -le $StaleSeconds) { return $null }   # live holder
+            try { Remove-Item -LiteralPath $lockPath -Force -ErrorAction Stop } catch { }
+            # retry the create once; if a rival re-created it first, report busy
+        } catch {
+            return $null
+        }
+    }
+    return $null
+}
+
+function Unlock-ConstructConfigSync {
+    <#
+        Release the sync lock, but only if it is still ours: the file must
+        exist and carry the given token. A missing/unreadable/foreign-token
+        file is left alone.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ConfigDir,
+        [AllowEmptyString()][AllowNull()][string]$Token
+    )
+    if (-not $Token) { return }
+    $lockPath = Join-Path $ConfigDir $script:CONSTRUCT_SYNC_LOCK_FILE
+    try {
+        $cur = [System.IO.File]::ReadAllText($lockPath) | ConvertFrom-Json
+        if ($cur.token -cne $Token) { return }   # not ours -- leave it
+        Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+    } catch { }   # already gone or unreadable -- leave it
+}
+
 function Invoke-ConstructConfigSync {
     <#
-        Full D6 sync tick: commit host changes, read the VM store, commit a VM
-        snapshot, merge, guarded write-back, advance vm ref. With -SeedOnly (D13)
-        just seed the VM with main profiles. Degraded mode (no git): additive
-        seed only.
+        Full D6 sync tick, serialized by the cross-process lock shared with the
+        VS Code engine. Waits up to $LockWaitSeconds for a concurrent tick to
+        finish (the provisioning pre-wipe sync should run, not silently skip),
+        then gives up with LockBusy=$true rather than racing. Everything else
+        is delegated to Invoke-ConstructConfigSyncLocked.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ConfigDir,
+        [Parameter(Mandatory)][string]$VmHost,
+        [ValidateSet("ours","theirs")]
+        [string]$AutoResolve,
+        [switch]$SeedOnly,
+        [scriptblock]$SshReadInvoker,
+        [scriptblock]$SshWriteInvoker,
+        [int]$LockWaitSeconds = 90
+    )
+
+    if (-not (Test-Path -LiteralPath $ConfigDir)) {
+        New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null
+    }
+    $deadline = (Get-Date).AddSeconds($LockWaitSeconds)
+    $lockToken = Lock-ConstructConfigSync -ConfigDir $ConfigDir
+    while (-not $lockToken -and (Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 3
+        $lockToken = Lock-ConstructConfigSync -ConfigDir $ConfigDir
+    }
+    if (-not $lockToken) {
+        return [pscustomobject]@{
+            Ok = $true; Ran = $false; LockBusy = $true; Conflict = $false; Blocked = $false
+            Reason = ""; SkippedInvalid = @(); Merged = $false; Seeded = $false
+            Warnings = @("Sync lock held by another engine (a VS Code window?); tick skipped.")
+            WriteBack = $null
+        }
+    }
+    try {
+        $inner = @{}
+        foreach ($k in $PSBoundParameters.Keys) {
+            if ($k -ne 'LockWaitSeconds') { $inner[$k] = $PSBoundParameters[$k] }
+        }
+        return Invoke-ConstructConfigSyncLocked @inner
+    } finally {
+        Unlock-ConstructConfigSync -ConfigDir $ConfigDir -Token $lockToken
+    }
+}
+
+function Invoke-ConstructConfigSyncLocked {
+    <#
+        The core D6 sync tick body: commit host changes, read the VM store,
+        commit a VM snapshot, merge, guarded write-back, advance vm ref. With
+        -SeedOnly (D13) just seed the VM with main profiles. Degraded mode (no
+        git): additive seed only. Callers go through Invoke-ConstructConfigSync
+        (the lock); tests may call this directly to bypass it.
     #>
     [CmdletBinding()]
     param(
@@ -2900,6 +3009,29 @@ function Invoke-ConstructConfigSync {
         } catch {
             $skippedInvalid += @{ Name = $name; Reason = "Unparseable JSON" }
             $warnings.Add("Unparseable VM file '$name'.")
+        }
+    }
+
+    # Mass-deletion guard (mirrors syncTickLocked in configsync.js): the store
+    # EXISTS but yielded zero valid profiles while the vm branch has some. Far
+    # more likely a half-provisioned store or all-invalid files than a genuine
+    # delete-everything -- propagating it would wipe main. Skip the VM side with
+    # a warning; individual deletions still propagate normally.
+    if ($validVm.Count -eq 0) {
+        $vmTipCount = 0
+        $prevMd = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+        try {
+            $vmTipCount = @(& git -C $ConfigDir ls-tree --name-only vm -- projects/ 2>$null |
+                            Where-Object { $_ }).Count
+        } catch { }
+        $ErrorActionPreference = $prevMd
+        if ($vmTipCount -gt 0) {
+            $warnings.Add("VM store has no valid profiles but the vm branch has ${vmTipCount}; refusing to propagate a mass deletion (delete profiles individually if intended).")
+            return [pscustomobject]@{
+                Ok = $true; Ran = $true; Conflict = $false; Blocked = $false
+                Reason = ""; SkippedInvalid = @($skippedInvalid); Merged = $false
+                Seeded = $false; Warnings = @($warnings); WriteBack = $null
+            }
         }
     }
 
