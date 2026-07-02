@@ -2610,13 +2610,30 @@ function Invoke-ConstructConfigSync {
     # ── Step 1: Check for ongoing merge/conflict ──────────────────────────────
     $mergeHead = Join-Path $ConfigDir ".git/MERGE_HEAD"
     if (Test-Path -LiteralPath $mergeHead) {
-        if ($AutoResolve) {
+        $unmergedAtStart = @()
+        $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+        try {
+            $unmergedAtStart = @(& git -C $ConfigDir diff --name-only --diff-filter=U 2>$null)
+        } catch { }
+        $ErrorActionPreference = $prev
+
+        if ($AutoResolve -and $unmergedAtStart.Count -gt 0) {
             $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
             try {
                 & git -C $ConfigDir checkout "--$AutoResolve" -- . 2>$null | Out-Null
                 & git -C $ConfigDir add -A 2>$null | Out-Null
             } catch { }
             $ErrorActionPreference = $prev
+        }
+
+        $unmergedAfterResolve = @()
+        $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+        try {
+            $unmergedAfterResolve = @(& git -C $ConfigDir diff --name-only --diff-filter=U 2>$null)
+        } catch { }
+        $ErrorActionPreference = $prev
+
+        if ($unmergedAfterResolve.Count -eq 0) {
             # Post-merge validation gate (D7): even after AutoResolve, the
             # merged content must validate before we commit. For a merge left
             # uncommitted by the gate (clean line-merge into invalid JSON),
@@ -2644,12 +2661,14 @@ function Invoke-ConstructConfigSync {
             if ($autoGateOk) {
                 $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
                 try {
-                    & git -C $ConfigDir @gitArgs commit -m "auto-resolve ($AutoResolve)" 2>$null | Out-Null
+                    & git -C $ConfigDir @gitArgs add -A 2>$null | Out-Null
+                    $commitMsg = if ($AutoResolve) { "auto-resolve ($AutoResolve)" } else { "merge vm" }
+                    & git -C $ConfigDir @gitArgs commit -m $commitMsg 2>$null | Out-Null
                 } catch { }
                 $ErrorActionPreference = $prev
             }
             if (Test-Path -LiteralPath $mergeHead) {
-                $reason = if (-not $autoGateOk) { $autoGateReason } else { "auto-resolve-failed" }
+                $reason = if (-not $autoGateOk) { $autoGateReason } elseif ($AutoResolve) { "auto-resolve-failed" } else { "merge-commit-failed" }
                 return [pscustomobject]@{
                     Ok = $false; Ran = $false; Conflict = $true; Blocked = $true
                     Reason = $reason; SkippedInvalid = @()
@@ -2976,7 +2995,12 @@ function Invoke-ConstructConfigSync {
                 }
                 if ($gateOk) {
                     & git -C $ConfigDir @gitArgs commit -m "merge vm" 2>$null | Out-Null
-                    $merged = $true
+                    if ($LASTEXITCODE -eq 0) {
+                        $merged = $true
+                    } else {
+                        $blocked = $true
+                        $blockedReason = "merge-commit-failed"
+                    }
                 } else {
                     $blocked = $true
                     $blockedReason = $gateReason
