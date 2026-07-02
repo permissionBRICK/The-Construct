@@ -514,14 +514,35 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("config-sync: git-missing notice visible when !gitPresent", await page.locator("#csGitMissing").isVisible());
   check("config-sync: conflict banner hidden when no conflict", !(await page.locator("#csConflict").isVisible()));
 
-  // conflict:true -> banner visible + open-repo button.
+  // conflict:true -> banner visible + open-repo button + merge-conflict text.
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h",
     configSync: { gitPresent: true, repoReady: true, conflict: true, conflictFiles: ["projects/foo.json"], mergeInProgress: true, lastSyncAt: Date.now(), lastResult: "conflict", warnings: [], remotes: [] }
   } }, "*"));
   await page.waitForTimeout(60);
   check("config-sync: conflict banner visible", await page.locator("#csConflict").isVisible());
   check("config-sync: open-repo button in conflict banner", (await page.locator('#csConflict [data-cmd="openConfigRepo"]').count()) === 1);
+  check("config-sync: conflict banner says merge conflict", (await page.locator("#csConflictText").textContent()).includes("merge conflict"));
   check("config-sync: git-missing hidden when gitPresent", !(await page.locator("#csGitMissing").isVisible()));
+
+  // blocked (no unmerged paths — e.g. an uncommitted invalid profile): banner
+  // shows the engine's blockedReason, NOT "merge conflict".
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h",
+    configSync: { gitPresent: true, repoReady: true, conflict: false, conflictFiles: [], mergeInProgress: false, lastSyncAt: Date.now(), lastResult: "blocked",
+      blockedReason: 'invalid host profile "wip" blocks the merge', warnings: [], remotes: [] }
+  } }, "*"));
+  await page.waitForTimeout(60);
+  check("config-sync: blocked banner visible", await page.locator("#csConflict").isVisible());
+  check("config-sync: blocked banner carries the reason", (await page.locator("#csConflictText").textContent()).includes('invalid host profile "wip"'));
+  check("config-sync: blocked banner does not claim a merge conflict", !(await page.locator("#csConflictText").textContent()).includes("merge conflict"));
+
+  // mergeInProgress with NO conflict (validation-gate pending merge): blocked
+  // wording with the generic fallback, not the conflict wording.
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h",
+    configSync: { gitPresent: true, repoReady: true, conflict: false, conflictFiles: [], mergeInProgress: true, lastSyncAt: Date.now(), lastResult: "ok", warnings: [], remotes: [] }
+  } }, "*"));
+  await page.waitForTimeout(60);
+  check("config-sync: pending-merge banner visible", await page.locator("#csConflict").isVisible());
+  check("config-sync: pending-merge banner uses blocked wording", (await page.locator("#csConflictText").textContent()).includes("Config sync blocked"));
 
   // Remotes list renders rows.
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h",

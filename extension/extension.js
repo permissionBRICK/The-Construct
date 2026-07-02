@@ -393,6 +393,7 @@ async function buildConfigSyncState() {
     repoReady: false, conflict: false, conflictFiles: [], mergeInProgress: false,
     lastSyncAt: lastSyncTickAt || null,
     lastResult: lastSyncResult ? (lastSyncResult.ok ? "ok" : (lastSyncResult.conflict ? "conflict" : (lastSyncResult.blocked ? "blocked" : "error"))) : null,
+    blockedReason: lastSyncResult ? (lastSyncResult.blockedReason || null) : null,
     warnings: lastSyncResult ? (lastSyncResult.warnings || []) : [],
     remotes: [],
   };
@@ -404,6 +405,7 @@ async function buildConfigSyncState() {
         if (recovered) {
           out.lastSyncAt = lastSyncTickAt || null;
           out.lastResult = recovered.ok ? "ok" : (recovered.conflict ? "conflict" : (recovered.blocked ? "blocked" : "error"));
+          out.blockedReason = recovered.blockedReason || null;
           out.warnings = recovered.warnings || [];
         }
         rs = await configsync.repoState(runGit, dir);
