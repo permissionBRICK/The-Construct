@@ -84,6 +84,7 @@
   document.querySelectorAll("[data-cmd]").forEach((el) => {
     el.addEventListener("click", () => {
       const id = el.getAttribute("data-cmd");
+      if (!id || el.disabled) return;
       if (id === "customReinstall" || id === "customRedownload") {
         post({
           type: "customRebuild",
@@ -341,6 +342,51 @@
       : '<span class="dot"></span> VM OFFLINE';
   }
 
+  function setPowerAction(s) {
+    const btn = $("powerBtn");
+    if (!btn) return;
+
+    const cls = ["btn"];
+    let cmd = "";
+    let label = "\u231B Loading";
+    let title = "Checking VM state";
+    let disabled = true;
+
+    if (s && s.online !== false) {
+      if (s.connected === false) {
+        cls.push("connect");
+        cmd = "connect";
+        label = "\u2192 Open on VM";
+        title = "Open this workspace on the VM";
+        disabled = false;
+      } else {
+        cls.push("danger");
+        cmd = "shutdown";
+        label = "\u23FB Shutdown";
+        title = "Shutdown the VM";
+        disabled = false;
+      }
+    } else if (s && s.vmState !== "absent" && s.vmState !== "running") {
+      cls.push("start");
+      cmd = "startConnect";
+      label = "\u25B6 Start & connect";
+      title = "Start the VM, then connect";
+      disabled = false;
+    } else {
+      cls.push("loading");
+      label = "\u231B Loading";
+      title = "Waiting for VM state";
+    }
+
+    btn.className = cls.join(" ");
+    btn.textContent = label;
+    btn.title = title;
+    btn.disabled = disabled;
+    btn.setAttribute("aria-disabled", disabled ? "true" : "false");
+    if (cmd) btn.setAttribute("data-cmd", cmd);
+    else btn.removeAttribute("data-cmd");
+  }
+
   // Blank the VM-derived live fields so an offline/failed refresh never leaves
   // stale values from a previous successful probe on screen.
   function clearLiveVmData() {
@@ -361,25 +407,9 @@
     const online = s.online !== false;
     setOnline(online);
 
-    // Power controls. "Open on VM" shows when the VM is reachable and this window
-    // isn't already connected to it. "Start & connect" replaces it when the VM is
-    // installed but stopped (offline + Hyper-V reports it off). "Shutdown" shows
-    // whenever the VM is reachable. All set before the offline early-return below.
-    // "Open on VM" is hidden for now: the "only when this window isn't already
-    // connected" gate (s.connected) isn't reliable, so keep it out of the UI.
-    const conn = $("connectBtn");
-    if (conn) conn.hidden = true;
-    // Show "Start & connect" whenever the VM is offline and NOT known to be absent.
-    // The non-elevated Get-VM probe is Hyper-V-permission gated (the installer's
-    // Hyper-V Administrators membership only takes effect at the next sign-in), so a
-    // genuinely stopped VM commonly reads back as "unknown", not "off". Since the
-    // Start action self-elevates (UAC Start-VM), it works regardless of the probe's
-    // permission — so we offer it for "off" AND "unknown", hiding it only when the
-    // probe positively determined the VM doesn't exist ("absent") or it's running.
-    const start = $("startBtn");
-    if (start) start.hidden = !(!online && s.vmState !== "absent" && s.vmState !== "running");
-    const sd = $("shutdownBtn");
-    if (sd) sd.hidden = !online;
+    // Stable power slot: it is present from first paint, then changes label/command
+    // as state arrives so the rest of the strip never jumps under the pointer.
+    setPowerAction(s);
 
     // Usage-period tab reflects the extension's shared selection (a local preference,
     // so sync it even on the offline path before the early-return below). If the active

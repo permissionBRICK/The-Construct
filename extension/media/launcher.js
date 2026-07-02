@@ -5,8 +5,57 @@
   const $ = (id) => document.getElementById(id);
 
   document.querySelectorAll("[data-cmd]").forEach((el) =>
-    el.addEventListener("click", () => vscode.postMessage({ type: "command", id: el.getAttribute("data-cmd") })));
+    el.addEventListener("click", () => {
+      const id = el.getAttribute("data-cmd");
+      if (!id || el.disabled) return;
+      vscode.postMessage({ type: "command", id });
+    }));
   $("lOpen").addEventListener("click", () => vscode.postMessage({ type: "openPanel" }));
+
+  function setPowerAction(s) {
+    const btn = $("lPowerBtn");
+    if (!btn) return;
+
+    const cls = ["lpower"];
+    let cmd = "";
+    let label = "\u231B Loading";
+    let title = "Checking VM state";
+    let disabled = true;
+
+    if (s && s.online !== false) {
+      if (s.connected === false) {
+        cls.push("connect");
+        cmd = "connect";
+        label = "\u2192 Open on VM";
+        title = "Open this workspace on the VM";
+        disabled = false;
+      } else {
+        cls.push("shutdown");
+        cmd = "shutdown";
+        label = "\u23FB Shutdown";
+        title = "Shutdown the VM";
+        disabled = false;
+      }
+    } else if (s && s.vmState !== "absent" && s.vmState !== "running") {
+      cls.push("start");
+      cmd = "startConnect";
+      label = "\u25B6 Start & connect";
+      title = "Start the VM, then connect";
+      disabled = false;
+    } else {
+      cls.push("loading");
+      label = "\u231B Loading";
+      title = "Waiting for VM state";
+    }
+
+    btn.className = cls.join(" ");
+    btn.textContent = label;
+    btn.title = title;
+    btn.disabled = disabled;
+    btn.setAttribute("aria-disabled", disabled ? "true" : "false");
+    if (cmd) btn.setAttribute("data-cmd", cmd);
+    else btn.removeAttribute("data-cmd");
+  }
 
   function render(s) {
     if (!s) return;
@@ -16,20 +65,9 @@
     if (st) { st.textContent = online ? "VM online" : "VM offline"; st.style.color = online ? "var(--rain)" : "var(--crit)"; }
     if (s.host) $("lHost").textContent = s.host;
 
-    // Power controls (set before the offline early-return below). "Open on VM"
-    // shows when reachable + not already connected here; "Start & connect" replaces
-    // it when the VM is installed but stopped; "Shutdown" shows whenever reachable.
-    // "Open on VM" is hidden for now: the "only when this window isn't already
-    // connected" gate (s.connected) isn't reliable, so keep it out of the UI.
-    const conn = $("lConnect");
-    if (conn) conn.hidden = true;
-    // Offline + not known-absent → offer Start (see panel.js for the full rationale:
-    // the non-elevated Get-VM probe is permission-gated, so a stopped VM usually reads
-    // "unknown"; the elevated Start-VM works anyway, so show it for off/unknown alike).
-    const start = $("lStart");
-    if (start) start.hidden = !(!online && s.vmState !== "absent" && s.vmState !== "running");
-    const sd = $("lShutdown");
-    if (sd) sd.hidden = !online;
+    // Stable power slot: present from first paint, disabled while state is unknown,
+    // then updated in-place so the compact dashboard never reflows around it.
+    setPowerAction(s);
 
     // Construct self-update nudge — same banner intent as the full panel, compact here.
     // `s.update` is folded in only when online, so gate on it; clicking runs the same
