@@ -1287,6 +1287,26 @@ function Get-RemoteOpenLink {
     return "vscode://vscode-remote/ssh-remote+$alias$path"
 }
 
+function Open-RemoteWorkspace {
+    <#
+        Launch a vscode:// deep link (from Get-RemoteOpenLink) so VS Code opens the
+        VM over Remote-SSH. Routed through explorer.exe rather than ShellExecute on
+        the URI: the install chain runs elevated, and a direct open from an elevated
+        process would start VS Code as Administrator. Explorer forwards the open to
+        the existing desktop shell, so VS Code starts as the real (non-admin) user.
+        Best-effort: returns $true once the open was handed to the shell, $false on
+        failure (e.g. no explorer.exe on this host); never throws.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Link)
+    try {
+        Start-Process -FilePath explorer.exe -ArgumentList $Link -ErrorAction Stop
+        return $true
+    } catch {
+        return $false
+    }
+}
+
 function Get-VSCodeExtensionDir {
     # Where the control-panel extension is installed on the host: a fixed folder
     # under the user's VS Code extensions dir. VS Code scans every subfolder of
