@@ -470,7 +470,10 @@ async function runTests() {
       storeRoot: storeDir,
     });
     ok("reserved: tick ok", result.ok);
-    ok("reserved: warning about reserved name", result.warnings.some((w) => w.includes("reserved") && w.includes("default")));
+    // A leftover default.json is the normal state on upgraded VMs: ignored
+    // silently (info log only), never a panel warning, never tracked on main.
+    ok("reserved: no warning about reserved name", !result.warnings.some((w) => w.includes("reserved") && w.includes("default")));
+    ok("reserved: not committed to config repo", !fs.existsSync(path.join(configDir, "projects", "default.json")));
   } finally { fs.rmSync(reservedRoot, { recursive: true, force: true }); }
 
   // ── VM deletion propagates to main ─────────────────────────────────────────
