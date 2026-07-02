@@ -4,9 +4,9 @@
         irm https://raw.githubusercontent.com/permissionBRICK/The-Construct/main/install.ps1 | iex
     Downloads the repo to %LOCALAPPDATA%\The-Construct and runs Auto-Install.ps1
     (which self-elevates, builds the autoinstall ISO, and creates + provisions the VM).
-    Pass -Repo/-Ref to install from a fork/branch. Self-update = Update-Construct.ps1.
+    Pass -Repo/-Ref to install from a fork/branch. Any other arguments pass straight
+    through to Auto-Install.ps1 (e.g. -ConfigRepo, -ConfigDir, -Action add-config).
 #>
-[CmdletBinding()]
 param(
     [string]$Repo = "permissionBRICK/The-Construct",
     [string]$Ref  = "main"
@@ -37,7 +37,10 @@ $auto = Join-Path $root.FullName "Auto-Install.ps1"
 if (-not (Test-Path -LiteralPath $auto)) { throw "Auto-Install.ps1 not found in $($root.FullName)." }
 
 Write-Host "==> Launching Auto-Install.ps1" -ForegroundColor Cyan
-# Forward the repo/ref pair only when explicitly set (fork/mirror), so the marker is accurate.
-$fwd = @{}
-if ($PSBoundParameters.ContainsKey('Repo') -or $PSBoundParameters.ContainsKey('Ref')) { $fwd['Repo'] = $Repo; $fwd['Ref'] = $Ref }
+# Forward the repo/ref PAIR only when explicitly set (fork/mirror), so the marker is
+# accurate. The pair travels together: setting either forwards both. Any other args
+# ($args, populated because there is no [CmdletBinding()]) pass straight through.
+$fwd = @()
+if ($PSBoundParameters.ContainsKey('Repo') -or $PSBoundParameters.ContainsKey('Ref')) { $fwd += '-Repo', $Repo, '-Ref', $Ref }
+$fwd += $args
 & $auto @fwd
