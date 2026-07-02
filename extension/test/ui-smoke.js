@@ -376,6 +376,16 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, connected: false, vmState: "running" } }, "*"));
   await page.waitForTimeout(80);
   check("panel: power button visible at 300px", await page.locator("#powerBtn").isVisible());
+  const panelColsTop = await page.locator(".cols").evaluate((el) => el.getBoundingClientRect().top);
+  await page.evaluate(() => window.postMessage({ type: "state", state: {
+    online: true, connected: false, vmState: "running",
+    host: "very-long-agent-vm-hostname-that-used-to-wrap-and-shift.mshome.net",
+    hostShort: "very-long-agent-vm-hostname",
+  } }, "*"));
+  await page.waitForTimeout(80);
+  const panelColsTopLongHost = await page.locator(".cols").evaluate((el) => el.getBoundingClientRect().top);
+  check("panel: long hostname does not shift content at 300px", Math.abs(panelColsTopLongHost - panelColsTop) <= 1,
+    `before=${panelColsTop}, after=${panelColsTopLongHost}`);
   const panelOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   check("panel: no horizontal overflow at 300px", panelOverflow <= 1, `overflow=${panelOverflow}px`);
 
@@ -386,6 +396,14 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("launcher: 3 lifecycle buttons", (await page.locator(".laction").count()) === 3);
   check("launcher: power button present on first paint", await page.locator("#lPowerBtn").isVisible());
   check("launcher: power button disabled while loading", await page.locator("#lPowerBtn").isDisabled());
+  const launcherPowerTop = await page.locator("#lPowerBtn").evaluate((el) => el.getBoundingClientRect().top);
+  await page.evaluate(() => window.postMessage({ type: "state", state: {
+    online: true, host: "very-long-agent-vm-hostname-that-used-to-wrap-and-shift.mshome.net",
+  } }, "*"));
+  await page.waitForTimeout(80);
+  const launcherPowerTopLongHost = await page.locator("#lPowerBtn").evaluate((el) => el.getBoundingClientRect().top);
+  check("launcher: hostname render does not shift power button", Math.abs(launcherPowerTopLongHost - launcherPowerTop) <= 1,
+    `before=${launcherPowerTop}, after=${launcherPowerTopLongHost}`);
   await page.click("#lOpen");
   let lposted = await page.evaluate(() => window.__posted);
   check("launcher: open posts openPanel", lposted.some((m) => m.type === "openPanel"));

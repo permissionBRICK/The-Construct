@@ -70,9 +70,11 @@ h1.title {
 .promptline {
   display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dim);
   background: rgba(0,0,0,0.4); border: 1px solid var(--line); border-radius: 4px; padding: 6px 11px;
+  max-width: 100%; min-width: 0;
 }
 .promptline .usr { color: var(--accent); }
 .promptline .cmd { color: var(--text); }
+#hostShort { display: inline-block; width: 12ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 .cursor { display: inline-block; width: 7px; height: 14px; background: var(--rain); box-shadow: 0 0 8px var(--rain); animation: blink 1.2s steps(1) infinite; transform: translateY(2px); }
 @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 
@@ -107,7 +109,10 @@ h1.title {
 .pill {
   display: inline-flex; align-items: center; gap: 6px; font-size: 11px; letter-spacing: 0.5px; padding: 4px 10px;
   border-radius: 999px; border: 1px solid var(--line); background: rgba(0,0,0,0.25); color: var(--text); white-space: nowrap;
+  min-width: 0;
 }
+#pillHost { width: clamp(13ch, 22vw, 28ch); overflow: hidden; text-overflow: ellipsis; }
+#sysHost { overflow-wrap: anywhere; }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--rain); box-shadow: 0 0 7px var(--rain); }
 .dot.live { animation: pulse 1.6s ease-in-out infinite; }
 .pill.offline .dot { background: var(--crit); box-shadow: 0 0 7px var(--crit); animation: none; }
@@ -365,7 +370,10 @@ body.launcher { font-size: 12px; }
 .lbrand .ldot { width: 9px; height: 9px; border-radius: 50%; background: var(--rain); box-shadow: 0 0 8px var(--rain); flex: none; }
 .lbrand .ldot.offline { background: var(--crit); box-shadow: 0 0 8px var(--crit); }
 .lstatus { font-size: 10.5px; letter-spacing: 1px; text-transform: uppercase; color: var(--dim); margin-top: -6px; }
-.lhost { color: var(--dim); font-size: 11px; word-break: break-all; }
+.lhost {
+  color: var(--dim); font-size: 11px; min-height: 16px; line-height: 16px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .lactions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
 .laction {
   display: flex; flex-direction: column; align-items: center; gap: 5px; text-align: center;
