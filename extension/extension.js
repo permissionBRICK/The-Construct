@@ -29,9 +29,20 @@ const audio = require("./src/audio");
 const configsync = require("./src/configsync");
 const importui = require("./src/importui");
 const zip = require("./src/zip");
+const themes = require("./src/themes");
 
 /** The single editor-tab panel instance, if open. */
 let panel; // vscode.WebviewPanel | undefined
+
+/** The sidebar launcher view, if resolved — kept so a theme change can re-render it. */
+let launcherView; // vscode.WebviewView | undefined
+
+/** The theme-picker webview, if open (single instance, like the panel). */
+let themePicker; // vscode.WebviewPanel | undefined
+
+/** Whether the "choose a design" picker was already offered this session, so an
+ *  undecided user isn't nagged by every surface open within one session. */
+let themePickerOffered = false;
 
 /** The host-side mic-passthrough orchestrator (audio.HostAudio), live only while
  *  passthrough is enabled. */
@@ -1102,7 +1113,15 @@ function getNonce() {
   return crypto.randomBytes(24).toString("base64");
 }
 
-/** Build the webview HTML for either surface from the shared template. */
+/** The user's chosen UI design id, or null while undecided (renders the default). */
+function currentThemeId() {
+  try { return themes.normalizeThemeId(vscode.workspace.getConfiguration("construct").get("uiTheme")); }
+  catch (_) { return null; }
+}
+
+/** Build the webview HTML for either surface from the shared template. Both
+ *  surfaces share one markup + one controller; the selected design is ONLY the
+ *  extra {{themeUri}} stylesheet layered after panel.css (see src/themes.js). */
 function buildHtml(webview, extensionUri, htmlFile, scriptFile) {
   const mediaUri = (file) => webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", file));
   const html = fs.readFileSync(path.join(extensionUri.fsPath, "media", htmlFile), "utf8");
@@ -1110,8 +1129,22 @@ function buildHtml(webview, extensionUri, htmlFile, scriptFile) {
   return html
     .replace(/{{cspSource}}/g, webview.cspSource)
     .replace(/{{styleUri}}/g, mediaUri("panel.css").toString())
+    .replace(/{{themeUri}}/g, mediaUri(themes.cssFileFor(currentThemeId())).toString())
     .replace(/{{scriptUri}}/g, mediaUri(scriptFile).toString())
     .replace(/{{nonce}}/g, nonce);
+}
+
+/** Re-render every open surface with the current design (config-change hook).
+ *  Setting webview.html reloads the document; the webview re-posts 'ready' and
+ *  gets fresh state, so no data is lost beyond transient in-modal edits. */
+function reapplyTheme(context) {
+  const { extensionUri } = context;
+  try {
+    if (launcherView) launcherView.webview.html = buildHtml(launcherView.webview, extensionUri, "launcher.html", "launcher.js");
+  } catch (_) { /* view may be disposed mid-flight */ }
+  try {
+    if (panel) panel.webview.html = buildHtml(panel.webview, extensionUri, "panel.html", "panel.js");
+  } catch (_) { /* panel may be disposed mid-flight */ }
 }
 
 const webviewOptions = (extensionUri) => ({
@@ -1580,9 +1613,15 @@ class ConstructViewProvider {
     // The listener is tied to the webview's own lifetime (not context.subscriptions);
     // its disposable is released when the view is destroyed.
     webviewView.webview.onDidReceiveMessage((m) => handleMessage(m, webviewView.webview, this.context));
+    launcherView = webviewView;
     liveWebviews.add(webviewView.webview);
     syncAutoRefresh();
-    this.context.subscriptions.push(webviewView.onDidDispose(() => { liveWebviews.delete(webviewView.webview); syncAutoRefresh(); }));
+    this.context.subscriptions.push(webviewView.onDidDispose(() => {
+      if (launcherView === webviewView) launcherView = undefined;
+      liveWebviews.delete(webviewView.webview);
+      syncAutoRefresh();
+    }));
+    maybeOfferThemePicker(this.context);
   }
 }
 
@@ -1601,6 +1640,67 @@ function setupPanel(p, context) {
   liveWebviews.add(p.webview);
   syncAutoRefresh();
   p.onDidDispose(() => { liveWebviews.delete(p.webview); if (panel === p) panel = undefined; syncAutoRefresh(); });
+  maybeOfferThemePicker(context);
+}
+
+// ── UI design (theme) picker ─────────────────────────────────────────────────
+// A design changes ONLY the stylesheet layered after panel.css (src/themes.js);
+// markup and controller logic are shared, so features can never fork per design.
+
+/** First-run nudge: when a Construct surface opens and no design was chosen yet
+ *  (construct.uiTheme unset/unknown), surface the picker once per session. It
+ *  keeps asking on later sessions until the user picks (picking "Classic Matrix"
+ *  is the explicit "keep the current look" answer). */
+function maybeOfferThemePicker(context) {
+  if (themePickerOffered || currentThemeId() !== null) return;
+  themePickerOffered = true;
+  // Best-effort: a picker failure must never break the surface that triggered it.
+  try { openThemePicker(context); } catch (_) {}
+}
+
+/** Open (or reveal) the design-picker webview: preview cards, one per design. */
+function openThemePicker(context) {
+  if (themePicker) {
+    try { themePicker.reveal(); return; } catch (_) { themePicker = undefined; }
+  }
+  const { extensionUri } = context;
+  const p = vscode.window.createWebviewPanel(
+    "construct.themePicker",
+    "The Construct — choose a design",
+    vscode.ViewColumn.Active,
+    webviewOptions(extensionUri)
+  );
+  themePicker = p;
+  p.iconPath = vscode.Uri.joinPath(extensionUri, "media", "icon.svg");
+  const mediaUri = (file) => p.webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", file)).toString();
+  p.webview.html = themes.buildPickerHtml({
+    cspSource: p.webview.cspSource,
+    nonce: getNonce(),
+    cards: themes.THEMES.map((t) => ({ ...t, previewUri: mediaUri(themes.previewFileFor(t.id)) })),
+  });
+  // One-shot: the config write is async, so without a guard a double-click (or a
+  // second card) would fire two updates -> two re-renders + two toasts.
+  let picked = false;
+  p.webview.onDidReceiveMessage((m) => {
+    if (!m || m.type !== "pickTheme" || picked) return;
+    const id = themes.normalizeThemeId(m.id);
+    if (!id) return;
+    picked = true;
+    const entry = themes.THEMES.find((t) => t.id === id);
+    // Persist globally; the onDidChangeConfiguration listener re-renders the
+    // open surfaces. Close the picker only after the write really landed.
+    vscode.workspace.getConfiguration("construct").update("uiTheme", id, vscode.ConfigurationTarget.Global).then(
+      () => {
+        vscode.window.showInformationMessage(`The Construct now wears "${entry ? entry.label : id}". Change it anytime: The Construct: Choose UI Design.`);
+        try { p.dispose(); } catch (_) {}
+      },
+      (e) => {
+        picked = false; // let the user retry after a failed write
+        vscode.window.showErrorMessage("Couldn't save the design choice: " + (e && e.message ? e.message : e));
+      }
+    );
+  });
+  p.onDidDispose(() => { if (themePicker === p) themePicker = undefined; });
 }
 
 /** Open (or reveal) the full control panel as a wide editor tab. */
@@ -1634,7 +1734,18 @@ function activate(context) {
     }),
     vscode.commands.registerCommand("construct.openPanel", () => openPanel(context)),
     vscode.commands.registerCommand("construct.refresh", () => refreshAll()),
-    vscode.commands.registerCommand("construct.showLogs", () => showLogs())
+    vscode.commands.registerCommand("construct.showLogs", () => showLogs()),
+    vscode.commands.registerCommand("construct.chooseTheme", () => openThemePicker(context)),
+    // Live-swap the design when construct.uiTheme changes (picker, settings UI,
+    // or a synced settings.json edit) — re-render both surfaces in place.
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (!e.affectsConfiguration("construct.uiTheme")) return;
+      reapplyTheme(context);
+      // A pick elsewhere (another window's picker, the settings UI) settles the
+      // question — retire a still-open picker whose "nothing chosen yet" premise
+      // is now false instead of leaving a stale nag inviting a second answer.
+      if (currentThemeId() !== null && themePicker) { try { themePicker.dispose(); } catch (_) {} }
+    })
   );
   // Restore the editor-tab panel across reloads instead of leaving a dead webview.
   if (vscode.window.registerWebviewPanelSerializer) {

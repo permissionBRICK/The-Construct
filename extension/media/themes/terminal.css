@@ -1,0 +1,364 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   Terminal, Refined — theme layer over media/panel.css
+   ─────────────────────────────────────────────────────────────────────────
+   The Matrix identity with discipline: a real phosphor green SCALE instead of
+   one acid green. The live accent (--rain, #37ff8b) and its glow are a SCARCE
+   resource — spent only on genuinely live things (online dot, armed mic,
+   cursor, in-flight states). Everything else sits calm on the tier scale:
+
+     grounds  #030906 (void) · #050d08 (ground) · #081410 (ink) · #0c1a12 (panel)
+     tiers    p1 #2b543c → p2 #4f8a68 → p3 #9fe8bd → p4 #dcffe9
+
+   Semantic colors stay separate from the accent: warn amber, crit red.
+   Pure CSS: same markup, same IDs/classes, same behavior as panel.css.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── 1. Tokens ──────────────────────────────────────────────────────────────
+   Remap the base palette onto the phosphor scale. --rain stays the LIVE
+   accent (cursor, online dots, armed switch); --accent drops to a calm mid
+   tier so every base rule that used it (glyphs, section labels) goes quiet. */
+:root {
+  --void: #030906;
+  --ground: #050d08;
+  --ground-2: #040b07;
+  --rain: #37ff8b;          /* live accent — scarce */
+  --accent: #4f8a68;        /* p2 — calm mid tier */
+  --title: #dcffe9;         /* p4 */
+  --text: #9fe8bd;          /* p3 */
+  --dim: #4f8a68;           /* p2 */
+  --faint: #2b543c;         /* p1 */
+  --line: #14291c;          /* edge */
+  --line-strong: #1f3b2c;   /* edge-2 */
+  --warn: #ffc24d;
+  --crit: #ff5d5d;
+  /* theme-scoped extras (t- prefix; not used by panel.css) */
+  --t-ink: #081410;
+  --t-panel: #0c1a12;
+  --t-crit-soft: #ff9d9d;
+  --t-live-08: rgba(55, 255, 139, 0.08);
+  --t-live-14: rgba(55, 255, 139, 0.14);
+  --sans: Seravek, 'Gill Sans Nova', Ubuntu, Calibri, 'Trebuchet MS', 'DejaVu Sans', 'Segoe UI', sans-serif;
+}
+
+/* ── 2. Page ground, scanlines, selection, scrollbars ─────────────────────── */
+body {
+  background: linear-gradient(180deg, var(--ground) 0%, var(--void) 60%, var(--void) 100%);
+  background-attachment: fixed;
+}
+/* Whisper-level CRT scanlines: static (no animation), never intercepts input. */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  pointer-events: none;
+  opacity: 0.06;
+  background: repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.55) 0 1px, transparent 1px 3px);
+}
+::selection { background: rgba(55, 255, 139, 0.25); color: var(--title); }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border: 2px solid transparent;
+  background-clip: content-box;
+  border-radius: 6px;
+}
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ── 3. Header: brand, rain, promptline, gear, update banner ──────────────── */
+header {
+  background: linear-gradient(180deg, #0a1710 0%, var(--ground) 100%);
+  border-bottom-color: var(--line);
+}
+/* Keep the rain, but demote it to a whisper (never display:none). */
+#rain {
+  opacity: 0.16;
+  mask-image: linear-gradient(180deg, #000 25%, transparent 96%);
+  -webkit-mask-image: linear-gradient(180deg, #000 25%, transparent 96%);
+}
+/* Typography tiers: small, wide-tracked brand instead of the huge glowing one. */
+.brand .eyebrow { letter-spacing: 0.34em; }
+h1.title {
+  font-size: clamp(18px, 2.6vw, 26px);
+  letter-spacing: 0.42em;
+  text-shadow: none;
+}
+.brand .subtitle { color: var(--dim); letter-spacing: 0.32em; }
+.gear {
+  color: var(--dim);
+  background: transparent;
+  border-color: var(--line);
+  border-radius: 3px;
+}
+.gear:hover { border-color: var(--line-strong); color: var(--title); background: var(--t-live-08); }
+.promptline {
+  background: rgba(3, 9, 6, 0.6);
+  border-color: var(--line);
+  border-radius: 3px;
+}
+.promptline .usr { color: var(--text); }
+.promptline .cmd { color: var(--title); }
+/* .cursor keeps its live glow + blink from the base — genuinely live. */
+.update-banner {
+  background: rgba(38, 27, 6, 0.85);
+  border-color: rgba(255, 194, 77, 0.45);
+  border-radius: 3px;
+  box-shadow: none;
+}
+.ub-btn { background: var(--warn); color: #1d1503; border-radius: 3px; }
+.ub-btn:hover { background: #ffd47e; box-shadow: none; }
+
+/* ── 4. Prompt-line section labels ("$ lifecycle", "$ projects", …) ───────── */
+.seclabel {
+  text-transform: lowercase;
+  letter-spacing: 0.08em;
+  color: var(--title);
+  font-size: 12px;
+}
+.seclabel::before { content: '$ '; color: var(--faint); font-weight: 400; }
+.pm-h {
+  text-transform: lowercase;
+  letter-spacing: 0.08em;
+  color: var(--title);
+}
+.pm-h::before { content: '$ '; color: var(--faint); font-weight: 400; }
+.lcard-h {
+  text-transform: lowercase;
+  letter-spacing: 0.08em;
+  color: var(--title);
+  font-size: 11px;
+}
+.lcard-h::before { content: '$ '; color: var(--faint); font-weight: 400; }
+.cs-label { text-transform: lowercase; letter-spacing: 0.12em; color: var(--dim); }
+
+/* ── 5. Lifecycle action grid ─────────────────────────────────────────────── */
+.act {
+  background: var(--t-ink);
+  border-color: var(--line-strong);
+  border-radius: 4px;
+}
+.act:hover { border-color: var(--dim); background: var(--t-panel); box-shadow: none; }
+.act small { font-family: var(--sans); }
+/* One accent spend: the primary action's glyph is live; the card stays calm. */
+.act.primary {
+  background: linear-gradient(180deg, rgba(55, 255, 139, 0.07), var(--t-ink));
+  border-color: var(--dim);
+  box-shadow: none;
+}
+.act.primary .t { color: var(--title); }
+.act.primary .t .gl { color: var(--rain); }
+.act.danger:hover { border-color: rgba(255, 93, 93, 0.55); background: rgba(255, 93, 93, 0.05); box-shadow: none; }
+.act.stale {
+  background: linear-gradient(180deg, rgba(255, 194, 77, 0.1), var(--t-ink));
+  border-color: var(--warn);
+  box-shadow: none;
+}
+/* Stale outranks the primary accent: the glyph must read WARN, not live — it
+ * ties with .act.primary .t .gl at (0,4,0), so it has to come after it here
+ * (in narrow icon-only mode the glyph is the button's whole message). */
+.act.stale .t .gl { color: var(--warn); }
+
+/* ── 6. Status strip ──────────────────────────────────────────────────────── */
+.pill {
+  border-radius: 2px;
+  background: rgba(3, 9, 6, 0.55);
+  border-color: var(--line);
+}
+/* .dot / .dot.live keep the base live glow + pulse — the online dot IS live. */
+
+/* ── 7. Modules, rows, hairlines ──────────────────────────────────────────── */
+.module {
+  background: var(--t-ink);
+  border-color: var(--line);
+  border-radius: 4px;
+}
+.row { border-top-color: rgba(31, 59, 44, 0.45); }
+.agent { border-top-color: rgba(31, 59, 44, 0.45); }
+.agent .name small { font-family: var(--sans); }
+
+/* ── 8. Buttons ───────────────────────────────────────────────────────────── */
+.btn {
+  color: var(--text);
+  background: transparent;
+  border-color: var(--line-strong);
+  border-radius: 3px;
+}
+.btn:hover { background: var(--t-live-08); border-color: var(--dim); color: var(--title); box-shadow: none; }
+.btn.ghost { color: var(--dim); border-color: var(--line); background: transparent; }
+.btn.ghost:hover { color: var(--text); background: var(--t-live-08); box-shadow: none; }
+.btn.danger { color: var(--t-crit-soft); border-color: rgba(255, 93, 93, 0.4); }
+.btn.danger:hover { background: rgba(255, 93, 93, 0.09); border-color: var(--crit); box-shadow: none; }
+.btn.start { color: #1d1503; background: var(--warn); box-shadow: none; }
+.btn.start:hover { background: #ffd47e; box-shadow: none; }
+.btn.loading, .btn:disabled {
+  color: var(--faint);
+  background: rgba(159, 232, 189, 0.04);
+  border-color: var(--line);
+}
+.btn.loading:hover, .btn:disabled:hover { background: rgba(159, 232, 189, 0.04); }
+/* Primary CTAs: solid live fill, no glow (fill is the spend, glow stays scarce). */
+.save-btn {
+  background: var(--rain);
+  color: #04170c;
+  border-radius: 3px;
+  box-shadow: none;
+  text-transform: none;
+  letter-spacing: 0.4px;
+  font-size: 12.5px;
+}
+.save-btn:hover { background: #5fffa4; box-shadow: none; }
+.save-btn:focus-visible { outline: 2px solid var(--title); outline-offset: 2px; }
+
+/* ── 9. Agent tags ────────────────────────────────────────────────────────── */
+.tag { border-radius: 2px; border-color: var(--line-strong); }
+/* "up to date" is a resting state, not a live one — calm tier, no accent. */
+.tag.ok { color: var(--text); border-color: var(--line-strong); }
+
+/* ── 10. Voice module (armed mic = a genuinely live state: keeps its glow) ── */
+.voice { border-color: var(--line-strong); box-shadow: none; }
+.voice .desc { color: var(--dim); }
+.switch { background: var(--ground); border-color: var(--line-strong); }
+.switch .knob { background: var(--faint); }
+.switch[aria-checked="true"] {
+  background: var(--t-live-14);
+  border-color: var(--rain);
+  box-shadow: 0 0 12px rgba(55, 255, 139, 0.35);
+}
+.switch[aria-checked="true"] .knob { background: var(--rain); box-shadow: 0 0 9px var(--rain); }
+.substatus { border-top-color: rgba(31, 59, 44, 0.45); }
+/* .sub .dot keeps its small live glow (tunnel/shim rows report live plumbing). */
+
+/* ── 11. Projects: chips + config-sync strip ──────────────────────────────── */
+.chip {
+  border-radius: 3px;
+  background: var(--ground);
+  border-color: var(--line);
+  transition: border-color 0.15s, color 0.15s;
+}
+.chip:hover { border-color: var(--dim); color: var(--text); }
+.chip.on { color: var(--title); border-color: var(--line-strong); background: var(--t-panel); }
+.chip.locked:hover { background: var(--ground); border-color: var(--line); color: var(--dim); }
+.chip .openbtn { border-left-color: var(--line); }
+.chip .openbtn:hover { color: var(--rain); text-shadow: none; }
+.cost-note { font-family: var(--sans); }
+.cs-strip { border-top-color: rgba(31, 59, 44, 0.45); }
+.cs-conflict { border-radius: 3px; }
+.cs-conflict-text { color: var(--t-crit-soft); }
+.cs-git-missing { border-radius: 3px; }
+.cs-remote-url { color: var(--dim); }
+.cs-remote-rm, .cs-remote-push { border-radius: 2px; }
+.cs-remote-push:hover { color: var(--rain); border-color: var(--line-strong); }
+
+/* ── 12. Usage: tabs + block-element share bars ───────────────────────────── */
+.usage-tabs { border-color: var(--line-strong); border-radius: 3px; }
+.utab:hover { color: var(--text); background: var(--t-live-08); }
+.utab.sel { color: var(--title); background: var(--t-live-14); }
+.usage-row .ulabel { color: var(--text); }
+/* Terminal block chart: ▰▰▰▱-style segments faked with repeating gradients.
+   Both track and fill segment on the same 11px pitch so they stay aligned;
+   the fill width is set inline by panel.js — only the paint changes here. */
+.bar {
+  height: 10px;
+  border-radius: 0;
+  background: repeating-linear-gradient(90deg, rgba(31, 59, 44, 0.5) 0 7px, transparent 7px 11px);
+}
+.bar > span {
+  border-radius: 0;
+  background: repeating-linear-gradient(90deg, var(--rain) 0 7px, transparent 7px 11px);
+  box-shadow: none;
+}
+.ucost { color: var(--title); }
+.usage-total { border-top-color: var(--line-strong); }
+.usage-total .cost { color: var(--title); font-weight: 700; }
+
+/* ── 13. Settings view ────────────────────────────────────────────────────── */
+.settings-top .lead { color: var(--dim); }
+.setgroup {
+  background: var(--t-ink);
+  border-color: var(--line);
+  border-radius: 4px;
+}
+.field { border-top-color: rgba(31, 59, 44, 0.4); }
+.field .hint { font-family: var(--sans); }
+.radio-card { border-radius: 4px; background: var(--ground); border-color: var(--line); }
+.radio-card:hover { border-color: var(--line-strong); }
+.radio-card.sel { border-color: var(--dim); background: var(--t-panel); }
+.radio-card.sel .rdot::after { background: var(--rain); box-shadow: none; }
+.radio-card.sel.danger { border-color: var(--crit); background: rgba(255, 93, 93, 0.06); }
+.radio-card.sel.danger .rdot::after { background: var(--crit); box-shadow: none; }
+.radio-card.danger .rc-t { color: var(--t-crit-soft); }
+
+/* ── 14. Inputs ───────────────────────────────────────────────────────────── */
+input[type=text], input[type=password], input[type=number], select {
+  background: var(--ground);
+  border-color: var(--line-strong);
+  border-radius: 3px;
+}
+input:focus, select:focus { border-color: var(--rain); box-shadow: 0 0 0 1px rgba(55, 255, 139, 0.3); }
+
+/* ── 15. Project modal ────────────────────────────────────────────────────── */
+.modal-overlay { background: rgba(3, 9, 6, 0.8); backdrop-filter: none; }
+.modal {
+  background: var(--t-ink);
+  border-color: var(--line-strong);
+  border-radius: 5px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+}
+.modal .lead code, .pm-note code { color: var(--text); }
+.pm-sec { border-top-color: rgba(31, 59, 44, 0.45); }
+.pm-del { border-radius: 3px; }
+.pm-ta { background: var(--ground); border-color: var(--line-strong); border-radius: 3px; }
+.pm-ta:focus { border-color: var(--rain); box-shadow: 0 0 0 1px rgba(55, 255, 139, 0.3); }
+.pm-err { color: var(--t-crit-soft); }
+
+/* ── 16. Footer ───────────────────────────────────────────────────────────── */
+footer a:hover { color: var(--text); text-decoration: underline; }
+
+/* ── 17. Launcher (body.launcher sidebar) ─────────────────────────────────── */
+.lbrand { letter-spacing: 0.24em; }
+/* .ldot keeps its live glow (online) / crit (offline) from the base tokens. */
+.laction {
+  background: var(--ground);
+  border-color: var(--line);
+  border-radius: 3px;
+}
+.laction:hover { border-color: var(--dim); box-shadow: none; }
+.laction.danger .lglyph { color: var(--crit); }
+.laction.danger:hover { border-color: rgba(255, 93, 93, 0.5); box-shadow: none; }
+.laction.stale { border-color: var(--warn); box-shadow: none; }
+.lopen { background: var(--rain); color: #04170c; border-radius: 3px; box-shadow: none; }
+.lopen:hover { background: #5fffa4; box-shadow: none; }
+.lcard { background: var(--ground); border-color: var(--line); border-radius: 3px; }
+.lrefresh { border-radius: 3px; }
+.lrefresh:hover { color: var(--text); background: var(--t-live-08); }
+.lpower { border-radius: 3px; }
+.lpower.start {
+  color: #1d1503;
+  background: var(--warn);
+  border-color: var(--warn);
+  box-shadow: none;
+}
+.lpower.start:hover { background: #ffd47e; box-shadow: none; }
+.lpower.shutdown { color: var(--t-crit-soft); background: transparent; border-color: rgba(255, 93, 93, 0.45); }
+.lpower.shutdown:hover { background: rgba(255, 93, 93, 0.09); box-shadow: none; }
+.lpower.loading, .lpower:disabled {
+  color: var(--faint);
+  background: rgba(159, 232, 189, 0.04);
+  border-color: var(--line);
+}
+.lpower.loading:hover, .lpower:disabled:hover { background: rgba(159, 232, 189, 0.04); }
+.lupdate { border-radius: 3px; }
+.lupdate:hover { background: rgba(255, 194, 77, 0.15); box-shadow: none; }
+
+/* ── 18. Narrow re-assertions ─────────────────────────────────────────────
+   This file loads after panel.css, so broad theme rules would out-cascade the
+   base's ≤420px adjustments for the same properties. Re-assert the narrow
+   values for exactly the properties this theme overrides broadly. */
+@media (max-width: 420px) {
+  h1.title { font-size: 16px; letter-spacing: 0.3em; }
+  .brand .subtitle { letter-spacing: 0.24em; }
+}
+
+/* ── 19. Motion ───────────────────────────────────────────────────────────
+   This theme adds no new animation (scanlines are static); the base already
+   stills .cursor and .dot.live under prefers-reduced-motion. */

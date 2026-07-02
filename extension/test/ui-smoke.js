@@ -11,12 +11,18 @@ const path = require("path");
 
 const MEDIA = path.join(__dirname, "..", "media");
 
+// The design under test: every theme is a pure CSS layer over the same markup +
+// controller, so the FULL suite must pass for any of them. Default classic;
+// override with UI_SMOKE_THEME=terminal|native to prove a theme changed no behavior.
+const THEME = /^[a-z]+$/.test(process.env.UI_SMOKE_THEME || "") ? process.env.UI_SMOKE_THEME : "classic";
+
 function buildPage(htmlFile, scriptFile) {
   let html = fs.readFileSync(path.join(MEDIA, htmlFile), "utf8");
   // Strip the CSP for the harness (CSP correctness is reviewed separately); this
   // lets us inject the mock vscode API inline.
   html = html.replace(/<meta http-equiv="Content-Security-Policy"[\s\S]*?\/>/, "");
   html = html.replace(/{{cspSource}}/g, "").replace(/{{styleUri}}/g, "panel.css")
+             .replace(/{{themeUri}}/g, "themes/" + THEME + ".css")
              .replace(/{{scriptUri}}/g, scriptFile).replace(/{{nonce}}/g, "test");
   const mock =
     '<script>window.__posted=[];window.acquireVsCodeApi=function(){return{' +
@@ -32,7 +38,13 @@ function serve() {
     const url = req.url.split("?")[0];
     if (pages[url]) { res.writeHead(200, { "Content-Type": "text/html" }); return res.end(pages[url]); }
     const ext = path.extname(url);
-    if (types[ext]) { res.writeHead(200, { "Content-Type": types[ext] }); return res.end(fs.readFileSync(path.join(MEDIA, path.basename(url)))); }
+    if (types[ext]) {
+      // Resolve under media/ (themes/ lives in a subdir), refusing traversal.
+      const file = path.normalize(path.join(MEDIA, url));
+      if (!file.startsWith(MEDIA + path.sep)) { res.writeHead(404); return res.end("nf"); }
+      try { const body = fs.readFileSync(file); res.writeHead(200, { "Content-Type": types[ext] }); return res.end(body); }
+      catch (_) { res.writeHead(404); return res.end("nf"); }
+    }
     res.writeHead(404); res.end("nf");
   });
   return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve({ server, port: server.address().port })));

@@ -9,6 +9,9 @@
   (function rain() {
     const canvas = $("rain");
     if (!canvas) return;
+    // A design (themes/*.css) may hide the rain entirely — don't animate an
+    // invisible canvas. A theme change reloads the webview, so this re-evaluates.
+    if (getComputedStyle(canvas).display === "none") return;
     const header = canvas.parentElement;
     const ctx = canvas.getContext("2d");
     const glyphs = "ｱｲｳｴｵｶｷｸ0123456789ABCDEFｦｧｨ$<>/\\|=+*".split("");
