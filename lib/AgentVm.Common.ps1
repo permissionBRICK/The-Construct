@@ -1358,8 +1358,8 @@ function Build-ControlPanelVsix {
         # manifest's own .vsixmanifest.
         $ctMap = @{
             '.js' = 'application/javascript'; '.json' = 'application/json'; '.css' = 'text/css';
-            '.html' = 'text/html'; '.svg' = 'image/svg+xml'; '.sh' = 'application/x-sh';
-            '.md' = 'text/markdown'; '.vsixmanifest' = 'text/xml'
+            '.html' = 'text/html'; '.svg' = 'image/svg+xml'; '.png' = 'image/png';
+            '.sh' = 'application/x-sh'; '.md' = 'text/markdown'; '.vsixmanifest' = 'text/xml'
         }
         $exts = @(Get-ChildItem -LiteralPath $payload -Recurse -File |
                   ForEach-Object { $_.Extension.ToLowerInvariant() } |

@@ -52,6 +52,11 @@
         "command": "construct.showLogs",
         "title": "Show Logs (diagnostics)",
         "category": "The Construct"
+      },
+      {
+        "command": "construct.chooseTheme",
+        "title": "Choose UI Design",
+        "category": "The Construct"
       }
     ],
     "configuration": {
@@ -66,6 +71,18 @@
           "type": "boolean",
           "default": false,
           "markdownDescription": "Diagnostics: keep launched host consoles OPEN (`-NoExit`) so errors stay readable instead of flashing closed, and log verbosely. Every launch is also recorded (with the exact command, resolved paths, args, and result) to the **Construct** Output channel — run **The Construct: Show Logs** to view it."
+        },
+        "construct.uiTheme": {
+          "type": "string",
+          "default": "",
+          "enum": ["", "classic", "terminal", "native"],
+          "enumDescriptions": [
+            "Not chosen yet — the design picker opens the next time a Construct panel is shown.",
+            "Classic Matrix — the original green operator console.",
+            "Terminal, Refined — the Matrix identity with a disciplined phosphor palette; glow only on live elements.",
+            "VS Code Native — looks like a built-in panel and follows your editor theme (light or dark)."
+          ],
+          "markdownDescription": "Visual design of the Construct panels. Every design has identical functionality — only the styling changes. Pick with preview images via **The Construct: Choose UI Design**."
         },
         "construct.micDevice": {
           "type": "string",

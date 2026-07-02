@@ -42,10 +42,15 @@ extension/
   media/
     launcher.html     sidebar launcher doc (status + update banner + 3 quick actions + Open button)
     launcher.js       launcher controller: postMessage, render(state)
-    panel.html        full-panel doc (CSP + {{nonce}}/{{styleUri}}/{{scriptUri}}/{{cspSource}})
-    panel.css         Matrix theme shared by launcher + panel (tokens from assets/banner.svg)
+    panel.html        full-panel doc (CSP + {{nonce}}/{{styleUri}}/{{themeUri}}/{{scriptUri}}/{{cspSource}})
+    panel.css         base stylesheet shared by launcher + panel — structure + the Classic
+                      Matrix skin (tokens from assets/banner.svg)
     panel.js          panel controller: rain, controls, postMessage, render(state)
     icon.svg          activity-bar glyph (filled, currentColor)
+    themes/           one stylesheet per UI design, layered AFTER panel.css via the
+                      {{themeUri}} link (classic.css is empty — panel.css IS classic;
+                      terminal.css / native.css re-skin it; see the UI-designs decision)
+    theme-previews/   one thumbnail per design for the picker cards (<id>.png)
   src/
     ssh.js            system-ssh runner (buildSshArgs/runRemote/runRemoteScript/isReachable)
     probe.js          REMOTE_PROBE + parseProbe/extractVersion/toState/probe()
@@ -65,6 +70,9 @@ extension/
                       ensureStagingClone, listImportCandidates, planUpstreamImport,
                       mergeFile, commitAll, pushUpstream; see docs/config-sync.md)
     zip.js            hand-rolled ZIP writer (STORED entries, no deps): crc32, buildZip
+    themes.js         UI-design registry (THEMES/DEFAULT_THEME/normalizeThemeId/
+                      cssFileFor/previewFileFor) + buildPickerHtml (the picker webview
+                      document, pure + injection-escaped) — no vscode dependency
     importui.js       pure decision core for the remote-config rename-on-collision import
                       (planRenamedImport: validate target + build canonical profile +
                       manifest provenance + base) — the testable half of extension.js's
@@ -122,14 +130,16 @@ extension/
     construct-audio-disable.sh   remove shim + revert patch (restore the .bak) — SKIPPED while
                                  another window's tunnel is live (last-window-out guard)
   test/
-    ui-smoke.js       Playwright headless-Chromium webview test (149 checks: panel + launcher +
+    ui-smoke.js       Playwright headless-Chromium webview test (162 checks: panel + launcher +
                       narrow overflow + settings round-trip + honesty + power buttons + add-project +
                       per-chip open + project edit modal + usage table + daily/monthly/total period tabs
                       (incl. period-change-without-usage blanks the table, same-period keeps it) +
                       audio substatus incl. gate-patch state + launcher update banner +
                       config-sync strip: absent→hidden, gitPresent:false→install-git notice,
                       conflict→banner+open-repo, remotes list, default chip locked/no-modal,
-                      sync-now posts syncConfigNow, installGit posts, offline survival)
+                      sync-now posts syncConfigNow, installGit posts, offline survival);
+                      UI_SMOKE_THEME=classic|terminal|native re-runs the WHOLE suite under
+                      that design skin — the designs-can't-fork-behavior invariant
     probe.test.js     plain-node ssh-arg + probe-parse units (21 checks)
     configsync.test.js plain-node config-sync engine units — git-based sync tick, staging clones,
                       upstream import planning, merge-file, read/write store scripts, repo state,
@@ -145,6 +155,9 @@ extension/
     projects.test.js  plain-node scan builder/parser + planImport merge + reconcileSelection +
                       sanitizeProfile (injection + prototype-pollution) + config-sync helpers:
                       isReservedProfileName, validateProfile, canonicalProfileJson, share builders (147 checks)
+    themes.test.js    plain-node UI-design units — registry shape + settings-enum sync with
+                      package.json, css+preview files exist per design, normalize fallbacks
+                      (hostile/unknown -> default), picker HTML nonce/CSP/escaping
     usage.test.js     plain-node ccusage script (daily/monthly/total window mapping) + parse (totalCost/costUSD/missing/error/zero/array) + formatting + per-report cache TTL/coalesce + isCurrentReport stale-collection ordering + export payload, injected ssh+clock (105 checks)
     audio.test.js     plain-node guard-patch apply/revert/idempotency + VM script builders (injection proofs) + ssh -R argv + AudioSession gating + HostAudio enable/disable/rollback + tunnel settle-window (async early death + later death) + multi-window port range (busy-skip/bind-race retry/no-free-port/self-port disable) (233 checks)
 ```
@@ -212,6 +225,30 @@ module, regardless of `online`.
 
 ## Design decisions
 
+- **UI designs (themes) are pure CSS layers — one markup, one controller, N skins.**
+  `construct.uiTheme` picks a design (`classic` | `terminal` | `native`; `""` = not
+  chosen). `buildHtml` layers `media/themes/<id>.css` after `panel.css` via the
+  `{{themeUri}}` link — `panel.html`/`panel.js`/`launcher.*` are SHARED, so
+  functionality can never fork per design; the invariant is enforced by running the
+  full ui-smoke suite against any skin (`UI_SMOKE_THEME=terminal|native node
+  test/ui-smoke.js`). `classic.css` is intentionally empty (panel.css IS the classic
+  skin); `native.css` derives every color/font from `var(--vscode-…, <Dark+
+  fallback>)`, so it follows the user's REAL editor theme — light themes included —
+  which a webview gets for free (this beats the mockup's simulated toggle).
+  **First-run picker:** when a surface opens and no design was chosen
+  (`normalizeThemeId(...)===null`), `maybeOfferThemePicker` opens a picker webview
+  once per session (`themes.buildPickerHtml`: preview-image cards from
+  `media/theme-previews/<id>.png`; escaped, nonce-CSP'd) — it keeps offering on
+  later sessions until the user picks (choosing "Classic Matrix" is the explicit
+  keep-it answer). Picking writes the GLOBAL setting; the
+  `onDidChangeConfiguration('construct.uiTheme')` listener re-renders both open
+  surfaces in place (reassigning `webview.html`; the webview re-posts `ready` and
+  gets fresh state). **The Construct: Choose UI Design** (`construct.chooseTheme`)
+  reopens the picker anytime; the VS Code setting is a plain enum so the Settings
+  UI works too. Adding a design later = one `THEMES` entry + `themes/<id>.css` +
+  `theme-previews/<id>.png` (mission-control / datasheet are the planned next two).
+  Perf nicety: `panel.js`'s rain loop exits when the active design `display:none`s
+  the canvas (native does), so a hidden canvas is never animated.
 - **Packaging = a PowerShell-generated `.vsix` installed via `code --install-extension`**
   (no `vsce`/Node on the host). Modern VS Code ignores a bare folder dropped into
   `~/.vscode/extensions` (it's never registered in `extensions.json`), so

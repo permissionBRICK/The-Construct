@@ -21,6 +21,22 @@ step — it's plain JavaScript; to hack on it, open `extension/` and press F5.)
 
 Both read the same live state, pushed from the extension as the VM is probed over SSH.
 
+## Choosing a look (UI designs)
+
+The first time a Construct panel opens (and until you decide), a picker tab offers the
+available designs with preview images:
+
+- **Classic Matrix** — the original green operator console.
+- **Terminal, Refined** — the same identity with a disciplined phosphor palette; glow is
+  reserved for genuinely live things (the online dot, an armed mic, a busy action).
+- **VS Code Native** — looks like a built-in VS Code panel and follows your editor color
+  theme automatically, light or dark.
+
+Every design is the **same panel** — identical features, buttons, and behavior; only the
+stylesheet changes. Switch anytime with **The Construct: Choose UI Design** from the
+command palette, or set `construct.uiTheme` in VS Code settings; open panels restyle in
+place. Closing the picker without choosing keeps the classic look and asks again next time.
+
 ## Status & connecting
 
 The header shows whether the VM is **online**, its hostname, and install/reprovision

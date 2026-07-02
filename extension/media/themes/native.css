@@ -1,0 +1,488 @@
+/* ════════════════════════════════════════════════════════════════════════
+   VS CODE NATIVE — first-party look for The Construct control panel.
+
+   Pure CSS layer over the shared media/panel.css (loaded after it via
+   {{themeUri}}); same markup, same panel.js, zero behavior changes.
+
+   The whole skin is built from the editor's LIVE injected theme variables
+   (var(--vscode-…, <Dark+ fallback>)), so it follows the user's actual
+   VS Code theme — light themes included. The hex fallbacks are the VS Code
+   Dark+ palette and are what you see outside a real webview (tests,
+   screenshots).
+
+   Cascade note: because this file loads after panel.css, any property set
+   here also outranks panel.css's narrow-width media rules; the small
+   @media (max-width: 420px) block near the end re-adds the compact-layout
+   values for exactly the properties this theme touches.
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* ── 1. Tokens ─────────────────────────────────────────────────────────── */
+:root {
+  /* theme-own tokens */
+  --nv-fg: var(--vscode-foreground, #cccccc);
+  --nv-desc: var(--vscode-descriptionForeground, #9d9d9d);
+  --nv-faint: var(--vscode-disabledForeground, #6e6e6e);
+  --nv-bg: var(--vscode-editor-background, #1e1e1e);
+  --nv-widget: var(--vscode-editorWidget-background, #252526);
+  --nv-notif: var(--vscode-notifications-background, #252526);
+  --nv-border: var(--vscode-widget-border, #454545);
+  --nv-border-soft: color-mix(in srgb, var(--nv-border) 72%, transparent);
+  --nv-hairline: color-mix(in srgb, var(--nv-border) 52%, transparent);
+  --nv-hover: var(--vscode-list-hoverBackground, #2a2d2e);
+  --nv-link: var(--vscode-textLink-foreground, #3794ff);
+  --nv-focus: var(--vscode-focusBorder, #007fd4);
+  --nv-btn: var(--vscode-button-background, #0e639c);
+  --nv-btn-fg: var(--vscode-button-foreground, #ffffff);
+  --nv-btn-hover: var(--vscode-button-hoverBackground, #1177bb);
+  --nv-btn2: var(--vscode-button-secondaryBackground, #3a3d41);
+  --nv-btn2-fg: var(--vscode-button-secondaryForeground, #cccccc);
+  --nv-btn2-hover: var(--vscode-button-secondaryHoverBackground, #45494e);
+  --nv-input: var(--vscode-input-background, #3c3c3c);
+  --nv-input-fg: var(--vscode-input-foreground, #cccccc);
+  --nv-input-border: var(--vscode-input-border, #3c3c3c);
+  --nv-badge: var(--vscode-badge-background, #4d4d4d);
+  --nv-badge-fg: var(--vscode-badge-foreground, #ffffff);
+  --nv-ok: var(--vscode-charts-green, #89d185);
+  --nv-warn: var(--vscode-charts-yellow, #cca700);
+  --nv-err: var(--vscode-errorForeground, #f48771);
+  --nv-chart: var(--vscode-charts-blue, #3794ff);
+  --nv-ok-dim: color-mix(in srgb, var(--nv-ok) 12%, transparent);
+  --nv-warn-dim: color-mix(in srgb, var(--nv-warn) 12%, transparent);
+  --nv-err-dim: color-mix(in srgb, var(--nv-err) 11%, transparent);
+  --nv-warn-border: color-mix(in srgb, var(--nv-warn) 55%, transparent);
+  --nv-err-border: color-mix(in srgb, var(--nv-err) 50%, transparent);
+  --nv-shadow: var(--vscode-widget-shadow, rgba(0, 0, 0, 0.36));
+  --nv-sans: var(--vscode-font-family, "Segoe WPF", "Segoe UI", system-ui, Ubuntu, "Droid Sans", sans-serif);
+  --nv-mono: var(--vscode-editor-font-family, "Cascadia Code", "Cascadia Mono", Consolas, "Ubuntu Mono", Menlo, monospace);
+
+  /* remap the base Matrix tokens so anything not explicitly reskinned below
+     (incl. panel.js's inline `var(--rain)` / `var(--dim)` state colors)
+     already lands on sane editor-theme colors */
+  --void: var(--nv-bg);
+  --ground: var(--nv-bg);
+  --ground-2: var(--nv-bg);
+  --rain: var(--nv-ok);
+  --accent: var(--nv-fg);
+  --title: var(--nv-fg);
+  --text: var(--nv-fg);
+  --dim: var(--nv-desc);
+  --faint: var(--nv-faint);
+  --line: var(--nv-hairline);
+  --line-strong: var(--nv-border);
+  --warn: var(--nv-warn);
+  --crit: var(--nv-err);
+  --mono: var(--nv-mono);
+  --sans: var(--nv-sans);
+}
+
+/* ── 2. Base / typography ──────────────────────────────────────────────── */
+body {
+  background: var(--nv-bg);
+  color: var(--nv-fg);
+  font-family: var(--nv-sans);
+  font-size: var(--vscode-font-size, 13px);
+  line-height: 1.45;
+}
+.shell { max-width: 960px; }
+
+/* ── 3. Header: clean panel title area (no rain, no glow, no cursor) ───── */
+#rain { display: none; }
+header { border-bottom: 1px solid var(--nv-hairline); }
+.header-inner { padding: 16px 24px 14px; }
+.brand .eyebrow {
+  font-size: 11px; letter-spacing: normal; text-transform: none;
+  color: var(--nv-desc); margin: 0 0 2px;
+}
+h1.title {
+  font-size: 22px; font-weight: 600; letter-spacing: 0.2px;
+  color: var(--nv-fg); text-shadow: none;
+}
+.brand .subtitle { font-size: 12.5px; letter-spacing: normal; color: var(--nv-desc); margin-top: 2px; }
+
+/* header tools: quiet toolbar buttons */
+.gear {
+  font-family: var(--nv-sans); font-size: 12px; letter-spacing: 0;
+  color: var(--nv-fg); background: none; border: 1px solid transparent;
+  border-radius: 3px; padding: 4px 10px;
+}
+.gear:hover { background: var(--nv-hover); border-color: transparent; color: var(--nv-fg); }
+
+/* update banner: VS Code notification-like inline bar */
+.update-banner {
+  background: var(--nv-notif); border: 1px solid var(--nv-border);
+  border-radius: 4px; padding: 7px 8px 7px 12px; gap: 12px; box-shadow: 0 2px 8px var(--nv-shadow);
+}
+.update-banner .ub-text { font-size: 12.5px; color: var(--nv-fg); }
+.update-banner .ub-text small { color: var(--nv-desc); font-size: 11px; }
+.ub-dot { width: 8px; height: 8px; background: var(--nv-link); box-shadow: none; }
+.ub-btn {
+  font-family: var(--nv-sans); font-size: 12px; letter-spacing: 0; font-weight: normal;
+  color: var(--nv-btn-fg); background: var(--nv-btn); border-radius: 2px; padding: 4px 12px;
+}
+.ub-btn:hover { background: var(--nv-btn-hover); box-shadow: none; }
+
+/* promptline: quiet mono breadcrumb */
+.promptline {
+  font-family: var(--nv-mono); font-size: 12px; color: var(--nv-desc);
+  background: none; border: 1px solid var(--nv-hairline); border-radius: 3px;
+  padding: 4px 10px; overflow: hidden;
+}
+.promptline .usr { color: var(--nv-desc); }
+.promptline .cmd { color: var(--nv-fg); }
+.cursor { display: none; }
+
+/* ── 4. Section headers: Settings-editor style (600, normal case) ─────── */
+.seclabel {
+  font-size: 14px; font-weight: 600; letter-spacing: normal;
+  text-transform: none; color: var(--nv-fg);
+}
+/* The danger-zone heading carries an inline style="color:#ff8a8a" in the
+   markup (unreachable from a stylesheet without !important, and unreadable
+   on light editor themes). Only that heading has a style attribute, so this
+   is the one truly-forced !important in the theme. */
+.seclabel[style] { color: var(--nv-err) !important; }
+
+/* ── 5. Lifecycle action grid ──────────────────────────────────────────── */
+.actionbar .meta { font-family: var(--nv-mono); font-size: 12px; color: var(--nv-desc); }
+.act {
+  font-family: var(--nv-sans); background: none; border: 1px solid var(--nv-border-soft);
+  border-radius: 3px; padding: 10px 12px; gap: 2px; color: var(--nv-fg);
+  transition: background 0.1s, border-color 0.1s;
+}
+.act:hover { background: var(--nv-hover); border-color: var(--nv-border); box-shadow: none; }
+.act .t { font-size: 13px; color: var(--nv-fg); font-weight: 600; letter-spacing: 0; }
+.act .t .gl { color: var(--nv-desc); }
+.act small { color: var(--nv-desc); font-size: 11.5px; letter-spacing: 0; }
+.act.primary { background: var(--nv-btn); border-color: var(--nv-btn); box-shadow: none; }
+.act.primary:hover { background: var(--nv-btn-hover); border-color: var(--nv-btn-hover); }
+.act.primary .t, .act.primary .t .gl { color: var(--nv-btn-fg); }
+.act.primary small { color: color-mix(in srgb, var(--nv-btn-fg) 78%, transparent); }
+.act.danger .t .gl { color: var(--nv-err); }
+.act.danger:hover { background: var(--nv-err-dim); border-color: var(--nv-err-border); box-shadow: none; }
+/* provision-stale reprovision: warning tint (overrides .primary below it) */
+.act.stale { background: var(--nv-warn-dim); border-color: var(--nv-warn); box-shadow: none; }
+.act.stale:hover { background: color-mix(in srgb, var(--nv-warn) 18%, transparent); border-color: var(--nv-warn); }
+.act.stale .t { color: var(--nv-fg); }
+.act.stale .t .gl { color: var(--nv-warn); }
+.act.stale small { color: var(--nv-warn); opacity: 1; }
+
+/* ── 6. Status strip: quiet chips ──────────────────────────────────────── */
+.pill {
+  font-size: 12px; letter-spacing: 0; padding: 3px 10px; border-radius: 3px;
+  border: 1px solid var(--nv-hairline); background: none; color: var(--nv-desc);
+  font-variant-numeric: tabular-nums;
+}
+#pillHost { font-family: var(--nv-mono); }
+.dot { width: 8px; height: 8px; background: var(--nv-ok); box-shadow: none; }
+.pill.offline { color: var(--nv-err); border-color: var(--nv-err-border); }
+.pill.offline .dot { background: var(--nv-err); box-shadow: none; }
+
+/* ── 7. Modules: flat sections with hairlines; rows get hover ─────────── */
+.cols { column-gap: 28px; }
+.module {
+  background: none; border: 0; border-top: 1px solid var(--nv-hairline);
+  border-radius: 0; padding: 12px 0 4px;
+}
+.module > .mhead { margin-bottom: 6px; }
+.voice { border-color: var(--nv-hairline); box-shadow: none; }
+.row { border-top: 0; padding: 5px 8px; margin: 0 -8px; border-radius: 3px; }
+.row:hover { background: var(--nv-hover); }
+.row .k { color: var(--nv-desc); }
+.row .v { color: var(--nv-fg); font-family: var(--nv-mono); font-size: 12px; }
+.row .v b { color: var(--nv-fg); }
+
+/* ── 8. Coding agents: hover rows + badge tags ─────────────────────────── */
+.agent { border-top: 0; padding: 6px 8px; margin: 0 -8px; border-radius: 3px; }
+.agent:hover { background: var(--nv-hover); }
+.agent .name { color: var(--nv-fg); }
+.agent .name small { color: var(--nv-desc); font-size: 11px; }
+.ver { font-family: var(--nv-mono); font-size: 12px; color: var(--nv-fg); }
+.tag {
+  font-size: 11px; letter-spacing: 0; text-transform: none; padding: 1px 7px;
+  border-radius: 2px; border: 1px solid transparent;
+  background: var(--nv-badge); color: var(--nv-badge-fg);
+}
+.tag.ok { color: var(--nv-ok); border-color: transparent; background: var(--nv-ok-dim); }
+.tag.upd { color: var(--nv-warn); border-color: transparent; background: var(--nv-warn-dim); }
+
+/* ── 9. Voice module: checkbox-style switches ──────────────────────────── */
+.toggle-row .label { font-size: 13px; color: var(--nv-fg); }
+.toggle-row .state { font-size: 11px; letter-spacing: 0.4px; color: var(--nv-desc); }
+.switch {
+  width: 18px; height: 18px; border-radius: 3px;
+  background: var(--nv-input); border: 1px solid var(--nv-border);
+  box-shadow: none; transition: none;
+}
+.switch .knob { display: none; }
+.switch::after {
+  content: "\2713"; position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; line-height: 1; color: var(--nv-fg); opacity: 0;
+}
+.switch[aria-checked="true"] { background: var(--nv-input); border-color: var(--nv-border); box-shadow: none; }
+.switch[aria-checked="true"]::after { opacity: 1; }
+.switch.sm { width: 18px; height: 18px; }
+/* busy (awaiting backend confirmation): indeterminate-checkbox dash */
+.switch.busy { opacity: 0.8; }
+.switch.busy::after { content: "\2013"; opacity: 1; color: var(--nv-desc); }
+.voice .desc { font-family: var(--nv-sans); font-size: 12px; color: var(--nv-desc); }
+.substatus { border-top: 1px solid var(--nv-hairline); }
+.sub { font-size: 12px; color: var(--nv-fg); }
+.sub .muted { color: var(--nv-desc); font-family: var(--nv-mono); font-size: 11.5px; }
+.sub.warn { color: var(--nv-warn); }
+.sub.warn .dot { background: var(--nv-warn); box-shadow: none; }
+.sub.warn .muted { color: var(--nv-warn); opacity: 1; }
+
+/* ── 10. Projects: VS Code-ish chips + config-sync strip ───────────────── */
+.chip {
+  font-size: 12px; padding: 3px 9px; border-radius: 3px;
+  border: 1px solid var(--nv-border-soft); color: var(--nv-desc); background: none;
+}
+.chip:hover { background: var(--nv-hover); }
+.chip.on { color: var(--nv-fg); border-color: var(--nv-border); background: none; }
+.chip.on .check { color: var(--nv-ok); }
+.chip .openbtn { font-family: inherit; font-size: 11px; color: var(--nv-desc); border-left: 1px solid var(--nv-border-soft); }
+.chip .openbtn:hover { color: var(--nv-link); text-shadow: none; }
+.chip.locked { opacity: 0.75; }
+.chip.locked:hover { background: none; }
+
+.cs-strip { border-top: 1px solid var(--nv-hairline); }
+.cs-label { font-size: 12.5px; letter-spacing: 0; text-transform: none; color: var(--nv-fg); font-weight: 600; }
+.cs-result { font-size: 12px; color: var(--nv-desc); font-variant-numeric: tabular-nums; }
+.cs-conflict {
+  border: 1px solid var(--nv-err-border); border-radius: 3px;
+  background: var(--nv-err-dim); padding: 7px 10px;
+}
+.cs-conflict-text { font-size: 12px; color: var(--nv-err); }
+.cs-git-missing {
+  border: 1px solid var(--nv-warn-border); border-radius: 3px;
+  background: var(--nv-warn-dim); padding: 7px 10px; font-size: 12px; color: var(--nv-warn);
+}
+.cs-remotes-label { font-size: 11.5px; letter-spacing: 0; text-transform: none; color: var(--nv-desc); }
+.cs-remote-row { font-size: 12px; color: var(--nv-fg); padding: 3px 8px; margin: 0 -8px; border-radius: 3px; }
+.cs-remote-row:hover { background: var(--nv-hover); }
+.cs-remote-url { font-family: var(--nv-mono); font-size: 11.5px; }
+.cs-remote-rm, .cs-remote-push {
+  font-family: var(--nv-sans); font-size: 12px; color: var(--nv-desc);
+  border: 1px solid transparent; border-radius: 3px; padding: 2px 6px;
+}
+.cs-remote-rm:hover { color: var(--nv-err); border-color: transparent; background: var(--nv-hover); }
+.cs-remote-push:hover { color: var(--nv-link); border-color: transparent; background: var(--nv-hover); }
+
+/* ── 11. Usage: underline tabs + flat progress bars ────────────────────── */
+.usage-tabs { border: 0; border-radius: 0; overflow: visible; gap: 2px; }
+.utab {
+  font-family: var(--nv-sans); font-size: 12.5px; letter-spacing: 0;
+  color: var(--nv-desc); padding: 3px 8px; border-bottom: 1px solid transparent;
+}
+.utab + .utab { border-left: 0; }
+.utab:hover { color: var(--nv-fg); background: none; }
+.utab.sel { color: var(--nv-fg); background: none; font-weight: 400; border-bottom-color: var(--nv-focus); }
+.usage-head { color: var(--nv-faint); letter-spacing: 0.4px; padding: 2px 8px 6px; margin: 0 -8px; }
+.usage-row { padding: 6px 8px; margin: 0 -8px; border-radius: 3px; }
+.usage-row:hover { background: var(--nv-hover); }
+.usage-row .ulabel { color: var(--nv-fg); font-size: 12.5px; }
+.bar { height: 5px; border-radius: 3px; background: var(--nv-hairline); }
+.bar > span { background: var(--nv-chart); border-radius: 3px; box-shadow: none; }
+.utok { color: var(--nv-fg); font-family: var(--nv-mono); font-size: 12px; }
+.ucost { color: var(--nv-desc); font-family: var(--nv-mono); font-size: 12px; }
+.usage-total { border-top: 1px solid var(--nv-hairline); margin: 6px -8px 0; padding: 8px 8px 0; }
+.usage-total .tt { color: var(--nv-fg); font-size: 12.5px; font-weight: 600; letter-spacing: 0; text-transform: none; }
+.usage-total b { color: var(--nv-fg); font-family: var(--nv-mono); font-size: 12px; font-weight: 600; }
+.usage-total .cost { color: var(--nv-desc); font-family: var(--nv-mono); font-size: 12px; }
+.cost-note { font-size: 11.5px; color: var(--nv-faint); font-family: var(--nv-sans); }
+
+/* ── 12. Buttons: VS Code primary / secondary / link language ──────────── */
+.btn {
+  font-family: var(--nv-sans); font-size: 12.5px; letter-spacing: 0;
+  color: var(--nv-btn2-fg); background: var(--nv-btn2);
+  border: 1px solid transparent; border-radius: 2px; padding: 4px 12px;
+  transition: background 0.1s;
+}
+.btn:hover { background: var(--nv-btn2-hover); box-shadow: none; }
+.btn.ghost { color: var(--nv-link); background: none; border-color: transparent; padding: 4px 6px; }
+.btn.ghost:hover { color: var(--nv-link); background: none; box-shadow: none; text-decoration: underline; }
+.btn.danger { color: var(--nv-err); background: none; border-color: var(--nv-err-border); }
+.btn.danger:hover { background: var(--nv-err-dim); box-shadow: none; }
+.btn.start { color: var(--nv-btn-fg); background: var(--nv-btn); border: 1px solid transparent; font-weight: normal; box-shadow: none; }
+.btn.start:hover { background: var(--nv-btn-hover); box-shadow: none; }
+.btn.loading, .btn:disabled {
+  color: var(--nv-btn2-fg); background: var(--nv-btn2); border-color: transparent;
+  opacity: 0.55; box-shadow: none;
+}
+.btn.loading:hover, .btn:disabled:hover { background: var(--nv-btn2); box-shadow: none; }
+
+.save-btn {
+  font-family: var(--nv-sans); font-size: 13px; letter-spacing: 0; text-transform: none;
+  font-weight: normal; color: var(--nv-btn-fg); background: var(--nv-btn);
+  border: 1px solid transparent; border-radius: 2px; padding: 5px 16px; box-shadow: none;
+}
+.save-btn:hover { background: var(--nv-btn-hover); box-shadow: none; }
+
+/* ── 13. Settings view ─────────────────────────────────────────────────── */
+.settings-top .lead { color: var(--nv-desc); font-family: var(--nv-sans); }
+/* Flat group with a top hairline. Sides stay transparent so the danger
+   group's inline border-color paints a full (rounded) red border. */
+.setgroup {
+  background: none; border: 1px solid transparent; border-top-color: var(--nv-hairline);
+  border-radius: 4px; padding: 12px 14px 10px; margin-bottom: 10px;
+}
+.setgroup > .gh { margin-bottom: 8px; }
+.applies {
+  font-size: 11px; letter-spacing: 0; text-transform: none;
+  color: var(--nv-desc); border: 1px solid var(--nv-hairline); border-radius: 3px; padding: 2px 8px;
+}
+.applies.reinstall { color: var(--nv-warn); border-color: var(--nv-warn-border); }
+.field { border-top: 0; padding: 7px 10px; margin: 0 -10px; border-radius: 3px; }
+.field:hover { background: var(--nv-hover); }
+.field > label { color: var(--nv-fg); font-weight: 600; font-size: 12.5px; }
+.field .hint { color: var(--nv-desc); font-size: 11.5px; font-weight: 400; }
+input[type=text], input[type=password], input[type=number], select {
+  font-family: var(--nv-sans); font-size: 13px; color: var(--nv-input-fg);
+  background: var(--nv-input); border: 1px solid var(--nv-input-border);
+  border-radius: 2px; padding: 4px 8px;
+}
+select {
+  background: var(--vscode-dropdown-background, #3c3c3c);
+  color: var(--vscode-dropdown-foreground, #cccccc);
+  border-color: var(--vscode-dropdown-border, #3c3c3c);
+}
+input:focus, select:focus { outline: none; border-color: var(--nv-focus); box-shadow: none; }
+.suffix { color: var(--nv-desc); }
+
+/* radio cards: hover rows, selection via focus ring + tint */
+.radio-card { border: 1px solid transparent; border-radius: 3px; padding: 9px 12px; margin-bottom: 4px; }
+.radio-card:hover { background: var(--nv-hover); border-color: transparent; }
+.radio-card.sel { border-color: var(--nv-focus); background: color-mix(in srgb, var(--nv-focus) 10%, transparent); }
+.radio-card.sel.danger { border-color: var(--nv-err); background: var(--nv-err-dim); }
+.radio-card .rdot { width: 14px; height: 14px; border: 1px solid var(--nv-border); background: var(--nv-input); }
+.radio-card.sel .rdot { border-color: var(--nv-focus); }
+.radio-card.sel .rdot::after { background: var(--nv-focus); box-shadow: none; }
+.radio-card.sel.danger .rdot { border-color: var(--nv-err); }
+.radio-card.sel.danger .rdot::after { background: var(--nv-err); box-shadow: none; }
+.radio-card .rc-t { color: var(--nv-fg); font-size: 13px; }
+.radio-card .rc-d { color: var(--nv-desc); font-family: var(--nv-sans); font-size: 12px; }
+.radio-card.danger .rc-t { color: var(--nv-err); }
+.backup-pick { color: var(--nv-desc); font-size: 12px; }
+
+/* ── 14. Project modal: VS Code dialog ─────────────────────────────────── */
+.modal-overlay { background: rgba(0, 0, 0, 0.4); backdrop-filter: none; }
+.modal {
+  background: var(--nv-widget); border: 1px solid var(--nv-border);
+  border-radius: 4px; box-shadow: 0 4px 16px var(--nv-shadow);
+}
+.modal .lead { color: var(--nv-desc); font-family: var(--nv-sans); }
+.modal .lead code, .pm-note code { font-family: var(--nv-mono); font-size: 11.5px; color: var(--nv-fg); }
+.modal-x { font-family: var(--nv-sans); font-size: 18px; color: var(--nv-desc); border-radius: 3px; padding: 0 6px; }
+.modal-x:hover { color: var(--nv-fg); background: var(--nv-hover); }
+.pm-sec { border-top: 1px solid var(--nv-hairline); }
+.pm-h { font-size: 13px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--nv-fg); }
+.pm-note { color: var(--nv-desc); font-size: 11.5px; }
+.pm-repo input { font-family: var(--nv-mono); font-size: 12px; }
+.pm-del { font-family: var(--nv-sans); font-size: 15px; color: var(--nv-desc); border: 1px solid transparent; border-radius: 3px; }
+.pm-del:hover { color: var(--nv-err); border-color: transparent; background: var(--nv-hover); }
+.pm-ta {
+  font-family: var(--nv-sans); font-size: 12.5px; color: var(--nv-input-fg);
+  background: var(--nv-input); border: 1px solid var(--nv-input-border); border-radius: 2px;
+}
+.pm-ta.mono { font-family: var(--nv-mono); font-size: 12px; }
+.pm-ta:focus { border-color: var(--nv-focus); box-shadow: none; }
+.pm-err { color: var(--nv-err); font-size: 12px; }
+
+/* ── 15. Footer ────────────────────────────────────────────────────────── */
+footer {
+  border-top: 1px solid var(--nv-hairline); padding-top: 10px;
+  color: var(--nv-faint); font-size: 11.5px; letter-spacing: 0;
+}
+footer a { color: var(--nv-link); }
+footer a:hover { color: var(--nv-link); text-decoration: underline; }
+
+/* ── 16. Launcher: native sidebar view ─────────────────────────────────── */
+body.launcher { background: var(--vscode-sideBar-background, #252526); font-size: 13px; }
+.lshell { padding: 12px 16px 16px; gap: 10px; }
+.lbrand {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.5px;
+  color: var(--vscode-sideBarTitle-foreground, #bbbbbb);
+}
+.lbrand .ldot { width: 8px; height: 8px; background: var(--nv-ok); box-shadow: none; }
+.lbrand .ldot.offline { background: var(--nv-err); box-shadow: none; }
+.lstatus { font-size: 11px; letter-spacing: 0.4px; color: var(--nv-desc); }
+.lhost { font-family: var(--nv-mono); font-size: 11.5px; color: var(--nv-desc); }
+.lupdate {
+  font-family: var(--nv-sans); font-size: 12px; letter-spacing: 0;
+  color: var(--nv-fg); background: var(--nv-warn-dim); border: 1px solid var(--nv-warn);
+  border-radius: 3px; padding: 6px 9px;
+}
+.lupdate:hover { background: var(--nv-hover); box-shadow: none; }
+.lupdate small { color: var(--nv-desc); font-size: 11px; }
+.lupd-dot { background: var(--nv-warn); box-shadow: none; }
+.lactions { gap: 6px; }
+.laction {
+  font-family: var(--nv-sans); font-size: 11px; color: var(--nv-fg);
+  background: none; border: 1px solid var(--nv-border-soft); border-radius: 3px;
+  padding: 9px 2px 7px; transition: background 0.1s, border-color 0.1s;
+}
+.laction:hover { background: var(--nv-hover); border-color: var(--nv-border); box-shadow: none; }
+.laction .lglyph { font-size: 16px; color: var(--nv-desc); }
+.laction.danger .lglyph { color: var(--nv-err); }
+.laction.danger:hover { background: var(--nv-err-dim); border-color: var(--nv-err-border); box-shadow: none; }
+.laction.stale { background: var(--nv-warn-dim); border-color: var(--nv-warn); box-shadow: none; }
+.laction.stale .lglyph { color: var(--nv-warn); }
+.lopen {
+  font-family: var(--nv-sans); font-size: 13px; font-weight: normal; letter-spacing: 0;
+  color: var(--nv-btn-fg); background: var(--nv-btn); border-radius: 2px;
+  padding: 6px 10px; box-shadow: none;
+}
+.lopen:hover { background: var(--nv-btn-hover); box-shadow: none; }
+.lcard { background: none; border: 0; border-top: 1px solid var(--nv-hairline); border-radius: 0; padding: 10px 0 0; }
+.lcard-h { font-size: 11px; letter-spacing: 0.5px; color: var(--nv-desc); font-weight: 600; }
+.lagents { gap: 3px; }
+.lagent { color: var(--nv-fg); padding: 2px 6px; margin: 0 -6px; border-radius: 3px; }
+.lagent:hover { background: var(--nv-hover); }
+.lagent .lver { font-family: var(--nv-mono); font-size: 12px; color: var(--nv-desc); }
+.lagent .lver.upd { color: var(--nv-warn); }
+.lmeta { color: var(--nv-faint); font-size: 11px; }
+.lrefresh { font-family: var(--nv-sans); font-size: 12px; color: var(--nv-link); background: none; border: 0; padding: 3px 4px; }
+.lrefresh:hover { color: var(--nv-link); background: none; text-decoration: underline; }
+.lpower { font-family: var(--nv-sans); font-size: 13px; letter-spacing: 0; border-radius: 2px; }
+.lpower.start { font-weight: normal; color: var(--nv-btn-fg); background: var(--nv-btn); border: 1px solid transparent; box-shadow: none; }
+.lpower.start:hover { background: var(--nv-btn-hover); box-shadow: none; }
+.lpower.shutdown { color: var(--nv-err); background: none; border: 1px solid var(--nv-err-border); }
+.lpower.shutdown:hover { background: var(--nv-err-dim); box-shadow: none; }
+.lpower.loading, .lpower:disabled {
+  color: var(--nv-btn2-fg); background: var(--nv-btn2); border: 1px solid transparent;
+  opacity: 0.55; box-shadow: none;
+}
+.lpower.loading:hover, .lpower:disabled:hover { background: var(--nv-btn2); box-shadow: none; }
+
+/* ── 17. Focus: 1px focusBorder outline, everywhere, never removed ─────── */
+.gear:focus-visible, .ub-btn:focus-visible, .act:focus-visible,
+.utab:focus-visible, .switch:focus-visible, .chip:focus-visible,
+.chip .openbtn:focus-visible, .btn:focus-visible, .save-btn:focus-visible,
+.modal-x:focus-visible, .pm-del:focus-visible, .radio-card:focus-visible,
+.cs-remote-rm:focus-visible, .cs-remote-push:focus-visible,
+.laction:focus-visible, .lopen:focus-visible, .lrefresh:focus-visible,
+.lpower:focus-visible, .lpower.start:focus-visible, .lpower.shutdown:focus-visible,
+.lupdate:focus-visible {
+  outline: 1px solid var(--nv-focus); outline-offset: 1px;
+}
+
+/* ── 18. Narrow (sidebar-docked) re-adds for properties this theme set ─── */
+@media (max-width: 420px) {
+  .header-inner { padding: 12px 12px 10px; }
+  .promptline { font-size: 10.5px; padding: 4px 8px; }
+  .update-banner { gap: 8px; }
+  /* compact icon-only lifecycle buttons (labels hidden by the base sheet) */
+  .act { padding: 9px 2px; gap: 0; }
+  .act .t { font-size: 18px; font-weight: 400; }
+  .act .t .gl { color: var(--nv-fg); }
+  .utab { padding: 3px 6px; }
+  /* compact header type (base narrow sizes; tracking stays this theme's own) */
+  h1.title { font-size: 21px; }
+  .brand .subtitle { font-size: 11px; }
+}
+
+/* ── 19. Reduced motion: this theme adds no animation; drop transitions ── */
+@media (prefers-reduced-motion: reduce) {
+  .act, .btn, .laction { transition: none; }
+}
