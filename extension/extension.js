@@ -455,6 +455,25 @@ async function runConfigSync() {
   } finally { syncTickInFlight = false; }
 }
 
+async function configMergeGate() {
+  var dir = resolveCfgDir();
+  var git = await detectGitCached();
+  if (!dir || !git.present || !runGit) return { blocked: false, dir: dir };
+  var pending = await configsync.completePendingMerge(runGit, dir);
+  if (pending.completed) {
+    logLine("[configsync] completed pending clean merge");
+  }
+  var rs = await configsync.repoState(runGit, dir);
+  if (rs.conflict || rs.mergeInProgress) {
+    return {
+      blocked: true,
+      dir: dir,
+      reason: pending.reason || "Resolve the config merge first -- open the config repo and commit the merge, then try again.",
+    };
+  }
+  return { blocked: false, dir: dir };
+}
+
 /** Throttled sync tick for auto-refresh: only runs if >=5 min since last. */
 async function maybeAutoSync() {
   if (Date.now() - lastSyncTickAt < SYNC_TICK_MIN_MS) return;
@@ -1144,15 +1163,11 @@ function handleMessage(message, webview, context) {
       const action = message.mode === "redownload" ? "redownload" : "reinstall";
       (async () => {
         try {
-          var dir = resolveCfgDir();
-          var git = await detectGitCached();
-          if (dir && git.present && runGit) {
-            var rs = await configsync.repoState(runGit, dir);
-            if (rs.conflict || rs.mergeInProgress) {
-              vscode.window.showErrorMessage("Resolve the config merge first -- open the config repo and commit the merge, then try again.", "Open config repo")
-                .then(function (pick) { if (pick === "Open config repo") vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(dir), true); });
-              return;
-            }
+          var gate = await configMergeGate();
+          if (gate.blocked) {
+            vscode.window.showErrorMessage(gate.reason, "Open config repo")
+              .then(function (pick) { if (pick === "Open config repo") vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(gate.dir), true); });
+            return;
           }
         } catch (_) {}
         effectiveProjects().then(function (projects) { lifecycle.run(action, { scriptsDir: scriptsDir, backupMode: message.backup, projects: projects }); });
@@ -1204,17 +1219,11 @@ function handleMessage(message, webview, context) {
         // Reprovision gate: check if the config repo is in a conflict/merge state.
         (async () => {
           try {
-            var dir = resolveCfgDir();
-            var git = await detectGitCached();
-            if (dir && git.present && runGit) {
-              var rs = await configsync.repoState(runGit, dir);
-              if (rs.conflict || rs.mergeInProgress) {
-                vscode.window.showErrorMessage(
-                  "Resolve the config merge first -- open the config repo and commit the merge, then try again.",
-                  "Open config repo"
-                ).then(function (pick) { if (pick === "Open config repo") vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(dir), true); });
-                return;
-              }
+            var gate = await configMergeGate();
+            if (gate.blocked) {
+              vscode.window.showErrorMessage(gate.reason, "Open config repo")
+                .then(function (pick) { if (pick === "Open config repo") vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(gate.dir), true); });
+              return;
             }
           } catch (_) {}
           effectiveProjects().then(function (projects) { lifecycle.run(id, { scriptsDir: scriptsDir, projects: projects }); });
@@ -1523,7 +1532,16 @@ function handleMessage(message, webview, context) {
       if (id === "openConfigRepo") {
         var ocDir = resolveCfgDir();
         if (!ocDir) { warnNoScriptsDir(); return; }
-        vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(ocDir), true);
+        (async () => {
+          try {
+            var gate = await configMergeGate();
+            if (!gate.blocked && gate.dir) {
+              cachedConfigSync = await buildConfigSyncState();
+              refreshAll();
+            }
+          } catch (_) {}
+          vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(ocDir), true);
+        })();
         return;
       }
       vscode.window.showInformationMessage(

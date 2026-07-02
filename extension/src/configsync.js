@@ -197,6 +197,40 @@ async function repoState(runGit, configDir) {
   return { repo: true, conflict, conflictFiles, mergeInProgress };
 }
 
+/**
+ * If a previous tick left a merge in progress but there are no unmerged paths,
+ * finish the merge with Construct's per-command git identity. This covers the
+ * "clean merge left uncommitted" and "user resolved files but did not commit"
+ * cases without depending on VS Code's Git UI or the host's global git identity.
+ */
+async function completePendingMerge(runGit, configDir) {
+  const state = await repoState(runGit, configDir);
+  if (!state.repo || !state.mergeInProgress) {
+    return { ok: true, completed: false, conflict: false, blocked: false, reason: "" };
+  }
+  if (state.conflict) {
+    return { ok: false, completed: false, conflict: true, blocked: false, reason: "merge conflict in config repo" };
+  }
+
+  const valid = validateWorkingTreeProfiles(configDir);
+  if (!valid.ok) {
+    return {
+      ok: false, completed: false, conflict: false, blocked: true,
+      reason: "post-merge validation failed: " + valid.errors.join("; "),
+    };
+  }
+
+  await runGit([...GIT_IDENTITY, "add", "-A"], { cwd: configDir });
+  const commit = await runGit([...GIT_IDENTITY, "commit", "-m", "sync merge vm"], { cwd: configDir });
+  if (commit.code !== 0) {
+    return {
+      ok: false, completed: false, conflict: false, blocked: true,
+      reason: "merge commit failed: " + (commit.stderr || commit.stdout || "").trim(),
+    };
+  }
+  return { ok: true, completed: true, conflict: false, blocked: false, reason: "" };
+}
+
 // ── VM store read/write scripts ──────────────────────────────────────────────
 
 /**
@@ -401,7 +435,17 @@ async function syncTick({ runGit, configDir, readStore, writeStore, log, storeRo
     return result;
   }
 
-  // Check for existing conflict/merge state — don't proceed if unresolved.
+  // Check for existing conflict/merge state. If the merge is already resolved
+  // (or was clean but left uncommitted), complete it automatically before the
+  // tick continues to write-back/advance refs.
+  const pending = await completePendingMerge(runGit, configDir);
+  if (pending.completed) result.merged = true;
+  if (!pending.ok) {
+    result.conflict = pending.conflict;
+    result.blocked = pending.blocked || !pending.conflict;
+    result.blockedReason = pending.reason || "unresolved merge in config repo";
+    return result;
+  }
   const state = await repoState(runGit, configDir);
   if (state.conflict || state.mergeInProgress) {
     result.conflict = state.conflict;
@@ -485,8 +529,15 @@ async function syncTick({ runGit, configDir, readStore, writeStore, log, storeRo
       const script = buildWriteStoreScript(ops, storeRoot);
       const wbStdout = await writeStore(script);
       const wb = parseWriteResult(wbStdout);
-      if (wb) result.writeBack = wb;
+      if (wb) {
+        result.writeBack = wb;
+      } else {
+        addWarning("write-back to VM store failed; vm ref not advanced");
+        result.ok = true;
+        return result;
+      }
     }
+    await runGit(["update-ref", "refs/heads/vm", "refs/heads/main"], { cwd: configDir });
     result.ok = true;
     return result;
   }
@@ -517,8 +568,15 @@ async function syncTick({ runGit, configDir, readStore, writeStore, log, storeRo
       const script = buildWriteStoreScript(ops, storeRoot);
       const wbStdout = await writeStore(script);
       const wb = parseWriteResult(wbStdout);
-      if (wb) result.writeBack = wb;
+      if (wb) {
+        result.writeBack = wb;
+      } else {
+        addWarning("write-back to VM store failed; vm ref not advanced");
+        result.ok = true;
+        return result;
+      }
     }
+    await runGit(["update-ref", "refs/heads/vm", "refs/heads/main"], { cwd: configDir });
     result.ok = true;
     return result;
   }
@@ -584,7 +642,13 @@ async function syncTick({ runGit, configDir, readStore, writeStore, log, storeRo
   }
 
   // Commit the merge.
-  await runGit([...GIT_IDENTITY, "commit", "-m", "sync merge vm"], { cwd: configDir });
+  const mergeCommit = await runGit([...GIT_IDENTITY, "commit", "-m", "sync merge vm"], { cwd: configDir });
+  if (mergeCommit.code !== 0) {
+    result.blocked = true;
+    result.blockedReason = "merge commit failed: " + (mergeCommit.stderr || mergeCommit.stdout || "").trim();
+    addWarning(result.blockedReason);
+    return result;
+  }
   result.merged = true;
 
   // Step 7: guarded write-back.
@@ -1056,7 +1120,7 @@ async function pushUpstream(runGit, { stagingDir, files, branch, message }) {
 module.exports = {
   makeGitRunner, detectGit,
   ensureConfigTree, migrateLegacyProfiles,
-  ensureRepo, repoState,
+  ensureRepo, repoState, completePendingMerge,
   buildReadStoreScript, parseReadStore,
   planWriteBack, buildWriteStoreScript, parseWriteResult,
   syncTick,

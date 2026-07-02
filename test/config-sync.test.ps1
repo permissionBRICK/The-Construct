@@ -380,6 +380,47 @@ try {
     $vmContent = [System.IO.File]::ReadAllText($vmFile, [System.Text.Encoding]::UTF8)
     ok "sync: VM store has the host edit" ($vmContent -match "curl")
 
+    # ── Scenario 3b: clean pending merge is auto-committed ───────────────────
+    # Recreate the state a user hit in the panel: MERGE_HEAD exists, but there
+    # are no unmerged files left. The sync tick should commit it with Construct's
+    # per-command identity instead of requiring VS Code/Git UI or global git config.
+    $hostPendingContent = ConvertTo-ConstructCanonicalJson -Name "host-pending" -Object ([pscustomobject]@{
+        name = "host-pending"
+        repos = @([pscustomobject]@{ url = "https://github.com/test/host-pending" })
+        provisionCommands = @("npm ci")
+    })
+    [System.IO.File]::WriteAllText((Join-Path $configDir "projects/host-pending.json"), $hostPendingContent, $utf8NoBom)
+    & git -C $configDir @("-c","user.name=T","-c","user.email=t@t") add -A 2>$null | Out-Null
+    & git -C $configDir @("-c","user.name=T","-c","user.email=t@t") commit -m "host pending clean" 2>$null | Out-Null
+
+    & git -C $configDir checkout vm 2>$null | Out-Null
+    $vmPendingContent = ConvertTo-ConstructCanonicalJson -Name "vm-pending" -Object ([pscustomobject]@{
+        name = "vm-pending"
+        repos = @([pscustomobject]@{ url = "https://github.com/test/vm-pending" })
+        sdks = [pscustomobject]@{ node = "22" }
+    })
+    [System.IO.File]::WriteAllText((Join-Path $configDir "projects/vm-pending.json"), $vmPendingContent, $utf8NoBom)
+    & git -C $configDir @("-c","user.name=T","-c","user.email=t@t") add -A 2>$null | Out-Null
+    & git -C $configDir @("-c","user.name=T","-c","user.email=t@t") commit -m "vm pending clean" 2>$null | Out-Null
+    & git -C $configDir checkout main 2>$null | Out-Null
+    & git -C $configDir merge --no-ff --no-commit vm 2>$null | Out-Null
+    ok "sync: pending clean merge has MERGE_HEAD" (Test-Path -LiteralPath (Join-Path $configDir ".git/MERGE_HEAD"))
+    $pendingUnmerged = @(& git -C $configDir diff --name-only --diff-filter=U 2>$null)
+    ok "sync: pending clean merge has no unmerged files" ($pendingUnmerged.Count -eq 0)
+
+    [System.IO.File]::WriteAllText((Join-Path $vmStoreDir "vm-pending.json"), $vmPendingContent, $utf8NoBom)
+    $r3b = Invoke-ConstructConfigSync -ConfigDir $configDir -VmHost "dummy" `
+        -SshReadInvoker $sshRead -SshWriteInvoker $sshWrite
+    ok "sync: pending clean merge recovered" $r3b.Ok
+    ok "sync: pending clean merge committed" (-not (Test-Path -LiteralPath (Join-Path $configDir ".git/MERGE_HEAD")))
+    $hostAfterPending = [System.IO.File]::ReadAllText((Join-Path $configDir "projects/host-pending.json"), [System.Text.Encoding]::UTF8)
+    $vmAfterPendingContent = [System.IO.File]::ReadAllText((Join-Path $configDir "projects/vm-pending.json"), [System.Text.Encoding]::UTF8)
+    ok "sync: pending clean merge kept host side" ($hostAfterPending -match "npm ci")
+    ok "sync: pending clean merge kept VM side" ($vmAfterPendingContent -match '"node": "22"')
+    $mainAfterPending = & git -C $configDir rev-parse main 2>$null
+    $vmAfterPending = & git -C $configDir rev-parse vm 2>$null
+    ok "sync: pending clean merge advanced vm ref" ("$mainAfterPending".Trim() -eq "$vmAfterPending".Trim())
+
     # ── Scenario 4: Reserved name in VM store is skipped ─────────────────────
     [System.IO.File]::WriteAllText((Join-Path $vmStoreDir "default.json"), '{"name":"default"}', $utf8NoBom)
 

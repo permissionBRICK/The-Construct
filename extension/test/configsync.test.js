@@ -877,6 +877,64 @@ async function runTests() {
     ok("gate: tick ok after gate resolution", gateResult3.ok);
   } finally { fs.rmSync(gateRoot, { recursive: true, force: true }); }
 
+  // ── Clean pending merge is auto-committed on the next tick ────────────────
+  const pendingCleanRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cs-pendingclean-"));
+  try {
+    const configDir = mk(pendingCleanRoot, "config");
+    const storeDir = path.join(pendingCleanRoot, "store");
+    cs.ensureConfigTree(configDir);
+    writeProfile(configDir, "web", { name: "web", repos: [{ url: "https://h/w.git" }] });
+    await cs.ensureRepo(runGit, configDir);
+
+    await cs.syncTick({
+      runGit, configDir,
+      readStore: makeReadStore(storeDir),
+      writeStore: makeWriteStore(),
+      storeRoot: storeDir,
+    });
+
+    writeProfile(configDir, "web", {
+      name: "web", repos: [{ url: "https://h/w.git" }],
+      provisionCommands: ["npm ci"],
+    });
+    writeStoreProfile(storeDir, "web", {
+      name: "web", repos: [{ url: "https://h/w.git" }],
+      sdks: { node: "22" },
+    });
+
+    const failMergeCommitRunGit = function(args, opts) {
+      if (args.includes("commit") && args.includes("-m") && args.includes("sync merge vm")) {
+        return Promise.resolve({ code: 1, stdout: "", stderr: "simulated commit failure" });
+      }
+      return runGit(args, opts);
+    };
+
+    const blocked = await cs.syncTick({
+      runGit: failMergeCommitRunGit, configDir,
+      readStore: makeReadStore(storeDir),
+      writeStore: makeWriteStore(),
+      storeRoot: storeDir,
+    });
+    ok("pending-clean: failed merge commit blocks", blocked.blocked === true);
+    let pendingState = await cs.repoState(runGit, configDir);
+    ok("pending-clean: merge is pending without conflicts", pendingState.mergeInProgress && !pendingState.conflict);
+
+    const recovered = await cs.syncTick({
+      runGit, configDir,
+      readStore: makeReadStore(storeDir),
+      writeStore: makeWriteStore(),
+      storeRoot: storeDir,
+    });
+    ok("pending-clean: next tick auto-commits clean pending merge", recovered.ok && recovered.merged);
+    pendingState = await cs.repoState(runGit, configDir);
+    ok("pending-clean: merge state cleared", !pendingState.mergeInProgress && !pendingState.conflict);
+    const hostWeb = readProfile(configDir, "web");
+    ok("pending-clean: host has both changes", hostWeb && hostWeb.sdks && hostWeb.sdks.node === "22" && hostWeb.provisionCommands && hostWeb.provisionCommands[0] === "npm ci");
+    const vmRef = await runGit(["rev-parse", "vm"], { cwd: configDir });
+    const mainRef = await runGit(["rev-parse", "main"], { cwd: configDir });
+    ok("pending-clean: vm ref advanced after recovery", vmRef.stdout.trim() === mainRef.stdout.trim());
+  } finally { fs.rmSync(pendingCleanRoot, { recursive: true, force: true }); }
+
   // ── Merge blocked when invalid host file would be overwritten (Fix 4) ──────
   // D6 step 2: when an invalid host file is left uncommitted and the merge
   // touches it, git refuses. The tick must return {blocked:true, blockedReason}.
