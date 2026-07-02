@@ -399,6 +399,15 @@ async function buildConfigSyncState() {
   if (dir && git.present && runGit) {
     try {
       var rs = await configsync.repoState(runGit, dir);
+      if (rs.mergeInProgress && !rs.conflict && !syncTickInFlight) {
+        var recovered = await runConfigSync();
+        if (recovered) {
+          out.lastSyncAt = lastSyncTickAt || null;
+          out.lastResult = recovered.ok ? "ok" : (recovered.conflict ? "conflict" : (recovered.blocked ? "blocked" : "error"));
+          out.warnings = recovered.warnings || [];
+        }
+        rs = await configsync.repoState(runGit, dir);
+      }
       out.repoReady = rs.repo; out.conflict = rs.conflict;
       out.conflictFiles = rs.conflictFiles || []; out.mergeInProgress = rs.mergeInProgress;
     } catch (_) {}
