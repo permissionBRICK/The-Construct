@@ -120,14 +120,27 @@ a failure mode.
   checkout. A live git repo inside a folder that update tooling rewrites is
   fragile, and user data should not live inside an app install dir. With the
   dedicated location, self-updates never touch live config.
-- **The shipped `projects/` folder becomes seed-only on the host too** —
-  symmetric with the VM. On first run, its profiles seed the config repo; it is
-  never a live source afterward.
-- **Lazy initialisation (also the migration story):** the first time the sync
-  engine runs with git available and finds no repo, it runs `git init` in the
-  config dir and commits the current contents as the initial commit. An existing
-  plain `projects/` folder from a pre-v2 install is migrated by copying its
-  user profiles into the config dir before that first commit.
+- **The shipped `projects/` folder is never a live source on the host.** (The
+  original pre-v2 migration that copied its profiles into the config dir was
+  removed: it re-ran on every tick and re-copied any profile missing from the
+  config dir, so a profile deleted by sync was silently resurrected from the
+  stale shipped copy and the two versions fought each other forever.)
+- **Lazy initialisation:** the first time the sync engine runs with git
+  available and finds no repo, it runs `git init` in the config dir and commits
+  the current contents as the initial commit.
+- **Cross-process lock:** every VS Code window runs its own sync engine
+  (extensionKind `ui`), and the PowerShell engine runs during provisions — so a
+  whole tick (read store → commit → merge → write-back) holds
+  `<configDir>\.sync.lock` (atomic create; a lock older than 5 minutes counts
+  as abandoned and is broken). Acquire returns an ownership token and release
+  only deletes the file while it still carries that token — so a holder that
+  outlived the stale threshold and was broken cannot delete its successor's
+  lock on the way out. A busy extension engine skips its tick and lets
+  the next timer retry; the PowerShell engine waits up to 90 s, because its
+  pre-reinstall tick should run rather than silently skip. Without the lock,
+  two concurrent ticks interleave and the one holding a stale store read
+  commits spurious deletions — observed in the field as profiles mass-deleted
+  and re-added within the same minute.
 - **`default` is reserved and read-only.** `default.json` (and
   `project.schema.json`) are **not tracked** in the config repo; they ship with
   Construct and serve as today: the nothing-selected fallback and the schema.
@@ -178,6 +191,14 @@ Each **sync tick**:
 file whose current content still equals the `vm`-branch tip (unchanged since it
 was read); anything else is left in place and reconciles through the merge path
 on the next tick. Same guard for deletions.
+
+**Mass-deletion guard:** when a read of an *existing* store yields **zero valid
+profiles** while the `vm` branch still has some, the tick refuses to treat that
+as "the user deleted everything" — it skips the VM side with a warning instead.
+That state is indistinguishable from a half-provisioned store or one whose
+files all failed validation, and propagating it would wipe `main` (observed in
+the field). Individual deletions (down to one remaining profile) still
+propagate; deleting the *last* profile is a host-side/panel action.
 
 **Canonical JSON everywhere.** Every writer — the VM helper, the extension's
 profile editor, the import path, the merge write-back — serialises profiles in
@@ -491,11 +512,13 @@ for steady state.
 
 The touch points that were built for this feature (kept for reference):
 
-- **Host config repo** — dedicated dir, lazy `git init` + migration commit,
-  seed from shipped `projects/`, `main`/`vm` branch scheme.
-- **Sync engine (host)** — the §6 tick: SSH read, validation, `vm` commits,
-  merge, post-merge validation gate, guarded write-back; shared by the
-  extension and the PowerShell path.
+- **Host config repo** — dedicated dir, lazy `git init`,
+  `main`/`vm` branch scheme. (The pre-v2 migration from the shipped
+  `projects/` folder was later removed — see §4.)
+- **Sync engine (host)** — the §6 tick: cross-process lock, SSH read,
+  validation, `vm` commits, merge, post-merge validation gate, guarded
+  write-back, mass-deletion guard; shared by the extension and the PowerShell
+  path.
 - [`bin/generate-runtime-config.sh`](../bin/generate-runtime-config.sh) — resolve
   from the VM store only (reserved `default` from the shipped copy); delete the
   repo-wins/store-fallback precedence and the `cp -f` refresh.

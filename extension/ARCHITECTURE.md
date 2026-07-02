@@ -58,7 +58,9 @@ extension/
                       configDir(env) resolves %LOCALAPPDATA%\The-Construct\config (machine-wide,
                       NOT slug-scoped — outside any zip checkout)
     configsync.js     config-sync engine: git-based profile sync between host and VM
-                      (makeGitRunner, detectGit, ensureConfigTree, migrateLegacyProfiles,
+                      (makeGitRunner, detectGit, ensureConfigTree, acquireSyncLock/
+                      releaseSyncLock (cross-process .sync.lock, serializes ticks across
+                      windows + the PS engine),
                       ensureRepo, repoState, syncTick, readRemotes/writeRemotes,
                       ensureStagingClone, listImportCandidates, planUpstreamImport,
                       mergeFile, commitAll, pushUpstream; see docs/config-sync.md)
