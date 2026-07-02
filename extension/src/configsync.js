@@ -165,10 +165,32 @@ async function hardenConfigRepo(runGit, configDir) {
   await runGit(["config", "core.autocrlf", "false"], { cwd: configDir });
   const ga = path.join(configDir, ".gitattributes");
   // A .gitattributes present in the working tree is honoured by git even while
-  // untracked; the new-repo path's `add -A` versions it, existing repos keep it
-  // as a working-tree file (commitHostDirtyFiles only stages projects/).
+  // untracked/ignored — it just pins LF as a belt to core.autocrlf=false's braces.
   try { fs.accessSync(ga); }
   catch (_) { try { fs.writeFileSync(ga, "* text=auto eol=lf\n", "utf8"); } catch (_) { /* best-effort */ } }
+  // Keep the machine-local bookkeeping files (.gitattributes + the PS engine's
+  // .migrated sentinel) out of `git status` and — crucially — out of git's
+  // untracked-overwrite guard. Left un-ignored, an untracked root file makes
+  // `git merge` refuse ("untracked working tree files would be overwritten"),
+  // which the tick then reports as a blocked/phantom "merge conflict". Ignoring
+  // them via .git/info/exclude (local, itself untracked) fixes both.
+  ensureRepoExclude(configDir, [".gitattributes", ".migrated"]);
+}
+
+/** Append the given names to <configDir>/.git/info/exclude if absent. Best-effort. */
+function ensureRepoExclude(configDir, names) {
+  try {
+    const dir = path.join(configDir, ".git", "info");
+    const p = path.join(dir, "exclude");
+    let cur = "";
+    try { cur = fs.readFileSync(p, "utf8"); } catch (_) { /* may not exist yet */ }
+    const have = new Set(cur.split(/\r?\n/).map((s) => s.trim()));
+    const missing = names.filter((n) => !have.has(n));
+    if (!missing.length) return;
+    fs.mkdirSync(dir, { recursive: true });
+    const prefix = cur && !cur.endsWith("\n") ? "\n" : "";
+    fs.appendFileSync(p, prefix + missing.join("\n") + "\n", "utf8");
+  } catch (_) { /* best-effort */ }
 }
 
 /**
