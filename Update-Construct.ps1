@@ -46,8 +46,10 @@ try {
     try { . (Join-Path $root.FullName "lib\AgentVm.Common.ps1") }
     catch { Write-Warning "Could not load helpers: $($_.Exception.Message)" }
 
-    # Record what we fetched (installedCommit "" on failure -> the panel treats it as no
-    # marker and hides the banner, rather than diffing against a stale commit).
+    # Record what we fetched. Set-ConstructInstalledMarker writes the (repo, ref,
+    # commit) tuple atomically: on a failed SHA lookup it PRESERVES the prior marker
+    # (it does not blank installedCommit), so a transient GitHub blip during an update
+    # can't hide the panel's update banner.
     if (Get-Command Set-ConstructInstalledMarker -ErrorAction SilentlyContinue) {
         $sha = Set-ConstructInstalledMarker -Root $root.FullName -Repo $Repo -Ref $Ref
         Write-Host "==> Updated Construct files in $($root.FullName)" -ForegroundColor Green

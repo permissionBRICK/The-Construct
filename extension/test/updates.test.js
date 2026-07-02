@@ -18,9 +18,11 @@ function ok(name, cond, detail) {
   const m = updates.readMarkers({ constructRepo: " me/fork ", constructRef: " dev ", installedCommit: " abc123 " });
   ok("markers: honors + trims overrides", m.repo === "me/fork" && m.ref === "dev" && m.installedCommit === "abc123");
   ok("markers: null raw -> defaults", updates.readMarkers(null).repo === updates.DEFAULT_REPO);
-  // A cleared marker (installedCommit:"" — what Set-ConstructInstalledMarker writes when
-  // the SHA lookup fails) must read as "no marker" while repo/ref are still honored,
-  // so a refreshed install never compares against a stale commit.
+  // An empty/legacy marker (installedCommit:"") — e.g. a settings file written by an
+  // older installer, or one whose very first SHA lookup failed with no prior commit —
+  // must read as "no marker" while repo/ref are still honored, so the panel hides the
+  // banner rather than comparing against a bogus base. (Set-ConstructInstalledMarker no
+  // longer writes "" over an existing commit; it preserves the prior tuple on failure.)
   const cleared = updates.readMarkers({ installedCommit: "", constructRepo: "me/fork", constructRef: "dev" });
   ok("markers: empty installedCommit -> no marker (banner hidden), repo/ref kept",
     cleared.installedCommit === "" && cleared.repo === "me/fork" && cleared.ref === "dev");

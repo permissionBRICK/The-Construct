@@ -305,6 +305,66 @@ try {
     ok "backup-creds: non-empty file -> true" (Test-BackupHasGitCredentials -BackupDir $bkTest)
 } finally { Remove-Item -LiteralPath $bkTest -Recurse -Force -ErrorAction SilentlyContinue }
 
+# ── Set-ConstructInstalledMarker: a failed SHA fetch must NOT clobber the marker ──
+# Regression: recording installedCommit="" on a transient GitHub blip permanently
+# hid the update banner (checkConstruct treats "" as no marker). The fetch is
+# injected so this is network-free.
+$mkDir = Join-Path ([System.IO.Path]::GetTempPath()) ("cs-marker-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $mkDir -Force | Out-Null
+try {
+    # A successful fetch records the SHA.
+    $sha1 = Set-ConstructInstalledMarker -Root $mkDir -Repo "permissionBRICK/The-Construct" -Ref "main" `
+        -CommitFetcher { param($r,$f) "abc1234def" }
+    ok "marker: successful fetch returns the sha" ($sha1 -eq "abc1234def")
+    ok "marker: successful fetch records installedCommit" ((Read-ConstructSettings -Dir $mkDir).installedCommit -eq "abc1234def")
+
+    # A FAILED fetch (fetcher throws) must PRESERVE the prior installedCommit, not blank it.
+    $sha2 = Set-ConstructInstalledMarker -Root $mkDir -Repo "permissionBRICK/The-Construct" -Ref "main" `
+        -CommitFetcher { param($r,$f) throw "network down" }
+    ok "marker: failed fetch returns empty" ($sha2 -eq "")
+    ok "marker: failed fetch PRESERVES the prior installedCommit (no clobber)" (
+        (Read-ConstructSettings -Dir $mkDir).installedCommit -eq "abc1234def")
+    # Same repo/ref -> the whole tuple is intact.
+    ok "marker: failed fetch preserves repo/ref" (
+        (Read-ConstructSettings -Dir $mkDir).constructRef -eq "main")
+
+    # An EMPTY-string sha (fetcher returns "") is likewise treated as no-fetch.
+    $null = Set-ConstructInstalledMarker -Root $mkDir -Repo "permissionBRICK/The-Construct" -Ref "main" `
+        -CommitFetcher { param($r,$f) "" }
+    ok "marker: empty-string fetch also preserves the prior commit" (
+        (Read-ConstructSettings -Dir $mkDir).installedCommit -eq "abc1234def")
+
+    # ATOMIC TUPLE: a repo/ref SWITCH with a FAILED fetch must NOT pair the new
+    # repo/ref with the OLD commit (that would 404 the compare -> hidden banner).
+    # The whole prior tuple (A) is preserved; the new B repo/ref are NOT written.
+    $null = Set-ConstructInstalledMarker -Root $mkDir -Repo "someone/a-fork" -Ref "dev" `
+        -CommitFetcher { param($r,$f) throw "network down" }
+    $sw = Read-ConstructSettings -Dir $mkDir
+    ok "marker: switch+failed fetch keeps the old commit" ($sw.installedCommit -eq "abc1234def")
+    ok "marker: switch+failed fetch does NOT adopt the new repo" ($sw.constructRepo -eq "permissionBRICK/The-Construct")
+    ok "marker: switch+failed fetch does NOT adopt the new ref" ($sw.constructRef -eq "main")
+    ok "marker: switch+failed fetch never pairs new repo with old commit" (
+        -not (($sw.constructRepo -eq "someone/a-fork") -and ($sw.installedCommit -eq "abc1234def")))
+    # A later SUCCESSFUL fetch for the switched source writes the full new tuple atomically.
+    $null = Set-ConstructInstalledMarker -Root $mkDir -Repo "someone/a-fork" -Ref "dev" `
+        -CommitFetcher { param($r,$f) "beef5678" }
+    $sw2 = Read-ConstructSettings -Dir $mkDir
+    ok "marker: successful switch writes the full new tuple" (
+        ($sw2.constructRepo -eq "someone/a-fork") -and ($sw2.constructRef -eq "dev") -and ($sw2.installedCommit -eq "beef5678"))
+
+    # First-ever install with a failed fetch: no prior value, so installedCommit stays
+    # absent/empty (banner hidden until a good record) -- never throws.
+    $mkDir2 = Join-Path ([System.IO.Path]::GetTempPath()) ("cs-marker2-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $mkDir2 -Force | Out-Null
+    try {
+        $null = Set-ConstructInstalledMarker -Root $mkDir2 -Repo "permissionBRICK/The-Construct" -Ref "main" `
+            -CommitFetcher { param($r,$f) throw "offline" }
+        $s2 = Read-ConstructSettings -Dir $mkDir2
+        ok "marker: first install + failed fetch leaves no phantom commit" (-not $s2.installedCommit)
+        ok "marker: first install + failed fetch still records repo/ref" ($s2.constructRepo -eq "permissionBRICK/The-Construct")
+    } finally { Remove-Item -LiteralPath $mkDir2 -Recurse -Force -ErrorAction SilentlyContinue }
+} finally { Remove-Item -LiteralPath $mkDir -Recurse -Force -ErrorAction SilentlyContinue }
+
 # ── Regression guard: no non-ASCII INSIDE a string literal in shipped .ps1 ────
 # Windows PowerShell 5.1 reads a BOM-less .ps1 as the ANSI code page, so a UTF-8
 # em-dash (etc.) inside a STRING mangles into a smart-quote that closes the string

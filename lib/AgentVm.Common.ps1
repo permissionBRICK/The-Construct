@@ -1503,28 +1503,57 @@ function Resolve-MarkerSource {
 function Set-ConstructInstalledMarker {
     <#
         Record which Construct repo/ref/commit is installed on this host, so the
-        control panel's update check has a base to diff against. The commit SHA is
-        best-effort -- recorded as "" when it can't be fetched, which the panel treats
-        as "no marker" (banner hidden) rather than a stale comparison base. Returns the
-        SHA ("" on failure). Never throws.
+        control panel's update check has a base to diff against. The SHA fetch is
+        best-effort, and the (repo, ref, installedCommit) TUPLE is written ATOMICALLY:
+          * SHA fetched             -> write all three (a fresh, self-consistent marker).
+          * fetch failed, prior
+            commit exists           -> write NOTHING; preserve the whole prior tuple.
+          * fetch failed, no prior
+            commit                  -> record repo/ref only (no commit yet).
+        Why atomic: the panel diffs `compare(installedCommit...ref)` on `repo`, so a
+        preserved commit must never be paired with a newly-switched repo/ref (that
+        yields a permanent 404/null check). And a failed fetch must never blank a good
+        installedCommit -- writing "" was a real bug: one transient GitHub blip during
+        any (re)install/reprovision permanently hid the update banner (checkConstruct
+        treats "" as "no marker"), and only the -- now hidden -- Update button
+        re-records it. Returns the SHA ("" on failure). Never throws.
+        `-CommitFetcher` injects the SHA lookup for tests (default: GitHub API).
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Root,
         [Parameter(Mandatory)][string]$Repo,
-        [Parameter(Mandatory)][string]$Ref
+        [Parameter(Mandatory)][string]$Ref,
+        [scriptblock]$CommitFetcher
     )
     $sha = ""
     try {
-        # -TimeoutSec so a slow/unreachable GitHub can't stall the install (this now
-        # runs on the fresh-install path too, before Auto-Install launches).
-        $sha = (Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/commits/$Ref" `
-                  -Headers @{ "User-Agent" = "construct-control-panel" } -UseBasicParsing -TimeoutSec 20).sha
+        if ($CommitFetcher) {
+            $sha = [string](& $CommitFetcher $Repo $Ref)
+        } else {
+            # -TimeoutSec so a slow/unreachable GitHub can't stall the install (this now
+            # runs on the fresh-install path too, before Auto-Install launches).
+            $sha = (Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/commits/$Ref" `
+                      -Headers @{ "User-Agent" = "construct-control-panel" } -UseBasicParsing -TimeoutSec 20).sha
+        }
     } catch {
         Write-Host "    (couldn't fetch the commit id for the update marker: $($_.Exception.Message))" -ForegroundColor DarkGray
     }
     try {
-        Save-ConstructSettings -Dir $Root -Values @{ constructRepo = $Repo; constructRef = $Ref; installedCommit = $sha }
+        if ($sha) {
+            # Fresh, self-consistent tuple.
+            Save-ConstructSettings -Dir $Root -Values @{ constructRepo = $Repo; constructRef = $Ref; installedCommit = $sha }
+        } else {
+            $priorCommit = ""
+            try { $ex = Read-ConstructSettings -Dir $Root; if ($ex -and $ex.installedCommit) { $priorCommit = [string]$ex.installedCommit } } catch { }
+            if ($priorCommit) {
+                # Preserve the WHOLE prior tuple (repo+ref+commit) -- never pair the old
+                # commit with a newly-switched repo/ref. Leave the settings untouched.
+            } else {
+                # First install / no commit recorded yet: record repo/ref only.
+                Save-ConstructSettings -Dir $Root -Values @{ constructRepo = $Repo; constructRef = $Ref }
+            }
+        }
     } catch {
         Write-Warning "Could not record the update marker: $($_.Exception.Message)"
     }
