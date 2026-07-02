@@ -1544,6 +1544,41 @@ async function runTests() {
     ok("sign: recovery tick completed the pending merge", recov.merged === true && mh2.code !== 0 && !recov.conflict);
   } finally { fs.rmSync(signRoot, { recursive: true, force: true }); }
 
+  // ── Bookkeeping files are ignored (no status clutter, no merge block) ────────
+  // .gitattributes (hardening) + .migrated (PS migration sentinel) live at the
+  // config-repo root. Left un-ignored they clutter `git status` AND can trip git's
+  // "untracked working tree files would be overwritten by merge" guard, which the
+  // tick reports as a phantom conflict. ensureRepo must add them to .git/info/exclude.
+  const excRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cs-exclude-"));
+  try {
+    const configDir = mk(excRoot, "config");
+    cs.ensureConfigTree(configDir);
+    writeProfile(configDir, "web", { name: "web", repos: [] });
+    await cs.ensureRepo(runGit, configDir);
+    fs.writeFileSync(path.join(configDir, ".migrated"), "1"); // simulate the PS sentinel
+    const excPath = path.join(configDir, ".git", "info", "exclude");
+    const exc = fs.readFileSync(excPath, "utf8");
+    ok("exclude: lists .gitattributes and .migrated", exc.includes(".gitattributes") && exc.includes(".migrated"));
+    const st = await runGit(["status", "--porcelain"], { cwd: configDir });
+    ok("exclude: git status hides the bookkeeping files",
+      !st.stdout.includes(".gitattributes") && !st.stdout.includes(".migrated"));
+    // Idempotent: re-running ensureRepo doesn't append duplicate entries.
+    await cs.ensureRepo(runGit, configDir);
+    const exc2 = fs.readFileSync(excPath, "utf8");
+    ok("exclude: idempotent (single .migrated entry)", (exc2.match(/^\.migrated$/gm) || []).length === 1);
+    // A merge that would overwrite an ignored bookkeeping file is NOT blocked.
+    await runGit(["branch", "collide"], { cwd: configDir });
+    await runGit([...["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"], "stash", "--include-untracked"], { cwd: configDir }).catch(() => {});
+    await runGit(["checkout", "collide"], { cwd: configDir });
+    fs.writeFileSync(path.join(configDir, ".migrated"), "from-branch");
+    await runGit(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "add", "-f", ".migrated"], { cwd: configDir });
+    await runGit(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-m", "track migrated on branch"], { cwd: configDir });
+    await runGit(["checkout", "main"], { cwd: configDir });
+    fs.writeFileSync(path.join(configDir, ".migrated"), "untracked-local"); // untracked + ignored, collides
+    const mg = await runGit(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "merge", "--no-ff", "--no-commit", "collide"], { cwd: configDir });
+    ok("exclude: an ignored bookkeeping file never blocks a merge", mg.code === 0);
+  } finally { fs.rmSync(excRoot, { recursive: true, force: true }); }
+
   // Print summary.
   console.log(`\n  config-sync unit tests — ${pass}/${pass + fail} passed\n`);
   process.exit(fail ? 1 : 0);

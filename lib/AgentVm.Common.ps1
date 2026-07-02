@@ -1735,7 +1735,11 @@ function Set-ConstructConfigRepoHardening {
         phantom "unresolved merge" the panel reports. The $gitArgs prefix already
         disables both per-invocation for the ENGINE; this persists them repo-locally
         so the user's own commits (e.g. resolving in VS Code) behave the same, and
-        pins LF so canonical-LF profiles never round-trip through CRLF. Best-effort.
+        pins LF so canonical-LF profiles never round-trip through CRLF. Also ignores
+        the machine-local bookkeeping files (.gitattributes + the .migrated sentinel)
+        via .git/info/exclude, so they don't clutter `git status` and -- crucially --
+        can't trip git's untracked-overwrite guard, which would make `git merge`
+        refuse and surface as a phantom "merge conflict". Best-effort.
     #>
     param([Parameter(Mandatory)][string]$ConfigDir)
     $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
@@ -1748,6 +1752,19 @@ function Set-ConstructConfigRepoHardening {
         $ga = Join-Path $ConfigDir ".gitattributes"
         if (-not (Test-Path -LiteralPath $ga)) {
             [System.IO.File]::WriteAllText($ga, "* text=auto eol=lf`n")
+        }
+        # Ignore the local bookkeeping files (idempotent append).
+        $exDir = Join-Path (Join-Path $ConfigDir ".git") "info"
+        $exFile = Join-Path $exDir "exclude"
+        $cur = ""
+        if (Test-Path -LiteralPath $exFile) { $cur = [System.IO.File]::ReadAllText($exFile) }
+        $have = @($cur -split "`r?`n" | ForEach-Object { $_.Trim() })
+        $missing = @(@(".gitattributes", ".migrated") | Where-Object { $have -notcontains $_ })
+        if ($missing.Count -gt 0) {
+            if (-not (Test-Path -LiteralPath $exDir)) { New-Item -ItemType Directory -Path $exDir -Force | Out-Null }
+            $prefix = ""
+            if ($cur -and -not $cur.EndsWith("`n")) { $prefix = "`n" }
+            [System.IO.File]::AppendAllText($exFile, $prefix + ($missing -join "`n") + "`n")
         }
     } catch { }
     $ErrorActionPreference = $prev

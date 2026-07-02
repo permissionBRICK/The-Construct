@@ -339,6 +339,16 @@ try {
     & git -C $configDir config --local core.hooksPath 2>$null | Out-Null
     ok "harden: core.hooksPath emptied locally" ($LASTEXITCODE -eq 0)
     ok "harden: .gitattributes pins LF" (Test-Path -LiteralPath (Join-Path $configDir ".gitattributes"))
+    # Bookkeeping files (.gitattributes + .migrated) are ignored so they neither
+    # clutter status nor trip git's untracked-overwrite merge guard.
+    $excText = ""
+    $excPath = Join-Path (Join-Path (Join-Path $configDir ".git") "info") "exclude"
+    if (Test-Path -LiteralPath $excPath) { $excText = [System.IO.File]::ReadAllText($excPath) }
+    ok "harden: .git/info/exclude ignores .gitattributes" ($excText -match '(?m)^\.gitattributes$')
+    ok "harden: .git/info/exclude ignores .migrated" ($excText -match '(?m)^\.migrated$')
+    [System.IO.File]::WriteAllText((Join-Path $configDir ".migrated"), "1")
+    $porcelain = @(& git -C $configDir status --porcelain 2>$null | Where-Object { $_ -match '\.migrated|\.gitattributes' })
+    ok "harden: git status hides the ignored bookkeeping files" ($porcelain.Count -eq 0)
     # A manual commit (no engine $gitArgs) must survive an inherited failing hook,
     # because the empty hooksPath is persisted repo-locally by the hardening step.
     # Run in a throwaway repo so it can't perturb the scenario repo below.
