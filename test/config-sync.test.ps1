@@ -470,7 +470,10 @@ try {
 
     $r4 = Invoke-ConstructConfigSync -ConfigDir $configDir -VmHost "dummy" `
         -SshReadInvoker $sshRead -SshWriteInvoker $sshWrite
-    ok "sync: reserved name in VM store produces a warning" (@($r4.Warnings | Where-Object { $_ -match "Reserved" }).Count -gt 0)
+    # A leftover default.json is the normal state on upgraded VMs: skipped
+    # quietly (verbose log only), never a recurring warning, never tracked.
+    ok "sync: reserved name in VM store skipped without warning" (@($r4.Warnings | Where-Object { $_ -match "Reserved" }).Count -eq 0)
+    ok "sync: reserved name not committed to config repo" (-not (Test-Path (Join-Path $configDir "projects/default.json")))
 
     # Clean up reserved name file.
     Remove-Item -LiteralPath (Join-Path $vmStoreDir "default.json") -Force -ErrorAction SilentlyContinue

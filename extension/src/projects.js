@@ -357,7 +357,7 @@ function validateProfile(name, obj) {
     if (!Array.isArray(obj.mcp)) errors.push('"mcp" must be an array');
     else obj.mcp.forEach((m, i) => {
       if (typeof m === "string") {
-        if (!MCP_LEGACY_ENUM.includes(m)) errors.push(`mcp[${i}] "${m}" is not one of ${MCP_LEGACY_ENUM.join("/")}`);
+        if (!MCP_LEGACY_ENUM.includes(m)) errors.push(`mcp[${i}] "${m}": a bare string must be a built-in docker-compose MCP (${MCP_LEGACY_ENUM.join("/")}); a custom server must be an object with "command" (stdio) or "url" (http); see docs/projects.md`);
         return;
       }
       if (!isPlainObject(m)) { errors.push(`mcp[${i}] must be a string or an object`); return; }

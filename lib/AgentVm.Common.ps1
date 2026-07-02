@@ -2278,7 +2278,7 @@ function Test-ConstructProfile {
                 $m = @($mp)[$i]
                 if ($m -is [string]) {
                     if ($MCP_LEGACY_ENUM -cnotcontains $m) {
-                        $errors.Add("mcp[$i] `"$m`" is not one of $($MCP_LEGACY_ENUM -join '/')")
+                        $errors.Add("mcp[$i] `"$m`": a bare string must be a built-in docker-compose MCP ($($MCP_LEGACY_ENUM -join '/')); a custom server must be an object with `"command`" (stdio) or `"url`" (http); see docs/projects.md")
                     }
                     continue
                 }
@@ -2894,7 +2894,11 @@ function Invoke-ConstructConfigSync {
     foreach ($name in @($vmStore.Keys)) {
         $lower = "$name".ToLowerInvariant()
         if ($script:RESERVED_PROFILE_NAMES -contains $lower) {
-            $warnings.Add("Reserved name '$name' in VM store; skipped.")
+            # Reserved names are dead files by design (default always resolves to
+            # the shipped copy) and pre-v2 provisions seeded default.json into the
+            # store, so a leftover is the normal state on upgraded VMs -- skip it
+            # quietly instead of warning on every tick.
+            Write-Verbose "Reserved name '$name' in VM store ignored."
             continue
         }
         try {

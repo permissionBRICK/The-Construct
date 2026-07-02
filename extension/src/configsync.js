@@ -552,7 +552,11 @@ async function syncTick({ runGit, configDir, readStore, writeStore, log, storeRo
   const vmValid = {};
   for (const entry of vmParsed.entries) {
     if (projects.isReservedProfileName(entry.name)) {
-      addWarning(`reserved name "${entry.name}" in VM store ignored`);
+      // Reserved names are dead files by design (default always resolves to the
+      // shipped copy) and pre-v2 provisions seeded default.json into the store,
+      // so a leftover is the normal state on upgraded VMs — log it, but don't
+      // raise a permanent panel warning the user can't act on.
+      info(`reserved name "${entry.name}" in VM store ignored`);
       continue;
     }
     let obj;
