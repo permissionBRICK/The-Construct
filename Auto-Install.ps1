@@ -130,7 +130,7 @@ param(
     # -FromPanel the redundant confirmations are skipped too (the "type yes" delete,
     # the git-identity prompt and the agent-password prompt -- all already handled by
     # the panel); the dirty-repo scan still warns if the VM has unsaved work.
-    [ValidateSet("reprovision", "reinstall", "redownload", "export")]
+    [ValidateSet("reprovision", "reinstall", "redownload", "export", "add-config")]
     [string]$Action,
     # With -Action reinstall/redownload, pre-answer the save/restore prompts:
     #   save     export the current config now and restore it afterwards (default)
@@ -138,6 +138,22 @@ param(
     #   wipe     no save and no restore -- reinstall completely blank
     [ValidateSet("save", "existing", "wipe")]
     [string]$BackupMode,
+    # ── Config-sync v2 params (spec sections 10-12) ────────────────────────────
+    # Import project configs from a remote git repo (cloned to a staging cache).
+    # Requires git on the host; if absent, the pre-elevation block prompts/installs it.
+    [string]$ConfigRepo,
+    # Import project configs from a local directory (no git needed). Files matching
+    # projects/*.json (or top-level *.json if no projects/ subdir) are imported.
+    [string]$ConfigDir,
+    # Comma-separated profile names to import from -ConfigRepo or -ConfigDir.
+    # Omitted with -ConfigDir = import everything; omitted with -ConfigRepo =
+    # interactive terminal picker (Import-ConstructConfigs' behavior per C5).
+    [string]$ImportConfigs,
+    # Conflict resolution strategy for the config-sync merge (spec section 8).
+    # 'ours' keeps the host side, 'theirs' keeps the VM/upstream side.
+    # When omitted, a conflict stops the operation with instructions to resolve manually.
+    [ValidateSet("ours", "theirs")]
+    [string]$AutoResolve,
     # GitHub owner/name + ref this install came from. Forwarded down to
     # Provision-AgentVM.ps1, which records the installed-commit update marker for the
     # control panel at the end of a successful provision. Defaults to the canonical
@@ -214,6 +230,31 @@ if (-not $SkipCreateVm) {
             # NOTE: ffmpeg (for mic passthrough) is installed at the END of provisioning
             # (Provision-AgentVM.ps1), not here — winget can be slow and this pre-step runs
             # BEFORE the user's install prompts, so it shouldn't block the flow up front.
+
+            # Config-sync v2 (spec section 10 / D15): when -ConfigRepo is bound and git
+            # is not on the host, install it NOW -- while we are still the real (non-admin)
+            # user -- because winget is per-user. Interactive (no -Action): prompt first.
+            # Unattended (-Action add-config): silent attempt, abort loudly on failure
+            # (the user explicitly asked for something that requires git).
+            if ($PSBoundParameters.ContainsKey('ConfigRepo') -and
+                (Get-Command Test-ConstructGitAvailable -ErrorAction SilentlyContinue) -and
+                -not (Test-ConstructGitAvailable)) {
+                if ($PSBoundParameters.ContainsKey('Action') -and $Action -eq 'add-config') {
+                    # Unattended: silent install attempt, hard abort on failure.
+                    if (Get-Command Ensure-ConstructGit -ErrorAction SilentlyContinue) {
+                        $gitOk = Ensure-ConstructGit -AutoMode
+                        if (-not $gitOk) { throw "-ConfigRepo requires git, but the automatic git install failed. Install git manually (winget install --id Git.Git) and re-run." }
+                    }
+                } else {
+                    # Interactive: prompt the user.
+                    $ans = Read-Host "    -ConfigRepo requires git. Install git via winget? [Y/n]"
+                    if (-not $ans -or $ans -match '^[Yy]') {
+                        if (Get-Command Ensure-ConstructGit -ErrorAction SilentlyContinue) {
+                            Ensure-ConstructGit | Out-Null
+                        }
+                    }
+                }
+            }
         } catch {
             Write-Warning "Could not set up the control panel on the host (continuing): $($_.Exception.Message)"
         }
@@ -399,7 +440,11 @@ function ConvertTo-WslPath([string]$winPath) {
 # Mirrors Select-Projects in Provision-AgentVM.ps1 so the choice can be made up
 # front here and passed straight through.
 function Select-Projects {
-    $projDir = Join-Path $PSScriptRoot "projects"
+    # Config-sync v2: prefer the shared config projects dir; fall back to the
+    # shipped projects/ in the repo checkout (pre-migration / degraded mode).
+    $projDir = if (Get-Command Get-ConstructConfigProjectsDir -ErrorAction SilentlyContinue) {
+        Get-ConstructConfigProjectsDir -ScriptsDir $PSScriptRoot
+    } else { Join-Path $PSScriptRoot "projects" }
     if (Get-Command Select-ProjectProfiles -ErrorAction SilentlyContinue) {
         return (Select-ProjectProfiles -ProjectsDir $projDir)
     }
@@ -523,12 +568,14 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
     Show-TuiScreen -Title "The agent VM '$HyperVmName' is already installed on this host."
 
     if ($PSBoundParameters.ContainsKey('Action')) {
-        # The control panel pre-selects the action; skip the interactive menu.
+        # The control panel or install.ps1 one-liner pre-selects the action; skip the
+        # interactive menu.
         $choice = switch ($Action) {
             'reprovision' { 0 }
             'reinstall'   { 1 }
             'redownload'  { 2 }
             'export'      { 3 }
+            'add-config'  { 4 }
         }
         Write-Note "Action selected by the control panel: $Action"
     } else {
@@ -537,6 +584,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
             "Reinstall      DELETE the VM and its disk, then build + install fresh (reuse downloaded ISOs)",
             "Redownload     DELETE the VM, re-download the latest Ubuntu ISO, rebuild + install fresh",
             "Export config  save the VM's current agent config + auth to this host (no changes to the VM)",
+            "Add config     import project configs from a remote repo or local directory",
             "Quit           make no changes and exit"
         ) -Default 0
     }
@@ -559,7 +607,10 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         # Feature 2: if the selected projects clone repos, ask once for credentials.
         $reprovCloneCredB64 = ""
         if (Get-Command Resolve-GitCloneCredential -ErrorAction SilentlyContinue) {
-            $reprovCloneCredB64 = Resolve-GitCloneCredential -ProjectsDir (Join-Path $PSScriptRoot 'projects') -Names $reprovProjects
+            $reprovProjDir = if (Get-Command Get-ConstructConfigProjectsDir -ErrorAction SilentlyContinue) {
+                Get-ConstructConfigProjectsDir -ScriptsDir $PSScriptRoot
+            } else { Join-Path $PSScriptRoot 'projects' }
+            $reprovCloneCredB64 = Resolve-GitCloneCredential -ProjectsDir $reprovProjDir -Names $reprovProjects
         }
 
         # No download/build/create on this path -- just re-run the provisioner
@@ -586,6 +637,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         $reprovArgs['MicPassthrough'] = $MicPassthrough
         if ($PSBoundParameters.ContainsKey('AgentPassword')) { $reprovArgs['AgentPassword'] = $AgentPassword }
         if ($reprovCloneCredB64) { $reprovArgs['GitCloneCredentialsB64'] = $reprovCloneCredB64 }
+        if ($PSBoundParameters.ContainsKey('AutoResolve')) { $reprovArgs['AutoResolve'] = $AutoResolve }
         try {
             & $provisionScript @reprovArgs
         } catch {
@@ -654,6 +706,29 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
             }
             if ($doSave) {
                 try {
+                    # Config-sync v2 (spec section 9 step 1): run a sync tick BEFORE
+                    # the tarball export so the host config repo captures the latest
+                    # VM-side profile edits. The existing export still runs afterwards
+                    # to capture non-profile data (auth, memory, skills). On Conflict
+                    # or Blocked, stop the reinstall so the user can resolve first.
+                    if ((Get-Command Test-ConstructGitAvailable -ErrorAction SilentlyContinue) -and
+                        (Test-ConstructGitAvailable) -and
+                        (Get-Command Invoke-ConstructConfigSync -ErrorAction SilentlyContinue)) {
+                        $syncConfigDir = Get-ConstructConfigDir
+                        $syncVmHost = "$($HyperVmName.ToLower()).mshome.net"
+                        $syncArgs = @{ ConfigDir = $syncConfigDir; VmHost = $syncVmHost }
+                        if ($PSBoundParameters.ContainsKey('AutoResolve')) { $syncArgs['AutoResolve'] = $AutoResolve }
+                        $syncResult = Invoke-ConstructConfigSync @syncArgs
+                        if ($syncResult.Conflict -or $syncResult.Blocked) {
+                            Write-Host ""
+                            Write-Host "Config sync detected a conflict that must be resolved before reinstalling." -ForegroundColor Red
+                            if ($syncResult.Reason) { Write-Host "    $($syncResult.Reason)" -ForegroundColor Red }
+                            Write-Host "    Resolve the conflict in the config repo ($syncConfigDir), commit, and re-run." -ForegroundColor Yellow
+                            Write-Host ""; Wait-Exit
+                            return
+                        }
+                    }
+
                     Show-TuiScreen -Title "Saving the VM's agent config" -Body @(
                         "Exporting auth, memory, skills, instruction files, and project setup to this host..."
                     )
@@ -757,11 +832,203 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         Write-Host ""; Wait-Exit
         return
     }
-    else {
+    elseif ($choice -eq 4) {
+        # ── Add project config (config-sync v2 / spec section 11 / D14) ────────
+        # Import profiles from -ConfigRepo (git clone) or -ConfigDir (local dir),
+        # then route: VM exists -> additive reprovision; no VM -> full install.
+        # When triggered from the interactive menu (no -Action), -ConfigRepo and
+        # -ConfigDir are not bound yet -- prompt interactively.
+        try {
+            # (1) Resolve the config store/repo.
+            if (Get-Command Initialize-ConstructConfigStore -ErrorAction SilentlyContinue) {
+                $addConfigDir = Initialize-ConstructConfigStore -ScriptsDir $PSScriptRoot
+            } else {
+                $addConfigDir = Get-ConstructConfigDir
+            }
+            if ((Get-Command Test-ConstructGitAvailable -ErrorAction SilentlyContinue) -and
+                (Test-ConstructGitAvailable) -and
+                (Get-Command Initialize-ConstructConfigRepo -ErrorAction SilentlyContinue)) {
+                Initialize-ConstructConfigRepo -ConfigDir $addConfigDir | Out-Null
+            }
+
+            # (2) Import profiles.
+            $importArgs = @{ ConfigDir = $addConfigDir }
+            if ($PSBoundParameters.ContainsKey('ConfigRepo')) {
+                $importArgs['SourceRepo'] = $ConfigRepo
+            } elseif ($PSBoundParameters.ContainsKey('ConfigDir')) {
+                $importArgs['SourceDir'] = $ConfigDir
+            } else {
+                # Interactive menu path: prompt for a source.
+                $addSrc = Invoke-TuiInput -ScreenTitle "Add project config" -Body @(
+                    "Enter a git repo URL to import from, or a local directory path."
+                ) -Prompt "Config source (URL or path)"
+                if ([string]::IsNullOrWhiteSpace($addSrc)) {
+                    Write-Note "No source given. No changes made."
+                    Write-Host ""; Wait-Exit
+                    return
+                }
+                if (Test-Path -LiteralPath $addSrc) {
+                    $importArgs['SourceDir'] = $addSrc
+                } else {
+                    $importArgs['SourceRepo'] = $addSrc
+                }
+            }
+            # Honour -ImportConfigs: comma-separated names to cherry-pick.
+            if ($PSBoundParameters.ContainsKey('ImportConfigs') -and $ImportConfigs) {
+                $importArgs['Names'] = @($ImportConfigs -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            }
+            if (-not (Get-Command Import-ConstructConfigs -ErrorAction SilentlyContinue)) {
+                throw "Import-ConstructConfigs is not available. Update your Construct installation."
+            }
+            $importResult = Import-ConstructConfigs @importArgs
+            $importedNames = @()
+            if ($importResult -and $importResult.Imported) { $importedNames = @($importResult.Imported) }
+            if ($importedNames.Count -eq 0) {
+                Write-Note "No profiles were imported. No changes made."
+                Write-Host ""; Wait-Exit
+                return
+            }
+            Write-Ok "Imported project profile(s): $($importedNames -join ', ')"
+
+            # (3) PROJECTS union per D14: VM reachable -> current PROJECTS from the
+            # VM union imported names; else imported names union -Projects param.
+            $addProjects = @()
+            $vmReachable = Test-VmReachable -VmName $HyperVmName
+            if ($vmReachable -and (Get-Command Get-ConstructVmProjects -ErrorAction SilentlyContinue)) {
+                $vmProjects = Get-ConstructVmProjects -VmHost "$($HyperVmName.ToLower()).mshome.net"
+                if ($vmProjects) { $addProjects += @($vmProjects) }
+            }
+            $addProjects += $importedNames
+            if ($PSBoundParameters.ContainsKey('Projects') -and $Projects) {
+                $addProjects += @($Projects -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            }
+            # Deduplicate preserving order: current VM projects first, then new imports.
+            $seen = @{}
+            $addProjectsUniq = @($addProjects | Where-Object {
+                $k = $_.ToLower()
+                if ($seen.ContainsKey($k)) { $false } else { $seen[$k] = $true; $true }
+            })
+            $addProjectsStr = $addProjectsUniq -join ','
+            Write-Ok "Projects for provision: $addProjectsStr"
+
+            # (4) Route: VM exists -> reprovision with the unioned selection
+            # (additive: checkout-projects skips existing clones already).
+            $provisionScript = Join-Path $PSScriptRoot "Provision-AgentVM.ps1"
+            if (-not (Test-Path -LiteralPath $provisionScript)) { throw "Provision-AgentVM.ps1 not found in $PSScriptRoot." }
+            $VmHostname = "$($HyperVmName.ToLower()).mshome.net"
+
+            # Git identity (resolved silently -- add-config doesn't change it).
+            $acGiParams = @{ Dir = $PSScriptRoot; NoPrompt = $true }
+            if ($PSBoundParameters.ContainsKey('GitUserName')) { $acGiParams['Name']  = $GitUserName }
+            if ($PSBoundParameters.ContainsKey('GitEmail'))    { $acGiParams['Email'] = $GitEmail }
+            $acGitId = Resolve-GitIdentity @acGiParams
+
+            # Clone credentials for any new repos.
+            $acCloneCredB64 = ""
+            if (Get-Command Resolve-GitCloneCredential -ErrorAction SilentlyContinue) {
+                $acProjDir = if (Get-Command Get-ConstructConfigProjectsDir -ErrorAction SilentlyContinue) {
+                    Get-ConstructConfigProjectsDir -ScriptsDir $PSScriptRoot
+                } else { Join-Path $PSScriptRoot 'projects' }
+                $acCloneCredB64 = Resolve-GitCloneCredential -ProjectsDir $acProjDir -Names $addProjectsStr
+            }
+
+            Write-Step "Reprovisioning the VM with the new config"
+            $acReprovArgs = @{
+                VmHost    = $VmHostname
+                HostAlias = $HyperVmName.ToLower()
+                Projects  = $addProjectsStr
+                Auto      = $true
+                GitUserName = $acGitId.Name
+                GitEmail    = $acGitId.Email
+                ClaudePartialStreaming = $ClaudePartialStreaming
+                MicPassthrough        = $MicPassthrough
+            }
+            if ($acCloneCredB64) { $acReprovArgs['GitCloneCredentialsB64'] = $acCloneCredB64 }
+            if ($PSBoundParameters.ContainsKey('AutoResolve')) { $acReprovArgs['AutoResolve'] = $AutoResolve }
+            & $provisionScript @acReprovArgs
+        } catch {
+            Write-Host ""
+            Write-Host "ERROR: add-config failed." -ForegroundColor Red
+            Write-Host "    $($_.Exception.Message)" -ForegroundColor Red
+        } finally {
+            Write-Host ""
+            Wait-Exit
+        }
+        return
+    }
+    elseif ($choice -eq 5) {
         Write-Note "No changes made."
         Write-Host ""; Wait-Exit
         return
     }
+}
+
+# ── add-config without an existing VM: full fresh-install path ─────────────
+# When -Action add-config is given but no VM exists (Hyper-V not present or no
+# VM named Agent-VM), import first, then fall through to the normal fresh-install
+# flow with the imported profiles as -Projects.
+if ($PSBoundParameters.ContainsKey('Action') -and $Action -eq 'add-config' -and -not $existingVmHandled) {
+    try {
+        if (Get-Command Initialize-ConstructConfigStore -ErrorAction SilentlyContinue) {
+            $addConfigDir = Initialize-ConstructConfigStore -ScriptsDir $PSScriptRoot
+        } else {
+            $addConfigDir = Get-ConstructConfigDir
+        }
+        if ((Get-Command Test-ConstructGitAvailable -ErrorAction SilentlyContinue) -and
+            (Test-ConstructGitAvailable) -and
+            (Get-Command Initialize-ConstructConfigRepo -ErrorAction SilentlyContinue)) {
+            Initialize-ConstructConfigRepo -ConfigDir $addConfigDir | Out-Null
+        }
+
+        $importArgs = @{ ConfigDir = $addConfigDir }
+        if ($PSBoundParameters.ContainsKey('ConfigRepo')) {
+            $importArgs['SourceRepo'] = $ConfigRepo
+        } elseif ($PSBoundParameters.ContainsKey('ConfigDir')) {
+            $importArgs['SourceDir'] = $ConfigDir
+        } else {
+            throw "-Action add-config requires -ConfigRepo or -ConfigDir."
+        }
+        if ($PSBoundParameters.ContainsKey('ImportConfigs') -and $ImportConfigs) {
+            $importArgs['Names'] = @($ImportConfigs -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        }
+        if (-not (Get-Command Import-ConstructConfigs -ErrorAction SilentlyContinue)) {
+            throw "Import-ConstructConfigs is not available. Update your Construct installation."
+        }
+        $importResult = Import-ConstructConfigs @importArgs
+        $importedNames = @()
+        if ($importResult -and $importResult.Imported) { $importedNames = @($importResult.Imported) }
+        if ($importedNames.Count -gt 0) {
+            Write-Ok "Imported project profile(s): $($importedNames -join ', ')"
+            # Union imported names with -Projects if supplied, then fall through to
+            # the fresh-install path which reads $chosenProjects.
+            $existingProjects = @()
+            if ($PSBoundParameters.ContainsKey('Projects') -and $Projects) {
+                $existingProjects = @($Projects -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            }
+            $union = @($existingProjects + $importedNames)
+            $seen = @{}
+            $union = @($union | Where-Object {
+                $k = $_.ToLower()
+                if ($seen.ContainsKey($k)) { $false } else { $seen[$k] = $true; $true }
+            })
+            $Projects = $union -join ','
+            # Update $PSBoundParameters so the downstream check at
+            # $PSBoundParameters.ContainsKey('Projects') passes -- otherwise
+            # Select-Projects is called and overwrites $chosenProjects, losing
+            # the imported names. Modifying the $Projects variable alone does
+            # NOT update $PSBoundParameters.
+            $PSBoundParameters['Projects'] = $Projects
+        } else {
+            Write-Note "No profiles were imported."
+        }
+    } catch {
+        Write-Host ""
+        Write-Host "ERROR: add-config import failed." -ForegroundColor Red
+        Write-Host "    $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host ""; Wait-Exit
+        exit 1
+    }
+    # Fall through to the fresh-install flow below with the imported $Projects.
 }
 
 # ── No existing VM: offer to restore a config backup left by an earlier run ──
@@ -858,7 +1125,10 @@ if (-not $SkipCreateVm) {
     # credentials available (e.g. a clean-wipe reinstall), still prompt so private
     # repos can be cloned during provisioning.
     if (Get-Command Resolve-GitCloneCredential -ErrorAction SilentlyContinue) {
-        $ccParams = @{ ProjectsDir = (Join-Path $PSScriptRoot 'projects'); Names = $chosenProjects }
+        $freshProjDir = if (Get-Command Get-ConstructConfigProjectsDir -ErrorAction SilentlyContinue) {
+            Get-ConstructConfigProjectsDir -ScriptsDir $PSScriptRoot
+        } else { Join-Path $PSScriptRoot 'projects' }
+        $ccParams = @{ ProjectsDir = $freshProjDir; Names = $chosenProjects }
         if ($restoreDir -and (Get-Command Test-BackupHasGitCredentials -ErrorAction SilentlyContinue) `
                         -and (Test-BackupHasGitCredentials -BackupDir $restoreDir)) {
             $ccParams['NoPrompt'] = $true
@@ -1184,6 +1454,13 @@ if ($chosenCloneCredB64) { $createArgs['GitCloneCredentialsB64'] = $chosenCloneC
 if ($PSBoundParameters.ContainsKey('Repo') -or $PSBoundParameters.ContainsKey('Ref')) {
     $createArgs['Repo'] = $Repo; $createArgs['Ref'] = $Ref
 }
+# Config-sync v2: -AutoResolve is NOT forwarded to Create-AgentVM.ps1 here.
+# Create-AgentVM.ps1 has [CmdletBinding()] and does not declare $AutoResolve,
+# so passing it would throw 'A parameter cannot be found...'. On the fresh-
+# install path, Create-AgentVM.ps1 calls Provision-AgentVM.ps1 selectively via
+# $PSBoundParameters; AutoResolve will reach the provisioner on the reprovision
+# path (which calls Provision-AgentVM.ps1 directly, above) but is not supported
+# on first-time installs through Create-AgentVM.ps1.
 try {
     & $createScript @createArgs
 

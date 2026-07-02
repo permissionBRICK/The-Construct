@@ -129,6 +129,12 @@ param(
     # Force the project repo checkout on/off ("true"/"false"). Empty = auto: on
     # when the selected projects declare any repos, off otherwise.
     [string]$CheckoutProjects = "",
+    # Config-sync v2 (spec section 8): conflict resolution strategy for the
+    # sync tick that runs before provisioning. 'ours' keeps the host side,
+    # 'theirs' keeps the VM side. When omitted, a conflict stops provisioning
+    # with instructions to resolve manually, commit, and re-run.
+    [ValidateSet("ours", "theirs")]
+    [string]$AutoResolve,
     # Set when this script is launched by an upper script (Auto-Install.ps1 /
     # Create-AgentVM.ps1), which owns the final "Press Enter" pause. When run on
     # its own this stays off and the script pauses at the end so a self-launched
@@ -1022,7 +1028,11 @@ function Select-Projects {
     # Returns a comma-separated PROJECTS value (or "default" if none chosen). The
     # real UI is the checkbox-style Select-ProjectProfiles in the shared lib; the
     # comma prompt below is only a fallback for when that lib isn't alongside us.
-    $projDir = Join-Path $PSScriptRoot "projects"
+    # Config-sync v2: prefer the shared config projects dir; fall back to the
+    # shipped projects/ in the repo checkout (pre-migration / degraded mode).
+    $projDir = if (Get-Command Get-ConstructConfigProjectsDir -ErrorAction SilentlyContinue) {
+        Get-ConstructConfigProjectsDir -ScriptsDir $PSScriptRoot
+    } else { Join-Path $PSScriptRoot "projects" }
     if (Get-Command Select-ProjectProfiles -ErrorAction SilentlyContinue) {
         return (Select-ProjectProfiles -ProjectsDir $projDir)
     }
@@ -1210,10 +1220,14 @@ if ($Action -eq 'export') {
         & tar.exe -xzf $tgz -C $extract
         if ($LASTEXITCODE -ne 0) { throw "Failed to extract the backup ($tgz)." }
 
-        # Merge generated project profiles into projects/, never overwriting an
-        # existing profile of the same name.
+        # Merge generated project profiles into the config projects dir (config-sync
+        # v2: shared %LOCALAPPDATA%\The-Construct\config\projects), never overwriting
+        # an existing profile of the same name. Falls back to the shipped repo checkout's
+        # projects/ when the config dir hasn't been initialized yet (degraded mode).
         $genDir  = Join-Path $extract "projects"
-        $projDir = Join-Path $PSScriptRoot "projects"
+        $projDir = if (Get-Command Get-ConstructConfigProjectsDir -ErrorAction SilentlyContinue) {
+            Get-ConstructConfigProjectsDir -ScriptsDir $PSScriptRoot
+        } else { Join-Path $PSScriptRoot "projects" }
         $added = @()
         if (Test-Path -LiteralPath $genDir) {
             if (-not (Test-Path -LiteralPath $projDir)) { New-Item -ItemType Directory -Force -Path $projDir | Out-Null }
@@ -1242,6 +1256,32 @@ if ($Action -eq 'export') {
     Write-Host ""
     Write-Host "Done (config export)." -ForegroundColor Green
     return
+}
+
+# ── Config-sync v2 (spec section 8 / D13): sync tick before provisioning ────
+# After SSH is up and the repo archive is uploaded, but BEFORE provision.sh runs:
+# run the config sync so the VM store gets seeded/updated from the host config
+# repo. The tick's write-back seeds/updates the VM store so generate-runtime-config.sh
+# resolves from it. On Conflict/Blocked, STOP provisioning with the resolve-commit-
+# rerun message unless -AutoResolve handled it. Degraded (no git): the lib call
+# does the additive seed -- still call it.
+if (Get-Command Initialize-ConstructConfigStore -ErrorAction SilentlyContinue) {
+    $syncConfigDir = Initialize-ConstructConfigStore -ScriptsDir $PSScriptRoot
+    if ((Get-Command Test-ConstructGitAvailable -ErrorAction SilentlyContinue) -and
+        (Test-ConstructGitAvailable) -and
+        (Get-Command Initialize-ConstructConfigRepo -ErrorAction SilentlyContinue)) {
+        Initialize-ConstructConfigRepo -ConfigDir $syncConfigDir | Out-Null
+    }
+    if (Get-Command Invoke-ConstructConfigSync -ErrorAction SilentlyContinue) {
+        $syncArgs = @{ ConfigDir = $syncConfigDir; VmHost = $VmHost }
+        if ($PSBoundParameters.ContainsKey('AutoResolve')) { $syncArgs['AutoResolve'] = $AutoResolve }
+        $syncResult = Invoke-ConstructConfigSync @syncArgs
+        if ($syncResult.Conflict -or $syncResult.Blocked) {
+            $syncReason = if ($syncResult.Reason) { $syncResult.Reason } else { "Merge conflict detected." }
+            throw "Config sync conflict: $syncReason -- resolve the conflict in the config repo ($syncConfigDir), commit, and re-run."
+        }
+        if ($syncResult.Ran) { Write-Ok "Config sync completed" }
+    }
 }
 
 # Run the non-interactive provisioner.
@@ -1313,7 +1353,10 @@ $checkoutArg = $CheckoutProjects
 if (-not $checkoutArg) {
     $repoUrls = @()
     if (Get-Command Get-ProjectRepoUrls -ErrorAction SilentlyContinue) {
-        $repoUrls = @(Get-ProjectRepoUrls -ProjectsDir (Join-Path $PSScriptRoot 'projects') -Names $Projects)
+        $checkoutProjDir = if (Get-Command Get-ConstructConfigProjectsDir -ErrorAction SilentlyContinue) {
+            Get-ConstructConfigProjectsDir -ScriptsDir $PSScriptRoot
+        } else { Join-Path $PSScriptRoot 'projects' }
+        $repoUrls = @(Get-ProjectRepoUrls -ProjectsDir $checkoutProjDir -Names $Projects)
     }
     $checkoutArg = if ($repoUrls.Count -gt 0) { "true" } else { "false" }
 }
