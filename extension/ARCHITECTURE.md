@@ -54,7 +54,19 @@ extension/
                       reuse/new window); needs the ms-vscode-remote.remote-ssh extension
     host.js           locate the scripts dir (newest %LOCALAPPDATA%\The-Construct\*\* with
                       Auto-Install.ps1, or the construct.scriptsDir override) + read/write
-                      .construct-settings.json (form<->disk mapping; pure fs/path, no vscode)
+                      .construct-settings.json (form<->disk mapping; pure fs/path, no vscode);
+                      configDir(env) resolves %LOCALAPPDATA%\The-Construct\config (machine-wide,
+                      NOT slug-scoped — outside any zip checkout)
+    configsync.js     config-sync engine: git-based profile sync between host and VM
+                      (makeGitRunner, detectGit, ensureConfigTree, migrateLegacyProfiles,
+                      ensureRepo, repoState, syncTick, readRemotes/writeRemotes,
+                      ensureStagingClone, listImportCandidates, planUpstreamImport,
+                      mergeFile, commitAll, pushUpstream; see docs/config-sync.md)
+    zip.js            hand-rolled ZIP writer (STORED entries, no deps): crc32, buildZip
+    importui.js       pure decision core for the remote-config rename-on-collision import
+                      (planRenamedImport: validate target + build canonical profile +
+                      manifest provenance + base) — the testable half of extension.js's
+                      importRemoteConfigs collision path
     lifecycle.js      reprovision/export -> Provision-AgentVM.ps1; reinstall/redownload ->
                       Auto-Install.ps1 -Action/-BackupMode; launches a host console via
                       child_process (pure buildInvocation/buildHostLaunch; vscode lazy-required)
@@ -65,10 +77,14 @@ extension/
                       into state by augment(). fetchJson follows 3xx redirects (a moved GitHub
                       repo resolves via its 301) + picks the Accept header per host (npm needs
                       application/json, not vnd.github+json). constructRefreshArgs for Update-Construct.ps1.
-    projects.js       import-from-VM + select + per-project edit — PURE transforms only
-                      (buildScanScript/parseScan, planImport merge, reconcileSelection,
-                      sanitizeProfile, toChips). Profile file I/O lives in host.js; the SSH
-                      round-trip, edit modal and QuickPick live in extension.js.
+    projects.js       import-from-VM + select + per-project edit + config-sync helpers + share —
+                      PURE transforms only (buildScanScript/parseScan, planImport,
+                      reconcileSelection, sanitizeProfile, toChips; config-sync:
+                      isReservedProfileName, validateProfile, canonicalProfileJson,
+                      RESERVED_PROFILE_NAMES, sanitize* helpers; share: buildShareCommand,
+                      buildDeployPs1, DEFAULT_INSTALL_REPO/REF, installUrlFor).
+                      Profile file I/O lives in host.js; the SSH round-trip, edit modal
+                      and QuickPick live in extension.js.
     usage.js          ccusage over SSH -> per-agent tokens + estimated cost. buildUsageScript
                       (base64-as-data) maps each VIEW to a ccusage window via --since/--until from
                       the VM clock — daily=today, monthly=this-month, total=all-time (no window);
@@ -104,19 +120,29 @@ extension/
     construct-audio-disable.sh   remove shim + revert patch (restore the .bak) — SKIPPED while
                                  another window's tunnel is live (last-window-out guard)
   test/
-    ui-smoke.js       Playwright headless-Chromium webview test (128 checks: panel + launcher +
+    ui-smoke.js       Playwright headless-Chromium webview test (149 checks: panel + launcher +
                       narrow overflow + settings round-trip + honesty + power buttons + add-project +
                       per-chip open + project edit modal + usage table + daily/monthly/total period tabs
                       (incl. period-change-without-usage blanks the table, same-period keeps it) +
-                      audio substatus incl. gate-patch state + launcher update banner)
+                      audio substatus incl. gate-patch state + launcher update banner +
+                      config-sync strip: absent→hidden, gitPresent:false→install-git notice,
+                      conflict→banner+open-repo, remotes list, default chip locked/no-modal,
+                      sync-now posts syncConfigNow, installGit posts, offline survival)
     probe.test.js     plain-node ssh-arg + probe-parse units (21 checks)
+    configsync.test.js plain-node config-sync engine units — git-based sync tick, staging clones,
+                      upstream import planning, merge-file, read/write store scripts, repo state,
+                      seeding, conflict handling (140 checks)
     host.test.js      plain-node scripts-dir resolution + settings merge + readProjectProfile +
-                      project-profile list/write/select + traversal (61 checks; fake %LOCALAPPDATA% tree)
+                      project-profile list/write/select + traversal (67 checks; fake %LOCALAPPDATA% tree)
     remote.test.js    plain-node Remote-SSH helpers — isConnectedToVm/remoteFolderUri + repoNameFromUrl/isLikelyGitUrl/buildCloneScript/projectOpenPath/shouldAutoOpenPanel + URI percent-encoding (71 checks)
     lifecycle.test.js plain-node buildInvocation + winQuoteArg/quoting/elevation units (48 checks)
     updates.test.js   plain-node update-check units — Construct compare/cache + agent semver/latest/script + fetchJson redirects/per-host Accept, injected fetch+clock+http (62 checks)
     vmpower.test.js   plain-node Hyper-V power units — Get-VM probe/parse + Start-VM/elevated launch builders + injected-spawn queryVmState (38 checks)
-    projects.test.js  plain-node scan builder/parser + planImport merge + reconcileSelection + sanitizeProfile (injection + prototype-pollution) (77 checks)
+    project-set.test.js plain-node VM-side project set/get/list CLI units — validation, reserved
+                      names, atomic writes, PROJECTS_STORE override (54 checks)
+    projects.test.js  plain-node scan builder/parser + planImport merge + reconcileSelection +
+                      sanitizeProfile (injection + prototype-pollution) + config-sync helpers:
+                      isReservedProfileName, validateProfile, canonicalProfileJson, share builders (147 checks)
     usage.test.js     plain-node ccusage script (daily/monthly/total window mapping) + parse (totalCost/costUSD/missing/error/zero/array) + formatting + per-report cache TTL/coalesce + isCurrentReport stale-collection ordering + export payload, injected ssh+clock (105 checks)
     audio.test.js     plain-node guard-patch apply/revert/idempotency + VM script builders (injection proofs) + ssh -R argv + AudioSession gating + HostAudio enable/disable/rollback + tunnel settle-window (async early death + later death) + multi-window port range (busy-skip/bind-race retry/no-free-port/self-port disable) (233 checks)
 ```
@@ -135,7 +161,15 @@ Defined in `extension.js` (handleMessage), `media/panel.js` and `media/launcher.
   `connect` (open the VM over Remote-SSH),
   `startConnect` (elevated Start-VM then poll+open), `shutdown` (poweroff over SSH),
   `addProject` (prompt a git URL → clone over SSH → open in a new window),
-  `openProject` (+`project`; open that project's folder on the VM in a new window).
+  `openProject` (+`project`; open that project's folder on the VM in a new window),
+  `syncConfigNow` (immediate config-sync tick, no throttle),
+  `addConfigRemote` (showInputBox URL → writeRemotes + staging clone),
+  `removeConfigRemote` (+`url`; confirm modal → writeRemotes),
+  `importRemoteConfigs` (clone/fetch all remotes → multi-select QuickPick → 3-way merge),
+  `shareConfigs` (multi-select profiles → clipboard command or zip bundle),
+  `pushConfigUpstream` (+`url`; confirm → push local changes to a new branch),
+  `installGit` (win32-only: visible console running winget install Git.Git),
+  `openConfigRepo` (open cfgDir in a new VS Code window for conflict resolution).
 - `{type:'setAudio', enabled}` — live mic-passthrough toggle (console switch only).
 - `{type:'setUsagePeriod', period:'daily'|'monthly'|'total'}` — switch the token-usage window
   (validated + remembered in `usageReport`; triggers a `refreshAll` that re-collects the
@@ -163,8 +197,16 @@ VM-derived fields when `online===false` or `probeError`):
   projects:[{name,selected}],
   usagePeriod:'daily'|'monthly'|'total',   // active token-usage tab (rides the sync first push)
   usage:{tools:[{label,tokens,tokensText,costText}], totalTokensText, totalCostText},
-  audio:{enabled,capturing,tunnel}, probeError }
+  audio:{enabled,capturing,tunnel}, probeError,
+  configSync:{gitPresent, repoReady, conflict, conflictFiles, mergeInProgress,
+    lastSyncAt, lastResult:'ok'|'conflict'|'blocked'|'error'|null,
+    warnings:[string], remotes:[{url}]} }
 ```
+
+**`configSync` is host-derived — NOT cleared by `clearLiveVmData`.** It reflects the
+local config-dir state (git presence, repo conflicts, linked remotes) and survives
+an offline VM. The webview renders it in the "Config sync" strip inside the Projects
+module, regardless of `online`.
 
 ## Design decisions
 
@@ -375,6 +417,26 @@ VM-derived fields when `online===false` or `probeError`):
   selection with the static all-on defaults. The panel's `applySettings` only
   drives a switch when the value is a real boolean, so a partial payload (e.g. the
   installer's git-only file) leaves the other toggles' HTML defaults intact.
+- **Host-driven config sync tick (docs/config-sync.md §6).** Profiles live in
+  `%LOCALAPPDATA%\The-Construct\config` (host.configDir), a machine-wide location
+  OUTSIDE any zip checkout. The sync tick reconciles this config dir (host truth)
+  with the VM store (`/opt/construct/projects`) via `configsync.syncTick`. Triggers:
+  (1) piggybacked on the existing 30s refresh timer, self-throttled to >=5 min between
+  automatic ticks; (2) immediate on the panel "Sync now" button (`syncConfigNow`);
+  (3) `fs.watch` on cfgDir/projects (debounced 2s, tolerates watcher errors); (4) once
+  at activation when a dashboard opens. An in-flight flag prevents concurrent ticks;
+  the tick is skipped entirely when git is absent or cfgDir is null. The engine is
+  platform-agnostic (it spawns `git`, works on any OS); the "supported" gate is git
+  presence + config dir, NOT `win32`. Before launching reprovision/reinstall/redownload,
+  handleMessage checks `repoState` — if conflicted/mergeInProgress, it blocks the
+  launch with an error toast and an "Open config repo" button (which opens cfgDir in a
+  new window so the VS Code git extension / merge editor can resolve it). `state.configSync`
+  is folded into every postState as a host-derived field: it survives offline (NOT cleared
+  by clearLiveVmData) so the conflict banner / git-missing notice / remotes list are
+  always visible regardless of VM reachability. The legacy fallback: when cfgDir is null
+  (no LOCALAPPDATA / TEMP), profile operations fall back to the old scriptsDir path.
+  D11: the "default" profile chip is rendered with a lock icon and does NOT open the
+  edit modal on click; reserved names are refused by runSaveProject/runEditProject.
 - **Destructive flows default to save→restore**; one-time overrides (existing
   backup / clean wipe) live in Settings → Custom reinstall, not as a persisted
   policy. On failure, offer a retry reusing the backup already taken.

@@ -269,6 +269,34 @@ input:focus, select:focus { outline: none; border-color: var(--rain); box-shadow
 .pm-err[hidden] { display: none; }
 .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; }
 
+/* Config-sync strip (inside the Projects module) */
+.cs-strip { margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(0,255,102,0.08); }
+.cs-strip[hidden] { display: none; }
+.cs-status { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cs-label { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--accent); font-weight: 700; }
+.cs-result { font-size: 11px; color: var(--dim); flex: 1; }
+.cs-sync-btn { padding: 4px 10px; font-size: 11px; }
+.cs-conflict { margin-top: 8px; padding: 9px 12px; border: 1px solid rgba(255,93,93,0.5); border-radius: 6px; background: rgba(255,93,93,0.06); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cs-conflict[hidden] { display: none; }
+.cs-conflict-text { font-size: 11.5px; color: #ff8a8a; flex: 1; }
+.cs-open-repo { padding: 4px 10px; font-size: 11px; }
+.cs-git-missing { margin-top: 8px; padding: 9px 12px; border: 1px solid rgba(255,194,77,0.4); border-radius: 6px; background: rgba(255,194,77,0.06); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 11.5px; color: var(--warn); }
+.cs-git-missing[hidden] { display: none; }
+.cs-remotes { margin-top: 10px; }
+.cs-remotes[hidden] { display: none; }
+.cs-remotes-label { font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--dim); margin-bottom: 6px; }
+.cs-remotes-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.cs-remote-row { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text); padding: 4px 0; }
+.cs-remote-url { flex: 1; word-break: break-all; }
+.cs-remote-rm, .cs-remote-push { font-family: var(--mono); font-size: 12px; color: var(--dim); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 2px 7px; cursor: pointer; line-height: 1; }
+.cs-remote-rm:hover { color: var(--crit); border-color: rgba(255,93,93,0.5); }
+.cs-remote-push:hover { color: var(--rain); border-color: var(--line-strong); }
+.cs-remotes-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+/* Locked default chip: cursor not-allowed, no hover highlight */
+.chip.locked { cursor: default; opacity: 0.7; }
+.chip.locked:hover { background: rgba(0,0,0,0.2); }
+.chip.locked .openbtn { display: none; }
+
 footer { margin-top: 22px; text-align: center; color: var(--faint); font-size: 11px; letter-spacing: 0.5px; }
 footer a { color: var(--dim); text-decoration: none; }
 footer a:hover { color: var(--accent); }

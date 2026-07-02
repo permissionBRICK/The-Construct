@@ -98,6 +98,32 @@
           </div>
           <div class="proj-actions"><button class="btn" data-cmd="addProject">+ add project</button><button class="btn ghost" data-cmd="importProjects">import from VM</button><button class="btn ghost" data-cmd="openProjectFolder">open config folder</button><button class="btn ghost" data-cmd="selectProfiles">select profiles</button><button class="btn ghost" data-cmd="exportConfig" title="Export config — save auth, creds, profiles">&#x238B; export config</button></div>
           <p class="cost-note" style="margin-top:10px">Click a project to edit its repos, runtimes &amp; MCP servers.</p>
+
+          <!-- Config sync strip (D8/D9/D12): status, sync controls, git notice, conflict banner, remotes list -->
+          <div class="cs-strip" id="csStrip" hidden>
+            <div class="cs-status">
+              <span class="cs-label">Config sync</span>
+              <span class="cs-result" id="csResult"></span>
+              <button class="btn ghost cs-sync-btn" data-cmd="syncConfigNow" title="Sync config now">sync now</button>
+            </div>
+            <div class="cs-conflict" id="csConflict" hidden>
+              <span class="cs-conflict-text">Config merge conflict &mdash; resolve it in the config repo, then commit.</span>
+              <button class="btn danger cs-open-repo" data-cmd="openConfigRepo">Open config repo</button>
+            </div>
+            <div class="cs-git-missing" id="csGitMissing" hidden>
+              <span>Install git to enable config sync and versioning.</span>
+              <button class="btn" data-cmd="installGit">Install git</button>
+            </div>
+            <div class="cs-remotes" id="csRemotes" hidden>
+              <div class="cs-remotes-label">Remote config repos</div>
+              <div class="cs-remotes-list" id="csRemotesList"></div>
+              <div class="cs-remotes-actions">
+                <button class="btn ghost" data-cmd="addConfigRemote">+ add remote</button>
+                <button class="btn ghost" data-cmd="importRemoteConfigs">import&hellip;</button>
+                <button class="btn ghost" data-cmd="shareConfigs">share&hellip;</button>
+              </div>
+            </div>
+          </div>
         </section>
       </div>
     </div>

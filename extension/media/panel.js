@@ -155,10 +155,20 @@
 
   // ── Chips ─────────────────────────────────────────────────────────────────--
   // Main-view project chips open the per-project editor.
+  // Reserved profile names (D11): default and project.schema — their chips must NOT
+  // open the edit modal. Kept in sync with projects.js RESERVED_PROFILE_NAMES.
+  const RESERVED_NAMES = ["default", "project.schema"];
+  function isReservedName(name) {
+    return RESERVED_NAMES.includes(String(name || "").trim().toLowerCase());
+  }
+
   function wireProjectChips() {
-    document.querySelectorAll("#projChips .chip").forEach((c) =>
+    document.querySelectorAll("#projChips .chip").forEach((c) => {
+      // Locked chips (reserved names) do not open the edit modal on click.
+      if (c.classList.contains("locked")) return;
       c.addEventListener("click", () =>
-        post({ type: "command", id: "editProject", project: c.dataset.project || c.textContent.trim() })));
+        post({ type: "command", id: "editProject", project: c.dataset.project || c.textContent.trim() }));
+    });
   }
   wireProjectChips();
 
@@ -394,6 +404,10 @@
       if (sub) sub.textContent = stale ? "update pending · reprovision to apply" : "re-run setup · keep all data";
     }
 
+    // Config-sync state is host-derived (not VM-derived): render it regardless of
+    // online status, and do NOT clear it in clearLiveVmData.
+    if (s.configSync) renderConfigSync(s.configSync);
+
     // Unreachable, or reachable but the probe script failed: we have no trustworthy
     // VM data, so clear it rather than show stale values.
     if (!online || s.probeError) { clearLiveVmData(); return; }
@@ -451,24 +465,35 @@
       return;
     }
     projects.forEach((p) => {
+      const reserved = isReservedName(p.name);
       const chip = document.createElement("span");
-      chip.className = "chip" + (p.selected ? " on" : "");
+      chip.className = "chip" + (p.selected ? " on" : "") + (reserved ? " locked" : "");
       chip.dataset.project = p.name;
-      if (p.selected) { const ck = document.createElement("span"); ck.className = "check"; ck.textContent = "✓ "; chip.appendChild(ck); }
+      if (reserved) {
+        // D11: locked chip — show lock icon, no edit on click, no open button.
+        chip.title = "reserved — create a named profile instead";
+        const lock = document.createElement("span");
+        lock.className = "check";
+        lock.textContent = "🔒 ";
+        chip.appendChild(lock);
+      } else if (p.selected) {
+        const ck = document.createElement("span"); ck.className = "check"; ck.textContent = "✓ "; chip.appendChild(ck);
+      }
       chip.appendChild(document.createTextNode(p.name));
-      // Inline ▷ opens the project on the VM in a new window. stopPropagation so it
-      // doesn't also trigger the chip-body click (which opens the edit modal).
-      const open = document.createElement("button");
-      open.type = "button";
-      open.className = "openbtn";
-      open.textContent = "▷";
-      open.title = "Open " + p.name + " on the VM";
-      open.setAttribute("aria-label", "Open " + p.name + " on the VM");
-      open.addEventListener("click", (e) => {
-        e.stopPropagation();
-        post({ type: "command", id: "openProject", project: p.name });
-      });
-      chip.appendChild(open);
+      if (!reserved) {
+        // Inline open button on non-reserved chips.
+        const open = document.createElement("button");
+        open.type = "button";
+        open.className = "openbtn";
+        open.textContent = "▷";
+        open.title = "Open " + p.name + " on the VM";
+        open.setAttribute("aria-label", "Open " + p.name + " on the VM");
+        open.addEventListener("click", (e) => {
+          e.stopPropagation();
+          post({ type: "command", id: "openProject", project: p.name });
+        });
+        chip.appendChild(open);
+      }
       host.appendChild(chip);
     });
     wireProjectChips();
@@ -517,6 +542,71 @@
       else if (a.gatePatched === false) { gate.textContent = "chat mic gate not patched"; gnote.textContent = "(unrecognised Claude build)"; }
       else { gate.textContent = "chat mic button"; gnote.textContent = "(gate patched if a known build)"; }
       if (grow) grow.classList.toggle("warn", a.gatePatched === false);
+    }
+  }
+
+  /** Render the config-sync strip from state.configSync (D9). Host-derived — NOT
+   *  cleared by clearLiveVmData. The strip is hidden when configSync is absent
+   *  (extension hasn't pushed it yet) or when no cfgDir was resolved. */
+  function renderConfigSync(cs) {
+    const strip = $("csStrip");
+    if (!strip) return;
+    if (!cs) { strip.hidden = true; return; }
+    strip.hidden = false;
+    // Status result line.
+    const result = $("csResult");
+    if (result) {
+      const parts = [];
+      if (cs.lastResult === "ok") parts.push("synced");
+      else if (cs.lastResult === "conflict") parts.push("conflict");
+      else if (cs.lastResult === "blocked") parts.push("blocked");
+      else if (cs.lastResult === "error") parts.push("error");
+      if (cs.lastSyncAt) {
+        try { parts.push(new Date(cs.lastSyncAt).toLocaleTimeString()); } catch (_) {}
+      }
+      if (cs.warnings && cs.warnings.length) parts.push(cs.warnings.length + " warning(s)");
+      result.textContent = parts.join(" · ");
+      if (cs.warnings && cs.warnings.length) result.title = cs.warnings.join("\n");
+      else result.title = "";
+    }
+    // Conflict banner.
+    const conflict = $("csConflict");
+    if (conflict) conflict.hidden = !(cs.conflict || cs.mergeInProgress);
+    // Git-missing notice.
+    const gitMissing = $("csGitMissing");
+    if (gitMissing) gitMissing.hidden = cs.gitPresent !== false;
+    // Remotes list.
+    const remoteSec = $("csRemotes");
+    const remotesList = $("csRemotesList");
+    if (remoteSec && remotesList) {
+      const remotes = Array.isArray(cs.remotes) ? cs.remotes : [];
+      remoteSec.hidden = remotes.length === 0 && !(cs.gitPresent);
+      if (!remoteSec.hidden) {
+        remotesList.innerHTML = "";
+        remotes.forEach((r) => {
+          const row = document.createElement("div");
+          row.className = "cs-remote-row";
+          const urlSpan = document.createElement("span");
+          urlSpan.className = "cs-remote-url";
+          urlSpan.textContent = r.url;
+          row.appendChild(urlSpan);
+          const pushBtn = document.createElement("button");
+          pushBtn.type = "button";
+          pushBtn.className = "cs-remote-push";
+          pushBtn.textContent = "↑";
+          pushBtn.title = "Push local changes upstream";
+          pushBtn.addEventListener("click", () => post({ type: "command", id: "pushConfigUpstream", url: r.url }));
+          row.appendChild(pushBtn);
+          const rmBtn = document.createElement("button");
+          rmBtn.type = "button";
+          rmBtn.className = "cs-remote-rm";
+          rmBtn.textContent = "✕";
+          rmBtn.title = "Remove remote";
+          rmBtn.addEventListener("click", () => post({ type: "command", id: "removeConfigRemote", url: r.url }));
+          row.appendChild(rmBtn);
+          remotesList.appendChild(row);
+        });
+      }
     }
   }
 
