@@ -245,6 +245,12 @@ fi
 step "Installing AI tools"
 TARGET_USER="${CLAUDE_USER}" bash "${REPO_DIR}/bin/install-ai-tools.sh"
 
+# 4b. Install the construct CLI so agents and users can manage project profiles
+#     from the VM shell (`construct project set|get|list`). Runs every provision
+#     so an updated script always gets redeployed on reprovision.
+step "Installing construct CLI"
+install -m 0755 "${REPO_DIR}/bin/construct" /usr/local/bin/construct
+
 # 5. Merge selected project profiles into the runtime config.
 step "Generating runtime config"
 bash "${REPO_DIR}/bin/generate-runtime-config.sh"

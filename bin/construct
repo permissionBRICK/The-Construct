@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# construct — agent-facing CLI for managing project profiles on the VM.
+#
+# Usage:
+#   construct project set <name> [--file <path>]   write/update a profile
+#   construct project get <name>                   print a stored profile
+#   construct project list                         list stored profile names
+#
+# The canonical store is /opt/construct/projects (overridable via PROJECTS_STORE).
+# Changes sync to the host and survive VM reinstall; anything NOT recorded in a
+# profile here is lost on reinstall.
+#
+# Exit codes:
+#   0  success
+#   1  not found (get) / general error
+#   2  validation error (set)
+#   3  reserved name (set)
+#   4  node not available (set requires node for schema validation)
+set -euo pipefail
+
+PROJECTS_STORE="${PROJECTS_STORE:-/opt/construct/projects}"
+CONSTRUCT_REPO_DIR="${CONSTRUCT_REPO_DIR:-/opt/construct/repo}"
+
+usage() {
+  cat <<'USAGE'
+Usage: construct project <command> [args]
+
+Commands:
+  set  <name> [--file <path>]   Create or update a project profile.
+                                Reads JSON from --file or stdin.
+  get  <name>                   Print the stored profile to stdout.
+  list                          List stored profile names.
+
+Environment:
+  PROJECTS_STORE    Profile directory (default: /opt/construct/projects)
+USAGE
+}
+
+die() { printf '%s\n' "$*" >&2; exit 1; }
+
+# Reject filename-unsafe profile names before they are concatenated into a store
+# path (mirrors the JS validateProfile / host safeProfileName guard): a name must
+# be a single path component — no separators, no "..", not "."/"..", no control
+# characters, non-empty. Prevents `get ../secret` escaping ${PROJECTS_STORE}.
+is_safe_name() {
+  local n="$1"
+  [[ -n "$n" ]] || return 1
+  [[ "$n" != "." && "$n" != ".." ]] || return 1
+  case "$n" in
+    */*|*'\'*|*'..'*) return 1 ;;
+  esac
+  [[ "$n" == *[[:cntrl:]]* ]] && return 1
+  return 0
+}
+
+# -- argument parsing ----------------------------------------------------------
+
+if [[ $# -lt 1 ]]; then usage >&2; exit 1; fi
+
+case "$1" in
+  project) shift ;;
+  help|--help|-h) usage; exit 0 ;;
+  *) die "Unknown command: $1 (try: construct project set|get|list)" ;;
+esac
+
+if [[ $# -lt 1 ]]; then usage >&2; exit 1; fi
+
+subcmd="$1"; shift
+
+case "${subcmd}" in
+  # ---------- set -------------------------------------------------------------
+  set)
+    if [[ $# -lt 1 ]]; then die "Usage: construct project set <name> [--file <path>]"; fi
+    name="$1"; shift
+    is_safe_name "${name}" || die "Invalid profile name: ${name} (must be a single filename, no path separators or '..')"
+
+    # 'set' delegates to project-set.js which requires node for the shared
+    # validateProfile / canonicalProfileJson from extension/src/projects.js.
+    if ! command -v node >/dev/null 2>&1; then
+      printf '%s\n' "node is not installed on this VM." >&2
+      printf '%s\n' "Edit the file directly: \${PROJECTS_STORE}/${name}.json" >&2
+      printf '%s\n' "The host sync tick validates direct edits on the next cycle." >&2
+      exit 4
+    fi
+
+    # Locate project-set.js: next to this script in the repo checkout (works
+    # both from /opt/construct/repo/bin and from a dev checkout).
+    script_dir="$(cd "$(dirname "$0")" && pwd)"
+    project_set="${script_dir}/project-set.js"
+    if [[ ! -f "${project_set}" ]]; then
+      # Fall back to the canonical repo location.
+      project_set="${CONSTRUCT_REPO_DIR}/bin/project-set.js"
+    fi
+    if [[ ! -f "${project_set}" ]]; then
+      die "project-set.js not found (looked in ${script_dir} and ${CONSTRUCT_REPO_DIR}/bin)"
+    fi
+
+    # Forward --file <path> or stdin to the node helper.
+    args=("${name}")
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --file) shift; [[ $# -gt 0 ]] || die "--file requires a path"; args+=("--file" "$1") ;;
+        *) die "Unknown option: $1" ;;
+      esac
+      shift
+    done
+
+    PROJECTS_STORE="${PROJECTS_STORE}" exec node "${project_set}" "${args[@]}"
+    ;;
+
+  # ---------- get -------------------------------------------------------------
+  get)
+    if [[ $# -lt 1 ]]; then die "Usage: construct project get <name>"; fi
+    name="$1"
+    is_safe_name "${name}" || die "Invalid profile name: ${name} (must be a single filename, no path separators or '..')"
+    file="${PROJECTS_STORE}/${name}.json"
+    if [[ ! -f "${file}" ]]; then
+      die "Profile not found: ${name}"
+    fi
+    cat "${file}"
+    ;;
+
+  # ---------- list ------------------------------------------------------------
+  list)
+    if [[ ! -d "${PROJECTS_STORE}" ]]; then exit 0; fi
+    shopt -s nullglob
+    for f in "${PROJECTS_STORE}"/*.json; do
+      basename "${f}" .json
+    done
+    shopt -u nullglob
+    ;;
+
+  *)
+    die "Unknown subcommand: ${subcmd} (try: set, get, list)"
+    ;;
+esac
