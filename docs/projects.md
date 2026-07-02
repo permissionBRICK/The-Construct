@@ -1,7 +1,10 @@
 # Project profiles & configuration
 
-How the VM is configured: the host-local `config.env`, the `projects/*.json` profiles, MCP
-servers, per-project provisioning commands, and repo checkout.
+How the VM is configured: the host-local `config.env`, project profiles, MCP servers,
+per-project provisioning commands, and repo checkout. Profile *persistence and sync* —
+where profiles actually live and how VM-side edits make it back to the host — is covered
+in depth in [Config sync](config-sync.md); this page focuses on what a profile contains
+and how it's resolved on the VM.
 
 ## Local config (`/etc/construct/config.env`)
 
@@ -19,8 +22,9 @@ Don't put long-lived secrets here. Prefer SSH keys, short-lived tokens, or a sec
 
 ## Project profiles
 
-Project profiles live in `projects/*.json`; the schema is documented in
-`projects/project.schema.json`. Each selected project may declare:
+A project profile is a JSON file describing one project's requirements; the schema is
+documented in `project.schema.json`, shipped alongside the repo's `default` profile. Each
+selected project may declare:
 
 - repos to clone
 - SDK versions needed by project containers
@@ -29,8 +33,20 @@ Project profiles live in `projects/*.json`; the schema is documented in
 - custom provisioning commands run on every provision (see below)
 - test commands and notes
 
+**Where profiles live.** The VM's `/opt/construct/projects` is the single **live** source
+of profiles on the VM — a plain folder, no git. The reserved names `default` and
+`project.schema` always resolve to the shipped copies and are never read from or written to
+this store. On the host, profiles are versioned in a dedicated config directory at
+`%LOCALAPPDATA%\The-Construct\config` (outside the installed-repo checkout, so a Construct
+self-update never touches them) — `git`-versioned on branches `main` (host truth) and `vm`
+(VM snapshots) when git is present on the host, or a plain folder in
+[degraded mode](#degraded-mode-no-git-on-the-host). A host-driven **sync tick** reads the VM
+store, reconciles it with the host repo, and writes back the merged result — see
+[Config sync](config-sync.md) for the full model, conflict handling, and remote config-repo
+support.
+
 Selected projects are read from `PROJECTS` in `/etc/construct/config.env`. Requirements are
-merged across all selected projects and deduplicated by:
+merged across all selected profiles, resolved from the VM store, and deduplicated by:
 
 ```bash
 sudo /opt/construct/repo/bin/generate-runtime-config.sh
@@ -38,6 +54,45 @@ sudo /opt/construct/repo/bin/generate-runtime-config.sh
 
 The generated files are written to `/opt/construct/runtime/generated.json` and
 `/opt/construct/runtime/generated.env`.
+
+### Degraded mode (no git on the host)
+
+Config sync needs `git` on the host. Without it, the config directory is still used as a
+plain folder — the panel and CLI read/write it the same way — but there's no sync tick: VM
+edits to an *existing* profile don't automatically reach the host, and reinstalls fall back
+to the [additive backup/restore](backup-restore.md) path. The Projects tab shows a
+persistent notice with a one-click git install. See
+[Config sync §10](config-sync.md#10-git-on-the-host--never-required-strictly-an-upgrade) for
+exactly what degrades.
+
+### Recording requirements from the VM
+
+Agents (and you, over SSH) can add or change a profile directly on the VM — both paths are
+first-class:
+
+```bash
+# validated, canonical write
+construct project set customer-portal --file customer-portal.json
+# or from stdin
+cat customer-portal.json | construct project set customer-portal
+
+construct project get customer-portal
+construct project list
+```
+
+`construct project set` validates against the schema and writes canonical JSON to
+`/opt/construct/projects/<name>.json`; it refuses the reserved names `default` and
+`project.schema`. It does **not** version anything itself — there's no git on the VM — the
+host's sync tick picks up the change on its next pass.
+
+**Direct file edits work too.** Editing `/opt/construct/projects/<name>.json` by hand (or
+from a script) is picked up by the next sync tick exactly the same way. An invalid file
+(bad JSON, fails schema validation) is skipped with a warning rather than corrupting the
+host repo — fix it and it's picked up next time.
+
+**`provisionCommands` are idempotent, not one-shot.** They rerun on every provision (not
+just the first), so anything you add there must tolerate being re-run — see
+[Provisioning commands](#provisioning-commands) below.
 
 ## MCP servers
 
@@ -76,8 +131,9 @@ The `mcp` array takes two kinds of entry:
   name; unrelated/hand-added servers are left untouched.
 
 Because MCP servers are declared in the project JSON, they are preserved across a
-reinstall: the [save/restore](backup-restore.md) flow backs up the VM's stored
-project profiles and restores any the host doesn't already have.
+reinstall: profiles are versioned on the host by [config sync](config-sync.md), so a
+reinstall's pre-wipe sync tick carries any VM-side changes home first, and the fresh VM is
+re-seeded from the host's copy — including any MCP servers you added or edited on the VM.
 
 ## Provisioning commands
 
