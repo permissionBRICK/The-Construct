@@ -88,6 +88,13 @@
           "type": "string",
           "default": "",
           "markdownDescription": "Windows microphone passthrough: the exact DirectShow capture-device name to record from. Leave empty to auto-detect the first audio device. List devices with `ffmpeg -list_devices true -f dshow -i dummy` and copy a name from the DirectShow audio section (e.g. `Microphone (Realtek(R) Audio)`)."
+        },
+        "construct.repatchDelaySeconds": {
+          "type": "number",
+          "default": 20,
+          "minimum": 0,
+          "maximum": 600,
+          "markdownDescription": "Seconds after the extension activates before it re-verifies the Construct patches on the VM's Claude Code extension (partial-message streaming and the chat-mic gate) and re-applies any that a background extension **auto-update reverted**. The delay lets a VS Code-start auto-update land first. Set to `0` to disable this startup check (patches are still applied on provision)."
         }
       }
     }
