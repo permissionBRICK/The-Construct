@@ -122,13 +122,23 @@ extension/
                       onError('no-device'); no ffmpeg/sox → onError('no-recorder') (honest, one
                       warning per enable). Guard patch apply/revert/idempotent. All pure
                       builders; ssh/spawn/net injected for tests.
-  vm/                 scripts pushed to the VM over SSH by audio.js on enable
+    repatch.js        startup patch-verification. The claude-code patches (partial streaming +
+                      the mic gate) are applied at provision time, but VS Code auto-updates that
+                      extension on start, replacing extension.js with a stock (un-patched) build.
+                      ~20s after activate (construct.repatchDelaySeconds — lets the update land),
+                      runStartupRepatch probes the VM read-only (construct-patch-status.sh) and
+                      re-runs the matching enable script for any feature that is ON in settings
+                      but sitting at the stock gate. Quiet (logs only, like the mic auto-arm);
+                      ssh/script-reader injected. parsePatchStatus/decideRepairs/confirmPatched pure.
+  vm/                 scripts pushed to the VM over SSH by audio.js / repatch.js
     construct-rec-shim.sh        rec/arecord shim (scans the tunnel-port range via `ss -ltn`,
                                  streams the first live tunnel's PCM, dies on SIGTERM)
     construct-audio-enable.sh    install shim + apply remoteName-guard patch; prints
                                  CONSTRUCT_GATE_PATCHED=0/1 + CONSTRUCT_PORTS_BUSY=<csv>
     construct-audio-disable.sh   remove shim + revert patch (restore the .bak) — SKIPPED while
                                  another window's tunnel is live (last-window-out guard)
+    construct-patch-status.sh    read-only probe: prints CONSTRUCT_PARTIAL_STATUS + CONSTRUCT_GATE_
+                                 STATUS = patched|stock|unknown|absent (drives repatch.js; never edits)
   test/
     ui-smoke.js       Playwright headless-Chromium webview test (162 checks: panel + launcher +
                       narrow overflow + settings round-trip + honesty + power buttons + add-project +
@@ -160,6 +170,7 @@ extension/
                       (hostile/unknown -> default), picker HTML nonce/CSP/escaping
     usage.test.js     plain-node ccusage script (daily/monthly/total window mapping) + parse (totalCost/costUSD/missing/error/zero/array) + formatting + per-report cache TTL/coalesce + isCurrentReport stale-collection ordering + export payload, injected ssh+clock (105 checks)
     audio.test.js     plain-node guard-patch apply/revert/idempotency + VM script builders (injection proofs) + ssh -R argv + AudioSession gating + HostAudio enable/disable/rollback + tunnel settle-window (async early death + later death) + multi-window port range (busy-skip/bind-race retry/no-free-port/self-port disable) (233 checks)
+    repatch.test.js   plain-node startup patch-verification units — parsePatchStatus (line-anchored/last-wins/CRLF) + planStartupActions (the streamingOff+micOn+no-tunnel retry regression) + decideRepairs (on∧stock truth table) + confirmPatched + runStartupRepatch orchestration vs a fake ssh (unreachable/probe-fail/streaming-only/mic-only/both-patched/no-confirm) (39 checks)
 ```
 
 ## Webview ↔ extension message protocol

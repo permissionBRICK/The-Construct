@@ -26,6 +26,7 @@ const remote = require("./src/remote");
 const vmpower = require("./src/vmpower");
 const projects = require("./src/projects");
 const audio = require("./src/audio");
+const repatch = require("./src/repatch");
 const configsync = require("./src/configsync");
 const importui = require("./src/importui");
 const zip = require("./src/zip");
@@ -51,6 +52,10 @@ let hostAudio; // audio.HostAudio | undefined
 /** Recorder-failure reasons already surfaced this enable, so we warn once (not on
  *  every record-start). Reset in enableAudio. */
 let micWarnedReasons = new Set();
+
+/** Pending one-shot timer for the startup patch-verification pass (repatch.js). Held
+ *  so deactivate() can cancel it if the window closes inside the delay window. */
+let repatchTimer = null;
 
 /** Every currently-live webview (sidebar view + editor panel) for broadcast refresh. */
 const liveWebviews = new Set();
@@ -999,6 +1004,98 @@ async function maybeAutoEnableAudio(context) {
   } catch (_) { /* best-effort: never block activation */ }
 }
 
+/** Delay (ms) before the startup patch-verification pass runs. VS Code auto-updates
+ *  the claude-code extension in the background right after a start, so we wait out a
+ *  window (default 20s, tunable via construct.repatchDelaySeconds) to let that land
+ *  before probing — otherwise we'd re-patch the OLD build the update is about to
+ *  replace. 0 disables the pass entirely. */
+function repatchDelayMs() {
+  let secs = 20;
+  try {
+    const v = vscode.workspace.getConfiguration("construct").get("repatchDelaySeconds");
+    if (typeof v === "number" && Number.isFinite(v)) secs = v;
+  } catch (_) {}
+  if (!(secs > 0)) return 0;              // <=0 (or NaN coerced away) disables the pass
+  return Math.min(Math.max(secs, 0), 600) * 1000; // clamp to a sane [0, 10min]
+}
+
+/** Arm the one-shot startup patch-verification pass. Best-effort and unref'd so it
+ *  never keeps the host alive on its own; cancelled by deactivate(). */
+function scheduleStartupRepatch(context) {
+  const delay = repatchDelayMs();
+  if (delay === 0) { logLine("repatch: startup verification disabled (construct.repatchDelaySeconds<=0)."); return; }
+  logLine(`repatch: scheduling startup patch verification in ${Math.round(delay / 1000)}s.`);
+  repatchTimer = setTimeout(() => {
+    repatchTimer = null;
+    verifyPatchesOnStartup(context).catch((e) => logLine("repatch: verification failed: " + (e && e.message ? e.message : e)));
+  }, delay);
+  if (repatchTimer && typeof repatchTimer.unref === "function") repatchTimer.unref();
+}
+
+/** Startup patch-verification pass: re-apply any Construct claude-code patch whose
+ *  feature is ON but has reverted to stock (a VS Code-start auto-update wiped it).
+ *
+ *  Streaming is a pure VM-side file patch, so it's repaired directly over SSH.
+ *  Mic passthrough also needs a live reverse tunnel: when one is up (auto-arm already
+ *  ran) we just re-apply the gate over SSH; when it isn't, we retry the FULL mic
+ *  enable, which installs the shim, patches the gate, AND opens the tunnel in one go.
+ *  Quiet by design — like the mic auto-arm, a startup housekeeping pass shouldn't
+ *  toast on every launch; everything is recorded to the Construct output channel. */
+async function verifyPatchesOnStartup(context) {
+  const scriptsDir = resolveScriptsDir();
+  const raw = scriptsDir ? host.readRawSettings(scriptsDir) : {};
+  // Streaming defaults ON (matches CLAUDE_PARTIAL_STREAMING:-true on the VM), so treat
+  // anything other than an explicit false as on. Mic passthrough is opt-in.
+  const streamingOn = raw.claudePartialStreaming !== false;
+  const micOn = raw.micPassthrough === true;
+  if (!streamingOn && !micOn) return;
+
+  const micLive = !!(hostAudio && hostAudio.enabled);
+  // Plan the branches purely (repatch.planStartupActions) so the "streaming off + mic
+  // on + no tunnel" case can't slip through: that combination must still retry the
+  // full auto-arm even though the SSH pass has nothing to do.
+  const plan = repatch.planStartupActions({ streamingOn, micOn, micLive, hasHostAudio: !!hostAudio });
+
+  // The SSH probe + gate/streaming repairs. Skipped entirely when there's nothing to
+  // probe for (e.g. streaming off and no live tunnel to re-patch) — the auto-arm retry
+  // below still runs and does its own reachability check.
+  if (plan.runPass) {
+    const res = await repatch.runStartupRepatch({
+      ssh,
+      cfg: undefined,
+      readVmScript: audio.defaultReadScript,
+      streamingOn,
+      // Only ask for a gate-only repair when a tunnel is already live; otherwise the
+      // full auto-arm retry below both patches the gate and opens the tunnel.
+      micOn: plan.passMicOn,
+      buildMicEnableScript: () => {
+        const enableText = audio.defaultReadScript("construct-audio-enable.sh");
+        const shimText = audio.defaultReadScript("construct-rec-shim.sh");
+        const vmPort = hostAudio ? hostAudio.vmPort : undefined;
+        const vmCount = hostAudio ? hostAudio.vmPortCount : undefined;
+        return audio.buildEnableScript(enableText, shimText, vmPort, vmCount);
+      },
+      log: logLine,
+    });
+    // A live gate re-patch means the console's mic substatus is authoritative again.
+    if (res.repaired.mic && hostAudio) {
+      hostAudio.gatePatched = true;
+      broadcastAudio({ enabled: true, capturing: hostAudio.capturing, gatePatched: true });
+    }
+  }
+
+  // Mic is wanted but there's no HostAudio at all (the VM was down at activate so the
+  // auto-arm bailed, or its enable failed and cleared the instance): retry the full
+  // enable. It installs the shim, patches the gate, and opens the tunnel in one go, and
+  // does its OWN reachability check (silent if the VM is still down) — so this must NOT
+  // be gated on the SSH pass, which may not have run. Guard on `!hostAudio` (from the
+  // plan) so an enable that is still in flight is never clobbered.
+  if (plan.retryAutoArm) {
+    logLine("repatch: mic passthrough is on but no tunnel is live — retrying auto-arm.");
+    maybeAutoEnableAudio(context);
+  }
+}
+
 /**
  * Choose which project profiles are selected. Presents the available profiles in a
  * multi-select QuickPick (pre-ticked from the persisted selection), then persists
@@ -1757,6 +1854,10 @@ function activate(context) {
   }
   maybeAutoOpenPanel(context);
   maybeAutoEnableAudio(context);
+  // A short while after start, re-apply any claude-code patch (streaming / mic gate)
+  // that a background extension auto-update reverted — patches are otherwise only
+  // applied at provision time. Delayed so the update has landed first (see repatch.js).
+  scheduleStartupRepatch(context);
   // Config-sync engine bootstrap (D8).
   try {
     cfgDir = host.configDir(process.env) || null;
@@ -1792,6 +1893,8 @@ function deactivate() {
   // next explicit disable is harmless; the guard patch is likewise inert without the shim.
   try { if (hostAudio) hostAudio.dispose(); } catch (_) {}
   hostAudio = undefined;
+  try { if (repatchTimer) clearTimeout(repatchTimer); } catch (_) {}
+  repatchTimer = null;
   stopAutoRefresh();
   stopConfigWatcher();
 }

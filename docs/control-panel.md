@@ -193,6 +193,24 @@ device name — the panel auto-detects the first one, but if that's the wrong in
 devices with `ffmpeg -list_devices true -f dshow -i dummy` and set **`construct.micDevice`**
 (in VS Code settings) to the device name you want (e.g. `Microphone (Realtek(R) Audio)`).
 
+## Keeping the Claude Code patches applied across updates
+
+Construct applies two reversible patches to the VM's Claude Code extension —
+**partial-message streaming** (so the chat panel streams over Remote-SSH instead of
+freezing until each turn finishes) and the **microphone gate** above. These go on at
+provision time, but VS Code **auto-updates the Claude Code extension in the background**,
+and a fresh build arrives un-patched — so after such an update the features silently
+regress until the next reprovision.
+
+To avoid that, the panel re-checks the patches on every start: about **20 seconds after
+it activates** (enough for a start-time auto-update to land) it probes the VM read-only
+and **re-applies any patch whose feature is on but has reverted to stock**. It's silent —
+recorded to the **Construct** output channel, no toasts — and best-effort (a powered-off
+VM is skipped). A re-applied patch takes effect for the *current* window after a reload,
+and is already in place on the next start. Tune the delay with
+**`construct.repatchDelaySeconds`** (default `20`; set `0` to disable the check — patches
+are still applied on provision).
+
 ## Settings
 
 **Settings** pre-fills the installer's prompts (git identity, VM resources, services like
