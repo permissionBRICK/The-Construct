@@ -238,6 +238,14 @@ async function ensureRepo(runGit, configDir) {
   // %LOCALAPPDATA%), and silently adopting that parent repo would commit config
   // files into the user's unrelated repository.
   const st = await runGit(["rev-parse", "--git-dir"], { cwd: configDir });
+  // A repo owned by another Windows account makes git refuse every command
+  // ("fatal: detected dubious ownership"). Without this check the failed
+  // rev-parse falls through to `git init`, whose later add/commit fail too,
+  // and the tick ends with the misleading "git not available" warning. Detect
+  // it and report a repairable, named condition instead.
+  if (st.code !== 0 && /dubious ownership/i.test(st.stderr || "")) {
+    return { repo: false, dubiousOwnership: true };
+  }
   if (st.code === 0) {
     const tl = await runGit(["rev-parse", "--show-toplevel"], { cwd: configDir });
     const toplevel = tl.stdout.trim().replace(/\/$/, "");
@@ -255,7 +263,9 @@ async function ensureRepo(runGit, configDir) {
 
   // Try to init.
   const init = await runGit(["init"], { cwd: configDir });
-  if (init.code !== 0) return { repo: false };
+  if (init.code !== 0) {
+    return { repo: false, dubiousOwnership: /dubious ownership/i.test(init.stderr || "") };
+  }
 
   // Harden BEFORE the initial commit: sets core.autocrlf=false and drops the
   // .gitattributes into the tree so the initial `add -A` versions it.
@@ -557,6 +567,17 @@ async function syncTickLocked({ runGit, configDir, readStore, writeStore, log, s
   // Step 1: ensure repo.
   const repo = await ensureRepo(runGit, configDir);
   if (!repo.repo) {
+    if (repo.dubiousOwnership) {
+      // Surface as blocked (not a tooltip warning): the panel's banner shows
+      // blockedReason, and this state is persistent + user-fixable.
+      result.blocked = true;
+      result.blockedReason =
+        "config folder is owned by another Windows account, so git refuses to sync it — " +
+        'reprovision (it repairs ownership automatically) or run from an elevated prompt: icacls "' +
+        configDir + '" /setowner "%USERNAME%" /T';
+      addWarning(result.blockedReason);
+      return result;
+    }
     addWarning("git not available; sync skipped");
     return result;
   }

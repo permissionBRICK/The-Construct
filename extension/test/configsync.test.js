@@ -179,6 +179,44 @@ async function runTests() {
     ok("ensureRepo: idempotent (no re-init)", r2.repo && !r2.initialized);
   } finally { fs.rmSync(repoRoot, { recursive: true, force: true }); }
 
+  // ── ensureRepo: dubious-ownership detection (git refuses foreign-owned dirs) ─
+  // Simulated via a fake git runner: producing a genuinely foreign-owned dir
+  // needs a second OS account. The stderr text is git's verbatim message.
+  {
+    const dubious = 'fatal: detected dubious ownership in repository at ' +
+      "'C:/Users/other/AppData/Local/The-Construct/config'";
+    const fakeGit = async () => ({ code: 128, stdout: "", stderr: dubious });
+    const r = await cs.ensureRepo(fakeGit, "/nonexistent-config");
+    ok("ensureRepo: dubious ownership detected on rev-parse", r.repo === false && r.dubiousOwnership === true);
+
+    // rev-parse fails generically (no repo), then init fails dubious.
+    const fakeGit2 = async (args) => args[0] === "init"
+      ? { code: 128, stdout: "", stderr: dubious }
+      : { code: 128, stdout: "", stderr: "fatal: not a git repository" };
+    const r2 = await cs.ensureRepo(fakeGit2, "/nonexistent-config");
+    ok("ensureRepo: dubious ownership detected on init", r2.repo === false && r2.dubiousOwnership === true);
+
+    // Generic failure stays generic.
+    const fakeGit3 = async () => ({ code: 1, stdout: "", stderr: "some other failure" });
+    const r3 = await cs.ensureRepo(fakeGit3, "/nonexistent-config");
+    ok("ensureRepo: generic failure not marked dubious", r3.repo === false && !r3.dubiousOwnership);
+
+    // A tick against a dubious-owned repo reports blocked with the repair hint
+    // (not the misleading "git not available").
+    const tickRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cs-dub-"));
+    try {
+      const configDir = mk(tickRoot, "config");
+      cs.ensureConfigTree(configDir);
+      const res = await cs.syncTick({
+        runGit: fakeGit, configDir,
+        readStore: async () => "END\n",
+        writeStore: async () => "END\n",
+      });
+      ok("syncTick: dubious ownership -> blocked", res.blocked === true && !res.ok);
+      ok("syncTick: dubious ownership names the fix", /owned by another Windows account/.test(res.blockedReason || "") && /icacls/.test(res.blockedReason || ""));
+    } finally { fs.rmSync(tickRoot, { recursive: true, force: true }); }
+  }
+
   // ── First tick: seeds vm = main ────────────────────────────────────────────
   const seedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cs-seed-"));
   try {
