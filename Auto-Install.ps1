@@ -727,6 +727,14 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
                             Write-Host ""; Wait-Exit
                             return
                         }
+                        # A degraded pre-wipe tick (VM unreachable, lock busy, skipped
+                        # profiles) means VM-side edits may NOT have reached the host
+                        # repo -- after the wipe, the tar backup is their only copy
+                        # (the Provision restore backstop folds it back in). Say so
+                        # NOW, while the user can still abort.
+                        foreach ($w in @($syncResult.Warnings)) {
+                            if ($w) { Write-Warning "Pre-reinstall config sync: $w" }
+                        }
                     }
 
                     Show-TuiScreen -Title "Saving the VM's agent config" -Body @(
