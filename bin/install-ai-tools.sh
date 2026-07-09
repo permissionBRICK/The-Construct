@@ -390,8 +390,22 @@ install_codex() {
     # and run with 'n' on stdin -- we don't want the installer to launch codex;
     # the codex-app-server systemd unit below manages it. CI=1 is an extra hint.
     codex_installer="$(mktemp)"
-    curl -fsSL https://chatgpt.com/codex/install.sh -o "${codex_installer}"
-    printf 'n\n' | CI=1 sh "${codex_installer}"
+    if ! { curl -fsSL https://chatgpt.com/codex/install.sh -o "${codex_installer}" \
+        && printf 'n\n' | CI=1 sh "${codex_installer}"; }; then
+      # The official installer parses GitHub's release JSON with a line-based awk
+      # script that misses every asset now that api.github.com serves minified
+      # single-line responses ("Could not find Codex package or platform npm
+      # release assets"). The @openai/codex npm package ships the same native
+      # binary, so fall back to it. This script runs before install-sdks.sh in
+      # provision.sh, so Node may not be provisioned yet.
+      warn "Official Codex installer failed; falling back to npm (@openai/codex)"
+      if ! command -v npm >/dev/null 2>&1; then
+        step "Installing Node.js 22.x (required for the Codex npm fallback)"
+        curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+        DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
+      fi
+      npm install -g @openai/codex
+    fi
     rm -f "${codex_installer}"
   else
     note "Codex already installed"
