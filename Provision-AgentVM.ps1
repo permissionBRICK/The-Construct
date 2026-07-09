@@ -1296,6 +1296,11 @@ if (Get-Command Initialize-ConstructConfigStore -ErrorAction SilentlyContinue) {
         Initialize-ConstructConfigRepo -ConfigDir $syncConfigDir | Out-Null
     }
     if (Get-Command Invoke-ConstructConfigSync -ErrorAction SilentlyContinue) {
+        # Snapshot host profiles so anything the tick brings UP from the VM (an
+        # agent-created profile) can join this run's selection below.
+        $syncProjDir = Join-Path $syncConfigDir "projects"
+        $profilesBeforeSync = @(Get-ChildItem -LiteralPath $syncProjDir -Filter *.json -File -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.BaseName })
         $syncArgs = @{ ConfigDir = $syncConfigDir; VmHost = $VmHost }
         if ($PSBoundParameters.ContainsKey('AutoResolve')) { $syncArgs['AutoResolve'] = $AutoResolve }
         $syncResult = Invoke-ConstructConfigSync @syncArgs
@@ -1304,6 +1309,26 @@ if (Get-Command Initialize-ConstructConfigStore -ErrorAction SilentlyContinue) {
             throw "Config sync conflict: $syncReason -- resolve the conflict in the config repo ($syncConfigDir), commit, and re-run."
         }
         if ($syncResult.Ran) { Write-Ok "Config sync completed" }
+
+        # Auto-enable profiles that newly arrived from the VM: add them to THIS
+        # run's -Projects (so their repos/sdks/mcp provision right now, and the
+        # checkout auto-decide sees their repos) and persist them into the saved
+        # selection so future reprovisions keep them without a manual re-tick.
+        $profilesAfterSync = @(Get-ChildItem -LiteralPath $syncProjDir -Filter *.json -File -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.BaseName })
+        $newProfiles = @($profilesAfterSync | Where-Object {
+            ($profilesBeforeSync -notcontains $_) -and
+            ($script:RESERVED_PROFILE_NAMES -notcontains $_.ToLowerInvariant())
+        })
+        if ($newProfiles.Count -gt 0) {
+            $selection = @(("$Projects").Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            foreach ($np in $newProfiles) { if ($selection -notcontains $np) { $selection += $np } }
+            $Projects = $selection -join ','
+            Write-Ok "Auto-enabled new project profile(s) from the VM: $($newProfiles -join ', ') (projects now: $Projects)"
+            if (Get-Command Save-ConstructSettings -ErrorAction SilentlyContinue) {
+                Save-ConstructSettings -Dir $PSScriptRoot -Values @{ projects = $selection }
+            }
+        }
     }
 }
 
@@ -1372,16 +1397,26 @@ if ($vsCodeCommit) {
     Write-Host "  Desktop VS Code commit: $vsCodeCommit (pre-seeding the matching Remote-SSH server)" -ForegroundColor DarkGray
 }
 # Auto-decide the checkout when not forced: on iff the selected projects declare repos.
+# Always print the decision -- a silent "false" here surfaces on the VM as cloning
+# being skipped with no explanation, which has already cost a debugging session.
 $checkoutArg = $CheckoutProjects
 if (-not $checkoutArg) {
     $repoUrls = @()
+    $checkoutProjDir = Join-Path $PSScriptRoot 'projects'
     if (Get-Command Get-ProjectRepoUrls -ErrorAction SilentlyContinue) {
-        $checkoutProjDir = if (Get-Command Get-ConstructConfigProjectsDir -ErrorAction SilentlyContinue) {
-            Get-ConstructConfigProjectsDir -ScriptsDir $PSScriptRoot
-        } else { Join-Path $PSScriptRoot 'projects' }
+        if (Get-Command Get-ConstructConfigProjectsDir -ErrorAction SilentlyContinue) {
+            $checkoutProjDir = Get-ConstructConfigProjectsDir -ScriptsDir $PSScriptRoot
+        }
         $repoUrls = @(Get-ProjectRepoUrls -ProjectsDir $checkoutProjDir -Names $Projects)
     }
     $checkoutArg = if ($repoUrls.Count -gt 0) { "true" } else { "false" }
+    if ($repoUrls.Count -gt 0) {
+        Write-Ok "Project checkout: ON ($($repoUrls.Count) repo URL(s) declared by: $Projects)"
+    } else {
+        Write-Warning "Project checkout: OFF -- no repo URLs found for '$Projects' in $checkoutProjDir. Repos will NOT be cloned; add repos[] to the profile (or check the selection) if that's unexpected."
+    }
+} else {
+    Write-Ok "Project checkout: forced '$checkoutArg' via -CheckoutProjects"
 }
 $envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit' SMB_SHARE='$SmbShare' CLAUDE_PARTIAL_STREAMING='$ClaudePartialStreaming' MIC_PASSTHROUGH='$MicPassthrough'"
 Write-Host "  --- live provisioning output ---" -ForegroundColor DarkGray
