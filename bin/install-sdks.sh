@@ -83,22 +83,37 @@ install_python() {
 }
 
 install_dotnet() {
-  local ver="${1:-10.0}" channel
-  # Normalize a bare major ("10") to a channel ("10.0").
+  local ver="${1:-10.0}" channel="" exact=""
+  # dotnet-install.sh distinguishes CHANNELS ("10.0", "LTS") from exact SDK
+  # VERSIONS ("10.0.301"): a three-part value passed as --channel fails with
+  # "Failed to resolve the exact version number". Normalize: bare major ("10")
+  # -> channel "10.0"; two-part -> channel; three-or-more-part -> exact version.
   case "${ver}" in
-    *.*) channel="${ver}" ;;
-    *)   channel="${ver}.0" ;;
+    *.*.*) exact="${ver}" ;;
+    *.*)   channel="${ver}" ;;
+    *)     channel="${ver}.0" ;;
   esac
-  local major="${channel%%.*}"
-  if command -v dotnet >/dev/null 2>&1 \
-     && dotnet --list-sdks 2>/dev/null | grep -q "^${major}\."; then
-    note ".NET SDK ${major}.x already installed"
-    return
+  local major="${ver%%.*}"
+  if command -v dotnet >/dev/null 2>&1; then
+    if [[ -n "${exact}" ]]; then
+      # An exact pin is only satisfied by that exact SDK version.
+      if dotnet --list-sdks 2>/dev/null | grep -q "^${exact} "; then
+        note ".NET SDK ${exact} already installed"
+        return
+      fi
+    elif dotnet --list-sdks 2>/dev/null | grep -q "^${major}\."; then
+      note ".NET SDK ${major}.x already installed"
+      return
+    fi
   fi
-  step "Installing .NET SDK channel ${channel}"
+  step "Installing .NET SDK ${exact:+version ${exact}}${channel:+channel ${channel}}"
   local script=/tmp/dotnet-install.sh
   curl -fsSL https://dot.net/v1/dotnet-install.sh -o "${script}"
-  bash "${script}" --channel "${channel}" --install-dir /usr/lib/dotnet
+  if [[ -n "${exact}" ]]; then
+    bash "${script}" --version "${exact}" --install-dir /usr/lib/dotnet
+  else
+    bash "${script}" --channel "${channel}" --install-dir /usr/lib/dotnet
+  fi
   rm -f "${script}"
   ln -sf /usr/lib/dotnet/dotnet /usr/local/bin/dotnet
   cat >/etc/profile.d/dotnet.sh <<'EOF'
