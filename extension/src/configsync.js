@@ -704,6 +704,29 @@ async function syncTickLocked({ runGit, configDir, readStore, writeStore, log, s
   // normally, and a real delete-all can be done per profile or from the panel.
   if (noValidVmFiles && vmTipProfiles > 0) {
     addWarning(`VM store has no valid profiles but the vm branch has ${vmTipProfiles}; refusing to propagate a mass deletion (delete profiles individually if intended)`);
+    // ...but do NOT stall: a store dir that exists yet holds zero valid profiles
+    // is, in the field, a rebuilt/wiped VM (provisioning recreates the dir before
+    // the first seed can run) — leaving it empty made every subsequent tick
+    // refuse here forever, so profiles never returned to the VM at all. Re-seed
+    // main's profiles with expect-absent guards: only files missing from the VM
+    // are written (a lingering invalid file keeps its warning and is preserved),
+    // main is untouched, and the vm ref is NOT advanced, so nothing about the
+    // refused deletion is committed.
+    const seedFiles = readMainProfiles(configDir);
+    const seedOps = Object.keys(seedFiles).map((name) => ({
+      name, action: "write", content: seedFiles[name], expect: null,
+    }));
+    if (seedOps.length > 0) {
+      const seedStdout = await writeStore(buildWriteStoreScript(seedOps, storeRoot));
+      const seedWb = parseWriteResult(seedStdout);
+      if (seedWb) {
+        result.writeBack = seedWb;
+        result.seeded = seedWb.done.length > 0;
+        info(`re-seeded ${seedWb.done.length} profile(s) into the emptied VM store`);
+      } else {
+        addWarning("re-seed write-back to the VM store failed");
+      }
+    }
     result.ok = true;
     return result;
   }

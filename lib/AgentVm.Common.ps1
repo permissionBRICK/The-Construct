@@ -3082,10 +3082,42 @@ function Invoke-ConstructConfigSyncLocked {
         $ErrorActionPreference = $prevMd
         if ($vmTipCount -gt 0) {
             $warnings.Add("VM store has no valid profiles but the vm branch has ${vmTipCount}; refusing to propagate a mass deletion (delete profiles individually if intended).")
+            # ...but do NOT stall (mirrors syncTickLocked in configsync.js): an
+            # existing-but-empty store is, in the field, a rebuilt VM whose dir
+            # provisioning recreated before the first seed -- returning here on
+            # every tick left it empty forever. Re-seed main's profiles with
+            # expect-absent guards: only files missing from the VM are written
+            # (invalid files stay put with their warning), main is untouched,
+            # and the vm ref is NOT advanced.
+            $reseedOps = @()
+            foreach ($f in @(Get-ChildItem -LiteralPath $projDir -Filter *.json -File -ErrorAction SilentlyContinue)) {
+                $rsName = $f.BaseName
+                if ($script:RESERVED_PROFILE_NAMES -contains $rsName.ToLowerInvariant()) { continue }
+                try {
+                    $rsContent = [System.IO.File]::ReadAllText($f.FullName, [System.Text.Encoding]::UTF8)
+                    try {
+                        $rsObj = $rsContent | ConvertFrom-Json
+                        $rsCanon = ConvertTo-ConstructCanonicalJson -Name $rsName -Object $rsObj
+                        if ($null -ne $rsCanon) { $rsContent = $rsCanon }
+                    } catch { }
+                    $reseedOps += @{
+                        Name = $rsName; Action = "write"; Content = $rsContent
+                        Expect = $null; ExpectAbsent = $true
+                    }
+                } catch { }
+            }
+            $reseedWb = $null
+            $reseedDone = 0
+            if ($reseedOps.Count -gt 0) {
+                $reseedWb = Write-ConstructVmStore -VmHost $VmHost -Ops $reseedOps -SshInvoker $SshWriteInvoker
+                if ($reseedWb -and $reseedWb.PSObject.Properties['Done']) { $reseedDone = @($reseedWb.Done).Count }
+                if ($null -eq $reseedWb) { $warnings.Add("Re-seed write-back to the VM store failed.") }
+                elseif ($reseedDone -gt 0) { Write-Verbose "Re-seeded $reseedDone profile(s) into the emptied VM store." }
+            }
             return [pscustomobject]@{
                 Ok = $true; Ran = $true; Conflict = $false; Blocked = $false
                 Reason = ""; SkippedInvalid = @($skippedInvalid); Merged = $false
-                Seeded = $false; Warnings = @($warnings); WriteBack = $null
+                Seeded = ($reseedDone -gt 0); Warnings = @($warnings); WriteBack = $reseedWb
             }
         }
     }
