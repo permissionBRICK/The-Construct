@@ -447,6 +447,11 @@ async function runConfigSync() {
     // cross-process lock (ensureRepo is its step 1) — nothing here may mutate
     // the repo, or two windows could race it.
     configsync.ensureConfigTree(dir);
+    // Snapshot the host profile set so profiles that arrive FROM the VM in this
+    // tick (an agent's `construct project set`) can be auto-enabled below —
+    // otherwise they exist on the host but stay outside the persisted selection,
+    // and the next reprovision silently provisions without them.
+    var profilesBeforeTick = host.listProjectProfiles(dir);
     var readStore = async function () {
       try {
         var r = await ssh.runRemoteScript(configsync.buildReadStoreScript(), { timeoutMs: 30000 });
@@ -478,8 +483,36 @@ async function runConfigSync() {
       if (result.warnings && result.warnings.length) parts.push("warnings: " + result.warnings.join("; "));
       logLine("sync tick: " + parts.join(" | "));
     }
+    if (result && result.ok && !result.lockBusy) {
+      await autoEnableNewProfiles(profilesBeforeTick, host.listProjectProfiles(dir));
+    }
     return result;
   } finally { syncTickInFlight = false; }
+}
+
+/** Add profiles that newly appeared on the host (synced up from the VM) to the
+ *  persisted selection, so reprovisions include them without a manual re-tick.
+ *  The union starts from effectiveProjects() — the same set a reprovision would
+ *  use — so enabling a new name never drops existing active projects. */
+async function autoEnableNewProfiles(before, after) {
+  try {
+    var beforeSet = new Set(before || []);
+    var fresh = (after || []).filter(function (n) {
+      return n && !beforeSet.has(n) && !projects.isReservedProfileName(n);
+    });
+    if (!fresh.length) return;
+    var scriptsDir = resolveScriptsDir();
+    if (!scriptsDir) return;
+    var current = await effectiveProjects();
+    var merged = current.slice();
+    for (var i = 0; i < fresh.length; i++) {
+      if (!merged.includes(fresh[i])) merged.push(fresh[i]);
+    }
+    host.saveSelectedProjects(scriptsDir, merged);
+    logLine("auto-enabled new project profile(s) from sync: " + fresh.join(", ") + " (selection now: " + merged.join(", ") + ")");
+  } catch (e) {
+    logLine("auto-enable of new profiles failed: " + (e && e.message ? e.message : e));
+  }
 }
 
 async function configMergeGate() {

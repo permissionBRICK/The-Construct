@@ -327,6 +327,13 @@ if [[ "${CHECKOUT_PROJECTS}" == "true" ]]; then
     note "    Fix the credentials, then re-run: bash ${REPO_DIR}/bin/checkout-projects.sh"
     warn "WARNING: project checkout failed (Git auth not configured?)"
   fi
+else
+  # Say so out loud: a silent skip here has repeatedly read as "cloning is
+  # broken" when the real cause was an upstream selection/profile decision.
+  step "Skipping project checkout (CHECKOUT_PROJECTS=${CHECKOUT_PROJECTS})"
+  note "    The host decided the selected projects (PROJECTS=${PROJECTS}) declare no repos."
+  note "    If that's wrong: check the profile's repos[] on the host and that it's selected,"
+  note "    then re-run -- or clone manually on the VM: bash ${REPO_DIR}/bin/checkout-projects.sh"
 fi
 
 # Drop the transient clone-credentials temp file (created above, used only for

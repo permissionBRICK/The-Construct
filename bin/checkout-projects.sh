@@ -40,6 +40,15 @@ repos_tsv="$(mktemp)"
 trap 'rm -f "${repos_tsv}"' EXIT
 jq -r '.repos[] | [.url, (.directory // "")] | @tsv' "${GENERATED_JSON}" >"${repos_tsv}"
 
+# An empty repo list is worth stating explicitly: it usually means the selected
+# profile never reached the VM store (sync/seed gap) or declares no repos[],
+# and a wordless zero-iteration loop here reads as "cloning silently skipped".
+if [[ ! -s "${repos_tsv}" ]]; then
+  echo "No repos to check out: the selected projects (PROJECTS=${PROJECTS:-?}) resolve to zero repos[] entries in ${GENERATED_JSON}."
+  echo "If the profile does declare repos, it likely hasn't synced to the VM store (${AGENT_HOME}/projects) yet -- run a config sync from the host, then: bash ${AGENT_HOME}/repo/bin/checkout-projects.sh"
+  exit 0
+fi
+
 failed=0
 while IFS=$'\t' read -r url directory; do
   if [[ -z "${url}" ]]; then
@@ -60,6 +69,18 @@ while IFS=$'\t' read -r url directory; do
     if ! git -C "${target}" fetch --all --prune 2>&1; then
       echo "ERROR: fetch failed for ${target}"
       failed=$((failed + 1))
+    elif [[ -z "$(git -C "${target}" status --porcelain 2>/dev/null)" ]]; then
+      # Clean tree: bring the checked-out branch forward so a reprovision leaves
+      # fresh code, not just fresh refs. --ff-only never merges or rewrites local
+      # commits -- a diverged/upstream-less branch is reported and left alone,
+      # and that is not a checkout failure.
+      if git -C "${target}" pull --ff-only 2>&1; then
+        echo "Updated: ${target}"
+      else
+        echo "NOTE: ${target} not fast-forwarded (diverged or no upstream); fetched only"
+      fi
+    else
+      echo "NOTE: ${target} has local changes; fetched only (working tree untouched)"
     fi
   else
     echo "Cloning ${url} -> ${target}"
