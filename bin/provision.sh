@@ -10,6 +10,22 @@
 #   sudo env AI_TOOLS=opencode,claude-code PROJECTS=default \
 #     bash /opt/construct/repo/bin/provision.sh
 #
+# Exit contract (consumed by Provision-AgentVM.ps1):
+#   0 = every step completed cleanly
+#   3 = provisioning reached the end, but one or more optional steps failed
+#   any other non-zero value = a critical step failed and provisioning stopped
+#
+# Step criticality is deliberately coarse at the orchestration boundary:
+#
+#   CRITICAL | root privilege; core bootstrap/base prerequisites; config.env
+#            | writes; root SSH key setup when enabled
+#   OPTIONAL | sudoers convenience; SMB; each selected AI tool; construct CLI;
+#            | runtime config; MCP; SDKs; git identity/credential seeding;
+#            | project checkout/commands; service restarts; VS Code; timestamps
+#
+# A critical step is limited to work without which the VM is unusable or the host
+# can be locked out. Everything else reaches the final loud failure summary so a
+# transient network/package/service failure does not hide later independent work.
 set -euo pipefail
 
 # Colourised logging helpers. Emit ANSI colour when either stream is a terminal
@@ -32,13 +48,126 @@ warn() { printf '%s%s%s\n'     "${_C_WARN}" "$*" "${_C_RESET}" >&2; }
 err()  { printf '%s%s%s\n'     "${_C_ERR}"  "$*" "${_C_RESET}" >&2; }
 note() { printf '%s%s%s\n'     "${_C_DIM}"  "$*" "${_C_RESET}"; }
 
+# Every command is placed in a conditional pipeline: that context suppresses
+# errexit for the pipeline while pipefail still preserves the command's status.
+# tee keeps output live and leaves a merged stdout/stderr log for the final tail.
+_PROVISION_LOG_DIR="$(mktemp -d)"
+declare -a _FAILED_TITLES=()
+declare -a _FAILED_CODES=()
+declare -a _FAILED_TAILS=()
+
+_sanitize_step_title() {
+  local title="$1"
+  title="${title//$'\n'/ }"
+  title="${title//$'\r'/ }"
+  title="${title//|/ }"
+  printf '%s' "${title}"
+}
+
+_record_step_failure() {
+  local title="$1" rc="$2" log_file="$3" tail_file
+  tail_file="${_PROVISION_LOG_DIR}/tail-${#_FAILED_TITLES[@]}.log"
+  tail -n 15 "${log_file}" >"${tail_file}" 2>/dev/null || :
+  _FAILED_TITLES+=("${title}")
+  _FAILED_CODES+=("${rc}")
+  _FAILED_TAILS+=("${tail_file}")
+}
+
+_print_machine_result() {
+  local i
+  printf '%s\n' '===CONSTRUCT-PROVISION-RESULT==='
+  printf 'errors=%s\n' "${#_FAILED_TITLES[@]}"
+  for ((i=0; i<${#_FAILED_TITLES[@]}; i++)); do
+    printf 'error=%s|%s\n' "$(_sanitize_step_title "${_FAILED_TITLES[$i]}")" "${_FAILED_CODES[$i]}"
+  done
+  printf '%s\n' '===END-CONSTRUCT-PROVISION-RESULT==='
+}
+
+_print_human_result() {
+  local critical_rc="$1" i line
+  if [[ "${#_FAILED_TITLES[@]}" -eq 0 ]]; then
+    ok "ALL PROVISIONING STEPS COMPLETED CLEANLY"
+    return
+  fi
+
+  if [[ "${critical_rc}" -ne 0 ]]; then
+    printf '%sPROVISION FAILED -- %s step(s) failed:%s\n' "${_C_ERR}" "${#_FAILED_TITLES[@]}" "${_C_RESET}"
+  else
+    printf '%sPROVISIONING COMPLETED WITH %s ERROR(S):%s\n' "${_C_ERR}" "${#_FAILED_TITLES[@]}" "${_C_RESET}"
+  fi
+  for ((i=0; i<${#_FAILED_TITLES[@]}; i++)); do
+    printf '%s  - %s (exit %s)%s\n' "${_C_ERR}" "${_FAILED_TITLES[$i]}" "${_FAILED_CODES[$i]}" "${_C_RESET}"
+    if [[ -s "${_FAILED_TAILS[$i]}" ]]; then
+      printf '%s    last output:%s\n' "${_C_ERR}" "${_C_RESET}"
+      while IFS= read -r line || [[ -n "${line}" ]]; do
+        printf '%s      %s%s\n' "${_C_ERR}" "${line}" "${_C_RESET}"
+      done <"${_FAILED_TAILS[$i]}"
+    else
+      printf '%s      (no output captured)%s\n' "${_C_ERR}" "${_C_RESET}"
+    fi
+  done
+}
+
+_finish_provision() {
+  local critical_rc="${1:-0}" final_rc
+  _print_machine_result
+  _print_human_result "${critical_rc}"
+  rm -rf "${_PROVISION_LOG_DIR}" || true
+  if [[ "${critical_rc}" -ne 0 ]]; then
+    final_rc="${critical_rc}"
+    [[ "${final_rc}" -eq 3 ]] && final_rc=1
+  elif [[ "${#_FAILED_TITLES[@]}" -gt 0 ]]; then
+    final_rc=3
+  else
+    final_rc=0
+  fi
+  exit "${final_rc}"
+}
+
+run_step() {
+  local criticality="$1" title="$2" rc log_file
+  shift 2
+  case "${criticality}" in
+    critical|optional) ;;
+    *) printf '%srun_step: invalid criticality: %s%s\n' "${_C_ERR}" "${criticality}" "${_C_RESET}"; return 2 ;;
+  esac
+
+  step "${title}"
+  log_file="${_PROVISION_LOG_DIR}/step-$(( ${#_FAILED_TITLES[@]} + 1 ))-${RANDOM}.log"
+  if "$@" 2>&1 | tee "${log_file}"; then
+    rm -f "${log_file}"
+    return 0
+  else
+    rc=$?
+  fi
+
+  _record_step_failure "${title}" "${rc}" "${log_file}"
+  rm -f "${log_file}"
+  if [[ "${criticality}" == "optional" ]]; then
+    printf '%sSTEP FAILED (continuing): %s (exit %s)%s\n' "${_C_ERR}" "${title}" "${rc}" "${_C_RESET}"
+    return 0
+  fi
+
+  printf '%sSTEP FAILED (critical): %s (exit %s)%s\n' "${_C_ERR}" "${title}" "${rc}" "${_C_RESET}"
+  _finish_provision "${rc}"
+}
+
+# The plain-Bash unit test sources only the runner; no VM paths or root-only
+# provisioning actions are touched in that mode.
+if [[ "${CONSTRUCT_STEP_RUNNER_ONLY:-false}" == "true" ]]; then
+  return 0 2>/dev/null || exit 0
+fi
+
 REPO_DIR="${REPO_DIR:-/opt/construct/repo}"
 CONFIG_FILE="${CONFIG_FILE:-/etc/construct/config.env}"
 
-if [[ "${EUID}" -ne 0 ]]; then
-  err "Run with sudo: sudo bash ${REPO_DIR}/bin/provision.sh"
-  exit 1
-fi
+require_root() {
+  if [[ "${EUID}" -ne 0 ]]; then
+    printf 'Run with sudo: sudo bash %s/bin/provision.sh\n' "${REPO_DIR}"
+    return 1
+  fi
+}
+run_step critical "Checking root privileges" require_root
 
 # Configuration, all overridable via the environment.
 AGENT_NAME="${AGENT_NAME:-$(hostname)-agent}"
@@ -70,7 +199,7 @@ VSCODE_SERVE_WEB="${VSCODE_SERVE_WEB:-true}"
 # registered VM keeps autostarting the tunnel even without the flag.)
 _vscode_tunnel_saved=""
 if [[ -f "${CONFIG_FILE}" ]]; then
-  _vscode_tunnel_saved="$(sed -n 's/^VSCODE_TUNNEL=//p' "${CONFIG_FILE}" | head -1)"
+  _vscode_tunnel_saved="$(sed -n 's/^VSCODE_TUNNEL=//p' "${CONFIG_FILE}" | head -1 || true)"
 fi
 VSCODE_TUNNEL="${VSCODE_TUNNEL:-${_vscode_tunnel_saved:-false}}"
 # Patch the Claude Code VS Code extension so it streams partial assistant messages
@@ -132,17 +261,22 @@ chmod +x "${REPO_DIR}/bootstrap.sh" "${REPO_DIR}/bin/"*.sh 2>/dev/null || true
 # drop-in makes provisioning depend on the bootstrap/root key alone and never on
 # the login password -- matching the sandbox's "unattended root, no prompts"
 # design. Validated with visudo before install so a bad file can't lock sudo.
-step "Granting ${SSH_USER} passwordless sudo"
-_sudoers_tmp="$(mktemp)"
-printf '%s ALL=(ALL) NOPASSWD:ALL\n' "${SSH_USER}" >"${_sudoers_tmp}"
-chmod 0440 "${_sudoers_tmp}"
-if visudo -cf "${_sudoers_tmp}" >/dev/null 2>&1; then
-  install -m 0440 "${_sudoers_tmp}" "/etc/sudoers.d/90-construct-${SSH_USER}"
-  ok "passwordless sudo configured for ${SSH_USER}"
-else
-  warn "WARNING: sudoers drop-in failed validation; leaving sudo unchanged"
-fi
-rm -f "${_sudoers_tmp}"
+configure_passwordless_sudo() {
+  local sudoers_tmp
+  sudoers_tmp="$(mktemp)" || return
+  printf '%s ALL=(ALL) NOPASSWD:ALL\n' "${SSH_USER}" >"${sudoers_tmp}" || return
+  chmod 0440 "${sudoers_tmp}" || return
+  if visudo -cf "${sudoers_tmp}" >/dev/null 2>&1; then
+    install -m 0440 "${sudoers_tmp}" "/etc/sudoers.d/90-construct-${SSH_USER}" || { rm -f "${sudoers_tmp}"; return 1; }
+    ok "passwordless sudo configured for ${SSH_USER}"
+  else
+    rm -f "${sudoers_tmp}"
+    printf 'sudoers drop-in failed validation; leaving sudo unchanged\n'
+    return 1
+  fi
+  rm -f "${sudoers_tmp}" || return
+}
+run_step optional "Granting ${SSH_USER} passwordless sudo" configure_passwordless_sudo
 
 # Heal a config.env poisoned by a pre-fix run that wrote an unquoted git name
 # with a space (e.g. GIT_USER_NAME=Christoph Ambrosch), which makes every later
@@ -160,25 +294,28 @@ fi
 #    group, /opt/construct ownership) from the seed user rather than SUDO_USER --
 #    provisioning may run directly as root (the re-provision root-key fast path),
 #    where SUDO_USER is unset and would otherwise flip TARGET_USER to root.
-step "Running bootstrap.sh"
-SSH_USER="${SSH_USER}" CONSTRUCT_NONINTERACTIVE=true bash "${REPO_DIR}/bootstrap.sh"
+run_step critical "Running core host bootstrap" \
+  env SSH_USER="${SSH_USER}" CONSTRUCT_NONINTERACTIVE=true CONSTRUCT_SKIP_RUNTIME_GENERATION=true \
+  bash "${REPO_DIR}/bootstrap.sh"
 
 # 2. Apply configuration to /etc/construct/config.env (idempotent merge that
 #    preserves any other keys bootstrap wrote).
-step "Writing configuration to ${CONFIG_FILE}"
 cfg() { bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" "$1" "$2"; }
-cfg AGENT_NAME "${AGENT_NAME}"
-cfg PROJECTS "${PROJECTS}"
-cfg SSH_USER "${SSH_USER}"
-cfg AI_TOOLS "${AI_TOOLS}"
-cfg ALLOW_HOST_PACKAGES "${ALLOW_HOST_PACKAGES}"
-cfg WORKSPACE_ROOT "${WORKSPACE_ROOT}"
-cfg VSCODE_SERVER "${VSCODE_SERVER}"
-cfg VSCODE_SERVE_WEB "${VSCODE_SERVE_WEB}"
-cfg VSCODE_TUNNEL "${VSCODE_TUNNEL}"
-cfg CLAUDE_PARTIAL_STREAMING "${CLAUDE_PARTIAL_STREAMING}"
-cfg MIC_PASSTHROUGH "${MIC_PASSTHROUGH}"
-install -d -m 0755 "${WORKSPACE_ROOT}"
+write_configuration() {
+  cfg AGENT_NAME "${AGENT_NAME}" || return
+  cfg PROJECTS "${PROJECTS}" || return
+  cfg SSH_USER "${SSH_USER}" || return
+  cfg AI_TOOLS "${AI_TOOLS}" || return
+  cfg ALLOW_HOST_PACKAGES "${ALLOW_HOST_PACKAGES}" || return
+  cfg WORKSPACE_ROOT "${WORKSPACE_ROOT}" || return
+  cfg VSCODE_SERVER "${VSCODE_SERVER}" || return
+  cfg VSCODE_SERVE_WEB "${VSCODE_SERVE_WEB}" || return
+  cfg VSCODE_TUNNEL "${VSCODE_TUNNEL}" || return
+  cfg CLAUDE_PARTIAL_STREAMING "${CLAUDE_PARTIAL_STREAMING}" || return
+  cfg MIC_PASSTHROUGH "${MIC_PASSTHROUGH}" || return
+  install -d -m 0755 "${WORKSPACE_ROOT}"
+}
+run_step critical "Writing configuration to ${CONFIG_FILE}" write_configuration
 
 # 2b. Global git identity for the users that operate on the VM: CLAUDE_USER
 #     (root -- used by VS Code Remote-SSH and the AI tools) and the SSH/seed user
@@ -188,29 +325,29 @@ install -d -m 0755 "${WORKSPACE_ROOT}"
 #     space would break that) -- `git config --global` is the store on the VM.
 #     Optionally also enables git's plaintext credential store (the host warns
 #     about the security trade-off before this is requested).
-if [[ -n "${GIT_USER_NAME}" || -n "${GIT_USER_EMAIL}" || -n "${GIT_CREDENTIAL_STORE}" ]]; then
-  step "Configuring global git identity"
+configure_git_identity() {
   _git_seen=""
+  _git_failed=0
   for _gu in "${CLAUDE_USER}" "${SSH_USER}"; do
     [[ -n "${_gu}" ]] || continue
     case " ${_git_seen} " in *" ${_gu} "*) continue ;; esac
     _git_seen="${_git_seen} ${_gu}"
     _gu_home="$(getent passwd "${_gu}" | cut -d: -f6)"
-    if [[ -z "${_gu_home}" ]]; then warn "  skipping ${_gu}: no home directory"; continue; fi
+    if [[ -z "${_gu_home}" ]]; then warn "  skipping ${_gu}: no home directory"; _git_failed=1; continue; fi
     if [[ -n "${GIT_USER_NAME}" ]]; then
       sudo -H -u "${_gu}" git config --global user.name "${GIT_USER_NAME}" \
-        || warn "  could not set user.name for ${_gu}"
+        || { warn "  could not set user.name for ${_gu}"; _git_failed=1; }
     fi
     if [[ -n "${GIT_USER_EMAIL}" ]]; then
       sudo -H -u "${_gu}" git config --global user.email "${GIT_USER_EMAIL}" \
-        || warn "  could not set user.email for ${_gu}"
+        || { warn "  could not set user.email for ${_gu}"; _git_failed=1; }
     fi
     # Plaintext credential store: enable when requested; when explicitly declined,
     # remove only a store helper we may have set before (don't clobber another).
     _cred="(unchanged)"
     if [[ "${GIT_CREDENTIAL_STORE}" == "true" ]]; then
       if sudo -H -u "${_gu}" git config --global credential.helper store; then _cred="store (plaintext)"
-      else warn "  could not enable credential.helper for ${_gu}"; fi
+      else warn "  could not enable credential.helper for ${_gu}"; _git_failed=1; fi
     elif [[ "${GIT_CREDENTIAL_STORE}" == "false" ]]; then
       if [[ "$(sudo -H -u "${_gu}" git config --global credential.helper 2>/dev/null || true)" == "store" ]]; then
         sudo -H -u "${_gu}" git config --global --unset-all credential.helper || true
@@ -219,6 +356,10 @@ if [[ -n "${GIT_USER_NAME}" || -n "${GIT_USER_EMAIL}" || -n "${GIT_CREDENTIAL_ST
     fi
     ok "  ${_gu}: ${GIT_USER_NAME:-(unchanged)} <${GIT_USER_EMAIL:-(unchanged)}>  credentials: ${_cred}"
   done
+  return "${_git_failed}"
+}
+if [[ -n "${GIT_USER_NAME}" || -n "${GIT_USER_EMAIL}" || -n "${GIT_CREDENTIAL_STORE}" ]]; then
+  run_step optional "Configuring global git identity" configure_git_identity
 fi
 
 # 2c. SMB share of the workspace for the host PC. On by default; the host then
@@ -227,47 +368,50 @@ fi
 #     same login the host already saved. setup-smb-share.sh resolves the
 #     SMB_SHARE/SMB_USER/... precedence (env/param > saved config > default), so
 #     forward whatever the host passed (empty = use saved/default).
-step "Setting up SMB share for the host"
-env SMB_SHARE="${SMB_SHARE:-}" SMB_USER="${SMB_USER:-}" \
+run_step optional "Setting up SMB share for the host" \
+  env SMB_SHARE="${SMB_SHARE:-}" SMB_USER="${SMB_USER:-}" \
   SMB_SHARE_NAME="${SMB_SHARE_NAME:-}" SMB_PASSWORD="${SMB_PASSWORD:-}" \
   WORKSPACE_ROOT="${WORKSPACE_ROOT}" CONFIG_FILE="${CONFIG_FILE}" REPO_DIR="${REPO_DIR}" \
-  bash "${REPO_DIR}/bin/setup-smb-share.sh" \
-  || warn "WARNING: SMB share setup failed; continuing"
+  bash "${REPO_DIR}/bin/setup-smb-share.sh"
 
 # 3. Root SSH key so the host (VS Code Remote-SSH) can log in as root by key.
 if [[ "${SETUP_ROOT_SSH_KEY}" == "true" ]]; then
-  step "Setting up root SSH key"
-  bash "${REPO_DIR}/bin/setup-root-ssh-key.sh"
+  run_step critical "Setting up root SSH key" bash "${REPO_DIR}/bin/setup-root-ssh-key.sh"
 fi
 
 # 4. Install selected AI tools. TARGET_USER pins Claude Code's CLI + VS Code
 #    extension settings to CLAUDE_USER (root) regardless of the sudo user.
-step "Installing AI tools"
-TARGET_USER="${CLAUDE_USER}" bash "${REPO_DIR}/bin/install-ai-tools.sh"
+IFS=',' read -ra _selected_ai_tools <<<"${AI_TOOLS}"
+for _ai_tool in "${_selected_ai_tools[@]}"; do
+  _ai_tool="${_ai_tool//[[:space:]]/}"
+  [[ -n "${_ai_tool}" ]] || continue
+  run_step optional "Installing AI tool: ${_ai_tool}" \
+    env TARGET_USER="${CLAUDE_USER}" AI_TOOLS_OVERRIDE="${_ai_tool}" AI_CONSOLE_INTEGRATION=false \
+    bash "${REPO_DIR}/bin/install-ai-tools.sh"
+done
+run_step optional "Installing AI tool console integration" \
+  env TARGET_USER="${CLAUDE_USER}" AI_TOOLS_OVERRIDE=none AI_CONSOLE_INTEGRATION=true \
+  bash "${REPO_DIR}/bin/install-ai-tools.sh"
 
 # 4b. Install the construct CLI so agents and users can manage project profiles
 #     from the VM shell (`construct project set|get|list`). Runs every provision
 #     so an updated script always gets redeployed on reprovision.
-step "Installing construct CLI"
-install -m 0755 "${REPO_DIR}/bin/construct" /usr/local/bin/construct
+run_step optional "Installing construct CLI" install -m 0755 "${REPO_DIR}/bin/construct" /usr/local/bin/construct
 
 # 5. Merge selected project profiles into the runtime config.
-step "Generating runtime config"
-bash "${REPO_DIR}/bin/generate-runtime-config.sh"
+run_step optional "Generating runtime config" bash "${REPO_DIR}/bin/generate-runtime-config.sh"
 
 # 5a. Configure the agent-native MCP servers the selected projects declare into
 #     Claude / Codex / Opencode (reads generated.json -> .mcpServers). Runs after
 #     the AI tools are installed (step 4) and the runtime config exists (step 5).
-step "Configuring MCP servers for the AI tools"
-AI_TOOLS="${AI_TOOLS}" CLAUDE_USER="${CLAUDE_USER}" AGENT_HOME="${AGENT_HOME:-/opt/construct}" \
+run_step optional "Configuring MCP servers for the AI tools" \
+  env AI_TOOLS="${AI_TOOLS}" CLAUDE_USER="${CLAUDE_USER}" AGENT_HOME="${AGENT_HOME:-/opt/construct}" \
   WORKSPACE_ROOT="${WORKSPACE_ROOT}" \
-  bash "${REPO_DIR}/bin/configure-mcp.sh" \
-  || warn "WARNING: MCP configuration failed; continuing"
+  bash "${REPO_DIR}/bin/configure-mcp.sh"
 
 # 5b. Install the runtimes (node/python/dotnet) the selected projects declare.
 if [[ "${INSTALL_SDKS}" == "true" ]]; then
-  step "Installing project SDKs/runtimes"
-  bash "${REPO_DIR}/bin/install-sdks.sh"
+  run_step optional "Installing project SDKs/runtimes" bash "${REPO_DIR}/bin/install-sdks.sh"
 fi
 
 # 5c. Seed git credentials for cloning private repos, if the host supplied any.
@@ -278,11 +422,16 @@ fi
 #     (and are captured by a future config export).
 _clone_creds_file=""
 if [[ -n "${GIT_CLONE_CREDENTIALS}" ]]; then
-  step "Seeding git credentials for repo checkout"
-  _clone_creds_file="$(mktemp)"
-  chmod 600 "${_clone_creds_file}"
-  printf '%s\n' "${GIT_CLONE_CREDENTIALS}" >"${_clone_creds_file}"
-  if [[ "${GIT_CREDENTIAL_STORE}" == "true" ]]; then
+  _clone_creds_file="${_PROVISION_LOG_DIR}/clone-credentials"
+  seed_git_credentials() {
+    local creds_file="$1"
+    : >"${creds_file}" || return
+    chmod 600 "${creds_file}" || return
+    printf '%s\n' "${GIT_CLONE_CREDENTIALS}" >"${creds_file}" || return
+    if [[ "${GIT_CREDENTIAL_STORE}" != "true" ]]; then
+      note "git credentials will be used for checkout only (not persisted)"
+      return 0
+    fi
     _cred_seen=""
     for _gu in "${CLAUDE_USER}" "${SSH_USER}"; do
       [[ -n "${_gu}" ]] || continue
@@ -291,16 +440,17 @@ if [[ -n "${GIT_CLONE_CREDENTIALS}" ]]; then
       _gu_home="$(getent passwd "${_gu}" | cut -d: -f6)"
       [[ -n "${_gu_home}" ]] || continue
       _cf="${_gu_home}/.git-credentials"
-      touch "${_cf}"; chmod 600 "${_cf}"; chown "${_gu}:${_gu}" "${_cf}" 2>/dev/null || true
+      touch "${_cf}" || return
+      chmod 600 "${_cf}" || return
+      chown "${_gu}:${_gu}" "${_cf}" 2>/dev/null || true
       while IFS= read -r _line; do
         [[ -n "${_line}" ]] || continue
-        grep -qxF "${_line}" "${_cf}" 2>/dev/null || printf '%s\n' "${_line}" >>"${_cf}"
-      done <"${_clone_creds_file}"
+        grep -qxF "${_line}" "${_cf}" 2>/dev/null || printf '%s\n' "${_line}" >>"${_cf}" || return
+      done <"${creds_file}"
     done
     ok "git credentials stored for:${_cred_seen}"
-  else
-    note "git credentials will be used for checkout only (not persisted)"
-  fi
+  }
+  run_step optional "Seeding git credentials for repo checkout" seed_git_credentials "${_clone_creds_file}"
 fi
 
 # 6. Optionally check out project repos (needs Git auth on the VM). When clone
@@ -308,24 +458,14 @@ fi
 #    via GIT_CONFIG_* so the clone authenticates without an interactive prompt
 #    and without depending on a persisted store.
 if [[ "${CHECKOUT_PROJECTS}" == "true" ]]; then
-  step "Checking out project repos"
-  _checkout_rc=0
-  if [[ -n "${_clone_creds_file}" ]]; then
-    GIT_CONFIG_COUNT=1 \
-    GIT_CONFIG_KEY_0=credential.helper \
-    GIT_CONFIG_VALUE_0="store --file=${_clone_creds_file}" \
-      bash "${REPO_DIR}/bin/checkout-projects.sh" || _checkout_rc=$?
+  if [[ -n "${_clone_creds_file}" && -s "${_clone_creds_file}" ]]; then
+    run_step optional "Checking out project repos" \
+      env GIT_CONFIG_COUNT=1 \
+      GIT_CONFIG_KEY_0=credential.helper \
+      GIT_CONFIG_VALUE_0="store --file=${_clone_creds_file}" \
+      bash "${REPO_DIR}/bin/checkout-projects.sh"
   else
-    bash "${REPO_DIR}/bin/checkout-projects.sh" || _checkout_rc=$?
-  fi
-  if [[ "${_checkout_rc}" -ne 0 ]]; then
-    # Report on stdout (not only via warn -> stderr, which the provisioning log
-    # can drop) so a failed checkout is impossible to miss. The per-repo reasons
-    # were already streamed above by checkout-projects.sh.
-    step "Project checkout FAILED (exit ${_checkout_rc}) -- see the clone errors above"
-    note "    Most common cause: missing or invalid Git credentials for the private repo host."
-    note "    Fix the credentials, then re-run: bash ${REPO_DIR}/bin/checkout-projects.sh"
-    warn "WARNING: project checkout failed (Git auth not configured?)"
+    run_step optional "Checking out project repos" bash "${REPO_DIR}/bin/checkout-projects.sh"
   fi
 else
   # Say so out loud: a silent skip here has repeatedly read as "cloning is
@@ -338,16 +478,15 @@ fi
 
 # Drop the transient clone-credentials temp file (created above, used only for
 # the checkout). Persisted copies, if any, live in ~/.git-credentials.
-[[ -n "${_clone_creds_file}" ]] && rm -f "${_clone_creds_file}"
+if [[ -n "${_clone_creds_file}" ]]; then rm -f "${_clone_creds_file}" || true; fi
 
 # 6b. Run the custom provisioning commands the selected projects declare. Placed
 #     after the checkout so each command runs from inside its project's cloned
 #     repo, and after the SDKs (step 5b) so build/install steps find their
 #     runtimes. Runs every provision; a failing command warns but never aborts.
-step "Running project provisioning commands"
-WORKSPACE_ROOT="${WORKSPACE_ROOT}" AGENT_HOME="${AGENT_HOME:-/opt/construct}" \
-  bash "${REPO_DIR}/bin/run-provision-commands.sh" \
-  || warn "WARNING: one or more project provisioning commands failed; continuing"
+run_step optional "Running project provisioning commands" \
+  env WORKSPACE_ROOT="${WORKSPACE_ROOT}" AGENT_HOME="${AGENT_HOME:-/opt/construct}" \
+  bash "${REPO_DIR}/bin/run-provision-commands.sh"
 
 # 7. (Re)start the agent service. Use restart, NOT start: construct.service is
 #    Type=oneshot + RemainAfterExit=yes, so on a reprovision it is already "active"
@@ -357,8 +496,7 @@ WORKSPACE_ROOT="${WORKSPACE_ROOT}" AGENT_HOME="${AGENT_HOME:-/opt/construct}" \
 #    the freshly regenerated runtime/compose config live -- the job the post-provision
 #    reboot used to do. On a fresh install the unit is inactive and restart just starts it.
 if [[ "${START_SERVICE}" == "true" ]]; then
-  step "(Re)starting construct service"
-  systemctl restart construct
+  run_step optional "(Re)starting construct service" systemctl restart construct
 fi
 
 # 8. Install the VS Code CLI ("VS Code Server", for Remote-SSH) and -- when the
@@ -367,14 +505,13 @@ fi
 #    the (streamed) provisioning output shows; the host script then pauses for the
 #    sign-in before finishing (and, on a full install/reinstall, rebooting).
 if [[ "${VSCODE_SERVER}" == "true" ]]; then
-  step "Setting up VS Code server / serve-web / tunnel"
-  VSCODE_SERVER="${VSCODE_SERVER}" VSCODE_SERVE_WEB="${VSCODE_SERVE_WEB}" VSCODE_TUNNEL="${VSCODE_TUNNEL}" \
+  run_step optional "Setting up VS Code server / serve-web / tunnel" \
+    env VSCODE_SERVER="${VSCODE_SERVER}" VSCODE_SERVE_WEB="${VSCODE_SERVE_WEB}" VSCODE_TUNNEL="${VSCODE_TUNNEL}" \
     VSCODE_SERVE_WEB_TOKEN_B64="${VSCODE_SERVE_WEB_TOKEN_B64:-}" \
     VSCODE_CLIENT_COMMIT="${VSCODE_CLIENT_COMMIT:-}" \
     CLAUDE_PARTIAL_STREAMING="${CLAUDE_PARTIAL_STREAMING}" \
     MIC_PASSTHROUGH="${MIC_PASSTHROUGH}" \
-    bash "${REPO_DIR}/bin/install-vscode.sh" \
-    || warn "WARNING: VS Code setup failed; continuing"
+    bash "${REPO_DIR}/bin/install-vscode.sh"
 fi
 
 # 9. Record provisioning timestamps so the control panel can surface when this VM
@@ -385,16 +522,21 @@ fi
 #    it. Written last so it only records a provision that reached the end. The file
 #    is a config.env-style KEY=VALUE so config-set.sh's idempotent merge and the
 #    control panel's sed reader both handle it. Best-effort: never abort the run.
-step "Recording provisioning timestamps"
 MARKER_FILE="${MARKER_FILE:-/etc/construct/provisioned.env}"
-_now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 mark() { bash "${REPO_DIR}/bin/config-set.sh" "${MARKER_FILE}" "$1" "$2"; }
-if [[ -f "${MARKER_FILE}" ]] && grep -Eq '^INSTALLED_AT=.+' "${MARKER_FILE}"; then
-  note "    INSTALLED_AT preserved (first install unchanged)"
-else
-  mark INSTALLED_AT "${_now}" && note "    INSTALLED_AT=${_now}"
-fi
-mark REPROVISIONED_AT "${_now}" && note "    REPROVISIONED_AT=${_now}"
-chmod 0644 "${MARKER_FILE}" 2>/dev/null || true
+record_timestamps() {
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)" || return
+  if [[ -f "${MARKER_FILE}" ]] && grep -Eq '^INSTALLED_AT=.+' "${MARKER_FILE}"; then
+    note "    INSTALLED_AT preserved (first install unchanged)"
+  else
+    mark INSTALLED_AT "${now}" || return
+    note "    INSTALLED_AT=${now}"
+  fi
+  mark REPROVISIONED_AT "${now}" || return
+  note "    REPROVISIONED_AT=${now}"
+  chmod 0644 "${MARKER_FILE}"
+}
+run_step optional "Recording provisioning timestamps" record_timestamps
 
-ok "provision.sh complete"
+_finish_provision 0

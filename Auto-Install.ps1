@@ -175,11 +175,31 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# End-of-run pause. Skipped when launched from the control panel (-FromPanel): the
-# console closes on its own and the dashboard shows the result (in debug the launcher
-# keeps it open with -NoExit). A direct PowerShell run pauses so the window stays
-# readable. Used for every "Press Enter to exit" exit point below.
-function Wait-Exit { if (-not $FromPanel) { Read-Host "Press Enter to exit" | Out-Null } }
+# End-of-run pause. A clean control-panel run closes by itself; any provisioning
+# error prints the VM result again at the true end of the parent flow and forces a
+# pause so the panel-launched console cannot vanish before it is read.
+function Wait-Exit {
+    if ($global:ConstructProvisionHadErrors) {
+        $items = @($global:ConstructProvisionErrors)
+        Write-Host ""
+        Write-Host "============================================================" -ForegroundColor DarkGray
+        if ($global:ConstructProvisionFailureMessage) {
+            Write-Host "RESULT: PROVISIONING FAILED" -ForegroundColor Red
+        } else {
+            Write-Host ("RESULT: PROVISIONING COMPLETED WITH {0} ERROR(S)" -f $items.Count) -ForegroundColor Red
+        }
+        foreach ($item in $items) {
+            Write-Host ("  - {0} (exit {1})" -f $item.Title, $item.ExitCode) -ForegroundColor Red
+        }
+        if ($global:ConstructProvisionFailureMessage) {
+            Write-Host "  - $($global:ConstructProvisionFailureMessage)" -ForegroundColor Red
+        }
+        Write-Host "============================================================" -ForegroundColor DarkGray
+    }
+    if ((-not $FromPanel) -or $global:ConstructProvisionHadErrors) {
+        Read-Host "Press Enter to exit" | Out-Null
+    }
+}
 
 # Any terminating error NOT handled by a try/catch below (e.g. missing WSL,
 # virtualization disabled in firmware) would normally close the self-elevated

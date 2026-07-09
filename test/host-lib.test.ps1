@@ -23,6 +23,36 @@ function ok($name, $cond) {
     else { $script:fail++; Write-Host "  FAIL  $name" -ForegroundColor Red }
 }
 
+# ── provision.sh result sentinel parser ─────────────────────────────────────
+$esc = [char]27
+$parsed = ConvertFrom-ConstructProvisionResult -Lines @(
+    "unrelated live output",
+    "${esc}[31m===CONSTRUCT-PROVISION-RESULT===${esc}[0m",
+    "errors=2",
+    "error=Installing .NET SDK|7",
+    "error=code serve-web setup|12",
+    "===END-CONSTRUCT-PROVISION-RESULT===",
+    "human summary follows"
+)
+ok "provision result: finds ANSI-contaminated sentinel" ($parsed.Found -and $parsed.IsValid)
+ok "provision result: reads declared error count" ($parsed.ErrorCount -eq 2)
+ok "provision result: parses every title and exit code" (
+    $parsed.Errors.Count -eq 2 -and
+    $parsed.Errors[0].Title -eq "Installing .NET SDK" -and $parsed.Errors[0].ExitCode -eq 7 -and
+    $parsed.Errors[1].Title -eq "code serve-web setup" -and $parsed.Errors[1].ExitCode -eq 12)
+
+$cleanResult = ConvertFrom-ConstructProvisionResult -Lines @(
+    "===CONSTRUCT-PROVISION-RESULT===", "errors=0", "===END-CONSTRUCT-PROVISION-RESULT==="
+)
+ok "provision result: accepts exact clean sentinel" ($cleanResult.IsValid -and $cleanResult.ErrorCount -eq 0 -and $cleanResult.Errors.Count -eq 0)
+
+$badResult = ConvertFrom-ConstructProvisionResult -Lines @(
+    "===CONSTRUCT-PROVISION-RESULT===", "errors=2", "error=only one|1", "===END-CONSTRUCT-PROVISION-RESULT==="
+)
+ok "provision result: rejects count mismatch" ($badResult.Found -and -not $badResult.IsValid)
+$missingResult = ConvertFrom-ConstructProvisionResult -Lines @("ordinary output")
+ok "provision result: missing sentinel is not found" (-not $missingResult.Found -and -not $missingResult.IsValid)
+
 # ── Get-RemoteOpenLink ───────────────────────────────────────────────────────
 ok "link: default alias + workspace root" ((Get-RemoteOpenLink) -eq "vscode://vscode-remote/ssh-remote+agent-vm/root/repos")
 ok "link: strips the DNS suffix to the alias" ((Get-RemoteOpenLink -VmHost "agent-vm.mshome.net") -eq "vscode://vscode-remote/ssh-remote+agent-vm/root/repos")

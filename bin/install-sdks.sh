@@ -124,10 +124,37 @@ EOF
 }
 
 installed_any=false
-if want node;   then install_node   "$(first_ver node)";   installed_any=true; fi
-if want python; then install_python "$(first_ver python)"; installed_any=true; fi
-if want dotnet; then install_dotnet "$(first_ver dotnet)"; installed_any=true; fi
+failed=0
+run_runtime() {
+  local title="$1" fn="$2" ver="$3" rc
+  set +e
+  ( set -e; "${fn}" "${ver}" )
+  rc=$?
+  set -e
+  if [[ "${rc}" -ne 0 ]]; then
+    warn "${title} failed (exit ${rc}); continuing with the remaining runtimes"
+    failed=$((failed + 1))
+  fi
+}
+
+if want node; then
+  installed_any=true
+  run_runtime "Node.js runtime installation" install_node "$(first_ver node)"
+fi
+if want python; then
+  installed_any=true
+  run_runtime "Python runtime installation" install_python "$(first_ver python)"
+fi
+if want dotnet; then
+  installed_any=true
+  run_runtime ".NET runtime installation" install_dotnet "$(first_ver dotnet)"
+fi
 
 if [[ "${installed_any}" != "true" ]]; then
   note "No node/python/dotnet runtimes requested by the selected projects."
+fi
+
+if [[ "${failed}" -gt 0 ]]; then
+  err "${failed} requested runtime(s) failed to install"
+  exit 1
 fi

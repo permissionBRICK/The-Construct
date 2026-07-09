@@ -146,10 +146,9 @@ param(
     # (an upper script pre-answers everything).
     [switch]$NonInteractive,
     # Launched from the control-panel extension: skip the end-of-run "Press Enter to
-    # exit" pause so the console closes on its own and the dashboard (which auto-
-    # refreshes) shows the result. In debug the launcher keeps the console open with
-    # -NoExit regardless. A direct PowerShell run leaves this off and pauses so the
-    # window stays readable before it closes.
+    # exit" pause only when provisioning is fully clean. Optional or critical errors
+    # always force the pause so the result remains readable. A direct PowerShell run
+    # leaves this off and pauses as usual.
     [switch]$FromPanel
 )
 
@@ -190,10 +189,14 @@ $BootstrapPubKey = Join-Path $PSScriptRoot "keys\bootstrap_ed25519.pub"
 function Write-Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)   { Write-Host "    $msg" -ForegroundColor Green }
 
-# Shared helpers: persisted settings + git-identity resolution. Optional -- if the
-# lib isn't alongside this script we fall back to the passed-in values below.
+# Shared helpers: persisted settings, git-identity resolution, and the provision
+# result parser. The parser is required for provisioning; export-only helpers keep
+# their existing degraded fallbacks when the library is unavailable.
 $commonLib = Join-Path $PSScriptRoot "lib\AgentVm.Common.ps1"
 if (Test-Path -LiteralPath $commonLib) { . $commonLib }
+if ($Action -eq 'provision' -and -not (Get-Command ConvertFrom-ConstructProvisionResult -ErrorAction SilentlyContinue)) {
+    throw "Required host helper library is missing or invalid: $commonLib"
+}
 
 # --- Dependencies -----------------------------------------------------------
 
@@ -379,8 +382,15 @@ function Invoke-SshStream {
     # Like Invoke-Ssh, but streams the remote command's combined stdout/stderr to
     # the console line-by-line as it arrives instead of buffering and returning it
     # all at once. Use this for long-running steps (e.g. provision.sh) so the user
-    # sees live progress. Throws on a non-zero remote exit code.
-    param([Parameter(Mandatory)][string]$Command, [switch]$Sudo)
+    # sees live progress. Throws on a non-zero remote exit code unless -NoThrow;
+    # -PassThru returns the exit code plus every displayed line for protocol
+    # parsers without changing the live console behaviour.
+    param(
+        [Parameter(Mandatory)][string]$Command,
+        [switch]$Sudo,
+        [switch]$PassThru,
+        [switch]$NoThrow
+    )
     # Keep colour but stay non-interactive: a colour-capable TERM plus FORCE_COLOR/
     # CLICOLOR_FORCE makes tools emit SGR colour even though stdout isn't a tty
     # (so they still skip animated progress bars). DEBIAN_FRONTEND keeps apt quiet.
@@ -403,14 +413,20 @@ function Invoke-SshStream {
     # class [@-ln-~] is @..~ with 'm' (0x6D) carved out.
     $esc    = [char]27
     $ansiRe = [regex]([regex]::Escape($esc) + '\[[0-9;?]*[ -/]*[@-ln-~]')
+    $lines = New-Object System.Collections.Generic.List[string]
     $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
     & ssh.exe -n @script:SshOpts "$($script:ConnectUser)@$VmHost" $toRun 2>&1 | ForEach-Object {
-        Write-Host ((([string]$_) -replace "`r", "") -replace $ansiRe, "")
+        $displayLine = ((([string]$_) -replace "`r", "") -replace $ansiRe, "")
+        $lines.Add($displayLine)
+        Write-Host $displayLine
     }
     $exitCode = $LASTEXITCODE
     $ErrorActionPreference = $prevEAP
-    if ($exitCode -ne 0) {
+    if ($exitCode -ne 0 -and -not $NoThrow) {
         throw "Remote command failed (exit $exitCode): $Command"
+    }
+    if ($PassThru) {
+        return [pscustomobject]@{ ExitCode = $exitCode; Lines = [string[]]$lines }
     }
 }
 
@@ -1093,6 +1109,41 @@ function Select-Projects {
 # Main
 # ============================================================================
 
+$script:ProvisionResult = $null
+$script:ProvisionFailureMessage = ""
+if ($Action -eq 'provision') {
+    $global:ConstructProvisionHadErrors = $false
+    $global:ConstructProvisionErrors = @()
+    $global:ConstructProvisionFailureMessage = ""
+}
+
+function Show-ProvisionResultScreen {
+    param(
+        [AllowNull()]$Result,
+        [string]$FailureMessage = ""
+    )
+
+    Write-Host ""
+    Write-Host "============================================================" -ForegroundColor DarkGray
+    if ($FailureMessage) {
+        Write-Host "RESULT: PROVISIONING FAILED" -ForegroundColor Red
+    } elseif ($Result -and $Result.ErrorCount -gt 0) {
+        Write-Host ("RESULT: PROVISIONING COMPLETED WITH {0} ERROR(S)" -f $Result.ErrorCount) -ForegroundColor Red
+    } else {
+        Write-Host "RESULT: VM PROVISIONED CLEANLY" -ForegroundColor Green
+    }
+
+    if ($Result) {
+        foreach ($item in @($Result.Errors)) {
+            Write-Host ("  - {0} (exit {1})" -f $item.Title, $item.ExitCode) -ForegroundColor Red
+        }
+    }
+    if ($FailureMessage) {
+        Write-Host "  - $FailureMessage" -ForegroundColor Red
+    }
+    Write-Host "============================================================" -ForegroundColor DarkGray
+}
+
 # Run the whole flow inside try/finally so that, when launched on its own (not
 # -Auto), the window pauses at the end -- on success OR error -- instead of
 # closing before the output can be read. In -Auto mode the calling script owns
@@ -1457,9 +1508,27 @@ if (-not $checkoutArg) {
 }
 $envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit' SMB_SHARE='$SmbShare' CLAUDE_PARTIAL_STREAMING='$ClaudePartialStreaming' MIC_PASSTHROUGH='$MicPassthrough'"
 Write-Host "  --- live provisioning output ---" -ForegroundColor DarkGray
-Invoke-SshStream -Sudo -Command "$envPrefix bash /opt/construct/repo/bin/provision.sh"
+$provisionStream = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "$envPrefix bash /opt/construct/repo/bin/provision.sh"
 Write-Host "  --- end provisioning output ---" -ForegroundColor DarkGray
-Write-Ok "Provisioning finished"
+$script:ProvisionResult = ConvertFrom-ConstructProvisionResult -Lines $provisionStream.Lines
+$global:ConstructProvisionErrors = @($script:ProvisionResult.Errors)
+if (-not $script:ProvisionResult.IsValid) {
+    throw "VM provisioner did not emit a valid result sentinel (remote exit $($provisionStream.ExitCode))."
+}
+if ($provisionStream.ExitCode -eq 3) {
+    if ($script:ProvisionResult.ErrorCount -eq 0) {
+        throw "VM provisioner exited 3 but reported no optional failures."
+    }
+    $global:ConstructProvisionHadErrors = $true
+    Write-Host ("    Provisioning reached the end with {0} optional error(s); host setup will continue." -f $script:ProvisionResult.ErrorCount) -ForegroundColor Yellow
+} elseif ($provisionStream.ExitCode -ne 0) {
+    $global:ConstructProvisionHadErrors = $true
+    throw "VM provisioning failed in a critical step (remote exit $($provisionStream.ExitCode))."
+} elseif ($script:ProvisionResult.ErrorCount -ne 0) {
+    throw "VM provisioner exited 0 but reported $($script:ProvisionResult.ErrorCount) failure(s)."
+} else {
+    Write-Ok "Provisioning finished cleanly"
+}
 
 # Restore a saved config onto the freshly provisioned VM (the reinstall
 # auto-restore). Done AFTER provision.sh so the user's saved instruction/config
@@ -1830,6 +1899,11 @@ Write-Host ""
 
 }
 catch {
+    $script:ProvisionFailureMessage = $_.Exception.Message
+    if ($Action -eq 'provision') {
+        $global:ConstructProvisionHadErrors = $true
+        $global:ConstructProvisionFailureMessage = $script:ProvisionFailureMessage
+    }
     # Standalone: show the failure above our own pause (readable even on a
     # double-click run). Chained (-Auto): rethrow so the upper script owns the
     # single error display + pause.
@@ -1838,11 +1912,13 @@ catch {
     Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
 }
 finally {
-    # Pause only for a direct PowerShell run so the window stays readable. An upper
-    # script (-Auto) owns its own pause, and a control-panel launch (-FromPanel) skips
-    # it entirely: the console closes and the dashboard shows the result (in debug the
-    # launcher's -NoExit keeps the console open regardless).
-    if (-not $Auto -and -not $FromPanel) {
+    if ($Action -eq 'provision') {
+        Show-ProvisionResultScreen -Result $script:ProvisionResult -FailureMessage $script:ProvisionFailureMessage
+    }
+    # An upper script (-Auto) owns the single final pause. Direct runs pause as
+    # before; panel runs skip it only when fully clean so errors cannot disappear
+    # with the console window.
+    if (-not $Auto -and ((-not $FromPanel) -or $global:ConstructProvisionHadErrors)) {
         Write-Host ""
         Read-Host "Press Enter to exit"
     }
