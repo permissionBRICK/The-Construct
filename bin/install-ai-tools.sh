@@ -23,6 +23,10 @@ note() { printf '%s%s%s\n'     "${_C_DIM}"  "$*" "${_C_RESET}"; }
 
 CONFIG_FILE="${CONFIG_FILE:-/etc/construct/config.env}"
 REPO_DIR="${REPO_DIR:-/opt/construct/repo}"
+# provision.sh invokes this once per selected tool. Preserve that override across
+# sourcing config.env, whose saved AI_TOOLS value otherwise replaces the caller's.
+AI_TOOLS_OVERRIDE="${AI_TOOLS_OVERRIDE:-}"
+AI_CONSOLE_INTEGRATION="${AI_CONSOLE_INTEGRATION:-true}"
 # The user that Claude Code (CLI + VS Code extension) is installed and
 # configured for. Defaults to the invoking sudo user, falling back to root, but
 # can be overridden (e.g. by provision.sh, which forces root for VS Code use).
@@ -43,7 +47,7 @@ set -a
 . "${CONFIG_FILE}"
 set +a
 
-AI_TOOLS="${AI_TOOLS:-}"
+AI_TOOLS="${AI_TOOLS_OVERRIDE:-${AI_TOOLS:-}}"
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-/root/repos}"
 OPENCODE_HOST="${OPENCODE_HOST:-0.0.0.0}"
 OPENCODE_PORT="${OPENCODE_PORT:-4096}"
@@ -135,7 +139,7 @@ install_opencode() {
   fi
   if [[ -z "${opencode_bin}" ]]; then
     warn "opencode install completed, but binary was not found in PATH or common locations"
-    exit 1
+    return 1
   fi
 
   # Resolve through any intermediate symlinks so the link target is the real
@@ -143,7 +147,7 @@ install_opencode() {
   opencode_bin="$(readlink -f "${opencode_bin}" 2>/dev/null || echo "${opencode_bin}")"
   if [[ "${opencode_bin}" == "/usr/local/bin/opencode" || ! -x "${opencode_bin}" ]]; then
     warn "refusing to create opencode symlink: resolved path is invalid (${opencode_bin})"
-    exit 1
+    return 1
   fi
   ln -sf "${opencode_bin}" /usr/local/bin/opencode
 
@@ -447,11 +451,11 @@ install_codex() {
   fi
   if [[ -z "${codex_target}" ]]; then
     err "Codex install completed, but no codex binary was found (checked PATH, /root/.local/bin, /root/.codex/bin, /usr/local, /usr/lib/node_modules)"
-    exit 1
+    return 1
   fi
   if [[ ! -x "${codex_target}" ]]; then
     err "refusing to create codex symlink: resolved path is invalid (${codex_target})"
-    exit 1
+    return 1
   fi
   if [[ "${codex_target}" != "/usr/local/bin/codex" ]]; then
     ln -sf "${codex_target}" /usr/local/bin/codex
@@ -488,26 +492,51 @@ install_codex() {
   install_agent_system_prompt "${codex_home}/.codex/AGENTS.md" "${codex_owner}"
 }
 
+failed=0
+run_tool() {
+  local title="$1" fn="$2" rc
+  # The parent temporarily disables errexit only around the subshell status
+  # collection. The subshell re-enables it so a bare failure inside one installer
+  # stops that tool without stopping the later independent tools.
+  set +e
+  ( set -e; "${fn}" )
+  rc=$?
+  set -e
+  if [[ "${rc}" -ne 0 ]]; then
+    warn "${title} failed (exit ${rc}); continuing with the remaining AI tools"
+    failed=$((failed + 1))
+  fi
+}
+
 if has_tool opencode; then
-  install_opencode
+  run_tool "opencode installation" install_opencode
 fi
 
 if has_tool claude-code; then
-  install_claude_code
+  run_tool "Claude Code installation" install_claude_code
 fi
 
 if has_tool codex; then
-  install_codex
+  run_tool "Codex installation" install_codex
 fi
 
 if has_tool pi; then
   warn "pi selected, but no installer is implemented yet. Selection is recorded in ${CONFIG_FILE}."
 fi
 
-install -m 0755 "${REPO_DIR}/bin/print-connection-info.sh" /usr/local/bin/construct-print-connection-info
-install -m 0644 "${REPO_DIR}/systemd/construct-console-info.service" /etc/systemd/system/construct-console-info.service
-systemctl daemon-reload
-systemctl enable construct-console-info
+configure_console_info() {
+  install -m 0755 "${REPO_DIR}/bin/print-connection-info.sh" /usr/local/bin/construct-print-connection-info
+  install -m 0644 "${REPO_DIR}/systemd/construct-console-info.service" /etc/systemd/system/construct-console-info.service
+  systemctl daemon-reload
+  systemctl enable construct-console-info
+  "${REPO_DIR}/bin/update-login-banner.sh"
+  "${REPO_DIR}/bin/print-connection-info.sh"
+}
+if [[ "${AI_CONSOLE_INTEGRATION}" == "true" ]]; then
+  run_tool "AI tool console integration" configure_console_info
+fi
 
-"${REPO_DIR}/bin/update-login-banner.sh"
-"${REPO_DIR}/bin/print-connection-info.sh"
+if [[ "${failed}" -gt 0 ]]; then
+  err "${failed} AI tool area(s) failed"
+  exit 1
+fi

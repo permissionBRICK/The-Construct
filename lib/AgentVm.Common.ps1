@@ -34,6 +34,59 @@ function Test-ConstructTui {
     return ($script:ConstructTuiActive -and -not [Console]::IsInputRedirected)
 }
 
+function ConvertFrom-ConstructProvisionResult {
+    <#
+        Parse provision.sh's uncoloured sentinel block without consulting any
+        process/global state. ANSI stripping is defensive: some SSH/console
+        layers can leave SGR sequences around otherwise plain sentinel lines.
+    #>
+    [CmdletBinding()]
+    param([AllowNull()][AllowEmptyCollection()][string[]]$Lines)
+
+    $clean = New-Object System.Collections.Generic.List[string]
+    $ansi = [regex]'\x1B\[[0-?]*[ -/]*[@-~]'
+    foreach ($line in @($Lines)) {
+        $clean.Add(($ansi.Replace(([string]$line), '') -replace "`r", ''))
+    }
+
+    $start = -1
+    $end = -1
+    for ($i = 0; $i -lt $clean.Count; $i++) {
+        if ($clean[$i] -eq '===CONSTRUCT-PROVISION-RESULT===') {
+            $start = $i
+            $end = -1
+        } elseif ($start -ge 0 -and $clean[$i] -eq '===END-CONSTRUCT-PROVISION-RESULT===') {
+            $end = $i
+        }
+    }
+
+    $errors = New-Object System.Collections.Generic.List[object]
+    $declared = -1
+    if ($start -ge 0 -and $end -gt $start) {
+        for ($i = $start + 1; $i -lt $end; $i++) {
+            if ($clean[$i] -match '^errors=([0-9]+)$') {
+                $declared = [int]$Matches[1]
+            } elseif ($clean[$i] -match '^error=([^|]*)\|(-?[0-9]+)$') {
+                $errors.Add([pscustomobject]@{
+                    Title = $Matches[1]
+                    ExitCode = [int]$Matches[2]
+                })
+            }
+        }
+    }
+
+    $found = ($start -ge 0 -and $end -gt $start)
+    $errorCount = 0
+    if ($declared -ge 0) { $errorCount = $declared }
+    $errorItems = [object[]]$errors
+    [pscustomobject]@{
+        Found = $found
+        IsValid = ($found -and $declared -ge 0 -and $declared -eq $errors.Count)
+        ErrorCount = $errorCount
+        Errors = $errorItems
+    }
+}
+
 function Show-ConstructHeader {
     <#
         Matrix-style header: green "digital rain" (random 0/1 -- ASCII only, so

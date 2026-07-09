@@ -142,8 +142,12 @@ systemctl daemon-reload
 systemctl enable construct
 systemctl enable construct-console-info
 
-step "Generating runtime config"
-"${REPO_DIR}/bin/generate-runtime-config.sh"
+if [[ "${CONSTRUCT_SKIP_RUNTIME_GENERATION:-false}" == "true" ]]; then
+  note "Runtime config generation deferred to provision.sh"
+else
+  step "Generating runtime config"
+  "${REPO_DIR}/bin/generate-runtime-config.sh"
+fi
 
 ok "Bootstrap complete."
 cat <<EOF

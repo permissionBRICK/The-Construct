@@ -646,10 +646,49 @@ note "Remote-SSH will use this binary; 'code serve-web' / 'code tunnel' are avai
 # build (via find_or_fetch_code_server) instead of downloading its own copy.
 preinstall_remote_ssh_server || true   # best-effort: never let it abort serve-web/tunnel
 preinstall_extensions || true          # best-effort: never let it abort serve-web/tunnel
-setup_serve_web
-setup_tunnel
+
+failed=0
+run_vscode_component() {
+  local title="$1" fn="$2" rc
+  set +e
+  ( set -e; "${fn}" )
+  rc=$?
+  set -e
+  if [[ "${rc}" -ne 0 ]]; then
+    warn "${title} failed (exit ${rc}); continuing with the remaining VS Code components"
+    failed=$((failed + 1))
+  fi
+}
+
+run_vscode_component "code serve-web setup" setup_serve_web
+run_vscode_component "code tunnel setup" setup_tunnel
+
+# Component isolation runs each setup in a subshell, so reconstruct the status
+# globals from durable files/services before writing the host-readable result.
+if [[ "${VSCODE_SERVE_WEB}" == "true" && -s "${VSCODE_SERVE_WEB_TOKEN_FILE}" ]] \
+   && systemctl is-enabled --quiet code-serve-web 2>/dev/null; then
+  SERVE_WEB_ENABLED="yes"
+  SERVE_WEB_TOKEN="$(tr -d ' \n' <"${VSCODE_SERVE_WEB_TOKEN_FILE}")"
+  SERVE_WEB_URL="http://localhost:${VSCODE_SERVE_WEB_PORT}"
+fi
+if [[ -f "${TUNNEL_UNIT_FILE}" ]] || systemctl is-enabled --quiet code-tunnel 2>/dev/null; then
+  TUNNEL_DEPLOYED="yes"
+  TUNNEL_NAME="$(sanitize_tunnel_name "${VSCODE_TUNNEL_NAME:-$(hostname)}")"
+  TUNNEL_URL="https://vscode.dev/tunnel/${TUNNEL_NAME}"
+  if tunnel_is_registered; then
+    TUNNEL_AUTHED="yes"
+  elif [[ "${VSCODE_TUNNEL}" == "true" ]]; then
+    TUNNEL_LOGIN="$(journalctl -u code-tunnel -o cat --no-pager -n 200 2>/dev/null | grep -Ei 'github\.com/login/device|microsoft\.com/devicelogin|use code|grant access' | tail -n1 || true)"
+    [[ -n "${TUNNEL_LOGIN}" ]] && TUNNEL_NEEDS_SIGNIN="yes"
+  fi
+fi
 
 # Refresh the login banner so SSH/console logins reflect the current state.
 "${REPO_DIR}/bin/update-login-banner.sh" 2>/dev/null || true
 
 write_status
+
+if [[ "${failed}" -gt 0 ]]; then
+  err "${failed} VS Code component(s) failed"
+  exit 1
+fi
