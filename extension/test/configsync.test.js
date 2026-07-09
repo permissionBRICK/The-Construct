@@ -563,6 +563,10 @@ async function runTests() {
     ok("mass-del: tick ok", massDel.ok);
     ok("mass-del: warned about refusing", massDel.warnings.some((w) => w.includes("mass deletion")));
     ok("mass-del: web survives on host", readProfile(configDir, "web") !== null);
+    // The guard must re-seed the emptied store instead of stalling forever
+    // (rebuilt-VM case: provisioning recreates the dir before the first seed).
+    ok("mass-del: store re-seeded from main", readStoreProfile(storeDir, "web") !== null);
+    ok("mass-del: reported seeded", massDel.seeded === true);
 
     // Same guard when the store holds only an INVALID file (zero valid reads).
     fs.writeFileSync(path.join(storeDir, "web.json"), "{ not json");
@@ -574,6 +578,10 @@ async function runTests() {
     });
     ok("mass-del: invalid-only store also refused", invOnly.ok && invOnly.warnings.some((w) => w.includes("mass deletion")));
     ok("mass-del: web still on host after invalid-only read", readProfile(configDir, "web") !== null);
+    // The absent-guard must protect the invalid file from the re-seed write.
+    ok("mass-del: invalid store file preserved by absent-guard",
+      fs.readFileSync(path.join(storeDir, "web.json"), "utf8") === "{ not json");
+    ok("mass-del: invalid-only tick not reported seeded", invOnly.seeded !== true);
 
     // ── syncTick honors the cross-process lock ───────────────────────────────
     const tickToken = cs.acquireSyncLock(configDir);
@@ -675,13 +683,18 @@ async function runTests() {
       writeStore: makeWriteStore(),
       storeRoot: storeDir,
     });
-    // Must NOT seed (would resurrect the deleted profile on the VM)...
-    ok("vm-single-del: not seeded (not a fresh VM)", !result2.seeded);
     ok("vm-single-del: tick ok", result2.ok);
-    // ...and must NOT propagate a to-zero deletion either: guard refuses.
+    // Must NOT propagate a to-zero deletion: guard refuses and main keeps it.
     ok("vm-single-del: refused with mass-deletion warning", result2.warnings.some((w) => w.includes("mass deletion")));
     ok("vm-single-del: profile kept on main", readProfile(configDir, "web") !== null);
-    ok("vm-single-del: store stays empty (no resurrection)", readStoreProfile(storeDir, "web") === null);
+    // INTENT CHANGE (rebuilt-VM stall fix): the guard now re-seeds the emptied
+    // store from main. A zero-valid store with a non-empty vm branch is
+    // indistinguishable from a rebuilt/wiped VM, and leaving it empty stalled
+    // every later tick (observed in the field: a reinstalled VM never got its
+    // profiles back). The cost: rm-ing the LAST profile on the VM resurrects
+    // it — delete the last profile from the panel/host instead.
+    ok("vm-single-del: store re-seeded from main", readStoreProfile(storeDir, "web") !== null);
+    ok("vm-single-del: reported seeded", result2.seeded === true);
   } finally { fs.rmSync(vmSingleDelRoot, { recursive: true, force: true }); }
 
   // ── D13 store-absent after host-only commit (regression: Fix 1) ────────────

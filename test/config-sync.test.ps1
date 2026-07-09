@@ -591,6 +591,10 @@ try {
     ok "mass-del: tick ok" $rMd.Ok
     ok "mass-del: refused with warning" (@($rMd.Warnings | Where-Object { $_ -match "mass deletion" }).Count -gt 0)
     ok "mass-del: host proj-a preserved" (Test-Path -LiteralPath (Join-Path $configDir "projects/proj-a.json"))
+    # The guard must re-seed the emptied store instead of stalling forever
+    # (rebuilt-VM case: provisioning recreates the dir before the first seed).
+    ok "mass-del: store re-seeded from main" (Test-Path -LiteralPath $vmFile9)
+    ok "mass-del: reported seeded" ($rMd.Seeded -eq $true)
     # Restore the store copy for anything that follows.
     [System.IO.File]::WriteAllText($vmFile9, $projAFixed, $utf8NoBom)
 
