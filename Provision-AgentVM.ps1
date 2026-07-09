@@ -646,6 +646,20 @@ function New-RepoArchive {
 
 # --- Host-side configuration ------------------------------------------------
 
+function Protect-SshFile {
+    param([Parameter(Mandatory)][string]$Path)
+    # OpenSSH refuses a private key or ~/.ssh/config that other accounts can
+    # read, or that a different account OWNS ("Bad owner or permissions") --
+    # seen in the field when another admin account created ~/.ssh, whose
+    # inherited ACEs then leaked onto our files. Owner-only: the current user
+    # owns the file and holds the sole ACE (inheritance severed). WriteAllText
+    # into a pre-existing file keeps the old owner, so /setowner is needed even
+    # for files we just wrote.
+    & icacls $Path /setowner "$($env:USERNAME)" /C /Q | Out-Null
+    & icacls $Path /inheritance:r | Out-Null
+    & icacls $Path /grant:r "$($env:USERNAME):F" | Out-Null
+}
+
 function Set-HostSshConfig {
     param([string]$PrivateKeyText)
 
@@ -656,8 +670,7 @@ function Set-HostSshConfig {
     $keyPath = Join-Path $sshDir $LocalKeyName
     $normalized = ($PrivateKeyText -replace "`r`n", "`n").TrimEnd("`n") + "`n"
     [System.IO.File]::WriteAllText($keyPath, $normalized)
-    & icacls $keyPath /inheritance:r | Out-Null
-    & icacls $keyPath /grant:r "$($env:USERNAME):F" | Out-Null
+    Protect-SshFile $keyPath
     Write-Ok "Wrote private key: $keyPath"
 
     # known_hosts - remove ALL stale entries for this VM (full hostname AND the
@@ -721,6 +734,7 @@ Host $HostAlias
         [System.IO.File]::WriteAllText($cfg, $block + "`r`n")
         Write-Ok "Added Host '$HostAlias' to $cfg"
     }
+    Protect-SshFile $cfg
     return $keyPath
 }
 
@@ -1121,6 +1135,15 @@ if ($Action -eq 'provision') {
 
 Ensure-Tar
 Ensure-OpenSSH
+
+# A ~/.ssh/config (or saved key) with a foreign owner or extra-user ACEs makes
+# OpenSSH abort EVERY invocation ("Bad owner or permissions") -- including this
+# script's own ssh/scp calls below -- so repair the ACLs before the first
+# connection attempt, not just when the files are (re)written at the end.
+foreach ($f in @((Join-Path $HOME ".ssh\config"), (Join-Path $HOME ".ssh\$LocalKeyName"))) {
+    if (Test-Path -LiteralPath $f) { Protect-SshFile $f }
+}
+
 $archivePath = New-RepoArchive
 Ensure-VmReachable
 

@@ -749,6 +749,17 @@ try {
     else { Remove-Item Env:\LOCALAPPDATA -ErrorAction SilentlyContinue }
 }
 
+# ── Repair-ConstructConfigOwnership ──────────────────────────────────────────
+# Windows-only (git "dubious ownership" repair via icacls); on this box it must
+# exist, no-op without throwing, and leave Initialize-ConstructConfigStore
+# (which now calls it on every run) working.
+ok "ownership: function exists" ((Get-Command Repair-ConstructConfigOwnership -ErrorAction SilentlyContinue) -ne $null)
+try {
+    Repair-ConstructConfigOwnership -Path "/tmp"
+    Repair-ConstructConfigOwnership -Path "/nonexistent-path-xyz"
+    ok "ownership: no-ops on non-Windows without throwing" $true
+} catch { ok "ownership: no-ops on non-Windows without throwing" $false }
+
 # ── Test-ConstructGitAvailable ───────────────────────────────────────────────
 ok "git-available: true on this box" (Test-ConstructGitAvailable)
 

@@ -1655,8 +1655,43 @@ function Initialize-ConstructConfigStore {
             New-Item -ItemType Directory -Path $d -Force | Out-Null
         }
     }
+    Repair-ConstructConfigOwnership -Path $configDir
 
     return $configDir
+}
+
+function Repair-ConstructConfigOwnership {
+    <#
+        git refuses to use a repo whose top-level folder is owned by another
+        account ("fatal: detected dubious ownership"), which silently breaks
+        every sync tick -- this engine's AND the VS Code extension's, which runs
+        non-elevated. That state arises when the config dir was created by an
+        elevated installer (owner becomes BUILTIN\Administrators) or by a
+        different admin account. Repair: make the invoking user the owner
+        (recursively, so a pre-existing .git is covered too) and grant them
+        FullControl. Best-effort -- on failure warn with the manual command and
+        let provisioning continue; the sync engines report the precise git
+        error if it still bites.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Path)
+
+    if ($env:OS -ne 'Windows_NT') { return }
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    $owner = $null
+    try {
+        $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+        $owner = (Get-Acl -LiteralPath $Path).Owner
+        if ($owner -and ($owner -ieq $me)) { return }
+        & icacls $Path /setowner $me /T /C /Q 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "icacls /setowner exited $LASTEXITCODE" }
+        & icacls $Path /grant "${me}:(OI)(CI)F" /Q 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "icacls /grant exited $LASTEXITCODE" }
+        Write-Verbose "Repaired config dir ownership: $Path (was: $owner, now: $me)"
+    } catch {
+        Write-Warning ("Config dir '$Path' is owned by '$owner', not '$env:USERNAME', and could not be repaired ($($_.Exception.Message)). " +
+            "git will refuse to sync it (""dubious ownership""). Fix manually from an elevated prompt: icacls ""$Path"" /setowner ""$env:USERNAME"" /T")
+    }
 }
 
 function Get-ConstructConfigProjectsDir {
