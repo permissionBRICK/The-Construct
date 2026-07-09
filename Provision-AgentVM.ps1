@@ -1295,6 +1295,43 @@ if (Get-Command Initialize-ConstructConfigStore -ErrorAction SilentlyContinue) {
         (Get-Command Initialize-ConstructConfigRepo -ErrorAction SilentlyContinue)) {
         Initialize-ConstructConfigRepo -ConfigDir $syncConfigDir | Out-Null
     }
+
+    # Backstop (spec section 9): fold profiles captured in the reinstall backup
+    # back into the host config repo BEFORE the sync tick. Normally the pre-wipe
+    # tick already carried the VM's profiles home; but when it could not (VM
+    # unreachable, git hiccup, sync never having worked on this host), the
+    # backup's extracted store copy is the ONLY surviving source -- without this
+    # merge a reinstall provisions a blank store and every profile silently
+    # vanishes (observed in the field). Additive only: an existing host profile
+    # of the same name always wins, reserved names and invalid files are skipped.
+    if ($RestoreDir) {
+        $bkProjDir  = Join-Path $RestoreDir "extracted\projects"
+        $cfgProjDir = Join-Path $syncConfigDir "projects"
+        if (Test-Path -LiteralPath $bkProjDir) {
+            $restoredProfiles = @()
+            foreach ($f in @(Get-ChildItem -LiteralPath $bkProjDir -Filter *.json -File -ErrorAction SilentlyContinue)) {
+                $bkName = $f.BaseName
+                if ($script:RESERVED_PROFILE_NAMES -contains $bkName.ToLowerInvariant()) { continue }
+                if (Test-Path -LiteralPath (Join-Path $cfgProjDir "$bkName.json")) { continue }
+                try { $bkObj = Get-Content -LiteralPath $f.FullName -Raw | ConvertFrom-Json } catch {
+                    Write-Warning "Backup profile '$bkName' is not valid JSON; not restored"
+                    continue
+                }
+                if (Get-Command Test-ConstructProfile -ErrorAction SilentlyContinue) {
+                    $bkValid = Test-ConstructProfile -Name $bkName -Object $bkObj
+                    if (-not $bkValid.Ok) {
+                        Write-Warning "Backup profile '$bkName' failed validation ($($bkValid.Errors -join '; ')); not restored"
+                        continue
+                    }
+                }
+                Copy-Item -LiteralPath $f.FullName -Destination (Join-Path $cfgProjDir "$bkName.json") -Force
+                $restoredProfiles += $bkName
+            }
+            if ($restoredProfiles.Count -gt 0) {
+                Write-Ok "Restored $($restoredProfiles.Count) project profile(s) from the backup into the host config: $($restoredProfiles -join ', ')"
+            }
+        }
+    }
     if (Get-Command Invoke-ConstructConfigSync -ErrorAction SilentlyContinue) {
         # Snapshot host profiles so anything the tick brings UP from the VM (an
         # agent-created profile) can join this run's selection below.
