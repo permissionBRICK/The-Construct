@@ -411,38 +411,51 @@ install_codex() {
     note "Codex already installed"
   fi
 
+  # Resolve the binary /usr/local/bin/codex should point at, then link it there
+  # as the stable PATH location (the codex-app-server unit execs it). command -v
+  # may report: our own symlink from a previous provision, an npm global shim
+  # (with Ubuntu's apt npm the global prefix is /usr/local, so the shim itself
+  # IS /usr/local/bin/codex -- a symlink into .../node_modules/@openai/codex/),
+  # or the official installer's path. Resolving THROUGH the link chain handles
+  # all of them; only a circular/broken chain (the historical self-symlink,
+  # which made codex --version fail with ELOOP and codex-app-server 203/EXEC)
+  # is discarded and repaired from the search locations below.
+  codex_target=""
   codex_bin="$(command -v codex || true)"
-  if [[ "${codex_bin}" == "/usr/local/bin/codex" ]]; then
-    # On a re-provision the symlink we manage is already on PATH, so command -v
-    # reports it back to us. Ignore it here and resolve the real install location
-    # below; otherwise we would symlink /usr/local/bin/codex to itself (a circular
-    # symlink) -- codex --version then fails with ELOOP (the panel shows "—") and
-    # codex-app-server fails with 203/EXEC. Mirrors the opencode/claude handling.
-    codex_bin=""
+  if [[ -n "${codex_bin}" ]]; then
+    resolved="$(readlink -f "${codex_bin}" 2>/dev/null || true)"
+    if [[ -n "${resolved}" && -x "${resolved}" ]]; then
+      if [[ "${resolved}" != "/usr/local/bin/codex" ]]; then
+        codex_target="${resolved}"
+      elif [[ ! -L /usr/local/bin/codex ]]; then
+        # A real binary already sits at the PATH location; nothing to link.
+        codex_target="/usr/local/bin/codex"
+      fi
+    fi
   fi
-  if [[ -z "${codex_bin}" && -x /root/.local/bin/codex ]]; then
-    codex_bin=/root/.local/bin/codex
+  if [[ -z "${codex_target}" && -x /root/.local/bin/codex ]]; then
+    codex_target=/root/.local/bin/codex
   fi
-  if [[ -z "${codex_bin}" && -x /root/.codex/bin/codex ]]; then
-    codex_bin=/root/.codex/bin/codex
+  if [[ -z "${codex_target}" && -x /root/.codex/bin/codex ]]; then
+    codex_target=/root/.codex/bin/codex
   fi
-  if [[ -z "${codex_bin}" ]]; then
-    # Last resort: search common install roots for the real binary (never a symlink).
-    codex_bin="$(find /root /home /usr/local -maxdepth 4 -type f -name codex -perm -u+x 2>/dev/null | head -n1 || true)"
+  if [[ -z "${codex_target}" ]]; then
+    # Last resort: search the install roots, including npm's global trees --
+    # the npm package nests its launcher/binary deeper than a shallow find
+    # reaches, so allow depth for .../node_modules/@openai/codex/bin/codex.js.
+    codex_target="$(find /root /home /usr/local /usr/lib/node_modules -maxdepth 7 -type f \( -name codex -o -name codex.js \) -perm -u+x 2>/dev/null | head -n1 || true)"
   fi
-  if [[ -z "${codex_bin}" ]]; then
-    warn "Codex install completed, but binary was not found in PATH or common root locations"
+  if [[ -z "${codex_target}" ]]; then
+    err "Codex install completed, but no codex binary was found (checked PATH, /root/.local/bin, /root/.codex/bin, /usr/local, /usr/lib/node_modules)"
     exit 1
   fi
-
-  # Resolve through any intermediate symlinks so the link target is the real
-  # binary, and never point the symlink at itself.
-  codex_bin="$(readlink -f "${codex_bin}" 2>/dev/null || echo "${codex_bin}")"
-  if [[ "${codex_bin}" == "/usr/local/bin/codex" || ! -x "${codex_bin}" ]]; then
-    warn "refusing to create codex symlink: resolved path is invalid (${codex_bin})"
+  if [[ ! -x "${codex_target}" ]]; then
+    err "refusing to create codex symlink: resolved path is invalid (${codex_target})"
     exit 1
   fi
-  ln -sf "${codex_bin}" /usr/local/bin/codex
+  if [[ "${codex_target}" != "/usr/local/bin/codex" ]]; then
+    ln -sf "${codex_target}" /usr/local/bin/codex
+  fi
 
   if [[ ! -f "${CODEX_TOKEN_FILE}" ]]; then
     install -d -m 0700 "$(dirname "${CODEX_TOKEN_FILE}")"
