@@ -63,6 +63,24 @@ for f in \
   fi
 done
 
+# SSH: export-config.sh captures outbound keys (never authorized_keys / the
+# provisioner key). OpenSSH refuses a private key that is group/world readable,
+# and cp -a preserves the key-file modes, but the staged ~/.ssh dir is created
+# with the export's umask -- so pin the strict perms here: dir 700, private keys
+# 600. Public keys, known_hosts, and config keep their copied modes, and any
+# provisioner-written authorized_keys is left untouched.
+if [[ -d "${EXPORT_HOME}/.ssh" ]]; then
+  chmod 700 "${EXPORT_HOME}/.ssh" 2>/dev/null || true
+  for _k in "${EXPORT_HOME}/.ssh"/*; do
+    [[ -f "${_k}" ]] || continue
+    case "${_k}" in
+      *.pub|*/known_hosts|*/known_hosts.old|*/config|*/authorized_keys|*/authorized_keys2) continue ;;
+    esac
+    chmod 600 "${_k}" 2>/dev/null || true
+  done
+  log "restored .ssh (outbound keys, perms tightened)"
+fi
+
 # Report instruction / memory files that came back, for the provisioning log.
 for f in ".claude/CLAUDE.md" ".codex/AGENTS.md" ".config/opencode/AGENTS.md"; do
   [[ -e "${EXPORT_HOME}/${f}" ]] && log "restored ${f}"

@@ -122,6 +122,28 @@ add ".git-credentials"
 # GitHub CLI: hosts.yml holds the login/OAuth token, config.yml the settings.
 add ".config/gh"
 
+# ── Outbound SSH keys (VM→remote) ────────────────────────────────────────────
+# The private key material the agent uses to reach remotes (deploy hosts, git
+# over SSH, …) -- same trust class as .git-credentials, so gated on INCLUDE_AUTH.
+# Export everything in ~/.ssh EXCEPT the provisioner-managed inbound bits:
+#   - authorized_keys / authorized_keys2 : the host->VM key that
+#     Provision-AgentVM.ps1 writes on every (re)provision.
+#   - codex_app_ed25519(.pub)            : the provisioner's own key ($RemoteKeyPath).
+# restore-config.sh merges the saved home back with `cp -a home/. $HOME/` (overlay,
+# no wipe), so omitting those leaves the freshly-provisioned host-access key intact
+# regardless of restore/provision ordering. Everything else (id_*, other user keys,
+# known_hosts, config) rides along so outbound SSH survives a reinstall.
+if [[ "${INCLUDE_AUTH}" == "true" && -d "${EXPORT_HOME}/.ssh" ]]; then
+  shopt -s nullglob dotglob
+  for _sshf in "${EXPORT_HOME}/.ssh"/*; do
+    case "$(basename "${_sshf}")" in
+      authorized_keys|authorized_keys2|codex_app_ed25519|codex_app_ed25519.pub) continue ;;
+    esac
+    add ".ssh/$(basename "${_sshf}")"
+  done
+  shopt -u nullglob dotglob
+fi
+
 # ── npm registry auth ────────────────────────────────────────────────────────
 # ~/.npmrc is npm's user config; it also carries registry auth tokens
 # (//registry/:_authToken=, _auth=, :_password=). It's pure auth, so gate it on
