@@ -1647,7 +1647,8 @@ function Invoke-DeElevatedProvision {
     $readyFile  = Join-Path $ipcDir "ready"
 
     # ── Register + start the one-shot scheduled task ─────────────────────────────
-    # InteractiveToken uses the desktop session's standard (non-elevated) token;
+    # 'Interactive' (the ScheduledTasks-cmdlet enum name for the COM API's
+    # InteractiveToken) runs under the desktop session's standard token;
     # RunLevel Limited ensures no elevation. The task opens a visible powershell
     # console in the user's desktop session.
     try {
@@ -1659,7 +1660,7 @@ function Invoke-DeElevatedProvision {
                         -Argument "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $encodedCmd"
         $principal = New-ScheduledTaskPrincipal `
                         -UserId $desktopUser `
-                        -LogonType InteractiveToken `
+                        -LogonType Interactive `
                         -RunLevel Limited
         $settings  = New-ScheduledTaskSettingsSet `
                         -AllowStartIfOnBatteries `
@@ -2501,7 +2502,11 @@ function Initialize-ConstructConfigRepo {
         $probeErrFile = [System.IO.Path]::GetTempFileName()
         try {
             $probeCode = 0
-            $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+            # 'Continue', not 'SilentlyContinue': 5.1 discards native-stderr
+            # records under SilentlyContinue even when 2>-redirected (proven in
+            # the field by an empty diagnostic); the redirect keeps the console
+            # clean either way.
+            $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"
             try {
                 $null = & git -C $ConfigDir rev-parse --git-dir 2>$probeErrFile
                 $probeCode = $LASTEXITCODE
