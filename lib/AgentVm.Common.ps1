@@ -2027,22 +2027,24 @@ function Initialize-ConstructConfigRepo {
         # merged records are discarded -- the message would vanish exactly when
         # it is needed. File redirection is applied regardless of EAP.
         $probeErrFile = [System.IO.Path]::GetTempFileName()
-        $probeCode = 0
-        $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
         try {
-            $null = & git -C $ConfigDir rev-parse --git-dir 2>$probeErrFile
-            $probeCode = $LASTEXITCODE
+            $probeCode = 0
+            $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+            try {
+                $null = & git -C $ConfigDir rev-parse --git-dir 2>$probeErrFile
+                $probeCode = $LASTEXITCODE
+            } finally {
+                $ErrorActionPreference = $prev
+            }
+            if ($probeCode -ne 0) {
+                $probeText = ""
+                try { $probeText = ((Get-Content -LiteralPath $probeErrFile -ErrorAction SilentlyContinue) -join " ").Trim() } catch { }
+                Write-Warning "Config repo at $ConfigDir is unusable (git rev-parse exited $probeCode)$(if ($probeText) { ": $probeText" })"
+                return $false
+            }
         } finally {
-            $ErrorActionPreference = $prev
-        }
-        if ($probeCode -ne 0) {
-            $probeText = ""
-            try { $probeText = ((Get-Content -LiteralPath $probeErrFile -ErrorAction SilentlyContinue) -join " ").Trim() } catch { }
             Remove-Item -LiteralPath $probeErrFile -ErrorAction SilentlyContinue
-            Write-Warning "Config repo at $ConfigDir is unusable (git rev-parse exited $probeCode)$(if ($probeText) { ": $probeText" })"
-            return $false
         }
-        Remove-Item -LiteralPath $probeErrFile -ErrorAction SilentlyContinue
         # Ensure the vm branch exists, and re-apply the repo-local hardening
         # every run so a repo created before this fix is repaired
         # (signing/hooks off, LF pinned).
