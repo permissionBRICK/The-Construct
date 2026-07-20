@@ -29,17 +29,26 @@ $parsed = ConvertFrom-ConstructProvisionResult -Lines @(
     "unrelated live output",
     "${esc}[31m===CONSTRUCT-PROVISION-RESULT===${esc}[0m",
     "errors=2",
-    "error=Installing .NET SDK|7",
-    "error=code serve-web setup|12",
+    "error=Installing .NET SDK|7|/var/log/construct/provision/step-0-Installing-.NET-SDK.log",
+    "error=code serve-web setup|12|",
     "===END-CONSTRUCT-PROVISION-RESULT===",
     "human summary follows"
 )
 ok "provision result: finds ANSI-contaminated sentinel" ($parsed.Found -and $parsed.IsValid)
 ok "provision result: reads declared error count" ($parsed.ErrorCount -eq 2)
-ok "provision result: parses every title and exit code" (
+ok "provision result: parses every title, exit code, and log path" (
     $parsed.Errors.Count -eq 2 -and
     $parsed.Errors[0].Title -eq "Installing .NET SDK" -and $parsed.Errors[0].ExitCode -eq 7 -and
-    $parsed.Errors[1].Title -eq "code serve-web setup" -and $parsed.Errors[1].ExitCode -eq 12)
+    $parsed.Errors[0].LogPath -eq "/var/log/construct/provision/step-0-Installing-.NET-SDK.log" -and
+    $parsed.Errors[1].Title -eq "code serve-web setup" -and $parsed.Errors[1].ExitCode -eq 12 -and
+    $parsed.Errors[1].LogPath -eq "")
+
+# Backward compatibility: a two-field error line (from an older provision.sh)
+# must still parse, with LogPath defaulting to empty.
+$oldVm = ConvertFrom-ConstructProvisionResult -Lines @(
+    "===CONSTRUCT-PROVISION-RESULT===", "errors=1", "error=old step|3", "===END-CONSTRUCT-PROVISION-RESULT==="
+)
+ok "provision result: two-field error line still parses (old VM compat)" ($oldVm.IsValid -and $oldVm.Errors[0].LogPath -eq "")
 
 $cleanResult = ConvertFrom-ConstructProvisionResult -Lines @(
     "===CONSTRUCT-PROVISION-RESULT===", "errors=0", "===END-CONSTRUCT-PROVISION-RESULT==="
