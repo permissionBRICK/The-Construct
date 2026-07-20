@@ -854,6 +854,19 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
             Write-Host ""; Wait-Exit
             return
         }
+        # Point of no return: every abort path (unsaved-work scan, sync conflict,
+        # failed-save cancel, typed confirmation) is behind us and the VM is about
+        # to be deleted. Any VS Code window still attached to it over Remote-SSH
+        # would only degrade into reconnect-error popups during the rebuild, so ask
+        # those windows -- and only those -- to close now (graceful WM_CLOSE; the
+        # install chain reopens VS Code onto the fresh VM at the end).
+        $closedWindows = Close-VmVsCodeWindow -VmHost "$($HyperVmName.ToLower()).mshome.net"
+        if ($closedWindows -gt 0) {
+            # WM_CLOSE is queued, not confirmed -- a window with a modal dialog up
+            # may legitimately stay open, so say "asked", not "closed".
+            Write-Note "Asked $closedWindows VS Code window(s) attached to $HyperVmName to close."
+        }
+
         Show-TuiScreen -Title "Removing the existing VM" -Body @(
             "Powering off '$HyperVmName' and deleting its virtual disk..."
         )

@@ -1341,6 +1341,99 @@ function Get-RemoteOpenLink {
     return "vscode://vscode-remote/ssh-remote+$alias$path"
 }
 
+function Select-VmCodeWindow {
+    <#
+        Pure filter: from top-level window records (Title, ProcessName), pick the
+        VS Code windows attached to the VM over Remote-SSH. Remote-SSH stamps
+        "[SSH: <authority>]" into the window title, where the authority is the SSH
+        Host alias (the VM host's first DNS label -- what Get-RemoteOpenLink and the
+        extension's deep links use) or the full host name (a manual connect). Both
+        must match; "agent-vm2", the same alias under a FOREIGN domain
+        ("agent-vm.example.net"), or an ssh session in a terminal window must not
+        -- so the authority must be EXACTLY the alias or the full host (plus an
+        optional :port), and the process exactly VS Code ('Code'/'Code - Insiders').
+    #>
+    [CmdletBinding()]
+    param(
+        [object[]]$Windows = @(),
+        [string]$VmHost = "agent-vm"
+    )
+    $alias = ($VmHost -split '\.')[0]
+    $names = @([regex]::Escape($alias), [regex]::Escape($VmHost)) | Select-Object -Unique
+    $pattern = "\[SSH:\s*($($names -join '|'))(:\d+)?\]"
+    return @($Windows | Where-Object {
+        $_ -and @('Code', 'Code - Insiders') -contains $_.ProcessName -and $_.Title -match $pattern
+    })
+}
+
+function Close-VmVsCodeWindow {
+    <#
+        Ask every VS Code window attached to the VM over Remote-SSH to close, and
+        return how many were asked. Used by the reinstall/redownload flow right
+        before the VM is deleted: an attached window would only degrade into
+        reconnect-error popups while its backend is destroyed and rebuilt.
+
+        WHY Win32 instead of Get-Process/CloseMainWindow: every VS Code window
+        belongs to ONE Electron main process, so .MainWindowTitle exposes a single
+        title no matter how many windows are open -- per-window targeting needs
+        EnumWindows. WM_CLOSE is the graceful ask (hot exit backs up dirty
+        editors); nothing is ever force-killed, so a window showing a modal dialog
+        may legitimately stay open. UIPI permits the elevated installer to post to
+        the user's medium-integrity windows (only lower->higher is blocked).
+        Best-effort and Windows-only: returns 0 (never throws) on any failure.
+    #>
+    [CmdletBinding()]
+    param([string]$VmHost = "agent-vm")
+    try {
+        if ($env:OS -ne 'Windows_NT') { return 0 }
+        if (-not ('ConstructNative.TopWindows' -as [type])) {
+            Add-Type -TypeDefinition @"
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
+namespace ConstructNative {
+    public static class TopWindows {
+        private delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
+        [DllImport("user32.dll")] private static extern bool EnumWindows(EnumProc cb, IntPtr lParam);
+        [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int max);
+        [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+        [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr w, IntPtr l);
+        private const uint WM_CLOSE = 0x0010;
+        public class Info { public long Handle; public string Title; public uint Pid; }
+        public static List<Info> List() {
+            var found = new List<Info>();
+            EnumWindows(delegate(IntPtr h, IntPtr l) {
+                if (!IsWindowVisible(h)) return true;
+                var sb = new StringBuilder(1024);
+                if (GetWindowText(h, sb, sb.Capacity) <= 0) return true;
+                uint pid; GetWindowThreadProcessId(h, out pid);
+                found.Add(new Info { Handle = h.ToInt64(), Title = sb.ToString(), Pid = pid });
+                return true;
+            }, IntPtr.Zero);
+            return found;
+        }
+        public static bool Close(long handle) { return PostMessage(new IntPtr(handle), WM_CLOSE, IntPtr.Zero, IntPtr.Zero); }
+    }
+}
+"@
+        }
+        $records = foreach ($w in [ConstructNative.TopWindows]::List()) {
+            $pname = ""
+            try { $pname = (Get-Process -Id $w.Pid -ErrorAction Stop).ProcessName } catch { $pname = "" }
+            [pscustomobject]@{ Title = $w.Title; ProcessName = $pname; Handle = $w.Handle }
+        }
+        $closed = 0
+        foreach ($t in @(Select-VmCodeWindow -Windows $records -VmHost $VmHost)) {
+            if ([ConstructNative.TopWindows]::Close($t.Handle)) { $closed++ }
+        }
+        return $closed
+    } catch {
+        return 0
+    }
+}
+
 function Open-RemoteWorkspace {
     <#
         Launch a vscode:// deep link (from Get-RemoteOpenLink) so VS Code opens the
