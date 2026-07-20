@@ -195,6 +195,40 @@ function Wait-Exit {
             Write-Host "  - $($global:ConstructProvisionFailureMessage)" -ForegroundColor Red
         }
         Write-Host "============================================================" -ForegroundColor DarkGray
+
+        # Copyable AI-agent fix prompt: built only for VM-side step failures (items
+        # with a Title), not host-side messages. The user pastes this into their AI
+        # coding agent on the VM (Claude Code over VS Code Remote-SSH) to diagnose.
+        $stepLines = @()
+        foreach ($item in $items) {
+            if (-not $item.Title) { continue }
+            $line = "- Step '$($item.Title)' failed (exit $($item.ExitCode))"
+            if ($item.LogPath) {
+                $line += "; log: $($item.LogPath)"
+            }
+            $stepLines += $line
+        }
+        if ($stepLines.Count -gt 0) {
+            Write-Host ""
+            Write-Host "  Paste this into your AI coding agent on the VM to diagnose:" -ForegroundColor Yellow
+            Write-Host "  ............................................................" -ForegroundColor DarkGray
+            Write-Host ""
+            $logPaths = @($items | Where-Object { $_.LogPath } | ForEach-Object { $_.LogPath })
+            $logRef = if ($logPaths.Count -eq 1) {
+                "Read the provisioning log at $($logPaths[0])"
+            } elseif ($logPaths.Count -gt 1) {
+                "Read the provisioning logs at: $($logPaths -join ', ')"
+            } else {
+                "Check the provisioning output above"
+            }
+            Write-Host "  On the last Construct provisioning run, the following step(s) failed:" -ForegroundColor White
+            foreach ($sl in $stepLines) {
+                Write-Host "  $sl" -ForegroundColor White
+            }
+            Write-Host "  $logRef and diagnose and fix the underlying problem." -ForegroundColor White
+            Write-Host ""
+            Write-Host "  ............................................................" -ForegroundColor DarkGray
+        }
     }
     if ((-not $FromPanel) -or $global:ConstructProvisionHadErrors) {
         Read-Host "Press Enter to exit" | Out-Null

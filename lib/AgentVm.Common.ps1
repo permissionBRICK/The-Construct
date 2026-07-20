@@ -66,10 +66,11 @@ function ConvertFrom-ConstructProvisionResult {
         for ($i = $start + 1; $i -lt $end; $i++) {
             if ($clean[$i] -match '^errors=([0-9]+)$') {
                 $declared = [int]$Matches[1]
-            } elseif ($clean[$i] -match '^error=([^|]*)\|(-?[0-9]+)$') {
+            } elseif ($clean[$i] -match '^error=([^|]*)\|(-?[0-9]+)(?:\|(.*))?$') {
                 $errors.Add([pscustomobject]@{
-                    Title = $Matches[1]
+                    Title    = $Matches[1]
                     ExitCode = [int]$Matches[2]
+                    LogPath  = if ($Matches[3]) { $Matches[3] } else { "" }
                 })
             }
         }

@@ -55,6 +55,14 @@ _PROVISION_LOG_DIR="$(mktemp -d)"
 declare -a _FAILED_TITLES=()
 declare -a _FAILED_CODES=()
 declare -a _FAILED_TAILS=()
+declare -a _FAILED_LOG_PATHS=()
+
+# Persistent log directory: full step logs are copied here so the host can point
+# the user's AI coding agent at a readable log after provisioning finishes. The
+# temp dir (_PROVISION_LOG_DIR) is deleted by _finish_provision, so without this
+# the logs would be lost. Old logs are cleaned at the start of each run (only the
+# current run's failures are kept).
+_PERSISTENT_LOG_DIR="/var/log/construct/provision"
 
 _sanitize_step_title() {
   local title="$1"
@@ -65,12 +73,17 @@ _sanitize_step_title() {
 }
 
 _record_step_failure() {
-  local title="$1" rc="$2" log_file="$3" tail_file
+  local title="$1" rc="$2" log_file="$3" tail_file persistent_file
   tail_file="${_PROVISION_LOG_DIR}/tail-${#_FAILED_TITLES[@]}.log"
   tail -n 15 "${log_file}" >"${tail_file}" 2>/dev/null || :
+  # Persist the FULL log (not just the tail) so the host can cite a readable path
+  # in the AI-agent fix prompt. The slug is filesystem-safe and bounded at 60 chars.
+  persistent_file="${_PERSISTENT_LOG_DIR}/step-${#_FAILED_TITLES[@]}-$(_sanitize_step_title "${title}" | tr ' ' '-' | tr -cd 'A-Za-z0-9_-' | head -c 60).log"
+  cp "${log_file}" "${persistent_file}" 2>/dev/null || persistent_file=""
   _FAILED_TITLES+=("${title}")
   _FAILED_CODES+=("${rc}")
   _FAILED_TAILS+=("${tail_file}")
+  _FAILED_LOG_PATHS+=("${persistent_file}")
 }
 
 _print_machine_result() {
@@ -78,7 +91,13 @@ _print_machine_result() {
   printf '%s\n' '===CONSTRUCT-PROVISION-RESULT==='
   printf 'errors=%s\n' "${#_FAILED_TITLES[@]}"
   for ((i=0; i<${#_FAILED_TITLES[@]}; i++)); do
-    printf 'error=%s|%s\n' "$(_sanitize_step_title "${_FAILED_TITLES[$i]}")" "${_FAILED_CODES[$i]}"
+    # Third field: the persistent log path on the VM, so the host can cite it in
+    # the AI-agent fix prompt. The path is generated code (no pipe/newline), so
+    # the pipe-delimited format round-trips safely.
+    printf 'error=%s|%s|%s\n' \
+      "$(_sanitize_step_title "${_FAILED_TITLES[$i]}")" \
+      "${_FAILED_CODES[$i]}" \
+      "${_FAILED_LOG_PATHS[$i]}"
   done
   printf '%s\n' '===END-CONSTRUCT-PROVISION-RESULT==='
 }
@@ -168,6 +187,11 @@ require_root() {
   fi
 }
 run_step critical "Checking root privileges" require_root
+
+# Create the persistent log directory and clean any logs from a previous run.
+# Only the current run's failure logs are kept; successful steps write nothing.
+mkdir -p "${_PERSISTENT_LOG_DIR}"
+rm -f "${_PERSISTENT_LOG_DIR}/"*.log 2>/dev/null || true
 
 # Configuration, all overridable via the environment.
 AGENT_NAME="${AGENT_NAME:-$(hostname)-agent}"
