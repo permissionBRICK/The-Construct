@@ -1325,6 +1325,240 @@ try {
     Remove-Item -LiteralPath $ptBase -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# ── Stdin-transport invoker test (provision SSH invoker shape) ────────────────
+# The provision-time SSH invoker pipes the base64-encoded payload through stdin
+# instead of embedding it in the command-line argument, to avoid Windows' ~32K
+# native argument limit.  These tests exercise the exact $toRun construction
+# from the real provision invoker (root-key and bootstrap/sudo paths) with large
+# payloads, special characters, and Unicode, running through local bash.
+$bashAvailable = $null -ne (Get-Command bash -ErrorAction SilentlyContinue)
+if (-not $bashAvailable) {
+    Write-Host "  SKIP  stdin-transport invoker tests (bash not available)" -ForegroundColor Yellow
+} else {
+    # Helper: build an invoker using the exact $toRun construction from the
+    # provision invoker.  $Mode selects root-key vs bootstrap/sudo path.
+    function New-ProvisionInvoker([string]$Mode, [string]$Password) {
+        $m = $Mode; $pw = $Password; $store = $script:stdinVmStore
+        return {
+            param([string]$BashCommand)
+            $scriptLf = ($BashCommand -replace "`r`n", "`n")
+            $rewritten = $scriptLf -replace '/opt/construct/projects', $store
+            $b64 = [Convert]::ToBase64String(
+                [System.Text.Encoding]::UTF8.GetBytes($rewritten))
+            $stdinDecode = "f=`$(mktemp) && cat > `"`$f.b64`" && base64 -d < `"`$f.b64`" > `"`$f`" && rm -f `"`$f.b64`""
+            if ($m -eq "rootkey") {
+                $toRun = "bash -lc '$stdinDecode && bash `"`$f`"; rc=`$?; rm -f `"`$f`"; exit `$rc'"
+            } else {
+                $escPw = $pw.Replace("'", "'\''")
+                $toRun = "$stdinDecode && printf '%s\n' '$escPw' | sudo -S -p '' bash `"`$f`"; rc=`$?; rm -f `"`$f`"; exit `$rc"
+            }
+            $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+            try {
+                $output = $b64 | & bash -c $toRun 2>$null
+                $code = $LASTEXITCODE
+                $outStr = if ($null -ne $output) { ($output -join "`n") } else { "" }
+                return [pscustomobject]@{ Code = $code; Output = $outStr }
+            } catch {
+                return [pscustomobject]@{ Code = -1; Output = "" }
+            } finally {
+                $ErrorActionPreference = $prev
+            }
+        }.GetNewClosure()
+    }
+
+    # ── Root-key mode tests ──────────────────────────────────────────────────
+    $stdinBase = Join-Path ([System.IO.Path]::GetTempPath()) ("stdin-xport-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $stdinBase -Force | Out-Null
+    $script:stdinVmStore = Join-Path $stdinBase "vmstore"
+    New-Item -ItemType Directory -Path $script:stdinVmStore -Force | Out-Null
+
+    $rootKeyInvoker = New-ProvisionInvoker "rootkey" ""
+
+    # Test 1: Seed 11 profiles of ~4 KB each (> 32K total base64).
+    $profileNames = @()
+    $seedOps = @()
+    for ($i = 1; $i -le 11; $i++) {
+        $pname = "large-profile-$i"
+        $profileNames += $pname
+        $padding = "x" * 3800
+        $content = "{`"name`":`"$pname`",`"repos`":[{`"url`":`"https://example.com/$pname`",`"path`":`"/root/repos/$pname`"}],`"pad`":`"$padding`"}"
+        $seedOps += @{
+            Name = $pname; Action = "write"; Content = $content
+            Expect = $null; ExpectAbsent = $true
+        }
+    }
+    $wb = Write-ConstructVmStore -VmHost "dummy" -Ops $seedOps -SshInvoker $rootKeyInvoker
+    ok "stdin-rootkey: 11x4KB write-back succeeded (not null)" ($null -ne $wb)
+    ok "stdin-rootkey: all 11 profiles reported done" ($wb -and $wb.Done.Count -eq 11)
+
+    $allFilesOk = $true
+    foreach ($pn in $profileNames) {
+        $fp = Join-Path $script:stdinVmStore "$pn.json"
+        if (-not (Test-Path -LiteralPath $fp)) { $allFilesOk = $false; break }
+        $fc = [System.IO.File]::ReadAllText($fp, [System.Text.Encoding]::UTF8)
+        if ($fc -notmatch "`"name`":`"$pn`"") { $allFilesOk = $false; break }
+    }
+    ok "stdin-rootkey: all 11 files exist with correct content" $allFilesOk
+
+    $readResult = Read-ConstructVmStore -VmHost "dummy" -SshInvoker $rootKeyInvoker
+    ok "stdin-rootkey: read-back succeeded (not null)" ($null -ne $readResult)
+    ok "stdin-rootkey: read-back found all 11 profiles" ($readResult -and $readResult.Files.Count -eq 11)
+
+    # Test 2: Profile with single quotes, double quotes, and backticks.
+    $quoteContent = "{""name"":""quotey"",""description"":""it's a \""test\"" with ``backticks``""}"
+    $quoteOps = @(@{ Name = "quotey"; Action = "write"; Content = $quoteContent; Expect = $null; ExpectAbsent = $true })
+    $qwb = Write-ConstructVmStore -VmHost "dummy" -Ops $quoteOps -SshInvoker $rootKeyInvoker
+    ok "stdin-rootkey: quoted-content write succeeded" ($null -ne $qwb -and $qwb.Done.Count -eq 1)
+    $qfp = Join-Path $script:stdinVmStore "quotey.json"
+    $qfc = if (Test-Path -LiteralPath $qfp) { [System.IO.File]::ReadAllText($qfp, [System.Text.Encoding]::UTF8) } else { "" }
+    ok "stdin-rootkey: quoted-content round-trips correctly" ($qfc -eq $quoteContent)
+
+    # Test 3: Unicode content (accented characters, coffee emoji).
+    $unicodeContent = "{""name"":""intl"",""desc"":""Stra$([char]0x00DF)e $([char]0x2615) caf$([char]0x00E9)""}"
+    $uniOps = @(@{ Name = "intl"; Action = "write"; Content = $unicodeContent; Expect = $null; ExpectAbsent = $true })
+    $uwb = Write-ConstructVmStore -VmHost "dummy" -Ops $uniOps -SshInvoker $rootKeyInvoker
+    ok "stdin-rootkey: unicode write succeeded" ($null -ne $uwb -and $uwb.Done.Count -eq 1)
+    $ufp = Join-Path $script:stdinVmStore "intl.json"
+    $ufc = if (Test-Path -LiteralPath $ufp) { [System.IO.File]::ReadAllText($ufp, [System.Text.Encoding]::UTF8) } else { "" }
+    ok "stdin-rootkey: unicode round-trips correctly" ($ufc -eq $unicodeContent)
+
+    # Test 4: ExpectAbsent guard -- writing over an existing file should skip.
+    $existOps = @(@{ Name = "large-profile-1"; Action = "write"; Content = "{""overwritten"":true}"; Expect = $null; ExpectAbsent = $true })
+    $ewb = Write-ConstructVmStore -VmHost "dummy" -Ops $existOps -SshInvoker $rootKeyInvoker
+    ok "stdin-rootkey: ExpectAbsent skips existing file" ($null -ne $ewb -and $ewb.Skipped.Count -eq 1 -and $ewb.Done.Count -eq 0)
+    $efp = Join-Path $script:stdinVmStore "large-profile-1.json"
+    $efc = [System.IO.File]::ReadAllText($efp, [System.Text.Encoding]::UTF8)
+    ok "stdin-rootkey: original content preserved (not overwritten)" ($efc -match "large-profile-1")
+
+    Remove-Item -LiteralPath $stdinBase -Recurse -Force -ErrorAction SilentlyContinue
+
+    # ── Bootstrap/sudo mode tests ────────────────────────────────────────────
+    # Uses 'sudo -S' with a test password (including a single quote to verify
+    # escaping).  Running as root, sudo accepts any password via -S.
+    $stdinBase2 = Join-Path ([System.IO.Path]::GetTempPath()) ("stdin-xport2-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $stdinBase2 -Force | Out-Null
+    $script:stdinVmStore = Join-Path $stdinBase2 "vmstore"
+    New-Item -ItemType Directory -Path $script:stdinVmStore -Force | Out-Null
+
+    $bootstrapInvoker = New-ProvisionInvoker "bootstrap" "test'pass"
+
+    # Test 5: 11x4KB write via bootstrap/sudo path.
+    $seedOps2 = @()
+    for ($i = 1; $i -le 11; $i++) {
+        $pname = "sudo-profile-$i"
+        $padding = "x" * 3800
+        $content = "{`"name`":`"$pname`",`"repos`":[{`"url`":`"https://example.com/$pname`"}],`"pad`":`"$padding`"}"
+        $seedOps2 += @{
+            Name = $pname; Action = "write"; Content = $content
+            Expect = $null; ExpectAbsent = $true
+        }
+    }
+    $wb2 = Write-ConstructVmStore -VmHost "dummy" -Ops $seedOps2 -SshInvoker $bootstrapInvoker
+    ok "stdin-bootstrap: 11x4KB write-back succeeded (not null)" ($null -ne $wb2)
+    ok "stdin-bootstrap: all 11 profiles reported done" ($wb2 -and $wb2.Done.Count -eq 11)
+
+    # Test 6: Read-back via bootstrap/sudo path.
+    $readResult2 = Read-ConstructVmStore -VmHost "dummy" -SshInvoker $bootstrapInvoker
+    ok "stdin-bootstrap: read-back succeeded (not null)" ($null -ne $readResult2)
+    ok "stdin-bootstrap: read-back found all 11 profiles" ($readResult2 -and $readResult2.Files.Count -eq 11)
+
+    # Test 7: Quoted content via bootstrap path.
+    $quoteOps2 = @(@{ Name = "quotey2"; Action = "write"; Content = $quoteContent; Expect = $null; ExpectAbsent = $true })
+    $qwb2 = Write-ConstructVmStore -VmHost "dummy" -Ops $quoteOps2 -SshInvoker $bootstrapInvoker
+    ok "stdin-bootstrap: quoted-content write succeeded" ($null -ne $qwb2 -and $qwb2.Done.Count -eq 1)
+    $qfp2 = Join-Path $script:stdinVmStore "quotey2.json"
+    $qfc2 = if (Test-Path -LiteralPath $qfp2) { [System.IO.File]::ReadAllText($qfp2, [System.Text.Encoding]::UTF8) } else { "" }
+    ok "stdin-bootstrap: quoted-content round-trips correctly" ($qfc2 -eq $quoteContent)
+
+    # Test 8: Unicode content via bootstrap path.
+    $uniOps2 = @(@{ Name = "intl2"; Action = "write"; Content = $unicodeContent; Expect = $null; ExpectAbsent = $true })
+    $uwb2 = Write-ConstructVmStore -VmHost "dummy" -Ops $uniOps2 -SshInvoker $bootstrapInvoker
+    ok "stdin-bootstrap: unicode write succeeded" ($null -ne $uwb2 -and $uwb2.Done.Count -eq 1)
+    $ufp2 = Join-Path $script:stdinVmStore "intl2.json"
+    $ufc2 = if (Test-Path -LiteralPath $ufp2) { [System.IO.File]::ReadAllText($ufp2, [System.Text.Encoding]::UTF8) } else { "" }
+    ok "stdin-bootstrap: unicode round-trips correctly" ($ufc2 -eq $unicodeContent)
+
+    Remove-Item -LiteralPath $stdinBase2 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# ── Seed-failure guard edge cases ────────────────────────────────────────────
+# The provision script's guard (`Seeded && !WriteBack && hostHasProfiles`) must
+# distinguish a failed write-back from a legitimate no-op seed (empty host).
+# These tests verify the sync engine's result shape for both scenarios.
+if (-not $bashAvailable) {
+    Write-Host "  SKIP  seed-failure guard tests (bash not available)" -ForegroundColor Yellow
+} else {
+    # Scenario A: fresh VM, empty host projects -> Seeded=$true, WriteBack=$null
+    # is a valid no-op (no profiles to seed), NOT a failure.
+    $sfBase = Join-Path ([System.IO.Path]::GetTempPath()) ("sf-test-" + [guid]::NewGuid().ToString("N"))
+    $sfCfgDir = Join-Path $sfBase "config"
+    New-Item -ItemType Directory -Path (Join-Path $sfCfgDir "projects") -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $sfCfgDir "manifest") -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $sfCfgDir "bases") -Force | Out-Null
+
+    # Mock invoker that simulates a fresh VM with no store dir (NOSTORE).
+    $sfFreshInvoker = {
+        param([string]$s)
+        return [pscustomobject]@{ Code = 0; Output = "NOSTORE`nEND" }
+    }
+
+    $sfInit = Initialize-ConstructConfigRepo -ConfigDir $sfCfgDir
+    $sfResult = Invoke-ConstructConfigSync -ConfigDir $sfCfgDir -VmHost "dummy" `
+        -SshReadInvoker $sfFreshInvoker -SshWriteInvoker $sfFreshInvoker
+
+    ok "seed-guard: empty-host fresh-VM returns Seeded=true" ($sfResult.Seeded -eq $true)
+    ok "seed-guard: empty-host fresh-VM WriteBack is null (no ops)" ($null -eq $sfResult.WriteBack)
+    ok "seed-guard: empty-host fresh-VM is not a failure (Ok=true)" ($sfResult.Ok -eq $true)
+
+    # Scenario B: fresh VM, host HAS profiles, but write invoker fails ->
+    # Seeded=$true, WriteBack=$null.  The provision guard should throw here.
+    $sfBase2 = Join-Path ([System.IO.Path]::GetTempPath()) ("sf-test2-" + [guid]::NewGuid().ToString("N"))
+    $sfCfgDir2 = Join-Path $sfBase2 "config"
+    New-Item -ItemType Directory -Path (Join-Path $sfCfgDir2 "projects") -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $sfCfgDir2 "manifest") -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $sfCfgDir2 "bases") -Force | Out-Null
+
+    # Add a host profile so there IS something to seed.
+    $sfProfile = "{""name"":""testprof"",""repos"":[{""url"":""https://example.com/test"",""path"":""/root/repos/test""}]}"
+    [System.IO.File]::WriteAllText(
+        (Join-Path $sfCfgDir2 "projects/testprof.json"),
+        $sfProfile, (New-Object System.Text.UTF8Encoding $false))
+
+    # Write invoker that always fails (simulates SSH failure).
+    $sfFailWrite = {
+        param([string]$s)
+        return [pscustomobject]@{ Code = -1; Output = "" }
+    }
+
+    $sfInit2 = Initialize-ConstructConfigRepo -ConfigDir $sfCfgDir2
+    $sfResult2 = Invoke-ConstructConfigSync -ConfigDir $sfCfgDir2 -VmHost "dummy" `
+        -SshReadInvoker $sfFreshInvoker -SshWriteInvoker $sfFailWrite
+
+    ok "seed-guard: failed-write fresh-VM returns Seeded=true" ($sfResult2.Seeded -eq $true)
+    ok "seed-guard: failed-write fresh-VM WriteBack is null (write failed)" ($null -eq $sfResult2.WriteBack)
+
+    # Verify the provision-side guard condition distinguishes these two:
+    # Only the failed-write case (B) should trigger the throw.
+    $sfHostProfiles = @(Get-ChildItem -LiteralPath (Join-Path $sfCfgDir "projects") -Filter *.json -File -ErrorAction SilentlyContinue |
+        ForEach-Object { $_.BaseName })
+    $sfHostHasProfiles = @($sfHostProfiles | Where-Object {
+        $script:RESERVED_PROFILE_NAMES -notcontains $_.ToLowerInvariant()
+    }).Count -gt 0
+    $sfWouldThrowA = $sfResult.Seeded -and $null -eq $sfResult.WriteBack -and $sfHostHasProfiles
+    ok "seed-guard: empty-host does NOT trigger throw" (-not $sfWouldThrowA)
+
+    $sfHostProfiles2 = @(Get-ChildItem -LiteralPath (Join-Path $sfCfgDir2 "projects") -Filter *.json -File -ErrorAction SilentlyContinue |
+        ForEach-Object { $_.BaseName })
+    $sfHostHasProfiles2 = @($sfHostProfiles2 | Where-Object {
+        $script:RESERVED_PROFILE_NAMES -notcontains $_.ToLowerInvariant()
+    }).Count -gt 0
+    $sfWouldThrowB = $sfResult2.Seeded -and $null -eq $sfResult2.WriteBack -and $sfHostHasProfiles2
+    ok "seed-guard: failed-write DOES trigger throw" $sfWouldThrowB
+
+    Remove-Item -LiteralPath $sfBase -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $sfBase2 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host ("  config-sync unit tests - {0}/{1} passed" -f $script:pass, ($script:pass + $script:fail))
