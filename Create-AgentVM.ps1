@@ -197,7 +197,7 @@ if (Get-VM -Name $VmName -ErrorAction SilentlyContinue) {
         if ($PSBoundParameters.ContainsKey('Repo') -or $PSBoundParameters.ContainsKey('Ref')) {
             $provArgs['Repo'] = $Repo; $provArgs['Ref'] = $Ref
         }
-        & $provisionScript @provArgs
+        Invoke-DeElevatedProvision -ScriptPath $provisionScript -ProvisionParams $provArgs
         return
     }
     elseif ($choice -eq 1) {
@@ -453,35 +453,36 @@ Set-VMFirmware -VMName $VmName -BootOrder $hdd, $nic
 Write-Ok "Boot order updated: HDD -> Network"
 
 if ($isAutoinstall) {
-    # ── 10. Auto-provision: run Provision-AgentVM.ps1 ────────────────────────
-    Write-Step "Launching Provision-AgentVM.ps1"
-
-    $provisionScript = Join-Path $PSScriptRoot "Provision-AgentVM.ps1"
-    if (-not (Test-Path $provisionScript)) {
-        Write-Warning "Provision-AgentVM.ps1 not found in $PSScriptRoot. Skipping provisioning."
+    if ($Auto) {
+        # ── 10a. Chained from Auto-Install: return without provisioning ──────
+        # Auto-Install.ps1 handles provisioning via Invoke-DeElevatedProvision
+        # so it runs as the non-elevated desktop user (config-sync resolves the
+        # right profile, SMB mappings land in the visible session).
+        Write-Step "VM created and SSH-ready"
+        Write-Ok "Returning to Auto-Install for de-elevated provisioning"
     } else {
-        # Always -Auto: this script (or its caller) owns the final pause, so the
-        # provisioner shouldn't add its own.
-        $provArgs = @{ VmHost = $VmHostname; HostAlias = $VmName.ToLower(); Auto = $true }
-        # Forward the project selection if we were given one (from Auto-Install.ps1
-        # or the caller) so Provision-AgentVM.ps1 skips its own project prompt.
-        if ($PSBoundParameters.ContainsKey('Projects'))      { $provArgs['Projects']      = $Projects }
-        if ($PSBoundParameters.ContainsKey('AgentPassword')) { $provArgs['AgentPassword'] = $AgentPassword }
-        if ($PSBoundParameters.ContainsKey('GitUserName'))   { $provArgs['GitUserName']   = $GitUserName }
-        if ($PSBoundParameters.ContainsKey('GitEmail'))      { $provArgs['GitEmail']      = $GitEmail }
-        if ($PSBoundParameters.ContainsKey('ClaudePartialStreaming')) { $provArgs['ClaudePartialStreaming'] = $ClaudePartialStreaming }
-        if ($PSBoundParameters.ContainsKey('MicPassthrough'))         { $provArgs['MicPassthrough']         = $MicPassthrough }
-        # Save/restore + clone-credential handoff (set by Auto-Install.ps1 on the
-        # reinstall auto-restore path; absent on a plain create).
-        if ($PSBoundParameters.ContainsKey('RestoreDir'))             { $provArgs['RestoreDir']             = $RestoreDir }
-        if ($PSBoundParameters.ContainsKey('GitCloneCredentialsB64')) { $provArgs['GitCloneCredentialsB64'] = $GitCloneCredentialsB64 }
-        if ($PSBoundParameters.ContainsKey('CheckoutProjects'))       { $provArgs['CheckoutProjects']       = $CheckoutProjects }
-        # Source repo/ref PAIR for the installed-commit marker: if either was set,
-        # forward both effective values so the recorded pair matches the install.
-        if ($PSBoundParameters.ContainsKey('Repo') -or $PSBoundParameters.ContainsKey('Ref')) {
-            $provArgs['Repo'] = $Repo; $provArgs['Ref'] = $Ref
+        # ── 10b. Standalone: de-elevate the provision call ───────────────────
+        Write-Step "Provisioning the VM (de-elevated)"
+
+        $provisionScript = Join-Path $PSScriptRoot "Provision-AgentVM.ps1"
+        if (-not (Test-Path $provisionScript)) {
+            Write-Warning "Provision-AgentVM.ps1 not found in $PSScriptRoot. Skipping provisioning."
+        } else {
+            $provArgs = @{ VmHost = $VmHostname; HostAlias = $VmName.ToLower(); Auto = $true }
+            if ($PSBoundParameters.ContainsKey('Projects'))      { $provArgs['Projects']      = $Projects }
+            if ($PSBoundParameters.ContainsKey('AgentPassword')) { $provArgs['AgentPassword'] = $AgentPassword }
+            if ($PSBoundParameters.ContainsKey('GitUserName'))   { $provArgs['GitUserName']   = $GitUserName }
+            if ($PSBoundParameters.ContainsKey('GitEmail'))      { $provArgs['GitEmail']      = $GitEmail }
+            if ($PSBoundParameters.ContainsKey('ClaudePartialStreaming')) { $provArgs['ClaudePartialStreaming'] = $ClaudePartialStreaming }
+            if ($PSBoundParameters.ContainsKey('MicPassthrough'))         { $provArgs['MicPassthrough']         = $MicPassthrough }
+            if ($PSBoundParameters.ContainsKey('RestoreDir'))             { $provArgs['RestoreDir']             = $RestoreDir }
+            if ($PSBoundParameters.ContainsKey('GitCloneCredentialsB64')) { $provArgs['GitCloneCredentialsB64'] = $GitCloneCredentialsB64 }
+            if ($PSBoundParameters.ContainsKey('CheckoutProjects'))       { $provArgs['CheckoutProjects']       = $CheckoutProjects }
+            if ($PSBoundParameters.ContainsKey('Repo') -or $PSBoundParameters.ContainsKey('Ref')) {
+                $provArgs['Repo'] = $Repo; $provArgs['Ref'] = $Ref
+            }
+            Invoke-DeElevatedProvision -ScriptPath $provisionScript -ProvisionParams $provArgs
         }
-        & $provisionScript @provArgs
     }
 } else {
     Write-Host ""

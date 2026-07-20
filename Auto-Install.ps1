@@ -247,12 +247,12 @@ trap {
 }
 
 # ── Self-elevate to Administrator from the start ─────────────────────────────
-# Creating + provisioning the Hyper-V VM needs admin rights, so we elevate up
-# front -- before the long download/build -- and run the whole chain (this
-# script -> Create-AgentVM.ps1 -> Provision-AgentVM.ps1) in one elevated window.
-# Running in-process is what lets the "Press Enter" pause at the very end fire
-# only after provisioning finishes (and even if it throws). We skip elevation
-# when only building the ISO (-SkipCreateVm needs no admin rights).
+# The Hyper-V VM creation needs admin rights, so we elevate up front -- before
+# the long download/build. After Create-AgentVM.ps1 returns (VM created, SSH up),
+# provisioning is DE-ELEVATED via a scheduled task (InteractiveToken + LeastPrivilege)
+# so it runs as the real desktop user: config-sync resolves the right profile, SMB
+# mappings land in the visible session, and git doesn't flag "dubious ownership".
+# We skip elevation when only building the ISO (-SkipCreateVm needs no admin rights).
 if (-not $SkipCreateVm) {
     $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
                ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -693,7 +693,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         if ($reprovCloneCredB64) { $reprovArgs['GitCloneCredentialsB64'] = $reprovCloneCredB64 }
         if ($PSBoundParameters.ContainsKey('AutoResolve')) { $reprovArgs['AutoResolve'] = $AutoResolve }
         try {
-            & $provisionScript @reprovArgs
+            Invoke-DeElevatedProvision -ScriptPath $provisionScript -ProvisionParams $reprovArgs
         } catch {
             # Show the failure ABOVE the pause so it's readable even when the
             # window was launched by double-click / right-click "Run with
@@ -1020,7 +1020,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
             }
             if ($acCloneCredB64) { $acReprovArgs['GitCloneCredentialsB64'] = $acCloneCredB64 }
             if ($PSBoundParameters.ContainsKey('AutoResolve')) { $acReprovArgs['AutoResolve'] = $AutoResolve }
-            & $provisionScript @acReprovArgs
+            Invoke-DeElevatedProvision -ScriptPath $provisionScript -ProvisionParams $acReprovArgs
         } catch {
             Write-Host ""
             Write-Host "ERROR: add-config failed." -ForegroundColor Red
@@ -1498,12 +1498,10 @@ $createScript = Join-Path $PSScriptRoot "Create-AgentVM.ps1"
 if (-not (Test-Path -LiteralPath $createScript)) {
     throw "Create-AgentVM.ps1 not found in $PSScriptRoot."
 }
-# Create-AgentVM.ps1 auto-detects the *autoinstall*.iso we just built next to
-# it, then chains into Provision-AgentVM.ps1. We pass every decision we already
-# collected so both run unattended. We're already elevated (see top), so this
-# runs in-process -- which is what lets the "Press Enter" pause below fire only
-# after provisioning finishes. The try/finally guarantees that pause runs even
-# if create/provision throws.
+# Create-AgentVM.ps1 creates the VM and waits for SSH; with -Auto it returns
+# without calling Provision (so we can de-elevate the provisioning below).
+# The provision-related params ride along in $createArgs for standalone
+# Create-AgentVM runs (no -Auto) where it de-elevates its own provision call.
 $createArgs = @{
     MemoryGB      = $chosenMemGB
     DiskSizeGB    = $chosenDiskGB
@@ -1513,44 +1511,57 @@ $createArgs = @{
     GitEmail      = $chosenGitEmail
     ClaudePartialStreaming = $ClaudePartialStreaming
     MicPassthrough = $MicPassthrough
-    # -Auto: the try/finally below owns the final pause, so neither
-    # Create-AgentVM.ps1 nor the Provision-AgentVM.ps1 it chains into pauses too.
+    # -Auto: Create-AgentVM skips its own Provision call and this script's
+    # try/finally owns the final pause.
     Auto          = $true
 }
-# Auto-restore a saved config after the fresh install, and hand down any git
-# credentials for cloning private project repos (both set above on the reinstall
-# / decisions paths; absent for a plain fresh install with no repos).
 if ($restoreDir)         { $createArgs['RestoreDir']             = $restoreDir }
 if ($chosenCloneCredB64) { $createArgs['GitCloneCredentialsB64'] = $chosenCloneCredB64 }
-# Pass the source repo/ref PAIR down to the provisioner (for the installed-commit
-# marker) when the caller set EITHER -- forward both effective values so the recorded
-# pair matches what was installed. A plain run forwards neither, leaving the
-# provisioner's defaults / preserved settings to win.
 if ($PSBoundParameters.ContainsKey('Repo') -or $PSBoundParameters.ContainsKey('Ref')) {
     $createArgs['Repo'] = $Repo; $createArgs['Ref'] = $Ref
 }
-# Config-sync v2: -AutoResolve is NOT forwarded to Create-AgentVM.ps1 here.
-# Create-AgentVM.ps1 has [CmdletBinding()] and does not declare $AutoResolve,
-# so passing it would throw 'A parameter cannot be found...'. On the fresh-
-# install path, Create-AgentVM.ps1 calls Provision-AgentVM.ps1 selectively via
-# $PSBoundParameters; AutoResolve will reach the provisioner on the reprovision
-# path (which calls Provision-AgentVM.ps1 directly, above) but is not supported
-# on first-time installs through Create-AgentVM.ps1.
 try {
     & $createScript @createArgs
 
-    # Host-side finalization for the control panel's Remote-SSH features (best-effort;
-    # these never throw). Add the user to Hyper-V Administrators so the non-elevated
-    # extension can read VM power state without a UAC prompt, then open the VM in
-    # VS Code Remote-SSH directly (the control panel opens alongside it, the first
-    # time the extension activates in that remote window). The deep link is only
-    # printed as a fallback when the launch itself fails.
+    # ── Elevated host-side finalization (needs admin) ────────────────────────
+    # Add the user to Hyper-V Administrators so the non-elevated control-panel
+    # extension can read VM power state without a UAC prompt.
     Add-HyperVAdminMembership
+
+    # ── De-elevated provisioning ─────────────────────────────────────────────
+    # Provision runs as the real desktop user so config-sync resolves the right
+    # profile, SMB mappings land in the visible session, and git doesn't flag
+    # "dubious ownership". Auto-Install builds provArgs directly (Create-AgentVM
+    # no longer chains into Provision when -Auto).
+    $provisionScript = Join-Path $PSScriptRoot "Provision-AgentVM.ps1"
+    if (-not (Test-Path -LiteralPath $provisionScript)) {
+        throw "Provision-AgentVM.ps1 not found in $PSScriptRoot."
+    }
+    $VmHostname = "$($HyperVmName.ToLower()).mshome.net"
+    $provArgs = @{
+        VmHost    = $VmHostname
+        HostAlias = $HyperVmName.ToLower()
+        Projects  = $chosenProjects
+        AgentPassword = $chosenAgentPassword
+        GitUserName   = $chosenGitName
+        GitEmail      = $chosenGitEmail
+        ClaudePartialStreaming = $ClaudePartialStreaming
+        MicPassthrough        = $MicPassthrough
+        Auto      = $true
+    }
+    if ($restoreDir)         { $provArgs['RestoreDir']             = $restoreDir }
+    if ($chosenCloneCredB64) { $provArgs['GitCloneCredentialsB64'] = $chosenCloneCredB64 }
+    if ($PSBoundParameters.ContainsKey('Repo') -or $PSBoundParameters.ContainsKey('Ref')) {
+        $provArgs['Repo'] = $Repo; $provArgs['Ref'] = $Ref
+    }
+    if ($PSBoundParameters.ContainsKey('AutoResolve')) { $provArgs['AutoResolve'] = $AutoResolve }
+    Invoke-DeElevatedProvision -ScriptPath $provisionScript -ProvisionParams $provArgs
+
+    # ── Post-provision host setup ────────────────────────────────────────────
     # The install path reboots the VM at the very end of provisioning, so opening
     # VS Code Remote-SSH right away races the reboot and fails the first connect.
-    # Wait for sshd to be back STABLY (a port that answers once but is about to
-    # drop for the reboot doesn't count) before launching; on timeout open
-    # anyway -- Remote-SSH retries on its own, and the deep link is printed too.
+    # Wait for sshd to be back STABLY before launching; on timeout open anyway —
+    # Remote-SSH retries on its own, and the deep link is printed too.
     if (Get-Command Wait-VmSshReady -ErrorAction SilentlyContinue) {
         Write-Step "Waiting for the VM to come back up after the final reboot"
         if (Wait-VmSshReady -VmHost $VmHost) {
