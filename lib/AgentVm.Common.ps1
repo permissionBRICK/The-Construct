@@ -2916,11 +2916,15 @@ function Invoke-ConstructConfigSync {
         $lockToken = Lock-ConstructConfigSync -ConfigDir $ConfigDir
     }
     if (-not $lockToken) {
+        # VmReadOk mirrors configsync.js: $true/$false once the VM-store read was
+        # attempted, $null when the tick never got that far. Provisioning treats
+        # $false (and Ran=$false with profiles to seed) as fatal -- silent skips
+        # are how fresh installs end up with an empty store and zero repos.
         return [pscustomobject]@{
             Ok = $true; Ran = $false; LockBusy = $true; Conflict = $false; Blocked = $false
-            Reason = ""; SkippedInvalid = @(); Merged = $false; Seeded = $false
+            Reason = "lock-busy"; SkippedInvalid = @(); Merged = $false; Seeded = $false
             Warnings = @("Sync lock held by another engine (a VS Code window?); tick skipped.")
-            WriteBack = $null
+            WriteBack = $null; VmReadOk = $null
         }
     }
     try {
@@ -2983,7 +2987,7 @@ function Invoke-ConstructConfigSyncLocked {
             return [pscustomobject]@{
                 Ok = $true; Ran = $true; Conflict = $false; Blocked = $false
                 Reason = ""; SkippedInvalid = @(); Merged = $false; Seeded = $false
-                Warnings = @($warnings); WriteBack = $null
+                Warnings = @($warnings); WriteBack = $null; VmReadOk = $false
             }
         }
         $vmStoreFiles = $vmStoreResult.Files
@@ -3011,7 +3015,7 @@ function Invoke-ConstructConfigSyncLocked {
             Ok = $true; Ran = $true; Conflict = $false; Blocked = $false
             Reason = "degraded-no-git"; SkippedInvalid = @(); Merged = $false
             Seeded = ($seedOps.Count -gt 0); Warnings = @($warnings)
-            WriteBack = $wb
+            WriteBack = $wb; VmReadOk = $true
         }
     }
 
@@ -3022,7 +3026,7 @@ function Invoke-ConstructConfigSyncLocked {
         return [pscustomobject]@{
             Ok = $false; Ran = $false; Conflict = $false; Blocked = $false
             Reason = "repo-init-failed"; SkippedInvalid = @(); Merged = $false
-            Seeded = $false; Warnings = @($warnings); WriteBack = $null
+            Seeded = $false; Warnings = @($warnings); WriteBack = $null; VmReadOk = $null
         }
     }
 
@@ -3092,7 +3096,7 @@ function Invoke-ConstructConfigSyncLocked {
                     Ok = $false; Ran = $false; Conflict = $true; Blocked = $true
                     Reason = $reason; SkippedInvalid = @()
                     Merged = $false; Seeded = $false; Warnings = @($warnings)
-                    WriteBack = $null
+                    WriteBack = $null; VmReadOk = $null
                 }
             }
         } else {
@@ -3100,7 +3104,7 @@ function Invoke-ConstructConfigSyncLocked {
                 Ok = $false; Ran = $false; Conflict = $true; Blocked = $false
                 Reason = "merge-in-progress"; SkippedInvalid = @()
                 Merged = $false; Seeded = $false; Warnings = @($warnings)
-                WriteBack = $null
+                WriteBack = $null; VmReadOk = $null
             }
         }
     }
@@ -3158,7 +3162,7 @@ function Invoke-ConstructConfigSyncLocked {
         return [pscustomobject]@{
             Ok = $true; Ran = $true; Conflict = $false; Blocked = $false
             Reason = ""; SkippedInvalid = @(); Merged = $false; Seeded = $false
-            Warnings = @($warnings); WriteBack = $null
+            Warnings = @($warnings); WriteBack = $null; VmReadOk = $false
         }
     }
     $vmStore = $vmStoreResult.Files
@@ -3222,7 +3226,7 @@ function Invoke-ConstructConfigSyncLocked {
             return [pscustomobject]@{
                 Ok = $true; Ran = $true; Conflict = $false; Blocked = $false
                 Reason = ""; SkippedInvalid = @(); Merged = $false
-                Seeded = $true; Warnings = @($warnings); WriteBack = $wb
+                Seeded = $true; Warnings = @($warnings); WriteBack = $wb; VmReadOk = $true
             }
         }
     }
@@ -3305,6 +3309,7 @@ function Invoke-ConstructConfigSyncLocked {
                 Ok = $true; Ran = $true; Conflict = $false; Blocked = $false
                 Reason = ""; SkippedInvalid = @($skippedInvalid); Merged = $false
                 Seeded = ($reseedDone -gt 0); Warnings = @($warnings); WriteBack = $reseedWb
+                VmReadOk = $true
             }
         }
     }
@@ -3496,7 +3501,7 @@ function Invoke-ConstructConfigSyncLocked {
             Conflict = $conflict; Blocked = $blocked
             Reason = $(if ($blocked) { $blockedReason } else { "conflict" })
             SkippedInvalid = $skippedInvalid; Merged = $false; Seeded = $false
-            Warnings = @($warnings); WriteBack = $null
+            Warnings = @($warnings); WriteBack = $null; VmReadOk = $true
         }
     }
 
@@ -3574,7 +3579,7 @@ function Invoke-ConstructConfigSyncLocked {
     return [pscustomobject]@{
         Ok = $true; Ran = $true; Conflict = $false; Blocked = $false
         Reason = ""; SkippedInvalid = $skippedInvalid; Merged = $merged
-        Seeded = $false; Warnings = @($warnings); WriteBack = $wb
+        Seeded = $false; Warnings = @($warnings); WriteBack = $wb; VmReadOk = $true
     }
 }
 
