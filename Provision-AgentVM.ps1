@@ -1462,17 +1462,28 @@ if (Get-Command Initialize-ConstructConfigStore -ErrorAction SilentlyContinue) {
                 $toRun = "$stdinDecode && printf '%s\n' '$escPw' | sudo -S -p '' bash `"`$f`"; rc=`$?; rm -f `"`$f`"; exit `$rc"
             }
             $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+            $errFile = [System.IO.Path]::GetTempFileName()
             try {
                 # Pipe the base64 through stdin (no -n flag); ssh reads from
                 # the pipe and gets EOF when it closes -- no console-blocking.
-                $output = $b64 | & ssh.exe @script:SshOpts "$($script:ConnectUser)@$VmHost" $toRun 2>$null
+                # stderr goes to a temp file (not $null): when the remote command
+                # fails, ssh's own message (auth, host key, connection) is the
+                # diagnosis, and a discarded stderr is how this seed once failed
+                # with a clean-looking console and a repo-less VM.
+                $output = $b64 | & ssh.exe @script:SshOpts "$($script:ConnectUser)@$VmHost" $toRun 2>$errFile
                 $code = $LASTEXITCODE
                 if ($null -eq $code) { $code = -1 }
+                if ($code -ne 0) {
+                    $errTail = ""
+                    try { $errTail = ((Get-Content -LiteralPath $errFile -ErrorAction SilentlyContinue | Select-Object -Last 3) -join " | ") } catch { }
+                    Write-Warning "Config-sync SSH to the VM failed (exit ${code})$(if ($errTail) { ": $errTail" })"
+                }
                 $outStr = if ($null -ne $output) { ($output -join "`n") } else { "" }
                 return [pscustomobject]@{ Code = $code; Output = $outStr }
             } catch {
                 return [pscustomobject]@{ Code = -1; Output = "" }
             } finally {
+                Remove-Item -LiteralPath $errFile -ErrorAction SilentlyContinue
                 $ErrorActionPreference = $prev
             }
         }
@@ -1488,18 +1499,51 @@ if (Get-Command Initialize-ConstructConfigStore -ErrorAction SilentlyContinue) {
             $syncReason = if ($syncResult.Reason) { $syncResult.Reason } else { "Merge conflict detected." }
             throw "Config sync conflict: $syncReason -- resolve the conflict in the config repo ($syncConfigDir), commit, and re-run."
         }
+        # Surface the tick's warnings: they carry the only trace of a skipped VM
+        # side ("VM unreachable"), a degraded run, or invalid profiles. Swallowing
+        # them once let a fresh install print "Config sync completed" while the
+        # store seed had silently never happened (observed in the field).
+        foreach ($w in @($syncResult.Warnings)) {
+            if ($w) { Write-Warning "Config sync: $w" }
+        }
         if ($syncResult.Ran) { Write-Ok "Config sync completed" }
-        # Detect a failed seed: the engine reports Seeded=$true but the write
-        # invoker failed (WriteBack=$null).  The engine also sets Seeded=$true
-        # when the store was absent but the host had zero non-reserved profiles
-        # (seedOps empty -> WriteBack stays $null) -- that is a valid no-op,
-        # not a failure.  Only throw when the host actually had profiles to
-        # seed, meaning the write was attempted and failed.
         $hostHasProfiles = @($profilesBeforeSync | Where-Object {
             $script:RESERVED_PROFILE_NAMES -notcontains $_.ToLowerInvariant()
         }).Count -gt 0
+        # HARD STOPS when the host has profiles the VM must receive. Provisioning
+        # continues into generate-runtime-config.sh + checkout right after this,
+        # so any silently-skipped seed here becomes "zero repos cloned" with a
+        # clean-looking log -- fail loudly instead:
+        #  - VmReadOk=$false: the engine could not read the VM store over SSH.
+        #  - Ran=$false: the tick bailed before the VM side (repo init failed --
+        #    e.g. git "dubious ownership" when an elevated/different-admin console
+        #    doesn't own the config repo -- or the sync lock was stuck).
+        #  - Seeded with a $null WriteBack: the seed write itself failed. (Seeded
+        #    with zero host profiles is a valid no-op and hostHasProfiles=false.)
+        if ($hostHasProfiles -and $syncResult.VmReadOk -eq $false) {
+            throw "Config sync could not READ the VM store over SSH, so the project profiles were not seeded -- a fresh install would provision with zero repos.  Check the SSH warnings above, verify connectivity to $VmHost, and re-run."
+        }
+        if ($hostHasProfiles -and -not $syncResult.Ran) {
+            $ranReason = if ($syncResult.Reason) { $syncResult.Reason } else { "unknown" }
+            throw "Config sync did not run (reason: $ranReason), so the project profiles were not seeded to the VM.  Fix the cause above (config repo ownership/lock) and re-run.  Config dir: $syncConfigDir"
+        }
         if ($syncResult.Seeded -and $null -eq $syncResult.WriteBack -and $hostHasProfiles) {
             throw "Config sync attempted to seed project profiles to the VM but the write-back failed -- the VM store is empty.  Verify SSH connectivity to $VmHost and re-run."
+        }
+        # Selected projects that have NO profile in this console's host store can
+        # never seed or clone. The classic cause: this console is elevated under a
+        # DIFFERENT account (UAC admin credentials), whose %LOCALAPPDATA% store is
+        # empty -- the selection (passed via -Projects) still lists the profiles
+        # the real user sees. Warn with the resolved store path so that mismatch
+        # is visible instead of surfacing as "zero repos" minutes later.
+        $missingSel = @(("$Projects").Split(',') | ForEach-Object { $_.Trim() } | Where-Object {
+            $_ -and ($script:RESERVED_PROFILE_NAMES -notcontains $_.ToLowerInvariant()) -and
+            -not (Test-Path -LiteralPath (Join-Path $syncProjDir "$_.json"))
+        })
+        if ($missingSel.Count -gt 0) {
+            Write-Warning ("Selected project(s) have no profile in this console's host config store and cannot seed/clone: " +
+                "$($missingSel -join ', ').  Store: $syncProjDir (user: $env:USERNAME).  " +
+                "If the panel shows these profiles, this console is likely elevated under a different account.")
         }
 
         # Auto-enable profiles that newly arrived from the VM: add them to THIS

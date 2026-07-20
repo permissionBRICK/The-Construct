@@ -2013,9 +2013,41 @@ function Initialize-ConstructConfigRepo {
 
     $gitDir = Join-Path $ConfigDir ".git"
     if (Test-Path -LiteralPath $gitDir) {
-        # Already initialised -- ensure vm branch exists, and re-apply the
-        # repo-local hardening every run so a repo created before this fix is
-        # repaired (signing/hooks off, LF pinned).
+        # git refuses EVERY operation on a repo it distrusts -- classically
+        # "dubious ownership" when the config dir belongs to another account
+        # (a different-admin elevated console). This function used to swallow
+        # that and return $true, so the sync tick "ran" while each git call
+        # inside it silently no-opped. Probe first: rev-parse --git-dir
+        # succeeds on any healthy repo regardless of branch state, so a
+        # failure here means the repo is unusable -- fail init loudly with
+        # git's own diagnostic so callers (and the provisioning guard) see
+        # repo-init-failed instead of a clean-looking no-op tick.
+        # git's diagnostic goes to a temp FILE, not 2>&1: Windows PowerShell 5.1
+        # turns native stderr into ErrorRecords, and under SilentlyContinue the
+        # merged records are discarded -- the message would vanish exactly when
+        # it is needed. File redirection is applied regardless of EAP.
+        $probeErrFile = [System.IO.Path]::GetTempFileName()
+        try {
+            $probeCode = 0
+            $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+            try {
+                $null = & git -C $ConfigDir rev-parse --git-dir 2>$probeErrFile
+                $probeCode = $LASTEXITCODE
+            } finally {
+                $ErrorActionPreference = $prev
+            }
+            if ($probeCode -ne 0) {
+                $probeText = ""
+                try { $probeText = ((Get-Content -LiteralPath $probeErrFile -ErrorAction SilentlyContinue) -join " ").Trim() } catch { }
+                Write-Warning "Config repo at $ConfigDir is unusable (git rev-parse exited $probeCode)$(if ($probeText) { ": $probeText" })"
+                return $false
+            }
+        } finally {
+            Remove-Item -LiteralPath $probeErrFile -ErrorAction SilentlyContinue
+        }
+        # Ensure the vm branch exists, and re-apply the repo-local hardening
+        # every run so a repo created before this fix is repaired
+        # (signing/hooks off, LF pinned).
         $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
         try {
             $null = & git -C $ConfigDir rev-parse --verify refs/heads/vm 2>$null
@@ -2916,11 +2948,15 @@ function Invoke-ConstructConfigSync {
         $lockToken = Lock-ConstructConfigSync -ConfigDir $ConfigDir
     }
     if (-not $lockToken) {
+        # VmReadOk mirrors configsync.js: $true/$false once the VM-store read was
+        # attempted, $null when the tick never got that far. Provisioning treats
+        # $false (and Ran=$false with profiles to seed) as fatal -- silent skips
+        # are how fresh installs end up with an empty store and zero repos.
         return [pscustomobject]@{
             Ok = $true; Ran = $false; LockBusy = $true; Conflict = $false; Blocked = $false
-            Reason = ""; SkippedInvalid = @(); Merged = $false; Seeded = $false
+            Reason = "lock-busy"; SkippedInvalid = @(); Merged = $false; Seeded = $false
             Warnings = @("Sync lock held by another engine (a VS Code window?); tick skipped.")
-            WriteBack = $null
+            WriteBack = $null; VmReadOk = $null
         }
     }
     try {
@@ -2983,7 +3019,7 @@ function Invoke-ConstructConfigSyncLocked {
             return [pscustomobject]@{
                 Ok = $true; Ran = $true; Conflict = $false; Blocked = $false
                 Reason = ""; SkippedInvalid = @(); Merged = $false; Seeded = $false
-                Warnings = @($warnings); WriteBack = $null
+                Warnings = @($warnings); WriteBack = $null; VmReadOk = $false
             }
         }
         $vmStoreFiles = $vmStoreResult.Files
@@ -3011,7 +3047,7 @@ function Invoke-ConstructConfigSyncLocked {
             Ok = $true; Ran = $true; Conflict = $false; Blocked = $false
             Reason = "degraded-no-git"; SkippedInvalid = @(); Merged = $false
             Seeded = ($seedOps.Count -gt 0); Warnings = @($warnings)
-            WriteBack = $wb
+            WriteBack = $wb; VmReadOk = $true
         }
     }
 
@@ -3022,7 +3058,7 @@ function Invoke-ConstructConfigSyncLocked {
         return [pscustomobject]@{
             Ok = $false; Ran = $false; Conflict = $false; Blocked = $false
             Reason = "repo-init-failed"; SkippedInvalid = @(); Merged = $false
-            Seeded = $false; Warnings = @($warnings); WriteBack = $null
+            Seeded = $false; Warnings = @($warnings); WriteBack = $null; VmReadOk = $null
         }
     }
 
@@ -3092,7 +3128,7 @@ function Invoke-ConstructConfigSyncLocked {
                     Ok = $false; Ran = $false; Conflict = $true; Blocked = $true
                     Reason = $reason; SkippedInvalid = @()
                     Merged = $false; Seeded = $false; Warnings = @($warnings)
-                    WriteBack = $null
+                    WriteBack = $null; VmReadOk = $null
                 }
             }
         } else {
@@ -3100,7 +3136,7 @@ function Invoke-ConstructConfigSyncLocked {
                 Ok = $false; Ran = $false; Conflict = $true; Blocked = $false
                 Reason = "merge-in-progress"; SkippedInvalid = @()
                 Merged = $false; Seeded = $false; Warnings = @($warnings)
-                WriteBack = $null
+                WriteBack = $null; VmReadOk = $null
             }
         }
     }
@@ -3158,7 +3194,7 @@ function Invoke-ConstructConfigSyncLocked {
         return [pscustomobject]@{
             Ok = $true; Ran = $true; Conflict = $false; Blocked = $false
             Reason = ""; SkippedInvalid = @(); Merged = $false; Seeded = $false
-            Warnings = @($warnings); WriteBack = $null
+            Warnings = @($warnings); WriteBack = $null; VmReadOk = $false
         }
     }
     $vmStore = $vmStoreResult.Files
@@ -3222,7 +3258,7 @@ function Invoke-ConstructConfigSyncLocked {
             return [pscustomobject]@{
                 Ok = $true; Ran = $true; Conflict = $false; Blocked = $false
                 Reason = ""; SkippedInvalid = @(); Merged = $false
-                Seeded = $true; Warnings = @($warnings); WriteBack = $wb
+                Seeded = $true; Warnings = @($warnings); WriteBack = $wb; VmReadOk = $true
             }
         }
     }
@@ -3305,6 +3341,7 @@ function Invoke-ConstructConfigSyncLocked {
                 Ok = $true; Ran = $true; Conflict = $false; Blocked = $false
                 Reason = ""; SkippedInvalid = @($skippedInvalid); Merged = $false
                 Seeded = ($reseedDone -gt 0); Warnings = @($warnings); WriteBack = $reseedWb
+                VmReadOk = $true
             }
         }
     }
@@ -3496,7 +3533,7 @@ function Invoke-ConstructConfigSyncLocked {
             Conflict = $conflict; Blocked = $blocked
             Reason = $(if ($blocked) { $blockedReason } else { "conflict" })
             SkippedInvalid = $skippedInvalid; Merged = $false; Seeded = $false
-            Warnings = @($warnings); WriteBack = $null
+            Warnings = @($warnings); WriteBack = $null; VmReadOk = $true
         }
     }
 
@@ -3574,7 +3611,7 @@ function Invoke-ConstructConfigSyncLocked {
     return [pscustomobject]@{
         Ok = $true; Ran = $true; Conflict = $false; Blocked = $false
         Reason = ""; SkippedInvalid = $skippedInvalid; Merged = $merged
-        Seeded = $false; Warnings = @($warnings); WriteBack = $wb
+        Seeded = $false; Warnings = @($warnings); WriteBack = $wb; VmReadOk = $true
     }
 }
 
