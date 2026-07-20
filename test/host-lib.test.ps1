@@ -417,6 +417,18 @@ foreach ($rel in $shipped) {
     if ($bad.Count -gt 0) { $bad | Select-Object -First 3 | ForEach-Object { Write-Host ("        line {0}: {1}" -f $_.Extent.StartLineNumber, $_.Extent.Text) -ForegroundColor DarkYellow } }
 }
 
+# ── Wait-VmSshReady ──────────────────────────────────────────────────────────
+# Real TCP against localhost: a live listener must count as ready (including the
+# consecutive-probe stability window), a closed port must time out to $false.
+$listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+$listener.Start()
+$lport = $listener.LocalEndpoint.Port
+try {
+    ok "ssh-wait: stable listener reports ready" (Wait-VmSshReady -VmHost "127.0.0.1" -Port $lport -TimeoutSec 15 -ProbeIntervalSec 0 -StableProbes 3)
+} finally { $listener.Stop() }
+ok "ssh-wait: closed port times out false" (-not (Wait-VmSshReady -VmHost "127.0.0.1" -Port $lport -TimeoutSec 2 -ProbeIntervalSec 0))
+ok "ssh-wait: unresolvable host returns false without throwing" ((Wait-VmSshReady -VmHost "definitely-not-a-host.invalid" -TimeoutSec 2 -ProbeIntervalSec 0) -eq $false)
+
 Write-Host ""
 Write-Host ("  host-lib unit tests - {0}/{1} passed" -f $script:pass, ($script:pass + $script:fail))
 Write-Host ""
