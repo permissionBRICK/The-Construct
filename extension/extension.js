@@ -607,19 +607,22 @@ function persistMicPreference(enabled) {
   } catch (_) { /* best-effort */ }
 }
 
-/** Force-update the coding agents on the VM over SSH, with a progress notification,
- *  then re-probe so the new versions + cleared badges show. */
-function runUpdateAgents() {
-  const script = updates.buildAgentUpdateScript();
+/** Force-update coding agents on the VM over SSH, with a progress notification,
+ *  then re-probe so the new versions + cleared badges show. `ids` narrows the
+ *  update to specific agents (the panel's per-agent ↑ tag); omitted = all. */
+function runUpdateAgents(ids) {
+  const subset = Array.isArray(ids) && ids.length ? ids : null;
+  const what = subset ? subset.join(", ") : "coding agents";
+  const script = updates.buildAgentUpdateScript(subset || undefined);
   vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: "Updating coding agents on the VM…", cancellable: false },
+    { location: vscode.ProgressLocation.Notification, title: `Updating ${what} on the VM…`, cancellable: false },
     async () => {
       const r = await ssh.runRemoteScript(script, { timeoutMs: 300000 });
       if (r.code === 0) {
-        vscode.window.showInformationMessage("Coding agents updated.");
+        vscode.window.showInformationMessage(subset ? `${what} updated.` : "Coding agents updated.");
       } else {
         vscode.window.showErrorMessage(
-          `Updating agents failed (exit ${r.code}). ${(r.stderr || "").slice(0, 200)}`.trim()
+          `Updating ${what} failed (exit ${r.code}). ${(r.stderr || "").slice(0, 200)}`.trim()
         );
       }
       refreshAll(); // re-probe versions + clear the update badges
@@ -1378,6 +1381,13 @@ function handleMessage(message, webview, context) {
       if (id === "editProject") { runEditProject(message.project, webview); return; }
       if (id === "exportUsage") { runExportUsage(); return; }
       if (id === "updateAgents") { runUpdateAgents(); return; }
+      if (id === "updateAgent") {
+        // Per-agent ↑ tag. Validate against the known ids — the webview is
+        // untrusted input and this string reaches a remote shell script builder.
+        const known = ["claude-code", "codex", "opencode"];
+        if (known.includes(message.agent)) runUpdateAgents([message.agent]);
+        return;
+      }
       if (id === "connect") { remote.openOnVm({ path: "/root/repos", newWindow: false }); return; }
       if (id === "startConnect") { runStartAndConnect(); return; }
       if (id === "shutdown") { runShutdown(); return; }

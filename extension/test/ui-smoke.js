@@ -131,7 +131,10 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
 
   await page.evaluate(() => window.postMessage({ type: "state", state: {
     vmName: "agent-vm-01", host: "h.example.net", online: true,
-    agents: [{ name: "Claude Code", detail: "CLI", version: "2.1.196", updateAvailable: true, latest: "2.1.210" }],
+    agents: [
+      { id: "claude-code", name: "Claude Code", detail: "CLI", version: "2.1.196", updateAvailable: true, latest: "2.1.210" },
+      { id: "codex", name: "Codex", version: "0.144.6", updateAvailable: false },
+    ],
     projects: [{ name: "default", selected: true }, { name: "billing", selected: false }],
     usagePeriod: "total",
     usage: { tools: [
@@ -145,6 +148,17 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("state render: update banner shown", await page.locator("#updateBanner").isVisible());
   check("state render: agent version", (await page.locator("#agentList .agent").first().innerText()).includes("2.1.196"));
   check("state render: project chips", (await page.locator("#projChips .chip").count()) === 2);
+
+  // Per-agent update: an update-available ↑ tag with an agent id is a button
+  // posting {command updateAgent, agent}; an up-to-date tag stays inert.
+  check("agent update tag: clickable when update available",
+    (await page.locator('#agentList .tag.upd[data-agent="claude-code"][role="button"]').count()) === 1);
+  check("agent update tag: up-to-date tag stays inert",
+    (await page.locator("#agentList .tag.ok[data-agent]").count()) === 0);
+  await page.click('#agentList .tag.upd[data-agent="claude-code"]');
+  const agentPost = await page.evaluate(() =>
+    window.__posted.filter((m) => m && m.type === "command" && m.id === "updateAgent").pop());
+  check("agent update tag: posts updateAgent with the agent id", !!agentPost && agentPost.agent === "claude-code");
 
   // provision-stale: Reprovision goes yellow (class "stale") + subtext when the VM was
   // provisioned with an older Construct than the installed one; cleared when in sync.

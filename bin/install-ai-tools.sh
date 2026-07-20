@@ -284,7 +284,10 @@ configure_claude_vscode_setting() {
 install_claude_code() {
   step "Installing Claude Code CLI"
   if command -v claude >/dev/null 2>&1; then
-    note "Claude Code already installed"
+    note "Claude Code already installed; self-updating"
+    # Best-effort: a failed self-update keeps the working installed version --
+    # never worth degrading a provision over.
+    claude update || warn "claude self-update failed; keeping the installed version"
   elif [[ "${TARGET_USER}" != "root" ]] && id "${TARGET_USER}" >/dev/null 2>&1; then
     sudo -H -u "${TARGET_USER}" bash -lc 'curl -fsSL https://claude.ai/install.sh | bash'
     if [[ -x "/home/${TARGET_USER}/.local/bin/claude" ]]; then
@@ -412,7 +415,32 @@ install_codex() {
     fi
     rm -f "${codex_installer}"
   else
-    note "Codex already installed"
+    # Already installed: update in place, matching HOW it is installed. An npm
+    # global install (the shim resolves into node_modules -- how the fallback
+    # above installs it) updates via npm; the official installer would fight
+    # that layout. Official-installer layouts re-run the installer, with the
+    # same npm fallback. Best-effort either way: a failed update keeps the
+    # working installed version rather than degrading the provision.
+    codex_current="$(readlink -f "$(command -v codex)" 2>/dev/null || true)"
+    case "${codex_current}" in
+      */node_modules/*)
+        note "Codex already installed (npm); updating via npm"
+        npm install -g @openai/codex@latest || warn "codex npm update failed; keeping the installed version"
+        ;;
+      *)
+        note "Codex already installed; updating via the official installer"
+        codex_installer="$(mktemp)"
+        if ! { curl -fsSL https://chatgpt.com/codex/install.sh -o "${codex_installer}" \
+            && printf 'n\n' | CI=1 sh "${codex_installer}"; }; then
+          if command -v npm >/dev/null 2>&1 && npm install -g @openai/codex@latest; then
+            warn "Official Codex installer failed; updated via npm instead"
+          else
+            warn "codex update failed; keeping the installed version"
+          fi
+        fi
+        rm -f "${codex_installer}"
+        ;;
+    esac
   fi
 
   # Resolve the binary /usr/local/bin/codex should point at, then link it there
