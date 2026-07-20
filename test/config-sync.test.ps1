@@ -1555,8 +1555,49 @@ if (-not $bashAvailable) {
     $sfWouldThrowB = $sfResult2.Seeded -and $null -eq $sfResult2.WriteBack -and $sfHostHasProfiles2
     ok "seed-guard: failed-write DOES trigger throw" $sfWouldThrowB
 
+    # Both prior scenarios READ the VM store successfully -> VmReadOk=$true.
+    ok "seed-guard: successful read reports VmReadOk=true (A)" ($sfResult.VmReadOk -eq $true)
+    ok "seed-guard: successful read reports VmReadOk=true (B)" ($sfResult2.VmReadOk -eq $true)
+
+    # Scenario C: the READ invoker fails (SSH down / auth / mangled transport).
+    # Historically this was the silent zero-repos variant: the engine skipped the
+    # VM side with only a swallowed warning, Seeded stayed $false, and the old
+    # write-guard never fired.  The result must now carry VmReadOk=$false so the
+    # provision-side guard can hard-stop when the host has profiles to seed.
+    $sfBase3 = Join-Path ([System.IO.Path]::GetTempPath()) ("sf-test3-" + [guid]::NewGuid().ToString("N"))
+    $sfCfgDir3 = Join-Path $sfBase3 "config"
+    New-Item -ItemType Directory -Path (Join-Path $sfCfgDir3 "projects") -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $sfCfgDir3 "manifest") -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $sfCfgDir3 "bases") -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $sfCfgDir3 "projects/testprof.json"),
+        $sfProfile, (New-Object System.Text.UTF8Encoding $false))
+
+    $sfFailRead = {
+        param([string]$s)
+        return [pscustomobject]@{ Code = 255; Output = "" }
+    }
+
+    $sfInit3 = Initialize-ConstructConfigRepo -ConfigDir $sfCfgDir3
+    $sfResult3 = Invoke-ConstructConfigSync -ConfigDir $sfCfgDir3 -VmHost "dummy" `
+        -SshReadInvoker $sfFailRead -SshWriteInvoker $sfFreshInvoker
+
+    ok "seed-guard: failed read reports VmReadOk=false" ($sfResult3.VmReadOk -eq $false)
+    ok "seed-guard: failed read does not claim a seed" ($sfResult3.Seeded -eq $false)
+    ok "seed-guard: failed read still surfaces a warning" (@($sfResult3.Warnings) -match "unreachable").Count -gt 0
+
+    # The provision-side read-guard (hostHasProfiles && VmReadOk -eq $false) must
+    # fire for C and stay quiet for A (successful read, empty host) and B (read
+    # ok; B's failure belongs to the separate write-guard).
+    $sfWouldThrowC = $sfHostHasProfiles2 -and $sfResult3.VmReadOk -eq $false
+    ok "seed-guard: failed read DOES trigger the read-guard throw" $sfWouldThrowC
+    ok "seed-guard: read-guard stays quiet on successful reads" (
+        -not ($sfHostHasProfiles -and $sfResult.VmReadOk -eq $false) -and
+        -not ($sfHostHasProfiles2 -and $sfResult2.VmReadOk -eq $false))
+
     Remove-Item -LiteralPath $sfBase -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $sfBase2 -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $sfBase3 -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 # ── Summary ──────────────────────────────────────────────────────────────────

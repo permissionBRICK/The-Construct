@@ -545,7 +545,7 @@ async function syncTick(opts) {
     return {
       ok: true, ran: false, lockBusy: true, conflict: false, blocked: false,
       blockedReason: null, skippedInvalid: [], merged: false, seeded: false,
-      writeBack: { done: [], skipped: [] }, warnings: [],
+      writeBack: { done: [], skipped: [] }, warnings: [], vmReadOk: null,
     };
   }
   try { return await syncTickLocked(opts); }
@@ -557,10 +557,15 @@ async function syncTick(opts) {
 async function syncTickLocked({ runGit, configDir, readStore, writeStore, log, storeRoot }) {
   const warn = (msg) => log && log("warn", msg);
   const info = (msg) => log && log("info", msg);
+  // vmReadOk: did the VM-store read succeed this tick? true/false once the read
+  // was attempted, null when the tick never got that far (lock busy, repo init
+  // failure, conflict). Provisioning treats false as fatal when the host has
+  // profiles to seed — a silent read failure is how a fresh install ends up
+  // with an empty store and zero cloned repos.
   const result = {
     ok: false, ran: false, conflict: false, blocked: false, blockedReason: null,
     skippedInvalid: [], merged: false, seeded: false,
-    writeBack: { done: [], skipped: [] }, warnings: [],
+    writeBack: { done: [], skipped: [] }, warnings: [], vmReadOk: null,
   };
   const addWarning = (msg) => { result.warnings.push(msg); warn(msg); };
 
@@ -612,9 +617,11 @@ async function syncTickLocked({ runGit, configDir, readStore, writeStore, log, s
   if (vmParsed === null) {
     // SSH unreachable or truncated — skip VM side, return partial success.
     addWarning("could not read VM store (SSH unreachable or truncated)");
+    result.vmReadOk = false;
     result.ok = true;
     return result;
   }
+  result.vmReadOk = true;
 
   const vmStoreAbsent = vmParsed.storeAbsent;
 
