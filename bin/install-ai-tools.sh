@@ -481,6 +481,22 @@ install_codex() {
     err "Codex install completed, but no codex binary was found (checked PATH, /root/.local/bin, /root/.codex/bin, /usr/local, /usr/lib/node_modules)"
     return 1
   fi
+  # Never pin a VERSIONED release dir of the official standalone installer
+  # (.../.codex/.../releases/<version>/bin/codex): updates only move the
+  # installer's `current` symlink, so a fully-resolved link would keep
+  # executing -- and the panel probe reporting -- the OLD version forever
+  # (observed: /usr/local/bin/codex stuck on 0.144.0 while `current` was
+  # 0.144.6). Link the stable entry instead; symlink chains resolve at exec.
+  case "${codex_target}" in
+    */.codex/*releases/*)
+      for codex_stable in /root/.local/bin/codex /root/.codex/bin/codex; do
+        if [[ -x "${codex_stable}" && "$(readlink -f "${codex_stable}" 2>/dev/null)" != "/usr/local/bin/codex" ]]; then
+          codex_target="${codex_stable}"
+          break
+        fi
+      done
+      ;;
+  esac
   if [[ ! -x "${codex_target}" ]]; then
     err "refusing to create codex symlink: resolved path is invalid (${codex_target})"
     return 1
