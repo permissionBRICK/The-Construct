@@ -2013,9 +2013,27 @@ function Initialize-ConstructConfigRepo {
 
     $gitDir = Join-Path $ConfigDir ".git"
     if (Test-Path -LiteralPath $gitDir) {
-        # Already initialised -- ensure vm branch exists, and re-apply the
-        # repo-local hardening every run so a repo created before this fix is
-        # repaired (signing/hooks off, LF pinned).
+        # git refuses EVERY operation on a repo it distrusts -- classically
+        # "dubious ownership" when the config dir belongs to another account
+        # (a different-admin elevated console). This function used to swallow
+        # that and return $true, so the sync tick "ran" while each git call
+        # inside it silently no-opped. Probe first: rev-parse --git-dir
+        # succeeds on any healthy repo regardless of branch state, so a
+        # failure here means the repo is unusable -- fail init loudly with
+        # git's own diagnostic so callers (and the provisioning guard) see
+        # repo-init-failed instead of a clean-looking no-op tick.
+        $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+        $probeOut = & git -C $ConfigDir rev-parse --git-dir 2>&1
+        $probeCode = $LASTEXITCODE
+        $ErrorActionPreference = $prev
+        if ($probeCode -ne 0) {
+            $probeText = (@($probeOut | ForEach-Object { "$_" }) -join " ").Trim()
+            Write-Warning "Config repo at $ConfigDir is unusable (git rev-parse exited $probeCode): $probeText"
+            return $false
+        }
+        # Ensure the vm branch exists, and re-apply the repo-local hardening
+        # every run so a repo created before this fix is repaired
+        # (signing/hooks off, LF pinned).
         $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
         try {
             $null = & git -C $ConfigDir rev-parse --verify refs/heads/vm 2>$null
