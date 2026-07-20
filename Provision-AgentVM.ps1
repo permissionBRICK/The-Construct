@@ -149,10 +149,37 @@ param(
     # exit" pause only when provisioning is fully clean. Optional or critical errors
     # always force the pause so the result remains readable. A direct PowerShell run
     # leaves this off and pauses as usual.
-    [switch]$FromPanel
+    [switch]$FromPanel,
+    # Path to a JSON result file written by the finally block when this script runs
+    # as a de-elevated child (Invoke-DeElevatedProvision). The elevated parent polls
+    # this file for the provision outcome. Not set on standalone or panel runs —
+    # the result flows through globals and the console instead.
+    [string]$ResultFile = "",
+    # Path to a "ready" handshake file written atomically (temp+rename) immediately
+    # after param binding succeeds. The elevated parent polls this to confirm the
+    # child's script entry worked (vs. a bootstrap/decode/missing-script failure).
+    # Contains the child PID so the parent can track liveness and stop on timeout.
+    [string]$ReadyFile = ""
 )
 
 $ErrorActionPreference = "Stop"
+
+# De-elevated child: signal the parent that Provision-AgentVM.ps1 has started
+# (param binding succeeded, script was found). Written atomically so the parent
+# never reads a partial PID.
+if ($ReadyFile) {
+    $readyTmp = "$ReadyFile.tmp.$PID"
+    try {
+        Set-Content -LiteralPath $readyTmp -Value "$PID" -Encoding ASCII -Force
+        Move-Item -LiteralPath $readyTmp -Destination $ReadyFile -Force -ErrorAction Stop
+    } catch {
+        # Unable to signal readiness — exit before any provisioning work so the
+        # parent's handshake timeout triggers a clean inline fallback.
+        Remove-Item -LiteralPath $readyTmp -Force -ErrorAction SilentlyContinue
+        Write-Warning "Could not publish ready handshake: $($_.Exception.Message)"
+        exit 1
+    }
+}
 
 # Decode native-command output (ssh/scp stdout) as UTF-8. Windows PowerShell 5.1
 # otherwise decodes it with the OEM code page (CP437/850), which turns the remote's
@@ -1111,6 +1138,7 @@ function Select-Projects {
 
 $script:ProvisionResult = $null
 $script:ProvisionFailureMessage = ""
+$script:ProvisionRawLines = @()
 if ($Action -eq 'provision') {
     $global:ConstructProvisionHadErrors = $false
     $global:ConstructProvisionErrors = @()
@@ -1658,6 +1686,8 @@ $envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' 
 Write-Host "  --- live provisioning output ---" -ForegroundColor DarkGray
 $provisionStream = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "$envPrefix bash /opt/construct/repo/bin/provision.sh"
 Write-Host "  --- end provisioning output ---" -ForegroundColor DarkGray
+# Store raw output for the result file (de-elevated child → parent fidelity).
+$script:ProvisionRawLines = @($provisionStream.Lines)
 $script:ProvisionResult = ConvertFrom-ConstructProvisionResult -Lines $provisionStream.Lines
 $global:ConstructProvisionErrors = @($script:ProvisionResult.Errors)
 if (-not $script:ProvisionResult.IsValid) {
@@ -2054,14 +2084,47 @@ catch {
     }
     # Standalone: show the failure above our own pause (readable even on a
     # double-click run). Chained (-Auto): rethrow so the upper script owns the
-    # single error display + pause.
-    if ($Auto) { throw }
+    # single error display + pause. De-elevated child (-ResultFile): don't
+    # rethrow — the result file written in the finally block IS the signal, and
+    # the result screen shows the error without a raw stack trace.
+    if ($Auto -and -not $ResultFile) { throw }
     Write-Host ""
     Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
 }
 finally {
     if ($Action -eq 'provision') {
         Show-ProvisionResultScreen -Result $script:ProvisionResult -FailureMessage $script:ProvisionFailureMessage
+    }
+    # De-elevated child (-ResultFile): write the result file so the elevated parent
+    # can read the outcome. Atomic: write to a temp file, then rename, so the
+    # parent never observes a partial (torn) write. No pause — the parent's
+    # Wait-Exit owns the single authoritative final screen and error prompt;
+    # pausing here would create competing pauses and risk orphaned consoles.
+    if ($ResultFile) {
+        $provExitCode = if ($script:ProvisionFailureMessage) { 1 }
+                        elseif ($global:ConstructProvisionHadErrors) { 3 }
+                        else { 0 }
+        $resultData = @{
+            ExitCode       = $provExitCode
+            HadErrors      = [bool]$global:ConstructProvisionHadErrors
+            FailureMessage = [string]$script:ProvisionFailureMessage
+            RawSentinel    = [string[]]$script:ProvisionRawLines
+        }
+        # Atomic publication: write to temp then rename. Never write the watched
+        # final name directly — a partial file would cause a torn read in the
+        # polling parent. If atomic publication fails, exit nonzero so the parent
+        # reports publication failure instead of observing garbage.
+        $tmpResult = "$ResultFile.tmp.$PID"
+        try {
+            $resultData | ConvertTo-Json -Depth 4 |
+                Set-Content -LiteralPath $tmpResult -Encoding UTF8 -Force
+            Move-Item -LiteralPath $tmpResult -Destination $ResultFile -Force -ErrorAction Stop
+        } catch {
+            Write-Warning "Could not publish provision result: $($_.Exception.Message)"
+            Remove-Item -LiteralPath $tmpResult -Force -ErrorAction SilentlyContinue
+            exit 1
+        }
+        exit $provExitCode
     }
     # An upper script (-Auto) owns the single final pause. Direct runs pause as
     # before; panel runs skip it only when fully clean so errors cannot disappear

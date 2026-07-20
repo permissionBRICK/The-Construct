@@ -1317,12 +1317,22 @@ function Add-HyperVAdminMembership {
     try {
         $sid = [System.Security.Principal.SecurityIdentifier]'S-1-5-32-578'
         $grp = Get-LocalGroup -SID $sid -ErrorAction Stop
-        $mySid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+        # Use the desktop user (explorer.exe owner) rather than the elevated
+        # identity so over-the-shoulder UAC / ABR adds the RIGHT account.
+        # When no desktop shell is found, skip rather than fall back to the
+        # elevated SID (which is precisely the wrong account).
+        $desktopUser = Get-DesktopUser
+        if (-not $desktopUser) {
+            Write-Note "Desktop user could not be determined -- skipping Hyper-V Administrators membership."
+            return
+        }
+        $desktopSid = (New-Object System.Security.Principal.NTAccount($desktopUser)).Translate(
+            [System.Security.Principal.SecurityIdentifier]).Value
         $already = @(Get-LocalGroupMember -Group $grp -ErrorAction Stop |
-                     Where-Object { $_.SID.Value -eq $mySid })
+                     Where-Object { $_.SID.Value -eq $desktopSid })
         if ($already.Count -gt 0) { Write-Note "Already in '$($grp.Name)'."; return }
         # -Member accepts a SID string; -SID on this cmdlet would identify the GROUP.
-        Add-LocalGroupMember -Group $grp -Member $mySid -ErrorAction Stop
+        Add-LocalGroupMember -Group $grp -Member $desktopSid -ErrorAction Stop
         Write-Ok "Added you to '$($grp.Name)' (effective at next sign-in)."
     } catch {
         Write-Note "Could not update Hyper-V Administrators membership: $($_.Exception.Message)"
@@ -1451,6 +1461,468 @@ function Open-RemoteWorkspace {
         return $true
     } catch {
         return $false
+    }
+}
+
+# ── De-elevated provisioning ─────────────────────────────────────────────────
+# The install chain runs elevated (Hyper-V needs admin), but provisioning should
+# run as the real desktop user so config-sync resolves the right profile, SMB
+# mappings land in the visible session, and git doesn't flag "dubious ownership".
+# These helpers launch Provision-AgentVM.ps1 in a non-elevated console via a
+# one-shot scheduled task with InteractiveToken + LeastPrivilege.
+
+function Get-DesktopUser {
+    <#
+        Resolve the real desktop user's DOMAIN\User identity. In same-user UAC
+        elevation WindowsIdentity::GetCurrent() IS the desktop user, but with
+        over-the-shoulder UAC (or Admin By Request) it returns the admin account
+        that granted elevation. Explorer.exe in the SAME interactive session
+        always runs as the real desktop user, so its process owner is the
+        authoritative identity. Returns $null when no unambiguous desktop shell
+        is available (Server Core, headless, multi-user RDP with no console
+        explorer) — callers must handle the null and take a loud fallback.
+    #>
+    [CmdletBinding()]
+    param()
+    try {
+        # Filter explorer.exe to the installer's interactive session so
+        # multi-user / RDP hosts don't pick another logged-on user's shell.
+        $sessionId = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
+        $explorerPids = @(Get-Process -Name 'explorer' -ErrorAction SilentlyContinue |
+                          Where-Object { $_.SessionId -eq $sessionId } |
+                          Select-Object -ExpandProperty Id)
+        if ($explorerPids.Count -eq 0) { return $null }
+        $explorer = Get-CimInstance Win32_Process `
+                        -Filter "ProcessId=$($explorerPids[0])" -ErrorAction Stop
+        if ($explorer) {
+            $owner = Invoke-CimMethod -InputObject $explorer -MethodName GetOwner -ErrorAction Stop
+            if ($owner.ReturnValue -eq 0 -and $owner.User) {
+                $domain = if ($owner.Domain) { $owner.Domain } else { $env:USERDOMAIN }
+                return "$domain\$($owner.User)"
+            }
+        }
+    } catch { }
+    return $null
+}
+
+function Build-ProvisionEncodedCommand {
+    <#
+        Serialize a provision parameter set into a single -EncodedCommand blob that
+        powershell.exe can accept. The params ride as JSON->base64 inside the script
+        text, so values with spaces, quotes, or special characters survive intact.
+        Returns the base64-encoded UTF-16LE script string.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ScriptPath,
+        [Parameter(Mandatory)][hashtable]$Params,
+        [Parameter(Mandatory)][string]$ResultFile,
+        [Parameter(Mandatory)][string]$ReadyFile
+    )
+    # Inner base64: the param hashtable as JSON, then base64, so it embeds safely
+    # inside the script string without quoting issues.
+    $json = ConvertTo-Json -InputObject $Params -Depth 4 -Compress
+    $b64  = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
+    # The script decodes the JSON, converts the PSCustomObject to a hashtable
+    # (PS 5.1's ConvertFrom-Json returns PSCustomObject, which can't be splatted),
+    # adds -ResultFile and -ReadyFile, and calls the provisioner. The ready-file
+    # handshake is written by Provision-AgentVM.ps1 itself (after param binding),
+    # not by this bootstrap — that way a missing/broken script or binding failure
+    # leaves no handshake and the parent falls back to inline elevated.
+    $escapedScript = $ScriptPath -replace "'", "''"
+    $escapedResult = $ResultFile -replace "'", "''"
+    $escapedReady  = $ReadyFile  -replace "'", "''"
+    $script = @"
+`$ErrorActionPreference = 'Stop'
+try {
+    `$Host.UI.RawUI.WindowTitle = 'Construct - Provisioning the VM'
+    `$Host.UI.RawUI.BackgroundColor = [ConsoleColor]::Black
+    if (`$Host.UI.RawUI.ForegroundColor -eq [ConsoleColor]::Black) {
+        `$Host.UI.RawUI.ForegroundColor = [ConsoleColor]::Gray
+    }
+    Clear-Host
+} catch { }
+try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch { }
+`$json = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$b64'))
+`$obj  = ConvertFrom-Json `$json
+`$ht   = @{}
+foreach (`$p in `$obj.PSObject.Properties) {
+    if (`$p.Value -is [bool]) { `$ht[`$p.Name] = [switch]`$p.Value }
+    else                      { `$ht[`$p.Name] = `$p.Value }
+}
+`$ht['ResultFile'] = '$escapedResult'
+`$ht['ReadyFile']  = '$escapedReady'
+& '$escapedScript' @`$ht
+"@
+    # Outer encoding: -EncodedCommand expects UTF-16LE base64.
+    return [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
+}
+
+function Invoke-DeElevatedProvision {
+    <#
+        Launch Provision-AgentVM.ps1 in a non-elevated console as the desktop user.
+        When already non-elevated (panel reprovision), runs Provision inline — no
+        task, no result file, identical to the pre-change behaviour.
+
+        On return, $global:ConstructProvisionHadErrors / ConstructProvisionErrors /
+        ConstructProvisionFailureMessage are set so the caller's Wait-Exit works
+        unchanged. Throws on critical failure (matching the inline behaviour).
+
+        Falls back to an inline elevated call (with a warning) if the scheduled task
+        can't be created — never leaves the VM created-but-unprovisioned silently.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ScriptPath,
+        [Parameter(Mandatory)][hashtable]$ProvisionParams,
+        [int]$TimeoutSeconds = 7200
+    )
+
+    # ── Not elevated? Run inline (panel reprovision — already non-elevated). ─────
+    $isElevated = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
+                   ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $isElevated) {
+        & $ScriptPath @ProvisionParams
+        return
+    }
+
+    Write-Step "De-elevating: provisioning will run as the desktop user"
+
+    # Resolve the desktop user BEFORE creating the task — the admin identity from
+    # an over-the-shoulder UAC / ABR session is NOT the desktop user. If no
+    # unambiguous desktop shell is found (Server Core, headless, multi-user RDP),
+    # fall back to inline elevated with a loud warning.
+    $desktopUser = Get-DesktopUser
+    if (-not $desktopUser) {
+        Write-Warning "Could not determine the desktop user (no explorer.exe in this session)."
+        Write-Warning "Falling back to inline elevated provisioning (config-sync may use the elevated profile)."
+        & $ScriptPath @ProvisionParams
+        return
+    }
+
+    $taskName = "ConstructProvision-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
+
+    # Clean up orphaned tasks from prior runs (crashed/aborted installs).
+    try {
+        Get-ScheduledTask -TaskPath '\' -ErrorAction SilentlyContinue |
+            Where-Object { $_.TaskName -like 'ConstructProvision-*' -and $_.State -ne 'Running' } |
+            ForEach-Object {
+                Unregister-ScheduledTask -TaskName $_.TaskName -Confirm:$false -ErrorAction SilentlyContinue
+            }
+    } catch { }
+
+    # ── Per-run IPC directory ────────────────────────────────────────────────────
+    # The elevated parent's $env:TEMP is inaccessible to a different desktop user
+    # (over-the-shoulder UAC). Use a GUID-named subdirectory under ProgramData
+    # with an explicit ACL granting only SYSTEM, Administrators, and the resolved
+    # desktop user — never a predictable or world-writable path.
+    $ipcBase = if ($env:ProgramData) { $env:ProgramData } else { Join-Path $env:SystemDrive 'ProgramData' }
+    $ipcDir  = Join-Path $ipcBase "construct-provision-$([guid]::NewGuid().ToString('N'))"
+    try {
+        New-Item -ItemType Directory -Path $ipcDir -Force -ErrorAction Stop | Out-Null
+        $acl     = New-Object System.Security.AccessControl.DirectorySecurity
+        $acl.SetAccessRuleProtection($true, $false)
+        $inherit = [System.Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'
+        $none    = [System.Security.AccessControl.PropagationFlags]::None
+        $allow   = [System.Security.AccessControl.AccessControlType]::Allow
+        $full    = [System.Security.AccessControl.FileSystemRights]::FullControl
+        $modify  = [System.Security.AccessControl.FileSystemRights]::Modify
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+            ([System.Security.Principal.SecurityIdentifier]'S-1-5-32-544'), $full, $inherit, $none, $allow)))
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+            ([System.Security.Principal.SecurityIdentifier]'S-1-5-18'), $full, $inherit, $none, $allow)))
+        $desktopNT = New-Object System.Security.Principal.NTAccount($desktopUser)
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $desktopNT, $modify, $inherit, $none, $allow)))
+        Set-Acl -Path $ipcDir -AclObject $acl
+    } catch {
+        Write-Warning "Could not create IPC directory: $($_.Exception.Message)"
+        Write-Warning "Falling back to inline elevated provisioning (config-sync may use the elevated profile)."
+        Remove-Item -LiteralPath $ipcDir -Recurse -Force -ErrorAction SilentlyContinue
+        & $ScriptPath @ProvisionParams
+        return
+    }
+
+    $resultFile = Join-Path $ipcDir "result.json"
+    $readyFile  = Join-Path $ipcDir "ready"
+
+    # ── Register + start the one-shot scheduled task ─────────────────────────────
+    # InteractiveToken uses the desktop session's standard (non-elevated) token;
+    # RunLevel Limited ensures no elevation. The task opens a visible powershell
+    # console in the user's desktop session.
+    try {
+        $encodedCmd = Build-ProvisionEncodedCommand `
+            -ScriptPath $ScriptPath -Params $ProvisionParams `
+            -ResultFile $resultFile -ReadyFile $readyFile
+
+        $action    = New-ScheduledTaskAction -Execute 'powershell.exe' `
+                        -Argument "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $encodedCmd"
+        $principal = New-ScheduledTaskPrincipal `
+                        -UserId $desktopUser `
+                        -LogonType InteractiveToken `
+                        -RunLevel Limited
+        $settings  = New-ScheduledTaskSettingsSet `
+                        -AllowStartIfOnBatteries `
+                        -DontStopIfGoingOnBatteries `
+                        -ExecutionTimeLimit (New-TimeSpan -Seconds $TimeoutSeconds)
+
+        Register-ScheduledTask -TaskName $taskName `
+            -Action $action -Principal $principal -Settings $settings `
+            -ErrorAction Stop | Out-Null
+        Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
+        Write-Ok "Provisioning started in a de-elevated console"
+    } catch {
+        # Fallback: run provision inline elevated, with a loud warning. This keeps
+        # the VM from sitting created-but-unprovisioned when the task mechanism fails
+        # (e.g. explorer unavailable, ABR session quirk, Task Scheduler disabled).
+        # Start-ScheduledTask can have launched/queued an instance even if the command
+        # reports an error — stop it and confirm it's dead before fallback.
+        Write-Warning "Could not start de-elevated provisioning: $($_.Exception.Message)"
+        try { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue } catch { }
+        $taskConfirmedStopped = $false
+        $startStopDeadline = (Get-Date).AddSeconds(10)
+        while ((Get-Date) -lt $startStopDeadline) {
+            $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+            if (-not $task -or ($task.State -ne 'Running' -and $task.State -ne 'Queued')) {
+                $taskConfirmedStopped = $true; break
+            }
+            Start-Sleep -Seconds 1
+        }
+        if (-not $taskConfirmedStopped) {
+            # Preserve the task and IPC directory for diagnosis. Set globals so
+            # Wait-Exit renders the persistent final screen before throwing.
+            $global:ConstructProvisionHadErrors = $true
+            $global:ConstructProvisionErrors = @()
+            $global:ConstructProvisionFailureMessage = "De-elevated task '$taskName' may still be running after a failed start -- cannot safely fall back. Check Task Scheduler."
+            throw $global:ConstructProvisionFailureMessage
+        }
+        try { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue } catch { }
+        Remove-Item -LiteralPath $ipcDir -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Warning "Falling back to inline elevated provisioning (config-sync may use the elevated profile)."
+        & $ScriptPath @ProvisionParams
+        return
+    }
+
+    # ── Start handshake: wait for Provision-AgentVM.ps1 to confirm it started ────
+    # The ready file is written atomically (temp+rename) by Provision-AgentVM.ps1
+    # itself AFTER its param block binds successfully. If this file never appears,
+    # the bootstrap or script entry failed — stop the task, verify it's no longer
+    # running, then fall back to inline elevated. Once the ready file arrives,
+    # provisioning is about to start and a fallback would risk double-provisioning.
+    $childPid       = $null
+    $childStartTime = $null
+    $handshakeOk    = $false
+    $handshakeLimit = 30   # seconds
+    $handshakeStart = Get-Date
+
+    while (((Get-Date) - $handshakeStart).TotalSeconds -lt $handshakeLimit) {
+        if (Test-Path -LiteralPath $readyFile) {
+            try {
+                $raw = (Get-Content -LiteralPath $readyFile -Raw -ErrorAction Stop).Trim()
+                if ($raw -match '^\d+$') {
+                    $childPid = [int]$raw
+                    # Capture the child's start time for identity verification
+                    # before any later Stop-Process (guards against PID recycling).
+                    $childProc = Get-Process -Id $childPid -ErrorAction SilentlyContinue
+                    if ($childProc) { $childStartTime = $childProc.StartTime }
+                    $handshakeOk = $true
+                    break
+                }
+            } catch { }
+        }
+        Start-Sleep -Seconds 1
+    }
+
+    if (-not $handshakeOk) {
+        # Bootstrap or entry failure: Provision-AgentVM.ps1 never started.
+        # Stop the task and CONFIRM it's no longer running before fallback —
+        # if it can't be confirmed stopped, throw instead of risking two provisioners.
+        Write-Warning "De-elevated child did not start within ${handshakeLimit}s -- bootstrap may have failed."
+        try { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue } catch { }
+        $taskConfirmedStopped = $false
+        $stopDeadline = (Get-Date).AddSeconds(10)
+        while ((Get-Date) -lt $stopDeadline) {
+            $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+            if (-not $task -or ($task.State -ne 'Running' -and $task.State -ne 'Queued')) {
+                $taskConfirmedStopped = $true; break
+            }
+            Start-Sleep -Seconds 1
+        }
+        if (-not $taskConfirmedStopped) {
+            # Preserve the task and IPC directory for diagnosis. Set globals so
+            # Wait-Exit renders the persistent final screen before throwing.
+            $global:ConstructProvisionHadErrors = $true
+            $global:ConstructProvisionErrors = @()
+            $global:ConstructProvisionFailureMessage = "De-elevated task '$taskName' could not be confirmed stopped -- cannot safely fall back. Check Task Scheduler."
+            throw $global:ConstructProvisionFailureMessage
+        }
+        try { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue } catch { }
+        Remove-Item -LiteralPath $ipcDir -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Warning "Falling back to inline elevated provisioning (config-sync may use the elevated profile)."
+        & $ScriptPath @ProvisionParams
+        return
+    }
+
+    # ── Poll for completion ──────────────────────────────────────────────────────
+    # Primary signal: the result file appears (the child's finally block writes it
+    # atomically via temp + rename). Secondary: the child PID is gone (crash).
+    Write-Host "    Waiting for de-elevated provisioning to finish (this can take several minutes)..." -ForegroundColor DarkGray
+    $deadline  = (Get-Date).AddSeconds($TimeoutSeconds)
+    $pollSec   = 5
+    $completed = $false
+
+    while ((Get-Date) -lt $deadline) {
+        # Check the result file first (the primary signal).
+        if (Test-Path -LiteralPath $resultFile) {
+            try {
+                $sz = (Get-Item -LiteralPath $resultFile -ErrorAction Stop).Length
+                if ($sz -gt 0) { $completed = $true; break }
+            } catch { }
+        }
+
+        # Liveness: is the child process still alive?
+        $childAlive = $false
+        if ($childPid) {
+            $proc = Get-Process -Id $childPid -ErrorAction SilentlyContinue
+            $childAlive = ($null -ne $proc)
+        }
+        if (-not $childAlive) {
+            # Child process is gone — grace period for the result file to flush.
+            Start-Sleep -Seconds 3
+            if (Test-Path -LiteralPath $resultFile) {
+                try {
+                    $sz = (Get-Item -LiteralPath $resultFile -ErrorAction Stop).Length
+                    if ($sz -gt 0) { $completed = $true }
+                } catch { }
+            }
+            break
+        }
+
+        Start-Sleep -Seconds $pollSec
+    }
+
+    # On timeout: stop the child so it doesn't continue provisioning after the
+    # parent has given up. Verify process identity (PID + start time) to guard
+    # against PID recycling before killing.
+    if (-not $completed -and $childPid) {
+        $proc = Get-Process -Id $childPid -ErrorAction SilentlyContinue
+        if ($proc -and $proc.ProcessName -match '^powershell' -and
+            $childStartTime -and $proc.StartTime -eq $childStartTime) {
+            Write-Warning "Stopping timed-out de-elevated child (PID $childPid)."
+            Stop-Process -Id $childPid -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    # ── Read and integrate the result ────────────────────────────────────────────
+    $result = $null
+    if ($completed) {
+        try {
+            $resultJson = Get-Content -LiteralPath $resultFile -Raw -ErrorAction Stop
+            $result     = ConvertFrom-Json $resultJson
+        } catch {
+            $result = $null
+        }
+    }
+
+    # Wait for the child process to actually exit before cleanup — the child
+    # publishes the result then exits without pausing (no Read-Host), so this
+    # is a short bounded wait, not a user-interactive one.
+    $childExited = $true
+    if ($childPid) {
+        $childExited = $false
+        $exitDeadline = (Get-Date).AddSeconds(10)
+        while ((Get-Date) -lt $exitDeadline) {
+            $proc = Get-Process -Id $childPid -ErrorAction SilentlyContinue
+            if (-not $proc) { $childExited = $true; break }
+            Start-Sleep -Milliseconds 500
+        }
+        if (-not $childExited) {
+            # Child is still alive after result publication — stop it (identity-
+            # verified) and confirm termination before cleanup.
+            $proc = Get-Process -Id $childPid -ErrorAction SilentlyContinue
+            if ($proc -and $proc.ProcessName -match '^powershell' -and
+                $childStartTime -and $proc.StartTime -eq $childStartTime) {
+                Write-Warning "De-elevated child (PID $childPid) did not exit after result publication -- stopping it."
+                Stop-Process -Id $childPid -Force -ErrorAction SilentlyContinue
+                Start-Sleep -Seconds 2
+                $proc = Get-Process -Id $childPid -ErrorAction SilentlyContinue
+                $childExited = (-not $proc)
+            }
+        }
+        if (-not $childExited) {
+            # Cannot confirm termination — preserve task/IPC for diagnosis.
+            # Set globals so Wait-Exit renders the persistent final screen.
+            $global:ConstructProvisionHadErrors = $true
+            $global:ConstructProvisionErrors = @()
+            $global:ConstructProvisionFailureMessage = "De-elevated child (PID $childPid) could not be confirmed terminated. Check Task Scheduler for '$taskName'."
+            throw $global:ConstructProvisionFailureMessage
+        }
+    }
+
+    # ── Clean up the scheduled task + IPC directory ──────────────────────────────
+    try { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue } catch { }
+    Remove-Item -LiteralPath $ipcDir -Recurse -Force -ErrorAction SilentlyContinue
+
+    if (-not $completed -or -not $result) {
+        $global:ConstructProvisionHadErrors = $true
+        $msg = if ($completed) {
+            "De-elevated provisioning finished but its result file could not be read."
+        } else {
+            "De-elevated provisioning did not complete (the child process may have crashed or timed out)."
+        }
+        $global:ConstructProvisionFailureMessage = $msg
+        throw $msg
+    }
+
+    # Integrate: set the same globals an inline call would, so Wait-Exit works.
+    # Derive HadErrors from ExitCode — never trust the child's HadErrors field
+    # since an inconsistent value can suppress Wait-Exit or render a false failure.
+    $global:ConstructProvisionFailureMessage = [string]$result.FailureMessage
+    $global:ConstructProvisionErrors         = @()
+
+    if ($result.ExitCode -eq 0) {
+        $global:ConstructProvisionHadErrors = $false
+    } else {
+        $global:ConstructProvisionHadErrors = $true
+    }
+
+    # Parse the raw sentinel block for end-to-end fidelity — the same lines
+    # provision.sh emitted, processed by ConvertFrom-ConstructProvisionResult,
+    # preserving marker validity and the 3713991 prompt data.
+    # Validate: exit 0/3 requires a valid sentinel block whose error count
+    # matches declared. A missing/malformed/count-mismatched sentinel is a
+    # critical failure — the prompt data cannot be trusted.
+    if ($result.ExitCode -eq 0 -or $result.ExitCode -eq 3) {
+        $parsed = $null
+        if ($result.RawSentinel) {
+            $parsed = ConvertFrom-ConstructProvisionResult -Lines @($result.RawSentinel)
+        }
+        if (-not $parsed -or -not $parsed.IsValid) {
+            $global:ConstructProvisionHadErrors = $true
+            $global:ConstructProvisionFailureMessage = "De-elevated provisioning exited $($result.ExitCode) but the result sentinel is missing or malformed."
+            throw $global:ConstructProvisionFailureMessage
+        }
+        if ($result.ExitCode -eq 0 -and $parsed.ErrorCount -ne 0) {
+            $global:ConstructProvisionHadErrors = $true
+            $global:ConstructProvisionFailureMessage = "De-elevated provisioning exited 0 but reported $($parsed.ErrorCount) failure(s)."
+            throw $global:ConstructProvisionFailureMessage
+        }
+        if ($result.ExitCode -eq 3 -and $parsed.ErrorCount -eq 0) {
+            $global:ConstructProvisionHadErrors = $true
+            $global:ConstructProvisionFailureMessage = "De-elevated provisioning exited 3 but reported no optional failures."
+            throw $global:ConstructProvisionFailureMessage
+        }
+        $global:ConstructProvisionErrors = @($parsed.Errors)
+    }
+
+    if ($result.ExitCode -ne 0 -and $result.ExitCode -ne 3) {
+        $global:ConstructProvisionFailureMessage = [string]$result.FailureMessage
+        throw "De-elevated provisioning failed: $($result.FailureMessage)"
+    }
+    if ($result.ExitCode -eq 3) {
+        Write-Host ("    De-elevated provisioning completed with {0} optional error(s)." -f @($global:ConstructProvisionErrors).Count) -ForegroundColor Yellow
+    } else {
+        Write-Ok "De-elevated provisioning completed cleanly"
     }
 }
 
