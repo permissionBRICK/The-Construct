@@ -475,6 +475,238 @@ ok "vm windows: empty input yields empty" ((@(Select-VmCodeWindow -Windows @() -
 ok "vm windows: non-Windows Close-VmVsCodeWindow is a safe no-op returning 0" (
     ($env:OS -eq 'Windows_NT') -or ((Close-VmVsCodeWindow -VmHost "agent-vm.mshome.net") -eq 0))
 
+# ── Build-ProvisionEncodedCommand round trip ───────────────────────────────
+# Verify that parameters with spaces, quotes, booleans, and base64 values
+# survive the JSON->base64 inner + UTF-16LE outer encoding.
+$rtParams = @{
+    VmHost            = "agent-vm.mshome.net"
+    Projects          = "my project;other project"
+    AgentPassword     = 'p@ss w"ord'
+    Auto              = $true
+    MicPassthrough    = $false
+    GitCloneCredB64   = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("test:token"))
+}
+$rtScript = "/tmp/Provision-AgentVM.ps1"
+$rtResult = "/tmp/result.json"
+$rtReady  = "/tmp/ready"
+$rtEncoded = Build-ProvisionEncodedCommand -ScriptPath $rtScript -Params $rtParams `
+    -ResultFile $rtResult -ReadyFile $rtReady
+# Decode: outer is UTF-16LE base64.
+$rtDecoded = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($rtEncoded))
+# The decoded script should contain the inner base64 blob. Extract it.
+$rtB64Match = [regex]::Match($rtDecoded, "FromBase64String\('([A-Za-z0-9+/=]+)'\)")
+$rtInnerOk = $false
+if ($rtB64Match.Success) {
+    $rtInnerJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($rtB64Match.Groups[1].Value))
+    $rtInnerObj  = ConvertFrom-Json $rtInnerJson
+    $rtInnerOk   = ($rtInnerObj.VmHost -eq "agent-vm.mshome.net") -and
+                   ($rtInnerObj.Projects -eq "my project;other project") -and
+                   ($rtInnerObj.AgentPassword -eq 'p@ss w"ord') -and
+                   ($rtInnerObj.Auto -eq $true) -and
+                   ($rtInnerObj.MicPassthrough -eq $false) -and
+                   ($rtInnerObj.GitCloneCredB64 -eq $rtParams.GitCloneCredB64)
+}
+ok "encoded command: params with spaces, quotes, booleans, base64 round trip intact" $rtInnerOk
+ok "encoded command: script path embedded correctly" ($rtDecoded -match [regex]::Escape($rtScript))
+ok "encoded command: result file path embedded correctly" ($rtDecoded -match [regex]::Escape($rtResult))
+ok "encoded command: ready file path embedded correctly" ($rtDecoded -match [regex]::Escape($rtReady))
+ok "encoded command: ReadyFile passed to Provision (not PID from bootstrap)" (
+    ($rtDecoded -match "'ReadyFile'\].*=.*'$([regex]::Escape($rtReady))'") -and
+    ($rtDecoded -notmatch 'Set-Content.*\.pid'))
+ok "encoded command: hashtable conversion handles booleans as switches" ($rtDecoded -match '\[switch\]')
+
+# Apostrophes in paths and parameter values must survive the double-single-quote
+# escaping used inside the here-string.
+$rtAposParams = @{ VmHost = "o'brien-vm.mshome.net"; Projects = "Kate's project" }
+$rtAposScript = "C:\Users\O'Brien\Construct\Provision-AgentVM.ps1"
+$rtAposResult = "C:\Users\O'Brien\AppData\result.json"
+$rtAposReady  = "C:\Users\O'Brien\AppData\ready"
+$rtAposEncoded = Build-ProvisionEncodedCommand -ScriptPath $rtAposScript -Params $rtAposParams `
+    -ResultFile $rtAposResult -ReadyFile $rtAposReady
+$rtAposDecoded = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($rtAposEncoded))
+$rtAposB64 = [regex]::Match($rtAposDecoded, "FromBase64String\('([A-Za-z0-9+/=]+)'\)")
+$rtAposRt = $false
+if ($rtAposB64.Success) {
+    $rtAposJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($rtAposB64.Groups[1].Value))
+    $rtAposObj  = ConvertFrom-Json $rtAposJson
+    $rtAposRt   = ($rtAposObj.VmHost -eq "o'brien-vm.mshome.net") -and
+                  ($rtAposObj.Projects -eq "Kate's project")
+}
+ok "encoded command: apostrophes in param values survive round trip" $rtAposRt
+ok "encoded command: apostrophe in script path escaped (doubled)" (
+    $rtAposDecoded -match "O''Brien")
+ok "encoded command: apostrophe in result path escaped (doubled)" (
+    $rtAposDecoded -match "O''Brien.*result\.json")
+
+# ── Get-DesktopUser ───────────────────────────────────────────────────────
+# On non-Windows (no explorer.exe), should return $null (not a fallback identity)
+# so callers can take a loud inline fallback.
+$desktopFallback = Get-DesktopUser
+ok "desktop user: returns null when no explorer.exe (non-Windows)" ($null -eq $desktopFallback)
+
+# ── Atomic result file contract ────────────────────────────────────────────
+# Verify the result file includes RawSentinel (not re-serialized Errors) and
+# that ConvertFrom-ConstructProvisionResult can parse it end-to-end.
+$rtSentinelLines = @(
+    "live output line 1",
+    "===CONSTRUCT-PROVISION-RESULT===",
+    "errors=1",
+    "error=Step X failed|5|/var/log/construct/provision/step-x.log",
+    "===END-CONSTRUCT-PROVISION-RESULT===",
+    "trailing output"
+)
+$rtResultObj = @{
+    ExitCode       = 3
+    HadErrors      = $true
+    FailureMessage = ""
+    RawSentinel    = [string[]]$rtSentinelLines
+}
+# Round-trip through JSON (simulates file write + read).
+$rtResultJson   = $rtResultObj | ConvertTo-Json -Depth 4
+$rtResultParsed = ConvertFrom-Json $rtResultJson
+$rtParsedResult = ConvertFrom-ConstructProvisionResult -Lines @($rtResultParsed.RawSentinel)
+ok "atomic result: RawSentinel survives JSON round trip" ($rtParsedResult.Found -and $rtParsedResult.IsValid)
+ok "atomic result: error items parsed from RawSentinel match originals" (
+    $rtParsedResult.ErrorCount -eq 1 -and
+    $rtParsedResult.Errors[0].Title -eq "Step X failed" -and
+    $rtParsedResult.Errors[0].ExitCode -eq 5 -and
+    $rtParsedResult.Errors[0].LogPath -eq "/var/log/construct/provision/step-x.log")
+
+# ── Malformed RawSentinel rejection ────────────────────────────────────────
+# A missing, empty, or count-mismatched sentinel must NOT be treated as valid.
+$rtMalformedEmpty = ConvertFrom-ConstructProvisionResult -Lines @()
+ok "malformed sentinel: empty lines -> not valid" (-not $rtMalformedEmpty.IsValid)
+$rtMalformedMismatch = ConvertFrom-ConstructProvisionResult -Lines @(
+    "===CONSTRUCT-PROVISION-RESULT===", "errors=2",
+    "error=only one|1|", "===END-CONSTRUCT-PROVISION-RESULT===")
+ok "malformed sentinel: count mismatch (declared 2, actual 1) -> not valid" (
+    -not $rtMalformedMismatch.IsValid)
+$rtMalformedNoEnd = ConvertFrom-ConstructProvisionResult -Lines @(
+    "===CONSTRUCT-PROVISION-RESULT===", "errors=0")
+ok "malformed sentinel: no end marker -> not found" (-not $rtMalformedNoEnd.Found)
+
+# ── Atomic file publication ────────────────────────────────────────────────
+# Verify the temp+rename pattern: write to temp, rename atomically, never
+# expose a partial final file.
+$rtAtomicDir = Join-Path ([System.IO.Path]::GetTempPath()) "construct-atomic-test-$([guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Path $rtAtomicDir -Force | Out-Null
+$rtAtomicFinal = Join-Path $rtAtomicDir "result.json"
+$rtAtomicTmp   = "$rtAtomicFinal.tmp.$$"
+$rtAtomicData  = @{ ExitCode = 0; HadErrors = $false } | ConvertTo-Json
+try {
+    Set-Content -LiteralPath $rtAtomicTmp -Value $rtAtomicData -Encoding UTF8 -Force
+    ok "atomic file: temp file exists before rename" (Test-Path -LiteralPath $rtAtomicTmp)
+    ok "atomic file: final file does NOT exist before rename" (-not (Test-Path -LiteralPath $rtAtomicFinal))
+    Move-Item -LiteralPath $rtAtomicTmp -Destination $rtAtomicFinal -Force
+    ok "atomic file: final file exists after rename" (Test-Path -LiteralPath $rtAtomicFinal)
+    ok "atomic file: temp file gone after rename" (-not (Test-Path -LiteralPath $rtAtomicTmp))
+    $rtAtomicContent = Get-Content -LiteralPath $rtAtomicFinal -Raw | ConvertFrom-Json
+    ok "atomic file: content intact after rename" ($rtAtomicContent.ExitCode -eq 0)
+} finally {
+    Remove-Item -LiteralPath $rtAtomicDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# ── AutoResolve forwarding ─────────────────────────────────────────────────
+# Verify Auto-Install.ps1 forwards AutoResolve on all provisioning paths by
+# checking the source for the pattern in each Invoke-DeElevatedProvision call
+# site. (Static analysis: grep the script text.)
+$aiSource = Get-Content -LiteralPath (Join-Path $here "..\Auto-Install.ps1") -Raw
+# Reprovision path (line ~694) already forwards. Fresh-install path must too.
+$aiAutoResolveCount = ([regex]::Matches($aiSource, "ContainsKey\('AutoResolve'\).*provArgs")).Count
+ok "auto-install: AutoResolve forwarded on all provisioning paths (at least 3 sites)" ($aiAutoResolveCount -ge 3)
+
+# ── Source-level behavioral checks ─────────────────────────────────────────
+# Verify key behavioral properties by static analysis of the source.
+$libSource = Get-Content -LiteralPath (Join-Path $here "..\lib\AgentVm.Common.ps1") -Raw
+$provSource = Get-Content -LiteralPath (Join-Path $here "..\Provision-AgentVM.ps1") -Raw
+
+# IPC directory uses ProgramData with explicit ACL (not elevated user's TEMP).
+ok "ipc: uses ProgramData for IPC directory (not env:TEMP)" (
+    $libSource -match 'ProgramData' -and
+    $libSource -match 'construct-provision' -and
+    $libSource -match 'SetAccessRuleProtection')
+# Handshake: ready file is written by Provision-AgentVM.ps1 (not bootstrap).
+ok "handshake: Provision-AgentVM.ps1 writes ReadyFile (not bootstrap)" (
+    $provSource -match '\$ReadyFile.*\.tmp\.\$PID' -and
+    $provSource -match 'Move-Item.*ReadyFile')
+# Handshake: ready publication failure exits nonzero before provisioning.
+ok "handshake: ready failure exits before provisioning" (
+    $provSource -match 'Could not publish ready handshake' -and
+    $provSource -match 'exit 1')
+# Handshake timeout: Stop-ScheduledTask called before fallback.
+ok "handshake: task stopped before inline fallback" (
+    $libSource -match 'Stop-ScheduledTask.*taskName.*SilentlyContinue')
+# Handshake timeout: confirmed-stopped flag required before fallback.
+ok "handshake: confirmed-stopped required before fallback (no two provisioners)" (
+    $libSource -match 'taskConfirmedStopped' -and
+    $libSource -match 'cannot safely fall back')
+# Start-catch: also stops+confirms task before fallback (Start can launch even on error).
+ok "start-catch: stops task and confirms dead before inline fallback" (
+    ([regex]::Matches($libSource, 'taskConfirmedStopped')).Count -ge 3)
+# Result file: never written directly to the watched path (no torn read).
+ok "result: no direct write to ResultFile (always temp+rename)" (
+    ($provSource -match 'Move-Item.*tmpResult.*ResultFile') -and
+    -not ($provSource -match 'Set-Content.*-LiteralPath \$ResultFile\b'))
+# Process validation: start time captured and checked before Stop-Process.
+ok "timeout: child start time captured for PID identity verification" (
+    $libSource -match 'childStartTime.*StartTime' -and
+    $libSource -match 'proc\.StartTime -eq \$childStartTime')
+# Sentinel validation: exit 0/3 requires valid sentinel.
+ok "sentinel: exit 0/3 requires IsValid sentinel" (
+    $libSource -match 'parsed\.IsValid' -and
+    $libSource -match 'sentinel is missing or malformed')
+# HadErrors derived from ExitCode, not trusted from JSON.
+ok "globals: HadErrors derived from ExitCode (not trusted from child JSON)" (
+    $libSource -match 'Derive HadErrors from ExitCode' -and
+    -not ($libSource -match '\$global:ConstructProvisionHadErrors\s*=\s*\[bool\]\$result\.HadErrors'))
+# Desktop user: session-filtered explorer, null on ambiguity.
+ok "desktop user: filters explorer by session ID" (
+    $libSource -match 'SessionId.*-eq.*sessionId')
+# HyperV membership: skips (not falls back to elevated SID) when no desktop shell.
+ok "hyperv: skips membership when desktop user unknown (not elevated SID)" (
+    $libSource -match 'skipping Hyper-V Administrators membership')
+# Child lifecycle: no Read-Host pause when -ResultFile is set (parent owns final screen).
+ok "lifecycle: child exits without Read-Host when ResultFile is set" (
+    -not ([regex]::IsMatch($provSource, '(?s)if\s*\(\$ResultFile\).*?Read-Host.*?exit \$provExitCode')))
+# Parent waits for child PID to exit before unregistering the task.
+# If the child doesn't exit, it must be stopped (identity-verified) and
+# confirmed terminated before cleanup; otherwise throw preserving task/IPC.
+ok "lifecycle: parent waits for child exit before cleanup" (
+    $libSource -match 'childExited' -and
+    $libSource -match 'Wait for the child process to actually exit')
+# Structural: the stop-or-throw for an un-exited child comes BEFORE the
+# Unregister-ScheduledTask cleanup line (which only runs after confirmed exit).
+$childStopPos = $libSource.IndexOf('could not be confirmed terminated')
+$cleanupPos   = $libSource.IndexOf('Clean up the scheduled task + IPC directory')
+ok "lifecycle: child stop-or-throw precedes task cleanup" (
+    $childStopPos -gt 0 -and $cleanupPos -gt $childStopPos)
+# Diagnostic preservation: do not unregister/delete before throwing "Check Task Scheduler".
+# The throw must come BEFORE Unregister-ScheduledTask in the confirmed-stopped branches.
+$throwPos = $libSource.IndexOf('cannot safely fall back. Check Task Scheduler')
+$unregAfterThrow = $libSource.IndexOf('Unregister-ScheduledTask', $throwPos)
+ok "lifecycle: task preserved for diagnosis when stop unconfirmed" (
+    $throwPos -gt 0 -and $unregAfterThrow -gt $throwPos)
+# Every safety throw must set globals so Wait-Exit renders the final screen.
+# Verify: each "cannot safely fall back" / "could not be confirmed" throw is
+# preceded by setting ConstructProvisionHadErrors=true and ConstructProvisionFailureMessage.
+$safetyThrows = @(
+    'cannot safely fall back. Check Task Scheduler',
+    'could not be confirmed stopped',
+    'could not be confirmed terminated'
+)
+$allGlobalsSet = $true
+foreach ($phrase in $safetyThrows) {
+    $pos = $libSource.IndexOf($phrase)
+    if ($pos -lt 0) { $allGlobalsSet = $false; continue }
+    # Look at the ~500 chars preceding the throw for the globals.
+    $preceding = $libSource.Substring([Math]::Max(0, $pos - 500), [Math]::Min(500, $pos))
+    if ($preceding -notmatch 'ConstructProvisionHadErrors\s*=\s*\$true' -or
+        $preceding -notmatch 'ConstructProvisionFailureMessage') {
+        $allGlobalsSet = $false
+    }
+}
+ok "lifecycle: all safety throws set Wait-Exit globals before throwing" $allGlobalsSet
+
 Write-Host ""
 Write-Host ("  host-lib unit tests - {0}/{1} passed" -f $script:pass, ($script:pass + $script:fail))
 Write-Host ""
