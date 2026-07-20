@@ -213,7 +213,15 @@ function buildAgentUpdateScript(ids) {
       '*) t=$(mktemp); ' +
       'if curl -fsSL https://chatgpt.com/codex/install.sh -o "$t" && printf "n\\n" | CI=1 sh "$t"; then :; ' +
       'elif command -v npm >/dev/null 2>&1 && npm install -g @openai/codex@latest; then ' +
-      'echo "official installer failed; updated via npm instead"; else rc=1; fi; rm -f "$t" ;; ' +
+      'echo "official installer failed; updated via npm instead"; else rc=1; fi; rm -f "$t"; ' +
+      // The official installer only moves its `current` symlink. If a previous
+      // provision pinned /usr/local/bin/codex to a VERSIONED releases/<v> dir,
+      // the update would land invisibly (probe + app-server keep the old
+      // binary) -- relink to the stable entry so the chain resolves at exec.
+      'if [ -L /usr/local/bin/codex ]; then case "$(readlink /usr/local/bin/codex)" in ' +
+      '*/.codex/*releases/*) for s in "$HOME/.local/bin/codex" "$HOME/.codex/bin/codex"; do ' +
+      'if [ -x "$s" ]; then ln -sf "$s" /usr/local/bin/codex; echo "relinked /usr/local/bin/codex -> $s"; break; fi; done ;; ' +
+      'esac; fi ;; ' +
       'esac; fi');
   }
   if (want.includes("opencode")) {

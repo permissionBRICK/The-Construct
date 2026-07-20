@@ -239,6 +239,10 @@ function ok(name, cond, detail) {
     /\*\/node_modules\/\*\) npm install -g @openai\/codex@latest/.test(all));
   ok("agentScript: codex official layout falls back to npm on installer failure",
     /elif command -v npm >\/dev\/null 2>&1 && npm install -g @openai\/codex@latest/.test(all));
+  // The installer only moves its `current` link; a /usr/local/bin/codex pinned
+  // to a versioned releases/<v> dir must be relinked or updates land invisibly.
+  ok("agentScript: codex relinks a version-pinned /usr/local/bin/codex after update",
+    /releases\/\*\) for s in/.test(all) && /ln -sf "\$s" \/usr\/local\/bin\/codex/.test(all));
   const onlyClaude = updates.buildAgentUpdateScript(["claude-code"]);
   ok("agentScript: subset only includes requested agents", /claude update/.test(onlyClaude) && !/opencode/.test(onlyClaude) && !/codex/.test(onlyClaude));
   ok("agentScript: subset still aggregates exit code", onlyClaude.startsWith("set -uo pipefail\nrc=0\n") && /\nexit \$rc\n$/.test(onlyClaude));
