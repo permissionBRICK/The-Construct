@@ -229,8 +229,16 @@ function ok(name, cond, detail) {
   const all = updates.buildAgentUpdateScript();
   ok("agentScript: set -uo pipefail + rc=0 preamble + exit $rc", all.startsWith("set -uo pipefail\nrc=0\n") && /\nexit \$rc\n$/.test(all));
   ok("agentScript: guards each on command -v", /command -v claude/.test(all) && /command -v codex/.test(all) && /command -v opencode/.test(all));
-  ok("agentScript: every agent's failure is captured into rc", /claude update \|\| rc=1/.test(all) && (all.match(/else rc=1/g) || []).length === 2);
+  ok("agentScript: every agent's failure is captured into rc",
+    /claude update \|\| rc=1/.test(all) && /npm install -g @openai\/codex@latest \|\| rc=1/.test(all) && /else rc=1/.test(all));
   ok("agentScript: claude self-update + installers", /claude update/.test(all) && /chatgpt\.com\/codex\/install\.sh/.test(all) && /opencode\.ai\/install/.test(all));
+  // Codex updates must match the install layout: npm-managed installs (shim
+  // resolves into node_modules) go through npm; official layouts try the
+  // installer, then fall back to npm when it fails and npm exists.
+  ok("agentScript: codex npm layout updates via npm",
+    /\*\/node_modules\/\*\) npm install -g @openai\/codex@latest/.test(all));
+  ok("agentScript: codex official layout falls back to npm on installer failure",
+    /elif command -v npm >\/dev\/null 2>&1 && npm install -g @openai\/codex@latest/.test(all));
   const onlyClaude = updates.buildAgentUpdateScript(["claude-code"]);
   ok("agentScript: subset only includes requested agents", /claude update/.test(onlyClaude) && !/opencode/.test(onlyClaude) && !/codex/.test(onlyClaude));
   ok("agentScript: subset still aggregates exit code", onlyClaude.startsWith("set -uo pipefail\nrc=0\n") && /\nexit \$rc\n$/.test(onlyClaude));

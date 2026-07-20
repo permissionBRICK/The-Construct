@@ -477,7 +477,19 @@
       name.appendChild(document.createTextNode(a.name + " "));
       if (a.detail) { const sm = document.createElement("small"); sm.textContent = a.detail; name.appendChild(sm); }
       div.querySelector(".ver").textContent = a.version || "—";
-      div.querySelector(".tag").textContent = tagTxt;
+      const tag = div.querySelector(".tag");
+      tag.textContent = tagTxt;
+      if (a.updateAvailable && a.id) {
+        // The ↑ tag doubles as a per-agent update button (the header's
+        // "update all" stays for the bulk path).
+        tag.dataset.agent = a.id;
+        tag.setAttribute("role", "button");
+        tag.setAttribute("tabindex", "0");
+        tag.title = "Update " + a.name + " now";
+        const fire = () => post({ type: "command", id: "updateAgent", agent: a.id });
+        tag.addEventListener("click", fire);
+        tag.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fire(); } });
+      }
       host.appendChild(div);
     });
   }

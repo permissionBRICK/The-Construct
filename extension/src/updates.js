@@ -200,8 +200,21 @@ function buildAgentUpdateScript(ids) {
     lines.push('if command -v claude >/dev/null 2>&1; then echo "== updating Claude Code =="; claude update || rc=1; fi');
   }
   if (want.includes("codex")) {
-    lines.push('if command -v codex >/dev/null 2>&1; then echo "== updating Codex =="; t=$(mktemp); ' +
-      'if curl -fsSL https://chatgpt.com/codex/install.sh -o "$t" && printf "n\\n" | CI=1 sh "$t"; then :; else rc=1; fi; rm -f "$t"; fi');
+    // Update MATCHES the install layout: an npm-managed codex (the shim resolves
+    // into node_modules — how the provision fallback installs it) must update via
+    // npm; re-running the official installer there fights the npm layout, and that
+    // installer has also been broken upstream (GitHub's minified release JSON).
+    // For official-installer layouts, still try the installer first and fall back
+    // to npm when it fails and npm is available.
+    lines.push('if command -v codex >/dev/null 2>&1; then echo "== updating Codex =="; ' +
+      'target=$(readlink -f "$(command -v codex)" 2>/dev/null || true); ' +
+      'case "$target" in ' +
+      '*/node_modules/*) npm install -g @openai/codex@latest || rc=1 ;; ' +
+      '*) t=$(mktemp); ' +
+      'if curl -fsSL https://chatgpt.com/codex/install.sh -o "$t" && printf "n\\n" | CI=1 sh "$t"; then :; ' +
+      'elif command -v npm >/dev/null 2>&1 && npm install -g @openai/codex@latest; then ' +
+      'echo "official installer failed; updated via npm instead"; else rc=1; fi; rm -f "$t" ;; ' +
+      'esac; fi');
   }
   if (want.includes("opencode")) {
     lines.push('if command -v opencode >/dev/null 2>&1; then echo "== updating opencode =="; ' +
