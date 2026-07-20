@@ -1499,6 +1499,19 @@ try {
     # time the extension activates in that remote window). The deep link is only
     # printed as a fallback when the launch itself fails.
     Add-HyperVAdminMembership
+    # The install path reboots the VM at the very end of provisioning, so opening
+    # VS Code Remote-SSH right away races the reboot and fails the first connect.
+    # Wait for sshd to be back STABLY (a port that answers once but is about to
+    # drop for the reboot doesn't count) before launching; on timeout open
+    # anyway -- Remote-SSH retries on its own, and the deep link is printed too.
+    if (Get-Command Wait-VmSshReady -ErrorAction SilentlyContinue) {
+        Write-Step "Waiting for the VM to come back up after the final reboot"
+        if (Wait-VmSshReady -VmHost $VmHost) {
+            Write-Ok "VM is back on SSH"
+        } else {
+            Write-Warning "The VM didn't answer on SSH within 5 minutes; opening VS Code anyway (it retries the connection itself)."
+        }
+    }
     $openLink = Get-RemoteOpenLink -VmHost $VmHost -WorkspaceRoot "/root/repos"
     if (Open-RemoteWorkspace -Link $openLink) {
         Show-Banner @(

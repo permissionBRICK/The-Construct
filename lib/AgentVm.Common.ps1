@@ -1747,6 +1747,46 @@ function Repair-ConstructConfigOwnership {
     }
 }
 
+function Wait-VmSshReady {
+    <#
+        Poll the VM's SSH TCP port until it accepts connections STABLY. Used
+        before opening VS Code Remote-SSH at the end of an install/reinstall:
+        provisioning reboots the VM at its very end, so a single successful
+        probe right after can be the OLD boot about to vanish -- require
+        $StableProbes consecutive successes so "up, about to reboot" and
+        "mid-reboot" both resolve to waiting. Returns $true when stable,
+        $false on timeout. Never throws; no output (caller narrates).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$VmHost,
+        [int]$Port = 22,
+        [int]$TimeoutSec = 300,
+        [int]$ProbeIntervalSec = 2,
+        [int]$StableProbes = 3
+    )
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    $streak = 0
+    while ((Get-Date) -lt $deadline) {
+        $up = $false
+        $client = $null
+        try {
+            $client = New-Object System.Net.Sockets.TcpClient
+            $async = $client.BeginConnect($VmHost, $Port, $null, $null)
+            if ($async.AsyncWaitHandle.WaitOne(2000) -and $client.Connected) { $up = $true }
+        } catch { $up = $false }
+        finally { if ($client) { try { $client.Close() } catch { } } }
+        if ($up) {
+            $streak++
+            if ($streak -ge $StableProbes) { return $true }
+        } else {
+            $streak = 0
+        }
+        Start-Sleep -Seconds $ProbeIntervalSec
+    }
+    return $false
+}
+
 function Get-ConstructConfigProjectsDir {
     <#
         Returns the live projects directory: config\projects when it exists
