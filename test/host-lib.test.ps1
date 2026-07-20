@@ -438,6 +438,43 @@ try {
 ok "ssh-wait: closed port times out false" (-not (Wait-VmSshReady -VmHost "127.0.0.1" -Port $lport -TimeoutSec 2 -ProbeIntervalSec 0))
 ok "ssh-wait: unresolvable host returns false without throwing" ((Wait-VmSshReady -VmHost "definitely-not-a-host.invalid" -TimeoutSec 2 -ProbeIntervalSec 0) -eq $false)
 
+# ── Select-VmCodeWindow (reinstall closes VM-attached VS Code windows) ───────
+# Pure filter over (Title, ProcessName) records; the Win32 enumeration itself is
+# not exercised here (Windows-only, needs a desktop).
+$winRecords = @(
+    [pscustomobject]@{ Title = "lifecycle.js - construct [SSH: agent-vm] - Visual Studio Code"; ProcessName = "Code" },
+    [pscustomobject]@{ Title = "repos [SSH: agent-vm.mshome.net] - Visual Studio Code";         ProcessName = "Code" },
+    [pscustomobject]@{ Title = "notes.md - stuff [SSH: other-box] - Visual Studio Code";        ProcessName = "Code" },
+    [pscustomobject]@{ Title = "scratch [SSH: agent-vm2] - Visual Studio Code";                 ProcessName = "Code" },
+    [pscustomobject]@{ Title = "root@agent-vm: ~";                                              ProcessName = "WindowsTerminal" },
+    [pscustomobject]@{ Title = "[SSH: agent-vm] - Visual Studio Code";                          ProcessName = "Code - Insiders" },
+    [pscustomobject]@{ Title = "agent-vm - local notes.txt - Visual Studio Code";               ProcessName = "Code" },
+    [pscustomobject]@{ Title = "x [SSH: agent-vm.example.net] - Visual Studio Code";            ProcessName = "Code" },
+    [pscustomobject]@{ Title = "x [SSH: agent-vm.mshome.net.evil] - Visual Studio Code";        ProcessName = "Code" },
+    [pscustomobject]@{ Title = "y [SSH: agent-vm] - Visual Studio Code";                        ProcessName = "CodeHelper" }
+)
+$sel = Select-VmCodeWindow -Windows $winRecords -VmHost "agent-vm.mshome.net"
+ok "vm windows: matches alias and full-host SSH titles, both Code variants" (
+    $sel.Count -eq 3 -and
+    $sel[0].Title -like "*agent-vm]*" -and
+    $sel[1].Title -like "*agent-vm.mshome.net]*" -and
+    $sel[2].ProcessName -eq "Code - Insiders")
+ok "vm windows: other hosts, alias-prefixed names, and terminals excluded" (
+    @($sel | Where-Object { $_.Title -match "other-box|agent-vm2" -or $_.ProcessName -eq "WindowsTerminal" }).Count -eq 0)
+ok "vm windows: same alias under a foreign domain is not matched" (
+    @($sel | Where-Object { $_.Title -match "example\.net|mshome\.net\.evil" }).Count -eq 0)
+ok "vm windows: non-VS-Code 'Code*' process is not matched" (
+    @($sel | Where-Object { $_.ProcessName -eq "CodeHelper" }).Count -eq 0)
+ok "vm windows: authority with a port suffix is matched" (
+    @(Select-VmCodeWindow -Windows @([pscustomobject]@{ Title = "z [SSH: agent-vm:22] - Visual Studio Code"; ProcessName = "Code" }) -VmHost "agent-vm.mshome.net").Count -eq 1)
+ok "vm windows: local window mentioning the VM name is not matched" (
+    @($sel | Where-Object { $_.Title -like "*local notes*" }).Count -eq 0)
+ok "vm windows: case-insensitive title match" (
+    @(Select-VmCodeWindow -Windows @([pscustomobject]@{ Title = "x [ssh: Agent-VM] - Visual Studio Code"; ProcessName = "Code" }) -VmHost "agent-vm.mshome.net").Count -eq 1)
+ok "vm windows: empty input yields empty" ((@(Select-VmCodeWindow -Windows @() -VmHost "agent-vm")).Count -eq 0)
+ok "vm windows: non-Windows Close-VmVsCodeWindow is a safe no-op returning 0" (
+    ($env:OS -eq 'Windows_NT') -or ((Close-VmVsCodeWindow -VmHost "agent-vm.mshome.net") -eq 0))
+
 Write-Host ""
 Write-Host ("  host-lib unit tests - {0}/{1} passed" -f $script:pass, ($script:pass + $script:fail))
 Write-Host ""
