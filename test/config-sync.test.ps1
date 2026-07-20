@@ -1555,8 +1555,82 @@ if (-not $bashAvailable) {
     $sfWouldThrowB = $sfResult2.Seeded -and $null -eq $sfResult2.WriteBack -and $sfHostHasProfiles2
     ok "seed-guard: failed-write DOES trigger throw" $sfWouldThrowB
 
+    # Both prior scenarios READ the VM store successfully -> VmReadOk=$true.
+    ok "seed-guard: successful read reports VmReadOk=true (A)" ($sfResult.VmReadOk -eq $true)
+    ok "seed-guard: successful read reports VmReadOk=true (B)" ($sfResult2.VmReadOk -eq $true)
+
+    # Scenario C: the READ invoker fails (SSH down / auth / mangled transport).
+    # Historically this was the silent zero-repos variant: the engine skipped the
+    # VM side with only a swallowed warning, Seeded stayed $false, and the old
+    # write-guard never fired.  The result must now carry VmReadOk=$false so the
+    # provision-side guard can hard-stop when the host has profiles to seed.
+    $sfBase3 = Join-Path ([System.IO.Path]::GetTempPath()) ("sf-test3-" + [guid]::NewGuid().ToString("N"))
+    $sfCfgDir3 = Join-Path $sfBase3 "config"
+    New-Item -ItemType Directory -Path (Join-Path $sfCfgDir3 "projects") -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $sfCfgDir3 "manifest") -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $sfCfgDir3 "bases") -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $sfCfgDir3 "projects/testprof.json"),
+        $sfProfile, (New-Object System.Text.UTF8Encoding $false))
+
+    $sfFailRead = {
+        param([string]$s)
+        return [pscustomobject]@{ Code = 255; Output = "" }
+    }
+
+    $sfInit3 = Initialize-ConstructConfigRepo -ConfigDir $sfCfgDir3
+    $sfResult3 = Invoke-ConstructConfigSync -ConfigDir $sfCfgDir3 -VmHost "dummy" `
+        -SshReadInvoker $sfFailRead -SshWriteInvoker $sfFreshInvoker
+
+    ok "seed-guard: failed read reports VmReadOk=false" ($sfResult3.VmReadOk -eq $false)
+    ok "seed-guard: failed read does not claim a seed" ($sfResult3.Seeded -eq $false)
+    ok "seed-guard: failed read still surfaces a warning" (@($sfResult3.Warnings) -match "unreachable").Count -gt 0
+
+    # The provision-side read-guard (hostHasProfiles && VmReadOk -eq $false) must
+    # fire for C and stay quiet for A (successful read, empty host) and B (read
+    # ok; B's failure belongs to the separate write-guard).
+    $sfWouldThrowC = $sfHostHasProfiles2 -and $sfResult3.VmReadOk -eq $false
+    ok "seed-guard: failed read DOES trigger the read-guard throw" $sfWouldThrowC
+    ok "seed-guard: read-guard stays quiet on successful reads" (
+        -not ($sfHostHasProfiles -and $sfResult.VmReadOk -eq $false) -and
+        -not ($sfHostHasProfiles2 -and $sfResult2.VmReadOk -eq $false))
+
+    # Scenario D: existing-but-UNUSABLE config repo (git refuses every
+    # operation, e.g. "dubious ownership" under a different-admin elevated
+    # console). Initialize-ConstructConfigRepo used to swallow the refusal and
+    # return $true, so the tick "ran" while every git call silently no-opped.
+    # Simulate the refusal portably with an invalid .git (a directory with no
+    # HEAD): rev-parse fails deterministically, init must fail, the tick must
+    # report repo-init-failed, and the provision Ran-guard must fire.
+    $sfBase4 = Join-Path ([System.IO.Path]::GetTempPath()) ("sf-test4-" + [guid]::NewGuid().ToString("N"))
+    $sfCfgDir4 = Join-Path $sfBase4 "config"
+    New-Item -ItemType Directory -Path (Join-Path $sfCfgDir4 "projects") -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $sfCfgDir4 ".git") -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $sfCfgDir4 "projects/testprof.json"),
+        $sfProfile, (New-Object System.Text.UTF8Encoding $false))
+
+    # Capture the warning stream: the refusal warning must carry git's own
+    # diagnostic (read back from the stderr temp file), not an empty suffix.
+    $sfWarn4 = @()
+    $sfInit4 = Initialize-ConstructConfigRepo -ConfigDir $sfCfgDir4 3>&1 |
+        ForEach-Object { if ($_ -is [System.Management.Automation.WarningRecord]) { $sfWarn4 += "$_" } else { $_ } }
+    ok "seed-guard: unusable existing repo fails init (not true)" ($sfInit4 -eq $false)
+    ok "seed-guard: refusal warning carries git's diagnostic" (
+        (@($sfWarn4) -match "unusable").Count -gt 0 -and (@($sfWarn4) -match "git repository").Count -gt 0)
+
+    $sfResult4 = Invoke-ConstructConfigSync -ConfigDir $sfCfgDir4 -VmHost "dummy" `
+        -SshReadInvoker $sfFreshInvoker -SshWriteInvoker $sfFreshInvoker 3>$null
+    ok "seed-guard: unusable repo yields Ran=false repo-init-failed" (
+        $sfResult4.Ran -eq $false -and $sfResult4.Reason -eq "repo-init-failed")
+    ok "seed-guard: unusable repo leaves VmReadOk null (read never attempted)" ($null -eq $sfResult4.VmReadOk)
+    $sfWouldThrowD = $sfHostHasProfiles2 -and -not $sfResult4.Ran
+    ok "seed-guard: unusable repo DOES trigger the Ran-guard throw" $sfWouldThrowD
+
     Remove-Item -LiteralPath $sfBase -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $sfBase2 -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $sfBase3 -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $sfBase4 -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 # ── Summary ──────────────────────────────────────────────────────────────────
