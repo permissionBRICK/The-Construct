@@ -1610,8 +1610,14 @@ if (-not $bashAvailable) {
         (Join-Path $sfCfgDir4 "projects/testprof.json"),
         $sfProfile, (New-Object System.Text.UTF8Encoding $false))
 
-    $sfInit4 = Initialize-ConstructConfigRepo -ConfigDir $sfCfgDir4 3>$null
+    # Capture the warning stream: the refusal warning must carry git's own
+    # diagnostic (read back from the stderr temp file), not an empty suffix.
+    $sfWarn4 = @()
+    $sfInit4 = Initialize-ConstructConfigRepo -ConfigDir $sfCfgDir4 3>&1 |
+        ForEach-Object { if ($_ -is [System.Management.Automation.WarningRecord]) { $sfWarn4 += "$_" } else { $_ } }
     ok "seed-guard: unusable existing repo fails init (not true)" ($sfInit4 -eq $false)
+    ok "seed-guard: refusal warning carries git's diagnostic" (
+        (@($sfWarn4) -match "unusable").Count -gt 0 -and (@($sfWarn4) -match "git repository").Count -gt 0)
 
     $sfResult4 = Invoke-ConstructConfigSync -ConfigDir $sfCfgDir4 -VmHost "dummy" `
         -SshReadInvoker $sfFreshInvoker -SshWriteInvoker $sfFreshInvoker 3>$null

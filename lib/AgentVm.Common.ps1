@@ -2022,15 +2022,27 @@ function Initialize-ConstructConfigRepo {
         # failure here means the repo is unusable -- fail init loudly with
         # git's own diagnostic so callers (and the provisioning guard) see
         # repo-init-failed instead of a clean-looking no-op tick.
+        # git's diagnostic goes to a temp FILE, not 2>&1: Windows PowerShell 5.1
+        # turns native stderr into ErrorRecords, and under SilentlyContinue the
+        # merged records are discarded -- the message would vanish exactly when
+        # it is needed. File redirection is applied regardless of EAP.
+        $probeErrFile = [System.IO.Path]::GetTempFileName()
+        $probeCode = 0
         $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-        $probeOut = & git -C $ConfigDir rev-parse --git-dir 2>&1
-        $probeCode = $LASTEXITCODE
-        $ErrorActionPreference = $prev
+        try {
+            $null = & git -C $ConfigDir rev-parse --git-dir 2>$probeErrFile
+            $probeCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $prev
+        }
         if ($probeCode -ne 0) {
-            $probeText = (@($probeOut | ForEach-Object { "$_" }) -join " ").Trim()
-            Write-Warning "Config repo at $ConfigDir is unusable (git rev-parse exited $probeCode): $probeText"
+            $probeText = ""
+            try { $probeText = ((Get-Content -LiteralPath $probeErrFile -ErrorAction SilentlyContinue) -join " ").Trim() } catch { }
+            Remove-Item -LiteralPath $probeErrFile -ErrorAction SilentlyContinue
+            Write-Warning "Config repo at $ConfigDir is unusable (git rev-parse exited $probeCode)$(if ($probeText) { ": $probeText" })"
             return $false
         }
+        Remove-Item -LiteralPath $probeErrFile -ErrorAction SilentlyContinue
         # Ensure the vm branch exists, and re-apply the repo-local hardening
         # every run so a repo created before this fix is repaired
         # (signing/hooks off, LF pinned).
