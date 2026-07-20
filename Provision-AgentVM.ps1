@@ -1389,7 +1389,63 @@ if (Get-Command Initialize-ConstructConfigStore -ErrorAction SilentlyContinue) {
         $syncProjDir = Join-Path $syncConfigDir "projects"
         $profilesBeforeSync = @(Get-ChildItem -LiteralPath $syncProjDir -Filter *.json -File -ErrorAction SilentlyContinue |
             ForEach-Object { $_.BaseName })
-        $syncArgs = @{ ConfigDir = $syncConfigDir; VmHost = $VmHost }
+        # The config-sync engine's default SSH invoker (Invoke-ConstructVmSsh)
+        # needs ~/.ssh/agent_vm_ed25519 or a Host alias -- neither exists yet
+        # on a fresh install.  Route through this script's already-authenticated
+        # SSH session ($script:SshOpts / $script:ConnectUser) instead.
+        #
+        # The payload is piped through stdin (not embedded in the command line)
+        # because Write-ConstructVmStore's batch script for a fresh-VM seed
+        # with many profiles can exceed Windows' ~32K native argument limit
+        # once base64-encoded.  The remote side reads stdin into a temp file,
+        # decodes it, and executes it -- the same base64-transport idea as
+        # Invoke-ConstructVmSsh, just via stdin instead of argument.  The
+        # Invoke-Ssh-style sudo wrapper handles the bootstrap-key case where
+        # $script:ConnectUser is the seed user rather than root.
+        $provisionSshInvoker = {
+            param([string]$BashCommand)
+            $scriptLf = ($BashCommand -replace "`r`n", "`n")
+            $b64 = [Convert]::ToBase64String(
+                [System.Text.Encoding]::UTF8.GetBytes($scriptLf))
+            # The remote command is short and fixed-size; the large base64
+            # payload travels through stdin, not the command-line argument.
+            # 'cat' reads stdin into a temp file, base64 decodes it, then
+            # bash runs the decoded script.
+            $stdinDecode = "f=`$(mktemp) && cat > `"`$f.b64`" && base64 -d < `"`$f.b64`" > `"`$f`" && rm -f `"`$f.b64`""
+            if ($script:UseRootKey) {
+                # Connected as root via saved key -- no sudo needed.
+                # Wrap in bash -lc for login-shell PATH (same as Invoke-Ssh).
+                # The stdin decode has no single quotes, so this is clean.
+                $toRun = "bash -lc '$stdinDecode && bash `"`$f`"; rc=`$?; rm -f `"`$f`"; exit `$rc'"
+            } else {
+                # Bootstrap key (agent user): decode stdin first (as agent),
+                # then pipe the password to sudo for the decoded script.
+                # No outer bash -lc wrapper -- the remote sshd login shell
+                # handles $f expansion, and sudo elevates the inner bash.
+                $escPw = $SeedPassword.Replace("'", "'\''")
+                $toRun = "$stdinDecode && printf '%s\n' '$escPw' | sudo -S -p '' bash `"`$f`"; rc=`$?; rm -f `"`$f`"; exit `$rc"
+            }
+            $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+            try {
+                # Pipe the base64 through stdin (no -n flag); ssh reads from
+                # the pipe and gets EOF when it closes -- no console-blocking.
+                $output = $b64 | & ssh.exe @script:SshOpts "$($script:ConnectUser)@$VmHost" $toRun 2>$null
+                $code = $LASTEXITCODE
+                if ($null -eq $code) { $code = -1 }
+                $outStr = if ($null -ne $output) { ($output -join "`n") } else { "" }
+                return [pscustomobject]@{ Code = $code; Output = $outStr }
+            } catch {
+                return [pscustomobject]@{ Code = -1; Output = "" }
+            } finally {
+                $ErrorActionPreference = $prev
+            }
+        }
+        $syncArgs = @{
+            ConfigDir       = $syncConfigDir
+            VmHost          = $VmHost
+            SshReadInvoker  = $provisionSshInvoker
+            SshWriteInvoker = $provisionSshInvoker
+        }
         if ($PSBoundParameters.ContainsKey('AutoResolve')) { $syncArgs['AutoResolve'] = $AutoResolve }
         $syncResult = Invoke-ConstructConfigSync @syncArgs
         if ($syncResult.Conflict -or $syncResult.Blocked) {
@@ -1397,6 +1453,18 @@ if (Get-Command Initialize-ConstructConfigStore -ErrorAction SilentlyContinue) {
             throw "Config sync conflict: $syncReason -- resolve the conflict in the config repo ($syncConfigDir), commit, and re-run."
         }
         if ($syncResult.Ran) { Write-Ok "Config sync completed" }
+        # Detect a failed seed: the engine reports Seeded=$true but the write
+        # invoker failed (WriteBack=$null).  The engine also sets Seeded=$true
+        # when the store was absent but the host had zero non-reserved profiles
+        # (seedOps empty -> WriteBack stays $null) -- that is a valid no-op,
+        # not a failure.  Only throw when the host actually had profiles to
+        # seed, meaning the write was attempted and failed.
+        $hostHasProfiles = @($profilesBeforeSync | Where-Object {
+            $script:RESERVED_PROFILE_NAMES -notcontains $_.ToLowerInvariant()
+        }).Count -gt 0
+        if ($syncResult.Seeded -and $null -eq $syncResult.WriteBack -and $hostHasProfiles) {
+            throw "Config sync attempted to seed project profiles to the VM but the write-back failed -- the VM store is empty.  Verify SSH connectivity to $VmHost and re-run."
+        }
 
         # Auto-enable profiles that newly arrived from the VM: add them to THIS
         # run's -Projects (so their repos/sdks/mcp provision right now, and the
