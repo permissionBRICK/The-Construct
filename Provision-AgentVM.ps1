@@ -1475,7 +1475,13 @@ if (Get-Command Initialize-ConstructConfigStore -ErrorAction SilentlyContinue) {
             # payload travels through stdin, not the command-line argument.
             # 'cat' reads stdin into a temp file, base64 decodes it, then
             # bash runs the decoded script.
-            $stdinDecode = "f=`$(mktemp) && cat > `"`$f.b64`" && base64 -d < `"`$f.b64`" > `"`$f`" && rm -f `"`$f.b64`""
+            # base64 -di, not -d: Windows PowerShell 5.1 terminates the piped
+            # stdin string with CRLF, and strict GNU base64 rejects the stray
+            # \r ("invalid input", exit 1) -- the read then looked like an
+            # unreachable VM and fresh installs seeded zero profiles (the
+            # original work-PC zero-repos bug). -i ignores non-alphabet bytes,
+            # which also keeps clean pwsh-7/LF payloads working unchanged.
+            $stdinDecode = "f=`$(mktemp) && cat > `"`$f.b64`" && base64 -di < `"`$f.b64`" > `"`$f`" && rm -f `"`$f.b64`""
             if ($script:UseRootKey) {
                 # Connected as root via saved key -- no sudo needed.
                 # Wrap in bash -lc for login-shell PATH (same as Invoke-Ssh).
@@ -1489,7 +1495,12 @@ if (Get-Command Initialize-ConstructConfigStore -ErrorAction SilentlyContinue) {
                 $escPw = $SeedPassword.Replace("'", "'\''")
                 $toRun = "$stdinDecode && printf '%s\n' '$escPw' | sudo -S -p '' bash `"`$f`"; rc=`$?; rm -f `"`$f`"; exit `$rc"
             }
-            $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+            # EAP 'Continue', not 'SilentlyContinue': 5.1 discards native-stderr
+            # ErrorRecords under SilentlyContinue even when 2>-redirected, which
+            # left the field warning as a bare "(exit 1)" with the remote
+            # base64 error erased. Continue lets the records reach the file;
+            # the 2> redirect keeps them off the console.
+            $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"
             $errFile = [System.IO.Path]::GetTempFileName()
             try {
                 # Pipe the base64 through stdin (no -n flag); ssh reads from
