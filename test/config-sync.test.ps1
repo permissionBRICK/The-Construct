@@ -1595,9 +1595,36 @@ if (-not $bashAvailable) {
         -not ($sfHostHasProfiles -and $sfResult.VmReadOk -eq $false) -and
         -not ($sfHostHasProfiles2 -and $sfResult2.VmReadOk -eq $false))
 
+    # Scenario D: existing-but-UNUSABLE config repo (git refuses every
+    # operation, e.g. "dubious ownership" under a different-admin elevated
+    # console). Initialize-ConstructConfigRepo used to swallow the refusal and
+    # return $true, so the tick "ran" while every git call silently no-opped.
+    # Simulate the refusal portably with an invalid .git (a directory with no
+    # HEAD): rev-parse fails deterministically, init must fail, the tick must
+    # report repo-init-failed, and the provision Ran-guard must fire.
+    $sfBase4 = Join-Path ([System.IO.Path]::GetTempPath()) ("sf-test4-" + [guid]::NewGuid().ToString("N"))
+    $sfCfgDir4 = Join-Path $sfBase4 "config"
+    New-Item -ItemType Directory -Path (Join-Path $sfCfgDir4 "projects") -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $sfCfgDir4 ".git") -Force | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $sfCfgDir4 "projects/testprof.json"),
+        $sfProfile, (New-Object System.Text.UTF8Encoding $false))
+
+    $sfInit4 = Initialize-ConstructConfigRepo -ConfigDir $sfCfgDir4 3>$null
+    ok "seed-guard: unusable existing repo fails init (not true)" ($sfInit4 -eq $false)
+
+    $sfResult4 = Invoke-ConstructConfigSync -ConfigDir $sfCfgDir4 -VmHost "dummy" `
+        -SshReadInvoker $sfFreshInvoker -SshWriteInvoker $sfFreshInvoker 3>$null
+    ok "seed-guard: unusable repo yields Ran=false repo-init-failed" (
+        $sfResult4.Ran -eq $false -and $sfResult4.Reason -eq "repo-init-failed")
+    ok "seed-guard: unusable repo leaves VmReadOk null (read never attempted)" ($null -eq $sfResult4.VmReadOk)
+    $sfWouldThrowD = $sfHostHasProfiles2 -and -not $sfResult4.Ran
+    ok "seed-guard: unusable repo DOES trigger the Ran-guard throw" $sfWouldThrowD
+
     Remove-Item -LiteralPath $sfBase -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $sfBase2 -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $sfBase3 -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $sfBase4 -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 # ── Summary ──────────────────────────────────────────────────────────────────
