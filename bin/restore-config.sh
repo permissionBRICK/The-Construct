@@ -40,9 +40,47 @@ fi
 printf '==> Restoring agent config into %s\n' "${EXPORT_HOME}"
 mkdir -p "${EXPORT_HOME}"
 
+# ── Codex thread index vs. restored sessions ─────────────────────────────────
+# Modern Codex lists/resumes threads from a sqlite index (~/.codex/
+# state_*.sqlite, threads table) -- the sessions/*.jsonl rollouts are only
+# transcript storage. On its first start with an empty home Codex runs a
+# ONE-SHOT rollout backfill into that index and marks it complete. During a
+# reinstall, provision.sh starts codex-app-server BEFORE this restore runs, so
+# by the time the old rollouts land here the backfill is already "complete for
+# an empty sessions dir" and Codex never re-scans: the restored history exists
+# on disk but is invisible to the picker. Fix: when the backup carries codex
+# sessions (live or archived), stop the app-server across the overlay (it
+# holds the sqlite files open) and delete the freshly-minted index; the next
+# start re-runs the backfill over the restored rollouts (verified to re-import
+# every rollout, titles included). The dropped index is minutes old and rebuilt
+# from the rollouts, so nothing of value is lost; only on a BY-HAND restore
+# onto a long-lived VM does this also reset index-only metadata (archived
+# flags).
+codex_reindex=""
+codex_was_running=""
+if [[ -d "${BACKUP_DIR}/home/.codex/sessions" || -d "${BACKUP_DIR}/home/.codex/archived_sessions" ]]; then
+  codex_reindex=1
+  if command -v systemctl >/dev/null 2>&1; then
+    case "$(systemctl is-active codex-app-server 2>/dev/null || true)" in
+      active|activating|reloading) codex_was_running=1 ;;
+    esac
+    if [[ -n "${codex_was_running}" ]]; then
+      systemctl stop codex-app-server 2>/dev/null || true
+    fi
+  fi
+fi
+
 # Copy preserving ownership/perms/timestamps. The trailing /. copies the
 # contents (including dotfiles) without nesting under a "home" directory.
 cp -a "${BACKUP_DIR}/home/." "${EXPORT_HOME}/"
+
+if [[ -n "${codex_reindex}" ]]; then
+  rm -f "${EXPORT_HOME}/.codex/state_"*.sqlite*
+  if [[ -n "${codex_was_running}" ]]; then
+    systemctl start codex-app-server 2>/dev/null || true
+  fi
+  log "reset codex thread index; restored sessions re-index on next codex start"
+fi
 
 # Tighten permissions on the secrets so the agents (and ssh, for git) accept them.
 # Includes the per-agent MCP server OAuth stores (.codex/.credentials.json,
