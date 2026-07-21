@@ -1,8 +1,8 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Creates a Hyper-V VM called "Agent-VM" for the construct sandbox,
-    matching the configuration of the existing agent-vm on this host.
+    Creates a Hyper-V VM called "Agent-VM" for the construct sandbox, sized
+    to the host it runs on.
 
 .DESCRIPTION
     1. Self-elevates to Administrator if not already elevated.
@@ -10,8 +10,8 @@
     2a. If the agent VM already exists, offers an interactive menu to
         reprovision it (keep data), completely reinstall it (delete the VM +
         disk after a confirmation, then create fresh), or quit.
-    3. Creates a Gen-2 VM with the same processor count and settings as the
-       existing agent-vm.
+    3. Creates a Gen-2 VM; vCPUs default to all of the host's logical
+       processors (override with -ProcessorCount).
     4. Prompts for VM RAM (default: a third of host RAM, capped at 24 GB) and virtual
        disk size (default 50 GB), and for an Ubuntu Server ISO. The RAM and disk
        prompts are skipped when -MemoryGB / -DiskSizeGB are supplied.
@@ -131,7 +131,7 @@ $commonLib = Join-Path $PSScriptRoot "lib\AgentVm.Common.ps1"
 if (-not (Test-Path -LiteralPath $commonLib)) { throw "Required helper not found: $commonLib" }
 . $commonLib
 
-# ── Configuration (mirrors the existing agent-vm) ────────────────────────────
+# ── Configuration ────────────────────────────────────────────────────────────
 $VmName            = "Agent-VM"
 $SwitchName        = "Default Switch"
 $Generation        = 2
@@ -338,7 +338,7 @@ New-VM -Name $VmName `
 
 Write-Ok "VM created"
 
-# ── 7. Configure VM to match existing agent-vm ──────────────────────────────
+# ── 7. Configure VM settings ─────────────────────────────────────────────────
 Write-Step "Configuring VM settings"
 
 Set-VM -Name $VmName `
