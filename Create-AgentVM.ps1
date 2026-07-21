@@ -329,6 +329,20 @@ Set-VM -Name $VmName `
 
 Write-Ok "Processors: $ProcessorCount, Dynamic Memory: off, Checkpoint: $CheckpointType"
 
+# Expose the host CPU's virtualization extensions to the guest (nested
+# virtualization) so the agent can use KVM/QEMU, containers with gVisor/Kata,
+# Android emulators, etc. inside the VM. Must be set while the VM is off, so it
+# goes here between New-VM and Start-VM; the static memory set above is already
+# what nested virtualization requires. Unsupported hosts (old Hyper-V builds,
+# some AMD/ARM configurations) throw -- treat that as non-fatal and continue
+# without nested virtualization rather than failing the whole install.
+try {
+    Set-VMProcessor -VMName $VmName -ExposeVirtualizationExtensions $true -ErrorAction Stop
+    Write-Ok "Nested virtualization: on"
+} catch {
+    Write-Warning "Nested virtualization not enabled (host doesn't support it?): $($_.Exception.Message)"
+}
+
 # Disable Secure Boot (required for Ubuntu without Microsoft UEFI keys)
 Set-VMFirmware -VMName $VmName -EnableSecureBoot Off
 Write-Ok "Secure Boot: off"
