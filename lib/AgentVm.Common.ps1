@@ -2359,6 +2359,15 @@ function Wait-VmSshReady {
         captured -- an uptime under $FreshBootMaxUptimeSec (an install keeps
         the VM up far longer than that before the final reboot).
 
+        The SSH probe is NOT gated behind a TCP pre-check: the TCP probe dials
+        -VmHost directly while ssh resolves the alias's HostName from
+        ~/.ssh/config (the FQDN the rest of the tooling uses), and a hostname
+        that only resolves on one of those paths would deadlock the wait --
+        field-observed: the short name stopped resolving after the reboot, the
+        TCP gate never opened, the ssh probe never ran, and the wait burned
+        its full timeout while VS Code (using the alias) connected fine. ssh
+        enforces its own ConnectTimeout, so the extra TCP dial bought nothing.
+
         Without -SshTarget, falls back to the TCP-only stability window:
         $StableProbes consecutive successful connects. Returns $true when
         ready, $false on timeout. Never throws; no output (caller narrates).
@@ -2381,19 +2390,12 @@ function Wait-VmSshReady {
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     $streak = 0
     while ((Get-Date) -lt $deadline) {
-        $up = $false
-        $client = $null
-        try {
-            $client = New-Object System.Net.Sockets.TcpClient
-            $async = $client.BeginConnect($VmHost, $Port, $null, $null)
-            if ($async.AsyncWaitHandle.WaitOne(2000) -and $client.Connected) { $up = $true }
-        } catch { $up = $false }
-        finally { if ($client) { try { $client.Close() } catch { } } }
-        if ($up -and $SshTarget) {
-            # Restart proof over SSH. accept-new: the post-reboot host key may
-            # not be in known_hosts yet (Set-HostSshConfig's accept probe can
-            # race the way down). EAP pinned to Continue so 5.1 doesn't turn
-            # native stderr into a terminating NativeCommandError.
+        if ($SshTarget) {
+            # Restart proof over SSH -- attempted every interval, no TCP gate
+            # (see above). accept-new: the post-reboot host key may not be in
+            # known_hosts yet (Set-HostSshConfig's accept probe can race the
+            # way down). EAP pinned to Continue so 5.1 doesn't turn native
+            # stderr into a terminating NativeCommandError.
             $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "Continue"
             try {
                 $probe = @(& ssh -n -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 `
@@ -2412,11 +2414,21 @@ function Wait-VmSshReady {
                     return $true
                 }
             }
-        } elseif ($up) {
-            $streak++
-            if ($streak -ge $StableProbes) { return $true }
         } else {
-            $streak = 0
+            $up = $false
+            $client = $null
+            try {
+                $client = New-Object System.Net.Sockets.TcpClient
+                $async = $client.BeginConnect($VmHost, $Port, $null, $null)
+                if ($async.AsyncWaitHandle.WaitOne(2000) -and $client.Connected) { $up = $true }
+            } catch { $up = $false }
+            finally { if ($client) { try { $client.Close() } catch { } } }
+            if ($up) {
+                $streak++
+                if ($streak -ge $StableProbes) { return $true }
+            } else {
+                $streak = 0
+            }
         }
         Start-Sleep -Seconds $ProbeIntervalSec
     }
