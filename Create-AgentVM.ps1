@@ -470,13 +470,12 @@ if ($isAutoinstall) {
     if ($Auto) {
         # ── 10a. Chained from Auto-Install: return without provisioning ──────
         # Auto-Install.ps1 handles provisioning via Invoke-DeElevatedProvision
-        # so it runs as the non-elevated desktop user (config-sync resolves the
-        # right profile, SMB mappings land in the visible session).
+        # (currently running inline; see the kill switch in AgentVm.Common.ps1).
         Write-Step "VM created and SSH-ready"
-        Write-Ok "Returning to Auto-Install for de-elevated provisioning"
+        Write-Ok "Returning to Auto-Install for provisioning"
     } else {
-        # ── 10b. Standalone: de-elevate the provision call ───────────────────
-        Write-Step "Provisioning the VM (de-elevated)"
+        # ── 10b. Standalone: provision via Invoke-DeElevatedProvision ────────
+        Write-Step "Provisioning the VM"
 
         $provisionScript = Join-Path $PSScriptRoot "Provision-AgentVM.ps1"
         if (-not (Test-Path $provisionScript)) {

@@ -249,9 +249,10 @@ trap {
 # ── Self-elevate to Administrator from the start ─────────────────────────────
 # The Hyper-V VM creation needs admin rights, so we elevate up front -- before
 # the long download/build. After Create-AgentVM.ps1 returns (VM created, SSH up),
-# provisioning is DE-ELEVATED via a scheduled task (InteractiveToken + LeastPrivilege)
-# so it runs as the real desktop user: config-sync resolves the right profile, SMB
-# mappings land in the visible session, and git doesn't flag "dubious ownership".
+# provisioning goes through Invoke-DeElevatedProvision. Its de-elevation
+# (scheduled task as the real desktop user) is currently DISABLED via the kill
+# switch in AgentVm.Common.ps1, so provisioning runs inline in this elevated
+# console until the de-elevated child's spurious prompts are fixed.
 # We skip elevation when only building the ISO (-SkipCreateVm needs no admin rights).
 if (-not $SkipCreateVm) {
     $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -1499,9 +1500,10 @@ if (-not (Test-Path -LiteralPath $createScript)) {
     throw "Create-AgentVM.ps1 not found in $PSScriptRoot."
 }
 # Create-AgentVM.ps1 creates the VM and waits for SSH; with -Auto it returns
-# without calling Provision (so we can de-elevate the provisioning below).
+# without calling Provision (Auto-Install owns the provisioning call below,
+# via Invoke-DeElevatedProvision -- currently inline, see the kill switch).
 # The provision-related params ride along in $createArgs for standalone
-# Create-AgentVM runs (no -Auto) where it de-elevates its own provision call.
+# Create-AgentVM runs (no -Auto) where it makes its own provision call.
 $createArgs = @{
     MemoryGB      = $chosenMemGB
     DiskSizeGB    = $chosenDiskGB
@@ -1528,11 +1530,11 @@ try {
     # extension can read VM power state without a UAC prompt.
     Add-HyperVAdminMembership
 
-    # ── De-elevated provisioning ─────────────────────────────────────────────
-    # Provision runs as the real desktop user so config-sync resolves the right
-    # profile, SMB mappings land in the visible session, and git doesn't flag
-    # "dubious ownership". Auto-Install builds provArgs directly (Create-AgentVM
-    # no longer chains into Provision when -Auto).
+    # ── Provisioning ─────────────────────────────────────────────────────────
+    # Goes through Invoke-DeElevatedProvision, whose de-elevation is currently
+    # DISABLED (kill switch in AgentVm.Common.ps1) — it runs Provision inline in
+    # this console. Auto-Install builds provArgs directly (Create-AgentVM no
+    # longer chains into Provision when -Auto).
     $provisionScript = Join-Path $PSScriptRoot "Provision-AgentVM.ps1"
     if (-not (Test-Path -LiteralPath $provisionScript)) {
         throw "Provision-AgentVM.ps1 not found in $PSScriptRoot."
