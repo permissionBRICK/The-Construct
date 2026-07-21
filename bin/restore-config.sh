@@ -49,15 +49,16 @@ mkdir -p "${EXPORT_HOME}"
 # by the time the old rollouts land here the backfill is already "complete for
 # an empty sessions dir" and Codex never re-scans: the restored history exists
 # on disk but is invisible to the picker. Fix: when the backup carries codex
-# sessions, stop the app-server across the overlay (it holds the sqlite files
-# open) and delete the freshly-minted index; the next start re-runs the
-# backfill over the restored rollouts (verified to re-import every rollout,
-# titles included). The dropped index is minutes old and rebuilt from the
-# rollouts, so nothing of value is lost; only on a BY-HAND restore onto a
-# long-lived VM does this also reset index-only metadata (archived flags).
+# sessions (live or archived), stop the app-server across the overlay (it
+# holds the sqlite files open) and delete the freshly-minted index; the next
+# start re-runs the backfill over the restored rollouts (verified to re-import
+# every rollout, titles included). The dropped index is minutes old and rebuilt
+# from the rollouts, so nothing of value is lost; only on a BY-HAND restore
+# onto a long-lived VM does this also reset index-only metadata (archived
+# flags).
 codex_reindex=""
 codex_was_running=""
-if [[ -d "${BACKUP_DIR}/home/.codex/sessions" ]]; then
+if [[ -d "${BACKUP_DIR}/home/.codex/sessions" || -d "${BACKUP_DIR}/home/.codex/archived_sessions" ]]; then
   codex_reindex=1
   if command -v systemctl >/dev/null 2>&1; then
     case "$(systemctl is-active codex-app-server 2>/dev/null || true)" in
