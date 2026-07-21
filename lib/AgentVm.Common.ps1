@@ -1566,6 +1566,15 @@ foreach (`$p in `$obj.PSObject.Properties) {
 # the parent's 30-second ready-handshake timeout kills the child and falls
 # back inline anyway — a strictly worse version of just running inline. Flip
 # to $true only after the child runs prompt-free under the passed parameters.
+#
+# ACCEPTED tradeoff while disabled: inline elevated provisioning writes the
+# host-side profile bits (Set-HostSshConfig -> $HOME\.ssh, VS Code Remote-SSH
+# settings -> %APPDATA%) under the ELEVATED token's profile. For the normal
+# self-elevated UAC case that is the same user profile, so nothing changes;
+# only under over-the-shoulder UAC / Admin By Request do they land in the
+# approving admin's profile instead of the desktop user's. That is exactly the
+# long-standing pre-de-elevation behaviour, and the problem that motivated
+# de-elevation turned out not to be permissions-related.
 $script:ConstructDeElevationEnabled = $false
 
 function Invoke-DeElevatedProvision {

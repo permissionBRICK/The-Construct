@@ -1500,9 +1500,10 @@ if (-not (Test-Path -LiteralPath $createScript)) {
     throw "Create-AgentVM.ps1 not found in $PSScriptRoot."
 }
 # Create-AgentVM.ps1 creates the VM and waits for SSH; with -Auto it returns
-# without calling Provision (so we can de-elevate the provisioning below).
+# without calling Provision (Auto-Install owns the provisioning call below,
+# via Invoke-DeElevatedProvision -- currently inline, see the kill switch).
 # The provision-related params ride along in $createArgs for standalone
-# Create-AgentVM runs (no -Auto) where it de-elevates its own provision call.
+# Create-AgentVM runs (no -Auto) where it makes its own provision call.
 $createArgs = @{
     MemoryGB      = $chosenMemGB
     DiskSizeGB    = $chosenDiskGB
