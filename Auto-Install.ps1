@@ -1574,8 +1574,11 @@ try {
             Write-Ok "No final reboot was needed -- the VM is already up"
         } else {
             Write-Step "Waiting for the VM to finish its final reboot"
+            # $VmHostname (FQDN), not the short $VmHost: the short name can
+            # stop resolving after the reboot while the switch DNS still
+            # serves the FQDN -- and ssh resolves the alias to the FQDN too.
             $sshWaitArgs = @{
-                VmHost         = $VmHost
+                VmHost         = $VmHostname
                 SshTarget      = $HyperVmName.ToLower()
                 BaselineBootId = "$global:ConstructVmPreRebootBootId"
             }

@@ -443,7 +443,10 @@ ok "ssh-wait: unresolvable host returns false without throwing" ((Wait-VmSshRead
 # sshd answers for a few seconds -- a probe must only count as ready with proof
 # of a NEW boot (boot id changed vs the baseline; uptime-fresh without one).
 # Shim `ssh` on PATH prints a chosen boot id + /proc/uptime line and exits with
-# a chosen code; the loopback listener keeps the TCP prefilter green.
+# a chosen code. -VmHost is deliberately UNRESOLVABLE in these tests: ssh mode
+# must not dial the TCP host at all (field regression: the short name stopped
+# resolving post-reboot, the old TCP gate never opened, and the ssh probe --
+# whose alias resolves fine -- was never attempted).
 function New-SshShim([string]$BootId, [string]$Uptime, [int]$ExitCode = 0) {
     $dir = Join-Path ([System.IO.Path]::GetTempPath()) ("ssh-shim-" + [guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Path $dir | Out-Null
@@ -462,7 +465,7 @@ function Test-SshWaitWithShim([string]$BootId, [string]$Uptime, [int]$ExitCode =
     $savedPath = $env:PATH
     $env:PATH = $dir + [System.IO.Path]::PathSeparator + $env:PATH
     try {
-        return Wait-VmSshReady -VmHost "127.0.0.1" -Port $lport -TimeoutSec $TimeoutSec -ProbeIntervalSec 0 `
+        return Wait-VmSshReady -VmHost "definitely-not-a-host.invalid" -TimeoutSec $TimeoutSec -ProbeIntervalSec 0 `
                                -SshTarget "agent-vm" -BaselineBootId $Baseline
     } finally {
         $env:PATH = $savedPath
@@ -471,21 +474,14 @@ function Test-SshWaitWithShim([string]$BootId, [string]$Uptime, [int]$ExitCode =
 }
 $oldBoot = "11111111-1111-1111-1111-111111111111"
 $newBoot = "22222222-2222-2222-2222-222222222222"
-# Fresh listener: restarting a stopped TcpListener rebinds port 0 to a NEW
-# ephemeral port, which would silently break the TCP prefilter against $lport.
-$listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
-$listener.Start()
-$lport = $listener.LocalEndpoint.Port
-try {
-    ok "ssh-wait: changed boot id vs baseline is ready" (Test-SshWaitWithShim -BootId $newBoot -Uptime "42.17" -Baseline $oldBoot)
-    ok "ssh-wait: SAME boot id vs baseline keeps waiting (old boot answering != restarted)" (
-        -not (Test-SshWaitWithShim -BootId $oldBoot -Uptime "5432.10" -Baseline $oldBoot -TimeoutSec 2))
-    ok "ssh-wait: no baseline + fresh uptime is ready" (Test-SshWaitWithShim -BootId $newBoot -Uptime "42.17")
-    ok "ssh-wait: no baseline + long uptime keeps waiting" (
-        -not (Test-SshWaitWithShim -BootId $oldBoot -Uptime "54321.09" -TimeoutSec 2))
-    ok "ssh-wait: failing ssh probe never passes on TCP alone when proof is required" (
-        -not (Test-SshWaitWithShim -BootId $newBoot -Uptime "42.17" -ExitCode 255 -Baseline $oldBoot -TimeoutSec 2))
-} finally { $listener.Stop() }
+ok "ssh-wait: changed boot id vs baseline is ready (no TCP gate: VmHost unresolvable)" (Test-SshWaitWithShim -BootId $newBoot -Uptime "42.17" -Baseline $oldBoot)
+ok "ssh-wait: SAME boot id vs baseline keeps waiting (old boot answering != restarted)" (
+    -not (Test-SshWaitWithShim -BootId $oldBoot -Uptime "5432.10" -Baseline $oldBoot -TimeoutSec 2))
+ok "ssh-wait: no baseline + fresh uptime is ready" (Test-SshWaitWithShim -BootId $newBoot -Uptime "42.17")
+ok "ssh-wait: no baseline + long uptime keeps waiting" (
+    -not (Test-SshWaitWithShim -BootId $oldBoot -Uptime "54321.09" -TimeoutSec 2))
+ok "ssh-wait: failing ssh probe keeps waiting (no readiness without restart proof)" (
+    -not (Test-SshWaitWithShim -BootId $newBoot -Uptime "42.17" -ExitCode 255 -Baseline $oldBoot -TimeoutSec 2))
 
 # ── Select-VmCodeWindow (reinstall closes VM-attached VS Code windows) ───────
 # Pure filter over (Title, ProcessName) records; the Win32 enumeration itself is
