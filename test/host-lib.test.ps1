@@ -438,6 +438,55 @@ try {
 ok "ssh-wait: closed port times out false" (-not (Wait-VmSshReady -VmHost "127.0.0.1" -Port $lport -TimeoutSec 2 -ProbeIntervalSec 0))
 ok "ssh-wait: unresolvable host returns false without throwing" ((Wait-VmSshReady -VmHost "definitely-not-a-host.invalid" -TimeoutSec 2 -ProbeIntervalSec 0) -eq $false)
 
+# ── Wait-VmSshReady: restart proof via -SshTarget ────────────────────────────
+# The end-of-provisioning reboot is backgrounded on the VM, so the OLD boot's
+# sshd answers for a few seconds -- a probe must only count as ready with proof
+# of a NEW boot (boot id changed vs the baseline; uptime-fresh without one).
+# Shim `ssh` on PATH prints a chosen boot id + /proc/uptime line and exits with
+# a chosen code; the loopback listener keeps the TCP prefilter green.
+function New-SshShim([string]$BootId, [string]$Uptime, [int]$ExitCode = 0) {
+    $dir = Join-Path ([System.IO.Path]::GetTempPath()) ("ssh-shim-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $dir | Out-Null
+    if ($IsWindows -or $env:OS -eq "Windows_NT") {
+        $lines = @("@echo off", "echo $BootId", "echo $Uptime 9999.99", "exit /b $ExitCode")
+        Set-Content -Path (Join-Path $dir "ssh.cmd") -Value ($lines -join "`r`n") -Encoding ASCII
+    } else {
+        $shim = Join-Path $dir "ssh"
+        Set-Content -Path $shim -Value "#!/bin/sh`necho '$BootId'`necho '$Uptime 9999.99'`nexit $ExitCode`n" -NoNewline
+        & chmod +x $shim
+    }
+    return $dir
+}
+function Test-SshWaitWithShim([string]$BootId, [string]$Uptime, [int]$ExitCode = 0, [string]$Baseline = "", [int]$TimeoutSec = 15) {
+    $dir = New-SshShim -BootId $BootId -Uptime $Uptime -ExitCode $ExitCode
+    $savedPath = $env:PATH
+    $env:PATH = $dir + [System.IO.Path]::PathSeparator + $env:PATH
+    try {
+        return Wait-VmSshReady -VmHost "127.0.0.1" -Port $lport -TimeoutSec $TimeoutSec -ProbeIntervalSec 0 `
+                               -SshTarget "agent-vm" -BaselineBootId $Baseline
+    } finally {
+        $env:PATH = $savedPath
+        Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+$oldBoot = "11111111-1111-1111-1111-111111111111"
+$newBoot = "22222222-2222-2222-2222-222222222222"
+# Fresh listener: restarting a stopped TcpListener rebinds port 0 to a NEW
+# ephemeral port, which would silently break the TCP prefilter against $lport.
+$listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+$listener.Start()
+$lport = $listener.LocalEndpoint.Port
+try {
+    ok "ssh-wait: changed boot id vs baseline is ready" (Test-SshWaitWithShim -BootId $newBoot -Uptime "42.17" -Baseline $oldBoot)
+    ok "ssh-wait: SAME boot id vs baseline keeps waiting (old boot answering != restarted)" (
+        -not (Test-SshWaitWithShim -BootId $oldBoot -Uptime "5432.10" -Baseline $oldBoot -TimeoutSec 2))
+    ok "ssh-wait: no baseline + fresh uptime is ready" (Test-SshWaitWithShim -BootId $newBoot -Uptime "42.17")
+    ok "ssh-wait: no baseline + long uptime keeps waiting" (
+        -not (Test-SshWaitWithShim -BootId $oldBoot -Uptime "54321.09" -TimeoutSec 2))
+    ok "ssh-wait: failing ssh probe never passes on TCP alone when proof is required" (
+        -not (Test-SshWaitWithShim -BootId $newBoot -Uptime "42.17" -ExitCode 255 -Baseline $oldBoot -TimeoutSec 2))
+} finally { $listener.Stop() }
+
 # ── Select-VmCodeWindow (reinstall closes VM-attached VS Code windows) ───────
 # Pure filter over (Title, ProcessName) records; the Win32 enumeration itself is
 # not exercised here (Windows-only, needs a desktop).
