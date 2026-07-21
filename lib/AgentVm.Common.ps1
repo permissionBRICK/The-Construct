@@ -1558,11 +1558,24 @@ foreach (`$p in `$obj.PSObject.Properties) {
     return [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
 }
 
+# De-elevation kill switch. $false = Invoke-DeElevatedProvision always runs
+# Provision-AgentVM.ps1 inline in the calling (elevated) console — the
+# scheduled-task machinery below is skipped entirely but kept for re-enabling.
+# Disabled because the de-elevated child window prompts the user for choices
+# the parent already answered via parameters, and if the user doesn't respond
+# the parent's 30-second ready-handshake timeout kills the child and falls
+# back inline anyway — a strictly worse version of just running inline. Flip
+# to $true only after the child runs prompt-free under the passed parameters.
+$script:ConstructDeElevationEnabled = $false
+
 function Invoke-DeElevatedProvision {
     <#
         Launch Provision-AgentVM.ps1 in a non-elevated console as the desktop user.
         When already non-elevated (panel reprovision), runs Provision inline — no
         task, no result file, identical to the pre-change behaviour.
+
+        TEMPORARILY DISABLED via $script:ConstructDeElevationEnabled above: always
+        runs inline until the child's spurious interactive prompts are fixed.
 
         On return, $global:ConstructProvisionHadErrors / ConstructProvisionErrors /
         ConstructProvisionFailureMessage are set so the caller's Wait-Exit works
@@ -1577,6 +1590,12 @@ function Invoke-DeElevatedProvision {
         [Parameter(Mandatory)][hashtable]$ProvisionParams,
         [int]$TimeoutSeconds = 7200
     )
+
+    # ── De-elevation disabled: run inline in this console. ───────────────────────
+    if (-not $script:ConstructDeElevationEnabled) {
+        & $ScriptPath @ProvisionParams
+        return
+    }
 
     # ── Not elevated? Run inline (panel reprovision — already non-elevated). ─────
     $isElevated = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
