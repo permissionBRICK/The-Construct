@@ -15,6 +15,15 @@ For the installed agents, from `root`'s home — never from inside the project r
   skills), `~/.claude/skills`.
 - Agent settings: `~/.claude/settings.json`, `~/.codex/config.toml`,
   `~/.config/opencode/opencode.json`.
+- Chat history (`INCLUDE_HISTORY=true`, the default): Claude's per-project session
+  transcripts (`~/.claude/projects/<slug>/`) and `~/.claude/history.jsonl`; Codex's
+  `~/.codex/{sessions,archived_sessions}` rollouts + indexes; Opencode's
+  `~/.local/share/opencode/{storage,project,opencode.db*}`. Codex-specific wrinkle:
+  modern Codex lists threads from a sqlite index it backfills **once** on first start,
+  and the app-server starts before the restore lands — so the restore deletes the
+  fresh, empty index (`~/.codex/state_*.sqlite`) and restarts `codex-app-server`,
+  making Codex re-index the restored rollouts. Titles come back from the transcripts;
+  index-only metadata (archived flags) does not.
 - **Subscription auth**, so you don't re-authenticate after a reinstall:
   `~/.claude/.credentials.json`, `~/.claude.json`, `~/.codex/auth.json`,
   `~/.local/share/opencode/auth.json`.
