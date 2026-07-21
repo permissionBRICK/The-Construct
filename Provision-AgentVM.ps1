@@ -1920,6 +1920,22 @@ if ($AgentPassword -and ($AgentPassword -ne $SeedPassword)) {
     Write-Ok "Setting a custom login password for '$SeedUser'"
 }
 
+# Tell the host-side caller (Auto-Install's open-VS-Code wait) whether this run
+# reboots the VM, and capture the CURRENT boot id over the still-authenticated
+# session first. The reboot below is backgrounded on the VM (sleep 3; reboot),
+# so the OLD boot's sshd keeps answering for several seconds after we return --
+# a port/ssh probe alone can pass on the boot that is about to vanish.
+# Wait-VmSshReady compares against this baseline to require a genuinely NEW
+# boot. Best-effort: an empty baseline makes the waiter fall back to its
+# fresh-boot uptime heuristic.
+$global:ConstructVmRebootIssued    = $doReboot
+$global:ConstructVmPreRebootBootId = ""
+if ($doReboot) {
+    try {
+        $global:ConstructVmPreRebootBootId = "$(Invoke-Ssh -Command 'cat /proc/sys/kernel/random/boot_id')".Trim()
+    } catch { }
+}
+
 if ($doReboot) {
     if ($rmBootstrapCmd) {
         Write-Step "Removing bootstrap key and rebooting the VM"

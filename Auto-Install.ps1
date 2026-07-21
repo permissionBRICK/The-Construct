@@ -1560,16 +1560,30 @@ try {
     Invoke-DeElevatedProvision -ScriptPath $provisionScript -ProvisionParams $provArgs
 
     # ── Post-provision host setup ────────────────────────────────────────────
-    # The install path reboots the VM at the very end of provisioning, so opening
-    # VS Code Remote-SSH right away races the reboot and fails the first connect.
-    # Wait for sshd to be back STABLY before launching; on timeout open anyway —
-    # Remote-SSH retries on its own, and the deep link is printed too.
+    # The install path reboots the VM at the very end of provisioning, but the
+    # reboot is backgrounded on the VM -- the OLD boot's sshd keeps answering
+    # for several seconds, so "the port is up" is NOT proof the restart
+    # happened, and opening VS Code on it lands in a connection error. Require
+    # actual restart proof: Provision exports whether it issued a reboot and
+    # the pre-reboot boot id; Wait-VmSshReady probes over SSH until the boot id
+    # CHANGES (or, without a baseline, uptime shows a fresh boot). No reboot
+    # issued -> the VM never went down, open immediately. On timeout open
+    # anyway -- Remote-SSH retries on its own, and the deep link is printed too.
     if (Get-Command Wait-VmSshReady -ErrorAction SilentlyContinue) {
-        Write-Step "Waiting for the VM to come back up after the final reboot"
-        if (Wait-VmSshReady -VmHost $VmHost) {
-            Write-Ok "VM is back on SSH"
+        if ($global:ConstructVmRebootIssued -eq $false) {
+            Write-Ok "No final reboot was needed -- the VM is already up"
         } else {
-            Write-Warning "The VM didn't answer on SSH within 5 minutes; opening VS Code anyway (it retries the connection itself)."
+            Write-Step "Waiting for the VM to finish its final reboot"
+            $sshWaitArgs = @{
+                VmHost         = $VmHost
+                SshTarget      = $HyperVmName.ToLower()
+                BaselineBootId = "$global:ConstructVmPreRebootBootId"
+            }
+            if (Wait-VmSshReady @sshWaitArgs) {
+                Write-Ok "VM restarted and is back on SSH"
+            } else {
+                Write-Warning "The VM didn't confirm its restart within 5 minutes; opening VS Code anyway (it retries the connection itself)."
+            }
         }
     }
     $openLink = Get-RemoteOpenLink -VmHost $VmHost -WorkspaceRoot "/root/repos"
