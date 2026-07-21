@@ -1,8 +1,8 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Creates a Hyper-V VM called "Agent-VM" for the construct sandbox,
-    matching the configuration of the existing agent-vm on this host.
+    Creates a Hyper-V VM called "Agent-VM" for the construct sandbox, sized
+    to the host it runs on.
 
 .DESCRIPTION
     1. Self-elevates to Administrator if not already elevated.
@@ -10,8 +10,8 @@
     2a. If the agent VM already exists, offers an interactive menu to
         reprovision it (keep data), completely reinstall it (delete the VM +
         disk after a confirmation, then create fresh), or quit.
-    3. Creates a Gen-2 VM with the same processor count and settings as the
-       existing agent-vm.
+    3. Creates a Gen-2 VM; vCPUs default to all of the host's logical
+       processors (override with -ProcessorCount).
     4. Prompts for VM RAM (default: a third of host RAM, capped at 24 GB) and virtual
        disk size (default 50 GB), and for an Ubuntu Server ISO. The RAM and disk
        prompts are skipped when -MemoryGB / -DiskSizeGB are supplied.
@@ -27,6 +27,10 @@
     Virtual hard disk size in GB. If omitted (0), the user is prompted
     (default 50 GB).
 
+.PARAMETER ProcessorCount
+    vCPU count for the VM. If omitted (0), defaults to all of the host's
+    logical processors.
+
 .PARAMETER Projects
     Comma-separated project profiles to load. When supplied it is forwarded to
     Provision-AgentVM.ps1, which then skips its own project prompt.
@@ -39,6 +43,11 @@
 param(
     [double]$MemoryGB  = 0,
     [int]$DiskSizeGB   = 0,
+    # vCPU count for the VM. If omitted (0), auto-scales to ALL of the host's
+    # logical processors (min 2) so the VM tracks the machine it runs on instead
+    # of a fixed number -- Hyper-V time-slices vCPUs, so the host keeps
+    # scheduling itself alongside a fully-provisioned VM.
+    [int]$ProcessorCount = 0,
     [string]$Projects,
     [string]$AgentPassword,
     # Optional git identity forwarded to Provision-AgentVM.ps1 (applied as the
@@ -122,11 +131,24 @@ $commonLib = Join-Path $PSScriptRoot "lib\AgentVm.Common.ps1"
 if (-not (Test-Path -LiteralPath $commonLib)) { throw "Required helper not found: $commonLib" }
 . $commonLib
 
-# ── Configuration (mirrors the existing agent-vm) ────────────────────────────
+# ── Configuration ────────────────────────────────────────────────────────────
 $VmName            = "Agent-VM"
 $SwitchName        = "Default Switch"
-$ProcessorCount    = 12
 $Generation        = 2
+
+# vCPUs: default to every logical processor the host has (min 2; the old
+# hardcoded 12 mirrored the original hand-built VM and ignored the host size).
+# Hyper-V time-slices vCPUs rather than reserving them, so the host stays
+# schedulable even with a fully-provisioned VM. -ProcessorCount overrides.
+if ($ProcessorCount -lt 1) {
+    $hostLPs = 0
+    try { $hostLPs = [int]$env:NUMBER_OF_PROCESSORS } catch { }
+    if ($hostLPs -lt 1) {
+        try { $hostLPs = [int](Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).NumberOfLogicalProcessors } catch { }
+    }
+    $ProcessorCount = if ($hostLPs -ge 1) { $hostLPs } else { 12 }
+    Write-Note "vCPUs: $ProcessorCount (all host logical processors)"
+}
 $VhdPath           = "C:\ProgramData\Microsoft\Windows\Virtual Hard Disks\$VmName.vhdx"
 $CheckpointType    = "Standard"
 $AutoStart         = "StartIfRunning"
@@ -316,7 +338,7 @@ New-VM -Name $VmName `
 
 Write-Ok "VM created"
 
-# ── 7. Configure VM to match existing agent-vm ──────────────────────────────
+# ── 7. Configure VM settings ─────────────────────────────────────────────────
 Write-Step "Configuring VM settings"
 
 Set-VM -Name $VmName `
