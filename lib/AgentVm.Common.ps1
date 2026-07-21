@@ -2344,13 +2344,24 @@ function Repair-ConstructConfigOwnership {
 
 function Wait-VmSshReady {
     <#
-        Poll the VM's SSH TCP port until it accepts connections STABLY. Used
-        before opening VS Code Remote-SSH at the end of an install/reinstall:
-        provisioning reboots the VM at its very end, so a single successful
-        probe right after can be the OLD boot about to vanish -- require
-        $StableProbes consecutive successes so "up, about to reboot" and
-        "mid-reboot" both resolve to waiting. Returns $true when stable,
-        $false on timeout. Never throws; no output (caller narrates).
+        Poll the VM until SSH is genuinely back after the end-of-provisioning
+        reboot. Used before opening VS Code Remote-SSH at the end of an
+        install/reinstall.
+
+        The reboot is backgrounded on the VM (sleep 3; reboot), so the OLD
+        boot's sshd keeps answering for several seconds after provisioning
+        returns -- any probe that only asks "is the port up?" can pass on the
+        boot that is about to vanish, and VS Code then opens into a connection
+        error. So, when -SshTarget is given, a probe only counts as ready with
+        PROOF the VM restarted: an SSH exec reads the VM's current boot id and
+        uptime, and readiness requires the boot id to differ from
+        -BaselineBootId (captured pre-reboot), or -- when no baseline could be
+        captured -- an uptime under $FreshBootMaxUptimeSec (an install keeps
+        the VM up far longer than that before the final reboot).
+
+        Without -SshTarget, falls back to the TCP-only stability window:
+        $StableProbes consecutive successful connects. Returns $true when
+        ready, $false on timeout. Never throws; no output (caller narrates).
     #>
     [CmdletBinding()]
     param(
@@ -2358,7 +2369,14 @@ function Wait-VmSshReady {
         [int]$Port = 22,
         [int]$TimeoutSec = 300,
         [int]$ProbeIntervalSec = 2,
-        [int]$StableProbes = 3
+        [int]$StableProbes = 3,
+        # ~/.ssh/config Host alias (or user@host) for the restart-proof probe.
+        [string]$SshTarget = "",
+        # Pre-reboot /proc/sys/kernel/random/boot_id; readiness = it changed.
+        [string]$BaselineBootId = "",
+        # No-baseline fallback: a boot id we can't compare still proves a fresh
+        # boot when the VM's uptime is under this many seconds.
+        [int]$FreshBootMaxUptimeSec = 600
     )
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     $streak = 0
@@ -2371,7 +2389,30 @@ function Wait-VmSshReady {
             if ($async.AsyncWaitHandle.WaitOne(2000) -and $client.Connected) { $up = $true }
         } catch { $up = $false }
         finally { if ($client) { try { $client.Close() } catch { } } }
-        if ($up) {
+        if ($up -and $SshTarget) {
+            # Restart proof over SSH. accept-new: the post-reboot host key may
+            # not be in known_hosts yet (Set-HostSshConfig's accept probe can
+            # race the way down). EAP pinned to Continue so 5.1 doesn't turn
+            # native stderr into a terminating NativeCommandError.
+            $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+            try {
+                $probe = @(& ssh -n -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 `
+                             $SshTarget "cat /proc/sys/kernel/random/boot_id /proc/uptime" 2>$null)
+            } catch { $probe = @() }
+            finally { $ErrorActionPreference = $prevEAP }
+            if ($LASTEXITCODE -eq 0 -and $probe.Count -ge 2) {
+                $bootId = "$($probe[0])".Trim()
+                $uptime = 0.0
+                $null = [double]::TryParse(("$($probe[1])" -split '\s+')[0],
+                    [System.Globalization.NumberStyles]::Float,
+                    [System.Globalization.CultureInfo]::InvariantCulture, [ref]$uptime)
+                if ($BaselineBootId) {
+                    if ($bootId -and $bootId -ne $BaselineBootId) { return $true }
+                } elseif ($uptime -gt 0 -and $uptime -lt $FreshBootMaxUptimeSec) {
+                    return $true
+                }
+            }
+        } elseif ($up) {
             $streak++
             if ($streak -ge $StableProbes) { return $true }
         } else {
