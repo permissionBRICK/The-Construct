@@ -17,6 +17,8 @@ if [ -r "$cfg" ]; then
   emit AGENT_NAME "$(sed -n 's/^AGENT_NAME=//p' "$cfg" | head -1)"
   emit PROJECTS "$(sed -n 's/^PROJECTS=//p' "$cfg" | head -1)"
   emit AI_TOOLS "$(sed -n 's/^AI_TOOLS=//p' "$cfg" | head -1)"
+  emit T3CODE "$(sed -n 's/^T3CODE=//p' "$cfg" | head -1)"
+  emit T3CODE_PORT "$(sed -n 's/^T3CODE_PORT=//p' "$cfg" | head -1)"
 fi
 mark=/etc/construct/provisioned.env
 if [ -r "$mark" ]; then
@@ -31,6 +33,8 @@ ver(){ "$1" --version 2>&1 | grep -oE '[0-9]+[.][0-9]+[.][0-9]+([-.][0-9A-Za-z.]
 command -v claude   >/dev/null 2>&1 && emit V_CLAUDE   "$(ver claude)"
 command -v codex    >/dev/null 2>&1 && emit V_CODEX    "$(ver codex)"
 command -v opencode >/dev/null 2>&1 && emit V_OPENCODE "$(ver opencode)"
+command -v t3       >/dev/null 2>&1 && emit V_T3       "$(ver t3)"
+emit T3_ACTIVE "$(systemctl is-active t3code-serve 2>/dev/null)"
 `;
 
 /** Pull the first semver out of a version string, e.g. "codex-cli 0.142.4" -> "0.142.4". */
@@ -78,6 +82,20 @@ function toState(map) {
   add("claude-code", "Claude Code", "CLI + VS Code extension", "V_CLAUDE");
   add("codex", "Codex", "app-server :4500", "V_CODEX");
   add("opencode", "OpenCode", "serve :4096", "V_OPENCODE");
+  // T3 Code has its own opt-in (config.env T3CODE, the panel's settings toggle),
+  // not an AI_TOOLS entry. Listed when enabled or when the CLI is present (a
+  // disabled-but-installed t3 stays visible/updatable). webui — which renders
+  // the panel's open-in-browser ▷ button — only when the serve unit is actually
+  // RUNNING: a stopped service would mint a pairing token and then open a URL
+  // where nothing listens.
+  if (map.T3CODE === "true" || map.V_T3) {
+    const t3port = (map.T3CODE_PORT || "").trim() || "5177";
+    agents.push({
+      id: "t3code", name: "T3 Code", detail: "web GUI :" + t3port,
+      version: extractVersion(map.V_T3) || "—", updateAvailable: false,
+      webui: map.T3_ACTIVE === "active",
+    });
+  }
 
   const projects = (map.PROJECTS || "").split(",").map((s) => s.trim()).filter(Boolean)
     .map((name) => ({ name, selected: true }));

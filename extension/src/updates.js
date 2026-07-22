@@ -139,6 +139,7 @@ const AGENT_LATEST = {
   // sst/opencode was renamed/transferred; the GitHub API 301-redirects this path to
   // the current owner, which fetchJson follows — so we don't hardcode a new owner.
   opencode: { url: "https://api.github.com/repos/sst/opencode/releases/latest", pick: (j) => j && j.tag_name },
+  t3code: { url: "https://registry.npmjs.org/t3/latest", pick: (j) => j && j.version },
 };
 
 /** Parse a version into [major,minor,patch], or null if it has no semver core. */
@@ -194,7 +195,7 @@ async function augmentAgents(agents, opts = {}) {
  * one agent's failure doesn't skip the others.
  */
 function buildAgentUpdateScript(ids) {
-  const want = (Array.isArray(ids) && ids.length) ? ids : ["claude-code", "codex", "opencode"];
+  const want = (Array.isArray(ids) && ids.length) ? ids : ["claude-code", "codex", "opencode", "t3code"];
   const lines = ["set -uo pipefail", "rc=0"];
   if (want.includes("claude-code")) {
     lines.push('if command -v claude >/dev/null 2>&1; then echo "== updating Claude Code =="; claude update || rc=1; fi');
@@ -227,6 +228,14 @@ function buildAgentUpdateScript(ids) {
   if (want.includes("opencode")) {
     lines.push('if command -v opencode >/dev/null 2>&1; then echo "== updating opencode =="; ' +
       'if curl -fsSL https://opencode.ai/install | bash; then :; else rc=1; fi; fi');
+  }
+  if (want.includes("t3code")) {
+    // npm-only (how install-ai-tools.sh installs it); restart the serve unit so
+    // the running web GUI actually picks up the new version. try-restart is a
+    // no-op when the service isn't deployed/running.
+    lines.push('if command -v t3 >/dev/null 2>&1; then echo "== updating T3 Code =="; ' +
+      'if npm install -g t3@latest --allow-scripts=node-pty,msgpackr-extract; then ' +
+      'systemctl try-restart t3code-serve 2>/dev/null || true; else rc=1; fi; fi');
   }
   lines.push("exit $rc");
   return lines.join("\n") + "\n";
