@@ -1,0 +1,16 @@
+[Unit]
+Description=T3 Code Server (web GUI for coding agents)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/construct/config.env
+WorkingDirectory=/root/repos
+ExecStart=/usr/local/bin/t3 serve --host ${T3CODE_HOST} --port ${T3CODE_PORT}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

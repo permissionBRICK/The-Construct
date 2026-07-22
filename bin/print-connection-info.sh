@@ -18,6 +18,9 @@ OPENCODE_HOST="${OPENCODE_HOST:-0.0.0.0}"
 CODEX_PORT="${CODEX_PORT:-4500}"
 CODEX_HOST="${CODEX_HOST:-0.0.0.0}"
 CODEX_TOKEN_FILE="${CODEX_TOKEN_FILE:-/etc/construct/codex-app-server.token}"
+T3CODE="${T3CODE:-}"
+T3CODE_HOST="${T3CODE_HOST:-0.0.0.0}"
+T3CODE_PORT="${T3CODE_PORT:-5177}"
 VSCODE_TUNNEL="${VSCODE_TUNNEL:-}"
 VSCODE_TUNNEL_NAME="${VSCODE_TUNNEL_NAME:-}"
 VSCODE_SERVE_WEB="${VSCODE_SERVE_WEB:-}"
@@ -104,6 +107,21 @@ Codex experimental app-server:
   Token file on VM:       ${CODEX_TOKEN_FILE}
   Connect CLI:            CODEX_REMOTE_TOKEN=<token> codex --remote ws://${hyperv_dns}:${CODEX_PORT} --remote-auth-token-env CODEX_REMOTE_TOKEN
   Optional tunnel:        ssh -L ${CODEX_PORT}:127.0.0.1:${CODEX_PORT} ${ssh_user}@${hyperv_dns}
+EOF
+fi
+
+# T3 Code web GUI: shown when the opt-in is on or its service is deployed.
+if [[ "${T3CODE}" == "true" ]] \
+   || systemctl is-active --quiet t3code-serve 2>/dev/null \
+   || systemctl is-enabled --quiet t3code-serve 2>/dev/null; then
+    cat <<EOF
+
+T3 Code (web GUI):
+  Service:  t3code-serve
+  Bind:     ${T3CODE_HOST}:${T3CODE_PORT}
+  URL:      http://${hyperv_dns}:${T3CODE_PORT}
+  Login:    mint a pairing link -- t3 auth pairing create --base-url http://${hyperv_dns}:${T3CODE_PORT}
+            (or use the control panel's "open web UI" button)
 EOF
 fi
 

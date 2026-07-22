@@ -243,8 +243,14 @@ function ok(name, cond, detail) {
   // to a versioned releases/<v> dir must be relinked or updates land invisibly.
   ok("agentScript: codex relinks a version-pinned /usr/local/bin/codex after update",
     /releases\/\*\) for s in/.test(all) && /ln -sf "\$s" \/usr\/local\/bin\/codex/.test(all));
+  // T3 Code: npm-managed like its install; the serve unit restarts so the
+  // running web GUI actually serves the new version.
+  ok("agentScript: t3code updates via npm + restarts the serve unit",
+    /command -v t3 >\/dev\/null/.test(all) && /npm install -g t3@latest/.test(all) && /try-restart t3code-serve/.test(all));
+  ok("AGENT_LATEST: t3code resolves from the npm registry",
+    /registry\.npmjs\.org\/t3\/latest/.test(updates.AGENT_LATEST.t3code.url) && updates.AGENT_LATEST.t3code.pick({ version: "0.0.29" }) === "0.0.29");
   const onlyClaude = updates.buildAgentUpdateScript(["claude-code"]);
-  ok("agentScript: subset only includes requested agents", /claude update/.test(onlyClaude) && !/opencode/.test(onlyClaude) && !/codex/.test(onlyClaude));
+  ok("agentScript: subset only includes requested agents", /claude update/.test(onlyClaude) && !/opencode/.test(onlyClaude) && !/codex/.test(onlyClaude) && !/t3@latest/.test(onlyClaude));
   ok("agentScript: subset still aggregates exit code", onlyClaude.startsWith("set -uo pipefail\nrc=0\n") && /\nexit \$rc\n$/.test(onlyClaude));
 
   console.log(`\n  updates (Construct check) unit tests — ${pass}/${pass + fail} passed\n`);

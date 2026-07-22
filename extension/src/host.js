@@ -247,6 +247,7 @@ function mapToForm(raw) {
   if (typeof raw.smbShare === "boolean") form.smb = raw.smbShare;
   if (typeof raw.micPassthrough === "boolean") form.mic = raw.micPassthrough;
   if (typeof raw.claudePartialStreaming === "boolean") form.partialStreaming = raw.claudePartialStreaming;
+  if (typeof raw.t3code === "boolean") form.t3code = raw.t3code;
   return form;
 }
 
@@ -291,6 +292,7 @@ function mapFromForm(form) {
   setBool("smbShare", form.smb);
   setBool("claudePartialStreaming", form.partialStreaming);
   setBool("micPassthrough", form.mic);
+  setBool("t3code", form.t3code);
   return out;
 }
 

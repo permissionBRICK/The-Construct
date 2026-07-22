@@ -34,6 +34,25 @@ For the installed agents, from `root`'s home — never from inside the project r
   Opencode in `~/.local/share/opencode/mcp-auth.json`. (`claude.ai` connectors are
   authenticated server-side against your Anthropic account, so there is nothing local
   to save for them.)
+- **T3 Code** (when the web GUI is enabled or installed): everything it needs to
+  keep working after a reinstall, from `~/.t3/userdata/` — `keybindings.json`
+  always; `settings.json`, the secret key material (`secrets/`,
+  `environment-id`) and the `state.sqlite*` event-store under `INCLUDE_AUTH`;
+  `attachments/` under `INCLUDE_HISTORY`. Everything credential-bearing rides
+  the auth gate: `settings.json` can hold provider passwords in plaintext, and
+  the sqlite store holds the chat threads **and** the auth sessions / pairing
+  state in one database — they can't be split, so a sanitized
+  `INCLUDE_AUTH=false` backup drops the t3 threads rather than leak session
+  tokens. The export briefly stops `t3code-serve` while copying the sqlite
+  files so the snapshot is consistent (db/-wal/-shm copied together). Logs,
+  caches, worktrees and the pid-bearing `server-runtime.json` are never
+  captured. On restore, `restore-config.sh` stops `t3code-serve` across the
+  copy (it holds the DB open), drops the freshly-minted empty DB, and restarts
+  the service on the restored store — paired browsers and history come straight
+  back. The backup also records that T3 Code was enabled
+  (`backup-info.json`), and the restore reinstalls + starts it when the fresh
+  provision didn't (e.g. a console-run reinstall that couldn't know the
+  preference).
 - Global git config + credentials: `~/.gitconfig`, `~/.git-credentials`.
 - GitHub CLI login + config: `~/.config/gh/` (`hosts.yml` holds the `gh auth` token).
   The `gh` CLI is installed by default during provisioning.
