@@ -329,6 +329,7 @@
       ram: val("setRam"), disk: val("setDisk"), ubuntu: val("setUbuntu"),
       serveWeb: swOn($("setServeWeb")), tunnel: swOn($("setTunnel")), smb: swOn($("setSmb")), mic: swOn($("setMic")),
       partialStreaming: swOn($("setPartialStreaming")),
+      t3code: swOn($("setT3")),
     };
   }
   $("saveBtn") && $("saveBtn").addEventListener("click", () => post({ type: "saveSettings", settings: gatherSettings() }));
@@ -476,6 +477,18 @@
       const name = div.querySelector(".name");
       name.appendChild(document.createTextNode(a.name + " "));
       if (a.detail) { const sm = document.createElement("small"); sm.textContent = a.detail; name.appendChild(sm); }
+      if (a.webui) {
+        // Small inline open button for agents with a browser UI (T3 Code): the
+        // extension mints a fresh pairing link over SSH and opens it on the host.
+        const open = document.createElement("button");
+        open.type = "button";
+        open.className = "openbtn";
+        open.textContent = "▷";
+        open.title = "Open the " + a.name + " web UI in your browser";
+        open.setAttribute("aria-label", "Open the " + a.name + " web UI in your browser");
+        open.addEventListener("click", () => post({ type: "command", id: "openAgentWeb", agent: a.id }));
+        name.appendChild(open);
+      }
       div.querySelector(".ver").textContent = a.version || "—";
       const tag = div.querySelector(".tag");
       tag.textContent = tagTxt;
@@ -685,6 +698,7 @@
     setSw("setGitCred", s.gitCred); setSw("setServeWeb", s.serveWeb);
     setSw("setTunnel", s.tunnel); setSw("setSmb", s.smb); setSw("setMic", s.mic);
     setSw("setPartialStreaming", s.partialStreaming);
+    setSw("setT3", s.t3code);
   }
 
   // Ask the extension for the current state once the webview is live.

@@ -26,13 +26,14 @@ ok("backupMode: undefined -> save", life.normalizeBackupMode(undefined) === "sav
 
 // ── reprovision ──────────────────────────────────────────────────────────────
 const repro = life.buildInvocation("reprovision", {
-  settings: { gitName: "Neo", gitEmail: "neo@zion.io", serveWeb: true, tunnel: false, smb: true, partialStreaming: true, mic: true },
+  settings: { gitName: "Neo", gitEmail: "neo@zion.io", serveWeb: true, tunnel: false, smb: true, partialStreaming: true, mic: true, t3code: true },
 });
 ok("reprovision: uses Provision script", repro.script === life.PROVISION);
 ok("reprovision: not destructive, not elevated", repro.destructive === false && repro.elevate === false);
 ok("reprovision: -Action provision", has(repro.args, "-Action", "provision"));
 ok("reprovision: git identity", has(repro.args, "-GitUserName", "Neo") && has(repro.args, "-GitEmail", "neo@zion.io"));
 ok("reprovision: bools as true/false strings", has(repro.args, "-VsCodeServeWeb", "true") && has(repro.args, "-VsCodeTunnel", "false") && has(repro.args, "-SmbShare", "true") && has(repro.args, "-ClaudePartialStreaming", "true") && has(repro.args, "-MicPassthrough", "true"));
+ok("reprovision: threads -T3Code from settings", has(repro.args, "-T3Code", "true"));
 
 const reproEmpty = life.buildInvocation("reprovision", { settings: {} });
 ok("reprovision: omits unset fields (-FromPanel + -NonInteractive)", reproEmpty.args.join(" ") === "-FromPanel -Action provision -NonInteractive");
@@ -50,7 +51,7 @@ ok("export: -Action export -BackupDir", has(exp.args, "-Action", "export", "-Bac
 ok("export: not destructive", exp.destructive === false && exp.elevate === false);
 
 // ── reinstall ────────────────────────────────────────────────────────────────
-const rei = life.buildInvocation("reinstall", { settings: { ram: "16", disk: "80", gitName: "Neo", partialStreaming: false, mic: true } });
+const rei = life.buildInvocation("reinstall", { settings: { ram: "16", disk: "80", gitName: "Neo", partialStreaming: false, mic: true, t3code: false } });
 ok("reinstall: uses Auto-Install script", rei.script === life.AUTO_INSTALL);
 ok("reinstall: destructive + elevated", rei.destructive === true && rei.elevate === true);
 ok("reinstall: label", rei.label === "Reinstall");
@@ -59,6 +60,7 @@ ok("reinstall: VM resources from settings", has(rei.args, "-VmMemoryGB", "16") &
 ok("reinstall: no -UbuntuRelease (reuses ISO)", !rei.args.includes("-UbuntuRelease"));
 ok("reinstall: threads -ClaudePartialStreaming from settings", has(rei.args, "-ClaudePartialStreaming", "false"));
 ok("reinstall: threads -MicPassthrough from settings", has(rei.args, "-MicPassthrough", "true"));
+ok("reinstall: threads -T3Code from settings (explicit off persists)", has(rei.args, "-T3Code", "false"));
 
 const reiProj = life.buildInvocation("reinstall", { settings: {}, projects: ["web"] });
 ok("reinstall: passes -Projects (Auto-Install forwards it to Provision)", has(reiProj.args, "-Projects", "web"));
@@ -68,12 +70,13 @@ const reiBad = life.buildInvocation("reinstall", { settings: {}, backupMode: "bo
 ok("reinstall: invalid backupMode -> save", has(reiBad.args, "-BackupMode", "save"));
 
 // ── redownload ───────────────────────────────────────────────────────────────
-const red = life.buildInvocation("redownload", { settings: { ubuntu: "24.04", ram: "8", partialStreaming: true, mic: false }, backupMode: "existing" });
+const red = life.buildInvocation("redownload", { settings: { ubuntu: "24.04", ram: "8", partialStreaming: true, mic: false, t3code: true }, backupMode: "existing" });
 ok("redownload: Auto-Install + label", red.script === life.AUTO_INSTALL && red.label === "Redownload");
 ok("redownload: -Action redownload + backupMode", has(red.args, "-Action", "redownload", "-BackupMode", "existing"));
 ok("redownload: includes -UbuntuRelease", has(red.args, "-UbuntuRelease", "24.04"));
 ok("redownload: threads -ClaudePartialStreaming from settings", has(red.args, "-ClaudePartialStreaming", "true"));
 ok("redownload: threads -MicPassthrough from settings", has(red.args, "-MicPassthrough", "false"));
+ok("redownload: threads -T3Code from settings", has(red.args, "-T3Code", "true"));
 const redNoRel = life.buildInvocation("redownload", { settings: {} });
 ok("redownload: omits -UbuntuRelease when unset", !redNoRel.args.includes("-UbuntuRelease"));
 

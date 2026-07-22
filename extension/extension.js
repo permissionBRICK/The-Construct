@@ -26,6 +26,7 @@ const remote = require("./src/remote");
 const vmpower = require("./src/vmpower");
 const projects = require("./src/projects");
 const audio = require("./src/audio");
+const t3code = require("./src/t3code");
 const repatch = require("./src/repatch");
 const configsync = require("./src/configsync");
 const importui = require("./src/importui");
@@ -1319,6 +1320,9 @@ function handleMessage(message, webview, context) {
       const scriptsDir = resolveScriptsDir();
       if (!scriptsDir) { warnNoScriptsDir(); return; }
       try {
+        // Snapshot the previous state BEFORE the write so live toggles below can
+        // key on actual transitions (off→on / on→off), not the absolute value.
+        const prev = host.readSettings(scriptsDir);
         host.saveSettings(scriptsDir, message.settings);
         vscode.window.showInformationMessage("Construct settings saved.");
         pushSettings(webview); // reflect the normalized, merged on-disk state
@@ -1328,6 +1332,13 @@ function handleMessage(message, webview, context) {
         const micOn = !!(hostAudio && hostAudio.enabled);
         if (wantMic && !micOn) enableAudio(context, webview);
         else if (!wantMic && micOn) disableAudio();
+        // The T3 Code toggle is live too: enabling installs + starts it on the VM
+        // right away and opens the web UI in the browser; disabling stops the
+        // service. Either way the persisted flag also rides the next (re)provision.
+        const wantT3 = message.settings && message.settings.t3code === true;
+        const hadT3 = prev.t3code === true;
+        if (wantT3 && !hadT3) t3code.enableOnVm().then(() => refreshAll());
+        else if (!wantT3 && hadT3) t3code.disableOnVm().then(() => refreshAll());
       } catch (e) {
         vscode.window.showErrorMessage("Couldn't save Construct settings: " + (e && e.message ? e.message : e));
       }
@@ -1384,8 +1395,14 @@ function handleMessage(message, webview, context) {
       if (id === "updateAgent") {
         // Per-agent ↑ tag. Validate against the known ids — the webview is
         // untrusted input and this string reaches a remote shell script builder.
-        const known = ["claude-code", "codex", "opencode"];
+        const known = ["claude-code", "codex", "opencode", "t3code"];
         if (known.includes(message.agent)) runUpdateAgents([message.agent]);
+        return;
+      }
+      if (id === "openAgentWeb") {
+        // The agents-list ▷ button: only T3 Code has a browser UI today. Mints a
+        // one-time pairing link over SSH and opens it in the host browser.
+        if (message.agent === "t3code") t3code.openWebUi();
         return;
       }
       if (id === "connect") { remote.openOnVm({ path: "/root/repos", newWindow: false }); return; }
