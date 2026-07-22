@@ -93,5 +93,25 @@ ok("probe script captures stderr for --version (2>&1)", /--version 2>&1/.test(pr
 ok("probe script greps a semver from version output", /grep -oE '\[0-9\]/.test(probe.REMOTE_PROBE));
 ok("probe script detects all three agents' versions", /ver claude/.test(probe.REMOTE_PROBE) && /ver codex/.test(probe.REMOTE_PROBE) && /ver opencode/.test(probe.REMOTE_PROBE));
 
+// ── T3 Code (opt-in web GUI, not part of AI_TOOLS) ───────────────────────────
+ok("probe script emits T3CODE flag + port + t3 version + service state",
+  /emit T3CODE /.test(probe.REMOTE_PROBE) && /emit T3CODE_PORT /.test(probe.REMOTE_PROBE) && /ver t3/.test(probe.REMOTE_PROBE) && /emit T3_ACTIVE /.test(probe.REMOTE_PROBE));
+const t3on = probe.toState(probe.parseProbe("AI_TOOLS\tclaude-code\nT3CODE\ttrue\nT3CODE_PORT\t5177\nV_T3\tt3 v0.0.28\nT3_ACTIVE\tactive\n"));
+const t3agent = t3on.agents.find((a) => a.id === "t3code");
+ok("state: t3code listed when enabled, version extracted", !!t3agent && t3agent.version === "0.0.28");
+ok("state: t3code webui true when the service is running", !!t3agent && t3agent.webui === true && /:5177/.test(t3agent.detail), t3agent && t3agent.detail);
+// Installed but toggled off / service stopped: still listed (show/update a
+// leftover install), but NO webui button — nothing is listening to open.
+const t3inst = probe.toState(probe.parseProbe("T3CODE\tfalse\nV_T3\t0.0.28\nT3_ACTIVE\tinactive\n"));
+const t3instAgent = t3inst.agents.find((a) => a.id === "t3code");
+ok("state: t3code listed when installed but flag off", !!t3instAgent);
+ok("state: t3code webui false when the service is stopped", !!t3instAgent && t3instAgent.webui === false);
+// Enabled but binary missing (install pending): listed with the "—" placeholder.
+const t3pending = probe.toState(probe.parseProbe("T3CODE\ttrue\n"));
+ok("state: t3code enabled without version shows placeholder + default port, no webui",
+  t3pending.agents.some((a) => a.id === "t3code" && a.version === "—" && /:5177/.test(a.detail) && a.webui === false));
+const t3absent = probe.toState(probe.parseProbe("AI_TOOLS\tclaude-code\nT3_ACTIVE\tinactive\n"));
+ok("state: no t3code when neither enabled nor installed", !t3absent.agents.some((a) => a.id === "t3code"));
+
 console.log(`\n  probe/ssh unit tests — ${pass}/${pass + fail} passed\n`);
 process.exit(fail ? 1 : 0);

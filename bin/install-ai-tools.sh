@@ -54,6 +54,8 @@ OPENCODE_PORT="${OPENCODE_PORT:-4096}"
 CODEX_HOST="${CODEX_HOST:-0.0.0.0}"
 CODEX_PORT="${CODEX_PORT:-4500}"
 CODEX_TOKEN_FILE="${CODEX_TOKEN_FILE:-/etc/construct/codex-app-server.token}"
+T3CODE_HOST="${T3CODE_HOST:-0.0.0.0}"
+T3CODE_PORT="${T3CODE_PORT:-5177}"
 # The local `code serve-web` server on the VM keeps its data (incl. Machine-scope
 # settings) here; used to seed the Claude Code bypass defaults for the browser IDE
 # too, not just the Remote-SSH server. Mirrors install-vscode.sh's default.
@@ -536,6 +538,106 @@ install_codex() {
   install_agent_system_prompt "${codex_home}/.codex/AGENTS.md" "${codex_owner}"
 }
 
+# Install the T3 Code web GUI (the `t3` npm package -- pingdotgg's browser
+# control plane for coding agents) and autostart it as the t3code-serve service.
+# Opt-in: selected via the T3CODE flag in config.env / the control panel's
+# settings toggle, NOT via the AI_TOOLS list (provision.sh invokes this with
+# AI_TOOLS_OVERRIDE=t3code when T3CODE=true). The server drives the agents
+# through their locally-authenticated CLIs, so it needs no credentials of its
+# own; browser access is gated by one-time pairing tokens (t3 auth pairing
+# create). Its state (threads, auth sessions, settings) lives under ~/.t3.
+# Whether the system Node satisfies t3's engines requirement
+# (^22.16 || ^23.11 || >=24.10). npm only WARNS on a mismatch, so without this
+# check an old Node yields an installed-but-broken t3 whose service restart-loops.
+t3_node_ok() {
+  local v major minor rest
+  v="$(node -v 2>/dev/null | sed 's/^v//')" || return 1
+  [[ -n "${v}" ]] || return 1
+  major="${v%%.*}"; rest="${v#*.}"; minor="${rest%%.*}"
+  [[ "${major}" -ge 25 ]] && return 0
+  case "${major}" in
+    24) [[ "${minor:-0}" -ge 10 ]] ;;
+    23) [[ "${minor:-0}" -ge 11 ]] ;;
+    22) [[ "${minor:-0}" -ge 16 ]] ;;
+    *) return 1 ;;
+  esac
+}
+
+install_t3code() {
+  step "Installing T3 Code (t3 CLI + web GUI server)"
+
+  # t3 ships only as an npm package. Node may not be provisioned yet (this runs
+  # before install-sdks.sh), or a project SDK may have pinned an older major --
+  # bootstrap/upgrade to Node 22 via NodeSource (the same channel
+  # install-sdks.sh uses) when npm is missing or Node is below t3's floor.
+  if ! command -v npm >/dev/null 2>&1 || ! t3_node_ok; then
+    step "Installing Node.js 22.x (t3 requires Node ^22.16 || ^23.11 || >=24.10)"
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+    DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
+  fi
+
+  # node-pty (terminal support) and msgpackr-extract must run their build
+  # scripts; newer npm gates install scripts behind --allow-scripts, older npm
+  # ignores the unknown flag and runs them anyway -- one call covers both.
+  if command -v t3 >/dev/null 2>&1; then
+    note "t3 already installed; updating to the latest version"
+    if ! npm install -g t3@latest --allow-scripts=node-pty,msgpackr-extract; then
+      warn "t3 update failed; keeping the existing version"
+    fi
+  else
+    npm install -g t3@latest --allow-scripts=node-pty,msgpackr-extract
+  fi
+
+  # Resolve the installed binary and pin the stable PATH location the service
+  # unit execs. With apt/nodesource npm the global shim already IS
+  # /usr/local/bin/t3; other prefixes get a symlink (never to itself).
+  t3_bin="$(command -v t3 || true)"
+  if [[ -z "${t3_bin}" ]]; then
+    err "t3 install completed, but no t3 binary was found on PATH"
+    return 1
+  fi
+  if [[ "${t3_bin}" != "/usr/local/bin/t3" ]]; then
+    resolved="$(readlink -f "${t3_bin}" 2>/dev/null || echo "${t3_bin}")"
+    if [[ "${resolved}" == "/usr/local/bin/t3" || ! -x "${resolved}" ]]; then
+      err "refusing to create t3 symlink: resolved path is invalid (${resolved})"
+      return 1
+    fi
+    ln -sf "${resolved}" /usr/local/bin/t3
+  fi
+
+  # Persist the bind settings so the unit's EnvironmentFile always defines them
+  # (an older config.env predating T3 Code has no T3CODE_* keys, and systemd
+  # would otherwise exec `t3 serve --host --port` with empty expansions).
+  bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" T3CODE_HOST "${T3CODE_HOST}"
+  bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" T3CODE_PORT "${T3CODE_PORT}"
+
+  install -d -m 0755 "${WORKSPACE_ROOT}"
+  install -m 0644 "${REPO_DIR}/systemd/t3code-serve.service" /etc/systemd/system/t3code-serve.service
+  sed -i "s|^WorkingDirectory=.*|WorkingDirectory=${WORKSPACE_ROOT}|" /etc/systemd/system/t3code-serve.service
+  systemctl daemon-reload
+  systemctl enable t3code-serve
+  systemctl restart t3code-serve
+
+  # Bootstrap one t3 project per git repo in the workspace so the web UI starts
+  # useful. (t3 serve's --auto-bootstrap-project-from-cwd flag is DEAD in the
+  # headless serve path -- the handler hardcodes it off -- hence explicit adds.)
+  # Idempotent: an already-registered path fails with ProjectAlreadyExistsError,
+  # which is swallowed; no duplicates are created.
+  local _t3_repo
+  for _t3_repo in "${WORKSPACE_ROOT}"/*/; do
+    [[ -d "${_t3_repo}.git" ]] || continue
+    t3 project add "${_t3_repo%/}" --log-level none >/dev/null 2>&1 || true
+  done
+
+  if systemctl is-active --quiet t3code-serve; then
+    echo "t3code-serve is running on ${T3CODE_HOST}:${T3CODE_PORT}"
+  else
+    warn "WARNING: t3code-serve failed to start; recent status and logs:"
+    systemctl --no-pager --full status t3code-serve >&2 || true
+    journalctl -u t3code-serve --no-pager -n 30 >&2 || true
+  fi
+}
+
 failed=0
 run_tool() {
   local title="$1" fn="$2" rc
@@ -562,6 +664,10 @@ fi
 
 if has_tool codex; then
   run_tool "Codex installation" install_codex
+fi
+
+if has_tool t3code; then
+  run_tool "T3 Code installation" install_t3code
 fi
 
 if has_tool pi; then

@@ -95,11 +95,12 @@ try {
     gitUserName: "Neo", gitEmail: "neo@zion.io", gitCredentialStore: false,
     vmMemoryGB: 16, vmDiskGB: 120, ubuntuRelease: "24.04",
     vsCodeServeWeb: true, vsCodeTunnel: false, smbShare: true, micPassthrough: true,
-    claudePartialStreaming: false,
+    claudePartialStreaming: false, t3code: true,
   });
   ok("mapToForm: git interop keys -> form", form.gitName === "Neo" && form.gitEmail === "neo@zion.io" && form.gitCred === false);
   ok("mapToForm: numbers stringified for inputs", form.ram === "16" && form.disk === "120");
-  ok("mapToForm: booleans pass through", form.serveWeb === true && form.tunnel === false && form.smb === true && form.mic === true && form.partialStreaming === false);
+  ok("mapToForm: booleans pass through", form.serveWeb === true && form.tunnel === false && form.smb === true && form.mic === true && form.partialStreaming === false && form.t3code === true);
+  ok("mapToForm: t3code omitted when absent", !("t3code" in host.mapToForm({ gitUserName: "Neo" })));
 
   ok("mapToForm: absent keys are omitted (no clobber)",
     !("serveWeb" in host.mapToForm({ gitUserName: "Neo" })) && !("gitCred" in host.mapToForm({ gitUserName: "Neo" })));
@@ -107,7 +108,7 @@ try {
   const disk = host.mapFromForm({
     gitName: " Neo ", gitEmail: "neo@zion.io", gitCred: true,
     ram: "16", disk: "120.5", ubuntu: "22.04",
-    serveWeb: false, tunnel: true, smb: false, mic: true, partialStreaming: true,
+    serveWeb: false, tunnel: true, smb: false, mic: true, partialStreaming: true, t3code: false,
     password: "s3cret", agents: ["claude-code"], projects: ["default"],
   });
   ok("mapFromForm: git identity uses interop keys", disk.gitUserName === "Neo" && disk.gitEmail === "neo@zion.io" && disk.gitCredentialStore === true);
@@ -117,7 +118,7 @@ try {
   const exotic = host.mapFromForm({ ram: "1e3", disk: "+8" });
   ok("mapFromForm: coerces sci/signed number-input values", exotic.vmMemoryGB === 1000 && exotic.vmDiskGB === 8);
   ok("mapFromForm: non-numeric numeric-field falls back to string", host.mapFromForm({ ram: "abc" }).vmMemoryGB === "abc");
-  ok("mapFromForm: booleans persisted incl. false", disk.vsCodeServeWeb === false && disk.vsCodeTunnel === true && disk.smbShare === false && disk.micPassthrough === true);
+  ok("mapFromForm: booleans persisted incl. false", disk.vsCodeServeWeb === false && disk.vsCodeTunnel === true && disk.smbShare === false && disk.micPassthrough === true && disk.t3code === false);
   ok("mapFromForm: password NEVER persisted", !("password" in disk) && !Object.values(disk).includes("s3cret"));
   ok("mapFromForm: agents/projects deferred (not written)", !("aiTools" in disk) && !("projects" in disk) && !("agents" in disk));
 

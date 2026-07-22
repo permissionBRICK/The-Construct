@@ -32,6 +32,11 @@
 #   - npm registry auth (INCLUDE_AUTH): ~/.npmrc (registry _authToken / _auth)
 #   - Agent settings/config           : ~/.claude/settings.json, ~/.codex/config.toml,
 #                                       ~/.config/opencode/opencode.json
+#   - T3 Code (when enabled/installed): ~/.t3/userdata -- settings + keybindings
+#                                       always; secrets/ + the state.sqlite
+#                                       event-store (threads AND auth sessions in
+#                                       one DB) under INCLUDE_AUTH; attachments/
+#                                       under INCLUDE_HISTORY. Never logs/caches.
 #   - Global git config + credentials : ~/.gitconfig, ~/.git-credentials
 #   - Generated project profiles      : one JSON per cloned repo under
 #                                       WORKSPACE_ROOT whose remote isn't already
@@ -258,6 +263,44 @@ if has_agent "opencode" || [[ -d "${EXPORT_HOME}/.config/opencode" ]]; then
   fi
 fi
 
+# ── T3 Code (web GUI) ────────────────────────────────────────────────────────
+# T3 Code keeps everything under ~/.t3/userdata: settings.json/keybindings.json
+# (settings), the state.sqlite event-store, secrets/ (server signing + pairing
+# key material) and attachments/. NOT captured: logs/, ../caches/, ../worktrees/
+# and the pid-bearing server-runtime.json -- all runtime junk the server
+# recreates. The T3CODE flag comes from config.env (sourced above); also match
+# an existing data dir so a hand-installed t3 is captured too.
+if [[ "${T3CODE:-false}" == "true" || -d "${EXPORT_HOME}/.t3/userdata" ]]; then
+  add ".t3/userdata/keybindings.json"
+  if [[ "${INCLUDE_AUTH}" == "true" ]]; then
+    # settings.json is auth-gated: T3's settings schema can carry provider
+    # credentials in PLAINTEXT (e.g. providers.opencode.serverPassword), so a
+    # sanitized backup must omit it.
+    add ".t3/userdata/settings.json"
+    add ".t3/userdata/secrets"
+    add ".t3/userdata/environment-id"
+    # The sqlite event-store holds chat history (threads/turns) AND auth (bearer
+    # sessions, pairing state) in ONE database -- they cannot be split, so it is
+    # gated on INCLUDE_AUTH: a sanitized INCLUDE_AUTH=false backup must not leak
+    # session tokens, even at the cost of dropping the t3 threads from that
+    # backup. Stop the server across the copy: the db/-wal/-shm files are copied
+    # one after another, and a live write or checkpoint between them would yield
+    # a torn, unusable snapshot -- unlike the small always-rewritten opencode.db,
+    # this store is the ONLY copy of the t3 threads.
+    _t3_stopped=""
+    if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet t3code-serve 2>/dev/null; then
+      systemctl stop t3code-serve 2>/dev/null && _t3_stopped=1
+    fi
+    add_glob ".t3/userdata/state.sqlite*"
+    if [[ -n "${_t3_stopped}" ]]; then
+      systemctl start t3code-serve 2>/dev/null || true
+    fi
+  fi
+  if [[ "${INCLUDE_HISTORY}" == "true" ]]; then
+    add ".t3/userdata/attachments"
+  fi
+fi
+
 # ── Back up stored project profiles + generate profiles for loose repos ──────
 # The VM's persisted project profiles (PROJECTS_STORE) carry the real config the
 # user added -- notably MCP servers (which live in the project JSON) -- so copy
@@ -330,16 +373,21 @@ gen_json='[]'
 if [[ "${#added_list[@]}" -gt 0 ]]; then
   gen_json="$(printf '%s\n' "${added_list[@]}" | jq -R . | jq -cs 'unique')"
 fi
+# t3code records whether the web GUI was enabled at export time, so
+# restore-config.sh can reinstall it on a fresh VM whose provision didn't know
+# the preference (a console reinstall passes an empty T3CODE, and the new
+# config.env has no saved value to fall back on).
 jq -n \
   --arg created "$(date -Iseconds 2>/dev/null || true)" \
   --arg host "$(hostname 2>/dev/null || true)" \
   --arg agents "${agents}" \
   --argjson includeAuth "$([[ "${INCLUDE_AUTH}" == "true" ]] && echo true || echo false)" \
   --argjson includeHistory "$([[ "${INCLUDE_HISTORY}" == "true" ]] && echo true || echo false)" \
+  --argjson t3code "$([[ "${T3CODE:-false}" == "true" ]] && echo true || echo false)" \
   --argjson addedProjects "${gen_json}" '
   { created: $created, host: $host, agents: ($agents | split(",")),
     includeAuth: $includeAuth, includeHistory: $includeHistory,
-    addedProjects: $addedProjects }' \
+    t3code: $t3code, addedProjects: $addedProjects }' \
   >"${STAGE}/backup-info.json"
 
 # ── Pack ─────────────────────────────────────────────────────────────────────

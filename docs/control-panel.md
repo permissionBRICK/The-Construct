@@ -55,8 +55,10 @@ automatically.
 
 ## Coding agents & updates
 
-The **Coding agents** module lists Claude Code, Codex, and Opencode with their live
-versions. Update checks are best-effort and cached: a header banner appears when Construct
+The **Coding agents** module lists Claude Code, Codex, and Opencode — plus T3 Code when its
+web GUI is enabled (see [Settings](#t3-code-web-gui)) — with their live versions. Agents
+with a browser UI (T3 Code) get an inline **▷** button that opens the web UI on your
+machine, logged in via a freshly minted one-time pairing link. Update checks are best-effort and cached: a header banner appears when Construct
 itself is behind its git ref (**Update Construct** re-downloads the extension + scripts in
 place and records the new version, so the banner clears once it's done), and a per-agent
 badge marks an available update (**update all** force-updates them over SSH, then re-probes).
@@ -218,6 +220,20 @@ serve-web / tunnel / SMB) so your next Reprovision / Reinstall runs with your sa
 The agent password is never stored — it's entered in the elevated console at reinstall time.
 See [Project profiles & configuration](projects.md) and [Provisioning](provisioning.md) for
 what each setting maps to.
+
+### T3 Code web GUI
+
+The **T3 Code web GUI** toggle (off by default) opts the VM into
+[T3 Code](https://github.com/pingdotgg/t3code) — a browser control plane that drives the
+installed coding agents through their existing CLI auth. It's a **live** toggle like the mic
+switch: flipping it on installs T3 Code on the VM over SSH right away, starts the
+`t3code-serve` service (port `5177`), and opens the web UI in your browser via a one-time
+pairing link; flipping it off stops the service. The choice is also persisted, so
+provisioning honours it — a reinstall reinstalls T3 Code, and its settings, chat threads,
+and auth/pairing state are part of the [config backup](backup-restore.md), so paired
+browsers keep working across a reinstall. While enabled, T3 Code appears in the **Coding
+agents** list with its version, an update badge, and a **▷** button that mints a fresh
+pairing link and opens the web UI.
 
 ## Troubleshooting
 

@@ -120,6 +120,9 @@ param(
     # Code extension for microphone passthrough so the mic button survives a rebuild.
     # Off by default; "true"/"false".
     [string]$MicPassthrough = "false",
+    # Forwarded down (Create-AgentVM.ps1 -> Provision-AgentVM.ps1): opt-in T3 Code
+    # web GUI. Empty = keep the VM's saved choice; "true"/"false".
+    [string]$T3Code = "",
     [switch]$SkipChecksum,
     [switch]$SkipCreateVm,
     [switch]$Force,
@@ -690,6 +693,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         $reprovArgs['GitEmail']    = $reprovGit.Email
         $reprovArgs['ClaudePartialStreaming'] = $ClaudePartialStreaming
         $reprovArgs['MicPassthrough'] = $MicPassthrough
+        $reprovArgs['T3Code'] = $T3Code
         if ($PSBoundParameters.ContainsKey('AgentPassword')) { $reprovArgs['AgentPassword'] = $AgentPassword }
         if ($reprovCloneCredB64) { $reprovArgs['GitCloneCredentialsB64'] = $reprovCloneCredB64 }
         if ($PSBoundParameters.ContainsKey('AutoResolve')) { $reprovArgs['AutoResolve'] = $AutoResolve }
@@ -1018,6 +1022,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
                 GitEmail    = $acGitId.Email
                 ClaudePartialStreaming = $ClaudePartialStreaming
                 MicPassthrough        = $MicPassthrough
+                T3Code                = $T3Code
             }
             if ($acCloneCredB64) { $acReprovArgs['GitCloneCredentialsB64'] = $acCloneCredB64 }
             if ($PSBoundParameters.ContainsKey('AutoResolve')) { $acReprovArgs['AutoResolve'] = $AutoResolve }
@@ -1513,6 +1518,7 @@ $createArgs = @{
     GitEmail      = $chosenGitEmail
     ClaudePartialStreaming = $ClaudePartialStreaming
     MicPassthrough = $MicPassthrough
+    T3Code        = $T3Code
     # -Auto: Create-AgentVM skips its own Provision call and this script's
     # try/finally owns the final pause.
     Auto          = $true
@@ -1549,6 +1555,7 @@ try {
         GitEmail      = $chosenGitEmail
         ClaudePartialStreaming = $ClaudePartialStreaming
         MicPassthrough        = $MicPassthrough
+        T3Code                = $T3Code
         Auto      = $true
     }
     if ($restoreDir)         { $provArgs['RestoreDir']             = $restoreDir }

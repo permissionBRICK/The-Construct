@@ -236,6 +236,16 @@ CLAUDE_PARTIAL_STREAMING="${CLAUDE_PARTIAL_STREAMING:-true}"
 # Off by default (opt-in); MIC_PASSTHROUGH=false reverts to stock. Forwarded to
 # install-vscode.sh, which applies the patch.
 MIC_PASSTHROUGH="${MIC_PASSTHROUGH:-false}"
+# Opt-in T3 Code web GUI (the `t3` npm package; service t3code-serve). Disabled by
+# default. Precedence: explicit env/param > saved config value > default (false) --
+# the host passes an EMPTY value when it doesn't know the preference, so a plain
+# console reprovision keeps a previously enabled T3 Code instead of disabling it.
+_t3code_saved=""
+if [[ -f "${CONFIG_FILE}" ]]; then
+  _t3code_saved="$(sed -n 's/^T3CODE=//p' "${CONFIG_FILE}" | head -1 || true)"
+fi
+T3CODE="${T3CODE:-${_t3code_saved:-false}}"
+[[ "${T3CODE}" == "true" ]] || T3CODE=false
 
 # Optional global git identity to set on the VM. Passed base64-encoded (see
 # Provision-AgentVM.ps1) so names/emails with spaces or apostrophes survive the
@@ -271,6 +281,7 @@ note "    VSCODE_SERVE_WEB=${VSCODE_SERVE_WEB}"
 note "    VSCODE_TUNNEL=${VSCODE_TUNNEL}"
 note "    CLAUDE_PARTIAL_STREAMING=${CLAUDE_PARTIAL_STREAMING}"
 note "    MIC_PASSTHROUGH=${MIC_PASSTHROUGH}"
+note "    T3CODE=${T3CODE}"
 note "    SMB_SHARE=${SMB_SHARE:-(saved/default)}"
 
 # A zip upload does not preserve Unix exec bits, so make the repo scripts
@@ -337,6 +348,7 @@ write_configuration() {
   cfg VSCODE_TUNNEL "${VSCODE_TUNNEL}" || return
   cfg CLAUDE_PARTIAL_STREAMING "${CLAUDE_PARTIAL_STREAMING}" || return
   cfg MIC_PASSTHROUGH "${MIC_PASSTHROUGH}" || return
+  cfg T3CODE "${T3CODE}" || return
   install -d -m 0755 "${WORKSPACE_ROOT}"
 }
 run_step critical "Writing configuration to ${CONFIG_FILE}" write_configuration
@@ -413,6 +425,20 @@ for _ai_tool in "${_selected_ai_tools[@]}"; do
     env TARGET_USER="${CLAUDE_USER}" AI_TOOLS_OVERRIDE="${_ai_tool}" AI_CONSOLE_INTEGRATION=false \
     bash "${REPO_DIR}/bin/install-ai-tools.sh"
 done
+# 4a. T3 Code web GUI: its own opt-in flag (panel settings toggle), not part of
+#     the AI_TOOLS selection. When enabled, install/update + (re)start the
+#     service; when disabled, stop a previously deployed service so the toggle
+#     is honoured both ways (the install itself is left in place -- cheap, and
+#     re-enabling is then instant).
+if [[ "${T3CODE}" == "true" ]]; then
+  run_step optional "Installing T3 Code web GUI" \
+    env TARGET_USER="${CLAUDE_USER}" AI_TOOLS_OVERRIDE=t3code AI_CONSOLE_INTEGRATION=false \
+    bash "${REPO_DIR}/bin/install-ai-tools.sh"
+elif [[ -f /etc/systemd/system/t3code-serve.service ]]; then
+  run_step optional "Disabling T3 Code web GUI (T3CODE=false)" \
+    systemctl disable --now t3code-serve
+fi
+
 run_step optional "Installing AI tool console integration" \
   env TARGET_USER="${CLAUDE_USER}" AI_TOOLS_OVERRIDE=none AI_CONSOLE_INTEGRATION=true \
   bash "${REPO_DIR}/bin/install-ai-tools.sh"

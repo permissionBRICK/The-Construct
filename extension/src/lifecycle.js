@@ -81,6 +81,7 @@ function buildInvocation(action, opts = {}) {
       pushBool("-SmbShare", s.smb);
       pushBool("-ClaudePartialStreaming", s.partialStreaming);
       pushBool("-MicPassthrough", s.mic);
+      pushBool("-T3Code", s.t3code);
       // Launched from the panel: don't prompt for the SMB drive letter etc. (still pauses
       // at the end so output is readable — -NonInteractive is NOT -Auto).
       args.push("-NonInteractive");
@@ -105,6 +106,7 @@ function buildInvocation(action, opts = {}) {
       // fall back to the provisioner's default-on).
       pushBool("-ClaudePartialStreaming", s.partialStreaming);
       pushBool("-MicPassthrough", s.mic);
+      pushBool("-T3Code", s.t3code);
       return {
         script: AUTO_INSTALL, args, destructive: true, elevate: true,
         label: action === "redownload" ? "Redownload" : "Reinstall",
