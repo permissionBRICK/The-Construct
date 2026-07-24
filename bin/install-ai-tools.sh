@@ -98,6 +98,30 @@ install_agent_system_prompt() {
   chown "${owner}:${owner}" "${dest_file}" 2>/dev/null || true
 }
 
+# Run an official `curl | bash` installer with retries. The opencode installer
+# downloads its release archive without curl --fail, so a transient HTTP error
+# (rate limit, CDN hiccup) pipes an error page into tar and the install dies
+# mid-run with "gzip: stdin: not in gzip format". Each attempt re-downloads
+# into a fresh temp dir, so retrying with backoff is safe and rides out blips.
+run_installer_with_retries() {
+  local label="$1"; shift
+  local attempt
+  for attempt in 1 2 3; do
+    if "$@"; then
+      return 0
+    fi
+    warn "${label} installer failed (attempt ${attempt}/3)"
+    if (( attempt < 3 )); then
+      sleep $((attempt * 5))
+    fi
+  done
+  return 1
+}
+
+opencode_official_installer() {
+  curl -fsSL https://opencode.ai/install | bash
+}
+
 install_opencode() {
   step "Installing opencode CLI"
   # Always run the official installer: on a fresh VM it installs opencode, and on
@@ -107,11 +131,11 @@ install_opencode() {
   # rather than aborting provisioning.
   if command -v opencode >/dev/null 2>&1; then
     note "opencode already installed; updating to the latest version"
-    if ! curl -fsSL https://opencode.ai/install | bash; then
+    if ! run_installer_with_retries "opencode" opencode_official_installer; then
       warn "opencode update failed; keeping the existing version"
     fi
   else
-    curl -fsSL https://opencode.ai/install | bash
+    run_installer_with_retries "opencode" opencode_official_installer
   fi
 
   opencode_bin="$(command -v opencode || true)"
@@ -296,7 +320,12 @@ install_claude_code() {
       ln -sf "/home/${TARGET_USER}/.local/bin/claude" /usr/local/bin/claude
     fi
   else
-    curl -fsSL https://claude.ai/install.sh | bash
+    # The official installer refuses to run as uid 0 when SUDO_USER names a
+    # non-root user (it assumes a workstation where sudo would misplace the
+    # install into root's home). Provisioning may be launched via sudo from a
+    # non-root SSH login, but on this VM root's home IS the intended install
+    # target (provision.sh forces TARGET_USER=root), so opt in explicitly.
+    curl -fsSL https://claude.ai/install.sh | CLAUDE_INSTALL_ALLOW_SUDO=1 bash
     if [[ -x /root/.local/bin/claude ]]; then
       ln -sf /root/.local/bin/claude /usr/local/bin/claude
     fi
