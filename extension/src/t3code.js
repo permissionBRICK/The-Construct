@@ -74,6 +74,14 @@ if ! command -v npm >/dev/null 2>&1 || ! t3_node_ok; then
   echo "== installing Node.js 22.x (t3 requires Node ^22.16 || ^23.11 || >=24.10) =="
   curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs || exit 1
 fi
+# node-pty (t3's terminal backend) ships prebuilt binaries only for macOS and
+# Windows — on Linux its install always falls back to 'node-gyp rebuild', which
+# needs make/g++/python3. Fresh VMs have no compiler toolchain, so install it
+# before npm runs the build scripts.
+if ! command -v make >/dev/null 2>&1 || ! command -v g++ >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
+  echo "== installing build tools (node-pty compiles from source on Linux) =="
+  { apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential python3; } || exit 1
+fi
 echo "== installing t3 =="
 # node-pty/msgpackr-extract need their build scripts; newer npm gates them behind
 # --allow-scripts, older npm ignores the unknown flag and runs them anyway.

@@ -605,6 +605,17 @@ install_t3code() {
     DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
   fi
 
+  # node-pty (t3's terminal backend) ships prebuilt binaries only for macOS and
+  # Windows -- on Linux its install always falls back to 'node-gyp rebuild',
+  # which needs make/g++/python3. A fresh VM has no compiler toolchain, so
+  # provision it before npm runs the build scripts.
+  if ! command -v make >/dev/null 2>&1 || ! command -v g++ >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
+    step "Installing build tools (node-pty compiles from source on Linux)"
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y build-essential python3
+  fi
+
   # node-pty (terminal support) and msgpackr-extract must run their build
   # scripts; newer npm gates install scripts behind --allow-scripts, older npm
   # ignores the unknown flag and runs them anyway -- one call covers both.
