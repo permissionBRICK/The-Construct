@@ -22,6 +22,11 @@ ok("install: checks the Node version against t3's engines floor",
 ok("install: no dead --auto-bootstrap flag on ExecStart; explicit per-repo project add",
   !/ExecStart[^\n]*auto-bootstrap-project-from-cwd/.test(inst) && /t3 project add/.test(inst) && /\.git/.test(inst));
 ok("install: npm installs t3 with build scripts allowed", /npm install -g t3@latest --allow-scripts=node-pty,msgpackr-extract/.test(inst));
+// node-pty has no Linux prebuilds — its install always node-gyp-rebuilds, so
+// the compiler toolchain must be in place before npm runs the build scripts.
+ok("install: provisions the compiler toolchain before npm (node-pty gyp build)",
+  /command -v g\+\+/.test(inst) && /apt-get install -y build-essential python3/.test(inst) &&
+  inst.indexOf("build-essential") < inst.indexOf("npm install -g t3@latest"));
 ok("install: persists the T3CODE opt-in + bind keys", /cfgset T3CODE true/.test(inst) && /cfgset T3CODE_HOST/.test(inst) && /cfgset T3CODE_PORT/.test(inst));
 ok("install: writes the t3code-serve unit", /\/etc\/systemd\/system\/t3code-serve\.service/.test(inst) && /EnvironmentFile=\/etc\/construct\/config\.env/.test(inst));
 // The unit's ExecStart placeholders must reach the FILE as literal ${...} for
