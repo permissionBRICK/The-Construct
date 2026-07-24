@@ -226,8 +226,17 @@ function buildAgentUpdateScript(ids) {
       'esac; fi');
   }
   if (want.includes("opencode")) {
+    // The official installer downloads its archive without curl --fail, so a
+    // transient HTTP error page becomes "gzip: stdin: not in gzip format" and
+    // kills the install mid-run. Retry with backoff (mirrors
+    // install-ai-tools.sh's run_installer_with_retries) instead of failing the
+    // whole update on one network blip.
     lines.push('if command -v opencode >/dev/null 2>&1; then echo "== updating opencode =="; ' +
-      'if curl -fsSL https://opencode.ai/install | bash; then :; else rc=1; fi; fi');
+      'oc_ok=1; for oc_i in 1 2 3; do ' +
+      'if curl -fsSL https://opencode.ai/install | bash; then oc_ok=0; break; fi; ' +
+      'echo "opencode installer failed (attempt $oc_i/3)"; ' +
+      'if [ "$oc_i" -lt 3 ]; then sleep $((oc_i * 5)); fi; ' +
+      'done; [ "$oc_ok" -eq 0 ] || rc=1; fi');
   }
   if (want.includes("t3code")) {
     // npm-only (how install-ai-tools.sh installs it); restart the serve unit so

@@ -247,6 +247,10 @@ function ok(name, cond, detail) {
   // running web GUI actually serves the new version.
   ok("agentScript: t3code updates via npm + restarts the serve unit",
     /command -v t3 >\/dev\/null/.test(all) && /npm install -g t3@latest/.test(all) && /try-restart t3code-serve/.test(all));
+  // opencode's installer downloads without curl --fail; one transient error page
+  // used to fail the whole update, so the script must retry before setting rc.
+  ok("agentScript: opencode retries the installer before failing the update",
+    /for oc_i in 1 2 3/.test(all) && /\[ "\$oc_ok" -eq 0 \] \|\| rc=1/.test(all));
   ok("AGENT_LATEST: t3code resolves from the npm registry",
     /registry\.npmjs\.org\/t3\/latest/.test(updates.AGENT_LATEST.t3code.url) && updates.AGENT_LATEST.t3code.pick({ version: "0.0.29" }) === "0.0.29");
   const onlyClaude = updates.buildAgentUpdateScript(["claude-code"]);
