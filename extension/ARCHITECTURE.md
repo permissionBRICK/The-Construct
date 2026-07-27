@@ -513,24 +513,40 @@ module, regardless of `online`.
   the VM's REAL policy (`vmpower.queryAutoCheckpoints` → `on|off|absent|unsupported|
   unknown`, a captured non-elevated `Get-VM` + `AutomaticCheckpointsEnabled` property
   probe) and `vmpower.shouldOfferCheckpointApply` (pure, unit-tested) offers iff the VM
-  DISAGREES; `absent`/`unsupported` never offer; `unknown` (the probe is Hyper-V-
-  permission gated) falls back to the changed-signal so it can't nag every save.
-  The wanted value is read from the MERGED save result, not the raw payload — `mapFromForm`
-  omits an absent boolean, so a partial post (stale webview sending only git fields) would
-  otherwise read as "wants off" and offer to disable checkpoints the file still says are on;
-  the block is additionally gated on the form actually carrying a boolean. After the modal
-  the preference is RE-READ from disk, so a second window saving the opposite value while
-  the dialog sat open can't make this one apply the stale side.
+  DISAGREES; `absent`/`unsupported` never offer. `unknown` is NOT rare — the non-elevated
+  `Get-VM` is Hyper-V-permission gated (membership lands at the next sign-in) — so it must
+  not fall back to the changed-signal either, which review round 2 caught as the SAME
+  upgrade bug in disguise. It falls back to **`vmAutoCheckpointsApplied`**: the value last
+  CONFIRMED onto the VM (`host.read/saveAppliedAutoCheckpoints`; `null` = never). Offer
+  while that disagrees → exactly once per preference value until an apply actually
+  succeeds. The marker is written ONLY on a confirmed run: `Set-AgentVmCheckpoints.ps1`
+  reports `ok`/`fail` through `CONSTRUCT_CHECKPOINT_RESULT` (temp+rename; the same
+  result-file mechanism `Update-Construct.ps1` uses) and the panel polls it — a declined
+  UAC never reaches that code, so it correctly leaves the marker unset and re-offers.
+  `vmpower.planCheckpointOffer` (pure) owns the payload sequencing: the wanted value is
+  read from the MERGED save result, not the raw payload — `mapFromForm` omits an absent
+  boolean, so a partial post (stale webview sending only git fields) would otherwise read
+  as "wants off" and offer to disable checkpoints the file still says are on — and it
+  refuses to act unless the form actually carried a boolean. After the modal the preference
+  is RE-READ from disk, so a second window saving the opposite value while the dialog sat
+  open can't make this one apply the stale side. (A residual race remains between that
+  re-read and the detached launch; two windows fighting over one Hyper-V flag is accepted,
+  since the next save reconciles against the VM's real policy anyway.)
   "Apply now" runs `lifecycle.run("setCheckpoints", {enabled})` → an ELEVATED console (UAC)
   running `Set-AgentVmCheckpoints.ps1 -FromPanel -Enabled true|false`; the action builder
   demands a STRICT boolean and returns null otherwise (defaulting would silently pick the
   destructive direction). The script self-elevates too — with canonical
   CommandLineToArgvW quoting and `-Wait -PassThru` so a cancelled UAC or a failed child
-  is reported instead of exiting 0. Non-win32 → an honest warning; a scripts dir with no
-  `Set-AgentVmCheckpoints.ps1` predates the feature entirely, so `lifecycle.run`
-  capability-gates `-AutomaticCheckpoints` off the rebuild too (an old `Auto-Install.ps1`
-  is an advanced function: an unknown parameter fails to BIND and the rebuild would never
-  start) and the message says "update Construct" rather than promising the next reinstall.
+  is reported instead of exiting 0 — and loads the common lib INSIDE its try/finally so a
+  damaged install still honours the pause + result-file contract. Non-win32 → an honest
+  warning. **Capability gate:** `lifecycle.scriptSupportsCheckpoints` greps
+  `Auto-Install.ps1` for `$AutomaticCheckpoints` (NOT the presence of a sibling file — a
+  hand-assembled dir can hold the new live-apply script next to an old Auto-Install) and
+  `buildInvocation` drops the flag when unsupported, because an advanced function rejects
+  an unknown parameter at BINDING time and the rebuild would never start. Since an old
+  `Create-AgentVM.ps1` hardcodes checkpoints ON, dropping the flag would silently produce
+  the OPPOSITE of an "off" preference — so `run()` warns about exactly that before the
+  rebuild instead of after.
   **Why removal is the hard half:** turning the policy off does NOT delete the checkpoint
   Hyper-V already took, and deleting the wrong one would destroy a user's snapshot.
   `Get-AgentVmAutomaticCheckpoint` (lib) classifies in three tiers — (1) the VMSnapshot's

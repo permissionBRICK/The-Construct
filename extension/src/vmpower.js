@@ -188,25 +188,60 @@ function queryAutoCheckpoints(opts = {}) {
 
 /**
  * Should saving the automatic-checkpoint preference offer to apply it to the VM that
- * exists right now? Pure — this is the decision the reviewers' "upgrade path" finding
- * turns on, so it is stated once here and unit-tested.
+ * exists right now? Pure — this is the decision the "upgrade path" finding turns on,
+ * so it is stated once here and unit-tested.
  *
- *   actual 'on'/'off'  → offer iff it DIFFERS from what the user wants. This is
- *                        authoritative: it catches the VM created before Construct
- *                        disabled checkpoints (no saved key, policy still ON), and it
- *                        keeps offering after "Later" / a declined UAC, because the VM
- *                        still disagrees. Equal → silent, however the preference moved.
+ *   actual 'on'/'off'  → offer iff it DIFFERS from what the user wants. Authoritative:
+ *                        it catches the VM created before Construct disabled checkpoints
+ *                        (no saved key, policy still ON), and it keeps offering after
+ *                        "Later" / a declined UAC, because the VM still disagrees.
+ *                        Equal → silent, however the preference moved.
  *   actual 'absent'    → no VM to change (the preference applies when one is created).
  *   'unsupported'      → this Hyper-V has no automatic checkpoints at all.
- *   'unknown'          → the probe is Hyper-V-permission gated, so we genuinely can't
- *                        tell; fall back to "did the preference change?" rather than
- *                        nagging on every save.
+ *   'unknown'          → the probe couldn't read the policy. This is NOT rare: the
+ *                        non-elevated `Get-VM` is Hyper-V-permission gated (the
+ *                        installer's Hyper-V Administrators membership only takes
+ *                        effect at the next sign-in), so an early-life install lands
+ *                        here routinely. Deciding on "did the preference change?" would
+ *                        reproduce the exact upgrade bug this function exists to fix —
+ *                        off→off on a checkpoints-ON VM. So fall back to `applied`: the
+ *                        value last CONFIRMED onto the VM (host.readAppliedAutoCheckpoints;
+ *                        `null` = never confirmed). Offer while that disagrees, which
+ *                        means exactly once per preference value until an apply actually
+ *                        succeeds — a bounded prompt, not a nag.
  */
-function shouldOfferCheckpointApply(actual, wantEnabled, changed) {
+function shouldOfferCheckpointApply(actual, wantEnabled, applied) {
   if (actual === "absent" || actual === "unsupported") return false;
   if (actual === "on") return wantEnabled !== true;
   if (actual === "off") return wantEnabled === true;
-  return !!changed;
+  return (typeof applied === "boolean" ? applied : null) !== (wantEnabled === true);
+}
+
+/**
+ * Decide whether a saved settings payload should even reach the checkpoint flow, and
+ * with what value. Pure, so the sequencing that a round of review found broken is
+ * locked at its own layer rather than only inside extension.js's handler.
+ *
+ * `payload` is the RAW webview message settings, `merged` the form-shaped view of what
+ * was actually written to disk, `prev` the form-shaped view from before the write.
+ *
+ *   - `act` is false unless the payload really carried a boolean. `mapFromForm` OMITS an
+ *     absent boolean, so a partial post (a stale webview sending only the git fields)
+ *     leaves the stored value untouched — reading "wants off" from it would offer to
+ *     DISABLE checkpoints the file still says are on, and delete one.
+ *   - `enabled` comes from the MERGED on-disk result, never from the payload, so what we
+ *     offer to apply is always what was actually persisted.
+ *   - `changed` is only used for messaging (the non-Windows warning), never to decide
+ *     whether to offer — see shouldOfferCheckpointApply.
+ */
+function planCheckpointOffer(payload, prev, merged) {
+  const carried = !!payload && typeof payload.autoCheckpoints === "boolean";
+  const enabled = !!merged && merged.autoCheckpoints === true;
+  return {
+    act: carried,
+    enabled,
+    changed: enabled !== (!!prev && prev.autoCheckpoints === true),
+  };
 }
 
 /**
@@ -309,7 +344,7 @@ module.exports = {
   VM_NAME, SHUTDOWN_CMD,
   buildStateProbeCommand, buildStateProbeLaunch, parseVmState, queryVmState,
   buildAutoCheckpointProbeCommand, buildAutoCheckpointProbeLaunch, parseAutoCheckpoints,
-  queryAutoCheckpoints, shouldOfferCheckpointApply,
+  queryAutoCheckpoints, shouldOfferCheckpointApply, planCheckpointOffer,
   shouldShowStart,
   buildElevatedCommandLaunch, buildStartCommand, startVm,
 };

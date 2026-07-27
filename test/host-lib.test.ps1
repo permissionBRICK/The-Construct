@@ -826,6 +826,13 @@ ok "checkpoints: supported-but-empty WMI result suppresses the heuristic" (
 $none = Get-AgentVmAutomaticCheckpoint -VmName "Agent-VM" -Wmi $noWmi -Snapshots @()
 ok "checkpoints: no snapshots -> three empty lists" (
     $none.All.Count -eq 0 -and $none.Certain.Count -eq 0 -and $none.Probable.Count -eq 0)
+# "no checkpoints" and "couldn't read the checkpoints" must be distinguishable: the
+# script reports success for the first and FAILS for the second, because an automatic
+# checkpoint may still be sitting there unremoved.
+ok "checkpoints: an empty-but-successful enumeration reports Enumerated" ($none.Enumerated -eq $true)
+$unreadable = Get-AgentVmAutomaticCheckpoint -VmName "No-Such-VM-For-Tests"
+ok "checkpoints: an enumeration failure reports Enumerated=false, not 'no checkpoints'" (
+    $unreadable.Enumerated -eq $false -and $unreadable.All.Count -eq 0)
 
 $nulls = Get-AgentVmAutomaticCheckpoint -VmName "Agent-VM" -Wmi @{ Supported = $true; Ids = @($null, "") } -Snapshots @(
     $null, (New-FakeSnap "Agent-VM - (d)" $null)
