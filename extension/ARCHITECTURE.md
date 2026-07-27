@@ -162,7 +162,10 @@ extension/
     lifecycle.test.js plain-node buildInvocation (incl. the setCheckpoints action + which
                       actions carry -AutomaticCheckpoints) + winQuoteArg/quoting/elevation units
     updates.test.js   plain-node update-check units — Construct compare/cache + agent semver/latest/script + fetchJson redirects/per-host Accept, injected fetch+clock+http (62 checks)
-    vmpower.test.js   plain-node Hyper-V power units — Get-VM probe/parse + Start-VM/elevated launch builders + injected-spawn queryVmState (38 checks)
+    vmpower.test.js   plain-node Hyper-V power units — Get-VM probe/parse + Start-VM/elevated
+                      launch builders + injected-spawn queryVmState + the automatic-checkpoint
+                      policy probe (parse/injection/spawn) and shouldOfferCheckpointApply's
+                      truth table, incl. the upgrade path (VM on, preference unchanged) (68 checks)
     project-set.test.js plain-node VM-side project set/get/list CLI units — validation, reserved
                       names, atomic writes, PROJECTS_STORE override (54 checks)
     projects.test.js  plain-node scan builder/parser + planImport merge + reconcileSelection +
@@ -501,13 +504,33 @@ module, regardless of `online`.
   Hyper-V). The panel toggle lives in **Settings → VM resources** (`#setAutoCheckpoints`
   → `autoCheckpoints` → `vmAutoCheckpoints` on disk), default OFF in the markup so a
   settings file with no stored key reads correctly.
-  **Live apply:** because a reprovision can't change a Hyper-V property, `saveSettings`
-  detects the transition (normalizing an absent prior value to `false`, so an off→off
-  save is silent) and `offerApplyCheckpoints` shows a modal; "Apply now" runs
-  `lifecycle.run("setCheckpoints", {enabled})` → an ELEVATED console (UAC) running
-  `Set-AgentVmCheckpoints.ps1 -FromPanel -Enabled true|false`. It self-elevates too, so
-  a manual run works. Missing script (older install) / non-win32 → an honest message,
-  preference still saved for the next rebuild.
+  **Live apply, decided against the VM — not against the old setting.** The obvious
+  design (offer when the preference CHANGED) is wrong, and external review caught it: a
+  VM created before this feature has the policy ON while its settings file has no key at
+  all, so the first save is off→off and would never offer — the upgrade path, i.e. every
+  existing user, silently gets nothing. It also can't retry after "Later" or a declined
+  UAC, since the file already holds the wanted value. So `offerApplyCheckpoints` probes
+  the VM's REAL policy (`vmpower.queryAutoCheckpoints` → `on|off|absent|unsupported|
+  unknown`, a captured non-elevated `Get-VM` + `AutomaticCheckpointsEnabled` property
+  probe) and `vmpower.shouldOfferCheckpointApply` (pure, unit-tested) offers iff the VM
+  DISAGREES; `absent`/`unsupported` never offer; `unknown` (the probe is Hyper-V-
+  permission gated) falls back to the changed-signal so it can't nag every save.
+  The wanted value is read from the MERGED save result, not the raw payload — `mapFromForm`
+  omits an absent boolean, so a partial post (stale webview sending only git fields) would
+  otherwise read as "wants off" and offer to disable checkpoints the file still says are on;
+  the block is additionally gated on the form actually carrying a boolean. After the modal
+  the preference is RE-READ from disk, so a second window saving the opposite value while
+  the dialog sat open can't make this one apply the stale side.
+  "Apply now" runs `lifecycle.run("setCheckpoints", {enabled})` → an ELEVATED console (UAC)
+  running `Set-AgentVmCheckpoints.ps1 -FromPanel -Enabled true|false`; the action builder
+  demands a STRICT boolean and returns null otherwise (defaulting would silently pick the
+  destructive direction). The script self-elevates too — with canonical
+  CommandLineToArgvW quoting and `-Wait -PassThru` so a cancelled UAC or a failed child
+  is reported instead of exiting 0. Non-win32 → an honest warning; a scripts dir with no
+  `Set-AgentVmCheckpoints.ps1` predates the feature entirely, so `lifecycle.run`
+  capability-gates `-AutomaticCheckpoints` off the rebuild too (an old `Auto-Install.ps1`
+  is an advanced function: an unknown parameter fails to BIND and the rebuild would never
+  start) and the message says "update Construct" rather than promising the next reinstall.
   **Why removal is the hard half:** turning the policy off does NOT delete the checkpoint
   Hyper-V already took, and deleting the wrong one would destroy a user's snapshot.
   `Get-AgentVmAutomaticCheckpoint` (lib) classifies in three tiers — (1) the VMSnapshot's
@@ -519,7 +542,9 @@ module, regardless of `online`.
   directions (`Get-AgentVmAutomaticCheckpointId` returns `@{Supported;Ids}` precisely so
   "query worked, found none" can suppress the heuristic), so a user checkpoint that
   happens to look auto-named isn't questioned. Only tier-1/2 hits (`Certain`) are deleted
-  silently; tier-3 hits (`Probable`) are listed and need a typed `yes` in the console.
+  silently; tier-3 hits (`Probable`) need a typed `yes` in the console — asked ONE
+  CHECKPOINT AT A TIME, since a blanket yes over a list would take a user's
+  deliberately-named checkpoint along with the real one.
   Removal is BY OBJECT (`-VMSnapshot`), never `-Name` (Hyper-V allows duplicate names).
   Both the property read and the `Set-VM` parameter are probed, so a pre-1709 host that
   has no automatic checkpoints says so instead of erroring.
