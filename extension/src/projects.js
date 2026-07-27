@@ -12,7 +12,7 @@
 // of it is pure and unit-tested; the extension layer (extension.js) does the SSH
 // round-trip, the modal round-trip, and the toasts.
 //
-// DISCOVERY MECHANISM — importProjects scans over SSH directly rather than driving
+// DISCOVERY MECHANISM — importFromVm (auto-import) scans over SSH directly rather than driving
 // Provision-AgentVM.ps1 -Action export -ScanReposOnly. That PowerShell path first
 // uploads a fresh repo archive to the VM (a heavy, VM-mutating step) and needs the
 // host scripts + a console; here we only READ the VM, over the ssh runner the panel

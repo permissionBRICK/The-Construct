@@ -200,7 +200,7 @@ async function withVmState(state) {
 /**
  * Fold the LOCAL project profiles + persisted selection into the state's `projects`
  * chips. The chips the panel shows come from the host-side profile files
- * (<scriptsDir>/projects/*.json) — the same set editProject/importProjects/
+ * (<scriptsDir>/projects/*.json) — the same set editProject/importFromVm/
  * selectProfiles operate on — rather than only the VM's live PROJECTS= list, so
  * profiles that exist locally but aren't provisioned yet are still visible/editable.
  *
@@ -486,6 +486,16 @@ async function runConfigSync() {
     }
     if (result && result.ok && !result.lockBusy) {
       await autoEnableNewProfiles(profilesBeforeTick, host.listProjectProfiles(dir));
+    }
+    // Auto-import: when the VM was reachable this tick, scan for repos not yet
+    // covered by a local profile and import them. This replaces the manual
+    // "import from VM" button — new configs are discovered automatically on
+    // every sync tick. Runs AFTER the sync tick (not inside it) so the lock is
+    // released and locally-written profiles don't race the git engine.
+    if (result && result.ok && result.vmReadOk) {
+      try { await importFromVm(); } catch (e) {
+        logLine("auto-import from VM failed: " + (e && e.message ? e.message : e));
+      }
     }
     return result;
   } finally { syncTickInFlight = false; }
@@ -864,51 +874,44 @@ function openProjectFolder() {
 }
 
 /**
- * Import projects from the VM: scan the checked-out repos over SSH and write a
- * minimal profile for each one not already covered by a local profile. Merges,
- * never overwrites (an existing profile of the same name or covering the same repo
- * URL is kept). Re-pushes state so the new chips appear. All pure planning lives in
- * src/projects.js; here we do the SSH round-trip + the writes + the toasts.
+ * Non-interactive import of VM repos: scan the checked-out repos over SSH and
+ * write a minimal profile for each one not already covered by a local profile.
+ * Merges, never overwrites (same rule as planImport). Returns
+ * `{ imported: string[], failed: string[], skipped: string[] }` or null when the
+ * VM is unreachable or the scan fails. Never shows toasts — the caller decides
+ * how to surface the result (the sync tick logs it; the reinstall gate checks it).
+ *
+ * Auto-selects newly imported profiles into the persisted selection so they are
+ * included in the next reprovision/reinstall (same semantics as
+ * autoEnableNewProfiles for sync-discovered profiles).
  */
-function runImportProjects() {
+async function importFromVm() {
   const projRoot = resolveCfgDir() || resolveScriptsDir();
-  if (!projRoot) { warnNoScriptsDir(); return; }
-  vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: "Scanning the VM for project repos…", cancellable: false },
-    async () => {
-      const r = await ssh.runRemoteScript(projects.buildScanScript(), { timeoutMs: 60000 });
-      if (r.code < 0) { vscode.window.showErrorMessage("Couldn't reach the VM to scan for repos. Is it running?"); return; }
-      if (r.code !== 0) {
-        vscode.window.showErrorMessage(`Scanning the VM failed (exit ${r.code}). ${(r.stderr || "").slice(0, 200)}`.trim());
-        return;
-      }
-      const scan = projects.parseScan(r.stdout);
-      if (scan == null) { vscode.window.showErrorMessage("The repo scan returned incomplete output; nothing was imported."); return; }
-      // Read every existing profile so planImport can skip a repo already covered.
-      const existing = {};
-      for (const name of host.listProjectProfiles(projRoot)) {
-        const p = host.readProjectProfile(projRoot, name);
-        if (p) existing[name] = p;
-      }
-      const plan = projects.planImport(scan, existing);
-      let written = 0;
-      const failed = [];
-      for (const item of plan.toWrite) {
-        try { host.writeProjectProfile(projRoot, item.name, item.profile); written++; }
-        catch (_) { failed.push(item.name); }
-      }
-      if (written > 0) {
-        const names = plan.toWrite.filter((i) => !failed.includes(i.name)).map((i) => i.name).join(", ");
-        vscode.window.showInformationMessage(`Imported ${written} project profile(s): ${names}.`);
-      } else if (plan.skipped.length && !plan.toWrite.length && !plan.covered.length) {
-        vscode.window.showWarningMessage("Found repos on the VM but none had a remote to clone from — nothing imported.");
-      } else {
-        vscode.window.showInformationMessage("No new project profiles to import — every repo on the VM is already covered.");
-      }
-      if (failed.length) vscode.window.showWarningMessage(`Couldn't write profile(s): ${failed.join(", ")}.`);
-      refreshAll(); // surface the new chips
-    }
-  );
+  if (!projRoot) return null;
+  var r;
+  try { r = await ssh.runRemoteScript(projects.buildScanScript(), { timeoutMs: 60000 }); }
+  catch (_) { return null; }
+  if (!r || r.code !== 0) return null;
+  var scan = projects.parseScan(r.stdout);
+  if (scan == null) return null;
+  var existing = {};
+  for (var name of host.listProjectProfiles(projRoot)) {
+    var p = host.readProjectProfile(projRoot, name);
+    if (p) existing[name] = p;
+  }
+  var profilesBefore = host.listProjectProfiles(projRoot);
+  var plan = projects.planImport(scan, existing);
+  var imported = [];
+  var failed = [];
+  for (var item of plan.toWrite) {
+    try { host.writeProjectProfile(projRoot, item.name, item.profile); imported.push(item.name); }
+    catch (_) { failed.push(item.name); }
+  }
+  if (imported.length) {
+    logLine("auto-import from VM: imported " + imported.join(", "));
+    await autoEnableNewProfiles(profilesBefore, host.listProjectProfiles(projRoot));
+  }
+  return { imported: imported, failed: failed, skipped: plan.skipped };
 }
 
 // ── Mic passthrough (on-demand) ────────────────────────────────────────────────
@@ -1387,7 +1390,6 @@ function handleMessage(message, webview, context) {
       if (id === "openProjectFolder") { openProjectFolder(); return; }
       if (id === "addProject") { runAddProject(); return; }
       if (id === "openProject") { runOpenProject(message.project); return; }
-      if (id === "importProjects") { runImportProjects(); return; }
       if (id === "selectProfiles") { runSelectProfiles(); return; }
       if (id === "editProject") { runEditProject(message.project, webview); return; }
       if (id === "exportUsage") { runExportUsage(); return; }
@@ -1417,13 +1419,27 @@ function handleMessage(message, webview, context) {
       if (id === "reprovision" || id === "reinstall" || id === "redownload") {
         const scriptsDir = resolveScriptsDir();
         if (!scriptsDir) { warnNoScriptsDir(); return; }
-        // Reprovision gate: check if the config repo is in a conflict/merge state.
+        // Pre-flight: import any undiscovered configs, run a final sync tick,
+        // then check for conflicts. All best-effort except the conflict gate
+        // which is blocking (docs/config-sync.md §9).
         (async () => {
+          // (a) Import any VM repos not yet covered by a local profile.
+          try { await importFromVm(); } catch (_) {}
+          // (b) Run one final config-sync tick so profile files are synced.
+          try { await runConfigSync(); } catch (_) {}
+          // (c) Conflict gate: if there are sync conflicts, do NOT proceed.
           try {
             var gate = await configMergeGate();
             if (gate.blocked) {
-              vscode.window.showErrorMessage(gate.reason, "Open config repo")
-                .then(function (pick) { if (pick === "Open config repo") vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(gate.dir), true); });
+              vscode.window.showErrorMessage(
+                "Config sync has unresolved conflicts — resolve them before " +
+                (id === "reprovision" ? "reprovisioning" : id === "reinstall" ? "reinstalling" : "redownloading") +
+                ". Open the config repo in VS Code, resolve the merge conflicts, and commit.",
+                "Open config repo", "Open settings"
+              ).then(function (pick) {
+                if (pick === "Open config repo") vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(gate.dir), true);
+                if (pick === "Open settings") vscode.commands.executeCommand("workbench.action.openSettings", "construct");
+              });
               return;
             }
           } catch (_) {}
