@@ -133,6 +133,15 @@ ok("capability: companion script present but the parameter absent -> still unsup
 fs.writeFileSync(path.join(sd, "Auto-Install.ps1"), "param(\n  [ValidateSet(\"true\",\"false\")]\n  [string]$AutomaticCheckpoints = \"false\"\n)\n");
 ok("capability: the parameter present -> supported", life.scriptSupportsCheckpoints(sd) === true);
 ok("capability: null scripts dir -> unsupported (no throw)", life.scriptSupportsCheckpoints(null) === false);
+// It must match a DECLARATION, not any mention: a doc comment naming the parameter on a
+// script that lacks it would send the flag into a binding failure.
+fs.writeFileSync(path.join(sd, "Auto-Install.ps1"), "# forwards -AutomaticCheckpoints in newer builds\n<#\n  mentions $AutomaticCheckpoints in prose\n#>\nparam([string]$T3Code)\n");
+ok("capability: a prose/comment mention alone -> unsupported", life.scriptSupportsCheckpoints(sd) === false);
+// PowerShell identifiers are case-insensitive, and Windows files are CRLF.
+fs.writeFileSync(path.join(sd, "Auto-Install.ps1"), "param(\r\n  [string]$automaticcheckpoints = \"false\",\r\n  [switch]$X\r\n)\r\n");
+ok("capability: case-insensitive + CRLF declaration -> supported", life.scriptSupportsCheckpoints(sd) === true);
+fs.writeFileSync(path.join(sd, "Auto-Install.ps1"), "param(\n  [string]$AutomaticCheckpoints\n)\n");
+ok("capability: trailing declaration with no default -> supported", life.scriptSupportsCheckpoints(sd) === true);
 
 ok("unknown action -> null", life.buildInvocation("bogus", {}) === null);
 

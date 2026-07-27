@@ -214,6 +214,23 @@ ok("SHUTDOWN_CMD returns immediately (--no-block)", vm.SHUTDOWN_CMD === "systemc
     plan({ autoCheckpoints: true }, { autoCheckpoints: true }, { autoCheckpoints: true }).changed === false &&
     plan({ autoCheckpoints: false }, {}, {}).changed === false);
 
+  // ── extension.js wiring invariants ────────────────────────────────────────
+  // The result-file poll -> applied-marker write is the hinge the whole "unknown" path
+  // depends on, and it lives in extension.js, which can't be required under plain node
+  // (it needs `vscode`). Pin it at the source level so a refactor that stops recording
+  // the marker — or starts recording it on failure — fails here.
+  const extSrc = require("fs").readFileSync(require("path").join(__dirname, "..", "extension.js"), "utf8");
+  const chkFn = extSrc.slice(extSrc.indexOf("async function offerApplyCheckpoints"), extSrc.indexOf("async function runShutdown"));
+  ok("wiring: the apply passes the result-file env var", chkFn.includes("CONSTRUCT_CHECKPOINT_RESULT"));
+  ok("wiring: the marker is written from the result poll", chkFn.includes("saveAppliedAutoCheckpoints"));
+  // Guard the DIRECTION: the marker write must sit under the ok branch, never beside the
+  // fail/timeout handling.
+  const okBranch = chkFn.slice(chkFn.indexOf('if (res === "ok")'), chkFn.indexOf("} else {", chkFn.indexOf('if (res === "ok")')));
+  ok("wiring: the marker is written ONLY on an ok result", okBranch.includes("saveAppliedAutoCheckpoints"));
+  ok("wiring: the offer consults the real VM policy and the marker",
+    chkFn.includes("queryAutoCheckpoints") && chkFn.includes("readAppliedAutoCheckpoints") &&
+    chkFn.includes("shouldOfferCheckpointApply"));
+
   console.log(`\n  vmpower unit tests — ${pass}/${pass + fail} passed\n`);
   process.exit(fail ? 1 : 0);
 })();

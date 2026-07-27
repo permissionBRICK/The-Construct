@@ -157,9 +157,13 @@ function buildInvocation(action, opts = {}) {
  */
 function scriptSupportsCheckpoints(scriptsDir) {
   if (!scriptsDir) return false;
-  try {
-    return /\$AutomaticCheckpoints\b/.test(fs.readFileSync(path.join(scriptsDir, AUTO_INSTALL), "utf8"));
-  } catch (_) { return false; }
+  let txt;
+  try { txt = fs.readFileSync(path.join(scriptsDir, AUTO_INSTALL), "utf8"); } catch (_) { return false; }
+  // Match a real parameter DECLARATION, not any mention of the name: `[string]$Foo` /
+  // `[string]$Foo = "x"` / `$Foo,`. A bare name test would be satisfied by a comment (or
+  // by our own doc text) on a script that has no such parameter, and passing the flag to
+  // one is a binding failure. PowerShell identifiers are case-INSENSITIVE, so is this.
+  return /\$AutomaticCheckpoints\s*(?:=|,|\)|$)/im.test(txt);
 }
 
 /** A PowerShell single-quoted string literal (embedded quotes doubled). */
@@ -387,8 +391,11 @@ function run(action, opts = {}) {
   // checkpoints ON, so silently rebuilding would produce the OPPOSITE of the saved
   // preference. Say so before the rebuild rather than after.
   if (inv.destructive && !inv.args.includes("-AutomaticCheckpoints")) {
-    let wantsOff = false;
-    try { wantsOff = host.readSettings(scriptsDir).autoCheckpoints === false; } catch (_) {}
+    // ABSENT counts as "wants off": the panel's toggle defaults to off and that IS the
+    // product default, so a user who never touched it still expects a rebuilt VM to have
+    // checkpoints disabled. Only an explicit `true` is unaffected by an old script.
+    let wantsOff = true;
+    try { wantsOff = host.readSettings(scriptsDir).autoCheckpoints !== true; } catch (_) {}
     if (wantsOff && !scriptSupportsCheckpoints(scriptsDir)) {
       vscode.window.showWarningMessage(
         "These host scripts are too old to honour the “Automatic checkpoints: off” setting, so the rebuilt VM will have Hyper-V's automatic checkpoints ON. Update Construct first to avoid that."
@@ -396,7 +403,15 @@ function run(action, opts = {}) {
     }
   }
   Promise.resolve(inv.destructive ? confirmDestructive(inv) : true).then((ok) => {
-    if (ok) launchHostScript({ scriptsDir, script: inv.script, args: inv.args, elevate: inv.elevate, label: inv.label, env: opts.env });
+    if (!ok) return;
+    // A rebuild REPLACES the VM, so what was last confirmed onto the old one says nothing
+    // about the new one. Clearing the marker keeps the (permission-gated) apply-offer
+    // honest: a stale "already applied off" must not suppress the offer for a fresh VM
+    // that an old script just created with checkpoints on.
+    if (inv.destructive) {
+      try { host.saveAppliedAutoCheckpoints(scriptsDir, null); } catch (_) { /* best-effort */ }
+    }
+    launchHostScript({ scriptsDir, script: inv.script, args: inv.args, elevate: inv.elevate, label: inv.label, env: opts.env });
   });
 }
 

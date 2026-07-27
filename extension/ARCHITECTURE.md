@@ -518,8 +518,8 @@ module, regardless of `online`.
   not fall back to the changed-signal either, which review round 2 caught as the SAME
   upgrade bug in disguise. It falls back to **`vmAutoCheckpointsApplied`**: the value last
   CONFIRMED onto the VM (`host.read/saveAppliedAutoCheckpoints`; `null` = never). Offer
-  while that disagrees → exactly once per preference value until an apply actually
-  succeeds. The marker is written ONLY on a confirmed run: `Set-AgentVmCheckpoints.ps1`
+  while that disagrees → on each save until an apply actually SUCCEEDS (Later / a declined
+  UAC don't count, and shouldn't). The marker is written ONLY on a confirmed run: `Set-AgentVmCheckpoints.ps1`
   reports `ok`/`fail` through `CONSTRUCT_CHECKPOINT_RESULT` (temp+rename; the same
   result-file mechanism `Update-Construct.ps1` uses) and the panel polls it — a declined
   UAC never reaches that code, so it correctly leaves the marker unset and re-offers.
@@ -546,7 +546,15 @@ module, regardless of `online`.
   an unknown parameter at BINDING time and the rebuild would never start. Since an old
   `Create-AgentVM.ps1` hardcodes checkpoints ON, dropping the flag would silently produce
   the OPPOSITE of an "off" preference — so `run()` warns about exactly that before the
-  rebuild instead of after.
+  rebuild instead of after (treating an ABSENT key as "wants off", since that's the
+  product default the panel shows). `Auto-Install.ps1` carries the mirror guard for the
+  DOWNSTREAM pair: it checks `Create-AgentVM.ps1`'s parameters before splatting and drops
+  the argument (loudly) if that script is older — by the time it runs the old VM is
+  already deleted, so a binding failure there would leave the rebuild simply broken. It
+  also falls back to the saved `vmAutoCheckpoints` when the parameter is unbound, so a
+  hand-run install — or an OLD extension driving new scripts — still honours the toggle.
+  A destructive rebuild REPLACES the VM, so `run()` clears the applied marker: what was
+  confirmed onto the old VM says nothing about the new one.
   **Why removal is the hard half:** turning the policy off does NOT delete the checkpoint
   Hyper-V already took, and deleting the wrong one would destroy a user's snapshot.
   `Get-AgentVmAutomaticCheckpoint` (lib) classifies in three tiers — (1) the VMSnapshot's
