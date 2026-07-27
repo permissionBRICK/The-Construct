@@ -840,6 +840,33 @@ $nulls = Get-AgentVmAutomaticCheckpoint -VmName "Agent-VM" -Wmi @{ Supported = $
 ok "checkpoints: null snapshot / unjoinable id / blank wmi ids don't throw or mis-classify" (
     $nulls.Certain.Count -eq 0 -and $nulls.Probable.Count -eq 1)
 
+# ── Set-AgentVmCheckpoints.ps1 source invariants ────────────────────────────
+# The classifier's Enumerated flag and the panel result file are only useful if the
+# script actually ACTS on them, and neither can be exercised without Hyper-V. Pin the
+# wiring at the source level (same technique as the Wait-Exit globals check above) so a
+# refactor that drops either one fails here instead of in the field.
+$chkScript = Get-Content -Raw (Join-Path $here "..\Set-AgentVmCheckpoints.ps1")
+
+ok "checkpoint script: an unreadable checkpoint list is turned into a throw, not a success" (
+    $chkScript -match '(?s)if\s*\(-not\s+\$found\.Enumerated\)\s*\{[^}]*throw')
+# The removal loop must be reached only after that guard. Anchor on the CALL
+# ("Remove-VMSnapshot -VMSnapshot"), not the bare name -- which also appears in the
+# script's help text, above everything.
+ok "checkpoint script: the Enumerated guard precedes every Remove-VMSnapshot call" (
+    $chkScript.IndexOf('$found.Enumerated') -lt $chkScript.IndexOf('Remove-VMSnapshot -VMSnapshot'))
+# The panel records "applied" from this file, so writing "ok" must be conditional on the
+# failure flag -- an unconditional write would mark a failed run as applied.
+ok "checkpoint script: the result file reports fail when the run failed" (
+    $chkScript -match 'CONSTRUCT_CHECKPOINT_RESULT' -and
+    $chkScript -match 'if\s*\(\$failed\)\s*\{\s*"fail"\s*\}\s*else\s*\{\s*"ok"\s*\}')
+# Written temp+rename so the polling panel can never read a half-written value.
+ok "checkpoint script: the result file is written temp+rename" (
+    $chkScript -match 'Set-Content[^\r\n]*\$tmp' -and $chkScript -match 'Move-Item[^\r\n]*\$tmp')
+# Every exit path that reaches finally must report, including the dependency failure --
+# which is why the common-lib load lives inside the try.
+ok "checkpoint script: the common-lib load is inside the guarded block" (
+    $chkScript.IndexOf('try {') -lt $chkScript.IndexOf('Required helper not found'))
+
 Write-Host ""
 Write-Host ("  host-lib unit tests - {0}/{1} passed" -f $script:pass, ($script:pass + $script:fail))
 Write-Host ""
