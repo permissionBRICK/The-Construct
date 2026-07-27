@@ -259,6 +259,48 @@ try {
     return host.hasPersistedSelection(d) === true;
   })());
   ok("select: hasPersistedSelection false with no scripts dir", host.hasPersistedSelection(null) === false);
+
+  // writeProjectProfileIfAbsent: atomic create-if-absent with case-insensitive guard.
+  ok("write-if-absent: creates when destination absent", (() => {
+    const d = path.join(root, "wia-create");
+    fs.mkdirSync(path.join(d, "projects"), { recursive: true });
+    fs.writeFileSync(path.join(d, "Auto-Install.ps1"), "");
+    var created = host.writeProjectProfileIfAbsent(d, "newproj", { name: "newproj", repos: [] });
+    if (!created) return false;
+    var f = path.join(d, "projects", "newproj.json");
+    return fs.existsSync(f) && JSON.parse(fs.readFileSync(f, "utf8")).name === "newproj";
+  })());
+
+  ok("write-if-absent: returns false when destination exists", (() => {
+    const d = path.join(root, "wia-exists");
+    fs.mkdirSync(path.join(d, "projects"), { recursive: true });
+    fs.writeFileSync(path.join(d, "Auto-Install.ps1"), "");
+    fs.writeFileSync(path.join(d, "projects", "api.json"), '{"name":"api"}');
+    return host.writeProjectProfileIfAbsent(d, "api", { name: "api-new" }) === false;
+  })());
+
+  ok("write-if-absent: case-insensitive collision returns false", (() => {
+    const d = path.join(root, "wia-case");
+    fs.mkdirSync(path.join(d, "projects"), { recursive: true });
+    fs.writeFileSync(path.join(d, "Auto-Install.ps1"), "");
+    fs.writeFileSync(path.join(d, "projects", "api.json"), '{"name":"api"}');
+    return host.writeProjectProfileIfAbsent(d, "API", { name: "API" }) === false;
+  })());
+
+  ok("write-if-absent: no temp file left on collision", (() => {
+    const d = path.join(root, "wia-noleak");
+    fs.mkdirSync(path.join(d, "projects"), { recursive: true });
+    fs.writeFileSync(path.join(d, "Auto-Install.ps1"), "");
+    fs.writeFileSync(path.join(d, "projects", "x.json"), '{}');
+    host.writeProjectProfileIfAbsent(d, "x", { name: "x" });
+    var files = fs.readdirSync(path.join(d, "projects"));
+    return files.length === 1 && files[0] === "x.json";
+  })());
+
+  ok("write-if-absent: throws on invalid name", (() => {
+    try { host.writeProjectProfileIfAbsent(root, "../evil", {}); return false; }
+    catch (_) { return true; }
+  })());
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }

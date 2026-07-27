@@ -155,7 +155,7 @@ extension/
                       upstream import planning, merge-file, read/write store scripts, repo state,
                       seeding, conflict handling (140 checks)
     host.test.js      plain-node scripts-dir resolution + settings merge + readProjectProfile +
-                      project-profile list/write/select + traversal + hasPersistedSelection (72 checks; fake %LOCALAPPDATA% tree)
+                      project-profile list/write/select + traversal + hasPersistedSelection + writeProjectProfileIfAbsent (77 checks; fake %LOCALAPPDATA% tree)
     remote.test.js    plain-node Remote-SSH helpers — isConnectedToVm/remoteFolderUri + repoNameFromUrl/isLikelyGitUrl/buildCloneScript/projectOpenPath/shouldAutoOpenPanel + URI percent-encoding (71 checks)
     lifecycle.test.js plain-node buildInvocation + winQuoteArg/quoting/elevation units (48 checks)
     updates.test.js   plain-node update-check units — Construct compare/cache + agent semver/latest/script + fetchJson redirects/per-host Accept, injected fetch+clock+http (62 checks)
@@ -164,7 +164,7 @@ extension/
                       names, atomic writes, PROJECTS_STORE override (54 checks)
     projects.test.js  plain-node scan builder/parser + planImport merge + reconcileSelection +
                       sanitizeProfile (injection + prototype-pollution) + config-sync helpers:
-                      isReservedProfileName, validateProfile, canonicalProfileJson, case-insensitive planImport collision, share builders (160 checks)
+                      isReservedProfileName, validateProfile, canonicalProfileJson, case-insensitive planImport collision, additiveMergeSelection, share builders (166 checks)
     themes.test.js    plain-node UI-design units — registry shape + settings-enum sync with
                       package.json, css+preview files exist per design, normalize fallbacks
                       (hostile/unknown -> default), picker HTML nonce/CSP/escaping
@@ -498,12 +498,14 @@ module, regardless of `online`.
   offline (the sync tick sets `vmReadOk:false` and the import is skipped).
 - **Reinstall/reprovision pre-flight.** Before a manual Reinstall, Redownload, or
   Reprovision proceeds, the handler runs a three-step pre-flight: (a) `importFromVm()`
-  to catch any repos not yet discovered by the auto-import; (b) `runConfigSync()` to
-  sync profile files one last time; (c) `configMergeGate()` to check for sync
-  conflicts. If there are conflicts, the launch is blocked with an error message,
-  an "Open config repo" button (to resolve the merge), and an "Open settings" button
-  (for reference). The gate is un-bypassable: the only way forward is to resolve the
-  conflicts and retry.
+  — if the VM is unreachable, a modal warning lets the user cancel or continue;
+  (b) `runConfigSync()` — inspects the result for lockBusy/blocked/failure and
+  warns accordingly; (c) `configMergeGate()` to check for sync conflicts — if
+  conflicted, the launch is blocked with an error message and an "Open config
+  repo" button (to resolve the merge in VS Code's merge editor). Steps (a)/(b)
+  are advisory (the user may proceed at their own risk), while step (c) is
+  un-bypassable: the only way forward is to resolve the conflicts, commit, and
+  retry.
 - **Destructive flows default to save→restore**; one-time overrides (existing
   backup / clean wipe) live in Settings → Custom reinstall, not as a persisted
   policy. On failure, offer a retry reusing the backup already taken.

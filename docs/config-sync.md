@@ -291,7 +291,7 @@ The order becomes **import → sync → conflict gate → provision**:
 |------|------------|-----------|
 | 1. Import from VM | Discover any repos not yet covered by a local profile | `importFromVm()`: SSH scan → `planImport` → write new profiles + auto-select |
 | 2. Final sync tick | Bring un-synced VM edits home **before** any wipe | A full sync tick (§6): read VM files → `vm` branch → merge |
-| 3. Conflict gate | Verify no unresolved merge conflicts | `configMergeGate()`: if conflicted/mergeInProgress → **block** with an error, "Open config repo" + "Open settings" |
+| 3. Conflict gate | Verify no unresolved merge conflicts | `configMergeGate()`: if conflicted/mergeInProgress → **block** with an error and "Open config repo" button |
 | 4. Provision | Wipe (reinstall), then seed the fresh VM's store | **Write files from `main`** into the empty `/opt/construct/projects`; reset `vm` to `main` |
 
 Steps 1–3 run as a pre-flight in the extension's reprovision/reinstall/redownload
