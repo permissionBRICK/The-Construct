@@ -213,6 +213,15 @@ catches the rare bad line-merge. A structural JSON merge driver is explicitly
 and written to the VM on the next tick; and the reinstall flow runs a tick
 **before** the wipe (§9).
 
+**Auto-import from VM.** After each successful sync tick where the VM was
+reachable (`vmReadOk:true`), `importFromVm()` scans the VM's checked-out repos
+(the same `buildScanScript`/`planImport` as the former manual "import from VM"
+button) and writes a profile for each repo not already covered by an existing
+profile. Newly imported profiles are auto-selected into the persisted project
+selection so they are included in the next reprovision/reinstall. The import is
+idempotent (never overwrites), non-interactive (logged, no toasts on the tick),
+and degrades gracefully when the VM is offline.
+
 **Accepted risk:** between ticks (e.g. VS Code closed), agent edits exist only
 on the VM. The reinstall path always syncs first, so planned wipes lose
 nothing; a catastrophic VM loss can lose config edits made since the last tick.
@@ -276,13 +285,21 @@ Two merge points — **host ↔ VM** (§6) and **local ↔ upstream** (§7) — 
 
 ## 9. Provisioning flow (revised)
 
-The order becomes **back up → merge → provision**:
+The order becomes **import → sync → conflict gate → provision**:
 
 | Step | What it is | Mechanics |
 |------|------------|-----------|
-| 1. Back up current config | Bring un-synced VM edits home **before** any wipe | A full sync tick (§6): read VM files → `vm` branch → merge |
-| 2. Config merge | Reconcile on the host (auto or resolver §8) | `git merge vm` on the host; conflict gate here |
-| 3. Provision | Wipe (reinstall), then seed the fresh VM's store | **Write files from `main`** into the empty `/opt/construct/projects`; reset `vm` to `main` |
+| 1. Import from VM | Discover any repos not yet covered by a local profile | `importFromVm()`: SSH scan → `planImport` → write new profiles + auto-select |
+| 2. Final sync tick | Bring un-synced VM edits home **before** any wipe | A full sync tick (§6): read VM files → `vm` branch → merge |
+| 3. Conflict gate | Verify no unresolved merge conflicts | `configMergeGate()`: if conflicted/mergeInProgress → **block** with an error and "Open config repo" button |
+| 4. Provision | Wipe (reinstall), then seed the fresh VM's store | **Write files from `main`** into the empty `/opt/construct/projects`; reset `vm` to `main` |
+
+Steps 1–3 run as a pre-flight in the extension's reprovision/reinstall/redownload
+handler. Steps 1 and 2 are **advisory**: if the VM is unreachable or sync is
+incomplete, a modal warning lets the user choose "Continue anyway" (accepting the
+risk of missing profiles) or cancel. Step 3 is **un-bypassable**: the only way
+forward when conflicts exist is to open the config repo (offered as a button in a
+modal warning), resolve the merge, commit, and retry.
 
 Seeding is plain file writes through the existing upload/scp channel — no git
 plumbing on the VM, no push-into-empty-repo edge cases. The existing
@@ -290,8 +307,9 @@ auth/history backup ([`bin/export-config.sh`](../bin/export-config.sh)) still
 runs for the non-profile data (subscription auth, chat history, git creds, …);
 the profile portion moves to the sync tick above.
 
-> Because the VM store is wiped on a full reinstall, step 1 is not optional — it
-> is the only thing that carries an agent edit made since the last tick.
+> Because the VM store is wiped on a full reinstall, steps 1–2 carry the latest
+> agent edits home. Skipping them (via the "Continue anyway" escape) means any
+> edits made since the last automatic tick may be lost.
 
 ## 10. Git on the host — never required, strictly an upgrade
 
