@@ -626,8 +626,8 @@ async function lifecyclePreFlight(actionLabel) {
         ok: false,
         dir: gate.dir,
         reason: "Config sync has unresolved conflicts — resolve them before " + actionLabel +
-          ". Open the config repo in VS Code, resolve the merge conflicts, and commit." +
-          "\n\nOpen the config repo, resolve the merge conflicts in the editor, then commit and retry.",
+          ".\n\nOpen the config repo, resolve the merge conflicts in the editor, then commit and retry. " +
+          "The Config sync strip in the Projects panel lists the conflicting files.",
       };
     }
   }
