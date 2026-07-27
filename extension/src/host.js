@@ -189,6 +189,46 @@ function writeProjectProfile(scriptsDir, name, obj) {
 }
 
 /**
+ * Atomic create-if-absent: write a profile ONLY when no file with that name
+ * exists yet (case-insensitive, matching Windows/macOS filesystem semantics).
+ * Writes to a temp file first, then renames — so a crash mid-write never
+ * leaves a truncated final file. Returns true if the file was created, false
+ * if the destination already existed (or a case-variant did). Throws on I/O
+ * errors other than "destination appeared after planning".
+ */
+function writeProjectProfileIfAbsent(scriptsDir, name, obj) {
+  if (!scriptsDir) throw new Error("No Construct scripts directory resolved");
+  const safe = safeProfileName(name);
+  if (!safe) throw new Error("Invalid project name");
+  const dir = projectsDir(scriptsDir);
+  fs.mkdirSync(dir, { recursive: true });
+  const dest = path.join(dir, safe + ".json");
+  // Fast pre-check: case-insensitive scan so "API.json" won't clobber "api.json"
+  // on Windows/macOS. Not authoritative (race possible) — the link below is.
+  const existingLower = new Set();
+  try {
+    for (const e of fs.readdirSync(dir)) existingLower.add(e.toLowerCase());
+  } catch (_) { /* empty dir is fine */ }
+  if (existingLower.has((safe + ".json").toLowerCase())) return false;
+  // Write complete content to a collision-safe temp, then hard-link to dest.
+  // linkSync is atomic and fails with EEXIST if dest appeared between the
+  // pre-check and now — no TOCTOU gap.
+  const tmp = dest + ".tmp." + process.pid + "." + Date.now();
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + "\n", "utf8");
+    try {
+      fs.linkSync(tmp, dest);
+    } catch (linkErr) {
+      if (linkErr.code === "EEXIST") return false;
+      throw linkErr;
+    }
+    return true;
+  } finally {
+    try { fs.unlinkSync(tmp); } catch (_) {}
+  }
+}
+
+/**
  * The persisted project SELECTION: the base names the user has ticked, kept as a
  * forward-compat `projects` array in .construct-settings.json (mirroring how
  * mapFromForm writes `vmMemoryGB` etc. for the installer to adopt later — the
@@ -204,6 +244,17 @@ function readSelectedProjects(scriptsDir) {
     if (s && !out.includes(s)) out.push(s);
   }
   return out;
+}
+
+/**
+ * Whether the `projects` key has been explicitly persisted (even as an empty array).
+ * Distinguishes "user has never saved a selection" (absent key) from "user
+ * deliberately saved an empty selection" (projects: []). The auto-import uses this
+ * to decide whether to seed from the VM's live list. Pure.
+ */
+function hasPersistedSelection(scriptsDir) {
+  const raw = readRawSettings(scriptsDir);
+  return Array.isArray(raw.projects);
 }
 
 /**
@@ -348,7 +399,7 @@ module.exports = {
   settingsPath, projectsDir, configDir,
   readRawSettings, writeRawSettings, mapToForm, mapFromForm,
   readSettings, saveSettings, readProjectProfile,
-  safeProfileName, listProjectProfiles, writeProjectProfile,
-  readSelectedProjects, saveSelectedProjects,
+  safeProfileName, listProjectProfiles, writeProjectProfile, writeProjectProfileIfAbsent,
+  readSelectedProjects, hasPersistedSelection, saveSelectedProjects,
   readAppliedAutoCheckpoints, saveAppliedAutoCheckpoints,
 };

@@ -12,7 +12,7 @@
 // of it is pure and unit-tested; the extension layer (extension.js) does the SSH
 // round-trip, the modal round-trip, and the toasts.
 //
-// DISCOVERY MECHANISM — importProjects scans over SSH directly rather than driving
+// DISCOVERY MECHANISM — importFromVm (auto-import) scans over SSH directly rather than driving
 // Provision-AgentVM.ps1 -Action export -ScanReposOnly. That PowerShell path first
 // uploads a fresh repo archive to the VM (a heavy, VM-mutating step) and needs the
 // host scripts + a console; here we only READ the VM, over the ssh runner the panel
@@ -135,15 +135,19 @@ function planImport(scan, existingProfiles) {
   const skipped = [];
   const coveredNames = [];
   const seenUrls = new Set();
-  const plannedNames = new Set(Object.keys(existing));
+  // Case-INSENSITIVE collision check: profile names are filenames, and on
+  // Windows/macOS the config dir is a case-insensitive filesystem, so "api" and
+  // "API" are the same file. Comparing case-sensitively would let a VM repo named
+  // "API" silently overwrite an existing "api.json".
+  const plannedNamesLower = new Set(Object.keys(existing).map(function (n) { return n.toLowerCase(); }));
   for (const repo of repos) {
     if (!repo || !repo.name) continue;
     const url = (repo.url || "").trim();
     if (!url) { skipped.push(repo.name); continue; }        // no remote -> can't re-clone
     if (covered.has(url) || seenUrls.has(url)) { coveredNames.push(repo.name); continue; }
-    if (plannedNames.has(repo.name)) { coveredNames.push(repo.name); continue; } // name taken -> keep existing
+    if (plannedNamesLower.has(repo.name.toLowerCase())) { coveredNames.push(repo.name); continue; }
     seenUrls.add(url);
-    plannedNames.add(repo.name);
+    plannedNamesLower.add(repo.name.toLowerCase());
     toWrite.push({ name: repo.name, profile: buildDiscoveredProfile(repo) });
   }
   return { toWrite, skipped, covered: coveredNames };
@@ -183,6 +187,29 @@ function reconcileSelection(requested, available) {
   const avail = Array.isArray(available) ? available.map(String) : [];
   const req = new Set((Array.isArray(requested) ? requested : []).map(String));
   return avail.filter((name) => req.has(name));
+}
+
+/**
+ * Additive selection merge: take an existing persisted selection, drop names
+ * that no longer exist on disk (stale), preserve the user's original relative
+ * order for surviving names, and append freshNames at the end. Pure.
+ *
+ *   additiveMergeSelection(["gone","b","a"], ["new"], ["a","b","new"])
+ *   → ["b","a","new"]   // "gone" pruned, order preserved, "new" appended
+ */
+function additiveMergeSelection(currentSelection, freshNames, available) {
+  const cur = Array.isArray(currentSelection) ? currentSelection : [];
+  const fresh = Array.isArray(freshNames) ? freshNames : [];
+  const avail = new Set(Array.isArray(available) ? available : []);
+  const result = [];
+  const seen = new Set();
+  for (const n of cur) {
+    if (avail.has(n) && !seen.has(n)) { result.push(n); seen.add(n); }
+  }
+  for (const n of fresh) {
+    if (avail.has(n) && !seen.has(n)) { result.push(n); seen.add(n); }
+  }
+  return result;
 }
 
 // ── Profile validation / sanitization (edit) ─────────────────────────────────
@@ -495,7 +522,7 @@ module.exports = {
   WORKSPACE_ROOT, MCP_AGENTS, RESERVED_PROFILE_NAMES,
   buildScanScript, parseScan,
   buildDiscoveredProfile, coveredUrls, planImport,
-  toChips, reconcileSelection,
+  toChips, reconcileSelection, additiveMergeSelection,
   sanitizeRepos, sanitizeSdks, sanitizeMcp, sanitizeMcpEntry, sanitizeStringArray, sanitizeProfile,
   isReservedProfileName, validateProfile, canonicalProfileJson,
   DEFAULT_INSTALL_REPO, DEFAULT_INSTALL_REF, installUrlFor, buildShareCommand, buildDeployPs1,

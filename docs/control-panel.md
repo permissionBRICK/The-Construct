@@ -89,8 +89,9 @@ subdirectory of that config directory.
 - **export config** — save auth, credentials, and profiles (launches a host console window).
 - **+ add project** — paste a git URL; it's cloned into `/root/repos` on the VM (safely,
   never through the shell) and opened in a new Remote-SSH window.
-- **import from VM** — scans the repos already checked out on the VM and writes a minimal
-  profile for each one not already covered (it never overwrites an existing profile).
+- **auto-import** — repos checked out on the VM are discovered automatically by the
+  config-sync tick and imported as profiles (never overwrites an existing profile).
+  Click **sync now** in the Config sync strip to trigger discovery immediately.
 - Click a chip to **edit** its profile in a modal — repos, SDKs (`node`/`python`/…), MCP
   servers (raw JSON, validated before save), host packages, and provision commands. The
   inline **▷** on a chip opens that project's folder on the VM in a new window. The
