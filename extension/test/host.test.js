@@ -133,6 +133,32 @@ try {
 
   ok("mapFromForm: null form -> {}", JSON.stringify(host.mapFromForm(null)) === "{}");
 
+  // ── the automatic-checkpoint "applied" marker ──────────────────────────────
+  // Separate from the PREFERENCE: it records what was actually CONFIRMED onto the VM,
+  // and it is what makes the apply-offer correct when the Hyper-V probe can't read the
+  // VM's real policy. It must never leak into the form shape.
+  const ckDir = fs.mkdtempSync(path.join(os.tmpdir(), "construct-marker-"));
+  fs.writeFileSync(host.settingsPath(ckDir), JSON.stringify({ gitUserName: "Neo", vmAutoCheckpoints: false }));
+  ok("applied: absent -> null (never confirmed, NOT false)", host.readAppliedAutoCheckpoints(ckDir) === null);
+  ok("applied: the marker is not a form field", !("autoCheckpointsApplied" in host.readSettings(ckDir)));
+  host.saveAppliedAutoCheckpoints(ckDir, false);
+  ok("applied: false is recorded as false, not dropped", host.readAppliedAutoCheckpoints(ckDir) === false);
+  ok("applied: writing the marker preserves unmanaged keys",
+    host.readRawSettings(ckDir).gitUserName === "Neo" && host.readRawSettings(ckDir).vmAutoCheckpoints === false);
+  host.saveAppliedAutoCheckpoints(ckDir, true);
+  ok("applied: true round-trips", host.readAppliedAutoCheckpoints(ckDir) === true);
+  host.saveAppliedAutoCheckpoints(ckDir, null);
+  ok("applied: null clears the marker", host.readAppliedAutoCheckpoints(ckDir) === null &&
+    !("vmAutoCheckpointsApplied" in host.readRawSettings(ckDir)));
+  fs.writeFileSync(host.settingsPath(ckDir), JSON.stringify({ vmAutoCheckpointsApplied: "yes" }));
+  ok("applied: a malformed marker reads as never-confirmed", host.readAppliedAutoCheckpoints(ckDir) === null);
+  // Saving the PREFERENCE must not silently clear the applied marker (they are
+  // independent: the preference moving is not proof the VM followed).
+  host.saveAppliedAutoCheckpoints(ckDir, true);
+  host.saveSettings(ckDir, { autoCheckpoints: false });
+  ok("applied: saving the preference leaves the marker intact",
+    host.readAppliedAutoCheckpoints(ckDir) === true && host.readRawSettings(ckDir).vmAutoCheckpoints === false);
+
   // ── saveSettings: merge preserves unmanaged keys ───────────────────────────
   fs.writeFileSync(host.settingsPath(newDir), JSON.stringify({ installedCommit: "abc123", gitUserName: "Old" }));
   const merged = host.saveSettings(newDir, { gitName: "Neo", gitEmail: "neo@zion.io", serveWeb: true, password: "nope" });

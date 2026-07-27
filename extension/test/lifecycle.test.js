@@ -91,6 +91,9 @@ ok("rebuild: omits -AutomaticCheckpoints when unset", !life.buildInvocation("rei
 // Capability gate: an older scripts dir has no -AutomaticCheckpoints parameter, and
 // Auto-Install.ps1 is an advanced function — passing it would fail to BIND and the
 // rebuild would never start. Dropping the flag lets the old script's default stand.
+// The gate reads the PARAMETER out of Auto-Install.ps1 itself: a companion-file check
+// would misjudge a hand-assembled dir holding the new live-apply script next to an
+// old Auto-Install.ps1, and pass the flag into a binding failure.
 ok("rebuild: drops -AutomaticCheckpoints when the scripts don't support it",
   !life.buildInvocation("reinstall", { settings: { autoCheckpoints: true }, supportsCheckpoints: false }).args.includes("-AutomaticCheckpoints"));
 ok("rebuild: keeps -AutomaticCheckpoints when supported (and when unspecified)",
@@ -114,6 +117,22 @@ ok("setCheckpoints: non-boolean enabled -> null",
   life.buildInvocation("setCheckpoints", { enabled: null }) === null);
 ok("setCheckpoints: labels say which way it went", chkOn.label === "Enable automatic checkpoints" && chkOff.label === "Disable automatic checkpoints");
 ok("setCheckpoints: passes -FromPanel (no pause on success)", chkOff.args.includes("-FromPanel"));
+
+// scriptSupportsCheckpoints reads the real parameter, against a fake scripts dir.
+const fs = require("fs"), os = require("os"), path = require("path");
+const sd = fs.mkdtempSync(path.join(os.tmpdir(), "construct-life-"));
+ok("capability: no Auto-Install.ps1 at all -> unsupported", life.scriptSupportsCheckpoints(sd) === false);
+fs.writeFileSync(path.join(sd, "Auto-Install.ps1"), "param(\n  [string]$T3Code = \"\"\n)\n");
+ok("capability: an old Auto-Install.ps1 -> unsupported", life.scriptSupportsCheckpoints(sd) === false);
+// The dangerous mixed-version case: the NEW live-apply script sitting next to an OLD
+// Auto-Install.ps1. A file-presence check would wrongly say "supported" and hand the
+// flag to a script that rejects it.
+fs.writeFileSync(path.join(sd, "Set-AgentVmCheckpoints.ps1"), "param([string]$Enabled)\n");
+ok("capability: companion script present but the parameter absent -> still unsupported",
+  life.scriptSupportsCheckpoints(sd) === false);
+fs.writeFileSync(path.join(sd, "Auto-Install.ps1"), "param(\n  [ValidateSet(\"true\",\"false\")]\n  [string]$AutomaticCheckpoints = \"false\"\n)\n");
+ok("capability: the parameter present -> supported", life.scriptSupportsCheckpoints(sd) === true);
+ok("capability: null scripts dir -> unsupported (no throw)", life.scriptSupportsCheckpoints(null) === false);
 
 ok("unknown action -> null", life.buildInvocation("bogus", {}) === null);
 

@@ -14,10 +14,11 @@
 
     Changing the policy does NOT remove a checkpoint Hyper-V has already taken, so
     when disabling, this script also deletes the existing AUTOMATIC checkpoints. It
-    never deletes a checkpoint you made yourself: checkpoints are classified by
-    Hyper-V's own IsAutomaticSnapshot flag (via WMI / the snapshot object), and a
-    checkpoint that merely LOOKS automatic by name is listed and only removed after
-    an explicit "yes" in the console.
+    never deletes a checkpoint you made yourself WITHOUT ASKING: checkpoints are
+    classified by Hyper-V's own IsAutomaticSnapshot flag (via WMI / the snapshot object),
+    and only those are removed unattended. On a host that doesn't report the flag, a
+    checkpoint that merely LOOKS automatic by name is shown separately and removed only
+    if you type "yes" for that specific one -- so an approved deletion is always yours.
 
     Requires elevation (Hyper-V cmdlets); self-elevates when run directly.
 
@@ -101,16 +102,19 @@ function Write-Step($msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)   { Write-Host "    $msg" -ForegroundColor Green }
 function Write-Note($msg) { Write-Host "    $msg" -ForegroundColor DarkGray }
 
-# Shared helpers: the automatic-checkpoint classifier.
-$commonLib = Join-Path $PSScriptRoot "lib\AgentVm.Common.ps1"
-if (-not (Test-Path -LiteralPath $commonLib)) { throw "Required helper not found: $commonLib" }
-. $commonLib
-
 $wantEnabled = ($Enabled -eq "true")
 $wantRemoval = ($RemoveExisting -eq "true")
 $failed = $false
 
 try {
+    # Shared helpers: the automatic-checkpoint classifier. Loaded INSIDE the guarded
+    # block so a damaged/partial install fails through the same catch/finally as any
+    # other error -- a throw out here would skip the -FromPanel pause contract and the
+    # result file, and the panel console would just vanish.
+    $commonLib = Join-Path $PSScriptRoot "lib\AgentVm.Common.ps1"
+    if (-not (Test-Path -LiteralPath $commonLib)) { throw "Required helper not found: $commonLib" }
+    . $commonLib
+
     Write-Host ""
     Write-Host "  Automatic checkpoints -> $(if ($wantEnabled) { 'ON' } else { 'OFF' })  ($VmName)" -ForegroundColor White
 
@@ -153,6 +157,12 @@ try {
     } else {
         Write-Step "Removing existing automatic checkpoints"
         $found = Get-AgentVmAutomaticCheckpoint -VmName $VmName
+        if (-not $found.Enumerated) {
+            # The policy is changed, but we could not READ the checkpoint list -- so we
+            # cannot claim the existing automatic checkpoint was cleaned up. Fail loudly
+            # rather than printing "no checkpoints" over a checkpoint that is still there.
+            throw "Automatic checkpoints are now disabled, but this VM's checkpoints could not be listed, so an existing automatic checkpoint may remain. Check Hyper-V Manager (or re-run this script) to remove it."
+        }
         $certain  = @($found.Certain)
         $probable = @($found.Probable)
 
@@ -215,6 +225,17 @@ try {
     Write-Host ""
     Write-Host "  FAILED: $($_.Exception.Message)" -ForegroundColor Red
 } finally {
+    # Report the outcome to the control panel, which polls this file (the same mechanism
+    # Update-Construct.ps1 uses) and only records the setting as APPLIED on "ok" -- a
+    # declined UAC never reaches this code at all, which is exactly right. Written
+    # temp+rename so the panel can never read a half-written value. Best-effort.
+    if ($env:CONSTRUCT_CHECKPOINT_RESULT) {
+        try {
+            $tmp = "$($env:CONSTRUCT_CHECKPOINT_RESULT).tmp"
+            Set-Content -LiteralPath $tmp -Value $(if ($failed) { "fail" } else { "ok" }) -Encoding ASCII -NoNewline
+            Move-Item -LiteralPath $tmp -Destination $env:CONSTRUCT_CHECKPOINT_RESULT -Force
+        } catch { }
+    }
     # Panel launches skip the pause on success (the panel reports the result); a
     # failure always pauses so the message can be read before the console closes.
     if ((-not $FromPanel) -or $failed) {

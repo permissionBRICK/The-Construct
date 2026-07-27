@@ -147,6 +147,21 @@ function buildInvocation(action, opts = {}) {
   }
 }
 
+/**
+ * Do the host scripts in `scriptsDir` understand `-AutomaticCheckpoints`? Read the
+ * ANSWER out of Auto-Install.ps1 itself rather than inferring it from a sibling file's
+ * existence: a hand-assembled or partially-updated scripts dir can hold the newer
+ * Set-AgentVmCheckpoints.ps1 next to an older Auto-Install.ps1, and passing the flag to
+ * an advanced function that lacks the parameter is a BINDING failure — the rebuild would
+ * never start. Unreadable/absent → false (drop the flag; the script's own default stands).
+ */
+function scriptSupportsCheckpoints(scriptsDir) {
+  if (!scriptsDir) return false;
+  try {
+    return /\$AutomaticCheckpoints\b/.test(fs.readFileSync(path.join(scriptsDir, AUTO_INSTALL), "utf8"));
+  } catch (_) { return false; }
+}
+
 /** A PowerShell single-quoted string literal (embedded quotes doubled). */
 function psSingleQuote(s) { return "'" + String(s).replace(/'/g, "''") + "'"; }
 
@@ -341,7 +356,7 @@ function launchHostScript(opts) {
 }
 
 /**
- * Run a lifecycle action. `opts`: { scriptsDir, backupMode?, projects?, enabled? }.
+ * Run a lifecycle action. `opts`: { scriptsDir, backupMode?, projects?, enabled?, env? }.
  * scriptsDir must be pre-resolved by the caller (it owns the construct.scriptsDir
  * setting); `enabled` is the setCheckpoints on/off. The destructive actions confirm
  * first; everything launches a new host console.
@@ -364,20 +379,30 @@ function run(action, opts = {}) {
     backupMode: opts.backupMode,
     projects,
     enabled: opts.enabled,
-    // Capability probe: the live-apply script ships in the same commit as the rebuild
-    // scripts' -AutomaticCheckpoints parameter, so its presence is the version marker
-    // for "these scripts understand the flag".
-    supportsCheckpoints: fs.existsSync(path.join(scriptsDir, CHECKPOINTS)),
+    supportsCheckpoints: scriptSupportsCheckpoints(scriptsDir),
   });
   if (!inv) return;
+  // Honesty gate: when the scripts are too old to take -AutomaticCheckpoints we drop the
+  // flag (see buildInvocation) — but an old Create-AgentVM.ps1 hardcodes automatic
+  // checkpoints ON, so silently rebuilding would produce the OPPOSITE of the saved
+  // preference. Say so before the rebuild rather than after.
+  if (inv.destructive && !inv.args.includes("-AutomaticCheckpoints")) {
+    let wantsOff = false;
+    try { wantsOff = host.readSettings(scriptsDir).autoCheckpoints === false; } catch (_) {}
+    if (wantsOff && !scriptSupportsCheckpoints(scriptsDir)) {
+      vscode.window.showWarningMessage(
+        "These host scripts are too old to honour the “Automatic checkpoints: off” setting, so the rebuilt VM will have Hyper-V's automatic checkpoints ON. Update Construct first to avoid that."
+      );
+    }
+  }
   Promise.resolve(inv.destructive ? confirmDestructive(inv) : true).then((ok) => {
-    if (ok) launchHostScript({ scriptsDir, script: inv.script, args: inv.args, elevate: inv.elevate, label: inv.label });
+    if (ok) launchHostScript({ scriptsDir, script: inv.script, args: inv.args, elevate: inv.elevate, label: inv.label, env: opts.env });
   });
 }
 
 module.exports = {
   PROVISION, AUTO_INSTALL, CHECKPOINTS, BACKUP_DIR_NAME,
-  normalizeBackupMode, buildInvocation,
+  normalizeBackupMode, buildInvocation, scriptSupportsCheckpoints,
   psSingleQuote, winQuoteArg, buildChildCommandLine, buildOuterCommand, buildCallCommand, buildHostLaunch,
   hostLaunchSpawnOptions, launchHostScript, run, configure,
 };

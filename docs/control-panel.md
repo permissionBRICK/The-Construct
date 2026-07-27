@@ -245,11 +245,14 @@ that way too, each one is shown separately in the console and removed only if yo
 for it. Answer anything else and it's kept.
 
 Choosing **Later** is fine: the preference is saved either way and takes effect on the next
-rebuild — and because the panel compares your setting against the VM's *actual* Hyper-V
-policy (not against what the settings file used to say), saving again still offers to apply
-it while the two disagree. That's also what makes the toggle work on a VM created before
+rebuild — and saving again still offers to apply it while the VM disagrees. The panel
+compares your setting against the VM's *actual* Hyper-V policy, not against what the
+settings file used to say, which is what makes the toggle work on a VM created before
 Construct started disabling checkpoints: its policy is on, the saved preference is off, so
-the first save offers to fix it.
+the first save offers to fix it. Reading that policy needs Hyper-V access (the installer
+adds you to **Hyper-V Administrators**, effective at your next sign-in); until then the
+panel falls back to remembering whether an apply has ever succeeded, so the offer still
+appears — just once per setting rather than for as long as the VM disagrees.
 
 You can also run it by hand:
 

@@ -158,25 +158,61 @@ ok("SHUTDOWN_CMD returns immediately (--no-block)", vm.SHUTDOWN_CMD === "systemc
   ok("autochk query: wedged process -> unknown", (await vm.queryAutoCheckpoints({ _platform: "win32", _spawn: fakeSpawn({ neverClose: true }, {}), timeoutMs: 30 })) === "unknown");
 
   // ── shouldOfferCheckpointApply ────────────────────────────────────────────
+  // Signature: (actual, wantEnabled, applied) where `applied` is the value last
+  // CONFIRMED onto the VM (null = never). Deliberately NOT "did the preference
+  // change?" — that is the bug two review rounds kept catching.
   const offer = vm.shouldOfferCheckpointApply;
-  // THE UPGRADE PATH: VM policy on, user wants off, preference never changed (no key
-  // on disk, form default off). Must still offer — this is the bug review caught.
-  ok("offer: VM on + want off + unchanged -> offers (the upgrade path)", offer("on", false, false) === true);
-  ok("offer: VM off + want on -> offers", offer("off", true, false) === true);
-  // Retry after "Later" / a declined UAC: the file already holds the wanted value, so
-  // `changed` is false — the VM still disagreeing is what keeps the offer coming back.
-  ok("offer: keeps offering while the VM disagrees", offer("on", false, false) === true && offer("off", true, false) === true);
-  ok("offer: VM already agrees -> silent, however the preference moved",
-    offer("off", false, true) === false && offer("on", true, true) === false &&
-    offer("off", false, false) === false && offer("on", true, false) === false);
-  ok("offer: no VM -> never offers", offer("absent", true, true) === false && offer("absent", false, true) === false);
+  // THE UPGRADE PATH: VM policy on, user wants off, no saved key, nothing ever
+  // applied. Must offer — this is the whole point of the function.
+  ok("offer: VM on + want off -> offers (the upgrade path)", offer("on", false, null) === true);
+  ok("offer: VM off + want on -> offers", offer("off", true, null) === true);
+  // Retry after "Later" / a declined UAC: the preference file already holds the wanted
+  // value, so a changed-signal would be false — the VM still disagreeing is what keeps
+  // the offer coming back.
+  ok("offer: keeps offering while the VM disagrees, whatever the marker says",
+    offer("on", false, false) === true && offer("on", false, true) === true &&
+    offer("off", true, false) === true && offer("off", true, true) === true);
+  ok("offer: VM already agrees -> silent (real state wins over any marker)",
+    offer("off", false, null) === false && offer("on", true, null) === false &&
+    offer("off", false, true) === false && offer("on", true, false) === false);
+  ok("offer: no VM -> never offers", offer("absent", true, null) === false && offer("absent", false, null) === false);
   ok("offer: Hyper-V without automatic checkpoints -> never offers",
-    offer("unsupported", true, true) === false && offer("unsupported", false, true) === false);
-  // The probe is Hyper-V-permission gated, so 'unknown' is common. Fall back to the
-  // changed-signal: offer on a real transition, stay quiet otherwise (no nagging).
-  ok("offer: unknown falls back to the changed signal",
-    offer("unknown", true, true) === true && offer("unknown", false, true) === true &&
-    offer("unknown", true, false) === false && offer("unknown", false, false) === false);
+    offer("unsupported", true, null) === false && offer("unsupported", false, null) === false);
+  // 'unknown' is COMMON (the non-elevated Get-VM is permission gated), so it must not
+  // fall back to a changed-signal — that reproduces the upgrade bug exactly. It falls
+  // back to the applied-marker instead.
+  ok("offer: unknown + never applied -> offers (upgrade path survives a blind probe)",
+    offer("unknown", false, null) === true && offer("unknown", true, null) === true);
+  ok("offer: unknown + marker disagrees -> offers",
+    offer("unknown", true, false) === true && offer("unknown", false, true) === true);
+  ok("offer: unknown + marker agrees -> silent (bounded, not a nag)",
+    offer("unknown", true, true) === false && offer("unknown", false, false) === false);
+  ok("offer: unknown + non-boolean marker treated as never-applied",
+    offer("unknown", false, undefined) === true && offer("unknown", false, "false") === true);
+
+  // ── planCheckpointOffer ───────────────────────────────────────────────────
+  // The sequencing that lived un-tested inside extension.js's handler.
+  const plan = vm.planCheckpointOffer;
+  ok("plan: a payload carrying the boolean acts, using the MERGED value",
+    plan({ autoCheckpoints: false }, { autoCheckpoints: true }, { autoCheckpoints: false }).act === true &&
+    plan({ autoCheckpoints: false }, { autoCheckpoints: true }, { autoCheckpoints: false }).enabled === false);
+  // The partial-payload bug: only git fields posted, so mapFromForm left the stored
+  // `true` alone — reading "wants off" from the payload would offer to DISABLE and
+  // delete a checkpoint. Must not act at all.
+  ok("plan: a partial payload (no boolean) never acts",
+    plan({ gitName: "Neo" }, { autoCheckpoints: true }, { autoCheckpoints: true }).act === false);
+  ok("plan: null/undefined payload never acts",
+    plan(null, {}, {}).act === false && plan(undefined, {}, {}).act === false);
+  ok("plan: a non-boolean autoCheckpoints never acts",
+    plan({ autoCheckpoints: "true" }, {}, {}).act === false &&
+    plan({ autoCheckpoints: 1 }, {}, {}).act === false);
+  ok("plan: enabled always comes from merged, never from the payload",
+    plan({ autoCheckpoints: true }, {}, { autoCheckpoints: false }).enabled === false &&
+    plan({ autoCheckpoints: false }, {}, { autoCheckpoints: true }).enabled === true);
+  ok("plan: changed compares merged against prev (messaging only)",
+    plan({ autoCheckpoints: true }, { autoCheckpoints: false }, { autoCheckpoints: true }).changed === true &&
+    plan({ autoCheckpoints: true }, { autoCheckpoints: true }, { autoCheckpoints: true }).changed === false &&
+    plan({ autoCheckpoints: false }, {}, {}).changed === false);
 
   console.log(`\n  vmpower unit tests — ${pass}/${pass + fail} passed\n`);
   process.exit(fail ? 1 : 0);

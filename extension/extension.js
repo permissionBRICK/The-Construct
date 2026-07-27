@@ -715,16 +715,21 @@ function runStartAndConnect() {
 }
 
 /**
- * The automatic-checkpoint preference changed in the settings form. The saved value
- * is applied whenever the VM is next CREATED (Auto-Install → Create-AgentVM), which
- * covers every future reinstall/redownload — but the VM that exists right now keeps
- * Hyper-V's current policy until someone changes it. So offer to apply it now.
+ * The automatic-checkpoint preference was saved. The value is applied whenever the VM is
+ * next CREATED (Auto-Install → Create-AgentVM), which covers every future reinstall /
+ * redownload — but the VM that exists right now keeps Hyper-V's current policy until
+ * someone changes it. So offer to apply it now.
  *
  * "Apply now" launches Set-AgentVmCheckpoints.ps1 in an ELEVATED host console (the
- * Hyper-V cmdlets need admin → one UAC prompt). Turning the setting OFF also removes
- * the automatic checkpoint Hyper-V already took — the script only deletes checkpoints
- * it can positively identify as automatic and asks in-console about anything it can't,
- * so a checkpoint the user made themselves is never lost.
+ * Hyper-V cmdlets need admin → one UAC prompt). Turning the setting OFF also removes the
+ * automatic checkpoint Hyper-V already took — the script deletes only checkpoints it can
+ * positively identify as automatic, and asks about each one it can't, so a checkpoint the
+ * user made themselves is never deleted WITHOUT AN EXPLICIT YES.
+ *
+ * The script reports its outcome through a result file (the same mechanism
+ * Update-Construct.ps1 uses), and a confirmed run records `vmAutoCheckpointsApplied`.
+ * That marker is what makes the offer correct when the Hyper-V probe can't read the VM's
+ * real policy — see vmpower.shouldOfferCheckpointApply.
  *
  * Best-effort and non-blocking: an older install without the script, or a non-Windows
  * host, explains itself and leaves the saved preference in place for the next rebuild.
@@ -743,9 +748,12 @@ async function offerApplyCheckpoints(scriptsDir, enabled, changed) {
   // say. A VM created before Construct started disabling checkpoints has the policy ON
   // with no saved key at all, so a preference that "didn't change" (off → off) still
   // needs applying — and after "Later" or a declined UAC, the next save must offer again.
+  // When the (permission-gated) probe can't tell, the applied-marker stands in for it.
   const actual = await vmpower.queryAutoCheckpoints();
-  logLine(`checkpoints: want=${enabled ? "on" : "off"} actual=${actual} changed=${!!changed}`);
-  if (!vmpower.shouldOfferCheckpointApply(actual, enabled, changed)) return;
+  let applied = null;
+  try { applied = host.readAppliedAutoCheckpoints(scriptsDir); } catch (_) { applied = null; }
+  logLine(`checkpoints: want=${enabled ? "on" : "off"} actual=${actual} applied=${applied} changed=${!!changed}`);
+  if (!vmpower.shouldOfferCheckpointApply(actual, enabled, applied)) return;
   const scriptPath = path.join(scriptsDir, lifecycle.CHECKPOINTS);
   if (!fs.existsSync(scriptPath)) {
     // No live-apply script means these scripts predate the feature entirely — so the
@@ -758,7 +766,7 @@ async function offerApplyCheckpoints(scriptsDir, enabled, changed) {
   }
   const detail = enabled
     ? "Hyper-V will snapshot the VM at every start. This applies from the VM's next start; it's also used when the VM is rebuilt."
-    : "Hyper-V will stop snapshotting the VM at every start, and the automatic checkpoint it already took will be removed (its disk is merged back in the background). Checkpoints you created yourself are kept — the console asks before touching anything it can't identify as automatic.";
+    : "Hyper-V will stop snapshotting the VM at every start, and the automatic checkpoint it already took will be removed (its disk is merged back in the background). Checkpoints Hyper-V doesn't report as automatic are never removed on their own — the console asks about each one separately first.";
   const pick = await vscode.window.showInformationMessage(
     `Apply automatic checkpoints = ${enabled ? "on" : "off"} to the current VM now?`,
     { modal: true, detail: detail + " Needs administrator rights (a UAC prompt)." },
@@ -776,7 +784,36 @@ async function offerApplyCheckpoints(scriptsDir, enabled, changed) {
     );
     return;
   }
-  lifecycle.run("setCheckpoints", { scriptsDir, enabled });
+  // Result file: the elevated console is detached, so this is the only way to learn
+  // whether the change actually landed (a declined UAC or a Hyper-V error must NOT be
+  // recorded as applied). Mirrors runUpdateConstruct's CONSTRUCT_UPDATE_RESULT.
+  const resultFile = path.join(os.tmpdir(), `construct-checkpoints-${Date.now()}.result`);
+  try { fs.unlinkSync(resultFile); } catch (_) {}
+  lifecycle.run("setCheckpoints", { scriptsDir, enabled, env: { CONSTRUCT_CHECKPOINT_RESULT: resultFile } });
+  const startedAt = Date.now();
+  const timer = setInterval(() => {
+    let res = null;
+    try { res = fs.readFileSync(resultFile, "utf8").trim(); } catch (_) { /* not written yet */ }
+    if (res === "ok" || res === "fail") {
+      clearInterval(timer);
+      try { fs.unlinkSync(resultFile); } catch (_) {}
+      logLine(`checkpoints: result=${res}`);
+      if (res === "ok") {
+        // Only a CONFIRMED run updates the marker; a failure leaves it stale-but-honest
+        // so the next save offers again.
+        try { host.saveAppliedAutoCheckpoints(scriptsDir, enabled); } catch (e) { logLine(`checkpoints: marker write failed — ${e && e.message ? e.message : e}`); }
+        vscode.window.showInformationMessage(`Automatic checkpoints are now ${enabled ? "on" : "off"} on the Construct VM.`);
+      } else {
+        vscode.window.showWarningMessage("Changing automatic checkpoints didn't complete — see the console window for the error.");
+      }
+    } else if (Date.now() - startedAt > 10 * 60 * 1000) {
+      // Gave up waiting (a declined UAC never runs the script, so it never writes a
+      // result). The marker stays unset, so the next save offers again — correct.
+      clearInterval(timer);
+      try { fs.unlinkSync(resultFile); } catch (_) {}
+      logLine("checkpoints: timed out waiting for a result (UAC declined, or the console is still open)");
+    }
+  }, 1500);
 }
 
 /** Power the VM off over SSH (root → systemctl poweroff). Confirms first; warns
@@ -1408,15 +1445,12 @@ function handleMessage(message, webview, context) {
         // created — so the saved value rides the next reinstall/redownload for free.
         // Offer to apply it to the VM that exists right now too (elevated, UAC).
         //
-        // The value comes from the MERGED on-disk result, never from the raw payload:
-        // mapFromForm OMITS an absent boolean, so a partial save (a stale webview
-        // posting only the git fields) would otherwise read as "wants off" and offer
-        // to disable checkpoints the file still says are ON. Only act when the form
-        // actually carried the field.
-        if (message.settings && typeof message.settings.autoCheckpoints === "boolean") {
-          const wantChk = merged.autoCheckpoints === true;
-          const changedChk = wantChk !== (prev.autoCheckpoints === true);
-          offerApplyCheckpoints(scriptsDir, wantChk, changedChk)
+        // What to offer (and whether to offer at all) is decided by the pure
+        // vmpower.planCheckpointOffer — see its doc for why the value must come from
+        // the MERGED on-disk result and not from the raw payload.
+        const chkPlan = vmpower.planCheckpointOffer(message.settings, prev, merged);
+        if (chkPlan.act) {
+          offerApplyCheckpoints(scriptsDir, chkPlan.enabled, chkPlan.changed)
             .catch((err) => logLine(`checkpoints: ${err && err.message ? err.message : err}`));
         }
       } catch (e) {

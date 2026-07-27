@@ -298,6 +298,35 @@ function mapFromForm(form) {
   return out;
 }
 
+// ── Automatic-checkpoint "applied" marker ───────────────────────────────────--
+// `vmAutoCheckpoints` is the user's PREFERENCE; `vmAutoCheckpointsApplied` records the
+// value we last CONFIRMED onto the live VM (the elevated script reports success through
+// a result file). The two are separate because the panel's Hyper-V probe is
+// permission-gated: when it can't read the VM's real policy, this marker is the only
+// way to tell "already applied" from "never applied", and without it a VM created
+// before this feature (policy on, no saved key) would never be offered the fix.
+// Deliberately NOT part of mapToForm/mapFromForm — it is state, not a form field.
+
+const APPLIED_KEY = "vmAutoCheckpointsApplied";
+
+/** The last automatic-checkpoint value confirmed onto the VM: true, false, or null
+ *  when nothing has ever been confirmed (or the key is absent/malformed). Pure. */
+function readAppliedAutoCheckpoints(scriptsDir) {
+  const raw = readRawSettings(scriptsDir);
+  return typeof raw[APPLIED_KEY] === "boolean" ? raw[APPLIED_KEY] : null;
+}
+
+/** Record the value just confirmed onto the VM, merging over the existing file so no
+ *  unmanaged key is lost. `null` clears the marker. Throws without a scripts dir. */
+function saveAppliedAutoCheckpoints(scriptsDir, value) {
+  if (!scriptsDir) throw new Error("No Construct scripts directory resolved");
+  const merged = { ...readRawSettings(scriptsDir) };
+  if (value === null) delete merged[APPLIED_KEY];
+  else merged[APPLIED_KEY] = value === true;
+  writeRawSettings(scriptsDir, merged);
+  return merged;
+}
+
 /** Read settings from disk in the webview form shape. */
 function readSettings(scriptsDir) { return mapToForm(readRawSettings(scriptsDir)); }
 
@@ -321,4 +350,5 @@ module.exports = {
   readSettings, saveSettings, readProjectProfile,
   safeProfileName, listProjectProfiles, writeProjectProfile,
   readSelectedProjects, saveSelectedProjects,
+  readAppliedAutoCheckpoints, saveAppliedAutoCheckpoints,
 };

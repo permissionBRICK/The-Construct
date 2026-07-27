@@ -1424,7 +1424,12 @@ function Get-AgentVmAutomaticCheckpoint {
         Classify a VM's checkpoints into the ones we are CERTAIN are automatic and the
         ones that merely LOOK automatic. Returns a hashtable:
 
-            @{ All = <VMSnapshot[]>; Certain = <VMSnapshot[]>; Probable = <VMSnapshot[]> }
+            @{ Enumerated = <bool>; All = <VMSnapshot[]>; Certain = <...>; Probable = <...> }
+
+        Enumerated is $false when the checkpoint list could not be READ at all (no
+        Hyper-V module, unknown VM, permission failure). That is NOT the same as "this
+        VM has no checkpoints", and callers must not report a successful cleanup for it
+        -- an automatic checkpoint may well still be sitting there.
 
         Certain  -- an AUTHORITATIVE source said so: the snapshot object's own
                     IsAutomaticCheckpoint property (newer Hyper-V modules), or a hit in
@@ -1457,7 +1462,7 @@ function Get-AgentVmAutomaticCheckpoint {
         $snaps = @($Snapshots)
     } else {
         try { $snaps = @(Get-VMSnapshot -VMName $VmName -ErrorAction Stop) }
-        catch { return @{ All = @(); Certain = @(); Probable = @() } }
+        catch { return @{ Enumerated = $false; All = @(); Certain = @(); Probable = @() } }
     }
 
     $wmi = if ($null -ne $Wmi) { $Wmi } else { Get-AgentVmAutomaticCheckpointId }
@@ -1492,7 +1497,7 @@ function Get-AgentVmAutomaticCheckpoint {
         if (Test-AgentVmCheckpointNamePattern -Name $name -VmName $VmName) { $probable += $s }
     }
 
-    return @{ All = @($snaps); Certain = @($certain); Probable = @($probable) }
+    return @{ Enumerated = $true; All = @($snaps); Certain = @($certain); Probable = @($probable) }
 }
 
 function Get-RemoteOpenLink {
