@@ -221,6 +221,36 @@ The agent password is never stored — it's entered in the elevated console at r
 See [Project profiles & configuration](projects.md) and [Provisioning](provisioning.md) for
 what each setting maps to.
 
+### Automatic checkpoints
+
+Hyper-V's **automatic checkpoints** snapshot a VM every time it starts. That's a sensible
+default for a pet VM and a pure cost for a disposable agent VM: the checkpoint pins a
+differencing disk (`.avhdx`) that grows with every write, slows disk I/O, and has to be
+merged back whenever it's deleted. Construct therefore **creates VMs with automatic
+checkpoints off**, and the **Settings → VM resources → Automatic checkpoints** toggle
+(off by default) controls it.
+
+The saved value is applied whenever the VM is (re)created — every Reinstall / Redownload
+picks it up with no extra step. Because it's a Hyper-V property, it can't be changed by a
+Reprovision, so **saving the setting also offers to apply it to the VM you have right now**:
+answer **Apply now** and an elevated console (one UAC prompt) runs
+`Set-AgentVmCheckpoints.ps1`, which flips the policy and — when turning it *off* — removes
+the automatic checkpoint Hyper-V already took, so its disk gets merged back.
+
+Checkpoints you made yourself are never deleted. The script only removes checkpoints Hyper-V
+positively reports as automatic (its `IsAutomaticSnapshot` flag). On an older host that
+doesn't report the flag, anything matching Hyper-V's auto-generated name
+(`Agent-VM - (<timestamp>)`) is listed in the console and removed only after you type `yes`.
+
+Choosing **Later** is fine: the preference is saved either way and takes effect on the next
+rebuild. You can also run it by hand:
+
+```powershell
+.\Set-AgentVmCheckpoints.ps1 -Enabled false             # off + clean up the existing one
+.\Set-AgentVmCheckpoints.ps1 -Enabled true              # back to Hyper-V's default
+.\Set-AgentVmCheckpoints.ps1 -Enabled false -RemoveExisting false   # policy only
+```
+
 ### T3 Code web GUI
 
 The **T3 Code web GUI** toggle (off by default) opts the VM into

@@ -94,6 +94,11 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("open-tab posts openPanel", posted.some((m) => m.type === "openPanel"));
 
   await page.click("#gearBtn");
+  // Automatic checkpoints default OFF — that IS the feature, so the markup default
+  // (what a settings file with no stored key leaves standing) is pinned here, before
+  // any settings payload has touched the form.
+  check("settings: automatic checkpoints default to off in the markup",
+    (await page.getAttribute("#setAutoCheckpoints", "aria-checked")) === "false");
   const before = await page.getAttribute("#setServeWeb", "aria-checked");
   await page.click("#setServeWeb");
   const after = await page.getAttribute("#setServeWeb", "aria-checked");
@@ -105,10 +110,12 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await page.evaluate(() => window.postMessage({ type: "settings", settings: {
     gitName: "Trinity", gitEmail: "trin@zion.io", gitCred: false,
     ram: "16", disk: "120", ubuntu: "22.04", serveWeb: false, tunnel: true, smb: false, mic: true,
+    autoCheckpoints: true,
   } }, "*"));
   await page.waitForTimeout(60);
   check("settings populate: text fields", (await page.inputValue("#setGitName")) === "Trinity" && (await page.inputValue("#setRam")) === "16");
   check("settings populate: switches driven", (await page.getAttribute("#setMic", "aria-checked")) === "true" && (await page.getAttribute("#setSmb", "aria-checked")) === "false");
+  check("settings populate: automatic-checkpoints switch driven", (await page.getAttribute("#setAutoCheckpoints", "aria-checked")) === "true");
 
   // ...and a PARTIAL payload (e.g. a file the installer wrote with just the git
   // keys) must NOT force the switches it omits to off — regression for applySettings.
@@ -122,6 +129,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   const savePosted = await page.evaluate(() => window.__posted);
   const savedMsg = savePosted.find((m) => m.type === "saveSettings");
   check("save posts saveSettings carrying the form", savedMsg && savedMsg.settings && savedMsg.settings.gitName === "Neo");
+  check("save carries the automatic-checkpoints toggle", savedMsg && savedMsg.settings.autoCheckpoints === true);
   // Honesty: agents/projects aren't wired yet, so they must NOT be gathered, and
   // the settings view must not present ignored interactive agent/project chips.
   check("save omits unwired agents/projects", savedMsg && !("agents" in savedMsg.settings) && !("projects" in savedMsg.settings));

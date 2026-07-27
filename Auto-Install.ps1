@@ -123,6 +123,13 @@ param(
     # Forwarded down (Create-AgentVM.ps1 -> Provision-AgentVM.ps1): opt-in T3 Code
     # web GUI. Empty = keep the VM's saved choice; "true"/"false".
     [string]$T3Code = "",
+    # Forwarded to Create-AgentVM.ps1: Hyper-V automatic checkpoints (a snapshot at
+    # every VM start). OFF by default for Construct -- on a disposable agent VM the
+    # checkpoint only costs disk and I/O. Applies when the VM is CREATED (install /
+    # reinstall / redownload); the control panel's Settings -> VM resources toggle
+    # can also apply it to an existing VM via Set-AgentVmCheckpoints.ps1. "true"/"false".
+    [ValidateSet("true", "false")]
+    [string]$AutomaticCheckpoints = "false",
     [switch]$SkipChecksum,
     [switch]$SkipCreateVm,
     [switch]$Force,
@@ -1519,6 +1526,7 @@ $createArgs = @{
     ClaudePartialStreaming = $ClaudePartialStreaming
     MicPassthrough = $MicPassthrough
     T3Code        = $T3Code
+    AutomaticCheckpoints = $AutomaticCheckpoints
     # -Auto: Create-AgentVM skips its own Provision call and this script's
     # try/finally owns the final pause.
     Auto          = $true

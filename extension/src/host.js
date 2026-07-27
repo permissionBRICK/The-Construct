@@ -248,6 +248,7 @@ function mapToForm(raw) {
   if (typeof raw.micPassthrough === "boolean") form.mic = raw.micPassthrough;
   if (typeof raw.claudePartialStreaming === "boolean") form.partialStreaming = raw.claudePartialStreaming;
   if (typeof raw.t3code === "boolean") form.t3code = raw.t3code;
+  if (typeof raw.vmAutoCheckpoints === "boolean") form.autoCheckpoints = raw.vmAutoCheckpoints;
   return form;
 }
 
@@ -293,6 +294,7 @@ function mapFromForm(form) {
   setBool("claudePartialStreaming", form.partialStreaming);
   setBool("micPassthrough", form.mic);
   setBool("t3code", form.t3code);
+  setBool("vmAutoCheckpoints", form.autoCheckpoints);
   return out;
 }
 

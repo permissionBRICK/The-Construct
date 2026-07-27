@@ -80,6 +80,28 @@ ok("redownload: threads -T3Code from settings", has(red.args, "-T3Code", "true")
 const redNoRel = life.buildInvocation("redownload", { settings: {} });
 ok("redownload: omits -UbuntuRelease when unset", !redNoRel.args.includes("-UbuntuRelease"));
 
+// ── automatic checkpoints ────────────────────────────────────────────────────
+// The preference is a Hyper-V property fixed at VM-CREATION time, so it rides the
+// rebuild actions (which run Create-AgentVM) and NOT reprovision (which never
+// touches Hyper-V); an existing VM is changed by the separate setCheckpoints action.
+ok("reinstall: threads -AutomaticCheckpoints false from settings", has(life.buildInvocation("reinstall", { settings: { autoCheckpoints: false } }).args, "-AutomaticCheckpoints", "false"));
+ok("reinstall: -AutomaticCheckpoints true when enabled", has(life.buildInvocation("reinstall", { settings: { autoCheckpoints: true } }).args, "-AutomaticCheckpoints", "true"));
+ok("redownload: threads -AutomaticCheckpoints", has(life.buildInvocation("redownload", { settings: { autoCheckpoints: true } }).args, "-AutomaticCheckpoints", "true"));
+ok("rebuild: omits -AutomaticCheckpoints when unset", !life.buildInvocation("reinstall", { settings: {} }).args.includes("-AutomaticCheckpoints"));
+ok("reprovision: never sends -AutomaticCheckpoints (no Hyper-V access)", !life.buildInvocation("reprovision", { settings: { autoCheckpoints: true } }).args.includes("-AutomaticCheckpoints"));
+
+const chkOff = life.buildInvocation("setCheckpoints", { enabled: false });
+const chkOn = life.buildInvocation("setCheckpoints", { enabled: true });
+ok("setCheckpoints: uses the checkpoint script", chkOff.script === life.CHECKPOINTS && life.CHECKPOINTS === "Set-AgentVmCheckpoints.ps1");
+ok("setCheckpoints: elevated (Hyper-V needs admin), not modal-destructive", chkOff.elevate === true && chkOff.destructive === false);
+ok("setCheckpoints: -Enabled false", has(chkOff.args, "-Enabled", "false"));
+ok("setCheckpoints: -Enabled true", has(chkOn.args, "-Enabled", "true"));
+ok("setCheckpoints: missing/undefined enabled -> false (never silently turns it on)",
+  has(life.buildInvocation("setCheckpoints", {}).args, "-Enabled", "false") &&
+  has(life.buildInvocation("setCheckpoints", { enabled: "yes" }).args, "-Enabled", "false"));
+ok("setCheckpoints: labels say which way it went", chkOn.label === "Enable automatic checkpoints" && chkOff.label === "Disable automatic checkpoints");
+ok("setCheckpoints: passes -FromPanel (no pause on success)", chkOff.args.includes("-FromPanel"));
+
 ok("unknown action -> null", life.buildInvocation("bogus", {}) === null);
 
 // ── -FromPanel: every panel launch skips the script's end-of-run pause ───────
