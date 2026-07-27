@@ -83,7 +83,8 @@ const SYNC_TICK_MIN_MS = 5 * 60 * 1000;
 let syncTickInFlight = false; // prevent concurrent ticks
 let lastSyncResult = null;    // most recent TickResult (for state.configSync)
 let configWatcher = null;     // fs.watch handle on cfgDir/projects
-let lastAutoImportAt = 0;     // ms: last auto-import (throttled like the sync tick)
+let lastAutoImportAt = 0;     // ms: last auto-import attempt (stamped BEFORE awaiting)
+let importInFlight = false;   // coalesce concurrent import attempts
 
 // ── Diagnostics log ─────────────────────────────────────────────────────────────
 // A "Construct" Output channel + a log file, so what the panel does (esp. the EXACT
@@ -516,27 +517,20 @@ async function runConfigSync() {
  *  fresh names ride along. */
 async function autoEnableNewProfiles(before, after) {
   try {
+    var afterArr = after || [];
     var beforeSet = new Set(before || []);
-    var fresh = (after || []).filter(function (n) {
+    var fresh = afterArr.filter(function (n) {
       return n && !beforeSet.has(n) && !projects.isReservedProfileName(n);
     });
     if (!fresh.length) return;
     var scriptsDir = resolveScriptsDir();
     if (!scriptsDir) return;
-    // When the user has explicitly saved a selection (even []), start from it —
-    // never fall back to the VM live set (that would re-select profiles the user
-    // deliberately deselected). When no selection was ever persisted, seed from
-    // the VM's current projects (effectiveProjects fallback).
-    var current;
-    if (host.hasPersistedSelection(scriptsDir)) {
-      current = host.readSelectedProjects(scriptsDir);
-    } else {
-      current = await effectiveProjects();
-    }
-    var merged = current.slice();
-    for (var i = 0; i < fresh.length; i++) {
-      if (!merged.includes(fresh[i])) merged.push(fresh[i]);
-    }
+    // When no selection was ever persisted, the seeded state lets effectiveProjects
+    // pull from the VM live set — fresh names ride along automatically.
+    if (!host.hasPersistedSelection(scriptsDir)) return;
+    var current = host.readSelectedProjects(scriptsDir);
+    var available = host.listProjectProfiles(scriptsDir);
+    var merged = projects.additiveMergeSelection(current, fresh, available);
     host.saveSelectedProjects(scriptsDir, merged);
     logLine("auto-enabled new project profile(s) from sync: " + fresh.join(", ") + " (selection now: " + merged.join(", ") + ")");
   } catch (e) {
@@ -575,32 +569,53 @@ async function configMergeGate() {
  * determine the state, it blocks rather than proceeding blindly.
  */
 async function lifecyclePreFlight(actionLabel) {
+  var cfgDir = resolveCfgDir();
   // (a) Import any VM repos not yet covered by a local profile.
-  try { await importFromVm(); } catch (_) {}
-  // (b) Run one final config-sync tick so profile files are synced.
-  try { await runConfigSync(); } catch (_) {}
-  // (c) Conflict gate: if there are sync conflicts, do NOT proceed.
-  // Fail-CLOSED: an exception from the gate (git error, repo-state error)
-  // blocks with an honest message rather than proceeding without verification.
-  var gate;
-  try {
-    gate = await configMergeGate();
-  } catch (e) {
-    return {
-      ok: false,
-      dir: resolveCfgDir(),
-      reason: "Could not verify config sync state before " + actionLabel +
-        ". Check the config repo for issues, then try again." +
-        (e && e.message ? " (" + e.message + ")" : ""),
-    };
+  var importResult;
+  try { importResult = await importFromVm(); } catch (_) { importResult = null; }
+  if (!importResult) {
+    var skip = await vscode.window.showWarningMessage(
+      "Could not reach the VM to check for new project configs. " +
+        "Proceeding may miss repos not yet imported. Continue with " + actionLabel + "?",
+      { modal: true }, "Continue anyway");
+    if (skip !== "Continue anyway") return { ok: false, reason: actionLabel + " cancelled." };
   }
-  if (gate.blocked) {
-    return {
-      ok: false,
-      dir: gate.dir,
-      reason: "Config sync has unresolved conflicts — resolve them before " + actionLabel +
-        ". Open the config repo in VS Code, resolve the merge conflicts, and commit.",
-    };
+  // (b) Run one final config-sync tick so profile files are synced.
+  var git = await detectGitCached();
+  if (git.present) {
+    var syncResult;
+    try { syncResult = await runConfigSync(); } catch (_) { syncResult = null; }
+    if (!syncResult || syncResult.lockBusy || syncResult.blocked || (!syncResult.ok && !syncResult.conflict)) {
+      var reason = syncResult && syncResult.lockBusy ? "Another VS Code window holds the sync lock."
+        : syncResult && syncResult.blocked ? ("Sync is blocked: " + (syncResult.blockedReason || "unknown"))
+        : "Config sync did not complete successfully.";
+      var pick = await vscode.window.showWarningMessage(
+        reason + " Profiles may not be up to date. Continue with " + actionLabel + "?",
+        { modal: true }, "Continue anyway");
+      if (pick !== "Continue anyway") return { ok: false, reason: actionLabel + " cancelled." };
+    }
+    // (c) Conflict gate: if there are sync conflicts, do NOT proceed.
+    // Fail-CLOSED: an exception from the gate blocks rather than proceeding.
+    var gate;
+    try {
+      gate = await configMergeGate();
+    } catch (e) {
+      return {
+        ok: false,
+        dir: cfgDir,
+        reason: "Could not verify config sync state before " + actionLabel +
+          ". Check the config repo for issues, then try again." +
+          (e && e.message ? " (" + e.message + ")" : ""),
+      };
+    }
+    if (gate.blocked) {
+      return {
+        ok: false,
+        dir: gate.dir,
+        reason: "Config sync has unresolved conflicts — resolve them before " + actionLabel +
+          ". Open the config repo in VS Code, resolve the merge conflicts, and commit.",
+      };
+    }
   }
   return { ok: true };
 }
@@ -626,14 +641,17 @@ async function maybeAutoSync() {
 
 /** Throttled auto-import: runs importFromVm regardless of git presence, so users
  *  without git still get automatic discovery. Uses the same 5-min throttle as the
- *  sync tick. When git IS present, the sync tick also triggers the import (Finding 3
- *  fix: git-absent users still get a steady-state import path). */
+ *  sync tick. Stamps BEFORE awaiting and coalesces concurrent attempts so offline/
+ *  hanging SSH doesn't cause unbounded overlapping scans. */
 async function maybeAutoImport() {
+  if (importInFlight) return;
   if (Date.now() - lastAutoImportAt < SYNC_TICK_MIN_MS) return;
+  importInFlight = true;
+  lastAutoImportAt = Date.now();
   try {
-    var result = await importFromVm();
-    if (result) lastAutoImportAt = Date.now();
+    await importFromVm();
   } catch (_) { /* best-effort */ }
+  finally { importInFlight = false; }
 }
 
 /** Set up fs.watch on cfgDir/projects (debounced 2s). Tolerates watcher errors. */
@@ -989,8 +1007,11 @@ async function importFromVm() {
   var imported = [];
   var failed = [];
   for (var item of plan.toWrite) {
-    try { host.writeProjectProfile(projRoot, item.name, item.profile); imported.push(item.name); }
-    catch (_) { failed.push(item.name); }
+    try {
+      var created = host.writeProjectProfileIfAbsent(projRoot, item.name, item.profile);
+      if (created) imported.push(item.name);
+      else failed.push(item.name);
+    } catch (_) { failed.push(item.name); }
   }
   lastAutoImportAt = Date.now();
   if (imported.length) {
@@ -1510,13 +1531,19 @@ function handleMessage(message, webview, context) {
       if (id === "updateConstruct") { runUpdateConstruct(); return; }
       // ── Config-sync commands (C6) ─────────────────────────────────────
       if (id === "syncConfigNow") {
-        runConfigSync().then(function () {
-          return buildConfigSyncState();
-        }).then(function (cs) {
-          cachedConfigSync = cs; refreshAll();
-        }).catch(function (e) {
-          vscode.window.showErrorMessage("Config sync failed: " + (e && e.message ? e.message : e));
-        });
+        (async function () {
+          try {
+            await runConfigSync();
+            // Always run import after sync (or instead of it for no-git hosts),
+            // bypassing the throttle since this is an explicit user action.
+            lastAutoImportAt = 0;
+            await importFromVm();
+          } catch (e) {
+            vscode.window.showErrorMessage("Config sync failed: " + (e && e.message ? e.message : e));
+          }
+          cachedConfigSync = await buildConfigSyncState();
+          refreshAll();
+        })();
         return;
       }
       if (id === "addConfigRemote") {

@@ -189,6 +189,44 @@ function writeProjectProfile(scriptsDir, name, obj) {
 }
 
 /**
+ * Atomic create-if-absent: write a profile ONLY when no file with that name
+ * exists yet (case-insensitive, matching Windows/macOS filesystem semantics).
+ * Writes to a temp file first, then renames — so a crash mid-write never
+ * leaves a truncated final file. Returns true if the file was created, false
+ * if the destination already existed (or a case-variant did). Throws on I/O
+ * errors other than "destination appeared after planning".
+ */
+function writeProjectProfileIfAbsent(scriptsDir, name, obj) {
+  if (!scriptsDir) throw new Error("No Construct scripts directory resolved");
+  const safe = safeProfileName(name);
+  if (!safe) throw new Error("Invalid project name");
+  const dir = projectsDir(scriptsDir);
+  fs.mkdirSync(dir, { recursive: true });
+  const dest = path.join(dir, safe + ".json");
+  const existingLower = new Set();
+  try {
+    for (const e of fs.readdirSync(dir)) existingLower.add(e.toLowerCase());
+  } catch (_) { /* empty dir is fine */ }
+  if (existingLower.has((safe + ".json").toLowerCase())) return false;
+  const tmp = dest + ".tmp." + process.pid;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + "\n", "utf8");
+    // Final guard: re-check before the atomic rename.
+    try {
+      fs.statSync(dest);
+      // Destination appeared after planning — another window won the race.
+      try { fs.unlinkSync(tmp); } catch (_) {}
+      return false;
+    } catch (_) { /* good — dest absent, proceed with rename */ }
+    fs.renameSync(tmp, dest);
+    return true;
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch (_) {}
+    throw e;
+  }
+}
+
+/**
  * The persisted project SELECTION: the base names the user has ticked, kept as a
  * forward-compat `projects` array in .construct-settings.json (mirroring how
  * mapFromForm writes `vmMemoryGB` etc. for the installer to adopt later — the
@@ -328,6 +366,6 @@ module.exports = {
   settingsPath, projectsDir, configDir,
   readRawSettings, writeRawSettings, mapToForm, mapFromForm,
   readSettings, saveSettings, readProjectProfile,
-  safeProfileName, listProjectProfiles, writeProjectProfile,
+  safeProfileName, listProjectProfiles, writeProjectProfile, writeProjectProfileIfAbsent,
   readSelectedProjects, hasPersistedSelection, saveSelectedProjects,
 };

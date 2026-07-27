@@ -449,5 +449,36 @@ ok("share: installUrlFor with custom repo/ref",
   ok("share-injection: single quote in name is doubled for PS", cmd2.includes("'it''s'"));
 })();
 
+// ── additiveMergeSelection ────────────────────────────────────────────────────
+ok("merge-sel: stale names pruned, order preserved, fresh appended", (() => {
+  var r = projects.additiveMergeSelection(["gone", "b", "a"], ["new"], ["a", "b", "new"]);
+  return eq(r, ["b", "a", "new"]);
+})());
+
+ok("merge-sel: empty current + fresh", (() => {
+  var r = projects.additiveMergeSelection([], ["x", "y"], ["x", "y", "z"]);
+  return eq(r, ["x", "y"]);
+})());
+
+ok("merge-sel: no fresh names, prunes stale only", (() => {
+  var r = projects.additiveMergeSelection(["a", "gone", "b"], [], ["a", "b"]);
+  return eq(r, ["a", "b"]);
+})());
+
+ok("merge-sel: deduplicates fresh that already in current", (() => {
+  var r = projects.additiveMergeSelection(["a", "b"], ["b", "c"], ["a", "b", "c"]);
+  return eq(r, ["a", "b", "c"]);
+})());
+
+ok("merge-sel: fresh name not in available is dropped", (() => {
+  var r = projects.additiveMergeSelection(["a"], ["phantom"], ["a"]);
+  return eq(r, ["a"]);
+})());
+
+ok("merge-sel: null/undefined inputs → empty", (() => {
+  var r = projects.additiveMergeSelection(null, null, null);
+  return eq(r, []);
+})());
+
 console.log(`\n  project-profile unit tests — ${pass}/${pass + fail} passed\n`);
 process.exit(fail ? 1 : 0);

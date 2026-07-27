@@ -189,6 +189,29 @@ function reconcileSelection(requested, available) {
   return avail.filter((name) => req.has(name));
 }
 
+/**
+ * Additive selection merge: take an existing persisted selection, drop names
+ * that no longer exist on disk (stale), preserve the user's original relative
+ * order for surviving names, and append freshNames at the end. Pure.
+ *
+ *   additiveMergeSelection(["gone","b","a"], ["new"], ["a","b","new"])
+ *   → ["b","a","new"]   // "gone" pruned, order preserved, "new" appended
+ */
+function additiveMergeSelection(currentSelection, freshNames, available) {
+  const cur = Array.isArray(currentSelection) ? currentSelection : [];
+  const fresh = Array.isArray(freshNames) ? freshNames : [];
+  const avail = new Set(Array.isArray(available) ? available : []);
+  const result = [];
+  const seen = new Set();
+  for (const n of cur) {
+    if (avail.has(n) && !seen.has(n)) { result.push(n); seen.add(n); }
+  }
+  for (const n of fresh) {
+    if (avail.has(n) && !seen.has(n)) { result.push(n); seen.add(n); }
+  }
+  return result;
+}
+
 // ── Profile validation / sanitization (edit) ─────────────────────────────────
 // A profile edited in the panel arrives as arbitrary JSON over postMessage. Before
 // it is written to <name>.json it must be coerced to the schema
@@ -499,7 +522,7 @@ module.exports = {
   WORKSPACE_ROOT, MCP_AGENTS, RESERVED_PROFILE_NAMES,
   buildScanScript, parseScan,
   buildDiscoveredProfile, coveredUrls, planImport,
-  toChips, reconcileSelection,
+  toChips, reconcileSelection, additiveMergeSelection,
   sanitizeRepos, sanitizeSdks, sanitizeMcp, sanitizeMcpEntry, sanitizeStringArray, sanitizeProfile,
   isReservedProfileName, validateProfile, canonicalProfileJson,
   DEFAULT_INSTALL_REPO, DEFAULT_INSTALL_REF, installUrlFor, buildShareCommand, buildDeployPs1,
