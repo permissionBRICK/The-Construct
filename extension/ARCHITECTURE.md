@@ -140,7 +140,7 @@ extension/
     construct-patch-status.sh    read-only probe: prints CONSTRUCT_PARTIAL_STATUS + CONSTRUCT_GATE_
                                  STATUS = patched|stock|unknown|absent (drives repatch.js; never edits)
   test/
-    ui-smoke.js       Playwright headless-Chromium webview test (162 checks: panel + launcher +
+    ui-smoke.js       Playwright headless-Chromium webview test (165 checks: panel + launcher +
                       narrow overflow + settings round-trip + honesty + power buttons + add-project +
                       per-chip open + project edit modal + usage table + daily/monthly/total period tabs
                       (incl. period-change-without-usage blanks the table, same-period keeps it) +
@@ -155,7 +155,7 @@ extension/
                       upstream import planning, merge-file, read/write store scripts, repo state,
                       seeding, conflict handling (140 checks)
     host.test.js      plain-node scripts-dir resolution + settings merge + readProjectProfile +
-                      project-profile list/write/select + traversal (67 checks; fake %LOCALAPPDATA% tree)
+                      project-profile list/write/select + traversal + hasPersistedSelection + writeProjectProfileIfAbsent + race test (79 checks; fake %LOCALAPPDATA% tree)
     remote.test.js    plain-node Remote-SSH helpers — isConnectedToVm/remoteFolderUri + repoNameFromUrl/isLikelyGitUrl/buildCloneScript/projectOpenPath/shouldAutoOpenPanel + URI percent-encoding (71 checks)
     lifecycle.test.js plain-node buildInvocation + winQuoteArg/quoting/elevation units (48 checks)
     updates.test.js   plain-node update-check units — Construct compare/cache + agent semver/latest/script + fetchJson redirects/per-host Accept, injected fetch+clock+http (62 checks)
@@ -164,7 +164,7 @@ extension/
                       names, atomic writes, PROJECTS_STORE override (54 checks)
     projects.test.js  plain-node scan builder/parser + planImport merge + reconcileSelection +
                       sanitizeProfile (injection + prototype-pollution) + config-sync helpers:
-                      isReservedProfileName, validateProfile, canonicalProfileJson, share builders (147 checks)
+                      isReservedProfileName, validateProfile, canonicalProfileJson, case-insensitive planImport collision, additiveMergeSelection, share builders (166 checks)
     themes.test.js    plain-node UI-design units — registry shape + settings-enum sync with
                       package.json, css+preview files exist per design, normalize fallbacks
                       (hostile/unknown -> default), picker HTML nonce/CSP/escaping
@@ -182,8 +182,8 @@ Defined in `extension.js` (handleMessage), `media/panel.js` and `media/launcher.
 - `{type:'command', id, project?}` — ids: `reprovision`, `exportConfig`,
   `redownload`, `reinstall`, `updateConstruct`, `updateAgents`, `refresh`,
   `openProjectFolder`, `selectProfiles` (multi-select QuickPick → persist),
-  `exportUsage` (collect ccusage → Save dialog), `importProjects` (SSH repo scan →
-  write/merge profiles), `editProject` (+`project`; opens the edit modal),
+  `exportUsage` (collect ccusage → Save dialog),
+  `editProject` (+`project`; opens the edit modal),
   `connect` (open the VM over Remote-SSH),
   `startConnect` (elevated Start-VM then poll+open), `shutdown` (poweroff over SSH),
   `addProject` (prompt a git URL → clone over SSH → open in a new window),
@@ -487,6 +487,26 @@ module, regardless of `online`.
   (no LOCALAPPDATA / TEMP), profile operations fall back to the old scriptsDir path.
   D11: the "default" profile chip is rendered with a lock icon and does NOT open the
   edit modal on click; reserved names are refused by runSaveProject/runEditProject.
+- **Auto-import from VM (replaces the manual "import from VM" button).** When the
+  sync tick successfully reads the VM store, `importFromVm()` scans the VM's
+  checked-out repos over SSH (the same `buildScanScript`/`planImport` as the old
+  manual import) and writes a profile for each repo not already covered. Newly
+  imported profiles are auto-selected into the persisted selection via
+  `autoEnableNewProfiles` so they are included in the next reprovision/reinstall.
+  The import is idempotent (planImport never overwrites), non-interactive (no
+  toasts on the tick — results are logged), and degrades gracefully when the VM is
+  offline (the sync tick sets `vmReadOk:false` and the import is skipped).
+- **Reinstall/reprovision pre-flight.** Before a manual Reinstall, Redownload, or
+  Reprovision proceeds, the handler runs a three-step pre-flight via
+  `coalescedImport(true)` + `runConfigSync()` + `configMergeGate()`:
+  (a) import — if the VM is unreachable or imports have write failures, a modal
+  warning lets the user cancel or continue; (b) sync — inspects the result for
+  lockBusy/blocked/failure/vmReadOk:false and warns with a modal; (c) conflict
+  gate — if conflicted, a modal warning with "Open config repo" / "Cancel"
+  blocks the launch. Steps (a)/(b) are advisory (the user may proceed at their
+  own risk), while step (c) is un-bypassable: the only way forward is to resolve
+  the conflicts, commit, and retry. All import calls go through `coalescedImport`
+  so concurrent scans from overlapping triggers share a single SSH session.
 - **Destructive flows default to save→restore**; one-time overrides (existing
   backup / clean wipe) live in Settings → Custom reinstall, not as a persisted
   policy. On failure, offer a retry reusing the backup already taken.
@@ -645,7 +665,7 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
      item 8 copies `extension/` into `%USERPROFILE%\.vscode\extensions\` so the panel (and
      thus the auto-open-on-connect) is actually installed on the host.
 4. ✓ **DONE — Projects** — `src/projects.js` (pure) + host profile helpers.
-   `importProjects` scans the VM's checked-out repos OVER SSH (a jq-free TSV walk,
+   `importFromVm` (auto-import) scans the VM's checked-out repos OVER SSH (a jq-free TSV walk,
    `buildScanScript`/`parseScan`, mirroring bin/scan-repos.sh's core — chosen over
    `Provision-AgentVM.ps1 -ScanReposOnly` because that first uploads a repo archive
    and mutates the VM; here we only READ) and `planImport` writes a minimal profile

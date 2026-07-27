@@ -94,6 +94,23 @@ ok("plan: two scan repos sharing a url import only once", (() => {
 ok("plan: empty scan -> nothing", (() => { const p = projects.planImport([], {}); return !p.toWrite.length && !p.skipped.length; })());
 ok("plan: null scan -> nothing (no throw)", (() => { const p = projects.planImport(null, null); return !p.toWrite.length; })());
 
+// Case-insensitive name collision: on Windows/macOS the config dir is a
+// case-insensitive filesystem, so "api" and "API" are the same file.
+ok("plan: case-insensitive name collision blocks import", (() => {
+  const p = projects.planImport(
+    [{ name: "API", url: "https://h/o/api.git", branch: "m" }],
+    { api: { name: "api", repos: [{ url: "https://h/old-api.git" }] } }
+  );
+  return p.toWrite.length === 0 && p.covered.includes("API");
+})());
+ok("plan: case-insensitive collision within scan batch", (() => {
+  const p = projects.planImport([
+    { name: "app", url: "https://h/o/app.git", branch: "m" },
+    { name: "APP", url: "https://h/o/other.git", branch: "m" },
+  ], {});
+  return p.toWrite.length === 1 && p.toWrite[0].name === "app" && p.covered.includes("APP");
+})());
+
 // ── toChips / reconcileSelection ──────────────────────────────────────────────
 ok("chips: one per available profile, ticked from selection", eq(
   projects.toChips(["a", "b", "c"], ["b"]),
@@ -431,6 +448,37 @@ ok("share: installUrlFor with custom repo/ref",
   });
   ok("share-injection: single quote in name is doubled for PS", cmd2.includes("'it''s'"));
 })();
+
+// ── additiveMergeSelection ────────────────────────────────────────────────────
+ok("merge-sel: stale names pruned, order preserved, fresh appended", (() => {
+  var r = projects.additiveMergeSelection(["gone", "b", "a"], ["new"], ["a", "b", "new"]);
+  return eq(r, ["b", "a", "new"]);
+})());
+
+ok("merge-sel: empty current + fresh", (() => {
+  var r = projects.additiveMergeSelection([], ["x", "y"], ["x", "y", "z"]);
+  return eq(r, ["x", "y"]);
+})());
+
+ok("merge-sel: no fresh names, prunes stale only", (() => {
+  var r = projects.additiveMergeSelection(["a", "gone", "b"], [], ["a", "b"]);
+  return eq(r, ["a", "b"]);
+})());
+
+ok("merge-sel: deduplicates fresh that already in current", (() => {
+  var r = projects.additiveMergeSelection(["a", "b"], ["b", "c"], ["a", "b", "c"]);
+  return eq(r, ["a", "b", "c"]);
+})());
+
+ok("merge-sel: fresh name not in available is dropped", (() => {
+  var r = projects.additiveMergeSelection(["a"], ["phantom"], ["a"]);
+  return eq(r, ["a"]);
+})());
+
+ok("merge-sel: null/undefined inputs → empty", (() => {
+  var r = projects.additiveMergeSelection(null, null, null);
+  return eq(r, []);
+})());
 
 console.log(`\n  project-profile unit tests — ${pass}/${pass + fail} passed\n`);
 process.exit(fail ? 1 : 0);
