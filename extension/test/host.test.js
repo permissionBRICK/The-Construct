@@ -301,6 +301,38 @@ try {
     try { host.writeProjectProfileIfAbsent(root, "../evil", {}); return false; }
     catch (_) { return true; }
   })());
+
+  ok("write-if-absent: race — dest created after pre-check returns false", (() => {
+    // Simulate a race: create the destination between the readdirSync pre-check
+    // and the linkSync publish. Since linkSync is atomic (EEXIST if dest exists),
+    // the helper should return false and the content should be the "racer" content.
+    const d = path.join(root, "wia-race");
+    fs.mkdirSync(path.join(d, "projects"), { recursive: true });
+    fs.writeFileSync(path.join(d, "Auto-Install.ps1"), "");
+    // Monkey-patch linkSync to inject a competing write.
+    const origLink = fs.linkSync;
+    let injected = false;
+    fs.linkSync = function (src, dest) {
+      if (!injected) {
+        injected = true;
+        fs.writeFileSync(dest, '{"name":"racer"}\n', "utf8");
+      }
+      return origLink.call(fs, src, dest);
+    };
+    try {
+      var created = host.writeProjectProfileIfAbsent(d, "raceme", { name: "auto-import" });
+      var content = JSON.parse(fs.readFileSync(path.join(d, "projects", "raceme.json"), "utf8"));
+      return created === false && content.name === "racer";
+    } finally {
+      fs.linkSync = origLink;
+    }
+  })());
+
+  ok("write-if-absent: no temp files left after race", (() => {
+    const d = path.join(root, "wia-race");
+    var files = fs.readdirSync(path.join(d, "projects"));
+    return files.length === 1 && files[0] === "raceme.json";
+  })());
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }

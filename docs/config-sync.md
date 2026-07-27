@@ -295,8 +295,11 @@ The order becomes **import → sync → conflict gate → provision**:
 | 4. Provision | Wipe (reinstall), then seed the fresh VM's store | **Write files from `main`** into the empty `/opt/construct/projects`; reset `vm` to `main` |
 
 Steps 1–3 run as a pre-flight in the extension's reprovision/reinstall/redownload
-handler. Step 3 is **un-bypassable**: the only way forward when conflicts exist is
-to open the config repo, resolve the merge, commit, and retry.
+handler. Steps 1 and 2 are **advisory**: if the VM is unreachable or sync is
+incomplete, a modal warning lets the user choose "Continue anyway" (accepting the
+risk of missing profiles) or cancel. Step 3 is **un-bypassable**: the only way
+forward when conflicts exist is to open the config repo (offered as a button in a
+modal warning), resolve the merge, commit, and retry.
 
 Seeding is plain file writes through the existing upload/scp channel — no git
 plumbing on the VM, no push-into-empty-repo edge cases. The existing
@@ -304,8 +307,9 @@ auth/history backup ([`bin/export-config.sh`](../bin/export-config.sh)) still
 runs for the non-profile data (subscription auth, chat history, git creds, …);
 the profile portion moves to the sync tick above.
 
-> Because the VM store is wiped on a full reinstall, step 1 is not optional — it
-> is the only thing that carries an agent edit made since the last tick.
+> Because the VM store is wiped on a full reinstall, steps 1–2 carry the latest
+> agent edits home. Skipping them (via the "Continue anyway" escape) means any
+> edits made since the last automatic tick may be lost.
 
 ## 10. Git on the host — never required, strictly an upgrade
 

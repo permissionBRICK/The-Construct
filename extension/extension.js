@@ -84,7 +84,7 @@ let syncTickInFlight = false; // prevent concurrent ticks
 let lastSyncResult = null;    // most recent TickResult (for state.configSync)
 let configWatcher = null;     // fs.watch handle on cfgDir/projects
 let lastAutoImportAt = 0;     // ms: last auto-import attempt (stamped BEFORE awaiting)
-let importInFlight = false;   // coalesce concurrent import attempts
+let importInflightPromise = null; // shared promise for coalescing concurrent imports
 
 // ── Diagnostics log ─────────────────────────────────────────────────────────────
 // A "Construct" Output channel + a log file, so what the panel does (esp. the EXACT
@@ -498,7 +498,7 @@ async function runConfigSync() {
     // every sync tick. Runs AFTER the sync tick (not inside it) so the lock is
     // released and locally-written profiles don't race the git engine.
     if (result && result.ok && result.vmReadOk) {
-      try { await importFromVm(); } catch (e) {
+      try { await coalescedImport(true); } catch (e) {
         logLine("auto-import from VM failed: " + (e && e.message ? e.message : e));
       }
     }
@@ -525,12 +525,16 @@ async function autoEnableNewProfiles(before, after) {
     if (!fresh.length) return;
     var scriptsDir = resolveScriptsDir();
     if (!scriptsDir) return;
-    // When no selection was ever persisted, the seeded state lets effectiveProjects
-    // pull from the VM live set — fresh names ride along automatically.
-    if (!host.hasPersistedSelection(scriptsDir)) return;
-    var current = host.readSelectedProjects(scriptsDir);
-    var available = host.listProjectProfiles(scriptsDir);
-    var merged = projects.additiveMergeSelection(current, fresh, available);
+    var current;
+    if (host.hasPersistedSelection(scriptsDir)) {
+      current = host.readSelectedProjects(scriptsDir);
+    } else {
+      current = await effectiveProjects();
+    }
+    // Reconcile against the actual post-import profile list (afterArr), not
+    // scriptsDir — profiles live in cfgDir and afterArr is the authoritative
+    // set of names that exist after the import/sync completed.
+    var merged = projects.additiveMergeSelection(current, fresh, afterArr);
     host.saveSelectedProjects(scriptsDir, merged);
     logLine("auto-enabled new project profile(s) from sync: " + fresh.join(", ") + " (selection now: " + merged.join(", ") + ")");
   } catch (e) {
@@ -571,23 +575,32 @@ async function configMergeGate() {
 async function lifecyclePreFlight(actionLabel) {
   var cfgDir = resolveCfgDir();
   // (a) Import any VM repos not yet covered by a local profile.
-  var importResult;
-  try { importResult = await importFromVm(); } catch (_) { importResult = null; }
+  var importResult = await coalescedImport(true);
   if (!importResult) {
     var skip = await vscode.window.showWarningMessage(
       "Could not reach the VM to check for new project configs. " +
         "Proceeding may miss repos not yet imported. Continue with " + actionLabel + "?",
       { modal: true }, "Continue anyway");
     if (skip !== "Continue anyway") return { ok: false, reason: actionLabel + " cancelled." };
+  } else if (importResult.failed && importResult.failed.length) {
+    var fskip = await vscode.window.showWarningMessage(
+      "Some project configs could not be written: " + importResult.failed.join(", ") +
+        ". Continue with " + actionLabel + "?",
+      { modal: true }, "Continue anyway");
+    if (fskip !== "Continue anyway") return { ok: false, reason: actionLabel + " cancelled." };
   }
   // (b) Run one final config-sync tick so profile files are synced.
   var git = await detectGitCached();
   if (git.present) {
     var syncResult;
     try { syncResult = await runConfigSync(); } catch (_) { syncResult = null; }
-    if (!syncResult || syncResult.lockBusy || syncResult.blocked || (!syncResult.ok && !syncResult.conflict)) {
+    var syncProblem = !syncResult || syncResult.lockBusy || syncResult.blocked
+      || (!syncResult.ok && !syncResult.conflict)
+      || (syncResult.ok && syncResult.vmReadOk === false);
+    if (syncProblem) {
       var reason = syncResult && syncResult.lockBusy ? "Another VS Code window holds the sync lock."
         : syncResult && syncResult.blocked ? ("Sync is blocked: " + (syncResult.blockedReason || "unknown"))
+        : syncResult && syncResult.ok && syncResult.vmReadOk === false ? "Could not read VM config store — sync is incomplete."
         : "Config sync did not complete successfully.";
       var pick = await vscode.window.showWarningMessage(
         reason + " Profiles may not be up to date. Continue with " + actionLabel + "?",
@@ -613,20 +626,25 @@ async function lifecyclePreFlight(actionLabel) {
         ok: false,
         dir: gate.dir,
         reason: "Config sync has unresolved conflicts — resolve them before " + actionLabel +
-          ". Open the config repo in VS Code, resolve the merge conflicts, and commit.",
+          ". Open the config repo in VS Code, resolve the merge conflicts, and commit." +
+          "\n\nOpen the config repo, resolve the merge conflicts in the editor, then commit and retry.",
       };
     }
   }
   return { ok: true };
 }
 
-/** Show the pre-flight block message with an "Open config repo" action. */
+/** Show the pre-flight block as a modal warning with explicit action choices. */
 function showPreFlightBlock(result) {
   if (!result.dir) {
-    vscode.window.showErrorMessage(result.reason);
+    vscode.window.showWarningMessage(result.reason, { modal: true }, "OK");
     return;
   }
-  vscode.window.showErrorMessage(result.reason, "Open config repo").then(function (pick) {
+  vscode.window.showWarningMessage(
+    result.reason,
+    { modal: true },
+    "Open config repo", "Cancel"
+  ).then(function (pick) {
     if (pick === "Open config repo") {
       vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(result.dir), true);
     }
@@ -639,19 +657,26 @@ async function maybeAutoSync() {
   await runConfigSync();
 }
 
+/** Coalesced import: if an import is already in flight, join it instead of
+ *  starting a second SSH scan. When `force` is true, bypass the time throttle
+ *  (used by explicit user actions like Sync Now and lifecycle pre-flight). */
+function coalescedImport(force) {
+  if (importInflightPromise) return importInflightPromise;
+  if (!force && Date.now() - lastAutoImportAt < SYNC_TICK_MIN_MS) return Promise.resolve(null);
+  lastAutoImportAt = Date.now();
+  importInflightPromise = importFromVm().catch(function () { return null; }).then(function (r) {
+    importInflightPromise = null;
+    return r;
+  });
+  return importInflightPromise;
+}
+
 /** Throttled auto-import: runs importFromVm regardless of git presence, so users
  *  without git still get automatic discovery. Uses the same 5-min throttle as the
- *  sync tick. Stamps BEFORE awaiting and coalesces concurrent attempts so offline/
- *  hanging SSH doesn't cause unbounded overlapping scans. */
-async function maybeAutoImport() {
-  if (importInFlight) return;
-  if (Date.now() - lastAutoImportAt < SYNC_TICK_MIN_MS) return;
-  importInFlight = true;
-  lastAutoImportAt = Date.now();
-  try {
-    await importFromVm();
-  } catch (_) { /* best-effort */ }
-  finally { importInFlight = false; }
+ *  sync tick. Coalesces concurrent attempts so offline/hanging SSH doesn't cause
+ *  unbounded overlapping scans. */
+function maybeAutoImport() {
+  return coalescedImport(false);
 }
 
 /** Set up fs.watch on cfgDir/projects (debounced 2s). Tolerates watcher errors. */
@@ -1006,11 +1031,12 @@ async function importFromVm() {
   var plan = projects.planImport(scan, existing);
   var imported = [];
   var failed = [];
+  var raceSkipped = [];
   for (var item of plan.toWrite) {
     try {
       var created = host.writeProjectProfileIfAbsent(projRoot, item.name, item.profile);
       if (created) imported.push(item.name);
-      else failed.push(item.name);
+      else raceSkipped.push(item.name);
     } catch (_) { failed.push(item.name); }
   }
   lastAutoImportAt = Date.now();
@@ -1018,7 +1044,9 @@ async function importFromVm() {
     logLine("auto-import from VM: imported " + imported.join(", "));
     await autoEnableNewProfiles(profilesBefore, host.listProjectProfiles(projRoot));
   }
-  return { imported: imported, failed: failed, skipped: plan.skipped };
+  if (raceSkipped.length) logLine("auto-import: skipped (already exist): " + raceSkipped.join(", "));
+  if (failed.length) logLine("auto-import: write failures: " + failed.join(", "));
+  return { imported: imported, failed: failed, skipped: plan.skipped.concat(raceSkipped) };
 }
 
 // ── Mic passthrough (on-demand) ────────────────────────────────────────────────
@@ -1535,9 +1563,8 @@ function handleMessage(message, webview, context) {
           try {
             await runConfigSync();
             // Always run import after sync (or instead of it for no-git hosts),
-            // bypassing the throttle since this is an explicit user action.
-            lastAutoImportAt = 0;
-            await importFromVm();
+            // bypassing the throttle. Coalesced: joins in-flight scan if one exists.
+            await coalescedImport(true);
           } catch (e) {
             vscode.window.showErrorMessage("Config sync failed: " + (e && e.message ? e.message : e));
           }

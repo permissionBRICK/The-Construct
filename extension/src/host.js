@@ -203,26 +203,28 @@ function writeProjectProfileIfAbsent(scriptsDir, name, obj) {
   const dir = projectsDir(scriptsDir);
   fs.mkdirSync(dir, { recursive: true });
   const dest = path.join(dir, safe + ".json");
+  // Fast pre-check: case-insensitive scan so "API.json" won't clobber "api.json"
+  // on Windows/macOS. Not authoritative (race possible) — the link below is.
   const existingLower = new Set();
   try {
     for (const e of fs.readdirSync(dir)) existingLower.add(e.toLowerCase());
   } catch (_) { /* empty dir is fine */ }
   if (existingLower.has((safe + ".json").toLowerCase())) return false;
-  const tmp = dest + ".tmp." + process.pid;
+  // Write complete content to a collision-safe temp, then hard-link to dest.
+  // linkSync is atomic and fails with EEXIST if dest appeared between the
+  // pre-check and now — no TOCTOU gap.
+  const tmp = dest + ".tmp." + process.pid + "." + Date.now();
   try {
     fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + "\n", "utf8");
-    // Final guard: re-check before the atomic rename.
     try {
-      fs.statSync(dest);
-      // Destination appeared after planning — another window won the race.
-      try { fs.unlinkSync(tmp); } catch (_) {}
-      return false;
-    } catch (_) { /* good — dest absent, proceed with rename */ }
-    fs.renameSync(tmp, dest);
+      fs.linkSync(tmp, dest);
+    } catch (linkErr) {
+      if (linkErr.code === "EEXIST") return false;
+      throw linkErr;
+    }
     return true;
-  } catch (e) {
+  } finally {
     try { fs.unlinkSync(tmp); } catch (_) {}
-    throw e;
   }
 }
 
