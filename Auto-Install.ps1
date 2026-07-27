@@ -1161,7 +1161,12 @@ if (-not $PSBoundParameters.ContainsKey('AutomaticCheckpoints')) {
     try {
         $savedSettings = Read-ConstructSettings -Dir $PSScriptRoot
         if ($savedSettings -and $null -ne $savedSettings.vmAutoCheckpoints) {
-            $effectiveAutoCheckpoints = if ([bool]$savedSettings.vmAutoCheckpoints) { "true" } else { "false" }
+            # NOT [bool]: every non-empty PowerShell string is truthy, so a hand-edited
+            # settings file holding the STRING "false" would coerce to $true and silently
+            # enable checkpoints. Compare the rendered value instead -- $true renders
+            # "True", $false renders "False", and both JSON strings compare as written.
+            $savedText = "$($savedSettings.vmAutoCheckpoints)".Trim().ToLowerInvariant()
+            $effectiveAutoCheckpoints = if ($savedText -in @("true", "1")) { "true" } else { "false" }
             Write-Note "Automatic checkpoints: $effectiveAutoCheckpoints (from the saved control-panel setting)"
         }
     } catch { }
@@ -1561,7 +1566,14 @@ try {
         Write-Host "    turn them off from the control panel (Settings -> VM resources) or run Set-AgentVmCheckpoints.ps1." -ForegroundColor Yellow
     }
 } catch {
-    Write-Note "Could not check Create-AgentVM.ps1's parameters ($($_.Exception.Message)) -- passing -AutomaticCheckpoints as-is."
+    # Fail SAFE, not open. We are already past Remove-AgentVm here, so passing an argument
+    # the target might reject risks a binding failure with the old VM gone -- a broken
+    # rebuild. Dropping it only costs Hyper-V's default (checkpoints on), which the
+    # control panel can fix afterwards.
+    $createArgs.Remove('AutomaticCheckpoints')
+    Write-Warning "Could not check Create-AgentVM.ps1's parameters ($($_.Exception.Message))."
+    Write-Host "    Creating the VM without -AutomaticCheckpoints; set it afterwards from the control panel" -ForegroundColor Yellow
+    Write-Host "    (Settings -> VM resources) or with Set-AgentVmCheckpoints.ps1." -ForegroundColor Yellow
 }
 if ($restoreDir)         { $createArgs['RestoreDir']             = $restoreDir }
 if ($chosenCloneCredB64) { $createArgs['GitCloneCredentialsB64'] = $chosenCloneCredB64 }

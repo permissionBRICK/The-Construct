@@ -867,6 +867,33 @@ ok "checkpoint script: the result file is written temp+rename" (
 ok "checkpoint script: the common-lib load is inside the guarded block" (
     $chkScript.IndexOf('try {') -lt $chkScript.IndexOf('Required helper not found'))
 
+# ── Auto-Install.ps1 automatic-checkpoint source invariants ─────────────────
+# Both guards sit on paths only a Windows host with a partially-updated scripts dir
+# reaches, so pin them at the source level rather than leave them unverified.
+$aiScript = Get-Content -Raw (Join-Path $here "..\Auto-Install.ps1")
+
+# The VM is already DELETED by the time the create script is invoked, so an unsupported
+# parameter must be dropped rather than splatted into a binding failure.
+ok "auto-install: checks Create-AgentVM's parameters before splatting" (
+    $aiScript -match "Get-Command[^\r\n]*createScript" -and
+    $aiScript -match "Parameters\.ContainsKey\('AutomaticCheckpoints'\)")
+ok "auto-install: an unsupported OR unknowable parameter is REMOVED, not passed" (
+    ([regex]::Matches($aiScript, "createArgs\.Remove\('AutomaticCheckpoints'\)")).Count -ge 2)
+ok "auto-install: the capability guard precedes the create-script call" (
+    $aiScript.IndexOf("Parameters.ContainsKey('AutomaticCheckpoints')") -lt
+    $aiScript.IndexOf('& $createScript @createArgs'))
+
+# An unbound parameter (a hand run, or an older control-panel extension) must fall back
+# to the saved preference instead of the parameter default.
+ok "auto-install: an unbound parameter falls back to the saved preference" (
+    $aiScript -match "ContainsKey\('AutomaticCheckpoints'\)" -and $aiScript -match 'vmAutoCheckpoints')
+# Not [bool]: every non-empty string is truthy in PowerShell, so the string "false"
+# would enable checkpoints.
+ok "auto-install: the saved preference is not read through a [bool] cast" (
+    $aiScript -notmatch '\[bool\]\$savedSettings\.vmAutoCheckpoints')
+ok "auto-install: the create call passes the EFFECTIVE value, not the raw parameter" (
+    $aiScript -match 'AutomaticCheckpoints = \$effectiveAutoCheckpoints')
+
 Write-Host ""
 Write-Host ("  host-lib unit tests - {0}/{1} passed" -f $script:pass, ($script:pass + $script:fail))
 Write-Host ""
