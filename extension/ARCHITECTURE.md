@@ -155,7 +155,7 @@ extension/
                       upstream import planning, merge-file, read/write store scripts, repo state,
                       seeding, conflict handling (140 checks)
     host.test.js      plain-node scripts-dir resolution + settings merge + readProjectProfile +
-                      project-profile list/write/select + traversal + hasPersistedSelection + writeProjectProfileIfAbsent (77 checks; fake %LOCALAPPDATA% tree)
+                      project-profile list/write/select + traversal + hasPersistedSelection + writeProjectProfileIfAbsent + race test (79 checks; fake %LOCALAPPDATA% tree)
     remote.test.js    plain-node Remote-SSH helpers — isConnectedToVm/remoteFolderUri + repoNameFromUrl/isLikelyGitUrl/buildCloneScript/projectOpenPath/shouldAutoOpenPanel + URI percent-encoding (71 checks)
     lifecycle.test.js plain-node buildInvocation + winQuoteArg/quoting/elevation units (48 checks)
     updates.test.js   plain-node update-check units — Construct compare/cache + agent semver/latest/script + fetchJson redirects/per-host Accept, injected fetch+clock+http (62 checks)
@@ -497,15 +497,16 @@ module, regardless of `online`.
   toasts on the tick — results are logged), and degrades gracefully when the VM is
   offline (the sync tick sets `vmReadOk:false` and the import is skipped).
 - **Reinstall/reprovision pre-flight.** Before a manual Reinstall, Redownload, or
-  Reprovision proceeds, the handler runs a three-step pre-flight: (a) `importFromVm()`
-  — if the VM is unreachable, a modal warning lets the user cancel or continue;
-  (b) `runConfigSync()` — inspects the result for lockBusy/blocked/failure and
-  warns accordingly; (c) `configMergeGate()` to check for sync conflicts — if
-  conflicted, the launch is blocked with an error message and an "Open config
-  repo" button (to resolve the merge in VS Code's merge editor). Steps (a)/(b)
-  are advisory (the user may proceed at their own risk), while step (c) is
-  un-bypassable: the only way forward is to resolve the conflicts, commit, and
-  retry.
+  Reprovision proceeds, the handler runs a three-step pre-flight via
+  `coalescedImport(true)` + `runConfigSync()` + `configMergeGate()`:
+  (a) import — if the VM is unreachable or imports have write failures, a modal
+  warning lets the user cancel or continue; (b) sync — inspects the result for
+  lockBusy/blocked/failure/vmReadOk:false and warns with a modal; (c) conflict
+  gate — if conflicted, a modal warning with "Open config repo" / "Cancel"
+  blocks the launch. Steps (a)/(b) are advisory (the user may proceed at their
+  own risk), while step (c) is un-bypassable: the only way forward is to resolve
+  the conflicts, commit, and retry. All import calls go through `coalescedImport`
+  so concurrent scans from overlapping triggers share a single SSH session.
 - **Destructive flows default to save→restore**; one-time overrides (existing
   backup / clean wipe) live in Settings → Custom reinstall, not as a persisted
   policy. On failure, offer a retry reusing the backup already taken.
