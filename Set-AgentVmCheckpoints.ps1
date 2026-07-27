@@ -57,16 +57,42 @@ param(
 if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
         ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Host "Relaunching as Administrator..." -ForegroundColor Yellow
-    $argList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"")
+    # Canonical Windows argument quoting (CommandLineToArgvW rules): quote when needed,
+    # double the run of backslashes before a quote or the closing quote, escape an
+    # embedded quote as \". A naive "`"$value`"" wrapper would let a -VmName containing
+    # a double quote split into extra parameter tokens in the elevated process.
+    function Get-QuotedArg([string]$Value) {
+        if ($Value -ne "" -and $Value -notmatch '[ \t\n\v"]') { return $Value }
+        $sb = New-Object System.Text.StringBuilder
+        [void]$sb.Append('"')
+        $bs = 0
+        foreach ($ch in $Value.ToCharArray()) {
+            if ($ch -eq '\') { $bs++; continue }
+            if ($ch -eq '"') { [void]$sb.Append('\' * ($bs * 2 + 1)); [void]$sb.Append('"'); $bs = 0; continue }
+            if ($bs -gt 0) { [void]$sb.Append('\' * $bs); $bs = 0 }
+            [void]$sb.Append($ch)
+        }
+        [void]$sb.Append('\' * ($bs * 2))
+        [void]$sb.Append('"')
+        return $sb.ToString()
+    }
+    $argList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Get-QuotedArg $PSCommandPath))
     foreach ($kv in $PSBoundParameters.GetEnumerator()) {
         if ($kv.Value -is [System.Management.Automation.SwitchParameter]) {
             if ($kv.Value.IsPresent) { $argList += "-$($kv.Key)" }
         } else {
-            $argList += "-$($kv.Key)"; $argList += "`"$($kv.Value)`""
+            $argList += "-$($kv.Key)"; $argList += (Get-QuotedArg ([string]$kv.Value))
         }
     }
-    Start-Process powershell.exe -Verb RunAs -ArgumentList $argList | Out-Null
-    exit
+    # -Wait -PassThru so this process reports the ELEVATED run's outcome instead of
+    # always exiting 0: a cancelled UAC prompt throws, and a failed child exits non-zero.
+    try {
+        $elevated = Start-Process powershell.exe -Verb RunAs -ArgumentList $argList -PassThru -Wait -ErrorAction Stop
+    } catch {
+        Write-Host "  Elevation was cancelled or failed: $($_.Exception.Message)" -ForegroundColor Red
+        exit 1
+    }
+    exit $elevated.ExitCode
 }
 
 $ErrorActionPreference = "Stop"
@@ -147,27 +173,35 @@ try {
             Write-Ok "Removed '$($snap.Name)'"
         }
 
-        # Name-matched only (older Hyper-V builds expose no flag). Deleting a
-        # checkpoint is irreversible, so never guess -- ask.
+        # Name-matched only (older Hyper-V builds expose no flag). Deleting a checkpoint
+        # is irreversible, so never guess -- ask. ONE PROMPT PER CHECKPOINT, deliberately:
+        # a single blanket "yes" over a list would take a deliberately-created checkpoint
+        # that merely happens to be named like Hyper-V's along with the real one.
+        $removedProbable = 0
         if ($probable.Count -gt 0) {
             Write-Host ""
             Write-Warning "Hyper-V on this host doesn't report which checkpoints are automatic."
-            Write-Host "    These match the name Hyper-V auto-generates (`"$VmName - (<timestamp>)`"):" -ForegroundColor DarkGray
-            foreach ($snap in $probable) { Write-Host "      - $($snap.Name)   (created $($snap.CreationTime))" -ForegroundColor DarkGray }
-            Write-Host "    Removing a checkpoint is IRREVERSIBLE. Anything you created yourself should be kept." -ForegroundColor Yellow
-            $answer = Read-Host "    Remove the $($probable.Count) checkpoint(s) listed above? (type yes to remove)"
-            if ($answer -eq "yes") {
-                foreach ($snap in $probable) {
-                    Write-Note "Removing '$($snap.Name)'..."
+            Write-Host "    The following match the name Hyper-V auto-generates (`"$VmName - (<timestamp>)`")," -ForegroundColor DarkGray
+            Write-Host "    but a checkpoint you created yourself could be named that way too." -ForegroundColor DarkGray
+            Write-Host "    Removing a checkpoint is IRREVERSIBLE -- each one is asked about separately." -ForegroundColor Yellow
+            foreach ($snap in $probable) {
+                Write-Host ""
+                Write-Host "      $($snap.Name)   (created $($snap.CreationTime))" -ForegroundColor White
+                $answer = Read-Host "      Remove this checkpoint? (type yes to remove, anything else to keep)"
+                if ($answer -eq "yes") {
                     Remove-VMSnapshot -VMSnapshot $snap -Confirm:$false -ErrorAction Stop
                     Write-Ok "Removed '$($snap.Name)'"
+                    $removedProbable++
+                } else {
+                    Write-Note "Kept '$($snap.Name)'."
                 }
-            } else {
-                Write-Note "Kept. Remove them from Hyper-V Manager if you want the disk space back."
+            }
+            if ($removedProbable -lt $probable.Count) {
+                Write-Note "Kept checkpoints can be removed from Hyper-V Manager if you want the disk space back."
             }
         }
 
-        if ($certain.Count -gt 0 -or $probable.Count -gt 0) {
+        if ($certain.Count -gt 0 -or $removedProbable -gt 0) {
             # Removing a checkpoint queues a background merge of the .avhdx into the
             # base .vhdx; the disk space comes back when that finishes.
             Write-Note "Hyper-V merges the removed checkpoint's disk in the background -- this can take a few minutes."

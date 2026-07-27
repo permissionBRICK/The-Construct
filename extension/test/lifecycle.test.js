@@ -88,6 +88,14 @@ ok("reinstall: threads -AutomaticCheckpoints false from settings", has(life.buil
 ok("reinstall: -AutomaticCheckpoints true when enabled", has(life.buildInvocation("reinstall", { settings: { autoCheckpoints: true } }).args, "-AutomaticCheckpoints", "true"));
 ok("redownload: threads -AutomaticCheckpoints", has(life.buildInvocation("redownload", { settings: { autoCheckpoints: true } }).args, "-AutomaticCheckpoints", "true"));
 ok("rebuild: omits -AutomaticCheckpoints when unset", !life.buildInvocation("reinstall", { settings: {} }).args.includes("-AutomaticCheckpoints"));
+// Capability gate: an older scripts dir has no -AutomaticCheckpoints parameter, and
+// Auto-Install.ps1 is an advanced function — passing it would fail to BIND and the
+// rebuild would never start. Dropping the flag lets the old script's default stand.
+ok("rebuild: drops -AutomaticCheckpoints when the scripts don't support it",
+  !life.buildInvocation("reinstall", { settings: { autoCheckpoints: true }, supportsCheckpoints: false }).args.includes("-AutomaticCheckpoints"));
+ok("rebuild: keeps -AutomaticCheckpoints when supported (and when unspecified)",
+  has(life.buildInvocation("reinstall", { settings: { autoCheckpoints: true }, supportsCheckpoints: true }).args, "-AutomaticCheckpoints", "true") &&
+  has(life.buildInvocation("reinstall", { settings: { autoCheckpoints: true } }).args, "-AutomaticCheckpoints", "true"));
 ok("reprovision: never sends -AutomaticCheckpoints (no Hyper-V access)", !life.buildInvocation("reprovision", { settings: { autoCheckpoints: true } }).args.includes("-AutomaticCheckpoints"));
 
 const chkOff = life.buildInvocation("setCheckpoints", { enabled: false });
@@ -96,9 +104,14 @@ ok("setCheckpoints: uses the checkpoint script", chkOff.script === life.CHECKPOI
 ok("setCheckpoints: elevated (Hyper-V needs admin), not modal-destructive", chkOff.elevate === true && chkOff.destructive === false);
 ok("setCheckpoints: -Enabled false", has(chkOff.args, "-Enabled", "false"));
 ok("setCheckpoints: -Enabled true", has(chkOn.args, "-Enabled", "true"));
-ok("setCheckpoints: missing/undefined enabled -> false (never silently turns it on)",
-  has(life.buildInvocation("setCheckpoints", {}).args, "-Enabled", "false") &&
-  has(life.buildInvocation("setCheckpoints", { enabled: "yes" }).args, "-Enabled", "false"));
+// STRICT boolean: this action DELETES checkpoints when it runs with -Enabled false, so a
+// malformed request must be refused, not defaulted into the destructive direction.
+ok("setCheckpoints: missing enabled -> null (never defaults to the destructive direction)",
+  life.buildInvocation("setCheckpoints", {}) === null);
+ok("setCheckpoints: non-boolean enabled -> null",
+  life.buildInvocation("setCheckpoints", { enabled: "true" }) === null &&
+  life.buildInvocation("setCheckpoints", { enabled: 1 }) === null &&
+  life.buildInvocation("setCheckpoints", { enabled: null }) === null);
 ok("setCheckpoints: labels say which way it went", chkOn.label === "Enable automatic checkpoints" && chkOff.label === "Disable automatic checkpoints");
 ok("setCheckpoints: passes -FromPanel (no pause on success)", chkOff.args.includes("-FromPanel"));
 

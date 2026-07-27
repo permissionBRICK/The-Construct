@@ -237,13 +237,21 @@ answer **Apply now** and an elevated console (one UAC prompt) runs
 `Set-AgentVmCheckpoints.ps1`, which flips the policy and — when turning it *off* — removes
 the automatic checkpoint Hyper-V already took, so its disk gets merged back.
 
-Checkpoints you made yourself are never deleted. The script only removes checkpoints Hyper-V
-positively reports as automatic (its `IsAutomaticSnapshot` flag). On an older host that
-doesn't report the flag, anything matching Hyper-V's auto-generated name
-(`Agent-VM - (<timestamp>)`) is listed in the console and removed only after you type `yes`.
+Checkpoints you made yourself are never deleted *automatically*. The script only removes
+checkpoints Hyper-V positively reports as automatic (its `IsAutomaticSnapshot` flag). On an
+older host that doesn't report the flag, it falls back to matching Hyper-V's auto-generated
+name (`Agent-VM - (<timestamp>)`) — and because a checkpoint *you* created could be named
+that way too, each one is shown separately in the console and removed only if you type `yes`
+for it. Answer anything else and it's kept.
 
 Choosing **Later** is fine: the preference is saved either way and takes effect on the next
-rebuild. You can also run it by hand:
+rebuild — and because the panel compares your setting against the VM's *actual* Hyper-V
+policy (not against what the settings file used to say), saving again still offers to apply
+it while the two disagree. That's also what makes the toggle work on a VM created before
+Construct started disabling checkpoints: its policy is on, the saved preference is off, so
+the first save offers to fix it.
+
+You can also run it by hand:
 
 ```powershell
 .\Set-AgentVmCheckpoints.ps1 -Enabled false             # off + clean up the existing one

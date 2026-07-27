@@ -20,6 +20,7 @@
 // (buildInvocation/buildHostLaunch) can be unit-tested under plain node.
 
 const cp = require("child_process");
+const fs = require("fs");
 const path = require("path");
 const host = require("./host");
 
@@ -101,7 +102,12 @@ function buildInvocation(action, opts = {}) {
       // Hyper-V automatic checkpoints are decided when the VM is CREATED, which only
       // a rebuild does — so the preference rides reinstall/redownload, not reprovision
       // (which never touches Hyper-V). An existing VM is changed by "setCheckpoints".
-      pushBool("-AutomaticCheckpoints", s.autoCheckpoints);
+      //
+      // Capability-gated: Auto-Install.ps1 is an advanced function, so an install whose
+      // scripts predate this parameter FAILS TO BIND and the rebuild never starts. A
+      // newer extension against an older scripts dir must therefore drop the flag and
+      // let the script's own default stand, not break Reinstall outright.
+      if (opts.supportsCheckpoints !== false) pushBool("-AutomaticCheckpoints", s.autoCheckpoints);
       if (action === "redownload") pushPair("-UbuntuRelease", s.ubuntu);
       pushPair("-GitUserName", s.gitName);
       pushPair("-GitEmail", s.gitEmail);
@@ -124,7 +130,11 @@ function buildInvocation(action, opts = {}) {
     // whether to apply now, and the script itself confirms before removing any
     // checkpoint it can't positively identify as automatic.
     case "setCheckpoints": {
-      const enabled = opts.enabled === true;
+      // STRICT boolean. This action deletes checkpoints when it runs with -Enabled false,
+      // so a malformed request (missing field, the STRING "true") must be refused rather
+      // than defaulted — defaulting would silently pick the destructive direction.
+      if (typeof opts.enabled !== "boolean") return null;
+      const enabled = opts.enabled;
       args.push("-Enabled", enabled ? "true" : "false");
       return {
         script: CHECKPOINTS, args, destructive: false, elevate: true,
@@ -354,6 +364,10 @@ function run(action, opts = {}) {
     backupMode: opts.backupMode,
     projects,
     enabled: opts.enabled,
+    // Capability probe: the live-apply script ships in the same commit as the rebuild
+    // scripts' -AutomaticCheckpoints parameter, so its presence is the version marker
+    // for "these scripts understand the flag".
+    supportsCheckpoints: fs.existsSync(path.join(scriptsDir, CHECKPOINTS)),
   });
   if (!inv) return;
   Promise.resolve(inv.destructive ? confirmDestructive(inv) : true).then((ok) => {

@@ -134,6 +134,50 @@ ok("SHUTDOWN_CMD returns immediately (--no-block)", vm.SHUTDOWN_CMD === "systemc
   const throwRes = await vm.queryVmState({ _platform: "win32", _spawn: () => { throw new Error("no exe"); } });
   ok("query: spawn throw -> unknown", throwRes === "unknown");
 
+  // ── automatic-checkpoint policy probe ─────────────────────────────────────
+  // This probe is what makes the panel's "apply to the current VM" offer correct on
+  // the UPGRADE path: a VM created before the feature has the policy ON while the
+  // settings file has no key, so the preference alone can't be trusted.
+  ok("autochk parse: True -> on", vm.parseAutoCheckpoints("VMAUTOCHK=True\n") === "on");
+  ok("autochk parse: False -> off", vm.parseAutoCheckpoints("VMAUTOCHK=False\n") === "off");
+  ok("autochk parse: absent VM", vm.parseAutoCheckpoints("VMAUTOCHK=absent") === "absent");
+  ok("autochk parse: pre-1709 Hyper-V -> unsupported", vm.parseAutoCheckpoints("VMAUTOCHK=unsupported") === "unsupported");
+  ok("autochk parse: no line / garbage -> unknown",
+    vm.parseAutoCheckpoints("") === "unknown" && vm.parseAutoCheckpoints("something else") === "unknown" &&
+    vm.parseAutoCheckpoints("VMAUTOCHK=weird") === "unknown");
+  ok("autochk probe: reads the property defensively (no hard reference)",
+    vm.buildAutoCheckpointProbeCommand().includes("PSObject.Properties['AutomaticCheckpointsEnabled']"));
+  ok("autochk probe: VM name is single-quoted (injection-safe)",
+    vm.buildAutoCheckpointProbeCommand("It's-A-VM").includes("Get-VM -Name 'It''s-A-VM'"));
+
+  const chkSink = {};
+  const chkRes = await vm.queryAutoCheckpoints({ _platform: "win32", _spawn: fakeSpawn({ data: "VMAUTOCHK=False\n" }, chkSink) });
+  ok("autochk query: spawns the encoded probe and parses it", chkRes === "off" && chkSink.called && chkSink.file === "powershell.exe");
+  ok("autochk query: off-Windows -> unknown without spawning", (await vm.queryAutoCheckpoints({ _platform: "linux", _spawn: fakeSpawn({ data: "VMAUTOCHK=True" }, {}) })) === "unknown");
+  ok("autochk query: spawn throw -> unknown", (await vm.queryAutoCheckpoints({ _platform: "win32", _spawn: () => { throw new Error("no exe"); } })) === "unknown");
+  ok("autochk query: wedged process -> unknown", (await vm.queryAutoCheckpoints({ _platform: "win32", _spawn: fakeSpawn({ neverClose: true }, {}), timeoutMs: 30 })) === "unknown");
+
+  // ── shouldOfferCheckpointApply ────────────────────────────────────────────
+  const offer = vm.shouldOfferCheckpointApply;
+  // THE UPGRADE PATH: VM policy on, user wants off, preference never changed (no key
+  // on disk, form default off). Must still offer — this is the bug review caught.
+  ok("offer: VM on + want off + unchanged -> offers (the upgrade path)", offer("on", false, false) === true);
+  ok("offer: VM off + want on -> offers", offer("off", true, false) === true);
+  // Retry after "Later" / a declined UAC: the file already holds the wanted value, so
+  // `changed` is false — the VM still disagreeing is what keeps the offer coming back.
+  ok("offer: keeps offering while the VM disagrees", offer("on", false, false) === true && offer("off", true, false) === true);
+  ok("offer: VM already agrees -> silent, however the preference moved",
+    offer("off", false, true) === false && offer("on", true, true) === false &&
+    offer("off", false, false) === false && offer("on", true, false) === false);
+  ok("offer: no VM -> never offers", offer("absent", true, true) === false && offer("absent", false, true) === false);
+  ok("offer: Hyper-V without automatic checkpoints -> never offers",
+    offer("unsupported", true, true) === false && offer("unsupported", false, true) === false);
+  // The probe is Hyper-V-permission gated, so 'unknown' is common. Fall back to the
+  // changed-signal: offer on a real transition, stay quiet otherwise (no nagging).
+  ok("offer: unknown falls back to the changed signal",
+    offer("unknown", true, true) === true && offer("unknown", false, true) === true &&
+    offer("unknown", true, false) === false && offer("unknown", false, false) === false);
+
   console.log(`\n  vmpower unit tests — ${pass}/${pass + fail} passed\n`);
   process.exit(fail ? 1 : 0);
 })();

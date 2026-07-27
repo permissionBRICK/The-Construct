@@ -729,12 +729,30 @@ function runStartAndConnect() {
  * Best-effort and non-blocking: an older install without the script, or a non-Windows
  * host, explains itself and leaves the saved preference in place for the next rebuild.
  */
-async function offerApplyCheckpoints(scriptsDir, enabled) {
-  if (process.platform !== "win32") return; // saved for the next rebuild; nothing to apply from here
+async function offerApplyCheckpoints(scriptsDir, enabled, changed) {
+  if (process.platform !== "win32") {
+    // Don't fail silently: the toggle looks live, but Hyper-V lives on the Windows host.
+    if (changed) {
+      vscode.window.showWarningMessage(
+        "Saved. Automatic checkpoints are a Hyper-V setting on the Windows host, which isn't reachable from here — the preference applies the next time the VM is rebuilt."
+      );
+    }
+    return;
+  }
+  // Compare against the VM's ACTUAL policy, not against what the settings file used to
+  // say. A VM created before Construct started disabling checkpoints has the policy ON
+  // with no saved key at all, so a preference that "didn't change" (off → off) still
+  // needs applying — and after "Later" or a declined UAC, the next save must offer again.
+  const actual = await vmpower.queryAutoCheckpoints();
+  logLine(`checkpoints: want=${enabled ? "on" : "off"} actual=${actual} changed=${!!changed}`);
+  if (!vmpower.shouldOfferCheckpointApply(actual, enabled, changed)) return;
   const scriptPath = path.join(scriptsDir, lifecycle.CHECKPOINTS);
   if (!fs.existsSync(scriptPath)) {
+    // No live-apply script means these scripts predate the feature entirely — so the
+    // REBUILD can't honour it either (lifecycle.run drops the flag for exactly this
+    // reason). Don't promise a next-Reinstall fix we can't deliver.
     vscode.window.showWarningMessage(
-      "Saved. Applying automatic checkpoints to the current VM needs a newer Construct — update Construct, or the setting takes effect on the next Reinstall."
+      "Saved, but this Construct install's host scripts are too old to change automatic checkpoints (here or during a rebuild). Update Construct first."
     );
     return;
   }
@@ -747,6 +765,17 @@ async function offerApplyCheckpoints(scriptsDir, enabled) {
     "Apply now"
   );
   if (pick !== "Apply now") return;
+  // Re-read the preference after the modal: another window (its own extension host,
+  // its own copy of this flow) may have saved the OPPOSITE value while this dialog sat
+  // open, and applying the stale one would leave the VM disagreeing with the file.
+  let stillWanted = enabled;
+  try { stillWanted = host.readSettings(scriptsDir).autoCheckpoints === true; } catch (_) { /* keep the captured value */ }
+  if (stillWanted !== enabled) {
+    vscode.window.showWarningMessage(
+      `Automatic checkpoints were changed to ${stillWanted ? "on" : "off"} elsewhere while this prompt was open — nothing was applied. Save again to apply the current setting.`
+    );
+    return;
+  }
   lifecycle.run("setCheckpoints", { scriptsDir, enabled });
 }
 
@@ -1359,7 +1388,7 @@ function handleMessage(message, webview, context) {
         // Snapshot the previous state BEFORE the write so live toggles below can
         // key on actual transitions (off→on / on→off), not the absolute value.
         const prev = host.readSettings(scriptsDir);
-        host.saveSettings(scriptsDir, message.settings);
+        const merged = host.mapToForm(host.saveSettings(scriptsDir, message.settings));
         vscode.window.showInformationMessage("Construct settings saved.");
         pushSettings(webview); // reflect the normalized, merged on-disk state
         // The "Microphone passthrough" toggle is a live preference: honor it now, not
@@ -1378,10 +1407,17 @@ function handleMessage(message, webview, context) {
         // Automatic checkpoints are a HYPER-V property, decided when the VM is
         // created — so the saved value rides the next reinstall/redownload for free.
         // Offer to apply it to the VM that exists right now too (elevated, UAC).
-        const wantChk = message.settings && message.settings.autoCheckpoints === true;
-        const hadChk = prev.autoCheckpoints === true;
-        if (wantChk !== hadChk) {
-          offerApplyCheckpoints(scriptsDir, wantChk).catch((err) => logLine(`checkpoints: ${err && err.message ? err.message : err}`));
+        //
+        // The value comes from the MERGED on-disk result, never from the raw payload:
+        // mapFromForm OMITS an absent boolean, so a partial save (a stale webview
+        // posting only the git fields) would otherwise read as "wants off" and offer
+        // to disable checkpoints the file still says are ON. Only act when the form
+        // actually carried the field.
+        if (message.settings && typeof message.settings.autoCheckpoints === "boolean") {
+          const wantChk = merged.autoCheckpoints === true;
+          const changedChk = wantChk !== (prev.autoCheckpoints === true);
+          offerApplyCheckpoints(scriptsDir, wantChk, changedChk)
+            .catch((err) => logLine(`checkpoints: ${err && err.message ? err.message : err}`));
         }
       } catch (e) {
         vscode.window.showErrorMessage("Couldn't save Construct settings: " + (e && e.message ? e.message : e));

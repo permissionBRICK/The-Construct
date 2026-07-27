@@ -110,6 +110,106 @@ function queryVmState(opts = {}) {
 }
 
 /**
+ * The inline PowerShell that prints `VMAUTOCHK=<x>` — the VM's CURRENT automatic-
+ * checkpoint policy, read straight from Hyper-V rather than inferred from the panel's
+ * saved preference. That distinction is the whole point: a VM created before Construct
+ * started disabling them has the policy ON while the settings file has no key at all,
+ * so "the preference didn't change" must NOT be read as "the VM already agrees".
+ *
+ * `AutomaticCheckpointsEnabled` is property-probed (absent on pre-1709 Hyper-V, which
+ * has no automatic checkpoints at all → `unsupported`). A missing VM maps to `absent`
+ * via the same FullyQualifiedErrorId test as buildStateProbeCommand; anything else
+ * (typically the Hyper-V permission gate) is `unknown`. Pure.
+ */
+function buildAutoCheckpointProbeCommand(vmName) {
+  const n = lifecycle.psSingleQuote(vmName || VM_NAME);
+  return (
+    "try { $vm = Get-VM -Name " + n + " -ErrorAction Stop; " +
+    "$p = $vm.PSObject.Properties['AutomaticCheckpointsEnabled']; " +
+    "if ($p -and $null -ne $p.Value) { Write-Output ('VMAUTOCHK=' + [bool]$p.Value) } " +
+    "else { Write-Output 'VMAUTOCHK=unsupported' } } " +
+    "catch { if ($_.FullyQualifiedErrorId -like 'InvalidParameter*') { Write-Output 'VMAUTOCHK=absent' } " +
+    "else { Write-Output 'VMAUTOCHK=unknown' } }"
+  );
+}
+
+/** argv for the captured (non-elevated) automatic-checkpoint probe. Pure. */
+function buildAutoCheckpointProbeLaunch(vmName) {
+  const command = buildAutoCheckpointProbeCommand(vmName);
+  const encoded = Buffer.from(command, "utf16le").toString("base64");
+  return {
+    file: "powershell.exe",
+    spawnArgs: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
+    command,
+  };
+}
+
+/**
+ * Map the probe's `VMAUTOCHK=<x>` line to 'on' | 'off' | 'absent' | 'unsupported' |
+ * 'unknown'. PowerShell stringifies a bool as `True`/`False`. Anything unrecognised or
+ * missing is 'unknown' — the caller must treat that as "can't tell", never as "off".
+ * Pure.
+ */
+function parseAutoCheckpoints(stdout) {
+  const m = /VMAUTOCHK=(\S+)/.exec(String(stdout || ""));
+  if (!m) return "unknown";
+  const s = m[1].toLowerCase();
+  if (s === "true") return "on";
+  if (s === "false") return "off";
+  if (s === "absent") return "absent";
+  if (s === "unsupported") return "unsupported";
+  return "unknown";
+}
+
+/**
+ * Read the VM's current automatic-checkpoint policy. Never rejects; off-Windows, a
+ * spawn failure, or a timeout resolves 'unknown'. `opts._spawn`/`opts._platform` are
+ * test seams (default child_process.spawn / process.platform).
+ */
+function queryAutoCheckpoints(opts = {}) {
+  const platform = opts._platform || process.platform;
+  if (platform !== "win32") return Promise.resolve("unknown");
+  const spawn = opts._spawn || cp.spawn;
+  const { file, spawnArgs } = buildAutoCheckpointProbeLaunch(opts.vmName);
+  return new Promise((resolve) => {
+    let out = "", done = false, child = null;
+    const finish = (v) => { if (done) return; done = true; clearTimeout(timer); resolve(v); };
+    const timer = setTimeout(() => { try { child && child.kill(); } catch (_) {} finish("unknown"); }, opts.timeoutMs || 15000);
+    try {
+      child = spawn(file, spawnArgs, { windowsHide: true });
+    } catch (_) {
+      return finish("unknown");
+    }
+    if (child.stdout) child.stdout.on("data", (d) => { if (out.length < MAX_OUT) out += d.toString(); });
+    child.on("error", () => finish("unknown"));
+    child.on("close", () => finish(parseAutoCheckpoints(out)));
+  });
+}
+
+/**
+ * Should saving the automatic-checkpoint preference offer to apply it to the VM that
+ * exists right now? Pure — this is the decision the reviewers' "upgrade path" finding
+ * turns on, so it is stated once here and unit-tested.
+ *
+ *   actual 'on'/'off'  → offer iff it DIFFERS from what the user wants. This is
+ *                        authoritative: it catches the VM created before Construct
+ *                        disabled checkpoints (no saved key, policy still ON), and it
+ *                        keeps offering after "Later" / a declined UAC, because the VM
+ *                        still disagrees. Equal → silent, however the preference moved.
+ *   actual 'absent'    → no VM to change (the preference applies when one is created).
+ *   'unsupported'      → this Hyper-V has no automatic checkpoints at all.
+ *   'unknown'          → the probe is Hyper-V-permission gated, so we genuinely can't
+ *                        tell; fall back to "did the preference change?" rather than
+ *                        nagging on every save.
+ */
+function shouldOfferCheckpointApply(actual, wantEnabled, changed) {
+  if (actual === "absent" || actual === "unsupported") return false;
+  if (actual === "on") return wantEnabled !== true;
+  if (actual === "off") return wantEnabled === true;
+  return !!changed;
+}
+
+/**
  * Whether the "Start & connect" affordance should be shown for a given probed state.
  * The webviews (media/panel.js, media/launcher.js) can't require() this module, so
  * they inline the SAME predicate — this is the canonical definition the unit tests
@@ -208,6 +308,8 @@ function startVm(opts = {}) {
 module.exports = {
   VM_NAME, SHUTDOWN_CMD,
   buildStateProbeCommand, buildStateProbeLaunch, parseVmState, queryVmState,
+  buildAutoCheckpointProbeCommand, buildAutoCheckpointProbeLaunch, parseAutoCheckpoints,
+  queryAutoCheckpoints, shouldOfferCheckpointApply,
   shouldShowStart,
   buildElevatedCommandLaunch, buildStartCommand, startVm,
 };
