@@ -327,6 +327,7 @@
     return {
       gitName: val("setGitName"), gitEmail: val("setGitEmail"), gitCred: swOn($("setGitCred")),
       ram: val("setRam"), disk: val("setDisk"), ubuntu: val("setUbuntu"),
+      autoCheckpoints: swOn($("setAutoCheckpoints")),
       serveWeb: swOn($("setServeWeb")), tunnel: swOn($("setTunnel")), smb: swOn($("setSmb")), mic: swOn($("setMic")),
       partialStreaming: swOn($("setPartialStreaming")),
       t3code: swOn($("setT3")),
@@ -699,6 +700,7 @@
     setSw("setTunnel", s.tunnel); setSw("setSmb", s.smb); setSw("setMic", s.mic);
     setSw("setPartialStreaming", s.partialStreaming);
     setSw("setT3", s.t3code);
+    setSw("setAutoCheckpoints", s.autoCheckpoints);
   }
 
   // Ask the extension for the current state once the webview is live.

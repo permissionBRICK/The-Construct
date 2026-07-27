@@ -714,6 +714,42 @@ function runStartAndConnect() {
   );
 }
 
+/**
+ * The automatic-checkpoint preference changed in the settings form. The saved value
+ * is applied whenever the VM is next CREATED (Auto-Install → Create-AgentVM), which
+ * covers every future reinstall/redownload — but the VM that exists right now keeps
+ * Hyper-V's current policy until someone changes it. So offer to apply it now.
+ *
+ * "Apply now" launches Set-AgentVmCheckpoints.ps1 in an ELEVATED host console (the
+ * Hyper-V cmdlets need admin → one UAC prompt). Turning the setting OFF also removes
+ * the automatic checkpoint Hyper-V already took — the script only deletes checkpoints
+ * it can positively identify as automatic and asks in-console about anything it can't,
+ * so a checkpoint the user made themselves is never lost.
+ *
+ * Best-effort and non-blocking: an older install without the script, or a non-Windows
+ * host, explains itself and leaves the saved preference in place for the next rebuild.
+ */
+async function offerApplyCheckpoints(scriptsDir, enabled) {
+  if (process.platform !== "win32") return; // saved for the next rebuild; nothing to apply from here
+  const scriptPath = path.join(scriptsDir, lifecycle.CHECKPOINTS);
+  if (!fs.existsSync(scriptPath)) {
+    vscode.window.showWarningMessage(
+      "Saved. Applying automatic checkpoints to the current VM needs a newer Construct — update Construct, or the setting takes effect on the next Reinstall."
+    );
+    return;
+  }
+  const detail = enabled
+    ? "Hyper-V will snapshot the VM at every start. This applies from the VM's next start; it's also used when the VM is rebuilt."
+    : "Hyper-V will stop snapshotting the VM at every start, and the automatic checkpoint it already took will be removed (its disk is merged back in the background). Checkpoints you created yourself are kept — the console asks before touching anything it can't identify as automatic.";
+  const pick = await vscode.window.showInformationMessage(
+    `Apply automatic checkpoints = ${enabled ? "on" : "off"} to the current VM now?`,
+    { modal: true, detail: detail + " Needs administrator rights (a UAC prompt)." },
+    "Apply now"
+  );
+  if (pick !== "Apply now") return;
+  lifecycle.run("setCheckpoints", { scriptsDir, enabled });
+}
+
 /** Power the VM off over SSH (root → systemctl poweroff). Confirms first; warns
  *  that an attached remote window will lose its connection. */
 async function runShutdown() {
@@ -1339,6 +1375,14 @@ function handleMessage(message, webview, context) {
         const hadT3 = prev.t3code === true;
         if (wantT3 && !hadT3) t3code.enableOnVm().then(() => refreshAll());
         else if (!wantT3 && hadT3) t3code.disableOnVm().then(() => refreshAll());
+        // Automatic checkpoints are a HYPER-V property, decided when the VM is
+        // created — so the saved value rides the next reinstall/redownload for free.
+        // Offer to apply it to the VM that exists right now too (elevated, UAC).
+        const wantChk = message.settings && message.settings.autoCheckpoints === true;
+        const hadChk = prev.autoCheckpoints === true;
+        if (wantChk !== hadChk) {
+          offerApplyCheckpoints(scriptsDir, wantChk).catch((err) => logLine(`checkpoints: ${err && err.message ? err.message : err}`));
+        }
       } catch (e) {
         vscode.window.showErrorMessage("Couldn't save Construct settings: " + (e && e.message ? e.message : e));
       }

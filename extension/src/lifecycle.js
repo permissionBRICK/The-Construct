@@ -27,6 +27,7 @@ function vsc() { return require("vscode"); }
 
 const PROVISION = "Provision-AgentVM.ps1";   // reprovision + export (no admin)
 const AUTO_INSTALL = "Auto-Install.ps1";     // reinstall + redownload (self/explicitly elevated)
+const CHECKPOINTS = "Set-AgentVmCheckpoints.ps1"; // apply the checkpoint policy to the LIVE VM (elevated)
 const BACKUP_DIR_NAME = ".construct-backup"; // mirrors Get-ConstructBackupDir
 
 /** Coerce a backup-mode to the validated set Auto-Install.ps1 accepts. The plain
@@ -97,6 +98,10 @@ function buildInvocation(action, opts = {}) {
       pushProjects(); // Auto-Install forwards -Projects to Provision (-Auto gates its prompts)
       pushPair("-VmMemoryGB", s.ram);
       pushPair("-VmDiskGB", s.disk);
+      // Hyper-V automatic checkpoints are decided when the VM is CREATED, which only
+      // a rebuild does — so the preference rides reinstall/redownload, not reprovision
+      // (which never touches Hyper-V). An existing VM is changed by "setCheckpoints".
+      pushBool("-AutomaticCheckpoints", s.autoCheckpoints);
       if (action === "redownload") pushPair("-UbuntuRelease", s.ubuntu);
       pushPair("-GitUserName", s.gitName);
       pushPair("-GitEmail", s.gitEmail);
@@ -110,6 +115,20 @@ function buildInvocation(action, opts = {}) {
       return {
         script: AUTO_INSTALL, args, destructive: true, elevate: true,
         label: action === "redownload" ? "Redownload" : "Reinstall",
+      };
+    }
+
+    // Apply the automatic-checkpoint policy to the EXISTING VM, right now. Hyper-V
+    // cmdlets need admin, so this elevates (UAC) like reinstall/redownload — but it
+    // isn't `destructive` in the confirm-modal sense: the extension has already asked
+    // whether to apply now, and the script itself confirms before removing any
+    // checkpoint it can't positively identify as automatic.
+    case "setCheckpoints": {
+      const enabled = opts.enabled === true;
+      args.push("-Enabled", enabled ? "true" : "false");
+      return {
+        script: CHECKPOINTS, args, destructive: false, elevate: true,
+        label: enabled ? "Enable automatic checkpoints" : "Disable automatic checkpoints",
       };
     }
 
@@ -312,9 +331,10 @@ function launchHostScript(opts) {
 }
 
 /**
- * Run a lifecycle action. `opts`: { scriptsDir, backupMode? }. scriptsDir must be
- * pre-resolved by the caller (it owns the construct.scriptsDir setting). The
- * destructive actions confirm first; everything launches a new host console.
+ * Run a lifecycle action. `opts`: { scriptsDir, backupMode?, projects?, enabled? }.
+ * scriptsDir must be pre-resolved by the caller (it owns the construct.scriptsDir
+ * setting); `enabled` is the setCheckpoints on/off. The destructive actions confirm
+ * first; everything launches a new host console.
  */
 function run(action, opts = {}) {
   const vscode = vsc();
@@ -333,6 +353,7 @@ function run(action, opts = {}) {
     backupDir: path.join(scriptsDir, BACKUP_DIR_NAME),
     backupMode: opts.backupMode,
     projects,
+    enabled: opts.enabled,
   });
   if (!inv) return;
   Promise.resolve(inv.destructive ? confirmDestructive(inv) : true).then((ok) => {
@@ -341,7 +362,7 @@ function run(action, opts = {}) {
 }
 
 module.exports = {
-  PROVISION, AUTO_INSTALL, BACKUP_DIR_NAME,
+  PROVISION, AUTO_INSTALL, CHECKPOINTS, BACKUP_DIR_NAME,
   normalizeBackupMode, buildInvocation,
   psSingleQuote, winQuoteArg, buildChildCommandLine, buildOuterCommand, buildCallCommand, buildHostLaunch,
   hostLaunchSpawnOptions, launchHostScript, run, configure,

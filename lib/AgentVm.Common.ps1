@@ -1339,6 +1339,162 @@ function Add-HyperVAdminMembership {
     }
 }
 
+# ── Hyper-V automatic checkpoints ────────────────────────────────────────────
+# Hyper-V's "automatic checkpoints" (on by default in Client Hyper-V) snapshot the
+# VM every time it starts. For a disposable agent VM that is pure cost: the .avhdx
+# differencing disk grows with every write, disk I/O slows, and the checkpoint has
+# to be merged on delete. Construct therefore creates VMs with them OFF and exposes
+# the switch in the control panel (Settings -> VM resources), which can also apply
+# the choice to the LIVE VM via Set-AgentVmCheckpoints.ps1.
+#
+# Removing an existing automatic checkpoint is the tricky half: Hyper-V's PowerShell
+# module gives no first-class "is this automatic?" flag on most builds, and deleting
+# the wrong checkpoint would throw away a user's deliberate snapshot. So we classify
+# in three tiers and only ever DELETE what we can positively identify (see
+# Get-AgentVmAutomaticCheckpoint); anything merely name-matched is reported and left
+# for the caller to confirm.
+
+function Test-AgentVmCheckpointNamePattern {
+    <#
+        Does a checkpoint name look like the one Hyper-V auto-generates?
+        Automatic checkpoints are named "<VM name> - (<timestamp>)" -- e.g.
+        "Agent-VM - (7/27/2026 - 10:14:03 AM)". The timestamp is locale-formatted, so
+        we only anchor on the "<VM name> - (" prefix and the closing paren, never on
+        the date format. Pure; used ONLY as the last-resort tier (heuristic matches are
+        reported, not deleted, unless the caller confirms).
+    #>
+    [CmdletBinding()]
+    param([string]$Name, [string]$VmName)
+    if ([string]::IsNullOrWhiteSpace($Name) -or [string]::IsNullOrWhiteSpace($VmName)) { return $false }
+    $prefix = "$VmName - ("
+    return ($Name.StartsWith($prefix, [System.StringComparison]::Ordinal) -and $Name.EndsWith(")", [System.StringComparison]::Ordinal))
+}
+
+function Get-AgentVmAutomaticCheckpointId {
+    <#
+        The GUIDs of every AUTOMATIC checkpoint on this host, read from WMI. The v2
+        Hyper-V namespace exposes each snapshot as an Msvm_VirtualSystemSettingData
+        whose IsAutomaticSnapshot flag is exactly the bit Hyper-V Manager uses to draw
+        the "automatic checkpoint" icon; ConfigurationID is the same GUID the
+        PowerShell VMSnapshot object carries as .Id, so the two views join cleanly.
+
+        Deliberately NOT filtered per VM: a snapshot setting's ElementName is the
+        SNAPSHOT's name (not the VM's), and the parent-VM link (VirtualSystemIdentifier)
+        needs a second lookup for no benefit -- the caller joins these GUIDs against the
+        snapshots of ONE VM, and checkpoint GUIDs are unique host-wide, so another VM's
+        automatic checkpoint can never match.
+
+        Returns a hashtable @{ Supported = <bool>; Ids = @(<guid string>...) }. The
+        Supported flag matters as much as the ids: when the query WORKS, an id that is
+        absent from the list is definitively NOT an automatic checkpoint, so the caller
+        can skip the name heuristic (and the confirmation prompt it triggers) entirely.
+        A missing namespace, a permission failure, or a build predating automatic
+        checkpoints yields Supported=$false and an empty list, and the caller falls back
+        to the heuristic rather than deleting anything. Never throws.
+    #>
+    [CmdletBinding()]
+    param()
+    $ids = @()
+    $sawProperty = $false
+    try {
+        $rows = @(Get-CimInstance -Namespace "root\virtualization\v2" `
+                                  -ClassName "Msvm_VirtualSystemSettingData" `
+                                  -ErrorAction Stop)
+        foreach ($row in $rows) {
+            # The property is absent on builds predating automatic checkpoints; seeing it
+            # on ANY row proves this host reports the flag, which is what Supported means.
+            $prop = $row.CimInstanceProperties | Where-Object { $_.Name -eq 'IsAutomaticSnapshot' }
+            if (-not $prop) { continue }
+            $sawProperty = $true
+            if (-not $row.ConfigurationID) { continue }
+            if (-not [bool]$prop.Value) { continue }
+            $ids += [string]$row.ConfigurationID
+        }
+    } catch {
+        return @{ Supported = $false; Ids = @() }
+    }
+    return @{
+        Supported = $sawProperty
+        Ids = @($ids | Where-Object { $_ } | ForEach-Object { $_.Trim('{', '}').ToLowerInvariant() } | Select-Object -Unique)
+    }
+}
+
+function Get-AgentVmAutomaticCheckpoint {
+    <#
+        Classify a VM's checkpoints into the ones we are CERTAIN are automatic and the
+        ones that merely LOOK automatic. Returns a hashtable:
+
+            @{ All = <VMSnapshot[]>; Certain = <VMSnapshot[]>; Probable = <VMSnapshot[]> }
+
+        Certain  -- an AUTHORITATIVE source said so: the snapshot object's own
+                    IsAutomaticCheckpoint property (newer Hyper-V modules), or a hit in
+                    the WMI IsAutomaticSnapshot set.
+        Probable -- NO authoritative source was available for this checkpoint, but its
+                    NAME matches Hyper-V's "<VM> - (<timestamp>)" auto-naming.
+
+        An authoritative source is trusted in BOTH directions: a checkpoint the object
+        (or a working WMI query) reports as non-automatic is never demoted to Probable
+        just because its name looks auto-generated -- so a user who names a checkpoint
+        that way is not asked about it. The heuristic only runs when neither source can
+        speak.
+
+        Everything else (a user's deliberate checkpoint) appears only in All. Callers
+        delete Certain silently and must confirm before touching Probable. Best-effort:
+        no Hyper-V module / unknown VM -> all three lists empty. Never throws.
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$VmName,
+        # Test seams: inject checkpoint objects and the WMI result
+        # (@{ Supported = <bool>; Ids = @() }) instead of querying Hyper-V, so the
+        # classification is unit-testable off a Hyper-V host.
+        $Snapshots = $null,
+        $Wmi = $null
+    )
+
+    $snaps = $null
+    if ($null -ne $Snapshots) {
+        $snaps = @($Snapshots)
+    } else {
+        try { $snaps = @(Get-VMSnapshot -VMName $VmName -ErrorAction Stop) }
+        catch { return @{ All = @(); Certain = @(); Probable = @() } }
+    }
+
+    $wmi = if ($null -ne $Wmi) { $Wmi } else { Get-AgentVmAutomaticCheckpointId }
+    $wmiOk   = [bool]$wmi.Supported
+    $autoIds = @(@($wmi.Ids) | Where-Object { $_ } | ForEach-Object { ([string]$_).Trim('{', '}').ToLowerInvariant() })
+
+    $certain = @(); $probable = @()
+    foreach ($s in $snaps) {
+        if ($null -eq $s) { continue }
+
+        # Tier 1 -- the object tells us directly (property probe: absent on most builds,
+        # so this must never be a hard reference). Authoritative both ways.
+        $flag = $s.PSObject.Properties['IsAutomaticCheckpoint']
+        if ($flag -and $null -ne $flag.Value) {
+            if ([bool]$flag.Value) { $certain += $s }
+            continue
+        }
+
+        # Tier 2 -- WMI's IsAutomaticSnapshot, joined on the checkpoint GUID. Also
+        # authoritative both ways, but ONLY when the query actually worked AND we can
+        # read this checkpoint's id (no id -> no join -> fall through to the heuristic).
+        $idProp = $s.PSObject.Properties['Id']
+        $id = if ($idProp -and $idProp.Value) { ([string]$idProp.Value).Trim('{', '}').ToLowerInvariant() } else { "" }
+        if ($wmiOk -and $id) {
+            if ($autoIds -contains $id) { $certain += $s }
+            continue
+        }
+
+        # Tier 3 -- name heuristic. Reported, never auto-deleted.
+        $nameProp = $s.PSObject.Properties['Name']
+        $name = if ($nameProp) { [string]$nameProp.Value } else { "" }
+        if (Test-AgentVmCheckpointNamePattern -Name $name -VmName $VmName) { $probable += $s }
+    }
+
+    return @{ All = @($snaps); Certain = @($certain); Probable = @($probable) }
+}
+
 function Get-RemoteOpenLink {
     # Build the `vscode://vscode-remote/ssh-remote+<alias><path>` deep link that opens
     # the VM's workspace in VS Code over Remote-SSH. The alias is the VM host's first
