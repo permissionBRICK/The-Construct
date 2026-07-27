@@ -206,9 +206,10 @@ function queryAutoCheckpoints(opts = {}) {
  *                        reproduce the exact upgrade bug this function exists to fix —
  *                        off→off on a checkpoints-ON VM. So fall back to `applied`: the
  *                        value last CONFIRMED onto the VM (host.readAppliedAutoCheckpoints;
- *                        `null` = never confirmed). Offer while that disagrees, which
- *                        means exactly once per preference value until an apply actually
- *                        succeeds — a bounded prompt, not a nag.
+ *                        `null` = never confirmed). Offer while that disagrees — i.e. on
+ *                        each save until an apply actually SUCCEEDS. "Later" and a
+ *                        declined UAC deliberately don't count: nothing changed on the
+ *                        VM, so the next save should still offer.
  */
 function shouldOfferCheckpointApply(actual, wantEnabled, applied) {
   if (actual === "absent" || actual === "unsupported") return false;

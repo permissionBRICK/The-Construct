@@ -162,8 +162,12 @@ function scriptSupportsCheckpoints(scriptsDir) {
   // Match a real parameter DECLARATION, not any mention of the name: `[string]$Foo` /
   // `[string]$Foo = "x"` / `$Foo,`. A bare name test would be satisfied by a comment (or
   // by our own doc text) on a script that has no such parameter, and passing the flag to
-  // one is a binding failure. PowerShell identifiers are case-INSENSITIVE, so is this.
-  return /\$AutomaticCheckpoints\s*(?:=|,|\)|$)/im.test(txt);
+  // one is a binding failure. Comments are stripped first so even `# $Foo = ...` can't
+  // pass; PowerShell identifiers are case-INSENSITIVE, so is this.
+  const code = txt
+    .replace(/<#[\s\S]*?#>/g, "")   // block comments (the .SYNOPSIS help header)
+    .replace(/^[ \t]*#.*$/gm, "");  // whole-line comments
+  return /\$AutomaticCheckpoints\s*(?:=|,|\)|$)/im.test(code);
 }
 
 /** A PowerShell single-quoted string literal (embedded quotes doubled). */

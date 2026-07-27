@@ -137,6 +137,11 @@ ok("capability: null scripts dir -> unsupported (no throw)", life.scriptSupports
 // script that lacks it would send the flag into a binding failure.
 fs.writeFileSync(path.join(sd, "Auto-Install.ps1"), "# forwards -AutomaticCheckpoints in newer builds\n<#\n  mentions $AutomaticCheckpoints in prose\n#>\nparam([string]$T3Code)\n");
 ok("capability: a prose/comment mention alone -> unsupported", life.scriptSupportsCheckpoints(sd) === false);
+// Even a commented-OUT declaration must not count — it is not bindable.
+fs.writeFileSync(path.join(sd, "Auto-Install.ps1"), "param(\n  # $AutomaticCheckpoints = \"false\",\n  [string]$T3Code\n)\n");
+ok("capability: a commented-out declaration -> unsupported", life.scriptSupportsCheckpoints(sd) === false);
+fs.writeFileSync(path.join(sd, "Auto-Install.ps1"), "<#\n .PARAMETER X\n   $AutomaticCheckpoints = \"false\"\n#>\nparam([string]$T3Code)\n");
+ok("capability: a block-comment help mention -> unsupported", life.scriptSupportsCheckpoints(sd) === false);
 // PowerShell identifiers are case-insensitive, and Windows files are CRLF.
 fs.writeFileSync(path.join(sd, "Auto-Install.ps1"), "param(\r\n  [string]$automaticcheckpoints = \"false\",\r\n  [switch]$X\r\n)\r\n");
 ok("capability: case-insensitive + CRLF declaration -> supported", life.scriptSupportsCheckpoints(sd) === true);
