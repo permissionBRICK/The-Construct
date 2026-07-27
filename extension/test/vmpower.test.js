@@ -134,6 +134,103 @@ ok("SHUTDOWN_CMD returns immediately (--no-block)", vm.SHUTDOWN_CMD === "systemc
   const throwRes = await vm.queryVmState({ _platform: "win32", _spawn: () => { throw new Error("no exe"); } });
   ok("query: spawn throw -> unknown", throwRes === "unknown");
 
+  // ── automatic-checkpoint policy probe ─────────────────────────────────────
+  // This probe is what makes the panel's "apply to the current VM" offer correct on
+  // the UPGRADE path: a VM created before the feature has the policy ON while the
+  // settings file has no key, so the preference alone can't be trusted.
+  ok("autochk parse: True -> on", vm.parseAutoCheckpoints("VMAUTOCHK=True\n") === "on");
+  ok("autochk parse: False -> off", vm.parseAutoCheckpoints("VMAUTOCHK=False\n") === "off");
+  ok("autochk parse: absent VM", vm.parseAutoCheckpoints("VMAUTOCHK=absent") === "absent");
+  ok("autochk parse: pre-1709 Hyper-V -> unsupported", vm.parseAutoCheckpoints("VMAUTOCHK=unsupported") === "unsupported");
+  ok("autochk parse: no line / garbage -> unknown",
+    vm.parseAutoCheckpoints("") === "unknown" && vm.parseAutoCheckpoints("something else") === "unknown" &&
+    vm.parseAutoCheckpoints("VMAUTOCHK=weird") === "unknown");
+  ok("autochk probe: reads the property defensively (no hard reference)",
+    vm.buildAutoCheckpointProbeCommand().includes("PSObject.Properties['AutomaticCheckpointsEnabled']"));
+  ok("autochk probe: VM name is single-quoted (injection-safe)",
+    vm.buildAutoCheckpointProbeCommand("It's-A-VM").includes("Get-VM -Name 'It''s-A-VM'"));
+
+  const chkSink = {};
+  const chkRes = await vm.queryAutoCheckpoints({ _platform: "win32", _spawn: fakeSpawn({ data: "VMAUTOCHK=False\n" }, chkSink) });
+  ok("autochk query: spawns the encoded probe and parses it", chkRes === "off" && chkSink.called && chkSink.file === "powershell.exe");
+  ok("autochk query: off-Windows -> unknown without spawning", (await vm.queryAutoCheckpoints({ _platform: "linux", _spawn: fakeSpawn({ data: "VMAUTOCHK=True" }, {}) })) === "unknown");
+  ok("autochk query: spawn throw -> unknown", (await vm.queryAutoCheckpoints({ _platform: "win32", _spawn: () => { throw new Error("no exe"); } })) === "unknown");
+  ok("autochk query: wedged process -> unknown", (await vm.queryAutoCheckpoints({ _platform: "win32", _spawn: fakeSpawn({ neverClose: true }, {}), timeoutMs: 30 })) === "unknown");
+
+  // ── shouldOfferCheckpointApply ────────────────────────────────────────────
+  // Signature: (actual, wantEnabled, applied) where `applied` is the value last
+  // CONFIRMED onto the VM (null = never). Deliberately NOT "did the preference
+  // change?" — that is the bug two review rounds kept catching.
+  const offer = vm.shouldOfferCheckpointApply;
+  // THE UPGRADE PATH: VM policy on, user wants off, no saved key, nothing ever
+  // applied. Must offer — this is the whole point of the function.
+  ok("offer: VM on + want off -> offers (the upgrade path)", offer("on", false, null) === true);
+  ok("offer: VM off + want on -> offers", offer("off", true, null) === true);
+  // Retry after "Later" / a declined UAC: the preference file already holds the wanted
+  // value, so a changed-signal would be false — the VM still disagreeing is what keeps
+  // the offer coming back.
+  ok("offer: keeps offering while the VM disagrees, whatever the marker says",
+    offer("on", false, false) === true && offer("on", false, true) === true &&
+    offer("off", true, false) === true && offer("off", true, true) === true);
+  ok("offer: VM already agrees -> silent (real state wins over any marker)",
+    offer("off", false, null) === false && offer("on", true, null) === false &&
+    offer("off", false, true) === false && offer("on", true, false) === false);
+  ok("offer: no VM -> never offers", offer("absent", true, null) === false && offer("absent", false, null) === false);
+  ok("offer: Hyper-V without automatic checkpoints -> never offers",
+    offer("unsupported", true, null) === false && offer("unsupported", false, null) === false);
+  // 'unknown' is COMMON (the non-elevated Get-VM is permission gated), so it must not
+  // fall back to a changed-signal — that reproduces the upgrade bug exactly. It falls
+  // back to the applied-marker instead.
+  ok("offer: unknown + never applied -> offers (upgrade path survives a blind probe)",
+    offer("unknown", false, null) === true && offer("unknown", true, null) === true);
+  ok("offer: unknown + marker disagrees -> offers",
+    offer("unknown", true, false) === true && offer("unknown", false, true) === true);
+  ok("offer: unknown + marker agrees -> silent (bounded, not a nag)",
+    offer("unknown", true, true) === false && offer("unknown", false, false) === false);
+  ok("offer: unknown + non-boolean marker treated as never-applied",
+    offer("unknown", false, undefined) === true && offer("unknown", false, "false") === true);
+
+  // ── planCheckpointOffer ───────────────────────────────────────────────────
+  // The sequencing that lived un-tested inside extension.js's handler.
+  const plan = vm.planCheckpointOffer;
+  ok("plan: a payload carrying the boolean acts, using the MERGED value",
+    plan({ autoCheckpoints: false }, { autoCheckpoints: true }, { autoCheckpoints: false }).act === true &&
+    plan({ autoCheckpoints: false }, { autoCheckpoints: true }, { autoCheckpoints: false }).enabled === false);
+  // The partial-payload bug: only git fields posted, so mapFromForm left the stored
+  // `true` alone — reading "wants off" from the payload would offer to DISABLE and
+  // delete a checkpoint. Must not act at all.
+  ok("plan: a partial payload (no boolean) never acts",
+    plan({ gitName: "Neo" }, { autoCheckpoints: true }, { autoCheckpoints: true }).act === false);
+  ok("plan: null/undefined payload never acts",
+    plan(null, {}, {}).act === false && plan(undefined, {}, {}).act === false);
+  ok("plan: a non-boolean autoCheckpoints never acts",
+    plan({ autoCheckpoints: "true" }, {}, {}).act === false &&
+    plan({ autoCheckpoints: 1 }, {}, {}).act === false);
+  ok("plan: enabled always comes from merged, never from the payload",
+    plan({ autoCheckpoints: true }, {}, { autoCheckpoints: false }).enabled === false &&
+    plan({ autoCheckpoints: false }, {}, { autoCheckpoints: true }).enabled === true);
+  ok("plan: changed compares merged against prev (messaging only)",
+    plan({ autoCheckpoints: true }, { autoCheckpoints: false }, { autoCheckpoints: true }).changed === true &&
+    plan({ autoCheckpoints: true }, { autoCheckpoints: true }, { autoCheckpoints: true }).changed === false &&
+    plan({ autoCheckpoints: false }, {}, {}).changed === false);
+
+  // ── extension.js wiring invariants ────────────────────────────────────────
+  // The result-file poll -> applied-marker write is the hinge the whole "unknown" path
+  // depends on, and it lives in extension.js, which can't be required under plain node
+  // (it needs `vscode`). Pin it at the source level so a refactor that stops recording
+  // the marker — or starts recording it on failure — fails here.
+  const extSrc = require("fs").readFileSync(require("path").join(__dirname, "..", "extension.js"), "utf8");
+  const chkFn = extSrc.slice(extSrc.indexOf("async function offerApplyCheckpoints"), extSrc.indexOf("async function runShutdown"));
+  ok("wiring: the apply passes the result-file env var", chkFn.includes("CONSTRUCT_CHECKPOINT_RESULT"));
+  ok("wiring: the marker is written from the result poll", chkFn.includes("saveAppliedAutoCheckpoints"));
+  // Guard the DIRECTION: the marker write must sit under the ok branch, never beside the
+  // fail/timeout handling.
+  const okBranch = chkFn.slice(chkFn.indexOf('if (res === "ok")'), chkFn.indexOf("} else {", chkFn.indexOf('if (res === "ok")')));
+  ok("wiring: the marker is written ONLY on an ok result", okBranch.includes("saveAppliedAutoCheckpoints"));
+  ok("wiring: the offer consults the real VM policy and the marker",
+    chkFn.includes("queryAutoCheckpoints") && chkFn.includes("readAppliedAutoCheckpoints") &&
+    chkFn.includes("shouldOfferCheckpointApply"));
+
   console.log(`\n  vmpower unit tests — ${pass}/${pass + fail} passed\n`);
   process.exit(fail ? 1 : 0);
 })();

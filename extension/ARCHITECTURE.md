@@ -78,8 +78,10 @@ extension/
                       manifest provenance + base) — the testable half of extension.js's
                       importRemoteConfigs collision path
     lifecycle.js      reprovision/export -> Provision-AgentVM.ps1; reinstall/redownload ->
-                      Auto-Install.ps1 -Action/-BackupMode; launches a host console via
-                      child_process (pure buildInvocation/buildHostLaunch; vscode lazy-required)
+                      Auto-Install.ps1 -Action/-BackupMode; setCheckpoints ->
+                      Set-AgentVmCheckpoints.ps1 -Enabled (elevated, live VM); launches a host
+                      console via child_process (pure buildInvocation/buildHostLaunch;
+                      vscode lazy-required)
     updates.js        update checks (best-effort, cached, injectable fetch): Construct =
                       GitHub compare(installedCommit...ref) -> {update:{available,behind}};
                       agents = npm/GitHub latest vs probed version -> per-agent {latest,
@@ -157,9 +159,13 @@ extension/
     host.test.js      plain-node scripts-dir resolution + settings merge + readProjectProfile +
                       project-profile list/write/select + traversal + hasPersistedSelection + writeProjectProfileIfAbsent + race test (79 checks; fake %LOCALAPPDATA% tree)
     remote.test.js    plain-node Remote-SSH helpers — isConnectedToVm/remoteFolderUri + repoNameFromUrl/isLikelyGitUrl/buildCloneScript/projectOpenPath/shouldAutoOpenPanel + URI percent-encoding (71 checks)
-    lifecycle.test.js plain-node buildInvocation + winQuoteArg/quoting/elevation units (48 checks)
+    lifecycle.test.js plain-node buildInvocation (incl. the setCheckpoints action + which
+                      actions carry -AutomaticCheckpoints) + winQuoteArg/quoting/elevation units
     updates.test.js   plain-node update-check units — Construct compare/cache + agent semver/latest/script + fetchJson redirects/per-host Accept, injected fetch+clock+http (62 checks)
-    vmpower.test.js   plain-node Hyper-V power units — Get-VM probe/parse + Start-VM/elevated launch builders + injected-spawn queryVmState (38 checks)
+    vmpower.test.js   plain-node Hyper-V power units — Get-VM probe/parse + Start-VM/elevated
+                      launch builders + injected-spawn queryVmState + the automatic-checkpoint
+                      policy probe (parse/injection/spawn) and shouldOfferCheckpointApply's
+                      truth table, incl. the upgrade path (VM on, preference unchanged) (68 checks)
     project-set.test.js plain-node VM-side project set/get/list CLI units — validation, reserved
                       names, atomic writes, PROJECTS_STORE override (54 checks)
     projects.test.js  plain-node scan builder/parser + planImport merge + reconcileSelection +
@@ -487,6 +493,85 @@ module, regardless of `online`.
   (no LOCALAPPDATA / TEMP), profile operations fall back to the old scriptsDir path.
   D11: the "default" profile chip is rendered with a lock icon and does NOT open the
   edit modal on click; reserved names are refused by runSaveProject/runEditProject.
+- **Automatic checkpoints: off by default, and the setting is applied BOTH ways.**
+  Hyper-V snapshots a VM at every start unless told otherwise; on a disposable agent
+  VM that only pins a growing `.avhdx` differencing disk, slows I/O, and costs a merge
+  on delete. So `Create-AgentVM.ps1` now passes `-AutomaticCheckpointsEnabled` from a
+  new `-AutomaticCheckpoints` param that **defaults to `false`** (Auto-Install forwards
+  it into `$createArgs`; `lifecycle.buildInvocation` threads
+  `-AutomaticCheckpoints` onto reinstall/redownload — the rebuild actions, since the
+  policy is fixed at VM-CREATION time — and NOT onto reprovision, which never touches
+  Hyper-V). The panel toggle lives in **Settings → VM resources** (`#setAutoCheckpoints`
+  → `autoCheckpoints` → `vmAutoCheckpoints` on disk), default OFF in the markup so a
+  settings file with no stored key reads correctly.
+  **Live apply, decided against the VM — not against the old setting.** The obvious
+  design (offer when the preference CHANGED) is wrong, and external review caught it: a
+  VM created before this feature has the policy ON while its settings file has no key at
+  all, so the first save is off→off and would never offer — the upgrade path, i.e. every
+  existing user, silently gets nothing. It also can't retry after "Later" or a declined
+  UAC, since the file already holds the wanted value. So `offerApplyCheckpoints` probes
+  the VM's REAL policy (`vmpower.queryAutoCheckpoints` → `on|off|absent|unsupported|
+  unknown`, a captured non-elevated `Get-VM` + `AutomaticCheckpointsEnabled` property
+  probe) and `vmpower.shouldOfferCheckpointApply` (pure, unit-tested) offers iff the VM
+  DISAGREES; `absent`/`unsupported` never offer. `unknown` is NOT rare — the non-elevated
+  `Get-VM` is Hyper-V-permission gated (membership lands at the next sign-in) — so it must
+  not fall back to the changed-signal either, which review round 2 caught as the SAME
+  upgrade bug in disguise. It falls back to **`vmAutoCheckpointsApplied`**: the value last
+  CONFIRMED onto the VM (`host.read/saveAppliedAutoCheckpoints`; `null` = never). Offer
+  while that disagrees → on each save until an apply actually SUCCEEDS (Later / a declined
+  UAC don't count, and shouldn't). The marker is written ONLY on a confirmed run: `Set-AgentVmCheckpoints.ps1`
+  reports `ok`/`fail` through `CONSTRUCT_CHECKPOINT_RESULT` (temp+rename; the same
+  result-file mechanism `Update-Construct.ps1` uses) and the panel polls it — a declined
+  UAC never reaches that code, so it correctly leaves the marker unset and re-offers.
+  `vmpower.planCheckpointOffer` (pure) owns the payload sequencing: the wanted value is
+  read from the MERGED save result, not the raw payload — `mapFromForm` omits an absent
+  boolean, so a partial post (stale webview sending only git fields) would otherwise read
+  as "wants off" and offer to disable checkpoints the file still says are on — and it
+  refuses to act unless the form actually carried a boolean. After the modal the preference
+  is RE-READ from disk, so a second window saving the opposite value while the dialog sat
+  open can't make this one apply the stale side. (A residual race remains between that
+  re-read and the detached launch; two windows fighting over one Hyper-V flag is accepted,
+  since the next save reconciles against the VM's real policy anyway.)
+  "Apply now" runs `lifecycle.run("setCheckpoints", {enabled})` → an ELEVATED console (UAC)
+  running `Set-AgentVmCheckpoints.ps1 -FromPanel -Enabled true|false`; the action builder
+  demands a STRICT boolean and returns null otherwise (defaulting would silently pick the
+  destructive direction). The script self-elevates too — with canonical
+  CommandLineToArgvW quoting and `-Wait -PassThru` so a cancelled UAC or a failed child
+  is reported instead of exiting 0 — and loads the common lib INSIDE its try/finally so a
+  damaged install still honours the pause + result-file contract. Non-win32 → an honest
+  warning. **Capability gate:** `lifecycle.scriptSupportsCheckpoints` greps
+  `Auto-Install.ps1` for `$AutomaticCheckpoints` (NOT the presence of a sibling file — a
+  hand-assembled dir can hold the new live-apply script next to an old Auto-Install) and
+  `buildInvocation` drops the flag when unsupported, because an advanced function rejects
+  an unknown parameter at BINDING time and the rebuild would never start. Since an old
+  `Create-AgentVM.ps1` hardcodes checkpoints ON, dropping the flag would silently produce
+  the OPPOSITE of an "off" preference — so `run()` warns about exactly that before the
+  rebuild instead of after (treating an ABSENT key as "wants off", since that's the
+  product default the panel shows). `Auto-Install.ps1` carries the mirror guard for the
+  DOWNSTREAM pair: it checks `Create-AgentVM.ps1`'s parameters before splatting and drops
+  the argument (loudly) if that script is older — by the time it runs the old VM is
+  already deleted, so a binding failure there would leave the rebuild simply broken. It
+  also falls back to the saved `vmAutoCheckpoints` when the parameter is unbound, so a
+  hand-run install — or an OLD extension driving new scripts — still honours the toggle.
+  A destructive rebuild REPLACES the VM, so `run()` clears the applied marker: what was
+  confirmed onto the old VM says nothing about the new one.
+  **Why removal is the hard half:** turning the policy off does NOT delete the checkpoint
+  Hyper-V already took, and deleting the wrong one would destroy a user's snapshot.
+  `Get-AgentVmAutomaticCheckpoint` (lib) classifies in three tiers — (1) the VMSnapshot's
+  own `IsAutomaticCheckpoint` property when the build exposes it, (2) WMI
+  `Msvm_VirtualSystemSettingData.IsAutomaticSnapshot` joined on the checkpoint GUID
+  (`ConfigurationID` == `VMSnapshot.Id`; queried host-wide, since GUIDs are unique and
+  a snapshot row's `ElementName` is the SNAPSHOT's name, not the VM's), (3) the
+  `"<VM> - (<timestamp>)"` auto-naming heuristic. Tiers 1–2 are authoritative in BOTH
+  directions (`Get-AgentVmAutomaticCheckpointId` returns `@{Supported;Ids}` precisely so
+  "query worked, found none" can suppress the heuristic), so a user checkpoint that
+  happens to look auto-named isn't questioned. Only tier-1/2 hits (`Certain`) are deleted
+  silently; tier-3 hits (`Probable`) need a typed `yes` in the console — asked ONE
+  CHECKPOINT AT A TIME, since a blanket yes over a list would take a user's
+  deliberately-named checkpoint along with the real one.
+  Removal is BY OBJECT (`-VMSnapshot`), never `-Name` (Hyper-V allows duplicate names).
+  Both the property read and the `Set-VM` parameter are probed, so a pre-1709 host that
+  has no automatic checkpoints says so instead of erroring.
 - **Auto-import from VM (replaces the manual "import from VM" button).** When the
   sync tick successfully reads the VM store, `importFromVm()` scans the VM's
   checked-out repos over SSH (the same `buildScanScript`/`planImport` as the old
@@ -534,6 +619,10 @@ module, regardless of `online`.
     `%LOCALAPPDATA%\The-Construct\<owner-repo-ref>\<repo>-<ref>\` and runs Auto-Install.
     Default repo `permissionBRICK/The-Construct`, ref `main` (forwards `-Repo`/`-Ref`
     only when explicit). No host setup of its own.
+  - `Set-AgentVmCheckpoints.ps1` — the panel's live "apply automatic checkpoints now":
+    `-Enabled true|false` (+ `-VmName`, `-RemoveExisting`, `-FromPanel`). Self-elevating;
+    sets `Set-VM -AutomaticCheckpointsEnabled` and, when disabling, removes the automatic
+    checkpoints classified by `Get-AgentVmAutomaticCheckpoint` (see the design decision).
   - `Update-Construct.ps1` — the panel's "Update Construct" self-update: re-download the
     repo in place, record the update marker (`installedCommit` from the GitHub commits
     API + `constructRepo`/`constructRef` via `Set-ConstructInstalledMarker`), and
@@ -542,7 +631,10 @@ module, regardless of `online`.
     (key `~/.ssh/agent_vm_ed25519` else `agent-vm` alias) mirrored in `src/ssh.js`.
   - `lib/AgentVm.Common.ps1` — `Get-ConstructSettingsPath` (`.construct-settings.json`
     next to scripts), `Read/Save-ConstructSettings` (merge), `Resolve-GitIdentity`,
-    `Get-ConstructBackupDir` (backup dir next to scripts), `Invoke-TuiConfirm`.
+    `Get-ConstructBackupDir` (backup dir next to scripts), `Invoke-TuiConfirm`,
+    `Get-AgentVmAutomaticCheckpoint`/`Get-AgentVmAutomaticCheckpointId`/
+    `Test-AgentVmCheckpointNamePattern` (automatic-checkpoint classification;
+    unit-tested via the `-Snapshots`/`-Wmi` seams in `test/host-lib.test.ps1`).
 - Claude recorder contract (from the installed `anthropic.claude-code-*/extension.js`):
   - `rec` argv: `-q --buffer 1024 -t raw -r 16000 -e signed -b 16 -c 1 -`
   - `arecord` argv: `-q -f S16_LE -r 16000 -c 1 -t raw`

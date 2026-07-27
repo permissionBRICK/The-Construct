@@ -752,6 +752,148 @@ foreach ($phrase in $safetyThrows) {
 }
 ok "lifecycle: all safety throws set Wait-Exit globals before throwing" $allGlobalsSet
 
+# ── Hyper-V automatic-checkpoint classification ─────────────────────────────
+# Get-AgentVmAutomaticCheckpoint decides what Set-AgentVmCheckpoints.ps1 is allowed
+# to DELETE, so the classification is the safety-critical part. Exercised through the
+# -Snapshots/-AutomaticIds seams (no Hyper-V on a CI box).
+
+ok "checkpoint name: matches Hyper-V's auto-naming" (
+    Test-AgentVmCheckpointNamePattern -Name "Agent-VM - (7/27/2026 - 10:14:03 AM)" -VmName "Agent-VM")
+ok "checkpoint name: rejects a user-named checkpoint" (
+    -not (Test-AgentVmCheckpointNamePattern -Name "before upgrade" -VmName "Agent-VM"))
+ok "checkpoint name: rejects another VM's automatic checkpoint" (
+    -not (Test-AgentVmCheckpointNamePattern -Name "Other-VM - (7/27/2026)" -VmName "Agent-VM"))
+ok "checkpoint name: rejects a prefix without the closing paren" (
+    -not (Test-AgentVmCheckpointNamePattern -Name "Agent-VM - (unfinished" -VmName "Agent-VM"))
+ok "checkpoint name: empty/blank inputs are not a match" (
+    (-not (Test-AgentVmCheckpointNamePattern -Name "" -VmName "Agent-VM")) -and
+    (-not (Test-AgentVmCheckpointNamePattern -Name "Agent-VM - (x)" -VmName "")))
+
+# Fake checkpoint objects: the classifier only ever touches .Id/.Name/
+# .IsAutomaticCheckpoint, and always through a PSObject property probe.
+function New-FakeSnap($name, $id, $auto = $null) {
+    $o = [pscustomobject]@{ Name = $name; Id = $id }
+    if ($null -ne $auto) { $o | Add-Member -NotePropertyName IsAutomaticCheckpoint -NotePropertyValue $auto }
+    return $o
+}
+
+# No WMI signal available (old build / failed query) unless a test says otherwise.
+$noWmi = @{ Supported = $false; Ids = @() }
+
+# Tier 1 -- the snapshot object reports it itself, and is believed BOTH ways: an
+# explicit $false must not be demoted to Probable by an auto-looking name.
+$t1 = Get-AgentVmAutomaticCheckpoint -VmName "Agent-VM" -Wmi $noWmi -Snapshots @(
+    (New-FakeSnap "Agent-VM - (a)" "11111111-1111-1111-1111-111111111111" $true),
+    (New-FakeSnap "Agent-VM - (b)" "22222222-2222-2222-2222-222222222222" $false)
+)
+ok "checkpoints tier1: IsAutomaticCheckpoint true -> Certain" (
+    $t1.Certain.Count -eq 1 -and $t1.Certain[0].Name -eq "Agent-VM - (a)")
+ok "checkpoints tier1: an explicit false is NOT demoted to Probable by its name" (
+    $t1.Probable.Count -eq 0)
+ok "checkpoints tier1: All keeps every checkpoint" ($t1.All.Count -eq 2)
+
+# Tier 2 -- WMI's IsAutomaticSnapshot ids, joined on the checkpoint GUID. Brace/case
+# differences between the two views must not break the join.
+$t2 = Get-AgentVmAutomaticCheckpoint -VmName "Agent-VM" `
+    -Wmi @{ Supported = $true; Ids = @("{AAAAAAAA-1111-2222-3333-444444444444}") } -Snapshots @(
+    (New-FakeSnap "Agent-VM - (b)" "aaaaaaaa-1111-2222-3333-444444444444"),
+    (New-FakeSnap "Agent-VM - (c)" "bbbbbbbb-1111-2222-3333-444444444444")
+)
+ok "checkpoints tier2: WMI id join is brace/case insensitive" (
+    $t2.Certain.Count -eq 1 -and $t2.Certain[0].Name -eq "Agent-VM - (b)")
+ok "checkpoints tier2: a working query is authoritative -- an unlisted id is neither certain nor probable" (
+    $t2.Certain.Count -eq 1 -and $t2.Probable.Count -eq 0)
+
+# Tier 3 -- no flag anywhere: name-matched checkpoints are PROBABLE (the script asks
+# before deleting them) and everything else is left out entirely.
+$t3 = Get-AgentVmAutomaticCheckpoint -VmName "Agent-VM" -Wmi $noWmi -Snapshots @(
+    (New-FakeSnap "Agent-VM - (c)" "33333333-3333-3333-3333-333333333333"),
+    (New-FakeSnap "pre-refactor" "44444444-4444-4444-4444-444444444444")
+)
+ok "checkpoints tier3: name match -> Probable, never Certain" (
+    $t3.Certain.Count -eq 0 -and $t3.Probable.Count -eq 1 -and $t3.Probable[0].Name -eq "Agent-VM - (c)")
+ok "checkpoints tier3: a user checkpoint is in neither delete list" (
+    ($t3.Probable | Where-Object { $_.Name -eq "pre-refactor" }).Count -eq 0)
+
+# A query that WORKED but found nothing automatic: still authoritative, so an
+# auto-looking name is left alone rather than prompting.
+$empty = Get-AgentVmAutomaticCheckpoint -VmName "Agent-VM" -Wmi @{ Supported = $true; Ids = @() } -Snapshots @(
+    (New-FakeSnap "Agent-VM - (e)" "55555555-5555-5555-5555-555555555555")
+)
+ok "checkpoints: supported-but-empty WMI result suppresses the heuristic" (
+    $empty.Certain.Count -eq 0 -and $empty.Probable.Count -eq 0)
+
+$none = Get-AgentVmAutomaticCheckpoint -VmName "Agent-VM" -Wmi $noWmi -Snapshots @()
+ok "checkpoints: no snapshots -> three empty lists" (
+    $none.All.Count -eq 0 -and $none.Certain.Count -eq 0 -and $none.Probable.Count -eq 0)
+# "no checkpoints" and "couldn't read the checkpoints" must be distinguishable: the
+# script reports success for the first and FAILS for the second, because an automatic
+# checkpoint may still be sitting there unremoved.
+ok "checkpoints: an empty-but-successful enumeration reports Enumerated" ($none.Enumerated -eq $true)
+$unreadable = Get-AgentVmAutomaticCheckpoint -VmName "No-Such-VM-For-Tests"
+ok "checkpoints: an enumeration failure reports Enumerated=false, not 'no checkpoints'" (
+    $unreadable.Enumerated -eq $false -and $unreadable.All.Count -eq 0)
+
+$nulls = Get-AgentVmAutomaticCheckpoint -VmName "Agent-VM" -Wmi @{ Supported = $true; Ids = @($null, "") } -Snapshots @(
+    $null, (New-FakeSnap "Agent-VM - (d)" $null)
+)
+ok "checkpoints: null snapshot / unjoinable id / blank wmi ids don't throw or mis-classify" (
+    $nulls.Certain.Count -eq 0 -and $nulls.Probable.Count -eq 1)
+
+# ── Set-AgentVmCheckpoints.ps1 source invariants ────────────────────────────
+# The classifier's Enumerated flag and the panel result file are only useful if the
+# script actually ACTS on them, and neither can be exercised without Hyper-V. Pin the
+# wiring at the source level (same technique as the Wait-Exit globals check above) so a
+# refactor that drops either one fails here instead of in the field.
+$chkScript = Get-Content -Raw (Join-Path $here "..\Set-AgentVmCheckpoints.ps1")
+
+ok "checkpoint script: an unreadable checkpoint list is turned into a throw, not a success" (
+    $chkScript -match '(?s)if\s*\(-not\s+\$found\.Enumerated\)\s*\{[^}]*throw')
+# The removal loop must be reached only after that guard. Anchor on the CALL
+# ("Remove-VMSnapshot -VMSnapshot"), not the bare name -- which also appears in the
+# script's help text, above everything.
+ok "checkpoint script: the Enumerated guard precedes every Remove-VMSnapshot call" (
+    $chkScript.IndexOf('$found.Enumerated') -lt $chkScript.IndexOf('Remove-VMSnapshot -VMSnapshot'))
+# The panel records "applied" from this file, so writing "ok" must be conditional on the
+# failure flag -- an unconditional write would mark a failed run as applied.
+ok "checkpoint script: the result file reports fail when the run failed" (
+    $chkScript -match 'CONSTRUCT_CHECKPOINT_RESULT' -and
+    $chkScript -match 'if\s*\(\$failed\)\s*\{\s*"fail"\s*\}\s*else\s*\{\s*"ok"\s*\}')
+# Written temp+rename so the polling panel can never read a half-written value.
+ok "checkpoint script: the result file is written temp+rename" (
+    $chkScript -match 'Set-Content[^\r\n]*\$tmp' -and $chkScript -match 'Move-Item[^\r\n]*\$tmp')
+# Every exit path that reaches finally must report, including the dependency failure --
+# which is why the common-lib load lives inside the try.
+ok "checkpoint script: the common-lib load is inside the guarded block" (
+    $chkScript.IndexOf('try {') -lt $chkScript.IndexOf('Required helper not found'))
+
+# ── Auto-Install.ps1 automatic-checkpoint source invariants ─────────────────
+# Both guards sit on paths only a Windows host with a partially-updated scripts dir
+# reaches, so pin them at the source level rather than leave them unverified.
+$aiScript = Get-Content -Raw (Join-Path $here "..\Auto-Install.ps1")
+
+# The VM is already DELETED by the time the create script is invoked, so an unsupported
+# parameter must be dropped rather than splatted into a binding failure.
+ok "auto-install: checks Create-AgentVM's parameters before splatting" (
+    $aiScript -match "Get-Command[^\r\n]*createScript" -and
+    $aiScript -match "Parameters\.ContainsKey\('AutomaticCheckpoints'\)")
+ok "auto-install: an unsupported OR unknowable parameter is REMOVED, not passed" (
+    ([regex]::Matches($aiScript, "createArgs\.Remove\('AutomaticCheckpoints'\)")).Count -ge 2)
+ok "auto-install: the capability guard precedes the create-script call" (
+    $aiScript.IndexOf("Parameters.ContainsKey('AutomaticCheckpoints')") -lt
+    $aiScript.IndexOf('& $createScript @createArgs'))
+
+# An unbound parameter (a hand run, or an older control-panel extension) must fall back
+# to the saved preference instead of the parameter default.
+ok "auto-install: an unbound parameter falls back to the saved preference" (
+    $aiScript -match "ContainsKey\('AutomaticCheckpoints'\)" -and $aiScript -match 'vmAutoCheckpoints')
+# Not [bool]: every non-empty string is truthy in PowerShell, so the string "false"
+# would enable checkpoints.
+ok "auto-install: the saved preference is not read through a [bool] cast" (
+    $aiScript -notmatch '\[bool\]\$savedSettings\.vmAutoCheckpoints')
+ok "auto-install: the create call passes the EFFECTIVE value, not the raw parameter" (
+    $aiScript -match 'AutomaticCheckpoints = \$effectiveAutoCheckpoints')
+
 Write-Host ""
 Write-Host ("  host-lib unit tests - {0}/{1} passed" -f $script:pass, ($script:pass + $script:fail))
 Write-Host ""

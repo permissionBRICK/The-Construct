@@ -20,6 +20,7 @@
 // (buildInvocation/buildHostLaunch) can be unit-tested under plain node.
 
 const cp = require("child_process");
+const fs = require("fs");
 const path = require("path");
 const host = require("./host");
 
@@ -27,6 +28,7 @@ function vsc() { return require("vscode"); }
 
 const PROVISION = "Provision-AgentVM.ps1";   // reprovision + export (no admin)
 const AUTO_INSTALL = "Auto-Install.ps1";     // reinstall + redownload (self/explicitly elevated)
+const CHECKPOINTS = "Set-AgentVmCheckpoints.ps1"; // apply the checkpoint policy to the LIVE VM (elevated)
 const BACKUP_DIR_NAME = ".construct-backup"; // mirrors Get-ConstructBackupDir
 
 /** Coerce a backup-mode to the validated set Auto-Install.ps1 accepts. The plain
@@ -97,6 +99,15 @@ function buildInvocation(action, opts = {}) {
       pushProjects(); // Auto-Install forwards -Projects to Provision (-Auto gates its prompts)
       pushPair("-VmMemoryGB", s.ram);
       pushPair("-VmDiskGB", s.disk);
+      // Hyper-V automatic checkpoints are decided when the VM is CREATED, which only
+      // a rebuild does — so the preference rides reinstall/redownload, not reprovision
+      // (which never touches Hyper-V). An existing VM is changed by "setCheckpoints".
+      //
+      // Capability-gated: Auto-Install.ps1 is an advanced function, so an install whose
+      // scripts predate this parameter FAILS TO BIND and the rebuild never starts. A
+      // newer extension against an older scripts dir must therefore drop the flag and
+      // let the script's own default stand, not break Reinstall outright.
+      if (opts.supportsCheckpoints !== false) pushBool("-AutomaticCheckpoints", s.autoCheckpoints);
       if (action === "redownload") pushPair("-UbuntuRelease", s.ubuntu);
       pushPair("-GitUserName", s.gitName);
       pushPair("-GitEmail", s.gitEmail);
@@ -113,9 +124,50 @@ function buildInvocation(action, opts = {}) {
       };
     }
 
+    // Apply the automatic-checkpoint policy to the EXISTING VM, right now. Hyper-V
+    // cmdlets need admin, so this elevates (UAC) like reinstall/redownload — but it
+    // isn't `destructive` in the confirm-modal sense: the extension has already asked
+    // whether to apply now, and the script itself confirms before removing any
+    // checkpoint it can't positively identify as automatic.
+    case "setCheckpoints": {
+      // STRICT boolean. This action deletes checkpoints when it runs with -Enabled false,
+      // so a malformed request (missing field, the STRING "true") must be refused rather
+      // than defaulted — defaulting would silently pick the destructive direction.
+      if (typeof opts.enabled !== "boolean") return null;
+      const enabled = opts.enabled;
+      args.push("-Enabled", enabled ? "true" : "false");
+      return {
+        script: CHECKPOINTS, args, destructive: false, elevate: true,
+        label: enabled ? "Enable automatic checkpoints" : "Disable automatic checkpoints",
+      };
+    }
+
     default:
       return null;
   }
+}
+
+/**
+ * Do the host scripts in `scriptsDir` understand `-AutomaticCheckpoints`? Read the
+ * ANSWER out of Auto-Install.ps1 itself rather than inferring it from a sibling file's
+ * existence: a hand-assembled or partially-updated scripts dir can hold the newer
+ * Set-AgentVmCheckpoints.ps1 next to an older Auto-Install.ps1, and passing the flag to
+ * an advanced function that lacks the parameter is a BINDING failure — the rebuild would
+ * never start. Unreadable/absent → false (drop the flag; the script's own default stands).
+ */
+function scriptSupportsCheckpoints(scriptsDir) {
+  if (!scriptsDir) return false;
+  let txt;
+  try { txt = fs.readFileSync(path.join(scriptsDir, AUTO_INSTALL), "utf8"); } catch (_) { return false; }
+  // Match a real parameter DECLARATION, not any mention of the name: `[string]$Foo` /
+  // `[string]$Foo = "x"` / `$Foo,`. A bare name test would be satisfied by a comment (or
+  // by our own doc text) on a script that has no such parameter, and passing the flag to
+  // one is a binding failure. Comments are stripped first so even `# $Foo = ...` can't
+  // pass; PowerShell identifiers are case-INSENSITIVE, so is this.
+  const code = txt
+    .replace(/<#[\s\S]*?#>/g, "")   // block comments (the .SYNOPSIS help header)
+    .replace(/^[ \t]*#.*$/gm, "");  // whole-line comments
+  return /\$AutomaticCheckpoints\s*(?:=|,|\)|$)/im.test(code);
 }
 
 /** A PowerShell single-quoted string literal (embedded quotes doubled). */
@@ -312,9 +364,10 @@ function launchHostScript(opts) {
 }
 
 /**
- * Run a lifecycle action. `opts`: { scriptsDir, backupMode? }. scriptsDir must be
- * pre-resolved by the caller (it owns the construct.scriptsDir setting). The
- * destructive actions confirm first; everything launches a new host console.
+ * Run a lifecycle action. `opts`: { scriptsDir, backupMode?, projects?, enabled?, env? }.
+ * scriptsDir must be pre-resolved by the caller (it owns the construct.scriptsDir
+ * setting); `enabled` is the setCheckpoints on/off. The destructive actions confirm
+ * first; everything launches a new host console.
  */
 function run(action, opts = {}) {
   const vscode = vsc();
@@ -333,16 +386,42 @@ function run(action, opts = {}) {
     backupDir: path.join(scriptsDir, BACKUP_DIR_NAME),
     backupMode: opts.backupMode,
     projects,
+    enabled: opts.enabled,
+    supportsCheckpoints: scriptSupportsCheckpoints(scriptsDir),
   });
   if (!inv) return;
+  // Honesty gate: when the scripts are too old to take -AutomaticCheckpoints we drop the
+  // flag (see buildInvocation) — but an old Create-AgentVM.ps1 hardcodes automatic
+  // checkpoints ON, so silently rebuilding would produce the OPPOSITE of the saved
+  // preference. Say so before the rebuild rather than after.
+  if (inv.destructive && !inv.args.includes("-AutomaticCheckpoints")) {
+    // ABSENT counts as "wants off": the panel's toggle defaults to off and that IS the
+    // product default, so a user who never touched it still expects a rebuilt VM to have
+    // checkpoints disabled. Only an explicit `true` is unaffected by an old script.
+    let wantsOff = true;
+    try { wantsOff = host.readSettings(scriptsDir).autoCheckpoints !== true; } catch (_) {}
+    if (wantsOff && !scriptSupportsCheckpoints(scriptsDir)) {
+      vscode.window.showWarningMessage(
+        "These host scripts are too old to honour the “Automatic checkpoints: off” setting, so the rebuilt VM will have Hyper-V's automatic checkpoints ON. Update Construct first to avoid that."
+      );
+    }
+  }
   Promise.resolve(inv.destructive ? confirmDestructive(inv) : true).then((ok) => {
-    if (ok) launchHostScript({ scriptsDir, script: inv.script, args: inv.args, elevate: inv.elevate, label: inv.label });
+    if (!ok) return;
+    // A rebuild REPLACES the VM, so what was last confirmed onto the old one says nothing
+    // about the new one. Clearing the marker keeps the (permission-gated) apply-offer
+    // honest: a stale "already applied off" must not suppress the offer for a fresh VM
+    // that an old script just created with checkpoints on.
+    if (inv.destructive) {
+      try { host.saveAppliedAutoCheckpoints(scriptsDir, null); } catch (_) { /* best-effort */ }
+    }
+    launchHostScript({ scriptsDir, script: inv.script, args: inv.args, elevate: inv.elevate, label: inv.label, env: opts.env });
   });
 }
 
 module.exports = {
-  PROVISION, AUTO_INSTALL, BACKUP_DIR_NAME,
-  normalizeBackupMode, buildInvocation,
+  PROVISION, AUTO_INSTALL, CHECKPOINTS, BACKUP_DIR_NAME,
+  normalizeBackupMode, buildInvocation, scriptSupportsCheckpoints,
   psSingleQuote, winQuoteArg, buildChildCommandLine, buildOuterCommand, buildCallCommand, buildHostLaunch,
   hostLaunchSpawnOptions, launchHostScript, run, configure,
 };
