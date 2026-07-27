@@ -248,10 +248,9 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await page.click('[data-cmd="selectProfiles"]');
   posted = await page.evaluate(() => window.__posted);
   check("panel: select-profiles posts command", posted.some((m) => m.type === "command" && m.id === "selectProfiles"));
-  // import-from-VM action posts the command.
-  await page.click('[data-cmd="importProjects"]');
-  posted = await page.evaluate(() => window.__posted);
-  check("panel: import-projects posts command", posted.some((m) => m.type === "command" && m.id === "importProjects"));
+  // The "import from VM" button was removed — auto-import is now handled by the
+  // sync tick. Verify the button is absent from the panel.
+  check("panel: import-from-VM button removed", (await page.locator('[data-cmd="importProjects"]').count()) === 0);
 
   // usage: the token-usage table renders a row per agent (bar + tokens + cost) and a
   // total row from the pushed usage state (renderUsage consumes {tools,totalTokensText,totalCostText}).
