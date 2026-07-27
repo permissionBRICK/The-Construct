@@ -238,6 +238,27 @@ try {
     return JSON.stringify(m.projects) === "[]";
   })());
   ok("select: save no scripts dir -> throws", (() => { try { host.saveSelectedProjects(null, []); return false; } catch (_) { return true; } })());
+
+  // hasPersistedSelection: distinguishes absent key from explicit empty array.
+  ok("select: hasPersistedSelection false when key absent", (() => {
+    const d = path.join(root, "has-test-absent");
+    fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(d, ".construct-settings.json"), JSON.stringify({ gitUserName: "x" }) + "\n", "utf8");
+    return host.hasPersistedSelection(d) === false;
+  })());
+  ok("select: hasPersistedSelection true for empty array", (() => {
+    const d = path.join(root, "has-test-empty");
+    fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(d, ".construct-settings.json"), JSON.stringify({ projects: [] }) + "\n", "utf8");
+    return host.hasPersistedSelection(d) === true;
+  })());
+  ok("select: hasPersistedSelection true for populated array", (() => {
+    const d = path.join(root, "has-test-pop");
+    fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(d, ".construct-settings.json"), JSON.stringify({ projects: ["web"] }) + "\n", "utf8");
+    return host.hasPersistedSelection(d) === true;
+  })());
+  ok("select: hasPersistedSelection false with no scripts dir", host.hasPersistedSelection(null) === false);
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }

@@ -155,7 +155,7 @@ extension/
                       upstream import planning, merge-file, read/write store scripts, repo state,
                       seeding, conflict handling (140 checks)
     host.test.js      plain-node scripts-dir resolution + settings merge + readProjectProfile +
-                      project-profile list/write/select + traversal (67 checks; fake %LOCALAPPDATA% tree)
+                      project-profile list/write/select + traversal + hasPersistedSelection (72 checks; fake %LOCALAPPDATA% tree)
     remote.test.js    plain-node Remote-SSH helpers — isConnectedToVm/remoteFolderUri + repoNameFromUrl/isLikelyGitUrl/buildCloneScript/projectOpenPath/shouldAutoOpenPanel + URI percent-encoding (71 checks)
     lifecycle.test.js plain-node buildInvocation + winQuoteArg/quoting/elevation units (48 checks)
     updates.test.js   plain-node update-check units — Construct compare/cache + agent semver/latest/script + fetchJson redirects/per-host Accept, injected fetch+clock+http (62 checks)
@@ -164,7 +164,7 @@ extension/
                       names, atomic writes, PROJECTS_STORE override (54 checks)
     projects.test.js  plain-node scan builder/parser + planImport merge + reconcileSelection +
                       sanitizeProfile (injection + prototype-pollution) + config-sync helpers:
-                      isReservedProfileName, validateProfile, canonicalProfileJson, share builders (147 checks)
+                      isReservedProfileName, validateProfile, canonicalProfileJson, case-insensitive planImport collision, share builders (160 checks)
     themes.test.js    plain-node UI-design units — registry shape + settings-enum sync with
                       package.json, css+preview files exist per design, normalize fallbacks
                       (hostile/unknown -> default), picker HTML nonce/CSP/escaping

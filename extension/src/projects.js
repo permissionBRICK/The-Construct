@@ -135,15 +135,19 @@ function planImport(scan, existingProfiles) {
   const skipped = [];
   const coveredNames = [];
   const seenUrls = new Set();
-  const plannedNames = new Set(Object.keys(existing));
+  // Case-INSENSITIVE collision check: profile names are filenames, and on
+  // Windows/macOS the config dir is a case-insensitive filesystem, so "api" and
+  // "API" are the same file. Comparing case-sensitively would let a VM repo named
+  // "API" silently overwrite an existing "api.json".
+  const plannedNamesLower = new Set(Object.keys(existing).map(function (n) { return n.toLowerCase(); }));
   for (const repo of repos) {
     if (!repo || !repo.name) continue;
     const url = (repo.url || "").trim();
     if (!url) { skipped.push(repo.name); continue; }        // no remote -> can't re-clone
     if (covered.has(url) || seenUrls.has(url)) { coveredNames.push(repo.name); continue; }
-    if (plannedNames.has(repo.name)) { coveredNames.push(repo.name); continue; } // name taken -> keep existing
+    if (plannedNamesLower.has(repo.name.toLowerCase())) { coveredNames.push(repo.name); continue; }
     seenUrls.add(url);
-    plannedNames.add(repo.name);
+    plannedNamesLower.add(repo.name.toLowerCase());
     toWrite.push({ name: repo.name, profile: buildDiscoveredProfile(repo) });
   }
   return { toWrite, skipped, covered: coveredNames };
