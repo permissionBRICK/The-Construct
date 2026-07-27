@@ -80,6 +80,74 @@ ok("redownload: threads -T3Code from settings", has(red.args, "-T3Code", "true")
 const redNoRel = life.buildInvocation("redownload", { settings: {} });
 ok("redownload: omits -UbuntuRelease when unset", !redNoRel.args.includes("-UbuntuRelease"));
 
+// ── automatic checkpoints ────────────────────────────────────────────────────
+// The preference is a Hyper-V property fixed at VM-CREATION time, so it rides the
+// rebuild actions (which run Create-AgentVM) and NOT reprovision (which never
+// touches Hyper-V); an existing VM is changed by the separate setCheckpoints action.
+ok("reinstall: threads -AutomaticCheckpoints false from settings", has(life.buildInvocation("reinstall", { settings: { autoCheckpoints: false } }).args, "-AutomaticCheckpoints", "false"));
+ok("reinstall: -AutomaticCheckpoints true when enabled", has(life.buildInvocation("reinstall", { settings: { autoCheckpoints: true } }).args, "-AutomaticCheckpoints", "true"));
+ok("redownload: threads -AutomaticCheckpoints", has(life.buildInvocation("redownload", { settings: { autoCheckpoints: true } }).args, "-AutomaticCheckpoints", "true"));
+ok("rebuild: omits -AutomaticCheckpoints when unset", !life.buildInvocation("reinstall", { settings: {} }).args.includes("-AutomaticCheckpoints"));
+// Capability gate: an older scripts dir has no -AutomaticCheckpoints parameter, and
+// Auto-Install.ps1 is an advanced function — passing it would fail to BIND and the
+// rebuild would never start. Dropping the flag lets the old script's default stand.
+// The gate reads the PARAMETER out of Auto-Install.ps1 itself: a companion-file check
+// would misjudge a hand-assembled dir holding the new live-apply script next to an
+// old Auto-Install.ps1, and pass the flag into a binding failure.
+ok("rebuild: drops -AutomaticCheckpoints when the scripts don't support it",
+  !life.buildInvocation("reinstall", { settings: { autoCheckpoints: true }, supportsCheckpoints: false }).args.includes("-AutomaticCheckpoints"));
+ok("rebuild: keeps -AutomaticCheckpoints when supported (and when unspecified)",
+  has(life.buildInvocation("reinstall", { settings: { autoCheckpoints: true }, supportsCheckpoints: true }).args, "-AutomaticCheckpoints", "true") &&
+  has(life.buildInvocation("reinstall", { settings: { autoCheckpoints: true } }).args, "-AutomaticCheckpoints", "true"));
+ok("reprovision: never sends -AutomaticCheckpoints (no Hyper-V access)", !life.buildInvocation("reprovision", { settings: { autoCheckpoints: true } }).args.includes("-AutomaticCheckpoints"));
+
+const chkOff = life.buildInvocation("setCheckpoints", { enabled: false });
+const chkOn = life.buildInvocation("setCheckpoints", { enabled: true });
+ok("setCheckpoints: uses the checkpoint script", chkOff.script === life.CHECKPOINTS && life.CHECKPOINTS === "Set-AgentVmCheckpoints.ps1");
+ok("setCheckpoints: elevated (Hyper-V needs admin), not modal-destructive", chkOff.elevate === true && chkOff.destructive === false);
+ok("setCheckpoints: -Enabled false", has(chkOff.args, "-Enabled", "false"));
+ok("setCheckpoints: -Enabled true", has(chkOn.args, "-Enabled", "true"));
+// STRICT boolean: this action DELETES checkpoints when it runs with -Enabled false, so a
+// malformed request must be refused, not defaulted into the destructive direction.
+ok("setCheckpoints: missing enabled -> null (never defaults to the destructive direction)",
+  life.buildInvocation("setCheckpoints", {}) === null);
+ok("setCheckpoints: non-boolean enabled -> null",
+  life.buildInvocation("setCheckpoints", { enabled: "true" }) === null &&
+  life.buildInvocation("setCheckpoints", { enabled: 1 }) === null &&
+  life.buildInvocation("setCheckpoints", { enabled: null }) === null);
+ok("setCheckpoints: labels say which way it went", chkOn.label === "Enable automatic checkpoints" && chkOff.label === "Disable automatic checkpoints");
+ok("setCheckpoints: passes -FromPanel (no pause on success)", chkOff.args.includes("-FromPanel"));
+
+// scriptSupportsCheckpoints reads the real parameter, against a fake scripts dir.
+const fs = require("fs"), os = require("os"), path = require("path");
+const sd = fs.mkdtempSync(path.join(os.tmpdir(), "construct-life-"));
+ok("capability: no Auto-Install.ps1 at all -> unsupported", life.scriptSupportsCheckpoints(sd) === false);
+fs.writeFileSync(path.join(sd, "Auto-Install.ps1"), "param(\n  [string]$T3Code = \"\"\n)\n");
+ok("capability: an old Auto-Install.ps1 -> unsupported", life.scriptSupportsCheckpoints(sd) === false);
+// The dangerous mixed-version case: the NEW live-apply script sitting next to an OLD
+// Auto-Install.ps1. A file-presence check would wrongly say "supported" and hand the
+// flag to a script that rejects it.
+fs.writeFileSync(path.join(sd, "Set-AgentVmCheckpoints.ps1"), "param([string]$Enabled)\n");
+ok("capability: companion script present but the parameter absent -> still unsupported",
+  life.scriptSupportsCheckpoints(sd) === false);
+fs.writeFileSync(path.join(sd, "Auto-Install.ps1"), "param(\n  [ValidateSet(\"true\",\"false\")]\n  [string]$AutomaticCheckpoints = \"false\"\n)\n");
+ok("capability: the parameter present -> supported", life.scriptSupportsCheckpoints(sd) === true);
+ok("capability: null scripts dir -> unsupported (no throw)", life.scriptSupportsCheckpoints(null) === false);
+// It must match a DECLARATION, not any mention: a doc comment naming the parameter on a
+// script that lacks it would send the flag into a binding failure.
+fs.writeFileSync(path.join(sd, "Auto-Install.ps1"), "# forwards -AutomaticCheckpoints in newer builds\n<#\n  mentions $AutomaticCheckpoints in prose\n#>\nparam([string]$T3Code)\n");
+ok("capability: a prose/comment mention alone -> unsupported", life.scriptSupportsCheckpoints(sd) === false);
+// Even a commented-OUT declaration must not count — it is not bindable.
+fs.writeFileSync(path.join(sd, "Auto-Install.ps1"), "param(\n  # $AutomaticCheckpoints = \"false\",\n  [string]$T3Code\n)\n");
+ok("capability: a commented-out declaration -> unsupported", life.scriptSupportsCheckpoints(sd) === false);
+fs.writeFileSync(path.join(sd, "Auto-Install.ps1"), "<#\n .PARAMETER X\n   $AutomaticCheckpoints = \"false\"\n#>\nparam([string]$T3Code)\n");
+ok("capability: a block-comment help mention -> unsupported", life.scriptSupportsCheckpoints(sd) === false);
+// PowerShell identifiers are case-insensitive, and Windows files are CRLF.
+fs.writeFileSync(path.join(sd, "Auto-Install.ps1"), "param(\r\n  [string]$automaticcheckpoints = \"false\",\r\n  [switch]$X\r\n)\r\n");
+ok("capability: case-insensitive + CRLF declaration -> supported", life.scriptSupportsCheckpoints(sd) === true);
+fs.writeFileSync(path.join(sd, "Auto-Install.ps1"), "param(\n  [string]$AutomaticCheckpoints\n)\n");
+ok("capability: trailing declaration with no default -> supported", life.scriptSupportsCheckpoints(sd) === true);
+
 ok("unknown action -> null", life.buildInvocation("bogus", {}) === null);
 
 // ── -FromPanel: every panel launch skips the script's end-of-run pause ───────

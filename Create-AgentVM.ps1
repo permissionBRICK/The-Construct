@@ -66,6 +66,14 @@ param(
     # Forwarded to Provision-AgentVM.ps1: opt-in T3 Code web GUI. Empty = keep the
     # VM's saved choice; "true"/"false".
     [string]$T3Code = "",
+    # Hyper-V automatic checkpoints: snapshot the VM at every start. OFF by default
+    # for Construct -- on a disposable agent VM the checkpoint only costs (a growing
+    # .avhdx differencing disk, slower I/O, and a merge whenever it's deleted).
+    # "true" re-enables Hyper-V's own default. Control-panel setting: Settings ->
+    # VM resources -> Automatic checkpoints (Set-AgentVmCheckpoints.ps1 applies it
+    # to an existing VM). "true"/"false".
+    [ValidateSet("true", "false")]
+    [string]$AutomaticCheckpoints = "false",
     # Forwarded to Provision-AgentVM.ps1 for the save/restore + clone-credential
     # features. RestoreDir restores a saved config after provisioning;
     # GitCloneCredentialsB64 supplies credentials for cloning private project
@@ -154,6 +162,9 @@ if ($ProcessorCount -lt 1) {
 }
 $VhdPath           = "C:\ProgramData\Microsoft\Windows\Virtual Hard Disks\$VmName.vhdx"
 $CheckpointType    = "Standard"
+# Automatic checkpoints default to OFF (Hyper-V's own default is ON) -- see the
+# -AutomaticCheckpoints parameter for why.
+$AutoCheckpoints   = ($AutomaticCheckpoints -eq "true")
 $AutoStart         = "StartIfRunning"
 $AutoStop          = "Save"
 
@@ -351,9 +362,10 @@ Set-VM -Name $VmName `
        -CheckpointType $CheckpointType `
        -AutomaticStartAction $AutoStart `
        -AutomaticStopAction $AutoStop `
-       -AutomaticCheckpointsEnabled $true
+       -AutomaticCheckpointsEnabled $AutoCheckpoints
 
 Write-Ok "Processors: $ProcessorCount, Dynamic Memory: off, Checkpoint: $CheckpointType"
+Write-Ok "Automatic checkpoints: $(if ($AutoCheckpoints) { 'on' } else { 'off' })"
 
 # Expose the host CPU's virtualization extensions to the guest (nested
 # virtualization) so the agent can use KVM/QEMU, containers with gVisor/Kata,

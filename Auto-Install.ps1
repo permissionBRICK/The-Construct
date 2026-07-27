@@ -123,6 +123,13 @@ param(
     # Forwarded down (Create-AgentVM.ps1 -> Provision-AgentVM.ps1): opt-in T3 Code
     # web GUI. Empty = keep the VM's saved choice; "true"/"false".
     [string]$T3Code = "",
+    # Forwarded to Create-AgentVM.ps1: Hyper-V automatic checkpoints (a snapshot at
+    # every VM start). OFF by default for Construct -- on a disposable agent VM the
+    # checkpoint only costs disk and I/O. Applies when the VM is CREATED (install /
+    # reinstall / redownload); the control panel's Settings -> VM resources toggle
+    # can also apply it to an existing VM via Set-AgentVmCheckpoints.ps1. "true"/"false".
+    [ValidateSet("true", "false")]
+    [string]$AutomaticCheckpoints = "false",
     [switch]$SkipChecksum,
     [switch]$SkipCreateVm,
     [switch]$Force,
@@ -1144,6 +1151,27 @@ if (-not $SkipCreateVm -and -not $existingVmHandled -and
 # download/build and the VM creation/provisioning can all run unattended. This
 # is skipped entirely when only building the ISO (-SkipCreateVm). Any value
 # passed on the command line is honoured and not re-prompted.
+# Automatic checkpoints: an EXPLICIT -AutomaticCheckpoints wins; otherwise fall back to
+# the control panel's saved preference (.construct-settings.json) so a hand-run install
+# honours the toggle instead of silently reverting to the parameter default. This also
+# covers an OLDER control-panel extension driving a NEWER Auto-Install: it passes no
+# argument at all, and without this the saved "on" would be lost.
+$effectiveAutoCheckpoints = $AutomaticCheckpoints
+if (-not $PSBoundParameters.ContainsKey('AutomaticCheckpoints')) {
+    try {
+        $savedSettings = Read-ConstructSettings -Dir $PSScriptRoot
+        if ($savedSettings -and $null -ne $savedSettings.vmAutoCheckpoints) {
+            # NOT [bool]: every non-empty PowerShell string is truthy, so a hand-edited
+            # settings file holding the STRING "false" would coerce to $true and silently
+            # enable checkpoints. Compare the rendered value instead -- $true renders
+            # "True", $false renders "False", and both JSON strings compare as written.
+            $savedText = "$($savedSettings.vmAutoCheckpoints)".Trim().ToLowerInvariant()
+            $effectiveAutoCheckpoints = if ($savedText -in @("true", "1")) { "true" } else { "false" }
+            Write-Note "Automatic checkpoints: $effectiveAutoCheckpoints (from the saved control-panel setting)"
+        }
+    } catch { }
+}
+
 $chosenMemGB         = $VmMemoryGB
 $chosenDiskGB        = $VmDiskGB
 $chosenProjects      = $Projects
@@ -1519,9 +1547,33 @@ $createArgs = @{
     ClaudePartialStreaming = $ClaudePartialStreaming
     MicPassthrough = $MicPassthrough
     T3Code        = $T3Code
+    AutomaticCheckpoints = $effectiveAutoCheckpoints
     # -Auto: Create-AgentVM skips its own Provision call and this script's
     # try/finally owns the final pause.
     Auto          = $true
+}
+# Version-skew guard: a partially-updated scripts dir can pair THIS script with an
+# older Create-AgentVM.ps1 that has no -AutomaticCheckpoints parameter. Splatting it
+# there is a parameter-binding failure -- and by this point the old VM is already
+# DELETED, so the rebuild would simply break. Drop the argument instead (the old
+# script's own default stands) and say so loudly, rather than fail the rebuild.
+try {
+    $createCmd = Get-Command -Name $createScript -CommandType ExternalScript -ErrorAction Stop
+    if (-not $createCmd.Parameters.ContainsKey('AutomaticCheckpoints')) {
+        $createArgs.Remove('AutomaticCheckpoints')
+        Write-Warning "Create-AgentVM.ps1 in this folder is older than Auto-Install.ps1 and doesn't support -AutomaticCheckpoints."
+        Write-Host "    The VM will be created with Hyper-V's automatic-checkpoint default (ON). Update Construct, then" -ForegroundColor Yellow
+        Write-Host "    turn them off from the control panel (Settings -> VM resources) or run Set-AgentVmCheckpoints.ps1." -ForegroundColor Yellow
+    }
+} catch {
+    # Fail SAFE, not open. We are already past Remove-AgentVm here, so passing an argument
+    # the target might reject risks a binding failure with the old VM gone -- a broken
+    # rebuild. Dropping it only costs Hyper-V's default (checkpoints on), which the
+    # control panel can fix afterwards.
+    $createArgs.Remove('AutomaticCheckpoints')
+    Write-Warning "Could not check Create-AgentVM.ps1's parameters ($($_.Exception.Message))."
+    Write-Host "    Creating the VM without -AutomaticCheckpoints; set it afterwards from the control panel" -ForegroundColor Yellow
+    Write-Host "    (Settings -> VM resources) or with Set-AgentVmCheckpoints.ps1." -ForegroundColor Yellow
 }
 if ($restoreDir)         { $createArgs['RestoreDir']             = $restoreDir }
 if ($chosenCloneCredB64) { $createArgs['GitCloneCredentialsB64'] = $chosenCloneCredB64 }

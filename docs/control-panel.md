@@ -222,6 +222,48 @@ The agent password is never stored — it's entered in the elevated console at r
 See [Project profiles & configuration](projects.md) and [Provisioning](provisioning.md) for
 what each setting maps to.
 
+### Automatic checkpoints
+
+Hyper-V's **automatic checkpoints** snapshot a VM every time it starts. That's a sensible
+default for a pet VM and a pure cost for a disposable agent VM: the checkpoint pins a
+differencing disk (`.avhdx`) that grows with every write, slows disk I/O, and has to be
+merged back whenever it's deleted. Construct therefore **creates VMs with automatic
+checkpoints off**, and the **Settings → VM resources → Automatic checkpoints** toggle
+(off by default) controls it.
+
+The saved value is applied whenever the VM is (re)created — every Reinstall / Redownload
+picks it up with no extra step. Because it's a Hyper-V property, it can't be changed by a
+Reprovision, so **saving the setting also offers to apply it to the VM you have right now**:
+answer **Apply now** and an elevated console (one UAC prompt) runs
+`Set-AgentVmCheckpoints.ps1`, which flips the policy and — when turning it *off* — removes
+the automatic checkpoint Hyper-V already took, so its disk gets merged back.
+
+Checkpoints you made yourself are never deleted *automatically*. The script only removes
+checkpoints Hyper-V positively reports as automatic (its `IsAutomaticSnapshot` flag). On an
+older host that doesn't report the flag, it falls back to matching Hyper-V's auto-generated
+name (`Agent-VM - (<timestamp>)`) — and because a checkpoint *you* created could be named
+that way too, each one is shown separately in the console and removed only if you type `yes`
+for it. Answer anything else and it's kept.
+
+Choosing **Later** is fine: the preference is saved either way and takes effect on the next
+rebuild — and saving again still offers to apply it while the VM disagrees. The panel
+compares your setting against the VM's *actual* Hyper-V policy, not against what the
+settings file used to say, which is what makes the toggle work on a VM created before
+Construct started disabling checkpoints: its policy is on, the saved preference is off, so
+the first save offers to fix it. Reading that policy needs Hyper-V access (the installer
+adds you to **Hyper-V Administrators**, effective at your next sign-in); until then the
+panel falls back to remembering whether an apply has ever *succeeded*, so the offer keeps
+appearing on each save until one does — choosing **Later** or cancelling the UAC prompt
+doesn't count.
+
+You can also run it by hand:
+
+```powershell
+.\Set-AgentVmCheckpoints.ps1 -Enabled false             # off + clean up the existing one
+.\Set-AgentVmCheckpoints.ps1 -Enabled true              # back to Hyper-V's default
+.\Set-AgentVmCheckpoints.ps1 -Enabled false -RemoveExisting false   # policy only
+```
+
 ### T3 Code web GUI
 
 The **T3 Code web GUI** toggle (off by default) opts the VM into
