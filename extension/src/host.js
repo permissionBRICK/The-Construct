@@ -207,6 +207,17 @@ function readSelectedProjects(scriptsDir) {
 }
 
 /**
+ * Whether the `projects` key has been explicitly persisted (even as an empty array).
+ * Distinguishes "user has never saved a selection" (absent key) from "user
+ * deliberately saved an empty selection" (projects: []). The auto-import uses this
+ * to decide whether to seed from the VM's live list. Pure.
+ */
+function hasPersistedSelection(scriptsDir) {
+  const raw = readRawSettings(scriptsDir);
+  return Array.isArray(raw.projects);
+}
+
+/**
  * Persist the project selection into .construct-settings.json under `projects`,
  * merging over the existing file so unmanaged keys (git identity, installedCommit,
  * vmMemoryGB, …) survive — same discipline as saveSettings. `names` is sanitized +
@@ -318,5 +329,5 @@ module.exports = {
   readRawSettings, writeRawSettings, mapToForm, mapFromForm,
   readSettings, saveSettings, readProjectProfile,
   safeProfileName, listProjectProfiles, writeProjectProfile,
-  readSelectedProjects, saveSelectedProjects,
+  readSelectedProjects, hasPersistedSelection, saveSelectedProjects,
 };

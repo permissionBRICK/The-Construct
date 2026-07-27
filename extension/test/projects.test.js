@@ -94,6 +94,23 @@ ok("plan: two scan repos sharing a url import only once", (() => {
 ok("plan: empty scan -> nothing", (() => { const p = projects.planImport([], {}); return !p.toWrite.length && !p.skipped.length; })());
 ok("plan: null scan -> nothing (no throw)", (() => { const p = projects.planImport(null, null); return !p.toWrite.length; })());
 
+// Case-insensitive name collision: on Windows/macOS the config dir is a
+// case-insensitive filesystem, so "api" and "API" are the same file.
+ok("plan: case-insensitive name collision blocks import", (() => {
+  const p = projects.planImport(
+    [{ name: "API", url: "https://h/o/api.git", branch: "m" }],
+    { api: { name: "api", repos: [{ url: "https://h/old-api.git" }] } }
+  );
+  return p.toWrite.length === 0 && p.covered.includes("API");
+})());
+ok("plan: case-insensitive collision within scan batch", (() => {
+  const p = projects.planImport([
+    { name: "app", url: "https://h/o/app.git", branch: "m" },
+    { name: "APP", url: "https://h/o/other.git", branch: "m" },
+  ], {});
+  return p.toWrite.length === 1 && p.toWrite[0].name === "app" && p.covered.includes("APP");
+})());
+
 // ── toChips / reconcileSelection ──────────────────────────────────────────────
 ok("chips: one per available profile, ticked from selection", eq(
   projects.toChips(["a", "b", "c"], ["b"]),

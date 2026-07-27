@@ -83,6 +83,7 @@ const SYNC_TICK_MIN_MS = 5 * 60 * 1000;
 let syncTickInFlight = false; // prevent concurrent ticks
 let lastSyncResult = null;    // most recent TickResult (for state.configSync)
 let configWatcher = null;     // fs.watch handle on cfgDir/projects
+let lastAutoImportAt = 0;     // ms: last auto-import (throttled like the sync tick)
 
 // ── Diagnostics log ─────────────────────────────────────────────────────────────
 // A "Construct" Output channel + a log file, so what the panel does (esp. the EXACT
@@ -292,6 +293,9 @@ async function refreshAll() {
     cachedConfigSync = await buildConfigSyncState();
     for (const w of liveWebviews) postState(w, withUsage !== aug ? withUsage : aug);
     await maybeAutoSync();
+    // Auto-import runs regardless of git presence, so users without git still get
+    // automatic discovery of new VM repos (docs/config-sync.md §10 degraded mode).
+    await maybeAutoImport();
     cachedConfigSync = await buildConfigSyncState();
     for (const w of liveWebviews) postState(w, withUsage !== aug ? withUsage : aug);
   } catch (_) { /* best-effort */ }
@@ -503,8 +507,13 @@ async function runConfigSync() {
 
 /** Add profiles that newly appeared on the host (synced up from the VM) to the
  *  persisted selection, so reprovisions include them without a manual re-tick.
- *  The union starts from effectiveProjects() — the same set a reprovision would
- *  use — so enabling a new name never drops existing active projects. */
+ *
+ *  Respects the seeded-vs-persisted distinction: when the user has EXPLICITLY
+ *  persisted a selection (even an empty one via "select profiles → save none"),
+ *  only the new names are appended to it — the existing selection is NOT
+ *  reseeded from the VM's live list. When no selection has ever been persisted
+ *  (the key is absent), effectiveProjects() seeds from the VM live set, and the
+ *  fresh names ride along. */
 async function autoEnableNewProfiles(before, after) {
   try {
     var beforeSet = new Set(before || []);
@@ -514,7 +523,16 @@ async function autoEnableNewProfiles(before, after) {
     if (!fresh.length) return;
     var scriptsDir = resolveScriptsDir();
     if (!scriptsDir) return;
-    var current = await effectiveProjects();
+    // When the user has explicitly saved a selection (even []), start from it —
+    // never fall back to the VM live set (that would re-select profiles the user
+    // deliberately deselected). When no selection was ever persisted, seed from
+    // the VM's current projects (effectiveProjects fallback).
+    var current;
+    if (host.hasPersistedSelection(scriptsDir)) {
+      current = host.readSelectedProjects(scriptsDir);
+    } else {
+      current = await effectiveProjects();
+    }
     var merged = current.slice();
     for (var i = 0; i < fresh.length; i++) {
       if (!merged.includes(fresh[i])) merged.push(fresh[i]);
@@ -545,10 +563,77 @@ async function configMergeGate() {
   return { blocked: false, dir: dir };
 }
 
+/**
+ * Shared pre-flight for destructive lifecycle flows (reinstall/redownload/
+ * reprovision and customRebuild). Runs the three required steps:
+ *   (a) importFromVm — catch any undiscovered repos;
+ *   (b) runConfigSync — final sync tick so profiles are synced;
+ *   (c) configMergeGate — verify no unresolved conflicts.
+ *
+ * Returns { ok:true } when the flow may proceed, or { ok:false, reason, dir }
+ * when it must be blocked. Fail-CLOSED: if the gate check throws or cannot
+ * determine the state, it blocks rather than proceeding blindly.
+ */
+async function lifecyclePreFlight(actionLabel) {
+  // (a) Import any VM repos not yet covered by a local profile.
+  try { await importFromVm(); } catch (_) {}
+  // (b) Run one final config-sync tick so profile files are synced.
+  try { await runConfigSync(); } catch (_) {}
+  // (c) Conflict gate: if there are sync conflicts, do NOT proceed.
+  // Fail-CLOSED: an exception from the gate (git error, repo-state error)
+  // blocks with an honest message rather than proceeding without verification.
+  var gate;
+  try {
+    gate = await configMergeGate();
+  } catch (e) {
+    return {
+      ok: false,
+      dir: resolveCfgDir(),
+      reason: "Could not verify config sync state before " + actionLabel +
+        ". Check the config repo for issues, then try again." +
+        (e && e.message ? " (" + e.message + ")" : ""),
+    };
+  }
+  if (gate.blocked) {
+    return {
+      ok: false,
+      dir: gate.dir,
+      reason: "Config sync has unresolved conflicts — resolve them before " + actionLabel +
+        ". Open the config repo in VS Code, resolve the merge conflicts, and commit.",
+    };
+  }
+  return { ok: true };
+}
+
+/** Show the pre-flight block message with an "Open config repo" action. */
+function showPreFlightBlock(result) {
+  if (!result.dir) {
+    vscode.window.showErrorMessage(result.reason);
+    return;
+  }
+  vscode.window.showErrorMessage(result.reason, "Open config repo").then(function (pick) {
+    if (pick === "Open config repo") {
+      vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(result.dir), true);
+    }
+  });
+}
+
 /** Throttled sync tick for auto-refresh: only runs if >=5 min since last. */
 async function maybeAutoSync() {
   if (Date.now() - lastSyncTickAt < SYNC_TICK_MIN_MS) return;
   await runConfigSync();
+}
+
+/** Throttled auto-import: runs importFromVm regardless of git presence, so users
+ *  without git still get automatic discovery. Uses the same 5-min throttle as the
+ *  sync tick. When git IS present, the sync tick also triggers the import (Finding 3
+ *  fix: git-absent users still get a steady-state import path). */
+async function maybeAutoImport() {
+  if (Date.now() - lastAutoImportAt < SYNC_TICK_MIN_MS) return;
+  try {
+    var result = await importFromVm();
+    if (result) lastAutoImportAt = Date.now();
+  } catch (_) { /* best-effort */ }
 }
 
 /** Set up fs.watch on cfgDir/projects (debounced 2s). Tolerates watcher errors. */
@@ -907,6 +992,7 @@ async function importFromVm() {
     try { host.writeProjectProfile(projRoot, item.name, item.profile); imported.push(item.name); }
     catch (_) { failed.push(item.name); }
   }
+  lastAutoImportAt = Date.now();
   if (imported.length) {
     logLine("auto-import from VM: imported " + imported.join(", "));
     await autoEnableNewProfiles(profilesBefore, host.listProjectProfiles(projRoot));
@@ -1152,7 +1238,7 @@ async function runSelectProfiles() {
   const profileRoot = resolveCfgDir() || scriptsDir;
   const available = host.listProjectProfiles(profileRoot);
   if (!available.length) {
-    vscode.window.showInformationMessage("No project profiles found. Use “import from VM” or “+ add project” first.");
+    vscode.window.showInformationMessage("No project profiles found. New repos are auto-discovered from the VM, or use \u201c+ add project\u201d to add one.");
     return;
   }
   const selected = new Set(host.readSelectedProjects(scriptsDir));
@@ -1353,14 +1439,8 @@ function handleMessage(message, webview, context) {
       if (!scriptsDir) { warnNoScriptsDir(); return; }
       const action = message.mode === "redownload" ? "redownload" : "reinstall";
       (async () => {
-        try {
-          var gate = await configMergeGate();
-          if (gate.blocked) {
-            vscode.window.showErrorMessage(gate.reason, "Open config repo")
-              .then(function (pick) { if (pick === "Open config repo") vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(gate.dir), true); });
-            return;
-          }
-        } catch (_) {}
+        var pf = await lifecyclePreFlight(action === "redownload" ? "redownloading" : "reinstalling");
+        if (!pf.ok) { showPreFlightBlock(pf); return; }
         effectiveProjects().then(function (projects) { lifecycle.run(action, { scriptsDir: scriptsDir, backupMode: message.backup, projects: projects }); });
       })();
       return;
@@ -1419,30 +1499,9 @@ function handleMessage(message, webview, context) {
       if (id === "reprovision" || id === "reinstall" || id === "redownload") {
         const scriptsDir = resolveScriptsDir();
         if (!scriptsDir) { warnNoScriptsDir(); return; }
-        // Pre-flight: import any undiscovered configs, run a final sync tick,
-        // then check for conflicts. All best-effort except the conflict gate
-        // which is blocking (docs/config-sync.md §9).
         (async () => {
-          // (a) Import any VM repos not yet covered by a local profile.
-          try { await importFromVm(); } catch (_) {}
-          // (b) Run one final config-sync tick so profile files are synced.
-          try { await runConfigSync(); } catch (_) {}
-          // (c) Conflict gate: if there are sync conflicts, do NOT proceed.
-          try {
-            var gate = await configMergeGate();
-            if (gate.blocked) {
-              vscode.window.showErrorMessage(
-                "Config sync has unresolved conflicts — resolve them before " +
-                (id === "reprovision" ? "reprovisioning" : id === "reinstall" ? "reinstalling" : "redownloading") +
-                ". Open the config repo in VS Code, resolve the merge conflicts, and commit.",
-                "Open config repo", "Open settings"
-              ).then(function (pick) {
-                if (pick === "Open config repo") vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(gate.dir), true);
-                if (pick === "Open settings") vscode.commands.executeCommand("workbench.action.openSettings", "construct");
-              });
-              return;
-            }
-          } catch (_) {}
+          var pf = await lifecyclePreFlight(id === "reprovision" ? "reprovisioning" : id === "reinstall" ? "reinstalling" : "redownloading");
+          if (!pf.ok) { showPreFlightBlock(pf); return; }
           effectiveProjects().then(function (projects) { lifecycle.run(id, { scriptsDir: scriptsDir, projects: projects }); });
           if (id === "reprovision") beginReprovisionFastRefresh();
         })();
