@@ -166,26 +166,57 @@ function isNewer(latest, installed) {
   return false;
 }
 
+/** Extract the prerelease portion of a version string (everything after the
+ *  first `-` that follows the major.minor.patch core). "" when absent. */
+function prereleasePart(v) {
+  const m = String(v).match(/\d+\.\d+\.\d+-(.*)/);
+  return m ? m[1] : "";
+}
+
+/** Compare two prerelease strings per semver 2.0 §11: split on `.`, compare
+ *  segment-by-segment — numeric segments as integers, string segments lexically,
+ *  numeric < string. Returns <0 / 0 / >0 (a < b / equal / a > b). */
+function comparePrerelease(a, b) {
+  if (a === b) return 0;
+  if (!a && !b) return 0;
+  if (!a) return 1;  // no prerelease > any prerelease (release beats pre)
+  if (!b) return -1;
+  const as = a.split("."), bs = b.split(".");
+  const len = Math.max(as.length, bs.length);
+  for (let i = 0; i < len; i++) {
+    if (i >= as.length) return -1;
+    if (i >= bs.length) return 1;
+    const an = /^\d+$/.test(as[i]), bn = /^\d+$/.test(bs[i]);
+    if (an && bn) {
+      const d = Number(as[i]) - Number(bs[i]);
+      if (d !== 0) return d;
+    } else if (an !== bn) {
+      return an ? -1 : 1;
+    } else {
+      if (as[i] < bs[i]) return -1;
+      if (as[i] > bs[i]) return 1;
+    }
+  }
+  return 0;
+}
+
 /** Nightly builds share the same major.minor.patch across many daily releases
  *  (e.g. 0.0.30-nightly.20260728 vs 0.0.30-nightly.20260729). isNewer strips
  *  the prerelease and calls them EQUAL, so the panel would never show a nightly
- *  update. This compares the FULL version string on the same channel: a semver
- *  core bump wins, otherwise any string difference means a new build. Only used
- *  when the VM's channel is nightly — stable still uses isNewer. */
+ *  update. This compares the FULL version using semver prerelease ordering: a
+ *  core bump wins, otherwise the prerelease identifiers are compared segment by
+ *  segment (numeric segments as integers, so .932 < .20260728 and dates sort
+ *  correctly regardless of build-number length). Only used when the VM's channel
+ *  is nightly — stable still uses isNewer. */
 function isNewerNightly(latest, installed) {
   if (!latest || !installed) return false;
   const ls = String(latest).trim(), is = String(installed).trim();
   if (ls === is) return false;
   if (isNewer(ls, is)) return true;
-  // Same core → compare the full string lexicographically. Nightly prerelease
-  // stamps are date-based (nightly.YYYYMMDD.NNN), so `>` is directionally correct:
-  // a newer date sorts after an older one. `!==` would be wrong here — it would
-  // show a spurious update badge (and downgrade) when the installed version is
-  // NEWER than the registry's latest (local build, propagation delay).
   const L = semverParts(ls), I = semverParts(is);
   if (!L || !I) return false;
   for (let i = 0; i < 3; i++) { if (L[i] !== I[i]) return false; }
-  return ls > is;
+  return comparePrerelease(prereleasePart(ls), prereleasePart(is)) > 0;
 }
 
 /** Best-effort latest version string for an agent id (cached), or "" if unknown.
@@ -335,7 +366,8 @@ function constructRefreshArgs(markers) {
 module.exports = {
   DEFAULT_REPO, DEFAULT_REF, TTL_MS, NEG_TTL_MS, AGENT_LATEST,
   readMarkers, acceptFor, fetchJson, constructUpdateFromCompare, checkConstruct, checkConstructCached,
-  behindText, semverParts, isNewer, isNewerNightly, isProvisionStale, t3codeUrl,
+  behindText, semverParts, isNewer, isNewerNightly, prereleasePart, comparePrerelease,
+  isProvisionStale, t3codeUrl,
   fetchAgentLatest, augmentAgents, buildAgentUpdateScript,
   augment, constructRefreshArgs,
 };

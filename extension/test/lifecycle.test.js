@@ -182,6 +182,16 @@ ok("t3ch-capability: null scripts dir -> unsupported", life.scriptSupportsT3Code
 fs.writeFileSync(path.join(sd2, "Auto-Install.ps1"), "param(\n  [string]$T3CodeChannel = \"\"\n)\n");
 fs.writeFileSync(path.join(sd2, "Provision-AgentVM.ps1"), "param(\n  [string]$T3Code = \"\"\n)\n");
 ok("t3ch-capability: Auto-Install has it, Provision old -> unsupported", life.scriptSupportsT3CodeChannel(sd2) === false);
+// Regression for finding #3: a partially-updated scripts dir where Provision has
+// the parameter but Auto-Install doesn't — the old single-file check would pass
+// and then the reinstall/redownload would fail to bind -T3CodeChannel.
+const sd3 = fs.mkdtempSync(path.join(os.tmpdir(), "construct-life-skew-"));
+fs.writeFileSync(path.join(sd3, "Provision-AgentVM.ps1"), "param(\n  [string]$T3CodeChannel = \"\"\n)\n");
+fs.writeFileSync(path.join(sd3, "Auto-Install.ps1"), "param(\n  [string]$T3Code = \"\"\n)\n");
+ok("t3ch-capability: Provision=new, Auto-Install=old -> unsupported (regression: single-file check was wrong)",
+  life.scriptSupportsT3CodeChannel(sd3) === false);
+ok("rebuild: drops -T3CodeChannel when Provision=new but Auto-Install=old",
+  !life.buildInvocation("reinstall", { settings: { t3codeChannel: "nightly" }, supportsT3CodeChannel: false }).args.includes("-T3CodeChannel"));
 
 ok("unknown action -> null", life.buildInvocation("bogus", {}) === null);
 

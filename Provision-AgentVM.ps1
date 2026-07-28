@@ -95,6 +95,9 @@ param(
     [string]$T3Code = "",
     # T3 Code install channel: "stable" (npm @latest) or "nightly" (npm @nightly).
     # EMPTY keeps the VM's saved choice, mirroring T3Code's own keep-saved semantics.
+    # ValidateSet enforces the contract before the value reaches the shell boundary
+    # ($envPrefix interpolates it into a single-quoted remote assignment).
+    [ValidateSet("", "stable", "nightly")]
     [string]$T3CodeChannel = "",
     # Set up a Samba/SMB server on the VM that shares the workspace (the repos
     # folder) to this host. Credentials are generated once on the VM and persisted
