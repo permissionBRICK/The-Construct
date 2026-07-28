@@ -182,15 +182,36 @@ ok("t3ch-capability: null scripts dir -> unsupported", life.scriptSupportsT3Code
 fs.writeFileSync(path.join(sd2, "Auto-Install.ps1"), "param(\n  [string]$T3CodeChannel = \"\"\n)\n");
 fs.writeFileSync(path.join(sd2, "Provision-AgentVM.ps1"), "param(\n  [string]$T3Code = \"\"\n)\n");
 ok("t3ch-capability: Auto-Install has it, Provision old -> unsupported", life.scriptSupportsT3CodeChannel(sd2) === false);
-// Regression for finding #3: a partially-updated scripts dir where Provision has
-// the parameter but Auto-Install doesn't — the old single-file check would pass
-// and then the reinstall/redownload would fail to bind -T3CodeChannel.
+// Regression for finding #3: action/target-appropriate capability detection.
+// A partially-updated scripts dir where Provision has the parameter but Auto-Install
+// doesn't: reprovision targets only Provision (so the flag is safe to send),
+// but rebuild targets Auto-Install (unsafe — binding failure).
 const sd3 = fs.mkdtempSync(path.join(os.tmpdir(), "construct-life-skew-"));
 fs.writeFileSync(path.join(sd3, "Provision-AgentVM.ps1"), "param(\n  [string]$T3CodeChannel = \"\"\n)\n");
 fs.writeFileSync(path.join(sd3, "Auto-Install.ps1"), "param(\n  [string]$T3Code = \"\"\n)\n");
-ok("t3ch-capability: Provision=new, Auto-Install=old -> unsupported (regression: single-file check was wrong)",
+// No action → conservative (both required) → false
+ok("t3ch-capability: Provision=new, Auto-Install=old, no action -> unsupported (conservative)",
   life.scriptSupportsT3CodeChannel(sd3) === false);
-ok("rebuild: drops -T3CodeChannel when Provision=new but Auto-Install=old",
+// Action-appropriate: reprovision checks only Provision → true
+ok("t3ch-capability: Provision=new, Auto-Install=old, reprovision -> supported",
+  life.scriptSupportsT3CodeChannel(sd3, "reprovision") === true);
+// Action-appropriate: rebuild checks only Auto-Install → false
+ok("t3ch-capability: Provision=new, Auto-Install=old, reinstall -> unsupported",
+  life.scriptSupportsT3CodeChannel(sd3, "reinstall") === false);
+ok("t3ch-capability: Provision=new, Auto-Install=old, redownload -> unsupported",
+  life.scriptSupportsT3CodeChannel(sd3, "redownload") === false);
+// Opposite direction: Provision=old, Auto-Install=new
+const sd4 = fs.mkdtempSync(path.join(os.tmpdir(), "construct-life-skew2-"));
+fs.writeFileSync(path.join(sd4, "Provision-AgentVM.ps1"), "param(\n  [string]$T3Code = \"\"\n)\n");
+fs.writeFileSync(path.join(sd4, "Auto-Install.ps1"), "param(\n  [string]$T3CodeChannel = \"\"\n)\n");
+ok("t3ch-capability: Provision=old, Auto-Install=new, reprovision -> unsupported",
+  life.scriptSupportsT3CodeChannel(sd4, "reprovision") === false);
+ok("t3ch-capability: Provision=old, Auto-Install=new, reinstall -> supported",
+  life.scriptSupportsT3CodeChannel(sd4, "reinstall") === true);
+// buildInvocation tests: the per-action capability feeds into the right decision
+ok("reprovision: keeps -T3CodeChannel when Provision=new (even if Auto-Install=old)",
+  life.buildInvocation("reprovision", { settings: { t3codeChannel: "nightly" }, supportsT3CodeChannel: true }).args.includes("-T3CodeChannel"));
+ok("rebuild: drops -T3CodeChannel when Auto-Install=old",
   !life.buildInvocation("reinstall", { settings: { t3codeChannel: "nightly" }, supportsT3CodeChannel: false }).args.includes("-T3CodeChannel"));
 
 ok("unknown action -> null", life.buildInvocation("bogus", {}) === null);

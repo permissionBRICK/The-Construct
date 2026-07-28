@@ -96,6 +96,8 @@ param(
     [switch]$Auto
 )
 
+if ($T3CodeChannel) { $T3CodeChannel = $T3CodeChannel.ToLower() }
+
 # ── Self-elevate to Administrator ────────────────────────────────────────────
 if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
         ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
