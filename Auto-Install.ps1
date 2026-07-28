@@ -712,6 +712,14 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         if ($reprovCloneCredB64) { $reprovArgs['GitCloneCredentialsB64'] = $reprovCloneCredB64 }
         if ($PSBoundParameters.ContainsKey('AutoResolve')) { $reprovArgs['AutoResolve'] = $AutoResolve }
         try {
+            $reprovCmd = Get-Command -Name $provisionScript -CommandType ExternalScript -ErrorAction Stop
+            if (-not $reprovCmd.Parameters.ContainsKey('T3CodeChannel')) {
+                $reprovArgs.Remove('T3CodeChannel')
+            }
+        } catch {
+            $reprovArgs.Remove('T3CodeChannel')
+        }
+        try {
             Invoke-DeElevatedProvision -ScriptPath $provisionScript -ProvisionParams $reprovArgs
         } catch {
             # Show the failure ABOVE the pause so it's readable even when the
@@ -1041,6 +1049,14 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
             }
             if ($acCloneCredB64) { $acReprovArgs['GitCloneCredentialsB64'] = $acCloneCredB64 }
             if ($PSBoundParameters.ContainsKey('AutoResolve')) { $acReprovArgs['AutoResolve'] = $AutoResolve }
+            try {
+                $acProvCmd = Get-Command -Name $provisionScript -CommandType ExternalScript -ErrorAction Stop
+                if (-not $acProvCmd.Parameters.ContainsKey('T3CodeChannel')) {
+                    $acReprovArgs.Remove('T3CodeChannel')
+                }
+            } catch {
+                $acReprovArgs.Remove('T3CodeChannel')
+            }
             Invoke-DeElevatedProvision -ScriptPath $provisionScript -ProvisionParams $acReprovArgs
         } catch {
             Write-Host ""

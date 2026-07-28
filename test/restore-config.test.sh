@@ -37,8 +37,13 @@ setup_fixture() {
 
   # Provide a real config-set.sh
   cp "${ROOT}/bin/config-set.sh" "${repo}/bin/config-set.sh"
-  # Provide a stub install-ai-tools.sh that always succeeds
-  printf '#!/bin/bash\nexit 0\n' > "${repo}/bin/install-ai-tools.sh"
+  # Instrumented stub: records invocation count + T3CODE_CHANNEL into a marker file.
+  local marker="${d}/install-invocations"
+  cat > "${repo}/bin/install-ai-tools.sh" <<STUB
+#!/bin/bash
+echo "\${T3CODE_CHANNEL:-UNSET}" >> "${marker}"
+exit 0
+STUB
   chmod +x "${repo}/bin/install-ai-tools.sh"
 
   # Empty config.env
@@ -88,6 +93,8 @@ ok "disabled+nightly: T3CODE_CHANNEL set to nightly in config.env" \
   test "$(read_config_key "${d}/config/config.env" T3CODE_CHANNEL)" = "nightly"
 ok "disabled+nightly: T3CODE flag NOT set (not installed)" \
   test -z "$(read_config_key "${d}/config/config.env" T3CODE)"
+ok "disabled+nightly: install-ai-tools.sh NOT invoked (disabled = skip install)" \
+  test ! -f "${d}/install-invocations"
 
 # ── enabled + nightly: channel preference + install ──────────────────────────
 d="$(setup_fixture "enabled-nightly" "true" "nightly")"
@@ -97,6 +104,10 @@ ok "enabled+nightly: T3CODE_CHANNEL set to nightly" \
   test "$(read_config_key "${d}/config/config.env" T3CODE_CHANNEL)" = "nightly"
 ok "enabled+nightly: T3CODE set to true (installed)" \
   test "$(read_config_key "${d}/config/config.env" T3CODE)" = "true"
+ok "enabled+nightly: install-ai-tools.sh invoked exactly once" \
+  test "$(wc -l < "${d}/install-invocations" 2>/dev/null)" -eq 1
+ok "enabled+nightly: installer received T3CODE_CHANNEL=nightly" \
+  test "$(cat "${d}/install-invocations" 2>/dev/null)" = "nightly"
 
 # ── enabled + stable: defaults to stable ────────────────────────────────────
 d="$(setup_fixture "enabled-stable" "true" "stable")"
@@ -104,6 +115,8 @@ make_systemctl_stub "${d}"
 run_restore "${d}" >/dev/null 2>&1
 ok "enabled+stable: T3CODE_CHANNEL set to stable" \
   test "$(read_config_key "${d}/config/config.env" T3CODE_CHANNEL)" = "stable"
+ok "enabled+stable: installer received T3CODE_CHANNEL=stable" \
+  test "$(cat "${d}/install-invocations" 2>/dev/null)" = "stable"
 
 # ── missing channel in backup: defaults to stable ───────────────────────────
 d="$(setup_fixture "no-channel" "true" "")"

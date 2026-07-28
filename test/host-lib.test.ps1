@@ -919,6 +919,17 @@ foreach ($scriptName in @("Provision-AgentVM.ps1", "Create-AgentVM.ps1", "Auto-I
     }
 }
 
+# ── T3CodeChannel version-skew guard on every Provision forwarding site ────
+# Auto-Install.ps1 splats T3CodeChannel into Provision-AgentVM.ps1 on four paths:
+# create, fresh-install provision, existing-VM reprovision, and add-config
+# reprovision. Every site must guard against an older Provision that lacks the
+# parameter — otherwise binding fails. Pin the guard count so a new forwarding
+# site can't skip the check.
+ok "auto-install: T3CodeChannel guard on all 4 Provision forwarding sites" (
+    ([regex]::Matches($aiScript, "Parameters\.ContainsKey\('T3CodeChannel'\)")).Count -ge 4)
+ok "auto-install: T3CodeChannel removed in both guard + catch branches (at least 8 sites)" (
+    ([regex]::Matches($aiScript, "\.Remove\('T3CodeChannel'\)")).Count -ge 8)
+
 # ── T3CodeChannel lowercase normalization ──────────────────────────────────
 # ValidateSet is case-insensitive: PowerShell happily binds "NIGHTLY" to the
 # param, but downstream bash matches only exact lowercase. Every entry point
