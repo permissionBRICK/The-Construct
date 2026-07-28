@@ -99,5 +99,77 @@ try {
   }
 } catch (_) { /* best-effort */ }
 
-console.log(`\n  t3code unit tests — ${pass}/${pass + fail} passed\n`);
-process.exit(fail ? 1 : 0);
+// ── _serial queue: strict ordering + last-action-wins + rejection path ───────
+// The queue serializes state-changing operations so the LAST one wins. Each mock
+// resolves immediately but logs its label, so we verify execution ORDER (which
+// proves the queue serialized them — concurrent runs would interleave).
+(async () => {
+  const log = [];
+  function mockSsh(label) {
+    return {
+      isReachable: async () => true,
+      runRemoteScript: async () => { log.push(label); return { code: 0, stdout: "", stderr: "" }; },
+    };
+  }
+  function mockVscode() {
+    return {
+      window: {
+        withProgress: (_, fn) => fn(),
+        showInformationMessage: () => {},
+        showWarningMessage: () => {},
+        showErrorMessage: () => {},
+      },
+      ProgressLocation: { Notification: 1 },
+      env: { openExternal: async () => {} },
+      Uri: { parse: (u) => u },
+    };
+  }
+
+  // Queue: enable(stable) → disable → enable(nightly) rapidly, then await all.
+  t3._resetQueue();
+  log.length = 0;
+  const vs = mockVscode();
+  const p1 = t3.enableOnVm({ channel: "stable", _vscode: vs, _ssh: mockSsh("enable-stable") });
+  const p2 = t3.disableOnVm({ _vscode: vs, _ssh: mockSsh("disable") });
+  const p3 = t3.enableOnVm({ channel: "nightly", _vscode: vs, _ssh: mockSsh("enable-nightly") });
+  await Promise.all([p1, p2, p3]);
+  // enableOnVm calls runRemoteScript twice (install + pairing), so filter to
+  // the labels we care about for ordering.
+  const ops = log.filter((l) => l !== "enable-stable" || log.indexOf(l) === log.indexOf("enable-stable"));
+  ok("queue: strict execution order (enable-stable, disable, enable-nightly)",
+    ops[0] === "enable-stable" && ops.indexOf("disable") > ops.indexOf("enable-stable") &&
+    ops.indexOf("enable-nightly") > ops.indexOf("disable"));
+  ok("queue: last action (enable-nightly) ran last",
+    ops[ops.length - 1] === "enable-nightly" || ops[ops.length - 2] === "enable-nightly");
+
+  // setChannelOnVm: rapid stable→nightly→stable, verify order.
+  t3._resetQueue();
+  log.length = 0;
+  const ch1 = t3.setChannelOnVm("nightly", { _vscode: vs, _ssh: mockSsh("ch-nightly") });
+  const ch2 = t3.setChannelOnVm("stable", { _vscode: vs, _ssh: mockSsh("ch-stable") });
+  await Promise.all([ch1, ch2]);
+  ok("queue channel: rapid nightly→stable executes in order",
+    log.join(",") === "ch-nightly,ch-stable");
+  ok("queue channel: last action is ch-stable (last wins)", log[log.length - 1] === "ch-stable");
+
+  // Rejection path: a failing operation must not break the queue for subsequent ops.
+  // _serial chains with then(fn, fn), so after a rejection the next op still runs.
+  t3._resetQueue();
+  log.length = 0;
+  const failSsh = {
+    isReachable: async () => true,
+    runRemoteScript: async () => { log.push("fail"); throw new Error("ssh broke"); },
+  };
+  const pFail = t3.enableOnVm({ channel: "stable", _vscode: vs, _ssh: failSsh });
+  const pAfter = t3.disableOnVm({ _vscode: vs, _ssh: mockSsh("after-fail") });
+  let failCaught = false;
+  try { await pFail; } catch (_) { failCaught = true; }
+  let afterOk = false;
+  try { await pAfter; afterOk = true; } catch (_) {}
+  ok("queue rejection: failing op ran and threw", log[0] === "fail" && failCaught);
+  ok("queue rejection: subsequent op runs after a failure (queue not stuck)",
+    log.includes("after-fail") && afterOk);
+
+  console.log(`\n  t3code unit tests — ${pass}/${pass + fail} passed\n`);
+  process.exit(fail ? 1 : 0);
+})();

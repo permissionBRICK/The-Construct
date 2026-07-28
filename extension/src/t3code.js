@@ -38,6 +38,7 @@ function _serial(fn) {
   _inflight = run.then(() => {}, () => {});
   return run;
 }
+function _resetQueue() { _inflight = Promise.resolve(); }
 
 // Shared bash prelude: read the T3CODE_* bind settings (and workspace root) from
 // config.env with the same defaults the provisioner uses, plus an idempotent
@@ -197,7 +198,8 @@ function baseUrl(cfg) {
  *  the plain base URL (already-paired browsers) when minting fails. */
 async function openWebUi(opts = {}) {
   const vscode = opts._vscode || vsc();
-  const r = await ssh.runRemoteScript(buildPairingScript(), { ...opts, timeoutMs: opts.timeoutMs || 30000 });
+  const _ssh = opts._ssh || ssh;
+  const r = await _ssh.runRemoteScript(buildPairingScript(), { ...opts, timeoutMs: opts.timeoutMs || 30000 });
   let url = r.code === 0 ? extractPairUrl(r.stdout) : "";
   if (!url) {
     url = baseUrl(opts.cfg);
@@ -220,14 +222,15 @@ function enableOnVm(opts = {}) {
 
 function _enableNow(opts = {}) {
   const vscode = opts._vscode || vsc();
+  const _ssh = opts._ssh || ssh;
   return vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: "Installing T3 Code on the VM…", cancellable: false },
     async () => {
-      if (!(await ssh.isReachable(opts))) {
+      if (!(await _ssh.isReachable(opts))) {
         vscode.window.showWarningMessage("T3 Code enabled — the VM is offline, so it installs on the next reprovision.");
         return false;
       }
-      const r = await ssh.runRemoteScript(buildInstallScript(opts.channel), { ...opts, timeoutMs: opts.timeoutMs || 300000 });
+      const r = await _ssh.runRemoteScript(buildInstallScript(opts.channel), { ...opts, timeoutMs: opts.timeoutMs || 300000 });
       if (r.code !== 0) {
         vscode.window.showErrorMessage(
           ("Installing T3 Code failed (exit " + r.code + "). " + (r.stderr || "").slice(0, 200)).trim()
@@ -250,16 +253,14 @@ function disableOnVm(opts = {}) {
 
 async function _disableNow(opts = {}) {
   const vscode = opts._vscode || vsc();
-  if (!(await ssh.isReachable(opts))) {
-    // Say so out loud: the host setting is already false, so a LATER save won't
-    // re-trigger this — the VM-side service keeps running until the next
-    // reprovision (the panel passes an explicit -T3Code false) stops it.
+  const _ssh = opts._ssh || ssh;
+  if (!(await _ssh.isReachable(opts))) {
     vscode.window.showWarningMessage(
       "T3 Code disabled — the VM is offline, so its service is still deployed; reprovision (or toggle again while online) to stop it."
     );
     return false;
   }
-  const r = await ssh.runRemoteScript(buildDisableScript(), { ...opts, timeoutMs: opts.timeoutMs || 60000 });
+  const r = await _ssh.runRemoteScript(buildDisableScript(), { ...opts, timeoutMs: opts.timeoutMs || 60000 });
   if (r.code === 0) vscode.window.showInformationMessage("T3 Code web GUI stopped on the VM.");
   return r.code === 0;
 }
@@ -273,16 +274,17 @@ function setChannelOnVm(channel, opts = {}) {
 
 async function _setChannelNow(channel, opts = {}) {
   const vscode = opts._vscode || vsc();
+  const _ssh = opts._ssh || ssh;
   const tag = npmTag(channel);
   const label = channel === "nightly" ? "nightly" : "stable";
   return vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: `Switching T3 Code to ${label}…`, cancellable: false },
     async () => {
-      if (!(await ssh.isReachable(opts))) {
+      if (!(await _ssh.isReachable(opts))) {
         vscode.window.showWarningMessage(`T3 Code channel set to ${label} — the VM is offline, so it applies on the next reprovision.`);
         return false;
       }
-      const r = await ssh.runRemoteScript(buildInstallScript(channel), { ...opts, timeoutMs: opts.timeoutMs || 300000 });
+      const r = await _ssh.runRemoteScript(buildInstallScript(channel), { ...opts, timeoutMs: opts.timeoutMs || 300000 });
       if (r.code !== 0) {
         vscode.window.showErrorMessage(
           (`Switching T3 Code to ${label} failed (exit ${r.code}). ` + (r.stderr || "").slice(0, 200)).trim()
@@ -307,5 +309,5 @@ module.exports = {
   buildInstallScript, buildDisableScript, buildPairingScript,
   extractPairUrl, baseUrl,
   openWebUi, enableOnVm, disableOnVm, setChannelOnVm,
-  planT3LiveAction,
+  planT3LiveAction, _resetQueue,
 };
