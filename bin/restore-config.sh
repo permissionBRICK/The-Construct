@@ -166,6 +166,22 @@ for f in ".claude/history.jsonl" ".codex/sessions" ".local/share/opencode/storag
   [[ -e "${EXPORT_HOME}/${f}" ]] && log "restored chat history: ${f}"
 done
 
+# ── T3 Code channel preference from backup metadata ─────────────────────────
+# The channel preference (stable/nightly) is persisted INDEPENDENTLY of whether
+# T3 Code is enabled: a user who selected nightly while T3 was disabled expects
+# the preference to survive a reinstall. The actual package install is still
+# conditional on the enabled flag below.
+REPO_DIR="${REPO_DIR:-/opt/construct/repo}"
+CONFIG_FILE="${CONFIG_FILE:-/etc/construct/config.env}"
+if [[ -f "${BACKUP_DIR}/backup-info.json" ]]; then
+  _restore_t3ch="$(jq -r '.t3codeChannel // "stable"' "${BACKUP_DIR}/backup-info.json" 2>/dev/null)"
+  [[ "${_restore_t3ch}" == "nightly" ]] || _restore_t3ch=stable
+  if [[ -f "${REPO_DIR}/bin/config-set.sh" ]]; then
+    bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" T3CODE_CHANNEL "${_restore_t3ch}" 2>/dev/null || true
+    log "restored T3 Code channel preference: ${_restore_t3ch}"
+  fi
+fi
+
 # ── T3 Code reinstall from backup metadata ───────────────────────────────────
 # A console reinstall provisions the fresh VM with an EMPTY T3CODE (keep-saved
 # semantics), and the new config.env has nothing saved -- so T3 Code doesn't get
@@ -174,15 +190,16 @@ done
 # service via the uploaded repo's installer. Best-effort: a failure logs the
 # manual fix and never aborts the restore. Skipped when the service is already
 # enabled (panel-driven flows pass -T3Code true and installed it earlier).
-REPO_DIR="${REPO_DIR:-/opt/construct/repo}"
-CONFIG_FILE="${CONFIG_FILE:-/etc/construct/config.env}"
 if [[ -f "${BACKUP_DIR}/backup-info.json" ]] \
    && [[ "$(jq -r '.t3code // false' "${BACKUP_DIR}/backup-info.json" 2>/dev/null)" == "true" ]] \
    && ! systemctl is-enabled --quiet t3code-serve 2>/dev/null; then
+  _restore_t3ch="$(jq -r '.t3codeChannel // "stable"' "${BACKUP_DIR}/backup-info.json" 2>/dev/null)"
+  [[ "${_restore_t3ch}" == "nightly" ]] || _restore_t3ch=stable
   if [[ -f "${REPO_DIR}/bin/install-ai-tools.sh" ]]; then
-    log "backup has T3 Code enabled; installing + starting t3code-serve"
+    log "backup has T3 Code enabled (channel=${_restore_t3ch}); installing + starting t3code-serve"
     bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" T3CODE true 2>/dev/null || true
     if ! env TARGET_USER=root AI_TOOLS_OVERRIDE=t3code AI_CONSOLE_INTEGRATION=false \
+        T3CODE_CHANNEL="${_restore_t3ch}" \
         bash "${REPO_DIR}/bin/install-ai-tools.sh"; then
       err "T3 Code reinstall failed; reprovision (or run: sudo env AI_TOOLS_OVERRIDE=t3code bash ${REPO_DIR}/bin/install-ai-tools.sh)"
     fi

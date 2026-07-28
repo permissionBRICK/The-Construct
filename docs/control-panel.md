@@ -278,6 +278,14 @@ browsers keep working across a reinstall. While enabled, T3 Code appears in the 
 agents** list with its version, an update badge, and a **▷** button that mints a fresh
 pairing link and opens the web UI.
 
+The **channel** dropdown next to the toggle selects between **stable** (npm `@latest` —
+the released version) and **nightly** (npm `@nightly` — the latest CI build, which may
+include newer features but can break). Switching the channel on an already-enabled T3 Code
+reinstalls it at the new tag and restarts the service live, without requiring a reprovision.
+The choice is persisted in `config.env` (`T3CODE_CHANNEL`), rides reprovision/reinstall, and
+survives a backup/restore cycle. On the agent card, a nightly install is annotated so it's
+visually distinguishable from stable.
+
 ## Troubleshooting
 
 If a lifecycle action doesn't behave as expected:

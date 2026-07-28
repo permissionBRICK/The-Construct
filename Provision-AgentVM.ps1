@@ -93,6 +93,12 @@ param(
     # reprovision never disables a previously enabled T3 Code; the control panel
     # always passes an explicit "true"/"false" from its settings toggle.
     [string]$T3Code = "",
+    # T3 Code install channel: "stable" (npm @latest) or "nightly" (npm @nightly).
+    # EMPTY keeps the VM's saved choice, mirroring T3Code's own keep-saved semantics.
+    # ValidateSet enforces the contract before the value reaches the shell boundary
+    # ($envPrefix interpolates it into a single-quoted remote assignment).
+    [ValidateSet("", "stable", "nightly")]
+    [string]$T3CodeChannel = "",
     # Set up a Samba/SMB server on the VM that shares the workspace (the repos
     # folder) to this host. Credentials are generated once on the VM and persisted
     # in its config, so re-provisions keep the same login. "true"/"false".
@@ -169,6 +175,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# ValidateSet is case-insensitive; downstream bash matches exact lowercase only.
+if ($T3CodeChannel) { $T3CodeChannel = $T3CodeChannel.ToLower() }
 
 # De-elevated child: signal the parent that Provision-AgentVM.ps1 has started
 # (param binding succeeded, script was found). Written atomically so the parent
@@ -1699,7 +1708,7 @@ if (-not $checkoutArg) {
 } else {
     Write-Ok "Project checkout: forced '$checkoutArg' via -CheckoutProjects"
 }
-$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit' SMB_SHARE='$SmbShare' CLAUDE_PARTIAL_STREAMING='$ClaudePartialStreaming' MIC_PASSTHROUGH='$MicPassthrough' T3CODE='$T3Code'"
+$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit' SMB_SHARE='$SmbShare' CLAUDE_PARTIAL_STREAMING='$ClaudePartialStreaming' MIC_PASSTHROUGH='$MicPassthrough' T3CODE='$T3Code' T3CODE_CHANNEL='$T3CodeChannel'"
 Write-Host "  --- live provisioning output ---" -ForegroundColor DarkGray
 $provisionStream = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "$envPrefix bash /opt/construct/repo/bin/provision.sh"
 Write-Host "  --- end provisioning output ---" -ForegroundColor DarkGray

@@ -1575,10 +1575,25 @@ function handleMessage(message, webview, context) {
         // The T3 Code toggle is live too: enabling installs + starts it on the VM
         // right away and opens the web UI in the browser; disabling stops the
         // service. Either way the persisted flag also rides the next (re)provision.
+        // Channel changes on an already-enabled T3 Code reinstall at the new tag.
         const wantT3 = message.settings && message.settings.t3code === true;
         const hadT3 = prev.t3code === true;
-        if (wantT3 && !hadT3) t3code.enableOnVm().then(() => refreshAll());
-        else if (!wantT3 && hadT3) t3code.disableOnVm().then(() => refreshAll());
+        // The effective channel comes from the MERGED on-disk result, not the raw
+        // payload: an omitted or invalid t3codeChannel in the payload must not
+        // override a stored nightly preference, and mapFromForm already rejects
+        // unknown values (so the old disk value survives).
+        const newCh = merged.t3codeChannel || "stable";
+        const oldCh = prev.t3codeChannel || "stable";
+        const t3plan = t3code.planT3LiveAction(wantT3, hadT3, newCh, oldCh);
+        if (t3plan) {
+          if (t3plan.action === "enable") {
+            t3code.enableOnVm({ channel: t3plan.channel }).then(() => refreshAll());
+          } else if (t3plan.action === "disable") {
+            t3code.disableOnVm().then(() => refreshAll());
+          } else if (t3plan.action === "setChannel") {
+            t3code.setChannelOnVm(t3plan.channel).then(() => refreshAll());
+          }
+        }
         // Automatic checkpoints are a HYPER-V property, decided when the VM is
         // created — so the saved value rides the next reinstall/redownload for free.
         // Offer to apply it to the VM that exists right now too (elevated, UAC).

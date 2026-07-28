@@ -331,6 +331,7 @@
       serveWeb: swOn($("setServeWeb")), tunnel: swOn($("setTunnel")), smb: swOn($("setSmb")), mic: swOn($("setMic")),
       partialStreaming: swOn($("setPartialStreaming")),
       t3code: swOn($("setT3")),
+      t3codeChannel: val("setT3Channel"),
     };
   }
   $("saveBtn") && $("saveBtn").addEventListener("click", () => post({ type: "saveSettings", settings: gatherSettings() }));
@@ -700,6 +701,7 @@
     setSw("setTunnel", s.tunnel); setSw("setSmb", s.smb); setSw("setMic", s.mic);
     setSw("setPartialStreaming", s.partialStreaming);
     setSw("setT3", s.t3code);
+    if (s.t3codeChannel) setVal("setT3Channel", s.t3codeChannel);
     setSw("setAutoCheckpoints", s.autoCheckpoints);
   }
 
