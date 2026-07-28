@@ -1578,7 +1578,11 @@ function handleMessage(message, webview, context) {
         // Channel changes on an already-enabled T3 Code reinstall at the new tag.
         const wantT3 = message.settings && message.settings.t3code === true;
         const hadT3 = prev.t3code === true;
-        const newCh = (message.settings && message.settings.t3codeChannel) || "stable";
+        // The effective channel comes from the MERGED on-disk result, not the raw
+        // payload: an omitted or invalid t3codeChannel in the payload must not
+        // override a stored nightly preference, and mapFromForm already rejects
+        // unknown values (so the old disk value survives).
+        const newCh = merged.t3codeChannel || "stable";
         const oldCh = prev.t3codeChannel || "stable";
         if (wantT3 && !hadT3) {
           // Fresh enable: honour the channel chosen in the SAME save so the first

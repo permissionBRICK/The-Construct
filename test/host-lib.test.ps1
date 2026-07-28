@@ -894,6 +894,31 @@ ok "auto-install: the saved preference is not read through a [bool] cast" (
 ok "auto-install: the create call passes the EFFECTIVE value, not the raw parameter" (
     $aiScript -match 'AutomaticCheckpoints = \$effectiveAutoCheckpoints')
 
+# ── T3CodeChannel ValidateSet (finding #5: injection safety) ─────────────────
+# Each entry point must enforce the exact ""|"stable"|"nightly" contract via
+# ValidateSet so a hostile value (e.g. containing a single-quote) can't reach
+# the shell boundary where $envPrefix interpolates it.
+foreach ($scriptName in @("Provision-AgentVM.ps1", "Create-AgentVM.ps1", "Auto-Install.ps1")) {
+    $scriptPath = Join-Path $here "..\$scriptName"
+    if (-not (Test-Path $scriptPath)) {
+        ok "$scriptName`: T3CodeChannel ValidateSet — SKIP (file not found)" $false
+        continue
+    }
+    $cmd = Get-Command $scriptPath -CommandType ExternalScript -ErrorAction SilentlyContinue
+    $param = if ($cmd) { $cmd.Parameters['T3CodeChannel'] } else { $null }
+    ok "$scriptName`: has a T3CodeChannel parameter" ($null -ne $param)
+    if ($param) {
+        $vs = $param.Attributes | Where-Object { $_ -is [System.Management.Automation.ValidateSetAttribute] }
+        ok "$scriptName`: T3CodeChannel has ValidateSet" ($null -ne $vs)
+        if ($vs) {
+            $allowed = @($vs.ValidValues) | Sort-Object
+            $expected = @("", "nightly", "stable") | Sort-Object
+            ok "$scriptName`: T3CodeChannel ValidateSet is exactly ('','stable','nightly')" (
+                ($allowed -join ",") -eq ($expected -join ","))
+        }
+    }
+}
+
 Write-Host ""
 Write-Host ("  host-lib unit tests - {0}/{1} passed" -f $script:pass, ($script:pass + $script:fail))
 Write-Host ""

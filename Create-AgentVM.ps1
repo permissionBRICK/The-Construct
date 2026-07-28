@@ -68,6 +68,7 @@ param(
     [string]$T3Code = "",
     # Forwarded to Provision-AgentVM.ps1: T3 Code install channel. Empty = keep the
     # VM's saved choice; "stable"/"nightly".
+    [ValidateSet("", "stable", "nightly")]
     [string]$T3CodeChannel = "",
     # Hyper-V automatic checkpoints: snapshot the VM at every start. OFF by default
     # for Construct -- on a disposable agent VM the checkpoint only costs (a growing

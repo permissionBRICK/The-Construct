@@ -125,6 +125,7 @@ param(
     [string]$T3Code = "",
     # Forwarded down: T3 Code install channel. Empty = keep the VM's saved choice;
     # "stable"/"nightly".
+    [ValidateSet("", "stable", "nightly")]
     [string]$T3CodeChannel = "",
     # Forwarded to Create-AgentVM.ps1: Hyper-V automatic checkpoints (a snapshot at
     # every VM start). OFF by default for Construct -- on a disposable agent VM the
@@ -1571,12 +1572,16 @@ try {
         Write-Host "    The VM will be created with Hyper-V's automatic-checkpoint default (ON). Update Construct, then" -ForegroundColor Yellow
         Write-Host "    turn them off from the control panel (Settings -> VM resources) or run Set-AgentVmCheckpoints.ps1." -ForegroundColor Yellow
     }
+    if (-not $createCmd.Parameters.ContainsKey('T3CodeChannel')) {
+        $createArgs.Remove('T3CodeChannel')
+    }
 } catch {
     # Fail SAFE, not open. We are already past Remove-AgentVm here, so passing an argument
     # the target might reject risks a binding failure with the old VM gone -- a broken
     # rebuild. Dropping it only costs Hyper-V's default (checkpoints on), which the
     # control panel can fix afterwards.
     $createArgs.Remove('AutomaticCheckpoints')
+    $createArgs.Remove('T3CodeChannel')
     Write-Warning "Could not check Create-AgentVM.ps1's parameters ($($_.Exception.Message))."
     Write-Host "    Creating the VM without -AutomaticCheckpoints; set it afterwards from the control panel" -ForegroundColor Yellow
     Write-Host "    (Settings -> VM resources) or with Set-AgentVmCheckpoints.ps1." -ForegroundColor Yellow
@@ -1623,6 +1628,16 @@ try {
         $provArgs['Repo'] = $Repo; $provArgs['Ref'] = $Ref
     }
     if ($PSBoundParameters.ContainsKey('AutoResolve')) { $provArgs['AutoResolve'] = $AutoResolve }
+    # Same version-skew guard as above: an older Provision-AgentVM.ps1 may lack
+    # -T3CodeChannel; splatting it would fail parameter binding.
+    try {
+        $provCmd = Get-Command -Name $provisionScript -CommandType ExternalScript -ErrorAction Stop
+        if (-not $provCmd.Parameters.ContainsKey('T3CodeChannel')) {
+            $provArgs.Remove('T3CodeChannel')
+        }
+    } catch {
+        $provArgs.Remove('T3CodeChannel')
+    }
     Invoke-DeElevatedProvision -ScriptPath $provisionScript -ProvisionParams $provArgs
 
     # ── Post-provision host setup ────────────────────────────────────────────

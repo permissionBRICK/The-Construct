@@ -190,6 +190,33 @@ function ok(name, cond, detail) {
     updates.isNewerNightly("", "0.0.30-nightly.20260728") === false);
   ok("isNewerNightly: stable versions differ -> true (no prerelease, different core)",
     updates.isNewerNightly("0.0.30", "0.0.29") === true);
+  // Regression: build-number length mismatch — lexical '>' gets this wrong because
+  // "932" > "1" as strings, but 20260729.1 is a NEWER date than 20260728.932.
+  ok("isNewerNightly: build-number length mismatch (newer date, shorter build) -> true",
+    updates.isNewerNightly("0.0.30-nightly.20260729.1", "0.0.30-nightly.20260728.932") === true);
+  ok("isNewerNightly: build-number length mismatch (older date, longer build) -> false",
+    updates.isNewerNightly("0.0.30-nightly.20260728.932", "0.0.30-nightly.20260729.1") === false);
+  // Same date, different build number — compare numerically
+  ok("isNewerNightly: same date, higher build number -> true",
+    updates.isNewerNightly("0.0.30-nightly.20260728.932", "0.0.30-nightly.20260728.100") === true);
+  ok("isNewerNightly: same date, lower build number -> false",
+    updates.isNewerNightly("0.0.30-nightly.20260728.100", "0.0.30-nightly.20260728.932") === false);
+  // Cross-channel: same core, stable (no prerelease) vs nightly (has prerelease)
+  // must not produce a bogus update badge. Per semver, no prerelease > prerelease.
+  ok("isNewerNightly: stable vs nightly same core -> true (release > pre)",
+    updates.isNewerNightly("0.0.30", "0.0.30-nightly.20260728") === true);
+  ok("isNewerNightly: nightly vs stable same core -> false",
+    updates.isNewerNightly("0.0.30-nightly.20260728", "0.0.30") === false);
+
+  // ── prereleasePart + comparePrerelease (unit) ─────────────────────────────
+  ok("prereleasePart: extracts nightly prerelease", updates.prereleasePart("0.0.30-nightly.20260728.932") === "nightly.20260728.932");
+  ok("prereleasePart: empty when no prerelease", updates.prereleasePart("0.0.30") === "");
+  ok("comparePrerelease: numeric segments compared as integers",
+    updates.comparePrerelease("nightly.20260729.1", "nightly.20260728.932") > 0);
+  ok("comparePrerelease: equal prereleases -> 0",
+    updates.comparePrerelease("nightly.20260728", "nightly.20260728") === 0);
+  ok("comparePrerelease: fewer segments = lower precedence",
+    updates.comparePrerelease("nightly.20260728", "nightly.20260728.1") < 0);
 
   // ── t3codeUrl ──────────────────────────────────────────────────────────────
   ok("t3codeUrl: stable -> registry/t3/latest", updates.t3codeUrl("stable") === "https://registry.npmjs.org/t3/latest");
