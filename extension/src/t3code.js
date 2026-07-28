@@ -255,6 +255,9 @@ async function _disableNow(opts = {}) {
   const vscode = opts._vscode || vsc();
   const _ssh = opts._ssh || ssh;
   if (!(await _ssh.isReachable(opts))) {
+    // Say so out loud: the host setting is already false, so a LATER save won't
+    // re-trigger this — the VM-side service keeps running until the next
+    // reprovision (the panel passes an explicit -T3Code false) stops it.
     vscode.window.showWarningMessage(
       "T3 Code disabled — the VM is offline, so its service is still deployed; reprovision (or toggle again while online) to stop it."
     );
