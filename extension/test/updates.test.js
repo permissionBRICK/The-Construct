@@ -176,8 +176,10 @@ function ok(name, cond, detail) {
   ok("semverParts: extracts core", JSON.stringify(updates.semverParts("v2.1.196-beta")) === "[2,1,196]");
 
   // ── isNewerNightly (prerelease-aware for daily builds) ─────────────────────
-  ok("isNewerNightly: different nightly date -> true",
+  ok("isNewerNightly: newer nightly date -> true",
     updates.isNewerNightly("0.0.30-nightly.20260729", "0.0.30-nightly.20260728") === true);
+  ok("isNewerNightly: older nightly date -> false (no spurious update badge)",
+    updates.isNewerNightly("0.0.30-nightly.20260728", "0.0.30-nightly.20260729") === false);
   ok("isNewerNightly: same version -> false",
     updates.isNewerNightly("0.0.30-nightly.20260728", "0.0.30-nightly.20260728") === false);
   ok("isNewerNightly: higher core -> true (delegates to isNewer)",

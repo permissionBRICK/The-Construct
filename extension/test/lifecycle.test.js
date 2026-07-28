@@ -162,16 +162,26 @@ ok("capability: case-insensitive + CRLF declaration -> supported", life.scriptSu
 fs.writeFileSync(path.join(sd, "Auto-Install.ps1"), "param(\n  [string]$AutomaticCheckpoints\n)\n");
 ok("capability: trailing declaration with no default -> supported", life.scriptSupportsCheckpoints(sd) === true);
 
-// ── scriptSupportsT3CodeChannel (same pattern as checkpoints) ───────────────
+// ── scriptSupportsT3CodeChannel (requires BOTH Provision + Auto-Install) ────
 const sd2 = fs.mkdtempSync(path.join(os.tmpdir(), "construct-life-ch-"));
-ok("t3ch-capability: no Provision-AgentVM.ps1 -> unsupported", life.scriptSupportsT3CodeChannel(sd2) === false);
-fs.writeFileSync(path.join(sd2, "Provision-AgentVM.ps1"), "param(\n  [string]$T3Code = \"\"\n)\n");
-ok("t3ch-capability: an old Provision without $T3CodeChannel -> unsupported", life.scriptSupportsT3CodeChannel(sd2) === false);
-fs.writeFileSync(path.join(sd2, "Provision-AgentVM.ps1"), "param(\n  [string]$T3Code = \"\",\n  [string]$T3CodeChannel = \"\"\n)\n");
-ok("t3ch-capability: $T3CodeChannel declared -> supported", life.scriptSupportsT3CodeChannel(sd2) === true);
+ok("t3ch-capability: empty dir -> unsupported", life.scriptSupportsT3CodeChannel(sd2) === false);
+// Only Provision has the param — Auto-Install is missing entirely
+fs.writeFileSync(path.join(sd2, "Provision-AgentVM.ps1"), "param(\n  [string]$T3CodeChannel = \"\"\n)\n");
+ok("t3ch-capability: Provision has it but Auto-Install missing -> unsupported", life.scriptSupportsT3CodeChannel(sd2) === false);
+// Both present but Auto-Install lacks the param (partially-updated scripts dir)
+fs.writeFileSync(path.join(sd2, "Auto-Install.ps1"), "param(\n  [string]$T3Code = \"\"\n)\n");
+ok("t3ch-capability: Provision has it, Auto-Install old -> unsupported", life.scriptSupportsT3CodeChannel(sd2) === false);
+// Both have the param -> supported
+fs.writeFileSync(path.join(sd2, "Auto-Install.ps1"), "param(\n  [string]$T3Code = \"\",\n  [string]$T3CodeChannel = \"\"\n)\n");
+ok("t3ch-capability: both scripts have it -> supported", life.scriptSupportsT3CodeChannel(sd2) === true);
+// Comment-only mention in Provision doesn't count
 fs.writeFileSync(path.join(sd2, "Provision-AgentVM.ps1"), "# mentions $T3CodeChannel in a comment\nparam([string]$T3Code)\n");
-ok("t3ch-capability: comment-only mention -> unsupported", life.scriptSupportsT3CodeChannel(sd2) === false);
+ok("t3ch-capability: comment-only mention in Provision -> unsupported", life.scriptSupportsT3CodeChannel(sd2) === false);
 ok("t3ch-capability: null scripts dir -> unsupported", life.scriptSupportsT3CodeChannel(null) === false);
+// Only Auto-Install has the param — Provision lacks it
+fs.writeFileSync(path.join(sd2, "Auto-Install.ps1"), "param(\n  [string]$T3CodeChannel = \"\"\n)\n");
+fs.writeFileSync(path.join(sd2, "Provision-AgentVM.ps1"), "param(\n  [string]$T3Code = \"\"\n)\n");
+ok("t3ch-capability: Auto-Install has it, Provision old -> unsupported", life.scriptSupportsT3CodeChannel(sd2) === false);
 
 ok("unknown action -> null", life.buildInvocation("bogus", {}) === null);
 

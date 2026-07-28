@@ -175,17 +175,24 @@ function scriptSupportsCheckpoints(scriptsDir) {
 /**
  * Same gate as scriptSupportsCheckpoints but for `-T3CodeChannel`. An older scripts
  * dir that predates this parameter rejects the unknown flag at binding time, breaking
- * the lifecycle action outright. The detection logic is identical: strip comments,
- * match a real `$T3CodeChannel` parameter declaration (case-insensitive).
+ * the lifecycle action outright. Unlike checkpoints (which only rides reinstall/
+ * redownload → Auto-Install.ps1), the channel flag is sent on BOTH paths:
+ *   reprovision   → Provision-AgentVM.ps1
+ *   reinstall/redownload → Auto-Install.ps1 → Create-AgentVM.ps1 → Provision
+ * A single `supportsT3CodeChannel` boolean feeds both code paths in buildInvocation,
+ * so both target scripts must have the parameter. Checking only one would allow a
+ * partially-updated scripts dir to send the flag to a script that rejects it.
  */
 function scriptSupportsT3CodeChannel(scriptsDir) {
   if (!scriptsDir) return false;
-  let txt;
-  try { txt = fs.readFileSync(path.join(scriptsDir, PROVISION), "utf8"); } catch (_) { return false; }
-  const code = txt
-    .replace(/<#[\s\S]*?#>/g, "")
-    .replace(/^[ \t]*#.*$/gm, "");
-  return /\$T3CodeChannel\s*(?:=|,|\)|$)/im.test(code);
+  const re = /\$T3CodeChannel\s*(?:=|,|\)|$)/im;
+  const check = (file) => {
+    let txt;
+    try { txt = fs.readFileSync(path.join(scriptsDir, file), "utf8"); } catch (_) { return false; }
+    const code = txt.replace(/<#[\s\S]*?#>/g, "").replace(/^[ \t]*#.*$/gm, "");
+    return re.test(code);
+  };
+  return check(PROVISION) && check(AUTO_INSTALL);
 }
 
 /** A PowerShell single-quoted string literal (embedded quotes doubled). */
