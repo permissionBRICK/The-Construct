@@ -214,6 +214,7 @@ function isNewerNightly(latest, installed) {
   if (ls === is) return false;
   const lPre = prereleasePart(ls), iPre = prereleasePart(is);
   if ((!lPre) !== (!iPre)) return false;
+  if (lPre && iPre && (!lPre.startsWith("nightly") || !iPre.startsWith("nightly"))) return false;
   if (isNewer(ls, is)) return true;
   const L = semverParts(ls), I = semverParts(is);
   if (!L || !I) return false;
