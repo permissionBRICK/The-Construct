@@ -220,6 +220,10 @@ function ok(name, cond, detail) {
     updates.isNewerNightly("0.0.30-alpha.2", "0.0.30-alpha.1") === false);
   ok("isNewerNightly: beta vs nightly -> false",
     updates.isNewerNightly("0.0.30-beta.1", "0.0.30-nightly.20260728") === false);
+  ok("isNewerNightly: nightly-prefix impostor rejected (nightlyish)",
+    updates.isNewerNightly("0.0.30-nightlyish.2", "0.0.30-nightly.20260728") === false);
+  ok("isNewerNightly: bare 'nightly' prerelease accepted (no date segments)",
+    updates.isNewerNightly("0.0.31-nightly", "0.0.30-nightly") === true);
 
   // ── prereleasePart + comparePrerelease (unit) ─────────────────────────────
   ok("prereleasePart: extracts nightly prerelease", updates.prereleasePart("0.0.30-nightly.20260728.932") === "nightly.20260728.932");
