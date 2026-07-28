@@ -1584,15 +1584,15 @@ function handleMessage(message, webview, context) {
         // unknown values (so the old disk value survives).
         const newCh = merged.t3codeChannel || "stable";
         const oldCh = prev.t3codeChannel || "stable";
-        if (wantT3 && !hadT3) {
-          // Fresh enable: honour the channel chosen in the SAME save so the first
-          // install isn't always stable followed by a redundant channel switch.
-          t3code.enableOnVm({ channel: newCh }).then(() => refreshAll());
-        } else if (!wantT3 && hadT3) {
-          t3code.disableOnVm().then(() => refreshAll());
-        } else if (wantT3 && hadT3 && newCh !== oldCh) {
-          // Already enabled, channel changed: reinstall at the new tag + restart.
-          t3code.setChannelOnVm(newCh).then(() => refreshAll());
+        const t3plan = t3code.planT3LiveAction(wantT3, hadT3, newCh, oldCh);
+        if (t3plan) {
+          if (t3plan.action === "enable") {
+            t3code.enableOnVm({ channel: t3plan.channel }).then(() => refreshAll());
+          } else if (t3plan.action === "disable") {
+            t3code.disableOnVm().then(() => refreshAll());
+          } else if (t3plan.action === "setChannel") {
+            t3code.setChannelOnVm(t3plan.channel).then(() => refreshAll());
+          }
         }
         // Automatic checkpoints are a HYPER-V property, decided when the VM is
         // created — so the saved value rides the next reinstall/redownload for free.

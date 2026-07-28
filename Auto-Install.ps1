@@ -189,6 +189,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+if ($T3CodeChannel) { $T3CodeChannel = $T3CodeChannel.ToLower() }
+
 # End-of-run pause. A clean control-panel run closes by itself; any provisioning
 # error prints the VM result again at the true end of the parent flow and forces a
 # pause so the panel-launched console cannot vanish before it is read.

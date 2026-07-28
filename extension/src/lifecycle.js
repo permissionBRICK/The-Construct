@@ -179,11 +179,14 @@ function scriptSupportsCheckpoints(scriptsDir) {
  * redownload → Auto-Install.ps1), the channel flag is sent on BOTH paths:
  *   reprovision   → Provision-AgentVM.ps1
  *   reinstall/redownload → Auto-Install.ps1 → Create-AgentVM.ps1 → Provision
- * A single `supportsT3CodeChannel` boolean feeds both code paths in buildInvocation,
- * so both target scripts must have the parameter. Checking only one would allow a
- * partially-updated scripts dir to send the flag to a script that rejects it.
+ *
+ * Action-appropriate: reprovision invokes only Provision-AgentVM.ps1, so only that
+ * script needs the parameter. Rebuild (reinstall/redownload) invokes Auto-Install,
+ * which has its own version-skew guard for the Create and Provision splats — checking
+ * Auto-Install alone suffices. Without an action, require BOTH (conservative default
+ * for callers that don't specify one).
  */
-function scriptSupportsT3CodeChannel(scriptsDir) {
+function scriptSupportsT3CodeChannel(scriptsDir, action) {
   if (!scriptsDir) return false;
   const re = /\$T3CodeChannel\s*(?:=|,|\)|$)/im;
   const check = (file) => {
@@ -192,6 +195,8 @@ function scriptSupportsT3CodeChannel(scriptsDir) {
     const code = txt.replace(/<#[\s\S]*?#>/g, "").replace(/^[ \t]*#.*$/gm, "");
     return re.test(code);
   };
+  if (action === "reprovision") return check(PROVISION);
+  if (action === "reinstall" || action === "redownload") return check(AUTO_INSTALL);
   return check(PROVISION) && check(AUTO_INSTALL);
 }
 
@@ -413,7 +418,7 @@ function run(action, opts = {}) {
     projects,
     enabled: opts.enabled,
     supportsCheckpoints: scriptSupportsCheckpoints(scriptsDir),
-    supportsT3CodeChannel: scriptSupportsT3CodeChannel(scriptsDir),
+    supportsT3CodeChannel: scriptSupportsT3CodeChannel(scriptsDir, action),
   });
   if (!inv) return;
   // Honesty gate: when the scripts are too old to take -AutomaticCheckpoints we drop the

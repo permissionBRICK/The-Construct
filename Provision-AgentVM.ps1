@@ -176,6 +176,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# ValidateSet is case-insensitive; downstream bash matches exact lowercase only.
+if ($T3CodeChannel) { $T3CodeChannel = $T3CodeChannel.ToLower() }
+
 # De-elevated child: signal the parent that Provision-AgentVM.ps1 has started
 # (param binding succeeded, script was found). Written atomically so the parent
 # never reads a partial PID.

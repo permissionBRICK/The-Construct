@@ -68,6 +68,25 @@ ok("extractPairUrl: empty on garbage", t3.extractPairUrl("no json here") === "" 
 ok("baseUrl: defaults to the VM DNS + default port", t3.baseUrl() === "http://agent-vm.mshome.net:5177");
 ok("baseUrl: honors a cfg vmHost override", t3.baseUrl({ vmHost: "other.host" }) === "http://other.host:5177");
 
+// ── planT3LiveAction ─────────────────────────────────────────────────────────
+const plan = t3.planT3LiveAction;
+ok("plan: enable when wantT3=true, hadT3=false",
+  (() => { const r = plan(true, false, "stable", "stable"); return r && r.action === "enable" && r.channel === "stable"; })());
+ok("plan: enable passes the chosen channel",
+  (() => { const r = plan(true, false, "nightly", "stable"); return r && r.action === "enable" && r.channel === "nightly"; })());
+ok("plan: disable when wantT3=false, hadT3=true",
+  (() => { const r = plan(false, true, "stable", "stable"); return r && r.action === "disable"; })());
+ok("plan: setChannel when already enabled and channel differs",
+  (() => { const r = plan(true, true, "nightly", "stable"); return r && r.action === "setChannel" && r.channel === "nightly"; })());
+ok("plan: null when both enabled and channel unchanged",
+  plan(true, true, "stable", "stable") === null);
+ok("plan: null when both disabled",
+  plan(false, false, "stable", "stable") === null);
+ok("plan: stored nightly + omitted channel (no switch) — merged preserves nightly",
+  plan(true, true, "nightly", "nightly") === null);
+ok("plan: enable takes priority over channel mismatch (one op, not two)",
+  (() => { const r = plan(true, false, "nightly", "stable"); return r && r.action === "enable" && r.channel === "nightly"; })());
+
 // ── the generated bash parses ────────────────────────────────────────────────
 // (bash -n via child_process; skipped quietly when bash isn't available, e.g. a
 // bare Windows host running the suite.)

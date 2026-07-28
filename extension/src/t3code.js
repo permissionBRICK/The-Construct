@@ -295,9 +295,17 @@ async function _setChannelNow(channel, opts = {}) {
   );
 }
 
+function planT3LiveAction(wantT3, hadT3, newCh, oldCh) {
+  if (wantT3 && !hadT3) return { action: "enable", channel: newCh };
+  if (!wantT3 && hadT3) return { action: "disable" };
+  if (wantT3 && hadT3 && newCh !== oldCh) return { action: "setChannel", channel: newCh };
+  return null;
+}
+
 module.exports = {
   SERVICE, DEFAULT_PORT, npmTag,
   buildInstallScript, buildDisableScript, buildPairingScript,
   extractPairUrl, baseUrl,
   openWebUi, enableOnVm, disableOnVm, setChannelOnVm,
+  planT3LiveAction,
 };
