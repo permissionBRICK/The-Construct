@@ -118,6 +118,7 @@ if [[ "${T3CODE}" == "true" ]] \
 
 T3 Code (web GUI):
   Service:  t3code-serve
+  Channel:  ${T3CODE_CHANNEL:-stable}
   Bind:     ${T3CODE_HOST}:${T3CODE_PORT}
   URL:      http://${hyperv_dns}:${T3CODE_PORT}
   Login:    mint a pairing link -- t3 auth pairing create --base-url http://${hyperv_dns}:${T3CODE_PORT}

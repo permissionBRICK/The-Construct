@@ -175,6 +175,25 @@ function ok(name, cond, detail) {
   ok("isNewer: unparseable -> false (best-effort)", updates.isNewer("", "2.1.196") === false && updates.isNewer("2.1.196", "nope") === false);
   ok("semverParts: extracts core", JSON.stringify(updates.semverParts("v2.1.196-beta")) === "[2,1,196]");
 
+  // ── isNewerNightly (prerelease-aware for daily builds) ─────────────────────
+  ok("isNewerNightly: different nightly date -> true",
+    updates.isNewerNightly("0.0.30-nightly.20260729", "0.0.30-nightly.20260728") === true);
+  ok("isNewerNightly: same version -> false",
+    updates.isNewerNightly("0.0.30-nightly.20260728", "0.0.30-nightly.20260728") === false);
+  ok("isNewerNightly: higher core -> true (delegates to isNewer)",
+    updates.isNewerNightly("0.0.31-nightly.20260730", "0.0.30-nightly.20260729") === true);
+  ok("isNewerNightly: lower core -> false",
+    updates.isNewerNightly("0.0.29-nightly.20260730", "0.0.30-nightly.20260729") === false);
+  ok("isNewerNightly: unparseable -> false",
+    updates.isNewerNightly("", "0.0.30-nightly.20260728") === false);
+  ok("isNewerNightly: stable versions differ -> true (no prerelease, different core)",
+    updates.isNewerNightly("0.0.30", "0.0.29") === true);
+
+  // ── t3codeUrl ──────────────────────────────────────────────────────────────
+  ok("t3codeUrl: stable -> registry/t3/latest", updates.t3codeUrl("stable") === "https://registry.npmjs.org/t3/latest");
+  ok("t3codeUrl: nightly -> registry/t3/nightly", updates.t3codeUrl("nightly") === "https://registry.npmjs.org/t3/nightly");
+  ok("t3codeUrl: undefined -> stable (default)", updates.t3codeUrl() === "https://registry.npmjs.org/t3/latest");
+
   // ── fetchAgentLatest (injected fetch) ───────────────────────────────────────
   const gh = (tag) => async () => ({ tag_name: tag });
   ok("agentLatest: codex from GitHub tag", await updates.fetchAgentLatest("codex", { fetchJson: gh("rust-v0.143.0"), noCache: true }) === "0.143.0");
@@ -207,6 +226,20 @@ function ok(name, cond, detail) {
     { noCache: true, fetchJson: async () => ({ tag_name: "v1.18.0" }) }
   );
   ok("augmentAgents: v-prefixed newer tag flags update", augV[0].updateAvailable === true && augV[0].latest === "1.18.0");
+
+  // t3code on the nightly channel: same core, different prerelease -> update available.
+  const augT3n = await updates.augmentAgents(
+    [{ id: "t3code", name: "T3 Code", version: "0.0.30-nightly.20260728", updateAvailable: false, channel: "nightly" }],
+    { noCache: true, fetchJson: async () => ({ version: "0.0.30-nightly.20260729" }) }
+  );
+  ok("augmentAgents: t3code nightly with different prerelease -> update",
+    augT3n[0].updateAvailable === true && augT3n[0].latest === "0.0.30-nightly.20260729");
+  // t3code on stable: classic isNewer (strip prerelease), same core -> no update.
+  const augT3s = await updates.augmentAgents(
+    [{ id: "t3code", name: "T3 Code", version: "0.0.29", updateAvailable: false, channel: "stable" }],
+    { noCache: true, fetchJson: async () => ({ version: "0.0.29" }) }
+  );
+  ok("augmentAgents: t3code stable same version -> no update (same ref)", augT3s[0] === augT3s[0] && augT3s[0].updateAvailable === false);
 
   // ── augment folds agent updates into state ──────────────────────────────────
   const st = await updates.augment(
@@ -243,10 +276,13 @@ function ok(name, cond, detail) {
   // to a versioned releases/<v> dir must be relinked or updates land invisibly.
   ok("agentScript: codex relinks a version-pinned /usr/local/bin/codex after update",
     /releases\/\*\) for s in/.test(all) && /ln -sf "\$s" \/usr\/local\/bin\/codex/.test(all));
-  // T3 Code: npm-managed like its install; the serve unit restarts so the
-  // running web GUI actually serves the new version.
-  ok("agentScript: t3code updates via npm + restarts the serve unit",
-    /command -v t3 >\/dev\/null/.test(all) && /npm install -g t3@latest/.test(all) && /try-restart t3code-serve/.test(all));
+  // T3 Code: npm-managed like its install; reads the channel from config.env on
+  // the VM (source of truth) and maps it to the npm tag. The serve unit restarts
+  // so the running web GUI actually serves the new version.
+  ok("agentScript: t3code reads channel from config.env + maps to npm tag",
+    /T3CODE_CHANNEL/.test(all) && /nightly\) _t3tag=nightly/.test(all) && /\*\) _t3tag=latest/.test(all));
+  ok("agentScript: t3code updates via npm (channel-driven) + restarts",
+    /command -v t3 >\/dev\/null/.test(all) && /npm install -g "t3@\$\{_t3tag\}"/.test(all) && /try-restart t3code-serve/.test(all));
   // opencode's installer downloads without curl --fail; one transient error page
   // used to fail the whole update, so the script must retry before setting rc.
   ok("agentScript: opencode retries the installer before failing the update",
@@ -254,7 +290,7 @@ function ok(name, cond, detail) {
   ok("AGENT_LATEST: t3code resolves from the npm registry",
     /registry\.npmjs\.org\/t3\/latest/.test(updates.AGENT_LATEST.t3code.url) && updates.AGENT_LATEST.t3code.pick({ version: "0.0.29" }) === "0.0.29");
   const onlyClaude = updates.buildAgentUpdateScript(["claude-code"]);
-  ok("agentScript: subset only includes requested agents", /claude update/.test(onlyClaude) && !/opencode/.test(onlyClaude) && !/codex/.test(onlyClaude) && !/t3@latest/.test(onlyClaude));
+  ok("agentScript: subset only includes requested agents", /claude update/.test(onlyClaude) && !/opencode/.test(onlyClaude) && !/codex/.test(onlyClaude) && !/t3/.test(onlyClaude));
   ok("agentScript: subset still aggregates exit code", onlyClaude.startsWith("set -uo pipefail\nrc=0\n") && /\nexit \$rc\n$/.test(onlyClaude));
 
   console.log(`\n  updates (Construct check) unit tests — ${pass}/${pass + fail} passed\n`);

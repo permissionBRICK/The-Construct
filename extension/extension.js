@@ -1575,10 +1575,21 @@ function handleMessage(message, webview, context) {
         // The T3 Code toggle is live too: enabling installs + starts it on the VM
         // right away and opens the web UI in the browser; disabling stops the
         // service. Either way the persisted flag also rides the next (re)provision.
+        // Channel changes on an already-enabled T3 Code reinstall at the new tag.
         const wantT3 = message.settings && message.settings.t3code === true;
         const hadT3 = prev.t3code === true;
-        if (wantT3 && !hadT3) t3code.enableOnVm().then(() => refreshAll());
-        else if (!wantT3 && hadT3) t3code.disableOnVm().then(() => refreshAll());
+        const newCh = (message.settings && message.settings.t3codeChannel) || "stable";
+        const oldCh = prev.t3codeChannel || "stable";
+        if (wantT3 && !hadT3) {
+          // Fresh enable: honour the channel chosen in the SAME save so the first
+          // install isn't always stable followed by a redundant channel switch.
+          t3code.enableOnVm({ channel: newCh }).then(() => refreshAll());
+        } else if (!wantT3 && hadT3) {
+          t3code.disableOnVm().then(() => refreshAll());
+        } else if (wantT3 && hadT3 && newCh !== oldCh) {
+          // Already enabled, channel changed: reinstall at the new tag + restart.
+          t3code.setChannelOnVm(newCh).then(() => refreshAll());
+        }
         // Automatic checkpoints are a HYPER-V property, decided when the VM is
         // created — so the saved value rides the next reinstall/redownload for free.
         // Offer to apply it to the VM that exists right now too (elevated, UAC).

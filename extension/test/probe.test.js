@@ -94,18 +94,25 @@ ok("probe script greps a semver from version output", /grep -oE '\[0-9\]/.test(p
 ok("probe script detects all three agents' versions", /ver claude/.test(probe.REMOTE_PROBE) && /ver codex/.test(probe.REMOTE_PROBE) && /ver opencode/.test(probe.REMOTE_PROBE));
 
 // ── T3 Code (opt-in web GUI, not part of AI_TOOLS) ───────────────────────────
-ok("probe script emits T3CODE flag + port + t3 version + service state",
-  /emit T3CODE /.test(probe.REMOTE_PROBE) && /emit T3CODE_PORT /.test(probe.REMOTE_PROBE) && /ver t3/.test(probe.REMOTE_PROBE) && /emit T3_ACTIVE /.test(probe.REMOTE_PROBE));
-const t3on = probe.toState(probe.parseProbe("AI_TOOLS\tclaude-code\nT3CODE\ttrue\nT3CODE_PORT\t5177\nV_T3\tt3 v0.0.28\nT3_ACTIVE\tactive\n"));
+ok("probe script emits T3CODE flag + port + channel + t3 version + service state",
+  /emit T3CODE /.test(probe.REMOTE_PROBE) && /emit T3CODE_PORT /.test(probe.REMOTE_PROBE) && /emit T3CODE_CHANNEL /.test(probe.REMOTE_PROBE) && /ver t3/.test(probe.REMOTE_PROBE) && /emit T3_ACTIVE /.test(probe.REMOTE_PROBE));
+const t3on = probe.toState(probe.parseProbe("AI_TOOLS\tclaude-code\nT3CODE\ttrue\nT3CODE_PORT\t5177\nT3CODE_CHANNEL\tstable\nV_T3\tt3 v0.0.28\nT3_ACTIVE\tactive\n"));
 const t3agent = t3on.agents.find((a) => a.id === "t3code");
 ok("state: t3code listed when enabled, version extracted", !!t3agent && t3agent.version === "0.0.28");
 ok("state: t3code webui true when the service is running", !!t3agent && t3agent.webui === true && /:5177/.test(t3agent.detail), t3agent && t3agent.detail);
+ok("state: t3code channel=stable, detail without nightly suffix", !!t3agent && t3agent.channel === "stable" && !/nightly/.test(t3agent.detail));
+// Nightly channel: detail must include "· nightly" so it's visually distinguishable.
+const t3night = probe.toState(probe.parseProbe("T3CODE\ttrue\nT3CODE_PORT\t5177\nT3CODE_CHANNEL\tnightly\nV_T3\t0.0.30-nightly.20260728\nT3_ACTIVE\tactive\n"));
+const t3nAgent = t3night.agents.find((a) => a.id === "t3code");
+ok("state: t3code nightly detail includes · nightly", !!t3nAgent && /· nightly/.test(t3nAgent.detail));
+ok("state: t3code nightly channel=nightly + version extracted", !!t3nAgent && t3nAgent.channel === "nightly" && t3nAgent.version === "0.0.30-nightly.20260728");
 // Installed but toggled off / service stopped: still listed (show/update a
 // leftover install), but NO webui button — nothing is listening to open.
 const t3inst = probe.toState(probe.parseProbe("T3CODE\tfalse\nV_T3\t0.0.28\nT3_ACTIVE\tinactive\n"));
 const t3instAgent = t3inst.agents.find((a) => a.id === "t3code");
 ok("state: t3code listed when installed but flag off", !!t3instAgent);
 ok("state: t3code webui false when the service is stopped", !!t3instAgent && t3instAgent.webui === false);
+ok("state: t3code defaults to channel=stable when absent", !!t3instAgent && t3instAgent.channel === "stable");
 // Enabled but binary missing (install pending): listed with the "—" placeholder.
 const t3pending = probe.toState(probe.parseProbe("T3CODE\ttrue\n"));
 ok("state: t3code enabled without version shows placeholder + default port, no webui",

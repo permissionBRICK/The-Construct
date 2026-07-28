@@ -384,10 +384,12 @@ jq -n \
   --argjson includeAuth "$([[ "${INCLUDE_AUTH}" == "true" ]] && echo true || echo false)" \
   --argjson includeHistory "$([[ "${INCLUDE_HISTORY}" == "true" ]] && echo true || echo false)" \
   --argjson t3code "$([[ "${T3CODE:-false}" == "true" ]] && echo true || echo false)" \
+  --arg t3codeChannel "${T3CODE_CHANNEL:-stable}" \
   --argjson addedProjects "${gen_json}" '
   { created: $created, host: $host, agents: ($agents | split(",")),
     includeAuth: $includeAuth, includeHistory: $includeHistory,
-    t3code: $t3code, addedProjects: $addedProjects }' \
+    t3code: $t3code, t3codeChannel: $t3codeChannel,
+    addedProjects: $addedProjects }' \
   >"${STAGE}/backup-info.json"
 
 # ── Pack ─────────────────────────────────────────────────────────────────────

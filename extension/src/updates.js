@@ -139,8 +139,17 @@ const AGENT_LATEST = {
   // sst/opencode was renamed/transferred; the GitHub API 301-redirects this path to
   // the current owner, which fetchJson follows — so we don't hardcode a new owner.
   opencode: { url: "https://api.github.com/repos/sst/opencode/releases/latest", pick: (j) => j && j.tag_name },
+  // Default lookup for stable; nightly is handled by t3codeUrl() below.
   t3code: { url: "https://registry.npmjs.org/t3/latest", pick: (j) => j && j.version },
 };
+
+/** The npm registry URL for the t3 package by channel. The per-tag endpoint
+ *  returns the version manifest whose `.version` field is the resolved version. */
+function t3codeUrl(channel) {
+  return channel === "nightly"
+    ? "https://registry.npmjs.org/t3/nightly"
+    : "https://registry.npmjs.org/t3/latest";
+}
 
 /** Parse a version into [major,minor,patch], or null if it has no semver core. */
 function semverParts(v) {
@@ -157,13 +166,38 @@ function isNewer(latest, installed) {
   return false;
 }
 
-/** Best-effort latest version string for an agent id (cached), or "" if unknown. */
+/** Nightly builds share the same major.minor.patch across many daily releases
+ *  (e.g. 0.0.30-nightly.20260728 vs 0.0.30-nightly.20260729). isNewer strips
+ *  the prerelease and calls them EQUAL, so the panel would never show a nightly
+ *  update. This compares the FULL version string on the same channel: a semver
+ *  core bump wins, otherwise any string difference means a new build. Only used
+ *  when the VM's channel is nightly — stable still uses isNewer. */
+function isNewerNightly(latest, installed) {
+  if (!latest || !installed) return false;
+  const ls = String(latest).trim(), is = String(installed).trim();
+  if (ls === is) return false;
+  if (isNewer(ls, is)) return true;
+  // Same core → compare the full string; a different prerelease suffix means a
+  // newer build (the date-stamped nightly tag is monotonically increasing).
+  const L = semverParts(ls), I = semverParts(is);
+  if (!L || !I) return false;
+  for (let i = 0; i < 3; i++) { if (L[i] !== I[i]) return false; }
+  return ls !== is;
+}
+
+/** Best-effort latest version string for an agent id (cached), or "" if unknown.
+ *  `opts.t3codeChannel` ("nightly"|"stable") steers the t3code lookup to the
+ *  matching npm dist-tag; the cache key includes the channel so a switch doesn't
+ *  serve a stale cross-channel answer. */
 async function fetchAgentLatest(id, opts = {}) {
   const src = AGENT_LATEST[id];
   if (!src) return "";
   const fj = opts.fetchJson || fetchJson;
-  const raw = await cached(`agent:${id}`, async () => {
-    const picked = src.pick(await fj(src.url, opts));
+  // t3code: per-channel URL + distinct cache key
+  const url = id === "t3code" ? t3codeUrl(opts.t3codeChannel) : src.url;
+  const cacheKey = id === "t3code" ? `agent:t3code:${opts.t3codeChannel === "nightly" ? "nightly" : "stable"}` : `agent:${id}`;
+  const raw = await cached(cacheKey, async () => {
+    const picked = src.pick(await fj(url, opts));
     return picked ? extractVersion(picked) : null; // null = failure -> short negative TTL
   }, opts);
   return raw || "";
@@ -172,13 +206,18 @@ async function fetchAgentLatest(id, opts = {}) {
 /** Annotate each agent with {latest, updateAvailable} ONLY when there's actually a
  *  newer release; an up-to-date or unknown agent is returned UNCHANGED (same object
  *  reference) so augment() can detect "nothing changed" and skip a redundant re-push.
- *  Best-effort + concurrent. */
+ *  Best-effort + concurrent. t3code on the nightly channel uses `isNewerNightly` so
+ *  daily builds with the same semver core still show an update badge. */
 async function augmentAgents(agents, opts = {}) {
   if (!Array.isArray(agents)) return agents;
   return Promise.all(agents.map(async (a) => {
     if (!a || !a.id || !a.version || a.version === "—" || !AGENT_LATEST[a.id]) return a;
-    const latest = await fetchAgentLatest(a.id, opts);
-    if (!latest || !isNewer(latest, a.version)) return a;
+    // Thread the agent's probed channel so fetchAgentLatest hits the right registry tag.
+    const agentOpts = a.id === "t3code" && a.channel ? { ...opts, t3codeChannel: a.channel } : opts;
+    const latest = await fetchAgentLatest(a.id, agentOpts);
+    if (!latest) return a;
+    const newer = (a.id === "t3code" && a.channel === "nightly") ? isNewerNightly(latest, a.version) : isNewer(latest, a.version);
+    if (!newer) return a;
     return { ...a, latest, updateAvailable: true };
   }));
 }
@@ -241,9 +280,13 @@ function buildAgentUpdateScript(ids) {
   if (want.includes("t3code")) {
     // npm-only (how install-ai-tools.sh installs it); restart the serve unit so
     // the running web GUI actually picks up the new version. try-restart is a
-    // no-op when the service isn't deployed/running.
+    // no-op when the service isn't deployed/running. The channel is read from
+    // the VM's config.env (source of truth), mapped to the npm tag the same way
+    // install-ai-tools.sh does — so a host/VM channel disagreement can't happen.
     lines.push('if command -v t3 >/dev/null 2>&1; then echo "== updating T3 Code =="; ' +
-      'if npm install -g t3@latest --allow-scripts=node-pty,msgpackr-extract; then ' +
+      '_t3ch="$(sed -n \'s/^T3CODE_CHANNEL=//p\' /etc/construct/config.env 2>/dev/null | head -1)"; ' +
+      'case "$_t3ch" in nightly) _t3tag=nightly ;; *) _t3tag=latest ;; esac; ' +
+      'if npm install -g "t3@${_t3tag}" --allow-scripts=node-pty,msgpackr-extract; then ' +
       'systemctl try-restart t3code-serve 2>/dev/null || true; else rc=1; fi; fi');
   }
   lines.push("exit $rc");
@@ -289,6 +332,7 @@ function constructRefreshArgs(markers) {
 module.exports = {
   DEFAULT_REPO, DEFAULT_REF, TTL_MS, NEG_TTL_MS, AGENT_LATEST,
   readMarkers, acceptFor, fetchJson, constructUpdateFromCompare, checkConstruct, checkConstructCached,
-  behindText, semverParts, isNewer, isProvisionStale, fetchAgentLatest, augmentAgents, buildAgentUpdateScript,
+  behindText, semverParts, isNewer, isNewerNightly, isProvisionStale, t3codeUrl,
+  fetchAgentLatest, augmentAgents, buildAgentUpdateScript,
   augment, constructRefreshArgs,
 };

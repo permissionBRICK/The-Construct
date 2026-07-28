@@ -9,6 +9,12 @@ function ok(name, cond, detail) {
   else { fail++; console.log("  FAIL  " + name + (detail ? "   << " + detail : "")); }
 }
 
+// ── npmTag ────────────────────────────────────────────────────────────────────
+ok("npmTag: stable -> latest", t3.npmTag("stable") === "latest");
+ok("npmTag: nightly -> nightly", t3.npmTag("nightly") === "nightly");
+ok("npmTag: undefined -> latest (default)", t3.npmTag(undefined) === "latest");
+ok("npmTag: garbage -> latest (normalize)", t3.npmTag("alpha") === "latest");
+
 // ── buildInstallScript ────────────────────────────────────────────────────────
 const inst = t3.buildInstallScript();
 ok("install: reads config.env with defaults", /CONFIG_FILE=\/etc\/construct\/config\.env/.test(inst) && /T3CODE_PORT:-5177/.test(inst) && /T3CODE_HOST:-0\.0\.0\.0/.test(inst));
@@ -21,18 +27,24 @@ ok("install: checks the Node version against t3's engines floor",
 // is dead there — projects are bootstrapped explicitly, one per git repo.
 ok("install: no dead --auto-bootstrap flag on ExecStart; explicit per-repo project add",
   !/ExecStart[^\n]*auto-bootstrap-project-from-cwd/.test(inst) && /t3 project add/.test(inst) && /\.git/.test(inst));
-ok("install: npm installs t3 with build scripts allowed", /npm install -g t3@latest --allow-scripts=node-pty,msgpackr-extract/.test(inst));
+ok("install(stable): npm installs t3@latest with build scripts allowed", /npm install -g t3@latest --allow-scripts=node-pty,msgpackr-extract/.test(inst));
 // node-pty has no Linux prebuilds — its install always node-gyp-rebuilds, so
 // the compiler toolchain must be in place before npm runs the build scripts.
 ok("install: provisions the compiler toolchain before npm (node-pty gyp build)",
   /command -v g\+\+/.test(inst) && /apt-get install -y build-essential python3/.test(inst) &&
   inst.indexOf("build-essential") < inst.indexOf("npm install -g t3@latest"));
-ok("install: persists the T3CODE opt-in + bind keys", /cfgset T3CODE true/.test(inst) && /cfgset T3CODE_HOST/.test(inst) && /cfgset T3CODE_PORT/.test(inst));
+ok("install: persists the T3CODE opt-in + bind keys + channel", /cfgset T3CODE true/.test(inst) && /cfgset T3CODE_HOST/.test(inst) && /cfgset T3CODE_PORT/.test(inst) && /cfgset T3CODE_CHANNEL latest/.test(inst));
 ok("install: writes the t3code-serve unit", /\/etc\/systemd\/system\/t3code-serve\.service/.test(inst) && /EnvironmentFile=\/etc\/construct\/config\.env/.test(inst));
 // The unit's ExecStart placeholders must reach the FILE as literal ${...} for
 // systemd to expand — i.e. escaped (\$) inside the unquoted heredoc.
 ok("install: unit placeholders escaped for systemd, not the shell", /--host \\\$\{T3CODE_HOST\} --port \\\$\{T3CODE_PORT\}/.test(inst));
 ok("install: enables + restarts the service and verifies it's active", /systemctl enable t3code-serve/.test(inst) && /systemctl restart t3code-serve/.test(inst) && /is-active --quiet t3code-serve/.test(inst));
+
+// ── buildInstallScript (nightly channel) ─────────────────────────────────────
+const instN = t3.buildInstallScript("nightly");
+ok("install(nightly): npm installs t3@nightly", /npm install -g t3@nightly --allow-scripts=/.test(instN));
+ok("install(nightly): persists T3CODE_CHANNEL nightly", /cfgset T3CODE_CHANNEL nightly/.test(instN));
+ok("install(nightly): 0-arg call defaults to stable (backward compat)", /t3@latest/.test(t3.buildInstallScript()) && !/t3@nightly/.test(t3.buildInstallScript()));
 
 // ── buildDisableScript ────────────────────────────────────────────────────────
 const dis = t3.buildDisableScript();
@@ -61,7 +73,7 @@ ok("baseUrl: honors a cfg vmHost override", t3.baseUrl({ vmHost: "other.host" })
 // bare Windows host running the suite.)
 try {
   const cp = require("child_process");
-  for (const [name, script] of [["install", inst], ["disable", dis], ["pairing", pair]]) {
+  for (const [name, script] of [["install", inst], ["install(nightly)", instN], ["disable", dis], ["pairing", pair]]) {
     const r = cp.spawnSync("bash", ["-n"], { input: script, encoding: "utf8" });
     if (r.error) { console.log("  SKIP  bash -n (" + name + ") — bash unavailable"); continue; }
     ok("bash -n: " + name + " script parses", r.status === 0, (r.stderr || "").trim());
