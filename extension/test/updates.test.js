@@ -202,11 +202,17 @@ function ok(name, cond, detail) {
   ok("isNewerNightly: same date, lower build number -> false",
     updates.isNewerNightly("0.0.30-nightly.20260728.100", "0.0.30-nightly.20260728.932") === false);
   // Cross-channel: same core, stable (no prerelease) vs nightly (has prerelease)
-  // must not produce a bogus update badge. Per semver, no prerelease > prerelease.
-  ok("isNewerNightly: stable vs nightly same core -> true (release > pre)",
-    updates.isNewerNightly("0.0.30", "0.0.30-nightly.20260728") === true);
-  ok("isNewerNightly: nightly vs stable same core -> false",
+  // must not produce an update badge — comparing across channels is never valid.
+  ok("isNewerNightly: stable vs nightly same core -> false (cross-channel rejected)",
+    updates.isNewerNightly("0.0.30", "0.0.30-nightly.20260728") === false);
+  ok("isNewerNightly: nightly vs stable same core -> false (cross-channel rejected)",
     updates.isNewerNightly("0.0.30-nightly.20260728", "0.0.30") === false);
+  // Cross-channel with higher core: stable 0.0.31 vs nightly 0.0.30 still rejected.
+  ok("isNewerNightly: higher stable vs lower nightly -> false (cross-channel)",
+    updates.isNewerNightly("0.0.31", "0.0.30-nightly.20260728") === false);
+  // Same-channel stable comparison still works (both lack prerelease).
+  ok("isNewerNightly: two stable versions -> delegates to isNewer",
+    updates.isNewerNightly("0.0.31", "0.0.30") === true);
 
   // ── prereleasePart + comparePrerelease (unit) ─────────────────────────────
   ok("prereleasePart: extracts nightly prerelease", updates.prereleasePart("0.0.30-nightly.20260728.932") === "nightly.20260728.932");
@@ -269,6 +275,20 @@ function ok(name, cond, detail) {
     { noCache: true, fetchJson: async () => ({ version: "0.0.29" }) }
   );
   ok("augmentAgents: t3code stable same version -> no update (same ref)", augT3s[0] === augT3s[0] && augT3s[0].updateAvailable === false);
+  // Cross-channel: nightly agent, stable registry answer -> no bogus badge.
+  const augT3cross = await updates.augmentAgents(
+    [{ id: "t3code", name: "T3 Code", version: "0.0.30-nightly.20260728", updateAvailable: false, channel: "nightly" }],
+    { noCache: true, fetchJson: async () => ({ version: "0.0.30" }) }
+  );
+  ok("augmentAgents: t3code nightly + stable same core -> no update (cross-channel)",
+    augT3cross[0].updateAvailable === false);
+  // Downgrade: higher nightly core, lower stable latest -> no badge.
+  const augT3down = await updates.augmentAgents(
+    [{ id: "t3code", name: "T3 Code", version: "0.0.31-nightly.20260730", updateAvailable: false, channel: "nightly" }],
+    { noCache: true, fetchJson: async () => ({ version: "0.0.30" }) }
+  );
+  ok("augmentAgents: t3code nightly higher core + stable lower -> no update (downgrade)",
+    augT3down[0].updateAvailable === false);
 
   // ── augment folds agent updates into state ──────────────────────────────────
   const st = await updates.augment(

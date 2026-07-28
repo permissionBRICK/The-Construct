@@ -212,11 +212,13 @@ function isNewerNightly(latest, installed) {
   if (!latest || !installed) return false;
   const ls = String(latest).trim(), is = String(installed).trim();
   if (ls === is) return false;
+  const lPre = prereleasePart(ls), iPre = prereleasePart(is);
+  if ((!lPre) !== (!iPre)) return false;
   if (isNewer(ls, is)) return true;
   const L = semverParts(ls), I = semverParts(is);
   if (!L || !I) return false;
   for (let i = 0; i < 3; i++) { if (L[i] !== I[i]) return false; }
-  return comparePrerelease(prereleasePart(ls), prereleasePart(is)) > 0;
+  return comparePrerelease(lPre, iPre) > 0;
 }
 
 /** Best-effort latest version string for an agent id (cached), or "" if unknown.
