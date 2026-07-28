@@ -56,6 +56,11 @@ CODEX_PORT="${CODEX_PORT:-4500}"
 CODEX_TOKEN_FILE="${CODEX_TOKEN_FILE:-/etc/construct/codex-app-server.token}"
 T3CODE_HOST="${T3CODE_HOST:-0.0.0.0}"
 T3CODE_PORT="${T3CODE_PORT:-5177}"
+# Channel ("stable"|"nightly") decides the npm dist-tag. stable -> @latest,
+# nightly -> @nightly. Anything that isn't exactly "nightly" normalizes to stable.
+T3CODE_CHANNEL="${T3CODE_CHANNEL:-stable}"
+[[ "${T3CODE_CHANNEL}" == "nightly" ]] || T3CODE_CHANNEL=stable
+_t3_npm_tag() { [[ "${T3CODE_CHANNEL}" == "nightly" ]] && echo nightly || echo latest; }
 # The local `code serve-web` server on the VM keeps its data (incl. Machine-scope
 # settings) here; used to seed the Claude Code bypass defaults for the browser IDE
 # too, not just the Remote-SSH server. Mirrors install-vscode.sh's default.
@@ -619,13 +624,15 @@ install_t3code() {
   # node-pty (terminal support) and msgpackr-extract must run their build
   # scripts; newer npm gates install scripts behind --allow-scripts, older npm
   # ignores the unknown flag and runs them anyway -- one call covers both.
+  local _tag
+  _tag="$(_t3_npm_tag)"
   if command -v t3 >/dev/null 2>&1; then
-    note "t3 already installed; updating to the latest version"
-    if ! npm install -g t3@latest --allow-scripts=node-pty,msgpackr-extract; then
+    note "t3 already installed; installing t3@${_tag} (channel=${T3CODE_CHANNEL})"
+    if ! npm install -g "t3@${_tag}" --allow-scripts=node-pty,msgpackr-extract; then
       warn "t3 update failed; keeping the existing version"
     fi
   else
-    npm install -g t3@latest --allow-scripts=node-pty,msgpackr-extract
+    npm install -g "t3@${_tag}" --allow-scripts=node-pty,msgpackr-extract
   fi
 
   # Resolve the installed binary and pin the stable PATH location the service
@@ -650,6 +657,7 @@ install_t3code() {
   # would otherwise exec `t3 serve --host --port` with empty expansions).
   bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" T3CODE_HOST "${T3CODE_HOST}"
   bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" T3CODE_PORT "${T3CODE_PORT}"
+  bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" T3CODE_CHANNEL "${T3CODE_CHANNEL}"
 
   install -d -m 0755 "${WORKSPACE_ROOT}"
   install -m 0644 "${REPO_DIR}/systemd/t3code-serve.service" /etc/systemd/system/t3code-serve.service

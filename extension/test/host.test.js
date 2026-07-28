@@ -95,12 +95,15 @@ try {
     gitUserName: "Neo", gitEmail: "neo@zion.io", gitCredentialStore: false,
     vmMemoryGB: 16, vmDiskGB: 120, ubuntuRelease: "24.04",
     vsCodeServeWeb: true, vsCodeTunnel: false, smbShare: true, micPassthrough: true,
-    claudePartialStreaming: false, t3code: true, vmAutoCheckpoints: true,
+    claudePartialStreaming: false, t3code: true, t3codeChannel: "nightly", vmAutoCheckpoints: true,
   });
   ok("mapToForm: git interop keys -> form", form.gitName === "Neo" && form.gitEmail === "neo@zion.io" && form.gitCred === false);
   ok("mapToForm: numbers stringified for inputs", form.ram === "16" && form.disk === "120");
   ok("mapToForm: booleans pass through", form.serveWeb === true && form.tunnel === false && form.smb === true && form.mic === true && form.partialStreaming === false && form.t3code === true);
   ok("mapToForm: t3code omitted when absent", !("t3code" in host.mapToForm({ gitUserName: "Neo" })));
+  ok("mapToForm: t3codeChannel round-trips (nightly)", form.t3codeChannel === "nightly");
+  ok("mapToForm: t3codeChannel omitted when absent", !("t3codeChannel" in host.mapToForm({ gitUserName: "Neo" })));
+  ok("mapToForm: t3codeChannel rejects unknown values", !("t3codeChannel" in host.mapToForm({ t3codeChannel: "alpha" })));
   ok("mapToForm: vmAutoCheckpoints -> autoCheckpoints", form.autoCheckpoints === true);
   ok("mapToForm: autoCheckpoints omitted when absent (form default off stands)",
     !("autoCheckpoints" in host.mapToForm({ gitUserName: "Neo" })));
@@ -112,7 +115,7 @@ try {
     gitName: " Neo ", gitEmail: "neo@zion.io", gitCred: true,
     ram: "16", disk: "120.5", ubuntu: "22.04",
     serveWeb: false, tunnel: true, smb: false, mic: true, partialStreaming: true, t3code: false,
-    autoCheckpoints: false,
+    t3codeChannel: "nightly", autoCheckpoints: false,
     password: "s3cret", agents: ["claude-code"], projects: ["default"],
   });
   ok("mapFromForm: git identity uses interop keys", disk.gitUserName === "Neo" && disk.gitEmail === "neo@zion.io" && disk.gitCredentialStore === true);
@@ -125,6 +128,10 @@ try {
   ok("mapFromForm: autoCheckpoints -> vmAutoCheckpoints (off persists)", disk.vmAutoCheckpoints === false);
   ok("mapFromForm: autoCheckpoints on persists", host.mapFromForm({ autoCheckpoints: true }).vmAutoCheckpoints === true);
   ok("mapFromForm: booleans persisted incl. false", disk.vsCodeServeWeb === false && disk.vsCodeTunnel === true && disk.smbShare === false && disk.micPassthrough === true && disk.t3code === false);
+  ok("mapFromForm: t3codeChannel persisted (nightly)", disk.t3codeChannel === "nightly");
+  ok("mapFromForm: t3codeChannel stable persists", host.mapFromForm({ t3codeChannel: "stable" }).t3codeChannel === "stable");
+  ok("mapFromForm: t3codeChannel unknown value rejected (no clobber)", !("t3codeChannel" in host.mapFromForm({ t3codeChannel: "alpha" })));
+  ok("mapFromForm: t3codeChannel absent -> omitted", !("t3codeChannel" in host.mapFromForm({})));
   ok("mapFromForm: password NEVER persisted", !("password" in disk) && !Object.values(disk).includes("s3cret"));
   ok("mapFromForm: agents/projects deferred (not written)", !("aiTools" in disk) && !("projects" in disk) && !("agents" in disk));
 

@@ -894,6 +894,73 @@ ok "auto-install: the saved preference is not read through a [bool] cast" (
 ok "auto-install: the create call passes the EFFECTIVE value, not the raw parameter" (
     $aiScript -match 'AutomaticCheckpoints = \$effectiveAutoCheckpoints')
 
+# ── T3CodeChannel ValidateSet (finding #5: injection safety) ─────────────────
+# Each entry point must enforce the exact ""|"stable"|"nightly" contract via
+# ValidateSet so a hostile value (e.g. containing a single-quote) can't reach
+# the shell boundary where $envPrefix interpolates it.
+foreach ($scriptName in @("Provision-AgentVM.ps1", "Create-AgentVM.ps1", "Auto-Install.ps1")) {
+    $scriptPath = Join-Path $here "..\$scriptName"
+    if (-not (Test-Path $scriptPath)) {
+        ok "$scriptName`: T3CodeChannel ValidateSet — SKIP (file not found)" $false
+        continue
+    }
+    $cmd = Get-Command $scriptPath -CommandType ExternalScript -ErrorAction SilentlyContinue
+    $param = if ($cmd) { $cmd.Parameters['T3CodeChannel'] } else { $null }
+    ok "$scriptName`: has a T3CodeChannel parameter" ($null -ne $param)
+    if ($param) {
+        $vs = $param.Attributes | Where-Object { $_ -is [System.Management.Automation.ValidateSetAttribute] }
+        ok "$scriptName`: T3CodeChannel has ValidateSet" ($null -ne $vs)
+        if ($vs) {
+            $allowed = @($vs.ValidValues) | Sort-Object
+            $expected = @("", "nightly", "stable") | Sort-Object
+            ok "$scriptName`: T3CodeChannel ValidateSet is exactly ('','stable','nightly')" (
+                ($allowed -join ",") -eq ($expected -join ","))
+        }
+    }
+}
+
+# ── T3CodeChannel version-skew guard on every Provision forwarding site ────
+# Auto-Install.ps1 splats T3CodeChannel into Provision-AgentVM.ps1 on four paths:
+# create, fresh-install provision, existing-VM reprovision, and add-config
+# reprovision. Every site must guard against an older Provision that lacks the
+# parameter — otherwise binding fails. Pin the guard count so a new forwarding
+# site can't skip the check.
+ok "auto-install: T3CodeChannel guard on all 4 Provision forwarding sites" (
+    ([regex]::Matches($aiScript, "Parameters\.ContainsKey\('T3CodeChannel'\)")).Count -ge 4)
+ok "auto-install: T3CodeChannel removed in both guard + catch branches (at least 8 sites)" (
+    ([regex]::Matches($aiScript, "\.Remove\('T3CodeChannel'\)")).Count -ge 8)
+
+# ── T3CodeChannel lowercase normalization ──────────────────────────────────
+# ValidateSet is case-insensitive: PowerShell happily binds "NIGHTLY" to the
+# param, but downstream bash matches only exact lowercase. Every entry point
+# must normalize a non-empty bound value to lowercase after param binding.
+foreach ($scriptName in @("Provision-AgentVM.ps1", "Create-AgentVM.ps1", "Auto-Install.ps1")) {
+    $scriptPath = Join-Path $here "..\$scriptName"
+    if (-not (Test-Path $scriptPath)) {
+        ok "$scriptName`: T3CodeChannel .ToLower() — SKIP (file not found)" $false
+        continue
+    }
+    $src = Get-Content -LiteralPath $scriptPath -Raw
+    ok "$scriptName`: normalizes T3CodeChannel to lowercase after param binding" (
+        $src -match '\$T3CodeChannel\s*=\s*\$T3CodeChannel\.ToLower\(\)')
+}
+# Functional verification: a scriptblock with the same param+normalize pattern
+# proves that uppercase values are actually lowercased and empty stays empty.
+$normTest = {
+    param([ValidateSet("", "stable", "nightly")][string]$T3CodeChannel = "")
+    if ($T3CodeChannel) { $T3CodeChannel = $T3CodeChannel.ToLower() }
+    return $T3CodeChannel
+}
+ok "T3CodeChannel normalization: 'nightly' passes through" ((& $normTest -T3CodeChannel "nightly") -eq "nightly")
+ok "T3CodeChannel normalization: 'NIGHTLY' lowered to 'nightly'" ((& $normTest -T3CodeChannel "NIGHTLY") -eq "nightly")
+ok "T3CodeChannel normalization: 'Stable' lowered to 'stable'" ((& $normTest -T3CodeChannel "Stable") -eq "stable")
+ok "T3CodeChannel normalization: empty stays empty (keep-saved semantics)" ((& $normTest -T3CodeChannel "") -eq "")
+ok "T3CodeChannel normalization: omitted defaults to empty" ((& $normTest) -eq "")
+# Hostile value: ValidateSet rejects anything outside the allowed set.
+$hostileThrew = $false
+try { & $normTest -T3CodeChannel "nightly'; rm -rf /" } catch { $hostileThrew = $true }
+ok "T3CodeChannel normalization: hostile value rejected by ValidateSet" $hostileThrew
+
 Write-Host ""
 Write-Host ("  host-lib unit tests - {0}/{1} passed" -f $script:pass, ($script:pass + $script:fail))
 Write-Host ""

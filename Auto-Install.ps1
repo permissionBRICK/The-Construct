@@ -123,6 +123,10 @@ param(
     # Forwarded down (Create-AgentVM.ps1 -> Provision-AgentVM.ps1): opt-in T3 Code
     # web GUI. Empty = keep the VM's saved choice; "true"/"false".
     [string]$T3Code = "",
+    # Forwarded down: T3 Code install channel. Empty = keep the VM's saved choice;
+    # "stable"/"nightly".
+    [ValidateSet("", "stable", "nightly")]
+    [string]$T3CodeChannel = "",
     # Forwarded to Create-AgentVM.ps1: Hyper-V automatic checkpoints (a snapshot at
     # every VM start). OFF by default for Construct -- on a disposable agent VM the
     # checkpoint only costs disk and I/O. Applies when the VM is CREATED (install /
@@ -184,6 +188,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+if ($T3CodeChannel) { $T3CodeChannel = $T3CodeChannel.ToLower() }
 
 # End-of-run pause. A clean control-panel run closes by itself; any provisioning
 # error prints the VM result again at the true end of the parent flow and forces a
@@ -701,9 +707,18 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         $reprovArgs['ClaudePartialStreaming'] = $ClaudePartialStreaming
         $reprovArgs['MicPassthrough'] = $MicPassthrough
         $reprovArgs['T3Code'] = $T3Code
+        $reprovArgs['T3CodeChannel'] = $T3CodeChannel
         if ($PSBoundParameters.ContainsKey('AgentPassword')) { $reprovArgs['AgentPassword'] = $AgentPassword }
         if ($reprovCloneCredB64) { $reprovArgs['GitCloneCredentialsB64'] = $reprovCloneCredB64 }
         if ($PSBoundParameters.ContainsKey('AutoResolve')) { $reprovArgs['AutoResolve'] = $AutoResolve }
+        try {
+            $reprovCmd = Get-Command -Name $provisionScript -CommandType ExternalScript -ErrorAction Stop
+            if (-not $reprovCmd.Parameters.ContainsKey('T3CodeChannel')) {
+                $reprovArgs.Remove('T3CodeChannel')
+            }
+        } catch {
+            $reprovArgs.Remove('T3CodeChannel')
+        }
         try {
             Invoke-DeElevatedProvision -ScriptPath $provisionScript -ProvisionParams $reprovArgs
         } catch {
@@ -1030,9 +1045,18 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
                 ClaudePartialStreaming = $ClaudePartialStreaming
                 MicPassthrough        = $MicPassthrough
                 T3Code                = $T3Code
+                T3CodeChannel         = $T3CodeChannel
             }
             if ($acCloneCredB64) { $acReprovArgs['GitCloneCredentialsB64'] = $acCloneCredB64 }
             if ($PSBoundParameters.ContainsKey('AutoResolve')) { $acReprovArgs['AutoResolve'] = $AutoResolve }
+            try {
+                $acProvCmd = Get-Command -Name $provisionScript -CommandType ExternalScript -ErrorAction Stop
+                if (-not $acProvCmd.Parameters.ContainsKey('T3CodeChannel')) {
+                    $acReprovArgs.Remove('T3CodeChannel')
+                }
+            } catch {
+                $acReprovArgs.Remove('T3CodeChannel')
+            }
             Invoke-DeElevatedProvision -ScriptPath $provisionScript -ProvisionParams $acReprovArgs
         } catch {
             Write-Host ""
@@ -1547,6 +1571,7 @@ $createArgs = @{
     ClaudePartialStreaming = $ClaudePartialStreaming
     MicPassthrough = $MicPassthrough
     T3Code        = $T3Code
+    T3CodeChannel = $T3CodeChannel
     AutomaticCheckpoints = $effectiveAutoCheckpoints
     # -Auto: Create-AgentVM skips its own Provision call and this script's
     # try/finally owns the final pause.
@@ -1565,12 +1590,16 @@ try {
         Write-Host "    The VM will be created with Hyper-V's automatic-checkpoint default (ON). Update Construct, then" -ForegroundColor Yellow
         Write-Host "    turn them off from the control panel (Settings -> VM resources) or run Set-AgentVmCheckpoints.ps1." -ForegroundColor Yellow
     }
+    if (-not $createCmd.Parameters.ContainsKey('T3CodeChannel')) {
+        $createArgs.Remove('T3CodeChannel')
+    }
 } catch {
     # Fail SAFE, not open. We are already past Remove-AgentVm here, so passing an argument
     # the target might reject risks a binding failure with the old VM gone -- a broken
     # rebuild. Dropping it only costs Hyper-V's default (checkpoints on), which the
     # control panel can fix afterwards.
     $createArgs.Remove('AutomaticCheckpoints')
+    $createArgs.Remove('T3CodeChannel')
     Write-Warning "Could not check Create-AgentVM.ps1's parameters ($($_.Exception.Message))."
     Write-Host "    Creating the VM without -AutomaticCheckpoints; set it afterwards from the control panel" -ForegroundColor Yellow
     Write-Host "    (Settings -> VM resources) or with Set-AgentVmCheckpoints.ps1." -ForegroundColor Yellow
@@ -1608,6 +1637,7 @@ try {
         ClaudePartialStreaming = $ClaudePartialStreaming
         MicPassthrough        = $MicPassthrough
         T3Code                = $T3Code
+        T3CodeChannel         = $T3CodeChannel
         Auto      = $true
     }
     if ($restoreDir)         { $provArgs['RestoreDir']             = $restoreDir }
@@ -1616,6 +1646,16 @@ try {
         $provArgs['Repo'] = $Repo; $provArgs['Ref'] = $Ref
     }
     if ($PSBoundParameters.ContainsKey('AutoResolve')) { $provArgs['AutoResolve'] = $AutoResolve }
+    # Same version-skew guard as above: an older Provision-AgentVM.ps1 may lack
+    # -T3CodeChannel; splatting it would fail parameter binding.
+    try {
+        $provCmd = Get-Command -Name $provisionScript -CommandType ExternalScript -ErrorAction Stop
+        if (-not $provCmd.Parameters.ContainsKey('T3CodeChannel')) {
+            $provArgs.Remove('T3CodeChannel')
+        }
+    } catch {
+        $provArgs.Remove('T3CodeChannel')
+    }
     Invoke-DeElevatedProvision -ScriptPath $provisionScript -ProvisionParams $provArgs
 
     # ── Post-provision host setup ────────────────────────────────────────────

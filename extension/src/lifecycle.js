@@ -84,6 +84,7 @@ function buildInvocation(action, opts = {}) {
       pushBool("-ClaudePartialStreaming", s.partialStreaming);
       pushBool("-MicPassthrough", s.mic);
       pushBool("-T3Code", s.t3code);
+      if (opts.supportsT3CodeChannel !== false) pushPair("-T3CodeChannel", s.t3codeChannel);
       // Launched from the panel: don't prompt for the SMB drive letter etc. (still pauses
       // at the end so output is readable — -NonInteractive is NOT -Auto).
       args.push("-NonInteractive");
@@ -118,6 +119,7 @@ function buildInvocation(action, opts = {}) {
       pushBool("-ClaudePartialStreaming", s.partialStreaming);
       pushBool("-MicPassthrough", s.mic);
       pushBool("-T3Code", s.t3code);
+      if (opts.supportsT3CodeChannel !== false) pushPair("-T3CodeChannel", s.t3codeChannel);
       return {
         script: AUTO_INSTALL, args, destructive: true, elevate: true,
         label: action === "redownload" ? "Redownload" : "Reinstall",
@@ -168,6 +170,34 @@ function scriptSupportsCheckpoints(scriptsDir) {
     .replace(/<#[\s\S]*?#>/g, "")   // block comments (the .SYNOPSIS help header)
     .replace(/^[ \t]*#.*$/gm, "");  // whole-line comments
   return /\$AutomaticCheckpoints\s*(?:=|,|\)|$)/im.test(code);
+}
+
+/**
+ * Same gate as scriptSupportsCheckpoints but for `-T3CodeChannel`. An older scripts
+ * dir that predates this parameter rejects the unknown flag at binding time, breaking
+ * the lifecycle action outright. Unlike checkpoints (which only rides reinstall/
+ * redownload → Auto-Install.ps1), the channel flag is sent on BOTH paths:
+ *   reprovision   → Provision-AgentVM.ps1
+ *   reinstall/redownload → Auto-Install.ps1 → Create-AgentVM.ps1 → Provision
+ *
+ * Action-appropriate: reprovision invokes only Provision-AgentVM.ps1, so only that
+ * script needs the parameter. Rebuild (reinstall/redownload) invokes Auto-Install,
+ * which has its own version-skew guard for the Create and Provision splats — checking
+ * Auto-Install alone suffices. Without an action, require BOTH (conservative default
+ * for callers that don't specify one).
+ */
+function scriptSupportsT3CodeChannel(scriptsDir, action) {
+  if (!scriptsDir) return false;
+  const re = /\$T3CodeChannel\s*(?:=|,|\)|$)/im;
+  const check = (file) => {
+    let txt;
+    try { txt = fs.readFileSync(path.join(scriptsDir, file), "utf8"); } catch (_) { return false; }
+    const code = txt.replace(/<#[\s\S]*?#>/g, "").replace(/^[ \t]*#.*$/gm, "");
+    return re.test(code);
+  };
+  if (action === "reprovision") return check(PROVISION);
+  if (action === "reinstall" || action === "redownload") return check(AUTO_INSTALL);
+  return check(PROVISION) && check(AUTO_INSTALL);
 }
 
 /** A PowerShell single-quoted string literal (embedded quotes doubled). */
@@ -388,6 +418,7 @@ function run(action, opts = {}) {
     projects,
     enabled: opts.enabled,
     supportsCheckpoints: scriptSupportsCheckpoints(scriptsDir),
+    supportsT3CodeChannel: scriptSupportsT3CodeChannel(scriptsDir, action),
   });
   if (!inv) return;
   // Honesty gate: when the scripts are too old to take -AutomaticCheckpoints we drop the
@@ -421,7 +452,7 @@ function run(action, opts = {}) {
 
 module.exports = {
   PROVISION, AUTO_INSTALL, CHECKPOINTS, BACKUP_DIR_NAME,
-  normalizeBackupMode, buildInvocation, scriptSupportsCheckpoints,
+  normalizeBackupMode, buildInvocation, scriptSupportsCheckpoints, scriptSupportsT3CodeChannel,
   psSingleQuote, winQuoteArg, buildChildCommandLine, buildOuterCommand, buildCallCommand, buildHostLaunch,
   hostLaunchSpawnOptions, launchHostScript, run, configure,
 };

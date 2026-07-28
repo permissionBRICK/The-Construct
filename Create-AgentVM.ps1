@@ -66,6 +66,10 @@ param(
     # Forwarded to Provision-AgentVM.ps1: opt-in T3 Code web GUI. Empty = keep the
     # VM's saved choice; "true"/"false".
     [string]$T3Code = "",
+    # Forwarded to Provision-AgentVM.ps1: T3 Code install channel. Empty = keep the
+    # VM's saved choice; "stable"/"nightly".
+    [ValidateSet("", "stable", "nightly")]
+    [string]$T3CodeChannel = "",
     # Hyper-V automatic checkpoints: snapshot the VM at every start. OFF by default
     # for Construct -- on a disposable agent VM the checkpoint only costs (a growing
     # .avhdx differencing disk, slower I/O, and a merge whenever it's deleted).
@@ -91,6 +95,8 @@ param(
     # into a fresh window that would otherwise vanish before it can be read.
     [switch]$Auto
 )
+
+if ($T3CodeChannel) { $T3CodeChannel = $T3CodeChannel.ToLower() }
 
 # ── Self-elevate to Administrator ────────────────────────────────────────────
 if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -226,6 +232,7 @@ if (Get-VM -Name $VmName -ErrorAction SilentlyContinue) {
         if ($PSBoundParameters.ContainsKey('ClaudePartialStreaming')) { $provArgs['ClaudePartialStreaming'] = $ClaudePartialStreaming }
         if ($PSBoundParameters.ContainsKey('MicPassthrough'))         { $provArgs['MicPassthrough']         = $MicPassthrough }
         if ($PSBoundParameters.ContainsKey('T3Code'))                 { $provArgs['T3Code']                 = $T3Code }
+        if ($PSBoundParameters.ContainsKey('T3CodeChannel'))          { $provArgs['T3CodeChannel']          = $T3CodeChannel }
         if ($PSBoundParameters.ContainsKey('RestoreDir'))             { $provArgs['RestoreDir']             = $RestoreDir }
         if ($PSBoundParameters.ContainsKey('GitCloneCredentialsB64')) { $provArgs['GitCloneCredentialsB64'] = $GitCloneCredentialsB64 }
         if ($PSBoundParameters.ContainsKey('CheckoutProjects'))       { $provArgs['CheckoutProjects']       = $CheckoutProjects }
@@ -527,6 +534,7 @@ if ($isAutoinstall) {
             if ($PSBoundParameters.ContainsKey('ClaudePartialStreaming')) { $provArgs['ClaudePartialStreaming'] = $ClaudePartialStreaming }
             if ($PSBoundParameters.ContainsKey('MicPassthrough'))         { $provArgs['MicPassthrough']         = $MicPassthrough }
         if ($PSBoundParameters.ContainsKey('T3Code'))                 { $provArgs['T3Code']                 = $T3Code }
+            if ($PSBoundParameters.ContainsKey('T3CodeChannel'))          { $provArgs['T3CodeChannel']          = $T3CodeChannel }
             if ($PSBoundParameters.ContainsKey('RestoreDir'))             { $provArgs['RestoreDir']             = $RestoreDir }
             if ($PSBoundParameters.ContainsKey('GitCloneCredentialsB64')) { $provArgs['GitCloneCredentialsB64'] = $GitCloneCredentialsB64 }
             if ($PSBoundParameters.ContainsKey('CheckoutProjects'))       { $provArgs['CheckoutProjects']       = $CheckoutProjects }

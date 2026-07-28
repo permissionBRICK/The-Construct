@@ -246,6 +246,15 @@ if [[ -f "${CONFIG_FILE}" ]]; then
 fi
 T3CODE="${T3CODE:-${_t3code_saved:-false}}"
 [[ "${T3CODE}" == "true" ]] || T3CODE=false
+# T3 Code install channel: "stable" (npm @latest) or "nightly" (npm @nightly).
+# Same keep-saved semantics: empty keeps the VM's saved channel, so a console
+# reprovision never flips a nightly user back to stable.
+_t3code_channel_saved=""
+if [[ -f "${CONFIG_FILE}" ]]; then
+  _t3code_channel_saved="$(sed -n 's/^T3CODE_CHANNEL=//p' "${CONFIG_FILE}" | head -1 || true)"
+fi
+T3CODE_CHANNEL="${T3CODE_CHANNEL:-${_t3code_channel_saved:-stable}}"
+[[ "${T3CODE_CHANNEL}" == "nightly" ]] || T3CODE_CHANNEL=stable
 
 # Optional global git identity to set on the VM. Passed base64-encoded (see
 # Provision-AgentVM.ps1) so names/emails with spaces or apostrophes survive the
@@ -282,6 +291,7 @@ note "    VSCODE_TUNNEL=${VSCODE_TUNNEL}"
 note "    CLAUDE_PARTIAL_STREAMING=${CLAUDE_PARTIAL_STREAMING}"
 note "    MIC_PASSTHROUGH=${MIC_PASSTHROUGH}"
 note "    T3CODE=${T3CODE}"
+note "    T3CODE_CHANNEL=${T3CODE_CHANNEL}"
 note "    SMB_SHARE=${SMB_SHARE:-(saved/default)}"
 
 # A zip upload does not preserve Unix exec bits, so make the repo scripts
@@ -349,6 +359,7 @@ write_configuration() {
   cfg CLAUDE_PARTIAL_STREAMING "${CLAUDE_PARTIAL_STREAMING}" || return
   cfg MIC_PASSTHROUGH "${MIC_PASSTHROUGH}" || return
   cfg T3CODE "${T3CODE}" || return
+  cfg T3CODE_CHANNEL "${T3CODE_CHANNEL}" || return
   install -d -m 0755 "${WORKSPACE_ROOT}"
 }
 run_step critical "Writing configuration to ${CONFIG_FILE}" write_configuration
@@ -433,6 +444,7 @@ done
 if [[ "${T3CODE}" == "true" ]]; then
   run_step optional "Installing T3 Code web GUI" \
     env TARGET_USER="${CLAUDE_USER}" AI_TOOLS_OVERRIDE=t3code AI_CONSOLE_INTEGRATION=false \
+    T3CODE_CHANNEL="${T3CODE_CHANNEL}" \
     bash "${REPO_DIR}/bin/install-ai-tools.sh"
 elif [[ -f /etc/systemd/system/t3code-serve.service ]]; then
   run_step optional "Disabling T3 Code web GUI (T3CODE=false)" \

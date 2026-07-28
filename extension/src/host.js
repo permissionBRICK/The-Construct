@@ -299,6 +299,10 @@ function mapToForm(raw) {
   if (typeof raw.micPassthrough === "boolean") form.mic = raw.micPassthrough;
   if (typeof raw.claudePartialStreaming === "boolean") form.partialStreaming = raw.claudePartialStreaming;
   if (typeof raw.t3code === "boolean") form.t3code = raw.t3code;
+  if (has("t3codeChannel")) {
+    const ch = String(raw.t3codeChannel);
+    if (ch === "stable" || ch === "nightly") form.t3codeChannel = ch;
+  }
   if (typeof raw.vmAutoCheckpoints === "boolean") form.autoCheckpoints = raw.vmAutoCheckpoints;
   return form;
 }
@@ -345,6 +349,10 @@ function mapFromForm(form) {
   setBool("claudePartialStreaming", form.partialStreaming);
   setBool("micPassthrough", form.mic);
   setBool("t3code", form.t3code);
+  // Only persist a valid channel — an unknown/absent value must not clobber a
+  // stored one (e.g. the host settings written by an older extension that never
+  // sent the key).
+  if (form.t3codeChannel === "stable" || form.t3codeChannel === "nightly") out.t3codeChannel = form.t3codeChannel;
   setBool("vmAutoCheckpoints", form.autoCheckpoints);
   return out;
 }

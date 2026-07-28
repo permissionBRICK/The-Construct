@@ -175,6 +175,71 @@ function ok(name, cond, detail) {
   ok("isNewer: unparseable -> false (best-effort)", updates.isNewer("", "2.1.196") === false && updates.isNewer("2.1.196", "nope") === false);
   ok("semverParts: extracts core", JSON.stringify(updates.semverParts("v2.1.196-beta")) === "[2,1,196]");
 
+  // ── isNewerNightly (prerelease-aware for daily builds) ─────────────────────
+  ok("isNewerNightly: newer nightly date -> true",
+    updates.isNewerNightly("0.0.30-nightly.20260729", "0.0.30-nightly.20260728") === true);
+  ok("isNewerNightly: older nightly date -> false (no spurious update badge)",
+    updates.isNewerNightly("0.0.30-nightly.20260728", "0.0.30-nightly.20260729") === false);
+  ok("isNewerNightly: same version -> false",
+    updates.isNewerNightly("0.0.30-nightly.20260728", "0.0.30-nightly.20260728") === false);
+  ok("isNewerNightly: higher core -> true (delegates to isNewer)",
+    updates.isNewerNightly("0.0.31-nightly.20260730", "0.0.30-nightly.20260729") === true);
+  ok("isNewerNightly: lower core -> false",
+    updates.isNewerNightly("0.0.29-nightly.20260730", "0.0.30-nightly.20260729") === false);
+  ok("isNewerNightly: unparseable -> false",
+    updates.isNewerNightly("", "0.0.30-nightly.20260728") === false);
+  ok("isNewerNightly: stable versions differ -> true (no prerelease, different core)",
+    updates.isNewerNightly("0.0.30", "0.0.29") === true);
+  // Regression: build-number length mismatch — lexical '>' gets this wrong because
+  // "932" > "1" as strings, but 20260729.1 is a NEWER date than 20260728.932.
+  ok("isNewerNightly: build-number length mismatch (newer date, shorter build) -> true",
+    updates.isNewerNightly("0.0.30-nightly.20260729.1", "0.0.30-nightly.20260728.932") === true);
+  ok("isNewerNightly: build-number length mismatch (older date, longer build) -> false",
+    updates.isNewerNightly("0.0.30-nightly.20260728.932", "0.0.30-nightly.20260729.1") === false);
+  // Same date, different build number — compare numerically
+  ok("isNewerNightly: same date, higher build number -> true",
+    updates.isNewerNightly("0.0.30-nightly.20260728.932", "0.0.30-nightly.20260728.100") === true);
+  ok("isNewerNightly: same date, lower build number -> false",
+    updates.isNewerNightly("0.0.30-nightly.20260728.100", "0.0.30-nightly.20260728.932") === false);
+  // Cross-channel: same core, stable (no prerelease) vs nightly (has prerelease)
+  // must not produce an update badge — comparing across channels is never valid.
+  ok("isNewerNightly: stable vs nightly same core -> false (cross-channel rejected)",
+    updates.isNewerNightly("0.0.30", "0.0.30-nightly.20260728") === false);
+  ok("isNewerNightly: nightly vs stable same core -> false (cross-channel rejected)",
+    updates.isNewerNightly("0.0.30-nightly.20260728", "0.0.30") === false);
+  // Cross-channel with higher core: stable 0.0.31 vs nightly 0.0.30 still rejected.
+  ok("isNewerNightly: higher stable vs lower nightly -> false (cross-channel)",
+    updates.isNewerNightly("0.0.31", "0.0.30-nightly.20260728") === false);
+  // Same-channel stable comparison still works (both lack prerelease).
+  ok("isNewerNightly: two stable versions -> delegates to isNewer",
+    updates.isNewerNightly("0.0.31", "0.0.30") === true);
+  // Non-nightly prerelease: alpha/beta must not compare as nightly.
+  ok("isNewerNightly: nightly vs alpha -> false (non-nightly prerelease rejected)",
+    updates.isNewerNightly("0.0.30-nightly.20260729", "0.0.30-alpha.999") === false);
+  ok("isNewerNightly: alpha vs alpha -> false (neither is nightly)",
+    updates.isNewerNightly("0.0.30-alpha.2", "0.0.30-alpha.1") === false);
+  ok("isNewerNightly: beta vs nightly -> false",
+    updates.isNewerNightly("0.0.30-beta.1", "0.0.30-nightly.20260728") === false);
+  ok("isNewerNightly: nightly-prefix impostor rejected (nightlyish)",
+    updates.isNewerNightly("0.0.30-nightlyish.2", "0.0.30-nightly.20260728") === false);
+  ok("isNewerNightly: bare 'nightly' prerelease accepted (no date segments)",
+    updates.isNewerNightly("0.0.31-nightly", "0.0.30-nightly") === true);
+
+  // ── prereleasePart + comparePrerelease (unit) ─────────────────────────────
+  ok("prereleasePart: extracts nightly prerelease", updates.prereleasePart("0.0.30-nightly.20260728.932") === "nightly.20260728.932");
+  ok("prereleasePart: empty when no prerelease", updates.prereleasePart("0.0.30") === "");
+  ok("comparePrerelease: numeric segments compared as integers",
+    updates.comparePrerelease("nightly.20260729.1", "nightly.20260728.932") > 0);
+  ok("comparePrerelease: equal prereleases -> 0",
+    updates.comparePrerelease("nightly.20260728", "nightly.20260728") === 0);
+  ok("comparePrerelease: fewer segments = lower precedence",
+    updates.comparePrerelease("nightly.20260728", "nightly.20260728.1") < 0);
+
+  // ── t3codeUrl ──────────────────────────────────────────────────────────────
+  ok("t3codeUrl: stable -> registry/t3/latest", updates.t3codeUrl("stable") === "https://registry.npmjs.org/t3/latest");
+  ok("t3codeUrl: nightly -> registry/t3/nightly", updates.t3codeUrl("nightly") === "https://registry.npmjs.org/t3/nightly");
+  ok("t3codeUrl: undefined -> stable (default)", updates.t3codeUrl() === "https://registry.npmjs.org/t3/latest");
+
   // ── fetchAgentLatest (injected fetch) ───────────────────────────────────────
   const gh = (tag) => async () => ({ tag_name: tag });
   ok("agentLatest: codex from GitHub tag", await updates.fetchAgentLatest("codex", { fetchJson: gh("rust-v0.143.0"), noCache: true }) === "0.143.0");
@@ -207,6 +272,41 @@ function ok(name, cond, detail) {
     { noCache: true, fetchJson: async () => ({ tag_name: "v1.18.0" }) }
   );
   ok("augmentAgents: v-prefixed newer tag flags update", augV[0].updateAvailable === true && augV[0].latest === "1.18.0");
+
+  // t3code on the nightly channel: same core, different prerelease -> update available.
+  const augT3n = await updates.augmentAgents(
+    [{ id: "t3code", name: "T3 Code", version: "0.0.30-nightly.20260728", updateAvailable: false, channel: "nightly" }],
+    { noCache: true, fetchJson: async () => ({ version: "0.0.30-nightly.20260729" }) }
+  );
+  ok("augmentAgents: t3code nightly with different prerelease -> update",
+    augT3n[0].updateAvailable === true && augT3n[0].latest === "0.0.30-nightly.20260729");
+  // t3code on stable: classic isNewer (strip prerelease), same core -> no update.
+  const augT3s = await updates.augmentAgents(
+    [{ id: "t3code", name: "T3 Code", version: "0.0.29", updateAvailable: false, channel: "stable" }],
+    { noCache: true, fetchJson: async () => ({ version: "0.0.29" }) }
+  );
+  ok("augmentAgents: t3code stable same version -> no update (same ref)", augT3s[0] === augT3s[0] && augT3s[0].updateAvailable === false);
+  // Cross-channel: nightly agent, stable registry answer -> no bogus badge.
+  const augT3cross = await updates.augmentAgents(
+    [{ id: "t3code", name: "T3 Code", version: "0.0.30-nightly.20260728", updateAvailable: false, channel: "nightly" }],
+    { noCache: true, fetchJson: async () => ({ version: "0.0.30" }) }
+  );
+  ok("augmentAgents: t3code nightly + stable same core -> no update (cross-channel)",
+    augT3cross[0].updateAvailable === false);
+  // Downgrade: higher nightly core, lower stable latest -> no badge.
+  const augT3down = await updates.augmentAgents(
+    [{ id: "t3code", name: "T3 Code", version: "0.0.31-nightly.20260730", updateAvailable: false, channel: "nightly" }],
+    { noCache: true, fetchJson: async () => ({ version: "0.0.30" }) }
+  );
+  ok("augmentAgents: t3code nightly higher core + stable lower -> no update (downgrade)",
+    augT3down[0].updateAvailable === false);
+  // Alpha prerelease on nightly channel: must not produce update badge.
+  const augT3alpha = await updates.augmentAgents(
+    [{ id: "t3code", name: "T3 Code", version: "0.0.30-alpha.999", updateAvailable: false, channel: "nightly" }],
+    { noCache: true, fetchJson: async () => ({ version: "0.0.30-nightly.20260729" }) }
+  );
+  ok("augmentAgents: t3code alpha installed + nightly latest -> no update (non-nightly prerelease)",
+    augT3alpha[0].updateAvailable === false);
 
   // ── augment folds agent updates into state ──────────────────────────────────
   const st = await updates.augment(
@@ -243,10 +343,13 @@ function ok(name, cond, detail) {
   // to a versioned releases/<v> dir must be relinked or updates land invisibly.
   ok("agentScript: codex relinks a version-pinned /usr/local/bin/codex after update",
     /releases\/\*\) for s in/.test(all) && /ln -sf "\$s" \/usr\/local\/bin\/codex/.test(all));
-  // T3 Code: npm-managed like its install; the serve unit restarts so the
-  // running web GUI actually serves the new version.
-  ok("agentScript: t3code updates via npm + restarts the serve unit",
-    /command -v t3 >\/dev\/null/.test(all) && /npm install -g t3@latest/.test(all) && /try-restart t3code-serve/.test(all));
+  // T3 Code: npm-managed like its install; reads the channel from config.env on
+  // the VM (source of truth) and maps it to the npm tag. The serve unit restarts
+  // so the running web GUI actually serves the new version.
+  ok("agentScript: t3code reads channel from config.env + maps to npm tag",
+    /T3CODE_CHANNEL/.test(all) && /nightly\) _t3tag=nightly/.test(all) && /\*\) _t3tag=latest/.test(all));
+  ok("agentScript: t3code updates via npm (channel-driven) + restarts",
+    /command -v t3 >\/dev\/null/.test(all) && /npm install -g "t3@\$\{_t3tag\}"/.test(all) && /try-restart t3code-serve/.test(all));
   // opencode's installer downloads without curl --fail; one transient error page
   // used to fail the whole update, so the script must retry before setting rc.
   ok("agentScript: opencode retries the installer before failing the update",
@@ -254,7 +357,7 @@ function ok(name, cond, detail) {
   ok("AGENT_LATEST: t3code resolves from the npm registry",
     /registry\.npmjs\.org\/t3\/latest/.test(updates.AGENT_LATEST.t3code.url) && updates.AGENT_LATEST.t3code.pick({ version: "0.0.29" }) === "0.0.29");
   const onlyClaude = updates.buildAgentUpdateScript(["claude-code"]);
-  ok("agentScript: subset only includes requested agents", /claude update/.test(onlyClaude) && !/opencode/.test(onlyClaude) && !/codex/.test(onlyClaude) && !/t3@latest/.test(onlyClaude));
+  ok("agentScript: subset only includes requested agents", /claude update/.test(onlyClaude) && !/opencode/.test(onlyClaude) && !/codex/.test(onlyClaude) && !/t3/.test(onlyClaude));
   ok("agentScript: subset still aggregates exit code", onlyClaude.startsWith("set -uo pipefail\nrc=0\n") && /\nexit \$rc\n$/.test(onlyClaude));
 
   console.log(`\n  updates (Construct check) unit tests — ${pass}/${pass + fail} passed\n`);

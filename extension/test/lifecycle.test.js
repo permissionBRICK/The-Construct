@@ -26,7 +26,7 @@ ok("backupMode: undefined -> save", life.normalizeBackupMode(undefined) === "sav
 
 // ── reprovision ──────────────────────────────────────────────────────────────
 const repro = life.buildInvocation("reprovision", {
-  settings: { gitName: "Neo", gitEmail: "neo@zion.io", serveWeb: true, tunnel: false, smb: true, partialStreaming: true, mic: true, t3code: true },
+  settings: { gitName: "Neo", gitEmail: "neo@zion.io", serveWeb: true, tunnel: false, smb: true, partialStreaming: true, mic: true, t3code: true, t3codeChannel: "nightly" },
 });
 ok("reprovision: uses Provision script", repro.script === life.PROVISION);
 ok("reprovision: not destructive, not elevated", repro.destructive === false && repro.elevate === false);
@@ -34,6 +34,7 @@ ok("reprovision: -Action provision", has(repro.args, "-Action", "provision"));
 ok("reprovision: git identity", has(repro.args, "-GitUserName", "Neo") && has(repro.args, "-GitEmail", "neo@zion.io"));
 ok("reprovision: bools as true/false strings", has(repro.args, "-VsCodeServeWeb", "true") && has(repro.args, "-VsCodeTunnel", "false") && has(repro.args, "-SmbShare", "true") && has(repro.args, "-ClaudePartialStreaming", "true") && has(repro.args, "-MicPassthrough", "true"));
 ok("reprovision: threads -T3Code from settings", has(repro.args, "-T3Code", "true"));
+ok("reprovision: threads -T3CodeChannel from settings", has(repro.args, "-T3CodeChannel", "nightly"));
 
 const reproEmpty = life.buildInvocation("reprovision", { settings: {} });
 ok("reprovision: omits unset fields (-FromPanel + -NonInteractive)", reproEmpty.args.join(" ") === "-FromPanel -Action provision -NonInteractive");
@@ -61,6 +62,8 @@ ok("reinstall: no -UbuntuRelease (reuses ISO)", !rei.args.includes("-UbuntuRelea
 ok("reinstall: threads -ClaudePartialStreaming from settings", has(rei.args, "-ClaudePartialStreaming", "false"));
 ok("reinstall: threads -MicPassthrough from settings", has(rei.args, "-MicPassthrough", "true"));
 ok("reinstall: threads -T3Code from settings (explicit off persists)", has(rei.args, "-T3Code", "false"));
+ok("reinstall: omits -T3CodeChannel when absent from settings",
+  !rei.args.includes("-T3CodeChannel"));
 
 const reiProj = life.buildInvocation("reinstall", { settings: {}, projects: ["web"] });
 ok("reinstall: passes -Projects (Auto-Install forwards it to Provision)", has(reiProj.args, "-Projects", "web"));
@@ -70,13 +73,24 @@ const reiBad = life.buildInvocation("reinstall", { settings: {}, backupMode: "bo
 ok("reinstall: invalid backupMode -> save", has(reiBad.args, "-BackupMode", "save"));
 
 // ── redownload ───────────────────────────────────────────────────────────────
-const red = life.buildInvocation("redownload", { settings: { ubuntu: "24.04", ram: "8", partialStreaming: true, mic: false, t3code: true }, backupMode: "existing" });
+const red = life.buildInvocation("redownload", { settings: { ubuntu: "24.04", ram: "8", partialStreaming: true, mic: false, t3code: true, t3codeChannel: "nightly" }, backupMode: "existing" });
 ok("redownload: Auto-Install + label", red.script === life.AUTO_INSTALL && red.label === "Redownload");
 ok("redownload: -Action redownload + backupMode", has(red.args, "-Action", "redownload", "-BackupMode", "existing"));
 ok("redownload: includes -UbuntuRelease", has(red.args, "-UbuntuRelease", "24.04"));
 ok("redownload: threads -ClaudePartialStreaming from settings", has(red.args, "-ClaudePartialStreaming", "true"));
 ok("redownload: threads -MicPassthrough from settings", has(red.args, "-MicPassthrough", "false"));
 ok("redownload: threads -T3Code from settings", has(red.args, "-T3Code", "true"));
+ok("redownload: threads -T3CodeChannel from settings", has(red.args, "-T3CodeChannel", "nightly"));
+
+// Capability gate: an older scripts dir has no -T3CodeChannel parameter; passing
+// it to Provision-AgentVM.ps1 would fail to bind and break the lifecycle action.
+ok("reprovision: drops -T3CodeChannel when the scripts don't support it",
+  !life.buildInvocation("reprovision", { settings: { t3codeChannel: "nightly" }, supportsT3CodeChannel: false }).args.includes("-T3CodeChannel"));
+ok("rebuild: drops -T3CodeChannel when the scripts don't support it",
+  !life.buildInvocation("reinstall", { settings: { t3codeChannel: "nightly" }, supportsT3CodeChannel: false }).args.includes("-T3CodeChannel"));
+ok("rebuild: keeps -T3CodeChannel when supported",
+  has(life.buildInvocation("reinstall", { settings: { t3codeChannel: "nightly" }, supportsT3CodeChannel: true }).args, "-T3CodeChannel", "nightly"));
+
 const redNoRel = life.buildInvocation("redownload", { settings: {} });
 ok("redownload: omits -UbuntuRelease when unset", !redNoRel.args.includes("-UbuntuRelease"));
 
@@ -147,6 +161,58 @@ fs.writeFileSync(path.join(sd, "Auto-Install.ps1"), "param(\r\n  [string]$automa
 ok("capability: case-insensitive + CRLF declaration -> supported", life.scriptSupportsCheckpoints(sd) === true);
 fs.writeFileSync(path.join(sd, "Auto-Install.ps1"), "param(\n  [string]$AutomaticCheckpoints\n)\n");
 ok("capability: trailing declaration with no default -> supported", life.scriptSupportsCheckpoints(sd) === true);
+
+// ── scriptSupportsT3CodeChannel (requires BOTH Provision + Auto-Install) ────
+const sd2 = fs.mkdtempSync(path.join(os.tmpdir(), "construct-life-ch-"));
+ok("t3ch-capability: empty dir -> unsupported", life.scriptSupportsT3CodeChannel(sd2) === false);
+// Only Provision has the param — Auto-Install is missing entirely
+fs.writeFileSync(path.join(sd2, "Provision-AgentVM.ps1"), "param(\n  [string]$T3CodeChannel = \"\"\n)\n");
+ok("t3ch-capability: Provision has it but Auto-Install missing -> unsupported", life.scriptSupportsT3CodeChannel(sd2) === false);
+// Both present but Auto-Install lacks the param (partially-updated scripts dir)
+fs.writeFileSync(path.join(sd2, "Auto-Install.ps1"), "param(\n  [string]$T3Code = \"\"\n)\n");
+ok("t3ch-capability: Provision has it, Auto-Install old -> unsupported", life.scriptSupportsT3CodeChannel(sd2) === false);
+// Both have the param -> supported
+fs.writeFileSync(path.join(sd2, "Auto-Install.ps1"), "param(\n  [string]$T3Code = \"\",\n  [string]$T3CodeChannel = \"\"\n)\n");
+ok("t3ch-capability: both scripts have it -> supported", life.scriptSupportsT3CodeChannel(sd2) === true);
+// Comment-only mention in Provision doesn't count
+fs.writeFileSync(path.join(sd2, "Provision-AgentVM.ps1"), "# mentions $T3CodeChannel in a comment\nparam([string]$T3Code)\n");
+ok("t3ch-capability: comment-only mention in Provision -> unsupported", life.scriptSupportsT3CodeChannel(sd2) === false);
+ok("t3ch-capability: null scripts dir -> unsupported", life.scriptSupportsT3CodeChannel(null) === false);
+// Only Auto-Install has the param — Provision lacks it
+fs.writeFileSync(path.join(sd2, "Auto-Install.ps1"), "param(\n  [string]$T3CodeChannel = \"\"\n)\n");
+fs.writeFileSync(path.join(sd2, "Provision-AgentVM.ps1"), "param(\n  [string]$T3Code = \"\"\n)\n");
+ok("t3ch-capability: Auto-Install has it, Provision old -> unsupported", life.scriptSupportsT3CodeChannel(sd2) === false);
+// Regression for finding #3: action/target-appropriate capability detection.
+// A partially-updated scripts dir where Provision has the parameter but Auto-Install
+// doesn't: reprovision targets only Provision (so the flag is safe to send),
+// but rebuild targets Auto-Install (unsafe — binding failure).
+const sd3 = fs.mkdtempSync(path.join(os.tmpdir(), "construct-life-skew-"));
+fs.writeFileSync(path.join(sd3, "Provision-AgentVM.ps1"), "param(\n  [string]$T3CodeChannel = \"\"\n)\n");
+fs.writeFileSync(path.join(sd3, "Auto-Install.ps1"), "param(\n  [string]$T3Code = \"\"\n)\n");
+// No action → conservative (both required) → false
+ok("t3ch-capability: Provision=new, Auto-Install=old, no action -> unsupported (conservative)",
+  life.scriptSupportsT3CodeChannel(sd3) === false);
+// Action-appropriate: reprovision checks only Provision → true
+ok("t3ch-capability: Provision=new, Auto-Install=old, reprovision -> supported",
+  life.scriptSupportsT3CodeChannel(sd3, "reprovision") === true);
+// Action-appropriate: rebuild checks only Auto-Install → false
+ok("t3ch-capability: Provision=new, Auto-Install=old, reinstall -> unsupported",
+  life.scriptSupportsT3CodeChannel(sd3, "reinstall") === false);
+ok("t3ch-capability: Provision=new, Auto-Install=old, redownload -> unsupported",
+  life.scriptSupportsT3CodeChannel(sd3, "redownload") === false);
+// Opposite direction: Provision=old, Auto-Install=new
+const sd4 = fs.mkdtempSync(path.join(os.tmpdir(), "construct-life-skew2-"));
+fs.writeFileSync(path.join(sd4, "Provision-AgentVM.ps1"), "param(\n  [string]$T3Code = \"\"\n)\n");
+fs.writeFileSync(path.join(sd4, "Auto-Install.ps1"), "param(\n  [string]$T3CodeChannel = \"\"\n)\n");
+ok("t3ch-capability: Provision=old, Auto-Install=new, reprovision -> unsupported",
+  life.scriptSupportsT3CodeChannel(sd4, "reprovision") === false);
+ok("t3ch-capability: Provision=old, Auto-Install=new, reinstall -> supported",
+  life.scriptSupportsT3CodeChannel(sd4, "reinstall") === true);
+// buildInvocation tests: the per-action capability feeds into the right decision
+ok("reprovision: keeps -T3CodeChannel when Provision=new (even if Auto-Install=old)",
+  life.buildInvocation("reprovision", { settings: { t3codeChannel: "nightly" }, supportsT3CodeChannel: true }).args.includes("-T3CodeChannel"));
+ok("rebuild: drops -T3CodeChannel when Auto-Install=old",
+  !life.buildInvocation("reinstall", { settings: { t3codeChannel: "nightly" }, supportsT3CodeChannel: false }).args.includes("-T3CodeChannel"));
 
 ok("unknown action -> null", life.buildInvocation("bogus", {}) === null);
 
