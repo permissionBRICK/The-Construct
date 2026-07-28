@@ -213,6 +213,13 @@ function ok(name, cond, detail) {
   // Same-channel stable comparison still works (both lack prerelease).
   ok("isNewerNightly: two stable versions -> delegates to isNewer",
     updates.isNewerNightly("0.0.31", "0.0.30") === true);
+  // Non-nightly prerelease: alpha/beta must not compare as nightly.
+  ok("isNewerNightly: nightly vs alpha -> false (non-nightly prerelease rejected)",
+    updates.isNewerNightly("0.0.30-nightly.20260729", "0.0.30-alpha.999") === false);
+  ok("isNewerNightly: alpha vs alpha -> false (neither is nightly)",
+    updates.isNewerNightly("0.0.30-alpha.2", "0.0.30-alpha.1") === false);
+  ok("isNewerNightly: beta vs nightly -> false",
+    updates.isNewerNightly("0.0.30-beta.1", "0.0.30-nightly.20260728") === false);
 
   // ── prereleasePart + comparePrerelease (unit) ─────────────────────────────
   ok("prereleasePart: extracts nightly prerelease", updates.prereleasePart("0.0.30-nightly.20260728.932") === "nightly.20260728.932");
@@ -289,6 +296,13 @@ function ok(name, cond, detail) {
   );
   ok("augmentAgents: t3code nightly higher core + stable lower -> no update (downgrade)",
     augT3down[0].updateAvailable === false);
+  // Alpha prerelease on nightly channel: must not produce update badge.
+  const augT3alpha = await updates.augmentAgents(
+    [{ id: "t3code", name: "T3 Code", version: "0.0.30-alpha.999", updateAvailable: false, channel: "nightly" }],
+    { noCache: true, fetchJson: async () => ({ version: "0.0.30-nightly.20260729" }) }
+  );
+  ok("augmentAgents: t3code alpha installed + nightly latest -> no update (non-nightly prerelease)",
+    augT3alpha[0].updateAvailable === false);
 
   // ── augment folds agent updates into state ──────────────────────────────────
   const st = await updates.augment(
