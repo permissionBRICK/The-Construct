@@ -99,18 +99,18 @@ try {
   }
 } catch (_) { /* best-effort */ }
 
-// ── _serial queue: strict ordering + last-action-wins + rejection path ───────
-// The queue serializes state-changing operations so the LAST one wins. Each mock
-// resolves immediately but logs its label, so we verify execution ORDER (which
-// proves the queue serialized them — concurrent runs would interleave).
+// ── _serial queue: non-overlap + last-action-wins + rejection path ──────────
+// Deferred-resolution mocks prove the queue serializes operations: each
+// runRemoteScript increments `active` on entry and decrements on resolve, so
+// maxActive > 1 would mean two ops overlapped. Explicit resolve callbacks
+// (not instant resolution) let us verify that op N+1 cannot START until op N
+// resolves. Uses setChannelOnVm (single runRemoteScript call, no pairing
+// side-effect) for clean ordering assertions.
 (async () => {
+  let active = 0, maxActive = 0, vmChannel = "stable";
   const log = [];
-  function mockSsh(label) {
-    return {
-      isReachable: async () => true,
-      runRemoteScript: async () => { log.push(label); return { code: 0, stdout: "", stderr: "" }; },
-    };
-  }
+  const resolvers = [];
+
   function mockVscode() {
     return {
       window: {
@@ -125,50 +125,84 @@ try {
     };
   }
 
-  // Queue: enable(stable) → disable → enable(nightly) rapidly, then await all.
+  function deferredSsh(label, channel) {
+    return {
+      isReachable: async () => true,
+      runRemoteScript: () => new Promise((resolve) => {
+        active++;
+        if (active > maxActive) maxActive = active;
+        log.push(`start:${label}`);
+        resolvers.push(() => {
+          vmChannel = channel;
+          log.push(`end:${label}`);
+          active--;
+          resolve({ code: 0, stdout: "", stderr: "" });
+        });
+      }),
+    };
+  }
+
+  // Queue three rapid channel transitions: stable → nightly → stable.
   t3._resetQueue();
-  log.length = 0;
+  active = 0; maxActive = 0; vmChannel = "stable";
+  log.length = 0; resolvers.length = 0;
   const vs = mockVscode();
-  const p1 = t3.enableOnVm({ channel: "stable", _vscode: vs, _ssh: mockSsh("enable-stable") });
-  const p2 = t3.disableOnVm({ _vscode: vs, _ssh: mockSsh("disable") });
-  const p3 = t3.enableOnVm({ channel: "nightly", _vscode: vs, _ssh: mockSsh("enable-nightly") });
+  const p1 = t3.setChannelOnVm("nightly", { _vscode: vs, _ssh: deferredSsh("op1-nightly", "nightly") });
+  const p2 = t3.setChannelOnVm("stable",  { _vscode: vs, _ssh: deferredSsh("op2-stable", "stable") });
+  const p3 = t3.setChannelOnVm("nightly", { _vscode: vs, _ssh: deferredSsh("op3-nightly", "nightly") });
+
+  // Yield so the first op's isReachable resolves and runRemoteScript is called.
+  await new Promise((r) => setTimeout(r, 20));
+  ok("queue: only op1 started (op2/op3 waiting)", resolvers.length === 1 && active === 1);
+
+  // Resolve op1 — op2 should start next.
+  resolvers[0]();
+  await new Promise((r) => setTimeout(r, 20));
+  ok("queue: op1 resolved, op2 started", resolvers.length === 2 && active === 1);
+  ok("queue: op2 did not start before op1 resolved (non-overlap)", maxActive === 1);
+
+  // Resolve op2 — op3 should start.
+  resolvers[1]();
+  await new Promise((r) => setTimeout(r, 20));
+  ok("queue: op2 resolved, op3 started", resolvers.length === 3 && active === 1);
+
+  // Resolve op3 — all done.
+  resolvers[2]();
   await Promise.all([p1, p2, p3]);
-  // enableOnVm calls runRemoteScript twice (install + pairing), so filter to
-  // the labels we care about for ordering.
-  const ops = log.filter((l) => l !== "enable-stable" || log.indexOf(l) === log.indexOf("enable-stable"));
-  ok("queue: strict execution order (enable-stable, disable, enable-nightly)",
-    ops[0] === "enable-stable" && ops.indexOf("disable") > ops.indexOf("enable-stable") &&
-    ops.indexOf("enable-nightly") > ops.indexOf("disable"));
-  ok("queue: last action (enable-nightly) ran last",
-    ops[ops.length - 1] === "enable-nightly" || ops[ops.length - 2] === "enable-nightly");
+  ok("queue: maxActive never exceeded 1 (strict serialization)", maxActive === 1);
+  ok("queue: execution order is op1→op2→op3",
+    log.join(",") === "start:op1-nightly,end:op1-nightly,start:op2-stable,end:op2-stable,start:op3-nightly,end:op3-nightly");
+  ok("queue: final VM state matches last action (nightly)", vmChannel === "nightly");
 
-  // setChannelOnVm: rapid stable→nightly→stable, verify order.
+  // Rejection path: a failing op must not jam the queue.
   t3._resetQueue();
-  log.length = 0;
-  const ch1 = t3.setChannelOnVm("nightly", { _vscode: vs, _ssh: mockSsh("ch-nightly") });
-  const ch2 = t3.setChannelOnVm("stable", { _vscode: vs, _ssh: mockSsh("ch-stable") });
-  await Promise.all([ch1, ch2]);
-  ok("queue channel: rapid nightly→stable executes in order",
-    log.join(",") === "ch-nightly,ch-stable");
-  ok("queue channel: last action is ch-stable (last wins)", log[log.length - 1] === "ch-stable");
-
-  // Rejection path: a failing operation must not break the queue for subsequent ops.
-  // _serial chains with then(fn, fn), so after a rejection the next op still runs.
-  t3._resetQueue();
-  log.length = 0;
+  active = 0; maxActive = 0; vmChannel = "stable";
+  log.length = 0; resolvers.length = 0;
   const failSsh = {
     isReachable: async () => true,
-    runRemoteScript: async () => { log.push("fail"); throw new Error("ssh broke"); },
+    runRemoteScript: () => new Promise((_, reject) => {
+      active++;
+      if (active > maxActive) maxActive = active;
+      log.push("start:fail");
+      resolvers.push(() => { log.push("end:fail"); active--; reject(new Error("ssh broke")); });
+    }),
   };
-  const pFail = t3.enableOnVm({ channel: "stable", _vscode: vs, _ssh: failSsh });
-  const pAfter = t3.disableOnVm({ _vscode: vs, _ssh: mockSsh("after-fail") });
+  const pFail = t3.setChannelOnVm("nightly", { _vscode: vs, _ssh: failSsh });
+  const pAfter = t3.setChannelOnVm("stable", { _vscode: vs, _ssh: deferredSsh("after-fail", "stable") });
+
+  await new Promise((r) => setTimeout(r, 20));
+  resolvers[0](); // resolve the failing op
+  await new Promise((r) => setTimeout(r, 20));
+  ok("queue rejection: next op started after failure", resolvers.length === 2 && active === 1);
+
+  resolvers[1](); // resolve the second op
   let failCaught = false;
   try { await pFail; } catch (_) { failCaught = true; }
   let afterOk = false;
   try { await pAfter; afterOk = true; } catch (_) {}
-  ok("queue rejection: failing op ran and threw", log[0] === "fail" && failCaught);
-  ok("queue rejection: subsequent op runs after a failure (queue not stuck)",
-    log.includes("after-fail") && afterOk);
+  ok("queue rejection: failing op threw", failCaught);
+  ok("queue rejection: subsequent op completed (queue not stuck)", afterOk && vmChannel === "stable");
+  ok("queue rejection: maxActive still 1 (serialized through failure)", maxActive === 1);
 
   console.log(`\n  t3code unit tests — ${pass}/${pass + fail} passed\n`);
   process.exit(fail ? 1 : 0);
