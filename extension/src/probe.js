@@ -19,6 +19,7 @@ if [ -r "$cfg" ]; then
   emit AI_TOOLS "$(sed -n 's/^AI_TOOLS=//p' "$cfg" | head -1)"
   emit T3CODE "$(sed -n 's/^T3CODE=//p' "$cfg" | head -1)"
   emit T3CODE_PORT "$(sed -n 's/^T3CODE_PORT=//p' "$cfg" | head -1)"
+  emit T3CODE_CHANNEL "$(sed -n 's/^T3CODE_CHANNEL=//p' "$cfg" | head -1)"
 fi
 mark=/etc/construct/provisioned.env
 if [ -r "$mark" ]; then
@@ -90,10 +91,13 @@ function toState(map) {
   // where nothing listens.
   if (map.T3CODE === "true" || map.V_T3) {
     const t3port = (map.T3CODE_PORT || "").trim() || "5177";
+    const t3ch = (map.T3CODE_CHANNEL || "").trim();
+    const t3detail = "web GUI :" + t3port + (t3ch === "nightly" ? " · nightly" : "");
     agents.push({
-      id: "t3code", name: "T3 Code", detail: "web GUI :" + t3port,
+      id: "t3code", name: "T3 Code", detail: t3detail,
       version: extractVersion(map.V_T3) || "—", updateAvailable: false,
       webui: map.T3_ACTIVE === "active",
+      channel: t3ch === "nightly" ? "nightly" : "stable",
     });
   }
 

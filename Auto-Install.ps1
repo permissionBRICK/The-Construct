@@ -123,6 +123,9 @@ param(
     # Forwarded down (Create-AgentVM.ps1 -> Provision-AgentVM.ps1): opt-in T3 Code
     # web GUI. Empty = keep the VM's saved choice; "true"/"false".
     [string]$T3Code = "",
+    # Forwarded down: T3 Code install channel. Empty = keep the VM's saved choice;
+    # "stable"/"nightly".
+    [string]$T3CodeChannel = "",
     # Forwarded to Create-AgentVM.ps1: Hyper-V automatic checkpoints (a snapshot at
     # every VM start). OFF by default for Construct -- on a disposable agent VM the
     # checkpoint only costs disk and I/O. Applies when the VM is CREATED (install /
@@ -701,6 +704,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         $reprovArgs['ClaudePartialStreaming'] = $ClaudePartialStreaming
         $reprovArgs['MicPassthrough'] = $MicPassthrough
         $reprovArgs['T3Code'] = $T3Code
+        $reprovArgs['T3CodeChannel'] = $T3CodeChannel
         if ($PSBoundParameters.ContainsKey('AgentPassword')) { $reprovArgs['AgentPassword'] = $AgentPassword }
         if ($reprovCloneCredB64) { $reprovArgs['GitCloneCredentialsB64'] = $reprovCloneCredB64 }
         if ($PSBoundParameters.ContainsKey('AutoResolve')) { $reprovArgs['AutoResolve'] = $AutoResolve }
@@ -1030,6 +1034,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
                 ClaudePartialStreaming = $ClaudePartialStreaming
                 MicPassthrough        = $MicPassthrough
                 T3Code                = $T3Code
+                T3CodeChannel         = $T3CodeChannel
             }
             if ($acCloneCredB64) { $acReprovArgs['GitCloneCredentialsB64'] = $acCloneCredB64 }
             if ($PSBoundParameters.ContainsKey('AutoResolve')) { $acReprovArgs['AutoResolve'] = $AutoResolve }
@@ -1547,6 +1552,7 @@ $createArgs = @{
     ClaudePartialStreaming = $ClaudePartialStreaming
     MicPassthrough = $MicPassthrough
     T3Code        = $T3Code
+    T3CodeChannel = $T3CodeChannel
     AutomaticCheckpoints = $effectiveAutoCheckpoints
     # -Auto: Create-AgentVM skips its own Provision call and this script's
     # try/finally owns the final pause.
@@ -1608,6 +1614,7 @@ try {
         ClaudePartialStreaming = $ClaudePartialStreaming
         MicPassthrough        = $MicPassthrough
         T3Code                = $T3Code
+        T3CodeChannel         = $T3CodeChannel
         Auto      = $true
     }
     if ($restoreDir)         { $provArgs['RestoreDir']             = $restoreDir }

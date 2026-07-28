@@ -107,6 +107,7 @@ Recognized variables:
 | `CLAUDE_PARTIAL_STREAMING` | `true` | Patch the Claude Code extension so it streams partial assistant messages over Remote-SSH (stock disables this on remote, so the chat panel looks frozen until each turn finishes). `false` keeps stock |
 | `MIC_PASSTHROUGH` | `false` | Patch the Claude Code extension for microphone passthrough (recorder shim + chat-mic gate) so the chat mic button is present on first start after a (re)provision. Opt-in; mirrors the control panel's mic toggle |
 | `T3CODE` | `false` | Opt in to the T3 Code web GUI (the `t3` npm package): installs the CLI and autostarts the `t3code-serve` service on `T3CODE_HOST:T3CODE_PORT` (default `0.0.0.0:5177`). Empty keeps the VM's saved choice, so a console reprovision never flips an enabled T3 Code off; `false` stops a previously deployed service. Mirrors the control panel's settings toggle |
+| `T3CODE_CHANNEL` | `stable` | Install channel for the `t3` npm package: `stable` tracks `@latest` (released version); `nightly` tracks `@nightly` (latest CI build, may break). Empty keeps the VM's saved choice. Mirrors the control panel's channel dropdown |
 | `SMB_SHARE` | `true` | Run an SMB server sharing `WORKSPACE_ROOT` to the host |
 | `SMB_USER` | `dev` | SMB login name (file access on the share runs as root) |
 | `SMB_SHARE_NAME` | `repo` | Share name in the UNC path `\\<vm>\<name>` |

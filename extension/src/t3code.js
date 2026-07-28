@@ -21,6 +21,11 @@ const SERVICE = "t3code-serve";
 const DEFAULT_PORT = 5177;
 const DEFAULT_HOST_BIND = "0.0.0.0";
 
+// channel -> npm dist-tag, the single mapping on the JS side. The provisioner
+// has its own (bash) equivalent in install-ai-tools.sh. "stable" tracks the
+// @latest tag; "nightly" tracks @nightly.
+function npmTag(channel) { return channel === "nightly" ? "nightly" : "latest"; }
+
 // Serialize the state-changing operations (enable/disable): a user can flip the
 // settings toggle off→on→off while the multi-minute npm install is still
 // running, and concurrent runs would interleave — the disable could finish
@@ -51,8 +56,10 @@ WORKSPACE_ROOT="$(cfgget WORKSPACE_ROOT)"; WORKSPACE_ROOT="\${WORKSPACE_ROOT:-/r
 `;
 
 /** Bash: install/update t3, persist the opt-in + bind keys, deploy + start the
- *  systemd service. Self-contained; exits non-zero on a real failure. */
-function buildInstallScript() {
+ *  systemd service. Self-contained; exits non-zero on a real failure.
+ *  `channel` ("stable"|"nightly"; default "stable") decides the npm dist-tag. */
+function buildInstallScript(channel) {
+  const tag = npmTag(channel);
   return PRELUDE + `
 # t3's engines field requires Node ^22.16 || ^23.11 || >=24.10 — npm merely
 # WARNS on a mismatch, leaving a broken install whose service restart-loops, so
@@ -82,10 +89,10 @@ if ! command -v make >/dev/null 2>&1 || ! command -v g++ >/dev/null 2>&1 || ! co
   echo "== installing build tools (node-pty compiles from source on Linux) =="
   { apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential python3; } || exit 1
 fi
-echo "== installing t3 =="
+echo "== installing t3 (${tag}) =="
 # node-pty/msgpackr-extract need their build scripts; newer npm gates them behind
 # --allow-scripts, older npm ignores the unknown flag and runs them anyway.
-npm install -g t3@latest --allow-scripts=node-pty,msgpackr-extract || exit 1
+npm install -g t3@${tag} --allow-scripts=node-pty,msgpackr-extract || exit 1
 command -v t3 >/dev/null 2>&1 || { echo "t3 binary not found after install" >&2; exit 1; }
 t3_bin="$(command -v t3)"
 if [ "$t3_bin" != /usr/local/bin/t3 ]; then
@@ -95,6 +102,7 @@ fi
 cfgset T3CODE true
 cfgset T3CODE_HOST "$T3CODE_HOST"
 cfgset T3CODE_PORT "$T3CODE_PORT"
+cfgset T3CODE_CHANNEL ${tag}
 mkdir -p "$WORKSPACE_ROOT"
 # Same unit the repo ships (systemd/t3code-serve.service); \${...} placeholders
 # are expanded by systemd from the EnvironmentFile, not by this shell.
@@ -203,7 +211,8 @@ async function openWebUi(opts = {}) {
 
 /** The settings toggle flipped ON: install + start T3 Code on the VM now, then
  *  open the web UI in the host browser. Offline VM → a toast explaining it will
- *  install on the next reprovision instead. Serialized against disableOnVm. */
+ *  install on the next reprovision instead. Serialized against disableOnVm.
+ *  `opts.channel` ("stable"|"nightly") decides the npm dist-tag. */
 function enableOnVm(opts = {}) {
   return _serial(() => _enableNow(opts));
 }
@@ -217,7 +226,7 @@ function _enableNow(opts = {}) {
         vscode.window.showWarningMessage("T3 Code enabled — the VM is offline, so it installs on the next reprovision.");
         return false;
       }
-      const r = await ssh.runRemoteScript(buildInstallScript(), { ...opts, timeoutMs: opts.timeoutMs || 300000 });
+      const r = await ssh.runRemoteScript(buildInstallScript(opts.channel), { ...opts, timeoutMs: opts.timeoutMs || 300000 });
       if (r.code !== 0) {
         vscode.window.showErrorMessage(
           ("Installing T3 Code failed (exit " + r.code + "). " + (r.stderr || "").slice(0, 200)).trim()
@@ -254,9 +263,40 @@ async function _disableNow(opts = {}) {
   return r.code === 0;
 }
 
+/** Reinstall t3 at a different channel on an already-enabled VM. Serialized
+ *  through the same queue as enable/disable so a rapid stable→nightly→stable
+ *  doesn't interleave npm runs. */
+function setChannelOnVm(channel, opts = {}) {
+  return _serial(() => _setChannelNow(channel, opts));
+}
+
+async function _setChannelNow(channel, opts = {}) {
+  const vscode = opts._vscode || vsc();
+  const tag = npmTag(channel);
+  const label = channel === "nightly" ? "nightly" : "stable";
+  return vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: `Switching T3 Code to ${label}…`, cancellable: false },
+    async () => {
+      if (!(await ssh.isReachable(opts))) {
+        vscode.window.showWarningMessage(`T3 Code channel set to ${label} — the VM is offline, so it applies on the next reprovision.`);
+        return false;
+      }
+      const r = await ssh.runRemoteScript(buildInstallScript(channel), { ...opts, timeoutMs: opts.timeoutMs || 300000 });
+      if (r.code !== 0) {
+        vscode.window.showErrorMessage(
+          (`Switching T3 Code to ${label} failed (exit ${r.code}). ` + (r.stderr || "").slice(0, 200)).trim()
+        );
+        return false;
+      }
+      vscode.window.showInformationMessage(`T3 Code switched to ${label} and restarted.`);
+      return true;
+    }
+  );
+}
+
 module.exports = {
-  SERVICE, DEFAULT_PORT,
+  SERVICE, DEFAULT_PORT, npmTag,
   buildInstallScript, buildDisableScript, buildPairingScript,
   extractPairUrl, baseUrl,
-  openWebUi, enableOnVm, disableOnVm,
+  openWebUi, enableOnVm, disableOnVm, setChannelOnVm,
 };

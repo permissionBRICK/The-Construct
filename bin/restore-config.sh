@@ -180,9 +180,13 @@ if [[ -f "${BACKUP_DIR}/backup-info.json" ]] \
    && [[ "$(jq -r '.t3code // false' "${BACKUP_DIR}/backup-info.json" 2>/dev/null)" == "true" ]] \
    && ! systemctl is-enabled --quiet t3code-serve 2>/dev/null; then
   if [[ -f "${REPO_DIR}/bin/install-ai-tools.sh" ]]; then
-    log "backup has T3 Code enabled; installing + starting t3code-serve"
+    _restore_t3ch="$(jq -r '.t3codeChannel // "stable"' "${BACKUP_DIR}/backup-info.json" 2>/dev/null)"
+    [[ "${_restore_t3ch}" == "nightly" ]] || _restore_t3ch=stable
+    log "backup has T3 Code enabled (channel=${_restore_t3ch}); installing + starting t3code-serve"
     bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" T3CODE true 2>/dev/null || true
+    bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" T3CODE_CHANNEL "${_restore_t3ch}" 2>/dev/null || true
     if ! env TARGET_USER=root AI_TOOLS_OVERRIDE=t3code AI_CONSOLE_INTEGRATION=false \
+        T3CODE_CHANNEL="${_restore_t3ch}" \
         bash "${REPO_DIR}/bin/install-ai-tools.sh"; then
       err "T3 Code reinstall failed; reprovision (or run: sudo env AI_TOOLS_OVERRIDE=t3code bash ${REPO_DIR}/bin/install-ai-tools.sh)"
     fi
