@@ -33,7 +33,7 @@ ok("install(stable): npm installs t3@latest with build scripts allowed", /npm in
 ok("install: provisions the compiler toolchain before npm (node-pty gyp build)",
   /command -v g\+\+/.test(inst) && /apt-get install -y build-essential python3/.test(inst) &&
   inst.indexOf("build-essential") < inst.indexOf("npm install -g t3@latest"));
-ok("install: persists the T3CODE opt-in + bind keys + channel", /cfgset T3CODE true/.test(inst) && /cfgset T3CODE_HOST/.test(inst) && /cfgset T3CODE_PORT/.test(inst) && /cfgset T3CODE_CHANNEL latest/.test(inst));
+ok("install: persists the T3CODE opt-in + bind keys + channel", /cfgset T3CODE true/.test(inst) && /cfgset T3CODE_HOST/.test(inst) && /cfgset T3CODE_PORT/.test(inst) && /cfgset T3CODE_CHANNEL stable/.test(inst));
 ok("install: writes the t3code-serve unit", /\/etc\/systemd\/system\/t3code-serve\.service/.test(inst) && /EnvironmentFile=\/etc\/construct\/config\.env/.test(inst));
 // The unit's ExecStart placeholders must reach the FILE as literal ${...} for
 // systemd to expand — i.e. escaped (\$) inside the unquoted heredoc.

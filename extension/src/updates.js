@@ -177,12 +177,15 @@ function isNewerNightly(latest, installed) {
   const ls = String(latest).trim(), is = String(installed).trim();
   if (ls === is) return false;
   if (isNewer(ls, is)) return true;
-  // Same core → compare the full string; a different prerelease suffix means a
-  // newer build (the date-stamped nightly tag is monotonically increasing).
+  // Same core → compare the full string lexicographically. Nightly prerelease
+  // stamps are date-based (nightly.YYYYMMDD.NNN), so `>` is directionally correct:
+  // a newer date sorts after an older one. `!==` would be wrong here — it would
+  // show a spurious update badge (and downgrade) when the installed version is
+  // NEWER than the registry's latest (local build, propagation delay).
   const L = semverParts(ls), I = semverParts(is);
   if (!L || !I) return false;
   for (let i = 0; i < 3; i++) { if (L[i] !== I[i]) return false; }
-  return ls !== is;
+  return ls > is;
 }
 
 /** Best-effort latest version string for an agent id (cached), or "" if unknown.

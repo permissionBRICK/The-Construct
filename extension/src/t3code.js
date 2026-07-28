@@ -60,6 +60,7 @@ WORKSPACE_ROOT="$(cfgget WORKSPACE_ROOT)"; WORKSPACE_ROOT="\${WORKSPACE_ROOT:-/r
  *  `channel` ("stable"|"nightly"; default "stable") decides the npm dist-tag. */
 function buildInstallScript(channel) {
   const tag = npmTag(channel);
+  const ch = channel === "nightly" ? "nightly" : "stable";
   return PRELUDE + `
 # t3's engines field requires Node ^22.16 || ^23.11 || >=24.10 — npm merely
 # WARNS on a mismatch, leaving a broken install whose service restart-loops, so
@@ -102,7 +103,7 @@ fi
 cfgset T3CODE true
 cfgset T3CODE_HOST "$T3CODE_HOST"
 cfgset T3CODE_PORT "$T3CODE_PORT"
-cfgset T3CODE_CHANNEL ${tag}
+cfgset T3CODE_CHANNEL ${ch}
 mkdir -p "$WORKSPACE_ROOT"
 # Same unit the repo ships (systemd/t3code-serve.service); \${...} placeholders
 # are expanded by systemd from the EnvironmentFile, not by this shell.
