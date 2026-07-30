@@ -59,6 +59,10 @@ For the installed agents, from `root`'s home — never from inside the project r
 - **npm registry auth**: `~/.npmrc`, so `npm publish`/installs from private registries keep
   working after a reinstall (it holds the registry `_authToken`). Saved only when auth is
   included — `INCLUDE_AUTH=false` omits it.
+- **User secrets store**: everything under `~/.secrets` — a free-form directory for
+  arbitrary secret material (API keys, tokens, `.env` files, …). Captured verbatim and
+  restored with tightened permissions (directories `700`, files `600`). Saved only when
+  auth is included — `INCLUDE_AUTH=false` omits it entirely.
 - **VS Code serve-web connection token**, so the browser `?tkn=` URL stays the same after a
   reinstall instead of regenerating. Unlike everything else here it lives outside home
   (`/etc/construct/vscode-serve-web.token`), so it rides in the backup at

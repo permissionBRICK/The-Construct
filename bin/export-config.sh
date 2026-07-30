@@ -30,6 +30,7 @@
 #                                         Codex   ~/.codex/.credentials.json
 #                                         Opencode ~/.local/share/opencode/mcp-auth.json
 #   - npm registry auth (INCLUDE_AUTH): ~/.npmrc (registry _authToken / _auth)
+#   - User secrets store (INCLUDE_AUTH): ~/.secrets -- everything in it, verbatim
 #   - Agent settings/config           : ~/.claude/settings.json, ~/.codex/config.toml,
 #                                       ~/.config/opencode/opencode.json
 #   - T3 Code (when enabled/installed): ~/.t3/userdata -- settings + keybindings
@@ -156,6 +157,15 @@ fi
 # nothing in provisioning needs it before restore, so it doesn't go unconditional.)
 if [[ "${INCLUDE_AUTH}" == "true" ]]; then
   add ".npmrc"
+fi
+
+# ── User secrets store ───────────────────────────────────────────────────────
+# ~/.secrets is a free-form directory the user keeps arbitrary secret material
+# in (API keys, tokens, .env files, ...). Capture it whole -- same trust class
+# as the credential files above, so a sanitized INCLUDE_AUTH=false backup must
+# omit it entirely.
+if [[ "${INCLUDE_AUTH}" == "true" ]]; then
+  add ".secrets"
 fi
 
 # ── VS Code serve-web connection token ───────────────────────────────────────

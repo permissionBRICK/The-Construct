@@ -137,6 +137,15 @@ if [[ -d "${EXPORT_HOME}/.t3/userdata/secrets" ]]; then
   log "restored .t3/userdata/secrets (perms tightened)"
 fi
 
+# User secrets store: free-form secret material (API keys, .env files, ...).
+# cp -a preserved the file modes, but the staged dirs may carry the export's
+# umask -- pin the whole tree private: dirs 700, files 600.
+if [[ -d "${EXPORT_HOME}/.secrets" ]]; then
+  find "${EXPORT_HOME}/.secrets" -type d -exec chmod 700 {} + 2>/dev/null || true
+  find "${EXPORT_HOME}/.secrets" -type f -exec chmod 600 {} + 2>/dev/null || true
+  log "restored .secrets (perms tightened)"
+fi
+
 # SSH: export-config.sh captures outbound keys (never authorized_keys / the
 # provisioner key). OpenSSH refuses a private key that is group/world readable,
 # and cp -a preserves the key-file modes, but the staged ~/.ssh dir is created
