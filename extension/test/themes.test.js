@@ -23,7 +23,7 @@ themes.THEMES.forEach((t) => {
   ok(t.label && t.blurb, `${t.id} has label + blurb`);
 });
 ok(ids.includes(themes.DEFAULT_THEME), "default theme is a registered design");
-eq(themes.DEFAULT_THEME, "classic", "undecided users keep the original look");
+eq(themes.DEFAULT_THEME, "native", "no first-run prompt: a fresh install gets the VS Code Native look");
 
 // ── every design's files actually exist (a typo here = a broken skin at runtime)
 themes.THEMES.forEach((t) => {
@@ -37,7 +37,7 @@ themes.THEMES.forEach((t) => {
 const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
 const prop = pkg.contributes.configuration.properties["construct.uiTheme"];
 ok(prop, "construct.uiTheme is contributed");
-eq(prop.default, "", "default is unset (= ask via the picker)");
+eq(prop.default, themes.DEFAULT_THEME, "settings default = the registry default design");
 eq(JSON.stringify(prop.enum), JSON.stringify(["", ...ids]), "settings enum = '' + registry ids, in order");
 eq(prop.enumDescriptions.length, prop.enum.length, "every enum value has a description");
 
@@ -52,8 +52,8 @@ eq(themes.normalizeThemeId({}), null, "non-strings are not chosen");
 
 // ── cssFileFor / previewFileFor ──────────────────────────────────────────────
 eq(themes.cssFileFor("native"), "themes/native.css");
-eq(themes.cssFileFor(null), "themes/classic.css", "undecided renders the default design");
-eq(themes.cssFileFor("../../etc/passwd"), "themes/classic.css", "hostile value falls back to default (never a path)");
+eq(themes.cssFileFor(null), "themes/native.css", "undecided renders the default design");
+eq(themes.cssFileFor("../../etc/passwd"), "themes/native.css", "hostile value falls back to default (never a path)");
 eq(themes.previewFileFor("terminal"), "theme-previews/terminal.png");
 
 // ── buildPickerHtml ──────────────────────────────────────────────────────────

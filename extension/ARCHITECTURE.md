@@ -243,8 +243,8 @@ module, regardless of `online`.
 ## Design decisions
 
 - **UI designs (themes) are pure CSS layers — one markup, one controller, N skins.**
-  `construct.uiTheme` picks a design (`classic` | `terminal` | `native`; `""` = not
-  chosen). `buildHtml` layers `media/themes/<id>.css` after `panel.css` via the
+  `construct.uiTheme` picks a design (`classic` | `terminal` | `native`; `""`/unknown
+  = fall back to `themes.DEFAULT_THEME` = `native`). `buildHtml` layers `media/themes/<id>.css` after `panel.css` via the
   `{{themeUri}}` link — `panel.html`/`panel.js`/`launcher.*` are SHARED, so
   functionality can never fork per design; the invariant is enforced by running the
   full ui-smoke suite against any skin (`UI_SMOKE_THEME=terminal|native node
@@ -252,12 +252,11 @@ module, regardless of `online`.
   skin); `native.css` derives every color/font from `var(--vscode-…, <Dark+
   fallback>)`, so it follows the user's REAL editor theme — light themes included —
   which a webview gets for free (this beats the mockup's simulated toggle).
-  **First-run picker:** when a surface opens and no design was chosen
-  (`normalizeThemeId(...)===null`), `maybeOfferThemePicker` opens a picker webview
-  once per session (`themes.buildPickerHtml`: preview-image cards from
-  `media/theme-previews/<id>.png`; escaped, nonce-CSP'd) — it keeps offering on
-  later sessions until the user picks (choosing "Classic Matrix" is the explicit
-  keep-it answer). Picking writes the GLOBAL setting; the
+  **No first-run prompt:** a fresh install just renders the default design; the
+  picker webview (`themes.buildPickerHtml`: preview-image cards from
+  `media/theme-previews/<id>.png`; escaped, nonce-CSP'd) opens ONLY on the explicit
+  `construct.chooseTheme` command, so nothing pops up unasked. Picking writes the
+  GLOBAL setting; the
   `onDidChangeConfiguration('construct.uiTheme')` listener re-renders both open
   surfaces in place (reassigning `webview.html`; the webview re-posts `ready` and
   gets fresh state). **The Construct: Choose UI Design** (`construct.chooseTheme`)
