@@ -42,10 +42,6 @@ let launcherView; // vscode.WebviewView | undefined
 /** The theme-picker webview, if open (single instance, like the panel). */
 let themePicker; // vscode.WebviewPanel | undefined
 
-/** Whether the "choose a design" picker was already offered this session, so an
- *  undecided user isn't nagged by every surface open within one session. */
-let themePickerOffered = false;
-
 /** The host-side mic-passthrough orchestrator (audio.HostAudio), live only while
  *  passthrough is enabled. */
 let hostAudio; // audio.HostAudio | undefined
@@ -2036,7 +2032,6 @@ class ConstructViewProvider {
       liveWebviews.delete(webviewView.webview);
       syncAutoRefresh();
     }));
-    maybeOfferThemePicker(this.context);
   }
 }
 
@@ -2055,23 +2050,13 @@ function setupPanel(p, context) {
   liveWebviews.add(p.webview);
   syncAutoRefresh();
   p.onDidDispose(() => { liveWebviews.delete(p.webview); if (panel === p) panel = undefined; syncAutoRefresh(); });
-  maybeOfferThemePicker(context);
 }
 
 // ── UI design (theme) picker ─────────────────────────────────────────────────
 // A design changes ONLY the stylesheet layered after panel.css (src/themes.js);
 // markup and controller logic are shared, so features can never fork per design.
-
-/** First-run nudge: when a Construct surface opens and no design was chosen yet
- *  (construct.uiTheme unset/unknown), surface the picker once per session. It
- *  keeps asking on later sessions until the user picks (picking "Classic Matrix"
- *  is the explicit "keep the current look" answer). */
-function maybeOfferThemePicker(context) {
-  if (themePickerOffered || currentThemeId() !== null) return;
-  themePickerOffered = true;
-  // Best-effort: a picker failure must never break the surface that triggered it.
-  try { openThemePicker(context); } catch (_) {}
-}
+// The picker is ALWAYS user-initiated (The Construct: Choose UI Design) — a fresh
+// install silently gets themes.DEFAULT_THEME instead of a first-run prompt.
 
 /** Open (or reveal) the design-picker webview: preview cards, one per design. */
 function openThemePicker(context) {
@@ -2156,10 +2141,6 @@ function activate(context) {
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (!e.affectsConfiguration("construct.uiTheme")) return;
       reapplyTheme(context);
-      // A pick elsewhere (another window's picker, the settings UI) settles the
-      // question — retire a still-open picker whose "nothing chosen yet" premise
-      // is now false instead of leaving a stale nag inviting a second answer.
-      if (currentThemeId() !== null && themePicker) { try { themePicker.dispose(); } catch (_) {} }
     })
   );
   // Restore the editor-tab panel across reloads instead of leaving a dead webview.

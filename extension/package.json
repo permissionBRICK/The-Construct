@@ -74,10 +74,10 @@
         },
         "construct.uiTheme": {
           "type": "string",
-          "default": "",
+          "default": "native",
           "enum": ["", "classic", "terminal", "native"],
           "enumDescriptions": [
-            "Not chosen yet — the design picker opens the next time a Construct panel is shown.",
+            "Unset — falls back to the default design (VS Code Native).",
             "Classic Matrix — the original green operator console.",
             "Terminal, Refined — the Matrix identity with a disciplined phosphor palette; glow only on live elements.",
             "VS Code Native — looks like a built-in panel and follows your editor theme (light or dark)."

@@ -31,8 +31,9 @@ const THEMES = [
   },
 ];
 
-/** The design used when nothing was chosen yet (also the pre-theming look). */
-const DEFAULT_THEME = "classic";
+/** The design used when nothing was chosen yet: VS Code Native, so a fresh
+ *  install looks like a built-in panel and follows the user's editor theme. */
+const DEFAULT_THEME = "native";
 
 /** Known id -> entry, else null (null/""/unknown all mean "not chosen"). */
 function normalizeThemeId(value) {
@@ -113,7 +114,7 @@ function buildPickerHtml({ cspSource, nonce, cards }) {
     <div class="cards">
 ${cardHtml}
     </div>
-    <p class="note">Change it later in Settings &rarr; Extensions &rarr; The Construct (<code>construct.uiTheme</code>), or run <b>The Construct: Choose UI Design</b> from the command palette. Closing this tab keeps things as they are and asks again next time.</p>
+    <p class="note">Change it later in Settings &rarr; Extensions &rarr; The Construct (<code>construct.uiTheme</code>), or run <b>The Construct: Choose UI Design</b> from the command palette. Closing this tab keeps the current look.</p>
   </div>
   <script nonce="${nonce}">
     (function () {
