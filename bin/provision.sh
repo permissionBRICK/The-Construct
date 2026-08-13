@@ -548,9 +548,20 @@ run_step optional "Installing AI tool console integration" \
   bash "${REPO_DIR}/bin/install-ai-tools.sh"
 
 # 4b. Install the construct CLI so agents and users can manage project profiles
-#     from the VM shell (`construct project set|get|list`). Runs every provision
-#     so an updated script always gets redeployed on reprovision.
+#     and raise host desktop notifications from the VM shell (`construct project
+#     set|get|list`, `construct notify`). Runs every provision so an updated
+#     script always gets redeployed on reprovision.
 run_step optional "Installing construct CLI" install -m 0755 "${REPO_DIR}/bin/construct" /usr/local/bin/construct
+
+# 4c. Notification spool for `construct notify`. On tmpfs (/run) deliberately: a
+#     reboot must not replay stale notifications at the host. The tmpfiles.d entry
+#     recreates it on every boot; --create makes it exist right now too.
+setup_notify_spool() {
+  install -m 0644 "${REPO_DIR}/systemd/construct-notify.conf" /etc/tmpfiles.d/construct-notify.conf || return 1
+  systemd-tmpfiles --create /etc/tmpfiles.d/construct-notify.conf 2>/dev/null || install -d -m 1777 /run/construct/notify
+  ok "  notification spool: /run/construct/notify"
+}
+run_step optional "Setting up the notification spool" setup_notify_spool
 
 # 5. Merge selected project profiles into the runtime config.
 run_step optional "Generating runtime config" bash "${REPO_DIR}/bin/generate-runtime-config.sh"

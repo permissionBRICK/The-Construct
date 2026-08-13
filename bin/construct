@@ -5,6 +5,7 @@
 #   construct project set <name> [--file <path>]   write/update a profile
 #   construct project get <name>                   print a stored profile
 #   construct project list                         list stored profile names
+#   construct notify <message> [--title …]         desktop notification on the host
 #
 # The canonical store is /opt/construct/projects (overridable via PROJECTS_STORE).
 # Changes sync to the host and survive VM reinstall; anything NOT recorded in a
@@ -16,6 +17,7 @@
 #   2  validation error (set)
 #   3  reserved name (set)
 #   4  node not available (set requires node for schema validation)
+#   5  notification queue full (notify)
 set -euo pipefail
 
 PROJECTS_STORE="${PROJECTS_STORE:-/opt/construct/projects}"
@@ -24,15 +26,26 @@ CONSTRUCT_REPO_DIR="${CONSTRUCT_REPO_DIR:-/opt/construct/repo}"
 usage() {
   cat <<'USAGE'
 Usage: construct project <command> [args]
+       construct notify <message> [options]
 
-Commands:
+Project commands:
   set  <name> [--file <path>]   Create or update a project profile.
                                 Reads JSON from --file or stdin.
   get  <name>                   Print the stored profile to stdout.
   list                          List stored profile names.
 
+notify — raise a desktop notification on the Windows host:
+  -t, --title <text>            Headline (default: the VM's hostname)
+  -l, --level info|warning|error
+                                Severity (default: info). warning/error stay on
+                                screen longer.
+  Reads the message from the arguments, or from stdin when given "-".
+  One-way by design: it cannot ask the user anything and returns no answer —
+  put questions in your own chat with the user instead.
+
 Environment:
   PROJECTS_STORE    Profile directory (default: /opt/construct/projects)
+  NOTIFY_SPOOL      Notification spool (default: /run/construct/notify)
 USAGE
 }
 
@@ -53,14 +66,109 @@ is_safe_name() {
   return 0
 }
 
+# -- notify --------------------------------------------------------------------
+# Queue a desktop notification for the Windows host. This writes ONE single-line
+# JSON file into a spool dir; the host's VS Code extension claims it over SSH
+# (atomic rename, so multiple VS Code windows show it once) and raises a real
+# Windows toast. The spool lives on tmpfs so a reboot can't replay old messages.
+#
+# One-way on purpose: there is no reply channel and no exit status carrying an
+# answer. An agent that needs a decision should ask in its own chat with the user.
+
+NOTIFY_SPOOL="${NOTIFY_SPOOL:-/run/construct/notify}"
+# Flood guard: a looping agent must not be able to bury the host in popups (or
+# fill tmpfs) while VS Code is closed and nothing is draining the spool.
+NOTIFY_MAX_PENDING="${NOTIFY_MAX_PENDING:-50}"
+NOTIFY_MAX_TITLE=100
+NOTIFY_MAX_BODY=400
+
+# Strip control characters -- they would break the host's one-entry-per-line claim
+# protocol -- squeeze whitespace, trim, and cap the length.
+notify_clean() {
+  local text="$1" max="$2"
+  text="$(printf '%s' "${text}" | tr '\000-\037\177' '   ' | tr -s ' ')"
+  text="${text#"${text%%[![:space:]]*}"}"
+  text="${text%"${text##*[![:space:]]}"}"
+  printf '%s' "${text:0:${max}}"
+}
+
+# Minimal JSON string escaping for the no-jq fallback. Control characters are
+# already gone by here, so backslash and double quote are the whole job.
+json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+
+do_notify() {
+  local title="" level="info" body=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -t|--title) shift; [[ $# -gt 0 ]] || die "--title requires a value"; title="$1" ;;
+      -l|--level) shift; [[ $# -gt 0 ]] || die "--level requires a value"; level="$1" ;;
+      -h|--help) usage; return 0 ;;
+      -) body="${body}${body:+ }$(cat)" ;;
+      --) shift; body="${body}${body:+ }$*"; break ;;
+      -*) die "Unknown option: $1 (try: construct notify --help)" ;;
+      *) body="${body}${body:+ }$1" ;;
+    esac
+    shift
+  done
+
+  case "${level}" in
+    info) ;;
+    warn|warning) level="warning" ;;
+    err|error) level="error" ;;
+    *) die "Unknown level: ${level} (use info, warning or error)" ;;
+  esac
+
+  body="$(notify_clean "${body}" "${NOTIFY_MAX_BODY}")"
+  [[ -n "${body}" ]] || die "construct notify: nothing to say (pass a message, or '-' to read stdin)"
+  title="$(notify_clean "${title:-$(hostname 2>/dev/null || echo VM)}" "${NOTIFY_MAX_TITLE}")"
+
+  if [[ ! -d "${NOTIFY_SPOOL}" ]]; then
+    # 1777 (like /tmp): any user on the VM may queue, nobody may clobber another's
+    # entry. Creating /run/construct needs root, which is who agents run as here.
+    install -d -m 1777 "${NOTIFY_SPOOL}" 2>/dev/null \
+      || die "construct notify: cannot create ${NOTIFY_SPOOL} (create it once as root, or set NOTIFY_SPOOL)"
+  fi
+
+  local pending
+  pending="$(find "${NOTIFY_SPOOL}" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l)"
+  if (( pending >= NOTIFY_MAX_PENDING )); then
+    printf 'construct notify: %s notifications already queued and undelivered (is VS Code open on the host?); dropping this one\n' \
+      "${pending}" >&2
+    return 5
+  fi
+
+  local ts source json tmp name
+  ts="$(date +%s%3N 2>/dev/null || true)"
+  [[ "${ts}" =~ ^[0-9]+$ ]] || ts="$(date +%s)000"
+  source="$(notify_clean "${SUDO_USER:-$(id -un 2>/dev/null || echo agent)}@$(hostname -s 2>/dev/null || echo vm)" 60)"
+
+  if command -v jq >/dev/null 2>&1; then
+    json="$(jq -cn --argjson ts "${ts}" --arg level "${level}" --arg title "${title}" \
+      --arg body "${body}" --arg source "${source}" \
+      '{v:1,ts:$ts,level:$level,title:$title,body:$body,source:$source}')"
+  else
+    json="{\"v\":1,\"ts\":${ts},\"level\":\"$(json_escape "${level}")\",\"title\":\"$(json_escape "${title}")\",\"body\":\"$(json_escape "${body}")\",\"source\":\"$(json_escape "${source}")\"}"
+  fi
+
+  # Write, then publish with a rename: the host polls this directory and must never
+  # read a half-written entry.
+  name="${ts}-$$-${RANDOM}.json"
+  tmp="${NOTIFY_SPOOL}/.tmp.$$.${RANDOM}"
+  printf '%s\n' "${json}" >"${tmp}" || die "construct notify: cannot write to ${NOTIFY_SPOOL}"
+  chmod 0644 "${tmp}" 2>/dev/null || true
+  mv -f "${tmp}" "${NOTIFY_SPOOL}/${name}" || { rm -f "${tmp}"; die "construct notify: cannot publish to ${NOTIFY_SPOOL}"; }
+  return 0
+}
+
 # -- argument parsing ----------------------------------------------------------
 
 if [[ $# -lt 1 ]]; then usage >&2; exit 1; fi
 
 case "$1" in
   project) shift ;;
+  notify) shift; do_notify "$@"; exit $? ;;
   help|--help|-h) usage; exit 0 ;;
-  *) die "Unknown command: $1 (try: construct project set|get|list)" ;;
+  *) die "Unknown command: $1 (try: construct project set|get|list, construct notify)" ;;
 esac
 
 if [[ $# -lt 1 ]]; then usage >&2; exit 1; fi

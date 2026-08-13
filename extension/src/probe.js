@@ -12,6 +12,7 @@ if [ -r /etc/os-release ]; then . /etc/os-release 2>/dev/null; emit UBUNTU "\${P
 emit MEM_GB "$(awk '/MemTotal/{printf "%.0f",$2/1024/1024}' /proc/meminfo 2>/dev/null)"
 emit DISK_SIZE "$(df -BG / 2>/dev/null | awk 'NR==2{print $2}')"
 emit DISK_USED "$(df -BG / 2>/dev/null | awk 'NR==2{print $3}')"
+emit DISK_PCT "$(df -P / 2>/dev/null | awk 'NR==2{print $5}')"
 cfg=/etc/construct/config.env
 if [ -r "$cfg" ]; then
   emit AGENT_NAME "$(sed -n 's/^AGENT_NAME=//p' "$cfg" | head -1)"
@@ -62,6 +63,17 @@ function formatMarker(s) {
   return m ? m[1] : v;
 }
 
+/**
+ * `df`'s Use% column ("94%") as a number, or null when the VM didn't report it
+ * (older VM), or reported something unparseable/out of range. Pure.
+ */
+function parseDiskPct(s) {
+  const m = String(s == null ? "" : s).trim().match(/^(\d{1,3})%?$/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return n >= 0 && n <= 100 ? n : null;
+}
+
 /** Parse TAB-separated KEY\tVALUE lines into a map. */
 function parseProbe(stdout) {
   const map = {};
@@ -107,6 +119,11 @@ function toState(map) {
   const mem = map.MEM_GB ? `${map.MEM_GB} GB RAM` : "";
   const disk = (map.DISK_USED && map.DISK_SIZE) ? `${map.DISK_USED} / ${map.DISK_SIZE} disk` : "";
   const resources = [mem, disk].filter(Boolean).join(" · ");
+  // Disk fill percentage, for the panel's over-90% warning. A full VM disk breaks
+  // provisioning and agent work in confusing ways (ext4's 5% root reserve lets
+  // root keep writing while every other user's writes fail), so it is worth
+  // flagging BEFORE it bites. Absent/unparseable on an older VM -> no verdict.
+  const diskPct = parseDiskPct(map.DISK_PCT);
 
   const installed = formatMarker(map.INSTALLED_AT);
   const reprovisioned = formatMarker(map.REPROVISIONED_AT);
@@ -116,6 +133,9 @@ function toState(map) {
   // "installed —" / "reprovisioned —" placeholder for an absent/unknown value.
   if (installed) out.installed = installed;
   if (reprovisioned) out.reprovisioned = reprovisioned;
+  // null (unknown) is deliberately NOT sent: the webview then leaves the warning
+  // as-is rather than claiming a healthy disk it has no reading for.
+  if (diskPct !== null) out.diskPct = diskPct;
   return out;
 }
 
@@ -131,4 +151,4 @@ async function probe(opts = {}) {
   return { online: true, host, hostShort, ...toState(parseProbe(r.stdout)) };
 }
 
-module.exports = { REMOTE_PROBE, extractVersion, formatMarker, parseProbe, toState, probe };
+module.exports = { REMOTE_PROBE, extractVersion, formatMarker, parseDiskPct, parseProbe, toState, probe };

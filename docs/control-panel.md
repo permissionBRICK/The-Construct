@@ -196,6 +196,41 @@ device name — the panel auto-detects the first one, but if that's the wrong in
 devices with `ffmpeg -list_devices true -f dshow -i dummy` and set **`construct.micDevice`**
 (in VS Code settings) to the device name you want (e.g. `Microphone (Realtek(R) Audio)`).
 
+## Desktop notifications from the VM
+
+An agent working on the VM can get your attention on the Windows desktop:
+
+```bash
+construct notify "Test suite finished — 3 failures" --title "audiobook-pilot"
+construct notify "Deploy failed, rolling back" --level error   # info | warning | error
+```
+
+You get a **real Windows notification** — the kind that slides in from the tray and stays
+in the notification centre — not a VS Code toast buried in a window you're not looking at.
+Clicking it opens the control panel. `warning` and `error` stay on screen longer; nothing
+is ever shown twice, even with several VS Code windows open.
+
+It works **without the panel or sidebar ever being opened**: the extension activates with
+VS Code and opens **one long-lived SSH connection** that waits on the VM and streams
+notifications as they're queued — no polling, so delivery is immediate (milliseconds) and an
+idle connection costs nothing. If it drops (VM rebooted, laptop slept, Wi-Fi switched) it
+reconnects on its own, backing off from 2 s to a minute, and delivers whatever queued in the
+meantime on reconnect. Turn the whole thing off with **`construct.notifications`**.
+
+Messages queued while VS Code was closed arrive at next start — apart from stale ones (older
+than an hour) and anything queued before a VM reboot, which are dropped rather than replayed
+at you.
+
+If Windows can't show the notification — notifications switched off for the app, a policy
+blocking PowerShell, or a non-Windows host — it falls back to a VS Code notification so the
+message is never lost. Nothing flashes on screen either way: the toast is raised by a
+PowerShell that runs with no console at all.
+
+The channel is deliberately **one-way**. An agent can tell you something; it cannot ask you
+anything or get an answer back — questions belong in the agent's own chat. Notifications
+are also rate-limited (50 queued at most) so a looping agent can't bury you in popups, and
+their text is sanitized before display.
+
 ## Keeping the Claude Code patches applied across updates
 
 Construct applies two reversible patches to the VM's Claude Code extension —

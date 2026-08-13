@@ -73,6 +73,10 @@ extension/
     themes.js         UI-design registry (THEMES/DEFAULT_THEME/normalizeThemeId/
                       cssFileFor/previewFileFor) + buildPickerHtml (the picker webview
                       document, pure + injection-escaped) — no vscode dependency
+    notify.js         VM -> host desktop notifications: the claim protocol
+                      (buildClaimScript/parseEntries/selectDeliverable) + the Windows
+                      toast payload (toastXml/buildToastScript/buildToastCommand),
+                      pure + sanitized — no vscode dependency
     importui.js       pure decision core for the remote-config rename-on-collision import
                       (planRenamedImport: validate target + build canonical profile +
                       manifest provenance + base) — the testable half of extension.js's
@@ -265,6 +269,46 @@ module, regardless of `online`.
   `theme-previews/<id>.png` (mission-control / datasheet are the planned next two).
   Perf nicety: `panel.js`'s rain loop exits when the active design `display:none`s
   the canvas (native does), so a hidden canvas is never animated.
+- **VM → desktop notifications are a spool + atomic claim, streamed over one SSH
+  connection, and delivered as a real Windows toast.**
+  `construct notify "…"` on the VM writes ONE single-line JSON entry into
+  `/run/construct/notify` (tmpfs via `systemd/construct-notify.conf`, mode 1777 — any
+  user queues, nobody clobbers; a reboot must not replay yesterday's messages). The
+  host runs `notify.buildWatchScript()` over a LONG-LIVED ssh started in `activate()` —
+  deliberately NOT the webview-gated `syncAutoRefresh` loop, since the whole point is
+  reaching a user who never opened the panel. The watcher drains on connect (so a
+  reconnect needs no extra round trip) and then BLOCKS on `inotifywait`, streaming
+  entries as they appear: delivery in milliseconds, and an idle connection costs
+  nothing — versus a poll, which pays an SSH handshake per interval forever and still
+  delivers late. `buildWatchArgs` adds ServerAlive keepalives so a silently dead link
+  makes the child EXIT, which is what drives `scheduleNotifyRestart`'s 2s→60s backoff
+  (reset once a connection has survived a minute, so one flaky drop doesn't inherit an
+  old streak). Three details that are easy to get wrong and were: inotifywait runs in
+  MONITOR mode (`-m`) read through a process substitution — one-shot `inotifywait; claim`
+  has a blind spot for entries queued DURING the claim, and a pipeline's subshell would
+  hide the watcher pid from cleanup and outlive its parent as an orphan; a `trap … EXIT
+  HUP INT TERM PIPE` kills that inotifywait when the connection ends; and the periodic
+  heartbeat line means an orphaned watcher meets a closed pipe and reaps itself.
+  Each entry is CLAIMED with an atomic `mv` before it is printed, which is the entire
+  multi-window story: N VS Code windows each hold their own watcher over the same spool,
+  exactly one wins each entry, so a notification shows once no matter how many windows
+  are open. A watcher that dies BETWEEN claiming and printing would strand its entry, so
+  `claim()` renames anything claimed for over a minute back to `.json` (a live claim
+  lasts microseconds) — deleting them, the obvious sweep, silently loses notifications. Delivery is a REAL Windows toast
+  (`ToastNotificationManager` via `powershell.exe -EncodedCommand`), because a VS Code
+  notification is invisible when the window is minimised — the point of the feature.
+  **No console flashes**: a powershell.exe spawned straight from the extension host
+  inherits no console and can't allocate one (the inverse of the `cmd /c start` note
+  above — that's what FORCES a window), plus `-WindowStyle Hidden` + `windowsHide`.
+  The script registers its AppUserModelId under HKCU (Windows silently drops toasts
+  from an unknown app id) and exits non-zero when `$notifier.Setting != Enabled`, so a
+  suppressed toast falls back to a VS Code notification instead of vanishing. Agent
+  text is UNTRUSTED input crossing into a shell and an XML document: it is stripped of
+  control characters (a newline would forge a second spool entry), length-capped,
+  XML-escaped, and reaches PowerShell only as a base64 blob inside a single-quoted
+  literal — never interpolated. One-way BY DESIGN (no actions, no reply channel):
+  questions belong in the agent's own chat. Clicking the toast opens a fixed
+  `vscode://` URI handled by `registerUriHandler` (no VM-authored data in it).
 - **Packaging = a PowerShell-generated `.vsix` installed via `code --install-extension`**
   (no `vsce`/Node on the host). Modern VS Code ignores a bare folder dropped into
   `~/.vscode/extensions` (it's never registered in `extensions.json`), so

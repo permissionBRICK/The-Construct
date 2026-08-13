@@ -25,6 +25,21 @@ can open from their own machine (for example, a dev server you started here).
 Bind long-running services to `0.0.0.0` rather than `127.0.0.1` so they are
 reachable from the user's machine over that name.
 
+## Getting the user's attention
+
+When a long job finishes (or fails) and the user is probably looking at
+something else, you can raise a notification on their Windows desktop:
+
+    construct notify "Test suite finished — 3 failures" --title "audiobook-pilot"
+    construct notify "Deploy failed, rolling back" --level error
+
+It appears as a normal Windows notification and stays in their notification
+centre. Use it sparingly — for things worth interrupting someone over, not for
+routine progress.
+
+This channel is **one-way**: it cannot ask anything and gives you no answer back.
+When you need a decision from the user, ask in this chat as usual.
+
 ## Recording project requirements
 
 This VM is reinstalled from scratch when the user rebuilds it. To preserve a

@@ -84,9 +84,19 @@ function runRemote(remoteCommand, opts = {}) {
  * Get-AgentUsage.ps1).
  */
 function runRemoteScript(scriptText, opts = {}) {
-  const b64 = Buffer.from(scriptText, "utf8").toString("base64");
-  const cmd = `f=$(mktemp) && printf %s '${b64}' | base64 -d > "$f" && bash "$f"; rc=$?; rm -f "$f"; exit $rc`;
-  return runRemote(cmd, opts);
+  return runRemote(wrapScriptCommand(scriptText), opts);
+}
+
+/**
+ * Wrap a script as ONE remote command line: ship it base64 (so no quoting of the
+ * script's own quotes/newlines is needed), decode into a temp file, run it, clean up,
+ * and preserve its exit status. Shared by runRemoteScript and by the long-lived
+ * connections (notifications), which need the same command but spawn ssh themselves.
+ * Pure.
+ */
+function wrapScriptCommand(scriptText) {
+  const b64 = Buffer.from(String(scriptText), "utf8").toString("base64");
+  return `f=$(mktemp) && printf %s '${b64}' | base64 -d > "$f" && bash "$f"; rc=$?; rm -f "$f"; exit $rc`;
 }
 
 /** Cheap reachability check. */
@@ -95,4 +105,4 @@ async function isReachable(opts = {}) {
   return r.code === 0;
 }
 
-module.exports = { DEFAULTS, keyPath, buildSshArgs, runRemote, runRemoteScript, isReachable, resolveCfg };
+module.exports = { DEFAULTS, keyPath, buildSshArgs, wrapScriptCommand, runRemote, runRemoteScript, isReachable, resolveCfg };
