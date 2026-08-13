@@ -112,6 +112,33 @@ Recognized variables:
 | `SMB_USER` | `dev` | SMB login name (file access on the share runs as root) |
 | `SMB_SHARE_NAME` | `repo` | Share name in the UNC path `\\<vm>\<name>` |
 | `SMB_PASSWORD` | _generated_ | Generated once and persisted; reused on reprovision |
+| `ALLOW_LOW_DISK` | `false` | Provision even when the free-disk preflight says the VM disk is full (see below) |
+
+### Free-disk preflight
+
+The first step of every (re)provision reports free space on each filesystem it writes to and
+**stops** when one is essentially full (under 256 MiB free; under 2 GiB is a warning). This is
+deliberate: a full disk is the most misleading failure this script has. ext4 reserves 5% of
+every filesystem for uid 0, so root's writes keep succeeding while writes as any other user
+fail — which surfaces as a scatter of unrelated-looking errors instead of "the disk is full".
+The classic one:
+
+```
+==> Configuring global git identity
+  root: Your Name <you@example.com>  credentials: store (plaintext)
+error: failed to write new configuration file /home/agent/.gitconfig.lock
+  could not set user.name for agent
+```
+
+Root's identity was written; the agent user's failed three lines later. That git message is
+its wording for a failed `write(2)` (ENOSPC/EDQUOT), not for a permission or locking problem.
+Free space on the VM (or grow its disk in Hyper-V and the partition inside it) and re-provision.
+To provision anyway, run the provisioner over SSH with the escape hatch (the host script has no
+switch for it, by design):
+
+```bash
+sudo env ALLOW_LOW_DISK=true bash /opt/construct/repo/bin/provision.sh
+```
 
 ### Project runtimes (SDKs)
 
@@ -139,7 +166,8 @@ The workflow lets you pick tools, records `AI_TOOLS=`, and runs `bin/install-ai-
 Currently supported selections:
 
 - `opencode`: installs the CLI and autostarts `opencode serve --hostname 0.0.0.0 --port 4096`
-  as root via `opencode-serve.service`.
+  as root via `opencode-serve.service`. See [opencode installs behind a company
+  network](#opencode-installs-behind-a-company-network) if this step fails.
 - `claude-code`: installs the Claude Code CLI and prints the SSH connection target.
 - `codex`: installs the Codex CLI, supports Codex App SSH remote connections, and can start the
   experimental Codex app-server on `0.0.0.0:4500` via `codex-app-server.service`.
@@ -168,6 +196,32 @@ SMB_USER=dev
 SMB_SHARE_NAME=repo
 SMB_PASSWORD=
 ```
+
+### opencode installs behind a company network
+
+opencode is the one tool that isn't installed from a package registry, and its official
+installer has two habits that break on corporate networks:
+
+- **It resolves its version through `api.github.com`,** which allows 60 unauthenticated
+  requests per hour **per source IP**. Behind a company NAT that budget is shared by every
+  machine on the network and is routinely spent, so the installer exits with
+  `Failed to fetch version information` — on every attempt, since retrying hits the same wall
+  until the hourly reset. Construct now resolves the latest tag from the plain
+  `github.com/.../releases/latest` redirect (no API, no quota) and pins it through the
+  installer's `VERSION` environment variable, so that call never happens.
+- **It downloads its release archive without `curl --fail`,** so a proxy error page gets piped
+  into `tar` and the install dies with `gzip: stdin: not in gzip format`. Each attempt is
+  retried three times with backoff.
+
+If the official installer still fails, provisioning falls back to the **`opencode-ai` npm
+package** — the same release, fetched from the npm registry, which is usually reachable (or
+mirrored) where raw GitHub downloads are blocked. Only if that fails too does the step fail,
+and it then prints the HTTP status of `github.com`, `api.github.com` and `registry.npmjs.org`
+so you can tell "offline" from "proxy block" from "rate limit" at a glance.
+
+Either layout is fine afterwards: `/usr/local/bin/opencode` is pointed at whichever binary was
+installed (`~/.opencode/bin/opencode` or the npm package's), which is what `opencode-serve.service`
+executes.
 
 ### Bypass-mode defaults
 

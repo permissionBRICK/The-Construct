@@ -171,6 +171,85 @@ run_step() {
   _finish_provision "${rc}"
 }
 
+# ── Free-disk preflight ──────────────────────────────────────────────────────
+# A full VM disk is the single most misleading failure mode this script has, so
+# it is checked BEFORE anything installs. ext4 reserves 5% of every filesystem
+# for uid 0, which makes a full disk look like a permission bug: root's own
+# writes keep succeeding while every write as another user fails with a cryptic
+# errno. The field report was exactly that -- root's git identity was written,
+# and the same three writes for the agent user died with
+#   error: failed to write new configuration file /home/agent/.gitconfig.lock
+# which is git's message for a failed write(2) (ENOSPC/EDQUOT), NOT for a
+# permission or lock problem. So: state the free space up front, and stop rather
+# than emit a screenful of unrelated-looking errors from a disk that is full.
+_DISK_FULL_KB="${_DISK_FULL_KB:-262144}"   # 256 MiB -- below this, stop
+_DISK_LOW_KB="${_DISK_LOW_KB:-2097152}"    # 2 GiB   -- below this, warn
+
+# "full" | "low" | "ok" for a free-space reading in KiB. Pure (unit-tested).
+_disk_verdict() {
+  local avail_kb="$1"
+  if [[ -z "${avail_kb}" || ! "${avail_kb}" =~ ^[0-9]+$ ]]; then printf 'unknown'; return 0; fi
+  if (( avail_kb < _DISK_FULL_KB )); then printf 'full'
+  elif (( avail_kb < _DISK_LOW_KB )); then printf 'low'
+  else printf 'ok'; fi
+}
+
+# df's Avail column already excludes the root reserve, i.e. it is what an
+# unprivileged write actually has left -- which is the number that matters here.
+_df_field() { df -P -k "$1" 2>/dev/null | awk 'NR==2 {print $'"$2"'}'; }
+
+# Report free space on every filesystem provisioning writes to (deduped by
+# device, since / /home /root/repos are usually one filesystem). Returns 1 when
+# any of them is full, unless ALLOW_LOW_DISK=true downgrades that to a warning.
+check_disk_space() {
+  local rc=0 seen="" path dev avail used verdict
+  for path in / /home "${WORKSPACE_ROOT:-/root/repos}" /var; do
+    [[ -d "${path}" ]] || continue
+    dev="$(_df_field "${path}" 1)"
+    [[ -n "${dev}" ]] || continue
+    case " ${seen} " in *" ${dev} "*) continue ;; esac
+    seen="${seen} ${dev}"
+    avail="$(_df_field "${path}" 4)"
+    used="$(_df_field "${path}" 5)"
+    verdict="$(_disk_verdict "${avail}")"
+    case "${verdict}" in
+      ok)   ok   "  ${path} (${dev}): $((avail / 1048576)) GiB free, ${used} used" ;;
+      low)  warn "  ${path} (${dev}): only $((avail / 1024)) MiB free (${used} used) -- installs may run out of space" ;;
+      full)
+        err "  ${path} (${dev}): only $((avail / 1024)) MiB free (${used} used) -- the disk is FULL"
+        err "  ext4 keeps a 5% reserve for root, so root-owned writes still succeed while writes as"
+        err "  ${SSH_USER:-agent} fail with confusing errors (e.g. git: 'failed to write new configuration file"
+        err "  /home/${SSH_USER:-agent}/.gitconfig.lock'). Free space on the VM or grow its disk, then re-provision."
+        err "  Set ALLOW_LOW_DISK=true to provision anyway."
+        rc=1
+        ;;
+      *)    note "  ${path} (${dev}): free space unknown" ;;
+    esac
+  done
+  if [[ "${rc}" -ne 0 && "${ALLOW_LOW_DISK:-false}" == "true" ]]; then
+    warn "  ALLOW_LOW_DISK=true -- continuing on a full disk; later steps may fail"
+    rc=0
+  fi
+  return "${rc}"
+}
+
+# Explain a failed `git config` write for one user. git prints "failed to write
+# new configuration file <path>.lock" (exit 4) only when the write(2) into the
+# lock file failed -- the filesystem is out of space or over quota -- never for a
+# permission or locking problem. Thanks to the same 5% root reserve this appears
+# as root's identity being written while the agent user's three writes all fail,
+# so say what actually happened instead of leaving three cryptic git lines.
+_git_write_diag() {
+  local user="$1" home="$2" avail
+  avail="$(_df_field "${home}" 4)"
+  [[ "${avail}" =~ ^[0-9]+$ ]] || return 0
+  if [[ "$(_disk_verdict "${avail}")" != "ok" ]]; then
+    warn "  ^ not a permissions problem: the filesystem holding ${home} has only"
+    warn "    $((avail / 1024)) MiB free, so git could not write ${user}'s config."
+    warn "    Free space on the VM, then re-provision."
+  fi
+}
+
 # The plain-Bash unit test sources only the runner; no VM paths or root-only
 # provisioning actions are touched in that mode.
 if [[ "${CONSTRUCT_STEP_RUNNER_ONLY:-false}" == "true" ]]; then
@@ -294,6 +373,12 @@ note "    T3CODE=${T3CODE}"
 note "    T3CODE_CHANNEL=${T3CODE_CHANNEL}"
 note "    SMB_SHARE=${SMB_SHARE:-(saved/default)}"
 
+# Free space FIRST: on a full disk every later step fails in its own confusing
+# way (see the _disk_verdict block above), so a crisp stop beats a long summary
+# of unrelated-looking errors. Critical, with ALLOW_LOW_DISK=true as the escape
+# hatch for "I know, provision anyway".
+run_step critical "Checking free disk space" check_disk_space
+
 # A zip upload does not preserve Unix exec bits, so make the repo scripts
 # executable before anything tries to run them.
 chmod +x "${REPO_DIR}/bootstrap.sh" "${REPO_DIR}/bin/"*.sh 2>/dev/null || true
@@ -372,6 +457,7 @@ run_step critical "Writing configuration to ${CONFIG_FILE}" write_configuration
 #     space would break that) -- `git config --global` is the store on the VM.
 #     Optionally also enables git's plaintext credential store (the host warns
 #     about the security trade-off before this is requested).
+#     A failed write here is almost never about permissions -- see _git_write_diag.
 configure_git_identity() {
   _git_seen=""
   _git_failed=0
@@ -381,25 +467,31 @@ configure_git_identity() {
     _git_seen="${_git_seen} ${_gu}"
     _gu_home="$(getent passwd "${_gu}" | cut -d: -f6)"
     if [[ -z "${_gu_home}" ]]; then warn "  skipping ${_gu}: no home directory"; _git_failed=1; continue; fi
+    # Per-user, so the "why" below is printed for EVERY user whose writes failed
+    # (_git_failed is sticky across users and can't answer that question).
+    _gu_failed=0
     if [[ -n "${GIT_USER_NAME}" ]]; then
       sudo -H -u "${_gu}" git config --global user.name "${GIT_USER_NAME}" \
-        || { warn "  could not set user.name for ${_gu}"; _git_failed=1; }
+        || { warn "  could not set user.name for ${_gu}"; _git_failed=1; _gu_failed=1; }
     fi
     if [[ -n "${GIT_USER_EMAIL}" ]]; then
       sudo -H -u "${_gu}" git config --global user.email "${GIT_USER_EMAIL}" \
-        || { warn "  could not set user.email for ${_gu}"; _git_failed=1; }
+        || { warn "  could not set user.email for ${_gu}"; _git_failed=1; _gu_failed=1; }
     fi
     # Plaintext credential store: enable when requested; when explicitly declined,
     # remove only a store helper we may have set before (don't clobber another).
     _cred="(unchanged)"
     if [[ "${GIT_CREDENTIAL_STORE}" == "true" ]]; then
       if sudo -H -u "${_gu}" git config --global credential.helper store; then _cred="store (plaintext)"
-      else warn "  could not enable credential.helper for ${_gu}"; _git_failed=1; fi
+      else warn "  could not enable credential.helper for ${_gu}"; _git_failed=1; _gu_failed=1; fi
     elif [[ "${GIT_CREDENTIAL_STORE}" == "false" ]]; then
       if [[ "$(sudo -H -u "${_gu}" git config --global credential.helper 2>/dev/null || true)" == "store" ]]; then
         sudo -H -u "${_gu}" git config --global --unset-all credential.helper || true
         _cred="disabled"
       fi
+    fi
+    if [[ "${_gu_failed}" -ne 0 ]]; then
+      _git_write_diag "${_gu}" "${_gu_home}"
     fi
     ok "  ${_gu}: ${GIT_USER_NAME:-(unchanged)} <${GIT_USER_EMAIL:-(unchanged)}>  credentials: ${_cred}"
   done
