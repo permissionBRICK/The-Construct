@@ -751,6 +751,19 @@ install_t3code() {
   bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" T3CODE_PORT "${T3CODE_PORT}"
   bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" T3CODE_CHANNEL "${T3CODE_CHANNEL}"
 
+  # Opt-in usage-limit auto-resume: patch (or un-patch) the freshly-installed
+  # dist bundle BEFORE the service (re)start below, so the running server
+  # always matches the T3CODE_LIMIT_RESUME preference. The patcher verifies
+  # its anchor sites first and refuses on an unexpected bundle (exit 2), in
+  # which case t3 simply runs stock — never block the install on it.
+  if [[ "${T3CODE_LIMIT_RESUME:-false}" == "true" ]]; then
+    step "Applying T3 Code usage-limit auto-resume patch"
+    node "${REPO_DIR}/extension/vm/construct-t3park-patch.mjs" apply \
+      || warn "WARNING: usage-limit auto-resume patch not applied (see above); t3 runs stock"
+  else
+    node "${REPO_DIR}/extension/vm/construct-t3park-patch.mjs" revert >/dev/null 2>&1 || true
+  fi
+
   install -d -m 0755 "${WORKSPACE_ROOT}"
   install -m 0644 "${REPO_DIR}/systemd/t3code-serve.service" /etc/systemd/system/t3code-serve.service
   sed -i "s|^WorkingDirectory=.*|WorkingDirectory=${WORKSPACE_ROOT}|" /etc/systemd/system/t3code-serve.service
@@ -771,6 +784,12 @@ install_t3code() {
 
   if systemctl is-active --quiet t3code-serve; then
     echo "t3code-serve is running on ${T3CODE_HOST}:${T3CODE_PORT}"
+    # Fresh VMs have no t3 DB when the patch step above runs, so the token mint
+    # there can fail; retry now that the server has started once.
+    if [[ "${T3CODE_LIMIT_RESUME:-false}" == "true" && ! -s /etc/construct/t3park-token ]]; then
+      node "${REPO_DIR}/extension/vm/construct-t3park-patch.mjs" mint-token \
+        || warn "WARNING: could not mint the auto-resume API token; parked threads can't restart until one exists"
+    fi
   else
     warn "WARNING: t3code-serve failed to start; recent status and logs:"
     systemctl --no-pager --full status t3code-serve >&2 || true

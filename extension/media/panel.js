@@ -332,6 +332,7 @@
       partialStreaming: swOn($("setPartialStreaming")),
       t3code: swOn($("setT3")),
       t3codeChannel: val("setT3Channel"),
+      t3codeLimitResume: swOn($("setT3Park")),
     };
   }
   $("saveBtn") && $("saveBtn").addEventListener("click", () => post({ type: "saveSettings", settings: gatherSettings() }));
@@ -719,6 +720,7 @@
     setSw("setPartialStreaming", s.partialStreaming);
     setSw("setT3", s.t3code);
     if (s.t3codeChannel) setVal("setT3Channel", s.t3codeChannel);
+    setSw("setT3Park", s.t3codeLimitResume);
     setSw("setAutoCheckpoints", s.autoCheckpoints);
   }
 

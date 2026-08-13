@@ -303,6 +303,7 @@ function mapToForm(raw) {
     const ch = String(raw.t3codeChannel);
     if (ch === "stable" || ch === "nightly") form.t3codeChannel = ch;
   }
+  if (typeof raw.t3codeLimitResume === "boolean") form.t3codeLimitResume = raw.t3codeLimitResume;
   if (typeof raw.vmAutoCheckpoints === "boolean") form.autoCheckpoints = raw.vmAutoCheckpoints;
   return form;
 }
@@ -353,6 +354,7 @@ function mapFromForm(form) {
   // stored one (e.g. the host settings written by an older extension that never
   // sent the key).
   if (form.t3codeChannel === "stable" || form.t3codeChannel === "nightly") out.t3codeChannel = form.t3codeChannel;
+  setBool("t3codeLimitResume", form.t3codeLimitResume);
   setBool("vmAutoCheckpoints", form.autoCheckpoints);
   return out;
 }
