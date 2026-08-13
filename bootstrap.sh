@@ -69,7 +69,10 @@ fi
 
 step "Installing base packages"
 apt-get update
-apt-get install -y ca-certificates curl git gh jq ripgrep unzip gnupg lsb-release
+# inotify-tools: the host's notification watcher blocks on `inotifywait` over its
+# long-lived SSH connection, so an agent's `construct notify` reaches the desktop the
+# moment it is queued. Without it the watcher falls back to a slow sleep loop.
+apt-get install -y ca-certificates curl git gh jq ripgrep unzip gnupg lsb-release inotify-tools
 
 step "Installing Docker if needed"
 if ! command -v docker >/dev/null 2>&1; then

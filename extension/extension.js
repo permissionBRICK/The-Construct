@@ -32,6 +32,7 @@ const configsync = require("./src/configsync");
 const importui = require("./src/importui");
 const zip = require("./src/zip");
 const themes = require("./src/themes");
+const notify = require("./src/notify");
 
 /** The single editor-tab panel instance, if open. */
 let panel; // vscode.WebviewPanel | undefined
@@ -374,6 +375,160 @@ function syncAutoRefresh() {
 /** Stop the auto-refresh timer unconditionally (extension deactivate). */
 function stopAutoRefresh() {
   if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; autoRefreshMs = 0; }
+}
+
+// ── VM → desktop notifications ───────────────────────────────────────────────
+// An agent on the VM runs `construct notify "…"`; entries arrive here over ONE
+// long-lived SSH connection that blocks on the VM until something is queued, and we
+// raise a real Windows toast (see src/notify.js for the protocol and why it is
+// deliberately one-way).
+//
+// A stream, not a poll: no reconnect every few seconds, no handshake cost while
+// idle, and delivery is immediate rather than "within the interval". The cost moves
+// to keeping the connection healthy — hence keepalives on the ssh side, a heartbeat
+// on the VM side, and the supervisor below, which reconnects with backoff whenever
+// the child dies (VM rebooted, laptop slept, Wi-Fi switched, link idled out).
+//
+// Unlike auto-refresh this runs whether or not a dashboard is open: the whole point
+// is reaching the user who never opened the panel.
+let notifyChild = null;          // the live ssh child, if connected
+let notifyRestartTimer = null;
+let notifyStopped = false;       // deactivate/disable: stop respawning
+let notifyAttempt = 0;           // consecutive failed connections, for the backoff
+let notifyBuffer = "";           // partial stream line carried between chunks
+
+/** Whether VM notifications are switched on (setting; default true). */
+function notificationsEnabled() {
+  try { return vscode.workspace.getConfiguration("construct").get("notifications") !== false; }
+  catch (_) { return true; }
+}
+
+/** Open the watcher connection, or schedule a retry if it can't be opened. */
+function startNotifyWatch() {
+  if (notifyChild || notifyRestartTimer) return;
+  notifyStopped = false;
+  if (!notificationsEnabled()) return;
+  const args = notify.buildWatchArgs(ssh, {}, fs.existsSync(ssh.keyPath(ssh.resolveCfg({}))));
+  let child;
+  try {
+    child = require("child_process").spawn("ssh", args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+  } catch (e) {
+    logLine("notify: could not start the watcher: " + (e && e.message ? e.message : e));
+    scheduleNotifyRestart();
+    return;
+  }
+  notifyChild = child;
+  notifyBuffer = "";
+  const startedAt = Date.now();
+  let stderr = "";
+  if (child.stdout) {
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      const { lines, rest } = notify.splitStream(notifyBuffer, chunk);
+      notifyBuffer = rest;
+      if (lines.length) onNotifyLines(lines);
+    });
+  }
+  if (child.stderr) child.stderr.on("data", (d) => { if (stderr.length < 2000) stderr += String(d); });
+  const ended = (why) => {
+    if (notifyChild !== child) return;      // superseded by a newer child
+    notifyChild = null;
+    // A connection that lived a while was healthy: forget the earlier failures so a
+    // one-off drop retries fast instead of inheriting a long backoff.
+    if (Date.now() - startedAt >= notify.CONNECTION_HEALTHY_MS) notifyAttempt = 0;
+    const detail = (stderr.trim().split("\n").pop() || why || "").slice(0, 200);
+    logLine("notify: watcher disconnected" + (detail ? ` (${detail})` : "") + "; reconnecting");
+    scheduleNotifyRestart();
+  };
+  if (child.on) {
+    child.on("error", (e) => ended(e && e.message ? e.message : String(e)));
+    child.on("exit", (code) => ended(code == null ? "" : "ssh exited " + code));
+  }
+  logLine("notify: watcher connected");
+}
+
+/** Reconnect after a backoff (2s doubling to 60s), unless we've been told to stop. */
+function scheduleNotifyRestart() {
+  if (notifyStopped || notifyRestartTimer || !notificationsEnabled()) return;
+  notifyAttempt += 1;
+  const delay = notify.reconnectDelayMs(notifyAttempt);
+  notifyRestartTimer = setTimeout(() => {
+    notifyRestartTimer = null;
+    if (!notifyStopped) startNotifyWatch();
+  }, delay);
+  if (notifyRestartTimer.unref) notifyRestartTimer.unref();
+}
+
+/** Tear the watcher down (deactivate, or the setting switched off). */
+function stopNotifyWatch() {
+  notifyStopped = true;
+  if (notifyRestartTimer) { clearTimeout(notifyRestartTimer); notifyRestartTimer = null; }
+  const child = notifyChild;
+  notifyChild = null;
+  notifyBuffer = "";
+  // Killing the local ssh closes the channel; the VM-side watcher then dies on its
+  // next heartbeat write (SIGPIPE), so nothing is left running on the VM either.
+  if (child) { try { child.kill(); } catch (_) {} }
+}
+
+/** Deliver a batch of streamed lines. Never throws. */
+async function onNotifyLines(lines) {
+  try {
+    const picked = notify.selectDeliverable(notify.parseEntries(lines.join("\n")), { now: Date.now() });
+    if (picked.stale) logLine(`notify: dropped ${picked.stale} notification(s) older than the delivery window`);
+    for (const entry of picked.deliver) await deliverNotification(entry);
+    if (picked.extra) {
+      await deliverNotification({
+        level: "info", title: notify.APP_NAME,
+        body: `${picked.extra} more notification${picked.extra === 1 ? "" : "s"} from the VM (see the Construct log)`,
+        source: "",
+      });
+    }
+  } catch (e) {
+    logLine("notify: delivery failed: " + (e && e.message ? e.message : e));
+  }
+}
+
+/** Raise one notification: a native Windows toast, falling back to a VS Code
+ *  notification when that isn't possible (non-Windows host, blocked execution
+ *  policy, notifications switched off in Windows). Never rejects. */
+async function deliverNotification(entry) {
+  logLine(notify.logLineFor(entry));
+  if (process.platform === "win32") {
+    const reason = await raiseWindowsToast(entry);
+    if (!reason) return;
+    logLine("notify: falling back to a VS Code notification (" + reason + ")");
+  }
+  const text = entry.title ? `${entry.title}: ${entry.body}` : entry.body;
+  try {
+    if (entry.level === "error") vscode.window.showErrorMessage(text);
+    else if (entry.level === "warning") vscode.window.showWarningMessage(text);
+    else vscode.window.showInformationMessage(text);
+  } catch (_) { /* a notification we cannot show is not worth an exception */ }
+}
+
+/** Spawn the toast script. Resolves "" on success, else a short failure reason.
+ *  No console window: a powershell.exe spawned straight from the extension host has
+ *  no console to inherit and cannot allocate one (see lifecycle.js — the visible
+ *  flows must force one via `cmd /c start`), and windowsHide seals it. */
+function raiseWindowsToast(entry) {
+  const cmd = notify.buildToastCommand(entry);
+  return new Promise((resolve) => {
+    let child, stderr = "", settled = false;
+    const finish = (reason) => { if (!settled) { settled = true; resolve(reason); } };
+    try {
+      child = require("child_process").spawn(cmd.file, cmd.args, cmd.options);
+    } catch (e) {
+      return finish("spawn failed: " + (e && e.message ? e.message : e));
+    }
+    const killTimer = setTimeout(() => { try { child.kill(); } catch (_) {} finish("toast timed out"); }, 15000);
+    if (child.stderr) child.stderr.on("data", (d) => { if (stderr.length < 2000) stderr += String(d); });
+    child.on("error", (e) => { clearTimeout(killTimer); finish("spawn failed: " + (e && e.message ? e.message : e)); });
+    child.on("close", (code) => {
+      clearTimeout(killTimer);
+      finish(code === 0 ? "" : (stderr.trim().split("\n").pop() || `powershell exited ${code}`));
+    });
+  });
 }
 
 /** Locate the host-side scripts dir, honoring the `construct.scriptsDir` override. */
@@ -2136,11 +2291,19 @@ function activate(context) {
     vscode.commands.registerCommand("construct.refresh", () => refreshAll()),
     vscode.commands.registerCommand("construct.showLogs", () => showLogs()),
     vscode.commands.registerCommand("construct.chooseTheme", () => openThemePicker(context)),
-    // Live-swap the design when construct.uiTheme changes (picker, settings UI,
-    // or a synced settings.json edit) — re-render both surfaces in place.
+    // Clicking a VM notification's toast opens the control panel: Windows launches
+    // the toast's vscode:// URI, which lands here. Data-free by design — the URI is
+    // fixed in src/notify.js, so nothing VM-authored ever reaches this handler.
+    vscode.window.registerUriHandler({ handleUri() { openPanel(context); } }),
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (!e.affectsConfiguration("construct.uiTheme")) return;
-      reapplyTheme(context);
+      // Live-swap the design when construct.uiTheme changes (picker, settings UI,
+      // or a synced settings.json edit) — re-render both surfaces in place.
+      if (e.affectsConfiguration("construct.uiTheme")) reapplyTheme(context);
+      // Open or tear down the notification watcher when it's switched on/off.
+      if (e.affectsConfiguration("construct.notifications")) {
+        stopNotifyWatch();
+        if (notificationsEnabled()) startNotifyWatch();
+      }
     })
   );
   // Restore the editor-tab panel across reloads instead of leaving a dead webview.
@@ -2153,6 +2316,10 @@ function activate(context) {
   }
   maybeAutoOpenPanel(context);
   maybeAutoEnableAudio(context);
+  // Notification watcher: independent of any open dashboard, so an agent can reach
+  // the user who never opened the panel. Delayed slightly so the SSH connect doesn't
+  // compete with startup work.
+  setTimeout(() => { if (!notifyStopped) startNotifyWatch(); }, 3000);
   // A short while after start, re-apply any claude-code patch (streaming / mic gate)
   // that a background extension auto-update reverted — patches are otherwise only
   // applied at provision time. Delayed so the update has landed first (see repatch.js).
@@ -2195,6 +2362,7 @@ function deactivate() {
   try { if (repatchTimer) clearTimeout(repatchTimer); } catch (_) {}
   repatchTimer = null;
   stopAutoRefresh();
+  stopNotifyWatch();
   stopConfigWatcher();
 }
 

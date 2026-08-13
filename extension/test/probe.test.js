@@ -37,6 +37,15 @@ ok("marker: null -> empty", probe.formatMarker(null) === "");
 ok("marker: whitespace -> empty", probe.formatMarker("   ") === "");
 ok("marker: unparseable passed through (trimmed)", probe.formatMarker("  never  ") === "never");
 
+// ── parseDiskPct ──────────────────────────────────────────────────────────────
+ok("disk%: df Use% column", probe.parseDiskPct("94%") === 94);
+ok("disk%: bare number", probe.parseDiskPct("7") === 7);
+ok("disk%: whitespace trimmed", probe.parseDiskPct("  100% ") === 100);
+ok("disk%: missing -> null", probe.parseDiskPct("") === null);
+ok("disk%: null -> null", probe.parseDiskPct(null) === null);
+ok("disk%: garbage -> null", probe.parseDiskPct("-") === null);
+ok("disk%: out of range -> null", probe.parseDiskPct("120%") === null);
+
 // ── parseProbe + toState ──────────────────────────────────────────────────────
 const sample = [
   "HOSTNAME\tagent-vm",
@@ -44,6 +53,7 @@ const sample = [
   "MEM_GB\t20",
   "DISK_SIZE\t58G",
   "DISK_USED\t24G",
+  "DISK_PCT\t43%",
   "AGENT_NAME\tagent-vm-01",
   "PROJECTS\tdefault,customer-portal",
   "AI_TOOLS\topencode,claude-code,codex",
@@ -59,6 +69,8 @@ const st = probe.toState(probe.parseProbe(sample));
 ok("state: vmName", st.vmName === "agent-vm-01");
 ok("state: ubuntu", st.ubuntu === "Ubuntu 24.04.4 LTS");
 ok("state: resources", /20 GB RAM/.test(st.resources) && /24G \/ 58G disk/.test(st.resources), st.resources);
+ok("state: diskPct", st.diskPct === 43, String(st.diskPct));
+ok("state: no diskPct when the VM didn't report it", !("diskPct" in probe.toState(probe.parseProbe("MEM_GB\t8"))));
 ok("state: 3 agents", st.agents.length === 3);
 ok("state: claude version", st.agents.find((a) => a.id === "claude-code").version === "2.1.196");
 ok("state: codex version", st.agents.find((a) => a.id === "codex").version === "0.142.4");

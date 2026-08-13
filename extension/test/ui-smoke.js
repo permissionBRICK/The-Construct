@@ -349,12 +349,31 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("audio render: disabled hides substatus", !(await page.locator("#voiceSub").isVisible()));
   check("audio render: disabled reads 'disabled'", /disabled/.test(await page.locator("#voiceState").textContent()));
 
+  // disk-pressure warning: the triangle next to "RAM / disk" appears only above
+  // 90% full, and never claims a healthy disk when there is no reading.
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, resources: "20 GB RAM · 24G / 58G disk", diskPct: 77 } }, "*"));
+  await page.waitForTimeout(60);
+  check("disk warning hidden at 77%", !(await page.locator("#sysDiskWarn").isVisible()));
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, resources: "20 GB RAM · 55G / 58G disk", diskPct: 94 } }, "*"));
+  await page.waitForTimeout(60);
+  check("disk warning shown at 94%", await page.locator("#sysDiskWarn").isVisible());
+  check("disk warning names the percentage", /94% full/.test(await page.getAttribute("#sysDiskWarn", "title")));
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, diskPct: 90 } }, "*"));
+  await page.waitForTimeout(60);
+  check("disk warning hidden at exactly 90%", !(await page.locator("#sysDiskWarn").isVisible()));
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, diskPct: 97 } }, "*"));
+  await page.waitForTimeout(60);
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, resources: "20 GB RAM" } }, "*"));
+  await page.waitForTimeout(60);
+  check("disk warning survives a state without a reading", await page.locator("#sysDiskWarn").isVisible());
+
   // stale-data: after a successful probe, an offline/failed refresh must CLEAR the
   // VM-derived fields rather than leave the prior values on screen.
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: false, host: "h.example.net", hostShort: "agent-vm" } }, "*"));
   await page.waitForTimeout(80);
   check("offline clears vm name", (await page.locator("#sysVm").innerText()) === "—");
   check("offline clears resources", (await page.locator("#sysResources").innerText()) === "—");
+  check("offline clears the disk warning", !(await page.locator("#sysDiskWarn").isVisible()));
   check("offline shows OFFLINE pill", /OFFLINE/.test(await page.locator("#pillStatus").innerText()));
   check("offline clears agent versions", (await page.locator("#agentList .agent .ver").first().innerText()).trim() === "");
   check("offline clears project chips", (await page.locator("#projChips .chip").innerText()).trim() === "—");

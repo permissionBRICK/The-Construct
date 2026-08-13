@@ -339,6 +339,22 @@
   // ── Render state pushed from the extension ──────────────────────────────────
   function text(id, v) { const e = $(id); if (e && v != null) e.textContent = v; }
 
+  // Disk-pressure flag next to "RAM / disk". Shown above 90% full only; the title
+  // carries the actual number (the icon itself stays a glanceable "look at this").
+  // pct === null means "no reading" (offline / older VM) -> hide rather than imply
+  // a healthy disk.
+  function setDiskWarn(pct) {
+    const e = $("sysDiskWarn");
+    if (!e) return;
+    const warn = typeof pct === "number" && pct > 90;
+    e.hidden = !warn;
+    if (warn) {
+      const msg = "VM disk is " + pct + "% full — free space before it breaks provisioning and agent work";
+      e.title = msg;
+      e.setAttribute("aria-label", msg);
+    }
+  }
+
   function setOnline(online) {
     const pill = $("pillStatus");
     if (!pill) return;
@@ -388,7 +404,7 @@
   // Blank the VM-derived live fields so an offline/failed refresh never leaves
   // stale values from a previous successful probe on screen.
   function clearLiveVmData() {
-    text("sysVm", "—"); text("sysResources", "—"); text("sysUbuntu", "—");
+    text("sysVm", "—"); text("sysResources", "—"); text("sysUbuntu", "—"); setDiskWarn(null);
     // The install/reprovision markers are VM-derived too, so drop them back to the
     // "—" placeholder when we have no trustworthy VM data (offline / probe failed).
     text("pillInstalled", "installed —"); text("pillReprovisioned", "reprovisioned —");
@@ -442,6 +458,7 @@
 
     if (s.vmName != null) text("sysVm", s.vmName || "—");
     if (s.resources != null) text("sysResources", s.resources || "—");
+    if (s.diskPct != null) setDiskWarn(s.diskPct);
     if (s.ubuntu != null) text("sysUbuntu", s.ubuntu || "—");
     if (s.constructRev) text("constructRev", s.constructRev);
     // Authoritative on the online path: a value shows the date, an absent marker

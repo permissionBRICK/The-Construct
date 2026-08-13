@@ -61,7 +61,11 @@
           <div class="mhead"><h2 class="seclabel">System</h2><button class="btn ghost" data-cmd="refresh">refresh</button></div>
           <div class="row"><span class="k">Hyper-V VM</span><span class="v"><b id="sysVm">—</b></span></div>
           <div class="row"><span class="k">Reachable at</span><span class="v" id="sysHost">—</span></div>
-          <div class="row"><span class="k">RAM / disk</span><span class="v" id="sysResources">—</span></div>
+          <div class="row"><span class="k">RAM / disk</span><span class="v"><span id="sysResources">—</span><!--
+            Disk-pressure flag: shown only above 90% full (see panel.js). A full VM
+            disk breaks provisioning and agent work in ways that read as permission
+            bugs, so it earns a visible warning before it bites.
+         --><span id="sysDiskWarn" class="diskwarn" role="img" hidden><svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 2.2 15 14.2H1z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M8 6.6v3.3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="12.1" r="0.95" fill="currentColor"/></svg></span></span></div>
           <div class="row"><span class="k">Ubuntu</span><span class="v" id="sysUbuntu">—</span></div>
         </section>
 

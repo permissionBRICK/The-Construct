@@ -89,6 +89,11 @@
           "default": "",
           "markdownDescription": "Windows microphone passthrough: the exact DirectShow capture-device name to record from. Leave empty to auto-detect the first audio device. List devices with `ffmpeg -list_devices true -f dshow -i dummy` and copy a name from the DirectShow audio section (e.g. `Microphone (Realtek(R) Audio)`)."
         },
+        "construct.notifications": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show desktop notifications an agent queues on the VM with `construct notify \"…\"` (e.g. telling you a long job finished). They arrive over one long-lived SSH connection that waits on the VM and reconnects itself, so delivery is immediate and idle costs nothing, and it works even when no Construct panel is open. Notifications appear as **Windows notifications** and stay in the notification centre; if Windows can't show one, it falls back to a VS Code notification. With several VS Code windows open, exactly one shows each notification."
+        },
         "construct.repatchDelaySeconds": {
           "type": "number",
           "default": 20,
