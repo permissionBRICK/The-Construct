@@ -32,20 +32,29 @@ AI_CONSOLE_INTEGRATION="${AI_CONSOLE_INTEGRATION:-true}"
 # can be overridden (e.g. by provision.sh, which forces root for VS Code use).
 TARGET_USER="${TARGET_USER:-${SUDO_USER:-root}}"
 
-if [[ "${EUID}" -ne 0 ]]; then
-  err "Run with sudo: sudo ${REPO_DIR}/bin/install-ai-tools.sh"
-  exit 1
+# The plain-Bash unit tests source this file for its installer helpers alone:
+# skip the root/config preconditions here and the tool dispatch at the bottom,
+# so sourcing installs nothing and touches no VM paths.
+_FUNCS_ONLY="${CONSTRUCT_AI_TOOLS_FUNCS_ONLY:-false}"
+
+if [[ "${_FUNCS_ONLY}" != "true" ]]; then
+  if [[ "${EUID}" -ne 0 ]]; then
+    err "Run with sudo: sudo ${REPO_DIR}/bin/install-ai-tools.sh"
+    exit 1
+  fi
+
+  if [[ ! -f "${CONFIG_FILE}" ]]; then
+    err "Missing config file: ${CONFIG_FILE}"
+    exit 1
+  fi
 fi
 
-if [[ ! -f "${CONFIG_FILE}" ]]; then
-  err "Missing config file: ${CONFIG_FILE}"
-  exit 1
+if [[ "${_FUNCS_ONLY}" != "true" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "${CONFIG_FILE}"
+  set +a
 fi
-
-set -a
-# shellcheck disable=SC1090
-. "${CONFIG_FILE}"
-set +a
 
 AI_TOOLS="${AI_TOOLS_OVERRIDE:-${AI_TOOLS:-}}"
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-/root/repos}"
@@ -123,64 +132,147 @@ run_installer_with_retries() {
   return 1
 }
 
+# Resolve the latest opencode release WITHOUT api.github.com. The official
+# installer looks the version up through the unauthenticated GitHub REST API,
+# which is rate-limited to 60 requests/hour per SOURCE IP -- behind a corporate
+# NAT that budget is shared by the whole office and is routinely exhausted, so
+# the installer exits 1 with "Failed to fetch version information" on every
+# attempt (retrying just hits the same wall; the quota resets hourly). The plain
+# releases/latest redirect is served by github.com itself and carries no such
+# quota, so resolve the tag here and hand it to the installer via its VERSION
+# env var -- which skips the API call entirely. Empty output = unresolved, the
+# caller then runs the installer unpinned and falls back to npm.
+opencode_latest_version() {
+  curl -sI --max-time 20 -o /dev/null -w '%{redirect_url}' \
+    https://github.com/anomalyco/opencode/releases/latest 2>/dev/null |
+    sed -n 's#.*/releases/tag/v\([0-9][^/]*\)$#\1#p'
+}
+
 opencode_official_installer() {
-  curl -fsSL https://opencode.ai/install | bash
+  local version="${1:-}"
+  if [[ -n "${version}" ]]; then
+    curl -fsSL https://opencode.ai/install | VERSION="${version}" bash
+  else
+    curl -fsSL https://opencode.ai/install | bash
+  fi
+}
+
+# Fallback path when GitHub is unreachable (proxy, blocklist, rate limit): the
+# opencode-ai npm package ships the same release, and the npm registry is
+# usually reachable/mirrored where raw GitHub downloads are not -- it is already
+# how codex and t3 get installed here. Node may not be provisioned yet (this
+# script runs before install-sdks.sh), so bootstrap it like install_codex does.
+opencode_npm_fallback() {
+  local version="${1:-}" spec="opencode-ai@latest"
+  if [[ -n "${version}" ]]; then spec="opencode-ai@${version}"; fi
+  if ! command -v npm >/dev/null 2>&1; then
+    step "Installing Node.js 22.x (required for the opencode npm fallback)"
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash - || return 1
+    DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs || return 1
+  fi
+  # The package's postinstall unpacks the platform binary; newer npm gates
+  # install scripts behind --allow-scripts, older npm ignores the unknown flag.
+  npm install -g "${spec}" --allow-scripts=opencode-ai
+}
+
+# One line per endpoint the install needs, so a failed install says WHY instead
+# of leaving the operator to guess between "offline", "proxy" and "rate limit".
+opencode_reachability_note() {
+  local url code
+  for url in https://github.com https://api.github.com/rate_limit https://registry.npmjs.org; do
+    code="$(curl -s --max-time 15 -o /dev/null -w '%{http_code}' "${url}" 2>/dev/null || echo "000")"
+    note "  ${url} -> HTTP ${code}$([[ "${code}" == "000" ]] && printf ' (unreachable: no route, DNS or proxy block)')"
+  done
 }
 
 install_opencode() {
   step "Installing opencode CLI"
-  # Always run the official installer: on a fresh VM it installs opencode, and on
-  # a re-provision it updates an existing install to the latest version (the
-  # installer fetches the newest release). When opencode is already present a
-  # failed update (e.g. no network) is non-fatal -- we keep the working copy
-  # rather than aborting provisioning.
-  if command -v opencode >/dev/null 2>&1; then
-    note "opencode already installed; updating to the latest version"
-    if ! run_installer_with_retries "opencode" opencode_official_installer; then
-      warn "opencode update failed; keeping the existing version"
-    fi
+  local had_opencode=false opencode_version
+  if command -v opencode >/dev/null 2>&1; then had_opencode=true; fi
+
+  opencode_version="$(opencode_latest_version || true)"
+  if [[ -n "${opencode_version}" ]]; then
+    note "latest opencode release: ${opencode_version} (pinned, so the installer skips the rate-limited GitHub API)"
   else
-    run_installer_with_retries "opencode" opencode_official_installer
+    warn "could not resolve the latest opencode release from github.com; letting the installer decide"
   fi
 
-  opencode_bin="$(command -v opencode || true)"
-  if [[ "${opencode_bin}" == "/usr/local/bin/opencode" ]]; then
-    # On a re-provision the symlink we manage is already on PATH, so command -v
-    # reports it back to us. Ignore it here and resolve the real install
-    # location below; otherwise we would symlink /usr/local/bin/opencode to
-    # itself (a circular symlink) and opencode-serve fails with 203/EXEC.
-    opencode_bin=""
+  # Always run the official installer: on a fresh VM it installs opencode, and on
+  # a re-provision it updates an existing install to the latest version. When
+  # opencode is already present a failed update (e.g. no network) is non-fatal --
+  # we keep the working copy rather than aborting provisioning.
+  if [[ "${had_opencode}" == true ]]; then
+    note "opencode already installed; updating to the latest version"
   fi
-  if [[ -z "${opencode_bin}" ]]; then
-    # The installer drops the binary under $HOME (root when run via sudo).
+  if ! run_installer_with_retries "opencode" opencode_official_installer "${opencode_version}"; then
+    warn "official opencode installer failed; falling back to npm (opencode-ai)"
+    if ! opencode_npm_fallback "${opencode_version}"; then
+      opencode_reachability_note
+      if [[ "${had_opencode}" == true ]]; then
+        warn "opencode update failed (installer and npm); keeping the existing version"
+      else
+        err "opencode install failed: neither the official installer nor npm could fetch it"
+        return 1
+      fi
+    fi
+  fi
+
+  # Resolve the binary /usr/local/bin/opencode should point at. command -v may
+  # report our own symlink from a previous provision, or an npm global shim
+  # (with Ubuntu's apt/nodesource npm the global prefix is /usr/local, so the
+  # shim itself IS /usr/local/bin/opencode -- a symlink into node_modules).
+  # Resolving THROUGH the link chain handles both; what must never happen is
+  # symlinking /usr/local/bin/opencode to itself, which made opencode-serve fail
+  # with 203/EXEC.
+  opencode_bin=""
+  opencode_path="$(command -v opencode || true)"
+  if [[ -n "${opencode_path}" ]]; then
+    opencode_resolved="$(readlink -f "${opencode_path}" 2>/dev/null || true)"
+    if [[ -n "${opencode_resolved}" && -x "${opencode_resolved}" ]]; then
+      if [[ "${opencode_resolved}" != "/usr/local/bin/opencode" ]]; then
+        opencode_bin="${opencode_resolved}"
+      elif [[ ! -L /usr/local/bin/opencode ]]; then
+        # A real binary already sits at the PATH location; nothing to link.
+        ok "opencode is already installed at /usr/local/bin/opencode"
+        opencode_bin=""
+        opencode_path="/usr/local/bin/opencode"
+      fi
+    fi
+  fi
+  if [[ -z "${opencode_bin}" && "${opencode_path}" != "/usr/local/bin/opencode" ]]; then
+    # The official installer drops the binary under $HOME (root when run via
+    # sudo); the npm package installs it inside its global node_modules.
     for candidate in \
       /root/.opencode/bin/opencode \
       /root/.local/bin/opencode \
       "${HOME:-/root}/.opencode/bin/opencode" \
-      "${HOME:-/root}/.local/bin/opencode"; do
+      "${HOME:-/root}/.local/bin/opencode" \
+      /usr/local/lib/node_modules/opencode-ai/bin/opencode.exe \
+      /usr/lib/node_modules/opencode-ai/bin/opencode.exe; do
       if [[ -x "${candidate}" ]]; then
         opencode_bin="${candidate}"
         break
       fi
     done
   fi
-  if [[ -z "${opencode_bin}" ]]; then
-    # Last resort: search common install roots for the binary.
-    opencode_bin="$(find /root /home /usr/local -maxdepth 4 -type f -name opencode -perm -u+x 2>/dev/null | head -n1 || true)"
+  if [[ -z "${opencode_bin}" && "${opencode_path}" != "/usr/local/bin/opencode" ]]; then
+    # Last resort: search common install roots for either binary name.
+    opencode_bin="$(find /root /home /usr/local/lib -maxdepth 5 -type f \
+      \( -name opencode -o -name opencode.exe \) -perm -u+x 2>/dev/null | head -n1 || true)"
   fi
-  if [[ -z "${opencode_bin}" ]]; then
+  if [[ -n "${opencode_bin}" ]]; then
+    # Resolve through any intermediate symlinks so the link target is the real
+    # binary, and never point the symlink at itself.
+    opencode_bin="$(readlink -f "${opencode_bin}" 2>/dev/null || echo "${opencode_bin}")"
+    if [[ "${opencode_bin}" == "/usr/local/bin/opencode" || ! -x "${opencode_bin}" ]]; then
+      warn "refusing to create opencode symlink: resolved path is invalid (${opencode_bin})"
+      return 1
+    fi
+    ln -sf "${opencode_bin}" /usr/local/bin/opencode
+  elif [[ ! -x /usr/local/bin/opencode ]]; then
     warn "opencode install completed, but binary was not found in PATH or common locations"
     return 1
   fi
-
-  # Resolve through any intermediate symlinks so the link target is the real
-  # binary, and never point the symlink at itself.
-  opencode_bin="$(readlink -f "${opencode_bin}" 2>/dev/null || echo "${opencode_bin}")"
-  if [[ "${opencode_bin}" == "/usr/local/bin/opencode" || ! -x "${opencode_bin}" ]]; then
-    warn "refusing to create opencode symlink: resolved path is invalid (${opencode_bin})"
-    return 1
-  fi
-  ln -sf "${opencode_bin}" /usr/local/bin/opencode
 
   # Seed the global opencode config (permission=allow) BEFORE starting the
   # service so opencode-serve comes up with prompts disabled. The unit runs as
@@ -685,6 +777,11 @@ install_t3code() {
     journalctl -u t3code-serve --no-pager -n 30 >&2 || true
   fi
 }
+
+# Sourced for the helpers only (unit tests): stop before anything installs.
+if [[ "${_FUNCS_ONLY}" == "true" ]]; then
+  return 0 2>/dev/null || exit 0
+fi
 
 failed=0
 run_tool() {
