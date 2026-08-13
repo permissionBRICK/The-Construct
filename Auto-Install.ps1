@@ -127,6 +127,9 @@ param(
     # "stable"/"nightly".
     [ValidateSet("", "stable", "nightly")]
     [string]$T3CodeChannel = "",
+    # Forwarded down: opt-in T3 Code usage-limit auto-resume (Construct patches the
+    # t3 dist bundle). Empty = keep the VM's saved choice; "true"/"false".
+    [string]$T3CodeLimitResume = "",
     # Forwarded to Create-AgentVM.ps1: Hyper-V automatic checkpoints (a snapshot at
     # every VM start). OFF by default for Construct -- on a disposable agent VM the
     # checkpoint only costs disk and I/O. Applies when the VM is CREATED (install /
@@ -708,6 +711,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         $reprovArgs['MicPassthrough'] = $MicPassthrough
         $reprovArgs['T3Code'] = $T3Code
         $reprovArgs['T3CodeChannel'] = $T3CodeChannel
+        $reprovArgs['T3CodeLimitResume'] = $T3CodeLimitResume
         if ($PSBoundParameters.ContainsKey('AgentPassword')) { $reprovArgs['AgentPassword'] = $AgentPassword }
         if ($reprovCloneCredB64) { $reprovArgs['GitCloneCredentialsB64'] = $reprovCloneCredB64 }
         if ($PSBoundParameters.ContainsKey('AutoResolve')) { $reprovArgs['AutoResolve'] = $AutoResolve }
@@ -716,8 +720,12 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
             if (-not $reprovCmd.Parameters.ContainsKey('T3CodeChannel')) {
                 $reprovArgs.Remove('T3CodeChannel')
             }
+            if (-not $reprovCmd.Parameters.ContainsKey('T3CodeLimitResume')) {
+                $reprovArgs.Remove('T3CodeLimitResume')
+            }
         } catch {
             $reprovArgs.Remove('T3CodeChannel')
+            $reprovArgs.Remove('T3CodeLimitResume')
         }
         try {
             Invoke-DeElevatedProvision -ScriptPath $provisionScript -ProvisionParams $reprovArgs
@@ -1046,6 +1054,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
                 MicPassthrough        = $MicPassthrough
                 T3Code                = $T3Code
                 T3CodeChannel         = $T3CodeChannel
+                T3CodeLimitResume     = $T3CodeLimitResume
             }
             if ($acCloneCredB64) { $acReprovArgs['GitCloneCredentialsB64'] = $acCloneCredB64 }
             if ($PSBoundParameters.ContainsKey('AutoResolve')) { $acReprovArgs['AutoResolve'] = $AutoResolve }
@@ -1054,8 +1063,12 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
                 if (-not $acProvCmd.Parameters.ContainsKey('T3CodeChannel')) {
                     $acReprovArgs.Remove('T3CodeChannel')
                 }
+                if (-not $acProvCmd.Parameters.ContainsKey('T3CodeLimitResume')) {
+                    $acReprovArgs.Remove('T3CodeLimitResume')
+                }
             } catch {
                 $acReprovArgs.Remove('T3CodeChannel')
+                $acReprovArgs.Remove('T3CodeLimitResume')
             }
             Invoke-DeElevatedProvision -ScriptPath $provisionScript -ProvisionParams $acReprovArgs
         } catch {

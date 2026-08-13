@@ -334,6 +334,17 @@ if [[ -f "${CONFIG_FILE}" ]]; then
 fi
 T3CODE_CHANNEL="${T3CODE_CHANNEL:-${_t3code_channel_saved:-stable}}"
 [[ "${T3CODE_CHANNEL}" == "nightly" ]] || T3CODE_CHANNEL=stable
+# Opt-in usage-limit auto-resume for T3 Code: when a Claude turn dies on a
+# usage/session limit, park the thread and auto-restart it once the limit
+# window resets (Construct patches the installed t3 dist bundle — see
+# extension/vm/construct-t3park-patch.mjs). Disabled by default; same
+# keep-saved semantics as T3CODE itself.
+_t3code_limit_resume_saved=""
+if [[ -f "${CONFIG_FILE}" ]]; then
+  _t3code_limit_resume_saved="$(sed -n 's/^T3CODE_LIMIT_RESUME=//p' "${CONFIG_FILE}" | head -1 || true)"
+fi
+T3CODE_LIMIT_RESUME="${T3CODE_LIMIT_RESUME:-${_t3code_limit_resume_saved:-false}}"
+[[ "${T3CODE_LIMIT_RESUME}" == "true" ]] || T3CODE_LIMIT_RESUME=false
 
 # Optional global git identity to set on the VM. Passed base64-encoded (see
 # Provision-AgentVM.ps1) so names/emails with spaces or apostrophes survive the
@@ -371,6 +382,7 @@ note "    CLAUDE_PARTIAL_STREAMING=${CLAUDE_PARTIAL_STREAMING}"
 note "    MIC_PASSTHROUGH=${MIC_PASSTHROUGH}"
 note "    T3CODE=${T3CODE}"
 note "    T3CODE_CHANNEL=${T3CODE_CHANNEL}"
+note "    T3CODE_LIMIT_RESUME=${T3CODE_LIMIT_RESUME}"
 note "    SMB_SHARE=${SMB_SHARE:-(saved/default)}"
 
 # Free space FIRST: on a full disk every later step fails in its own confusing
@@ -445,6 +457,7 @@ write_configuration() {
   cfg MIC_PASSTHROUGH "${MIC_PASSTHROUGH}" || return
   cfg T3CODE "${T3CODE}" || return
   cfg T3CODE_CHANNEL "${T3CODE_CHANNEL}" || return
+  cfg T3CODE_LIMIT_RESUME "${T3CODE_LIMIT_RESUME}" || return
   install -d -m 0755 "${WORKSPACE_ROOT}"
 }
 run_step critical "Writing configuration to ${CONFIG_FILE}" write_configuration
@@ -536,7 +549,7 @@ done
 if [[ "${T3CODE}" == "true" ]]; then
   run_step optional "Installing T3 Code web GUI" \
     env TARGET_USER="${CLAUDE_USER}" AI_TOOLS_OVERRIDE=t3code AI_CONSOLE_INTEGRATION=false \
-    T3CODE_CHANNEL="${T3CODE_CHANNEL}" \
+    T3CODE_CHANNEL="${T3CODE_CHANNEL}" T3CODE_LIMIT_RESUME="${T3CODE_LIMIT_RESUME}" \
     bash "${REPO_DIR}/bin/install-ai-tools.sh"
 elif [[ -f /etc/systemd/system/t3code-serve.service ]]; then
   run_step optional "Disabling T3 Code web GUI (T3CODE=false)" \

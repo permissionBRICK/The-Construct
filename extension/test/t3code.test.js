@@ -87,12 +87,44 @@ ok("plan: stored nightly + omitted channel (no switch) — merged preserves nigh
 ok("plan: enable takes priority over channel mismatch (one op, not two)",
   (() => { const r = plan(true, false, "nightly", "stable"); return r && r.action === "enable" && r.channel === "nightly"; })());
 
+// ── planT3ParkLiveAction (usage-limit auto-resume) ───────────────────────────
+const ppark = t3.planT3ParkLiveAction;
+ok("park plan: fresh enable + preference on -> apply after install",
+  ppark({ action: "enable", channel: "stable" }, true, true, false) === "apply");
+ok("park plan: fresh enable re-applies even when preference unchanged (bundle is stock)",
+  ppark({ action: "enable", channel: "stable" }, true, true, true) === "apply");
+ok("park plan: enable + preference off -> nothing (stock bundle needs no revert)",
+  ppark({ action: "enable", channel: "stable" }, true, false, true) === null);
+ok("park plan: channel switch re-applies when preference on",
+  ppark({ action: "setChannel", channel: "nightly" }, true, true, true) === "apply");
+ok("park plan: T3 disable -> nothing", ppark({ action: "disable" }, false, true, true) === null);
+ok("park plan: steady T3, preference flips on -> apply", ppark(null, true, true, false) === "apply");
+ok("park plan: steady T3, preference flips off -> revert", ppark(null, true, false, true) === "revert");
+ok("park plan: steady T3, preference unchanged -> nothing", ppark(null, true, true, true) === null);
+ok("park plan: T3 off entirely -> nothing", ppark(null, false, true, false) === null);
+
+// ── buildLimitResume{Enable,Disable}Script ───────────────────────────────────
+const parkOn = t3.buildLimitResumeEnableScript();
+const parkOff = t3.buildLimitResumeDisableScript();
+ok("park enable: uploads the patcher and applies it",
+  /base64 -d > \/tmp\/construct-t3park-patch\.mjs/.test(parkOn) && /t3park-patch\.mjs apply/.test(parkOn));
+ok("park enable: propagates the patcher's exit code (anchor mismatch must surface)",
+  /apply \|\| exit \$\?/.test(parkOn));
+ok("park enable: persists the opt-in and restarts the service",
+  /cfgset T3CODE_LIMIT_RESUME true/.test(parkOn) && /systemctl restart t3code-serve/.test(parkOn));
+ok("park enable: mints the resume API token after the restart (needs the t3 DB)",
+  /mint-token/.test(parkOn) && parkOn.indexOf("systemctl restart") < parkOn.indexOf("mint-token"));
+ok("park enable: embedded patcher is pure base64 (survives single-quoting)",
+  (() => { const m = parkOn.match(/printf '%s' '([^']*)'/); return m && /^[A-Za-z0-9+/=]+$/.test(m[1]); })());
+ok("park disable: reverts, clears the opt-in, best-effort exit 0",
+  /t3park-patch\.mjs revert/.test(parkOff) && /cfgset T3CODE_LIMIT_RESUME false/.test(parkOff) && /exit 0/.test(parkOff));
+
 // ── the generated bash parses ────────────────────────────────────────────────
 // (bash -n via child_process; skipped quietly when bash isn't available, e.g. a
 // bare Windows host running the suite.)
 try {
   const cp = require("child_process");
-  for (const [name, script] of [["install", inst], ["install(nightly)", instN], ["disable", dis], ["pairing", pair]]) {
+  for (const [name, script] of [["install", inst], ["install(nightly)", instN], ["disable", dis], ["pairing", pair], ["park-enable", parkOn], ["park-disable", parkOff]]) {
     const r = cp.spawnSync("bash", ["-n"], { input: script, encoding: "utf8" });
     if (r.error) { console.log("  SKIP  bash -n (" + name + ") — bash unavailable"); continue; }
     ok("bash -n: " + name + " script parses", r.status === 0, (r.stderr || "").trim());

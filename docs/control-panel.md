@@ -321,6 +321,31 @@ The choice is persisted in `config.env` (`T3CODE_CHANNEL`), rides reprovision/re
 survives a backup/restore cycle. On the agent card, a nightly install is annotated so it's
 visually distinguishable from stable.
 
+### T3 Code auto-resume on usage limit
+
+Stock T3 Code simply fails a thread whose Claude turn dies on a usage/session limit — the
+turn ends in an error banner and nothing happens when the limit window resets. The
+**T3 Code auto-resume on usage limit** toggle (off by default) opts the VM into a
+Construct-applied runtime patch of the installed `t3` server that fixes this: the patched
+server watches the Claude Agent SDK's structured rate-limit telemetry, and when a turn
+fails while the account is limit-rejected (or the error text matches the usage-limit
+message), it **parks** the thread and automatically dispatches a continuation turn once
+the limit resets (plus a one-minute margin). Parked threads are persisted
+(`~/.t3/userdata/t3park-pending.json`), so they survive a service restart; the resume
+re-uses the thread's own model/runtime settings and is skipped if you already continued
+the thread manually.
+
+Like the mic switch it's a **live** toggle: flipping it on patches the bundle over SSH and
+restarts `t3code-serve`; flipping it off restores the pristine bundle (a backup is kept
+next to it). The preference is persisted in `config.env` (`T3CODE_LIMIT_RESUME`) and rides
+reprovision/reinstall — the provisioner re-applies the patch after every t3
+install/update. The patch is **version-guarded**: before touching anything it verifies the
+exact code sites it hooks (verified against `t3@0.0.33`); if a newer t3 bundle looks
+different, the patch is skipped with a warning and t3 simply runs stock until Construct's
+patcher (`extension/vm/construct-t3park-patch.mjs`) is updated. The auto-resume dispatch
+authenticates with its own long-lived t3 API token (`/etc/construct/t3park-token`, minted
+on enable).
+
 ## Troubleshooting
 
 If a lifecycle action doesn't behave as expected:

@@ -1736,6 +1736,13 @@ function handleMessage(message, webview, context) {
         const newCh = merged.t3codeChannel || "stable";
         const oldCh = prev.t3codeChannel || "stable";
         const t3plan = t3code.planT3LiveAction(wantT3, hadT3, newCh, oldCh);
+        // Usage-limit auto-resume rides on top: enable/setChannel npm-reinstall
+        // the bundle (stock), so the patch is (re)applied AFTER those complete —
+        // the shared serial queue inside t3code.js keeps the order right. On a
+        // plain preference flip (T3 unchanged) it applies/reverts on its own.
+        const wantPark = message.settings && message.settings.t3codeLimitResume === true;
+        const hadPark = prev.t3codeLimitResume === true;
+        const parkPlan = t3code.planT3ParkLiveAction(t3plan, wantT3, wantPark, hadPark);
         if (t3plan) {
           if (t3plan.action === "enable") {
             t3code.enableOnVm({ channel: t3plan.channel }).then(() => refreshAll());
@@ -1744,6 +1751,9 @@ function handleMessage(message, webview, context) {
           } else if (t3plan.action === "setChannel") {
             t3code.setChannelOnVm(t3plan.channel).then(() => refreshAll());
           }
+        }
+        if (parkPlan) {
+          t3code.setLimitResumeOnVm(parkPlan === "apply").then(() => refreshAll());
         }
         // Automatic checkpoints are a HYPER-V property, decided when the VM is
         // created — so the saved value rides the next reinstall/redownload for free.
