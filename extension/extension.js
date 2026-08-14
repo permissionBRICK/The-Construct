@@ -510,9 +510,16 @@ async function deliverNotification(entry) {
 /** Spawn the toast script. Resolves "" on success, else a short failure reason.
  *  No console window: a powershell.exe spawned straight from the extension host has
  *  no console to inherit and cannot allocate one (see lifecycle.js — the visible
- *  flows must force one via `cmd /c start`), and windowsHide seals it. */
+ *  flows must force one via `cmd /c start`), and windowsHide seals it.
+ *
+ *  A toast that DID appear can still have something to say (it went out under the
+ *  fallback app id, or the notifier's setting was odd) — that goes to the log as a
+ *  note, because "the toast worked but here is why it may look wrong" is exactly the
+ *  information that was missing when this path failed in the field. */
 function raiseWindowsToast(entry) {
-  const cmd = notify.buildToastCommand(entry);
+  const cmd = notify.buildToastCommand(entry, {
+    file: notify.powershellPath(process.env, (p) => { try { return fs.existsSync(p); } catch (_) { return false; } }),
+  });
   return new Promise((resolve) => {
     let child, stderr = "", settled = false;
     const finish = (reason) => { if (!settled) { settled = true; resolve(reason); } };
@@ -526,7 +533,9 @@ function raiseWindowsToast(entry) {
     child.on("error", (e) => { clearTimeout(killTimer); finish("spawn failed: " + (e && e.message ? e.message : e)); });
     child.on("close", (code) => {
       clearTimeout(killTimer);
-      finish(code === 0 ? "" : (stderr.trim().split("\n").pop() || `powershell exited ${code}`));
+      const res = notify.toastResult(code, stderr);
+      if (res.ok && res.note) logLine("notify: toast shown, with a note (" + res.note + ")");
+      finish(res.reason);
     });
   });
 }

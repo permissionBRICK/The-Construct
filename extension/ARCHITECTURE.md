@@ -75,8 +75,9 @@ extension/
                       document, pure + injection-escaped) — no vscode dependency
     notify.js         VM -> host desktop notifications: the claim protocol
                       (buildClaimScript/parseEntries/selectDeliverable) + the Windows
-                      toast payload (toastXml/buildToastScript/buildToastCommand),
-                      pure + sanitized — no vscode dependency
+                      toast payload (toastXml/buildToastScript/buildToastCommand,
+                      powershellPath/toastResult/TOAST_EXIT), pure + sanitized — no
+                      vscode dependency
     importui.js       pure decision core for the remote-config rename-on-collision import
                       (planRenamedImport: validate target + build canonical profile +
                       manifest provenance + base) — the testable half of extension.js's
@@ -180,6 +181,12 @@ extension/
                       (hostile/unknown -> default), picker HTML nonce/CSP/escaping
     usage.test.js     plain-node ccusage script (daily/monthly/total window mapping) + parse (totalCost/costUSD/missing/error/zero/array) + formatting + per-report cache TTL/coalesce + isCurrentReport stale-collection ordering + export payload, injected ssh+clock (105 checks)
     audio.test.js     plain-node guard-patch apply/revert/idempotency + VM script builders (injection proofs) + ssh -R argv + AudioSession gating + HostAudio enable/disable/rollback + tunnel settle-window (async early death + later death) + multi-window port range (busy-skip/bind-race retry/no-free-port/self-port disable) (233 checks)
+    notify.test.js    plain-node notification units — claim/watch script invariants (atomic
+                      claim, stranded-entry recovery, inotify monitor mode), stream split,
+                      parse/select/backoff, toast XML + PowerShell injection proofs, the
+                      notifier-candidate/exit-code contract, toastResult and powershellPath
+                      (100 checks). The generated toast script's RUNTIME behaviour is covered
+                      by `../../test/notify-toast.test.ps1` (pwsh, WinRT stubbed in C#)
     repatch.test.js   plain-node startup patch-verification units — parsePatchStatus (line-anchored/last-wins/CRLF) + planStartupActions (the streamingOff+micOn+no-tunnel retry regression) + decideRepairs (on∧stock truth table) + confirmPatched + runStartupRepatch orchestration vs a fake ssh (unreachable/probe-fail/streaming-only/mic-only/both-patched/no-confirm) (39 checks)
 ```
 
@@ -300,9 +307,33 @@ module, regardless of `online`.
   **No console flashes**: a powershell.exe spawned straight from the extension host
   inherits no console and can't allocate one (the inverse of the `cmd /c start` note
   above — that's what FORCES a window), plus `-WindowStyle Hidden` + `windowsHide`.
-  The script registers its AppUserModelId under HKCU (Windows silently drops toasts
-  from an unknown app id) and exits non-zero when `$notifier.Setting != Enabled`, so a
-  suppressed toast falls back to a VS Code notification instead of vanishing. Agent
+  The script registers its AppUserModelId under HKCU — the registry key IS the
+  registration, since we have no installer and no Start-menu shortcut, and Windows
+  silently drops toasts from an app id it does not know (`ShowInSettings` so the user
+  can mute/un-mute us deliberately, `ShowInActionCenter` so the toast persists).
+  **The notifier's `Setting` is advisory, not a gate** — and getting that wrong is
+  what made this path fail in the field: an id registered only under HKCU commonly
+  reports `DisabledForApplication` until Windows has seen a toast from it, so gating
+  on `Setting != Enabled` downgraded EVERY notification to a VS Code toast on a
+  machine where notifications were fine. Now a candidate list is tried — our own app
+  id first, then the Start-menu "Windows PowerShell" AUMID that every install
+  registers — preferring whichever reports `Enabled`, pushing the toast through the
+  best non-`Enabled` candidate otherwise, and retrying the next candidate if `Show()`
+  throws. Only `DisabledForUser`/`DisabledByGroupPolicy` suppress — and they veto the
+  whole attempt, not just the candidate that reported them (they are user-/machine-wide
+  switches, so slipping the toast out under the other identity would walk around the
+  user's own setting) — and only then does the VS Code fallback run. `DisabledForApplication` is ambiguous — it is equally what
+  Windows reports when the user genuinely switches us off — so the deliberate case is
+  read where it is unambiguous instead: the per-app `Enabled` flag the Settings UI
+  writes under `…\CurrentVersion\Notifications\Settings\<app id>`. Present and 0 =
+  muted on purpose → exit 2, and NOT re-routed through the fallback identity. Every outcome has
+  its own exit code (`notify.TOAST_EXIT`: 2 suppressed, 3 no WinRT, 4 constrained
+  language mode, 1 anything else) plus a one-line reason on stderr, which
+  `toastResult` turns into the log line — a toast that DID appear but went out under
+  the fallback identity is logged as a note, not a failure. A silent downgrade is the
+  bug; the fallback itself is not. powershell.exe is spawned by its absolute System32
+  path when there is one (`powershellPath`), so a stripped PATH cannot cost a toast.
+  Agent
   text is UNTRUSTED input crossing into a shell and an XML document: it is stripped of
   control characters (a newline would forge a second spool entry), length-capped,
   XML-escaped, and reaches PowerShell only as a base64 blob inside a single-quoted
