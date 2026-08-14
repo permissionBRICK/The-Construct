@@ -144,6 +144,24 @@ try {
 
   ok("mapFromForm: null form -> {}", JSON.stringify(host.mapFromForm(null)) === "{}");
 
+  // ── provisioning-only patch settings ─────────────────────────────────────
+  ok("patch changes: untouched absent/off defaults need no reprovision",
+    host.patchReprovisionChanges({}, { t3codeLimitResume: false, opencodeBackgroundWatcher: false }).length === 0);
+  ok("patch changes: T3 extra-feature transition is reported",
+    JSON.stringify(host.patchReprovisionChanges({ t3codeLimitResume: false }, { t3codeLimitResume: true })) === JSON.stringify(["T3 Code extra features"]));
+  ok("patch changes: OpenCode watcher transition is reported",
+    JSON.stringify(host.patchReprovisionChanges({ opencodeBackgroundWatcher: true }, { opencodeBackgroundWatcher: false })) === JSON.stringify(["OpenCode background watcher"]));
+  ok("patch changes: simultaneous transitions produce one combined prompt list",
+    host.patchReprovisionChanges(
+      { t3codeLimitResume: false, opencodeBackgroundWatcher: false },
+      { t3codeLimitResume: true, opencodeBackgroundWatcher: true },
+    ).length === 2);
+  const extensionSource = fs.readFileSync(path.join(__dirname, "..", "extension.js"), "utf8");
+  ok("patch settings: save path has no live T3/OpenCode patch invocation",
+    !extensionSource.includes("setLimitResumeOnVm") && !extensionSource.includes("setBackgroundWatcherOnVm"));
+  ok("patch settings: changed values offer an immediate reprovision action",
+    extensionSource.includes("offerReprovisionForPatchSettings") && extensionSource.includes('"Reprovision now"'));
+
   // ── the automatic-checkpoint "applied" marker ──────────────────────────────
   // Separate from the PREFERENCE: it records what was actually CONFIRMED onto the VM,
   // and it is what makes the apply-offer correct when the Hyper-V probe can't read the
