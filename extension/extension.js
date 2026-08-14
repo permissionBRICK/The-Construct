@@ -26,6 +26,7 @@ const remote = require("./src/remote");
 const vmpower = require("./src/vmpower");
 const projects = require("./src/projects");
 const audio = require("./src/audio");
+const opencode = require("./src/opencode");
 const t3code = require("./src/t3code");
 const repatch = require("./src/repatch");
 const configsync = require("./src/configsync");
@@ -1752,17 +1753,27 @@ function handleMessage(message, webview, context) {
         const wantPark = message.settings && message.settings.t3codeLimitResume === true;
         const hadPark = prev.t3codeLimitResume === true;
         const parkPlan = t3code.planT3ParkLiveAction(t3plan, wantT3, wantPark, hadPark);
+        let lastT3Action = Promise.resolve();
         if (t3plan) {
           if (t3plan.action === "enable") {
-            t3code.enableOnVm({ channel: t3plan.channel }).then(() => refreshAll());
+            lastT3Action = t3code.enableOnVm({ channel: t3plan.channel }).then(() => refreshAll());
           } else if (t3plan.action === "disable") {
-            t3code.disableOnVm().then(() => refreshAll());
+            lastT3Action = t3code.disableOnVm().then(() => refreshAll());
           } else if (t3plan.action === "setChannel") {
-            t3code.setChannelOnVm(t3plan.channel).then(() => refreshAll());
+            lastT3Action = t3code.setChannelOnVm(t3plan.channel).then(() => refreshAll());
           }
         }
         if (parkPlan) {
-          t3code.setLimitResumeOnVm(parkPlan === "apply").then(() => refreshAll());
+          lastT3Action = t3code.setLimitResumeOnVm(parkPlan === "apply").then(() => refreshAll());
+        }
+        // The OpenCode plugin owns the same VM config file as the T3 live actions.
+        // Sequence it after those actions so simultaneous setting changes cannot
+        // race each other's atomic config update.
+        const wantOpenCodeWatcher = message.settings && message.settings.opencodeBackgroundWatcher === true;
+        const hadOpenCodeWatcher = prev.opencodeBackgroundWatcher === true;
+        const opencodePlan = opencode.planBackgroundWatcherLiveAction(wantOpenCodeWatcher, hadOpenCodeWatcher);
+        if (opencodePlan) {
+          lastT3Action.then(() => opencode.setBackgroundWatcherOnVm(opencodePlan === "enable")).then(() => refreshAll());
         }
         // Automatic checkpoints are a HYPER-V property, decided when the VM is
         // created — so the saved value rides the next reinstall/redownload for free.

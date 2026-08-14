@@ -344,6 +344,16 @@ if [[ -f "${CONFIG_FILE}" ]]; then
 fi
 T3CODE_LIMIT_RESUME="${T3CODE_LIMIT_RESUME:-${_t3code_limit_resume_saved:-false}}"
 [[ "${T3CODE_LIMIT_RESUME}" == "true" ]] || T3CODE_LIMIT_RESUME=false
+# Optional dependency-free OpenCode background watcher plugin. Separate from
+# the T3 patch set: this controls whether OpenCode itself exposes the
+# background/background_output/background_kill tools. Empty input keeps the
+# VM's saved preference across a console reprovision.
+_opencode_background_saved=""
+if [[ -f "${CONFIG_FILE}" ]]; then
+  _opencode_background_saved="$(sed -n 's/^OPENCODE_BACKGROUND_WATCHER=//p' "${CONFIG_FILE}" | head -1 || true)"
+fi
+OPENCODE_BACKGROUND_WATCHER="${OPENCODE_BACKGROUND_WATCHER:-${_opencode_background_saved:-false}}"
+[[ "${OPENCODE_BACKGROUND_WATCHER}" == "true" ]] || OPENCODE_BACKGROUND_WATCHER=false
 
 # Optional global git identity to set on the VM. Passed base64-encoded (see
 # Provision-AgentVM.ps1) so names/emails with spaces or apostrophes survive the
@@ -382,6 +392,7 @@ note "    MIC_PASSTHROUGH=${MIC_PASSTHROUGH}"
 note "    T3CODE=${T3CODE}"
 note "    T3CODE_CHANNEL=${T3CODE_CHANNEL}"
 note "    T3CODE_LIMIT_RESUME=${T3CODE_LIMIT_RESUME}"
+note "    OPENCODE_BACKGROUND_WATCHER=${OPENCODE_BACKGROUND_WATCHER}"
 note "    SMB_SHARE=${SMB_SHARE:-(saved/default)}"
 
 # Free space FIRST: on a full disk every later step fails in its own confusing
@@ -457,6 +468,7 @@ write_configuration() {
   cfg T3CODE "${T3CODE}" || return
   cfg T3CODE_CHANNEL "${T3CODE_CHANNEL}" || return
   cfg T3CODE_LIMIT_RESUME "${T3CODE_LIMIT_RESUME}" || return
+  cfg OPENCODE_BACKGROUND_WATCHER "${OPENCODE_BACKGROUND_WATCHER}" || return
   install -d -m 0755 "${WORKSPACE_ROOT}"
 }
 run_step critical "Writing configuration to ${CONFIG_FILE}" write_configuration
@@ -538,6 +550,7 @@ for _ai_tool in "${_selected_ai_tools[@]}"; do
   [[ -n "${_ai_tool}" ]] || continue
   run_step optional "Installing AI tool: ${_ai_tool}" \
     env TARGET_USER="${CLAUDE_USER}" AI_TOOLS_OVERRIDE="${_ai_tool}" AI_CONSOLE_INTEGRATION=false \
+    OPENCODE_BACKGROUND_WATCHER="${OPENCODE_BACKGROUND_WATCHER}" \
     bash "${REPO_DIR}/bin/install-ai-tools.sh"
 done
 # 4a. T3 Code web GUI: its own opt-in flag (panel settings toggle), not part of

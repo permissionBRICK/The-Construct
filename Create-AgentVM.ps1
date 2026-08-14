@@ -63,6 +63,9 @@ param(
     # microphone passthrough so the mic button survives a rebuild. Off by default.
     # "true"/"false".
     [string]$MicPassthrough = "false",
+    # Forwarded to Provision-AgentVM.ps1: optional OpenCode background watcher.
+    # Empty = keep the VM's saved choice; "true"/"false".
+    [string]$OpenCodeBackgroundWatcher = "",
     # Forwarded to Provision-AgentVM.ps1: opt-in T3 Code web GUI. Empty = keep the
     # VM's saved choice; "true"/"false".
     [string]$T3Code = "",
@@ -234,6 +237,7 @@ if (Get-VM -Name $VmName -ErrorAction SilentlyContinue) {
         if ($PSBoundParameters.ContainsKey('GitEmail'))      { $provArgs['GitEmail']      = $GitEmail }
         if ($PSBoundParameters.ContainsKey('ClaudePartialStreaming')) { $provArgs['ClaudePartialStreaming'] = $ClaudePartialStreaming }
         if ($PSBoundParameters.ContainsKey('MicPassthrough'))         { $provArgs['MicPassthrough']         = $MicPassthrough }
+        if ($PSBoundParameters.ContainsKey('OpenCodeBackgroundWatcher')) { $provArgs['OpenCodeBackgroundWatcher'] = $OpenCodeBackgroundWatcher }
         if ($PSBoundParameters.ContainsKey('T3Code'))                 { $provArgs['T3Code']                 = $T3Code }
         if ($PSBoundParameters.ContainsKey('T3CodeChannel'))          { $provArgs['T3CodeChannel']          = $T3CodeChannel }
         if ($PSBoundParameters.ContainsKey('T3CodeLimitResume'))      { $provArgs['T3CodeLimitResume']      = $T3CodeLimitResume }
@@ -537,6 +541,7 @@ if ($isAutoinstall) {
             if ($PSBoundParameters.ContainsKey('GitEmail'))      { $provArgs['GitEmail']      = $GitEmail }
             if ($PSBoundParameters.ContainsKey('ClaudePartialStreaming')) { $provArgs['ClaudePartialStreaming'] = $ClaudePartialStreaming }
             if ($PSBoundParameters.ContainsKey('MicPassthrough'))         { $provArgs['MicPassthrough']         = $MicPassthrough }
+            if ($PSBoundParameters.ContainsKey('OpenCodeBackgroundWatcher')) { $provArgs['OpenCodeBackgroundWatcher'] = $OpenCodeBackgroundWatcher }
         if ($PSBoundParameters.ContainsKey('T3Code'))                 { $provArgs['T3Code']                 = $T3Code }
             if ($PSBoundParameters.ContainsKey('T3CodeChannel'))          { $provArgs['T3CodeChannel']          = $T3CodeChannel }
             if ($PSBoundParameters.ContainsKey('T3CodeLimitResume'))      { $provArgs['T3CodeLimitResume']      = $T3CodeLimitResume }

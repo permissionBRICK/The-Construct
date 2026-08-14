@@ -118,5 +118,35 @@ ok "a failing installer is retried three times" test "$(grep -c . "${tmp}/instal
 ok "every retry keeps the pinned version" test "$(grep -cx 'VERSION=9.9.9' "${tmp}/installer.log")" = 3
 ok "exhausted retries fail" test "$(cat "${tmp}/retry.rc")" = 1
 
+# ── configure_opencode_background_watcher: managed, reversible, isolated ─────
+watcher_home="${tmp}/watcher-home"
+mkdir -p "${watcher_home}"
+CONSTRUCT_AI_TOOLS_FUNCS_ONLY=true REPO_DIR="${ROOT}" OPENCODE_BACKGROUND_WATCHER=true \
+  bash -c 'source "$1"; configure_opencode_background_watcher "$2" root' _ "${SCRIPT}" "${watcher_home}" \
+  >"${tmp}/watcher-enable.out" 2>&1
+watcher_target="${watcher_home}/.config/opencode/plugins/background.js"
+ok "watcher enable installs the Construct-managed plugin" test -f "${watcher_target}"
+ok "watcher plugin contains all three requested tools" sh -c \
+  "grep -q 'background:' '${watcher_target}' && grep -q 'background_output:' '${watcher_target}' && grep -q 'background_kill:' '${watcher_target}'"
+ok "watcher plugin excludes the Cortecs request hook" sh -c \
+  "! grep -Eq 'enable_model_fallback|chat\\.params|providerID' '${watcher_target}'"
+
+CONSTRUCT_AI_TOOLS_FUNCS_ONLY=true REPO_DIR="${ROOT}" OPENCODE_BACKGROUND_WATCHER=false \
+  bash -c 'source "$1"; configure_opencode_background_watcher "$2" root' _ "${SCRIPT}" "${watcher_home}" \
+  >"${tmp}/watcher-disable.out" 2>&1
+ok "watcher disable removes the managed plugin" test ! -e "${watcher_target}"
+
+mkdir -p "$(dirname "${watcher_target}")"
+printf '%s\n' '// user-owned plugin' >"${watcher_target}"
+if CONSTRUCT_AI_TOOLS_FUNCS_ONLY=true REPO_DIR="${ROOT}" OPENCODE_BACKGROUND_WATCHER=true \
+  bash -c 'source "$1"; configure_opencode_background_watcher "$2" root' _ "${SCRIPT}" "${watcher_home}" \
+  >"${tmp}/watcher-collision.out" 2>&1; then
+  watcher_collision_rc=0
+else
+  watcher_collision_rc=$?
+fi
+ok "watcher enable refuses an unmanaged background.js" test "${watcher_collision_rc}" -ne 0
+ok "watcher collision preserves the unmanaged file" grep -qx '// user-owned plugin' "${watcher_target}"
+
 printf '\n%s passed, %s failed\n' "${pass}" "${fail}"
 [[ "${fail}" -eq 0 ]]

@@ -134,6 +134,31 @@ run_restore "${d}" >/dev/null 2>&1
 ok "hostile channel: normalized to stable (not nightly)" \
   test "$(read_config_key "${d}/config/config.env" T3CODE_CHANNEL)" = "stable"
 
+# ── OpenCode watcher metadata: regenerated, not copied from backup ───────────
+d="$(setup_fixture "opencode-watcher" "false" "stable")"
+printf '{"t3code":false,"t3codeChannel":"stable","opencodeBackgroundWatcher":true}\n' \
+  > "${d}/backup/backup-info.json"
+cp "${ROOT}/bin/install-ai-tools.sh" "${d}/repo/bin/install-ai-tools.sh"
+mkdir -p "${d}/repo/extension/vm"
+cp "${ROOT}/extension/vm/opencode-background.js" "${d}/repo/extension/vm/opencode-background.js"
+make_systemctl_stub "${d}"
+run_restore "${d}" >/dev/null 2>&1
+watcher_target="${d}/export_home/.config/opencode/plugins/background.js"
+ok "watcher metadata: preference restored into config.env" \
+  test "$(read_config_key "${d}/config/config.env" OPENCODE_BACKGROUND_WATCHER)" = "true"
+ok "watcher metadata: managed plugin regenerated from current Construct" test -f "${watcher_target}"
+ok "watcher metadata: regenerated plugin excludes Cortecs behavior" sh -c \
+  "! grep -Eq 'enable_model_fallback|chat\\.params|providerID' '${watcher_target}'"
+
+# Backward compatibility: an old backup without the key must not override a
+# preference already selected for the fresh VM by the panel/rebuild command.
+d="$(setup_fixture "old-backup-keeps-watcher" "false" "stable")"
+printf '%s\n' 'OPENCODE_BACKGROUND_WATCHER=true' > "${d}/config/config.env"
+make_systemctl_stub "${d}"
+run_restore "${d}" >/dev/null 2>&1
+ok "old backup: absent watcher key leaves the current preference untouched" \
+  test "$(read_config_key "${d}/config/config.env" OPENCODE_BACKGROUND_WATCHER)" = "true"
+
 printf '\n  restore-config fixture tests — %d/%d passed\n\n' "${pass}" "$((pass + fail))"
 [ "${fail}" -eq 0 ] || exit 1
 exit 0

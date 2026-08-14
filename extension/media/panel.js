@@ -330,6 +330,7 @@
       autoCheckpoints: swOn($("setAutoCheckpoints")),
       serveWeb: swOn($("setServeWeb")), tunnel: swOn($("setTunnel")), smb: swOn($("setSmb")), mic: swOn($("setMic")),
       partialStreaming: swOn($("setPartialStreaming")),
+      opencodeBackgroundWatcher: swOn($("setOpenCodeBackgroundWatcher")),
       t3code: swOn($("setT3")),
       t3codeChannel: val("setT3Channel"),
       t3codeLimitResume: swOn($("setT3Park")),
@@ -718,6 +719,7 @@
     setSw("setGitCred", s.gitCred); setSw("setServeWeb", s.serveWeb);
     setSw("setTunnel", s.tunnel); setSw("setSmb", s.smb); setSw("setMic", s.mic);
     setSw("setPartialStreaming", s.partialStreaming);
+    setSw("setOpenCodeBackgroundWatcher", s.opencodeBackgroundWatcher);
     setSw("setT3", s.t3code);
     if (s.t3codeChannel) setVal("setT3Channel", s.t3codeChannel);
     setSw("setT3Park", s.t3codeLimitResume);

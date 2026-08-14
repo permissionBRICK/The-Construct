@@ -395,10 +395,12 @@ jq -n \
   --argjson includeHistory "$([[ "${INCLUDE_HISTORY}" == "true" ]] && echo true || echo false)" \
   --argjson t3code "$([[ "${T3CODE:-false}" == "true" ]] && echo true || echo false)" \
   --arg t3codeChannel "${T3CODE_CHANNEL:-stable}" \
+  --argjson opencodeBackgroundWatcher "$([[ "${OPENCODE_BACKGROUND_WATCHER:-false}" == "true" ]] && echo true || echo false)" \
   --argjson addedProjects "${gen_json}" '
   { created: $created, host: $host, agents: ($agents | split(",")),
     includeAuth: $includeAuth, includeHistory: $includeHistory,
     t3code: $t3code, t3codeChannel: $t3codeChannel,
+    opencodeBackgroundWatcher: $opencodeBackgroundWatcher,
     addedProjects: $addedProjects }' \
   >"${STAGE}/backup-info.json"
 

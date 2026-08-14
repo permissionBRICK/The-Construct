@@ -120,6 +120,9 @@ param(
     # Code extension for microphone passthrough so the mic button survives a rebuild.
     # Off by default; "true"/"false".
     [string]$MicPassthrough = "false",
+    # Forwarded down: optional dependency-free OpenCode background watcher.
+    # Empty = keep the VM's saved choice; "true"/"false".
+    [string]$OpenCodeBackgroundWatcher = "",
     # Forwarded down (Create-AgentVM.ps1 -> Provision-AgentVM.ps1): opt-in T3 Code
     # web GUI. Empty = keep the VM's saved choice; "true"/"false".
     [string]$T3Code = "",
@@ -709,6 +712,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         $reprovArgs['GitEmail']    = $reprovGit.Email
         $reprovArgs['ClaudePartialStreaming'] = $ClaudePartialStreaming
         $reprovArgs['MicPassthrough'] = $MicPassthrough
+        $reprovArgs['OpenCodeBackgroundWatcher'] = $OpenCodeBackgroundWatcher
         $reprovArgs['T3Code'] = $T3Code
         $reprovArgs['T3CodeChannel'] = $T3CodeChannel
         $reprovArgs['T3CodeLimitResume'] = $T3CodeLimitResume
@@ -723,9 +727,13 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
             if (-not $reprovCmd.Parameters.ContainsKey('T3CodeLimitResume')) {
                 $reprovArgs.Remove('T3CodeLimitResume')
             }
+            if (-not $reprovCmd.Parameters.ContainsKey('OpenCodeBackgroundWatcher')) {
+                $reprovArgs.Remove('OpenCodeBackgroundWatcher')
+            }
         } catch {
             $reprovArgs.Remove('T3CodeChannel')
             $reprovArgs.Remove('T3CodeLimitResume')
+            $reprovArgs.Remove('OpenCodeBackgroundWatcher')
         }
         try {
             Invoke-DeElevatedProvision -ScriptPath $provisionScript -ProvisionParams $reprovArgs
@@ -1052,6 +1060,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
                 GitEmail    = $acGitId.Email
                 ClaudePartialStreaming = $ClaudePartialStreaming
                 MicPassthrough        = $MicPassthrough
+                OpenCodeBackgroundWatcher = $OpenCodeBackgroundWatcher
                 T3Code                = $T3Code
                 T3CodeChannel         = $T3CodeChannel
                 T3CodeLimitResume     = $T3CodeLimitResume
@@ -1066,9 +1075,13 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
                 if (-not $acProvCmd.Parameters.ContainsKey('T3CodeLimitResume')) {
                     $acReprovArgs.Remove('T3CodeLimitResume')
                 }
+                if (-not $acProvCmd.Parameters.ContainsKey('OpenCodeBackgroundWatcher')) {
+                    $acReprovArgs.Remove('OpenCodeBackgroundWatcher')
+                }
             } catch {
                 $acReprovArgs.Remove('T3CodeChannel')
                 $acReprovArgs.Remove('T3CodeLimitResume')
+                $acReprovArgs.Remove('OpenCodeBackgroundWatcher')
             }
             Invoke-DeElevatedProvision -ScriptPath $provisionScript -ProvisionParams $acReprovArgs
         } catch {
@@ -1583,6 +1596,7 @@ $createArgs = @{
     GitEmail      = $chosenGitEmail
     ClaudePartialStreaming = $ClaudePartialStreaming
     MicPassthrough = $MicPassthrough
+    OpenCodeBackgroundWatcher = $OpenCodeBackgroundWatcher
     T3Code        = $T3Code
     T3CodeChannel = $T3CodeChannel
     AutomaticCheckpoints = $effectiveAutoCheckpoints
@@ -1606,6 +1620,9 @@ try {
     if (-not $createCmd.Parameters.ContainsKey('T3CodeChannel')) {
         $createArgs.Remove('T3CodeChannel')
     }
+    if (-not $createCmd.Parameters.ContainsKey('OpenCodeBackgroundWatcher')) {
+        $createArgs.Remove('OpenCodeBackgroundWatcher')
+    }
 } catch {
     # Fail SAFE, not open. We are already past Remove-AgentVm here, so passing an argument
     # the target might reject risks a binding failure with the old VM gone -- a broken
@@ -1613,6 +1630,7 @@ try {
     # control panel can fix afterwards.
     $createArgs.Remove('AutomaticCheckpoints')
     $createArgs.Remove('T3CodeChannel')
+    $createArgs.Remove('OpenCodeBackgroundWatcher')
     Write-Warning "Could not check Create-AgentVM.ps1's parameters ($($_.Exception.Message))."
     Write-Host "    Creating the VM without -AutomaticCheckpoints; set it afterwards from the control panel" -ForegroundColor Yellow
     Write-Host "    (Settings -> VM resources) or with Set-AgentVmCheckpoints.ps1." -ForegroundColor Yellow
@@ -1649,6 +1667,7 @@ try {
         GitEmail      = $chosenGitEmail
         ClaudePartialStreaming = $ClaudePartialStreaming
         MicPassthrough        = $MicPassthrough
+        OpenCodeBackgroundWatcher = $OpenCodeBackgroundWatcher
         T3Code                = $T3Code
         T3CodeChannel         = $T3CodeChannel
         Auto      = $true
@@ -1666,8 +1685,12 @@ try {
         if (-not $provCmd.Parameters.ContainsKey('T3CodeChannel')) {
             $provArgs.Remove('T3CodeChannel')
         }
+        if (-not $provCmd.Parameters.ContainsKey('OpenCodeBackgroundWatcher')) {
+            $provArgs.Remove('OpenCodeBackgroundWatcher')
+        }
     } catch {
         $provArgs.Remove('T3CodeChannel')
+        $provArgs.Remove('OpenCodeBackgroundWatcher')
     }
     Invoke-DeElevatedProvision -ScriptPath $provisionScript -ProvisionParams $provArgs
 

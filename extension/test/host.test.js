@@ -95,11 +95,13 @@ try {
     gitUserName: "Neo", gitEmail: "neo@zion.io", gitCredentialStore: false,
     vmMemoryGB: 16, vmDiskGB: 120, ubuntuRelease: "24.04",
     vsCodeServeWeb: true, vsCodeTunnel: false, smbShare: true, micPassthrough: true,
-    claudePartialStreaming: false, t3code: true, t3codeChannel: "nightly", vmAutoCheckpoints: true,
+    claudePartialStreaming: false, opencodeBackgroundWatcher: true,
+    t3code: true, t3codeChannel: "nightly", vmAutoCheckpoints: true,
   });
   ok("mapToForm: git interop keys -> form", form.gitName === "Neo" && form.gitEmail === "neo@zion.io" && form.gitCred === false);
   ok("mapToForm: numbers stringified for inputs", form.ram === "16" && form.disk === "120");
-  ok("mapToForm: booleans pass through", form.serveWeb === true && form.tunnel === false && form.smb === true && form.mic === true && form.partialStreaming === false && form.t3code === true);
+  ok("mapToForm: booleans pass through", form.serveWeb === true && form.tunnel === false && form.smb === true && form.mic === true && form.partialStreaming === false && form.opencodeBackgroundWatcher === true && form.t3code === true);
+  ok("mapToForm: OpenCode watcher omitted when absent", !("opencodeBackgroundWatcher" in host.mapToForm({ gitUserName: "Neo" })));
   ok("mapToForm: t3code omitted when absent", !("t3code" in host.mapToForm({ gitUserName: "Neo" })));
   ok("mapToForm: t3codeChannel round-trips (nightly)", form.t3codeChannel === "nightly");
   ok("mapToForm: t3codeChannel omitted when absent", !("t3codeChannel" in host.mapToForm({ gitUserName: "Neo" })));
@@ -114,12 +116,14 @@ try {
   const disk = host.mapFromForm({
     gitName: " Neo ", gitEmail: "neo@zion.io", gitCred: true,
     ram: "16", disk: "120.5", ubuntu: "22.04",
-    serveWeb: false, tunnel: true, smb: false, mic: true, partialStreaming: true, t3code: false,
+    serveWeb: false, tunnel: true, smb: false, mic: true, partialStreaming: true,
+    opencodeBackgroundWatcher: false, t3code: false,
     t3codeChannel: "nightly", autoCheckpoints: false,
     password: "s3cret", agents: ["claude-code"], projects: ["default"],
   });
   ok("mapFromForm: git identity uses interop keys", disk.gitUserName === "Neo" && disk.gitEmail === "neo@zion.io" && disk.gitCredentialStore === true);
   ok("mapFromForm: partial-streaming toggle persists", disk.claudePartialStreaming === true);
+  ok("mapFromForm: OpenCode watcher off persists", disk.opencodeBackgroundWatcher === false);
   ok("mapFromForm: trims string values", disk.gitUserName === "Neo");
   ok("mapFromForm: numeric coercion (int + float)", disk.vmMemoryGB === 16 && disk.vmDiskGB === 120.5);
   const exotic = host.mapFromForm({ ram: "1e3", disk: "+8" });
