@@ -334,11 +334,10 @@ if [[ -f "${CONFIG_FILE}" ]]; then
 fi
 T3CODE_CHANNEL="${T3CODE_CHANNEL:-${_t3code_channel_saved:-stable}}"
 [[ "${T3CODE_CHANNEL}" == "nightly" ]] || T3CODE_CHANNEL=stable
-# Opt-in usage-limit auto-resume for T3 Code: when a Claude turn dies on a
-# usage/session limit, park the thread and auto-restart it once the limit
-# window resets (Construct patches the installed t3 dist bundle — see
-# extension/vm/construct-t3park-patch.mjs). Disabled by default; same
-# keep-saved semantics as T3CODE itself.
+# Opt-in T3 Code extra-feature patch set: Claude usage-limit auto-resume plus
+# OpenCode background-watcher monitoring. The legacy variable name is retained
+# so existing host settings and config.env files migrate without changing their
+# effective preference. Disabled by default; same keep-saved semantics as T3CODE.
 _t3code_limit_resume_saved=""
 if [[ -f "${CONFIG_FILE}" ]]; then
   _t3code_limit_resume_saved="$(sed -n 's/^T3CODE_LIMIT_RESUME=//p' "${CONFIG_FILE}" | head -1 || true)"

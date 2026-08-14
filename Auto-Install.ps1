@@ -127,8 +127,8 @@ param(
     # "stable"/"nightly".
     [ValidateSet("", "stable", "nightly")]
     [string]$T3CodeChannel = "",
-    # Forwarded down: opt-in T3 Code usage-limit auto-resume (Construct patches the
-    # t3 dist bundle). Empty = keep the VM's saved choice; "true"/"false".
+    # Forwarded down: opt-in T3 Code extra-feature patch set (legacy parameter
+    # name retained). Empty = keep the VM's saved choice; "true"/"false".
     [string]$T3CodeLimitResume = "",
     # Forwarded to Create-AgentVM.ps1: Hyper-V automatic checkpoints (a snapshot at
     # every VM start). OFF by default for Construct -- on a disposable agent VM the

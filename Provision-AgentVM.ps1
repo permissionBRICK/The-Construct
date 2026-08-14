@@ -99,11 +99,10 @@ param(
     # ($envPrefix interpolates it into a single-quoted remote assignment).
     [ValidateSet("", "stable", "nightly")]
     [string]$T3CodeChannel = "",
-    # Opt-in usage-limit auto-resume for T3 Code: Construct patches the installed
-    # t3 dist bundle so a thread that dies on a Claude usage/session limit is
-    # parked and automatically restarted once the limit window resets. Off by
-    # default; EMPTY keeps the VM's saved choice (config.env T3CODE_LIMIT_RESUME),
-    # mirroring T3Code's own keep-saved semantics. "true"/"false"/"".
+    # Opt-in T3 Code extra-feature patch set: Claude usage-limit auto-resume plus
+    # OpenCode background-watcher monitoring. The parameter/key keeps its legacy
+    # name for saved-setting compatibility. Off by default; EMPTY keeps the VM's
+    # saved choice (config.env T3CODE_LIMIT_RESUME). "true"/"false"/"".
     [string]$T3CodeLimitResume = "",
     # Set up a Samba/SMB server on the VM that shares the workspace (the repos
     # folder) to this host. Credentials are generated once on the VM and persisted
