@@ -307,14 +307,12 @@ function planT3LiveAction(wantT3, hadT3, newCh, oldCh) {
   return null;
 }
 
-// ── Usage-limit auto-resume (t3park) ──────────────────────────────────────────
+// ── Opt-in T3 Code extra features ─────────────────────────────────────────────
 //
-// Opt-in patch of the installed t3 dist bundle (upstream won't ship the
-// feature): park a thread whose Claude turn dies on a usage/session limit and
-// auto-restart it once the limit window resets. The patcher itself lives in
-// extension/vm/construct-t3park-patch.mjs (single source for the provisioner
-// and this live toggle); it verifies its anchor sites before touching the
-// bundle and refuses on an unexpected t3 version, leaving stock behaviour.
+// One opt-in controls Construct's patch set for the installed t3 dist bundle:
+// usage-limit auto-resume for Claude plus background-watcher monitoring for
+// OpenCode. The on-disk/form name remains t3codeLimitResume as a compatibility
+// detail for existing settings; the control panel presents the broader name.
 
 /** What to do about the auto-resume patch after a settings save, given the T3
  *  action already planned. enable/setChannel npm-reinstall the bundle (stock),
@@ -336,42 +334,54 @@ function _patcherB64() {
   return fs.readFileSync(path.join(__dirname, "..", "vm", "construct-t3park-patch.mjs")).toString("base64");
 }
 
-/** Bash: upload the patcher, apply the patch, persist the opt-in, restart the
- *  service so the patched bundle is what's running, then make sure the resume
- *  API token exists (minting needs the t3 DB, hence after the restart). */
+function _monitorPatcherB64() {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  return fs.readFileSync(
+    path.join(__dirname, "..", "vm", "construct-t3-opencode-monitor-patch.mjs"),
+  ).toString("base64");
+}
+
+/** Bash: upload and apply both patchers, persist the opt-in, restart the
+ *  service so the patched bundle is running, then make sure the resume API
+ *  token exists (minting needs the t3 DB, hence after the restart). */
 function buildLimitResumeEnableScript() {
   return PRELUDE + `
 command -v node >/dev/null 2>&1 || { echo "node is not installed on the VM" >&2; exit 1; }
 printf '%s' '${_patcherB64()}' | base64 -d > /tmp/construct-t3park-patch.mjs
 node /tmp/construct-t3park-patch.mjs apply || exit $?
+printf '%s' '${_monitorPatcherB64()}' | base64 -d > /tmp/construct-t3-opencode-monitor-patch.mjs
+node /tmp/construct-t3-opencode-monitor-patch.mjs apply || exit $?
 cfgset T3CODE_LIMIT_RESUME true
 if [ -f /etc/systemd/system/${SERVICE}.service ]; then
   systemctl restart ${SERVICE} 2>/dev/null || true
   sleep 2
   node /tmp/construct-t3park-patch.mjs mint-token || true
 fi
-echo "usage-limit auto-resume enabled"
+echo "T3 Code extra features enabled"
 `;
 }
 
-/** Bash: revert to the stock bundle, clear the opt-in, restart if deployed.
+/** Bash: remove both extra-feature patches, clear the opt-in, and restart.
  *  Best-effort like buildDisableScript — always exits 0. */
 function buildLimitResumeDisableScript() {
   return PRELUDE + `
 if command -v node >/dev/null 2>&1; then
   printf '%s' '${_patcherB64()}' | base64 -d > /tmp/construct-t3park-patch.mjs
   node /tmp/construct-t3park-patch.mjs revert || true
+  printf '%s' '${_monitorPatcherB64()}' | base64 -d > /tmp/construct-t3-opencode-monitor-patch.mjs
+  node /tmp/construct-t3-opencode-monitor-patch.mjs revert || true
 fi
 cfgset T3CODE_LIMIT_RESUME false
 if [ -f /etc/systemd/system/${SERVICE}.service ]; then
   systemctl try-restart ${SERVICE} 2>/dev/null || true
 fi
-echo "usage-limit auto-resume disabled (stock t3)"
+echo "T3 Code extra features disabled (stock t3)"
 exit 0
 `;
 }
 
-/** Apply or revert the auto-resume patch on the VM now. Serialized through the
+/** Apply or revert the extra-feature patch set on the VM now. Serialized through the
  *  same queue as enable/disable/setChannel so it can't interleave with a
  *  running npm install (and, chained after enable/setChannel, runs against the
  *  freshly-installed bundle). */
@@ -384,10 +394,10 @@ async function _setLimitResumeNow(enable, opts = {}) {
   const _ssh = opts._ssh || ssh;
   const label = enable ? "Enabling" : "Disabling";
   return vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: `${label} T3 Code usage-limit auto-resume…`, cancellable: false },
+    { location: vscode.ProgressLocation.Notification, title: `${label} T3 Code extra features…`, cancellable: false },
     async () => {
       if (!(await _ssh.isReachable(opts))) {
-        vscode.window.showWarningMessage("T3 Code auto-resume preference saved — the VM is offline, so it applies on the next reprovision.");
+        vscode.window.showWarningMessage("T3 Code extra-feature preference saved — the VM is offline, so it applies on the next reprovision.");
         return false;
       }
       const script = enable ? buildLimitResumeEnableScript() : buildLimitResumeDisableScript();
@@ -396,14 +406,14 @@ async function _setLimitResumeNow(enable, opts = {}) {
         const detail = (r.stderr || r.stdout || "").trim().slice(0, 250);
         vscode.window.showErrorMessage(
           (r.code === 2
-            ? "T3 Code auto-resume patch not applied: this t3 version's bundle looks different, so Construct left it stock. "
-            : `${label} T3 Code auto-resume failed (exit ${r.code}). `) + detail
+            ? "T3 Code extra-feature patches were not applied: this t3 version's bundle looks different, so Construct left it stock. "
+            : `${label} T3 Code extra features failed (exit ${r.code}). `) + detail
         );
         return false;
       }
       vscode.window.showInformationMessage(
-        enable ? "T3 Code usage-limit auto-resume enabled — parked threads now restart when the limit resets."
-               : "T3 Code usage-limit auto-resume disabled — t3 runs stock again."
+        enable ? "T3 Code extra features enabled — usage-limit resume and OpenCode watcher monitoring are active."
+               : "T3 Code extra features disabled — t3 runs stock again."
       );
       return true;
     }

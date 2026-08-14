@@ -106,8 +106,9 @@ ok("park plan: T3 off entirely -> nothing", ppark(null, false, true, false) === 
 // ── buildLimitResume{Enable,Disable}Script ───────────────────────────────────
 const parkOn = t3.buildLimitResumeEnableScript();
 const parkOff = t3.buildLimitResumeDisableScript();
-ok("park enable: uploads the patcher and applies it",
-  /base64 -d > \/tmp\/construct-t3park-patch\.mjs/.test(parkOn) && /t3park-patch\.mjs apply/.test(parkOn));
+ok("extra features enable: uploads and applies both patchers",
+  /base64 -d > \/tmp\/construct-t3park-patch\.mjs/.test(parkOn) && /t3park-patch\.mjs apply/.test(parkOn) &&
+  /base64 -d > \/tmp\/construct-t3-opencode-monitor-patch\.mjs/.test(parkOn) && /opencode-monitor-patch\.mjs apply/.test(parkOn));
 ok("park enable: propagates the patcher's exit code (anchor mismatch must surface)",
   /apply \|\| exit \$\?/.test(parkOn));
 ok("park enable: persists the opt-in and restarts the service",
@@ -116,8 +117,9 @@ ok("park enable: mints the resume API token after the restart (needs the t3 DB)"
   /mint-token/.test(parkOn) && parkOn.indexOf("systemctl restart") < parkOn.indexOf("mint-token"));
 ok("park enable: embedded patcher is pure base64 (survives single-quoting)",
   (() => { const m = parkOn.match(/printf '%s' '([^']*)'/); return m && /^[A-Za-z0-9+/=]+$/.test(m[1]); })());
-ok("park disable: reverts, clears the opt-in, best-effort exit 0",
-  /t3park-patch\.mjs revert/.test(parkOff) && /cfgset T3CODE_LIMIT_RESUME false/.test(parkOff) && /exit 0/.test(parkOff));
+ok("extra features disable: reverts both, clears the opt-in, best-effort exit 0",
+  /t3park-patch\.mjs revert/.test(parkOff) && /opencode-monitor-patch\.mjs revert/.test(parkOff) &&
+  /cfgset T3CODE_LIMIT_RESUME false/.test(parkOff) && /exit 0/.test(parkOff));
 
 // ── the generated bash parses ────────────────────────────────────────────────
 // (bash -n via child_process; skipped quietly when bash isn't available, e.g. a

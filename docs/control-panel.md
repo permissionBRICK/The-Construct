@@ -328,30 +328,33 @@ The choice is persisted in `config.env` (`T3CODE_CHANNEL`), rides reprovision/re
 survives a backup/restore cycle. On the agent card, a nightly install is annotated so it's
 visually distinguishable from stable.
 
-### T3 Code auto-resume on usage limit
+### T3 Code extra features
 
-Stock T3 Code simply fails a thread whose Claude turn dies on a usage/session limit — the
-turn ends in an error banner and nothing happens when the limit window resets. The
-**T3 Code auto-resume on usage limit** toggle (off by default) opts the VM into a
-Construct-applied runtime patch of the installed `t3` server that fixes this: the patched
-server watches the Claude Agent SDK's structured rate-limit telemetry, and when a turn
-fails while the account is limit-rejected (or the error text matches the usage-limit
-message), it **parks** the thread and automatically dispatches a continuation turn once
-the limit resets (plus a one-minute margin). Parked threads are persisted
-(`~/.t3/userdata/t3park-pending.json`), so they survive a service restart; the resume
-re-uses the thread's own model/runtime settings and is skipped if you already continued
-the thread manually.
+The **Patch T3 Code with extra features** toggle (off by default) controls Construct's
+runtime patches of the installed `t3` server as one reversible set:
 
-Like the mic switch it's a **live** toggle: flipping it on patches the bundle over SSH and
-restarts `t3code-serve`; flipping it off restores the pristine bundle (a backup is kept
-next to it). The preference is persisted in `config.env` (`T3CODE_LIMIT_RESUME`) and rides
-reprovision/reinstall — the provisioner re-applies the patch after every t3
-install/update. The patch is **version-guarded**: before touching anything it verifies the
-exact code sites it hooks (verified against `t3@0.0.33`); if a newer t3 bundle looks
-different, the patch is skipped with a warning and t3 simply runs stock until Construct's
-patcher (`extension/vm/construct-t3park-patch.mjs`) is updated. The auto-resume dispatch
-authenticates with its own long-lived t3 API token (`/etc/construct/t3park-token`, minted
-on enable).
+- **Claude usage-limit recovery:** when a turn fails while the account is
+  limit-rejected (or the error text matches the usage-limit message), T3 **parks** the
+  thread and automatically dispatches a continuation once the limit resets, plus a
+  one-minute margin. Parked threads are persisted
+  (`~/.t3/userdata/t3park-pending.json`), so they survive a service restart; the resume
+  re-uses the thread's own model/runtime settings and is skipped if you already continued
+  the thread manually.
+
+- **OpenCode background monitoring:** a completed `background` tool call armed with
+  `wait: true` is projected as a T3 `local_bash` task, so the thread pill stays
+  `monitoring` after the foreground turn settles. The plugin's later
+  `<background-task ...>` wake-up prompt, or a completed `background_kill`, closes that
+  task and clears the monitoring state.
+
+Like the mic switch it is a **live** toggle: flipping it on patches the bundle over SSH
+and restarts `t3code-serve`; flipping it off removes both patches. The preference rides
+reprovision/reinstall, and the provisioner re-applies both patches after every T3
+install/update. For compatibility with existing machines, its internal config key remains
+`T3CODE_LIMIT_RESUME`; the UI and behavior now cover the whole patch set. Both patchers
+are version-guarded. If a newer T3 bundle changes an anchor, that feature is skipped with
+a warning instead of breaking T3. The auto-resume dispatch authenticates with its own
+long-lived T3 API token (`/etc/construct/t3park-token`, minted on enable).
 
 ## Troubleshooting
 

@@ -751,17 +751,20 @@ install_t3code() {
   bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" T3CODE_PORT "${T3CODE_PORT}"
   bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" T3CODE_CHANNEL "${T3CODE_CHANNEL}"
 
-  # Opt-in usage-limit auto-resume: patch (or un-patch) the freshly-installed
-  # dist bundle BEFORE the service (re)start below, so the running server
-  # always matches the T3CODE_LIMIT_RESUME preference. The patcher verifies
-  # its anchor sites first and refuses on an unexpected bundle (exit 2), in
-  # which case t3 simply runs stock — never block the install on it.
+  # Opt-in T3 extra features: patch (or un-patch) the freshly-installed dist
+  # bundle BEFORE the service (re)start below. The legacy env key remains for
+  # settings compatibility, but now controls the whole patch set: Claude
+  # usage-limit auto-resume and OpenCode background-watcher monitoring. Both
+  # patchers verify their anchors; an unknown upstream bundle stays usable.
   if [[ "${T3CODE_LIMIT_RESUME:-false}" == "true" ]]; then
-    step "Applying T3 Code usage-limit auto-resume patch"
+    step "Applying T3 Code extra-feature patches"
     node "${REPO_DIR}/extension/vm/construct-t3park-patch.mjs" apply \
       || warn "WARNING: usage-limit auto-resume patch not applied (see above); t3 runs stock"
+    node "${REPO_DIR}/extension/vm/construct-t3-opencode-monitor-patch.mjs" apply \
+      || warn "WARNING: OpenCode background-monitoring patch not applied (see above); t3 continues without it"
   else
     node "${REPO_DIR}/extension/vm/construct-t3park-patch.mjs" revert >/dev/null 2>&1 || true
+    node "${REPO_DIR}/extension/vm/construct-t3-opencode-monitor-patch.mjs" revert >/dev/null 2>&1 || true
   fi
 
   install -d -m 0755 "${WORKSPACE_ROOT}"

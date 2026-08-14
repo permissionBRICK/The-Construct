@@ -70,8 +70,8 @@ param(
     # VM's saved choice; "stable"/"nightly".
     [ValidateSet("", "stable", "nightly")]
     [string]$T3CodeChannel = "",
-    # Forwarded to Provision-AgentVM.ps1: opt-in T3 Code usage-limit auto-resume.
-    # Empty = keep the VM's saved choice; "true"/"false".
+    # Forwarded to Provision-AgentVM.ps1: opt-in T3 Code extra-feature patches
+    # (legacy parameter name retained). Empty = keep the VM's saved choice.
     [string]$T3CodeLimitResume = "",
     # Hyper-V automatic checkpoints: snapshot the VM at every start. OFF by default
     # for Construct -- on a disposable agent VM the checkpoint only costs (a growing
