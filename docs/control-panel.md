@@ -321,7 +321,8 @@ repository symlinks. Enabling or disabling it applies live over SSH and restarts
 active `opencode-serve` service; new CLI/T3 sessions pick up the change on startup. Turning
 it off removes only a plugin bearing Construct's ownership marker, so an unrelated local
 `background.js` is never overwritten or deleted. The preference is also carried through
-reprovision and rebuilds as `OPENCODE_BACKGROUND_WATCHER`.
+reprovision and rebuilds as `OPENCODE_BACKGROUND_WATCHER`. Live changes queue the service
+restart instead of waiting for OpenCode to shut down, so saving Settings remains responsive.
 
 ### T3 Code web GUI
 
@@ -371,7 +372,9 @@ install/update. For compatibility with existing machines, its internal config ke
 `T3CODE_LIMIT_RESUME`; the UI and behavior now cover the whole patch set. Both patchers
 are version-guarded. If a newer T3 bundle changes an anchor, that feature is skipped with
 a warning instead of breaking T3. The auto-resume dispatch authenticates with its own
-long-lived T3 API token (`/etc/construct/t3park-token`, minted on enable).
+long-lived T3 API token (`/etc/construct/t3park-token`, minted on enable). Because T3 may
+take a long time to honor `SIGTERM`, the live toggle queues its service restart and returns
+without waiting; managed service units cap future stop waits at five seconds.
 
 ## Troubleshooting
 

@@ -41,8 +41,8 @@ node --check "$tmp" || { rm -f -- "$tmp"; exit 1; }
 chmod 0644 "$tmp"
 mv -f -- "$tmp" "$TARGET"
 cfgset OPENCODE_BACKGROUND_WATCHER true
-if systemctl is-active --quiet opencode-serve 2>/dev/null; then systemctl restart opencode-serve; fi
-echo "OpenCode background watcher enabled (new CLI/T3 sessions load it on start)"
+if systemctl is-active --quiet opencode-serve 2>/dev/null; then systemctl --no-block restart opencode-serve; fi
+echo "OpenCode background watcher enabled (service restart queued; new CLI/T3 sessions load it on start)"
 `;
 }
 
@@ -53,8 +53,8 @@ if [ -e "$TARGET" ] || [ -L "$TARGET" ]; then
   rm -f -- "$TARGET"
 fi
 cfgset OPENCODE_BACKGROUND_WATCHER false
-if systemctl is-active --quiet opencode-serve 2>/dev/null; then systemctl restart opencode-serve; fi
-echo "OpenCode background watcher disabled (running CLI/T3 sessions are unchanged)"
+if systemctl is-active --quiet opencode-serve 2>/dev/null; then systemctl --no-block restart opencode-serve; fi
+echo "OpenCode background watcher disabled (service restart queued; running CLI/T3 sessions are unchanged)"
 `;
 }
 

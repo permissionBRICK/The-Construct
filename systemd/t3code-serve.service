@@ -11,6 +11,7 @@ WorkingDirectory=/root/repos
 ExecStart=/usr/local/bin/t3 serve --host ${T3CODE_HOST} --port ${T3CODE_PORT}
 Restart=always
 RestartSec=5
+TimeoutStopSec=5s
 
 [Install]
 WantedBy=multi-user.target
