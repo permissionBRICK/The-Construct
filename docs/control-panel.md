@@ -221,10 +221,17 @@ Messages queued while VS Code was closed arrive at next start — apart from sta
 than an hour) and anything queued before a VM reboot, which are dropped rather than replayed
 at you.
 
-If Windows can't show the notification — notifications switched off for the app, a policy
-blocking PowerShell, or a non-Windows host — it falls back to a VS Code notification so the
-message is never lost. Nothing flashes on screen either way: the toast is raised by a
-PowerShell that runs with no console at all.
+The notification is filed under **The Construct**, which the extension registers for your
+user on first use (no admin, no installer) — you'll find it in *Settings ▸ System ▸
+Notifications* if you ever want to mute or un-mute it. Until Windows has seen a toast from
+that identity it sometimes refuses to recognise it; in that case the toast still appears,
+just labelled *Windows PowerShell*, and the Construct output channel says why.
+
+If Windows genuinely can't show it — notifications switched off for your user or by group
+policy, a locked-down PowerShell, or a non-Windows host — it falls back to a VS Code
+notification so the message is never lost, and the exact reason is written to the Construct
+output channel. Nothing flashes on screen either way: the toast is raised by a PowerShell
+that runs with no console at all.
 
 The channel is deliberately **one-way**. An agent can tell you something; it cannot ask you
 anything or get an answer back — questions belong in the agent's own chat. Notifications

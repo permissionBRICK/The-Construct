@@ -149,9 +149,82 @@ ok("script: the payload is base64 only", /FromBase64String\('[A-Za-z0-9+/=]+'\)/
 ok("script: no agent text is interpolated into PowerShell", !script.includes("Remove-Item") && !script.includes("`whoami`"));
 ok("script: registers the AppUserModelId (Windows drops unknown-app toasts)",
   script.includes("HKCU:\\Software\\Classes\\AppUserModelId\\") && script.includes(notify.APP_ID));
-ok("script: reports suppressed notifications instead of failing silently",
-  script.includes("$n.Setting -ne 'Enabled'") && /exit 2/.test(script));
-ok("script: any failure exits non-zero so the caller can fall back", /catch \{.*exit 1 \}/.test(script));
+ok("script: the registration makes us visible in Settings and persistent in the action centre",
+  /New-ItemProperty -Path \$k -Name ShowInSettings -Value 1 -PropertyType DWord/.test(script)
+  && /New-ItemProperty -Path \$k -Name ShowInActionCenter -Value 1 -PropertyType DWord/.test(script));
+ok("script: a registry that refuses the registration is not fatal (the fallback id is Windows' own)",
+  /catch \{ \[Console\]::Error\.WriteLine\('app id registration failed: /.test(script));
+// The bug this file exists for: an app id registered only under HKCU commonly reports
+// DisabledForApplication until Windows has seen a toast from it. Treating that as
+// "suppressed" downgraded EVERY notification to a VS Code toast on a machine where
+// notifications were perfectly fine.
+ok("script: a non-Enabled setting no longer vetoes the toast",
+  !script.includes("$n.Setting -ne 'Enabled'") && !/DisabledForApplication'\)? *\{? *exit/.test(script));
+// DisabledForApplication is also what Windows reports once the user HAS switched us
+// off, so the deliberate case is read where it is unambiguous: the per-app flag the
+// Settings UI writes. Without this, ignoring the setting would make the Settings
+// toggle we ask for (ShowInSettings) a lie.
+ok("script: an explicit mute in Windows settings is honoured before anything is shown",
+  script.includes("HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings\\")
+  && /\$sv\.Enabled -eq 0/.test(script)
+  && new RegExp(`switched off for '\\+\\$appId\\+' in Settings'\\); exit ${notify.TOAST_EXIT.SUPPRESSED}`).test(script)
+  && script.indexOf("$muted") < script.indexOf("CreateToastNotifier"));
+ok("script: an absent mute flag is not a refusal (Windows has simply never seen us)",
+  /\$muted=\$false/.test(script) && /Get-ItemProperty -Path \$sk -Name Enabled -ErrorAction SilentlyContinue/.test(script));
+ok("script: only a user-wide or policy disable suppresses (those are definitive)",
+  /\$s -eq 'DisabledForUser' -or \$s -eq 'DisabledByGroupPolicy'/.test(script)
+  && new RegExp(`toast suppressed by Windows: '\\+\\$blocked\\); exit ${notify.TOAST_EXIT.SUPPRESSED}`).test(script));
+// A user/machine-wide switch-off vetoes the ATTEMPT, not just the candidate that
+// reported it — otherwise the other identity would walk straight around it.
+ok("script: a definitive disable vetoes every candidate, before anything is shown",
+  script.indexOf("if ($blocked)") < script.indexOf("foreach ($o in $order)")
+  && script.indexOf("if ($blocked)") < script.indexOf("$order.Count -eq 0")
+  && !/if \(\$order\.Count -eq 0\) \{\n? *if \(\$blocked\)/.test(script));
+ok("script: tries our own app id first, then the one Windows registers itself",
+  script.indexOf(notify.APP_ID) < script.indexOf(notify.FALLBACK_APP_ID)
+  && /foreach \(\$id in @\(\$appId,\$fallbackId\)\)/.test(script)
+  && script.includes("$order=@($best)+@($rest)"));
+ok("script: an Enabled notifier outranks an unrecognised one",
+  /if \(\$o\.Enabled\) \{ \$best\+=\$o \}/.test(script) && /else \{ \$rest\+=\$o \}/.test(script));
+ok("script: a Show() that throws falls through to the next candidate",
+  /catch \{ \$last=\$_\.Exception\.Message; continue \}/.test(script));
+ok("script: a toast shown under the fallback identity says so (the host logs it)",
+  script.includes("shown under the fallback app id") && script.includes("notifier setting is "));
+ok("script: constrained language mode is named, and survives not being able to say so",
+  /\$lm -ne 'FullLanguage'/.test(script)
+  && new RegExp(`try \\{ \\[Console\\]::Error\\.WriteLine\\('powershell language mode .*\\} catch \\{ \\}; exit ${notify.TOAST_EXIT.LANGUAGE_MODE}`).test(script));
+ok("script: a host without the WinRT types gets its own exit code",
+  new RegExp(`WinRT notifications are unavailable: '\\+\\$_\\.Exception\\.Message\\); exit ${notify.TOAST_EXIT.NO_WINRT}`).test(script));
+ok("script: any failure exits non-zero so the caller can fall back", /exit 1 \}?$/m.test(script));
+ok("script: the fallback app id is a constant, never agent text",
+  script.includes(`$fallbackId='${notify.FALLBACK_APP_ID}'`));
+
+// ── toastResult (what the host logs) ──────────────────────────────────────────
+ok("result: exit 0 with nothing on stderr is a clean success",
+  notify.toastResult(0, "").ok && notify.toastResult(0, "").note === "" && notify.toastResult(0, "").reason === "");
+ok("result: a toast that appeared but had something to say carries a note, not a fallback",
+  notify.toastResult(0, "shown under the fallback app id\n").note === "shown under the fallback app id");
+ok("result: stderr is the reason when the script failed",
+  notify.toastResult(1, "boom\ntoast failed: nope\n").reason === "toast failed: nope");
+ok("result: a lost stderr still names the failure by exit code",
+  notify.toastResult(2, "").reason === "Windows has notifications switched off"
+  && notify.toastResult(3, "").reason === "WinRT notifications are unavailable on this host"
+  && notify.toastResult(4, "").reason === "PowerShell is not in full language mode");
+ok("result: an unknown exit code is reported verbatim", notify.toastResult(99, "").reason === "powershell exited 99");
+ok("result: a killed toast process is not silence", notify.toastResult(null, "").reason === "the toast script was killed");
+ok("result: a failure never reports itself as ok", !notify.toastResult(1, "").ok);
+
+// ── powershellPath ────────────────────────────────────────────────────────────
+ok("powershell: the absolute System32 path is preferred over PATH",
+  notify.powershellPath({ SystemRoot: "C:\\Windows" }, () => true)
+    === "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+ok("powershell: a trailing separator doesn't double up",
+  notify.powershellPath({ SystemRoot: "C:\\Windows\\" }, () => true).includes("Windows\\System32"));
+ok("powershell: falls back to PATH when that binary isn't there",
+  notify.powershellPath({ SystemRoot: "C:\\Windows" }, () => false) === "powershell.exe");
+ok("powershell: no SystemRoot (or a throwing probe) still yields something spawnable",
+  notify.powershellPath({}, () => true) === "powershell.exe"
+  && notify.powershellPath({ SystemRoot: "C:\\Windows" }, () => { throw new Error("x"); }) === "powershell.exe");
 
 const cmd = notify.buildToastCommand(hostile);
 ok("cmd: runs powershell directly (no cmd /c start, which is what forces a window)",
@@ -162,6 +235,9 @@ ok("cmd: script rides as -EncodedCommand", cmd.args[cmd.args.indexOf("-EncodedCo
 ok("cmd: -EncodedCommand is UTF-16LE base64 of the script",
   Buffer.from(cmd.args[cmd.args.indexOf("-EncodedCommand") + 1], "base64").toString("utf16le") === cmd.script);
 ok("cmd: stderr is captured for the fallback reason", cmd.options.stdio[2] === "pipe");
+ok("cmd: an absolute powershell path is used when the caller resolved one",
+  notify.buildToastCommand(hostile, { file: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" }).file
+    === "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
 
 console.log(`\n  notification unit tests — ${pass}/${pass + fail} passed`);
 process.exit(fail ? 1 : 0);

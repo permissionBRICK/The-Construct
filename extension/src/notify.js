@@ -32,6 +32,13 @@ const MAX_PER_TICK = 5;
 const APP_ID = "PermissionBrick.TheConstruct";
 const APP_NAME = "The Construct";
 
+/** Last-resort identity: the AppUserModelId of the Start-menu "Windows PowerShell"
+ *  shortcut, which every Windows install ships and which the notification platform
+ *  therefore already knows. A toast raised under it says "Windows PowerShell" instead
+ *  of "The Construct" — ugly, but a visible notification beats a correct-looking one
+ *  that Windows silently drops because it does not recognise our own app id yet. */
+const FALLBACK_APP_ID = "{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe";
+
 /** Clicking the toast opens the control panel through the extension's URI handler.
  *  activationType="protocol" means Windows just launches this URI — no COM server,
  *  no background activator, nothing that could run VM-supplied text as a command. */
@@ -272,37 +279,184 @@ function toastXml(entry) {
 }
 
 /**
+ * Exit codes of the toast script. They exist so the host can name the failure even
+ * when stderr is empty or truncated — the field report we are fixing here ("only a
+ * VS Code toast appeared") was undiagnosable precisely because the reason never made
+ * it into the output channel.
+ */
+const TOAST_EXIT = {
+  OK: 0,
+  FAILED: 1,          // anything unexpected: COM error, bad payload, no notifier
+  SUPPRESSED: 2,      // Windows says notifications are off for this USER or by policy
+  NO_WINRT: 3,        // the WinRT notification types are not loadable on this host
+  LANGUAGE_MODE: 4,   // PowerShell is locked down and cannot construct WinRT objects
+};
+const TOAST_EXIT_REASONS = {
+  1: "the toast script failed",
+  2: "Windows has notifications switched off",
+  3: "WinRT notifications are unavailable on this host",
+  4: "PowerShell is not in full language mode",
+};
+
+/**
  * The PowerShell that raises the toast, as a self-contained script. The payload
  * rides as base64 (alphabet [A-Za-z0-9+/=]) so agent text can never break out of
  * the single-quoted literal — the same trick provisioning uses for git identities.
  *
- * It registers the AppUserModelId under HKCU first (Windows silently drops toasts
- * from an unknown app id; no admin or Start-menu shortcut needed), and reports the
- * notifier's Setting: when the user or a group policy has notifications switched
- * off, Show() succeeds silently, so we exit non-zero instead and let the caller
- * fall back to a VS Code notification rather than lose the message.
+ * Shape of the thing, and why it is not the obvious four lines:
+ *
+ *  1. AppUserModelId registration under HKCU. Windows drops toasts from an app id it
+ *     has never heard of, and we have no installer and no Start-menu shortcut to
+ *     register one — the registry key IS the registration. `ShowInSettings` puts us
+ *     in Settings ▸ Notifications so the user can mute us deliberately (and un-mute
+ *     us again); `ShowInActionCenter` keeps the toast in the notification centre
+ *     after it fades, which is the entire point of the feature. No `IconUri`: it
+ *     must point at a file that exists on the host, and a dangling one is a way to
+ *     lose the toast rather than to decorate it.
+ *
+ *  2. The notifier's `Setting` is ADVISORY, not a gate. This is what broke in the
+ *     field: an app id registered purely under HKCU commonly reports
+ *     `DisabledForApplication` on Win10/11 until Windows has actually seen a toast
+ *     from it, even though Show() would have worked. The old code treated any
+ *     non-`Enabled` value as "suppressed", exited 2 and downgraded to a VS Code
+ *     notification — every single time, on a machine where notifications were fine.
+ *     `DisabledForUser` / `DisabledByGroupPolicy` are the deliberate ones and still
+ *     exit 2 (hand back to the VS Code fallback) — and they veto the whole attempt,
+ *     not just the candidate that reported them, because they are user- and
+ *     machine-wide switches; `DisabledForApplication` is the ambiguous one and no
+ *     longer vetoes anything.
+ *
+ *  2b. …which leaves a real question: `DisabledForApplication` is ALSO what Windows
+ *     reports when the user genuinely switches us off in Settings ▸ Notifications,
+ *     and ignoring that would make the toggle we just asked for (`ShowInSettings`)
+ *     a lie. So the deliberate case is read where it is unambiguous — the per-app
+ *     `Enabled` value the Settings UI itself writes under
+ *     `…\CurrentVersion\Notifications\Settings\<app id>`. Present and 0 means the
+ *     user muted us: exit 2, no toast, no sneaking it out under another identity.
+ *     Absent means Windows has simply never seen us, which is not a refusal.
+ *
+ *  3. Hence a CANDIDATE LIST rather than one notifier: our own app id first, the
+ *     always-registered PowerShell one behind it, and whichever reports `Enabled`
+ *     wins. So a fresh machine whose custom id is not accepted yet still gets a real
+ *     toast (under the PowerShell identity), and once Windows knows us the branded
+ *     id takes over. Only if none of them is `Enabled` do we push a toast through
+ *     the best non-`Enabled` candidate anyway — noting on stderr what we did, so the
+ *     host log says why the toast might not have appeared.
+ *
+ *  4. Every failure mode gets its own exit code and a one-line reason on stderr
+ *     (see TOAST_EXIT). A silent downgrade is the bug, not the fallback itself.
  */
 function buildToastScript(entry) {
   const b64 = Buffer.from(toastXml(entry), "utf8").toString("base64");
   return [
     "$ErrorActionPreference='Stop'",
+    // Constrained/restricted language mode cannot construct WinRT objects at all, and
+    // the error it produces four lines later ("method invocation is not supported")
+    // says nothing about the cause. Name it up front instead.
+    // (Reading the language mode is itself allowed under it; writing the reason to
+    // stderr is NOT — [Console] is not one of the types a constrained session may
+    // call into — so that line is best-effort and the exit code carries the meaning.)
+    "$lm=[string]$ExecutionContext.SessionState.LanguageMode",
+    "if ($lm -ne 'FullLanguage') { try { [Console]::Error.WriteLine('powershell language mode is '+$lm+'; a WinRT toast needs FullLanguage') } catch { }; exit " + TOAST_EXIT.LANGUAGE_MODE + " }",
+    `$appId='${APP_ID}'`,
+    `$fallbackId='${FALLBACK_APP_ID}'`,
     "try {",
-    `  $appId='${APP_ID}'`,
     "  $k='HKCU:\\Software\\Classes\\AppUserModelId\\'+$appId",
     "  if (-not (Test-Path $k)) { New-Item -Path $k -Force | Out-Null }",
-    `  if ((Get-ItemProperty -Path $k -Name DisplayName -ErrorAction SilentlyContinue).DisplayName -ne '${APP_NAME}') {`,
-    `    New-ItemProperty -Path $k -Name DisplayName -Value '${APP_NAME}' -PropertyType String -Force | Out-Null`,
-    "  }",
+    `  New-ItemProperty -Path $k -Name DisplayName -Value '${APP_NAME}' -PropertyType String -Force | Out-Null`,
+    "  New-ItemProperty -Path $k -Name ShowInSettings -Value 1 -PropertyType DWord -Force | Out-Null",
+    "  New-ItemProperty -Path $k -Name ShowInActionCenter -Value 1 -PropertyType DWord -Force | Out-Null",
+    // Not fatal: the fallback app id is registered by Windows itself, so a locked-down
+    // HKCU still gets a toast — we just say what happened.
+    "} catch { [Console]::Error.WriteLine('app id registration failed: '+$_.Exception.Message) }",
+    // The one unambiguous "the user switched us off" signal: the value the Settings ▸
+    // Notifications toggle writes. Absent = Windows has never seen us (not a refusal).
+    "$muted=$false",
+    "try {",
+    "  $sk='HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings\\'+$appId",
+    "  $sv=Get-ItemProperty -Path $sk -Name Enabled -ErrorAction SilentlyContinue",
+    // $null on the left: the right-hand side is whatever Get-ItemProperty returned,
+    // and PowerShell's -ne filters a collection instead of comparing it.
+    "  if ($null -ne $sv -and $sv.Enabled -eq 0) { $muted=$true }",
+    "} catch { }",
+    `if ($muted) { [Console]::Error.WriteLine('toast suppressed by Windows: notifications are switched off for '+$appId+' in Settings'); exit ${TOAST_EXIT.SUPPRESSED} }`,
+    "try {",
     "  [Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime] | Out-Null",
+    "  [Windows.UI.Notifications.ToastNotification,Windows.UI.Notifications,ContentType=WindowsRuntime] | Out-Null",
     "  [Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom,ContentType=WindowsRuntime] | Out-Null",
+    "} catch { [Console]::Error.WriteLine('WinRT notifications are unavailable: '+$_.Exception.Message); exit " + TOAST_EXIT.NO_WINRT + " }",
+    "try {",
     "  $xml = New-Object Windows.Data.Xml.Dom.XmlDocument",
     `  $xml.LoadXml([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64}')))`,
-    "  $n = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($appId)",
-    "  if ($n.Setting -ne 'Enabled') { [Console]::Error.WriteLine('toast suppressed: '+$n.Setting); exit 2 }",
-    "  $n.Show([Windows.UI.Notifications.ToastNotification]::new($xml))",
-    "  exit 0",
-    "} catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }",
+    "} catch { [Console]::Error.WriteLine('toast payload rejected: '+$_.Exception.Message); exit " + TOAST_EXIT.FAILED + " }",
+    // Build the candidate list: Enabled notifiers first, in app-id preference order,
+    // then the merely-unrecognised ones. Two plain arrays rather than Sort-Object,
+    // which is not a stable sort in Windows PowerShell and would be free to reorder
+    // equally-ranked candidates.
+    "$best=@(); $rest=@(); $blocked=''; $last=''",
+    "foreach ($id in @($appId,$fallbackId)) {",
+    "  try { $n=[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($id) } catch { $last=$_.Exception.Message; continue }",
+    "  $s='Unknown'",
+    // Reading Setting can itself throw for an app id Windows does not know; that is
+    // the same "not recognised yet" case as DisabledForApplication, not a refusal.
+    "  try { $s=[string]$n.Setting } catch { $s='Unknown' }",
+    "  $o=[pscustomobject]@{ N=$n; Id=$id; Setting=$s; Enabled=($s -eq 'Enabled') }",
+    "  if ($s -eq 'DisabledForUser' -or $s -eq 'DisabledByGroupPolicy') { $blocked=$s }",
+    "  elseif ($o.Enabled) { $best+=$o }",
+    "  else { $rest+=$o }",
+    "}",
+    "$order=@($best)+@($rest)",
+    // A definitive disable vetoes the whole attempt, not just its own candidate: it is
+    // a user/machine-wide switch, so honouring it on one identity and then pushing the
+    // same toast out under another would be sneaking around the user's own setting.
+    // Checked BEFORE anything is shown, and ahead of the empty-list case, because
+    // "notifications are off" is a better answer than "no notifier available".
+    `if ($blocked) { [Console]::Error.WriteLine('toast suppressed by Windows: '+$blocked); exit ${TOAST_EXIT.SUPPRESSED} }`,
+    `if ($order.Count -eq 0) { [Console]::Error.WriteLine('no toast notifier available: '+$last); exit ${TOAST_EXIT.FAILED} }`,
+    "foreach ($o in $order) {",
+    "  try {",
+    // A ToastNotification is consumed by Show(), so build a fresh one per attempt.
+    "    $o.N.Show([Windows.UI.Notifications.ToastNotification]::new($xml))",
+    "  } catch { $last=$_.Exception.Message; continue }",
+    "  $msg=''",
+    "  if (-not $o.Enabled) { $msg='notifier setting is '+$o.Setting+'; shown anyway' }",
+    "  if ($o.Id -ne $appId) { if ($msg) { $msg=$msg+'; ' }; $msg=$msg+'shown under the fallback app id' }",
+    "  if ($msg) { [Console]::Error.WriteLine($msg) }",
+    `  exit ${TOAST_EXIT.OK}`,
+    "}",
+    `[Console]::Error.WriteLine('toast failed: '+$last); exit ${TOAST_EXIT.FAILED}`,
   ].join("\n");
+}
+
+/**
+ * Where powershell.exe lives. Spawning the bare name trusts PATH — which the
+ * extension host inherits from whatever launched VS Code, and which can be stripped
+ * or shadowed; an ENOENT there costs us the toast for no reason. The absolute
+ * System32 path is the same binary on every Windows install, so prefer it and keep
+ * the bare name only as a fallback. `exists` is injected so this stays pure.
+ */
+function powershellPath(env, exists) {
+  const root = env && (env.SystemRoot || env.windir || env.WINDIR);
+  if (root) {
+    const p = String(root).replace(/[\\/]+$/, "") + "\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+    try { if (!exists || exists(p)) return p; } catch (_) { /* fall through to PATH */ }
+  }
+  return "powershell.exe";
+}
+
+/**
+ * Turn the toast process's outcome into what the host should log. `note` is the
+ * diagnostic from a toast that DID appear (fallback app id, odd notifier setting) —
+ * worth recording, not worth a fallback; `reason` is why it did not.
+ *
+ * stderr wins over the exit code because it carries the detail; the code names the
+ * failure when stderr is empty (killed process, lost pipe, stdio not captured).
+ */
+function toastResult(code, stderr) {
+  const last = String(stderr == null ? "" : stderr).split("\n").map((s) => s.trim()).filter(Boolean).pop() || "";
+  if (code === TOAST_EXIT.OK) return { ok: true, reason: "", note: last };
+  const label = TOAST_EXIT_REASONS[code] || (code == null ? "the toast script was killed" : `powershell exited ${code}`);
+  return { ok: false, reason: last || label, note: "" };
 }
 
 /**
@@ -312,10 +466,10 @@ function buildToastScript(entry) {
  * here, and the reason the visible flows have to go out of their way to force a
  * window. -WindowStyle Hidden and windowsHide are belt and braces on top.
  */
-function buildToastCommand(entry) {
+function buildToastCommand(entry, opts = {}) {
   const script = buildToastScript(entry);
   return {
-    file: "powershell.exe",
+    file: (opts && opts.file) || "powershell.exe",
     args: [
       "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
       "-ExecutionPolicy", "Bypass",
@@ -372,11 +526,12 @@ const RECONNECT_MAX_MS = 60000;
 const CONNECTION_HEALTHY_MS = 60000;
 
 module.exports = {
-  SPOOL_DIR, APP_ID, APP_NAME, LAUNCH_URI, LEVELS,
+  SPOOL_DIR, APP_ID, APP_NAME, FALLBACK_APP_ID, LAUNCH_URI, LEVELS, TOAST_EXIT,
   MAX_TITLE, MAX_BODY, DEFAULT_TTL_MS, MAX_PER_TICK,
   WATCH_FALLBACK_SECONDS, WATCH_HEARTBEAT_SECONDS, HEARTBEAT_LINE,
   RECONNECT_BASE_MS, RECONNECT_MAX_MS, CONNECTION_HEALTHY_MS,
   normalizeLevel, sanitizeText, buildClaimScript, buildWatchScript, buildWatchArgs,
   splitStream, parseEntries, selectDeliverable, reconnectDelayMs,
   xmlEscape, toastXml, buildToastScript, buildToastCommand, logLineFor,
+  powershellPath, toastResult,
 };
