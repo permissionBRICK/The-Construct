@@ -101,6 +101,9 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     (await page.getAttribute("#setAutoCheckpoints", "aria-checked")) === "false");
   check("settings: OpenCode background watcher defaults to off",
     (await page.getAttribute("#setOpenCodeBackgroundWatcher", "aria-checked")) === "false");
+  const settingsText = await page.locator("#settingsView").innerText();
+  check("settings: both patch toggles disclose reprovision-only behavior",
+    (settingsText.match(/requires reprovision/gi) || []).length >= 2);
   const before = await page.getAttribute("#setServeWeb", "aria-checked");
   await page.click("#setServeWeb");
   const after = await page.getAttribute("#setServeWeb", "aria-checked");

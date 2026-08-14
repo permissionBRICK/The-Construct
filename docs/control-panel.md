@@ -317,12 +317,11 @@ signals used by Construct's optional T3 monitoring patch.
 
 This feature contains only that dependency-free watcher plugin. It does **not** install
 the source archive's Cortecs request hook, provider settings, model-fallback changes, or
-repository symlinks. Enabling or disabling it applies live over SSH and restarts only an
-active `opencode-serve` service; new CLI/T3 sessions pick up the change on startup. Turning
+repository symlinks. Enabling or disabling it is applied by the next reprovision; saving a
+changed setting shows a prompt with a **Reprovision now** action. Turning
 it off removes only a plugin bearing Construct's ownership marker, so an unrelated local
 `background.js` is never overwritten or deleted. The preference is also carried through
-reprovision and rebuilds as `OPENCODE_BACKGROUND_WATCHER`. Live changes queue the service
-restart instead of waiting for OpenCode to shut down, so saving Settings remains responsive.
+reprovision and rebuilds as `OPENCODE_BACKGROUND_WATCHER`.
 
 ### T3 Code web GUI
 
@@ -365,16 +364,14 @@ runtime patches of the installed `t3` server as one reversible set:
   `<background-task ...>` wake-up prompt, or a completed `background_kill`, closes that
   task and clears the monitoring state.
 
-Like the mic switch it is a **live** toggle: flipping it on patches the bundle over SSH
-and restarts `t3code-serve`; flipping it off removes both patches. The preference rides
-reprovision/reinstall, and the provisioner re-applies both patches after every T3
+This is a **reprovision-only** toggle: saving a change persists it and shows a prompt with
+a **Reprovision now** action. The reprovision applies or removes both patches and restarts
+`t3code-serve`. The preference also rides reinstall, and the provisioner re-applies both patches after every T3
 install/update. For compatibility with existing machines, its internal config key remains
 `T3CODE_LIMIT_RESUME`; the UI and behavior now cover the whole patch set. Both patchers
 are version-guarded. If a newer T3 bundle changes an anchor, that feature is skipped with
 a warning instead of breaking T3. The auto-resume dispatch authenticates with its own
-long-lived T3 API token (`/etc/construct/t3park-token`, minted on enable). Because T3 may
-take a long time to honor `SIGTERM`, the live toggle queues its service restart and returns
-without waiting; managed service units cap future stop waits at five seconds.
+long-lived T3 API token (`/etc/construct/t3park-token`, minted on enable).
 
 ## Troubleshooting
 

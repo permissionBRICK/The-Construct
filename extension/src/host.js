@@ -361,6 +361,19 @@ function mapFromForm(form) {
   return out;
 }
 
+/** Patch settings that are deliberately provisioning-only. Treat an absent
+ *  key as the off default so saving an untouched form does not create a false
+ *  reprovision warning. Returns user-facing feature names that changed. */
+function patchReprovisionChanges(previous, next) {
+  previous = previous || {};
+  next = next || {};
+  return [
+    ["t3codeLimitResume", "T3 Code extra features"],
+    ["opencodeBackgroundWatcher", "OpenCode background watcher"],
+  ].filter(([key]) => (previous[key] === true) !== (next[key] === true))
+    .map(([, label]) => label);
+}
+
 // ── Automatic-checkpoint "applied" marker ───────────────────────────────────--
 // `vmAutoCheckpoints` is the user's PREFERENCE; `vmAutoCheckpointsApplied` records the
 // value we last CONFIRMED onto the live VM (the elevated script reports success through
@@ -409,7 +422,7 @@ module.exports = {
   CONTAINER, MARKER, SETTINGS_FILE,
   localAppData, findScriptsDir, resolveScriptsDir,
   settingsPath, projectsDir, configDir,
-  readRawSettings, writeRawSettings, mapToForm, mapFromForm,
+  readRawSettings, writeRawSettings, mapToForm, mapFromForm, patchReprovisionChanges,
   readSettings, saveSettings, readProjectProfile,
   safeProfileName, listProjectProfiles, writeProjectProfile, writeProjectProfileIfAbsent,
   readSelectedProjects, hasPersistedSelection, saveSelectedProjects,

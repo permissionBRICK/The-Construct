@@ -26,7 +26,6 @@ const remote = require("./src/remote");
 const vmpower = require("./src/vmpower");
 const projects = require("./src/projects");
 const audio = require("./src/audio");
-const opencode = require("./src/opencode");
 const t3code = require("./src/t3code");
 const repatch = require("./src/repatch");
 const configsync = require("./src/configsync");
@@ -1115,6 +1114,28 @@ async function offerApplyCheckpoints(scriptsDir, enabled, changed) {
   }, 1500);
 }
 
+/** Patch toggles are provisioning-only: saving persists them, then this offers
+ *  the lifecycle action that applies them. No VM-side SSH mutation happens in
+ *  the settings-save path. */
+function offerReprovisionForPatchSettings(scriptsDir, features) {
+  const names = features.join(" and ");
+  vscode.window.showWarningMessage(
+    `Construct settings saved. Changing ${names} requires a reprovision before it takes effect.`,
+    "Reprovision now",
+  ).then(async (pick) => {
+    if (pick !== "Reprovision now") return;
+    try {
+      const pf = await lifecyclePreFlight("reprovisioning");
+      if (!pf.ok) { showPreFlightBlock(pf); return; }
+      const selected = await effectiveProjects();
+      lifecycle.run("reprovision", { scriptsDir, projects: selected });
+      beginReprovisionFastRefresh();
+    } catch (e) {
+      vscode.window.showErrorMessage("Couldn't start reprovision: " + (e && e.message ? e.message : e));
+    }
+  });
+}
+
 /** Power the VM off over SSH (root → systemctl poweroff). Confirms first; warns
  *  that an attached remote window will lose its connection. */
 async function runShutdown() {
@@ -1721,11 +1742,13 @@ function handleMessage(message, webview, context) {
       const scriptsDir = resolveScriptsDir();
       if (!scriptsDir) { warnNoScriptsDir(); return; }
       try {
-        // Snapshot the previous state BEFORE the write so live toggles below can
-        // key on actual transitions (off→on / on→off), not the absolute value.
+        // Snapshot the previous state BEFORE the write so live T3 changes and
+        // provisioning-only patch prompts key on transitions, not absolute values.
         const prev = host.readSettings(scriptsDir);
         const merged = host.mapToForm(host.saveSettings(scriptsDir, message.settings));
-        vscode.window.showInformationMessage("Construct settings saved.");
+        const patchChanges = host.patchReprovisionChanges(prev, merged);
+        if (patchChanges.length) offerReprovisionForPatchSettings(scriptsDir, patchChanges);
+        else vscode.window.showInformationMessage("Construct settings saved.");
         pushSettings(webview); // reflect the normalized, merged on-disk state
         // The "Microphone passthrough" toggle is a live preference: honor it now, not
         // just on next startup, so changing the setting actually does something.
@@ -1746,34 +1769,14 @@ function handleMessage(message, webview, context) {
         const newCh = merged.t3codeChannel || "stable";
         const oldCh = prev.t3codeChannel || "stable";
         const t3plan = t3code.planT3LiveAction(wantT3, hadT3, newCh, oldCh);
-        // Construct's T3 extra-feature patch set rides on top: enable/setChannel
-        // npm-reinstall the bundle (stock), so both patches are (re)applied AFTER
-        // those complete. The shared serial queue inside t3code.js keeps the
-        // order right; a plain preference flip applies/reverts them on its own.
-        const wantPark = message.settings && message.settings.t3codeLimitResume === true;
-        const hadPark = prev.t3codeLimitResume === true;
-        const parkPlan = t3code.planT3ParkLiveAction(t3plan, wantT3, wantPark, hadPark);
-        let lastT3Action = Promise.resolve();
         if (t3plan) {
           if (t3plan.action === "enable") {
-            lastT3Action = t3code.enableOnVm({ channel: t3plan.channel }).then(() => refreshAll());
+            t3code.enableOnVm({ channel: t3plan.channel }).then(() => refreshAll());
           } else if (t3plan.action === "disable") {
-            lastT3Action = t3code.disableOnVm().then(() => refreshAll());
+            t3code.disableOnVm().then(() => refreshAll());
           } else if (t3plan.action === "setChannel") {
-            lastT3Action = t3code.setChannelOnVm(t3plan.channel).then(() => refreshAll());
+            t3code.setChannelOnVm(t3plan.channel).then(() => refreshAll());
           }
-        }
-        if (parkPlan) {
-          lastT3Action = t3code.setLimitResumeOnVm(parkPlan === "apply").then(() => refreshAll());
-        }
-        // The OpenCode plugin owns the same VM config file as the T3 live actions.
-        // Sequence it after those actions so simultaneous setting changes cannot
-        // race each other's atomic config update.
-        const wantOpenCodeWatcher = message.settings && message.settings.opencodeBackgroundWatcher === true;
-        const hadOpenCodeWatcher = prev.opencodeBackgroundWatcher === true;
-        const opencodePlan = opencode.planBackgroundWatcherLiveAction(wantOpenCodeWatcher, hadOpenCodeWatcher);
-        if (opencodePlan) {
-          lastT3Action.then(() => opencode.setBackgroundWatcherOnVm(opencodePlan === "enable")).then(() => refreshAll());
         }
         // Automatic checkpoints are a HYPER-V property, decided when the VM is
         // created — so the saved value rides the next reinstall/redownload for free.
