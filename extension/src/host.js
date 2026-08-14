@@ -298,6 +298,7 @@ function mapToForm(raw) {
   if (typeof raw.smbShare === "boolean") form.smb = raw.smbShare;
   if (typeof raw.micPassthrough === "boolean") form.mic = raw.micPassthrough;
   if (typeof raw.claudePartialStreaming === "boolean") form.partialStreaming = raw.claudePartialStreaming;
+  if (typeof raw.opencodeBackgroundWatcher === "boolean") form.opencodeBackgroundWatcher = raw.opencodeBackgroundWatcher;
   if (typeof raw.t3code === "boolean") form.t3code = raw.t3code;
   if (has("t3codeChannel")) {
     const ch = String(raw.t3codeChannel);
@@ -348,6 +349,7 @@ function mapFromForm(form) {
   setBool("vsCodeTunnel", form.tunnel);
   setBool("smbShare", form.smb);
   setBool("claudePartialStreaming", form.partialStreaming);
+  setBool("opencodeBackgroundWatcher", form.opencodeBackgroundWatcher);
   setBool("micPassthrough", form.mic);
   setBool("t3code", form.t3code);
   // Only persist a valid channel — an unknown/absent value must not clobber a

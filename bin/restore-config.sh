@@ -191,6 +191,28 @@ if [[ -f "${BACKUP_DIR}/backup-info.json" ]]; then
   fi
 fi
 
+# ── Optional OpenCode background watcher from backup metadata ───────────────
+# The plugin is Construct-managed code, so it is regenerated from the current
+# repo instead of copied into the backup. Older backups omit this key; in that
+# case leave the freshly provisioned/panel-selected preference untouched.
+if [[ -f "${BACKUP_DIR}/backup-info.json" ]]; then
+  _restore_ocbg="$(jq -r 'if has("opencodeBackgroundWatcher") and (.opencodeBackgroundWatcher | type == "boolean") then (.opencodeBackgroundWatcher | tostring) else "" end' "${BACKUP_DIR}/backup-info.json" 2>/dev/null)"
+  if [[ "${_restore_ocbg}" == "true" || "${_restore_ocbg}" == "false" ]]; then
+    if [[ -f "${REPO_DIR}/bin/config-set.sh" ]]; then
+      bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" OPENCODE_BACKGROUND_WATCHER "${_restore_ocbg}" 2>/dev/null || true
+    fi
+    if [[ -f "${REPO_DIR}/bin/install-ai-tools.sh" ]]; then
+      log "restoring OpenCode background watcher preference: ${_restore_ocbg}"
+      if ! env CONSTRUCT_AI_TOOLS_FUNCS_ONLY=true REPO_DIR="${REPO_DIR}" \
+          OPENCODE_BACKGROUND_WATCHER="${_restore_ocbg}" \
+          bash -c 'source "$1"; configure_opencode_background_watcher "$2" root' \
+          _ "${REPO_DIR}/bin/install-ai-tools.sh" "${EXPORT_HOME}"; then
+        err "OpenCode background watcher restore failed; reprovision to retry"
+      fi
+    fi
+  fi
+fi
+
 # ── T3 Code reinstall from backup metadata ───────────────────────────────────
 # A console reinstall provisions the fresh VM with an EMPTY T3CODE (keep-saved
 # semantics), and the new config.env has nothing saved -- so T3 Code doesn't get

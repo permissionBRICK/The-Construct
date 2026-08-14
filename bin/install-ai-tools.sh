@@ -60,6 +60,8 @@ AI_TOOLS="${AI_TOOLS_OVERRIDE:-${AI_TOOLS:-}}"
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-/root/repos}"
 OPENCODE_HOST="${OPENCODE_HOST:-0.0.0.0}"
 OPENCODE_PORT="${OPENCODE_PORT:-4096}"
+OPENCODE_BACKGROUND_WATCHER="${OPENCODE_BACKGROUND_WATCHER:-false}"
+[[ "${OPENCODE_BACKGROUND_WATCHER}" == "true" ]] || OPENCODE_BACKGROUND_WATCHER=false
 CODEX_HOST="${CODEX_HOST:-0.0.0.0}"
 CODEX_PORT="${CODEX_PORT:-4500}"
 CODEX_TOKEN_FILE="${CODEX_TOKEN_FILE:-/etc/construct/codex-app-server.token}"
@@ -280,9 +282,13 @@ install_opencode() {
   # config (if different) for interactive SSH use.
   configure_opencode_settings "/root" "root"
   install_agent_system_prompt "/root/.config/opencode/AGENTS.md" "root"
+  configure_opencode_background_watcher "/root" "root" \
+    || warn "WARNING: OpenCode background watcher setting could not be applied for root"
   if [[ "${TARGET_USER}" != "root" ]] && id "${TARGET_USER}" >/dev/null 2>&1; then
     configure_opencode_settings "/home/${TARGET_USER}" "${TARGET_USER}"
     install_agent_system_prompt "/home/${TARGET_USER}/.config/opencode/AGENTS.md" "${TARGET_USER}"
+    configure_opencode_background_watcher "/home/${TARGET_USER}" "${TARGET_USER}" \
+      || warn "WARNING: OpenCode background watcher setting could not be applied for ${TARGET_USER}"
   fi
 
   # The service's WorkingDirectory must exist or systemd fails to start it
@@ -301,6 +307,50 @@ install_opencode() {
     warn "WARNING: opencode-serve failed to start; recent status and logs:"
     systemctl --no-pager --full status opencode-serve >&2 || true
     journalctl -u opencode-serve --no-pager -n 30 >&2 || true
+  fi
+}
+
+# Install/remove Construct's dependency-free OpenCode background watcher. This
+# is deliberately the ONLY feature taken from opencode-cortecs-config: the
+# Cortecs request hook and provider configuration are not shipped or touched.
+# The fixed destination is safe to remove only when it carries our marker.
+configure_opencode_background_watcher() {
+  local home_dir="$1"
+  local owner="$2"
+  local source_file="${REPO_DIR}/extension/vm/opencode-background.js"
+  local plugin_dir="${home_dir}/.config/opencode/plugins"
+  local target_file="${plugin_dir}/background.js"
+  local marker="Construct-managed OpenCode background watcher."
+
+  if [[ "${OPENCODE_BACKGROUND_WATCHER}" == "true" ]]; then
+    if [[ ! -f "${source_file}" ]]; then
+      warn "OpenCode background watcher source is missing: ${source_file}"
+      return 1
+    fi
+    if ! node --check "${source_file}" >/dev/null 2>&1; then
+      warn "OpenCode background watcher source failed JavaScript validation: ${source_file}"
+      return 1
+    fi
+    install -d -m 0755 "${plugin_dir}"
+    if [[ -L "${target_file}" ]] && [[ "$(readlink -f "${target_file}" 2>/dev/null || true)" == */opencode-cortecs-config/plugins/background.js ]]; then
+      rm -f -- "${target_file}"
+    elif [[ -e "${target_file}" || -L "${target_file}" ]] && ! grep -Fq "${marker}" "${target_file}" 2>/dev/null; then
+      warn "Refusing to replace unmanaged OpenCode plugin ${target_file}"
+      return 1
+    fi
+    install -m 0644 "${source_file}" "${target_file}"
+    chown "${owner}:${owner}" "${target_file}" 2>/dev/null || true
+    ok "OpenCode background watcher enabled at ${target_file}"
+    return 0
+  fi
+
+  if [[ -e "${target_file}" || -L "${target_file}" ]]; then
+    if grep -Fq "${marker}" "${target_file}" 2>/dev/null; then
+      rm -f -- "${target_file}"
+      ok "OpenCode background watcher disabled for ${owner}"
+    else
+      note "Leaving unmanaged OpenCode plugin untouched: ${target_file}"
+    fi
   fi
 }
 

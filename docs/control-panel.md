@@ -306,6 +306,23 @@ You can also run it by hand:
 .\Set-AgentVmCheckpoints.ps1 -Enabled false -RemoveExisting false   # policy only
 ```
 
+### OpenCode background watcher
+
+The **Patch OpenCode with background watcher** toggle is a separate, off-by-default
+feature. It installs a Construct-managed OpenCode plugin that provides three tools:
+`background` starts a detached process, `background_output` reads its captured output,
+and `background_kill` stops it. A `background` call with `wait: true` can wake the
+originating OpenCode session when the process finishes, which also supplies the stable
+signals used by Construct's optional T3 monitoring patch.
+
+This feature contains only that dependency-free watcher plugin. It does **not** install
+the source archive's Cortecs request hook, provider settings, model-fallback changes, or
+repository symlinks. Enabling or disabling it applies live over SSH and restarts only an
+active `opencode-serve` service; new CLI/T3 sessions pick up the change on startup. Turning
+it off removes only a plugin bearing Construct's ownership marker, so an unrelated local
+`background.js` is never overwritten or deleted. The preference is also carried through
+reprovision and rebuilds as `OPENCODE_BACKGROUND_WATCHER`.
+
 ### T3 Code web GUI
 
 The **T3 Code web GUI** toggle (off by default) opts the VM into

@@ -83,6 +83,7 @@ function buildInvocation(action, opts = {}) {
       pushBool("-SmbShare", s.smb);
       pushBool("-ClaudePartialStreaming", s.partialStreaming);
       pushBool("-MicPassthrough", s.mic);
+      if (opts.supportsOpenCodeBackgroundWatcher !== false) pushBool("-OpenCodeBackgroundWatcher", s.opencodeBackgroundWatcher);
       pushBool("-T3Code", s.t3code);
       if (opts.supportsT3CodeChannel !== false) pushPair("-T3CodeChannel", s.t3codeChannel);
       if (opts.supportsT3CodeLimitResume !== false) pushBool("-T3CodeLimitResume", s.t3codeLimitResume);
@@ -119,6 +120,7 @@ function buildInvocation(action, opts = {}) {
       // fall back to the provisioner's default-on).
       pushBool("-ClaudePartialStreaming", s.partialStreaming);
       pushBool("-MicPassthrough", s.mic);
+      if (opts.supportsOpenCodeBackgroundWatcher !== false) pushBool("-OpenCodeBackgroundWatcher", s.opencodeBackgroundWatcher);
       pushBool("-T3Code", s.t3code);
       if (opts.supportsT3CodeChannel !== false) pushPair("-T3CodeChannel", s.t3codeChannel);
       if (opts.supportsT3CodeLimitResume !== false) pushBool("-T3CodeLimitResume", s.t3codeLimitResume);
@@ -193,6 +195,21 @@ function scriptSupportsCheckpoints(scriptsDir) {
 function scriptSupportsT3CodeLimitResume(scriptsDir, action) {
   if (!scriptsDir) return false;
   const re = /\$T3CodeLimitResume\s*(?:=|,|\)|$)/im;
+  const check = (file) => {
+    let txt;
+    try { txt = fs.readFileSync(path.join(scriptsDir, file), "utf8"); } catch (_) { return false; }
+    const code = txt.replace(/<#[\s\S]*?#>/g, "").replace(/^[ \t]*#.*$/gm, "");
+    return re.test(code);
+  };
+  if (action === "reprovision") return check(PROVISION);
+  if (action === "reinstall" || action === "redownload") return check(AUTO_INSTALL);
+  return check(PROVISION) && check(AUTO_INSTALL);
+}
+
+/** Capability gate for the optional OpenCode background-watcher parameter. */
+function scriptSupportsOpenCodeBackgroundWatcher(scriptsDir, action) {
+  if (!scriptsDir) return false;
+  const re = /\$OpenCodeBackgroundWatcher\s*(?:=|,|\)|$)/im;
   const check = (file) => {
     let txt;
     try { txt = fs.readFileSync(path.join(scriptsDir, file), "utf8"); } catch (_) { return false; }
@@ -438,6 +455,7 @@ function run(action, opts = {}) {
     supportsCheckpoints: scriptSupportsCheckpoints(scriptsDir),
     supportsT3CodeChannel: scriptSupportsT3CodeChannel(scriptsDir, action),
     supportsT3CodeLimitResume: scriptSupportsT3CodeLimitResume(scriptsDir, action),
+    supportsOpenCodeBackgroundWatcher: scriptSupportsOpenCodeBackgroundWatcher(scriptsDir, action),
   });
   if (!inv) return;
   // Honesty gate: when the scripts are too old to take -AutomaticCheckpoints we drop the
@@ -473,6 +491,7 @@ module.exports = {
   PROVISION, AUTO_INSTALL, CHECKPOINTS, BACKUP_DIR_NAME,
   normalizeBackupMode, buildInvocation, scriptSupportsCheckpoints, scriptSupportsT3CodeChannel,
   scriptSupportsT3CodeLimitResume,
+  scriptSupportsOpenCodeBackgroundWatcher,
   psSingleQuote, winQuoteArg, buildChildCommandLine, buildOuterCommand, buildCallCommand, buildHostLaunch,
   hostLaunchSpawnOptions, launchHostScript, run, configure,
 };

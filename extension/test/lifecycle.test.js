@@ -26,7 +26,7 @@ ok("backupMode: undefined -> save", life.normalizeBackupMode(undefined) === "sav
 
 // ── reprovision ──────────────────────────────────────────────────────────────
 const repro = life.buildInvocation("reprovision", {
-  settings: { gitName: "Neo", gitEmail: "neo@zion.io", serveWeb: true, tunnel: false, smb: true, partialStreaming: true, mic: true, t3code: true, t3codeChannel: "nightly" },
+  settings: { gitName: "Neo", gitEmail: "neo@zion.io", serveWeb: true, tunnel: false, smb: true, partialStreaming: true, mic: true, opencodeBackgroundWatcher: true, t3code: true, t3codeChannel: "nightly" },
 });
 ok("reprovision: uses Provision script", repro.script === life.PROVISION);
 ok("reprovision: not destructive, not elevated", repro.destructive === false && repro.elevate === false);
@@ -34,6 +34,7 @@ ok("reprovision: -Action provision", has(repro.args, "-Action", "provision"));
 ok("reprovision: git identity", has(repro.args, "-GitUserName", "Neo") && has(repro.args, "-GitEmail", "neo@zion.io"));
 ok("reprovision: bools as true/false strings", has(repro.args, "-VsCodeServeWeb", "true") && has(repro.args, "-VsCodeTunnel", "false") && has(repro.args, "-SmbShare", "true") && has(repro.args, "-ClaudePartialStreaming", "true") && has(repro.args, "-MicPassthrough", "true"));
 ok("reprovision: threads -T3Code from settings", has(repro.args, "-T3Code", "true"));
+ok("reprovision: threads the OpenCode watcher setting", has(repro.args, "-OpenCodeBackgroundWatcher", "true"));
 ok("reprovision: threads -T3CodeChannel from settings", has(repro.args, "-T3CodeChannel", "nightly"));
 
 const reproEmpty = life.buildInvocation("reprovision", { settings: {} });
@@ -52,7 +53,7 @@ ok("export: -Action export -BackupDir", has(exp.args, "-Action", "export", "-Bac
 ok("export: not destructive", exp.destructive === false && exp.elevate === false);
 
 // ── reinstall ────────────────────────────────────────────────────────────────
-const rei = life.buildInvocation("reinstall", { settings: { ram: "16", disk: "80", gitName: "Neo", partialStreaming: false, mic: true, t3code: false } });
+const rei = life.buildInvocation("reinstall", { settings: { ram: "16", disk: "80", gitName: "Neo", partialStreaming: false, mic: true, opencodeBackgroundWatcher: false, t3code: false } });
 ok("reinstall: uses Auto-Install script", rei.script === life.AUTO_INSTALL);
 ok("reinstall: destructive + elevated", rei.destructive === true && rei.elevate === true);
 ok("reinstall: label", rei.label === "Reinstall");
@@ -62,6 +63,7 @@ ok("reinstall: no -UbuntuRelease (reuses ISO)", !rei.args.includes("-UbuntuRelea
 ok("reinstall: threads -ClaudePartialStreaming from settings", has(rei.args, "-ClaudePartialStreaming", "false"));
 ok("reinstall: threads -MicPassthrough from settings", has(rei.args, "-MicPassthrough", "true"));
 ok("reinstall: threads -T3Code from settings (explicit off persists)", has(rei.args, "-T3Code", "false"));
+ok("reinstall: threads the OpenCode watcher explicit off", has(rei.args, "-OpenCodeBackgroundWatcher", "false"));
 ok("reinstall: omits -T3CodeChannel when absent from settings",
   !rei.args.includes("-T3CodeChannel"));
 
@@ -90,6 +92,10 @@ ok("rebuild: drops -T3CodeChannel when the scripts don't support it",
   !life.buildInvocation("reinstall", { settings: { t3codeChannel: "nightly" }, supportsT3CodeChannel: false }).args.includes("-T3CodeChannel"));
 ok("rebuild: keeps -T3CodeChannel when supported",
   has(life.buildInvocation("reinstall", { settings: { t3codeChannel: "nightly" }, supportsT3CodeChannel: true }).args, "-T3CodeChannel", "nightly"));
+ok("reprovision: drops the OpenCode watcher flag for old scripts",
+  !life.buildInvocation("reprovision", { settings: { opencodeBackgroundWatcher: true }, supportsOpenCodeBackgroundWatcher: false }).args.includes("-OpenCodeBackgroundWatcher"));
+ok("rebuild: keeps the OpenCode watcher flag when supported",
+  has(life.buildInvocation("reinstall", { settings: { opencodeBackgroundWatcher: true }, supportsOpenCodeBackgroundWatcher: true }).args, "-OpenCodeBackgroundWatcher", "true"));
 
 const redNoRel = life.buildInvocation("redownload", { settings: {} });
 ok("redownload: omits -UbuntuRelease when unset", !redNoRel.args.includes("-UbuntuRelease"));
@@ -213,6 +219,20 @@ ok("reprovision: keeps -T3CodeChannel when Provision=new (even if Auto-Install=o
   life.buildInvocation("reprovision", { settings: { t3codeChannel: "nightly" }, supportsT3CodeChannel: true }).args.includes("-T3CodeChannel"));
 ok("rebuild: drops -T3CodeChannel when Auto-Install=old",
   !life.buildInvocation("reinstall", { settings: { t3codeChannel: "nightly" }, supportsT3CodeChannel: false }).args.includes("-T3CodeChannel"));
+
+// ── scriptSupportsOpenCodeBackgroundWatcher (action-sensitive) ─────────────
+const sdWatcher = fs.mkdtempSync(path.join(os.tmpdir(), "construct-life-watcher-"));
+fs.writeFileSync(path.join(sdWatcher, "Provision-AgentVM.ps1"), "param(\n  [string]$OpenCodeBackgroundWatcher = \"\"\n)\n");
+ok("watcher-capability: reprovision checks Provision only",
+  life.scriptSupportsOpenCodeBackgroundWatcher(sdWatcher, "reprovision") === true);
+ok("watcher-capability: rebuild is unsupported without the Auto-Install parameter",
+  life.scriptSupportsOpenCodeBackgroundWatcher(sdWatcher, "reinstall") === false);
+fs.writeFileSync(path.join(sdWatcher, "Auto-Install.ps1"), "param(\n  [string]$OpenCodeBackgroundWatcher = \"\"\n)\n");
+ok("watcher-capability: rebuild checks Auto-Install only",
+  life.scriptSupportsOpenCodeBackgroundWatcher(sdWatcher, "redownload") === true);
+fs.writeFileSync(path.join(sdWatcher, "Provision-AgentVM.ps1"), "# $OpenCodeBackgroundWatcher is documented here\nparam([string]$T3Code)\n");
+ok("watcher-capability: a comment-only mention does not count",
+  life.scriptSupportsOpenCodeBackgroundWatcher(sdWatcher, "reprovision") === false);
 
 ok("unknown action -> null", life.buildInvocation("bogus", {}) === null);
 
