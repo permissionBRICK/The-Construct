@@ -30,6 +30,14 @@ ok("enable: refuses to overwrite an unmanaged plugin",
 ok("disable: removes only a marker-owned plugin",
   disable.includes("grep -Fq \"$MARKER\"") && disable.includes("refusing to remove unmanaged OpenCode plugin"));
 ok("disable: persists the off state", disable.includes("cfgset OPENCODE_BACKGROUND_WATCHER false"));
+ok("live enable and disable queue service restarts without waiting on shutdown",
+  enable.includes("systemctl --no-block restart opencode-serve") &&
+  disable.includes("systemctl --no-block restart opencode-serve"));
+
+const t3Unit = fs.readFileSync(path.join(__dirname, "..", "..", "systemd", "t3code-serve.service"), "utf8");
+const opencodeUnit = fs.readFileSync(path.join(__dirname, "..", "..", "systemd", "opencode-serve.service"), "utf8");
+ok("managed services have bounded stop timeouts",
+  t3Unit.includes("TimeoutStopSec=5s") && opencodeUnit.includes("TimeoutStopSec=5s"));
 
 const plugin = fs.readFileSync(path.join(__dirname, "..", "vm", "opencode-background.js"), "utf8");
 ok("plugin: Construct ownership marker is present", plugin.includes(opencode.MARKER));

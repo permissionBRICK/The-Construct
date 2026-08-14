@@ -122,6 +122,7 @@ WorkingDirectory=$WORKSPACE_ROOT
 ExecStart=/usr/local/bin/t3 serve --host \\\${T3CODE_HOST} --port \\\${T3CODE_PORT}
 Restart=always
 RestartSec=5
+TimeoutStopSec=5s
 
 [Install]
 WantedBy=multi-user.target
@@ -342,9 +343,10 @@ function _monitorPatcherB64() {
   ).toString("base64");
 }
 
-/** Bash: upload and apply both patchers, persist the opt-in, restart the
- *  service so the patched bundle is running, then make sure the resume API
- *  token exists (minting needs the t3 DB, hence after the restart). */
+/** Bash: upload and apply both patchers, persist the opt-in, make sure the
+ *  resume API token exists, then queue a non-blocking service restart. T3 does
+ *  not always exit promptly on SIGTERM; waiting synchronously here used to
+ *  freeze Settings saves until systemd's 90-second stop timeout. */
 function buildLimitResumeEnableScript() {
   return PRELUDE + `
 command -v node >/dev/null 2>&1 || { echo "node is not installed on the VM" >&2; exit 1; }
@@ -354,11 +356,10 @@ printf '%s' '${_monitorPatcherB64()}' | base64 -d > /tmp/construct-t3-opencode-m
 node /tmp/construct-t3-opencode-monitor-patch.mjs apply || exit $?
 cfgset T3CODE_LIMIT_RESUME true
 if [ -f /etc/systemd/system/${SERVICE}.service ]; then
-  systemctl restart ${SERVICE} 2>/dev/null || true
-  sleep 2
   node /tmp/construct-t3park-patch.mjs mint-token || true
+  systemctl --no-block restart ${SERVICE} 2>/dev/null || true
 fi
-echo "T3 Code extra features enabled"
+echo "T3 Code extra features enabled (service restart queued)"
 `;
 }
 
@@ -374,9 +375,9 @@ if command -v node >/dev/null 2>&1; then
 fi
 cfgset T3CODE_LIMIT_RESUME false
 if [ -f /etc/systemd/system/${SERVICE}.service ]; then
-  systemctl try-restart ${SERVICE} 2>/dev/null || true
+  systemctl --no-block try-restart ${SERVICE} 2>/dev/null || true
 fi
-echo "T3 Code extra features disabled (stock t3)"
+echo "T3 Code extra features disabled (stock t3; service restart queued)"
 exit 0
 `;
 }
