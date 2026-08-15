@@ -350,13 +350,15 @@ visually distinguishable from stable.
 The **Patch T3 Code with extra features** toggle (off by default) controls Construct's
 runtime patches of the installed `t3` server as one reversible set:
 
-- **Claude usage-limit recovery:** when a turn fails while the account is
-  limit-rejected (or the error text matches the usage-limit message), T3 **parks** the
+- **Claude usage-limit recovery:** when Claude rejects a turn for an account limit —
+  including SDK results wrapped as `subtype: success` with `is_error: true` — T3 **parks** the
   thread and automatically dispatches a continuation once the limit resets, plus a
-  one-minute margin. Parked threads are persisted
-  (`~/.t3/userdata/t3park-pending.json`), so they survive a service restart; the resume
-  re-uses the thread's own model/runtime settings and is skipped if you already continued
-  the thread manually.
+  one-minute margin. The park is sent through T3's native snooze lifecycle, so existing
+  clients move it into the **Snoozed** shelf and show their normal wake countdown/banner;
+  the continuation wakes it without requiring a Windows client update. Parked threads are
+  persisted (`$T3CODE_HOME/userdata/t3park-pending.json`, default
+  `~/.t3/userdata/`), so they survive a service restart; the resume re-uses the thread's
+  own model/runtime settings and is skipped if you already continued the thread manually.
 
 - **OpenCode background monitoring:** a completed `background` tool call armed with
   `wait: true` is projected as a T3 `local_bash` task, so the thread pill stays
