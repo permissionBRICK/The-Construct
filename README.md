@@ -35,6 +35,9 @@ where they can't touch your host PC.
   git-versioned on the host, shareable with a teammate via a one-liner or a zip.
 - 🎤 **Microphone passthrough** — voice input in the Claude Code extension works, even over
   Remote-SSH.
+- 🖥️ **Optional T3 Code, patched end to end** — build the selected stable or nightly
+  server and Windows Desktop app inside the VM, then keep both updated together. The shared
+  patch adds live voice input, Claude usage-limit recovery, and OpenCode task monitoring.
 - 🤷 **It just works™** — system prompts make agents just install whatever tool they need for the task automatically
 
 <sub>Bonus: auto-deploy MCP servers to all three agents · patched Claude Code extension for faster UI updates · no AI attribution by default.</sub>
@@ -77,6 +80,7 @@ during install:
 | **vscode.dev tunnel** | `https://vscode.dev/tunnel/<name>` — opt-in (`VSCODE_TUNNEL=true`) |
 | **Codex App** | Add `agent-vm` as an SSH host |
 | **Opencode** | `agent-vm.mshome.net:4096` — `opencode serve` autostarts |
+| **T3 Code** | Opt in from Construct settings, then use its paired web UI or silently installed Windows Desktop app |
 | **Windows file share** | `\\agent-vm.mshome.net\repo` — map to a drive with `-MountRepoShare true` |
 | **Terminal** | `ssh agent-vm` — direct root access |
 
@@ -98,7 +102,9 @@ Per-project setup is declared once in `projects/*.json` and reused on every (re)
 
 VM-level settings live at `/etc/construct/config.env` (agent name, projects, tools,
 workspace root). Full reference: [Project profiles & configuration](docs/projects.md) and
-[Provisioning](docs/provisioning.md).
+[Provisioning](docs/provisioning.md). Optional features—including microphone passthrough and
+the shared patched T3 Code server/Desktop build—are toggled in the
+[Construct control panel](docs/control-panel.md#patched-t3-code-server--desktop-build).
 
 ## 🔐 Know the trade
 
@@ -121,8 +127,8 @@ The Construct swaps guardrails for isolation:
 | [Provisioning](docs/provisioning.md) | `Provision-AgentVM.ps1`, `provision.sh` + env vars, agent setup |
 | [Manual setup](docs/manual-setup.md) | Blank Ubuntu VM to ready state by hand |
 | [Project profiles & configuration](docs/projects.md) | `config.env`, profile schema, MCP servers, checkouts |
-| [Remote access & services](docs/remote-access.md) | serve-web, tunnels, Codex remote, service lifecycle |
-| [Control panel](docs/control-panel.md) | The VS Code operator console, module by module |
+| [Remote access & services](docs/remote-access.md) | serve-web, tunnels, Codex remote, T3 Code, service lifecycle |
+| [Control panel](docs/control-panel.md) | The VS Code operator console, optional voice and patched T3 Code features |
 | [Backup & restore](docs/backup-restore.md) | Carrying agent config and auth across reinstalls |
 | [Config sync](docs/config-sync.md) | How project profiles survive a reinstall and sync between VM and host |
 

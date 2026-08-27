@@ -91,6 +91,24 @@ ensure `codex` is on the remote PATH, and let Codex App start the remote app-ser
 The managed `codex-app-server.service` is for experimental WebSocket app-server usage and
 defaults to `0.0.0.0` for NAT-only VM setups.
 
+## T3 Code desktop and web
+
+T3 Code is an optional client for the coding agents already authenticated in the VM. Enable
+**T3 Code web GUI** in the Construct control panel to run its server in the VM and connect with
+either the paired browser UI or T3 Code's Windows Desktop app. The separate **Build patched T3
+Code + Desktop** setting builds the selected stable/nightly source once inside the VM, uses that
+same patched build for both clients, and silently installs or updates Desktop on the host during
+provisioning. Routine reprovisions skip the build and installation when neither T3 Code nor
+Construct has changed.
+
+The patched clients add a mic button beside Send and a **Ctrl+T** shortcut. Speech appears live
+at the cursor without replacing existing input, and the recording ring responds to microphone
+level. This reuses Construct's microphone tunnel, so **Microphone passthrough** must also be
+enabled and a VS Code window running the Construct extension must remain open while recording.
+The patch also adds Claude usage-limit recovery and OpenCode background-task monitoring. See
+[Control panel: Patched T3 Code server + Desktop build](control-panel.md#patched-t3-code-server--desktop-build)
+for setup, update, caching, and compatibility details.
+
 ## Agent runtime
 
 The template includes a minimal local runtime in `agent-runtime/` so the VM can start before a
@@ -105,8 +123,8 @@ sudo systemctl start|stop|restart|status construct
 ```
 
 Provisioning also manages these units (when their tools/features are selected): `opencode-serve`,
-`codex-app-server`, `code-serve-web` (browser VS Code), `code-tunnel` (the VS Code remote
-tunnel), and `smbd` (the workspace file share). Inspect any of them with
+`t3code-serve`, `codex-app-server`, `code-serve-web` (browser VS Code), `code-tunnel` (the VS Code
+remote tunnel), and `smbd` (the workspace file share). Inspect any of them with
 `systemctl status <unit>` / `journalctl -u <unit>`.
 
 Container logs:
