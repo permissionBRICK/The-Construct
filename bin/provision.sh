@@ -563,9 +563,15 @@ if [[ "${T3CODE}" == "true" ]]; then
     env TARGET_USER="${CLAUDE_USER}" AI_TOOLS_OVERRIDE=t3code AI_CONSOLE_INTEGRATION=false \
     T3CODE_CHANNEL="${T3CODE_CHANNEL}" T3CODE_LIMIT_RESUME="${T3CODE_LIMIT_RESUME}" \
     bash "${REPO_DIR}/bin/install-ai-tools.sh"
-elif [[ -f /etc/systemd/system/t3code-serve.service ]]; then
-  run_step optional "Disabling T3 Code web GUI (T3CODE=false)" \
-    systemctl disable --now t3code-serve
+else
+  # A disabled T3 deployment must not cause the host handoff to offer a stale
+  # patched Desktop installer from an earlier provision.
+  rm -f /etc/construct/t3code-desktop-status
+  bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" CONSTRUCT_T3_VOICE_INPUT false
+  if [[ -f /etc/systemd/system/t3code-serve.service ]]; then
+    run_step optional "Disabling T3 Code web GUI (T3CODE=false)" \
+      systemctl disable --now t3code-serve
+  fi
 fi
 
 run_step optional "Installing AI tool console integration" \

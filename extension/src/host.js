@@ -367,11 +367,24 @@ function mapFromForm(form) {
 function patchReprovisionChanges(previous, next) {
   previous = previous || {};
   next = next || {};
-  return [
-    ["t3codeLimitResume", "T3 Code extra features"],
-    ["opencodeBackgroundWatcher", "OpenCode background watcher"],
-  ].filter(([key]) => (previous[key] === true) !== (next[key] === true))
-    .map(([, label]) => label);
+  const changes = [];
+  const sourceBuildChanged =
+    (previous.t3codeLimitResume === true) !== (next.t3codeLimitResume === true);
+  const sourceManagedT3Changed =
+    next.t3codeLimitResume === true &&
+    next.t3code === true &&
+    (previous.t3code !== true ||
+      (previous.t3codeChannel || "stable") !== (next.t3codeChannel || "stable"));
+  if (sourceBuildChanged || sourceManagedT3Changed) {
+    changes.push("patched T3 Code + Desktop build");
+  }
+  if (
+    (previous.opencodeBackgroundWatcher === true) !==
+    (next.opencodeBackgroundWatcher === true)
+  ) {
+    changes.push("OpenCode background watcher");
+  }
+  return changes;
 }
 
 // ── Automatic-checkpoint "applied" marker ───────────────────────────────────--
