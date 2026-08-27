@@ -345,10 +345,27 @@ The choice is persisted in `config.env` (`T3CODE_CHANNEL`), rides reprovision/re
 survives a backup/restore cycle. On the agent card, a nightly install is annotated so it's
 visually distinguishable from stable.
 
-### T3 Code extra features
+### Patched T3 Code server + Desktop build
 
-The **Patch T3 Code with extra features** toggle (off by default) controls Construct's
-runtime patches of the installed `t3` server as one reversible set:
+The **Build patched T3 Code + Desktop** toggle (off by default) makes Construct resolve the
+selected npm channel to its exact upstream Git tag, apply one guarded source patch, and build
+both the VM server/web client and an unsigned Windows x64 Desktop installer from that same
+checkout. The build toolchain (Node/pnpm, Rust/MinGW, Wine, and Electron Builder) stays in the
+VM. The finished installer is copied to
+`%LOCALAPPDATA%\The-Construct\artifacts\t3code\` and silently installed or updated on
+Windows as part of provisioning. There is no installation prompt and provisioning does not
+launch the app afterward. Unchanged version/patch combinations are cached rather than rebuilt,
+and an already-current Desktop installation is left alone.
+
+The shared patch adds:
+
+- **Voice input:** a mic button immediately left of Send in both draft/new and existing chat
+  composers, plus **Ctrl+D** tap/hold behavior. The selected environment streams raw 16 kHz
+  mono PCM through Construct's existing host microphone reverse tunnel into Claude's speech
+  endpoint. Partial transcripts replace only their own live span at the cursor captured when
+  recording started; existing prefix/suffix text is never replaced, and typing while recording
+  stops the stream before another partial can write. Enable **Microphone passthrough** as well
+  and keep the Construct VS Code extension running so it owns the host capture/tunnel.
 
 - **Claude usage-limit recovery:** when Claude rejects a turn for an account limit —
   including SDK results wrapped as `subtype: success` with `is_error: true` — T3 **parks** the
@@ -367,13 +384,21 @@ runtime patches of the installed `t3` server as one reversible set:
   task and clears the monitoring state.
 
 This is a **reprovision-only** toggle: saving a change persists it and shows a prompt with
-a **Reprovision now** action. The reprovision applies or removes both patches and restarts
-`t3code-serve`. The preference also rides reinstall, and the provisioner re-applies both patches after every T3
-install/update. For compatibility with existing machines, its internal config key remains
-`T3CODE_LIMIT_RESUME`; the UI and behavior now cover the whole patch set. Both patchers
-are version-guarded. If a newer T3 bundle changes an anchor, that feature is skipped with
-a warning instead of breaking T3. The auto-resume dispatch authenticates with its own
-long-lived T3 API token (`/etc/construct/t3park-token`, minted on enable).
+a **Reprovision now** action. The reprovision selects the patched-source or stock install and
+restarts `t3code-serve`. The preference also rides reinstall. For compatibility with existing machines,
+its internal config key remains `T3CODE_LIMIT_RESUME`; the UI and behavior now cover the whole
+source-build feature set. If a newer stable/nightly source tag changes a guarded patch anchor,
+the new build is refused and the prior working T3 installation is left in place. The established
+usage-limit/OpenCode bundle transforms are applied to the freshly built server before both the
+VM install and Desktop packaging. The auto-resume dispatch authenticates with its own long-lived
+T3 API token (`/etc/construct/t3park-token`, minted on enable).
+
+In the Construct-built Desktop app, the normal update control launches `Update-T3Code.ps1`,
+which reruns Construct reprovisioning with the saved settings. It does not install an upstream
+T3 binary over the patched build. The next installer is again built in the VM and silently
+applied on the host without launching the app. The Construct panel's T3 update action and
+stable/nightly changes follow that same reprovision path while the shared source build is
+enabled, so neither end is replaced by a stock npm update.
 
 ## Troubleshooting
 

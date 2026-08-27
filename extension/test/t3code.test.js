@@ -1,6 +1,8 @@
 "use strict";
 // Plain-node unit tests for the T3 Code live-control script builders + the
 // pairing-URL extractor. No deps. Run: node t3code.test.js
+const fs = require("fs");
+const path = require("path");
 const t3 = require("../src/t3code");
 
 let pass = 0, fail = 0;
@@ -14,6 +16,29 @@ ok("npmTag: stable -> latest", t3.npmTag("stable") === "latest");
 ok("npmTag: nightly -> nightly", t3.npmTag("nightly") === "nightly");
 ok("npmTag: undefined -> latest (default)", t3.npmTag(undefined) === "latest");
 ok("npmTag: garbage -> latest (normalize)", t3.npmTag("alpha") === "latest");
+
+// ── shared patched-source server/Desktop build ─────────────────────────────
+const repoRoot = path.resolve(__dirname, "..", "..");
+const sourceBuild = fs.readFileSync(path.join(repoRoot, "bin", "build-t3code.sh"), "utf8");
+const sourcePatch = fs.readFileSync(path.join(repoRoot, "patches", "t3code-construct.patch"), "utf8");
+const updateT3 = fs.readFileSync(path.join(repoRoot, "Update-T3Code.ps1"), "utf8");
+const provisionT3 = fs.readFileSync(path.join(repoRoot, "Provision-AgentVM.ps1"), "utf8");
+ok("source build: resolves the selected npm channel to an exact Git tag",
+  /npm view "t3@\$\{NPM_TAG\}" version/.test(sourceBuild) && /TAG="v\$\{VERSION\}"/.test(sourceBuild) && /git clone --depth 1 --branch "\$\{TAG\}"/.test(sourceBuild));
+ok("source build: one patched server bundle feeds the VM and Desktop package",
+  /pnpm run build:desktop/.test(sourceBuild) && /construct-t3park-patch\.mjs" apply --bundle/.test(sourceBuild) &&
+  /build-desktop-artifact\.ts/.test(sourceBuild) && /ln -sfn "\$\{SOURCE_DIR\}\/apps\/server\/dist\/bin\.mjs" \/usr\/local\/bin\/t3/.test(sourceBuild));
+ok("source build: Windows compiler/NSIS dependencies stay in the VM",
+  /mingw-w64/.test(sourceBuild) && /wine32:i386/.test(sourceBuild) && /x86_64-pc-windows-gnu/.test(sourceBuild) && /--target nsis --arch x64/.test(sourceBuild));
+ok("source patch: voice RPC, live cursor-safe insertion, mic UI, and Construct updater are present",
+  /voiceInput\.start/.test(sourcePatch) && /active\.lastSetInput/.test(sourcePatch) && /MicIcon/.test(sourcePatch) &&
+  /Ctrl\+D/.test(sourcePatch) && /Update-T3Code\.ps1/.test(sourcePatch));
+ok("desktop update handoff: reprovisions with the saved T3 source-build setting",
+  /Provision-AgentVM\.ps1/.test(updateT3) && /Action\s+= 'provision'/.test(updateT3) && /T3CodeLimitResume/.test(updateT3));
+ok("desktop provisioning: installs updates silently, waits, and never prompts or launches the app",
+  /ArgumentList @\('--updated', '\/S'\) -Wait -PassThru -WindowStyle Hidden/.test(provisionT3) &&
+  /installed\.json/.test(provisionT3) && !/System\.Windows\.Forms\.MessageBox/.test(provisionT3) &&
+  !/--force-run/.test(provisionT3) && !/T3 Code Desktop installer launched/.test(provisionT3));
 
 // ── buildInstallScript ────────────────────────────────────────────────────────
 const inst = t3.buildInstallScript();
@@ -49,6 +74,8 @@ ok("install(nightly): 0-arg call defaults to stable (backward compat)", /t3@late
 // ── buildDisableScript ────────────────────────────────────────────────────────
 const dis = t3.buildDisableScript();
 ok("disable: clears the opt-in flag", /cfgset T3CODE false/.test(dis));
+ok("disable: clears voice capability and stale Desktop handoff state",
+  /cfgset CONSTRUCT_T3_VOICE_INPUT false/.test(dis) && /t3code-desktop-status/.test(dis));
 ok("disable: stops + disables the service, best-effort", /systemctl disable --now t3code-serve/.test(dis) && /exit 0/.test(dis));
 
 // ── buildPairingScript ────────────────────────────────────────────────────────

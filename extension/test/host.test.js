@@ -147,8 +147,18 @@ try {
   // ── provisioning-only patch settings ─────────────────────────────────────
   ok("patch changes: untouched absent/off defaults need no reprovision",
     host.patchReprovisionChanges({}, { t3codeLimitResume: false, opencodeBackgroundWatcher: false }).length === 0);
-  ok("patch changes: T3 extra-feature transition is reported",
-    JSON.stringify(host.patchReprovisionChanges({ t3codeLimitResume: false }, { t3codeLimitResume: true })) === JSON.stringify(["T3 Code extra features"]));
+  ok("patch changes: T3 shared source-build transition is reported",
+    JSON.stringify(host.patchReprovisionChanges({ t3codeLimitResume: false }, { t3codeLimitResume: true })) === JSON.stringify(["patched T3 Code + Desktop build"]));
+  ok("patch changes: enabling source-managed T3 requires the shared rebuild",
+    JSON.stringify(host.patchReprovisionChanges(
+      { t3code: false, t3codeLimitResume: true, t3codeChannel: "stable" },
+      { t3code: true, t3codeLimitResume: true, t3codeChannel: "stable" },
+    )) === JSON.stringify(["patched T3 Code + Desktop build"]));
+  ok("patch changes: source-managed T3 channel switch requires the shared rebuild",
+    JSON.stringify(host.patchReprovisionChanges(
+      { t3code: true, t3codeLimitResume: true, t3codeChannel: "stable" },
+      { t3code: true, t3codeLimitResume: true, t3codeChannel: "nightly" },
+    )) === JSON.stringify(["patched T3 Code + Desktop build"]));
   ok("patch changes: OpenCode watcher transition is reported",
     JSON.stringify(host.patchReprovisionChanges({ opencodeBackgroundWatcher: true }, { opencodeBackgroundWatcher: false })) === JSON.stringify(["OpenCode background watcher"]));
   ok("patch changes: simultaneous transitions produce one combined prompt list",
@@ -161,6 +171,12 @@ try {
     !extensionSource.includes("setLimitResumeOnVm") && !extensionSource.includes("setBackgroundWatcherOnVm"));
   ok("patch settings: changed values offer an immediate reprovision action",
     extensionSource.includes("offerReprovisionForPatchSettings") && extensionSource.includes('"Reprovision now"'));
+  ok("source-managed T3: live enable/channel update cannot replace it with stock npm",
+    extensionSource.includes('t3plan.action === "enable" && !sourceManagedT3') &&
+    extensionSource.includes('t3plan.action === "setChannel" && !sourceManagedT3'));
+  ok("source-managed T3: agent update action starts Construct reprovision",
+    extensionSource.includes('requested.includes("t3code")') &&
+    extensionSource.includes("startConstructReprovision(scriptsDir)"));
 
   // ── the automatic-checkpoint "applied" marker ──────────────────────────────
   // Separate from the PREFERENCE: it records what was actually CONFIRMED onto the VM,

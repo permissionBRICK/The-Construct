@@ -742,6 +742,24 @@ t3_node_ok() {
 install_t3code() {
   step "Installing T3 Code (t3 CLI + web GUI server)"
 
+  # Construct's optional T3 feature set is built from one upstream source tag.
+  # That checkout produces both the VM server and the Windows Desktop installer,
+  # so renderer/RPC changes cannot drift between the two ends. The build script
+  # resolves latest/nightly through npm, caches identical builds, and leaves an
+  # already-installed version untouched if a future upstream tag rejects the
+  # guarded patch.
+  if [[ "${T3CODE_LIMIT_RESUME:-false}" == "true" ]]; then
+    step "Building Construct's patched T3 server + Windows Desktop app"
+    if ! REPO_DIR="${REPO_DIR}" T3CODE_CHANNEL="${T3CODE_CHANNEL}" \
+      bash "${REPO_DIR}/bin/build-t3code.sh"; then
+      err "patched T3 source/Desktop build failed; the previous T3 install was left in place"
+      return 1
+    fi
+  else
+  # A stock install must not leave a prior patched Desktop artifact advertised
+  # to the host after this feature is disabled.
+  rm -f /etc/construct/t3code-desktop-status
+
   # t3 ships only as an npm package. Node may not be provisioned yet (this runs
   # before install-sdks.sh), or a project SDK may have pinned an older major --
   # bootstrap/upgrade to Node 22 via NodeSource (the same channel
@@ -776,6 +794,7 @@ install_t3code() {
   else
     npm install -g "t3@${_tag}" --allow-scripts=node-pty,msgpackr-extract
   fi
+  fi
 
   # Resolve the installed binary and pin the stable PATH location the service
   # unit execs. With apt/nodesource npm the global shim already IS
@@ -793,6 +812,7 @@ install_t3code() {
     fi
     ln -sf "${resolved}" /usr/local/bin/t3
   fi
+  t3_bundle="$(readlink -f "$(command -v t3)" 2>/dev/null || command -v t3)"
 
   # Persist the bind settings so the unit's EnvironmentFile always defines them
   # (an older config.env predating T3 Code has no T3CODE_* keys, and systemd
@@ -800,21 +820,22 @@ install_t3code() {
   bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" T3CODE_HOST "${T3CODE_HOST}"
   bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" T3CODE_PORT "${T3CODE_PORT}"
   bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" T3CODE_CHANNEL "${T3CODE_CHANNEL}"
+  bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" CONSTRUCT_T3_VOICE_INPUT \
+    "$([[ "${T3CODE_LIMIT_RESUME:-false}" == "true" ]] && echo true || echo false)"
 
-  # Opt-in T3 extra features: patch (or un-patch) the freshly-installed dist
-  # bundle BEFORE the service (re)start below. The legacy env key remains for
-  # settings compatibility, but now controls the whole patch set: Claude
-  # usage-limit auto-resume and OpenCode background-watcher monitoring. Both
-  # patchers verify their anchors; an unknown upstream bundle stays usable.
+  # The legacy env key remains for settings compatibility and now selects the
+  # shared patched-source server/Desktop build. Re-running the established
+  # bundle transforms here is idempotent and also keeps stock-mode reversion
+  # behavior compatible with older Construct-provisioned installs.
   if [[ "${T3CODE_LIMIT_RESUME:-false}" == "true" ]]; then
     step "Applying T3 Code extra-feature patches"
-    node "${REPO_DIR}/extension/vm/construct-t3park-patch.mjs" apply \
+    node "${REPO_DIR}/extension/vm/construct-t3park-patch.mjs" apply --bundle "${t3_bundle}" \
       || warn "WARNING: usage-limit auto-resume patch not applied (see above); t3 runs stock"
-    node "${REPO_DIR}/extension/vm/construct-t3-opencode-monitor-patch.mjs" apply \
+    node "${REPO_DIR}/extension/vm/construct-t3-opencode-monitor-patch.mjs" apply --bundle "${t3_bundle}" \
       || warn "WARNING: OpenCode background-monitoring patch not applied (see above); t3 continues without it"
   else
-    node "${REPO_DIR}/extension/vm/construct-t3park-patch.mjs" revert >/dev/null 2>&1 || true
-    node "${REPO_DIR}/extension/vm/construct-t3-opencode-monitor-patch.mjs" revert >/dev/null 2>&1 || true
+    node "${REPO_DIR}/extension/vm/construct-t3park-patch.mjs" revert --bundle "${t3_bundle}" >/dev/null 2>&1 || true
+    node "${REPO_DIR}/extension/vm/construct-t3-opencode-monitor-patch.mjs" revert --bundle "${t3_bundle}" >/dev/null 2>&1 || true
   fi
 
   install -d -m 0755 "${WORKSPACE_ROOT}"
@@ -840,7 +861,7 @@ install_t3code() {
     # Fresh VMs have no t3 DB when the patch step above runs, so the token mint
     # there can fail; retry now that the server has started once.
     if [[ "${T3CODE_LIMIT_RESUME:-false}" == "true" && ! -s /etc/construct/t3park-token ]]; then
-      node "${REPO_DIR}/extension/vm/construct-t3park-patch.mjs" mint-token \
+      node "${REPO_DIR}/extension/vm/construct-t3park-patch.mjs" mint-token --bundle "${t3_bundle}" \
         || warn "WARNING: could not mint the auto-resume API token; parked threads can't restart until one exists"
     fi
   else

@@ -911,8 +911,25 @@ function persistMicPreference(enabled) {
  *  update to specific agents (the panel's per-agent ↑ tag); omitted = all. */
 function runUpdateAgents(ids) {
   const subset = Array.isArray(ids) && ids.length ? ids : null;
+  const requested = subset || ["claude-code", "codex", "opencode", "t3code"];
+  const scriptsDir = resolveScriptsDir();
+  let sourceManagedT3 = false;
+  try {
+    const settings = scriptsDir ? host.readSettings(scriptsDir) : {};
+    sourceManagedT3 =
+      requested.includes("t3code") &&
+      settings.t3code === true &&
+      settings.t3codeLimitResume === true;
+  } catch (_) { /* fall back to the normal updater */ }
+  const remotelyUpdated = sourceManagedT3
+    ? requested.filter((id) => id !== "t3code")
+    : requested;
+  if (sourceManagedT3 && remotelyUpdated.length === 0) {
+    void startConstructReprovision(scriptsDir);
+    return;
+  }
   const what = subset ? subset.join(", ") : "coding agents";
-  const script = updates.buildAgentUpdateScript(subset || undefined);
+  const script = updates.buildAgentUpdateScript(remotelyUpdated);
   vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: `Updating ${what} on the VM…`, cancellable: false },
     async () => {
@@ -925,6 +942,7 @@ function runUpdateAgents(ids) {
         );
       }
       refreshAll(); // re-probe versions + clear the update badges
+      if (sourceManagedT3) await startConstructReprovision(scriptsDir);
     }
   );
 }
@@ -1117,22 +1135,28 @@ async function offerApplyCheckpoints(scriptsDir, enabled, changed) {
 /** Patch toggles are provisioning-only: saving persists them, then this offers
  *  the lifecycle action that applies them. No VM-side SSH mutation happens in
  *  the settings-save path. */
+async function startConstructReprovision(scriptsDir) {
+  try {
+    const pf = await lifecyclePreFlight("reprovisioning");
+    if (!pf.ok) { showPreFlightBlock(pf); return false; }
+    const selected = await effectiveProjects();
+    lifecycle.run("reprovision", { scriptsDir, projects: selected });
+    beginReprovisionFastRefresh();
+    return true;
+  } catch (e) {
+    vscode.window.showErrorMessage("Couldn't start reprovision: " + (e && e.message ? e.message : e));
+    return false;
+  }
+}
+
 function offerReprovisionForPatchSettings(scriptsDir, features) {
   const names = features.join(" and ");
   vscode.window.showWarningMessage(
     `Construct settings saved. Changing ${names} requires a reprovision before it takes effect.`,
     "Reprovision now",
-  ).then(async (pick) => {
+  ).then((pick) => {
     if (pick !== "Reprovision now") return;
-    try {
-      const pf = await lifecyclePreFlight("reprovisioning");
-      if (!pf.ok) { showPreFlightBlock(pf); return; }
-      const selected = await effectiveProjects();
-      lifecycle.run("reprovision", { scriptsDir, projects: selected });
-      beginReprovisionFastRefresh();
-    } catch (e) {
-      vscode.window.showErrorMessage("Couldn't start reprovision: " + (e && e.message ? e.message : e));
-    }
+    void startConstructReprovision(scriptsDir);
   });
 }
 
@@ -1756,10 +1780,9 @@ function handleMessage(message, webview, context) {
         const micOn = !!(hostAudio && hostAudio.enabled);
         if (wantMic && !micOn) enableAudio(context, webview);
         else if (!wantMic && micOn) disableAudio();
-        // The T3 Code toggle is live too: enabling installs + starts it on the VM
-        // right away and opens the web UI in the browser; disabling stops the
-        // service. Either way the persisted flag also rides the next (re)provision.
-        // Channel changes on an already-enabled T3 Code reinstall at the new tag.
+        // Stock T3 enable/channel changes are live. A source-managed enable or
+        // channel change waits for the shared server/Desktop reprovision offered
+        // above, so npm can never replace only one end; disabling remains live.
         const wantT3 = message.settings && message.settings.t3code === true;
         const hadT3 = prev.t3code === true;
         // The effective channel comes from the MERGED on-disk result, not the raw
@@ -1770,11 +1793,12 @@ function handleMessage(message, webview, context) {
         const oldCh = prev.t3codeChannel || "stable";
         const t3plan = t3code.planT3LiveAction(wantT3, hadT3, newCh, oldCh);
         if (t3plan) {
-          if (t3plan.action === "enable") {
+          const sourceManagedT3 = merged.t3codeLimitResume === true;
+          if (t3plan.action === "enable" && !sourceManagedT3) {
             t3code.enableOnVm({ channel: t3plan.channel }).then(() => refreshAll());
           } else if (t3plan.action === "disable") {
             t3code.disableOnVm().then(() => refreshAll());
-          } else if (t3plan.action === "setChannel") {
+          } else if (t3plan.action === "setChannel" && !sourceManagedT3) {
             t3code.setChannelOnVm(t3plan.channel).then(() => refreshAll());
           }
         }

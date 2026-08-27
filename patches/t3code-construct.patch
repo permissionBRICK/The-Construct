@@ -1,0 +1,846 @@
+diff --git a/apps/desktop/src/updates/DesktopUpdates.ts b/apps/desktop/src/updates/DesktopUpdates.ts
+index 483ace0f..5167cd65 100644
+--- a/apps/desktop/src/updates/DesktopUpdates.ts
++++ b/apps/desktop/src/updates/DesktopUpdates.ts
+@@ -1,3 +1,5 @@
++// @effect-diagnostics nodeBuiltinImport:off - Construct's updater handoff must
++// launch the host PowerShell reprovisioner as a detached Windows process.
+ import {
+   DesktopUpdateChannelSchema,
+   type DesktopRuntimeInfo,
+@@ -17,6 +19,7 @@ import * as Option from "effect/Option";
+ import * as Ref from "effect/Ref";
+ import * as Schema from "effect/Schema";
+ import * as Scope from "effect/Scope";
++import { spawn } from "node:child_process";
+ 
+ import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
+ import * as DesktopConfig from "../app/DesktopConfig.ts";
+@@ -44,6 +47,24 @@ import {
+ 
+ const AUTO_UPDATE_STARTUP_DELAY = "15 seconds";
+ const AUTO_UPDATE_POLL_INTERVAL = "4 minutes";
++const CONSTRUCT_MANAGED_UPDATES = true;
++
++function launchConstructReprovision(): boolean {
++  if (process.platform !== "win32") return false;
++  const command = [
++    "$root = Join-Path $env:LOCALAPPDATA 'The-Construct'",
++    "$script = Get-ChildItem -LiteralPath $root -Filter 'Update-T3Code.ps1' -File -Recurse -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1",
++    "if (-not $script) { throw 'Construct Update-T3Code.ps1 was not found. Reinstall or update Construct first.' }",
++    "& $script.FullName",
++  ].join("; ");
++  const child = spawn(
++    "powershell.exe",
++    ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
++    { detached: true, stdio: "ignore", windowsHide: false },
++  );
++  child.unref();
++  return true;
++}
+ 
+ type UpdateAction = "check" | "download" | "install" | "channel";
+ 
+@@ -742,6 +763,10 @@ export const make = Effect.gen(function* () {
+       }
+ 
+       const settings = yield* desktopSettings.get;
++      if (CONSTRUCT_MANAGED_UPDATES) {
++        yield* setState(createBaseUpdateState(settings.updateChannel, true, environment));
++        return;
++      }
+       const enabled = yield* shouldEnableAutoUpdates;
+       yield* setState(createBaseUpdateState(settings.updateChannel, enabled, environment));
+       if (!enabled) {
+@@ -831,6 +856,13 @@ export const make = Effect.gen(function* () {
+     }),
+     check: Effect.fn("desktop.updates.check")(function* (reason: string) {
+       yield* Effect.annotateCurrentSpan({ reason });
++      if (CONSTRUCT_MANAGED_UPDATES && reason !== "startup" && reason !== "poll") {
++        const checked = yield* Effect.sync(launchConstructReprovision);
++        return { checked, state: yield* Ref.get(updateStateRef) };
++      }
++      if (CONSTRUCT_MANAGED_UPDATES) {
++        return { checked: false, state: yield* Ref.get(updateStateRef) };
++      }
+       if (!(yield* Ref.get(updaterConfiguredRef))) {
+         return {
+           checked: false,
+diff --git a/apps/server/package.json b/apps/server/package.json
+index ca19f708..d7583604 100644
+--- a/apps/server/package.json
++++ b/apps/server/package.json
+@@ -33,6 +33,7 @@
+     "effect": "catalog:",
+     "msgpackr-extract": "3.0.4",
+     "node-pty": "^1.1.0",
++    "ws": "^8.18.3",
+     "yaml": "catalog:"
+   },
+   "devDependencies": {
+@@ -43,6 +44,7 @@
+     "@t3tools/web": "workspace:*",
+     "@types/bun": "1.3.14",
+     "@types/node": "catalog:",
++    "@types/ws": "^8.18.1",
+     "effect-acp": "workspace:*",
+     "effect-codex-app-server": "workspace:*",
+     "vite-plus": "catalog:"
+diff --git a/apps/server/src/auth/RpcAuthorization.ts b/apps/server/src/auth/RpcAuthorization.ts
+index 28ceac4c..3cb6396f 100644
+--- a/apps/server/src/auth/RpcAuthorization.ts
++++ b/apps/server/src/auth/RpcAuthorization.ts
+@@ -35,6 +35,8 @@ export const RPC_REQUIRED_SCOPES = {
+   [WS_METHODS.serverUpdateProvider]: AuthOrchestrationOperateScope,
+   [WS_METHODS.serverUpdateServer]: AuthOrchestrationOperateScope,
+   [WS_METHODS.serverUpdateServerWithProgress]: AuthOrchestrationOperateScope,
++  [WS_METHODS.voiceInputStart]: AuthOrchestrationOperateScope,
++  [WS_METHODS.voiceInputStop]: AuthOrchestrationOperateScope,
+   [WS_METHODS.serverUpsertKeybinding]: AuthOrchestrationOperateScope,
+   [WS_METHODS.serverRemoveKeybinding]: AuthOrchestrationOperateScope,
+   [WS_METHODS.serverGetSettings]: AuthOrchestrationReadScope,
+diff --git a/apps/server/src/environment/ServerEnvironment.ts b/apps/server/src/environment/ServerEnvironment.ts
+index 907a5d64..f452d769 100644
+--- a/apps/server/src/environment/ServerEnvironment.ts
++++ b/apps/server/src/environment/ServerEnvironment.ts
+@@ -153,6 +153,7 @@ export const make = Effect.gen(function* () {
+       threadPinning: true,
+       threadPinReorder: true,
+       threadTitleRegeneration: true,
++      voiceInput: process.env.CONSTRUCT_T3_VOICE_INPUT === "true",
+       threadPullRequestLinking: true,
+       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
+       ...(serverSelfUpdate === "boot-service" ? { serverSelfUpdateProgress: true } : {}),
+diff --git a/apps/server/src/voiceInput.ts b/apps/server/src/voiceInput.ts
+new file mode 100644
+index 00000000..0bb844f1
+--- /dev/null
++++ b/apps/server/src/voiceInput.ts
+@@ -0,0 +1,264 @@
++// @effect-diagnostics nodeBuiltinImport:off globalTimers:off - this module is the
++// callback boundary for a native recorder and the ws client; their lifetimes are
++// still scope-bound by the Effect stream returned at the bottom of the file.
++import { VoiceInputError, type VoiceInputStreamEvent } from "@t3tools/contracts";
++import * as Effect from "effect/Effect";
++import * as Queue from "effect/Queue";
++import * as Stream from "effect/Stream";
++import { spawn, type ChildProcessByStdio } from "node:child_process";
++import { readFileSync } from "node:fs";
++import { homedir } from "node:os";
++import { join } from "node:path";
++import type { Readable } from "node:stream";
++import WebSocket from "ws";
++
++const VOICE_STREAM_URL = "wss://api.anthropic.com/api/ws/speech_to_text/voice_stream";
++const KEEP_ALIVE_MS = 8_000;
++const SILENCE_TIMEOUT_MS = 15_000;
++const MAX_RECORDING_MS = 120_000;
++const CLOSE_GRACE_MS = 3_000;
++const KEYTERMS = [
++  "VS Code",
++  "IDE",
++  "webview",
++  "IntelliSense",
++  "MCP",
++  "symlink",
++  "grep",
++  "regex",
++  "localhost",
++  "codebase",
++  "TypeScript",
++  "JSON",
++  "OAuth",
++  "webhook",
++  "gRPC",
++  "dotfiles",
++  "subagent",
++  "worktree",
++].join(",");
++
++type VoiceSessionCallbacks = {
++  readonly event: (event: VoiceInputStreamEvent) => void;
++  readonly error: (error: VoiceInputError) => void;
++  readonly complete: () => void;
++};
++
++function readClaudeAccessToken(): string {
++  const configDirectory = process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), ".claude");
++  const credentialsPath = join(configDirectory, ".credentials.json");
++  let decoded: unknown;
++  try {
++    decoded = JSON.parse(readFileSync(credentialsPath, "utf8"));
++  } catch {
++    throw new Error(`Claude credentials were not readable at ${credentialsPath}. Sign in with claude first.`);
++  }
++  const token =
++    typeof decoded === "object" &&
++    decoded !== null &&
++    "claudeAiOauth" in decoded &&
++    typeof decoded.claudeAiOauth === "object" &&
++    decoded.claudeAiOauth !== null &&
++    "accessToken" in decoded.claudeAiOauth &&
++    typeof decoded.claudeAiOauth.accessToken === "string"
++      ? decoded.claudeAiOauth.accessToken.trim()
++      : "";
++  if (!token) throw new Error("Claude OAuth credentials do not contain an access token. Sign in with claude first.");
++  return token;
++}
++
++function voiceStreamUrl(): string {
++  const query = new URLSearchParams({
++    encoding: "linear16",
++    sample_rate: "16000",
++    channels: "1",
++    endpointing_ms: "300",
++    utterance_end_ms: "1000",
++    language: process.env.CLAUDE_CODE_VOICE_LANGUAGE?.trim() || "en",
++    use_conversation_engine: "true",
++    forward_interims: "typed",
++  });
++  return `${VOICE_STREAM_URL}?${query.toString()}`;
++}
++
++class VoiceSession {
++  readonly id: string;
++  private readonly callbacks: VoiceSessionCallbacks;
++  private socket: WebSocket | null = null;
++  private recorder: ChildProcessByStdio<null, Readable, Readable> | null = null;
++  private keepAlive: NodeJS.Timeout | null = null;
++  private silenceTimer: NodeJS.Timeout | null = null;
++  private maximumTimer: NodeJS.Timeout | null = null;
++  private closeTimer: NodeJS.Timeout | null = null;
++  private committed: string[] = [];
++  private interim = "";
++  private stopping = false;
++  private ended = false;
++
++  constructor(id: string, callbacks: VoiceSessionCallbacks) {
++    this.id = id;
++    this.callbacks = callbacks;
++  }
++
++  start(): void {
++    const token = readClaudeAccessToken();
++    const socket = new WebSocket(voiceStreamUrl(), {
++      headers: {
++        Authorization: `Bearer ${token}`,
++        "x-app": "vscode",
++        "anthropic-client-platform": "claude_code_vscode",
++        "x-config-keyterms": KEYTERMS,
++      },
++    });
++    this.socket = socket;
++
++    socket.on("open", () => {
++      if (this.stopping) {
++        socket.send(JSON.stringify({ type: "CloseStream" }));
++        return;
++      }
++      this.callbacks.event({ type: "listening" });
++      socket.send(JSON.stringify({ type: "KeepAlive" }));
++      const recorder = spawn(
++        "rec",
++        ["-q", "--buffer", "1024", "-t", "raw", "-r", "16000", "-e", "signed", "-b", "16", "-c", "1", "-"],
++        { stdio: ["ignore", "pipe", "pipe"] },
++      );
++      this.recorder = recorder;
++      recorder.stdout.on("data", (chunk: Buffer) => {
++        if (socket.readyState === WebSocket.OPEN && !this.stopping) socket.send(chunk);
++      });
++      recorder.on("error", (error) => this.fail(`Could not start the recorder: ${error.message}`, true));
++      recorder.on("exit", (code) => {
++        if (!this.stopping && !this.ended && code !== 0) {
++          this.fail("The host microphone bridge is unavailable. Enable microphone passthrough in Construct and keep its VS Code extension running.", true);
++        }
++      });
++      this.keepAlive = setInterval(() => {
++        if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "KeepAlive" }));
++      }, KEEP_ALIVE_MS);
++      this.maximumTimer = setTimeout(() => this.stop(), MAX_RECORDING_MS);
++      this.resetSilenceTimer();
++    });
++
++    socket.on("message", (raw) => {
++      let message: { type?: string; data?: string; description?: string; message?: string };
++      try {
++        message = JSON.parse(raw.toString()) as typeof message;
++      } catch {
++        return;
++      }
++      if (message.type === "TranscriptInterim" || message.type === "TranscriptText") {
++        if (message.data) {
++          this.interim = message.data;
++          this.callbacks.event({ type: "transcript", text: this.fullTranscript(), final: false });
++          this.resetSilenceTimer();
++        }
++        return;
++      }
++      if (message.type === "TranscriptEndpoint") {
++        const segment = this.interim.trim();
++        if (segment) this.committed.push(segment);
++        this.interim = "";
++        this.callbacks.event({ type: "transcript", text: this.fullTranscript(), final: true });
++        this.resetSilenceTimer();
++        return;
++      }
++      if (message.type === "TranscriptError") {
++        this.fail(message.description || "Claude voice transcription failed.", true);
++      } else if (message.type === "error") {
++        this.fail(message.message || "Claude voice transcription failed.", true);
++      }
++    });
++    socket.on("error", (error) => {
++      if (!this.stopping) this.fail(`Claude voice WebSocket error: ${error.message}`, true);
++    });
++    socket.on("close", () => this.finish());
++  }
++
++  stop(): void {
++    if (this.stopping || this.ended) return;
++    this.stopping = true;
++    this.recorder?.kill("SIGTERM");
++    this.recorder = null;
++    if (this.socket?.readyState === WebSocket.OPEN) {
++      this.socket.send(JSON.stringify({ type: "CloseStream" }));
++      this.closeTimer = setTimeout(() => this.finish(), CLOSE_GRACE_MS);
++    } else {
++      this.finish();
++    }
++  }
++
++  abort(): void {
++    this.stopping = true;
++    this.finish(false);
++  }
++
++  private fullTranscript(): string {
++    return [...this.committed, this.interim.trim()].filter(Boolean).join(" ");
++  }
++
++  private resetSilenceTimer(): void {
++    if (this.silenceTimer) clearTimeout(this.silenceTimer);
++    this.silenceTimer = setTimeout(() => this.stop(), SILENCE_TIMEOUT_MS);
++  }
++
++  private fail(message: string, fatal: boolean): void {
++    if (this.ended) return;
++    this.callbacks.error(new VoiceInputError({ message, fatal }));
++    this.abort();
++  }
++
++  private finish(notify = true): void {
++    if (this.ended) return;
++    this.ended = true;
++    this.recorder?.kill("SIGTERM");
++    this.recorder = null;
++    if (this.socket && this.socket.readyState !== WebSocket.CLOSED) this.socket.terminate();
++    this.socket = null;
++    for (const timer of [this.keepAlive, this.silenceTimer, this.maximumTimer, this.closeTimer]) {
++      if (timer) clearTimeout(timer);
++    }
++    this.keepAlive = this.silenceTimer = this.maximumTimer = this.closeTimer = null;
++    activeVoiceSessions.delete(this.id);
++    if (notify) this.callbacks.complete();
++  }
++}
++
++const activeVoiceSessions = new Map<string, VoiceSession>();
++
++export function stopVoiceInput(sessionId: string): Effect.Effect<{ stopped: boolean }> {
++  return Effect.sync(() => {
++    const session = activeVoiceSessions.get(sessionId);
++    session?.stop();
++    return { stopped: session !== undefined };
++  });
++}
++
++export function startVoiceInput(sessionId: string): Stream.Stream<VoiceInputStreamEvent, VoiceInputError> {
++  return Stream.callback<VoiceInputStreamEvent, VoiceInputError>((queue) =>
++    Effect.acquireRelease(
++      Effect.sync(() => {
++        for (const active of activeVoiceSessions.values()) active.stop();
++        const session = new VoiceSession(sessionId, {
++          event: (event) => void Effect.runFork(Queue.offer(queue, event)),
++          error: (error) => void Effect.runFork(Queue.fail(queue, error)),
++          complete: () =>
++            void Effect.runFork(
++              Queue.offer(queue, { type: "stopped" }).pipe(Effect.andThen(Queue.end(queue))),
++            ),
++        });
++        activeVoiceSessions.set(sessionId, session);
++        try {
++          session.start();
++        } catch (error) {
++          session.abort();
++          const message = error instanceof Error ? error.message : String(error);
++          void Effect.runFork(Queue.fail(queue, new VoiceInputError({ message, fatal: true })));
++        }
++        return session;
++      }),
++      (session) => Effect.sync(() => session.stop()),
++    ).pipe(Effect.forkScoped),
++  );
++}
+diff --git a/apps/server/src/ws.ts b/apps/server/src/ws.ts
+index 226c82cd..ab6dbc2b 100644
+--- a/apps/server/src/ws.ts
++++ b/apps/server/src/ws.ts
+@@ -133,6 +133,7 @@ import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
+ import * as VcsProcess from "./vcs/VcsProcess.ts";
+ import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
+ import * as SessionStore from "./auth/SessionStore.ts";
++import { startVoiceInput, stopVoiceInput } from "./voiceInput.ts";
+ import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
+ import * as RelayClient from "@t3tools/shared/relayClient";
+ const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
+@@ -1642,6 +1643,14 @@ const makeWsRpcLayer = (
+             ),
+             { "rpc.aggregate": "server" },
+           ),
++        [WS_METHODS.voiceInputStart]: (input) =>
++          observeRpcStream(WS_METHODS.voiceInputStart, startVoiceInput(input.sessionId), {
++            "rpc.aggregate": "voice-input",
++          }),
++        [WS_METHODS.voiceInputStop]: (input) =>
++          observeRpcEffect(WS_METHODS.voiceInputStop, stopVoiceInput(input.sessionId), {
++            "rpc.aggregate": "voice-input",
++          }),
+         [WS_METHODS.serverUpsertKeybinding]: (rule) =>
+           observeRpcEffect(
+             WS_METHODS.serverUpsertKeybinding,
+diff --git a/apps/web/src/components/chat/ChatComposer.tsx b/apps/web/src/components/chat/ChatComposer.tsx
+index 6d0ca8a7..466b432d 100644
+--- a/apps/web/src/components/chat/ChatComposer.tsx
++++ b/apps/web/src/components/chat/ChatComposer.tsx
+@@ -34,6 +34,7 @@ import {
+   useState,
+ } from "react";
+ import { createPortal } from "react-dom";
++import { AsyncResult } from "effect/unstable/reactivity";
+ import {
+   clampCollapsedComposerCursor,
+   type ComposerSubmissionIntent,
+@@ -137,6 +138,13 @@ import {
+   submitComposerDraft,
+ } from "./composerSubmission";
+ import { ComposerPromptLengthValidation } from "./ComposerPromptLengthValidation";
++import { useAtomCommand } from "../../state/use-atom-command";
++import { MicIcon, SquareIcon } from "lucide-react";
++import { useServerConfigs } from "../../state/entities";
++import {
++  startVoiceInput as startVoiceInputCommand,
++  stopVoiceInput as stopVoiceInputCommand,
++} from "../../state/voiceInput";
+ 
+ type ComposerCommandMenuPosition = {
+   bottom: number;
+@@ -741,6 +749,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
+     setThreadError,
+     onExpandImage,
+   } = props;
++  const serverConfigs = useServerConfigs();
++  const supportsVoiceInput =
++    serverConfigs.get(environmentId)?.environment.capabilities.voiceInput === true;
++  const runStartVoiceInput = useAtomCommand(startVoiceInputCommand, { reportFailure: false });
++  const runStopVoiceInput = useAtomCommand(stopVoiceInputCommand, { reportFailure: false });
+   // ------------------------------------------------------------------
+   // Store subscriptions (prompt / images / terminal contexts)
+   // ------------------------------------------------------------------
+@@ -1040,6 +1053,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
+   const [isComposerPrimaryActionsCompact, setIsComposerPrimaryActionsCompact] = useState(false);
+   const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
+   const [isComposerFocused, setIsComposerFocused] = useState(false);
++  const [isVoiceRecording, setIsVoiceRecording] = useState(false);
+   const [composerSubmissionError, setComposerSubmissionError] = useState<string | null>(null);
+   const [providerInputSubmissionError, setProviderInputSubmissionError] = useState<string | null>(
+     null,
+@@ -1060,6 +1074,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
+   // Refs
+   // ------------------------------------------------------------------
+   const composerEditorRef = useRef<ComposerPromptEditorHandle>(null);
++  const voiceInsertionRef = useRef<{
++    sessionId: string;
++    prefix: string;
++    suffix: string;
++    rendered: string;
++    lastSetInput: string;
++  } | null>(null);
++  const voiceShortcutRef = useRef<{ started: boolean; downAt: number } | null>(null);
+   const composerFormRef = useRef<HTMLFormElement>(null);
+   const composerSurfaceRef = useRef<HTMLDivElement>(null);
+   const providerInputRejectedRef = useRef(false);
+@@ -1780,6 +1802,149 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
+     };
+   }, [composerCursor, composerTerminalContexts, promptRef]);
+ 
++  const stopVoiceRecording = useCallback(() => {
++    const insertion = voiceInsertionRef.current;
++    if (!insertion) return;
++    void runStopVoiceInput({ environmentId, sessionId: insertion.sessionId });
++  }, [environmentId, runStopVoiceInput]);
++
++  const startVoiceRecording = useCallback(() => {
++    if (!supportsVoiceInput || voiceInsertionRef.current || environmentUnavailable !== null) return;
++    const snapshot = readComposerSnapshot();
++    const sessionId = randomUUID();
++    const insertion = {
++      sessionId,
++      prefix: snapshot.value.slice(0, snapshot.expandedCursor),
++      suffix: snapshot.value.slice(snapshot.expandedCursor),
++      rendered: "",
++      lastSetInput: snapshot.value,
++    };
++    voiceInsertionRef.current = insertion;
++    setIsVoiceRecording(true);
++
++    void runStartVoiceInput({
++      environmentId,
++      sessionId,
++      onEvent: (event) => {
++        const active = voiceInsertionRef.current;
++        if (!active || active.sessionId !== sessionId) return;
++        if (event.type === "stopped") {
++          voiceInsertionRef.current = null;
++          setIsVoiceRecording(false);
++          return;
++        }
++        if (event.type !== "transcript") return;
++        // Claude's composer stops voice mode if the user edits while a partial
++        // transcript is live. That full-value guard prevents a later interim from
++        // overwriting either the original prompt or the user's new edit.
++        if (promptRef.current !== active.lastSetInput) {
++          stopVoiceRecording();
++          voiceInsertionRef.current = null;
++          setIsVoiceRecording(false);
++          return;
++        }
++        const transcript = event.text.trim();
++        const leading = transcript && active.prefix && !/\s$/u.test(active.prefix) ? " " : "";
++        const trailing = transcript && active.suffix && !/^\s/u.test(active.suffix) ? " " : "";
++        const rendered = transcript ? `${leading}${transcript}${trailing}` : "";
++        const nextInput = `${active.prefix}${rendered}${active.suffix}`;
++        const applied = applyPromptReplacement(
++          active.prefix.length,
++          active.prefix.length + active.rendered.length,
++          rendered,
++          { expectedText: active.rendered, focusEditorAfterReplace: false },
++        );
++        if (!applied) {
++          stopVoiceRecording();
++          voiceInsertionRef.current = null;
++          setIsVoiceRecording(false);
++          return;
++        }
++        active.rendered = rendered;
++        active.lastSetInput = nextInput;
++        const expandedCursor = active.prefix.length + leading.length + transcript.length;
++        const cursor = collapseExpandedComposerCursor(nextInput, expandedCursor);
++        window.requestAnimationFrame(() => composerEditorRef.current?.focusAt(cursor));
++      },
++    }).then((result) => {
++      const active = voiceInsertionRef.current;
++      if (active?.sessionId === sessionId) {
++        voiceInsertionRef.current = null;
++        setIsVoiceRecording(false);
++      }
++      if (!AsyncResult.isSuccess(result)) {
++        toastManager.add({
++          type: "error",
++          title: "Voice input stopped",
++          description:
++            "Could not transcribe the microphone. Check Claude sign-in and Construct microphone passthrough.",
++        });
++      }
++    });
++  }, [
++    applyPromptReplacement,
++    environmentId,
++    environmentUnavailable,
++    promptRef,
++    readComposerSnapshot,
++    runStartVoiceInput,
++    stopVoiceRecording,
++    supportsVoiceInput,
++  ]);
++
++  const toggleVoiceRecording = useCallback(() => {
++    if (voiceInsertionRef.current) stopVoiceRecording();
++    else startVoiceRecording();
++  }, [startVoiceRecording, stopVoiceRecording]);
++
++  // Ctrl+D mirrors Claude's tap/hold behavior: tap once to start, tap again to
++  // stop, or hold the first press and recording stops when the key is released.
++  useEffect(() => {
++    if (!supportsVoiceInput) return;
++    const onKeyDown = (event: KeyboardEvent) => {
++      if (event.repeat || event.key.toLowerCase() !== "d" || !event.ctrlKey || event.altKey || event.metaKey) return;
++      if (!(event.target instanceof Element) || !event.target.closest('[data-chat-composer-form="true"]')) return;
++      event.preventDefault();
++      const wasRecording = voiceInsertionRef.current !== null;
++      if (wasRecording) {
++        stopVoiceRecording();
++        voiceShortcutRef.current = { started: false, downAt: performance.now() };
++      } else {
++        startVoiceRecording();
++        voiceShortcutRef.current = { started: true, downAt: performance.now() };
++      }
++    };
++    const onKeyUp = (event: KeyboardEvent) => {
++      if (event.key.toLowerCase() !== "d" || !event.ctrlKey) return;
++      const shortcut = voiceShortcutRef.current;
++      voiceShortcutRef.current = null;
++      if (shortcut?.started && performance.now() - shortcut.downAt >= 400) stopVoiceRecording();
++    };
++    document.addEventListener("keydown", onKeyDown, true);
++    document.addEventListener("keyup", onKeyUp, true);
++    return () => {
++      document.removeEventListener("keydown", onKeyDown, true);
++      document.removeEventListener("keyup", onKeyUp, true);
++    };
++  }, [startVoiceRecording, stopVoiceRecording, supportsVoiceInput]);
++
++  useEffect(() => {
++    const active = voiceInsertionRef.current;
++    if (active && prompt !== active.lastSetInput) {
++      stopVoiceRecording();
++      voiceInsertionRef.current = null;
++      setIsVoiceRecording(false);
++    }
++  }, [prompt, stopVoiceRecording]);
++
++  useEffect(
++    () => () => {
++      const active = voiceInsertionRef.current;
++      if (active) void runStopVoiceInput({ environmentId, sessionId: active.sessionId });
++    },
++    [environmentId, runStopVoiceInput],
++  );
++
+   const resolveActiveComposerTrigger = useCallback((): {
+     snapshot: { value: string; cursor: number; expandedCursor: number };
+     trigger: ComposerTrigger | null;
+@@ -3555,6 +3719,29 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
+                 >
+                   {showMobilePendingAnswerActions ? null : inlineTasksBadge}
+                   {showMobilePendingAnswerActions ? null : inlineStashBadge}
++                  {supportsVoiceInput ? (
++                    <button
++                      type="button"
++                      className={cn(
++                        "flex h-9 w-9 items-center justify-center rounded-full transition-colors sm:h-8 sm:w-8",
++                        isVoiceRecording
++                          ? "bg-destructive text-white hover:bg-destructive/90"
++                          : "bg-secondary text-secondary-foreground hover:bg-secondary/80",
++                      )}
++                      onPointerDown={(event) => event.preventDefault()}
++                      onClick={toggleVoiceRecording}
++                      disabled={environmentUnavailable !== null || isConnecting}
++                      aria-pressed={isVoiceRecording}
++                      aria-label={isVoiceRecording ? "Stop voice input" : "Start voice input"}
++                      title={isVoiceRecording ? "Stop voice input (Ctrl+D)" : "Voice input (Ctrl+D)"}
++                    >
++                      {isVoiceRecording ? (
++                        <SquareIcon className="size-3.5" fill="currentColor" aria-hidden="true" />
++                      ) : (
++                        <MicIcon className="size-4" aria-hidden="true" />
++                      )}
++                    </button>
++                  ) : null}
+                   <ComposerFooterPrimaryActions
+                     compact={isComposerPrimaryActionsCompact}
+                     activeContextWindow={activeContextWindow}
+diff --git a/apps/web/src/components/sidebar/SidebarUpdatePill.tsx b/apps/web/src/components/sidebar/SidebarUpdatePill.tsx
+index f576fdd4..0f2a8414 100644
+--- a/apps/web/src/components/sidebar/SidebarUpdatePill.tsx
++++ b/apps/web/src/components/sidebar/SidebarUpdatePill.tsx
+@@ -173,7 +173,7 @@ function SidebarUpdateControl() {
+       : "Update available"
+     : showCheckIcon
+       ? "Checking for updates…"
+-      : "Check for updates";
++      : "Rebuild/update T3 Code through Construct";
+   const disabled = showCheckIcon
+     ? true
+     : showUpdateDetails
+diff --git a/apps/web/src/state/voiceInput.ts b/apps/web/src/state/voiceInput.ts
+new file mode 100644
+index 00000000..a265b19f
+--- /dev/null
++++ b/apps/web/src/state/voiceInput.ts
+@@ -0,0 +1,39 @@
++import {
++  WS_METHODS,
++  type EnvironmentId,
++  type VoiceInputStreamEvent,
++} from "@t3tools/contracts";
++import { request, runStream } from "@t3tools/client-runtime/rpc";
++import {
++  createRuntimeCommand,
++  runInEnvironment,
++  runStreamInEnvironment,
++} from "@t3tools/client-runtime/state/runtime";
++import * as Effect from "effect/Effect";
++import * as Stream from "effect/Stream";
++
++import { connectionAtomRuntime } from "../connection/runtime";
++
++export const startVoiceInput = createRuntimeCommand(connectionAtomRuntime, {
++  label: "voice-input:start",
++  execute: (target: {
++    readonly environmentId: EnvironmentId;
++    readonly sessionId: string;
++    readonly onEvent: (event: VoiceInputStreamEvent) => void;
++  }) =>
++    runStreamInEnvironment(
++      target.environmentId,
++      runStream(WS_METHODS.voiceInputStart, { sessionId: target.sessionId }),
++    ).pipe(
++      Stream.runForEach((event) => Effect.sync(() => target.onEvent(event))),
++    ),
++});
++
++export const stopVoiceInput = createRuntimeCommand(connectionAtomRuntime, {
++  label: "voice-input:stop",
++  execute: (target: { readonly environmentId: EnvironmentId; readonly sessionId: string }) =>
++    runInEnvironment(
++      target.environmentId,
++      request(WS_METHODS.voiceInputStop, { sessionId: target.sessionId }),
++    ),
++});
+diff --git a/packages/client-runtime/src/rpc/client.ts b/packages/client-runtime/src/rpc/client.ts
+index bfe57a6c..2845f1a1 100644
+--- a/packages/client-runtime/src/rpc/client.ts
++++ b/packages/client-runtime/src/rpc/client.ts
+@@ -57,7 +57,8 @@ export type EnvironmentSubscriptionRpcTag =
+ export type EnvironmentStreamCommandRpcTag =
+   | typeof WS_METHODS.cloudInstallRelayClient
+   | typeof WS_METHODS.serverUpdateServerWithProgress
+-  | typeof WS_METHODS.gitRunStackedAction;
++  | typeof WS_METHODS.gitRunStackedAction
++  | typeof WS_METHODS.voiceInputStart;
+ 
+ export type EnvironmentStreamRpcTag =
+   | EnvironmentSubscriptionRpcTag
+diff --git a/packages/contracts/src/environment.ts b/packages/contracts/src/environment.ts
+index 939313e8..4ed387d8 100644
+--- a/packages/contracts/src/environment.ts
++++ b/packages/contracts/src/environment.ts
+@@ -78,6 +78,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
+   /** Server can stream self-update progress before acknowledging the
+       restart. Clients fall back to server.updateServer when absent. */
+   serverSelfUpdateProgress: Schema.optionalKey(Schema.Boolean),
++  /** Construct-patched servers can capture host audio through the recorder shim and
++      stream Claude's live speech transcript into a connected composer. */
++  voiceInput: Schema.optionalKey(Schema.Boolean),
+   /** Agent-activity publishes (push notifications and Live Activities)
+       currently leave this environment: the publish opt-in is enabled and the
+       relay link credentials exist. Clients skip seeding a Live Activity when
+diff --git a/packages/contracts/src/index.ts b/packages/contracts/src/index.ts
+index c6daef86..236c734f 100644
+--- a/packages/contracts/src/index.ts
++++ b/packages/contracts/src/index.ts
+@@ -17,6 +17,7 @@ export * from "./server.ts";
+ export * from "./settings.ts";
+ export * from "./git.ts";
+ export * from "./vcs.ts";
++export * from "./voiceInput.ts";
+ export * from "./sourceControl.ts";
+ export * from "./pullRequest.ts";
+ export * from "./orchestration.ts";
+diff --git a/packages/contracts/src/rpc.ts b/packages/contracts/src/rpc.ts
+index 14363cfe..92863cf5 100644
+--- a/packages/contracts/src/rpc.ts
++++ b/packages/contracts/src/rpc.ts
+@@ -205,6 +205,13 @@ import {
+   SourceControlRepositoryLookupInput,
+ } from "./sourceControl.ts";
+ import { VcsError } from "./vcs.ts";
++import {
++  VoiceInputError,
++  VoiceInputStartInput,
++  VoiceInputStopInput,
++  VoiceInputStopResult,
++  VoiceInputStreamEvent,
++} from "./voiceInput.ts";
+ 
+ export const WS_METHODS = {
+   // Project registry methods
+@@ -276,6 +283,8 @@ export const WS_METHODS = {
+   serverUpdateProvider: "server.updateProvider",
+   serverUpdateServer: "server.updateServer",
+   serverUpdateServerWithProgress: "server.updateServerWithProgress",
++  voiceInputStart: "voiceInput.start",
++  voiceInputStop: "voiceInput.stop",
+   serverUpsertKeybinding: "server.upsertKeybinding",
+   serverRemoveKeybinding: "server.removeKeybinding",
+   serverGetSettings: "server.getSettings",
+@@ -393,6 +402,19 @@ export const WsServerUpdateServerWithProgressRpc = Rpc.make(
+   },
+ );
+ 
++export const WsVoiceInputStartRpc = Rpc.make(WS_METHODS.voiceInputStart, {
++  payload: VoiceInputStartInput,
++  success: VoiceInputStreamEvent,
++  error: Schema.Union([VoiceInputError, EnvironmentAuthorizationError]),
++  stream: true,
++});
++
++export const WsVoiceInputStopRpc = Rpc.make(WS_METHODS.voiceInputStop, {
++  payload: VoiceInputStopInput,
++  success: VoiceInputStopResult,
++  error: EnvironmentAuthorizationError,
++});
++
+ export const WsServerGetSettingsRpc = Rpc.make(WS_METHODS.serverGetSettings, {
+   payload: Schema.Struct({}),
+   success: ServerSettings,
+@@ -1024,6 +1046,8 @@ export const WsRpcGroup = RpcGroup.make(
+   WsServerUpdateProviderRpc,
+   WsServerUpdateServerRpc,
+   WsServerUpdateServerWithProgressRpc,
++  WsVoiceInputStartRpc,
++  WsVoiceInputStopRpc,
+   WsServerUpsertKeybindingRpc,
+   WsServerRemoveKeybindingRpc,
+   WsServerGetSettingsRpc,
+diff --git a/packages/contracts/src/voiceInput.ts b/packages/contracts/src/voiceInput.ts
+new file mode 100644
+index 00000000..46f67a35
+--- /dev/null
++++ b/packages/contracts/src/voiceInput.ts
+@@ -0,0 +1,35 @@
++import * as Schema from "effect/Schema";
++
++export const VoiceInputStartInput = Schema.Struct({
++  sessionId: Schema.String,
++});
++export type VoiceInputStartInput = typeof VoiceInputStartInput.Type;
++
++export const VoiceInputStopInput = Schema.Struct({
++  sessionId: Schema.String,
++});
++export type VoiceInputStopInput = typeof VoiceInputStopInput.Type;
++
++export const VoiceInputStopResult = Schema.Struct({
++  stopped: Schema.Boolean,
++});
++export type VoiceInputStopResult = typeof VoiceInputStopResult.Type;
++
++export const VoiceInputStreamEvent = Schema.Union([
++  Schema.Struct({ type: Schema.Literal("listening") }),
++  Schema.Struct({
++    type: Schema.Literal("transcript"),
++    text: Schema.String,
++    final: Schema.Boolean,
++  }),
++  Schema.Struct({ type: Schema.Literal("stopped") }),
++]);
++export type VoiceInputStreamEvent = typeof VoiceInputStreamEvent.Type;
++
++export class VoiceInputError extends Schema.TaggedErrorClass<VoiceInputError>()(
++  "VoiceInputError",
++  {
++    message: Schema.String,
++    fatal: Schema.optional(Schema.Boolean),
++  },
++) {}

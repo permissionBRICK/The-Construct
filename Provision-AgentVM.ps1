@@ -102,10 +102,10 @@ param(
     # ($envPrefix interpolates it into a single-quoted remote assignment).
     [ValidateSet("", "stable", "nightly")]
     [string]$T3CodeChannel = "",
-    # Opt-in T3 Code extra-feature patch set: Claude usage-limit auto-resume plus
-    # OpenCode background-watcher monitoring. The parameter/key keeps its legacy
-    # name for saved-setting compatibility. Off by default; EMPTY keeps the VM's
-    # saved choice (config.env T3CODE_LIMIT_RESUME). "true"/"false"/"".
+    # Opt-in shared patched-source build for the T3 VM server and Windows Desktop
+    # app: voice input, Claude usage-limit recovery, and OpenCode monitoring. The
+    # parameter/key keeps its legacy name for saved-setting compatibility. Off by
+    # default; EMPTY keeps the VM's saved choice. "true"/"false"/"".
     [string]$T3CodeLimitResume = "",
     # Set up a Samba/SMB server on the VM that shares the workspace (the repos
     # folder) to this host. Credentials are generated once on the VM and persisted
@@ -1765,6 +1765,86 @@ if ($RestoreDir) {
         Write-Ok "Saved config restored"
     } else {
         Write-Host "    -RestoreDir set but no backup.tar.gz in $RestoreDir -- skipping restore." -ForegroundColor DarkGray
+    }
+}
+
+# A patched-source T3 provision leaves an unsigned Windows NSIS installer in a
+# fixed VM artifact path. Pull it onto the host and silently install it when its
+# content hash changed (or when the app was removed); all compiler/package-manager/
+# Rust/Wine dependencies remain inside the disposable VM. Electron Builder's
+# --updated + /S path closes the running app, does not relaunch it, and needs no
+# elevation for this per-user package. This optional handoff must never turn a
+# successful VM provision into a failure merely because the Desktop update failed.
+if ($Action -eq 'provision') {
+    try {
+        $t3DesktopStatus = (Invoke-Ssh -Sudo -Command "cat /etc/construct/t3code-desktop-status 2>/dev/null || true" | Out-String)
+        if ($t3DesktopStatus -match '(?m)^T3CODE_DESKTOP_READY=yes\s*$') {
+            $t3ArtifactRoot = if ($env:LOCALAPPDATA) {
+                Join-Path $env:LOCALAPPDATA 'The-Construct\artifacts\t3code'
+            } else {
+                Join-Path $env:TEMP 'The-Construct\artifacts\t3code'
+            }
+            New-Item -ItemType Directory -Path $t3ArtifactRoot -Force | Out-Null
+            $localManifest = Join-Path $t3ArtifactRoot 'manifest.json'
+            $installedManifest = Join-Path $t3ArtifactRoot 'installed.json'
+            $localInstaller = Join-Path $t3ArtifactRoot 'T3Code-Construct-Setup.exe'
+            $manifestTemp = "$localManifest.download"
+            Invoke-ScpFrom -RemotePath '/var/lib/construct/t3code-desktop/manifest.json' -LocalPath $manifestTemp
+            $manifest = Get-Content -LiteralPath $manifestTemp -Raw | ConvertFrom-Json
+            $expectedSha = ([string]$manifest.sha256).Trim().ToLowerInvariant()
+            if ($expectedSha -notmatch '^[0-9a-f]{64}$') {
+                throw 'The patched T3 Desktop manifest has no valid SHA-256.'
+            }
+            $needsDownload = $true
+            if (Test-Path -LiteralPath $localInstaller) {
+                $localSha = (Get-FileHash -LiteralPath $localInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
+                $needsDownload = $localSha -ne $expectedSha
+            }
+            if ($needsDownload) {
+                Write-Step "Downloading patched T3 Code Desktop $($manifest.desktopVersion) installer to this host"
+                $installerTemp = "$localInstaller.download"
+                Invoke-ScpFrom -RemotePath '/var/lib/construct/t3code-desktop/T3Code-Construct-Setup.exe' -LocalPath $installerTemp
+                $downloadedSha = (Get-FileHash -LiteralPath $installerTemp -Algorithm SHA256).Hash.ToLowerInvariant()
+                if ($downloadedSha -ne $expectedSha) {
+                    throw "Patched T3 Desktop installer hash mismatch (expected $expectedSha, got $downloadedSha)."
+                }
+                Move-Item -LiteralPath $installerTemp -Destination $localInstaller -Force
+            }
+            Move-Item -LiteralPath $manifestTemp -Destination $localManifest -Force
+            $installedSha = ''
+            if (Test-Path -LiteralPath $installedManifest) {
+                try {
+                    $installed = Get-Content -LiteralPath $installedManifest -Raw | ConvertFrom-Json
+                    $installedSha = ([string]$installed.sha256).Trim().ToLowerInvariant()
+                } catch { }
+            }
+            # electron-builder derives this stable per-user directory from the
+            # app id; stable and nightly intentionally update the same install.
+            $t3InstallRoot = if ($env:LOCALAPPDATA) {
+                Join-Path $env:LOCALAPPDATA 'Programs\t3code'
+            } else { $null }
+            $appPresent = $false
+            if ($t3InstallRoot -and (Test-Path -LiteralPath $t3InstallRoot)) {
+                $appPresent = $null -ne (Get-ChildItem -LiteralPath $t3InstallRoot -Filter '*.exe' -File -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Name -notlike 'Uninstall*' } | Select-Object -First 1)
+            }
+
+            if (($installedSha -eq $expectedSha) -and $appPresent) {
+                Write-Ok "Patched T3 Code Desktop $($manifest.desktopVersion) is already current"
+            } else {
+                Write-Step "Silently installing/updating patched T3 Code Desktop $($manifest.desktopVersion)"
+                $installerProcess = Start-Process -FilePath $localInstaller -ArgumentList @('--updated', '/S') -Wait -PassThru -WindowStyle Hidden
+                if ($installerProcess.ExitCode -ne 0) {
+                    throw "Patched T3 Desktop installer exited $($installerProcess.ExitCode)."
+                }
+                $installedTemp = "$installedManifest.download"
+                Copy-Item -LiteralPath $localManifest -Destination $installedTemp -Force
+                Move-Item -LiteralPath $installedTemp -Destination $installedManifest -Force
+                Write-Ok "Patched T3 Code Desktop $($manifest.desktopVersion) installed/updated silently"
+            }
+        }
+    } catch {
+        Write-Warning "Patched T3 Desktop could not be installed/updated ($($_.Exception.Message)). The VM server provision is still valid."
     }
 }
 
