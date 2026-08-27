@@ -104,9 +104,40 @@ function ensureConfigTree(configDir) {
 // AgentVm.Common.ps1 must match).
 
 const SYNC_LOCK_FILE = ".sync.lock";
+const PROVISION_SYNC_INTENT_FILE = ".sync.provisioning";
 // A tick is seconds of work (two 30s-capped SSH calls + local git). A lock older
 // than this belongs to a crashed/killed process and may be broken.
 const SYNC_LOCK_STALE_MS = 5 * 60 * 1000;
+const PROVISION_SYNC_INTENT_STALE_MS = 5 * 60 * 1000;
+
+/** True when the pid recorded by another local host process is definitely gone. */
+function ownerProcessIsDead(lockPath) {
+  try {
+    const owner = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+    const pid = Number(owner && owner.pid);
+    if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+    try { process.kill(pid, 0); return false; }
+    catch (e) { return !!e && e.code === "ESRCH"; }
+  } catch (_) { return false; }
+}
+
+/**
+ * A provisioning PowerShell process writes this short-lived intent before it
+ * waits for the ordinary sync lock. Extension ticks yield while that live
+ * intent exists, which prevents timer/watcher ticks from repeatedly winning
+ * the lock and starving an unattended reprovision.
+ */
+function provisionSyncPending(configDir, opts) {
+  const staleMs = (opts && opts.staleMs) || PROVISION_SYNC_INTENT_STALE_MS;
+  const intentPath = path.join(configDir, PROVISION_SYNC_INTENT_FILE);
+  let st;
+  try { st = fs.statSync(intentPath); } catch (_) { return false; }
+  if (ownerProcessIsDead(intentPath) || Date.now() - st.mtimeMs > staleMs) {
+    try { fs.unlinkSync(intentPath); } catch (_) { /* lost a cleanup race */ }
+    return false;
+  }
+  return true;
+}
 
 /**
  * Try to take the sync lock. Atomic create (O_EXCL); a lock whose mtime is
@@ -131,7 +162,7 @@ function acquireSyncLock(configDir, opts) {
       let st;
       try { st = fs.statSync(lockPath); }
       catch (_) { continue; } // holder released between open and stat — retry
-      if (Date.now() - st.mtimeMs <= staleMs) return null; // live holder
+      if (!ownerProcessIsDead(lockPath) && Date.now() - st.mtimeMs <= staleMs) return null;
       try { fs.unlinkSync(lockPath); } catch (_) { /* lost the break race */ }
       // retry the create once; if a rival re-created it first, report busy
     }
@@ -207,7 +238,7 @@ async function hardenConfigRepo(runGit, configDir) {
   // `git merge` refuse ("untracked working tree files would be overwritten"),
   // which the tick then reports as a blocked/phantom "merge conflict". Ignoring
   // them via .git/info/exclude (local, itself untracked) fixes both.
-  ensureRepoExclude(configDir, [".gitattributes", ".migrated", SYNC_LOCK_FILE]);
+  ensureRepoExclude(configDir, [".gitattributes", ".migrated", SYNC_LOCK_FILE, PROVISION_SYNC_INTENT_FILE]);
 }
 
 /** Append the given names to <configDir>/.git/info/exclude if absent. Best-effort. */
@@ -539,12 +570,20 @@ function parseWriteResult(stdout) {
  * log:        (level, msg) => void
  */
 async function syncTick(opts) {
+  if (provisionSyncPending(opts.configDir)) {
+    if (opts.log) opts.log("info", "provisioning sync is pending; extension tick yielded");
+    return {
+      ok: true, ran: false, lockBusy: true, conflict: false, blocked: false,
+      blockedReason: null, reason: "provision-pending", skippedInvalid: [], merged: false,
+      seeded: false, writeBack: { done: [], skipped: [] }, warnings: [], vmReadOk: null,
+    };
+  }
   const lockToken = acquireSyncLock(opts.configDir);
   if (!lockToken) {
     if (opts.log) opts.log("info", "sync lock held by another window/engine; tick skipped");
     return {
       ok: true, ran: false, lockBusy: true, conflict: false, blocked: false,
-      blockedReason: null, skippedInvalid: [], merged: false, seeded: false,
+      blockedReason: null, reason: "lock-busy", skippedInvalid: [], merged: false, seeded: false,
       writeBack: { done: [], skipped: [] }, warnings: [], vmReadOk: null,
     };
   }
@@ -689,6 +728,11 @@ async function syncTickLocked({ runGit, configDir, readStore, writeStore, log, s
       const wb = parseWriteResult(wbStdout);
       if (wb) {
         result.writeBack = wb;
+        if (wb.skipped.length > 0) {
+          addWarning(`seed write-back skipped concurrently changed profile(s): ${wb.skipped.join(", ")}; sync base not advanced`);
+          result.ok = true;
+          return result;
+        }
       } else {
         addWarning("write-back to VM store failed; vm ref not advanced");
         result.ok = true;
@@ -766,6 +810,11 @@ async function syncTickLocked({ runGit, configDir, readStore, writeStore, log, s
       const wb = parseWriteResult(wbStdout);
       if (wb) {
         result.writeBack = wb;
+        if (wb.skipped.length > 0) {
+          addWarning(`write-back skipped concurrently changed profile(s): ${wb.skipped.join(", ")}; sync base not advanced`);
+          result.ok = true;
+          return result;
+        }
       } else {
         addWarning("write-back to VM store failed; vm ref not advanced");
         result.ok = true;
@@ -857,6 +906,10 @@ async function syncTickLocked({ runGit, configDir, readStore, writeStore, log, s
     const wb = parseWriteResult(wbStdout);
     if (wb) {
       result.writeBack = wb;
+      if (wb.skipped.length > 0) {
+        writeBackRan = false;
+        addWarning(`write-back skipped concurrently changed profile(s): ${wb.skipped.join(", ")}; sync base not advanced`);
+      }
     } else {
       writeBackRan = false;
       addWarning("write-back to VM store failed; vm ref not advanced");
@@ -1030,6 +1083,58 @@ function readMainProfiles(configDir) {
     catch (_) { /* skip */ }
   }
   return map;
+}
+
+/**
+ * Return repository identities belonging to profiles that were intentionally
+ * deleted from the host/VM history and are still absent now. Auto-discovery
+ * must not recreate these merely because their checkout directory remains on
+ * the VM. Re-creating a profile explicitly removes it from this effective
+ * tombstone set because `currentNames` then contains the name again.
+ */
+async function deletedProfileIdentities(runGit, configDir, currentNames) {
+  const current = new Set(Array.from(currentNames || [], (n) => String(n).toLowerCase()));
+  const paths = new Set();
+  for (const args of [
+    ["diff", "--name-only", "--diff-filter=D", "--", "projects/"],
+    ["log", "--all", "--name-only", "--pretty=format:", "--diff-filter=D", "--", "projects/"],
+  ]) {
+    const r = await runGit(args, { cwd: configDir });
+    for (const line of String(r.stdout || "").split(/\r?\n/)) {
+      const rel = line.trim().replace(/\\/g, "/");
+      if (/^projects\/[^/]+\.json$/.test(rel)) paths.add(rel);
+    }
+  }
+
+  const names = new Set();
+  const urls = new Set();
+  for (const rel of paths) {
+    const name = path.basename(rel, ".json");
+    if (current.has(name.toLowerCase()) || projects.isReservedProfileName(name)) continue;
+    names.add(name);
+
+    // Recover the most recent valid pre-deletion content so renamed profiles
+    // also suppress the same repository URL. Names alone cover the common
+    // auto-import case, so history-read failures remain harmless.
+    const commits = await runGit(["log", "--all", "--max-count=20", "--format=%H", "--", rel], { cwd: configDir });
+    let found = false;
+    for (const commit of String(commits.stdout || "").split(/\r?\n/).filter(Boolean)) {
+      for (const spec of [commit + ":" + rel, commit + "^:" + rel]) {
+        const shown = await runGit(["show", spec], { cwd: configDir });
+        if (shown.code !== 0 || !shown.stdout) continue;
+        try {
+          const profile = JSON.parse(shown.stdout);
+          for (const repo of (Array.isArray(profile.repos) ? profile.repos : [])) {
+            if (repo && typeof repo.url === "string" && repo.url.trim()) urls.add(repo.url.trim());
+          }
+          found = true;
+        } catch (_) { /* try the next historical blob */ }
+        if (found) break;
+      }
+      if (found) break;
+    }
+  }
+  return { names, urls };
 }
 
 /** Validate every projects/*.json in the working tree. Returns {ok, errors}. */
@@ -1316,11 +1421,12 @@ async function pushUpstream(runGit, { stagingDir, files, branch, message }) {
 module.exports = {
   makeGitRunner, detectGit,
   ensureConfigTree,
-  acquireSyncLock, releaseSyncLock, SYNC_LOCK_FILE,
+  acquireSyncLock, releaseSyncLock, provisionSyncPending,
+  SYNC_LOCK_FILE, PROVISION_SYNC_INTENT_FILE,
   ensureRepo, repoState, completePendingMerge,
   buildReadStoreScript, parseReadStore,
   planWriteBack, buildWriteStoreScript, parseWriteResult,
-  syncTick,
+  syncTick, deletedProfileIdentities,
   readRemotes, writeRemotes, remoteSlug, stagingRoot,
   ensureStagingClone, listImportCandidates, readImportManifest,
   planUpstreamImport, mergeFile, commitAll, pushUpstream,

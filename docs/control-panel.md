@@ -354,13 +354,18 @@ checkout. The build toolchain (Node/pnpm, Rust/MinGW, Wine, and Electron Builder
 VM. The finished installer is copied to
 `%LOCALAPPDATA%\The-Construct\artifacts\t3code\` and silently installed or updated on
 Windows as part of provisioning. There is no installation prompt and provisioning does not
-launch the app afterward. Unchanged version/patch combinations are cached rather than rebuilt,
-and an already-current Desktop installation is left alone.
+launch the app afterward. Construct keys the shared build by the resolved upstream T3 version,
+the installed Construct revision, and the guarded patch recipe. Routine reprovisions reuse the
+running VM server and Desktop artifact without rebuilding, reinstalling, or restarting T3; a T3
+update or Construct update invalidates that cache. An already-current Desktop installation is
+left alone. Activating a genuinely new build restarts `t3code-serve`, so an open T3 provider
+session may ask you to send a new message afterward; unchanged reprovisions do not interrupt it.
 
 The shared patch adds:
 
 - **Voice input:** a mic button immediately left of Send in both draft/new and existing chat
-  composers, plus **Ctrl+D** tap/hold behavior. The selected environment streams raw 16 kHz
+  composers, plus **Ctrl+T** tap/hold behavior. While recording, a live ring around the button
+  expands with the microphone signal level. The selected environment streams raw 16 kHz
   mono PCM through Construct's existing host microphone reverse tunnel into Claude's speech
   endpoint. Partial transcripts replace only their own live span at the cursor captured when
   recording started; existing prefix/suffix text is never replaced, and typing while recording

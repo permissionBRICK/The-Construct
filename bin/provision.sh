@@ -567,6 +567,7 @@ else
   # A disabled T3 deployment must not cause the host handoff to offer a stale
   # patched Desktop installer from an earlier provision.
   rm -f /etc/construct/t3code-desktop-status
+  rm -f /etc/construct/t3code-installed-build
   bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" CONSTRUCT_T3_VOICE_INPUT false
   if [[ -f /etc/systemd/system/t3code-serve.service ]]; then
     run_step optional "Disabling T3 Code web GUI (T3CODE=false)" \

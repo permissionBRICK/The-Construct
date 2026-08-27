@@ -29,6 +29,32 @@ fi
 
 mkdir -p "${WORKSPACE_ROOT}"
 
+# Fetch each configured remote independently so one stale single-branch refspec
+# can be repaired without hiding which remote failed. This occurs when a repo was
+# originally cloned/fetched with a narrow branch (for example `lite-split`) and
+# upstream later deletes that branch: plain `git fetch --all` then fails every
+# provision even though the repository and its default branch are healthy.
+fetch_existing_repo() {
+  local repo="$1" remote output failed=0
+  while IFS= read -r remote; do
+    [[ -n "${remote}" ]] || continue
+    if output="$(git -C "${repo}" fetch "${remote}" --prune 2>&1)"; then
+      [[ -z "${output}" ]] || printf '%s\n' "${output}"
+      continue
+    fi
+    printf '%s\n' "${output}"
+    if [[ "${output}" == *"couldn't find remote ref"* || "${output}" == *"could not find remote ref"* ]]; then
+      echo "NOTE: ${repo} remote '${remote}' has a stale deleted-branch fetch refspec; restoring normal branch discovery and retrying"
+      git -C "${repo}" config --replace-all "remote.${remote}.fetch" "+refs/heads/*:refs/remotes/${remote}/*"
+      if git -C "${repo}" fetch "${remote}" --prune 2>&1; then
+        continue
+      fi
+    fi
+    failed=1
+  done < <(git -C "${repo}" remote)
+  return "${failed}"
+}
+
 # Parse the repo list up front into a temp file. Doing this as a plain command
 # (not in a pipe or process substitution) keeps a jq/config failure FATAL under
 # `set -e` -- malformed/unreadable generated.json must abort, not silently check
@@ -66,7 +92,7 @@ while IFS=$'\t' read -r url directory; do
   # channel, which is how a failed checkout previously looked like a success.
   if [[ -d "${target}/.git" ]]; then
     echo "Already cloned: ${target}"
-    if ! git -C "${target}" fetch --all --prune 2>&1; then
+    if ! fetch_existing_repo "${target}"; then
       echo "ERROR: fetch failed for ${target}"
       failed=$((failed + 1))
     elif [[ -z "$(git -C "${target}" status --porcelain 2>/dev/null)" ]]; then

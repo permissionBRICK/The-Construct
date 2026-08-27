@@ -307,6 +307,11 @@
   });
   $("pmClose") && $("pmClose").addEventListener("click", closeModal);
   $("pmCancel") && $("pmCancel").addEventListener("click", closeModal);
+  $("pmDelete") && $("pmDelete").addEventListener("click", () => {
+    if (!editName) return;
+    post({ type: "command", id: "deleteProject", project: editName });
+    closeModal();
+  });
   // Click the dimmed backdrop (but not the dialog itself) to dismiss.
   modal && modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
   // Esc closes the modal when it's open.

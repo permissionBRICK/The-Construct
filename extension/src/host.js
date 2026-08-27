@@ -188,6 +188,20 @@ function writeProjectProfile(scriptsDir, name, obj) {
   fs.writeFileSync(path.join(dir, safe + ".json"), JSON.stringify(obj, null, 2) + "\n", "utf8");
 }
 
+/** Delete one profile file, traversal-safe. Returns false when already absent. */
+function deleteProjectProfile(scriptsDir, name) {
+  if (!scriptsDir) throw new Error("No Construct scripts directory resolved");
+  const safe = safeProfileName(name);
+  if (!safe) throw new Error("Invalid project name");
+  try {
+    fs.unlinkSync(path.join(projectsDir(scriptsDir), safe + ".json"));
+    return true;
+  } catch (e) {
+    if (e && e.code === "ENOENT") return false;
+    throw e;
+  }
+}
+
 /**
  * Atomic create-if-absent: write a profile ONLY when no file with that name
  * exists yet (case-insensitive, matching Windows/macOS filesystem semantics).
@@ -437,7 +451,7 @@ module.exports = {
   settingsPath, projectsDir, configDir,
   readRawSettings, writeRawSettings, mapToForm, mapFromForm, patchReprovisionChanges,
   readSettings, saveSettings, readProjectProfile,
-  safeProfileName, listProjectProfiles, writeProjectProfile, writeProjectProfileIfAbsent,
+  safeProfileName, listProjectProfiles, writeProjectProfile, deleteProjectProfile, writeProjectProfileIfAbsent,
   readSelectedProjects, hasPersistedSelection, saveSelectedProjects,
   readAppliedAutoCheckpoints, saveAppliedAutoCheckpoints,
 };

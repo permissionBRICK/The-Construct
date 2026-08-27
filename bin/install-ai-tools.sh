@@ -740,6 +740,7 @@ t3_node_ok() {
 }
 
 install_t3code() {
+  local t3_bin resolved t3_bundle _wanted_t3_build _active_t3_build
   step "Installing T3 Code (t3 CLI + web GUI server)"
 
   # Construct's optional T3 feature set is built from one upstream source tag.
@@ -750,50 +751,51 @@ install_t3code() {
   # guarded patch.
   if [[ "${T3CODE_LIMIT_RESUME:-false}" == "true" ]]; then
     step "Building Construct's patched T3 server + Windows Desktop app"
-    if ! REPO_DIR="${REPO_DIR}" T3CODE_CHANNEL="${T3CODE_CHANNEL}" \
+    if ! env REPO_DIR="${REPO_DIR}" T3CODE_CHANNEL="${T3CODE_CHANNEL}" \
       bash "${REPO_DIR}/bin/build-t3code.sh"; then
       err "patched T3 source/Desktop build failed; the previous T3 install was left in place"
       return 1
     fi
   else
-  # A stock install must not leave a prior patched Desktop artifact advertised
-  # to the host after this feature is disabled.
-  rm -f /etc/construct/t3code-desktop-status
+    # A stock install must not leave a prior patched Desktop artifact advertised
+    # to the host after this feature is disabled.
+    rm -f /etc/construct/t3code-desktop-status
+    rm -f /etc/construct/t3code-installed-build
 
-  # t3 ships only as an npm package. Node may not be provisioned yet (this runs
-  # before install-sdks.sh), or a project SDK may have pinned an older major --
-  # bootstrap/upgrade to Node 22 via NodeSource (the same channel
-  # install-sdks.sh uses) when npm is missing or Node is below t3's floor.
-  if ! command -v npm >/dev/null 2>&1 || ! t3_node_ok; then
-    step "Installing Node.js 22.x (t3 requires Node ^22.16 || ^23.11 || >=24.10)"
-    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-    DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
-  fi
-
-  # node-pty (t3's terminal backend) ships prebuilt binaries only for macOS and
-  # Windows -- on Linux its install always falls back to 'node-gyp rebuild',
-  # which needs make/g++/python3. A fresh VM has no compiler toolchain, so
-  # provision it before npm runs the build scripts.
-  if ! command -v make >/dev/null 2>&1 || ! command -v g++ >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
-    step "Installing build tools (node-pty compiles from source on Linux)"
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update
-    apt-get install -y build-essential python3
-  fi
-
-  # node-pty (terminal support) and msgpackr-extract must run their build
-  # scripts; newer npm gates install scripts behind --allow-scripts, older npm
-  # ignores the unknown flag and runs them anyway -- one call covers both.
-  local _tag
-  _tag="$(_t3_npm_tag)"
-  if command -v t3 >/dev/null 2>&1; then
-    note "t3 already installed; installing t3@${_tag} (channel=${T3CODE_CHANNEL})"
-    if ! npm install -g "t3@${_tag}" --allow-scripts=node-pty,msgpackr-extract; then
-      warn "t3 update failed; keeping the existing version"
+    # t3 ships only as an npm package. Node may not be provisioned yet (this runs
+    # before install-sdks.sh), or a project SDK may have pinned an older major --
+    # bootstrap/upgrade to Node 22 via NodeSource (the same channel
+    # install-sdks.sh uses) when npm is missing or Node is below t3's floor.
+    if ! command -v npm >/dev/null 2>&1 || ! t3_node_ok; then
+      step "Installing Node.js 22.x (t3 requires Node ^22.16 || ^23.11 || >=24.10)"
+      curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+      DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
     fi
-  else
-    npm install -g "t3@${_tag}" --allow-scripts=node-pty,msgpackr-extract
-  fi
+
+    # node-pty (t3's terminal backend) ships prebuilt binaries only for macOS and
+    # Windows -- on Linux its install always falls back to 'node-gyp rebuild',
+    # which needs make/g++/python3. A fresh VM has no compiler toolchain, so
+    # provision it before npm runs the build scripts.
+    if ! command -v make >/dev/null 2>&1 || ! command -v g++ >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
+      step "Installing build tools (node-pty compiles from source on Linux)"
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update
+      apt-get install -y build-essential python3
+    fi
+
+    # node-pty (terminal support) and msgpackr-extract must run their build
+    # scripts; newer npm gates install scripts behind --allow-scripts, older npm
+    # ignores the unknown flag and runs them anyway -- one call covers both.
+    local _tag
+    _tag="$(_t3_npm_tag)"
+    if command -v t3 >/dev/null 2>&1; then
+      note "t3 already installed; installing t3@${_tag} (channel=${T3CODE_CHANNEL})"
+      if ! npm install -g "t3@${_tag}" --allow-scripts=node-pty,msgpackr-extract; then
+        warn "t3 update failed; keeping the existing version"
+      fi
+    else
+      npm install -g "t3@${_tag}" --allow-scripts=node-pty,msgpackr-extract
+    fi
   fi
 
   # Resolve the installed binary and pin the stable PATH location the service
@@ -822,6 +824,20 @@ install_t3code() {
   bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" T3CODE_CHANNEL "${T3CODE_CHANNEL}"
   bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" CONSTRUCT_T3_VOICE_INPUT \
     "$([[ "${T3CODE_LIMIT_RESUME:-false}" == "true" ]] && echo true || echo false)"
+
+  # On an unchanged upstream T3 + Construct revision, the source builder has
+  # already restored the exact server symlink and Desktop status. If that same
+  # build is active, avoid re-patching, rewriting the unit, restarting T3, and
+  # re-registering every workspace repo during routine reprovisions.
+  if [[ "${T3CODE_LIMIT_RESUME:-false}" == "true" ]]; then
+    _wanted_t3_build="$(sed -n 's/^T3CODE_BUILD_KEY=//p' /etc/construct/t3code-desktop-status 2>/dev/null | head -1)"
+    _active_t3_build="$(cat /etc/construct/t3code-installed-build 2>/dev/null || true)"
+    if [[ -n "${_wanted_t3_build}" && "${_wanted_t3_build}" == "${_active_t3_build}" ]] && \
+       systemctl is-active --quiet t3code-serve; then
+      note "T3 Code build is unchanged and already running; skipping its reinstall/restart."
+      return 0
+    fi
+  fi
 
   # The legacy env key remains for settings compatibility and now selects the
   # shared patched-source server/Desktop build. Re-running the established
@@ -857,6 +873,9 @@ install_t3code() {
   done
 
   if systemctl is-active --quiet t3code-serve; then
+    if [[ "${T3CODE_LIMIT_RESUME:-false}" == "true" ]]; then
+      sed -n 's/^T3CODE_BUILD_KEY=//p' /etc/construct/t3code-desktop-status | head -1 > /etc/construct/t3code-installed-build
+    fi
     echo "t3code-serve is running on ${T3CODE_HOST}:${T3CODE_PORT}"
     # Fresh VMs have no t3 DB when the patch step above runs, so the token mint
     # there can fail; retry now that the server has started once.

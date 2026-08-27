@@ -252,6 +252,17 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     saveProjMsg.profile.tests && saveProjMsg.profile.tests.web && saveProjMsg.profile.tests.web.runner === "playwright");
   check("modal: closes after a valid save", await page.locator("#projModal").isHidden());
 
+  // Delete is an explicit modal action; confirmation and filesystem mutation
+  // happen in the extension host after this command is posted.
+  await page.evaluate(() => window.postMessage({ type: "editProject", name: "billing", profile: { name: "billing", repos: [] } }, "*"));
+  await page.waitForTimeout(60);
+  await page.evaluate(() => { window.__posted.length = 0; });
+  await page.click("#pmDelete");
+  posted = await page.evaluate(() => window.__posted);
+  check("modal: Delete profile posts the named deleteProject command", posted.some((m) =>
+    m.type === "command" && m.id === "deleteProject" && m.project === "billing"));
+  check("modal: closes after requesting profile deletion", await page.locator("#projModal").isHidden());
+
   // Esc + backdrop dismissal.
   await page.evaluate(() => window.postMessage({ type: "editProject", name: "x", profile: { name: "x", repos: [] } }, "*"));
   await page.waitForTimeout(60);

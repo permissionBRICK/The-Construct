@@ -23,8 +23,16 @@ const sourceBuild = fs.readFileSync(path.join(repoRoot, "bin", "build-t3code.sh"
 const sourcePatch = fs.readFileSync(path.join(repoRoot, "patches", "t3code-construct.patch"), "utf8");
 const updateT3 = fs.readFileSync(path.join(repoRoot, "Update-T3Code.ps1"), "utf8");
 const provisionT3 = fs.readFileSync(path.join(repoRoot, "Provision-AgentVM.ps1"), "utf8");
+const installAiTools = fs.readFileSync(path.join(repoRoot, "bin", "install-ai-tools.sh"), "utf8");
 ok("source build: resolves the selected npm channel to an exact Git tag",
   /npm view "t3@\$\{NPM_TAG\}" version/.test(sourceBuild) && /TAG="v\$\{VERSION\}"/.test(sourceBuild) && /git clone --depth 1 --branch "\$\{TAG\}"/.test(sourceBuild));
+ok("source build: cache is keyed by both T3 and installed Construct versions",
+  /CONSTRUCT_VERSION/.test(sourceBuild) && /cached_construct/.test(sourceBuild) &&
+  /T3CODE_BUILD_KEY/.test(sourceBuild) && /constructVersion, buildHash/.test(sourceBuild) &&
+  /CONSTRUCT_VERSION='\$constructVersion'/.test(provisionT3));
+ok("source build: an unchanged active build skips T3 reinstall and restart",
+  /t3code-installed-build/.test(installAiTools) &&
+  /T3 Code build is unchanged and already running; skipping its reinstall\/restart/.test(installAiTools));
 ok("source build: one patched server bundle feeds the VM and Desktop package",
   /pnpm run build:desktop/.test(sourceBuild) && /construct-t3park-patch\.mjs" apply --bundle/.test(sourceBuild) &&
   /build-desktop-artifact\.ts/.test(sourceBuild) && /ln -sfn "\$\{SOURCE_DIR\}\/apps\/server\/dist\/bin\.mjs" \/usr\/local\/bin\/t3/.test(sourceBuild));
@@ -32,7 +40,10 @@ ok("source build: Windows compiler/NSIS dependencies stay in the VM",
   /mingw-w64/.test(sourceBuild) && /wine32:i386/.test(sourceBuild) && /x86_64-pc-windows-gnu/.test(sourceBuild) && /--target nsis --arch x64/.test(sourceBuild));
 ok("source patch: voice RPC, live cursor-safe insertion, mic UI, and Construct updater are present",
   /voiceInput\.start/.test(sourcePatch) && /active\.lastSetInput/.test(sourcePatch) && /MicIcon/.test(sourcePatch) &&
-  /Ctrl\+D/.test(sourcePatch) && /Update-T3Code\.ps1/.test(sourcePatch));
+  /Ctrl\+T/.test(sourcePatch) && !/Ctrl\+D/.test(sourcePatch) && /Update-T3Code\.ps1/.test(sourcePatch));
+ok("source patch: streams PCM amplitude into a live mic-button level effect",
+  /readInt16LE/.test(sourcePatch) && /Schema\.Literal\("level"\)/.test(sourcePatch) &&
+  /data-voice-level/.test(sourcePatch) && /boxShadow/.test(sourcePatch));
 ok("desktop update handoff: reprovisions with the saved T3 source-build setting",
   /Provision-AgentVM\.ps1/.test(updateT3) && /Action\s+= 'provision'/.test(updateT3) && /T3CodeLimitResume/.test(updateT3));
 ok("desktop provisioning: installs updates silently, waits, and never prompts or launches the app",
@@ -75,7 +86,8 @@ ok("install(nightly): 0-arg call defaults to stable (backward compat)", /t3@late
 const dis = t3.buildDisableScript();
 ok("disable: clears the opt-in flag", /cfgset T3CODE false/.test(dis));
 ok("disable: clears voice capability and stale Desktop handoff state",
-  /cfgset CONSTRUCT_T3_VOICE_INPUT false/.test(dis) && /t3code-desktop-status/.test(dis));
+  /cfgset CONSTRUCT_T3_VOICE_INPUT false/.test(dis) && /t3code-desktop-status/.test(dis) &&
+  /t3code-installed-build/.test(dis));
 ok("disable: stops + disables the service, best-effort", /systemctl disable --now t3code-serve/.test(dis) && /exit 0/.test(dis));
 
 // ── buildPairingScript ────────────────────────────────────────────────────────

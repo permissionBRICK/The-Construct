@@ -177,6 +177,12 @@ try {
   ok("source-managed T3: agent update action starts Construct reprovision",
     extensionSource.includes('requested.includes("t3code")') &&
     extensionSource.includes("startConstructReprovision(scriptsDir)"));
+  ok("config sync: same-window overlap queues one follow-up instead of reporting contention",
+    extensionSource.includes("syncTickFollowupPromise") &&
+    extensionSource.includes("syncTickFollowupPromise = active.then(function ()"));
+  ok("projects UI: confirmed delete prunes selection and runs config sync",
+    extensionSource.includes("runDeleteProject") && extensionSource.includes("Delete project profile") &&
+    extensionSource.includes("host.deleteProjectProfile") && extensionSource.includes("await runConfigSync()"));
 
   // ── the automatic-checkpoint "applied" marker ──────────────────────────────
   // Separate from the PREFERENCE: it records what was actually CONFIRMED onto the VM,
@@ -282,6 +288,15 @@ try {
   ok("write: no scripts dir -> throws", (() => { try { host.writeProjectProfile(null, "x", {}); return false; } catch (_) { return true; } })());
   ok("write: a traversing name never wrote a file outside projects/",
     !fs.existsSync(path.join(newDir, "evil.json")) && !fs.existsSync(path.join(newDir, "..", "evil.json")));
+  ok("delete: removes one profile and reports already-absent on repeat",
+    host.deleteProjectProfile(newDir, "billing") === true &&
+    !fs.existsSync(path.join(projDir, "billing.json")) &&
+    host.deleteProjectProfile(newDir, "billing") === false);
+  ok("delete: rejects traversal and never removes outside the profile folder", (() => {
+    try { host.deleteProjectProfile(newDir, "../customer-portal"); return false; } catch (_) {
+      return fs.existsSync(path.join(projDir, "customer-portal.json"));
+    }
+  })());
 
   // ── safeProfileName ────────────────────────────────────────────────────────
   ok("safeName: trims a valid name", host.safeProfileName("  billing  ") === "billing");

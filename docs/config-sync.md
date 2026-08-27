@@ -131,13 +131,17 @@ a failure mode.
 - **Cross-process lock:** every VS Code window runs its own sync engine
   (extensionKind `ui`), and the PowerShell engine runs during provisions — so a
   whole tick (read store → commit → merge → write-back) holds
-  `<configDir>\.sync.lock` (atomic create; a lock older than 5 minutes counts
-  as abandoned and is broken). Acquire returns an ownership token and release
+  `<configDir>\.sync.lock` (atomic create; a lock whose recorded process is gone,
+  or whose timestamp is older than 5 minutes, counts as abandoned and is broken).
+  Acquire returns an ownership token and release
   only deletes the file while it still carries that token — so a holder that
   outlived the stale threshold and was broken cannot delete its successor's
-  lock on the way out. A busy extension engine skips its tick and lets
-  the next timer retry; the PowerShell engine waits up to 90 s, because its
-  pre-reinstall tick should run rather than silently skip. Without the lock,
+  lock on the way out. Same-window callers share one queued follow-up tick rather
+  than reporting false contention (so changes made during the active snapshot are
+  included). Before PowerShell waits for the lock it writes
+  `<configDir>\.sync.provisioning`; extension timer/watcher ticks yield to that
+  live intent, so an open VS Code window cannot starve an unattended provision.
+  Without the lock,
   two concurrent ticks interleave and the one holding a stale store read
   commits spurious deletions — observed in the field as profiles mass-deleted
   and re-added within the same minute.
@@ -190,7 +194,10 @@ Each **sync tick**:
 **Write-back guard (the race window):** a host→VM write only overwrites a VM
 file whose current content still equals the `vm`-branch tip (unchanged since it
 was read); anything else is left in place and reconciles through the merge path
-on the next tick. Same guard for deletions.
+on the next tick. Same guard for deletions. If any guarded operation is skipped,
+the engines do **not** advance the common-base ref: the next tick therefore sees
+both edits from their real ancestor and either merges them or exposes a conflict,
+instead of silently treating one side as the new baseline.
 
 **Mass-deletion guard:** when a read of an *existing* store yields **zero valid
 profiles** while the `vm` branch still has some, the tick refuses to treat that
@@ -220,7 +227,14 @@ button) and writes a profile for each repo not already covered by an existing
 profile. Newly imported profiles are auto-selected into the persisted project
 selection so they are included in the next reprovision/reinstall. The import is
 idempotent (never overwrites), non-interactive (logged, no toasts on the tick),
-and degrades gracefully when the VM is offline.
+and degrades gracefully when the VM is offline. A profile that was deliberately
+deleted is suppressed by its name and historical repository URL while it remains
+absent, so a leftover checkout cannot resurrect it. Explicitly creating the
+profile again opts it back in.
+
+The profile editor includes **Delete profile**. It confirms the destructive
+profile action, removes the name from the saved selection, and syncs the deletion
+to the VM; it does not delete the checked-out repository directory.
 
 **Accepted risk:** between ticks (e.g. VS Code closed), agent edits exist only
 on the VM. The reinstall path always syncs first, so planned wipes lose

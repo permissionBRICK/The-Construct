@@ -156,7 +156,7 @@ function buildDisableScript() {
   return PRELUDE + `
 cfgset T3CODE false
 cfgset CONSTRUCT_T3_VOICE_INPUT false
-rm -f /etc/construct/t3code-desktop-status
+rm -f /etc/construct/t3code-desktop-status /etc/construct/t3code-installed-build
 if [ -f /etc/systemd/system/${SERVICE}.service ]; then
   systemctl disable --now ${SERVICE} 2>/dev/null || true
   echo "${SERVICE} stopped and disabled"

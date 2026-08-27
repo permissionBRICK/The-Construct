@@ -85,6 +85,11 @@ construct project list
 `project.schema`. It does **not** version anything itself — there's no git on the VM — the
 host's sync tick picks up the change on its next pass.
 
+Profiles can also be deleted from the Construct panel: open a profile chip and use
+**Delete profile**. The action unselects and removes the profile on both sides but
+leaves the repository checkout intact. Automatic discovery remembers the deletion,
+so that leftover checkout does not recreate the profile.
+
 **Direct file edits work too.** Editing `/opt/construct/projects/<name>.json` by hand (or
 from a script) is picked up by the next sync tick exactly the same way. An invalid file
 (bad JSON, fails schema validation) is skipped with a warning rather than corrupting the
@@ -184,6 +189,11 @@ automatically during setup (it passes `CHECKOUT_PROJECTS=true`). To run it by ha
 ```
 
 Repos are cloned under `/root/repos`.
+
+Existing checkouts are fetched one remote at a time. If a remote still has a
+narrow fetch refspec for a branch that upstream deleted, checkout restores that
+remote's normal `refs/heads/*` discovery and retries instead of failing every
+subsequent provision.
 
 **Credentials for private repos.** If any selected project's repos use `https://`
 URLs, the installer asks **once** up front for a git username + token (press Enter to

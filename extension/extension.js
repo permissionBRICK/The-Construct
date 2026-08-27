@@ -77,7 +77,9 @@ let gitDetectedAt = 0;       // ms when gitDetected was cached
 const GIT_DETECT_TTL = 5 * 60 * 1000; // 5 min cache like augmentUpdates
 let lastSyncTickAt = 0;      // ms: last automatic tick (for the 5-min throttle)
 const SYNC_TICK_MIN_MS = 5 * 60 * 1000;
-let syncTickInFlight = false; // prevent concurrent ticks
+let syncTickInFlight = false; // exposed as simple state for UI/recovery gates
+let syncTickPromise = null;   // same-window callers queue behind the active tick
+let syncTickFollowupPromise = null; // all queued callers share one fresh follow-up
 let lastSyncResult = null;    // most recent TickResult (for state.configSync)
 let configWatcher = null;     // fs.watch handle on cfgDir/projects
 let lastAutoImportAt = 0;     // ms: last auto-import attempt (stamped BEFORE awaiting)
@@ -600,15 +602,26 @@ async function buildConfigSyncState() {
   return out;
 }
 
-/** Run a single sync tick. Guard: skip when git absent, cfgDir null, or in flight. */
+/** Run a sync tick. Same-window callers wait, then share one follow-up tick so
+ * changes made during the active snapshot are not mistaken for having synced. */
 async function runConfigSync() {
   var dir = resolveCfgDir();
   if (!dir) return null;
   var git = await detectGitCached();
   if (!git.present) return null;
-  if (syncTickInFlight) return null;
+  if (syncTickPromise) {
+    if (!syncTickFollowupPromise) {
+      const active = syncTickPromise;
+      syncTickFollowupPromise = active.then(function () {
+        syncTickFollowupPromise = null;
+        return runConfigSync();
+      });
+    }
+    return syncTickFollowupPromise;
+  }
   syncTickInFlight = true;
-  try {
+  syncTickPromise = (async function () {
+    try {
     // Everything that touches the repo happens inside syncTick, under the
     // cross-process lock (ensureRepo is its step 1) — nothing here may mutate
     // the repo, or two windows could race it.
@@ -662,8 +675,13 @@ async function runConfigSync() {
         logLine("auto-import from VM failed: " + (e && e.message ? e.message : e));
       }
     }
-    return result;
-  } finally { syncTickInFlight = false; }
+      return result;
+    } finally {
+      syncTickInFlight = false;
+      syncTickPromise = null;
+    }
+  })();
+  return syncTickPromise;
 }
 
 /** Add profiles that newly appeared on the host (synced up from the VM) to the
@@ -1336,7 +1354,19 @@ async function importFromVm() {
     if (p) existing[name] = p;
   }
   var profilesBefore = host.listProjectProfiles(projRoot);
-  var plan = projects.planImport(scan, existing);
+  var deleted = { names: new Set(), urls: new Set() };
+  try {
+    var git = await detectGitCached();
+    if (git.present && runGit && resolveCfgDir()) {
+      deleted = await configsync.deletedProfileIdentities(runGit, resolveCfgDir(), profilesBefore);
+    }
+  } catch (e) {
+    logLine("auto-import: could not read deletion history: " + (e && e.message ? e.message : e));
+  }
+  var plan = projects.planImport(scan, existing, {
+    ignoredNames: deleted.names,
+    ignoredUrls: deleted.urls,
+  });
   var imported = [];
   var failed = [];
   var raceSkipped = [];
@@ -1668,6 +1698,48 @@ function runSaveProject(name, profileObj) {
   }
 }
 
+/** Delete a host profile after explicit confirmation, prune it from the saved
+ * selection, then sync the deletion to the VM. The checkout directory itself is
+ * deliberately left alone; deletion history prevents auto-discovery from
+ * recreating the profile just because that directory still exists. */
+async function runDeleteProject(name) {
+  const safe = host.safeProfileName(name);
+  if (!safe) { vscode.window.showErrorMessage("Invalid project name."); return; }
+  if (projects.isReservedProfileName(safe)) {
+    vscode.window.showInformationMessage('"' + safe + '" is reserved and cannot be deleted.');
+    return;
+  }
+  const projRoot = resolveCfgDir() || resolveScriptsDir();
+  const scriptsDir = resolveScriptsDir();
+  if (!projRoot || !scriptsDir) { warnNoScriptsDir(); return; }
+  const pick = await vscode.window.showWarningMessage(
+    'Delete project profile "' + safe + '"?',
+    {
+      modal: true,
+      detail: "This removes the profile from Construct on the host and VM, and unselects it. The checked-out repository folder is not deleted.",
+    },
+    "Delete profile",
+  );
+  if (pick !== "Delete profile") return;
+  try {
+    host.deleteProjectProfile(projRoot, safe);
+    const available = host.listProjectProfiles(projRoot);
+    const selected = host.readSelectedProjects(scriptsDir).filter((n) => n !== safe);
+    host.saveSelectedProjects(scriptsDir, projects.reconcileSelection(selected, available));
+    const syncResult = await runConfigSync();
+    if (!syncResult || syncResult.lockBusy || !syncResult.ok) {
+      vscode.window.showWarningMessage(
+        'Deleted profile "' + safe + '" locally; its VM deletion is pending the next successful config sync.'
+      );
+    } else {
+      vscode.window.showInformationMessage('Deleted project profile "' + safe + '".');
+    }
+    refreshAll();
+  } catch (e) {
+    vscode.window.showErrorMessage("Couldn't delete the project profile: " + (e && e.message ? e.message : e));
+  }
+}
+
 /** Disable mic passthrough: stop capture + tunnel, revert the VM shim + patch. */
 function disableAudio() {
   if (!hostAudio) { broadcastAudio({ enabled: false, capturing: false }); return; }
@@ -1858,6 +1930,7 @@ function handleMessage(message, webview, context) {
       if (id === "openProject") { runOpenProject(message.project); return; }
       if (id === "selectProfiles") { runSelectProfiles(); return; }
       if (id === "editProject") { runEditProject(message.project, webview); return; }
+      if (id === "deleteProject") { void runDeleteProject(message.project); return; }
       if (id === "exportUsage") { runExportUsage(); return; }
       if (id === "updateAgents") { runUpdateAgents(); return; }
       if (id === "updateAgent") {

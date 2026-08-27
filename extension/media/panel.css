@@ -289,6 +289,8 @@ input:focus, select:focus { outline: none; border-color: var(--rain); box-shadow
 .pm-err { margin-top: 6px; font-size: 11px; color: var(--crit); }
 .pm-err[hidden] { display: none; }
 .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; }
+.modal-actions .danger-btn { margin-right: auto; color: #ff8a8a; border-color: rgba(255,93,93,0.45); }
+.modal-actions .danger-btn:hover { color: #fff; background: rgba(255,93,93,0.16); border-color: var(--crit); }
 
 /* Config-sync strip (inside the Projects module) */
 .cs-strip { margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(0,255,102,0.08); }

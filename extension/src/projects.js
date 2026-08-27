@@ -127,9 +127,11 @@ function coveredUrls(profiles) {
  * re-cloned, so a profile would be useless). Duplicate URLs within one scan import
  * only once. Pure. Returns { toWrite:[{name,profile}], skipped:[name], covered:[name] }.
  */
-function planImport(scan, existingProfiles) {
+function planImport(scan, existingProfiles, options) {
   const repos = Array.isArray(scan) ? scan : [];
   const existing = existingProfiles || {};
+  const ignoredNames = new Set(Array.from((options && options.ignoredNames) || [], (n) => String(n).toLowerCase()));
+  const ignoredUrls = new Set(Array.from((options && options.ignoredUrls) || [], (u) => String(u).trim()).filter(Boolean));
   const covered = coveredUrls(existing);
   const toWrite = [];
   const skipped = [];
@@ -144,6 +146,7 @@ function planImport(scan, existingProfiles) {
     if (!repo || !repo.name) continue;
     const url = (repo.url || "").trim();
     if (!url) { skipped.push(repo.name); continue; }        // no remote -> can't re-clone
+    if (ignoredNames.has(repo.name.toLowerCase()) || ignoredUrls.has(url)) { skipped.push(repo.name); continue; }
     if (covered.has(url) || seenUrls.has(url)) { coveredNames.push(repo.name); continue; }
     if (plannedNamesLower.has(repo.name.toLowerCase())) { coveredNames.push(repo.name); continue; }
     seenUrls.add(url);
