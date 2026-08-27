@@ -80,7 +80,7 @@ during install:
 | **vscode.dev tunnel** | `https://vscode.dev/tunnel/<name>` — opt-in (`VSCODE_TUNNEL=true`) |
 | **Codex App** | Add `agent-vm` as an SSH host |
 | **Opencode** | `agent-vm.mshome.net:4096` — `opencode serve` autostarts |
-| **T3 Code** | Opt in from Construct settings, then use its paired web UI or silently installed Windows Desktop app |
+| **T3 Code** | Opt in from Construct settings, then use its paired web UI or automatically installed and patched Windows Desktop app |
 | **Windows file share** | `\\agent-vm.mshome.net\repo` — map to a drive with `-MountRepoShare true` |
 | **Terminal** | `ssh agent-vm` — direct root access |
 
