@@ -153,6 +153,15 @@ async function runTests() {
     cs.releaseSyncLock(cfg, t3);
     ok("lock: owner release removes it", !fs.existsSync(lp));
     ok("lock: double release is harmless", (() => { cs.releaseSyncLock(cfg, t3); return true; })());
+    fs.writeFileSync(lp, JSON.stringify({ token: "dead", pid: 2147483647, at: new Date().toISOString() }));
+    const t4 = cs.acquireSyncLock(cfg);
+    ok("lock: a fresh lock whose owner process is gone is recovered immediately", !!t4);
+    cs.releaseSyncLock(cfg, t4);
+    const intent = path.join(cfg, cs.PROVISION_SYNC_INTENT_FILE);
+    fs.writeFileSync(intent, JSON.stringify({ token: "live", pid: process.pid, at: new Date().toISOString() }));
+    ok("lock: live provisioning intent makes extension ticks yield", cs.provisionSyncPending(cfg));
+    fs.writeFileSync(intent, JSON.stringify({ token: "dead", pid: 2147483647, at: new Date().toISOString() }));
+    ok("lock: dead provisioning intent is removed immediately", !cs.provisionSyncPending(cfg) && !fs.existsSync(intent));
   } finally { fs.rmSync(lockRoot, { recursive: true, force: true }); }
 
   // ── ensureRepo: lazy init + idempotence ────────────────────────────────────
@@ -548,6 +557,9 @@ async function runTests() {
     ok("vm-del: api deleted from host", readProfile(configDir, "api") === null);
     // web should still be there.
     ok("vm-del: web still on host", readProfile(configDir, "web") !== null);
+    const deleted = await cs.deletedProfileIdentities(runGit, configDir, ["web"]);
+    ok("vm-del: deletion history suppresses repo auto-import by name and URL",
+      deleted.names.has("api") && deleted.urls.has("https://h/a.git"));
 
     // ── Mass-deletion guard ──────────────────────────────────────────────────
     // Empty the store entirely (dir stays). The vm branch has profiles, so this
@@ -793,6 +805,16 @@ async function runTests() {
     // The store should still have the concurrent edit (python), not the host edit (node).
     const storeWeb = readStoreProfile(storeDir, "web");
     ok("guard: store has concurrent edit, not host's", storeWeb && storeWeb.sdks && storeWeb.sdks.python === "3.14");
+    const mainAfterSkip = await runGit(["rev-parse", "main"], { cwd: configDir });
+    const vmAfterSkip = await runGit(["rev-parse", "vm"], { cwd: configDir });
+    ok("guard: skipped write-back does not falsely advance the shared sync base",
+      mainAfterSkip.stdout.trim() !== vmAfterSkip.stdout.trim());
+    const retry = await cs.syncTick({
+      runGit, configDir, readStore: makeReadStore(storeDir), writeStore: makeWriteStore(), storeRoot: storeDir,
+    });
+    ok("guard: next tick exposes the concurrent same-file edits as a conflict", retry.conflict && !retry.ok);
+    ok("guard: host edit was not silently replaced after the skipped write",
+      fs.readFileSync(path.join(configDir, "projects", "web.json"), "utf8").includes('"node": "22"'));
   } finally { fs.rmSync(guardRoot, { recursive: true, force: true }); }
 
   // ── Non-canonical VM file gets normalized on write-back ─────────────────────
@@ -1663,7 +1685,9 @@ async function runTests() {
     fs.writeFileSync(path.join(configDir, ".migrated"), "1"); // simulate the PS sentinel
     const excPath = path.join(configDir, ".git", "info", "exclude");
     const exc = fs.readFileSync(excPath, "utf8");
-    ok("exclude: lists .gitattributes and .migrated", exc.includes(".gitattributes") && exc.includes(".migrated"));
+    ok("exclude: lists config-sync bookkeeping files",
+      exc.includes(".gitattributes") && exc.includes(".migrated") &&
+      exc.includes(".sync.lock") && exc.includes(".sync.provisioning"));
     const st = await runGit(["status", "--porcelain"], { cwd: configDir });
     ok("exclude: git status hides the bookkeeping files",
       !st.stdout.includes(".gitattributes") && !st.stdout.includes(".migrated"));

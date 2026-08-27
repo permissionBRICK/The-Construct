@@ -15,6 +15,8 @@ PATCH_FILE="${REPO_DIR}/patches/t3code-construct.patch"
 INSTALLER_PATH="${ARTIFACT_ROOT}/T3Code-Construct-Setup.exe"
 MANIFEST_PATH="${ARTIFACT_ROOT}/manifest.json"
 STATUS_PATH="/etc/construct/t3code-desktop-status"
+CONSTRUCT_VERSION="${CONSTRUCT_VERSION:-unversioned}"
+[[ "${CONSTRUCT_VERSION}" =~ ^[0-9a-f]{7,64}$ ]] || CONSTRUCT_VERSION=unversioned
 
 note() { printf '    %s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -39,7 +41,8 @@ VERSION="$(npm view "t3@${NPM_TAG}" version 2>/dev/null | tail -1 | tr -d '[:spa
 TAG="v${VERSION}"
 SAFE_VERSION="${VERSION//[^0-9A-Za-z._-]/-}"
 PATCH_HASH="$({ sha256sum "${PATCH_FILE}" "${REPO_DIR}/bin/build-t3code.sh" "${REPO_DIR}/extension/vm/construct-t3park-patch.mjs" "${REPO_DIR}/extension/vm/construct-t3-opencode-monitor-patch.mjs"; } | sha256sum | awk '{print $1}')"
-SOURCE_KEY="${SAFE_VERSION}-${PATCH_HASH:0:12}"
+BUILD_HASH="$(printf '%s\n%s\n' "${PATCH_HASH}" "${CONSTRUCT_VERSION}" | sha256sum | awk '{print $1}')"
+SOURCE_KEY="${SAFE_VERSION}-${BUILD_HASH:0:12}"
 SOURCE_DIR="${CACHE_ROOT}/${SOURCE_KEY}"
 
 mkdir -p "${CACHE_ROOT}" "${ARTIFACT_ROOT}" /etc/construct
@@ -47,10 +50,11 @@ mkdir -p "${CACHE_ROOT}" "${ARTIFACT_ROOT}" /etc/construct
 if [[ -s "${MANIFEST_PATH}" && -s "${INSTALLER_PATH}" ]]; then
   cached_version="$(node -e 'try{let m=require(process.argv[1]);process.stdout.write(m.version||"")}catch{}' "${MANIFEST_PATH}")"
   cached_hash="$(node -e 'try{let m=require(process.argv[1]);process.stdout.write(m.patchHash||"")}catch{}' "${MANIFEST_PATH}")"
-  if [[ "${cached_version}" == "${VERSION}" && "${cached_hash}" == "${PATCH_HASH}" && -x "${SOURCE_DIR}/apps/server/dist/bin.mjs" ]]; then
+  cached_construct="$(node -e 'try{let m=require(process.argv[1]);process.stdout.write(m.constructVersion||"")}catch{}' "${MANIFEST_PATH}")"
+  if [[ "${cached_version}" == "${VERSION}" && "${cached_hash}" == "${PATCH_HASH}" && "${cached_construct}" == "${CONSTRUCT_VERSION}" && -x "${SOURCE_DIR}/apps/server/dist/bin.mjs" ]]; then
     ln -sfn "${SOURCE_DIR}/apps/server/dist/bin.mjs" /usr/local/bin/t3
-    printf 'T3CODE_DESKTOP_READY=yes\nT3CODE_DESKTOP_VERSION=%s\nT3CODE_DESKTOP_CHANNEL=%s\nT3CODE_DESKTOP_INSTALLER=%s\n' \
-      "${VERSION}" "${CHANNEL}" "${INSTALLER_PATH}" >"${STATUS_PATH}"
+    printf 'T3CODE_DESKTOP_READY=yes\nT3CODE_DESKTOP_VERSION=%s\nT3CODE_DESKTOP_CHANNEL=%s\nT3CODE_DESKTOP_INSTALLER=%s\nT3CODE_BUILD_KEY=%s\n' \
+      "${VERSION}" "${CHANNEL}" "${INSTALLER_PATH}" "${BUILD_HASH}" >"${STATUS_PATH}"
     note "T3 Code ${VERSION} patched build is already current; reusing its VM server and Windows installer."
     exit 0
   fi
@@ -129,7 +133,7 @@ pty_dir="$(dirname "${pty_manifest}")"
 pty_prebuild="${pty_dir}/build/Release/pty.node"
 [[ -s "${pty_prebuild}" ]] || fail "Linux node-pty prebuild was not produced: ${pty_prebuild}"
 
-desktop_version="${VERSION}-construct.${PATCH_HASH:0:8}"
+desktop_version="${VERSION}-construct.${BUILD_HASH:0:8}"
 output_dir="${ARTIFACT_ROOT}/build-${SOURCE_KEY}"
 note "Packaging unsigned Windows x64 installer..."
 WINEPREFIX="${CACHE_ROOT}/wine-${SOURCE_KEY}" WINEDEBUG=-all \
@@ -147,11 +151,11 @@ chmod 0644 "${INSTALLER_PATH}"
 
 commit="$(git rev-parse HEAD)"
 installer_sha="$(sha256sum "${INSTALLER_PATH}" | awk '{print $1}')"
-node - "${MANIFEST_PATH}.tmp" "${VERSION}" "${desktop_version}" "${CHANNEL}" "${TAG}" "${commit}" "${PATCH_HASH}" "${installer_sha}" <<'NODE'
+node - "${MANIFEST_PATH}.tmp" "${VERSION}" "${desktop_version}" "${CHANNEL}" "${TAG}" "${commit}" "${PATCH_HASH}" "${CONSTRUCT_VERSION}" "${BUILD_HASH}" "${installer_sha}" <<'NODE'
 const fs = require("node:fs");
-const [path, version, desktopVersion, channel, sourceTag, commit, patchHash, sha256] = process.argv.slice(2);
+const [path, version, desktopVersion, channel, sourceTag, commit, patchHash, constructVersion, buildHash, sha256] = process.argv.slice(2);
 fs.writeFileSync(path, JSON.stringify({
-  version, desktopVersion, channel, sourceTag, commit, patchHash, sha256,
+  version, desktopVersion, channel, sourceTag, commit, patchHash, constructVersion, buildHash, sha256,
   installer: "T3Code-Construct-Setup.exe",
   builtAt: new Date().toISOString(),
 }, null, 2) + "\n");
@@ -160,8 +164,8 @@ mv -f "${MANIFEST_PATH}.tmp" "${MANIFEST_PATH}"
 
 chmod +x apps/server/dist/bin.mjs
 ln -sfn "${SOURCE_DIR}/apps/server/dist/bin.mjs" /usr/local/bin/t3
-printf 'T3CODE_DESKTOP_READY=yes\nT3CODE_DESKTOP_VERSION=%s\nT3CODE_DESKTOP_CHANNEL=%s\nT3CODE_DESKTOP_INSTALLER=%s\n' \
-  "${VERSION}" "${CHANNEL}" "${INSTALLER_PATH}" >"${STATUS_PATH}"
+printf 'T3CODE_DESKTOP_READY=yes\nT3CODE_DESKTOP_VERSION=%s\nT3CODE_DESKTOP_CHANNEL=%s\nT3CODE_DESKTOP_INSTALLER=%s\nT3CODE_BUILD_KEY=%s\n' \
+  "${VERSION}" "${CHANNEL}" "${INSTALLER_PATH}" "${BUILD_HASH}" >"${STATUS_PATH}"
 
 # Keep only the selected channel build. pnpm's global content store retains shared
 # packages, while stale checked-out node_modules trees would otherwise consume the VM disk.

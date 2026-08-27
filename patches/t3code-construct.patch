@@ -116,8 +116,8 @@ new file mode 100644
 index 00000000..0bb844f1
 --- /dev/null
 +++ b/apps/server/src/voiceInput.ts
-@@ -0,0 +1,264 @@
-+// @effect-diagnostics nodeBuiltinImport:off globalTimers:off - this module is the
+@@ -0,0 +1,284 @@
++// @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalDate:off - this module is the
 +// callback boundary for a native recorder and the ws client; their lifetimes are
 +// still scope-bound by the Effect stream returned at the bottom of the file.
 +import { VoiceInputError, type VoiceInputStreamEvent } from "@t3tools/contracts";
@@ -136,6 +136,7 @@ index 00000000..0bb844f1
 +const SILENCE_TIMEOUT_MS = 15_000;
 +const MAX_RECORDING_MS = 120_000;
 +const CLOSE_GRACE_MS = 3_000;
++const LEVEL_INTERVAL_MS = 75;
 +const KEYTERMS = [
 +  "VS Code",
 +  "IDE",
@@ -211,6 +212,7 @@ index 00000000..0bb844f1
 +  private closeTimer: NodeJS.Timeout | null = null;
 +  private committed: string[] = [];
 +  private interim = "";
++  private lastLevelAt = 0;
 +  private stopping = false;
 +  private ended = false;
 +
@@ -245,7 +247,9 @@ index 00000000..0bb844f1
 +      );
 +      this.recorder = recorder;
 +      recorder.stdout.on("data", (chunk: Buffer) => {
-+        if (socket.readyState === WebSocket.OPEN && !this.stopping) socket.send(chunk);
++        if (this.stopping) return;
++        this.emitAudioLevel(chunk);
++        if (socket.readyState === WebSocket.OPEN) socket.send(chunk);
 +      });
 +      recorder.on("error", (error) => this.fail(`Could not start the recorder: ${error.message}`, true));
 +      recorder.on("exit", (code) => {
@@ -315,6 +319,22 @@ index 00000000..0bb844f1
 +
 +  private fullTranscript(): string {
 +    return [...this.committed, this.interim.trim()].filter(Boolean).join(" ");
++  }
++
++  private emitAudioLevel(chunk: Buffer): void {
++    const now = Date.now();
++    if (now - this.lastLevelAt < LEVEL_INTERVAL_MS) return;
++    this.lastLevelAt = now;
++    let sumSquares = 0;
++    let sampleCount = 0;
++    for (let offset = 0; offset + 1 < chunk.length; offset += 2) {
++      const sample = chunk.readInt16LE(offset) / 32_768;
++      sumSquares += sample * sample;
++      sampleCount += 1;
++    }
++    const rms = sampleCount > 0 ? Math.sqrt(sumSquares / sampleCount) : 0;
++    const value = Math.min(1, Math.max(0, (rms - 0.006) * 10));
++    this.callbacks.event({ type: "level", value });
 +  }
 +
 +  private resetSilenceTimer(): void {
@@ -446,15 +466,16 @@ index 6d0ca8a7..466b432d 100644
    // ------------------------------------------------------------------
    // Store subscriptions (prompt / images / terminal contexts)
    // ------------------------------------------------------------------
-@@ -1040,6 +1053,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
+@@ -1040,6 +1053,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
    const [isComposerPrimaryActionsCompact, setIsComposerPrimaryActionsCompact] = useState(false);
    const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
    const [isComposerFocused, setIsComposerFocused] = useState(false);
 +  const [isVoiceRecording, setIsVoiceRecording] = useState(false);
++  const [voiceLevel, setVoiceLevel] = useState(0);
    const [composerSubmissionError, setComposerSubmissionError] = useState<string | null>(null);
    const [providerInputSubmissionError, setProviderInputSubmissionError] = useState<string | null>(
      null,
-@@ -1060,6 +1074,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
+@@ -1060,6 +1075,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
    // Refs
    // ------------------------------------------------------------------
    const composerEditorRef = useRef<ComposerPromptEditorHandle>(null);
@@ -469,11 +490,12 @@ index 6d0ca8a7..466b432d 100644
    const composerFormRef = useRef<HTMLFormElement>(null);
    const composerSurfaceRef = useRef<HTMLDivElement>(null);
    const providerInputRejectedRef = useRef(false);
-@@ -1780,6 +1802,149 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
+@@ -1780,6 +1803,158 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
      };
    }, [composerCursor, composerTerminalContexts, promptRef]);
  
 +  const stopVoiceRecording = useCallback(() => {
++    setVoiceLevel(0);
 +    const insertion = voiceInsertionRef.current;
 +    if (!insertion) return;
 +    void runStopVoiceInput({ environmentId, sessionId: insertion.sessionId });
@@ -492,6 +514,7 @@ index 6d0ca8a7..466b432d 100644
 +    };
 +    voiceInsertionRef.current = insertion;
 +    setIsVoiceRecording(true);
++    setVoiceLevel(0);
 +
 +    void runStartVoiceInput({
 +      environmentId,
@@ -499,9 +522,14 @@ index 6d0ca8a7..466b432d 100644
 +      onEvent: (event) => {
 +        const active = voiceInsertionRef.current;
 +        if (!active || active.sessionId !== sessionId) return;
++        if (event.type === "level") {
++          setVoiceLevel(event.value);
++          return;
++        }
 +        if (event.type === "stopped") {
 +          voiceInsertionRef.current = null;
 +          setIsVoiceRecording(false);
++          setVoiceLevel(0);
 +          return;
 +        }
 +        if (event.type !== "transcript") return;
@@ -542,6 +570,7 @@ index 6d0ca8a7..466b432d 100644
 +      if (active?.sessionId === sessionId) {
 +        voiceInsertionRef.current = null;
 +        setIsVoiceRecording(false);
++        setVoiceLevel(0);
 +      }
 +      if (!AsyncResult.isSuccess(result)) {
 +        toastManager.add({
@@ -568,12 +597,12 @@ index 6d0ca8a7..466b432d 100644
 +    else startVoiceRecording();
 +  }, [startVoiceRecording, stopVoiceRecording]);
 +
-+  // Ctrl+D mirrors Claude's tap/hold behavior: tap once to start, tap again to
++  // Ctrl+T mirrors Claude's tap/hold behavior: tap once to start, tap again to
 +  // stop, or hold the first press and recording stops when the key is released.
 +  useEffect(() => {
 +    if (!supportsVoiceInput) return;
 +    const onKeyDown = (event: KeyboardEvent) => {
-+      if (event.repeat || event.key.toLowerCase() !== "d" || !event.ctrlKey || event.altKey || event.metaKey) return;
++      if (event.repeat || event.key.toLowerCase() !== "t" || !event.ctrlKey || event.altKey || event.metaKey) return;
 +      if (!(event.target instanceof Element) || !event.target.closest('[data-chat-composer-form="true"]')) return;
 +      event.preventDefault();
 +      const wasRecording = voiceInsertionRef.current !== null;
@@ -586,7 +615,7 @@ index 6d0ca8a7..466b432d 100644
 +      }
 +    };
 +    const onKeyUp = (event: KeyboardEvent) => {
-+      if (event.key.toLowerCase() !== "d" || !event.ctrlKey) return;
++      if (event.key.toLowerCase() !== "t" || !event.ctrlKey) return;
 +      const shortcut = voiceShortcutRef.current;
 +      voiceShortcutRef.current = null;
 +      if (shortcut?.started && performance.now() - shortcut.downAt >= 400) stopVoiceRecording();
@@ -605,6 +634,7 @@ index 6d0ca8a7..466b432d 100644
 +      stopVoiceRecording();
 +      voiceInsertionRef.current = null;
 +      setIsVoiceRecording(false);
++      setVoiceLevel(0);
 +    }
 +  }, [prompt, stopVoiceRecording]);
 +
@@ -619,7 +649,7 @@ index 6d0ca8a7..466b432d 100644
    const resolveActiveComposerTrigger = useCallback((): {
      snapshot: { value: string; cursor: number; expandedCursor: number };
      trigger: ComposerTrigger | null;
-@@ -3555,6 +3719,29 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
+@@ -3555,6 +3730,38 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                  >
                    {showMobilePendingAnswerActions ? null : inlineTasksBadge}
                    {showMobilePendingAnswerActions ? null : inlineStashBadge}
@@ -627,17 +657,26 @@ index 6d0ca8a7..466b432d 100644
 +                    <button
 +                      type="button"
 +                      className={cn(
-+                        "flex h-9 w-9 items-center justify-center rounded-full transition-colors sm:h-8 sm:w-8",
++                        "flex h-9 w-9 items-center justify-center rounded-full transition-[color,background-color,box-shadow,transform] duration-75 sm:h-8 sm:w-8",
 +                        isVoiceRecording
 +                          ? "bg-destructive text-white hover:bg-destructive/90"
 +                          : "bg-secondary text-secondary-foreground hover:bg-secondary/80",
 +                      )}
 +                      onPointerDown={(event) => event.preventDefault()}
 +                      onClick={toggleVoiceRecording}
++                      style={
++                        isVoiceRecording
++                          ? {
++                              transform: `scale(${1 + voiceLevel * 0.12})`,
++                              boxShadow: `0 0 0 ${2 + voiceLevel * 7}px rgb(239 68 68 / ${0.2 + voiceLevel * 0.45})`,
++                            }
++                          : undefined
++                      }
++                      data-voice-level={isVoiceRecording ? voiceLevel.toFixed(3) : undefined}
 +                      disabled={environmentUnavailable !== null || isConnecting}
 +                      aria-pressed={isVoiceRecording}
 +                      aria-label={isVoiceRecording ? "Stop voice input" : "Start voice input"}
-+                      title={isVoiceRecording ? "Stop voice input (Ctrl+D)" : "Voice input (Ctrl+D)"}
++                      title={isVoiceRecording ? "Stop voice input (Ctrl+T)" : "Voice input (Ctrl+T)"}
 +                    >
 +                      {isVoiceRecording ? (
 +                        <SquareIcon className="size-3.5" fill="currentColor" aria-hidden="true" />
@@ -808,7 +847,7 @@ new file mode 100644
 index 00000000..46f67a35
 --- /dev/null
 +++ b/packages/contracts/src/voiceInput.ts
-@@ -0,0 +1,35 @@
+@@ -0,0 +1,39 @@
 +import * as Schema from "effect/Schema";
 +
 +export const VoiceInputStartInput = Schema.Struct({
@@ -828,6 +867,10 @@ index 00000000..46f67a35
 +
 +export const VoiceInputStreamEvent = Schema.Union([
 +  Schema.Struct({ type: Schema.Literal("listening") }),
++  Schema.Struct({
++    type: Schema.Literal("level"),
++    value: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
++  }),
 +  Schema.Struct({
 +    type: Schema.Literal("transcript"),
 +    text: Schema.String,

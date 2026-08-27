@@ -93,6 +93,18 @@ ok("plan: two scan repos sharing a url import only once", (() => {
 })());
 ok("plan: empty scan -> nothing", (() => { const p = projects.planImport([], {}); return !p.toWrite.length && !p.skipped.length; })());
 ok("plan: null scan -> nothing (no throw)", (() => { const p = projects.planImport(null, null); return !p.toWrite.length; })());
+ok("plan: intentional deletions suppress auto-import by name or repository URL", (() => {
+  const p = projects.planImport([
+    { name: "retired", url: "https://h/old.git", branch: "m" },
+    { name: "renamed-checkout", url: "https://h/deleted-profile.git", branch: "m" },
+    { name: "new", url: "https://h/new.git", branch: "m" },
+  ], {}, {
+    ignoredNames: new Set(["RETIRED"]),
+    ignoredUrls: new Set(["https://h/deleted-profile.git"]),
+  });
+  return p.toWrite.length === 1 && p.toWrite[0].name === "new" &&
+    p.skipped.includes("retired") && p.skipped.includes("renamed-checkout");
+})());
 
 // Case-insensitive name collision: on Windows/macOS the config dir is a
 // case-insensitive filesystem, so "api" and "API" are the same file.

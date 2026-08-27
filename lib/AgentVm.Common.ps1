@@ -2701,7 +2701,7 @@ function Set-ConstructConfigRepoHardening {
         $cur = ""
         if (Test-Path -LiteralPath $exFile) { $cur = [System.IO.File]::ReadAllText($exFile) }
         $have = @($cur -split "`r?`n" | ForEach-Object { $_.Trim() })
-        $missing = @(@(".gitattributes", ".migrated", ".sync.lock") | Where-Object { $have -notcontains $_ })
+        $missing = @(@(".gitattributes", ".migrated", ".sync.lock", ".sync.provisioning") | Where-Object { $have -notcontains $_ })
         if ($missing.Count -gt 0) {
             if (-not (Test-Path -LiteralPath $exDir)) { New-Item -ItemType Directory -Path $exDir -Force | Out-Null }
             $prefix = ""
@@ -3572,6 +3572,7 @@ function Write-ConstructVmStore {
 # extension/src/configsync.js must match).
 
 $script:CONSTRUCT_SYNC_LOCK_FILE = ".sync.lock"
+$script:CONSTRUCT_SYNC_INTENT_FILE = ".sync.provisioning"
 $script:CONSTRUCT_SYNC_LOCK_STALE_SEC = 300
 
 function Lock-ConstructConfigSync {
@@ -3607,7 +3608,15 @@ function Lock-ConstructConfigSync {
             $st = $null
             try { $st = Get-Item -LiteralPath $lockPath -Force -ErrorAction Stop } catch { continue } # vanished -- retry
             $age = ((Get-Date) - $st.LastWriteTime).TotalSeconds
-            if ($age -le $StaleSeconds) { return $null }   # live holder
+            $ownerAlive = $true
+            try {
+                $owner = [System.IO.File]::ReadAllText($lockPath) | ConvertFrom-Json
+                $ownerPid = [int]$owner.pid
+                if ($ownerPid -gt 0 -and $null -eq (Get-Process -Id $ownerPid -ErrorAction SilentlyContinue)) {
+                    $ownerAlive = $false
+                }
+            } catch { } # legacy/unreadable locks retain the age-based behavior
+            if ($ownerAlive -and $age -le $StaleSeconds) { return $null }
             try { Remove-Item -LiteralPath $lockPath -Force -ErrorAction Stop } catch { }
             # retry the create once; if a rival re-created it first, report busy
         } catch {
@@ -3660,32 +3669,53 @@ function Invoke-ConstructConfigSync {
     if (-not (Test-Path -LiteralPath $ConfigDir)) {
         New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null
     }
-    $deadline = (Get-Date).AddSeconds($LockWaitSeconds)
-    $lockToken = Lock-ConstructConfigSync -ConfigDir $ConfigDir
-    while (-not $lockToken -and (Get-Date) -lt $deadline) {
-        Start-Sleep -Seconds 3
-        $lockToken = Lock-ConstructConfigSync -ConfigDir $ConfigDir
-    }
-    if (-not $lockToken) {
-        # VmReadOk mirrors configsync.js: $true/$false once the VM-store read was
-        # attempted, $null when the tick never got that far. Provisioning treats
-        # $false (and Ran=$false with profiles to seed) as fatal -- silent skips
-        # are how fresh installs end up with an empty store and zero repos.
-        return [pscustomobject]@{
-            Ok = $true; Ran = $false; LockBusy = $true; Conflict = $false; Blocked = $false
-            Reason = "lock-busy"; SkippedInvalid = @(); Merged = $false; Seeded = $false
-            Warnings = @("Sync lock held by another engine (a VS Code window?); tick skipped.")
-            WriteBack = $null; VmReadOk = $null
-        }
-    }
+    # Announce provisioning before waiting for the ordinary lock. Every VS Code
+    # extension host watches this shared marker and yields its timer/watcher
+    # ticks, so one open window cannot repeatedly re-acquire the lock and starve
+    # the unattended provision. The marker is ownership-token guarded just like
+    # the lock and is removed as soon as this sync call finishes.
+    $intentPath = Join-Path $ConfigDir $script:CONSTRUCT_SYNC_INTENT_FILE
+    $intentToken = [guid]::NewGuid().ToString("N")
     try {
-        $inner = @{}
-        foreach ($k in $PSBoundParameters.Keys) {
-            if ($k -ne 'LockWaitSeconds') { $inner[$k] = $PSBoundParameters[$k] }
+        [System.IO.File]::WriteAllText(
+            $intentPath,
+            ('{"token":"' + $intentToken + '","pid":' + $PID + ',"at":"' + (Get-Date -Format o) + '"}'),
+            (New-Object System.Text.UTF8Encoding $false))
+
+        $deadline = (Get-Date).AddSeconds($LockWaitSeconds)
+        $lockToken = Lock-ConstructConfigSync -ConfigDir $ConfigDir
+        while (-not $lockToken -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 3
+            $lockToken = Lock-ConstructConfigSync -ConfigDir $ConfigDir
         }
-        return Invoke-ConstructConfigSyncLocked @inner
+        if (-not $lockToken) {
+            # VmReadOk mirrors configsync.js: $true/$false once the VM-store read was
+            # attempted, $null when the tick never got that far. Provisioning treats
+            # $false (and Ran=$false with profiles to seed) as fatal -- silent skips
+            # are how fresh installs end up with an empty store and zero repos.
+            return [pscustomobject]@{
+                Ok = $true; Ran = $false; LockBusy = $true; Conflict = $false; Blocked = $false
+                Reason = "lock-busy"; SkippedInvalid = @(); Merged = $false; Seeded = $false
+                Warnings = @("Config sync lock stayed busy after yielding extension ticks; tick skipped.")
+                WriteBack = $null; VmReadOk = $null
+            }
+        }
+        try {
+            $inner = @{}
+            foreach ($k in $PSBoundParameters.Keys) {
+                if ($k -ne 'LockWaitSeconds') { $inner[$k] = $PSBoundParameters[$k] }
+            }
+            return Invoke-ConstructConfigSyncLocked @inner
+        } finally {
+            Unlock-ConstructConfigSync -ConfigDir $ConfigDir -Token $lockToken
+        }
     } finally {
-        Unlock-ConstructConfigSync -ConfigDir $ConfigDir -Token $lockToken
+        try {
+            $intent = [System.IO.File]::ReadAllText($intentPath) | ConvertFrom-Json
+            if ($intent.token -ceq $intentToken) {
+                Remove-Item -LiteralPath $intentPath -Force -ErrorAction SilentlyContinue
+            }
+        } catch { }
     }
 }
 
@@ -3968,12 +3998,19 @@ function Invoke-ConstructConfigSyncLocked {
             if ($seedOps.Count -gt 0) {
                 $wb = Write-ConstructVmStore -VmHost $VmHost -Ops $seedOps -SshInvoker $SshWriteInvoker
             }
-            # Advance vm ref to main so the next tick starts from a common base.
-            $prev2 = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-            try {
-                & git -C $ConfigDir update-ref refs/heads/vm refs/heads/main 2>$null | Out-Null
-            } catch { }
-            $ErrorActionPreference = $prev2
+            $seedSkipped = $null -ne $wb -and @($wb.Skipped).Count -gt 0
+            if ($seedSkipped) {
+                $warnings.Add("Seed write-back skipped concurrently changed profile(s): $(@($wb.Skipped) -join ', '); sync base not advanced.")
+            } elseif ($seedOps.Count -eq 0 -or $null -ne $wb) {
+                # Advance only after every guarded seed write landed. Treating a
+                # skipped race as agreement makes the next tick silently choose
+                # one side instead of performing a real three-way merge.
+                $prev2 = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+                try {
+                    & git -C $ConfigDir update-ref refs/heads/vm refs/heads/main 2>$null | Out-Null
+                } catch { }
+                $ErrorActionPreference = $prev2
+            }
             return [pscustomobject]@{
                 Ok = $true; Ran = $true; Conflict = $false; Blocked = $false
                 Reason = ""; SkippedInvalid = @(); Merged = $false
@@ -4318,7 +4355,10 @@ function Invoke-ConstructConfigSyncLocked {
     # Write-ConstructVmStore returned non-null). Without this guard, a failed
     # write-back causes the next tick to re-read the stale VM content as a
     # fresh vm-side change, silently reverting the host's committed edit.
-    $writeBackRan = ($writeOps.Count -eq 0) -or ($null -ne $wb)
+    $writeBackRan = ($writeOps.Count -eq 0) -or ($null -ne $wb -and @($wb.Skipped).Count -eq 0)
+    if ($null -ne $wb -and @($wb.Skipped).Count -gt 0) {
+        $warnings.Add("Write-back skipped concurrently changed profile(s): $(@($wb.Skipped) -join ', '); sync base not advanced.")
+    }
     if (($merged -or -not $needsMerge) -and $writeBackRan) {
         $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
         try {

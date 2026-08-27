@@ -348,6 +348,7 @@ try {
     ok "harden: .git/info/exclude ignores .gitattributes" ($excText -match '(?m)^\.gitattributes$')
     ok "harden: .git/info/exclude ignores .migrated" ($excText -match '(?m)^\.migrated$')
     ok "harden: .git/info/exclude ignores .sync.lock" ($excText -match '(?m)^\.sync\.lock$')
+    ok "harden: .git/info/exclude ignores provisioning intent" ($excText -match '(?m)^\.sync\.provisioning$')
     [System.IO.File]::WriteAllText((Join-Path $configDir ".migrated"), "1")
     $porcelain = @(& git -C $configDir status --porcelain 2>$null | Where-Object { $_ -match '\.migrated|\.gitattributes' })
     ok "harden: git status hides the ignored bookkeeping files" ($porcelain.Count -eq 0)
@@ -622,15 +623,22 @@ try {
     ok "lock: new lock still excludes others" ($null -eq (Lock-ConstructConfigSync -ConfigDir $configDir))
     Unlock-ConstructConfigSync -ConfigDir $configDir -Token $lockTok3
     ok "lock: owner release removes it" (-not (Test-Path -LiteralPath $lockPath))
+    [System.IO.File]::WriteAllText($lockPath, '{"token":"dead","pid":2147483647,"at":"now"}')
+    $lockTok4 = Lock-ConstructConfigSync -ConfigDir $configDir
+    ok "lock: fresh lock with dead owner is recovered immediately" ($lockTok4 -and $lockTok4 -ne "dead")
+    Unlock-ConstructConfigSync -ConfigDir $configDir -Token $lockTok4
     $rUnlocked = Invoke-ConstructConfigSync -ConfigDir $configDir -VmHost "dummy" `
         -SshReadInvoker $sshRead -SshWriteInvoker $sshWrite
     ok "lock: tick runs after unlock" $rUnlocked.Ran
     ok "lock: released after the tick" (-not (Test-Path -LiteralPath $lockPath))
+    ok "lock: provisioning intent removed after the tick" (-not (Test-Path -LiteralPath (Join-Path $configDir ".sync.provisioning")))
     # Cross-engine mutual exclusion: both engines must use the same file name.
     if ($nodeAvailable) {
         $csJs = (Join-Path $repoRoot "extension/src/configsync.js") -replace '\\', '/'
         $jsLockName = & node -e "process.stdout.write(require('$csJs').SYNC_LOCK_FILE)" 2>$null
         ok "lock: JS and PS engines agree on the lock file name" ($jsLockName -ceq ".sync.lock")
+        $jsIntentName = & node -e "process.stdout.write(require('$csJs').PROVISION_SYNC_INTENT_FILE)" 2>$null
+        ok "lock: JS and PS engines agree on provisioning intent" ($jsIntentName -ceq ".sync.provisioning")
     }
 
 } finally {
