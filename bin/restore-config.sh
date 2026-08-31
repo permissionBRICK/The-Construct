@@ -122,7 +122,9 @@ if [[ -n "${codex_reindex}" ]]; then
       active|activating|reloading) codex_was_running=1 ;;
     esac
     if [[ -n "${codex_was_running}" ]]; then
+      log "pausing codex-app-server for restored session index"
       systemctl stop codex-app-server 2>/dev/null || true
+      log "codex-app-server paused"
     fi
   fi
 fi
@@ -147,7 +149,9 @@ if [[ -n "${t3_state_restore}" ]]; then
       active|activating|reloading) t3_was_running=1 ;;
     esac
     if [[ -n "${t3_was_running}" ]]; then
+      log "pausing t3code-serve for restored event store"
       systemctl stop t3code-serve 2>/dev/null || true
+      log "t3code-serve paused"
     fi
   fi
   rm -f "${EXPORT_HOME}/.t3/userdata/state.sqlite" \
@@ -159,12 +163,14 @@ fi
 # home/ directly; an already-extracted BACKUP_DIR uses trailing /. so dotfiles
 # copy without nesting under a "home" directory.
 if [[ -n "${archive_restore}" ]]; then
+  log "extracting saved home tree from archive"
   if ! tar -xzf "${BACKUP_TGZ}" -C "${EXPORT_HOME}" \
       --strip-components="${archive_strip_components}" "${archive_home_member}"; then
     err "Agent config overlay failed while extracting ${BACKUP_TGZ} into ${EXPORT_HOME}."
     err "Free space: $(df -h "${EXPORT_HOME}" 2>/dev/null | awk 'NR==2 {print $4 " available on " $1}' || echo unknown)"
     exit 1
   fi
+  log "saved home tree extracted"
 else
   if ! cp -a "${BACKUP_DIR}/home/." "${EXPORT_HOME}/"; then
     err "Agent config overlay failed while copying ${BACKUP_DIR}/home into ${EXPORT_HOME}."
