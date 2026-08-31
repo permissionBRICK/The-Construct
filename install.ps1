@@ -31,7 +31,14 @@ Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
 
 # GitHub archives unpack to a single <name>-<ref> folder. Run the real .ps1 file (not
 # iex) so Auto-Install's self-elevation ($PSCommandPath) and $PSScriptRoot resolve.
-$root = Get-ChildItem -LiteralPath $work -Directory | Select-Object -First 1
+$expectedRootName = (($Repo -split '/')[-1] + '-' + (($Ref -replace '/', '-')))
+$root = Get-Item -LiteralPath (Join-Path $work $expectedRootName) -ErrorAction SilentlyContinue
+if (-not $root) {
+    # GitHub may normalize unusual ref names differently. Prefer the directory
+    # refreshed by this download, never an arbitrary stale sibling from an older run.
+    $root = Get-ChildItem -LiteralPath $work -Directory |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+}
 if (-not $root) { throw "Downloaded archive looked empty: $work" }
 $auto = Join-Path $root.FullName "Auto-Install.ps1"
 if (-not (Test-Path -LiteralPath $auto)) { throw "Auto-Install.ps1 not found in $($root.FullName)." }

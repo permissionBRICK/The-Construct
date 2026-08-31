@@ -198,6 +198,22 @@ ok "failure cleanup: restore still reports the overlay failure" test "${restore_
 ok "failure cleanup: T3 service is restarted" grep -qx t3code-serve "${d}/service-starts"
 ok "failure cleanup: Codex service is restarted" grep -qx codex-app-server "${d}/service-starts"
 
+# A bare command failure under `set -e` must identify the restore-script line;
+# otherwise the Windows wrapper can only report an unhelpful remote exit code.
+d="$(setup_fixture "diagnostic-on-error" "false" "stable")"
+printf '{not-json}\n' >"${d}/backup/backup-info.json"
+make_systemctl_stub "${d}"
+if diagnostic_output="$(CONSTRUCT_VERSION=abc1234 run_restore "${d}" 2>&1)"; then
+  diagnostic_failed=false
+else
+  diagnostic_failed=true
+fi
+ok "diagnostics: malformed metadata still fails the restore" test "${diagnostic_failed}" = true
+ok "diagnostics: failure includes the restore-script line" sh -c \
+  "printf '%s' \"\$1\" | grep -Eq 'Restore failed at restore-config.sh line [0-9]+ \\(exit [0-9]+\\)'" _ "${diagnostic_output}"
+ok "diagnostics: output identifies the Construct revision" sh -c \
+  "printf '%s' \"\$1\" | grep -Fq 'Construct restore revision: abc1234'" _ "${diagnostic_output}"
+
 printf '\n  restore-config fixture tests — %d/%d passed\n\n' "${pass}" "$((pass + fail))"
 [ "${fail}" -eq 0 ] || exit 1
 exit 0
