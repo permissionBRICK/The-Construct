@@ -159,6 +159,25 @@ run_restore "${d}" >/dev/null 2>&1
 ok "old backup: absent watcher key leaves the current preference untouched" \
   test "$(read_config_key "${d}/config/config.env" OPENCODE_BACKGROUND_WATCHER)" = "true"
 
+# Tarball restores stream home/ directly into the destination. This avoids the
+# old extract-then-copy path, whose second full uncompressed tree exhausted disk
+# on large history backups.
+d="$(setup_fixture "streamed-tarball" "false" "stable")"
+mkdir -p "${d}/backup/home/.codex"
+printf 'streamed\n' >"${d}/backup/home/.codex/AGENTS.md"
+tar -czf "${d}/backup.tar.gz" -C "${d}/backup" .
+make_systemctl_stub "${d}"
+env BACKUP_TGZ="${d}/backup.tar.gz" \
+    EXPORT_HOME="${d}/export_home" \
+    CONFIG_FILE="${d}/config/config.env" \
+    REPO_DIR="${d}/repo" \
+    PATH="${d}/bin:${PATH}" \
+    bash "${RESTORE}" >/dev/null 2>&1
+ok "tarball: streams home tree into EXPORT_HOME" \
+  grep -qx streamed "${d}/export_home/.codex/AGENTS.md"
+ok "tarball: does not nest restored files under home/" \
+  test ! -e "${d}/export_home/home"
+
 printf '\n  restore-config fixture tests — %d/%d passed\n\n' "${pass}" "$((pass + fail))"
 [ "${fail}" -eq 0 ] || exit 1
 exit 0
