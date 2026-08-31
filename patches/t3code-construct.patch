@@ -429,7 +429,7 @@ index 226c82cd..ab6dbc2b 100644
            observeRpcEffect(
              WS_METHODS.serverUpsertKeybinding,
 diff --git a/apps/web/src/components/chat/ChatComposer.tsx b/apps/web/src/components/chat/ChatComposer.tsx
-index 6d0ca8a7..466b432d 100644
+index 68d1a9eb..1c23e161 100644
 --- a/apps/web/src/components/chat/ChatComposer.tsx
 +++ b/apps/web/src/components/chat/ChatComposer.tsx
 @@ -34,6 +34,7 @@ import {
@@ -440,7 +440,7 @@ index 6d0ca8a7..466b432d 100644
  import {
    clampCollapsedComposerCursor,
    type ComposerSubmissionIntent,
-@@ -137,6 +138,13 @@ import {
+@@ -160,6 +161,13 @@ import {
    submitComposerDraft,
  } from "./composerSubmission";
  import { ComposerPromptLengthValidation } from "./ComposerPromptLengthValidation";
@@ -452,11 +452,11 @@ index 6d0ca8a7..466b432d 100644
 +  stopVoiceInput as stopVoiceInputCommand,
 +} from "../../state/voiceInput";
  
- type ComposerCommandMenuPosition = {
-   bottom: number;
-@@ -741,6 +749,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
-     setThreadError,
-     onExpandImage,
+ function ComposerVideoThumbnail({ file }: { file: File }) {
+   const setVideo = useCallback(
+@@ -800,6 +808,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
+     onFileOpen,
+     openingVideoAttachmentId,
    } = props;
 +  const serverConfigs = useServerConfigs();
 +  const supportsVoiceInput =
@@ -466,7 +466,7 @@ index 6d0ca8a7..466b432d 100644
    // ------------------------------------------------------------------
    // Store subscriptions (prompt / images / terminal contexts)
    // ------------------------------------------------------------------
-@@ -1040,6 +1053,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
+@@ -1200,6 +1213,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
    const [isComposerPrimaryActionsCompact, setIsComposerPrimaryActionsCompact] = useState(false);
    const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
    const [isComposerFocused, setIsComposerFocused] = useState(false);
@@ -475,7 +475,7 @@ index 6d0ca8a7..466b432d 100644
    const [composerSubmissionError, setComposerSubmissionError] = useState<string | null>(null);
    const [providerInputSubmissionError, setProviderInputSubmissionError] = useState<string | null>(
      null,
-@@ -1060,6 +1075,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
+@@ -1220,6 +1235,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
    // Refs
    // ------------------------------------------------------------------
    const composerEditorRef = useRef<ComposerPromptEditorHandle>(null);
@@ -487,10 +487,10 @@ index 6d0ca8a7..466b432d 100644
 +    lastSetInput: string;
 +  } | null>(null);
 +  const voiceShortcutRef = useRef<{ started: boolean; downAt: number } | null>(null);
+   const attachmentInputRef = useRef<HTMLInputElement>(null);
    const composerFormRef = useRef<HTMLFormElement>(null);
    const composerSurfaceRef = useRef<HTMLDivElement>(null);
-   const providerInputRejectedRef = useRef(false);
-@@ -1780,6 +1803,158 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
+@@ -1968,6 +1991,158 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
      };
    }, [composerCursor, composerTerminalContexts, promptRef]);
  
@@ -649,8 +649,8 @@ index 6d0ca8a7..466b432d 100644
    const resolveActiveComposerTrigger = useCallback((): {
      snapshot: { value: string; cursor: number; expandedCursor: number };
      trigger: ComposerTrigger | null;
-@@ -3555,6 +3730,38 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
-                 >
+@@ -4221,6 +4396,38 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
+                   ) : null}
                    {showMobilePendingAnswerActions ? null : inlineTasksBadge}
                    {showMobilePendingAnswerActions ? null : inlineStashBadge}
 +                  {supportsVoiceInput ? (
