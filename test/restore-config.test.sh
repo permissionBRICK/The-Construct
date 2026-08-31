@@ -177,6 +177,27 @@ ok "tarball: streams home tree into EXPORT_HOME" \
 ok "tarball: does not nest restored files under home/" \
   test ! -e "${d}/export_home/home"
 
+# Project provisioning can recreate a repo-managed skill as a directory while
+# the saved home contains a symlink at the same path. The complete backed-up
+# Claude skill tree must replace the fresh tree without tar's EEXIST failure.
+d="$(setup_fixture "claude-skill-type-conflict" "false" "stable")"
+mkdir -p "${d}/backup/home/.claude/skills" "${d}/skill-source" \
+         "${d}/export_home/.claude/skills/wochenbuchung"
+printf 'saved\n' >"${d}/skill-source/SKILL.md"
+ln -s "${d}/skill-source" "${d}/backup/home/.claude/skills/wochenbuchung"
+tar -czf "${d}/backup.tar.gz" -C "${d}/backup" .
+make_systemctl_stub "${d}"
+env BACKUP_TGZ="${d}/backup.tar.gz" \
+    EXPORT_HOME="${d}/export_home" \
+    CONFIG_FILE="${d}/config/config.env" \
+    REPO_DIR="${d}/repo" \
+    PATH="${d}/bin:${PATH}" \
+    bash "${RESTORE}" >/dev/null 2>&1
+ok "Claude skills: saved symlink replaces freshly provisioned directory" \
+  test -L "${d}/export_home/.claude/skills/wochenbuchung"
+ok "Claude skills: restored symlink resolves to saved skill" \
+  grep -qx saved "${d}/export_home/.claude/skills/wochenbuchung/SKILL.md"
+
 # Any failure after services are paused must restore their prior state. The old
 # script exited under set -e and stranded both services stopped.
 d="$(setup_fixture "failure-restarts-services" "false" "stable")"

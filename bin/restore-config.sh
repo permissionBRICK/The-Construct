@@ -94,6 +94,23 @@ printf '==> Restoring agent config into %s\n' "${EXPORT_HOME}"
 log "Construct restore revision: ${CONSTRUCT_VERSION:-unversioned}"
 mkdir -p "${EXPORT_HOME}"
 
+# The backup owns Claude's complete user-skill tree. Project provision commands
+# may already have recreated repo-managed skills there as symlinks; tar cannot
+# replace an existing directory with a saved symlink (or vice versa) and exits
+# with "Cannot open: File exists". Remove only this complete, backed-up tree
+# before overlaying it. Do not do the same for Codex skills: export deliberately
+# omits `.codex/skills/.system`, which the fresh installation must retain.
+claude_skills_restore=""
+if [[ -n "${archive_restore}" ]]; then
+  grep -Eq '^(\./)?home/\.claude/skills(/|$)' "${archive_list}" && claude_skills_restore=1 || true
+elif [[ -e "${BACKUP_DIR}/home/.claude/skills" || -L "${BACKUP_DIR}/home/.claude/skills" ]]; then
+  claude_skills_restore=1
+fi
+if [[ -n "${claude_skills_restore}" ]]; then
+  rm -rf "${EXPORT_HOME}/.claude/skills"
+  log "cleared freshly provisioned Claude skills before restoring the saved skill tree"
+fi
+
 # ── Codex thread index vs. restored sessions ─────────────────────────────────
 # Modern Codex lists/resumes threads from a sqlite index (~/.codex/
 # state_*.sqlite, threads table) -- the sessions/*.jsonl rollouts are only
