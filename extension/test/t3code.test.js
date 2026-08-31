@@ -29,6 +29,10 @@ ok("source build: resolves the selected npm channel to an exact Git tag",
 ok("source build: falls back to codeload and preserves the upstream commit",
   /GIT_TERMINAL_PROMPT=0 git clone/.test(sourceBuild) && /codeload\.github\.com\/pingdotgg\/t3code\/tar\.gz\/refs\/tags\/\$\{TAG\}/.test(sourceBuild) &&
   /api\.github\.com\/repos\/pingdotgg\/t3code\/commits\/\$\{TAG\}/.test(sourceBuild) && /\.construct-upstream-commit/.test(sourceBuild));
+ok("source build: prunes superseded dependency trees before its free-space gate",
+  /for stale_modules in "\$\{CACHE_ROOT\}"\/\*\/node_modules/.test(sourceBuild) &&
+  /dirname "\$\{stale_modules\}"\)" == "\$\{SOURCE_DIR\}"/.test(sourceBuild) &&
+  sourceBuild.indexOf("for stale_modules") < sourceBuild.indexOf('available_kb="$(df'));
 ok("source build: cache is keyed by both T3 and installed Construct versions",
   /CONSTRUCT_VERSION/.test(sourceBuild) && /cached_construct/.test(sourceBuild) &&
   /T3CODE_BUILD_KEY/.test(sourceBuild) && /constructVersion, buildHash/.test(sourceBuild) &&
