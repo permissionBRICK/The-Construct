@@ -23,7 +23,19 @@ log() { printf '  %s\n' "$*"; }
 err() { printf '  %s\n' "$*" >&2; }
 
 cleanup_tmp=""
-trap '[[ -n "${cleanup_tmp}" ]] && rm -rf "${cleanup_tmp}"' EXIT
+t3_was_running=""
+codex_was_running=""
+cleanup_restore() {
+  local rc=$?
+  trap - EXIT
+  if [[ "${rc}" -ne 0 ]]; then
+    [[ -n "${t3_was_running:-}" ]] && systemctl start t3code-serve 2>/dev/null || true
+    [[ -n "${codex_was_running:-}" ]] && systemctl start codex-app-server 2>/dev/null || true
+  fi
+  [[ -n "${cleanup_tmp}" ]] && rm -rf "${cleanup_tmp}"
+  exit "${rc}"
+}
+trap cleanup_restore EXIT
 archive_restore=""
 archive_list=""
 archive_home_member=""
@@ -48,9 +60,9 @@ if [[ -n "${BACKUP_TGZ}" ]]; then
     err "No backup home/ tree found in ${BACKUP_TGZ}."
     exit 1
   fi
-  # Only metadata needs staging. Stream home/ directly into EXPORT_HOME later:
-  # extracting the whole archive and then cp -a'ing it doubled the peak disk
-  # requirement and made large history backups fail during the overlay.
+  # Only metadata needs staging. Stream home/ directly into EXPORT_HOME later,
+  # avoiding a second copy of the full uncompressed history tree and the extra
+  # file-type conflict surface of an extract-then-cp overlay.
   if grep -qx './backup-info.json' "${archive_list}"; then
     tar -xOf "${BACKUP_TGZ}" ./backup-info.json >"${BACKUP_DIR}/backup-info.json"
   elif grep -qx 'backup-info.json' "${archive_list}"; then
@@ -84,7 +96,6 @@ mkdir -p "${EXPORT_HOME}"
 # onto a long-lived VM does this also reset index-only metadata (archived
 # flags).
 codex_reindex=""
-codex_was_running=""
 if [[ -n "${archive_restore}" ]]; then
   grep -Eq '^(\./)?home/\.codex/(sessions|archived_sessions)(/|$)' "${archive_list}" && codex_reindex=1 || true
 elif [[ -d "${BACKUP_DIR}/home/.codex/sessions" || -d "${BACKUP_DIR}/home/.codex/archived_sessions" ]]; then
@@ -109,7 +120,6 @@ fi
 # siblings next to the restored .sqlite would corrupt it on next open. Stop the
 # service across the copy, drop the minutes-old empty DB (nothing of value in
 # it), and start the server again after -- it then opens the restored store.
-t3_was_running=""
 t3_state_restore=""
 if [[ -n "${archive_restore}" ]]; then
   grep -Eq '^(\./)?home/\.t3/userdata/state\.sqlite' "${archive_list}" && t3_state_restore=1 || true
@@ -138,16 +148,12 @@ if [[ -n "${archive_restore}" ]]; then
       --strip-components="${archive_strip_components}" "${archive_home_member}"; then
     err "Agent config overlay failed while extracting ${BACKUP_TGZ} into ${EXPORT_HOME}."
     err "Free space: $(df -h "${EXPORT_HOME}" 2>/dev/null | awk 'NR==2 {print $4 " available on " $1}' || echo unknown)"
-    [[ -n "${t3_was_running}" ]] && systemctl start t3code-serve 2>/dev/null || true
-    [[ -n "${codex_was_running}" ]] && systemctl start codex-app-server 2>/dev/null || true
     exit 1
   fi
 else
   if ! cp -a "${BACKUP_DIR}/home/." "${EXPORT_HOME}/"; then
     err "Agent config overlay failed while copying ${BACKUP_DIR}/home into ${EXPORT_HOME}."
     err "Free space: $(df -h "${EXPORT_HOME}" 2>/dev/null | awk 'NR==2 {print $4 " available on " $1}' || echo unknown)"
-    [[ -n "${t3_was_running}" ]] && systemctl start t3code-serve 2>/dev/null || true
-    [[ -n "${codex_was_running}" ]] && systemctl start codex-app-server 2>/dev/null || true
     exit 1
   fi
 fi

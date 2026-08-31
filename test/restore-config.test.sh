@@ -160,8 +160,7 @@ ok "old backup: absent watcher key leaves the current preference untouched" \
   test "$(read_config_key "${d}/config/config.env" OPENCODE_BACKGROUND_WATCHER)" = "true"
 
 # Tarball restores stream home/ directly into the destination. This avoids the
-# old extract-then-copy path, whose second full uncompressed tree exhausted disk
-# on large history backups.
+# old extract-then-copy path and its second full uncompressed history tree.
 d="$(setup_fixture "streamed-tarball" "false" "stable")"
 mkdir -p "${d}/backup/home/.codex"
 printf 'streamed\n' >"${d}/backup/home/.codex/AGENTS.md"
@@ -177,6 +176,27 @@ ok "tarball: streams home tree into EXPORT_HOME" \
   grep -qx streamed "${d}/export_home/.codex/AGENTS.md"
 ok "tarball: does not nest restored files under home/" \
   test ! -e "${d}/export_home/home"
+
+# Any failure after services are paused must restore their prior state. The old
+# script exited under set -e and stranded both services stopped.
+d="$(setup_fixture "failure-restarts-services" "false" "stable")"
+mkdir -p "${d}/backup/home/.codex/sessions" "${d}/backup/home/.t3/userdata" "${d}/bin"
+touch "${d}/backup/home/.t3/userdata/state.sqlite"
+cat >"${d}/bin/systemctl" <<STUB
+#!/bin/bash
+if [[ "\$1" == "is-active" ]]; then echo active; exit 0; fi
+if [[ "\$1" == "start" ]]; then echo "\$2" >>"${d}/service-starts"; fi
+exit 0
+STUB
+cat >"${d}/bin/cp" <<'STUB'
+#!/bin/bash
+exit 7
+STUB
+chmod +x "${d}/bin/systemctl" "${d}/bin/cp"
+if run_restore "${d}" >/dev/null 2>&1; then restore_failed=false; else restore_failed=true; fi
+ok "failure cleanup: restore still reports the overlay failure" test "${restore_failed}" = true
+ok "failure cleanup: T3 service is restarted" grep -qx t3code-serve "${d}/service-starts"
+ok "failure cleanup: Codex service is restarted" grep -qx codex-app-server "${d}/service-starts"
 
 printf '\n  restore-config fixture tests — %d/%d passed\n\n' "${pass}" "$((pass + fail))"
 [ "${fail}" -eq 0 ] || exit 1
