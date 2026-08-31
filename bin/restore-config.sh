@@ -24,15 +24,42 @@ err() { printf '  %s\n' "$*" >&2; }
 
 cleanup_tmp=""
 trap '[[ -n "${cleanup_tmp}" ]] && rm -rf "${cleanup_tmp}"' EXIT
+archive_restore=""
+archive_list=""
+archive_home_member=""
+archive_strip_components=""
 
 if [[ -n "${BACKUP_TGZ}" ]]; then
   if [[ ! -f "${BACKUP_TGZ}" ]]; then err "Backup tarball not found: ${BACKUP_TGZ}"; exit 1; fi
   cleanup_tmp="$(mktemp -d /tmp/construct-restore.XXXXXX)"
   BACKUP_DIR="${cleanup_tmp}"
-  tar -xzf "${BACKUP_TGZ}" -C "${BACKUP_DIR}"
+  archive_list="${cleanup_tmp}/archive.list"
+  if ! tar -tzf "${BACKUP_TGZ}" >"${archive_list}"; then
+    err "Backup tarball is unreadable or truncated: ${BACKUP_TGZ}"
+    exit 1
+  fi
+  if grep -qx './home/' "${archive_list}"; then
+    archive_home_member='./home'
+    archive_strip_components=2
+  elif grep -qx 'home/' "${archive_list}"; then
+    archive_home_member='home'
+    archive_strip_components=1
+  else
+    err "No backup home/ tree found in ${BACKUP_TGZ}."
+    exit 1
+  fi
+  # Only metadata needs staging. Stream home/ directly into EXPORT_HOME later:
+  # extracting the whole archive and then cp -a'ing it doubled the peak disk
+  # requirement and made large history backups fail during the overlay.
+  if grep -qx './backup-info.json' "${archive_list}"; then
+    tar -xOf "${BACKUP_TGZ}" ./backup-info.json >"${BACKUP_DIR}/backup-info.json"
+  elif grep -qx 'backup-info.json' "${archive_list}"; then
+    tar -xOf "${BACKUP_TGZ}" backup-info.json >"${BACKUP_DIR}/backup-info.json"
+  fi
+  archive_restore=1
 fi
 
-if [[ -z "${BACKUP_DIR}" || ! -d "${BACKUP_DIR}/home" ]]; then
+if [[ -z "${BACKUP_DIR}" || ( -z "${archive_restore}" && ! -d "${BACKUP_DIR}/home" ) ]]; then
   err "No backup home/ tree found (set BACKUP_TGZ or BACKUP_DIR to a valid export)."
   exit 1
 fi
@@ -58,8 +85,12 @@ mkdir -p "${EXPORT_HOME}"
 # flags).
 codex_reindex=""
 codex_was_running=""
-if [[ -d "${BACKUP_DIR}/home/.codex/sessions" || -d "${BACKUP_DIR}/home/.codex/archived_sessions" ]]; then
+if [[ -n "${archive_restore}" ]]; then
+  grep -Eq '^(\./)?home/\.codex/(sessions|archived_sessions)(/|$)' "${archive_list}" && codex_reindex=1 || true
+elif [[ -d "${BACKUP_DIR}/home/.codex/sessions" || -d "${BACKUP_DIR}/home/.codex/archived_sessions" ]]; then
   codex_reindex=1
+fi
+if [[ -n "${codex_reindex}" ]]; then
   if command -v systemctl >/dev/null 2>&1; then
     case "$(systemctl is-active codex-app-server 2>/dev/null || true)" in
       active|activating|reloading) codex_was_running=1 ;;
@@ -79,7 +110,13 @@ fi
 # service across the copy, drop the minutes-old empty DB (nothing of value in
 # it), and start the server again after -- it then opens the restored store.
 t3_was_running=""
-if compgen -G "${BACKUP_DIR}/home/.t3/userdata/state.sqlite*" >/dev/null 2>&1; then
+t3_state_restore=""
+if [[ -n "${archive_restore}" ]]; then
+  grep -Eq '^(\./)?home/\.t3/userdata/state\.sqlite' "${archive_list}" && t3_state_restore=1 || true
+elif compgen -G "${BACKUP_DIR}/home/.t3/userdata/state.sqlite*" >/dev/null 2>&1; then
+  t3_state_restore=1
+fi
+if [[ -n "${t3_state_restore}" ]]; then
   if command -v systemctl >/dev/null 2>&1; then
     case "$(systemctl is-active t3code-serve 2>/dev/null || true)" in
       active|activating|reloading) t3_was_running=1 ;;
@@ -93,9 +130,27 @@ if compgen -G "${BACKUP_DIR}/home/.t3/userdata/state.sqlite*" >/dev/null 2>&1; t
         "${EXPORT_HOME}/.t3/userdata/state.sqlite-shm"
 fi
 
-# Copy preserving ownership/perms/timestamps. The trailing /. copies the
-# contents (including dotfiles) without nesting under a "home" directory.
-cp -a "${BACKUP_DIR}/home/." "${EXPORT_HOME}/"
+# Overlay while preserving ownership/perms/timestamps. Tarball restores stream
+# home/ directly; an already-extracted BACKUP_DIR uses trailing /. so dotfiles
+# copy without nesting under a "home" directory.
+if [[ -n "${archive_restore}" ]]; then
+  if ! tar -xzf "${BACKUP_TGZ}" -C "${EXPORT_HOME}" \
+      --strip-components="${archive_strip_components}" "${archive_home_member}"; then
+    err "Agent config overlay failed while extracting ${BACKUP_TGZ} into ${EXPORT_HOME}."
+    err "Free space: $(df -h "${EXPORT_HOME}" 2>/dev/null | awk 'NR==2 {print $4 " available on " $1}' || echo unknown)"
+    [[ -n "${t3_was_running}" ]] && systemctl start t3code-serve 2>/dev/null || true
+    [[ -n "${codex_was_running}" ]] && systemctl start codex-app-server 2>/dev/null || true
+    exit 1
+  fi
+else
+  if ! cp -a "${BACKUP_DIR}/home/." "${EXPORT_HOME}/"; then
+    err "Agent config overlay failed while copying ${BACKUP_DIR}/home into ${EXPORT_HOME}."
+    err "Free space: $(df -h "${EXPORT_HOME}" 2>/dev/null | awk 'NR==2 {print $4 " available on " $1}' || echo unknown)"
+    [[ -n "${t3_was_running}" ]] && systemctl start t3code-serve 2>/dev/null || true
+    [[ -n "${codex_was_running}" ]] && systemctl start codex-app-server 2>/dev/null || true
+    exit 1
+  fi
+fi
 
 if [[ -n "${t3_was_running}" ]]; then
   systemctl start t3code-serve 2>/dev/null || true
