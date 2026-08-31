@@ -40,7 +40,12 @@ try {
     Expand-Archive -LiteralPath $zip -DestinationPath $work -Force
     Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
 
-    $root = Get-ChildItem -LiteralPath $work -Directory | Select-Object -First 1
+    $expectedRootName = (($Repo -split '/')[-1] + '-' + (($Ref -replace '/', '-')))
+    $root = Get-Item -LiteralPath (Join-Path $work $expectedRootName) -ErrorAction SilentlyContinue
+    if (-not $root) {
+        $root = Get-ChildItem -LiteralPath $work -Directory |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    }
     if (-not $root) { throw "Downloaded archive looked empty: $work" }
 
     try { . (Join-Path $root.FullName "lib\AgentVm.Common.ps1") }

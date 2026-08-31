@@ -13,7 +13,7 @@
 #
 # Exactly one of BACKUP_TGZ / BACKUP_DIR is required.
 #
-set -euo pipefail
+set -Eeuo pipefail
 
 EXPORT_HOME="${EXPORT_HOME:-/root}"
 BACKUP_TGZ="${BACKUP_TGZ:-}"
@@ -21,6 +21,20 @@ BACKUP_DIR="${BACKUP_DIR:-}"
 
 log() { printf '  %s\n' "$*"; }
 err() { printf '  %s\n' "$*" >&2; }
+
+# `set -e` otherwise makes simple-command failures (for example a malformed
+# metadata jq read) disappear behind the host's generic "remote command failed"
+# message. Report the exact script line while deliberately omitting BASH_COMMAND,
+# which could contain restored paths or metadata from the user's backup.
+restore_err_reported=""
+report_restore_error() {
+  local rc=$?
+  [[ -n "${restore_err_reported}" ]] && return "${rc}"
+  restore_err_reported=1
+  err "Restore failed at restore-config.sh line ${BASH_LINENO[0]} (exit ${rc})."
+  return "${rc}"
+}
+trap report_restore_error ERR
 
 cleanup_tmp=""
 t3_was_running=""
@@ -77,6 +91,7 @@ if [[ -z "${BACKUP_DIR}" || ( -z "${archive_restore}" && ! -d "${BACKUP_DIR}/hom
 fi
 
 printf '==> Restoring agent config into %s\n' "${EXPORT_HOME}"
+log "Construct restore revision: ${CONSTRUCT_VERSION:-unversioned}"
 mkdir -p "${EXPORT_HOME}"
 
 # ── Codex thread index vs. restored sessions ─────────────────────────────────

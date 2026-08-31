@@ -1770,7 +1770,7 @@ if ($RestoreDir) {
         # restore throws and "Saved config restored" is NOT printed).
         try {
             Invoke-Scp -LocalPath $restoreTgz -RemotePath "/tmp/construct-config-restore.tar.gz"
-            Invoke-SshStream -Sudo -Command "EXPORT_HOME=/root BACKUP_TGZ=/tmp/construct-config-restore.tar.gz bash /opt/construct/repo/bin/restore-config.sh"
+            Invoke-SshStream -Sudo -Command "EXPORT_HOME=/root BACKUP_TGZ=/tmp/construct-config-restore.tar.gz CONSTRUCT_VERSION='$constructVersion' bash /opt/construct/repo/bin/restore-config.sh"
         } finally {
             try { Invoke-Ssh -Sudo -Command "rm -f /tmp/construct-config-restore.tar.gz" } catch { }
         }
