@@ -132,6 +132,21 @@ sanitize_tunnel_name() {
   printf '%s' "${n}" | sed -E 's/-+$//'
 }
 
+# Microsoft normally redirects update.code.visualstudio.com to this CDN. Some
+# networks cannot connect to the redirect service while the artifact CDN itself
+# remains reachable, so commit-pinned downloads try the CDN directly first.
+vscode_cli_cdn_url() {
+  printf 'https://vscode.download.prss.microsoft.com/dbazure/download/stable/%s/vscode_cli_linux_%s_cli.tar.gz' "$1" "$2"
+}
+
+vscode_server_cdn_url() {
+  printf 'https://vscode.download.prss.microsoft.com/dbazure/download/stable/%s/vscode-server-linux-%s.tar.gz' "$1" "$2"
+}
+
+download_vscode() {
+  curl -fsSL --connect-timeout 15 --max-time 240 --retry 1 --retry-delay 2 --retry-all-errors "$1" -o "$2"
+}
+
 # Download the standalone VS Code CLI to /usr/local/bin/code if not already
 # present. The archive from code.visualstudio.com holds a single `code` binary.
 install_vscode_cli() {
@@ -140,7 +155,7 @@ install_vscode_cli() {
     return 0
   fi
 
-  local arch tmp got
+  local arch tmp got direct_url
   case "$(uname -m)" in
     x86_64|amd64)  arch="x64" ;;
     aarch64|arm64) arch="arm64" ;;
@@ -150,16 +165,26 @@ install_vscode_cli() {
 
   step "Downloading VS Code CLI (cli-linux-${arch})"
   tmp="$(mktemp -d)"
+  got=""
+  if [[ "${VSCODE_CLIENT_COMMIT}" =~ ^[0-9a-f]{40}$ ]]; then
+    direct_url="$(vscode_cli_cdn_url "${VSCODE_CLIENT_COMMIT}" "${arch}")"
+    if download_vscode "${direct_url}" "${tmp}/vscode-cli.tar.gz"; then
+      got="cdn-${arch}"
+    else
+      note "  direct Microsoft CDN download failed; trying the update service"
+    fi
+  fi
   # Use update.code.visualstudio.com -- the older code.visualstudio.com/sha/download
   # endpoint 404s for the cli-linux-* identifiers. Try the glibc build first, then
   # fall back to the statically-linked alpine build (which also runs on glibc).
-  got=""
-  for variant in "linux-${arch}" "alpine-${arch}"; do
-    if curl -fsSL "https://update.code.visualstudio.com/latest/cli-${variant}/stable" -o "${tmp}/vscode-cli.tar.gz"; then
-      got="${variant}"; break
-    fi
-    note "  cli-${variant} download failed; trying next"
-  done
+  if [[ -z "${got}" ]]; then
+    for variant in "linux-${arch}" "alpine-${arch}"; do
+      if download_vscode "https://update.code.visualstudio.com/latest/cli-${variant}/stable" "${tmp}/vscode-cli.tar.gz"; then
+        got="${variant}"; break
+      fi
+      note "  cli-${variant} download failed; trying next"
+    done
+  fi
   if [[ -z "${got}" ]]; then
     warn "failed to download the VS Code CLI from update.code.visualstudio.com; skipping"
     rm -rf "${tmp}"
@@ -235,7 +260,8 @@ preinstall_remote_ssh_server() {
       ok "  CLI seeded from /usr/local/bin/code -> code-${commit:0:10}"
     else
       tmp="$(mktemp -d)"
-      if curl -fsSL "https://update.code.visualstudio.com/commit:${commit}/cli-linux-${arch}/stable" -o "${tmp}/cli.tar.gz" \
+      if { download_vscode "$(vscode_cli_cdn_url "${commit}" "${arch}")" "${tmp}/cli.tar.gz" \
+           || download_vscode "https://update.code.visualstudio.com/commit:${commit}/cli-linux-${arch}/stable" "${tmp}/cli.tar.gz"; } \
          && tar -xzf "${tmp}/cli.tar.gz" -C "${tmp}" && [[ -x "${tmp}/code" ]]; then
         install -m 0755 "${tmp}/code" "${data_dir}/code-${commit}"
         ok "  CLI downloaded for client commit -> code-${commit:0:10}"
@@ -252,7 +278,8 @@ preinstall_remote_ssh_server() {
   srv_dir="${data_dir}/cli/servers/Stable-${commit}/server"
   if [[ ! -x "${srv_dir}/bin/code-server" ]]; then
     tmp="$(mktemp -d)"
-    if curl -fsSL "https://update.code.visualstudio.com/commit:${commit}/server-linux-${arch}/stable" -o "${tmp}/server.tar.gz"; then
+    if download_vscode "$(vscode_server_cdn_url "${commit}" "${arch}")" "${tmp}/server.tar.gz" \
+       || download_vscode "https://update.code.visualstudio.com/commit:${commit}/server-linux-${arch}/stable" "${tmp}/server.tar.gz"; then
       install -d -m 0700 "${data_dir}/cli"
       install -d -m 0755 "${data_dir}/cli/servers" "${srv_dir%/server}" "${srv_dir}"
       if tar -xzf "${tmp}/server.tar.gz" -C "${srv_dir}" --strip-components=1 \
@@ -291,7 +318,7 @@ preinstall_remote_ssh_server() {
 CODE_SERVER_BIN=""
 PREINSTALL_TMP=""
 find_or_fetch_code_server() {
-  local user_data_dir="$1" bin commit arch url tmp
+  local user_data_dir="$1" bin commit arch url fallback_url tmp
   CODE_SERVER_BIN=""; PREINSTALL_TMP=""
   # 1. Reuse any server binary already present (Remote-SSH / serve-web / tunnel).
   bin="$(find "${user_data_dir}/cli/servers" /var/lib/vscode-serve-web /var/lib/vscode-tunnel \
@@ -304,8 +331,11 @@ find_or_fetch_code_server() {
   [[ -n "${commit}" ]] || return 1
   arch="$(vscode_server_arch)"
   url="https://update.code.visualstudio.com/commit:${commit}/server-linux-${arch}/stable"
+  fallback_url="$(vscode_server_cdn_url "${commit}" "${arch}")"
   tmp="$(mktemp -d)"
-  if curl -fsSL "${url}" -o "${tmp}/server.tar.gz" && tar -xzf "${tmp}/server.tar.gz" -C "${tmp}"; then
+  if { download_vscode "${fallback_url}" "${tmp}/server.tar.gz" \
+       || download_vscode "${url}" "${tmp}/server.tar.gz"; } \
+     && tar -xzf "${tmp}/server.tar.gz" -C "${tmp}"; then
     bin="$(find "${tmp}" -type f -name code-server 2>/dev/null | head -n1)"
     if [[ -n "${bin}" && -x "${bin}" ]]; then
       PREINSTALL_TMP="${tmp}"; CODE_SERVER_BIN="${bin}"; return 0
