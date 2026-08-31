@@ -88,12 +88,26 @@ fi
 export PATH="/root/.cargo/bin:${PATH}"
 rustup target add x86_64-pc-windows-gnu
 
-if [[ -e "${SOURCE_DIR}" && ! -d "${SOURCE_DIR}/.git" ]]; then
+if [[ -e "${SOURCE_DIR}" && ! -d "${SOURCE_DIR}/.git" && ! -s "${SOURCE_DIR}/.construct-upstream-commit" ]]; then
   rm -rf -- "${SOURCE_DIR}"
 fi
-if [[ ! -d "${SOURCE_DIR}/.git" ]]; then
+if [[ ! -d "${SOURCE_DIR}/.git" && ! -s "${SOURCE_DIR}/.construct-upstream-commit" ]]; then
   note "Downloading T3 Code ${TAG} (${CHANNEL}) source..."
-  git clone --depth 1 --branch "${TAG}" --single-branch https://github.com/pingdotgg/t3code.git "${SOURCE_DIR}"
+  if ! GIT_TERMINAL_PROMPT=0 git clone --depth 1 --branch "${TAG}" --single-branch \
+    https://github.com/pingdotgg/t3code.git "${SOURCE_DIR}"; then
+    note "Git clone failed; downloading the matching GitHub source archive instead..."
+    rm -rf -- "${SOURCE_DIR}"
+    mkdir -p "${SOURCE_DIR}"
+    archive="$(mktemp "${CACHE_ROOT}/t3code-${SAFE_VERSION}.XXXXXX.tar.gz")"
+    curl -fsSL "https://codeload.github.com/pingdotgg/t3code/tar.gz/refs/tags/${TAG}" -o "${archive}"
+    upstream_commit="$(curl -fsSL -H 'Accept: application/vnd.github+json' \
+      "https://api.github.com/repos/pingdotgg/t3code/commits/${TAG}" \
+      | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).sha||""))')"
+    [[ "${upstream_commit}" =~ ^[0-9a-f]{40}$ ]] || fail "GitHub returned an invalid commit for ${TAG}"
+    tar -xzf "${archive}" --strip-components=1 -C "${SOURCE_DIR}"
+    printf '%s\n' "${upstream_commit}" >"${SOURCE_DIR}/.construct-upstream-commit"
+    rm -f -- "${archive}"
+  fi
 fi
 cd "${SOURCE_DIR}"
 
@@ -149,7 +163,11 @@ cp "${built_installer}" "${INSTALLER_PATH}.tmp"
 mv -f "${INSTALLER_PATH}.tmp" "${INSTALLER_PATH}"
 chmod 0644 "${INSTALLER_PATH}"
 
-commit="$(git rev-parse HEAD)"
+if [[ -d .git ]]; then
+  commit="$(git rev-parse HEAD)"
+else
+  commit="$(tr -d '[:space:]' <.construct-upstream-commit)"
+fi
 installer_sha="$(sha256sum "${INSTALLER_PATH}" | awk '{print $1}')"
 node - "${MANIFEST_PATH}.tmp" "${VERSION}" "${desktop_version}" "${CHANNEL}" "${TAG}" "${commit}" "${PATCH_HASH}" "${CONSTRUCT_VERSION}" "${BUILD_HASH}" "${installer_sha}" <<'NODE'
 const fs = require("node:fs");

@@ -26,6 +26,9 @@ const provisionT3 = fs.readFileSync(path.join(repoRoot, "Provision-AgentVM.ps1")
 const installAiTools = fs.readFileSync(path.join(repoRoot, "bin", "install-ai-tools.sh"), "utf8");
 ok("source build: resolves the selected npm channel to an exact Git tag",
   /npm view "t3@\$\{NPM_TAG\}" version/.test(sourceBuild) && /TAG="v\$\{VERSION\}"/.test(sourceBuild) && /git clone --depth 1 --branch "\$\{TAG\}"/.test(sourceBuild));
+ok("source build: falls back to codeload and preserves the upstream commit",
+  /GIT_TERMINAL_PROMPT=0 git clone/.test(sourceBuild) && /codeload\.github\.com\/pingdotgg\/t3code\/tar\.gz\/refs\/tags\/\$\{TAG\}/.test(sourceBuild) &&
+  /api\.github\.com\/repos\/pingdotgg\/t3code\/commits\/\$\{TAG\}/.test(sourceBuild) && /\.construct-upstream-commit/.test(sourceBuild));
 ok("source build: cache is keyed by both T3 and installed Construct versions",
   /CONSTRUCT_VERSION/.test(sourceBuild) && /cached_construct/.test(sourceBuild) &&
   /T3CODE_BUILD_KEY/.test(sourceBuild) && /constructVersion, buildHash/.test(sourceBuild) &&
