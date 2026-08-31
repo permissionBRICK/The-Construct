@@ -65,6 +65,18 @@ fi
 # build is complete, but the host handoff is re-enabled only after success.
 rm -f "${STATUS_PATH}"
 
+# A completed source build retains a multi-gigabyte node_modules tree even though
+# its installed server runs entirely from apps/server/dist. Reclaim dependency
+# trees from superseded builds before checking free space; keep the source and
+# server bundle themselves so a failed upgrade still leaves the previous T3
+# executable available, as promised above.
+for stale_modules in "${CACHE_ROOT}"/*/node_modules; do
+  [[ -d "${stale_modules}" ]] || continue
+  [[ "$(dirname "${stale_modules}")" == "${SOURCE_DIR}" ]] && continue
+  note "Pruning dependencies from superseded T3 build $(basename "$(dirname "${stale_modules}")")..."
+  rm -rf -- "${stale_modules}"
+done
+
 available_kb="$(df -Pk "${CACHE_ROOT}" | awk 'NR==2 {print $4}')"
 [[ "${available_kb:-0}" -ge 15728640 ]] || fail "T3 source/Desktop build needs at least 15 GiB free in the VM"
 
