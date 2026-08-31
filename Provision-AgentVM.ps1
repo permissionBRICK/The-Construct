@@ -1764,15 +1764,24 @@ if ($RestoreDir) {
     if (Test-Path -LiteralPath $restoreTgz) {
         Write-Step "Restoring saved agent config onto the VM"
         Invoke-Ssh -Sudo -Command "rm -f /tmp/construct-config-restore.tar.gz"
-        # The upload is INSIDE the try so the finally still removes the (plaintext
-        # secret) tarball even if scp fails mid-transfer. restore-config.sh is the
-        # only command in the stream, so its non-zero exit propagates (a failed
-        # restore throws and "Saved config restored" is NOT printed).
+        # Keep a persistent remote log because PowerShell/ssh has occasionally lost
+        # the final stderr lines when the restore exits while replacing a large home
+        # tree. On failure retain the uploaded archive, private to root, so the user
+        # can retry/inspect without another 605 MiB transfer. A later installer run
+        # removes it before upload; success removes it immediately.
+        $restoreSucceeded = $false
         try {
             Invoke-Scp -LocalPath $restoreTgz -RemotePath "/tmp/construct-config-restore.tar.gz"
-            Invoke-SshStream -Sudo -Command "EXPORT_HOME=/root BACKUP_TGZ=/tmp/construct-config-restore.tar.gz CONSTRUCT_VERSION='$constructVersion' bash /opt/construct/repo/bin/restore-config.sh"
+            $restoreStream = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "install -d -m 700 /var/log/construct; set -o pipefail; EXPORT_HOME=/root BACKUP_TGZ=/tmp/construct-config-restore.tar.gz CONSTRUCT_VERSION='$constructVersion' bash /opt/construct/repo/bin/restore-config.sh 2>&1 | tee /var/log/construct/restore-config.log"
+            if ($restoreStream.ExitCode -ne 0) {
+                try { Invoke-Ssh -Sudo -Command "chmod 600 /tmp/construct-config-restore.tar.gz; mv -f /tmp/construct-config-restore.tar.gz /tmp/construct-config-restore.failed.tar.gz" } catch { }
+                throw "Agent config restore failed (exit $($restoreStream.ExitCode)); remote log: /var/log/construct/restore-config.log; retained archive: /tmp/construct-config-restore.failed.tar.gz"
+            }
+            $restoreSucceeded = $true
         } finally {
-            try { Invoke-Ssh -Sudo -Command "rm -f /tmp/construct-config-restore.tar.gz" } catch { }
+            if ($restoreSucceeded) {
+                try { Invoke-Ssh -Sudo -Command "rm -f /tmp/construct-config-restore.tar.gz /tmp/construct-config-restore.failed.tar.gz" } catch { }
+            }
         }
         Write-Ok "Saved config restored"
     } else {
