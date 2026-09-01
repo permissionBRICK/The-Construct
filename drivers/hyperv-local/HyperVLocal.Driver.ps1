@@ -382,7 +382,7 @@ function Get-ConstructVmEndpoint {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Name)
     return @{
-        SshHost = "$($Name.ToLower()).mshome.net"
+        SshHost = "$($Name.ToLowerInvariant()).mshome.net"
         SshPort = 22
     }
 }
