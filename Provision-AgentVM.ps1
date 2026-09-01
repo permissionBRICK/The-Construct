@@ -159,6 +159,15 @@ param(
     # with instructions to resolve manually, commit, and re-run.
     [ValidateSet("ours", "theirs")]
     [string]$AutoResolve,
+    # Config-sync v2: the branch inside the host config repo that holds THIS
+    # VM's last-known store. One repo can carry several VM instances, one branch
+    # each ('main' stays the host truth for all of them). EMPTY (the default)
+    # derives it from -HostAlias: "agent-vm" -> "vm" (today's single-VM
+    # behavior), any other alias -> "vm-<alias>" (a leading "construct-" from
+    # the older alias convention is stripped first, so both spellings of an
+    # instance's alias land on one branch).
+    # See docs/config-sync.md "Multiple instances".
+    [string]$ConfigBranch = "",
     # Set when this script is launched by an upper script (Auto-Install.ps1 /
     # Create-AgentVM.ps1), which owns the final "Press Enter" pause. When run on
     # its own this stays off and the script pauses at the end so a self-launched
@@ -1461,10 +1470,38 @@ if ($Action -eq 'export') {
 # does the additive seed -- still call it.
 if (Get-Command Initialize-ConstructConfigStore -ErrorAction SilentlyContinue) {
     $syncConfigDir = Initialize-ConstructConfigStore -ScriptsDir $PSScriptRoot
+    # Instance-keyed config-sync branch (B5). Derived BEFORE the repo is
+    # initialised: repo init is what CREATES the branch, so a non-default
+    # instance must not let it create the default 'vm' ref first. Explicit
+    # -ConfigBranch wins; otherwise derive from the host alias (default alias
+    # -> "vm").
+    $syncVmBranch = "vm"
+    if ($ConfigBranch) {
+        $syncVmBranch = $ConfigBranch
+    } elseif (Get-Command Get-ConstructConfigBranchName -ErrorAction SilentlyContinue) {
+        $syncVmBranch = Get-ConstructConfigBranchName -HostAlias $HostAlias
+        # The derivation helper is a pure value function: a non-default alias
+        # always yields "vm-<name>", so getting the default back means the alias
+        # could not form a usable branch name. Report it here -- silently
+        # sharing the default instance's store is the outcome to avoid.
+        $aliasNorm = "$HostAlias".Trim().ToLowerInvariant()
+        if ($aliasNorm -and $aliasNorm -ne 'agent-vm' -and $syncVmBranch -eq 'vm') {
+            Write-Warning ("Host alias '$HostAlias' does not yield a usable config-sync branch name; " +
+                "falling back to the default 'vm' branch, so this VM shares the default instance's " +
+                "config-sync store.  Pass -ConfigBranch to choose one explicitly.")
+        }
+    }
     if ((Get-Command Test-ConstructGitAvailable -ErrorAction SilentlyContinue) -and
         (Test-ConstructGitAvailable) -and
         (Get-Command Initialize-ConstructConfigRepo -ErrorAction SilentlyContinue)) {
-        Initialize-ConstructConfigRepo -ConfigDir $syncConfigDir | Out-Null
+        # Probe before passing -VmBranch so an older lib is never handed an
+        # unknown argument; the default instance's call is left exactly as it was.
+        if ($syncVmBranch -and $syncVmBranch -ne 'vm' -and
+            (Get-Command Initialize-ConstructConfigRepo).Parameters.ContainsKey('VmBranch')) {
+            Initialize-ConstructConfigRepo -ConfigDir $syncConfigDir -VmBranch $syncVmBranch | Out-Null
+        } else {
+            Initialize-ConstructConfigRepo -ConfigDir $syncConfigDir | Out-Null
+        }
     }
 
     # Backstop (spec section 9): fold profiles captured in the reinstall backup
@@ -1589,6 +1626,15 @@ if (Get-Command Initialize-ConstructConfigStore -ErrorAction SilentlyContinue) {
             SshWriteInvoker = $provisionSshInvoker
         }
         if ($PSBoundParameters.ContainsKey('AutoResolve')) { $syncArgs['AutoResolve'] = $AutoResolve }
+        # Instance-keyed config-sync branch (B5), derived above. Probe before
+        # splatting so an older lib without -VmBranch is never handed an unknown
+        # argument, and only pass a NON-default branch so the single-VM call
+        # stays exactly what it has always been.
+        if ($syncVmBranch -and $syncVmBranch -ne 'vm' -and
+            (Get-Command Invoke-ConstructConfigSync).Parameters.ContainsKey('VmBranch')) {
+            $syncArgs['VmBranch'] = $syncVmBranch
+            Write-Ok "Config sync branch: $syncVmBranch"
+        }
         $syncResult = Invoke-ConstructConfigSync @syncArgs
         if ($syncResult.Conflict -or $syncResult.Blocked) {
             $syncReason = if ($syncResult.Reason) { $syncResult.Reason } else { "Merge conflict detected." }
