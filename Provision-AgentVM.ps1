@@ -416,6 +416,30 @@ function ConvertTo-PosixSingleQuoted {
     return "'" + ($Value -replace "'", "'\''") + "'"
 }
 
+# Which external identity (if any) to append to provision.sh's env prefix. PURE, so
+# the instance-identity test covers every case without a VM:
+#   non-default endpoint                    -> always sent
+#   default endpoint, params bound          -> sent ONLY when the guest already saved a
+#                                              custom host/port (explicit default = reset)
+#   default endpoint, nothing bound         -> never (zero-change legacy path)
+function Get-ExternalEnvSuffix {
+    param(
+        [string]$VmHost,
+        [int]$SshPort,
+        [bool]$ExplicitlyBound,
+        [string]$SavedHost = "",
+        [string]$SavedPort = ""
+    )
+    $isDefault = ($VmHost -eq "agent-vm.mshome.net" -and $SshPort -eq 22)
+    if ($isDefault) {
+        if (-not $ExplicitlyBound) { return "" }
+        $savedCustom = (-not [string]::IsNullOrEmpty($SavedHost)) -or
+                       ((-not [string]::IsNullOrEmpty($SavedPort)) -and $SavedPort -ne "22")
+        if (-not $savedCustom) { return "" }
+    }
+    return " CONSTRUCT_EXTERNAL_HOST=$(ConvertTo-PosixSingleQuoted $VmHost) CONSTRUCT_EXTERNAL_SSH_PORT='$SshPort'"
+}
+
 # scp needs raw IPv6 literals bracketed (user@[2001:db8::1]:/path); hostnames and
 # IPv4 addresses pass through unchanged.
 function Get-ScpHost {
@@ -1761,16 +1785,29 @@ if (-not $checkoutArg) {
 } else {
     Write-Ok "Project checkout: forced '$checkoutArg' via -CheckoutProjects"
 }
-# Client-reachable identity for the guest (banner/URLs/SSH snippets). Sent when the
-# endpoint is non-default OR when the caller bound -VmHost/-SshPort explicitly (so an
-# explicit default can RESET a custom value the guest saved earlier). A plain default
-# run sends nothing, keeping its remote command, provisioning log and config.env
-# byte-identical. Values are POSIX-quoted for the remote shell.
-$externalEnv = ""
-if ($VmHost -ne "agent-vm.mshome.net" -or $SshPort -ne 22 -or
-    $PSBoundParameters.ContainsKey('VmHost') -or $PSBoundParameters.ContainsKey('SshPort')) {
-    $externalEnv = " CONSTRUCT_EXTERNAL_HOST=$(ConvertTo-PosixSingleQuoted $VmHost) CONSTRUCT_EXTERNAL_SSH_PORT='$SshPort'"
+# Client-reachable identity for the guest (banner/URLs/SSH snippets), decided by the
+# pure Get-ExternalEnvSuffix: a non-default endpoint is always sent; the default
+# endpoint is sent ONLY when -VmHost/-SshPort were bound explicitly AND the guest has
+# a custom value saved (explicit default = reset). A stock guest -- with or without the
+# legacy explicit "-VmHost agent-vm.mshome.net -HostAlias agent-vm" -- gets the
+# unchanged remote command, provisioning log and config.env.
+$explicitEndpoint = [bool]($PSBoundParameters.ContainsKey('VmHost') -or $PSBoundParameters.ContainsKey('SshPort'))
+$savedExtHost = ""; $savedExtPort = ""
+if ($explicitEndpoint -and $VmHost -eq "agent-vm.mshome.net" -and $SshPort -eq 22) {
+    # Only the reset case needs the guest's saved keys (values may carry config-set.sh's
+    # single quotes; strip them). A failed read degrades to "nothing saved".
+    try {
+        $savedRaw = Invoke-Ssh -Sudo -Command "f=/etc/construct/config.env; printf 'H=%s\nP=%s\n' \"\$(sed -n 's/^CONSTRUCT_EXTERNAL_HOST=//p' \"\$f\" 2>/dev/null | head -1)\" \"\$(sed -n 's/^CONSTRUCT_EXTERNAL_SSH_PORT=//p' \"\$f\" 2>/dev/null | head -1)\""
+        foreach ($line in @($savedRaw)) {
+            $l = ([string]$line).Trim()
+            if ($l -like 'H=*') { $savedExtHost = $l.Substring(2).Trim("'") }
+            elseif ($l -like 'P=*') { $savedExtPort = $l.Substring(2).Trim("'") }
+        }
+    } catch {
+        Write-Warning "Could not read the VM's saved external identity ($($_.Exception.Message)); assuming none."
+    }
 }
+$externalEnv = Get-ExternalEnvSuffix -VmHost $VmHost -SshPort $SshPort -ExplicitlyBound $explicitEndpoint -SavedHost $savedExtHost -SavedPort $savedExtPort
 $envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit' CONSTRUCT_VERSION='$constructVersion' SMB_SHARE='$SmbShare' CLAUDE_PARTIAL_STREAMING='$ClaudePartialStreaming' MIC_PASSTHROUGH='$MicPassthrough' OPENCODE_BACKGROUND_WATCHER='$OpenCodeBackgroundWatcher' T3CODE='$T3Code' T3CODE_CHANNEL='$T3CodeChannel' T3CODE_LIMIT_RESUME='$T3CodeLimitResume'" + $externalEnv
 Write-Host "  --- live provisioning output ---" -ForegroundColor DarkGray
 $provisionStream = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "$envPrefix bash /opt/construct/repo/bin/provision.sh"

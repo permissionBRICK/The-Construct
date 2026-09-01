@@ -286,6 +286,39 @@ $provContent = Get-Content -LiteralPath (Join-Path $repoRoot "Provision-AgentVM.
 ok "envPrefix includes CONSTRUCT_EXTERNAL_HOST" ($provContent -match "CONSTRUCT_EXTERNAL_HOST=")
 ok "envPrefix includes CONSTRUCT_EXTERNAL_SSH_PORT" ($provContent -match "CONSTRUCT_EXTERNAL_SSH_PORT=")
 
+# Get-ExternalEnvSuffix (Provision-AgentVM.ps1): the external identity is appended to
+# provision.sh's env prefix ONLY when it carries information. Extract the pure helpers
+# from the script's AST and exercise every case without a VM.
+Write-Host ""
+Write-Host "=== External env suffix (zero-change + reset semantics) ===" -ForegroundColor Cyan
+$provPath = Join-Path $repoRoot "Provision-AgentVM.ps1"
+$provTokens = $null; $provErrors = $null
+$provAst = [System.Management.Automation.Language.Parser]::ParseFile($provPath, [ref]$provTokens, [ref]$provErrors)
+foreach ($fnName in @('ConvertTo-PosixSingleQuoted', 'Get-ExternalEnvSuffix')) {
+    $fn = $provAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $fnName }, $true) | Select-Object -First 1
+    ok "Provision-AgentVM defines $fnName" ($null -ne $fn)
+    if ($fn) { Invoke-Expression $fn.Extent.Text }
+}
+if (Get-Command Get-ExternalEnvSuffix -ErrorAction SilentlyContinue) {
+    $legacy = " CONSTRUCT_EXTERNAL_HOST='agent-vm.mshome.net' CONSTRUCT_EXTERNAL_SSH_PORT='22'"
+    ok "suffix: default endpoint, nothing bound -> empty" `
+        ((Get-ExternalEnvSuffix -VmHost 'agent-vm.mshome.net' -SshPort 22 -ExplicitlyBound $false) -eq "")
+    ok "suffix: legacy explicit default on a stock guest -> empty (byte-identical)" `
+        ((Get-ExternalEnvSuffix -VmHost 'agent-vm.mshome.net' -SshPort 22 -ExplicitlyBound $true -SavedHost "" -SavedPort "") -eq "")
+    ok "suffix: legacy explicit default, guest saved port 22 only -> empty" `
+        ((Get-ExternalEnvSuffix -VmHost 'agent-vm.mshome.net' -SshPort 22 -ExplicitlyBound $true -SavedHost "" -SavedPort "22") -eq "")
+    ok "suffix: explicit default RESETS a saved custom host" `
+        ((Get-ExternalEnvSuffix -VmHost 'agent-vm.mshome.net' -SshPort 22 -ExplicitlyBound $true -SavedHost "old.example.net" -SavedPort "") -eq $legacy)
+    ok "suffix: explicit default RESETS a saved custom port" `
+        ((Get-ExternalEnvSuffix -VmHost 'agent-vm.mshome.net' -SshPort 22 -ExplicitlyBound $true -SavedHost "" -SavedPort "2201") -eq $legacy)
+    ok "suffix: non-default host always sent, even when not 'bound'" `
+        ((Get-ExternalEnvSuffix -VmHost 'work-vm.mshome.net' -SshPort 22 -ExplicitlyBound $false) -eq " CONSTRUCT_EXTERNAL_HOST='work-vm.mshome.net' CONSTRUCT_EXTERNAL_SSH_PORT='22'")
+    ok "suffix: non-default port always sent" `
+        ((Get-ExternalEnvSuffix -VmHost 'agent-vm.mshome.net' -SshPort 2201 -ExplicitlyBound $true) -eq " CONSTRUCT_EXTERNAL_HOST='agent-vm.mshome.net' CONSTRUCT_EXTERNAL_SSH_PORT='2201'")
+    ok "suffix: apostrophe in host is POSIX-quoted" `
+        ((Get-ExternalEnvSuffix -VmHost "o'brien-vm.mshome.net" -SshPort 22 -ExplicitlyBound $true) -eq " CONSTRUCT_EXTERNAL_HOST='o'\''brien-vm.mshome.net' CONSTRUCT_EXTERNAL_SSH_PORT='22'")
+}
+
 # ── Summary ─────────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "==============================" -ForegroundColor Cyan
