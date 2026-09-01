@@ -3357,8 +3357,16 @@ function Invoke-ConstructVmSsh {
         return [pscustomobject]@{ Code = -1; Output = "" }
     }
 
-    # Build connection args: prefer the explicit key the provisioner wrote.
-    if (-not $KeyPath) { $KeyPath = Join-Path $HOME ".ssh/agent_vm_ed25519" }
+    # Build connection args: prefer the explicit key the provisioner wrote. The
+    # default instance (alias agent-vm) uses the legacy key name; any other VM uses
+    # its instance-scoped key (construct_<alias>_ed25519, written by the provisioner
+    # via -LocalKeyName) -- never the default VM's key, which would fail auth (or
+    # worse, reach the wrong VM). Missing key -> Host-alias fallback below.
+    if (-not $KeyPath) {
+        $alias0 = ($VmHost -split '\.')[0]
+        $KeyPath = if ($alias0 -eq 'agent-vm') { Join-Path $HOME ".ssh/agent_vm_ed25519" }
+                   else { Join-Path $HOME ".ssh/construct_${alias0}_ed25519" }
+    }
     $portArgs = if ($SshPort -ne 22) { @("-p", "$SshPort") } else { @() }
     if (Test-Path -LiteralPath $KeyPath) {
         $target  = "root@$VmHost"

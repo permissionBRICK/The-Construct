@@ -190,7 +190,7 @@ why the remote-Hyper-V API below deliberately mirrors that shape.
       "service": { "url": "https://buildbox.example.local:7462", "auth": "negotiate" },
       "vmName": "work-vm",              // name on the remote host, unique per host
       "sshHost": "buildbox.example.local", "sshPort": 2201,
-      "hostAlias": "construct-work-vm",
+      "hostAlias": "work-vm",
       "keyName": "construct_work-vm_ed25519",
       "owner": "DOMAIN\\christoph"
     }
@@ -202,8 +202,8 @@ Rules:
 
 - **Missing file / missing entry ⇒ exactly today's behavior** (defaults above). No
   migration, no prompts for existing installs.
-- Instance name is the primary key: SSH alias = `construct-<name>` (default instance
-  keeps bare `agent-vm`), key file = `construct_<name>_ed25519` (default keeps
+- Instance name is the primary key: SSH alias = `<name>` (the first DNS label, matching
+  every lib helper's derivation; the default instance is `agent-vm`), key file = `construct_<name>_ed25519` (default keeps
   `agent_vm_ed25519`), config-sync branch = `vm` for the default and `vm-<name>` otherwise
   (a slash form like `vm/x` cannot coexist with the existing `refs/heads/vm` file), notification spool and sync locks keyed by name.
 - The SSH-config writer **appends/replaces only its own alias block per instance**
@@ -272,7 +272,7 @@ POST    /vms/{name}/activity                  → guest heartbeat {busy, reasons
    (e.g. 2201–2299), generates + injects the scoped VM token config, and completes the
    job with the endpoint.
 2. Client runs **`Provision-AgentVM.ps1 -VmHost <serviceHost> -SshPort <fwd>
-   -HostAlias construct-<name> -LocalKeyName construct_<name>_ed25519`** — the same
+   -HostAlias <name> -LocalKeyName construct_<name>_ed25519`** — the same
    bootstrap-key negotiation, payload upload, config-sync tick, `provision.sh`, restore,
    and host-side client wiring as today, just over host:port. (New: `-SshPort` threading
    through every ssh/scp/keyscan call — today port 22 is implicit.)
