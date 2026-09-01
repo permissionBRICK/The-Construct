@@ -1869,6 +1869,45 @@ async function runTests() {
       eq(await heads(configDir), ["refs/heads/main", "refs/heads/vm", "refs/heads/vm-work"]));
   } finally { fs.rmSync(twoRoot, { recursive: true, force: true }); }
 
+  // (c1b) A merge finished OUTSIDE a tick -- extension.js's configMergeGate, after the
+  // user resolved the conflict in the editor -- must be committed with THIS instance's
+  // branch in the message. "sync merge vm" on a work-vm repo is a lie the config
+  // repo's history keeps forever, and it is the only record of which VM the merge came
+  // from.
+  const msgRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cs-mergemsg-"));
+  try {
+    const SETUP = ["-c", "user.name=x", "-c", "user.email=x@y", "-c", "commit.gpgsign=false"];
+    const subjectOf = async (dir) => (await runGit(["log", "-1", "--pretty=%s"], { cwd: dir })).stdout.trim();
+    /** A repo with a CLEAN pending merge of `branch` into main (staged, no conflict). */
+    async function pendingMergeRepo(tag, branch) {
+      const root = mk(msgRoot, tag);
+      const configDir = mk(root, "config");
+      cs.ensureConfigTree(configDir);
+      writeProfile(configDir, "web", { name: "web", repos: [{ url: "https://h/w.git" }] });
+      await cs.ensureRepo(runGit, configDir, branch);
+      await runGit([...SETUP, "checkout", branch], { cwd: configDir });
+      writeProfile(configDir, "fromvm", { name: "fromvm", repos: [{ url: "https://h/v.git" }] });
+      await runGit([...SETUP, "add", "-A"], { cwd: configDir });
+      await runGit([...SETUP, "commit", "-m", "vm side"], { cwd: configDir });
+      await runGit([...SETUP, "checkout", "main"], { cwd: configDir });
+      writeProfile(configDir, "frommain", { name: "frommain", repos: [{ url: "https://h/m.git" }] });
+      await runGit([...SETUP, "add", "-A"], { cwd: configDir });
+      await runGit([...SETUP, "commit", "-m", "main side"], { cwd: configDir });
+      await runGit([...SETUP, "merge", "--no-ff", "--no-commit", branch], { cwd: configDir });
+      return configDir;
+    }
+    const workDir = await pendingMergeRepo("work", "vm-work");
+    const doneWork = await cs.completePendingMerge(runGit, workDir, "vm-work");
+    ok("merge-msg: a non-default branch's pending merge completes", doneWork.completed === true);
+    ok("merge-msg: ...and the commit names THAT branch, not 'vm'",
+      (await subjectOf(workDir)) === "sync merge vm-work", await subjectOf(workDir));
+    // The default path is unchanged: no branch argument still commits "sync merge vm".
+    const defDir = await pendingMergeRepo("default", "vm");
+    const doneDef = await cs.completePendingMerge(runGit, defDir);
+    ok("merge-msg: the default path still commits 'sync merge vm'",
+      doneDef.completed === true && (await subjectOf(defDir)) === "sync merge vm", await subjectOf(defDir));
+  } finally { fs.rmSync(msgRoot, { recursive: true, force: true }); }
+
   // (c2) Branch isolation in the tick's decision points: every ref the tick reads
   // must be the INSTANCE's branch. Reading another instance's branch here is the
   // shape of bug that silently deletes or resurrects profiles, so each decision

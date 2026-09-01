@@ -95,8 +95,10 @@ const INSTANCE_PARAMS = {
  *   default endpoint with the default key, so Reprovision/Export would reconfigure (and
  *   re-key) the default VM.
  * Silently dropping a parameter therefore RETARGETS the action, which is why the gate
- * refuses instead. -ConfigBranch is not listed: it is conditional, and its own gate
- * lives in checkInstanceSupport.
+ * refuses instead. -ConfigBranch is not listed: whether its VALUE is emitted is
+ * conditional (only when the provisioner would derive another ref), while its
+ * DECLARATION is required for every action that can carry it — that gate lives in
+ * checkInstanceSupport.
  */
 const REQUIRED_INSTANCE_PARAMS = {
   reprovision: ["VmHost", "HostAlias", "SshPort", "LocalKeyName"],
@@ -211,8 +213,10 @@ function instanceArgs(action, instance, declared) {
  *      lifecycleSupport); a rebuild of a remote instance would hit a local VM.
  *   2. REQUIRED IDENTITY — an older script that doesn't declare a parameter would run
  *      against ITS OWN defaults, i.e. the default VM (REQUIRED_INSTANCE_PARAMS).
- *   3. CONFIG BRANCH — when an explicit branch is needed but -ConfigBranch can't be
- *      passed, the provisioner would initialise and sync a DIFFERENT ref than the panel.
+ *   3. CONFIG BRANCH — for every action that can carry -ConfigBranch, the installed
+ *      script must DECLARE it (the capability marker for instance-keyed config sync),
+ *      or the provisioner initialises and syncs a DIFFERENT ref than the panel — the
+ *      canonical "vm-<name>" branch included, where there is no value to emit.
  *
  * `declared === undefined` means "no probe was done" (tests / direct callers): the
  * version-skew gates are then skipped, exactly as instanceArgPairs emits the full set.
@@ -239,13 +243,20 @@ function checkInstanceSupport(action, instance, declared) {
         ", so the action would run against the DEFAULT VM. Update the Construct scripts first.",
     };
   }
+  // -ConfigBranch is the CAPABILITY MARKER for instance-keyed config sync, so the gate
+  // asks whether the script DECLARES it — not whether this instance needs a value
+  // emitted. A script that predates the parameter has no per-alias branch derivation
+  // either: it would initialise and sync work-vm's store on refs/heads/vm while the
+  // panel syncs refs/heads/vm-work-vm, splitting one VM across two host-config refs.
+  // That is just as true for the canonical "vm-<name>" branch (nothing to emit) as for
+  // an explicit override, which is why the check no longer looks at the override.
   const emitted = INSTANCE_PARAMS[action] || [];
-  if (configBranchOverride(instance) && emitted.indexOf("ConfigBranch") >= 0 &&
-      supported.indexOf("ConfigBranch") < 0) {
+  if (emitted.indexOf("ConfigBranch") >= 0 && supported.indexOf("ConfigBranch") < 0) {
+    const branch = instance.configBranch || derivedConfigBranch(instance.hostAlias);
     return {
       blocked: true,
       reason: `${label} can't target instance "${name}": its config-sync branch ` +
-        `"${instance.configBranch}" needs -ConfigBranch, which this install's ` +
+        `"${branch}" needs -ConfigBranch, which this install's ` +
         `${scriptForAction(action) || "host scripts"} doesn't accept — the VM would be ` +
         "initialised on a different branch than the panel syncs. Update the Construct scripts first.",
     };
