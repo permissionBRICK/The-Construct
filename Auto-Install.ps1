@@ -548,7 +548,18 @@ if (-not $SkipCreateVm -and $VmName.ToLowerInvariant() -ne 'agent-vm') {
     $skewProv = Join-Path $PSScriptRoot "Provision-AgentVM.ps1"
     if (-not (Test-Path -LiteralPath $skewProv)) { throw "Provision-AgentVM.ps1 not found in $PSScriptRoot; cannot create a VM named '$VmName'." }
     $skewProvCmd = Get-Command -Name $skewProv -CommandType ExternalScript -ErrorAction Stop
-    foreach ($p in @('VmHost', 'HostAlias', 'LocalKeyName', 'SshPort')) {
+    # -ConfigBranch joins the list as the CAPABILITY MARKER for instance-keyed config
+    # sync, even when this run has no explicit branch to pass: a provisioner that
+    # predates it has no per-alias branch derivation either, so it would initialise and
+    # sync this VM's store on the DEFAULT instance's 'vm' ref while the panel uses
+    # 'vm-<name>'. Same rule as the extension's checkInstanceSupport gate -- and the
+    # same exemption: EXPORT touches no config repo (Provision-AgentVM.ps1 -Action
+    # export returns before repo init and before the sync tick), so it cannot land on
+    # the wrong ref and must stay available on an older install. Every other action --
+    # including the interactive menu, whose choice is not known yet -- is gated.
+    $skewProvParams = @('VmHost', 'HostAlias', 'LocalKeyName', 'SshPort')
+    if ($Action -ne 'export') { $skewProvParams += 'ConfigBranch' }
+    foreach ($p in $skewProvParams) {
         if (-not $skewProvCmd.Parameters.ContainsKey($p)) {
             throw "This install's Provision-AgentVM.ps1 does not support -$p; update The Construct before creating a VM named '$VmName'."
         }
@@ -762,6 +773,42 @@ $VmDnsName   = "$VmGuestName.mshome.net"
 $VmIsDefault = ($VmGuestName -eq 'agent-vm')
 $VmAlias     = $VmGuestName
 $VmKeyName   = if ($VmIsDefault) { 'agent_vm_ed25519' } else { "construct_${VmGuestName}_ed25519" }
+# The config-sync branch THIS run owns, derived ONCE and exactly the way
+# Provision-AgentVM.ps1 derives it (explicit -ConfigBranch wins, otherwise the alias:
+# "agent-vm" -> "vm", anything else -> "vm-<alias>"). Every sync this script performs
+# -- the PRE-WIPE tick below included -- has to run on it: a tick that runs on the
+# default 'vm' ref for a non-default VM reads THAT VM's store into the DEFAULT
+# instance's branch and merges it into main (docs/config-sync.md, "Multiple instances").
+$VmConfigBranch = if ($ConfigBranch) {
+    $ConfigBranch
+} elseif ($VmIsDefault) {
+    'vm'
+} elseif (Get-Command Get-ConstructConfigBranchName -ErrorAction SilentlyContinue) {
+    Get-ConstructConfigBranchName -HostAlias $VmAlias
+} else {
+    'vm'
+}
+# Version skew, checked HERE -- before the menu, the pre-wipe sync and the delete --
+# rather than at the sync call with the VM already gone. A non-default branch that the
+# installed library cannot name, or cannot be TOLD, must be a hard stop: falling back
+# to 'vm' is precisely the cross-instance write this branch keying exists to prevent.
+#
+# EXPORT is exempt, and only export: it runs Provision-AgentVM.ps1 -Action export, which
+# returns before the config repo is initialised or synced, and it never reaches the
+# pre-wipe tick (that lives in the reinstall/redownload flow) -- so there is no ref for
+# an older library to get wrong, and refusing a non-destructive config save would be
+# pure loss. An UNBOUND -Action (the interactive menu) is gated: the choice is not known
+# yet and the check has to happen before the delete.
+$VmBranchNeeded = ($Action -ne 'export')
+if ($VmBranchNeeded -and -not $VmIsDefault -and $VmConfigBranch -eq 'vm' -and -not $ConfigBranch) {
+    throw "This install's Construct library cannot derive a config-sync branch for the VM '$VmName' (Get-ConstructConfigBranchName is missing); update The Construct scripts, or pass -ConfigBranch explicitly, before running this action."
+}
+if ($VmBranchNeeded -and $VmConfigBranch -ne 'vm') {
+    $vbSyncCmd = Get-Command Invoke-ConstructConfigSync -ErrorAction SilentlyContinue
+    if ($vbSyncCmd -and -not $vbSyncCmd.Parameters.ContainsKey('VmBranch')) {
+        throw "This install's Construct library does not support the config-sync branch '$VmConfigBranch' (Invoke-ConstructConfigSync has no -VmBranch), so the config sync would run on the default 'vm' branch instead; update The Construct scripts before running this action for the VM '$VmName'."
+    }
+}
 # Both halves are the driver's: Test-ConstructDriverPrereqs is the cheap "this host
 # can't drive the backend at all" short-circuit (locally: the Hyper-V cmdlets are
 # absent), and Test-ConstructVmPresent is three-valued, so `-eq $true` behaves
@@ -946,6 +993,13 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
                         $syncConfigDir = Get-ConstructConfigDir
                         $syncVmHost = $VmDnsName
                         $syncArgs = @{ ConfigDir = $syncConfigDir; VmHost = $syncVmHost }
+                        # THIS VM's branch, never the default one: without it the tick
+                        # would read a non-default VM's store into refs/heads/vm and
+                        # merge it into main. Passed only when non-default, so the
+                        # default instance's call stays argument-identical; the
+                        # capability was already gated (fail-closed) above, before
+                        # anything destructive could run.
+                        if ($VmConfigBranch -ne 'vm') { $syncArgs['VmBranch'] = $VmConfigBranch }
                         if ($PSBoundParameters.ContainsKey('AutoResolve')) { $syncArgs['AutoResolve'] = $AutoResolve }
                         $syncResult = Invoke-ConstructConfigSync @syncArgs
                         if ($syncResult.Conflict -or $syncResult.Blocked) {

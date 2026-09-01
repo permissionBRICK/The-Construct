@@ -329,6 +329,11 @@ change them together):
   schema may redefine what a field *means*, and acting on a misread entry could target
   the wrong host — so the file is ignored, a problem is reported, and the byte-identical
   default stands. An *absent* version is still read as v1 (hand-written files omit it).
+  `1` means the JSON **number** in both readers: a quoted `"1"` is a foreign schema.
+  PowerShell used to compare the two operands as *strings* and load such a file while
+  `instances.js` refused it — the same bytes then selected `work-vm` on one side and
+  `agent-vm` on the other, which is precisely the disagreement this contract exists to
+  prevent (`$true` is likewise not `1`, matching JS's strict `!==`).
 - **Every non-object top level is malformed** — arrays *and* the falsy scalars
   (`0`, `false`, `null`, `""`), which a truthiness guard would silently swallow as "an
   empty registry" with nothing for the user to see.
@@ -469,7 +474,13 @@ into `withLocalState`/`withVmState`/`augmentUsage`, so a payload is always label
 the VM it actually came from rather than with "whatever is current now". `probeOnce` is
 keyed by instance name too: coalescing is only correct between callers asking about the
 same VM. The gate is pure, so the discard rule is proven with deferred A/B promises in
-`extension/test/instances.test.js`.
+`extension/test/instances.test.js`. **Auto-import is keyed the same way**: `coalescedImport`
+runs through `instances.createCoalescer` — a pure, clock-injectable helper that keys both
+the in-flight promise and the five-minute throttle stamp by instance name (its ordering
+rules are driven with deferred promises in the same test file) — and the scan captures
+its target's cfg before the first await. Sharing them globally let
+a scan of A satisfy a pre-flight asking about B (B was reported "scanned" on A's result)
+and let A's timestamp suppress B's first automatic scan.
 
 **User actions are bound to the instance they started on.** A command is not one atomic
 step — Shutdown shows a modal, a rebuild probes the VM for its project list, a clone
@@ -551,17 +562,34 @@ can do*, not by editing `lifecycle.js`). Without the gate, "Reinstall" on a
 reprovision and exportConfig are pure SSH to an already-running VM and stay allowed for
 every backend.
 
-**`-ConfigBranch` is threaded, conditionally.** JS config sync uses
-`instance.configBranch` verbatim while `Provision-AgentVM.ps1` derives its branch from
-`-HostAlias`, so an instance whose branch disagrees with that derivation would be
-initialised on one ref and synced on another. `configBranchOverride` (the JS mirror of
-`Get-ConstructConfigBranchName`) emits `-ConfigBranch` for reprovision/reinstall/
-redownload **only when the two differ** — never on the default path — and refuses the
-action when the override is needed but the destination can't take it. The PowerShell
-chain carries it the same way: `Auto-Install.ps1` → `Create-AgentVM.ps1` →
-`Provision-AgentVM.ps1` (and Auto-Install's reprovision / add-config paths straight to
-Provision), probe-before-splat, with the probe for a destructive rebuild done *before*
-anything is deleted.
+**`-ConfigBranch` is threaded conditionally — and *required* by every branch-writing
+action.** JS config sync uses `instance.configBranch` verbatim while
+`Provision-AgentVM.ps1` derives its branch from `-HostAlias`, so an instance whose branch
+disagrees with that derivation would be initialised on one ref and synced on another.
+`configBranchOverride` (the JS mirror of `Get-ConstructConfigBranchName`) emits
+`-ConfigBranch` for reprovision/reinstall/redownload **only when the two differ** — never
+on the default path.
+
+Its *declaration* is the **capability marker** for instance-keyed config sync, so
+`checkInstanceSupport` requires it for every non-default reprovision/reinstall/redownload
+even when there is no value to emit. A script that predates the parameter has no
+per-alias derivation either: it would initialise and sync `work-vm` on `refs/heads/vm`
+while the panel syncs `refs/heads/vm-work-vm` — the canonical `vm-<name>` case, where
+nothing would have been emitted, is exactly the one that used to slip through the gate.
+
+**Only branch-writing actions are gated.** `exportConfig` is not: it runs
+`Provision-AgentVM.ps1 -Action export`, which returns *before* the config repo is
+initialised and before the sync tick, so it can never land on the wrong ref — it carries
+no `-ConfigBranch` (`INSTANCE_PARAMS`) and is never refused for lacking one, and a
+non-default export therefore keeps working against older scripts. The PowerShell chain
+draws the same line: `Auto-Install.ps1` → `Create-AgentVM.ps1` → `Provision-AgentVM.ps1`
+(and Auto-Install's reprovision / add-config paths straight to Provision),
+probe-before-splat, with the probe for a destructive rebuild done *before* anything is
+deleted. Auto-Install demands `-ConfigBranch` from the installed provisioner — and a
+`-VmBranch`-capable library — for a non-default VM on every action that provisions or
+syncs (reprovision, reinstall, redownload, add-config, a fresh install, and an *unbound*
+`-Action`, where the interactive menu's choice is not known yet and the check has to
+precede the delete); `-Action export` is the single exemption.
 
 **Values are quoted structurally.** `buildInvocation` builds its arguments as
 (flag, value) pairs (`argSpec`); `buildCallCommand` emits parameter *names* bare and
@@ -1031,7 +1059,9 @@ by the JS and PS readers rather than an implementation detail.
   blocks the launch. Steps (a)/(b) are advisory (the user may proceed at their
   own risk), while step (c) is un-bypassable: the only way forward is to resolve
   the conflicts, commit, and retry. All import calls go through `coalescedImport`
-  so concurrent scans from overlapping triggers share a single SSH session.
+  so concurrent scans from overlapping triggers share a single SSH session — per
+  instance: the pre-flight passes the action's captured target, so it joins (or
+  starts) a scan of the VM it is about to rebuild, never one of another instance.
 - **Destructive flows default to save→restore**; one-time overrides (existing
   backup / clean wipe) live in Settings → Custom reinstall, not as a persisted
   policy. On failure, offer a retry reusing the backup already taken.
