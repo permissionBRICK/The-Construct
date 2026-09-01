@@ -52,7 +52,17 @@ extension/
                       terminal.css / native.css re-skin it; see the UI-designs decision)
     theme-previews/   one thumbnail per design for the picker cards (<id>.png)
   src/
-    ssh.js            system-ssh runner (buildSshArgs/runRemote/runRemoteScript/isReachable)
+    instances.js      instance registry: %LOCALAPPDATA%\The-Construct\instances.json —
+                      load/parse/validate, synthesize the implicit `agent-vm` default,
+                      derive per-instance alias/key/branch, resolveActive (setting >
+                      workspaceState > registry default), matchByRemoteHost/
+                      planRemoteAdoption/adoptRemoteInstance, createGate (the
+                      stale-refresh generation guard), atomic save + add/update/remove;
+                      pure fs/path/JSON, no vscode. Its PS twin is
+                      lib/AgentVm.Instances.ps1 (same file, same normalization rules)
+    ssh.js            system-ssh runner (buildSshArgs/runRemote/runRemoteScript/isReachable);
+                      cfg carries the active instance (vmHost/hostAlias/keyName/sshPort);
+                      `-p` only for a non-22 port so the default argv is unchanged
     probe.js          REMOTE_PROBE + parseProbe/extractVersion/toState/probe()
     remote.js         open the VM over Remote-SSH: isConnectedToVm(remoteAuthority) +
                       vscode-remote://ssh-remote+agent-vm/<path> URIs; openOnVm (vscode.openFolder,
@@ -220,6 +230,8 @@ Defined in `extension.js` (handleMessage), `media/panel.js` and `media/launcher.
 - `{type:'saveProject', name, profile}` — the edited profile posted back from the modal
   (sanitized + written to `projects/<name>.json`).
 - `{type:'openPanel'}` — open the wide editor-tab panel.
+- `{type:'setInstance', name}` — the header dropdown picked another instance (the name
+  is validated against the registry extension-side; the webview is untrusted input).
 - `{type:'saveSettings', settings}` — persist the settings form.
 - `{type:'customRebuild', mode:'reinstall'|'redownload', backup:'save'|'existing'|'wipe', backupId}`.
 
@@ -234,6 +246,8 @@ Defined in `extension.js` (handleMessage), `media/panel.js` and `media/launcher.
 VM-derived fields when `online===false` or `probeError`):
 ```
 { online, connected, vmState:'running'|'off'|'absent'|'unknown',
+  instance,                                // active instance NAME (always present)
+  instances:[name],                        // only when >1 exists — renders the picker
   host, hostShort, vmName, ubuntu, resources, constructRev,
   installed, reprovisioned, update:{available,behind},
   agents:[{id,name,detail,version,updateAvailable,latest}],
@@ -250,6 +264,248 @@ VM-derived fields when `online===false` or `probeError`):
 local config-dir state (git presence, repo conflicts, linked remotes) and survives
 an offline VM. The webview renders it in the "Config sync" strip inside the Projects
 module, regardless of `online`.
+
+## Instances
+
+The extension drives **one instance per window**. An *instance* is one named VM plus
+everything the client needs to reach and manage it. `agent-vm` is the **implicit
+default**: with no registry file there is exactly one instance, it holds today's
+literals, and nothing in the UI or in any launched command line changes.
+
+### The registry
+
+`%LOCALAPPDATA%\The-Construct\instances.json` — next to the existing `config\` dir
+(`host.configDir`'s sibling). Schema v1:
+
+```jsonc
+{
+  "version": 1,
+  "defaultInstance": "agent-vm",
+  "instances": {
+    "agent-vm": {                        // implicit; synthesized when absent
+      "backend": "hyperv-local",
+      "vmName": "Agent-VM",
+      "sshHost": "agent-vm.mshome.net", "sshPort": 22,
+      "hostAlias": "agent-vm",
+      "keyName": "agent_vm_ed25519",
+      "configBranch": "vm",
+      "scriptsDir": null,                // null = newest install (today's detection)
+      "service": null, "owner": null
+    },
+    "work-vm": {
+      "backend": "hyperv-remote",
+      "service": { "url": "https://buildbox.example.local:7462", "auth": "negotiate" },
+      "vmName": "work-vm",
+      "sshHost": "buildbox.example.local", "sshPort": 2201,
+      "hostAlias": "work-vm",
+      "keyName": "construct_work-vm_ed25519",
+      "configBranch": "vm-work-vm",
+      "owner": "DOMAIN\\christoph"
+    }
+  }
+}
+```
+
+Two readers, one file and one set of rules: `src/instances.js` (pure fs/path/JSON, no
+`vscode`) and `lib/AgentVm.Instances.ps1` (dot-sourceable, PS 5.1). **Change both
+together** — the JS module's header comment is the shared contract.
+
+**Missing file, unreadable file, or a missing entry ⇒ the default instance is
+synthesized and NOTHING is written.** Neither reader ever throws: problems are
+collected (`.problems` / `.Problems`) and the caller decides how to surface them (the
+extension logs each one and toasts once per distinct problem set).
+
+**Instance names** are `^[a-z0-9][a-z0-9-]{0,39}$` — they end up verbatim in file
+names, SSH aliases and git refs. An invalid name is skipped with a problem, not
+guessed at.
+
+**One normalization contract, two readers.** These rules are what keep the JS and PS
+readers from disagreeing about the *same* file — a disagreement would mean the panel
+and the scripts targeting different machines. Both test suites run the same
+malformed-input matrix (`extension/test/instances.test.js` ↔ `test/instances.test.ps1`;
+change them together):
+
+- **Any explicit `version` other than `1` is refused, not partially read.** A later
+  schema may redefine what a field *means*, and acting on a misread entry could target
+  the wrong host — so the file is ignored, a problem is reported, and the byte-identical
+  default stands. An *absent* version is still read as v1 (hand-written files omit it).
+- **Every non-object top level is malformed** — arrays *and* the falsy scalars
+  (`0`, `false`, `null`, `""`), which a truthiness guard would silently swallow as "an
+  empty registry" with nothing for the user to see.
+- **String fields are type-strict.** `sshHost: 123` is a malformed file, not the host
+  name `"123"`: the value is reported and the *derived* default is used. (PowerShell
+  needed two extra guards for this — `[string]` type tests instead of `[string]$v`
+  stringification, and `return ,$value` so an array field isn't unrolled into a scalar.)
+- **Enum comparisons are case-sensitive** in both readers (`-cnotcontains` / `-cne` on
+  the PS side), so `"HYPERV-REMOTE"` or `auth: "TOKEN"` can never be honoured by one and
+  rejected by the other.
+- **`sshPort` accepts exactly two shapes**: an integral JSON number, or a bare-digit
+  string (both readers trim). Not `"+2201"`, not `2201.5`, not `true`. The range check
+  happens in a wide numeric type *before* any Int32 cast — `[int]999999999999` throws in
+  PowerShell, and an exception escaping the reader would break the "never throws"
+  contract the whole zero-change path rests on.
+- **`isDefaultInstance` compares case-sensitively** (`===` / `-ceq`), and the PS
+  instance table is an ordinal hashtable. Otherwise a `vmName` of `"agent-vm"` would
+  read as the default on one side and as a non-default instance on the other — and only
+  one of them would emit target arguments.
+
+`addInstance` rejects **every** existing name, `agent-vm` included — it is always
+present (synthesized), so an "add" would silently *replace* the default instance.
+Changing an existing entry is `updateInstance`'s job.
+
+### Derivations for a non-default `<name>`
+
+| field | derived value | why |
+|---|---|---|
+| `hostAlias` | `<name>` | the **bare** name. Every shared PowerShell helper (`Get-RemoteOpenLink`, `Close-VmVsCodeWindow`, `Invoke-ConstructVmSsh`'s alias fallback) derives the SSH alias as the first DNS label of the VM host, and `Auto-Install.ps1` writes alias = lowercased VM name. The registry has to agree or the two would write different `Host` blocks. |
+| `keyName` | `construct_<name>_ed25519` | one key file per VM; the default keeps `agent_vm_ed25519`. |
+| `configBranch` | `vm-<name>` | **not** `vm/<name>`: git cannot hold `refs/heads/vm` and `refs/heads/vm/x` at once, and the default instance's branch is literally `vm`. |
+| `vmName` | `<name>` | the Hyper-V display name. |
+| `vmHost` | `<name>.mshome.net` | `hyperv-local` only; a remote instance must state `sshHost`. |
+| `sshPort` | `22` | |
+| `scriptsDir` | `null` | = newest-install detection, today's behaviour. |
+
+The default instance keeps `agent-vm` / `Agent-VM` / `agent-vm.mshome.net` / `22` /
+`agent_vm_ed25519` / `vm` byte-for-byte.
+
+### The active instance
+
+Precedence (`instances.resolveActive`, unit-tested):
+
+1. the **`construct.instance`** setting — a global pin, `""` = unset;
+2. the window's **`workspaceState`** choice (`construct.activeInstance`);
+3. the registry's **`defaultInstance`**.
+
+A name at any level that the registry no longer holds is skipped (with a problem)
+rather than failing. A window attached over Remote-SSH to a VM that *is* a known
+instance **adopts it at activation** (`planRemoteAdoption` → `adoptRemoteInstance`), so
+the panel always describes the machine you are working on — unless the setting pins
+another one. `activate()` is **async and awaits that adoption**: `workspaceState.update`
+is a Thenable, and a fire-and-forget write would let the status bar, the auto-open, the
+mic auto-arm and the notification watcher all start against the *previous* selection and
+probe the wrong VM. The decision itself is a pure function, so it is unit-tested rather
+than only observable in a live window.
+
+**Stale refreshes are discarded, not relabelled.** A refresh is a multi-stage async
+pipeline (probe → Hyper-V state → GitHub updates → ccusage → config-sync) and any stage
+can outlive a switch. Without a guard, instance A's slow probe resolving after a switch
+to B would be stamped with B's name and painted over B's data. So `instances.createGate()`
+issues a token at the start of each pipeline, and `refreshState`/`refreshAll` re-check
+`instanceGate.valid(token)` **after every await, before any post or cache write** — a
+late stage abandons the whole continuation. The instance is also threaded explicitly
+into `withLocalState`/`withVmState`/`augmentUsage`, so a payload is always labelled with
+the VM it actually came from rather than with "whatever is current now". `probeOnce` is
+keyed by instance name too: coalescing is only correct between callers asking about the
+same VM. The gate is pure, so the discard rule is proven with deferred A/B promises in
+`extension/test/instances.test.js`.
+
+**User actions are bound to the instance they started on.** A command is not one atomic
+step — Shutdown shows a modal, a rebuild probes the VM for its project list, a clone
+runs for minutes — so re-reading "the active instance" in a later step lets a switch
+redirect the rest of the action. The worst case is destructive: confirm *Shut down* for
+A, switch to B while the modal is open, and the poweroff lands on B. So every command
+entry point captures `actionTarget()` (`instances.captureTarget`) once and uses
+`target.cfg` / `target.instance` throughout; before anything irreversible it calls
+`targetSuperseded()`, which — when the window switched meanwhile — does **nothing** and
+says which instance the action was for, because at that point we can no longer tell
+which VM the user meant. (Same idiom as the pre-existing "changed elsewhere while this
+prompt was open" guard in `offerApplyCheckpoints`.) Confirmation copy gains a
+` (<name>)` suffix via `instanceLabel()` **only when more than one instance exists**, so
+a single-VM install's prompts are unchanged. Bound this way: shutdown, reprovision,
+reinstall/redownload (both the panel button and `customRebuild`), export, setCheckpoints,
+add-project clone-then-open, and the agent update + its follow-up reprovision.
+
+**UI.** A status-bar item (`construct.switchInstance`) shows the active instance and is
+**hidden when only one instance exists**; the command *The Construct: Switch Instance*
+opens a QuickPick; the panel header renders a `<select>` **only when
+`state.instances.length > 1`**. A single-VM install therefore sees no new UI at all.
+
+**Switching** (`onInstanceChanged`) invalidates every VM-derived cache (the in-flight
+probe, the usage table, git detection, the config-sync snapshot), reconnects the
+notification watcher, re-arms the mic tunnel against the new VM, and re-probes — the
+panel must never show one VM's pills, versions, projects or usage under another's name.
+
+### One transport helper: `activeCfg()`
+
+`ssh.js` has always accepted a `cfg`, and every module honoured it — but no caller ever
+passed one. Now **every** call that reaches a VM goes through the single `activeCfg()`
+helper in `extension.js` (`probe`, `runRemote`/`runRemoteScript`/`isReachable`,
+`remote.isConnectedToVm`/`openOnVm`/`shouldAutoOpenPanel`, `usage`, `t3code`, `audio`,
+`notify`, `repatch`). That is deliberate: one helper is the thing that makes it *hard to
+forget*, so a new call site can't silently fall back to the hardcoded default VM.
+`ssh.buildSshArgs` emits `-p <port>` **only for a non-22 port**, so the default
+instance's argv is byte-identical to the pre-instance build (same rule in
+`notify.buildWatchArgs` and `audio.buildTunnelArgs`).
+
+Cross-package options this batch passes (implemented by siblings; ignored until then,
+which is harmless because the default instance's value *is* each function's own
+default): `vmpower.queryVmState/queryAutoCheckpoints/startVm({instance})` (B4) and
+`configsync.syncTick({vmBranch})` (B5).
+
+### Per-instance lifecycle invocations
+
+`lifecycle.buildInvocation(action, {instance, instanceParams})` emits target-identity
+arguments **only for a non-default instance**, and only for the parameters the
+*installed* script declares (`instanceParamSupport` → `scriptSupportsParam`, the same
+comment-stripped declaration probe the other capability gates use). Per script:
+
+- **`Provision-AgentVM.ps1`** (reprovision, exportConfig) — `-VmHost -HostAlias
+  -SshPort -LocalKeyName`. It dials the VM itself, so it needs the whole endpoint;
+  `-LocalKeyName` rides along because otherwise the provisioner would write the
+  *default* instance's key file over this instance's.
+- **`Auto-Install.ps1`** (reinstall, redownload) — **`-VmName` and nothing else.**
+  Auto-Install derives the guest hostname, alias and key name from `-VmName`, and it
+  *throws* on a `-VmHost` that disagrees with it. It does declare `-VmHost`, so a naive
+  "emit whatever the script declares" would break every non-default rebuild — hence an
+  explicit per-action parameter list rather than one shared set.
+- **`Set-AgentVmCheckpoints.ps1`** (setCheckpoints) — `-VmName`; it only talks to Hyper-V.
+
+A scripts dir that predates B1 declares none of them, so the probe yields `[]` and the
+action runs against the script's own defaults (exactly today's single-VM behaviour)
+instead of failing to bind.
+
+`host.resolveScriptsDir` gained a third, most-specific source: the active instance's
+pinned `scriptsDir`, then the `construct.scriptsDir` setting, then newest-install
+detection. `.construct-settings.json` stays **per scripts dir** — two instances that
+share a scripts dir deliberately share its settings.
+
+### Collision analysis: notifications and mic passthrough (§4.8)
+
+Both features hold a long-lived SSH connection to *one* VM. The question this batch had
+to answer is whether two instances can collide; the answer is **no, on the VM side** —
+so nothing was refactored speculatively:
+
+- **Notification spool** (`/run/construct/notify` on the VM). It is per VM by
+  construction, and the claim protocol's ids are the VM-side `$$`, so two *windows*
+  watching the *same* VM already de-conflict (that was true before instances). Two
+  windows on two instances watch two different spools on two different machines —
+  nothing shared. The only real change is that the watcher must follow the active
+  instance: it is opened with `activeCfg()` and reconnected on a switch
+  (`notifyInstance` records which VM it is attached to).
+- **Mic passthrough** (`audio.js`). The VM-side tunnel port range `8767–8774` is
+  **per-window de-confliction inside one VM**, not per-VM: two VMs each have their own
+  `127.0.0.1:8767+`, so cross-instance collision is impossible. The host side binds an
+  **ephemeral** port (`listen(0)`), so it cannot collide either. The only real change is
+  again targeting: `HostAudio` is constructed with `activeCfg()`, `hostAudioInstance`
+  records the VM the tunnel terminates on, and a switch tears the tunnel down and lets
+  the saved `micPassthrough` preference re-arm it against the new VM (quietly, under the
+  same rules as the startup auto-arm). Its default key-existence probe resolves against
+  **`this.cfg`**, not the module defaults — otherwise the enable script would install
+  the shim over `construct_<name>_ed25519` while the persistent tunnel decided "no key",
+  fell back to a `~/.ssh/config` alias a direct-cfg instance need not have, and failed
+  with the shim already in place.
+- **Usage cache.** This one *was* a real collision: `usage.js` memoized by report
+  granularity alone, so switching instances would have served the previous VM's numbers
+  under the new heading. The cache key now includes the endpoint
+  (`usage.cacheKeyFor`); with no cfg it stays the bare report key, i.e. unchanged.
+
+Module rules followed for the new code (plan §4.8): `src/instances.js` is **free of the
+vscode API** (it takes `env`/`path`/injected `readFile`, and the extension layer owns
+every toast, the status bar and the settings read); the **transport is injected** — no
+module opens its own connection, they all receive the instance `cfg`; **state is
+namespaced per instance** (workspaceState key, usage cache key, `notifyInstance` /
+`hostAudioInstance`); and the registry file format is a **documented contract** shared
+by the JS and PS readers rather than an implementation detail.
 
 ## Design decisions
 
