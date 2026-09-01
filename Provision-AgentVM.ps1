@@ -440,6 +440,22 @@ function Get-ExternalEnvSuffix {
     return " CONSTRUCT_EXTERNAL_HOST=$(ConvertTo-PosixSingleQuoted $VmHost) CONSTRUCT_EXTERNAL_SSH_PORT='$SshPort'"
 }
 
+# Parse the guest's saved external identity as printed by the remote read command
+# ("H=<host>\nP=<port>\n"). Invoke-Ssh returns ONE scalar (Out-String), so the text is
+# split into lines here -- iterating the scalar would swallow the second line into the
+# first field and make a stock guest look customized. Values may carry config-set.sh's
+# single quotes; they are stripped. PURE (unit-tested).
+function ConvertFrom-SavedExternalIdentity {
+    param([string]$Raw)
+    $h = ""; $p = ""
+    foreach ($line in ([string]$Raw -split '\r?\n')) {
+        $l = $line.Trim()
+        if ($l -like 'H=*')     { $h = $l.Substring(2).Trim().Trim("'") }
+        elseif ($l -like 'P=*') { $p = $l.Substring(2).Trim().Trim("'") }
+    }
+    return @{ Host = $h; Port = $p }
+}
+
 # scp needs raw IPv6 literals bracketed (user@[2001:db8::1]:/path); hostnames and
 # IPv4 addresses pass through unchanged.
 function Get-ScpHost {
@@ -1798,11 +1814,9 @@ if ($explicitEndpoint -and $VmHost -eq "agent-vm.mshome.net" -and $SshPort -eq 2
     # single quotes; strip them). A failed read degrades to "nothing saved".
     try {
         $savedRaw = Invoke-Ssh -Sudo -Command "f=/etc/construct/config.env; printf 'H=%s\nP=%s\n' `"`$(sed -n 's/^CONSTRUCT_EXTERNAL_HOST=//p' `"`$f`" 2>/dev/null | head -1)`" `"`$(sed -n 's/^CONSTRUCT_EXTERNAL_SSH_PORT=//p' `"`$f`" 2>/dev/null | head -1)`""
-        foreach ($line in @($savedRaw)) {
-            $l = ([string]$line).Trim()
-            if ($l -like 'H=*') { $savedExtHost = $l.Substring(2).Trim("'") }
-            elseif ($l -like 'P=*') { $savedExtPort = $l.Substring(2).Trim("'") }
-        }
+        $savedExt = ConvertFrom-SavedExternalIdentity -Raw $savedRaw
+        $savedExtHost = $savedExt.Host
+        $savedExtPort = $savedExt.Port
     } catch {
         Write-Warning "Could not read the VM's saved external identity ($($_.Exception.Message)); assuming none."
     }
