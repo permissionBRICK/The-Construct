@@ -223,6 +223,24 @@ ok "version 2: defaultInstance pointer ignored too" ($reg4b.Default -eq 'agent-v
 # An ABSENT version is still read as v1 (hand-written files routinely omit it).
 $f3c = New-RegistryFile '{ "instances": { "later-vm": { "backend": "hyperv-local" } } }'
 ok "absent version: still read as v1" ((Read-ConstructInstances -Path $f3c).Instances.ContainsKey('later-vm'))
+# The version must be a JSON NUMBER: a QUOTED "1" is a foreign schema. This reader used
+# to compare the two operands as STRINGS and load the file, while instances.js refused
+# it outright -- the same bytes then selected work-vm here and agent-vm there, which is
+# exactly what the shared-reader contract forbids. Mirrored in
+# extension/test/instances.test.js; change them together.
+$f3d = New-RegistryFile '{ "version": "1", "instances": { "work-vm": { "backend": "hyperv-local" } } }'
+$reg4c = Read-ConstructInstances -Path $f3d
+ok "quoted version: a string '1' is NOT version 1" (-not $reg4c.Instances.ContainsKey('work-vm'))
+ok "quoted version: only the default remains"    ($reg4c.Instances.Keys.Count -eq 1)
+ok "quoted version: the default is byte-identical" (Test-ConstructDefaultInstance (Get-ConstructInstance -Registry $reg4c))
+ok "quoted version: reported as a problem"       (@($reg4c.Problems | Where-Object { $_ -match 'version' }).Count -ge 1)
+ok "quoted version: resolving the named instance falls back to the default" (
+    Test-ConstructDefaultInstance (Get-ConstructInstance -Registry $reg4c -Name 'work-vm'))
+# ...and the numeric spellings JSON considers the same number ARE version 1.
+ok "numeric version: 1.0 is version 1" (
+    (Read-ConstructInstances -Path (New-RegistryFile '{ "version": 1.0, "instances": { "work-vm": { "backend": "hyperv-local" } } }')).Instances.ContainsKey('work-vm'))
+ok "boolean version: true is NOT version 1" (
+    -not (Read-ConstructInstances -Path (New-RegistryFile '{ "version": true, "instances": { "work-vm": { "backend": "hyperv-local" } } }')).Instances.ContainsKey('work-vm'))
 
 # ── (g2) JS/PS NORMALIZATION PARITY MATRIX ──────────────────────────────────
 # Both readers must normalize the SAME malformed input to the SAME instance and the

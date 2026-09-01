@@ -202,6 +202,22 @@ eq("future schema: defaultInstance pointer ignored too", futureDefault.defaultIn
 // An ABSENT version is still read as v1 (hand-written files routinely omit it).
 ok("absent version: still read as v1",
   !!inst.load({ path: writeRegistry('{"instances":{"later-vm":{"backend":"hyperv-local"}}}') }).byName["later-vm"]);
+// The version must be a JSON NUMBER: a QUOTED "1" is a foreign schema. This is the
+// shared-reader contract's sharpest edge -- PowerShell used to compare the two operands
+// as strings and load the file, so the same bytes selected work-vm there and agent-vm
+// here. Mirrored in test/instances.test.ps1; change them together.
+const quotedVer = inst.load({ path: writeRegistry('{"version":"1","instances":{"work-vm":{"backend":"hyperv-local"}}}') });
+ok("quoted version: a string \"1\" is NOT version 1", !quotedVer.byName["work-vm"]);
+eq("quoted version: only the default remains", quotedVer.instances.length, 1);
+ok("quoted version: the default is byte-identical", inst.isDefaultInstance(inst.resolve(quotedVer, null)));
+ok("quoted version: reported as a problem", quotedVer.problems.some((p) => p.includes("version")));
+ok("quoted version: resolving the named instance falls back to the default",
+  inst.isDefaultInstance(inst.resolve(quotedVer, "work-vm")));
+// ...and the numeric spellings JSON considers the same number ARE version 1.
+ok("numeric version: 1.0 is version 1",
+  !!inst.load({ path: writeRegistry('{"version":1.0,"instances":{"work-vm":{"backend":"hyperv-local"}}}') }).byName["work-vm"]);
+ok("boolean version: true is NOT version 1",
+  !inst.load({ path: writeRegistry('{"version":true,"instances":{"work-vm":{"backend":"hyperv-local"}}}') }).byName["work-vm"]);
 
 // ── JS/PS NORMALIZATION PARITY MATRIX ────────────────────────────────────────
 // Both readers must normalize the SAME malformed input to the SAME instance and the
@@ -930,6 +946,30 @@ for (const action of ["reprovision", "reinstall", "redownload"]) {
   ok(`branch: ${action} fails closed when -ConfigBranch can't be passed`, skew.blocked === true);
   ok(`branch: ${action} refusal names the branch`, /vm-team/.test(skew.reason));
 }
+// The gate asks whether the script DECLARES -ConfigBranch, not whether this instance
+// has a value to emit. workInst's branch is the CANONICAL "vm-work-vm", so nothing is
+// emitted -- but a script that predates the parameter has no per-alias derivation
+// either: it would initialise and sync refs/heads/vm while the panel uses
+// refs/heads/vm-work-vm. (The Phase-1 scripts at f84f554 are exactly that shape:
+// every identity parameter, no -ConfigBranch.)
+for (const action of ["reprovision", "reinstall", "redownload"]) {
+  const canon = life.buildInvocation(action, {
+    settings: SETTINGS, instance: workInst, instanceParams: ALL.filter((p) => p !== "ConfigBranch"),
+  });
+  ok(`branch: ${action} fails closed for a CANONICAL branch too`, canon.blocked === true);
+  ok(`branch: ${action} the canonical refusal names the branch`, /vm-work-vm/.test(canon.reason || ""));
+  ok(`branch: ${action} the canonical refusal says to update the scripts`,
+    /Update the Construct scripts/.test(canon.reason || ""));
+}
+// ...and none of that touches the zero-change default path: the default instance is
+// never gated, however old the installed scripts are.
+for (const action of ["reprovision", "reinstall", "redownload"]) {
+  ok(`branch: the DEFAULT instance is never blocked by the gate (${action})`,
+    !life.buildInvocation(action, { settings: SETTINGS, instance: d, instanceParams: [] }).blocked);
+  ok(`branch: the DEFAULT instance still emits no -ConfigBranch (${action})`,
+    life.buildInvocation(action, { settings: SETTINGS, instance: d, instanceParams: ALL })
+      .args.indexOf("-ConfigBranch") < 0);
+}
 ok("branch: exportConfig never carries -ConfigBranch (it initialises no store)",
   life.buildInvocation("exportConfig", { backupDir: "C:\\b", instance: teamInst, instanceParams: ALL })
     .args.indexOf("-ConfigBranch") < 0);
@@ -1027,6 +1067,32 @@ ok("usage: same instance, two periods get different keys",
 eq("usage: the same instance is stable",
   usage.cacheKeyFor("daily", inst.toSshCfg(d)), usage.cacheKeyFor("daily", inst.toSshCfg(d)));
 
+// ── extension.js wiring: per-instance import coalescing + merge branch ───────
+// These live in extension.js, which can't be required under plain node (it needs
+// `vscode`), so they are pinned at the source level -- the same way vmpower.test.js
+// pins the checkpoint marker. What they guard: an import of instance A must never be
+// joined (or throttled away) by a caller asking about B, and a completed merge must be
+// committed with the ACTIVE instance's branch in its message.
+console.log("\n=== extension.js wiring (source-pinned) ===");
+const extSrc = fs.readFileSync(path.join(__dirname, "..", "extension.js"), "utf8");
+ok("import: the scan is coalesced through the per-instance coalescer",
+  extSrc.includes("instances.createCoalescer({ throttleMs: SYNC_TICK_MIN_MS })") &&
+  extSrc.includes("importCoalescer.run(t.name, force, function () { return importFromVm(t); })") &&
+  !extSrc.includes("importInflightPromise"));
+ok("import: the target is captured before the scan and used for the SSH cfg",
+  extSrc.includes("const scanTarget = importTargetOf(target)") &&
+  extSrc.includes("cfg: scanTarget.cfg") &&
+  extSrc.includes("importCoalescer.stamp(scanTarget.name)"));
+const preFlightFn = extSrc.slice(extSrc.indexOf("async function lifecyclePreFlight"),
+  extSrc.indexOf("function showPreFlightBlock"));
+ok("import: the lifecycle pre-flight scans ITS captured target, not the active one",
+  preFlightFn.includes("coalescedImport(true, target)") && !preFlightFn.includes("coalescedImport(true)"));
+ok("import: the sync tick's post-tick scan uses the tick's own instance",
+  extSrc.includes("var syncTarget = { name: syncInstance.name, cfg: instances.toSshCfg(syncInstance) }") &&
+  extSrc.includes("coalescedImport(true, syncTarget)"));
+ok("merge: a completed pending merge is committed on the ACTIVE instance's branch",
+  extSrc.includes("completePendingMerge(runGit, dir, activeInstance().configBranch)"));
+
 // ── The async cases: generation gate + Remote-SSH adoption ───────────────────
 // These are the two ordering bugs a live window would only show intermittently, so
 // they are driven here with DEFERRED promises: nothing resolves until the test says so.
@@ -1082,6 +1148,68 @@ async function asyncTests() {
   eq("gate: the post is labelled B", posts[0].instance, "work-vm");
   eq("gate: A's late result did NOT overwrite the cache", cache.value.from, "work-vm");
   ok("gate: A's payload never reached a post", !posts.some((p) => p.payload.from === "agent-vm"));
+
+  // ── The per-instance coalescer (auto-import) ───────────────────────────────
+  // The live failure: an automatic scan of A is still running when the window switches
+  // to B, B's lifecycle pre-flight joins A's promise and treats B as scanned, and A's
+  // throttle stamp suppresses B's first automatic scan for five minutes. Driven here
+  // with deferred promises and a fake clock — nothing resolves until the test says so.
+  console.log("\n=== per-instance import coalescing ===");
+  let clock = 1000;
+  const co = inst.createCoalescer({ throttleMs: 5 * 60 * 1000, now: () => clock });
+  const started = [];
+  /** Start a scan for a captured target; resolves with the cfg the scan actually got. */
+  const scan = (target, force, d) => co.run(target.name, force, () => {
+    started.push(target.name);
+    return d.promise.then(() => ({ instance: target.name, cfg: target.cfg }));
+  });
+  const instA = { name: "agent-vm", cfg: inst.toSshCfg(d) };
+  const instB = { name: "work-vm", cfg: inst.toSshCfg(workInst) };
+
+  // (a) Two overlapping requests for A share ONE scan.
+  const dA = deferred();
+  const a1 = scan(instA, false, dA);
+  const a2 = scan(instA, false, dA);
+  ok("coalesce: a second request for A joins the in-flight scan", a1 === a2);
+  eq("coalesce: ...and A's scan was started exactly once", started.filter((n) => n === "agent-vm").length, 1);
+
+  // (b) A request for B while A is pending starts its OWN scan (this is the bug).
+  const dB = deferred();
+  const b1 = scan(instB, false, dB);
+  ok("coalesce: B does not join A's in-flight scan", b1 !== a1);
+  ok("coalesce: ...B's scan really started", started.includes("work-vm"));
+  ok("coalesce: both keys are in flight at once", co.isInflight("agent-vm") && co.isInflight("work-vm"));
+
+  // (d) Each scan gets the cfg of the instance it was captured for.
+  dB.resolve(); dA.resolve();
+  const [ra, rb] = [await a1, await b1];
+  eq("coalesce: A's result carries A's cfg", ra.cfg.vmHost, instA.cfg.vmHost);
+  eq("coalesce: B's result carries B's cfg", rb.cfg.vmHost, instB.cfg.vmHost);
+  ok("coalesce: A's result is never B's", ra.instance === "agent-vm" && rb.instance === "work-vm" &&
+    ra.cfg.vmHost !== rb.cfg.vmHost);
+  ok("coalesce: settled scans release their keys",
+    !co.isInflight("agent-vm") && !co.isInflight("work-vm"));
+
+  // (c) The throttle is keyed too: A's stamp must not suppress B's FIRST scan.
+  clock += 1000;
+  const co2 = inst.createCoalescer({ throttleMs: 5 * 60 * 1000, now: () => clock });
+  const startedT = [];
+  const tScan = (name, force) => co2.run(name, force, () => { startedT.push(name); return Promise.resolve(name); });
+  eq("throttle: A's first automatic scan runs", await tScan("agent-vm", false), "agent-vm");
+  clock += 1000;                                   // still well inside the window
+  eq("throttle: A's second automatic scan is suppressed", await tScan("agent-vm", false), null);
+  eq("throttle: B's FIRST automatic scan still runs (A's stamp is not B's)",
+    await tScan("work-vm", false), "work-vm");
+  deepEq("throttle: exactly the two first scans ran", startedT, ["agent-vm", "work-vm"]);
+  eq("throttle: force bypasses the window", await tScan("agent-vm", true), "agent-vm");
+  clock += 5 * 60 * 1000 + 1;                      // the window elapses
+  eq("throttle: an automatic scan runs again afterwards", await tScan("agent-vm", false), "agent-vm");
+  // A failing scan must not leave the key stuck "in flight" forever.
+  const boom = co2.run("boom-vm", true, () => Promise.reject(new Error("ssh died")));
+  eq("coalesce: a rejected scan resolves to null", await boom, null);
+  ok("coalesce: ...and releases its key", !co2.isInflight("boom-vm"));
+  const throwing = co2.run("throw-vm", true, () => { throw new Error("sync boom"); });
+  eq("coalesce: a synchronously throwing scan resolves to null", await throwing, null);
 
   // A multi-stage pipeline: the switch can land between ANY two stages. `stopAfter` is
   // how many stages had already resolved when the user switched; 3 (= all of them) is

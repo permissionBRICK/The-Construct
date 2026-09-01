@@ -671,8 +671,21 @@ function ConvertFrom-ConstructInstancesJson {
         # A foreign schema version is REFUSED, not partially read: a later version may
         # redefine what a field MEANS, and acting on a misread entry would target the
         # wrong machine. Report it and fall back to the byte-identical default.
+        # The version must be a JSON NUMBER equal to 1: a quoted "1" is a foreign
+        # schema, exactly as the JS reader's `doc.version !== 1` treats it. Comparing
+        # STRING REPRESENTATIONS here (what this used to do) loaded a file the
+        # extension refuses outright, so the two readers could resolve different
+        # targets from the same bytes -- the one thing the shared contract forbids.
+        # $true is a [ValueType] that PowerShell would compare equal to 1, so the
+        # numeric test is by type, not by coercion.
         $verRaw = Get-ConstructRawProperty $doc 'version'
-        if ($null -ne $verRaw -and [string]$verRaw -ne [string]$script:ConstructSchemaVersion) {
+        $verOk = $false
+        if ($null -ne $verRaw -and -not ($verRaw -is [bool]) -and
+            (($verRaw -is [byte]) -or ($verRaw -is [int16]) -or ($verRaw -is [int32]) -or ($verRaw -is [int64]) -or
+             ($verRaw -is [single]) -or ($verRaw -is [double]) -or ($verRaw -is [decimal]))) {
+            $verOk = ([double]$verRaw -eq [double]$script:ConstructSchemaVersion)
+        }
+        if ($null -ne $verRaw -and -not $verOk) {
             $problems.Add("instances.json has version '$verRaw'; this Construct only understands version $($script:ConstructSchemaVersion) -- ignoring the file and using the default instance (update Construct)")
             $doc = $null
         }

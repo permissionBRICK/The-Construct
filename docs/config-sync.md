@@ -279,7 +279,27 @@ its **own VM-side branch** inside it:
   `configsync.syncTick({ vmBranch })` in the extension and
   `Invoke-ConstructConfigSync -VmBranch` in PowerShell (both default to `vm`),
   with `Provision-AgentVM.ps1 -ConfigBranch` (empty = derive from
-  `-HostAlias`) selecting it for a provision.
+  `-HostAlias`) selecting it for a provision. **Every** tick a script runs is
+  keyed, the §9 pre-wipe tick included: `Auto-Install.ps1` derives the branch it
+  owns once (explicit `-ConfigBranch`, else from the VM name) and passes it to
+  that tick, because a pre-wipe tick left on `vm` reads the *rebuilt* VM's store
+  into the default instance's branch and merges it into `main`. The extension's
+  `completePendingMerge` — the merge a user finishes by hand through *Open config
+  repo* — is keyed too, so the commit says `sync merge vm-<name>`.
+- **Version skew is a hard stop for a non-default branch, never a fallback.**
+  A branch the installed library cannot be *told* (`Invoke-ConstructConfigSync` /
+  `Initialize-ConstructConfigRepo` without `-VmBranch`) or cannot *derive*
+  (no `Get-ConstructConfigBranchName`) would run that VM on `refs/heads/vm` and
+  split it from the branch the panel syncs. `Auto-Install.ps1` checks before the
+  menu — i.e. before the pre-wipe tick and before the VM is deleted —
+  `Provision-AgentVM.ps1` checks before the repo is initialised (init is what
+  *creates* the branch), and the extension refuses the action unless the target
+  script declares `-ConfigBranch`. All of them say to update The Construct
+  scripts. Only the default `vm` path keeps the parameter-less fallback, so a
+  single-VM install on an older library behaves exactly as it always did — and
+  only *branch-writing* actions are gated: `-Action export` (host-side config
+  save) returns before repo init and before any tick, so it stays available on
+  an older install, in the scripts and in the panel alike.
 - **The lock stays repo-wide.** `<configDir>\.sync.lock` and the
   `.sync.provisioning` intent marker are **not** per instance: git operations on
   one repo must serialize anyway (index, refs, working tree on `main`). A tick

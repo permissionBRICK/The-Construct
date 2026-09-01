@@ -208,8 +208,11 @@ let syncTickPromise = null;   // same-window callers queue behind the active tic
 let syncTickFollowupPromise = null; // all queued callers share one fresh follow-up
 let lastSyncResult = null;    // most recent TickResult (for state.configSync)
 let configWatcher = null;     // fs.watch handle on cfgDir/projects
-let lastAutoImportAt = 0;     // ms: last auto-import attempt (stamped BEFORE awaiting)
-let importInflightPromise = null; // shared promise for coalescing concurrent imports
+// The auto-import scan is coalesced and throttled PER INSTANCE (instances.createCoalescer,
+// where the ordering rules are unit-tested): held globally, an in-flight scan of A would
+// be handed to a caller asking about B — the lifecycle pre-flight would treat B as
+// scanned — and A's timestamp would suppress B's first automatic scan.
+const importCoalescer = instances.createCoalescer({ throttleMs: SYNC_TICK_MIN_MS });
 
 // ── Diagnostics log ─────────────────────────────────────────────────────────────
 // A "Construct" Output channel + a log file, so what the panel does (esp. the EXACT
@@ -470,7 +473,8 @@ async function refreshAll() {
     if (!instanceGate.valid(gate)) return;
     // Auto-import runs regardless of git presence, so users without git still get
     // automatic discovery of new VM repos (docs/config-sync.md §10 degraded mode).
-    await maybeAutoImport();
+    // Scans the instance THIS refresh was captured for, and is throttled per instance.
+    await maybeAutoImport({ name: inst.name, cfg: instances.toSshCfg(inst) });
     if (!instanceGate.valid(gate)) return;
     const cs2 = await buildConfigSyncState();
     if (!instanceGate.valid(gate)) return;
@@ -815,7 +819,11 @@ async function runConfigSync() {
     // otherwise they exist on the host but stay outside the persisted selection,
     // and the next reprovision silently provisions without them.
     var profilesBeforeTick = host.listProjectProfiles(dir);
-    var syncCfg = activeCfg();
+    // The instance this tick belongs to, captured before the first await: the store
+    // read/write, the branch and the post-tick import all speak about the SAME VM.
+    var syncInstance = activeInstance();
+    var syncTarget = { name: syncInstance.name, cfg: instances.toSshCfg(syncInstance) };
+    var syncCfg = syncTarget.cfg;
     var readStore = async function () {
       try {
         var r = await ssh.runRemoteScript(configsync.buildReadStoreScript(), { timeoutMs: 30000, cfg: syncCfg });
@@ -833,9 +841,9 @@ async function runConfigSync() {
     var result = await configsync.syncTick({
       runGit: runGit, configDir: dir, readStore: readStore, writeStore: writeStore,
       // The instance's config-sync branch ("vm" for the default instance, "vm-<name>"
-      // otherwise). B5 implements the option; until then syncTick ignores it, which is
-      // harmless because the default instance's value IS syncTick's own default.
-      vmBranch: activeInstance().configBranch,
+      // otherwise) -- from the instance captured above, so a switch mid-tick cannot
+      // move the refs this tick writes onto another instance's branch.
+      vmBranch: syncInstance.configBranch,
       log: function (level, msg) { logLine("[configsync] [" + level + "] " + msg); },
     });
     lastSyncResult = result;
@@ -860,7 +868,7 @@ async function runConfigSync() {
     // every sync tick. Runs AFTER the sync tick (not inside it) so the lock is
     // released and locally-written profiles don't race the git engine.
     if (result && result.ok && result.vmReadOk) {
-      try { await coalescedImport(true); } catch (e) {
+      try { await coalescedImport(true, syncTarget); } catch (e) {
         logLine("auto-import from VM failed: " + (e && e.message ? e.message : e));
       }
     }
@@ -913,7 +921,10 @@ async function configMergeGate() {
   var dir = resolveCfgDir();
   var git = await detectGitCached();
   if (!dir || !git.present || !runGit) return { blocked: false, dir: dir };
-  var pending = await configsync.completePendingMerge(runGit, dir);
+  // The active instance's branch: the merge commit this completes is THAT branch's
+  // merge, and the message ("sync merge vm-work-vm") is what a later reader of the
+  // config repo's history goes by. Every syncTick call already threads it.
+  var pending = await configsync.completePendingMerge(runGit, dir, activeInstance().configBranch);
   if (pending.completed) {
     logLine("[configsync] completed pending clean merge");
   }
@@ -942,7 +953,9 @@ async function configMergeGate() {
 async function lifecyclePreFlight(actionLabel, target) {
   var cfgDir = resolveCfgDir();
   // (a) Import any VM repos not yet covered by a local profile.
-  var importResult = await coalescedImport(true);
+  // Scan the instance THIS action targets, not whatever the window is showing now:
+  // joining another instance's in-flight scan would report B as scanned on A's result.
+  var importResult = await coalescedImport(true, target);
   if (target && targetSuperseded(target, "This action")) return { ok: false, reason: actionLabel + " cancelled." };
   if (!importResult) {
     var skip = await vscode.window.showWarningMessage(
@@ -1025,26 +1038,31 @@ async function maybeAutoSync() {
   await runConfigSync();
 }
 
-/** Coalesced import: if an import is already in flight, join it instead of
- *  starting a second SSH scan. When `force` is true, bypass the time throttle
- *  (used by explicit user actions like Sync Now and lifecycle pre-flight). */
-function coalescedImport(force) {
-  if (importInflightPromise) return importInflightPromise;
-  if (!force && Date.now() - lastAutoImportAt < SYNC_TICK_MIN_MS) return Promise.resolve(null);
-  lastAutoImportAt = Date.now();
-  importInflightPromise = importFromVm().catch(function () { return null; }).then(function (r) {
-    importInflightPromise = null;
-    return r;
-  });
-  return importInflightPromise;
+/** The instance an import runs against: the caller's captured target when it has one
+ *  (a lifecycle pre-flight, a sync tick), otherwise the active instance captured NOW —
+ *  never re-read later, so a switch mid-scan cannot redirect it. */
+function importTargetOf(target) {
+  if (target && target.cfg && target.name) return { name: target.name, cfg: target.cfg };
+  const inst = activeInstance();
+  return { name: inst.name, cfg: instances.toSshCfg(inst) };
+}
+
+/** Coalesced import: if an import IS ALREADY IN FLIGHT FOR THAT INSTANCE, join it
+ *  instead of starting a second SSH scan. When `force` is true, bypass the time
+ *  throttle (used by explicit user actions like Sync Now and lifecycle pre-flight).
+ *  `target` is the captured instance to scan; both the coalescing and the throttle are
+ *  keyed by it, so a scan of A never stands in for B. */
+function coalescedImport(force, target) {
+  const t = importTargetOf(target);
+  return importCoalescer.run(t.name, force, function () { return importFromVm(t); });
 }
 
 /** Throttled auto-import: runs importFromVm regardless of git presence, so users
  *  without git still get automatic discovery. Uses the same 5-min throttle as the
- *  sync tick. Coalesces concurrent attempts so offline/hanging SSH doesn't cause
- *  unbounded overlapping scans. */
-function maybeAutoImport() {
-  return coalescedImport(false);
+ *  sync tick. Coalesces concurrent attempts (per instance) so offline/hanging SSH
+ *  doesn't cause unbounded overlapping scans. */
+function maybeAutoImport(target) {
+  return coalescedImport(false, target);
 }
 
 /** Set up fs.watch on cfgDir/projects (debounced 2s). Tolerates watcher errors. */
@@ -1556,11 +1574,14 @@ function openProjectFolder() {
  * included in the next reprovision/reinstall (same semantics as
  * autoEnableNewProfiles for sync-discovered profiles).
  */
-async function importFromVm() {
+async function importFromVm(target) {
+  // The instance is captured ONCE, before the scan: the SSH cfg used here and the
+  // throttle stamp below must both belong to the VM this scan actually talked to.
+  const scanTarget = importTargetOf(target);
   const projRoot = resolveCfgDir() || resolveScriptsDir();
   if (!projRoot) return null;
   var r;
-  try { r = await ssh.runRemoteScript(projects.buildScanScript(), { timeoutMs: 60000, cfg: activeCfg() }); }
+  try { r = await ssh.runRemoteScript(projects.buildScanScript(), { timeoutMs: 60000, cfg: scanTarget.cfg }); }
   catch (_) { return null; }
   if (!r || r.code !== 0) return null;
   var scan = projects.parseScan(r.stdout);
@@ -1594,7 +1615,7 @@ async function importFromVm() {
       else raceSkipped.push(item.name);
     } catch (_) { failed.push(item.name); }
   }
-  lastAutoImportAt = Date.now();
+  importCoalescer.stamp(scanTarget.name);
   if (imported.length) {
     logLine("auto-import from VM: imported " + imported.join(", "));
     await autoEnableNewProfiles(profilesBefore, host.listProjectProfiles(projRoot));
@@ -2343,11 +2364,15 @@ function handleMessage(message, webview, context) {
       // ── Config-sync commands (C6) ─────────────────────────────────────
       if (id === "syncConfigNow") {
         (async function () {
+          // Capture the instance the button was pressed for, so the scan after the
+          // tick cannot land on another instance the user switched to meanwhile.
+          const syncNowTarget = actionTarget();
           try {
             await runConfigSync();
             // Always run import after sync (or instead of it for no-git hosts),
-            // bypassing the throttle. Coalesced: joins in-flight scan if one exists.
-            await coalescedImport(true);
+            // bypassing the throttle. Coalesced per instance: joins an in-flight scan
+            // OF THAT INSTANCE if one exists.
+            await coalescedImport(true, syncNowTarget);
           } catch (e) {
             vscode.window.showErrorMessage("Config sync failed: " + (e && e.message ? e.message : e));
           }

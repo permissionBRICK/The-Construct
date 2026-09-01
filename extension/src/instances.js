@@ -794,6 +794,63 @@ function createGate(name) {
 }
 
 /**
+ * A PER-INSTANCE COALESCER for a long, VM-bound background job (today: the auto-import
+ * SSH scan of a VM's repos).
+ *
+ * Coalescing and throttling are only correct BETWEEN CALLERS ASKING ABOUT THE SAME VM.
+ * Held globally, they lie across a switch: an in-flight scan of A is handed to a caller
+ * asking about B (the lifecycle pre-flight then treats B as scanned and rebuilds it
+ * without importing its repos), and A's throttle stamp suppresses B's first automatic
+ * scan for the whole window. So both the in-flight promise and the last-attempt stamp
+ * are keyed by instance name.
+ *
+ * `run(key, force, start)` returns the in-flight promise for that key when there is
+ * one, `Promise.resolve(null)` when the key is inside its throttle window and `force`
+ * is false, and otherwise starts `start()` (synchronously, before the stamp is read
+ * again) and remembers it until it settles. A rejecting `start` resolves to null — a
+ * failed scan must never leave the key permanently "in flight".
+ *
+ * Pure and dependency-free (`now` is injectable), so the ordering rules are unit-tested
+ * with deferred promises instead of only being observable in a live window.
+ */
+function createCoalescer(opts) {
+  const o = opts || {};
+  const throttleMs = typeof o.throttleMs === "number" ? o.throttleMs : 0;
+  const now = typeof o.now === "function" ? o.now : () => Date.now();
+  const inflight = new Map();
+  const lastAt = new Map();
+  const keyOf = (key) => String(key == null ? "" : key);
+  return {
+    run(key, force, start) {
+      const k = keyOf(key);
+      const pending = inflight.get(k);
+      if (pending) return pending;
+      // A key that was NEVER attempted is not throttled — "no stamp" is not "stamped at
+      // epoch 0", which is what a `|| 0` default would make of a new instance under a
+      // small/injected clock.
+      const last = lastAt.has(k) ? lastAt.get(k) : null;
+      if (!force && last != null && now() - last < throttleMs) return Promise.resolve(null);
+      lastAt.set(k, now());
+      let started;
+      try { started = Promise.resolve(start()); }
+      catch (_) { started = Promise.resolve(null); }
+      const p = started.catch(() => null).then((r) => {
+        if (inflight.get(k) === p) inflight.delete(k);
+        return r;
+      });
+      inflight.set(k, p);
+      return p;
+    },
+    /** Re-stamp a key from inside the job (the scan stamps again when it finishes). */
+    stamp(key) { lastAt.set(keyOf(key), now()); },
+    /** Last attempt time for a key, or null when it was never attempted. */
+    lastAt(key) { const k = keyOf(key); return lastAt.has(k) ? lastAt.get(k) : null; },
+    /** Is a job for this key in flight? */
+    isInflight(key) { return inflight.has(keyOf(key)); },
+  };
+}
+
+/**
  * Match a Remote-SSH authority host against the registry, so a window attached to a
  * specific VM auto-selects that instance. `host` is the part after "ssh-remote+";
  * it is compared case-insensitively against each instance's alias and hostname.
@@ -1020,7 +1077,7 @@ module.exports = {
   deriveBackend, backendProblems,
   deriveDefaults, isDefaultInstance, toSshCfg,
   parseRegistry, load, list, resolve, resolveActive, matchByRemoteHost,
-  createGate, captureTarget, targetSuperseded, planRemoteAdoption, adoptRemoteInstance,
+  createGate, createCoalescer, captureTarget, targetSuperseded, planRemoteAdoption, adoptRemoteInstance,
   toFileEntry, toFileDocument, save,
   addInstance, updateInstance, removeInstance, setDefaultInstance,
 };
