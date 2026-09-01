@@ -99,6 +99,10 @@ param(
     # Auto-Install derives an instance-scoped name for non-default VMs; omitted = the
     # provisioner's default (agent_vm_ed25519).
     [string]$LocalKeyName,
+    # Explicit autoinstall ISO to attach (Auto-Install passes the one it built/reused
+    # for THIS VM). Omitted: a named VM uses "<name>-autoinstall.iso" next to this
+    # script; the default VM keeps the legacy "newest *autoinstall*.iso" discovery.
+    [string]$AutoinstallIso,
     # Source repo/ref, forwarded to Provision-AgentVM.ps1 so it can record the
     # installed-commit update marker for the control panel. Passed only when set.
     [string]$Repo,
@@ -237,7 +241,8 @@ if (Get-VM -Name $VmName -ErrorAction SilentlyContinue) {
         $VmHostname = "$($VmName.ToLower()).mshome.net"
         # Always -Auto: this script (or its caller) owns the final pause, so the
         # provisioner shouldn't add its own.
-        $provArgs = @{ VmHost = $VmHostname; HostAlias = $VmName.ToLower(); Auto = $true }
+        $provArgs = @{ Auto = $true }
+        if (-not $script:VmIsDefault) { $provArgs['VmHost'] = $VmHostname; $provArgs['HostAlias'] = $script:VmGuestName }
         if ($PSBoundParameters.ContainsKey('Projects'))      { $provArgs['Projects']      = $Projects }
         if ($PSBoundParameters.ContainsKey('AgentPassword')) { $provArgs['AgentPassword'] = $AgentPassword }
         if ($PSBoundParameters.ContainsKey('GitUserName'))   { $provArgs['GitUserName']   = $GitUserName }
@@ -251,7 +256,7 @@ if (Get-VM -Name $VmName -ErrorAction SilentlyContinue) {
         if ($PSBoundParameters.ContainsKey('RestoreDir'))             { $provArgs['RestoreDir']             = $RestoreDir }
         if ($PSBoundParameters.ContainsKey('GitCloneCredentialsB64')) { $provArgs['GitCloneCredentialsB64'] = $GitCloneCredentialsB64 }
         if ($PSBoundParameters.ContainsKey('CheckoutProjects'))       { $provArgs['CheckoutProjects']       = $CheckoutProjects }
-        if ($PSBoundParameters.ContainsKey('LocalKeyName'))           { $provArgs['LocalKeyName']           = $LocalKeyName }
+        if ($LocalKeyName)                                            { $provArgs['LocalKeyName']           = $LocalKeyName }
         # Source repo/ref PAIR for the installed-commit marker: if either was set,
         # forward both effective values so the recorded pair matches the install.
         if ($PSBoundParameters.ContainsKey('Repo') -or $PSBoundParameters.ContainsKey('Ref')) {
@@ -334,14 +339,39 @@ if ($DiskSizeGB -gt 0) {
 }
 Write-Ok "Disk size: $diskSizeGB GB"
 
+# ── Instance identity ────────────────────────────────────────────────────────
+# Alias = lowercased VM name (the first DNS label, the convention every shared lib
+# helper derives from the host). The default VM keeps the legacy key name
+# byte-for-byte; any other VM gets an instance-scoped key so a standalone
+# "Create-AgentVM.ps1 -VmName work-vm" never overwrites Agent-VM's ~/.ssh key.
+$script:VmGuestName = $VmName.ToLower()
+$script:VmIsDefault = ($script:VmGuestName -eq 'agent-vm')
+if (-not $LocalKeyName -and -not $script:VmIsDefault) {
+    $LocalKeyName = "construct_$($script:VmGuestName)_ed25519"
+}
+
 # ── 5. Select Ubuntu Server ISO ──────────────────────────────────────────────
 Write-Step "Select Ubuntu Server ISO"
 
-# Prefer an autoinstall ISO sitting next to this script (built by
-# bin/build-autoinstall-iso.sh). If found, use it automatically; that also
-# drives the unattended autoinstall + auto-provision flow further down.
-$autoIso = Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*autoinstall*.iso' -File -ErrorAction SilentlyContinue |
-           Sort-Object LastWriteTime -Descending | Select-Object -First 1
+# Which autoinstall ISO belongs to THIS VM: an explicit -AutoinstallIso wins; a named
+# VM uses its own "<name>-autoinstall.iso" (never "the newest ISO in the folder",
+# which may belong to another instance and would boot the guest with the wrong
+# hostname); the default VM keeps the legacy newest-file discovery.
+$autoIso = $null
+if ($AutoinstallIso) {
+    if (-not (Test-Path -LiteralPath $AutoinstallIso)) { throw "-AutoinstallIso '$AutoinstallIso' does not exist." }
+    $autoIso = Get-Item -LiteralPath $AutoinstallIso
+} elseif (-not $script:VmIsDefault) {
+    $namedIso = Join-Path $PSScriptRoot "$($script:VmGuestName)-autoinstall.iso"
+    if (Test-Path -LiteralPath $namedIso) { $autoIso = Get-Item -LiteralPath $namedIso }
+    else { throw "No autoinstall ISO for VM '$VmName' ($namedIso) and no -AutoinstallIso given; refusing to guess another instance's ISO." }
+} else {
+    # Prefer an autoinstall ISO sitting next to this script (built by
+    # bin/build-autoinstall-iso.sh). If found, use it automatically; that also
+    # drives the unattended autoinstall + auto-provision flow further down.
+    $autoIso = Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*autoinstall*.iso' -File -ErrorAction SilentlyContinue |
+               Sort-Object LastWriteTime -Descending | Select-Object -First 1
+}
 
 if ($autoIso) {
     $isoPath = $autoIso.FullName
@@ -542,7 +572,8 @@ if ($isAutoinstall) {
         if (-not (Test-Path $provisionScript)) {
             Write-Warning "Provision-AgentVM.ps1 not found in $PSScriptRoot. Skipping provisioning."
         } else {
-            $provArgs = @{ VmHost = $VmHostname; HostAlias = $VmName.ToLower(); Auto = $true }
+            $provArgs = @{ Auto = $true }
+        if (-not $script:VmIsDefault) { $provArgs['VmHost'] = $VmHostname; $provArgs['HostAlias'] = $script:VmGuestName }
             if ($PSBoundParameters.ContainsKey('Projects'))      { $provArgs['Projects']      = $Projects }
             if ($PSBoundParameters.ContainsKey('AgentPassword')) { $provArgs['AgentPassword'] = $AgentPassword }
             if ($PSBoundParameters.ContainsKey('GitUserName'))   { $provArgs['GitUserName']   = $GitUserName }
@@ -556,7 +587,7 @@ if ($isAutoinstall) {
             if ($PSBoundParameters.ContainsKey('RestoreDir'))             { $provArgs['RestoreDir']             = $RestoreDir }
             if ($PSBoundParameters.ContainsKey('GitCloneCredentialsB64')) { $provArgs['GitCloneCredentialsB64'] = $GitCloneCredentialsB64 }
             if ($PSBoundParameters.ContainsKey('CheckoutProjects'))       { $provArgs['CheckoutProjects']       = $CheckoutProjects }
-        if ($PSBoundParameters.ContainsKey('LocalKeyName'))           { $provArgs['LocalKeyName']           = $LocalKeyName }
+        if ($LocalKeyName)                                            { $provArgs['LocalKeyName']           = $LocalKeyName }
             if ($PSBoundParameters.ContainsKey('Repo') -or $PSBoundParameters.ContainsKey('Ref')) {
                 $provArgs['Repo'] = $Repo; $provArgs['Ref'] = $Ref
             }

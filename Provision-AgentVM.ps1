@@ -1761,11 +1761,14 @@ if (-not $checkoutArg) {
 } else {
     Write-Ok "Project checkout: forced '$checkoutArg' via -CheckoutProjects"
 }
-# Client-reachable identity for the guest (banner/URLs/SSH snippets). Sent ONLY for a
-# non-default endpoint, so a default install's remote command, provisioning log and
-# config.env stay byte-identical. Values are POSIX-quoted for the remote shell.
+# Client-reachable identity for the guest (banner/URLs/SSH snippets). Sent when the
+# endpoint is non-default OR when the caller bound -VmHost/-SshPort explicitly (so an
+# explicit default can RESET a custom value the guest saved earlier). A plain default
+# run sends nothing, keeping its remote command, provisioning log and config.env
+# byte-identical. Values are POSIX-quoted for the remote shell.
 $externalEnv = ""
-if ($VmHost -ne "agent-vm.mshome.net" -or $SshPort -ne 22) {
+if ($VmHost -ne "agent-vm.mshome.net" -or $SshPort -ne 22 -or
+    $PSBoundParameters.ContainsKey('VmHost') -or $PSBoundParameters.ContainsKey('SshPort')) {
     $externalEnv = " CONSTRUCT_EXTERNAL_HOST=$(ConvertTo-PosixSingleQuoted $VmHost) CONSTRUCT_EXTERNAL_SSH_PORT='$SshPort'"
 }
 $envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit' CONSTRUCT_VERSION='$constructVersion' SMB_SHARE='$SmbShare' CLAUDE_PARTIAL_STREAMING='$ClaudePartialStreaming' MIC_PASSTHROUGH='$MicPassthrough' OPENCODE_BACKGROUND_WATCHER='$OpenCodeBackgroundWatcher' T3CODE='$T3Code' T3CODE_CHANNEL='$T3CodeChannel' T3CODE_LIMIT_RESUME='$T3CodeLimitResume'" + $externalEnv

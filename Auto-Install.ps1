@@ -511,8 +511,21 @@ if (-not $SkipCreateVm -and $VmName.ToLower() -ne 'agent-vm') {
     $skewCreate = Join-Path $PSScriptRoot "Create-AgentVM.ps1"
     if (Test-Path -LiteralPath $skewCreate) {
         $skewCmd = Get-Command -Name $skewCreate -CommandType ExternalScript -ErrorAction SilentlyContinue
-        if (-not $skewCmd -or -not $skewCmd.Parameters.ContainsKey('VmName')) {
-            throw "This install's Create-AgentVM.ps1 does not support -VmName; update The Construct before creating a VM named '$VmName'."
+        foreach ($p in @('VmName', 'LocalKeyName', 'AutoinstallIso')) {
+            if (-not $skewCmd -or -not $skewCmd.Parameters.ContainsKey($p)) {
+                throw "This install's Create-AgentVM.ps1 does not support -$p; update The Construct before creating a VM named '$VmName'."
+            }
+        }
+    }
+    # The provisioner must accept the instance identity too -- probe it here, before
+    # any destructive step, not at the splat after the old VM is already gone.
+    $skewProv = Join-Path $PSScriptRoot "Provision-AgentVM.ps1"
+    if (Test-Path -LiteralPath $skewProv) {
+        $skewProvCmd = Get-Command -Name $skewProv -CommandType ExternalScript -ErrorAction SilentlyContinue
+        foreach ($p in @('VmHost', 'HostAlias', 'LocalKeyName', 'SshPort')) {
+            if (-not $skewProvCmd -or -not $skewProvCmd.Parameters.ContainsKey($p)) {
+                throw "This install's Provision-AgentVM.ps1 does not support -$p; update The Construct before creating a VM named '$VmName'."
+            }
         }
     }
 }
@@ -609,9 +622,15 @@ function Invoke-VmConfigExport {
     $a = @{
         Action    = 'export'
         BackupDir = $BackupDir
-        VmHost    = "$($VmName.ToLower()).mshome.net"
-        HostAlias = $VmName.ToLower()
         Auto      = $true
+    }
+    # Non-default VM: address it by its own alias/key (the default path passes no
+    # identity so its invocation is unchanged).
+    $exportGuest = $VmName.ToLower()
+    if ($exportGuest -ne 'agent-vm') {
+        $a['VmHost']       = "$exportGuest.mshome.net"
+        $a['HostAlias']    = $exportGuest
+        $a['LocalKeyName'] = "construct_${exportGuest}_ed25519"
     }
     if ($ScanReposOnly) { $a['ScanReposOnly'] = $true }
     & $ps @a
@@ -672,11 +691,14 @@ $HyperVmName = $VmName
 # below instead of re-computing "$($HyperVmName.ToLower()).mshome.net" each time.
 $VmGuestName = $HyperVmName.ToLower()            # guest hostname (ISO) = mshome DNS label
 $VmDnsName   = "$VmGuestName.mshome.net"
-# SSH alias + saved-key name: the default VM keeps the legacy names byte-for-byte; any
-# other VM gets instance-scoped names so a second VM never overwrites the first VM's
-# ~/.ssh key or Host block (see docs/plans/modular-remote-architecture.md §4.3).
+# SSH alias = the guest name (the first DNS label -- the convention every shared lib
+# helper derives from the host). Saved-key name: the default VM keeps agent_vm_ed25519
+# byte-for-byte; any other VM gets an instance-scoped key so a second VM never
+# overwrites the first VM's ~/.ssh key (docs/plans/modular-remote-architecture.md §4.3).
+# Identity args are passed to the provisioner ONLY for a non-default VM, so the default
+# path's provisioner invocation (and thus the guest's config.env) is unchanged.
 $VmIsDefault = ($VmGuestName -eq 'agent-vm')
-$VmAlias     = if ($VmIsDefault) { 'agent-vm' } else { "construct-$VmGuestName" }
+$VmAlias     = $VmGuestName
 $VmKeyName   = if ($VmIsDefault) { 'agent_vm_ed25519' } else { "construct_${VmGuestName}_ed25519" }
 if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -and
     (Get-VM -Name $HyperVmName -ErrorAction SilentlyContinue)) {
@@ -745,8 +767,8 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         # Reprovision keeps the existing password; only honour an explicit
         # -AgentPassword passed on the command line (this path has no prompt).
         # -Auto: the finally below owns the pause, so the provisioner stays quiet.
-        $reprovArgs = @{ VmHost = $VmDnsName; HostAlias = $VmAlias; Projects = $reprovProjects; Auto = $true }
-        if (-not $VmIsDefault) { $reprovArgs['LocalKeyName'] = $VmKeyName }
+        $reprovArgs = @{ Projects = $reprovProjects; Auto = $true }
+        if (-not $VmIsDefault) { $reprovArgs['VmHost'] = $VmDnsName; $reprovArgs['HostAlias'] = $VmAlias; $reprovArgs['LocalKeyName'] = $VmKeyName }
         # Pass both git values (even if empty) so the provisioner doesn't re-prompt.
         $reprovArgs['GitUserName'] = $reprovGit.Name
         $reprovArgs['GitEmail']    = $reprovGit.Email
@@ -1090,8 +1112,6 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
 
             Write-Step "Reprovisioning the VM with the new config"
             $acReprovArgs = @{
-                VmHost    = $VmDnsName
-                HostAlias = $VmAlias
                 Projects  = $addProjectsStr
                 Auto      = $true
                 GitUserName = $acGitId.Name
@@ -1103,7 +1123,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
                 T3CodeChannel         = $T3CodeChannel
                 T3CodeLimitResume     = $T3CodeLimitResume
             }
-            if (-not $VmIsDefault) { $acReprovArgs['LocalKeyName'] = $VmKeyName }
+            if (-not $VmIsDefault) { $acReprovArgs['VmHost'] = $VmDnsName; $acReprovArgs['HostAlias'] = $VmAlias; $acReprovArgs['LocalKeyName'] = $VmKeyName }
             if ($acCloneCredB64) { $acReprovArgs['GitCloneCredentialsB64'] = $acCloneCredB64 }
             if ($PSBoundParameters.ContainsKey('AutoResolve')) { $acReprovArgs['AutoResolve'] = $AutoResolve }
             try {
@@ -1669,6 +1689,11 @@ try {
     if (-not $VmIsDefault -and $createCmd.Parameters.ContainsKey('LocalKeyName')) {
         $createArgs['LocalKeyName'] = $VmKeyName
     }
+    # Hand Create-AgentVM the ISO built/reused for THIS VM instead of letting it pick
+    # "the newest *autoinstall*.iso", which may belong to another instance.
+    if ($createCmd.Parameters.ContainsKey('AutoinstallIso') -and $OutputIso -and (Test-Path -LiteralPath $OutputIso)) {
+        $createArgs['AutoinstallIso'] = $OutputIso
+    }
 } catch {
     # Fail SAFE, not open. We are already past Remove-AgentVm here, so passing an argument
     # the target might reject risks a binding failure with the old VM gone -- a broken
@@ -1709,8 +1734,6 @@ try {
         throw "Provision-AgentVM.ps1 not found in $PSScriptRoot."
     }
     $provArgs = @{
-        VmHost    = $VmDnsName
-        HostAlias = $VmAlias
         Projects  = $chosenProjects
         AgentPassword = $chosenAgentPassword
         GitUserName   = $chosenGitName
@@ -1722,7 +1745,7 @@ try {
         T3CodeChannel         = $T3CodeChannel
         Auto      = $true
     }
-    if (-not $VmIsDefault) { $provArgs['LocalKeyName'] = $VmKeyName }
+    if (-not $VmIsDefault) { $provArgs['VmHost'] = $VmDnsName; $provArgs['HostAlias'] = $VmAlias; $provArgs['LocalKeyName'] = $VmKeyName }
     if ($restoreDir)         { $provArgs['RestoreDir']             = $restoreDir }
     if ($chosenCloneCredB64) { $provArgs['GitCloneCredentialsB64'] = $chosenCloneCredB64 }
     if ($PSBoundParameters.ContainsKey('Repo') -or $PSBoundParameters.ContainsKey('Ref')) {
