@@ -42,6 +42,10 @@
 param(
     [string]$VmHost       = "agent-vm.mshome.net",
     [string]$HostAlias    = "agent-vm",
+    # Client-reachable SSH port for the VM. Thread into every ssh/scp/ssh-keyscan
+    # invocation (-p/-P). Default 22 keeps backward compat; non-22 adjusts the
+    # Host block's Port line and the known_hosts bracketed-host format.
+    [int]$SshPort         = 22,
     [string]$SeedUser     = "agent",
     [string]$SeedPassword = "agent",
     # Optional NEW login password for the agent user, applied at the very end of
@@ -338,7 +342,7 @@ function Ensure-BootstrapKey {
 
 function Ensure-VmReachable {
     while ($true) {
-        Write-Step "Checking VM reachability ($script:VmHost, SSH port 22)"
+        Write-Step "Checking VM reachability ($script:VmHost, SSH port $SshPort)"
         # Detect reachability with ssh itself -- the tool we use anyway -- rather
         # than a separate TCP probe, so there's no Test-NetConnection (and no
         # progress/warning banner) at all. We don't need to AUTHENTICATE here,
@@ -354,6 +358,7 @@ function Ensure-VmReachable {
             "-o", "ConnectTimeout=5",
             "-o", "PreferredAuthentications=none"
         )
+        if ($SshPort -ne 22) { $probeOpts += @("-p", "$SshPort") }
         $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
         $probe = (& ssh.exe @probeOpts "$SeedUser@$($script:VmHost)" "true" 2>&1 | Out-String)
         $ErrorActionPreference = $prevEAP
@@ -362,7 +367,7 @@ function Ensure-VmReachable {
             Write-Ok "VM is reachable at $($script:VmHost)"
             return
         }
-        Write-Warning "Cannot reach $($script:VmHost) over SSH (port 22)."
+        Write-Warning "Cannot reach $($script:VmHost) over SSH (port $SshPort)."
         Write-Host "    Make sure the VM is running, then enter its Hyper-V hostname (without .mshome.net)." -ForegroundColor Yellow
         Write-Host "    Press Enter to retry with the current hostname." -ForegroundColor Yellow
         $current = $script:VmHost -replace '\.mshome\.net$', ''
@@ -389,6 +394,9 @@ $script:SshOpts = @(
     "-o", "ServerAliveInterval=15",
     "-o", "ServerAliveCountMax=4"
 )
+# Port args: ssh uses -p, scp uses -P; build both once so every invocation is consistent.
+$script:SshPortArgs = if ($SshPort -ne 22) { @("-p", "$SshPort") } else { @() }
+$script:ScpPortArgs = if ($SshPort -ne 22) { @("-P", "$SshPort") } else { @() }
 
 # Identity used for the provisioning SSH/SCP connection. Defaults to the seed
 # (agent) user reached via the bootstrap key; the re-provision fast path
@@ -419,7 +427,7 @@ function Invoke-Ssh {
     # -n: read stdin from /dev/null so ssh.exe never attaches to the host console.
     # Without it ssh can block (and fail to terminate) waiting on console stdin --
     # no remote command here reads local stdin (passwords are piped in remotely).
-    $output = & ssh.exe -n @script:SshOpts "$($script:ConnectUser)@$VmHost" $toRun 2>$null
+    $output = & ssh.exe -n @script:SshPortArgs @script:SshOpts "$($script:ConnectUser)@$VmHost" $toRun 2>$null
     $exitCode = $LASTEXITCODE
     $ErrorActionPreference = $prevEAP
     if ($exitCode -ne 0) {
@@ -465,7 +473,7 @@ function Invoke-SshStream {
     $ansiRe = [regex]([regex]::Escape($esc) + '\[[0-9;?]*[ -/]*[@-ln-~]')
     $lines = New-Object System.Collections.Generic.List[string]
     $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-    & ssh.exe -n @script:SshOpts "$($script:ConnectUser)@$VmHost" $toRun 2>&1 | ForEach-Object {
+    & ssh.exe -n @script:SshPortArgs @script:SshOpts "$($script:ConnectUser)@$VmHost" $toRun 2>&1 | ForEach-Object {
         $displayLine = ((([string]$_) -replace "`r", "") -replace $ansiRe, "")
         $lines.Add($displayLine)
         Write-Host $displayLine
@@ -486,7 +494,7 @@ function Invoke-Scp {
         [Parameter(Mandatory)][string]$RemotePath
     )
     $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-    & scp.exe @script:SshOpts $LocalPath "$($script:ConnectUser)@${VmHost}:${RemotePath}" 2>$null
+    & scp.exe @script:ScpPortArgs @script:SshOpts $LocalPath "$($script:ConnectUser)@${VmHost}:${RemotePath}" 2>$null
     $exitCode = $LASTEXITCODE
     $ErrorActionPreference = $prevEAP
     if ($exitCode -ne 0) {
@@ -502,7 +510,7 @@ function Invoke-ScpFrom {
         [Parameter(Mandatory)][string]$LocalPath
     )
     $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-    & scp.exe @script:SshOpts "$($script:ConnectUser)@${VmHost}:${RemotePath}" $LocalPath 2>$null
+    & scp.exe @script:ScpPortArgs @script:SshOpts "$($script:ConnectUser)@${VmHost}:${RemotePath}" $LocalPath 2>$null
     $exitCode = $LASTEXITCODE
     $ErrorActionPreference = $prevEAP
     if ($exitCode -ne 0) {
@@ -518,7 +526,7 @@ function Test-KeyAuth {
     # added ... to known hosts") isn't promoted to a terminating error by the
     # script-wide 'Stop' setting.
     $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-    & ssh.exe -n @script:SshOpts "$SeedUser@$VmHost" "true" 2>&1 | Out-Null
+    & ssh.exe -n @script:SshPortArgs @script:SshOpts "$SeedUser@$VmHost" "true" 2>&1 | Out-Null
     $ok = ($LASTEXITCODE -eq 0)
     $ErrorActionPreference = $prevEAP
     return $ok
@@ -531,7 +539,7 @@ function Test-Sudo {
     param([Parameter(Mandatory)][string]$Password)
     $escPw = $Password.Replace("'", "'\''")
     $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-    & ssh.exe -n @script:SshOpts "$SeedUser@$VmHost" "printf '%s\n' '$escPw' | sudo -k -S -p '' true" 2>$null | Out-Null
+    & ssh.exe -n @script:SshPortArgs @script:SshOpts "$SeedUser@$VmHost" "printf '%s\n' '$escPw' | sudo -k -S -p '' true" 2>$null | Out-Null
     $ok = ($LASTEXITCODE -eq 0)
     $ErrorActionPreference = $prevEAP
     return $ok
@@ -606,6 +614,7 @@ function Install-BootstrapKeyViaPassword {
         "-o", "UserKnownHostsFile=$env:TEMP\construct-known_hosts",
         "-o", "ConnectTimeout=15"
     )
+    if ($SshPort -ne 22) { $pwOpts += @("-p", "$SshPort") }
 
     # Make sure ssh prompts on the console rather than using an askpass helper.
     # ($env:X = $null leaves an empty var that can still force askpass mode, so
@@ -673,7 +682,7 @@ function Enter-RootKeyFastPath {
     # Probe as the remote (root) user. Lower ErrorActionPreference so ssh's benign
     # stderr isn't promoted to a terminating error by the script-wide 'Stop'.
     $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-    & ssh.exe -n @opts "$RemoteUser@$VmHost" "true" 2>&1 | Out-Null
+    & ssh.exe -n @script:SshPortArgs @opts "$RemoteUser@$VmHost" "true" 2>&1 | Out-Null
     $ok = ($LASTEXITCODE -eq 0)
     $ErrorActionPreference = $prevEAP
 
@@ -743,17 +752,24 @@ function Set-HostSshConfig {
     # short alias, including hashed ones) BEFORE accepting the current key, so a
     # re-provisioned VM with a new host key doesn't trip "REMOTE HOST
     # IDENTIFICATION HAS CHANGED". ssh-keygen -R rewrites ~/.ssh/known_hosts in
-    # place and leaves entries for every other host untouched.
+    # place and leaves entries for every other host untouched. Non-standard ports
+    # are stored as "[host]:port" in known_hosts, so remove that form too.
     $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
     & ssh-keygen -R $VmHost    2>$null
     & ssh-keygen -R $HostAlias 2>$null
+    if ($SshPort -ne 22) {
+        & ssh-keygen -R "[$VmHost]:$SshPort"    2>$null
+        & ssh-keygen -R "[$HostAlias]:$SshPort" 2>$null
+    }
     # -n + a connect timeout: this runs right after the reboot was kicked off, so
     # the VM may be on its way down -- don't attach to console stdin and don't sit
     # on a long TCP timeout if it's already gone (a stale/missing key just warns below).
-    & ssh -n -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=10 -i $keyPath "$RemoteUser@$VmHost" "exit" 2>$null
+    & ssh -n @script:SshPortArgs -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=10 -i $keyPath "$RemoteUser@$VmHost" "exit" 2>$null
     $ErrorActionPreference = $prevEAP
     $kh = Join-Path $sshDir "known_hosts"
-    $have = (Test-Path $kh) -and (Select-String -Path $kh -Pattern ([regex]::Escape($VmHost)) -Quiet)
+    # Non-standard ports store as "[host]:port"; standard ports store bare.
+    $khPattern = if ($SshPort -ne 22) { [regex]::Escape("[$VmHost]:$SshPort") } else { [regex]::Escape($VmHost) }
+    $have = (Test-Path $kh) -and (Select-String -Path $kh -Pattern $khPattern -Quiet)
     if ($have) {
         Write-Ok "Host key accepted into known_hosts"
     } else {
@@ -762,13 +778,16 @@ function Set-HostSshConfig {
 
     # ~/.ssh/config Host entry (read by VS Code Remote-SSH). Replace any existing
     # entry for this alias in place and leave every other Host block untouched.
+    # Port is written only when non-default (22), so the default output is
+    # byte-identical to the pre-change behaviour.
     $cfg = Join-Path $sshDir "config"
+    $portLine = if ($SshPort -ne 22) { "`n    Port $SshPort" } else { "" }
     $block = @"
 Host $HostAlias
     HostName $VmHost
     User $RemoteUser
     IdentityFile $keyPath
-    IdentitiesOnly yes
+    IdentitiesOnly yes$portLine
 "@
 
     if (Test-Path $cfg) {
@@ -1288,7 +1307,7 @@ Ensure-VmReachable
 # Accept the VM's host key before any SSH operations (overwrite to clear stale keys from previous VMs).
 Write-Step "Accepting VM host key"
 $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-& ssh-keyscan -T 5 $VmHost 2>$null | Out-File -Encoding ascii "$env:TEMP\construct-known_hosts"
+& ssh-keyscan -T 5 @script:SshPortArgs $VmHost 2>$null | Out-File -Encoding ascii "$env:TEMP\construct-known_hosts"
 $ErrorActionPreference = $prevEAP
 Write-Ok "Host key stored"
 
@@ -1532,7 +1551,7 @@ if (Get-Command Initialize-ConstructConfigStore -ErrorAction SilentlyContinue) {
                 # fails, ssh's own message (auth, host key, connection) is the
                 # diagnosis, and a discarded stderr is how this seed once failed
                 # with a clean-looking console and a repo-less VM.
-                $output = $b64 | & ssh.exe @script:SshOpts "$($script:ConnectUser)@$VmHost" $toRun 2>$errFile
+                $output = $b64 | & ssh.exe @script:SshPortArgs @script:SshOpts "$($script:ConnectUser)@$VmHost" $toRun 2>$errFile
                 $code = $LASTEXITCODE
                 if ($null -eq $code) { $code = -1 }
                 if ($code -ne 0) {
@@ -1728,7 +1747,7 @@ if (-not $checkoutArg) {
 } else {
     Write-Ok "Project checkout: forced '$checkoutArg' via -CheckoutProjects"
 }
-$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit' CONSTRUCT_VERSION='$constructVersion' SMB_SHARE='$SmbShare' CLAUDE_PARTIAL_STREAMING='$ClaudePartialStreaming' MIC_PASSTHROUGH='$MicPassthrough' OPENCODE_BACKGROUND_WATCHER='$OpenCodeBackgroundWatcher' T3CODE='$T3Code' T3CODE_CHANNEL='$T3CodeChannel' T3CODE_LIMIT_RESUME='$T3CodeLimitResume'"
+$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit' CONSTRUCT_VERSION='$constructVersion' SMB_SHARE='$SmbShare' CLAUDE_PARTIAL_STREAMING='$ClaudePartialStreaming' MIC_PASSTHROUGH='$MicPassthrough' OPENCODE_BACKGROUND_WATCHER='$OpenCodeBackgroundWatcher' T3CODE='$T3Code' T3CODE_CHANNEL='$T3CodeChannel' T3CODE_LIMIT_RESUME='$T3CodeLimitResume' CONSTRUCT_EXTERNAL_HOST='$VmHost' CONSTRUCT_EXTERNAL_SSH_PORT='$SshPort'"
 Write-Host "  --- live provisioning output ---" -ForegroundColor DarkGray
 $provisionStream = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "$envPrefix bash /opt/construct/repo/bin/provision.sh"
 Write-Host "  --- end provisioning output ---" -ForegroundColor DarkGray
