@@ -674,7 +674,7 @@ function Test-VmReachable {
     # Where to dial comes from the driver (local Hyper-V: <name>.mshome.net:22), so
     # a non-local backend probes its real endpoint instead of a name convention.
     # Falls back to the local convention if the driver isn't loaded (version skew).
-    $epHost = "$($VmName.ToLower()).mshome.net"
+    $epHost = "$($VmName.ToLowerInvariant()).mshome.net"
     $epPort = 22
     if (Get-Command Get-ConstructVmEndpoint -ErrorAction SilentlyContinue) {
         try {
