@@ -498,7 +498,7 @@ if ($PSBoundParameters.ContainsKey('UbuntuRelease') -and -not [string]::IsNullOr
 if ($PSBoundParameters.ContainsKey('VmHost') -and -not $PSBoundParameters.ContainsKey('VmName')) {
     $VmName = $VmHost
 } elseif ($PSBoundParameters.ContainsKey('VmHost') -and $PSBoundParameters.ContainsKey('VmName') -and
-          $VmHost.ToLower() -ne $VmName.ToLower()) {
+          $VmHost.ToLowerInvariant() -ne $VmName.ToLowerInvariant()) {
     # Never silently discard an explicitly bound value: the guest hostname is always
     # derived from -VmName, so a differing -VmHost cannot be honoured.
     throw "-VmHost '$VmHost' conflicts with -VmName '$VmName': the guest hostname is derived from -VmName (lowercased). Pass only -VmName."
@@ -507,37 +507,37 @@ if ($PSBoundParameters.ContainsKey('VmHost') -and -not $PSBoundParameters.Contai
 # The lowercased VM name doubles as guest hostname, mshome DNS label, SSH alias and
 # key-name component, so it must be a single valid DNS label (the display name is
 # the same string; "Work-VM" is fine, "Work VM" or "work.vm" is not).
-if ($VmName.ToLower() -notmatch '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$') {
+if ($VmName.ToLowerInvariant() -notmatch '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$') {
     throw "-VmName '$VmName' is not usable as a hostname: use 1-63 letters, digits or hyphens (no spaces or dots), e.g. 'Work-VM'."
 }
 
 # Version-skew guard, BEFORE anything destructive: a non-default VM name needs a
 # Create-AgentVM.ps1 that accepts -VmName. An older colocated script would silently
 # create "Agent-VM" and the provisioner would then dial an address that never exists.
-if (-not $SkipCreateVm -and $VmName.ToLower() -ne 'agent-vm') {
+if (-not $SkipCreateVm -and $VmName.ToLowerInvariant() -ne 'agent-vm') {
+    # Fail CLOSED: a missing sibling script is as fatal as an old one -- discovering it
+    # after Remove-AgentVm would leave the user with no VM and no way to rebuild.
     $skewCreate = Join-Path $PSScriptRoot "Create-AgentVM.ps1"
-    if (Test-Path -LiteralPath $skewCreate) {
-        $skewCmd = Get-Command -Name $skewCreate -CommandType ExternalScript -ErrorAction SilentlyContinue
-        foreach ($p in @('VmName', 'LocalKeyName', 'AutoinstallIso')) {
-            if (-not $skewCmd -or -not $skewCmd.Parameters.ContainsKey($p)) {
-                throw "This install's Create-AgentVM.ps1 does not support -$p; update The Construct before creating a VM named '$VmName'."
-            }
+    if (-not (Test-Path -LiteralPath $skewCreate)) { throw "Create-AgentVM.ps1 not found in $PSScriptRoot; cannot create a VM named '$VmName'." }
+    $skewCmd = Get-Command -Name $skewCreate -CommandType ExternalScript -ErrorAction Stop
+    foreach ($p in @('VmName', 'LocalKeyName', 'AutoinstallIso')) {
+        if (-not $skewCmd.Parameters.ContainsKey($p)) {
+            throw "This install's Create-AgentVM.ps1 does not support -$p; update The Construct before creating a VM named '$VmName'."
         }
     }
     # The provisioner must accept the instance identity too -- probe it here, before
     # any destructive step, not at the splat after the old VM is already gone.
     $skewProv = Join-Path $PSScriptRoot "Provision-AgentVM.ps1"
-    if (Test-Path -LiteralPath $skewProv) {
-        $skewProvCmd = Get-Command -Name $skewProv -CommandType ExternalScript -ErrorAction SilentlyContinue
-        foreach ($p in @('VmHost', 'HostAlias', 'LocalKeyName', 'SshPort')) {
-            if (-not $skewProvCmd -or -not $skewProvCmd.Parameters.ContainsKey($p)) {
-                throw "This install's Provision-AgentVM.ps1 does not support -$p; update The Construct before creating a VM named '$VmName'."
-            }
+    if (-not (Test-Path -LiteralPath $skewProv)) { throw "Provision-AgentVM.ps1 not found in $PSScriptRoot; cannot create a VM named '$VmName'." }
+    $skewProvCmd = Get-Command -Name $skewProv -CommandType ExternalScript -ErrorAction Stop
+    foreach ($p in @('VmHost', 'HostAlias', 'LocalKeyName', 'SshPort')) {
+        if (-not $skewProvCmd.Parameters.ContainsKey($p)) {
+            throw "This install's Provision-AgentVM.ps1 does not support -$p; update The Construct before creating a VM named '$VmName'."
         }
     }
 }
 
-if (-not $OutputIso) { $OutputIso = Join-Path $PSScriptRoot "$($VmName.ToLower())-autoinstall.iso" }
+if (-not $OutputIso) { $OutputIso = Join-Path $PSScriptRoot "$($VmName.ToLowerInvariant())-autoinstall.iso" }
 $buildScript = Join-Path $PSScriptRoot "bin\build-autoinstall-iso.sh"
 $bootstrapPubKey = Join-Path $PSScriptRoot "keys\bootstrap_ed25519.pub"
 
@@ -633,7 +633,7 @@ function Invoke-VmConfigExport {
     }
     # Non-default VM: address it by its own alias/key (the default path passes no
     # identity so its invocation is unchanged).
-    $exportGuest = $VmName.ToLower()
+    $exportGuest = $VmName.ToLowerInvariant()
     if ($exportGuest -ne 'agent-vm') {
         $a['VmHost']       = "$exportGuest.mshome.net"
         $a['HostAlias']    = $exportGuest
@@ -664,7 +664,7 @@ function Test-VmReachable {
     param([Parameter(Mandatory)][string]$VmName, [int]$TimeoutMs = 5000)
     $client = New-Object System.Net.Sockets.TcpClient
     try {
-        $iar = $client.BeginConnect("$($VmName.ToLower()).mshome.net", 22, $null, $null)
+        $iar = $client.BeginConnect("$($VmName.ToLowerInvariant()).mshome.net", 22, $null, $null)
         if ($iar.AsyncWaitHandle.WaitOne($TimeoutMs)) { $client.EndConnect($iar); return $true }
         return $false
     } catch {
@@ -695,8 +695,8 @@ $existingVmHandled    = $false # set once the existing-VM menu runs, so the fres
 
 $HyperVmName = $VmName
 # Derive the mshome DNS name and host alias ONCE from the VM name; used everywhere
-# below instead of re-computing "$($HyperVmName.ToLower()).mshome.net" each time.
-$VmGuestName = $HyperVmName.ToLower()            # guest hostname (ISO) = mshome DNS label
+# below instead of re-computing "$($HyperVmName.ToLowerInvariant()).mshome.net" each time.
+$VmGuestName = $HyperVmName.ToLowerInvariant()            # guest hostname (ISO) = mshome DNS label
 $VmDnsName   = "$VmGuestName.mshome.net"
 # SSH alias = the guest name (the first DNS label -- the convention every shared lib
 # helper derives from the host). Saved-key name: the default VM keeps agent_vm_ed25519

@@ -228,7 +228,7 @@ Ensure-HyperV
 # valid DNS label. The default VM keeps the legacy key name byte-for-byte; any other
 # VM gets an instance-scoped key so a standalone "Create-AgentVM.ps1 -VmName work-vm"
 # never overwrites Agent-VM's ~/.ssh key.
-$script:VmGuestName = $VmName.ToLower()
+$script:VmGuestName = $VmName.ToLowerInvariant()
 if ($script:VmGuestName -notmatch '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$') {
     throw "-VmName '$VmName' is not usable as a hostname: use 1-63 letters, digits or hyphens (no spaces or dots), e.g. 'Work-VM'."
 }
@@ -268,7 +268,7 @@ if (Get-VM -Name $VmName -ErrorAction SilentlyContinue) {
         Write-Step "Reprovisioning the existing VM"
         $provisionScript = Join-Path $PSScriptRoot "Provision-AgentVM.ps1"
         if (-not (Test-Path -LiteralPath $provisionScript)) { throw "Provision-AgentVM.ps1 not found in $PSScriptRoot." }
-        $VmHostname = "$($VmName.ToLower()).mshome.net"
+        $VmHostname = "$($VmName.ToLowerInvariant()).mshome.net"
         # Always -Auto: this script (or its caller) owns the final pause, so the
         # provisioner shouldn't add its own.
         $provArgs = @{ Auto = $true }
@@ -473,7 +473,7 @@ Write-Step "Starting VM '$VmName'"
 Start-VM -Name $VmName
 Write-Ok "VM is running. The Ubuntu installer should boot from the ISO."
 
-$VmHostname = "$($VmName.ToLower()).mshome.net"
+$VmHostname = "$($VmName.ToLowerInvariant()).mshome.net"
 $isAutoinstall = (Split-Path $isoPath -Leaf) -match "autoinstall"
 
 if ($isAutoinstall) {
@@ -543,7 +543,7 @@ if ($isAutoinstall) {
     Write-Host "    using EXACTLY these settings so provisioning works:" -ForegroundColor Yellow
     Write-Host ""
     Write-Host "      - Install variant : Ubuntu Server (minimized)" -ForegroundColor White
-    Write-Host "      - Your server's name (hostname) : $($VmName.ToLower())" -ForegroundColor White
+    Write-Host "      - Your server's name (hostname) : $($VmName.ToLowerInvariant())" -ForegroundColor White
     Write-Host "      - Username : agent" -ForegroundColor White
     Write-Host "      - Password : agent" -ForegroundColor White
     Write-Host "      - Install OpenSSH server : YES (enable it)" -ForegroundColor White

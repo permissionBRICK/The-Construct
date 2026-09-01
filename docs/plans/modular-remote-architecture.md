@@ -498,3 +498,10 @@ in the host TCP table on the forward ports; if that proves flaky, or for wake-on
 switch to an in-process TCP proxy, which is a contained change inside the service);
 false-idle saves killing long agent jobs (heartbeat `busy` semantics must be generous
 and reviewed as make-or-break).
+
+**Recorded follow-ups from the Phase 1 integration review (not blocking):** IPv6
+zone identifiers (`fe80::1%12`) are not `%25`-encoded in guest-printed URLs, and the
+SMB UNC (guest banner, `smb-status`, host auto-mount, provisioner summary) is built from
+the raw host, which Windows cannot use for IPv6 literals — derive one Windows-compatible
+SMB endpoint (or suppress SMB instructions when none exists) when the remote flow (B7)
+defines how SMB is reached through the service host.
