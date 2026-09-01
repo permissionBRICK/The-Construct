@@ -336,6 +336,10 @@ function buildTunnelArgs(ssh, cfg, vmPort, hostPort, hasKey) {
     "-o", "ExitOnForwardFailure=yes",       // if the -R bind fails (port in use), fail fast
     "-R", `${vp}:127.0.0.1:${hp}`,
   ];
+  // Non-default instance reached on a forwarded SSH port. Only for a non-22 port, so
+  // the default instance's tunnel argv is byte-identical to before instances existed.
+  const sp = ssh.normalizeSshPort ? ssh.normalizeSshPort(c.sshPort) : 22;
+  if (sp !== 22) common.push("-p", String(sp));
   if (hasKey) {
     return ["-i", ssh.keyPath(c), "-o", "IdentitiesOnly=yes", ...common, `${c.user}@${c.vmHost}`];
   }
@@ -566,11 +570,17 @@ class HostAudio {
     this._spawn = opts._spawn || require("child_process").spawn;
     this._net = opts._net;
     this._readScript = opts._readScript || defaultReadScript;
+    this.cfg = opts.cfg;
+    // Look the key up for THIS INSTANCE's cfg, not for the module defaults. Getting
+    // this wrong is silent and confusing: runRemoteScript (which resolves the cfg
+    // properly) would enable the shim over the instance's own
+    // construct_<name>_ed25519, while the persistent tunnel would decide "no key",
+    // fall back to the ~/.ssh/config alias — which a direct-cfg instance need not have
+    // — and fail with the shim already installed.
     this._hasKey = opts._hasKey || (() => {
-      try { return require("fs").existsSync(this._ssh.keyPath(this._ssh.resolveCfg({}))); }
+      try { return require("fs").existsSync(this._ssh.keyPath(this._ssh.resolveCfg({ cfg: this.cfg }))); }
       catch (_) { return false; }
     });
-    this.cfg = opts.cfg;
     // vmPort is the BASE of the tunnel-port range; each window binds ONE port of
     // [vmPort, vmPort+vmPortCount). boundPort records which one THIS window holds.
     this.vmPort = normalizePort(opts.vmPort, DEFAULT_VM_PORT);

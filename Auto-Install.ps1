@@ -178,6 +178,15 @@ param(
     # When omitted, a conflict stops the operation with instructions to resolve manually.
     [ValidateSet("ours", "theirs")]
     [string]$AutoResolve,
+    # The config-sync branch this VM's host-config store lives on. EMPTY (the default,
+    # and every existing install) means "let Provision-AgentVM.ps1 derive it from the
+    # host alias" -- exactly today's behaviour, with nothing extra forwarded anywhere.
+    # An instance whose registry entry names a branch that does NOT match that
+    # derivation passes it explicitly, so provisioning initialises and syncs the same
+    # ref the control panel does (otherwise one VM ends up split across two refs).
+    # Forwarded down the chain: -> Create-AgentVM.ps1 -> Provision-AgentVM.ps1, and
+    # straight to Provision on the reprovision / add-config paths.
+    [string]$ConfigBranch = "",
     # GitHub owner/name + ref this install came from. Forwarded down to
     # Provision-AgentVM.ps1, which records the installed-commit update marker for the
     # control panel at the end of a successful provision. Defaults to the canonical
@@ -416,6 +425,15 @@ $commonLib = Join-Path $PSScriptRoot "lib\AgentVm.Common.ps1"
 if (-not (Test-Path -LiteralPath $commonLib)) { throw "Required helper not found: $commonLib" }
 . $commonLib
 
+# Hypervisor driver: every Hyper-V touch in this script (the existence probe, the
+# prerequisite install, the teardown, the reachability endpoint) goes through the
+# contract functions it defines -- see docs/drivers.md. "hyperv-local" is today's
+# only backend and the zero-change default; a per-instance backend arrives with
+# the instance registry.
+$driverLoader = Join-Path $PSScriptRoot "drivers\Load-ConstructDriver.ps1"
+if (-not (Test-Path -LiteralPath $driverLoader)) { throw "Required helper not found: $driverLoader" }
+. $driverLoader -Backend "hyperv-local"
+
 # Full-window TUI for the whole interactive phase: every choice below runs as
 # its own screen (wipe + header + the current menu only). Show-AllSet turns it
 # back off at the "all set" banner, after which output scrolls as a normal log.
@@ -533,6 +551,32 @@ if (-not $SkipCreateVm -and $VmName.ToLowerInvariant() -ne 'agent-vm') {
     foreach ($p in @('VmHost', 'HostAlias', 'LocalKeyName', 'SshPort')) {
         if (-not $skewProvCmd.Parameters.ContainsKey($p)) {
             throw "This install's Provision-AgentVM.ps1 does not support -$p; update The Construct before creating a VM named '$VmName'."
+        }
+    }
+}
+
+# Same shape of guard for an EXPLICIT -ConfigBranch: honouring it half-way (the
+# provisioner initialising the store on the alias-derived ref while the control panel
+# syncs the named one) would split one VM across two host-config refs, so an install
+# whose scripts cannot carry the parameter fails CLOSED -- here, before anything
+# destructive, rather than at the splat with the old VM already deleted.
+if ($ConfigBranch) {
+    $cbProv = Join-Path $PSScriptRoot "Provision-AgentVM.ps1"
+    if (-not (Test-Path -LiteralPath $cbProv)) { throw "Provision-AgentVM.ps1 not found in $PSScriptRoot; cannot honour -ConfigBranch '$ConfigBranch'." }
+    $cbProvCmd = Get-Command -Name $cbProv -CommandType ExternalScript -ErrorAction Stop
+    if (-not $cbProvCmd.Parameters.ContainsKey('ConfigBranch')) {
+        throw "This install's Provision-AgentVM.ps1 does not support -ConfigBranch; update The Construct before using the config-sync branch '$ConfigBranch'."
+    }
+    # Only the VM-creating paths reach Create-AgentVM.ps1: -SkipCreateVm never does,
+    # and neither do the panel's -Action reprovision / export (they go straight to
+    # Provision). Anything else -- including the interactive menu, whose choice isn't
+    # known yet -- is checked, because the check has to happen before the delete.
+    if (-not $SkipCreateVm -and $Action -ne 'reprovision' -and $Action -ne 'export') {
+        $cbCreate = Join-Path $PSScriptRoot "Create-AgentVM.ps1"
+        if (-not (Test-Path -LiteralPath $cbCreate)) { throw "Create-AgentVM.ps1 not found in $PSScriptRoot; cannot honour -ConfigBranch '$ConfigBranch'." }
+        $cbCreateCmd = Get-Command -Name $cbCreate -CommandType ExternalScript -ErrorAction Stop
+        if (-not $cbCreateCmd.Parameters.ContainsKey('ConfigBranch')) {
+            throw "This install's Create-AgentVM.ps1 does not support -ConfigBranch; update The Construct before using the config-sync branch '$ConfigBranch'."
         }
     }
 }
@@ -662,9 +706,20 @@ function Get-BackupProjectNames {
 # provisioner's interactive "enter the hostname" reachability retry loop.
 function Test-VmReachable {
     param([Parameter(Mandatory)][string]$VmName, [int]$TimeoutMs = 5000)
+    # Where to dial comes from the driver (local Hyper-V: <name>.mshome.net:22), so
+    # a non-local backend probes its real endpoint instead of a name convention.
+    # Falls back to the local convention if the driver isn't loaded (version skew).
+    $epHost = "$($VmName.ToLowerInvariant()).mshome.net"
+    $epPort = 22
+    if (Get-Command Get-ConstructVmEndpoint -ErrorAction SilentlyContinue) {
+        try {
+            $ep = Get-ConstructVmEndpoint -Name $VmName
+            if ($ep -and $ep.SshHost) { $epHost = [string]$ep.SshHost; $epPort = [int]$ep.SshPort }
+        } catch { }
+    }
     $client = New-Object System.Net.Sockets.TcpClient
     try {
-        $iar = $client.BeginConnect("$($VmName.ToLowerInvariant()).mshome.net", 22, $null, $null)
+        $iar = $client.BeginConnect($epHost, $epPort, $null, $null)
         if ($iar.AsyncWaitHandle.WaitOne($TimeoutMs)) { $client.EndConnect($iar); return $true }
         return $false
     } catch {
@@ -707,8 +762,13 @@ $VmDnsName   = "$VmGuestName.mshome.net"
 $VmIsDefault = ($VmGuestName -eq 'agent-vm')
 $VmAlias     = $VmGuestName
 $VmKeyName   = if ($VmIsDefault) { 'agent_vm_ed25519' } else { "construct_${VmGuestName}_ed25519" }
-if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -and
-    (Get-VM -Name $HyperVmName -ErrorAction SilentlyContinue)) {
+# Both halves are the driver's: Test-ConstructDriverPrereqs is the cheap "this host
+# can't drive the backend at all" short-circuit (locally: the Hyper-V cmdlets are
+# absent), and Test-ConstructVmPresent is three-valued, so `-eq $true` behaves
+# exactly like the previous Get-VM -ErrorAction SilentlyContinue: a VM in any state
+# opens the menu, an unreadable backend falls through.
+if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
+    ((Test-ConstructVmPresent -Name $HyperVmName) -eq $true)) {
 
     $existingVmHandled = $true
     Show-TuiScreen -Title "The agent VM '$HyperVmName' is already installed on this host."
@@ -785,6 +845,9 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         $reprovArgs['T3Code'] = $T3Code
         $reprovArgs['T3CodeChannel'] = $T3CodeChannel
         $reprovArgs['T3CodeLimitResume'] = $T3CodeLimitResume
+        # Only when explicitly chosen: empty leaves the provisioner's own alias
+        # derivation in charge, so the default path splats exactly what it always did.
+        if ($ConfigBranch) { $reprovArgs['ConfigBranch'] = $ConfigBranch }
         if ($PSBoundParameters.ContainsKey('AgentPassword')) { $reprovArgs['AgentPassword'] = $AgentPassword }
         if ($reprovCloneCredB64) { $reprovArgs['GitCloneCredentialsB64'] = $reprovCloneCredB64 }
         if ($PSBoundParameters.ContainsKey('AutoResolve')) { $reprovArgs['AutoResolve'] = $AutoResolve }
@@ -982,7 +1045,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         Show-TuiScreen -Title "Removing the existing VM" -Body @(
             "Powering off '$HyperVmName' and deleting its virtual disk..."
         )
-        Remove-AgentVm -VmName $HyperVmName
+        Remove-ConstructVm -Name $HyperVmName
         if ($forceDownload) {
             Write-Note "Existing VM removed; will re-download the latest Ubuntu ISO and rebuild."
         } else {
@@ -1131,6 +1194,8 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
                 T3CodeLimitResume     = $T3CodeLimitResume
             }
             if (-not $VmIsDefault) { $acReprovArgs['VmHost'] = $VmDnsName; $acReprovArgs['HostAlias'] = $VmAlias; $acReprovArgs['LocalKeyName'] = $VmKeyName }
+            # Explicit config-sync branch only (empty = the provisioner derives it).
+            if ($ConfigBranch) { $acReprovArgs['ConfigBranch'] = $ConfigBranch }
             if ($acCloneCredB64) { $acReprovArgs['GitCloneCredentialsB64'] = $acCloneCredB64 }
             if ($PSBoundParameters.ContainsKey('AutoResolve')) { $acReprovArgs['AutoResolve'] = $AutoResolve }
             try {
@@ -1408,7 +1473,7 @@ if (-not $SkipCreateVm) {
     # enables Hyper-V + the platform features (rebooting if needed) or aborts
     # with BIOS / Windows-Home guidance. The "all set" banner comes later, once
     # we know the unattended phase can really proceed (ISO present, or WSL OK).
-    Ensure-HyperV
+    Ensure-ConstructDriverPrereqs
 }
 
 # If the target autoinstall ISO is already here, skip both the Ubuntu download
@@ -1696,6 +1761,12 @@ try {
     if (-not $VmIsDefault -and $createCmd.Parameters.ContainsKey('LocalKeyName')) {
         $createArgs['LocalKeyName'] = $VmKeyName
     }
+    # An explicit config-sync branch rides down to Provision through Create-AgentVM.
+    # The pre-destructive guard above already refused an install whose Create-AgentVM
+    # can't carry it, so this only ever adds a parameter the target declares.
+    if ($ConfigBranch -and $createCmd.Parameters.ContainsKey('ConfigBranch')) {
+        $createArgs['ConfigBranch'] = $ConfigBranch
+    }
     # Hand Create-AgentVM the ISO built/reused for THIS VM instead of letting it pick
     # "the newest *autoinstall*.iso", which may belong to another instance.
     if ($createCmd.Parameters.ContainsKey('AutoinstallIso') -and $OutputIso -and (Test-Path -LiteralPath $OutputIso)) {
@@ -1728,8 +1799,9 @@ try {
 
     # ── Elevated host-side finalization (needs admin) ────────────────────────
     # Add the user to Hyper-V Administrators so the non-elevated control-panel
-    # extension can read VM power state without a UAC prompt.
-    Add-HyperVAdminMembership
+    # extension can read VM power state without a UAC prompt. (Driver contract:
+    # the host-access half of Ensure-ConstructDriverPrereqs.)
+    Ensure-ConstructDriverPrereqs -Scope HostAccess
 
     # ── Provisioning ─────────────────────────────────────────────────────────
     # Goes through Invoke-DeElevatedProvision, whose de-elevation is currently
@@ -1753,6 +1825,9 @@ try {
         Auto      = $true
     }
     if (-not $VmIsDefault) { $provArgs['VmHost'] = $VmDnsName; $provArgs['HostAlias'] = $VmAlias; $provArgs['LocalKeyName'] = $VmKeyName }
+    # Explicit config-sync branch only; empty means "derive from -HostAlias" (today's
+    # behaviour, and the guard above already refused an install that can't honour it).
+    if ($ConfigBranch) { $provArgs['ConfigBranch'] = $ConfigBranch }
     if ($restoreDir)         { $provArgs['RestoreDir']             = $restoreDir }
     if ($chosenCloneCredB64) { $provArgs['GitCloneCredentialsB64'] = $chosenCloneCredB64 }
     if ($PSBoundParameters.ContainsKey('Repo') -or $PSBoundParameters.ContainsKey('Ref')) {

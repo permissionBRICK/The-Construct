@@ -23,8 +23,16 @@ const cp = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const host = require("./host");
+const instances = require("./instances");
 
 function vsc() { return require("vscode"); }
+
+/** Driver dispatch — lazily required so the require CYCLE stays resolvable
+ *  (drivers/index -> drivers/hyperv-local -> lifecycle): by the time any of these
+ *  functions runs, both modules are fully loaded. */
+function drivers() { return require("./drivers"); }
+/** The config-sync engine's branch rule, reused (never re-implemented) here. */
+function configsync() { return require("./configsync"); }
 
 const PROVISION = "Provision-AgentVM.ps1";   // reprovision + export (no admin)
 const AUTO_INSTALL = "Auto-Install.ps1";     // reinstall + redownload (self/explicitly elevated)
@@ -37,6 +45,230 @@ function normalizeBackupMode(bm) {
   return (bm === "existing" || bm === "wipe") ? bm : "save";
 }
 
+// ── Per-instance target arguments ────────────────────────────────────────────
+// Which target-identity parameters each launched script can actually take. The two
+// entry points differ, and getting this wrong is a BINDING FAILURE (an advanced
+// function refuses an unknown parameter, so the action never starts):
+//
+//   Provision-AgentVM.ps1 (reprovision / exportConfig)
+//       -VmHost <fqdn> -HostAlias <alias> -SshPort <n> -LocalKeyName <file>
+//       It dials the VM directly, so it needs the full endpoint. -LocalKeyName rides
+//       along because a non-default instance has its own key file; without it the
+//       provisioner would write the DEFAULT instance's key on top of this one.
+//
+//   Auto-Install.ps1 (reinstall / redownload)
+//       -VmName <name>  — and NOTHING else. Auto-Install DERIVES the guest hostname,
+//       the alias and the key name from -VmName, and it THROWS when a -VmHost is
+//       passed that disagrees with -VmName ("the guest hostname is derived from
+//       -VmName"). It declares -VmHost, so a naive "emit it if the script declares
+//       it" would break every non-default rebuild — hence the explicit per-script
+//       list here rather than a probe over one shared set.
+//
+//   Set-AgentVmCheckpoints.ps1 (setCheckpoints)
+//       -VmName <name> — it only talks to Hyper-V.
+//
+// For the DEFAULT instance NOTHING is emitted at all, so argv is byte-identical to
+// what shipped before instances existed. That is the regression bar these lists exist
+// to keep provable.
+//   -ConfigBranch rides reprovision/reinstall/redownload (NOT export, which does not
+//       initialise a config store). It is CONDITIONAL — see configBranchOverride: the
+//       provisioner derives the branch from -HostAlias on its own, so the parameter is
+//       emitted only when the instance's configBranch disagrees with that derivation.
+const INSTANCE_PARAMS = {
+  reprovision: ["VmHost", "HostAlias", "SshPort", "LocalKeyName", "ConfigBranch"],
+  exportConfig: ["VmHost", "HostAlias", "SshPort", "LocalKeyName"],
+  reinstall: ["VmName", "ConfigBranch"],
+  redownload: ["VmName", "ConfigBranch"],
+  setCheckpoints: ["VmName"],
+};
+
+/**
+ * The identity parameters the installed script MUST declare before a NON-DEFAULT
+ * instance's action is allowed to run. Stated explicitly (not derived from
+ * INSTANCE_PARAMS) because it answers a different question: INSTANCE_PARAMS is what we
+ * WOULD emit, this is what makes the action TARGETED AT ALL.
+ *
+ * Why every one of them, rather than "emit what fits":
+ *   Auto-Install.ps1 without -VmName rebuilds its own default VM ("Agent-VM") — so
+ *   Reinstall/Redownload on `work-vm` would DELETE the default VM;
+ *   Provision-AgentVM.ps1 without -VmHost/-HostAlias/-SshPort/-LocalKeyName dials the
+ *   default endpoint with the default key, so Reprovision/Export would reconfigure (and
+ *   re-key) the default VM.
+ * Silently dropping a parameter therefore RETARGETS the action, which is why the gate
+ * refuses instead. -ConfigBranch is not listed: it is conditional, and its own gate
+ * lives in checkInstanceSupport.
+ */
+const REQUIRED_INSTANCE_PARAMS = {
+  reprovision: ["VmHost", "HostAlias", "SshPort", "LocalKeyName"],
+  exportConfig: ["VmHost", "HostAlias", "SshPort", "LocalKeyName"],
+  reinstall: ["VmName"],
+  redownload: ["VmName"],
+  setCheckpoints: ["VmName"],
+};
+
+/** Human labels for the refusal messages (buildInvocation's own labels are built
+ *  inside the switch, which a refusal never reaches). */
+const ACTION_LABELS = {
+  reprovision: "Reprovision",
+  exportConfig: "Export config",
+  reinstall: "Reinstall",
+  redownload: "Redownload",
+  setCheckpoints: "Automatic checkpoints",
+};
+
+/**
+ * The config-sync branch Provision-AgentVM.ps1 DERIVES from a host alias — the mirror
+ * of Get-ConstructConfigBranchName (lib/AgentVm.Common.ps1): "agent-vm" (and an empty
+ * alias) -> "vm"; anything else -> "vm-<alias>" lowercased, with a leading "construct-"
+ * tolerated and stripped; a result the branch validator rejects falls back to "vm".
+ * Pure. Change it together with the PowerShell function.
+ */
+function derivedConfigBranch(hostAlias) {
+  const cs = configsync();
+  let alias = String(hostAlias == null ? "" : hostAlias).trim().toLowerCase();
+  if (!alias || alias === "agent-vm") return cs.DEFAULT_VM_BRANCH;
+  if (alias.indexOf("construct-") === 0) alias = alias.slice("construct-".length);
+  const branch = "vm-" + alias;
+  return cs.isValidVmBranch(branch) ? branch : cs.DEFAULT_VM_BRANCH;
+}
+
+/**
+ * The -ConfigBranch value an action must carry for this instance, or null when the
+ * destination would derive the very same branch on its own.
+ *
+ * Why it matters: ordinary JS config sync uses instance.configBranch verbatim, while
+ * Provision-AgentVM.ps1 derives its branch from -HostAlias. An instance with
+ * configBranch "vm-team" and hostAlias "work-vm" would be INITIALISED and synced by the
+ * provisioner on "vm-work-vm" while every panel tick used "vm-team" — one VM split
+ * across two host-config refs. Emitting nothing when the two agree keeps the common
+ * case (and the whole default path) byte-identical. Pure.
+ */
+function configBranchOverride(instance) {
+  if (!instance || instances.isDefaultInstance(instance)) return null;
+  const want = instance.configBranch;
+  // An unusable branch name is not an override to force onto the provisioner: the
+  // registry reader already refuses such an instance, and the sync engine falls back
+  // to the default branch rather than acting on it.
+  if (!want || !configsync().isValidVmBranch(want)) return null;
+  return want === derivedConfigBranch(instance.hostAlias) ? null : want;
+}
+
+/** The value each instance parameter carries, for one normalized instance. A null
+ *  means "nothing to emit" (only -ConfigBranch is ever conditional). */
+function instanceParamValue(param, instance) {
+  switch (param) {
+    case "VmHost": return instance.vmHost;
+    case "HostAlias": return instance.hostAlias;
+    case "SshPort": return String(instance.sshPort);
+    case "LocalKeyName": return instance.keyName;
+    case "VmName": return instance.vmName;
+    case "ConfigBranch": return configBranchOverride(instance);
+    default: return null;
+  }
+}
+
+/**
+ * The target-identity args for one action, as (flag, value) PAIRS. Returns [] — the
+ * zero-change path — for a missing instance and for the DEFAULT instance
+ * (instances.isDefaultInstance).
+ *
+ * `declared` is the version-skew filter: the subset of INSTANCE_PARAMS[action] the
+ * INSTALLED script actually declares (lifecycle.run computes it with
+ * scriptSupportsParam; tests pass it explicitly). `undefined` means "no probe was
+ * done" and emits the full set. Dropping a REQUIRED parameter here would retarget the
+ * action, so callers must run checkInstanceSupport first — buildInvocation does, and
+ * refuses; by the time this runs, everything required is present. Pure.
+ */
+function instanceArgPairs(action, instance, declared) {
+  if (!instance || instances.isDefaultInstance(instance)) return [];
+  const wanted = INSTANCE_PARAMS[action];
+  if (!wanted) return [];
+  const supported = Array.isArray(declared) ? declared : null;
+  const out = [];
+  for (const p of wanted) {
+    if (supported && supported.indexOf(p) < 0) continue;
+    const v = instanceParamValue(p, instance);
+    if (v != null && String(v) !== "") out.push({ flag: "-" + p, value: String(v) });
+  }
+  return out;
+}
+
+/** The same target-identity args as a flat token list. Pure. */
+function instanceArgs(action, instance, declared) {
+  return flattenArgPairs(instanceArgPairs(action, instance, declared));
+}
+
+/**
+ * May this action run against this instance, with the parameters the installed script
+ * declares? Returns null when it may, or a structured refusal { blocked: true, reason }
+ * when it may not — buildInvocation returns that verbatim and run() surfaces it.
+ *
+ * NEVER blocks the DEFAULT instance (or a missing one): that is the zero-change path,
+ * where no targeting is needed in the first place.
+ *
+ * Three gates, most fundamental first:
+ *   1. BACKEND — the host scripts drive the local Hyper-V only (drivers/index.js
+ *      lifecycleSupport); a rebuild of a remote instance would hit a local VM.
+ *   2. REQUIRED IDENTITY — an older script that doesn't declare a parameter would run
+ *      against ITS OWN defaults, i.e. the default VM (REQUIRED_INSTANCE_PARAMS).
+ *   3. CONFIG BRANCH — when an explicit branch is needed but -ConfigBranch can't be
+ *      passed, the provisioner would initialise and sync a DIFFERENT ref than the panel.
+ *
+ * `declared === undefined` means "no probe was done" (tests / direct callers): the
+ * version-skew gates are then skipped, exactly as instanceArgPairs emits the full set.
+ * Pure.
+ */
+function checkInstanceSupport(action, instance, declared) {
+  if (!instance || instances.isDefaultInstance(instance)) return null;
+  const label = ACTION_LABELS[action] || action;
+  const name = instance.name || "this instance";
+  const support = drivers().lifecycleSupport(instance.backend, action);
+  if (!support.ok) {
+    return { blocked: true, reason: `${label} can't run for instance "${name}": ${support.reason}` };
+  }
+  const supported = Array.isArray(declared) ? declared : null;
+  if (!supported) return null;
+  const required = REQUIRED_INSTANCE_PARAMS[action] || [];
+  const missing = required.filter((p) => supported.indexOf(p) < 0);
+  if (missing.length) {
+    return {
+      blocked: true,
+      reason: `${label} can't target instance "${name}": this Construct install's ` +
+        `${scriptForAction(action) || "host scripts"} doesn't accept ` +
+        missing.map((p) => "-" + p).join(", ") +
+        ", so the action would run against the DEFAULT VM. Update the Construct scripts first.",
+    };
+  }
+  const emitted = INSTANCE_PARAMS[action] || [];
+  if (configBranchOverride(instance) && emitted.indexOf("ConfigBranch") >= 0 &&
+      supported.indexOf("ConfigBranch") < 0) {
+    return {
+      blocked: true,
+      reason: `${label} can't target instance "${name}": its config-sync branch ` +
+        `"${instance.configBranch}" needs -ConfigBranch, which this install's ` +
+        `${scriptForAction(action) || "host scripts"} doesn't accept — the VM would be ` +
+        "initialised on a different branch than the panel syncs. Update the Construct scripts first.",
+    };
+  }
+  return null;
+}
+
+/**
+ * ARGUMENTS ARE BUILT AS (flag, value) PAIRS, not as a flat token list, and the flat
+ * `args` array every launcher already takes is derived from them. That structure is
+ * what lets buildCallCommand tell a parameter NAME from a VALUE without guessing:
+ * a registry value that happens to start with '-' (or carries `;`) must be quoted as
+ * data, never handed to PowerShell as syntax. `{ flag }` with no `value` is a switch.
+ */
+function flattenArgPairs(pairs) {
+  const out = [];
+  for (const p of (pairs || [])) {
+    out.push(p.flag);
+    if ("value" in p) out.push(p.value);
+  }
+  return out;
+}
+
 /**
  * Build the script + PowerShell args for an action from the settings form shape.
  * Pure. `opts`: { settings, backupDir, backupMode }.
@@ -45,6 +277,17 @@ function normalizeBackupMode(bm) {
  *   reinstall    -> Auto-Install.ps1 -Action reinstall  -BackupMode <mode>
  *   redownload   -> Auto-Install.ps1 -Action redownload -BackupMode <mode>
  * Returns { script, args, destructive, elevate, label } or null for an unknown action.
+ *
+ * `opts.instance` (optional) is the ACTIVE INSTANCE (the normalized object from
+ * src/instances.js). For a non-default instance the action's target-identity args are
+ * emitted (see instanceArgs / INSTANCE_PARAMS), gated by `opts.instanceParams` — the
+ * parameters the installed script really declares. For the default instance (and when
+ * no instance is passed at all) NOTHING extra is emitted and argv is byte-identical to
+ * what shipped before instances existed.
+ *
+ * A non-default instance the installed scripts (or this build's drivers) cannot
+ * TARGET yields a structured refusal `{ blocked: true, reason }` instead of an
+ * invocation — never a silently retargeted one. See checkInstanceSupport.
  *
  * The agent password is deliberately NOT collected, stored, or passed (it would be
  * visible on the process command line and is only a manual-fallback login — normal
@@ -55,26 +298,47 @@ function normalizeBackupMode(bm) {
  */
 function buildInvocation(action, opts = {}) {
   const s = opts.settings || {};
-  const args = [];
+  // Fail CLOSED before building anything: a non-default instance the installed scripts
+  // can't target must be refused, not silently pointed at the default VM.
+  const blocked = checkInstanceSupport(action, opts.instance, opts.instanceParams);
+  if (blocked) return blocked;
+  const parts = [];
+  // Is this invocation TARGETED at a specific (non-default) VM? Only then is the pair
+  // spec attached — see buildCallCommand: quoting values structurally CHANGES the
+  // command string for a value that starts with '-' (a project literally named
+  // "-NoProfile"), and on the default path that string must stay byte-identical to the
+  // pre-instances build. Registry-sourced values only ever ride a targeted invocation,
+  // which is where the quoting matters.
+  const targeted = !!(opts.instance && !instances.isDefaultInstance(opts.instance));
+  const done = (script, extra) => {
+    const inv = { script, args: flattenArgPairs(parts), ...extra };
+    if (targeted) inv.argSpec = parts.slice();
+    return inv;
+  };
+  const addSwitch = (flag) => { parts.push({ flag }); };
+  const addPair = (flag, value) => { parts.push({ flag, value }); };
   // Panel-launched scripts skip their end-of-run "Press Enter" pause: the dashboard
   // shows the result (and auto-refreshes), so the console just closes when done. In
   // debug the launcher still keeps it open via -NoExit. A direct PowerShell run (no
   // -FromPanel) keeps the pause so the window stays readable. Passed as a param (not
   // an env var) so it survives the UAC boundary for the elevated reinstall/redownload.
-  args.push("-FromPanel");
-  const pushPair = (flag, val) => { if (val != null && String(val).trim() !== "") args.push(flag, String(val)); };
-  const pushBool = (flag, val) => { if (typeof val === "boolean") args.push(flag, val ? "true" : "false"); };
+  addSwitch("-FromPanel");
+  // Target identity for a non-default instance ([] for the default one — the
+  // zero-change path). Named parameters, so their position in argv is irrelevant.
+  for (const p of instanceArgPairs(action, opts.instance, opts.instanceParams)) parts.push(p);
+  const pushPair = (flag, val) => { if (val != null && String(val).trim() !== "") addPair(flag, String(val)); };
+  const pushBool = (flag, val) => { if (typeof val === "boolean") addPair(flag, val ? "true" : "false"); };
   // The control panel's project selection (persisted `projects`), so the script uses
   // it instead of re-prompting in the console. Only when a selection exists — with none
   // persisted, let the script keep its own default/prompt rather than force "default".
   const pushProjects = () => {
     const p = Array.isArray(opts.projects) ? opts.projects.filter(Boolean) : [];
-    if (p.length) args.push("-Projects", p.join(","));
+    if (p.length) addPair("-Projects", p.join(","));
   };
 
   switch (action) {
     case "reprovision":
-      args.push("-Action", "provision");
+      addPair("-Action", "provision");
       pushProjects();
       pushPair("-GitUserName", s.gitName);
       pushPair("-GitEmail", s.gitEmail);
@@ -89,16 +353,18 @@ function buildInvocation(action, opts = {}) {
       if (opts.supportsT3CodeLimitResume !== false) pushBool("-T3CodeLimitResume", s.t3codeLimitResume);
       // Launched from the panel: don't prompt for the SMB drive letter etc. (still pauses
       // at the end so output is readable — -NonInteractive is NOT -Auto).
-      args.push("-NonInteractive");
-      return { script: PROVISION, args, destructive: false, elevate: false, label: "Reprovision" };
+      addSwitch("-NonInteractive");
+      return done(PROVISION, { destructive: false, elevate: false, label: "Reprovision" });
 
     case "exportConfig":
-      args.push("-Action", "export", "-BackupDir", opts.backupDir);
-      return { script: PROVISION, args, destructive: false, elevate: false, label: "Export config" };
+      addPair("-Action", "export");
+      addPair("-BackupDir", opts.backupDir);
+      return done(PROVISION, { destructive: false, elevate: false, label: "Export config" });
 
     case "reinstall":
     case "redownload": {
-      args.push("-Action", action, "-BackupMode", normalizeBackupMode(opts.backupMode));
+      addPair("-Action", action);
+      addPair("-BackupMode", normalizeBackupMode(opts.backupMode));
       pushProjects(); // Auto-Install forwards -Projects to Provision (-Auto gates its prompts)
       pushPair("-VmMemoryGB", s.ram);
       pushPair("-VmDiskGB", s.disk);
@@ -124,10 +390,10 @@ function buildInvocation(action, opts = {}) {
       pushBool("-T3Code", s.t3code);
       if (opts.supportsT3CodeChannel !== false) pushPair("-T3CodeChannel", s.t3codeChannel);
       if (opts.supportsT3CodeLimitResume !== false) pushBool("-T3CodeLimitResume", s.t3codeLimitResume);
-      return {
-        script: AUTO_INSTALL, args, destructive: true, elevate: true,
+      return done(AUTO_INSTALL, {
+        destructive: true, elevate: true,
         label: action === "redownload" ? "Redownload" : "Reinstall",
-      };
+      });
     }
 
     // Apply the automatic-checkpoint policy to the EXISTING VM, right now. Hyper-V
@@ -141,11 +407,11 @@ function buildInvocation(action, opts = {}) {
       // than defaulted — defaulting would silently pick the destructive direction.
       if (typeof opts.enabled !== "boolean") return null;
       const enabled = opts.enabled;
-      args.push("-Enabled", enabled ? "true" : "false");
-      return {
-        script: CHECKPOINTS, args, destructive: false, elevate: true,
+      addPair("-Enabled", enabled ? "true" : "false");
+      return done(CHECKPOINTS, {
+        destructive: false, elevate: true,
         label: enabled ? "Enable automatic checkpoints" : "Disable automatic checkpoints",
-      };
+      });
     }
 
     default:
@@ -235,6 +501,41 @@ function scriptSupportsT3CodeChannel(scriptsDir, action) {
   return check(PROVISION) && check(AUTO_INSTALL);
 }
 
+/**
+ * Does `<scriptsDir>/<file>` DECLARE the parameter `$<name>`? The same
+ * comment-stripped declaration test the scriptSupports* gates use, generalized so the
+ * per-instance target arguments can be probed without one function per parameter.
+ * Unreadable/absent file -> false (drop the argument; the script's own default stands).
+ */
+function scriptSupportsParam(scriptsDir, file, name) {
+  if (!scriptsDir || !file || !name) return false;
+  let txt;
+  try { txt = fs.readFileSync(path.join(scriptsDir, file), "utf8"); } catch (_) { return false; }
+  const code = txt.replace(/<#[\s\S]*?#>/g, "").replace(/^[ \t]*#.*$/gm, "");
+  return new RegExp("\\$" + name + "\\s*(?:=|,|\\)|$)", "im").test(code);
+}
+
+/** The script an action launches (so the instance-arg probe reads the right file). */
+function scriptForAction(action) {
+  if (action === "reprovision" || action === "exportConfig") return PROVISION;
+  if (action === "reinstall" || action === "redownload") return AUTO_INSTALL;
+  if (action === "setCheckpoints") return CHECKPOINTS;
+  return null;
+}
+
+/**
+ * The subset of an action's instance parameters that the INSTALLED script declares —
+ * the version-skew gate for per-instance targeting. A scripts dir that predates B1
+ * yields [] and the action runs against the script's own defaults (which is exactly
+ * today's single-VM behaviour) rather than failing to bind.
+ */
+function instanceParamSupport(scriptsDir, action) {
+  const wanted = INSTANCE_PARAMS[action];
+  const file = scriptForAction(action);
+  if (!wanted || !file) return [];
+  return wanted.filter((p) => scriptSupportsParam(scriptsDir, file, p));
+}
+
 /** A PowerShell single-quoted string literal (embedded quotes doubled). */
 function psSingleQuote(s) { return "'" + String(s).replace(/'/g, "''") + "'"; }
 
@@ -293,12 +594,33 @@ function buildOuterCommand(childCommandLine, opts = {}) {
  * The PowerShell call-operator invocation `& '<script>' <args>` used for the
  * NON-elevated single-console launch: the script runs directly in the console `start`
  * allocates (no inner Start-Process → no second window). Parameter NAMES stay bare and
- * VALUES are single-quoted; our values never start with '-', so the /^-/ test cleanly
- * splits names from values. All target params are [string]/[int]/[switch], so a quoted
- * string value binds (incl. [int] coercion, verified) and a bare -Switch sets it. Pure.
+ * every VALUE is single-quoted. All target params are [string]/[int]/[switch], so a
+ * quoted string value binds (incl. [int] coercion, verified) and a bare -Switch sets it.
+ *
+ * WHICH TOKEN IS A NAME is decided STRUCTURALLY when an `argSpec` is given — the
+ * (flag, value) pairs the args were built from. Values reaching this builder come from
+ * the instance registry, which a user hand-edits: a vmHost of `-x; Start-Process calc; #`
+ * is a valid JSON string, and emitting a leading-dash value bare would hand PowerShell
+ * a fresh command to run. With the spec, a value is quoted whatever it starts with.
+ *
+ * WITHOUT a spec the ORIGINAL rule applies verbatim: a token starting with '-' is a
+ * name, everything else is quoted. That is not a nicety — it is the zero-change bar.
+ * buildInvocation attaches a spec ONLY for a non-default instance, so the command
+ * string an install with no registry sends is byte-for-byte what it always was, down
+ * to a value that itself begins with '-' (a project literally named "-NoProfile" is
+ * still emitted bare there, exactly as before). Pure.
  */
-function buildCallCommand(scriptPath, args) {
-  const toks = (args || []).map((a) => /^-/.test(String(a)) ? String(a) : psSingleQuote(a));
+function buildCallCommand(scriptPath, args, argSpec) {
+  let toks;
+  if (Array.isArray(argSpec)) {
+    toks = [];
+    for (const p of argSpec) {
+      toks.push(String(p.flag));
+      if ("value" in p) toks.push(psSingleQuote(p.value));
+    }
+  } else {
+    toks = (args || []).map((a) => /^-/.test(String(a)) ? String(a) : psSingleQuote(a));
+  }
   return "& " + psSingleQuote(scriptPath) + (toks.length ? " " + toks.join(" ") : "");
 }
 
@@ -328,7 +650,7 @@ function buildHostLaunch(scriptPath, args, opts = {}) {
   const keepOpen = !!opts.keepOpen; // debug: keep the console open on exit (errors stay readable)
   const command = elevate
     ? buildOuterCommand(buildChildCommandLine(scriptPath, args, { keepOpen }), opts) // -NoExit rides the elevated child
-    : buildCallCommand(scriptPath, args);                                             // & 'script' … (this console)
+    : buildCallCommand(scriptPath, args, opts.argSpec);                              // & 'script' … (this console)
   const encoded = Buffer.from(command, "utf16le").toString("base64");
   // -NonInteractive only for the elevated launcher (it just fires Start-Process). The
   // non-elevated console RUNS the script here, so it must stay interactive for the
@@ -389,7 +711,9 @@ function hostLaunchSpawnOptions(cwd, extraEnv) {
  * Spawn a host console running <scriptsDir>/<script> with the given args, opening
  * a new (optionally elevated) window. Shared by the lifecycle actions and the
  * Construct update refresh. Guards off-Windows. `opts`:
- * { scriptsDir, script, args, elevate, label, env? }. `env` is merged into the launched
+ * { scriptsDir, script, args, argSpec?, elevate, label, env? }. `argSpec` is
+ * buildInvocation's (flag, value) pair list — pass it whenever there is one, so the
+ * non-elevated command string quotes values structurally. `env` is merged into the launched
  * process environment (reaches the script). `opts._spawn`/`_vscode`/`_platform` are test
  * seams (default child_process.spawn / the real vscode / process.platform). Returns true
  * if spawned.
@@ -406,7 +730,8 @@ function launchHostScript(opts) {
     return false;
   }
   const scriptPath = path.join(opts.scriptsDir, opts.script);
-  const { file, spawnArgs, command } = buildHostLaunch(scriptPath, opts.args || [], { elevate: !!opts.elevate, keepOpen: debug });
+  const { file, spawnArgs, command } = buildHostLaunch(scriptPath, opts.args || [],
+    { elevate: !!opts.elevate, keepOpen: debug, argSpec: opts.argSpec });
   // Deterministic record of exactly WHAT we launch (reveals version skew / wrong paths /
   // bad args). The decoded command shows the real script path + args reaching powershell.
   log(`launch ${opts.label}: elevate=${!!opts.elevate} debug=${debug} script=${scriptPath}`);
@@ -429,19 +754,26 @@ function launchHostScript(opts) {
 }
 
 /**
- * Run a lifecycle action. `opts`: { scriptsDir, backupMode?, projects?, enabled?, env? }.
+ * Run a lifecycle action. `opts`: { scriptsDir, backupMode?, projects?, enabled?, env?,
+ * instance? }. `instance` is the active instance (src/instances.js); omitted or default
+ * => the launched argv is byte-identical to before instances existed.
  * scriptsDir must be pre-resolved by the caller (it owns the construct.scriptsDir
  * setting); `enabled` is the setCheckpoints on/off. The destructive actions confirm
  * first; everything launches a new host console.
+ *
+ * Returns FALSE when nothing was (or will be) launched — not on Windows, no scripts
+ * dir, an unbuildable action, or a REFUSED one (a non-default instance this install
+ * can't target; the refusal is shown to the user here). True means the launch is under
+ * way (possibly behind the destructive-action confirmation).
  */
 function run(action, opts = {}) {
   const vscode = vsc();
   if (process.platform !== "win32") {
     vscode.window.showWarningMessage("Construct lifecycle actions run on the Windows host, which isn't available here.");
-    return;
+    return false;
   }
   const scriptsDir = opts.scriptsDir;
-  if (!scriptsDir) return; // caller warns when it can't resolve the scripts dir
+  if (!scriptsDir) return false; // caller warns when it can't resolve the scripts dir
   // Prefer the caller-supplied selection (the extension computes the EFFECTIVE set —
   // saved selection, else the VM's current projects); fall back to the saved selection.
   let projects = Array.isArray(opts.projects) ? opts.projects : null;
@@ -452,12 +784,22 @@ function run(action, opts = {}) {
     backupMode: opts.backupMode,
     projects,
     enabled: opts.enabled,
+    instance: opts.instance,
+    instanceParams: instanceParamSupport(scriptsDir, action),
     supportsCheckpoints: scriptSupportsCheckpoints(scriptsDir),
     supportsT3CodeChannel: scriptSupportsT3CodeChannel(scriptsDir, action),
     supportsT3CodeLimitResume: scriptSupportsT3CodeLimitResume(scriptsDir, action),
     supportsOpenCodeBackgroundWatcher: scriptSupportsOpenCodeBackgroundWatcher(scriptsDir, action),
   });
-  if (!inv) return;
+  // A refusal, not an invocation: this install cannot TARGET the active instance, and
+  // running anyway would hit the default VM. Say which and stop — never fall back.
+  if (inv && inv.blocked) {
+    const log = _log || (() => {});
+    log(`lifecycle ${action}: refused — ${inv.reason}`);
+    vscode.window.showErrorMessage(inv.reason);
+    return false;
+  }
+  if (!inv) return false;
   // Honesty gate: when the scripts are too old to take -AutomaticCheckpoints we drop the
   // flag (see buildInvocation) — but an old Create-AgentVM.ps1 hardcodes automatic
   // checkpoints ON, so silently rebuilding would produce the OPPOSITE of the saved
@@ -483,12 +825,20 @@ function run(action, opts = {}) {
     if (inv.destructive) {
       try { host.saveAppliedAutoCheckpoints(scriptsDir, null); } catch (_) { /* best-effort */ }
     }
-    launchHostScript({ scriptsDir, script: inv.script, args: inv.args, elevate: inv.elevate, label: inv.label, env: opts.env });
+    launchHostScript({
+      scriptsDir, script: inv.script, args: inv.args, argSpec: inv.argSpec,
+      elevate: inv.elevate, label: inv.label, env: opts.env,
+    });
   });
+  return true;
 }
 
 module.exports = {
   PROVISION, AUTO_INSTALL, CHECKPOINTS, BACKUP_DIR_NAME,
+  INSTANCE_PARAMS, REQUIRED_INSTANCE_PARAMS, ACTION_LABELS,
+  instanceArgs, instanceArgPairs, flattenArgPairs, checkInstanceSupport,
+  derivedConfigBranch, configBranchOverride,
+  scriptSupportsParam, scriptForAction, instanceParamSupport,
   normalizeBackupMode, buildInvocation, scriptSupportsCheckpoints, scriptSupportsT3CodeChannel,
   scriptSupportsT3CodeLimitResume,
   scriptSupportsOpenCodeBackgroundWatcher,

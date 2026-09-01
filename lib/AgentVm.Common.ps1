@@ -2664,6 +2664,103 @@ function Ensure-ConstructGit {
     return $false
 }
 
+# ── VM-side branch name (one config repo, one branch per VM instance) ────────
+# The default instance keeps the historical branch name "vm", so a single-VM
+# install never sees a new ref. Additional instances get "vm-<instance>"; a
+# slash form ("vm/<name>") is deliberately NOT used because git cannot hold
+# refs/heads/vm and refs/heads/vm/<x> at the same time.
+
+$script:CONSTRUCT_DEFAULT_VM_BRANCH = "vm"
+
+# Names that are syntactically fine but semantically wrong here, compared
+# case-insensitively because Windows' loose-ref files are case-insensitive:
+#   * 'main' is the host-truth branch -- using it as an instance branch would
+#     merge main into itself and destroy the isolation this parameter exists
+#     for (same for 'master', the other conventional trunk name);
+#   * git's pseudo-refs ('HEAD' and friends) cannot be created as branches
+#     ('git branch HEAD' is refused) yet READ specially -- a bare HEAD resolves
+#     to the checked-out branch, so a tick would silently sync against main
+#     while writing to a bogus refs/heads/HEAD.
+# An explicit list, not a shape rule: an instance legitimately named 'WORK'
+# must get its own 'WORK' branch rather than silently sharing 'vm'.
+$script:CONSTRUCT_RESERVED_VM_BRANCHES = @(
+    "main", "master",
+    "head", "fetch_head", "orig_head", "merge_head", "cherry_pick_head",
+    "revert_head", "bisect_head", "rebase_head", "auto_merge", "stash")
+
+function Test-ConstructVmBranchName {
+    <#
+        .SYNOPSIS
+        True when the name is safe to use as refs/heads/<name> AND safe to hand
+        to git as a BARE ref operand: starts alphanumeric, then alphanumerics /
+        dot / underscore / hyphen, no '..', no '.lock' suffix (git reserves it),
+        and not one of $script:CONSTRUCT_RESERVED_VM_BRANCHES. Pure; mirrors
+        isValidVmBranch in extension/src/configsync.js.
+    #>
+    [CmdletBinding()]
+    param([AllowEmptyString()][AllowNull()][string]$Name)
+    if ([string]::IsNullOrEmpty($Name)) { return $false }
+    if ($Name -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') { return $false }
+    if ($Name.Contains("..")) { return $false }
+    if ($Name.EndsWith(".lock")) { return $false }
+    $lower = $Name.ToLowerInvariant()
+    if ($script:CONSTRUCT_RESERVED_VM_BRANCHES -contains $lower) { return $false }
+    # Any other spelling of the default branch is the SAME loose-ref file on
+    # Windows (refs/heads/VM == refs/heads/vm), so it would hijack the default
+    # instance's store. Only the exact default name is allowed.
+    if ($lower -eq $script:CONSTRUCT_DEFAULT_VM_BRANCH -and $Name -cne $script:CONSTRUCT_DEFAULT_VM_BRANCH) { return $false }
+    return $true
+}
+
+function Resolve-ConstructVmBranch {
+    <#
+        .SYNOPSIS
+        Resolve the branch a sync tick works on. Empty/absent means the default
+        instance ("vm"); an unusable name degrades to "vm" so a broken registry
+        entry can never stop config sync. Pure.
+    #>
+    [CmdletBinding()]
+    param([AllowEmptyString()][AllowNull()][string]$VmBranch)
+    if ([string]::IsNullOrEmpty($VmBranch)) { return $script:CONSTRUCT_DEFAULT_VM_BRANCH }
+    if (Test-ConstructVmBranchName -Name $VmBranch) { return $VmBranch }
+    return $script:CONSTRUCT_DEFAULT_VM_BRANCH
+}
+
+function Get-ConstructConfigBranchName {
+    <#
+        .SYNOPSIS
+        Derive the config-sync branch for an SSH host alias: "agent-vm" (the
+        default instance) -> "vm"; anything else -> "vm-<alias>", lowercased.
+        Pure -- Provision-AgentVM.ps1 uses it when -ConfigBranch is not given.
+
+        A non-default instance's alias IS its bare instance name ("work" ->
+        "vm-work"). A leading "construct-" is tolerated and stripped first, so
+        the older "construct-<name>" alias convention maps to the same branch as
+        the bare name and no VM changes branches when its alias is rewritten.
+
+        Lowercasing and that prefix strip are the ONLY transformations: the
+        alias is never "cleaned up" by substituting characters, because that
+        would map two different aliases ("work/one" and "work-one") onto one
+        branch and silently share a store. Aliases are expected to follow the
+        instance-name rule (^[a-z0-9][a-z0-9-]{0,39}$); anything that does not
+        yield a usable branch name falls back to the default branch.
+
+        Pure -- returns a value and writes to no other stream. A non-default
+        alias always derives "vm-<name>", so a caller that gets the default
+        branch back for a non-default alias knows the derivation fell back and
+        owns whatever it wants to report (Provision-AgentVM.ps1 warns).
+    #>
+    [CmdletBinding()]
+    param([AllowEmptyString()][AllowNull()][string]$HostAlias)
+    $alias = ""
+    if ($null -ne $HostAlias) { $alias = $HostAlias.Trim().ToLowerInvariant() }
+    if (-not $alias -or $alias -eq "agent-vm") { return $script:CONSTRUCT_DEFAULT_VM_BRANCH }
+    if ($alias.StartsWith("construct-")) { $alias = $alias.Substring("construct-".Length) }
+    $branch = "vm-$alias"
+    if (-not (Test-ConstructVmBranchName -Name $branch)) { return $script:CONSTRUCT_DEFAULT_VM_BRANCH }
+    return $branch
+}
+
 # ── Git repo initialisation ──────────────────────────────────────────────────
 
 function Set-ConstructConfigRepoHardening {
@@ -2714,15 +2811,22 @@ function Set-ConstructConfigRepoHardening {
 
 function Initialize-ConstructConfigRepo {
     <#
-        Lazy git init per D1: create a git repo in the config dir with main + vm
-        branches if it does not exist yet. Optionally seeds from -SeedDir (shipped
-        projects). Returns $true when the repo is ready. Idempotent.
+        Lazy git init per D1: create a git repo in the config dir with main + the
+        instance's VM branch if it does not exist yet. Optionally seeds from
+        -SeedDir (shipped projects). Returns $true when the repo is ready.
+        Idempotent.
+
+        -VmBranch names the VM-side branch (default "vm" = the default
+        instance); several instances share one repo, one branch each.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$ConfigDir,
-        [string]$SeedDir
+        [string]$SeedDir,
+        [string]$VmBranch = "vm"
     )
+
+    $VmBranch = Resolve-ConstructVmBranch -VmBranch $VmBranch
 
     if (-not (Test-ConstructGitAvailable)) { return $false }
 
@@ -2764,14 +2868,14 @@ function Initialize-ConstructConfigRepo {
         } finally {
             Remove-Item -LiteralPath $probeErrFile -ErrorAction SilentlyContinue
         }
-        # Ensure the vm branch exists, and re-apply the repo-local hardening
-        # every run so a repo created before this fix is repaired
+        # Ensure the instance's VM branch exists, and re-apply the repo-local
+        # hardening every run so a repo created before this fix is repaired
         # (signing/hooks off, LF pinned).
         $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
         try {
-            $null = & git -C $ConfigDir rev-parse --verify refs/heads/vm 2>$null
+            $null = & git -C $ConfigDir rev-parse --verify "refs/heads/$VmBranch" 2>$null
             if ($LASTEXITCODE -ne 0) {
-                & git -C $ConfigDir branch vm 2>$null | Out-Null
+                & git -C $ConfigDir branch $VmBranch 2>$null | Out-Null
             }
         } catch { }
         Set-ConstructConfigRepoHardening -ConfigDir $ConfigDir
@@ -2817,7 +2921,7 @@ function Initialize-ConstructConfigRepo {
         }
         & git -C $ConfigDir @gitArgs commit --allow-empty -m "initial config" 2>$null | Out-Null
         & git -C $ConfigDir branch -M main 2>$null | Out-Null
-        & git -C $ConfigDir branch vm 2>$null | Out-Null
+        & git -C $ConfigDir branch $VmBranch 2>$null | Out-Null
     } catch { }
     $ErrorActionPreference = $prev
 
@@ -3669,6 +3773,11 @@ function Invoke-ConstructConfigSync {
         finish (the provisioning pre-wipe sync should run, not silently skip),
         then gives up with LockBusy=$true rather than racing. Everything else
         is delegated to Invoke-ConstructConfigSyncLocked.
+
+        -VmBranch selects the VM-side branch inside the one host config repo
+        (default "vm" = the default instance; "vm-<instance>" otherwise). The
+        lock and the provisioning intent stay REPO-wide: git operations on one
+        repo must serialize regardless of which branch they touch.
     #>
     [CmdletBinding()]
     param(
@@ -3679,6 +3788,7 @@ function Invoke-ConstructConfigSync {
         [switch]$SeedOnly,
         [scriptblock]$SshReadInvoker,
         [scriptblock]$SshWriteInvoker,
+        [string]$VmBranch = "vm",
         [int]$LockWaitSeconds = 90
     )
 
@@ -3738,10 +3848,12 @@ function Invoke-ConstructConfigSync {
 function Invoke-ConstructConfigSyncLocked {
     <#
         The core D6 sync tick body: commit host changes, read the VM store,
-        commit a VM snapshot, merge, guarded write-back, advance vm ref. With
-        -SeedOnly (D13) just seed the VM with main profiles. Degraded mode (no
-        git): additive seed only. Callers go through Invoke-ConstructConfigSync
+        commit a VM snapshot, merge, guarded write-back, advance the VM ref.
+        With -SeedOnly (D13) just seed the VM with main profiles. Degraded mode
+        (no git): additive seed only. Callers go through Invoke-ConstructConfigSync
         (the lock); tests may call this directly to bypass it.
+
+        -VmBranch names this instance's VM-side branch (default "vm").
     #>
     [CmdletBinding()]
     param(
@@ -3751,11 +3863,20 @@ function Invoke-ConstructConfigSyncLocked {
         [string]$AutoResolve,
         [switch]$SeedOnly,
         [scriptblock]$SshReadInvoker,
-        [scriptblock]$SshWriteInvoker
+        [scriptblock]$SshWriteInvoker,
+        [string]$VmBranch = "vm"
     )
 
     $warnings = New-Object System.Collections.Generic.List[string]
     $skippedInvalid = @()
+
+    # Every ref this tick touches is derived from $VmBranch; an unusable name
+    # degrades to the default branch with a warning instead of failing the tick.
+    $resolvedBranch = Resolve-ConstructVmBranch -VmBranch $VmBranch
+    if ($resolvedBranch -cne $VmBranch) {
+        $warnings.Add("Invalid config-sync branch name '$VmBranch'; falling back to '$resolvedBranch'.")
+    }
+    $VmBranch = $resolvedBranch
 
     $gitArgs = @("-c", "user.name=The Construct", "-c", "user.email=construct@construct.local", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=")
     $hasGit = Test-ConstructGitAvailable
@@ -3817,7 +3938,7 @@ function Invoke-ConstructConfigSyncLocked {
     }
 
     # ── Ensure repo is initialised ────────────────────────────────────────────
-    $repoReady = Initialize-ConstructConfigRepo -ConfigDir $ConfigDir
+    $repoReady = Initialize-ConstructConfigRepo -ConfigDir $ConfigDir -VmBranch $VmBranch
     if (-not $repoReady) {
         $warnings.Add("Could not initialise config repo.")
         return [pscustomobject]@{
@@ -3882,7 +4003,7 @@ function Invoke-ConstructConfigSyncLocked {
                 $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
                 try {
                     & git -C $ConfigDir @gitArgs add -A 2>$null | Out-Null
-                    $commitMsg = if ($AutoResolve) { "auto-resolve ($AutoResolve)" } else { "merge vm" }
+                    $commitMsg = if ($AutoResolve) { "auto-resolve ($AutoResolve)" } else { "merge $VmBranch" }
                     & git -C $ConfigDir @gitArgs commit -m $commitMsg 2>$null | Out-Null
                 } catch { }
                 $ErrorActionPreference = $prev
@@ -3982,7 +4103,7 @@ function Invoke-ConstructConfigSyncLocked {
 
         $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
         try {
-            $vmTreeFiles = & git -C $ConfigDir ls-tree --name-only vm -- projects/ 2>$null
+            $vmTreeFiles = & git -C $ConfigDir ls-tree --name-only $VmBranch -- projects/ 2>$null
             if ($vmTreeFiles) { $vmTreeEmpty = $false }
         } catch { }
         $ErrorActionPreference = $prev
@@ -4023,7 +4144,7 @@ function Invoke-ConstructConfigSyncLocked {
                 # one side instead of performing a real three-way merge.
                 $prev2 = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
                 try {
-                    & git -C $ConfigDir update-ref refs/heads/vm refs/heads/main 2>$null | Out-Null
+                    & git -C $ConfigDir update-ref "refs/heads/$VmBranch" refs/heads/main 2>$null | Out-Null
                 } catch { }
                 $ErrorActionPreference = $prev2
             }
@@ -4071,12 +4192,12 @@ function Invoke-ConstructConfigSyncLocked {
         $vmTipCount = 0
         $prevMd = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
         try {
-            $vmTipCount = @(& git -C $ConfigDir ls-tree --name-only vm -- projects/ 2>$null |
+            $vmTipCount = @(& git -C $ConfigDir ls-tree --name-only $VmBranch -- projects/ 2>$null |
                             Where-Object { $_ }).Count
         } catch { }
         $ErrorActionPreference = $prevMd
         if ($vmTipCount -gt 0) {
-            $warnings.Add("VM store has no valid profiles but the vm branch has ${vmTipCount}; refusing to propagate a mass deletion (delete profiles individually if intended).")
+            $warnings.Add("VM store has no valid profiles but the $VmBranch branch has ${vmTipCount}; refusing to propagate a mass deletion (delete profiles individually if intended).")
             # ...but do NOT stall (mirrors syncTickLocked in configsync.js): an
             # existing-but-empty store is, in the field, a rebuilt VM whose dir
             # provisioning recreated before the first seed -- returning here on
@@ -4126,7 +4247,7 @@ function Invoke-ConstructConfigSyncLocked {
         $savedIndex = $env:GIT_INDEX_FILE
         try {
             $env:GIT_INDEX_FILE = $tmpIndex
-            & git -C $ConfigDir read-tree vm 2>$null | Out-Null
+            & git -C $ConfigDir read-tree $VmBranch 2>$null | Out-Null
 
             # Names read from the VM but SKIPPED (invalid) or RESERVED must NOT be
             # read as deletions: an invalid file is skipped and 'never enters the
@@ -4187,7 +4308,7 @@ function Invoke-ConstructConfigSyncLocked {
                 } else {
                     $env:GIT_INDEX_FILE = $savedIndex
                 }
-                $vmTipTree = (& git -C $ConfigDir rev-parse "vm^{tree}" 2>$null)
+                $vmTipTree = (& git -C $ConfigDir rev-parse "$VmBranch^{tree}" 2>$null)
                 $env:GIT_INDEX_FILE = $origIdx
                 if ($vmTipTree) { $vmTipTree = "$vmTipTree".Trim() }
                 if ($newTree -ne $vmTipTree) {
@@ -4198,13 +4319,13 @@ function Invoke-ConstructConfigSyncLocked {
                     } else {
                         $env:GIT_INDEX_FILE = $savedIndex
                     }
-                    $vmTip = (& git -C $ConfigDir rev-parse vm 2>$null)
+                    $vmTip = (& git -C $ConfigDir rev-parse $VmBranch 2>$null)
                     $env:GIT_INDEX_FILE = $origIdx2
                     if ($vmTip) { $vmTip = "$vmTip".Trim() }
-                    $newCommit = (& git -C $ConfigDir @gitArgs commit-tree $newTree -p $vmTip -m "vm sync" 2>$null)
+                    $newCommit = (& git -C $ConfigDir @gitArgs commit-tree $newTree -p $vmTip -m "$VmBranch sync" 2>$null)
                     if ($newCommit) {
                         $newCommit = "$newCommit".Trim()
-                        & git -C $ConfigDir update-ref refs/heads/vm $newCommit 2>$null | Out-Null
+                        & git -C $ConfigDir update-ref "refs/heads/$VmBranch" $newCommit 2>$null | Out-Null
                         $vmCommitted = $true
                     }
                 }
@@ -4224,7 +4345,7 @@ function Invoke-ConstructConfigSyncLocked {
     }
     $ErrorActionPreference = $prev
 
-    # ── Step 6: Merge vm into main ────────────────────────────────────────────
+    # ── Step 6: Merge the VM branch into main ─────────────────────────────────
     $merged = $false
     $conflict = $false
     $blocked = $false
@@ -4234,18 +4355,18 @@ function Invoke-ConstructConfigSyncLocked {
     $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
     try {
         $mainTree = (& git -C $ConfigDir rev-parse "main^{tree}" 2>$null)
-        $vmTree   = (& git -C $ConfigDir rev-parse "vm^{tree}" 2>$null)
+        $vmTree   = (& git -C $ConfigDir rev-parse "$VmBranch^{tree}" 2>$null)
         if ($mainTree) { $mainTree = "$mainTree".Trim() }
         if ($vmTree)   { $vmTree   = "$vmTree".Trim() }
 
         if ($mainTree -eq $vmTree) { $needsMerge = $false }
         if ($needsMerge) {
-            & git -C $ConfigDir merge-base --is-ancestor vm main 2>$null
+            & git -C $ConfigDir merge-base --is-ancestor $VmBranch main 2>$null
             if ($LASTEXITCODE -eq 0) { $needsMerge = $false }
         }
 
         if ($needsMerge) {
-            & git -C $ConfigDir merge --no-ff --no-commit vm 2>$null | Out-Null
+            & git -C $ConfigDir merge --no-ff --no-commit $VmBranch 2>$null | Out-Null
             $mergeExitCode = $LASTEXITCODE
 
             if ($mergeExitCode -ne 0) {
@@ -4281,7 +4402,7 @@ function Invoke-ConstructConfigSyncLocked {
                     }
                 }
                 if ($gateOk) {
-                    & git -C $ConfigDir @gitArgs commit -m "merge vm" 2>$null | Out-Null
+                    & git -C $ConfigDir @gitArgs commit -m "merge $VmBranch" 2>$null | Out-Null
                     if ($LASTEXITCODE -eq 0) {
                         $merged = $true
                     } else {
@@ -4365,7 +4486,7 @@ function Invoke-ConstructConfigSyncLocked {
         $wb = Write-ConstructVmStore -VmHost $VmHost -Ops $writeOps -SshInvoker $SshWriteInvoker
     }
 
-    # ── Step 8: Advance vm ref (D6.8) ───────────────────────────────────────────
+    # ── Step 8: Advance the VM ref (D6.8) ───────────────────────────────────────
     # Advance vm to main ONLY when the merge committed AND write-back actually
     # ran successfully (writeOps empty means nothing to write = success; or
     # Write-ConstructVmStore returned non-null). Without this guard, a failed
@@ -4378,7 +4499,7 @@ function Invoke-ConstructConfigSyncLocked {
     if (($merged -or -not $needsMerge) -and $writeBackRan) {
         $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
         try {
-            & git -C $ConfigDir update-ref refs/heads/vm refs/heads/main 2>$null | Out-Null
+            & git -C $ConfigDir update-ref "refs/heads/$VmBranch" refs/heads/main 2>$null | Out-Null
         } catch { }
         $ErrorActionPreference = $prev
     }

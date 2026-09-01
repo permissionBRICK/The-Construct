@@ -271,8 +271,21 @@ function parseUsage(combined) {
 // runs. Keying by report means switching the daily/monthly view collects that period
 // fresh (never serving the other period's numbers), while toggling back to a still-fresh
 // period is instant. Only two keys ever exist, so the maps stay tiny.
-const _cache = new Map();    // report -> { at, value }
-const _inflight = new Map(); // report -> Promise
+const _cache = new Map();    // cacheKey -> { at, value }
+const _inflight = new Map(); // cacheKey -> Promise
+
+/**
+ * The cache key: the report granularity PLUS the VM endpoint the numbers came from.
+ * Without the endpoint, switching the active instance would serve the previous VM's
+ * usage under the new instance's heading. `undefined` cfg (the default instance, which
+ * is what every caller passed before instances existed) keeps the bare report key.
+ * Pure.
+ */
+function cacheKeyFor(report, cfg) {
+  const r = normalizeReport(report);
+  if (!cfg || (!cfg.vmHost && !cfg.sshPort && !cfg.hostAlias)) return r;
+  return r + " " + String(cfg.vmHost || cfg.hostAlias || "") + ":" + String(cfg.sshPort || 22);
+}
 
 /**
  * Run the collector on the VM and parse it into usage state. Never rejects; resolves
@@ -286,7 +299,7 @@ async function collectOnce(opts = {}) {
   let r;
   try {
     // ccusage may install itself the first time, so allow a generous timeout.
-    r = await runScript(script, { timeoutMs: opts.timeoutMs || 180000 });
+    r = await runScript(script, { timeoutMs: opts.timeoutMs || 180000, cfg: opts.cfg });
   } catch (_) {
     return null; // runRemoteScript never rejects, but stay defensive against an injected runner
   }
@@ -302,20 +315,20 @@ async function collectOnce(opts = {}) {
  */
 function collect(opts = {}) {
   if (opts.noCache) return collectOnce(opts);
-  const report = normalizeReport(opts.report);
+  const key = cacheKeyFor(opts.report, opts.cfg);
   const now = opts.now ? opts.now() : Date.now();
-  const hit = _cache.get(report);
+  const hit = _cache.get(key);
   if (hit && now - hit.at < (hit.value == null ? NEG_TTL_MS : TTL_MS)) {
     return Promise.resolve(hit.value);
   }
-  const flying = _inflight.get(report);
+  const flying = _inflight.get(key);
   if (flying) return flying;
   const p = collectOnce(opts).then(
-    (value) => { _cache.set(report, { at: (opts.now ? opts.now() : Date.now()), value }); return value; },
-    () => { _cache.set(report, { at: (opts.now ? opts.now() : Date.now()), value: null }); return null; }
-  ).then((v) => { if (_inflight.get(report) === p) _inflight.delete(report); return v; },
-         (e) => { if (_inflight.get(report) === p) _inflight.delete(report); throw e; });
-  _inflight.set(report, p);
+    (value) => { _cache.set(key, { at: (opts.now ? opts.now() : Date.now()), value }); return value; },
+    () => { _cache.set(key, { at: (opts.now ? opts.now() : Date.now()), value: null }); return null; }
+  ).then((v) => { if (_inflight.get(key) === p) _inflight.delete(key); return v; },
+         (e) => { if (_inflight.get(key) === p) _inflight.delete(key); throw e; });
+  _inflight.set(key, p);
   return p;
 }
 
@@ -385,7 +398,7 @@ async function collectRaw(opts = {}) {
   const runScript = opts.runScript || ssh.runRemoteScript;
   const script = buildUsageScript(opts.report);
   let r;
-  try { r = await runScript(script, { timeoutMs: opts.timeoutMs || 180000 }); }
+  try { r = await runScript(script, { timeoutMs: opts.timeoutMs || 180000, cfg: opts.cfg }); }
   catch (_) { return null; }
   if (!r || r.code !== 0 || !r.stdout) return null;
   // Validate it's JSON before handing it back so export never writes garbage.
@@ -395,7 +408,7 @@ async function collectRaw(opts = {}) {
 
 module.exports = {
   TOOLS, REPORTS, DEFAULT_REPORT, TTL_MS, NEG_TTL_MS,
-  normalizeReport, isCurrentReport, buildUsageScript,
+  normalizeReport, isCurrentReport, buildUsageScript, cacheKeyFor,
   formatTokens, formatCost, parseToolUsage, parseUsage,
   collectOnce, collect, collectRaw, clearCache, augment,
   buildExportPayload, exportFileName,

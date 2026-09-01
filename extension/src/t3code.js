@@ -14,6 +14,7 @@
 // lifecycle.js).
 
 const ssh = require("./ssh");
+const instances = require("./instances");
 
 function vsc() { return require("vscode"); }
 
@@ -167,12 +168,38 @@ exit 0
 `;
 }
 
-/** Bash: mint a one-time pairing token and print the ready-to-open JSON
- *  ({... "pairUrl": "http://<dns>:<port>/pair#token=..."}). */
-function buildPairingScript() {
-  return PRELUDE + `
+/**
+ * Bash: mint a one-time pairing token and print the ready-to-open JSON
+ * ({... "pairUrl": "http://<dns>:<port>/pair#token=..."}).
+ *
+ * TWO VARIANTS, and which one runs is decided by the instance:
+ *
+ *   DEFAULT INSTANCE (and no instance at all) — the script is BYTE-IDENTICAL to the
+ *   one that shipped before instances existed. Not "equivalent": identical. This
+ *   string is the remote command an existing install sends over SSH, and the
+ *   zero-change bar is about the command, not only about the URL it happens to
+ *   produce today (config.env is user-editable, so a CONSTRUCT_EXTERNAL_HOST left
+ *   behind by anything else would silently change the default install's pairing URL).
+ *
+ *   NON-DEFAULT INSTANCE — prefers CONSTRUCT_EXTERNAL_HOST, the client-reachable name
+ *   B2 records in config.env, because a remote/port-forwarded VM is NOT reachable at
+ *   its own mshome name; it falls back to $(hostname).mshome.net when the key is absent.
+ */
+function buildPairingScript(instance) {
+  if (!instance || instances.isDefaultInstance(instance)) {
+    return PRELUDE + `
 command -v t3 >/dev/null 2>&1 || { echo "t3 is not installed" >&2; exit 1; }
 base="http://$(hostname).mshome.net:\${T3CODE_PORT}"
+t3 auth pairing create --json --ttl 10m --label "construct-control-panel" --base-url "$base" --log-level none
+`;
+  }
+  return PRELUDE + `
+command -v t3 >/dev/null 2>&1 || { echo "t3 is not installed" >&2; exit 1; }
+# The client-reachable name of THIS VM. B2 records it in config.env as
+# CONSTRUCT_EXTERNAL_HOST (a remote/forwarded instance is not reachable at its own
+# mshome name); absent, fall back to the local $(hostname).mshome.net.
+ext="$(cfgget CONSTRUCT_EXTERNAL_HOST)"
+base="http://\${ext:-$(hostname).mshome.net}:\${T3CODE_PORT}"
 t3 auth pairing create --json --ttl 10m --label "construct-control-panel" --base-url "$base" --log-level none
 `;
 }
@@ -198,11 +225,13 @@ function baseUrl(cfg) {
 }
 
 /** Mint a pairing link on the VM and open it in the host browser. Falls back to
- *  the plain base URL (already-paired browsers) when minting fails. */
+ *  the plain base URL (already-paired browsers) when minting fails. `opts.instance`
+ *  (the active instance) only selects the pairing script variant — omitted or default
+ *  sends the byte-identical original command. */
 async function openWebUi(opts = {}) {
   const vscode = opts._vscode || vsc();
   const _ssh = opts._ssh || ssh;
-  const r = await _ssh.runRemoteScript(buildPairingScript(), { ...opts, timeoutMs: opts.timeoutMs || 30000 });
+  const r = await _ssh.runRemoteScript(buildPairingScript(opts.instance), { ...opts, timeoutMs: opts.timeoutMs || 30000 });
   let url = r.code === 0 ? extractPairUrl(r.stdout) : "";
   if (!url) {
     url = baseUrl(opts.cfg);

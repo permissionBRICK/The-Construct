@@ -179,9 +179,10 @@ Each **sync tick**:
 2. **Validate** each file against `project.schema.json`. An invalid file (e.g.
    a half-written agent edit) is **skipped with a panel warning** and never
    enters the repo — the branch stays always-valid.
-3. **Commit** changes (including deletions) onto the **`vm` branch**, which
-   always forks from the last agreed sync point — so 3-way ancestry is
-   guaranteed by construction.
+3. **Commit** changes (including deletions) onto the **`vm` branch** (with
+   several VM instances, that instance's own branch — see "Multiple instances"
+   below), which always forks from the last agreed sync point — so 3-way
+   ancestry is guaranteed by construction.
 4. **Merge** `vm` into `main`. Non-overlapping edits merge silently; a true
    clash produces a real git conflict handled by the shared resolver (§8).
 5. **Post-merge validation gate:** every touched profile must re-validate
@@ -239,6 +240,58 @@ to the VM; it does not delete the checked-out repository directory.
 **Accepted risk:** between ticks (e.g. VS Code closed), agent edits exist only
 on the VM. The reinstall path always syncs first, so planned wipes lose
 nothing; a catastrophic VM loss can lose config edits made since the last tick.
+
+### Multiple instances (one config repo, one branch per VM)
+
+With more than one VM instance (the modular/remote work — see
+[`plans/modular-remote-architecture.md`](plans/modular-remote-architecture.md)
+§3.1/§4.3), there is still exactly **one host config repo**. Each instance owns
+its **own VM-side branch** inside it:
+
+- **Naming:** the default instance keeps the historical branch **`vm`**; any
+  other instance uses **`vm-<instance>`**. A non-default instance's SSH alias is
+  its bare instance name, so the branch is `vm-` + the alias, lowercased (an
+  alias written in the older `construct-<name>` form is stripped of that prefix
+  first, so both spellings map to the same branch). The **slash** form
+  `vm/<name>` is deliberately not used: git cannot hold `refs/heads/vm` and
+  `refs/heads/vm/<x>` at the same time, so adding a second instance would break
+  the first one's ref. Names are validated — `^[A-Za-z0-9][A-Za-z0-9._-]*$`, no
+  `..`, no `.lock` suffix, and not one of a short reserved list git would
+  resolve as something else: `main`/`master` (the host-truth trunk) and the
+  pseudo-refs `HEAD`, `FETCH_HEAD`, `ORIG_HEAD`, `MERGE_HEAD`, … (which cannot
+  be created as branches yet *read* specially), plus any spelling of `vm` other
+  than the exact default. The list is matched case-insensitively because
+  Windows' loose-ref files are — but it is a list, not a shape rule: an instance
+  named `WORK` legitimately gets a `WORK` branch. Anything reserved falls back
+  to `vm` with a warning rather than failing the tick.
+  The `-HostAlias` → branch derivation only lowercases and strips a leading
+  `construct-`; it never substitutes characters, so two different aliases can
+  never be folded onto one branch. An alias that does not yield a valid name
+  falls back to `vm`, and provisioning warns that the VM is sharing the default
+  instance's store.
+- **Semantics:** `main` stays **the host's truth for every instance**. Each
+  instance branch is that VM's last-known store, and the whole §6 tick — VM
+  snapshot commit, merge into `main`, post-merge gate, guarded write-back,
+  fast-forward of the branch to `main` — runs **per branch**, unchanged. A
+  profile edited on VM A therefore reaches VM B the ordinary way: A's tick
+  merges it into `main`, and B's next tick writes it back to B's store.
+- **Selecting the branch:** the engines take it as a parameter —
+  `configsync.syncTick({ vmBranch })` in the extension and
+  `Invoke-ConstructConfigSync -VmBranch` in PowerShell (both default to `vm`),
+  with `Provision-AgentVM.ps1 -ConfigBranch` (empty = derive from
+  `-HostAlias`) selecting it for a provision.
+- **The lock stays repo-wide.** `<configDir>\.sync.lock` and the
+  `.sync.provisioning` intent marker are **not** per instance: git operations on
+  one repo must serialize anyway (index, refs, working tree on `main`). A tick
+  for instance B therefore yields while instance A provisions, and two windows
+  watching two VMs take turns. That is an accepted v1 limitation — ticks are
+  seconds of work and the yielding path already retries on the next tick.
+- **Removing an instance** leaves its branch in place: nothing deletes
+  `refs/heads/vm-<name>`, so a re-created instance of the same name resumes from
+  its old sync base and stale branches are harmless (they are never merged
+  unless that instance syncs again). Clean them up by hand if wanted:
+  `git -C %LOCALAPPDATA%\The-Construct\config branch -D vm-<name>`. Profiles
+  themselves live on `main` and are untouched by that.
 
 ## 7. Upstream company config repos (optional)
 
