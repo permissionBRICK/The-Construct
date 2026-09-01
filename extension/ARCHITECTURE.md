@@ -339,6 +339,25 @@ change them together):
 - **Enum comparisons are case-sensitive** in both readers (`-cnotcontains` / `-cne` on
   the PS side), so `"HYPERV-REMOTE"` or `auth: "TOKEN"` can never be honoured by one and
   rejected by the other.
+- **`backend` is never coerced, and the rule is presence-aware.** Rewriting anything to
+  `hyperv-local` (which both readers used to do) *promoted* it to destructive local
+  Hyper-V access: `drivers.lifecycleSupport` would see `hostLifecycle: true` and let
+  Reinstall/Redownload/checkpoints run against a *local* VM that merely shares the
+  instance's `vmName`. Exactly four cases, identical in both readers:
+  | the entry's `backend` | result |
+  |---|---|
+  | absent, or JSON `null` | `hyperv-local` — the zero-change default, and the identity is then held to the canonical rule below |
+  | a known id (`hyperv-local`, `hyperv-remote`), possibly with surrounding whitespace | used as written (trimmed) |
+  | any other non-empty string (`"proxmox"`, `"hyperv-remtoe"`, `"HYPERV-REMOTE"`) | **kept verbatim** and reported. It reaches `drivers/index.js` as itself, gets the unknown-driver fallback, and the hypervisor actions are refused — Reprovision and Export config still work, being pure SSH |
+  | present but unusable (`42`, `true`, `""`, `"   "`, an array/object), **or** a spelling that differs from `hyperv-local` only by case (`"HYPERV-LOCAL"`) | the entry is **skipped** with a problem |
+  The last row is the subtle one. `backend` is *not* in the type-strict `STRING_FIELDS`
+  list, because "report it and use the derived default" is the wrong answer for the one
+  field whose derived default is the local hypervisor — the file stating a backend that
+  isn't one must not become "no backend". And a case-variant spelling is read *two ways*:
+  every enum comparison in both readers is case-sensitive (so it is "unknown"), while
+  `getDriver()` trims and lowercases before the lookup (so it would hand back the **local**
+  driver). A value the two disagree about is not safe to act on under either reading, so
+  it does not load at all.
 - **`sshPort` accepts exactly two shapes**: an integral JSON number, or a bare-digit
   string (both readers trim). Not `"+2201"`, not `2201.5`, not `true`. The range check
   happens in a wide numeric type *before* any Int32 cast — `[int]999999999999` throws in
@@ -367,12 +386,43 @@ change them together):
   dial, key or sync some *other* machine, so the entry is dropped and reported rather
   than partially used. Every derived value satisfies the rules, so only a hand-written
   entry can trip them.
+- **A `hyperv-local` instance's identity is CANONICAL — derived from its name, and any
+  deviation is skipped.** `vmName` must lowercase to the instance name, `sshHost` must be
+  `<name>.mshome.net`, `hostAlias` must be the **bare** `<name>` (the legacy
+  `construct-<name>` spelling is *not* accepted — that prefix is only tolerated on the way
+  *in* to the branch derivation), `keyName` must be `construct_<name>_ed25519`, and
+  `sshPort` must be `22`; the default instance keeps `Agent-VM` /
+  `agent-vm.mshome.net` / `agent-vm` / `agent_vm_ed25519` / `22`. The reason is that
+  Reinstall/Redownload emit **only `-VmName`** and `Auto-Install.ps1` derives the rest
+  from it (guest host = `<vmname lowercased>.mshome.net`, alias = that name, key
+  `construct_<name>_ed25519`). So an entry named `work-vm` with `vmName: "Agent-VM"`
+  would *rebuild the default VM* — a "work-vm reinstall" that deletes and recreates
+  Agent-VM — and a custom host/alias/key is accepted by the extension but silently
+  replaced by the derived one during the rebuild, leaving the instance unable to reach
+  the VM it just recreated. `configBranch` is deliberately **not** pinned: it is the one
+  field the launched scripts can be *told* (`-ConfigBranch`, threaded by
+  `lifecycle.configBranchOverride` and gated by `checkInstanceSupport`), so an explicit
+  branch stays a supported override. **Non-local backends keep free-form** (still
+  format-checked) identities — their endpoints are defined on the other side.
+- **Identities are UNIQUE across the registry.** No two entries may share a `vmName`,
+  `sshHost`, `hostAlias` or `keyName` (compared case-insensitively — one Hyper-V name,
+  one DNS name, one `Host` block, one NTFS key file), and a non-default entry may not
+  claim any of the *default* instance's four values. A clash with the default skips the
+  claimant; a clash between two entries skips **both**, because nothing in the file says
+  which is the impostor — and dropping both is also what keeps the two readers'
+  outcomes independent of key order.
 
-`addInstance` rejects **every** existing name, `agent-vm` included — it is always
+The same rules apply on the WRITE side: `addInstance`/`updateInstance` throw rather than
+persist an entry the reader would skip (it would simply vanish from the picker on the
+next load). `addInstance` rejects **every** existing name, `agent-vm` included — it is always
 present (synthesized), so an "add" would silently *replace* the default instance.
 Changing an existing entry is `updateInstance`'s job.
 
 ### Derivations for a non-default `<name>`
+
+For `hyperv-local` these are not just defaults — they are the **only** accepted values
+(see the canonical-identity rule above); for other backends they are the fallback when a
+field is omitted.
 
 | field | derived value | why |
 |---|---|---|
