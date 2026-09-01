@@ -33,6 +33,11 @@
     "true" (default) to also delete existing automatic checkpoints when disabling;
     "false" to change the policy only and leave any existing checkpoint in place.
 
+.PARAMETER Backend
+    Hypervisor backend the VM lives on. "hyperv-local" (the default) is today's
+    local Hyper-V path; checkpoints are a capability-gated feature of the driver
+    contract (docs/drivers.md).
+
 .PARAMETER FromPanel
     Set by the control panel: skip the end-of-run "Press Enter" pause on SUCCESS
     (the panel is the feedback). Failures always pause so the error stays readable.
@@ -46,6 +51,7 @@ param(
     [ValidateSet("true", "false")]
     [string]$Enabled = "false",
     [string]$VmName = "Agent-VM",
+    [string]$Backend = "hyperv-local",
     [ValidateSet("true", "false")]
     [string]$RemoveExisting = "true",
     [switch]$FromPanel
@@ -115,35 +121,50 @@ try {
     if (-not (Test-Path -LiteralPath $commonLib)) { throw "Required helper not found: $commonLib" }
     . $commonLib
 
+    # Hypervisor driver (docs/drivers.md): the VM lookup goes through it, and its
+    # capability flags say whether this backend has checkpoints at all. Loaded in
+    # the same guarded block, for the same reason as the lib.
+    $driverLoader = Join-Path $PSScriptRoot "drivers\Load-ConstructDriver.ps1"
+    if (-not (Test-Path -LiteralPath $driverLoader)) { throw "Required helper not found: $driverLoader" }
+    . $driverLoader -Backend $Backend
+    $caps = Get-ConstructDriverCapabilities
+    if (-not $caps.Checkpoints) {
+        throw "The '$Backend' backend does not support checkpoints, so there is nothing to change."
+    }
+
     Write-Host ""
     Write-Host "  Automatic checkpoints -> $(if ($wantEnabled) { 'ON' } else { 'OFF' })  ($VmName)" -ForegroundColor White
 
     # ── 1. The VM must exist ─────────────────────────────────────────────────
     Write-Step "Locating the VM"
-    $vm = $null
-    try { $vm = Get-VM -Name $VmName -ErrorAction Stop } catch { $vm = $null }
-    if (-not $vm) {
+    # ONE backend lookup for existence, the displayed state and the policy -- the
+    # same single fetch the pre-driver code did, so there is no window for the VM to
+    # change between them. Present is three-valued ($true / $false / $null = can't
+    # tell), so `-ne $true` throws for exactly the cases the previous
+    # Get-VM/try/catch did: a missing VM, no Hyper-V, or the permission gate.
+    $info = Get-ConstructVmCheckpointInfo -Name $VmName
+    if ($info.Present -ne $true) {
         throw "Hyper-V VM '$VmName' was not found. Nothing to change (install the VM first, or pass -VmName)."
     }
-    Write-Ok "Found '$VmName' (state: $($vm.State))"
+    # StateText is the backend's own state text -- display only, never branched on.
+    Write-Ok "Found '$VmName' (state: $($info.StateText))"
 
     # ── 2. Apply the policy ──────────────────────────────────────────────────
     # AutomaticCheckpointsEnabled is a VM-level policy, not virtual hardware, so it
     # can be set while the VM is running; it takes effect at the next start.
     Write-Step "Setting the automatic-checkpoint policy"
-    # Property-probe rather than a hard reference: builds predating automatic
-    # checkpoints (Server 2016 / pre-1709) expose neither the property nor the
-    # Set-VM parameter, and there the feature simply doesn't exist.
-    $curProp = $vm.PSObject.Properties['AutomaticCheckpointsEnabled']
-    $current = if ($curProp -and $null -ne $curProp.Value) { [bool]$curProp.Value } else { $null }
-    $setVmCmd = Get-Command Set-VM -ErrorAction SilentlyContinue
-    $supported = ($setVmCmd -and $setVmCmd.Parameters.ContainsKey('AutomaticCheckpointsEnabled'))
+    # Both halves were PROBED by the lookup above rather than assumed: builds
+    # predating automatic checkpoints (Server 2016 / pre-1709) expose neither the VM
+    # property (-> Enabled $null, "can't read") nor the Set-VM parameter
+    # (-> Settable false, "the feature doesn't exist here").
+    $current   = $info.Enabled
+    $supported = [bool]$info.Settable
     if ($null -ne $current -and $current -eq $wantEnabled) {
         Write-Note "Already $(if ($wantEnabled) { 'enabled' } else { 'disabled' }) -- no change needed."
     } elseif (-not $supported) {
         Write-Note "This Hyper-V version has no automatic checkpoints -- nothing to change."
     } else {
-        Set-VM -Name $VmName -AutomaticCheckpointsEnabled $wantEnabled -ErrorAction Stop
+        Set-ConstructVmAutoCheckpointPolicy -Name $VmName -Enabled $wantEnabled
         Write-Ok "Automatic checkpoints are now $(if ($wantEnabled) { 'ENABLED' } else { 'DISABLED' })"
     }
 
@@ -156,7 +177,7 @@ try {
         Write-Note "-RemoveExisting false -- policy changed, existing checkpoints left in place."
     } else {
         Write-Step "Removing existing automatic checkpoints"
-        $found = Get-AgentVmAutomaticCheckpoint -VmName $VmName
+        $found = Get-ConstructVmAutomaticCheckpoint -Name $VmName
         if (-not $found.Enumerated) {
             # The policy is changed, but we could not READ the checkpoint list -- so we
             # cannot claim the existing automatic checkpoint was cleaned up. Fail loudly
@@ -178,8 +199,11 @@ try {
         foreach ($snap in $certain) {
             Write-Note "Removing automatic checkpoint '$($snap.Name)'..."
             # Remove BY OBJECT, not by name: -Name would match every checkpoint
-            # sharing that name, and Hyper-V allows duplicates.
-            Remove-VMSnapshot -VMSnapshot $snap -Confirm:$false -ErrorAction Stop
+            # sharing that name, and Hyper-V allows duplicates. (The local driver
+            # issues `Remove-VMSnapshot -VMSnapshot <obj> -Confirm:$false`; that this
+            # deletion sits AFTER the $found.Enumerated guard above is pinned by
+            # test/host-lib.test.ps1, which anchors on that call text.)
+            Remove-ConstructVmCheckpoint -Name $VmName -Checkpoint $snap
             Write-Ok "Removed '$($snap.Name)'"
         }
 
@@ -199,7 +223,7 @@ try {
                 Write-Host "      $($snap.Name)   (created $($snap.CreationTime))" -ForegroundColor White
                 $answer = Read-Host "      Remove this checkpoint? (type yes to remove, anything else to keep)"
                 if ($answer -eq "yes") {
-                    Remove-VMSnapshot -VMSnapshot $snap -Confirm:$false -ErrorAction Stop
+                    Remove-ConstructVmCheckpoint -Name $VmName -Checkpoint $snap
                     Write-Ok "Removed '$($snap.Name)'"
                     $removedProbable++
                 } else {

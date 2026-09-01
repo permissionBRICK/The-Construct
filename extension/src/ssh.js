@@ -14,6 +14,7 @@ const DEFAULTS = {
   hostAlias: "agent-vm",
   user: "root",
   keyName: "agent_vm_ed25519",
+  sshPort: 22,
   connectTimeout: 12,
 };
 
@@ -22,9 +23,24 @@ function keyPath(cfg) {
 }
 
 /**
+ * The SSH port for a cfg as a safe integer. Anything missing/garbage reads as 22 —
+ * the only value that produces today's argv, so a malformed instance entry can
+ * never turn into an `ssh -p NaN`. Pure.
+ */
+function normalizeSshPort(port) {
+  const n = Number(port);
+  if (!Number.isInteger(n) || n <= 0 || n > 65535) return 22;
+  return n;
+}
+
+/**
  * Build the argv for `ssh`. Pure (takes `hasKey` rather than touching the disk)
  * so it can be unit-tested. The remote command is passed as a single trailing
  * argument; ssh hands it to the remote login shell.
+ *
+ * `-p <port>` is emitted ONLY for a non-22 port: the default instance's argv must
+ * stay byte-identical to what shipped before instances existed (22 is also ssh's
+ * own default, so the flag would be pure noise there).
  */
 function buildSshArgs(cfg, remoteCommand, hasKey) {
   const common = [
@@ -32,6 +48,8 @@ function buildSshArgs(cfg, remoteCommand, hasKey) {
     "-o", "StrictHostKeyChecking=accept-new",
     "-o", `ConnectTimeout=${cfg.connectTimeout}`,
   ];
+  const port = normalizeSshPort(cfg.sshPort);
+  if (port !== 22) common.push("-p", String(port));
   if (hasKey) {
     return ["-i", keyPath(cfg), "-o", "IdentitiesOnly=yes", ...common, `${cfg.user}@${cfg.vmHost}`, remoteCommand];
   }
@@ -105,4 +123,4 @@ async function isReachable(opts = {}) {
   return r.code === 0;
 }
 
-module.exports = { DEFAULTS, keyPath, buildSshArgs, wrapScriptCommand, runRemote, runRemoteScript, isReachable, resolveCfg };
+module.exports = { DEFAULTS, keyPath, normalizeSshPort, buildSshArgs, wrapScriptCommand, runRemote, runRemoteScript, isReachable, resolveCfg };

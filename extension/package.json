@@ -57,6 +57,11 @@
         "command": "construct.chooseTheme",
         "title": "Choose UI Design",
         "category": "The Construct"
+      },
+      {
+        "command": "construct.switchInstance",
+        "title": "Switch Instance",
+        "category": "The Construct"
       }
     ],
     "configuration": {
@@ -66,6 +71,11 @@
           "type": "string",
           "default": "",
           "markdownDescription": "Folder that holds the Construct PowerShell lifecycle scripts (`Auto-Install.ps1`, `projects/`, `.construct-settings.json`). Leave empty to auto-detect the newest install under `%LOCALAPPDATA%\\The-Construct`."
+        },
+        "construct.instance": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Construct **instance** (VM) this VS Code window drives, by name from `%LOCALAPPDATA%\\The-Construct\\instances.json`. Leave empty (the default) to use the registry's default instance and the per-window choice made with **The Construct: Switch Instance** — with no registry file there is exactly one instance, `agent-vm`, and nothing changes. Setting a name here pins EVERY window to it and overrides the per-window choice."
         },
         "construct.debug": {
           "type": "boolean",

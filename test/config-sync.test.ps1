@@ -1641,6 +1641,575 @@ if (-not $bashAvailable) {
     Remove-Item -LiteralPath $sfBase4 -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# ── Instance-keyed VM branch (B5) ────────────────────────────────────────────
+# One host config repo, one VM-side branch per instance. The default instance
+# keeps the historical "vm" ref; everything else must be reachable ONLY through
+# -VmBranch. Uses real git in temp repos, same mock-SSH store as above.
+
+Write-Host ""
+Write-Host "=== Instance-keyed VM branch ===" -ForegroundColor Cyan
+
+# Pure helpers.
+ok "vmbranch: valid names accepted" (
+    (Test-ConstructVmBranchName -Name "vm") -and (Test-ConstructVmBranchName -Name "vm-work") -and
+    (Test-ConstructVmBranchName -Name "vm-work_2.1"))
+ok "vmbranch: rejects empty/null" (
+    -not (Test-ConstructVmBranchName -Name "") -and -not (Test-ConstructVmBranchName -Name $null))
+ok "vmbranch: rejects traversal, bad leading char, spaces, slashes, .lock" (
+    -not (Test-ConstructVmBranchName -Name "vm..x") -and
+    -not (Test-ConstructVmBranchName -Name "-vm") -and
+    -not (Test-ConstructVmBranchName -Name ".vm") -and
+    -not (Test-ConstructVmBranchName -Name "vm work") -and
+    -not (Test-ConstructVmBranchName -Name "vm/work") -and
+    -not (Test-ConstructVmBranchName -Name "vm~1") -and
+    -not (Test-ConstructVmBranchName -Name "vm.lock"))
+ok "vmbranch: rejects the trunk names and git pseudo-refs" (
+    -not (Test-ConstructVmBranchName -Name "main") -and
+    -not (Test-ConstructVmBranchName -Name "MAIN") -and
+    -not (Test-ConstructVmBranchName -Name "Main") -and
+    -not (Test-ConstructVmBranchName -Name "master") -and
+    -not (Test-ConstructVmBranchName -Name "HEAD") -and
+    -not (Test-ConstructVmBranchName -Name "head") -and
+    -not (Test-ConstructVmBranchName -Name "FETCH_HEAD") -and
+    -not (Test-ConstructVmBranchName -Name "ORIG_HEAD") -and
+    -not (Test-ConstructVmBranchName -Name "stash"))
+ok "vmbranch: rejects other spellings of the default branch (Windows ref collision)" (
+    -not (Test-ConstructVmBranchName -Name "VM") -and -not (Test-ConstructVmBranchName -Name "Vm"))
+ok "vmbranch: an ordinary uppercase instance branch is NOT treated as a pseudo-ref" (
+    (Test-ConstructVmBranchName -Name "WORK") -and (Test-ConstructVmBranchName -Name "Work") -and
+    (Test-ConstructVmBranchName -Name "VM_WORK"))
+ok "vmbranch: resolve defaults to vm" (
+    (Resolve-ConstructVmBranch -VmBranch "") -eq "vm" -and
+    (Resolve-ConstructVmBranch -VmBranch $null) -eq "vm")
+ok "vmbranch: resolve keeps a valid name" ((Resolve-ConstructVmBranch -VmBranch "vm-work") -eq "vm-work")
+ok "vmbranch: resolve falls back on a bad name" ((Resolve-ConstructVmBranch -VmBranch "vm/work") -eq "vm")
+
+# Branch derivation from the SSH host alias (Provision-AgentVM.ps1 -ConfigBranch).
+# A non-default instance's alias is its bare name; the older "construct-<name>"
+# spelling is tolerated and lands on the same branch.
+ok "vmbranch: default alias derives 'vm'" ((Get-ConstructConfigBranchName -HostAlias "agent-vm") -eq "vm")
+ok "vmbranch: empty/null alias derives 'vm'" (
+    (Get-ConstructConfigBranchName -HostAlias "") -eq "vm" -and
+    (Get-ConstructConfigBranchName -HostAlias $null) -eq "vm")
+ok "vmbranch: bare instance alias derives 'vm-<name>'" (
+    (Get-ConstructConfigBranchName -HostAlias "work") -eq "vm-work")
+ok "vmbranch: legacy construct- alias derives the same branch" (
+    (Get-ConstructConfigBranchName -HostAlias "construct-work") -eq "vm-work")
+ok "vmbranch: alias case and padding are normalised" (
+    (Get-ConstructConfigBranchName -HostAlias "  Work-2  ") -eq "vm-work-2")
+
+# Derivation must NOT "clean up" characters: rewriting them would map two
+# different aliases onto one branch and silently share a store. A malformed
+# alias falls back to the default branch; the helper stays a pure value
+# function (the provision call site owns the warning -- see "provision-run"
+# below).
+function Get-DerivedBranch {
+    <# Capture EVERY non-success stream so a side effect cannot go unnoticed. #>
+    param([string]$HostAlias)
+    $extra = @()
+    $value = Get-ConstructConfigBranchName -HostAlias $HostAlias 2>&1 3>&1 4>&1 5>&1 6>&1 | ForEach-Object {
+        if ($_ -is [string]) { $_ } else { $extra += $_ }
+    }
+    return [pscustomobject]@{ Branch = $value; Extra = @($extra) }
+}
+$dSlash = Get-DerivedBranch -HostAlias "work/one"
+$dDash  = Get-DerivedBranch -HostAlias "work-one"
+$dUnder = Get-DerivedBranch -HostAlias "work_one"
+$dSpace = Get-DerivedBranch -HostAlias "work one"
+$dDots  = Get-DerivedBranch -HostAlias ".."
+ok "vmbranch: a malformed alias falls back to 'vm' instead of being rewritten" (
+    $dSlash.Branch -eq "vm" -and $dSpace.Branch -eq "vm" -and $dDots.Branch -eq "vm")
+ok "vmbranch: a malformed alias cannot collide with a valid instance's branch" (
+    $dSlash.Branch -ne $dDash.Branch -and $dDash.Branch -eq "vm-work-one" -and
+    $dUnder.Branch -eq "vm-work_one" -and $dDash.Branch -ne $dUnder.Branch)
+ok "vmbranch: the derivation helper is pure (no warning/error/verbose output)" (
+    $dSlash.Extra.Count -eq 0 -and $dSpace.Extra.Count -eq 0 -and $dDots.Extra.Count -eq 0 -and
+    $dDash.Extra.Count -eq 0 -and $dUnder.Extra.Count -eq 0)
+
+# Engine parameter metadata: the new switchable branch must be optional and
+# default to today's literal on every engine entry point.
+foreach ($fn in @("Invoke-ConstructConfigSync", "Invoke-ConstructConfigSyncLocked", "Initialize-ConstructConfigRepo")) {
+    $cmd = Get-Command $fn -ErrorAction SilentlyContinue
+    ok "vmbranch: $fn declares -VmBranch" ($null -ne $cmd -and $cmd.Parameters.ContainsKey('VmBranch'))
+    $fnAst = $ast.Find({ param($n)
+        $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $fn }, $true)
+    $vmbParam = $null
+    if ($fnAst -and $fnAst.Body.ParamBlock) {
+        $vmbParam = $fnAst.Body.ParamBlock.Parameters |
+            Where-Object { $_.Name.VariablePath.UserPath -eq 'VmBranch' }
+    }
+    ok "vmbranch: $fn -VmBranch defaults to 'vm'" (
+        $null -ne $vmbParam -and $vmbParam.DefaultValue.Extent.Text -eq '"vm"')
+}
+
+# Build a mock-SSH invoker bound to a specific store dir (a "VM").
+function New-BranchStoreInvoker {
+    param([string]$StoreDir)
+    return {
+        param([string]$BashCommand)
+        $rewritten = $BashCommand -replace '/opt/construct/projects', $StoreDir
+        $tmpScript = Join-Path ([System.IO.Path]::GetTempPath()) ("ssh-mock-b-" + [guid]::NewGuid().ToString("N") + ".sh")
+        [System.IO.File]::WriteAllText($tmpScript, $rewritten, (New-Object System.Text.UTF8Encoding $false))
+        try {
+            $out = & bash $tmpScript 2>$null
+            $code = $LASTEXITCODE
+            $outStr = if ($null -ne $out) { ($out -join "`n") } else { "" }
+            return [pscustomobject]@{ Code = $code; Output = $outStr }
+        } finally {
+            Remove-Item -LiteralPath $tmpScript -Force -ErrorAction SilentlyContinue
+        }
+    }.GetNewClosure()
+}
+function Get-BranchHeads {
+    param([string]$ConfigDir)
+    return @(& git -C $ConfigDir for-each-ref --format="%(refname)" refs/heads 2>$null |
+             Where-Object { $_ }) | Sort-Object
+}
+function Get-BranchRev {
+    param([string]$ConfigDir, [string]$Ref)
+    return "$(& git -C $ConfigDir rev-parse $Ref 2>$null)".Trim()
+}
+function New-BranchTestProfile {
+    param([string]$Name, [string]$NodeSdk)
+    $o = [pscustomobject]@{ name = $Name; repos = @([pscustomobject]@{ url = "https://h/$Name.git" }) }
+    if ($NodeSdk) { $o | Add-Member -NotePropertyName sdks -NotePropertyValue ([pscustomobject]@{ node = $NodeSdk }) }
+    return (ConvertTo-ConstructCanonicalJson -Name $Name -Object $o)
+}
+function Write-BranchTestFile {
+    param([string]$Dir, [string]$Name, [string]$Content)
+    if (-not (Test-Path -LiteralPath $Dir)) { New-Item -ItemType Directory -Path $Dir -Force | Out-Null }
+    [System.IO.File]::WriteAllText((Join-Path $Dir "$Name.json"), $Content, (New-Object System.Text.UTF8Encoding $false))
+}
+
+$bTmp = Join-Path ([System.IO.Path]::GetTempPath()) ("cs-branch-" + [guid]::NewGuid().ToString("N"))
+try {
+    # (a) Default path: no -VmBranch anywhere -> exactly main + vm, as today.
+    $bdCfg = Join-Path $bTmp "def/config"
+    $bdStore = Join-Path $bTmp "def/store"
+    New-Item -ItemType Directory -Path (Join-Path $bdCfg "projects") -Force | Out-Null
+    Write-BranchTestFile (Join-Path $bdCfg "projects") "web" (New-BranchTestProfile -Name "web")
+    $null = Initialize-ConstructConfigRepo -ConfigDir $bdCfg
+    ok "vmbranch-default: init creates only main + vm" (
+        (Get-BranchHeads -ConfigDir $bdCfg) -join "," -eq "refs/heads/main,refs/heads/vm")
+    $bdInv = New-BranchStoreInvoker -StoreDir $bdStore
+    $null = Invoke-ConstructConfigSync -ConfigDir $bdCfg -VmHost "dummy" -SshReadInvoker $bdInv -SshWriteInvoker $bdInv
+    Write-BranchTestFile $bdStore "web" (New-BranchTestProfile -Name "web" -NodeSdk "22")
+    $bdR = Invoke-ConstructConfigSync -ConfigDir $bdCfg -VmHost "dummy" -SshReadInvoker $bdInv -SshWriteInvoker $bdInv
+    ok "vmbranch-default: VM edit merged" ($bdR.Ok -and $bdR.Merged)
+    ok "vmbranch-default: no extra refs after a full tick" (
+        (Get-BranchHeads -ConfigDir $bdCfg) -join "," -eq "refs/heads/main,refs/heads/vm")
+    ok "vmbranch-default: vm fast-forwarded to main" (
+        (Get-BranchRev -ConfigDir $bdCfg -Ref "vm") -eq (Get-BranchRev -ConfigDir $bdCfg -Ref "main"))
+
+    # (b) A non-default branch uses its own ref and never touches refs/heads/vm.
+    $baCfg = Join-Path $bTmp "alt/config"
+    $baStore = Join-Path $bTmp "alt/store"
+    New-Item -ItemType Directory -Path (Join-Path $baCfg "projects") -Force | Out-Null
+    Write-BranchTestFile (Join-Path $baCfg "projects") "web" (New-BranchTestProfile -Name "web")
+    $null = Initialize-ConstructConfigRepo -ConfigDir $baCfg -VmBranch "vm-work"
+    ok "vmbranch-alt: init creates main + vm-work only" (
+        (Get-BranchHeads -ConfigDir $baCfg) -join "," -eq "refs/heads/main,refs/heads/vm-work")
+    $baInv = New-BranchStoreInvoker -StoreDir $baStore
+    $baSeed = Invoke-ConstructConfigSync -ConfigDir $baCfg -VmHost "dummy" -VmBranch "vm-work" `
+        -SshReadInvoker $baInv -SshWriteInvoker $baInv
+    ok "vmbranch-alt: seeds the fresh VM" ($baSeed.Ok -and $baSeed.Seeded)
+    ok "vmbranch-alt: profile written to the store" (Test-Path -LiteralPath (Join-Path $baStore "web.json"))
+    Write-BranchTestFile $baStore "web" (New-BranchTestProfile -Name "web" -NodeSdk "22")
+    $baR = Invoke-ConstructConfigSync -ConfigDir $baCfg -VmHost "dummy" -VmBranch "vm-work" `
+        -SshReadInvoker $baInv -SshWriteInvoker $baInv
+    ok "vmbranch-alt: VM edit merged into main" ($baR.Ok -and $baR.Merged)
+    ok "vmbranch-alt: host has the VM edit" (
+        [System.IO.File]::ReadAllText((Join-Path $baCfg "projects/web.json")) -match '"node": "22"')
+    ok "vmbranch-alt: still no refs/heads/vm" (
+        (Get-BranchHeads -ConfigDir $baCfg) -join "," -eq "refs/heads/main,refs/heads/vm-work")
+    ok "vmbranch-alt: vm-work fast-forwarded to main" (
+        (Get-BranchRev -ConfigDir $baCfg -Ref "vm-work") -eq (Get-BranchRev -ConfigDir $baCfg -Ref "main"))
+    $baSubj = "$(& git -C $baCfg log -1 --format=%s main 2>$null)".Trim()
+    ok "vmbranch-alt: merge commit names the instance branch" ($baSubj -eq "merge vm-work")
+
+    # An existing single-VM repo gains a second instance's branch on demand.
+    $bjRev = Get-BranchRev -ConfigDir $bdCfg -Ref "main"
+    $null = Initialize-ConstructConfigRepo -ConfigDir $bdCfg -VmBranch "vm-work"
+    ok "vmbranch-join: a second instance's branch is created at HEAD" (
+        ((Get-BranchHeads -ConfigDir $bdCfg) -join ",") -eq "refs/heads/main,refs/heads/vm,refs/heads/vm-work" -and
+        (Get-BranchRev -ConfigDir $bdCfg -Ref "vm-work") -eq $bjRev)
+
+    # (c) Two instances in ONE repo sync independently: instance B's merge must
+    # use ITS OWN base, or it deletes instance A's profile from main.
+    $btCfg = Join-Path $bTmp "two/config"
+    $btA = Join-Path $bTmp "two/store-a"
+    $btB = Join-Path $bTmp "two/store-b"
+    New-Item -ItemType Directory -Path (Join-Path $btCfg "projects") -Force | Out-Null
+    Write-BranchTestFile (Join-Path $btCfg "projects") "web" (New-BranchTestProfile -Name "web")
+    $null = Initialize-ConstructConfigRepo -ConfigDir $btCfg
+    $btInvA = New-BranchStoreInvoker -StoreDir $btA
+    $btInvB = New-BranchStoreInvoker -StoreDir $btB
+    $btSeedA = Invoke-ConstructConfigSync -ConfigDir $btCfg -VmHost "dummy" -SshReadInvoker $btInvA -SshWriteInvoker $btInvA
+    $btSeedB = Invoke-ConstructConfigSync -ConfigDir $btCfg -VmHost "dummy" -VmBranch "vm-work" `
+        -SshReadInvoker $btInvB -SshWriteInvoker $btInvB
+    ok "vmbranch-two: both instances seed their own store" (
+        $btSeedA.Seeded -and $btSeedB.Seeded -and
+        (Test-Path -LiteralPath (Join-Path $btA "web.json")) -and (Test-Path -LiteralPath (Join-Path $btB "web.json")))
+    ok "vmbranch-two: both branches exist alongside main" (
+        ((Get-BranchHeads -ConfigDir $btCfg) -join ",") -eq "refs/heads/main,refs/heads/vm,refs/heads/vm-work")
+
+    Write-BranchTestFile $btA "a-only" (New-BranchTestProfile -Name "a-only")
+    Write-BranchTestFile $btB "b-only" (New-BranchTestProfile -Name "b-only")
+    $btRa = Invoke-ConstructConfigSync -ConfigDir $btCfg -VmHost "dummy" -SshReadInvoker $btInvA -SshWriteInvoker $btInvA
+    ok "vmbranch-two: A's tick merges a-only into main" (
+        $btRa.Merged -and (Test-Path -LiteralPath (Join-Path $btCfg "projects/a-only.json")))
+    ok "vmbranch-two: A's tick leaves B's branch behind" (
+        (Get-BranchRev -ConfigDir $btCfg -Ref "vm-work") -ne (Get-BranchRev -ConfigDir $btCfg -Ref "main"))
+    ok "vmbranch-two: A's tick does not touch B's store" (
+        -not (Test-Path -LiteralPath (Join-Path $btB "a-only.json")))
+
+    $btRb = Invoke-ConstructConfigSync -ConfigDir $btCfg -VmHost "dummy" -VmBranch "vm-work" `
+        -SshReadInvoker $btInvB -SshWriteInvoker $btInvB
+    ok "vmbranch-two: B's tick merges b-only into main" (
+        $btRb.Merged -and (Test-Path -LiteralPath (Join-Path $btCfg "projects/b-only.json")))
+    ok "vmbranch-two: B's merge keeps A's profile on main (own base, not vm's)" (
+        Test-Path -LiteralPath (Join-Path $btCfg "projects/a-only.json"))
+    ok "vmbranch-two: B's write-back delivers A's profile to B's store" (
+        Test-Path -LiteralPath (Join-Path $btB "a-only.json"))
+    ok "vmbranch-two: b-only is not written to A's store by B's tick" (
+        -not (Test-Path -LiteralPath (Join-Path $btA "b-only.json")))
+
+    $null = Invoke-ConstructConfigSync -ConfigDir $btCfg -VmHost "dummy" -SshReadInvoker $btInvA -SshWriteInvoker $btInvA
+    ok "vmbranch-two: A's next tick delivers b-only to A's store" (
+        Test-Path -LiteralPath (Join-Path $btA "b-only.json"))
+    $btMain = Get-BranchRev -ConfigDir $btCfg -Ref "main"
+    ok "vmbranch-two: both branches end at main" (
+        (Get-BranchRev -ConfigDir $btCfg -Ref "vm") -eq $btMain -and
+        (Get-BranchRev -ConfigDir $btCfg -Ref "vm-work") -eq $btMain)
+    ok "vmbranch-two: no other refs were created" (
+        ((Get-BranchHeads -ConfigDir $btCfg) -join ",") -eq "refs/heads/main,refs/heads/vm,refs/heads/vm-work")
+
+    # An invalid file on B's VM must preserve B's OWN last-agreed copy, not A's.
+    Write-BranchTestFile $btA "web" (New-BranchTestProfile -Name "web" -NodeSdk "22")
+    $null = Invoke-ConstructConfigSync -ConfigDir $btCfg -VmHost "dummy" -SshReadInvoker $btInvA -SshWriteInvoker $btInvA
+    [System.IO.File]::WriteAllText((Join-Path $btB "web.json"), "{ half-written", (New-Object System.Text.UTF8Encoding $false))
+    Write-BranchTestFile $btB "q" (New-BranchTestProfile -Name "q")
+    $btRp = Invoke-ConstructConfigSync -ConfigDir $btCfg -VmHost "dummy" -VmBranch "vm-work" `
+        -SshReadInvoker $btInvB -SshWriteInvoker $btInvB
+    ok "vmbranch-two: B's invalid file is skipped, not committed" (
+        $btRp.Ok -and (@($btRp.SkippedInvalid | ForEach-Object { $_.Name }) -contains "web"))
+    # Inspect B's snapshot commit itself (the branch tip has since fast-forwarded
+    # to the merge): the preserved blob must be B's last agreed copy, not A's.
+    $btSnap = "$(& git -C $btCfg rev-list -1 --all --grep='^vm-work sync$' 2>$null)".Trim()
+    $btPreserved = ""
+    if ($btSnap) { $btPreserved = "$(& git -C $btCfg show "${btSnap}:projects/web.json" 2>$null)" }
+    ok "vmbranch-two: the preserved copy comes from THIS instance's branch" (
+        $btSnap -and $btPreserved -and ($btPreserved -notmatch '"node"'))
+
+    # A new instance joining an existing repo: its branch has no profiles yet, so
+    # its first tick against an existing-but-empty store SEEDS (the other
+    # instance's branch must not make it look like a mass deletion).
+    $bnCfg = Join-Path $bTmp "new/config"
+    $bnA = Join-Path $bTmp "new/store-a"
+    $bnB = Join-Path $bTmp "new/store-b"
+    New-Item -ItemType Directory -Path (Join-Path $bnCfg "projects") -Force | Out-Null
+    $null = Initialize-ConstructConfigRepo -ConfigDir $bnCfg                     # empty repo: main + vm
+    $null = Initialize-ConstructConfigRepo -ConfigDir $bnCfg -VmBranch "vm-work" # B joins at the same point
+    Write-BranchTestFile (Join-Path $bnCfg "projects") "p" (New-BranchTestProfile -Name "p")
+    $bnInvA = New-BranchStoreInvoker -StoreDir $bnA
+    $bnInvB = New-BranchStoreInvoker -StoreDir $bnB
+    $null = Invoke-ConstructConfigSync -ConfigDir $bnCfg -VmHost "dummy" -SshReadInvoker $bnInvA -SshWriteInvoker $bnInvA
+    New-Item -ItemType Directory -Path $bnB -Force | Out-Null   # B's store dir exists but is EMPTY
+    $bnR = Invoke-ConstructConfigSync -ConfigDir $bnCfg -VmHost "dummy" -VmBranch "vm-work" `
+        -SshReadInvoker $bnInvB -SshWriteInvoker $bnInvB
+    ok "vmbranch-new: B's first sync seeds instead of hitting the mass-deletion guard" (
+        $bnR.Ok -and $bnR.Seeded -and @($bnR.Warnings).Count -eq 0)
+    ok "vmbranch-new: B's store received the profile" (Test-Path -LiteralPath (Join-Path $bnB "p.json"))
+    ok "vmbranch-new: B's branch advanced to main" (
+        (Get-BranchRev -ConfigDir $bnCfg -Ref "vm-work") -eq (Get-BranchRev -ConfigDir $bnCfg -Ref "main"))
+
+    # ...and the mass-deletion guard counts THIS instance's branch: an emptied
+    # store on B must not wipe main just because the default branch is empty.
+    $bgCfg = Join-Path $bTmp "guard/config"
+    $bgB = Join-Path $bTmp "guard/store-b"
+    New-Item -ItemType Directory -Path (Join-Path $bgCfg "projects") -Force | Out-Null
+    $null = Initialize-ConstructConfigRepo -ConfigDir $bgCfg                     # vm stays at the empty initial commit
+    Write-BranchTestFile (Join-Path $bgCfg "projects") "p" (New-BranchTestProfile -Name "p")
+    $bgInvB = New-BranchStoreInvoker -StoreDir $bgB
+    $null = Invoke-ConstructConfigSync -ConfigDir $bgCfg -VmHost "dummy" -VmBranch "vm-work" `
+        -SshReadInvoker $bgInvB -SshWriteInvoker $bgInvB                          # seeds B; vm-work has 1 profile
+    Remove-Item -LiteralPath (Join-Path $bgB "p.json") -Force                     # everything deleted on B's VM
+    $bgR = Invoke-ConstructConfigSync -ConfigDir $bgCfg -VmHost "dummy" -VmBranch "vm-work" `
+        -SshReadInvoker $bgInvB -SshWriteInvoker $bgInvB
+    ok "vmbranch-guard: the mass-deletion guard fires from THIS instance's count" (
+        (@($bgR.Warnings) -match "refusing to propagate a mass deletion").Count -gt 0)
+    ok "vmbranch-guard: main keeps its profile" (
+        Test-Path -LiteralPath (Join-Path $bgCfg "projects/p.json"))
+
+    # "Did the VM change?" is answered against THIS instance's tip, even when the
+    # other instance's branch already holds exactly the same tree.
+    $bcCfg = Join-Path $bTmp "cmp/config"
+    $bcA = Join-Path $bTmp "cmp/store-a"
+    $bcB = Join-Path $bTmp "cmp/store-b"
+    New-Item -ItemType Directory -Path (Join-Path $bcCfg "projects") -Force | Out-Null
+    Write-BranchTestFile (Join-Path $bcCfg "projects") "web" (New-BranchTestProfile -Name "web")
+    $null = Initialize-ConstructConfigRepo -ConfigDir $bcCfg
+    $bcInvA = New-BranchStoreInvoker -StoreDir $bcA
+    $bcInvB = New-BranchStoreInvoker -StoreDir $bcB
+    $null = Invoke-ConstructConfigSync -ConfigDir $bcCfg -VmHost "dummy" -SshReadInvoker $bcInvA -SshWriteInvoker $bcInvA
+    $null = Invoke-ConstructConfigSync -ConfigDir $bcCfg -VmHost "dummy" -VmBranch "vm-work" `
+        -SshReadInvoker $bcInvB -SshWriteInvoker $bcInvB
+    Write-BranchTestFile $bcA "web" (New-BranchTestProfile -Name "web" -NodeSdk "22")
+    $null = Invoke-ConstructConfigSync -ConfigDir $bcCfg -VmHost "dummy" -SshReadInvoker $bcInvA -SshWriteInvoker $bcInvA
+    Write-BranchTestFile $bcB "web" (New-BranchTestProfile -Name "web" -NodeSdk "22")  # B's VM lands on the same content
+    $bcR = Invoke-ConstructConfigSync -ConfigDir $bcCfg -VmHost "dummy" -VmBranch "vm-work" `
+        -SshReadInvoker $bcInvB -SshWriteInvoker $bcInvB
+    $bcReflog = @(& git -C $bcCfg reflog show refs/heads/vm-work --format="%s" 2>$null)
+    ok "vmbranch-cmp: B's snapshot is committed onto B's own branch" (
+        $bcR.Ok -and ($bcReflog -contains "vm-work sync"))
+    ok "vmbranch-cmp: B's branch ends at main" (
+        (Get-BranchRev -ConfigDir $bcCfg -Ref "vm-work") -eq (Get-BranchRev -ConfigDir $bcCfg -Ref "main"))
+
+    # (d) An unusable branch name degrades to "vm" with a warning; the tick runs.
+    $bxCfg = Join-Path $bTmp "bad/config"
+    $bxStore = Join-Path $bTmp "bad/store"
+    New-Item -ItemType Directory -Path (Join-Path $bxCfg "projects") -Force | Out-Null
+    Write-BranchTestFile (Join-Path $bxCfg "projects") "web" (New-BranchTestProfile -Name "web")
+    $null = Initialize-ConstructConfigRepo -ConfigDir $bxCfg
+    $bxInv = New-BranchStoreInvoker -StoreDir $bxStore
+    $bxR = Invoke-ConstructConfigSync -ConfigDir $bxCfg -VmHost "dummy" -VmBranch "vm/../evil" `
+        -SshReadInvoker $bxInv -SshWriteInvoker $bxInv
+    ok "vmbranch-invalid: tick still succeeds" ($bxR.Ok -and $bxR.Seeded)
+    ok "vmbranch-invalid: warns about the name" (
+        (@($bxR.Warnings) -match "Invalid config-sync branch name").Count -gt 0)
+    ok "vmbranch-invalid: falls back to refs/heads/vm" (
+        ((Get-BranchHeads -ConfigDir $bxCfg) -join ",") -eq "refs/heads/main,refs/heads/vm" -and
+        (Get-BranchRev -ConfigDir $bxCfg -Ref "vm") -eq (Get-BranchRev -ConfigDir $bxCfg -Ref "main"))
+
+    # An uppercase instance name is an ordinary branch, not a pseudo-ref: it gets
+    # its own ref and must not fall back onto the default instance's store.
+    $buCfg = Join-Path $bTmp "upper/config"
+    $buStore = Join-Path $bTmp "upper/store"
+    New-Item -ItemType Directory -Path (Join-Path $buCfg "projects") -Force | Out-Null
+    Write-BranchTestFile (Join-Path $buCfg "projects") "web" (New-BranchTestProfile -Name "web")
+    $null = Initialize-ConstructConfigRepo -ConfigDir $buCfg -VmBranch "WORK"
+    $buInv = New-BranchStoreInvoker -StoreDir $buStore
+    $buR = Invoke-ConstructConfigSync -ConfigDir $buCfg -VmHost "dummy" -VmBranch "WORK" `
+        -SshReadInvoker $buInv -SshWriteInvoker $buInv
+    ok "vmbranch-upper: WORK syncs on its own ref with no warning" (
+        $buR.Ok -and $buR.Seeded -and @($buR.Warnings).Count -eq 0 -and
+        ((Get-BranchHeads -ConfigDir $buCfg) -join ",") -eq "refs/heads/main,refs/heads/WORK" -and
+        (Get-BranchRev -ConfigDir $buCfg -Ref "WORK") -eq (Get-BranchRev -ConfigDir $buCfg -Ref "main"))
+
+    # Names git ACCEPTS syntactically but resolves specially (HEAD) or that alias
+    # the host-truth branch (main): HEAD cannot be created yet reads as the
+    # checked-out branch, and "main" would merge main into itself. Both degrade
+    # to "vm" with a warning.
+    $bres = 0
+    foreach ($bad in @("HEAD", "main")) {
+        $brCfg = Join-Path $bTmp "res$bres/config"
+        $brStore = Join-Path $bTmp "res$bres/store"
+        $bres++
+        New-Item -ItemType Directory -Path (Join-Path $brCfg "projects") -Force | Out-Null
+        Write-BranchTestFile (Join-Path $brCfg "projects") "web" (New-BranchTestProfile -Name "web")
+        $null = Initialize-ConstructConfigRepo -ConfigDir $brCfg -VmBranch $bad
+        ok "vmbranch-reserved($bad): init creates the default branch, not the reserved name" (
+            ((Get-BranchHeads -ConfigDir $brCfg) -join ",") -eq "refs/heads/main,refs/heads/vm")
+        $brInv = New-BranchStoreInvoker -StoreDir $brStore
+        $brR = Invoke-ConstructConfigSync -ConfigDir $brCfg -VmHost "dummy" -VmBranch $bad `
+            -SshReadInvoker $brInv -SshWriteInvoker $brInv
+        ok "vmbranch-reserved($bad): tick warns and still succeeds" (
+            $brR.Ok -and (@($brR.Warnings) -match "Invalid config-sync branch name").Count -gt 0)
+        ok "vmbranch-reserved($bad): only main + vm exist and main is intact" (
+            ((Get-BranchHeads -ConfigDir $brCfg) -join ",") -eq "refs/heads/main,refs/heads/vm" -and
+            (Test-Path -LiteralPath (Join-Path $brCfg "projects/web.json")) -and
+            (Get-BranchRev -ConfigDir $brCfg -Ref "vm") -eq (Get-BranchRev -ConfigDir $brCfg -Ref "main"))
+    }
+} finally {
+    Remove-Item -LiteralPath $bTmp -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# ── Provision-AgentVM.ps1 -ConfigBranch wiring ───────────────────────────────
+$provPath = Join-Path $repoRoot "Provision-AgentVM.ps1"
+$provErrs = $null
+$provAst = [System.Management.Automation.Language.Parser]::ParseFile($provPath, [ref]$null, [ref]$provErrs)
+ok "provision: Provision-AgentVM.ps1 has no parse errors" ($provErrs.Count -eq 0)
+$provParam = $null
+if ($provAst.ParamBlock) {
+    $provParam = $provAst.ParamBlock.Parameters |
+        Where-Object { $_.Name.VariablePath.UserPath -eq 'ConfigBranch' }
+}
+ok "provision: -ConfigBranch param exists" ($null -ne $provParam)
+ok "provision: -ConfigBranch defaults to empty (derive)" (
+    $null -ne $provParam -and $provParam.DefaultValue.Extent.Text -eq '""')
+ok "provision: -ConfigBranch is a plain [string]" (
+    $null -ne $provParam -and @($provParam.Attributes | ForEach-Object { $_.TypeName.Name }) -contains 'string')
+$provSrc = [System.IO.File]::ReadAllText($provPath)
+ok "provision: derives the branch from the host alias" (
+    $provSrc -match 'Get-ConstructConfigBranchName -HostAlias \$HostAlias')
+ok "provision: probes for -VmBranch before splatting it" (
+    $provSrc -match "Get-Command Invoke-ConstructConfigSync\)\.Parameters\.ContainsKey\('VmBranch'\)")
+ok "provision: only a NON-default branch is passed (default call unchanged)" (
+    $provSrc -match "\`$syncVmBranch -ne 'vm' -and")
+
+# Behavioural test of the script's own config-sync block: lift the whole
+# `if (Get-Command Initialize-ConstructConfigStore ...) { ... }` statement out of
+# Provision-AgentVM.ps1 and run it against stubs. This exercises the real
+# ORDER of the statements -- repo init CREATES the branch, so deriving the
+# branch after it would let a non-default instance create refs/heads/vm first
+# (a source regex cannot see that).
+$provBlockAst = $provAst.Find({ param($n)
+    $n -is [System.Management.Automation.Language.IfStatementAst] -and
+    $n.Extent.Text.StartsWith("if (Get-Command Initialize-ConstructConfigStore") }, $true)
+ok "provision: the config-sync block was located for execution" ($null -ne $provBlockAst)
+
+function Invoke-ProvisionConfigSyncBlock {
+    <#
+        Run the extracted block with stubbed helpers. Returns what the block
+        passed to the repo initialiser and to the sync engine.
+        -OldLib drops -VmBranch from both stubs (version-skew check).
+    #>
+    param(
+        [string]$Code,
+        [string]$HostAlias,
+        [string]$ConfigBranch = "",
+        [switch]$OldLib
+    )
+    $script:capturedInit = $null
+    $script:capturedSync = $null
+    $storeDir = Join-Path ([System.IO.Path]::GetTempPath()) ("prov-blk-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path (Join-Path $storeDir "projects") -Force | Out-Null
+    # Variables the block reads from the script scope.
+    $RestoreDir = ""
+    $VmHost = "dummy"
+    $Projects = "default"
+    $SeedPassword = "x"
+
+    function Initialize-ConstructConfigStore { param([string]$ScriptsDir) return $storeDir }
+    if ($OldLib) {
+        function Initialize-ConstructConfigRepo {
+            param([Parameter(Mandatory)][string]$ConfigDir, [string]$SeedDir)
+            $script:capturedInit = @{ ConfigDir = $ConfigDir; VmBranch = $null }
+            return $true
+        }
+        function Invoke-ConstructConfigSync {
+            param([string]$ConfigDir, [string]$VmHost, [string]$AutoResolve,
+                  [switch]$SeedOnly, [scriptblock]$SshReadInvoker, [scriptblock]$SshWriteInvoker)
+            $script:capturedSync = @{ VmBranch = $null }
+            return [pscustomobject]@{ Ok = $true; Ran = $true; Conflict = $false; Blocked = $false
+                Reason = ""; Warnings = @(); Merged = $false; Seeded = $false; WriteBack = $null; VmReadOk = $true }
+        }
+    } else {
+        function Initialize-ConstructConfigRepo {
+            param([Parameter(Mandatory)][string]$ConfigDir, [string]$SeedDir, [string]$VmBranch = "vm")
+            $script:capturedInit = @{ ConfigDir = $ConfigDir
+                VmBranch = $(if ($PSBoundParameters.ContainsKey('VmBranch')) { $VmBranch } else { $null }) }
+            return $true
+        }
+        function Invoke-ConstructConfigSync {
+            param([string]$ConfigDir, [string]$VmHost, [string]$AutoResolve, [switch]$SeedOnly,
+                  [scriptblock]$SshReadInvoker, [scriptblock]$SshWriteInvoker, [string]$VmBranch = "vm")
+            $script:capturedSync = @{
+                VmBranch = $(if ($PSBoundParameters.ContainsKey('VmBranch')) { $VmBranch } else { $null }) }
+            return [pscustomobject]@{ Ok = $true; Ran = $true; Conflict = $false; Blocked = $false
+                Reason = ""; Warnings = @(); Merged = $false; Seeded = $false; WriteBack = $null; VmReadOk = $true }
+        }
+    }
+    try {
+        $warns = @()
+        Invoke-Expression $Code 3>&1 | ForEach-Object {
+            if ($_ -is [System.Management.Automation.WarningRecord]) { $warns += "$_" }
+        }
+        return [pscustomobject]@{
+            InitBranch = $(if ($script:capturedInit) { $script:capturedInit.VmBranch } else { "<never called>" })
+            SyncBranch = $(if ($script:capturedSync) { $script:capturedSync.VmBranch } else { "<never called>" })
+            Warnings   = @($warns)
+        }
+    } finally {
+        Remove-Item -LiteralPath $storeDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+if ($provBlockAst) {
+    $provCode = $provBlockAst.Extent.Text
+
+    $rDefault = Invoke-ProvisionConfigSyncBlock -Code $provCode -HostAlias "agent-vm"
+    ok "provision-run: the default instance passes NO branch to repo init" ($null -eq $rDefault.InitBranch)
+    ok "provision-run: the default instance passes NO branch to the sync engine" ($null -eq $rDefault.SyncBranch)
+
+    $rWork = Invoke-ProvisionConfigSyncBlock -Code $provCode -HostAlias "work"
+    ok "provision-run: a non-default alias initialises the repo on ITS branch" ($rWork.InitBranch -eq "vm-work")
+    ok "provision-run: a non-default alias syncs on ITS branch" ($rWork.SyncBranch -eq "vm-work")
+
+    $rLegacy = Invoke-ProvisionConfigSyncBlock -Code $provCode -HostAlias "construct-work"
+    ok "provision-run: the legacy construct- alias lands on the same branch" (
+        $rLegacy.InitBranch -eq "vm-work" -and $rLegacy.SyncBranch -eq "vm-work")
+
+    $rExplicit = Invoke-ProvisionConfigSyncBlock -Code $provCode -HostAlias "work" -ConfigBranch "vm-other"
+    ok "provision-run: explicit -ConfigBranch wins over the alias" (
+        $rExplicit.InitBranch -eq "vm-other" -and $rExplicit.SyncBranch -eq "vm-other")
+
+    $rOld = Invoke-ProvisionConfigSyncBlock -Code $provCode -HostAlias "work" -OldLib
+    ok "provision-run: an older lib without -VmBranch is never handed one" (
+        $null -eq $rOld.InitBranch -and $null -eq $rOld.SyncBranch)
+
+    # The pure helper falls back silently; the CALL SITE is what tells the user
+    # this VM ended up on the default instance's branch.
+    ok "provision-run: a valid alias produces no branch warning" (
+        (@($rWork.Warnings) -match "config-sync branch").Count -eq 0)
+    $rBad = Invoke-ProvisionConfigSyncBlock -Code $provCode -HostAlias "work/one"
+    ok "provision-run: a malformed alias falls back to the default branch" (
+        $null -eq $rBad.InitBranch -and $null -eq $rBad.SyncBranch)
+    ok "provision-run: ...and the call site warns about the shared store" (
+        (@($rBad.Warnings) -match "does not yield a usable config-sync branch name").Count -eq 1 -and
+        (@($rBad.Warnings) -match "shares the default instance").Count -eq 1)
+}
+
+# ── -ConfigBranch reaches Provision from the top of the chain ────────────────
+# The provisioner derives the branch from -HostAlias, so an instance whose registry
+# entry names a DIFFERENT branch has to pass it explicitly -- otherwise a rebuild
+# initialises (and syncs) one VM on two refs. The parameter therefore has to exist,
+# and be forwarded, all the way down: Auto-Install -> Create-AgentVM -> Provision,
+# plus Auto-Install's reprovision / add-config paths straight to Provision.
+foreach ($chain in @(
+    @{ file = 'Auto-Install.ps1';   splats = @('reprovArgs', 'acReprovArgs', 'provArgs', 'createArgs') },
+    @{ file = 'Create-AgentVM.ps1'; splats = @('provArgs') })) {
+    $chainPath = Join-Path $repoRoot $chain.file
+    $chainErrs = $null
+    $chainAst = [System.Management.Automation.Language.Parser]::ParseFile($chainPath, [ref]$null, [ref]$chainErrs)
+    ok "chain: $($chain.file) has no parse errors" ($chainErrs.Count -eq 0)
+    $chainParam = $null
+    if ($chainAst.ParamBlock) {
+        $chainParam = $chainAst.ParamBlock.Parameters |
+            Where-Object { $_.Name.VariablePath.UserPath -eq 'ConfigBranch' }
+    }
+    ok "chain: $($chain.file) declares -ConfigBranch" ($null -ne $chainParam)
+    ok "chain: $($chain.file) defaults -ConfigBranch to empty (derive, i.e. today)" (
+        $null -ne $chainParam -and $chainParam.DefaultValue.Extent.Text -eq '""')
+    ok "chain: $($chain.file) types it as a plain [string]" (
+        $null -ne $chainParam -and @($chainParam.Attributes | ForEach-Object { $_.TypeName.Name }) -contains 'string')
+    $chainSrc = [System.IO.File]::ReadAllText($chainPath)
+    foreach ($splat in $chain.splats) {
+        ok "chain: $($chain.file) forwards it into `$$splat" (
+            $chainSrc -match ([regex]::Escape("`$$splat['ConfigBranch'] = `$ConfigBranch")))
+    }
+    # Every forward is guarded by `if ($ConfigBranch)`: empty must add NOTHING, so the
+    # default path's splat is byte-identical to what it always was.
+    $unguarded = @(@([regex]::Matches($chainSrc, "(?m)^\s*\`$\w+\['ConfigBranch'\]\s*=")) | Where-Object {
+        # The `if ($ConfigBranch)` that gates this assignment is either on the same
+        # line or opens the block it sits in -- look back over the enclosing block.
+        $from = [Math]::Max(0, $_.Index - 600)
+        $chainSrc.Substring($from, $_.Index - $from) -notmatch '(?s)if \(\$ConfigBranch[ )]'
+    })
+    ok "chain: $($chain.file) never forwards an EMPTY -ConfigBranch" ($unguarded.Count -eq 0)
+}
+$aiSrc = [System.IO.File]::ReadAllText((Join-Path $repoRoot 'Auto-Install.ps1'))
+ok "chain: Auto-Install probes Provision for -ConfigBranch before anything destructive" (
+    $aiSrc -match "cbProvCmd\.Parameters\.ContainsKey\('ConfigBranch'\)")
+ok "chain: Auto-Install probes Create-AgentVM for -ConfigBranch too" (
+    $aiSrc -match "cbCreateCmd\.Parameters\.ContainsKey\('ConfigBranch'\)")
+ok "chain: Auto-Install fails CLOSED when the branch cannot be honoured" (
+    $aiSrc -match "does not support -ConfigBranch; update The Construct")
+$cvSrc = [System.IO.File]::ReadAllText((Join-Path $repoRoot 'Create-AgentVM.ps1'))
+ok "chain: Create-AgentVM probes before splatting and fails closed" (
+    ($cvSrc -match "Parameters\.ContainsKey\('ConfigBranch'\)") -and
+    ($cvSrc -match "does not support -ConfigBranch; update The Construct"))
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host ("  config-sync unit tests - {0}/{1} passed" -f $script:pass, ($script:pass + $script:fail))
