@@ -575,8 +575,7 @@ fi
 #     forward whatever the host passed (empty = use saved/default).
 run_step optional "Setting up SMB share for the host" \
   env SMB_SHARE="${SMB_SHARE:-}" SMB_USER="${SMB_USER:-}" \
-    SMB_SHARE_NAME="${SMB_SHARE_NAME:-}" SMB_PASSWORD="${SMB_PASSWORD:-}" \
-  CONSTRUCT_EXTERNAL_HOST="${CONSTRUCT_EXTERNAL_HOST}" \
+  SMB_SHARE_NAME="${SMB_SHARE_NAME:-}" SMB_PASSWORD="${SMB_PASSWORD:-}" \
   WORKSPACE_ROOT="${WORKSPACE_ROOT}" CONFIG_FILE="${CONFIG_FILE}" REPO_DIR="${REPO_DIR}" \
   bash "${REPO_DIR}/bin/setup-smb-share.sh"
 
@@ -593,7 +592,6 @@ for _ai_tool in "${_selected_ai_tools[@]}"; do
   [[ -n "${_ai_tool}" ]] || continue
   run_step optional "Installing AI tool: ${_ai_tool}" \
     env TARGET_USER="${CLAUDE_USER}" AI_TOOLS_OVERRIDE="${_ai_tool}" AI_CONSOLE_INTEGRATION=false \
-    CONSTRUCT_EXTERNAL_HOST="${CONSTRUCT_EXTERNAL_HOST}" \
     OPENCODE_BACKGROUND_WATCHER="${OPENCODE_BACKGROUND_WATCHER}" \
     bash "${REPO_DIR}/bin/install-ai-tools.sh"
 done
@@ -605,7 +603,6 @@ done
 if [[ "${T3CODE}" == "true" ]]; then
   run_step optional "Installing T3 Code web GUI" \
     env TARGET_USER="${CLAUDE_USER}" AI_TOOLS_OVERRIDE=t3code AI_CONSOLE_INTEGRATION=false \
-    CONSTRUCT_EXTERNAL_HOST="${CONSTRUCT_EXTERNAL_HOST}" \
     T3CODE_CHANNEL="${T3CODE_CHANNEL}" T3CODE_LIMIT_RESUME="${T3CODE_LIMIT_RESUME}" \
     bash "${REPO_DIR}/bin/install-ai-tools.sh"
 else
@@ -622,7 +619,6 @@ fi
 
 run_step optional "Installing AI tool console integration" \
   env TARGET_USER="${CLAUDE_USER}" AI_TOOLS_OVERRIDE=none AI_CONSOLE_INTEGRATION=true \
-  CONSTRUCT_EXTERNAL_HOST="${CONSTRUCT_EXTERNAL_HOST}" \
   bash "${REPO_DIR}/bin/install-ai-tools.sh"
 
 # 4b. Install the construct CLI so agents and users can manage project profiles
@@ -750,7 +746,6 @@ fi
 if [[ "${VSCODE_SERVER}" == "true" ]]; then
   run_step optional "Setting up VS Code server / serve-web / tunnel" \
     env VSCODE_SERVER="${VSCODE_SERVER}" VSCODE_SERVE_WEB="${VSCODE_SERVE_WEB}" VSCODE_TUNNEL="${VSCODE_TUNNEL}" \
-    CONSTRUCT_EXTERNAL_HOST="${CONSTRUCT_EXTERNAL_HOST}" \
     VSCODE_SERVE_WEB_TOKEN_B64="${VSCODE_SERVE_WEB_TOKEN_B64:-}" \
     VSCODE_CLIENT_COMMIT="${VSCODE_CLIENT_COMMIT:-}" \
     CLAUDE_PARTIAL_STREAMING="${CLAUDE_PARTIAL_STREAMING}" \

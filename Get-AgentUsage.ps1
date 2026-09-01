@@ -46,6 +46,7 @@ param(
     [string]$RemoteUser  = "root",
     [string]$LocalKeyName = "agent_vm_ed25519",
     # SSH port for the VM (matches Provision-AgentVM.ps1's -SshPort).
+    [ValidateRange(1, 65535)]
     [int]$SshPort        = 22,
     [ValidateSet("session", "daily", "weekly", "monthly")]
     [string]$Report      = "session",

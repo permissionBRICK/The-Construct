@@ -35,6 +35,13 @@ mkdir -p "${tmp}/stubs"
 printf '#!/bin/sh\necho testvm\n' >"${tmp}/stubs/hostname"
 chmod +x "${tmp}/stubs/hostname"
 stub_path="${tmp}/stubs:${PATH}"
+# Make the Codex and VS Code banner sections render (they gate on the commands
+# existing) so their descriptive SSH-target lines are covered; the default-vs-base
+# diff below runs both scripts in this same sandbox, so it stays a fair comparison.
+for _cmd in codex code; do
+  printf '#!/usr/bin/env bash\nexit 0\n' >"${tmp}/stubs/${_cmd}"
+  chmod +x "${tmp}/stubs/${_cmd}"
+done
 
 # Default config.env: both keys absent (simulates a fresh install or env cleared).
 default_cfg="${tmp}/config_default.env"
@@ -102,6 +109,12 @@ ok "print-connection-info: OVERRIDE no SSH port on HTTP URLs" \
   sh -c "! grep -oP 'http://[^:]+:\K[0-9]+' '${new_pci_override}' | grep -qx '2201'"
 
 # A direct caller override must win over a persisted value.
+ok "print-connection-info: OVERRIDE descriptive SSH target carries the port note" \
+  grep -q 'SSH target: .*@myhost\.example\.com (port 2201)$' "${new_pci_override}"
+
+ok "print-connection-info: OVERRIDE Remote-SSH hint carries the port note" \
+  grep -q 'Remote Explorer -> SSH -> myhost\.example\.com (port 2201)$' "${new_pci_override}"
+
 new_pci_env_override="${tmp}/new_pci_env_override.out"
 PATH="${stub_path}" CONFIG_FILE="${override_cfg}" \
   CONSTRUCT_EXTERNAL_HOST=env.example.net CONSTRUCT_EXTERNAL_SSH_PORT=2299 \

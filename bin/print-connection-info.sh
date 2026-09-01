@@ -56,8 +56,11 @@ fi
 ssh_port="${CONSTRUCT_EXTERNAL_SSH_PORT}"
 # Prepare SSH port flag for command lines ("-p <n> " or empty for the default 22).
 ssh_port_flag=""
+# Descriptive (non-command) SSH targets get an explicit annotation so nobody dials 22.
+ssh_port_note=""
 if [[ "${ssh_port}" != "22" ]]; then
   ssh_port_flag="-p ${ssh_port} "
+  ssh_port_note=" (port ${ssh_port})"
 fi
 ssh_user="${SSH_USER:-${SUDO_USER:-${USER:-root}}}"
 
@@ -117,7 +120,7 @@ if has_selected_or_installed_tool codex codex codex-app-server; then
 
 Codex:
   Supported app workflow: add this VM as an SSH host in Codex App.
-  SSH target:             ${ssh_user}@${hyperv_dns}
+  SSH target:             ${ssh_user}@${hyperv_dns}${ssh_port_note}
   Remote CLI check:       ssh ${ssh_port_flag}${ssh_user}@${hyperv_dns} codex --version
 
 Codex experimental app-server:
@@ -152,7 +155,7 @@ if command -v code >/dev/null 2>&1; then
     cat <<EOF
 
 VS Code Remote-SSH:
-  Server installed; connect via Remote Explorer -> SSH -> ${hyperv_dns}
+  Server installed; connect via Remote Explorer -> SSH -> ${hyperv_dns}${ssh_port_note}
 EOF
 fi
 

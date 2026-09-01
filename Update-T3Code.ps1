@@ -5,6 +5,7 @@ param(
     # probing so an older provisioner is never handed unknown args).
     [string]$VmHost,
     [string]$HostAlias,
+    [ValidateRange(0, 65535)]
     [int]$SshPort = 0,
     [string]$LocalKeyName
 )
