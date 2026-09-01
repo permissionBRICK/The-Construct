@@ -95,6 +95,10 @@ param(
     # host alias) all follow this parameter. Must match the name Auto-Install.ps1
     # passes -- the default keeps backward compat with existing installs.
     [string]$VmName = "Agent-VM",
+    # Hypervisor backend to create the VM on. "hyperv-local" (the default) is
+    # today's local Hyper-V path; the driver contract behind it (docs/drivers.md)
+    # is what a remote-Hyper-V / Proxmox backend plugs into later.
+    [string]$Backend = "hyperv-local",
     # Host-side saved-key file name (~\.ssh\<name>), forwarded to Provision-AgentVM.ps1.
     # Auto-Install derives an instance-scoped name for non-default VMs; omitted = the
     # provisioner's default (agent_vm_ed25519).
@@ -162,6 +166,14 @@ $commonLib = Join-Path $PSScriptRoot "lib\AgentVm.Common.ps1"
 if (-not (Test-Path -LiteralPath $commonLib)) { throw "Required helper not found: $commonLib" }
 . $commonLib
 
+# Hypervisor driver: every Hyper-V call below goes through the contract functions
+# it defines (docs/drivers.md), so another backend can be dropped in without this
+# script changing. Dot-sourced (not imported) so the driver's functions land in
+# this script's scope, exactly like the lib above.
+$driverLoader = Join-Path $PSScriptRoot "drivers\Load-ConstructDriver.ps1"
+if (-not (Test-Path -LiteralPath $driverLoader)) { throw "Required helper not found: $driverLoader" }
+. $driverLoader -Backend $Backend
+
 # ── Configuration ────────────────────────────────────────────────────────────
 $SwitchName        = "Default Switch"
 $Generation        = 2
@@ -216,10 +228,14 @@ if (-not (Get-Command ssh.exe -ErrorAction SilentlyContinue)) {
 # Validate hardware virtualization + enable the required Windows features (may
 # reboot, or abort with BIOS / Windows-Home guidance). Shared with Auto-Install.ps1,
 # which runs the same check up front; harmless to re-confirm here when chained.
-Ensure-HyperV
+Ensure-ConstructDriverPrereqs
 
 # ── 2. Handle an already-installed VM (reprovision / reinstall / quit) ───────
-if (Get-VM -Name $VmName -ErrorAction SilentlyContinue) {
+# Test-ConstructVmPresent is three-valued ($true / $false / $null = can't tell),
+# so `-eq $true` reproduces the previous `Get-VM -ErrorAction SilentlyContinue`
+# test exactly: a VM in ANY state (including a transient one) opens the menu, and
+# any failure to read Hyper-V falls through to creation as it always did.
+if ((Test-ConstructVmPresent -Name $VmName) -eq $true) {
     Write-Host ""
     Write-Warning "The agent VM '$VmName' is already installed on this host."
 
@@ -234,7 +250,7 @@ if (Get-VM -Name $VmName -ErrorAction SilentlyContinue) {
         Write-Step "Reprovisioning the existing VM"
         $provisionScript = Join-Path $PSScriptRoot "Provision-AgentVM.ps1"
         if (-not (Test-Path -LiteralPath $provisionScript)) { throw "Provision-AgentVM.ps1 not found in $PSScriptRoot." }
-        $VmHostname = "$($VmName.ToLower()).mshome.net"
+        $VmHostname = [string](Get-ConstructVmEndpoint -Name $VmName).SshHost
         # Always -Auto: this script (or its caller) owns the final pause, so the
         # provisioner shouldn't add its own.
         $provArgs = @{ VmHost = $VmHostname; HostAlias = $VmName.ToLower(); Auto = $true }
@@ -267,7 +283,7 @@ if (Get-VM -Name $VmName -ErrorAction SilentlyContinue) {
             Write-Note "Reinstall cancelled. No changes made."
             return
         }
-        Remove-AgentVm -VmName $VmName
+        Remove-ConstructVm -Name $VmName
         Write-Note "Existing VM removed; continuing with a fresh install."
     }
     else {
@@ -364,68 +380,38 @@ if ($autoIso) {
 }
 Write-Ok "ISO: $isoPath"
 
-# ── 6. Create the VM ────────────────────────────────────────────────────────
+# ── 6/7. Create + configure the VM (driver) ─────────────────────────────────
+# The whole Hyper-V sequence -- New-VM, Set-VM, nested virtualization, Secure
+# Boot, the install DVD and the boot order -- lives in the backend driver now
+# (drivers\hyperv-local\HyperVLocal.Driver.ps1); it prints the same progress
+# lines this section used to. MemoryBytes carries the exact, already 2 MB-aligned
+# byte count so nothing is re-derived from a GB double.
 Write-Step "Creating VM '$VmName'"
 
-New-VM -Name $VmName `
-       -Generation $Generation `
-       -MemoryStartupBytes $memoryBytes `
-       -SwitchName $SwitchName `
-       -NewVHDPath $VhdPath `
-       -NewVHDSizeBytes ($diskSizeGB * 1GB) | Out-Null
-
-Write-Ok "VM created"
-
-# ── 7. Configure VM settings ─────────────────────────────────────────────────
-Write-Step "Configuring VM settings"
-
-Set-VM -Name $VmName `
-       -ProcessorCount $ProcessorCount `
-       -StaticMemory `
-       -CheckpointType $CheckpointType `
-       -AutomaticStartAction $AutoStart `
-       -AutomaticStopAction $AutoStop `
-       -AutomaticCheckpointsEnabled $AutoCheckpoints
-
-Write-Ok "Processors: $ProcessorCount, Dynamic Memory: off, Checkpoint: $CheckpointType"
-Write-Ok "Automatic checkpoints: $(if ($AutoCheckpoints) { 'on' } else { 'off' })"
-
-# Expose the host CPU's virtualization extensions to the guest (nested
-# virtualization) so the agent can use KVM/QEMU, containers with gVisor/Kata,
-# Android emulators, etc. inside the VM. Must be set while the VM is off, so it
-# goes here between New-VM and Start-VM; the static memory set above is already
-# what nested virtualization requires. Unsupported hosts (old Hyper-V builds,
-# some AMD/ARM configurations) throw -- treat that as non-fatal and continue
-# without nested virtualization rather than failing the whole install.
-try {
-    Set-VMProcessor -VMName $VmName -ExposeVirtualizationExtensions $true -ErrorAction Stop
-    Write-Ok "Nested virtualization: on"
-} catch {
-    Write-Warning "Nested virtualization not enabled (host doesn't support it?): $($_.Exception.Message)"
+New-ConstructVm -Descriptor @{
+    Name                 = $VmName
+    MemoryBytes          = $memoryBytes
+    DiskGB               = $diskSizeGB
+    ProcessorCount       = $ProcessorCount
+    VhdPath              = $VhdPath
+    SwitchName           = $SwitchName
+    Generation           = $Generation
+    IsoPath              = $isoPath
+    Nested               = $true
+    AutomaticCheckpoints = $AutoCheckpoints
+    CheckpointType       = $CheckpointType
+    AutomaticStartAction = $AutoStart
+    AutomaticStopAction  = $AutoStop
 }
-
-# Disable Secure Boot (required for Ubuntu without Microsoft UEFI keys)
-Set-VMFirmware -VMName $VmName -EnableSecureBoot Off
-Write-Ok "Secure Boot: off"
-
-# Attach the ISO as a DVD drive on the SCSI controller
-Add-VMDvdDrive -VMName $VmName -ControllerNumber 0 -ControllerLocation 1 -Path $isoPath
-Write-Ok "ISO attached on SCSI 0:1"
-
-# Set boot order: DVD first, then hard drive, then network
-$dvd  = Get-VMDvdDrive  -VMName $VmName
-$hdd  = Get-VMHardDiskDrive -VMName $VmName
-$nic  = Get-VMNetworkAdapter -VMName $VmName
-Set-VMFirmware -VMName $VmName -BootOrder $dvd, $hdd, $nic
-Write-Ok "Boot order: DVD -> HDD -> Network"
 
 # ── 8. Start the VM ─────────────────────────────────────────────────────────
 Write-Step "Starting VM '$VmName'"
 
-Start-VM -Name $VmName
+Start-ConstructVm -Name $VmName
 Write-Ok "VM is running. The Ubuntu installer should boot from the ISO."
 
-$VmHostname = "$($VmName.ToLower()).mshome.net"
+$vmEndpoint = Get-ConstructVmEndpoint -Name $VmName
+$VmHostname = [string]$vmEndpoint.SshHost
 $isAutoinstall = (Split-Path $isoPath -Leaf) -match "autoinstall"
 
 if ($isAutoinstall) {
@@ -435,58 +421,11 @@ if ($isAutoinstall) {
     Write-Host "    and become reachable via SSH at $VmHostname. This takes about 5 minutes ..." -ForegroundColor Yellow
     Write-Host ""
 
-    $pollInterval = 15
-
-    # We deliberately do NOT verify SSH *login* here. Authenticating with the
-    # bootstrap key from Windows requires locked-down file ACLs (Windows OpenSSH
-    # silently ignores keys with too-open permissions) -- that handling lives in
-    # Provision-AgentVM.ps1, which also has its own reachability wait and a
-    # password fallback. Here we only need to know the unattended install has
-    # finished and the VM is back up, which we detect purely from the SSH port.
-
-    # Helper: is TCP/22 open on the VM right now?
-    # We probe with a raw TcpClient rather than Test-NetConnection: during the
-    # autoinstall wait the VM name isn't resolvable yet, and Test-NetConnection
-    # emits progress + name-resolution/ping banners that $ProgressPreference and
-    # -WarningAction don't fully silence. A bare socket connect with a short
-    # timeout is completely silent and tests exactly what we care about. Any
-    # failure (no DNS, refused, timeout) is swallowed and reported as "not open".
-    function Test-SshPort {
-        $client = New-Object System.Net.Sockets.TcpClient
-        try {
-            $iar = $client.BeginConnect($VmHostname, 22, $null, $null)
-            if ($iar.AsyncWaitHandle.WaitOne(3000)) {
-                $client.EndConnect($iar)   # throws if the connect actually failed
-                return $true
-            }
-            return $false
-        } catch {
-            return $false
-        } finally {
-            $client.Close()
-        }
-    }
-
-    # SSH typically comes up only ONCE -- when the freshly installed OS boots
-    # after the unattended install -- not during the install. So we just wait
-    # for the port to open, give it a short settle, and hand off. No
-    # reboot-detection loop, and no hard error: the wait is bounded, and if it
-    # expires we proceed anyway (Provision-AgentVM.ps1 has its own reachability
-    # wait + retries, and tolerates the VM being mid-reboot).
-    $deadline = (Get-Date).AddMinutes(20)
-    Write-Host "    Waiting for SSH port to open..." -ForegroundColor DarkGray
-    while (-not (Test-SshPort)) {
-        if ((Get-Date) -gt $deadline) {
-            Write-Note "SSH still not reachable after 20 min; handing off to provisioning anyway."
-            break
-        }
-        Write-Host "    Not reachable yet -- retrying in $pollInterval seconds..." -ForegroundColor DarkGray
-        Start-Sleep -Seconds $pollInterval
-    }
-
-    # Wait a little and then end, regardless of whether the VM happens to reboot
-    # in the meantime -- provisioning re-checks reachability before it connects.
-    Start-Sleep -Seconds 20
+    # The raw-socket poll (plus its 20-minute bound, its non-fatal timeout and the
+    # settle delay afterwards) is the driver's Wait-ConstructVmReachable -- a
+    # backend knows where its VMs answer. Its return value says whether the port
+    # ever opened; the flow is the same either way, so it is discarded here.
+    $null = Wait-ConstructVmReachable -Name $VmName -TimeoutSeconds 1200 -PollIntervalSeconds 15 -SettleSeconds 20
     Write-Ok "Handing off to provisioning"
 } else {
     # ── 8b. Manual install: ask the user ─────────────────────────────────────
@@ -516,16 +455,7 @@ if ($isAutoinstall) {
 # ── 9. Unmount ISO and remove DVD drive ──────────────────────────────────────
 Write-Step "Cleaning up: removing ISO and DVD drive"
 
-Set-VMDvdDrive -VMName $VmName -ControllerNumber 0 -ControllerLocation 1 -Path $null
-Write-Ok "ISO unmounted"
-
-Remove-VMDvdDrive -VMName $VmName -ControllerNumber 0 -ControllerLocation 1
-Write-Ok "DVD drive removed"
-
-$hdd = Get-VMHardDiskDrive -VMName $VmName
-$nic = Get-VMNetworkAdapter -VMName $VmName
-Set-VMFirmware -VMName $VmName -BootOrder $hdd, $nic
-Write-Ok "Boot order updated: HDD -> Network"
+Detach-ConstructInstallMedia -Name $VmName
 
 if ($isAutoinstall) {
     if ($Auto) {
