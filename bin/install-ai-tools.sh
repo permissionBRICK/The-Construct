@@ -27,6 +27,10 @@ REPO_DIR="${REPO_DIR:-/opt/construct/repo}"
 # sourcing config.env, whose saved AI_TOOLS value otherwise replaces the caller's.
 AI_TOOLS_OVERRIDE="${AI_TOOLS_OVERRIDE:-}"
 AI_CONSOLE_INTEGRATION="${AI_CONSOLE_INTEGRATION:-true}"
+# Keep caller-supplied connection identity authoritative when config.env is
+# loaded below. Provisioning normally persists it first, but this also makes a
+# direct installer invocation obey env > saved config as documented.
+_external_host_override="${CONSTRUCT_EXTERNAL_HOST:-}"
 # The user that Claude Code (CLI + VS Code extension) is installed and
 # configured for. Defaults to the invoking sudo user, falling back to root, but
 # can be overridden (e.g. by provision.sh, which forces root for VS Code use).
@@ -55,6 +59,8 @@ if [[ "${_FUNCS_ONLY}" != "true" ]]; then
   . "${CONFIG_FILE}"
   set +a
 fi
+
+CONSTRUCT_EXTERNAL_HOST="${_external_host_override:-${CONSTRUCT_EXTERNAL_HOST:-}}"
 
 AI_TOOLS="${AI_TOOLS_OVERRIDE:-${AI_TOOLS:-}}"
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-/root/repos}"
@@ -86,11 +92,11 @@ has_tool() {
 }
 
 # Path to the system prompt shipped in the repo, plus the DNS name this VM is
-# reachable under from the user's machine. The DNS is derived from the live
-# hostname (Hyper-V publishes "<hostname>.mshome.net"), matching what
-# print-connection-info.sh advertises.
+# reachable under from the user's machine. CONSTRUCT_EXTERNAL_HOST (from
+# config.env or the env) takes precedence; falls back to the Hyper-V local DNS
+# name, matching what print-connection-info.sh and setup-root-ssh-key.sh advertise.
 AGENT_SYSTEM_PROMPT_SRC="${REPO_DIR}/config/systemprompt.md"
-AGENT_DNS="$(hostname).mshome.net"
+AGENT_DNS="${CONSTRUCT_EXTERNAL_HOST:-$(hostname).mshome.net}"
 
 # Render the shipped system prompt (substituting the live DNS name) into a tool's
 # GLOBAL agent-instructions file so it applies to every repo the agent touches

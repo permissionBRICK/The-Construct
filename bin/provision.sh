@@ -378,6 +378,22 @@ if [[ -n "${GIT_CLONE_CREDENTIALS_B64:-}" ]]; then
   GIT_CLONE_CREDENTIALS="$(printf '%s' "${GIT_CLONE_CREDENTIALS_B64}" | base64 -d 2>/dev/null || true)"
 fi
 
+# External host/port: the client-reachable identity of this VM (B2 interface
+# contract). Precedence: explicit non-empty env value > value saved in config.env
+# > built-in default. Empty env value means "keep the VM's saved choice", matching
+# the VSCODE_TUNNEL idiom used throughout this file.
+_external_host_saved=""
+if [[ -f "${CONFIG_FILE}" ]]; then
+  _external_host_saved="$(sed -n 's/^CONSTRUCT_EXTERNAL_HOST=//p' "${CONFIG_FILE}" | head -1 || true)"
+fi
+CONSTRUCT_EXTERNAL_HOST="${CONSTRUCT_EXTERNAL_HOST:-${_external_host_saved:-}}"
+
+_external_ssh_port_saved=""
+if [[ -f "${CONFIG_FILE}" ]]; then
+  _external_ssh_port_saved="$(sed -n 's/^CONSTRUCT_EXTERNAL_SSH_PORT=//p' "${CONFIG_FILE}" | head -1 || true)"
+fi
+CONSTRUCT_EXTERNAL_SSH_PORT="${CONSTRUCT_EXTERNAL_SSH_PORT:-${_external_ssh_port_saved:-22}}"
+
 step "provision.sh starting (non-interactive)"
 note "    AGENT_NAME=${AGENT_NAME}"
 note "    PROJECTS=${PROJECTS}"
@@ -394,6 +410,8 @@ note "    T3CODE_CHANNEL=${T3CODE_CHANNEL}"
 note "    T3CODE_LIMIT_RESUME=${T3CODE_LIMIT_RESUME}"
 note "    OPENCODE_BACKGROUND_WATCHER=${OPENCODE_BACKGROUND_WATCHER}"
 note "    SMB_SHARE=${SMB_SHARE:-(saved/default)}"
+note "    CONSTRUCT_EXTERNAL_HOST=${CONSTRUCT_EXTERNAL_HOST:-(empty=auto hostname.mshome.net)}"
+note "    CONSTRUCT_EXTERNAL_SSH_PORT=${CONSTRUCT_EXTERNAL_SSH_PORT}"
 
 # Free space FIRST: on a full disk every later step fails in its own confusing
 # way (see the _disk_verdict block above), so a crisp stop beats a long summary
@@ -469,6 +487,8 @@ write_configuration() {
   cfg T3CODE_CHANNEL "${T3CODE_CHANNEL}" || return
   cfg T3CODE_LIMIT_RESUME "${T3CODE_LIMIT_RESUME}" || return
   cfg OPENCODE_BACKGROUND_WATCHER "${OPENCODE_BACKGROUND_WATCHER}" || return
+  cfg CONSTRUCT_EXTERNAL_HOST "${CONSTRUCT_EXTERNAL_HOST}" || return
+  cfg CONSTRUCT_EXTERNAL_SSH_PORT "${CONSTRUCT_EXTERNAL_SSH_PORT}" || return
   install -d -m 0755 "${WORKSPACE_ROOT}"
 }
 run_step critical "Writing configuration to ${CONFIG_FILE}" write_configuration
@@ -533,7 +553,8 @@ fi
 #     forward whatever the host passed (empty = use saved/default).
 run_step optional "Setting up SMB share for the host" \
   env SMB_SHARE="${SMB_SHARE:-}" SMB_USER="${SMB_USER:-}" \
-  SMB_SHARE_NAME="${SMB_SHARE_NAME:-}" SMB_PASSWORD="${SMB_PASSWORD:-}" \
+    SMB_SHARE_NAME="${SMB_SHARE_NAME:-}" SMB_PASSWORD="${SMB_PASSWORD:-}" \
+  CONSTRUCT_EXTERNAL_HOST="${CONSTRUCT_EXTERNAL_HOST}" \
   WORKSPACE_ROOT="${WORKSPACE_ROOT}" CONFIG_FILE="${CONFIG_FILE}" REPO_DIR="${REPO_DIR}" \
   bash "${REPO_DIR}/bin/setup-smb-share.sh"
 
@@ -550,6 +571,7 @@ for _ai_tool in "${_selected_ai_tools[@]}"; do
   [[ -n "${_ai_tool}" ]] || continue
   run_step optional "Installing AI tool: ${_ai_tool}" \
     env TARGET_USER="${CLAUDE_USER}" AI_TOOLS_OVERRIDE="${_ai_tool}" AI_CONSOLE_INTEGRATION=false \
+    CONSTRUCT_EXTERNAL_HOST="${CONSTRUCT_EXTERNAL_HOST}" \
     OPENCODE_BACKGROUND_WATCHER="${OPENCODE_BACKGROUND_WATCHER}" \
     bash "${REPO_DIR}/bin/install-ai-tools.sh"
 done
@@ -561,6 +583,7 @@ done
 if [[ "${T3CODE}" == "true" ]]; then
   run_step optional "Installing T3 Code web GUI" \
     env TARGET_USER="${CLAUDE_USER}" AI_TOOLS_OVERRIDE=t3code AI_CONSOLE_INTEGRATION=false \
+    CONSTRUCT_EXTERNAL_HOST="${CONSTRUCT_EXTERNAL_HOST}" \
     T3CODE_CHANNEL="${T3CODE_CHANNEL}" T3CODE_LIMIT_RESUME="${T3CODE_LIMIT_RESUME}" \
     bash "${REPO_DIR}/bin/install-ai-tools.sh"
 else
@@ -577,6 +600,7 @@ fi
 
 run_step optional "Installing AI tool console integration" \
   env TARGET_USER="${CLAUDE_USER}" AI_TOOLS_OVERRIDE=none AI_CONSOLE_INTEGRATION=true \
+  CONSTRUCT_EXTERNAL_HOST="${CONSTRUCT_EXTERNAL_HOST}" \
   bash "${REPO_DIR}/bin/install-ai-tools.sh"
 
 # 4b. Install the construct CLI so agents and users can manage project profiles
@@ -704,6 +728,7 @@ fi
 if [[ "${VSCODE_SERVER}" == "true" ]]; then
   run_step optional "Setting up VS Code server / serve-web / tunnel" \
     env VSCODE_SERVER="${VSCODE_SERVER}" VSCODE_SERVE_WEB="${VSCODE_SERVE_WEB}" VSCODE_TUNNEL="${VSCODE_TUNNEL}" \
+    CONSTRUCT_EXTERNAL_HOST="${CONSTRUCT_EXTERNAL_HOST}" \
     VSCODE_SERVE_WEB_TOKEN_B64="${VSCODE_SERVE_WEB_TOKEN_B64:-}" \
     VSCODE_CLIENT_COMMIT="${VSCODE_CLIENT_COMMIT:-}" \
     CLAUDE_PARTIAL_STREAMING="${CLAUDE_PARTIAL_STREAMING}" \
