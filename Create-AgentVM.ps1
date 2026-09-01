@@ -95,6 +95,10 @@ param(
     # host alias) all follow this parameter. Must match the name Auto-Install.ps1
     # passes -- the default keeps backward compat with existing installs.
     [string]$VmName = "Agent-VM",
+    # Host-side saved-key file name (~\.ssh\<name>), forwarded to Provision-AgentVM.ps1.
+    # Auto-Install derives an instance-scoped name for non-default VMs; omitted = the
+    # provisioner's default (agent_vm_ed25519).
+    [string]$LocalKeyName,
     # Source repo/ref, forwarded to Provision-AgentVM.ps1 so it can record the
     # installed-commit update marker for the control panel. Passed only when set.
     [string]$Repo,
@@ -247,6 +251,7 @@ if (Get-VM -Name $VmName -ErrorAction SilentlyContinue) {
         if ($PSBoundParameters.ContainsKey('RestoreDir'))             { $provArgs['RestoreDir']             = $RestoreDir }
         if ($PSBoundParameters.ContainsKey('GitCloneCredentialsB64')) { $provArgs['GitCloneCredentialsB64'] = $GitCloneCredentialsB64 }
         if ($PSBoundParameters.ContainsKey('CheckoutProjects'))       { $provArgs['CheckoutProjects']       = $CheckoutProjects }
+        if ($PSBoundParameters.ContainsKey('LocalKeyName'))           { $provArgs['LocalKeyName']           = $LocalKeyName }
         # Source repo/ref PAIR for the installed-commit marker: if either was set,
         # forward both effective values so the recorded pair matches the install.
         if ($PSBoundParameters.ContainsKey('Repo') -or $PSBoundParameters.ContainsKey('Ref')) {
@@ -551,6 +556,7 @@ if ($isAutoinstall) {
             if ($PSBoundParameters.ContainsKey('RestoreDir'))             { $provArgs['RestoreDir']             = $RestoreDir }
             if ($PSBoundParameters.ContainsKey('GitCloneCredentialsB64')) { $provArgs['GitCloneCredentialsB64'] = $GitCloneCredentialsB64 }
             if ($PSBoundParameters.ContainsKey('CheckoutProjects'))       { $provArgs['CheckoutProjects']       = $CheckoutProjects }
+        if ($PSBoundParameters.ContainsKey('LocalKeyName'))           { $provArgs['LocalKeyName']           = $LocalKeyName }
             if ($PSBoundParameters.ContainsKey('Repo') -or $PSBoundParameters.ContainsKey('Ref')) {
                 $provArgs['Repo'] = $Repo; $provArgs['Ref'] = $Ref
             }

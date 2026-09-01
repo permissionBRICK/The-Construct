@@ -410,8 +410,12 @@ note "    T3CODE_CHANNEL=${T3CODE_CHANNEL}"
 note "    T3CODE_LIMIT_RESUME=${T3CODE_LIMIT_RESUME}"
 note "    OPENCODE_BACKGROUND_WATCHER=${OPENCODE_BACKGROUND_WATCHER}"
 note "    SMB_SHARE=${SMB_SHARE:-(saved/default)}"
-note "    CONSTRUCT_EXTERNAL_HOST=${CONSTRUCT_EXTERNAL_HOST:-(empty=auto hostname.mshome.net)}"
-note "    CONSTRUCT_EXTERNAL_SSH_PORT=${CONSTRUCT_EXTERNAL_SSH_PORT}"
+# Only mention the external identity when it carries information, so a default
+# install's provisioning log is unchanged.
+if [[ -n "${CONSTRUCT_EXTERNAL_HOST}" || "${CONSTRUCT_EXTERNAL_SSH_PORT}" != "22" ]]; then
+  note "    CONSTRUCT_EXTERNAL_HOST=${CONSTRUCT_EXTERNAL_HOST:-(empty=auto hostname.mshome.net)}"
+  note "    CONSTRUCT_EXTERNAL_SSH_PORT=${CONSTRUCT_EXTERNAL_SSH_PORT}"
+fi
 
 # Free space FIRST: on a full disk every later step fails in its own confusing
 # way (see the _disk_verdict block above), so a crisp stop beats a long summary
@@ -487,8 +491,15 @@ write_configuration() {
   cfg T3CODE_CHANNEL "${T3CODE_CHANNEL}" || return
   cfg T3CODE_LIMIT_RESUME "${T3CODE_LIMIT_RESUME}" || return
   cfg OPENCODE_BACKGROUND_WATCHER "${OPENCODE_BACKGROUND_WATCHER}" || return
-  cfg CONSTRUCT_EXTERNAL_HOST "${CONSTRUCT_EXTERNAL_HOST}" || return
-  cfg CONSTRUCT_EXTERNAL_SSH_PORT "${CONSTRUCT_EXTERNAL_SSH_PORT}" || return
+  # Persist the external identity only when it carries information (a non-empty
+  # host; a non-default or previously saved port), so a default install's
+  # config.env stays byte-identical.
+  if [[ -n "${CONSTRUCT_EXTERNAL_HOST}" ]]; then
+    cfg CONSTRUCT_EXTERNAL_HOST "${CONSTRUCT_EXTERNAL_HOST}" || return
+  fi
+  if [[ -n "${_external_ssh_port_saved}" || "${CONSTRUCT_EXTERNAL_SSH_PORT}" != "22" ]]; then
+    cfg CONSTRUCT_EXTERNAL_SSH_PORT "${CONSTRUCT_EXTERNAL_SSH_PORT}" || return
+  fi
   install -d -m 0755 "${WORKSPACE_ROOT}"
 }
 run_step critical "Writing configuration to ${CONFIG_FILE}" write_configuration

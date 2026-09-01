@@ -491,6 +491,32 @@ if ($PSBoundParameters.ContainsKey('UbuntuRelease') -and -not [string]::IsNullOr
     }
 }
 
+# Legacy alias: -VmHost (the guest hostname baked into the ISO) predates -VmName.
+# A caller who passes -VmHost explicitly without -VmName gets the VM name derived
+# from it, so guest hostname, Hyper-V name, mshome DNS name and SSH alias all agree
+# (before -VmName existed such a run produced a VM the provisioner could not reach).
+if ($PSBoundParameters.ContainsKey('VmHost') -and -not $PSBoundParameters.ContainsKey('VmName')) {
+    $VmName = $VmHost
+} elseif ($PSBoundParameters.ContainsKey('VmHost') -and $PSBoundParameters.ContainsKey('VmName') -and
+          $VmHost.ToLower() -ne $VmName.ToLower()) {
+    # Never silently discard an explicitly bound value: the guest hostname is always
+    # derived from -VmName, so a differing -VmHost cannot be honoured.
+    throw "-VmHost '$VmHost' conflicts with -VmName '$VmName': the guest hostname is derived from -VmName (lowercased). Pass only -VmName."
+}
+
+# Version-skew guard, BEFORE anything destructive: a non-default VM name needs a
+# Create-AgentVM.ps1 that accepts -VmName. An older colocated script would silently
+# create "Agent-VM" and the provisioner would then dial an address that never exists.
+if (-not $SkipCreateVm -and $VmName.ToLower() -ne 'agent-vm') {
+    $skewCreate = Join-Path $PSScriptRoot "Create-AgentVM.ps1"
+    if (Test-Path -LiteralPath $skewCreate) {
+        $skewCmd = Get-Command -Name $skewCreate -CommandType ExternalScript -ErrorAction SilentlyContinue
+        if (-not $skewCmd -or -not $skewCmd.Parameters.ContainsKey('VmName')) {
+            throw "This install's Create-AgentVM.ps1 does not support -VmName; update The Construct before creating a VM named '$VmName'."
+        }
+    }
+}
+
 if (-not $OutputIso) { $OutputIso = Join-Path $PSScriptRoot "$($VmName.ToLower())-autoinstall.iso" }
 $buildScript = Join-Path $PSScriptRoot "bin\build-autoinstall-iso.sh"
 $bootstrapPubKey = Join-Path $PSScriptRoot "keys\bootstrap_ed25519.pub"
@@ -644,8 +670,14 @@ $existingVmHandled    = $false # set once the existing-VM menu runs, so the fres
 $HyperVmName = $VmName
 # Derive the mshome DNS name and host alias ONCE from the VM name; used everywhere
 # below instead of re-computing "$($HyperVmName.ToLower()).mshome.net" each time.
-$VmDnsName  = "$($HyperVmName.ToLower()).mshome.net"
-$VmAlias    = $HyperVmName.ToLower()
+$VmGuestName = $HyperVmName.ToLower()            # guest hostname (ISO) = mshome DNS label
+$VmDnsName   = "$VmGuestName.mshome.net"
+# SSH alias + saved-key name: the default VM keeps the legacy names byte-for-byte; any
+# other VM gets instance-scoped names so a second VM never overwrites the first VM's
+# ~/.ssh key or Host block (see docs/plans/modular-remote-architecture.md §4.3).
+$VmIsDefault = ($VmGuestName -eq 'agent-vm')
+$VmAlias     = if ($VmIsDefault) { 'agent-vm' } else { "construct-$VmGuestName" }
+$VmKeyName   = if ($VmIsDefault) { 'agent_vm_ed25519' } else { "construct_${VmGuestName}_ed25519" }
 if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -and
     (Get-VM -Name $HyperVmName -ErrorAction SilentlyContinue)) {
 
@@ -714,6 +746,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         # -AgentPassword passed on the command line (this path has no prompt).
         # -Auto: the finally below owns the pause, so the provisioner stays quiet.
         $reprovArgs = @{ VmHost = $VmDnsName; HostAlias = $VmAlias; Projects = $reprovProjects; Auto = $true }
+        if (-not $VmIsDefault) { $reprovArgs['LocalKeyName'] = $VmKeyName }
         # Pass both git values (even if empty) so the provisioner doesn't re-prompt.
         $reprovArgs['GitUserName'] = $reprovGit.Name
         $reprovArgs['GitEmail']    = $reprovGit.Email
@@ -1070,6 +1103,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
                 T3CodeChannel         = $T3CodeChannel
                 T3CodeLimitResume     = $T3CodeLimitResume
             }
+            if (-not $VmIsDefault) { $acReprovArgs['LocalKeyName'] = $VmKeyName }
             if ($acCloneCredB64) { $acReprovArgs['GitCloneCredentialsB64'] = $acCloneCredB64 }
             if ($PSBoundParameters.ContainsKey('AutoResolve')) { $acReprovArgs['AutoResolve'] = $AutoResolve }
             try {
@@ -1548,7 +1582,7 @@ $wslLfScript = ConvertTo-WslPath $lfScript
 
 try {
     & wsl.exe @wslDistroArgs -u root -- env `
-        "VM_USER=$VmUser" "VM_PASS=$VmPass" "VM_HOST=$VmAlias" "SOURCE_ID=$SourceId" `
+        "VM_USER=$VmUser" "VM_PASS=$VmPass" "VM_HOST=$VmGuestName" "SOURCE_ID=$SourceId" `
         "BOOTSTRAP_PUBKEY_FILE=$wslPubKey" `
         bash $wslLfScript $wslSrc $wslOut
     $buildExit = $LASTEXITCODE
@@ -1632,6 +1666,9 @@ try {
     if ($createCmd.Parameters.ContainsKey('VmName')) {
         $createArgs['VmName'] = $HyperVmName
     }
+    if (-not $VmIsDefault -and $createCmd.Parameters.ContainsKey('LocalKeyName')) {
+        $createArgs['LocalKeyName'] = $VmKeyName
+    }
 } catch {
     # Fail SAFE, not open. We are already past Remove-AgentVm here, so passing an argument
     # the target might reject risks a binding failure with the old VM gone -- a broken
@@ -1643,6 +1680,11 @@ try {
     Write-Warning "Could not check Create-AgentVM.ps1's parameters ($($_.Exception.Message))."
     Write-Host "    Creating the VM without -AutomaticCheckpoints; set it afterwards from the control panel" -ForegroundColor Yellow
     Write-Host "    (Settings -> VM resources) or with Set-AgentVmCheckpoints.ps1." -ForegroundColor Yellow
+}
+# A custom VM name must reach Create-AgentVM.ps1; continuing without it would build
+# "Agent-VM" and provision an address that never exists (the catch above swallows).
+if (-not $VmIsDefault -and -not $createArgs.ContainsKey('VmName')) {
+    throw "Create-AgentVM.ps1 does not accept -VmName; cannot create a VM named '$HyperVmName'. Update The Construct."
 }
 if ($restoreDir)         { $createArgs['RestoreDir']             = $restoreDir }
 if ($chosenCloneCredB64) { $createArgs['GitCloneCredentialsB64'] = $chosenCloneCredB64 }
@@ -1680,6 +1722,7 @@ try {
         T3CodeChannel         = $T3CodeChannel
         Auto      = $true
     }
+    if (-not $VmIsDefault) { $provArgs['LocalKeyName'] = $VmKeyName }
     if ($restoreDir)         { $provArgs['RestoreDir']             = $restoreDir }
     if ($chosenCloneCredB64) { $provArgs['GitCloneCredentialsB64'] = $chosenCloneCredB64 }
     if ($PSBoundParameters.ContainsKey('Repo') -or $PSBoundParameters.ContainsKey('Ref')) {

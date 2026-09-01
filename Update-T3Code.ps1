@@ -5,7 +5,8 @@ param(
     # probing so an older provisioner is never handed unknown args).
     [string]$VmHost,
     [string]$HostAlias,
-    [int]$SshPort = 0
+    [int]$SshPort = 0,
+    [string]$LocalKeyName
 )
 
 $ErrorActionPreference = 'Stop'
@@ -41,21 +42,22 @@ if ($settings.projects -is [System.Array] -and $settings.projects.Count -gt 0) {
     $params.Projects = ($settings.projects -join ',')
 }
 
-# Forward optional identity overrides only when the caller supplied them AND the
-# target Provision-AgentVM.ps1 declares the matching parameter (skew guard: an
-# older provisioner must never receive an unknown argument).
-try {
-    $provCmd = Get-Command -Name $provision -CommandType ExternalScript -ErrorAction Stop
-    if ($PSBoundParameters.ContainsKey('VmHost') -and $VmHost -and $provCmd.Parameters.ContainsKey('VmHost')) {
-        $params['VmHost'] = $VmHost
+# Forward caller-supplied identity overrides. Each one is a hard requirement when
+# given: a provisioner that lacks the parameter (or a failed metadata probe) must
+# FAIL here rather than silently reprovision the default VM / port 22. Only
+# parameters the caller did not supply are omitted silently.
+$provCmd = Get-Command -Name $provision -CommandType ExternalScript -ErrorAction Stop
+$identity = @{}
+if ($PSBoundParameters.ContainsKey('VmHost')       -and $VmHost)        { $identity['VmHost']       = $VmHost }
+if ($PSBoundParameters.ContainsKey('HostAlias')    -and $HostAlias)     { $identity['HostAlias']    = $HostAlias }
+if ($PSBoundParameters.ContainsKey('SshPort')      -and $SshPort -ne 0) { $identity['SshPort']      = $SshPort }
+if ($PSBoundParameters.ContainsKey('LocalKeyName') -and $LocalKeyName)  { $identity['LocalKeyName'] = $LocalKeyName }
+foreach ($k in @($identity.Keys)) {
+    if (-not $provCmd.Parameters.ContainsKey($k)) {
+        throw "Provision-AgentVM.ps1 in $PSScriptRoot does not support -$k; update The Construct or omit -$k."
     }
-    if ($PSBoundParameters.ContainsKey('HostAlias') -and $HostAlias -and $provCmd.Parameters.ContainsKey('HostAlias')) {
-        $params['HostAlias'] = $HostAlias
-    }
-    if ($PSBoundParameters.ContainsKey('SshPort') -and $SshPort -ne 0 -and $provCmd.Parameters.ContainsKey('SshPort')) {
-        $params['SshPort'] = $SshPort
-    }
-} catch { }
+    $params[$k] = $identity[$k]
+}
 
 Write-Host 'Starting Construct reprovision to rebuild/update patched T3 Code...' -ForegroundColor Cyan
 & $provision @params
