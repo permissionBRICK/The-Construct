@@ -1,6 +1,12 @@
 #Requires -Version 5.1
 [CmdletBinding()]
-param()
+param(
+    # Optional identity overrides forwarded to Provision-AgentVM.ps1 (with param
+    # probing so an older provisioner is never handed unknown args).
+    [string]$VmHost,
+    [string]$HostAlias,
+    [int]$SshPort = 0
+)
 
 $ErrorActionPreference = 'Stop'
 $settingsPath = Join-Path $PSScriptRoot '.construct-settings.json'
@@ -34,6 +40,22 @@ $params = @{
 if ($settings.projects -is [System.Array] -and $settings.projects.Count -gt 0) {
     $params.Projects = ($settings.projects -join ',')
 }
+
+# Forward optional identity overrides only when the caller supplied them AND the
+# target Provision-AgentVM.ps1 declares the matching parameter (skew guard: an
+# older provisioner must never receive an unknown argument).
+try {
+    $provCmd = Get-Command -Name $provision -CommandType ExternalScript -ErrorAction Stop
+    if ($PSBoundParameters.ContainsKey('VmHost') -and $VmHost -and $provCmd.Parameters.ContainsKey('VmHost')) {
+        $params['VmHost'] = $VmHost
+    }
+    if ($PSBoundParameters.ContainsKey('HostAlias') -and $HostAlias -and $provCmd.Parameters.ContainsKey('HostAlias')) {
+        $params['HostAlias'] = $HostAlias
+    }
+    if ($PSBoundParameters.ContainsKey('SshPort') -and $SshPort -ne 0 -and $provCmd.Parameters.ContainsKey('SshPort')) {
+        $params['SshPort'] = $SshPort
+    }
+} catch { }
 
 Write-Host 'Starting Construct reprovision to rebuild/update patched T3 Code...' -ForegroundColor Cyan
 & $provision @params

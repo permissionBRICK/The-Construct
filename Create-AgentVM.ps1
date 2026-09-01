@@ -91,6 +91,10 @@ param(
     [string]$RestoreDir,
     [string]$GitCloneCredentialsB64,
     [string]$CheckoutProjects,
+    # Hyper-V VM display name. Derived values (VHDX path, mshome DNS name, SSH
+    # host alias) all follow this parameter. Must match the name Auto-Install.ps1
+    # passes -- the default keeps backward compat with existing installs.
+    [string]$VmName = "Agent-VM",
     # Source repo/ref, forwarded to Provision-AgentVM.ps1 so it can record the
     # installed-commit update marker for the control panel. Passed only when set.
     [string]$Repo,
@@ -155,7 +159,6 @@ if (-not (Test-Path -LiteralPath $commonLib)) { throw "Required helper not found
 . $commonLib
 
 # ── Configuration ────────────────────────────────────────────────────────────
-$VmName            = "Agent-VM"
 $SwitchName        = "Default Switch"
 $Generation        = 2
 
@@ -487,7 +490,7 @@ if ($isAutoinstall) {
     Write-Host "    using EXACTLY these settings so provisioning works:" -ForegroundColor Yellow
     Write-Host ""
     Write-Host "      - Install variant : Ubuntu Server (minimized)" -ForegroundColor White
-    Write-Host "      - Your server's name (hostname) : agent-vm" -ForegroundColor White
+    Write-Host "      - Your server's name (hostname) : $($VmName.ToLower())" -ForegroundColor White
     Write-Host "      - Username : agent" -ForegroundColor White
     Write-Host "      - Password : agent" -ForegroundColor White
     Write-Host "      - Install OpenSSH server : YES (enable it)" -ForegroundColor White
