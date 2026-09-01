@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Constructd.Api</RootNamespace>
+    <!-- The tests drive the host through WebApplicationFactory<Program>. -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Constructd.Core\Constructd.Core.csproj" />
+    <!--
+      The fakes ship with the host on purpose: fake mode (Constructd:Fake=true) runs the whole API
+      without Hyper-V, which is how it is developed and tested off Windows.
+    -->
+    <ProjectReference Include="..\Constructd.Fakes\Constructd.Fakes.csproj" />
+    <!-- The durable stores; cross-platform, so they are used in every non-fake mode. -->
+    <ProjectReference Include="..\Constructd.Sqlite\Constructd.Sqlite.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Kerberos/NTLM; registered only when running on Windows (see Auth/AuthenticationSetup.cs). -->
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.Negotiate" Version="10.0.11" />
+    <!-- Windows service hosting hook; a no-op elsewhere. -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.11" />
+  </ItemGroup>
+
+</Project>
