@@ -1708,6 +1708,344 @@ async function runTests() {
     ok("exclude: an ignored bookkeeping file never blocks a merge", mg.code === 0);
   } finally { fs.rmSync(excRoot, { recursive: true, force: true }); }
 
+  // ── vmBranch: instance-keyed VM branch (B5) ────────────────────────────────
+  // One host config repo, one VM-side branch per instance. `main` stays the host
+  // truth; the default instance keeps the historical `vm` ref.
+
+  /** All local branch refs in the repo, sorted. */
+  async function heads(configDir) {
+    const r = await runGit(["for-each-ref", "--format=%(refname)", "refs/heads"], { cwd: configDir });
+    return r.stdout.trim().split("\n").filter(Boolean).sort();
+  }
+  const revOf = async (configDir, ref) =>
+    (await runGit(["rev-parse", ref], { cwd: configDir })).stdout.trim();
+
+  ok("vmBranch: valid names accepted", cs.isValidVmBranch("vm") && cs.isValidVmBranch("vm-work") &&
+    cs.isValidVmBranch("vm-work_2.1"));
+  ok("vmBranch: rejects empty / non-string", !cs.isValidVmBranch("") && !cs.isValidVmBranch(null) &&
+    !cs.isValidVmBranch(undefined) && !cs.isValidVmBranch(7));
+  ok("vmBranch: rejects traversal, bad leading char, spaces, slashes",
+    !cs.isValidVmBranch("vm..x") && !cs.isValidVmBranch("-vm") && !cs.isValidVmBranch(".vm") &&
+    !cs.isValidVmBranch("vm work") && !cs.isValidVmBranch("vm/work") && !cs.isValidVmBranch("vm~1") &&
+    !cs.isValidVmBranch("vm.lock"));
+  ok("vmBranch: rejects the trunk names and git pseudo-refs",
+    !cs.isValidVmBranch("main") && !cs.isValidVmBranch("MAIN") && !cs.isValidVmBranch("Main") &&
+    !cs.isValidVmBranch("master") && !cs.isValidVmBranch("HEAD") && !cs.isValidVmBranch("head") &&
+    !cs.isValidVmBranch("FETCH_HEAD") && !cs.isValidVmBranch("ORIG_HEAD") && !cs.isValidVmBranch("stash"));
+  ok("vmBranch: rejects other spellings of the default branch (Windows ref collision)",
+    !cs.isValidVmBranch("VM") && !cs.isValidVmBranch("Vm"));
+  ok("vmBranch: an ordinary uppercase instance branch is NOT treated as a pseudo-ref",
+    cs.isValidVmBranch("WORK") && cs.isValidVmBranch("Work") && cs.isValidVmBranch("VM_WORK"));
+  ok("vmBranch: resolve defaults to vm", cs.resolveVmBranch() === "vm" && cs.resolveVmBranch("") === "vm" &&
+    cs.resolveVmBranch(null) === "vm" && cs.DEFAULT_VM_BRANCH === "vm");
+  ok("vmBranch: resolve keeps a valid name", cs.resolveVmBranch("vm-work") === "vm-work");
+  ok("vmBranch: resolve falls back and warns on a bad name", (() => {
+    const warns = [];
+    const r = cs.resolveVmBranch("vm/work", (m) => warns.push(m));
+    return r === "vm" && warns.length === 1 && /invalid config-sync branch name/.test(warns[0]);
+  })());
+
+  // (a) Default (no vmBranch) creates exactly refs/heads/main + refs/heads/vm.
+  const defBranchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cs-branch-default-"));
+  try {
+    const configDir = mk(defBranchRoot, "config");
+    const storeDir = path.join(defBranchRoot, "store");
+    cs.ensureConfigTree(configDir);
+    writeProfile(configDir, "web", { name: "web", repos: [{ url: "https://h/w.git" }] });
+    await cs.ensureRepo(runGit, configDir);
+    ok("branch-default: init creates only main + vm", eq(await heads(configDir), ["refs/heads/main", "refs/heads/vm"]));
+    await cs.syncTick({ runGit, configDir, readStore: makeReadStore(storeDir), writeStore: makeWriteStore(), storeRoot: storeDir });
+    writeStoreProfile(storeDir, "web", { name: "web", repos: [{ url: "https://h/w.git" }], sdks: { node: "22" } });
+    const r = await cs.syncTick({ runGit, configDir, readStore: makeReadStore(storeDir), writeStore: makeWriteStore(), storeRoot: storeDir });
+    ok("branch-default: merged", r.merged && r.ok);
+    ok("branch-default: no extra refs after a full tick", eq(await heads(configDir), ["refs/heads/main", "refs/heads/vm"]));
+    ok("branch-default: vm fast-forwarded to main",
+      (await revOf(configDir, "vm")) === (await revOf(configDir, "main")));
+  } finally { fs.rmSync(defBranchRoot, { recursive: true, force: true }); }
+
+  // (b) A non-default vmBranch uses its own ref and never touches refs/heads/vm.
+  const altBranchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cs-branch-alt-"));
+  try {
+    const configDir = mk(altBranchRoot, "config");
+    const storeDir = path.join(altBranchRoot, "store");
+    cs.ensureConfigTree(configDir);
+    writeProfile(configDir, "web", { name: "web", repos: [{ url: "https://h/w.git" }] });
+    await cs.ensureRepo(runGit, configDir, "vm-work");
+    ok("branch-alt: init creates main + vm-work only", eq(await heads(configDir), ["refs/heads/main", "refs/heads/vm-work"]));
+
+    const seed = await cs.syncTick({
+      runGit, configDir, vmBranch: "vm-work",
+      readStore: makeReadStore(storeDir), writeStore: makeWriteStore(), storeRoot: storeDir,
+    });
+    ok("branch-alt: seeds the fresh VM", seed.seeded && seed.ok);
+    ok("branch-alt: profile written to the store", (readStoreProfile(storeDir, "web") || {}).name === "web");
+
+    writeStoreProfile(storeDir, "web", { name: "web", repos: [{ url: "https://h/w.git" }], sdks: { node: "22" } });
+    const r = await cs.syncTick({
+      runGit, configDir, vmBranch: "vm-work",
+      readStore: makeReadStore(storeDir), writeStore: makeWriteStore(), storeRoot: storeDir,
+    });
+    ok("branch-alt: VM edit merged into main", r.merged && r.ok);
+    ok("branch-alt: host has the VM edit", ((readProfile(configDir, "web") || {}).sdks || {}).node === "22");
+    ok("branch-alt: still no refs/heads/vm", eq(await heads(configDir), ["refs/heads/main", "refs/heads/vm-work"]));
+    ok("branch-alt: vm-work fast-forwarded to main",
+      (await revOf(configDir, "vm-work")) === (await revOf(configDir, "main")));
+    const log = await runGit(["log", "-1", "--format=%s", "main"], { cwd: configDir });
+    ok("branch-alt: merge commit names the instance branch", log.stdout.trim() === "sync merge vm-work");
+  } finally { fs.rmSync(altBranchRoot, { recursive: true, force: true }); }
+
+  // An existing single-VM repo gains a second instance's branch on demand.
+  const joinRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cs-branch-join-"));
+  try {
+    const configDir = mk(joinRoot, "config");
+    cs.ensureConfigTree(configDir);
+    writeProfile(configDir, "web", { name: "web", repos: [{ url: "https://h/w.git" }] });
+    await cs.ensureRepo(runGit, configDir);
+    const before = await heads(configDir);
+    await cs.ensureRepo(runGit, configDir, "vm-work");
+    ok("branch-join: default repo keeps main + vm", eq(before, ["refs/heads/main", "refs/heads/vm"]));
+    ok("branch-join: a second instance's branch is created at main",
+      eq(await heads(configDir), ["refs/heads/main", "refs/heads/vm", "refs/heads/vm-work"]) &&
+      (await revOf(configDir, "vm-work")) === (await revOf(configDir, "main")));
+    // Idempotent: an existing branch is never reset back to main.
+    await runGit(["update-ref", "refs/heads/vm-work", "main^{commit}"], { cwd: configDir });
+    const keep = await revOf(configDir, "vm-work");
+    await cs.ensureRepo(runGit, configDir, "vm-work");
+    ok("branch-join: an existing instance branch is left where it is",
+      (await revOf(configDir, "vm-work")) === keep);
+  } finally { fs.rmSync(joinRoot, { recursive: true, force: true }); }
+
+  // (c) Two instances in ONE repo sync independently: each tick reads/writes its
+  // own store and merges from ITS OWN branch's base. Cross-branch leakage would
+  // make instance B's merge delete instance A's profile from main.
+  const twoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cs-branch-two-"));
+  try {
+    const configDir = mk(twoRoot, "config");
+    const storeA = path.join(twoRoot, "store-a");
+    const storeB = path.join(twoRoot, "store-b");
+    cs.ensureConfigTree(configDir);
+    writeProfile(configDir, "web", { name: "web", repos: [{ url: "https://h/w.git" }] });
+    await cs.ensureRepo(runGit, configDir);
+    const tickA = () => cs.syncTick({
+      runGit, configDir,
+      readStore: makeReadStore(storeA), writeStore: makeWriteStore(), storeRoot: storeA,
+    });
+    const tickB = () => cs.syncTick({
+      runGit, configDir, vmBranch: "vm-work",
+      readStore: makeReadStore(storeB), writeStore: makeWriteStore(), storeRoot: storeB,
+    });
+
+    ok("two-instances: A seeds its store", (await tickA()).seeded && !!readStoreProfile(storeA, "web"));
+    ok("two-instances: B seeds its own store", (await tickB()).seeded && !!readStoreProfile(storeB, "web"));
+    ok("two-instances: both branches exist alongside main",
+      eq(await heads(configDir), ["refs/heads/main", "refs/heads/vm", "refs/heads/vm-work"]));
+
+    // A's VM creates a profile; B's VM creates a different one, each in its own store.
+    writeStoreProfile(storeA, "a-only", { name: "a-only", repos: [{ url: "https://h/a.git" }] });
+    writeStoreProfile(storeB, "b-only", { name: "b-only", repos: [{ url: "https://h/b.git" }] });
+
+    const ra = await tickA();
+    ok("two-instances: A's tick merges a-only into main", ra.merged && !!readProfile(configDir, "a-only"));
+    ok("two-instances: A's tick leaves B's branch behind",
+      (await revOf(configDir, "vm-work")) !== (await revOf(configDir, "main")));
+    ok("two-instances: A's tick does not touch B's store", readStoreProfile(storeB, "a-only") === null);
+
+    const rb = await tickB();
+    ok("two-instances: B's tick merges b-only into main", rb.merged && !!readProfile(configDir, "b-only"));
+    ok("two-instances: B's merge keeps A's profile on main (own base, not vm's)",
+      !!readProfile(configDir, "a-only"));
+    ok("two-instances: B's write-back delivers A's profile to B's store",
+      (readStoreProfile(storeB, "a-only") || {}).name === "a-only");
+    ok("two-instances: b-only is not written to A's store by B's tick",
+      readStoreProfile(storeA, "b-only") === null);
+
+    await tickA();
+    ok("two-instances: A's next tick delivers b-only to A's store",
+      (readStoreProfile(storeA, "b-only") || {}).name === "b-only");
+    const mainRev = await revOf(configDir, "main");
+    ok("two-instances: both branches end at main",
+      (await revOf(configDir, "vm")) === mainRev && (await revOf(configDir, "vm-work")) === mainRev);
+    ok("two-instances: no other refs were created",
+      eq(await heads(configDir), ["refs/heads/main", "refs/heads/vm", "refs/heads/vm-work"]));
+  } finally { fs.rmSync(twoRoot, { recursive: true, force: true }); }
+
+  // (c2) Branch isolation in the tick's decision points: every ref the tick reads
+  // must be the INSTANCE's branch. Reading another instance's branch here is the
+  // shape of bug that silently deletes or resurrects profiles, so each decision
+  // point gets its own scenario with the two branches deliberately out of step.
+
+  /** A config repo with profile `p`, instance A on `vm` and instance B on `vm-work`, both seeded. */
+  async function twoInstanceRepo(tag) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "cs-iso-" + tag + "-"));
+    const configDir = mk(root, "config");
+    const storeA = path.join(root, "store-a");
+    const storeB = path.join(root, "store-b");
+    cs.ensureConfigTree(configDir);
+    writeProfile(configDir, "p", { name: "p", repos: [{ url: "https://h/p.git" }] });
+    await cs.ensureRepo(runGit, configDir);
+    const tick = (store, vmBranch) => cs.syncTick({
+      runGit, configDir, vmBranch,
+      readStore: makeReadStore(store), writeStore: makeWriteStore(), storeRoot: store,
+    });
+    await tick(storeA);            // A seeds from an absent store
+    await tick(storeB, "vm-work"); // B seeds its own (also absent) store
+    return { root, configDir, storeA, storeB, tick };
+  }
+  const pWithSdk = (v) => ({ name: "p", repos: [{ url: "https://h/p.git" }], sdks: { node: v } });
+
+  // An invalid file on B's VM must keep B's OWN last-agreed copy, not A's newer one.
+  {
+    const t = await twoInstanceRepo("preserve");
+    try {
+      writeStoreProfile(t.storeA, "p", pWithSdk("22"));
+      await t.tick(t.storeA);                       // main + vm move ahead; vm-work stays put
+      fs.writeFileSync(path.join(t.storeB, "p.json"), "{ half-written", "utf8");
+      writeStoreProfile(t.storeB, "q", { name: "q", repos: [{ url: "https://h/q.git" }] });
+      const r = await t.tick(t.storeB, "vm-work");
+      ok("branch-isolation: B's invalid file is skipped, not committed",
+        r.ok && r.skippedInvalid.some((s) => s.name === "p"));
+      const shown = await runGit(["show", "vm-work:projects/p.json"], { cwd: t.configDir });
+      const preserved = shown.code === 0 ? JSON.parse(shown.stdout) : null;
+      ok("branch-isolation: the preserved copy comes from THIS instance's branch",
+        !!preserved && !(preserved.sdks && preserved.sdks.node));
+      ok("branch-isolation: main keeps the newer profile and gains B's new one",
+        ((readProfile(t.configDir, "p") || {}).sdks || {}).node === "22" && !!readProfile(t.configDir, "q"));
+    } finally { fs.rmSync(t.root, { recursive: true, force: true }); }
+  }
+
+  // "Did the VM change?" is answered against THIS instance's tip, even when the
+  // other instance's tip already holds exactly the same tree.
+  {
+    const t = await twoInstanceRepo("tip");
+    try {
+      writeStoreProfile(t.storeA, "p", pWithSdk("22"));
+      await t.tick(t.storeA);
+      writeStoreProfile(t.storeB, "p", pWithSdk("22")); // B's VM reaches the same content on its own
+      await t.tick(t.storeB, "vm-work");
+      const subj = await runGit(["log", "-1", "--format=%s", "vm-work"], { cwd: t.configDir });
+      ok("branch-isolation: B's snapshot is compared against B's tip", subj.stdout.trim() === "vm-work sync");
+    } finally { fs.rmSync(t.root, { recursive: true, force: true }); }
+  }
+
+  // An empty store is judged "fresh VM" from THIS instance's profile count.
+  {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "cs-iso-count-"));
+    try {
+      const configDir = mk(root, "config");
+      const storeA = path.join(root, "store-a");
+      const storeB = path.join(root, "store-b");
+      cs.ensureConfigTree(configDir);
+      await cs.ensureRepo(runGit, configDir);             // empty repo: main + vm, no profiles
+      await cs.ensureRepo(runGit, configDir, "vm-work");  // B joins at that same point
+      writeProfile(configDir, "p", { name: "p", repos: [{ url: "https://h/p.git" }] });
+      const tick = (store, vmBranch) => cs.syncTick({
+        runGit, configDir, vmBranch,
+        readStore: makeReadStore(store), writeStore: makeWriteStore(), storeRoot: store,
+      });
+      await tick(storeA);                                 // A seeds; vm now has a profile
+      fs.mkdirSync(storeB, { recursive: true });          // B's store dir exists but is EMPTY
+      const r = await tick(storeB, "vm-work");
+      ok("branch-isolation: B's first sync seeds instead of hitting the mass-deletion guard",
+        r.ok && r.seeded && r.warnings.length === 0);
+      ok("branch-isolation: B's store received the profile", !!readStoreProfile(storeB, "p"));
+      ok("branch-isolation: B's branch advanced to main",
+        (await revOf(configDir, "vm-work")) === (await revOf(configDir, "main")));
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  }
+
+  // Ancestry ("is this instance already merged?") is asked about THIS branch: an
+  // interrupted tick on A leaves refs/heads/vm ahead of main, which must not
+  // change how B's tick behaves.
+  {
+    const t = await twoInstanceRepo("ancestor");
+    try {
+      const ident = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"];
+      const mainTreeSha = (await runGit(["rev-parse", "main^{tree}"], { cwd: t.configDir })).stdout.trim();
+      const vmSha = await revOf(t.configDir, "vm");
+      const orphan = await runGit([...ident, "commit-tree", mainTreeSha, "-p", vmSha, "-m", "interrupted vm snapshot"],
+        { cwd: t.configDir });
+      await runGit(["update-ref", "refs/heads/vm", orphan.stdout.trim()], { cwd: t.configDir });
+      writeProfile(t.configDir, "p", pWithSdk("20"));     // host-side edit for B to receive
+      const r = await t.tick(t.storeB, "vm-work");
+      ok("branch-isolation: B's tick is unaffected by A's unmerged snapshot", r.ok && !r.blocked && !r.conflict);
+      ok("branch-isolation: B's store received the host edit",
+        ((readStoreProfile(t.storeB, "p") || {}).sdks || {}).node === "20");
+      ok("branch-isolation: B's branch advanced to main",
+        (await revOf(t.configDir, "vm-work")) === (await revOf(t.configDir, "main")));
+    } finally { fs.rmSync(t.root, { recursive: true, force: true }); }
+  }
+
+  // (d) An unusable branch name degrades to `vm` with a warning; the tick runs.
+  const badBranchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cs-branch-bad-"));
+  try {
+    const configDir = mk(badBranchRoot, "config");
+    const storeDir = path.join(badBranchRoot, "store");
+    cs.ensureConfigTree(configDir);
+    writeProfile(configDir, "web", { name: "web", repos: [{ url: "https://h/w.git" }] });
+    await cs.ensureRepo(runGit, configDir);
+    const logged = [];
+    const r = await cs.syncTick({
+      runGit, configDir, vmBranch: "vm/../evil",
+      readStore: makeReadStore(storeDir), writeStore: makeWriteStore(), storeRoot: storeDir,
+      log: (level, msg) => logged.push(level + ": " + msg),
+    });
+    ok("branch-invalid: tick still succeeds", r.ok && r.seeded);
+    ok("branch-invalid: warns about the name",
+      r.warnings.some((w) => /invalid config-sync branch name/.test(w)) &&
+      logged.some((l) => /^warn: invalid config-sync branch name/.test(l)));
+    ok("branch-invalid: falls back to refs/heads/vm",
+      eq(await heads(configDir), ["refs/heads/main", "refs/heads/vm"]) &&
+      (await revOf(configDir, "vm")) === (await revOf(configDir, "main")));
+  } finally { fs.rmSync(badBranchRoot, { recursive: true, force: true }); }
+
+  // An uppercase instance name is an ordinary branch, not a pseudo-ref: it gets
+  // its own ref and must not fall back onto the default instance's store.
+  {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "cs-branch-upper-"));
+    try {
+      const configDir = mk(root, "config");
+      const storeDir = path.join(root, "store");
+      cs.ensureConfigTree(configDir);
+      writeProfile(configDir, "web", { name: "web", repos: [{ url: "https://h/w.git" }] });
+      await cs.ensureRepo(runGit, configDir, "WORK");
+      const r = await cs.syncTick({
+        runGit, configDir, vmBranch: "WORK",
+        readStore: makeReadStore(storeDir), writeStore: makeWriteStore(), storeRoot: storeDir,
+      });
+      ok("branch-upper: WORK syncs on its own ref with no warning",
+        r.ok && r.seeded && r.warnings.length === 0 &&
+        eq(await heads(configDir), ["refs/heads/WORK", "refs/heads/main"].sort()) &&
+        (await revOf(configDir, "WORK")) === (await revOf(configDir, "main")));
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  }
+
+  // Names git ACCEPTS syntactically but resolves specially (HEAD) or that alias
+  // the host-truth branch (main): a tick must never sync against them — HEAD
+  // cannot be created yet reads as the checked-out branch, and `main` would
+  // merge main into itself. Both degrade to `vm`.
+  for (const bad of ["HEAD", "main"]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "cs-branch-reserved-"));
+    try {
+      const configDir = mk(root, "config");
+      const storeDir = path.join(root, "store");
+      cs.ensureConfigTree(configDir);
+      writeProfile(configDir, "web", { name: "web", repos: [{ url: "https://h/w.git" }] });
+      await cs.ensureRepo(runGit, configDir, bad);
+      ok(`branch-reserved(${bad}): ensureRepo creates the default branch, not the reserved name`,
+        eq(await heads(configDir), ["refs/heads/main", "refs/heads/vm"]));
+      const r = await cs.syncTick({
+        runGit, configDir, vmBranch: bad,
+        readStore: makeReadStore(storeDir), writeStore: makeWriteStore(), storeRoot: storeDir,
+      });
+      ok(`branch-reserved(${bad}): tick warns and still succeeds`,
+        r.ok && r.warnings.some((w) => /invalid config-sync branch name/.test(w)));
+      ok(`branch-reserved(${bad}): only main + vm exist and main is intact`,
+        eq(await heads(configDir), ["refs/heads/main", "refs/heads/vm"]) &&
+        !!readProfile(configDir, "web") &&
+        (await revOf(configDir, "vm")) === (await revOf(configDir, "main")));
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  }
+
   // Print summary.
   console.log(`\n  config-sync unit tests — ${pass}/${pass + fail} passed\n`);
   process.exit(fail ? 1 : 0);
