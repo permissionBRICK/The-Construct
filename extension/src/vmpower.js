@@ -1,29 +1,25 @@
 "use strict";
-// Hyper-V power control for the Construct VM, from the control panel.
+// VM power control for the Construct VM, from the control panel.
+//
+// This module is the panel's ENTRY POINT for VM power/state; the backend-specific
+// work (the Hyper-V PowerShell probes and the elevated Start-VM launch) moved into
+// src/drivers/hyperv-local.js and is reached through src/drivers/index.js — see
+// docs/drivers.md. What stays here is what is NOT backend-specific: the panel's
+// decision helpers (shouldShowStart, shouldOfferCheckpointApply, planCheckpointOffer)
+// and the shutdown command. The pure builders are re-exported unchanged so every
+// existing caller — and extension/test/vmpower.test.js — keeps working verbatim.
 //
 // WHERE THIS RUNS — like lifecycle.js this is part of the UI extension, so its
 // Node code runs on the user's LOCAL Windows host even when the window is remote.
-// Two host operations live here:
-//   • queryVmState — a CAPTURED-output `Get-VM` probe (child_process, stdout read
-//     back) used ONLY when the VM is not SSH-reachable, to tell "stopped" apart
-//     from "not installed". (SSH reachability already means "running", so we never
-//     pay the Hyper-V query — which can need elevation — in the common case.)
-//   • startVm — an ELEVATED `Start-VM` launched in a console (Start-Process
-//     -Verb RunAs → UAC), fire-and-forget like the lifecycle scripts. Bringing the
-//     VM up then connecting is driven by the extension (poll reachability + open).
 //
 // The Shutdown action is just `poweroff` over SSH (the VM user is root), so it
 // lives as a constant here and is run through src/ssh.js by the extension.
-//
-// `vscode` is lazy-required so the pure builders unit-test under plain node. The
-// quoting helpers are reused from lifecycle.js (same canonical Windows rules).
 
-const cp = require("child_process");
-const lifecycle = require("./lifecycle");
+const drivers = require("./drivers");
+const hypervLocal = require("./drivers/hyperv-local");
 
-function vsc() { return require("vscode"); }
-
-// The Hyper-V VM name Auto-Install.ps1 creates ($HyperVmName).
+// The Hyper-V VM name Auto-Install.ps1 creates ($HyperVmName) — i.e. the default
+// instance's vmName, used whenever no instance/vmName is supplied.
 const VM_NAME = "Agent-VM";
 
 // `systemctl poweroff --no-block` asks PID 1 to shut down and returns immediately
@@ -32,158 +28,57 @@ const VM_NAME = "Agent-VM";
 // under it.
 const SHUTDOWN_CMD = "systemctl poweroff --no-block";
 
-// Cap captured probe output; the probe prints one short line, so this only guards
-// against a wedged/garbage powershell flooding host memory.
-const MAX_OUT = 64 * 1024;
-
 /**
- * The inline PowerShell that prints `VMSTATE=<state>` for the VM. `Get-VM -Name`
- * throws for a missing VM with a FullyQualifiedErrorId beginning "InvalidParameter"
- * — distinct from a permission/Hyper-V-absent failure — so we map that to `absent`
- * and every other failure to `unknown` (caller falls back gracefully). Pure.
- */
-function buildStateProbeCommand(vmName) {
-  const n = lifecycle.psSingleQuote(vmName || VM_NAME);
-  return (
-    "try { $vm = Get-VM -Name " + n + " -ErrorAction Stop; Write-Output ('VMSTATE=' + $vm.State) } " +
-    "catch { if ($_.FullyQualifiedErrorId -like 'InvalidParameter*') { Write-Output 'VMSTATE=absent' } " +
-    "else { Write-Output 'VMSTATE=unknown' } }"
-  );
-}
-
-/**
- * argv for the captured (non-elevated) state probe. The command is passed via
- * -EncodedCommand (base64 UTF-16LE) so no shell/quoting layer can mangle it. Pure.
- */
-function buildStateProbeLaunch(vmName) {
-  const command = buildStateProbeCommand(vmName);
-  const encoded = Buffer.from(command, "utf16le").toString("base64");
-  return {
-    file: "powershell.exe",
-    spawnArgs: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
-    command,
-  };
-}
-
-/**
- * Map the probe's raw `VMSTATE=<x>` line to a coarse state the UI gates on:
- *   running                          -> running
- *   off | saved | paused (resumable) -> off
- *   absent                           -> absent
- *   anything else / transient / none -> unknown
+ * Resolve the call's target instance + backend from `opts`.
+ *
+ *   opts.instance — the normalized instance object from the registry (optional).
+ *   opts.vmName   — the legacy explicit override; still wins, so every existing
+ *                   caller behaves exactly as before.
+ *   neither       — the DEFAULT instance: "Agent-VM" on "hyperv-local", which is
+ *                   today's behavior for an install with no instances.json.
  * Pure.
  */
-function parseVmState(stdout) {
-  const m = /VMSTATE=(\S+)/.exec(String(stdout || ""));
-  if (!m) return "unknown";
-  const s = m[1].toLowerCase();
-  if (s === "running") return "running";
-  if (s === "off" || s === "saved" || s === "paused") return "off"; // Start-VM resumes saved/paused
-  if (s === "absent") return "absent";
-  return "unknown"; // transient (starting/stopping) or an unrecognised state
+function resolveTarget(opts) {
+  const inst = (opts && opts.instance) || null;
+  const backend = (inst && inst.backend) || drivers.DEFAULT_BACKEND;
+  const vmName = (opts && opts.vmName) || (inst && inst.vmName) || VM_NAME;
+  return { instance: Object.assign({}, inst, { backend, vmName }), backend };
+}
+
+/** The driver for `opts`'s instance (default instance → the local Hyper-V driver). */
+function driverFor(opts) {
+  return drivers.getDriver(resolveTarget(opts).backend);
 }
 
 /**
- * Run the host `Get-VM` probe and resolve a coarse state string
- * ('running'|'off'|'absent'|'unknown'). Never rejects. Off-Windows (or a spawn
- * failure / timeout) resolves 'unknown'. `opts._spawn`/`opts._platform` are test
- * seams (default child_process.spawn / process.platform).
+ * Probe the VM's power state and resolve a coarse state string
+ * ('running'|'off'|'absent'|'unknown'). Never rejects; a backend that can't answer
+ * (off-Windows, spawn failure, timeout, unknown backend) resolves 'unknown'.
+ * `opts.instance` selects the instance; `opts._spawn`/`opts._platform`/`opts.timeoutMs`
+ * are passed through to the driver (test seams).
  */
 function queryVmState(opts = {}) {
-  const platform = opts._platform || process.platform;
-  if (platform !== "win32") return Promise.resolve("unknown");
-  const spawn = opts._spawn || cp.spawn;
-  const { file, spawnArgs } = buildStateProbeLaunch(opts.vmName);
-  return new Promise((resolve) => {
-    let out = "", done = false, child = null;
-    const finish = (v) => { if (done) return; done = true; clearTimeout(timer); resolve(v); };
-    const timer = setTimeout(() => { try { child && child.kill(); } catch (_) {} finish("unknown"); }, opts.timeoutMs || 15000);
-    try {
-      child = spawn(file, spawnArgs, { windowsHide: true });
-    } catch (_) {
-      return finish("unknown");
-    }
-    if (child.stdout) child.stdout.on("data", (d) => { if (out.length < MAX_OUT) out += d.toString(); });
-    child.on("error", () => finish("unknown"));
-    child.on("close", () => finish(parseVmState(out)));
-  });
+  const { instance } = resolveTarget(opts);
+  return drivers.getDriver(instance.backend).queryVmState(instance, opts);
 }
 
 /**
- * The inline PowerShell that prints `VMAUTOCHK=<x>` — the VM's CURRENT automatic-
- * checkpoint policy, read straight from Hyper-V rather than inferred from the panel's
- * saved preference. That distinction is the whole point: a VM created before Construct
- * started disabling them has the policy ON while the settings file has no key at all,
- * so "the preference didn't change" must NOT be read as "the VM already agrees".
- *
- * `AutomaticCheckpointsEnabled` is property-probed (absent on pre-1709 Hyper-V, which
- * has no automatic checkpoints at all → `unsupported`). A missing VM maps to `absent`
- * via the same FullyQualifiedErrorId test as buildStateProbeCommand; anything else
- * (typically the Hyper-V permission gate) is `unknown`. Pure.
- */
-function buildAutoCheckpointProbeCommand(vmName) {
-  const n = lifecycle.psSingleQuote(vmName || VM_NAME);
-  return (
-    "try { $vm = Get-VM -Name " + n + " -ErrorAction Stop; " +
-    "$p = $vm.PSObject.Properties['AutomaticCheckpointsEnabled']; " +
-    "if ($p -and $null -ne $p.Value) { Write-Output ('VMAUTOCHK=' + [bool]$p.Value) } " +
-    "else { Write-Output 'VMAUTOCHK=unsupported' } } " +
-    "catch { if ($_.FullyQualifiedErrorId -like 'InvalidParameter*') { Write-Output 'VMAUTOCHK=absent' } " +
-    "else { Write-Output 'VMAUTOCHK=unknown' } }"
-  );
-}
-
-/** argv for the captured (non-elevated) automatic-checkpoint probe. Pure. */
-function buildAutoCheckpointProbeLaunch(vmName) {
-  const command = buildAutoCheckpointProbeCommand(vmName);
-  const encoded = Buffer.from(command, "utf16le").toString("base64");
-  return {
-    file: "powershell.exe",
-    spawnArgs: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
-    command,
-  };
-}
-
-/**
- * Map the probe's `VMAUTOCHK=<x>` line to 'on' | 'off' | 'absent' | 'unsupported' |
- * 'unknown'. PowerShell stringifies a bool as `True`/`False`. Anything unrecognised or
- * missing is 'unknown' — the caller must treat that as "can't tell", never as "off".
- * Pure.
- */
-function parseAutoCheckpoints(stdout) {
-  const m = /VMAUTOCHK=(\S+)/.exec(String(stdout || ""));
-  if (!m) return "unknown";
-  const s = m[1].toLowerCase();
-  if (s === "true") return "on";
-  if (s === "false") return "off";
-  if (s === "absent") return "absent";
-  if (s === "unsupported") return "unsupported";
-  return "unknown";
-}
-
-/**
- * Read the VM's current automatic-checkpoint policy. Never rejects; off-Windows, a
- * spawn failure, or a timeout resolves 'unknown'. `opts._spawn`/`opts._platform` are
- * test seams (default child_process.spawn / process.platform).
+ * Read the VM's current automatic-checkpoint policy ('on'|'off'|'absent'|
+ * 'unsupported'|'unknown'). Never rejects; same seams as queryVmState.
  */
 function queryAutoCheckpoints(opts = {}) {
-  const platform = opts._platform || process.platform;
-  if (platform !== "win32") return Promise.resolve("unknown");
-  const spawn = opts._spawn || cp.spawn;
-  const { file, spawnArgs } = buildAutoCheckpointProbeLaunch(opts.vmName);
-  return new Promise((resolve) => {
-    let out = "", done = false, child = null;
-    const finish = (v) => { if (done) return; done = true; clearTimeout(timer); resolve(v); };
-    const timer = setTimeout(() => { try { child && child.kill(); } catch (_) {} finish("unknown"); }, opts.timeoutMs || 15000);
-    try {
-      child = spawn(file, spawnArgs, { windowsHide: true });
-    } catch (_) {
-      return finish("unknown");
-    }
-    if (child.stdout) child.stdout.on("data", (d) => { if (out.length < MAX_OUT) out += d.toString(); });
-    child.on("error", () => finish("unknown"));
-    child.on("close", () => finish(parseAutoCheckpoints(out)));
-  });
+  const { instance } = resolveTarget(opts);
+  return drivers.getDriver(instance.backend).queryAutoCheckpoints(instance, opts);
+}
+
+/**
+ * Start the VM (locally: an elevated Start-VM console behind a UAC prompt).
+ * Fire-and-forget; the caller polls SSH reachability and opens the VM once it
+ * answers. Returns true if the start was actually launched.
+ */
+function startVm(opts = {}) {
+  const { instance } = resolveTarget(opts);
+  return drivers.getDriver(instance.backend).startVm(instance, opts);
 }
 
 /**
@@ -264,88 +159,24 @@ function shouldShowStart(online, vmState) {
   return !online && vmState !== "absent" && vmState !== "running";
 }
 
-/**
- * argv that opens an ELEVATED host console running `commandText` (UAC via
- * Start-Process -Verb RunAs). The child is `-Command <text>` (not -File): the
- * inner argv is canonically quoted (winQuoteArg) and forwarded as a single-string
- * -ArgumentList so a VM name with a space/quote survives. Pure; mirrors
- * lifecycle.buildHostLaunch but for an inline command instead of a script file.
- *
- * `-WindowStyle Normal` is explicit so the elevated child gets a VISIBLE console
- * (same rationale as lifecycle.buildOuterCommand): the launcher is spawned DETACHED
- * with no console of its own, so without this the inner powershell can inherit "no
- * console" and run windowless — the "toast fires, nothing happens" symptom. It
- * coexists with -Verb RunAs.
- *
- * NO -NoExit by default: the child runs its inline command and EXITS (closing the
- * console) instead of dropping to an interactive prompt — the reported "leaves an
- * interactive PowerShell window" bug. `opts.keepOpen` (debug) adds it back so errors
- * stay readable. (The command itself can still pause on FAILURE — see buildStartCommand.)
- */
-function buildElevatedCommandLaunch(commandText, opts = {}) {
-  const childArgv = ["-NoProfile", "-ExecutionPolicy", "Bypass"];
-  if (opts.keepOpen) childArgv.push("-NoExit");
-  childArgv.push("-Command", commandText);
-  const childLine = childArgv.map(lifecycle.winQuoteArg).join(" ");
-  const command = `Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Normal -ArgumentList ${lifecycle.psSingleQuote(childLine)}`;
-  const encoded = Buffer.from(command, "utf16le").toString("base64");
-  const psArgs = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded];
-  // Launch through `cmd /c start` (same reason as lifecycle.buildHostLaunch): from
-  // VS Code's console-less extension host a plain powershell spawn gets no console, so
-  // its Start-Process -Verb RunAs opens no visible/UAC window. `start` forces a new
-  // console. Only argv-safe tokens (flags + base64) pass through cmd.
-  return {
-    file: "cmd.exe",
-    spawnArgs: ["/c", "start", "", "powershell.exe", ...psArgs],
-    command,
-  };
-}
-
-/** The elevated child command that starts the VM and reports the result. On SUCCESS the
- *  console closes (no -NoExit; the extension polls reachability + opens the VM, so that's
- *  the real feedback). On FAILURE it PAUSES so the error is readable before closing. Pure. */
-function buildStartCommand(vmName) {
-  const n = lifecycle.psSingleQuote(vmName || VM_NAME);
-  return (
-    "Start-VM -Name " + n + "; " +
-    "if ($?) { Write-Host 'Construct VM started.' -ForegroundColor Green } " +
-    "else { Write-Host 'Failed to start the Construct VM.' -ForegroundColor Red; " +
-    "if (-not [Console]::IsInputRedirected) { [void](Read-Host 'Press Enter to close') } }"
-  );
-}
-
-/**
- * Launch the elevated Start-VM in a new host console (UAC prompt). Fire-and-forget
- * like the lifecycle scripts; the caller polls SSH reachability and opens the VM
- * once it answers. Guards off-Windows. Returns true if spawned.
- */
-function startVm(opts = {}) {
-  const vscode = vsc();
-  if (process.platform !== "win32") {
-    vscode.window.showWarningMessage("Starting the Construct VM runs on the Windows host, which isn't available here.");
-    return false;
-  }
-  const { file, spawnArgs } = buildElevatedCommandLaunch(buildStartCommand(opts.vmName), { keepOpen: !!opts.debug });
-  try {
-    // No windowsHide: it sets CREATE_NO_WINDOW on this launcher, which suppresses the
-    // console the inner Start-Process opens (same bug the lifecycle buttons had).
-    // `detached` gives the launcher no console of its own and lets the UAC console
-    // outlive VS Code.
-    const child = cp.spawn(file, spawnArgs, { detached: true, stdio: "ignore" });
-    child.on("error", (e) => vscode.window.showErrorMessage(`Couldn't start the VM: ${e.message}`));
-    child.unref();
-    return true;
-  } catch (e) {
-    vscode.window.showErrorMessage(`Couldn't start the VM: ${e && e.message ? e.message : e}`);
-    return false;
-  }
-}
-
 module.exports = {
   VM_NAME, SHUTDOWN_CMD,
-  buildStateProbeCommand, buildStateProbeLaunch, parseVmState, queryVmState,
-  buildAutoCheckpointProbeCommand, buildAutoCheckpointProbeLaunch, parseAutoCheckpoints,
+  // Backend-specific builders/parsers live in the driver; re-exported here so the
+  // module's public surface (and its unit tests) are unchanged.
+  buildStateProbeCommand: hypervLocal.buildStateProbeCommand,
+  buildStateProbeLaunch: hypervLocal.buildStateProbeLaunch,
+  parseVmState: hypervLocal.parseVmState,
+  queryVmState,
+  buildAutoCheckpointProbeCommand: hypervLocal.buildAutoCheckpointProbeCommand,
+  buildAutoCheckpointProbeLaunch: hypervLocal.buildAutoCheckpointProbeLaunch,
+  parseAutoCheckpoints: hypervLocal.parseAutoCheckpoints,
   queryAutoCheckpoints, shouldOfferCheckpointApply, planCheckpointOffer,
   shouldShowStart,
-  buildElevatedCommandLaunch, buildStartCommand, startVm,
+  buildElevatedCommandLaunch: hypervLocal.buildElevatedCommandLaunch,
+  buildStartCommand: hypervLocal.buildStartCommand,
+  startVm,
+  // Driver dispatch, for callers that need the backend's capability flags.
+  getDriver: drivers.getDriver,
+  driverFor,
+  resolveTarget,
 };
