@@ -504,6 +504,10 @@ function buildWatchArgs(ssh, cfg, hasKey, script) {
     "-o", "ServerAliveInterval=20",         // notice a dead link…
     "-o", "ServerAliveCountMax=3",          // …within ~60s, then exit so we reconnect
   ];
+  // Non-default instance on a forwarded SSH port. Emitted only for a non-22 port so
+  // the default instance's watcher argv is byte-identical to before instances existed.
+  const port = ssh.normalizeSshPort ? ssh.normalizeSshPort(c.sshPort) : 22;
+  if (port !== 22) common.push("-p", String(port));
   if (hasKey) {
     return ["-i", ssh.keyPath(c), "-o", "IdentitiesOnly=yes", ...common, `${c.user}@${c.vmHost}`, command];
   }

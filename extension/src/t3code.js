@@ -172,7 +172,12 @@ exit 0
 function buildPairingScript() {
   return PRELUDE + `
 command -v t3 >/dev/null 2>&1 || { echo "t3 is not installed" >&2; exit 1; }
-base="http://$(hostname).mshome.net:\${T3CODE_PORT}"
+# The client-reachable name of THIS VM. B2 records it in config.env as
+# CONSTRUCT_EXTERNAL_HOST (a remote/forwarded instance is not reachable at its own
+# mshome name); absent — i.e. every existing local install — falls back to the
+# original $(hostname).mshome.net, so the minted URL is byte-identical to before.
+ext="$(cfgget CONSTRUCT_EXTERNAL_HOST)"
+base="http://\${ext:-$(hostname).mshome.net}:\${T3CODE_PORT}"
 t3 auth pairing create --json --ttl 10m --label "construct-control-panel" --base-url "$base" --log-level none
 `;
 }

@@ -51,6 +51,11 @@ h1.title {
 }
 .gear:hover { border-color: var(--line-strong); color: var(--title); }
 .gear:focus-visible { outline: 2px solid var(--rain); outline-offset: 2px; }
+/* Instance picker (multi-instance installs only; hidden with exactly one). Styled as
+   a .gear so it sits in the header tools without a design of its own — every theme
+   layer that restyles .gear picks it up for free. */
+.instance-select { padding-right: 6px; max-width: 180px; }
+.instance-select[hidden] { display: none; }
 .update-banner {
   display: flex; align-items: center; gap: 14px; background: rgba(22, 15, 2, 0.82);
   border: 1px solid rgba(255, 194, 77, 0.42); border-radius: 7px; padding: 8px 10px 8px 13px;
