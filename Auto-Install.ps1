@@ -416,6 +416,15 @@ $commonLib = Join-Path $PSScriptRoot "lib\AgentVm.Common.ps1"
 if (-not (Test-Path -LiteralPath $commonLib)) { throw "Required helper not found: $commonLib" }
 . $commonLib
 
+# Hypervisor driver: every Hyper-V touch in this script (the existence probe, the
+# prerequisite install, the teardown, the reachability endpoint) goes through the
+# contract functions it defines -- see docs/drivers.md. "hyperv-local" is today's
+# only backend and the zero-change default; a per-instance backend arrives with
+# the instance registry.
+$driverLoader = Join-Path $PSScriptRoot "drivers\Load-ConstructDriver.ps1"
+if (-not (Test-Path -LiteralPath $driverLoader)) { throw "Required helper not found: $driverLoader" }
+. $driverLoader -Backend "hyperv-local"
+
 # Full-window TUI for the whole interactive phase: every choice below runs as
 # its own screen (wipe + header + the current menu only). Show-AllSet turns it
 # back off at the "all set" banner, after which output scrolls as a normal log.
@@ -636,9 +645,20 @@ function Get-BackupProjectNames {
 # provisioner's interactive "enter the hostname" reachability retry loop.
 function Test-VmReachable {
     param([Parameter(Mandatory)][string]$VmName, [int]$TimeoutMs = 5000)
+    # Where to dial comes from the driver (local Hyper-V: <name>.mshome.net:22), so
+    # a non-local backend probes its real endpoint instead of a name convention.
+    # Falls back to the local convention if the driver isn't loaded (version skew).
+    $epHost = "$($VmName.ToLower()).mshome.net"
+    $epPort = 22
+    if (Get-Command Get-ConstructVmEndpoint -ErrorAction SilentlyContinue) {
+        try {
+            $ep = Get-ConstructVmEndpoint -Name $VmName
+            if ($ep -and $ep.SshHost) { $epHost = [string]$ep.SshHost; $epPort = [int]$ep.SshPort }
+        } catch { }
+    }
     $client = New-Object System.Net.Sockets.TcpClient
     try {
-        $iar = $client.BeginConnect("$($VmName.ToLower()).mshome.net", 22, $null, $null)
+        $iar = $client.BeginConnect($epHost, $epPort, $null, $null)
         if ($iar.AsyncWaitHandle.WaitOne($TimeoutMs)) { $client.EndConnect($iar); return $true }
         return $false
     } catch {
@@ -678,8 +698,13 @@ $VmDnsName   = "$VmGuestName.mshome.net"
 $VmIsDefault = ($VmGuestName -eq 'agent-vm')
 $VmAlias     = if ($VmIsDefault) { 'agent-vm' } else { "construct-$VmGuestName" }
 $VmKeyName   = if ($VmIsDefault) { 'agent_vm_ed25519' } else { "construct_${VmGuestName}_ed25519" }
-if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -and
-    (Get-VM -Name $HyperVmName -ErrorAction SilentlyContinue)) {
+# Both halves are the driver's: Test-ConstructDriverPrereqs is the cheap "this host
+# can't drive the backend at all" short-circuit (locally: the Hyper-V cmdlets are
+# absent), and Test-ConstructVmPresent is three-valued, so `-eq $true` behaves
+# exactly like the previous Get-VM -ErrorAction SilentlyContinue: a VM in any state
+# opens the menu, an unreadable backend falls through.
+if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
+    ((Test-ConstructVmPresent -Name $HyperVmName) -eq $true)) {
 
     $existingVmHandled = $true
     Show-TuiScreen -Title "The agent VM '$HyperVmName' is already installed on this host."
@@ -953,7 +978,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         Show-TuiScreen -Title "Removing the existing VM" -Body @(
             "Powering off '$HyperVmName' and deleting its virtual disk..."
         )
-        Remove-AgentVm -VmName $HyperVmName
+        Remove-ConstructVm -Name $HyperVmName
         if ($forceDownload) {
             Write-Note "Existing VM removed; will re-download the latest Ubuntu ISO and rebuild."
         } else {
@@ -1381,7 +1406,7 @@ if (-not $SkipCreateVm) {
     # enables Hyper-V + the platform features (rebooting if needed) or aborts
     # with BIOS / Windows-Home guidance. The "all set" banner comes later, once
     # we know the unattended phase can really proceed (ISO present, or WSL OK).
-    Ensure-HyperV
+    Ensure-ConstructDriverPrereqs
 }
 
 # If the target autoinstall ISO is already here, skip both the Ubuntu download
@@ -1696,8 +1721,9 @@ try {
 
     # ── Elevated host-side finalization (needs admin) ────────────────────────
     # Add the user to Hyper-V Administrators so the non-elevated control-panel
-    # extension can read VM power state without a UAC prompt.
-    Add-HyperVAdminMembership
+    # extension can read VM power state without a UAC prompt. (Driver contract:
+    # the host-access half of Ensure-ConstructDriverPrereqs.)
+    Ensure-ConstructDriverPrereqs -Scope HostAccess
 
     # ── Provisioning ─────────────────────────────────────────────────────────
     # Goes through Invoke-DeElevatedProvision, whose de-elevation is currently
