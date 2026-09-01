@@ -18,6 +18,10 @@
 //   CONTAINER, INSTANCES_FILE, DEFAULT_INSTANCE_NAME, DEFAULT_INSTANCE, NAME_RE
 //   isValidName(name)                     -> bool          (^[a-z0-9][a-z0-9-]{0,39}$)
 //   identityProblems(instance, raw?)       -> string[]      (format rules; [] = usable)
+//   backendProblems(rawBackend)           -> string[]      (the backend field's own rule)
+//   canonicalIdentity(name)               -> the identity a hyperv-local instance MUST have
+//   localIdentityProblems(instance)       -> string[]      (that rule; [] = usable/non-local)
+//   collisionProblems(byName)             -> { problems, drop } (cross-entry identity clashes)
 //   instancesPath(env)                    -> abs path | null
 //   deriveDefaults(name, raw)             -> normalized instance object
 //   parseRegistry(text)                   -> { registry, problems }
@@ -51,6 +55,9 @@ const INSTANCES_FILE = "instances.json";
 const SCHEMA_VERSION = 1;
 
 const DEFAULT_INSTANCE_NAME = "agent-vm";
+/** The backend a missing `backend` field means — today's zero-change path. Mirrors
+ *  drivers/index.js DEFAULT_BACKEND (and the driver key it resolves to). */
+const DEFAULT_BACKEND = "hyperv-local";
 const BACKENDS = ["hyperv-local", "hyperv-remote"];
 const DEFAULT_SSH_PORT = 22;
 
@@ -62,7 +69,7 @@ const NAME_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
  *  consumer can never mutate the fallback out from under another one. */
 const DEFAULT_INSTANCE = Object.freeze({
   name: DEFAULT_INSTANCE_NAME,
-  backend: "hyperv-local",
+  backend: DEFAULT_BACKEND,
   vmName: "Agent-VM",
   vmHost: "agent-vm.mshome.net",
   sshPort: DEFAULT_SSH_PORT,
@@ -118,7 +125,10 @@ function badString(v) { return v != null && v !== "" && typeof v !== "string"; }
 
 /** The string fields of an instance entry, for the type check. `sshPort` is handled
  *  separately (it is an int in the schema). */
-const STRING_FIELDS = ["backend", "vmName", "sshHost", "vmHost", "hostAlias", "keyName", "configBranch", "scriptsDir", "owner"];
+/** `backend` is deliberately NOT in this list: "report it and use the derived default"
+ *  is the wrong answer for the one field whose derived default is the LOCAL hypervisor.
+ *  It has its own, stricter check — backendProblems() — which SKIPS the entry. */
+const STRING_FIELDS = ["vmName", "sshHost", "vmHost", "hostAlias", "keyName", "configBranch", "scriptsDir", "owner"];
 
 // ── Identity-field FORMAT rules ──────────────────────────────────────────────
 // Type-checking a field ("it is a string") is not enough for the ones that end up in
@@ -233,6 +243,137 @@ function identityProblems(inst, raw) {
   return out;
 }
 
+// ── The CANONICAL identity of a local (hyper-v) instance ─────────────────────
+// For backend `hyperv-local` the identity is not a preference — it is DERIVED, in two
+// places that must agree:
+//   • here, from the instance name;
+//   • by Auto-Install.ps1 during a rebuild, from -VmName alone (it derives the guest
+//     host "<vmname lowercased>.mshome.net", the ssh alias = that name, and the key
+//     construct_<name>_ed25519 — agent_vm_ed25519 for the default VM), which is why
+//     reinstall/redownload emit ONLY -VmName (lifecycle.js INSTANCE_PARAMS).
+// So a registry entry that deviates is not "a customized instance", it is an entry that
+// TARGETS A DIFFERENT MACHINE than the one it would rebuild: `"work-vm": { vmName:
+// "Agent-VM" }` reinstalls the DEFAULT VM, and a custom host/alias/key is silently
+// replaced by the derived one the moment the VM is rebuilt, leaving the instance unable
+// to reach it. Such an entry is SKIPPED with a problem (parseRegistry), never used.
+//
+// NON-LOCAL backends keep free-form (still format-checked) identities: their endpoints
+// are defined by whatever created them on the other side, not by this convention.
+// `configBranch` is deliberately NOT pinned — it is the one field the launched scripts
+// can be TOLD (-ConfigBranch, threaded by lifecycle.configBranchOverride and gated by
+// checkInstanceSupport), so an explicit branch stays a supported override.
+// lib/AgentVm.Instances.ps1 applies the identical rules — change both together.
+
+/** The identity a `hyperv-local` instance of this name MUST have. Pure. */
+function canonicalIdentity(name) {
+  const isDefault = name === DEFAULT_INSTANCE_NAME;
+  return {
+    vmName: isDefault ? DEFAULT_INSTANCE.vmName : name,
+    vmHost: isDefault ? DEFAULT_INSTANCE.vmHost : name + ".mshome.net",
+    hostAlias: isDefault ? DEFAULT_INSTANCE.hostAlias : name,
+    keyName: isDefault ? DEFAULT_INSTANCE.keyName : "construct_" + name + "_ed25519",
+    sshPort: DEFAULT_SSH_PORT,
+  };
+}
+
+/**
+ * Is this backend the LOCAL Hyper-V one? Normalized exactly like drivers/index.js
+ * getDriver (trimmed, lowercased, empty = the default backend) — so every entry that
+ * would be handed the local driver (hostLifecycle: true, i.e. rebuild/checkpoint
+ * actions against a local VM of that vmName) is held to the canonical identity,
+ * including a differently-cased "HYPERV-LOCAL" the driver lookup would still resolve.
+ */
+function isLocalBackend(backend) {
+  const v = String(backend == null ? "" : backend).trim().toLowerCase();
+  return v === "" || v === DEFAULT_BACKEND;
+}
+
+/**
+ * The problems of a NORMALIZED instance whose identity must be canonical (see above):
+ * [] for every non-local backend and for a local instance that matches its derivation.
+ * Pure.
+ */
+function localIdentityProblems(inst) {
+  if (!inst || !isLocalBackend(inst.backend)) return [];
+  const c = canonicalIdentity(inst.name);
+  const q = (v) => JSON.stringify(v === undefined ? null : v);
+  const why = ' (a "' + DEFAULT_BACKEND + '" instance\'s identity is derived from its name — ' +
+    "Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)";
+  const out = [];
+  // The Hyper-V display name is case-INSENSITIVE (and the default instance's canonical
+  // spelling is the display-cased "Agent-VM"), so only the lowercased form must match.
+  if (String(inst.vmName).toLowerCase() !== c.vmName.toLowerCase()) {
+    out.push('"vmName" ' + q(inst.vmName) + " must be " + q(c.vmName) + " for instance " + q(inst.name) + why);
+  }
+  // The rest are the lowercase tokens the scripts derive, compared verbatim: a differing
+  // spelling is a differing ssh_config Host block / key file / -VmHost argument.
+  if (inst.vmHost !== c.vmHost) {
+    out.push('"sshHost" ' + q(inst.vmHost) + " must be " + q(c.vmHost) + " for instance " + q(inst.name) + why);
+  }
+  if (inst.hostAlias !== c.hostAlias) {
+    out.push('"hostAlias" ' + q(inst.hostAlias) + " must be " + q(c.hostAlias) + " for instance " + q(inst.name) + why);
+  }
+  if (inst.keyName !== c.keyName) {
+    out.push('"keyName" ' + q(inst.keyName) + " must be " + q(c.keyName) + " for instance " + q(inst.name) + why);
+  }
+  if (Number(inst.sshPort) !== c.sshPort) {
+    out.push('"sshPort" ' + q(inst.sshPort) + " must be " + c.sshPort + " for instance " + q(inst.name) + why);
+  }
+  return out;
+}
+
+/**
+ * The backend of an entry, NEVER coerced. The rule is PRESENCE-AWARE:
+ *   • ABSENT (or JSON null) -> "hyperv-local", today's zero-change default;
+ *   • a usable string       -> kept EXACTLY as written (trimmed), whatever it says.
+ * A wrong or misspelled backend ("proxmox", "hyperv-remtoe") must reach drivers/index.js
+ * as ITSELF, where the unknown-driver fallback refuses the hypervisor actions. Rewriting
+ * anything to "hyperv-local" (as this once did) PROMOTED it to destructive local Hyper-V
+ * access: lifecycleSupport would see hostLifecycle=true and let Reinstall/Redownload/
+ * checkpoints run against a LOCAL VM of that name. A present-but-UNUSABLE value (wrong
+ * type, or an empty/whitespace string) is kept here as it came so it can never read as
+ * local either — parseRegistry skips such an entry outright (backendProblems). Pure.
+ */
+function deriveBackend(raw) {
+  if (raw == null) return DEFAULT_BACKEND;
+  const v = str(raw);
+  return v == null ? raw : v;
+}
+
+/**
+ * The problems of an entry's RAW `backend` field ([] = usable). This field owns its own
+ * type check (it is NOT in STRING_FIELDS) because "report it and use the derived
+ * default" is exactly the wrong answer here: the derived default is the LOCAL hypervisor.
+ *
+ * Two kinds of entry are refused whole rather than normalized:
+ *   • PRESENT BUT UNUSABLE — `backend: 42`, `backend: ""`, `backend: "  "`. The file
+ *     states a backend; it just isn't one. Deriving "hyperv-local" from it would grant
+ *     destructive local access to a value the user never wrote.
+ *   • A SPELLING THE TWO LOOKUPS READ DIFFERENTLY — "HYPERV-LOCAL", "Hyperv-Local".
+ *     Every enum comparison in both readers is case-SENSITIVE (so this is "unknown"),
+ *     but drivers/index.js getDriver() trims and lowercases before the lookup (so it
+ *     would hand back the LOCAL driver, hostLifecycle: true). A value the two disagree
+ *     about is not safe to act on under either reading, so it does not load at all.
+ * A genuinely unknown backend ("proxmox") is NOT a problem here — it is reported
+ * separately and kept, because the driver dispatch degrades on it correctly.
+ * lib/AgentVm.Instances.ps1 applies the identical rule. Pure.
+ */
+function backendProblems(raw) {
+  if (raw == null) return [];   // omitted / JSON null -> the derived default
+  const q = (v) => JSON.stringify(v === undefined ? null : v);
+  if (typeof raw !== "string" || !raw.trim()) {
+    return ['"backend" ' + q(raw) + " is not a usable backend id (omit it for " + q(DEFAULT_BACKEND) +
+      ", or name one of: " + BACKENDS.join(", ") + ")"];
+  }
+  const v = raw.trim();
+  if (BACKENDS.indexOf(v) < 0 && isLocalBackend(v)) {
+    return ['"backend" ' + q(v) + " is not spelled " + q(DEFAULT_BACKEND) +
+      " (the backend id is case-sensitive, but the driver lookup is not — a value the two" +
+      " read differently must not drive a local VM)"];
+  }
+  return [];
+}
+
 /**
  * Fill in every field an entry omits, per the registry contract:
  *   default instance ("agent-vm") -> today's literals, verbatim;
@@ -253,11 +394,15 @@ function identityProblems(inst, raw) {
  * A remote backend has no name convention for its host, so `sshHost` is required
  * there — an entry that omits it derives the mshome name and the caller's validation
  * reports the problem. Pure; `raw` is never mutated.
+ *
+ * For `hyperv-local` these derivations are also the ONLY permitted values — an entry
+ * that states something else is skipped by parseRegistry (localIdentityProblems), not
+ * normalized into it.
  */
 function deriveDefaults(name, raw) {
   const r = (raw && typeof raw === "object" && !Array.isArray(raw)) ? raw : {};
   const isDefault = name === DEFAULT_INSTANCE_NAME;
-  const backend = BACKENDS.indexOf(r.backend) >= 0 ? r.backend : "hyperv-local";
+  const backend = deriveBackend(r.backend);
   return {
     name,
     backend,
@@ -316,6 +461,69 @@ function toSshCfg(inst) {
 }
 
 // ── Parsing / validation ─────────────────────────────────────────────────────
+
+/**
+ * The identity fields that must be UNIQUE across the registry, with the schema name
+ * each one is reported under. Two instances sharing any of them are two names for one
+ * machine (or one key file / one ssh_config Host block): a rebuild of the second would
+ * delete the first's VM, and a reprovision would overwrite its key.
+ */
+const UNIQUE_FIELDS = Object.freeze([
+  { key: "vmName", label: "vmName" },
+  { key: "vmHost", label: "sshHost" },
+  { key: "hostAlias", label: "hostAlias" },
+  { key: "keyName", label: "keyName" },
+]);
+
+/** All four are case-insensitive in the places they land (Hyper-V names, DNS, an
+ *  ssh_config alias, an NTFS file name), so they are compared lowercased. */
+function idKey(v) { return String(v == null ? "" : v).toLowerCase(); }
+
+/**
+ * Cross-entry identity COLLISIONS. Returns { problems, drop } where `drop` is the set of
+ * instance names that must not load. Two rules:
+ *   1. a non-default entry may not claim any of the DEFAULT instance's values — the
+ *      default is always present (synthesized when absent), so such an entry aims a
+ *      rebuild/re-key at the default VM under another name;
+ *   2. no two entries may share one — BOTH are dropped, because nothing in the file says
+ *      which one is the impostor, and keeping either would act on a machine the user
+ *      thinks belongs to the other. Dropping both is also what makes the two readers
+ *      agree without depending on key order.
+ * Pure.
+ */
+function collisionProblems(byName) {
+  const names = Object.keys(byName).sort();   // ordinal — the PS reader sorts the same way
+  const q = (v) => JSON.stringify(v === undefined ? null : v);
+  const problems = [];
+  const drop = new Set();
+  for (const name of names) {
+    if (name === DEFAULT_INSTANCE_NAME) continue;
+    const inst = byName[name];
+    for (const f of UNIQUE_FIELDS) {
+      if (idKey(inst[f.key]) === idKey(DEFAULT_INSTANCE[f.key])) {
+        problems.push('instance "' + name + '": ' + f.label + " " + q(inst[f.key]) +
+          ' belongs to the default instance "' + DEFAULT_INSTANCE_NAME + '" — skipped');
+        drop.add(name);
+        break;
+      }
+    }
+  }
+  for (let i = 0; i < names.length; i++) {
+    for (let j = i + 1; j < names.length; j++) {
+      const a = byName[names[i]], b = byName[names[j]];
+      for (const f of UNIQUE_FIELDS) {
+        if (idKey(a[f.key]) === idKey(b[f.key])) {
+          problems.push('instances "' + names[i] + '" and "' + names[j] + '" share the same ' +
+            f.label + " " + q(a[f.key]) + " — both skipped");
+          drop.add(names[i]);
+          drop.add(names[j]);
+          break;
+        }
+      }
+    }
+  }
+  return { problems, drop };
+}
 
 /**
  * Parse registry TEXT into { registry, problems }. Never throws. `registry` always
@@ -377,11 +585,21 @@ function parseRegistry(text) {
             problems.push('instance "' + name + '": "' + f + '" must be a string — using the derived default');
           }
         }
-        // Enum comparisons are CASE-SENSITIVE in both readers, so "HYPERV-REMOTE"
-        // can never be honoured by one and rejected by the other.
-        if (entry.backend != null && BACKENDS.indexOf(entry.backend) < 0) {
-          problems.push('instance "' + name + '" has an unknown backend ' + JSON.stringify(entry.backend) +
-            ' — treated as hyperv-local');
+        // The backend's own rules (backendProblems): an unusable or two-faced spelling
+        // makes the entry unloadable, and is collected with the identity problems below.
+        // The TRIMMED string is what both readers compare (the PS side's
+        // Get-ConstructInstanceField trims), so " hyperv-local " is simply the enum value.
+        const backendBad = backendProblems(entry.backend);
+        const rawBackend = str(entry.backend);
+        // Enum comparisons are CASE-SENSITIVE in both readers, so "HYPERV-REMOTE" can
+        // never be honoured by one and rejected by the other. An unknown backend is
+        // REPORTED BUT KEPT VERBATIM (see deriveBackend): it reaches drivers/index.js as
+        // itself, where the unknown-driver fallback refuses the hypervisor actions.
+        // Coercing it to hyperv-local would hand a typo destructive local Hyper-V access.
+        if (!backendBad.length && rawBackend && BACKENDS.indexOf(rawBackend) < 0) {
+          problems.push('instance "' + name + '" has an unknown backend ' + JSON.stringify(rawBackend) +
+            " — this Construct has no driver for it, so rebuild/checkpoint actions are unavailable" +
+            " for it (update Construct if a newer version created it)");
         }
         if (entry.sshPort != null && coercePort(entry.sshPort) === null) {
           problems.push('instance "' + name + '" has an invalid sshPort — using 22');
@@ -393,20 +611,31 @@ function parseRegistry(text) {
         } else if (entry.service && entry.service.auth != null && entry.service.auth !== "token" && entry.service.auth !== "negotiate") {
           problems.push('instance "' + name + '": unknown service auth ' + JSON.stringify(entry.service.auth) + ' — using negotiate');
         }
-        if (entry.backend === "hyperv-remote" && !str(entry.sshHost)) {
+        if (rawBackend === "hyperv-remote" && !str(entry.sshHost)) {
           problems.push('instance "' + name + '" is hyperv-remote but has no sshHost');
         }
         const normalized = deriveDefaults(name, entry);
         // A field of the right TYPE can still be unusable (or hostile) as a host name,
         // an ssh alias, a key file name or a git ref. Such an entry is skipped WHOLE:
-        // using the rest of it would dial, key or sync some other machine.
-        const bad = identityProblems(normalized, entry);
+        // using the rest of it would dial, key or sync some other machine. A local
+        // instance is held to its CANONICAL identity on top of that — a deviating one
+        // would rebuild (and then be unable to reach) a different VM than it names —
+        // and an entry whose BACKEND itself is unusable never loads at all.
+        const bad = backendBad
+          .concat(identityProblems(normalized, entry))
+          .concat(localIdentityProblems(normalized));
         if (bad.length) {
           problems.push('instance "' + name + '": ' + bad.join("; ") + " — skipped");
           continue;
         }
         byName[name] = normalized;
       }
+      // ...and finally the CROSS-entry rules: two instances that share an identity, or
+      // one that claims the default instance's, are dropped here rather than left to
+      // retarget each other's rebuilds.
+      const collisions = collisionProblems(byName);
+      for (const p of collisions.problems) problems.push(p);
+      for (const name of collisions.drop) delete byName[name];
     }
     const dflt = str(doc.defaultInstance);
     if (dflt) {
@@ -721,7 +950,8 @@ function addInstance(registry, name, entry) {
   if (!isValidName(name)) throw new Error('Invalid instance name "' + name + '"');
   const next = cloneRegistry(registry);
   if (next.byName[name]) throw new Error('Instance "' + name + '" already exists');
-  next.byName[name] = deriveDefaults(name, entry);
+  next.byName[name] = validatedInstance(name, entry);
+  assertNoCollisions(next);
   return next;
 }
 
@@ -730,8 +960,32 @@ function updateInstance(registry, name, patch) {
   const next = cloneRegistry(registry);
   const cur = next.byName[name];
   if (!cur) throw new Error('Unknown instance "' + name + '"');
-  next.byName[name] = deriveDefaults(name, { ...toFileEntry(cur), ...(patch || {}) });
+  next.byName[name] = validatedInstance(name, { ...toFileEntry(cur), ...(patch || {}) });
+  assertNoCollisions(next);
   return next;
+}
+
+/**
+ * deriveDefaults + THE READER'S OWN RULES, as a throw. The mutators write a file that
+ * parseRegistry reads back: an entry the reader would skip (a hostile field, or a local
+ * instance whose identity isn't the derived one) must be refused where it is CREATED,
+ * not silently persisted and then dropped on the next load — the instance would simply
+ * vanish from the picker with only a toast to explain it. Pure.
+ */
+function validatedInstance(name, entry) {
+  const inst = deriveDefaults(name, entry);
+  const raw = (entry && typeof entry === "object" && !Array.isArray(entry)) ? entry : {};
+  const bad = backendProblems(raw.backend)
+    .concat(identityProblems(inst, entry))
+    .concat(localIdentityProblems(inst));
+  if (bad.length) throw new Error('Instance "' + name + '": ' + bad.join("; "));
+  return inst;
+}
+
+/** The cross-entry rules, as a throw (same reason as validatedInstance). Pure. */
+function assertNoCollisions(registry) {
+  const { problems } = collisionProblems(registry.byName);
+  if (problems.length) throw new Error(problems[0]);
 }
 
 /**
@@ -759,9 +1013,11 @@ function setDefaultInstance(registry, name) {
 
 module.exports = {
   CONTAINER, INSTANCES_FILE, SCHEMA_VERSION, BACKENDS, NAME_RE,
-  DEFAULT_INSTANCE_NAME, DEFAULT_INSTANCE, DEFAULT_SSH_PORT,
+  DEFAULT_INSTANCE_NAME, DEFAULT_INSTANCE, DEFAULT_SSH_PORT, DEFAULT_BACKEND,
   isValidName, localAppData, instancesPath,
   isHostEndpoint, isIpv6Literal, isSafeToken, isKeyFileName, isDnsLabel, identityProblems,
+  isLocalBackend, canonicalIdentity, localIdentityProblems, collisionProblems,
+  deriveBackend, backendProblems,
   deriveDefaults, isDefaultInstance, toSshCfg,
   parseRegistry, load, list, resolve, resolveActive, matchByRemoteHost,
   createGate, captureTarget, targetSuperseded, planRemoteAdoption, adoptRemoteInstance,

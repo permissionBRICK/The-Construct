@@ -26,6 +26,10 @@
       Resolve-ConstructInstanceDefaults -Name   -> the derivation rules, applied
       Test-ConstructInstanceName -Name          -> [bool]
       Get-ConstructInstanceIdentityProblem -Instance [-Entry] -> [string[]] (@() = usable)
+      Get-ConstructBackendProblem -Raw           -> [string[]] (the backend field's own rule)
+      Get-ConstructCanonicalIdentity -Name      -> the identity a hyperv-local instance MUST have
+      Get-ConstructLocalIdentityProblem -Instance -> [string[]] (that rule; @() = usable/non-local)
+      Get-ConstructInstanceCollision -Instances  -> @{ Problems; Drop } (cross-entry clashes)
       Test-ConstructDefaultInstance -Instance   -> [bool] "behaves exactly like today"
       Save-ConstructInstances                   -> atomic write (temp file + move)
 
@@ -38,6 +42,9 @@ Set-StrictMode -Version Latest
 
 $script:ConstructSchemaVersion   = 1
 $script:ConstructDefaultInstance = 'agent-vm'
+# The backend a missing 'backend' field means -- today's zero-change path. Mirrors
+# DEFAULT_BACKEND in extension/src/instances.js and drivers/index.js.
+$script:ConstructDefaultBackend  = 'hyperv-local'
 $script:ConstructBackends        = @('hyperv-local', 'hyperv-remote')
 # Names are used verbatim in file names, ssh aliases and git refs.
 $script:ConstructInstanceNameRe  = '^[a-z0-9][a-z0-9-]{0,39}$'
@@ -79,8 +86,10 @@ function New-ConstructDefaultInstance {
 
 # The string-typed fields of an instance entry (sshPort is an int and is handled on
 # its own). Kept in one list so the type check and the JS reader's STRING_FIELDS stay
-# in step.
-$script:ConstructStringFields = @('backend', 'vmName', 'sshHost', 'vmHost', 'hostAlias', 'keyName', 'configBranch', 'scriptsDir', 'owner')
+# in step. 'backend' is deliberately NOT here: "report it and use the derived default" is
+# the wrong answer for the one field whose derived default is the LOCAL hypervisor, so it
+# has its own, stricter check (Get-ConstructBackendProblem) which SKIPS the entry.
+$script:ConstructStringFields = @('vmName', 'sshHost', 'vmHost', 'hostAlias', 'keyName', 'configBranch', 'scriptsDir', 'owner')
 
 # ── Identity-field FORMAT rules (mirror of extension/src/instances.js) ────────
 # Being a string is not enough for the fields that end up in a PowerShell command
@@ -243,6 +252,178 @@ function Get-ConstructInstanceIdentityProblem {
     return @($out)
 }
 
+# ── The CANONICAL identity of a local (hyper-v) instance ─────────────────────
+# For backend 'hyperv-local' the identity is DERIVED, in two places that must agree:
+# here, from the instance name; and by Auto-Install.ps1 during a rebuild, from -VmName
+# alone (guest host "<vmname lowercased>.mshome.net", ssh alias = that name, key
+# construct_<name>_ed25519 -- agent_vm_ed25519 for the default VM), which is why
+# reinstall/redownload emit ONLY -VmName. So an entry that deviates does not describe a
+# customised instance, it TARGETS ANOTHER MACHINE than the one it would rebuild:
+# { "work-vm": { "vmName": "Agent-VM" } } reinstalls the DEFAULT VM, and a custom
+# host/alias/key is replaced by the derived one the moment the VM is rebuilt. Such an
+# entry is SKIPPED with a problem. Non-local backends keep free-form (still
+# format-checked) identities -- their endpoints are defined on the other side.
+# ConfigBranch is deliberately NOT pinned: it is the one field the launched scripts can
+# be TOLD (-ConfigBranch), so an explicit branch stays a supported override.
+# Mirrors canonicalIdentity()/localIdentityProblems() in extension/src/instances.js.
+
+function Get-ConstructCanonicalIdentity {
+    <# The identity a 'hyperv-local' instance of this name MUST have. Pure. #>
+    param([Parameter(Mandatory)][string]$Name)
+    $isDefault = ($Name -eq $script:ConstructDefaultInstance)
+    return [pscustomobject]@{
+        VmName    = if ($isDefault) { 'Agent-VM' }             else { $Name }
+        VmHost    = if ($isDefault) { 'agent-vm.mshome.net' }  else { "$Name.mshome.net" }
+        HostAlias = if ($isDefault) { 'agent-vm' }             else { $Name }
+        KeyName   = if ($isDefault) { 'agent_vm_ed25519' }     else { "construct_${Name}_ed25519" }
+        SshPort   = 22
+    }
+}
+
+function Test-ConstructLocalBackend {
+    <#
+        Is this backend the LOCAL Hyper-V one? Normalised exactly like getDriver() in
+        extension/src/drivers/index.js (trimmed, lowercased, empty = the default
+        backend), so every entry that WOULD be handed the local driver -- including a
+        differently-cased 'HYPERV-LOCAL' -- is recognised as such. Such a two-faced
+        spelling does not load at all (Get-ConstructBackendProblem); the exact value is
+        held to the canonical identity.
+    #>
+    param([string]$Backend)
+    $v = ''
+    if ($null -ne $Backend) { $v = ([string]$Backend).Trim().ToLowerInvariant() }
+    return [bool]($v -eq '' -or $v -eq $script:ConstructDefaultBackend)
+}
+
+function Get-ConstructBackendProblem {
+    <#
+        The problems of an entry's RAW 'backend' value (@() = usable). This field owns its
+        own type check (it is NOT in $script:ConstructStringFields) because "report it and
+        use the derived default" is exactly the wrong answer for the one field whose
+        derived default is the LOCAL hypervisor.
+
+        Two kinds of entry are refused whole rather than normalised:
+          * PRESENT BUT UNUSABLE -- backend: 42, "", "  ". The file states a backend; it
+            just isn't one. Deriving 'hyperv-local' from it would grant destructive local
+            access to a value the user never wrote.
+          * A SPELLING THE TWO LOOKUPS READ DIFFERENTLY -- 'HYPERV-LOCAL', 'Hyperv-Local'.
+            Every enum comparison in both readers is case-SENSITIVE (so this is
+            "unknown"), but getDriver() in extension/src/drivers/index.js trims and
+            lowercases before the lookup (so it would hand back the LOCAL driver,
+            hostLifecycle: true). A value the two disagree about is not safe to act on
+            under either reading, so it does not load.
+        A genuinely unknown backend ('proxmox') is NOT a problem here -- it is reported
+        separately and kept, because the driver dispatch degrades on it correctly.
+        Mirrors backendProblems() in extension/src/instances.js. Pure.
+    #>
+    param($Raw)
+    $out = New-Object System.Collections.Generic.List[string]
+    if ($null -eq $Raw) { return @($out) }   # omitted / JSON null -> the derived default
+    if (-not ($Raw -is [string]) -or [string]::IsNullOrWhiteSpace($Raw)) {
+        $out.Add("`"backend`" '$Raw' is not a usable backend id (omit it for '$($script:ConstructDefaultBackend)', or name one of: $($script:ConstructBackends -join ', '))")
+        return @($out)
+    }
+    $v = $Raw.Trim()
+    if (($script:ConstructBackends -cnotcontains $v) -and (Test-ConstructLocalBackend $v)) {
+        $out.Add("`"backend`" '$v' is not spelled '$($script:ConstructDefaultBackend)' (the backend id is case-sensitive, but the driver lookup is not -- a value the two read differently must not drive a local VM)")
+    }
+    return @($out)
+}
+
+function Get-ConstructLocalIdentityProblem {
+    <#
+        The problems of a NORMALISED instance whose identity must be canonical (above):
+        @() for every non-local backend and for a local instance that matches its
+        derivation. Pure; mirrors localIdentityProblems() in extension/src/instances.js.
+    #>
+    param($Instance)
+    $out = New-Object System.Collections.Generic.List[string]
+    if ($null -eq $Instance) { return @($out) }
+    if (-not (Test-ConstructLocalBackend ([string]$Instance.Backend))) { return @($out) }
+    $c    = Get-ConstructCanonicalIdentity -Name ([string]$Instance.Name)
+    $why  = " (a `"$($script:ConstructDefaultBackend)`" instance's identity is derived from its name --" +
+            " Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)"
+    $n    = "`"$($Instance.Name)`""
+    # The Hyper-V display name is case-INSENSITIVE (and the default instance's canonical
+    # spelling is the display-cased 'Agent-VM'), so only the lowercased form must match.
+    if (([string]$Instance.VmName).ToLowerInvariant() -cne $c.VmName.ToLowerInvariant()) {
+        $out.Add("`"vmName`" `"$($Instance.VmName)`" must be `"$($c.VmName)`" for instance $n$why")
+    }
+    # The rest are the lowercase tokens the scripts derive, compared verbatim: a differing
+    # spelling is a differing ssh_config Host block / key file / -VmHost argument.
+    if ([string]$Instance.VmHost -cne $c.VmHost) {
+        $out.Add("`"sshHost`" `"$($Instance.VmHost)`" must be `"$($c.VmHost)`" for instance $n$why")
+    }
+    if ([string]$Instance.HostAlias -cne $c.HostAlias) {
+        $out.Add("`"hostAlias`" `"$($Instance.HostAlias)`" must be `"$($c.HostAlias)`" for instance $n$why")
+    }
+    if ([string]$Instance.KeyName -cne $c.KeyName) {
+        $out.Add("`"keyName`" `"$($Instance.KeyName)`" must be `"$($c.KeyName)`" for instance $n$why")
+    }
+    if ([int]$Instance.SshPort -ne [int]$c.SshPort) {
+        $out.Add("`"sshPort`" $($Instance.SshPort) must be $($c.SshPort) for instance $n$why")
+    }
+    return @($out)
+}
+
+# The identity fields that must be UNIQUE across the registry, with the schema name each
+# is reported under. Two instances sharing one are two names for ONE machine (or one key
+# file / one ssh_config Host block): a rebuild of the second would delete the first's VM.
+# Mirrors UNIQUE_FIELDS in extension/src/instances.js.
+$script:ConstructUniqueFields = @(
+    @{ Key = 'VmName';    Label = 'vmName' },
+    @{ Key = 'VmHost';    Label = 'sshHost' },
+    @{ Key = 'HostAlias'; Label = 'hostAlias' },
+    @{ Key = 'KeyName';   Label = 'keyName' }
+)
+
+function Get-ConstructInstanceCollision {
+    <#
+        Cross-entry identity COLLISIONS over a name->instance hashtable. Returns
+        @{ Problems = [string[]]; Drop = [string[]] }. Two rules:
+          1. a non-default entry may not claim any of the DEFAULT instance's values -- the
+             default is always present (synthesised when absent), so such an entry aims a
+             rebuild/re-key at the default VM under another name;
+          2. no two entries may share one -- BOTH are dropped, because nothing in the file
+             says which is the impostor. Dropping both is also what makes the two readers
+             agree without depending on key order.
+        Pure; mirrors collisionProblems() in extension/src/instances.js.
+    #>
+    param($Instances)
+    $problems = New-Object System.Collections.Generic.List[string]
+    $drop     = New-Object System.Collections.Generic.List[string]
+    # ORDINAL sort, like the JS reader's Array#sort -- Sort-Object is culture-sensitive
+    # and could order '-' differently, which would reorder the problem messages.
+    $names = [string[]]@($Instances.Keys)
+    [Array]::Sort($names, [System.StringComparer]::Ordinal)
+    $default = New-ConstructDefaultInstance
+    foreach ($name in $names) {
+        if ($name -ceq $script:ConstructDefaultInstance) { continue }
+        $inst = $Instances[$name]
+        foreach ($f in $script:ConstructUniqueFields) {
+            if (([string]$inst.($f.Key)).ToLowerInvariant() -ceq ([string]$default.($f.Key)).ToLowerInvariant()) {
+                $problems.Add("instance '$name': $($f.Label) `"$($inst.($f.Key))`" belongs to the default instance '$($script:ConstructDefaultInstance)' -- skipped")
+                if (-not $drop.Contains($name)) { $drop.Add($name) }
+                break
+            }
+        }
+    }
+    for ($i = 0; $i -lt $names.Count; $i++) {
+        for ($j = $i + 1; $j -lt $names.Count; $j++) {
+            $a = $Instances[$names[$i]]
+            $b = $Instances[$names[$j]]
+            foreach ($f in $script:ConstructUniqueFields) {
+                if (([string]$a.($f.Key)).ToLowerInvariant() -ceq ([string]$b.($f.Key)).ToLowerInvariant()) {
+                    $problems.Add("instances '$($names[$i])' and '$($names[$j])' share the same $($f.Label) `"$($a.($f.Key))`" -- both skipped")
+                    foreach ($n in @($names[$i], $names[$j])) { if (-not $drop.Contains($n)) { $drop.Add($n) } }
+                    break
+                }
+            }
+        }
+    }
+    return [pscustomobject]@{ Problems = @($problems); Drop = @($drop) }
+}
+
 function Get-ConstructRawProperty {
     <# The raw property value, or $null when absent. No coercion of any kind. #>
     param($Object, [string]$Name)
@@ -339,6 +520,10 @@ function Resolve-ConstructInstanceDefaults {
                                      VmHost       "<name>.mshome.net"  (hyperv-local)
                                      SshPort      22
                                      ScriptsDir   $null           (= newest install)
+
+        For 'hyperv-local' these derivations are also the ONLY permitted values -- an
+        entry that states something else is SKIPPED by the parser
+        (Get-ConstructLocalIdentityProblem), not normalised into it.
         Pure; $Entry is never modified.
     #>
     [CmdletBinding()]
@@ -349,11 +534,23 @@ function Resolve-ConstructInstanceDefaults {
 
     $isDefault = ($Name -eq $script:ConstructDefaultInstance)
 
-    # -cnotcontains: the enum comparison is CASE-SENSITIVE, exactly like the JS
-    # reader's indexOf. Without the `c` prefix PowerShell would silently accept
-    # "HYPERV-REMOTE" that JS rejects, and the two would target different backends.
-    $backend = Get-ConstructInstanceField $Entry 'backend'
-    if (-not $backend -or ($script:ConstructBackends -cnotcontains $backend)) { $backend = 'hyperv-local' }
+    # The backend is NEVER coerced, and the rule is PRESENCE-AWARE:
+    #   * ABSENT (or JSON null) -> 'hyperv-local', today's zero-change default;
+    #   * a usable string       -> kept EXACTLY as written (trimmed), whatever it says.
+    # A wrong or misspelled one ('proxmox', 'hyperv-remtoe') must reach the driver
+    # dispatch as ITSELF, where the unknown-driver fallback refuses the hypervisor
+    # actions. Rewriting anything to 'hyperv-local' (as this once did) PROMOTED it to
+    # destructive local Hyper-V access. A present-but-UNUSABLE value (wrong type, or an
+    # empty/whitespace string) is kept as it came so it can never read as local either --
+    # the parser skips such an entry outright (Get-ConstructBackendProblem). A local
+    # backend is then held to the canonical identity (Get-ConstructLocalIdentityProblem).
+    $rawBackendValue = Get-ConstructRawProperty $Entry 'backend'
+    if ($null -eq $rawBackendValue) {
+        $backend = $script:ConstructDefaultBackend
+    } else {
+        $backend = Get-ConstructInstanceField $Entry 'backend'
+        if (-not $backend) { $backend = $rawBackendValue }
+    }
 
     $vmName = Get-ConstructInstanceField $Entry 'vmName'
     if (-not $vmName) { $vmName = if ($isDefault) { 'Agent-VM' } else { $Name } }
@@ -508,9 +705,17 @@ function ConvertFrom-ConstructInstancesJson {
                         $problems.Add("instance '$name': '$f' must be a string -- using the derived default")
                     }
                 }
+                # The backend's own rules: an unusable or two-faced spelling makes the
+                # entry unloadable, and is collected with the identity problems below.
+                $backendBad = @(Get-ConstructBackendProblem -Raw (Get-ConstructRawProperty $entry 'backend'))
+                # -cnotcontains: the enum comparison is CASE-SENSITIVE, exactly like the
+                # JS reader's indexOf, so 'HYPERV-REMOTE' can never be honoured by one
+                # reader and rejected by the other. An unknown backend is REPORTED BUT
+                # KEPT VERBATIM (see Resolve-ConstructInstanceDefaults): coercing it would
+                # hand a typo destructive local Hyper-V access.
                 $rawBackend = Get-ConstructInstanceField $entry 'backend'
-                if ($rawBackend -and ($script:ConstructBackends -cnotcontains $rawBackend)) {
-                    $problems.Add("instance '$name' has an unknown backend '$rawBackend' -- treated as hyperv-local")
+                if ($backendBad.Count -eq 0 -and $rawBackend -and ($script:ConstructBackends -cnotcontains $rawBackend)) {
+                    $problems.Add("instance '$name' has an unknown backend '$rawBackend' -- this Construct has no driver for it, so rebuild/checkpoint actions are unavailable for it (update Construct if a newer version created it)")
                 }
                 $rawPort = Get-ConstructRawProperty $entry 'sshPort'
                 if ($null -ne $rawPort -and $null -eq (ConvertTo-ConstructPort $rawPort)) {
@@ -533,17 +738,28 @@ function ConvertFrom-ConstructInstancesJson {
                 # A field of the right TYPE can still be unusable (or hostile) as a host
                 # name, an ssh alias, a key file name or a git ref. Such an entry is
                 # skipped WHOLE: using the rest of it would dial, key or sync some other
-                # machine. The JS reader skips exactly the same entries.
+                # machine. A LOCAL instance is held to its canonical identity on top of
+                # that -- a deviating one would rebuild (and then be unable to reach) a
+                # different VM than it names -- and an entry whose BACKEND itself is
+                # unusable never loads at all. The JS reader skips the same entries.
                 $normalized = Resolve-ConstructInstanceDefaults -Name $name -Entry $entry
                 # @() around the call: an empty result unrolls to $null on the way out
                 # of a function, and Set-StrictMode makes $null.Count a hard error.
-                $bad = @(Get-ConstructInstanceIdentityProblem -Instance $normalized -Entry $entry)
+                $bad = $backendBad +
+                       @(Get-ConstructInstanceIdentityProblem -Instance $normalized -Entry $entry) +
+                       @(Get-ConstructLocalIdentityProblem -Instance $normalized)
                 if ($bad.Count -gt 0) {
                     $problems.Add("instance '$name': $($bad -join '; ') -- skipped")
                     continue
                 }
                 $instances[$name] = $normalized
             }
+            # ...and finally the CROSS-entry rules: two instances that share an identity,
+            # or one that claims the default instance's, are dropped here rather than left
+            # to retarget each other's rebuilds.
+            $collisions = Get-ConstructInstanceCollision -Instances $instances
+            foreach ($p in @($collisions.Problems)) { $problems.Add($p) }
+            foreach ($n in @($collisions.Drop)) { $instances.Remove($n) }
         }
 
         $dflt = Get-ConstructInstanceField $doc 'defaultInstance'
