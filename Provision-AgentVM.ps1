@@ -45,6 +45,7 @@ param(
     # Client-reachable SSH port for the VM. Thread into every ssh/scp/ssh-keyscan
     # invocation (-p/-P). Default 22 keeps backward compat; non-22 adjusts the
     # Host block's Port line and the known_hosts bracketed-host format.
+    [ValidateRange(1, 65535)]
     [int]$SshPort         = 22,
     [string]$SeedUser     = "agent",
     [string]$SeedPassword = "agent",

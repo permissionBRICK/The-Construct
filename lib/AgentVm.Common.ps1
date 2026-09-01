@@ -3349,6 +3349,7 @@ function Invoke-ConstructVmSsh {
         # their own path (e.g. Provision-AgentVM.ps1's -LocalKeyName).
         [string]$KeyPath = "",
         # SSH port for the VM (matches Provision-AgentVM.ps1's -SshPort).
+        [ValidateRange(1, 65535)]
         [int]$SshPort = 22
     )
 
