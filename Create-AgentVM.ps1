@@ -222,6 +222,36 @@ if (-not (Get-Command ssh.exe -ErrorAction SilentlyContinue)) {
 # which runs the same check up front; harmless to re-confirm here when chained.
 Ensure-HyperV
 
+# ── Instance identity (before ANY branch that provisions or deletes) ─────────
+# Alias = lowercased VM name (the first DNS label -- the convention every shared lib
+# helper derives from the host). It doubles as the guest hostname, so it must be a
+# valid DNS label. The default VM keeps the legacy key name byte-for-byte; any other
+# VM gets an instance-scoped key so a standalone "Create-AgentVM.ps1 -VmName work-vm"
+# never overwrites Agent-VM's ~/.ssh key.
+$script:VmGuestName = $VmName.ToLower()
+if ($script:VmGuestName -notmatch '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$') {
+    throw "-VmName '$VmName' is not usable as a hostname: use 1-63 letters, digits or hyphens (no spaces or dots), e.g. 'Work-VM'."
+}
+$script:VmIsDefault = ($script:VmGuestName -eq 'agent-vm')
+if (-not $LocalKeyName -and -not $script:VmIsDefault) {
+    $LocalKeyName = "construct_$($script:VmGuestName)_ed25519"
+}
+# Resolve a named VM's autoinstall ISO up front (explicit -AutoinstallIso wins, else
+# "<name>-autoinstall.iso" next to this script -- never "the newest ISO", which may
+# belong to another instance). A missing ISO is only an error on paths that CREATE a
+# VM, and it is raised BEFORE a reinstall deletes anything. The default VM keeps the
+# legacy newest-file discovery at the ISO step below.
+$script:ResolvedIso   = $null
+$script:NamedIsoError = $null
+if ($AutoinstallIso) {
+    if (-not (Test-Path -LiteralPath $AutoinstallIso)) { throw "-AutoinstallIso '$AutoinstallIso' does not exist." }
+    $script:ResolvedIso = Get-Item -LiteralPath $AutoinstallIso
+} elseif (-not $script:VmIsDefault) {
+    $namedIso = Join-Path $PSScriptRoot "$($script:VmGuestName)-autoinstall.iso"
+    if (Test-Path -LiteralPath $namedIso) { $script:ResolvedIso = Get-Item -LiteralPath $namedIso }
+    else { $script:NamedIsoError = "No autoinstall ISO for VM '$VmName' ($namedIso) and no -AutoinstallIso given; refusing to guess another instance's ISO." }
+}
+
 # ── 2. Handle an already-installed VM (reprovision / reinstall / quit) ───────
 if (Get-VM -Name $VmName -ErrorAction SilentlyContinue) {
     Write-Host ""
@@ -268,6 +298,8 @@ if (Get-VM -Name $VmName -ErrorAction SilentlyContinue) {
     elseif ($choice -eq 1) {
         # Complete reinstall -- confirm the irreversible delete (defaults to NO),
         # tear the VM down, then fall through to the normal creation steps below.
+        # A named VM without its ISO must fail HERE, before the delete below.
+        if ($script:NamedIsoError) { throw $script:NamedIsoError }
         if (-not (Confirm-Reinstall -VmName $VmName)) {
             Write-Note "Reinstall cancelled. No changes made."
             return
@@ -339,17 +371,6 @@ if ($DiskSizeGB -gt 0) {
 }
 Write-Ok "Disk size: $diskSizeGB GB"
 
-# ── Instance identity ────────────────────────────────────────────────────────
-# Alias = lowercased VM name (the first DNS label, the convention every shared lib
-# helper derives from the host). The default VM keeps the legacy key name
-# byte-for-byte; any other VM gets an instance-scoped key so a standalone
-# "Create-AgentVM.ps1 -VmName work-vm" never overwrites Agent-VM's ~/.ssh key.
-$script:VmGuestName = $VmName.ToLower()
-$script:VmIsDefault = ($script:VmGuestName -eq 'agent-vm')
-if (-not $LocalKeyName -and -not $script:VmIsDefault) {
-    $LocalKeyName = "construct_$($script:VmGuestName)_ed25519"
-}
-
 # ── 5. Select Ubuntu Server ISO ──────────────────────────────────────────────
 Write-Step "Select Ubuntu Server ISO"
 
@@ -358,13 +379,10 @@ Write-Step "Select Ubuntu Server ISO"
 # which may belong to another instance and would boot the guest with the wrong
 # hostname); the default VM keeps the legacy newest-file discovery.
 $autoIso = $null
-if ($AutoinstallIso) {
-    if (-not (Test-Path -LiteralPath $AutoinstallIso)) { throw "-AutoinstallIso '$AutoinstallIso' does not exist." }
-    $autoIso = Get-Item -LiteralPath $AutoinstallIso
-} elseif (-not $script:VmIsDefault) {
-    $namedIso = Join-Path $PSScriptRoot "$($script:VmGuestName)-autoinstall.iso"
-    if (Test-Path -LiteralPath $namedIso) { $autoIso = Get-Item -LiteralPath $namedIso }
-    else { throw "No autoinstall ISO for VM '$VmName' ($namedIso) and no -AutoinstallIso given; refusing to guess another instance's ISO." }
+if ($script:ResolvedIso) {
+    $autoIso = $script:ResolvedIso
+} elseif ($script:NamedIsoError) {
+    throw $script:NamedIsoError
 } else {
     # Prefer an autoinstall ISO sitting next to this script (built by
     # bin/build-autoinstall-iso.sh). If found, use it automatically; that also

@@ -60,9 +60,20 @@ fi
 # environment variable of the same name isn't clobbered, and a malformed line
 # elsewhere can't abort us). config-set.sh writes our values bare (safe charset),
 # so no unquoting is needed.
+# Undo config-set.sh's rendering: values outside its safe set are written as
+# '...' with embedded apostrophes as '\'' -- the sed reader must decode that or a
+# reprovision would carry the quote characters into the value.
+_cfg_unquote() {
+  local v="$1"
+  if [[ ${#v} -ge 2 && "${v}" == \'*\' ]]; then
+    v="${v:1:${#v}-2}"
+    v="${v//\'\\\'\'/\'}"
+  fi
+  printf '%s' "${v}"
+}
 read_cfg() {
   [[ -f "${CONFIG_FILE}" ]] || return 0
-  sed -n "s/^$1=//p" "${CONFIG_FILE}" | head -1
+  _cfg_unquote "$(sed -n "s/^$1=//p" "${CONFIG_FILE}" | head -1)"
 }
 
 # Precedence for each setting: explicit environment (from provision.sh / the host

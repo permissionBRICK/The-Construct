@@ -183,6 +183,20 @@ PATH="${guard_stubs}:${stub_path}" CONFIG_FILE="${override_cfg}" \
 ok "setup-root-ssh-key: --snippet invokes no privileged tool" \
   sh -c "! test -e '${tmp}/guard-calls'"
 
+# A value config-set.sh had to single-quote (here a scoped IPv6 address with '%')
+# must come back verbatim from the narrow reader -- no quote characters leak.
+quoted_cfg="${tmp}/config_quoted.env"
+bash "${ROOT}/bin/config-set.sh" "${quoted_cfg}" CONSTRUCT_EXTERNAL_HOST "fe80::1%12"
+bash "${ROOT}/bin/config-set.sh" "${quoted_cfg}" CONSTRUCT_EXTERNAL_SSH_PORT "2222"
+ok "config-set.sh quoted the scoped IPv6 value (test precondition)" \
+  grep -q "^CONSTRUCT_EXTERNAL_HOST='fe80::1%12'$" "${quoted_cfg}"
+snippet_quoted="${tmp}/snippet_quoted.out"
+PATH="${stub_path}" CONFIG_FILE="${quoted_cfg}" bash "${ROOT}/bin/setup-root-ssh-key.sh" --snippet >"${snippet_quoted}" 2>/dev/null
+ok "setup-root-ssh-key: quoted saved host is decoded (no quote characters)" \
+  sh -c "grep -q '^  HostName fe80::1%12$' '${snippet_quoted}' && ! grep -q \"'\" '${snippet_quoted}'"
+ok "setup-root-ssh-key: quoted saved port is decoded" \
+  grep -q '^  Port 2222$' "${snippet_quoted}"
+
 # config.env must not be able to redirect the key path or sshd drop-in (the file is
 # read with a narrow key lookup, not sourced).
 poison_cfg="${tmp}/config_poison.env"
