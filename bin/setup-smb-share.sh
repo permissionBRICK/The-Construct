@@ -75,6 +75,21 @@ SMB_PASSWORD="${SMB_PASSWORD:-$(read_cfg SMB_PASSWORD)}"
 
 cfg() { bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" "$1" "$2"; }
 
+# Resolve the client-reachable hostname from config.env/env (same precedence
+# idiom as setup-root-ssh-key.sh and print-connection-info.sh). Uses read_cfg so
+# the file is not sourced -- an env-provided value always wins, and a malformed
+# line elsewhere cannot abort this script.
+# Windows UNC paths (\\host\share) cannot use raw IPv6 literals, so when the
+# external host contains a colon (IPv6 indicator) we fall back to the Hyper-V DNS
+# name for the SMB share path -- the LAN IP is in the banner as a secondary option.
+CONSTRUCT_EXTERNAL_HOST="${CONSTRUCT_EXTERNAL_HOST:-$(read_cfg CONSTRUCT_EXTERNAL_HOST)}"
+_raw_external="${CONSTRUCT_EXTERNAL_HOST:-$(hostname).mshome.net}"
+if [[ "${_raw_external}" == *:* ]]; then
+  external_host="$(hostname).mshome.net"
+else
+  external_host="${_raw_external}"
+fi
+
 # Generate a stable, host-friendly password: alphanumeric only (no quoting needed
 # in config.env or in the host's `net use` command line). Prefer openssl (a single
 # command, so no pipe to SIGPIPE under `set -o pipefail`); fall back to /dev/urandom
@@ -103,7 +118,7 @@ write_status() {
     printf 'SMB_PASSWORD=%s\n'   "${SMB_PASSWORD}"
     printf 'SMB_PATH=%s\n'       "${WORKSPACE_ROOT}"
     printf 'SMB_IP=%s\n'         "$(lan_ip)"
-    printf 'SMB_DNS=%s\n'        "$(hostname).mshome.net"
+    printf 'SMB_DNS=%s\n'        "${external_host}"
   } >"${STATUS_FILE}" 2>/dev/null || true
   # Holds the SMB password -> readable only by root (the host reads it via sudo).
   chmod 0600 "${STATUS_FILE}" 2>/dev/null || true
@@ -234,4 +249,4 @@ fi
 # 10. Publish the connection details for the host (read back by Provision-AgentVM.ps1).
 write_status "yes"
 
-ok "SMB share ready: \\\\$(hostname).mshome.net\\${SMB_SHARE_NAME}  (user ${SMB_USER}, access as root)"
+ok "SMB share ready: \\\\${external_host}\\${SMB_SHARE_NAME}  (user ${SMB_USER}, access as root)"

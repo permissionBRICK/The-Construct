@@ -2,6 +2,8 @@
 set -euo pipefail
 
 CONFIG_FILE="${CONFIG_FILE:-/etc/construct/config.env}"
+_external_host_override="${CONSTRUCT_EXTERNAL_HOST:-}"
+_external_ssh_port_override="${CONSTRUCT_EXTERNAL_SSH_PORT:-}"
 
 if [[ -f "${CONFIG_FILE}" ]]; then
   set -a
@@ -11,6 +13,10 @@ if [[ -f "${CONFIG_FILE}" ]]; then
   . "${CONFIG_FILE}" 2>/dev/null || true
   set +a
 fi
+
+# Sourcing config.env must not replace an explicit caller override.
+CONSTRUCT_EXTERNAL_HOST="${_external_host_override:-${CONSTRUCT_EXTERNAL_HOST:-}}"
+CONSTRUCT_EXTERNAL_SSH_PORT="${_external_ssh_port_override:-${CONSTRUCT_EXTERNAL_SSH_PORT:-}}"
 
 AI_TOOLS="${AI_TOOLS:-}"
 OPENCODE_PORT="${OPENCODE_PORT:-4096}"
@@ -37,7 +43,22 @@ if [[ -z "${lan_ip}" ]]; then
   lan_ip="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
 fi
 lan_ip="${lan_ip:-unknown}"
-hyperv_dns="$(hostname).mshome.net"
+# External host: CONSTRUCT_EXTERNAL_HOST from config.env/env takes precedence;
+# fall back to the Hyper-V local DNS name when the key is absent or empty.
+CONSTRUCT_EXTERNAL_SSH_PORT="${CONSTRUCT_EXTERNAL_SSH_PORT:-22}"
+hyperv_dns="${CONSTRUCT_EXTERNAL_HOST:-$(hostname).mshome.net}"
+# Bracket IPv6 addresses for URL contexts (http://[::1]:8080). Hostnames and
+# IPv4 addresses pass through unchanged. SSH/DNS/SMB contexts use hyperv_dns raw.
+url_host="${hyperv_dns}"
+if [[ "${hyperv_dns}" == *:* ]]; then
+  url_host="[${hyperv_dns}]"
+fi
+ssh_port="${CONSTRUCT_EXTERNAL_SSH_PORT}"
+# Prepare SSH port flag for command lines ("-p <n> " or empty for the default 22).
+ssh_port_flag=""
+if [[ "${ssh_port}" != "22" ]]; then
+  ssh_port_flag="-p ${ssh_port} "
+fi
 ssh_user="${SSH_USER:-${SUDO_USER:-${USER:-root}}}"
 
 has_selected_or_installed_tool() {
@@ -69,7 +90,7 @@ DNS:      ${hyperv_dns}
 LAN IP:   ${lan_ip} fallback
 
 SSH:
-  ssh ${ssh_user}@${hyperv_dns}
+  ssh ${ssh_port_flag}${ssh_user}@${hyperv_dns}
 EOF
 
 if has_selected_or_installed_tool claude-code claude; then
@@ -86,8 +107,8 @@ if has_selected_or_installed_tool opencode opencode opencode-serve; then
 OpenCode:
   Service:  opencode-serve
   Bind:     ${OPENCODE_HOST}:${OPENCODE_PORT}
-  URL:      http://${hyperv_dns}:${OPENCODE_PORT}
-  Docs:     http://${hyperv_dns}:${OPENCODE_PORT}/doc
+  URL:      http://${url_host}:${OPENCODE_PORT}
+  Docs:     http://${url_host}:${OPENCODE_PORT}/doc
 EOF
 fi
 
@@ -97,16 +118,16 @@ if has_selected_or_installed_tool codex codex codex-app-server; then
 Codex:
   Supported app workflow: add this VM as an SSH host in Codex App.
   SSH target:             ${ssh_user}@${hyperv_dns}
-  Remote CLI check:       ssh ${ssh_user}@${hyperv_dns} codex --version
+  Remote CLI check:       ssh ${ssh_port_flag}${ssh_user}@${hyperv_dns} codex --version
 
 Codex experimental app-server:
   Service:                codex-app-server
   Bind:                   ${CODEX_HOST}:${CODEX_PORT}
-  Health:                 http://${hyperv_dns}:${CODEX_PORT}/healthz
-  Direct remote URL:      ws://${hyperv_dns}:${CODEX_PORT}
+  Health:                 http://${url_host}:${CODEX_PORT}/healthz
+  Direct remote URL:      ws://${url_host}:${CODEX_PORT}
   Token file on VM:       ${CODEX_TOKEN_FILE}
-  Connect CLI:            CODEX_REMOTE_TOKEN=<token> codex --remote ws://${hyperv_dns}:${CODEX_PORT} --remote-auth-token-env CODEX_REMOTE_TOKEN
-  Optional tunnel:        ssh -L ${CODEX_PORT}:127.0.0.1:${CODEX_PORT} ${ssh_user}@${hyperv_dns}
+  Connect CLI:            CODEX_REMOTE_TOKEN=<token> codex --remote ws://${url_host}:${CODEX_PORT} --remote-auth-token-env CODEX_REMOTE_TOKEN
+  Optional tunnel:        ssh -L ${CODEX_PORT}:127.0.0.1:${CODEX_PORT} ${ssh_port_flag}${ssh_user}@${hyperv_dns}
 EOF
 fi
 
@@ -120,8 +141,8 @@ T3 Code (web GUI):
   Service:  t3code-serve
   Channel:  ${T3CODE_CHANNEL:-stable}
   Bind:     ${T3CODE_HOST}:${T3CODE_PORT}
-  URL:      http://${hyperv_dns}:${T3CODE_PORT}
-  Login:    mint a pairing link -- t3 auth pairing create --base-url http://${hyperv_dns}:${T3CODE_PORT}
+  URL:      http://${url_host}:${T3CODE_PORT}
+  Login:    mint a pairing link -- t3 auth pairing create --base-url http://${url_host}:${T3CODE_PORT}
             (or use the control panel's "open web UI" button)
 EOF
 fi
