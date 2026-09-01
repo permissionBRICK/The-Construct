@@ -68,6 +68,35 @@ ok("unknown: getDriver doesn't throw and keeps the requested name",
   !!unk && unk.backend === "hyperv-remote" && unk.unknown === true);
 ok("unknown: no capabilities are claimed",
   unk.capabilities.checkpoints === false && unk.capabilities.console === "none" && unk.capabilities.suspend === false);
+
+// ── lifecycle capability gate ────────────────────────────────────────────────
+// The host PowerShell scripts drive the LOCAL Hyper-V, so the actions that create,
+// delete or reconfigure a VM are refused for every other backend — otherwise a
+// Reinstall of a remote instance would delete a LOCAL VM of the same name. The gate
+// reads a declared capability, so a future remote driver enables the actions by
+// declaring `hostLifecycle`, not by editing lifecycle.js.
+ok("caps: local Hyper-V declares hostLifecycle (the host scripts manage it)", caps.hostLifecycle === true);
+ok("caps: an unknown backend claims no hostLifecycle", unk.capabilities.hostLifecycle === false);
+ok("gate: the hypervisor actions are exactly reinstall/redownload/setCheckpoints",
+  JSON.stringify(drivers.HYPERVISOR_ACTIONS) === JSON.stringify(["reinstall", "redownload", "setCheckpoints"]));
+for (const action of drivers.HYPERVISOR_ACTIONS) {
+  ok(`gate: hyperv-local may ${action}`, drivers.lifecycleSupport("hyperv-local", action).ok === true);
+  const denied = drivers.lifecycleSupport("hyperv-remote", action);
+  ok(`gate: hyperv-remote may NOT ${action}`, denied.ok === false);
+  ok(`gate: ...and says why (${action})`, /remote driver/i.test(denied.reason));
+  ok(`gate: an unknown backend may NOT ${action}`, drivers.lifecycleSupport("proxmox", action).ok === false);
+}
+for (const action of ["reprovision", "exportConfig"]) {
+  ok(`gate: ${action} is SSH-only, so every backend may run it`,
+    drivers.lifecycleSupport("hyperv-local", action).ok === true &&
+    drivers.lifecycleSupport("hyperv-remote", action).ok === true &&
+    drivers.lifecycleSupport("proxmox", action).ok === true);
+  ok(`gate: ${action} is not a hypervisor action`, drivers.isHypervisorAction(action) === false);
+}
+ok("gate: a missing/empty backend is the default (local) one — the zero-change path",
+  drivers.lifecycleSupport(undefined, "reinstall").ok === true &&
+  drivers.lifecycleSupport("", "reinstall").ok === true &&
+  drivers.lifecycleSupport(null, "reinstall").ok === true);
 const logged = [];
 ok("unknown: startVm declines and logs a reason",
   unk.startVm(WORK_INSTANCE, { _log: (m) => logged.push(m) }) === false &&

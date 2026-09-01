@@ -25,6 +25,7 @@
       Get-ConstructInstance -Name               -> one normalised instance (falls back to the default)
       Resolve-ConstructInstanceDefaults -Name   -> the derivation rules, applied
       Test-ConstructInstanceName -Name          -> [bool]
+      Get-ConstructInstanceIdentityProblem -Instance [-Entry] -> [string[]] (@() = usable)
       Test-ConstructDefaultInstance -Instance   -> [bool] "behaves exactly like today"
       Save-ConstructInstances                   -> atomic write (temp file + move)
 
@@ -80,6 +81,167 @@ function New-ConstructDefaultInstance {
 # its own). Kept in one list so the type check and the JS reader's STRING_FIELDS stay
 # in step.
 $script:ConstructStringFields = @('backend', 'vmName', 'sshHost', 'vmHost', 'hostAlias', 'keyName', 'configBranch', 'scriptsDir', 'owner')
+
+# ── Identity-field FORMAT rules (mirror of extension/src/instances.js) ────────
+# Being a string is not enough for the fields that end up in a PowerShell command
+# line, an ssh argv, a key-file path or a git ref: '-x; Start-Process calc; #' is a
+# perfectly good JSON string. An entry that breaks one of these is SKIPPED with a
+# problem -- half an identity would silently target some OTHER machine. Every DERIVED
+# value satisfies them, so only a hand-written entry can trip them. Change these
+# together with the JS reader's identityProblems().
+# \A and \z (not ^ and $): .NET's $ ALSO matches just before a trailing newline, while
+# JavaScript's does not -- so "buildbox.local`n" would pass here and be skipped there,
+# and the two readers would disagree about which instances exist. \z is the true end.
+$script:ConstructHostNameRe  = '\A(?=.{1,253}\z)[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\z'
+# The SHAPE an IPv6 literal must have BEFORE it is parsed (a character class alone
+# would accept '::::' or '1::2::3'): hex, ':' and '.' only -- no zone id (%eth0), no
+# brackets. That filter is also what makes the two readers' PARSERS agree: Node's
+# net.isIP accepts 'fe80::1%eth0' and .NET's IPAddress.TryParse accepts '[::1]', so
+# neither spelling ever reaches a parser on either side.
+$script:ConstructIpv6ShapeRe = '\A[0-9A-Fa-f:.]{2,45}\z'
+# The only IPv4 tail an IPv6-mapped address may carry. Pinned here because .NET has
+# historically been lenient about leading zeros ('::ffff:1.2.3.004') where Node is not.
+$script:ConstructIpv4StrictRe = '\A(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\z'
+$script:ConstructSafeTokenRe = '\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z'
+$script:ConstructDnsLabelRe  = '\A[A-Za-z0-9][A-Za-z0-9-]{0,62}\z'
+$script:ConstructBranchRe    = '\A[A-Za-z0-9][A-Za-z0-9._-]*\z'
+# Windows device names. They are NOT ordinary files at any path, so ~\.ssh\CON can
+# never be created -- and the reservation applies to the stem before the first dot, so
+# 'CON.txt' is the same device. Compared case-insensitively (lowercased first).
+$script:ConstructWindowsDeviceNames = @(
+    'con', 'prn', 'aux', 'nul',
+    'com1', 'com2', 'com3', 'com4', 'com5', 'com6', 'com7', 'com8', 'com9',
+    'lpt1', 'lpt2', 'lpt3', 'lpt4', 'lpt5', 'lpt6', 'lpt7', 'lpt8', 'lpt9'
+)
+# Branch names that are syntactically fine but semantically wrong (the trunk names and
+# git's pseudo-refs). Same list as RESERVED_VM_BRANCHES in extension/src/configsync.js
+# and $script:CONSTRUCT_RESERVED_VM_BRANCHES in AgentVm.Common.ps1; repeated here
+# because this module is deliberately self-contained.
+$script:ConstructReservedBranches = @(
+    'main', 'master',
+    'head', 'fetch_head', 'orig_head', 'merge_head', 'cherry_pick_head',
+    'revert_head', 'bisect_head', 'rebase_head', 'auto_merge', 'stash'
+)
+
+function Test-ConstructInstanceIpv6 {
+    <#
+        A real IPv6 literal: shape-filtered first (see the regex above), then handed to
+        an ACTUAL parser, because a character class accepts nonsense like '::::',
+        '1::2::3' or '1:2:3:4:5:6:7:8:9'. The JS reader does the same with net.isIP;
+        both suites run the same accept/reject matrix.
+    #>
+    param([string]$Value)
+    if ([string]::IsNullOrEmpty($Value)) { return $false }
+    if (-not [regex]::IsMatch($Value, $script:ConstructIpv6ShapeRe)) { return $false }
+    if (-not $Value.Contains(':')) { return $false }
+    if ($Value.Contains('.')) {
+        $tail = $Value.Substring($Value.LastIndexOf(':') + 1)
+        if (-not [regex]::IsMatch($tail, $script:ConstructIpv4StrictRe)) { return $false }
+    }
+    $ip = $null
+    if (-not [System.Net.IPAddress]::TryParse($Value, [ref]$ip)) { return $false }
+    if ($ip.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetworkV6) { return $false }
+    # A scope id can only come from a '%' the shape filter already rejects; belt and
+    # braces, since ssh would have to carry it through a command line too.
+    return [bool]($ip.ScopeId -eq 0)
+}
+
+function Test-ConstructInstanceHostEndpoint {
+    <# A DNS host name / FQDN / IPv4 literal, or a bare IPv6 literal. #>
+    param([string]$Value)
+    if ([string]::IsNullOrEmpty($Value)) { return $false }
+    if ([regex]::IsMatch($Value, $script:ConstructHostNameRe)) { return $true }
+    return [bool](Test-ConstructInstanceIpv6 -Value $Value)
+}
+
+function Test-ConstructInstanceToken {
+    <# One path-free, shell-free token: an ssh alias (and the base rule for a key name). #>
+    param([string]$Value)
+    if ([string]::IsNullOrEmpty($Value)) { return $false }
+    if ($Value.Contains('..')) { return $false }
+    return [bool]([regex]::IsMatch($Value, $script:ConstructSafeTokenRe))
+}
+
+function Test-ConstructInstanceKeyFileName {
+    <#
+        A key file name -- the alias rule PLUS what Windows adds, because this value is
+        used as a FILE: ~\.ssh\<KeyName> is written and read by Provision-AgentVM.ps1.
+          * a trailing dot is stripped by Win32, so 'agent_vm_ed25519.' and
+            'agent_vm_ed25519' are the SAME file -- an entry spelled that way would
+            quietly overwrite the DEFAULT instance's key;
+          * a reserved device stem (CON, NUL, COM1 ..., with or without an extension) is
+            not a creatable file at all, so provisioning would fail after the VM exists.
+        HostAlias deliberately keeps the plain token rule: an ssh_config Host alias is
+        not a path. Mirrors isKeyFileName() in extension/src/instances.js.
+    #>
+    param([string]$Value)
+    if (-not (Test-ConstructInstanceToken $Value)) { return $false }
+    if ($Value.EndsWith('.')) { return $false }
+    $stem = $Value.Split('.')[0]
+    return [bool]($script:ConstructWindowsDeviceNames -notcontains $stem.ToLowerInvariant())
+}
+
+function Test-ConstructInstanceBranch {
+    <#
+        A branch name git will accept as refs/heads/<name> and that is safe as a bare
+        ref operand -- the rule isValidVmBranch (extension/src/configsync.js) and
+        Test-ConstructVmBranchName (AgentVm.Common.ps1) apply.
+    #>
+    param([string]$Value)
+    if ([string]::IsNullOrEmpty($Value)) { return $false }
+    if (-not [regex]::IsMatch($Value, $script:ConstructBranchRe)) { return $false }
+    if ($Value.Contains('..')) { return $false }
+    if ($Value.EndsWith('.lock')) { return $false }
+    $lower = $Value.ToLowerInvariant()
+    if ($script:ConstructReservedBranches -contains $lower) { return $false }
+    # Any other spelling of the default branch is the SAME loose-ref file on Windows,
+    # so it would hijack the default instance's store.
+    if ($lower -eq 'vm' -and $Value -cne 'vm') { return $false }
+    return $true
+}
+
+function Get-ConstructInstanceIdentityProblem {
+    <#
+        The format problems of one NORMALISED instance, as strings. Empty = usable.
+        Pure; mirrors identityProblems() in extension/src/instances.js.
+
+        -Entry (optional) is the entry as WRITTEN in the file. The host has two
+        spellings and Resolve-ConstructInstanceDefaults prefers 'sshHost', so
+        { sshHost = 'good.local'; vmHost = '-x; calc' } would otherwise normalise to a
+        valid endpoint and leave the hostile one on disk for the next reader. Every
+        SUPPLIED host field is checked, then the effective endpoint.
+    #>
+    param($Instance, $Entry)
+    $out = New-Object System.Collections.Generic.List[string]
+    $add = { param([string]$m) if (-not $out.Contains($m)) { $out.Add($m) } }
+    if ($null -ne $Entry) {
+        foreach ($f in @('sshHost', 'vmHost')) {
+            $v = Get-ConstructInstanceField $Entry $f
+            if ($v -and -not (Test-ConstructInstanceHostEndpoint $v)) {
+                & $add "`"$f`" '$v' is not a host name or IP address"
+            }
+        }
+    }
+    # The VM name doubles as the guest hostname, so it must be ONE DNS label
+    # (Auto-Install.ps1 enforces the same shape before it creates anything).
+    if (-not ([regex]::IsMatch([string]$Instance.VmName, $script:ConstructDnsLabelRe))) {
+        & $add "`"vmName`" '$($Instance.VmName)' is not a usable VM/host name (letters, digits and hyphens, starting alphanumeric, max 63)"
+    }
+    if (-not (Test-ConstructInstanceHostEndpoint ([string]$Instance.VmHost))) {
+        & $add "`"sshHost`" '$($Instance.VmHost)' is not a host name or IP address"
+    }
+    if (-not (Test-ConstructInstanceToken ([string]$Instance.HostAlias))) {
+        & $add "`"hostAlias`" '$($Instance.HostAlias)' is not a usable ssh alias (letters, digits, '.', '_' and '-', max 64)"
+    }
+    if (-not (Test-ConstructInstanceKeyFileName ([string]$Instance.KeyName))) {
+        & $add ("`"keyName`" '$($Instance.KeyName)' is not a usable key file name (letters, digits, '.', '_' and '-', max 64;" +
+            " no trailing dot and not a reserved Windows device name)")
+    }
+    if (-not (Test-ConstructInstanceBranch ([string]$Instance.ConfigBranch))) {
+        & $add "`"configBranch`" '$($Instance.ConfigBranch)' is not a usable config-sync branch name"
+    }
+    return @($out)
+}
 
 function Get-ConstructRawProperty {
     <# The raw property value, or $null when absent. No coercion of any kind. #>
@@ -368,7 +530,19 @@ function ConvertFrom-ConstructInstancesJson {
                 if ($rawBackend -ceq 'hyperv-remote' -and -not (Get-ConstructInstanceField $entry 'sshHost')) {
                     $problems.Add("instance '$name' is hyperv-remote but has no sshHost")
                 }
-                $instances[$name] = Resolve-ConstructInstanceDefaults -Name $name -Entry $entry
+                # A field of the right TYPE can still be unusable (or hostile) as a host
+                # name, an ssh alias, a key file name or a git ref. Such an entry is
+                # skipped WHOLE: using the rest of it would dial, key or sync some other
+                # machine. The JS reader skips exactly the same entries.
+                $normalized = Resolve-ConstructInstanceDefaults -Name $name -Entry $entry
+                # @() around the call: an empty result unrolls to $null on the way out
+                # of a function, and Set-StrictMode makes $null.Count a hard error.
+                $bad = @(Get-ConstructInstanceIdentityProblem -Instance $normalized -Entry $entry)
+                if ($bad.Count -gt 0) {
+                    $problems.Add("instance '$name': $($bad -join '; ') -- skipped")
+                    continue
+                }
+                $instances[$name] = $normalized
             }
         }
 

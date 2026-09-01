@@ -348,6 +348,25 @@ change them together):
   instance table is an ordinal hashtable. Otherwise a `vmName` of `"agent-vm"` would
   read as the default on one side and as a non-default instance on the other — and only
   one of them would emit target arguments.
+- **Identity fields are format-checked, and a bad entry is skipped WHOLE**
+  (`identityProblems` / `Get-ConstructInstanceIdentityProblem`). Being a string is not
+  enough for values that end up in a PowerShell command line, an ssh argv, a key path
+  or a git ref — `"-x; Start-Process calc; #"` is a perfectly good JSON string. So
+  `sshHost` must be a host name or an IP literal, `hostAlias` one path-free token,
+  `keyName` the same *plus* what Windows adds — it is written as `~\.ssh\<keyName>`,
+  so a trailing dot (Win32 strips it, aliasing the default instance's key file) and a
+  reserved device stem (`CON`, `NUL`, `COM1`, with or without an extension) are
+  refused — `vmName` a single DNS label (the shape `Auto-Install.ps1` enforces), and
+  `configBranch` must pass the config-sync branch validator. An IP literal is
+  shape-filtered and then handed to a real parser (`net.isIP` / `IPAddress.TryParse`),
+  because a character class happily accepts `::::` or `1::2::3`; the shape filter is
+  also what keeps the two parsers in step (Node accepts `fe80::1%eth0`, .NET accepts
+  `[::1]` — neither spelling reaches either parser). **Both** host spellings are
+  checked, not just the one that wins normalization: `{sshHost, vmHost}` where only the
+  losing field is hostile must not load. Half an identity would
+  dial, key or sync some *other* machine, so the entry is dropped and reported rather
+  than partially used. Every derived value satisfies the rules, so only a hand-written
+  entry can trip them.
 
 `addInstance` rejects **every** existing name, `agent-vm` included — it is always
 present (synthesized), so an "add" would silently *replace* the default instance.
@@ -376,8 +395,11 @@ Precedence (`instances.resolveActive`, unit-tested):
 2. the window's **`workspaceState`** choice (`construct.activeInstance`);
 3. the registry's **`defaultInstance`**.
 
-A name at any level that the registry no longer holds is skipped (with a problem)
-rather than failing. A window attached over Remote-SSH to a VM that *is* a known
+A name at any level that the registry no longer holds is skipped (with a problem) and
+the **next candidate is tried** — the registry default is only used once every
+candidate is exhausted. A stale global `construct.instance` (an instance someone
+removed) must not drag a window that still has a perfectly valid per-window selection
+back to the default VM. A window attached over Remote-SSH to a VM that *is* a known
 instance **adopts it at activation** (`planRemoteAdoption` → `adoptRemoteInstance`), so
 the panel always describes the machine you are working on — unless the setting pins
 another one. `activate()` is **async and awaits that adoption**: `workspaceState.update`
@@ -460,9 +482,47 @@ comment-stripped declaration probe the other capability gates use). Per script:
   explicit per-action parameter list rather than one shared set.
 - **`Set-AgentVmCheckpoints.ps1`** (setCheckpoints) — `-VmName`; it only talks to Hyper-V.
 
-A scripts dir that predates B1 declares none of them, so the probe yields `[]` and the
-action runs against the script's own defaults (exactly today's single-VM behaviour)
-instead of failing to bind.
+**Version skew fails CLOSED for a non-default instance.** Dropping an identity
+parameter the installed script doesn't declare does not "degrade gracefully" — it
+*retargets* the action at whatever the script defaults to, i.e. the DEFAULT VM (an
+Auto-Install.ps1 without `-VmName` rebuilds `Agent-VM`; a Provision-AgentVM.ps1 without
+the endpoint re-keys the default VM). So `REQUIRED_INSTANCE_PARAMS` states, per action,
+what must be declared, and `checkInstanceSupport` returns a structured refusal
+`{blocked, reason}` — surfaced by `run()` as "update the Construct scripts" — instead of
+an invocation. The *default* instance is never blocked: it needs no targeting, and its
+argv stays byte-identical.
+
+**Backend capability gate.** The host scripts drive the LOCAL Hyper-V, so
+reinstall / redownload / setCheckpoints are refused for any backend whose driver does
+not declare `hostLifecycle` (`drivers/index.js` `lifecycleSupport`, capability table
+next to the dispatch — a future remote driver re-enables them by *declaring what it
+can do*, not by editing `lifecycle.js`). Without the gate, "Reinstall" on a
+`hyperv-remote` instance would delete a LOCAL VM that merely shares the name.
+reprovision and exportConfig are pure SSH to an already-running VM and stay allowed for
+every backend.
+
+**`-ConfigBranch` is threaded, conditionally.** JS config sync uses
+`instance.configBranch` verbatim while `Provision-AgentVM.ps1` derives its branch from
+`-HostAlias`, so an instance whose branch disagrees with that derivation would be
+initialised on one ref and synced on another. `configBranchOverride` (the JS mirror of
+`Get-ConstructConfigBranchName`) emits `-ConfigBranch` for reprovision/reinstall/
+redownload **only when the two differ** — never on the default path — and refuses the
+action when the override is needed but the destination can't take it. The PowerShell
+chain carries it the same way: `Auto-Install.ps1` → `Create-AgentVM.ps1` →
+`Provision-AgentVM.ps1` (and Auto-Install's reprovision / add-config paths straight to
+Provision), probe-before-splat, with the probe for a destructive rebuild done *before*
+anything is deleted.
+
+**Values are quoted structurally.** `buildInvocation` builds its arguments as
+(flag, value) pairs (`argSpec`); `buildCallCommand` emits parameter *names* bare and
+single-quotes every *value*, whatever it starts with. Registry fields are hand-edited,
+and the non-elevated launch embeds them in a PowerShell command string, so a `vmHost` of
+`-x; Start-Process calc; #` must be data, not syntax. The default path's command string
+is unchanged.
+
+A scripts dir that predates B1 declares none of them, so for the DEFAULT instance the
+probe yields `[]` and the action runs against the script's own defaults (exactly today's
+single-VM behaviour) instead of failing to bind.
 
 `host.resolveScriptsDir` gained a third, most-specific source: the active instance's
 pinned `scriptsDir`, then the `construct.scriptsDir` setting, then newest-install

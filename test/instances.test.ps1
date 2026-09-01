@@ -258,6 +258,139 @@ ok "parity: uppercase auth reported"        (@($mxReg.Problems | Where-Object { 
 ok "parity: scalar service reported"        (@($mxReg.Problems | Where-Object { $_ -match "'service' must be an object" }).Count -ge 1)
 ok "parity: bad port reported"              (@($mxReg.Problems | Where-Object { $_ -match 'invalid sshPort' }).Count -ge 1)
 
+# ── (g3) IDENTITY-FIELD FORMAT RULES (mirrored in extension/test/instances.test.js) ──
+# A field of the right TYPE can still be unusable -- or hostile -- once it reaches a
+# PowerShell command line, an ssh argv, a key path or a git ref. Such an entry is
+# SKIPPED WHOLE (never partially used) and reported. Both readers must skip the SAME
+# entries, or the panel and the scripts would disagree about which VMs exist.
+Write-Host ""
+Write-Host "=== identity-field format rules (mirrored in extension/test/instances.test.js) ===" -ForegroundColor Cyan
+$badIdentity = @(
+    @{ label = 'vmHost-injection';  json = '{ "sshHost": "-x; Start-Process calc; #" }'; field = 'sshHost' },
+    @{ label = 'vmHost-space';      json = '{ "sshHost": "buildbox local" }';            field = 'sshHost' },
+    @{ label = 'vmHost-empty-label';json = '{ "sshHost": "buildbox..local" }';           field = 'sshHost' },
+    # An EMBEDDED newline is the JS/PS parity trap: .NET's `$` matches just before a
+    # final newline where JavaScript's does not, so the rules anchor with \A..\z.
+    @{ label = 'vmHost-newline';    json = '{ "sshHost": "buildbox\nlocal" }';           field = 'sshHost' },
+    @{ label = 'alias-newline';     json = '{ "hostAlias": "work\nvm" }';                field = 'hostAlias' },
+    @{ label = 'branch-newline';    json = '{ "configBranch": "vm\nwork" }';             field = 'configBranch' },
+    @{ label = 'alias-path';        json = '{ "hostAlias": "../../etc/passwd" }';        field = 'hostAlias' },
+    @{ label = 'alias-space';       json = '{ "hostAlias": "work vm" }';                 field = 'hostAlias' },
+    @{ label = 'key-path';          json = '{ "keyName": "..\\\\..\\\\id_rsa" }';        field = 'keyName' },
+    @{ label = 'key-slash';         json = '{ "keyName": "sub/dir_ed25519" }';           field = 'keyName' },
+    # keyName is a WINDOWS FILE NAME (~\.ssh\<KeyName>), not just a token: Win32 strips a
+    # trailing dot (so this would write over the DEFAULT instance's key file), and a device
+    # stem is not a creatable file at all -- provisioning would fail with the VM already
+    # built. HostAlias keeps the plain token rule; an ssh alias is not a path.
+    @{ label = 'key-trailing-dot';  json = '{ "keyName": "agent_vm_ed25519." }';         field = 'keyName' },
+    @{ label = 'key-device-con';    json = '{ "keyName": "CON" }';                       field = 'keyName' },
+    @{ label = 'key-device-lower';  json = '{ "keyName": "con" }';                       field = 'keyName' },
+    @{ label = 'key-device-nul';    json = '{ "keyName": "NUL" }';                       field = 'keyName' },
+    @{ label = 'key-device-com1';   json = '{ "keyName": "COM1" }';                      field = 'keyName' },
+    @{ label = 'key-device-lpt9';   json = '{ "keyName": "lpt9" }';                      field = 'keyName' },
+    @{ label = 'key-device-ext';    json = '{ "keyName": "CON.txt" }';                   field = 'keyName' },
+    @{ label = 'key-device-ext2';   json = '{ "keyName": "con.key.txt" }';               field = 'keyName' },
+    @{ label = 'vmname-dot';        json = '{ "vmName": "work.vm" }';                    field = 'vmName' },
+    @{ label = 'vmname-space';      json = '{ "vmName": "Work VM" }';                    field = 'vmName' },
+    @{ label = 'vmname-dash-start'; json = '{ "vmName": "-work" }';                      field = 'vmName' },
+    @{ label = 'branch-reserved';   json = '{ "configBranch": "main" }';                 field = 'configBranch' },
+    @{ label = 'branch-dotdot';     json = '{ "configBranch": "vm..x" }';                field = 'configBranch' },
+    @{ label = 'branch-lock';       json = '{ "configBranch": "vm-x.lock" }';            field = 'configBranch' },
+    @{ label = 'branch-case-hijack';json = '{ "configBranch": "VM" }';                   field = 'configBranch' }
+)
+foreach ($c in $badIdentity) {
+    $r = Read-ConstructInstances -Path (New-RegistryFile ('{ "version": 1, "instances": { "bad-vm": ' + $c.json + ' } }'))
+    ok "identity($($c.label)): the instance is SKIPPED"        (-not $r.Instances.ContainsKey('bad-vm'))
+    ok "identity($($c.label)): the problem names '$($c.field)'" (@($r.Problems | Where-Object { $_ -match [regex]::Escape("`"$($c.field)`"") }).Count -ge 1)
+    ok "identity($($c.label)): the problem says skipped"        (@($r.Problems | Where-Object { $_ -match 'skipped' }).Count -ge 1)
+}
+$skipReg = Read-ConstructInstances -Path (New-RegistryFile '{ "version": 1, "instances": { "bad-vm": { "sshHost": "no spaces allowed" }, "good-vm": {} } }')
+ok "identity: a valid sibling still loads"          ($skipReg.Instances.ContainsKey('good-vm'))
+ok "identity: the default instance is still synthesized" (Test-ConstructDefaultInstance $skipReg.Instances['agent-vm'])
+$brokenDefault = Read-ConstructInstances -Path (New-RegistryFile '{ "version": 1, "instances": { "agent-vm": { "sshHost": "-oProxyCommand=calc" } } }')
+ok "identity: a broken agent-vm entry falls back to the synthesized default" (Test-ConstructDefaultInstance $brokenDefault.Instances['agent-vm'])
+foreach ($good in @(
+    '{ "sshHost": "buildbox.example.local" }', '{ "sshHost": "10.0.0.7" }', '{ "sshHost": "host" }',
+    '{ "sshHost": "fe80::1" }', '{ "sshHost": "2001:db8::8a2e:370:7334" }',
+    '{ "keyName": "construct_work-vm_ed25519" }', '{ "hostAlias": "work-vm.local" }',
+    '{ "vmName": "Work-VM" }', '{ "configBranch": "vm-work" }', '{ "configBranch": "feature.x_1" }',
+    '{ "sshHost": " buildbox.local\n" }')) {   # both readers TRIM a string field first
+    $r = Read-ConstructInstances -Path (New-RegistryFile ('{ "version": 1, "instances": { "work-vm": ' + $good + ' } }'))
+    ok "identity: $good is accepted" ($r.Instances.ContainsKey('work-vm'))
+}
+# IPv6: a character-class regex would wave through '::::', '1::2::3' and friends, so the
+# rule shape-filters and then PARSES ([System.Net.IPAddress]::TryParse). The identical
+# matrix runs in extension/test/instances.test.js (net.isIP there) -- the two readers
+# must agree address for address, or the panel and the scripts would disagree about
+# which instances exist.
+$ipv6Matrix = @(
+    @{ v = '::';                      want = $true },
+    @{ v = '::1';                     want = $true },
+    @{ v = 'fe80::1';                 want = $true },
+    @{ v = '2001:db8::8a2e:370:7334'; want = $true },
+    @{ v = '1:2:3:4:5:6:7:8';         want = $true },
+    @{ v = '0:0:0:0:0:0:0:0';         want = $true },
+    @{ v = '1::';                     want = $true },
+    @{ v = '::2';                     want = $true },
+    @{ v = '::ffff:10.0.0.1';         want = $true },
+    @{ v = '::::';                    want = $false },
+    @{ v = '1::2::3';                 want = $false },
+    @{ v = '1:2:3:4:5:6:7:8:9';       want = $false },
+    @{ v = '1.2.3:4';                 want = $false },
+    @{ v = '....:';                   want = $false },
+    @{ v = ':::';                     want = $false },
+    @{ v = ':1';                      want = $false },
+    @{ v = '1:';                      want = $false },
+    @{ v = '12345::1';                want = $false },
+    @{ v = '::ffff:999.1.1.1';        want = $false },
+    @{ v = '::ffff:1.2.3.004';        want = $false },
+    # Rejected by SHAPE on both sides, precisely because the two parsers disagree about
+    # them: Node accepts the zone id, .NET accepts the brackets.
+    @{ v = 'fe80::1%eth0';            want = $false },
+    @{ v = '[::1]';                   want = $false }
+)
+foreach ($c in $ipv6Matrix) {
+    ok "ipv6: '$($c.v)' -> $($c.want)"               ((Test-ConstructInstanceIpv6 -Value $c.v) -eq $c.want)
+    ok "ipv6: '$($c.v)' as an endpoint -> $($c.want)" ((Test-ConstructInstanceHostEndpoint $c.v) -eq $c.want)
+}
+foreach ($bad in @('::::', '1::2::3', '1:2:3:4:5:6:7:8:9', '1.2.3:4', '....:', 'fe80::1%eth0')) {
+    $r = Read-ConstructInstances -Path (New-RegistryFile ('{ "version": 1, "instances": { "bad-vm": { "sshHost": "' + $bad + '" } } }'))
+    ok "ipv6: a bogus literal ($bad) skips the instance" (-not $r.Instances.ContainsKey('bad-vm'))
+    ok "ipv6: ...and is reported ($bad)" (@($r.Problems | Where-Object { $_ -match 'is not a host name or IP address' }).Count -ge 1)
+}
+
+# BOTH host spellings are validated, not only the one that wins normalisation:
+# Resolve-ConstructInstanceDefaults prefers sshHost, so an invalid vmHost would
+# otherwise sit unnoticed in the file for whatever reads that field next.
+$dualHost = Read-ConstructInstances -Path (New-RegistryFile '{ "version": 1, "instances": { "work-vm": { "sshHost": "good.local", "vmHost": "-x; calc" } } }')
+ok "identity: an invalid LOSING vmHost still skips the instance" (-not $dualHost.Instances.ContainsKey('work-vm'))
+ok "identity: ...and names the field that is wrong"              (@($dualHost.Problems | Where-Object { $_ -match '"vmHost"' }).Count -ge 1)
+$dualHost2 = Read-ConstructInstances -Path (New-RegistryFile '{ "version": 1, "instances": { "work-vm": { "sshHost": "-x; calc", "vmHost": "good.local" } } }')
+ok "identity: an invalid WINNING sshHost skips it too" (-not $dualHost2.Instances.ContainsKey('work-vm'))
+ok "identity: ...reported once, not twice" (
+    (@($dualHost2.Problems | Where-Object { $_ -match 'is not a host name or IP address' }).Count) -eq 1)
+$dualOk = Read-ConstructInstances -Path (New-RegistryFile '{ "version": 1, "instances": { "work-vm": { "sshHost": "good.local", "vmHost": "other.local" } } }')
+ok "identity: two VALID spellings still load, sshHost winning" ($dualOk.Instances['work-vm'].VmHost -eq 'good.local')
+
+# The key-file rule is STRICTER than the alias rule, and only for KeyName.
+foreach ($v in @('CON', 'con', 'NUL', 'COM1', 'lpt9', 'CON.txt', 'con.key.txt', 'agent_vm_ed25519.')) {
+    ok "keyfile: '$v' is refused as a key file name" (-not (Test-ConstructInstanceKeyFileName $v))
+    ok "keyfile: '$v' is still a fine ssh alias"     (Test-ConstructInstanceToken $v)
+    $r = Read-ConstructInstances -Path (New-RegistryFile ('{ "version": 1, "instances": { "work-vm": { "hostAlias": "' + $v + '" } } }'))
+    ok "keyfile: ...so hostAlias '$v' still loads"   ($r.Instances.ContainsKey('work-vm'))
+}
+foreach ($v in @('construct_work-vm_ed25519', 'agent_vm_ed25519', 'com10_key', 'console_key', 'a', 'nul_key', 'con-1')) {
+    ok "keyfile: '$v' is accepted" (Test-ConstructInstanceKeyFileName $v)
+}
+ok "keyfile: the DEFAULT key name is unaffected" (Test-ConstructInstanceKeyFileName (New-ConstructDefaultInstance).KeyName)
+ok "keyfile: a derived key name is unaffected" (
+    Test-ConstructInstanceKeyFileName (Resolve-ConstructInstanceDefaults -Name 'work-vm' -Entry $null).KeyName)
+
+ok "identity: every derived default passes its own rules" (
+    @(Get-ConstructInstanceIdentityProblem -Instance (Resolve-ConstructInstanceDefaults -Name 'work-vm' -Entry $null)).Count -eq 0)
+ok "identity: today's literals pass" (
+    @(Get-ConstructInstanceIdentityProblem -Instance (New-ConstructDefaultInstance)).Count -eq 0)
+
 # Port boundaries + numbers no Int32 can hold. A huge sshPort must be REPORTED and fall
 # back to 22, never crash the reader: [int]999999999999 throws "Value was either too
 # large or too small for an Int32", which would escape Read-ConstructInstances and break

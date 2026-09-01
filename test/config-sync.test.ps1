@@ -2160,6 +2160,56 @@ if ($provBlockAst) {
         (@($rBad.Warnings) -match "shares the default instance").Count -eq 1)
 }
 
+# ── -ConfigBranch reaches Provision from the top of the chain ────────────────
+# The provisioner derives the branch from -HostAlias, so an instance whose registry
+# entry names a DIFFERENT branch has to pass it explicitly -- otherwise a rebuild
+# initialises (and syncs) one VM on two refs. The parameter therefore has to exist,
+# and be forwarded, all the way down: Auto-Install -> Create-AgentVM -> Provision,
+# plus Auto-Install's reprovision / add-config paths straight to Provision.
+foreach ($chain in @(
+    @{ file = 'Auto-Install.ps1';   splats = @('reprovArgs', 'acReprovArgs', 'provArgs', 'createArgs') },
+    @{ file = 'Create-AgentVM.ps1'; splats = @('provArgs') })) {
+    $chainPath = Join-Path $repoRoot $chain.file
+    $chainErrs = $null
+    $chainAst = [System.Management.Automation.Language.Parser]::ParseFile($chainPath, [ref]$null, [ref]$chainErrs)
+    ok "chain: $($chain.file) has no parse errors" ($chainErrs.Count -eq 0)
+    $chainParam = $null
+    if ($chainAst.ParamBlock) {
+        $chainParam = $chainAst.ParamBlock.Parameters |
+            Where-Object { $_.Name.VariablePath.UserPath -eq 'ConfigBranch' }
+    }
+    ok "chain: $($chain.file) declares -ConfigBranch" ($null -ne $chainParam)
+    ok "chain: $($chain.file) defaults -ConfigBranch to empty (derive, i.e. today)" (
+        $null -ne $chainParam -and $chainParam.DefaultValue.Extent.Text -eq '""')
+    ok "chain: $($chain.file) types it as a plain [string]" (
+        $null -ne $chainParam -and @($chainParam.Attributes | ForEach-Object { $_.TypeName.Name }) -contains 'string')
+    $chainSrc = [System.IO.File]::ReadAllText($chainPath)
+    foreach ($splat in $chain.splats) {
+        ok "chain: $($chain.file) forwards it into `$$splat" (
+            $chainSrc -match ([regex]::Escape("`$$splat['ConfigBranch'] = `$ConfigBranch")))
+    }
+    # Every forward is guarded by `if ($ConfigBranch)`: empty must add NOTHING, so the
+    # default path's splat is byte-identical to what it always was.
+    $unguarded = @(@([regex]::Matches($chainSrc, "(?m)^\s*\`$\w+\['ConfigBranch'\]\s*=")) | Where-Object {
+        # The `if ($ConfigBranch)` that gates this assignment is either on the same
+        # line or opens the block it sits in -- look back over the enclosing block.
+        $from = [Math]::Max(0, $_.Index - 600)
+        $chainSrc.Substring($from, $_.Index - $from) -notmatch '(?s)if \(\$ConfigBranch[ )]'
+    })
+    ok "chain: $($chain.file) never forwards an EMPTY -ConfigBranch" ($unguarded.Count -eq 0)
+}
+$aiSrc = [System.IO.File]::ReadAllText((Join-Path $repoRoot 'Auto-Install.ps1'))
+ok "chain: Auto-Install probes Provision for -ConfigBranch before anything destructive" (
+    $aiSrc -match "cbProvCmd\.Parameters\.ContainsKey\('ConfigBranch'\)")
+ok "chain: Auto-Install probes Create-AgentVM for -ConfigBranch too" (
+    $aiSrc -match "cbCreateCmd\.Parameters\.ContainsKey\('ConfigBranch'\)")
+ok "chain: Auto-Install fails CLOSED when the branch cannot be honoured" (
+    $aiSrc -match "does not support -ConfigBranch; update The Construct")
+$cvSrc = [System.IO.File]::ReadAllText((Join-Path $repoRoot 'Create-AgentVM.ps1'))
+ok "chain: Create-AgentVM probes before splatting and fails closed" (
+    ($cvSrc -match "Parameters\.ContainsKey\('ConfigBranch'\)") -and
+    ($cvSrc -match "does not support -ConfigBranch; update The Construct"))
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host ("  config-sync unit tests - {0}/{1} passed" -f $script:pass, ($script:pass + $script:fail))

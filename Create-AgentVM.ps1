@@ -84,6 +84,13 @@ param(
     # to an existing VM). "true"/"false".
     [ValidateSet("true", "false")]
     [string]$AutomaticCheckpoints = "false",
+    # Forwarded to Provision-AgentVM.ps1: the config-sync branch this VM's host-config
+    # store lives on. EMPTY (the default, and every existing install) means "let the
+    # provisioner derive it from the host alias" -- nothing is forwarded and the splat
+    # is exactly what it always was. A non-empty value is an instance's explicit
+    # branch, which must reach Provision or the VM would be initialised on a different
+    # ref than the control panel syncs.
+    [string]$ConfigBranch = "",
     # Forwarded to Provision-AgentVM.ps1 for the save/restore + clone-credential
     # features. RestoreDir restores a saved config after provisioning;
     # GitCloneCredentialsB64 supplies credentials for cloning private project
@@ -303,6 +310,16 @@ if ((Test-ConstructVmPresent -Name $VmName) -eq $true) {
         if ($PSBoundParameters.ContainsKey('GitCloneCredentialsB64')) { $provArgs['GitCloneCredentialsB64'] = $GitCloneCredentialsB64 }
         if ($PSBoundParameters.ContainsKey('CheckoutProjects'))       { $provArgs['CheckoutProjects']       = $CheckoutProjects }
         if ($LocalKeyName)                                            { $provArgs['LocalKeyName']           = $LocalKeyName }
+        # An explicit config-sync branch, and only into a provisioner that declares it:
+        # dropping it silently would initialise the store on the alias-derived ref while
+        # the control panel syncs the named one. Probe first, fail closed.
+        if ($ConfigBranch) {
+            $cbProvCmd = Get-Command -Name $provisionScript -CommandType ExternalScript -ErrorAction Stop
+            if (-not $cbProvCmd.Parameters.ContainsKey('ConfigBranch')) {
+                throw "This install's Provision-AgentVM.ps1 does not support -ConfigBranch; update The Construct before using the config-sync branch '$ConfigBranch'."
+            }
+            $provArgs['ConfigBranch'] = $ConfigBranch
+        }
         # Source repo/ref PAIR for the installed-commit marker: if either was set,
         # forward both effective values so the recorded pair matches the install.
         if ($PSBoundParameters.ContainsKey('Repo') -or $PSBoundParameters.ContainsKey('Ref')) {
@@ -536,6 +553,15 @@ if ($isAutoinstall) {
             if ($PSBoundParameters.ContainsKey('GitCloneCredentialsB64')) { $provArgs['GitCloneCredentialsB64'] = $GitCloneCredentialsB64 }
             if ($PSBoundParameters.ContainsKey('CheckoutProjects'))       { $provArgs['CheckoutProjects']       = $CheckoutProjects }
         if ($LocalKeyName)                                            { $provArgs['LocalKeyName']           = $LocalKeyName }
+            # Same probe-before-splat rule as the reprovision path above: an explicit
+            # branch either reaches the provisioner or the run fails closed.
+            if ($ConfigBranch) {
+                $cbProvCmd2 = Get-Command -Name $provisionScript -CommandType ExternalScript -ErrorAction Stop
+                if (-not $cbProvCmd2.Parameters.ContainsKey('ConfigBranch')) {
+                    throw "This install's Provision-AgentVM.ps1 does not support -ConfigBranch; update The Construct before using the config-sync branch '$ConfigBranch'."
+                }
+                $provArgs['ConfigBranch'] = $ConfigBranch
+            }
             if ($PSBoundParameters.ContainsKey('Repo') -or $PSBoundParameters.ContainsKey('Ref')) {
                 $provArgs['Repo'] = $Repo; $provArgs['Ref'] = $Ref
             }

@@ -182,7 +182,7 @@ const state = await driver.queryVmState(instance);   // 'running'|'off'|'absent'
 | Member | Signature | Notes |
 |---|---|---|
 | `backend` | string | the id this driver implements |
-| `capabilities` | `{ checkpoints, console, suspend }` | `console`: `"vmconnect"` \| `"none"` \| a URL |
+| `capabilities` | `{ checkpoints, console, suspend, hostLifecycle }` | `console`: `"vmconnect"` \| `"none"` \| a URL; `hostLifecycle`: the host's own PowerShell scripts create/delete/reconfigure this backend's VMs |
 | `queryVmState` | `(instance, opts) => Promise<string>` | `running\|off\|absent\|unknown` (`saved`/`paused` collapse to `off`: Start resumes them) |
 | `queryAutoCheckpoints` | `(instance, opts) => Promise<string>` | `on\|off\|absent\|unsupported\|unknown` |
 | `startVm` | `(instance, opts) => bool` | fire-and-forget; `true` = launched |
@@ -196,6 +196,16 @@ hostAlias, keyName, configBranch, scriptsDir }`); a driver reads only what it ne
 Construct, or a typo) gets a driver whose queries resolve `"unknown"`, whose
 capabilities are all off, and whose `startVm` returns `false` after logging why — the
 panel already degrades gracefully on `unknown`.
+
+`capabilities.hostLifecycle` is what gates the VM-destroying lifecycle actions.
+`drivers/index.js` exposes `lifecycleSupport(backend, action)`: `reinstall`,
+`redownload` and `setCheckpoints` (the `HYPERVISOR_ACTIONS`) are refused unless the
+driver declares it, because those actions run through the host's PowerShell scripts,
+which drive the LOCAL Hyper-V — on a remote instance they would create or delete a
+LOCAL VM that merely shares the name. `reprovision` and `exportConfig` are pure SSH to
+an already-running VM and are allowed for every backend. `src/lifecycle.js` asks this
+function rather than testing backend ids, so a new driver enables the actions by
+declaring the capability.
 
 `src/vmpower.js` stays the panel's entry point and keeps every export and signature it
 had; `queryVmState(opts)` / `queryAutoCheckpoints(opts)` / `startVm(opts)` now take an
@@ -213,7 +223,10 @@ still wins over the instance, so older call sites are unaffected.
    queryVmState, queryAutoCheckpoints, startVm }` and register it in
    `extension/src/drivers/index.js`. Keep the pure builders pure (they are what the unit
    tests pin) and never let a driver reject: resolve `"unknown"` instead.
-3. **Capabilities** — report honestly. Callers gate features on the flags, never on the
+3. **Capabilities** — report honestly, `hostLifecycle` included (declare it only once
+   the host scripts really can create/delete/reconfigure that backend's VMs; until then
+   the panel refuses those actions with "remote lifecycle arrives with the remote
+   driver").  Callers gate features on the flags, never on the
    backend id: `Set-AgentVmCheckpoints.ps1` refuses to run when `Checkpoints` is false,
    and the panel hides a console affordance when `console` is `"none"`. A backend that
    reports `Checkpoints = $true` MUST implement all four checkpoint functions —

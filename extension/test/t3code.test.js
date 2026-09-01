@@ -103,6 +103,47 @@ ok("pairing: mints a one-time token as JSON against the mshome.net base URL",
   /t3 auth pairing create --json/.test(pair) && /mshome\.net/.test(pair) && /--base-url/.test(pair));
 ok("pairing: silences CLI logs so stdout stays parseable", /--log-level none/.test(pair));
 
+// ZERO-CHANGE PIN. This string is the remote command an existing install sends over
+// SSH; for the default instance it must be BYTE-IDENTICAL to what shipped before
+// instances existed (commit f84f554), not merely equivalent. The WHOLE script is
+// pinned — prelude included — because every byte of it crosses the SSH boundary: a
+// change to PRELUDE alone would still change the command an unchanged install runs.
+// If a change to the pairing script is intended it belongs in the NON-default branch,
+// and this literal stays put.
+const PAIRING_DEFAULT_SCRIPT = `set -uo pipefail
+CONFIG_FILE=/etc/construct/config.env
+cfgget() { sed -n "s/^$1=//p" "$CONFIG_FILE" 2>/dev/null | head -1; }
+cfgset() {
+  mkdir -p "$(dirname "$CONFIG_FILE")"; touch "$CONFIG_FILE"
+  if grep -q "^$1=" "$CONFIG_FILE" 2>/dev/null; then sed -i "s|^$1=.*|$1=$2|" "$CONFIG_FILE"; else printf '%s=%s\\n' "$1" "$2" >> "$CONFIG_FILE"; fi
+}
+T3CODE_HOST="$(cfgget T3CODE_HOST)"; T3CODE_HOST="\${T3CODE_HOST:-0.0.0.0}"
+T3CODE_PORT="$(cfgget T3CODE_PORT)"; T3CODE_PORT="\${T3CODE_PORT:-5177}"
+WORKSPACE_ROOT="$(cfgget WORKSPACE_ROOT)"; WORKSPACE_ROOT="\${WORKSPACE_ROOT:-/root/repos}"
+
+command -v t3 >/dev/null 2>&1 || { echo "t3 is not installed" >&2; exit 1; }
+base="http://$(hostname).mshome.net:\${T3CODE_PORT}"
+t3 auth pairing create --json --ttl 10m --label "construct-control-panel" --base-url "$base" --log-level none
+`;
+ok("pairing(default): the WHOLE script is byte-identical to the pre-instances one",
+  pair === PAIRING_DEFAULT_SCRIPT,
+  JSON.stringify(pair));
+ok("pairing(default): ...and is still the expected 825 bytes",
+  Buffer.byteLength(pair, "utf8") === 825, String(Buffer.byteLength(pair, "utf8")));
+ok("pairing(default): reads NO CONSTRUCT_EXTERNAL_HOST", !/CONSTRUCT_EXTERNAL_HOST/.test(pair));
+const instances = require("../src/instances");
+ok("pairing(default instance object): same script as passing nothing",
+  t3.buildPairingScript(instances.DEFAULT_INSTANCE) === pair);
+ok("pairing(spelled-out default registry entry): same script",
+  t3.buildPairingScript(instances.deriveDefaults("agent-vm", {})) === pair);
+// A NON-default instance may be reachable only under a forwarded/external name, so
+// there (and only there) the VM's recorded CONSTRUCT_EXTERNAL_HOST wins.
+const pairRemote = t3.buildPairingScript(instances.deriveDefaults("work-vm", { sshHost: "buildbox.local", sshPort: 2201 }));
+ok("pairing(instance): prefers the recorded external host", /cfgget CONSTRUCT_EXTERNAL_HOST/.test(pairRemote));
+ok("pairing(instance): still falls back to the mshome name", /ext:-\$\(hostname\)\.mshome\.net/.test(pairRemote));
+ok("pairing(instance): still mints the same kind of link",
+  /t3 auth pairing create --json --ttl 10m --label "construct-control-panel"/.test(pairRemote));
+
 // ── extractPairUrl ────────────────────────────────────────────────────────────
 const clean = JSON.stringify({ id: "x", credential: "ABC", pairUrl: "http://agent-vm.mshome.net:5177/pair#token=ABC" });
 ok("extractPairUrl: clean JSON", t3.extractPairUrl(clean) === "http://agent-vm.mshome.net:5177/pair#token=ABC");
