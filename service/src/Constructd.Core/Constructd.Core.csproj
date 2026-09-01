@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <!--
+    Constructd.Core deliberately has ZERO package references: domain records, interfaces and
+    pure logic only. No ASP.NET Core, no hosting, no persistence. Everything platform- or
+    transport-specific lives behind the interfaces in Abstractions/.
+  -->
+
+</Project>
