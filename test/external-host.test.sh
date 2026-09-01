@@ -158,15 +158,44 @@ ok "setup-root-ssh-key: OVERRIDE snippet host alias still uses local hostname" \
   grep -q '^Host testvm-root$' "${snippet_override}"
 
 snippet_env_override="${tmp}/snippet_env_override.out"
-PATH="${stub_path}" CONFIG_FILE="${override_cfg}" SETUP_SSH_KEY_SNIPPET_ONLY=true \
+PATH="${stub_path}" CONFIG_FILE="${override_cfg}" \
   CONSTRUCT_EXTERNAL_HOST=env.example.net CONSTRUCT_EXTERNAL_SSH_PORT=2299 \
-  bash "${ROOT}/bin/setup-root-ssh-key.sh" >"${snippet_env_override}" 2>/dev/null
+  bash "${ROOT}/bin/setup-root-ssh-key.sh" --snippet >"${snippet_env_override}" 2>/dev/null
 
 ok "setup-root-ssh-key: environment host overrides config.env" \
   sh -c "grep -q '  HostName env\\.example\\.net$' '${snippet_env_override}' && ! grep -q 'myhost\\.example\\.com' '${snippet_env_override}'"
 
 ok "setup-root-ssh-key: environment SSH port overrides config.env" \
   sh -c "grep -q '^  Port 2299$' '${snippet_env_override}' && ! grep -q '^  Port 2201$' '${snippet_env_override}'"
+
+# --snippet must be side-effect free: stub every privileged tool the real path uses
+# so any call is recorded, then assert nothing was recorded. (Without --snippet this
+# script generates keys, edits /root/.ssh/authorized_keys and restarts sshd -- a test
+# must never take that path.)
+guard_stubs="${tmp}/guard-stubs"
+mkdir -p "${guard_stubs}"
+for _tool in ssh-keygen systemctl sshd install; do
+  printf '#!/usr/bin/env bash\nprintf "%%s %%s\\n" "%s" "$*" >> "%s/guard-calls"\nexit 0\n' "${_tool}" "${tmp}" >"${guard_stubs}/${_tool}"
+  chmod +x "${guard_stubs}/${_tool}"
+done
+PATH="${guard_stubs}:${stub_path}" CONFIG_FILE="${override_cfg}" \
+  bash "${ROOT}/bin/setup-root-ssh-key.sh" --snippet >/dev/null 2>&1
+ok "setup-root-ssh-key: --snippet invokes no privileged tool" \
+  sh -c "! test -e '${tmp}/guard-calls'"
+
+# config.env must not be able to redirect the key path or sshd drop-in (the file is
+# read with a narrow key lookup, not sourced).
+poison_cfg="${tmp}/config_poison.env"
+printf 'CONSTRUCT_EXTERNAL_HOST=poison.example.net\nKEY_PATH=/tmp/evil\nSSHD_DROPIN=/tmp/evil.conf\n' >"${poison_cfg}"
+poison_out="${tmp}/poison.out"
+PATH="${stub_path}" CONFIG_FILE="${poison_cfg}" bash -c '
+  set -euo pipefail
+  # shellcheck disable=SC1090
+  source <(sed -n "1,/^_snippet_only=false/p" "$1" | grep -v "^if \[\[ \"\${EUID}\"" )
+  printf "%s|%s|%s\n" "${KEY_PATH}" "${SSHD_DROPIN}" "${external_host}"
+' _ "${ROOT}/bin/setup-root-ssh-key.sh" >"${poison_out}" 2>/dev/null || true
+ok "setup-root-ssh-key: config.env cannot override KEY_PATH/SSHD_DROPIN" \
+  sh -c "grep -q '^/root/.ssh/codex_app_ed25519|/etc/ssh/sshd_config.d/99-construct-root-pubkey.conf|poison.example.net$' '${poison_out}'"
 
 # ── print-connection-info.sh: IPv6 OVERRIDE case ────────────────────────────
 # When CONSTRUCT_EXTERNAL_HOST is an IPv6 address, HTTP/WS URLs must bracket it

@@ -32,14 +32,15 @@ _external_ssh_port_override="${CONSTRUCT_EXTERNAL_SSH_PORT:-}"
 # Resolve the client-reachable host and SSH port from config.env/env.
 # CONSTRUCT_EXTERNAL_HOST takes precedence over the Hyper-V DNS fallback.
 # CONSTRUCT_EXTERNAL_SSH_PORT is included in SSH-shaped outputs when != 22.
-if [[ -f "${CONFIG_FILE}" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  . "${CONFIG_FILE}" 2>/dev/null || true
-  set +a
-fi
-CONSTRUCT_EXTERNAL_HOST="${_external_host_override:-${CONSTRUCT_EXTERNAL_HOST:-}}"
-CONSTRUCT_EXTERNAL_SSH_PORT="${_external_ssh_port_override:-${CONSTRUCT_EXTERNAL_SSH_PORT:-}}"
+# Read ONLY the two identity keys -- never source config.env here: a sourced file
+# could override KEY_PATH & co. and would export unrelated values into the
+# privileged commands (ssh-keygen, sshd, systemctl) below.
+_read_cfg_key() {
+  [[ -f "${CONFIG_FILE}" ]] || return 0
+  sed -n "s/^$1=//p" "${CONFIG_FILE}" | head -1 || true
+}
+CONSTRUCT_EXTERNAL_HOST="${_external_host_override:-$(_read_cfg_key CONSTRUCT_EXTERNAL_HOST)}"
+CONSTRUCT_EXTERNAL_SSH_PORT="${_external_ssh_port_override:-$(_read_cfg_key CONSTRUCT_EXTERNAL_SSH_PORT)}"
 CONSTRUCT_EXTERNAL_HOST="${CONSTRUCT_EXTERNAL_HOST:-}"
 CONSTRUCT_EXTERNAL_SSH_PORT="${CONSTRUCT_EXTERNAL_SSH_PORT:-22}"
 external_host="${CONSTRUCT_EXTERNAL_HOST:-$(hostname).mshome.net}"

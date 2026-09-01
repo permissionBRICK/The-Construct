@@ -408,6 +408,20 @@ $script:UseRootKey        = $false
 $script:LocalRootKeyPath  = $null
 $script:SecureRootKeyPath = $null
 
+# POSIX single-quoting for values interpolated into the remote shell command line
+# (env prefix). A literal ' becomes '\'' so apostrophes/metacharacters in a hostname
+# can neither break nor extend the command.
+function ConvertTo-PosixSingleQuoted {
+    param([string]$Value)
+    return "'" + ($Value -replace "'", "'\''") + "'"
+}
+
+# scp needs raw IPv6 literals bracketed (user@[2001:db8::1]:/path); hostnames and
+# IPv4 addresses pass through unchanged.
+function Get-ScpHost {
+    if ($VmHost -match ':') { return "[$VmHost]" } else { return $VmHost }
+}
+
 function Invoke-Ssh {
     param([Parameter(Mandatory)][string]$Command, [switch]$Sudo)
     if ($script:UseRootKey) {
@@ -494,7 +508,7 @@ function Invoke-Scp {
         [Parameter(Mandatory)][string]$RemotePath
     )
     $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-    & scp.exe @script:ScpPortArgs @script:SshOpts $LocalPath "$($script:ConnectUser)@${VmHost}:${RemotePath}" 2>$null
+    & scp.exe @script:ScpPortArgs @script:SshOpts $LocalPath "$($script:ConnectUser)@$(Get-ScpHost):${RemotePath}" 2>$null
     $exitCode = $LASTEXITCODE
     $ErrorActionPreference = $prevEAP
     if ($exitCode -ne 0) {
@@ -510,7 +524,7 @@ function Invoke-ScpFrom {
         [Parameter(Mandatory)][string]$LocalPath
     )
     $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-    & scp.exe @script:ScpPortArgs @script:SshOpts "$($script:ConnectUser)@${VmHost}:${RemotePath}" $LocalPath 2>$null
+    & scp.exe @script:ScpPortArgs @script:SshOpts "$($script:ConnectUser)@$(Get-ScpHost):${RemotePath}" $LocalPath 2>$null
     $exitCode = $LASTEXITCODE
     $ErrorActionPreference = $prevEAP
     if ($exitCode -ne 0) {
@@ -1747,7 +1761,14 @@ if (-not $checkoutArg) {
 } else {
     Write-Ok "Project checkout: forced '$checkoutArg' via -CheckoutProjects"
 }
-$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit' CONSTRUCT_VERSION='$constructVersion' SMB_SHARE='$SmbShare' CLAUDE_PARTIAL_STREAMING='$ClaudePartialStreaming' MIC_PASSTHROUGH='$MicPassthrough' OPENCODE_BACKGROUND_WATCHER='$OpenCodeBackgroundWatcher' T3CODE='$T3Code' T3CODE_CHANNEL='$T3CodeChannel' T3CODE_LIMIT_RESUME='$T3CodeLimitResume' CONSTRUCT_EXTERNAL_HOST='$VmHost' CONSTRUCT_EXTERNAL_SSH_PORT='$SshPort'"
+# Client-reachable identity for the guest (banner/URLs/SSH snippets). Sent ONLY for a
+# non-default endpoint, so a default install's remote command, provisioning log and
+# config.env stay byte-identical. Values are POSIX-quoted for the remote shell.
+$externalEnv = ""
+if ($VmHost -ne "agent-vm.mshome.net" -or $SshPort -ne 22) {
+    $externalEnv = " CONSTRUCT_EXTERNAL_HOST=$(ConvertTo-PosixSingleQuoted $VmHost) CONSTRUCT_EXTERNAL_SSH_PORT='$SshPort'"
+}
+$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit' CONSTRUCT_VERSION='$constructVersion' SMB_SHARE='$SmbShare' CLAUDE_PARTIAL_STREAMING='$ClaudePartialStreaming' MIC_PASSTHROUGH='$MicPassthrough' OPENCODE_BACKGROUND_WATCHER='$OpenCodeBackgroundWatcher' T3CODE='$T3Code' T3CODE_CHANNEL='$T3CodeChannel' T3CODE_LIMIT_RESUME='$T3CodeLimitResume'" + $externalEnv
 Write-Host "  --- live provisioning output ---" -ForegroundColor DarkGray
 $provisionStream = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "$envPrefix bash /opt/construct/repo/bin/provision.sh"
 Write-Host "  --- end provisioning output ---" -ForegroundColor DarkGray
@@ -1991,7 +2012,7 @@ if ($tunnelStatus['VSCODE_TUNNEL_NEEDS_SIGNIN'] -eq "yes") {
     } else {
         $journalCmd = if ($script:UseRootKey) { "journalctl -u code-tunnel -n 50" } else { "sudo journalctl -u code-tunnel -n 50" }
         Write-Host "      Could not read the device code automatically. In another window run:" -ForegroundColor Yellow
-        Write-Host "        ssh $($script:ConnectUser)@$VmHost `"$journalCmd`"" -ForegroundColor Cyan
+        Write-Host "        ssh $(if ($SshPort -ne 22) { "-p $SshPort " })$($script:ConnectUser)@$VmHost `"$journalCmd`"" -ForegroundColor Cyan
         Write-Host "      and use the github.com/login/device link shown there." -ForegroundColor Cyan
     }
     Write-Host "    Open the link, enter the code, and authorize access." -ForegroundColor White
@@ -2162,7 +2183,8 @@ if ($Action -eq "provision" -and (Get-Command Ensure-Ffmpeg -ErrorAction Silentl
 
 Write-Host "Done." -ForegroundColor Green
 Write-Host "Connect from a terminal:" -ForegroundColor White
-Write-Host "    ssh $VmHost" -ForegroundColor Yellow
+$sshHint = if ($SshPort -ne 22) { "ssh -p $SshPort $VmHost" } else { "ssh $VmHost" }
+Write-Host "    $sshHint" -ForegroundColor Yellow
 Write-Host "Or in VS Code: Remote Explorer -> SSH -> $HostAlias (platform preset to linux)." -ForegroundColor White
 
 Write-Host ""
