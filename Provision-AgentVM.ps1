@@ -369,14 +369,27 @@ function Ensure-VmReachable {
             return
         }
         Write-Warning "Cannot reach $($script:VmHost) over SSH (port $SshPort)."
-        Write-Host "    Make sure the VM is running, then enter its Hyper-V hostname (without .mshome.net)." -ForegroundColor Yellow
-        Write-Host "    Press Enter to retry with the current hostname." -ForegroundColor Yellow
-        $current = $script:VmHost -replace '\.mshome\.net$', ''
-        $name = Read-Host "VM hostname [$current]"
-        if (-not [string]::IsNullOrWhiteSpace($name)) {
-            $name = $name.Trim()
-            $script:VmHost    = "$name.mshome.net"
-            $script:HostAlias = $name
+        if ($script:VmHost -match '\.mshome\.net$') {
+            # Local Hyper-V form: the legacy short-name prompt (byte-identical), the
+            # entered name becomes both the mshome host and the SSH alias.
+            Write-Host "    Make sure the VM is running, then enter its Hyper-V hostname (without .mshome.net)." -ForegroundColor Yellow
+            Write-Host "    Press Enter to retry with the current hostname." -ForegroundColor Yellow
+            $current = $script:VmHost -replace '\.mshome\.net$', ''
+            $name = Read-Host "VM hostname [$current]"
+            if (-not [string]::IsNullOrWhiteSpace($name)) {
+                $name = $name.Trim()
+                $script:VmHost    = "$name.mshome.net"
+                $script:HostAlias = $name
+            }
+        } else {
+            # Custom endpoint (DNS name or IP): take the corrected value verbatim and
+            # keep the instance's SSH alias -- never append .mshome.net to it.
+            Write-Host "    Make sure the VM is running, then enter its address (DNS name or IP)." -ForegroundColor Yellow
+            Write-Host "    Press Enter to retry with the current address." -ForegroundColor Yellow
+            $entered = Read-Host "VM address [$($script:VmHost)]"
+            if (-not [string]::IsNullOrWhiteSpace($entered)) {
+                $script:VmHost = $entered.Trim()
+            }
         }
     }
 }
@@ -638,7 +651,8 @@ function Throw-BootstrapKeyHelp {
     Write-Warning "The VM did not accept the bootstrap key, so provisioning can't connect."
     Write-Host ""
     Write-Host "  1. Connect to the VM with PuTTY:" -ForegroundColor White
-    Write-Host "       Host: $VmHost   User: $SeedUser   Password: $SeedPassword" -ForegroundColor Yellow
+    $portField = if ($SshPort -ne 22) { "   Port: $SshPort" } else { "" }
+    Write-Host "       Host: $VmHost   User: $SeedUser   Password: $SeedPassword$portField" -ForegroundColor Yellow
     Write-Host "  2. Paste and run this single command to authorize the key:" -ForegroundColor White
     Write-Host ""
     Write-Host "       $cmd" -ForegroundColor Cyan

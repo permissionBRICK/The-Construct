@@ -30,6 +30,9 @@
     The ~\.ssh\config Host alias provisioning created; used to connect when the
     explicit key file is not found.
 
+.PARAMETER SshPort
+    Client-reachable SSH port of the VM (default 22; matches Provision-AgentVM.ps1 -SshPort).
+
 .PARAMETER Report
     ccusage report granularity: session (default), daily, weekly or monthly.
 
@@ -258,7 +261,7 @@ if (-not (Get-Command ssh.exe -ErrorAction SilentlyContinue)) {
 
 Write-Step "Connecting to the VM"
 if (-not (Test-Connection)) {
-    throw "Cannot reach $script:SshTarget over SSH as root. Make sure the VM is running and was provisioned (Provision-AgentVM.ps1 writes the root key to ~\.ssh\$LocalKeyName), or pass -VmHost / -LocalKeyName / -HostAlias."
+    throw "Cannot reach $script:SshTarget over SSH as root. Make sure the VM is running and was provisioned (Provision-AgentVM.ps1 writes the root key to ~\.ssh\$LocalKeyName), or pass -VmHost / -SshPort / -LocalKeyName / -HostAlias."
 }
 Write-Ok "Connected"
 
