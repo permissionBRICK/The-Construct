@@ -45,6 +45,8 @@ param(
     [string]$HostAlias   = "agent-vm",
     [string]$RemoteUser  = "root",
     [string]$LocalKeyName = "agent_vm_ed25519",
+    # SSH port for the VM (matches Provision-AgentVM.ps1's -SshPort).
+    [int]$SshPort        = 22,
     [ValidateSet("session", "daily", "weekly", "monthly")]
     [string]$Report      = "session",
     [string]$OutFile     = "",
@@ -71,6 +73,7 @@ function Write-Ok($msg)   { Write-Host "    $msg" -ForegroundColor Green }
 # there, fall back to the Host alias in ~\.ssh\config, which the provisioner also
 # configured to use that same key.
 $keyPath = Join-Path $HOME ".ssh\$LocalKeyName"
+$script:SshPortArgs = if ($SshPort -ne 22) { @("-p", "$SshPort") } else { @() }
 if (Test-Path -LiteralPath $keyPath) {
     $script:SshTarget = "$RemoteUser@$VmHost"
     $script:SshOpts = @(
@@ -94,7 +97,7 @@ if (Test-Path -LiteralPath $keyPath) {
 
 function Test-Connection {
     $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-    & ssh.exe @script:SshOpts $script:SshTarget "true" 2>$null | Out-Null
+    & ssh.exe @script:SshPortArgs @script:SshOpts $script:SshTarget "true" 2>$null | Out-Null
     $ok = ($LASTEXITCODE -eq 0)
     $ErrorActionPreference = $prevEAP
     return $ok
@@ -189,7 +192,7 @@ function Invoke-RemoteCollector {
     $remoteCmd = "f=`$(mktemp) && printf %s '$b64' | base64 -d > `"`$f`" && bash `"`$f`"; rc=`$?; rm -f `"`$f`"; exit `$rc"
 
     $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-    $output = & ssh.exe @script:SshOpts $script:SshTarget $remoteCmd 2>$null
+    $output = & ssh.exe @script:SshPortArgs @script:SshOpts $script:SshTarget $remoteCmd 2>$null
     $exitCode = $LASTEXITCODE
     $ErrorActionPreference = $prevEAP
     if ($exitCode -ne 0) {
