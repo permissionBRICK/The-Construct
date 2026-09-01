@@ -1546,11 +1546,31 @@ if (Get-Command Initialize-ConstructConfigStore -ErrorAction SilentlyContinue) {
                 "config-sync store.  Pass -ConfigBranch to choose one explicitly.")
         }
     }
+    # Version skew, BEFORE the repo is initialised (repo init is what CREATES the
+    # branch): a non-default branch that a partially updated AgentVm.Common.ps1 cannot
+    # be TOLD is a hard stop, not a silent run on 'vm'. Falling back would initialise
+    # and sync this VM's store on the DEFAULT instance's ref while the control panel
+    # keeps using 'vm-<name>' -- one VM split across two host-config refs, which is the
+    # split this branch keying exists to prevent. Only the default 'vm' path keeps the
+    # parameter-less fallback (an older lib runs it exactly as it always did).
+    if ($syncVmBranch -and $syncVmBranch -ne 'vm') {
+        foreach ($fn in @('Initialize-ConstructConfigRepo', 'Invoke-ConstructConfigSync')) {
+            $skewFn = Get-Command $fn -ErrorAction SilentlyContinue
+            if ($skewFn -and -not $skewFn.Parameters.ContainsKey('VmBranch')) {
+                throw ("This install's Construct library does not support the config-sync branch " +
+                    "'$syncVmBranch' ($fn has no -VmBranch), so this VM's config would be " +
+                    "initialised and synced on the default 'vm' branch; update The Construct scripts " +
+                    "before provisioning this instance.")
+            }
+        }
+    }
     if ((Get-Command Test-ConstructGitAvailable -ErrorAction SilentlyContinue) -and
         (Test-ConstructGitAvailable) -and
         (Get-Command Initialize-ConstructConfigRepo -ErrorAction SilentlyContinue)) {
         # Probe before passing -VmBranch so an older lib is never handed an
-        # unknown argument; the default instance's call is left exactly as it was.
+        # unknown argument; the default instance's call is left exactly as it was
+        # (a NON-default branch that the lib cannot take never gets here -- the gate
+        # above already stopped the run).
         if ($syncVmBranch -and $syncVmBranch -ne 'vm' -and
             (Get-Command Initialize-ConstructConfigRepo).Parameters.ContainsKey('VmBranch')) {
             Initialize-ConstructConfigRepo -ConfigDir $syncConfigDir -VmBranch $syncVmBranch | Out-Null
@@ -1684,7 +1704,9 @@ if (Get-Command Initialize-ConstructConfigStore -ErrorAction SilentlyContinue) {
         # Instance-keyed config-sync branch (B5), derived above. Probe before
         # splatting so an older lib without -VmBranch is never handed an unknown
         # argument, and only pass a NON-default branch so the single-VM call
-        # stays exactly what it has always been.
+        # stays exactly what it has always been. A non-default branch this lib
+        # cannot take never reaches here: the fail-closed gate before repo init
+        # covers Invoke-ConstructConfigSync as well as the initialiser.
         if ($syncVmBranch -and $syncVmBranch -ne 'vm' -and
             (Get-Command Invoke-ConstructConfigSync).Parameters.ContainsKey('VmBranch')) {
             $syncArgs['VmBranch'] = $syncVmBranch
