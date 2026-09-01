@@ -108,6 +108,10 @@ param(
     [string]$WslDistro,
     [double]$VmMemoryGB = 0,
     [int]$VmDiskGB = 0,
+    # Hyper-V VM display name. Forwarded to Create-AgentVM.ps1 (with param probing);
+    # derived DNS name and host alias follow this value. Default matches the existing
+    # convention so all generated output is byte-identical when not overridden.
+    [string]$VmName = "Agent-VM",
     [string]$Projects,
     [string]$AgentPassword,
     [string]$GitUserName,
@@ -487,7 +491,7 @@ if ($PSBoundParameters.ContainsKey('UbuntuRelease') -and -not [string]::IsNullOr
     }
 }
 
-if (-not $OutputIso) { $OutputIso = Join-Path $PSScriptRoot "$VmHost-autoinstall.iso" }
+if (-not $OutputIso) { $OutputIso = Join-Path $PSScriptRoot "$($VmName.ToLower())-autoinstall.iso" }
 $buildScript = Join-Path $PSScriptRoot "bin\build-autoinstall-iso.sh"
 $bootstrapPubKey = Join-Path $PSScriptRoot "keys\bootstrap_ed25519.pub"
 
@@ -637,7 +641,11 @@ $restoredProjectNames = @()    # project profiles that save generated, to re-pro
 $chosenCloneCredB64   = ""     # git credentials for cloning private project repos
 $existingVmHandled    = $false # set once the existing-VM menu runs, so the fresh-install restore offer below is skipped
 
-$HyperVmName = "Agent-VM"
+$HyperVmName = $VmName
+# Derive the mshome DNS name and host alias ONCE from the VM name; used everywhere
+# below instead of re-computing "$($HyperVmName.ToLower()).mshome.net" each time.
+$VmDnsName  = "$($HyperVmName.ToLower()).mshome.net"
+$VmAlias    = $HyperVmName.ToLower()
 if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -and
     (Get-VM -Name $HyperVmName -ErrorAction SilentlyContinue)) {
 
@@ -701,12 +709,11 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
 
         $provisionScript = Join-Path $PSScriptRoot "Provision-AgentVM.ps1"
         if (-not (Test-Path -LiteralPath $provisionScript)) { throw "Provision-AgentVM.ps1 not found in $PSScriptRoot." }
-        $VmHostname = "$($HyperVmName.ToLower()).mshome.net"
         Write-Step "Reprovisioning the existing VM"
         # Reprovision keeps the existing password; only honour an explicit
         # -AgentPassword passed on the command line (this path has no prompt).
         # -Auto: the finally below owns the pause, so the provisioner stays quiet.
-        $reprovArgs = @{ VmHost = $VmHostname; HostAlias = $HyperVmName.ToLower(); Projects = $reprovProjects; Auto = $true }
+        $reprovArgs = @{ VmHost = $VmDnsName; HostAlias = $VmAlias; Projects = $reprovProjects; Auto = $true }
         # Pass both git values (even if empty) so the provisioner doesn't re-prompt.
         $reprovArgs['GitUserName'] = $reprovGit.Name
         $reprovArgs['GitEmail']    = $reprovGit.Email
@@ -812,7 +819,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
                         (Test-ConstructGitAvailable) -and
                         (Get-Command Invoke-ConstructConfigSync -ErrorAction SilentlyContinue)) {
                         $syncConfigDir = Get-ConstructConfigDir
-                        $syncVmHost = "$($HyperVmName.ToLower()).mshome.net"
+                        $syncVmHost = $VmDnsName
                         $syncArgs = @{ ConfigDir = $syncConfigDir; VmHost = $syncVmHost }
                         if ($PSBoundParameters.ContainsKey('AutoResolve')) { $syncArgs['AutoResolve'] = $AutoResolve }
                         $syncResult = Invoke-ConstructConfigSync @syncArgs
@@ -903,7 +910,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
         # would only degrade into reconnect-error popups during the rebuild, so ask
         # those windows -- and only those -- to close now (graceful WM_CLOSE; the
         # install chain reopens VS Code onto the fresh VM at the end).
-        $closedWindows = Close-VmVsCodeWindow -VmHost "$($HyperVmName.ToLower()).mshome.net"
+        $closedWindows = Close-VmVsCodeWindow -VmHost $VmDnsName
         if ($closedWindows -gt 0) {
             # WM_CLOSE is queued, not confirmed -- a window with a modal dialog up
             # may legitimately stay open, so say "asked", not "closed".
@@ -1013,7 +1020,7 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
             $addProjects = @()
             $vmReachable = Test-VmReachable -VmName $HyperVmName
             if ($vmReachable -and (Get-Command Get-ConstructVmProjects -ErrorAction SilentlyContinue)) {
-                $vmProjects = Get-ConstructVmProjects -VmHost "$($HyperVmName.ToLower()).mshome.net"
+                $vmProjects = Get-ConstructVmProjects -VmHost $VmDnsName
                 if ($vmProjects) { $addProjects += @($vmProjects) }
             }
             $addProjects += $importedNames
@@ -1033,8 +1040,6 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
             # (additive: checkout-projects skips existing clones already).
             $provisionScript = Join-Path $PSScriptRoot "Provision-AgentVM.ps1"
             if (-not (Test-Path -LiteralPath $provisionScript)) { throw "Provision-AgentVM.ps1 not found in $PSScriptRoot." }
-            $VmHostname = "$($HyperVmName.ToLower()).mshome.net"
-
             # Git identity (resolved silently -- add-config doesn't change it).
             $acGiParams = @{ Dir = $PSScriptRoot; NoPrompt = $true }
             if ($PSBoundParameters.ContainsKey('GitUserName')) { $acGiParams['Name']  = $GitUserName }
@@ -1052,8 +1057,8 @@ if (-not $SkipCreateVm -and (Get-Command Get-VM -ErrorAction SilentlyContinue) -
 
             Write-Step "Reprovisioning the VM with the new config"
             $acReprovArgs = @{
-                VmHost    = $VmHostname
-                HostAlias = $HyperVmName.ToLower()
+                VmHost    = $VmDnsName
+                HostAlias = $VmAlias
                 Projects  = $addProjectsStr
                 Auto      = $true
                 GitUserName = $acGitId.Name
@@ -1543,7 +1548,7 @@ $wslLfScript = ConvertTo-WslPath $lfScript
 
 try {
     & wsl.exe @wslDistroArgs -u root -- env `
-        "VM_USER=$VmUser" "VM_PASS=$VmPass" "VM_HOST=$VmHost" "SOURCE_ID=$SourceId" `
+        "VM_USER=$VmUser" "VM_PASS=$VmPass" "VM_HOST=$VmAlias" "SOURCE_ID=$SourceId" `
         "BOOTSTRAP_PUBKEY_FILE=$wslPubKey" `
         bash $wslLfScript $wslSrc $wslOut
     $buildExit = $LASTEXITCODE
@@ -1623,6 +1628,10 @@ try {
     if (-not $createCmd.Parameters.ContainsKey('OpenCodeBackgroundWatcher')) {
         $createArgs.Remove('OpenCodeBackgroundWatcher')
     }
+    # Forward the VM name only when the target script understands it (skew guard).
+    if ($createCmd.Parameters.ContainsKey('VmName')) {
+        $createArgs['VmName'] = $HyperVmName
+    }
 } catch {
     # Fail SAFE, not open. We are already past Remove-AgentVm here, so passing an argument
     # the target might reject risks a binding failure with the old VM gone -- a broken
@@ -1657,10 +1666,9 @@ try {
     if (-not (Test-Path -LiteralPath $provisionScript)) {
         throw "Provision-AgentVM.ps1 not found in $PSScriptRoot."
     }
-    $VmHostname = "$($HyperVmName.ToLower()).mshome.net"
     $provArgs = @{
-        VmHost    = $VmHostname
-        HostAlias = $HyperVmName.ToLower()
+        VmHost    = $VmDnsName
+        HostAlias = $VmAlias
         Projects  = $chosenProjects
         AgentPassword = $chosenAgentPassword
         GitUserName   = $chosenGitName
@@ -1709,12 +1717,12 @@ try {
             Write-Ok "No final reboot was needed -- the VM is already up"
         } else {
             Write-Step "Waiting for the VM to finish its final reboot"
-            # $VmHostname (FQDN), not the short $VmHost: the short name can
+            # $VmDnsName (FQDN), not the short $VmHost: the short name can
             # stop resolving after the reboot while the switch DNS still
             # serves the FQDN -- and ssh resolves the alias to the FQDN too.
             $sshWaitArgs = @{
-                VmHost         = $VmHostname
-                SshTarget      = $HyperVmName.ToLower()
+                VmHost         = $VmDnsName
+                SshTarget      = $VmAlias
                 BaselineBootId = "$global:ConstructVmPreRebootBootId"
             }
             if (Wait-VmSshReady @sshWaitArgs) {
@@ -1724,7 +1732,7 @@ try {
             }
         }
     }
-    $openLink = Get-RemoteOpenLink -VmHost $VmHost -WorkspaceRoot "/root/repos"
+    $openLink = Get-RemoteOpenLink -VmHost $VmDnsName -WorkspaceRoot "/root/repos"
     if (Open-RemoteWorkspace -Link $openLink) {
         Show-Banner @(
             "Your Construct VM is ready.",

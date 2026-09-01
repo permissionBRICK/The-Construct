@@ -3343,7 +3343,13 @@ function Invoke-ConstructVmSsh {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$VmHost,
-        [Parameter(Mandatory)][string]$Command
+        [Parameter(Mandatory)][string]$Command,
+        # Path to the provisioner-written root key. Default matches the
+        # canonical provisioner output; callers with a custom key name pass
+        # their own path (e.g. Provision-AgentVM.ps1's -LocalKeyName).
+        [string]$KeyPath = "",
+        # SSH port for the VM (matches Provision-AgentVM.ps1's -SshPort).
+        [int]$SshPort = 22
     )
 
     $sshExe = Get-Command ssh -ErrorAction SilentlyContinue
@@ -3352,11 +3358,12 @@ function Invoke-ConstructVmSsh {
     }
 
     # Build connection args: prefer the explicit key the provisioner wrote.
-    $keyPath = Join-Path $HOME ".ssh/agent_vm_ed25519"
-    if (Test-Path -LiteralPath $keyPath) {
+    if (-not $KeyPath) { $KeyPath = Join-Path $HOME ".ssh/agent_vm_ed25519" }
+    $portArgs = if ($SshPort -ne 22) { @("-p", "$SshPort") } else { @() }
+    if (Test-Path -LiteralPath $KeyPath) {
         $target  = "root@$VmHost"
         $sshOpts = @(
-            "-i", $keyPath,
+            "-i", $KeyPath,
             "-o", "IdentitiesOnly=yes",
             "-o", "StrictHostKeyChecking=accept-new",
             "-o", "BatchMode=yes",
@@ -3383,7 +3390,7 @@ function Invoke-ConstructVmSsh {
 
     $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
     try {
-        $output = & ssh @sshOpts $target $remoteCmd 2>$null
+        $output = & ssh @portArgs @sshOpts $target $remoteCmd 2>$null
         $code = $LASTEXITCODE
         if ($null -eq $code) { $code = -1 }
         $outStr = if ($null -ne $output) { ($output -join "`n") } else { "" }
