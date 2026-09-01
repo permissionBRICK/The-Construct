@@ -20,6 +20,10 @@
       </div>
       <div class="header-right">
         <div class="header-tools">
+          <!-- Instance picker: rendered ONLY when the registry holds more than one
+               instance (panel.js keeps it hidden otherwise), so a single-VM install's
+               header is unchanged. -->
+          <select class="gear instance-select" id="instanceSelect" title="Construct instance (VM) this window drives" hidden aria-label="Construct instance"></select>
           <button class="gear" id="openTabBtn" title="Open as editor tab">&#x2922; Tab</button>
           <button class="gear" id="gearBtn">&#x2699; Settings</button>
         </div>
