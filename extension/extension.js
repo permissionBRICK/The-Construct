@@ -1174,6 +1174,9 @@ function runUpdateConstruct() {
   const ok = lifecycle.launchHostScript({
     scriptsDir, script: "Update-Construct.ps1",
     args: updates.constructRefreshArgs(markers),
+    // Pair form of the same args: the command builder quotes VALUES from it, so a
+    // repo/ref hand-edited into the settings file can't be read as PowerShell syntax.
+    argSpec: updates.constructRefreshArgPairs(markers),
     env: { CONSTRUCT_UPDATE_RESULT: resultFile },
     elevate: false, label: "Update Construct",
   });
@@ -1318,7 +1321,9 @@ async function offerApplyCheckpoints(scriptsDir, enabled, changed) {
   const resultFile = path.join(os.tmpdir(), `construct-checkpoints-${Date.now()}.result`);
   try { fs.unlinkSync(resultFile); } catch (_) {}
   if (targetSuperseded(t, "Applying automatic checkpoints")) return;
-  lifecycle.run("setCheckpoints", { scriptsDir, enabled, instance: t.instance, env: { CONSTRUCT_CHECKPOINT_RESULT: resultFile } });
+  // Refused (a non-default instance this install can't target) => no console runs, so
+  // no result file will ever appear: don't start the poller.
+  if (lifecycle.run("setCheckpoints", { scriptsDir, enabled, instance: t.instance, env: { CONSTRUCT_CHECKPOINT_RESULT: resultFile } }) === false) return;
   const startedAt = Date.now();
   const timer = setInterval(() => {
     let res = null;
@@ -1358,7 +1363,9 @@ async function startConstructReprovision(scriptsDir, target) {
     if (!pf.ok) { showPreFlightBlock(pf); return false; }
     const selected = await effectiveProjects(t.instance);
     if (targetSuperseded(t, "Reprovision")) return false;
-    lifecycle.run("reprovision", { scriptsDir, projects: selected, instance: t.instance });
+    // run() refuses (and explains) when this install can't TARGET the active instance;
+    // nothing was launched then, so don't start polling for a provisioned commit.
+    if (lifecycle.run("reprovision", { scriptsDir, projects: selected, instance: t.instance }) === false) return false;
     beginReprovisionFastRefresh();
     return true;
   } catch (e) {
@@ -2223,7 +2230,9 @@ function handleMessage(message, webview, context) {
         if (t3plan) {
           const sourceManagedT3 = merged.t3codeLimitResume === true;
           if (t3plan.action === "enable" && !sourceManagedT3) {
-            t3code.enableOnVm({ channel: t3plan.channel, cfg: activeCfg() }).then(() => refreshAll());
+            // `instance` only picks the pairing-script variant openWebUi mints with
+            // (the default instance keeps the original command verbatim).
+            t3code.enableOnVm({ channel: t3plan.channel, cfg: activeCfg(), instance: activeInstance() }).then(() => refreshAll());
           } else if (t3plan.action === "disable") {
             t3code.disableOnVm({ cfg: activeCfg() }).then(() => refreshAll());
           } else if (t3plan.action === "setChannel" && !sourceManagedT3) {
@@ -2304,7 +2313,7 @@ function handleMessage(message, webview, context) {
       if (id === "openAgentWeb") {
         // The agents-list ▷ button: only T3 Code has a browser UI today. Mints a
         // one-time pairing link over SSH and opens it in the host browser.
-        if (message.agent === "t3code") t3code.openWebUi({ cfg: activeCfg() });
+        if (message.agent === "t3code") t3code.openWebUi({ cfg: activeCfg(), instance: activeInstance() });
         return;
       }
       if (id === "connect") { remote.openOnVm({ path: "/root/repos", newWindow: false, cfg: activeCfg() }); return; }
@@ -2325,8 +2334,8 @@ function handleMessage(message, webview, context) {
           if (!pf.ok) { showPreFlightBlock(pf); return; }
           const projects = await effectiveProjects(lifeTarget.instance);
           if (targetSuperseded(lifeTarget, id === "reprovision" ? "Reprovision" : id === "reinstall" ? "Reinstall" : "Redownload")) return;
-          lifecycle.run(id, { scriptsDir: scriptsDir, projects: projects, instance: lifeTarget.instance });
-          if (id === "reprovision") beginReprovisionFastRefresh();
+          const started = lifecycle.run(id, { scriptsDir: scriptsDir, projects: projects, instance: lifeTarget.instance });
+          if (started !== false && id === "reprovision") beginReprovisionFastRefresh();
         })();
         return;
       }

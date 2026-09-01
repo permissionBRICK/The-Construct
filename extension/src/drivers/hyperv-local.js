@@ -34,8 +34,12 @@ const VM_NAME = "Agent-VM";
 // against a wedged/garbage powershell flooding host memory.
 const MAX_OUT = 64 * 1024;
 
-/** What this backend can do; the UI gates optional affordances on these. */
-const CAPABILITIES = { checkpoints: true, console: "vmconnect", suspend: true };
+/** What this backend can do; the UI gates optional affordances on these.
+ *  `hostLifecycle`: the host's own PowerShell scripts (Auto-Install.ps1 /
+ *  Create-AgentVM.ps1 / Set-AgentVmCheckpoints.ps1) create, delete and reconfigure
+ *  this backend's VMs — they drive the LOCAL Hyper-V, which is exactly this driver.
+ *  drivers/index.js gates the VM-destroying lifecycle actions on it. */
+const CAPABILITIES = { checkpoints: true, console: "vmconnect", suspend: true, hostLifecycle: true };
 
 /** The VM name for an instance (contract: normalized instance object), or the default. */
 function vmNameOf(instance) {

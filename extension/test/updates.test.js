@@ -166,6 +166,15 @@ function ok(name, cond, detail) {
   // ── constructRefreshArgs ────────────────────────────────────────────────────
   const args = updates.constructRefreshArgs({ repo: "me/fork", ref: "dev", installedCommit: "x" });
   ok("refreshArgs: -Repo -Ref (no -RefreshOnly; Update-Construct.ps1 is the refresh)", args.join(" ") === "-Repo me/fork -Ref dev");
+  // The pair form the launcher quotes VALUES from — derived from the same place, so
+  // the flat list and the spec can't drift apart.
+  const pairs = updates.constructRefreshArgPairs({ repo: "me/fork", ref: "dev" });
+  ok("refreshArgs: the pair spec flattens to exactly the flat args",
+    JSON.stringify(pairs.reduce((a, p) => a.concat([p.flag, p.value]), [])) === JSON.stringify(args));
+  ok("refreshArgs: a hand-edited leading-dash ref is quoted as a VALUE",
+    require("../src/lifecycle").buildCallCommand("C:\\x\\Update-Construct.ps1",
+      updates.constructRefreshArgs({ repo: "me/fork", ref: "-Force" }),
+      updates.constructRefreshArgPairs({ repo: "me/fork", ref: "-Force" })).endsWith("-Ref '-Force'"));
 
   // ── semver compare ──────────────────────────────────────────────────────────
   ok("isNewer: patch bump", updates.isNewer("2.1.197", "2.1.196") === true);

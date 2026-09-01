@@ -281,6 +281,53 @@ ok("call: uses the & call operator on the quoted script", call.startsWith("& 'C:
 ok("call: parameter NAMES stay bare", call.includes(" -Action ") && call.endsWith(" -NonInteractive"));
 ok("call: VALUES are single-quoted", call.includes(" -Action 'provision' ") && call.includes(" -VmDiskGB '80' "));
 
+// A VALUE is quoted whatever it starts with. The tokens come from the instance
+// registry, which the user hand-edits, and this string IS a PowerShell command: a
+// leading-dash value emitted bare would be parsed as syntax (command injection on a
+// plain button press). `argSpec` — buildInvocation's (flag, value) pairs — says which
+// token is a parameter NAME, so no guessing is involved.
+const spec = [
+  { flag: "-FromPanel" },
+  { flag: "-VmHost", value: "-x'; Start-Process calc; #" },
+  { flag: "-Action", value: "provision" },
+];
+const injected = life.buildCallCommand("C:\\x\\Provision-AgentVM.ps1", life.flattenArgPairs(spec), spec);
+ok("call(spec): a leading-dash VALUE is quoted, not emitted as code",
+  injected.includes("-VmHost '-x''; Start-Process calc; #'"));
+ok("call(spec): the embedded apostrophe is doubled", injected.includes("''; Start-Process"));
+ok("call(spec): a switch stays bare", injected.includes("& 'C:\\x\\Provision-AgentVM.ps1' -FromPanel "));
+ok("call(spec): nothing executable survives outside the quotes",
+  !/Start-Process/.test(injected.replace(/'(?:[^']|'')*'/g, "")));
+// WITHOUT a spec the ORIGINAL rule stands, unchanged: anything starting with '-' is a
+// name. That is the zero-change bar, not a nicety — so it is pinned against literals,
+// not against the builder's own other branch.
+ok("call(no spec): the legacy rule is intact — a leading-dash token stays bare",
+  life.buildCallCommand("C:\\x\\p.ps1", ["-VmHost", "-x; Start-Process calc; #"]) ===
+  "& 'C:\\x\\p.ps1' -VmHost -x; Start-Process calc; #");
+ok("call(no spec): ordinary flags are still bare",
+  life.buildCallCommand("C:\\x\\p.ps1", ["-Action", "provision"]) === "& 'C:\\x\\p.ps1' -Action 'provision'");
+
+// ZERO-CHANGE PIN. buildInvocation attaches the spec ONLY for a non-default instance,
+// so an install with no registry produces the pre-instances command string verbatim —
+// including for a VALUE that itself begins with '-' (a project named "-NoProfile" was
+// emitted bare before instances existed and must still be). The expected strings below
+// are literals: comparing the two builder branches against each other would pass even
+// if both drifted.
+const dashProjects = life.buildInvocation("reprovision", { settings: {}, projects: ["-NoProfile", "x"] });
+ok("default path: no argSpec is attached (nothing to target)", dashProjects.argSpec === undefined);
+ok("default path: the command string is the legacy one, verbatim",
+  life.buildCallCommand("C:\\s\\Provision-AgentVM.ps1", dashProjects.args, dashProjects.argSpec) ===
+  "& 'C:\\s\\Provision-AgentVM.ps1' -FromPanel -Action 'provision' -Projects -NoProfile,x -NonInteractive",
+  life.buildCallCommand("C:\\s\\Provision-AgentVM.ps1", dashProjects.args, dashProjects.argSpec));
+const plainDefault = life.buildInvocation("reprovision", { settings: { gitName: "Neo", gitEmail: "neo@zion.io" } });
+ok("default path: an ordinary reprovision command is pinned too",
+  life.buildCallCommand("C:\\s\\Provision-AgentVM.ps1", plainDefault.args, plainDefault.argSpec) ===
+  "& 'C:\\s\\Provision-AgentVM.ps1' -FromPanel -Action 'provision' -GitUserName 'Neo' -GitEmail 'neo@zion.io' -NonInteractive",
+  life.buildCallCommand("C:\\s\\Provision-AgentVM.ps1", plainDefault.args, plainDefault.argSpec));
+ok("call: buildHostLaunch threads argSpec through to the command",
+  life.buildHostLaunch("C:\\x\\p.ps1", life.flattenArgPairs(spec), { argSpec: spec }).command
+    .includes("-VmHost '-x''; Start-Process calc; #'"));
+
 // ── buildHostLaunch (ELEVATED): cmd /c start + Start-Process -Verb RunAs ──────
 const hl = life.buildHostLaunch("C:\\x\\Auto-Install.ps1", ["-Action", "reinstall", "-BackupMode", "save"], { elevate: true });
 ok("launch(elevated): spawns via cmd.exe (start allocates the console)", hl.file === "cmd.exe");

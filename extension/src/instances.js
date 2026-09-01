@@ -17,6 +17,7 @@
 // ── Public API ───────────────────────────────────────────────────────────────
 //   CONTAINER, INSTANCES_FILE, DEFAULT_INSTANCE_NAME, DEFAULT_INSTANCE, NAME_RE
 //   isValidName(name)                     -> bool          (^[a-z0-9][a-z0-9-]{0,39}$)
+//   identityProblems(instance, raw?)       -> string[]      (format rules; [] = usable)
 //   instancesPath(env)                    -> abs path | null
 //   deriveDefaults(name, raw)             -> normalized instance object
 //   parseRegistry(text)                   -> { registry, problems }
@@ -38,6 +39,12 @@
 
 const fs = require("fs");
 const path = require("path");
+const net = require("net");   // net.isIP — a real IPv6 parser for the endpoint rule
+// The config-sync engine owns the branch-name rule (isValidVmBranch), and an
+// instance's configBranch IS that branch — so it is validated against the one
+// authority rather than a second copy of the rule. One-way only: configsync.js must
+// never require this module back.
+const configsync = require("./configsync");
 
 const CONTAINER = "The-Construct";          // %LOCALAPPDATA%\The-Construct
 const INSTANCES_FILE = "instances.json";
@@ -112,6 +119,119 @@ function badString(v) { return v != null && v !== "" && typeof v !== "string"; }
 /** The string fields of an instance entry, for the type check. `sshPort` is handled
  *  separately (it is an int in the schema). */
 const STRING_FIELDS = ["backend", "vmName", "sshHost", "vmHost", "hostAlias", "keyName", "configBranch", "scriptsDir", "owner"];
+
+// ── Identity-field FORMAT rules ──────────────────────────────────────────────
+// Type-checking a field ("it is a string") is not enough for the ones that end up in
+// a PowerShell command line, an ssh argv, a key-file path or a git ref: `-x;
+// Start-Process calc; #` is a perfectly good JSON string. These rules constrain the
+// SHAPE of every identity field, and an entry that breaks one is SKIPPED with a
+// problem rather than partially used — half an identity would silently target some
+// OTHER machine. Every DERIVED value satisfies them (instance names are already
+// `^[a-z0-9][a-z0-9-]{0,39}$`), so only a hand-written entry can trip these.
+// lib/AgentVm.Instances.ps1 applies the identical rules — change both together.
+
+/** A DNS host name / FQDN (also matches a dotted IPv4 literal). */
+const HOSTNAME_RE = /^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/;
+/** The SHAPE an IPv6 literal must have before it is parsed: hex, ':' and '.' only, so
+ *  no zone id (`%eth0`) and no brackets — ssh takes the bare address in argv, and both
+ *  would have to survive a PowerShell command line too. It is also where the two
+ *  readers' parsers are made to agree: Node's net.isIP accepts `fe80::1%eth0` and
+ *  .NET's IPAddress.TryParse accepts `[::1]`, so neither ever reaches a parser. */
+const IPV6_SHAPE_RE = /^[0-9A-Fa-f:.]{2,45}$/;
+/** A strict dotted quad — the only IPv4 tail an IPv6-mapped address may carry.
+ *  .NET's parser has historically been lenient about leading zeros where Node's is
+ *  not, so the shape is pinned here rather than left to either. */
+const IPV4_STRICT_RE = /^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}$/;
+/** An ssh alias / key file name: one path-free, shell-free token. */
+const SAFE_TOKEN_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+/** Windows device names. They are NOT ordinary files at any path, so `~\.ssh\CON`
+ *  can never be created — and the reservation applies to the stem before the first
+ *  dot, so `CON.txt` is the same device. Case-insensitive. */
+const WINDOWS_DEVICE_NAMES = new Set([
+  "con", "prn", "aux", "nul",
+  "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
+  "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+]);
+/** A single DNS label — the Hyper-V VM name doubles as the guest hostname, so
+ *  Auto-Install.ps1 enforces the same shape (case-insensitively). */
+const DNS_LABEL_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,62}$/;
+
+/**
+ * A real IPv6 literal — shape-filtered (above), then handed to an actual parser
+ * (`net.isIP`), because a character-class regex accepts nonsense like `::::`,
+ * `1::2::3` or `1:2:3:4:5:6:7:8:9`. lib/AgentVm.Instances.ps1 applies the same shape
+ * filter and then .NET's `IPAddress.TryParse` (+ an InterNetworkV6/ScopeId check), and
+ * both test suites run the same accept/reject matrix.
+ */
+function isIpv6Literal(v) {
+  if (typeof v !== "string" || !IPV6_SHAPE_RE.test(v) || v.indexOf(":") < 0) return false;
+  if (v.indexOf(".") >= 0 && !IPV4_STRICT_RE.test(v.slice(v.lastIndexOf(":") + 1))) return false;
+  return net.isIP(v) === 6;
+}
+
+function isHostEndpoint(v) {
+  return typeof v === "string" && (HOSTNAME_RE.test(v) || isIpv6Literal(v));
+}
+function isSafeToken(v) {
+  return typeof v === "string" && SAFE_TOKEN_RE.test(v) && !v.includes("..");
+}
+
+/**
+ * A key file name — the SSH alias rule plus what Windows adds, because this value is
+ * used as a FILE: `~\.ssh\<keyName>` is written (Provision-AgentVM.ps1) and read.
+ *   • a trailing dot is stripped by Win32, so "agent_vm_ed25519." and
+ *     "agent_vm_ed25519" are the SAME file — an entry spelled that way would quietly
+ *     overwrite the default instance's key;
+ *   • a reserved device stem (CON, NUL, COM1 … , with or without an extension) is not
+ *     a creatable file at all, so provisioning would fail after the VM exists.
+ * `hostAlias` deliberately keeps the plain token rule: an ssh_config Host alias is not
+ * a path. lib/AgentVm.Instances.ps1 applies the identical rule.
+ */
+function isKeyFileName(v) {
+  if (!isSafeToken(v)) return false;
+  if (v.endsWith(".")) return false;
+  return !WINDOWS_DEVICE_NAMES.has(v.split(".")[0].toLowerCase());
+}
+function isDnsLabel(v) { return typeof v === "string" && DNS_LABEL_RE.test(v); }
+
+/**
+ * The format problems of one NORMALIZED instance (i.e. after deriveDefaults), as
+ * human-readable strings. Empty array = usable. Pure.
+ *
+ * `raw` (optional) is the entry as it was written in the file. It matters because the
+ * host has TWO spellings: `deriveDefaults` prefers `sshHost`, so an entry like
+ * `{ sshHost: "good.local", vmHost: "-x; calc" }` would otherwise normalize to a
+ * perfectly valid endpoint and keep the hostile one on disk for whoever reads `vmHost`
+ * next. EVERY supplied host field is checked, then the effective endpoint.
+ */
+function identityProblems(inst, raw) {
+  const out = [];
+  const q = (v) => JSON.stringify(v === undefined ? null : v);
+  const add = (msg) => { if (out.indexOf(msg) < 0) out.push(msg); };
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    for (const f of ["sshHost", "vmHost"]) {
+      const v = str(raw[f]);
+      if (v && !isHostEndpoint(v)) add('"' + f + '" ' + q(v) + " is not a host name or IP address");
+    }
+  }
+  if (!isDnsLabel(inst.vmName)) {
+    add('"vmName" ' + q(inst.vmName) + " is not a usable VM/host name (letters, digits and hyphens, starting alphanumeric, max 63)");
+  }
+  if (!isHostEndpoint(inst.vmHost)) {
+    add('"sshHost" ' + q(inst.vmHost) + " is not a host name or IP address");
+  }
+  if (!isSafeToken(inst.hostAlias)) {
+    add('"hostAlias" ' + q(inst.hostAlias) + " is not a usable ssh alias (letters, digits, '.', '_' and '-', max 64)");
+  }
+  if (!isKeyFileName(inst.keyName)) {
+    add('"keyName" ' + q(inst.keyName) + " is not a usable key file name (letters, digits, '.', '_' and '-', max 64;" +
+      " no trailing dot and not a reserved Windows device name)");
+  }
+  if (!configsync.isValidVmBranch(inst.configBranch)) {
+    add('"configBranch" ' + q(inst.configBranch) + " is not a usable config-sync branch name");
+  }
+  return out;
+}
 
 /**
  * Fill in every field an entry omits, per the registry contract:
@@ -276,7 +396,16 @@ function parseRegistry(text) {
         if (entry.backend === "hyperv-remote" && !str(entry.sshHost)) {
           problems.push('instance "' + name + '" is hyperv-remote but has no sshHost');
         }
-        byName[name] = deriveDefaults(name, entry);
+        const normalized = deriveDefaults(name, entry);
+        // A field of the right TYPE can still be unusable (or hostile) as a host name,
+        // an ssh alias, a key file name or a git ref. Such an entry is skipped WHOLE:
+        // using the rest of it would dial, key or sync some other machine.
+        const bad = identityProblems(normalized, entry);
+        if (bad.length) {
+          problems.push('instance "' + name + '": ' + bad.join("; ") + " — skipped");
+          continue;
+        }
+        byName[name] = normalized;
       }
     }
     const dflt = str(doc.defaultInstance);
@@ -370,9 +499,14 @@ function resolve(registry, name) {
  *   1. `construct.instance` setting (a global override; "" = unset)
  *   2. the window's persisted workspaceState selection
  *   3. the registry's defaultInstance
- * A name at any level that no longer exists in the registry is skipped (with a
- * `problem`) rather than failing — an instance can be removed while a window still
- * remembers it. Returns { instance, name, source, problem? }. Pure.
+ * A name at any level that no longer exists in the registry is SKIPPED (with a
+ * `problem`) and the NEXT candidate is tried — an instance can be removed, or a
+ * global `construct.instance` can go stale, while this window still has a perfectly
+ * valid selection of its own; letting the invalid higher-precedence value win would
+ * silently drag the window back to the default VM. The registry default is used only
+ * once every candidate is exhausted. Returns { instance, name, source, problem?,
+ * problems? } (`problem` = the first one, kept for callers that toast a single
+ * string). Pure.
  */
 function resolveActive(opts = {}) {
   const registry = opts.registry;
@@ -381,18 +515,15 @@ function resolveActive(opts = {}) {
     { value: str(opts.setting), source: "setting" },
     { value: str(opts.workspaceValue), source: "workspace" },
   ];
+  const problems = [];
+  const withProblems = (res) => (problems.length ? { ...res, problem: problems[0], problems } : res);
   for (const c of candidates) {
     if (!c.value) continue;
-    if (bag[c.value]) return { instance: bag[c.value], name: c.value, source: c.source };
-    return {
-      instance: resolve(registry, null),
-      name: (registry && registry.defaultInstance) || DEFAULT_INSTANCE_NAME,
-      source: "default",
-      problem: 'instance "' + c.value + '" is not in the registry — using the default instance',
-    };
+    if (bag[c.value]) return withProblems({ instance: bag[c.value], name: c.value, source: c.source });
+    problems.push('instance "' + c.value + '" (' + c.source + ') is not in the registry — skipped');
   }
   const inst = resolve(registry, null);
-  return { instance: inst, name: inst.name, source: "default" };
+  return withProblems({ instance: inst, name: inst.name, source: "default" });
 }
 
 /**
@@ -630,6 +761,7 @@ module.exports = {
   CONTAINER, INSTANCES_FILE, SCHEMA_VERSION, BACKENDS, NAME_RE,
   DEFAULT_INSTANCE_NAME, DEFAULT_INSTANCE, DEFAULT_SSH_PORT,
   isValidName, localAppData, instancesPath,
+  isHostEndpoint, isIpv6Literal, isSafeToken, isKeyFileName, isDnsLabel, identityProblems,
   deriveDefaults, isDefaultInstance, toSshCfg,
   parseRegistry, load, list, resolve, resolveActive, matchByRemoteHost,
   createGate, captureTarget, targetSuperseded, planRemoteAdoption, adoptRemoteInstance,
