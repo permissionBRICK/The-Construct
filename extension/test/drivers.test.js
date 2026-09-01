@@ -6,6 +6,7 @@
 // Run: node drivers.test.js
 const { EventEmitter } = require("events");
 const drivers = require("../src/drivers");
+const instances = require("../src/instances");
 const hypervLocal = require("../src/drivers/hyperv-local");
 const vmpower = require("../src/vmpower");
 
@@ -39,11 +40,27 @@ const DEFAULT_INSTANCE = {
   vmHost: "agent-vm.mshome.net", sshPort: 22, hostAlias: "agent-vm",
   keyName: "agent_vm_ed25519", configBranch: "vm", scriptsDir: null,
 };
+// CANONICAL for a hyperv-local instance named "work-vm": the alias is the BARE
+// instance name. The hardened registry reader REFUSES the older "construct-work-vm"
+// spelling for this backend, so a fixture using it could not reach the driver through
+// production parsing at all (extension/test/instances.test.js, "canonical local
+// identity") -- it has to be what the reader really hands the driver.
 const WORK_INSTANCE = {
   name: "work-vm", backend: "hyperv-local", vmName: "Work-VM",
-  vmHost: "work-vm.mshome.net", sshPort: 22, hostAlias: "construct-work-vm",
+  vmHost: "work-vm.mshome.net", sshPort: 22, hostAlias: "work-vm",
   keyName: "construct_work-vm_ed25519", configBranch: "vm-work-vm", scriptsDir: null,
 };
+
+// The fixture is pinned to PRODUCTION PARSING: every field it states must be what the
+// registry reader derives for this instance, and the reader must accept it as a
+// canonical hyperv-local identity -- an entry it refuses (e.g. the old
+// "construct-work-vm" alias) can never reach a driver at all.
+const READER_WORK = instances.deriveDefaults("work-vm", { backend: "hyperv-local", vmName: "Work-VM" });
+ok("fixture: WORK_INSTANCE is what the registry reader produces",
+  Object.keys(WORK_INSTANCE).every((k) => JSON.stringify(READER_WORK[k]) === JSON.stringify(WORK_INSTANCE[k])),
+  JSON.stringify(READER_WORK));
+ok("fixture: ...and the reader accepts that identity for hyperv-local",
+  instances.localIdentityProblems(READER_WORK).length === 0);
 
 // ── getDriver dispatch ───────────────────────────────────────────────────────
 ok("dispatch: 'hyperv-local' -> the local Hyper-V driver", drivers.getDriver("hyperv-local") === hypervLocal);
@@ -116,7 +133,7 @@ ok("target: the instance object is copied, not mutated",
   vmpower.resolveTarget({ instance: WORK_INSTANCE, vmName: "Other-VM" }).instance !== WORK_INSTANCE &&
   WORK_INSTANCE.vmName === "Work-VM");
 ok("target: other instance fields survive the copy",
-  vmpower.resolveTarget({ instance: WORK_INSTANCE }).instance.hostAlias === "construct-work-vm");
+  vmpower.resolveTarget({ instance: WORK_INSTANCE }).instance.hostAlias === "work-vm");
 ok("facade: driverFor resolves the backend's driver", vmpower.driverFor({ instance: DEFAULT_INSTANCE }) === hypervLocal);
 ok("facade: getDriver is re-exported", vmpower.getDriver === drivers.getDriver);
 

@@ -2112,13 +2112,22 @@ function Invoke-ProvisionConfigSyncBlock {
     }
     try {
         $warns = @()
-        Invoke-Expression $Code 3>&1 | ForEach-Object {
-            if ($_ -is [System.Management.Automation.WarningRecord]) { $warns += "$_" }
+        $threw = $false
+        $message = ""
+        try {
+            Invoke-Expression $Code 3>&1 | ForEach-Object {
+                if ($_ -is [System.Management.Automation.WarningRecord]) { $warns += "$_" }
+            }
+        } catch {
+            $threw = $true
+            $message = "$($_.Exception.Message)"
         }
         return [pscustomobject]@{
             InitBranch = $(if ($script:capturedInit) { $script:capturedInit.VmBranch } else { "<never called>" })
             SyncBranch = $(if ($script:capturedSync) { $script:capturedSync.VmBranch } else { "<never called>" })
             Warnings   = @($warns)
+            Threw      = $threw
+            Message    = $message
         }
     } finally {
         Remove-Item -LiteralPath $storeDir -Recurse -Force -ErrorAction SilentlyContinue
@@ -2144,9 +2153,22 @@ if ($provBlockAst) {
     ok "provision-run: explicit -ConfigBranch wins over the alias" (
         $rExplicit.InitBranch -eq "vm-other" -and $rExplicit.SyncBranch -eq "vm-other")
 
+    # A NON-DEFAULT branch against a partially updated library is a HARD STOP, not a
+    # silent run on 'vm': initialising this VM's store on the default instance's ref
+    # while the panel syncs 'vm-<name>' splits one VM across two host-config refs.
     $rOld = Invoke-ProvisionConfigSyncBlock -Code $provCode -HostAlias "work" -OldLib
-    ok "provision-run: an older lib without -VmBranch is never handed one" (
-        $null -eq $rOld.InitBranch -and $null -eq $rOld.SyncBranch)
+    ok "provision-run: an older lib + a non-default branch FAILS CLOSED" ($rOld.Threw)
+    ok "provision-run: ...before the repo is initialised" (
+        $rOld.InitBranch -eq "<never called>" -and $rOld.SyncBranch -eq "<never called>")
+    ok "provision-run: ...and says to update The Construct scripts" (
+        $rOld.Message -match 'does not support the config-sync branch' -and
+        $rOld.Message -match "update The Construct")
+    # The DEFAULT instance keeps its parameter-less fallback: an old lib runs exactly
+    # as it always did, with no branch argument anywhere.
+    $rOldDefault = Invoke-ProvisionConfigSyncBlock -Code $provCode -HostAlias "agent-vm" -OldLib
+    ok "provision-run: the DEFAULT path still runs on an older lib" (-not $rOldDefault.Threw)
+    ok "provision-run: ...passing no branch at all" (
+        $null -eq $rOldDefault.InitBranch -and $null -eq $rOldDefault.SyncBranch)
 
     # The pure helper falls back silently; the CALL SITE is what tells the user
     # this VM ended up on the default instance's branch.
@@ -2203,12 +2225,222 @@ ok "chain: Auto-Install probes Provision for -ConfigBranch before anything destr
     $aiSrc -match "cbProvCmd\.Parameters\.ContainsKey\('ConfigBranch'\)")
 ok "chain: Auto-Install probes Create-AgentVM for -ConfigBranch too" (
     $aiSrc -match "cbCreateCmd\.Parameters\.ContainsKey\('ConfigBranch'\)")
+# -ConfigBranch is also the CAPABILITY MARKER: any non-default VM needs a provisioner
+# that declares it, even when this run has no explicit branch to pass -- an older
+# provisioner has no per-alias derivation either and would sync on 'vm'. EXPORT is the
+# exemption (it initialises no store). Both are proven behaviourally below, against the
+# real pre-destructive probe block run with PHASE-1 sibling scripts on disk.
+ok "chain: Auto-Install's provisioner probe list is action-scoped" (
+    $aiSrc -match "if \(\`$Action -ne 'export'\) \{ \`$skewProvParams \+= 'ConfigBranch' \}")
 ok "chain: Auto-Install fails CLOSED when the branch cannot be honoured" (
     $aiSrc -match "does not support -ConfigBranch; update The Construct")
 $cvSrc = [System.IO.File]::ReadAllText((Join-Path $repoRoot 'Create-AgentVM.ps1'))
 ok "chain: Create-AgentVM probes before splatting and fails closed" (
     ($cvSrc -match "Parameters\.ContainsKey\('ConfigBranch'\)") -and
     ($cvSrc -match "does not support -ConfigBranch; update The Construct"))
+
+# ── Auto-Install.ps1: the branch THIS run owns, and the pre-wipe tick ────────
+# The reinstall/redownload flow syncs BEFORE it wipes the VM. That tick used to be
+# handed no branch at all, so a save-mode reinstall of work-vm read work-vm's store
+# into refs/heads/vm and merged it into main -- the default instance's ref. Both halves
+# are exercised against the REAL statements lifted out of the script.
+$aiPath = Join-Path $repoRoot "Auto-Install.ps1"
+$aiErrs = $null
+$aiAst  = [System.Management.Automation.Language.Parser]::ParseFile($aiPath, [ref]$null, [ref]$aiErrs)
+ok "auto-install: Auto-Install.ps1 has no parse errors" ($aiErrs.Count -eq 0)
+$aiText = [System.IO.File]::ReadAllText($aiPath)
+$aiAssign = $aiAst.Find({ param($n)
+    $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+    $n.Extent.Text.StartsWith('$VmConfigBranch = ') }, $true)
+$aiGate = $aiAst.Find({ param($n)
+    $n -is [System.Management.Automation.Language.IfStatementAst] -and
+    $n.Extent.Text.StartsWith("if (`$VmBranchNeeded -and `$VmConfigBranch -ne ") }, $true)
+$aiPreWipe = $aiAst.Find({ param($n)
+    $n -is [System.Management.Automation.Language.IfStatementAst] -and
+    $n.Extent.Text.StartsWith("if ((Get-Command Test-ConstructGitAvailable") }, $true)
+ok "auto-install: the branch derivation + skew gate were located" ($null -ne $aiAssign -and $null -ne $aiGate)
+if ($aiAssign -and $aiGate) {
+    # Guard the LIFT itself: the two landmarks must still be adjacent statements. If a
+    # refactor moves them apart, the span below would swallow half the script and the
+    # behavioural cases would stop testing what they claim to.
+    $aiSpan = $aiText.Substring($aiAssign.Extent.StartOffset, $aiGate.Extent.EndOffset - $aiAssign.Extent.StartOffset)
+    ok "auto-install: the lifted derivation span is just those statements" (
+        $aiSpan.Length -lt 2000 -and $aiSpan -notmatch 'Show-TuiScreen')
+}
+ok "auto-install: the pre-wipe sync block was located for execution" ($null -ne $aiPreWipe)
+
+function Invoke-AutoInstallBranchBlock {
+    <#
+        Run Auto-Install's branch derivation + version-skew gate against stubs.
+        -OldLib   : the installed Invoke-ConstructConfigSync has no -VmBranch.
+        -NoDeriver: the installed library has no Get-ConstructConfigBranchName.
+    #>
+    param([string]$Code, [string]$VmAlias, [string]$ConfigBranch = "", [string]$Action = "",
+          [switch]$OldLib, [switch]$NoDeriver)
+    $VmName      = $VmAlias
+    $VmIsDefault = ($VmAlias -eq 'agent-vm')
+    if ($OldLib) {
+        function Invoke-ConstructConfigSync { param([string]$ConfigDir, [string]$VmHost, [string]$AutoResolve) }
+    } else {
+        function Invoke-ConstructConfigSync { param([string]$ConfigDir, [string]$VmHost, [string]$AutoResolve, [string]$VmBranch = "vm") }
+    }
+    $savedDeriver = $null
+    if ($NoDeriver) {
+        $savedDeriver = ${function:Get-ConstructConfigBranchName}
+        Remove-Item Function:\Get-ConstructConfigBranchName -ErrorAction SilentlyContinue
+    }
+    try {
+        $VmConfigBranch = $null
+        $threw = $false; $message = ""
+        try { Invoke-Expression $Code } catch { $threw = $true; $message = "$($_.Exception.Message)" }
+        return [pscustomobject]@{ Branch = $VmConfigBranch; Threw = $threw; Message = $message }
+    } finally {
+        if ($NoDeriver -and $savedDeriver) {
+            # Restore into the GLOBAL scope: a Set-Item inside this function would only
+            # define it for the function's own scope, and the following tests (which
+            # call the real helper) would run against a library that lost it.
+            Set-Item Function:Global:Get-ConstructConfigBranchName -Value $savedDeriver
+        }
+    }
+}
+
+function Invoke-AutoInstallPreWipeSync {
+    <# Run Auto-Install's pre-wipe sync tick against stubs; returns the branch it passed. #>
+    param([string]$Code, [string]$VmConfigBranch)
+    $script:capturedPreWipe = $null
+    $VmDnsName = "work-vm.mshome.net"
+    function Get-ConstructConfigDir { return "C:\does-not-matter" }
+    function Test-ConstructGitAvailable { return $true }
+    function Invoke-ConstructConfigSync {
+        param([string]$ConfigDir, [string]$VmHost, [string]$AutoResolve, [string]$VmBranch = "vm")
+        $script:capturedPreWipe = @{
+            VmBranch = $(if ($PSBoundParameters.ContainsKey('VmBranch')) { $VmBranch } else { $null })
+            Keys     = @($PSBoundParameters.Keys | Sort-Object)
+        }
+        return [pscustomobject]@{ Conflict = $false; Blocked = $false; Reason = ""; Warnings = @() }
+    }
+    Invoke-Expression $Code | Out-Null
+    return [pscustomobject]@{
+        VmBranch = $(if ($script:capturedPreWipe) { $script:capturedPreWipe.VmBranch } else { "<never called>" })
+        Keys     = $(if ($script:capturedPreWipe) { $script:capturedPreWipe.Keys } else { @() })
+    }
+}
+
+if ($aiAssign -and $aiGate) {
+    $aiBranchCode = $aiText.Substring($aiAssign.Extent.StartOffset, $aiGate.Extent.EndOffset - $aiAssign.Extent.StartOffset)
+
+    $aiDef = Invoke-AutoInstallBranchBlock -Code $aiBranchCode -VmAlias "agent-vm"
+    ok "auto-install-run: the default VM derives 'vm'" ($aiDef.Branch -eq 'vm' -and -not $aiDef.Threw)
+    $aiDefOld = Invoke-AutoInstallBranchBlock -Code $aiBranchCode -VmAlias "agent-vm" -OldLib
+    ok "auto-install-run: the DEFAULT path never fails closed on an older lib" (
+        $aiDefOld.Branch -eq 'vm' -and -not $aiDefOld.Threw)
+
+    $aiWork = Invoke-AutoInstallBranchBlock -Code $aiBranchCode -VmAlias "work-vm"
+    ok "auto-install-run: a non-default VM derives ITS branch" ($aiWork.Branch -eq 'vm-work-vm' -and -not $aiWork.Threw)
+    $aiExplicit = Invoke-AutoInstallBranchBlock -Code $aiBranchCode -VmAlias "work-vm" -ConfigBranch "vm-team"
+    ok "auto-install-run: an explicit -ConfigBranch wins over the alias" ($aiExplicit.Branch -eq 'vm-team')
+
+    $aiWorkOld = Invoke-AutoInstallBranchBlock -Code $aiBranchCode -VmAlias "work-vm" -OldLib
+    ok "auto-install-run: a non-default branch + an older lib FAILS CLOSED" ($aiWorkOld.Threw)
+    ok "auto-install-run: ...and says to update The Construct scripts" (
+        $aiWorkOld.Message -match "update The Construct scripts")
+    $aiExplicitOld = Invoke-AutoInstallBranchBlock -Code $aiBranchCode -VmAlias "agent-vm" -ConfigBranch "vm-team" -OldLib
+    ok "auto-install-run: an explicit branch an older lib can't carry FAILS CLOSED" ($aiExplicitOld.Threw)
+
+    $aiNoDeriver = Invoke-AutoInstallBranchBlock -Code $aiBranchCode -VmAlias "work-vm" -NoDeriver
+    ok "auto-install-run: a library that can't NAME the branch FAILS CLOSED" ($aiNoDeriver.Threw)
+    ok "auto-install-run: ...rather than silently using the default instance's ref" (
+        $aiNoDeriver.Message -match "cannot derive a config-sync branch")
+    $aiNoDeriverDefault = Invoke-AutoInstallBranchBlock -Code $aiBranchCode -VmAlias "agent-vm" -NoDeriver
+    ok "auto-install-run: ...and the default VM needs no deriver at all" (
+        $aiNoDeriverDefault.Branch -eq 'vm' -and -not $aiNoDeriverDefault.Threw)
+    # EXPORT is exempt, and only export: Provision -Action export returns before repo
+    # init and before the sync tick, and never reaches the pre-wipe tick -- so an older
+    # library cannot land it on the wrong ref, and refusing a non-destructive config
+    # save would be pure loss.
+    $aiExport = Invoke-AutoInstallBranchBlock -Code $aiBranchCode -VmAlias "work-vm" -Action "export" -OldLib
+    ok "auto-install-run: EXPORT still runs on an older lib" (-not $aiExport.Threw)
+    $aiExportNoDeriver = Invoke-AutoInstallBranchBlock -Code $aiBranchCode -VmAlias "work-vm" -Action "export" -NoDeriver
+    ok "auto-install-run: EXPORT needs no branch derivation either" (-not $aiExportNoDeriver.Threw)
+    foreach ($gatedAction in @("reprovision", "reinstall", "redownload", "add-config", "")) {
+        $label = if ($gatedAction) { $gatedAction } else { "<interactive menu>" }
+        $aiGated = Invoke-AutoInstallBranchBlock -Code $aiBranchCode -VmAlias "work-vm" -Action $gatedAction -OldLib
+        ok "auto-install-run: $label still FAILS CLOSED on an older lib" ($aiGated.Threw)
+    }
+    ok "auto-install-run: the derivation helper survived the skew tests" (
+        (Get-Command Get-ConstructConfigBranchName -ErrorAction SilentlyContinue) -and
+        (Get-ConstructConfigBranchName -HostAlias "work") -eq "vm-work")
+}
+
+# The PRE-DESTRUCTIVE provisioner probe (the same statement that guards -VmHost /
+# -HostAlias / -SshPort / -LocalKeyName) is run for real against PHASE-1 sibling
+# scripts on disk: -ConfigBranch must be demanded for every action that provisions, and
+# must NOT be demanded for a non-destructive export.
+$aiProbe = $aiAst.Find({ param($n)
+    $n -is [System.Management.Automation.Language.IfStatementAst] -and
+    $n.Extent.Text.StartsWith("if (-not `$SkipCreateVm -and `$VmName.ToLowerInvariant() -ne 'agent-vm')") }, $true)
+ok "auto-install: the pre-destructive provisioner probe was located" ($null -ne $aiProbe)
+
+function Invoke-AutoInstallProvProbe {
+    <# Run Auto-Install's identity/capability probe against fake sibling scripts.
+       -Phase1 writes a Provision-AgentVM.ps1 WITHOUT -ConfigBranch (the f84f554 shape). #>
+    param([string]$Code, [string]$Action = "", [switch]$Phase1)
+    $SkipCreateVm = $false
+    $VmName = "work-vm"
+    $dir = Join-Path ([System.IO.Path]::GetTempPath()) ("ai-probe-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    # $PSScriptRoot is what the probe joins its sibling paths from. Inside
+    # Invoke-Expression the AUTOMATIC $PSScriptRoot wins over any local of that name
+    # (it resolves to "" there), so the one variable is rewritten in the lifted text --
+    # the only edit made to the real statements.
+    $ProbeRoot = $dir
+    $Code = $Code.Replace('$PSScriptRoot', '$ProbeRoot')
+    try {
+        Set-Content -LiteralPath (Join-Path $dir "Create-AgentVM.ps1") -Encoding ASCII -Value @'
+param([string]$VmName, [string]$LocalKeyName, [string]$AutoinstallIso, [string]$ConfigBranch = "")
+'@
+        $provParams = 'param([string]$VmHost, [string]$HostAlias, [string]$LocalKeyName, [int]$SshPort'
+        if (-not $Phase1) { $provParams += ', [string]$ConfigBranch = ""' }
+        Set-Content -LiteralPath (Join-Path $dir "Provision-AgentVM.ps1") -Encoding ASCII -Value ($provParams + ')')
+        $threw = $false; $message = ""
+        try { Invoke-Expression $Code } catch { $threw = $true; $message = "$($_.Exception.Message)" }
+        return [pscustomobject]@{ Threw = $threw; Message = $message }
+    } finally {
+        Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+if ($aiProbe) {
+    $aiProbeCode = $aiProbe.Extent.Text
+    foreach ($gatedAction in @("reprovision", "reinstall", "redownload", "add-config", "")) {
+        $label = if ($gatedAction) { $gatedAction } else { "<interactive menu>" }
+        $pr = Invoke-AutoInstallProvProbe -Code $aiProbeCode -Action $gatedAction -Phase1
+        ok "auto-install-probe: $label refuses a Phase-1 provisioner (no -ConfigBranch)" (
+            $pr.Threw -and $pr.Message -match "does not support -ConfigBranch")
+    }
+    $prExport = Invoke-AutoInstallProvProbe -Code $aiProbeCode -Action "export" -Phase1
+    ok "auto-install-probe: EXPORT still runs against a Phase-1 provisioner" (-not $prExport.Threw)
+    foreach ($anyAction in @("reinstall", "export", "")) {
+        $prNow = Invoke-AutoInstallProvProbe -Code $aiProbeCode -Action $anyAction
+        $label2 = if ($anyAction) { $anyAction } else { "<interactive menu>" }
+        ok "auto-install-probe: $label2 passes against the CURRENT provisioner shape" (-not $prNow.Threw)
+    }
+}
+
+if ($aiPreWipe) {
+    $aiPreCode = $aiPreWipe.Extent.Text
+    $preDefault = Invoke-AutoInstallPreWipeSync -Code $aiPreCode -VmConfigBranch 'vm'
+    ok "auto-install-prewipe: the default instance passes NO branch (argument-identical)" (
+        $null -eq $preDefault.VmBranch)
+    ok "auto-install-prewipe: ...and exactly the two arguments it always passed" (
+        (@($preDefault.Keys) -join ',') -eq 'ConfigDir,VmHost')
+    $preWork = Invoke-AutoInstallPreWipeSync -Code $aiPreCode -VmConfigBranch 'vm-work-vm'
+    ok "auto-install-prewipe: a non-default instance syncs on ITS branch" (
+        $preWork.VmBranch -eq 'vm-work-vm')
+    $preTeam = Invoke-AutoInstallPreWipeSync -Code $aiPreCode -VmConfigBranch 'vm-team'
+    ok "auto-install-prewipe: an explicit -ConfigBranch reaches the pre-wipe tick" (
+        $preTeam.VmBranch -eq 'vm-team')
+}
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 Write-Host ""
