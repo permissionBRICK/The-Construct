@@ -197,7 +197,9 @@ $f2 = New-RegistryFile @'
 $reg3 = Read-ConstructInstances -Path $f2
 ok "invalid name is skipped"                 (-not $reg3.Instances.ContainsKey('Work_VM'))
 ok "valid sibling survives"                  ($reg3.Instances.ContainsKey('good-vm'))
-ok "unknown backend falls back"              ($reg3.Instances['good-vm'].Backend -eq 'hyperv-local')
+# An unknown backend is REPORTED but kept VERBATIM. Rewriting it to 'hyperv-local'
+# (which this reader used to do) promoted every typo to destructive local Hyper-V access.
+ok "unknown backend is kept as written, never promoted" ($reg3.Instances['good-vm'].Backend -ceq 'martian')
 ok "invalid port falls back to 22"           ($reg3.Instances['good-vm'].SshPort -eq 22)
 ok "dangling defaultInstance -> agent-vm"    ($reg3.Default -eq 'agent-vm')
 ok "agent-vm synthesized alongside"          ($reg3.Instances.ContainsKey('agent-vm'))
@@ -240,7 +242,10 @@ $mx = New-RegistryFile @'
 '@
 $mxReg = Read-ConstructInstances -Path $mx
 $tv = $mxReg.Instances['typed-vm']
-ok "parity: uppercase backend rejected (case-sensitive)" ($tv.Backend -eq 'hyperv-local')
+# Case-SENSITIVE: 'HYPERV-REMOTE' is not the enum value, so it is reported -- and kept
+# exactly as written, which is what makes the driver dispatch refuse it on BOTH sides
+# rather than one of them treating it as the local Hyper-V backend.
+ok "parity: uppercase backend rejected (case-sensitive) and kept verbatim" ($tv.Backend -ceq 'HYPERV-REMOTE')
 ok "parity: numeric sshHost NOT stringified"             ($tv.VmHost -eq 'typed-vm.mshome.net')
 ok "parity: digit-string sshPort accepted"               ($tv.SshPort -eq 2201)
 ok "parity: boolean hostAlias -> derived bare name"      ($tv.HostAlias -eq 'typed-vm')
@@ -309,12 +314,20 @@ ok "identity: a valid sibling still loads"          ($skipReg.Instances.Contains
 ok "identity: the default instance is still synthesized" (Test-ConstructDefaultInstance $skipReg.Instances['agent-vm'])
 $brokenDefault = Read-ConstructInstances -Path (New-RegistryFile '{ "version": 1, "instances": { "agent-vm": { "sshHost": "-oProxyCommand=calc" } } }')
 ok "identity: a broken agent-vm entry falls back to the synthesized default" (Test-ConstructDefaultInstance $brokenDefault.Instances['agent-vm'])
+# The shapes that MUST keep working. A free-form ENDPOINT belongs to a non-local backend
+# (a hyperv-local instance's identity is pinned to its name -- see the canonical-identity
+# block below), so the host/alias/key cases are stated on a remote entry.
 foreach ($good in @(
-    '{ "sshHost": "buildbox.example.local" }', '{ "sshHost": "10.0.0.7" }', '{ "sshHost": "host" }',
-    '{ "sshHost": "fe80::1" }', '{ "sshHost": "2001:db8::8a2e:370:7334" }',
-    '{ "keyName": "construct_work-vm_ed25519" }', '{ "hostAlias": "work-vm.local" }',
+    '{ "backend": "hyperv-remote", "sshHost": "buildbox.example.local" }',
+    '{ "backend": "hyperv-remote", "sshHost": "10.0.0.7" }',
+    '{ "backend": "hyperv-remote", "sshHost": "host" }',
+    '{ "backend": "hyperv-remote", "sshHost": "fe80::1" }',
+    '{ "backend": "hyperv-remote", "sshHost": "2001:db8::8a2e:370:7334" }',
+    '{ "backend": "hyperv-remote", "sshHost": "buildbox.local", "keyName": "construct_work-vm_ed25519" }',
+    '{ "backend": "hyperv-remote", "sshHost": "buildbox.local", "hostAlias": "work-vm.local" }',
+    '{ "keyName": "construct_work-vm_ed25519" }',
     '{ "vmName": "Work-VM" }', '{ "configBranch": "vm-work" }', '{ "configBranch": "feature.x_1" }',
-    '{ "sshHost": " buildbox.local\n" }')) {   # both readers TRIM a string field first
+    '{ "backend": "hyperv-remote", "sshHost": " buildbox.local\n" }')) {   # both readers TRIM a string field first
     $r = Read-ConstructInstances -Path (New-RegistryFile ('{ "version": 1, "instances": { "work-vm": ' + $good + ' } }'))
     ok "identity: $good is accepted" ($r.Instances.ContainsKey('work-vm'))
 }
@@ -362,21 +375,21 @@ foreach ($bad in @('::::', '1::2::3', '1:2:3:4:5:6:7:8:9', '1.2.3:4', '....:', '
 # BOTH host spellings are validated, not only the one that wins normalisation:
 # Resolve-ConstructInstanceDefaults prefers sshHost, so an invalid vmHost would
 # otherwise sit unnoticed in the file for whatever reads that field next.
-$dualHost = Read-ConstructInstances -Path (New-RegistryFile '{ "version": 1, "instances": { "work-vm": { "sshHost": "good.local", "vmHost": "-x; calc" } } }')
+$dualHost = Read-ConstructInstances -Path (New-RegistryFile '{ "version": 1, "instances": { "work-vm": { "backend": "hyperv-remote", "sshHost": "good.local", "vmHost": "-x; calc" } } }')
 ok "identity: an invalid LOSING vmHost still skips the instance" (-not $dualHost.Instances.ContainsKey('work-vm'))
 ok "identity: ...and names the field that is wrong"              (@($dualHost.Problems | Where-Object { $_ -match '"vmHost"' }).Count -ge 1)
-$dualHost2 = Read-ConstructInstances -Path (New-RegistryFile '{ "version": 1, "instances": { "work-vm": { "sshHost": "-x; calc", "vmHost": "good.local" } } }')
+$dualHost2 = Read-ConstructInstances -Path (New-RegistryFile '{ "version": 1, "instances": { "work-vm": { "backend": "hyperv-remote", "sshHost": "-x; calc", "vmHost": "good.local" } } }')
 ok "identity: an invalid WINNING sshHost skips it too" (-not $dualHost2.Instances.ContainsKey('work-vm'))
 ok "identity: ...reported once, not twice" (
     (@($dualHost2.Problems | Where-Object { $_ -match 'is not a host name or IP address' }).Count) -eq 1)
-$dualOk = Read-ConstructInstances -Path (New-RegistryFile '{ "version": 1, "instances": { "work-vm": { "sshHost": "good.local", "vmHost": "other.local" } } }')
+$dualOk = Read-ConstructInstances -Path (New-RegistryFile '{ "version": 1, "instances": { "work-vm": { "backend": "hyperv-remote", "sshHost": "good.local", "vmHost": "other.local" } } }')
 ok "identity: two VALID spellings still load, sshHost winning" ($dualOk.Instances['work-vm'].VmHost -eq 'good.local')
 
 # The key-file rule is STRICTER than the alias rule, and only for KeyName.
 foreach ($v in @('CON', 'con', 'NUL', 'COM1', 'lpt9', 'CON.txt', 'con.key.txt', 'agent_vm_ed25519.')) {
     ok "keyfile: '$v' is refused as a key file name" (-not (Test-ConstructInstanceKeyFileName $v))
     ok "keyfile: '$v' is still a fine ssh alias"     (Test-ConstructInstanceToken $v)
-    $r = Read-ConstructInstances -Path (New-RegistryFile ('{ "version": 1, "instances": { "work-vm": { "hostAlias": "' + $v + '" } } }'))
+    $r = Read-ConstructInstances -Path (New-RegistryFile ('{ "version": 1, "instances": { "work-vm": { "backend": "hyperv-remote", "sshHost": "buildbox.local", "hostAlias": "' + $v + '" } } }'))
     ok "keyfile: ...so hostAlias '$v' still loads"   ($r.Instances.ContainsKey('work-vm'))
 }
 foreach ($v in @('construct_work-vm_ed25519', 'agent_vm_ed25519', 'com10_key', 'console_key', 'a', 'nul_key', 'con-1')) {
@@ -390,6 +403,157 @@ ok "identity: every derived default passes its own rules" (
     @(Get-ConstructInstanceIdentityProblem -Instance (Resolve-ConstructInstanceDefaults -Name 'work-vm' -Entry $null)).Count -eq 0)
 ok "identity: today's literals pass" (
     @(Get-ConstructInstanceIdentityProblem -Instance (New-ConstructDefaultInstance)).Count -eq 0)
+
+# ── (g4) UNKNOWN BACKENDS ARE NEVER PROMOTED (mirrored in extension/test/instances.test.js) ──
+# Coercing an unrecognised backend to 'hyperv-local' handed every typo destructive LOCAL
+# Hyper-V access: the driver dispatch would report hostLifecycle=true and let a rebuild
+# run against a local VM that merely shares the name. The string is kept verbatim so the
+# unknown-driver fallback can refuse it -- on BOTH sides of the contract.
+Write-Host ""
+Write-Host "=== unknown backends are kept verbatim (mirrored in extension/test/instances.test.js) ===" -ForegroundColor Cyan
+# A GENUINELY unknown backend is kept verbatim: the driver dispatch degrades on it
+# correctly (the unknown-driver fallback), which is what refuses the destructive actions.
+foreach ($b in @('proxmox', 'hyperv-remtoe', 'HYPERV-REMOTE')) {
+    $r = Read-ConstructInstances -Path (New-RegistryFile ('{ "version": 1, "instances": { "work-vm": { "backend": "' + $b + '", "sshHost": "buildbox.local" } } }'))
+    ok "backend($b): the entry survives"                 ($r.Instances.ContainsKey('work-vm'))
+    ok "backend($b): it is NOT rewritten to hyperv-local" ($r.Instances['work-vm'].Backend -ceq $b)
+    ok "backend($b): it is not a local backend"           (-not (Test-ConstructLocalBackend $b))
+    ok "backend($b): reported as unknown"                 (@($r.Problems | Where-Object { $_ -match [regex]::Escape($b) }).Count -ge 1)
+}
+# A PRESENT BUT UNUSABLE backend is NOT "no backend": deriving hyperv-local from it would
+# hand destructive local Hyper-V access to a value the file never actually stated. Only an
+# ABSENT (or JSON-null) backend derives the default, so these entries never load -- both
+# in the otherwise-CANONICAL shape and with a foreign host.
+$unusableBackends = @(
+    @{ label = '42';           json = '42' },
+    @{ label = 'true';         json = 'true' },
+    @{ label = 'empty string'; json = '""' },
+    @{ label = 'whitespace';   json = '"   "' },
+    @{ label = 'an array';     json = '["hyperv-local"]' },
+    @{ label = 'an object';    json = '{ "id": "hyperv-local" }' }
+)
+foreach ($u in $unusableBackends) {
+    foreach ($shape in @(@{ label = 'canonical'; extra = '' },
+                         @{ label = 'with a foreign host'; extra = ', "sshHost": "buildbox.local"' })) {
+        $r = Read-ConstructInstances -Path (New-RegistryFile (
+            '{ "version": 1, "instances": { "work-vm": { "backend": ' + $u.json + $shape.extra + ' } } }'))
+        ok "backend($($u.label), $($shape.label)): the entry is SKIPPED" (-not $r.Instances.ContainsKey('work-vm'))
+        ok "backend($($u.label), $($shape.label)): the problem names 'backend' and says skipped" (
+            @($r.Problems | Where-Object { $_ -match '"backend"' -and $_ -match 'skipped' }).Count -ge 1)
+        ok "backend($($u.label), $($shape.label)): not reported as a plain type problem" (
+            @($r.Problems | Where-Object { $_ -match "'backend' must be a string" }).Count -eq 0)
+        ok "backend($($u.label), $($shape.label)): what remains is the default instance" (
+            Test-ConstructDefaultInstance (Get-ConstructInstance -Name 'work-vm' -Registry $r))
+    }
+}
+# A JSON null (like an absent key) IS "omitted" -- that stays the zero-change default.
+$nullBackend = Read-ConstructInstances -Path (New-RegistryFile '{ "version": 1, "instances": { "work-vm": { "backend": null } } }')
+ok "backend(null): omitted-equivalent, derives hyperv-local" ($nullBackend.Instances['work-vm'].Backend -ceq 'hyperv-local')
+ok "backend(null): and reports nothing"                      (@($nullBackend.Problems).Count -eq 0)
+# A SPELLING THE TWO LOOKUPS READ DIFFERENTLY: every enum comparison in both readers is
+# case-SENSITIVE ('unknown'), but getDriver() in the extension trims + lowercases before
+# the lookup and WOULD return the LOCAL driver -- so an otherwise CANONICAL entry would
+# drive destructive local actions. Neither reading is safe, so it does not load.
+foreach ($b in @('HYPERV-LOCAL', 'Hyperv-Local', '  hyperv-LOCAL  ')) {
+    ok "backend('$b'): the driver lookup WOULD read it as local" (Test-ConstructLocalBackend $b)
+    $r = Read-ConstructInstances -Path (New-RegistryFile ('{ "version": 1, "instances": { "work-vm": { "backend": "' + $b + '" } } }'))
+    ok "backend('$b'): the entry is SKIPPED" (-not $r.Instances.ContainsKey('work-vm'))
+    ok "backend('$b'): the problem names 'backend'" (
+        @($r.Problems | Where-Object { $_ -match '"backend"' -and $_ -match 'skipped' }).Count -ge 1)
+    ok "backend('$b'): what remains is the default instance" (
+        Test-ConstructDefaultInstance (Get-ConstructInstance -Name 'work-vm' -Registry $r))
+}
+# ...while the EXACT value (and one that only needed trimming, which both readers do to
+# every string field) is the ordinary local backend.
+foreach ($b in @('hyperv-local', ' hyperv-local ')) {
+    $r = Read-ConstructInstances -Path (New-RegistryFile ('{ "version": 1, "instances": { "work-vm": { "backend": "' + $b + '" } } }'))
+    ok "backend('$b'): loads as the local backend" (
+        $r.Instances.ContainsKey('work-vm') -and $r.Instances['work-vm'].Backend -ceq 'hyperv-local')
+    ok "backend('$b'): with no problems" (@($r.Problems).Count -eq 0)
+}
+
+# ── (g5) THE CANONICAL IDENTITY of a hyperv-local instance (mirrored in the JS suite) ──
+# reinstall/redownload emit ONLY -VmName; Auto-Install.ps1 derives the guest host, the
+# alias and the key from it. A local entry that states anything else would rebuild a
+# DIFFERENT VM than it dials -- and be unable to reach the one it rebuilt.
+Write-Host ""
+Write-Host "=== canonical local identity (mirrored in extension/test/instances.test.js) ===" -ForegroundColor Cyan
+$nonCanonical = @(
+    # The headline case: 'work-vm' pointed at the DEFAULT VM -- a reinstall would delete
+    # and recreate Agent-VM under the guise of rebuilding work-vm.
+    @{ label = 'vmName of another VM'; json = '{ "vmName": "Agent-VM" }';                 field = 'vmName' },
+    @{ label = 'a foreign sshHost';    json = '{ "sshHost": "buildbox.local" }';          field = 'sshHost' },
+    # The legacy alias convention: the registry's alias is the BARE instance name.
+    @{ label = 'the legacy construct- alias'; json = '{ "hostAlias": "construct-work-vm" }'; field = 'hostAlias' },
+    @{ label = 'a custom key file';    json = '{ "keyName": "custom_key" }';              field = 'keyName' },
+    @{ label = 'a non-standard port';  json = '{ "sshPort": 2201 }';                      field = 'sshPort' }
+)
+foreach ($c in $nonCanonical) {
+    $r = Read-ConstructInstances -Path (New-RegistryFile ('{ "version": 1, "instances": { "work-vm": ' + $c.json + ' } }'))
+    ok "canonical($($c.label)): the instance is SKIPPED" (-not $r.Instances.ContainsKey('work-vm'))
+    ok "canonical($($c.label)): the problem names '$($c.field)'" (
+        @($r.Problems | Where-Object { $_ -match [regex]::Escape("`"$($c.field)`"") -and $_ -match 'skipped' }).Count -ge 1)
+    ok "canonical($($c.label)): the default instance is what remains" (
+        Test-ConstructDefaultInstance (Get-ConstructInstance -Name 'work-vm' -Registry $r))
+}
+ok "canonical: a deviating agent-vm entry degrades to the synthesized default" (
+    Test-ConstructDefaultInstance (Read-ConstructInstances -Path (New-RegistryFile '{ "version": 1, "instances": { "agent-vm": { "vmName": "Other-VM" } } }')).Instances['agent-vm'])
+# Hyper-V VM names are case-insensitive, so only the LOWERCASED name must match.
+ok "canonical: a differently-cased vmName is fine" (
+    (Read-ConstructInstances -Path (New-RegistryFile '{ "version": 1, "instances": { "work-vm": { "vmName": "Work-VM" } } }')).Instances.ContainsKey('work-vm'))
+# The -ConfigBranch override must keep working: it is the one field the launched scripts
+# can be TOLD, so an explicit branch is not a deviation.
+$branchOverride = Read-ConstructInstances -Path (New-RegistryFile '{ "version": 1, "instances": { "work-vm": { "configBranch": "vm-team" } } }')
+ok "canonical: an explicit configBranch is still allowed" ($branchOverride.Instances.ContainsKey('work-vm'))
+ok "canonical: ...and is preserved for the -ConfigBranch threading" ($branchOverride.Instances['work-vm'].ConfigBranch -ceq 'vm-team')
+# The positive control: a canonical entry loads clean, with the derived identity.
+$canon = Read-ConstructInstances -Path (New-RegistryFile '{ "version": 1, "instances": { "work-vm": { "backend": "hyperv-local" } } }')
+ok "canonical: a canonical entry loads with no problems" (@($canon.Problems).Count -eq 0)
+ok "canonical: ...with the derived VM name"   ($canon.Instances['work-vm'].VmName -ceq 'work-vm')
+ok "canonical: ...the derived host"           ($canon.Instances['work-vm'].VmHost -ceq 'work-vm.mshome.net')
+ok "canonical: ...the derived alias"          ($canon.Instances['work-vm'].HostAlias -ceq 'work-vm')
+ok "canonical: ...the derived key"            ($canon.Instances['work-vm'].KeyName -ceq 'construct_work-vm_ed25519')
+ok "canonical: ...and port 22"                ($canon.Instances['work-vm'].SshPort -eq 22)
+
+# ── (g6) Cross-entry identity COLLISIONS (mirrored in the JS suite) ──────────
+# Two names for one machine: a rebuild of one would delete the other's VM, and a
+# reprovision would overwrite its key file.
+Write-Host ""
+Write-Host "=== identity collisions (mirrored in extension/test/instances.test.js) ===" -ForegroundColor Cyan
+$collisions = @(
+    @{ label = "the default VM's name";  json = '"vmName": "agent-vm"';                field = 'vmName' },
+    @{ label = "the default VM's host";  json = '"sshHost": "agent-vm.mshome.net"';    field = 'sshHost' },
+    @{ label = "the default VM's alias"; json = '"hostAlias": "agent-vm"';             field = 'hostAlias' },
+    @{ label = "the default VM's key";   json = '"keyName": "agent_vm_ed25519"';       field = 'keyName' }
+)
+foreach ($c in $collisions) {
+    $r = Read-ConstructInstances -Path (New-RegistryFile (
+        '{ "version": 1, "instances": { "work-vm": { "backend": "hyperv-remote", "sshHost": "buildbox.local", ' + $c.json + ' } } }'))
+    ok "collision($($c.label)): the entry is skipped" (-not $r.Instances.ContainsKey('work-vm'))
+    ok "collision($($c.label)): the problem names $($c.field)" (
+        @($r.Problems | Where-Object { $_ -match [regex]::Escape($c.field) -and $_ -match 'skipped' }).Count -ge 1)
+    ok "collision($($c.label)): the default instance survives untouched" (
+        Test-ConstructDefaultInstance $r.Instances['agent-vm'])
+}
+$shared = Read-ConstructInstances -Path (New-RegistryFile @'
+{ "version": 1, "instances": {
+    "a-vm": { "backend": "hyperv-remote", "sshHost": "buildbox.local" },
+    "b-vm": { "backend": "hyperv-remote", "sshHost": "BuildBox.local" } } }
+'@)
+ok "collision: two entries sharing a host drop BOTH" (
+    -not $shared.Instances.ContainsKey('a-vm') -and -not $shared.Instances.ContainsKey('b-vm'))
+ok "collision: ...reported once, naming both" (
+    (@($shared.Problems | Where-Object { $_ -match 'share the same' }).Count -eq 1) -and
+    (@($shared.Problems | Where-Object { $_ -match 'a-vm' -and $_ -match 'b-vm' }).Count -ge 1))
+$sharedKey = Read-ConstructInstances -Path (New-RegistryFile @'
+{ "version": 1, "instances": {
+    "a-vm": { "backend": "hyperv-remote", "sshHost": "one.local", "keyName": "Shared_Key" },
+    "b-vm": { "backend": "hyperv-remote", "sshHost": "two.local", "keyName": "shared_key" } } }
+'@)
+ok "collision: the comparison is case-insensitive (one NTFS file, one DNS name)" (
+    -not $sharedKey.Instances.ContainsKey('a-vm'))
+$noClash = Read-ConstructInstances -Path (New-RegistryFile '{ "version": 1, "instances": { "a-vm": {}, "b-vm": {}, "agent-vm": {} } }')
+ok "collision: two canonical local instances never collide" (@($noClash.Problems).Count -eq 0)
 
 # Port boundaries + numbers no Int32 can hold. A huge sshPort must be REPORTED and fall
 # back to 22, never crash the reader: [int]999999999999 throws "Value was either too
@@ -412,7 +576,7 @@ $portCases = @(
     @{ lit = '"99999"';       want = 22;    problem = $true }
 )
 foreach ($pc in $portCases) {
-    $pf = New-RegistryFile ('{"version":1,"instances":{"p-vm":{"sshPort":' + $pc.lit + '}}}')
+    $pf = New-RegistryFile ('{"version":1,"instances":{"p-vm":{"backend":"hyperv-remote","sshHost":"p-vm.example.local","sshPort":' + $pc.lit + '}}}')
     $threw = $false
     $pr = $null
     try { $pr = Read-ConstructInstances -Path $pf } catch { $threw = $true }
@@ -447,7 +611,10 @@ Write-Host ""
 Write-Host "=== Save (atomic) ===" -ForegroundColor Cyan
 $out = Join-Path $tmpRoot "sub/dir/instances.json"
 $regW = Read-ConstructInstances -Path $out
-$regW.Instances['work-vm'] = Resolve-ConstructInstanceDefaults -Name 'work-vm' -Entry ([pscustomobject]@{ sshPort = 2201; sshHost = 'buildbox.local' })
+# A custom endpoint belongs to a non-local backend: a hyperv-local instance's identity is
+# pinned to its name, so writing one with a foreign host would produce a file the reader
+# (rightly) refuses on the way back in.
+$regW.Instances['work-vm'] = Resolve-ConstructInstanceDefaults -Name 'work-vm' -Entry ([pscustomobject]@{ backend = 'hyperv-remote'; sshPort = 2201; sshHost = 'buildbox.local' })
 Save-ConstructInstances -Registry $regW -Path $out | Out-Null
 ok "save: creates the containing directory" (Test-Path -LiteralPath $out)
 ok "save: leaves no temp file behind" (@(Get-ChildItem -LiteralPath (Split-Path -Parent $out) -Filter "*.tmp.*" -ErrorAction SilentlyContinue).Count -eq 0)
