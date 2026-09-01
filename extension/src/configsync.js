@@ -6,6 +6,12 @@
 // branch (the vm branch uses a temp index). Process execution is injected
 // (makeGitRunner) so tests run REAL git in throwaway dirs without any fakes.
 //
+// The VM-side branch name is a PARAMETER (`vmBranch`, default `vm`): with more
+// than one VM instance, each instance owns its own branch in the one host config
+// repo (`vm` for the default instance, `vm-<instance>` otherwise — see
+// docs/config-sync.md §6 "Multiple instances"). `main` stays the host truth for
+// all of them. Omitting the option reproduces the single-VM behavior exactly.
+//
 // The module also owns:
 //   - the bash scripts that read/write the VM store (buildReadStoreScript /
 //     buildWriteStoreScript) — same base64-as-data, END-sentinel idiom as
@@ -185,6 +191,67 @@ function releaseSyncLock(configDir, token) {
   } catch (_) { /* already gone or unreadable — leave it */ }
 }
 
+// ── VM-side branch name ──────────────────────────────────────────────────────
+// One host config repo can carry several VM instances, one branch each. The
+// default instance keeps the historical name `vm`, so a single-VM install sees
+// no new refs. A slash form (`vm/<name>`) is deliberately NOT used: git cannot
+// hold refs/heads/vm and refs/heads/vm/<x> at the same time.
+
+const DEFAULT_VM_BRANCH = "vm";
+
+// Names that are syntactically fine but semantically wrong here, compared
+// case-insensitively because Windows' loose-ref files are case-insensitive:
+//   • `main` is the host-truth branch — using it as an instance branch would
+//     merge main into itself and destroy the isolation this parameter exists for
+//     (same for `master`, the other conventional trunk name);
+//   • git's pseudo-refs (`HEAD` and friends) cannot be created as branches
+//     (`git branch HEAD` is refused) yet READ specially — a bare `HEAD` resolves
+//     to the checked-out branch, so a tick would silently sync against main
+//     while writing to a bogus refs/heads/HEAD.
+// This is an explicit list, not a shape rule: an instance legitimately named
+// `WORK` must get its own `WORK` branch rather than silently sharing `vm`.
+const RESERVED_VM_BRANCHES = new Set([
+  "main", "master",
+  "head", "fetch_head", "orig_head", "merge_head", "cherry_pick_head",
+  "revert_head", "bisect_head", "rebase_head", "auto_merge", "stash",
+]);
+
+/**
+ * A branch name git will accept as refs/heads/<name> without surprises, and
+ * that is safe to hand to git as a BARE ref operand: starts alphanumeric, then
+ * alphanumerics / dot / underscore / hyphen, no "..", no ".lock" suffix (git
+ * reserves it), and not one of RESERVED_VM_BRANCHES. Deliberately stricter than
+ * check-ref-format — these names come from instance names
+ * (^[a-z0-9][a-z0-9-]{0,39}$) and end up in file paths and ssh aliases too.
+ */
+function isValidVmBranch(name) {
+  if (typeof name !== "string" || !name) return false;
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) return false;
+  if (name.includes("..")) return false;
+  if (name.endsWith(".lock")) return false;
+  const lower = name.toLowerCase();
+  if (RESERVED_VM_BRANCHES.has(lower)) return false;
+  // Any other spelling of the default branch is the SAME loose-ref file on
+  // Windows (refs/heads/VM == refs/heads/vm), so it would hijack the default
+  // instance's store. Only the exact default name is allowed.
+  if (lower === DEFAULT_VM_BRANCH && name !== DEFAULT_VM_BRANCH) return false;
+  return true;
+}
+
+/**
+ * Resolve the branch to sync on. Empty/absent means the default instance;
+ * anything git could choke on falls back to `vm` with a warning rather than
+ * failing the tick (a broken registry entry must not stop config sync).
+ */
+function resolveVmBranch(name, onWarn) {
+  if (name === undefined || name === null || name === "") return DEFAULT_VM_BRANCH;
+  if (isValidVmBranch(name)) return name;
+  if (onWarn) {
+    onWarn(`invalid config-sync branch name "${String(name)}"; falling back to "${DEFAULT_VM_BRANCH}"`);
+  }
+  return DEFAULT_VM_BRANCH;
+}
+
 // ── Git identity args (per-invocation, never global config) ──────────────────
 
 // Identity + hardening flags prefixed onto every git invocation that may create a
@@ -258,11 +325,14 @@ function ensureRepoExclude(configDir, names) {
 }
 
 /**
- * Lazy git init per D1: init, add -A, commit, rename branch to main, create vm
- * branch. Idempotent — if a repo already exists returns {repo:true,
+ * Lazy git init per D1: init, add -A, commit, rename branch to main, create the
+ * VM branch. Idempotent — if a repo already exists returns {repo:true,
  * initialized:false}. Returns {repo:false} when git is absent.
+ *
+ * `vmBranch` (default "vm") names the instance's VM-side branch.
  */
-async function ensureRepo(runGit, configDir) {
+async function ensureRepo(runGit, configDir, vmBranch) {
+  const branch = resolveVmBranch(vmBranch);
   // Check if repo already exists. We must verify that the discovered repo's
   // toplevel actually IS configDir — `git rev-parse --git-dir` matches any
   // ancestor repo (e.g. a dotfiles repo in %USERPROFILE% that contains
@@ -287,6 +357,16 @@ async function ensureRepo(runGit, configDir) {
       // fix (or one the user re-created) is repaired: signing/hooks off for the
       // user's own commits too, and LF line endings pinned.
       await hardenConfigRepo(runGit, configDir);
+      // A NON-default instance branch may not exist yet in a repo that was
+      // created for the default VM — create it at main so the tick's ls-tree /
+      // read-tree / merge steps have a ref to work with. The default branch is
+      // deliberately left alone: when `vm` is missing, today's tick self-heals
+      // through the seed path (update-ref refs/heads/vm = main), and that
+      // behavior stays exactly as-is for single-VM installs.
+      if (branch !== DEFAULT_VM_BRANCH) {
+        const have = await runGit(["rev-parse", "--verify", "refs/heads/" + branch], { cwd: configDir });
+        if (have.code !== 0) await runGit(["branch", branch, "main"], { cwd: configDir });
+      }
       return { repo: true, initialized: false };
     }
     // The repo belongs to an ancestor directory — ignore it and init our own.
@@ -312,8 +392,8 @@ async function ensureRepo(runGit, configDir) {
   await runGit([...GIT_IDENTITY, "commit", "--allow-empty", "-m", "initial config"], { cwd: configDir });
   // Rename whatever default branch to main.
   await runGit(["branch", "-M", "main"], { cwd: configDir });
-  // Create the vm branch at the same point.
-  await runGit(["branch", "vm"], { cwd: configDir });
+  // Create the instance's VM branch at the same point.
+  await runGit(["branch", branch], { cwd: configDir });
   return { repo: true, initialized: true };
 }
 
@@ -351,7 +431,8 @@ async function repoState(runGit, configDir) {
  * "clean merge left uncommitted" and "user resolved files but did not commit"
  * cases without depending on VS Code's Git UI or the host's global git identity.
  */
-async function completePendingMerge(runGit, configDir) {
+async function completePendingMerge(runGit, configDir, vmBranch) {
+  const branch = resolveVmBranch(vmBranch);
   const state = await repoState(runGit, configDir);
   if (!state.repo || !state.mergeInProgress) {
     return { ok: true, completed: false, conflict: false, blocked: false, reason: "" };
@@ -369,7 +450,7 @@ async function completePendingMerge(runGit, configDir) {
   }
 
   await runGit([...GIT_IDENTITY, "add", "-A"], { cwd: configDir });
-  const commit = await runGit([...GIT_IDENTITY, "commit", "-m", "sync merge vm"], { cwd: configDir });
+  const commit = await runGit([...GIT_IDENTITY, "commit", "-m", "sync merge " + branch], { cwd: configDir });
   if (commit.code !== 0) {
     return {
       ok: false, completed: false, conflict: false, blocked: true,
@@ -568,6 +649,7 @@ function parseWriteResult(stdout) {
  * readStore:  () => Promise<string|null>  (raw stdout; null = SSH unreachable)
  * writeStore: (script) => Promise<string|null>
  * log:        (level, msg) => void
+ * vmBranch:   optional VM-side branch (default "vm" = the default instance)
  */
 async function syncTick(opts) {
   if (provisionSyncPending(opts.configDir)) {
@@ -593,7 +675,7 @@ async function syncTick(opts) {
 
 /** The core tick body. Implements D6 steps 1-8 exactly. Callers go through
  *  syncTick (the lock); tests may call this directly to bypass it. */
-async function syncTickLocked({ runGit, configDir, readStore, writeStore, log, storeRoot }) {
+async function syncTickLocked({ runGit, configDir, readStore, writeStore, log, storeRoot, vmBranch }) {
   const warn = (msg) => log && log("warn", msg);
   const info = (msg) => log && log("info", msg);
   // vmReadOk: did the VM-store read succeed this tick? true/false once the read
@@ -608,8 +690,12 @@ async function syncTickLocked({ runGit, configDir, readStore, writeStore, log, s
   };
   const addWarning = (msg) => { result.warnings.push(msg); warn(msg); };
 
+  // The instance's VM-side branch. Every ref this tick touches is derived from
+  // it; an unusable name degrades to the default rather than failing the tick.
+  const branch = resolveVmBranch(vmBranch, addWarning);
+
   // Step 1: ensure repo.
-  const repo = await ensureRepo(runGit, configDir);
+  const repo = await ensureRepo(runGit, configDir, branch);
   if (!repo.repo) {
     if (repo.dubiousOwnership) {
       // Surface as blocked (not a tooltip warning): the panel's banner shows
@@ -629,7 +715,7 @@ async function syncTickLocked({ runGit, configDir, readStore, writeStore, log, s
   // Check for existing conflict/merge state. If the merge is already resolved
   // (or was clean but left uncommitted), complete it automatically before the
   // tick continues to write-back/advance refs.
-  const pending = await completePendingMerge(runGit, configDir);
+  const pending = await completePendingMerge(runGit, configDir, branch);
   if (pending.completed) result.merged = true;
   if (!pending.ok) {
     result.conflict = pending.conflict;
@@ -707,7 +793,7 @@ async function syncTickLocked({ runGit, configDir, readStore, writeStore, log, s
   // commit (e.g. the P2 add-remote flow calling writeRemotes + commitAll) main
   // advances past vm, making the predicate false, and the next tick with an
   // absent store would commit a mass-deletion vm commit and merge it into main.
-  const vmTipProfiles = await countVmBranchProfiles(runGit, configDir);
+  const vmTipProfiles = await countVmBranchProfiles(runGit, configDir, branch);
   const noValidVmFiles = Object.keys(vmValid).length === 0;
   const freshVm = vmStoreAbsent
     ? noValidVmFiles    // store dir absent: seed unless valid files were somehow read (shouldn't happen)
@@ -739,7 +825,7 @@ async function syncTickLocked({ runGit, configDir, readStore, writeStore, log, s
         return result;
       }
     }
-    await runGit(["update-ref", "refs/heads/vm", "refs/heads/main"], { cwd: configDir });
+    await runGit(["update-ref", "refs/heads/" + branch, "refs/heads/main"], { cwd: configDir });
     result.ok = true;
     return result;
   }
@@ -754,7 +840,7 @@ async function syncTickLocked({ runGit, configDir, readStore, writeStore, log, s
   // risk: skip the VM side with a warning; individual deletions still propagate
   // normally, and a real delete-all can be done per profile or from the panel.
   if (noValidVmFiles && vmTipProfiles > 0) {
-    addWarning(`VM store has no valid profiles but the vm branch has ${vmTipProfiles}; refusing to propagate a mass deletion (delete profiles individually if intended)`);
+    addWarning(`VM store has no valid profiles but the ${branch} branch has ${vmTipProfiles}; refusing to propagate a mass deletion (delete profiles individually if intended)`);
     // ...but do NOT stall: a store dir that exists yet holds zero valid profiles
     // is, in the field, a rebuilt/wiped VM (provisioning recreates the dir before
     // the first seed can run) — leaving it empty made every subsequent tick
@@ -794,11 +880,11 @@ async function syncTickLocked({ runGit, configDir, readStore, writeStore, log, s
     ...result.skippedInvalid.map((s) => s.name),
     ...vmParsed.entries.filter((e) => projects.isReservedProfileName(e.name)).map((e) => e.name),
   ]);
-  const vmChanged = await commitVmBranch(runGit, configDir, vmValid, preserveNames);
+  const vmChanged = await commitVmBranch(runGit, configDir, vmValid, preserveNames, branch);
 
   // Step 6: merge vm into main.
   // First check if merge is needed.
-  const baseCheck = await runGit(["merge-base", "--is-ancestor", "vm", "main"], { cwd: configDir });
+  const baseCheck = await runGit(["merge-base", "--is-ancestor", branch, "main"], { cwd: configDir });
   if (baseCheck.code === 0 && !vmChanged) {
     // vm is already an ancestor of main and nothing changed — nothing to merge.
     // Still do write-back for any drifted files.
@@ -821,14 +907,14 @@ async function syncTickLocked({ runGit, configDir, readStore, writeStore, log, s
         return result;
       }
     }
-    await runGit(["update-ref", "refs/heads/vm", "refs/heads/main"], { cwd: configDir });
+    await runGit(["update-ref", "refs/heads/" + branch, "refs/heads/main"], { cwd: configDir });
     result.ok = true;
     return result;
   }
 
   // Also check: are trees identical? (vm == main tree-wise)
   const mainTree = await runGit(["rev-parse", "main^{tree}"], { cwd: configDir });
-  const vmTree = await runGit(["rev-parse", "vm^{tree}"], { cwd: configDir });
+  const vmTree = await runGit(["rev-parse", branch + "^{tree}"], { cwd: configDir });
   if (mainTree.stdout.trim() === vmTree.stdout.trim()) {
     // Trees are identical — nothing to merge.
     const mainFiles = readMainProfiles(configDir);
@@ -845,7 +931,7 @@ async function syncTickLocked({ runGit, configDir, readStore, writeStore, log, s
 
   // Perform the merge.
   const mergeResult = await runGit(
-    [...GIT_IDENTITY, "merge", "--no-ff", "--no-commit", "vm"],
+    [...GIT_IDENTITY, "merge", "--no-ff", "--no-commit", branch],
     { cwd: configDir }
   );
 
@@ -887,7 +973,7 @@ async function syncTickLocked({ runGit, configDir, readStore, writeStore, log, s
   }
 
   // Commit the merge.
-  const mergeCommit = await runGit([...GIT_IDENTITY, "commit", "-m", "sync merge vm"], { cwd: configDir });
+  const mergeCommit = await runGit([...GIT_IDENTITY, "commit", "-m", "sync merge " + branch], { cwd: configDir });
   if (mergeCommit.code !== 0) {
     result.blocked = true;
     result.blockedReason = "merge commit failed: " + (mergeCommit.stderr || mergeCommit.stdout || "").trim();
@@ -921,7 +1007,7 @@ async function syncTickLocked({ runGit, configDir, readStore, writeStore, log, s
   // the vm ref stays behind so the next tick retries the merge+write-back
   // instead of silently losing the merged content.
   if (writeBackRan) {
-    await runGit(["update-ref", "refs/heads/vm", "refs/heads/main"], { cwd: configDir });
+    await runGit(["update-ref", "refs/heads/" + branch, "refs/heads/main"], { cwd: configDir });
   }
 
   result.ok = true;
@@ -976,20 +1062,22 @@ async function commitHostDirtyFiles(runGit, configDir, result) {
   }
 }
 
-/** Count the number of projects/*.json files on the vm branch tip. */
-async function countVmBranchProfiles(runGit, configDir) {
-  const ls = await runGit(["ls-tree", "--name-only", "vm", "projects/"], { cwd: configDir });
+/** Count the number of projects/*.json files on the VM branch tip. */
+async function countVmBranchProfiles(runGit, configDir, vmBranch) {
+  const branch = resolveVmBranch(vmBranch);
+  const ls = await runGit(["ls-tree", "--name-only", branch, "projects/"], { cwd: configDir });
   if (ls.code !== 0) return 0;
   const files = ls.stdout.trim().split("\n").filter((f) => f && f.endsWith(".json"));
   return files.length;
 }
 
 /**
- * Commit the VM snapshot onto the vm branch using a temp index so the working
- * tree (checked out on main) is never disturbed. Returns true if a new commit
- * was created (the tree differs from the vm-tip tree).
+ * Commit the VM snapshot onto the instance's VM branch using a temp index so the
+ * working tree (checked out on main) is never disturbed. Returns true if a new
+ * commit was created (the tree differs from the branch-tip tree).
  */
-async function commitVmBranch(runGit, configDir, vmValid, preserveNames) {
+async function commitVmBranch(runGit, configDir, vmValid, preserveNames, vmBranch) {
+  const branch = resolveVmBranch(vmBranch);
   const preserve = preserveNames instanceof Set ? preserveNames : new Set(preserveNames || []);
   const tmpIndex = path.join(configDir, ".git", "tmp-vm-index");
   try { fs.unlinkSync(tmpIndex); } catch (_) { /* ok */ }
@@ -997,7 +1085,7 @@ async function commitVmBranch(runGit, configDir, vmValid, preserveNames) {
   const envOverride = { GIT_INDEX_FILE: tmpIndex };
 
   // Read the current vm tree into the temp index.
-  await runGit(["read-tree", "vm"], { cwd: configDir, env: envOverride });
+  await runGit(["read-tree", branch], { cwd: configDir, env: envOverride });
 
   // Remove projects/* entries from the temp index so the tree is rebuilt from the
   // fresh VM read — EXCEPT names in `preserve` (skipped-invalid or reserved), whose
@@ -1047,7 +1135,7 @@ async function commitVmBranch(runGit, configDir, vmValid, preserveNames) {
   const newTree = wt.stdout.trim();
 
   // Compare with the vm-tip tree.
-  const vmTipTree = await runGit(["rev-parse", "vm^{tree}"], { cwd: configDir });
+  const vmTipTree = await runGit(["rev-parse", branch + "^{tree}"], { cwd: configDir });
   if (newTree === vmTipTree.stdout.trim()) {
     // No change.
     try { fs.unlinkSync(tmpIndex); } catch (_) { /* ok */ }
@@ -1055,13 +1143,13 @@ async function commitVmBranch(runGit, configDir, vmValid, preserveNames) {
   }
 
   // Commit the new tree as a child of the vm tip.
-  const vmTip = await runGit(["rev-parse", "vm"], { cwd: configDir });
+  const vmTip = await runGit(["rev-parse", branch], { cwd: configDir });
   const ct = await runGit(
-    [...GIT_IDENTITY, "commit-tree", newTree, "-p", vmTip.stdout.trim(), "-m", "vm sync"],
+    [...GIT_IDENTITY, "commit-tree", newTree, "-p", vmTip.stdout.trim(), "-m", branch + " sync"],
     { cwd: configDir }
   );
   const newCommit = ct.stdout.trim();
-  await runGit(["update-ref", "refs/heads/vm", newCommit], { cwd: configDir });
+  await runGit(["update-ref", "refs/heads/" + branch, newCommit], { cwd: configDir });
 
   try { fs.unlinkSync(tmpIndex); } catch (_) { /* ok */ }
   return true;
@@ -1421,6 +1509,7 @@ async function pushUpstream(runGit, { stagingDir, files, branch, message }) {
 module.exports = {
   makeGitRunner, detectGit,
   ensureConfigTree,
+  DEFAULT_VM_BRANCH, isValidVmBranch, resolveVmBranch,
   acquireSyncLock, releaseSyncLock, provisionSyncPending,
   SYNC_LOCK_FILE, PROVISION_SYNC_INTENT_FILE,
   ensureRepo, repoState, completePendingMerge,

@@ -362,9 +362,19 @@ async function augment(state, raw, opts = {}) {
 
 /** install.ps1 args for the control-panel "Update Construct" refresh. */
 function constructRefreshArgs(markers) {
+  const out = [];
+  for (const p of constructRefreshArgPairs(markers)) out.push(p.flag, p.value);
+  return out;
+}
+
+/** The same arguments as (flag, value) PAIRS. lifecycle.buildCallCommand quotes every
+ *  VALUE from this spec, so a repo/ref hand-edited into .construct-settings.json is
+ *  passed as data even if it starts with '-'. `constructRefreshArgs` is derived from it,
+ *  so the flat list and the spec can never drift apart. */
+function constructRefreshArgPairs(markers) {
   // Args for Update-Construct.ps1 (the self-update script the panel launches): it IS
   // the refresh, so there's no -RefreshOnly flag — just the source repo/ref to pull.
-  return ["-Repo", markers.repo, "-Ref", markers.ref];
+  return [{ flag: "-Repo", value: markers.repo }, { flag: "-Ref", value: markers.ref }];
 }
 
 module.exports = {
@@ -373,5 +383,5 @@ module.exports = {
   behindText, semverParts, isNewer, isNewerNightly, prereleasePart, comparePrerelease,
   isProvisionStale, t3codeUrl,
   fetchAgentLatest, augmentAgents, buildAgentUpdateScript,
-  augment, constructRefreshArgs,
+  augment, constructRefreshArgs, constructRefreshArgPairs,
 };

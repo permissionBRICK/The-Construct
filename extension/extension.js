@@ -19,6 +19,7 @@ const crypto = require("crypto");
 const probe = require("./src/probe");
 const ssh = require("./src/ssh");
 const host = require("./src/host");
+const instances = require("./src/instances");
 const lifecycle = require("./src/lifecycle");
 const updates = require("./src/updates");
 const usage = require("./src/usage");
@@ -57,6 +58,131 @@ let repatchTimer = null;
 
 /** Every currently-live webview (sidebar view + editor panel) for broadcast refresh. */
 const liveWebviews = new Set();
+
+// ── Active instance ─────────────────────────────────────────────────────────
+// One VM per window. The registry (%LOCALAPPDATA%\The-Construct\instances.json) lists
+// them; with no registry file it synthesizes exactly one — `agent-vm`, today's
+// literals — so an existing install behaves identically and never sees any of this.
+//
+// EVERY call that reaches the VM goes through activeCfg(); that single helper is the
+// reason a new call site can't silently fall back to the hardcoded default. The
+// instance object itself (activeInstance()) rides into lifecycle/vmpower/config-sync.
+const ACTIVE_INSTANCE_KEY = "construct.activeInstance"; // workspaceState (per window)
+let extensionContext = null;          // set in activate(); owns workspaceState
+let registryCache = null;             // { at, registry } — the parsed instances.json
+let registryProblemsShown = "";       // last problem set surfaced, so we toast once
+const REGISTRY_TTL_MS = 5000;         // re-read the (tiny) file at most every 5s
+/** The instance the mic tunnel was opened for, so a switch can retarget it. */
+let hostAudioInstance = null;
+/** The instance the notification watcher is connected to. */
+let notifyInstance = null;
+/** The status-bar item showing the active instance (only when >1 exists). */
+let instanceStatusItem = null;
+/**
+ * The generation gate for the active instance (instances.createGate). Every async
+ * refresh pipeline captures a token before its first await and re-checks it after each
+ * one, so a slow stage that resolves AFTER a switch is discarded instead of painting
+ * the previous VM's data under the new instance's name.
+ */
+const instanceGate = instances.createGate(instances.DEFAULT_INSTANCE_NAME);
+
+/** The instance registry, re-read at most every REGISTRY_TTL_MS. Never throws. */
+function registryNow(force) {
+  const now = Date.now();
+  if (!force && registryCache && now - registryCache.at < REGISTRY_TTL_MS) return registryCache.registry;
+  let reg;
+  try { reg = instances.load({ env: process.env }); }
+  catch (e) {
+    // load() is documented never to throw; stay defensive so a surprise can't break
+    // the panel — degrade to the synthesized default WITHOUT touching the disk again.
+    logLine("instances: registry load failed — " + (e && e.message ? e.message : e));
+    reg = instances.load({ path: "" });
+  }
+  registryCache = { at: now, registry: reg };
+  reportRegistryProblems(reg);
+  return reg;
+}
+
+/** Surface registry problems ONCE per distinct problem set: a malformed file must be
+ *  visible (it silently changes which VM you are driving) without nagging every tick. */
+function reportRegistryProblems(reg) {
+  const problems = (reg && reg.problems) || [];
+  const key = problems.join("\n");
+  if (key === registryProblemsShown) return;
+  registryProblemsShown = key;
+  if (!problems.length) return;
+  for (const p of problems) logLine("instances: " + p);
+  try {
+    vscode.window.showWarningMessage(
+      "The Construct instance registry has problems — using the default instance where needed. " +
+      problems[0] + (problems.length > 1 ? ` (+${problems.length - 1} more; see the Construct log)` : "")
+    );
+  } catch (_) { /* never break a refresh over a toast */ }
+}
+
+/** The `construct.instance` setting (global override), or "" when unset. */
+function instanceSetting() {
+  try { return String(vscode.workspace.getConfiguration("construct").get("instance") || "").trim(); }
+  catch (_) { return ""; }
+}
+
+/** The window's persisted instance choice, or "" when it has never chosen. */
+function workspaceInstance() {
+  try { return String((extensionContext && extensionContext.workspaceState.get(ACTIVE_INSTANCE_KEY)) || "").trim(); }
+  catch (_) { return ""; }
+}
+
+/**
+ * The ACTIVE instance for this window: setting > workspaceState > registry default
+ * (instances.resolveActive owns that precedence, and skips a name the registry no
+ * longer has). Always returns a usable instance — the synthesized `agent-vm` when
+ * nothing else applies, which is what makes every downstream call zero-change.
+ */
+function activeInstance() {
+  const picked = instances.resolveActive({
+    registry: registryNow(),
+    setting: instanceSetting(),
+    workspaceValue: workspaceInstance(),
+  });
+  // Keep the gate in step with the RESOLVED answer, so a change that arrives by any
+  // route (the setting, another window's registry edit, adoption) invalidates in-flight
+  // refreshes even when it didn't come through switchInstance().
+  instanceGate.set(picked.instance.name);
+  return picked.instance;
+}
+
+/** The ssh.js cfg for the active instance — the ONE way any module reaches the VM. */
+function activeCfg() {
+  return instances.toSshCfg(activeInstance());
+}
+
+/**
+ * Capture the instance a USER ACTION targets. Commands are multi-step (a modal, a VM
+ * probe, a minutes-long clone), so re-reading "the active instance" in a later step
+ * would let a switch redirect the rest of the action — including the destructive ones,
+ * where the confirmation given for A would be executed against B. Every command entry
+ * point captures once and uses `target.cfg` / `target.instance` all the way through.
+ */
+function actionTarget() {
+  return instances.captureTarget(instanceGate, activeInstance());
+}
+
+/**
+ * Refuse to take an irreversible step when the window switched instances since the
+ * action started, and say why. Mirrors the existing "changed elsewhere while this
+ * prompt was open" guard in offerApplyCheckpoints: doing nothing and explaining beats
+ * acting on either VM, because we can no longer tell which one the user meant.
+ * Returns true when the caller must abort.
+ */
+function targetSuperseded(target, what) {
+  if (!instances.targetSuperseded(instanceGate, target)) return false;
+  const now = activeInstance().name;
+  logLine(`instances: ${what} was started for "${target.name}" but the window switched to "${now}" — aborted`);
+  vscode.window.showWarningMessage(
+    `${what} was started for the “${target.name}” instance, but this window has since switched to “${now}” — nothing was done. Switch back and try again.`
+  );
+  return true;
+}
 
 // The currently selected token-usage period ("daily"|"monthly"), shared across every
 // dashboard. Drives both the ccusage window we collect and the active tab the panel
@@ -126,15 +252,19 @@ function safePost(webview, msg) {
 
 // Coalesce overlapping probes: concurrent refresh triggers (e.g. both surfaces
 // firing 'ready', or rapid refresh commands) share one in-flight ssh probe.
-let inflightProbe = null;
-function probeOnce() {
-  if (!inflightProbe) {
-    const p = probe.probe().then((s) => s, () => ({ online: false }));
-    inflightProbe = p;
-    const clear = () => { if (inflightProbe === p) inflightProbe = null; };
-    p.then(clear, clear);
-  }
-  return inflightProbe;
+// The in-flight probe is keyed BY INSTANCE: coalescing is only correct for callers
+// asking about the same VM, and a probe of the previous instance must never be handed
+// to a caller that has already switched.
+let inflightProbe = null;      // { name, promise }
+function probeOnce(inst) {
+  const target = inst || activeInstance();
+  if (inflightProbe && inflightProbe.name === target.name) return inflightProbe.promise;
+  const promise = probe.probe({ cfg: instances.toSshCfg(target) }).then((s) => s, () => ({ online: false }));
+  const entry = { name: target.name, promise };
+  inflightProbe = entry;
+  const clear = () => { if (inflightProbe === entry) inflightProbe = null; };
+  promise.then(clear, clear);
+  return promise;
 }
 
 /** Fold host-side update info (GitHub) into a probed state. Best-effort: returns
@@ -152,18 +282,36 @@ async function augmentUpdates(state) {
  *  SSH + ccusage round-trip (ccusage may even install itself the first time), so this
  *  runs after the base + update pushes and folds usage in as its own state message.
  *  Returns the same object reference when nothing was added, so callers skip a re-push. */
-async function augmentUsage(state, report) {
+async function augmentUsage(state, report, inst) {
   try {
-    return await usage.augment(state, { report });
+    return await usage.augment(state, { report, cfg: instances.toSshCfg(inst || activeInstance()) });
   } catch (_) { return state; }
 }
 
 /** Add window-local fields (whether THIS window is already on the VM) to a probed
  *  state. Synchronous, so it rides the first push. */
-function withLocalState(state) {
+function withLocalState(state, inst) {
+  const target = inst || activeInstance();
   let connected = false;
-  try { connected = remote.isConnectedToVm(safeRemoteAuthority()); } catch (_) { /* default false */ }
-  return { ...state, connected };
+  try { connected = remote.isConnectedToVm(safeRemoteAuthority(), instances.toSshCfg(target)); } catch (_) { /* default false */ }
+  return { ...state, connected, ...instanceState(target) };
+}
+
+/** The instance fields every state push carries: which instance this window drives and
+ *  (only when there is a choice to make) the list the picker/dropdown offers. The name
+ *  is the instance the CALLER's pipeline started under, never "whatever is current
+ *  now" — a payload must always be labelled with the VM it actually came from. */
+function instanceState(inst) {
+  try {
+    const reg = registryNow();
+    const target = inst || activeInstance();
+    const names = instances.list(reg).map((i) => i.name);
+    const out = { instance: target.name };
+    // The dropdown renders ONLY when more than one instance exists, so a single-VM
+    // install's panel is pixel-identical to before.
+    if (names.length > 1) out.instances = names;
+    return out;
+  } catch (_) { return {}; }
 }
 
 /** Post a state to a webview, stamping the CURRENT usage period at SEND time. usageReport
@@ -188,10 +336,10 @@ function postState(target, state) {
  *  vmState 'unknown'. The UI still offers "Start & connect" for 'unknown' (the
  *  elevated Start-VM self-elevates via UAC), hiding it only for 'absent'/'running' —
  *  see vmpower.shouldShowStart. */
-async function withVmState(state) {
+async function withVmState(state, inst) {
   try {
     if (state && state.online) return { ...state, vmState: "running" };
-    const vmState = await vmpower.queryVmState();
+    const vmState = await vmpower.queryVmState({ instance: inst || activeInstance() });
     return { ...state, vmState };
   } catch (_) {
     return { ...state, vmState: "unknown" };
@@ -244,7 +392,7 @@ function withProjects(state) {
  *  projects (a quick probe) so a reprovision keeps what's installed — matching the
  *  panel, whose chips default to all current projects. Empty only when we genuinely
  *  can't tell (offline + nothing saved), where the script keeps its own prompt. */
-async function effectiveProjects() {
+async function effectiveProjects(inst) {
   try {
     const scriptsDir = resolveScriptsDir();
     if (scriptsDir) {
@@ -253,7 +401,9 @@ async function effectiveProjects() {
     }
   } catch (_) { /* fall through to the live set */ }
   try {
-    const st = await probeOnce();
+    // Probe the instance the ACTION targets, not whatever is active by the time this
+    // slow round-trip runs — the project list decides what a rebuild provisions.
+    const st = await probeOnce(inst);
     if (st && Array.isArray(st.projects)) {
       return st.projects.filter((p) => p && p.selected !== false).map((p) => p.name).filter(Boolean);
     }
@@ -265,38 +415,66 @@ async function effectiveProjects() {
  *  state once the (cached, best-effort) GitHub check resolves. */
 async function refreshState(webview) {
   if (!webview) return;
-  const state = withProjects(await withVmState(withLocalState(await probeOnce())));
+  // Bind the whole pipeline to the instance it starts under. Every await below is
+  // followed by a gate check, so a stage that outlives a switch is dropped rather than
+  // posted — the same discipline the usagePeriod binding already used for periods.
+  const inst = activeInstance();
+  const gate = instanceGate.token();
+  const probed = await probeOnce(inst);
+  if (!instanceGate.valid(gate)) return;
+  const state = withProjects(await withVmState(withLocalState(probed, inst), inst));
+  if (!instanceGate.valid(gate)) return;
   postState(webview, state);
   const aug = await augmentUpdates(state);
+  if (!instanceGate.valid(gate)) return;
   if (aug !== state) postState(webview, aug);
   // Usage is a slower SSH+ccusage round-trip: BIND it to the report we start with and
   // DISCARD the result if the user switched the period meanwhile (a stale daily run must
   // never land as monthly's numbers). postState always stamps the CURRENT usagePeriod.
   const report = usageReport;
-  const withUsage = await augmentUsage(aug, report);
+  const withUsage = await augmentUsage(aug, report, inst);
+  if (!instanceGate.valid(gate)) return;
   if (withUsage !== aug && usageReport === report) postState(webview, withUsage);
 }
 
 /** Probe once and broadcast the same state to every live webview, then broadcast
  *  the update-augmented state. */
 async function refreshAll() {
+  // Keep the status-bar indicator honest even when the registry gains/loses an
+  // instance behind our back (another window, a hand edit, a future installer).
+  syncInstanceStatusItem();
   if (liveWebviews.size === 0) return;
-  const state = withProjects(await withVmState(withLocalState(await probeOnce())));
+  // Same instance binding as refreshState: capture up front, re-check after every
+  // await, and abandon the whole continuation (posts AND cache writes) on a switch.
+  const inst = activeInstance();
+  const gate = instanceGate.token();
+  const probed = await probeOnce(inst);
+  if (!instanceGate.valid(gate)) return;
+  const state = withProjects(await withVmState(withLocalState(probed, inst), inst));
+  if (!instanceGate.valid(gate)) return;
   for (const w of liveWebviews) postState(w, state);
   const aug = await augmentUpdates(state);
+  if (!instanceGate.valid(gate)) return;
   if (aug !== state) for (const w of liveWebviews) postState(w, aug);
   const report = usageReport;
-  const withUsage = await augmentUsage(aug, report);
+  const withUsage = await augmentUsage(aug, report, inst);
+  if (!instanceGate.valid(gate)) return;
   if (withUsage !== aug && usageReport === report) for (const w of liveWebviews) postState(w, withUsage);
   // Config-sync: update the cached state and run a throttled tick. Best-effort.
   try {
-    cachedConfigSync = await buildConfigSyncState();
+    const cs = await buildConfigSyncState();
+    if (!instanceGate.valid(gate)) return;
+    cachedConfigSync = cs;
     for (const w of liveWebviews) postState(w, withUsage !== aug ? withUsage : aug);
     await maybeAutoSync();
+    if (!instanceGate.valid(gate)) return;
     // Auto-import runs regardless of git presence, so users without git still get
     // automatic discovery of new VM repos (docs/config-sync.md §10 degraded mode).
     await maybeAutoImport();
-    cachedConfigSync = await buildConfigSyncState();
+    if (!instanceGate.valid(gate)) return;
+    const cs2 = await buildConfigSyncState();
+    if (!instanceGate.valid(gate)) return;
+    cachedConfigSync = cs2;
     for (const w of liveWebviews) postState(w, withUsage !== aug ? withUsage : aug);
   } catch (_) { /* best-effort */ }
 }
@@ -410,7 +588,9 @@ function startNotifyWatch() {
   if (notifyChild || notifyRestartTimer) return;
   notifyStopped = false;
   if (!notificationsEnabled()) return;
-  const args = notify.buildWatchArgs(ssh, {}, fs.existsSync(ssh.keyPath(ssh.resolveCfg({}))));
+  const cfg = activeCfg();
+  notifyInstance = activeInstance().name;
+  const args = notify.buildWatchArgs(ssh, cfg, fs.existsSync(ssh.keyPath(ssh.resolveCfg({ cfg }))));
   let child;
   try {
     child = require("child_process").spawn("ssh", args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
@@ -542,10 +722,14 @@ function raiseWindowsToast(entry) {
   });
 }
 
-/** Locate the host-side scripts dir, honoring the `construct.scriptsDir` override. */
+/** Locate the host-side scripts dir: the active instance's pinned `scriptsDir` first
+ *  (registry field; null for the default instance), then the `construct.scriptsDir`
+ *  override, then newest-install detection — see host.resolveScriptsDir. */
 function resolveScriptsDir() {
   const override = vscode.workspace.getConfiguration("construct").get("scriptsDir");
-  return host.resolveScriptsDir({ scriptsDir: override, env: process.env });
+  let pinned = null;
+  try { pinned = activeInstance().scriptsDir; } catch (_) { pinned = null; }
+  return host.resolveScriptsDir({ instanceScriptsDir: pinned, scriptsDir: override, env: process.env });
 }
 
 /** Resolve the config dir. Falls back to null when LOCALAPPDATA/TEMP absent. */
@@ -631,22 +815,27 @@ async function runConfigSync() {
     // otherwise they exist on the host but stay outside the persisted selection,
     // and the next reprovision silently provisions without them.
     var profilesBeforeTick = host.listProjectProfiles(dir);
+    var syncCfg = activeCfg();
     var readStore = async function () {
       try {
-        var r = await ssh.runRemoteScript(configsync.buildReadStoreScript(), { timeoutMs: 30000 });
+        var r = await ssh.runRemoteScript(configsync.buildReadStoreScript(), { timeoutMs: 30000, cfg: syncCfg });
         if (r.code < 0) return null;
         return r.stdout || null;
       } catch (_) { return null; }
     };
     var writeStore = async function (script) {
       try {
-        var r = await ssh.runRemoteScript(script, { timeoutMs: 30000 });
+        var r = await ssh.runRemoteScript(script, { timeoutMs: 30000, cfg: syncCfg });
         if (r.code < 0) return null;
         return r.stdout || null;
       } catch (_) { return null; }
     };
     var result = await configsync.syncTick({
       runGit: runGit, configDir: dir, readStore: readStore, writeStore: writeStore,
+      // The instance's config-sync branch ("vm" for the default instance, "vm-<name>"
+      // otherwise). B5 implements the option; until then syncTick ignores it, which is
+      // harmless because the default instance's value IS syncTick's own default.
+      vmBranch: activeInstance().configBranch,
       log: function (level, msg) { logLine("[configsync] [" + level + "] " + msg); },
     });
     lastSyncResult = result;
@@ -750,10 +939,11 @@ async function configMergeGate() {
  * when it must be blocked. Fail-CLOSED: if the gate check throws or cannot
  * determine the state, it blocks rather than proceeding blindly.
  */
-async function lifecyclePreFlight(actionLabel) {
+async function lifecyclePreFlight(actionLabel, target) {
   var cfgDir = resolveCfgDir();
   // (a) Import any VM repos not yet covered by a local profile.
   var importResult = await coalescedImport(true);
+  if (target && targetSuperseded(target, "This action")) return { ok: false, reason: actionLabel + " cancelled." };
   if (!importResult) {
     var skip = await vscode.window.showWarningMessage(
       "Could not reach the VM to check for new project configs. " +
@@ -948,10 +1138,12 @@ function runUpdateAgents(ids) {
   }
   const what = subset ? subset.join(", ") : "coding agents";
   const script = updates.buildAgentUpdateScript(remotelyUpdated);
+  // Multi-minute npm work followed (sometimes) by a reprovision: one target for both.
+  const t = actionTarget();
   vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: `Updating ${what} on the VM…`, cancellable: false },
     async () => {
-      const r = await ssh.runRemoteScript(script, { timeoutMs: 300000 });
+      const r = await ssh.runRemoteScript(script, { timeoutMs: 300000, cfg: t.cfg });
       if (r.code === 0) {
         vscode.window.showInformationMessage(subset ? `${what} updated.` : "Coding agents updated.");
       } else {
@@ -960,7 +1152,7 @@ function runUpdateAgents(ids) {
         );
       }
       refreshAll(); // re-probe versions + clear the update badges
-      if (sourceManagedT3) await startConstructReprovision(scriptsDir);
+      if (sourceManagedT3) await startConstructReprovision(scriptsDir, t);
     }
   );
 }
@@ -982,6 +1174,9 @@ function runUpdateConstruct() {
   const ok = lifecycle.launchHostScript({
     scriptsDir, script: "Update-Construct.ps1",
     args: updates.constructRefreshArgs(markers),
+    // Pair form of the same args: the command builder quotes VALUES from it, so a
+    // repo/ref hand-edited into the settings file can't be read as PowerShell syntax.
+    argSpec: updates.constructRefreshArgPairs(markers),
     env: { CONSTRUCT_UPDATE_RESULT: resultFile },
     elevate: false, label: "Update Construct",
   });
@@ -1025,7 +1220,8 @@ function runStartAndConnect() {
     );
     return;
   }
-  if (!vmpower.startVm({ debug: debugEnabled() })) return; // startVm surfaces its own failure
+  const startInstance = activeInstance();
+  if (!vmpower.startVm({ debug: debugEnabled(), instance: startInstance })) return; // startVm surfaces its own failure
   vscode.window.showInformationMessage("Starting the Construct VM — approve the UAC prompt.");
   vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: "Waiting for the Construct VM to come online…", cancellable: true },
@@ -1034,8 +1230,8 @@ function runStartAndConnect() {
       let waited = 0;
       while (waited < maxMs) {
         if (token.isCancellationRequested) return;
-        if (await ssh.isReachable({ timeoutMs: 6000 })) {
-          remote.openOnVm({ path: "/root/repos", newWindow: false });
+        if (await ssh.isReachable({ timeoutMs: 6000, cfg: instances.toSshCfg(startInstance) })) {
+          remote.openOnVm({ path: "/root/repos", newWindow: false, cfg: instances.toSshCfg(startInstance) });
           refreshAll();
           return;
         }
@@ -1083,7 +1279,8 @@ async function offerApplyCheckpoints(scriptsDir, enabled, changed) {
   // with no saved key at all, so a preference that "didn't change" (off → off) still
   // needs applying — and after "Later" or a declined UAC, the next save must offer again.
   // When the (permission-gated) probe can't tell, the applied-marker stands in for it.
-  const actual = await vmpower.queryAutoCheckpoints();
+  const t = actionTarget();
+  const actual = await vmpower.queryAutoCheckpoints({ instance: t.instance });
   let applied = null;
   try { applied = host.readAppliedAutoCheckpoints(scriptsDir); } catch (_) { applied = null; }
   logLine(`checkpoints: want=${enabled ? "on" : "off"} actual=${actual} applied=${applied} changed=${!!changed}`);
@@ -1123,7 +1320,10 @@ async function offerApplyCheckpoints(scriptsDir, enabled, changed) {
   // recorded as applied). Mirrors runUpdateConstruct's CONSTRUCT_UPDATE_RESULT.
   const resultFile = path.join(os.tmpdir(), `construct-checkpoints-${Date.now()}.result`);
   try { fs.unlinkSync(resultFile); } catch (_) {}
-  lifecycle.run("setCheckpoints", { scriptsDir, enabled, env: { CONSTRUCT_CHECKPOINT_RESULT: resultFile } });
+  if (targetSuperseded(t, "Applying automatic checkpoints")) return;
+  // Refused (a non-default instance this install can't target) => no console runs, so
+  // no result file will ever appear: don't start the poller.
+  if (lifecycle.run("setCheckpoints", { scriptsDir, enabled, instance: t.instance, env: { CONSTRUCT_CHECKPOINT_RESULT: resultFile } }) === false) return;
   const startedAt = Date.now();
   const timer = setInterval(() => {
     let res = null;
@@ -1153,12 +1353,19 @@ async function offerApplyCheckpoints(scriptsDir, enabled, changed) {
 /** Patch toggles are provisioning-only: saving persists them, then this offers
  *  the lifecycle action that applies them. No VM-side SSH mutation happens in
  *  the settings-save path. */
-async function startConstructReprovision(scriptsDir) {
+async function startConstructReprovision(scriptsDir, target) {
   try {
-    const pf = await lifecyclePreFlight("reprovisioning");
+    // Bind to the instance the reprovision was ASKED for: the pre-flight and the
+    // project probe below both await, and a switch in between must not redirect the
+    // rebuild to another VM.
+    const t = target || actionTarget();
+    const pf = await lifecyclePreFlight("reprovisioning", t);
     if (!pf.ok) { showPreFlightBlock(pf); return false; }
-    const selected = await effectiveProjects();
-    lifecycle.run("reprovision", { scriptsDir, projects: selected });
+    const selected = await effectiveProjects(t.instance);
+    if (targetSuperseded(t, "Reprovision")) return false;
+    // run() refuses (and explains) when this install can't TARGET the active instance;
+    // nothing was launched then, so don't start polling for a provisioned commit.
+    if (lifecycle.run("reprovision", { scriptsDir, projects: selected, instance: t.instance }) === false) return false;
     beginReprovisionFastRefresh();
     return true;
   } catch (e) {
@@ -1181,20 +1388,27 @@ function offerReprovisionForPatchSettings(scriptsDir, features) {
 /** Power the VM off over SSH (root → systemctl poweroff). Confirms first; warns
  *  that an attached remote window will lose its connection. */
 async function runShutdown() {
+  // Powering a VM off is irreversible from here, and the modal below can sit open for
+  // as long as the user likes — so the target is captured BEFORE it opens and verified
+  // again after. Switching while the prompt is up means we can no longer tell which VM
+  // the answer was about, so we do nothing and say so.
+  const t = actionTarget();
   const connectedHere = (() => {
-    try { return remote.isConnectedToVm(safeRemoteAuthority()); } catch (_) { return false; }
+    try { return remote.isConnectedToVm(safeRemoteAuthority(), t.cfg); } catch (_) { return false; }
   })();
+  const named = instanceLabel(t.instance);
   const detail = connectedHere
     ? "This window is connected to the VM over Remote-SSH, so its connection will drop when the VM powers off."
     : "The VM will power off. You can bring it back with “Start & connect”.";
   const pick = await vscode.window.showWarningMessage(
-    "Shut down the Construct VM?", { modal: true, detail }, "Shut down"
+    `Shut down the Construct VM${named}?`, { modal: true, detail }, "Shut down"
   );
   if (pick !== "Shut down") return;
+  if (targetSuperseded(t, "Shutdown")) return;
   vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: "Shutting down the Construct VM…", cancellable: false },
     async () => {
-      const r = await ssh.runRemote(vmpower.SHUTDOWN_CMD, { timeoutMs: 20000 });
+      const r = await ssh.runRemote(vmpower.SHUTDOWN_CMD, { timeoutMs: 20000, cfg: t.cfg });
       if (r.code === 0) {
         vscode.window.showInformationMessage("The Construct VM is shutting down.");
       } else {
@@ -1224,7 +1438,7 @@ function runOpenProject(name) {
   }
   const projRoot = resolveCfgDir() || resolveScriptsDir();
   const profile = projRoot ? host.readProjectProfile(projRoot, name) : null;
-  remote.openOnVm({ path: remote.projectOpenPath(profile), newWindow: true });
+  remote.openOnVm({ path: remote.projectOpenPath(profile), newWindow: true, cfg: activeCfg() });
 }
 
 /** Clone a git URL into /root/repos on the VM over SSH, then open it in a NEW
@@ -1258,19 +1472,22 @@ async function runAddProject() {
     return;
   }
   const dest = `${remote.WORKSPACE_ROOT}/${name}`;
+  // A clone can run for minutes. Bind the whole flow to ONE instance so the folder we
+  // open afterwards is the VM the repo was actually cloned onto.
+  const t = actionTarget();
   vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: `Cloning ${name} onto the VM…`, cancellable: false },
+    { location: vscode.ProgressLocation.Notification, title: `Cloning ${name} onto the VM${instanceLabel(t.instance)}…`, cancellable: false },
     async () => {
-      const r = await ssh.runRemoteScript(remote.buildCloneScript(url, name), { timeoutMs: 300000 });
+      const r = await ssh.runRemoteScript(remote.buildCloneScript(url, name), { timeoutMs: 300000, cfg: t.cfg });
       if (r.code === 0) {
         vscode.window.showInformationMessage(`Cloned ${name} — opening it on the VM…`);
-        remote.openOnVm({ path: dest, newWindow: true });
+        remote.openOnVm({ path: dest, newWindow: true, cfg: t.cfg });
         refreshAll(); // the repo now exists on the VM
       } else if (r.code === 3) {
         const pick = await vscode.window.showWarningMessage(
           `${dest} already exists on the VM.`, "Open it", "Cancel"
         );
-        if (pick === "Open it") remote.openOnVm({ path: dest, newWindow: true });
+        if (pick === "Open it") remote.openOnVm({ path: dest, newWindow: true, cfg: t.cfg });
       } else if (r.code < 0) {
         vscode.window.showErrorMessage("Couldn't reach the VM to clone. Is it running?");
       } else {
@@ -1291,7 +1508,7 @@ function runExportUsage() {
   vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: "Collecting usage from the VM…", cancellable: false },
     async () => {
-      const rawText = await usage.collectRaw({ report: usageReport });
+      const rawText = await usage.collectRaw({ report: usageReport, cfg: activeCfg() });
       if (!rawText) {
         vscode.window.showErrorMessage(
           "Couldn't collect usage from the VM. Make sure it's running and reachable, then try again."
@@ -1343,7 +1560,7 @@ async function importFromVm() {
   const projRoot = resolveCfgDir() || resolveScriptsDir();
   if (!projRoot) return null;
   var r;
-  try { r = await ssh.runRemoteScript(projects.buildScanScript(), { timeoutMs: 60000 }); }
+  try { r = await ssh.runRemoteScript(projects.buildScanScript(), { timeoutMs: 60000, cfg: activeCfg() }); }
   catch (_) { return null; }
   if (!r || r.code !== 0) return null;
   var scan = projects.parseScan(r.stdout);
@@ -1451,8 +1668,12 @@ function makeMicProvider() {
 function enableAudio(context, webview, opts = {}) {
   if (hostAudio && hostAudio.enabled) { broadcastAudio({ enabled: true, capturing: hostAudio.capturing }); return; }
   micWarnedReasons = new Set(); // fresh enable: allow one warning per failure reason again
+  hostAudioInstance = activeInstance().name;
   hostAudio = new audio.HostAudio({
-    cfg: undefined,
+    // The mic tunnel is per-INSTANCE: the reverse forward lands on the VM this window
+    // currently drives. The VM-side port range (8767+) is per VM, so two instances
+    // never contend for it; only the host-side cfg has to follow the switch.
+    cfg: activeCfg(),
     mic: makeMicProvider(),
     onStatus: (s) => broadcastAudio(s),
   });
@@ -1460,6 +1681,7 @@ function enableAudio(context, webview, opts = {}) {
     if (!r.ok) {
       // Reset the switch to off on every surface.
       hostAudio = undefined;
+      hostAudioInstance = null;
       safePost(webview, { type: "audio", enabled: false, capturing: false });
       broadcastAudio({ enabled: false, capturing: false });
       if (opts.auto) return; // best-effort startup arm: stay silent, the switch shows off
@@ -1512,7 +1734,7 @@ async function maybeAutoEnableAudio(context) {
     if (!scriptsDir) return;
     const raw = host.readRawSettings(scriptsDir);
     if (!raw || raw.micPassthrough !== true) return;
-    if (!(await ssh.isReachable({ timeoutMs: 6000 }))) return; // VM down — stay off silently
+    if (!(await ssh.isReachable({ timeoutMs: 6000, cfg: activeCfg() }))) return; // VM down — stay off silently
     enableAudio(context, undefined, { auto: true });
   } catch (_) { /* best-effort: never block activation */ }
 }
@@ -1575,7 +1797,7 @@ async function verifyPatchesOnStartup(context) {
   if (plan.runPass) {
     const res = await repatch.runStartupRepatch({
       ssh,
-      cfg: undefined,
+      cfg: activeCfg(),
       readVmScript: audio.defaultReadScript,
       streamingOn,
       // Only ask for a gate-only repair when a tunnel is already live; otherwise the
@@ -1745,6 +1967,7 @@ function disableAudio() {
   if (!hostAudio) { broadcastAudio({ enabled: false, capturing: false }); return; }
   const inst = hostAudio;
   hostAudio = undefined;
+  hostAudioInstance = null;
   vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: "Disabling microphone passthrough…", cancellable: false },
     async () => {
@@ -1757,6 +1980,140 @@ function disableAudio() {
       broadcastAudio({ enabled: false, capturing: false });
     }
   );
+}
+
+// ── Switching the active instance ───────────────────────────────────────────
+// Selection is PER WINDOW (workspaceState), so two windows can drive two VMs at once;
+// `construct.instance` is a global override for people who want one answer everywhere.
+// A switch must invalidate every VM-derived cache, retarget the long-lived connections
+// (notification watcher, mic tunnel), and re-probe — otherwise the panel would show the
+// previous VM's status pills, versions, projects and usage under the new name.
+
+/** Update (or hide) the status-bar instance indicator. Hidden with exactly one
+ *  instance, so a single-VM install's status bar is unchanged. */
+function syncInstanceStatusItem() {
+  try {
+    if (!instanceStatusItem) return;
+    const reg = registryNow();
+    const all = instances.list(reg);
+    if (all.length < 2) { instanceStatusItem.hide(); return; }
+    const inst = activeInstance();
+    instanceStatusItem.text = "$(vm) " + inst.name;
+    instanceStatusItem.tooltip = `The Construct instance: ${inst.name} (${inst.vmHost}:${inst.sshPort}) — click to switch`;
+    instanceStatusItem.show();
+  } catch (_) { /* a status-bar item is never worth an exception */ }
+}
+
+/** Point this window at `name`. Persists the choice, retargets the live connections,
+ *  and re-probes every surface. A no-op when the name is already active or unknown. */
+async function switchInstance(name) {
+  const reg = registryNow(true);
+  const wanted = String(name || "").trim();
+  if (!wanted || !reg.byName[wanted]) {
+    vscode.window.showWarningMessage(`"${wanted}" is not a Construct instance in the registry.`);
+    return;
+  }
+  if (activeInstance().name === wanted) return;
+  try { await extensionContext.workspaceState.update(ACTIVE_INSTANCE_KEY, wanted); }
+  catch (e) {
+    // Without persistence the switch would silently revert on the next reload — say so.
+    logLine("instances: could not persist the active instance — " + (e && e.message ? e.message : e));
+    vscode.window.showWarningMessage("Switched to \"" + wanted + "\" for now, but the choice couldn't be saved for this window.");
+  }
+  const setting = instanceSetting();
+  if (setting && setting !== wanted) {
+    // Honesty: the setting outranks workspaceState, so the switch would silently not
+    // take effect. Say so rather than leave the user staring at the old VM.
+    vscode.window.showWarningMessage(
+      `The "construct.instance" setting pins every window to "${setting}", so this window still uses it. Clear that setting to switch per window.`
+    );
+  }
+  logLine(`instances: active instance -> ${activeInstance().name}`);
+  await onInstanceChanged();
+}
+
+/** Re-target everything that holds a per-VM connection or cache, then re-render. */
+async function onInstanceChanged() {
+  const inst = activeInstance();   // also bumps instanceGate, invalidating live tokens
+  // VM-derived caches: the probe, the update check's markers and the usage table are
+  // all "about a VM", so serving the previous one's results would be a lie.
+  inflightProbe = null;
+  try { usage.clearCache(); } catch (_) {}
+  gitDetected = null; gitDetectedAt = 0;
+  cachedConfigSync = null;
+  // The notification watcher is one long-lived SSH connection to ONE VM: reconnect it
+  // to the new instance (its spool lives on that VM, so nothing is lost on the old one).
+  if (notifyInstance !== inst.name) {
+    stopNotifyWatch();
+    if (notificationsEnabled()) startNotifyWatch();
+  }
+  // The mic tunnel likewise terminates on one VM. Drop it and let the saved preference
+  // re-arm it against the new instance (quietly — same rules as the startup auto-arm).
+  if (hostAudio && hostAudioInstance && hostAudioInstance !== inst.name) {
+    disableAudio();
+    maybeAutoEnableAudio(extensionContext);
+  }
+  syncInstanceStatusItem();
+  await refreshAll();
+}
+
+/** The "The Construct: Switch Instance" QuickPick. */
+async function runSwitchInstance() {
+  const reg = registryNow(true);
+  const all = instances.list(reg);
+  const current = activeInstance().name;
+  if (all.length < 2) {
+    vscode.window.showInformationMessage(
+      "Only one Construct instance is configured (" + current + "). Add more in " +
+      (reg.path || "%LOCALAPPDATA%\\The-Construct\\instances.json") + "."
+    );
+    return;
+  }
+  const pick = await vscode.window.showQuickPick(
+    all.map((i) => ({
+      label: (i.name === current ? "$(check) " : "") + i.name,
+      description: i.vmHost + (i.sshPort === 22 ? "" : ":" + i.sshPort),
+      detail: i.backend + (i.name === reg.defaultInstance ? " · registry default" : ""),
+      name: i.name,
+    })),
+    { title: "Switch the Construct instance", placeHolder: "The VM this window's panel drives" }
+  );
+  if (!pick) return;
+  await switchInstance(pick.name);
+}
+
+/** When a window is attached over Remote-SSH to a VM that IS a known instance, adopt
+ *  it: the panel must describe the machine you are actually working on. Only when the
+ *  authority matches an instance and no explicit setting pins another one. */
+async function adoptRemoteInstance() {
+  try {
+    const res = await instances.adoptRemoteInstance({
+      registry: registryNow(),
+      remoteAuthority: safeRemoteAuthority(),
+      setting: instanceSetting(),
+      currentName: activeInstance().name,
+      // AWAITED inside the helper: workspaceState.update is a Thenable, and a
+      // fire-and-forget write would let the rest of activation read the OLD selection
+      // and probe the wrong VM.
+      setActive: (name) => extensionContext.workspaceState.update(ACTIVE_INSTANCE_KEY, name),
+    });
+    if (res.adopt && res.persisted) {
+      logLine(`instances: window is attached to this VM — active instance -> ${res.name}`);
+      instanceGate.set(res.name);
+    } else if (res.adopt && res.error) {
+      logLine(`instances: could not adopt the attached VM's instance (${res.error})`);
+    }
+  } catch (_) { /* best-effort: never break activation */ }
+}
+
+/** " (work-vm)" for the instance an action targets, or "" when only one instance
+ *  exists — so a single-VM install's confirmation copy is byte-identical to before,
+ *  and a multi-VM one always names the machine it is about to touch. */
+function instanceLabel(inst) {
+  try {
+    if (!inst || instances.list(registryNow()).length < 2) return "";
+    return ` (${inst.name})`;
+  } catch (_) { return ""; }
 }
 
 // A per-render CSP nonce: it is the sole gate between the trusted bundled script
@@ -1826,6 +2183,12 @@ function handleMessage(message, webview, context) {
       vscode.commands.executeCommand("construct.openPanel");
       return;
 
+    case "setInstance":
+      // The panel header's instance dropdown. The name is validated against the
+      // registry inside switchInstance — the webview is untrusted input.
+      void switchInstance(message.name);
+      return;
+
     case "setAudio":
       // The console toggle IS the persistent preference: persist it so passthrough
       // auto-arms next session (unifies the two mic switches into one setting).
@@ -1867,11 +2230,13 @@ function handleMessage(message, webview, context) {
         if (t3plan) {
           const sourceManagedT3 = merged.t3codeLimitResume === true;
           if (t3plan.action === "enable" && !sourceManagedT3) {
-            t3code.enableOnVm({ channel: t3plan.channel }).then(() => refreshAll());
+            // `instance` only picks the pairing-script variant openWebUi mints with
+            // (the default instance keeps the original command verbatim).
+            t3code.enableOnVm({ channel: t3plan.channel, cfg: activeCfg(), instance: activeInstance() }).then(() => refreshAll());
           } else if (t3plan.action === "disable") {
-            t3code.disableOnVm().then(() => refreshAll());
+            t3code.disableOnVm({ cfg: activeCfg() }).then(() => refreshAll());
           } else if (t3plan.action === "setChannel" && !sourceManagedT3) {
-            t3code.setChannelOnVm(t3plan.channel).then(() => refreshAll());
+            t3code.setChannelOnVm(t3plan.channel, { cfg: activeCfg() }).then(() => refreshAll());
           }
         }
         // Automatic checkpoints are a HYPER-V property, decided when the VM is
@@ -1896,10 +2261,15 @@ function handleMessage(message, webview, context) {
       const scriptsDir = resolveScriptsDir();
       if (!scriptsDir) { warnNoScriptsDir(); return; }
       const action = message.mode === "redownload" ? "redownload" : "reinstall";
+      const rebuildTarget = actionTarget();
       (async () => {
-        var pf = await lifecyclePreFlight(action === "redownload" ? "redownloading" : "reinstalling");
+        var pf = await lifecyclePreFlight(action === "redownload" ? "redownloading" : "reinstalling", rebuildTarget);
         if (!pf.ok) { showPreFlightBlock(pf); return; }
-        effectiveProjects().then(function (projects) { lifecycle.run(action, { scriptsDir: scriptsDir, backupMode: message.backup, projects: projects }); });
+        // A rebuild DELETES a VM, so it must land on the instance the button was
+        // pressed for — never on whichever one the window switched to meanwhile.
+        const projects = await effectiveProjects(rebuildTarget.instance);
+        if (targetSuperseded(rebuildTarget, action === "redownload" ? "Redownload" : "Reinstall")) return;
+        lifecycle.run(action, { scriptsDir: scriptsDir, backupMode: message.backup, projects: projects, instance: rebuildTarget.instance });
       })();
       return;
     }
@@ -1943,26 +2313,29 @@ function handleMessage(message, webview, context) {
       if (id === "openAgentWeb") {
         // The agents-list ▷ button: only T3 Code has a browser UI today. Mints a
         // one-time pairing link over SSH and opens it in the host browser.
-        if (message.agent === "t3code") t3code.openWebUi();
+        if (message.agent === "t3code") t3code.openWebUi({ cfg: activeCfg(), instance: activeInstance() });
         return;
       }
-      if (id === "connect") { remote.openOnVm({ path: "/root/repos", newWindow: false }); return; }
+      if (id === "connect") { remote.openOnVm({ path: "/root/repos", newWindow: false, cfg: activeCfg() }); return; }
       if (id === "startConnect") { runStartAndConnect(); return; }
       if (id === "shutdown") { runShutdown(); return; }
       if (id === "exportConfig") {
         const scriptsDir = resolveScriptsDir();
         if (!scriptsDir) { warnNoScriptsDir(); return; }
-        lifecycle.run(id, { scriptsDir }); // export doesn't touch project selection
+        lifecycle.run(id, { scriptsDir, instance: actionTarget().instance }); // export doesn't touch project selection
         return;
       }
       if (id === "reprovision" || id === "reinstall" || id === "redownload") {
         const scriptsDir = resolveScriptsDir();
         if (!scriptsDir) { warnNoScriptsDir(); return; }
+        const lifeTarget = actionTarget();
         (async () => {
-          var pf = await lifecyclePreFlight(id === "reprovision" ? "reprovisioning" : id === "reinstall" ? "reinstalling" : "redownloading");
+          var pf = await lifecyclePreFlight(id === "reprovision" ? "reprovisioning" : id === "reinstall" ? "reinstalling" : "redownloading", lifeTarget);
           if (!pf.ok) { showPreFlightBlock(pf); return; }
-          effectiveProjects().then(function (projects) { lifecycle.run(id, { scriptsDir: scriptsDir, projects: projects }); });
-          if (id === "reprovision") beginReprovisionFastRefresh();
+          const projects = await effectiveProjects(lifeTarget.instance);
+          if (targetSuperseded(lifeTarget, id === "reprovision" ? "Reprovision" : id === "reinstall" ? "Reinstall" : "Redownload")) return;
+          const started = lifecycle.run(id, { scriptsDir: scriptsDir, projects: projects, instance: lifeTarget.instance });
+          if (started !== false && id === "reprovision") beginReprovisionFastRefresh();
         })();
         return;
       }
@@ -2408,11 +2781,26 @@ function openPanel(context) {
   setupPanel(p, context);
 }
 
-function activate(context) {
+// activate is ASYNC so the Remote-SSH adoption below can be AWAITED: workspaceState
+// .update() is a Thenable, and every instance-dependent step that follows (the status
+// bar, the auto-open, the mic auto-arm, the notification watcher, the config-sync
+// bootstrap) must see the adopted selection, not the one it replaced. VS Code waits on
+// the returned promise before treating the extension as active.
+async function activate(context) {
+  extensionContext = context;
   // Route lifecycle/update launch logging into the Construct Output channel, and let
   // `construct.debug` keep launched consoles open so errors are readable.
   lifecycle.configure({ log: logLine, isDebug: debugEnabled });
-  logLine(`activate: remoteAuthority=${safeRemoteAuthority() || "(local)"} debug=${debugEnabled()}`);
+  // A window attached to a known instance's VM adopts it BEFORE anything probes, so
+  // the first push already describes the machine this window is working on.
+  await adoptRemoteInstance();
+  logLine(`activate: remoteAuthority=${safeRemoteAuthority() || "(local)"} debug=${debugEnabled()} instance=${activeInstance().name}`);
+  // Status-bar instance indicator: created always, SHOWN only when more than one
+  // instance exists (syncInstanceStatusItem), so a single-VM install sees no new UI.
+  instanceStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+  instanceStatusItem.command = "construct.switchInstance";
+  context.subscriptions.push(instanceStatusItem);
+  syncInstanceStatusItem();
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider("construct.panel", new ConstructViewProvider(context), {
       webviewOptions: { retainContextWhenHidden: true },
@@ -2421,6 +2809,7 @@ function activate(context) {
     vscode.commands.registerCommand("construct.refresh", () => refreshAll()),
     vscode.commands.registerCommand("construct.showLogs", () => showLogs()),
     vscode.commands.registerCommand("construct.chooseTheme", () => openThemePicker(context)),
+    vscode.commands.registerCommand("construct.switchInstance", () => runSwitchInstance()),
     // Clicking a VM notification's toast opens the control panel: Windows launches
     // the toast's vscode:// URI, which lands here. Data-free by design — the URI is
     // fixed in src/notify.js, so nothing VM-authored ever reaches this handler.
@@ -2433,6 +2822,11 @@ function activate(context) {
       if (e.affectsConfiguration("construct.notifications")) {
         stopNotifyWatch();
         if (notificationsEnabled()) startNotifyWatch();
+      }
+      // The global instance pin changed: re-resolve and retarget everything.
+      if (e.affectsConfiguration("construct.instance")) {
+        registryNow(true);
+        void onInstanceChanged();
       }
     })
   );
@@ -2475,7 +2869,7 @@ function maybeAutoOpenPanel(context) {
   // from openPanel/createWebviewPanel) can never break extension activation. The
   // flag is set BEFORE openPanel, so even a throw won't reopen on the next reload.
   try {
-    if (!remote.shouldAutoOpenPanel(safeRemoteAuthority(), context.workspaceState.get(KEY))) return;
+    if (!remote.shouldAutoOpenPanel(safeRemoteAuthority(), context.workspaceState.get(KEY), activeCfg())) return;
     context.workspaceState.update(KEY, true);
     openPanel(context);
   } catch (_) { /* never break activation for an optional convenience */ }
@@ -2491,6 +2885,7 @@ function deactivate() {
   hostAudio = undefined;
   try { if (repatchTimer) clearTimeout(repatchTimer); } catch (_) {}
   repatchTimer = null;
+  hostAudioInstance = null;
   stopAutoRefresh();
   stopNotifyWatch();
   stopConfigWatcher();

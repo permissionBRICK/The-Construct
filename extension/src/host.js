@@ -68,12 +68,22 @@ function findScriptsDir(base) {
 }
 
 /**
- * Resolve the scripts dir. An explicit override (the `construct.scriptsDir`
- * setting) wins when it points at a real directory — the user knows where their
- * checkout is; otherwise auto-detect the newest install. Returns a path or null.
- * `opts`: { scriptsDir?, localAppData?, env? }.
+ * Resolve the scripts dir. Precedence, most specific first:
+ *   1. the ACTIVE INSTANCE's `scriptsDir` (registry field; null = "not pinned"),
+ *   2. the machine-wide `construct.scriptsDir` setting override,
+ *   3. auto-detect the newest install under <base>\The-Construct.
+ * Each override is used only when it points at a real directory, so a stale path
+ * degrades to detection rather than to "no install found". Returns a path or null.
+ * `opts`: { instanceScriptsDir?, scriptsDir?, localAppData?, env? }.
+ *
+ * The default instance carries `scriptsDir: null`, so an install with no registry
+ * resolves exactly as it did before instances existed. The settings file
+ * (.construct-settings.json) stays per SCRIPTS DIR — two instances that share a
+ * scripts dir deliberately share its settings.
  */
 function resolveScriptsDir(opts = {}) {
+  const pinned = opts.instanceScriptsDir != null ? String(opts.instanceScriptsDir).trim() : "";
+  if (pinned && isDir(pinned)) return pinned;
   const override = opts.scriptsDir != null ? String(opts.scriptsDir).trim() : "";
   if (override && isDir(override)) return override;
   const base = opts.localAppData != null ? String(opts.localAppData) : localAppData(opts.env);
