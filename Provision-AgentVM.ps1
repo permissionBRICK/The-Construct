@@ -1797,7 +1797,7 @@ if ($explicitEndpoint -and $VmHost -eq "agent-vm.mshome.net" -and $SshPort -eq 2
     # Only the reset case needs the guest's saved keys (values may carry config-set.sh's
     # single quotes; strip them). A failed read degrades to "nothing saved".
     try {
-        $savedRaw = Invoke-Ssh -Sudo -Command "f=/etc/construct/config.env; printf 'H=%s\nP=%s\n' \"\$(sed -n 's/^CONSTRUCT_EXTERNAL_HOST=//p' \"\$f\" 2>/dev/null | head -1)\" \"\$(sed -n 's/^CONSTRUCT_EXTERNAL_SSH_PORT=//p' \"\$f\" 2>/dev/null | head -1)\""
+        $savedRaw = Invoke-Ssh -Sudo -Command "f=/etc/construct/config.env; printf 'H=%s\nP=%s\n' `"`$(sed -n 's/^CONSTRUCT_EXTERNAL_HOST=//p' `"`$f`" 2>/dev/null | head -1)`" `"`$(sed -n 's/^CONSTRUCT_EXTERNAL_SSH_PORT=//p' `"`$f`" 2>/dev/null | head -1)`""
         foreach ($line in @($savedRaw)) {
             $l = ([string]$line).Trim()
             if ($l -like 'H=*') { $savedExtHost = $l.Substring(2).Trim("'") }
