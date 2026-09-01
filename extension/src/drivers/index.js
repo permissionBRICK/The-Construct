@@ -10,7 +10,8 @@
 // Driver shape:
 //   {
 //     backend: string,
-//     capabilities: { checkpoints: bool, console: "vmconnect"|"none"|<url>, suspend: bool },
+//     capabilities: { checkpoints: bool, console: "vmconnect"|"none"|<url>, suspend: bool,
+//                     hostLifecycle: bool },
 //     queryVmState(instance, opts)        -> Promise<'running'|'off'|'absent'|'unknown'>
 //     queryAutoCheckpoints(instance, opts) -> Promise<'on'|'off'|'absent'|'unsupported'|'unknown'>
 //     startVm(instance, opts)             -> bool (spawned?)
@@ -41,7 +42,7 @@ function unknownDriver(backend) {
     `for this instance. Update The Construct if this instance was created by a newer version.`;
   return {
     backend: name,
-    capabilities: { checkpoints: false, console: "none", suspend: false },
+    capabilities: { checkpoints: false, console: "none", suspend: false, hostLifecycle: false },
     unknown: true,
     queryVmState() { return Promise.resolve("unknown"); },
     queryAutoCheckpoints() { return Promise.resolve("unknown"); },
@@ -68,4 +69,46 @@ function listBackends() {
   return Object.keys(DRIVERS);
 }
 
-module.exports = { getDriver, listBackends, unknownDriver, DEFAULT_BACKEND };
+// ── Which lifecycle actions a backend may drive ──────────────────────────────
+// The host PowerShell lifecycle scripts (Auto-Install.ps1, Create-AgentVM.ps1,
+// Set-AgentVmCheckpoints.ps1) speak to the LOCAL Hyper-V of the machine they run on —
+// they load the hyperv-local driver and know no other. So for any other backend the
+// actions that CREATE, DELETE or reconfigure a VM would operate on a local VM that
+// merely shares the instance's name: Reinstall on a "hyperv-remote" instance can wipe
+// the local Agent-VM, and setCheckpoints can rewrite the local VM's checkpoint policy.
+//
+// reprovision and exportConfig are different in kind: they are pure SSH to an
+// ALREADY-RUNNING VM at the instance's endpoint, so they are correct for every backend
+// that has one.
+//
+// The gate is a CAPABILITY (`hostLifecycle`), declared by the driver, not a backend
+// name checked in lifecycle.js: a future remote driver re-enables these actions by
+// declaring what it can do.
+const HYPERVISOR_ACTIONS = Object.freeze(["reinstall", "redownload", "setCheckpoints"]);
+
+/** Does `action` touch the hypervisor (rather than just SSH into the VM)? Pure. */
+function isHypervisorAction(action) {
+  return HYPERVISOR_ACTIONS.indexOf(String(action)) >= 0;
+}
+
+/**
+ * May `action` be launched for an instance on `backend`? Returns
+ * { ok: true } or { ok: false, reason }. Never throws; an unknown backend refuses
+ * the hypervisor actions (its driver declares no capabilities). Pure.
+ */
+function lifecycleSupport(backend, action) {
+  if (!isHypervisorAction(action)) return { ok: true };
+  const driver = getDriver(backend);
+  const caps = driver.capabilities || {};
+  if (caps.hostLifecycle === true) return { ok: true };
+  return {
+    ok: false,
+    reason: `the "${driver.backend || String(backend)}" backend can't be rebuilt or reconfigured from here — ` +
+      "remote lifecycle arrives with the remote driver. Reprovision and Export config still work.",
+  };
+}
+
+module.exports = {
+  getDriver, listBackends, unknownDriver, DEFAULT_BACKEND,
+  HYPERVISOR_ACTIONS, isHypervisorAction, lifecycleSupport,
+};

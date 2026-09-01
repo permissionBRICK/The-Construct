@@ -13,6 +13,7 @@ const path = require("path");
 const inst = require("../src/instances");
 const ssh = require("../src/ssh");
 const life = require("../src/lifecycle");
+const drivers = require("../src/drivers");
 const host = require("../src/host");
 const notify = require("../src/notify");
 const audio = require("../src/audio");
@@ -235,6 +236,137 @@ ok("parity: uppercase auth reported", mx.problems.some((p) => p.includes("servic
 ok("parity: scalar service reported", mx.problems.some((p) => p.includes('"service" must be an object')));
 ok("parity: bad port reported", mx.problems.some((p) => p.includes("invalid sshPort")));
 
+// ── IDENTITY-FIELD FORMAT RULES (mirrored in test/instances.test.ps1) ────────
+// A field of the right TYPE can still be unusable — or hostile — once it reaches a
+// PowerShell command line, an ssh argv, a key path or a git ref. Such an entry is
+// SKIPPED WHOLE (never partially used) and reported.
+console.log("\n=== identity-field format rules ===");
+const badIdentity = [
+  ["vmHost-injection", { sshHost: "-x; Start-Process calc; #" }, "sshHost"],
+  ["vmHost-space", { sshHost: "buildbox local" }, "sshHost"],
+  ["vmHost-empty-label", { sshHost: "buildbox..local" }, "sshHost"],
+  // An EMBEDDED newline is the JS/PS parity trap: .NET's `$` matches just before a
+  // final newline where JavaScript's does not, so the PS rules anchor with \A..\z.
+  // (A value is trimmed first by both readers, so only an INNER newline survives.)
+  ["vmHost-newline", { sshHost: "buildbox\nlocal" }, "sshHost"],
+  ["alias-newline", { hostAlias: "work\nvm" }, "hostAlias"],
+  ["branch-newline", { configBranch: "vm\nwork" }, "configBranch"],
+  ["alias-path", { hostAlias: "../../etc/passwd" }, "hostAlias"],
+  ["alias-space", { hostAlias: "work vm" }, "hostAlias"],
+  ["key-path", { keyName: "..\\..\\id_rsa" }, "keyName"],
+  ["key-slash", { keyName: "sub/dir_ed25519" }, "keyName"],
+  // keyName is a WINDOWS FILE NAME (~\.ssh\<keyName>), not just a token: Win32 strips
+  // a trailing dot (so this would write over the DEFAULT instance's key file), and a
+  // device stem is not a creatable file at all — provisioning would fail with the VM
+  // already built. hostAlias keeps the plain token rule; an ssh alias is not a path.
+  ["key-trailing-dot", { keyName: "agent_vm_ed25519." }, "keyName"],
+  ["key-device-con", { keyName: "CON" }, "keyName"],
+  ["key-device-lowercase", { keyName: "con" }, "keyName"],
+  ["key-device-nul", { keyName: "NUL" }, "keyName"],
+  ["key-device-com1", { keyName: "COM1" }, "keyName"],
+  ["key-device-lpt9", { keyName: "lpt9" }, "keyName"],
+  ["key-device-with-extension", { keyName: "CON.txt" }, "keyName"],
+  ["key-device-two-extensions", { keyName: "con.key.txt" }, "keyName"],
+  ["vmname-dot", { vmName: "work.vm" }, "vmName"],
+  ["vmname-space", { vmName: "Work VM" }, "vmName"],
+  ["vmname-dash-start", { vmName: "-work" }, "vmName"],
+  ["branch-reserved", { configBranch: "main" }, "configBranch"],
+  ["branch-dotdot", { configBranch: "vm..x" }, "configBranch"],
+  ["branch-lock", { configBranch: "vm-x.lock" }, "configBranch"],
+  ["branch-case-hijack", { configBranch: "VM" }, "configBranch"],
+];
+for (const [label, entry, field] of badIdentity) {
+  const r = inst.load({ path: writeRegistry(JSON.stringify({ version: 1, instances: { "bad-vm": entry } })) });
+  ok(`identity(${label}): the instance is SKIPPED`, !r.byName["bad-vm"]);
+  ok(`identity(${label}): the problem names "${field}"`, r.problems.some((p) => p.includes(`"${field}"`)));
+  ok(`identity(${label}): the problem says skipped`, r.problems.some((p) => p.includes("skipped")));
+}
+// A skipped entry never takes the default instance with it.
+const skipReg = inst.load({ path: writeRegistry(JSON.stringify({
+  version: 1, instances: { "bad-vm": { sshHost: "no spaces allowed" }, "good-vm": {} },
+})) });
+ok("identity: a valid sibling still loads", !!skipReg.byName["good-vm"]);
+ok("identity: the default instance is still synthesized", inst.isDefaultInstance(skipReg.byName["agent-vm"]));
+// An explicit default-instance entry that is broken degrades to today's literals
+// rather than to a half-usable one.
+const brokenDefault = inst.load({ path: writeRegistry(JSON.stringify({
+  version: 1, instances: { "agent-vm": { sshHost: "-oProxyCommand=calc" } },
+})) });
+ok("identity: a broken agent-vm entry falls back to the synthesized default",
+  inst.isDefaultInstance(brokenDefault.byName["agent-vm"]));
+// The shapes that MUST keep working.
+for (const good of [
+  { sshHost: "buildbox.example.local" }, { sshHost: "10.0.0.7" }, { sshHost: "host" },
+  { sshHost: "fe80::1" }, { sshHost: "2001:db8::8a2e:370:7334" },
+  { keyName: "construct_work-vm_ed25519" }, { hostAlias: "work-vm.local" },
+  { vmName: "Work-VM" }, { configBranch: "vm-work" }, { configBranch: "feature.x_1" },
+  // Both readers TRIM a string field first, so surrounding whitespace is not a problem.
+  { sshHost: " buildbox.local\n" },
+]) {
+  const r = inst.load({ path: writeRegistry(JSON.stringify({ version: 1, instances: { "work-vm": good } })) });
+  ok(`identity: ${JSON.stringify(good)} is accepted`, !!r.byName["work-vm"]);
+}
+// IPv6: a character-class regex would wave through `::::`, `1::2::3` and friends, so
+// the rule shape-filters and then PARSES. The same matrix runs in test/instances.test.ps1
+// (.NET's IPAddress.TryParse there) — the two readers must agree address for address.
+const IPV6_MATRIX = [
+  ["::", true], ["::1", true], ["fe80::1", true], ["2001:db8::8a2e:370:7334", true],
+  ["1:2:3:4:5:6:7:8", true], ["0:0:0:0:0:0:0:0", true], ["1::", true], ["::2", true],
+  ["::ffff:10.0.0.1", true],
+  ["::::", false], ["1::2::3", false], ["1:2:3:4:5:6:7:8:9", false], ["1.2.3:4", false],
+  ["....:", false], [":::", false], [":1", false], ["1:", false], ["12345::1", false],
+  ["::ffff:999.1.1.1", false], ["::ffff:1.2.3.004", false],
+  // Rejected by SHAPE on both sides, precisely because the two parsers disagree about
+  // them: Node accepts the zone id, .NET accepts the brackets.
+  ["fe80::1%eth0", false], ["[::1]", false],
+];
+for (const [v, want] of IPV6_MATRIX) {
+  eq(`ipv6: ${JSON.stringify(v)} -> ${want}`, inst.isIpv6Literal(v), want);
+  eq(`ipv6: ${JSON.stringify(v)} as an endpoint -> ${want}`, inst.isHostEndpoint(v), want);
+}
+for (const bad of ["::::", "1::2::3", "1:2:3:4:5:6:7:8:9", "1.2.3:4", "....:", "fe80::1%eth0"]) {
+  const r = inst.load({ path: writeRegistry(JSON.stringify({ version: 1, instances: { "bad-vm": { sshHost: bad } } })) });
+  ok(`ipv6: a bogus literal (${bad}) skips the instance`, !r.byName["bad-vm"]);
+  ok(`ipv6: ...and is reported (${bad})`, r.problems.some((p) => p.includes("is not a host name or IP address")));
+}
+
+// BOTH host spellings are validated, not only the one that wins normalization:
+// deriveDefaults prefers sshHost, so an invalid vmHost would otherwise sit unnoticed in
+// the file for whatever reads that field next.
+const dualHost = inst.load({ path: writeRegistry(JSON.stringify({
+  version: 1, instances: { "work-vm": { sshHost: "good.local", vmHost: "-x; calc" } },
+})) });
+ok("identity: an invalid LOSING vmHost still skips the instance", !dualHost.byName["work-vm"]);
+ok("identity: ...and names the field that is wrong", dualHost.problems.some((p) => p.includes('"vmHost"')));
+const dualHost2 = inst.load({ path: writeRegistry(JSON.stringify({
+  version: 1, instances: { "work-vm": { sshHost: "-x; calc", vmHost: "good.local" } },
+})) });
+ok("identity: an invalid WINNING sshHost skips it too", !dualHost2.byName["work-vm"]);
+ok("identity: ...reported once, not twice",
+  dualHost2.problems.filter((p) => p.includes("is not a host name or IP address")).length === 1,
+  JSON.stringify(dualHost2.problems));
+const dualOk = inst.load({ path: writeRegistry(JSON.stringify({
+  version: 1, instances: { "work-vm": { sshHost: "good.local", vmHost: "other.local" } },
+})) });
+eq("identity: two VALID spellings still load, sshHost winning", dualOk.byName["work-vm"].vmHost, "good.local");
+
+// The key-file rule is STRICTER than the alias rule, and only for keyName.
+for (const v of ["CON", "con", "NUL", "COM1", "lpt9", "CON.txt", "con.key.txt", "agent_vm_ed25519."]) {
+  ok(`keyfile: ${JSON.stringify(v)} is refused as a key file name`, !inst.isKeyFileName(v));
+  ok(`keyfile: ${JSON.stringify(v)} is still a fine ssh alias`, inst.isSafeToken(v));
+  const r = inst.load({ path: writeRegistry(JSON.stringify({ version: 1, instances: { "work-vm": { hostAlias: v } } })) });
+  ok(`keyfile: ...so hostAlias ${JSON.stringify(v)} still loads`, !!r.byName["work-vm"]);
+}
+for (const v of ["construct_work-vm_ed25519", "agent_vm_ed25519", "com10_key", "console_key", "a", "nul_key", "con-1"]) {
+  ok(`keyfile: ${JSON.stringify(v)} is accepted`, inst.isKeyFileName(v));
+}
+eq("keyfile: the DEFAULT key name is unaffected", inst.isKeyFileName(inst.DEFAULT_INSTANCE.keyName), true);
+eq("keyfile: a derived key name is unaffected", inst.isKeyFileName(inst.deriveDefaults("work-vm", {}).keyName), true);
+
+deepEq("identity: every derived default passes its own rules",
+  inst.identityProblems(inst.deriveDefaults("work-vm", {})), []);
+deepEq("identity: today's literals pass", inst.identityProblems(inst.DEFAULT_INSTANCE), []);
+
 // Port boundaries + numbers no Int32 can hold. A huge sshPort must be REPORTED and
 // fall back to 22, never crash the reader (PowerShell's [int] cast throws on these,
 // which would have escaped Read-ConstructInstances and broken "never throws").
@@ -298,11 +430,22 @@ eq("precedence: registry default last",
   inst.resolveActive({ registry: three, setting: "", workspaceValue: "" }).name, "b-vm");
 eq("precedence: no inputs at all -> registry default",
   inst.resolveActive({ registry: three }).name, "b-vm");
+// An INVALID higher-precedence candidate is skipped, not promoted into a fallback: a
+// stale global `construct.instance` must not drag a window that has its own valid
+// selection back to the registry default.
 const goneSetting = inst.resolveActive({ registry: three, setting: "deleted-vm", workspaceValue: "c-vm" });
-eq("precedence: unknown setting falls back to the registry default", goneSetting.name, "b-vm");
-ok("precedence: unknown setting reports a problem", !!goneSetting.problem);
+eq("precedence: unknown setting yields to the still-valid workspace selection", goneSetting.name, "c-vm");
+eq("precedence: ...and reports it as the workspace source", goneSetting.source, "workspace");
+ok("precedence: unknown setting still reports a problem", !!goneSetting.problem);
+ok("precedence: the problem names the skipped value", goneSetting.problem.includes("deleted-vm"));
+const goneBoth = inst.resolveActive({ registry: three, setting: "deleted-vm", workspaceValue: "also-gone" });
+eq("precedence: only when EVERY candidate is invalid does the registry default win", goneBoth.name, "b-vm");
+eq("precedence: ...reported as the default source", goneBoth.source, "default");
+eq("precedence: ...with one problem per skipped candidate", goneBoth.problems.length, 2);
 const goneWorkspace = inst.resolveActive({ registry: three, setting: "", workspaceValue: "deleted-vm" });
 eq("precedence: unknown workspace value falls back", goneWorkspace.name, "b-vm");
+ok("precedence: a valid selection reports no problem",
+  !inst.resolveActive({ registry: three, setting: "a-vm" }).problem);
 eq("precedence: with NO registry, everything lands on agent-vm",
   inst.resolveActive({ registry: empty, setting: "", workspaceValue: "" }).name, "agent-vm");
 
@@ -423,7 +566,7 @@ deepEq("HostAudio: no cfg at all still probes the module default", noCfgKeyPaths
 // ── lifecycle.buildInvocation: default argv byte-identical, instance args gated ─
 console.log("\n=== lifecycle invocation ===");
 const SETTINGS = { gitName: "Neo", gitEmail: "neo@zion.io", serveWeb: true, mic: false };
-const ALL = ["VmHost", "HostAlias", "SshPort", "LocalKeyName", "VmName"];
+const ALL = ["VmHost", "HostAlias", "SshPort", "LocalKeyName", "VmName", "ConfigBranch"];
 for (const action of ["reprovision", "exportConfig", "reinstall", "redownload"]) {
   const bare = life.buildInvocation(action, { settings: SETTINGS, backupDir: "C:\\b", enabled: true });
   const withDefault = life.buildInvocation(action, {
@@ -472,16 +615,133 @@ const chkI = life.buildInvocation("setCheckpoints", { enabled: false, instance: 
 eq("setCheckpoints(instance): -VmName", pair(chkI.args, "-VmName"), "work-vm");
 eq("setCheckpoints(instance): -Enabled preserved", pair(chkI.args, "-Enabled"), "false");
 
-// Version skew: a scripts dir that declares only some parameters gets only those.
+// ── Version skew FAILS CLOSED for a non-default instance ────────────────────
+// Dropping an identity parameter the script doesn't declare does not "degrade
+// gracefully" — it RETARGETS the action at whatever the script defaults to, i.e. the
+// DEFAULT VM. Reinstall would then delete the wrong VM, reprovision would re-key it.
+// So an install that can't take the full identity is refused, loudly.
 const partial = life.buildInvocation("reprovision", { settings: {}, instance: workInst, instanceParams: ["VmHost", "HostAlias"] });
-ok("skew: declared params emitted", partial.args.includes("-VmHost") && partial.args.includes("-HostAlias"));
-ok("skew: undeclared -SshPort dropped", partial.args.indexOf("-SshPort") < 0);
-ok("skew: undeclared -LocalKeyName dropped", partial.args.indexOf("-LocalKeyName") < 0);
+ok("skew: a partially-declaring Provision-AgentVM.ps1 is REFUSED", partial.blocked === true);
+ok("skew: the refusal names the missing parameters",
+  /-SshPort/.test(partial.reason) && /-LocalKeyName/.test(partial.reason));
+ok("skew: the refusal says what to do", /Update the Construct scripts/i.test(partial.reason));
+ok("skew: a refusal carries NO args to launch", partial.args === undefined && partial.script === undefined);
 const none = life.buildInvocation("reprovision", { settings: {}, instance: workInst, instanceParams: [] });
-ok("skew: an old scripts dir gets NO target args (runs as today rather than failing to bind)",
-  !none.args.some((a) => String(a).startsWith("-Vm") || a === "-HostAlias" || a === "-SshPort" || a === "-LocalKeyName"));
+ok("skew: an old scripts dir is refused rather than run against the default VM", none.blocked === true);
+for (const action of ["reinstall", "redownload", "setCheckpoints"]) {
+  const oldAi = life.buildInvocation(action, { settings: {}, enabled: true, instance: workInst, instanceParams: [] });
+  ok(`skew: ${action} without -VmName is refused (it would rebuild the DEFAULT VM)`, oldAi.blocked === true);
+  ok(`skew: ${action} refusal names -VmName`, /-VmName/.test(oldAi.reason));
+}
+const exportOld = life.buildInvocation("exportConfig", { backupDir: "C:\\b", instance: workInst, instanceParams: ["VmHost"] });
+ok("skew: exportConfig against an old provisioner is refused too", exportOld.blocked === true);
+// The DEFAULT instance is never blocked — that path needs no targeting at all.
+for (const action of ["reprovision", "exportConfig", "reinstall", "redownload", "setCheckpoints"]) {
+  const dflt = life.buildInvocation(action, { settings: SETTINGS, backupDir: "C:\\b", enabled: true, instance: d, instanceParams: [] });
+  ok(`skew: the default instance is never blocked (${action})`, !dflt.blocked && !!dflt.script);
+  ok(`skew: no instance at all is never blocked (${action})`,
+    !life.buildInvocation(action, { settings: SETTINGS, backupDir: "C:\\b", enabled: true, instanceParams: [] }).blocked);
+}
+deepEq("checkInstanceSupport: default instance -> null", life.checkInstanceSupport("reinstall", d, []), null);
+deepEq("checkInstanceSupport: no instance -> null", life.checkInstanceSupport("reinstall", null, []), null);
+deepEq("checkInstanceSupport: unprobed (undefined) params -> null",
+  life.checkInstanceSupport("reinstall", workInst, undefined), null);
 deepEq("instanceArgs: default instance -> []", life.instanceArgs("reprovision", d, ALL), []);
 deepEq("instanceArgs: unknown action -> []", life.instanceArgs("nonsense", workInst, ALL), []);
+
+// ── Backend capability gate: only hyperv-local is driven by the host scripts ─
+// The host PowerShell scripts speak to the LOCAL Hyper-V, so a rebuild of a remote
+// instance would create/delete a LOCAL VM that merely shares the name.
+console.log("\n=== backend capability gate ===");
+const remoteInst = inst.deriveDefaults("work-vm", { backend: "hyperv-remote", sshHost: "buildbox.local", sshPort: 2201 });
+eq("gate: the fixture really is hyperv-remote", remoteInst.backend, "hyperv-remote");
+for (const action of ["reinstall", "redownload", "setCheckpoints"]) {
+  const r = life.buildInvocation(action, { settings: SETTINGS, enabled: true, instance: remoteInst, instanceParams: ALL });
+  ok(`gate: ${action} is refused for a hyperv-remote instance`, r.blocked === true);
+  ok(`gate: ${action} explains the remote driver is missing`, /remote driver/i.test(r.reason));
+}
+for (const action of ["reprovision", "exportConfig"]) {
+  const r = life.buildInvocation(action, { settings: SETTINGS, backupDir: "C:\\b", instance: remoteInst, instanceParams: ALL });
+  ok(`gate: ${action} stays ALLOWED for hyperv-remote (pure SSH to the VM)`, !r.blocked && !!r.script);
+  ok(`gate: ${action} still targets the remote endpoint`, r.args.includes("buildbox.local"));
+}
+// An unknown backend (a registry written by a newer Construct) is refused the same way.
+const alienInst = inst.deriveDefaults("work-vm", { sshHost: "buildbox.local" });
+alienInst.backend = "proxmox";
+ok("gate: an unknown backend is refused the hypervisor actions",
+  life.buildInvocation("reinstall", { settings: {}, instance: alienInst, instanceParams: ALL }).blocked === true);
+ok("gate: drivers.lifecycleSupport is the single source of truth",
+  drivers.lifecycleSupport("hyperv-local", "reinstall").ok === true &&
+  drivers.lifecycleSupport("hyperv-remote", "reinstall").ok === false &&
+  drivers.lifecycleSupport("hyperv-remote", "reprovision").ok === true);
+ok("gate: the local driver declares the capability the gate reads",
+  drivers.getDriver("hyperv-local").capabilities.hostLifecycle === true);
+
+// ── -ConfigBranch: emitted only when the provisioner would derive another ref ─
+console.log("\n=== config-sync branch threading ===");
+const repoRootScripts = path.join(__dirname, "..", "..");
+eq("branch: the default alias derives 'vm'", life.derivedConfigBranch("agent-vm"), "vm");
+eq("branch: an empty alias derives 'vm'", life.derivedConfigBranch(""), "vm");
+eq("branch: 'work' derives 'vm-work'", life.derivedConfigBranch("work"), "vm-work");
+eq("branch: a 'construct-' prefix is stripped", life.derivedConfigBranch("construct-work"), "vm-work");
+eq("branch: the alias is lowercased+trimmed", life.derivedConfigBranch("  Work-2  "), "vm-work-2");
+eq("branch: an unusable alias falls back to 'vm'", life.derivedConfigBranch("work/one"), "vm");
+eq("branch: an instance whose branch matches the derivation needs no override",
+  life.configBranchOverride(workInst), null);
+eq("branch: the default instance never overrides", life.configBranchOverride(d), null);
+const teamInst = inst.deriveDefaults("work-vm", { sshHost: "buildbox.local", configBranch: "vm-team" });
+eq("branch: a disagreeing configBranch IS an override", life.configBranchOverride(teamInst), "vm-team");
+for (const action of ["reprovision", "reinstall", "redownload"]) {
+  const same = life.buildInvocation(action, { settings: SETTINGS, instance: workInst, instanceParams: ALL });
+  ok(`branch: ${action} emits nothing when the derivation agrees`, same.args.indexOf("-ConfigBranch") < 0);
+  const over = life.buildInvocation(action, { settings: SETTINGS, instance: teamInst, instanceParams: ALL });
+  eq(`branch: ${action} carries the explicit branch`, pair(over.args, "-ConfigBranch"), "vm-team");
+  // ...and refuses rather than letting the VM be initialised on the derived ref.
+  const skew = life.buildInvocation(action, {
+    settings: SETTINGS, instance: teamInst,
+    instanceParams: ALL.filter((p) => p !== "ConfigBranch"),
+  });
+  ok(`branch: ${action} fails closed when -ConfigBranch can't be passed`, skew.blocked === true);
+  ok(`branch: ${action} refusal names the branch`, /vm-team/.test(skew.reason));
+}
+ok("branch: exportConfig never carries -ConfigBranch (it initialises no store)",
+  life.buildInvocation("exportConfig", { backupDir: "C:\\b", instance: teamInst, instanceParams: ALL })
+    .args.indexOf("-ConfigBranch") < 0);
+ok("branch: exportConfig is NOT blocked by a branch override either",
+  !life.buildInvocation("exportConfig", { backupDir: "C:\\b", instance: teamInst, instanceParams: ALL.filter((p) => p !== "ConfigBranch") }).blocked);
+ok("branch: setCheckpoints never carries -ConfigBranch",
+  life.buildInvocation("setCheckpoints", { enabled: true, instance: teamInst, instanceParams: ALL })
+    .args.indexOf("-ConfigBranch") < 0);
+// The PowerShell side must be able to receive it all the way down.
+if (fs.existsSync(path.join(repoRootScripts, "Auto-Install.ps1"))) {
+  for (const [file, want] of [["Auto-Install.ps1", true], ["Create-AgentVM.ps1", true], ["Provision-AgentVM.ps1", true]]) {
+    eq(`branch: ${file} declares -ConfigBranch`, life.scriptSupportsParam(repoRootScripts, file, "ConfigBranch"), want);
+  }
+}
+
+// ── buildCallCommand quotes VALUES, whatever they start with ────────────────
+// Registry fields are hand-editable, and the non-elevated launch embeds them in a
+// PowerShell command string: a value beginning with '-' must be data, not syntax.
+console.log("\n=== non-elevated command quoting ===");
+const hostile = inst.deriveDefaults("work-vm", { sshHost: "buildbox.local" });
+hostile.vmHost = "-x; Start-Process calc; #";
+const hostileInv = life.buildInvocation("reprovision", { settings: {}, instance: hostile, instanceParams: ALL });
+const hostileCmd = life.buildCallCommand("C:\\s\\Provision-AgentVM.ps1", hostileInv.args, hostileInv.argSpec);
+ok("quoting: a leading-dash VALUE is single-quoted, not emitted as code",
+  hostileCmd.includes("-VmHost '-x; Start-Process calc; #'"));
+ok("quoting: no bare Start-Process leaks into the command",
+  !/ Start-Process calc/.test(hostileCmd.replace(/'[^']*'/g, "")));
+ok("quoting: parameter names stay bare", hostileCmd.includes("-Action 'provision'"));
+ok("quoting: a targeted invocation carries the pair spec", Array.isArray(hostileInv.argSpec));
+// ...and the DEFAULT path keeps the LEGACY builder, so its command string is
+// byte-identical to the pre-instances one even for a value that starts with '-'.
+// (Pinned as a literal in extension/test/lifecycle.test.js too.)
+const defInv = life.buildInvocation("reprovision", { settings: SETTINGS, projects: ["-NoProfile", "p1"] });
+ok("quoting: the default path gets NO spec", defInv.argSpec === undefined);
+eq("quoting: ...so a leading-dash value is still emitted bare, as before",
+  life.buildCallCommand("C:\\s\\Provision-AgentVM.ps1", defInv.args, defInv.argSpec),
+  "& 'C:\\s\\Provision-AgentVM.ps1' -FromPanel -Action 'provision' -Projects -NoProfile,p1" +
+  " -GitUserName 'Neo' -GitEmail 'neo@zion.io' -VsCodeServeWeb 'true' -MicPassthrough 'false' -NonInteractive");
 
 // The parameter probe reads the REAL repo scripts (this worktree is a scripts dir).
 console.log("\n=== parameter probing against the real scripts ===");
@@ -492,8 +752,11 @@ if (fs.existsSync(path.join(repoRoot, life.PROVISION))) {
   ok("probe: Provision-AgentVM.ps1 declares -HostAlias", provParams.includes("HostAlias"));
   ok("probe: Provision-AgentVM.ps1 declares -SshPort", provParams.includes("SshPort"));
   ok("probe: Provision-AgentVM.ps1 declares -LocalKeyName", provParams.includes("LocalKeyName"));
+  ok("probe: Provision-AgentVM.ps1 declares -ConfigBranch", provParams.includes("ConfigBranch"));
+  // Auto-Install DERIVES the guest hostname/alias/key from -VmName and throws on a
+  // conflicting -VmHost, so identity there is -VmName only (+ the optional branch).
   const aiParams = life.instanceParamSupport(repoRoot, "reinstall");
-  deepEq("probe: reinstall only ever considers -VmName", aiParams, ["VmName"]);
+  deepEq("probe: reinstall considers -VmName and -ConfigBranch only", aiParams, ["VmName", "ConfigBranch"]);
   deepEq("probe: setCheckpoints only ever considers -VmName",
     life.instanceParamSupport(repoRoot, "setCheckpoints"), ["VmName"]);
   ok("probe: a made-up parameter is not found",
