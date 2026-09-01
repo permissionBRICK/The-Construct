@@ -382,15 +382,26 @@ fi
 # contract). Precedence: explicit non-empty env value > value saved in config.env
 # > built-in default. Empty env value means "keep the VM's saved choice", matching
 # the VSCODE_TUNNEL idiom used throughout this file.
+# Undo config-set.sh's rendering: values outside its safe set are written as
+# '...' with embedded apostrophes as '\'' -- the sed reader must decode that or a
+# reprovision would carry the quote characters into the value.
+_cfg_unquote() {
+  local v="$1"
+  if [[ ${#v} -ge 2 && "${v}" == \'*\' ]]; then
+    v="${v:1:${#v}-2}"
+    v="${v//\'\\\'\'/\'}"
+  fi
+  printf '%s' "${v}"
+}
 _external_host_saved=""
 if [[ -f "${CONFIG_FILE}" ]]; then
-  _external_host_saved="$(sed -n 's/^CONSTRUCT_EXTERNAL_HOST=//p' "${CONFIG_FILE}" | head -1 || true)"
+  _external_host_saved="$(_cfg_unquote "$(sed -n 's/^CONSTRUCT_EXTERNAL_HOST=//p' "${CONFIG_FILE}" | head -1 || true)")"
 fi
 CONSTRUCT_EXTERNAL_HOST="${CONSTRUCT_EXTERNAL_HOST:-${_external_host_saved:-}}"
 
 _external_ssh_port_saved=""
 if [[ -f "${CONFIG_FILE}" ]]; then
-  _external_ssh_port_saved="$(sed -n 's/^CONSTRUCT_EXTERNAL_SSH_PORT=//p' "${CONFIG_FILE}" | head -1 || true)"
+  _external_ssh_port_saved="$(_cfg_unquote "$(sed -n 's/^CONSTRUCT_EXTERNAL_SSH_PORT=//p' "${CONFIG_FILE}" | head -1 || true)")"
 fi
 CONSTRUCT_EXTERNAL_SSH_PORT="${CONSTRUCT_EXTERNAL_SSH_PORT:-${_external_ssh_port_saved:-22}}"
 

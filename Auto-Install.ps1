@@ -504,6 +504,13 @@ if ($PSBoundParameters.ContainsKey('VmHost') -and -not $PSBoundParameters.Contai
     throw "-VmHost '$VmHost' conflicts with -VmName '$VmName': the guest hostname is derived from -VmName (lowercased). Pass only -VmName."
 }
 
+# The lowercased VM name doubles as guest hostname, mshome DNS label, SSH alias and
+# key-name component, so it must be a single valid DNS label (the display name is
+# the same string; "Work-VM" is fine, "Work VM" or "work.vm" is not).
+if ($VmName.ToLower() -notmatch '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$') {
+    throw "-VmName '$VmName' is not usable as a hostname: use 1-63 letters, digits or hyphens (no spaces or dots), e.g. 'Work-VM'."
+}
+
 # Version-skew guard, BEFORE anything destructive: a non-default VM name needs a
 # Create-AgentVM.ps1 that accepts -VmName. An older colocated script would silently
 # create "Agent-VM" and the provisioner would then dial an address that never exists.

@@ -35,9 +35,20 @@ _external_ssh_port_override="${CONSTRUCT_EXTERNAL_SSH_PORT:-}"
 # Read ONLY the two identity keys -- never source config.env here: a sourced file
 # could override KEY_PATH & co. and would export unrelated values into the
 # privileged commands (ssh-keygen, sshd, systemctl) below.
+# Undo config-set.sh's rendering: values outside its safe set are written as
+# '...' with embedded apostrophes as '\'' -- the sed reader must decode that or a
+# reprovision would carry the quote characters into the value.
+_cfg_unquote() {
+  local v="$1"
+  if [[ ${#v} -ge 2 && "${v}" == \'*\' ]]; then
+    v="${v:1:${#v}-2}"
+    v="${v//\'\\\'\'/\'}"
+  fi
+  printf '%s' "${v}"
+}
 _read_cfg_key() {
   [[ -f "${CONFIG_FILE}" ]] || return 0
-  sed -n "s/^$1=//p" "${CONFIG_FILE}" | head -1 || true
+  _cfg_unquote "$(sed -n "s/^$1=//p" "${CONFIG_FILE}" | head -1 || true)"
 }
 CONSTRUCT_EXTERNAL_HOST="${_external_host_override:-$(_read_cfg_key CONSTRUCT_EXTERNAL_HOST)}"
 CONSTRUCT_EXTERNAL_SSH_PORT="${_external_ssh_port_override:-$(_read_cfg_key CONSTRUCT_EXTERNAL_SSH_PORT)}"
