@@ -23,6 +23,7 @@ const cp = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const host = require("./host");
+const instances = require("./instances");
 
 function vsc() { return require("vscode"); }
 
@@ -37,6 +38,75 @@ function normalizeBackupMode(bm) {
   return (bm === "existing" || bm === "wipe") ? bm : "save";
 }
 
+// ── Per-instance target arguments ────────────────────────────────────────────
+// Which target-identity parameters each launched script can actually take. The two
+// entry points differ, and getting this wrong is a BINDING FAILURE (an advanced
+// function refuses an unknown parameter, so the action never starts):
+//
+//   Provision-AgentVM.ps1 (reprovision / exportConfig)
+//       -VmHost <fqdn> -HostAlias <alias> -SshPort <n> -LocalKeyName <file>
+//       It dials the VM directly, so it needs the full endpoint. -LocalKeyName rides
+//       along because a non-default instance has its own key file; without it the
+//       provisioner would write the DEFAULT instance's key on top of this one.
+//
+//   Auto-Install.ps1 (reinstall / redownload)
+//       -VmName <name>  — and NOTHING else. Auto-Install DERIVES the guest hostname,
+//       the alias and the key name from -VmName, and it THROWS when a -VmHost is
+//       passed that disagrees with -VmName ("the guest hostname is derived from
+//       -VmName"). It declares -VmHost, so a naive "emit it if the script declares
+//       it" would break every non-default rebuild — hence the explicit per-script
+//       list here rather than a probe over one shared set.
+//
+//   Set-AgentVmCheckpoints.ps1 (setCheckpoints)
+//       -VmName <name> — it only talks to Hyper-V.
+//
+// For the DEFAULT instance NOTHING is emitted at all, so argv is byte-identical to
+// what shipped before instances existed. That is the regression bar these lists exist
+// to keep provable.
+const INSTANCE_PARAMS = {
+  reprovision: ["VmHost", "HostAlias", "SshPort", "LocalKeyName"],
+  exportConfig: ["VmHost", "HostAlias", "SshPort", "LocalKeyName"],
+  reinstall: ["VmName"],
+  redownload: ["VmName"],
+  setCheckpoints: ["VmName"],
+};
+
+/** The value each instance parameter carries, for one normalized instance. */
+function instanceParamValue(param, instance) {
+  switch (param) {
+    case "VmHost": return instance.vmHost;
+    case "HostAlias": return instance.hostAlias;
+    case "SshPort": return String(instance.sshPort);
+    case "LocalKeyName": return instance.keyName;
+    case "VmName": return instance.vmName;
+    default: return null;
+  }
+}
+
+/**
+ * The target-identity args for one action. Returns [] — the zero-change path — for a
+ * missing instance and for the DEFAULT instance (instances.isDefaultInstance).
+ *
+ * `declared` is the version-skew gate: the subset of INSTANCE_PARAMS[action] the
+ * INSTALLED script actually declares (lifecycle.run computes it with
+ * scriptSupportsParam; tests pass it explicitly). `undefined` means "no probe was
+ * done" and emits the full set — run() never does that, so an old scripts dir can't
+ * be handed a parameter it would reject. Pure.
+ */
+function instanceArgs(action, instance, declared) {
+  if (!instance || instances.isDefaultInstance(instance)) return [];
+  const wanted = INSTANCE_PARAMS[action];
+  if (!wanted) return [];
+  const supported = Array.isArray(declared) ? declared : null;
+  const out = [];
+  for (const p of wanted) {
+    if (supported && supported.indexOf(p) < 0) continue;
+    const v = instanceParamValue(p, instance);
+    if (v != null && String(v) !== "") out.push("-" + p, String(v));
+  }
+  return out;
+}
+
 /**
  * Build the script + PowerShell args for an action from the settings form shape.
  * Pure. `opts`: { settings, backupDir, backupMode }.
@@ -45,6 +115,13 @@ function normalizeBackupMode(bm) {
  *   reinstall    -> Auto-Install.ps1 -Action reinstall  -BackupMode <mode>
  *   redownload   -> Auto-Install.ps1 -Action redownload -BackupMode <mode>
  * Returns { script, args, destructive, elevate, label } or null for an unknown action.
+ *
+ * `opts.instance` (optional) is the ACTIVE INSTANCE (the normalized object from
+ * src/instances.js). For a non-default instance the action's target-identity args are
+ * emitted (see instanceArgs / INSTANCE_PARAMS), gated by `opts.instanceParams` — the
+ * parameters the installed script really declares. For the default instance (and when
+ * no instance is passed at all) NOTHING extra is emitted and argv is byte-identical to
+ * what shipped before instances existed.
  *
  * The agent password is deliberately NOT collected, stored, or passed (it would be
  * visible on the process command line and is only a manual-fallback login — normal
@@ -62,6 +139,9 @@ function buildInvocation(action, opts = {}) {
   // -FromPanel) keeps the pause so the window stays readable. Passed as a param (not
   // an env var) so it survives the UAC boundary for the elevated reinstall/redownload.
   args.push("-FromPanel");
+  // Target identity for a non-default instance ([] for the default one — the
+  // zero-change path). Named parameters, so their position in argv is irrelevant.
+  for (const tok of instanceArgs(action, opts.instance, opts.instanceParams)) args.push(tok);
   const pushPair = (flag, val) => { if (val != null && String(val).trim() !== "") args.push(flag, String(val)); };
   const pushBool = (flag, val) => { if (typeof val === "boolean") args.push(flag, val ? "true" : "false"); };
   // The control panel's project selection (persisted `projects`), so the script uses
@@ -233,6 +313,41 @@ function scriptSupportsT3CodeChannel(scriptsDir, action) {
   if (action === "reprovision") return check(PROVISION);
   if (action === "reinstall" || action === "redownload") return check(AUTO_INSTALL);
   return check(PROVISION) && check(AUTO_INSTALL);
+}
+
+/**
+ * Does `<scriptsDir>/<file>` DECLARE the parameter `$<name>`? The same
+ * comment-stripped declaration test the scriptSupports* gates use, generalized so the
+ * per-instance target arguments can be probed without one function per parameter.
+ * Unreadable/absent file -> false (drop the argument; the script's own default stands).
+ */
+function scriptSupportsParam(scriptsDir, file, name) {
+  if (!scriptsDir || !file || !name) return false;
+  let txt;
+  try { txt = fs.readFileSync(path.join(scriptsDir, file), "utf8"); } catch (_) { return false; }
+  const code = txt.replace(/<#[\s\S]*?#>/g, "").replace(/^[ \t]*#.*$/gm, "");
+  return new RegExp("\\$" + name + "\\s*(?:=|,|\\)|$)", "im").test(code);
+}
+
+/** The script an action launches (so the instance-arg probe reads the right file). */
+function scriptForAction(action) {
+  if (action === "reprovision" || action === "exportConfig") return PROVISION;
+  if (action === "reinstall" || action === "redownload") return AUTO_INSTALL;
+  if (action === "setCheckpoints") return CHECKPOINTS;
+  return null;
+}
+
+/**
+ * The subset of an action's instance parameters that the INSTALLED script declares —
+ * the version-skew gate for per-instance targeting. A scripts dir that predates B1
+ * yields [] and the action runs against the script's own defaults (which is exactly
+ * today's single-VM behaviour) rather than failing to bind.
+ */
+function instanceParamSupport(scriptsDir, action) {
+  const wanted = INSTANCE_PARAMS[action];
+  const file = scriptForAction(action);
+  if (!wanted || !file) return [];
+  return wanted.filter((p) => scriptSupportsParam(scriptsDir, file, p));
 }
 
 /** A PowerShell single-quoted string literal (embedded quotes doubled). */
@@ -429,7 +544,9 @@ function launchHostScript(opts) {
 }
 
 /**
- * Run a lifecycle action. `opts`: { scriptsDir, backupMode?, projects?, enabled?, env? }.
+ * Run a lifecycle action. `opts`: { scriptsDir, backupMode?, projects?, enabled?, env?,
+ * instance? }. `instance` is the active instance (src/instances.js); omitted or default
+ * => the launched argv is byte-identical to before instances existed.
  * scriptsDir must be pre-resolved by the caller (it owns the construct.scriptsDir
  * setting); `enabled` is the setCheckpoints on/off. The destructive actions confirm
  * first; everything launches a new host console.
@@ -452,6 +569,8 @@ function run(action, opts = {}) {
     backupMode: opts.backupMode,
     projects,
     enabled: opts.enabled,
+    instance: opts.instance,
+    instanceParams: instanceParamSupport(scriptsDir, action),
     supportsCheckpoints: scriptSupportsCheckpoints(scriptsDir),
     supportsT3CodeChannel: scriptSupportsT3CodeChannel(scriptsDir, action),
     supportsT3CodeLimitResume: scriptSupportsT3CodeLimitResume(scriptsDir, action),
@@ -489,6 +608,7 @@ function run(action, opts = {}) {
 
 module.exports = {
   PROVISION, AUTO_INSTALL, CHECKPOINTS, BACKUP_DIR_NAME,
+  INSTANCE_PARAMS, instanceArgs, scriptSupportsParam, scriptForAction, instanceParamSupport,
   normalizeBackupMode, buildInvocation, scriptSupportsCheckpoints, scriptSupportsT3CodeChannel,
   scriptSupportsT3CodeLimitResume,
   scriptSupportsOpenCodeBackgroundWatcher,
