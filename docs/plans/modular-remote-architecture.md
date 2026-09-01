@@ -504,4 +504,7 @@ zone identifiers (`fe80::1%12`) are not `%25`-encoded in guest-printed URLs, and
 SMB UNC (guest banner, `smb-status`, host auto-mount, provisioner summary) is built from
 the raw host, which Windows cannot use for IPv6 literals — derive one Windows-compatible
 SMB endpoint (or suppress SMB instructions when none exists) when the remote flow (B7)
-defines how SMB is reached through the service host.
+defines how SMB is reached through the service host. The host side has the same gap:
+`Provision-AgentVM.ps1` builds the SMB UNC and the OpenCode/summary URLs from the raw
+`-VmHost` (ignores the guest-reported `SMB_DNS`, no IPv6 bracketing) — centralize
+endpoint formatting there in the same batch.

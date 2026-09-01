@@ -294,7 +294,7 @@ Write-Host "=== External env suffix (zero-change + reset semantics) ===" -Foregr
 $provPath = Join-Path $repoRoot "Provision-AgentVM.ps1"
 $provTokens = $null; $provErrors = $null
 $provAst = [System.Management.Automation.Language.Parser]::ParseFile($provPath, [ref]$provTokens, [ref]$provErrors)
-foreach ($fnName in @('ConvertTo-PosixSingleQuoted', 'Get-ExternalEnvSuffix')) {
+foreach ($fnName in @('ConvertTo-PosixSingleQuoted', 'Get-ExternalEnvSuffix', 'ConvertFrom-SavedExternalIdentity')) {
     $fn = $provAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $fnName }, $true) | Select-Object -First 1
     ok "Provision-AgentVM defines $fnName" ($null -ne $fn)
     if ($fn) { Invoke-Expression $fn.Extent.Text }
@@ -315,6 +315,20 @@ if (Get-Command Get-ExternalEnvSuffix -ErrorAction SilentlyContinue) {
         ((Get-ExternalEnvSuffix -VmHost 'work-vm.mshome.net' -SshPort 22 -ExplicitlyBound $false) -eq " CONSTRUCT_EXTERNAL_HOST='work-vm.mshome.net' CONSTRUCT_EXTERNAL_SSH_PORT='22'")
     ok "suffix: non-default port always sent" `
         ((Get-ExternalEnvSuffix -VmHost 'agent-vm.mshome.net' -SshPort 2201 -ExplicitlyBound $true) -eq " CONSTRUCT_EXTERNAL_HOST='agent-vm.mshome.net' CONSTRUCT_EXTERNAL_SSH_PORT='2201'")
+    # The remote read returns ONE scalar with both lines (Invoke-Ssh uses Out-String).
+    $stock = ConvertFrom-SavedExternalIdentity -Raw "H=`nP=`n"
+    ok "saved-identity parse: stock guest scalar -> empty host and port" ($stock.Host -eq "" -and $stock.Port -eq "")
+    ok "suffix: legacy explicit default with the stock-guest scalar -> empty (integration)" `
+        ((Get-ExternalEnvSuffix -VmHost 'agent-vm.mshome.net' -SshPort 22 -ExplicitlyBound $true -SavedHost $stock.Host -SavedPort $stock.Port) -eq "")
+    $crlf = ConvertFrom-SavedExternalIdentity -Raw "H=`r`nP=`r`n"
+    ok "saved-identity parse: CRLF stock scalar -> empty" ($crlf.Host -eq "" -and $crlf.Port -eq "")
+    $custom = ConvertFrom-SavedExternalIdentity -Raw "H='old.example.net'`nP=2201`n"
+    ok "saved-identity parse: quoted host + port decoded" ($custom.Host -eq "old.example.net" -and $custom.Port -eq "2201")
+    ok "suffix: explicit default with the custom scalar -> reset suffix" `
+        ((Get-ExternalEnvSuffix -VmHost 'agent-vm.mshome.net' -SshPort 22 -ExplicitlyBound $true -SavedHost $custom.Host -SavedPort $custom.Port) -eq $legacy)
+    $portOnly = ConvertFrom-SavedExternalIdentity -Raw "H=`nP=22`n"
+    ok "suffix: explicit default, guest saved port 22 via scalar -> empty" `
+        ((Get-ExternalEnvSuffix -VmHost 'agent-vm.mshome.net' -SshPort 22 -ExplicitlyBound $true -SavedHost $portOnly.Host -SavedPort $portOnly.Port) -eq "")
     ok "suffix: apostrophe in host is POSIX-quoted" `
         ((Get-ExternalEnvSuffix -VmHost "o'brien-vm.mshome.net" -SshPort 22 -ExplicitlyBound $true) -eq " CONSTRUCT_EXTERNAL_HOST='o'\''brien-vm.mshome.net' CONSTRUCT_EXTERNAL_SSH_PORT='22'")
 }
