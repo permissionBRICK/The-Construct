@@ -177,7 +177,10 @@ const messy = inst.load({ path: writeRegistry(JSON.stringify({
 })) });
 ok("messy: invalid name skipped", !messy.byName["Work_VM"]);
 ok("messy: valid sibling survives", !!messy.byName["good-vm"]);
-eq("messy: unknown backend falls back", messy.byName["good-vm"].backend, "hyperv-local");
+// An unknown backend is REPORTED but kept VERBATIM. Rewriting it to "hyperv-local"
+// (which this reader used to do) promoted every typo to destructive local Hyper-V
+// access — see the end-to-end gate below.
+eq("messy: unknown backend is kept as written, never promoted", messy.byName["good-vm"].backend, "martian");
 eq("messy: invalid port falls back to 22", messy.byName["good-vm"].sshPort, 22);
 eq("messy: dangling defaultInstance -> agent-vm", messy.defaultInstance, "agent-vm");
 ok("messy: agent-vm synthesized alongside", !!messy.byName["agent-vm"]);
@@ -218,7 +221,10 @@ const mx = inst.load({ path: writeRegistry(JSON.stringify({
   },
 })) });
 const tv = mx.byName["typed-vm"];
-eq("parity: uppercase backend rejected (case-sensitive)", tv.backend, "hyperv-local");
+// Case-SENSITIVE: "HYPERV-REMOTE" is not the enum value, so it is reported — and kept
+// exactly as written, which is what makes drivers/index.js refuse it a driver on BOTH
+// sides rather than one of them treating it as the local Hyper-V backend.
+eq("parity: uppercase backend rejected (case-sensitive) and kept verbatim", tv.backend, "HYPERV-REMOTE");
 eq("parity: numeric sshHost NOT stringified", tv.vmHost, "typed-vm.mshome.net");
 eq("parity: digit-string sshPort accepted", tv.sshPort, 2201);
 eq("parity: boolean hostAlias -> derived bare name", tv.hostAlias, "typed-vm");
@@ -294,14 +300,20 @@ const brokenDefault = inst.load({ path: writeRegistry(JSON.stringify({
 })) });
 ok("identity: a broken agent-vm entry falls back to the synthesized default",
   inst.isDefaultInstance(brokenDefault.byName["agent-vm"]));
-// The shapes that MUST keep working.
+// The shapes that MUST keep working. A free-form ENDPOINT belongs to a non-local
+// backend (a hyperv-local instance's identity is pinned to its name — see the canonical
+// identity block below), so the host/alias/key cases are stated on a remote entry.
 for (const good of [
-  { sshHost: "buildbox.example.local" }, { sshHost: "10.0.0.7" }, { sshHost: "host" },
-  { sshHost: "fe80::1" }, { sshHost: "2001:db8::8a2e:370:7334" },
-  { keyName: "construct_work-vm_ed25519" }, { hostAlias: "work-vm.local" },
+  { backend: "hyperv-remote", sshHost: "buildbox.example.local" },
+  { backend: "hyperv-remote", sshHost: "10.0.0.7" }, { backend: "hyperv-remote", sshHost: "host" },
+  { backend: "hyperv-remote", sshHost: "fe80::1" },
+  { backend: "hyperv-remote", sshHost: "2001:db8::8a2e:370:7334" },
+  { backend: "hyperv-remote", sshHost: "buildbox.local", keyName: "construct_work-vm_ed25519" },
+  { backend: "hyperv-remote", sshHost: "buildbox.local", hostAlias: "work-vm.local" },
+  { keyName: "construct_work-vm_ed25519" },
   { vmName: "Work-VM" }, { configBranch: "vm-work" }, { configBranch: "feature.x_1" },
   // Both readers TRIM a string field first, so surrounding whitespace is not a problem.
-  { sshHost: " buildbox.local\n" },
+  { backend: "hyperv-remote", sshHost: " buildbox.local\n" },
 ]) {
   const r = inst.load({ path: writeRegistry(JSON.stringify({ version: 1, instances: { "work-vm": good } })) });
   ok(`identity: ${JSON.stringify(good)} is accepted`, !!r.byName["work-vm"]);
@@ -334,19 +346,19 @@ for (const bad of ["::::", "1::2::3", "1:2:3:4:5:6:7:8:9", "1.2.3:4", "....:", "
 // deriveDefaults prefers sshHost, so an invalid vmHost would otherwise sit unnoticed in
 // the file for whatever reads that field next.
 const dualHost = inst.load({ path: writeRegistry(JSON.stringify({
-  version: 1, instances: { "work-vm": { sshHost: "good.local", vmHost: "-x; calc" } },
+  version: 1, instances: { "work-vm": { backend: "hyperv-remote", sshHost: "good.local", vmHost: "-x; calc" } },
 })) });
 ok("identity: an invalid LOSING vmHost still skips the instance", !dualHost.byName["work-vm"]);
 ok("identity: ...and names the field that is wrong", dualHost.problems.some((p) => p.includes('"vmHost"')));
 const dualHost2 = inst.load({ path: writeRegistry(JSON.stringify({
-  version: 1, instances: { "work-vm": { sshHost: "-x; calc", vmHost: "good.local" } },
+  version: 1, instances: { "work-vm": { backend: "hyperv-remote", sshHost: "-x; calc", vmHost: "good.local" } },
 })) });
 ok("identity: an invalid WINNING sshHost skips it too", !dualHost2.byName["work-vm"]);
 ok("identity: ...reported once, not twice",
   dualHost2.problems.filter((p) => p.includes("is not a host name or IP address")).length === 1,
   JSON.stringify(dualHost2.problems));
 const dualOk = inst.load({ path: writeRegistry(JSON.stringify({
-  version: 1, instances: { "work-vm": { sshHost: "good.local", vmHost: "other.local" } },
+  version: 1, instances: { "work-vm": { backend: "hyperv-remote", sshHost: "good.local", vmHost: "other.local" } },
 })) });
 eq("identity: two VALID spellings still load, sshHost winning", dualOk.byName["work-vm"].vmHost, "good.local");
 
@@ -354,7 +366,9 @@ eq("identity: two VALID spellings still load, sshHost winning", dualOk.byName["w
 for (const v of ["CON", "con", "NUL", "COM1", "lpt9", "CON.txt", "con.key.txt", "agent_vm_ed25519."]) {
   ok(`keyfile: ${JSON.stringify(v)} is refused as a key file name`, !inst.isKeyFileName(v));
   ok(`keyfile: ${JSON.stringify(v)} is still a fine ssh alias`, inst.isSafeToken(v));
-  const r = inst.load({ path: writeRegistry(JSON.stringify({ version: 1, instances: { "work-vm": { hostAlias: v } } })) });
+  const r = inst.load({ path: writeRegistry(JSON.stringify({
+    version: 1, instances: { "work-vm": { backend: "hyperv-remote", sshHost: "buildbox.local", hostAlias: v } },
+  })) });
   ok(`keyfile: ...so hostAlias ${JSON.stringify(v)} still loads`, !!r.byName["work-vm"]);
 }
 for (const v of ["construct_work-vm_ed25519", "agent_vm_ed25519", "com10_key", "console_key", "a", "nul_key", "con-1"]) {
@@ -366,6 +380,199 @@ eq("keyfile: a derived key name is unaffected", inst.isKeyFileName(inst.deriveDe
 deepEq("identity: every derived default passes its own rules",
   inst.identityProblems(inst.deriveDefaults("work-vm", {})), []);
 deepEq("identity: today's literals pass", inst.identityProblems(inst.DEFAULT_INSTANCE), []);
+
+// ── END-TO-END: registry TEXT -> resolve -> lifecycle.buildInvocation ────────
+// The two rules below are only worth anything if they hold along the WHOLE path a real
+// action takes, so these cases start from raw JSON (parseRegistry) and end at the
+// launched invocation — not at a hand-built instance object, which is how the earlier
+// backend-gating tests missed the coercion bug in the first place.
+console.log("\n=== unknown backends are never promoted (registry -> lifecycle) ===");
+const parse = (doc) => inst.parseRegistry(JSON.stringify(doc));
+const E2E_PARAMS = ["VmHost", "HostAlias", "SshPort", "LocalKeyName", "VmName", "ConfigBranch"];
+const invoke = (action, instance) => life.buildInvocation(action, {
+  settings: { gitName: "Neo" }, backupDir: "C:\\b", enabled: true,
+  instance, instanceParams: E2E_PARAMS,
+});
+// An entry that CANNOT launch a targeted action, whatever else it says: `resolve` hands
+// back the default instance, so the invocation carries no target identity at all.
+const cannotTarget = (label, parsed) => {
+  const resolved = inst.resolve(parsed.registry, "work-vm");
+  ok(`${label}: resolve falls back to the default instance`, inst.isDefaultInstance(resolved));
+  for (const action of ["reinstall", "redownload", "setCheckpoints"]) {
+    const r = invoke(action, resolved);
+    deepEq(`${label}: ${action} carries no target args`,
+      r.args.filter((a) => ["-VmName", "-VmHost", "-HostAlias", "-SshPort", "-LocalKeyName"].includes(a)), []);
+  }
+};
+// A GENUINELY unknown backend is kept verbatim: the driver dispatch degrades on it
+// correctly (unknownDriver), which is what refuses the destructive actions.
+for (const backend of ["proxmox", "hyperv-remtoe", "HYPERV-REMOTE"]) {
+  const parsed = parse({ version: 1, instances: { "work-vm": { backend, sshHost: "buildbox.local" } } });
+  const entry = parsed.registry.byName["work-vm"];
+  ok(`backend(${backend}): the entry survives`, !!entry);
+  eq(`backend(${backend}): it is NOT rewritten to hyperv-local`, entry.backend, backend);
+  ok(`backend(${backend}): drivers refuse it a hypervisor driver`,
+    drivers.getDriver(entry.backend).unknown === true &&
+    drivers.getDriver(entry.backend).capabilities.hostLifecycle === false);
+  for (const action of ["reinstall", "redownload", "setCheckpoints"]) {
+    const r = invoke(action, inst.resolve(parsed.registry, "work-vm"));
+    ok(`backend(${backend}): ${action} is BLOCKED`, r.blocked === true);
+    ok(`backend(${backend}): ${action} launches nothing`, r.script === undefined && r.args === undefined);
+  }
+  for (const action of ["reprovision", "exportConfig"]) {
+    const r = invoke(action, inst.resolve(parsed.registry, "work-vm"));
+    ok(`backend(${backend}): ${action} stays allowed (pure SSH)`, !r.blocked && !!r.script);
+    ok(`backend(${backend}): ${action} targets the entry's own endpoint`, r.args.includes("buildbox.local"));
+  }
+  ok(`backend(${backend}): reported as unknown`, parsed.problems.some((p) => p.includes(backend)));
+}
+
+// A PRESENT BUT UNUSABLE backend is NOT "no backend": deriving hyperv-local from it would
+// hand destructive local Hyper-V access to a value the file never actually stated. Only
+// an ABSENT (or JSON-null) backend derives the default, so these entries never load — and
+// therefore can never reach a rebuild. Every case is driven from raw JSON to the
+// invocation, including the otherwise-canonical ones (nothing but the backend is wrong).
+for (const [label, raw] of [
+  ["42", 42], ["true", true], ["empty string", ""], ["whitespace", "   "],
+  ["an array", ["hyperv-local"]], ["an object", { id: "hyperv-local" }],
+]) {
+  for (const [shape, extra] of [["canonical", {}], ["with a foreign host", { sshHost: "buildbox.local" }]]) {
+    const parsed = parse({ version: 1, instances: { "work-vm": { backend: raw, ...extra } } });
+    ok(`backend(${label}, ${shape}): the entry is SKIPPED`, !parsed.registry.byName["work-vm"]);
+    ok(`backend(${label}, ${shape}): the problem names "backend" and says skipped`,
+      parsed.problems.some((p) => p.includes('"backend"') && p.includes("skipped")));
+    ok(`backend(${label}, ${shape}): not reported as a plain type problem`,
+      !parsed.problems.some((p) => p.includes('"backend" must be a string')));
+    cannotTarget(`backend(${label}, ${shape})`, parsed);
+  }
+}
+// A JSON null (like an absent key) IS "omitted" — that stays the zero-change default.
+const nullBackend = parse({ version: 1, instances: { "work-vm": { backend: null } } });
+eq("backend(null): omitted-equivalent, derives hyperv-local",
+  nullBackend.registry.byName["work-vm"].backend, "hyperv-local");
+deepEq("backend(null): and reports nothing", nullBackend.problems, []);
+
+// A SPELLING THE TWO LOOKUPS READ DIFFERENTLY. Every enum comparison in both readers is
+// case-sensitive ("unknown"), but drivers.getDriver trims + lowercases before the lookup
+// and WOULD return the local driver (hostLifecycle: true) — so an otherwise CANONICAL
+// entry would drive destructive local actions. Neither reading is safe, so it is skipped.
+for (const backend of ["HYPERV-LOCAL", "Hyperv-Local", "  hyperv-LOCAL  "]) {
+  ok(`backend(${JSON.stringify(backend)}): getDriver WOULD hand it the local driver`,
+    drivers.getDriver(backend).capabilities.hostLifecycle === true);
+  const parsed = parse({ version: 1, instances: { "work-vm": { backend } } });   // canonical otherwise
+  ok(`backend(${JSON.stringify(backend)}): the entry is SKIPPED`, !parsed.registry.byName["work-vm"]);
+  ok(`backend(${JSON.stringify(backend)}): the problem names "backend"`,
+    parsed.problems.some((p) => p.includes('"backend"') && p.includes("skipped")));
+  cannotTarget(`backend(${JSON.stringify(backend)})`, parsed);
+}
+// ...while the EXACT value (and one that only needed trimming, which both readers do to
+// every string field) is the ordinary local backend.
+for (const backend of ["hyperv-local", " hyperv-local "]) {
+  const parsed = parse({ version: 1, instances: { "work-vm": { backend } } });
+  ok(`backend(${JSON.stringify(backend)}): loads as the local backend`,
+    parsed.registry.byName["work-vm"] && parsed.registry.byName["work-vm"].backend === "hyperv-local");
+  deepEq(`backend(${JSON.stringify(backend)}): with no problems`, parsed.problems, []);
+}
+
+// ── The CANONICAL identity of a hyperv-local instance ───────────────────────
+// reinstall/redownload emit ONLY -VmName; Auto-Install.ps1 derives the guest host, the
+// alias and the key from it. So a local entry that states anything else would rebuild a
+// DIFFERENT VM than it dials — and be unable to reach the one it rebuilt.
+console.log("\n=== canonical local identity (registry -> lifecycle) ===");
+const nonCanonical = [
+  // The headline case: "work-vm" pointed at the DEFAULT VM. A reinstall would delete and
+  // recreate Agent-VM under the guise of rebuilding work-vm.
+  ["vmName of another VM", { vmName: "Agent-VM" }, "vmName"],
+  ["a foreign sshHost", { sshHost: "buildbox.local" }, "sshHost"],
+  // The legacy alias convention: the registry's alias is the BARE instance name.
+  ["the legacy construct- alias", { hostAlias: "construct-work-vm" }, "hostAlias"],
+  ["a custom key file", { keyName: "custom_key" }, "keyName"],
+  ["a non-standard port", { sshPort: 2201 }, "sshPort"],
+];
+for (const [label, entry, field] of nonCanonical) {
+  const parsed = parse({ version: 1, instances: { "work-vm": { backend: "hyperv-local", ...entry } } });
+  ok(`canonical(${label}): the instance is SKIPPED`, !parsed.registry.byName["work-vm"]);
+  ok(`canonical(${label}): the problem names "${field}"`,
+    parsed.problems.some((p) => p.includes(`"${field}"`) && p.includes("skipped")));
+  // ...so it can never reach a launched command: resolve falls back to the DEFAULT
+  // instance, which targets nothing and emits no -VmName of its own.
+  const resolved = inst.resolve(parsed.registry, "work-vm");
+  ok(`canonical(${label}): resolve falls back to the default instance`, inst.isDefaultInstance(resolved));
+  deepEq(`canonical(${label}): a rebuild carries no target args at all`,
+    invoke("reinstall", resolved).args.filter((a) => a === "-VmName"), []);
+}
+// An omitted backend is the same rule (it derives hyperv-local).
+ok("canonical: a backendless entry is held to the same rule",
+  !parse({ version: 1, instances: { "work-vm": { vmName: "Agent-VM" } } }).registry.byName["work-vm"]);
+// The DEFAULT instance's own entry is canonical with today's literals, and a deviating
+// one degrades to the synthesized default rather than to half an identity.
+ok("canonical: the default instance's literals are canonical",
+  !!parse({ version: 1, instances: { "agent-vm": {
+    backend: "hyperv-local", vmName: "Agent-VM", sshHost: "agent-vm.mshome.net", sshPort: 22,
+    hostAlias: "agent-vm", keyName: "agent_vm_ed25519", configBranch: "vm",
+  } } }).registry.byName["agent-vm"]);
+ok("canonical: a deviating agent-vm entry degrades to the synthesized default",
+  inst.isDefaultInstance(parse({ version: 1, instances: { "agent-vm": { vmName: "Other-VM" } } })
+    .registry.byName["agent-vm"]));
+// Hyper-V VM names are case-insensitive, so only the LOWERCASED name must match.
+ok("canonical: a differently-cased vmName is fine",
+  !!parse({ version: 1, instances: { "work-vm": { vmName: "Work-VM" } } }).registry.byName["work-vm"]);
+// The -ConfigBranch override must keep working: it is the one field the launched scripts
+// can be TOLD, so an explicit branch is not a deviation.
+const branchOverride = parse({ version: 1, instances: { "work-vm": { configBranch: "vm-team" } } });
+ok("canonical: an explicit configBranch is still allowed", !!branchOverride.registry.byName["work-vm"]);
+eq("canonical: ...and is threaded to the rebuild as -ConfigBranch",
+  (() => { const a = invoke("reinstall", inst.resolve(branchOverride.registry, "work-vm")).args;
+    return a[a.indexOf("-ConfigBranch") + 1]; })(), "vm-team");
+// A canonical entry is the positive control — it rebuilds and reprovisions ITSELF.
+const canonical = parse({ version: 1, instances: { "work-vm": { backend: "hyperv-local" } } });
+const canonInst = inst.resolve(canonical.registry, "work-vm");
+deepEq("canonical: a canonical entry loads with no problems", canonical.problems, []);
+eq("canonical: it is the entry, not the default", canonInst.name, "work-vm");
+const canonPair = (args, flag) => { const i = args.indexOf(flag); return i < 0 ? null : args[i + 1]; };
+eq("canonical: reinstall targets -VmName work-vm", canonPair(invoke("reinstall", canonInst).args, "-VmName"), "work-vm");
+eq("canonical: redownload targets -VmName work-vm", canonPair(invoke("redownload", canonInst).args, "-VmName"), "work-vm");
+const canonRepro = invoke("reprovision", canonInst).args;
+eq("canonical: reprovision dials the derived host", canonPair(canonRepro, "-VmHost"), "work-vm.mshome.net");
+eq("canonical: reprovision uses the derived alias", canonPair(canonRepro, "-HostAlias"), "work-vm");
+eq("canonical: reprovision uses the derived key", canonPair(canonRepro, "-LocalKeyName"), "construct_work-vm_ed25519");
+eq("canonical: reprovision uses port 22", canonPair(canonRepro, "-SshPort"), "22");
+
+// ── Cross-entry identity collisions ─────────────────────────────────────────
+// Two names for one machine: a rebuild of one would delete the other's VM, and a
+// reprovision would overwrite its key file.
+console.log("\n=== identity collisions ===");
+for (const [label, entry, field] of [
+  ["the default VM's name", { vmName: "agent-vm" }, "vmName"],
+  ["the default VM's host", { sshHost: "agent-vm.mshome.net" }, "sshHost"],
+  ["the default VM's alias", { hostAlias: "agent-vm" }, "hostAlias"],
+  ["the default VM's key", { keyName: "agent_vm_ed25519" }, "keyName"],
+]) {
+  const parsed = parse({ version: 1, instances: {
+    "work-vm": { backend: "hyperv-remote", sshHost: "buildbox.local", ...entry },
+  } });
+  ok(`collision(${label}): the entry is skipped`, !parsed.registry.byName["work-vm"]);
+  ok(`collision(${label}): the problem names ${field}`,
+    parsed.problems.some((p) => p.includes(field) && p.includes("skipped")));
+  ok(`collision(${label}): the default instance survives untouched`,
+    inst.isDefaultInstance(parsed.registry.byName["agent-vm"]));
+}
+const shared = parse({ version: 1, instances: {
+  "a-vm": { backend: "hyperv-remote", sshHost: "buildbox.local" },
+  "b-vm": { backend: "hyperv-remote", sshHost: "BuildBox.local" },
+} });
+ok("collision: two entries sharing a host drop BOTH (nothing says which is the impostor)",
+  !shared.registry.byName["a-vm"] && !shared.registry.byName["b-vm"]);
+ok("collision: ...and it is reported once, naming both",
+  shared.problems.filter((p) => p.includes("share the same")).length === 1 &&
+  shared.problems.some((p) => p.includes("a-vm") && p.includes("b-vm")));
+ok("collision: the comparison is case-insensitive (one NTFS file, one DNS name)",
+  !parse({ version: 1, instances: {
+    "a-vm": { backend: "hyperv-remote", sshHost: "one.local", keyName: "Shared_Key" },
+    "b-vm": { backend: "hyperv-remote", sshHost: "two.local", keyName: "shared_key" },
+  } }).registry.byName["a-vm"]);
+deepEq("collision: two canonical local instances never collide",
+  parse({ version: 1, instances: { "a-vm": {}, "b-vm": {}, "agent-vm": {} } }).problems, []);
 
 // Port boundaries + numbers no Int32 can hold. A huge sshPort must be REPORTED and
 // fall back to 22, never crash the reader (PowerShell's [int] cast throws on these,
@@ -379,7 +586,9 @@ const portCases = [
 ];
 for (const [literal, want, wantProblem] of portCases) {
   let r = null, threw = false;
-  try { r = inst.load({ path: writeRegistry('{"version":1,"instances":{"p-vm":{"sshPort":' + literal + '}}}') }); }
+  // A non-default PORT belongs to a non-local backend (a hyperv-local instance is always
+  // reached on 22), so the matrix runs on a remote entry with a stated endpoint.
+  try { r = inst.load({ path: writeRegistry('{"version":1,"instances":{"p-vm":{"backend":"hyperv-remote","sshHost":"p-vm.example.local","sshPort":' + literal + '}}}') }); }
   catch (_) { threw = true; }
   ok(`port ${literal}: does not throw`, !threw);
   if (!threw) {
@@ -461,7 +670,7 @@ eq("match: empty -> null", inst.matchByRemoteHost(reg, ""), null);
 // ── Mutation + atomic save round-trip ────────────────────────────────────────
 console.log("\n=== add / update / remove + atomic save ===");
 const base = inst.load({ path: path.join(tmpRoot, "fresh", "instances.json") });
-const added = inst.addInstance(base, "work-vm", { sshHost: "buildbox.local", sshPort: 2201 });
+const added = inst.addInstance(base, "work-vm", { backend: "hyperv-remote", sshHost: "buildbox.local", sshPort: 2201 });
 eq("add: instance present", added.byName["work-vm"].vmHost, "buildbox.local");
 ok("add: the source registry is not mutated", !base.byName["work-vm"]);
 ok("add: rejects an invalid name", (() => { try { inst.addInstance(base, "Work_VM", {}); return false; } catch (_) { return true; } })());
@@ -472,10 +681,27 @@ ok("add: rejects the synthesized default as a duplicate",
   (() => { try { inst.addInstance(base, "agent-vm", { sshPort: 2222 }); return false; } catch (_) { return true; } })());
 ok("add: the default instance is untouched after a rejected add",
   inst.isDefaultInstance(base.byName["agent-vm"]));
+// The WRITE side applies the reader's own rules, so a mutator can never persist an entry
+// the next load would drop (it would just vanish from the picker).
+ok("add: refuses a hyperv-local instance with a foreign identity",
+  (() => { try { inst.addInstance(base, "work-vm", { vmName: "Agent-VM" }); return false; } catch (_) { return true; } })());
+ok("add: refuses a hostile field", (() => {
+  try { inst.addInstance(base, "work-vm", { backend: "hyperv-remote", sshHost: "-x; calc" }); return false; } catch (_) { return true; }
+})());
+ok("add: refuses an entry that claims the default instance's key",
+  (() => {
+    try { inst.addInstance(base, "work-vm", { backend: "hyperv-remote", sshHost: "buildbox.local", keyName: "agent_vm_ed25519" }); return false; }
+    catch (_) { return true; }
+  })());
+ok("add: a canonical local instance is accepted",
+  !!inst.addInstance(base, "work-vm", {}).byName["work-vm"]);
 const updated = inst.updateInstance(added, "work-vm", { sshPort: 2299 });
 eq("update: field changed", updated.byName["work-vm"].sshPort, 2299);
 eq("update: untouched field preserved", updated.byName["work-vm"].vmHost, "buildbox.local");
+eq("update: backend preserved", updated.byName["work-vm"].backend, "hyperv-remote");
 ok("update: rejects an unknown name", (() => { try { inst.updateInstance(added, "ghost", {}); return false; } catch (_) { return true; } })());
+ok("update: rejects a change that would collide with the default instance",
+  (() => { try { inst.updateInstance(added, "work-vm", { sshHost: "agent-vm.mshome.net" }); return false; } catch (_) { return true; } })());
 ok("remove: refuses the default instance", (() => { try { inst.removeInstance(updated, "agent-vm"); return false; } catch (_) { return true; } })());
 const removed = inst.removeInstance(updated, "work-vm");
 ok("remove: gone", !removed.byName["work-vm"]);
@@ -885,7 +1111,7 @@ async function asyncTests() {
   console.log("\n=== user actions are bound to the instance they started on ===");
   const actReg = inst.load({ path: writeRegistry(JSON.stringify({
     version: 1, defaultInstance: "agent-vm",
-    instances: { "agent-vm": {}, "work-vm": { sshHost: "buildbox.example.local", sshPort: 2201 } },
+    instances: { "agent-vm": {}, "work-vm": { backend: "hyperv-remote", sshHost: "buildbox.example.local", sshPort: 2201 } },
   })) });
   const A = inst.resolve(actReg, "agent-vm");
   const B = inst.resolve(actReg, "work-vm");
@@ -979,7 +1205,7 @@ async function asyncTests() {
   console.log("\n=== Remote-SSH adoption ===");
   const adoptReg = inst.load({ path: writeRegistry(JSON.stringify({
     version: 1, defaultInstance: "agent-vm",
-    instances: { "agent-vm": {}, "work-vm": { sshHost: "buildbox.example.local", sshPort: 2201 } },
+    instances: { "agent-vm": {}, "work-vm": { backend: "hyperv-remote", sshHost: "buildbox.example.local", sshPort: 2201 } },
   })) });
   const plan = (auth, setting, current) => inst.planRemoteAdoption(adoptReg, auth, setting, current);
   ok("adopt: a local window does not adopt", !plan(undefined, "", "agent-vm").adopt);
