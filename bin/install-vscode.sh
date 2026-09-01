@@ -50,6 +50,9 @@ TUNNEL_UNIT_FILE="/etc/systemd/system/code-tunnel.service"
 SERVE_WEB_UNIT_FILE="/etc/systemd/system/code-serve-web.service"
 # Machine-readable status the host provisioner reads back over SSH.
 VSCODE_STATUS_FILE="${VSCODE_STATUS_FILE:-/etc/construct/vscode-status}"
+# Keep caller-supplied connection identity authoritative when config.env is
+# loaded below (env > saved config).
+_external_host_override="${CONSTRUCT_EXTERNAL_HOST:-}"
 
 if [[ "${EUID}" -ne 0 ]]; then
   err "Run with sudo: sudo ${REPO_DIR}/bin/install-vscode.sh"
@@ -63,6 +66,8 @@ if [[ -f "${CONFIG_FILE}" ]]; then
   . "${CONFIG_FILE}" 2>/dev/null || true
   set +a
 fi
+
+CONSTRUCT_EXTERNAL_HOST="${_external_host_override:-${CONSTRUCT_EXTERNAL_HOST:-}}"
 
 VSCODE_SERVER="${VSCODE_SERVER:-true}"
 VSCODE_TUNNEL="${VSCODE_TUNNEL:-false}"
@@ -96,9 +101,10 @@ MIC_PASSTHROUGH="${MIC_PASSTHROUGH:-false}"
 # is current and use the installed CLI's commit (latest stable).
 VSCODE_CLIENT_COMMIT="${VSCODE_CLIENT_COMMIT:-}"
 
-# DNS name this VM is reachable under from the user's machine (Hyper-V publishes
-# "<hostname>.mshome.net"), matching print-connection-info.sh.
-AGENT_DNS="$(hostname).mshome.net"
+# DNS name this VM is reachable under from the user's machine. CONSTRUCT_EXTERNAL_HOST
+# (from config.env or the env) takes precedence; falls back to the Hyper-V local
+# DNS name, matching print-connection-info.sh and install-ai-tools.sh.
+AGENT_DNS="${CONSTRUCT_EXTERNAL_HOST:-$(hostname).mshome.net}"
 
 # --- status accumulated across the run, written once at the end --------------
 TUNNEL_DEPLOYED="no"; TUNNEL_AUTHED="no"; TUNNEL_NEEDS_SIGNIN="no"
