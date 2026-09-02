@@ -494,7 +494,11 @@ public class ForwardTests
                 message = "line one\u0000\r\nline two",
             })).ReadAsync<ForwardResponse>();
 
-        Assert.Equal("pcX-Injected: 1", acked.HostLabel);
+        // The control characters go first (Sanitize), and what is left — "pcX-Injected: 1" — is not
+        // a host label at all, so ForwardHost.Normalize drops it and the link falls back to
+        // loopback. Same answer the extension's own sanitizeHostLabel gives that string.
+        Assert.Null(acked.HostLabel);
+        Assert.Equal("http://localhost:5173/", acked.Url);
         Assert.Equal("line oneline two", acked.Message);
         Assert.DoesNotContain("\n", acked.Url!);
     }

@@ -206,6 +206,12 @@ function Test-ConstructInstanceBranch {
     # than at the first sync tick (same rule, same fixtures, as the two twins above).
     if ($Value.EndsWith('.')) { return $false }
     if ($Value.EndsWith('.lock')) { return $false }
+    # A loose ref is a FILE, and the host config repo is a loose-ref repo on Windows:
+    # refs/heads/CON (and the CON.lock git writes beside it) cannot be created there,
+    # extension or not. The same device rule Test-ConstructInstanceKeyFileName applies to
+    # ~\.ssh\<KeyName>; git on Linux accepts these names, so only this check catches them.
+    $stem = $Value.Split('.')[0]
+    if ($script:ConstructWindowsDeviceNames -contains $stem.ToLowerInvariant()) { return $false }
     $lower = $Value.ToLowerInvariant()
     if ($script:ConstructReservedBranches -contains $lower) { return $false }
     # Any other spelling of the default branch is the SAME loose-ref file on Windows,

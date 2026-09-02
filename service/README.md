@@ -284,6 +284,12 @@ The list projects it **inline and flat**:
 - `hostLabel` and `message` are trimmed, stripped of control characters and capped: both are echoed
   to a CLI that prints them, so a newline in either would let one field forge another line of
   `construct expose --list`'s output.
+- `hostLabel` is then held to **one** wire form (`ForwardHost`, specified in
+  [`docs/expose.md`](../docs/expose.md#the-host-label-rule)): a host name, or a **bare** IP literal
+  — a bracketed IPv6 value is unwrapped, a zone id and anything that is not an address are dropped.
+  `url` adds the brackets back exactly once, so the link this service builds and the one the guest
+  CLI builds from the same fields are the same string. Interpolating the label as it stood printed
+  `http://fe80::1:5173/` here while the CLI printed `http://[[fe80::1]]:5173/`.
 
 ### Auditing
 

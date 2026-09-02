@@ -73,7 +73,11 @@ public sealed record ForwardResponse(
     {
         ArgumentNullException.ThrowIfNull(forward);
 
-        var url = forward.PublicPort is int port ? $"http://{publicHost}:{port}/" : null;
+        // Every host in a link goes through the one rule (ForwardHost, docs/expose.md): an IPv6
+        // literal gets exactly one bracket pair, everything else is passed through unchanged.
+        var url = forward.PublicPort is int port
+            ? $"http://{ForwardHost.ForUrl(publicHost) ?? publicHost}:{port}/"
+            : null;
 
         if (forward.Ack is not { } ack)
         {
@@ -84,9 +88,11 @@ public sealed record ForwardResponse(
 
         if (ack.Status == AckStatus.Open && ack.LocalPort is int local)
         {
-            url = string.IsNullOrEmpty(ack.HostLabel)
-                ? $"http://localhost:{local}/"
-                : $"http://{ack.HostLabel}:{local}/";
+            // The label is stored canonically (bare, ForwardHost.Normalize at the ack endpoint);
+            // an unusable one — or one an older client stored bracketed — falls back to loopback
+            // rather than producing a link nobody can open.
+            var host = ForwardHost.ForUrl(ack.HostLabel) ?? "localhost";
+            url = $"http://{host}:{local}/";
         }
 
         return new(
