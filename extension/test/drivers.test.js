@@ -8,6 +8,7 @@ const { EventEmitter } = require("events");
 const drivers = require("../src/drivers");
 const instances = require("../src/instances");
 const hypervLocal = require("../src/drivers/hyperv-local");
+const hypervRemote = require("../src/drivers/hyperv-remote");
 const vmpower = require("../src/vmpower");
 
 let pass = 0, fail = 0;
@@ -70,7 +71,8 @@ ok("dispatch: null/empty backend -> the default (local) driver",
 ok("dispatch: case/whitespace tolerant", drivers.getDriver("  HyperV-Local  ") === hypervLocal);
 ok("dispatch: DEFAULT_BACKEND is hyperv-local (the zero-change path)", drivers.DEFAULT_BACKEND === "hyperv-local");
 ok("dispatch: listBackends reports what this build implements",
-  JSON.stringify(drivers.listBackends()) === JSON.stringify(["hyperv-local"]));
+  JSON.stringify(drivers.listBackends()) === JSON.stringify(["hyperv-local", "hyperv-remote"]));
+ok("dispatch: 'hyperv-remote' -> the remote driver", drivers.getDriver("hyperv-remote") === hypervRemote);
 
 // ── capabilities ─────────────────────────────────────────────────────────────
 const caps = drivers.getDriver("hyperv-local").capabilities;
@@ -79,10 +81,20 @@ ok("caps: local Hyper-V console is vmconnect", caps.console === "vmconnect");
 ok("caps: local Hyper-V can suspend (Save-VM)", caps.suspend === true);
 ok("caps: the driver names its backend", hypervLocal.backend === "hyperv-local");
 
+// ── the remote driver's capabilities ─────────────────────────────────────────
+// hostLifecycle is TRUE since B7 (Auto-Install.ps1 gained -Backend hyperv-remote), and
+// checkpoints stays FALSE — the two are separate questions, see the gate below.
+const rcaps = hypervRemote.capabilities;
+ok("caps: hyperv-remote has NO checkpoints", rcaps.checkpoints === false);
+ok("caps: hyperv-remote has no console", rcaps.console === "none");
+ok("caps: hyperv-remote can suspend (the idle policy saves it)", rcaps.suspend === true);
+ok("caps: hyperv-remote declares hostLifecycle (Auto-Install's remote path)", rcaps.hostLifecycle === true);
+ok("caps: the remote driver names its backend", hypervRemote.backend === "hyperv-remote");
+
 // ── unknown backend degrades, never throws ───────────────────────────────────
-const unk = drivers.getDriver("hyperv-remote");   // not implemented in this build
+const unk = drivers.getDriver("proxmox");   // no driver in this build
 ok("unknown: getDriver doesn't throw and keeps the requested name",
-  !!unk && unk.backend === "hyperv-remote" && unk.unknown === true);
+  !!unk && unk.backend === "proxmox" && unk.unknown === true);
 ok("unknown: no capabilities are claimed",
   unk.capabilities.checkpoints === false && unk.capabilities.console === "none" && unk.capabilities.suspend === false);
 
@@ -98,11 +110,21 @@ ok("gate: the hypervisor actions are exactly reinstall/redownload/setCheckpoints
   JSON.stringify(drivers.HYPERVISOR_ACTIONS) === JSON.stringify(["reinstall", "redownload", "setCheckpoints"]));
 for (const action of drivers.HYPERVISOR_ACTIONS) {
   ok(`gate: hyperv-local may ${action}`, drivers.lifecycleSupport("hyperv-local", action).ok === true);
-  const denied = drivers.lifecycleSupport("hyperv-remote", action);
-  ok(`gate: hyperv-remote may NOT ${action}`, denied.ok === false);
-  ok(`gate: ...and says why (${action})`, /remote driver/i.test(denied.reason));
-  ok(`gate: an unknown backend may NOT ${action}`, drivers.lifecycleSupport("proxmox", action).ok === false);
+  const denied = drivers.lifecycleSupport("proxmox", action);
+  ok(`gate: an unknown backend may NOT ${action}`, denied.ok === false);
+  ok(`gate: ...and says why (${action})`, /local Hyper-V/i.test(denied.reason));
 }
+// hyperv-remote: rebuilds YES (they route through Auto-Install's remote path),
+// checkpoints NO (the backend has none) — and the refusal says which of the two it is.
+for (const action of ["reinstall", "redownload"]) {
+  ok(`gate: hyperv-remote MAY ${action}`, drivers.lifecycleSupport("hyperv-remote", action).ok === true);
+}
+const noChk = drivers.lifecycleSupport("hyperv-remote", "setCheckpoints");
+ok("gate: hyperv-remote may NOT setCheckpoints", noChk.ok === false);
+ok("gate: ...and blames the missing capability, not the missing driver",
+  /no checkpoints/i.test(noChk.reason) && !/remote driver/i.test(noChk.reason));
+ok("gate: ACTION_CAPABILITY maps setCheckpoints onto the checkpoints capability",
+  drivers.ACTION_CAPABILITY.setCheckpoints === "checkpoints");
 for (const action of ["reprovision", "exportConfig"]) {
   ok(`gate: ${action} is SSH-only, so every backend may run it`,
     drivers.lifecycleSupport("hyperv-local", action).ok === true &&
@@ -117,7 +139,7 @@ ok("gate: a missing/empty backend is the default (local) one — the zero-change
 const logged = [];
 ok("unknown: startVm declines and logs a reason",
   unk.startVm(WORK_INSTANCE, { _log: (m) => logged.push(m) }) === false &&
-  logged.length === 1 && /hyperv-remote/.test(logged[0]));
+  logged.length === 1 && /proxmox/.test(logged[0]));
 
 // ── vmpower.resolveTarget (the instance/vmName precedence) ───────────────────
 ok("target: no opts -> the default instance",
@@ -160,13 +182,26 @@ ok("facade: getDriver is re-exported", vmpower.getDriver === drivers.getDriver);
   // A registry entry naming a backend this build has no driver for must not spawn
   // anything and must read back as "can't tell" — what the UI already degrades on.
   const s4 = {};
-  const remote = { ...WORK_INSTANCE, backend: "hyperv-remote" };
-  const st4 = await vmpower.queryVmState({ instance: remote, _platform: "win32", _spawn: fakeSpawn({ data: "VMSTATE=Running\n" }, s4) });
-  const ac4 = await vmpower.queryAutoCheckpoints({ instance: remote, _platform: "win32", _spawn: fakeSpawn({ data: "VMAUTOCHK=True\n" }, s4) });
+  const foreign = { ...WORK_INSTANCE, backend: "proxmox" };
+  const st4 = await vmpower.queryVmState({ instance: foreign, _platform: "win32", _spawn: fakeSpawn({ data: "VMSTATE=Running\n" }, s4) });
+  const ac4 = await vmpower.queryAutoCheckpoints({ instance: foreign, _platform: "win32", _spawn: fakeSpawn({ data: "VMAUTOCHK=True\n" }, s4) });
   ok("unknown backend: queries resolve 'unknown' without spawning",
     st4 === "unknown" && ac4 === "unknown" && !s4.called);
   ok("unknown backend: startVm returns false (logged, not thrown)",
-    vmpower.startVm({ instance: remote, _log: () => {} }) === false);
+    vmpower.startVm({ instance: foreign, _log: () => {} }) === false);
+
+  // A REMOTE instance dispatches to the remote driver: no powershell is spawned for a
+  // state probe (it is an HTTPS call), and an entry with no service.url can't be
+  // reached at all -> "can't tell", never "absent".
+  const s4b = {};
+  const remoteNoSvc = { ...WORK_INSTANCE, backend: "hyperv-remote", service: null };
+  const st4b = await vmpower.queryVmState({ instance: remoteNoSvc, _platform: "win32", _spawn: fakeSpawn({ data: "VMSTATE=Running\n" }, s4b) });
+  const ac4b = await vmpower.queryAutoCheckpoints({ instance: remoteNoSvc, _platform: "win32", _spawn: fakeSpawn({}, s4b) });
+  ok("remote backend: a serviceless entry reads 'unknown' and spawns nothing",
+    st4b === "unknown" && !s4b.called);
+  ok("remote backend: checkpoints are 'unsupported', not probed", ac4b === "unsupported");
+  ok("remote backend: startVm without a service URL declines",
+    vmpower.startVm({ instance: remoteNoSvc, _log: () => {} }) === false);
 
   // ── the driver's own entry points (instance-first signature) ───────────────
   const s5 = {};
