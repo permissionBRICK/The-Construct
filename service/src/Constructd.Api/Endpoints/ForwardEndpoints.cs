@@ -262,7 +262,10 @@ public static class ForwardEndpoints
             localPort = reported;
         }
 
-        var hostLabel = Sanitize(request.HostLabel, MaxHostLabel);
+        // Stored in the ONE canonical wire form (ForwardHost, docs/expose.md): an IPv6 literal is
+        // kept bare and bracketed only when a URL is built, so what this service echoes and what
+        // the guest CLI prints cannot disagree about the same address.
+        var hostLabel = ForwardHost.Normalize(Sanitize(request.HostLabel, MaxHostLabel));
         var message = Sanitize(request.Message, MaxAckMessage) ?? string.Empty;
 
         var ack = new ForwardAck(status, localPort, hostLabel, message, clock.UtcNow);

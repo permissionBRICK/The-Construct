@@ -269,7 +269,15 @@ its **own VM-side branch** inside it:
   than the exact default. The list is matched case-insensitively because
   Windows' loose-ref files are — but it is a list, not a shape rule: an instance
   named `WORK` legitimately gets a `WORK` branch. Anything reserved falls back
-  to `vm` with a warning rather than failing the tick.
+  to `vm` with a warning rather than failing the tick. A **Windows device stem**
+  (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`, with or without an
+  extension — `CON.txt` is the device too) is refused for a reason that is not
+  git's at all: a loose ref *is* a file, and this repo lives on Windows, where
+  neither `refs/heads/CON` nor the `refs/heads/CON.lock` git writes beside it
+  can be created. Linux git accepts those names, so only this rule catches them
+  — it is the same device rule `keyName` gets for `~\.ssh\<keyName>`, and it
+  matches the stem, not a substring (`console` and `con-work` are ordinary
+  branch names).
   The `-HostAlias` → branch derivation only lowercases and strips a leading
   `construct-`; it never substitutes characters, so two different aliases can
   never be folded onto one branch. An alias that does not yield a valid name

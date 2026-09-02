@@ -1739,6 +1739,23 @@ async function runTests() {
   ok("vmBranch: rejects a trailing dot (git refuses `foo.` as a branch)",
     !cs.isValidVmBranch("foo.") && !cs.isValidVmBranch("vm-work.") && !cs.isValidVmBranch("vm."));
 
+  // WINDOWS' RULE, NOT GIT'S. The host config repo is a loose-ref repo on Windows, where
+  // refs/heads/CON — and the refs/heads/CON.lock git writes beside it — cannot be created,
+  // with or without an extension. Linux git accepts every one of these, so the fixture
+  // list below cannot catch them: only this rule keeps a hand-authored `configBranch`
+  // from passing every registry check and failing at the first sync tick.
+  ok("vmBranch: rejects Windows device stems (a loose ref is a file)",
+    !cs.isValidVmBranch("CON") && !cs.isValidVmBranch("con") && !cs.isValidVmBranch("NUL") &&
+    !cs.isValidVmBranch("PRN") && !cs.isValidVmBranch("aux") &&
+    !cs.isValidVmBranch("COM1") && !cs.isValidVmBranch("com9") &&
+    !cs.isValidVmBranch("LPT1") && !cs.isValidVmBranch("lpt9"));
+  ok("vmBranch: ...including the extension forms Win32 resolves to the same device",
+    !cs.isValidVmBranch("CON.txt") && !cs.isValidVmBranch("con.work") &&
+    !cs.isValidVmBranch("nul.branch.1"));
+  ok("vmBranch: ...but the rule is the STEM, not a substring",
+    cs.isValidVmBranch("console") && cs.isValidVmBranch("con-work") &&
+    cs.isValidVmBranch("vm-con") && cs.isValidVmBranch("com10") && cs.isValidVmBranch("lpt0"));
+
   // THE PROPERTY, against REAL GIT. This validator is deliberately stricter than
   // check-ref-format (it also refuses `main`, `HEAD`, `VM`, …) — but it must never be
   // LOOSER, or a hand-authored `configBranch` passes validation here and then fails at
@@ -1747,7 +1764,9 @@ async function runTests() {
   // (Test-ConstructVmBranchName) in test/config-sync.test.ps1.
   const BRANCH_FIXTURES = [
     "vm", "vm-work", "vm-work_2.1", "WORK", "Work", "VM_WORK", "vm2", "a",
+    "console", "con-work", "com10",
     "main", "master", "HEAD", "stash", "VM", "Vm",
+    "CON", "con", "NUL", "PRN", "aux", "COM1", "lpt9", "CON.txt", "con.work",
     "foo.", "vm.", "vm-work.", "foo.bar.", "vm..x", "a..b", "-vm", ".vm",
     "vm work", "vm/work", "vm~1", "vm.lock", "x@{y", "vm^", "vm:1", "vm?", "vm*",
     "vm[1]", "vm\\x", "vm@{now}", "@",

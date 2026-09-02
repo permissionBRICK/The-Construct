@@ -143,6 +143,100 @@ wait "${waiter}" 2>/dev/null
 ok "ack: a hostLabel + remapped port build the link" \
   test "$(cat "${out}")" = "http://christoph-pc:15173/"
 
+# ── the ONE host-label rule (docs/expose.md) ─────────────────────────────────
+# hostLabel travels BARE and is bracketed exactly once, here, when the link is built.
+# Both spellings therefore print the same URL: the CLI used to bracket anything with a
+# colon, so an already-bracketed label became http://[[fe80::1]]:5173/ while the service,
+# which interpolated the label as it stood, printed http://fe80::1:5173/ for the bare one.
+# Neither link opens, and no representation worked in both modes.
+ack_link() {   # <ack json fields> -> the link the CLI prints for a client forward
+  local fields="$1" link_out link_id
+  reset_spool
+  link_out="${tmp}/acklink.out"
+  ( expose 5173 --wait 10 >"${link_out}" 2>&1; printf '%s' "$?" >"${tmp}/acklink.rc" ) &
+  local waiter_pid=$!
+  link_id=""
+  for _ in $(seq 1 40); do
+    if [[ -n "$(requests)" ]]; then link_id="$(request_id)"; break; fi
+    sleep 0.25
+  done
+  printf '{"v":1,"id":"%s","status":"open","localPort":5173,%s}\n' "${link_id}" "${fields}" \
+    >"${spool}/acks/${link_id}.json"
+  wait "${waiter_pid}" 2>/dev/null
+  cat "${link_out}"
+}
+
+ok "ack: a BARE IPv6 host label is bracketed exactly once" \
+  test "$(ack_link '"hostLabel":"fe80::1"')" = "http://[fe80::1]:5173/"
+ok "ack: ...and a BRACKETED one prints the identical link, never doubled" \
+  test "$(ack_link '"hostLabel":"[fe80::1]"')" = "http://[fe80::1]:5173/"
+ok "ack: a full literal too" \
+  test "$(ack_link '"hostLabel":"[2001:db8::8a2e:370:7334]"')" = "http://[2001:db8::8a2e:370:7334]:5173/"
+ok "ack: a label that is not an address at all falls back to a link that opens" \
+  test "$(ack_link '"hostLabel":"1::2::3"')" = "http://localhost:5173/"
+ok "ack: a zone id is not a wire host label (a URL would need %25)" \
+  test "$(ack_link '"hostLabel":"fe80::1%eth0"')" = "http://localhost:5173/"
+ok "ack: an IPv4 literal is passed through unbracketed" \
+  test "$(ack_link '"hostLabel":"10.0.0.7"')" = "http://10.0.0.7:5173/"
+
+# THE SHARED FIXTURE MATRIX. One rule, three implementations — `is_ipv6_literal` here,
+# `net.isIP` in extension/src/forwarder.js and `IPAddress.TryParse` in the service's
+# ForwardHost — and they are only one rule while they agree address for address. The SAME
+# list runs in extension/test/forwarder.test.js and in Constructd.Tests' ForwardHostTests.
+#
+# Driven against the REAL functions, lifted out of the CLI by name (it has no library-only
+# mode; extracting definitions is the trick test/idle-report.test.sh uses for provision.sh),
+# so this is the shipped source and not a copy of it — an end-to-end `expose` per address
+# would be a minute of sleeping for the same answer. The six link tests above already prove
+# the wiring from ack document to printed link.
+host_rule_src="$(sed -n '/^is_ipv4_literal()/,/^}$/p;/^ipv6_groups()/,/^}$/p;/^is_ipv6_literal()/,/^}$/p;/^wire_host_label()/,/^}$/p;/^url_host()/,/^}$/p' "${ROOT}/bin/construct-expose.sh")"
+host_rule_count="$(printf '%s\n' "${host_rule_src}" | grep -c '^[a-z0-9_]*() {$' || true)"
+ok "host rule: all five functions were found in the CLI (a rename must not skip the matrix)" \
+  test "${host_rule_count}" = 5
+
+# The link host for one hostLabel, exactly as link_from_ack composes the two helpers.
+link_host() {
+  HOST_RULE_SRC="${host_rule_src}" LBL="$1" bash -c '
+    set -u
+    eval "${HOST_RULE_SRC}"
+    v="$(wire_host_label "${LBL}")"
+    url_host "${v:-localhost}"
+  '
+}
+
+ipv6_valid=(
+  "::" "::1" "fe80::1" "2001:db8::8a2e:370:7334" "1:2:3:4:5:6:7:8"
+  "0:0:0:0:0:0:0:0" "1::" "::2" "0::0" "::ffff:10.0.0.1"
+  "1:2:3:4:5:6:1.2.3.4" "::1.2.3.4" "1::1.2.3.4" "1:2:3:4:5:6:7::"
+  "fe80::0204:61ff:fe9d:f156" "ABCD::1"
+)
+# The four marked (*) are the pre-fix controls: a "plausible IPv6" shape filter accepts
+# every one of them, and each then reached a URL authority as http://[1:::]:5173/ and
+# friends. A real parse is what refuses them.
+ipv6_invalid=(
+  "::::" "1::2::3" "1:2:3:4:5:6:7:8:9" "1.2.3:4" "....:" ":::"
+  ":1" "1:" "12345::1"        # (*)
+  "::ffff:999.1.1.1" "::ffff:1.2.3.004"
+  "1:2" "1:2:3:4:5:6:7" "1:::"  # (*) (*) (*)
+  "1::2:3:4:5:6:7:8" "::1.2.3.4.5" "1:2:3:4:5:6:7:1.2.3.4"
+  # An embedded IPv4 address is the literal's FINAL 32 bits, so it can never appear before
+  # the "::" -- the grammar boundary a per-run "quad must be last" check misses.
+  "192.0.2.1::" "192.0.2.1::1" "1:192.0.2.1::" "1.2.3.4::1:2"
+)
+for v6 in "${ipv6_valid[@]}"; do
+  ok "host rule[matrix]: ${v6} is an address, bracketed exactly once" \
+    test "$(link_host "${v6}")" = "[${v6}]"
+  ok "host rule[matrix]: [${v6}] is the same address, still one pair" \
+    test "$(link_host "[${v6}]")" = "[${v6}]"
+done
+for v6 in "${ipv6_invalid[@]}"; do
+  ok "host rule[matrix]: ${v6} is not an address, so the link falls back to localhost" \
+    test "$(link_host "${v6}")" = "localhost"
+done
+ok "host rule: a zone id is not a wire host label" test "$(link_host 'fe80::1%eth0')" = "localhost"
+ok "host rule: a host name passes through" test "$(link_host 'christoph-pc')" = "christoph-pc"
+ok "host rule: an empty label is loopback" test "$(link_host '')" = "localhost"
+
 # An error ack is a final answer, not "keep waiting".
 reset_spool
 out="${tmp}/ackerr.out"

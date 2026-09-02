@@ -72,7 +72,23 @@ public class ExposeCliContractTests
         }
 
         var hostLabel = JsonField(document, "hostLabel");
-        return (CliOutcome.Link, $"http://{(hostLabel.Length > 0 ? hostLabel : "localhost")}:{localPort}/");
+        return (CliOutcome.Link, $"http://{UrlHost(hostLabel.Length > 0 ? hostLabel : "localhost")}:{localPort}/");
+    }
+
+    /// <summary>
+    /// `url_host`: the label arrives in its canonical BARE form and gets exactly one bracket pair
+    /// when it is an IPv6 literal — and an already-bracketed one is unwrapped first, so both
+    /// spellings render the same link. Transcribed from the shell rather than shared with
+    /// <c>ForwardHost</c> on purpose: this file exists to prove the two ends agree independently.
+    /// </summary>
+    private static string UrlHost(string host)
+    {
+        if (host.Length > 2 && host[0] == '[' && host[^1] == ']')
+        {
+            host = host[1..^1];
+        }
+
+        return host.Contains(':', StringComparison.Ordinal) ? $"[{host}]" : host;
     }
 
     // ── The real bytes ──────────────────────────────────────────────────────────────────────
@@ -172,6 +188,38 @@ public class ExposeCliContractTests
         // ...and the ack fields the CLI would fall back on say the same thing.
         Assert.Equal("18800", JsonField(forward, "localPort"));
         Assert.Equal("christoph-pc", JsonField(forward, "hostLabel"));
+    }
+
+    /// <remarks>
+    /// ONE WIRE REPRESENTATION. The label is stored bare whichever spelling the extension sent, so
+    /// the <c>url</c> this service builds and the link the CLI builds from <c>hostLabel</c> are the
+    /// same string — the bug being pinned here is that they were not: the CLI bracketed anything
+    /// with a colon (<c>http://[[fe80::1]]:18800/</c>) while this service interpolated the label as
+    /// it stood (<c>http://fe80::1:18800/</c>), so no IPv6 spelling worked in both modes.
+    /// </remarks>
+    [Theory]
+    [InlineData("fe80::1")]
+    [InlineData("[fe80::1]")]
+    public async Task An_ipv6_host_label_reads_the_same_bracketed_link_either_way(string sent)
+    {
+        var (app, owner, guest) = await SetupAsync();
+        using var _app = app;
+        using var _owner = owner;
+        using var _guest = guest;
+
+        var id = await AddClientAsync(owner);
+        await owner.PostAsJsonAsync($"/api/v1/vms/work-vm/forwards/{id}/ack",
+            new { status = "open", localPort = 18800, hostLabel = sent }, ApiJson.Options);
+
+        var forward = Assert.Single(JsonObjects(await ListAsync(guest)));
+        var (outcome, text) = LinkFromForward(forward);
+
+        Assert.Equal(CliOutcome.Link, outcome);
+        Assert.Equal("http://[fe80::1]:18800/", text);
+        // The stored field is the canonical bare literal, and the service's own url agrees with
+        // the link the CLI would have built from it.
+        Assert.Equal("fe80::1", JsonField(forward, "hostLabel"));
+        Assert.Equal("http://[fe80::1]:18800/", JsonField(forward, "url"));
     }
 
     [Fact]

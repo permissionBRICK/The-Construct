@@ -12,6 +12,9 @@
 //
 //   1. NO VS CODE API, and no child_process/net either. Every effect goes through the
 //      injected transport, so the whole local and remote flow unit-tests in plain node.
+//      The ONE thing pulled out of `net` is `isIP` — a pure parser, no socket — because
+//      the host-label rule has to know a real IPv6 literal from a plausible-looking string
+//      (sanitizeHostLabel); instances.js reads the same function for the same reason.
 //   2. TRANSPORT INJECTED, NEVER OWNED:
 //        runRemoteScript(script, opts) -> Promise<{code, stdout, stderr}>
 //        spawnWatch(script)            -> child          (long-lived SSH stream)
@@ -36,6 +39,9 @@
 // SSH; remote (hyperv-remote) polls the host service. Both funnel into the same pure
 // `planActions`, so "what should happen" is decided in one tested place and the class only
 // executes it.
+
+// `net.isIP` only — a real IPv6 parser for the host-label rule, no socket (see rule 1).
+const net = require("net");
 
 // ── The contract's constants ─────────────────────────────────────────────────
 
@@ -94,6 +100,29 @@ const SPOOL_YES = "SPOOL=1";
 const SPOOL_NO = "SPOOL=0";
 
 /**
+ * WHAT `start()` RESOLVES TO — the guest's answer, handed back to the window that armed
+ * this session, because the two "no" answers mean opposite things for the armed edge:
+ *
+ *   `supported`   — serving (a `SPOOL=1` guest, or remote mode, which has no spool).
+ *   `unsupported` — a guest provisioned before `construct expose` existed. It answered,
+ *                   and the answer will not change until it is reprovisioned: stay armed,
+ *                   so it is asked once per connection and not every 30 s.
+ *   `unanswered`  — the check could not be made at all (the exec failed, or exited
+ *                   non-zero). NOTHING was established, so the window must let this
+ *                   session go and let the next reachable reading try again — the bug this
+ *                   value exists to close is a transient failure arming the instance
+ *                   forever, which silently swallows every later `construct expose`.
+ *   `stood-down`  — the window withdrew the session while it was in flight (eligible()
+ *                   went false, or dispose() ran). The stop path owns the cleanup.
+ *   `running`     — start() was called on a session that is already started.
+ */
+const START_SUPPORTED = "supported";
+const START_UNSUPPORTED = "unsupported";
+const START_UNANSWERED = "unanswered";
+const START_STOOD_DOWN = "stood-down";
+const START_RUNNING = "running";
+
+/**
  * Where a forward listens on the user's PC.
  *
  * Loopback is the default and is stated EXPLICITLY in the ssh argv, so the privacy of a
@@ -147,11 +176,47 @@ function sanitizeText(value, max) {
  * character that has no business in a URL authority is refused rather than escaped —
  * the setting is a machine name, and a half-encoded one would print a link nobody can
  * open. Pure.
+ *
+ * THE CANONICAL WIRE FORM OF AN IPv6 LABEL IS THE BARE LITERAL — `fe80::1`, never
+ * `[fe80::1]` (docs/expose.md). One representation is the whole point: this value crosses
+ * to a guest CLI that prints a link and to a service that builds one, so anything that
+ * accepted both spellings without normalizing gave `[[fe80::1]]` on one path and
+ * `fe80::1:5173` on the other. A bracketed value is therefore ACCEPTED and unwrapped here
+ * (a user typing what they see in a browser is not an error), and the brackets are put
+ * back exactly once, by urlHostFor, at the moment a URL is built.
+ *
+ * The literal is PARSED (`net.isIP`), not character-classed: `::::`, `1::2::3` and
+ * `1:2:3:4:5:6:7:8:9` all pass a character class and none of them is an address. A ZONE ID
+ * (`fe80::1%eth0`) is refused — `%` never was in this rule's alphabet, a URL would need it
+ * as `%25`, and a zone is meaningful only on the machine that owns that interface, which is
+ * the opposite of what a label advertising this PC to others is for.
  */
 function sanitizeHostLabel(value) {
   const raw = sanitizeText(value, MAX_HOST_LABEL).replace(/\s+/g, "");
   if (!raw) return "";
-  return /^[A-Za-z0-9._:[\]-]+$/.test(raw) ? raw : "";
+  const bare = raw.length > 2 && raw.charAt(0) === "[" && raw.charAt(raw.length - 1) === "]"
+    ? raw.slice(1, -1)
+    : raw;
+  if (!bare) return "";
+  // The zone id goes before the parser, not after it: node's `isIP` accepts `fe80::1%eth0`
+  // and .NET's `IPAddress.TryParse` does not, so agreeing on a wire form means deciding it
+  // here rather than inheriting whichever parser happens to be reading.
+  if (bare.indexOf("%") >= 0) return "";
+  if (bare.indexOf(":") >= 0) return net.isIP(bare) === 6 ? bare : "";
+  return /^[A-Za-z0-9._-]+$/.test(bare) ? bare : "";
+}
+
+/**
+ * THE HOST AS IT GOES INTO A URL — the one rule shared by this module, the guest CLI's
+ * `url_host` (bin/construct-expose.sh) and the service's response builder: normalize to
+ * the canonical bare form, then add exactly one bracket pair for an IPv6 literal and
+ * nothing for anything else. "" when the label is unusable, so the caller falls back to
+ * `localhost` the way an absent label does. Pure.
+ */
+function urlHostFor(value) {
+  const bare = sanitizeHostLabel(value);
+  if (!bare) return "";
+  return net.isIP(bare) === 6 ? `[${bare}]` : bare;
 }
 
 /**
@@ -884,6 +949,42 @@ function planLifecycle(input = {}) {
   return { action: armed ? "stop" : "none", reason };
 }
 
+/**
+ * WHAT THE GUEST'S ANSWER MEANS FOR THE ARMED EDGE — planLifecycle's other half, and the
+ * reason `start()` resolves to a value at all. Pure.
+ *
+ * planLifecycle arms an instance the moment a reachable reading asks for a start, which is
+ * correct for the two answers the check can actually give: `SPOOL=1` is serving, `SPOOL=0`
+ * is a guest that will not change until it is reprovisioned. But the check is one SSH exec
+ * and it can simply FAIL — the connection drops, the VM is going down, sshd is not up yet —
+ * and that answer establishes nothing. Left armed, the session (which has already stood
+ * itself down) makes every later reachable reading a `none`, so no watcher and no reconcile
+ * is ever retried and a queued `construct expose` waits without an ack until something
+ * unrelated (an unreachable reading, a switch, a setting toggle, a reload) clears the edge.
+ *
+ * So an `unanswered` start is a RETRY: the window drops the session it holds and clears the
+ * armed edge, and the next reachable reading starts a fresh one. It may only do that while
+ * its own claim and generation are still current — a start whose window has moved on must
+ * touch neither, because what it would be clearing belongs to another session by then.
+ *
+ * Inputs:
+ *   outcome  what `Forwarder.start()` resolved to (START_* above)
+ *   current  is this start still the window's current session? (slot claim + generation)
+ *
+ * Returns { action: "retry" | "keep" | "none", reason }:
+ *   "retry" — clear the session reference and the armed edge; the next reading re-arms.
+ *   "keep"  — leave both alone (serving, or a genuinely older guest asked once per connect).
+ *   "none"  — not ours to touch.
+ */
+function planStartOutcome(input = {}) {
+  if (input.current === false) return { action: "none", reason: "superseded" };
+  const outcome = String(input.outcome == null ? "" : input.outcome);
+  if (outcome === START_UNANSWERED) return { action: "retry", reason: "unanswered" };
+  if (outcome === START_UNSUPPORTED) return { action: "keep", reason: "unsupported" };
+  if (outcome === START_STOOD_DOWN) return { action: "none", reason: "stood-down" };
+  return { action: "keep", reason: outcome || "started" };
+}
+
 // ── Presentation ─────────────────────────────────────────────────────────────
 
 /**
@@ -924,13 +1025,13 @@ function toSnapshot(input = {}) {
     } else if (ack && ack.status === "open" && toPort(ack.localPort) !== null) {
       item.status = "open";
       item.localPort = toPort(ack.localPort);
-      item.url = `http://${ack.hostLabel || "localhost"}:${item.localPort}/`;
+      item.url = `http://${urlHostFor(ack.hostLabel) || "localhost"}:${item.localPort}/`;
     } else if (tunnel && tunnel.state === "up" && toPort(tunnel.localPort) !== null) {
       // The tunnel is up but the ack has not landed yet (or is somebody else's). Report
       // the port that is actually listening; it is the honest answer for this PC.
       item.status = "open";
       item.localPort = toPort(tunnel.localPort);
-      item.url = `http://${sanitizeHostLabel(input.hostLabel) || "localhost"}:${item.localPort}/`;
+      item.url = `http://${urlHostFor(input.hostLabel) || "localhost"}:${item.localPort}/`;
     }
     items.push(item);
   }
@@ -1038,11 +1139,20 @@ class Forwarder {
    *
    * Returns the promise for that first round trip so a test can await it; callers fire and
    * forget, because start() is reached from a status reading and may not block on SSH.
+   *
+   * It RESOLVES TO the guest's answer (START_* / planStartOutcome), because the window that
+   * armed this instance cannot tell "an older guest, asked once per connection" from "the
+   * check never happened" by any other means — and treating the second as the first arms
+   * the instance forever. An unexpected throw is that same "nothing was established", so it
+   * resolves to `unanswered` rather than rejecting: a start is never a caller's error path.
    */
   start() {
-    if (!this._stopped) return this._starting || Promise.resolve();
+    if (!this._stopped) return this._starting || Promise.resolve(START_RUNNING);
     this._stopped = false;
-    this._starting = this._begin().catch(() => {});
+    this._starting = this._begin().catch((e) => {
+      this.log(`forwarder[${this.name}]: could not start — ${errText(e)}`);
+      return START_UNANSWERED;
+    });
     return this._starting;
   }
 
@@ -1057,20 +1167,26 @@ class Forwarder {
    * be disposed a moment later — SSH traffic after the user said stop.
    */
   async _begin() {
-    if (!this._eligible("before the guest check")) return;
+    if (!this._eligible("before the guest check")) return START_STOOD_DOWN;
     if (this.mode === "local") {
       const supported = await this._checkSpool();
       // dispose()/_standDown() while the check was in flight: the window switched, the
       // setting went off, or it is closing. Nothing may be spawned behind that.
-      if (this._stopped) return;
-      if (!supported) { this._standDown(); return; }
+      if (this._stopped) return START_STOOD_DOWN;
+      if (!supported) {
+        this._standDown();
+        // `supported === false` is the guest ANSWERING "no spool"; null is a check that
+        // never happened. Only the second one is worth another connection's worth of work.
+        return this.supported === false ? START_UNSUPPORTED : START_UNANSWERED;
+      }
     }
-    if (!this._eligible("while the guest was answering")) return;
+    if (!this._eligible("while the guest was answering")) return START_STOOD_DOWN;
     if (this.mode === "local") this._startWatch();
     this._schedulePoll();
     // Not awaited: the reconcile is a second round trip and the caller is a status
     // reading, not a step that may block on SSH.
     this._safeReconcile();
+    return START_SUPPORTED;
   }
 
   /**
@@ -1093,8 +1209,9 @@ class Forwarder {
   /**
    * Does this VM have the spool contract? One cheap exec, and the only place `supported`
    * is decided. An unreachable VM (or a script that failed) is NOT recorded as an old
-   * guest — it is simply not established, and says so in the log; the next connect asks
-   * again. Never throws.
+   * guest — it is simply not established, and says so in the log; `supported` stays null,
+   * which is what start() reports back as `unanswered` so the window re-arms on the next
+   * reachable reading instead of holding a stood-down session forever. Never throws.
    */
   async _checkSpool() {
     let res;
@@ -1108,7 +1225,7 @@ class Forwarder {
     if (!res || res.code !== 0) {
       this.supported = null;
       this.log(`forwarder[${this.name}]: could not check this VM's forward spool ` +
-        `(exit ${res ? res.code : "?"}) — not watching it until the next connect`);
+        `(exit ${res ? res.code : "?"}) — not watching it until the next reading reaches it`);
       return false;
     }
     this.supported = parseCapability(res.stdout);
@@ -1761,14 +1878,15 @@ module.exports = {
   RECONNECT_BASE_MS, RECONNECT_MAX_MS, CONNECTION_HEALTHY_MS, MAX_TUNNEL_ATTEMPTS,
   WATCH_FALLBACK_SECONDS, WATCH_HEARTBEAT_SECONDS, HEARTBEAT_LINE, CHANGED_LINE,
   SPOOL_YES, SPOOL_NO,
+  START_SUPPORTED, START_UNSUPPORTED, START_UNANSWERED, START_STOOD_DOWN, START_RUNNING,
   MAX_HOST_LABEL, MAX_MESSAGE, MAX_LABEL,
   BIND_LOOPBACK, BIND_ALL, bindHostFor,
-  isSafeId, sanitizeText, sanitizeHostLabel, toPort, portCandidates, reconnectDelayMs,
+  isSafeId, sanitizeText, sanitizeHostLabel, urlHostFor, toPort, portCandidates, reconnectDelayMs,
   splitLines, shQuote,
   isV1Document, parseRequest, parseAck, parseClose, ackDocument, parseDump,
   isClosedEntry, readForwardList,
   buildReconcileScript, buildAckScript, buildRemoveScript, buildWatchScript,
   buildCapabilityScript, parseCapability,
-  planActions, planLifecycle, toSnapshot,
+  planActions, planLifecycle, planStartOutcome, toSnapshot,
   Forwarder, createForwarder,
 };
