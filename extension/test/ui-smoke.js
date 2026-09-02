@@ -517,6 +517,15 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: false, host: "h.example.net", vmState: "unknown" } }, "*"));
   await page.waitForTimeout(60);
   check("launcher: start&connect shows when offline + probe unknown", await page.locator("#lPowerBtn").innerText() === "▶ Start & connect");
+  // vmState 'saved' (the idle policy saved the VM): the launcher must say the SAME thing
+  // as the panel — the start call resumes it, and two surfaces must not promise the user
+  // different things about one button.
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: false, host: "h.example.net", vmState: "saved" } }, "*"));
+  await page.waitForTimeout(60);
+  check("launcher: a saved VM offers Resume & connect", await page.locator("#lPowerBtn").innerText() === "▶ Resume & connect");
+  check("launcher: ...still firing startConnect", (await page.getAttribute("#lPowerBtn", "data-cmd")) === "startConnect");
+  check("launcher: ...with copy that says what will happen",
+    (await page.getAttribute("#lPowerBtn", "title")).includes("Resume"));
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: false, host: "h.example.net", connected: false, vmState: "running" } }, "*"));
   await page.waitForTimeout(60);
   check("launcher: shutdown wins when vmState is running", await page.locator("#lPowerBtn").innerText() === "⏻ Shutdown");
@@ -673,6 +682,229 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   // The strip should still be visible even though we went offline (configSync is NOT
   // pushed in this state, but the previously rendered strip should remain).
   check("config-sync: strip remains visible after offline (not cleared by clearLiveVmData)", await page.locator("#csStrip").isVisible());
+
+  // ── Forwards card (B8) ────────────────────────────────────────────────────
+  // The zero-change rule first: a state push WITHOUT `forwards` — which is what an older
+  // extension host sends — must leave the card hidden, and so must a local instance with
+  // nothing to show.
+  await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "networkidle" });
+  await page.waitForTimeout(120);
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h" } }, "*"));
+  await page.waitForTimeout(60);
+  check("forwards: card hidden when the state carries no forwards at all",
+    !(await page.locator("#fwdModule").isVisible()));
+  check("idle policy: card hidden when the state carries no policy", !(await page.locator("#idleModule").isVisible()));
+
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h",
+    forwards: { mode: "local", owner: true, visible: false, items: [] } } }, "*"));
+  await page.waitForTimeout(60);
+  check("forwards: card stays hidden for an untouched local install",
+    !(await page.locator("#fwdModule").isVisible()));
+
+  // A local instance with one open forward and one queued one.
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h",
+    forwards: { mode: "local", owner: true, visible: true, items: [
+      { id: "1-a", vmPort: 3000, label: "api", target: "client", status: "queued", localPort: null, url: null, message: "" },
+      { id: "2-b", vmPort: 5173, label: "vite dev", target: "client", status: "open", localPort: 18800, url: "http://localhost:18800/", message: "" },
+    ] } } }, "*"));
+  await page.waitForTimeout(60);
+  check("forwards: card visible once there is a forward", await page.locator("#fwdModule").isVisible());
+  check("forwards: one row per forward", (await page.locator("#fwdList .fwd-row").count()) === 2);
+  check("forwards: the empty note is gone", !(await page.locator("#fwdEmpty").isVisible()));
+  check("forwards: a queued row is marked queued",
+    (await page.locator("#fwdList .fwd-row").nth(0).getAttribute("class")).includes("queued"));
+  check("forwards: an open row is marked open",
+    (await page.locator("#fwdList .fwd-row").nth(1).getAttribute("class")).includes("open"));
+  check("forwards: a remapped port shows both numbers",
+    (await page.locator("#fwdList .fwd-row").nth(1).locator(".fwd-port").textContent()).includes("18800"));
+  check("forwards: the agent's label is rendered",
+    (await page.locator("#fwdList .fwd-row").nth(1).locator(".fwd-label").textContent()).includes("vite dev"));
+  check("forwards: Open is disabled while there is no link",
+    await page.locator("#fwdList .fwd-row").nth(0).locator(".fwd-open").isDisabled());
+  check("forwards: Open is enabled once there is one",
+    !(await page.locator("#fwdList .fwd-row").nth(1).locator(".fwd-open").isDisabled()));
+  check("forwards: nothing claims another window owns it", (await page.locator("#fwdOwner").textContent()) === "");
+
+  await page.evaluate(() => { window.__posted.length = 0; });
+  await page.locator("#fwdList .fwd-row").nth(1).locator(".fwd-open").click();
+  await page.locator("#fwdList .fwd-row").nth(0).locator(".fwd-close").click();
+  posted = await page.evaluate(() => window.__posted);
+  check("forwards: Open posts openForward with the id",
+    posted.some((m) => m.type === "command" && m.id === "openForward" && m.forward === "2-b"));
+  check("forwards: Close posts closeForward with the id",
+    posted.some((m) => m.type === "command" && m.id === "closeForward" && m.forward === "1-a"));
+
+  // An error ack: the reason is what the user needs to see.
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h",
+    forwards: { mode: "local", owner: true, visible: true, items: [
+      { id: "3-c", vmPort: 5173, label: "", target: "client", status: "error", localPort: null, url: null, message: "no free port on this PC" },
+    ] } } }, "*"));
+  await page.waitForTimeout(60);
+  check("forwards: an error row is marked error",
+    (await page.locator("#fwdList .fwd-row").nth(0).getAttribute("class")).includes("error"));
+  check("forwards: an error row shows the reason",
+    (await page.locator("#fwdList .fwd-row").nth(0).locator(".fwd-label").textContent()).includes("no free port"));
+
+  // A remote instance shows the card even with nothing in it, and says when another
+  // window is the one serving.
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h",
+    forwards: { mode: "remote", owner: false, visible: true, items: [] } } }, "*"));
+  await page.waitForTimeout(60);
+  check("forwards: a remote instance shows the card with no forwards", await page.locator("#fwdModule").isVisible());
+  check("forwards: the empty note explains how to make one", await page.locator("#fwdEmpty").isVisible());
+  check("forwards: non-ownership is stated",
+    (await page.locator("#fwdOwner").textContent()).includes("another window"));
+
+  // A local NON-OWNER must not be offered Close: it would delete the owner's spool
+  // documents and tear down a forward the owner still believes it is serving.
+  await page.evaluate(() => window.postMessage({ type: "forwards", forwards:
+    { mode: "local", owner: false, visible: true, items: [
+      { id: "1-a", vmPort: 5173, label: "vite", target: "client", status: "open", localPort: 5173, url: "http://localhost:5173/", message: "", closable: false },
+    ] } }, "*"));
+  await page.waitForTimeout(60);
+  check("forwards: a local non-owner cannot click Close",
+    await page.locator("#fwdList .fwd-row").nth(0).locator(".fwd-close").isDisabled());
+  check("forwards: ...and is told where to close it instead",
+    /another vs code window/i.test(await page.locator("#fwdList .fwd-row").nth(0).locator(".fwd-close").getAttribute("title")));
+  check("forwards: ...while Open still works (same PC, same port)",
+    !(await page.locator("#fwdList .fwd-row").nth(0).locator(".fwd-open").isDisabled()));
+
+  // A host-target forward (remote): the SERVICE published it, so it must be visible,
+  // openable and closable, and labelled as a different kind of thing.
+  await page.evaluate(() => window.postMessage({ type: "forwards", forwards:
+    { mode: "remote", owner: true, visible: true, items: [
+      { id: "h-1", vmPort: 8080, label: "webhook", target: "host", status: "open", localPort: 31234, url: "http://buildbox:31234/", message: "", closable: true },
+      { id: "c-1", vmPort: 5173, label: "vite", target: "client", status: "open", localPort: 5173, url: "http://localhost:5173/", message: "", closable: true },
+    ] } }, "*"));
+  await page.waitForTimeout(60);
+  check("forwards: a host-target forward is listed", (await page.locator("#fwdList .fwd-row").count()) === 2);
+  check("forwards: ...and labelled host",
+    (await page.locator("#fwdList .fwd-row").nth(0).locator(".fwd-target").textContent()) === "host");
+  check("forwards: ...a client one is labelled client",
+    (await page.locator("#fwdList .fwd-row").nth(1).locator(".fwd-target").textContent()) === "client");
+  check("forwards: ...and the host forward can be opened",
+    !(await page.locator("#fwdList .fwd-row").nth(0).locator(".fwd-open").isDisabled()));
+  check("forwards: ...and closed",
+    !(await page.locator("#fwdList .fwd-row").nth(0).locator(".fwd-close").isDisabled()));
+  await page.evaluate(() => { window.__posted.length = 0; });
+  await page.locator("#fwdList .fwd-row").nth(0).locator(".fwd-close").click();
+  posted = await page.evaluate(() => window.__posted);
+  check("forwards: closing a host forward posts its id",
+    posted.some((m) => m.type === "command" && m.id === "closeForward" && m.forward === "h-1"));
+
+  // Forwards survive an offline push: a VM that stopped answering has not closed the
+  // ports this PC is holding open.
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: false, host: "h" } }, "*"));
+  await page.waitForTimeout(60);
+  check("forwards: the card survives going offline (not cleared by clearLiveVmData)",
+    await page.locator("#fwdModule").isVisible());
+
+  // The NARROW live update: {type:'forwards'} repaints only this card. The rest of the
+  // panel must be untouched — which is the whole reason it is not a partial `state`.
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h",
+    vmState: "running", installed: "2026-09-01", instances: ["agent-vm", "work-vm"], instance: "agent-vm",
+    forwards: { mode: "local", owner: true, visible: true, items: [] } } }, "*"));
+  await page.waitForTimeout(60);
+  const powerBefore = await page.locator("#powerBtn").innerText();
+  const pillBefore = await page.locator("#pillInstalled").textContent();
+  const statusBefore = await page.locator("#pillStatus").textContent();
+  const pickerBefore = await page.locator("#instanceSelect").isVisible();
+  await page.evaluate(() => window.postMessage({ type: "forwards", forwards:
+    { mode: "local", owner: true, visible: true, items: [
+      { id: "9-z", vmPort: 8080, label: "docs", target: "client", status: "open", localPort: 8080, url: "http://localhost:8080/", message: "" },
+    ] } }, "*"));
+  await page.waitForTimeout(60);
+  check("forwards: a narrow {type:'forwards'} push renders the row",
+    (await page.locator("#fwdList .fwd-row").count()) === 1);
+  check("forwards: ...and leaves the power button alone",
+    (await page.locator("#powerBtn").innerText()) === powerBefore);
+  check("forwards: ...and the install marker",
+    (await page.locator("#pillInstalled").textContent()) === pillBefore);
+  check("forwards: ...and the online pill",
+    (await page.locator("#pillStatus").textContent()) === statusBefore);
+  check("forwards: ...and the instance picker",
+    (await page.locator("#instanceSelect").isVisible()) === pickerBefore);
+
+  // The same for the idle-policy card.
+  await page.evaluate(() => window.postMessage({ type: "idlePolicy", idlePolicy:
+    { timeoutMinutes: 15, action: "save", maxTimeoutMinutes: 0, clamped: false } }, "*"));
+  await page.waitForTimeout(60);
+  check("idle policy: a narrow {type:'idlePolicy'} push populates the card",
+    (await page.inputValue("#idleTimeout")) === "15");
+  check("idle policy: ...and leaves the power button alone",
+    (await page.locator("#powerBtn").innerText()) === powerBefore);
+  check("idle policy: ...and shows no cap hint when there is no cap",
+    (await page.locator("#idleHint").textContent()) === "");
+
+  // ── Idle policy card (B8, plan §4.7) ──────────────────────────────────────
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h",
+    idlePolicy: { timeoutMinutes: 45, action: "shutdown", maxTimeoutMinutes: 120, clamped: false } } }, "*"));
+  await page.waitForTimeout(60);
+  check("idle policy: card visible for a remote instance", await page.locator("#idleModule").isVisible());
+  check("idle policy: the timeout is populated", (await page.inputValue("#idleTimeout")) === "45");
+  check("idle policy: the action is populated", (await page.inputValue("#idleAction")) === "shutdown");
+  check("idle policy: the admin cap is shown as a hint",
+    (await page.locator("#idleHint").textContent()).includes("120"));
+  check("idle policy: the input is capped at the admin maximum",
+    (await page.getAttribute("#idleTimeout", "max")) === "120");
+
+  await page.evaluate(() => { window.__posted.length = 0; });
+  await page.fill("#idleTimeout", "90");
+  await page.selectOption("#idleAction", "save");
+  await page.click("#idleSave");
+  posted = await page.evaluate(() => window.__posted);
+  const idleMsg = posted.find((m) => m.type === "saveIdlePolicy");
+  check("idle policy: apply posts saveIdlePolicy", !!idleMsg);
+  check("idle policy: ...carrying the edited values",
+    idleMsg && idleMsg.policy.timeoutMinutes === 90 && idleMsg.policy.action === "save");
+
+  // A refresh mid-edit must not yank the value out from under the user.
+  await page.fill("#idleTimeout", "77");
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h",
+    idlePolicy: { timeoutMinutes: 45, action: "shutdown", maxTimeoutMinutes: 120, clamped: false } } }, "*"));
+  await page.waitForTimeout(60);
+  check("idle policy: a refresh does not overwrite a half-typed value",
+    (await page.inputValue("#idleTimeout")) === "77");
+
+  // THE REMOTE -> LOCAL SWITCH: the extension sends the RESOLVED value, and null means
+  // "this instance has no idle policy". Without it the remote VM's card stayed on screen
+  // forever after switching to a local instance.
+  check("idle policy: card is visible for the remote instance", await page.locator("#idleModule").isVisible());
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h", idlePolicy: null } }, "*"));
+  await page.waitForTimeout(60);
+  check("idle policy: switching to a local instance HIDES the card (state.idlePolicy null)",
+    !(await page.locator("#idleModule").isVisible()));
+  await page.evaluate(() => window.postMessage({ type: "idlePolicy", idlePolicy: null }, "*"));
+  await page.waitForTimeout(60);
+  check("idle policy: a narrow null push hides it too", !(await page.locator("#idleModule").isVisible()));
+  // ...and it comes back for a remote instance.
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h",
+    idlePolicy: { timeoutMinutes: 45, action: "shutdown", maxTimeoutMinutes: 120, clamped: false } } }, "*"));
+  await page.waitForTimeout(60);
+  check("idle policy: ...and returns when a remote instance is selected again",
+    await page.locator("#idleModule").isVisible());
+
+  check("idle policy: a clamped answer says so", await (async () => {
+    await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h",
+      idlePolicy: { timeoutMinutes: 120, action: "save", maxTimeoutMinutes: 120, clamped: true } } }, "*"));
+    await page.waitForTimeout(60);
+    return (await page.locator("#idleHint").textContent()).includes("clamped");
+  })());
+
+  // ── The `saved` VM state reads as a resume ────────────────────────────────
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: false, host: "h", vmState: "saved" } }, "*"));
+  await page.waitForTimeout(60);
+  check("power: a saved VM offers Resume & connect",
+    (await page.locator("#powerBtn").innerText()).includes("Resume"));
+  check("power: ...and still fires startConnect (the driver maps it to a resume)",
+    (await page.getAttribute("#powerBtn", "data-cmd")) === "startConnect");
+  check("power: ...with copy that says what will happen",
+    (await page.getAttribute("#powerBtn", "title")).includes("Resume"));
+
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: false, host: "h", vmState: "off" } }, "*"));
+  await page.waitForTimeout(60);
+  check("power: an off VM still says Start & connect",
+    (await page.locator("#powerBtn").innerText()).includes("Start"));
 
   await browser.close();
   server.close();
