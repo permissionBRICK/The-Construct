@@ -412,7 +412,7 @@ try {
 # shipped script and fail if any string-literal token carries a non-ASCII char.
 $repoRoot = Split-Path -Parent $here
 $shipped = @("install.ps1","Auto-Install.ps1","Create-AgentVM.ps1","Provision-AgentVM.ps1",
-             "Update-Construct.ps1","Get-AgentUsage.ps1","lib/AgentVm.Common.ps1")
+             "Update-Construct.ps1","Update-T3Code.ps1","Get-AgentUsage.ps1","lib/AgentVm.Common.ps1")
 foreach ($rel in $shipped) {
     $p = Join-Path $repoRoot $rel
     if (-not (Test-Path -LiteralPath $p)) { continue }
@@ -931,6 +931,92 @@ ok "auto-install: T3CodeChannel guard on all 4 Provision forwarding sites" (
     ([regex]::Matches($aiScript, "Parameters\.ContainsKey\('T3CodeChannel'\)")).Count -ge 4)
 ok "auto-install: T3CodeChannel removed in both guard + catch branches (at least 8 sites)" (
     ([regex]::Matches($aiScript, "\.Remove\('T3CodeChannel'\)")).Count -ge 8)
+
+# ── T3 HTTPS: the CA trust-import decision ─────────────────────────────────
+# The VM issues its own CA for the T3 HTTPS origin (bin/setup-t3-https.sh). Which
+# Root store it goes into -- and whether Windows will prompt -- is decided by this
+# pure helper so the provisioning block stays a thin caller.
+$planMachine = Get-T3CaImportPlan -Elevated
+ok "ca-plan: elevated imports into the machine Root store" (
+    $planMachine.Action -eq "import" -and $planMachine.Store -eq "Cert:\LocalMachine\Root" -and
+    $planMachine.Scope -eq "LocalMachine")
+ok "ca-plan: the machine import is silent (no confirmation dialog)" (-not $planMachine.Prompts)
+$planUser = Get-T3CaImportPlan
+ok "ca-plan: not elevated imports into the user Root store" (
+    $planUser.Action -eq "import" -and $planUser.Store -eq "Cert:\CurrentUser\Root" -and
+    $planUser.Scope -eq "CurrentUser")
+ok "ca-plan: the user import is announced as prompting once" ($planUser.Prompts -eq $true)
+ok "ca-plan: the user import reason says a dialog appears" ($planUser.Reason -match "confirmation dialog")
+# Already trusted in EITHER store: importing again would add a duplicate entry
+# and (unelevated) show a second dialog for a certificate the user accepted.
+$planSkipMachine = Get-T3CaImportPlan -PresentInMachine
+ok "ca-plan: present in the machine store -> skip" (
+    $planSkipMachine.Action -eq "skip" -and -not $planSkipMachine.Prompts -and $planSkipMachine.Store -eq "")
+$planSkipUser = Get-T3CaImportPlan -PresentInUser
+ok "ca-plan: present in the user store -> skip" ($planSkipUser.Action -eq "skip")
+ok "ca-plan: present in the user store names that scope" ($planSkipUser.Scope -eq "CurrentUser")
+$planSkipElevated = Get-T3CaImportPlan -Elevated -PresentInUser
+ok "ca-plan: an elevated run still skips a CA already trusted for the user" (
+    $planSkipElevated.Action -eq "skip")
+ok "ca-plan: every verdict carries a human reason" (
+    $planMachine.Reason -and $planUser.Reason -and $planSkipMachine.Reason -and $planSkipUser.Reason)
+
+# ── T3CodeHttps parameter contract ─────────────────────────────────────────
+# ""/"true"/"false" only: empty means "keep the VM's saved choice", and the value
+# is interpolated into a single-quoted remote assignment, so ValidateSet is what
+# keeps a hostile string away from that shell boundary.
+$provPath = Join-Path $here "..\Provision-AgentVM.ps1"
+$provCmdT3 = Get-Command $provPath -CommandType ExternalScript -ErrorAction SilentlyContinue
+$httpsParam = if ($provCmdT3) { $provCmdT3.Parameters['T3CodeHttps'] } else { $null }
+ok "Provision-AgentVM.ps1: has a T3CodeHttps parameter" ($null -ne $httpsParam)
+if ($httpsParam) {
+    $httpsSet = $httpsParam.Attributes | Where-Object { $_ -is [System.Management.Automation.ValidateSetAttribute] }
+    ok "Provision-AgentVM.ps1: T3CodeHttps has ValidateSet" ($null -ne $httpsSet)
+    if ($httpsSet) {
+        $allowedHttps = @($httpsSet.ValidValues) | Sort-Object
+        $expectedHttps = @("", "false", "true") | Sort-Object
+        ok "Provision-AgentVM.ps1: T3CodeHttps ValidateSet is exactly ('','true','false')" (
+            ($allowedHttps -join ",") -eq ($expectedHttps -join ","))
+    }
+    $httpsDefault = @($provCmdT3.ScriptBlock.Ast.ParamBlock.Parameters |
+        Where-Object { $_.Name.VariablePath.UserPath -eq 'T3CodeHttps' } |
+        ForEach-Object { $_.DefaultValue.Extent.Text })[0]
+    ok "Provision-AgentVM.ps1: T3CodeHttps defaults to empty (keep-saved)" ($httpsDefault -eq '""')
+}
+$provSrc = Get-Content -LiteralPath $provPath -Raw
+ok "Provision-AgentVM.ps1: T3CodeHttps reaches the guest as T3CODE_HTTPS" (
+    $provSrc -match "T3CODE_HTTPS='\`$T3CodeHttps'")
+# ValidateSet is case-insensitive, so -T3CodeHttps FALSE binds -- and bin/provision.sh
+# treats anything but the exact lowercase "false" as ENABLED. The value must be
+# lowercased after binding, before it reaches the env prefix.
+ok "Provision-AgentVM.ps1: normalizes T3CodeHttps to lowercase after param binding" (
+    $provSrc -match '\$T3CodeHttps\s*=\s*\$T3CodeHttps\.ToLower\(\)')
+ok "Provision-AgentVM.ps1: normalizes T3CodeHttps BEFORE building the env prefix" (
+    $provSrc.IndexOf('$T3CodeHttps = $T3CodeHttps.ToLower()') -lt $provSrc.IndexOf("T3CODE_HTTPS='`$T3CodeHttps'"))
+$httpsNormTest = {
+    param([ValidateSet("", "true", "false")][string]$T3CodeHttps = "")
+    if ($T3CodeHttps) { $T3CodeHttps = $T3CodeHttps.ToLower() }
+    return $T3CodeHttps
+}
+ok "T3CodeHttps normalization: 'FALSE' lowered to 'false' (else the guest reads it as true)" (
+    (& $httpsNormTest -T3CodeHttps "FALSE") -eq "false")
+ok "T3CodeHttps normalization: 'TRUE' lowered to 'true'" ((& $httpsNormTest -T3CodeHttps "TRUE") -eq "true")
+ok "T3CodeHttps normalization: 'False' lowered to 'false'" ((& $httpsNormTest -T3CodeHttps "False") -eq "false")
+ok "T3CodeHttps normalization: empty stays empty (keep-saved semantics)" ((& $httpsNormTest -T3CodeHttps "") -eq "")
+ok "T3CodeHttps normalization: omitted defaults to empty" ((& $httpsNormTest) -eq "")
+$httpsHostileThrew = $false
+try { & $httpsNormTest -T3CodeHttps "false'; rm -rf /" } catch { $httpsHostileThrew = $true }
+ok "T3CodeHttps normalization: hostile value rejected by ValidateSet" $httpsHostileThrew
+ok "Provision-AgentVM.ps1: the CA handoff reads the VM status file and imports by plan" (
+    $provSrc -match 'T3CODE_HTTPS_READY=yes' -and
+    $provSrc -match 'Get-T3CaImportPlan' -and
+    $provSrc -match 'Import-Certificate -FilePath')
+ok "Provision-AgentVM.ps1: the CA handoff never fails the provision" (
+    $provSrc -match "(?s)T3CODE_HTTPS_READY=yes.*?catch \{\s*Write-Warning")
+$updT3Src = Get-Content -LiteralPath (Join-Path $here "..\Update-T3Code.ps1") -Raw
+ok "Update-T3Code.ps1: forwards t3codeHttps only when set and supported" (
+    $updT3Src -match "settings\.t3codeHttps" -and
+    $updT3Src -match "Parameters\.ContainsKey\('T3CodeHttps'\)")
 
 # ── T3CodeChannel lowercase normalization ──────────────────────────────────
 # ValidateSet is case-insensitive: PowerShell happily binds "NIGHTLY" to the

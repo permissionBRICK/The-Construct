@@ -15,6 +15,7 @@
 
 const ssh = require("./ssh");
 const instances = require("./instances");
+const probe = require("./probe");
 
 function vsc() { return require("vscode"); }
 
@@ -47,7 +48,17 @@ function _resetQueue() { _inflight = Promise.resolve(); }
 // shell-safe literals).
 const PRELUDE = `set -uo pipefail
 CONFIG_FILE=/etc/construct/config.env
-cfgget() { sed -n "s/^$1=//p" "$CONFIG_FILE" 2>/dev/null | head -1; }
+# Undo config-set.sh's rendering: it writes values made only of its safe charset
+# bare, and single-quotes anything else (embedded apostrophes as '\\''). An IPv6
+# public base URL — https://[2001:db8::1]:5178 — has brackets, so it IS stored
+# quoted, and reading the raw line would carry the apostrophes into the value.
+cfgget() {
+  _v="$(sed -n "s/^$1=//p" "$CONFIG_FILE" 2>/dev/null | head -1)"
+  case "$_v" in
+    "'"*"'") _v="\${_v#\\'}"; _v="\${_v%\\'}"; _v="\${_v//\\'\\\\\\'\\'/\\'}" ;;
+  esac
+  printf '%s' "$_v"
+}
 cfgset() {
   mkdir -p "$(dirname "$CONFIG_FILE")"; touch "$CONFIG_FILE"
   if grep -q "^$1=" "$CONFIG_FILE" 2>/dev/null; then sed -i "s|^$1=.*|$1=$2|" "$CONFIG_FILE"; else printf '%s=%s\\n' "$1" "$2" >> "$CONFIG_FILE"; fi
@@ -55,6 +66,22 @@ cfgset() {
 T3CODE_HOST="$(cfgget T3CODE_HOST)"; T3CODE_HOST="\${T3CODE_HOST:-${DEFAULT_HOST_BIND}}"
 T3CODE_PORT="$(cfgget T3CODE_PORT)"; T3CODE_PORT="\${T3CODE_PORT:-${DEFAULT_PORT}}"
 WORKSPACE_ROOT="$(cfgget WORKSPACE_ROOT)"; WORKSPACE_ROOT="\${WORKSPACE_ROOT:-/root/repos}"
+`;
+
+// Pairing scripts additionally need the HTTPS front end's EFFECTIVE state, which
+// is T3CODE_PUBLIC_BASE_URL and nothing else: bin/setup-t3-https.sh writes that
+// key only when the TLS proxy actually came up, and clears it on every failure
+// path (offline apt, nginx refused to start) while keeping T3CODE_HTTPS as the
+// retry preference. Reading the PREFERENCE here would mint pairing links to a
+// port nothing listens on after exactly the failure that is meant to degrade to
+// plain http. T3's DPoP proofs are bound to the origin the browser dialled, so
+// the link must name the same one the server was told to advertise.
+const PAIRING_PRELUDE = PRELUDE + `T3CODE_PUBLIC_BASE_URL="$(cfgget T3CODE_PUBLIC_BASE_URL)"
+# The origin the pairing link is minted against, given the client-reachable host in $1.
+t3base() {
+  if [ -n "$T3CODE_PUBLIC_BASE_URL" ]; then printf '%s' "$T3CODE_PUBLIC_BASE_URL"; return 0; fi
+  printf 'http://%s:%s' "$1" "$T3CODE_PORT"
+}
 `;
 
 /** Bash: install/update t3, persist the opt-in + bind keys, deploy + start the
@@ -128,6 +155,18 @@ TimeoutStopSec=5s
 [Install]
 WantedBy=multi-user.target
 UNIT
+# HTTPS front end (browser mic capture needs a secure origin). This is the ONE
+# part that is NOT embedded: certificate issuance + the nginx site are far too
+# much to inline, and unlike the npm install they are not needed for the toggle
+# to work at all. So call the VM's repo copy when it has the script, and say so
+# plainly when it doesn't -- the next reprovision then sets HTTPS up. Runs before
+# the restart below so \`t3 serve\` starts with T3CODE_PUBLIC_BASE_URL set.
+if [ -f /opt/construct/repo/bin/setup-t3-https.sh ]; then
+  bash /opt/construct/repo/bin/setup-t3-https.sh \\
+    || echo "warning: T3 HTTPS setup failed; the web GUI stays on plain http" >&2
+else
+  echo "note: this VM's Construct copy predates T3 HTTPS support; the web GUI stays on plain http until the next reprovision"
+fi
 systemctl daemon-reload
 systemctl enable ${SERVICE}
 systemctl restart ${SERVICE}
@@ -158,6 +197,12 @@ function buildDisableScript() {
 cfgset T3CODE false
 cfgset CONSTRUCT_T3_VOICE_INPUT false
 rm -f /etc/construct/t3code-desktop-status /etc/construct/t3code-installed-build
+# Take the TLS proxy down with the server it fronts (an https listener in front of
+# a stopped T3 only serves 502s). --teardown keeps the saved T3CODE_HTTPS
+# preference and the local CA, so re-enabling needs no new Windows trust import.
+if [ -f /opt/construct/repo/bin/setup-t3-https.sh ]; then
+  bash /opt/construct/repo/bin/setup-t3-https.sh --teardown || true
+fi
 if [ -f /etc/systemd/system/${SERVICE}.service ]; then
   systemctl disable --now ${SERVICE} 2>/dev/null || true
   echo "${SERVICE} stopped and disabled"
@@ -170,36 +215,44 @@ exit 0
 
 /**
  * Bash: mint a one-time pairing token and print the ready-to-open JSON
- * ({... "pairUrl": "http://<dns>:<port>/pair#token=..."}).
+ * ({... "pairUrl": "https://<dns>:<port>/pair#token=..."}).
  *
  * TWO VARIANTS, and which one runs is decided by the instance:
  *
- *   DEFAULT INSTANCE (and no instance at all) — the script is BYTE-IDENTICAL to the
- *   one that shipped before instances existed. Not "equivalent": identical. This
- *   string is the remote command an existing install sends over SSH, and the
- *   zero-change bar is about the command, not only about the URL it happens to
- *   produce today (config.env is user-editable, so a CONSTRUCT_EXTERNAL_HOST left
- *   behind by anything else would silently change the default install's pairing URL).
+ *   DEFAULT INSTANCE (and no instance at all) — the host name comes from the VM's
+ *   own $(hostname).mshome.net and CONSTRUCT_EXTERNAL_HOST is deliberately NOT read
+ *   (config.env is user-editable, so a value left behind by anything else must not
+ *   silently redirect the default install's pairing URL).
  *
  *   NON-DEFAULT INSTANCE — prefers CONSTRUCT_EXTERNAL_HOST, the client-reachable name
  *   B2 records in config.env, because a remote/port-forwarded VM is NOT reachable at
  *   its own mshome name; it falls back to $(hostname).mshome.net when the key is absent.
+ *
+ * BOTH variants pick the SCHEME from the VM: Construct now serves T3 over HTTPS
+ * (bin/setup-t3-https.sh), and a browser only exposes getUserMedia() — T3's
+ * client-side microphone capture — on a secure origin, so the pairing link must
+ * name the https origin whenever one is configured. This script therefore is no
+ * longer byte-identical to the pre-instances one: that pin was a zero-change bar
+ * for a refactor, and this is a deliberate feature change (the WHOLE script is
+ * still pinned in extension/test/t3code.test.js, at its new value). On a VM
+ * without the TLS proxy every key is absent and the produced URL is exactly
+ * today's http one.
  */
 function buildPairingScript(instance) {
   if (!instance || instances.isDefaultInstance(instance)) {
-    return PRELUDE + `
+    return PAIRING_PRELUDE + `
 command -v t3 >/dev/null 2>&1 || { echo "t3 is not installed" >&2; exit 1; }
-base="http://$(hostname).mshome.net:\${T3CODE_PORT}"
+base="$(t3base "$(hostname).mshome.net")"
 t3 auth pairing create --json --ttl 10m --label "construct-control-panel" --base-url "$base" --log-level none
 `;
   }
-  return PRELUDE + `
+  return PAIRING_PRELUDE + `
 command -v t3 >/dev/null 2>&1 || { echo "t3 is not installed" >&2; exit 1; }
 # The client-reachable name of THIS VM. B2 records it in config.env as
 # CONSTRUCT_EXTERNAL_HOST (a remote/forwarded instance is not reachable at its own
 # mshome name); absent, fall back to the local $(hostname).mshome.net.
 ext="$(cfgget CONSTRUCT_EXTERNAL_HOST)"
-base="http://\${ext:-$(hostname).mshome.net}:\${T3CODE_PORT}"
+base="$(t3base "\${ext:-$(hostname).mshome.net}")"
 t3 auth pairing create --json --ttl 10m --label "construct-control-panel" --base-url "$base" --log-level none
 `;
 }
@@ -218,23 +271,28 @@ function extractPairUrl(stdout) {
 }
 
 /** Fallback web-UI URL when pairing-link minting fails (an already-paired
- *  browser session still gets in). */
-function baseUrl(cfg) {
+ *  browser session still gets in). `probedUrl` is the origin the last VM probe
+ *  reported (probe.js `toState` -> the t3code agent's `url`), which knows whether
+ *  the TLS proxy is on; it is VALIDATED here rather than trusted, because it
+ *  originates from the VM's config.env and ends up in openExternal. Without it,
+ *  fall back to today's plain-http guess. */
+function baseUrl(cfg, probedUrl) {
+  if (probe.isSafeOrigin(probedUrl)) return String(probedUrl);
   const host = (cfg && cfg.vmHost) || ssh.DEFAULTS.vmHost;
   return `http://${host}:${DEFAULT_PORT}`;
 }
 
 /** Mint a pairing link on the VM and open it in the host browser. Falls back to
- *  the plain base URL (already-paired browsers) when minting fails. `opts.instance`
- *  (the active instance) only selects the pairing script variant — omitted or default
- *  sends the byte-identical original command. */
+ *  the base URL (already-paired browsers) when minting fails. `opts.instance`
+ *  (the active instance) selects the pairing script variant; `opts.webUrl` is the
+ *  origin the last probe reported, used only for that fallback. */
 async function openWebUi(opts = {}) {
   const vscode = opts._vscode || vsc();
   const _ssh = opts._ssh || ssh;
   const r = await _ssh.runRemoteScript(buildPairingScript(opts.instance), { ...opts, timeoutMs: opts.timeoutMs || 30000 });
   let url = r.code === 0 ? extractPairUrl(r.stdout) : "";
   if (!url) {
-    url = baseUrl(opts.cfg);
+    url = baseUrl(opts.cfg, opts.webUrl);
     vscode.window.showWarningMessage(
       "Couldn't mint a T3 Code pairing link (" + ((r.stderr || "").trim().slice(0, 120) || "exit " + r.code) +
       ") — opening the plain web UI; already-paired browsers still get in."

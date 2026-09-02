@@ -21,6 +21,9 @@ if [ -r "$cfg" ]; then
   emit T3CODE "$(sed -n 's/^T3CODE=//p' "$cfg" | head -1)"
   emit T3CODE_PORT "$(sed -n 's/^T3CODE_PORT=//p' "$cfg" | head -1)"
   emit T3CODE_CHANNEL "$(sed -n 's/^T3CODE_CHANNEL=//p' "$cfg" | head -1)"
+  emit T3CODE_HTTPS "$(sed -n 's/^T3CODE_HTTPS=//p' "$cfg" | head -1)"
+  emit T3CODE_HTTPS_PORT "$(sed -n 's/^T3CODE_HTTPS_PORT=//p' "$cfg" | head -1)"
+  emit T3CODE_PUBLIC_BASE_URL "$(sed -n 's/^T3CODE_PUBLIC_BASE_URL=//p' "$cfg" | head -1)"
 fi
 mark=/etc/construct/provisioned.env
 if [ -r "$mark" ]; then
@@ -84,7 +87,49 @@ function parseProbe(stdout) {
   return map;
 }
 
-function toState(map) {
+/** Host as it appears inside a URL: IPv6 literals get bracketed, names and IPv4
+ *  pass through (same rule the VM's print-connection-info.sh applies). */
+function urlHost(host) {
+  const h = String(host == null ? "" : host);
+  return h.includes(":") ? `[${h}]` : h;
+}
+
+/** A T3CODE_PUBLIC_BASE_URL from the VM's config.env is only accepted when it is
+ *  a plain http(s) origin. config.env is root-owned but user-editable, and this
+ *  string ends up in vscode.env.openExternal — so it is validated, never trusted. */
+function isSafeOrigin(s) {
+  return /^https?:\/\/[A-Za-z0-9._-]+(?::\d{1,5})?$/.test(String(s || "")) ||
+    /^https?:\/\/\[[0-9A-Fa-f:.]+\](?::\d{1,5})?$/.test(String(s || ""));
+}
+
+/**
+ * Undo bin/config-set.sh's rendering. It writes values made only of its safe
+ * charset bare, and single-quotes anything else (embedded apostrophes as '\'').
+ * An IPv6 public base URL — https://[2001:db8::1]:5178 — contains brackets, so it
+ * IS stored quoted; reading the raw line without decoding would carry the
+ * apostrophes into the URL. Pure; mirrors _cfg_unquote in the guest scripts.
+ */
+function cfgUnquote(s) {
+  const v = String(s == null ? "" : s);
+  if (v.length >= 2 && v.startsWith("'") && v.endsWith("'")) {
+    return v.slice(1, -1).split("'\\''").join("'");
+  }
+  return v;
+}
+
+/** The port of an origin, or "" when it carries none. Handles the bracketed IPv6
+ *  form, where the colons inside the brackets are not the port separator. */
+function originPort(origin) {
+  const m = String(origin || "").match(/:(\d{1,5})$/);
+  return m ? m[1] : "";
+}
+
+/**
+ * Shape a probe map into panel state. `opts.host` is the client-reachable name of
+ * the VM (cfg.vmHost) and is only needed to build the T3 web URL; omit it and the
+ * agent entry simply carries no `url`.
+ */
+function toState(map, opts = {}) {
   const tools = (map.AI_TOOLS || "").split(",").map((s) => s.trim()).filter(Boolean);
   const agents = [];
   const add = (id, name, detail, vkey) => {
@@ -104,13 +149,36 @@ function toState(map) {
   if (map.T3CODE === "true" || map.V_T3) {
     const t3port = (map.T3CODE_PORT || "").trim() || "5177";
     const t3ch = (map.T3CODE_CHANNEL || "").trim();
-    const t3detail = "web GUI :" + t3port + (t3ch === "nightly" ? " · nightly" : "");
-    agents.push({
+    // With Construct's TLS proxy on (bin/setup-t3-https.sh) the web GUI is
+    // reached over https on its own port — that origin is what the panel shows
+    // and opens, because browser microphone capture needs a secure context and
+    // the pairing token is bound to the origin that minted it. Plain http on
+    // T3CODE_PORT keeps working for local tooling; it just isn't advertised.
+    //
+    // READINESS IS T3CODE_PUBLIC_BASE_URL, NOT T3CODE_HTTPS. The latter is only
+    // the user's preference: a setup that failed (offline apt, nginx refused to
+    // start) deliberately keeps it true so the next provision retries, while
+    // clearing the public origin. Keying off the origin means such a VM shows
+    // and opens its working http URL instead of a dead https listener.
+    const t3base = cfgUnquote((map.T3CODE_PUBLIC_BASE_URL || "").trim());
+    const t3ready = isSafeOrigin(t3base) && t3base.startsWith("https://");
+    const t3shownPort = t3ready
+      ? (originPort(t3base) || (map.T3CODE_HTTPS_PORT || "").trim() || "5178")
+      : t3port;
+    const t3detail = "web GUI :" + t3shownPort +
+      (t3ready ? " · https" : "") + (t3ch === "nightly" ? " · nightly" : "");
+    const entry = {
       id: "t3code", name: "T3 Code", detail: t3detail,
       version: extractVersion(map.V_T3) || "—", updateAvailable: false,
       webui: map.T3_ACTIVE === "active",
       channel: t3ch === "nightly" ? "nightly" : "stable",
-    });
+    };
+    if (t3ready) {
+      entry.url = t3base;
+    } else if (opts.host) {
+      entry.url = `http://${urlHost(opts.host)}:${t3port}`;
+    }
+    agents.push(entry);
   }
 
   const projects = (map.PROJECTS || "").split(",").map((s) => s.trim()).filter(Boolean)
@@ -148,7 +216,7 @@ async function probe(opts = {}) {
   if (!reachable) return { online: false, host, hostShort };
   const r = await ssh.runRemoteScript(REMOTE_PROBE, { ...opts, timeoutMs: opts.timeoutMs || 25000 });
   if (r.code !== 0) return { online: true, host, hostShort, probeError: (r.stderr || "").slice(0, 300) };
-  return { online: true, host, hostShort, ...toState(parseProbe(r.stdout)) };
+  return { online: true, host, hostShort, ...toState(parseProbe(r.stdout), { host }) };
 }
 
-module.exports = { REMOTE_PROBE, extractVersion, formatMarker, parseDiskPct, parseProbe, toState, probe };
+module.exports = { REMOTE_PROBE, extractVersion, formatMarker, parseDiskPct, parseProbe, toState, probe, isSafeOrigin, cfgUnquote, originPort };

@@ -132,5 +132,92 @@ ok("state: t3code enabled without version shows placeholder + default port, no w
 const t3absent = probe.toState(probe.parseProbe("AI_TOOLS\tclaude-code\nT3_ACTIVE\tinactive\n"));
 ok("state: no t3code when neither enabled nor installed", !t3absent.agents.some((a) => a.id === "t3code"));
 
+// ── T3 Code over HTTPS (bin/setup-t3-https.sh) ───────────────────────────────
+ok("probe script emits the HTTPS keys",
+  /emit T3CODE_HTTPS /.test(probe.REMOTE_PROBE) && /emit T3CODE_HTTPS_PORT /.test(probe.REMOTE_PROBE) &&
+  /emit T3CODE_PUBLIC_BASE_URL /.test(probe.REMOTE_PROBE));
+// `^T3CODE_HTTPS=` must not also swallow the T3CODE_HTTPS_PORT line.
+ok("probe script reads T3CODE_HTTPS with an anchored, '='-terminated match",
+  /s\/\^T3CODE_HTTPS=\/\/p/.test(probe.REMOTE_PROBE));
+const t3agentOf = (map, opts) => probe.toState(probe.parseProbe(map), opts).agents.find((a) => a.id === "t3code");
+// Off (or absent): today's http origin and port, unchanged.
+const httpAgent = t3agentOf("T3CODE\ttrue\nT3CODE_PORT\t5177\nT3_ACTIVE\tactive\n", { host: "agent-vm.mshome.net" });
+ok("state: without HTTPS the url + detail stay on the http port",
+  !!httpAgent && httpAgent.url === "http://agent-vm.mshome.net:5177" && /:5177/.test(httpAgent.detail) &&
+  !/https/.test(httpAgent.detail));
+// READINESS IS THE RECORDED ORIGIN, NOT THE PREFERENCE. setup-t3-https.sh writes
+// T3CODE_PUBLIC_BASE_URL only when the proxy actually came up, and DPoP proofs are
+// bound to that exact origin.
+const httpsAgent = t3agentOf("T3CODE\ttrue\nT3CODE_PORT\t5177\nT3CODE_HTTPS\ttrue\nT3CODE_HTTPS_PORT\t5178\nT3CODE_PUBLIC_BASE_URL\thttps://agent-vm.mshome.net:5178\nT3_ACTIVE\tactive\n", { host: "agent-vm.mshome.net" });
+ok("state: a recorded https origin is the url the panel opens",
+  !!httpsAgent && httpsAgent.url === "https://agent-vm.mshome.net:5178");
+ok("state: HTTPS on -> detail names the https port and marks the scheme",
+  !!httpsAgent && /:5178/.test(httpsAgent.detail) && /https/.test(httpsAgent.detail), httpsAgent && httpsAgent.detail);
+const publicAgent = t3agentOf("T3CODE\ttrue\nT3CODE_HTTPS\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://vm.example.com:6443\nT3_ACTIVE\tactive\n", { host: "agent-vm.mshome.net" });
+ok("state: the recorded origin wins over the probed host, port included",
+  !!publicAgent && publicAgent.url === "https://vm.example.com:6443" && /:6443/.test(publicAgent.detail));
+// THE FAILED-SETUP CASE: preference kept for a retry, origin cleared. The panel
+// must show/open the working http URL, not a dead https listener.
+const prefOnlyAgent = t3agentOf("T3CODE\ttrue\nT3CODE_PORT\t5177\nT3CODE_HTTPS\ttrue\nT3CODE_HTTPS_PORT\t5178\nT3_ACTIVE\tactive\n", { host: "agent-vm.mshome.net" });
+ok("state: T3CODE_HTTPS=true with NO recorded origin -> http url (failed setup)",
+  !!prefOnlyAgent && prefOnlyAgent.url === "http://agent-vm.mshome.net:5177");
+ok("state: ...and the detail does not claim https either",
+  !!prefOnlyAgent && !/https/.test(prefOnlyAgent.detail) && /:5177/.test(prefOnlyAgent.detail),
+  prefOnlyAgent && prefOnlyAgent.detail);
+// A value that is not an origin comes from a user-editable file and would end up
+// in openExternal: rejected, and the http fallback is used.
+const poisonAgent = t3agentOf("T3CODE\ttrue\nT3CODE_HTTPS\ttrue\nT3CODE_PUBLIC_BASE_URL\tjavascript:alert(1)\nT3_ACTIVE\tactive\n", { host: "agent-vm.mshome.net" });
+ok("state: a non-origin T3CODE_PUBLIC_BASE_URL is rejected, http fallback used",
+  !!poisonAgent && poisonAgent.url === "http://agent-vm.mshome.net:5177");
+const httpPublicAgent = t3agentOf("T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttp://vm.example.com:5177\nT3_ACTIVE\tactive\n", { host: "agent-vm.mshome.net" });
+ok("state: an http public origin is not treated as HTTPS-ready",
+  !!httpPublicAgent && !/https/.test(httpPublicAgent.detail));
+ok("isSafeOrigin: accepts http/https origins with and without a port, brackets IPv6",
+  probe.isSafeOrigin("https://vm.example.com:5178") && probe.isSafeOrigin("http://vm") &&
+  probe.isSafeOrigin("https://[2001:db8::1]:5178"));
+ok("isSafeOrigin: rejects paths, other schemes, spaces and empties",
+  !probe.isSafeOrigin("https://vm/pair") && !probe.isSafeOrigin("javascript:alert(1)") &&
+  !probe.isSafeOrigin("https://vm example") && !probe.isSafeOrigin("") && !probe.isSafeOrigin(null));
+// config-set.sh single-quotes any value outside its safe charset -- which an IPv6
+// origin (brackets) always is. The probe reads the RAW config.env line, so it has
+// to decode that rendering; the fixture below is produced by the real script.
+(() => {
+  const cp = require("child_process");
+  const os = require("os");
+  const fsx = require("fs");
+  const path = require("path");
+  const dir = fsx.mkdtempSync(path.join(os.tmpdir(), "t3probe-"));
+  const cfg = path.join(dir, "config.env");
+  fsx.writeFileSync(cfg, "");
+  const configSet = path.join(__dirname, "..", "..", "bin", "config-set.sh");
+  cp.spawnSync("bash", [configSet, cfg, "T3CODE_PUBLIC_BASE_URL", "https://[2001:db8::1]:5178"], { encoding: "utf8" });
+  // Exactly what the remote probe emits: the raw text after the '=' .
+  const raw = String(fsx.readFileSync(cfg, "utf8")).split("\n")
+    .find((l) => l.startsWith("T3CODE_PUBLIC_BASE_URL=")).slice("T3CODE_PUBLIC_BASE_URL=".length);
+  fsx.rmSync(dir, { recursive: true, force: true });
+  ok("test precondition: config-set.sh really quotes an IPv6 origin", raw.startsWith("'") && raw.endsWith("'"), raw);
+  const v6Agent = t3agentOf(`T3CODE\ttrue\nT3CODE_HTTPS\ttrue\nT3CODE_PUBLIC_BASE_URL\t${raw}\nT3_ACTIVE\tactive\n`,
+    { host: "agent-vm.mshome.net" });
+  ok("state: a config-set.sh-quoted IPv6 origin is decoded and accepted",
+    !!v6Agent && v6Agent.url === "https://[2001:db8::1]:5178", v6Agent && v6Agent.url);
+  ok("state: ...and its port shows in the detail", !!v6Agent && /:5178/.test(v6Agent.detail), v6Agent && v6Agent.detail);
+})();
+ok("cfgUnquote: decodes config-set.sh's rendering, including escaped apostrophes",
+  probe.cfgUnquote("'https://[2001:db8::1]:5178'") === "https://[2001:db8::1]:5178" &&
+  probe.cfgUnquote("'it'\\''s'") === "it's" &&
+  probe.cfgUnquote("https://vm:5178") === "https://vm:5178" &&
+  probe.cfgUnquote("") === "" && probe.cfgUnquote(null) === "");
+ok("originPort: reads the port, ignoring the colons inside an IPv6 literal",
+  probe.originPort("https://vm:5178") === "5178" && probe.originPort("https://[2001:db8::1]:6443") === "6443" &&
+  probe.originPort("https://vm") === "" && probe.originPort("https://[2001:db8::1]") === "");
+// Without a host (toState called with one argument, as the older callers do) the
+// entry simply carries no url -- never a half-built one.
+const noHostAgent = t3agentOf("T3CODE\ttrue\nT3CODE_HTTPS\ttrue\n");
+ok("state: no host -> no url field", !!noHostAgent && !("url" in noHostAgent));
+// ...but a recorded origin needs no host at all.
+const noHostReady = t3agentOf("T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://vm.example.com:5178\n");
+ok("state: a recorded origin yields a url even without a probed host",
+  !!noHostReady && noHostReady.url === "https://vm.example.com:5178");
+
 console.log(`\n  probe/ssh unit tests — ${pass}/${pass + fail} passed\n`);
 process.exit(fail ? 1 : 0);
