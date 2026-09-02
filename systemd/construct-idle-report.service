@@ -1,0 +1,15 @@
+[Unit]
+Description=Construct guest activity heartbeat (idle detection)
+Documentation=file:/opt/construct/repo/docs/expose.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+# The script reads /etc/construct/config.env itself with a narrow key lookup, so
+# there is deliberately no EnvironmentFile= here: config.env must not be able to
+# set the script's internal variables.
+# The script never exits non-zero: a failed report is logged to the journal and
+# retried by the next tick, so this unit never shows up in `systemctl --failed`.
+ExecStart=/usr/local/bin/construct-idle-report.sh
