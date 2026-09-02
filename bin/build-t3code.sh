@@ -21,6 +21,74 @@ CONSTRUCT_VERSION="${CONSTRUCT_VERSION:-unversioned}"
 note() { printf '    %s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
+# ── Superseded-build pruning + free-space requirement (pure helpers; unit-tested by
+#    test/t3-build-diskcheck.test.sh, which sources this file with _FUNCS_ONLY=true) ──
+#
+# A finished build directory must keep what the INSTALLED server uses at run time:
+# the source checkout (git, or the .construct-upstream-commit marker), apps/server/dist
+# (/usr/local/bin/t3 points into it; the web client is bundled at dist/client) and any
+# resource-monitor executable under native/*/target/{release,debug}. Everything else is
+# regenerable once the build is superseded: the pnpm node_modules tree (mostly hardlinks
+# into the pnpm store, so it reclaims little), the Windows cross-compile targets, cargo's
+# intermediate deps/build/incremental dirs, the Windows Desktop output and the web bundle
+# (apps/web/dist is only the monorepo fallback for a dev server).
+t3_build_prune_candidates() {
+  local dir="$1" p
+  for p in node_modules apps/desktop/release apps/desktop/dist apps/web/dist apps/mobile/dist apps/marketing/dist; do
+    [[ -e "${dir}/${p}" ]] && printf '%s\n' "${dir}/${p}"
+  done
+  for p in "${dir}"/native/*/target/*-pc-windows-* \
+           "${dir}"/native/*/target/release/deps "${dir}"/native/*/target/release/build \
+           "${dir}"/native/*/target/release/incremental "${dir}"/native/*/target/release/.fingerprint \
+           "${dir}"/native/*/target/release/examples \
+           "${dir}"/native/*/target/debug/deps "${dir}"/native/*/target/debug/build \
+           "${dir}"/native/*/target/debug/incremental "${dir}"/native/*/target/debug/.fingerprint; do
+    [[ -e "${p}" ]] && printf '%s\n' "${p}"
+  done
+  return 0
+}
+
+# Free space the build needs, in KiB. 15 GiB is the COLD first-build figure: wine
+# (~1.3 GiB installed plus its .deb downloads), the pnpm store (~3 GiB), the electron /
+# electron-builder caches, the Rust toolchain with the Windows target, and the build
+# outputs. Once those are on disk a rebuild only adds the source tree, node_modules
+# hardlinks, the cargo target and the desktop/web output: a few GiB. Demanding 15 GiB for
+# every rebuild turned a 95%-full disk into a hard failure although the rebuild itself
+# would have fitted. T3CODE_BUILD_MIN_FREE_GIB (integer) overrides the whole heuristic.
+#   $1..$4 = 1/0 flags: wine installed, pnpm store present, electron cache present,
+#   Rust Windows target installed.
+t3_build_required_kb() {
+  local wine="$1" store="$2" electron="$3" rust="$4" gib=6
+  if [[ "${T3CODE_BUILD_MIN_FREE_GIB:-}" =~ ^[0-9]+$ ]]; then
+    echo $(( T3CODE_BUILD_MIN_FREE_GIB * 1048576 )); return 0
+  fi
+  [[ "${wine}" == 1 ]] || gib=$(( gib + 4 ))
+  [[ "${store}" == 1 ]] || gib=$(( gib + 3 ))
+  [[ "${electron}" == 1 ]] || gib=$(( gib + 1 ))
+  [[ "${rust}" == 1 ]] || gib=$(( gib + 1 ))
+  echo $(( gib * 1048576 ))
+}
+
+# Probe the toolchain state as the four 1/0 flags above (space-separated, one line).
+# HOME and PATH (dpkg-query, pnpm) are honoured so tests can point them at fixtures.
+t3_build_toolchain_flags() {
+  local wine=0 store=0 electron=0 rust=0 store_path
+  dpkg-query -W -f='${Status}' wine64 2>/dev/null | grep -q 'install ok installed' && wine=1
+  store_path="$(pnpm store path 2>/dev/null || true)"
+  [[ -n "${store_path}" ]] || store_path="${HOME}/.local/share/pnpm/store"
+  [[ -d "${store_path}" && -n "$(ls -A "${store_path}" 2>/dev/null)" ]] && store=1
+  [[ -d "${HOME}/.cache/electron" && -n "$(ls -A "${HOME}/.cache/electron" 2>/dev/null)" ]] && electron=1
+  if [[ -d "${HOME}/.rustup/toolchains" ]]; then
+    ls -d "${HOME}"/.rustup/toolchains/*/lib/rustlib/x86_64-pc-windows-gnu >/dev/null 2>&1 && rust=1
+  fi
+  echo "${wine} ${store} ${electron} ${rust}"
+}
+
+# Sourced for the helpers only (unit tests): stop before anything resolves or installs.
+if [[ "${_FUNCS_ONLY:-}" == "true" ]]; then
+  return 0 2>/dev/null || exit 0
+fi
+
 [[ -s "${PATCH_FILE}" ]] || fail "T3 source patch is missing: ${PATCH_FILE}"
 
 # This source build can be selected even when no JavaScript-based agent was
@@ -65,20 +133,34 @@ fi
 # build is complete, but the host handoff is re-enabled only after success.
 rm -f "${STATUS_PATH}"
 
-# A completed source build retains a multi-gigabyte node_modules tree even though
-# its installed server runs entirely from apps/server/dist. Reclaim dependency
-# trees from superseded builds before checking free space; keep the source and
-# server bundle themselves so a failed upgrade still leaves the previous T3
-# executable available, as promised above.
-for stale_modules in "${CACHE_ROOT}"/*/node_modules; do
-  [[ -d "${stale_modules}" ]] || continue
-  [[ "$(dirname "${stale_modules}")" == "${SOURCE_DIR}" ]] && continue
-  note "Pruning dependencies from superseded T3 build $(basename "$(dirname "${stale_modules}")")..."
-  rm -rf -- "${stale_modules}"
+# Reclaim the regenerable parts of superseded builds before checking free space (see
+# t3_build_prune_candidates for what stays: the source and the server bundle of the build
+# that is CURRENTLY installed keep working until this build succeeds, as promised above).
+reclaimed_kb=0
+for stale_dir in "${CACHE_ROOT}"/*/; do
+  stale_dir="${stale_dir%/}"
+  [[ -d "${stale_dir}" ]] || continue
+  [[ "${stale_dir}" == "${SOURCE_DIR}" ]] && continue
+  while IFS= read -r victim; do
+    [[ -n "${victim}" ]] || continue
+    victim_kb="$(du -sxk -- "${victim}" 2>/dev/null | awk '{print $1}')"
+    rm -rf -- "${victim}"
+    reclaimed_kb=$(( reclaimed_kb + ${victim_kb:-0} ))
+  done < <(t3_build_prune_candidates "${stale_dir}")
 done
+if [[ "${reclaimed_kb}" -gt 0 ]]; then
+  note "Reclaimed $(( reclaimed_kb / 1024 )) MiB of regenerable output from superseded T3 builds (their source + server bundle stay until this build succeeds)."
+fi
 
+# The requirement depends on how much of the toolchain is already on disk.
+read -r tc_wine tc_store tc_electron tc_rust <<<"$(t3_build_toolchain_flags)"
+required_kb="$(t3_build_required_kb "${tc_wine}" "${tc_store}" "${tc_electron}" "${tc_rust}")"
 available_kb="$(df -Pk "${CACHE_ROOT}" | awk 'NR==2 {print $4}')"
-[[ "${available_kb:-0}" -ge 15728640 ]] || fail "T3 source/Desktop build needs at least 15 GiB free in the VM"
+toolchain_note="wine=${tc_wine} pnpm-store=${tc_store} electron-cache=${tc_electron} rust-windows-target=${tc_rust}"
+if [[ "${available_kb:-0}" -lt "${required_kb}" ]]; then
+  fail "T3 source/Desktop build needs at least $(( required_kb / 1048576 )) GiB free in the VM; $(( ${available_kb:-0} / 1024 )) MiB available (toolchain already present: ${toolchain_note}; override with T3CODE_BUILD_MIN_FREE_GIB=<gib>)"
+fi
+note "Free space: $(( ${available_kb:-0} / 1024 )) MiB available, $(( required_kb / 1048576 )) GiB required (${toolchain_note})."
 
 export DEBIAN_FRONTEND=noninteractive
 if ! dpkg --print-foreign-architectures | grep -qx i386; then
