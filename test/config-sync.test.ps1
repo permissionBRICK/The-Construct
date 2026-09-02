@@ -1752,16 +1752,24 @@ ok "vmbranch: resolve keeps a valid name" ((Resolve-ConstructVmBranch -VmBranch 
 ok "vmbranch: resolve falls back on a bad name" ((Resolve-ConstructVmBranch -VmBranch "vm/work") -eq "vm")
 
 # Branch derivation from the SSH host alias (Provision-AgentVM.ps1 -ConfigBranch).
-# A non-default instance's alias is its bare name; the older "construct-<name>"
-# spelling is tolerated and lands on the same branch.
+# A non-default instance's alias is its bare name. Lowercasing is the ONLY
+# transformation -- no prefix is stripped (see the "construct-" fixture below).
 ok "vmbranch: default alias derives 'vm'" ((Get-ConstructConfigBranchName -HostAlias "agent-vm") -eq "vm")
 ok "vmbranch: empty/null alias derives 'vm'" (
     (Get-ConstructConfigBranchName -HostAlias "") -eq "vm" -and
     (Get-ConstructConfigBranchName -HostAlias $null) -eq "vm")
 ok "vmbranch: bare instance alias derives 'vm-<name>'" (
     (Get-ConstructConfigBranchName -HostAlias "work") -eq "vm-work")
-ok "vmbranch: legacy construct- alias derives the same branch" (
-    (Get-ConstructConfigBranchName -HostAlias "construct-work") -eq "vm-work")
+# THE STORE-ALIASING REGRESSION. The derivation used to STRIP a leading "construct-",
+# which mapped the perfectly valid instance "construct-work" (registry branch
+# "vm-construct-work") onto "vm-work" -- the store of the DIFFERENT, equally valid
+# instance "work". The strip is gone; the prefix is RESERVED by every name validator
+# instead (Test-ConstructInstanceName). Same fixture in extension/test/instances.test.js.
+ok "vmbranch: NO construct- prefix is stripped (it would alias another instance's store)" (
+    (Get-ConstructConfigBranchName -HostAlias "construct-work") -eq "vm-construct-work")
+ok "vmbranch: ...so 'work' and 'construct-work' never share a branch" (
+    (Get-ConstructConfigBranchName -HostAlias "construct-work") -ne
+    (Get-ConstructConfigBranchName -HostAlias "work"))
 ok "vmbranch: alias case and padding are normalised" (
     (Get-ConstructConfigBranchName -HostAlias "  Work-2  ") -eq "vm-work-2")
 
@@ -2212,9 +2220,14 @@ if ($provBlockAst) {
     ok "provision-run: a non-default alias initialises the repo on ITS branch" ($rWork.InitBranch -eq "vm-work")
     ok "provision-run: a non-default alias syncs on ITS branch" ($rWork.SyncBranch -eq "vm-work")
 
-    $rLegacy = Invoke-ProvisionConfigSyncBlock -Code $provCode -HostAlias "construct-work"
-    ok "provision-run: the legacy construct- alias lands on the same branch" (
-        $rLegacy.InitBranch -eq "vm-work" -and $rLegacy.SyncBranch -eq "vm-work")
+    # End to end through the provisioner's own block: "work" and "construct-work" must
+    # initialise and sync on DIFFERENT refs (the prefix is reserved, so the second name
+    # never reaches here in practice -- this pins that the derivation cannot fold them).
+    $rReserved = Invoke-ProvisionConfigSyncBlock -Code $provCode -HostAlias "construct-work"
+    ok "provision-run: a 'construct-' alias gets its OWN branch, never 'work''s" (
+        $rReserved.InitBranch -eq "vm-construct-work" -and $rReserved.SyncBranch -eq "vm-construct-work")
+    ok "provision-run: ...so the two instances never share a store" (
+        $rReserved.SyncBranch -ne $rWork.SyncBranch)
 
     $rExplicit = Invoke-ProvisionConfigSyncBlock -Code $provCode -HostAlias "work" -ConfigBranch "vm-other"
     ok "provision-run: explicit -ConfigBranch wins over the alias" (

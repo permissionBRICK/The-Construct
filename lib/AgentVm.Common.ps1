@@ -2762,15 +2762,27 @@ function Get-ConstructConfigBranchName {
         Pure -- Provision-AgentVM.ps1 uses it when -ConfigBranch is not given.
 
         A non-default instance's alias IS its bare instance name ("work" ->
-        "vm-work"). A leading "construct-" is tolerated and stripped first, so
-        the older "construct-<name>" alias convention maps to the same branch as
-        the bare name and no VM changes branches when its alias is rewritten.
+        "vm-work"). There is exactly ONE derivation rule, everywhere: alias =
+        name, key = construct_<name>_ed25519, branch = vm-<name>.
 
-        Lowercasing and that prefix strip are the ONLY transformations: the
-        alias is never "cleaned up" by substituting characters, because that
-        would map two different aliases ("work/one" and "work-one") onto one
-        branch and silently share a store. Aliases are expected to follow the
-        instance-name rule (^[a-z0-9][a-z0-9-]{0,39}$); anything that does not
+        NO PREFIX IS STRIPPED. An earlier version tolerated (and removed) a
+        leading "construct-", from an alias convention that was abandoned
+        mid-project and never shipped -- and that strip was a store-aliasing
+        bug, not compatibility: the registry derives the valid instance
+        "construct-work" to branch "vm-construct-work" while this function
+        answered "vm-work", the branch of the DIFFERENT, equally valid instance
+        "work". A local install of "construct-work" therefore initialised and
+        synced another instance's store. The prefix is now RESERVED instead --
+        Test-ConstructInstanceName (lib\AgentVm.Instances.ps1), the extension's
+        isValidName, Auto-Install.ps1 / Create-AgentVM.ps1 and the host service
+        all refuse a name that starts with it -- so no alias reaching here can
+        carry it in the first place.
+
+        Lowercasing is the ONLY transformation: the alias is never "cleaned up"
+        by substituting characters, because that would map two different aliases
+        ("work/one" and "work-one") onto one branch and silently share a store.
+        Aliases are expected to follow the instance-name rule (a lowercase DNS
+        label, 1-63 chars, alphanumeric first and last); anything that does not
         yield a usable branch name falls back to the default branch.
 
         Pure -- returns a value and writes to no other stream. A non-default
@@ -2783,7 +2795,6 @@ function Get-ConstructConfigBranchName {
     $alias = ""
     if ($null -ne $HostAlias) { $alias = $HostAlias.Trim().ToLowerInvariant() }
     if (-not $alias -or $alias -eq "agent-vm") { return $script:CONSTRUCT_DEFAULT_VM_BRANCH }
-    if ($alias.StartsWith("construct-")) { $alias = $alias.Substring("construct-".Length) }
     $branch = "vm-$alias"
     if (-not (Test-ConstructVmBranchName -Name $branch)) { return $script:CONSTRUCT_DEFAULT_VM_BRANCH }
     return $branch

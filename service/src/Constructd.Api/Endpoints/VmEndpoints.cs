@@ -83,7 +83,7 @@ public static class VmEndpoints
 
         if (!VmNameValidator.IsValid(name))
         {
-            return Problems.BadRequest($"'name' must match {VmNameValidator.Pattern}.");
+            return Problems.BadRequest($"'name' is invalid: {VmNameValidator.Rule}");
         }
 
         http.SetAuditTarget(name);

@@ -430,9 +430,31 @@ synthesized and NOTHING is written.** Neither reader ever throws: problems are
 collected (`.problems` / `.Problems`) and the caller decides how to surface them (the
 extension logs each one and toasts once per distinct problem set).
 
-**Instance names** are `^[a-z0-9][a-z0-9-]{0,39}$` — they end up verbatim in file
-names, SSH aliases and git refs. An invalid name is skipped with a problem, not
-guessed at.
+**Instance names** are one lowercase DNS label — `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`,
+and **not** starting with the reserved prefix `construct-`. They end up verbatim in file
+names, SSH aliases and git refs, so:
+
+- the **last** character must be alphanumeric too. `work-` derives the endpoint
+  `work-.mshome.net`, which is not a host name at all — a name the validator accepted and
+  the identity rules then refused was a name no instance could be recorded under;
+- **1–63** characters — the DNS label's own limit, because the name *is* a label of
+  `<name>.mshome.net`. Every derived value has to stay usable at that length, which is why
+  `keyName` carries its own longer bound: `construct_` + 63 + `_ed25519` is 81 characters,
+  so the key-**file** rule allows 128 while the ssh-**alias** token rule keeps 64 (an alias
+  is not a path, and `hostAlias` is the bare 63-character name). Same character class in
+  both — nothing about path or control-character safety is loosened;
+- `construct-` is **reserved**. It is the namespace the derived key file and branch live
+  in, and the derivation used to *strip* it (an abandoned, never-shipped alias
+  convention), so the perfectly valid instance `construct-work` derived branch
+  `vm-construct-work` here and `vm-work` in the provisioner — the config store of the
+  *different*, equally valid instance `work`. Reserving the prefix is what leaves exactly
+  **one derivation rule everywhere**: alias = `<name>`, key = `construct_<name>_ed25519`,
+  branch = `vm-<name>`.
+
+The identical rule is applied by `lib/AgentVm.Instances.ps1`, by `Auto-Install.ps1` /
+`Create-AgentVM.ps1` before a local VM is created, and by the host service
+(`Constructd.Core.Logic.VmNameValidator`) — change all four together. An invalid name is
+skipped with a problem, not guessed at.
 
 **One normalization contract, two readers.** These rules are what keep the JS and PS
 readers from disagreeing about the *same* file — a disagreement would mean the panel
@@ -542,9 +564,10 @@ change them together):
   entry can trip them.
 - **A `hyperv-local` instance's identity is CANONICAL — derived from its name, and any
   deviation is skipped.** `vmName` must lowercase to the instance name, `sshHost` must be
-  `<name>.mshome.net`, `hostAlias` must be the **bare** `<name>` (the legacy
-  `construct-<name>` spelling is *not* accepted — that prefix is only tolerated on the way
-  *in* to the branch derivation), `keyName` must be `construct_<name>_ed25519`, and
+  `<name>.mshome.net`, `hostAlias` must be the **bare** `<name>` (a `construct-<name>`
+  spelling is not a legacy form to tolerate — the prefix is **reserved**, refused by every
+  name validator, and nothing strips it anywhere any more; see *Instance names* above),
+  `keyName` must be `construct_<name>_ed25519`, and
   `sshPort` must be `22`; the default instance keeps `Agent-VM` /
   `agent-vm.mshome.net` / `agent-vm` / `agent_vm_ed25519` / `22`. The reason is that
   Reinstall/Redownload emit **only `-VmName`** and `Auto-Install.ps1` derives the rest
@@ -668,6 +691,39 @@ mic auto-arm and the notification watcher all start against the *previous* selec
 probe the wrong VM. The decision itself is a pure function, so it is unit-tested rather
 than only observable in a live window.
 
+**The registry is observed, and a change is one serialized transition.** `instances.json`
+belongs to no single process: another window's picker writes it, `Auto-Install.ps1` records
+a VM into it, a rebuild rewrites an entry. None of that raises a VS Code event, so three
+changes used to go unnoticed by a window that was already running — the **default flipped**
+(this window follows it), the **selected entry removed** (`resolveActive` falls back to
+another VM), and, worst, an entry **rewritten under the same name** (a rebuilt remote VM
+comes back on a new `sshHost`/`sshPort`). The last one changed nothing a *name*-keyed gate
+could see, while the probes, the notification stream, the mic tunnel, the forwarding
+transports, the idle-policy cache and the sync throttles all went on using the endpoint
+that no longer existed.
+
+So "which VM is this window driving" is a **fingerprint of the complete normalized target**
+(`instances.targetFingerprint`: name + backend + vmName + sshHost + sshPort + hostAlias +
+keyName + configBranch + scriptsDir + service url/auth + owner), not a name:
+
+- `activeInstance()` sets the gate with `set(name, fingerprint)`, so a same-name rewrite
+  bumps the generation and every in-flight token for the old endpoint is discarded;
+- the registry is watched (`fs.watch` on its **directory** — it is written tmp+rename —
+  debounced) and re-checked on every refresh tick, and both routes call the one
+  `retargetIfChanged()`;
+- every route that retargets — the picker/command, the `construct.instance` setting and
+  the observer — goes through **one serialized transition** (`queueInstanceTransition` →
+  `onInstanceChanged`), because the handovers are async chains: two overlapping transitions
+  would interleave a teardown of A with an arm of C.
+
+`onInstanceChanged` hands over the notification watcher, the mic tunnel and the forwarder
+when the name **or** the identity changed (all three terminate on an *endpoint*), clears the
+per-target caches, and refreshes. **Zero-change:** with no registry file no watcher is ever
+opened, the synthesized default's fingerprint is a constant, and the gate is seeded with it
+— so a single-VM window stays at generation 0 for its whole life and takes none of this
+path. A **no-op rewrite** (re-serialized, reordered, or spelling out a field the derivation
+would have filled in) normalizes to the same fingerprint and does nothing at all.
+
 **Stale refreshes are discarded, not relabelled.** A refresh is a multi-stage async
 pipeline (probe → Hyper-V state → GitHub updates → ccusage → config-sync) and any stage
 can outlive a switch. Without a guard, instance A's slow probe resolving after a switch
@@ -702,6 +758,50 @@ prompt was open" guard in `offerApplyCheckpoints`.) Confirmation copy gains a
 a single-VM install's prompts are unchanged. Bound this way: shutdown, reprovision,
 reinstall/redownload (both the panel button and `customRebuild`), export, setCheckpoints,
 add-project clone-then-open, and the agent update + its follow-up reprovision.
+
+**The confirmation itself is an await, and `lifecycle.run` verifies the capture on the far
+side of it.** The destructive modal opens *inside* `run()`, so a caller's pre-call
+generation check says nothing about the moment the user clicks *Reinstall*: another window
+can change the global selection, or the registry can be rewritten, while the dialog sits
+open. Callers therefore pass `stillCurrent` — their captured-target predicate — and `run()`
+re-asks it **after** `confirmDestructive` and **before** it clears the applied-checkpoints
+marker or launches anything; an unusable predicate fails *closed*. The dialog also names
+the instance for a non-default one (and states the endpoint for a `hyperv-remote` VM, which
+lives on somebody else's host); the **default instance's dialog text is byte-identical** to
+the single-VM one it has always shown.
+
+**Start & connect** is the longest such flow — a credential lookup that can prompt, then an
+SSH poll of up to 150 s — and it both *starts* a VM and *opens a window on it*. It captures
+a target up front and re-checks it after the credential lookup, after every probe and
+immediately before `openOnVm`. A supersession stops **quietly**: the VM was legitimately
+asked to start and is left running, so the warning says it wasn't opened rather than
+"nothing was done".
+
+**Per-instance narrow messages are scoped, on both sides.** `saveIdlePolicy` PUTs to the
+captured instance and re-checks the gate after the credential lookup *and* after the PUT
+before caching or broadcasting (`readIdlePolicy` gates its cache write the same way). That
+is only half of it: extension-side gating decides whether to **post**, and says nothing
+about a message *already posted* and sitting in a webview's queue behind a full state push
+for another instance. So **every per-instance narrow producer stamps `instance`** —
+
+| message | stamped with | why it is per-instance |
+|---|---|---|
+| `idlePolicy` | the captured target | one VM's policy on one host service |
+| `forwards` | `forwarderInstance` (else the active one) | the `ssh -L` transports terminate on one VM |
+| `audio` | the mic session's slot owner (else the active one) | the `ssh -R` tunnel terminates on one VM |
+| `settings` | the instance whose `scriptsDir` was just read | `.construct-settings.json` is per scripts dir |
+
+— and the webview's message router drops any narrow message naming an instance other than
+the one the last full `state` described. One generic line covers all four; `state` itself is
+handled *before* it, because a state push is what **moves** the panel to another instance.
+Every `{type:'audio'}` payload is built by the single `audioMessage()` helper (the string
+literal exists in exactly one place), so no call site can forget the stamp; `settings` is
+read and stamped in the same breath, so the label can never describe another instance's
+file. `editProject` is deliberately **not** scoped: it is a direct reply to one webview's
+own request about the *single* host config repo every instance shares (only the VM-side
+branch is per instance — see [`../docs/config-sync.md`](../docs/config-sync.md)), so
+stamping it would make a modal opened before a switch refuse to populate after one. **Zero
+change:** a message with no `instance` still applies, which is the single-VM path.
 
 **The same discipline covers the *deferred* steps** — the ones that resolve long after
 the click, where re-reading the active instance is hardest to spot:

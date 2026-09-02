@@ -78,14 +78,99 @@ Write-Host "=== Instance names ===" -ForegroundColor Cyan
 ok "name: agent-vm ok"        (Test-ConstructInstanceName 'agent-vm')
 ok "name: a ok"               (Test-ConstructInstanceName 'a')
 ok "name: 9lives ok"          (Test-ConstructInstanceName '9lives')
-ok "name: 40 chars ok"        (Test-ConstructInstanceName ('a' * 40))
-ok "name: 41 chars rejected"  (-not (Test-ConstructInstanceName ('a' * 41)))
+# The 63/64 BOUNDARY -- a DNS label's own limit, because the name IS a label of
+# '<name>.mshome.net'. Mirrored assertion-for-assertion in extension/test/instances.test.js
+# and service/tests/Constructd.Tests/Core/VmNameValidatorTests.cs.
+ok "name: 63 chars ok (the DNS label limit)" (Test-ConstructInstanceName ('a' * 63))
+ok "name: 64 chars rejected"  (-not (Test-ConstructInstanceName ('a' * 64)))
+ok "name: 63 chars with an interior hyphen ok" (Test-ConstructInstanceName (('a' * 31) + '-' + ('b' * 31)))
+# ...and the longest accepted name must still produce an identity the reader accepts. Its
+# key file is 'construct_' + 63 + '_ed25519' = 81 characters, which is exactly why
+# $script:ConstructKeyFileRe has its own 128 bound while the ssh-alias token rule stays 64.
+$longestName = 'a' * 63
+$longestInst = Resolve-ConstructInstanceDefaults -Name $longestName -Entry $null
+ok "name: the LONGEST accepted name yields a usable identity" (
+    @(Get-ConstructInstanceIdentityProblem -Instance $longestInst).Count -eq 0)
+ok "name: ...whose derived key file is 81 characters" ($longestInst.KeyName.Length -eq 81)
+ok "name: ...and that key file name is accepted" (
+    Test-ConstructInstanceKeyFileName ('construct_' + $longestName + '_ed25519'))
+ok "name: ...while the ssh-ALIAS token rule is unchanged at 64" (
+    (Test-ConstructInstanceToken ('a' * 64)) -and (-not (Test-ConstructInstanceToken ('a' * 65))))
+ok "name: the key-file rule loosened only the LENGTH, not the character class" (
+    (-not (Test-ConstructInstanceKeyFileName 'bad/name')) -and
+    (-not (Test-ConstructInstanceKeyFileName 'bad name')) -and
+    (-not (Test-ConstructInstanceKeyFileName 'has..dots')) -and
+    (-not (Test-ConstructInstanceKeyFileName 'trailing.')) -and
+    (-not (Test-ConstructInstanceKeyFileName 'CON')) -and
+    (-not (Test-ConstructInstanceKeyFileName ('a' * 129))))
 ok "name: uppercase rejected" (-not (Test-ConstructInstanceName 'Work-VM'))
 ok "name: underscore rejected" (-not (Test-ConstructInstanceName 'work_vm'))
 ok "name: leading dash rejected" (-not (Test-ConstructInstanceName '-work'))
 ok "name: dot rejected"       (-not (Test-ConstructInstanceName 'work.vm'))
 ok "name: slash rejected"     (-not (Test-ConstructInstanceName 'work/vm'))
 ok "name: empty rejected"     (-not (Test-ConstructInstanceName ''))
+# THE TRAILING-HYPHEN REGRESSION: 'work-' used to be a valid name whose derived endpoint
+# ('work-.mshome.net') the identity rules then refused -- an instance that could never be
+# recorded. Alphanumeric FIRST AND LAST. Shared fixtures with
+# extension/test/instances.test.js and service/tests/.../VmNameValidatorTests.cs.
+ok "name: trailing dash rejected" (-not (Test-ConstructInstanceName 'work-'))
+ok "name: lone dash rejected"     (-not (Test-ConstructInstanceName '-'))
+ok "name: interior dash ok"       (Test-ConstructInstanceName 'work-vm-2')
+ok "name: two chars ok"           (Test-ConstructInstanceName 'ab')
+ok "name: two chars, trailing dash rejected" (-not (Test-ConstructInstanceName 'a-'))
+# .NET's '$' also matches before a trailing newline; \A/\z is why this is rejected here
+# exactly as it is in JavaScript. The two readers must never disagree about a name.
+ok "name: trailing newline rejected" (-not (Test-ConstructInstanceName "work`n"))
+# THE RESERVED PREFIX -- the namespace the derived key file (construct_<name>_ed25519)
+# and branch (vm-<name>) live in, and the exact name the branch derivation used to strip
+# the prefix off, aliasing a DIFFERENT instance's config store.
+ok "name: reserved 'construct-' prefix rejected" (-not (Test-ConstructInstanceName 'construct-work'))
+ok "name: ...at any length"       (
+    (-not (Test-ConstructInstanceName 'construct-w')) -and (-not (Test-ConstructInstanceName 'construct-')))
+ok "name: the reserved test is case-insensitive" (
+    (Test-ConstructReservedInstanceName 'Construct-Work') -and
+    (Test-ConstructReservedInstanceName 'CONSTRUCT-work'))
+ok "name: merely CONTAINING it is fine" (Test-ConstructInstanceName 'my-construct-work')
+ok "name: 'construct' without the hyphen is a good name" (Test-ConstructInstanceName 'construct')
+ok "name: 'constructor' is still a name" (Test-ConstructInstanceName 'constructor')
+ok "name: 'work' -- what 'construct-work' used to alias -- is valid" (Test-ConstructInstanceName 'work')
+# Every accepted name must yield an identity the reader accepts: that is the whole point
+# of one shared rule (a 41-char name would derive a 59+8-char key file name, and 'work-'
+# a non-host endpoint).
+foreach ($goodName in @('a', 'ab', 'work-vm-2', '9lives', ('a' * 63))) {
+    ok "name: '$goodName' yields a usable identity" (
+        @(Get-ConstructInstanceIdentityProblem -Instance (Resolve-ConstructInstanceDefaults -Name $goodName -Entry $null)).Count -eq 0)
+}
+
+# ── END TO END: 'work' and 'construct-work' in ONE registry ─────────────────
+# The store-aliasing bug, as the file that produced it: both names passed the OLD rule,
+# and the branch derivation folded the second onto the first's store. Byte-identical
+# fixture in extension/test/instances.test.js.
+# THE FIXTURE BYTES, shared verbatim with extension/test/instances.test.js
+# (RESERVED_PREFIX_REGISTRY) -- the two readers must agree about the SAME BYTES.
+$reservedJson = '{ "version": 1, "defaultInstance": "work", "instances": { "work": {}, "construct-work": {} } }'
+$reservedReg = Read-ConstructInstances -Path (New-RegistryFile $reservedJson)
+ok "reserved e2e: 'work' loads" ($reservedReg.Instances.ContainsKey('work'))
+ok "reserved e2e: 'construct-work' does NOT" (-not $reservedReg.Instances.ContainsKey('construct-work'))
+ok "reserved e2e: exactly two instances remain (work + synthesized default)" (
+    $reservedReg.Instances.Count -eq 2)
+ok "reserved e2e: the skip is reported, naming the entry" (
+    @($reservedReg.Problems | Where-Object { $_ -match 'construct-work' -and $_ -match 'is invalid' -and $_ -match 'skipped' }).Count -ge 1)
+ok "reserved e2e: 'work' keeps its own derived branch" (
+    (Get-ConstructInstance -Name 'work' -Registry $reservedReg).ConfigBranch -ceq 'vm-work')
+ok "reserved e2e: ...and its own derived key" (
+    (Get-ConstructInstance -Name 'work' -Registry $reservedReg).KeyName -ceq 'construct_work_ed25519')
+# (the matching "the provisioner derives the same branch" half lives in
+#  test/config-sync.test.ps1, which is where Get-ConstructConfigBranchName is loaded)
+ok "reserved e2e: 'work' is still the registry default" ($reservedReg.Default -ceq 'work')
+ok "reserved e2e: the entry is refused where it would be CREATED too" (
+    @(Get-ConstructInstanceEntryProblem -Name 'construct-work' -Entry @{}).Count -ge 1)
+# Byte-identical with extension/test/instances.test.js (RESERVED_DEFAULT_REGISTRY).
+$reservedDefaultJson = '{ "version": 1, "defaultInstance": "construct-work", "instances": { "work": {} } }'
+$reservedDefault = Read-ConstructInstances -Path (New-RegistryFile $reservedDefaultJson)
+ok "reserved e2e: a reserved defaultInstance falls back to agent-vm" ($reservedDefault.Default -ceq 'agent-vm')
+ok "reserved e2e: ...and says so" (
+    @($reservedDefault.Problems | Where-Object { $_ -match 'construct-work' }).Count -ge 1)
 
 # ── (e) Derivation for a NON-default instance ───────────────────────────────
 Write-Host ""
