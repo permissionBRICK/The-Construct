@@ -1,6 +1,6 @@
 # Modular / Remote Architecture Plan
 
-Status: **draft for review** · 2026-09-01
+Status: **in execution** · plan 2026-09-01, progress log at the end
 Scope decided with Christoph via Q&A; findings below come from a four-way repo/notes audit
 (assumption map, idea mining, jarvis logs, pipeline anatomy).
 
@@ -508,3 +508,21 @@ defines how SMB is reached through the service host. The host side has the same 
 `Provision-AgentVM.ps1` builds the SMB UNC and the OpenCode/summary URLs from the raw
 `-VmHost` (ignores the guest-reported `SMB_DNS`, no IPv6 bracketing) — centralize
 endpoint formatting there in the same batch.
+
+
+## 6. Progress log
+
+| Date | Milestone |
+|---|---|
+| 2026-09-01 | Phase 1 (B1 host identity params, B2 guest external host) merged; integration review closed after 8 rounds (`d0b1eff`, follow-ups `f132cc4`). |
+| 2026-09-01 | Phase 2 (B3 registry + extension multi-VM, B4 driver extraction, B5 config-sync branch keying) merged (`d43fe79`); integration review rounds 1–5 fixed and merged through `f28b3f0`; round 6 fix pair in flight. |
+| 2026-09-01 | B6 `constructd` skeleton merged (`c9c8287`): .NET 10 solution, contract-first, fakes, 223 tests. |
+| 2026-09-02 | B8g guest side merged (`d108fd1`): `construct expose` (client default, spool contract in `docs/expose.md`, remote API mode), idle heartbeat reporter. |
+| 2026-09-02 | B6b merged (`0e2ea00`): Hyper-V driver over the PS contract, WSL ISO builder, netsh forwarder with reconcile + connection counting, `service/host/Install-ConstructHost.ps1`, admin CLI; console capability is a kind. |
+| 2026-09-02 | B7 merged (`c8f390c`): hyperv-remote PS/JS drivers, `lib/AgentVm.Remote.ps1` (Negotiate/token/credential providers, DPAPI token store, cert pinning), Auto-Install mode prompt + remote flows, extension remote-host flows, `docs/remote-host.md`, remote e2e test. |
+| in flight | B8x (extension forwarder module + service ack relay + idle-policy UI); Phase 2 review round 6 fixes. Remaining: B9 docs + field test on the home domain. |
+
+Process notes: every package ran as an omniloop dev/reviewer pair (opus developer,
+gpt-5.6-sol reviewer) in its own worktree; cross-package integration reviews ran on the
+merged tree with the zero-change default path as the primary bar. Workflow budgets must
+be ≥ 720 min because a usage-limit park does not pause the workflow-level timeout.
