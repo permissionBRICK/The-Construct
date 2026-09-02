@@ -56,6 +56,15 @@ function acceptFor(url) {
   catch (_) { return "application/json"; }
 }
 
+/** What fetchJson resolves for an HTTP 404. Distinct from null (network failure,
+ *  timeout, bad JSON, other non-2xx) because for the Construct update check a 404 on
+ *  the compare URL carries information: the INSTALLED commit no longer exists on the
+ *  remote. That is what a history rewrite of the repo looks like from a PC installed
+ *  before it, and it must show as "update available" — not vanish. Frozen; callers
+ *  that only pick fields off the parsed object see no field and fall through as
+ *  before. */
+const NOT_FOUND = Object.freeze({ notFound: true });
+
 function fetchJson(url, opts = {}) {
   const httpGet = opts._get || https.get;
   const timeout = opts.timeoutMs || 8000;
@@ -75,6 +84,7 @@ function fetchJson(url, opts = {}) {
             try { next = new URL(res.headers.location, u).toString(); } catch (_) { return finish(null); }
             return get(next, redirectsLeft - 1);
           }
+          if (sc === 404) { res.resume(); return finish(NOT_FOUND); }
           if (sc < 200 || sc >= 300) { res.resume(); return finish(null); }
           let body = "";
           res.setEncoding("utf8");
@@ -93,6 +103,10 @@ function fetchJson(url, opts = {}) {
  *  `ahead_by` = commits the ref has that the installed commit doesn't = how many
  *  we're behind. Returns {available, count} or null when the response is unusable. */
 function constructUpdateFromCompare(json) {
+  // The installed commit is unknown to the remote (history rewritten, or the marker
+  // points at a commit that was force-pushed away): the only sane offer is "update",
+  // with no distance to show. Updating re-records a marker the remote does know.
+  if (json === NOT_FOUND || (json && json.notFound === true)) return { available: true, count: null, unknownBase: true };
   if (!json || typeof json.ahead_by !== "number") return null;
   const count = json.ahead_by;
   return { available: count > 0, count };
@@ -379,7 +393,7 @@ function constructRefreshArgPairs(markers) {
 
 module.exports = {
   DEFAULT_REPO, DEFAULT_REF, TTL_MS, NEG_TTL_MS, AGENT_LATEST,
-  readMarkers, acceptFor, fetchJson, constructUpdateFromCompare, checkConstruct, checkConstructCached,
+  readMarkers, acceptFor, fetchJson, NOT_FOUND, constructUpdateFromCompare, checkConstruct, checkConstructCached,
   behindText, semverParts, isNewer, isNewerNightly, prereleasePart, comparePrerelease,
   isProvisionStale, t3codeUrl,
   fetchAgentLatest, augmentAgents, buildAgentUpdateScript,
