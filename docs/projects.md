@@ -38,9 +38,12 @@ of profiles on the VM — a plain folder, no git. The reserved names `default` a
 `project.schema` always resolve to the shipped copies and are never read from or written to
 this store. On the host, profiles are versioned in a dedicated config directory at
 `%LOCALAPPDATA%\The-Construct\config` (outside the installed-repo checkout, so a Construct
-self-update never touches them) — `git`-versioned on branches `main` (host truth) and `vm`
-(VM snapshots) when git is present on the host, or a plain folder in
-[degraded mode](#degraded-mode-no-git-on-the-host). A host-driven **sync tick** reads the VM
+self-update never touches them) — `git`-versioned on branch `main` (host truth) plus one
+branch per VM for its snapshots (`vm` for the default instance, `vm-<instance>` for any
+other) when git is present on the host, or a plain folder in
+[degraded mode](#degraded-mode-no-git-on-the-host). One config repo therefore carries every
+instance; see [Config sync § Multiple instances](config-sync.md#multiple-instances-one-config-repo-one-branch-per-vm).
+A host-driven **sync tick** reads the VM
 store, reconciles it with the host repo, and writes back the merged result — see
 [Config sync](config-sync.md) for the full model, conflict handling, and remote config-repo
 support.
