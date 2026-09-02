@@ -691,6 +691,50 @@ function Set-ConstructPathAcl {
     Write-Ok "$Name locked to SYSTEM + Administrators ($($descendants.Count) item(s) inside): $Path"
 }
 
+# Task Scheduler status values the runner has to recognize (pure data, so the
+# decision helpers below run on any PowerShell, including the Linux one the tests use).
+$script:ConstructTaskPath  = '\Construct\'
+$script:SchedTaskRunning   = 0x41301   # SCHED_S_TASK_RUNNING   (267009) -- LastTaskResult while running
+$script:SchedTaskHasNotRun = 0x41303   # SCHED_S_TASK_HAS_NOT_RUN (267011)
+$script:TaskStateRunning   = 4         # TASK_STATE_RUNNING (COM); Get-ScheduledTask says "Running"
+
+function Test-ConstructTaskStillRunning {
+    <#
+        Whether a one-shot task is still executing, judged from BOTH the state and
+        the last result: right after Start-ScheduledTask the state can still read
+        Ready while the result already says SCHED_S_TASK_RUNNING, and a result of
+        0x41301 is never a real exit code -- it means "not finished yet".
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][AllowNull()]$Status)
+
+    if ($null -eq $Status) { return $true }
+    if ($Status.State -eq $script:TaskStateRunning -or "$($Status.State)" -eq 'Running') { return $true }
+    if ([int]$Status.LastTaskResult -eq $script:SchedTaskRunning) { return $true }
+    return $false
+}
+
+function Get-ConstructTaskStatus {
+    <#
+        @{ State; LastTaskResult } for one task in the Construct task folder, read
+        through the Schedule.Service COM object (which touches only that task).
+        Falls back to the CIM cmdlets scoped to the same folder.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$TaskName)
+
+    try {
+        $svc = New-Object -ComObject Schedule.Service
+        $svc.Connect()
+        $task = $svc.GetFolder($script:ConstructTaskPath.TrimEnd('\')).GetTask($TaskName)
+        return @{ State = [int]$task.State; LastTaskResult = [int]$task.LastTaskResult }
+    } catch {
+        $info = Get-ScheduledTaskInfo -TaskName $TaskName -TaskPath $script:ConstructTaskPath
+        $task = Get-ScheduledTask     -TaskName $TaskName -TaskPath $script:ConstructTaskPath
+        return @{ State = [string]$task.State; LastTaskResult = [int]$info.LastTaskResult }
+    }
+}
+
 function Invoke-AsLocalSystem {
     <#
         Run a program as LocalSystem and return @{ ExitCode; Output; Simulated }.
@@ -735,18 +779,25 @@ function Invoke-AsLocalSystem {
     $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
                     -ExecutionTimeLimit (New-TimeSpan -Seconds $TimeoutSeconds)
 
+    # The task lives in its own folder and is polled through the Task Scheduler COM
+    # API, not Get-ScheduledTask. Field failure (2026-09-02): Get-ScheduledTask
+    # -TaskName enumerates the whole root folder and dies with 0x80041318 as soon as
+    # ANY task there has XML the CIM provider cannot parse (a leftover of some
+    # uninstalled product is enough); the loop then fell through and reported the
+    # scheduler's "still running" status 0x41301 (267009) as the command's exit code.
     try {
-        Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal -Settings $settings -Force | Out-Null
-        Start-ScheduledTask -TaskName $taskName
+        Register-ScheduledTask -TaskName $taskName -TaskPath $script:ConstructTaskPath `
+            -Action $action -Principal $principal -Settings $settings -Force | Out-Null
+        Start-ScheduledTask -TaskName $taskName -TaskPath $script:ConstructTaskPath
 
         $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
         do {
             Start-Sleep -Milliseconds 500
-            $info = Get-ScheduledTaskInfo -TaskName $taskName
-            $state = (Get-ScheduledTask -TaskName $taskName).State
-        } while ($state -eq "Running" -and (Get-Date) -lt $deadline)
+            $status = Get-ConstructTaskStatus -TaskName $taskName
+        } while ((Test-ConstructTaskStillRunning -Status $status) -and (Get-Date) -lt $deadline)
 
-        if ($state -eq "Running") { throw "The LocalSystem command did not finish within $TimeoutSeconds seconds." }
+        if (Test-ConstructTaskStillRunning -Status $status) { throw "The LocalSystem command did not finish within $TimeoutSeconds seconds." }
+        if ($status.LastTaskResult -eq $script:SchedTaskHasNotRun) { throw "The LocalSystem task never started (Task Scheduler reported SCHED_S_TASK_HAS_NOT_RUN)." }
 
         $output = ""
         if (Test-Path -LiteralPath $outFile) {
@@ -754,9 +805,9 @@ function Invoke-AsLocalSystem {
             if ($null -eq $output) { $output = "" }
         }
 
-        return @{ ExitCode = [int]$info.LastTaskResult; Output = $output.Trim(); Simulated = $false }
+        return @{ ExitCode = [int]$status.LastTaskResult; Output = $output.Trim(); Simulated = $false }
     } finally {
-        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskName $taskName -TaskPath $script:ConstructTaskPath -Confirm:$false -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $outFile -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $payloadFile -Force -ErrorAction SilentlyContinue
     }
