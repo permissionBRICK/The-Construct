@@ -231,8 +231,9 @@ public class AuthenticationTests
     [Fact]
     public void The_host_refuses_to_start_without_a_hypervisor_platform()
     {
-        // The test-identity scheme exists only in fake mode, and with fakes off the host refuses to
-        // start at all: that is the seam the Windows driver/ISO/portproxy implementations fill.
+        // The test-identity scheme exists only in fake mode, and with fakes off the host needs the
+        // real platform implementations — which are Windows-only (Hyper-V, WSL, netsh). On this
+        // machine that means it must refuse to start rather than come up half-wired.
         var settings = new Dictionary<string, string?>
         {
             ["Constructd:Fake"] = "false",
@@ -241,7 +242,10 @@ public class AuthenticationTests
         using var app = new TestApp(settings);
 
         var ex = Assert.ThrowsAny<Exception>(() => app.CreateAnonymousClient());
-        Assert.Contains("no hypervisor platform yet", Flatten(ex), StringComparison.OrdinalIgnoreCase);
+        var message = Flatten(ex);
+
+        Assert.Contains("no hypervisor platform here", message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("--fake", message, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string Flatten(Exception ex) =>

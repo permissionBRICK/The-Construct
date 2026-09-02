@@ -20,6 +20,7 @@
     <ProjectReference Include="..\Constructd.Fakes\Constructd.Fakes.csproj" />
     <!-- The durable stores; cross-platform, so they are used in every non-fake mode. -->
     <ProjectReference Include="..\Constructd.Sqlite\Constructd.Sqlite.csproj" />
+    <ProjectReference Include="..\Constructd.Windows\Constructd.Windows.csproj" />
   </ItemGroup>
 
   <ItemGroup>
