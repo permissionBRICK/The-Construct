@@ -1,8 +1,9 @@
 # Remote host (`hyperv-remote`)
 
-> **Status: implemented (batch B7).** Local Hyper-V stays the default and is completely
-> unchanged — an install that never names a remote host behaves, and prints, exactly as
-> it always has. Everything below is opt-in.
+> **Status: implemented.** The service and its host installer, the `hyperv-remote` driver,
+> the installer and extension flows, port forwards and the idle policy are all in place.
+> Local Hyper-V stays the default and is completely unchanged — an install that never names
+> a remote host behaves, and prints, exactly as it always has. Everything below is opt-in.
 
 The Construct can put your agent VM on **somebody else's Hyper-V** — a shared box under a
 desk, a lab server, a build machine — instead of your own PC. An admin installs the
@@ -24,9 +25,10 @@ idle policy keep running, because the host service owns them
 │ Auto-Install.ps1 / VS Code      │        │ constructd (Windows service, HTTPS)     │
 │   · picks the mode, asks the    │        │   · users, tokens, quotas, audit        │
 │     questions                   │ HTTPS  │   · builds the autoinstall ISO (WSL)    │
-│   · lib/AgentVm.Remote.ps1 ─────┼───────▶│   · creates the VM on its own NAT switch│
-│     (API client + credentials)  │Negotiate│  · waits for SSH, allocates a forward  │
-│                                 │ /token │   · idle policy (save / shutdown)       │
+│   · lib/AgentVm.Remote.ps1 ─────┼───────▶│   · creates the VM on the configured   │
+│     (API client + credentials)  │Negotiate│    switch (Default Switch by default)  │
+│                                 │ /token │   · waits for SSH, allocates a forward  │
+│                                 │        │   · idle policy (save / shutdown)       │
 │ Provision-AgentVM.ps1 ──────────┼────────┼─▶ VM  (ssh to <host>:<allocated port>)  │
 │   · YOUR git creds, agent auth, │  SSH   │                                          │
 │     backups — never touch the   │        │                                          │
@@ -39,7 +41,7 @@ The split is deliberate ([plan §4.4](plans/modular-remote-architecture.md), "hy
 | Step | Who does it | Why |
 |---|---|---|
 | Build the autoinstall ISO, create the VM, wait for the OS install, allocate the SSH port | **the service** | it owns the hypervisor, WSL and the port range |
-| Run `bin/provision.sh`, install the agent stack, restore backups, wire *your* machine (ssh config, VS Code Remote-SSH, OpenCode, SMB) | **your PC**, over SSH | provisioning carries your git credentials, agent auth and backups. None of that may transit a shared service. |
+| Run `bin/provision.sh`, install the agent stack, restore backups, wire *your* machine (ssh config, VS Code Remote-SSH, OpenCode) | **your PC**, over SSH | provisioning carries your git credentials, agent auth and backups. None of that may transit a shared service. |
 
 The **guest payload is identical in every mode** — same ISO inputs, same `provision.sh`
 contract, same `/opt/construct` layout. Only *who calls the hypervisor* and *what address
@@ -55,26 +57,66 @@ you dial* change.
    .\service\host\Install-ConstructHost.ps1
    ```
 
-   It checks the prerequisites (Hyper-V, WSL for the ISO build), generates the
-   self-signed TLS certificate, creates the internal NAT switch the VMs live on
-   (the "Default Switch" is left alone so local-mode installs are untouched), and
-   registers `constructd` as a Windows service. See
+   It checks the prerequisites (Hyper-V, WSL for the ISO build), hardens the paths the
+   service executes and trusts, generates the self-signed TLS certificate, opens three
+   inbound firewall rules (the API port, the SSH forward range, the app forward range),
+   and registers `constructd` as a Windows service. See
    [`service/README.md`](../service/README.md) for the configuration keys
-   (`PublicHost`, `SshForwardPorts`, the idle defaults, the certificate).
+   (`PublicHost`, `SshForwardPorts`, the idle defaults, the certificate) and the full
+   parameter table. Publish the service first
+   (`dotnet publish service\src\Constructd.Api -c Release -r win-x64 --self-contained true
+   -o <publish dir>`); no .NET runtime is then needed on the host. Re-run the installer
+   after publishing a new build — it updates binaries, settings and the service in place.
+   `service/host/Uninstall-ConstructHost.ps1` is the companion.
 
-   > The installer script ships with batch B6b. Until it lands, the service can be run
-   > by hand — `dotnet run --project service/src/Constructd.Api` with the keys from
-   > `service/README.md` — which is also how the end-to-end tests drive it.
+   > **The VMs go on the switch you configure, not on a switch the service creates.**
+   > `-SwitchName` (and `Constructd:SwitchName`) default to Hyper-V's **`Default Switch`**,
+   > which is what a host with nothing else set up has. The plan's "the service creates its
+   > own internal NAT switch at install" is **not implemented** — the setting is the seam
+   > for it. If you want the service's VMs on a switch of their own, create it yourself and
+   > pass `-SwitchName`.
 
-2. **Enrol yourself as the first admin.** Set `Constructd:BootstrapAdmin` to your domain
-   identity (`DOMAIN\you`) before the first start; the service seeds it as an admin when
-   the user store is empty. On a host that cannot use Kerberos you can also set
-   `Constructd:BootstrapAdminToken` once, issue yourself a real token, and remove it.
+2. **The first admin is created by the installer.** `-AdminUser` (default: the current
+   user) is seeded as an admin and issued an API token *before* the service is started,
+   and both the token and the certificate thumbprint are printed at the end. A re-run
+   issues no new token unless you pass `-RotateAdminToken`. On a host that cannot use
+   Negotiate at all, `Constructd:BootstrapAdminToken` in the settings file is the escape
+   hatch: set it once, issue yourself a real token, remove it.
 
-3. **Add a user and issue their token.**
+   > ⚠ **Do not publish the thumbprint the installer prints — it is not what clients
+   > compare.** The installer prints the certificate's **SHA-1** thumbprint (40 hex
+   > characters; that is the value `-CertThumbprint` selects a certificate by), while the
+   > client pins and displays the **SHA-256** fingerprint (64 hex characters, colon-separated
+   > pairs). Compute and publish the SHA-256 form:
+   >
+   > ```powershell
+   > $cert = Get-ChildItem Cert:\LocalMachine\My | Where-Object Thumbprint -eq '<printed value>'
+   > ([BitConverter]::ToString(
+   >     [Security.Cryptography.SHA256]::Create().ComputeHash($cert.RawData))) -replace '-', ':'
+   > ```
+   >
+   > That output is exactly the spelling §3 step 2 shows the user.
+
+3. **Add a user and issue their token.** The admin CLI is the same executable and works
+   the stores directly — no HTTP, no listener, no authentication beyond already being an
+   administrator on that host:
 
    ```powershell
-   # as the admin identity (Negotiate on a domain-joined machine)
+   # the published executable itself, with `admin` as the first argument
+   $constructd = "C:\Construct\service\publish\Constructd.Api.exe"
+
+   & $constructd admin users add DOMAIN\alice --role User --max-vms 2
+   & $constructd admin users add DOMAIN\bob   --role User --max-vms 2 --no-host-forwards
+   & $constructd admin tokens issue DOMAIN\alice --label "alice laptop"
+   & $constructd admin users list
+   ```
+
+   (The installer prints these two lines with the real path filled in when it finishes.)
+
+   The HTTP API does the same as the admin identity, which is what you want from another
+   machine:
+
+   ```powershell
    Invoke-RestMethod -UseDefaultCredentials -Method Post `
      -Uri https://buildbox.example.local:7462/api/v1/users `
      -ContentType application/json `
@@ -85,13 +127,17 @@ you dial* change.
      -ContentType application/json -Body '{"label":"alice laptop"}'
    ```
 
-   **There is no self-registration.** The token's plaintext is in the response *once* and
-   is never stored or logged; hand it to the user over a channel you trust. A domain user
-   who will authenticate with Kerberos needs no token at all — just the `POST /users`.
+   **There is no self-registration.** The token's plaintext is shown *once* and is never
+   stored or logged; hand it to the user over a channel you trust. A domain user who will
+   authenticate with Kerberos needs no token at all — just the `users add`. `--max-vms`
+   defaults to `0`, which means "may not create VMs", so a quota typed carelessly refuses
+   rather than over-grants; `--no-host-forwards` denies that user
+   [`construct expose --to host`](expose.md#the-two-targets).
 
-4. **Tell the users the URL and the certificate fingerprint.** The client shows the
-   fingerprint at enrolment and asks for confirmation; publishing it out of band is what
-   makes that confirmation meaningful (see §5).
+4. **Tell the users the URL and the SHA-256 certificate fingerprint** (the value computed
+   in step 2, not the thumbprint the installer printed). The client shows that fingerprint
+   at enrolment and asks for confirmation; publishing it out of band is what makes the
+   confirmation meaningful (see §5).
 
 ---
 
@@ -113,8 +159,11 @@ was. Pick **Remote host** and the installer walks:
 
 1. **Service URL** — `https://buildbox.example.local:7462` (a bare host name gets
    `https://` and the default port `7462`).
-2. **Certificate fingerprint** — shown once, in full. Compare it with what your admin
-   published and confirm. It is then **pinned** (§5) and enforced on every later call.
+2. **Certificate fingerprint** — the **SHA-256** fingerprint, shown once, in full, as
+   colon-separated hex pairs. Compare it with what your admin published and confirm. It is
+   then **pinned** (§5) and enforced on every later call. (If what your admin gave you is
+   40 hex characters, they published the installer's SHA-1 thumbprint by mistake — ask for
+   the SHA-256 value; §2 step 2 says how to produce it.)
 3. **Authentication** — Windows/Kerberos is tried first, silently, as the account you are
    logged in as. On a 401 you are offered:
    * **paste an API token** — stored DPAPI-encrypted for your account (§5), or
@@ -163,6 +212,9 @@ processor count, so the parameter deliberately does nothing there.)
 Passing any of `-Backend` / `-ServiceUrl` / `-InstanceName` skips the mode prompt. So does
 an existing default instance, `-VmName`, `-Action`, and `-FromPanel` — **an existing
 install never sees the new question.**
+
+A remote install also **needs no administrator rights on your PC**: nothing is created
+locally, so the installer says so and skips the elevation it does for a local install.
 
 "Already installed" is decided twice over, because the mode is resolved *before* the
 elevation prompt, as the ordinary desktop user: a Hyper-V probe through the driver
@@ -217,15 +269,34 @@ Nothing special. The provisioner writes an ordinary `~/.ssh/config` block:
 ```
 Host work-vm
     HostName buildbox.example.local
-    Port     2201
-    User     root
-    IdentityFile ~/.ssh/construct_work-vm_ed25519
+    User root
+    IdentityFile C:\Users\<you>\.ssh\construct_work-vm_ed25519
+    IdentitiesOnly yes
+    Port 2201
 ```
 
-so `ssh work-vm`, VS Code Remote-SSH, SMB and the control panel all work the way they do
+(The `Port` line appears only for a non-22 port, which is why a local VM's block is
+byte-identical to what it always was. Only the block for *this* alias is replaced, so
+several instances coexist in one `~\.ssh\config`.)
+
+So `ssh work-vm`, VS Code Remote-SSH and the control panel all work the way they do
 for a local VM. The panel's **System** card names the backend and the host service for a
 remote instance (the rows are hidden for `hyperv-local`, so a single-VM install's panel is
-pixel-identical), and the instance picker lists local and remote VMs side by side.
+pixel-identical), the instance picker lists local and remote VMs side by side, and the
+[**Forwards** card](control-panel.md#forwards-construct-expose) shows the ports
+`construct expose` opened — including the `host` ones the service published.
+
+**What does NOT reach a remote VM the way it does a local one:**
+
+* **The SMB share.** The service publishes exactly two kinds of forward — the VM's own SSH
+  port, and the host forwards somebody asked for with `construct expose --to host`. There
+  is **no SMB forward**, so the `\\<host>\repo` UNC the guest prints (built from
+  `CONSTRUCT_EXTERNAL_HOST`, i.e. the service host) points at an address where nothing is
+  listening on 445, and `-MountRepoShare` has nothing to map. Reach the files over
+  Remote-SSH instead. Known gap, recorded in the plan's IPv6/SMB follow-up.
+* **Web ports in general.** OpenCode, T3 Code and `code serve-web` are not mapped
+  automatically either. Use [`construct expose <port>`](expose.md) — that is what it is
+  for, and its client target works identically in both modes.
 
 **What the panel will NOT do for a remote instance:**
 
@@ -263,8 +334,15 @@ takes a different route: it is written to the guest over **ssh's stdin** into a 
 file, the remote shell reads it back with a command substitution (`export
 CONSTRUCT_VM_TOKEN_B64="$(cat …)"`), and the file is deleted the moment provisioning
 ends, whatever its exit code. `bin/provision.sh` still reads the variable from its
-environment exactly as before — the contract is unchanged, only the delivery is. If a
-token is lost, issue a new one; that invalidates the previous one.
+environment exactly as before — the contract is unchanged, only the delivery is.
+
+> **A lost VM token cannot currently be re-issued.** The service mints one in exactly one
+> place — the VM creation job — and exposes no rotation route or admin verb. If the guest's
+> `/etc/construct/vm-token` is destroyed, or the one-time delivery is lost, that VM's
+> `construct expose` and its idle heartbeat stay broken until the VM is **deleted and created
+> again** (`DELETE /vms/{name}` → `POST /vms` → provision, i.e. what *Reinstall* does).
+> A reprovision alone does not help: it can only re-deliver a token it was given. Recorded as
+> an open point in [`service/README.md`](../service/README.md).
 
 ### TLS pinning, and why it looks different on PS 5.1 and PS 7
 
@@ -307,8 +385,16 @@ connections — that is the entire point of unattended agents.
 The default action is `save` (Hyper-V `Save-VM`: state to disk, RAM freed, transparent
 resume). Any power-start — the panel, `POST /vms/{name}/power {"action":"start"}` — brings
 it back. Your admin sets the service-wide default and an optional cap; you set your own
-VM's policy. The guest heartbeat that feeds the "in-guest activity" signal ships with
-batch B8.
+VM's policy — in the control panel's [**Idle policy** card](control-panel.md#idle-policy-remote-vms),
+which applies the cap locally so the number in the box is the number that takes effect.
+
+The "in-guest activity" signal is the VM's own heartbeat: `construct-idle-report.timer`
+posts `{busy, reasons[]}` every 60 s (`CONSTRUCT_IDLE_REPORT_INTERVAL_SEC`), reporting busy
+for an SSH session, an agent process (or any of its **descendants**) burning CPU, recent
+tmux window activity, or a provisioning run in flight. It is deliberately generous: a false
+`busy` costs some host RAM until the next tick, a false idle kills someone's unattended job.
+The timer is installed only when `CONSTRUCT_SERVICE_URL` is set — a local install gets no
+new unit. Details in [`construct expose` § Activity heartbeat](expose.md#activity-heartbeat).
 
 ---
 
@@ -369,8 +455,15 @@ registry — and so are several hosts.
 
 ## See also
 
+* [`docs/field-test-remote-host.md`](field-test-remote-host.md) — the step-by-step first run
+  on a domain, with the expected result of each step and where to look when it fails.
+* [`docs/expose.md`](expose.md) — `construct expose`, the two forward targets, the guest
+  spool and the service API behind them, and the activity heartbeat.
+* [`docs/control-panel.md`](control-panel.md) — the instance picker, the Forwards card and
+  the idle-policy card.
 * [`docs/drivers.md`](drivers.md) — the driver contract and the `hyperv-remote` section.
-* [`service/README.md`](../service/README.md) — the API, authentication, jobs, config.
+* [`service/README.md`](../service/README.md) — the API, authentication, jobs, config,
+  the admin CLI and `Install-ConstructHost.ps1`.
 * [`docs/plans/modular-remote-architecture.md`](plans/modular-remote-architecture.md) —
   §4.2 driver contract, §4.3 registry, §4.4 the service, §4.5 installer UX, §4.7 idle.
 * [`extension/ARCHITECTURE.md`](../extension/ARCHITECTURE.md) — the extension side.

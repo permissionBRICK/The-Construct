@@ -232,9 +232,12 @@ backend ids, so a new driver enables the actions by declaring the capability.
 `setCheckpoints` is gated on **`capabilities.checkpoints` as well**: it is a hypervisor
 action *and* a capability-gated feature, and the two are genuinely different questions.
 `hyperv-remote` answers yes to the first (since B7 `Auto-Install.ps1` really can create
-and delete its VMs) and no to the second, and gets a refusal that says the backend has no
-checkpoints rather than the generic "remote lifecycle arrives with the remote driver".
-`hyperv-local` declares both; the unknown-backend driver declares neither.
+and delete its VMs) and no to the second, so it gets the *specific* refusal — `the
+"hyperv-remote" backend has no checkpoints — that setting applies to VMs on this PC's
+Hyper-V only.` — rather than the generic one a backend without `hostLifecycle` gets
+(`… can't be rebuilt or reconfigured from here — the host scripts drive the local
+Hyper-V. Reprovision and Export config still work.`). `hyperv-local` declares both; the
+unknown-backend driver declares neither.
 
 `src/vmpower.js` stays the panel's entry point and keeps every export and signature it
 had; `queryVmState(opts)` / `queryAutoCheckpoints(opts)` / `startVm(opts)` now take an
@@ -254,8 +257,8 @@ still wins over the instance, so older call sites are unaffected.
    tests pin) and never let a driver reject: resolve `"unknown"` instead.
 3. **Capabilities** — report honestly, `hostLifecycle` included (declare it only once
    the host scripts really can create/delete/reconfigure that backend's VMs; until then
-   the panel refuses those actions with "remote lifecycle arrives with the remote
-   driver").  Callers gate features on the flags, never on the
+   the panel refuses those actions, naming the backend and pointing out that Reprovision
+   and Export config still work).  Callers gate features on the flags, never on the
    backend id: `Set-AgentVmCheckpoints.ps1` refuses to run when `Checkpoints` is false,
    and the panel hides a console affordance when `console` is `"none"`. A backend that
    reports `Checkpoints = $true` MUST implement all four checkpoint functions —

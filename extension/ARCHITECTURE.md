@@ -8,8 +8,17 @@ so work can resume without re-deriving the design.
 
 One VS Code panel to operate a Construct agent VM: live status, coding-agent
 versions + updates, Construct self-update, project profiles, token usage & cost,
-lifecycle (reprovision / reinstall / redownload / export config), and **microphone
-passthrough** so voice input works over Remote-SSH.
+lifecycle (reprovision / reinstall / redownload / export config), **microphone
+passthrough** so voice input works over Remote-SSH, the client-side **port forwards**
+`construct expose` asks for, and the **idle policy** of a service-hosted VM.
+
+Since the modular/remote work (`docs/plans/modular-remote-architecture.md`) the panel
+drives **one instance per window** rather than one hardcoded VM, over a **driver**
+dispatch rather than direct Hyper-V calls. Both are additive: with no instance registry
+there is exactly one implicit instance holding today's literals, the driver is
+`hyperv-local`, and no surface changes. The three sections that carry that design are
+[Instances](#instances), [Remote hosts](#remote-hosts-hyperv-remote) and
+[Forwards](#forwards-construct-expose).
 
 ## Architecture
 
@@ -17,8 +26,9 @@ passthrough** so voice input works over Remote-SSH.
   when the window is attached to the VM over Remote-SSH. That single vantage point
   reaches both sides:
   - **host** — PowerShell lifecycle scripts in `%LOCALAPPDATA%\The-Construct\…`,
-    and the local microphone;
-  - **VM** — status/versions/usage gathered over `ssh` (the `agent-vm` key/alias).
+    the local microphone, and the local ports opened for `construct expose`;
+  - **VM** — status/versions/usage gathered over `ssh`, with the ACTIVE INSTANCE's
+    host/alias/key/port (`agent-vm` + `agent_vm_ed25519` on port 22 by default).
 - **No build step.** Plain JS. The installer packages this folder into a `.vsix`
   (`Build-ControlPanelVsix`, no vsce/Node) and installs it with `code --install-extension`
   (a bare folder copy into `.vscode\extensions` isn't loaded by current VS Code).
@@ -67,9 +77,25 @@ extension/
                       cfg carries the active instance (vmHost/hostAlias/keyName/sshPort);
                       `-p` only for a non-22 port so the default argv is unchanged
     probe.js          REMOTE_PROBE + parseProbe/extractVersion/toState/probe()
-    remote.js         open the VM over Remote-SSH: isConnectedToVm(remoteAuthority) +
-                      vscode-remote://ssh-remote+agent-vm/<path> URIs; openOnVm (vscode.openFolder,
+    remote.js         open the VM over Remote-SSH: isConnectedToVm(remoteAuthority, cfg) +
+                      vscode-remote://ssh-remote+<alias>/<path> URIs built from the ACTIVE
+                      instance's hostAlias; openOnVm (vscode.openFolder,
                       reuse/new window); needs the ms-vscode-remote.remote-ssh extension
+    drivers/          hypervisor dispatch: getDriver(backend) (missing/empty => hyperv-local;
+                      unknown => a fallback that resolves "unknown" and never throws), the
+                      capability table {checkpoints, console, suspend, hostLifecycle} and
+                      lifecycleSupport(backend, action) — the gate on the VM-destroying
+                      lifecycle actions. index.js + hyperv-local.js + hyperv-remote.js;
+                      contract in docs/drivers.md
+    vmpower.js        the panel's power/state entry point, every export and signature kept:
+                      queryVmState/queryAutoCheckpoints/startVm take an optional
+                      opts.instance and dispatch through getDriver (an explicit opts.vmName
+                      still wins, so older call sites are unaffected)
+    remotehost.js     the constructd API client, no vscode: three credential providers
+                      (negotiate via a spawned powershell.exe over lib/AgentVm.Remote.ps1,
+                      token, domain credentials), TLS pinning against the SAME
+                      %LOCALAPPDATA%\The-Construct\remote\<slug>.pin the PS client reads,
+                      and the whoami / vms / forwards / idle-policy calls
     host.js           locate the scripts dir (newest %LOCALAPPDATA%\The-Construct\*\* with
                       Auto-Install.ps1, or the construct.scriptsDir override) + read/write
                       .construct-settings.json (form<->disk mapping; pure fs/path, no vscode);
@@ -1025,9 +1051,10 @@ remote path. But `setCheckpoints` must stay refused, and it is one of the same
 `hostLifecycle` for every hypervisor action, **plus `capabilities.checkpoints` for
 `setCheckpoints`** specifically. `hyperv-local` declares both and is unchanged; the
 unknown-backend driver declares neither and is unchanged; `hyperv-remote` gets
-reinstall/redownload and keeps checkpoints refused — with a reason that says *why*
-(the backend has no checkpoints) rather than the generic "remote lifecycle arrives with
-the remote driver".
+reinstall/redownload and keeps checkpoints refused — with a reason that says *why* (`the
+"hyperv-remote" backend has no checkpoints — that setting applies to VMs on this PC's
+Hyper-V only.`) rather than the `hostLifecycle` refusal, which would claim the host
+scripts cannot drive this backend at all.
 
 ### Per-instance lifecycle invocations for a remote instance
 
@@ -1789,29 +1816,68 @@ says what will actually happen.
   re-run (`claude update` / re-run installers). sox installed in `install_claude_code()`.
 - Lifecycle entrypoints (host PowerShell):
   - `Provision-AgentVM.ps1` — params incl. `-Action provision|export`, `-BackupDir`,
-    `-RestoreDir`, `-ScanReposOnly`, `-Projects`, `-AiTools`, `-VmHost`, `-HostAlias`,
-    `-GitUserName`, `-GitEmail`. The reprovision entrypoint.
+    `-RestoreDir`, `-ScanReposOnly`, `-Projects`, `-AiTools`, `-GitUserName`, `-GitEmail`.
+    The reprovision entrypoint. **Targeting:** `-VmHost` (default
+    `agent-vm.mshome.net`), `-SshPort` (default 22 — threaded into every ssh/scp/keyscan
+    call, adds the `Port` line to the ssh_config block and switches `known_hosts` to
+    `[host]:port`), `-HostAlias` (default `agent-vm`), `-LocalKeyName` (default
+    `agent_vm_ed25519`), `-ConfigBranch` (empty ⇒ derived from `-HostAlias`).
+    **Remote-only:** `-ServiceUrl` / `-InstanceName` / `-VmTokenB64` → the guest's
+    `CONSTRUCT_SERVICE_URL` / `_INSTANCE_NAME` / `_VM_TOKEN_B64`; while empty they add
+    NOTHING to the env prefix, so a local run is byte-identical. The token never reaches
+    an argument list — it goes to the guest over ssh's stdin.
   - `Auto-Install.ps1` — web-install + reinstall/reprovision menu; params incl.
     `-VmDiskGB`, `-VmMemoryGB`, `-Projects`, `-AgentPassword`, `-GitUserName`,
     `-GitEmail`, `-Force`, `-Redownload`, `-SkipCreateVm`. Reinstall deletes the
-    VM + disk. **`-Action reprovision|reinstall|redownload|export`** bypasses the
-    interactive menu (added for the panel); with reinstall/redownload,
+    VM + disk. **`-Action reprovision|reinstall|redownload|export|add-config`** bypasses
+    the interactive menu (added for the panel); with reinstall/redownload,
     **`-BackupMode save|existing|wipe`** pre-answers the save/restore prompts. The
     dirty-repo scan and the `Confirm-Reinstall` "type yes" delete still run.
+    **Targeting:** `-VmName` (default `Agent-VM`; the guest hostname, DNS name, ssh alias
+    and key name all derive from it), legacy `-VmHost` (the guest hostname, predating
+    `-VmName`: alone it *sets* `-VmName`, and a value conflicting with an explicit
+    `-VmName` is a hard error), `-ConfigBranch`. **Remote:** `-Backend
+    hyperv-local|hyperv-remote`, `-ServiceUrl`, `-ServiceAuth negotiate|token`,
+    `-InstanceName`, `-VmCpuCount` (remote-only: `Create-AgentVM.ps1` decides the local
+    VM's processor count). Any of `-Backend`/`-ServiceUrl`/`-InstanceName` — and also
+    `-VmName`, `-Action`, `-FromPanel`, or an existing default instance — skips the
+    install-mode prompt.
+  - `Create-AgentVM.ps1` — `-VmName`, `-Backend`, `-LocalKeyName`, `-AutoinstallIso`
+    (a named VM otherwise looks for `<name>-autoinstall.iso` next to the script and
+    refuses to guess another instance's ISO; the default VM keeps the "newest
+    `*autoinstall*.iso`" discovery), `-ConfigBranch`, plus the resource/forwarded ones.
+    Hypervisor calls go through `drivers/Load-ConstructDriver.ps1`, not raw cmdlets.
   - `install.ps1` — THIN web bootstrapper: downloads the repo zip to
     `%LOCALAPPDATA%\The-Construct\<owner-repo-ref>\<repo>-<ref>\` and runs Auto-Install.
     Default repo `permissionBRICK/The-Construct`, ref `main` (forwards `-Repo`/`-Ref`
     only when explicit). No host setup of its own.
   - `Set-AgentVmCheckpoints.ps1` — the panel's live "apply automatic checkpoints now":
-    `-Enabled true|false` (+ `-VmName`, `-RemoveExisting`, `-FromPanel`). Self-elevating;
-    sets `Set-VM -AutomaticCheckpointsEnabled` and, when disabling, removes the automatic
-    checkpoints classified by `Get-AgentVmAutomaticCheckpoint` (see the design decision).
+    `-Enabled true|false` (+ `-VmName`, `-Backend`, `-RemoveExisting`, `-FromPanel`).
+    Self-elevating; goes through the driver contract's four checkpoint functions and
+    REFUSES when the backend reports `Checkpoints = $false` (so it can never reconfigure
+    a *local* VM that merely shares a remote instance's name); when disabling, removes
+    the automatic checkpoints classified by `Get-ConstructVmAutomaticCheckpoint`
+    (`Certain` unattended, `Probable` only after a per-checkpoint `yes` — see the design
+    decision).
   - `Update-Construct.ps1` — the panel's "Update Construct" self-update: re-download the
     repo in place, record the update marker (`installedCommit` from the GitHub commits
     API + `constructRepo`/`constructRef` via `Set-ConstructInstalledMarker`), and
     reinstall the control-panel extension. Does NOT rebuild the VM.
   - `Get-AgentUsage.ps1` — ccusage over SSH → combined JSON; SSH connection logic
-    (key `~/.ssh/agent_vm_ed25519` else `agent-vm` alias) mirrored in `src/ssh.js`.
+    (key `~/.ssh/<-LocalKeyName>` else the `-HostAlias` alias, on `-SshPort`) mirrored in
+    `src/ssh.js`. Defaults are the single-VM literals.
+  - `Update-T3Code.ps1` — launched by the Construct-built T3 Desktop app's update control;
+    reruns provisioning with the saved settings. Takes `-VmHost` / `-HostAlias` /
+    `-SshPort` / `-LocalKeyName` and forwards them with param probing, so an older
+    provisioner is never handed unknown args.
+  - `lib/AgentVm.Instances.ps1` — the PowerShell twin of `src/instances.js`: same file,
+    same schema, same normalization and identity rules. Change both together.
+  - `lib/AgentVm.Remote.ps1` — the PowerShell `constructd` client `src/remotehost.js`
+    mirrors: `New-ConstructApiAuth` (credential providers), `Invoke-ConstructApi`,
+    `Wait-ConstructJob`, the DPAPI token store and the shared `<slug>.pin` file.
+  - `drivers/Load-ConstructDriver.ps1` — dot-source it (a function cannot dot-source into
+    its caller's scope) to get the backend's contract functions; `-ServiceUrl`/`-Auth` are
+    empty and inert for the local path. Contract: `docs/drivers.md`.
   - `lib/AgentVm.Common.ps1` — `Get-ConstructSettingsPath` (`.construct-settings.json`
     next to scripts), `Read/Save-ConstructSettings` (merge), `Resolve-GitIdentity`,
     `Get-ConstructBackupDir` (backup dir next to scripts), `Invoke-TuiConfirm`,
@@ -1826,7 +1892,15 @@ says what will actually happen.
     `rec`/`arecord` found on PATH (`/usr/local/bin` wins over `/usr/bin` sox).
   - gate: `isSpeechToTextEnabled(){if(env.remoteName)return!1;if(authMethod!=='claudeai')return!1;return l5()}`.
 
-## Remaining roadmap (one batch each, via auto-review)
+## Roadmap history — the original control-panel batches (1–9)
+
+**All complete.** Kept as the record of *why* each surface is shaped the way it is; it is
+not a to-do list. Work after it — the instance registry, the driver extraction,
+config-sync instance keying, the `constructd` service, the `hyperv-remote` driver,
+`construct expose` and the idle policy — is planned and logged in
+`docs/plans/modular-remote-architecture.md`, and designed in the
+[Instances](#instances), [Remote hosts](#remote-hosts-hyperv-remote) and
+[Forwards](#forwards-construct-expose) sections above.
 
 Each batch: build → 3-lens adversarial pre-review (Workflow) → fix → `request_review`.
 Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits.
@@ -2077,6 +2151,10 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
 **🎉 The control-panel roadmap (items 1–9, plus the inserted 3.5) is COMPLETE.**
 
 ## Committed so far
+
+> Covers the original control-panel roadmap only, up to and including item 9. The
+> modular/remote batches (B1–B9) have their own dated log in
+> `docs/plans/modular-remote-architecture.md` §6 — that table is the current one.
 
 - `4931140` install SoX on the VM
 - `d01e420` extension scaffold + webview + Playwright UI test
