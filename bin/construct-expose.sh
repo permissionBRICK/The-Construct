@@ -183,10 +183,112 @@ json_objects() {
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
-# Hostnames and IPv4 pass through; an IPv6 literal is bracketed for URLs.
+# ── the one URL-host rule (docs/expose.md) ───────────────────────────────────
+# `hostLabel` travels on the wire as a BARE literal -- fe80::1, never [fe80::1] -- and
+# the brackets are added exactly once, here, when a URL is built. One representation and
+# one bracketing place is the whole rule: with the URL side bracketing anything with a
+# colon and the wire side accepting both spellings, an accepted "[fe80::1]" printed as
+# http://[[fe80::1]]:5173/ locally while the service, which interpolates the label as it
+# stands, printed http://fe80::1:5173/ for the bare one. Neither is openable.
+
+# Hostnames and IPv4 pass through; an IPv6 literal gets exactly one bracket pair.
+# IDEMPOTENT: an already-bracketed value is unwrapped first, so both spellings render the
+# same link. (CONSTRUCT_EXTERNAL_HOST goes through here too -- it is an admin-set local
+# value, so it is formatted, not filtered.)
 url_host() {
   local host="$1"
+  case "${host}" in
+    "["*"]") host="${host:1:${#host}-2}" ;;
+  esac
   if [[ "${host}" == *:* ]]; then printf '[%s]' "${host}"; else printf '%s' "${host}"; fi
+}
+
+# One dotted-quad, the form an IPv6 literal may end with. Leading zeros are refused, the
+# way inet_pton refuses them (so "::ffff:1.2.3.004" is not an address here either).
+is_ipv4_literal() {
+  local v="$1" octet
+  [[ "${v}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] || return 1
+  local IFS='.'
+  local octets=()
+  read -r -a octets <<<"${v}"
+  for octet in "${octets[@]}"; do
+    (( 10#${octet} <= 255 )) || return 1
+    [[ "${octet}" == "0" || "${octet}" != 0* ]] || return 1
+  done
+}
+
+# How many 16-bit groups are in ONE colon-separated run of an IPv6 literal? Prints the
+# count ("" is 0 groups); fails on any malformed piece.
+#
+# $2 = 1 when THIS run may end with an embedded IPv4 address. A dotted quad is the literal's
+# final 32 bits, so it can only ever be the last segment of the WHOLE address -- which means
+# never in the head of a compressed one. The caller decides ("192.0.2.1::" and
+# "1:192.0.2.1::" are not addresses, and inet_pton says so too), and even where it is
+# allowed it must still be the last segment of the run ("::1.2.3.4.5", "1.2.3:4").
+ipv6_groups() {
+  local part="$1" allow_ipv4="$2" n=0 i seg
+  [[ -n "${part}" ]] || { printf '0'; return 0; }
+  # A run may not start or end with a colon: the only place a colon touches a boundary is
+  # the "::" the caller already split on (":1", "1:" and "1:::" die here).
+  [[ "${part}" != :* && "${part}" != *: ]] || return 1
+  local IFS=':'
+  local segs=()
+  read -r -a segs <<<"${part}"
+  for (( i = 0; i < ${#segs[@]}; i++ )); do
+    seg="${segs[i]}"
+    if [[ "${seg}" == *.* ]]; then
+      [[ "${allow_ipv4}" == 1 ]] || return 1
+      (( i == ${#segs[@]} - 1 )) || return 1
+      is_ipv4_literal "${seg}" || return 1
+      n=$(( n + 2 ))
+    else
+      [[ "${seg}" =~ ^[0-9A-Fa-f]{1,4}$ ]] || return 1
+      n=$(( n + 1 ))
+    fi
+  done
+  printf '%s' "${n}"
+}
+
+# Is this a real IPv6 literal? THE SAME CONTRACT the extension's `net.isIP` and the
+# service's `IPAddress.TryParse` enforce -- the three implementations of the host-label
+# rule have to agree address for address (docs/expose.md), so this is a parse and not a
+# character class: "::::", "1::2::3", "12345::1" and "1:2:3:4:5:6:7" all look like
+# addresses to a class and are none. The three test suites drive one shared fixture matrix
+# through all three. '%' is outside the alphabet on purpose -- a zone id is not a wire
+# host label.
+is_ipv6_literal() {
+  local v="$1" head tail hn tn
+  [[ "${v}" == *:* ]] || return 1
+  [[ "${v}" =~ ^[0-9A-Fa-f:.]+$ ]] || return 1
+  if [[ "${v}" == *::* ]]; then
+    head="${v%%::*}"
+    tail="${v#*::}"
+    [[ "${tail}" != *::* ]] || return 1           # "::" may appear once
+    hn="$(ipv6_groups "${head}" 0)" || return 1   # a quad can never be BEFORE the "::"
+    tn="$(ipv6_groups "${tail}" 1)" || return 1
+    # "::" stands for AT LEAST one zero group, so the written ones can never fill all eight.
+    (( hn + tn <= 7 ))
+  else
+    hn="$(ipv6_groups "${v}" 1)" || return 1
+    (( hn == 8 ))
+  fi
+}
+
+# The hostLabel as it arrives in an ack (or a service forward record): unwrap the optional
+# brackets, and drop anything that is neither host-name-shaped nor an IPv6 literal. The
+# caller then prints localhost -- an openable link -- rather than a URL nobody can parse.
+wire_host_label() {
+  local v="$1"
+  case "${v}" in
+    "["*"]") v="${v:1:${#v}-2}" ;;
+  esac
+  [[ -n "${v}" ]] || return 0
+  if [[ "${v}" == *:* ]]; then
+    is_ipv6_literal "${v}" && printf '%s' "${v}"
+    return 0
+  fi
+  [[ "${v}" =~ ^[A-Za-z0-9._-]+$ ]] && printf '%s' "${v}"
+  return 0
 }
 
 is_port() { [[ "$1" =~ ^[0-9]+$ ]] && (( 10#$1 >= 1 && 10#$1 <= 65535 )); }
@@ -239,7 +341,7 @@ link_from_ack() {
   fi
   local_port="$(json_field "${doc}" localPort)"
   if ! is_port "${local_port}"; then return 1; fi
-  host_label="$(json_field "${doc}" hostLabel)"
+  host_label="$(wire_host_label "$(json_field "${doc}" hostLabel)")"
   printf 'http://%s:%s/' "$(url_host "${host_label:-localhost}")" "${local_port}"
 }
 

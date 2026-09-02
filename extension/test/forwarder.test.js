@@ -255,13 +255,76 @@ async function settle(fwd, timers, ms = 5000) {
 
   eq("hostLabel: a plain machine name survives", f.sanitizeHostLabel("christoph-pc"), "christoph-pc");
   eq("hostLabel: an FQDN survives", f.sanitizeHostLabel("pc.home.example"), "pc.home.example");
-  eq("hostLabel: an IPv6 literal survives bracketed", f.sanitizeHostLabel("[fe80::1]"), "[fe80::1]");
   eq("hostLabel: whitespace is removed, not a separator", f.sanitizeHostLabel("  pc  "), "pc");
   eq("hostLabel: a slash is refused outright", f.sanitizeHostLabel("pc/evil"), "");
   eq("hostLabel: an @ (credential smuggling) is refused", f.sanitizeHostLabel("evil.test@pc"), "");
   eq("hostLabel: a query/fragment is refused", f.sanitizeHostLabel("pc?a=b"), "");
   eq("hostLabel: empty is the default", f.sanitizeHostLabel(""), "");
   eq("hostLabel: undefined is the default", f.sanitizeHostLabel(undefined), "");
+
+  // ONE WIRE REPRESENTATION, ONE BRACKETING PLACE (docs/expose.md). The label travels bare
+  // and is bracketed only when a URL is built — the two used to disagree, so an accepted
+  // "[fe80::1]" rendered http://[[fe80::1]]:5173/ here while the service rendered the bare
+  // one as http://fe80::1:5173/, and neither link opens.
+  eq("hostLabel: an IPv6 literal is canonically BARE", f.sanitizeHostLabel("fe80::1"), "fe80::1");
+  eq("hostLabel: ...and a bracketed one is accepted and unwrapped to it",
+    f.sanitizeHostLabel("[fe80::1]"), "fe80::1");
+  eq("hostLabel: ...compressed or full, same rule",
+    f.sanitizeHostLabel("[2001:db8::8a2e:370:7334]"), "2001:db8::8a2e:370:7334");
+  eq("hostLabel: an IPv4-mapped literal is a literal too",
+    f.sanitizeHostLabel("::ffff:10.0.0.1"), "::ffff:10.0.0.1");
+  // THE SHARED FIXTURE MATRIX. One rule, three implementations — this module's `net.isIP`,
+  // `is_ipv6_literal` in bin/construct-expose.sh and `ForwardHost` in the service — and they
+  // are only one rule while they agree address for address, so the SAME list runs in
+  // test/construct-expose.test.sh and in Constructd.Tests' ForwardHostTests.
+  //
+  // Every entry is PARSED, never character-classed. The four marked (*) are the ones a
+  // shape filter waves through — they are what a "plausible IPv6" test accepts and what a
+  // real parser refuses, and each of them would otherwise reach a URL authority.
+  const IPV6_LABELS_VALID = [
+    "::", "::1", "fe80::1", "2001:db8::8a2e:370:7334", "1:2:3:4:5:6:7:8",
+    "0:0:0:0:0:0:0:0", "1::", "::2", "0::0", "::ffff:10.0.0.1",
+    "1:2:3:4:5:6:1.2.3.4", "::1.2.3.4", "1::1.2.3.4", "1:2:3:4:5:6:7::",
+    "fe80::0204:61ff:fe9d:f156", "ABCD::1",
+  ];
+  const IPV6_LABELS_INVALID = [
+    "::::", "1::2::3", "1:2:3:4:5:6:7:8:9", "1.2.3:4", "....:", ":::",
+    ":1", "1:", "12345::1" /* (*) */, "::ffff:999.1.1.1", "::ffff:1.2.3.004",
+    "1:2" /* (*) */, "1:2:3:4:5:6:7" /* (*) */, "1:::" /* (*) */,
+    "1::2:3:4:5:6:7:8", "::1.2.3.4.5", "1:2:3:4:5:6:7:1.2.3.4",
+    // An embedded IPv4 address is the literal's FINAL 32 bits, so it can never appear
+    // before the "::" — the grammar boundary a per-run "quad must be last" check misses.
+    "192.0.2.1::", "192.0.2.1::1", "1:192.0.2.1::", "1.2.3.4::1:2",
+  ];
+  for (const good of IPV6_LABELS_VALID) {
+    eq(`hostLabel[matrix]: ${JSON.stringify(good)} is an address, kept bare`,
+      f.sanitizeHostLabel(good), good);
+    eq(`hostLabel[matrix]: ${JSON.stringify(good)} bracketed is the same address`,
+      f.sanitizeHostLabel(`[${good}]`), good);
+    eq(`urlHost[matrix]: ${JSON.stringify(good)} gets exactly one bracket pair`,
+      f.urlHostFor(good), `[${good}]`);
+  }
+  for (const bad of IPV6_LABELS_INVALID) {
+    eq(`hostLabel[matrix]: ${JSON.stringify(bad)} is not an address, so it is refused`,
+      f.sanitizeHostLabel(bad), "");
+    eq(`urlHost[matrix]: ...and never reaches a URL authority`, f.urlHostFor(bad), "");
+  }
+  for (const bad of ["[]", "[fe80::1", "fe80::1]"]) {
+    eq(`hostLabel: ${JSON.stringify(bad)} is not an address, so it is refused`,
+      f.sanitizeHostLabel(bad), "");
+  }
+  eq("hostLabel: a zone id is refused (a URL would need %25, and a zone is local to one PC)",
+    f.sanitizeHostLabel("fe80::1%eth0"), "");
+  eq("hostLabel: ...bracketed too", f.sanitizeHostLabel("[fe80::1%25eth0]"), "");
+  eq("hostLabel: nested brackets are not a label", f.sanitizeHostLabel("[[fe80::1]]"), "");
+
+  eq("urlHost: a name is used as it stands", f.urlHostFor("christoph-pc"), "christoph-pc");
+  eq("urlHost: an IPv4 literal too", f.urlHostFor("10.0.0.7"), "10.0.0.7");
+  eq("urlHost: an IPv6 literal gets exactly one bracket pair", f.urlHostFor("fe80::1"), "[fe80::1]");
+  eq("urlHost: ...and a bracketed one gets exactly one pair as well, never two",
+    f.urlHostFor("[fe80::1]"), "[fe80::1]");
+  eq("urlHost: an unusable label is empty, so the caller says localhost", f.urlHostFor("pc/evil"), "");
+  eq("urlHost: ...as is an absent one", f.urlHostFor(""), "");
 
   eq("toPort: an integer", f.toPort(5173), 5173);
   eq("toPort: a numeric string (came over JSON)", f.toPort("5173"), 5173);
@@ -363,6 +426,13 @@ async function settle(fwd, timers, ms = 5000) {
   eq("ack document: an unknown status becomes open, never something new on the wire",
     f.ackDocument("1-a", { status: "weird", localPort: 1 }).status, "open");
   eq("ack document: the version is the contract's", doc.v, f.WIRE_VERSION);
+  // The ONE wire representation: what the guest CLI and the service read is the bare
+  // literal, whichever spelling the setting was typed in.
+  eq("ack document: an IPv6 host label goes on the wire BARE",
+    f.ackDocument("1-a", { status: "open", localPort: 18800, hostLabel: "[fe80::1]" }).hostLabel,
+    "fe80::1");
+  ok("ack document: an unusable host label is omitted, not half-encoded",
+    !("hostLabel" in f.ackDocument("1-a", { status: "open", localPort: 18800, hostLabel: "fe80::1%eth0" })));
 
   const parsed = f.parseDump(dump("self", [
     ["R", "1-a", { v: 1, id: "1-a", vmPort: 5173, label: "vite" }],
@@ -539,6 +609,31 @@ async function settle(fwd, timers, ms = 5000) {
     plan({ enabled: true, name: "agent-vm", armed: "", online: true, vmState: "running" }),
     { action: "start", reason: "reachable" });
   deep("lifecycle: a missing reading starts nothing", plan({}), { action: "none", reason: "unreachable" });
+
+  // THE OTHER HALF OF THE EDGE: what the guest's answer means for it. planLifecycle arms
+  // the instance the moment a reachable reading asks for a start, which is right for both
+  // answers the check can give — but a check that never HAPPENED establishes nothing, and
+  // leaving it armed made every later reachable reading a "none": no watcher, no reconcile,
+  // no ack, until an unrelated event cleared the edge.
+  const outcome = (o) => f.planStartOutcome(o);
+  deep("outcome: a guest that could not be asked is a RETRY, not an answer",
+    outcome({ outcome: f.START_UNANSWERED, current: true }), { action: "retry", reason: "unanswered" });
+  deep("outcome: a guest that answered 'no spool' keeps the edge (asked once per connect)",
+    outcome({ outcome: f.START_UNSUPPORTED, current: true }), { action: "keep", reason: "unsupported" });
+  deep("outcome: a serving session keeps it too",
+    outcome({ outcome: f.START_SUPPORTED, current: true }), { action: "keep", reason: "supported" });
+  deep("outcome: a session the window withdrew is the stop path's business",
+    outcome({ outcome: f.START_STOOD_DOWN, current: true }), { action: "none", reason: "stood-down" });
+  deep("outcome: start() on an already-started session changes nothing",
+    outcome({ outcome: f.START_RUNNING, current: true }), { action: "keep", reason: "running" });
+  // The claim/generation guard: what it would clear belongs to a LATER session by then.
+  deep("outcome: a start the window has moved on from touches neither reference",
+    outcome({ outcome: f.START_UNANSWERED, current: false }), { action: "none", reason: "superseded" });
+  deep("outcome: ...whatever it answered",
+    outcome({ outcome: f.START_SUPPORTED, current: false }), { action: "none", reason: "superseded" });
+  deep("outcome: an unknown answer is never a retry (it would be an unbounded loop)",
+    outcome({ outcome: "something-new", current: true }), { action: "keep", reason: "something-new" });
+  deep("outcome: a missing answer is not one either", outcome({ current: true }), { action: "keep", reason: "started" });
 })();
 
 // ── The claim protocol, RUN FOR REAL against a temp spool ──────────────────────
@@ -1098,7 +1193,9 @@ async function lazyStart() {
     const { fwd, transport, timers } = makeForwarder();
     const started = fwd.start();
     eq("lazy: start() spawns nothing before the guest has answered", transport.watches.length, 0);
-    await started;
+    // start() RESOLVES TO the guest's answer: the window that armed this instance cannot
+    // tell "an older guest" from "the check never happened" by any other means.
+    eq("lazy: ...and start() reports a served guest", await started, f.START_SUPPORTED);
     await timers.advance(5000);
     eq("lazy: the capability check ran exactly once", transport.capabilities.length, 1);
     ok("lazy: ...and it was the FIRST thing to touch the VM", isCapabilityScript(transport.scripts[0]));
@@ -1116,7 +1213,7 @@ async function lazyStart() {
     const { fwd, transport, timers } = makeForwarder({ spool: false });
     const lines = [];
     fwd.log = (l) => lines.push(l);
-    await fwd.start();
+    eq("lazy: an answered 'no spool' is reported as UNSUPPORTED", await fwd.start(), f.START_UNSUPPORTED);
     await timers.advance(f.RECONCILE_MS * 4);
     eq("lazy: an older guest is checked once", transport.capabilities.length, 1);
     eq("lazy: ...and NO watcher is spawned", transport.watches.length, 0);
@@ -1142,7 +1239,9 @@ async function lazyStart() {
     const { fwd, transport, timers } = makeForwarder({ spoolCode: 255 });
     const lines = [];
     fwd.log = (l) => lines.push(l);
-    await fwd.start();
+    // ...and this one is reported as UNANSWERED, which is what makes the window retry it
+    // instead of holding a stood-down session armed forever (see the wiring model below).
+    eq("lazy: a check that never happened is reported as UNANSWERED", await fwd.start(), f.START_UNANSWERED);
     await timers.advance(f.RECONCILE_MS * 2);
     eq("lazy: an unanswerable check spawns no watcher", transport.watches.length, 0);
     eq("lazy: ...and no reconcile", transport.scripts.filter(isReconcileScript).length, 0);
@@ -1163,7 +1262,7 @@ async function lazyStart() {
     const started = fwd.start();
     fwd.dispose();
     release();
-    await started;
+    eq("lazy: a start disposed mid-check reports that it stood down", await started, f.START_STOOD_DOWN);
     await timers.advance(5000);
     eq("lazy: a start disposed mid-check spawns no watcher", transport.watches.length, 0);
     eq("lazy: ...and runs no reconcile", transport.scripts.filter(isReconcileScript).length, 0);
@@ -1176,7 +1275,7 @@ async function lazyStart() {
       instance: { name: "work-vm", backend: "hyperv-remote", vmName: "work-vm" },
     });
     transport.lists = [[]];
-    await fwd.start();
+    eq("lazy: remote mode has no spool to check, so it starts served", await fwd.start(), f.START_SUPPORTED);
     await timers.advance(1000);
     eq("lazy: remote mode runs no capability check", transport.capabilities.length, 0);
     eq("lazy: ...and opens no watcher", transport.watches.length, 0);
@@ -1599,6 +1698,21 @@ async function remoteFlow() {
   eq("snapshot: a closing forward is not rendered",
     f.toSnapshot({ requests: [{ id: "a", vmPort: 1 }], closes: ["a"] }).items.length, 0);
 
+  // The rendered link goes through the same URL-host rule as the ack the guest reads, so
+  // the panel and `construct expose` cannot print two different addresses for one forward.
+  eq("snapshot: an IPv6 host label is bracketed exactly once",
+    f.toSnapshot({ requests: [{ id: "a", vmPort: 1 }], acks: [{ id: "a", status: "open", localPort: 18800, hostLabel: "fe80::1" }] })
+      .items[0].url, "http://[fe80::1]:18800/");
+  eq("snapshot: ...and a bracketed one (an older client's ack) renders identically",
+    f.toSnapshot({ requests: [{ id: "a", vmPort: 1 }], acks: [{ id: "a", status: "open", localPort: 18800, hostLabel: "[fe80::1]" }] })
+      .items[0].url, "http://[fe80::1]:18800/");
+  eq("snapshot: an unusable host label falls back to a link that at least opens",
+    f.toSnapshot({ requests: [{ id: "a", vmPort: 1 }], acks: [{ id: "a", status: "open", localPort: 18800, hostLabel: "1::2::3" }] })
+      .items[0].url, "http://localhost:18800/");
+  eq("snapshot: a tunnel with no ack yet brackets the configured label the same way",
+    f.toSnapshot({ requests: [{ id: "a", vmPort: 1 }], tunnels: [{ id: "a", localPort: 18800, state: "up" }], hostLabel: "[fe80::1]" })
+      .items[0].url, "http://[fe80::1]:18800/");
+
   const local = ui.toPanelForwards({ mode: "local", owner: true, items: [] });
   eq("panel: an untouched LOCAL install shows nothing new", local.visible, false);
   eq("panel: a local install with a forward shows the card",
@@ -1743,6 +1857,13 @@ async function lifecycleWiring() {
     // Hold the guest's answer so a test can park a session inside its own await, which is
     // the window between publishing it and spawning anything.
     const holdCapability = o.holdCapability === true;
+    // `keepArmed: true` is the PRE-FIX control for the retry edge: start()'s answer is
+    // thrown away, so an unanswered check leaves the instance armed forever.
+    const retryUnanswered = o.keepArmed !== true;
+    // What the GUEST answers, per start: `{}` = SPOOL=1, `{ spool: false }` = an older
+    // guest, `{ spoolCode: 255 }` = a check that could not be made at all. A function is
+    // asked once per session, so one window can fail a check and then succeed.
+    const guest = typeof o.guest === "function" ? o.guest : () => (o.guest || {});
     const gate = inst.createGate(startName);
     const slot = inst.createSessionOwner();
     const sessions = [];                       // every forwarder ever constructed
@@ -1806,7 +1927,7 @@ async function lifecycleWiring() {
       // A REAL Forwarder, so the second await this round is about — its own guest
       // capability check — is exercised rather than modelled.
       const timers = makeTimers();
-      const fake = makeTransport();
+      const fake = makeTransport(guest(t.name));
       const hold = holdFor(t.name);
       const inner = fake.runRemoteScript;
       fake.runRemoteScript = (script) => (isCapabilityScript(script)
@@ -1826,9 +1947,18 @@ async function lifecycleWiring() {
       sessions.push(session);
       held.session = session; held.name = t.name;
       log.push("serving:" + t.name);
-      // RETURNED, exactly as extension.js returns forwarderSession.start(): the chain step
-      // stays open until the guest has answered.
-      return fwd.start();
+      // AWAITED, exactly as extension.js awaits forwarderSession.start(): the chain step
+      // stays open until the guest has answered, and that answer decides the armed edge.
+      const answer = await fwd.start();
+      // noteForwarderStarted(): a check that never happened establishes nothing, so the
+      // session AND the armed edge go — but only while this start is still the current one.
+      const outcomePlan = f.planStartOutcome({
+        outcome: answer,
+        current: slot.owns(claim) && held.session === session && !inst.targetSuperseded(gate, t),
+      });
+      log.push("outcome:" + outcomePlan.action + ":" + t.name);
+      if (serialized && retryUnanswered && outcomePlan.action === "retry") { armed = null; stop(); }
+      return answer;
     }
 
     const chain = inst.createHandover({
@@ -1890,6 +2020,8 @@ async function lifecycleWiring() {
         stop();
       },
       askedFor: (name) => asked.filter((n) => n === name).length,
+      /** Guest capability checks this window ever made — one exec per session, at most. */
+      checks: () => sessions.reduce((n, s) => n + s.transport.capabilities.length, 0),
       /** The guest answering the capability check for a session that was parked in it. */
       answerCapability: (name) => { holdFor(name).resolve(); return tick(); },
       /** Watchers this window ever SPAWNED, and reconciles it ever ran — the traffic. */
@@ -2106,6 +2238,76 @@ async function lifecycleWiring() {
     ok("control: ...and the spool is reconciled too", w.reconciles() >= 1);
   }
 
+  // 8) A CAPABILITY CHECK THAT COULD NOT BE MADE. The reading reached the VM, the session
+  //    was built, and its one exec failed (the connection dropped, sshd is not up yet, the
+  //    VM is on its way down). Nothing was established — so the window must let that
+  //    session go and RE-ARM on the next reachable reading. Left armed, as it was, every
+  //    later reading planned "none" and no watcher, reconcile or ack ever followed: a
+  //    queued `construct expose` waited out its whole timeout for no reason.
+  {
+    let fail = true;
+    const w = forwarderWindow("agent-vm", { guest: () => (fail ? { spoolCode: 255 } : {}) });
+    const first = w.note("agent-vm", up);
+    w.resolveBuild("agent-vm");
+    await first;
+    await tick();
+    eq("unanswered: the check ran", w.checks(), 1);
+    eq("unanswered: ...and spawned nothing", w.watchers(), 0);
+    deep("unanswered: ...and nothing is left serving", w.openSessions(), []);
+    deep("unanswered: ...and nothing is orphaned", w.orphans(), []);
+    eq("unanswered: THE EDGE IS CLEARED, so the next reading is a retry", w.armedName(), null);
+    // The next 30 s reading, with the VM answering this time.
+    fail = false;
+    const second = w.note("agent-vm", up);
+    w.resolveBuild("agent-vm");
+    await second;
+    await tick();
+    eq("unanswered: the next reachable reading asks again", w.checks(), 2);
+    deep("unanswered: ...and this one serves", w.openSessions(), ["agent-vm"]);
+    eq("unanswered: ...with its watcher up", w.liveWatchers(), 1);
+    deep("unanswered: ...and still nothing orphaned", w.orphans(), []);
+    w.close();
+  }
+  {
+    // THE CONTROL, and the reason the two answers are not one: a guest that ANSWERED
+    // "no spool" is not retried. It costs one exec per connection and nothing else —
+    // the zero-change bar for a VM provisioned before `construct expose` existed.
+    const w = forwarderWindow("agent-vm", { guest: { spool: false } });
+    const first = w.note("agent-vm", up);
+    w.resolveBuild("agent-vm");
+    await first;
+    await tick();
+    eq("unsupported: the guest was asked once", w.checks(), 1);
+    eq("unsupported: ...and the edge is KEPT", w.armedName(), "agent-vm");
+    await w.note("agent-vm", up);
+    await w.note("agent-vm", up);
+    await tick();
+    eq("unsupported: ...so two more reachable readings ask nothing", w.checks(), 1);
+    eq("unsupported: ...and spawn nothing", w.watchers(), 0);
+    eq("unsupported: ...and build no second session", w.builtFor("agent-vm"), 1);
+    w.close();
+  }
+  {
+    // PRE-FIX CONTROL: the shape where start()'s answer was discarded. The instance stays
+    // armed on a session that stood itself down, so the next reachable reading — and every
+    // one after it — plans "none": the retry never happens.
+    const w = forwarderWindow("agent-vm", { guest: { spoolCode: 255 }, keepArmed: true });
+    const first = w.note("agent-vm", up);
+    w.resolveBuild("agent-vm");
+    await first;
+    await tick();
+    eq("control: the pre-fix shape stays armed on a check that never answered",
+      w.armedName(), "agent-vm");
+    await w.note("agent-vm", up);
+    await tick();
+    ok("control: ...so the next reachable reading does nothing at all",
+      w.log.filter((l) => l === "lifecycle:none:agent-vm").length === 1);
+    eq("control: ...and the guest is never asked again", w.checks(), 1);
+    eq("control: ...leaving a queued `construct expose` with no watcher to answer it",
+      w.watchers(), 0);
+    w.close();
+  }
+
   // 7) A REMOTE INSTANCE WITH NO CREDENTIAL resolves to no transport: nothing is built,
   //    nothing is armed twice, and the window is not left in a half-started state.
   {
@@ -2151,6 +2353,16 @@ async function lifecycleWiring() {
   ok("stop: every stop request invalidates the slot SYNCHRONOUSLY and queues the disposal",
     extSrc.indexOf("function requestForwarderStop() {\n  forwarderSlot.claim(\"\");\n  forwarderArmed = null;\n  return forwarderChain.disable();\n}") >= 0 &&
     // ...and nothing bypasses it.
+    extSrc.split("forwarderChain.disable()").length === 2);
+  ok("outcome: the guest's answer comes back through the pure sibling and decides the edge",
+    extSrc.indexOf("const outcome = await session.start();") >= 0 &&
+    extSrc.indexOf("noteForwarderStarted(t, claim, session, outcome);") >= 0 &&
+    extSrc.indexOf("const plan = forwarder.planStartOutcome({") >= 0 &&
+    extSrc.indexOf("current: forwarderSlot.owns(claim) && forwarderSession === session") >= 0);
+  ok("outcome: ...and a retry clears the armed edge AND the session, in that one step",
+    extSrc.indexOf('if (plan.action !== "retry") return;') >= 0 &&
+    extSrc.indexOf("  forwarderArmed = null;\n  stopForwarder();\n}") >= 0 &&
+    // ...without a second disable on the chain (it already runs ON the chain).
     extSrc.split("forwarderChain.disable()").length === 2);
   ok("eligibility: the session re-checks the SAME four conditions around its own await",
     extSrc.indexOf("const stillWanted = () => forwarderSlot.owns(claim)") >= 0 &&

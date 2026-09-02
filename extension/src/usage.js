@@ -381,6 +381,33 @@ function buildExportPayload(rawText, opts = {}) {
   return JSON.stringify(payload, null, 2);
 }
 
+/**
+ * ONE EXPORT'S CAPTURED IDENTITY — the report period and the instance it was started for,
+ * plus every string that names them. Pure, so "what does this file say it is, and what is
+ * it called" is a test rather than a live-window observation.
+ *
+ * The export runs a slow SSH collection between the click and the save dialog, and both of
+ * its subjects can change underneath it: switching instances would present VM A's numbers
+ * while the panel shows B, and switching the period would save daily numbers under a
+ * monthly file name. The caller captures both BEFORE the collection and labels the dialog
+ * and the confirmation from what it captured, so the answer names the question.
+ *
+ * `instance` is optional: without one the labels are exactly the strings a single-VM
+ * install has always seen.
+ */
+function describeExport(opts = {}) {
+  const report = normalizeReport(opts.report);
+  const instance = String(opts.instance == null ? "" : opts.instance).trim();
+  const scope = instance ? `${report}, “${instance}”` : report;
+  return {
+    report,
+    instance,
+    fileName: exportFileName(report, opts.at),
+    dialogTitle: `Save Construct usage report (${scope})`,
+    savedMessage: (target) => `Usage report (${scope}) saved to ${target}`,
+  };
+}
+
 /** Default filename for the save dialog, e.g. construct-usage-weekly-20260701-143005.json. */
 function exportFileName(report, at) {
   const d = at || new Date();
@@ -411,5 +438,5 @@ module.exports = {
   normalizeReport, isCurrentReport, buildUsageScript, cacheKeyFor,
   formatTokens, formatCost, parseToolUsage, parseUsage,
   collectOnce, collect, collectRaw, clearCache, augment,
-  buildExportPayload, exportFileName,
+  buildExportPayload, exportFileName, describeExport,
 };

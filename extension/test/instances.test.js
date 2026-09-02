@@ -383,6 +383,13 @@ const badIdentity = [
   // dot must be refused HERE — accepting it meant the branch was only created (or not) at
   // the first sync tick. Same fixture in test/instances.test.ps1.
   ["branch-trailing-dot", { configBranch: "vm-work." }, "configBranch"],
+  // A branch is a FILE too on the host: the config repo keeps loose refs on Windows, so
+  // refs/heads/CON (and the CON.lock git writes beside it) cannot be created — the same
+  // device rule keyName gets. Linux git accepts these, so only the validator catches them.
+  ["branch-device-con", { configBranch: "CON" }, "configBranch"],
+  ["branch-device-nul", { configBranch: "nul" }, "configBranch"],
+  ["branch-device-com1", { configBranch: "COM1" }, "configBranch"],
+  ["branch-device-with-extension", { configBranch: "CON.txt" }, "configBranch"],
 ];
 for (const [label, entry, field] of badIdentity) {
   const r = inst.load({ path: writeRegistry(JSON.stringify({ version: 1, instances: { "bad-vm": entry } })) });
@@ -415,6 +422,8 @@ for (const good of [
   { backend: "hyperv-remote", sshHost: "buildbox.local", hostAlias: "work-vm.local" },
   { keyName: "construct_work-vm_ed25519" },
   { vmName: "Work-VM" }, { configBranch: "vm-work" }, { configBranch: "feature.x_1" },
+  // The device rule is the STEM, not a substring: these are ordinary branch names.
+  { configBranch: "console" }, { configBranch: "con-work" },
   // Both readers TRIM a string field first, so surrounding whitespace is not a problem.
   { backend: "hyperv-remote", sshHost: " buildbox.local\n" },
 ]) {

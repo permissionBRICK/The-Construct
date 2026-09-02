@@ -1342,6 +1342,28 @@ carries it out:
 | reachable, already armed | nothing |
 | unreachable (whatever the VM's power state says) | stop: kill the watcher and the tunnels, hand the claim back, clear the armed edge |
 
+The armed edge is set when the start is *asked for*, so there is a second decision when the
+guest answers, and it is the pure sibling `forwarder.planStartOutcome` (carried out by
+`noteForwarderStarted`, inside the same chain step that built the session):
+
+| `Forwarder.start()` resolved to | what happens to the armed edge |
+|---|---|
+| `supported` — serving (or remote mode, which has no spool) | kept |
+| `unsupported` — the guest ANSWERED `SPOOL=0` | kept: that answer cannot change until the VM is reprovisioned, so it is asked once per connection and not every 30 s |
+| `unanswered` — the check could not be made at all | **cleared, with the session** — the next reachable reading is a fresh start |
+| `stood-down` — the window withdrew the session mid-check | nothing: the stop path already cleared it |
+
+The `unanswered` row is the one that has to exist. The capability check is one SSH exec and
+it can simply fail — the connection drops, sshd is not up yet, the VM is on its way down —
+and a failure establishes *nothing*, yet the session stands itself down while the window
+keeps both the reference and the edge. Every later reachable reading then plans `none`, so
+no watcher, no reconcile and no ack ever follows: a queued `construct expose` waits out its
+whole timeout with an extension that is holding the instance and doing nothing. Clearing
+both together (only while the start's own slot claim and generation are still current — what
+it would clear belongs to a later session otherwise) turns the next 30 s reading into the
+retry. The `supported`/`unsupported` asymmetry is the zero-change bar: a genuinely older
+guest still costs exactly one exec per connection.
+
 **Reachability is the whole rule, in both directions.** A watcher and a set of `ssh -L`
 children pointed at a VM this window can no longer reach are holding sockets and nothing
 else, so an unreachable reading lets them go even when the host still reports the VM as
@@ -1358,6 +1380,7 @@ exec and nothing else**: no watcher, no reconcile, no timer, one log line saying
 reprovision, and no retry until the next connect, switch or setting change. Holding a
 connection and polling such a VM every 30 s would be a socket, a wakeup and a battery
 charged to an install that gained nothing — exactly what the zero-change rule is about.
+A check that could not be *made* is a different answer and is retried (the table above).
 (`OWNER=absent` from the reconcile still stands the forwarder down, for a spool that
 disappears *after* the check.)
 
@@ -1468,9 +1491,20 @@ forward that was provably broken.
 
 `construct.forwards.hostLabel` (default `""`) is the only new setting. Empty means the ack
 carries no `hostLabel` and the CLI prints a loopback link — today's behaviour, and the
-reason an untouched install sees no change. A value is put in the ack verbatim (sanitised
-to one host-name-shaped token) so the CLI prints `http://<label>:<port>/` for a PC other
-machines know by name.
+reason an untouched install sees no change. A value is put in the ack in its canonical form
+(`sanitizeHostLabel`: one host-name-shaped token, or one bare IP literal) so the CLI prints
+`http://<label>:<port>/` for a PC other machines know by name.
+
+**One representation on the wire, one place that brackets it.** An IPv6 label is advertised
+BARE — `fe80::1`, never `[fe80::1]` — and `urlHostFor` adds exactly one bracket pair when a
+URL is built. The full rule, including what happens to a bracketed value, a zone id and a
+string that is not an address at all, is specified once in
+[`docs/expose.md` §The host-label rule](../docs/expose.md#the-host-label-rule) and
+implemented three times against it (here, `bin/construct-expose.sh`, and the service's
+`ForwardHost`); this module normalizes whatever the setting says before it advertises it, so
+the wire only ever carries the canonical form. The literal is *parsed* (`net.isIP` — the one
+thing this module takes from `net`, and it opens no socket), because a character class
+accepts `::::` and `1::2::3`.
 
 The panel's **Forwards** card lists port, label, target, status and link, with *Open*
 (`vscode.env.openExternal`) and *Close*. It is `hidden` when there are no forwards **and**

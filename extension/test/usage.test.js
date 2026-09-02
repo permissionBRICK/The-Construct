@@ -2,6 +2,8 @@
 // Plain-node unit tests for the token-usage collector/parser. The SSH runner and the
 // clock are injected (opts.runScript / opts.now) so no VM is touched. No deps.
 // Run: node usage.test.js
+const fs = require("fs");
+const path = require("path");
 const usage = require("../src/usage");
 
 let pass = 0, fail = 0;
@@ -280,6 +282,223 @@ function realisticCombined() {
   ok("exportFileName: construct-usage-<report>-<stamp>.json", fn === "construct-usage-total-20260701-143005.json", fn);
   ok("exportFileName: invalid report normalized in the name", usage.exportFileName("bogus", new Date(2026, 0, 2, 3, 4, 5)) === "construct-usage-daily-20260102-030405.json");
   ok("exportFileName: zero-pads month/day/time", usage.exportFileName("daily", new Date(2026, 0, 2, 3, 4, 5)) === "construct-usage-daily-20260102-030405.json");
+
+  // ── describeExport (the captured identity of ONE export) ─────────────────────
+  // The export's file name and its two labels are derived ONCE, from the report and the
+  // instance the click was captured for — not re-read after the collection, which is when
+  // both of them can have changed.
+  const desc = usage.describeExport({ report: "monthly", instance: "work-vm", at: new Date(2026, 6, 1, 14, 30, 5) });
+  ok("describeExport: the file name carries the CAPTURED period",
+    desc.fileName === "construct-usage-monthly-20260701-143005.json", desc.fileName);
+  ok("describeExport: the dialog names the period and the instance",
+    desc.dialogTitle === "Save Construct usage report (monthly, “work-vm”)", desc.dialogTitle);
+  ok("describeExport: ...and so does the confirmation",
+    desc.savedMessage("/tmp/u.json") === "Usage report (monthly, “work-vm”) saved to /tmp/u.json");
+  ok("describeExport: the report is normalized, so a bogus period cannot name a file",
+    usage.describeExport({ report: "weekly", at: new Date(2026, 0, 2, 3, 4, 5) }).fileName
+      === "construct-usage-daily-20260102-030405.json");
+  const noInstance = usage.describeExport({ report: "daily", at: new Date(2026, 0, 2, 3, 4, 5) });
+  ok("describeExport: without an instance the labels stay the single-VM strings",
+    noInstance.dialogTitle === "Save Construct usage report (daily)" &&
+    noInstance.savedMessage("/tmp/u.json") === "Usage report (daily) saved to /tmp/u.json");
+  ok("describeExport: whitespace around an instance name is not a label",
+    usage.describeExport({ report: "daily", instance: "  " }).instance === "");
+
+  // ── runExportUsage, modelled with a deferred collection ──────────────────────
+  // A MODEL of extension.js's export command (it cannot be required under plain node — it
+  // needs `vscode` — so the wiring itself is pinned at the source below, the same way
+  // forwarder.test.js pins the forwarder's). The model is the production ORDER with the
+  // production helper: capture instance+report, collect, check the generation, then the
+  // failure branch, the dialog, a second generation check, and only then the write. Every
+  // effect is recorded, so "nothing was shown, opened or written" is an assertion rather
+  // than a hope.
+  //
+  // `guard` selects the shape: "checked" is this change; "after-failure" is the shape the
+  // reviewer caught (the check sitting below the `!rawText` branch, so a failed collection
+  // still toasts into the other instance's window); "none" is the pre-fix original, which
+  // re-read the live instance and period after the collection.
+  async function runExportModel(opts) {
+    const o = opts || {};
+    const guard = o.guard || "checked";
+    const live = { instance: "agent-vm", report: "monthly" };
+    const effects = [];
+    // actionTarget() + describeExport(), BEFORE the slow part.
+    const captured = { instance: live.instance, report: live.report };
+    const exportOf = usage.describeExport({ ...captured, at: new Date(2026, 6, 1, 14, 30, 5) });
+    // targetSuperseded(): the window's generation, as extension.js asks it.
+    const superseded = () => live.instance !== captured.instance;
+    const abort = (why) => { effects.push("aborted:" + why); return true; };
+    const run = (async () => {
+      const rawText = await o.collect();
+      // The pre-fix shape re-derived everything here instead of using the capture.
+      const desc = guard === "none"
+        ? usage.describeExport({ instance: live.instance, report: live.report, at: new Date(2026, 6, 1, 14, 30, 5) })
+        : exportOf;
+      if (guard === "checked" && superseded()) return abort("after-collect");
+      if (!rawText) {
+        effects.push("error-toast");
+        return;
+      }
+      if (guard === "after-failure" && superseded()) return abort("after-collect");
+      effects.push("dialog:" + desc.dialogTitle + "|" + desc.fileName);
+      const uri = await o.dialog();
+      if (!uri) return;
+      if (guard !== "none" && superseded()) return abort("after-dialog");
+      effects.push("write:" + uri + "|" + JSON.parse(usage.buildExportPayload(rawText, { savedAt: "t" })).report);
+      effects.push("saved-toast:" + desc.savedMessage(uri));
+    })();
+    return { effects, run, live, exportOf };
+  }
+
+  const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
+  const collected = () => JSON.stringify({ report: "monthly", tools: {} });
+
+  // 1) THE HAPPY PATH: nothing switches, and every string comes from the capture.
+  {
+    const m = await runExportModel({ collect: async () => collected(), dialog: async () => "/tmp/u.json" });
+    await m.run;
+    ok("export: the dialog is titled with the captured period and instance",
+      m.effects[0] === "dialog:Save Construct usage report (monthly, “agent-vm”)|construct-usage-monthly-20260701-143005.json",
+      m.effects[0]);
+    ok("export: the file is written with the captured period's payload",
+      m.effects[1] === "write:/tmp/u.json|monthly", m.effects[1]);
+    ok("export: ...and the confirmation names both",
+      m.effects[2] === "saved-toast:Usage report (monthly, “agent-vm”) saved to /tmp/u.json", m.effects[2]);
+  }
+
+  // 2) A SWITCH DURING THE COLLECTION. The answer belongs to the instance nobody is looking
+  //    at any more: no dialog, no write, no toast — the abort names both instances instead.
+  {
+    const gate = deferred();
+    const m = await runExportModel({
+      collect: async () => { await gate.promise; return collected(); },
+      dialog: async () => "/tmp/u.json",
+    });
+    m.live.instance = "work-vm";      // the user switches while the SSH round trip is out
+    m.live.report = "daily";
+    gate.resolve();
+    await m.run;
+    ok("export race: a switch during the collection aborts before anything is shown",
+      m.effects.length === 1 && m.effects[0] === "aborted:after-collect", JSON.stringify(m.effects));
+    ok("export race: ...so no save dialog is opened", !m.effects.some((e) => e.startsWith("dialog:")));
+    ok("export race: ...and nothing is written", !m.effects.some((e) => e.startsWith("write:")));
+  }
+  {
+    // THE PRE-FIX CONTROL: no generation check at all, and the description re-derived after
+    // the collection — A's numbers offered under B's name, in B's file name, and saved.
+    const gate = deferred();
+    const m = await runExportModel({
+      guard: "none",
+      collect: async () => { await gate.promise; return collected(); },
+      dialog: async () => "/tmp/u.json",
+    });
+    m.live.instance = "work-vm";
+    m.live.report = "daily";
+    gate.resolve();
+    await m.run;
+    ok("control: without the guard the dialog names the instance the user switched TO",
+      m.effects[0] === "dialog:Save Construct usage report (daily, “work-vm”)|construct-usage-daily-20260701-143005.json",
+      m.effects[0]);
+    ok("control: ...and MONTHLY numbers are saved under a DAILY file name",
+      m.effects[1] === "write:/tmp/u.json|monthly", m.effects[1]);
+  }
+
+  // 3) A FAILED COLLECTION PLUS A SWITCH. The generic "couldn't collect usage from the VM"
+  //    toast would land in the other instance's window and accuse the wrong VM, so the
+  //    generation is checked BEFORE the failure branch, not after it.
+  {
+    const gate = deferred();
+    const m = await runExportModel({
+      collect: async () => { await gate.promise; return null; },
+      dialog: async () => "/tmp/u.json",
+    });
+    m.live.instance = "work-vm";
+    gate.resolve();
+    await m.run;
+    ok("export race: a failed collection after a switch aborts instead of toasting",
+      m.effects.length === 1 && m.effects[0] === "aborted:after-collect", JSON.stringify(m.effects));
+  }
+  {
+    // THE CONTROL for that ordering: the guard one line lower, which is where it was.
+    const gate = deferred();
+    const m = await runExportModel({
+      guard: "after-failure",
+      collect: async () => { await gate.promise; return null; },
+      dialog: async () => "/tmp/u.json",
+    });
+    m.live.instance = "work-vm";
+    gate.resolve();
+    await m.run;
+    ok("control: the check below the failure branch lets the toast into the other window",
+      m.effects.length === 1 && m.effects[0] === "error-toast", JSON.stringify(m.effects));
+  }
+  // ...and the failure toast is still shown when nothing switched.
+  {
+    const m = await runExportModel({ collect: async () => null, dialog: async () => "/tmp/u.json" });
+    await m.run;
+    ok("export: a genuine collection failure still says so",
+      m.effects.length === 1 && m.effects[0] === "error-toast", JSON.stringify(m.effects));
+  }
+
+  // 4) A SWITCH WHILE THE SAVE DIALOG IS OPEN. The dialog is an await too, and the write is
+  //    the irreversible step: one VM's numbers must not land on disk under a path the user
+  //    chose while looking at another one.
+  {
+    const gate = deferred();
+    const m = await runExportModel({
+      collect: async () => collected(),
+      dialog: async () => { await gate.promise; return "/tmp/u.json"; },
+    });
+    await Promise.resolve();
+    m.live.instance = "work-vm";
+    gate.resolve();
+    await m.run;
+    ok("export race: a switch during the save dialog aborts before the write",
+      m.effects.some((e) => e === "aborted:after-dialog"), JSON.stringify(m.effects));
+    ok("export race: ...and nothing reached the disk", !m.effects.some((e) => e.startsWith("write:")));
+  }
+  // A cancelled dialog writes nothing and says nothing, switch or no switch.
+  {
+    const m = await runExportModel({ collect: async () => collected(), dialog: async () => null });
+    await m.run;
+    ok("export: a cancelled dialog writes nothing",
+      m.effects.length === 1 && m.effects[0].startsWith("dialog:"), JSON.stringify(m.effects));
+  }
+
+  // ── extension.js's export wiring, pinned at the source ───────────────────────
+  // The model above stands in for runExportUsage; these pin the real thing, so the order
+  // it models cannot drift out from under it (extension.js needs `vscode`, so it cannot be
+  // required here — same approach as forwarder.test.js's source pins).
+  {
+    const extSrc = fs.readFileSync(path.join(__dirname, "..", "extension.js"), "utf8");
+    // Just this function: the first line that is exactly "}" closes it.
+    const from = extSrc.indexOf("function runExportUsage()");
+    const body = extSrc.slice(from, from + extSrc.slice(from).indexOf("\n}\n") + 2);
+    const at = (needle) => body.indexOf(needle);
+    ok("export wiring: the instance and the report are captured BEFORE withProgress",
+      at("const target = actionTarget();") >= 0 &&
+      at("const exportOf = usage.describeExport({ report: usageReport, instance: target.name });") >= 0 &&
+      at("const exportOf = usage.describeExport(") < at("vscode.window.withProgress("));
+    ok("export wiring: the collection uses the CAPTURED cfg and report, not the live ones",
+      at("await usage.collectRaw({ report: exportOf.report, cfg: target.cfg })") >= 0 &&
+      at("usage.collectRaw({ report: usageReport") < 0 &&
+      at("cfg: activeCfg()") < 0);
+    ok("export wiring: the generation is checked immediately after the collection...",
+      at('if (targetSuperseded(target, "The usage export")) return;') >= 0 &&
+      at("await usage.collectRaw(") < at('if (targetSuperseded(target, "The usage export")) return;'));
+    ok("export wiring: ...BEFORE the failure branch, so a late failure cannot toast elsewhere",
+      at('if (targetSuperseded(target, "The usage export")) return;') < at("if (!rawText) {"));
+    ok("export wiring: ...and again after the save dialog, before the write",
+      body.split('if (targetSuperseded(target, "The usage export")) return;').length === 3 &&
+      body.lastIndexOf('if (targetSuperseded(target, "The usage export")) return;')
+        > at("vscode.window.showSaveDialog(") &&
+      body.lastIndexOf('if (targetSuperseded(target, "The usage export")) return;')
+        < at("await fs.promises.writeFile("));
+    ok("export wiring: the dialog, the file name and the confirmation all come from the capture",
+      at("title: exportOf.dialogTitle,") >= 0 &&
+      at("os.homedir(), exportOf.fileName") >= 0 &&
+      at("showInformationMessage(exportOf.savedMessage(uri.fsPath))") >= 0);
+  }
 
   console.log(`\n  usage unit tests — ${pass}/${pass + fail} passed\n`);
   process.exit(fail ? 1 : 0);

@@ -199,6 +199,19 @@ function releaseSyncLock(configDir, token) {
 
 const DEFAULT_VM_BRANCH = "vm";
 
+// Windows' reserved device stems. A loose ref IS a file — refs/heads/<name>, plus the
+// refs/heads/<name>.lock git writes next to it — and on Windows none of these names can
+// be created as one, with or without an extension ("CON.txt" is the device too). The host
+// config repo lives on Windows, so a hand-authored `configBranch` of "CON" passes every
+// registry check here and then fails at the first `git branch`, leaving the instance on
+// the fallback branch. Same list, same rule as isKeyFileName() in instances.js — that one
+// guards ~/.ssh/<keyName>, this one guards .git/refs/heads/<branch>.
+const WINDOWS_DEVICE_NAMES = new Set([
+  "con", "prn", "aux", "nul",
+  "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
+  "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+]);
+
 // Names that are syntactically fine but semantically wrong here, compared
 // case-insensitively because Windows' loose-ref files are case-insensitive:
 //   • `main` is the host-truth branch — using it as an instance branch would
@@ -237,6 +250,13 @@ const RESERVED_VM_BRANCHES = new Set([
  *     it meant a hand-authored `configBranch` of "foo." passed validation here
  *     and then failed at `git branch` (or silently synced on the fallback
  *     branch), which is exactly the promise this function exists to keep.
+ *
+ * The last rule is not git's at all, it is WINDOWS': a loose ref is a file, and
+ * the host config repo is a loose-ref repo on Windows, where `refs/heads/CON`
+ * (and the `refs/heads/CON.lock` git writes beside it) cannot be created. git
+ * on Linux accepts those names, so only this check keeps the promise for them.
+ * The shape rule leaves the name with no "/" in it, so there is exactly one path
+ * component to test — its stem, extension or not.
  */
 function isValidVmBranch(name) {
   if (typeof name !== "string" || !name) return false;
@@ -244,6 +264,7 @@ function isValidVmBranch(name) {
   if (name.includes("..")) return false;
   if (name.endsWith(".")) return false;
   if (name.endsWith(".lock")) return false;
+  if (WINDOWS_DEVICE_NAMES.has(name.split(".")[0].toLowerCase())) return false;
   const lower = name.toLowerCase();
   if (RESERVED_VM_BRANCHES.has(lower)) return false;
   // Any other spelling of the default branch is the SAME loose-ref file on
