@@ -488,6 +488,27 @@ browsers keep working across a reinstall. While enabled, T3 Code appears in the 
 agents** list with its version, an update badge, and a **▷** button that mints a fresh
 pairing link and opens the web UI.
 
+**HTTPS.** Construct serves the web GUI over TLS as well: the VM runs nginx on port
+`5178` (`T3CODE_HTTPS_PORT`) with a certificate issued by a **local CA** it creates once,
+and reverse-proxies to the unchanged `t3 serve` on `5177` — which stays plain HTTP for
+local tooling. The https origin is the one the panel shows and the ▷ button opens, because
+browsers only expose the microphone (`getUserMedia`) on a **secure origin**: over plain
+`http://<vm>.mshome.net:5177` T3's in-browser voice input is not available at all. The
+Windows Desktop app is unaffected — it loads its UI from a scheme registered as secure.
+
+Provisioning copies the CA certificate to
+`%LOCALAPPDATA%\The-Construct\artifacts\t3code\construct-t3-ca.crt` and trusts it for you:
+elevated it lands in the **machine** Root store silently, and when the run is *not*
+elevated it goes into your **user** Root store — where Windows shows **one** confirmation
+dialog you have to accept. A CA that is already trusted is never imported twice. Firefox
+keeps its own trust store, so set `security.enterprise_roots.enabled` to `true` in
+`about:config` to make it use the Windows one. On the VM the CA lives in
+`/etc/construct/tls/ca.crt` (private keys stay in that `0700` directory; a readable copy
+for the host handoff sits at `/etc/construct/t3code-ca.crt`), and it is part of the
+[config backup](backup-restore.md) — so a reinstall does not ask you to trust a new CA.
+Set `T3CODE_HTTPS=false` (see [provisioning](provisioning.md)) to remove the proxy; the CA
+is kept either way.
+
 The **channel** dropdown next to the toggle selects between **stable** (npm `@latest` —
 the released version) and **nightly** (npm `@nightly` — the latest CI build, which may
 include newer features but can break). Switching the channel on an already-enabled T3 Code
