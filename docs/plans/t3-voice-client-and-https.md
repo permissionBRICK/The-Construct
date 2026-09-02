@@ -5,6 +5,15 @@ tracks approved in round 2). Track A merge `0e786a3`, Track B merge `bf7d9fc`. T
 branch `feat/construct-voice-client` in `/root/repos/t3code` (v0.0.37 + patch) is kept for reference;
 the shipped artifact is `patches/t3code-construct.patch`.
 
+2026-09-02 (later): upstream's stable tag moved to v0.0.38 before the first reprovision; the patch was
+rebased onto v0.0.38 by a fresh Opus dev + Codex reviewer pair (omniloop `wf_C99WJD2IunzK`, approved
+round 1; two conflicts in ChatComposer.tsx and two import collisions in SettingsPanels.tsx). Merged as
+the patch-only commit `b5c8db4`. The T3 branch `feat/construct-voice-client` now sits on v0.0.38
+(pre-rebase history on `backup/pre-v38-rebase`). Known baseline-only failure: 17 desktop
+`DesktopUpdates.test.ts` cases fail because the patch's CONSTRUCT_MANAGED_UPDATES short-circuits the
+electron-updater wiring they assert; outside the gate, left as is. `bin/build-t3code.sh` now applies
+the patch leniently (exact, then context fuzz) and fails only on real conflicts (`2241c61`).
+
 Deviations accepted at merge: the host downloads the CA from `/etc/construct/t3code-ca.crt`
 (0644 copy; the 0700 TLS dir is unreadable for a seed-user login); `setup-t3-https.sh --teardown`
 removes the proxy without clearing the saved preference when T3 is switched off; readiness is
