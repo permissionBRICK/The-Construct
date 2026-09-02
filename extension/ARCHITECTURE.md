@@ -57,7 +57,9 @@ extension/
                       derive per-instance alias/key/branch, resolveActive (setting >
                       workspaceState > registry default), matchByRemoteHost/
                       planRemoteAdoption/adoptRemoteInstance, createGate (the
-                      stale-refresh generation guard), atomic save + add/update/remove;
+                      stale-refresh generation guard), planHandover/createHandover +
+                      createSessionOwner (the mic tunnel's serialized handover across a
+                      switch), planSwitchPersistence, atomic save + add/update/remove;
                       pure fs/path/JSON, no vscode. Its PS twin is
                       lib/AgentVm.Instances.ps1 (same file, same normalization rules)
     ssh.js            system-ssh runner (buildSshArgs/runRemote/runRemoteScript/isReachable);
@@ -440,11 +442,20 @@ change them together):
   `lifecycle.configBranchOverride` and gated by `checkInstanceSupport`), so an explicit
   branch stays a supported override. **Non-local backends keep free-form** (still
   format-checked) identities — their endpoints are defined on the other side.
-- **Identities are UNIQUE across the registry.** No two entries may share a `vmName`,
-  `sshHost`, `hostAlias`, `keyName` or `configBranch` (compared case-insensitively — one
-  Hyper-V name, one DNS name, one `Host` block, one NTFS key file, one Windows loose-ref
-  file), and a non-default entry may not claim any of the *default* instance's five
-  values — which is also what **reserves the branch `vm` for `agent-vm`**. `configBranch`
+- **Identities are UNIQUE across the registry.** No two entries may share a `vmName`, an
+  **endpoint**, a `hostAlias`, a `keyName` or a `configBranch` (compared
+  case-insensitively — one Hyper-V name, one machine, one `Host` block, one NTFS key
+  file, one Windows loose-ref file), and a non-default entry may not claim any of the
+  *default* instance's five — which is also what **reserves the branch `vm` for
+  `agent-vm`**. The endpoint is the **composite `(sshHost, sshPort)`**, not the host
+  alone: several `hyperv-remote` instances legitimately live on ONE service host and are
+  told apart by the SSH forward the service allocated them (one port per VM out of a
+  configured range), so keying on the host made every VM on a shared host collide — and
+  the "drop both" rule below then lost the entire registry. The port is compared
+  numerically (`2201` and `"2201"` are one endpoint) and a `hyperv-local` instance's port
+  is canonically `22` with a host derived from its own name, so local entries still
+  cannot share an endpoint — while a remote VM forwarded on the *same machine* as a local
+  one, on another port, is a different endpoint and loads. `configBranch`
   is in that list because the branch *is* the instance's store inside the one host config
   repo (docs/config-sync.md, "Multiple instances"): two entries on one branch share their
   VM snapshots, deletion history, merge base and write-backs, so one VM's tick merges —
@@ -484,8 +495,26 @@ The default instance keeps `agent-vm` / `Agent-VM` / `agent-vm.mshome.net` / `22
 Precedence (`instances.resolveActive`, unit-tested):
 
 1. the **`construct.instance`** setting — a global pin, `""` = unset;
-2. the window's **`workspaceState`** choice (`construct.activeInstance`);
+2. the window's **`workspaceState`** choice (`construct.activeInstance`) — or, when that
+   write **rejected**, the window-local override that stands in for it;
 3. the registry's **`defaultInstance`**.
+
+`workspaceState.update` can fail (a corrupt or locked storage file). Saying the window
+switched "for now" while *nothing* held the new selection was a lie in both directions:
+`activeInstance()` kept resolving the previous instance, so the refresh that followed
+re-rendered the VM the user had just switched away from. So a failed write installs an
+explicit window-local override (`instances.planSwitchPersistence` →
+`windowInstanceOverride`, read by `workspaceInstance()`) at **exactly** the same
+precedence level — the switch really does hold for this window, it simply doesn't
+survive a reload, and the `construct.instance` pin still outranks it. The warning says
+that, and the next successful write clears the override.
+
+**A pin only counts when the registry holds it** (`instances.effectivePin`, the same
+own-property membership `resolveActive` uses). Both of a switch's warnings — "the choice
+couldn't be saved" and "the setting pins every window to X" — are driven by that one
+value, because a *stale* `construct.instance` pins nothing: the window does move, and
+reporting the removed name as the reason it "still uses" another VM would contradict its
+own active target. A set-but-ineffective pin is logged instead.
 
 A name at any level that the registry no longer holds is skipped (with a problem) and
 the **next candidate is tried** — the registry default is only used once every
@@ -594,10 +623,38 @@ the click, where re-reading the active instance is hardest to spot:
 - **The mic auto-arm discards its own result**: instance, cfg, scripts dir and generation
   are captured before `micPassthrough` is read, and the reachability probe's answer is
   dropped if the window switched while it was in flight — A's "yes" must never install
-  the shim and open a microphone tunnel on B, whose preference may be off. Nothing exists
-  yet for the switch handler to cancel at that moment, which is why the discard has to
-  happen here. The decision itself is the pure `instances.planCapturedFollowUp`, shared
-  with the prompt above and unit-tested with deferred promises.
+  the shim and open a microphone tunnel on B, whose preference may be off. The decision
+  itself is the pure `instances.planCapturedFollowUp`, shared with the prompt above and
+  unit-tested with deferred promises.
+- **The mic tunnel's HANDOVER is serialized, and its status is owned by one session.**
+  A switch does two slow things to two different VMs — tear the old tunnel down (stop the
+  `ssh -R`, then revert the shim on that VM over SSH) and arm the new one (read *its*
+  preference, probe *it*). Started concurrently, they lost the new VM's tunnel three
+  ways, so all three are structural now:
+  1. the destination is **always** evaluated (`instances.planHandover`). Arming only
+     "when a tunnel for another instance exists" meant that a startup arm which produced
+     none — instance A unreachable, or its preference off — made the switch to B do
+     nothing at all, and B's saved `micPassthrough` was ignored for the rest of the
+     window. It is skipped only when a live tunnel *already* belongs to the destination.
+  2. `disableAudio()` is **awaitable** and every switch goes through one chain
+     (`instances.createHandover`), so the arm starts after the instance we left has let
+     go — and A→B→C tears A down once, supersedes B's arm through the same
+     `targetSuperseded` rule as every other deferred step, and arms C, with no tunnel
+     left behind.
+  3. every status a session emits — `HostAudio.onStatus`, the enable result, the
+     teardown's final "disabled" — carries the **slot claim** it was armed under
+     (`instances.createSessionOwner`), and `broadcastAudio` drops one whose claim a later
+     enable superseded. Ungated, A's trailing `{enabled:false}` painted the console
+     switch off over B's live tunnel, and A's failed enable cleared the module's
+     reference to B's `HostAudio` — leaking B's tunnel with nothing left to dispose it.
+     A status with **no** claim (the "there is nothing armed" call sites) always goes
+     out, which is what keeps the single-VM path unchanged.
+  The re-evaluation is gated on the destination having actually changed
+  (`audioTargetInstance`, the instance the arm was last evaluated for — not
+  `hostAudioInstance`, which is null in exactly the case that needs evaluating), so a
+  window that never switches never re-arms. All four orderings (no prior tunnel, a
+  delayed teardown, rapid A→B→C, and the no-switch control) are driven with deferred
+  promises in `extension/test/instances.test.js`.
 
 **UI.** A status-bar item (`construct.switchInstance`) shows the active instance and is
 **hidden when only one instance exists**; the command *The Construct: Switch Instance*
@@ -606,8 +663,10 @@ opens a QuickPick; the panel header renders a `<select>` **only when
 
 **Switching** (`onInstanceChanged`) invalidates every VM-derived cache (the in-flight
 probe, the usage table, git detection, the config-sync snapshot), reconnects the
-notification watcher, re-arms the mic tunnel against the new VM, and re-probes — the
-panel must never show one VM's pills, versions, projects or usage under another's name.
+notification watcher, hands the mic tunnel over to the new VM (see above — teardown then
+arm, on one serialized chain), and re-probes — the panel must never show one VM's pills,
+versions, projects or usage under another's name. The handover runs in the background:
+the panel refresh is not held behind an SSH teardown.
 
 ### One transport helper: `activeCfg()`
 
