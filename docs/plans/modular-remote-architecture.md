@@ -527,7 +527,7 @@ endpoint formatting there in the same batch.
 | 2026-09-02 | Phase 2 review round 7 fixes merged (`b5f9051`): installer remote flow uses the shared registry collision logic (pre-create identities, post-create composite endpoint), hyperv-remote canonical `vmName === name`, case-variant backend ids fail closed, one mic-session chain incl. cancellable `HostAudio` enable, remote entries without `sshHost` rejected whole. |
 | 2026-09-02 | Phase 2 review round 8 fixes merged (`93b1f68`): client forwarder is lazy + guest-gated (starts from the existing status probe once the VM is reachable, one capability exec for the spool markers, watcher argv documented as the one default-path addition), forwarder start/stop on the shared handover/session-owner chain, git-invalid branch names rejected in all three validators. |
 | 2026-09-02 | B9 docs merged (`d091279`): 17 markdown files aligned with the code, new `docs/field-test-remote-host.md` (12-step home-domain checklist). |
-| in flight | Phase 2 review round 9. Remaining: field test on the home domain (needs Christoph). |
+| in flight | Phase 2 review round 9 found 1 must-fix (forwarder never retries after an unanswered capability check) + 3 should-fix (Windows-reserved branch names, IPv6 hostLabel URL rule diverges CLI vs service, usage export not bound to its instance/period) — fix pair on `fix/p2-r9`. Remaining: field test on the home domain (needs Christoph). |
 
 Process notes: every package ran as an omniloop dev/reviewer pair (opus developer,
 gpt-5.6-sol reviewer) in its own worktree; cross-package integration reviews ran on the
