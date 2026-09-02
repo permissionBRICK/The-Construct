@@ -8,9 +8,12 @@ namespace Constructd.Sqlite;
 /// real host (plan §4.4). Connections are opened per operation (the driver pools them), with WAL and
 /// a busy timeout so the API, the job engine and the idle scheduler can write concurrently.
 ///
-/// Everything here is hand-written SQL — no ORM, and no schema migration machinery yet: the schema
-/// is created if missing, and evolving it is a deliberate decision to make when the first change
-/// comes.
+/// Everything here is hand-written SQL — no ORM. The schema is created if missing; the only
+/// evolution machinery is <see cref="AddColumnIfMissing"/>, deliberately the smallest thing that
+/// could work for the change that forced it (the forward ack columns of plan §4.6). Additive
+/// nullable columns are all it supports, which is also all the schema is allowed to do to a
+/// database an older build is still reading: a rename or a drop needs a real migration story, and
+/// choosing one is a decision to make when something actually needs it.
 /// </summary>
 public sealed class SqliteDatabase
 {
@@ -110,13 +113,18 @@ public sealed class SqliteDatabase
             );
 
             CREATE TABLE IF NOT EXISTS forwards (
-                id          TEXT PRIMARY KEY,
-                vm_name     TEXT NOT NULL COLLATE NOCASE,
-                vm_port     INTEGER NOT NULL,
-                public_port INTEGER NULL,
-                target      TEXT NOT NULL,
-                label       TEXT NOT NULL,
-                created     TEXT NOT NULL
+                id              TEXT PRIMARY KEY,
+                vm_name         TEXT NOT NULL COLLATE NOCASE,
+                vm_port         INTEGER NOT NULL,
+                public_port     INTEGER NULL,
+                target          TEXT NOT NULL,
+                label           TEXT NOT NULL,
+                created         TEXT NOT NULL,
+                ack_status      TEXT NULL,
+                ack_local_port  INTEGER NULL,
+                ack_host_label  TEXT NULL,
+                ack_message     TEXT NULL,
+                ack_at          TEXT NULL
             );
             CREATE INDEX IF NOT EXISTS ix_forwards_vm ON forwards (vm_name);
 
@@ -144,6 +152,41 @@ public sealed class SqliteDatabase
             );
             """;
         command.ExecuteNonQuery();
+
+        // A database created before the client-forward ack existed has the forwards table without
+        // these five columns, and CREATE TABLE IF NOT EXISTS will not add them.
+        AddColumnIfMissing(connection, "forwards", "ack_status", "TEXT NULL");
+        AddColumnIfMissing(connection, "forwards", "ack_local_port", "INTEGER NULL");
+        AddColumnIfMissing(connection, "forwards", "ack_host_label", "TEXT NULL");
+        AddColumnIfMissing(connection, "forwards", "ack_message", "TEXT NULL");
+        AddColumnIfMissing(connection, "forwards", "ack_at", "TEXT NULL");
+    }
+
+    /// <summary>
+    /// Adds a column to an existing table when it is not there yet. Idempotent, so it runs on every
+    /// start; <paramref name="definition"/> must be nullable or carry a default, because SQLite
+    /// applies it to every existing row.
+    /// </summary>
+    private static void AddColumnIfMissing(
+        SqliteConnection connection,
+        string table,
+        string column,
+        string definition)
+    {
+        using (var probe = connection.CreateCommand())
+        {
+            // PRAGMA takes no parameters, so the identifiers are interpolated — they are literals
+            // from this file, never anything a caller supplies.
+            probe.CommandText = $"SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = '{column}';";
+            if (Convert.ToInt32(probe.ExecuteScalar()) > 0)
+            {
+                return;
+            }
+        }
+
+        using var alter = connection.CreateCommand();
+        alter.CommandText = $"ALTER TABLE {table} ADD COLUMN {column} {definition};";
+        alter.ExecuteNonQuery();
     }
 
     // ---- value conversion ------------------------------------------------------------------

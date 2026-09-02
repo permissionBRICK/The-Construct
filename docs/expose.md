@@ -19,6 +19,7 @@ The link is the thing to hand to the user. Everything below is the contract behi
 - [Configuration](#configuration)
 - [Local mode: the guest forward spool](#local-mode-the-guest-forward-spool)
 - [Remote mode: the host service API](#remote-mode-the-host-service-api)
+- [The extension side](#the-extension-side)
 - [The VM token](#the-vm-token)
 - [Activity heartbeat](#activity-heartbeat)
 
@@ -232,6 +233,51 @@ directory, never passed as an argument, so the token never appears in `ps`, in a
 history or in an error message. `CONSTRUCT_SERVICE_CA_FILE`, when set, is passed as
 `--cacert`.
 
+## The extension side
+
+Everything above is the contract; the other end of it is the VS Code extension's
+**client-forwarder module**, `extension/src/forwarder.js`. Its design — the module
+contract, the spool ownership claim, the local port policy, the remote poll and the tunnel
+supervision — is documented in
+[`extension/ARCHITECTURE.md` §Forwards](../extension/ARCHITECTURE.md#forwards-construct-expose),
+and is not restated here.
+
+What matters from the guest's side is only this:
+
+- **Which window answers.** Several VS Code windows can be attached to one VM, and exactly
+  one of them serves the spool. Ownership is recorded in `/etc/construct/forwards/.owner`
+  (`<windowId> <unix-seconds>`, re-claimable once it is 90 s stale) and the claim
+  transaction is serialised by a `mkdir` mutex at `/etc/construct/forwards/.owner.lock`,
+  which is what makes it genuinely exclusive. The other windows show the same list
+  read-only and cannot close anything. Nothing in the spool contract depends on which
+  window won — the port opens on the same PC either way.
+- **Two dot-files in the spool are the extension's**: `.owner` and `.owner.lock`. They are
+  not documents, and `--list` already ignores anything that is not `<id>.json`.
+- **`v: 1` and `id` are enforced, not just written.** The extension refuses any request,
+  ack or close document that does not carry `"v": 1` *and* an `id` equal to its file name —
+  the three shapes above all define both, and the temp-file+`mv` publish exists so a reader
+  never sees a partial one. A future version of this spool therefore needs a matching
+  extension, which is the point of the field.
+- **Turning `construct.forwards.hostLabel` on or off restarts the live tunnels** (same
+  local port), because it changes which address they listen on. Changing one name to
+  another only rewrites the acks.
+- **`localPort` really can differ from `vmPort`.** The extension prefers the number you
+  asked for and falls back to `18800`–`18815` when it is already taken on the user's PC.
+  That is exactly why `expose` waits for the ack instead of printing `vmPort`.
+- **When nothing is listening.** No VS Code attached means no ack, which is exit code 6 and
+  a request that stays queued — not an error. The extension re-opens everything still
+  queued as soon as a window connects, which is why the spool lives under `/etc`.
+- **A forward lives as long as VS Code does.** Closing the window kills the tunnels and
+  releases the claim. The request stays in the spool, so the next window re-opens it — on
+  the same port if it can, so an already-printed link keeps working.
+- **`--to client` needs no configuration.** By default the forward listens on the user's
+  PC **loopback only** and the ack carries no `hostLabel`, so the CLI prints
+  `http://localhost:<port>/`. Setting `construct.forwards.hostLabel` both puts that name in
+  the ack *and* makes the forward listen on all of that PC's interfaces — otherwise the
+  link it advertises would be one only that PC could open.
+  `construct.forwards.enabled` can switch the whole thing off, in which case requests
+  simply stay queued (exit code 6), which is the same answer as "no VS Code attached".
+
 ## The VM token
 
 `/etc/construct/vm-token` — mode `0600`, owned by root, one line, no trailing newline
@@ -296,5 +342,6 @@ Environment overrides (used by `test/idle-report.test.sh`, and available for deb
 ## Related
 
 - `docs/plans/modular-remote-architecture.md` §4.6 (forwards), §4.7 (idle), §4.8 (module rules)
-- `service/README.md` — the host service's API and authentication
+- `extension/ARCHITECTURE.md` §Forwards — the extension half of this contract
+- `service/README.md` — the host service's API and authentication, including the ack relay
 - `docs/remote-access.md` — how the VM is reached in the first place

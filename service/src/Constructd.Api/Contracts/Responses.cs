@@ -32,6 +32,23 @@ public sealed record TokenIssuedResponse(string Id, string Label, string Token, 
 
 public sealed record IdlePolicyResponse(int TimeoutMinutes, IdleAction Action, int MaxTimeoutMinutes, bool Clamped);
 
+/// <summary>
+/// One forward on the wire. The ack fields are INLINE and the record stays FLAT on purpose:
+/// <c>bin/construct-expose.sh</c> reads a forward with the same lenient, jq-optional parser it reads
+/// a spool ack document with (<c>docs/expose.md</c>), and that parser's fallback path splits a JSON
+/// array on <c>{…}</c> and greps flat <c>"key": value</c> pairs. A nested <c>ack</c> object would be
+/// invisible to it on a VM without jq.
+/// </summary>
+/// <param name="Status">
+/// <c>open</c> or <c>error</c> once a client acked; absent otherwise. An <c>error</c> is a FINAL
+/// answer for the CLI — it stops waiting and prints <paramref name="Message"/>.
+/// </param>
+/// <param name="Url">
+/// Advisory (plan §4.9: "url on forwards is a field, not a format"): the host forward's LAN URL, or
+/// the link the client reported, or <c>null</c> while a client forward is still queued. It is null
+/// for an <c>error</c> ack too, because the CLI checks <c>url</c> first and would print it instead
+/// of reporting the failure.
+/// </param>
 public sealed record ForwardResponse(
     string Id,
     string VmName,
@@ -40,23 +57,47 @@ public sealed record ForwardResponse(
     ForwardTarget Target,
     string Label,
     DateTimeOffset Created,
-    string? Url)
+    string? Url,
+    string? Status = null,
+    int? LocalPort = null,
+    string? HostLabel = null,
+    string? Message = null,
+    DateTimeOffset? AckedAt = null)
 {
     /// <summary>
-    /// <paramref name="publicHost"/> is the LAN name forwards are advertised on. The URL is advisory
-    /// (plan §4.9: "url on forwards is a field, not a format") and only exists for host targets;
-    /// client targets are opened by the extension on the user's PC.
+    /// <paramref name="publicHost"/> is the LAN name host forwards are advertised on. A client
+    /// forward is opened by the extension on the user's PC instead, so its link is built from the
+    /// ack: <c>hostLabel</c> when the user's PC has a name other machines use, loopback otherwise.
     /// </summary>
-    public static ForwardResponse From(PortForward forward, string publicHost) =>
-        new(
-            forward.Id,
-            forward.VmName,
-            forward.VmPort,
-            forward.PublicPort,
-            forward.Target,
-            forward.Label,
-            forward.Created,
-            forward.PublicPort is int port ? $"http://{publicHost}:{port}/" : null);
+    public static ForwardResponse From(PortForward forward, string publicHost)
+    {
+        ArgumentNullException.ThrowIfNull(forward);
+
+        var url = forward.PublicPort is int port ? $"http://{publicHost}:{port}/" : null;
+
+        if (forward.Ack is not { } ack)
+        {
+            return new(
+                forward.Id, forward.VmName, forward.VmPort, forward.PublicPort,
+                forward.Target, forward.Label, forward.Created, url);
+        }
+
+        if (ack.Status == AckStatus.Open && ack.LocalPort is int local)
+        {
+            url = string.IsNullOrEmpty(ack.HostLabel)
+                ? $"http://localhost:{local}/"
+                : $"http://{ack.HostLabel}:{local}/";
+        }
+
+        return new(
+            forward.Id, forward.VmName, forward.VmPort, forward.PublicPort,
+            forward.Target, forward.Label, forward.Created, url,
+            Status: ack.Status.ToString().ToLowerInvariant(),
+            LocalPort: ack.LocalPort,
+            HostLabel: ack.HostLabel,
+            Message: ack.Message,
+            AckedAt: ack.At);
+    }
 }
 
 public sealed record VmResponse(
