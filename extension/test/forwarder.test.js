@@ -2349,7 +2349,9 @@ async function lifecycleWiring() {
     // ...and nothing starts the forwarder beside it.
     !/void startForwarder\(\)/.test(extSrc));
   ok("chain: a switch tears down on the chain and starts nothing",
-    extSrc.indexOf("if (forwarderInstance !== inst.name || forwarderArmed !== inst.name) {\n    void requestForwarderStop();\n  }") >= 0);
+    // ...and a registry rewrite under the SAME name counts as a switch: the transport is
+    // an `ssh -L` to an ENDPOINT, which a same-name rewrite moves (identityChanged).
+    extSrc.indexOf("if (forwarderInstance !== inst.name || forwarderArmed !== inst.name || identityChanged) {\n    void requestForwarderStop();\n  }") >= 0);
   ok("stop: every stop request invalidates the slot SYNCHRONOUSLY and queues the disposal",
     extSrc.indexOf("function requestForwarderStop() {\n  forwarderSlot.claim(\"\");\n  forwarderArmed = null;\n  return forwarderChain.disable();\n}") >= 0 &&
     // ...and nothing bypasses it.
