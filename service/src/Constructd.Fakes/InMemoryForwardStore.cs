@@ -43,6 +43,24 @@ public sealed class InMemoryForwardStore : IForwardStore
         return Task.CompletedTask;
     }
 
+    public Task<bool> SetAckAsync(string id, ForwardAck ack, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(ack);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // A compare-and-swap loop rather than a read-then-write: two windows may ack the same
+        // forward at the same moment, and the loser must overwrite a value it actually saw.
+        while (_forwards.TryGetValue(id, out var existing))
+        {
+            if (_forwards.TryUpdate(id, existing with { Ack = ack }, existing))
+            {
+                return Task.FromResult(true);
+            }
+        }
+
+        return Task.FromResult(false);
+    }
+
     public Task<bool> RemoveAsync(string id, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

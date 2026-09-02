@@ -103,4 +103,9 @@ internal static class ApiHelpers
     public static string Options<TEnum>()
         where TEnum : struct, Enum =>
         string.Join("|", Enum.GetNames<TEnum>().Select(n => n.ToLowerInvariant()));
+
+    /// <summary>An enum value spelled the way the wire spells it (camelCase strings, ApiJson).</summary>
+    public static string Name<TEnum>(TEnum value)
+        where TEnum : struct, Enum =>
+        value.ToString()!.ToLowerInvariant();
 }

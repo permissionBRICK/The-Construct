@@ -77,6 +77,32 @@ public sealed class SqliteForwardStore(SqliteDatabase database) : IForwardStore
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<bool> SetAckAsync(string id, ForwardAck ack, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(ack);
+
+        await using var connection = await database.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE forwards
+               SET ack_status = @status,
+                   ack_local_port = @localPort,
+                   ack_host_label = @hostLabel,
+                   ack_message = @message,
+                   ack_at = @at
+             WHERE id = @id;
+            """;
+        command
+            .With("@id", id)
+            .With("@status", ack.Status.ToString())
+            .With("@localPort", ack.LocalPort)
+            .With("@hostLabel", ack.HostLabel)
+            .With("@message", ack.Message)
+            .With("@at", SqliteDatabase.Text(ack.At));
+
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 1;
+    }
+
     public async Task<bool> RemoveAsync(string id, CancellationToken cancellationToken)
     {
         await using var connection = await database.OpenAsync(cancellationToken).ConfigureAwait(false);
@@ -94,5 +120,26 @@ public sealed class SqliteForwardStore(SqliteDatabase database) : IForwardStore
         reader.GetIntOrNull("public_port"),
         SqliteDatabase.ReadEnum<ForwardTarget>(reader.GetString("target")),
         reader.GetString("label"),
-        SqliteDatabase.ReadTime(reader.GetString("created")));
+        SqliteDatabase.ReadTime(reader.GetString("created")),
+        ReadAck(reader));
+
+    /// <summary>The ack columns, or null when nobody has acked this forward.</summary>
+    private static ForwardAck? ReadAck(SqliteDataReader reader)
+    {
+        var status = reader.GetStringOrNull("ack_status");
+        if (status is null)
+        {
+            return null;
+        }
+
+        // ack_at is written in the same statement as ack_status, so a row with a status always has
+        // one; MinValue is the "cannot happen, do not throw over it" fallback for a hand-edited file.
+        var at = reader.GetStringOrNull("ack_at");
+        return new ForwardAck(
+            SqliteDatabase.ReadEnum<AckStatus>(status),
+            reader.GetIntOrNull("ack_local_port"),
+            reader.GetStringOrNull("ack_host_label"),
+            reader.GetStringOrNull("ack_message") ?? string.Empty,
+            at is null ? DateTimeOffset.MinValue : SqliteDatabase.ReadTime(at));
+    }
 }

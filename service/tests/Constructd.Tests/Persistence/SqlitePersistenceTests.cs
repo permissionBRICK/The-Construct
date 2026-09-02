@@ -294,6 +294,102 @@ public sealed class SqlitePersistenceTests : IDisposable
     }
 
     /// <remarks>
+    /// The client ack is durable for the same reason the forward is: a guest that already printed a
+    /// link must not be told "not open yet" again because the service restarted, and the tunnel on
+    /// the user's PC is still up regardless.
+    /// </remarks>
+    [Fact]
+    public async Task A_client_ack_survives_a_restart()
+    {
+        string forwardId;
+
+        using (var app = TestApp.WithSqlite(_path))
+        {
+            using var bob = await app.CreateUserClientAsync("bob");
+            await bob.CreateVmAsync("work-vm");
+
+            var forward = await (await bob.PostJsonAsync("/api/v1/vms/work-vm/forwards",
+                new { vmPort = 5173, label = "vite", target = "client" })).ReadAsync<ForwardResponse>();
+            forwardId = forward.Id;
+
+            var acked = await (await bob.PostJsonAsync($"/api/v1/vms/work-vm/forwards/{forwardId}/ack",
+                new { status = "open", localPort = 18800, hostLabel = "christoph-pc" }))
+                .ReadAsync<ForwardResponse>();
+            Assert.Equal("http://christoph-pc:18800/", acked.Url);
+        }
+
+        using (var restarted = TestApp.WithSqlite(_path))
+        {
+            using var bob = await restarted.CreateTokenClientAsync("bob");
+
+            var forward = Assert.Single(await (await bob.GetAsync("/api/v1/vms/work-vm/forwards"))
+                .ReadAsync<List<ForwardResponse>>());
+
+            Assert.Equal(forwardId, forward.Id);
+            Assert.Equal("open", forward.Status);
+            Assert.Equal(18800, forward.LocalPort);
+            Assert.Equal("christoph-pc", forward.HostLabel);
+            Assert.Equal("http://christoph-pc:18800/", forward.Url);
+        }
+    }
+
+    /// <remarks>
+    /// The first schema change this service ever made: a database written before the ack existed has
+    /// a <c>forwards</c> table without those five columns, and <c>CREATE TABLE IF NOT EXISTS</c>
+    /// would leave it that way. Opening one must add them, not fail — and must not touch the rows.
+    /// </remarks>
+    [Fact]
+    public async Task An_older_forwards_table_gains_the_ack_columns_without_losing_a_row()
+    {
+        // The pre-ack schema, written by hand.
+        {
+            var database = new SqliteDatabase(_path);
+            using var connection = database.Open();
+            using var create = connection.CreateCommand();
+            create.CommandText = """
+                CREATE TABLE forwards (
+                    id          TEXT PRIMARY KEY,
+                    vm_name     TEXT NOT NULL COLLATE NOCASE,
+                    vm_port     INTEGER NOT NULL,
+                    public_port INTEGER NULL,
+                    target      TEXT NOT NULL,
+                    label       TEXT NOT NULL,
+                    created     TEXT NOT NULL
+                );
+                INSERT INTO forwards VALUES ('old-1', 'work-vm', 5173, NULL, 'Client', 'vite', '2026-09-01T09:00:00.0000000+00:00');
+                """;
+            create.ExecuteNonQuery();
+        }
+
+        var upgraded = Open();
+        var store = new SqliteForwardStore(upgraded);
+
+        var before = Assert.Single(await store.ListAsync("work-vm", CancellationToken.None));
+        Assert.Equal(5173, before.VmPort);
+        Assert.Null(before.Ack);
+
+        Assert.True(await store.SetAckAsync(
+            "old-1", new ForwardAck(AckStatus.Open, 18800, null, string.Empty, Now), CancellationToken.None));
+
+        var after = Assert.Single(await store.ListAsync("work-vm", CancellationToken.None));
+        Assert.Equal(AckStatus.Open, after.Ack!.Status);
+        Assert.Equal(18800, after.Ack.LocalPort);
+
+        // Idempotent: a second open of the same file must not try to add the columns again.
+        Assert.Single(await new SqliteForwardStore(Open()).ListAsync("work-vm", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Acking_an_unknown_forward_reports_it_rather_than_inventing_a_row()
+    {
+        var store = new SqliteForwardStore(Open());
+
+        Assert.False(await store.SetAckAsync(
+            "nope", new ForwardAck(AckStatus.Open, 18800, null, string.Empty, Now), CancellationToken.None));
+        Assert.Empty(await store.ListAsync(null, CancellationToken.None));
+    }
+
+    /// <remarks>
     /// A crash right after the SSH port was allocated — before the creation job got to any of its later
     /// steps — must not leave a port that the restarted service thinks is free.
     /// </remarks>

@@ -114,6 +114,16 @@
           "default": true,
           "markdownDescription": "Show desktop notifications an agent queues on the VM with `construct notify \"…\"` (e.g. telling you a long job finished). They arrive over one long-lived SSH connection that waits on the VM and reconnects itself, so delivery is immediate and idle costs nothing, and it works even when no Construct panel is open. Notifications appear as **Windows notifications** and stay in the notification centre; if Windows can't show one, it falls back to a VS Code notification. With several VS Code windows open, exactly one shows each notification."
         },
+        "construct.forwards.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Serve the port forwards an agent on the VM asks for with `construct expose <port>`: the extension opens that port on **this PC** and tunnels it over the SSH connection, so the link the agent prints actually works. Nothing is opened until an agent asks — an install where nobody runs `construct expose` behaves exactly as before. Switch this off to refuse the requests instead (they stay queued on the VM). With several VS Code windows open, exactly one serves each VM's forwards."
+        },
+        "construct.forwards.hostLabel": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Host name to put in the links `construct expose` prints instead of `localhost` — for example `christoph-pc`.\n\n**This also changes what the forwarded port is reachable from.** Left empty (the default) a forward listens on this PC's loopback only (`127.0.0.1`), so nothing else on your network can reach it and the link is `http://localhost:<port>/`. Setting a name opts in to listening on **all interfaces** (`0.0.0.0`), because a link naming this PC that only this PC could open would be a dead link. Set it only if you want those ports reachable from your network under that name, and only if the name resolves to this PC.\n\nFor a port that must be reachable independently of your PC being on, use `construct expose <port> --to host` on the VM instead — the host service publishes that one."
+        },
         "construct.repatchDelaySeconds": {
           "type": "number",
           "default": 20,

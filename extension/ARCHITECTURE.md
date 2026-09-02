@@ -141,6 +141,24 @@ extension/
                       onError('no-device'); no ffmpeg/sox → onError('no-recorder') (honest, one
                       warning per enable). Guard patch apply/revert/idempotent. All pure
                       builders; ssh/spawn/net injected for tests.
+    forwarder.js      CLIENT PORT FORWARDER — the extension half of `construct expose`
+                      (docs/expose.md, §Forwards below). Built to the §4.8 module rules from
+                      day one: no vscode, no child_process, no net — the transport
+                      (runRemoteScript/spawnWatch/spawnTunnel/probePort/fetchJson) is
+                      injected. Pure core: isSafeId/sanitizeHostLabel/portCandidates,
+                      parseRequest/parseAck/ackDocument/parseDump/readForwardList, the spool
+                      scripts (buildReconcileScript with the atomic `.owner` claim,
+                      buildAckScript, buildRemoveScript, buildWatchScript), planActions (the
+                      one place open/ack/error/close/sweep/adopt is decided) and toSnapshot.
+                      Forwarder: tunnel table, watcher + 30s reconcile (local) or 10s poll
+                      (remote), audio.js-style settle window + restart backoff, dispose
+    forwarder-ui.js   the forwarder's adapter — the ONLY file in the feature that touches a
+                      process, a socket or the vscode API: createSshTransport /
+                      createRemoteTransport (ssh.js + child_process + net + a remotehost
+                      client), buildStreamArgs (the long-lived watcher argv, notify.js's
+                      shape), probeLocalPort (binds for real), hostLabelOf/forwardsEnabled
+                      (settings), and the pure UI projections toPanelForwards /
+                      clampIdlePolicy / toPanelIdlePolicy / powerIntentFor
     repatch.js        startup patch-verification. The claude-code patches (partial streaming +
                       the mic gate) are applied at provision time, but VS Code auto-updates that
                       extension on start, replacing extension.js with a stock (un-patched) build.
@@ -159,14 +177,23 @@ extension/
     construct-patch-status.sh    read-only probe: prints CONSTRUCT_PARTIAL_STATUS + CONSTRUCT_GATE_
                                  STATUS = patched|stock|unknown|absent (drives repatch.js; never edits)
   test/
-    ui-smoke.js       Playwright headless-Chromium webview test (165 checks: panel + launcher +
+    ui-smoke.js       Playwright headless-Chromium webview test (238 checks: panel + launcher +
                       narrow overflow + settings round-trip + honesty + power buttons + add-project +
                       per-chip open + project edit modal + usage table + daily/monthly/total period tabs
                       (incl. period-change-without-usage blanks the table, same-period keeps it) +
                       audio substatus incl. gate-patch state + launcher update banner +
                       config-sync strip: absent→hidden, gitPresent:false→install-git notice,
                       conflict→banner+open-repo, remotes list, default chip locked/no-modal,
-                      sync-now posts syncConfigNow, installGit posts, offline survival);
+                      sync-now posts syncConfigNow, installGit posts, offline survival;
+                      forwards card: absent/local-empty→hidden, rows per forward with the
+                      remapped-port form, queued/open/error styling, Open disabled without a
+                      link, Open/Close post their ids, non-ownership stated, offline
+                      survival; idle-policy card: hidden without a policy, populated + the
+                      admin cap as an input max and a hint, apply posts the edited values, a
+                      refresh does not overwrite a half-typed number, clamped is stated;
+                      power: vmState 'saved' → "Resume & connect" still firing startConnect on
+                      BOTH panel and launcher; a local non-owner's Close disabled; host-target
+                      rows rendered/openable/closable; idlePolicy null hides the card);
                       UI_SMOKE_THEME=classic|terminal|native re-runs the WHOLE suite under
                       that design skin — the designs-can't-fork-behavior invariant
     probe.test.js     plain-node ssh-arg + probe-parse units (21 checks)
@@ -199,6 +226,20 @@ extension/
                       notifier-candidate/exit-code contract, toastResult and powershellPath
                       (100 checks). The generated toast script's RUNTIME behaviour is covered
                       by `../../test/notify-toast.test.ps1` (pwsh, WinRT stubbed in C#)
+    forwarder.test.js plain-node client-forwarder units (390 checks) — pure guards + port
+                      policy + backoff, the spool documents, the spool SCRIPTS as data
+                      (base64-as-data, the atomic ack rename, the claim's read-back, inotify
+                      monitor mode + the orphan trap, injection proofs for the spool path and
+                      the window id), the PLANNER's every action case incl. idempotence, the
+                      local flow against a fake transport (request → tunnel argv → atomic ack
+                      → close → kill, port fallback, re-open on activation, read-only
+                      non-ownership, claim release), the remote flow against a fake fetch
+                      (poll → tunnel → POST ack, entry removed → kill, an acked entry left
+                      alone), tunnel supervision (settle window, backoff, the error ack after
+                      persistent failure, dispose), the UI projections, and ssh.js's `-L` argv.
+                      The CLAIM PROTOCOL is executed for real (bash, 5 windows x 25
+                      concurrent rounds, stale-record + stale-lock takeover): mutual
+                      exclusion is a property of concurrent execution, not of the source
     repatch.test.js   plain-node startup patch-verification units — parsePatchStatus (line-anchored/last-wins/CRLF) + planStartupActions (the streamingOff+micOn+no-tunnel retry regression) + decideRepairs (on∧stock truth table) + confirmPatched + runStartupRepatch orchestration vs a fake ssh (unreachable/probe-fail/streaming-only/mic-only/both-patched/no-confirm) (39 checks)
 ```
 
@@ -224,8 +265,13 @@ Defined in `extension.js` (handleMessage), `media/panel.js` and `media/launcher.
   `shareConfigs` (multi-select profiles → clipboard command or zip bundle),
   `pushConfigUpstream` (+`url`; confirm → push local changes to a new branch),
   `installGit` (win32-only: visible console running winget install Git.Git),
-  `openConfigRepo` (open cfgDir in a new VS Code window for conflict resolution).
+  `openConfigRepo` (open cfgDir in a new VS Code window for conflict resolution),
+  `openForward` (+`forward`; `vscode.env.openExternal` on that forward's link),
+  `closeForward` (+`forward`; kill the tunnel + drop the request/service record).
 - `{type:'setAudio', enabled}` — live mic-passthrough toggle (console switch only).
+- `{type:'saveIdlePolicy', policy:{timeoutMinutes, action}}` — the idle-policy card's
+  "apply" (remote instances only; re-clamped to the admin cap extension-side before the
+  `PUT`, because the webview is untrusted input).
 - `{type:'setUsagePeriod', period:'daily'|'monthly'|'total'}` — switch the token-usage window
   (validated + remembered in `usageReport`; triggers a `refreshAll` that re-collects the
   scoped numbers and re-broadcasts `usagePeriod`).
@@ -243,11 +289,18 @@ Defined in `extension.js` (handleMessage), `media/panel.js` and `media/launcher.
   switch; `gatePatched` drives the honest "chat mic button" substatus line).
 - `{type:'editProject', name, profile}` — open + populate the project edit modal.
 - `{type:'settings', settings}` — populate the settings form from disk.
+- `{type:'forwards', forwards}` — repaint just the Forwards card (a tunnel came up or went
+  away). Its own message type rather than a partial `state`, for the same reason
+  `{type:'audio'}` is: `render(state)` reads every absent field as "no reading", so a
+  `{forwards}`-only state would blank the power button, flip the ONLINE pill and reset the
+  install markers. The full push carries `state.forwards` too, so a webview that opens
+  mid-session renders the card on its first `ready`.
+- `{type:'idlePolicy', idlePolicy}` — same, for the idle-policy card after an apply.
 
 **state shape** (every field optional; `render()` guards each, and clears
 VM-derived fields when `online===false` or `probeError`):
 ```
-{ online, connected, vmState:'running'|'off'|'absent'|'unknown',
+{ online, connected, vmState:'running'|'off'|'saved'|'absent'|'unknown',
   instance,                                // active instance NAME (always present)
   instances:[name],                        // only when >1 exists — renders the picker
   host, hostShort, vmName, ubuntu, resources, constructRev,
@@ -259,8 +312,27 @@ VM-derived fields when `online===false` or `probeError`):
   audio:{enabled,capturing,tunnel}, probeError,
   configSync:{gitPresent, repoReady, conflict, conflictFiles, mergeInProgress,
     lastSyncAt, lastResult:'ok'|'conflict'|'blocked'|'error'|null,
-    warnings:[string], remotes:[{url}]} }
+    warnings:[string], remotes:[{url}]},
+  forwards:{mode:'local'|'remote', owner, visible,               // §Forwards
+    items:[{id, vmPort, label, target, status:'open'|'queued'|'error',
+            localPort, url, message}]},
+  idlePolicy:{timeoutMinutes, action:'save'|'shutdown'|'off',    // remote only; null = hide
+    maxTimeoutMinutes, clamped} }
 ```
+
+**`vmState:'saved'`** is a LABEL-only distinction. The driver contract collapses
+`saved`/`paused`/`off` into `off` because every caller that *acts* on the state wants "a
+start brings it back" — but the power button's wording is different for a VM the idle
+policy saved, since the same call resumes it where it was. `withVmState` therefore re-reads
+the service's own enum (remote instances only, only when the collapsed answer was `off`)
+and the panel says **Resume & connect**.
+
+**`forwards` and `idlePolicy` are host/service-derived — NOT cleared by
+`clearLiveVmData`.** A VM that stopped answering SSH has not closed the ports this PC is
+holding open, and a `forwards` card that blinked out whenever a probe failed would be
+telling the user their links had died. `forwards` also rides its own narrow push
+(`{type:'state', state:{forwards}}`) whenever a tunnel comes up, so it does not wait for
+the next 30 s refresh.
 
 **`configSync` is host-derived — NOT cleared by `clearLiveVmData`.** It reflects the
 local config-dir state (git presence, repo conflicts, linked remotes) and survives
@@ -952,6 +1024,255 @@ both readers, `Auto-Install.ps1` refuses the second one where it is created — 
 asks the service for anything, and again against the address the service actually
 returned — rather than writing a registry that silently loses both. Several *users* on
 one host are unaffected (each has their own PC and registry), and so are several hosts.
+
+## Forwards (`construct expose`)
+
+An agent on the VM runs `construct expose 5173` and hands the user the link it prints.
+The port it names lives **inside the VM**; the link points at the **user's PC**, because
+`src/forwarder.js` opened a local port here and tunnelled it over the SSH connection this
+extension already knows how to make. This section is the extension half. The wire formats
+— the guest spool and the service's forward routes — are the CONTRACT, and they are
+specified once in [`docs/expose.md`](../docs/expose.md); nothing here restates them.
+
+**The forwarder is a client tool module (plan §4.8), built module-first.** It is the first
+feature written to all four rules from day one, so it is also the worked example the older
+modules are meant to converge on:
+
+1. **Core free of the VS Code API.** `src/forwarder.js` has no `require("vscode")` and no
+   `require("child_process")`. It is pure logic plus an injected transport, so the whole
+   local and remote flow unit-tests under plain node.
+2. **Transport injected, never owned.** The module receives one object and calls nothing
+   else; `src/forwarder-ui.js` builds the real one out of `ssh.js`, `child_process`, `net`
+   and (remote mode) a `remotehost.js` client, and is the only file that touches `vscode`.
+3. **Own state, keyed by instance.** One `Forwarder` per instance name, its own spool
+   directory on that VM, its own tunnel table and its own claim marker. It reads no other
+   module's files or globals.
+4. **A documented contract** — `docs/expose.md` for the wire, this section for the module.
+
+### The transport interface
+
+```
+{
+  runRemoteScript(script, opts) -> Promise<{code, stdout, stderr}>   // one-shot SSH
+  spawnWatch(script)            -> child                             // long-lived SSH stream
+  spawnTunnel({localPort, vmPort}) -> child                          // long-lived `ssh -L`
+  probePort(port)               -> Promise<boolean>                  // free on THIS PC?
+  fetchJson(method, path, body) -> Promise<any>                      // remote mode only
+}
+```
+
+A `child` is anything with `stdout`, `on("exit"|"error")` and `kill()` — the tests pass
+fake emitters, so no test spawns a process or opens a socket.
+
+`ssh.js` gained exactly one thing for this: `buildLocalForwardArgs(cfg, localPort, vmPort,
+hasKey)`, the `ssh -L <local>:127.0.0.1:<vm> -N` argv. It is the mirror of `audio.js`'s
+`-R` builder and shares its rules — `-N`, keepalives so a dead link makes the child exit,
+`ExitOnForwardFailure=yes` so a busy local port fails fast instead of pretending, and `-p`
+only for a non-22 port so the default instance's argv is unchanged.
+
+### The planner
+
+`planActions({ requests, acks, closes, tunnels, ... })` is pure and is where every decision
+about *what to do* lives; the `Forwarder` only executes what it returns. Actions:
+
+| action | when |
+|---|---|
+| `open` | a request with no ack and no live tunnel |
+| `ack` | a tunnel is up for a request whose ack is missing or disagrees (a re-ack after a reconnect, which `docs/expose.md` explicitly allows) |
+| `error` | opening failed; write `status:"error"` with a safe message |
+| `close` | a close document, a request that vanished, or (remote) an entry that left the list |
+| `sweep` | an ack or close document with no request behind it — remove the leftovers |
+| `adopt` | (remote) somebody else's ack names a port that is not ours → drop our tunnel |
+
+Because it is pure, "a request that is already acked and already tunnelled produces no
+actions" is a unit test rather than a hope — that idempotence is what makes it safe to run
+the planner on every inotify event, every 30 s poll and every window activation.
+
+### Port selection, and where the port actually listens
+
+The link is only honest if the port in it is the port that opened, which is why the CLI
+waits for the ack instead of printing `vmPort` itself. The policy: **prefer `vmPort`**, so
+the common case prints exactly the number the agent asked for; if it is taken on this PC,
+take the first free port in **18800–18815**, skipping ports this instance's other tunnels
+already hold. Nothing free → an `error` ack naming the problem, not a silent hang.
+
+**The bind address is always explicit, and it follows the one setting that exists.**
+`ssh -L` is emitted as `-L <bind>:<local>:127.0.0.1:<vm>`, never address-less: an
+address-less `-L` means loopback only until a `GatewayPorts`, a `LocalForward` in a
+matching `Host` block or a future ssh default says otherwise, and the privacy of a default
+forward should be a property of our argv rather than an assumption about the user's
+configuration. So:
+
+| `construct.forwards.hostLabel` | binds | link |
+|---|---|---|
+| empty (default) | `127.0.0.1` | `http://localhost:<port>/` — private to this PC |
+| set, e.g. `christoph-pc` | `0.0.0.0` | `http://christoph-pc:<port>/` — reachable at that name |
+
+One setting, one consistent meaning (`bindHostFor`, read by the argv, the port probe *and*
+the rendered link, so they cannot disagree). **Changing it across that boundary restarts
+the live tunnels**, because a running `ssh -L` captured its bind address when it was
+spawned: re-acking alone would be a lie in both directions, and one of them is a security
+bug — clearing a label would advertise `localhost` while ssh kept listening on `0.0.0.0`,
+i.e. the port stays exposed after the user opted out. So the child is killed, respawned on
+the **same local port** (the guest may already hold that number), and the new ack is
+written only once the replacement has survived its settle window. A label→label change
+leaves the bind address alone and is therefore a re-ack only — killing a working tunnel to
+change the text of a link would be pure churn. The label is the opt-in: advertising this PC
+under a name that only this PC can open would be a dead link, which is worse than having
+no setting. `normalizeBindHost` is an allow-list of exactly those two values — a listening
+address is the last thing that should be "whatever the caller passed". The port probe binds
+the *same* address, because probing loopback and then binding `0.0.0.0` would call a port
+free that is not.
+
+The range is a *host*-side de-confliction range, like the mic tunnel's 8767–8774 but for
+the opposite direction; two instances cannot collide inside it because the planner is told
+which ports are in use and every `Forwarder` probes the real socket before binding.
+
+### Spool ownership: one window writes
+
+Several VS Code windows can watch one VM, and every one of them can see the same request.
+They must not each open a tunnel and each overwrite the ack, so **exactly one window owns
+an instance's spool** and the others are read-only.
+
+Mutual exclusion comes from **`mkdir "$d/.owner.lock"`**, which either creates the
+directory or fails, atomically, with no window in between. Write-then-read-back is *not*
+sufficient on its own and was the first version's bug: with A-write, A-read, B-write,
+B-read, both windows read their own id back and **both** believe they own the spool. So the
+lease transaction — read the record, decide, replace it — runs inside that lock, and the
+record `<forwards>/.owner` (`<windowId> <unix-seconds>`) is then read once more *outside*
+it. A window that could not take the lock, or could not write the file, therefore reports
+whatever is actually there rather than what it hoped for.
+
+A window claims when the record is missing, already its own, or older than **90 s** (three
+missed 30 s reconciles, i.e. only ever a window that is gone). A lock left behind by a
+window that died mid-transaction is broken once it is older than **60 s** — the transaction
+it guards is three filesystem operations, so a live lock is never that old, and without
+this the spool could wedge forever. On dispose the record is removed if it is still ours,
+so the next window takes over immediately instead of after the TTL.
+
+The property that matters is *at most one owner*, and it is a property of concurrent
+execution rather than of the source — so `forwarder.test.js` **executes the generated
+script for real**, five windows at a time, 25 rounds, and asserts that no round ever
+elects two.
+
+A non-owner window still renders the list — it is the same PC and the same ports, so the
+links the owner opened work from any window — but it writes nothing **and may not close
+anything**: deleting the owner's request/ack documents would tear down a forward the owner
+still believes it is serving (and would then re-open on its next reconcile). The core
+refuses it; the panel also disables the button, because the webview is untrusted input.
+
+Remote mode has no spool and therefore no marker: **the ack itself is the claim.** A window
+opens a tunnel for an entry that has no ack yet, and if a poll then shows an ack whose
+`localPort` is not the one it opened, another window won and it drops its tunnel (`adopt`).
+
+`readForwardList` returns three kinds of thing, because a remote list contains three:
+client entries (the planner's input), **host entries kept for presentation only** — the
+service materializes those itself and answers `409` to an ack for one, but they are still
+this VM's forwards and dropping them meant the panel could not show, open or close a
+`construct expose --to host` forward at all — and entries the service reports as
+**closed**, which become closes rather than requests so a finished record can never be read
+as a live one and re-opened.
+
+An entry that is *already* acked is the interesting case, because the ack is a promise the
+guest has already collected: it printed that link and stopped looking. So the forward may
+only be re-established **on the very same port, or not at all** — and this window cannot
+tell its own stale ack from another live window's. The port itself answers that: the
+reclaim is conditional on `localPort` still being **free on this PC**. Free means nobody
+here is serving it (the window that was has gone), so taking exactly that port restores the
+exact link the agent printed — and needs no second ack, because the surviving one already
+says so. Busy means somebody is serving it, and it is left alone. A reclaim never falls
+back to another port, which is the whole difference from the local re-open: locally the
+spool is ours alone, so falling back and re-acking is honest.
+
+### Local mode
+
+One long-lived `inotifywait -m` over SSH on `requests/` and `close/` — the `notify.js`
+pattern, including the heartbeat that reaps an orphaned watcher through SIGPIPE and the
+reconnect backoff. It carries **no data**: it prints one `CHANGED` line, and the host
+answers with a reconcile. Forward changes are rare (a human or an agent typing `expose`),
+so one SSH exec per change buys a much smaller protocol than streaming the spool would.
+
+The reconcile is one script that claims ownership and base64-dumps `requests/`, `acks/` and
+`close/` in a single round trip. It runs on activation, on every `CHANGED`, and **every
+30 s regardless** — which is what keeps a VM without inotify-tools working, and what
+refreshes the ownership claim.
+
+Requests survive reboots by design (the spool is under `/etc/construct`, not `/run`), so
+"re-open everything still queued" is not a special case: activation is just the first
+reconcile, and the planner sees requests with no live tunnel.
+
+### Wire-document validation (local spool only)
+
+`v: 1` and a body `id` equal to the file name are **both mandatory** on every request, ack
+and close document — `docs/expose.md` defines `id` in all three shapes, and the spool is
+published atomically (temp name + `mv`) precisely so a reader never sees a partial file.
+Both are refusals, not warnings: reading a `v: 2` request as v1 is exactly what the version
+field exists to prevent (a future writer could give `localPort` a different meaning and we
+would open a port for it), and a document that is missing its id, or claims a different
+one, is a file that was never validly written — while the name it happens to sit under is
+the identity used to write the ack, to `--close` it and to close it from the panel.
+
+Strictness on the *close* document cuts both ways, and both favour it: `--close` removes
+the request and the ack itself, so a close we decline to read still leaves a tunnel with no
+request behind it (which the planner closes anyway) — whereas an **incomplete** close
+document that we did read would tear down whichever tunnel its file name selects.
+
+The **service's** list is a different contract with no `v` at all, so `readForwardList`
+stays deliberately lenient — the same leniency `bin/construct-expose.sh` reads it with.
+
+**A VM with no spool is probed once and then dropped.** `construct.forwards.enabled`
+defaults to `true`, because a feature the agents are told to use cannot need configuring
+first — but a VM provisioned *before* `construct expose` existed has no
+`/etc/construct/forwards`, no `expose` verb, and nothing this module could ever serve.
+Holding a connection and polling it every 30 s would be a real cost (a socket, a wakeup,
+a battery) charged to an install that gained nothing, which is exactly what the zero-change
+rule is about. So the reconcile script answers `OWNER=absent` for a missing directory, and
+the forwarder **stands down**: the watcher is killed, the poll is cancelled, and one line
+in the log says to reprovision. It stays re-startable, so the next activation, instance
+switch or setting change asks again — and `provision.sh` creates the directories on every
+provision, so reprovisioning is all it takes.
+
+### Remote mode
+
+`GET /api/v1/vms/{name}/forwards` every 10 s, through the same `remotehost.js` client and
+the same credential the driver uses (owner credentials — the VM's own token deliberately
+cannot post a client ack, see `service/README.md`). Client-target entries with no ack get a
+tunnel over the instance's SSH endpoint (`sshHost:sshPort` from the registry, i.e. the port
+the service allocated), then a `POST /vms/{name}/forwards/{id}/ack`. An entry that leaves
+the list has been closed, so its tunnel is killed. The poll runs only while a window has
+that instance active — the service, not this PC, is the authority for a remote VM.
+
+### Tunnel supervision
+
+Copied wholesale from `audio.js`, because the failure modes are the same: a settle window
+(an `ssh` that dies within 1.2 s never opened the port, so it is a failure and not a
+restart), restart with a 2 s → 60 s doubling backoff, and `dispose()` kills every child.
+After `MAX_TUNNEL_ATTEMPTS` consecutive failures the guest is told with an `error` ack, so
+`construct expose` stops waiting and says why.
+
+**Only a connection that lasted `CONNECTION_HEALTHY_MS` (60 s) clears the failure streak.**
+Surviving the settle window merely means the port opened; it says nothing about the link
+being usable. Resetting `attempt` there — which the first version did — meant a tunnel that
+died at 1.3 s *every time* reset its own streak on each retry, backed off at 2 s forever and
+never reached the persistent-failure ack, so the guest waited out its entire timeout on a
+forward that was provably broken.
+
+### Settings and the panel
+
+`construct.forwards.hostLabel` (default `""`) is the only new setting. Empty means the ack
+carries no `hostLabel` and the CLI prints a loopback link — today's behaviour, and the
+reason an untouched install sees no change. A value is put in the ack verbatim (sanitised
+to one host-name-shaped token) so the CLI prints `http://<label>:<port>/` for a PC other
+machines know by name.
+
+The panel's **Forwards** card lists port, label, target, status and link, with *Open*
+(`vscode.env.openExternal`) and *Close*. It is `hidden` when there are no forwards **and**
+the instance is local, so a single-VM install that never runs `expose` sees exactly the
+panel it saw before. The **Idle policy** card (`GET`/`PUT /vms/{name}/idle-policy`) renders
+only for a remote instance and clamps its input to the cap the service reports, with a hint
+saying so. And a VM the service reports as `saved` turns the power button into **Resume &
+connect** — the same `startVm` call the driver already maps to a resume, with copy that
+says what will actually happen.
 
 ## Design decisions
 
