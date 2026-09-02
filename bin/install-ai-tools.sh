@@ -31,6 +31,10 @@ AI_CONSOLE_INTEGRATION="${AI_CONSOLE_INTEGRATION:-true}"
 # loaded below. Provisioning normally persists it first, but this also makes a
 # direct installer invocation obey env > saved config as documented.
 _external_host_override="${CONSTRUCT_EXTERNAL_HOST:-}"
+# Same rule for the T3 HTTPS keys: provision.sh (and the panel) pass the resolved
+# preference in the environment, which must win over whatever config.env holds.
+_t3_https_override="${T3CODE_HTTPS:-}"
+_t3_https_port_override="${T3CODE_HTTPS_PORT:-}"
 # The user that Claude Code (CLI + VS Code extension) is installed and
 # configured for. Defaults to the invoking sudo user, falling back to root, but
 # can be overridden (e.g. by provision.sh, which forces root for VS Code use).
@@ -77,6 +81,13 @@ T3CODE_PORT="${T3CODE_PORT:-5177}"
 # nightly -> @nightly. Anything that isn't exactly "nightly" normalizes to stable.
 T3CODE_CHANNEL="${T3CODE_CHANNEL:-stable}"
 [[ "${T3CODE_CHANNEL}" == "nightly" ]] || T3CODE_CHANNEL=stable
+# Serve the T3 web GUI over HTTPS through a local nginx (bin/setup-t3-https.sh).
+# On by default whenever T3 Code is installed: browsers only expose getUserMedia
+# on a secure origin, so T3's client-side microphone capture needs it. Plain HTTP
+# on T3CODE_PORT stays available for local tooling either way.
+T3CODE_HTTPS="${_t3_https_override:-${T3CODE_HTTPS:-true}}"
+[[ "${T3CODE_HTTPS}" == "false" ]] || T3CODE_HTTPS=true
+T3CODE_HTTPS_PORT="${_t3_https_port_override:-${T3CODE_HTTPS_PORT:-5178}}"
 _t3_npm_tag() { [[ "${T3CODE_CHANNEL}" == "nightly" ]] && echo nightly || echo latest; }
 # The local `code serve-web` server on the VM keeps its data (incl. Machine-scope
 # settings) here; used to seed the Claude Code bypass defaults for the browser IDE
@@ -731,6 +742,22 @@ install_codex() {
 # Whether the system Node satisfies t3's engines requirement
 # (^22.16 || ^23.11 || >=24.10). npm only WARNS on a mismatch, so without this
 # check an old Node yields an installed-but-broken t3 whose service restart-loops.
+
+# May the unchanged-build fast path skip the T3 reinstall AND the service
+# restart? A matching build key is NOT sufficient: `t3 serve` reads
+# T3CODE_PUBLIC_BASE_URL from its systemd EnvironmentFile only at START, so if
+# the HTTPS reconciliation above just changed that value (toggle flipped, port
+# changed, external host changed), the RUNNING process still advertises the old
+# origin -- its startup/pairing URLs would stay bound to a stale or plain-http
+# base. Restarting is the only way to pick it up. Pure; the caller adds the
+# is-active check.
+t3_can_skip_restart() {
+  local wanted_build="$1" active_build="$2" pub_before="$3" pub_after="$4"
+  [[ -n "${wanted_build}" && "${wanted_build}" == "${active_build}" ]] || return 1
+  [[ "${pub_before}" == "${pub_after}" ]] || return 1
+  return 0
+}
+
 t3_node_ok() {
   local v major minor rest
   v="$(node -v 2>/dev/null | sed 's/^v//')" || return 1
@@ -831,6 +858,22 @@ install_t3code() {
   bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" CONSTRUCT_T3_VOICE_INPUT \
     "$([[ "${T3CODE_LIMIT_RESUME:-false}" == "true" ]] && echo true || echo false)"
 
+  # HTTPS reverse proxy for the web GUI. Runs BEFORE the service restart below so
+  # config.env already holds T3CODE_PUBLIC_BASE_URL when `t3 serve` starts (the
+  # patched server reads it once, at startup, for its pairing/startup URLs), and
+  # deliberately BEFORE the unchanged-build early return so flipping the HTTPS
+  # toggle is reconciled even when the T3 build itself is untouched. Best-effort:
+  # the setup script degrades to plain HTTP on its own rather than failing the
+  # T3 install, so a non-zero exit here is reported and then tolerated.
+  local _t3_pub_before _t3_pub_after
+  _t3_pub_before="$(sed -n 's/^T3CODE_PUBLIC_BASE_URL=//p' "${CONFIG_FILE}" 2>/dev/null | head -1 || true)"
+  env T3CODE_HTTPS="${T3CODE_HTTPS}" T3CODE_HTTPS_PORT="${T3CODE_HTTPS_PORT}" \
+    T3CODE_PORT="${T3CODE_PORT}" CONSTRUCT_EXTERNAL_HOST="${CONSTRUCT_EXTERNAL_HOST}" \
+    CONFIG_FILE="${CONFIG_FILE}" REPO_DIR="${REPO_DIR}" \
+    bash "${REPO_DIR}/bin/setup-t3-https.sh" \
+    || warn "WARNING: T3 Code HTTPS setup failed; the web GUI stays on plain HTTP (:${T3CODE_PORT})"
+  _t3_pub_after="$(sed -n 's/^T3CODE_PUBLIC_BASE_URL=//p' "${CONFIG_FILE}" 2>/dev/null | head -1 || true)"
+
   # On an unchanged upstream T3 + Construct revision, the source builder has
   # already restored the exact server symlink and Desktop status. If that same
   # build is active, avoid re-patching, rewriting the unit, restarting T3, and
@@ -838,10 +881,13 @@ install_t3code() {
   if [[ "${T3CODE_LIMIT_RESUME:-false}" == "true" ]]; then
     _wanted_t3_build="$(sed -n 's/^T3CODE_BUILD_KEY=//p' /etc/construct/t3code-desktop-status 2>/dev/null | head -1)"
     _active_t3_build="$(cat /etc/construct/t3code-installed-build 2>/dev/null || true)"
-    if [[ -n "${_wanted_t3_build}" && "${_wanted_t3_build}" == "${_active_t3_build}" ]] && \
+    if t3_can_skip_restart "${_wanted_t3_build}" "${_active_t3_build}" "${_t3_pub_before}" "${_t3_pub_after}" && \
        systemctl is-active --quiet t3code-serve; then
       note "T3 Code build is unchanged and already running; skipping its reinstall/restart."
       return 0
+    fi
+    if [[ "${_t3_pub_before}" != "${_t3_pub_after}" ]]; then
+      note "T3 Code's public base URL changed (${_t3_pub_before:-<none>} -> ${_t3_pub_after:-<none>}); restarting t3code-serve so the server picks it up."
     fi
   fi
 
@@ -883,6 +929,11 @@ install_t3code() {
       sed -n 's/^T3CODE_BUILD_KEY=//p' /etc/construct/t3code-desktop-status | head -1 > /etc/construct/t3code-installed-build
     fi
     echo "t3code-serve is running on ${T3CODE_HOST}:${T3CODE_PORT}"
+    # Only claim HTTPS when the proxy actually came up (the setup script writes
+    # this file last, and removes it whenever it had to fall back to plain HTTP).
+    if [[ -s /etc/construct/t3code-https-status ]]; then
+      echo "t3code HTTPS: $(sed -n 's/^T3CODE_PUBLIC_BASE_URL=//p' /etc/construct/t3code-https-status | head -1)"
+    fi
     # Fresh VMs have no t3 DB when the patch step above runs, so the token mint
     # there can fail; retry now that the server has started once.
     if [[ "${T3CODE_LIMIT_RESUME:-false}" == "true" && ! -s /etc/construct/t3park-token ]]; then

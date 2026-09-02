@@ -186,6 +186,24 @@ if [[ "${INCLUDE_AUTH}" == "true" ]]; then
   fi
 fi
 
+# ── T3 Code HTTPS certificate authority ──────────────────────────────────────
+# /etc/construct/tls holds the local CA (ca.key/ca.crt) whose certificate the
+# user imported into Windows' trust store, plus the T3 server leaf. Losing it on
+# a reinstall means a NEW CA and therefore a new (possibly UAC-prompted) trust
+# import on the host, so carry the directory across the same way the serve-web
+# token does -- it lives outside home, and ca.key/t3.key are private keys, so it
+# is gated on INCLUDE_AUTH. restore-config.sh copies it back and reissues the
+# leaf if the VM's names changed.
+if [[ "${INCLUDE_AUTH}" == "true" ]]; then
+  tls_dir="${T3CODE_TLS_DIR:-/etc/construct/tls}"
+  if [[ -d "${tls_dir}" ]] && compgen -G "${tls_dir}/*" >/dev/null 2>&1; then
+    mkdir -p "${STAGE}/etc/construct"
+    cp -a "${tls_dir}" "${STAGE}/etc/construct/tls"
+    printf 'etc/construct/tls\n' >>"${MANIFEST}"
+    log "+ etc/construct/tls (T3 HTTPS local CA)"
+  fi
+fi
+
 # ── Claude Code ──────────────────────────────────────────────────────────────
 if has_agent "claude-code" || [[ -d "${EXPORT_HOME}/.claude" ]]; then
   add ".claude/CLAUDE.md"
