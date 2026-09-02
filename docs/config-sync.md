@@ -269,6 +269,20 @@ its **own VM-side branch** inside it:
   never be folded onto one branch. An alias that does not yield a valid name
   falls back to `vm`, and provisioning warns that the VM is sharing the default
   instance's store.
+- **One branch, one VM — enforced in the registry.** `configBranch` is a
+  *cross-entry identity* in `instances.json`, alongside `vmName`/`sshHost`/
+  `hostAlias`/`keyName`: no two entries may name the same branch (compared
+  case-insensitively, because Windows' loose-ref files are), and the default
+  instance's `vm` is **reserved for `agent-vm`** — a non-default entry that
+  claims it is skipped with a problem, exactly like one that claims the default
+  VM's name. Two instances on one branch would share their VM snapshots, their
+  deletion history, their merge base and their write-backs, so one VM's tick
+  would merge — or delete — the other VM's configuration, which is precisely
+  what "one branch per VM" exists to prevent. The derived names (`vm-<name>`)
+  are unique by construction, so this only ever bites a hand-written
+  `configBranch` override; both readers (`extension/src/instances.js`,
+  `lib/AgentVm.Instances.ps1`) reject the same file, and the extension's
+  `addInstance`/`updateInstance` refuse to *write* one.
 - **Semantics:** `main` stays **the host's truth for every instance**. Each
   instance branch is that VM's last-known store, and the whole §6 tick — VM
   snapshot commit, merge into `main`, post-merge gate, guarded write-back,

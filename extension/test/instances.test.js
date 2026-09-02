@@ -590,6 +590,124 @@ ok("collision: the comparison is case-insensitive (one NTFS file, one DNS name)"
 deepEq("collision: two canonical local instances never collide",
   parse({ version: 1, instances: { "a-vm": {}, "b-vm": {}, "agent-vm": {} } }).problems, []);
 
+// ── configBranch is a cross-entry identity ───────────────────────────────────
+// The branch IS the instance's store inside the ONE host config repo (docs/config-sync.md,
+// "Multiple instances"): two entries on one branch share their VM snapshots, deletion
+// history, merge base and write-backs, so one VM's tick merges -- or deletes -- the
+// other VM's configuration. Mirrored in test/instances.test.ps1.
+console.log("\n=== configBranch uniqueness (one branch per VM) ===");
+const branchClaim = parse({ version: 1, instances: {
+  "work-vm": { backend: "hyperv-remote", sshHost: "buildbox.local", configBranch: "vm" },
+} });
+ok("branch: a non-default entry may NOT claim the default instance's \"vm\"",
+  !branchClaim.registry.byName["work-vm"]);
+ok("branch: ...and the problem names configBranch and the default instance",
+  branchClaim.problems.some((p) => p.includes("configBranch") && p.includes("agent-vm") && p.includes("skipped")));
+ok("branch: the default instance itself survives that entry untouched",
+  inst.isDefaultInstance(branchClaim.registry.byName["agent-vm"]));
+const sharedBranch = parse({ version: 1, instances: {
+  "a-vm": { backend: "hyperv-remote", sshHost: "one.local", configBranch: "vm-team" },
+  "b-vm": { backend: "hyperv-remote", sshHost: "two.local", configBranch: "VM-Team" },
+} });
+ok("branch: two entries sharing one branch drop BOTH (case-insensitively -- Windows loose refs)",
+  !sharedBranch.registry.byName["a-vm"] && !sharedBranch.registry.byName["b-vm"]);
+ok("branch: ...reported once, naming both and the field",
+  sharedBranch.problems.filter((p) => p.includes("share the same configBranch")).length === 1 &&
+  sharedBranch.problems.some((p) => p.includes("a-vm") && p.includes("b-vm")));
+// The derived branches (vm-<name>) are unique by construction, so nothing changes for
+// an ordinary multi-instance registry -- including the default instance's own "vm".
+deepEq("branch: derived branches never collide",
+  parse({ version: 1, instances: { "a-vm": {}, "b-vm": {}, "agent-vm": {} } }).problems, []);
+ok("branch: a distinct explicit override is still allowed",
+  !!parse({ version: 1, instances: { "work-vm": { configBranch: "vm-team" } } }).registry.byName["work-vm"]);
+// The WRITE side refuses what the reader would skip -- an entry that vanished on the
+// next load would leave the user with a picker that silently lost an instance.
+const mutBase = parse({ version: 1, instances: { "a-vm": { configBranch: "vm-team" } } }).registry;
+let threw = null;
+try { inst.addInstance(mutBase, "b-vm", { configBranch: "vm-team" }); } catch (e) { threw = e; }
+ok("branch: addInstance refuses a branch another instance already owns",
+  !!threw && /configBranch/.test(threw.message) && /share the same/.test(threw.message));
+threw = null;
+try { inst.addInstance(mutBase, "b-vm", { configBranch: "vm" }); } catch (e) { threw = e; }
+ok("branch: addInstance refuses the default instance's reserved \"vm\"",
+  !!threw && /configBranch/.test(threw.message) && /agent-vm/.test(threw.message));
+threw = null;
+try { inst.addInstance(mutBase, "b-vm", { configBranch: "VM" }); } catch (e) { threw = e; }
+ok("branch: ...in any spelling (the branch validator refuses a case variant of vm)",
+  !!threw && /configBranch/.test(threw.message));
+threw = null;
+try { inst.updateInstance(inst.addInstance(mutBase, "b-vm", {}), "b-vm", { configBranch: "vm-team" }); }
+catch (e) { threw = e; }
+ok("branch: updateInstance refuses moving an instance onto another's branch",
+  !!threw && /configBranch/.test(threw.message));
+ok("branch: a distinct branch is accepted by the mutators",
+  !!inst.addInstance(mutBase, "b-vm", { configBranch: "vm-other" }).byName["b-vm"]);
+
+// ── Object.prototype names are NOT registry entries ──────────────────────────
+// A name->instance map keyed by file data must not inherit Object.prototype: with a
+// plain {}, byName["constructor"] is truthy for EVERY registry, so a file that merely
+// POINTS at such a name resolved to Object's constructor FUNCTION and handed it out as
+// an instance (undefined vmHost/keyName in every ssh argv) -- while the PowerShell
+// reader's ordinal Hashtable correctly reported "no entry" and used agent-vm. Same
+// fixtures in test/instances.test.ps1 -- change both together.
+console.log("\n=== Object.prototype name parity ===");
+const PROTO_NAMES = ["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf", "isPrototypeOf"];
+for (const name of PROTO_NAMES) {
+  // (a) as defaultInstance, with NO entry of that name.
+  const asDefault = parse({ version: 1, defaultInstance: name, instances: {} });
+  eq(`proto(${name}): defaultInstance falls back to agent-vm`, asDefault.registry.defaultInstance, "agent-vm");
+  ok(`proto(${name}): ...and it is reported as having no entry`,
+    asDefault.problems.some((p) => p.includes("has no entry") || p.includes("not a valid instance name")));
+  const active = inst.resolveActive({ registry: asDefault.registry });
+  ok(`proto(${name}): the active instance is the synthesized default`,
+    inst.isDefaultInstance(active.instance) && active.instance.name === "agent-vm");
+  // (b) as the construct.instance SETTING (a global pin nothing validates as a name).
+  const pinned = inst.resolveActive({ registry: asDefault.registry, setting: name });
+  ok(`proto(${name}): a construct.instance pin of it is "not in the registry"`,
+    pinned.source === "default" && inst.isDefaultInstance(pinned.instance) &&
+    !!pinned.problem && pinned.problem.includes("not in the registry"));
+  // (c) as the window's persisted workspace selection.
+  const ws = inst.resolveActive({ registry: asDefault.registry, workspaceValue: name });
+  ok(`proto(${name}): a stale workspace selection of it is skipped too`,
+    ws.source === "default" && inst.isDefaultInstance(ws.instance));
+  // (d) resolve()/hasInstance() agree: it is not a member.
+  ok(`proto(${name}): resolve() falls back to the default instance`,
+    inst.isDefaultInstance(inst.resolve(asDefault.registry, name)));
+  ok(`proto(${name}): hasInstance() is false`, !inst.hasInstance(asDefault.registry, name));
+  // (e) as an INSTANCE NAME in the file: the name rule decides, and it is the same
+  //     decision in both readers -- only lowercase slugs are names at all.
+  const asEntry = parse({ version: 1, instances: { [name]: { backend: "hyperv-remote", sshHost: "buildbox.local" } } });
+  if (inst.isValidName(name)) {
+    // "constructor" is a perfectly good instance name -- it must load like any other.
+    ok(`proto(${name}): a real instance of that name LOADS`, !!asEntry.registry.byName[name]);
+    eq(`proto(${name}): ...and resolves to itself, not to a prototype member`,
+      inst.resolve(asEntry.registry, name).vmHost, "buildbox.local");
+    ok(`proto(${name}): ...and hasInstance() sees it`, inst.hasInstance(asEntry.registry, name));
+    ok(`proto(${name}): ...and it can be the defaultInstance`,
+      parse({ version: 1, defaultInstance: name, instances: { [name]: { backend: "hyperv-remote", sshHost: "buildbox.local" } } })
+        .registry.defaultInstance === name);
+  } else {
+    ok(`proto(${name}): an invalid name is skipped with a problem`,
+      !asEntry.registry.byName[name] &&
+      asEntry.problems.some((p) => p.includes("is invalid") && p.includes("skipped")));
+  }
+}
+// The maps themselves carry no prototype, so nothing downstream can inherit one either.
+const protoReg = parse({ version: 1, instances: { "work-vm": { backend: "hyperv-remote", sshHost: "buildbox.local" } } }).registry;
+ok("proto: byName has a null prototype", Object.getPrototypeOf(protoReg.byName) === null);
+ok("proto: a loaded registry's byName has a null prototype too",
+  Object.getPrototypeOf(inst.load({ path: path.join(tmpRoot, "nope", "instances.json") }).byName) === null);
+ok("proto: a mutated registry keeps it",
+  Object.getPrototypeOf(inst.addInstance(protoReg, "b-vm", {}).byName) === null);
+ok("proto: the file document's instances map keeps it",
+  Object.getPrototypeOf(inst.toFileDocument(protoReg).instances) === null);
+// ...and a hostile "__proto__" entry can never pollute one (JSON.parse makes it an own
+// property, the name rule then rejects it).
+const polluted = inst.parseRegistry('{"version":1,"instances":{"__proto__":{"vmName":"pwned"}}}');
+ok("proto: a __proto__ entry is skipped and pollutes nothing",
+  !polluted.registry.byName["__proto__"] && ({}).vmName === undefined &&
+  inst.isDefaultInstance(polluted.registry.byName["agent-vm"]));
+
 // Port boundaries + numbers no Int32 can hold. A huge sshPort must be REPORTED and
 // fall back to 22, never crash the reader (PowerShell's [int] cast throws on these,
 // which would have escaped Read-ConstructInstances and broken "never throws").
@@ -1088,10 +1206,97 @@ const preFlightFn = extSrc.slice(extSrc.indexOf("async function lifecyclePreFlig
 ok("import: the lifecycle pre-flight scans ITS captured target, not the active one",
   preFlightFn.includes("coalescedImport(true, target)") && !preFlightFn.includes("coalescedImport(true)"));
 ok("import: the sync tick's post-tick scan uses the tick's own instance",
-  extSrc.includes("var syncTarget = { name: syncInstance.name, cfg: instances.toSshCfg(syncInstance) }") &&
+  extSrc.includes("var syncTarget = captureTargetFull(target);") &&
+  extSrc.includes("var syncInstance = targetInstance(syncTarget);") &&
   extSrc.includes("coalescedImport(true, syncTarget)"));
-ok("merge: a completed pending merge is committed on the ACTIVE instance's branch",
-  extSrc.includes("completePendingMerge(runGit, dir, activeInstance().configBranch)"));
+ok("import: the scan keeps the WHOLE capture and hands it to the profile auto-enable",
+  extSrc.includes("function importTargetOf(target) {\n  return captureTargetFull(target);\n}") &&
+  extSrc.includes("await autoEnableNewProfiles(profilesBefore, host.listProjectProfiles(projRoot), scanTarget)") &&
+  !extSrc.includes("return { name: target.name, cfg: target.cfg };"));
+ok("merge: a completed pending merge is committed on the CAPTURED instance's branch",
+  extSrc.includes("var gateTarget = captureTargetFull(target);") &&
+  extSrc.includes("completePendingMerge(runGit, dir, gateTarget.instance.configBranch)") &&
+  !extSrc.includes("completePendingMerge(runGit, dir, activeInstance().configBranch)"));
+// ...and the branch WRITE is gated before it happens and after the repo reads, with a
+// stale gate reported as blocked (never {blocked:false}) so a destructive pre-flight
+// fails closed rather than proceeding on an indeterminate answer.
+ok("merge: the gate aborts around the write and fails CLOSED when it goes stale",
+  extSrc.split('targetStale(gateTarget, "The config merge gate")').length === 3 &&
+  extSrc.includes("return { blocked: true, stale: true, dir: dir, reason: STALE_GATE_REASON };") &&
+  extSrc.includes("if (gate.stale) {") &&
+  extSrc.includes("const STALE_GATE_REASON ="));
+ok("import: the scan and the import both abort on a stale generation, before any write",
+  extSrc.includes('if (targetStale(scanTarget, "The VM repo scan")) return null;') &&
+  extSrc.includes('if (targetStale(scanTarget, "The VM repo import")) return null;') &&
+  // ...and both sit BEFORE the profile writes and the throttle stamp.
+  extSrc.indexOf('targetStale(scanTarget, "The VM repo import")') <
+    extSrc.indexOf("host.writeProjectProfileIfAbsent(projRoot, item.name, item.profile)") &&
+  extSrc.indexOf('targetStale(scanTarget, "The VM repo import")') <
+    extSrc.indexOf("importCoalescer.stamp(scanTarget.name)"));
+ok("sync: BOTH post-tick follow-ups (auto-enable and import) stop on a stale generation",
+  extSrc.includes('var followUpsStale = targetStale(syncTarget, "The post-tick follow-ups");') &&
+  extSrc.includes("if (!followUpsStale && result && result.ok && !result.lockBusy) {") &&
+  extSrc.includes("if (!followUpsStale && result && result.ok && result.vmReadOk) {"));
+
+// The three flows the integration review found re-reading "the active instance" after
+// an await. Each one's binding is pinned here; the ORDERING rules they rely on are
+// driven with deferred promises in asyncTests() below (createTargetQueue /
+// planCapturedFollowUp), which is where the discard logic actually lives.
+ok("sync: runConfigSync takes a captured target and uses it for the branch, cfg and scripts dir",
+  extSrc.includes("async function runConfigSync(target) {") &&
+  extSrc.includes("var syncTarget = captureTargetFull(target);") &&
+  extSrc.includes("vmBranch: syncInstance.configBranch") &&
+  extSrc.includes("cfg: syncCfg") &&
+  extSrc.includes("autoEnableNewProfiles(profilesBeforeTick, host.listProjectProfiles(dir), syncTarget)"));
+ok("sync: the queued follow-up is keyed by target and re-runs for THAT target",
+  extSrc.includes("const syncTickFollowups = instances.createTargetQueue()") &&
+  extSrc.includes("syncTickFollowups.queue(syncTarget.name, syncTickPromise, function () {") &&
+  extSrc.includes("return runConfigSync(syncTarget);"));
+ok("sync: every caller passes its own captured target (no bare runConfigSync())",
+  !/runConfigSync\(\)/.test(extSrc) &&
+  extSrc.includes("runConfigSync(syncNowTarget)") && extSrc.includes("runConfigSync(target)") &&
+  extSrc.includes("runConfigSync(delTarget)") && extSrc.includes("runConfigSync(actionTarget())"));
+ok("sync: profile auto-enable writes into the TARGET's CAPTURED scripts dir",
+  extSrc.includes("async function autoEnableNewProfiles(before, after, target) {") &&
+  extSrc.includes("var enableTarget = captureTargetFull(target);") &&
+  extSrc.includes("var scriptsDir = enableTarget.scriptsDir;") &&
+  !extSrc.includes("var scriptsDir = resolveScriptsDirFor(targetInstance(enableTarget));"));
+// ...and every captured config-sync flow ABORTS on a stale generation rather than
+// running against either instance -- at the tick's entry, when a queued follow-up
+// finally starts, and immediately before the selection file is written.
+ok("sync: a stale tick, a stale queued follow-up and a stale write all abort",
+  extSrc.includes('if (targetStale(syncTarget, "The config-sync tick")) return null;') &&
+  extSrc.includes('if (targetStale(syncTarget, "The queued config-sync tick")) return null;') &&
+  extSrc.includes('if (targetStale(enableTarget, "The project-profile auto-enable")) return;') &&
+  extSrc.split('targetStale(enableTarget, "The project-profile auto-enable")').length === 3 &&
+  extSrc.includes("function targetStale(target, what) {") &&
+  extSrc.includes("if (!instances.targetSuperseded(instanceGate, target)) return false;"));
+ok("sync: the capture carries the instance, cfg, scripts dir AND the generation token",
+  extSrc.includes("function captureTargetFull(target) {") &&
+  extSrc.includes("token: t.token || instanceGate.token(),") &&
+  extSrc.includes("scriptsDir: t.scriptsDir !== undefined ? t.scriptsDir : resolveScriptsDirFor(instance),"));
+ok("reprovision prompt: the target is captured with the scripts dir, before the toast",
+  extSrc.includes("const saveTarget = actionTarget();") &&
+  extSrc.includes("const scriptsDir = resolveScriptsDirFor(saveTarget.instance);") &&
+  extSrc.includes("offerReprovisionForPatchSettings(scriptsDir, patchChanges, saveTarget)") &&
+  extSrc.includes("function offerReprovisionForPatchSettings(scriptsDir, features, target) {"));
+ok("reprovision prompt: a stale answer aborts through targetSuperseded instead of rebuilding",
+  extSrc.includes("const plan = instances.planCapturedFollowUp(instanceGate, t, pick === \"Reprovision now\");") &&
+  extSrc.includes("if (plan.reason === \"superseded\") { targetSuperseded(t, \"Reprovision\"); return; }") &&
+  extSrc.includes("void startConstructReprovision(scriptsDir, plan.target);"));
+ok("mic auto-arm: instance, cfg, scripts dir and generation are captured before the preference",
+  extSrc.includes("async function maybeAutoEnableAudio(context, target) {") &&
+  extSrc.includes("const scriptsDir = resolveScriptsDirFor(t.instance);") &&
+  extSrc.includes("const reachable = await ssh.isReachable({ timeoutMs: 6000, cfg: t.cfg });") &&
+  extSrc.includes("const plan = instances.planCapturedFollowUp(instanceGate, t, reachable);"));
+ok("mic auto-arm: the probe result is discarded (not applied to the new VM) after a switch",
+  extSrc.includes("enableAudio(context, undefined, { auto: true, target: plan.target })") &&
+  extSrc.includes("if (opts.target && instances.targetSuperseded(instanceGate, t)) {") &&
+  extSrc.includes("hostAudioInstance = t.name;") && extSrc.includes("cfg: t.cfg,") &&
+  !extSrc.includes("hostAudioInstance = activeInstance().name;"));
+ok("switch: registry membership is an OWN-property test (a webview name is untrusted)",
+  extSrc.includes("if (!instances.hasInstance(reg, wanted)) {") &&
+  !/reg\.byName\[wanted\]/.test(extSrc));
 
 // ── The async cases: generation gate + Remote-SSH adoption ───────────────────
 // These are the two ordering bugs a live window would only show intermittently, so
@@ -1370,6 +1575,188 @@ async function asyncTests() {
   // No setActive at all must not throw either.
   ok("adopt: a missing setActive is tolerated",
     (await inst.adoptRemoteInstance({ registry: adoptReg, remoteAuthority: "ssh-remote+work-vm", setting: "", currentName: "agent-vm" })).adopt);
+
+  // ── The keyed follow-up queue (config-sync ticks) ──────────────────────────
+  // The real failure: A's tick is in flight, the user hits "Sync Now" for A, then
+  // switches to B before the follow-up starts. Held as ONE global promise, that
+  // follow-up synced B's branch and B's VM store while A's changes stayed unsynced.
+  console.log("\n=== keyed follow-up queue (a queued tick keeps its target) ===");
+  const qActive = deferred();
+  const q = inst.createTargetQueue();
+  const ran = [];
+  // Two callers ask about A while A's tick runs: ONE follow-up, and it is A's.
+  const qa1 = q.queue("agent-vm", qActive.promise, () => { ran.push("agent-vm"); return "synced agent-vm"; });
+  const qa2 = q.queue("agent-vm", qActive.promise, () => { ran.push("agent-vm-2"); return "second closure"; });
+  ok("queue: a second caller for the same target JOINS the queued follow-up", qa1 === qa2);
+  // ...and a caller about B gets its own, because the two sync different branches.
+  const qb1 = q.queue("work-vm", qActive.promise, () => { ran.push("work-vm"); return "synced work-vm"; });
+  ok("queue: a different target gets its OWN follow-up", qb1 !== qa1);
+  eq("queue: one entry per target", q.size, 2);
+  ok("queue: nothing has run while the active tick is in flight", ran.length === 0);
+  qActive.resolve(null);
+  eq("queue: the follow-up runs the closure ITS caller registered", await qa1, "synced agent-vm");
+  eq("queue: ...the joining caller sees the same result", await qa2, "synced agent-vm");
+  eq("queue: ...and B's follow-up is B's", await qb1, "synced work-vm");
+  deepEq("queue: the superseded second closure never ran", ran.sort(), ["agent-vm", "work-vm"]);
+  ok("queue: the keys are released once their follow-up starts", q.size === 0);
+  // A FAILING active tick must not wedge the queue: the follow-up still runs.
+  const failing = Promise.reject(new Error("tick blew up"));
+  failing.catch(() => {});   // the test process must not see an unhandled rejection
+  const afterFail = await inst.createTargetQueue().queue("agent-vm", failing, () => "ran anyway");
+  eq("queue: a rejected active tick still releases its follow-up", afterFail, "ran anyway");
+
+  // ── Deferred steps decide with the target they captured ────────────────────
+  // The reprovision toast the user answers minutes later, and the mic auto-arm's
+  // reachability probe: both must refuse to act when the window switched meanwhile —
+  // acting on the CURRENT instance is as wrong as acting on the captured one.
+  console.log("\n=== deferred follow-ups (prompt answers, probe results) ===");
+  const fgate = inst.createGate("agent-vm");
+  const deferredA = inst.captureTarget(fgate, inst.DEFAULT_INSTANCE);
+  eq("deferred: a declined prompt does nothing",
+    inst.planCapturedFollowUp(fgate, deferredA, false).reason, "declined");
+  const okPlan = inst.planCapturedFollowUp(fgate, deferredA, true);
+  ok("deferred: an accepted prompt runs — for the CAPTURED target",
+    okPlan.run && okPlan.reason === "ok" && okPlan.target === deferredA);
+  fgate.set("work-vm");   // the window switches while the toast / probe is outstanding
+  const stale = inst.planCapturedFollowUp(fgate, deferredA, true);
+  ok("deferred: a stale accept neither runs nor retargets",
+    !stale.run && stale.reason === "superseded" && stale.target === deferredA);
+  eq("deferred: a stale DECLINE is still just a decline (nothing to explain)",
+    inst.planCapturedFollowUp(fgate, deferredA, false).reason, "declined");
+  ok("deferred: a target captured after the switch is live again",
+    inst.planCapturedFollowUp(fgate, inst.captureTarget(fgate, inst.DEFAULT_INSTANCE), true).run);
+  ok("deferred: no gate / no target is never treated as superseded",
+    inst.planCapturedFollowUp(null, null, true).run);
+
+  // ── The import tail: A's discoveries never reach B's settings file ─────────
+  // importFromVm scans A over SSH and then auto-enables what it found into A's
+  // .construct-settings.json. Both halves hang off ONE capture (instance + cfg +
+  // scriptsDir + generation); the extension code is source-pinned above, and the RULE
+  // it applies is driven here with a deferred scan, exactly as the live failure went:
+  // the scan is slow, the user switches, and the write must land nowhere.
+  console.log("\n=== captured import tail (a scan of A must not write B) ===");
+  const files = { "agent-vm": [], "work-vm": [] };            // each VM's selection file
+  const profileWrites = [];                                   // config-dir profile files
+  const stamps = [];                                          // per-instance throttle
+  const igate = inst.createGate("agent-vm");
+  // The flow, written the way extension.js writes it: capture BEFORE the first await,
+  // then check the generation again before EVERY mutation — the profile files and the
+  // throttle stamp included, not just the settings write at the end.
+  // `afterScan` is the test's deterministic hook for "the window switches HERE" — it
+  // fires once the scan-stage check has passed, i.e. during the deletion-history read.
+  const importFlow = async (target, scanPromise, historyPromise, afterScan) => {
+    const found = await scanPromise;                          // the SSH scan of THAT VM
+    if (!inst.planCapturedFollowUp(igate, target, true).run) return "discarded:scan";
+    if (afterScan) afterScan();
+    await historyPromise;                                     // the deletion-history read
+    const plan = inst.planCapturedFollowUp(igate, target, found.length > 0);
+    if (!plan.run) return "discarded:" + plan.reason;
+    // Every write is addressed by the CAPTURE, never by "the active instance now".
+    profileWrites.push(...found);                             // host.writeProjectProfileIfAbsent
+    stamps.push(plan.target.name);                            // importCoalescer.stamp
+    files[plan.target.scriptsDir].push(...found);             // host.saveSelectedProjects
+    return "enabled";
+  };
+  const capturedImport = (name) => ({
+    ...inst.captureTarget(igate, { name, ...inst.DEFAULT_INSTANCE }),
+    name,
+    scriptsDir: name,   // stands in for that instance's .construct-settings.json
+  });
+  // (i) the switch lands while the SSH scan is still in flight.
+  const slowScan = deferred();
+  const runImport = importFlow(capturedImport("agent-vm"), slowScan.promise, Promise.resolve());
+  igate.set("work-vm");                                       // ...the user switches
+  slowScan.resolve(["repo-from-a"]);                          // ...and A's scan lands
+  eq("import: a scan that finishes after a switch is discarded", await runImport, "discarded:scan");
+  deepEq("import: ...no profile file is written at all", profileWrites, []);
+  deepEq("import: ...the per-instance throttle is not stamped", stamps, []);
+  deepEq("import: ...B's selection file is untouched", files["work-vm"], []);
+  deepEq("import: ...and A's is too (this window no longer drives it)", files["agent-vm"], []);
+  // (ii) the scan came back in time, but the switch lands during the deletion-history
+  //      read — the last await before the writes.
+  const lateHistory = deferred();
+  igate.set("agent-vm");
+  const runLate = importFlow(capturedImport("agent-vm"), Promise.resolve(["repo-from-a"]),
+    lateHistory.promise, () => igate.set("work-vm"));
+  lateHistory.resolve(null);
+  eq("import: a switch during the deletion-history read discards it too", await runLate, "discarded:superseded");
+  deepEq("import: ...still nothing written", profileWrites, []);
+  deepEq("import: ...still nothing stamped", stamps, []);
+  deepEq("import: ...and neither selection file moved",
+    files["agent-vm"].concat(files["work-vm"]), []);
+  // The control: no switch, and the discovery lands in the scanned VM's own files.
+  const okScan = deferred();
+  const runImportB = importFlow(capturedImport("work-vm"), okScan.promise, Promise.resolve());
+  okScan.resolve(["repo-from-b"]);
+  eq("import: without a switch the discovery is enabled", await runImportB, "enabled");
+  deepEq("import: ...the profile is written once", profileWrites, ["repo-from-b"]);
+  deepEq("import: ...the SCANNED instance is the one stamped", stamps, ["work-vm"]);
+  deepEq("import: ...in the SCANNED instance's file only", files["work-vm"], ["repo-from-b"]);
+  deepEq("import: ...and nothing leaked into the other one", files["agent-vm"], []);
+
+  // ── A queued follow-up that goes stale touches NOTHING ─────────────────────
+  console.log("\n=== stale queued follow-up ===");
+  const sgate = inst.createGate("agent-vm");
+  const sq = inst.createTargetQueue();
+  const touched = [];
+  const staleTarget = { ...inst.captureTarget(sgate, inst.DEFAULT_INSTANCE) };
+  const activeTick = deferred();
+  const queued = sq.queue(staleTarget.name, activeTick.promise, () => {
+    // The follow-up re-checks its generation before it starts a tick of its own.
+    const plan = inst.planCapturedFollowUp(sgate, staleTarget, true);
+    if (!plan.run) return "aborted:" + plan.reason;
+    touched.push(plan.target.name);
+    return "synced";
+  });
+  sgate.set("work-vm");            // the switch happens inside the queue window
+  activeTick.resolve(null);
+  eq("queue: a stale follow-up aborts instead of running", await queued, "aborted:superseded");
+  deepEq("queue: ...and syncs NEITHER instance", touched, []);
+
+  // ── The merge gate WRITES a branch, so it is bounded the same way ──────────
+  // completePendingMerge creates the merge commit whose message names the branch, and
+  // the gate's verdict decides whether a destructive rebuild may proceed. Both halves
+  // are modelled here: the write must not happen on a stale capture, and the verdict a
+  // stale gate returns must never be "clear" (a pre-flight has to fail CLOSED).
+  console.log("\n=== captured merge gate (branch write + fail-closed verdict) ===");
+  const mgate = inst.createGate("agent-vm");
+  const merges = [];                                          // branches merged, in order
+  // `afterMerge` is the "switch HERE" hook: after the branch write, during the repo read.
+  const mergeGate = async (target, detectPromise, repoPromise, afterMerge) => {
+    await detectPromise;                                      // git detection
+    if (!inst.planCapturedFollowUp(mgate, target, true).run) return { blocked: true, stale: true };
+    merges.push(target.instance.configBranch);                // completePendingMerge
+    if (afterMerge) afterMerge();
+    const rs = await repoPromise;                             // repoState
+    if (!inst.planCapturedFollowUp(mgate, target, true).run) return { blocked: true, stale: true };
+    return { blocked: !!rs.conflict, stale: false };
+  };
+  const capturedGate = (name, branch) => ({
+    ...inst.captureTarget(mgate, { name, configBranch: branch }),
+    instance: { name, configBranch: branch },
+  });
+  const slowDetect = deferred();
+  const gateRun = mergeGate(capturedGate("agent-vm", "vm"), slowDetect.promise, Promise.resolve({}));
+  mgate.set("work-vm");                                       // the switch beats git home
+  slowDetect.resolve(null);
+  const gateRes = await gateRun;
+  ok("merge gate: a stale gate reports blocked+stale, never a clear verdict",
+    gateRes.blocked === true && gateRes.stale === true);
+  deepEq("merge gate: ...and no branch was merged at all", merges, []);
+  // A switch AFTER the merge but before the verdict must still not read as "clear".
+  const slowRepo = deferred();
+  mgate.set("agent-vm");
+  const lateGate = mergeGate(capturedGate("agent-vm", "vm"), Promise.resolve(), slowRepo.promise,
+    () => mgate.set("work-vm"));
+  slowRepo.resolve({ conflict: false });
+  const lateRes = await lateGate;
+  ok("merge gate: a switch after the write still fails closed", lateRes.blocked && lateRes.stale);
+  deepEq("merge gate: ...on the CAPTURED branch, never the new instance's", merges, ["vm"]);
+  // The control: no switch — the captured branch is merged and the verdict is honest.
+  mgate.set("agent-vm");
+  const clean = await mergeGate(capturedGate("agent-vm", "vm"), Promise.resolve(), Promise.resolve({ conflict: false }));
+  ok("merge gate: without a switch the verdict is the repo's own", !clean.blocked && !clean.stale);
+  deepEq("merge gate: ...and it merged the captured branch", merges, ["vm", "vm"]);
 }
 
 asyncTests().then(() => {
