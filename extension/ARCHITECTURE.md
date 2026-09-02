@@ -76,7 +76,22 @@ extension/
     ssh.js            system-ssh runner (buildSshArgs/runRemote/runRemoteScript/isReachable);
                       cfg carries the active instance (vmHost/hostAlias/keyName/sshPort);
                       `-p` only for a non-22 port so the default argv is unchanged
-    probe.js          REMOTE_PROBE + parseProbe/extractVersion/toState/probe()
+    probe.js          REMOTE_PROBE + parseProbe/extractVersion/toState/probe(). The probe
+                      also reports the T3 HTTPS keys (T3CODE_HTTPS/_HTTPS_PORT/
+                      _PUBLIC_BASE_URL, written by bin/setup-t3-https.sh), and
+                      toState(map, {host}) turns them into the t3code agent's detail +
+                      `url` — https once the proxy is on, else today's http. A
+                      T3CODE_PUBLIC_BASE_URL from config.env is accepted only when
+                      isSafeOrigin() says it is a bare http(s) origin (it ends up in
+                      openExternal)
+    t3code.js         T3 Code live control: buildInstallScript/buildDisableScript (the
+                      EMBEDDED bash the settings toggle runs over SSH; both call the VM's
+                      bin/setup-t3-https.sh for the TLS front end, which is the one step
+                      too large to inline), buildPairingScript (two variants — default
+                      instance vs. one with a recorded CONSTRUCT_EXTERNAL_HOST — both
+                      minting the link against the VM's own origin, T3CODE_PUBLIC_BASE_URL
+                      first, so DPoP proofs match), extractPairUrl, baseUrl(cfg, probedUrl)
+                      and the _serial queue that makes the last toggle action win
     remote.js         open the VM over Remote-SSH: isConnectedToVm(remoteAuthority, cfg) +
                       vscode-remote://ssh-remote+<alias>/<path> URIs built from the ACTIVE
                       instance's hostAlias; openOnVm (vscode.openFolder,

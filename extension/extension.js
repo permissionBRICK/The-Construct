@@ -132,6 +132,13 @@ const forwarderSlot = instances.createSessionOwner();
 let forwarderArmed = null;
 /** The last snapshot it pushed, so a fresh webview renders the card immediately. */
 let cachedForwards = null;
+/**
+ * The T3 web origin the LAST probed state reported (https once Construct's TLS
+ * proxy is on, else plain http). Only used as the ▷ button's fallback when
+ * minting a pairing link fails; null whenever the probe saw no T3 Code, so a
+ * stale origin can never outlive an instance switch.
+ */
+let lastT3WebUrl = null;
 /** The active instance's idle policy (remote only), cached for the state push. */
 let cachedIdlePolicy = null;
 let cachedIdlePolicyInstance = null;
@@ -457,6 +464,12 @@ function instanceState(inst) {
 let cachedConfigSync = null;
 
 function postState(target, state) {
+  // Every state push funnels through here, so this is the one place that always
+  // sees a freshly probed agents list.
+  if (Array.isArray(state.agents)) {
+    const t3 = state.agents.find((a) => a && a.id === "t3code");
+    lastT3WebUrl = (t3 && typeof t3.url === "string" && t3.url) ? t3.url : null;
+  }
   const extra = { usagePeriod: usageReport };
   if (cachedConfigSync) extra.configSync = cachedConfigSync;
   // Forwards + idle policy ride every push, so a webview that opens mid-session renders
@@ -3860,7 +3873,9 @@ function handleMessage(message, webview, context) {
       if (id === "openAgentWeb") {
         // The agents-list ▷ button: only T3 Code has a browser UI today. Mints a
         // one-time pairing link over SSH and opens it in the host browser.
-        if (message.agent === "t3code") t3code.openWebUi({ cfg: activeCfg(), instance: activeInstance() });
+        if (message.agent === "t3code") {
+          t3code.openWebUi({ cfg: activeCfg(), instance: activeInstance(), webUrl: lastT3WebUrl });
+        }
         return;
       }
       if (id === "connect") { remote.openOnVm({ path: "/root/repos", newWindow: false, cfg: activeCfg() }); return; }

@@ -82,6 +82,16 @@ ok("install: writes the t3code-serve unit", /\/etc\/systemd\/system\/t3code-serv
 // systemd to expand — i.e. escaped (\$) inside the unquoted heredoc.
 ok("install: unit placeholders escaped for systemd, not the shell", /--host \\\$\{T3CODE_HOST\} --port \\\$\{T3CODE_PORT\}/.test(inst));
 ok("install: enables + restarts the service and verifies it's active", /systemctl enable t3code-serve/.test(inst) && /systemctl restart t3code-serve/.test(inst) && /is-active --quiet t3code-serve/.test(inst));
+// The HTTPS front end is the one non-embedded step (certificates + nginx are too
+// much to inline). It must run BEFORE the restart so `t3 serve` starts with
+// T3CODE_PUBLIC_BASE_URL in its environment, and an old VM copy without the
+// script must say so instead of failing the toggle.
+ok("install: sets up HTTPS via the repo script before restarting the service",
+  /bash \/opt\/construct\/repo\/bin\/setup-t3-https\.sh/.test(inst) &&
+  inst.indexOf("setup-t3-https.sh") < inst.indexOf("systemctl restart t3code-serve"));
+ok("install: a Construct copy without the HTTPS script degrades to a note",
+  /-f \/opt\/construct\/repo\/bin\/setup-t3-https\.sh/.test(inst) &&
+  /predates T3 HTTPS support/.test(inst) && /stays on plain http/.test(inst));
 
 // ── buildInstallScript (nightly channel) ─────────────────────────────────────
 const instN = t3.buildInstallScript("nightly");
@@ -96,6 +106,10 @@ ok("disable: clears voice capability and stale Desktop handoff state",
   /cfgset CONSTRUCT_T3_VOICE_INPUT false/.test(dis) && /t3code-desktop-status/.test(dis) &&
   /t3code-installed-build/.test(dis));
 ok("disable: stops + disables the service, best-effort", /systemctl disable --now t3code-serve/.test(dis) && /exit 0/.test(dis));
+// Tearing the proxy down must NOT rewrite the T3CODE_HTTPS preference (or drop
+// the CA), so re-enabling T3 Code brings HTTPS back without a new trust import.
+ok("disable: tears the HTTPS proxy down with --teardown (preference + CA kept)",
+  /setup-t3-https\.sh --teardown/.test(dis) && !/cfgset T3CODE_HTTPS/.test(dis));
 
 // ── buildPairingScript ────────────────────────────────────────────────────────
 const pair = t3.buildPairingScript();
@@ -103,13 +117,16 @@ ok("pairing: mints a one-time token as JSON against the mshome.net base URL",
   /t3 auth pairing create --json/.test(pair) && /mshome\.net/.test(pair) && /--base-url/.test(pair));
 ok("pairing: silences CLI logs so stdout stays parseable", /--log-level none/.test(pair));
 
-// ZERO-CHANGE PIN. This string is the remote command an existing install sends over
-// SSH; for the default instance it must be BYTE-IDENTICAL to what shipped before
-// instances existed (commit f84f554), not merely equivalent. The WHOLE script is
-// pinned — prelude included — because every byte of it crosses the SSH boundary: a
-// change to PRELUDE alone would still change the command an unchanged install runs.
-// If a change to the pairing script is intended it belongs in the NON-default branch,
-// and this literal stays put.
+// FULL-SCRIPT PIN. This string is the remote command an existing install sends
+// over SSH, so every byte of it matters and the WHOLE script is pinned — prelude
+// included. It used to be pinned to the pre-instances command (commit f84f554) as
+// a zero-change bar for that refactor. HTTPS support DELIBERATELY changed it: the
+// scheme now comes from the VM, because a browser only exposes getUserMedia() on a
+// secure origin and the pairing token is bound to the origin that minted it. The
+// pin therefore moved to the new value rather than being dropped — an unintended
+// edit still fails here. Note what did NOT change: on a VM with no TLS proxy every
+// new key reads empty and t3base() produces exactly the old http URL, and the
+// default instance still reads no CONSTRUCT_EXTERNAL_HOST.
 const PAIRING_DEFAULT_SCRIPT = `set -uo pipefail
 CONFIG_FILE=/etc/construct/config.env
 cfgget() { sed -n "s/^$1=//p" "$CONFIG_FILE" 2>/dev/null | head -1; }
@@ -120,17 +137,83 @@ cfgset() {
 T3CODE_HOST="$(cfgget T3CODE_HOST)"; T3CODE_HOST="\${T3CODE_HOST:-0.0.0.0}"
 T3CODE_PORT="$(cfgget T3CODE_PORT)"; T3CODE_PORT="\${T3CODE_PORT:-5177}"
 WORKSPACE_ROOT="$(cfgget WORKSPACE_ROOT)"; WORKSPACE_ROOT="\${WORKSPACE_ROOT:-/root/repos}"
+T3CODE_HTTPS="$(cfgget T3CODE_HTTPS)"
+T3CODE_HTTPS_PORT="$(cfgget T3CODE_HTTPS_PORT)"; T3CODE_HTTPS_PORT="\${T3CODE_HTTPS_PORT:-5178}"
+T3CODE_PUBLIC_BASE_URL="$(cfgget T3CODE_PUBLIC_BASE_URL)"
+# The origin the pairing link is minted against, given the client-reachable host
+# in $1. T3CODE_PUBLIC_BASE_URL (written by bin/setup-t3-https.sh) WINS: T3's DPoP
+# proofs are bound to the exact origin the browser dialled, so the link must name
+# the same one the server was told to advertise.
+t3base() {
+  if [ -n "$T3CODE_PUBLIC_BASE_URL" ]; then printf '%s' "$T3CODE_PUBLIC_BASE_URL"; return 0; fi
+  if [ "$T3CODE_HTTPS" = true ]; then printf 'https://%s:%s' "$1" "$T3CODE_HTTPS_PORT"
+  else printf 'http://%s:%s' "$1" "$T3CODE_PORT"; fi
+}
 
 command -v t3 >/dev/null 2>&1 || { echo "t3 is not installed" >&2; exit 1; }
-base="http://$(hostname).mshome.net:\${T3CODE_PORT}"
+base="$(t3base "$(hostname).mshome.net")"
 t3 auth pairing create --json --ttl 10m --label "construct-control-panel" --base-url "$base" --log-level none
 `;
-ok("pairing(default): the WHOLE script is byte-identical to the pre-instances one",
+ok("pairing(default): the WHOLE script matches the pin",
   pair === PAIRING_DEFAULT_SCRIPT,
   JSON.stringify(pair));
-ok("pairing(default): ...and is still the expected 825 bytes",
-  Buffer.byteLength(pair, "utf8") === 825, String(Buffer.byteLength(pair, "utf8")));
+ok("pairing(default): ...and is still the expected 1551 bytes",
+  Buffer.byteLength(pair, "utf8") === 1551, String(Buffer.byteLength(pair, "utf8")));
 ok("pairing(default): reads NO CONSTRUCT_EXTERNAL_HOST", !/CONSTRUCT_EXTERNAL_HOST/.test(pair));
+
+// ── HTTPS-aware pairing URL ──────────────────────────────────────────────────
+// The scheme decision lives in the generated bash, so it is EXECUTED here (with
+// stub config.env files) rather than pattern-matched: the whole point is which
+// --base-url the CLI is finally handed.
+(() => {
+  const cp = require("child_process");
+  const os = require("os");
+  const fsx = require("fs");
+  const probeBase = (cfgLines, instance) => {
+    const dir = fsx.mkdtempSync(path.join(os.tmpdir(), "t3pair-"));
+    const cfg = path.join(dir, "config.env");
+    fsx.writeFileSync(cfg, cfgLines.join("\n") + (cfgLines.length ? "\n" : ""));
+    const bin = path.join(dir, "bin");
+    fsx.mkdirSync(bin);
+    // Stubs: `t3` echoes the base URL it was given, `hostname` is fixed.
+    fsx.writeFileSync(path.join(bin, "t3"),
+      '#!/bin/sh\nwhile [ $# -gt 0 ]; do if [ "$1" = "--base-url" ]; then echo "$2"; fi; shift; done\n', { mode: 0o755 });
+    fsx.writeFileSync(path.join(bin, "hostname"), "#!/bin/sh\necho testvm\n", { mode: 0o755 });
+    // Point the script at the fixture config.env without touching /etc.
+    const script = t3.buildPairingScript(instance).replace(
+      "CONFIG_FILE=/etc/construct/config.env", "CONFIG_FILE=" + cfg);
+    const r = cp.spawnSync("bash", ["-c", script], {
+      encoding: "utf8", env: { ...process.env, PATH: bin + ":" + process.env.PATH },
+    });
+    fsx.rmSync(dir, { recursive: true, force: true });
+    return { out: (r.stdout || "").trim(), code: r.status, err: (r.stderr || "").trim() };
+  };
+  if (cp.spawnSync("bash", ["-c", "true"]).error) {
+    console.log("  SKIP  pairing base-url execution — bash unavailable");
+    return;
+  }
+  const noHttps = probeBase([]);
+  ok("pairing: no HTTPS keys -> today's plain http URL", noHttps.out === "http://testvm.mshome.net:5177", noHttps.out + " " + noHttps.err);
+  const httpsOn = probeBase(["T3CODE_HTTPS=true"]);
+  ok("pairing: T3CODE_HTTPS=true -> https on the HTTPS port", httpsOn.out === "https://testvm.mshome.net:5178", httpsOn.out);
+  const httpsPort = probeBase(["T3CODE_HTTPS=true", "T3CODE_HTTPS_PORT=6443"]);
+  ok("pairing: honours T3CODE_HTTPS_PORT", httpsPort.out === "https://testvm.mshome.net:6443", httpsPort.out);
+  const publicUrl = probeBase(["T3CODE_HTTPS=true", "T3CODE_PUBLIC_BASE_URL=https://vm.example.com:5178"]);
+  ok("pairing: T3CODE_PUBLIC_BASE_URL wins (DPoP binds to that exact origin)",
+    publicUrl.out === "https://vm.example.com:5178", publicUrl.out);
+  const httpsOff = probeBase(["T3CODE_HTTPS=false", "T3CODE_HTTPS_PORT=5178"]);
+  ok("pairing: T3CODE_HTTPS=false stays on http", httpsOff.out === "http://testvm.mshome.net:5177", httpsOff.out);
+  // The instance variant resolves the host differently but must make the SAME
+  // scheme decision.
+  const remoteInst = require("../src/instances")
+    .deriveDefaults("work-vm", { sshHost: "buildbox.local", sshPort: 2201 });
+  const instHttps = probeBase(["T3CODE_HTTPS=true", "CONSTRUCT_EXTERNAL_HOST=buildbox.local"], remoteInst);
+  ok("pairing(instance): https + the recorded external host",
+    instHttps.out === "https://buildbox.local:5178", instHttps.out);
+  const instHttp = probeBase(["CONSTRUCT_EXTERNAL_HOST=buildbox.local"], remoteInst);
+  ok("pairing(instance): plain http when the proxy is off",
+    instHttp.out === "http://buildbox.local:5177", instHttp.out);
+})();
 const instances = require("../src/instances");
 ok("pairing(default instance object): same script as passing nothing",
   t3.buildPairingScript(instances.DEFAULT_INSTANCE) === pair);
@@ -154,6 +237,15 @@ ok("extractPairUrl: empty on garbage", t3.extractPairUrl("no json here") === "" 
 // ── baseUrl fallback ──────────────────────────────────────────────────────────
 ok("baseUrl: defaults to the VM DNS + default port", t3.baseUrl() === "http://agent-vm.mshome.net:5177");
 ok("baseUrl: honors a cfg vmHost override", t3.baseUrl({ vmHost: "other.host" }) === "http://other.host:5177");
+// The probed origin (probe.js toState -> the t3code agent's url) knows whether the
+// TLS proxy is on, so it wins -- but only after validation: it comes from the VM's
+// config.env and is handed to openExternal.
+ok("baseUrl: uses the probed https origin when there is one",
+  t3.baseUrl({ vmHost: "other.host" }, "https://vm.example.com:5178") === "https://vm.example.com:5178");
+ok("baseUrl: rejects a non-origin probed value and falls back",
+  t3.baseUrl({ vmHost: "other.host" }, "javascript:alert(1)") === "http://other.host:5177" &&
+  t3.baseUrl({ vmHost: "other.host" }, "https://vm.example.com/pair#tok") === "http://other.host:5177" &&
+  t3.baseUrl({ vmHost: "other.host" }, "") === "http://other.host:5177");
 
 // ── planT3LiveAction ─────────────────────────────────────────────────────────
 const plan = t3.planT3LiveAction;

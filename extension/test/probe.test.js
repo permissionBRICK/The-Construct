@@ -132,5 +132,47 @@ ok("state: t3code enabled without version shows placeholder + default port, no w
 const t3absent = probe.toState(probe.parseProbe("AI_TOOLS\tclaude-code\nT3_ACTIVE\tinactive\n"));
 ok("state: no t3code when neither enabled nor installed", !t3absent.agents.some((a) => a.id === "t3code"));
 
+// ── T3 Code over HTTPS (bin/setup-t3-https.sh) ───────────────────────────────
+ok("probe script emits the HTTPS keys",
+  /emit T3CODE_HTTPS /.test(probe.REMOTE_PROBE) && /emit T3CODE_HTTPS_PORT /.test(probe.REMOTE_PROBE) &&
+  /emit T3CODE_PUBLIC_BASE_URL /.test(probe.REMOTE_PROBE));
+// `^T3CODE_HTTPS=` must not also swallow the T3CODE_HTTPS_PORT line.
+ok("probe script reads T3CODE_HTTPS with an anchored, '='-terminated match",
+  /s\/\^T3CODE_HTTPS=\/\/p/.test(probe.REMOTE_PROBE));
+const t3agentOf = (map, opts) => probe.toState(probe.parseProbe(map), opts).agents.find((a) => a.id === "t3code");
+// Off (or absent): today's http origin and port, unchanged.
+const httpAgent = t3agentOf("T3CODE\ttrue\nT3CODE_PORT\t5177\nT3_ACTIVE\tactive\n", { host: "agent-vm.mshome.net" });
+ok("state: without HTTPS the url + detail stay on the http port",
+  !!httpAgent && httpAgent.url === "http://agent-vm.mshome.net:5177" && /:5177/.test(httpAgent.detail) &&
+  !/https/.test(httpAgent.detail));
+// On: the https port is what the panel shows and opens.
+const httpsAgent = t3agentOf("T3CODE\ttrue\nT3CODE_PORT\t5177\nT3CODE_HTTPS\ttrue\nT3CODE_HTTPS_PORT\t5178\nT3_ACTIVE\tactive\n", { host: "agent-vm.mshome.net" });
+ok("state: HTTPS on -> https url on the HTTPS port",
+  !!httpsAgent && httpsAgent.url === "https://agent-vm.mshome.net:5178");
+ok("state: HTTPS on -> detail names the https port and marks the scheme",
+  !!httpsAgent && /:5178/.test(httpsAgent.detail) && /https/.test(httpsAgent.detail), httpsAgent && httpsAgent.detail);
+// The VM-recorded public origin wins: DPoP proofs are bound to that exact origin.
+const publicAgent = t3agentOf("T3CODE\ttrue\nT3CODE_HTTPS\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://vm.example.com:5178\nT3_ACTIVE\tactive\n", { host: "agent-vm.mshome.net" });
+ok("state: T3CODE_PUBLIC_BASE_URL wins over the probed host",
+  !!publicAgent && publicAgent.url === "https://vm.example.com:5178");
+// ...but only when it IS an origin: the value comes from a user-editable file and
+// ends up in openExternal.
+const poisonAgent = t3agentOf("T3CODE\ttrue\nT3CODE_HTTPS\ttrue\nT3CODE_PUBLIC_BASE_URL\tjavascript:alert(1)\nT3_ACTIVE\tactive\n", { host: "agent-vm.mshome.net" });
+ok("state: a non-origin T3CODE_PUBLIC_BASE_URL is rejected, host fallback used",
+  !!poisonAgent && poisonAgent.url === "https://agent-vm.mshome.net:5178");
+ok("isSafeOrigin: accepts http/https origins with and without a port, brackets IPv6",
+  probe.isSafeOrigin("https://vm.example.com:5178") && probe.isSafeOrigin("http://vm") &&
+  probe.isSafeOrigin("https://[2001:db8::1]:5178"));
+ok("isSafeOrigin: rejects paths, other schemes, spaces and empties",
+  !probe.isSafeOrigin("https://vm/pair") && !probe.isSafeOrigin("javascript:alert(1)") &&
+  !probe.isSafeOrigin("https://vm example") && !probe.isSafeOrigin("") && !probe.isSafeOrigin(null));
+// An IPv6 external host must come back bracketed in the URL.
+const v6Agent = t3agentOf("T3CODE\ttrue\nT3CODE_HTTPS\ttrue\nT3_ACTIVE\tactive\n", { host: "2001:db8::1" });
+ok("state: IPv6 host is bracketed in the T3 url", !!v6Agent && v6Agent.url === "https://[2001:db8::1]:5178");
+// Without a host (toState called with one argument, as the older callers do) the
+// entry simply carries no url -- never a half-built one.
+const noHostAgent = t3agentOf("T3CODE\ttrue\nT3CODE_HTTPS\ttrue\n");
+ok("state: no host -> no url field", !!noHostAgent && !("url" in noHostAgent));
+
 console.log(`\n  probe/ssh unit tests — ${pass}/${pass + fail} passed\n`);
 process.exit(fail ? 1 : 0);
