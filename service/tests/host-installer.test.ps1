@@ -110,7 +110,7 @@ $expectedInstall = @(
     "SwitchName", "WslDistro", "ListenAddress",
     "IsoSourcePath", "IsoSourceUrl", "IsoSha256",
     "AdminUser", "AdminMaxVms", "SkipPrereqs", "SkipAclHardening",
-    "ProvisionWslForService", "RotateAdminToken", "NoStart")
+    "SkipIsoBuild", "IsoBuildOnly", "RotateAdminToken", "NoStart")
 
 foreach ($name in $expectedInstall) {
     ok "installer has -$name" ($install.ContainsKey($name))
@@ -132,8 +132,11 @@ ok "installer -NoStart is a switch" ($install["NoStart"].Type -eq "SwitchParamet
 ok "installer -AdminMaxVms is an int" ($install["AdminMaxVms"].Type -eq "Int32")
 ok "installer -SkipAclHardening is a switch (hardening is the default)" (
     $install["SkipAclHardening"].Type -eq "SwitchParameter" -and $null -eq $install["SkipAclHardening"].Default)
-ok "installer -ProvisionWslForService is opt-in" (
-    $install["ProvisionWslForService"].Type -eq "SwitchParameter" -and $null -eq $install["ProvisionWslForService"].Default)
+ok "installer -SkipIsoBuild is opt-in (the ISO is built by default)" (
+    $install["SkipIsoBuild"].Type -eq "SwitchParameter" -and $null -eq $install["SkipIsoBuild"].Default)
+ok "installer -IsoBuildOnly is opt-in" (
+    $install["IsoBuildOnly"].Type -eq "SwitchParameter" -and $null -eq $install["IsoBuildOnly"].Default)
+ok "the installer no longer takes -ProvisionWslForService" (-not $install.ContainsKey("ProvisionWslForService"))
 ok "installer -RotateAdminToken is opt-in" (
     $install["RotateAdminToken"].Type -eq "SwitchParameter" -and $null -eq $install["RotateAdminToken"].Default)
 
@@ -183,9 +186,8 @@ Write-Host "=== Helpers ===" -ForegroundColor Cyan
 foreach ($fn in $functions) {
     if ($fn.Name -in @("Split-PortRange", "Get-ListenPort", "Get-ConstructAclPolicy",
                        "Get-ConstructTrustedSid", "Get-ConstructAncestorRiskMask",
-                       "Get-ConstructWriteRiskMask", "Get-ConstructUnsafeAce", "Resolve-ConstructAceSid", "Sort-ConstructHardeningOrder", "Test-ConstructTaskStillRunning", "Format-ConstructCommandOutput",
-                       "ConvertTo-ConstructPayload", "New-ConstructRelaunchScript",
-                       "New-ConstructLocalSystemScript")) {
+                       "Get-ConstructWriteRiskMask", "Get-ConstructUnsafeAce", "Resolve-ConstructAceSid", "Sort-ConstructHardeningOrder", "Format-ConstructCommandOutput",
+                       "ConvertTo-ConstructPayload", "New-ConstructRelaunchScript")) {
         . ([scriptblock]::Create($fn.Extent.Text))
     }
 }
@@ -271,8 +273,8 @@ $installAstText = Get-Content -Raw -LiteralPath $installer
 ok "the installer hardens the publish directory" ($installAstText -match '@\{ Path = \$PublishDir;\s+Kind = ''Code'';\s+Name = "-PublishDir" \}')
 ok "the installer hardens the scripts directory" ($installAstText -match '@\{ Path = \$ScriptsDir;\s+Kind = ''Code'';\s+Name = "-ScriptsDir" \}')
 ok "the installer hardens one protected service root" ($installAstText -match '@\{ Path = \$serviceRoot; Kind = ''Data''; Name = "the service root" \}')
-ok "the WSL distro is imported under the protected root" ($installAstText -match '\$wslRoot = Join-Path \$serviceRoot "wsl"')
-ok "the imported WSL distro is hardened too" ($installAstText -match 'Set-ConstructPathAcl -Path \$importTo -Kind Data')
+ok "the ISO catalog lives under the protected service root" ($installAstText -match '\$isoCacheDir = Join-Path \$DataDir "iso"')
+ok "no LocalSystem WSL directory is created any more" (-not ($installAstText -match '\$wslRoot'))
 ok "the installer refuses reparse points" ($installAstText -match 'ReparsePoint')
 ok "the installer refuses paths under a user profile root" ($installAstText -match 'user profile root')
 ok "the installer rejects overlapping port ranges" ($installAstText -match 'overlap')
@@ -280,9 +282,9 @@ ok "the installer rejects overlapping port ranges" ($installAstText -match 'over
 # Hardening has to happen before anything is put in those directories, and long
 # before the service can ever run from them.
 $aclAt      = $installAstText.IndexOf('foreach ($entry in (Sort-ConstructHardeningOrder -Entries $hardening))')
-$importAt   = $installAstText.IndexOf("Provisioning WSL distro")
+$isoAt      = $installAstText.IndexOf("Building the autoinstall ISO (as you, via WSL)")
 $registerAt = $installAstText.IndexOf("Registering the Windows service")
-ok "paths are hardened before the WSL import" ($aclAt -gt 0 -and $aclAt -lt $importAt)
+ok "paths are hardened before anything is built into them" ($aclAt -gt 0 -and $aclAt -lt $isoAt)
 ok "paths are hardened before the service is registered" ($aclAt -gt 0 -and $aclAt -lt $registerAt)
 
 # ── (d4) The ancestor / descendant ACL decision ──────────────────────────────
@@ -452,13 +454,10 @@ foreach ($value in $nasty) {
 
     # ...and never appears as SOURCE in the script that runs in the privileged context.
     # The relaunch script carries the payload, but only as inert base64.
-    $localSystemScript = New-ConstructLocalSystemScript `
-        -PayloadFile "C:\Windows\Temp\constructd-1.json" -OutputFile "C:\Windows\Temp\constructd-1.txt"
     $relaunchScript = New-ConstructRelaunchScript `
         -ScriptPath "C:\Construct\service\host\Install-ConstructHost.ps1" -PayloadJson $payload
 
-    ok "no generated script contains that value" (
-        -not $localSystemScript.Contains($value) -and -not $relaunchScript.Contains($value))
+    ok "no generated script contains that value" (-not $relaunchScript.Contains($value))
 
     # And it really is still there, recoverable byte for byte from the base64 the
     # elevated copy decodes -- inertness that lost the value would be no good.
@@ -469,13 +468,6 @@ foreach ($value in $nasty) {
 
 ok "a switch is serialized as a boolean so it splats back" (
     (ConvertFrom-Json (ConvertTo-ConstructPayload -Values @{ NoStart = [switch]$true })).NoStart -eq $true)
-
-# The generated scripts must read their inputs, not embed them.
-$localSystemScript = New-ConstructLocalSystemScript `
-    -PayloadFile "C:\Windows\Temp\constructd-1.json" -OutputFile "C:\Windows\Temp\constructd-1.txt"
-ok "the LocalSystem script reads a payload file" ($localSystemScript -match 'ConvertFrom-Json')
-ok "the LocalSystem script splats the argument list" ($localSystemScript -match '@\(\$spec\.ArgumentList\)')
-ok "the LocalSystem script propagates the exit code" ($localSystemScript -match 'exit \$LASTEXITCODE')
 
 $relaunchScript = New-ConstructRelaunchScript `
     -ScriptPath "C:\Construct\service\host\Install-ConstructHost.ps1" `
@@ -494,12 +486,15 @@ ok "the elevation script reads NO file for its parameters" (
     -not ($relaunchScript -match 'Get-Content') -and -not ($relaunchScript -match 'LiteralPath'))
 ok "the installer never stages elevation parameters in the user's temp directory" (
     -not ($installAstText -match 'GetTempPath'))
-ok "the only temp paths the installer uses are under SystemRoot" (
-    $installAstText -match 'Join-Path \$env:SystemRoot "Temp\\')
+# Nothing crosses a privilege boundary through a file any more: with the LocalSystem
+# task runner gone, the installer writes no temp file at all.
+ok "the installer stages nothing in any temp directory" (
+    -not ($installAstText -match 'GetTempPath') -and -not ($installAstText -match 'SystemRoot\) "Temp'))
 
-# A path of ours with an apostrophe still cannot end the literal.
-$quoted = New-ConstructLocalSystemScript -PayloadFile "C:\Temp\it's.json" -OutputFile "C:\Temp\out.txt"
-ok "our own paths are escaped as PowerShell literals" ($quoted -match "it''s")
+# A path of ours with an apostrophe still cannot end a literal.
+$relaunchQuoted = New-ConstructRelaunchScript -ScriptPath "C:\Temp\it's\Install-ConstructHost.ps1" `
+    -PayloadJson (ConvertTo-ConstructPayload -Values @{ ScriptsDir = "C:\Construct" })
+ok "our own paths are escaped as PowerShell literals" ($relaunchQuoted -match "it''s")
 
 # And the distro name is constrained before it ever gets that far.
 ok "-WslDistro is constrained by a ValidatePattern" ($null -ne $install["WslDistro"].ValidatePattern)
@@ -579,52 +574,114 @@ ok "a non-admin existing account is a hard error" ($installText -match "not Admi
 # A token per reinstall would leave a pile of permanent credentials behind.
 ok "a token is only issued on creation or on -RotateAdminToken" ($installText -match '\$created -or \$RotateAdminToken')
 
-# ── (g) WSL under the service identity ───────────────────────────────────────
+# ── (g) The ISO build: as the ADMIN, not as the service ──────────────────────
 Write-Host ""
-Write-Host "=== WSL under LocalSystem ===" -ForegroundColor Cyan
+Write-Host "=== The autoinstall ISO step ===" -ForegroundColor Cyan
 
-# WSL distros are registered per Windows user; checking them as the elevated
-# administrator says nothing about what LocalSystem will see at the first VM build.
-ok "the installer can run a command as LocalSystem" ($installText -match 'function Invoke-AsLocalSystem')
-ok "it uses the LocalSystem SID for the task principal" ($installText -match 'New-ScheduledTaskPrincipal -UserId "S-1-5-18"')
-# Field failure (2026-09-02): Get-ScheduledTask -TaskName died with 0x80041318 because of an
-# unrelated corrupt task in the root folder, and the loop then reported 267009
-# (SCHED_S_TASK_RUNNING) as the WSL command's exit code.
-$taskConsts = $installAst.FindAll({ $args[0] -is [System.Management.Automation.Language.AssignmentStatementAst] -and
-    $args[0].Left.Extent.Text -like '$script:Sched*' -or $args[0].Left.Extent.Text -like '$script:TaskState*' -or $args[0].Left.Extent.Text -eq '$script:ConstructTaskPath' }, $true)
-foreach ($c in $taskConsts) { . ([scriptblock]::Create($c.Extent.Text)) }
-ok "task runner: a result of SCHED_S_TASK_RUNNING (267009) is 'still running', never an exit code" `
-    (Test-ConstructTaskStillRunning -Status @{ State = 3; LastTaskResult = 267009 })
-ok "task runner: COM state 4 (running) is still running" (Test-ConstructTaskStillRunning -Status @{ State = 4; LastTaskResult = 0 })
-ok "task runner: the CIM 'Running' string is still running" (Test-ConstructTaskStillRunning -Status @{ State = 'Running'; LastTaskResult = 0 })
-ok "task runner: ready + exit 0 is finished" (-not (Test-ConstructTaskStillRunning -Status @{ State = 3; LastTaskResult = 0 }))
-ok "task runner: ready + a real non-zero exit is finished" (-not (Test-ConstructTaskStillRunning -Status @{ State = 3; LastTaskResult = 1 }))
-ok "task runner: an unreadable status counts as still running (keeps waiting instead of misreporting)" (Test-ConstructTaskStillRunning -Status $null)
-ok "task runner: the one-shot task lives in its own folder, not the root" ($script:ConstructTaskPath -eq '\Construct\' -and $installText -match 'Register-ScheduledTask -TaskName \$taskName -TaskPath \$script:ConstructTaskPath')
-ok "task runner: polls through the Schedule.Service COM object" ($installText -match 'New-Object -ComObject Schedule\.Service')
-ok "task runner: the CIM fallback is scoped to the Construct folder" ($installText -match 'Get-ScheduledTask\s+-TaskName \$TaskName -TaskPath \$script:ConstructTaskPath')
-ok "task runner: the exit code comes from the final status, not a pre-loop Get-ScheduledTaskInfo" ($installText -match 'ExitCode = \[int\]\$status\.LastTaskResult' -and -not ($installText -match '\$info = Get-ScheduledTaskInfo -TaskName \$taskName\s*$'))
-ok "failed LocalSystem commands report what they printed, not only the exit code" ($installText -match 'Format-ConstructCommandOutput -Output \$listing\.Output')
+# Field finding (2026-09-02, standpc, WSL 2.6.3): wsl.exe as LocalSystem exits with
+# Wsl/WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED, and LocalSystem is the identity the service
+# runs as. So the media is built HERE, by the administrator running the installer, and
+# the service only consumes it (plan section 4.10). Every trace of the old
+# "run WSL as LocalSystem" path must be gone -- a leftover would fail every install.
+ok "no LocalSystem command runner is left" (-not ($installText -match 'Invoke-AsLocalSystem'))
+ok "no scheduled task is registered any more" (-not ($installText -match 'Register-ScheduledTask'))
+ok "no LocalSystem task principal is left" (-not ($installText -match 'New-ScheduledTaskPrincipal'))
+ok "no LocalSystem script is generated any more" (-not ($installText -match 'New-ConstructLocalSystemScript'))
+ok "the 'check WSL under LocalSystem' step is gone" (
+    -not ($installText -match 'Checking WSL under the service identity'))
+ok "nothing runs wsl.exe as LocalSystem any more" (
+    -not ($installText -match 'wsl\.exe" -ArgumentList'))
+ok "the WSL distro is no longer exported/imported" (
+    -not ($installText -match 'wsl\.exe --export') -and -not ($installText -match '"--import"'))
+
+# What replaces it.
+ok "the interactive WSL check stays" ($installText -match 'Checking WSL \(the ISO build runs xorriso inside it, as YOU\)')
+ok "a missing WSL is still a hard error" ($installText -match 'WSL is not installed')
+ok "a missing distro is still a hard error" ($installText -match 'WSL is installed but has no distro')
+ok "xorriso + whois are ensured in the ADMIN's distro" (
+    $installText -match 'Ensuring xorriso \+ whois inside your WSL distro')
+ok "...as root inside the distro, through an argument list" (
+    $installText -match '"-u", "root", "--", "bash", "-lc"' -and $installText -match '& wsl\.exe @ensureArgs')
+ok "a failed package install fails the install, showing what it printed" (
+    $installText -match 'Could not install xorriso/whois inside WSL' -and
+    $installText -match 'Format-ConstructCommandOutput -Output \$ensureOutput')
+
+# The CLI reads appsettings.Production.json for the cache directory and the source ISO, so
+# the environment has to be selected before the FIRST invocation, not before the admin steps.
+$envAt = $installText.IndexOf('$env:DOTNET_ENVIRONMENT = "Production"')
+ok "the production environment is selected before the executable is ever run" (
+    $envAt -gt 0 -and
+    $envAt -lt $installText.IndexOf('Invoke-ConstructIsoBuild -Exe $exe') -and
+    $envAt -lt $installText.IndexOf('Invoke-ConstructdAdmin -Exe $exe'))
+ok "...and only once" (
+    ([regex]::Matches($installText, [regex]::Escape('$env:DOTNET_ENVIRONMENT = "Production"'))).Count -eq 1)
+ok "the ISO is built through the service's own admin CLI" (
+    $installText -match '@\("admin", "iso", "build"\)')
+ok "the build is invoked with an argument list, never a command string" (
+    $installText -match '& \$Exe @arguments')
+ok "the step says whose WSL it uses" (
+    $installText -match 'Building the autoinstall ISO \(as you, via WSL\)')
+ok "a failed ISO build fails the install (fail closed)" (
+    $installText -match 'Building the autoinstall ISO failed \(exit \$isoExit\)')
+ok "...and shows what the build printed" (
+    $installText -match 'Format-ConstructCommandOutput -Output \$text -MaxLines 20')
+ok "the published path is read from the CLI's last line" ($installText -match '\$_ -like "ISO: \*"')
+ok "the build streams while it runs and is still captured" ($installText -match 'Tee-Object -Variable isoOutput')
+
+# -SkipIsoBuild defers it; -IsoBuildOnly is nothing but it.
+ok "-SkipIsoBuild skips the build and says what will fail" (
+    $installText -match '-SkipIsoBuild: no install media was built')
+ok "-SkipIsoBuild prints the command to run later" (
+    $installText -match '\$exe`" admin iso build')
+ok "-IsoBuildOnly rebuilds and stops before anything else" (
+    $installText -match 'Rebuilding the autoinstall ISO only \(-IsoBuildOnly\)')
+ok "-IsoBuildOnly refuses to run without the settings the build reads" (
+    $installText -match '-IsoBuildOnly needs an existing install')
+ok "-IsoBuildOnly forces a rebuild (that is what it is for)" (
+    $installText -match 'Invoke-ConstructIsoBuild -Exe \$exe -Force')
+ok "-IsoBuildOnly and -SkipIsoBuild together are refused" (
+    $installText -match '-IsoBuildOnly and -SkipIsoBuild contradict each other')
+ok "the enrollment summary prints the rebuild command" (
+    $installText -match 'admin iso build --force')
+ok "the enrollment summary prints how to inspect the media" (
+    $installText -match 'admin iso status')
+
+# The settings must select the strategy the installer just built for.
+ok "the service is configured for the pre-built strategy" ($installText -match 'Mode\s+= "Prebuilt"')
+ok "the guest identity source is written into the settings" (
+    $installText -match 'HostnameSource\s+= "hyperv-kvp"')
+
 ok "output formatter: empty output" ((Format-ConstructCommandOutput -Output '') -eq ' It printed nothing.')
 ok "output formatter: strips WSL's UTF-16 NULs and blank lines" ((Format-ConstructCommandOutput -Output "W`0S`0L`0 `0e`0r`0r`0o`0r`0`r`n`r`n") -eq " It said:`n    WSL error")
 ok "output formatter: caps the lines shown" ((Format-ConstructCommandOutput -Output ((1..12 | ForEach-Object { "l$_" }) -join "`n") -MaxLines 3) -match '\(\+9 more line\(s\)\)$')
-ok "task runner: cleanup unregisters from the same folder" ($installText -match 'Unregister-ScheduledTask -TaskName \$taskName -TaskPath \$script:ConstructTaskPath')
-ok "it lists the distros LocalSystem can see" (
-    $installText -match 'Invoke-AsLocalSystem -FilePath "wsl\.exe" -ArgumentList @\("-l", "-q"\)')
-ok "a LocalSystem check that cannot run fails the install" ($installText -match 'Could not list the WSL distros as LocalSystem')
-ok "-WhatIf does not read an empty answer as 'no distro'" ($installText -match '\$listing\.Simulated')
-ok "a distro missing for LocalSystem is a hard error" ($installText -match 'NOT for LocalSystem')
-ok "xorriso/whois are ensured inside the service's distro" (
-    $installText -match 'Ensuring xorriso \+ whois inside WSL \(as LocalSystem\)')
+
 ok "the OpenSSH client is installed rather than warned about" (
     $installText -match 'Add-WindowsCapability -Online -Name \$capability\.Name')
 ok "a missing OpenSSH client is a hard error" ($installText -match 'The OpenSSH client is required')
 
-# The service is registered only after the admin exists, so the host is reachable
-# the moment it comes up and nothing contends for the SQLite file.
-$adminAt   = $installText.IndexOf('"admin", "users", "add"')
-$serviceAt = $installText.IndexOf("Registering the Windows service")
+# Step order: settings -> ISO -> admin -> service. The ISO build needs the settings
+# (it reads the service's own configuration for the cache directory and the source
+# ISO), and the service is registered only after the admin exists, so the host is
+# reachable the moment it comes up and nothing contends for the SQLite file.
+$settingsAt = $installText.IndexOf("Writing appsettings.Production.json")
+$isoBuildAt = $installText.IndexOf("Building the autoinstall ISO (as you, via WSL)")
+$adminAt    = $installText.IndexOf('"admin", "users", "add"')
+$serviceAt  = $installText.IndexOf("Registering the Windows service")
+ok "the settings are written before the ISO is built" ($settingsAt -gt 0 -and $settingsAt -lt $isoBuildAt)
+ok "the ISO is built before the service is registered" ($isoBuildAt -gt 0 -and $isoBuildAt -lt $serviceAt)
 ok "the admin is created before the service is registered" ($adminAt -gt 0 -and $adminAt -lt $serviceAt)
+
+# ── (h) The uninstaller removes the ISO catalog with -RemoveData ─────────────
+Write-Host ""
+Write-Host "=== Uninstall: the ISO catalog ===" -ForegroundColor Cyan
+
+ok "-RemoveData removes the versioned ISOs" ($uninstallText -match 'construct-autoinstall-\*')
+ok "-RemoveData removes the pointer" ($uninstallText -match 'current\.pointer')
+ok "an ISO a VM still holds open is reported, not fatal" (
+    $uninstallText -match 'a VM probably still has it attached')
+ok "the data note mentions the media" ($uninstallText -match 'autoinstall ISOs')
+ok "nothing in the uninstaller talks about a LocalSystem WSL distro" (
+    -not ($uninstallText -match 'imports it for LocalSystem'))
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 Write-Host ""

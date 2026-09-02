@@ -10,9 +10,11 @@
 
     Two things are deliberately NOT removed unless you ask:
 
-      * The DATA DIRECTORY (users, tokens, the VM registry, the audit trail). It is
-        the record of who had what, and a reinstall on the same host is expected to
-        find it. -RemoveData deletes it.
+      * The DATA DIRECTORY (users, tokens, the VM registry, the audit trail, and the
+        autoinstall ISO catalog under <DataDir>\iso). It is the record of who had
+        what, and a reinstall on the same host is expected to find it -- including
+        the install media, which takes twenty minutes to rebuild. -RemoveData
+        deletes all of it.
       * The VMs themselves. This script never touches Hyper-V: deleting a colleague's
         VM is not an uninstall step. Remove them through the API (or
         Remove-ConstructVm) first if that is what you want.
@@ -30,8 +32,9 @@
     Also delete the self-signed certificate the installer created for -PublicHost.
 
 .PARAMETER RemoveData
-    Also delete the data directory. This is irreversible: users, tokens and the
-    audit trail go with it.
+    Also delete the data directory. This is irreversible: users, tokens, the audit
+    trail and the autoinstall ISO catalog (the versioned ISOs, their sidecars and the
+    'current' pointer) go with it.
 
 .EXAMPLE
     .\Uninstall-ConstructHost.ps1 -WhatIf
@@ -318,10 +321,30 @@ if (-not $RemoveCertificate) {
 
 Write-Step "Data directory"
 if (-not $RemoveData) {
-    Write-Note "$DataDir left in place (users, tokens, VM registry, audit trail). Pass -RemoveData to delete it."
+    Write-Note "$DataDir left in place (users, tokens, VM registry, audit trail, autoinstall ISOs). Pass -RemoveData to delete it."
 } elseif (-not (Test-Path -LiteralPath $DataDir)) {
     Write-Note "$DataDir does not exist"
 } else {
+    # The ISO catalog first, one file at a time. Hyper-V holds an open handle on an ISO
+    # that is still attached to a VM, so a recursive delete would fail on it and take
+    # the rest of the data directory with it -- and this script never touches VMs.
+    $isoDir = Join-Path $DataDir "iso"
+    if (Test-Path -LiteralPath $isoDir) {
+        $held = 0
+        foreach ($file in @(Get-ChildItem -LiteralPath $isoDir -File -ErrorAction SilentlyContinue |
+                            Where-Object { $_.Name -like "construct-autoinstall-*" -or $_.Name -eq "current.pointer" })) {
+            if ($PSCmdlet.ShouldProcess($file.FullName, "Delete the autoinstall ISO catalog entry")) {
+                try {
+                    Remove-Item -LiteralPath $file.FullName -Force -ErrorAction Stop
+                } catch {
+                    Write-Warning "Could not delete $($file.Name): a VM probably still has it attached."
+                    $held++
+                }
+            }
+        }
+        if ($held -eq 0) { Write-Ok "Autoinstall ISO catalog removed" }
+    }
+
     if ($PSCmdlet.ShouldProcess($DataDir, "Delete the data directory and everything in it")) {
         Remove-Item -LiteralPath $DataDir -Recurse -Force
     }

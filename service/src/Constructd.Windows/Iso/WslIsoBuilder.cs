@@ -10,16 +10,44 @@ namespace Constructd.Windows.Iso;
 /// The autoinstall ISO could not be built. As with the driver, the message names the VM and nothing
 /// else, because it is what reaches the job error, the audit trail and the API response.
 /// </summary>
-public sealed class IsoBuildException(string vmName, string? detail = null)
-    : Exception($"Building the autoinstall ISO for VM '{vmName}' failed."), IConstructdError
+public sealed class IsoBuildException : Exception, IConstructdError
 {
-    public string VmName { get; } = vmName;
+    public IsoBuildException(string vmName, string? detail = null)
+        : this($"Building the autoinstall ISO for VM '{vmName}' failed.", vmName, detail)
+    {
+    }
+
+    private IsoBuildException(string message, string? vmName, string? detail)
+        : base(message)
+    {
+        VmName = vmName;
+        Detail = detail;
+    }
+
+    /// <summary>
+    /// The same failure for a build that is not for one VM: generic media serves all of them, so
+    /// naming a VM would be a lie.
+    ///
+    /// This one carries its reason in the message, because it is raised by <c>admin iso build</c> —
+    /// an administrator standing at the host, not an API caller — and the reason is composed by this
+    /// service (an exit code, a timeout, a configuration problem), never from the build's output.
+    /// </summary>
+    public static IsoBuildException ForMedia(string? detail = null) =>
+        new(
+            detail is null
+                ? "Building the autoinstall ISO failed."
+                : $"Building the autoinstall ISO failed: {detail}.",
+            vmName: null,
+            detail);
+
+    /// <summary>The VM the build was for, or null for generic media.</summary>
+    public string? VmName { get; }
 
     /// <summary>
     /// How it failed, in this service's own words (an exit code, a timeout, a configuration problem).
     /// Never the build's output.
     /// </summary>
-    public string? Detail { get; } = detail;
+    public string? Detail { get; }
 }
 
 /// <summary>
@@ -33,8 +61,19 @@ public sealed class IsoBuildException(string vmName, string? detail = null)
 ///
 /// Builds are serialized: the LF copy is a single shared file, and one xorriso repack of a
 /// multi-gigabyte ISO at a time is what the host can usefully do anyway.
+///
+/// It implements BOTH halves of the ISO seam, because WSL can do both:
+/// <list type="bullet">
+/// <item><see cref="IIsoBuilder"/> — per-VM media with the hostname baked in, which is what
+/// <see cref="IsoBuildMode.PerVm"/> hands to a VM creation job.</item>
+/// <item><see cref="IIsoMediaBuilder"/> — one generic ISO at a path the caller picks, for the catalog.
+/// That is what <c>admin iso build</c> drives, as the interactive administrator, and it is how the
+/// default <see cref="IsoBuildMode.Prebuilt"/> mode gets anything to consume.</item>
+/// </list>
+/// The two share everything below the argument vector: the same script, the same source-ISO
+/// resolution, the same redaction.
 /// </summary>
-public sealed class WslIsoBuilder : IIsoBuilder, IDisposable
+public sealed class WslIsoBuilder : IIsoBuilder, IIsoMediaBuilder, IDisposable
 {
     /// <summary>Copying and repacking a multi-gigabyte ISO, plus a possible download.</summary>
     private static readonly TimeSpan BuildTimeout = TimeSpan.FromMinutes(60);
@@ -66,6 +105,10 @@ public sealed class WslIsoBuilder : IIsoBuilder, IDisposable
         _logger = logger;
     }
 
+    /// <summary>
+    /// Per-VM media (<see cref="IsoBuildMode.PerVm"/>): the hostname is baked into the seed, so the
+    /// ISO belongs to exactly one VM and is rebuilt for the next one.
+    /// </summary>
     public async Task<string> BuildAsync(
         string vmName,
         string seedUser,
@@ -75,9 +118,74 @@ public sealed class WslIsoBuilder : IIsoBuilder, IDisposable
         CancellationToken cancellationToken)
     {
         var name = ArgumentGuard.VmName(vmName);
-
-        // The guest hostname is baked into the seed, so the ISO is per VM and is rebuilt for each one.
         var guestHost = name.ToLowerInvariant();
+        var cacheDir = ArgumentGuard.WindowsPath(_options.Iso.CacheDir, "Constructd:Iso:CacheDir").TrimEnd('\\', '/');
+
+        var result = await RunBuildAsync(
+            vmName: name,
+            outputIso: $@"{cacheDir}\{guestHost}-autoinstall.iso",
+            // The one difference between the two modes, and it is one environment variable: this ISO
+            // knows its guest's name, generic media does not.
+            identity: [$"VM_HOST={guestHost}"],
+            seedUser,
+            seedPassword,
+            bootstrapPubKeyPath,
+            describing: $"building the autoinstall ISO for {guestHost}",
+            describeContents: false,
+            progress,
+            cancellationToken).ConfigureAwait(false);
+
+        return result.IsoPath;
+    }
+
+    /// <summary>
+    /// Generic media for the catalog (<see cref="IsoBuildMode.Prebuilt"/>): no hostname is baked in
+    /// at all — the guest adopts one at first boot from
+    /// <see cref="IsoMediaRequest.HostnameSource"/>, which the build script turns into a one-shot
+    /// unit inside the image.
+    /// </summary>
+    public async Task<IsoMediaResult> BuildMediaAsync(
+        IsoMediaRequest request,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var output = ArgumentGuard.WindowsPath(request.OutputPath, "autoinstall media path");
+        var hostnameSource = ArgumentGuard.EnvironmentValue(
+            request.HostnameSource, "Constructd:Iso:HostnameSource");
+
+        return await RunBuildAsync(
+            vmName: null,
+            outputIso: output,
+            identity: [$"VM_HOSTNAME_SOURCE={hostnameSource}"],
+            request.SeedUser,
+            request.SeedPassword,
+            request.BootstrapPublicKeyPath,
+            describing: $"building generic autoinstall media (hostname source: {hostnameSource})",
+            describeContents: true,
+            progress,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Everything the two modes share: the source ISO, the LF-normalized script copy, the argument
+    /// vector, the timeout, the redaction and the checks on the result. Only
+    /// <paramref name="identity"/> and where the output goes differ.
+    /// </summary>
+    private async Task<IsoMediaResult> RunBuildAsync(
+        string? vmName,
+        string outputIso,
+        IReadOnlyList<string> identity,
+        string seedUser,
+        string seedPassword,
+        string bootstrapPubKeyPath,
+        string describing,
+        bool describeContents,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        var name = vmName;
 
         var scriptsDir = ArgumentGuard.WindowsPath(_options.ScriptsDir, "Constructd:ScriptsDir").TrimEnd('\\', '/');
         var cacheDir = ArgumentGuard.WindowsPath(_options.Iso.CacheDir, "Constructd:Iso:CacheDir").TrimEnd('\\', '/');
@@ -101,7 +209,6 @@ public sealed class WslIsoBuilder : IIsoBuilder, IDisposable
 
             var sourceIso = await ResolveSourceIsoAsync(name, cacheDir, safeProgress, cancellationToken)
                 .ConfigureAwait(false);
-            var outputIso = $@"{cacheDir}\{guestHost}-autoinstall.iso";
 
             var buildScript = $@"{scriptsDir}\bin\build-autoinstall-iso.sh";
             if (!_files.FileExists(buildScript))
@@ -135,7 +242,7 @@ public sealed class WslIsoBuilder : IIsoBuilder, IDisposable
                 arguments.Add("env");
                 arguments.Add($"VM_USER={user}");
                 arguments.Add($"VM_PASS={password}");
-                arguments.Add($"VM_HOST={guestHost}");
+                arguments.AddRange(identity);
                 arguments.Add($"SOURCE_ID={sourceId}");
                 arguments.Add($"BOOTSTRAP_PUBKEY_FILE={WslPath.FromWindows(pubKey, "Constructd:Iso:BootstrapPublicKeyPath")}");
                 arguments.Add("bash");
@@ -143,7 +250,7 @@ public sealed class WslIsoBuilder : IIsoBuilder, IDisposable
                 arguments.Add(WslPath.FromWindows(sourceIso, "Constructd:Iso:SourcePath"));
                 arguments.Add(WslPath.FromWindows(outputIso, "output iso"));
 
-                safeProgress?.Report($"building the autoinstall ISO for {guestHost}");
+                safeProgress?.Report(describing);
 
                 var result = await _processes.RunAsync(
                     _options.WslPath,
@@ -172,7 +279,17 @@ public sealed class WslIsoBuilder : IIsoBuilder, IDisposable
                 }
 
                 safeProgress?.Report($"autoinstall ISO ready: {outputIso}");
-                return outputIso;
+
+                // Only the catalog needs to describe what went in, and hashing a multi-gigabyte ISO
+                // is not something a per-VM build should pay for on every creation.
+                return describeContents
+                    ? new IsoMediaResult(
+                        outputIso,
+                        sourceIso,
+                        _files.ComputeSha256(sourceIso),
+                        SshPublicKey.FingerprintOrUnknown(ReadTextOrEmpty(pubKey)),
+                        _files.ComputeSha256(buildScript))
+                    : new IsoMediaResult(outputIso, sourceIso, string.Empty, string.Empty, string.Empty);
             }
             finally
             {
@@ -198,7 +315,7 @@ public sealed class WslIsoBuilder : IIsoBuilder, IDisposable
     /// once and reused by every later build.
     /// </summary>
     private async Task<string> ResolveSourceIsoAsync(
-        string vmName,
+        string? vmName,
         string cacheDir,
         IProgress<string>? progress,
         CancellationToken cancellationToken)
@@ -265,7 +382,7 @@ public sealed class WslIsoBuilder : IIsoBuilder, IDisposable
     /// Checked on every use, not only right after the download: a cache entry can be truncated by a
     /// full disk or replaced on a host several people administer.
     /// </summary>
-    private void VerifyChecksum(string vmName, string isoPath)
+    private void VerifyChecksum(string? vmName, string isoPath)
     {
         var expected = _options.Iso.Sha256?.Trim();
         if (string.IsNullOrEmpty(expected))
@@ -285,11 +402,27 @@ public sealed class WslIsoBuilder : IIsoBuilder, IDisposable
     /// exit code, a timeout, or the service's own configuration — and never from the child's output:
     /// WSL's stderr can quote the command line, and the command line carries the seed password.
     /// </summary>
-    private IsoBuildException Fail(string vmName, string reason)
+    private IsoBuildException Fail(string? vmName, string reason)
     {
-        _logger.LogError("Autoinstall ISO build for {Vm} failed: {Reason}", vmName, reason);
+        _logger.LogError("Autoinstall ISO build for {Vm} failed: {Reason}", vmName ?? "generic media", reason);
 
-        return new IsoBuildException(vmName, reason);
+        return vmName is null ? IsoBuildException.ForMedia(reason) : new IsoBuildException(vmName, reason);
+    }
+
+    /// <summary>
+    /// The bootstrap key's text, for the fingerprint that goes into the catalog. A key file that
+    /// cannot be read is not worth failing a finished build over -- the fingerprint records "unknown".
+    /// </summary>
+    private string ReadTextOrEmpty(string path)
+    {
+        try
+        {
+            return _files.ReadAllText(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return string.Empty;
+        }
     }
 
     public void Dispose() => _gate.Dispose();
