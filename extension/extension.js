@@ -1015,10 +1015,44 @@ async function startForwarder(target) {
     },
   });
   logLine(`forwards: serving "${t.name}" (${forwarderSession.mode} mode)`);
-  // RETURNED, so the chain step stays open until the guest capability check has answered:
+  // AWAITED, so the chain step stays open until the guest capability check has answered:
   // the next queued step must not decide its teardown against a session that is still
-  // deciding whether it may run at all.
-  return forwarderSession.start();
+  // deciding whether it may run at all. Its answer is also what decides the armed edge.
+  const session = forwarderSession;
+  const outcome = await session.start();
+  noteForwarderStarted(t, claim, session, outcome);
+}
+
+/**
+ * THE ARMED EDGE, AFTER THE GUEST HAS ANSWERED — the other half of the lazy trigger.
+ *
+ * `noteForwarderPresence` arms the instance when a reachable reading asks for a start, and
+ * that edge is what keeps an older guest from being re-asked every 30 s. But the session's
+ * own check is one SSH exec, and a failed one establishes NOTHING: the session stands
+ * itself down while this window keeps both the armed edge and the reference, so every later
+ * reachable reading plans "none" and no watcher, no reconcile and no ack is ever retried —
+ * a queued `construct expose` then waits out its whole timeout for no reason.
+ *
+ * So an `unanswered` start lets go: the session reference and the armed edge are cleared
+ * together (the decision is the pure forwarder.planStartOutcome), and the next reachable
+ * reading is a fresh start. `unsupported` — the guest ANSWERED "no spool" — keeps the edge,
+ * because that answer cannot change until the VM is reprovisioned.
+ *
+ * It runs INSIDE the chain step that created this session, which is what makes disposing
+ * here legal (only the chain may dispose one) and what makes the two writes atomic against
+ * every other step. A start the window has already moved on from touches neither: what it
+ * would clear belongs to a later session by then.
+ */
+function noteForwarderStarted(t, claim, session, outcome) {
+  const plan = forwarder.planStartOutcome({
+    outcome,
+    current: forwarderSlot.owns(claim) && forwarderSession === session
+      && !instances.targetSuperseded(instanceGate, t),
+  });
+  if (plan.action !== "retry") return;
+  logLine(`forwards: "${t.name}" never answered the guest check — letting it go so the next reading that reaches it retries`);
+  forwarderArmed = null;
+  stopForwarder();
 }
 
 /**
@@ -2191,10 +2225,24 @@ async function runAddProject() {
  *  and writes nothing. The saved payload wraps the RAW combined document (full
  *  per-session/model breakdown) plus a savedAt stamp and the parsed summary. */
 function runExportUsage() {
+  // CAPTURED BEFORE THE SLOW PART, both of them. The collection is a minutes-long SSH round
+  // trip, and the two things that decide what this file IS can change during it: switching
+  // instance would present VM A's numbers under B's card (and save them as B's), and
+  // switching the period would write daily numbers into a monthly file name. So the
+  // instance and the report are taken here, once, and everything below reads only these —
+  // the ssh cfg, the file name, the dialog and the confirmation.
+  const target = actionTarget();
+  const exportOf = usage.describeExport({ report: usageReport, instance: target.name });
   vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: "Collecting usage from the VM…", cancellable: false },
     async () => {
-      const rawText = await usage.collectRaw({ report: usageReport, cfg: activeCfg() });
+      const rawText = await usage.collectRaw({ report: exportOf.report, cfg: target.cfg });
+      // THE GENERATION IS CHECKED FIRST, before anything is done with the result — including
+      // the failure branch. A collection that came back after the window switched is an
+      // answer to a question nobody is asking any more, and its generic "couldn't collect
+      // usage from the VM" toast would land in the other instance's window as if that VM
+      // were the unreachable one. The standard guard names both instances instead.
+      if (targetSuperseded(target, "The usage export")) return;
       if (!rawText) {
         vscode.window.showErrorMessage(
           "Couldn't collect usage from the VM. Make sure it's running and reachable, then try again."
@@ -2202,17 +2250,21 @@ function runExportUsage() {
         return;
       }
       const uri = await vscode.window.showSaveDialog({
-        title: "Save Construct usage report",
+        title: exportOf.dialogTitle,
         filters: { JSON: ["json"], "All files": ["*"] },
         // Default into the home dir; a bare filename in showSaveDialog resolves against
         // the last-used location, so pin it under home for a predictable first save.
-        defaultUri: vscode.Uri.file(path.join(os.homedir(), usage.exportFileName(usageReport))),
+        defaultUri: vscode.Uri.file(path.join(os.homedir(), exportOf.fileName)),
       });
       if (!uri) return; // cancelled — nothing written
+      // The dialog is an await too, and writing a file is the irreversible step this guard
+      // exists for: a switch while it was open must not put one VM's numbers on disk under
+      // a path the user chose while looking at another one.
+      if (targetSuperseded(target, "The usage export")) return;
       const payload = usage.buildExportPayload(rawText);
       try {
         await fs.promises.writeFile(uri.fsPath, payload, "utf8");
-        vscode.window.showInformationMessage("Usage report saved to " + uri.fsPath);
+        vscode.window.showInformationMessage(exportOf.savedMessage(uri.fsPath));
       } catch (e) {
         vscode.window.showErrorMessage("Couldn't save the usage report: " + (e && e.message ? e.message : e));
       }

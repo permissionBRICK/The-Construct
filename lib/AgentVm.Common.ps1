@@ -2688,6 +2688,16 @@ $script:CONSTRUCT_RESERVED_VM_BRANCHES = @(
     "head", "fetch_head", "orig_head", "merge_head", "cherry_pick_head",
     "revert_head", "bisect_head", "rebase_head", "auto_merge", "stash")
 
+# Windows' reserved device stems. A loose ref IS a file (refs/heads/<name>, plus the
+# refs/heads/<name>.lock git writes beside it), and the host config repo is a loose-ref
+# repo on Windows -- where none of these can be created, with or without an extension
+# ("CON.txt" is the device too). Same list, same rule as Test-ConstructInstanceKeyFileName
+# in lib\AgentVm.Instances.ps1 and WINDOWS_DEVICE_NAMES in extension/src/configsync.js.
+$script:CONSTRUCT_WINDOWS_DEVICE_NAMES = @(
+    'con', 'prn', 'aux', 'nul',
+    'com1', 'com2', 'com3', 'com4', 'com5', 'com6', 'com7', 'com8', 'com9',
+    'lpt1', 'lpt2', 'lpt3', 'lpt4', 'lpt5', 'lpt6', 'lpt7', 'lpt8', 'lpt9')
+
 function Test-ConstructVmBranchName {
     <#
         .SYNOPSIS
@@ -2705,6 +2715,12 @@ function Test-ConstructVmBranchName {
         and a TRAILING '.', which git refuses ("foo." is not a branch name) so a
         hand-authored configBranch of "foo." can no longer pass validation here
         and then fail at `git branch`. Same fixture list as the JS twin's tests.
+
+        The device-stem rule is not git's, it is WINDOWS': this repo lives on
+        Windows with loose refs, where refs/heads/CON (and the CON.lock beside
+        it) cannot be created at all. git on Linux accepts those names, so only
+        this check keeps the promise for them. The shape rule leaves no '/' in
+        the name, so there is exactly one path component to test.
     #>
     [CmdletBinding()]
     param([AllowEmptyString()][AllowNull()][string]$Name)
@@ -2713,6 +2729,8 @@ function Test-ConstructVmBranchName {
     if ($Name.Contains("..")) { return $false }
     if ($Name.EndsWith(".")) { return $false }
     if ($Name.EndsWith(".lock")) { return $false }
+    $stem = $Name.Split('.')[0]
+    if ($script:CONSTRUCT_WINDOWS_DEVICE_NAMES -contains $stem.ToLowerInvariant()) { return $false }
     $lower = $Name.ToLowerInvariant()
     if ($script:CONSTRUCT_RESERVED_VM_BRANCHES -contains $lower) { return $false }
     # Any other spelling of the default branch is the SAME loose-ref file on

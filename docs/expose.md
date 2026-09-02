@@ -173,8 +173,45 @@ extension re-opens the tunnel for anything still queued.
   the CLI waits for the ack instead of guessing the link.
 - `hostLabel` — optional. When present the CLI prints `http://<hostLabel>:<localPort>/`
   instead of `http://localhost:<localPort>/` (useful when the user's PC has a name other
-  machines use). Omit it for a loopback-only tunnel.
+  machines use). Omit it for a loopback-only tunnel. Its exact form is
+  [the host-label rule](#the-host-label-rule) below.
 - `message` — optional; shown to the user when `status` is `error`.
+
+#### The host-label rule
+
+`hostLabel` is **one host name or one bare IP literal**, and an IPv6 literal travels
+**without brackets** — `fe80::1`, never `[fe80::1]`. The brackets belong to the URL, not to
+the value, and they are added **exactly once**, by whoever builds the link.
+
+That is the whole rule, and it has three implementations that must agree address for
+address: `sanitizeHostLabel`/`urlHostFor` in `extension/src/forwarder.js` (which normalizes
+what it advertises, so the wire only ever carries the canonical form), `wire_host_label`/
+`url_host` in `bin/construct-expose.sh`, and `ForwardHost` in
+`service/src/Constructd.Core/Domain/ForwardHost.cs`. Before it existed the two modes
+disagreed: the CLI bracketed anything containing a colon, so an accepted `[fe80::1]` printed
+`http://[[fe80::1]]:5173/`, while the service interpolated the label as it stood and printed
+`http://fe80::1:5173/` for the bare one — no IPv6 spelling worked in both.
+
+- A **bracketed** literal is accepted from the setting and from an older client's ack, and
+  is unwrapped to the bare form. It is never stored or sent bracketed.
+- The literal is **parsed**, not pattern-matched — by `net.isIP`, `IPAddress.TryParse` and
+  `is_ipv6_literal` respectively: `::::`, `1::2::3`, `1:2:3:4:5:6:7:8:9`, `1:::`, `1:2`,
+  `12345::1` and `1:2:3:4:5:6:7` all pass a plausible character class and none of them is an
+  address. An embedded IPv4 address is the literal's **final 32 bits**, so `::1.2.3.4` and
+  `1:2:3:4:5:6:1.2.3.4` are addresses while `192.0.2.1::`, `1:192.0.2.1::` and
+  `1.2.3.4::1:2` are not. One shared accept/reject fixture matrix runs through all three implementations
+  (`extension/test/forwarder.test.js`, `test/construct-expose.test.sh`,
+  `Constructd.Tests/Core/ForwardHostTests.cs`), because "agree address for address" is only
+  true while something checks it.
+- A **zone id** (`fe80::1%eth0`) is **refused**, not percent-encoded. A URL would need it as
+  `%25`, and a zone is meaningful only on the machine that owns that interface — the
+  opposite of what a label advertising this PC to *other* machines is for.
+- A label that is neither a host name nor a literal is **dropped**, and the link falls back
+  to `http://localhost:<localPort>/` — a link that opens beats a link that cannot be parsed.
+
+`CONSTRUCT_EXTERNAL_HOST` (the local `--to host` address) is formatted by the same
+`url_host`, so a bare or bracketed IPv6 value there yields one bracket pair too; it is an
+admin-set local value, so it is formatted rather than filtered.
 
 The extension should write the ack atomically as well (temp file + rename) and should
 overwrite an existing ack for the same id when the tunnel is re-established.
@@ -274,9 +311,17 @@ What matters from the guest's side is only this:
   PC **loopback only** and the ack carries no `hostLabel`, so the CLI prints
   `http://localhost:<port>/`. Setting `construct.forwards.hostLabel` both puts that name in
   the ack *and* makes the forward listen on all of that PC's interfaces — otherwise the
-  link it advertises would be one only that PC could open.
+  link it advertises would be one only that PC could open. The value follows
+  [the host-label rule](#the-host-label-rule): a name, or a bare IPv6 literal (a bracketed
+  one is accepted and unwrapped), and a value that is neither is ignored.
   `construct.forwards.enabled` can switch the whole thing off, in which case requests
   simply stay queued (exit code 6), which is the same answer as "no VS Code attached".
+- **A guest that cannot be asked is asked again.** Before it serves a VM the extension makes
+  one cheap check for the spool directories. A VM that answers "no spool" is a guest
+  provisioned before this feature existed and is not re-asked until the next connection; a
+  check that *failed* (the connection dropped, sshd was not up yet) established nothing, so
+  the window lets that session go and retries on the next 30 s reading that reaches the VM.
+  A queued request therefore never waits on a one-off failure.
 
 ## The VM token
 
