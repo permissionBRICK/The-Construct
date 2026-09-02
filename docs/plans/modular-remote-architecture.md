@@ -157,7 +157,7 @@ instance's `backend`. Operations:
 | `Start-Vm` / `Stop-Vm` / `Get-VmState` | state: running/off/paused/unknown |
 | `Get-VmEndpoint(name)` | → `{sshHost, sshPort}` — local: `<name>.mshome.net:22`; remote: `serviceHost:allocatedPort` |
 | `Wait-VmReachable(name, deadline)` | replaces the raw socket poll in Create-AgentVM |
-| capability: `checkpoints` | local Hyper-V: yes (existing scripts); remote: yes via API; Proxmox later: snapshot mapping |
+| capability: `checkpoints` | local Hyper-V: yes (existing scripts); remote: **not in this release** — both hyperv-remote drivers declare `Checkpoints=false` and `constructd` exposes no checkpoint endpoints (see `docs/drivers.md`); Proxmox later: snapshot mapping |
 | capability: `console` | local: vmconnect; remote/Proxmox: URL or "none" |
 | capability: `suspend` | `Save-Vm`/resume-on-start; Hyper-V: `Save-VM` (state `saved`, RAM freed, `Start-VM` resumes); Proxmox later: suspend-to-disk. `Get-VmState` gains `saved`. |
 
@@ -250,7 +250,7 @@ GET  /vms                             POST /vms {name, cpu, ramGB, diskGB, opts}
 GET  /vms/{name}                      DELETE /vms/{name}                          → job
 POST /vms/{name}/power {action}       GET  /vms/{name}/state
 GET  /vms/{name}/endpoint             → {sshHost, sshPort}
-POST /vms/{name}/checkpoints {…}      (capability-gated)
+POST /vms/{name}/checkpoints {…}      (capability-gated; NOT implemented in this release)
 GET  /jobs/{id}  /jobs/{id}/events    (SSE)
 # port forwards (user-auth OR the VM's own scoped token); target host|client — only
 # target defaults to client (relayed to the owner's extension, opened on the user PC);
@@ -528,7 +528,7 @@ endpoint formatting there in the same batch.
 | 2026-09-02 | Phase 2 review round 8 fixes merged (`93b1f68`): client forwarder is lazy + guest-gated (starts from the existing status probe once the VM is reachable, one capability exec for the spool markers, watcher argv documented as the one default-path addition), forwarder start/stop on the shared handover/session-owner chain, git-invalid branch names rejected in all three validators. |
 | 2026-09-02 | B9 docs merged (`d091279`): 17 markdown files aligned with the code, new `docs/field-test-remote-host.md` (12-step home-domain checklist). |
 | 2026-09-02 | Phase 2 review round 9 fixes merged (`8d726a7`): forwarder retries after an unanswered capability check (pure `planStartOutcome`), Windows device-stem rule on all three branch validators, one canonical IPv6 host-label rule shared by guest CLI / service (`ForwardHost.cs`) / extension with a 37-entry tri-language matrix, usage export bound to its captured instance + period. |
-| in flight | Phase 2 review round 10. Remaining: field test on the home domain (needs Christoph). |
+| in flight | Phase 2 review round 10 found 5 must-fix (construct-* prefix stripping aliases another instance's branch → decided: prefix reserved, stripping removed; name validator accepts trailing hyphen; registry-driven target changes don't retarget sessions; Start & connect and lifecycle.run lack supersession checks) + 2 should-fix (late idle-policy paint; this plan's remote-checkpoint claim, fixed here) — fix pair on `fix/p2-r10`. Remaining: field test on the home domain (needs Christoph). |
 
 Process notes: every package ran as an omniloop dev/reviewer pair (opus developer,
 gpt-5.6-sol reviewer) in its own worktree; cross-package integration reviews ran on the
