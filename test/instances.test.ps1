@@ -631,6 +631,60 @@ ok "collision: the comparison is case-insensitive (one NTFS file, one DNS name)"
 $noClash = Read-ConstructInstances -Path (New-RegistryFile '{ "version": 1, "instances": { "a-vm": {}, "b-vm": {}, "agent-vm": {} } }')
 ok "collision: two canonical local instances never collide" (@($noClash.Problems).Count -eq 0)
 
+# ── The endpoint identity is (sshHost, sshPort), not the host alone ──────────
+# Several hyperv-remote VMs legitimately live on ONE service host and are told apart by
+# the SSH forward the service allocated them (one port per VM out of a configured range).
+# Keyed on the host alone, every VM on a shared host collided and the "drop BOTH" rule
+# then lost the whole registry. Mirrored in extension/test/instances.test.js.
+Write-Host ""
+Write-Host "=== endpoint uniqueness: (sshHost, sshPort) (mirrored in the JS suite) ===" -ForegroundColor Cyan
+$sameHost = Read-ConstructInstances -Path (New-RegistryFile @'
+{ "version": 1, "instances": {
+    "a-vm": { "backend": "hyperv-remote", "sshHost": "buildbox.example.local", "sshPort": 2201 },
+    "b-vm": { "backend": "hyperv-remote", "sshHost": "BuildBox.Example.local", "sshPort": 2202 } } }
+'@)
+ok "endpoint: two remote VMs on ONE service host, different ports, both load" (
+    $sameHost.Instances.ContainsKey('a-vm') -and $sameHost.Instances.ContainsKey('b-vm'))
+ok "endpoint: ...with nothing reported" (@($sameHost.Problems).Count -eq 0)
+$samePort = Read-ConstructInstances -Path (New-RegistryFile @'
+{ "version": 1, "instances": {
+    "a-vm": { "backend": "hyperv-remote", "sshHost": "buildbox.example.local", "sshPort": 2201 },
+    "b-vm": { "backend": "hyperv-remote", "sshHost": "BuildBox.Example.local", "sshPort": 2201 } } }
+'@)
+ok "endpoint: the SAME host and port is still one machine -- both dropped" (
+    -not $samePort.Instances.ContainsKey('a-vm') -and -not $samePort.Instances.ContainsKey('b-vm'))
+ok "endpoint: ...reported once, naming both and the host:port" (
+    (@($samePort.Problems | Where-Object { $_ -match 'share the same sshHost/sshPort' }).Count -eq 1) -and
+    (@($samePort.Problems | Where-Object { $_ -match 'a-vm' -and $_ -match 'b-vm' -and $_ -match 'buildbox\.example\.local:2201' }).Count -ge 1))
+$portShapes = Read-ConstructInstances -Path (New-RegistryFile @'
+{ "version": 1, "instances": {
+    "a-vm": { "backend": "hyperv-remote", "sshHost": "one.local", "sshPort": 2201 },
+    "b-vm": { "backend": "hyperv-remote", "sshHost": "one.local", "sshPort": "2201" } } }
+'@)
+ok "endpoint: the port comparison is numeric, so '2201' and 2201 are one endpoint" (
+    -not $portShapes.Instances.ContainsKey('a-vm'))
+# A local instance's port is canonically 22 and its host derives from its own name, so
+# local entries still cannot share an endpoint -- but a remote VM reached through a
+# FORWARD on the same machine is a different endpoint and must load.
+$localAndRemote = Read-ConstructInstances -Path (New-RegistryFile (
+    '{ "version": 1, "instances": { "work-vm": { "backend": "hyperv-remote", "sshHost": "agent-vm.mshome.net", "sshPort": 2201 } } }'))
+ok "endpoint: a remote VM forwarded on the default VM's host (other port) loads" (
+    $localAndRemote.Instances.ContainsKey('work-vm'))
+ok "endpoint: ...and nothing is reported" (@($localAndRemote.Problems).Count -eq 0)
+ok "endpoint: the default instance survives it untouched" (
+    Test-ConstructDefaultInstance $localAndRemote.Instances['agent-vm'])
+$defaultEndpoint = Read-ConstructInstances -Path (New-RegistryFile (
+    '{ "version": 1, "instances": { "work-vm": { "backend": "hyperv-remote", "sshHost": "agent-vm.mshome.net", "sshPort": 22 } } }'))
+ok "endpoint: ...while the default instance's OWN host:port is still reserved" (
+    -not $defaultEndpoint.Instances.ContainsKey('work-vm'))
+$sharedHostKey = Read-ConstructInstances -Path (New-RegistryFile @'
+{ "version": 1, "instances": {
+    "a-vm": { "backend": "hyperv-remote", "sshHost": "one.local", "sshPort": 2201, "keyName": "shared_key" },
+    "b-vm": { "backend": "hyperv-remote", "sshHost": "one.local", "sshPort": 2202, "keyName": "Shared_Key" } } }
+'@)
+ok "endpoint: a shared host does not excuse a shared key file" (
+    -not $sharedHostKey.Instances.ContainsKey('a-vm') -and -not $sharedHostKey.Instances.ContainsKey('b-vm'))
+
 # ── (g7) configBranch is a cross-entry identity (mirrored in the JS suite) ────
 # The branch IS that instance's store inside the ONE host config repo
 # (docs/config-sync.md, "Multiple instances"): two entries on one branch share their VM
