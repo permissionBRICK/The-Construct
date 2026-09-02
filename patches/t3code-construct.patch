@@ -1,3 +1,43 @@
+diff --git a/apps/desktop/src/electron/ElectronProtocol.test.ts b/apps/desktop/src/electron/ElectronProtocol.test.ts
+index 585dd7e7..fb3a65a3 100644
+--- a/apps/desktop/src/electron/ElectronProtocol.test.ts
++++ b/apps/desktop/src/electron/ElectronProtocol.test.ts
+@@ -57,7 +57,7 @@ describe("ElectronProtocol", () => {
+           assert.equal(yield* Effect.promise(() => response.text()), "ok");
+           assert.include(
+             response.headers.get("content-security-policy") ?? "",
+-            "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://clerk.t3.codes https://challenges.cloudflare.com",
++            "script-src 'self' 'unsafe-inline' blob: 'wasm-unsafe-eval' https://clerk.t3.codes https://challenges.cloudflare.com",
+           );
+           assert.include(
+             response.headers.get("content-security-policy") ?? "",
+@@ -209,9 +209,12 @@ describe("ElectronProtocol", () => {
+       }),
+     );
+ 
++    // blob: is required for the voice-input AudioWorklet module, which the
++    // renderer builds at runtime; worklet fetches go through script-src.
+     assert.deepEqual(directives["script-src"], [
+       "'self'",
+       "'unsafe-inline'",
++      "blob:",
+       "'wasm-unsafe-eval'",
+       "https://clerk.t3.codes",
+       "https://challenges.cloudflare.com",
+diff --git a/apps/desktop/src/electron/ElectronProtocol.ts b/apps/desktop/src/electron/ElectronProtocol.ts
+index 845f03db..bbaab1a7 100644
+--- a/apps/desktop/src/electron/ElectronProtocol.ts
++++ b/apps/desktop/src/electron/ElectronProtocol.ts
+@@ -71,6 +71,9 @@ export function makeDesktopContentSecurityPolicy(input: DesktopProtocolRegistrat
+   const scriptSources = [
+     "'self'",
+     "'unsafe-inline'",
++    // Voice input's AudioWorklet module is a Blob URL built in the renderer.
++    // Worklet module fetches are checked against script-src, not worker-src.
++    "blob:",
+     "'wasm-unsafe-eval'",
+     ...(clerkOrigin ? [clerkOrigin] : []),
+     "https://challenges.cloudflare.com",
 diff --git a/apps/desktop/src/settings/DesktopClientSettings.test.ts b/apps/desktop/src/settings/DesktopClientSettings.test.ts
 index e32a5e2d..0707ba2a 100644
 --- a/apps/desktop/src/settings/DesktopClientSettings.test.ts
@@ -988,7 +1028,7 @@ index 9983de22..b0b2a85a 100644
            observeRpcEffect(
              WS_METHODS.serverUpsertKeybinding,
 diff --git a/apps/web/src/components/chat/ChatComposer.tsx b/apps/web/src/components/chat/ChatComposer.tsx
-index 68d1a9eb..da95e9e5 100644
+index 68d1a9eb..6b89f562 100644
 --- a/apps/web/src/components/chat/ChatComposer.tsx
 +++ b/apps/web/src/components/chat/ChatComposer.tsx
 @@ -34,6 +34,7 @@ import {
@@ -999,7 +1039,7 @@ index 68d1a9eb..da95e9e5 100644
  import {
    clampCollapsedComposerCursor,
    type ComposerSubmissionIntent,
-@@ -160,6 +161,55 @@ import {
+@@ -160,6 +161,56 @@ import {
    submitComposerDraft,
  } from "./composerSubmission";
  import { ComposerPromptLengthValidation } from "./ComposerPromptLengthValidation";
@@ -1023,6 +1063,7 @@ index 68d1a9eb..da95e9e5 100644
 +  MAX_PENDING_VOICE_CHUNKS,
 +  type VoiceAudioSender,
 +} from "../../voice/voiceAudioSender";
++import { describeVoiceInputFailure } from "../../voice/voiceInputFailure";
 +import { useClientSettings } from "../../hooks/useSettings";
 +
 +/**
@@ -1055,7 +1096,7 @@ index 68d1a9eb..da95e9e5 100644
  
  function ComposerVideoThumbnail({ file }: { file: File }) {
    const setVideo = useCallback(
-@@ -800,6 +850,27 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
+@@ -800,6 +851,27 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
      onFileOpen,
      openingVideoAttachmentId,
    } = props;
@@ -1083,7 +1124,7 @@ index 68d1a9eb..da95e9e5 100644
    // ------------------------------------------------------------------
    // Store subscriptions (prompt / images / terminal contexts)
    // ------------------------------------------------------------------
-@@ -1200,6 +1271,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
+@@ -1200,6 +1272,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
    const [isComposerPrimaryActionsCompact, setIsComposerPrimaryActionsCompact] = useState(false);
    const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
    const [isComposerFocused, setIsComposerFocused] = useState(false);
@@ -1092,7 +1133,7 @@ index 68d1a9eb..da95e9e5 100644
    const [composerSubmissionError, setComposerSubmissionError] = useState<string | null>(null);
    const [providerInputSubmissionError, setProviderInputSubmissionError] = useState<string | null>(
      null,
-@@ -1220,6 +1293,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
+@@ -1220,6 +1294,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
    // Refs
    // ------------------------------------------------------------------
    const composerEditorRef = useRef<ComposerPromptEditorHandle>(null);
@@ -1101,7 +1142,7 @@ index 68d1a9eb..da95e9e5 100644
    const attachmentInputRef = useRef<HTMLInputElement>(null);
    const composerFormRef = useRef<HTMLFormElement>(null);
    const composerSurfaceRef = useRef<HTMLDivElement>(null);
-@@ -1968,6 +2043,245 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
+@@ -1968,6 +2044,244 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
      };
    }, [composerCursor, composerTerminalContexts, promptRef]);
  
@@ -1250,14 +1291,13 @@ index 68d1a9eb..da95e9e5 100644
 +        setIsVoiceRecording(false);
 +        setVoiceLevel(0);
 +      }
-+      if (!AsyncResult.isSuccess(result)) {
++      if (AsyncResult.isFailure(result)) {
 +        toastManager.add({
 +          type: "error",
 +          title: "Voice input stopped",
-+          description:
-+            source === "client"
-+              ? "Could not transcribe the microphone. Check Claude sign-in on the T3 Code server."
-+              : "Could not transcribe the microphone. Check Claude sign-in and Construct microphone passthrough.",
++          // The server names its own failures (no client audio, host bridge
++          // down, a transcription error); only unexplained ones fall back.
++          description: describeVoiceInputFailure(result.cause, source),
 +        });
 +      }
 +    });
@@ -2295,6 +2335,102 @@ index 00000000..4d2a6aa8
 +      return dropped;
 +    },
 +  };
++}
+diff --git a/apps/web/src/voice/voiceInputFailure.test.ts b/apps/web/src/voice/voiceInputFailure.test.ts
+new file mode 100644
+index 00000000..0c3594b9
+--- /dev/null
++++ b/apps/web/src/voice/voiceInputFailure.test.ts
+@@ -0,0 +1,49 @@
++import { VoiceInputError } from "@t3tools/contracts";
++import * as Cause from "effect/Cause";
++import { describe, expect, it } from "vite-plus/test";
++
++import {
++  CLIENT_VOICE_FAILURE_DESCRIPTION,
++  describeVoiceInputFailure,
++  HOST_VOICE_FAILURE_DESCRIPTION,
++} from "./voiceInputFailure";
++
++describe("describeVoiceInputFailure", () => {
++  it("keeps the server's reason for a client session that never sent audio", () => {
++    const cause = Cause.fail(
++      new VoiceInputError({
++        message: "No microphone audio arrived from the client.",
++        fatal: true,
++      }),
++    );
++    expect(describeVoiceInputFailure(cause, "client")).toBe(
++      "No microphone audio arrived from the client.",
++    );
++  });
++
++  it("keeps the server's reason for an unavailable host bridge", () => {
++    const cause = Cause.fail(
++      new VoiceInputError({
++        message:
++          "The host microphone bridge is unavailable. Enable microphone passthrough in Construct and keep its VS Code extension running.",
++        fatal: true,
++      }),
++    );
++    expect(describeVoiceInputFailure(cause, "host")).toContain("host microphone bridge");
++  });
++
++  it("falls back to a source-specific hint when the failure carries no reason", () => {
++    expect(describeVoiceInputFailure(Cause.die(new Error("boom")), "client")).toBe(
++      CLIENT_VOICE_FAILURE_DESCRIPTION,
++    );
++    expect(describeVoiceInputFailure(Cause.interrupt(), "host")).toBe(
++      HOST_VOICE_FAILURE_DESCRIPTION,
++    );
++    expect(describeVoiceInputFailure(Cause.fail({ code: 42 }), "host")).toBe(
++      HOST_VOICE_FAILURE_DESCRIPTION,
++    );
++    expect(
++      describeVoiceInputFailure(Cause.fail(new VoiceInputError({ message: "   " })), "client"),
++    ).toBe(CLIENT_VOICE_FAILURE_DESCRIPTION);
++  });
++});
+diff --git a/apps/web/src/voice/voiceInputFailure.ts b/apps/web/src/voice/voiceInputFailure.ts
+new file mode 100644
+index 00000000..b8c7e4ad
+--- /dev/null
++++ b/apps/web/src/voice/voiceInputFailure.ts
+@@ -0,0 +1,35 @@
++import * as Cause from "effect/Cause";
++import * as Option from "effect/Option";
++
++/**
++ * What to tell the user when a voice session ends badly.
++ *
++ * The server explains its own failures ("The host microphone bridge is
++ * unavailable ...", "No microphone audio arrived from the client.", a
++ * transcription error from Claude), so its message wins. The per-source text
++ * below is only for failures that carry no reason at all — a defect, an
++ * interrupt, or a dropped connection.
++ */
++export const CLIENT_VOICE_FAILURE_DESCRIPTION =
++  "Could not transcribe the microphone. Check Claude sign-in on the T3 Code server.";
++export const HOST_VOICE_FAILURE_DESCRIPTION =
++  "Could not transcribe the microphone. Check Claude sign-in and Construct microphone passthrough.";
++
++export function describeVoiceInputFailure(
++  cause: Cause.Cause<unknown>,
++  source: "client" | "host",
++): string {
++  const error = Cause.findErrorOption(cause);
++  if (Option.isSome(error)) {
++    const failure = error.value;
++    const message =
++      typeof failure === "object" &&
++      failure !== null &&
++      "message" in failure &&
++      typeof failure.message === "string"
++        ? failure.message.trim()
++        : "";
++    if (message) return message;
++  }
++  return source === "client" ? CLIENT_VOICE_FAILURE_DESCRIPTION : HOST_VOICE_FAILURE_DESCRIPTION;
 +}
 diff --git a/packages/client-runtime/src/rpc/client.ts b/packages/client-runtime/src/rpc/client.ts
 index bfe57a6c..2845f1a1 100644
