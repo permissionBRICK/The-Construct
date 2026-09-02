@@ -33,7 +33,7 @@ host service, and the extension is a management UI only.
 | VM reachability | **Host-service port forwards** (per-VM SSH port on the host's LAN address). Plus an **in-VM CLI** (`construct expose <port>`) so agents can self-serve additional forwards for dev servers etc. |
 | VM-CLI auth | **Scoped per-VM token** injected at provision time; valid only for that VM's own forward management. |
 | Provisioning split | **Hybrid**: service does ISO build + VM create + OS install wait; the **client** runs the agent-stack provisioning (`Provision-AgentVM.ps1`) over the forwarded SSH port — user secrets (git creds, agent auth, backups) never transit the service. |
-| ISO build on remote host | **WSL is a service-host prerequisite** (checked/installed by the one-time service setup); the proven `build-autoinstall-iso.sh` path is reused as-is. |
+| ISO build on remote host | ~~WSL is a service-host prerequisite checked under LocalSystem~~ **Superseded 2026-09-02 (field test):** WSL 2.x refuses to run as LocalSystem (`WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED`). `constructd` runs as a **dedicated service account** that owns a WSL distro (§4.10). Long-term main path is Proxmox, where the autoinstall ISO is built natively. |
 | Compatibility | **Zero-change default path.** One-liner install, `agent-vm` name, `mshome.net`, existing extension flows all keep working exactly as today. Multi-VM and remote are opt-in. |
 | Process | Plan doc (this file) → analyze/consolidate → parallel worktree implementation with per-chain codex auto-review → merge batches. |
 
@@ -430,6 +430,41 @@ Module rules (enforced in review for new code, adopted opportunistically in old)
   host. Registry/API leave room (`url` on forwards is a field, not a format).
 - **Secret store service**: separate effort; will co-locate with `constructd`.
 
+### 4.10 Service identity: a dedicated service account (B10)
+
+**Finding (field test 2026-09-02, `standpc`, WSL 2.6.3):** `wsl.exe` run as LocalSystem
+exits -1 with `Wsl/WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED`. Every "WSL as the service sees it"
+mechanism built on LocalSystem (`Invoke-AsLocalSystem wsl -l -q`, `-ProvisionWslForService`,
+the `<service root>\wsl` import) is therefore unusable. Decision (Christoph): run `constructd`
+as a **dedicated Windows service account** with its own WSL distro. Proxmox will be the main
+path later and builds the ISO natively, so this is the minimal, conventional fix — not a new
+ISO builder.
+
+**Identity model**
+
+| Aspect | Rule |
+|---|---|
+| Account | `-ServiceAccount <DOMAIN\name or .\name>` + `-ServiceCredential` (PSCredential, prompted when absent). The installer does **not** create domain accounts; it creates a **local** account when asked (`-CreateLocalServiceAccount`, random password kept only in the SCM), for token-only hosts. |
+| Rights | Member of local **Administrators** (Hyper-V, `netsh portproxy`, cert private key). Services get the full admin token (no UAC filtering). `SeServiceLogonRight` is granted by the SCM when the service is configured with the account (`New-Service -Credential`; updates through CIM `Win32_Service.Change` — never `sc.exe ... password=` on a command line). |
+| Kerberos | Negotiate against a service running as a custom account needs the SPN on **that account**: `setspn -S HTTP/<PublicHost> <account>` (and the short name if clients use it). The installer attempts it for domain accounts and prints the exact command with a clear "Kerberos will fail until this exists; tokens work" note when it lacks rights. A **local** account cannot hold the SPN → Kerberos impossible, Negotiate does **not** fall back (the KDC issues a machine-account ticket the service cannot decrypt) → document: local account = token auth only. The service's `whoami` surface should expose which auth actually happened. |
+| Certificate | The private key of the TLS cert in `LocalMachine\My` gets a read ACE for the account (the installer already resolves/creates the cert; add the key ACL step, both CNG and CAPI key containers). |
+| Paths | `Get-ConstructTrustedSid` / the Code+Data ACL policies add the account's SID: Data = FullControl (DB, ISO cache, WSL vhdx), Code = read/execute is already granted to Users. The ancestor trust check treats the account as trusted. |
+| WSL | All "as the service sees it" steps run **as the service account** through the existing one-shot task runner, generalized: `Invoke-AsServiceAccount` (principal = account + `-LogonType Password` credential, `RunLevel Highest`, own task folder, COM polling — the LocalSystem variant goes away). Import target stays `<service root>\wsl\<distro>` (owned by the account). The account's profile must exist and load: the runner's first call creates it (`-LogonType Password` batch logon loads the profile); the SCM loads it for the service. |
+| Store WSL in a non-interactive session | **Assumption to verify first** (probe below): the MSIX WSL package is provisioned machine-wide and registers for the account on first use in a batch/service session. If the probe fails, the fallback is to run the whole build as a scheduled task under the account triggered from LocalSystem — not planned unless needed. |
+| Config / API | `Constructd:ServiceAccount` recorded in `appsettings`/registry for diagnostics; `GET /api/v1/whoami` unchanged; `admin status` prints the service identity. |
+| Uninstall | `-RemoveServiceAccount` removes a **local** account the installer created (never a domain one); WSL distro unregistered under the account first (`wsl --unregister` as the account). |
+| Zero-change | Local Hyper-V installs (Auto-Install/Create-AgentVM on the user's own PC) are untouched: WSL runs as the interactive user there. |
+
+**Probe (run on the host before/while B10 is built):** register a one-shot task as the intended
+account (`-LogonType Password`, `RunLevel Highest`) running `cmd /c wsl.exe --status & wsl.exe -l -v`
+redirected to a file; expected: version output and the distro list (or "no distro" — that is fine,
+the import follows). `WSL_E_*` errors mean the assumption above is wrong → fallback path.
+
+**Batch B10 (dev/reviewer pair):** `service/host/Install-ConstructHost.ps1` (+ uninstaller,
+`host-installer.test.ps1`), `service/README.md`, `docs/remote-host.md`,
+`docs/field-test-remote-host.md` (§1.1 → the account + probe + SPN), `docs/installation.md` remote
+section. Service code: only if the identity is surfaced in `whoami`/`admin status`.
+
 ## 5. Implementation batches
 
 Ordered for the parallel-worktree pipeline; ownership is file-disjoint per phase so
@@ -529,7 +564,8 @@ endpoint formatting there in the same batch.
 | 2026-09-02 | B9 docs merged (`d091279`): 17 markdown files aligned with the code, new `docs/field-test-remote-host.md` (12-step home-domain checklist). |
 | 2026-09-02 | Phase 2 review round 9 fixes merged (`8d726a7`): forwarder retries after an unanswered capability check (pure `planStartOutcome`), Windows device-stem rule on all three branch validators, one canonical IPv6 host-label rule shared by guest CLI / service (`ForwardHost.cs`) / extension with a 37-entry tri-language matrix, usage export bound to its captured instance + period. |
 | 2026-09-02 | Phase 2 review round 10 fixes merged (`a5954b5`): `construct-` prefix reserved and stripping removed (one derivation rule everywhere), one instance-name rule in JS/PS/C# (alphanumeric first+last, 1–63; C# `\A…\z` parity fix), registry fingerprint-driven retargeting via one serialized transition (debounced `fs.watch` only when the file exists), Start & connect + `lifecycle.run` stale-target gates, instance-scoped narrow webview messages. Node 21 files, dotnet 510, pwsh instances 684. **Code work for this batch is complete; per the one-loop-per-change rule no further review runs without new changes.** |
-| next | Field test on the home domain (`docs/field-test-remote-host.md`) — needs Christoph. Bugs found there get one dev/reviewer loop each. |
+| 2026-09-02 | Field test started on `standpc` (WSL 2.6.3, German Windows). Installer fixes from the field, each direct + tested: relative path params resolved against `$PWD` before the elevated relaunch and ACE identities read by SID (`6ceaf98`); parents hardened before children (`8aa8ca6`); LocalSystem task polled via the Schedule.Service COM API in its own folder, `SCHED_S_TASK_RUNNING` is not an exit code (`16405cc`); failed LocalSystem commands report their output (`b56e0e9`). Blocker: `WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED` → §4.10 / B10. |
+| in flight | B10 dedicated service account (dev/reviewer pair). Field test resumes after it merges. |
 
 Process notes: every package ran as an omniloop dev/reviewer pair (opus developer,
 gpt-5.6-sol reviewer) in its own worktree; cross-package integration reviews ran on the
