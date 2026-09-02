@@ -58,24 +58,23 @@ Names used throughout — substitute your own:
 
 ## 1. Host — install `constructd`
 
-### 1.1 WSL, as *LocalSystem* sees it
+### 1.1 WSL — **yours**, not the service's
 
-The ISO build runs in WSL, and the service runs as **LocalSystem** — and WSL distros are
-registered *per Windows user*, so a distro you can see as the administrator says nothing
-about what the service will see.
+The ISO build runs `xorriso` inside WSL, and it runs **as the administrator installing this**.
+It cannot run as the service: `wsl.exe` exits with `Wsl/WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED`
+under LocalSystem, which is the identity `constructd` runs as (this is the field finding
+that produced [plan §4.10](plans/modular-remote-architecture.md)). So the media is built
+once, here, and the service only consumes it.
 
 ```powershell
 wsl --install -d Ubuntu        # if there is no distro at all; reboot when asked
+wsl -l -q                      # what YOU have
 ```
 
-The installer checks the LocalSystem view itself and fails with the exact remedy if the
-distro is missing there. To have it do the `wsl --export` / `wsl --import`-as-SYSTEM dance
-for you, add `-ProvisionWslForService` in step 1.3.
-
-**Expect:** `wsl -l -q` lists a distro.
-**If it fails:** the check runs through a one-shot scheduled task; it *fails closed*, so
-"the LocalSystem probe could not run at all" stops the install rather than reporting
-success. `-SkipPrereqs` is the deliberate override, not a workaround.
+**Expect:** `wsl -l -q` lists a distro. The installer ensures `xorriso` and `whois` inside
+it (step 1.3) and fails, showing what the package manager printed, if it cannot.
+**If it fails:** nothing about LocalSystem is involved any more — this is your own WSL, so
+fix it the ordinary way. `-SkipPrereqs` is the deliberate override, not a workaround.
 
 ### 1.2 Publish the service
 
@@ -113,9 +112,14 @@ In order it: validates the inputs → creates the service root and data director
 down** `-PublishDir`, `-ScriptsDir` and the service root (LocalSystem executes what it finds
 there) → checks the prerequisites → creates the TLS certificate → adds three inbound
 firewall rules (API port, SSH range, app range) → writes
-`appsettings.Production.json` → **creates the first admin and issues its token before the
-service starts** → registers `constructd` as LocalSystem → starts it → prints the
-enrolment details.
+`appsettings.Production.json` → **builds the autoinstall ISO as you, through your WSL**
+(minutes: it downloads the source ISO on the first run and repacks it) → **creates the first
+admin and issues its token before the service starts** → registers `constructd` as
+LocalSystem → starts it → prints the enrolment details.
+
+`-SkipIsoBuild` defers the media (the summary then says VM creation will fail until you
+build it); `-IsoBuildOnly` re-runs *only* that step on an existing install, which is how you
+pick up a new Ubuntu release or a rotated bootstrap key.
 
 **Expect** a final block with:
 
@@ -124,6 +128,16 @@ enrolment details.
   Certificate   : <40 hex characters>
   Admin token for HOME\christoph (shown once):
   <token>
+
+  Autoinstall ISO:
+    & "C:\Construct\service\publish\Constructd.Api.exe" admin iso status
+```
+
+and, further up, the ISO step's own last line:
+
+```
+==> Building the autoinstall ISO (as you, via WSL)
+    ISO: C:\ProgramData\Construct\service\iso\construct-autoinstall-<utc>.iso
 ```
 
 **Copy the token now — that one really is shown once**, and only its hash is stored; a
@@ -148,7 +162,26 @@ shows at enrolment (step 3.1).
 **If the install fails:** it stops at the failing step and says which. Common ones —
 overlapping port ranges (fix the arguments), an ancestor directory an untrusted account can
 delete or a reparse point in the path (move the directory, or take responsibility with
-`-SkipAclHardening`), or the WSL/LocalSystem check from 1.1.
+`-SkipAclHardening`), or the ISO build (it prints what `xorriso`, the download or `mkpasswd`
+said; fix that and re-run with `-IsoBuildOnly`).
+
+### 1.3b Verify the install media
+
+```powershell
+& "C:\Construct\service\publish\Constructd.Api.exe" admin iso status
+```
+
+**Expect:** `Mode : Prebuilt`, a `Current ISO` under `C:\ProgramData\Construct\service\iso`,
+the source ISO it was remastered from with its SHA-256, `Guest identity: hyperv-kvp`, and a
+`Bootstrap key` fingerprint that matches your checkout's key:
+
+```powershell
+ssh-keygen -lf C:\Construct\keys\bootstrap_ed25519.pub    # the middle field is the fingerprint
+```
+
+**If it says "No autoinstall ISO is published on this host"** (exit code 3): the build was
+skipped or failed — run `admin iso build`, or the installer with `-IsoBuildOnly`. Creating a
+VM before this passes fails with the same sentence and the command to fix it.
 
 ### 1.4 Confirm it answers
 
@@ -256,6 +289,35 @@ already in the registry (that is why it is written first). Re-run
 touched and nothing is created twice.
 
 ### 3.2 Sanity-check the VM
+
+**Check the guest's own name first — everything downstream depends on it.** The media is
+generic, so the guest adopts the Hyper-V VM name at first boot out of the KVP channel; the
+Default Switch's DNS then publishes *that* name, and both the service's reachability check
+and every forward's `connectaddress` resolve `<vm name>.mshome.net`.
+
+```powershell
+ssh work-vm "hostname; cat /var/lib/construct/hostname-adopted; journalctl -u construct-hostname --no-pager"
+Resolve-DnsName work-vm.mshome.net            # on the HOST
+```
+
+**Expect:** `hostname` prints exactly `work-vm`, the marker file holds the same name, the
+unit logged `adopting hostname 'work-vm' from hyperv-kvp`, and the host resolves
+`work-vm.mshome.net`.
+
+**If the hostname is still `construct-seed`:** the KVP path did not deliver (this is the one
+field risk of §4.10 — `linux-cloud-tools-virtual` must have installed during the unattended
+install, and `hv_kvp_daemon` must populate pool 3 on a Gen 2 VM). Check, in the guest:
+
+```bash
+systemctl status hv-kvp-daemon; ls -l /var/lib/hyperv/.kvp_pool_3
+sudo strings /var/lib/hyperv/.kvp_pool_3 | head        # VirtualMachineName should be in there
+```
+
+Provisioning has a belt-and-braces fallback (`bin/provision.sh` renames a still-seed guest to
+`CONSTRUCT_INSTANCE_NAME`), so a VM provisioned by the client may already be correct even if
+first boot was not — the journal above tells you which of the two fixed it. DNS can lag the
+rename by a lease: if the name is right in the guest but does not resolve yet, that is the
+DHCP renewal, not the adoption.
 
 ```powershell
 ssh work-vm "hostname; grep '^CONSTRUCT_' /etc/construct/config.env"

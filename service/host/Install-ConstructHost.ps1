@@ -14,7 +14,7 @@
       1. Self-elevates (the whole thing needs Administrator).
       2. Prerequisites: Hyper-V and the platform features (via the repo's own
          Ensure-HyperV in lib\AgentVm.Common.ps1 -- the same check the local
-         installer runs), a WSL distro with xorriso + whois inside it, and the
+         installer runs), YOUR WSL distro with xorriso + whois inside it, and the
          Windows OpenSSH client. No .NET runtime is required: publish the service
          self-contained.
       3. Data directory (database + ISO cache) under ProgramData.
@@ -23,11 +23,16 @@
          enrollment, so it is the one value that has to leave this machine.
       5. Firewall: inbound TCP for the API port and both forward port ranges.
       6. appsettings.Production.json next to the published executable.
-      7. The first admin user plus an API token, created through the service's own
+      7. The autoinstall ISO, built AS YOU through your own WSL
+         ('constructd admin iso build'). The service runs as LocalSystem, and WSL
+         refuses to run as LocalSystem (WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED), so the
+         media is built once here and the service only consumes it -- see
+         docs/plans/modular-remote-architecture.md section 4.10.
+      8. The first admin user plus an API token, created through the service's own
          admin CLI BEFORE the service starts (so nothing contends for the
          database, and so the host is reachable the moment it comes up).
-      8. Registers the Windows service as LocalSystem and starts it.
-      9. Prints the enrollment details.
+      9. Registers the Windows service as LocalSystem and starts it.
+     10. Prints the enrollment details.
 
     Everything that changes the machine honours -WhatIf.
 
@@ -76,12 +81,16 @@
     anything an unprivileged user can write there runs as LocalSystem, and anything
     they can write in the data directory is the authorization database.
 
-.PARAMETER ProvisionWslForService
-    WSL distros are registered PER WINDOWS USER, and the service runs as LocalSystem.
-    With this switch the installer exports the distro from the current user and
-    imports it for LocalSystem when it is missing there. Without it, a missing distro
-    is a hard error with the commands to fix it (the export can be several GB, so it
-    is not done behind your back).
+.PARAMETER SkipIsoBuild
+    Do NOT build the autoinstall ISO. The install finishes without install media,
+    and VM creation fails until you build it:
+        <PublishDir>\Constructd.Api.exe admin iso build
+
+.PARAMETER IsoBuildOnly
+    Only (re)build the autoinstall ISO on an existing install and exit. Nothing
+    else is touched -- no ACLs, no certificate, no settings, no service
+    registration. This is how you pick up a new Ubuntu release or a rotated
+    bootstrap key.
 
 .PARAMETER RotateAdminToken
     Issue a fresh API token even when the admin already exists. Without it, a re-run
@@ -119,8 +128,8 @@ param(
 
     [string]$SwitchName = "Default Switch",
 
-    # Constrained on purpose: this value is handed to wsl.exe and to a LocalSystem
-    # task, and WSL's own distro names are a narrow set anyway.
+    # Constrained on purpose: this value is handed to wsl.exe and written into the
+    # service's settings, and WSL's own distro names are a narrow set anyway.
     [ValidatePattern('^$|^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')]
     [string]$WslDistro = "Ubuntu",
 
@@ -140,7 +149,9 @@ param(
 
     [switch]$SkipAclHardening,
 
-    [switch]$ProvisionWslForService,
+    [switch]$SkipIsoBuild,
+
+    [switch]$IsoBuildOnly,
 
     [switch]$RotateAdminToken,
 
@@ -170,12 +181,11 @@ function Write-Ok($msg)   { Write-Host "    $msg" -ForegroundColor Green }
 function Write-Note($msg) { Write-Host "    $msg" -ForegroundColor DarkGray }
 
 # ── Value transport ──────────────────────────────────────────────────────────
-# Two places here start a process in a MORE privileged context: the self-elevation
-# below, and Invoke-AsLocalSystem later. Neither may build PowerShell source out of
-# a value: a parameter carrying a quote, a semicolon or a newline would otherwise
-# become another statement running elevated or as LocalSystem. So values NEVER
-# appear in a generated script -- they are serialized to a JSON file whose path this
-# script chose, and the generated script only reads that file.
+# One place here starts a process in a MORE privileged context: the self-elevation
+# below. It may not build PowerShell source out of a value: a parameter carrying a
+# quote, a semicolon or a newline would otherwise become another statement running
+# elevated. So values NEVER appear in a generated script as source -- they cross the
+# boundary as inert base64 inside the encoded command.
 
 function ConvertTo-ConstructPayload {
     <#
@@ -196,18 +206,6 @@ function ConvertTo-ConstructPayload {
         $plain[$kv.Key] = $value
     }
     return ($plain | ConvertTo-Json -Depth 5 -Compress)
-}
-
-function New-ConstructTempPath {
-    <#
-        A path under %SystemRoot%\Temp, which only SYSTEM and Administrators can
-        write. The name is a GUID we generate, so nothing a caller supplied ever
-        ends up inside a generated script.
-    #>
-    [CmdletBinding()]
-    param([Parameter(Mandatory = $true)][string]$Extension)
-
-    return (Join-Path $env:SystemRoot "Temp\constructd-$([guid]::NewGuid().ToString('n')).$Extension")
 }
 
 function New-ConstructRelaunchScript {
@@ -255,30 +253,6 @@ try {
     Read-Host "Press Enter to close"
     exit 1
 }
-"@
-}
-
-function New-ConstructLocalSystemScript {
-    <#
-        The script the LOCALSYSTEM task runs: read {FilePath, ArgumentList} back
-        from JSON, invoke it with the argument list SPLATTED -- so each element
-        stays one argument no matter what it contains -- and capture everything to
-        a file. Again, the only interpolated values are two GUID temp paths.
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)][string]$PayloadFile,
-        [Parameter(Mandatory = $true)][string]$OutputFile
-    )
-
-    $payload = $PayloadFile.Replace("'", "''")
-    $output  = $OutputFile.Replace("'", "''")
-
-    return @"
-`$ErrorActionPreference = 'Continue'
-`$spec = Get-Content -Raw -LiteralPath '$payload' | ConvertFrom-Json
-& `$spec.FilePath @(`$spec.ArgumentList) *> '$output'
-exit `$LASTEXITCODE
 "@
 }
 
@@ -691,50 +665,6 @@ function Set-ConstructPathAcl {
     Write-Ok "$Name locked to SYSTEM + Administrators ($($descendants.Count) item(s) inside): $Path"
 }
 
-# Task Scheduler status values the runner has to recognize (pure data, so the
-# decision helpers below run on any PowerShell, including the Linux one the tests use).
-$script:ConstructTaskPath  = '\Construct\'
-$script:SchedTaskRunning   = 0x41301   # SCHED_S_TASK_RUNNING   (267009) -- LastTaskResult while running
-$script:SchedTaskHasNotRun = 0x41303   # SCHED_S_TASK_HAS_NOT_RUN (267011)
-$script:TaskStateRunning   = 4         # TASK_STATE_RUNNING (COM); Get-ScheduledTask says "Running"
-
-function Test-ConstructTaskStillRunning {
-    <#
-        Whether a one-shot task is still executing, judged from BOTH the state and
-        the last result: right after Start-ScheduledTask the state can still read
-        Ready while the result already says SCHED_S_TASK_RUNNING, and a result of
-        0x41301 is never a real exit code -- it means "not finished yet".
-    #>
-    [CmdletBinding()]
-    param([Parameter(Mandatory = $true)][AllowNull()]$Status)
-
-    if ($null -eq $Status) { return $true }
-    if ($Status.State -eq $script:TaskStateRunning -or "$($Status.State)" -eq 'Running') { return $true }
-    if ([int]$Status.LastTaskResult -eq $script:SchedTaskRunning) { return $true }
-    return $false
-}
-
-function Get-ConstructTaskStatus {
-    <#
-        @{ State; LastTaskResult } for one task in the Construct task folder, read
-        through the Schedule.Service COM object (which touches only that task).
-        Falls back to the CIM cmdlets scoped to the same folder.
-    #>
-    [CmdletBinding()]
-    param([Parameter(Mandatory = $true)][string]$TaskName)
-
-    try {
-        $svc = New-Object -ComObject Schedule.Service
-        $svc.Connect()
-        $task = $svc.GetFolder($script:ConstructTaskPath.TrimEnd('\')).GetTask($TaskName)
-        return @{ State = [int]$task.State; LastTaskResult = [int]$task.LastTaskResult }
-    } catch {
-        $info = Get-ScheduledTaskInfo -TaskName $TaskName -TaskPath $script:ConstructTaskPath
-        $task = Get-ScheduledTask     -TaskName $TaskName -TaskPath $script:ConstructTaskPath
-        return @{ State = [string]$task.State; LastTaskResult = [int]$info.LastTaskResult }
-    }
-}
-
 function Format-ConstructCommandOutput {
     <#
         The first lines a failed command printed, ready to append to an error
@@ -750,84 +680,6 @@ function Format-ConstructCommandOutput {
     $shown = @($lines | Select-Object -First $MaxLines)
     $more = if ($lines.Count -gt $shown.Count) { " (+$($lines.Count - $shown.Count) more line(s))" } else { "" }
     return " It said:`n    " + ($shown -join "`n    ") + $more
-}
-
-function Invoke-AsLocalSystem {
-    <#
-        Run a program as LocalSystem and return @{ ExitCode; Output; Simulated }.
-
-        Needed because several things the service depends on are PER WINDOWS USER,
-        WSL distro registration above all: what the elevated administrator running
-        this script can see says nothing about what the service will see. A one-shot
-        scheduled task is the way to reach that identity without extra tooling.
-
-        The program and its arguments travel as a serialized ARGUMENT LIST, never as
-        script text: the generated script reads them back and splats them, so a
-        distro name with a space stays one argument and an apostrophe cannot end a
-        literal and start another SYSTEM command.
-
-        Simulated = $true means -WhatIf: nothing ran, and the empty output must not
-        be read as an answer.
-    #>
-    [CmdletBinding(SupportsShouldProcess = $true)]
-    param(
-        [Parameter(Mandatory = $true)][string]$FilePath,
-        [string[]]$ArgumentList = @(),
-        [int]$TimeoutSeconds = 1800
-    )
-
-    if (-not $PSCmdlet.ShouldProcess("LocalSystem", "Run $FilePath")) {
-        return @{ ExitCode = 0; Output = ""; Simulated = $true }
-    }
-
-    $taskName    = "ConstructdSetup-$([guid]::NewGuid().ToString('n'))"
-    $payloadFile = New-ConstructTempPath -Extension "json"
-    $outFile     = New-ConstructTempPath -Extension "txt"
-
-    $payload = ConvertTo-ConstructPayload -Values @{ FilePath = $FilePath; ArgumentList = @($ArgumentList) }
-    [System.IO.File]::WriteAllText($payloadFile, $payload, (New-Object System.Text.UTF8Encoding($false)))
-
-    $script  = New-ConstructLocalSystemScript -PayloadFile $payloadFile -OutputFile $outFile
-    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
-
-    $action    = New-ScheduledTaskAction -Execute "powershell.exe" `
-                    -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded"
-    $principal = New-ScheduledTaskPrincipal -UserId "S-1-5-18" -LogonType ServiceAccount -RunLevel Highest
-    $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-                    -ExecutionTimeLimit (New-TimeSpan -Seconds $TimeoutSeconds)
-
-    # The task lives in its own folder and is polled through the Task Scheduler COM
-    # API, not Get-ScheduledTask. Field failure (2026-09-02): Get-ScheduledTask
-    # -TaskName enumerates the whole root folder and dies with 0x80041318 as soon as
-    # ANY task there has XML the CIM provider cannot parse (a leftover of some
-    # uninstalled product is enough); the loop then fell through and reported the
-    # scheduler's "still running" status 0x41301 (267009) as the command's exit code.
-    try {
-        Register-ScheduledTask -TaskName $taskName -TaskPath $script:ConstructTaskPath `
-            -Action $action -Principal $principal -Settings $settings -Force | Out-Null
-        Start-ScheduledTask -TaskName $taskName -TaskPath $script:ConstructTaskPath
-
-        $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-        do {
-            Start-Sleep -Milliseconds 500
-            $status = Get-ConstructTaskStatus -TaskName $taskName
-        } while ((Test-ConstructTaskStillRunning -Status $status) -and (Get-Date) -lt $deadline)
-
-        if (Test-ConstructTaskStillRunning -Status $status) { throw "The LocalSystem command did not finish within $TimeoutSeconds seconds." }
-        if ($status.LastTaskResult -eq $script:SchedTaskHasNotRun) { throw "The LocalSystem task never started (Task Scheduler reported SCHED_S_TASK_HAS_NOT_RUN)." }
-
-        $output = ""
-        if (Test-Path -LiteralPath $outFile) {
-            $output = (Get-Content -Raw -LiteralPath $outFile -ErrorAction SilentlyContinue)
-            if ($null -eq $output) { $output = "" }
-        }
-
-        return @{ ExitCode = [int]$status.LastTaskResult; Output = $output.Trim(); Simulated = $false }
-    } finally {
-        Unregister-ScheduledTask -TaskName $taskName -TaskPath $script:ConstructTaskPath -Confirm:$false -ErrorAction SilentlyContinue
-        Remove-Item -LiteralPath $outFile -Force -ErrorAction SilentlyContinue
-        Remove-Item -LiteralPath $payloadFile -Force -ErrorAction SilentlyContinue
-    }
 }
 
 function Set-ConstructFirewallRule {
@@ -913,6 +765,50 @@ function Invoke-ConstructdAdmin {
     return @{ ExitCode = $LASTEXITCODE; Output = ($output | Out-String).Trim() }
 }
 
+function Invoke-ConstructIsoBuild {
+    <#
+        Build the autoinstall ISO through the service's own admin CLI, and report the
+        path it published.
+
+        It runs AS THE ADMINISTRATOR RUNNING THIS INSTALLER, not as the service:
+        wsl.exe refuses to run as LocalSystem (Wsl/WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED,
+        field-verified 2026-09-02) and LocalSystem is the service's identity. The
+        service only consumes what is published here (plan section 4.10).
+
+        Idempotent without -Force: the CLI reports media that is already there rather
+        than spending twenty minutes rebuilding it, so re-running the installer is
+        cheap. Fails closed, showing what the build printed -- an exit code alone says
+        nothing about why xorriso or a download gave up.
+    #>
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param(
+        [Parameter(Mandatory = $true)][string]$Exe,
+        [switch]$Force
+    )
+
+    if (-not $PSCmdlet.ShouldProcess("the autoinstall ISO", "Build it through WSL and publish it")) { return }
+
+    # An argument LIST, never a command string: nothing here is quoted by hand.
+    $arguments = @("admin", "iso", "build")
+    if ($Force) { $arguments = $arguments + @("--force") }
+
+    # Tee, so a build that takes twenty minutes is visible while it runs AND readable
+    # afterwards. 2>&1 keeps the CLI's diagnostics (stderr) in the capture too.
+    $isoOutput = $null
+    & $Exe @arguments 2>&1 | Tee-Object -Variable isoOutput
+    $isoExit = $LASTEXITCODE
+    $text = ($isoOutput | Out-String)
+
+    if ($isoExit -ne 0) {
+        $said = Format-ConstructCommandOutput -Output $text -MaxLines 20
+        throw "Building the autoinstall ISO failed (exit $isoExit). Fix what it reports, then re-run this installer with -IsoBuildOnly.$said"
+    }
+
+    # The command's last line is 'ISO: <path>' precisely so this can report it.
+    $isoLine = @($text -split "`r?`n" | Where-Object { $_ -like "ISO: *" } | Select-Object -Last 1)
+    if ($isoLine.Count -gt 0) { Write-Ok $isoLine[0].Trim() } else { Write-Ok "Autoinstall ISO ready" }
+}
+
 # ── 0. Validate inputs ───────────────────────────────────────────────────────
 
 Write-Step "Checking the inputs"
@@ -929,6 +825,42 @@ Write-Ok "Construct checkout: $ScriptsDir"
 $exe = Get-ConstructdExe -Dir $PublishDir
 Write-Ok "Service executable: $exe"
 
+# Every invocation of the service executable below -- the ISO build and the admin CLI --
+# must read the SAME configuration the service will: appsettings.Production.json, the file
+# this installer writes. Set once, here, because the ISO build runs before the admin steps
+# and would otherwise build into the default cache directory instead of -DataDir's.
+$env:DOTNET_ENVIRONMENT = "Production"
+
+if ($IsoBuildOnly -and $SkipIsoBuild) {
+    throw "-IsoBuildOnly and -SkipIsoBuild contradict each other: one runs nothing but the ISO build, the other runs everything except it."
+}
+
+# ── 0b. -IsoBuildOnly: rebuild the media and change nothing else ─────────────
+# For an existing install picking up a new Ubuntu release or a rotated bootstrap key.
+# No ACLs, no certificate, no settings, no service registration -- so it cannot
+# disturb a host that is serving VMs right now. The running install keeps the ISO it
+# has attached; the pointer swap is what makes the new one current.
+if ($IsoBuildOnly) {
+    Write-Step "Rebuilding the autoinstall ISO only (-IsoBuildOnly)"
+
+    # It builds from the SERVICE's configuration (cache directory, source ISO, seed user),
+    # so there has to be one. Without this the CLI would quietly fall back to defaults and
+    # publish media into a directory the service never reads.
+    $productionSettings = Join-Path $PublishDir "appsettings.Production.json"
+    if (-not (Test-Path -LiteralPath $productionSettings)) {
+        throw "-IsoBuildOnly needs an existing install: $productionSettings is missing. Run the installer without it first."
+    }
+
+    Invoke-ConstructIsoBuild -Exe $exe -Force
+
+    Write-Host ""
+    Write-Host "The autoinstall ISO was rebuilt; nothing else on this host was changed." -ForegroundColor Cyan
+    Write-Host "  What is published now:  & `"$exe`" admin iso status"
+    Write-Host "  Remove superseded ISOs: & `"$exe`" admin iso prune"
+    Write-Host ""
+    exit 0
+}
+
 $listenPort = Get-ListenPort -Url $ListenUrl
 $sshRange   = Split-PortRange -Range $SshPortRange -Name "-SshPortRange"
 $appRange   = Split-PortRange -Range $AppPortRange -Name "-AppPortRange"
@@ -941,12 +873,11 @@ if ($sshRange.Start -le $appRange.End -and $appRange.Start -le $sshRange.End) {
     throw "-SshPortRange ($SshPortRange) and -AppPortRange ($AppPortRange) overlap. They are allocated independently, so an overlap would hand the same public port to two VMs."
 }
 
-# One protected root above the data directory: the database, the ISO cache and the
-# LocalSystem WSL distro all live under it, so hardening it once covers all three and
-# no untrusted parent sits between them.
+# One protected root above the data directory: the database and the ISO catalog both
+# live under it, so hardening it once covers both and no untrusted parent sits between
+# them.
 $serviceRoot = Split-Path -Parent $DataDir
 if (-not $serviceRoot) { $serviceRoot = $DataDir }
-$wslRoot = Join-Path $serviceRoot "wsl"
 Write-Ok "Service root: $serviceRoot"
 
 if (-not $AdminUser) {
@@ -964,31 +895,31 @@ if (-not (Test-Path -LiteralPath $bootstrapKey)) {
 
 Write-Step "Preparing the data directory"
 $isoCacheDir = Join-Path $DataDir "iso"
-foreach ($dir in @($serviceRoot, $DataDir, $isoCacheDir, $wslRoot)) {
+foreach ($dir in @($serviceRoot, $DataDir, $isoCacheDir)) {
     if (-not (Test-Path -LiteralPath $dir)) {
         if ($PSCmdlet.ShouldProcess($dir, "Create the directory")) {
             New-Item -ItemType Directory -Path $dir -Force | Out-Null
         }
     }
 }
-Write-Ok "$DataDir (database, ISO cache), $wslRoot (LocalSystem WSL)"
+Write-Ok "$DataDir (database), $isoCacheDir (autoinstall ISO catalog)"
 
 # ── 1b. Lock down what the service executes and trusts ───────────────────────
 # The service runs as LocalSystem: anything an unprivileged user can write into the
 # publish or scripts directory runs as LocalSystem, and anything they can write under
-# the service root IS the authorization database (or the filesystem WSL runs). This
-# happens FIRST -- before the WSL distro is imported into it, and long before the
-# service is registered.
+# the service root IS the authorization database -- or the ISO every new VM installs
+# itself from. This happens FIRST, before anything is put in those directories and long
+# before the service is registered.
 
 Write-Step "Locking down the service's executable, script and data paths"
 if ($SkipAclHardening) {
     Write-Warning "-SkipAclHardening: not touching the ACLs. Make sure only SYSTEM and Administrators can write to these, or to any directory above them:"
     Write-Note "  $PublishDir (executed as LocalSystem)"
     Write-Note "  $ScriptsDir (executed as LocalSystem)"
-    Write-Note "  $serviceRoot (users, token hashes, audit trail, the LocalSystem WSL distro)"
+    Write-Note "  $serviceRoot (users, token hashes, audit trail, the autoinstall ISO catalog)"
 } else {
-    # The service root covers the database, the ISO cache and the WSL distro in one
-    # hardened tree, and each call verifies the whole ancestor chain above it.
+    # The service root covers the database and the ISO catalog in one hardened tree, and
+    # each call verifies the whole ancestor chain above it.
     # Parents before children. The trust check judges a path by its ANCESTORS'
     # ACLs (an ancestor a user can rename is a way to swap the whole tree under the
     # service's feet), so a directory that contains another one on this list must be
@@ -1019,7 +950,12 @@ if ($SkipPrereqs) {
     }
     Write-Ok "Hyper-V is available"
 
-    Write-Step "Checking WSL (the ISO build runs xorriso inside it)"
+    Write-Step "Checking WSL (the ISO build runs xorriso inside it, as YOU)"
+    # YOUR WSL, not the service's. wsl.exe refuses to run as LocalSystem
+    # (Wsl/WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED, field-verified 2026-09-02), which is the
+    # identity the service runs as -- so the media is built here, once, by the
+    # administrator running this installer, and the service only consumes it
+    # (plan section 4.10).
     if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
         throw "WSL is not installed. Install it and a distro, then re-run:`n    wsl --install -d Ubuntu"
     }
@@ -1032,96 +968,25 @@ if ($SkipPrereqs) {
     }
     Write-Ok "WSL distro: $(if ($WslDistro) { $WslDistro } else { $distros[0] })"
 
-    # ── WSL as the SERVICE sees it ───────────────────────────────────────────
-    # WSL distros are registered per Windows user. Everything above was checked as
-    # the elevated administrator; the service runs as LocalSystem, which has its own
-    # distro registry. Without this step the install reports success and the first
-    # VM creation fails with "there is no distribution with the supplied name".
-    Write-Step "Checking WSL under the service identity (LocalSystem)"
-
-    $wanted = $WslDistro
-    if (-not $wanted) { $wanted = $distros[0] }
-
-    # Every value below travels as an ARGUMENT LIST element, never as script text:
-    # a distro name with a space stays one argument, and an apostrophe cannot end a
-    # literal and start another SYSTEM command.
+    Write-Step "Ensuring xorriso + whois inside your WSL distro"
+    # Every value travels as an ARGUMENT LIST element, never as script text: a distro
+    # name with a space stays one argument, and an apostrophe cannot end a literal and
+    # start another command. The bash snippet itself is a constant.
     $distroArgs = @()
     if ($WslDistro) { $distroArgs = @("-d", $WslDistro) }
 
-    # This is a prerequisite check like any other, so it FAILS CLOSED. Reporting
-    # success and starting a LocalSystem service whose distro was never verified is
-    # exactly the failure this step exists to prevent; -SkipPrereqs is the override.
-    $listing = Invoke-AsLocalSystem -FilePath "wsl.exe" -ArgumentList @("-l", "-q") -TimeoutSeconds 120
+    if ($PSCmdlet.ShouldProcess("WSL", "Install xorriso and whois inside the distro")) {
+        $ensureArgs = $distroArgs + @(
+            "-u", "root", "--", "bash", "-lc",
+            "command -v xorriso >/dev/null 2>&1 && command -v mkpasswd >/dev/null 2>&1 || { apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y xorriso whois; }")
 
-    if ($listing.Simulated) {
-        Write-Note "-WhatIf: not running anything as LocalSystem, so the distro check is not performed."
-    } else {
-        if ($listing.ExitCode -ne 0) {
-            $said = Format-ConstructCommandOutput -Output $listing.Output
-            throw "Could not list the WSL distros as LocalSystem (exit $($listing.ExitCode)). That is the identity the service runs as, so its distro cannot be verified; fix it, or re-run with -SkipPrereqs to install anyway.$said"
+        $ensureOutput = (& wsl.exe @ensureArgs 2>&1 | Out-String)
+        if ($LASTEXITCODE -ne 0) {
+            $said = Format-ConstructCommandOutput -Output $ensureOutput
+            throw "Could not install xorriso/whois inside WSL (exit $LASTEXITCODE). The ISO build needs both.$said"
         }
-
-        $systemDistros = @($listing.Output -split "`n" |
-                           ForEach-Object { ($_ -replace "`0", "").Trim() } |
-                           Where-Object { $_ })
-
-        if ($systemDistros -notcontains $wanted) {
-            if (-not $ProvisionWslForService) {
-                throw @"
-WSL distro '$wanted' is registered for $([Security.Principal.WindowsIdentity]::GetCurrent().Name) but NOT for LocalSystem,
-which is the identity the service runs as. The ISO build would fail on the first VM.
-
-Distros LocalSystem can see: $(if ($systemDistros.Count) { $systemDistros -join ', ' } else { '(none)' })
-
-Fix it either way:
-  * re-run this installer with -ProvisionWslForService (exports '$wanted' and imports it for LocalSystem; the export can be several GB), or
-  * do it by hand, running the import as SYSTEM:
-        wsl --export <distro> <tarball>
-        wsl --import <distro> $wslRoot\<distro> <tarball>
-"@
-            }
-
-            Write-Step "Provisioning WSL distro '$wanted' for LocalSystem"
-            $tarball  = New-ConstructTempPath -Extension "tar"
-            $importTo = Join-Path $wslRoot $wanted
-
-            if ($PSCmdlet.ShouldProcess($wanted, "Export the distro and import it for LocalSystem")) {
-                try {
-                    & wsl.exe --export $wanted $tarball
-                    if ($LASTEXITCODE -ne 0) { throw "wsl --export failed with exit code $LASTEXITCODE." }
-
-                    $import = Invoke-AsLocalSystem -FilePath "wsl.exe" `
-                                -ArgumentList @("--import", $wanted, $importTo, $tarball)
-                    if ($import.ExitCode -ne 0) { throw "wsl --import as LocalSystem failed with exit code $($import.ExitCode)." }
-                } finally {
-                    Remove-Item -LiteralPath $tarball -Force -ErrorAction SilentlyContinue
-                }
-            }
-
-            # The distro's filesystem is code WSL runs as LocalSystem, so it gets the
-            # same treatment as everything else the service executes.
-            if (-not $SkipAclHardening) {
-                Set-ConstructPathAcl -Path $importTo -Kind Data -Name "the LocalSystem WSL distro"
-            }
-            Write-Ok "'$wanted' is now registered for LocalSystem"
-        } else {
-            Write-Ok "LocalSystem can see '$wanted'"
-        }
-
-        Write-Step "Ensuring xorriso + whois inside WSL (as LocalSystem)"
-        # Inside the distro LocalSystem will actually use -- installing them for the
-        # administrator's copy proves nothing about the service's. The bash snippet is
-        # a constant; nothing configurable is interpolated into it.
-        $ensure = Invoke-AsLocalSystem -FilePath "wsl.exe" -ArgumentList (
-            $distroArgs + @(
-                "-u", "root", "--", "bash", "-lc",
-                "command -v xorriso >/dev/null 2>&1 && command -v mkpasswd >/dev/null 2>&1 || { apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y xorriso whois; }"))
-
-        if ($ensure.ExitCode -ne 0) {
-            throw "Could not install xorriso/whois inside the LocalSystem WSL distro (exit $($ensure.ExitCode))."
-        }
-        Write-Ok "xorriso + whois present in the service's WSL distro"
     }
+    Write-Ok "xorriso + whois present in your WSL distro"
 
     Write-Step "Checking the OpenSSH client"
     if (Get-Command ssh.exe -ErrorAction SilentlyContinue) {
@@ -1181,6 +1046,11 @@ $settings = [ordered]@{
         SshForwardPorts  = [ordered]@{ Start = $sshRange.Start; End = $sshRange.End }
         AppForwardPorts  = [ordered]@{ Start = $appRange.Start; End = $appRange.End }
         Iso              = [ordered]@{
+            # Prebuilt: the service consumes the media built below, as you. It cannot
+            # build media itself -- WSL refuses to run as LocalSystem. 'PerVm' is the
+            # other implemented strategy (see service/README.md, ISO build strategies).
+            Mode                  = "Prebuilt"
+            HostnameSource        = "hyperv-kvp"
             SeedUser              = "construct"
             BootstrapPublicKeyPath = $bootstrapKey
             CacheDir              = $isoCacheDir
@@ -1200,13 +1070,26 @@ if ($PSCmdlet.ShouldProcess($settingsPath, "Write the service configuration")) {
 }
 Write-Ok $settingsPath
 
-# ── 6. First admin + token (before the service starts) ───────────────────────
+# ── 6. The autoinstall ISO (built as YOU, through your own WSL) ──────────────
+# The service is LocalSystem and WSL will not run there, so the media is built here,
+# by the administrator running this installer, and published into the catalog the
+# service reads (plan section 4.10). It is idempotent: without -Force the command
+# reports the media that is already there instead of spending twenty minutes
+# rebuilding it.
+
+Write-Step "Building the autoinstall ISO (as you, via WSL)"
+if ($SkipIsoBuild) {
+    Write-Warning "-SkipIsoBuild: no install media was built, so creating a VM will fail until you run:"
+    Write-Host "    & `"$exe`" admin iso build" -ForegroundColor Yellow
+} else {
+    Invoke-ConstructIsoBuild -Exe $exe
+}
+
+# ── 7. First admin + token (before the service starts) ───────────────────────
 
 Write-Step "Creating the first admin"
 $token = ""
 if ($PSCmdlet.ShouldProcess($AdminUser, "Create the admin user and issue a token")) {
-    $env:DOTNET_ENVIRONMENT = "Production"
-
     $created = $false
     $add = Invoke-ConstructdAdmin -Exe $exe -Arguments @("admin", "users", "add", $AdminUser, "--role", "Admin", "--max-vms", "$AdminMaxVms")
 
@@ -1249,7 +1132,7 @@ if ($PSCmdlet.ShouldProcess($AdminUser, "Create the admin user and issue a token
     }
 }
 
-# ── 7. Windows service ───────────────────────────────────────────────────────
+# ── 8. Windows service ───────────────────────────────────────────────────────
 
 Write-Step "Registering the Windows service"
 
@@ -1280,8 +1163,9 @@ if ($existingService) {
     Write-Ok "Created the service"
 }
 
-# LocalSystem: it has to drive Hyper-V, netsh and WSL, none of which a restricted
-# service account can do here without further setup.
+# LocalSystem: it has to drive Hyper-V and netsh, neither of which a restricted service
+# account can do here without further setup. It does NOT run WSL -- wsl.exe refuses to run
+# as LocalSystem, which is why the ISO was built above, as you.
 Write-Note "Running as LocalSystem"
 
 if ($NoStart) {
@@ -1291,7 +1175,7 @@ if ($NoStart) {
     Write-Ok "Service started"
 }
 
-# ── 8. Enrollment details ────────────────────────────────────────────────────
+# ── 9. Enrollment details ────────────────────────────────────────────────────
 
 $clientUrl = "https://$PublicHost`:$listenPort"
 
@@ -1308,6 +1192,17 @@ if ($token) {
     Write-Host "  Admin token for $AdminUser (shown once):"
     Write-Host "  $token" -ForegroundColor Yellow
 }
+Write-Host ""
+if ($SkipIsoBuild) {
+    Write-Host "  NO INSTALL MEDIA: creating a VM will fail until you build it." -ForegroundColor Yellow
+    Write-Host "    & `"$exe`" admin iso build"
+} else {
+    Write-Host "  Autoinstall ISO:"
+    Write-Host "    & `"$exe`" admin iso status            # what is published, and from what"
+}
+Write-Host "    & `"$exe`" admin iso build --force      # new Ubuntu release, or a rotated bootstrap key"
+Write-Host "                                             # (or re-run this installer with -IsoBuildOnly)"
+Write-Host "    & `"$exe`" admin iso prune              # delete superseded ISOs nothing has attached"
 Write-Host ""
 Write-Host "  Add another user:"
 Write-Host "    & `"$exe`" admin users add DOMAIN\someone --role User --max-vms 2"

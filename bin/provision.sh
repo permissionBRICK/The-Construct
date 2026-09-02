@@ -459,6 +459,46 @@ if ! [[ "${CONSTRUCT_IDLE_REPORT_INTERVAL_SEC}" =~ ^[0-9]+$ ]] \
   CONSTRUCT_IDLE_REPORT_INTERVAL_SEC=60
 fi
 
+# Belt and braces for GENERIC install media (plan section 4.10). A VM installed from
+# the pre-built ISO boots as 'construct-seed' and adopts the name the hypervisor gave
+# it at first boot. If that never happened -- no KVP daemon on this generation of VM,
+# a hypervisor with no such channel -- the VM is unreachable as <name>.mshome.net,
+# because the switch's DNS publishes the guest's OWN hostname. Provisioning knows the
+# name the host asked for, so it fixes it here.
+#
+# Everything else is untouched: the guard is the placeholder hostname, which only
+# generic media ever has.
+SEED_PLACEHOLDER_HOSTNAME="construct-seed"
+
+adopt_seed_hostname() {
+  # adopt_seed_hostname <current hostname> <wanted name>
+  # Returns 1 (and changes nothing) when this is not a seed VM or the name is unusable.
+  local current="$1" wanted="$2"
+  local etc="${PROVISION_ETC_DIR:-/etc}"   # overridden by test/provision-hostname.test.sh
+
+  [[ "${current}" == "${SEED_PLACEHOLDER_HOSTNAME}" ]] || return 1
+
+  wanted="$(printf '%s' "${wanted}" | tr '[:upper:]' '[:lower:]')"
+  [[ -n "${wanted}" && "${wanted}" != "${SEED_PLACEHOLDER_HOSTNAME}" ]] || return 1
+  # A DNS label: it is what the virtual switch's DNS will publish.
+  [[ "${wanted}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || return 1
+
+  if ! hostnamectl set-hostname "${wanted}" 2>/dev/null; then
+    printf '%s\n' "${wanted}" >"${etc}/hostname" || return 1
+    hostname "${wanted}" 2>/dev/null || true
+  fi
+
+  # 127.0.1.1 is how Debian/Ubuntu resolve the machine's own name; a stale entry
+  # there makes every self-lookup (sudo included) wait for a timeout.
+  if grep -q '^127\.0\.1\.1' "${etc}/hosts" 2>/dev/null; then
+    sed -i "s/^127\.0\.1\.1.*/127.0.1.1\t${wanted}/" "${etc}/hosts"
+  else
+    printf '127.0.1.1\t%s\n' "${wanted}" >>"${etc}/hosts"
+  fi
+
+  printf '%s' "${wanted}"
+}
+
 step "provision.sh starting (non-interactive)"
 note "    AGENT_NAME=${AGENT_NAME}"
 note "    PROJECTS=${PROJECTS}"
@@ -486,6 +526,19 @@ fi
 if [[ -n "${CONSTRUCT_SERVICE_URL}" ]]; then
   note "    CONSTRUCT_SERVICE_URL=${CONSTRUCT_SERVICE_URL}"
   note "    CONSTRUCT_INSTANCE_NAME=${CONSTRUCT_INSTANCE_NAME}"
+fi
+
+# Silent on every VM whose hostname is its own -- which is every VM not installed
+# from generic media whose first-boot adoption failed.
+_current_hostname="$(hostname 2>/dev/null || true)"
+if [[ "${_current_hostname}" == "${SEED_PLACEHOLDER_HOSTNAME}" ]]; then
+  step "Adopting this VM's name (it still carries the install media's placeholder)"
+  _adopted_hostname="$(adopt_seed_hostname "${_current_hostname}" "${CONSTRUCT_INSTANCE_NAME}" || true)"
+  if [[ -n "${_adopted_hostname}" ]]; then
+    ok "hostname ${SEED_PLACEHOLDER_HOSTNAME} -> ${_adopted_hostname}"
+  else
+    warn "hostname is still ${SEED_PLACEHOLDER_HOSTNAME}: '${CONSTRUCT_INSTANCE_NAME}' cannot be used as one"
+  fi
 fi
 
 # Free space FIRST: on a full disk every later step fails in its own confusing

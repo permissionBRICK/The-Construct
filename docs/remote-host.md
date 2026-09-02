@@ -40,7 +40,8 @@ The split is deliberate ([plan §4.4](plans/modular-remote-architecture.md), "hy
 
 | Step | Who does it | Why |
 |---|---|---|
-| Build the autoinstall ISO, create the VM, wait for the OS install, allocate the SSH port | **the service** | it owns the hypervisor, WSL and the port range |
+| Create the VM from the pre-built autoinstall ISO, wait for the OS install, allocate the SSH port | **the service** | it owns the hypervisor and the port range |
+| Build that ISO, once, before any VM exists | **the host's administrator**, interactively | `wsl.exe` refuses to run as LocalSystem (`WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED`), and LocalSystem is the service's identity. The installer does it as *you*; `constructd admin iso build` repeats it later ([plan §4.10](plans/modular-remote-architecture.md)). |
 | Run `bin/provision.sh`, install the agent stack, restore backups, wire *your* machine (ssh config, VS Code Remote-SSH, OpenCode) | **your PC**, over SSH | provisioning carries your git credentials, agent auth and backups. None of that may transit a shared service. |
 
 The **guest payload is identical in every mode** — same ISO inputs, same `provision.sh`
@@ -57,10 +58,12 @@ you dial* change.
    .\service\host\Install-ConstructHost.ps1
    ```
 
-   It checks the prerequisites (Hyper-V, WSL for the ISO build), hardens the paths the
+   It checks the prerequisites (Hyper-V, **your** WSL distro with `xorriso` + `whois` for
+   the ISO build), hardens the paths the
    service executes and trusts, generates the self-signed TLS certificate, opens three
    inbound firewall rules (the API port, the SSH forward range, the app forward range),
-   and registers `constructd` as a Windows service. See
+   **builds the autoinstall ISO as you, through your WSL**, and registers `constructd` as a
+   Windows service. See
    [`service/README.md`](../service/README.md) for the configuration keys
    (`PublicHost`, `SshForwardPorts`, the idle defaults, the certificate) and the full
    parameter table. Publish the service first
@@ -97,14 +100,39 @@ you dial* change.
    >
    > That output is exactly the spelling §3 step 2 shows the user.
 
-3. **Add a user and issue their token.** The admin CLI is the same executable and works
-   the stores directly — no HTTP, no listener, no authentication beyond already being an
-   administrator on that host:
+3. **The autoinstall ISO.** The installer already built it (step 1) — one **generic** ISO
+   that every VM on this host installs from. There is nothing per-VM in it: the guest reads
+   the Hyper-V VM name out of the KVP data-exchange channel at first boot and adopts it as
+   its hostname, which is what makes `<vm name>.mshome.net` resolve for the service's own
+   reachability check and for the forwards' `connectaddress`.
 
    ```powershell
    # the published executable itself, with `admin` as the first argument
    $constructd = "C:\Construct\service\publish\Constructd.Api.exe"
 
+   & $constructd admin iso status          # what is published, from which source ISO, which key
+   & $constructd admin iso build --force   # new Ubuntu release, or a rotated bootstrap key
+   & $constructd admin iso prune           # delete superseded ISOs nothing has attached
+   ```
+
+   `admin iso build` runs **as you**, through **your** WSL: `wsl.exe` refuses to run as
+   LocalSystem, which is the service's identity ([plan §4.10](plans/modular-remote-architecture.md)).
+   The service only consumes what is published. A rebuild never overwrites the ISO in
+   place — Hyper-V holds an open handle on media a VM has attached — it writes
+   `construct-autoinstall-<utc>.iso` next to it, with a sidecar recording when it was
+   built, from which source ISO and SHA-256, and which bootstrap key fingerprint is inside;
+   then the `current.pointer` swap makes it the one new VMs get. `.\service\host\Install-ConstructHost.ps1
+   -IsoBuildOnly` does the same from the installer.
+
+   > **No media, no VMs.** Creating a VM fails with *"No autoinstall ISO is available on
+   > this host"* and the exact command to fix it. That is also what `-SkipIsoBuild` leaves
+   > behind on purpose.
+
+4. **Add a user and issue their token.** The admin CLI is the same executable and works
+   the stores directly — no HTTP, no listener, no authentication beyond already being an
+   administrator on that host:
+
+   ```powershell
    & $constructd admin users add DOMAIN\alice --role User --max-vms 2
    & $constructd admin users add DOMAIN\bob   --role User --max-vms 2 --no-host-forwards
    & $constructd admin tokens issue DOMAIN\alice --label "alice laptop"
@@ -134,7 +162,7 @@ you dial* change.
    rather than over-grants; `--no-host-forwards` denies that user
    [`construct expose --to host`](expose.md#the-two-targets).
 
-4. **Tell the users the URL and the SHA-256 certificate fingerprint** (the value computed
+5. **Tell the users the URL and the SHA-256 certificate fingerprint** (the value computed
    in step 2, not the thumbprint the installer printed). The client shows that fingerprint
    at enrolment and asks for confirmation; publishing it out of band is what makes the
    confirmation meaningful (see §5).
@@ -174,7 +202,7 @@ was. Pick **Remote host** and the installer walks:
 6. The **usual questions** — RAM, disk, project profiles, git identity, agent password —
    exactly the same TUI screens as the local path.
 7. `POST /vms` starts the create job; its progress lines stream into the same scrolling
-   log the local install uses (ISO build → VM create → OS install wait → media detach →
+   log the local install uses (media selected → VM create → OS install wait → media detach →
    SSH forward allocated).
 8. The **instance registry entry** is written
    (`%LOCALAPPDATA%\The-Construct\instances.json`) as soon as the endpoint is known —

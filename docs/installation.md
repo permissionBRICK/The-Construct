@@ -254,7 +254,9 @@ panel to list and switch to it.
     -InstanceName work-vm -VmCpuCount 4 -VmMemoryGB 8 -VmDiskGB 60 -Projects default
 ```
 
-The host service builds the ISO, creates the VM and allocates its SSH forward; your PC then
+The host service creates the VM from the autoinstall ISO its administrator built at install
+time (one generic ISO serves every VM: the guest takes its hostname from the Hyper-V VM name
+at first boot) and allocates its SSH forward; your PC then
 runs the ordinary `Provision-AgentVM.ps1` over that endpoint, so your git credentials, agent
 auth and backups never transit the service. The registry entry is written by the installer
 as soon as the endpoint is known. This path needs **no administrator rights on your PC** —
