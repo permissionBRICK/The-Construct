@@ -32,6 +32,15 @@ function ok(name, cond, detail) {
   ok("compare: ahead_by 0 -> not available", (() => { const r = updates.constructUpdateFromCompare({ ahead_by: 0 }); return r.available === false && r.count === 0; })());
   ok("compare: missing field -> null", updates.constructUpdateFromCompare({}) === null);
   ok("compare: null -> null", updates.constructUpdateFromCompare(null) === null);
+  // A 404 on compare = the installed commit no longer exists upstream (history rewrite).
+  // That must read as "update available" with no distance, never as "no info".
+  ok("compare: NOT_FOUND -> available, unknown distance", (() => {
+    const r = updates.constructUpdateFromCompare(updates.NOT_FOUND);
+    return r && r.available === true && r.count === null && r.unknownBase === true;
+  })());
+  ok("compare: NOT_FOUND shows an empty behind-text", updates.behindText(updates.constructUpdateFromCompare(updates.NOT_FOUND).count) === "");
+  ok("compare: an ordinary object without ahead_by is still null (no false positives)", updates.constructUpdateFromCompare({ message: "x" }) === null);
+  ok("compare: NOT_FOUND is frozen", Object.isFrozen(updates.NOT_FOUND));
 
   // ── behindText ──────────────────────────────────────────────────────────────
   ok("behindText: positive", updates.behindText(6) === "6 behind");
@@ -52,6 +61,18 @@ function ok(name, cond, detail) {
 
   const netFail = await updates.checkConstruct({ repo: "a/b", ref: "main", installedCommit: "deadbeef" }, { fetchJson: async () => null });
   ok("check: network failure -> null", netFail === null);
+  const gone = await updates.checkConstruct({ repo: "a/b", ref: "main", installedCommit: "deadbeef" }, { fetchJson: async () => updates.NOT_FOUND });
+  ok("checkConstruct: 404 (installed commit rewritten away) -> update available", gone && gone.available === true && gone.count === null);
+  const aGone = await updates.augment({ agents: [] }, { installedCommit: "abc1234567", constructRef: "main" }, { fetchJson: async () => updates.NOT_FOUND, noCache: true });
+  ok("augment: 404 -> banner shown (available) with no count", aGone.update && aGone.update.available === true && aGone.update.behind === "");
+  // fetchJson maps a real HTTP 404 to NOT_FOUND, other non-2xx to null.
+  const fakeGet = (status) => (u, o, cb) => {
+    const res = new EventEmitter(); res.statusCode = status; res.headers = {}; res.resume = () => {}; res.setEncoding = () => {};
+    const req = new EventEmitter(); setImmediate(() => { cb(res); res.emit("end"); }); return req;
+  };
+  ok("fetchJson: HTTP 404 -> NOT_FOUND", (await updates.fetchJson("https://api.github.com/x", { _get: fakeGet(404) })) === updates.NOT_FOUND);
+  ok("fetchJson: HTTP 500 -> null", (await updates.fetchJson("https://api.github.com/x", { _get: fakeGet(500) })) === null);
+  ok("fetchJson: HTTP 403 (rate limit) -> null, not an update offer", (await updates.fetchJson("https://api.github.com/x", { _get: fakeGet(403) })) === null);
 
   // ── augment ─────────────────────────────────────────────────────────────────
   const base = { online: true, host: "h" };
@@ -139,7 +160,8 @@ function ok(name, cond, detail) {
     "https://x/old": { statusCode: 301, headers: { location: "https://x/new" } },
     "https://x/new": { statusCode: 200, body: '{"tag_name":"v9.9.9"}' },
   }) })).tag_name === "v9.9.9");
-  ok("fetchJson: non-2xx -> null", (await updates.fetchJson("https://x/m", { _get: mockGet({ "https://x/m": { statusCode: 404 } }) })) === null);
+  ok("fetchJson: non-2xx -> null", (await updates.fetchJson("https://x/m", { _get: mockGet({ "https://x/m": { statusCode: 500 } }) })) === null);
+  ok("fetchJson: 404 is the one non-2xx with a meaning (NOT_FOUND, not null)", (await updates.fetchJson("https://x/m", { _get: mockGet({ "https://x/m": { statusCode: 404 } }) })) === updates.NOT_FOUND);
   ok("fetchJson: stops after maxRedirects -> null", (await updates.fetchJson("https://x/a", { maxRedirects: 1, _get: mockGet({
     "https://x/a": { statusCode: 302, headers: { location: "https://x/b" } },
     "https://x/b": { statusCode: 302, headers: { location: "https://x/c" } },
