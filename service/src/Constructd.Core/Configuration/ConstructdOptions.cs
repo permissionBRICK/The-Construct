@@ -171,9 +171,63 @@ public sealed class IdleOptions
     public int MissingReportGraceMultiple { get; set; } = 3;
 }
 
+/// <summary>
+/// How install media is built. One strategy per value; composition maps the value to an
+/// <see cref="Abstractions.IIsoBuilder"/> in exactly one place, so a new strategy is a
+/// new implementation and one more case there.
+/// </summary>
+public enum IsoBuildMode
+{
+    /// <summary>
+    /// The service consumes media an administrator built once, interactively
+    /// (<c>constructd admin iso build</c>), and published into the ISO catalog. The default, because
+    /// WSL refuses to run as LocalSystem (<c>WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED</c>) and that is the
+    /// identity the service runs as. The guest takes its name from the hypervisor at first boot.
+    /// </summary>
+    Prebuilt,
+
+    /// <summary>
+    /// The service builds one ISO per VM itself, through <c>wsl.exe</c>. Usable wherever the service
+    /// identity can run WSL; it bakes the VM's hostname into the seed.
+    /// </summary>
+    PerVm,
+
+    /// <summary>Planned: remaster the stock ISO in-process on Windows, no WSL and no xorriso.</summary>
+    Native,
+
+    /// <summary>
+    /// Planned: build inside an existing Construct VM over SSH — where xorriso already is —
+    /// and copy the result back. This is how the system will self-update its install media.
+    /// </summary>
+    InGuest,
+
+    /// <summary>
+    /// Planned: build natively on the hypervisor host (xorriso on a Proxmox node), which is
+    /// the regular autoinstall path once Hyper-V is not the only backend.
+    /// </summary>
+    HypervisorHost,
+}
+
 /// <summary>Inputs for the autoinstall ISO build.</summary>
 public sealed class IsoOptions
 {
+    /// <summary>
+    /// Which build strategy is in effect. <see cref="IsoBuildMode.Prebuilt"/> by default — see the
+    /// enum for why, and <c>service/README.md</c> ("ISO build strategies") for the whole picture.
+    /// </summary>
+    public IsoBuildMode Mode { get; set; } = IsoBuildMode.Prebuilt;
+
+    /// <summary>
+    /// Where a guest built from GENERIC media takes its hostname at first boot — the
+    /// <c>VM_HOSTNAME_SOURCE</c> of <c>bin/build-autoinstall-iso.sh</c>. <c>hyperv-kvp</c> reads the
+    /// Hyper-V VM name out of the KVP data-exchange pool; <c>cloud-init-metadata</c> is the planned
+    /// value for Proxmox / NoCloud / ConfigDrive, where the hypervisor supplies identity natively.
+    ///
+    /// It matters beyond cosmetics: the driver contract resolves a VM as <c>&lt;name&gt;.mshome.net</c>,
+    /// and that name is the guest's OWN hostname as the switch's DNS learned it.
+    /// </summary>
+    public string HostnameSource { get; set; } = "hyperv-kvp";
+
     /// <summary>Seed user created by the unattended install (before provisioning takes over).</summary>
     public string SeedUser { get; set; } = "construct";
 

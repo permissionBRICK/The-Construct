@@ -202,11 +202,78 @@ public static class ServiceComposition
             client.Timeout = TimeSpan.FromHours(2));
 
         services.AddSingleton<IHypervisorDriver, HyperVDriver>();
-        services.AddSingleton<IIsoBuilder, WslIsoBuilder>();
         services.AddSingleton<IPortForwardManager, NetshPortForwardManager>();
+
+        services.AddIsoStrategy(options);
 
         return services;
     }
+
+    /// <summary>
+    /// THE place that maps <c>Constructd:Iso:Mode</c> to an ISO build strategy. Adding a
+    /// strategy is a new <see cref="IIsoBuilder"/> (and, if it can produce media, an
+    /// <see cref="IIsoMediaBuilder"/>) plus one case here — no endpoint, job or CLI code changes,
+    /// because everything else talks to the two seams and the catalog.
+    ///
+    /// Three registrations, and they are deliberately independent:
+    /// <list type="bullet">
+    /// <item>the <b>catalog</b> — versioned files, pointer, sidecars — shared by every strategy;</item>
+    /// <item>the <b>producing</b> side (<see cref="IIsoMediaBuilder"/>), which is what
+    /// <c>admin iso build</c> drives as the interactive administrator. It is registered whatever the
+    /// mode is: in <c>Prebuilt</c> mode building the media is the whole point, and in <c>PerVm</c>
+    /// mode an admin can still publish a catalog entry;</item>
+    /// <item>the <b>consuming</b> side (<see cref="IIsoBuilder"/>), chosen by the mode. This is the
+    /// only line that differs between a host that consumes pre-built media and one whose service
+    /// identity can run WSL per VM.</item>
+    /// </list>
+    /// </summary>
+    public static IServiceCollection AddIsoStrategy(
+        this IServiceCollection services,
+        ConstructdOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        services.AddSingleton<IIsoCatalog>(sp => new FileIsoCatalog(
+            sp.GetRequiredService<IIsoFileSystem>(),
+            sp.GetRequiredService<IClock>(),
+            options.Iso.CacheDir,
+            sp.GetRequiredService<ILoggerFactory>().CreateLogger<FileIsoCatalog>()));
+
+        // WSL is what can build media on a Windows host today; the interactive administrator's WSL,
+        // not the service's (it has none — that is the whole reason Prebuilt is the default).
+        services.AddSingleton<WslIsoBuilder>();
+        services.AddSingleton<IIsoMediaBuilder>(sp => sp.GetRequiredService<WslIsoBuilder>());
+
+        switch (options.Iso.Mode)
+        {
+            case IsoBuildMode.Prebuilt:
+                services.AddSingleton<IIsoBuilder>(sp => new PrebuiltIsoBuilder(
+                    sp.GetRequiredService<IIsoCatalog>(),
+                    sp.GetRequiredService<IIsoFileSystem>(),
+                    options,
+                    sp.GetRequiredService<ILoggerFactory>().CreateLogger<PrebuiltIsoBuilder>()));
+                break;
+
+            case IsoBuildMode.PerVm:
+                services.AddSingleton<IIsoBuilder>(sp => sp.GetRequiredService<WslIsoBuilder>());
+                break;
+
+            default:
+                // Unreachable: ValidatePlatformOptions refuses these at startup. Kept so that adding a
+                // value to the enum without adding it here fails loudly rather than silently falling
+                // back to a strategy nobody asked for.
+                throw new InvalidOperationException(UnimplementedModeMessage(options.Iso.Mode));
+        }
+
+        return services;
+    }
+
+    /// <summary>Why a planned mode is not a working mode, and what to set instead.</summary>
+    private static string UnimplementedModeMessage(IsoBuildMode mode) =>
+        $"Constructd:Iso:Mode is '{mode}', which is a planned ISO build strategy (service/README.md, " +
+        "\"ISO build strategies\") and is not implemented yet. Use 'Prebuilt' " +
+        "(an administrator builds the media with 'constructd admin iso build') or 'PerVm' (the " +
+        "service builds one ISO per VM through WSL, which needs a service identity that can run it).";
 
     /// <summary>
     /// Fails at startup on a misconfiguration that would otherwise surface as a failed VM creation
@@ -214,6 +281,11 @@ public static class ServiceComposition
     /// </summary>
     private static void ValidatePlatformOptions(ConstructdOptions options)
     {
+        if (options.Iso.Mode is not (IsoBuildMode.Prebuilt or IsoBuildMode.PerVm))
+        {
+            throw new InvalidOperationException(UnimplementedModeMessage(options.Iso.Mode));
+        }
+
         if (string.IsNullOrWhiteSpace(options.ScriptsDir))
         {
             throw new InvalidOperationException(

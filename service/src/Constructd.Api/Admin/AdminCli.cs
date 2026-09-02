@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using Constructd.Api.Infrastructure;
 using Constructd.Core.Abstractions;
+using Constructd.Core.Configuration;
 using Constructd.Core.Domain;
 using Constructd.Core.Logic;
 
@@ -51,6 +52,9 @@ public static class AdminCli
           tokens issue <user> --label <label>
           tokens revoke-all <user>
           forwards reconcile
+          iso build [--force]
+          iso status
+          iso prune
 
         Options:
           --json    machine-readable output on stdout (errors on stderr)
@@ -88,6 +92,9 @@ public static class AdminCli
                 ("tokens", "issue") => await IssueTokenAsync(positional, services, writer, cancellationToken).ConfigureAwait(false),
                 ("tokens", "revoke-all") => await RevokeTokensAsync(positional, services, writer, cancellationToken).ConfigureAwait(false),
                 ("forwards", "reconcile") => await ReconcileAsync(positional, services, writer, cancellationToken).ConfigureAwait(false),
+                ("iso", "build") => await IsoBuildAsync(positional, services, writer, output, cancellationToken).ConfigureAwait(false),
+                ("iso", "status") => IsoStatus(positional, services, writer),
+                ("iso", "prune") => IsoPrune(positional, services, writer),
                 _ => writer.Usage($"unknown command '{string.Join(' ', positional.Take(2))}'"),
             };
         }
@@ -331,6 +338,214 @@ public static class AdminCli
     }
 
     /// <summary>
+    /// Builds the autoinstall media and publishes it into the catalog.
+    ///
+    /// A thin driver over "a builder + the catalog", and it is thin on purpose: which
+    /// strategy builds (WSL today; Native, InGuest or HypervisorHost later) is composition's decision,
+    /// and none of it is visible here. Run by the interactive administrator — the installer's ISO step
+    /// is this command — because on Windows the service identity (LocalSystem) cannot run WSL.
+    ///
+    /// The seed password is generated here and discarded: nobody logs in with it (the client
+    /// provisions over the bootstrap key), it is never printed, stored or audited.
+    /// </summary>
+    private static async Task<int> IsoBuildAsync(
+        IReadOnlyList<string> args,
+        IServiceProvider services,
+        AdminOutput writer,
+        TextWriter output,
+        CancellationToken cancellationToken)
+    {
+        var parsed = new OptionSet(args.Skip(2), valueOptions: [], flags: ["--force"]);
+        if (parsed.Unknown is { } unknown)
+        {
+            return writer.Usage($"unknown option '{unknown}'");
+        }
+
+        var force = parsed.Flag("--force");
+
+        var catalog = services.GetService<IIsoCatalog>();
+        var builder = services.GetService<IIsoMediaBuilder>();
+        var options = services.GetService<ConstructdOptions>();
+        if (catalog is null || builder is null || options is null)
+        {
+            return writer.Error(AdminExitCode.Failed, NoIsoSupport);
+        }
+
+        var current = catalog.GetCurrent();
+        if (!force && current is { Sidecar: not null })
+        {
+            // Idempotent: re-running the installer must not spend twenty minutes rebuilding media
+            // that is already there. --force is how a new Ubuntu release or a rotated key gets in.
+            return writer.Result(
+                Describe(current, options),
+                $"The autoinstall ISO is already built ({current.FileName}, " +
+                $"built {current.Sidecar.BuiltAt.UtcDateTime.ToString("u", CultureInfo.InvariantCulture)})." +
+                Environment.NewLine +
+                "Pass --force to build a new one." + Environment.NewLine +
+                $"ISO: {current.Path}");
+        }
+
+        // Progress is the only sign of life during a multi-gigabyte repack, so it is streamed — but
+        // never into stdout that a script is parsing as JSON.
+        var progress = writer.Json ? null : new TextWriterProgress(output);
+
+        var mediaPath = catalog.NextMediaPath();
+        var result = await builder.BuildMediaAsync(
+            new IsoMediaRequest(
+                mediaPath,
+                options.Iso.SeedUser,
+                TokenHasher.GenerateSecret(),
+                options.Iso.BootstrapPublicKeyPath,
+                options.Iso.HostnameSource),
+            progress,
+            cancellationToken).ConfigureAwait(false);
+
+        var clock = services.GetRequiredService<IClock>();
+        var entry = catalog.Publish(
+            result.IsoPath,
+            new IsoSidecar(
+                clock.UtcNow,
+                result.SourceIsoPath,
+                result.SourceSha256,
+                options.Iso.SeedUser,
+                result.BootstrapKeyFingerprint,
+                options.Iso.HostnameSource,
+                result.BuildScriptSha256));
+
+        await AuditAsync(
+            services,
+            "iso.build",
+            entry.FileName,
+            $"source={result.SourceIsoPath}, hostnameSource={options.Iso.HostnameSource}, " +
+            $"bootstrapKey={result.BootstrapKeyFingerprint}",
+            cancellationToken).ConfigureAwait(false);
+
+        return writer.Result(
+            Describe(entry, options),
+            $"Built and published {entry.FileName}." + Environment.NewLine +
+            $"ISO: {entry.Path}");
+    }
+
+    /// <summary>
+    /// What media this host has, and whether a VM could be created right now. Exit code 3 when
+    /// nothing usable is published, so the installer and a health check can branch on it.
+    /// </summary>
+    private static int IsoStatus(IReadOnlyList<string> args, IServiceProvider services, AdminOutput writer)
+    {
+        if (Extra(args, 2) is { } unexpected)
+        {
+            return writer.Usage($"iso status takes no options; got '{unexpected}'");
+        }
+
+        var catalog = services.GetService<IIsoCatalog>();
+        var options = services.GetService<ConstructdOptions>();
+        if (catalog is null || options is null)
+        {
+            return writer.Error(AdminExitCode.Failed, NoIsoSupport);
+        }
+
+        var current = catalog.GetCurrent();
+        var all = catalog.List();
+
+        if (current is null || current.Sidecar is null)
+        {
+            var why = current is null
+                ? "No autoinstall ISO is published on this host."
+                : $"The current ISO ({current.FileName}) has no readable sidecar, so it is not usable.";
+
+            return writer.Error(
+                AdminExitCode.NotFound,
+                $"{why} VM creation will fail until it is built: {IsoBuildCommand}");
+        }
+
+        var lines = new List<string>
+        {
+            $"Mode          : {options.Iso.Mode}",
+            $"Current ISO   : {current.Path}",
+            $"Built         : {current.Sidecar.BuiltAt.UtcDateTime.ToString("u", CultureInfo.InvariantCulture)}",
+            $"Source ISO    : {current.Sidecar.SourceIso}",
+            $"Source SHA256 : {current.Sidecar.SourceSha256}",
+            $"Seed user     : {current.Sidecar.SeedUser}",
+            $"Bootstrap key : {current.Sidecar.BootstrapKeyFingerprint}",
+            $"Guest identity: {current.Sidecar.HostnameSource}",
+            $"Size          : {current.SizeBytes} bytes",
+        };
+
+        var others = all.Where(entry => !entry.IsCurrent).ToList();
+        if (others.Count > 0)
+        {
+            lines.Add($"Older ISOs    : {others.Count} ({string.Join(", ", others.Select(entry => entry.FileName))})");
+            lines.Add("                remove them with: constructd admin iso prune");
+        }
+
+        return writer.Result(
+            new
+            {
+                mode = options.Iso.Mode.ToString(),
+                current = Describe(current, options),
+                others = others.Select(entry => Describe(entry, options)).ToList(),
+            },
+            string.Join(Environment.NewLine, lines));
+    }
+
+    /// <summary>
+    /// Deletes the media nothing points at. An ISO a VM still has attached is held open by Hyper-V:
+    /// that is reported and skipped, not treated as a failure.
+    /// </summary>
+    private static int IsoPrune(IReadOnlyList<string> args, IServiceProvider services, AdminOutput writer)
+    {
+        if (Extra(args, 2) is { } unexpected)
+        {
+            return writer.Usage($"iso prune takes no options; got '{unexpected}'");
+        }
+
+        var catalog = services.GetService<IIsoCatalog>();
+        if (catalog is null)
+        {
+            return writer.Error(AdminExitCode.Failed, NoIsoSupport);
+        }
+
+        var pruned = catalog.Prune();
+
+        var lines = new List<string>
+        {
+            pruned.Removed.Count == 0
+                ? "No ISO was removed."
+                : $"Removed {pruned.Removed.Count} ISO(s): {string.Join(", ", pruned.Removed)}",
+        };
+        lines.AddRange(pruned.Skipped.Select(skip => $"Kept {skip.FileName}: {skip.Reason}."));
+
+        return writer.Result(
+            new
+            {
+                removed = pruned.Removed,
+                skipped = pruned.Skipped.Select(skip => new { file = skip.FileName, reason = skip.Reason }).ToList(),
+            },
+            string.Join(Environment.NewLine, lines));
+    }
+
+    /// <summary>The command that produces the media; printed wherever its absence is reported.</summary>
+    private const string IsoBuildCommand = "constructd admin iso build";
+
+    private const string NoIsoSupport =
+        "install media can only be built or inspected on the Windows host that holds it";
+
+    private static object Describe(IsoCatalogEntry entry, ConstructdOptions options) => new
+    {
+        file = entry.FileName,
+        path = entry.Path,
+        current = entry.IsCurrent,
+        sizeBytes = entry.SizeBytes,
+        builtAt = entry.Sidecar?.BuiltAt,
+        sourceIso = entry.Sidecar?.SourceIso,
+        sourceSha256 = entry.Sidecar?.SourceSha256,
+        seedUser = entry.Sidecar?.SeedUser,
+        bootstrapKeyFingerprint = entry.Sidecar?.BootstrapKeyFingerprint,
+        hostnameSource = entry.Sidecar?.HostnameSource ?? options.Iso.HostnameSource,
+        scriptSha256 = entry.Sidecar?.ScriptSha256,
+    };
+
+    /// <summary>
     /// The first argument past what a command takes, if any. A verb that quietly ignores what it was
     /// not expecting is how somebody ends up believing they set a quota they did not set.
     /// </summary>
@@ -370,9 +585,18 @@ public static class AdminCli
     }
 }
 
+/// <summary>Progress lines straight to the console — what a long build shows while it runs.</summary>
+internal sealed class TextWriterProgress(TextWriter output) : IProgress<string>
+{
+    public void Report(string value) => output.WriteLine(value);
+}
+
 /// <summary>Text or JSON, chosen once by <c>--json</c> and applied to results and errors alike.</summary>
 internal sealed class AdminOutput(TextWriter output, TextWriter error, bool json)
 {
+    /// <summary>Whether stdout is being parsed — nothing else may be written to it.</summary>
+    public bool Json => json;
+
     public int Result(object payload, string text)
     {
         if (json)
