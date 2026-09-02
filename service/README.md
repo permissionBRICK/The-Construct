@@ -4,11 +4,16 @@ The .NET service that runs on a remote Hyper-V host so several users can create 
 VMs on it from the VS Code extension and the PowerShell scripts
 (`docs/plans/modular-remote-architecture.md` §4.4, §4.6, §4.7).
 
-**Status: contract-first scaffold (batch B6).** The API surface, the domain model, the internal
-interfaces, the idle-policy engine and the durable SQLite stores are real and covered by tests.
-Everything that has to touch Windows — the Hyper-V driver, the WSL ISO build, `netsh` port forwards —
-exists only as an interface plus an in-memory fake, so the whole HTTP surface can be developed and
-tested on Linux. The follow-up batches implement those interfaces without touching the API layer.
+**Status: complete (batches B6 + B6b).** The API surface, the domain model, the idle-policy engine and
+the durable SQLite stores landed with the contract-first scaffold (B6); the Windows platform — the
+Hyper-V driver, the WSL ISO build, the `netsh` port forwards — plus the admin CLI and the host
+installer landed with B6b, without changing an endpoint, a policy or a job.
+
+Everything Windows-specific still sits behind the same interfaces, and every child process goes
+through one `IProcessRunner`. That is what lets the whole thing be developed and tested on Linux: the
+tests assert the exact `powershell.exe`, `wsl.exe` and `netsh.exe` **argument vectors** against a
+recording runner, so the command lines this service issues are pinned by tests rather than by a field
+visit.
 
 ## Layout
 
@@ -20,15 +25,23 @@ service/
                             AuditEntry, VmDescriptor, Endpoint
     Abstractions/           IHypervisorDriver, IIsoBuilder, IJobEngine, IJobStore,
                             IPortForwardManager, IForwardStore, IIdlePolicyEngine, IUserStore,
-                            ITokenService, IVmRepository, IAuditLog, IClock
+                            ITokenService, IVmRepository, IAuditLog, IClock,
+                            IProcessRunner, ITcpTableReader
     Logic/                  PortAllocator, TokenHasher, VmNameValidator, Ownership,
-                            IdleEvaluator, IdlePolicyRules
+                            IdleEvaluator, IdlePolicyRules, TcpConnectionCounter
     Services/               IdlePolicyEngine, InProcessJobEngine — platform-agnostic, so these are
                             the real implementations in every mode
     Configuration/          ConstructdOptions and friends
   src/Constructd.Sqlite/    durable stores: hand-written SQL over Microsoft.Data.Sqlite, no ORM
+  src/Constructd.Windows/   the Windows platform; every call goes through IProcessRunner
+    Process/                ProcessRunner — argv arrays, no shell, ever
+    HyperV/                 HyperVDriver + the PowerShell it composes (drivers/Load-ConstructDriver.ps1)
+    Iso/                    WslIsoBuilder, the WSL path mapping, the source-ISO cache
+    Forwards/               NetshPortForwardManager, the portproxy parser, the TCP-table P/Invoke
+    Internal/               ArgumentGuard + PowerShellLiteral — nothing reaches a child unvalidated
   src/Constructd.Api/       ASP.NET Core minimal API host
-    Program.cs              composition root, TLS, Windows-service hook
+    Program.cs              composition root, TLS, Windows-service hook, `admin` CLI entry
+    Admin/                  the admin CLI (`constructd admin …`) and its own tiny host
     Auth/                   schemes (Bearer, VmToken, Negotiate seam, test identity), policies
     Endpoints/              one file per area of the API
     Jobs/                   the VM create/remove workflows the job engine runs
@@ -36,8 +49,15 @@ service/
     Infrastructure/         JSON contract, problem details, centralized auditing
     Contracts/              request/response DTOs — the wire contract
   src/Constructd.Fakes/     in-memory implementation of every interface
-  tests/Constructd.Tests/   xunit: Core unit tests, SQLite persistence tests, API integration tests
+  host/                     Install-ConstructHost.ps1 / Uninstall-ConstructHost.ps1 (PS 5.1)
+  tests/Constructd.Tests/   xunit: Core unit tests, SQLite persistence tests, API integration tests,
+                            Windows platform tests (command lines, parsers, reconciliation)
+  tests/host-installer.test.ps1   pwsh: installer parser + parameter contract
 ```
+
+`Constructd.Windows` targets plain `net10.0`, **not** `net10.0-windows`: the API references it and the
+whole suite has to keep building and running on Linux. What only works on Windows is marked
+`[SupportedOSPlatform("windows")]` and registered only when `OperatingSystem.IsWindows()`.
 
 `Constructd.Sqlite` is the one project beyond the four the batch brief sketched: persistence is
 cross-platform (so it belongs in this batch, not in a Windows follow-up), Core must stay free of
@@ -47,10 +67,13 @@ package references, and hand-written SQL does not belong in the HTTP host.
 
 ```bash
 dotnet build service/Constructd.sln            # 0 warnings, 0 errors
-dotnet test  service/Constructd.sln            # 223 tests
+dotnet test  service/Constructd.sln            # 382 tests
 
 # run the whole API against the fakes (no Hyper-V, no Windows):
 dotnet run --project service/src/Constructd.Api -- --fake
+
+# the admin CLI is the same executable:
+dotnet run --project service/src/Constructd.Api -- admin users list
 ```
 
 `--fake` is shorthand for `Constructd:Fake=true`: the hypervisor driver, the ISO builder and the
@@ -60,9 +83,11 @@ Negotiate. **Never run fake mode on a real host**; the service logs a warning at
 on. Fake mode can be combined with `Constructd:Persistence=Sqlite` (fake hypervisor, real database),
 which is how the persistence tests drive the API.
 
-Without fake mode the service currently refuses to start, naming the hypervisor implementations that
-are still missing. That is deliberate: a half-wired host is worse than one that will not boot. The
-SQLite stores are real in both modes.
+Without fake mode the service needs Windows, and off Windows it refuses to start rather than coming up
+half-wired. On Windows it also validates at startup that `Constructd:ScriptsDir` really is a Construct
+checkout (it must contain `drivers\Load-ConstructDriver.ps1`, `lib\AgentVm.Common.ps1` and
+`bin\build-autoinstall-iso.sh`) — a misconfiguration that would otherwise surface as a VM creation
+failing twenty minutes in. The SQLite stores are real in both modes.
 
 A quick local session:
 
@@ -266,11 +291,17 @@ Bound from the `Constructd` section of `appsettings.json`, from environment vari
 | `ListenUrl` | `https://0.0.0.0:7462` | What the service listens on. |
 | `CertPath` / `CertPassword` | – | PFX for TLS. |
 | `CertThumbprint` | – | Certificate from `LocalMachine\My` (what the client pins at enrollment). |
-| `ScriptsDir` | – | The Construct checkout the service invokes (ISO build, `Create-AgentVM.ps1`). |
-| `WslDistro` | `Ubuntu` | WSL distro used for the ISO build. |
+| `ScriptsDir` | – | The Construct checkout the service invokes (`drivers\`, `lib\`, `bin\`). Validated at startup. |
+| `WslDistro` | `Ubuntu` | WSL distro used for the ISO build. Empty uses WSL's default distro (no `-d`). |
 | `PublicHost` | `localhost` | LAN name/IP that endpoints and forwards are advertised on. |
+| `SwitchName` | `Default Switch` | Hyper-V virtual switch new VMs are attached to. |
+| `VmStorageRoot` | – (empty) | Folder the per-VM VHDX is created in. Empty leaves the path to the driver, i.e. Hyper-V's own default folder — the same location a local install uses. |
+| `ListenAddress` | `0.0.0.0` | `listenaddress=` of the host's portproxy rules. Narrow it to one LAN address on a multi-homed host. |
+| `PowerShellPath` | `powershell.exe` | Windows PowerShell used for the Hyper-V driver. **Windows PowerShell 5.1, not `pwsh`** — that is what the repo's drivers target. |
+| `WslPath` | `wsl.exe` | WSL launcher used for the ISO build. |
+| `NetshPath` | `netsh.exe` | netsh used for the port-proxy rules. |
 | `SshForwardPorts:Start` / `:End` | `2201` / `2299` | Per-VM SSH forward range. |
-| `AppForwardPorts:Start` / `:End` | `2300` / `2999` | Range for `construct expose --to host`. |
+| `AppForwardPorts:Start` / `:End` | `2300` / `2999` | Range for `construct expose --to host`. Must not overlap the SSH range. |
 | `MaxForwardsPerVm` | `16` | Cap on extra forwards per VM, enforced inside the forward manager. |
 | `VmReachableTimeoutMinutes` | `30` | How long creation waits for SSH. |
 | `AuditQueryLimit` | `200` | Default page size of `GET /audit`. |
@@ -283,7 +314,12 @@ Bound from the `Constructd` section of `appsettings.json`, from environment vari
 | `Idle:ReportIntervalMinutes` | `5` | Interval the guest reporter posts at. |
 | `Idle:MissingReportGraceMultiple` | `3` | Intervals of silence before the guest counts as idle. |
 | `Iso:SeedUser` | `construct` | Seed user of the unattended install. |
-| `Iso:BootstrapPublicKeyPath` | – | Bootstrap key injected into the ISO. |
+| `Iso:BootstrapPublicKeyPath` | `<ScriptsDir>\keys\bootstrap_ed25519.pub` | Bootstrap key injected into the ISO. |
+| `Iso:SourcePath` | – | The Ubuntu ISO to remaster. Set this **or** `Iso:SourceUrl`; a path wins and is never downloaded or deleted. |
+| `Iso:SourceUrl` | – | Where to fetch the source ISO when no path is set. Admin-configured on purpose: the service does not go looking for "the current LTS", so a host's guests cannot change release because a mirror did. |
+| `Iso:Sha256` | – | Expected SHA-256 of the source ISO. Empty skips the check; when set it is verified on **every** use, not only after the download. |
+| `Iso:CacheDir` | `C:\ProgramData\Construct\service\iso` | Holds the downloaded source ISO and the per-VM autoinstall ISOs. |
+| `Iso:SourceId` | `ubuntu-server-minimal` | `SOURCE_ID` of `bin/build-autoinstall-iso.sh` (`ubuntu-server` for the standard set). |
 | `BootstrapAdmin` | – | Identity seeded as the first admin when the user store is empty. |
 | `BootstrapAdminMaxVms` | `10` | Quota for that admin. |
 | `BootstrapAdminToken` | – | Optional plaintext token for the bootstrap admin (hashed at startup). Only for hosts that cannot use Negotiate; remove it once a real token has been issued. |
@@ -318,34 +354,463 @@ missing; evolving it is a deliberate decision to make when the first change come
   all forwards down take the same per-VM gate in the forward manager, and adding re-checks inside that
   gate that the VM still exists and is not being deleted.
 
-## How the real implementations plug in
+## How the platform plugs in
 
 Every platform-specific concern is one interface in `Constructd.Core/Abstractions`, registered in
 exactly one place — `Composition/ServiceComposition.cs`, which has two independent axes: persistence
-(SQLite or memory) and platform (fakes or Windows). `AddPlatformImplementations` currently throws with
-a message listing what is missing; filling it in is the whole integration.
+(SQLite or memory) and platform (fakes or Windows).
 
-| Interface | Real implementation (batch) |
+| Interface | Implementation |
 |---|---|
-| `IHypervisorDriver` | PowerShell/Hyper-V driver invoking `Create-AgentVM.ps1` and the Hyper-V cmdlets (B7). Mirrors the PowerShell driver contract of plan §4.2; `docs/drivers.md`, which writes that contract down, lands with the driver extraction (B4). A future Proxmox driver maps the same operations onto its REST API. |
-| `IIsoBuilder` | `wsl.exe` running the existing `bin/build-autoinstall-iso.sh` with its `VM_USER`/`VM_PASS`/`VM_HOST` env contract (B7). |
-| `IPortForwardManager` | `netsh interface portproxy` rules over the existing `IForwardStore`, reconciled at startup, plus connection counting from the host TCP table for the idle signal (B7/B8). |
-| `IUserStore`, `IVmRepository`, `ITokenService`, `IAuditLog`, `IJobStore`, `IForwardStore` | Done: `Constructd.Sqlite`. |
-| Negotiate | Done: `builder.AddNegotiate()` inside the `OperatingSystem.IsWindows()` guard in `Auth/AuthenticationSetup.cs`. |
-| Windows service | Done: `builder.Host.UseWindowsService()` in `Program.cs`, under the same guard. |
+| `IHypervisorDriver` | `HyperVDriver`: `powershell.exe` running the repo's own `drivers/Load-ConstructDriver.ps1` contract (`docs/drivers.md`). A future Proxmox driver maps the same operations onto its REST API. |
+| `IIsoBuilder` | `WslIsoBuilder`: `wsl.exe` running the existing `bin/build-autoinstall-iso.sh` with its `VM_USER`/`VM_PASS`/`VM_HOST` env contract. |
+| `IPortForwardManager` | `NetshPortForwardManager`: `netsh interface portproxy` rules over `IForwardStore`, reconciled at startup, plus connection counting from the host TCP table for the idle signal. |
+| `IProcessRunner` | `ProcessRunner`: `System.Diagnostics.Process` with an `ArgumentList`. The only way this service starts anything. |
+| `ITcpTableReader` | `IpHlpApiTcpTableReader`: `GetExtendedTcpTable` (`TCP_TABLE_OWNER_PID_ALL`). |
+| `IUserStore`, `IVmRepository`, `ITokenService`, `IAuditLog`, `IJobStore`, `IForwardStore` | `Constructd.Sqlite`. |
+| Negotiate | `builder.AddNegotiate()` inside the `OperatingSystem.IsWindows()` guard in `Auth/AuthenticationSetup.cs`. |
+| Windows service | `builder.Host.UseWindowsService()` in `Program.cs`, under the same guard. |
 
-Nothing above those interfaces knows about Hyper-V, PowerShell, netsh or Windows, so those batches
-change no endpoint, policy, job or test.
+Nothing above those interfaces knows about Hyper-V, PowerShell, netsh or Windows: B6b added them
+without changing an endpoint, a policy, a job or an API test.
+
+## What the Windows implementations actually run
+
+Every command line below is asserted argument-by-argument by a test against a recording process
+runner, which is why they can be written down here with confidence.
+
+**Nothing is ever a command string.** Arguments are passed as an argv array (`ProcessStartInfo.ArgumentList`),
+no shell is involved, and every value that reaches a child — VM name, port, path, switch name, seed
+user — is validated first (`Internal/ArgumentGuard`). VM names must match the API's own
+`^[a-z0-9][a-z0-9-]{0,39}$`; paths must be absolute on a drive letter; ports must be 1–65535; nothing
+may contain a control character.
+
+### Hyper-V driver
+
+Every operation is one process:
+
+```
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand <base64 UTF-16LE>
+```
+
+`-EncodedCommand` means the script is a single opaque argv element, so quoting is a non-issue at the
+process boundary. Inside the script, values are single-quoted PowerShell literals (which expand
+nothing) with `'` doubled. Every script has the same shape:
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$result = $null
+try {
+    $constructLib = 'C:\Construct\lib\AgentVm.Common.ps1'
+    if (-not (Test-Path -LiteralPath $constructLib)) { throw "Construct lib not found: $constructLib" }
+    . $constructLib
+    $constructLoader = 'C:\Construct\drivers\Load-ConstructDriver.ps1'
+    if (-not (Test-Path -LiteralPath $constructLoader)) { throw "Construct driver loader not found: $constructLoader" }
+    . $constructLoader -Backend 'hyperv-local'
+    <the operation, into $result>
+    $envelope = [ordered]@{ ok = $true; value = $result }
+} catch {
+    $envelope = [ordered]@{ ok = $false; error = [string]$_.Exception.Message }
+}
+ConvertTo-Json $envelope -Compress -Depth 6
+```
+
+The service therefore **shares one implementation with the local install** rather than reimplementing
+Hyper-V against raw cmdlets — the point of the B4 driver extraction. A fix to the driver reaches the
+service without being ported, and a backend added to the loader is reachable by changing a backend id.
+The shared lib is dot-sourced first because `Remove-ConstructVm` routes to its `Remove-AgentVm`
+(disk-chain handling, checkpoint-merge wait), exactly as `docs/drivers.md` §2 requires.
+
+| Interface method | The operation in the script |
+|---|---|
+| `CreateVmAsync` | `$descriptor = @{}` with `Name`, `ProcessorCount`, `MemoryGB`, `DiskGB`, `SwitchName`, `VhdPath`†, `IsoPath`†, `Nested`, `AutomaticCheckpoints` → `New-ConstructVm -Descriptor $descriptor` → `Start-ConstructVm -Name '<vm>'` |
+| `RemoveVmAsync` | `Remove-ConstructVm -Name '<vm>'` |
+| `StartAsync` | `Start-ConstructVm -Name '<vm>'` |
+| `StopAsync` | `Stop-ConstructVm -Name '<vm>' -Force` |
+| `SaveAsync` | `Save-ConstructVm -Name '<vm>'` |
+| `GetStateAsync` | `$result = [string](Get-ConstructVmState -Name '<vm>')` |
+| `GetEndpointAsync` | `$endpoint = Get-ConstructVmEndpoint -Name '<vm>'` → `@{ SshHost = …; SshPort = … }` |
+| `WaitReachableAsync` | `$result = [bool](Wait-ConstructVmReachable -Name '<vm>' -TimeoutSeconds <n>)` |
+| `DetachInstallMediaAsync` | `Detach-ConstructInstallMedia -Name '<vm>'` |
+| `Capabilities` | `Get-ConstructDriverCapabilities`, read once and cached |
+
+† `VhdPath` is emitted only when `Constructd:VmStorageRoot` is set (`<root>\<vm>.vhdx`); `IsoPath` only
+when the job has built one. Leaving `VmStorageRoot` empty is not a gap — it hands the decision to the
+driver, which uses Hyper-V's own default folder, so a service-created VM lands where a locally created
+one does.
+
+Two details worth knowing:
+
+- **Starting is a separate call on purpose.** `docs/drivers.md` §3.3: `New-ConstructVm` creates and
+  configures but leaves the VM off, so the caller owns when the unattended install begins.
+- **`-Force` on stop.** The service runs under the SCM with `-NonInteractive`, where a confirmation
+  prompt is a hang rather than a question.
+
+**Progress.** The driver's own `Write-Step`/`Write-Ok` lines are forwarded to the job (and so to the SSE
+stream) as they arrive — including `Wait-ConstructVmReachable`'s "not reachable yet" ticks during a
+half-hour wait. The result JSON is the last stdout line, so progress is reported one line behind: the
+most recent line is withheld until another arrives, which is what stops the envelope being reported as
+progress.
+
+**States** map exactly onto `VmState`: `running`, `off`, `paused`, `saved`, `absent`, and everything
+else — a transient `Starting`, an unreadable Hyper-V — to `unknown`. `unknown` means "can't tell" and
+is never read as "not installed".
+
+**Capabilities** carry the console as a *kind*, not a flag (`ConsoleKind.None | VmConnect | Url` plus a
+URL for the last): a client has to launch VMConnect, open a browser, or offer nothing, and those are
+three different actions. `hyperv-local` reports `vmconnect`. A failed capability probe is **not**
+cached and reports nothing supported — promising `Suspend` while the driver is unreachable would let
+the API accept a save it cannot perform.
+
+**Errors.** A non-zero exit, a timeout, output that is not the envelope, or `ok: false` all raise
+`HypervisorOperationException`, whose message is composed here — *"The Hyper-V driver failed during
+'create-vm' for VM 'work-vm'."*
+
+**No child output is ever logged.** Not the stderr, not the last stdout line, not the driver's own
+error text. PowerShell error text routinely carries a script path, a whole command line, or the values
+a cmdlet was called with, and this service's rule is that dependency text is not repeated verbatim
+anywhere — the log included (see *Auditing* above). What an operator gets instead is the operation, the
+VM, and *how* it failed in the service's own words ("powershell.exe exited with 1", "timed out after 30
+minutes", "the last output line was not the expected JSON envelope"), and, for the whole run, the
+driver's own progress lines, which are streamed to the job as they happen. The same rule applies to the
+ISO build and to netsh.
+
+### WSL ISO build
+
+```
+wsl.exe [-d <WslDistro>] -u root -- env \
+    VM_USER=<Iso:SeedUser> \
+    VM_PASS=<generated per VM, never stored> \
+    VM_HOST=<vm name, lowercased> \
+    SOURCE_ID=<Iso:SourceId> \
+    BOOTSTRAP_PUBKEY_FILE=/mnt/c/Construct/keys/bootstrap_ed25519.pub \
+    bash /mnt/c/Construct/bin/.build-autoinstall.lf.sh \
+         /mnt/c/…/<source>.iso \
+         /mnt/c/ProgramData/Construct/service/iso/<vm>-autoinstall.iso
+```
+
+This mirrors `Auto-Install.ps1` step for step, because that path is proven and because the guest
+payload has to be identical in every mode (plan §4.1):
+
+- **The LF-normalized copy.** `bin/build-autoinstall-iso.sh` is copied to `bin/.build-autoinstall.lf.sh`
+  with `\r` stripped (UTF-8, no BOM) and *that* is run, then deleted. A CRLF script — or an inline
+  here-string through PowerShell → `wsl.exe` → bash — mangles quoting and breaks constructs like `trap`.
+- **The path mapping is done in-process** (`C:\x` → `/mnt/c/x`) rather than by calling `wslpath`, for
+  the reason recorded in `Auto-Install.ps1`: backslashes do not survive the trip, so `wslpath` would be
+  handed `C:Usersmex.iso`.
+- **The identity is env in front of `bash`**, each element its own argv entry — no shell quoting anywhere.
+- **The source ISO** is `Iso:SourcePath` if set (used as-is, never deleted), otherwise `Iso:SourceUrl`
+  downloaded **once** into `Iso:CacheDir` (to `<name>.part`, then renamed, so an interrupted download is
+  never mistaken for a complete one) and reused by every later build. Size must be > 0; `Iso:Sha256`, when
+  set, is verified on every use.
+- **The output ISO is per VM** (`<vm>-autoinstall.iso`) because the guest hostname is baked into the seed.
+- **Builds are serialized** with a `SemaphoreSlim(1)`: the LF copy is one shared file, and one xorriso
+  repack of a multi-gigabyte image at a time is what the host can usefully do anyway.
+
+The seed password is a secret. It is generated per VM, never persisted, and never logged: progress
+lines and the failure detail are both passed through a redactor before they exist anywhere, and
+`IsoBuildException`'s message is only *"Building the autoinstall ISO for VM 'work-vm' failed."*
+(It is still visible in the host's own process list while `wsl.exe` runs — the `VM_PASS=` env contract
+of `build-autoinstall-iso.sh` is what `Auto-Install.ps1` has always used, and changing it would change
+the guest payload. It buys an attacker a seed credential that the client's provisioning run replaces.)
+
+### netsh port forwards
+
+```
+netsh.exe interface portproxy add v4tov4 listenaddress=<ListenAddress> listenport=<public> \
+                                        connectaddress=<VM IPv4> connectport=<vm port>
+netsh.exe interface portproxy delete v4tov4 listenaddress=<ListenAddress> listenport=<public>
+netsh.exe interface portproxy show v4tov4
+```
+
+The VM's IPv4 is resolved from the driver's endpoint host at apply time (`Dns.GetHostAddresses`, IPv4
+first; a literal needs no lookup) rather than stored — a VM on the Default Switch gets its address from
+Hyper-V's NAT DHCP, and that changes.
+
+- **SSH forward**: `connectport` is the VM's own SSH port from the driver endpoint, not a hardcoded 22.
+- **Host-target forwards**: `connectport` is the requested guest port.
+- **Client-target forwards are only recorded** — they are opened on the user's PC by the extension, so
+  materializing them here would be exactly the LAN exposure the client target exists to avoid (§4.6).
+- The public port is written to durable state **before** the rule is created, so a crash between the two
+  leaves an allocation with no rule (which reconciliation repairs) and never a live rule that no
+  allocation accounts for. A forward whose rule cannot be created is rolled back out of the store, so
+  there is never a forward a user can see and nothing can reach.
+- Deletes are best effort: a rule that is already gone, or a netsh that refuses, must not stop a VM from
+  being deleted.
+- **The two ranges must not overlap**, and the service refuses to start if they do (the installer
+  refuses earlier, on the same rule). `SshForwardPorts` and `AppForwardPorts` are allocated by two
+  independent allocators, so a shared port looks free to both: each would hand it out, and the second
+  netsh rule would silently replace the first — one VM's SSH forward pointing at another VM's dev
+  server. Adjacent ranges (`2201-2299` / `2300-2999`) are fine, which is the default.
+
+**Firewall.** netsh portproxy only redirects; it does not open anything. The installer creates three
+inbound TCP rules — the API port, the SSH forward range, the app forward range — so the ranges are open
+as ranges rather than a rule appearing and disappearing per VM. Narrow their scope (`-RemoteAddress`) if
+LAN-wide is too broad for the network the host sits on.
+
+### Reconciliation semantics
+
+`ReconcileAsync` runs at startup (`Bootstrap`) and on demand (`constructd admin forwards reconcile`).
+netsh rules survive reboots and the store survives restarts, but they drift apart — so:
+
+1. Read the host's rules (`show v4tov4`). The parser reads **rows by shape**, not by column header:
+   four whitespace-separated tokens that are address, port, address, port. netsh is localized (a German
+   host prints "Lauschen auf ipv4:" / "Adresse Port"), and reconciliation must not quietly do nothing
+   there. `*` reads as `0.0.0.0`; IPv6 rows and anything else are skipped.
+2. Walk the store: every VM's `SshForwardPort` and every forward's `PublicPort` is **re-reserved**,
+   which is what stops a new VM being handed a port that is already in use. The reservation goes to
+   whichever allocator's range *covers* the port, which is not always the allocator that handed it out
+   — an admin who moves the SSH range off a port an existing VM still holds leaves that port sitting in
+   the app range, and the app allocator has to know it is occupied or the next host forward is handed
+   the very port that live rule uses. (The two ranges are disjoint, so exactly one allocator can claim
+   any given port.)
+
+   Whether a stored port is **re-materialized** is decided against **its own** range — the SSH range
+   for a VM's SSH forward, the app range for a host forward — never the union of the two. A port
+   outside its own range (an allocation from before an admin narrowed or moved the range) is
+   grandfathered: logged, then left completely alone, with no netsh call either way. "This service only
+   touches rules inside its configured ranges" has to hold for the rules it would *add* just as much as
+   for the ones it would delete.
+3. For each expected forward, resolve the VM's current address and:
+   - no rule on that port → **add** it;
+   - a rule with a different `connectaddress`/`connectport` → **delete and add** (netsh has no update);
+   - a matching rule → leave it alone.
+4. Delete rules that are **on our listen address and inside our configured ranges** but that the store
+   knows nothing about — a VM removed while the service was down. Rules outside the ranges, or on another
+   listen address, are never touched: the host may have port proxies that are none of this service's
+   business.
+
+A VM whose address cannot be resolved right now is skipped for step 3 but still counts as *known* in
+step 4, so a DNS blip can never delete a working forward. `ReconcileAsync` returns how many rules it
+repaired. If the rule list cannot be read at all it throws, and the service does not start: reconciling
+against an unknown host state is worse than refusing.
+
+**A deletion that netsh refuses fails reconciliation** rather than being counted. Deleting is best
+effort when a VM is being *torn down* — a rule that may not even exist any more must not block a VM
+from being removed — but in reconciliation the deletion *is* the repair: a rule the sweep could not
+remove is inside our range, accounted for by nothing, and still forwarding on the LAN, so reporting the
+host as reconciled would be a false all-clear. The same holds for the delete half of a re-point, where
+carrying on would add a rule on top of one still aimed at the VM's old address.
+
+**Connection counting** (the idle signal, plan §4.7) reads the host TCP table through
+`GetExtendedTcpTable` and counts `Established` rows whose *local* port is one of the VM's public ports —
+its SSH forward plus every host forward. Only established rows count: the portproxy listener is always
+`Listen`, and a closed session lingers in `TimeWait` for minutes, so counting either would mean a VM is
+never idle. A client tunnel rides the VM's SSH connection, so it is seen on the SSH forward (§4.6).
+
+## Admin CLI
+
+The same executable, with `admin` as the first argument, is a command-line mode that works the stores
+directly — no HTTP, no authentication, no listener, no jobs:
+
+```powershell
+constructd admin users add DOMAIN\christoph --role Admin --max-vms 10
+constructd admin users add DOMAIN\alice --role User --max-vms 2 --no-host-forwards
+constructd admin users remove DOMAIN\alice
+constructd admin users list [--json]
+constructd admin tokens issue DOMAIN\alice --label laptop [--json]
+constructd admin tokens revoke-all DOMAIN\alice
+constructd admin forwards reconcile
+```
+
+It exists because the first admin has to be created before anybody can authenticate, and because an
+operator standing at the host needs a way in when the API will not start or Negotiate is misconfigured.
+The gate is the host itself: it reads the service's own configuration and opens its database, so being
+able to run it already means having the privileges on the machine that owning the service implies. Its
+actions are audited like any other (`actor = admin-cli`).
+
+`--role` defaults to `User` and `--max-vms` to `0` ("may not create VMs") — the safe reading of a name
+typed without thinking. `--role` is matched against the role *names*, so `--role 7` is a usage error
+rather than a user whose role nothing in the service knows how to authorize. An unknown option, or an
+argument a verb does not take, is likewise a usage error rather than something silently ignored: a
+quota that did not take is worse than a refusal.
+
+`tokens issue` prints the plaintext **once**; only its hash is stored, and it never reaches the log or
+the audit trail. `--json` puts a machine-readable object on stdout and errors on stderr, which is what
+the installer consumes.
+
+| Exit code | Meaning |
+|---|---|
+| `0` | Success |
+| `1` | The command was understood but failed (a store error, netsh, the wrong OS) |
+| `2` | Usage error |
+| `3` | No such user |
+| `4` | Already exists, or still owns VMs |
+
+`users remove` refuses while the user still owns VMs (their VMs would be left with an owner that does
+not exist) and revokes their tokens with them. `forwards reconcile` needs the Windows platform and says
+so plainly when it is not there, rather than reporting "0 repaired".
+
+## Installing on a host
+
+`service/host/Install-ConstructHost.ps1` (PowerShell 5.1, self-elevating, idempotent, `-WhatIf` on
+everything that changes the machine):
+
+```powershell
+dotnet publish service\src\Constructd.Api -c Release -r win-x64 --self-contained true -o C:\Construct\service\publish
+
+.\service\host\Install-ConstructHost.ps1 `
+    -ScriptsDir C:\Construct `
+    -PublishDir C:\Construct\service\publish `
+    -PublicHost buildbox.example.local `
+    -IsoSourceUrl https://releases.ubuntu.com/24.04/ubuntu-24.04.3-live-server-amd64.iso
+```
+
+In order: self-elevate → validate the inputs (including that the two port ranges do not overlap) → the
+service root and data directory under `ProgramData` → **lock down everything the service executes or
+trusts** → prerequisites (Hyper-V via the repo's own `Ensure-HyperV`, a WSL distro with `xorriso` +
+`whois` inside it *as LocalSystem sees it*, the OpenSSH client; no .NET runtime is needed when
+published self-contained) → the TLS certificate → firewall rules → `appsettings.Production.json` next
+to the executable → **the first admin and an API token, through the admin CLI, before the service
+starts** (so nothing contends for the SQLite file and the host is reachable the moment it comes up) →
+register the service as LocalSystem → start it → print the enrollment details.
+
+The ACL step comes **before** the prerequisites on purpose: the WSL distro is imported into the
+service root, so the root has to be protected before anything is placed in it.
+
+Run it again after publishing a new build: it updates binaries, settings and the service in place.
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `-ScriptsDir` | *(required)* | The Construct checkout the service invokes. Verified to contain `drivers\`, `lib\` and `bin\`. |
+| `-PublishDir` | *(required)* | Where the published executable is. |
+| `-ListenUrl` | `https://0.0.0.0:7462` | The port from this URL is the one opened in the firewall. |
+| `-PublicHost` | `$env:COMPUTERNAME` | What clients dial and the certificate is bound to. |
+| `-DataDir` | `C:\ProgramData\Construct\service` | Database + ISO cache. |
+| `-SshPortRange` / `-AppPortRange` | `2201-2299` / `2300-2999` | Forward ranges; also the firewall rules. |
+| `-CertThumbprint` | – | Use an existing certificate instead of creating one. |
+| `-ServiceName` | `constructd` | Windows service name. |
+| `-SwitchName` | `Default Switch` | Hyper-V switch for new VMs. |
+| `-WslDistro` | `Ubuntu` | Distro the ISO build runs in. |
+| `-ListenAddress` | `0.0.0.0` | `listenaddress=` of the portproxy rules. |
+| `-IsoSourcePath` / `-IsoSourceUrl` / `-IsoSha256` | – | The Ubuntu ISO to remaster. |
+| `-AdminUser` / `-AdminMaxVms` | current user / `10` | The first admin. |
+| `-SkipPrereqs` | off | Skip the Hyper-V/WSL/OpenSSH checks (a re-run on a host you already prepared). |
+| `-SkipAclHardening` | off | Do not lock the three paths down (see below). |
+| `-ProvisionWslForService` | off | Export the WSL distro and import it for LocalSystem when it is missing there (see below). |
+| `-RotateAdminToken` | off | Issue a fresh token even when the admin already exists. |
+| `-NoStart` | off | Register the service but do not start it. |
+
+**The certificate thumbprint is the one value that has to leave the machine** — clients pin it at
+enrollment — so it is printed prominently at the end, next to the admin token. A self-signed
+certificate is created once and **reused** on later runs: a fresh one per install would break every
+client's pinned thumbprint.
+
+The service runs as **LocalSystem**. It drives Hyper-V, netsh and WSL, none of which a restricted
+service account can do here without further setup — which is also why nothing in this service builds a
+command string. Two consequences the installer handles explicitly:
+
+**Everything the service executes or trusts is locked down before the service is ever registered.**
+LocalSystem *executes* what it finds in `-PublishDir` and `-ScriptsDir` (the published exe, the
+PowerShell driver, the ISO build script), so write access to either is equivalent to running code as
+LocalSystem; the **service root** (the parent of `-DataDir`) holds the authorization database — users,
+token hashes, the VM registry, the audit trail — plus the ISO cache and the filesystem WSL runs as
+LocalSystem. On a host several people can log into, an unprivileged user who can pre-create or modify
+any of them owns the service.
+
+A DACL on the leaf directory alone does not achieve that, because three things sit outside it: the
+directories *above* it, the entries already *inside* it, and links pointing elsewhere. So for each of
+the service root, `-PublishDir` and `-ScriptsDir` the installer:
+
+- walks the **whole ancestor chain** and refuses a **reparse point** anywhere along it (the ACL would
+  apply to the link while the service reads through it to a target somebody else owns), a path under a
+  **user profile root**, and any ancestor on which an untrusted SID holds `DELETE`,
+  `FILE_DELETE_CHILD`, `WRITE_DAC` or `WRITE_OWNER` — those beat any ACL set on the child, since a
+  parent you can delete children in lets an attacker swap the hardened directory for their own.
+  Creating *new* entries in a parent is deliberately allowed: that is exactly what `C:\ProgramData`
+  grants `Users` on a stock Windows. **Inherit-only (`(IO)`) ACEs are not judged either** — they grant
+  nothing on the object that carries them, they are a template stamped onto children as those are
+  created. Stock Windows puts `CREATOR OWNER:(OI)(CI)(IO)(F)` on `C:\ProgramData`, so treating it as a
+  finding would refuse the *default* `-DataDir` on every clean host; and any directory the installer
+  creates under it has its DACL replaced outright anyway;
+- replaces the DACL with an explicit one and turns inheritance off — `-PublishDir`/`-ScriptsDir` get
+  SYSTEM and Administrators full control plus `Users` read-and-execute, the service root gets SYSTEM
+  and Administrators and nobody else — by **well-known SID**, so it is right on a non-English host,
+  and sets Administrators as the owner so an administrator can always repair it later;
+- **recursively strips every existing descendant's own DACL** so it inherits that policy. A file an
+  attacker pre-created with inheritance disabled — `Constructd.Api.exe`, `Load-ConstructDriver.ps1`,
+  `constructd.db` — would otherwise keep its attacker-writable ACL through a `Set-Acl` on the parent;
+- re-reads the **whole tree** afterwards and fails if anything outside that policy can still write.
+
+The **service root**, not `-DataDir`, is the hardened unit: the database, the ISO cache and the
+LocalSystem WSL distro (`<service root>\wsl`) all live under it, so one protected tree covers all
+three and no untrusted directory sits between them.
+
+The decision itself — "which of these ACEs are dangerous" — is a pure function over ACEs as plain data
+(`Get-ConstructUnsafeAce`), which is what lets the tests exercise an attacker-writable parent and a
+protected child carrying an explicit untrusted ACE on a machine that has no Windows ACLs at all.
+
+`-SkipAclHardening` turns it off for a host where you manage those ACLs yourself; the installer then
+prints what you are taking responsibility for.
+
+**No configurable value is ever concatenated into a script, and nothing crosses a privilege boundary
+through a file the caller can still rewrite.** The installer runs code in two more privileged contexts
+— the self-elevated copy of itself, and one-shot scheduled tasks as LocalSystem — and in both, a
+parameter carrying a quote, a semicolon or a newline would otherwise become another statement running
+elevated or as SYSTEM. So values never appear in generated script text: they are serialized to JSON and
+**splatted** back on the other side. A distro name containing a space stays one argument; an apostrophe
+cannot end a literal. The only things interpolated into a generated script are paths the installer
+itself produced.
+
+*How* the JSON travels differs by direction, and the difference is the point:
+
+- **Across the elevation boundary** (unelevated → Administrator) the payload is embedded in the
+  encoded command itself, as inert base64. A file would have to sit in the *unelevated* caller's own
+  writable `%TEMP%`, and the elevated copy reads it only after the UAC prompt is answered — so another
+  process running as the same user can watch for the file and swap its contents in that window,
+  choosing the `-ScriptsDir` that then executes as LocalSystem or adding `-SkipAclHardening`. A GUID
+  name prevents guessing the name in advance, not noticing it appear. `-EncodedCommand` is part of the
+  elevated process's command line, which the caller cannot alter once `Start-Process` has been called.
+- **Down to LocalSystem** (already Administrator → SYSTEM) the payload goes through a GUID-named file
+  under `%SystemRoot%\Temp`, which only SYSTEM and Administrators can write — the writer is already
+  elevated, so there is no lower-privileged party in the window.
+
+`Uninstall-ConstructHost.ps1` carries the same transport, and needs it more: it is the script with
+`-RemoveData` on it, so a value able to inject an argument after UAC turns a harmless uninstall into an
+irreversible one against a path of somebody else's choosing. (`-ArgumentList` is not an escape here —
+PowerShell flattens it back into a single command-line string.)
+
+**WSL distros are registered per Windows user, and LocalSystem is a different user.** Checking WSL as
+the elevated administrator says nothing about what the service will see, so an install can report
+success and then fail on the first VM with "there is no distribution with the supplied name". The
+installer therefore runs `wsl -l -q` **as LocalSystem** (through a one-shot scheduled task), installs
+`xorriso`/`whois` inside *that* distro, and fails with the exact remedy when the distro is missing
+there. `-ProvisionWslForService` does the `wsl --export` / `wsl --import`-as-SYSTEM dance for you; it is
+opt-in because the export can be several gigabytes. The imported distro lands in `<service root>\wsl`
+and is hardened like everything else — it is a filesystem WSL runs commands from as LocalSystem.
+
+This check **fails closed**, like every other prerequisite: if the LocalSystem probe cannot run at all
+(no `ScheduledTasks` module, a locked-down host), the install stops rather than reporting success and
+starting a service whose distro was never verified — which is precisely the failure the step exists to
+catch. `-SkipPrereqs` is the explicit override. Under `-WhatIf` nothing runs as LocalSystem, and the
+helper says so rather than letting its empty output read as "LocalSystem has no distro".
+
+**Re-running is safe and adds no credentials.** "The admin already exists" is not the same as "the admin
+is an admin": the installer reads the account back and fails if its role is not `Admin`, rather than
+reporting success on a host that has no admin at all. And a re-run issues **no new token** unless
+`-RotateAdminToken` is passed — otherwise every reinstall would leave another permanent credential
+behind.
+
+`service/host/Uninstall-ConstructHost.ps1` is the companion: it stops and deletes the service and
+removes the firewall rules. Its `-RemovePortProxies` pass reads netsh's rows with the same
+shape-based rule the service's own parser uses (four tokens that are address, port, address, port,
+with `*` normalized to `0.0.0.0`) and checks netsh's exit codes, so it cannot report "removed 0" on a
+host that prints the wildcard listen address while leaving every rule behind. Three things it leaves alone unless asked — the data directory
+(`-RemoveData`; it is the record of who had what, and a reinstall expects to find it), the port-proxy
+rules (`-RemovePortProxies`), and the certificate (`-RemoveCertificate`). It never talks to Hyper-V:
+deleting a colleague's VM is not an uninstall step.
 
 ## Tests
 
-`dotnet test service/Constructd.sln` — 223 tests, all running on Linux.
+`dotnet test service/Constructd.sln` — 382 tests, all running on Linux, Windows platform included.
 
 - **Core unit tests**: port allocation (lowest-free, no double allocation, release, exhaustion,
   reservation, concurrency), token hashing (format pinned to a known SHA-256 vector, fixed-time
   comparison), VM name validation, ownership and quota rules, the idle decision matrix including the
   grace-window cases (stale heartbeat, never-reported VM, timeout shorter than the grace), cap
-  clamping, and the idle engine against the fake driver.
+  clamping, the idle engine against the fake driver, the console-capability mapping, and the pure
+  connection counter (only `Established` rows on the VM's own ports count).
 - **Job engine tests**: a store that holds a progress write until completion starts, proving the
   terminal snapshot is what the store ends up with; a store that holds the *terminal* write, proving
   that no terminal state, no state event and no one-time token is observable before it lands; a store
@@ -374,6 +839,75 @@ change no endpoint, policy, job or test.
   the sentinel is the presented plaintext token) — asserted absent from the response body, the audit
   trail, job state, the SSE stream and every captured log entry, while the service's own error messages
   still come through in full.
+- **Windows platform tests**, all against a recording process runner, so the command lines are pinned
+  on a machine with no Hyper-V, no WSL and no netsh:
+  - *Hyper-V driver*: the exact `powershell.exe` argv and the **decoded script** for every operation
+    (the dot-source of the loader and the shared lib, the backend id, the contract function and its
+    arguments, and the absence of any raw Hyper-V cmdlet); the descriptor the create script builds,
+    including `VhdPath` being omitted when no storage root is configured; the create-then-start order;
+    every state of the contract enum mapped, with an unmapped one landing on `unknown` and never
+    `absent`; the endpoint; an expired wait reported as "not reachable" rather than as a failure; the
+    capability probe cached on success, retried and reporting nothing on failure, and mapping the console
+    kind; progress forwarding the driver's own lines but never the result envelope; and the error paths
+    (non-zero exit, timeout, non-JSON output, `ok: false`) all yielding a safe message while the detail
+    stays on the exception and the log.
+  - *Injection*: a VM name that is not a DNS label, a control character in a configured value, and a
+    newline in the seed password are all refused **before** any process is started; a quote in a
+    configured switch name is escaped rather than closing the PowerShell string.
+  - *ISO build*: the exact `wsl.exe` argv including the WSL path mapping and the env contract; no `-d`
+    when no distro is configured; the LF normalization of the script copy and its removal; the source ISO
+    used as-is when configured, downloaded once and reused otherwise, rejected when truncated or when the
+    checksum does not match; a build that reports success but produces no ISO failing anyway; progress
+    that never repeats the seed password; and builds actually serializing.
+  - *Port forwards*: the exact add/delete argv for the SSH forward and for host forwards; the configurable
+    listen address; the durable-before-live ordering; a client forward never touching the host; a forward
+    whose rule fails being rolled back and its port freed; a netsh that refuses to delete not blocking a
+    removal; the full reconciliation matrix (add missing, leave correct alone, re-point after an address
+    change, delete an unknown rule in our range, never touch one outside the ranges or on another listen
+    address, keep a live rule when the VM cannot be resolved, grandfather a stored SSH port or host
+    forward that now falls outside the configured ranges without any netsh call, re-reserve allocated
+    ports, materialize stored host forwards); a grandfathered port not being re-issued by the *other*
+    allocator; overlapping ranges refused at startup and adjacent ones accepted; a netsh whose output
+    cannot be read failing rather than reporting success; a refused delete failing reconciliation
+    instead of counting as repaired, while teardown stays best effort; and connection counting across
+    the SSH forward and the host forwards.
+  - *Log hygiene*: a sentinel in a child's stdout and stderr driven through every failure shape of all
+    three implementations — non-zero exit, timeout, malformed output, a driver-reported error, a failed
+    delete — asserted absent from every captured log entry, while the composed reason ("get-state",
+    "netsh add exited with 1") is present.
+  - *netsh parser fixtures*: the English and German layouts, headers/separators/blank lines, ragged
+    spacing and CRLF, the `*` wildcard, and IPv6 or nonsense rows being skipped.
+  - *Process runner* (against POSIX binaries, skipped on Windows): arguments reaching the child verbatim
+    with no word splitting, command substitution or globbing; stdin written and closed; stdout streamed
+    line by line; stderr captured separately; a child that outlives its timeout killed and reported as
+    timed out; and the caller's cancellation staying a cancellation.
+- **Admin CLI tests**: every verb against in-memory stores — the user created with the right role and
+  quota, the safe defaults, host forwards deniable, a conflict rather than an overwrite, bad options as
+  usage errors that create nothing, a numeric `--role` refused rather than parsed, trailing arguments on
+  every verb that takes none refused rather than ignored, removal revoking tokens and refusing while VMs
+  are owned, a token that validates once and never appears in the audit trail, revoke-all invalidating
+  it, `forwards reconcile` reporting the missing platform, and the exit codes.
+- **Host installer tests** (`service/tests/host-installer.test.ps1` — 238 assertions, run by
+  `dotnet test` through `HostInstallerTests` wherever `pwsh` exists): both scripts parse with zero
+  errors and use no syntax PowerShell 5.1 lacks; every documented parameter exists with its documented
+  type and default, and the three new switches are opt-in; the uninstaller's defaults match the
+  installer's; `SupportsShouldProcess` is declared and the changes are guarded, including in the helper
+  functions (a plain function would not get `-WhatIf`); the pure helpers — port-range parsing, listen-URL
+  parsing, the ACL policy and the uninstaller's portproxy row parser — accept and reject the right
+  things, with the ACL policy asserted to be SID-based, to give `Users` read-and-execute on code and
+  nothing at all on data, and the row parser asserted against the English and German headers, the
+  separator, an IPv6 row, an out-of-range port and the `*` wildcard; every settings key the installer
+  writes is one the service actually binds; the paths are hardened and the admin is created before the
+  service is registered; an existing account's role is verified rather than assumed; a token is issued
+  only on creation or on `-RotateAdminToken`; WSL is checked under LocalSystem with the SID-based task
+  principal; and a missing OpenSSH client is installed rather than warned about. The value transport is
+  driven with everything a parameter could carry — spaces, apostrophes, quotes, semicolons, newlines,
+  control characters, subexpressions, backticks — asserting for **both** scripts that the value never
+  appears as source in a generated script, that it still decodes back byte for byte on the privileged
+  side, that an injected `-RemoveData` stays data rather than becoming a switch, and structurally that
+  the elevated copy reads its parameters from no file at all and that neither script stages anything in
+  the caller's `%TEMP%`. Inherit-only ACEs are covered both ways: a stock `CREATOR OWNER:(IO)` on
+  `ProgramData` does not refuse the default `-DataDir`, and the same ACE without `(IO)` still does.
 
 ## Open points for the follow-up batches
 
@@ -390,3 +924,17 @@ change no endpoint, policy, job or test.
 - Quota semantics: `maxVms` is a plain cap and `0` means "may not create VMs"; "unlimited" has to be
   expressed as a large number.
 - No schema migrations yet — the first schema change has to introduce them.
+- The capability's console **kind** (`vmconnect`, a URL, none) is read from the driver and carried on
+  `DriverCapabilities`, but no endpoint exposes it yet: the consumer is the extension's "open console"
+  affordance, which arrives with the remote driver (B7). Adding it is a response field, not a redesign.
+- Plan §4.4 has the service create its **own internal NAT switch** at install. `Constructd:SwitchName`
+  is the seam for that and defaults to Hyper-V's `Default Switch`, which is what a host with nothing
+  else configured has; the installer does not create a switch yet.
+- The service creates VMs but does not **update the checkout** it invokes (`constructd update` in the
+  plan's sketch). Today that is the admin re-running the installer after a `git pull`.
+- No **wake-on-SSH**: a connection to a saved VM's forward is not detected, so a saved VM is resumed by
+  a user action rather than by dialing it (recorded as a stretch goal in plan §4.7).
+- The seed password is visible in the host's own process list for the duration of the ISO build. It is
+  the `VM_PASS=` env contract of `bin/build-autoinstall-iso.sh`, which the local installer has always
+  used; changing it would change the guest payload, and what it buys is a seed credential the client's
+  provisioning run replaces.

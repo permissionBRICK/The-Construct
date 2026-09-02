@@ -45,11 +45,40 @@ public sealed class ConstructdOptions
     /// <summary>The Construct checkout the service invokes (ISO build, Create-AgentVM, …).</summary>
     public string ScriptsDir { get; set; } = string.Empty;
 
-    /// <summary>WSL distro used for the ISO build.</summary>
+    /// <summary>WSL distro used for the ISO build. Empty uses WSL's default distro.</summary>
     public string WslDistro { get; set; } = "Ubuntu";
 
     /// <summary>LAN name/IP that forwards and endpoints are advertised on.</summary>
     public string PublicHost { get; set; } = "localhost";
+
+    /// <summary>
+    /// Hyper-V virtual switch new VMs are attached to. The service host's own switch (plan §4.4
+    /// creates an internal NAT switch at install); the default is Hyper-V's <c>Default Switch</c>, so
+    /// a host that has nothing else configured still works.
+    /// </summary>
+    public string SwitchName { get; set; } = "Default Switch";
+
+    /// <summary>
+    /// Directory the per-VM VHDX is created in. Empty (the default) leaves the path to the hypervisor
+    /// driver, which uses Hyper-V's own default folder
+    /// (<c>C:\ProgramData\Microsoft\Windows\Virtual Hard Disks</c>).
+    /// </summary>
+    public string VmStorageRoot { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Address the host's portproxy rules listen on. <c>0.0.0.0</c> is every interface; narrow it to
+    /// one LAN address on a multi-homed host.
+    /// </summary>
+    public string ListenAddress { get; set; } = "0.0.0.0";
+
+    /// <summary>Windows PowerShell used for the Hyper-V driver. PowerShell 5.1 — <em>not</em> pwsh.</summary>
+    public string PowerShellPath { get; set; } = "powershell.exe";
+
+    /// <summary>WSL launcher used for the ISO build.</summary>
+    public string WslPath { get; set; } = "wsl.exe";
+
+    /// <summary>netsh used for the host's port-proxy rules.</summary>
+    public string NetshPath { get; set; } = "netsh.exe";
 
     /// <summary>Port range for per-VM SSH forwards.</summary>
     public PortRangeOptions SshForwardPorts { get; set; } = new(2201, 2299);
@@ -150,4 +179,29 @@ public sealed class IsoOptions
 
     /// <summary>Public key injected as the bootstrap key the client provisioner authenticates with.</summary>
     public string BootstrapPublicKeyPath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Ubuntu server ISO the autoinstall image is remastered from. Set this <em>or</em>
+    /// <see cref="SourceUrl"/>; a path wins and is never downloaded or deleted.
+    /// </summary>
+    public string SourcePath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Where to download the source ISO from when <see cref="SourcePath"/> is empty. Admin-configured
+    /// on purpose: the service does not go looking for "the current LTS" behind the admin's back, so a
+    /// host's guests do not change release because a mirror did.
+    /// </summary>
+    public string SourceUrl { get; set; } = string.Empty;
+
+    /// <summary>Expected SHA-256 of the downloaded source ISO. Empty skips the check.</summary>
+    public string Sha256 { get; set; } = string.Empty;
+
+    /// <summary>Directory holding the downloaded source ISO and the per-VM autoinstall ISOs.</summary>
+    public string CacheDir { get; set; } = @"C:\ProgramData\Construct\service\iso";
+
+    /// <summary>
+    /// Ubuntu install source id baked into the autoinstall seed (<c>SOURCE_ID</c> of
+    /// <c>bin/build-autoinstall-iso.sh</c>).
+    /// </summary>
+    public string SourceId { get; set; } = "ubuntu-server-minimal";
 }

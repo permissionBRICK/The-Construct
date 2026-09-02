@@ -3,6 +3,10 @@ using Constructd.Core.Configuration;
 using Constructd.Core.Services;
 using Constructd.Fakes;
 using Constructd.Sqlite;
+using Constructd.Windows.Forwards;
+using Constructd.Windows.HyperV;
+using Constructd.Windows.Iso;
+using Constructd.Windows.Process;
 
 namespace Constructd.Api.Composition;
 
@@ -27,16 +31,7 @@ public static class ServiceComposition
     {
         ArgumentNullException.ThrowIfNull(options);
 
-        services.AddSingleton<IClock, SystemClock>();
-
-        if (options.EffectivePersistence == PersistenceMode.Sqlite)
-        {
-            services.AddSqliteStores(options);
-        }
-        else
-        {
-            services.AddInMemoryStores();
-        }
+        services.AddConstructdStores(options);
 
         if (options.Fake)
         {
@@ -44,7 +39,7 @@ public static class ServiceComposition
         }
         else
         {
-            services.AddPlatformImplementations();
+            services.AddPlatformImplementations(options);
         }
 
         // Platform-agnostic, so these are the real implementations in every mode: the job engine runs
@@ -71,6 +66,31 @@ public static class ServiceComposition
             sp.GetRequiredService<IHypervisorDriver>(),
             sp.GetRequiredService<IAuditLog>(),
             options.Idle));
+
+        return services;
+    }
+
+    /// <summary>
+    /// The persistence axis on its own: the clock and every store, with no platform implementation and
+    /// no HTTP host. That is all the admin CLI (<c>constructd admin …</c>) needs, and it must work on a
+    /// host where the hypervisor is unreachable — adding a user should not depend on Hyper-V.
+    /// </summary>
+    public static IServiceCollection AddConstructdStores(
+        this IServiceCollection services,
+        ConstructdOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        services.AddSingleton<IClock, SystemClock>();
+
+        if (options.EffectivePersistence == PersistenceMode.Sqlite)
+        {
+            services.AddSqliteStores(options);
+        }
+        else
+        {
+            services.AddInMemoryStores();
+        }
 
         return services;
     }
@@ -142,19 +162,77 @@ public static class ServiceComposition
     }
 
     /// <summary>
-    /// Where the Windows host implementations get registered:
+    /// The Windows host implementations:
     /// <list type="bullet">
-    /// <item><c>IHypervisorDriver</c> → PowerShell/Hyper-V driver (B7),</item>
-    /// <item><c>IIsoBuilder</c> → <c>wsl.exe bin/build-autoinstall-iso.sh</c> (B7),</item>
-    /// <item><c>IPortForwardManager</c> → <c>netsh interface portproxy</c> + TCP-table connection
-    /// counting (B7/B8).</item>
+    /// <item><c>IHypervisorDriver</c> → <c>powershell.exe</c> running the repo's own
+    /// <c>drivers/Load-ConstructDriver.ps1</c> contract,</item>
+    /// <item><c>IIsoBuilder</c> → <c>wsl.exe</c> running <c>bin/build-autoinstall-iso.sh</c>,</item>
+    /// <item><c>IPortForwardManager</c> → <c>netsh interface portproxy</c> plus TCP-table connection
+    /// counting for the idle signal.</item>
     /// </list>
-    /// Until they exist the service refuses to start rather than pretending to work. Persistence is
-    /// unaffected by this: the SQLite stores above are real in every mode.
+    ///
+    /// All three go through <see cref="IProcessRunner"/>, so nothing here builds a command string.
+    /// Off Windows the service refuses to start rather than pretending to work; persistence is
+    /// unaffected either way, because the SQLite stores above are real in every mode.
     /// </summary>
-    private static void AddPlatformImplementations(this IServiceCollection services) =>
-        throw new InvalidOperationException(
-            "constructd has no hypervisor platform yet: the Hyper-V driver, the ISO builder and the " +
-            "portproxy forward manager land in follow-up packages. Start the service with --fake " +
-            "(or Constructd:Fake=true) until then; persistence works in both modes.");
+    public static IServiceCollection AddPlatformImplementations(
+        this IServiceCollection services,
+        ConstructdOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (!OperatingSystem.IsWindows())
+        {
+            throw new InvalidOperationException(
+                "constructd has no hypervisor platform here: the Hyper-V driver, the WSL ISO build and " +
+                "the portproxy forward manager need Windows, and this process is running on " +
+                $"{Environment.OSVersion.Platform}. Start the service with --fake (or " +
+                "Constructd:Fake=true); persistence works in both modes.");
+        }
+
+        ValidatePlatformOptions(options);
+
+        services.AddSingleton<IProcessRunner, ProcessRunner>();
+        services.AddSingleton<IIsoFileSystem, IsoFileSystem>();
+        services.AddSingleton<IHostAddressResolver, DnsHostAddressResolver>();
+        services.AddSingleton<ITcpTableReader, IpHlpApiTcpTableReader>();
+
+        services.AddHttpClient<IIsoDownloader, HttpIsoDownloader>(client =>
+            // The source ISO is gigabytes over whatever link the host has.
+            client.Timeout = TimeSpan.FromHours(2));
+
+        services.AddSingleton<IHypervisorDriver, HyperVDriver>();
+        services.AddSingleton<IIsoBuilder, WslIsoBuilder>();
+        services.AddSingleton<IPortForwardManager, NetshPortForwardManager>();
+
+        return services;
+    }
+
+    /// <summary>
+    /// Fails at startup on a misconfiguration that would otherwise surface as a failed VM creation
+    /// twenty minutes in: the checkout the service invokes has to actually be a Construct checkout.
+    /// </summary>
+    private static void ValidatePlatformOptions(ConstructdOptions options)
+    {
+        if (string.IsNullOrWhiteSpace(options.ScriptsDir))
+        {
+            throw new InvalidOperationException(
+                "Constructd:ScriptsDir is not set. It must point at the Construct checkout the service " +
+                "invokes (the one holding drivers\\, lib\\ and bin\\).");
+        }
+
+        foreach (var required in new[]
+                 {
+                     Path.Combine(options.ScriptsDir, "drivers", "Load-ConstructDriver.ps1"),
+                     Path.Combine(options.ScriptsDir, "lib", "AgentVm.Common.ps1"),
+                     Path.Combine(options.ScriptsDir, "bin", "build-autoinstall-iso.sh"),
+                 })
+        {
+            if (!File.Exists(required))
+            {
+                throw new InvalidOperationException(
+                    $"Constructd:ScriptsDir does not look like a Construct checkout: {required} is missing.");
+            }
+        }
+    }
 }

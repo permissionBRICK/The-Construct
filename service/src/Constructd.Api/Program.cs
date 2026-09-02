@@ -1,10 +1,21 @@
 using System.Security.Cryptography.X509Certificates;
+using Constructd.Api.Admin;
 using Constructd.Api.Auth;
 using Constructd.Api.Composition;
 using Constructd.Api.Endpoints;
 using Constructd.Api.Hosting;
 using Constructd.Api.Infrastructure;
 using Constructd.Core.Configuration;
+
+// ---- Admin CLI -----------------------------------------------------------------------------
+// `constructd admin …` is the same executable in command-line mode: it works the stores directly,
+// with no HTTP, which is how the first admin exists before anybody can authenticate. Nothing below
+// runs in that mode — no listener, no jobs, no scheduler.
+if (args.Length > 0 && string.Equals(args[0], AdminCli.Verb, StringComparison.OrdinalIgnoreCase))
+{
+    return await AdminCliHost.RunAsync(args[1..], CancellationToken.None);
+}
+// ---------------------------------------------------------------------------------------------
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -93,6 +104,8 @@ app.MapGroup("/api/v1")
 await Bootstrap.RunAsync(app.Services, CancellationToken.None);
 
 await app.RunAsync();
+
+return 0;
 
 // ---- helpers --------------------------------------------------------------------------------
 
