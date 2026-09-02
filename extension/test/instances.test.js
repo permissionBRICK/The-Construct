@@ -258,6 +258,63 @@ ok("parity: uppercase auth reported", mx.problems.some((p) => p.includes("servic
 ok("parity: scalar service reported", mx.problems.some((p) => p.includes('"service" must be an object')));
 ok("parity: bad port reported", mx.problems.some((p) => p.includes("invalid sshPort")));
 
+// ── KEY-CASING PARITY (mirrored in test/instances.test.ps1) ──────────────────
+// JavaScript property lookup is case-SENSITIVE; the PowerShell reader's was case-
+// INSENSITIVE (PSObject.Properties[$name]), so ONE registry's bytes aimed the two
+// readers at DIFFERENT VMs: {"VERSION":1,"DEFAULTINSTANCE":"x","INSTANCES":{...}} was
+// ignored here (agent-vm) and loaded there — with "x" as the DEFAULT instance — while a
+// wrong-cased "BACKEND"/"SSHHOST" inside an entry turned a derived hyperv-local instance
+// into a remote one on the PS side only. Both readers now do an ORDINAL, exact-case
+// lookup for every top-level and nested schema field, so a wrong-cased key is simply
+// ABSENT: never a value, and never a "must be a string" problem either.
+// These string literals are the EXACT bytes test/instances.test.ps1 feeds its reader —
+// change the two lists together. (Deliberately no fixture spelling the SAME key twice in
+// two casings: ConvertFrom-Json itself refuses that document on PowerShell 6+, so the PS
+// side degrades to "not valid JSON" + the default instance — fail-closed, not a target
+// disagreement, and not fixable in a 5.1-compatible way.)
+console.log("\n=== key-casing parity (mirrored in test/instances.test.ps1) ===");
+const CASE_FIXTURES = {
+  "upper-top": '{"VERSION":1,"DEFAULTINSTANCE":"work-vm","INSTANCES":{"work-vm":{"backend":"hyperv-local"}}}',
+  "mixed-top": '{"Version":1,"DefaultInstance":"work-vm","Instances":{"work-vm":{"backend":"hyperv-local"}}}',
+  "upper-nested": '{"version":1,"instances":{"work-vm":{"BACKEND":"hyperv-remote","SSHHOST":"buildbox.local",' +
+    '"SSHPORT":2201,"HOSTALIAS":"boxy","KEYNAME":"custom_key","CONFIGBRANCH":"branch-x",' +
+    '"SCRIPTSDIR":"C:/tools","OWNER":"someone","SERVICE":{"url":"https://x"}}}}',
+  "mixed-nested": '{"version":1,"instances":{"work-vm":{"Backend":"hyperv-remote","SshHost":"buildbox.local",' +
+    '"VmName":"BuildBox","SshPort":"2201"}}}',
+  "upper-badtype": '{"version":1,"instances":{"work-vm":{"SSHHOST":123,"KEYNAME":42}}}',
+};
+// Wrong-cased TOP-LEVEL keys: no version, no instances, no defaultInstance — i.e. the
+// zero-change default, silently.
+for (const k of ["upper-top", "mixed-top"]) {
+  const r = inst.load({ path: writeRegistry(CASE_FIXTURES[k]) });
+  ok(`casing (${k}): the wrong-cased "instances" bag is not read`, !r.byName["work-vm"]);
+  eq(`casing (${k}): only the default instance loads`, r.instances.length, 1);
+  eq(`casing (${k}): the wrong-cased defaultInstance pointer is ignored`, r.defaultInstance, "agent-vm");
+  ok(`casing (${k}): the default is byte-identical to today`, inst.isDefaultInstance(inst.resolve(r, null)));
+  deepEq(`casing (${k}): silent — an absent key is not a malformed file`, r.problems, []);
+}
+// Wrong-cased ENTRY fields: the entry loads, but every field is DERIVED (which is also
+// what makes it a canonical hyperv-local instance rather than a skipped one).
+for (const k of ["upper-nested", "mixed-nested", "upper-badtype"]) {
+  const r = inst.load({ path: writeRegistry(CASE_FIXTURES[k]) });
+  const e = r.byName["work-vm"];
+  ok(`casing (${k}): the entry itself still loads (its NAME is exact)`, !!e);
+  if (!e) continue;
+  eq(`casing (${k}): "BACKEND" ignored -> derived hyperv-local`, e.backend, "hyperv-local");
+  eq(`casing (${k}): "SSHHOST" ignored -> derived host`, e.vmHost, "work-vm.mshome.net");
+  eq(`casing (${k}): "SSHPORT" ignored -> 22`, e.sshPort, 22);
+  eq(`casing (${k}): "HOSTALIAS"/"VmName" ignored -> derived`, e.hostAlias, "work-vm");
+  eq(`casing (${k}): "VmName" ignored -> derived`, e.vmName, "work-vm");
+  eq(`casing (${k}): "KEYNAME" ignored -> derived`, e.keyName, "construct_work-vm_ed25519");
+  eq(`casing (${k}): "CONFIGBRANCH" ignored -> derived branch`, e.configBranch, "vm-work-vm");
+  eq(`casing (${k}): "SCRIPTSDIR" ignored -> null`, e.scriptsDir, null);
+  eq(`casing (${k}): "OWNER" ignored -> null`, e.owner, null);
+  eq(`casing (${k}): "SERVICE" ignored -> null`, e.service, null);
+  ok(`casing (${k}): a wrong-cased entry is a DEFAULT-behaving local instance`,
+    !inst.localIdentityProblems(e).length);
+  deepEq(`casing (${k}): no problems (not even a type complaint)`, r.problems, []);
+}
+
 // ── IDENTITY-FIELD FORMAT RULES (mirrored in test/instances.test.ps1) ────────
 // A field of the right TYPE can still be unusable — or hostile — once it reaches a
 // PowerShell command line, an ssh argv, a key path or a git ref. Such an entry is
@@ -1271,6 +1328,28 @@ ok("sync: a stale tick, a stale queued follow-up and a stale write all abort",
   extSrc.split('targetStale(enableTarget, "The project-profile auto-enable")').length === 3 &&
   extSrc.includes("function targetStale(target, what) {") &&
   extSrc.includes("if (!instances.targetSuperseded(instanceGate, target)) return false;"));
+// ...and the tick's TIMESTAMP and RESULT are that instance's too. Held window-globally,
+// they made the panel report A's status under B's name and let A's stamp suppress B's
+// first automatic tick for five minutes. The model of the rule runs in asyncTests().
+ok("sync: the tick's timestamp and result are recorded PER INSTANCE",
+  extSrc.includes("const syncStatus = instances.createSyncStatusStore({ throttleMs: SYNC_TICK_MIN_MS })") &&
+  extSrc.includes("syncStatus.record(syncTarget.name, result);") &&
+  !extSrc.includes("lastSyncTickAt") && !extSrc.includes("lastSyncResult"));
+ok("sync: the panel reports the CAPTURED target's own status, not the last tick's",
+  extSrc.includes("...syncStatus.status(csTarget.name),") &&
+  extSrc.includes("instances.describeSyncStatus(syncStatus.lastAt(csTarget.name), recovered)"));
+ok("sync: the automatic throttle is measured against THAT instance's last tick",
+  extSrc.includes("const autoTarget = captureTargetFull(target);") &&
+  extSrc.includes("if (!syncStatus.dueForAuto(autoTarget.name)) return;") &&
+  extSrc.includes("await runConfigSync(autoTarget);"));
+// The other half of the rule: what is genuinely repository-wide STAYS window-global —
+// there is one config repo and one cross-process lock, so a tick for B must still wait
+// behind a tick for A rather than race it.
+ok("sync: the in-flight tick stays window-global (one repo, one lock)",
+  extSrc.includes("let syncTickInFlight = false;") &&
+  extSrc.includes("let syncTickPromise = null;") &&
+  extSrc.includes("if (syncTickPromise) {") &&
+  extSrc.includes("syncTickInFlight = true;"));
 ok("sync: the capture carries the instance, cfg, scripts dir AND the generation token",
   extSrc.includes("function captureTargetFull(target) {") &&
   extSrc.includes("token: t.token || instanceGate.token(),") &&
@@ -1712,6 +1791,99 @@ async function asyncTests() {
   activeTick.resolve(null);
   eq("queue: a stale follow-up aborts instead of running", await queued, "aborted:superseded");
   deepEq("queue: ...and syncs NEITHER instance", touched, []);
+
+  // ── Per-target sync STATUS and THROTTLE (A's tick must not speak for B) ────
+  // The live failure: A syncs, the user switches to B, and the panel shows A's
+  // timestamp/result/warnings/blocked reason under B's name while A's stamp satisfies the
+  // window-global 5-minute throttle — so B's first automatic tick never runs and B's
+  // branch and VM store stay unsynchronized. Modelled here the way extension.js is now
+  // wired: the STATUS and the THROTTLE are keyed by the captured target, while the
+  // in-flight tick and its follow-up queue stay global (one config repo, one lock).
+  console.log("\n=== per-target config-sync status + throttle ===");
+  // The pure mapping first (extension.js used to inline it twice).
+  eq("status: a fresh target has never synced", inst.describeSyncStatus(null, null).lastResult, null);
+  eq("status: ok", inst.describeSyncStatus(1, { ok: true }).lastResult, "ok");
+  eq("status: conflict", inst.describeSyncStatus(1, { conflict: true }).lastResult, "conflict");
+  eq("status: blocked", inst.describeSyncStatus(1, { blocked: true, blockedReason: "why" }).blockedReason, "why");
+  eq("status: anything else is an error", inst.describeSyncStatus(1, {}).lastResult, "error");
+  deepEq("status: warnings default to an empty list", inst.describeSyncStatus(1, { ok: true }).warnings, []);
+  eq("status: a 0 timestamp reads as never (unchanged from the old global)",
+    inst.describeSyncStatus(0, { ok: true }).lastSyncAt, null);
+
+  let syncClock = 10000;
+  const status = inst.createSyncStatusStore({ throttleMs: 5 * 60 * 1000, now: () => syncClock });
+  const tgate = inst.createGate("agent-vm");
+  // The window-global halves, exactly as extension.js holds them.
+  let inFlight = null;
+  const tickQueue = inst.createTargetQueue();
+  const ticked = [];                                   // {name, branch}, in run order
+  const runTick = (target, d) => {
+    // A tick that arrives while another is running queues behind it — repo-wide, for
+    // EITHER instance, because both write the same config repo under the same lock.
+    if (inFlight) return tickQueue.queue(target.name, inFlight, () => runTick(target, d));
+    const p = d.promise.then((result) => {
+      status.record(target.name, result);              // <- keyed by the CAPTURED target
+      ticked.push({ name: target.name, branch: target.instance.configBranch });
+      if (inFlight === p) inFlight = null;
+      return result;
+    });
+    inFlight = p;
+    return p;
+  };
+  const maybeAuto = (target, d) =>
+    (status.dueForAuto(target.name) ? runTick(target, d) : Promise.resolve("throttled"));
+  const capturedSync = (name, branch) => ({
+    ...inst.captureTarget(tgate, { name, configBranch: branch }),
+    instance: { name, configBranch: branch },
+  });
+
+  const syncTA = capturedSync("agent-vm", "vm");
+  const syncDA = deferred();
+  const syncRunA = maybeAuto(syncTA, syncDA);                      // A has never synced -> it runs
+  // The user switches to B while A's tick is still in flight.
+  tgate.set("work-vm");
+  const syncTB = capturedSync("work-vm", "vm-work-vm");
+  const syncDB = deferred();
+  const syncRunB = maybeAuto(syncTB, syncDB);
+  ok("sync state: B's tick is DUE (A's stamp does not throttle it)", status.dueForAuto("work-vm"));
+  ok("sync state: ...but it queues behind A's — one repo, one lock", tickQueue.isQueued("work-vm"));
+  deepEq("sync state: nothing has ticked yet", ticked, []);
+  syncDA.resolve({ ok: true, warnings: ["A's warning"] });
+  await syncRunA;
+  // A's tick has landed. B's panel state must still say "never synced" — A's timestamp,
+  // result and warnings belong to A's branch and A's VM store.
+  const bBefore = status.status("work-vm");
+  eq("sync state: B reports no last sync of its own", bBefore.lastSyncAt, null);
+  eq("sync state: ...no result", bBefore.lastResult, null);
+  deepEq("sync state: ...and none of A's warnings", bBefore.warnings, []);
+  const aAfter = status.status("agent-vm");
+  eq("sync state: A reports its own result", aAfter.lastResult, "ok");
+  eq("sync state: ...at its own timestamp", aAfter.lastSyncAt, 10000);
+  syncClock += 60000;                                   // one minute later
+  ok("sync state: A is inside its own throttle window", !status.dueForAuto("agent-vm"));
+  ok("sync state: B is STILL due — A's tick never suppressed it", status.dueForAuto("work-vm"));
+  syncDB.resolve({ ok: false, blocked: true, blockedReason: "lock busy", warnings: ["B's warning"] });
+  await syncRunB;
+  deepEq("sync state: both ticks ran, in lock order", ticked.map((t) => t.name), ["agent-vm", "work-vm"]);
+  deepEq("sync state: ...each on its OWN branch", ticked.map((t) => t.branch), ["vm", "vm-work-vm"]);
+  const bAfter = status.status("work-vm");
+  eq("sync state: B now reports B's result", bAfter.lastResult, "blocked");
+  eq("sync state: ...B's blocked reason", bAfter.blockedReason, "lock busy");
+  deepEq("sync state: ...and B's warnings", bAfter.warnings, ["B's warning"]);
+  eq("sync state: ...at B's own timestamp", bAfter.lastSyncAt, 70000);
+  // Switching back must not have disturbed A's entry either.
+  tgate.set("agent-vm");
+  const aBack = status.status("agent-vm");
+  eq("sync state: A's status survives the round trip", aBack.lastResult, "ok");
+  deepEq("sync state: ...with A's warnings, not B's", aBack.warnings, ["A's warning"]);
+  eq("sync state: ...and A's timestamp, not B's", aBack.lastSyncAt, 10000);
+  eq("sync state: one entry per instance", status.size, 2);
+  // Once B's window elapses its automatic tick runs again — for B alone.
+  syncClock += 5 * 60 * 1000;
+  ok("sync state: B is due again after its OWN window", status.dueForAuto("work-vm"));
+  eq("sync state: a target that never synced is always due",
+    await maybeAuto(capturedSync("third-vm", "vm-third-vm"), { promise: Promise.resolve({ ok: true }) }).then((r) => r.ok),
+    true);
 
   // ── The merge gate WRITES a branch, so it is bounded the same way ──────────
   // completePendingMerge creates the merge commit whose message names the branch, and
