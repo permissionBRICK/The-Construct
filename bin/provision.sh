@@ -26,6 +26,12 @@
 # A critical step is limited to work without which the VM is unusable or the host
 # can be locked out. Everything else reaches the final loud failure summary so a
 # transient network/package/service failure does not hide later independent work.
+#
+# Every step body in this file is invoked INDIRECTLY -- `run_step <criticality>
+# "<title>" <function> [args]` calls it through "$@" -- which ShellCheck cannot
+# see, so it reports each of them as unreachable code. That is the one diagnostic
+# this file would otherwise be full of, and it hides real findings.
+# shellcheck disable=SC2317
 set -euo pipefail
 
 # Colourised logging helpers. Emit ANSI colour when either stream is a terminal
@@ -129,6 +135,10 @@ _print_human_result() {
 
 _finish_provision() {
   local critical_rc="${1:-0}" final_rc
+  # Drop the "provisioning is running" marker the guest activity heartbeat reads
+  # (plan §4.7). Only set on the real provisioning path, so the step-runner unit
+  # test never touches it.
+  if [[ -n "${_PROVISION_MARKER:-}" ]]; then rm -f "${_PROVISION_MARKER}" 2>/dev/null || true; fi
   _print_machine_result
   _print_human_result "${critical_rc}"
   rm -rf "${_PROVISION_LOG_DIR}" || true
@@ -272,6 +282,15 @@ run_step critical "Checking root privileges" require_root
 mkdir -p "${_PERSISTENT_LOG_DIR}"
 rm -f "${_PERSISTENT_LOG_DIR}/"*.log 2>/dev/null || true
 
+# "Provisioning is running" marker for the guest activity heartbeat (§4.7): a
+# provision must keep a remote VM alive even with nobody connected. It carries
+# this run's PID so a run killed mid-flight (dropped SSH, hard reset) cannot pin
+# the VM as busy forever, and it lives on tmpfs so a reboot clears it. Silent by
+# design -- the default path's output stays byte-identical.
+_PROVISION_MARKER="${_PROVISION_MARKER:-/run/construct/provisioning}"
+mkdir -p "$(dirname "${_PROVISION_MARKER}")" 2>/dev/null || true
+printf '%s\n' "$$" >"${_PROVISION_MARKER}" 2>/dev/null || true
+
 # Configuration, all overridable via the environment.
 AGENT_NAME="${AGENT_NAME:-$(hostname)-agent}"
 PROJECTS="${PROJECTS:-default}"
@@ -405,6 +424,30 @@ if [[ -f "${CONFIG_FILE}" ]]; then
 fi
 CONSTRUCT_EXTERNAL_SSH_PORT="${CONSTRUCT_EXTERNAL_SSH_PORT:-${_external_ssh_port_saved:-22}}"
 
+# Host service (B8 interface contract): the constructd instance this VM belongs
+# to, if any. Empty -- the default, and every local Hyper-V install -- means
+# "there is no service": `construct expose` uses the guest spool and no heartbeat
+# timer is installed. Same three-level precedence as the keys above.
+_service_url_saved=""
+_instance_name_saved=""
+_idle_interval_saved=""
+if [[ -f "${CONFIG_FILE}" ]]; then
+  _service_url_saved="$(_cfg_unquote "$(sed -n 's/^CONSTRUCT_SERVICE_URL=//p' "${CONFIG_FILE}" | head -1 || true)")"
+  _instance_name_saved="$(_cfg_unquote "$(sed -n 's/^CONSTRUCT_INSTANCE_NAME=//p' "${CONFIG_FILE}" | head -1 || true)")"
+  _idle_interval_saved="$(_cfg_unquote "$(sed -n 's/^CONSTRUCT_IDLE_REPORT_INTERVAL_SEC=//p' "${CONFIG_FILE}" | head -1 || true)")"
+fi
+CONSTRUCT_SERVICE_URL="${CONSTRUCT_SERVICE_URL:-${_service_url_saved:-}}"
+CONSTRUCT_INSTANCE_NAME="${CONSTRUCT_INSTANCE_NAME:-${_instance_name_saved:-$(hostname 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo vm)}}"
+CONSTRUCT_IDLE_REPORT_INTERVAL_SEC="${CONSTRUCT_IDLE_REPORT_INTERVAL_SEC:-${_idle_interval_saved:-60}}"
+# Positive and bounded, not just numeric: systemd treats OnUnitActiveSec=0 as a
+# DISABLED timer, so a stray 0 here would silently stop a service-managed VM from
+# ever reporting -- and a VM that never reports gets saved as idle. Anything
+# unusable falls back to the default. (Same bounds as construct-idle-report.sh.)
+if ! [[ "${CONSTRUCT_IDLE_REPORT_INTERVAL_SEC}" =~ ^[0-9]+$ ]] \
+  || (( CONSTRUCT_IDLE_REPORT_INTERVAL_SEC < 5 || CONSTRUCT_IDLE_REPORT_INTERVAL_SEC > 3600 )); then
+  CONSTRUCT_IDLE_REPORT_INTERVAL_SEC=60
+fi
+
 step "provision.sh starting (non-interactive)"
 note "    AGENT_NAME=${AGENT_NAME}"
 note "    PROJECTS=${PROJECTS}"
@@ -426,6 +469,11 @@ note "    SMB_SHARE=${SMB_SHARE:-(saved/default)}"
 if [[ -n "${CONSTRUCT_EXTERNAL_HOST}" || "${CONSTRUCT_EXTERNAL_SSH_PORT}" != "22" ]]; then
   note "    CONSTRUCT_EXTERNAL_HOST=${CONSTRUCT_EXTERNAL_HOST:-(empty=auto hostname.mshome.net)}"
   note "    CONSTRUCT_EXTERNAL_SSH_PORT=${CONSTRUCT_EXTERNAL_SSH_PORT}"
+fi
+# Same rule for the host service: nothing new is printed on a local install.
+if [[ -n "${CONSTRUCT_SERVICE_URL}" ]]; then
+  note "    CONSTRUCT_SERVICE_URL=${CONSTRUCT_SERVICE_URL}"
+  note "    CONSTRUCT_INSTANCE_NAME=${CONSTRUCT_INSTANCE_NAME}"
 fi
 
 # Free space FIRST: on a full disk every later step fails in its own confusing
@@ -511,9 +559,50 @@ write_configuration() {
   if [[ -n "${_external_ssh_port_saved}" || "${CONSTRUCT_EXTERNAL_SSH_PORT}" != "22" ]]; then
     cfg CONSTRUCT_EXTERNAL_SSH_PORT "${CONSTRUCT_EXTERNAL_SSH_PORT}" || return
   fi
+  # Host-service identity: written only for a service-managed VM, so a local
+  # install's config.env stays byte-identical (empty = "there is no service").
+  if [[ -n "${CONSTRUCT_SERVICE_URL}" ]]; then
+    cfg CONSTRUCT_SERVICE_URL "${CONSTRUCT_SERVICE_URL}" || return
+    cfg CONSTRUCT_INSTANCE_NAME "${CONSTRUCT_INSTANCE_NAME}" || return
+  fi
+  if [[ -n "${_idle_interval_saved}" || "${CONSTRUCT_IDLE_REPORT_INTERVAL_SEC}" != "60" ]]; then
+    cfg CONSTRUCT_IDLE_REPORT_INTERVAL_SEC "${CONSTRUCT_IDLE_REPORT_INTERVAL_SEC}" || return
+  fi
   install -d -m 0755 "${WORKSPACE_ROOT}"
 }
 run_step critical "Writing configuration to ${CONFIG_FILE}" write_configuration
+
+# 2a. The VM's scoped service token (plan §2/§4.6): it authorizes ONLY this VM's
+#     own port forwards and its activity heartbeat. Passed base64-encoded so it
+#     survives the SSH/PowerShell layers untouched (like GIT_USER_NAME_B64), and
+#     never echoed, logged or written to config.env -- the step reports only that
+#     a token was installed. Runs only when the host supplied one, so a local
+#     install's output is unchanged.
+write_vm_token() {
+  local token_file="${CONSTRUCT_VM_TOKEN_FILE:-/etc/construct/vm-token}" tmp
+  # mkdir, not `install -d -m`: /etc/construct already exists (bootstrap.sh) and
+  # its mode is not ours to reset.
+  mkdir -p "$(dirname "${token_file}")" || return 1
+  tmp="${token_file}.tmp.$$"
+  # -di, not -d: a value that travelled through PowerShell/SSH can carry CR or
+  # stray whitespace, which strict base64 rejects (field-verified in this path).
+  if ! ( umask 077; printf '%s' "${CONSTRUCT_VM_TOKEN_B64}" | base64 -di >"${tmp}" ) 2>/dev/null; then
+    rm -f "${tmp}"
+    warn "  CONSTRUCT_VM_TOKEN_B64 could not be decoded; ${token_file} left unchanged"
+    return 1
+  fi
+  if [[ ! -s "${tmp}" ]]; then
+    rm -f "${tmp}"
+    warn "  CONSTRUCT_VM_TOKEN_B64 decoded to nothing; ${token_file} left unchanged"
+    return 1
+  fi
+  chmod 0600 "${tmp}" || { rm -f "${tmp}"; return 1; }
+  mv -f "${tmp}" "${token_file}" || { rm -f "${tmp}"; return 1; }
+  ok "  VM service token installed (${token_file}, 0600)"
+}
+if [[ -n "${CONSTRUCT_VM_TOKEN_B64:-}" ]]; then
+  run_step optional "Installing the VM service token" write_vm_token
+fi
 
 # 2b. Global git identity for the users that operate on the VM: CLAUDE_USER
 #     (root -- used by VS Code Remote-SSH and the AI tools) and the SSH/seed user
@@ -621,11 +710,26 @@ run_step optional "Installing AI tool console integration" \
   env TARGET_USER="${CLAUDE_USER}" AI_TOOLS_OVERRIDE=none AI_CONSOLE_INTEGRATION=true \
   bash "${REPO_DIR}/bin/install-ai-tools.sh"
 
-# 4b. Install the construct CLI so agents and users can manage project profiles
-#     and raise host desktop notifications from the VM shell (`construct project
-#     set|get|list`, `construct notify`). Runs every provision so an updated
-#     script always gets redeployed on reprovision.
-run_step optional "Installing construct CLI" install -m 0755 "${REPO_DIR}/bin/construct" /usr/local/bin/construct
+# 4b. Install the construct CLI so agents and users can manage project profiles,
+#     raise host desktop notifications and expose ports from the VM shell
+#     (`construct project set|get|list`, `construct notify`, `construct expose`).
+#     Runs every provision so an updated script always gets redeployed on
+#     reprovision. Silent (install prints nothing), including the forward spool:
+#     the default path's output must stay byte-identical.
+install_construct_cli() {
+  local bin_dir="${CONSTRUCT_BIN_DIR:-/usr/local/bin}"
+  local forwards_dir="${CONSTRUCT_FORWARDS_DIR:-/etc/construct/forwards}"
+  install -m 0755 "${REPO_DIR}/bin/construct" "${bin_dir}/construct" || return 1
+  # `construct expose` execs this next to itself; the heartbeat unit runs the
+  # reporter from the same directory.
+  install -m 0755 "${REPO_DIR}/bin/construct-expose.sh" "${bin_dir}/construct-expose.sh" || return 1
+  install -m 0755 "${REPO_DIR}/bin/construct-idle-report.sh" "${bin_dir}/construct-idle-report.sh" || return 1
+  # Forward spool (docs/expose.md): root-owned 0755, deliberately NOT 1777 like
+  # the notification spool -- a request opens a port on the user's PC.
+  install -d -m 0755 "${forwards_dir}" "${forwards_dir}/requests" \
+    "${forwards_dir}/acks" "${forwards_dir}/close" || return 1
+}
+run_step optional "Installing construct CLI" install_construct_cli
 
 # 4c. Notification spool for `construct notify`. On tmpfs (/run) deliberately: a
 #     reboot must not replay stale notifications at the host. The tmpfiles.d entry
@@ -636,6 +740,47 @@ setup_notify_spool() {
   ok "  notification spool: /run/construct/notify"
 }
 run_step optional "Setting up the notification spool" setup_notify_spool
+
+# 4d. Guest activity heartbeat (plan §4.7). ONLY for a service-managed VM: the
+#     host service is what enforces idle policy, and a local install must gain no
+#     new units at all. Both branches are silent on the default path -- the enable
+#     branch cannot run without CONSTRUCT_SERVICE_URL, and the disable branch says
+#     nothing (it has nothing to do unless a service-managed VM was moved back).
+setup_idle_report_timer() {
+  local interval="${1:-60}"
+  # Belt and braces with the resolution above: a zero/absurd interval must never
+  # reach the unit file, where systemd would read it as "timer disabled".
+  if ! [[ "${interval}" =~ ^[0-9]+$ ]] || (( interval < 5 || interval > 3600 )); then
+    interval=60
+  fi
+  local unit_dir="${CONSTRUCT_SYSTEMD_DIR:-/etc/systemd/system}"
+  local systemctl_bin="${CONSTRUCT_SYSTEMCTL:-systemctl}"
+  install -d -m 0755 "${unit_dir}" || return 1
+  install -m 0644 "${REPO_DIR}/systemd/construct-idle-report.service" "${unit_dir}/construct-idle-report.service" || return 1
+  install -m 0644 "${REPO_DIR}/systemd/construct-idle-report.timer" "${unit_dir}/construct-idle-report.timer" || return 1
+  if [[ "${interval}" != "60" ]]; then
+    sed -i -e "s/^OnBootSec=.*/OnBootSec=${interval}/" \
+           -e "s/^OnUnitActiveSec=.*/OnUnitActiveSec=${interval}/" \
+           "${unit_dir}/construct-idle-report.timer" || return 1
+  fi
+  "${systemctl_bin}" daemon-reload || return 1
+  "${systemctl_bin}" enable --now construct-idle-report.timer || return 1
+  ok "  activity heartbeat: every ${interval}s to ${CONSTRUCT_SERVICE_URL}"
+}
+remove_idle_report_timer() {
+  local unit_dir="${CONSTRUCT_SYSTEMD_DIR:-/etc/systemd/system}"
+  local systemctl_bin="${CONSTRUCT_SYSTEMCTL:-systemctl}"
+  [[ -f "${unit_dir}/construct-idle-report.timer" ]] || return 0
+  "${systemctl_bin}" disable --now construct-idle-report.timer >/dev/null 2>&1 || true
+  rm -f "${unit_dir}/construct-idle-report.timer" "${unit_dir}/construct-idle-report.service"
+  "${systemctl_bin}" daemon-reload >/dev/null 2>&1 || true
+}
+if [[ -n "${CONSTRUCT_SERVICE_URL}" ]]; then
+  run_step optional "Setting up the activity heartbeat timer" \
+    setup_idle_report_timer "${CONSTRUCT_IDLE_REPORT_INTERVAL_SEC}"
+else
+  remove_idle_report_timer || true
+fi
 
 # 5. Merge selected project profiles into the runtime config.
 run_step optional "Generating runtime config" bash "${REPO_DIR}/bin/generate-runtime-config.sh"
