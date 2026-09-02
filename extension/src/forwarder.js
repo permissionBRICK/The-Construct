@@ -26,6 +26,12 @@
 //      wire protocol (docs/expose.md, service/README.md) — changing one is a versioned
 //      decision. This file is their client and never their author.
 //
+// LAZY, AND GATED ON THE GUEST. Nothing here is started by activation: a Forwarder is
+// created only for a VM the window has already established is up (forwarder.planLifecycle,
+// wired in extension.js), and its own first act is one cheap capability check
+// (buildCapabilityScript) — a guest provisioned before `construct expose` existed costs
+// exactly that one exec and never sees a watcher.
+//
 // TWO MODES, ONE PLANNER. Local (hyperv-local, no service) watches the guest spool over
 // SSH; remote (hyperv-remote) polls the host service. Both funnel into the same pure
 // `planActions`, so "what should happen" is decided in one tested place and the class only
@@ -81,6 +87,11 @@ const WATCH_FALLBACK_SECONDS = 30;
 const WATCH_HEARTBEAT_SECONDS = 60;
 const HEARTBEAT_LINE = "#";
 const CHANGED_LINE = "CHANGED";
+
+/** The capability check's two answers (buildCapabilityScript): does this guest have the
+ *  spool contract at all? */
+const SPOOL_YES = "SPOOL=1";
+const SPOOL_NO = "SPOOL=0";
 
 /**
  * Where a forward listens on the user's PC.
@@ -496,6 +507,50 @@ function buildRemoveScript(entries, opts = {}) {
 }
 
 /**
+ * THE CAPABILITY CHECK, and the first thing this module ever runs on a VM.
+ *
+ * `construct.forwards.enabled` defaults to true — a feature agents are told to use cannot
+ * need configuring first — so the guest side has to be established rather than assumed. A
+ * VM provisioned BEFORE `construct expose` existed has no spool, no `expose` verb and
+ * nothing this module could serve; opening a long-lived `inotifywait` stream to it (a
+ * socket, a wakeup, a battery) would be a cost charged to an install that gained nothing,
+ * which is exactly what the zero-change rule is about.
+ *
+ * So the answer is one line over one one-shot exec, and it is the EXACT marker
+ * `bin/provision.sh` writes: `install -d` of `<dir>` plus `requests/`, `acks/` and
+ * `close/`, all four together, on every provision. Testing all four rather than only the
+ * root is deliberate — a half-made spool would let the watcher's `inotifywait` fail into
+ * the polling fallback forever, and it is the same directory set docs/expose.md specifies.
+ *
+ * Answers `SPOOL=1` or `SPOOL=0` and exits 0 either way: "this VM does not have it" is an
+ * answer, not a failure. Pure.
+ */
+function buildCapabilityScript(opts = {}) {
+  const dir = shQuote(opts.dir || SPOOL_DIR);
+  return `set -u
+d=${dir}
+if [ -d "$d" ] && [ -d "$d/requests" ] && [ -d "$d/acks" ] && [ -d "$d/close" ]; then
+  printf '${SPOOL_YES}\\n'
+else
+  printf '${SPOOL_NO}\\n'
+fi
+exit 0
+`;
+}
+
+/**
+ * Read the capability check's answer. Only an explicit `SPOOL=1` is a yes: an empty or
+ * garbled stdout (a VM that dropped the connection mid-answer, a transport that swallowed
+ * it) means we did not establish the contract, and the watcher stays unstarted. Pure.
+ */
+function parseCapability(stdout) {
+  for (const raw of String(stdout == null ? "" : stdout).split("\n")) {
+    if (raw.trim() === SPOOL_YES) return true;
+  }
+  return false;
+}
+
+/**
  * The long-lived watcher: ONE SSH connection that blocks on the VM until the spool
  * changes. It carries NO DATA — it prints `CHANGED` and the host answers with a
  * reconcile. Forward changes are rare (a human or an agent typing `expose`), so one SSH
@@ -784,6 +839,51 @@ function planActions(input = {}) {
   return actions;
 }
 
+/**
+ * WHEN A WINDOW MAY HOLD A FORWARDER AT ALL — the lazy, guest-gated rule, as a pure
+ * decision so it is driven by tests rather than by a live window.
+ *
+ * The forwarder is NOT started by activation. It is started by what the window's EXISTING
+ * status flow (`probeOnce` + `withVmState`, the same reading the panel renders) has just
+ * learned about the instance that refresh was captured for, and it never probes on its own:
+ * a window that has not established the VM is up must not open an SSH stream to it, which
+ * is what an activation-driven start did on every default install — including one whose VM
+ * was off, and one whose guest predates `construct expose` entirely.
+ *
+ * Inputs:
+ *   enabled  the `construct.forwards.enabled` setting (default true)
+ *   name     the CAPTURED instance the reading describes
+ *   armed    the instance a forwarder has already been asked to serve since that VM was
+ *            last seen up, or null. This is what makes the trigger an EDGE: an older guest
+ *            that answered "no spool" is not asked again on every 30 s refresh, only after
+ *            a reconnect (which clears it), a switch, or the setting being toggled.
+ *   online   did the probe reach the VM?
+ *   vmState  the folded Hyper-V/host state ("running" | "off" | "saved" | "absent" | …)
+ *
+ * Returns { action: "start" | "stop" | "none", reason }.
+ *
+ * REACHABILITY IS THE WHOLE RULE, in both directions. A reading that reached the VM starts
+ * the forwarder; a reading that did NOT reach it stops the one we hold and clears the
+ * armed edge, whatever the host-side power state says — a watcher and a set of `ssh -L`
+ * children pointed at a VM this window can no longer reach are doing nothing but holding
+ * sockets, and the honest recovery is the reconnect edge: the next reading that DOES reach
+ * it starts a fresh session, which re-opens everything still queued in the spool (requests
+ * live under /etc/construct, so nothing is lost by letting go). `off`/`saved`/`absent` are
+ * reported as the reason rather than being the condition. Pure.
+ */
+function planLifecycle(input = {}) {
+  const armed = input.armed == null || input.armed === "" ? null : String(input.armed);
+  const name = input.name == null ? null : String(input.name);
+  if (input.enabled === false) return { action: armed ? "stop" : "none", reason: "disabled" };
+  if (input.online === true) {
+    if (armed !== null && name !== null && armed === name) return { action: "none", reason: "armed" };
+    return { action: "start", reason: "reachable" };
+  }
+  const state = String(input.vmState == null ? "" : input.vmState).trim().toLowerCase();
+  const reason = state === "off" || state === "saved" || state === "absent" ? state : "unreachable";
+  return { action: armed ? "stop" : "none", reason };
+}
+
 // ── Presentation ─────────────────────────────────────────────────────────────
 
 /**
@@ -871,6 +971,9 @@ function toSnapshot(input = {}) {
  *   dir         spool directory (default /etc/construct/forwards)
  *   hostLabel   the `construct.forwards.hostLabel` setting (default "")
  *   windowId    this window's claim id (default: a random one)
+ *   eligible    () => bool — may this session still run? Asked around the guest capability
+ *               check, because the window can disable/switch/close while it is in flight
+ *               and the teardown for that is queued behind this start (see _eligible)
  *   onChange    (snapshot) => void — the panel push
  *   log         (line) => void
  *   timers      { setTimeout, clearTimeout } — injected so tests need no clock
@@ -902,7 +1005,14 @@ class Forwarder {
     /** Last reconcile's view, for the snapshot. */
     this._view = { owner: this.mode === "remote", requests: [], acks: [], closes: [], host: [] };
 
+    /** Does this VM have the spool contract? null until the capability check has answered
+     *  (and back to null when it could not be established at all). */
+    this.supported = null;
+    /** The window's "may this session still run?" (see _eligible). Default: yes. */
+    this._isEligible = typeof opts.eligible === "function" ? opts.eligible : null;
+
     this._stopped = true;
+    this._starting = null;
     this._watchChild = null;
     this._watchBuffer = "";
     this._watchAttempt = 0;
@@ -918,15 +1028,97 @@ class Forwarder {
     return bindHostFor(this.hostLabel);
   }
 
-  /** Start watching (local) or polling (remote). Idempotent. */
+  /**
+   * Start serving this instance. Idempotent, and NOTHING persistent is spawned before the
+   * guest has been established: the first action is the one-shot capability check
+   * (buildCapabilityScript), and only a VM that answers `SPOOL=1` gets the long-lived
+   * watcher and the reconcile poll. A guest without the spool contract costs exactly that
+   * one exec — no watcher, no reconcile, no timer — and is not asked again until the
+   * window is told to start again (a reconnect, a switch, or the setting being toggled).
+   *
+   * Returns the promise for that first round trip so a test can await it; callers fire and
+   * forget, because start() is reached from a status reading and may not block on SSH.
+   */
   start() {
-    if (!this._stopped) return;
+    if (!this._stopped) return this._starting || Promise.resolve();
     this._stopped = false;
+    this._starting = this._begin().catch(() => {});
+    return this._starting;
+  }
+
+  /**
+   * start()'s body: check the guest (local mode), then bring the transport up.
+   *
+   * `eligible()` is asked around the ONE await in here, for the same reason the caller asks
+   * its own generation around the transport build: the window can disable forwarding,
+   * switch instance, lose reachability or close WHILE the guest is answering, and the
+   * teardown for any of those is queued BEHIND the start that is still running. Without
+   * this check a positive answer would spawn the watcher and reconcile the spool first and
+   * be disposed a moment later — SSH traffic after the user said stop.
+   */
+  async _begin() {
+    if (!this._eligible("before the guest check")) return;
+    if (this.mode === "local") {
+      const supported = await this._checkSpool();
+      // dispose()/_standDown() while the check was in flight: the window switched, the
+      // setting went off, or it is closing. Nothing may be spawned behind that.
+      if (this._stopped) return;
+      if (!supported) { this._standDown(); return; }
+    }
+    if (!this._eligible("while the guest was answering")) return;
     if (this.mode === "local") this._startWatch();
     this._schedulePoll();
-    // Not awaited: start() is called from activation and a window switch, neither of
-    // which may block on an SSH round trip.
+    // Not awaited: the reconcile is a second round trip and the caller is a status
+    // reading, not a step that may block on SSH.
     this._safeReconcile();
+  }
+
+  /**
+   * May this session still run? The window's own answer (generation + the enabled setting +
+   * the captured instance + the shutdown flag), injected so this module stays free of every
+   * one of those concepts. A session that is no longer eligible stands down HERE — it
+   * spawns nothing — and the teardown queued behind it disposes it in the ordinary way.
+   */
+  _eligible(when) {
+    if (this._stopped) return false;
+    if (typeof this._isEligible !== "function") return true;
+    let ok = false;
+    try { ok = !!this._isEligible(); } catch (_) { ok = false; }
+    if (ok) return true;
+    this.log(`forwarder[${this.name}]: standing down ${when} — this window let the instance go`);
+    this._standDown();
+    return false;
+  }
+
+  /**
+   * Does this VM have the spool contract? One cheap exec, and the only place `supported`
+   * is decided. An unreachable VM (or a script that failed) is NOT recorded as an old
+   * guest — it is simply not established, and says so in the log; the next connect asks
+   * again. Never throws.
+   */
+  async _checkSpool() {
+    let res;
+    try {
+      res = await this._runScript(buildCapabilityScript({ dir: this.dir }));
+    } catch (e) {
+      this.supported = null;
+      this.log(`forwarder[${this.name}]: could not check this VM's forward spool — ${errText(e)}`);
+      return false;
+    }
+    if (!res || res.code !== 0) {
+      this.supported = null;
+      this.log(`forwarder[${this.name}]: could not check this VM's forward spool ` +
+        `(exit ${res ? res.code : "?"}) — not watching it until the next connect`);
+      return false;
+    }
+    this.supported = parseCapability(res.stdout);
+    if (!this.supported) {
+      // Provisioned before `construct expose` existed: there is nothing to serve and
+      // nothing will appear until it is reprovisioned. One log line, no process, no timer.
+      this.log(`forwarder[${this.name}]: no forward spool on this VM ` +
+        `(${this.dir}) — standing down. Reprovision the VM to use \`construct expose\`.`);
+    }
+    return this.supported === true;
   }
 
   /**
@@ -936,6 +1128,7 @@ class Forwarder {
    */
   dispose() {
     this._stopped = true;
+    this._starting = null;
     this._clear("_watchRestart");
     this._clear("_pollTimer");
     this._clear("_debounceTimer");
@@ -955,6 +1148,7 @@ class Forwarder {
    */
   _standDown() {
     this._stopped = true;
+    this._starting = null;
     this._clear("_watchRestart");
     this._clear("_pollTimer");
     this._clear("_debounceTimer");
@@ -1566,6 +1760,7 @@ module.exports = {
   PORT_BASE, PORT_COUNT, TUNNEL_SETTLE_MS,
   RECONNECT_BASE_MS, RECONNECT_MAX_MS, CONNECTION_HEALTHY_MS, MAX_TUNNEL_ATTEMPTS,
   WATCH_FALLBACK_SECONDS, WATCH_HEARTBEAT_SECONDS, HEARTBEAT_LINE, CHANGED_LINE,
+  SPOOL_YES, SPOOL_NO,
   MAX_HOST_LABEL, MAX_MESSAGE, MAX_LABEL,
   BIND_LOOPBACK, BIND_ALL, bindHostFor,
   isSafeId, sanitizeText, sanitizeHostLabel, toPort, portCandidates, reconnectDelayMs,
@@ -1573,6 +1768,7 @@ module.exports = {
   isV1Document, parseRequest, parseAck, parseClose, ackDocument, parseDump,
   isClosedEntry, readForwardList,
   buildReconcileScript, buildAckScript, buildRemoveScript, buildWatchScript,
-  planActions, toSnapshot,
+  buildCapabilityScript, parseCapability,
+  planActions, planLifecycle, toSnapshot,
   Forwarder, createForwarder,
 };

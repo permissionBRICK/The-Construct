@@ -404,7 +404,10 @@ $badIdentity = @(
     @{ label = 'branch-reserved';   json = '{ "configBranch": "main" }';                 field = 'configBranch' },
     @{ label = 'branch-dotdot';     json = '{ "configBranch": "vm..x" }';                field = 'configBranch' },
     @{ label = 'branch-lock';       json = '{ "configBranch": "vm-x.lock" }';            field = 'configBranch' },
-    @{ label = 'branch-case-hijack';json = '{ "configBranch": "VM" }';                   field = 'configBranch' }
+    @{ label = 'branch-case-hijack';json = '{ "configBranch": "VM" }';                   field = 'configBranch' },
+    # `git check-ref-format --branch vm-work.` fails, so a hand-authored entry ending in a
+    # dot must be refused HERE. Same fixture in extension/test/instances.test.js.
+    @{ label = 'branch-trailing-dot';json = '{ "configBranch": "vm-work." }';            field = 'configBranch' }
 )
 foreach ($c in $badIdentity) {
     $r = Read-ConstructInstances -Path (New-RegistryFile ('{ "version": 1, "instances": { "bad-vm": ' + $c.json + ' } }'))
