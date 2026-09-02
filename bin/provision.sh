@@ -353,6 +353,17 @@ if [[ -f "${CONFIG_FILE}" ]]; then
 fi
 T3CODE_CHANNEL="${T3CODE_CHANNEL:-${_t3code_channel_saved:-stable}}"
 [[ "${T3CODE_CHANNEL}" == "nightly" ]] || T3CODE_CHANNEL=stable
+# Serve the T3 web GUI over HTTPS (nginx in the VM, locally trusted certificate;
+# bin/setup-t3-https.sh). On by default whenever T3 Code is enabled -- a browser
+# only exposes getUserMedia() on a secure origin, so client-side microphone
+# capture in T3 depends on it. Same keep-saved semantics as T3CODE_CHANNEL:
+# empty keeps the VM's saved value, first-time default true.
+_t3code_https_saved=""
+if [[ -f "${CONFIG_FILE}" ]]; then
+  _t3code_https_saved="$(sed -n 's/^T3CODE_HTTPS=//p' "${CONFIG_FILE}" | head -1 || true)"
+fi
+T3CODE_HTTPS="${T3CODE_HTTPS:-${_t3code_https_saved:-true}}"
+[[ "${T3CODE_HTTPS}" == "false" ]] || T3CODE_HTTPS=true
 # Opt-in T3 Code extra-feature patch set: Claude usage-limit auto-resume plus
 # OpenCode background-watcher monitoring. The legacy variable name is retained
 # so existing host settings and config.env files migrate without changing their
@@ -461,6 +472,7 @@ note "    CLAUDE_PARTIAL_STREAMING=${CLAUDE_PARTIAL_STREAMING}"
 note "    MIC_PASSTHROUGH=${MIC_PASSTHROUGH}"
 note "    T3CODE=${T3CODE}"
 note "    T3CODE_CHANNEL=${T3CODE_CHANNEL}"
+note "    T3CODE_HTTPS=${T3CODE_HTTPS}"
 note "    T3CODE_LIMIT_RESUME=${T3CODE_LIMIT_RESUME}"
 note "    OPENCODE_BACKGROUND_WATCHER=${OPENCODE_BACKGROUND_WATCHER}"
 note "    SMB_SHARE=${SMB_SHARE:-(saved/default)}"
@@ -548,6 +560,11 @@ write_configuration() {
   cfg MIC_PASSTHROUGH "${MIC_PASSTHROUGH}" || return
   cfg T3CODE "${T3CODE}" || return
   cfg T3CODE_CHANNEL "${T3CODE_CHANNEL}" || return
+  # Only carries information once T3 Code is in play (or a preference was saved
+  # earlier), so a VM that never opted in keeps its config.env byte-identical.
+  if [[ "${T3CODE}" == "true" || -n "${_t3code_https_saved:-}" ]]; then
+    cfg T3CODE_HTTPS "${T3CODE_HTTPS}" || return
+  fi
   cfg T3CODE_LIMIT_RESUME "${T3CODE_LIMIT_RESUME}" || return
   cfg OPENCODE_BACKGROUND_WATCHER "${OPENCODE_BACKGROUND_WATCHER}" || return
   # Persist the external identity only when it carries information (a non-empty
@@ -693,6 +710,7 @@ if [[ "${T3CODE}" == "true" ]]; then
   run_step optional "Installing T3 Code web GUI" \
     env TARGET_USER="${CLAUDE_USER}" AI_TOOLS_OVERRIDE=t3code AI_CONSOLE_INTEGRATION=false \
     T3CODE_CHANNEL="${T3CODE_CHANNEL}" T3CODE_LIMIT_RESUME="${T3CODE_LIMIT_RESUME}" \
+    T3CODE_HTTPS="${T3CODE_HTTPS}" \
     bash "${REPO_DIR}/bin/install-ai-tools.sh"
 else
   # A disabled T3 deployment must not cause the host handoff to offer a stale
@@ -700,6 +718,13 @@ else
   rm -f /etc/construct/t3code-desktop-status
   rm -f /etc/construct/t3code-installed-build
   bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" CONSTRUCT_T3_VOICE_INPUT false
+  # Tear the TLS proxy down too: an https listener in front of a stopped T3 would
+  # only produce 502s, and the advertised T3CODE_PUBLIC_BASE_URL must not survive
+  # the feature being switched off. Keeps the CA, so re-enabling needs no new
+  # Windows trust import.
+  run_step optional "Disabling T3 Code HTTPS proxy (T3CODE=false)" \
+    env CONFIG_FILE="${CONFIG_FILE}" REPO_DIR="${REPO_DIR}" \
+    bash "${REPO_DIR}/bin/setup-t3-https.sh" --teardown
   if [[ -f /etc/systemd/system/t3code-serve.service ]]; then
     run_step optional "Disabling T3 Code web GUI (T3CODE=false)" \
       systemctl disable --now t3code-serve

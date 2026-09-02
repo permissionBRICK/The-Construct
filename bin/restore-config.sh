@@ -281,6 +281,60 @@ done
 # conditional on the enabled flag below.
 REPO_DIR="${REPO_DIR:-/opt/construct/repo}"
 CONFIG_FILE="${CONFIG_FILE:-/etc/construct/config.env}"
+
+# ── T3 Code HTTPS local CA ───────────────────────────────────────────────────
+# The saved /etc/construct/tls tree carries the CA whose certificate is already
+# trusted on the host, so restoring it keeps the browser happy without a fresh
+# import. It rides OUTSIDE home (like the serve-web token), hence the explicit
+# extraction. The restored leaf may no longer match this VM's names, and a leaf
+# minted minutes ago by this provision no longer chains to the restored CA --
+# setup-t3-https.sh detects both (SAN drift / failed openssl verify) and reissues
+# the leaf, so re-run it here. Only when T3 Code is actually deployed: on a VM
+# without it there is nothing to serve and nothing to reconcile.
+TLS_DIR="${T3CODE_TLS_DIR:-/etc/construct/tls}"
+tls_restore=""
+if [[ -n "${archive_restore}" ]]; then
+  grep -Eq '^(\./)?etc/construct/tls/' "${archive_list}" && tls_restore=1 || true
+elif compgen -G "${BACKUP_DIR}/etc/construct/tls/*" >/dev/null 2>&1; then
+  tls_restore=1
+fi
+if [[ -n "${tls_restore}" ]]; then
+  mkdir -p "${TLS_DIR}"
+  chmod 700 "${TLS_DIR}" 2>/dev/null || true
+  _tls_ok=1
+  if [[ -n "${archive_restore}" ]]; then
+    # Extract WITHOUT --strip-components: both the './etc/...' and 'etc/...'
+    # member spellings then land at the same path inside the staging dir.
+    _tls_stage="$(mktemp -d /tmp/construct-restore-tls.XXXXXX)"
+    if tar -xzf "${BACKUP_TGZ}" -C "${_tls_stage}" \
+        "$(grep -Eom1 '^(\./)?etc/construct/tls' "${archive_list}")" 2>/dev/null \
+       && [[ -d "${_tls_stage}/etc/construct/tls" ]]; then
+      cp -a "${_tls_stage}/etc/construct/tls/." "${TLS_DIR}/" || _tls_ok=""
+    else
+      _tls_ok=""
+    fi
+    rm -rf "${_tls_stage}"
+  else
+    cp -a "${BACKUP_DIR}/etc/construct/tls/." "${TLS_DIR}/" || _tls_ok=""
+  fi
+  if [[ -n "${_tls_ok}" ]]; then
+    # Private keys must not come back group/world readable, whatever umask the
+    # export ran under; the CA certificate itself is public.
+    chmod 600 "${TLS_DIR}"/*.key 2>/dev/null || true
+    chmod 644 "${TLS_DIR}"/*.crt 2>/dev/null || true
+    log "restored etc/construct/tls (T3 HTTPS local CA)"
+    if [[ -f "${REPO_DIR}/bin/setup-t3-https.sh" ]] \
+       && systemctl is-enabled --quiet t3code-serve 2>/dev/null; then
+      if ! env CONFIG_FILE="${CONFIG_FILE}" REPO_DIR="${REPO_DIR}" \
+          bash "${REPO_DIR}/bin/setup-t3-https.sh"; then
+        err "T3 Code HTTPS could not be reconciled against the restored CA; reprovision to retry"
+      fi
+    fi
+  else
+    err "restoring the T3 HTTPS CA failed; a new CA is generated on the next provision (re-import it on the host)"
+  fi
+fi
+
 if [[ -f "${BACKUP_DIR}/backup-info.json" ]]; then
   _restore_t3ch="$(jq -r '.t3codeChannel // "stable"' "${BACKUP_DIR}/backup-info.json" 2>/dev/null)"
   [[ "${_restore_t3ch}" == "nightly" ]] || _restore_t3ch=stable
