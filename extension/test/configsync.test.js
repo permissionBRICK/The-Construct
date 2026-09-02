@@ -1736,6 +1736,40 @@ async function runTests() {
     !cs.isValidVmBranch("VM") && !cs.isValidVmBranch("Vm"));
   ok("vmBranch: an ordinary uppercase instance branch is NOT treated as a pseudo-ref",
     cs.isValidVmBranch("WORK") && cs.isValidVmBranch("Work") && cs.isValidVmBranch("VM_WORK"));
+  ok("vmBranch: rejects a trailing dot (git refuses `foo.` as a branch)",
+    !cs.isValidVmBranch("foo.") && !cs.isValidVmBranch("vm-work.") && !cs.isValidVmBranch("vm."));
+
+  // THE PROPERTY, against REAL GIT. This validator is deliberately stricter than
+  // check-ref-format (it also refuses `main`, `HEAD`, `VM`, …) — but it must never be
+  // LOOSER, or a hand-authored `configBranch` passes validation here and then fails at
+  // `git branch`, leaving the instance syncing on the fallback branch instead of the one
+  // it was promised. The same fixture list is driven through the PowerShell twin
+  // (Test-ConstructVmBranchName) in test/config-sync.test.ps1.
+  const BRANCH_FIXTURES = [
+    "vm", "vm-work", "vm-work_2.1", "WORK", "Work", "VM_WORK", "vm2", "a",
+    "main", "master", "HEAD", "stash", "VM", "Vm",
+    "foo.", "vm.", "vm-work.", "foo.bar.", "vm..x", "a..b", "-vm", ".vm",
+    "vm work", "vm/work", "vm~1", "vm.lock", "x@{y", "vm^", "vm:1", "vm?", "vm*",
+    "vm[1]", "vm\\x", "vm@{now}", "@",
+  ];
+  const gitAccepts = (name) => {
+    try { execSync("git check-ref-format --branch " + JSON.stringify(name), { stdio: "ignore" }); return true; }
+    catch (_) { return false; }
+  };
+  {
+    const looser = BRANCH_FIXTURES.filter((n) => cs.isValidVmBranch(n) && !gitAccepts(n));
+    ok("vmBranch: everything this validator accepts, real git accepts", looser.length === 0,
+      "git refuses: " + JSON.stringify(looser));
+    const gitBad = BRANCH_FIXTURES.filter((n) => !gitAccepts(n));
+    const wrongly = gitBad.filter((n) => cs.isValidVmBranch(n));
+    ok("vmBranch: ...and everything real git refuses is refused here too", wrongly.length === 0,
+      "accepted anyway: " + JSON.stringify(wrongly));
+    ok("vmBranch: the fixture list really does contain git-invalid names",
+      gitBad.indexOf("foo.") >= 0 && gitBad.length >= 15);
+    ok("vmBranch: ...and the two names the product depends on stay accepted",
+      cs.isValidVmBranch("vm") && cs.isValidVmBranch("vm-work") &&
+      gitAccepts("vm") && gitAccepts("vm-work"));
+  }
   ok("vmBranch: resolve defaults to vm", cs.resolveVmBranch() === "vm" && cs.resolveVmBranch("") === "vm" &&
     cs.resolveVmBranch(null) === "vm" && cs.DEFAULT_VM_BRANCH === "vm");
   ok("vmBranch: resolve keeps a valid name", cs.resolveVmBranch("vm-work") === "vm-work");

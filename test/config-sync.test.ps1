@@ -1678,6 +1678,46 @@ ok "vmbranch: rejects other spellings of the default branch (Windows ref collisi
 ok "vmbranch: an ordinary uppercase instance branch is NOT treated as a pseudo-ref" (
     (Test-ConstructVmBranchName -Name "WORK") -and (Test-ConstructVmBranchName -Name "Work") -and
     (Test-ConstructVmBranchName -Name "VM_WORK"))
+ok "vmbranch: rejects a trailing dot (git refuses ``foo.`` as a branch)" (
+    -not (Test-ConstructVmBranchName -Name "foo.") -and
+    -not (Test-ConstructVmBranchName -Name "vm.") -and
+    -not (Test-ConstructVmBranchName -Name "vm-work."))
+
+# THE PROPERTY, against REAL GIT -- the same fixture list the JS twin drives through
+# `git check-ref-format --branch` (extension/test/configsync.test.js). This validator is
+# deliberately stricter than check-ref-format (it also refuses "main", "HEAD", "VM"), but
+# it must never be LOOSER: a name accepted here and refused by git means a hand-authored
+# configBranch that fails at `git branch` after the instance was promised its own branch.
+$branchFixtures = @(
+    'vm', 'vm-work', 'vm-work_2.1', 'WORK', 'Work', 'VM_WORK', 'vm2', 'a',
+    'main', 'master', 'HEAD', 'stash', 'VM', 'Vm',
+    'foo.', 'vm.', 'vm-work.', 'foo.bar.', 'vm..x', 'a..b', '-vm', '.vm',
+    'vm work', 'vm/work', 'vm~1', 'vm.lock', 'x@{y', 'vm^', 'vm:1', 'vm?', 'vm*',
+    'vm[1]', 'vm\x', 'vm@{now}', '@'
+)
+$gitPresent = $null -ne (Get-Command git -ErrorAction SilentlyContinue)
+if ($gitPresent) {
+    $looser = @()
+    $wrongly = @()
+    $gitBad = @()
+    foreach ($name in $branchFixtures) {
+        & git check-ref-format --branch $name 2>$null | Out-Null
+        $gitOk = ($LASTEXITCODE -eq 0)
+        $ours = Test-ConstructVmBranchName -Name $name
+        if (-not $gitOk) { $gitBad += $name }
+        if ($ours -and -not $gitOk) { $looser += $name }
+        if ($ours -and -not $gitOk) { $wrongly += $name }
+    }
+    ok "vmbranch: everything this validator accepts, real git accepts" ($looser.Count -eq 0)
+    ok "vmbranch: ...and everything real git refuses is refused here too" ($wrongly.Count -eq 0)
+    ok "vmbranch: the fixture list really does contain git-invalid names" (
+        ($gitBad -contains 'foo.') -and $gitBad.Count -ge 15)
+    ok "vmbranch: ...and the two names the product depends on stay accepted" (
+        (Test-ConstructVmBranchName -Name "vm") -and (Test-ConstructVmBranchName -Name "vm-work"))
+} else {
+    Write-Host "  SKIP  vmbranch: real-git fixture list (git not installed)" -ForegroundColor DarkYellow
+}
+
 ok "vmbranch: resolve defaults to vm" (
     (Resolve-ConstructVmBranch -VmBranch "") -eq "vm" -and
     (Resolve-ConstructVmBranch -VmBranch $null) -eq "vm")

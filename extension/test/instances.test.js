@@ -379,6 +379,10 @@ const badIdentity = [
   ["branch-dotdot", { configBranch: "vm..x" }, "configBranch"],
   ["branch-lock", { configBranch: "vm-x.lock" }, "configBranch"],
   ["branch-case-hijack", { configBranch: "VM" }, "configBranch"],
+  // `git check-ref-format --branch vm-work.` fails, so a hand-authored entry ending in a
+  // dot must be refused HERE — accepting it meant the branch was only created (or not) at
+  // the first sync tick. Same fixture in test/instances.test.ps1.
+  ["branch-trailing-dot", { configBranch: "vm-work." }, "configBranch"],
 ];
 for (const [label, entry, field] of badIdentity) {
   const r = inst.load({ path: writeRegistry(JSON.stringify({ version: 1, instances: { "bad-vm": entry } })) });

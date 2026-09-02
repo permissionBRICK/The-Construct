@@ -2693,15 +2693,25 @@ function Test-ConstructVmBranchName {
         .SYNOPSIS
         True when the name is safe to use as refs/heads/<name> AND safe to hand
         to git as a BARE ref operand: starts alphanumeric, then alphanumerics /
-        dot / underscore / hyphen, no '..', no '.lock' suffix (git reserves it),
-        and not one of $script:CONSTRUCT_RESERVED_VM_BRANCHES. Pure; mirrors
-        isValidVmBranch in extension/src/configsync.js.
+        dot / underscore / hyphen, no '..', no trailing '.', no '.lock' suffix
+        (git reserves it), and not one of
+        $script:CONSTRUCT_RESERVED_VM_BRANCHES. Pure; mirrors isValidVmBranch in
+        extension/src/configsync.js.
+
+        Stricter than `git check-ref-format --branch`, never looser: the shape
+        rule already excludes a leading '-', control characters, '@{', a '/.'
+        component and the space/tilde/caret/colon/question/asterisk/bracket/
+        backslash set, and the two survivors are spelled out -- '..' anywhere,
+        and a TRAILING '.', which git refuses ("foo." is not a branch name) so a
+        hand-authored configBranch of "foo." can no longer pass validation here
+        and then fail at `git branch`. Same fixture list as the JS twin's tests.
     #>
     [CmdletBinding()]
     param([AllowEmptyString()][AllowNull()][string]$Name)
     if ([string]::IsNullOrEmpty($Name)) { return $false }
     if ($Name -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') { return $false }
     if ($Name.Contains("..")) { return $false }
+    if ($Name.EndsWith(".")) { return $false }
     if ($Name.EndsWith(".lock")) { return $false }
     $lower = $Name.ToLowerInvariant()
     if ($script:CONSTRUCT_RESERVED_VM_BRANCHES -contains $lower) { return $false }
