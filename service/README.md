@@ -21,8 +21,8 @@ visit.
 service/
   Constructd.sln
   src/Constructd.Core/      domain records, interfaces, pure logic; zero package references
-    Domain/                 User, ApiToken, Vm, PortForward, IdlePolicy, ActivityReport, Job,
-                            AuditEntry, VmDescriptor, Endpoint
+    Domain/                 User, ApiToken, Vm, PortForward (+ ForwardAck), IdlePolicy,
+                            ActivityReport, Job, AuditEntry, VmDescriptor, Endpoint
     Abstractions/           IHypervisorDriver, IIsoBuilder, IJobEngine, IJobStore,
                             IPortForwardManager, IForwardStore, IIdlePolicyEngine, IUserStore,
                             ITokenService, IVmRepository, IAuditLog, IClock,
@@ -119,9 +119,10 @@ Everything lives under `/api/v1`, speaks JSON with camelCase properties and came
 | `POST /vms/{name}/power` | owner/admin | `{action: start\|stop\|save}`, synchronous, returns the new state. `save` needs the driver's suspend capability. |
 | `GET /vms/{name}/state` | owner/admin | Live state from the driver (and refreshes the registry). |
 | `GET /vms/{name}/endpoint` | owner/admin | `{sshHost, sshPort}` — the service host plus the allocated forward. Until that forward exists the call answers `409`: the VM sits on an internal NAT switch and has no client-dialable address yet. |
-| `GET /vms/{name}/forwards` | owner/admin **or that VM's own token** | Lists forwards. |
+| `GET /vms/{name}/forwards` | owner/admin **or that VM's own token** | Lists forwards, each with its client ack inline (see below). |
 | `POST /vms/{name}/forwards` | owner/admin **or that VM's own token** | `{vmPort, label, target}` → `{id, publicPort?, url?}`. `target` defaults to `client`. |
 | `DELETE /vms/{name}/forwards/{id}` | owner/admin **or that VM's own token** | Removes one forward. |
+| `POST /vms/{name}/forwards/{id}/ack` | owner/admin — **not** the VM's own token | `{status: open\|error, localPort?, hostLabel?, message?}` → the updated forward. The extension reporting that it opened the port on the user's PC. |
 | `GET`/`PUT /vms/{name}/idle-policy` | owner/admin | `{timeoutMinutes, action}`; the response also carries the admin cap and whether the request was clamped. |
 | `POST /vms/{name}/activity` | owner/admin **or that VM's own token** | Guest heartbeat `{busy, reasons[]}`. |
 | `GET /jobs/{id}` | job submitter/admin | Job state, progress lines, result, error. The first retrieval of a succeeded creation job also gets `result.vmToken`. |
@@ -196,8 +197,9 @@ Policies (`Auth/AuthorizationSetup.cs`):
   implemented on top of the pure `Ownership` helpers.
 
 A VM-scoped token is valid for exactly four calls: its own VM's forwards (list, add, remove) and its
-own heartbeat. Every other route — including `/whoami` — answers `403` for it, and so does any other
-VM's copy of those four routes, even one owned by the same user.
+own heartbeat. Every other route — including `/whoami` and including the **ack** on its own
+forwards — answers `403` for it, and so does any other VM's copy of those four routes, even one
+owned by the same user.
 
 A VM that exists but belongs to somebody else answers `403`, not `404`; an unknown VM answers `404`.
 
@@ -212,6 +214,53 @@ survive the VM (an orphan forward would otherwise be re-materialized at the next
 
 Host-target forwards are gated on the **VM owner's** `AllowHostForwards` flag, not the caller's, so
 an admin acting on someone else's VM cannot route around that restriction.
+
+### The client-forward ack relay (plan §4.6)
+
+A `host` forward is something the service *does*; a `client` forward is something the service only
+*records*, because the port opens on the user's PC, over the SSH connection VS Code already holds.
+The extension's forwarder module (`extension/src/forwarder.js`, `extension/ARCHITECTURE.md`
+§Forwards) is the other end.
+
+```
+guest CLI ──POST /forwards {target:client}──►  service  ◄──GET /forwards── extension
+   (VM token)                                     │                          │ opens localhost:<port>
+          ◄────GET /forwards, polling─────────────┘  ◄──POST …/{id}/ack──────┘
+          prints http://localhost:<port>/
+```
+
+**A VM may not ack its own forward.** The ack route is the one forward route that answers `403` to a
+VM-scoped token: the guest *asks* whether a port opened on the user's PC, and a VM that could also
+*answer* would be able to hand its own agents a link to a port nothing is listening on. Owner or
+admin only, and only for a forward that really belongs to that VM (`404` otherwise) and really has
+target `client` (`409` for a host forward, which the service materializes itself).
+
+The ack is stored on the forward and **replaces** any earlier one — the extension re-acks after
+re-establishing a tunnel — and it is durable, so a service restart does not tell a guest that a link
+it already printed is "not open yet" while the tunnel is still up.
+
+The list projects it **inline and flat**:
+
+```json
+{"id":"…","vmName":"work-vm","vmPort":5173,"publicPort":null,"target":"client","label":"vite dev",
+ "created":"…","url":"http://christoph-pc:18800/","status":"open","localPort":18800,
+ "hostLabel":"christoph-pc","message":"","ackedAt":"…"}
+```
+
+- `url` is `http://<hostLabel>:<localPort>/` when the extension reported a host label, and
+  `http://localhost:<localPort>/` when it did not (the default — an untouched install opens a
+  loopback-only tunnel). An **unacked** client forward has `url: null`, and so does an `error` ack:
+  the CLI reads `url` first, so filling it in for a failure would make it print a dead link instead
+  of the reason.
+- `status` is absent until somebody acks, then `open` or `error`; `message` carries the reason for
+  an `error`.
+- **Flat is load-bearing.** `bin/construct-expose.sh` falls back to a purely textual parser on a VM
+  without `jq` — it splits the array on `{…}` and greps flat `"key": value` pairs — so a nested
+  `ack` object would be invisible there. `ExposeCliContractTests` re-implements that parser and runs
+  it against the real serialized bytes of the real routes.
+- `hostLabel` and `message` are trimmed, stripped of control characters and capped: both are echoed
+  to a CLI that prints them, so a newline in either would let one field forge another line of
+  `construct expose --list`'s output.
 
 ### Auditing
 
@@ -819,7 +868,9 @@ deleting a colleague's VM is not an uninstall step.
 - **Persistence tests**: every store against a real SQLite file that is then reopened ("restart"),
   the quota transaction, job recovery after a restart, no plaintext secret anywhere in the file,
   forwards (and their ports) surviving a restart with reconciliation re-materializing the host rules
-  and no port colliding afterwards, an SSH allocation that is durable before its host rule exists (so a
+  and no port colliding afterwards, a client ack surviving a restart with the same link, a pre-ack
+  `forwards` table gaining the five ack columns on open without losing a row (and idempotently on the
+  next open), an SSH allocation that is durable before its host rule exists (so a
   crash right after it cannot hand the port out twice), a dependency failure whose message contains a
   sentinel secret appearing nowhere in job state, the SSE stream, the audit trail or the file, plus the
   whole API driven over HTTP against SQLite.
@@ -831,9 +882,17 @@ deleting a colleague's VM is not an uninstall step.
   when the job cannot be queued at all), the delete fence (a VM token cannot slip a forward past an
   accepted deletion, and power/policy/heartbeat answer 409 while it runs), the one-time token (handed out once in `result.vmToken`,
   absent from the stored job, absent on replay), forwards (client vs host, per-user host gating,
-  VM-token scoping, caps, port exhaustion), concurrency (quota and forward caps under simultaneous
-  requests), idle policy with cap clamping, the heartbeat, and audit entries for successes, validation
-  failures, refusals, malformed bodies and a throwing hypervisor.
+  VM-token scoping, caps, port exhaustion), the ack relay (the auth matrix — owner and admin yes, the
+  VM's own token and another user `403`, anonymous `401` — the link shapes, re-acking, `404` for an
+  unknown or another VM's id, `409` for a host target and for a VM being deleted, invalid payloads,
+  control characters stripped from the label and the message, and the audit entry), concurrency
+  (quota and forward caps under simultaneous requests), idle policy with cap clamping, the heartbeat,
+  and audit entries for successes, validation failures, refusals, malformed bodies and a throwing
+  hypervisor.
+- **Expose-CLI contract tests**: `bin/construct-expose.sh`'s own lenient, `jq`-optional parser,
+  re-implemented in C# and run against the real serialized bytes of `GET /vms/{name}/forwards` — so
+  the flatness of a forward object, the meaning of `url`/`status`/`localPort`/`hostLabel`/`message`
+  and the fields `--list`/`--close` match on are pinned by a test rather than by convention.
 - **Secret-hygiene tests**: a dependency exception carrying a sentinel secret, raised in the request
   path, in a background job, in the idle engine, in the forward manager, and in token validation (where
   the sentinel is the presented plaintext token) — asserted absent from the response body, the audit
@@ -917,13 +976,18 @@ deleting a colleague's VM is not an uninstall step.
 - The idle engine's per-VM "last active" watermark is in-process: a restart restarts the idle window
   rather than idling VMs out on history it cannot see. Persisting it alongside the VM row is a small
   follow-up if that matters.
-- `client`-target forwards are recorded (and durable) but not relayed yet; the extension side of that
-  is B8.
-- The `url` on a forward is advisory (`http://<publicHost>:<port>/`). Per-VM hostnames for
-  cookie-sensitive services stay out of scope (plan §4.9).
+- `client`-target forwards are relayed through the ack route (B8). The service still does not *push*
+  them: the extension polls `GET /forwards` every 10 s while a window has that instance active. A
+  long-poll or an SSE stream would cut the latency and the chatter; the poll is what B8 shipped
+  because it needs nothing new on either side.
+- The `url` on a forward is advisory (`http://<publicHost>:<port>/` for a host target, the client's
+  reported link for a client target). Per-VM hostnames for cookie-sensitive services stay out of
+  scope (plan §4.9).
 - Quota semantics: `maxVms` is a plain cap and `0` means "may not create VMs"; "unlimited" has to be
   expressed as a large number.
-- No schema migrations yet — the first schema change has to introduce them.
+- Schema evolution is `SqliteDatabase.AddColumnIfMissing` and nothing more: additive nullable
+  columns, applied on every start, introduced by the forward ack (B8). A rename, a drop or a data
+  backfill still needs a real migration story — and a version stamp to decide when to run it.
 - The capability's console **kind** (`vmconnect`, a URL, none) is read from the driver and carried on
   `DriverCapabilities`, but no endpoint exposes it yet: the consumer is the extension's "open console"
   affordance, which arrives with the remote driver (B7). Adding it is a response field, not a redesign.

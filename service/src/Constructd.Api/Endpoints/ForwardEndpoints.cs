@@ -25,6 +25,13 @@ public static class ForwardEndpoints
         api.MapDelete("/vms/{name}/forwards/{id}", DeleteAsync)
             .RequireAuthorization(Policies.VmScoped).Audited("forward.remove").WithName("DeleteForward");
 
+        // Policies.User, NOT Policies.VmScoped: this is the one forward route the VM's own token
+        // may not reach. The guest ASKS for a client forward; whether a port really opened on the
+        // user's PC is the extension's answer to give, and a VM that could write it would be able
+        // to hand its own agents a link to a port nothing is listening on.
+        api.MapPost("/vms/{name}/forwards/{id}/ack", AckAsync)
+            .RequireAuthorization(Policies.User).Audited("forward.ack").WithName("AckForward");
+
         return api;
     }
 
@@ -165,5 +172,137 @@ public static class ForwardEndpoints
         return await forwards.RemoveForwardAsync(vm.Name, id, cancellationToken).ConfigureAwait(false)
             ? TypedResults.NoContent()
             : Problems.NotFound($"VM '{vm.Name}' has no forward '{id}'.");
+    }
+
+    /// <summary>
+    /// The client-forward ack relay (plan §4.6): the owner's extension reports that it opened the
+    /// port on the user's PC — or that it could not — and <c>construct expose</c>, polling the list
+    /// with the VM token, finally has a link to print.
+    ///
+    /// The store is written directly rather than through <see cref="IPortForwardManager"/>: an ack
+    /// changes nothing on the host (no rule, no port allocation), so there is nothing for the
+    /// platform implementation to do and no reason for a Windows-only type to be in this path.
+    /// </summary>
+    private static async Task<IResult> AckAsync(
+        string name,
+        string id,
+        ForwardAckRequest? request,
+        HttpContext http,
+        IVmRepository repository,
+        IAuthorizationService authorization,
+        IForwardStore store,
+        IClock clock,
+        ConstructdOptions options,
+        CancellationToken cancellationToken)
+    {
+        var lookup = await ApiHelpers.ResolveVmAsync(http, repository, authorization, name,
+            Policies.VmOwnerOrAdmin, cancellationToken).ConfigureAwait(false);
+
+        if (!lookup.Ok)
+        {
+            return lookup.Failure!;
+        }
+
+        var vm = lookup.Vm!;
+        http.SetAuditDetail($"id={id}");
+
+        if (ApiHelpers.FenceDeleting(vm) is { } fenced)
+        {
+            http.SetAuditDetail($"id={id}, vm is being deleted");
+            return fenced;
+        }
+
+        var forward = await store.GetAsync(id, cancellationToken).ConfigureAwait(false);
+
+        // A forward of somebody else's VM is a 404 here, not a 403: the caller is already
+        // authorized for THIS VM, so the only thing being reported is that this VM has no such
+        // forward — which is exactly what "the id is another VM's" means to them.
+        if (forward is null || !string.Equals(forward.VmName, vm.Name, StringComparison.OrdinalIgnoreCase))
+        {
+            return Problems.NotFound($"VM '{vm.Name}' has no forward '{id}'.");
+        }
+
+        if (forward.Target != ForwardTarget.Client)
+        {
+            http.SetAuditDetail($"id={id}, target={forward.Target}");
+            return Problems.Conflict(
+                $"Forward '{id}' has target={ApiHelpers.Name(forward.Target)}: the service materializes it " +
+                "itself, so there is no client ack to record.");
+        }
+
+        if (request is null)
+        {
+            return Problems.BadRequest("A body with 'status' is required.");
+        }
+
+        if (!ApiHelpers.TryParseEnum<AckStatus>(request.Status, out var status))
+        {
+            return Problems.BadRequest($"'status' must be one of: {ApiHelpers.Options<AckStatus>()}.");
+        }
+
+        int? localPort = null;
+        if (status == AckStatus.Open)
+        {
+            if (request.LocalPort is not int port || port is < 1 or > 65535)
+            {
+                return Problems.BadRequest("'localPort' must be between 1 and 65535 for status=open.");
+            }
+
+            localPort = port;
+        }
+        else if (request.LocalPort is int reported)
+        {
+            // An error ack may still name the port it tried; a nonsense one is refused rather than
+            // stored, because the same field builds the link when the status later flips to open.
+            if (reported is < 1 or > 65535)
+            {
+                return Problems.BadRequest("'localPort' must be between 1 and 65535.");
+            }
+
+            localPort = reported;
+        }
+
+        var hostLabel = Sanitize(request.HostLabel, MaxHostLabel);
+        var message = Sanitize(request.Message, MaxAckMessage) ?? string.Empty;
+
+        var ack = new ForwardAck(status, localPort, hostLabel, message, clock.UtcNow);
+
+        if (!await store.SetAckAsync(id, ack, cancellationToken).ConfigureAwait(false))
+        {
+            // Removed between the read and the write (the guest ran `expose --close`).
+            return Problems.NotFound($"VM '{vm.Name}' has no forward '{id}'.");
+        }
+
+        http.SetAuditDetail(
+            $"id={id}, status={ApiHelpers.Name(status)}, localPort={localPort?.ToString() ?? "-"}" +
+            $", hostLabel={(string.IsNullOrEmpty(hostLabel) ? "-" : hostLabel)}");
+
+        return TypedResults.Ok(ForwardResponse.From(forward with { Ack = ack }, options.PublicHost));
+    }
+
+    /// <summary>A host label ends up in a URL the CLI prints; a message ends up on its stderr.</summary>
+    private const int MaxHostLabel = 200;
+
+    private const int MaxAckMessage = 300;
+
+    /// <summary>
+    /// Trims, drops control characters and caps the length. The extension is trusted to be honest,
+    /// not to be well-behaved: these two strings are echoed to a guest CLI that prints them, so a
+    /// newline in either would let one field forge another line of its output.
+    /// </summary>
+    private static string? Sanitize(string? value, int max)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var cleaned = new string([.. value.Where(c => !char.IsControl(c))]).Trim();
+        if (cleaned.Length == 0)
+        {
+            return null;
+        }
+
+        return cleaned.Length > max ? cleaned[..max] : cleaned;
     }
 }

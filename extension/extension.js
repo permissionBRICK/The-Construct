@@ -35,6 +35,9 @@ const zip = require("./src/zip");
 const themes = require("./src/themes");
 const notify = require("./src/notify");
 const remotehost = require("./src/remotehost");
+const forwarder = require("./src/forwarder");
+const forwarderui = require("./src/forwarder-ui");
+const hypervRemote = require("./src/drivers/hyperv-remote");
 
 /** The single editor-tab panel instance, if open. */
 let panel; // vscode.WebviewPanel | undefined
@@ -77,6 +80,15 @@ const REGISTRY_TTL_MS = 5000;         // re-read the (tiny) file at most every 5
 let hostAudioInstance = null;
 /** The instance the notification watcher is connected to. */
 let notifyInstance = null;
+/** The live client port forwarder (src/forwarder.js) and the instance it serves — one
+ *  per window, retargeted on a switch exactly like the notification watcher. */
+let forwarderSession = null;   // forwarder.Forwarder | null
+let forwarderInstance = null;  // the instance name it was opened for
+/** The last snapshot it pushed, so a fresh webview renders the card immediately. */
+let cachedForwards = null;
+/** The active instance's idle policy (remote only), cached for the state push. */
+let cachedIdlePolicy = null;
+let cachedIdlePolicyInstance = null;
 /** The status-bar item showing the active instance (only when >1 exists). */
 let instanceStatusItem = null;
 /**
@@ -385,6 +397,18 @@ let cachedConfigSync = null;
 function postState(target, state) {
   const extra = { usagePeriod: usageReport };
   if (cachedConfigSync) extra.configSync = cachedConfigSync;
+  // Forwards + idle policy ride every push, so a webview that opens mid-session renders
+  // them without waiting for a tunnel to change.
+  if (cachedForwards) extra.forwards = cachedForwards;
+  // `null` is a VALUE here, not "no news": it means "this instance has no idle policy",
+  // which is how the panel knows to HIDE the card. Omitting it left a remote VM's card on
+  // screen forever after switching to a local instance — renderIdlePolicy(null) was never
+  // called. So it is attached as soon as it has been RESOLVED for the active instance
+  // (which is what cachedIdlePolicyInstance records), null included; before that, and
+  // only then, it is left off so the first paint does not flicker the card away.
+  if (cachedIdlePolicyInstance === activeInstance().name) {
+    extra.idlePolicy = cachedIdlePolicy;
+  }
   safePost(target, { type: "state", state: { ...state, ...extra } });
 }
 
@@ -402,9 +426,36 @@ async function withVmState(state, inst) {
     if (state && state.online) return { ...state, vmState: "running" };
     const target = inst || activeInstance();
     const vmState = await vmpower.queryVmState({ instance: target, ...(await driverOpts(target)) });
-    return { ...state, vmState };
+    return { ...state, vmState: await refineSavedState(vmState, target) };
   } catch (_) {
     return { ...state, vmState: "unknown" };
+  }
+}
+
+/**
+ * Tell `saved` apart from `off` for a remote instance (plan §4.7).
+ *
+ * The driver contract deliberately collapses the two — `saved`/`paused`/`off` all mean
+ * "a start brings it back" (docs/drivers.md §4), and every caller that ACTS on the state
+ * wants exactly that. But the power button's WORDING is different in the saved case: the
+ * idle policy put the VM's RAM on disk, so the same call resumes it where it was, and
+ * "Start" would be the wrong promise. So the distinction is re-read here, for the label
+ * only, from the service's own enum.
+ *
+ * Cheap and best-effort: only for a remote instance, only when the collapsed answer was
+ * `off`, and any failure keeps the answer the driver already gave.
+ */
+async function refineSavedState(vmState, inst) {
+  if (vmState !== "off") return vmState;
+  if (String((inst && inst.backend) || "").trim().toLowerCase() !== "hyperv-remote") return vmState;
+  try {
+    const opts = await driverOpts(inst);
+    const { client } = hypervRemote.resolveClient(inst, { ...opts, log: logLine });
+    if (!client) return vmState;
+    const res = await client.getState(hypervRemote.vmNameOf(inst));
+    return String((res && res.state) || "").trim().toLowerCase() === "saved" ? "saved" : vmState;
+  } catch (_) {
+    return vmState;
   }
 }
 
@@ -558,6 +609,13 @@ async function refreshAll() {
   const withUsage = await augmentUsage(aug, report, inst);
   if (!instanceGate.valid(gate)) return;
   if (withUsage !== aug && usageReport === report) for (const w of liveWebviews) postState(w, withUsage);
+  // The idle policy (remote instances only) — one HTTPS read, folded in like the update
+  // check. A local instance resolves to null, which is what hides the card.
+  try {
+    await readIdlePolicy(inst);
+    if (!instanceGate.valid(gate)) return;
+    for (const w of liveWebviews) postState(w, withUsage !== aug ? withUsage : aug);
+  } catch (_) { /* never break a refresh over an optional card */ }
   // Config-sync: update the cached state and run a throttled tick. Best-effort.
   try {
     const cs = await buildConfigSyncState(refreshTarget);
@@ -750,6 +808,181 @@ function stopNotifyWatch() {
   // Killing the local ssh closes the channel; the VM-side watcher then dies on its
   // next heartbeat write (SIGPIPE), so nothing is left running on the VM either.
   if (child) { try { child.kill(); } catch (_) {} }
+}
+
+// ── Client port forwards (`construct expose`) ────────────────────────────────
+// An agent on the VM runs `construct expose 5173`; src/forwarder.js opens that port on
+// THIS PC, tunnels it over SSH and writes the ack the CLI is blocking on. All the logic
+// lives in that module (plan §4.8: no vscode, injected transport) — this is the wiring:
+// build the transport, own the lifetime, push the snapshot to the webviews.
+//
+// One forwarder per WINDOW, targeting the active instance, retargeted on a switch for the
+// same reason the notification watcher is: its spool lives on one VM and its tunnels
+// terminate there. Multi-window is resolved on the VM (the spool's .owner claim), not
+// here — see extension/ARCHITECTURE.md §Forwards.
+
+/** Whether serving forward requests is switched on (setting; default true). */
+function forwardsEnabled() {
+  return forwarderui.forwardsEnabled(vscode);
+}
+
+/**
+ * Build the transport for an instance. Local instances get plain SSH; a remote one also
+ * gets a host-service client, built from the OWNER's credential — the VM's own token
+ * deliberately cannot post a client ack (service/README.md), so the ack relay only works
+ * with the credential this window already holds for the driver.
+ *
+ * Returns null when a remote instance cannot be reached at all (no service URL, no stored
+ * token), which is the honest answer: nothing is started rather than a poll that 401s
+ * every ten seconds.
+ */
+async function buildForwarderTransport(inst) {
+  const cfg = instances.toSshCfg(inst);
+  const backend = String((inst && inst.backend) || "").trim().toLowerCase();
+  if (backend !== "hyperv-remote") return forwarderui.createSshTransport({ ssh, cfg });
+
+  const opts = await driverOpts(inst);
+  const { client, problem } = hypervRemote.resolveClient(inst, { ...opts, log: logLine });
+  if (!client) {
+    logLine(`forwards: not serving "${inst.name}" — ${problem}`);
+    return null;
+  }
+  return forwarderui.createRemoteTransport({ ssh, cfg, client });
+}
+
+/** Open the forwarder for the active instance. Idempotent per instance. */
+async function startForwarder() {
+  if (!forwardsEnabled()) return;
+  const inst = activeInstance();
+  if (forwarderSession && forwarderInstance === inst.name) return;
+  stopForwarder();
+
+  const transport = await buildForwarderTransport(inst);
+  if (!transport) return;
+  // A switch may have landed while the credential was being read; serving the wrong VM's
+  // spool would open the wrong ports on this PC.
+  if (activeInstance().name !== inst.name) return;
+
+  forwarderInstance = inst.name;
+  forwarderSession = forwarder.createForwarder({
+    instance: inst,
+    transport,
+    hostLabel: forwarderui.hostLabelOf(vscode),
+    log: logLine,
+    onChange: (snapshot) => {
+      if (forwarderInstance !== activeInstance().name) return;
+      cachedForwards = forwarderui.toPanelForwards(snapshot);
+      broadcastForwards();
+    },
+  });
+  forwarderSession.start();
+  logLine(`forwards: serving "${inst.name}" (${forwarderSession.mode} mode)`);
+}
+
+/** Tear the forwarder down: every tunnel, the watcher and the ownership claim. */
+function stopForwarder() {
+  const session = forwarderSession;
+  forwarderSession = null;
+  forwarderInstance = null;
+  cachedForwards = null;
+  if (session) { try { session.dispose(); } catch (_) {} }
+}
+
+/**
+ * Push just the forwards card to every live surface — a tunnel coming up must not wait for
+ * the next 30 s probe to become visible.
+ *
+ * Its OWN message type, not a partial `state`: `render(state)` in the webviews treats an
+ * absent field as "no reading", so a `{forwards}`-only state would blank the power button,
+ * flip the ONLINE pill and reset the install markers. Same reason `{type:'audio'}` exists.
+ */
+function broadcastForwards() {
+  for (const w of liveWebviews) safePost(w, { type: "forwards", forwards: cachedForwards });
+}
+
+/**
+ * The active instance's idle policy, for the state push. Remote only: the service is what
+ * enforces it (plan §4.7), so a local instance has none and the panel shows nothing.
+ * Best-effort and cached — a failed read leaves the card as it was rather than blanking it.
+ */
+async function readIdlePolicy(inst) {
+  const target = inst || activeInstance();
+  if (String(target.backend || "").trim().toLowerCase() !== "hyperv-remote") {
+    cachedIdlePolicy = null;
+    cachedIdlePolicyInstance = target.name;
+    return null;
+  }
+  if (cachedIdlePolicyInstance !== target.name) { cachedIdlePolicy = null; cachedIdlePolicyInstance = target.name; }
+  try {
+    const opts = await driverOpts(target);
+    const { client } = hypervRemote.resolveClient(target, { ...opts, log: logLine });
+    if (!client) return cachedIdlePolicy;
+    const name = hypervRemote.vmNameOf(target);
+    const body = await client.request("GET", `/vms/${encodeURIComponent(name)}/idle-policy`);
+    const policy = forwarderui.toPanelIdlePolicy(body);
+    if (policy) cachedIdlePolicy = policy;
+    return cachedIdlePolicy;
+  } catch (e) {
+    logLine(`idle policy: could not read "${target.name}" — ${(e && e.message) || e}`);
+    return cachedIdlePolicy;
+  }
+}
+
+/** The panel's "apply" on the idle-policy card. Clamps to the admin cap first, so the
+ *  number that goes over the wire is the number the user was shown. */
+async function saveIdlePolicy(policy) {
+  const target = actionTarget();
+  const inst = targetInstance(target);
+  if (String(inst.backend || "").trim().toLowerCase() !== "hyperv-remote") {
+    vscode.window.showInformationMessage(
+      `Idle policy is enforced by the host service, and "${inst.name}" runs on this PC's Hyper-V — there is nothing to configure.`
+    );
+    return;
+  }
+  const cap = (cachedIdlePolicy && cachedIdlePolicy.maxTimeoutMinutes) || 0;
+  const wanted = forwarderui.clampIdlePolicy(policy, cap);
+  try {
+    const opts = await driverOpts(inst);
+    const { client, problem } = hypervRemote.resolveClient(inst, { ...opts, log: logLine });
+    if (!client) throw new Error(problem);
+    const body = await client.request("PUT", `/vms/${encodeURIComponent(hypervRemote.vmNameOf(inst))}/idle-policy`,
+      { timeoutMinutes: wanted.timeoutMinutes, action: wanted.action });
+    const applied = forwarderui.toPanelIdlePolicy(body);
+    if (applied) {
+      cachedIdlePolicy = applied;
+      cachedIdlePolicyInstance = inst.name;
+      // Own message type, for the same reason broadcastForwards has one.
+      for (const w of liveWebviews) safePost(w, { type: "idlePolicy", idlePolicy: applied });
+      if (applied.clamped) {
+        vscode.window.showInformationMessage(
+          `Idle timeout set to ${applied.timeoutMinutes} minutes — the host's administrator caps it there.`
+        );
+      }
+    }
+    logLine(`idle policy: "${inst.name}" -> ${wanted.timeoutMinutes}m / ${wanted.action}`);
+  } catch (e) {
+    const detail = (e && e.message) || String(e);
+    logLine(`idle policy: could not save "${inst.name}" — ${detail}`);
+    vscode.window.showWarningMessage(`Couldn't save the idle policy for "${inst.name}": ${detail}`);
+  }
+}
+
+/** The panel's Open button: hand the link to the OS browser. */
+async function openForward(id) {
+  const item = (cachedForwards && cachedForwards.items || []).find((i) => i.id === id);
+  if (!item || !item.url) {
+    vscode.window.showInformationMessage("That forward isn't open yet — there is no link to open.");
+    return;
+  }
+  try { await vscode.env.openExternal(vscode.Uri.parse(item.url)); }
+  catch (e) { logLine(`forwards: could not open ${item.url} — ${(e && e.message) || e}`); }
+}
+
+/** The panel's Close button. */
+async function closeForward(id) {
+  if (!forwarderSession) return;
+  const ok = await forwarderSession.closeForward(String(id || ""));
+  if (!ok) vscode.window.showWarningMessage("Couldn't close that forward — see the Construct log for why.");
 }
 
 /** Deliver a batch of streamed lines. Never throws. */
@@ -2335,6 +2568,7 @@ async function onInstanceChanged() {
   try { usage.clearCache(); } catch (_) {}
   gitDetected = null; gitDetectedAt = 0;
   cachedConfigSync = null;
+  cachedIdlePolicy = null; cachedIdlePolicyInstance = null;
   // The notification watcher is one long-lived SSH connection to ONE VM: reconnect it
   // to the new instance (its spool lives on that VM, so nothing is lost on the old one).
   if (notifyInstance !== inst.name) {
@@ -2348,6 +2582,14 @@ async function onInstanceChanged() {
     // Captured for the instance we just switched TO, so the arm that follows reads that
     // VM's preference and dials that VM even if another switch beats the probe home.
     maybeAutoEnableAudio(extensionContext, instances.captureTarget(instanceGate, inst));
+  }
+  // The forwarder holds `ssh -L` tunnels to ONE VM and owns a claim in that VM's spool.
+  // Retarget it: the old instance's ports must not stay open on this PC pointing at a VM
+  // this window no longer drives, and the claim has to be handed back so another window
+  // can take over immediately.
+  if (forwarderInstance !== inst.name) {
+    stopForwarder();
+    void startForwarder();
   }
   syncInstanceStatusItem();
   await refreshAll();
@@ -2905,6 +3147,13 @@ function handleMessage(message, webview, context) {
       runSaveProject(message.name, message.profile);
       return;
 
+    case "saveIdlePolicy":
+      // The idle-policy card's "apply" (plan §4.7). Re-clamped and re-validated
+      // extension-side: the webview is untrusted input, and the numbers reach the
+      // service's own validator behind that.
+      void saveIdlePolicy(message.policy || {});
+      return;
+
     case "command": {
       const id = message.id;
       logLine(`command: ${id}${message.project ? " (" + message.project + ")" : ""}`);
@@ -2917,6 +3166,10 @@ function handleMessage(message, webview, context) {
       if (id === "editProject") { runEditProject(message.project, webview); return; }
       if (id === "deleteProject") { void runDeleteProject(message.project); return; }
       if (id === "exportUsage") { runExportUsage(); return; }
+      // Forwards (B8). The id comes from the webview, so both go through the module's
+      // own `isSafeId` guard before they reach a spool path or a URL.
+      if (id === "openForward") { void openForward(String(message.forward || "")); return; }
+      if (id === "closeForward") { void closeForward(String(message.forward || "")); return; }
       if (id === "updateAgents") { runUpdateAgents(); return; }
       if (id === "updateAgent") {
         // Per-agent ↑ tag. Validate against the known ids — the webview is
@@ -3458,6 +3711,16 @@ async function activate(context) {
         registryNow(true);
         void onInstanceChanged();
       }
+      // Start or tear down the forward server when it is switched on/off.
+      if (e.affectsConfiguration("construct.forwards.enabled")) {
+        stopForwarder();
+        if (forwardsEnabled()) void startForwarder();
+      }
+      // A new host label changes the link every ack promises: re-ack the live tunnels
+      // rather than leave the guest holding a link the setting no longer agrees with.
+      if (e.affectsConfiguration("construct.forwards.hostLabel") && forwarderSession) {
+        forwarderSession.setHostLabel(forwarderui.hostLabelOf(vscode));
+      }
     })
   );
   // Restore the editor-tab panel across reloads instead of leaving a dead webview.
@@ -3474,6 +3737,11 @@ async function activate(context) {
   // the user who never opened the panel. Delayed slightly so the SSH connect doesn't
   // compete with startup work.
   setTimeout(() => { if (!notifyStopped) startNotifyWatch(); }, 3000);
+  // Client port forwards: like the notification watcher, independent of any open
+  // dashboard — a request that was queued while VS Code was closed has to open as soon as
+  // a window connects, whether or not anybody looks at the panel. Same startup delay, for
+  // the same reason (don't compete with activation for the SSH connection).
+  setTimeout(() => { void startForwarder(); }, 3000);
   // A short while after start, re-apply any claude-code patch (streaming / mic gate)
   // that a background extension auto-update reverted — patches are otherwise only
   // applied at provision time. Delayed so the update has landed first (see repatch.js).
@@ -3518,6 +3786,9 @@ function deactivate() {
   hostAudioInstance = null;
   stopAutoRefresh();
   stopNotifyWatch();
+  // Kill every `ssh -L` and hand the spool claim back, so the ports do not outlive the
+  // window that opened them and the next window takes over without waiting out the TTL.
+  stopForwarder();
   stopConfigWatcher();
 }
 

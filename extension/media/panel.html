@@ -77,6 +77,33 @@
           <div class="row"><span class="k">Ubuntu</span><span class="v" id="sysUbuntu">—</span></div>
         </section>
 
+        <!-- Forwards (B8): the ports an agent asked for with `construct expose`, opened on
+             THIS PC. Hidden entirely when there is nothing to show and the instance is
+             local, so an install that never runs `expose` sees the card it always did. -->
+        <section class="module" id="fwdModule" hidden>
+          <div class="mhead"><h2 class="seclabel">Forwards</h2><span class="meta" id="fwdOwner"></span></div>
+          <div class="fwd-list" id="fwdList"></div>
+          <p class="cost-note" id="fwdEmpty">No forwards. An agent on the VM opens one with <span class="sans-dim">construct expose &lt;port&gt;</span>.</p>
+        </section>
+
+        <!-- Idle policy (B8, plan §4.7): remote instances only — the host service enforces
+             it, so a local VM has nothing to configure here. -->
+        <section class="module" id="idleModule" hidden>
+          <div class="mhead"><h2 class="seclabel">Idle policy</h2><span class="meta" id="idleHint"></span></div>
+          <div class="idle-row">
+            <label class="idle-lbl" for="idleTimeout">Idle for</label>
+            <input class="idle-num" id="idleTimeout" type="number" min="0" max="10080" step="5" value="0" aria-describedby="idleHint" />
+            <span class="idle-unit">minutes &rarr;</span>
+            <select class="idle-sel" id="idleAction" aria-label="What to do when the VM is idle">
+              <option value="save">save (RAM to disk)</option>
+              <option value="shutdown">shut down</option>
+              <option value="off">never</option>
+            </select>
+            <button class="btn" id="idleSave">apply</button>
+          </div>
+          <p class="cost-note">The host service decides, so it works with this PC switched off. A VM stays alive while an agent is working, even with nobody connected.</p>
+        </section>
+
         <section class="module voice">
           <div class="mhead"><h2 class="seclabel">Voice input &middot; microphone passthrough</h2></div>
           <div class="toggle-row">

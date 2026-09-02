@@ -19,6 +19,12 @@ public sealed record PowerRequest(string? Action);
 
 public sealed record CreateForwardRequest(int? VmPort, string? Label, string? Target);
 
+/// <param name="Status"><c>open</c> or <c>error</c>.</param>
+/// <param name="LocalPort">The port the extension actually opened. Required for <c>open</c>.</param>
+/// <param name="HostLabel">Optional name of the user's PC; omitted ⇒ a loopback link.</param>
+/// <param name="Message">Why it failed. Only meaningful for <c>error</c>.</param>
+public sealed record ForwardAckRequest(string? Status, int? LocalPort, string? HostLabel, string? Message);
+
 public sealed record IdlePolicyRequest(int? TimeoutMinutes, string? Action);
 
 public sealed record ActivityRequest(bool? Busy, IReadOnlyList<string>? Reasons);
