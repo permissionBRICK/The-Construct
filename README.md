@@ -39,7 +39,8 @@ where they can't touch your host PC.
   PC — over an SSH tunnel the extension opens to that VM — and prints the URL to open.
 - 🖥️ **Optional T3 Code, patched end to end** — build the selected stable or nightly
   server and Windows Desktop app inside the VM, then keep both updated together. The shared
-  patch adds live voice input, Claude usage-limit recovery, and OpenCode task monitoring.
+  patch adds live voice input recorded by the T3 app itself (no VS Code window needed),
+  Claude usage-limit recovery, and OpenCode task monitoring.
 - 🤷 **It just works™** — system prompts make agents just install whatever tool they need for the task automatically
 
 <sub>Bonus: auto-deploy MCP servers to all three agents · patched Claude Code extension for faster UI updates · no AI attribution by default.</sub>

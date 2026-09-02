@@ -331,6 +331,13 @@ toggle re-enables it by streaming your **local** microphone to the VM on demand:
   exactly this — after the reload the button is there and passthrough re-arms automatically.
   (On later sessions where it auto-armed at startup, the button is already present.)
 
+**T3 Code does not need any of this.** The patched T3 Code client records your microphone
+itself and pushes the audio to the T3 server, so its mic button works with no VS Code window
+open — see [voice input in the patched T3 Code](#patched-t3-code-server--desktop-build).
+Passthrough remains what powers voice input in the **Claude Code VS Code extension** and
+`/voice` in a terminal, and it stays available to T3 Code as the **Construct host bridge**
+source.
+
 The panel is honest about the patch and the recorder: the "chat mic button" line reflects
 whether the guard patch actually applied, and if no recorder or no capture device is found
 you get a one-time warning (never silent-but-broken). On a Claude Code build the patch
@@ -516,12 +523,27 @@ The shared patch adds:
 
 - **Voice input:** a mic button immediately left of Send in both draft/new and existing chat
   composers, plus **Ctrl+T** tap/hold behavior. While recording, a live ring around the button
-  expands with the microphone signal level. The selected environment streams raw 16 kHz
-  mono PCM through Construct's existing host microphone reverse tunnel into Claude's speech
-  endpoint. Partial transcripts replace only their own live span at the cursor captured when
-  recording started; existing prefix/suffix text is never replaced, and typing while recording
-  stops the stream before another partial can write. Enable **Microphone passthrough** as well
-  and keep the Construct VS Code extension running so it owns the host capture/tunnel.
+  expands with the microphone signal level. Raw 16 kHz mono PCM goes into Claude's speech
+  endpoint using the VM's own Claude sign-in. Partial transcripts replace only their own live
+  span at the cursor captured when recording started; existing prefix/suffix text is never
+  replaced, and typing while recording stops the stream before another partial can write.
+
+  Where the audio comes from is your choice, in **Settings → General → Voice input source**:
+
+  - **This device** — the T3 client itself records the microphone and pushes the audio to the
+    T3 server. Nothing else has to be running: no VS Code window, no microphone passthrough.
+    Works in the Desktop app, and in a browser served over **HTTPS** (browsers only expose
+    microphones on secure origins).
+  - **Construct host bridge** — the VM-side recorder shim streams your host microphone through
+    Construct's reverse tunnel, exactly as before. Needs **Microphone passthrough** enabled and
+    the Construct VS Code extension running, since the extension owns the host capture/tunnel.
+  - **Automatic** (the default) records on this device when it can, and falls back to the host
+    bridge otherwise — so a browser tab on the plain `http://` URL still gets voice input as
+    long as passthrough is armed.
+
+  If you pick **This device** where it cannot work, T3 refuses to start the recording and says
+  why, rather than quietly recording somewhere else. Every failure (denied permission, no
+  microphone, no audio arriving at the server) surfaces as a toast with its reason.
 
 - **Claude usage-limit recovery:** when Claude rejects a turn for an account limit —
   including SDK results wrapped as `subtype: success` with `is_error: true` — T3 **parks** the
