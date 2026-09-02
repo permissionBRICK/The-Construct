@@ -1276,31 +1276,174 @@ function Test-ConstructRemoteInstanceName {
     return [bool]([regex]::IsMatch($Name, '^[a-z0-9][a-z0-9-]{0,39}$'))
 }
 
-function Assert-ConstructRemoteRegistrySpace {
+function New-ConstructRemoteInstanceEntry {
     <#
-        Would this instance be REFUSED by the registry once it is written? Checked
-        BEFORE the VM is created on the host, because discovering it afterwards leaves a
-        VM nothing on this PC can address.
+        The registry entry a remote VM is recorded as -- built in ONE place so the
+        pre-create check, the post-create check and the write itself can never judge a
+        different entry than the one that lands on disk.
 
-        The one that really bites: the reader treats `sshHost` as a UNIQUE identity
-        field, and every VM on one host service shares the service's host name. So a
-        SECOND VM on the same host would make both entries unloadable. Say that here, in
-        those words, instead of creating a VM and then failing to record it.
+        -SshHost/-SshPort are the endpoint the SERVICE allocated. Before it exists (the
+        pre-create check) the service URL's own host stands in and the endpoint identity
+        is excluded from the check instead of guessed at -- see
+        Get-ConstructRemoteInstanceConflict.
     #>
     param(
-        [Parameter(Mandatory)]$Registry,
         [Parameter(Mandatory)][string]$Name,
-        [Parameter(Mandatory)][string]$SshHost
+        [Parameter(Mandatory)][string]$SshHost,
+        [int]$SshPort = 22,
+        [string]$ServiceUrl = "",
+        [string]$ServiceAuth = "",
+        [string]$Owner = ""
     )
-    foreach ($k in @($Registry.Entries.Keys)) {
-        if ($k -ceq $Name) { continue }
-        $other = $Registry.Entries[$k]
-        if (([string]$other.VmHost).ToLowerInvariant() -ceq ([string]$SshHost).ToLowerInvariant()) {
-            throw ("The instance registry already has '$k' at the same address ($SshHost), and it treats that " +
-                   "address as a unique identity -- adding '$Name' would make BOTH entries unloadable. " +
-                   "This build therefore supports one VM per host service per PC; remove '$k' first, or " +
-                   "update The Construct once the registry keys instances by host AND port.")
+    $entry = @{
+        backend      = 'hyperv-remote'
+        vmName       = $Name          # the service addresses the VM by this name, and so
+                                      # does a rebuild (-InstanceName): both readers pin
+                                      # vmName = the instance name for this backend
+        sshHost      = $SshHost
+        sshPort      = [int]$SshPort
+        hostAlias    = $Name
+        keyName      = "construct_${Name}_ed25519"
+        configBranch = "vm-$Name"
+        owner        = $Owner
+    }
+    if ($ServiceUrl) { $entry['service'] = @{ url = $ServiceUrl; auth = $ServiceAuth } }
+    return $entry
+}
+
+function Get-ConstructRemoteInstanceConflict {
+    <#
+        Every reason the instance registry would REFUSE this entry, as strings (@() = it
+        will load). Answered BY THE REGISTRY LIBRARY ITSELF -- Get-ConstructInstanceEntryProblem
+        (the per-entry rules) plus Get-ConstructInstanceCollision (the cross-entry identity
+        rules) -- so the installer never re-states a rule the two readers own. Anything
+        this returns is something Save-ConstructInstanceEntry would throw on later.
+
+        -IgnoreEndpoint drops the COMPOSITE ENDPOINT rule ('sshHost/sshPort'), and only
+        that one, for the PRE-CREATE call: the service has not allocated this VM's SSH
+        forward yet, so the endpoint half of the identity does not exist to judge.
+        Several VMs on ONE host service, told apart by the port the service allocated
+        each of them, are exactly the intended multi-VM flow -- the endpoint is checked
+        for real, once, against the endpoint the service actually returned.
+
+        Same child-scope discipline as the snapshot reader (the library turns strict mode
+        on), and the same degradation: with no library there is nothing to conflict with,
+        and the write itself will report the missing file.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][hashtable]$Entry,
+        [switch]$IgnoreEndpoint,
+        [string]$ScriptsDir = $PSScriptRoot
+    )
+    $lib = Join-Path (Join-Path $ScriptsDir "lib") "AgentVm.Instances.ps1"
+    if (-not (Test-Path -LiteralPath $lib)) { return @() }
+    return @(& {
+        param($libPath, $n, $e, $ignoreEndpoint)
+        . $libPath
+        $out = New-Object System.Collections.Generic.List[string]
+        foreach ($p in @(Get-ConstructInstanceEntryProblem -Name $n -Entry $e)) { $out.Add($p) }
+        # The cross-entry half: put the candidate into a COPY of the live registry (which
+        # replaces an entry of the same name -- a rebuild never collides with itself) and
+        # ask the shared collision rules about it.
+        $reg  = Read-ConstructInstances
+        $next = Copy-ConstructInstanceRegistry -Registry $reg
+        $next.Instances[$n] = Resolve-ConstructInstanceDefaults -Name $n `
+                                  -Entry (ConvertTo-ConstructInstanceEntryObject -Entry $e)
+        $exclude = if ($ignoreEndpoint) { @('sshHost/sshPort') } else { @() }
+        foreach ($p in @((Get-ConstructInstanceCollision -Instances $next.Instances -ExcludeLabel $exclude).Problems)) {
+            $out.Add($p)
         }
+        return @($out)
+    } $lib $Name $Entry ([bool]$IgnoreEndpoint))
+}
+
+function New-ConstructRemoteVmRecord {
+    <#
+        CREATE the VM on the host service, CHECK the entry its endpoint yields against the
+        shared registry rules, ROLL THE CREATE BACK if the registry would refuse it, and
+        otherwise RECORD the instance -- all before anything is provisioned.
+
+        It is one function rather than inline flow so the whole sequence can be driven in
+        a test with fake service calls (test/remote-install.test.ps1): "two VMs on one
+        service host, on the ports it allocated them, both register" and "the same
+        host:port rolls back and records nothing" are the contract, and a contract that
+        can only be asserted by reading source order is not really asserted.
+
+        WHY THE RECORD HAPPENS HERE, before provisioning: the registry entry is the ONLY
+        handle this PC has on a remote VM. Locally, a provision that fails still leaves a
+        VM that Get-VM finds and the existing-VM menu offers to reprovision; remotely
+        there is nothing to enumerate, so an unrecorded VM would be unreachable AND
+        un-recreatable (the service refuses a second VM of the same name). Recording it
+        first turns the common failure -- provisioning, which touches the network, apt and
+        ssh -- into "re-run and pick Reprovision".
+
+        The write itself is best-effort by design: if it fails, provisioning is still
+        worth doing (it configures this PC's ssh config and key), so that warns with what
+        to clean up instead of aborting. A registry CONFLICT is the opposite -- the VM
+        could never be reached or rebuilt from this PC -- so it throws, after the rollback.
+
+        Returns @{ Endpoint; VmToken; Entry; Recorded }.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][hashtable]$Descriptor,
+        [Parameter(Mandatory)][string]$ServiceUrl,
+        [string]$ServiceAuth = "",
+        [string]$Owner = "",
+        [string]$RegistryPath = "",
+        [switch]$MakeDefault,
+        [string]$ScriptsDir = $PSScriptRoot
+    )
+    $created  = New-ConstructVm -Descriptor $Descriptor
+    $endpoint = $created.Endpoint
+    Write-Ok "Endpoint: $($endpoint.SshHost):$($endpoint.SshPort)"
+    # The entry this VM will be recorded as -- built ONCE, so what is checked below is
+    # byte-for-byte what is written.
+    $entry = New-ConstructRemoteInstanceEntry -Name $Name `
+                 -SshHost ([string]$endpoint.SshHost) -SshPort ([int]$endpoint.SshPort) `
+                 -ServiceUrl $ServiceUrl -ServiceAuth $ServiceAuth -Owner $Owner
+    # NOW the FULL registry check, endpoint included: this is the first moment the true
+    # address is known (nothing exposes the service's allocated forward -- or its own
+    # advertised PublicHost, which can differ from the URL's -- before a VM exists).
+    # The composite (sshHost, sshPort) is what the two readers treat as one endpoint, so a
+    # second VM on the same service host is a conflict only when the service handed it the
+    # SAME PORT as an instance this PC already has.
+    #
+    # A conflict here means the VM cannot be recorded, i.e. cannot be reached or rebuilt
+    # from this PC ever again. Rather than leave that orphan behind (holding its name, its
+    # disk and the host's RAM), the create is ROLLED BACK: the same DELETE the reinstall
+    # path uses, and only then the failure. The one-time VM token dies with the VM, which
+    # is exactly what should happen to a credential for a machine that no longer exists.
+    $conflicts = @(Get-ConstructRemoteInstanceConflict -Name $Name -Entry $entry -ScriptsDir $ScriptsDir)
+    if ($conflicts.Count -gt 0) {
+        $why = "This PC's instance registry would refuse '$Name': $($conflicts -join '; ')"
+        Write-Warning "The VM was created, but this PC cannot record it: $why"
+        Write-Note "Rolling the creation back so nothing is left stranded on the host..."
+        try { Remove-ConstructVm -Name $Name } catch {
+            Write-Warning "The rollback failed as well: $($_.Exception.Message)"
+            throw "$why`nThe VM '$Name' still EXISTS on $ServiceUrl and could not be removed automatically -- delete it there before trying again."
+        }
+        throw "$why`nThe VM '$Name' was removed from $ServiceUrl again, so nothing was left behind."
+    }
+
+    # Written through lib\AgentVm.Instances.ps1 (never hand-rolled JSON) so the PS and JS
+    # readers can never disagree about what is in the file.
+    $recorded = $false
+    try {
+        [void](Save-ConstructInstanceEntry -Name $Name -Replace -MakeDefault:$MakeDefault -Entry $entry -ScriptsDir $ScriptsDir)
+        $recorded = $true
+        Write-Ok "Recorded the instance '$Name' in $RegistryPath"
+    } catch {
+        Write-Warning ("The VM '$Name' was created on $ServiceUrl but could not be recorded in the instance registry: " +
+                       "$($_.Exception.Message)`n    Provisioning continues, but the control panel will not list it. " +
+                       "Fix the registry ($RegistryPath) and re-run, or delete the VM on the host.")
+    }
+    return [pscustomobject]@{
+        Endpoint = $endpoint
+        VmToken  = [string]$created.VmToken
+        Entry    = $entry
+        Recorded = $recorded
     }
 }
 
@@ -1716,11 +1859,23 @@ if ($RemoteInstall) {
     # DnsSafeHost, not Host: .NET keeps an IPv6 literal's URL brackets, and the registry
     # records the bare address the service reports.
     $publicHost = ([System.Uri]$svcUrl).DnsSafeHost
-    # Best-effort PRE-check, before anything is created. The service's advertised
-    # PublicHost can differ from the URL's host, so the same check runs again below with
-    # the endpoint the service actually returned -- but doing it here catches the common
-    # case while there is still nothing to clean up.
-    Assert-ConstructRemoteRegistrySpace -Registry $registry -Name $instName -SshHost $publicHost
+    # PRE-check, before anything is created: would the registry refuse this instance for a
+    # reason that is ALREADY KNOWABLE -- its name, and the identities derived from it
+    # (vmName, hostAlias, keyName, configBranch)? Discovering one of those after a VM
+    # exists on somebody else's host leaves a VM nothing on this PC can address.
+    #
+    # The ENDPOINT is deliberately NOT judged here: the service has not allocated this
+    # VM's SSH forward yet, and the endpoint identity is the composite (sshHost, sshPort)
+    # -- several VMs on ONE host service, each on the port the service gave it, are
+    # exactly the intended flow. It is checked for real below, against the endpoint the
+    # service actually returned.
+    $preConflicts = @(Get-ConstructRemoteInstanceConflict -Name $instName -IgnoreEndpoint -Entry (
+        New-ConstructRemoteInstanceEntry -Name $instName -SshHost $publicHost `
+            -ServiceUrl $svcUrl -ServiceAuth $remoteAuthMode -Owner $remoteOwner))
+    if ($preConflicts.Count -gt 0) {
+        throw ("This PC's instance registry would refuse '$instName': $($preConflicts -join '; ')`n" +
+               "Nothing was created on $svcUrl. Fix the registry ($($registry.Path)) or pick another name.")
+    }
 
     # ── The usual questions, asked up front ───────────────────────────────────
     # Not the local path's prompts: the recommendation there is "a third of THIS PC's
@@ -1801,76 +1956,23 @@ if ($RemoteInstall) {
         "This takes about 10 minutes total, with no further input needed."
     )
 
-    # ── Create (on the host), then provision (from here) ──────────────────────
-    $created = New-ConstructVm -Descriptor @{
-        Name                 = $instName
-        ProcessorCount       = $remoteCpu
-        MemoryGB             = $chosenMemGB
-        DiskGB               = $chosenDiskGB
-        Nested               = $true
-        AutomaticCheckpoints = $false
-    }
-    $endpoint = $created.Endpoint
-    $vmToken  = [string]$created.VmToken
-    Write-Ok "Endpoint: $($endpoint.SshHost):$($endpoint.SshPort)"
-    # Re-check against the address the service REALLY returned. The pre-check above used
-    # the URL's host, but the service advertises its own PublicHost, which can differ --
-    # and nothing exposes it before a VM exists, so this is the first moment the true
-    # address is known.
-    #
-    # A collision here means the VM cannot be recorded, i.e. cannot be reached or
-    # rebuilt from this PC ever again. Rather than leave that orphan behind (holding its
-    # name, its disk and the host's RAM), the create is ROLLED BACK: the same DELETE the
-    # reinstall path uses, and only then the failure. The one-time VM token dies with
-    # the VM, which is exactly what should happen to a credential for a machine that no
-    # longer exists.
-    try {
-        Assert-ConstructRemoteRegistrySpace -Registry $registry -Name $instName -SshHost ([string]$endpoint.SshHost)
-    } catch {
-        $why = $_.Exception.Message
-        Write-Warning "The VM was created, but this PC cannot record it: $why"
-        Write-Note "Rolling the creation back so nothing is left stranded on the host..."
-        try { Remove-ConstructVm -Name $instName } catch {
-            Write-Warning "The rollback failed as well: $($_.Exception.Message)"
-            throw "$why`nThe VM '$instName' still EXISTS on $svcUrl and could not be removed automatically -- delete it there before trying again."
-        }
-        throw "$why`nThe VM '$instName' was removed from $svcUrl again, so nothing was left behind."
-    }
-
-    # ── Record the instance, BEFORE provisioning ──────────────────────────────
-    # Written through lib\AgentVm.Instances.ps1 (never hand-rolled JSON) so the PS and JS
-    # readers can never disagree about what is in the file.
-    #
-    # WHY HERE and not after a successful provision: the registry entry is the ONLY
-    # handle this PC has on a remote VM. Locally, a provision that fails still leaves a
-    # VM that Get-VM finds and the existing-VM menu offers to reprovision; remotely there
-    # is nothing to enumerate, so an unrecorded VM would be unreachable AND un-recreatable
-    # (the service refuses a second VM of the same name). Recording it first turns the
-    # common failure -- provisioning, which touches the network, apt and ssh -- into
-    # "re-run and pick Reprovision".
-    #
-    # Best-effort by design: if the write itself fails, provisioning is still worth doing
-    # (it configures this PC's ssh config and key, so the VM stays reachable), so this
-    # warns with what the user needs to clean up instead of aborting.
-    $makeDefault = (-not $registry.Exists)
-    try {
-        [void](Save-ConstructInstanceEntry -Name $instName -Replace -MakeDefault:$makeDefault -Entry @{
-            backend      = 'hyperv-remote'
-            vmName       = $instName
-            sshHost      = [string]$endpoint.SshHost
-            sshPort      = [int]$endpoint.SshPort
-            hostAlias    = $instName
-            keyName      = "construct_${instName}_ed25519"
-            configBranch = "vm-$instName"
-            service      = @{ url = $svcUrl; auth = $remoteAuthMode }
-            owner        = $remoteOwner
-        })
-        Write-Ok "Recorded the instance '$instName' in $($registry.Path)"
-    } catch {
-        Write-Warning ("The VM '$instName' was created on $svcUrl but could not be recorded in the instance registry: " +
-                       "$($_.Exception.Message)`n    Provisioning continues, but the control panel will not list it. " +
-                       "Fix the registry ($($registry.Path)) and re-run, or delete the VM on the host.")
-    }
+    # ── Create (on the host) + record (here), then provision ──────────────────
+    # One function, so the create -> registry-check -> rollback-or-record sequence can be
+    # driven end to end in test/remote-install.test.ps1 instead of only being described by
+    # source-order assertions.
+    $record   = New-ConstructRemoteVmRecord -Name $instName -ServiceUrl $svcUrl `
+                    -ServiceAuth $remoteAuthMode -Owner $remoteOwner `
+                    -RegistryPath ([string]$registry.Path) -MakeDefault:(-not $registry.Exists) `
+                    -Descriptor @{
+                        Name                 = $instName
+                        ProcessorCount       = $remoteCpu
+                        MemoryGB             = $chosenMemGB
+                        DiskGB               = $chosenDiskGB
+                        Nested               = $true
+                        AutomaticCheckpoints = $false
+                    }
+    $endpoint = $record.Endpoint
+    $vmToken  = [string]$record.VmToken
 
     # The service already waited for SSH inside its own network; this proves the port
     # FORWARD is reachable from HERE, which the host cannot test for us. Non-fatal.

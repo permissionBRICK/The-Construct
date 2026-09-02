@@ -58,8 +58,9 @@ extension/
                       workspaceState > registry default), matchByRemoteHost/
                       planRemoteAdoption/adoptRemoteInstance, createGate (the
                       stale-refresh generation guard), planHandover/createHandover +
-                      createSessionOwner (the mic tunnel's serialized handover across a
-                      switch), planSwitchPersistence, atomic save + add/update/remove;
+                      planEnable + createSessionOwner (the ONE mic-tunnel chain: switch
+                      handovers, the manual/auto enable+disable, and its shutdown),
+                      planSwitchPersistence, atomic save + add/update/remove;
                       pure fs/path/JSON, no vscode. Its PS twin is
                       lib/AgentVm.Instances.ps1 (same file, same normalization rules)
     ssh.js            system-ssh runner (buildSshArgs/runRemote/runRemoteScript/isReachable);
@@ -125,6 +126,8 @@ extension/
                       patch over SSH, open a local TCP server + a persistent `ssh -R` tunnel
                       CONFIRMED by a settle window (an ssh that dies early = tunnel-failed, roll
                       back both sides); parses CONSTRUCT_GATE_PATCHED so the UI is honest.
+                      dispose() CANCELS an enable that is mid-await (deactivate), which
+                      enable() re-checks after every one of them and rolls back.
                       MULTI-WINDOW: the VM side is a port RANGE (8767..+8) — each window binds
                       the first free port (CONSTRUCT_PORTS_BUSY report + bind-race retry), the
                       shim scans for a live tunnel, and the disable script only removes the
@@ -418,8 +421,10 @@ change them together):
   needed two extra guards for this — `[string]` type tests instead of `[string]$v`
   stringification, and `return ,$value` so an array field isn't unrolled into a scalar.)
 - **Enum comparisons are case-sensitive** in both readers (`-cnotcontains` / `-cne` on
-  the PS side), so `"HYPERV-REMOTE"` or `auth: "TOKEN"` can never be honoured by one and
-  rejected by the other.
+  the PS side), so a case-variant or `auth: "TOKEN"` can never be honoured by one and
+  rejected by the other. For `backend` that is not the end of it: `getDriver()`
+  *lowercases*, so a case-variant of a known id would still be handed the real driver —
+  which is why such an entry is refused whole (next bullet).
 - **`backend` is never coerced, and the rule is presence-aware.** Rewriting anything to
   `hyperv-local` (which both readers used to do) *promoted* it to destructive local
   Hyper-V access: `drivers.lifecycleSupport` would see `hostLifecycle: true` and let
@@ -429,16 +434,19 @@ change them together):
   |---|---|
   | absent, or JSON `null` | `hyperv-local` — the zero-change default, and the identity is then held to the canonical rule below |
   | a known id (`hyperv-local`, `hyperv-remote`), possibly with surrounding whitespace | used as written (trimmed) |
-  | any other non-empty string (`"proxmox"`, `"hyperv-remtoe"`, `"HYPERV-REMOTE"`) | **kept verbatim** and reported. It reaches `drivers/index.js` as itself, gets the unknown-driver fallback, and the hypervisor actions are refused — Reprovision and Export config still work, being pure SSH |
-  | present but unusable (`42`, `true`, `""`, `"   "`, an array/object), **or** a spelling that differs from `hyperv-local` only by case (`"HYPERV-LOCAL"`) | the entry is **skipped** with a problem |
+  | any other non-empty string whose **lowercase form is also unknown** (`"proxmox"`, `"hyperv-remtoe"`, `"HYPERV-PROXMOX"`) | **kept verbatim** and reported. It reaches `drivers/index.js` as itself, gets the unknown-driver fallback, and the hypervisor actions are refused — Reprovision and Export config still work, being pure SSH |
+  | present but unusable (`42`, `true`, `""`, `"   "`, an array/object), **or** a spelling that differs from **any implemented id** only by case (`"HYPERV-LOCAL"`, `"HYPERV-REMOTE"`, `"Hyperv-Remote"`) | the entry is **skipped** with a problem |
   The last row is the subtle one. `backend` is *not* in the type-strict `STRING_FIELDS`
   list, because "report it and use the derived default" is the wrong answer for the one
   field whose derived default is the local hypervisor — the file stating a backend that
   isn't one must not become "no backend". And a case-variant spelling is read *two ways*:
-  every enum comparison in both readers is case-sensitive (so it is "unknown"), while
-  `getDriver()` trims and lowercases before the lookup (so it would hand back the **local**
-  driver). A value the two disagree about is not safe to act on under either reading, so
-  it does not load at all.
+  every enum comparison in both readers is case-sensitive (so the value is "unknown" to
+  them), while `getDriver()` trims and lowercases before the lookup (so it hands back the
+  **real** driver — the local one with `hostLifecycle: true`, or the remote one that
+  drives somebody else's host service). A value the two disagree about is not safe to act
+  on under either reading, so it does not load at all. Restricting this to `hyperv-local`
+  (as it once was) left `"HYPERV-REMOTE"` loading while every message about it claimed it
+  had no driver — and it had one.
 - **`sshPort` accepts exactly two shapes**: an integral JSON number, or a bare-digit
   string (both readers trim). Not `"+2201"`, not `2201.5`, not `true`. The range check
   happens in a wide numeric type *before* any Int32 cast — `[int]999999999999` throws in
@@ -513,7 +521,30 @@ change them together):
   field the launched scripts can be *told* (`-ConfigBranch`, threaded by
   `lifecycle.configBranchOverride` and gated by `checkInstanceSupport`), so an explicit
   branch stays a supported override. **Non-local backends keep free-form** (still
-  format-checked) identities — their endpoints are defined on the other side.
+  format-checked) identities — their endpoints are defined on the other side — but they
+  are not rule-*free*: `hyperv-remote` has two of its own, below.
+- **A `hyperv-remote` instance must state its endpoint and share ONE VM name.** Two
+  whole-entry rejections (`remoteIdentityProblems` / `Get-ConstructRemoteIdentityProblem`),
+  applied to every spelling `getDriver()` resolves to the remote driver (a case-variant
+  `"HYPERV-REMOTE"` included, since that is what would act on the entry):
+  - **`vmName` must equal the instance name**, compared *exactly*. A remote VM is
+    addressed **by name** on the host service, from two directions that have to mean one
+    machine: the driver queries and starts `vmName` (`drivers/hyperv-remote.js`), while a
+    rebuild emits `-InstanceName <name>` and `Auto-Install.ps1` then uses the registry
+    **entry's** name to fetch the endpoint, **delete** the VM and create it again. An
+    entry keyed `alias-vm` with `vmName: "service-vm"` therefore split the identity in
+    half — the panel's power state and Start acted on `service-vm` while Reinstall
+    deleted and recreated `alias-vm`, i.e. potentially the wrong VM on somebody else's
+    machine. The comparison is exact (not lowercased like the local Hyper-V display
+    name) because the value goes into a URL path (`/vms/{name}`) and into a
+    `-InstanceName` argument, and nothing may assume the service folds case.
+  - **`sshHost` is required.** A remote endpoint is whatever the service allocated; no
+    name convention can produce it. An entry that omitted it still *loaded*, with the
+    derived `<name>.mshome.net:22` — an actionable instance whose picker entry and SSH
+    lifecycle actions pointed at an unrelated machine on this PC's own network. Only the
+    canonical spelling counts: everything that writes the registry writes `sshHost`, so
+    an entry stating its endpoint under the JS-internal `vmHost` alias is a hand-written
+    file and refusing one is the fail-closed reading.
 - **Identities are UNIQUE across the registry.** No two entries may share a `vmName`, an
   **endpoint**, a `hostAlias`, a `keyName` or a `configBranch` (compared
   case-insensitively — one Hyper-V name, one machine, one `Host` block, one NTFS key
@@ -554,8 +585,8 @@ field is omitted.
 | `hostAlias` | `<name>` | the **bare** name. Every shared PowerShell helper (`Get-RemoteOpenLink`, `Close-VmVsCodeWindow`, `Invoke-ConstructVmSsh`'s alias fallback) derives the SSH alias as the first DNS label of the VM host, and `Auto-Install.ps1` writes alias = lowercased VM name. The registry has to agree or the two would write different `Host` blocks. |
 | `keyName` | `construct_<name>_ed25519` | one key file per VM; the default keeps `agent_vm_ed25519`. |
 | `configBranch` | `vm-<name>` | **not** `vm/<name>`: git cannot hold `refs/heads/vm` and `refs/heads/vm/x` at once, and the default instance's branch is literally `vm`. |
-| `vmName` | `<name>` | the Hyper-V display name. |
-| `vmHost` | `<name>.mshome.net` | `hyperv-local` only; a remote instance must state `sshHost`. |
+| `vmName` | `<name>` | the Hyper-V display name — and, for `hyperv-remote`, the **only** accepted value (see the rule above). |
+| `vmHost` | `<name>.mshome.net` | `hyperv-local` only. A `hyperv-remote` entry **must state `sshHost`**: it is refused whole rather than left holding this derived local address. |
 | `sshPort` | `22` | |
 | `scriptsDir` | `null` | = newest-install detection, today's behaviour. |
 
@@ -721,12 +752,50 @@ the click, where re-reading the active instance is hardest to spot:
      reference to B's `HostAudio` — leaking B's tunnel with nothing left to dispose it.
      A status with **no** claim (the "there is nothing armed" call sites) always goes
      out, which is what keeps the single-VM path unchanged.
+  4. **the MANUAL operations ride the same chain** — the console/settings toggle
+     (`requestAudioEnable` / `requestAudioDisable`) and the startup and repatch auto-arms
+     all queue on it (`createHandover.enable` / `.disable`), and a HostAudio is only ever
+     constructed from inside it. Run *beside* the chain, a manual "on" that
+     arrived while a switch was tearing A down saw no session (the reference had already
+     been dropped), built one for B, and B's queued auto-arm then built a **second**
+     `HostAudio` for the same VM: the newer claim took the slot, the first enable's result
+     was discarded as superseded, and nothing was left that could disable it — an orphan
+     `ssh -R`. On the chain the second enable can only **join**: `enableAudio` treats a
+     live `HostAudio` whose enable is still in flight as already pending and awaits *that*
+     promise instead of claiming the slot again. The "off" is queued for the mirror
+     reason — it must not overtake an "on" still waiting in the queue and leave the tunnel
+     that enable opens behind.
+     The decision is the pure **`instances.planEnable(slotState, name)`** →
+     `create | report | join | refuse`, read from one helper (`audioSlotState()`: the four
+     module variables plus the chain's shutdown flag), so the branch is driven by tests
+     rather than only by a live window.
+  5. **shutdown is part of the same ownership, in two layers.** `deactivate()` cannot
+     await SSH, so it disposes the one live `HostAudio` **directly** — the single
+     exception to "only the chain touches a session" — and two things make that safe:
+     - `audioHandover.close()` runs **first**, refusing every step still queued
+       (`reason: "closed"`, its `run` never called) and publishing `closed`, which feeds
+       `planEnable`: a step already *running* — an auto-arm sitting in its reachability
+       probe — gets `refuse` on the way out instead of constructing anything.
+     - that still cannot stop an enable that has **already reached** `HostAudio.enable()`
+       and is waiting on SSH: `dispose()` tears down what exists at that moment, which
+       mid-enable is nothing, and the continuation would then bind its server and spawn
+       `ssh -R` behind it — a live tunnel with no reference left in the extension host.
+       So `dispose()` sets a **cancellation flag** (`src/audio.js`) that `enable()`
+       re-checks **after every await** — the remote enable, the local `listen`, and the
+       tunnel's settle window — rolling back what it had built (kill the child, close the
+       server, run the guarded VM-side revert if step 1 already mutated it) and returning
+       `{ ok: false, error: "disposed" }`. A disposed object also refuses any later enable.
+     All of it is driven with deferred promises against the **real** `HostAudio` (injected
+     ssh/net/spawn): each of the three await points, plus controls showing the tunnel
+     appearing without the cancellation.
   The re-evaluation is gated on the destination having actually changed
   (`audioTargetInstance`, the instance the arm was last evaluated for — not
   `hostAudioInstance`, which is null in exactly the case that needs evaluating), so a
-  window that never switches never re-arms. All four orderings (no prior tunnel, a
-  delayed teardown, rapid A→B→C, and the no-switch control) are driven with deferred
-  promises in `extension/test/instances.test.js`.
+  window that never switches never re-arms. All the orderings (no prior tunnel, a
+  delayed teardown, rapid A→B→C, the no-switch control, a manual enable during a
+  teardown, an auto-arm behind a manual one, an "off" behind an "on") are driven with
+  deferred promises in `extension/test/instances.test.js` — each with the pre-fix shape
+  as a control, so the model demonstrably still catches the bug it was written for.
 
 **UI.** A status-bar item (`construct.switchInstance`) shows the active instance and is
 **hidden when only one instance exists**; the command *The Construct: Switch Instance*
@@ -1014,16 +1083,31 @@ part of the service URL — never the whole URL, which can carry a port and is n
 one-line row). `media/panel.js` renders two extra **System** rows and keeps them `hidden`
 for `hyperv-local`, so a single-VM install's panel is pixel-identical to before.
 
-### Known limitation: one VM per host service, per PC
+### Several VMs on one host service
 
-The registry treats `sshHost` as a **unique identity field** (`UNIQUE_FIELDS` /
-`collisionProblems`), and every VM on one host service shares that host's address,
-differing only by the allocated SSH port. A second VM on the same host would therefore
-make **both** entries unloadable. Until the uniqueness key becomes host **and** port on
-both readers, `Auto-Install.ps1` refuses the second one where it is created — before it
-asks the service for anything, and again against the address the service actually
-returned — rather than writing a registry that silently loses both. Several *users* on
-one host are unaffected (each has their own PC and registry), and so are several hosts.
+The registry's endpoint identity is the **composite `(sshHost, sshPort)`**
+(`UNIQUE_FIELDS` / `collisionProblems`), so the VMs a host service runs for you — one
+address, one allocated forward each — are distinct instances and all load. Only the same
+host **and** port is "one machine under two names", and that still drops both entries.
+
+`Auto-Install.ps1`'s remote path asks the registry twice, both times through the shared
+rules in `lib/AgentVm.Instances.ps1` (`Get-ConstructInstanceEntryProblem` +
+`Get-ConstructInstanceCollision`, reached by `Get-ConstructRemoteInstanceConflict`), never
+through a copy of them:
+
+1. **before it asks the service for anything** — the name and the identities *derived*
+   from it (`vmName`, `hostAlias`, `keyName`, `configBranch`). The endpoint is excluded
+   (`-ExcludeLabel 'sshHost/sshPort'`, the one caller-side filter the PS twin has) because
+   the service has not allocated the forward yet; judging the host alone here is what used
+   to refuse a perfectly valid second VM on a shared host.
+2. **immediately after the create**, on the entry that will be written — the full rule
+   set, endpoint included, since the service's advertised `PublicHost` can differ from the
+   URL's host and the port does not exist until the VM does. A conflict rolls the create
+   back (the same `DELETE` the reinstall path uses) rather than stranding a VM this PC
+   could never reach or rebuild.
+
+Several *users* on one host are unaffected either way (each has their own PC and
+registry), and so are several hosts.
 
 ## Forwards (`construct expose`)
 

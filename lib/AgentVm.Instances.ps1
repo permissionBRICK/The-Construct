@@ -29,6 +29,8 @@
       Get-ConstructBackendProblem -Raw           -> [string[]] (the backend field's own rule)
       Get-ConstructCanonicalIdentity -Name      -> the identity a hyperv-local instance MUST have
       Get-ConstructLocalIdentityProblem -Instance -> [string[]] (that rule; @() = usable/non-local)
+      Get-ConstructRemoteIdentityProblem -Instance [-Entry] -> [string[]] (the hyperv-remote
+                                                 rules: VmName = Name, SshHost stated)
       Get-ConstructInstanceCollision -Instances  -> @{ Problems; Drop } (cross-entry clashes)
       Test-ConstructDefaultInstance -Instance   -> [bool] "behaves exactly like today"
       Save-ConstructInstances                   -> atomic write (temp file + move)
@@ -262,7 +264,9 @@ function Get-ConstructInstanceIdentityProblem {
 # { "work-vm": { "vmName": "Agent-VM" } } reinstalls the DEFAULT VM, and a custom
 # host/alias/key is replaced by the derived one the moment the VM is rebuilt. Such an
 # entry is SKIPPED with a problem. Non-local backends keep free-form (still
-# format-checked) identities -- their endpoints are defined on the other side.
+# format-checked) identities -- their endpoints are defined on the other side. Not
+# rule-FREE, though: 'hyperv-remote' has two of its own (an endpoint it must state, and
+# one VM name for the service and the rebuild alike) -- Get-ConstructRemoteIdentityProblem.
 # ConfigBranch is deliberately NOT pinned: it is the one field the launched scripts can
 # be TOLD (-ConfigBranch), so an explicit branch stays a supported override.
 # Mirrors canonicalIdentity()/localIdentityProblems() in extension/src/instances.js.
@@ -306,12 +310,16 @@ function Get-ConstructBackendProblem {
           * PRESENT BUT UNUSABLE -- backend: 42, "", "  ". The file states a backend; it
             just isn't one. Deriving 'hyperv-local' from it would grant destructive local
             access to a value the user never wrote.
-          * A SPELLING THE TWO LOOKUPS READ DIFFERENTLY -- 'HYPERV-LOCAL', 'Hyperv-Local'.
-            Every enum comparison in both readers is case-SENSITIVE (so this is
-            "unknown"), but getDriver() in extension/src/drivers/index.js trims and
-            lowercases before the lookup (so it would hand back the LOCAL driver,
-            hostLifecycle: true). A value the two disagree about is not safe to act on
-            under either reading, so it does not load.
+          * A SPELLING THE TWO LOOKUPS READ DIFFERENTLY -- 'HYPERV-LOCAL',
+            'Hyperv-Remote', i.e. a case-variant of ANY id this build implements. Every
+            enum comparison in both readers is case-SENSITIVE (so the value is "unknown"
+            to them), but getDriver() in extension/src/drivers/index.js trims and
+            lowercases before the lookup (so it hands back the REAL driver for it -- the
+            local one with hostLifecycle: true, or the remote one that drives somebody
+            else's host service). The two readings disagree about what such an entry IS,
+            so nothing may act on it under either: it does not load. Restricting this to
+            'hyperv-local' (as it once was) left 'HYPERV-REMOTE' loading while every
+            message about it claimed it had no driver -- and it had one.
         A genuinely unknown backend ('proxmox') is NOT a problem here -- it is reported
         separately and kept, because the driver dispatch degrades on it correctly.
         Mirrors backendProblems() in extension/src/instances.js. Pure.
@@ -324,8 +332,17 @@ function Get-ConstructBackendProblem {
         return @($out)
     }
     $v = $Raw.Trim()
-    if (($script:ConstructBackends -cnotcontains $v) -and (Test-ConstructLocalBackend $v)) {
-        $out.Add("`"backend`" '$v' is not spelled '$($script:ConstructDefaultBackend)' (the backend id is case-sensitive, but the driver lookup is not -- a value the two read differently must not drive a local VM)")
+    if ($script:ConstructBackends -ccontains $v) { return @($out) }
+    # The canonical id this value differs from only by case -- the one the driver lookup
+    # would resolve it to. An empty string never reaches here (refused above), so the
+    # local backend's "empty means local" rule plays no part in this comparison.
+    # A foreach, not @(...)[0]: Set-StrictMode -Version Latest makes indexing an EMPTY
+    # array a terminating error, and "no canonical id" is the common case here.
+    $canonical = ''
+    $lower = $v.ToLowerInvariant()
+    foreach ($b in $script:ConstructBackends) { if ($b -ceq $lower) { $canonical = $b; break } }
+    if ($canonical) {
+        $out.Add("`"backend`" '$v' is not spelled '$canonical' (the backend id is case-sensitive, but the driver lookup is not -- a value the two read differently must not drive a VM)")
     }
     return @($out)
 }
@@ -362,6 +379,70 @@ function Get-ConstructLocalIdentityProblem {
     }
     if ([int]$Instance.SshPort -ne [int]$c.SshPort) {
         $out.Add("`"sshPort`" $($Instance.SshPort) must be $($c.SshPort) for instance $n$why")
+    }
+    return @($out)
+}
+
+# ── The CANONICAL identity of a REMOTE instance ──────────────────────────────
+# Backend 'hyperv-remote' has two identity rules of its own, for two different reasons.
+#
+# 1. VmName MUST BE THE INSTANCE NAME. A remote VM is addressed BY NAME on the host
+#    service, from two directions that have to mean the same machine: the extension's
+#    driver queries and starts vmName (extension/src/drivers/hyperv-remote.js), while a
+#    rebuild emits -InstanceName <name> and Auto-Install.ps1 then uses the registry
+#    ENTRY's name to fetch the endpoint, DELETE the VM and create it again. An entry
+#    keyed 'alias-vm' with vmName 'service-vm' therefore splits the identity in half: the
+#    power state and Start act on service-vm while Reinstall deletes and recreates
+#    alias-vm -- two different VMs on somebody else's machine. Compared EXACTLY (-cne,
+#    not lowercased like the local Hyper-V display name): the value goes into a URL path
+#    (/vms/{name}) and into a -InstanceName argument, and nothing here may assume the
+#    service folds case.
+# 2. SshHost IS REQUIRED. A remote endpoint is whatever the service allocated -- no name
+#    convention can produce it. An entry that omits it derives '<name>.mshome.net' (the
+#    LOCAL Hyper-V convention), and the picker, ssh and every lifecycle action would then
+#    target an unrelated machine on this PC's own network. Only the canonical spelling
+#    counts: everything that writes the registry writes sshHost
+#    (ConvertTo-ConstructInstanceEntry / toFileEntry), so an entry stating its endpoint
+#    under the JS-internal 'vmHost' alias is a hand-written file, and refusing one is the
+#    fail-closed reading.
+# Both are WHOLE-ENTRY rejections. Mirrors isRemoteBackend()/remoteIdentityProblems() in
+# extension/src/instances.js -- change both together.
+
+function Test-ConstructRemoteBackend {
+    <#
+        Is this backend the REMOTE Hyper-V one? Normalised exactly like getDriver() in
+        extension/src/drivers/index.js (trimmed, lowercased), so every entry that WOULD be
+        handed the remote driver is held to the rules above. A case-variant spelling never
+        gets this far -- Get-ConstructBackendProblem refuses the whole entry -- but the
+        lookup here matches the driver's rather than assuming that, so this rule can never
+        be the looser of the two.
+    #>
+    param([string]$Backend)
+    $v = ''
+    if ($null -ne $Backend) { $v = ([string]$Backend).Trim().ToLowerInvariant() }
+    return [bool]($v -eq 'hyperv-remote')
+}
+
+function Get-ConstructRemoteIdentityProblem {
+    <#
+        The problems of a NORMALISED instance on the remote backend (above): @() for every
+        other backend, and for a remote instance that states an endpoint and names its VM
+        after itself. -Entry is the entry as WRITTEN -- the SshHost rule is about what the
+        file says, not about what the derivation made of it. Pure; mirrors
+        remoteIdentityProblems() in extension/src/instances.js.
+    #>
+    param($Instance, $Entry)
+    $out = New-Object System.Collections.Generic.List[string]
+    if ($null -eq $Instance) { return @($out) }
+    if (-not (Test-ConstructRemoteBackend ([string]$Instance.Backend))) { return @($out) }
+    if (-not (Get-ConstructInstanceField $Entry 'sshHost')) {
+        $out.Add('"sshHost" is missing (no sshHost) -- a "hyperv-remote" instance''s endpoint is the' +
+                 ' one its host service allocated, so it cannot be derived from the instance name')
+    }
+    if ([string]$Instance.VmName -cne [string]$Instance.Name) {
+        $out.Add("`"vmName`" `"$($Instance.VmName)`" must be `"$($Instance.Name)`" for a `"hyperv-remote`"" +
+                 " instance (the host service addresses the VM by that name, so the power state, Start and a" +
+                 " rebuild would otherwise act on two different VMs)")
     }
     return @($out)
 }
@@ -412,10 +493,21 @@ function Get-ConstructInstanceCollision {
              says which is the impostor. Dropping both is also what makes the two readers
              agree without depending on key order.
         Pure; mirrors collisionProblems() in extension/src/instances.js.
+
+        -ExcludeLabel is NOT a relaxation of the rule set (the READER always applies all
+        of it, and the JS reader has no such parameter): it is for a caller that has to
+        ask the question BEFORE one of the identities exists. Auto-Install.ps1's remote
+        path checks the registry before the host service has allocated the VM's SSH
+        forward, so at that moment the composite endpoint ('sshHost/sshPort') is not yet
+        knowable and only the name-derived identities can be judged; the full check runs
+        again on the endpoint the service really returned.
     #>
-    param($Instances)
+    param($Instances, [string[]]$ExcludeLabel = @())
     $problems = New-Object System.Collections.Generic.List[string]
     $drop     = New-Object System.Collections.Generic.List[string]
+    # The fields this call is allowed to judge. Ordinal, case-sensitive matching on the
+    # LABEL, so a typo in a caller's exclusion silently widens nothing.
+    $fields = @($script:ConstructUniqueFields | Where-Object { $ExcludeLabel -cnotcontains $_.Label })
     # ORDINAL sort, like the JS reader's Array#sort -- Sort-Object is culture-sensitive
     # and could order '-' differently, which would reorder the problem messages.
     $names = [string[]]@($Instances.Keys)
@@ -424,7 +516,7 @@ function Get-ConstructInstanceCollision {
     foreach ($name in $names) {
         if ($name -ceq $script:ConstructDefaultInstance) { continue }
         $inst = $Instances[$name]
-        foreach ($f in $script:ConstructUniqueFields) {
+        foreach ($f in $fields) {
             if ((& $f.Value $inst) -ceq (& $f.Value $default)) {
                 $problems.Add("instance '$name': $($f.Label) `"$(& $f.Show $inst)`" belongs to the default instance '$($script:ConstructDefaultInstance)' -- skipped")
                 if (-not $drop.Contains($name)) { $drop.Add($name) }
@@ -436,7 +528,7 @@ function Get-ConstructInstanceCollision {
         for ($j = $i + 1; $j -lt $names.Count; $j++) {
             $a = $Instances[$names[$i]]
             $b = $Instances[$names[$j]]
-            foreach ($f in $script:ConstructUniqueFields) {
+            foreach ($f in $fields) {
                 if ((& $f.Value $a) -ceq (& $f.Value $b)) {
                     $problems.Add("instances '$($names[$i])' and '$($names[$j])' share the same $($f.Label) `"$(& $f.Show $a)`" -- both skipped")
                     foreach ($n in @($names[$i], $names[$j])) { if (-not $drop.Contains($n)) { $drop.Add($n) } }
@@ -797,22 +889,22 @@ function ConvertFrom-ConstructInstancesJson {
                         $problems.Add("instance '$name': unknown service auth '$rawAuth' -- using negotiate")
                     }
                 }
-                if ($rawBackend -ceq 'hyperv-remote' -and -not (Get-ConstructInstanceField $entry 'sshHost')) {
-                    $problems.Add("instance '$name' is hyperv-remote but has no sshHost")
-                }
                 # A field of the right TYPE can still be unusable (or hostile) as a host
                 # name, an ssh alias, a key file name or a git ref. Such an entry is
                 # skipped WHOLE: using the rest of it would dial, key or sync some other
                 # machine. A LOCAL instance is held to its canonical identity on top of
                 # that -- a deviating one would rebuild (and then be unable to reach) a
-                # different VM than it names -- and an entry whose BACKEND itself is
-                # unusable never loads at all. The JS reader skips the same entries.
+                # different VM than it names -- a REMOTE one to its own (an endpoint it
+                # must state, and one VM name for the service and the rebuild alike) --
+                # and an entry whose BACKEND itself is unusable never loads at all. The
+                # JS reader skips the same entries.
                 $normalized = Resolve-ConstructInstanceDefaults -Name $name -Entry $entry
                 # @() around the call: an empty result unrolls to $null on the way out
                 # of a function, and Set-StrictMode makes $null.Count a hard error.
                 $bad = $backendBad +
                        @(Get-ConstructInstanceIdentityProblem -Instance $normalized -Entry $entry) +
-                       @(Get-ConstructLocalIdentityProblem -Instance $normalized)
+                       @(Get-ConstructLocalIdentityProblem -Instance $normalized) +
+                       @(Get-ConstructRemoteIdentityProblem -Instance $normalized -Entry $entry)
                 if ($bad.Count -gt 0) {
                     $problems.Add("instance '$name': $($bad -join '; ') -- skipped")
                     continue
@@ -972,7 +1064,8 @@ function Get-ConstructInstanceEntryProblem {
     $normalized = Resolve-ConstructInstanceDefaults -Name $Name -Entry $obj
     $bad = @(Get-ConstructBackendProblem -Raw (Get-ConstructRawProperty $obj 'backend')) +
            @(Get-ConstructInstanceIdentityProblem -Instance $normalized -Entry $obj) +
-           @(Get-ConstructLocalIdentityProblem -Instance $normalized)
+           @(Get-ConstructLocalIdentityProblem -Instance $normalized) +
+           @(Get-ConstructRemoteIdentityProblem -Instance $normalized -Entry $obj)
     foreach ($b in $bad) { if (-not $out.Contains($b)) { $out.Add($b) } }
     return @($out)
 }
