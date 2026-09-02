@@ -48,6 +48,15 @@ if ($settings.projects -is [System.Array] -and $settings.projects.Count -gt 0) {
 # FAIL here rather than silently reprovision the default VM / port 22. Only
 # parameters the caller did not supply are omitted silently.
 $provCmd = Get-Command -Name $provision -CommandType ExternalScript -ErrorAction Stop
+# HTTPS for the T3 web GUI (config.env T3CODE_HTTPS). An ABSENT setting stays
+# unset, which is how the provisioner is told to keep whatever the VM saved
+# (default true) -- so a rebuild launched from the Desktop app never flips the
+# VM's HTTPS state by accident. Unlike the identity overrides below, an older
+# provisioner without the parameter is NOT an error here: it simply predates
+# HTTPS support, so drop the value instead of failing the rebuild.
+if ($null -ne $settings.t3codeHttps -and $provCmd.Parameters.ContainsKey('T3CodeHttps')) {
+    $params.T3CodeHttps = As-BoolString $settings.t3codeHttps $true
+}
 $identity = @{}
 if ($PSBoundParameters.ContainsKey('VmHost')       -and $VmHost)        { $identity['VmHost']       = $VmHost }
 if ($PSBoundParameters.ContainsKey('HostAlias')    -and $HostAlias)     { $identity['HostAlias']    = $HostAlias }

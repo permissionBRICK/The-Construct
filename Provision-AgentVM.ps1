@@ -107,6 +107,13 @@ param(
     # ($envPrefix interpolates it into a single-quoted remote assignment).
     [ValidateSet("", "stable", "nightly")]
     [string]$T3CodeChannel = "",
+    # Serve the T3 Code web GUI over HTTPS from the VM (nginx + a locally trusted
+    # certificate; bin/setup-t3-https.sh). A browser only exposes getUserMedia on a
+    # secure origin, so T3's client-side microphone capture needs it. On by default
+    # on the VM side; EMPTY keeps the VM's saved choice (config.env T3CODE_HTTPS),
+    # mirroring T3Code's own keep-saved semantics. "true"/"false"/"".
+    [ValidateSet("", "true", "false")]
+    [string]$T3CodeHttps = "",
     # Opt-in shared patched-source build for the T3 VM server and Windows Desktop
     # app: voice input, Claude usage-limit recovery, and OpenCode monitoring. The
     # parameter/key keeps its legacy name for saved-setting compatibility. Off by
@@ -2031,7 +2038,7 @@ if ($VmTokenB64) {
     $tokenExport  = "export CONSTRUCT_VM_TOKEN_B64=`"`$(cat '$vmTokenRemotePath')`"; "
     $tokenCleanup = "; __rc=`$?; rm -f '$vmTokenRemotePath'; exit `$__rc"
 }
-$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit' CONSTRUCT_VERSION='$constructVersion' SMB_SHARE='$SmbShare' CLAUDE_PARTIAL_STREAMING='$ClaudePartialStreaming' MIC_PASSTHROUGH='$MicPassthrough' OPENCODE_BACKGROUND_WATCHER='$OpenCodeBackgroundWatcher' T3CODE='$T3Code' T3CODE_CHANNEL='$T3CodeChannel' T3CODE_LIMIT_RESUME='$T3CodeLimitResume'" + $externalEnv + $serviceEnv
+$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit' CONSTRUCT_VERSION='$constructVersion' SMB_SHARE='$SmbShare' CLAUDE_PARTIAL_STREAMING='$ClaudePartialStreaming' MIC_PASSTHROUGH='$MicPassthrough' OPENCODE_BACKGROUND_WATCHER='$OpenCodeBackgroundWatcher' T3CODE='$T3Code' T3CODE_CHANNEL='$T3CodeChannel' T3CODE_LIMIT_RESUME='$T3CodeLimitResume' T3CODE_HTTPS='$T3CodeHttps'" + $externalEnv + $serviceEnv
 Write-Host "  --- live provisioning output ---" -ForegroundColor DarkGray
 $provisionStream = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "$tokenExport$envPrefix bash /opt/construct/repo/bin/provision.sh$tokenCleanup"
 Write-Host "  --- end provisioning output ---" -ForegroundColor DarkGray
@@ -2089,6 +2096,59 @@ if ($RestoreDir) {
         Write-Ok "Saved config restored"
     } else {
         Write-Host "    -RestoreDir set but no backup.tar.gz in $RestoreDir -- skipping restore." -ForegroundColor DarkGray
+    }
+}
+
+# The VM now serves the T3 web GUI over HTTPS (bin/setup-t3-https.sh) with a
+# certificate issued by its OWN local CA -- a browser only exposes getUserMedia,
+# which is how T3 captures the microphone client-side, on a secure origin. For
+# that origin to load without a warning, this host has to trust that CA, so pull
+# the certificate over and import it into a Root store. Best-effort throughout:
+# an un-trusted CA costs one browser warning, never a failed provision.
+if ($Action -eq 'provision') {
+    try {
+        $t3HttpsStatus = (Invoke-Ssh -Sudo -Command "cat /etc/construct/t3code-https-status 2>/dev/null || true" | Out-String)
+        if ($t3HttpsStatus -match '(?m)^T3CODE_HTTPS_READY=yes\s*$') {
+            $t3CaRoot = if ($env:LOCALAPPDATA) {
+                Join-Path $env:LOCALAPPDATA 'The-Construct\artifacts\t3code'
+            } else {
+                Join-Path $env:TEMP 'The-Construct\artifacts\t3code'
+            }
+            New-Item -ItemType Directory -Path $t3CaRoot -Force | Out-Null
+            $localCa = Join-Path $t3CaRoot 'construct-t3-ca.crt'
+            $caTemp = "$localCa.download"
+            # The private keys live in a 0700 directory the seed user cannot read;
+            # the VM publishes the public CA certificate at this readable path.
+            Invoke-ScpFrom -RemotePath '/etc/construct/t3code-ca.crt' -LocalPath $caTemp
+            $caCert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 -ArgumentList $caTemp
+            Move-Item -LiteralPath $caTemp -Destination $localCa -Force
+            $caThumb = $caCert.Thumbprint
+            # Thumbprint lookup, not a name match: the CN carries the VM hostname,
+            # and a re-created CA must be recognised as a DIFFERENT certificate.
+            $inMachineRoot = Test-Path -LiteralPath "Cert:\LocalMachine\Root\$caThumb"
+            $inUserRoot = Test-Path -LiteralPath "Cert:\CurrentUser\Root\$caThumb"
+            $isElevatedForCa = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
+                               ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+            $caPlan = Get-T3CaImportPlan -Elevated:$isElevatedForCa `
+                -PresentInMachine:$inMachineRoot -PresentInUser:$inUserRoot
+            if ($caPlan.Action -eq 'skip') {
+                Write-Ok $caPlan.Reason
+            } else {
+                Write-Step "Trusting the VM's T3 HTTPS certificate authority ($($caPlan.Scope) Root store)"
+                if ($caPlan.Prompts) {
+                    Write-Host "    Windows shows ONE security confirmation dialog for this certificate." -ForegroundColor Yellow
+                    Write-Host "    Accept it, or T3 Code's HTTPS page (and its browser microphone) stays untrusted." -ForegroundColor Yellow
+                }
+                Import-Certificate -FilePath $localCa -CertStoreLocation $caPlan.Store | Out-Null
+                Write-Ok "T3 certificate authority trusted (thumbprint $caThumb)"
+            }
+            if ($t3HttpsStatus -match '(?m)^T3CODE_PUBLIC_BASE_URL=(\S+)\s*$') {
+                Write-Host "    T3 Code web GUI over HTTPS: $($matches[1])" -ForegroundColor DarkGray
+            }
+            Write-Host "    Firefox keeps its own trust store: set security.enterprise_roots.enabled to true there." -ForegroundColor DarkGray
+        }
+    } catch {
+        Write-Warning "The VM's T3 HTTPS certificate authority could not be trusted on this host ($($_.Exception.Message)). T3 Code still works over plain HTTP, and its browser microphone stays unavailable until the CA is imported (certificate: /etc/construct/t3code-ca.crt on the VM)."
     }
 }
 
