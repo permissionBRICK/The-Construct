@@ -84,6 +84,19 @@ For the installed agents, from `root`'s home — never from inside the project r
 > ⚠️ The backup contains **plaintext** auth tokens and git credentials. It is git-ignored
 > and stays on your host; treat `.construct-backup/` as a secret.
 
+> **With several VMs:** `.construct-backup/` is **one folder next to the scripts**, not one
+> per instance, and an export overwrites what's there. Export one VM at a time and copy the
+> folder somewhere else if you need to keep two, or drive the by-hand export below with a
+> per-VM `OUT=` path.
+>
+> Project profiles are usually the exception: **once a git-backed sync tick has succeeded**,
+> they live on that instance's own branch in the host config repo (`vm-<instance>`, see
+> [config sync](config-sync.md)) and are not carried by this backup at all. But that is
+> exactly the path that degrades — with no git on the host, or when the tick cannot run, the
+> profiles fall back into this same singleton backup and *are* overwritten by the next VM's
+> export. If you are running several VMs without git on the host, treat profiles as being
+> as at-risk as everything else here.
+
 ## Triggering it from the installer
 
 From `Auto-Install.ps1`, when the VM already exists:

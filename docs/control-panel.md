@@ -21,6 +21,41 @@ step — it's plain JavaScript; to hack on it, open `extension/` and press F5.)
 
 Both read the same live state, pushed from the extension as the VM is probed over SSH.
 
+## Which VM the panel drives (instances)
+
+**With one VM there is nothing here to do.** The panel drives the default instance,
+`agent-vm`, no picker or status-bar item appears, and every screen below is the screen it
+has always been. The rest of this section only applies once a second VM exists — see
+[Installation § Several VMs](installation.md#several-vms-and-vms-on-another-host) for the
+registry that defines them.
+
+With **two or more** instances in `%LOCALAPPDATA%\The-Construct\instances.json`:
+
+- A **dropdown** appears at the top of the panel and a **status-bar item** (`$(vm) <name>`)
+  on the left of the status bar. Either one switches; so does **The Construct: Switch
+  Instance** from the command palette, which lists each instance with its endpoint and
+  backend and ticks the current one.
+- The choice is **per window** and persists across reloads, so two windows can drive two
+  VMs at once. Setting **`construct.instance`** in VS Code settings *pins* every window to
+  one instance instead — the panel says so rather than letting a switch silently not take
+  effect.
+- A window attached to a known instance's VM over Remote-SSH **adopts** that instance on
+  activation, so the panel describes the machine you are actually working on rather than
+  whichever one was selected last.
+
+Switching retargets everything that holds a per-VM connection or cache in one sequence: the
+in-flight status probe, the usage table, the git/config-sync state and the cached idle
+policy are dropped (serving the previous VM's numbers under the new name would be a lie),
+the notification watcher reconnects to the new
+VM's spool, the [forwarder](#forwards-construct-expose) hands back its claim and re-opens
+the new VM's tunnels, and **microphone passthrough is torn down and re-armed against the
+destination** — evaluated from *that* VM's saved preference, so a VM whose mic preference is
+on gets its tunnel even if the instance you left never had one. Rapid A→B→C switching is
+serialized through one chain, so B can neither leave a tunnel behind nor win over C.
+
+If the registry itself has a problem — an entry that does not load, two entries claiming one
+identity — the panel toasts it once and writes the detail to its log; it never guesses.
+
 ## Choosing a look (UI designs)
 
 The panels ship in **VS Code Native** by default — nothing is asked on first launch. Three
@@ -46,12 +81,81 @@ power control shows at a time, driven by the VM's real state:
 | State | Button | What it does |
 | --- | --- | --- |
 | Reachable, this window not on the VM | **→ Open on VM** | Opens `/root/repos` over Remote-SSH in the current window |
-| Installed but stopped (Hyper-V reports it off) | **▶ Start & connect** | Elevated `Start-VM` (one UAC prompt), waits for SSH, then opens it |
+| Installed but stopped (the backend reports it off) | **▶ Start & connect** | Elevated `Start-VM` (one UAC prompt) for a local VM, a power call to the host service for a remote one; waits for SSH, then opens it |
+| Suspended by the [idle policy](#idle-policy-remote-vms) (`saved`) | **▶ Resume & connect** | The same action, named for what actually happens: the VM's RAM is on disk and starting it resumes it transparently |
 | Reachable | **⏻ Shutdown** | `systemctl poweroff` over SSH (confirms first) |
 
-Connecting needs the `ms-vscode-remote.remote-ssh` extension and the `agent-vm` SSH host
-alias (both set up by the installer). When you first connect, the dashboard opens alongside
-automatically.
+Connecting needs the `ms-vscode-remote.remote-ssh` extension and the VM's SSH host alias —
+`agent-vm` for the default VM, the instance's own name for any other (both set up by the
+installer/provisioner). When you first connect, the dashboard opens alongside automatically.
+
+For a VM that isn't on this PC's Hyper-V, the System module also names the **backend** and
+the **host service** that owns it. Both rows stay hidden for `hyperv-local`, so a
+single-VM install's card is exactly the card it always was.
+
+## Forwards (`construct expose`)
+
+When an agent on the VM runs [`construct expose <port>`](expose.md), the extension is what
+actually opens that port on **your** PC: it spawns a long-lived `ssh -N -L` process of its
+own to the active instance, one per forward. The **Forwards** card is where you see them.
+It stays hidden entirely until
+there is something to show (no forwards *and* a local instance), so an install that never
+runs `expose` sees the panel it always saw.
+
+Each row shows the VM port (as `vm:5173`, or `vm:5173→18800` when the port had to be
+remapped because the one asked for was busy on your PC), whether the forward is a **client**
+forward (opened here) or a **host** forward (published by the host service on its LAN
+address), its label, and its state — `queued`, `open` or `error`. **▷** opens the link and
+is disabled until there is one; **✕** closes the forward.
+
+- **A stopped VM does not lose the forward, but the link does go down.** The card keeps
+  rendering when the VM stops answering (the request is what persists, and it is not on the
+  VM's side of anything the extension forgets), but the `ssh` process dies with the
+  connection, so the local port stops listening. The extension notices and retries on the
+  **same** local port with a backoff — the number the guest was already told — so the link
+  comes back by itself once the VM does. After enough failed attempts the row goes `error`
+  and says so, while the retries continue at the slowest cadence.
+- **Several windows, one server — on a local VM.** A local VM's forward requests live in a
+  spool on the VM itself, and exactly one window claims it: the others show the same list
+  read-only, say "served by another window", and have **✕** disabled (a non-owner deleting
+  the owner's spool documents would tear down a forward the owner still believes it is
+  serving). The links work in every window — it is the same PC. Closing the serving window
+  releases the claim and the next window picks the queued forwards straight back up.
+- **On a remote VM there is no spool and no claim.** The host service holds the forward
+  state, so every window lists every forward and **✕** is always enabled — the ownership row
+  never says "served by another window". The tunnels still do not multiply **on this PC**: a
+  window that finds a forward already acked will only take it over if the exact local port
+  the guest was promised is still free here. Busy means another window on this machine is
+  already serving it, so it is left alone — re-opening it on a different port would break a
+  link somebody already holds. (The check is per machine, so a *second PC* signed in to the
+  same host will open its own tunnel for the same forward — which is what you want: the link
+  has to work on that machine too.)
+- By default the tunnel listens on **loopback only** and the link is
+  `http://localhost:<port>/`. Setting **`construct.forwards.hostLabel`** both puts that name
+  in the link and makes the forward listen on all of that PC's interfaces — otherwise it
+  would advertise an address only this PC could open. Changing the setting restarts the live
+  tunnels, on the same ports.
+- **`construct.forwards.enabled`** switches the whole thing off; requests then simply stay
+  queued on the VM, which is the same answer as "no VS Code attached".
+
+## Idle policy (remote VMs)
+
+A VM on a [host service](remote-host.md) consumes that host's RAM whether or not anyone is
+using it, so the service enforces a per-VM idle policy — and the **Idle policy** card is
+where you set yours. It is hidden for a local VM: there is no always-on service on your own
+PC, so there would be nothing to enforce it.
+
+Pick a timeout in minutes and what should happen — **save** (the default: Hyper-V writes the
+VM's RAM to disk and frees it; any start resumes it transparently), **shutdown**, or **off**
+(never idle out) — and press **apply**. If your admin set a cap, the box carries it as its
+maximum and the hint says so, so the number you see is the number that takes effect rather
+than one that silently changes after the round trip. A background refresh never overwrites a
+half-typed value.
+
+A VM counts as idle only when **both** signals agree for the whole window: no live
+connections through any of its forwards, *and* no in-guest activity reported by the VM's
+heartbeat. **An agent running a long unattended job keeps the VM alive with nobody
+connected** — that is the entire point of unattended agents.
 
 ## Coding agents & updates
 
@@ -77,6 +181,44 @@ The **Lifecycle** actions each launch a host console window (never the VM's term
   and recreate the VM, so they launch elevated and always stop in the console for the
   dirty-repo warning and the "type yes" delete confirmation. **Settings → Custom
   reinstall** offers a one-time save-and-restore / restore-existing / clean-wipe choice.
+
+For a **non-default instance** the panel checks three things before it launches anything,
+and refuses with the reason rather than running an action that would hit the wrong machine:
+
+- **The backend must support it.** Reinstall, Redownload and applying automatic checkpoints
+  go through the host's PowerShell scripts, so they are gated on the driver's
+  `hostLifecycle` capability; checkpoints additionally need the `checkpoints` capability,
+  which `hyperv-remote` does not have (the message says the backend has no checkpoints,
+  not something vaguer). Reprovision and Export config are pure SSH to a running VM and
+  work on every backend.
+- **A remote instance needs a host service** recorded in its registry entry — without one
+  there is nothing to ask for a new VM, and an `Auto-Install.ps1` run with no `-ServiceUrl`
+  would fall back to the *local* path.
+- **The installed scripts must accept the targeting parameters.** If this PC's Construct is
+  older than the instance work (no `-VmName` / `-InstanceName` / `-ConfigBranch`), the
+  action would silently run against the default VM or split one VM's config across two
+  branches — so the panel blocks it and tells you to update the scripts.
+
+The default instance is never blocked by any of this: it needs no targeting in the first
+place.
+
+### Remote hosts
+
+Two command-palette entries handle VMs on somebody else's Hyper-V (full story:
+[Remote host](remote-host.md)):
+
+- **The Construct: Add Remote Host** — service URL → the certificate fingerprint shown once
+  for you to confirm → authentication (Windows/Kerberos first, then a token or domain
+  credentials) → `whoami`. The host is remembered in the extension's `globalState`; a token
+  goes into VS Code **SecretStorage**. Nothing is written to `instances.json` until a VM
+  exists on that host, because the registry describes *VMs*. The confirmed fingerprint is
+  written to the same pin file the PowerShell client reads, so a host trusted here is
+  already trusted in a console (the token is deliberately *not* shared — each store keeps
+  its own).
+- **The Construct: New VM on Remote Host** — pick a known host, answer name / CPU / RAM /
+  disk, and the command launches `Auto-Install.ps1`'s remote path in a host console through
+  the same launcher every other lifecycle action uses. The console does the create *and* the
+  provisioning, because provisioning configures your PC too.
 
 ## Projects
 
@@ -179,6 +321,10 @@ toggle re-enables it by streaming your **local** microphone to the VM on demand:
   passthrough arms itself **automatically on startup** (as soon as the VM is reachable) — you
   don't have to flip it each session. Startup arming is silent: if the VM is down it just
   stays off; flip the console switch to see any error.
+- **Switching instances re-arms it.** The tunnel terminates on one VM, so switching the
+  window to another instance tears it down and evaluates *that* VM's own saved preference —
+  you don't have to flip the switch again on the VM you moved to, and the VM you left is not
+  holding a tunnel this window no longer drives.
 - **Seeing the chat mic button.** The first time you enable passthrough in a session, the
   already-running Claude Code still has its pre-patch code loaded, so the chat mic button
   won't appear until the window reloads. The panel offers a **Reload window** button for
@@ -283,7 +429,7 @@ the automatic checkpoint Hyper-V already took, so its disk gets merged back.
 Checkpoints you made yourself are never deleted *automatically*. The script only removes
 checkpoints Hyper-V positively reports as automatic (its `IsAutomaticSnapshot` flag). On an
 older host that doesn't report the flag, it falls back to matching Hyper-V's auto-generated
-name (`Agent-VM - (<timestamp>)`) — and because a checkpoint *you* created could be named
+name (`<VM name> - (<timestamp>)`, e.g. `Agent-VM - (…)`) — and because a checkpoint *you* created could be named
 that way too, each one is shown separately in the console and removed only if you type `yes`
 for it. Answer anything else and it's kept.
 
@@ -304,7 +450,12 @@ You can also run it by hand:
 .\Set-AgentVmCheckpoints.ps1 -Enabled false             # off + clean up the existing one
 .\Set-AgentVmCheckpoints.ps1 -Enabled true              # back to Hyper-V's default
 .\Set-AgentVmCheckpoints.ps1 -Enabled false -RemoveExisting false   # policy only
+.\Set-AgentVmCheckpoints.ps1 -Enabled false -VmName build-vm        # another local VM
 ```
+
+It defaults to `-VmName Agent-VM -Backend hyperv-local`, and refuses to run when the
+backend reports no checkpoint capability rather than reconfiguring some *local* VM that
+happens to share the name.
 
 ### OpenCode background watcher
 

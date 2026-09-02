@@ -30,7 +30,7 @@ questions, and only one of them is meant to be routine.
 
 | | `--to client` (default) | `--to host` |
 |---|---|---|
-| Where the port opens | on the **user's PC**, tunnelled over the SSH connection VS Code already holds | on the **VM host's LAN address** |
+| Where the port opens | on the **user's PC**, through an `ssh -L` tunnel the extension opens to this VM | on the **VM host's LAN address** |
 | Who sees it | only that machine | anything that can reach the host |
 | Needs | VS Code with the Construct extension connected | nothing (survives the user's PC being off) |
 | Typical link | `http://localhost:5173/` | `http://buildbox.example.local:31234/` |
@@ -115,7 +115,7 @@ Two paths are overridable from the environment for testing and unusual layouts:
 
 With no `CONSTRUCT_SERVICE_URL` there is no service to talk to — the VM runs on the user's
 own Hyper-V. The CLI therefore writes its request into a spool directory that the VS Code
-extension watches over the SSH connection it already holds, the same proven pattern as the
+extension watches over an SSH connection of its own, the same proven pattern as the
 notification spool (`construct notify` → `extension/src/notify.js`).
 
 **This spool is a wire protocol** (plan §4.8 rule 4): the extension's client-forwarder module
@@ -290,9 +290,12 @@ survive the SSH/PowerShell layers intact, like `GIT_USER_NAME_B64`). The token i
 echoed, never logged, never written to `config.env` and never placed on a command line; the
 provisioning step reports only that a token was installed.
 
-Rotation: issue a new token on the service and re-provision. A VM whose token file is missing
-or unreadable in remote mode gets a clear error from `expose` (exit 8) and a logged warning
-from the heartbeat — never a stack trace and never the token itself.
+**Rotation is not implemented.** The service issues a VM token in exactly one place — the VM
+creation job — and exposes no route or admin verb to mint another, so re-provisioning cannot
+replace a lost one (it can only re-deliver a token it was handed). Recovering from a
+destroyed or lost VM token today means deleting and re-creating the VM. A VM whose token file
+is missing or unreadable in remote mode gets a clear error from `expose` (exit 8) and a
+logged warning from the heartbeat — never a stack trace and never the token itself.
 
 ## Activity heartbeat
 
@@ -343,5 +346,9 @@ Environment overrides (used by `test/idle-report.test.sh`, and available for deb
 
 - `docs/plans/modular-remote-architecture.md` §4.6 (forwards), §4.7 (idle), §4.8 (module rules)
 - `extension/ARCHITECTURE.md` §Forwards — the extension half of this contract
+- [`docs/control-panel.md` § Forwards](control-panel.md#forwards-construct-expose) — what
+  the user sees: the Forwards card, the `construct.forwards.*` settings, and which window
+  serves the spool
 - `service/README.md` — the host service's API and authentication, including the ack relay
+- [`docs/remote-host.md`](remote-host.md) — the host service this VM talks to in remote mode
 - `docs/remote-access.md` — how the VM is reached in the first place

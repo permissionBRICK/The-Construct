@@ -6,9 +6,10 @@
 > resolution, the `construct project set` CLI), [Backup & restore](backup-restore.md)
 > (the degraded-mode fallback), [Installation](installation.md) (the `add-config`
 > entrypoint and one-liner sharing), and [Control panel](control-panel.md) (the Projects
-> tab's sync status, remote config repos, and conflict UI). The **Current state** section
-> below is kept as-is for historical context — it describes the pre-v2 behaviour this
-> design replaced.
+> tab's sync status, remote config repos, and conflict UI). §2 below is kept for
+> historical context — it describes the pre-v2 behaviour this design replaced, not how
+> Construct works today. With more than one VM the branch scheme is per instance; see
+> [§6 Multiple instances](#multiple-instances-one-config-repo-one-branch-per-vm).
 >
 > v2 incorporates the design-review findings: git now lives **only on the
 > host** (the VM store is a plain folder mirrored into a `vm` branch), the host
@@ -48,26 +49,29 @@ carry a `repos[]` array. The only thing missing is **durable sync of VM-side
 edits**. The design keeps that structure and fixes only the sync, using **git as
 the reconciliation engine — on the host only**.
 
-## 2. Current state (how it works today)
+## 2. The problem this replaced (pre-v2)
 
-There are three copies of every profile, and the precedence between them is
-hardcoded in two *opposite* directions — which is why VM edits leak away.
+> This section is the **"before"** picture — the behaviour the design in §3 onward
+> replaced, kept because it explains every rule that follows. It is not how Construct
+> works today.
 
-| Tier | Location | Lifetime today |
+There were three copies of every profile, and the precedence between them was
+hardcoded in two *opposite* directions — which is why VM edits leaked away.
+
+| Tier | Location | Lifetime, back then |
 |------|----------|----------------|
 | Host folder | `projects/*.json` in the host checkout | **Persistent** — survives VM reinstall (reinstall wipes only the VM) and Construct self-update (`Expand-Archive -Force` overwrites repo-shipped files but leaves user-added `<name>.json` in place) |
 | VM upload copy | `/opt/construct/repo/projects` (a tar of the host folder) | **Ephemeral** — re-uploaded/replaced every provision |
 | VM store | `/opt/construct/projects` (`PROJECTS_STORE`) | Survives reprovision (only `.../repo` is wiped); **gone on a full reinstall** |
 
-- On **provision (host → VM)**, [`bin/generate-runtime-config.sh`](../bin/generate-runtime-config.sh)
-  copies the repo copy over the store and *prefers the repo copy* — "repo wins".
-- On **restore (VM → host)**, [`Provision-AgentVM.ps1`](../Provision-AgentVM.ps1)
-  merges saved profiles but **never overwrites an existing host profile of the
-  same name** — "host wins".
+- On **provision (host → VM)**, `bin/generate-runtime-config.sh` copied the repo copy
+  over the store and *preferred the repo copy* — "repo wins".
+- On **restore (VM → host)**, `Provision-AgentVM.ps1` merged saved profiles but
+  **never overwrote an existing host profile of the same name** — "host wins".
 
-Put together: an agent edit to an existing, host-known profile on the VM is
+Put together: an agent edit to an existing, host-known profile on the VM was
 overwritten by the repo copy on the next reprovision, and discarded on restore
-because the host already has that name. Only *new* names survive.
+because the host already had that name. Only *new* names survived.
 
 ## 3. Design overview — three tiers, git on the host only
 
@@ -81,6 +85,7 @@ because the host already has that name. Only *new* names survive.
    HOST config repo  (%LOCALAPPDATA%\The-Construct\config)
         branch `main` ── host truth; survives reinstall AND self-update
         branch `vm`   ── snapshots of the VM's files, committed by each sync tick
+                         (one branch per instance: `vm`, then `vm-<name>` — see §6)
         │  ▲
   write │  │  read files over SSH → commit onto `vm` → git merge vm
   files ▼  │  (the whole engine runs on the host)
@@ -633,8 +638,9 @@ for steady state.
 The touch points that were built for this feature (kept for reference):
 
 - **Host config repo** — dedicated dir, lazy `git init`,
-  `main`/`vm` branch scheme. (The pre-v2 migration from the shipped
-  `projects/` folder was later removed — see §4.)
+  `main`/`vm` branch scheme (one VM branch per instance — see §6 *Multiple
+  instances*). (The pre-v2 migration from the shipped `projects/` folder was
+  later removed — see §4.)
 - **Sync engine (host)** — the §6 tick: cross-process lock, SSH read,
   validation, `vm` commits, merge, post-merge validation gate, guarded
   write-back, mass-deletion guard; shared by the extension and the PowerShell

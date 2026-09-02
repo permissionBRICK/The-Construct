@@ -67,7 +67,7 @@ package references, and hand-written SQL does not belong in the HTTP host.
 
 ```bash
 dotnet build service/Constructd.sln            # 0 warnings, 0 errors
-dotnet test  service/Constructd.sln            # 382 tests
+dotnet test  service/Constructd.sln            # 412 tests
 
 # run the whole API against the fakes (no Hyper-V, no Windows):
 dotnet run --project service/src/Constructd.Api -- --fake
@@ -118,7 +118,7 @@ Everything lives under `/api/v1`, speaks JSON with camelCase properties and came
 | `DELETE /vms/{name}` | owner/admin | → `202 {jobId}`; accepting it fences the VM (see below) and the job removes the VM, its forwards and its SSH port. |
 | `POST /vms/{name}/power` | owner/admin | `{action: start\|stop\|save}`, synchronous, returns the new state. `save` needs the driver's suspend capability. |
 | `GET /vms/{name}/state` | owner/admin | Live state from the driver (and refreshes the registry). |
-| `GET /vms/{name}/endpoint` | owner/admin | `{sshHost, sshPort}` — the service host plus the allocated forward. Until that forward exists the call answers `409`: the VM sits on an internal NAT switch and has no client-dialable address yet. |
+| `GET /vms/{name}/endpoint` | owner/admin | `{sshHost, sshPort}` — the service host plus the allocated forward. Until that forward exists the call answers `409`: the VM sits on the host's own switch (`SwitchName`, `Default Switch` unless configured) and has no client-dialable address yet. |
 | `GET /vms/{name}/forwards` | owner/admin **or that VM's own token** | Lists forwards, each with its client ack inline (see below). |
 | `POST /vms/{name}/forwards` | owner/admin **or that VM's own token** | `{vmPort, label, target}` → `{id, publicPort?, url?}`. `target` defaults to `client`. |
 | `DELETE /vms/{name}/forwards/{id}` | owner/admin **or that VM's own token** | Removes one forward. |
@@ -161,9 +161,16 @@ it merged into `result.vmToken`; every later retrieval, every SSE reconnect and 
 restart sees `vmToken: null` while `name` and `endpoint` stay.
 
 "Consumed" means exactly that: the secret is taken when the response is *composed*, not when the
-client acknowledges it, so a response lost in transit loses the token. That is deliberate (nothing
-about the delivery is retriable without weakening "once"); the recovery path is to issue a new VM
-token, which invalidates the previous one.
+client acknowledges it, so a response lost in transit loses the token. That is deliberate: nothing
+about the delivery is retriable without weakening "once".
+
+**There is currently no way to re-issue one.** `ITokenService.IssueVmTokenAsync` is called from
+exactly one place — the VM creation job — and no route or admin verb exposes it. A VM whose token
+was lost (or whose guest file was destroyed) therefore keeps a token nothing can replace: its
+`construct expose` and its idle heartbeat stay broken until the VM is **deleted and created
+again** (`DELETE /vms/{name}` → `POST /vms` → provision, which is what the installer's *Reinstall*
+does). A rotation endpoint — `POST /vms/{name}/token`, invalidating the previous hash — is the
+obvious follow-up; see *Open points* below.
 
 If any creation step fails, the job rolls back: the partially created VM is removed from the
 hypervisor (an orphan VM would keep consuming disk while its name was handed back), the ports are
@@ -206,11 +213,26 @@ A VM that exists but belongs to somebody else answers `403`, not `404`; an unkno
 **Deleting is fenced.** Accepting `DELETE /vms/{name}` immediately marks the VM `deleting` and revokes
 its scoped token in the same write; if the removal job then cannot be queued, that write is rolled back
 so the VM is operable again (fence cleared, token intact) rather than fenced forever with no job to
-finish the job. From that moment the guest cannot authenticate at all (`401`) and
-every mutation of that VM — a new forward, a power change, a policy edit, a heartbeat — answers `409`;
-reads still work and report `deleting: true`. The forward manager re-checks the same fact inside the
-per-VM gate it holds while tearing forwards down, so nothing can be attached behind the job's back and
-survive the VM (an orphan forward would otherwise be re-materialized at the next startup).
+finish the job. From that moment the two callers see different things, and the difference is the point:
+
+- **The guest is locked out at authentication.** Its token hash is gone, so every call it makes —
+  including the forward and heartbeat routes it is otherwise entitled to — is `401`. It never reaches
+  the fence.
+- **An authenticated owner or admin gets `409` from the fenced routes**: `POST /vms/{name}/power`,
+  `POST` and `DELETE` on `/vms/{name}/forwards`, `PUT /vms/{name}/idle-policy` and
+  `POST /vms/{name}/activity`. Reads still work and report `deleting: true`.
+
+`DELETE /vms/{name}` itself carries **no** fence check, so a second delete while the first removal job
+is still running is accepted rather than refused: it re-writes the same fence and queues a **second**
+removal job. Jobs are not serialized per VM, so the two run concurrently and their completions can
+race — both can pass the driver's initial "does this VM exist" lookup before either reaches the
+removal, leaving the loser to fail on a VM that is already gone. Nothing is corrupted by that (the
+fence and the token revocation are the same write either way), but "the duplicate is harmless" is not
+something the code guarantees, and a per-VM job gate would be the way to make it so.
+
+The forward manager re-checks the same fact inside the per-VM gate it holds while tearing forwards
+down, so nothing can be attached behind the job's back and survive the VM (an orphan forward would
+otherwise be re-materialized at the next startup).
 
 Host-target forwards are gated on the **VM owner's** `AllowHostForwards` flag, not the caller's, so
 an admin acting on someone else's VM cannot route around that restriction.
@@ -218,7 +240,8 @@ an admin acting on someone else's VM cannot route around that restriction.
 ### The client-forward ack relay (plan §4.6)
 
 A `host` forward is something the service *does*; a `client` forward is something the service only
-*records*, because the port opens on the user's PC, over the SSH connection VS Code already holds.
+*records*, because the port opens on the user's PC: the extension spawns its own `ssh -N -L` tunnel
+to the VM the window is driving.
 The extension's forwarder module (`extension/src/forwarder.js`, `extension/ARCHITECTURE.md`
 §Forwards) is the other end.
 
@@ -741,10 +764,25 @@ Run it again after publishing a new build: it updates binaries, settings and the
 | `-RotateAdminToken` | off | Issue a fresh token even when the admin already exists. |
 | `-NoStart` | off | Register the service but do not start it. |
 
-**The certificate thumbprint is the one value that has to leave the machine** — clients pin it at
-enrollment — so it is printed prominently at the end, next to the admin token. A self-signed
-certificate is created once and **reused** on later runs: a fresh one per install would break every
-client's pinned thumbprint.
+**The certificate's identity is the one value that has to leave the machine** — clients pin it at
+enrollment — so the installer prints it prominently at the end, next to the admin token. A
+self-signed certificate is created once and **reused** on later runs: a fresh one per install would
+break every client's pin.
+
+> ⚠ **Known mismatch: the printed value is not the value clients compare.** The installer prints
+> `X509Certificate2.Thumbprint`, which is the **SHA-1** thumbprint (40 hex characters) — the right
+> value for `Constructd:CertThumbprint`, which selects the certificate from `LocalMachine\My`. But
+> the clients pin the **SHA-256** fingerprint (`Get-ConstructCertificateFingerprint` in
+> `lib/AgentVm.Remote.ps1`, 64 hex characters shown as colon-separated pairs), which is what the
+> enrollment prompt displays. Publishing the printed thumbprint therefore gives users something they
+> cannot compare with what they see. Until the installer prints both, compute the SHA-256 form on the
+> host and publish **that**:
+>
+> ```powershell
+> $cert = Get-ChildItem Cert:\LocalMachine\My | Where-Object Thumbprint -eq '<the printed value>'
+> ([BitConverter]::ToString(
+>     [Security.Cryptography.SHA256]::Create().ComputeHash($cert.RawData))) -replace '-', ':'
+> ```
 
 The service runs as **LocalSystem**. It drives Hyper-V, netsh and WSL, none of which a restricted
 service account can do here without further setup — which is also why nothing in this service builds a
@@ -852,7 +890,7 @@ deleting a colleague's VM is not an uninstall step.
 
 ## Tests
 
-`dotnet test service/Constructd.sln` — 382 tests, all running on Linux, Windows platform included.
+`dotnet test service/Constructd.sln` — 412 tests, all running on Linux, Windows platform included.
 
 - **Core unit tests**: port allocation (lowest-free, no double allocation, release, exhaustion,
   reservation, concurrency), token hashing (format pinned to a known SHA-256 vector, fixed-time
@@ -983,14 +1021,20 @@ deleting a colleague's VM is not an uninstall step.
 - The `url` on a forward is advisory (`http://<publicHost>:<port>/` for a host target, the client's
   reported link for a client target). Per-VM hostnames for cookie-sensitive services stay out of
   scope (plan §4.9).
+- **No VM-token rotation.** `IssueVmTokenAsync` is only ever called by the VM creation job, so a
+  lost VM token cannot be replaced — the VM has to be deleted and re-created. A
+  `POST /vms/{name}/token` route (issue, invalidate the previous hash, hand the plaintext out once
+  under the same rules as the create job) is a contained addition.
 - Quota semantics: `maxVms` is a plain cap and `0` means "may not create VMs"; "unlimited" has to be
   expressed as a large number.
 - Schema evolution is `SqliteDatabase.AddColumnIfMissing` and nothing more: additive nullable
   columns, applied on every start, introduced by the forward ack (B8). A rename, a drop or a data
   backfill still needs a real migration story — and a version stamp to decide when to run it.
 - The capability's console **kind** (`vmconnect`, a URL, none) is read from the driver and carried on
-  `DriverCapabilities`, but no endpoint exposes it yet: the consumer is the extension's "open console"
-  affordance, which arrives with the remote driver (B7). Adding it is a response field, not a redesign.
+  `DriverCapabilities`, but **no endpoint exposes it**. It has no consumer either: the extension's
+  `hyperv-remote` driver hardcodes `console: "none"` (there is no `vmconnect` to a machine you are not
+  sitting at), so the panel offers no console affordance for a remote VM. Surfacing it — for a
+  backend that *does* have a console URL, e.g. Proxmox's noVNC — is a response field, not a redesign.
 - Plan §4.4 has the service create its **own internal NAT switch** at install. `Constructd:SwitchName`
   is the seam for that and defaults to Hyper-V's `Default Switch`, which is what a host with nothing
   else configured has; the installer does not create a switch yet.
