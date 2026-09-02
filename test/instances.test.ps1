@@ -573,6 +573,74 @@ ok "collision: the comparison is case-insensitive (one NTFS file, one DNS name)"
 $noClash = Read-ConstructInstances -Path (New-RegistryFile '{ "version": 1, "instances": { "a-vm": {}, "b-vm": {}, "agent-vm": {} } }')
 ok "collision: two canonical local instances never collide" (@($noClash.Problems).Count -eq 0)
 
+# ── (g7) configBranch is a cross-entry identity (mirrored in the JS suite) ────
+# The branch IS that instance's store inside the ONE host config repo
+# (docs/config-sync.md, "Multiple instances"): two entries on one branch share their VM
+# snapshots, deletion history, merge base and write-backs, so one VM's tick merges -- or
+# deletes -- the other VM's configuration.
+Write-Host ""
+Write-Host "=== configBranch uniqueness (mirrored in extension/test/instances.test.js) ===" -ForegroundColor Cyan
+$branchClaimJson = '{ "version": 1, "instances": { "work-vm": { "backend": "hyperv-remote", "sshHost": "buildbox.local", "configBranch": "vm" } } }'
+$branchClaim = Read-ConstructInstances -Path (New-RegistryFile $branchClaimJson)
+ok "branch: a non-default entry may NOT claim the default instance's 'vm'" (
+    -not $branchClaim.Instances.ContainsKey('work-vm'))
+ok "branch: ...and the problem names configBranch and the default instance" (
+    @($branchClaim.Problems | Where-Object { $_ -match 'configBranch' -and $_ -match 'agent-vm' -and $_ -match 'skipped' }).Count -ge 1)
+ok "branch: the default instance survives that entry untouched" (
+    Test-ConstructDefaultInstance $branchClaim.Instances['agent-vm'])
+$sharedBranch = Read-ConstructInstances -Path (New-RegistryFile @'
+{ "version": 1, "instances": {
+    "a-vm": { "backend": "hyperv-remote", "sshHost": "one.local", "configBranch": "vm-team" },
+    "b-vm": { "backend": "hyperv-remote", "sshHost": "two.local", "configBranch": "VM-Team" } } }
+'@)
+ok "branch: two entries sharing one branch drop BOTH (case-insensitively -- Windows loose refs)" (
+    -not $sharedBranch.Instances.ContainsKey('a-vm') -and -not $sharedBranch.Instances.ContainsKey('b-vm'))
+ok "branch: ...reported once, naming both and the field" (
+    (@($sharedBranch.Problems | Where-Object { $_ -match 'share the same configBranch' }).Count -eq 1) -and
+    (@($sharedBranch.Problems | Where-Object { $_ -match 'a-vm' -and $_ -match 'b-vm' }).Count -ge 1))
+$branchOk = Read-ConstructInstances -Path (New-RegistryFile '{ "version": 1, "instances": { "work-vm": { "configBranch": "vm-team" } } }')
+ok "branch: a distinct explicit override is still allowed" ($branchOk.Instances.ContainsKey('work-vm'))
+
+# ── (g8) Object.prototype names are NOT registry entries (JS parity) ──────────
+# The JS reader's byName is a prototype-free map and every membership test is an
+# OWN-property test, because a plain {} made byName['constructor'] truthy for EVERY
+# registry -- so a file that merely POINTS at such a name resolved to Object's
+# constructor FUNCTION over there while this reader (an ordinal Hashtable +
+# ContainsKey) correctly reported "no entry". Same fixtures as the JS suite; the two
+# must agree on every one of them.
+Write-Host ""
+Write-Host "=== Object.prototype name parity (mirrored in extension/test/instances.test.js) ===" -ForegroundColor Cyan
+foreach ($pn in @('constructor', '__proto__', 'toString', 'hasOwnProperty', 'valueOf', 'isPrototypeOf')) {
+    # (a) as defaultInstance, with NO entry of that name.
+    $asDefaultJson = '{ "version": 1, "defaultInstance": "' + $pn + '", "instances": {} }'
+    $asDefault = Read-ConstructInstances -Path (New-RegistryFile $asDefaultJson)
+    ok "proto($pn): defaultInstance falls back to agent-vm" ($asDefault.Default -ceq 'agent-vm')
+    ok "proto($pn): ...and it is reported" (
+        @($asDefault.Problems | Where-Object { $_ -match 'has no entry' -or $_ -match 'not a valid instance name' }).Count -ge 1)
+    ok "proto($pn): the resolved instance is the synthesized default" (
+        Test-ConstructDefaultInstance (Get-ConstructInstance -Registry $asDefault))
+    # (b) asked for BY NAME (the -Name lookup the scripts use).
+    ok "proto($pn): Get-ConstructInstance -Name falls back to the default instance" (
+        Test-ConstructDefaultInstance (Get-ConstructInstance -Name $pn -Registry $asDefault))
+    ok "proto($pn): the instance table has no such key" (-not $asDefault.Instances.ContainsKey($pn))
+    # (c) as an INSTANCE NAME in the file: the name rule decides, identically on both sides.
+    $asEntryJson = '{ "version": 1, "instances": { "' + $pn + '": { "backend": "hyperv-remote", "sshHost": "buildbox.local" } } }'
+    $asEntry = Read-ConstructInstances -Path (New-RegistryFile $asEntryJson)
+    if (Test-ConstructInstanceName $pn) {
+        # 'constructor' is a perfectly good instance name -- it must load like any other.
+        ok "proto($pn): a real instance of that name LOADS" ($asEntry.Instances.ContainsKey($pn))
+        ok "proto($pn): ...and resolves to itself, not to a type member" (
+            (Get-ConstructInstance -Name $pn -Registry $asEntry).VmHost -ceq 'buildbox.local')
+        $asBothJson = '{ "version": 1, "defaultInstance": "' + $pn + '", "instances": { "' + $pn + '": { "backend": "hyperv-remote", "sshHost": "buildbox.local" } } }'
+        $asBoth = Read-ConstructInstances -Path (New-RegistryFile $asBothJson)
+        ok "proto($pn): ...and it can be the defaultInstance" ($asBoth.Default -ceq $pn)
+    } else {
+        ok "proto($pn): an invalid name is skipped with a problem" (
+            (-not $asEntry.Instances.ContainsKey($pn)) -and
+            (@($asEntry.Problems | Where-Object { $_ -match 'is invalid' -and $_ -match 'skipped' }).Count -ge 1))
+    }
+}
+
 # Port boundaries + numbers no Int32 can hold. A huge sshPort must be REPORTED and fall
 # back to 22, never crash the reader: [int]999999999999 throws "Value was either too
 # large or too small for an Int32", which would escape Read-ConstructInstances and break
