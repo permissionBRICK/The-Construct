@@ -208,6 +208,9 @@ ok "problem: unknown backend reported"       (@($reg3.Problems | Where-Object { 
 ok "problem: invalid sshPort reported"       (@($reg3.Problems | Where-Object { $_ -match 'sshPort' }).Count -ge 1)
 ok "problem: dangling default reported"      (@($reg3.Problems | Where-Object { $_ -match 'ghost' }).Count -ge 1)
 ok "problem: remote without sshHost reported" (@($reg3.Problems | Where-Object { $_ -match 'no sshHost' }).Count -ge 1)
+# ...and SKIPPED, not left actionable with the derived <name>.mshome.net address (a
+# remote endpoint only ever comes from the host service).
+ok "remote without sshHost is skipped"       (-not $reg3.Instances.ContainsKey('remote-vm'))
 
 # A foreign schema version is REFUSED, not partially read: a later version may redefine
 # what a field MEANS, so acting on a misread entry could target the wrong machine.
@@ -248,10 +251,15 @@ ok "boolean version: true is NOT version 1" (
 # lists are kept in step by hand, so change them together.
 Write-Host ""
 Write-Host "=== normalization parity (mirrored in extension/test/instances.test.js) ===" -ForegroundColor Cyan
+# 'martian-remote' is an UNKNOWN backend on purpose: it is neither local (so the
+# canonical-identity rule does not apply) nor remote (so the endpoint/vmName rules do
+# not), which leaves exactly the field-by-field TYPE normalisation on show. The uppercase
+# spelling of a KNOWN backend has its own fixture below, because a spelling the driver
+# lookup resolves to the remote driver is held to that backend's rules.
 $mx = New-RegistryFile @'
 { "version": 1,
   "instances": {
-    "typed-vm": { "backend": "HYPERV-REMOTE", "sshHost": 123, "sshPort": "2201",
+    "typed-vm": { "backend": "martian-remote", "sshHost": 123, "sshPort": "2201",
                   "hostAlias": true, "keyName": 42, "configBranch": ["x"], "owner": 7,
                   "service": { "url": "https://x", "auth": "TOKEN" } },
     "svc-vm":   { "service": "not-an-object" },
@@ -260,10 +268,7 @@ $mx = New-RegistryFile @'
 '@
 $mxReg = Read-ConstructInstances -Path $mx
 $tv = $mxReg.Instances['typed-vm']
-# Case-SENSITIVE: 'HYPERV-REMOTE' is not the enum value, so it is reported -- and kept
-# exactly as written, which is what makes the driver dispatch refuse it on BOTH sides
-# rather than one of them treating it as the local Hyper-V backend.
-ok "parity: uppercase backend rejected (case-sensitive) and kept verbatim" ($tv.Backend -ceq 'HYPERV-REMOTE')
+ok "parity: unknown backend kept verbatim"               ($tv.Backend -ceq 'martian-remote')
 ok "parity: numeric sshHost NOT stringified"             ($tv.VmHost -eq 'typed-vm.mshome.net')
 ok "parity: digit-string sshPort accepted"               ($tv.SshPort -eq 2201)
 ok "parity: boolean hostAlias -> derived bare name"      ($tv.HostAlias -eq 'typed-vm')
@@ -276,10 +281,32 @@ ok "parity: '+2201' rejected -> 22"                      ($mxReg.Instances['port
 foreach ($f in @('sshHost', 'hostAlias', 'keyName', 'configBranch', 'owner')) {
     ok "parity: type problem reported for '$f'" (@($mxReg.Problems | Where-Object { $_ -match "'$f' must be a string" }).Count -ge 1)
 }
-ok "parity: uppercase backend reported"     (@($mxReg.Problems | Where-Object { $_ -match 'HYPERV-REMOTE' }).Count -ge 1)
+ok "parity: unknown backend reported"       (@($mxReg.Problems | Where-Object { $_ -match 'martian-remote' }).Count -ge 1)
 ok "parity: uppercase auth reported"        (@($mxReg.Problems | Where-Object { $_ -match 'service auth' }).Count -ge 1)
 ok "parity: scalar service reported"        (@($mxReg.Problems | Where-Object { $_ -match "'service' must be an object" }).Count -ge 1)
 ok "parity: bad port reported"              (@($mxReg.Problems | Where-Object { $_ -match 'invalid sshPort' }).Count -ge 1)
+
+# A CASE-VARIANT of a known backend id does not load AT ALL, for either backend. Every
+# enum comparison in both readers is case-sensitive (so 'HYPERV-REMOTE' is "unknown" to
+# them), while the driver lookup trims and lowercases (so it hands back the REAL driver --
+# the remote one here, the local one with hostLifecycle for 'HYPERV-LOCAL'). The two
+# readings disagree about what the entry IS, so nothing acts on it under either.
+foreach ($c in @(@{ label = 'remote'; id = 'HYPERV-REMOTE' },
+                 @{ label = 'local';  id = 'HYPERV-LOCAL' },
+                 @{ label = 'mixed';  id = 'Hyperv-Remote' })) {
+    $cased = Read-ConstructInstances -Path (New-RegistryFile (
+        '{"version":1,"instances":{"cased-vm":{"backend":"' + $c.id + '","sshHost":"buildbox.local","sshPort":2201}}}'))
+    ok "parity: a case-variant backend id ($($c.label)) does not load" (-not $cased.Instances.ContainsKey('cased-vm'))
+    ok "parity: ...reported as a spelling the two lookups read differently ($($c.label))" (
+        @($cased.Problems | Where-Object { $_ -cmatch [regex]::Escape($c.id) -and $_ -match 'case-sensitive' -and $_ -match 'skipped' }).Count -ge 1)
+    ok "parity: ...naming the canonical spelling ($($c.label))" (
+        @($cased.Problems | Where-Object { $_ -match [regex]::Escape("is not spelled '$($c.id.ToLowerInvariant())'") }).Count -ge 1)
+}
+# ...while a genuinely unknown id IS kept: the driver lookup finds nothing for it under
+# any casing, so the unknown-driver fallback is what acts on it.
+ok "parity: an unknown backend still loads and is merely reported" (
+    (Read-ConstructInstances -Path (New-RegistryFile `
+        '{"version":1,"instances":{"cased-vm":{"backend":"proxmox","sshHost":"buildbox.local"}}}')).Instances.ContainsKey('cased-vm'))
 
 # ── (g2b) KEY-CASING PARITY (mirrored in extension/test/instances.test.js) ──
 # JSON property lookup is case-SENSITIVE in JavaScript and USED TO BE case-INSENSITIVE
@@ -489,7 +516,10 @@ Write-Host ""
 Write-Host "=== unknown backends are kept verbatim (mirrored in extension/test/instances.test.js) ===" -ForegroundColor Cyan
 # A GENUINELY unknown backend is kept verbatim: the driver dispatch degrades on it
 # correctly (the unknown-driver fallback), which is what refuses the destructive actions.
-foreach ($b in @('proxmox', 'hyperv-remtoe', 'HYPERV-REMOTE')) {
+# (A case-variant of a KNOWN id -- 'HYPERV-REMOTE' -- is NOT in this list: the driver
+# lookup lowercases, so that one really does get a driver, and it is refused whole
+# instead. See the case-variant fixtures in the parity matrix above.)
+foreach ($b in @('proxmox', 'hyperv-remtoe', 'HYPERV-PROXMOX')) {
     $r = Read-ConstructInstances -Path (New-RegistryFile ('{ "version": 1, "instances": { "work-vm": { "backend": "' + $b + '", "sshHost": "buildbox.local" } } }'))
     ok "backend($b): the entry survives"                 ($r.Instances.ContainsKey('work-vm'))
     ok "backend($b): it is NOT rewritten to hyperv-local" ($r.Instances['work-vm'].Backend -ceq $b)
@@ -591,6 +621,71 @@ ok "canonical: ...the derived alias"          ($canon.Instances['work-vm'].HostA
 ok "canonical: ...the derived key"            ($canon.Instances['work-vm'].KeyName -ceq 'construct_work-vm_ed25519')
 ok "canonical: ...and port 22"                ($canon.Instances['work-vm'].SshPort -eq 22)
 
+# ── (g5b) The REMOTE backend's own identity rules (mirrored in the JS suite) ─
+# Mirrored assertion-for-assertion in extension/test/instances.test.js (same fixtures,
+# same order); change the two together.
+#   VmName = Name  -- the host service addresses the VM by that name, and so does a
+#     rebuild (-InstanceName). An entry keyed 'alias-vm' with vmName 'service-vm' had
+#     Start and the power state acting on service-vm while Reinstall DELETED and
+#     recreated alias-vm.
+#   SshHost stated -- a remote endpoint is whatever the service allocated. An entry that
+#     omits it used to load with the DERIVED '<name>.mshome.net:22', i.e. an actionable
+#     instance pointing at an unrelated machine on this PC's own network.
+Write-Host ""
+Write-Host "=== canonical remote identity (mirrored in extension/test/instances.test.js) ===" -ForegroundColor Cyan
+$remoteOkJson = '{ "backend": "hyperv-remote", "vmName": "work-vm", "sshHost": "buildbox.example.local", "sshPort": 2201 }'
+$remoteGood = Read-ConstructInstances -Path (New-RegistryFile ('{ "version": 1, "instances": { "work-vm": ' + $remoteOkJson + ' } }'))
+ok "remote: a canonical remote entry loads with no problems" (@($remoteGood.Problems).Count -eq 0)
+ok "remote: ...as itself" ($remoteGood.Instances['work-vm'].VmHost -ceq 'buildbox.example.local')
+# An omitted vmName DERIVES the instance name, so it satisfies the rule by construction.
+ok "remote: an omitted vmName derives the instance name and is fine" (
+    (Read-ConstructInstances -Path (New-RegistryFile '{ "version": 1, "instances": { "work-vm": { "backend": "hyperv-remote", "sshHost": "buildbox.local" } } }')).Instances.ContainsKey('work-vm'))
+$nonCanonicalRemote = @(
+    @{ label = 'a service VM name of its own'
+       json  = '{ "backend": "hyperv-remote", "vmName": "service-vm", "sshHost": "buildbox.example.local", "sshPort": 2201 }'
+       field = 'vmName' },
+    # Compared EXACTLY: the value goes into a URL path and into a -InstanceName argument,
+    # and nothing may assume the service folds case.
+    @{ label = 'a differently-cased vmName'
+       json  = '{ "backend": "hyperv-remote", "vmName": "Work-VM", "sshHost": "buildbox.example.local", "sshPort": 2201 }'
+       field = 'vmName' },
+    @{ label = 'no sshHost at all'; json = '{ "backend": "hyperv-remote", "sshPort": 2201 }'; field = 'sshHost' },
+    @{ label = 'an empty sshHost';  json = '{ "backend": "hyperv-remote", "sshHost": "   ", "sshPort": 2201 }'; field = 'sshHost' },
+    # The canonical spelling is 'sshHost' -- everything that writes the registry writes it.
+    @{ label = 'the endpoint under the vmHost alias only'
+       json  = '{ "backend": "hyperv-remote", "vmHost": "buildbox.local" }'; field = 'sshHost' }
+)
+foreach ($c in $nonCanonicalRemote) {
+    $r = Read-ConstructInstances -Path (New-RegistryFile ('{ "version": 1, "instances": { "work-vm": ' + $c.json + ' } }'))
+    ok "remote($($c.label)): the entry is ABSENT, not merely warned about" (-not $r.Instances.ContainsKey('work-vm'))
+    ok "remote($($c.label)): the problem names '$($c.field)' and says skipped" (
+        @($r.Problems | Where-Object { $_ -match [regex]::Escape("`"$($c.field)`"") -and $_ -match 'skipped' }).Count -ge 1)
+    ok "remote($($c.label)): resolve falls back to the default instance" (
+        Test-ConstructDefaultInstance (Get-ConstructInstance -Name 'work-vm' -Registry $r))
+}
+# The derived mshome endpoint is exactly what must NOT survive a missing sshHost.
+$remoteNoHost = Read-ConstructInstances -Path (New-RegistryFile '{ "version": 1, "instances": { "work-vm": { "backend": "hyperv-remote" } } }')
+ok "remote: no entry is left holding the derived <name>.mshome.net address" (
+    (-not $remoteNoHost.Instances.ContainsKey('work-vm')) -and
+    @($remoteNoHost.Instances.Keys | Where-Object { $remoteNoHost.Instances[$_].VmHost -eq 'work-vm.mshome.net' }).Count -eq 0)
+ok "remote: the missing endpoint is reported in the words the JS reader uses" (
+    @($remoteNoHost.Problems | Where-Object { $_ -match 'no sshHost' }).Count -ge 1)
+# The WRITE side refuses the same shapes where they are created (Get-ConstructInstanceEntryProblem,
+# which is what Add-ConstructInstance and Auto-Install.ps1's pre-create check both ask).
+$remoteOkEntry = @{ backend = 'hyperv-remote'; vmName = 'work-vm'; sshHost = 'buildbox.example.local'; sshPort = 2201 }
+ok "remote: the entry check accepts the canonical entry" (
+    @(Get-ConstructInstanceEntryProblem -Name 'work-vm' -Entry $remoteOkEntry).Count -eq 0)
+$remoteSplit = @{} + $remoteOkEntry; $remoteSplit['vmName'] = 'service-vm'
+ok "remote: the entry check refuses a service VM name of its own" (
+    @(Get-ConstructInstanceEntryProblem -Name 'work-vm' -Entry $remoteSplit).Count -gt 0)
+$remoteNoEp = @{ backend = 'hyperv-remote'; sshPort = 2201 }
+ok "remote: the entry check refuses a missing endpoint" (
+    @(Get-ConstructInstanceEntryProblem -Name 'work-vm' -Entry $remoteNoEp).Count -gt 0)
+# The rules are the remote backend's ALONE: a local instance's vmName is its own
+# (case-insensitive) rule and needs no sshHost at all.
+ok "remote: the rules do not touch a hyperv-local entry" (
+    (Read-ConstructInstances -Path (New-RegistryFile '{ "version": 1, "instances": { "work-vm": { "backend": "hyperv-local", "vmName": "Work-VM" } } }')).Instances.ContainsKey('work-vm'))
+
 # ── (g6) Cross-entry identity COLLISIONS (mirrored in the JS suite) ──────────
 # Two names for one machine: a rebuild of one would delete the other's VM, and a
 # reprovision would overwrite its key file.
@@ -684,6 +779,31 @@ $sharedHostKey = Read-ConstructInstances -Path (New-RegistryFile @'
 '@)
 ok "endpoint: a shared host does not excuse a shared key file" (
     -not $sharedHostKey.Instances.ContainsKey('a-vm') -and -not $sharedHostKey.Instances.ContainsKey('b-vm'))
+
+# -ExcludeLabel: the ONE caller-side filter, for the question Auto-Install.ps1 has to ask
+# BEFORE the host service has allocated a VM's SSH forward. It drops the named identity
+# from the check and NOTHING else -- it is not a relaxation of the rule set (the reader
+# never passes it, and the JS twin has no such parameter).
+$epPair = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
+$epPair['a-vm'] = Resolve-ConstructInstanceDefaults -Name 'a-vm' -Entry (ConvertTo-ConstructInstanceEntryObject -Entry @{
+    backend = 'hyperv-remote'; vmName = 'a-vm'; sshHost = 'buildbox.example.local'; sshPort = 2201 })
+$epPair['b-vm'] = Resolve-ConstructInstanceDefaults -Name 'b-vm' -Entry (ConvertTo-ConstructInstanceEntryObject -Entry @{
+    backend = 'hyperv-remote'; vmName = 'b-vm'; sshHost = 'buildbox.example.local'; sshPort = 2201 })
+ok "exclude: the endpoint collision is reported by default" (
+    @((Get-ConstructInstanceCollision -Instances $epPair).Problems | Where-Object { $_ -match 'sshHost/sshPort' }).Count -eq 1)
+ok "exclude: ...and is the ONLY problem those two entries have" (
+    @((Get-ConstructInstanceCollision -Instances $epPair).Problems).Count -eq 1)
+ok "exclude: -ExcludeLabel 'sshHost/sshPort' drops exactly that one" (
+    @((Get-ConstructInstanceCollision -Instances $epPair -ExcludeLabel @('sshHost/sshPort')).Problems).Count -eq 0)
+$keyPair = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
+$keyPair['a-vm'] = Resolve-ConstructInstanceDefaults -Name 'a-vm' -Entry (ConvertTo-ConstructInstanceEntryObject -Entry @{
+    backend = 'hyperv-remote'; vmName = 'a-vm'; sshHost = 'one.local'; sshPort = 2201; keyName = 'shared_key' })
+$keyPair['b-vm'] = Resolve-ConstructInstanceDefaults -Name 'b-vm' -Entry (ConvertTo-ConstructInstanceEntryObject -Entry @{
+    backend = 'hyperv-remote'; vmName = 'b-vm'; sshHost = 'two.local'; sshPort = 2202; keyName = 'shared_key' })
+ok "exclude: ...and leaves every OTHER identity rule in force" (
+    @((Get-ConstructInstanceCollision -Instances $keyPair -ExcludeLabel @('sshHost/sshPort')).Problems | Where-Object { $_ -match 'keyName' }).Count -eq 1)
+ok "exclude: an unknown label excludes nothing (a typo must not widen the check)" (
+    @((Get-ConstructInstanceCollision -Instances $epPair -ExcludeLabel @('sshhost/sshport')).Problems).Count -eq 1)
 
 # ── (g7) configBranch is a cross-entry identity (mirrored in the JS suite) ────
 # The branch IS that instance's store inside the ONE host config repo

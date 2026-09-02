@@ -39,8 +39,11 @@ function serviceUrlOf(instance) {
   return (svc && typeof svc.url === "string" && svc.url.trim()) ? svc.url.trim() : "";
 }
 
-/** The VM's name on the host service. The registry's `vmName` is that name; the
- *  instance name is the fallback for a hand-written entry that omitted it. Pure. */
+/** The VM's name on the host service. Both registry readers PIN `vmName` to the instance
+ *  name for this backend (instances.remoteIdentityProblems: a rebuild reaches the service
+ *  by `-InstanceName <name>` and deletes what it finds there, so an entry naming a
+ *  different service VM would split power and rebuild across two machines) — so the two
+ *  are the same string here, and the fallback only covers an object built by hand. Pure. */
 function vmNameOf(instance) {
   return (instance && (instance.vmName || instance.name)) || "";
 }

@@ -324,23 +324,48 @@ batch B8.
 | The VM was created but provisioning failed | the instance is already in the registry (§3, step 8). Run `Auto-Install.ps1 -InstanceName <name>` and pick **Reprovision** — nothing on the host is touched, and nothing is created twice. |
 | The job fails and the VM disappears | creation rolls back deliberately (`service/README.md`): a partially created VM would keep consuming disk while holding its name. The original failure is reported, never masked. |
 | Reinstall/Redownload refused in the panel | the installed host scripts predate the remote parameters, so the action would have hit a *local* VM. Update The Construct on this PC. |
-| "the instance registry already has … at the same address" | see the limitation below: this build records one VM per host service per PC. |
+| "this PC's instance registry would refuse …" | an identity clash with an instance you already have — the message names it and the field (a shared `configBranch`, `keyName`, `hostAlias`, `vmName`, or the same `sshHost` **and** `sshPort`). Before the VM is created nothing has happened; after it, the create is rolled back. See the section below. |
 | `Refusing to talk to the Construct host service … over plain http` | you gave an `http://` URL for a host that is not this machine. There is nothing to pin and nothing to encrypt, so a token or a Windows credential would cross the network in clear. Both clients refuse before sending anything. Use `https`; plain http is accepted only for a service on `localhost` (which is how the tests drive the fake service). |
 | A warning about sending a Windows credential over plain http | you pointed at a service on **this** machine over `http://`. That is allowed, but Kerberos/NTLM is not encrypted in transit there, so the client says so once. |
 
-## Known limitation: one VM per host service, per PC
+## Several VMs on one host service, and what the registry refuses
 
-The instance registry treats an instance's **`sshHost` as a unique identity field** — two
-entries that share it are two names for one machine, and both are dropped on load
-(`extension/src/instances.js` / `lib/AgentVm.Instances.ps1`, the collision rules). Every
-VM on one host service shares that host's address and differs only by the allocated SSH
-port, so **a second VM on the same host would make both registry entries unloadable.**
+**Several of your VMs can live on one host service.** The registry's endpoint identity is
+the **composite `(sshHost, sshPort)`**, not the host alone: every VM on a service host
+shares that host's address and is told apart by the SSH forward the service allocated it
+(one port per VM out of the configured range, §4.4). Two entries are "one machine under
+two names" — and both are then dropped on load — only when they share **host *and*
+port**.
 
-Until the uniqueness key becomes host **and** port on both readers, this build refuses the
-second one where it is created rather than writing a registry that silently loses both:
-`Auto-Install.ps1` checks before it asks the service for anything, and again against the
-address the service actually returned, before provisioning. Several *users* on one host
-are unaffected — each has their own PC and their own registry — and so are several hosts.
+`Auto-Install.ps1` therefore asks the registry two different questions, both answered by
+the shared rules in `lib/AgentVm.Instances.ps1` (never by a second copy of them):
+
+* **before it asks the service for anything** — would this instance be refused for a
+  reason that is already knowable? Its name, and the identities derived from it: `vmName`,
+  `hostAlias`, `keyName`, `configBranch`. The endpoint is deliberately *not* judged here,
+  because the service has not allocated the forward yet. (This is what used to refuse a
+  perfectly good second VM on a shared host.)
+* **right after the VM is created**, with the endpoint the service really returned (its
+  advertised `PublicHost` can differ from the URL's host, and nothing exposes the port
+  before the VM exists) — the full rule set. A conflict here means the VM could never be
+  reached or rebuilt from this PC, so the create is **rolled back** (the same `DELETE` the
+  reinstall path uses) and the failure names the entry that is in the way.
+
+Two entry rules are worth knowing if you ever hand-edit `instances.json`, because a
+`hyperv-remote` entry that breaks either one **does not load at all** (both readers refuse
+it whole, with a problem the panel surfaces):
+
+* **`sshHost` must be stated.** A remote endpoint only ever comes from the host service.
+  An entry without one used to fall back to the local-Hyper-V convention
+  `<name>.mshome.net:22` and stay actionable — pointing the picker and every SSH action at
+  an unrelated machine on your own network.
+* **`vmName` must be exactly the instance name.** The service addresses the VM by that
+  name and so does a rebuild (`-InstanceName`), so an entry keyed `alias-vm` with
+  `vmName: "service-vm"` would let Start and the power state act on one VM while
+  Reinstall **deleted and recreated** the other.
+
+Several *users* on one host are unaffected either way — each has their own PC and their own
+registry — and so are several hosts.
 
 ## See also
 

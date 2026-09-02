@@ -2193,16 +2193,35 @@ function makeMicProvider() {
  *  reflects the result; a down VM or a second window that already holds the tunnel
  *  shouldn't nag on every launch). A manual toggle keeps the progress spinner + toasts. */
 function enableAudio(context, webview, opts = {}) {
-  if (hostAudio && hostAudio.enabled) { broadcastAudio({ enabled: true, capturing: hostAudio.capturing }); return; }
   // `opts.target` is a target the CALLER captured before its own awaits (the auto-arm
-  // reads a preference and probes the VM first). Its generation is re-checked here,
+  // reads a preference and probes the VM first). Its generation is re-checked below,
   // immediately before the tunnel is created: A's "yes, reachable, mic wanted" must not
   // install the shim and open a microphone tunnel on B, whose own preference may be off.
-  // A manual toggle passes no target and captures the current instance right here.
+  // Every caller now goes through requestAudioEnable, which captures at the user's click
+  // (or at activation) before queueing on the single-session chain; the fallback capture
+  // here covers a direct call.
   const t = opts.target || actionTarget();
+  // THE SINGLE-SESSION RULE, decided by the pure instances.planEnable (unit-tested with
+  // deferred promises): a HostAudio may never be replaced while it is still the only
+  // reference to a live — or half-built — tunnel.
+  const plan = instances.planEnable(audioSlotState(), t.name);
+  if (plan.action === "report") { broadcastAudio({ enabled: true, capturing: hostAudio.capturing }); return Promise.resolve(); }
   if (opts.target && instances.targetSuperseded(instanceGate, t)) {
-    logLine(`audio: auto-arm for "${t.name}" was discarded — the window switched to "${activeInstance().name}" while probing`);
-    return;
+    logLine(`audio: the enable for "${t.name}" was discarded — the window switched to "${activeInstance().name}" before it ran`);
+    return Promise.resolve();
+  }
+  if (plan.action !== "create") {
+    // "join"   — a session for this window is still being enabled. Await THAT promise
+    //            (it reports for itself) and settle this caller's optimistic switch on
+    //            what it produced. Constructing a second HostAudio would replace the
+    //            module's reference to the first, whose result is then discarded as
+    //            superseded (audioSlot) — a live `ssh -R` with nothing able to stop it.
+    // "refuse" — the window is closing (the chain is closed), or a session is held with
+    //            no enable to join. Either way nothing new may be built over it.
+    const pending = plan.action === "join" ? hostAudioEnable : null;
+    logLine(`audio: the enable for "${t.name}" ${plan.action === "join" ? "joined" : "declined to replace"} ` +
+      `the mic session on "${hostAudioInstance}" (${plan.reason})`);
+    return Promise.resolve(pending).then(() => { reportAudioState(webview); });
   }
   micWarnedReasons = new Set(); // fresh enable: allow one warning per failure reason again
   hostAudioInstance = t.name;
@@ -2272,13 +2291,64 @@ function enableAudio(context, webview, opts = {}) {
   hostAudioEnable = Promise.resolve(started).then(() => null, () => null);
   if (opts.auto) {
     // No notification progress on startup — auto-arm must be invisible until it succeeds.
-    started.then(handle, () => handle({ ok: false, error: "enable-failed" }));
-    return;
+    return started.then(handle, () => handle({ ok: false, error: "enable-failed" })).catch(() => {});
   }
-  vscode.window.withProgress(
+  // RETURNED (it was fire-and-forget), so the single-session chain that queued this
+  // enable does not consider the step finished while the tunnel is still coming up —
+  // the next queued step would otherwise decide its teardown against a half-built
+  // session. Nothing on the single-instance path awaits it, so the toggle is unchanged.
+  return Promise.resolve(vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: "Enabling microphone passthrough…", cancellable: false },
     async () => { handle(await started); }
-  );
+  )).catch(() => {});
+}
+
+/** The mic slot as instances.planEnable reads it: the module's own four variables plus
+ *  the chain's shutdown flag. Kept in one place so the decision and the state it is taken
+ *  from can never drift apart. */
+function audioSlotState() {
+  return {
+    live: !!hostAudio,
+    name: hostAudioInstance,
+    enabled: !!(hostAudio && hostAudio.enabled),
+    pending: !!hostAudioEnable,
+    closed: audioHandover.closed,
+  };
+}
+
+/** Report the live mic state to `webview` (and every surface) — used when an enable
+ *  JOINED a session that was already being enabled, so the optimistic switch settles on
+ *  what really happened instead of on its own guess. */
+function reportAudioState(webview) {
+  const on = !!(hostAudio && hostAudio.enabled);
+  const status = { enabled: on, capturing: on ? !!hostAudio.capturing : false };
+  if (webview) safePost(webview, { type: "audio", ...status });
+  broadcastAudio(status, hostAudioSession);
+}
+
+/**
+ * The console/settings toggle's "on", and the startup/repatch auto-arm, queued on the
+ * SAME single-session chain the switch handover uses (audioHandover). That is what keeps
+ * a manual enable from constructing a second HostAudio for a VM whose session is still
+ * being torn down or brought up — see instances.createHandover.
+ *
+ * `opts.auto` marks the silent auto-arm (it evaluates the saved preference and probes the
+ * VM first); a manual enable enables unconditionally and keeps its toasts.
+ */
+function requestAudioEnable(context, webview, opts = {}) {
+  // The target is captured HERE — at the user's click / at activation — not when the
+  // queued step finally runs, so an enable can never be applied to a VM the window moved
+  // to in between (the chain re-checks it and aborts instead).
+  const target = opts.target || actionTarget();
+  return audioHandover.enable(target, (t) => (
+    opts.auto ? maybeAutoEnableAudio(context, t) : enableAudio(context, webview, { target: t })
+  ));
+}
+
+/** The console/settings toggle's "off", queued on the same chain (so it can never
+ *  overtake an enable that is still waiting in it). */
+function requestAudioDisable() {
+  return audioHandover.disable();
 }
 
 /** Auto-arm mic passthrough on startup when the saved preference (micPassthrough in
@@ -2307,7 +2377,9 @@ async function maybeAutoEnableAudio(context, target) {
       }
       return; // VM down (or superseded) — stay off silently
     }
-    enableAudio(context, undefined, { auto: true, target: plan.target });
+    // RETURNED, so a chain step that queued this arm stays open until the tunnel is
+    // really up (the enable itself is what the next step's teardown has to wait for).
+    return enableAudio(context, undefined, { auto: true, target: plan.target });
   } catch (_) { /* best-effort: never block activation */ }
 }
 
@@ -2409,7 +2481,7 @@ async function verifyPatchesOnStartup(context) {
       return;
     }
     logLine("repatch: mic passthrough is on but no tunnel is live — retrying auto-arm.");
-    maybeAutoEnableAudio(context, t);
+    void requestAudioEnable(context, undefined, { auto: true, target: t });
   }
 }
 
@@ -3165,8 +3237,12 @@ function handleMessage(message, webview, context) {
       // The console toggle IS the persistent preference: persist it so passthrough
       // auto-arms next session (unifies the two mic switches into one setting).
       persistMicPreference(message.enabled);
-      if (message.enabled) enableAudio(context, webview);
-      else disableAudio();
+      // Both directions ride the single-session chain (requestAudioEnable /
+      // requestAudioDisable): a manual "on" during a switch's teardown must join the
+      // destination's session rather than build a second one, and an "off" must not
+      // overtake an "on" that is still queued.
+      if (message.enabled) void requestAudioEnable(context, webview);
+      else void requestAudioDisable();
       return;
 
     case "saveSettings": {
@@ -3190,8 +3266,8 @@ function handleMessage(message, webview, context) {
         // just on next startup, so changing the setting actually does something.
         const wantMic = message.settings && message.settings.mic === true;
         const micOn = !!(hostAudio && hostAudio.enabled);
-        if (wantMic && !micOn) enableAudio(context, webview);
-        else if (!wantMic && micOn) disableAudio();
+        if (wantMic && !micOn) void requestAudioEnable(context, webview);
+        else if (!wantMic && micOn) void requestAudioDisable();
         // Stock T3 enable/channel changes are live. A source-managed enable or
         // channel change waits for the shared server/Desktop reprovision offered
         // above, so npm can never replace only one end; disabling remains live.
@@ -3856,7 +3932,7 @@ async function activate(context) {
   // it was for, so onInstanceChanged only re-evaluates when the destination REALLY
   // changed (a single-VM window never switches, so it never re-arms).
   audioTargetInstance = activeInstance().name;
-  maybeAutoEnableAudio(context);
+  void requestAudioEnable(context, undefined, { auto: true });
   // Notification watcher: independent of any open dashboard, so an agent can reach
   // the user who never opened the panel. Delayed slightly so the SSH connect doesn't
   // compete with startup work.
@@ -3898,11 +3974,20 @@ function maybeAutoOpenPanel(context) {
 }
 
 function deactivate() {
-  // Release the mic + kill the reverse tunnel on shutdown. Best-effort and
-  // synchronous (deactivate can't reliably await): dispose() tears down the local
-  // side (tunnel child + server + any active native recorder). The VM shim only
-  // streams while a tunnel exists — which it no longer does — so leaving it until the
-  // next explicit disable is harmless; the guard patch is likewise inert without the shim.
+  // CLOSE THE SESSION CHAIN FIRST. Everything still queued on it is refused, and every
+  // step already RUNNING — an auto-arm sitting in its reachability probe, an enable that
+  // has not reached `new audio.HostAudio` yet — asks instances.planEnable on the way
+  // through and gets "refuse" for a closed slot. Without that, a pending arm could
+  // construct a HostAudio (and its `ssh -R`) AFTER the dispose below had already run,
+  // with nothing left in this extension host that could ever tear it down.
+  try { void audioHandover.close(); } catch (_) {}
+  // Then release the mic + kill the reverse tunnel. Best-effort and synchronous
+  // (deactivate can't reliably await): dispose() tears down the local side (tunnel child
+  // + server + any active native recorder). This is the ONE disposal outside the chain,
+  // and it is safe precisely because the chain is closed above: the window is going away,
+  // and there is no one left to await an SSH teardown. The VM shim only streams while a
+  // tunnel exists — which it no longer does — so leaving it until the next explicit
+  // disable is harmless; the guard patch is likewise inert without the shim.
   try { if (hostAudio) hostAudio.dispose(); } catch (_) {}
   hostAudio = undefined;
   try { if (repatchTimer) clearTimeout(repatchTimer); } catch (_) {}
