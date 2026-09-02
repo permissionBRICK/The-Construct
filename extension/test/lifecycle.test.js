@@ -434,5 +434,110 @@ ok("configure: isDebug() drives keepOpen (-NoExit) without an explicit opts.debu
   dbgSpawned && Buffer.from(dbgSpawned.args[dbgSpawned.args.length - 1], "base64").toString("utf16le").length > 0 && dbgSpawned.args.includes("-NoExit"));
 life.configure({ log: () => {}, isDebug: () => false }); // reset so it doesn't leak to other checks
 
+
+// ── Remote instances: the rebuild targets the SERVICE, not a local VM name ───
+// (B7, docs/remote-host.md.) Auto-Install.ps1's -VmName path derives a guest hostname,
+// an mshome address and a local Hyper-V display name — none of which exist for a VM on
+// somebody else's host — so the rebuild actions carry a different parameter set.
+const REMOTE_INST = {
+  name: "work-vm", backend: "hyperv-remote", vmName: "work-vm",
+  vmHost: "buildbox.example.local", sshPort: 2201, hostAlias: "work-vm",
+  keyName: "construct_work-vm_ed25519", configBranch: "vm-work-vm", scriptsDir: null,
+  service: { url: "https://buildbox.example.local:7462", auth: "negotiate" },
+};
+const LOCAL_INST = {
+  name: "work-vm", backend: "hyperv-local", vmName: "work-vm",
+  vmHost: "work-vm.mshome.net", sshPort: 22, hostAlias: "work-vm",
+  keyName: "construct_work-vm_ed25519", configBranch: "vm-work-vm", scriptsDir: null,
+};
+const DEFAULT_INST = {
+  name: "agent-vm", backend: "hyperv-local", vmName: "Agent-VM",
+  vmHost: "agent-vm.mshome.net", sshPort: 22, hostAlias: "agent-vm",
+  keyName: "agent_vm_ed25519", configBranch: "vm", scriptsDir: null,
+};
+const EVERY_PARAM = ["Backend", "ServiceUrl", "InstanceName", "ConfigBranch", "VmName",
+                     "VmHost", "HostAlias", "SshPort", "LocalKeyName"];
+
+const deepEq = (name, actual, expected) =>
+  ok(name, JSON.stringify(actual) === JSON.stringify(expected),
+     `expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+ok("remote: isRemoteBackend normalises like getDriver",
+  life.isRemoteBackend("  HyperV-Remote ") === true && life.isRemoteBackend("hyperv-local") === false &&
+  life.isRemoteBackend(null) === false);
+deepEq("remote: reinstall emits the service parameters",
+  life.instanceArgs("reinstall", REMOTE_INST, EVERY_PARAM),
+  ["-Backend", "hyperv-remote", "-ServiceUrl", "https://buildbox.example.local:7462", "-InstanceName", "work-vm"]);
+ok("remote: ...and never -VmName (that is the LOCAL path)",
+  life.instanceArgs("reinstall", REMOTE_INST, EVERY_PARAM).indexOf("-VmName") < 0);
+deepEq("remote: redownload emits the same set",
+  life.instanceArgs("redownload", REMOTE_INST, EVERY_PARAM),
+  life.instanceArgs("reinstall", REMOTE_INST, EVERY_PARAM));
+// -ConfigBranch is still conditional: "vm-work-vm" is exactly what the provisioner
+// derives from the alias, so there is nothing to emit.
+ok("remote: -ConfigBranch stays conditional (the canonical branch emits nothing)",
+  life.instanceArgs("reinstall", REMOTE_INST, EVERY_PARAM).indexOf("-ConfigBranch") < 0);
+deepEq("remote: an explicit branch IS emitted",
+  life.instanceArgs("reinstall", { ...REMOTE_INST, configBranch: "vm-team" }, EVERY_PARAM),
+  ["-Backend", "hyperv-remote", "-ServiceUrl", "https://buildbox.example.local:7462",
+   "-InstanceName", "work-vm", "-ConfigBranch", "vm-team"]);
+// Reprovision/export are pure SSH to the endpoint, so they are IDENTICAL for both
+// backends — whoever created the VM.
+deepEq("remote: reprovision keeps the endpoint identity, unchanged",
+  life.instanceArgs("reprovision", REMOTE_INST, EVERY_PARAM),
+  ["-VmHost", "buildbox.example.local", "-HostAlias", "work-vm", "-SshPort", "2201",
+   "-LocalKeyName", "construct_work-vm_ed25519"]);
+deepEq("local: the rebuild set is unchanged by B7",
+  life.instanceArgs("reinstall", LOCAL_INST, EVERY_PARAM), ["-VmName", "work-vm"]);
+// THE ZERO-CHANGE BAR: the default instance emits nothing at all, on every action.
+for (const action of ["reprovision", "exportConfig", "reinstall", "redownload", "setCheckpoints"]) {
+  deepEq(`zero-change: the default instance emits no target args (${action})`,
+    life.instanceArgs(action, DEFAULT_INST, EVERY_PARAM), []);
+  deepEq(`zero-change: no instance at all emits none either (${action})`,
+    life.instanceArgs(action, null, EVERY_PARAM), []);
+}
+const defaultInv = life.buildInvocation("reinstall", { settings: {}, backupMode: "save", instance: DEFAULT_INST, instanceParams: EVERY_PARAM });
+ok("zero-change: the default instance's invocation carries no argSpec (bare-value quoting)",
+  defaultInv.argSpec === undefined);
+ok("zero-change: ...and no remote parameter can appear in it",
+  !defaultInv.args.includes("-ServiceUrl") && !defaultInv.args.includes("-Backend") &&
+  !defaultInv.args.includes("-InstanceName"));
+
+// Fail CLOSED on version skew: scripts that predate the remote parameters would run the
+// LOCAL path and rebuild a local VM named after the remote one.
+for (const declared of [[], ["ConfigBranch"], ["Backend", "InstanceName"], ["ServiceUrl", "InstanceName"]]) {
+  const r = life.checkInstanceSupport("reinstall", REMOTE_INST, declared);
+  ok(`skew: reinstall refused when Auto-Install declares [${declared}]`, !!r && r.blocked === true);
+}
+ok("skew: reinstall allowed once all three are declared",
+  life.checkInstanceSupport("reinstall", REMOTE_INST, ["Backend", "ServiceUrl", "InstanceName", "ConfigBranch"]) === null);
+const noSvc = life.checkInstanceSupport("reinstall", { ...REMOTE_INST, service: null }, EVERY_PARAM);
+ok("skew: an entry with no service.url is refused on every version of the scripts",
+  !!noSvc && noSvc.blocked === true && /host service/i.test(noSvc.reason));
+ok("skew: ...and reprovision still works for it (pure SSH to the endpoint)",
+  life.checkInstanceSupport("reprovision", { ...REMOTE_INST, service: null }, EVERY_PARAM) === null);
+
+// ── ELEVATION IS BACKEND-AWARE ───────────────────────────────────────────────
+// A remote rebuild creates no local VM, so it needs no administrator rights — and on a
+// PC where UAC switches to a different admin account, elevating would put the DPAPI
+// token store, instances.json and ~\.ssh in that account's profile. Auto-Install.ps1
+// makes the same call (it skips its own relaunch on the remote path); if the launcher
+// elevated anyway, the script would already be in the wrong profile before it could.
+const remoteOpts = { settings: {}, backupMode: "save", instance: REMOTE_INST, instanceParams: EVERY_PARAM };
+for (const action of ["reinstall", "redownload"]) {
+  const remoteInv = life.buildInvocation(action, remoteOpts);
+  ok(`elevate: a REMOTE ${action} does not elevate`, remoteInv.elevate === false);
+  ok(`elevate: ...and is still destructive (the confirm modal stays)`, remoteInv.destructive === true);
+  const localInv = life.buildInvocation(action, { settings: {}, backupMode: "save", instance: LOCAL_INST, instanceParams: EVERY_PARAM });
+  ok(`elevate: a LOCAL ${action} still elevates (it drives Hyper-V)`, localInv.elevate === true);
+  const defaultInvE = life.buildInvocation(action, { settings: {}, backupMode: "save", instance: DEFAULT_INST, instanceParams: EVERY_PARAM });
+  ok(`elevate: the DEFAULT instance still elevates (zero-change) (${action})`, defaultInvE.elevate === true);
+  ok(`elevate: no instance at all still elevates (zero-change) (${action})`,
+    life.buildInvocation(action, { settings: {}, backupMode: "save" }).elevate === true);
+}
+// setCheckpoints never reaches a remote instance (drivers/index.js refuses it on the
+// checkpoints capability), so its elevation is unchanged.
+ok("elevate: setCheckpoints is untouched by the backend rule",
+  life.buildInvocation("setCheckpoints", { settings: {}, enabled: true }).elevate === true);
+
 console.log(`\n  lifecycle launcher unit tests — ${pass}/${pass + fail} passed\n`);
 process.exit(fail ? 1 : 0);
