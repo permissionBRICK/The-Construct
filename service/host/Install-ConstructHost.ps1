@@ -735,6 +735,23 @@ function Get-ConstructTaskStatus {
     }
 }
 
+function Format-ConstructCommandOutput {
+    <#
+        The first lines a failed command printed, ready to append to an error
+        message -- because "exit -1" alone says nothing about WHY wsl.exe refused.
+        WSL prints UTF-16 with embedded NULs when redirected; those are stripped.
+    #>
+    [CmdletBinding()]
+    param([AllowNull()][AllowEmptyString()][string]$Output, [int]$MaxLines = 8)
+
+    if ([string]::IsNullOrWhiteSpace($Output)) { return " It printed nothing." }
+    $lines = @(($Output -replace "`0", "") -split "\r?\n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    if ($lines.Count -eq 0) { return " It printed nothing." }
+    $shown = @($lines | Select-Object -First $MaxLines)
+    $more = if ($lines.Count -gt $shown.Count) { " (+$($lines.Count - $shown.Count) more line(s))" } else { "" }
+    return " It said:`n    " + ($shown -join "`n    ") + $more
+}
+
 function Invoke-AsLocalSystem {
     <#
         Run a program as LocalSystem and return @{ ExitCode; Output; Simulated }.
@@ -1040,7 +1057,8 @@ if ($SkipPrereqs) {
         Write-Note "-WhatIf: not running anything as LocalSystem, so the distro check is not performed."
     } else {
         if ($listing.ExitCode -ne 0) {
-            throw "Could not list the WSL distros as LocalSystem (exit $($listing.ExitCode)). That is the identity the service runs as, so its distro cannot be verified; fix it, or re-run with -SkipPrereqs to install anyway."
+            $said = Format-ConstructCommandOutput -Output $listing.Output
+            throw "Could not list the WSL distros as LocalSystem (exit $($listing.ExitCode)). That is the identity the service runs as, so its distro cannot be verified; fix it, or re-run with -SkipPrereqs to install anyway.$said"
         }
 
         $systemDistros = @($listing.Output -split "`n" |
