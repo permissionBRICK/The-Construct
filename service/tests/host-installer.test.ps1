@@ -183,7 +183,7 @@ Write-Host "=== Helpers ===" -ForegroundColor Cyan
 foreach ($fn in $functions) {
     if ($fn.Name -in @("Split-PortRange", "Get-ListenPort", "Get-ConstructAclPolicy",
                        "Get-ConstructTrustedSid", "Get-ConstructAncestorRiskMask",
-                       "Get-ConstructWriteRiskMask", "Get-ConstructUnsafeAce", "Resolve-ConstructAceSid", "Sort-ConstructHardeningOrder",
+                       "Get-ConstructWriteRiskMask", "Get-ConstructUnsafeAce", "Resolve-ConstructAceSid", "Sort-ConstructHardeningOrder", "Test-ConstructTaskStillRunning",
                        "ConvertTo-ConstructPayload", "New-ConstructRelaunchScript",
                        "New-ConstructLocalSystemScript")) {
         . ([scriptblock]::Create($fn.Extent.Text))
@@ -587,6 +587,24 @@ Write-Host "=== WSL under LocalSystem ===" -ForegroundColor Cyan
 # administrator says nothing about what LocalSystem will see at the first VM build.
 ok "the installer can run a command as LocalSystem" ($installText -match 'function Invoke-AsLocalSystem')
 ok "it uses the LocalSystem SID for the task principal" ($installText -match 'New-ScheduledTaskPrincipal -UserId "S-1-5-18"')
+# Field failure (2026-09-02): Get-ScheduledTask -TaskName died with 0x80041318 because of an
+# unrelated corrupt task in the root folder, and the loop then reported 267009
+# (SCHED_S_TASK_RUNNING) as the WSL command's exit code.
+$taskConsts = $installAst.FindAll({ $args[0] -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+    $args[0].Left.Extent.Text -like '$script:Sched*' -or $args[0].Left.Extent.Text -like '$script:TaskState*' -or $args[0].Left.Extent.Text -eq '$script:ConstructTaskPath' }, $true)
+foreach ($c in $taskConsts) { . ([scriptblock]::Create($c.Extent.Text)) }
+ok "task runner: a result of SCHED_S_TASK_RUNNING (267009) is 'still running', never an exit code" `
+    (Test-ConstructTaskStillRunning -Status @{ State = 3; LastTaskResult = 267009 })
+ok "task runner: COM state 4 (running) is still running" (Test-ConstructTaskStillRunning -Status @{ State = 4; LastTaskResult = 0 })
+ok "task runner: the CIM 'Running' string is still running" (Test-ConstructTaskStillRunning -Status @{ State = 'Running'; LastTaskResult = 0 })
+ok "task runner: ready + exit 0 is finished" (-not (Test-ConstructTaskStillRunning -Status @{ State = 3; LastTaskResult = 0 }))
+ok "task runner: ready + a real non-zero exit is finished" (-not (Test-ConstructTaskStillRunning -Status @{ State = 3; LastTaskResult = 1 }))
+ok "task runner: an unreadable status counts as still running (keeps waiting instead of misreporting)" (Test-ConstructTaskStillRunning -Status $null)
+ok "task runner: the one-shot task lives in its own folder, not the root" ($script:ConstructTaskPath -eq '\Construct\' -and $installText -match 'Register-ScheduledTask -TaskName \$taskName -TaskPath \$script:ConstructTaskPath')
+ok "task runner: polls through the Schedule.Service COM object" ($installText -match 'New-Object -ComObject Schedule\.Service')
+ok "task runner: the CIM fallback is scoped to the Construct folder" ($installText -match 'Get-ScheduledTask\s+-TaskName \$TaskName -TaskPath \$script:ConstructTaskPath')
+ok "task runner: the exit code comes from the final status, not a pre-loop Get-ScheduledTaskInfo" ($installText -match 'ExitCode = \[int\]\$status\.LastTaskResult' -and -not ($installText -match '\$info = Get-ScheduledTaskInfo -TaskName \$taskName\s*$'))
+ok "task runner: cleanup unregisters from the same folder" ($installText -match 'Unregister-ScheduledTask -TaskName \$taskName -TaskPath \$script:ConstructTaskPath')
 ok "it lists the distros LocalSystem can see" (
     $installText -match 'Invoke-AsLocalSystem -FilePath "wsl\.exe" -ArgumentList @\("-l", "-q"\)')
 ok "a LocalSystem check that cannot run fails the install" ($installText -match 'Could not list the WSL distros as LocalSystem')
