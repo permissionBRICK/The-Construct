@@ -65,8 +65,9 @@ function Get-InstallerFunctionText([string]$Name) {
 # below (and each other) can see them -- doing it inside a helper would define them in
 # that helper's scope and nowhere else.
 foreach ($fname in @('Test-ConstructPriorLocalInstall', 'Resolve-ConstructInstallMode',
-                     'Test-ConstructRemoteInstanceName', 'Assert-ConstructRemoteRegistrySpace',
-                     'New-ConstructRemoteProvisionArgs')) {
+                     'Test-ConstructRemoteInstanceName', 'New-ConstructRemoteInstanceEntry',
+                     'Get-ConstructRemoteInstanceConflict', 'New-ConstructRemoteVmRecord',
+                     'Save-ConstructInstanceEntry', 'New-ConstructRemoteProvisionArgs')) {
     $fnText = Get-InstallerFunctionText $fname
     ok "extract: Auto-Install.ps1 defines $fname" ($fnText -ne "")
     if ($fnText) { Invoke-Expression $fnText }
@@ -233,10 +234,11 @@ ok "name: a plain label is valid" (Test-ConstructRemoteInstanceName "work-vm")
 # what keeps that refusal from arriving after a VM has been built on a shared host.
 ok "name: the reserved default instance name is refused" (-not (Test-ConstructRemoteInstanceName "agent-vm"))
 ok "name: ...and the refusal happens before anything is created" (
-    # The validator gates the name loop, which sits above the POST /vms in the flow; the
-    # two guards after it (an existing entry, and the registry collision) also precede it.
+    # The validator gates the name loop, which sits above the create-and-record step (the
+    # POST /vms) in the flow; the two guards after it -- an existing entry, and the
+    # pre-create registry check -- also precede it.
     $autoAst.Extent.Text.IndexOf('while (-not (Test-ConstructRemoteInstanceName $instName))') -lt
-    $autoAst.Extent.Text.IndexOf('$created = New-ConstructVm'))
+    $autoAst.Extent.Text.IndexOf('New-ConstructRemoteVmRecord -Name $instName'))
 ok "name: digits and a leading digit are valid" (Test-ConstructRemoteInstanceName "9vm")
 ok "name: 40 characters is the limit" (Test-ConstructRemoteInstanceName ("a" * 40))
 ok "name: 41 is too long" (-not (Test-ConstructRemoteInstanceName ("a" * 41)))
@@ -247,24 +249,98 @@ ok "name: a dot is invalid (it is a DNS LABEL, not a name)" (-not (Test-Construc
 ok "name: a path separator is invalid (it becomes a key FILE name)" (-not (Test-ConstructRemoteInstanceName "a/b"))
 ok "name: whitespace is invalid" (-not (Test-ConstructRemoteInstanceName "work vm"))
 
-# ── (e) The registry-space guard ────────────────────────────────────────────
-# The reader treats sshHost as a unique identity field, so a second VM on one host
-# service would make BOTH entries unloadable. That has to be found before a VM is
-# created, not after.
+# ── (e) The registry conflict check (the SHARED rules, not a local copy) ────
+# The endpoint identity is the COMPOSITE (sshHost, sshPort) in both readers, because
+# several VMs on ONE host service are told apart by the forward the service allocated
+# them. So:
+#   * the PRE-create check may only judge what is knowable before the service allocates
+#     that forward -- the name and the identities derived from it;
+#   * the POST-create check judges the real endpoint, and a conflict there rolls the VM
+#     back.
+# Both questions are answered by lib/AgentVm.Instances.ps1 itself
+# (Get-ConstructInstanceEntryProblem + Get-ConstructInstanceCollision), so the installer
+# holds no second copy of a rule.
 Write-Host ""
-Write-Host "=== Registry-space guard ===" -ForegroundColor Cyan
-$occupied = New-Snapshot @{
-    'work-vm' = [pscustomobject]@{ Name = 'work-vm'; Backend = 'hyperv-remote'; VmHost = 'buildbox.example.local'; SshPort = 2201 }
-} $true
-ok "space: a different host is fine" (-not (Test-Throws { Assert-ConstructRemoteRegistrySpace -Registry $occupied -Name 'other-vm' -SshHost 'otherbox.example.local' }))
-ok "space: the SAME host is refused" (Test-Throws { Assert-ConstructRemoteRegistrySpace -Registry $occupied -Name 'other-vm' -SshHost 'buildbox.example.local' })
-ok "space: ...case-insensitively (a host name is not case-sensitive)" (Test-Throws { Assert-ConstructRemoteRegistrySpace -Registry $occupied -Name 'other-vm' -SshHost 'BUILDBOX.example.local' })
-$spaceMsg = Get-ThrowMessage { Assert-ConstructRemoteRegistrySpace -Registry $occupied -Name 'other-vm' -SshHost 'buildbox.example.local' }
-ok "space: ...naming the entry that is in the way" ($spaceMsg -match "work-vm")
-ok "space: ...and saying both would become unloadable" ($spaceMsg -match 'unloadable')
-# A REBUILD re-uses its own address, which is not a collision with itself.
-ok "space: an instance never collides with itself (this is how reinstall works)" `
-    (-not (Test-Throws { Assert-ConstructRemoteRegistrySpace -Registry $occupied -Name 'work-vm' -SshHost 'buildbox.example.local' }))
+Write-Host "=== Registry conflict check (pre-create vs. post-create) ===" -ForegroundColor Cyan
+$regHome = Join-Path $tmpRoot "appdata"
+New-Item -ItemType Directory -Path (Join-Path $regHome "The-Construct") -Force | Out-Null
+$savedLocalAppData = $env:LOCALAPPDATA
+$env:LOCALAPPDATA = $regHome
+try {
+    # A PC that already has work-vm on the service host, on the port the service gave it,
+    # plus a hand-written entry that has claimed the branch other-vm would derive.
+    Set-Content -LiteralPath (Join-Path $regHome "The-Construct/instances.json") -Encoding UTF8 -Value @'
+{ "version": 1, "defaultInstance": "work-vm",
+  "instances": {
+    "work-vm": { "backend": "hyperv-remote", "vmName": "work-vm", "sshHost": "buildbox.example.local",
+                 "sshPort": 2201, "hostAlias": "work-vm", "keyName": "construct_work-vm_ed25519",
+                 "configBranch": "vm-work-vm" },
+    "lab-vm":  { "backend": "hyperv-remote", "vmName": "lab-vm", "sshHost": "buildbox.example.local",
+                 "sshPort": 2202, "hostAlias": "lab-vm", "keyName": "construct_lab-vm_ed25519",
+                 "configBranch": "vm-taken-vm" }
+  } }
+'@
+    $entryFor = {
+        param([string]$Name, [string]$SshHost, [int]$Port)
+        New-ConstructRemoteInstanceEntry -Name $Name -SshHost $SshHost -SshPort $Port `
+            -ServiceUrl 'https://buildbox.example.local:7462' -ServiceAuth 'negotiate' -Owner 'DOMAIN\alice'
+    }
+    $conflict = {
+        param([string]$Name, [string]$SshHost, [int]$Port, [switch]$Pre)
+        @(Get-ConstructRemoteInstanceConflict -Name $Name -Entry (& $entryFor $Name $SshHost $Port) `
+              -IgnoreEndpoint:$Pre -ScriptsDir $repoRoot)
+    }
+
+    # The entry itself: one VM name for the service and the rebuild, and the derived
+    # alias / key / branch this PC addresses it by.
+    $e = & $entryFor 'other-vm' 'buildbox.example.local' 2203
+    ok "entry: vmName IS the instance name (both readers pin it for hyperv-remote)" ($e['vmName'] -ceq 'other-vm')
+    ok "entry: hostAlias is the bare name"      ($e['hostAlias'] -ceq 'other-vm')
+    ok "entry: keyName is instance-scoped"      ($e['keyName'] -ceq 'construct_other-vm_ed25519')
+    ok "entry: configBranch is its own ref"     ($e['configBranch'] -ceq 'vm-other-vm')
+    ok "entry: the endpoint is the service's"   ($e['sshHost'] -ceq 'buildbox.example.local' -and $e['sshPort'] -eq 2203)
+    ok "entry: the backend is hyperv-remote"    ($e['backend'] -ceq 'hyperv-remote')
+    ok "entry: the service is recorded"         ($e['service'].url -ceq 'https://buildbox.example.local:7462')
+
+    # THE REGRESSION THIS SECTION EXISTS FOR: a second VM on the SAME service host is the
+    # intended flow, so the pre-create check must not refuse it -- the port it will be
+    # told apart by does not exist yet.
+    ok "pre: a second VM on the SAME service host is NOT refused before creation" (
+        (& $conflict 'other-vm' 'buildbox.example.local' 22 -Pre).Count -eq 0)
+    ok "pre: ...and neither is one on another host" (
+        (& $conflict 'other-vm' 'otherbox.example.local' 22 -Pre).Count -eq 0)
+    # ...while the identities that ARE knowable still bite before anything is created.
+    $preBranch = & $conflict 'taken-vm' 'buildbox.example.local' 22 -Pre
+    ok "pre: a name whose derived branch is already claimed IS refused" ($preBranch.Count -gt 0)
+    ok "pre: ...naming the entry in the way and the identity" (
+        ($preBranch -join '; ') -match 'lab-vm' -and ($preBranch -join '; ') -match 'configBranch')
+    # A REBUILD replaces its own entry, so it never collides with itself.
+    ok "pre: an instance never collides with itself (this is how reinstall works)" (
+        (& $conflict 'work-vm' 'buildbox.example.local' 22 -Pre).Count -eq 0)
+
+    # After the create, the FULL rule set -- endpoint included.
+    ok "post: the SAME host on a DIFFERENT port is a different endpoint, and loads" (
+        (& $conflict 'other-vm' 'buildbox.example.local' 2203).Count -eq 0)
+    $postSame = & $conflict 'other-vm' 'buildbox.example.local' 2201
+    ok "post: the SAME host AND port is one machine -- refused" ($postSame.Count -gt 0)
+    ok "post: ...naming the entry that is in the way" (($postSame -join '; ') -match 'work-vm')
+    ok "post: ...and the composite endpoint" (($postSame -join '; ') -match 'sshHost/sshPort')
+    ok "post: a rebuild re-using its OWN endpoint is not a conflict" (
+        (& $conflict 'work-vm' 'buildbox.example.local' 2201).Count -eq 0)
+    # The port comparison is the readers' own (numeric), and the host comparison theirs
+    # too (case-insensitive) -- proof the installer is asking THEM, not re-implementing.
+    ok "post: the host comparison is case-insensitive, like the readers'" (
+        (& $conflict 'other-vm' 'BUILDBOX.Example.local' 2201).Count -gt 0)
+    # A registry that does not exist yet conflicts with nothing (the very first VM).
+    Remove-Item -LiteralPath (Join-Path $regHome "The-Construct/instances.json") -Force
+    ok "post: with no registry at all there is nothing to conflict with" (
+        (& $conflict 'other-vm' 'buildbox.example.local' 2201).Count -eq 0)
+    # ...but the DEFAULT instance is always there, and its own endpoint stays reserved.
+    ok "post: the synthesized default instance's endpoint is still reserved" (
+        (& $conflict 'other-vm' 'agent-vm.mshome.net' 22).Count -gt 0)
+} finally {
+    $env:LOCALAPPDATA = $savedLocalAppData
+}
 
 # ── (f) The provisioner splat ───────────────────────────────────────────────
 # Get one of these wrong and the provisioner aims at the DEFAULT LOCAL VM.
@@ -323,30 +399,143 @@ ok "args: ...while the identity arguments are still there (they are non-negotiab
     ($args4['VmHost'] -eq 'buildbox.example.local' -and $args4['ServiceUrl'] -eq 'https://b:7462')
 $script:RemoteProvCmd = [pscustomobject]@{ Parameters = $fullParams }
 
-# ── (f2) The create path's ORDER, and its rollback ──────────────────────────
-# These steps are top-level flow rather than functions, so they are pinned at the source
-# level (the repo's established way of guarding wiring that cannot be called in
-# isolation -- see extension/test/vmpower.test.js). The ORDER is the whole safety story:
-# a VM that exists but cannot be recorded is unreachable AND un-recreatable.
+# ── (f2) The create path, DRIVEN end to end (and its ordering) ──────────────
+# The create -> registry-check -> rollback-or-record sequence lives in ONE function
+# (New-ConstructRemoteVmRecord) precisely so it can be RUN here against a fake service
+# instead of only being described by source-order assertions. The contract this section
+# exists for: two VMs on one host service, on the ports the service allocated them, BOTH
+# register -- and the same host:port rolls the second create back without recording it.
+Write-Host ""
+Write-Host "=== Create path: two VMs on one service host, and the duplicate-endpoint rollback ===" -ForegroundColor Cyan
+$flowRoot = Join-Path $tmpRoot "flow"
+New-Item -ItemType Directory -Path (Join-Path $flowRoot "The-Construct") -Force | Out-Null
+$savedLocalAppData2 = $env:LOCALAPPDATA
+$env:LOCALAPPDATA = $flowRoot
+try {
+    # The fake host service: it allocates the port the scenario dictates, and remembers
+    # every VM it was asked to create or delete.
+    $script:svcCreated = New-Object System.Collections.Generic.List[string]
+    $script:svcRemoved = New-Object System.Collections.Generic.List[string]
+    $script:svcPort    = 2201
+    $script:svcHost    = 'buildbox.example.local'
+    function New-ConstructVm {
+        param($Descriptor)
+        $script:svcCreated.Add([string]$Descriptor.Name)
+        return [pscustomobject]@{
+            Endpoint = [pscustomobject]@{ SshHost = $script:svcHost; SshPort = $script:svcPort }
+            VmToken  = "token-for-$($Descriptor.Name)"
+        }
+    }
+    function Remove-ConstructVm { param([string]$Name) $script:svcRemoved.Add($Name) }
+    # The installer's own output helpers (the real ones live above the remote block).
+    # Write-Warning is the real cmdlet; the rollback case deliberately warns, so its one
+    # line is silenced rather than left to look like a test failure.
+    function Write-Ok   { param($m) }
+    function Write-Note { param($m) }
+    $savedWarnPref = $WarningPreference
+    $WarningPreference = 'SilentlyContinue'
+
+    $desc = { param([string]$n) @{ Name = $n; ProcessorCount = 4; MemoryGB = 8; DiskGB = 50; Nested = $true; AutomaticCheckpoints = $false } }
+    $record = {
+        param([string]$n, [int]$port)
+        $script:svcPort = $port
+        New-ConstructRemoteVmRecord -Name $n -Descriptor (& $desc $n) `
+            -ServiceUrl 'https://buildbox.example.local:7462' -ServiceAuth 'negotiate' `
+            -Owner 'DOMAIN\alice' -RegistryPath (Join-Path $flowRoot "The-Construct/instances.json") `
+            -ScriptsDir $repoRoot
+    }
+
+    # VM 1 -- the first instance on a PC with no registry at all.
+    $r1 = & $record 'work-vm' 2201
+    ok "flow: the first VM is created on the service" ($script:svcCreated -contains 'work-vm')
+    ok "flow: ...and recorded"                        ($r1.Recorded -eq $true)
+    ok "flow: ...at the endpoint the service allocated" (
+        $r1.Endpoint.SshPort -eq 2201 -and $r1.Entry['sshPort'] -eq 2201)
+    ok "flow: ...and its one-time token is handed back" ($r1.VmToken -eq 'token-for-work-vm')
+
+    # VM 2 -- the SAME service host, the NEXT port the service allocated. This is the
+    # multi-VM flow the old host-only check made impossible.
+    $r2 = & $record 'other-vm' 2202
+    ok "flow: a second VM on the SAME host is created and recorded" (
+        ($script:svcCreated -contains 'other-vm') -and $r2.Recorded -eq $true)
+    ok "flow: ...with no rollback" ($script:svcRemoved.Count -eq 0)
+    # ...and the REGISTRY on disk really holds both, read back by the real library.
+    & {
+        . (Join-Path $repoRoot "lib/AgentVm.Instances.ps1")
+        $back = Read-ConstructInstances
+        ok "flow: both instances are in instances.json" (
+            $back.Instances.ContainsKey('work-vm') -and $back.Instances.ContainsKey('other-vm'))
+        ok "flow: ...on one host, told apart by their ports" (
+            $back.Instances['work-vm'].VmHost -eq 'buildbox.example.local' -and
+            $back.Instances['other-vm'].VmHost -eq 'buildbox.example.local' -and
+            $back.Instances['work-vm'].SshPort -eq 2201 -and $back.Instances['other-vm'].SshPort -eq 2202)
+        ok "flow: ...and the reader accepted the file with no problems" (@($back.Problems).Count -eq 0)
+        ok "flow: each VM keeps its own key file and config branch" (
+            $back.Instances['other-vm'].KeyName -ceq 'construct_other-vm_ed25519' -and
+            $back.Instances['other-vm'].ConfigBranch -ceq 'vm-other-vm')
+    }
+
+    # VM 3 -- the service hands out an endpoint another instance already occupies. The
+    # create must be ROLLED BACK and nothing recorded.
+    $threw = $false; $msg = ""
+    try { [void](& $record 'third-vm' 2201) } catch { $threw = $true; $msg = [string]$_.Exception.Message }
+    ok "flow: a duplicate host:port throws rather than recording" $threw
+    ok "flow: ...naming the instance already there"  ($msg -match 'work-vm')
+    ok "flow: ...and the composite endpoint"         ($msg -match 'sshHost/sshPort')
+    ok "flow: ...saying the VM was removed again"    ($msg -match 'was removed from')
+    ok "flow: the create WAS rolled back on the service" ($script:svcRemoved -contains 'third-vm')
+    & {
+        . (Join-Path $repoRoot "lib/AgentVm.Instances.ps1")
+        $back = Read-ConstructInstances
+        ok "flow: the rolled-back VM is NOT in the registry" (-not $back.Instances.ContainsKey('third-vm'))
+        ok "flow: ...and the two good entries are untouched" (
+            $back.Instances.ContainsKey('work-vm') -and $back.Instances.ContainsKey('other-vm'))
+    }
+} finally {
+    $env:LOCALAPPDATA = $savedLocalAppData2
+    if ($null -ne $savedWarnPref) { $WarningPreference = $savedWarnPref }
+    foreach ($fn in @('New-ConstructVm', 'Remove-ConstructVm', 'Write-Ok', 'Write-Note')) {
+        if (Test-Path "function:$fn") { Remove-Item "function:$fn" -Force }
+    }
+}
+
+# ...and the ORDER of the steps around that function, which is the rest of the safety
+# story: nothing is created before the pre-check, and nothing is provisioned before the
+# instance is recorded.
 Write-Host ""
 Write-Host "=== Create-path ordering and rollback ===" -ForegroundColor Cyan
 $autoText  = $autoAst.Extent.Text
-$iCreate   = $autoText.IndexOf('$created = New-ConstructVm')
-$iAssert   = $autoText.IndexOf('Assert-ConstructRemoteRegistrySpace -Registry $registry -Name $instName -SshHost ([string]$endpoint.SshHost)')
-$iRecord   = $autoText.IndexOf('Save-ConstructInstanceEntry -Name $instName -Replace')
+$recordFn  = Get-InstallerFunctionText 'New-ConstructRemoteVmRecord'
+$iPre      = $autoText.IndexOf('Get-ConstructRemoteInstanceConflict -Name $instName -IgnoreEndpoint')
+$iRecordVm = $autoText.IndexOf('New-ConstructRemoteVmRecord -Name $instName')
 $iWait     = $autoText.IndexOf('Wait-ConstructVmReachable -Name $instName')
 # The FIRST '& $provisionScript' in the file belongs to the reprovision branch, which
-# sits above the create path -- search from the create onwards.
-$iProvision= $autoText.IndexOf('& $provisionScript @provArgs', $iCreate)
-ok "order: the endpoint is checked against the registry after the create" ($iCreate -gt 0 -and $iAssert -gt $iCreate)
-ok "order: the instance is RECORDED before provisioning runs" ($iRecord -gt $iAssert -and $iRecord -lt $iProvision)
-ok "order: ...and before the reachability wait, which can take ten minutes" ($iRecord -lt $iWait)
+# sits above the create path -- search from the create-and-record call onwards.
+$iProvision= $autoText.IndexOf('& $provisionScript @provArgs', $iRecordVm)
+ok "order: the pre-create check runs BEFORE anything is created" ($iPre -gt 0 -and $iPre -lt $iRecordVm)
+ok "order: ...and it excludes the endpoint, which does not exist yet" (
+    $autoText.IndexOf('-IgnoreEndpoint', $iPre) -gt 0)
+# The pre-create check must not look at sshHost as an identity of its own: two VMs on one
+# service host, told apart by the port the service allocates, are the intended flow.
+ok "order: the host-only pre-check is gone" (
+    $autoText.IndexOf('Assert-ConstructRemoteRegistrySpace') -lt 0 -and
+    $autoText.IndexOf('one VM per host service') -lt 0)
+ok "order: the create+record step runs before provisioning" ($iRecordVm -gt 0 -and $iProvision -gt $iRecordVm)
+ok "order: ...and before the reachability wait, which can take ten minutes" ($iRecordVm -lt $iWait)
+# Inside the function: create -> build the entry -> check it -> write THAT entry.
+$fCreate = $recordFn.IndexOf('New-ConstructVm -Descriptor $Descriptor')
+$fEntry  = $recordFn.IndexOf('$entry = New-ConstructRemoteInstanceEntry -Name $Name')
+$fCheck  = $recordFn.IndexOf('Get-ConstructRemoteInstanceConflict -Name $Name -Entry $entry')
+$fSave   = $recordFn.IndexOf('Save-ConstructInstanceEntry -Name $Name -Replace -MakeDefault:$MakeDefault -Entry $entry')
+ok "order: the endpoint is checked against the registry after the create" (
+    $fCreate -ge 0 -and $fEntry -gt $fCreate -and $fCheck -gt $fEntry)
+ok "order: the checked entry is the one that gets WRITTEN (built once)" ($fSave -gt $fCheck)
 # The service advertises its own PublicHost, which can differ from the URL's host, so the
 # post-create check is the first moment the real address is known. A failure there must
 # not strand a VM on somebody else's machine.
-$rollback = $autoText.Substring($iAssert, [Math]::Min(1400, $autoText.Length - $iAssert))
-ok "rollback: the post-create check is wrapped so a failure can be handled" ($rollback -match '\}\s*catch\s*\{')
-ok "rollback: ...and removes the VM it just created" ($rollback -match 'Remove-ConstructVm -Name \$instName')
+$rollback = $recordFn.Substring($fCheck)
+ok "rollback: a conflict after the create is handled, not thrown blind" ($rollback -match 'if \(\$conflicts\.Count -gt 0\)')
+ok "rollback: ...and removes the VM it just created" ($rollback -match 'Remove-ConstructVm -Name \$Name')
 ok "rollback: ...saying so, rather than failing silently" ($rollback -match 'was removed from')
 ok "rollback: a failed rollback says the VM is STILL THERE" ($rollback -match 'still EXISTS')
 
@@ -528,8 +717,11 @@ Write-Host "=== Registry entry writing (Add-ConstructInstance) ===" -ForegroundC
     ok "reg: the DEFAULT instance can never be replaced" (Test-Throws { Add-ConstructInstance -Registry $back -Name 'agent-vm' -Entry $remoteEntry })
     ok "reg: an invalid instance name is refused" (Test-Throws { Add-ConstructInstance -Registry $reg -Name 'Work VM' -Entry $remoteEntry })
     # 'hyperv-remote' really is a known backend now -- if it were not, every entry the
-    # remote flow writes would be refused here.
-    ok "reg: 'hyperv-remote' is a known backend" (@(Get-ConstructInstanceEntryProblem -Name 'x-vm' -Entry $remoteEntry).Count -eq 0)
+    # remote flow writes would be refused here. Checked under the entry's OWN name: for
+    # this backend both readers pin vmName = the instance name.
+    ok "reg: 'hyperv-remote' is a known backend" (@(Get-ConstructInstanceEntryProblem -Name 'work-vm' -Entry $remoteEntry).Count -eq 0)
+    ok "reg: ...and the entry is refused under ANOTHER name (vmName would split the identity)" (
+        @(Get-ConstructInstanceEntryProblem -Name 'x-vm' -Entry $remoteEntry).Count -gt 0)
     # ...and the reader's spelling rule still bites where it matters: a miscased LOCAL id
     # is read as "unknown" by the case-sensitive comparisons and as the LOCAL driver by
     # the lowercasing JS lookup, so it must not load under either reading.
@@ -537,16 +729,21 @@ Write-Host "=== Registry entry writing (Add-ConstructInstance) ===" -ForegroundC
     ok "reg: a miscased local backend id is refused" (Test-Throws { Add-ConstructInstance -Registry $reg -Name 'other-vm' -Entry $miscased })
     $emptyBackend = @{} + $remoteEntry; $emptyBackend['backend'] = '   '
     ok "reg: a present-but-empty backend is refused (it must never derive 'local')" (Test-Throws { Add-ConstructInstance -Registry $reg -Name 'other-vm' -Entry $emptyBackend })
-    # The collision the remote flow actually hits: two VMs on one host service.
+    # The multi-VM case the remote flow is FOR: a second VM on the same host service,
+    # told apart by the port the service allocated it.
     $sameHost = @{} + $remoteEntry; $sameHost['vmName'] = 'other-vm'; $sameHost['hostAlias'] = 'other-vm'
     $sameHost['keyName'] = 'construct_other-vm_ed25519'; $sameHost['configBranch'] = 'vm-other-vm'
+    $otherPort = @{} + $sameHost; $otherPort['sshPort'] = 2202
+    ok "reg: a second VM on the same host, on ITS OWN port, is added" (
+        (Add-ConstructInstance -Registry $back -Name 'other-vm' -Entry $otherPort).Instances.ContainsKey('other-vm'))
+    # ...while the same host AND port is one machine under two names.
     $collide = Get-ThrowMessage { Add-ConstructInstance -Registry $back -Name 'other-vm' -Entry $sameHost }
-    ok "reg: a second VM at the SAME address is refused, not written" ($collide -ne "")
+    ok "reg: a second VM at the SAME address AND port is refused, not written" ($collide -ne "")
     ok "reg: ...and the message names the instance being added" ($collide -match 'other-vm')
     ok "reg: nothing was written by the refusal" ((Read-ConstructInstances -Path $regPath).Instances.Keys.Count -eq $back.Instances.Keys.Count)
 
     # The problem list is the reader's own rule set, reported where the entry is built.
-    ok "reg: a good entry reports no problems" (@(Get-ConstructInstanceEntryProblem -Name 'x-vm' -Entry $remoteEntry).Count -eq 0)
+    ok "reg: a good entry reports no problems" (@(Get-ConstructInstanceEntryProblem -Name 'work-vm' -Entry $remoteEntry).Count -eq 0)
     ok "reg: an invalid name reports one" (@(Get-ConstructInstanceEntryProblem -Name 'X VM' -Entry $remoteEntry).Count -gt 0)
 }
 
