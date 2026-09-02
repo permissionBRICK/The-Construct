@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <!--
+      Required by [LibraryImport] (the source-generated P/Invoke used for GetExtendedTcpTable): the
+      generator emits the marshalling stub itself. No hand-written unsafe code lives in this project.
+    -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <!--
+    Deliberately net10.0 and NOT net10.0-windows: the host project references this one, and the whole
+    API (and its test suite) has to keep building and running on Linux. Everything that only works on
+    Windows is marked [SupportedOSPlatform("windows")] and is registered only when
+    OperatingSystem.IsWindows() — see Constructd.Api/Composition/ServiceComposition.cs.
+  -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\Constructd.Core\Constructd.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Logging only: the composition root does the DI wiring, so no container dependency here. -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
+  </ItemGroup>
+
+</Project>
