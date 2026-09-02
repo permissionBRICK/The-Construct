@@ -111,6 +111,25 @@ let notifyInstance = null;
  *  per window, retargeted on a switch exactly like the notification watcher. */
 let forwarderSession = null;   // forwarder.Forwarder | null
 let forwarderInstance = null;  // the instance name it was opened for
+/**
+ * Ownership of the ONE forwarder slot (instances.createSessionOwner), the twin of
+ * `audioSlot`. A start claims it BEFORE its only await (the transport build, which reads
+ * SecretStorage for a remote instance) and everything after that await — publishing the
+ * session, and every snapshot it pushes — is gated on still owning the claim.
+ * stopForwarder() takes the slot away, which is what makes a start that is still in flight
+ * unable to leave a polling session, an `ssh -L` or a listening port behind it.
+ */
+const forwarderSlot = instances.createSessionOwner();
+/**
+ * The instance a forwarder has already been asked to serve since this window last SAW that
+ * VM up. It is the edge that makes the forwarder lazy: a VM that is up is asked ONCE per
+ * connect, so an older guest that answered "no spool" is not re-probed by every 30 s
+ * refresh, and a window that has established nothing starts nothing. Cleared by a switch,
+ * by the setting going off and by the VM going down — i.e. exactly the events after which
+ * asking again is right. Not `forwarderInstance`: that one is null whenever the attempt
+ * produced no session, which is the case the retry rule is about.
+ */
+let forwarderArmed = null;
 /** The last snapshot it pushed, so a fresh webview renders the card immediately. */
 let cachedForwards = null;
 /** The active instance's idle policy (remote only), cached for the state push. */
@@ -596,12 +615,16 @@ async function refreshState(webview) {
   // followed by a gate check, so a stage that outlives a switch is dropped rather than
   // posted — the same discipline the usagePeriod binding already used for periods.
   const inst = activeInstance();
-  const gate = instanceGate.token();
+  const target = instances.captureTarget(instanceGate, inst);
+  const gate = target.token;
   const probed = await probeOnce(inst);
   if (!instanceGate.valid(gate)) return;
   const state = withProjects(await withVmState(withLocalState(probed, inst), inst));
   if (!instanceGate.valid(gate)) return;
   postState(webview, state);
+  // The reading this window just took IS the forwarder's trigger — it never probes on its
+  // own, and never starts against a VM nothing has established is up.
+  noteForwarderPresence(target, state);
   const aug = await augmentUpdates(state);
   if (!instanceGate.valid(gate)) return;
   if (aug !== state) postState(webview, aug);
@@ -633,6 +656,9 @@ async function refreshAll() {
   const state = withProjects(await withVmState(withLocalState(probed, inst), inst));
   if (!instanceGate.valid(gate)) return;
   for (const w of liveWebviews) postState(w, state);
+  // Same reading, same trigger (see refreshState): the forwarder is started — or let go —
+  // by what the status flow established about the instance THIS refresh captured.
+  noteForwarderPresence(refreshTarget, state);
   const aug = await augmentUpdates(state);
   if (!instanceGate.valid(gate)) return;
   if (aug !== state) for (const w of liveWebviews) postState(w, aug);
@@ -881,42 +907,200 @@ async function buildForwarderTransport(inst) {
   return forwarderui.createRemoteTransport({ ssh, cfg, client });
 }
 
-/** Open the forwarder for the active instance. Idempotent per instance. */
-async function startForwarder() {
+/**
+ * The forwarder's SERIALIZED session chain (instances.createHandover) — the same one the
+ * mic tunnel runs on, for the same reason: a forwarder is a live per-VM connection, and
+ * exactly one of them may exist at a time.
+ *
+ * Run beside each other instead, a start and a stop can interleave across the transport
+ * build's await: an A→B→A switch (or an off/on of the setting) let two sessions for A be
+ * constructed, the second overwrote the module's only reference to the first, and the
+ * orphan kept its poll, its `ssh -L` children and its listening ports with nothing left in
+ * this window able to dispose it. Queued here, each step tears the live session down and
+ * builds its OWN captured target's before the next step looks at the world.
+ */
+const forwarderChain = instances.createHandover({
+  session: () => ({ live: !!forwarderSession, name: forwarderInstance }),
+  teardown: () => stopForwarder(),
+  arm: (target) => startForwarder(target),
+  superseded: (target) => instances.targetSuperseded(instanceGate, target),
+});
+
+/**
+ * The forwarder slot as instances.planEnable reads it — the same decision the mic session
+ * takes, from the same helper.
+ *
+ * A forwarder session is STARTED by the statement that creates it (its own first SSH round
+ * trip is inside `start()`, after the object exists), so `live` implies `enabled` and
+ * `pending` is always false: the decision reduces to create / report / refuse. The one
+ * await that could be overtaken — building the transport — happens BEFORE anything is
+ * constructed, and is guarded by the slot claim rather than by a half-built session.
+ */
+function forwarderSlotState() {
+  return {
+    live: !!forwarderSession,
+    name: forwarderInstance,
+    enabled: !!forwarderSession,
+    pending: false,
+    closed: forwarderChain.closed,
+  };
+}
+
+/**
+ * Open the forwarder for a CAPTURED target. Only ever reached through the chain, and only
+ * for a VM the window has already established is up (noteForwarderPresence) — this function
+ * never probes and is never called from activation.
+ *
+ * Building the transport is a real await for a remote instance (SecretStorage.get), and
+ * disabling the feature, switching instance or closing the window during it must all leave
+ * nothing behind. So the claim is taken first, and every one of those is re-checked after
+ * it: a start that lost the slot publishes nothing, and a snapshot from a session the slot
+ * has moved on from is dropped rather than painted over the current VM's card.
+ */
+async function startForwarder(target) {
+  const t = target || actionTarget();
+  const inst = targetInstance(t);
+  const plan = instances.planEnable(forwarderSlotState(), t.name);
+  if (plan.action !== "create") {
+    // "report" — the destination already has its forwarder (the chain tears down anything
+    // that belongs to another VM before this runs). "refuse" — the window is closing.
+    if (plan.action === "refuse") logLine(`forwards: not serving "${t.name}" — ${plan.reason}`);
+    return;
+  }
   if (!forwardsEnabled()) return;
-  const inst = activeInstance();
-  if (forwarderSession && forwarderInstance === inst.name) return;
-  stopForwarder();
+  if (instances.targetSuperseded(instanceGate, t)) return;
 
+  // Claim the ONE slot before the await; every stop request invalidates it (see
+  // requestForwarderStop), which is what a start in ANY of its awaits is checked against.
+  const claim = forwarderSlot.claim(t.name);
   const transport = await buildForwarderTransport(inst);
+  if (!forwarderSlot.owns(claim)) {
+    logLine(`forwards: the start for "${t.name}" was discarded — forwarding was stopped while its transport was being built`);
+    return;
+  }
+  if (forwarderChain.closed || !forwardsEnabled()) {
+    logLine(`forwards: the start for "${t.name}" was discarded — ` +
+      (forwarderChain.closed ? "the window is closing" : "forwarding was switched off"));
+    return;
+  }
+  if (instances.targetSuperseded(instanceGate, t)) {
+    logLine(`forwards: the start for "${t.name}" was discarded — the window switched to "${activeInstance().name}" while its transport was being built`);
+    return;
+  }
   if (!transport) return;
-  // A switch may have landed while the credential was being read; serving the wrong VM's
-  // spool would open the wrong ports on this PC.
-  if (activeInstance().name !== inst.name) return;
 
-  forwarderInstance = inst.name;
+  // The SAME four conditions, asked again from inside the session — its own start has an
+  // await too (the guest capability check), and the teardown for a disable / switch /
+  // unreachable reading that lands during it is queued BEHIND this step. Without this the
+  // session would spawn its watcher and reconcile the spool first and be disposed a moment
+  // later: SSH traffic after the window said stop.
+  const stillWanted = () => forwarderSlot.owns(claim)
+    && !forwarderChain.closed
+    && forwardsEnabled()
+    && !instances.targetSuperseded(instanceGate, t);
+
+  forwarderInstance = t.name;
   forwarderSession = forwarder.createForwarder({
     instance: inst,
     transport,
     hostLabel: forwarderui.hostLabelOf(vscode),
     log: logLine,
+    eligible: stillWanted,
     onChange: (snapshot) => {
-      if (forwarderInstance !== activeInstance().name) return;
+      // A snapshot that arrives after a LATER claim describes a session this window has
+      // already let go of; painting it would show another VM's forwards under this one's.
+      if (!forwarderSlot.owns(claim)) return;
       cachedForwards = forwarderui.toPanelForwards(snapshot);
       broadcastForwards();
     },
   });
-  forwarderSession.start();
-  logLine(`forwards: serving "${inst.name}" (${forwarderSession.mode} mode)`);
+  logLine(`forwards: serving "${t.name}" (${forwarderSession.mode} mode)`);
+  // RETURNED, so the chain step stays open until the guest capability check has answered:
+  // the next queued step must not decide its teardown against a session that is still
+  // deciding whether it may run at all.
+  return forwarderSession.start();
 }
 
-/** Tear the forwarder down: every tunnel, the watcher and the ownership claim. */
+/**
+ * Tear the forwarder down: every tunnel, the watcher and the ownership claim — and every
+ * start that is still in flight, which is what the slot claim is for.
+ */
 function stopForwarder() {
+  // Invalidate first: a start awaiting its transport must not publish a session after this.
+  forwarderSlot.claim("");
   const session = forwarderSession;
   forwarderSession = null;
   forwarderInstance = null;
   cachedForwards = null;
   if (session) { try { session.dispose(); } catch (_) {} }
+}
+
+/**
+ * ASK FOR THE FORWARDER TO STOP — the only way this window says so.
+ *
+ * Two halves, and they are not the same instant. The SLOT is invalidated synchronously,
+ * because a start may be sitting in one of its awaits (the transport build here, or the
+ * guest capability check inside the session) and the disposal below is queued BEHIND that
+ * step: without the immediate invalidation the start would go on to publish a session and
+ * spawn a watcher, and only then be torn down — SSH traffic the user already said no to.
+ * The DISPOSAL is queued on the chain, because only the chain may dispose a session.
+ */
+function requestForwarderStop() {
+  forwarderSlot.claim("");
+  forwarderArmed = null;
+  return forwarderChain.disable();
+}
+
+/**
+ * THE FORWARDER'S ONLY TRIGGER: what this window's existing status flow just learned about
+ * the instance a refresh was captured for.
+ *
+ * The forwarder is deliberately not started by activation. `construct.forwards.enabled`
+ * defaults to true — `construct expose` has to work out of the box for the agents that are
+ * told to use it — but "enabled" cannot mean "open an SSH stream to a VM we know nothing
+ * about": on a default install that started an `inotifywait` watcher against a VM that may
+ * be off, may be unreachable, or may be an older guest with no spool at all. So the state
+ * the panel already reads (`probeOnce` + `withVmState`, no extra round trip) is what starts
+ * it, the decision is the pure forwarder.planLifecycle, and the work is queued on the one
+ * chain. See extension/ARCHITECTURE.md §Forwards.
+ */
+function noteForwarderPresence(target, state) {
+  if (!target) return;
+  const plan = forwarder.planLifecycle({
+    enabled: forwardsEnabled(),
+    name: target.name,
+    armed: forwarderArmed,
+    online: !!(state && state.online),
+    vmState: state && state.vmState,
+  });
+  if (plan.action === "start") {
+    forwarderArmed = target.name;
+    void forwarderChain.enable(target, (t) => startForwarder(t));
+    return;
+  }
+  if (plan.action === "stop") {
+    // This window can no longer reach that VM (it is off, saved, gone, or simply did not
+    // answer): a watcher and a set of `ssh -L` children pointed at it are holding sockets
+    // and nothing else. Let go — the requests survive in the spool under /etc/construct,
+    // so the next reading that DOES reach it re-opens everything still queued.
+    logLine(`forwards: letting "${target.name}" go — ${plan.reason}`);
+    void requestForwarderStop();
+  }
+}
+
+/**
+ * A window ATTACHED to the VM over Remote-SSH already knows that VM is up: its own
+ * connection terminates there (the extension is `"extensionKind": ["ui"]`, so it runs on
+ * this PC either way). That is the one reachability fact activation has without probing
+ * anything, and it is the case `construct expose` exists for — an agent working in a window
+ * on the VM, whether or not anybody ever opens the panel. Everything else waits for the
+ * status flow.
+ */
+function noteForwarderConnected() {
+  try {
+    if (!remote.isConnectedToVm(safeRemoteAuthority(), activeCfg())) return;
+    noteForwarderPresence(actionTarget(), { online: true, vmState: "running" });
+  } catch (_) { /* never break activation over an optional connection */ }
 }
 
 /**
@@ -2778,10 +2962,11 @@ async function onInstanceChanged() {
   // The forwarder holds `ssh -L` tunnels to ONE VM and owns a claim in that VM's spool.
   // Retarget it: the old instance's ports must not stay open on this PC pointing at a VM
   // this window no longer drives, and the claim has to be handed back so another window
-  // can take over immediately.
-  if (forwarderInstance !== inst.name) {
-    stopForwarder();
-    void startForwarder();
+  // can take over immediately. The teardown is QUEUED on the chain (never run beside it),
+  // and the destination is deliberately NOT started here — this window has established
+  // nothing about that VM yet. The refresh below takes the reading that starts it.
+  if (forwarderInstance !== inst.name || forwarderArmed !== inst.name) {
+    void requestForwarderStop();
   }
   syncInstanceStatusItem();
   await refreshAll();
@@ -3907,10 +4092,13 @@ async function activate(context) {
         registryNow(true);
         void onInstanceChanged();
       }
-      // Start or tear down the forward server when it is switched on/off.
+      // Start or tear down the forward server when it is switched on/off. Both go through
+      // the chain, so a re-enable cannot overtake the teardown of what was running — and
+      // switching it ON re-asks the connection question rather than assuming an answer
+      // (a window that has established nothing still starts nothing).
       if (e.affectsConfiguration("construct.forwards.enabled")) {
-        stopForwarder();
-        if (forwardsEnabled()) void startForwarder();
+        void requestForwarderStop();
+        if (forwardsEnabled()) noteForwarderConnected();
       }
       // A new host label changes the link every ack promises: re-ack the live tunnels
       // rather than leave the guest holding a link the setting no longer agrees with.
@@ -3937,11 +4125,15 @@ async function activate(context) {
   // the user who never opened the panel. Delayed slightly so the SSH connect doesn't
   // compete with startup work.
   setTimeout(() => { if (!notifyStopped) startNotifyWatch(); }, 3000);
-  // Client port forwards: like the notification watcher, independent of any open
-  // dashboard — a request that was queued while VS Code was closed has to open as soon as
-  // a window connects, whether or not anybody looks at the panel. Same startup delay, for
-  // the same reason (don't compete with activation for the SSH connection).
-  setTimeout(() => { void startForwarder(); }, 3000);
+  // Client port forwards: LAZY and guest-gated, unlike the notification watcher.
+  // Activation spawns nothing — no watcher, no reconcile, no probe of its own. It only
+  // asks the question this window can already answer for free: is it ATTACHED to the VM
+  // over Remote-SSH? If it is, that VM is up by construction and a request queued while
+  // VS Code was closed opens right away, whether or not anybody looks at the panel; if it
+  // is not, the forwarder waits for the status flow (noteForwarderPresence). The delay is
+  // the notification watcher's, for the same reason: don't compete with activation for the
+  // SSH connection.
+  setTimeout(() => { noteForwarderConnected(); }, 3000);
   // A short while after start, re-apply any claude-code patch (streaming / mic gate)
   // that a background extension auto-update reverted — patches are otherwise only
   // applied at provision time. Delayed so the update has landed first (see repatch.js).
@@ -3998,8 +4190,16 @@ function deactivate() {
   audioTargetInstance = null;
   stopAutoRefresh();
   stopNotifyWatch();
-  // Kill every `ssh -L` and hand the spool claim back, so the ports do not outlive the
-  // window that opened them and the next window takes over without waiting out the TTL.
+  // CLOSE THE FORWARDER CHAIN FIRST, for the reason the mic chain is closed first: a start
+  // sitting in its transport build must not construct a forwarder — and its `ssh -L`
+  // children and listening ports — after the disposal below has already run.
+  try { void forwarderChain.close(); } catch (_) {}
+  // Then kill every `ssh -L` and hand the spool claim back, so the ports do not outlive
+  // the window that opened them and the next window takes over without waiting out the
+  // TTL. This is the ONE disposal outside the chain, and it is safe precisely because the
+  // chain is closed above (stopForwarder also invalidates the slot claim, so an in-flight
+  // start publishes nothing even if it wins the race to the next microtask).
+  forwarderArmed = null;
   stopForwarder();
   stopConfigWatcher();
 }
