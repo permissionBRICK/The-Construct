@@ -742,6 +742,22 @@ install_codex() {
 # Whether the system Node satisfies t3's engines requirement
 # (^22.16 || ^23.11 || >=24.10). npm only WARNS on a mismatch, so without this
 # check an old Node yields an installed-but-broken t3 whose service restart-loops.
+
+# May the unchanged-build fast path skip the T3 reinstall AND the service
+# restart? A matching build key is NOT sufficient: `t3 serve` reads
+# T3CODE_PUBLIC_BASE_URL from its systemd EnvironmentFile only at START, so if
+# the HTTPS reconciliation above just changed that value (toggle flipped, port
+# changed, external host changed), the RUNNING process still advertises the old
+# origin -- its startup/pairing URLs would stay bound to a stale or plain-http
+# base. Restarting is the only way to pick it up. Pure; the caller adds the
+# is-active check.
+t3_can_skip_restart() {
+  local wanted_build="$1" active_build="$2" pub_before="$3" pub_after="$4"
+  [[ -n "${wanted_build}" && "${wanted_build}" == "${active_build}" ]] || return 1
+  [[ "${pub_before}" == "${pub_after}" ]] || return 1
+  return 0
+}
+
 t3_node_ok() {
   local v major minor rest
   v="$(node -v 2>/dev/null | sed 's/^v//')" || return 1
@@ -849,11 +865,14 @@ install_t3code() {
   # toggle is reconciled even when the T3 build itself is untouched. Best-effort:
   # the setup script degrades to plain HTTP on its own rather than failing the
   # T3 install, so a non-zero exit here is reported and then tolerated.
+  local _t3_pub_before _t3_pub_after
+  _t3_pub_before="$(sed -n 's/^T3CODE_PUBLIC_BASE_URL=//p' "${CONFIG_FILE}" 2>/dev/null | head -1 || true)"
   env T3CODE_HTTPS="${T3CODE_HTTPS}" T3CODE_HTTPS_PORT="${T3CODE_HTTPS_PORT}" \
     T3CODE_PORT="${T3CODE_PORT}" CONSTRUCT_EXTERNAL_HOST="${CONSTRUCT_EXTERNAL_HOST}" \
     CONFIG_FILE="${CONFIG_FILE}" REPO_DIR="${REPO_DIR}" \
     bash "${REPO_DIR}/bin/setup-t3-https.sh" \
     || warn "WARNING: T3 Code HTTPS setup failed; the web GUI stays on plain HTTP (:${T3CODE_PORT})"
+  _t3_pub_after="$(sed -n 's/^T3CODE_PUBLIC_BASE_URL=//p' "${CONFIG_FILE}" 2>/dev/null | head -1 || true)"
 
   # On an unchanged upstream T3 + Construct revision, the source builder has
   # already restored the exact server symlink and Desktop status. If that same
@@ -862,10 +881,13 @@ install_t3code() {
   if [[ "${T3CODE_LIMIT_RESUME:-false}" == "true" ]]; then
     _wanted_t3_build="$(sed -n 's/^T3CODE_BUILD_KEY=//p' /etc/construct/t3code-desktop-status 2>/dev/null | head -1)"
     _active_t3_build="$(cat /etc/construct/t3code-installed-build 2>/dev/null || true)"
-    if [[ -n "${_wanted_t3_build}" && "${_wanted_t3_build}" == "${_active_t3_build}" ]] && \
+    if t3_can_skip_restart "${_wanted_t3_build}" "${_active_t3_build}" "${_t3_pub_before}" "${_t3_pub_after}" && \
        systemctl is-active --quiet t3code-serve; then
       note "T3 Code build is unchanged and already running; skipping its reinstall/restart."
       return 0
+    fi
+    if [[ "${_t3_pub_before}" != "${_t3_pub_after}" ]]; then
+      note "T3 Code's public base URL changed (${_t3_pub_before:-<none>} -> ${_t3_pub_after:-<none>}); restarting t3code-serve so the server picks it up."
     fi
   fi
 
