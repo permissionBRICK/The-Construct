@@ -169,6 +169,26 @@ param(
     # instance's alias land on one branch).
     # See docs/config-sync.md "Multiple instances".
     [string]$ConfigBranch = "",
+    # ── Remote host service (batch B7, docs/remote-host.md) ────────────────────
+    # Set ONLY when this VM lives on a remote Hyper-V host managed by `constructd`.
+    # All three default to EMPTY and, while empty, add NOTHING to the env prefix that
+    # reaches bin/provision.sh -- a local VM's provisioning command, log and config.env
+    # are byte-identical to before these parameters existed.
+    #
+    #   -ServiceUrl     the host service's base URL   -> CONSTRUCT_SERVICE_URL
+    #   -InstanceName   this VM's name on that host   -> CONSTRUCT_INSTANCE_NAME
+    #   -VmTokenB64     the VM-scoped token, base64   -> CONSTRUCT_VM_TOKEN_B64
+    #
+    # provision.sh writes the decoded token to /etc/construct/vm-token (mode 0600) and
+    # enables the idle-heartbeat timer only when the URL is set. The token is a ONE-TIME
+    # secret from the creation job (service/README.md) and authorises exactly one VM's
+    # port forwards and heartbeat; it is passed as a PARAMETER VALUE, is never printed,
+    # echoed or logged, and never reaches an ARGUMENT LIST on either machine -- it goes
+    # to the guest over ssh's stdin (Send-GuestSecret) and is exported inside the remote
+    # shell, which is where provision.sh reads it from the environment.
+    [string]$ServiceUrl = "",
+    [string]$InstanceName = "",
+    [string]$VmTokenB64 = "",
     # Set when this script is launched by an upper script (Auto-Install.ps1 /
     # Create-AgentVM.ps1), which owns the final "Press Enter" pause. When run on
     # its own this stays off and the script pauses at the end so a self-launched
@@ -463,6 +483,40 @@ function Get-ExternalEnvSuffix {
     return " CONSTRUCT_EXTERNAL_HOST=$(ConvertTo-PosixSingleQuoted $VmHost) CONSTRUCT_EXTERNAL_SSH_PORT='$SshPort'"
 }
 
+# Which host-service identity (if any) to append to provision.sh's env prefix. PURE,
+# for the same reason Get-ExternalEnvSuffix is: the zero-change bar is testable without
+# a VM. Each of the three is appended ONLY when it is set, so a local install adds
+# nothing at all and its remote command line is unchanged.
+#
+# POSIX single-quoting everywhere (ConvertTo-PosixSingleQuoted), exactly like
+# CONSTRUCT_EXTERNAL_HOST: these values cross a shell boundary, and a URL or a base64
+# token is not something to trust to be metacharacter-free.
+#
+# THE TOKEN IS A SECRET, AND THE PROVISIONING CALL DOES NOT RENDER IT HERE. The result
+# of this function becomes an ARGUMENT of ssh.exe, and arguments are readable by any
+# process listing on this PC -- so the real call passes -VmTokenB64 "" and delivers the
+# token over ssh's stdin instead (Send-GuestSecret), exporting it inside the remote
+# shell. The parameter stays because it is part of this pure renderer's contract (and is
+# what the tests pin), not because the provisioning path uses it.
+function Get-ServiceEnvSuffix {
+    param(
+        [string]$ServiceUrl,
+        [string]$InstanceName,
+        [string]$VmTokenB64
+    )
+    $out = ""
+    if (-not [string]::IsNullOrWhiteSpace($ServiceUrl)) {
+        $out += " CONSTRUCT_SERVICE_URL=$(ConvertTo-PosixSingleQuoted $ServiceUrl)"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($InstanceName)) {
+        $out += " CONSTRUCT_INSTANCE_NAME=$(ConvertTo-PosixSingleQuoted $InstanceName)"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($VmTokenB64)) {
+        $out += " CONSTRUCT_VM_TOKEN_B64=$(ConvertTo-PosixSingleQuoted $VmTokenB64)"
+    }
+    return $out
+}
+
 # Parse the guest's saved external identity as printed by the remote read command
 # ("H=<host>\nP=<port>\n"). Invoke-Ssh returns ONE scalar (Out-String), so the text is
 # split into lines here -- iterating the scalar would swallow the second line into the
@@ -563,6 +617,45 @@ function Invoke-SshStream {
     if ($PassThru) {
         return [pscustomobject]@{ ExitCode = $exitCode; Lines = [string[]]$lines }
     }
+}
+
+function Send-GuestSecret {
+    <#
+        Put a secret into a file on the guest WITHOUT it ever appearing in an argument
+        list. Returns $true on success, $false on failure -- and never echoes, logs or
+        throws with the value.
+
+        Why not the ordinary env-prefix route: every remote command this script runs is
+        handed to ssh.exe as an ARGUMENT, and arguments are readable by any process
+        listing on this PC (`Get-Process`, `wmic`, another user's task manager). A
+        one-time credential must not be visible there for the ten minutes a provision
+        takes. Here the value travels on ssh's STDIN instead -- hence a bespoke ssh call
+        rather than Invoke-Ssh, which passes -n (stdin from /dev/null) precisely so no
+        other remote command can block on the console.
+
+        `umask 077` before the redirect, so the file is 0600 from the instant it exists
+        -- there is no window where it is world-readable. It is removed by the command
+        that consumes it.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Content,
+        [Parameter(Mandatory)][string]$RemotePath
+    )
+    # The path is generated by this script (a fixed prefix + a GUID), so quoting it is
+    # belt-and-braces rather than load-bearing.
+    $escPath = $RemotePath.Replace("'", "'\''")
+    $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+    # The value goes down the PIPE (ssh's stdin) and reaches `cat` on the guest; the
+    # trailing newline PowerShell adds is dropped by the command substitution that reads
+    # the file back.
+    $Content | & ssh.exe @script:SshPortArgs @script:SshOpts "$($script:ConnectUser)@$VmHost" "umask 077; cat > '$escPath'" 2>$null | Out-Null
+    $exitCode = $LASTEXITCODE
+    $ErrorActionPreference = $prevEAP
+    if ($exitCode -ne 0) {
+        Write-Warning "Could not write the guest's credential file (ssh exit $exitCode)."
+        return $false
+    }
+    return $true
 }
 
 function Invoke-Scp {
@@ -1905,9 +1998,41 @@ if ($explicitEndpoint -and $VmHost -eq "agent-vm.mshome.net" -and $SshPort -eq 2
     }
 }
 $externalEnv = Get-ExternalEnvSuffix -VmHost $VmHost -SshPort $SshPort -ExplicitlyBound $explicitEndpoint -SavedHost $savedExtHost -SavedPort $savedExtPort
-$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit' CONSTRUCT_VERSION='$constructVersion' SMB_SHARE='$SmbShare' CLAUDE_PARTIAL_STREAMING='$ClaudePartialStreaming' MIC_PASSTHROUGH='$MicPassthrough' OPENCODE_BACKGROUND_WATCHER='$OpenCodeBackgroundWatcher' T3CODE='$T3Code' T3CODE_CHANNEL='$T3CodeChannel' T3CODE_LIMIT_RESUME='$T3CodeLimitResume'" + $externalEnv
+# Host-service identity for a remote VM: empty (and therefore absent from the env
+# prefix) unless -ServiceUrl / -InstanceName / -VmTokenB64 were supplied.
+#
+# THE TOKEN IS NOT IN HERE. It is delivered out of band (Send-GuestSecret below) and
+# exported inside the remote shell, because everything in $envPrefix ends up as an
+# ARGUMENT of ssh.exe -- readable by any process listing on this PC -- and again as an
+# argument of the guest's `env`. bin/provision.sh's contract is unchanged either way: it
+# reads CONSTRUCT_VM_TOKEN_B64 out of its ENVIRONMENT.
+$serviceEnv = Get-ServiceEnvSuffix -ServiceUrl $ServiceUrl -InstanceName $InstanceName -VmTokenB64 ""
+if ($ServiceUrl) {
+    # Say WHAT was sent, never the token itself.
+    Write-Ok "Host service: $ServiceUrl (instance '$InstanceName')$(if ($VmTokenB64) { '; VM token supplied' } else { '' })"
+}
+# ── The VM-scoped token: uploaded over ssh's STDIN, never through an argv ──────
+# Written 0600 into the guest's /tmp by the connecting user, read back by the remote
+# shell with a command substitution (so the value exists only inside that shell and in
+# provision.sh's environment), and removed as soon as provisioning ends -- whatever its
+# exit code, which is preserved. Empty -VmTokenB64 (every local install, and every
+# remote reprovision) adds NOTHING: $tokenExport/$tokenCleanup stay empty and the
+# provisioning command below is byte-identical to what it has always been.
+$tokenExport  = ""
+$tokenCleanup = ""
+if ($VmTokenB64) {
+    $vmTokenRemotePath = "/tmp/.construct-vm-token.$([guid]::NewGuid().ToString('N'))"
+    if (-not (Send-GuestSecret -Content $VmTokenB64 -RemotePath $vmTokenRemotePath)) {
+        throw "Could not hand the VM's host-service token to the guest. Nothing was provisioned."
+    }
+    # Double quotes so the substitution happens IN THE GUEST; the path is a literal this
+    # script generated, so there is nothing to inject through it.
+    $tokenExport  = "export CONSTRUCT_VM_TOKEN_B64=`"`$(cat '$vmTokenRemotePath')`"; "
+    $tokenCleanup = "; __rc=`$?; rm -f '$vmTokenRemotePath'; exit `$__rc"
+}
+$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit' CONSTRUCT_VERSION='$constructVersion' SMB_SHARE='$SmbShare' CLAUDE_PARTIAL_STREAMING='$ClaudePartialStreaming' MIC_PASSTHROUGH='$MicPassthrough' OPENCODE_BACKGROUND_WATCHER='$OpenCodeBackgroundWatcher' T3CODE='$T3Code' T3CODE_CHANNEL='$T3CodeChannel' T3CODE_LIMIT_RESUME='$T3CodeLimitResume'" + $externalEnv + $serviceEnv
 Write-Host "  --- live provisioning output ---" -ForegroundColor DarkGray
-$provisionStream = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "$envPrefix bash /opt/construct/repo/bin/provision.sh"
+$provisionStream = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "$tokenExport$envPrefix bash /opt/construct/repo/bin/provision.sh$tokenCleanup"
 Write-Host "  --- end provisioning output ---" -ForegroundColor DarkGray
 # Store raw output for the result file (de-elevated child → parent fidelity).
 $script:ProvisionRawLines = @($provisionStream.Lines)

@@ -106,6 +106,24 @@ workspace root). Full reference: [Project profiles & configuration](docs/project
 the shared patched T3 Code server/Desktop build—are toggled in the
 [Construct control panel](docs/control-panel.md#patched-t3-code-server--desktop-build).
 
+## 🖧 Run it on a remote host
+
+The VM does not have to live on your own PC. An admin installs the `constructd` service
+once on a shared Hyper-V machine, and everyone creates and manages **their own** VMs on it
+from the same installer and the same control panel:
+
+```powershell
+.\Auto-Install.ps1 -Backend hyperv-remote -ServiceUrl https://buildbox.example.local:7462 -InstanceName work-vm
+```
+
+On a fresh machine the installer simply asks — *local Hyper-V* (the default, unchanged) or
+*remote host*. The host builds the ISO, creates the VM and allocates an SSH port; your PC
+still runs the provisioning, so your git credentials, agent auth and backups never transit
+the service. Once it is up, the VM keeps running with your laptop closed.
+
+See **[Remote host](docs/remote-host.md)** for the admin setup, authentication
+(Kerberos or admin-issued tokens), certificate pinning and the idle policy.
+
 ## 🔐 Know the trade
 
 The Construct swaps guardrails for isolation:
@@ -128,6 +146,7 @@ The Construct swaps guardrails for isolation:
 | [Manual setup](docs/manual-setup.md) | Blank Ubuntu VM to ready state by hand |
 | [Project profiles & configuration](docs/projects.md) | `config.env`, profile schema, MCP servers, checkouts |
 | [Remote access & services](docs/remote-access.md) | serve-web, tunnels, Codex remote, T3 Code, service lifecycle |
+| [Remote host](docs/remote-host.md) | Running the VM on a shared Hyper-V host: the `constructd` service, auth, pinning, idle policy |
 | [Control panel](docs/control-panel.md) | The VS Code operator console, optional voice and patched T3 Code features |
 | [Backup & restore](docs/backup-restore.md) | Carrying agent config and auth across reinstalls |
 | [Config sync](docs/config-sync.md) | How project profiles survive a reinstall and sync between VM and host |

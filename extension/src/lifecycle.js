@@ -82,6 +82,38 @@ const INSTANCE_PARAMS = {
   setCheckpoints: ["VmName"],
 };
 
+// ── …and the REMOTE backend's rebuild arguments ──────────────────────────────
+// Auto-Install.ps1 reaches a remote VM by INSTANCE NAME plus SERVICE URL, not by
+// -VmName: the -VmName path derives a guest hostname, an mshome address and a local
+// Hyper-V display name, none of which exist for a VM on somebody else's host — and it
+// runs the local skew guards on the way. So the rebuild actions carry a different set
+// for a remote instance. Everything else is unchanged, including reprovision and
+// exportConfig, which are pure SSH to the endpoint whoever created the VM.
+//
+// -Backend is in the list on purpose even though the value is implied by the others:
+// it is what makes the installer take the remote path at all, and emitting it
+// explicitly means an Auto-Install.ps1 that DECLARES the parameter cannot silently
+// interpret the run as a local one.
+const REMOTE_INSTANCE_PARAMS = {
+  reinstall: ["Backend", "ServiceUrl", "InstanceName", "ConfigBranch"],
+  redownload: ["Backend", "ServiceUrl", "InstanceName", "ConfigBranch"],
+};
+
+/** Is this backend one whose VMs live on a host service? Normalized exactly like
+ *  getDriver() (trimmed, lowercased) so a differently-cased registry value can't be
+ *  read one way here and another there. Pure. */
+function isRemoteBackend(backend) {
+  return String(backend == null ? "" : backend).trim().toLowerCase() === "hyperv-remote";
+}
+
+/** The instance parameters an action emits for THIS instance's backend. Pure. */
+function paramsForAction(action, instance) {
+  if (instance && isRemoteBackend(instance.backend) && REMOTE_INSTANCE_PARAMS[action]) {
+    return REMOTE_INSTANCE_PARAMS[action];
+  }
+  return INSTANCE_PARAMS[action];
+}
+
 /**
  * The identity parameters the installed script MUST declare before a NON-DEFAULT
  * instance's action is allowed to run. Stated explicitly (not derived from
@@ -107,6 +139,22 @@ const REQUIRED_INSTANCE_PARAMS = {
   redownload: ["VmName"],
   setCheckpoints: ["VmName"],
 };
+
+/** The same rule for a REMOTE instance's rebuild. An Auto-Install.ps1 that predates the
+ *  remote path declares none of these, and dropping them does not "degrade": it runs
+ *  the LOCAL path and rebuilds a local VM named after the remote one. */
+const REQUIRED_REMOTE_INSTANCE_PARAMS = {
+  reinstall: ["Backend", "ServiceUrl", "InstanceName"],
+  redownload: ["Backend", "ServiceUrl", "InstanceName"],
+};
+
+/** What an action MUST be able to state for this instance. Pure. */
+function requiredParamsForAction(action, instance) {
+  if (instance && isRemoteBackend(instance.backend) && REQUIRED_REMOTE_INSTANCE_PARAMS[action]) {
+    return REQUIRED_REMOTE_INSTANCE_PARAMS[action];
+  }
+  return REQUIRED_INSTANCE_PARAMS[action] || [];
+}
 
 /** Human labels for the refusal messages (buildInvocation's own labels are built
  *  inside the switch, which a refusal never reaches). */
@@ -165,6 +213,10 @@ function instanceParamValue(param, instance) {
     case "LocalKeyName": return instance.keyName;
     case "VmName": return instance.vmName;
     case "ConfigBranch": return configBranchOverride(instance);
+    // Remote rebuilds only (REMOTE_INSTANCE_PARAMS).
+    case "Backend": return instance.backend;
+    case "ServiceUrl": return (instance.service && instance.service.url) || null;
+    case "InstanceName": return instance.name;
     default: return null;
   }
 }
@@ -183,7 +235,7 @@ function instanceParamValue(param, instance) {
  */
 function instanceArgPairs(action, instance, declared) {
   if (!instance || instances.isDefaultInstance(instance)) return [];
-  const wanted = INSTANCE_PARAMS[action];
+  const wanted = paramsForAction(action, instance);
   if (!wanted) return [];
   const supported = Array.isArray(declared) ? declared : null;
   const out = [];
@@ -230,9 +282,21 @@ function checkInstanceSupport(action, instance, declared) {
   if (!support.ok) {
     return { blocked: true, reason: `${label} can't run for instance "${name}": ${support.reason}` };
   }
+  // A remote instance is addressed by its SERVICE, so an entry that names none cannot be
+  // rebuilt at all — and an Auto-Install run without -ServiceUrl falls back to the LOCAL
+  // path. Refuse before any parameter probing: this is a property of the entry, not of
+  // the installed scripts, so it is wrong on every version of them.
+  if (isRemoteBackend(instance.backend) && REMOTE_INSTANCE_PARAMS[action] &&
+      !(instance.service && instance.service.url)) {
+    return {
+      blocked: true,
+      reason: `${label} can't run for instance "${name}": its registry entry records no host service ` +
+        "(service.url), so there is nothing to ask for a new VM. Add the host again, or fix the entry.",
+    };
+  }
   const supported = Array.isArray(declared) ? declared : null;
   if (!supported) return null;
-  const required = REQUIRED_INSTANCE_PARAMS[action] || [];
+  const required = requiredParamsForAction(action, instance);
   const missing = required.filter((p) => supported.indexOf(p) < 0);
   if (missing.length) {
     return {
@@ -250,7 +314,7 @@ function checkInstanceSupport(action, instance, declared) {
   // panel syncs refs/heads/vm-work-vm, splitting one VM across two host-config refs.
   // That is just as true for the canonical "vm-<name>" branch (nothing to emit) as for
   // an explicit override, which is why the check no longer looks at the override.
-  const emitted = INSTANCE_PARAMS[action] || [];
+  const emitted = paramsForAction(action, instance) || [];
   if (emitted.indexOf("ConfigBranch") >= 0 && supported.indexOf("ConfigBranch") < 0) {
     const branch = instance.configBranch || derivedConfigBranch(instance.hostAlias);
     return {
@@ -402,7 +466,15 @@ function buildInvocation(action, opts = {}) {
       if (opts.supportsT3CodeChannel !== false) pushPair("-T3CodeChannel", s.t3codeChannel);
       if (opts.supportsT3CodeLimitResume !== false) pushBool("-T3CodeLimitResume", s.t3codeLimitResume);
       return done(AUTO_INSTALL, {
-        destructive: true, elevate: true,
+        destructive: true,
+        // A REMOTE rebuild must NOT elevate. It creates no local VM, so it needs no
+        // administrator rights — and on a PC where UAC switches to a different admin
+        // account it would read and write the DPAPI token store, instances.json and
+        // ~\.ssh under THAT account's profile. Auto-Install.ps1 makes the same choice
+        // for the same reason (it skips its own relaunch on the remote path); if this
+        // launcher elevated anyway, the script would already be in the wrong profile
+        // before it could decide. Local rebuilds are unchanged: they drive Hyper-V.
+        elevate: !isRemoteBackend(opts.instance && opts.instance.backend),
         label: action === "redownload" ? "Redownload" : "Reinstall",
       });
     }
@@ -540,8 +612,12 @@ function scriptForAction(action) {
  * yields [] and the action runs against the script's own defaults (which is exactly
  * today's single-VM behaviour) rather than failing to bind.
  */
-function instanceParamSupport(scriptsDir, action) {
-  const wanted = INSTANCE_PARAMS[action];
+function instanceParamSupport(scriptsDir, action, instance) {
+  // Backend-aware: a remote instance's rebuild is probed for the REMOTE parameters
+  // (-Backend/-ServiceUrl/-InstanceName), because those are the ones it would emit. The
+  // union would be wrong in both directions -- it would report a local-only parameter as
+  // "declared" for a remote rebuild and vice versa.
+  const wanted = paramsForAction(action, instance);
   const file = scriptForAction(action);
   if (!wanted || !file) return [];
   return wanted.filter((p) => scriptSupportsParam(scriptsDir, file, p));
@@ -796,7 +872,7 @@ function run(action, opts = {}) {
     projects,
     enabled: opts.enabled,
     instance: opts.instance,
-    instanceParams: instanceParamSupport(scriptsDir, action),
+    instanceParams: instanceParamSupport(scriptsDir, action, opts.instance),
     supportsCheckpoints: scriptSupportsCheckpoints(scriptsDir),
     supportsT3CodeChannel: scriptSupportsT3CodeChannel(scriptsDir, action),
     supportsT3CodeLimitResume: scriptSupportsT3CodeLimitResume(scriptsDir, action),
@@ -847,6 +923,8 @@ function run(action, opts = {}) {
 module.exports = {
   PROVISION, AUTO_INSTALL, CHECKPOINTS, BACKUP_DIR_NAME,
   INSTANCE_PARAMS, REQUIRED_INSTANCE_PARAMS, ACTION_LABELS,
+  REMOTE_INSTANCE_PARAMS, REQUIRED_REMOTE_INSTANCE_PARAMS,
+  isRemoteBackend, paramsForAction, requiredParamsForAction,
   instanceArgs, instanceArgPairs, flattenArgPairs, checkInstanceSupport,
   derivedConfigBranch, configBranchOverride,
   scriptSupportsParam, scriptForAction, instanceParamSupport,
