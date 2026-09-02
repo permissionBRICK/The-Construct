@@ -87,6 +87,36 @@ t3_build_toolchain_flags() {
   echo "${wine} ${store_mib:-0} ${electron_mib:-0} ${rust}"
 }
 
+
+# Apply Construct's source patch to the checkout in $PWD, as leniently as is SAFE:
+#   1. exact (`git apply --check` then `git apply`);
+#   2. otherwise GNU patch with fuzz 3 -- only surrounding CONTEXT lines drifted, the
+#      changed lines themselves still match. Applied hunks are reported (offset/fuzz) so
+#      the log shows which files upstream moved around;
+#   3. otherwise fail, naming the files whose hunks no longer fit. That is the one
+#      case where the patch genuinely has to be rebased; a changed version number on
+#      its own is never a reason to refuse.
+# Never leaves a half-applied tree: dry runs precede every real application, and a
+# tracked file is restored from the index if a real application still fails.
+#   $1 = patch file.  Prints notes; returns 0 on success, 1 on failure.
+t3_build_apply_patch() {
+  local patch_file="$1" out failing
+  if git apply --check "${patch_file}" >/dev/null 2>&1; then
+    git apply "${patch_file}" && return 0
+  fi
+  if command -v patch >/dev/null 2>&1 && out="$(patch -p1 --forward --fuzz=3 --dry-run --batch <"${patch_file}" 2>&1)"; then
+    printf '    %s\n' "Construct T3 patch needs context fuzz on ${TAG:-this tag} (changed lines still match; only surrounding lines moved):"
+    printf '%s\n' "${out}" | grep -E 'fuzz|offset' | sed 's/^/      /' || true
+    if patch -p1 --forward --fuzz=3 --batch --silent <"${patch_file}" >/dev/null 2>&1; then
+      return 0
+    fi
+    git checkout -q -- . 2>/dev/null || true
+  fi
+  failing="$(git apply --check "${patch_file}" 2>&1 | sed -n 's/^error: patch failed: \([^:]*\):.*/\1/p' | sort -u | tr '\n' ' ')"
+  printf 'ERROR: %s\n' "Construct's T3 source patch no longer applies to T3 ${TAG:-this tag}: upstream changed ${failing:-the patched files} beyond what context fuzz can bridge. Rebase patches/t3code-construct.patch onto ${TAG:-the new tag} (the previously installed T3 build is left untouched)." >&2
+  return 1
+}
+
 # Sourced for the helpers only (unit tests): stop before shell options or anything else changes.
 if [[ "${_FUNCS_ONLY:-}" == "true" ]]; then
   return 0 2>/dev/null || exit 0
@@ -235,8 +265,7 @@ cd "${SOURCE_DIR}"
 if git apply --reverse --check "${PATCH_FILE}" >/dev/null 2>&1; then
   note "Construct T3 source patch is already applied."
 else
-  git apply --check "${PATCH_FILE}" || fail "T3 ${TAG} changed incompatibly; leaving the installed T3 build untouched"
-  git apply "${PATCH_FILE}"
+  t3_build_apply_patch "${PATCH_FILE}" || exit 1
 fi
 
 note "Installing T3 source dependencies..."
