@@ -219,15 +219,30 @@ const RESERVED_VM_BRANCHES = new Set([
 /**
  * A branch name git will accept as refs/heads/<name> without surprises, and
  * that is safe to hand to git as a BARE ref operand: starts alphanumeric, then
- * alphanumerics / dot / underscore / hyphen, no "..", no ".lock" suffix (git
- * reserves it), and not one of RESERVED_VM_BRANCHES. Deliberately stricter than
- * check-ref-format — these names come from instance names
- * (^[a-z0-9][a-z0-9-]{0,39}$) and end up in file paths and ssh aliases too.
+ * alphanumerics / dot / underscore / hyphen, no "..", no trailing ".", no
+ * ".lock" suffix (git reserves it), and not one of RESERVED_VM_BRANCHES.
+ * Deliberately stricter than check-ref-format — these names come from instance
+ * names (^[a-z0-9][a-z0-9-]{0,39}$) and end up in file paths and ssh aliases
+ * too — but never LOOSER: everything this accepts, `git check-ref-format
+ * --branch` accepts (configsync.test.js drives the fixture list through real
+ * git, and config-sync.test.ps1 drives the same list through the PS twin).
+ *
+ * The shape rule above already covers most of check-ref-format's list — a
+ * leading "-", control characters, "@{", a "/." component and the space/tilde/
+ * caret/colon/question/asterisk/bracket/backslash set are all outside the
+ * character class, and there are no slashes, so ".lock" only has to be checked
+ * on the whole name. The two that survive it are spelled out:
+ *   • ".."   — git refuses it anywhere in a ref;
+ *   • a TRAILING "." — `git check-ref-format --branch foo.` fails, so accepting
+ *     it meant a hand-authored `configBranch` of "foo." passed validation here
+ *     and then failed at `git branch` (or silently synced on the fallback
+ *     branch), which is exactly the promise this function exists to keep.
  */
 function isValidVmBranch(name) {
   if (typeof name !== "string" || !name) return false;
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) return false;
   if (name.includes("..")) return false;
+  if (name.endsWith(".")) return false;
   if (name.endsWith(".lock")) return false;
   const lower = name.toLowerCase();
   if (RESERVED_VM_BRANCHES.has(lower)) return false;

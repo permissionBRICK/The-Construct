@@ -202,6 +202,9 @@ function Test-ConstructInstanceBranch {
     if ([string]::IsNullOrEmpty($Value)) { return $false }
     if (-not [regex]::IsMatch($Value, $script:ConstructBranchRe)) { return $false }
     if ($Value.Contains('..')) { return $false }
+    # `git check-ref-format --branch foo.` fails, so a trailing dot is refused here rather
+    # than at the first sync tick (same rule, same fixtures, as the two twins above).
+    if ($Value.EndsWith('.')) { return $false }
     if ($Value.EndsWith('.lock')) { return $false }
     $lower = $Value.ToLowerInvariant()
     if ($script:ConstructReservedBranches -contains $lower) { return $false }

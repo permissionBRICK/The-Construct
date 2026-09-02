@@ -151,10 +151,13 @@ extension/
                       injected. Pure core: isSafeId/sanitizeHostLabel/portCandidates,
                       parseRequest/parseAck/ackDocument/parseDump/readForwardList, the spool
                       scripts (buildReconcileScript with the atomic `.owner` claim,
-                      buildAckScript, buildRemoveScript, buildWatchScript), planActions (the
-                      one place open/ack/error/close/sweep/adopt is decided) and toSnapshot.
-                      Forwarder: tunnel table, watcher + 30s reconcile (local) or 10s poll
-                      (remote), audio.js-style settle window + restart backoff, dispose
+                      buildAckScript, buildRemoveScript, buildWatchScript,
+                      buildCapabilityScript/parseCapability — the guest gate), planActions
+                      (the one place open/ack/error/close/sweep/adopt is decided),
+                      planLifecycle (when a window may hold a forwarder at all) and
+                      toSnapshot. Forwarder: LAZY start (capability check first, then the
+                      watcher + 30s reconcile locally, or the 10s poll remotely), tunnel
+                      table, audio.js-style settle window + restart backoff, dispose
     forwarder-ui.js   the forwarder's adapter — the ONLY file in the feature that touches a
                       process, a socket or the vscode API: createSshTransport /
                       createRemoteTransport (ssh.js + child_process + net + a remotehost
@@ -229,17 +232,24 @@ extension/
                       notifier-candidate/exit-code contract, toastResult and powershellPath
                       (100 checks). The generated toast script's RUNTIME behaviour is covered
                       by `../../test/notify-toast.test.ps1` (pwsh, WinRT stubbed in C#)
-    forwarder.test.js plain-node client-forwarder units (390 checks) — pure guards + port
+    forwarder.test.js plain-node client-forwarder units (518 checks) — pure guards + port
                       policy + backoff, the spool documents, the spool SCRIPTS as data
                       (base64-as-data, the atomic ack rename, the claim's read-back, inotify
                       monitor mode + the orphan trap, injection proofs for the spool path and
                       the window id), the PLANNER's every action case incl. idempotence, the
                       local flow against a fake transport (request → tunnel argv → atomic ack
-                      → close → kill, port fallback, re-open on activation, read-only
+                      → close → kill, port fallback, re-open on connect, read-only
                       non-ownership, claim release), the remote flow against a fake fetch
                       (poll → tunnel → POST ack, entry removed → kill, an acked entry left
                       alone), tunnel supervision (settle window, backoff, the error ack after
-                      persistent failure, dispose), the UI projections, and ssh.js's `-L` argv.
+                      persistent failure, dispose), the LAZY START (capability check first;
+                      an older guest gets no watcher and no reconcile at all) and
+                      planLifecycle's start/stop rule, a MODEL of extension.js's forwarder
+                      wiring around REAL Forwarder sessions with both awaits deferred
+                      (disable/deactivate during the transport build, the same four stops
+                      during the guest check, overlapping starts, A→B→A, the reconnect
+                      edge — one session, zero orphans, zero spawn after a stop, each with
+                      a pre-fix control), the UI projections, and ssh.js's `-L` argv.
                       The CLAIM PROTOCOL is executed for real (bash, 5 windows x 25
                       concurrent rounds, stale-record + stale-lock takeover): mutual
                       exclusion is a property of concurrent execution, not of the source
@@ -805,7 +815,8 @@ opens a QuickPick; the panel header renders a `<select>` **only when
 **Switching** (`onInstanceChanged`) invalidates every VM-derived cache (the in-flight
 probe, the usage table, git detection, the config-sync snapshot), reconnects the
 notification watcher, hands the mic tunnel over to the new VM (see above — teardown then
-arm, on one serialized chain), and re-probes — the panel must never show one VM's pills,
+arm, on one serialized chain), lets the port forwarder go on ITS chain (the destination's
+own is started by the first reading that says that VM is up — §Forwards), and re-probes — the panel must never show one VM's pills,
 versions, projects or usage under another's name. The handover runs in the background:
 the panel refresh is not held behind an SSH teardown.
 
@@ -1170,7 +1181,7 @@ about *what to do* lives; the `Forwarder` only executes what it returns. Actions
 
 Because it is pure, "a request that is already acked and already tunnelled produces no
 actions" is a unit test rather than a hope — that idempotence is what makes it safe to run
-the planner on every inotify event, every 30 s poll and every window activation.
+the planner on every inotify event, every 30 s poll and every connect.
 
 ### Port selection, and where the port actually listens
 
@@ -1277,13 +1288,101 @@ answers with a reconcile. Forward changes are rare (a human or an agent typing `
 so one SSH exec per change buys a much smaller protocol than streaming the spool would.
 
 The reconcile is one script that claims ownership and base64-dumps `requests/`, `acks/` and
-`close/` in a single round trip. It runs on activation, on every `CHANGED`, and **every
-30 s regardless** — which is what keeps a VM without inotify-tools working, and what
+`close/` in a single round trip. It runs when the forwarder starts, on every `CHANGED`, and
+**every 30 s regardless** — which is what keeps a VM without inotify-tools working, and what
 refreshes the ownership claim.
 
 Requests survive reboots by design (the spool is under `/etc/construct`, not `/run`), so
-"re-open everything still queued" is not a special case: activation is just the first
-reconcile, and the planner sees requests with no live tunnel.
+"re-open everything still queued" is not a special case: the first reconcile after a
+connect sees requests with no live tunnel and opens them.
+
+### When the forwarder runs at all — lazy, and gated on the guest
+
+`construct.forwards.enabled` defaults to `true`, because a feature the agents are told to
+use cannot need configuring first. But **enabled is not "start something"**: activation
+spawns nothing forwarding-related — no watcher, no reconcile, and no probe of its own.
+
+The trigger is what this window's *existing* status flow has already established about the
+instance a refresh was captured for (`probeOnce` + `withVmState`, the reading the panel
+renders anyway), plus the one reachability fact activation gets for free: a window
+**attached to the VM over Remote-SSH** knows that VM is up, because its own connection
+terminates there. `forwarder.planLifecycle` is the pure decision and `noteForwarderPresence`
+carries it out:
+
+| the status flow says | what happens |
+|---|---|
+| reachable, nothing armed for it | start (once per connect — an older guest is not re-asked every 30 s) |
+| reachable, already armed | nothing |
+| unreachable (whatever the VM's power state says) | stop: kill the watcher and the tunnels, hand the claim back, clear the armed edge |
+
+**Reachability is the whole rule, in both directions.** A watcher and a set of `ssh -L`
+children pointed at a VM this window can no longer reach are holding sockets and nothing
+else, so an unreachable reading lets them go even when the host still reports the VM as
+`running` — `off`/`saved`/`absent` are the *reason* in the log, not the condition. Letting
+go is safe because the requests live in the spool under `/etc/construct`, not in this
+window: clearing the armed edge turns the next reading that *does* reach the VM into a
+reconnect, and that session's first reconcile re-opens everything still queued.
+
+Then, and only then, the forwarder asks the guest ONE cheap question
+(`buildCapabilityScript`): does `/etc/construct/forwards` exist with `requests/`, `acks/`
+and `close/` — the exact set `bin/provision.sh` `install -d`s on every provision? A VM
+provisioned *before* `construct expose` existed answers `SPOOL=0`, and that costs **one
+exec and nothing else**: no watcher, no reconcile, no timer, one log line saying to
+reprovision, and no retry until the next connect, switch or setting change. Holding a
+connection and polling such a VM every 30 s would be a socket, a wakeup and a battery
+charged to an install that gained nothing — exactly what the zero-change rule is about.
+(`OWNER=absent` from the reconcile still stands the forwarder down, for a spool that
+disappears *after* the check.)
+
+**The one deliberate default-path addition**, and the only long-lived process this feature
+starts on a default install, is the spool watcher — spawned only after `SPOOL=1`, with
+exactly this argv (`forwarder-ui.buildStreamArgs`, pinned in `forwarder.test.js`):
+
+```
+argv[0..10]  -T -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=12 \
+             -o ServerAliveInterval=20 -o ServerAliveCountMax=3
+argv[11]     agent-vm                         # the ssh alias (the default instance's)
+argv[12]     the remote command, ONE argument, exactly as `ssh.wrapScriptCommand` builds it:
+
+  f=$(mktemp) && printf %s '<base64 of forwarder.buildWatchScript()>' | base64 -d > "$f" \
+    && bash "$f"; rc=$?; rm -f "$f"; exit $rc
+```
+
+(Thirteen elements in all: `-T`, five `-o` pairs, the alias, the command.) That whole
+array is asserted **element for element** in `forwarder.test.js`, with the command rebuilt
+from the watch script's own base64 rather than by calling `wrapScriptCommand`, so a change
+to either the wrapper or the script fails the test rather than sliding past it. The script
+it carries is `buildWatchScript` — an `inotifywait -m` on `requests/` and `close/` that
+prints `CHANGED`, heartbeats, and traps SIGHUP to reap itself.
+
+`-i <key> -o IdentitiesOnly=yes` leads the argv when the instance has a key file, and `-p`
+is emitted **only for a non-22 port** — so the default instance's argv is the notification
+watcher's, option for option. Every *other* argv on the default path is byte-identical to
+the pre-forwards build.
+
+### One session, one chain
+
+The forwarder is a live per-VM connection, so it obeys the same rule the mic tunnel does:
+**exactly one may exist, and only one serialized chain may create or dispose it**
+(`instances.createHandover`, the decision by `instances.planEnable`, the slot by
+`instances.createSessionOwner`). Building the transport is a real `await` for a remote
+instance (its token comes from `SecretStorage`), and disabling forwarding, switching
+instance or closing the window during it must all leave *nothing* behind — so the start
+claims the slot **before** that await and re-checks the claim, the setting, the chain's
+closed flag and the generation **after** it. A start that lost any of them publishes
+nothing, and a snapshot from a session the slot has moved on from is dropped rather than
+painted over the current VM's card.
+
+**There is a second await, and it is inside the session.** `Forwarder.start()` asks the
+guest before it spawns anything, and a teardown requested during that check is queued
+*behind* the start that is still running — so the session would put its watcher up and
+reconcile the spool first and be disposed a moment later. Two things prevent it: every stop
+request goes through `requestForwarderStop()`, which invalidates the slot **synchronously**
+and only then queues the disposal on the chain; and the session is handed the window's own
+`eligible()` (claim + setting + chain-closed + generation), which it asks on both sides of
+the capability check and stands down on — spawning nothing at all. So "no SSH after the
+window said stop" holds across *both* awaits, not just the first. `deactivate()` closes the chain first and disposes the
+one live session second, which is the same single documented exception the mic path makes.
 
 ### Wire-document validation (local spool only)
 
@@ -1304,17 +1403,12 @@ document that we did read would tear down whichever tunnel its file name selects
 The **service's** list is a different contract with no `v` at all, so `readForwardList`
 stays deliberately lenient — the same leniency `bin/construct-expose.sh` reads it with.
 
-**A VM with no spool is probed once and then dropped.** `construct.forwards.enabled`
-defaults to `true`, because a feature the agents are told to use cannot need configuring
-first — but a VM provisioned *before* `construct expose` existed has no
-`/etc/construct/forwards`, no `expose` verb, and nothing this module could ever serve.
-Holding a connection and polling it every 30 s would be a real cost (a socket, a wakeup,
-a battery) charged to an install that gained nothing, which is exactly what the zero-change
-rule is about. So the reconcile script answers `OWNER=absent` for a missing directory, and
-the forwarder **stands down**: the watcher is killed, the poll is cancelled, and one line
-in the log says to reprovision. It stays re-startable, so the next activation, instance
-switch or setting change asks again — and `provision.sh` creates the directories on every
-provision, so reprovisioning is all it takes.
+**A VM with no spool is asked once and then dropped** — see *lazy, and gated on the guest*
+above for the capability check that decides it. The reconcile script's `OWNER=absent` is the
+same answer arriving one round trip later (a spool removed after the check), and it stands
+the forwarder down the same way: the watcher is killed, the poll is cancelled, one line in
+the log says to reprovision, and it stays re-startable because `provision.sh` creates the
+directories on every provision.
 
 ### Remote mode
 
@@ -1324,7 +1418,9 @@ cannot post a client ack, see `service/README.md`). Client-target entries with n
 tunnel over the instance's SSH endpoint (`sshHost:sshPort` from the registry, i.e. the port
 the service allocated), then a `POST /vms/{name}/forwards/{id}/ack`. An entry that leaves
 the list has been closed, so its tunnel is killed. The poll runs only while a window has
-that instance active — the service, not this PC, is the authority for a remote VM.
+that instance active *and* has established it is up — the service, not this PC, is the
+authority for a remote VM, so there is no spool and no capability check here: the same
+lazy trigger simply starts the poll instead of a watcher.
 
 ### Tunnel supervision
 
