@@ -69,11 +69,38 @@ const liveWebviews = new Set();
 // instance object itself (activeInstance()) rides into lifecycle/vmpower/config-sync.
 const ACTIVE_INSTANCE_KEY = "construct.activeInstance"; // workspaceState (per window)
 let extensionContext = null;          // set in activate(); owns workspaceState
+/** The window-local selection installed when workspaceState.update REJECTED, so the
+ *  switch the user was told about actually holds for this window (instances
+ *  .planSwitchPersistence). "" whenever the persisted value is the truth. */
+let windowInstanceOverride = "";
 let registryCache = null;             // { at, registry } — the parsed instances.json
 let registryProblemsShown = "";       // last problem set surfaced, so we toast once
 const REGISTRY_TTL_MS = 5000;         // re-read the (tiny) file at most every 5s
 /** The instance the mic tunnel was opened for, so a switch can retarget it. */
 let hostAudioInstance = null;
+/**
+ * Ownership of the ONE mic-tunnel slot (instances.createSessionOwner). Every enable
+ * claims it and stamps its own callbacks — the enable result, HostAudio's onStatus, the
+ * teardown's final "disabled" — with the claim id, so a session we have switched away
+ * from cannot paint its status over the new VM's tunnel or clear the reference to it.
+ */
+const audioSlot = instances.createSessionOwner();
+/** The claim id the live mic session (hostAudio) was armed under, or null. */
+let hostAudioSession = null;
+/**
+ * The live session's enable(), mapped to always settle. The teardown waits for it: a
+ * HostAudio disabled MID-ENABLE tears down what exists at that moment (nothing yet), and
+ * the enable then goes on to open its AudioSession and `ssh -R` behind the teardown's
+ * back — an orphan tunnel on the instance we just left, referenced by nothing.
+ */
+let hostAudioEnable = null;
+/**
+ * The instance the mic auto-arm was last EVALUATED for — set at activation and on every
+ * switch that retargets the tunnel. It is not `hostAudioInstance`: that one is null when
+ * the evaluation produced no tunnel (the VM was unreachable, or the preference was off),
+ * which is exactly the case where the next switch still has to evaluate the destination.
+ */
+let audioTargetInstance = null;
 /** The instance the notification watcher is connected to. */
 let notifyInstance = null;
 /** The status-bar item showing the active instance (only when >1 exists). */
@@ -126,8 +153,12 @@ function instanceSetting() {
   catch (_) { return ""; }
 }
 
-/** The window's persisted instance choice, or "" when it has never chosen. */
+/** The window's persisted instance choice, or "" when it has never chosen. A switch
+ *  whose workspaceState write REJECTED stands in with an in-memory override at exactly
+ *  the same precedence level (below the construct.instance pin), so the window really is
+ *  on the instance the warning says it is — it just won't survive a reload. */
 function workspaceInstance() {
+  if (windowInstanceOverride) return windowInstanceOverride;
   try { return String((extensionContext && extensionContext.workspaceState.get(ACTIVE_INSTANCE_KEY)) || "").trim(); }
   catch (_) { return ""; }
 }
@@ -1809,8 +1840,17 @@ async function importFromVm(target) {
 // setAudio(false) → HostAudio.disable(): stop capture + tunnel, then remove the shim
 // + revert the patch on the VM. deactivate() disposes the local side unconditionally.
 
-/** Broadcast live audio status to every webview (flips the console switch). */
-function broadcastAudio(status) {
+/** Broadcast live audio status to every webview (flips the console switch).
+ *  `session` is the audioSlot claim the status belongs to (see hostAudioSession): a
+ *  status from a session a LATER enable has superseded is dropped, so instance A's
+ *  trailing teardown report can't switch B's live tunnel off in every panel. A status
+ *  with no session (the ungated call sites: "there is nothing armed") always goes out,
+ *  which is what keeps the single-instance path exactly as it was. */
+function broadcastAudio(status, session) {
+  if (session != null && !audioSlot.owns(session)) {
+    logLine(`audio: a status update from a superseded mic session was dropped — the tunnel slot now belongs to "${audioSlot.name}"`);
+    return;
+  }
   const msg = { type: "audio", enabled: !!status.enabled, capturing: !!status.capturing };
   if (status.tunnel) msg.tunnel = status.tunnel;
   if (typeof status.gatePatched === "boolean") msg.gatePatched = status.gatePatched;
@@ -1876,21 +1916,35 @@ function enableAudio(context, webview, opts = {}) {
   }
   micWarnedReasons = new Set(); // fresh enable: allow one warning per failure reason again
   hostAudioInstance = t.name;
+  // Claim the one tunnel slot: every callback below carries this id, and a later enable
+  // (the next switch) invalidates it — see broadcastAudio and `handle`.
+  const session = audioSlot.claim(t.name);
+  hostAudioSession = session;
   hostAudio = new audio.HostAudio({
     // The mic tunnel is per-INSTANCE: the reverse forward lands on the VM this enable
     // was captured for. The VM-side port range (8767+) is per VM, so two instances
     // never contend for it; only the host-side cfg has to follow the switch.
     cfg: t.cfg,
     mic: makeMicProvider(),
-    onStatus: (s) => broadcastAudio(s),
+    onStatus: (s) => broadcastAudio(s, session),
   });
   const handle = (r) => {
+    // A result that lands after a LATER enable claimed the slot describes a session this
+    // window has already moved on from: reporting it would flip the new tunnel's switch
+    // off, and clearing `hostAudio` would drop the reference to the new HostAudio —
+    // leaving its tunnel open with nothing left to dispose it.
+    if (!audioSlot.owns(session)) {
+      logLine(`audio: the enable for "${t.name}" finished after the mic tunnel moved to "${audioSlot.name}" — result discarded`);
+      return;
+    }
     if (!r.ok) {
       // Reset the switch to off on every surface.
       hostAudio = undefined;
       hostAudioInstance = null;
+      hostAudioSession = null;
+      hostAudioEnable = null;
       safePost(webview, { type: "audio", enabled: false, capturing: false });
-      broadcastAudio({ enabled: false, capturing: false });
+      broadcastAudio({ enabled: false, capturing: false }, session);
       if (opts.auto) return; // best-effort startup arm: stay silent, the switch shows off
       const why = {
         unreachable: "Couldn't reach the VM. Is it running?",
@@ -1919,14 +1973,21 @@ function enableAudio(context, webview, opts = {}) {
       }
     }
   };
+  // ONE enable promise per session, published before anything can await it: the teardown
+  // (disableAudio) waits for it to settle before it disables this HostAudio, so a switch
+  // can never disable a half-enabled session and let the enable finish its tunnel behind
+  // the teardown — an orphan `ssh -R` on the instance we left. Both paths below consume
+  // the same promise; the SSH work and its argv are unchanged either way.
+  const started = hostAudio.enable();
+  hostAudioEnable = Promise.resolve(started).then(() => null, () => null);
   if (opts.auto) {
     // No notification progress on startup — auto-arm must be invisible until it succeeds.
-    hostAudio.enable().then(handle, () => handle({ ok: false, error: "enable-failed" }));
+    started.then(handle, () => handle({ ok: false, error: "enable-failed" }));
     return;
   }
   vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: "Enabling microphone passthrough…", cancellable: false },
-    async () => { handle(await hostAudio.enable()); }
+    async () => { handle(await started); }
   );
 }
 
@@ -2196,24 +2257,41 @@ async function runDeleteProject(name) {
   }
 }
 
-/** Disable mic passthrough: stop capture + tunnel, revert the VM shim + patch. */
+/** Disable mic passthrough: stop capture + tunnel, revert the VM shim + patch.
+ *  RETURNS the teardown promise (never rejects): a switch has to be able to sequence
+ *  the destination's arm AFTER the instance it left has actually let go of its tunnel,
+ *  instead of racing it. Nothing on the single-instance path awaits it, so the toggle
+ *  behaves exactly as before. */
 function disableAudio() {
-  if (!hostAudio) { broadcastAudio({ enabled: false, capturing: false }); return; }
+  if (!hostAudio) { broadcastAudio({ enabled: false, capturing: false }); return Promise.resolve(); }
   const inst = hostAudio;
+  // The session this teardown reports for: once a later enable claims the slot, this
+  // instance's "disabled" must not overwrite the new tunnel's status (broadcastAudio).
+  const session = hostAudioSession;
+  // ...and the enable that may still be in flight ON THIS SESSION (never rejects).
+  const pendingEnable = hostAudioEnable;
   hostAudio = undefined;
   hostAudioInstance = null;
-  vscode.window.withProgress(
+  hostAudioSession = null;
+  hostAudioEnable = null;
+  return Promise.resolve(vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: "Disabling microphone passthrough…", cancellable: false },
     async () => {
+      // Let a half-finished enable COMPLETE before disabling it. HostAudio.disable()
+      // tears down what exists when it runs: mid-enable that is nothing yet, and the
+      // enable would then open its AudioSession and `ssh -R` after the teardown had
+      // already passed — a live tunnel to the instance we left that no reference can
+      // reach. Bounded by the enable's own SSH timeouts.
+      if (pendingEnable) await pendingEnable;
       const r = await inst.disable();
       if (!r.ok) {
         vscode.window.showWarningMessage(
           "Microphone passthrough is off locally, but the VM cleanup (removing the shim / reverting the patch) may not have completed. Re-enable and disable once the VM is reachable to fully clean up."
         );
       }
-      broadcastAudio({ enabled: false, capturing: false });
+      broadcastAudio({ enabled: false, capturing: false }, session);
     }
-  );
+  )).catch(() => {});
 }
 
 // ── Switching the active instance ───────────────────────────────────────────
@@ -2251,27 +2329,65 @@ async function switchInstance(name) {
     return;
   }
   if (activeInstance().name === wanted) return;
+  // Read the pin BEFORE reporting: with `construct.instance` pinned to another instance
+  // the window does not move at all, so a failed write must not be reported as a switch
+  // that took effect "for this window" — the pin warning below is the accurate half.
+  // The pin only counts when the REGISTRY HOLDS IT (instances.effectivePin, the same
+  // own-property membership resolveActive uses): a stale setting naming a removed
+  // instance pins nothing, and reporting it would contradict the window's own active
+  // target — both warnings therefore key off this one value.
+  const setting = instanceSetting();
+  const pin = instances.effectivePin(reg, setting);
+  if (setting && !pin) {
+    logLine(`instances: the "construct.instance" setting names "${setting}", which is not in the registry — it pins nothing`);
+  }
+  let persisted = true;
   try { await extensionContext.workspaceState.update(ACTIVE_INSTANCE_KEY, wanted); }
   catch (e) {
     // Without persistence the switch would silently revert on the next reload — say so.
+    // And say it TRUTHFULLY: a warning that the window switched "for now" while nothing
+    // held the new selection left activeInstance() resolving the PREVIOUS instance, so
+    // the refresh below re-rendered the VM the user had just switched away from. The
+    // window-local override is what makes the message true (planSwitchPersistence).
+    persisted = false;
     logLine("instances: could not persist the active instance — " + (e && e.message ? e.message : e));
-    vscode.window.showWarningMessage("Switched to \"" + wanted + "\" for now, but the choice couldn't be saved for this window.");
   }
-  const setting = instanceSetting();
-  if (setting && setting !== wanted) {
+  const persistence = instances.planSwitchPersistence(wanted, persisted, pin);
+  windowInstanceOverride = persistence.override;
+  if (persistence.message) vscode.window.showWarningMessage(persistence.message);
+  if (pin && pin !== wanted) {
     // Honesty: the setting outranks workspaceState, so the switch would silently not
     // take effect. Say so rather than leave the user staring at the old VM.
     vscode.window.showWarningMessage(
-      `The "construct.instance" setting pins every window to "${setting}", so this window still uses it. Clear that setting to switch per window.`
+      `The "construct.instance" setting pins every window to "${pin}", so this window still uses it. Clear that setting to switch per window.`
     );
   }
   logLine(`instances: active instance -> ${activeInstance().name}`);
   await onInstanceChanged();
 }
 
+/**
+ * The mic tunnel's handover across a switch (instances.createHandover), serialized:
+ * tear the instance we left off its tunnel, THEN evaluate the destination's own saved
+ * preference against the destination's target. Every switch goes through this one chain,
+ * so A→B→C can neither leave B's tunnel behind nor let B's arm win over C's.
+ */
+const audioHandover = instances.createHandover({
+  session: () => ({ live: !!hostAudio, name: hostAudioInstance }),
+  teardown: () => disableAudio(),
+  arm: (target) => maybeAutoEnableAudio(extensionContext, target),
+  superseded: (target) => instances.targetSuperseded(instanceGate, target),
+});
+
 /** Re-target everything that holds a per-VM connection or cache, then re-render. */
 async function onInstanceChanged() {
   const inst = activeInstance();   // also bumps instanceGate, invalidating live tokens
+  // Did the DESTINATION change since the mic was last evaluated? A window that has not
+  // actually changed instance (the construct.instance setting was edited to the name it
+  // already resolves to) must do nothing new — that is the single-VM path, which never
+  // switches at all. The gate's own name can't answer this: activeInstance() above (and
+  // switchInstance's log line before it) has already moved it to the new name.
+  const micSwitched = inst.name !== audioTargetInstance;
   // VM-derived caches: the probe, the update check's markers and the usage table are
   // all "about a VM", so serving the previous one's results would be a lie.
   inflightProbe = null;
@@ -2284,13 +2400,17 @@ async function onInstanceChanged() {
     stopNotifyWatch();
     if (notificationsEnabled()) startNotifyWatch();
   }
-  // The mic tunnel likewise terminates on one VM. Drop it and let the saved preference
-  // re-arm it against the new instance (quietly — same rules as the startup auto-arm).
-  if (hostAudio && hostAudioInstance && hostAudioInstance !== inst.name) {
-    disableAudio();
-    // Captured for the instance we just switched TO, so the arm that follows reads that
-    // VM's preference and dials that VM even if another switch beats the probe home.
-    maybeAutoEnableAudio(extensionContext, instances.captureTarget(instanceGate, inst));
+  // The mic tunnel likewise terminates on one VM. Drop it and let the DESTINATION's own
+  // saved preference re-arm it (quietly — same rules as the startup auto-arm). The arm
+  // is evaluated on every switch, not only when a tunnel existed: a startup arm that
+  // produced none (instance A unreachable) used to mean B's micPassthrough was never
+  // honoured at all. The target is captured for the instance we just switched TO, so the
+  // arm reads that VM's preference and dials that VM even if another switch beats the
+  // probe home; the chain runs in the background so the panel refresh below is not held
+  // behind an SSH teardown.
+  if (micSwitched) {
+    audioTargetInstance = inst.name;
+    void audioHandover.switch(instances.captureTarget(instanceGate, inst));
   }
   syncInstanceStatusItem();
   await refreshAll();
@@ -3096,6 +3216,10 @@ async function activate(context) {
     );
   }
   maybeAutoOpenPanel(context);
+  // The startup arm is the first evaluation of the mic preference; record which instance
+  // it was for, so onInstanceChanged only re-evaluates when the destination REALLY
+  // changed (a single-VM window never switches, so it never re-arms).
+  audioTargetInstance = activeInstance().name;
   maybeAutoEnableAudio(context);
   // Notification watcher: independent of any open dashboard, so an agent can reach
   // the user who never opened the panel. Delayed slightly so the SSH connect doesn't
@@ -3143,6 +3267,9 @@ function deactivate() {
   try { if (repatchTimer) clearTimeout(repatchTimer); } catch (_) {}
   repatchTimer = null;
   hostAudioInstance = null;
+  hostAudioSession = null;
+  hostAudioEnable = null;
+  audioTargetInstance = null;
   stopAutoRefresh();
   stopNotifyWatch();
   stopConfigWatcher();
