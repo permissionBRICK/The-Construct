@@ -190,6 +190,9 @@ ok("messy: unknown backend reported", messy.problems.some((p) => p.includes("mar
 ok("messy: invalid sshPort reported", messy.problems.some((p) => p.includes("sshPort")));
 ok("messy: dangling default reported", messy.problems.some((p) => p.includes("ghost")));
 ok("messy: hyperv-remote without sshHost reported", messy.problems.some((p) => p.includes("no sshHost")));
+// ...and SKIPPED, not left actionable with the derived <name>.mshome.net address (a
+// remote endpoint only ever comes from the host service).
+ok("messy: hyperv-remote without sshHost is skipped", !messy.byName["remote-vm"]);
 
 // A foreign schema version is REFUSED, not partially read: a later version may redefine
 // what a field MEANS, so acting on a misread entry could target the wrong machine.
@@ -225,11 +228,16 @@ ok("boolean version: true is NOT version 1",
 // SAME problems. test/instances.test.ps1 runs this identical matrix; the two lists are
 // kept in step by hand, so change them together.
 console.log("\n=== normalization parity (mirrored in test/instances.test.ps1) ===");
+// `martian-remote` is an UNKNOWN backend on purpose: it is neither local (so the
+// canonical-identity rule does not apply) nor remote (so the endpoint/vmName rules do
+// not), which leaves exactly the field-by-field TYPE normalization on show. The
+// uppercase spelling of a KNOWN backend has its own fixture below, because a spelling
+// getDriver() resolves to the remote driver is held to that backend's rules.
 const mx = inst.load({ path: writeRegistry(JSON.stringify({
   version: 1,
   instances: {
     "typed-vm": {
-      backend: "HYPERV-REMOTE", sshHost: 123, sshPort: "2201",
+      backend: "martian-remote", sshHost: 123, sshPort: "2201",
       hostAlias: true, keyName: 42, configBranch: ["x"], owner: 7,
       service: { url: "https://x", auth: "TOKEN" },
     },
@@ -238,10 +246,7 @@ const mx = inst.load({ path: writeRegistry(JSON.stringify({
   },
 })) });
 const tv = mx.byName["typed-vm"];
-// Case-SENSITIVE: "HYPERV-REMOTE" is not the enum value, so it is reported — and kept
-// exactly as written, which is what makes drivers/index.js refuse it a driver on BOTH
-// sides rather than one of them treating it as the local Hyper-V backend.
-eq("parity: uppercase backend rejected (case-sensitive) and kept verbatim", tv.backend, "HYPERV-REMOTE");
+eq("parity: unknown backend kept verbatim", tv.backend, "martian-remote");
 eq("parity: numeric sshHost NOT stringified", tv.vmHost, "typed-vm.mshome.net");
 eq("parity: digit-string sshPort accepted", tv.sshPort, 2201);
 eq("parity: boolean hostAlias -> derived bare name", tv.hostAlias, "typed-vm");
@@ -254,10 +259,30 @@ eq("parity: '+2201' rejected -> 22", mx.byName["port-vm"].sshPort, 22);
 for (const f of ["sshHost", "hostAlias", "keyName", "configBranch", "owner"]) {
   ok(`parity: type problem reported for "${f}"`, mx.problems.some((p) => p.includes(`"${f}" must be a string`)));
 }
-ok("parity: uppercase backend reported", mx.problems.some((p) => p.includes("HYPERV-REMOTE")));
+ok("parity: unknown backend reported", mx.problems.some((p) => p.includes("martian-remote")));
 ok("parity: uppercase auth reported", mx.problems.some((p) => p.includes("service auth")));
 ok("parity: scalar service reported", mx.problems.some((p) => p.includes('"service" must be an object')));
 ok("parity: bad port reported", mx.problems.some((p) => p.includes("invalid sshPort")));
+
+// A CASE-VARIANT of a known backend id does not load AT ALL, for either backend. Every
+// enum comparison in both readers is case-sensitive (so "HYPERV-REMOTE" is "unknown" to
+// them), while getDriver() trims and lowercases (so it hands back the REAL driver — the
+// remote one here, the local one with hostLifecycle for "HYPERV-LOCAL"). The two
+// readings disagree about what the entry IS, so nothing acts on it under either.
+for (const [label, id] of [["remote", "HYPERV-REMOTE"], ["local", "HYPERV-LOCAL"], ["mixed", "Hyperv-Remote"]]) {
+  const cased = inst.load({ path: writeRegistry(
+    '{"version":1,"instances":{"cased-vm":{"backend":"' + id + '","sshHost":"buildbox.local","sshPort":2201}}}') });
+  ok(`parity: a case-variant backend id (${label}) does not load`, !cased.byName["cased-vm"]);
+  ok(`parity: ...reported as a spelling the two lookups read differently (${label})`,
+    cased.problems.some((p) => p.includes(id) && p.includes("case-sensitive") && p.includes("skipped")));
+  ok(`parity: ...naming the canonical spelling (${label})`,
+    cased.problems.some((p) => p.includes('is not spelled "' + id.toLowerCase() + '"')));
+}
+// ...while a genuinely unknown id IS kept: getDriver finds no driver for it under any
+// casing, so the unknown-driver fallback is what acts on it (hypervisor actions refused).
+ok("parity: an unknown backend still loads and is merely reported",
+  !!inst.load({ path: writeRegistry(
+    '{"version":1,"instances":{"cased-vm":{"backend":"proxmox","sshHost":"buildbox.local"}}}') }).byName["cased-vm"]);
 
 // ── KEY-CASING PARITY (mirrored in test/instances.test.ps1) ──────────────────
 // JavaScript property lookup is case-SENSITIVE; the PowerShell reader's was case-
@@ -479,7 +504,10 @@ const cannotTarget = (label, parsed) => {
   }
 };
 // A GENUINELY unknown backend is kept verbatim: the driver dispatch degrades on it
-// correctly (unknownDriver), which is what refuses the destructive actions.
+// correctly (unknownDriver), which is what refuses the destructive actions. (A
+// case-variant of a KNOWN id — "HYPERV-REMOTE" — is NOT in this list: getDriver
+// lowercases, so that one really does get a driver, and it is refused whole instead. See
+// the case-variant fixtures in the parity matrix above.)
 for (const backend of ["proxmox", "hyperv-remtoe", "HYPERV-PROXMOX"]) {
   const parsed = parse({ version: 1, instances: { "work-vm": { backend, sshHost: "buildbox.local" } } });
   const entry = parsed.registry.byName["work-vm"];
@@ -611,6 +639,78 @@ eq("canonical: reprovision dials the derived host", canonPair(canonRepro, "-VmHo
 eq("canonical: reprovision uses the derived alias", canonPair(canonRepro, "-HostAlias"), "work-vm");
 eq("canonical: reprovision uses the derived key", canonPair(canonRepro, "-LocalKeyName"), "construct_work-vm_ed25519");
 eq("canonical: reprovision uses port 22", canonPair(canonRepro, "-SshPort"), "22");
+
+// ── The REMOTE backend's own identity rules ─────────────────────────────────
+// Mirrored assertion-for-assertion in test/instances.test.ps1 (same fixtures, same
+// order); change the two together.
+//   vmName === name — the host service addresses the VM by that name, and so does a
+//     rebuild (-InstanceName). An entry keyed `alias-vm` with vmName `service-vm` had
+//     Start and the power state acting on service-vm while Reinstall DELETED and
+//     recreated alias-vm.
+//   sshHost stated  — a remote endpoint is whatever the service allocated. An entry
+//     that omits it used to load with the DERIVED `<name>.mshome.net:22`, i.e. an
+//     actionable instance pointing at an unrelated machine on this PC's own network.
+console.log("\n=== canonical remote identity (vmName === name, sshHost required) ===");
+const REMOTE_OK = { backend: "hyperv-remote", vmName: "work-vm", sshHost: "buildbox.example.local", sshPort: 2201 };
+const remoteGood = parse({ version: 1, instances: { "work-vm": REMOTE_OK } });
+deepEq("remote: a canonical remote entry loads with no problems", remoteGood.problems, []);
+eq("remote: ...as itself", remoteGood.registry.byName["work-vm"].vmHost, "buildbox.example.local");
+// An omitted vmName DERIVES the instance name, so it satisfies the rule by construction.
+ok("remote: an omitted vmName derives the instance name and is fine",
+  !!parse({ version: 1, instances: { "work-vm": { backend: "hyperv-remote", sshHost: "buildbox.local" } } })
+    .registry.byName["work-vm"]);
+for (const [label, entry, field] of [
+  ["a service VM name of its own", { ...REMOTE_OK, vmName: "service-vm" }, "vmName"],
+  // Compared EXACTLY: the value goes into a URL path and into a -InstanceName argument,
+  // and nothing may assume the service folds case.
+  ["a differently-cased vmName", { ...REMOTE_OK, vmName: "Work-VM" }, "vmName"],
+  ["no sshHost at all", { backend: "hyperv-remote", sshPort: 2201 }, "sshHost"],
+  ["an empty sshHost", { backend: "hyperv-remote", sshHost: "   ", sshPort: 2201 }, "sshHost"],
+  // The canonical spelling is `sshHost` — everything that writes the registry writes it.
+  ["the endpoint under the vmHost alias only", { backend: "hyperv-remote", vmHost: "buildbox.local" }, "sshHost"],
+]) {
+  const parsed = parse({ version: 1, instances: { "work-vm": entry } });
+  ok(`remote(${label}): the entry is ABSENT, not merely warned about`, !parsed.registry.byName["work-vm"]);
+  ok(`remote(${label}): the problem names "${field}" and says skipped`,
+    parsed.problems.some((p) => p.includes(`"${field}"`) && p.includes("skipped")));
+  // ...so nothing can act on it: resolve falls back to the default instance.
+  ok(`remote(${label}): resolve falls back to the default instance`,
+    inst.isDefaultInstance(inst.resolve(parsed.registry, "work-vm")));
+}
+// The derived mshome endpoint is exactly what must NOT survive a missing sshHost.
+const remoteNoHost = parse({ version: 1, instances: { "work-vm": { backend: "hyperv-remote" } } });
+ok("remote: no entry is left holding the derived <name>.mshome.net address",
+  !remoteNoHost.registry.byName["work-vm"] &&
+  !inst.list(remoteNoHost.registry).some((i) => i.vmHost === "work-vm.mshome.net"));
+ok("remote: the missing endpoint is reported in the words the PS reader uses",
+  remoteNoHost.problems.some((p) => p.includes("no sshHost")));
+// The WRITE side refuses the same shapes where they are created (they would otherwise be
+// persisted and then vanish from the picker on the next load).
+const remoteBase = inst.load({ path: writeRegistry(JSON.stringify({ version: 1, instances: {} })) });
+ok("remote: addInstance accepts the canonical entry",
+  !!inst.addInstance(remoteBase, "work-vm", REMOTE_OK).byName["work-vm"]);
+for (const [label, entry] of [
+  ["a service VM name of its own", { ...REMOTE_OK, vmName: "service-vm" }],
+  ["no sshHost", { backend: "hyperv-remote", sshPort: 2201 }],
+]) {
+  ok(`remote: addInstance refuses ${label}`,
+    (() => { try { inst.addInstance(remoteBase, "work-vm", entry); return false; } catch (_) { return true; } })());
+}
+ok("remote: updateInstance refuses a patch that splits the identity",
+  (() => {
+    const withRemote = inst.addInstance(remoteBase, "work-vm", REMOTE_OK);
+    try { inst.updateInstance(withRemote, "work-vm", { vmName: "service-vm" }); return false; } catch (_) { return true; }
+  })());
+ok("remote: updateInstance refuses a patch that removes the endpoint",
+  (() => {
+    const withRemote = inst.addInstance(remoteBase, "work-vm", REMOTE_OK);
+    try { inst.updateInstance(withRemote, "work-vm", { sshHost: null }); return false; } catch (_) { return true; }
+  })());
+// The rules are the remote backend's ALONE: a local instance's vmName is its own
+// (case-insensitive) rule and needs no sshHost at all.
+ok("remote: the rules do not touch a hyperv-local entry",
+  !!parse({ version: 1, instances: { "work-vm": { backend: "hyperv-local", vmName: "Work-VM" } } })
+    .registry.byName["work-vm"]);
 
 // ── Cross-entry identity collisions ─────────────────────────────────────────
 // Two names for one machine: a rebuild of one would delete the other's VM, and a
@@ -1156,6 +1256,17 @@ for (const action of ["reinstall", "redownload"]) {
     r.args.includes("-InstanceName") && r.args.includes("work-vm") &&
     !r.args.includes("-VmName"));
 }
+// ...and the name it targets on the service is the SAME string the driver queries and
+// starts. That is what the canonical remote identity buys: `-InstanceName` (the rebuild,
+// which DELETES) and drivers/hyperv-remote.vmNameOf (the power state, Start) can no
+// longer name two different VMs on the host.
+const remoteLoaded = inst.resolve(parse({ version: 1, instances: {
+  "work-vm": { backend: "hyperv-remote", vmName: "work-vm", sshHost: "buildbox.local", sshPort: 2201, service: REMOTE_SVC },
+} }).registry, "work-vm");
+const remoteRebuild = life.buildInvocation("reinstall", { settings: SETTINGS, instance: remoteLoaded, instanceParams: REMOTE_ALL });
+eq("gate: the rebuild's -InstanceName IS the name the driver drives",
+  remoteRebuild.args[remoteRebuild.args.indexOf("-InstanceName") + 1],
+  require("../src/drivers/hyperv-remote").vmNameOf(remoteLoaded));
 const chk = life.buildInvocation("setCheckpoints", { settings: SETTINGS, enabled: true, instance: remoteInst, instanceParams: REMOTE_ALL });
 ok("gate: setCheckpoints is refused for a hyperv-remote instance", chk.blocked === true);
 ok("gate: ...because the backend has no checkpoints", /no checkpoints/i.test(chk.reason));
@@ -1500,7 +1611,8 @@ ok("mic switch: ...only when the destination really changed (a single-VM window 
   // the startup arm records the instance it evaluated, so the first onInstanceChanged
   // with an unchanged name is a no-op rather than a fresh arm.
   extSrc.includes("audioTargetInstance = activeInstance().name;") &&
-  extSrc.indexOf("audioTargetInstance = activeInstance().name;") < extSrc.indexOf("maybeAutoEnableAudio(context);"));
+  extSrc.indexOf("audioTargetInstance = activeInstance().name;") <
+    extSrc.indexOf("void requestAudioEnable(context, undefined, { auto: true });"));
 ok("mic switch: the teardown is AWAITABLE, so the destination's arm is sequenced after it",
   extSrc.includes("if (!hostAudio) { broadcastAudio({ enabled: false, capturing: false }); return Promise.resolve(); }") &&
   extSrc.includes("return Promise.resolve(vscode.window.withProgress(") &&
@@ -1509,7 +1621,7 @@ ok("mic switch: the teardown also waits for an enable still IN FLIGHT on that se
   // one enable promise per session, published before anything can await it...
   extSrc.includes("const started = hostAudio.enable();") &&
   extSrc.includes("hostAudioEnable = Promise.resolve(started).then(() => null, () => null);") &&
-  extSrc.includes("started.then(handle, () => handle({ ok: false, error: \"enable-failed\" }));") &&
+  extSrc.includes("return started.then(handle, () => handle({ ok: false, error: \"enable-failed\" })).catch(() => {});") &&
   extSrc.includes("async () => { handle(await started); }") &&
   // ...and the teardown captures it and awaits it BEFORE disabling the session, so a
   // half-enabled HostAudio can't finish its tunnel behind the teardown's back.
@@ -1530,6 +1642,49 @@ ok("mic switch: every status a session emits carries its slot claim, and a super
 ok("mic switch: a superseded enable RESULT cannot clear the new tunnel's reference",
   extSrc.includes("if (!audioSlot.owns(session)) {") &&
   extSrc.indexOf("if (!audioSlot.owns(session)) {") < extSrc.indexOf("      // Reset the switch to off on every surface."));
+// ...and the MANUAL operations ride the SAME chain. Run beside it, a manual enable that
+// arrived while a switch was tearing the previous instance down saw no session (the
+// reference was already dropped), built one, and the switch's own arm then built a
+// SECOND HostAudio for the same VM — the newer claim replaced the module's reference,
+// the older object's result was discarded as superseded, and nothing was left that could
+// dispose it: an orphan `ssh -R`. The ordering is modelled with deferred promises in
+// asyncTests() (createHandover.enable / .disable).
+ok("mic: every enable and the manual disable are queued on the ONE session chain",
+  extSrc.includes("function requestAudioEnable(context, webview, opts = {}) {") &&
+  extSrc.includes("return audioHandover.enable(target, (t) => (") &&
+  extSrc.includes("opts.auto ? maybeAutoEnableAudio(context, t) : enableAudio(context, webview, { target: t })") &&
+  extSrc.includes("function requestAudioDisable() {") &&
+  extSrc.includes("return audioHandover.disable();") &&
+  // ...and NOTHING calls the raw enable/disable outside that chain any more (the
+  // handover's own teardown, and the auto-arm the chain invokes, are the exceptions).
+  extSrc.includes("if (message.enabled) void requestAudioEnable(context, webview);") &&
+  extSrc.includes("else void requestAudioDisable();") &&
+  extSrc.includes("if (wantMic && !micOn) void requestAudioEnable(context, webview);") &&
+  extSrc.includes("else if (!wantMic && micOn) void requestAudioDisable();") &&
+  extSrc.includes("void requestAudioEnable(context, undefined, { auto: true, target: t });") &&
+  // ...and the raw teardown has exactly TWO mentions left: its own definition and the
+  // handover's `teardown` hook. Every user-facing "off" goes through the chain.
+  extSrc.split("disableAudio()").length === 3);
+// The DECISION itself is the pure instances.planEnable (exercised on its own, and driven
+// through the deferred model, in asyncTests()); extension.js only supplies the state and
+// carries out the answer. What is pinned here is that wiring.
+ok("mic: the enable decision is taken by instances.planEnable, from one state helper",
+  extSrc.includes("const plan = instances.planEnable(audioSlotState(), t.name);") &&
+  extSrc.includes("function audioSlotState() {") &&
+  extSrc.includes("live: !!hostAudio,") && extSrc.includes("name: hostAudioInstance,") &&
+  extSrc.includes("enabled: !!(hostAudio && hostAudio.enabled),") &&
+  extSrc.includes("pending: !!hostAudioEnable,") && extSrc.includes("closed: audioHandover.closed,") &&
+  // "report" and the non-"create" answers both return WITHOUT reaching the constructor,
+  // so nothing can build a second HostAudio while one is held.
+  extSrc.includes('if (plan.action === "report") {') &&
+  extSrc.includes('if (plan.action !== "create") {') &&
+  extSrc.indexOf('if (plan.action !== "create") {') < extSrc.indexOf("hostAudio = new audio.HostAudio({") &&
+  extSrc.includes('const pending = plan.action === "join" ? hostAudioEnable : null;') &&
+  extSrc.includes("return Promise.resolve(pending).then(() => { reportAudioState(webview); });") &&
+  extSrc.includes("function reportAudioState(webview) {"));
+ok("mic: shutdown closes the chain BEFORE the one disposal that happens outside it",
+  extSrc.includes("try { void audioHandover.close(); } catch (_) {}") &&
+  extSrc.indexOf("void audioHandover.close();") < extSrc.indexOf("try { if (hostAudio) hostAudio.dispose(); } catch (_) {}"));
 ok("switch: a rejected workspaceState write installs a window-local override, so the message is true",
   extSrc.includes("const persistence = instances.planSwitchPersistence(wanted, persisted, pin);") &&
   // the pin is read BEFORE the report, so a pinned window is never told it switched
@@ -2120,6 +2275,34 @@ async function asyncTests() {
   deepEq("handover: names compare case-sensitively, like every instance comparison here",
     inst.planHandover({ live: true, name: "Work-VM", next: "work-vm" }), { teardown: true, arm: true });
 
+  // The SINGLE-SESSION rule, as its own pure decision (instances.planEnable) — the
+  // branch that used to live inline in extension.js's enableAudio. Every state the mic
+  // slot can be in, and what an explicit "on" must do about it.
+  deepEq("planEnable: nothing held -> build the session (the single-VM path)",
+    inst.planEnable({ live: false }, "agent-vm"), { action: "create", reason: "idle" });
+  deepEq("planEnable: a session that is already ENABLED is only re-reported",
+    inst.planEnable({ live: true, name: "agent-vm", enabled: true }, "agent-vm"),
+    { action: "report", reason: "already-enabled" });
+  deepEq("planEnable: a session still being enabled is JOINED, never replaced",
+    inst.planEnable({ live: true, name: "work-vm", pending: true }, "work-vm"),
+    { action: "join", reason: "pending" });
+  deepEq("planEnable: ...even when it belongs to ANOTHER instance (the fail-closed backstop)",
+    inst.planEnable({ live: true, name: "agent-vm", pending: true }, "work-vm"),
+    { action: "join", reason: "pending-other-instance" });
+  deepEq("planEnable: a held session with no enable to join is REFUSED, not built over",
+    inst.planEnable({ live: true, name: "work-vm" }, "work-vm"), { action: "refuse", reason: "held" });
+  // Shutdown outranks every other state: after the chain is closed nothing new may exist.
+  for (const [label, state] of [
+    ["with nothing held", { live: false, closed: true }],
+    ["with a session coming up", { live: true, name: "work-vm", pending: true, closed: true }],
+    ["with a live session", { live: true, name: "work-vm", enabled: true, closed: true }],
+  ]) {
+    deepEq(`planEnable: a CLOSED window refuses to enable (${label})`,
+      inst.planEnable(state, "work-vm"), { action: "refuse", reason: "closed" });
+  }
+  deepEq("planEnable: a missing state is the idle one", inst.planEnable(null, "agent-vm"),
+    { action: "create", reason: "idle" });
+
   // The slot owner: a later claim invalidates every earlier one; an unclaimed status
   // (the single-VM disable, which claims nothing new) still goes out.
   const owner = inst.createSessionOwner();
@@ -2136,10 +2319,17 @@ async function asyncTests() {
   // destination really change" guard — driven with deferred promises so the
   // interleavings are exact instead of intermittent in a live window.
   const tick = async (n) => { for (let i = 0; i < (n || 4); i++) await Promise.resolve(); };
-  function micWindow(startName) {
+  function micWindow(startName, opts) {
+    // `joinPendingEnables: false` reproduces the pre-fix shape for the control below: the
+    // decision is taken WITHOUT instances.planEnable, exactly as extension.js used to
+    // take it inline ("nothing is enabled right now, so build one").
+    const joinPending = !(opts && opts.joinPendingEnables === false);
     const gate = inst.createGate(startName);
     const slot = inst.createSessionOwner();
-    const mic = { tunnel: null, name: null, session: null };   // the module-level trio
+    // The module-level state: hostAudio / hostAudioInstance / hostAudioSession, plus
+    // hostAudioEnable — the enable that is still in flight ON that session, which is what
+    // a second enable has to JOIN rather than replace.
+    const mic = { tunnel: null, name: null, session: null, enable: null };
     let evaluated = startName;                                  // audioTargetInstance
     let teardown = null;                                        // the pending VM cleanup
     const log = [], shown = [], tunnels = [], probes = new Map();
@@ -2152,37 +2342,74 @@ async function asyncTests() {
       shown.push(status);
     };
     const target = (name) => ({ ...inst.captureTarget(gate, { name }), name });
-    // enableAudio(): re-checks the capture, claims the slot, opens the tunnel — and its
-    // RESULT lands later, through the same claim.
+    /** extension.js's audioSlotState(): the module state planEnable reads. */
+    const slotState = () => ({
+      live: !!mic.tunnel,
+      name: mic.name,
+      enabled: !!(mic.tunnel && mic.tunnel.enabled),
+      pending: !!mic.enable,
+      closed: handover.closed,
+    });
+    // enableAudio(): asks the PRODUCTION decision (instances.planEnable) what to do about
+    // the session that exists right now, then carries the answer out — claim the slot and
+    // open the tunnel, whose RESULT lands later through that same claim. The model
+    // supplies only the effects; the branch under test is the real one.
     const enableAudio = (t) => {
-      if (inst.targetSuperseded(gate, t)) { log.push("enable-discarded:" + t.name); return null; }
+      const plan = joinPending
+        ? inst.planEnable(slotState(), t.name)
+        // The PRE-FIX inline decision, for the control: only an already-ENABLED session
+        // stopped a second one from being built.
+        : { action: mic.tunnel && mic.tunnel.enabled ? "report" : "create", reason: "pre-fix" };
+      log.push("plan:" + plan.action + ":" + t.name);
+      if (plan.action === "report") {
+        broadcast({ from: mic.name, enabled: true });
+        return Promise.resolve();
+      }
+      if (plan.action !== "create") {
+        // "join" awaits the enable that is already running — the promise the module
+        // published for that session — and reports on what it produced. "refuse" has
+        // nothing to await (a closed window, or a session with no enable in flight).
+        const pending = plan.action === "join" ? mic.enable : null;
+        return Promise.resolve(pending).then(() => {
+          broadcast({ from: mic.name, enabled: !!(mic.tunnel && mic.tunnel.enabled) });
+        });
+      }
+      if (inst.targetSuperseded(gate, t)) { log.push("enable-discarded:" + t.name); return Promise.resolve(); }
       const session = slot.claim(t.name);
-      const tunnel = { name: t.name, session, open: true, result: deferred() };
+      const tunnel = { name: t.name, session, open: true, enabled: false, result: deferred() };
       tunnels.push(tunnel);
       mic.tunnel = tunnel; mic.name = t.name; mic.session = session;
       log.push("armed:" + t.name);
+      // hostAudioEnable: one promise per session, published before anything can await it.
+      const pending = tunnel.result.promise.then(() => null, () => null);
+      mic.enable = pending;
       tunnel.result.promise.then((okResult) => {
         if (!slot.owns(session)) { log.push("result-dropped:" + tunnel.name); return; }
-        if (okResult) return;
-        mic.tunnel = null; mic.name = null; mic.session = null;
+        if (okResult) { tunnel.enabled = true; return; }
+        mic.tunnel = null; mic.name = null; mic.session = null; mic.enable = null;
         tunnel.open = false;
         broadcast({ from: tunnel.name, enabled: false }, session);
       });
-      return tunnel;
+      // The step ends when the session is PUBLISHED, not when its enable settles — that
+      // is deliberately where this model draws the boundary, because the window between
+      // the two is exactly where a second enable used to slip in. (extension.js returns
+      // the enable itself, so its steps additionally wait for the tunnel to come up: a
+      // superset of this ordering, driven against the real HostAudio further down.)
+      return Promise.resolve();
     };
     // maybeAutoEnableAudio(): capture -> probe -> planCapturedFollowUp -> enable.
     const arm = async (t) => {
       const reachable = await probeFor(t.name).promise;
       const plan = inst.planCapturedFollowUp(gate, t, reachable);
       if (!plan.run) { log.push("arm-" + plan.reason + ":" + t.name); return; }
-      enableAudio(plan.target);
+      return enableAudio(plan.target);
     };
     // disableAudio(): drops the reference at once, finishes over SSH, and reports for
     // the session it tore down (never for whatever is armed by then).
     const disable = () => {
       if (!mic.tunnel) { broadcast({ from: "(none)", enabled: false }); return Promise.resolve(); }
       const tunnel = mic.tunnel, session = mic.session;
-      mic.tunnel = null; mic.name = null; mic.session = null;
+      mic.tunnel = null; mic.name = null; mic.session = null; mic.enable = null;
       teardown = deferred();
       log.push("teardown-started:" + tunnel.name);
       return teardown.promise.then(() => {
@@ -2201,8 +2428,24 @@ async function asyncTests() {
       mic, log, shown, tunnels,
       probe: (name, reachable) => probeFor(name).resolve(reachable),
       finishTeardown: () => { const d = teardown; teardown = null; d.resolve(); return d.promise; },
-      /** activate()'s startup auto-arm. */
+      /** activate()'s startup auto-arm (before it, too, was queued on the chain). */
       armStartup: (name) => arm(target(name)),
+      /** requestAudioEnable(): the console/settings toggle's "on", on the ONE chain. */
+      manualEnable: (name) => handover.enable(target(name), (t) => enableAudio(t)),
+      /** requestAudioEnable({auto}): the startup / repatch auto-arm, on the same chain. */
+      autoArm: (name) => handover.enable(target(name), (t) => arm(t)),
+      /** requestAudioDisable(): the toggle's "off", queued so it cannot overtake an "on". */
+      manualDisable: () => handover.disable(),
+      /** The PRE-FIX shape, for the control: an enable run BESIDE the chain. */
+      enableOffChain: (name) => enableAudio(target(name)),
+      /** deactivate()'s first act: close the chain (nothing may construct after it). */
+      close: () => handover.close(),
+      /** HostAudio.enable() settling for the newest session of `name`. */
+      settleEnable(name, okResult) {
+        const t = tunnels.filter((x) => x.name === name).slice(-1)[0];
+        t.result.resolve(okResult !== false);
+        return t.result.promise;
+      },
       /** onInstanceChanged()'s mic half, guard included. */
       switchTo(name) {
         gate.set(name);
@@ -2212,6 +2455,10 @@ async function asyncTests() {
       },
       broadcast,
       openTunnels: () => tunnels.filter((t) => t.open).map((t) => t.name),
+      /** Tunnels that are still OPEN while the module no longer references them — the
+       *  leak this whole chain exists to make impossible. */
+      orphans: () => tunnels.filter((t) => t.open && t !== mic.tunnel).map((t) => t.name),
+      builtFor: (name) => tunnels.filter((t) => t.name === name).length,
     };
   }
 
@@ -2279,7 +2526,7 @@ async function asyncTests() {
   eq("single VM: a 'switch' to the instance already active does nothing", r4.reason, "unchanged");
   deepEq("single VM: ...one tunnel, still A's", w4.openTunnels(), ["agent-vm"]);
   deepEq("single VM: ...and the window did exactly one thing all session",
-    w4.log, ["armed:agent-vm", "no-op:agent-vm"]);
+    w4.log, ["plan:create:agent-vm", "armed:agent-vm", "no-op:agent-vm"]);
 
   // ...and if a handover DOES run for an instance that already holds the tunnel, it
   // leaves it alone rather than cycling the mic.
@@ -2303,6 +2550,134 @@ async function asyncTests() {
   const wedgedRes = await wedged.switch({ name: "work-vm" });
   ok("handover: a FAILED teardown still hands over", wedgedRes.armed === true && wedgedRes.teardown === true);
 
+  // ── A MANUAL enable racing the serialized handover ────────────────────────
+  // The integration review's exact interleaving: A's enable is still in flight, the
+  // window switches to B (which clears the reference and waits for A), and the user then
+  // flips the console switch for B DURING that wait. Run beside the chain, that manual
+  // enable saw no session, built one, and B's queued auto-arm then built a SECOND
+  // HostAudio for the same VM — the newer claim took the slot, the first enable's result
+  // was discarded as superseded, and nothing was left that could disable it: a live
+  // `ssh -R` to B with no reference to tear it down. On the chain it can only join.
+  console.log("\n=== manual enable vs. the serialized handover (one session, zero orphans) ===");
+  const w5 = micWindow("agent-vm");
+  w5.probe("agent-vm", true);
+  await w5.armStartup("agent-vm");            // A's session exists; its enable never settles
+  const s5 = w5.switchTo("work-vm");          // A's teardown starts, B's arm queued behind it
+  await tick();
+  const m5 = w5.manualEnable("work-vm");      // the user flips the switch mid-teardown
+  w5.probe("work-vm", true);
+  await tick();
+  ok("manual+auto: the manual enable WAITS in the queue while A tears down",
+    w5.log.includes("teardown-started:agent-vm") &&
+    !w5.log.includes("armed:work-vm") && !w5.log.includes("plan:join:work-vm"));
+  await w5.finishTeardown();
+  await tick(12);
+  ok("manual+auto: the switch's arm opened B's tunnel, and the manual enable JOINED it",
+    w5.log.indexOf("armed:work-vm") >= 0 &&
+    w5.log.indexOf("armed:work-vm") < w5.log.indexOf("plan:join:work-vm"));
+  // The join really does await the enable that was already in flight — it is still
+  // waiting on B's HostAudio.enable(), which has not settled yet.
+  let joinSettled = false;
+  void m5.then(() => { joinSettled = true; });
+  await tick();
+  ok("manual+auto: ...and it is still awaiting THAT enable, not reporting its own",
+    joinSettled === false && w5.builtFor("work-vm") === 1);
+  w5.settleEnable("work-vm", true);           // B's enable finally lands
+  const r5 = await s5, rm5 = await m5;
+  eq("manual+auto: the switch's own arm is what opened B's tunnel", r5.reason, "armed");
+  eq("manual+auto: ...and the manual enable is reported as a join", rm5.reason, "joined");
+  eq("manual+auto: exactly ONE session was ever built for B", w5.builtFor("work-vm"), 1);
+  deepEq("manual+auto: one tunnel is open, and it is B's", w5.openTunnels(), ["work-vm"]);
+  deepEq("manual+auto: nothing is orphaned", w5.orphans(), []);
+
+  // The reverse order — the manual enable gets there first and the auto-arm follows
+  // (startup, or the repatch retry): the arm must join, not build a second session.
+  const w6 = micWindow("work-vm");
+  const m6 = w6.manualEnable("work-vm");
+  const a6 = w6.autoArm("work-vm");
+  w6.probe("work-vm", true);
+  await tick(12);
+  ok("auto after manual: the auto-arm joins the session the manual enable is building",
+    w6.log.includes("plan:join:work-vm") && w6.builtFor("work-vm") === 1);
+  w6.settleEnable("work-vm", true);
+  const rm6 = await m6, ra6 = await a6;
+  eq("auto after manual: the manual enable built the session", rm6.reason, "armed");
+  eq("auto after manual: ...and the auto-arm joined it", ra6.reason, "joined");
+  eq("auto after manual: one session for the destination", w6.builtFor("work-vm"), 1);
+  deepEq("auto after manual: one tunnel, no orphans", w6.openTunnels(), ["work-vm"]);
+  deepEq("auto after manual: ...", w6.orphans(), []);
+
+  // ...and an "off" that arrives while an "on" is still coming up runs AFTER it, so the
+  // tunnel the enable opens is the one the disable tears down — not one left behind.
+  const w7 = micWindow("work-vm");
+  const on7 = w7.manualEnable("work-vm");
+  const off7 = w7.manualDisable();
+  await tick(12);
+  ok("off after on: the off waits for the on, so it tears down the session that was opened",
+    w7.log.indexOf("armed:work-vm") >= 0 &&
+    w7.log.indexOf("armed:work-vm") < w7.log.indexOf("teardown-started:work-vm"));
+  await w7.finishTeardown();
+  const r7 = await off7;
+  await on7;
+  eq("off after on: the disable reports the teardown it really did", r7.reason, "torn-down");
+  deepEq("off after on: no tunnel is left open", w7.openTunnels(), []);
+  deepEq("off after on: ...and nothing is orphaned", w7.orphans(), []);
+  // The control: an "off" with nothing armed still reports "there is nothing armed" —
+  // the single-VM path's own behaviour, unchanged.
+  const w8 = micWindow("agent-vm");
+  const r8 = await w8.manualDisable();
+  eq("off with nothing armed: reported as idle", r8.reason, "idle");
+  eq("off with nothing armed: ...and the status still goes out", w8.shown.length, 1);
+
+  // ── Shutdown: deactivate() CLOSES the chain, and nothing can build after it ────
+  // deactivate() disposes the one live session directly (it cannot await SSH), so the
+  // rule that only the chain constructs has to hold across that moment: close() first,
+  // dispose second. Two ways a session could otherwise appear behind the dispose.
+  console.log("\n=== shutdown (the chain is closed before the one direct disposal) ===");
+  const w10 = micWindow("agent-vm");
+  w10.close();                                 // deactivate()'s first act
+  const r10 = await w10.manualEnable("agent-vm");
+  eq("shutdown: a step queued after close() is refused", r10.reason, "closed");
+  deepEq("shutdown: ...and its enable never ran at all", w10.log, []);
+  deepEq("shutdown: ...so no tunnel was built", w10.openTunnels(), []);
+  const r10b = await w10.manualDisable();
+  eq("shutdown: a queued teardown is refused too (the direct dispose owns it)", r10b.reason, "closed");
+  // ...and a step that was ALREADY RUNNING when the window closed — an auto-arm sitting
+  // in its reachability probe — refuses to construct on the way out.
+  const w11 = micWindow("agent-vm");
+  const arming11 = w11.autoArm("agent-vm");
+  await tick();
+  ok("shutdown: the arm is in flight (waiting on its probe)", w11.builtFor("agent-vm") === 0);
+  w11.close();                                 // deactivate() while the probe is out
+  w11.probe("agent-vm", true);                 // the VM answers AFTER the window closed
+  await arming11;
+  ok("shutdown: an in-flight arm refuses to build a session after close()",
+    w11.log.includes("plan:refuse:agent-vm") && w11.builtFor("agent-vm") === 0);
+  deepEq("shutdown: ...so nothing is left open behind the dispose", w11.openTunnels(), []);
+  // The control: without the close, that same late probe DOES open a tunnel — which is
+  // exactly what would have survived deactivate().
+  const w12 = micWindow("agent-vm");
+  const arming12 = w12.autoArm("agent-vm");
+  await tick();
+  w12.probe("agent-vm", true);
+  await arming12;
+  deepEq("shutdown control: an unclosed window's late arm opens its tunnel", w12.openTunnels(), ["agent-vm"]);
+
+  // The CONTROL — the shape the review found: the manual enable runs BESIDE the chain and
+  // does not join a session that is still coming up. Two HostAudios for one VM, the first
+  // one's result discarded as superseded, and nothing left that can dispose it.
+  const w9 = micWindow("agent-vm", { joinPendingEnables: false });
+  w9.probe("agent-vm", true);
+  await w9.armStartup("agent-vm");
+  const s9 = w9.switchTo("work-vm");
+  await tick();
+  w9.enableOffChain("work-vm");               // the manual toggle, unqueued
+  w9.probe("work-vm", true);
+  await w9.finishTeardown();
+  await s9;
+  eq("control: the unqueued shape builds TWO sessions for one VM", w9.builtFor("work-vm"), 2);
+  deepEq("control: ...and leaves the first one open with nothing referencing it", w9.orphans(), ["work-vm"]);
+
   // ── A switch while the previous instance's enable is STILL IN FLIGHT ───────
   // The model above opens its tunnel synchronously, so it cannot see this ordering:
   // HostAudio.disable() tears down what exists WHEN IT RUNS, and mid-enable that is
@@ -2312,11 +2687,19 @@ async function asyncTests() {
   // server and spawner injected, paused before its first awaited SSH result.
   console.log("\n=== mid-enable switch (the real HostAudio, paused before its first SSH result) ===");
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  function fakeHostAudio(label, spawns) {
+  function fakeHostAudio(label, spawns, opts) {
+    const o = opts || {};
     const gateEnable = deferred();          // releases the enable's remote step
+    // Optionally pause the LOCAL SERVER's listen too, so a cancellation arriving at that
+    // later await can be driven as exactly as the SSH one.
+    const gateListen = o.pauseListen ? deferred() : null;
     const netState = { closed: false, port: null };
     const server = new EventEmitter();
-    server.listen = (port, host, cb) => { netState.port = 55555; if (cb) setImmediate(cb); return server; };
+    server.listen = (port, host, cb) => {
+      netState.port = 55555;
+      if (cb) { if (gateListen) void gateListen.promise.then(() => cb()); else setImmediate(cb); }
+      return server;
+    };
     server.address = () => ({ port: netState.port });
     server.close = () => { netState.closed = true; };
     let sshCalls = 0;
@@ -2345,9 +2728,9 @@ async function asyncTests() {
       _hasKey: () => true,
       mic: () => () => {},
       onStatus: () => {},
-      _tunnelSettleMs: 1,
+      _tunnelSettleMs: o.settleMs != null ? o.settleMs : 1,
     });
-    return { h, gateEnable, netState };
+    return { h, gateEnable, gateListen, netState, remoteCalls: () => sshCalls };
   }
 
   const spawns = [];
@@ -2389,6 +2772,81 @@ async function asyncTests() {
   ok("mid-enable control: disabling mid-enable lets the enable open a tunnel anyway",
     raceSpawns.length === 1 && raceSpawns[0].child.killed === false && orphan.h.enabled === true);
   orphan.h.dispose();                      // don't leave the fake child behind
+
+  // ── deactivate() DURING an enable: the real HostAudio must not finish behind it ──
+  // Closing the session chain stops everything QUEUED and everything that has not yet
+  // reached the constructor, but it cannot retroactively stop an enable that is already
+  // sitting in an SSH call: dispose() tears down what exists at that moment, and
+  // mid-enable that is nothing. Without a cancellation flag the continuation went on to
+  // bind its local server and spawn `ssh -R` AFTER the only reference to the object had
+  // been dropped — a live tunnel this extension host could never stop again. So
+  // HostAudio.enable() re-checks `_disposed` after EVERY await; these drive the real
+  // object through each of those points.
+  console.log("\n=== deactivate mid-enable (the real HostAudio, cancelled after each await) ===");
+  // (a) cancelled while the VM was answering the remote enable.
+  const cancelSpawns = [];
+  const cancelA = fakeHostAudio("agent-vm", cancelSpawns);
+  const cancelAEnable = cancelA.h.enable();
+  await tick();
+  ok("dispose mid-enable: the enable is paused in its first SSH call", cancelSpawns.length === 0);
+  cancelA.h.dispose();                     // deactivate(): chain closed, then this
+  cancelA.gateEnable.resolve();            // the VM answers AFTER the window went away
+  const cancelARes = await cancelAEnable;
+  eq("dispose mid-enable: the enable reports it was cancelled", cancelARes.error, "disposed");
+  ok("dispose mid-enable: ...it never became enabled", cancelA.h.enabled === false && cancelARes.ok === false);
+  ok("dispose mid-enable: ...no local server was ever bound", cancelA.netState.port === null);
+  ok("dispose mid-enable: ...and no tunnel child was spawned", cancelSpawns.length === 0);
+  // ...and the VM is not left mutated: step 1 installed the shim + patch, so the abort
+  // runs the same guarded remote disable every other rollback path uses.
+  ok("dispose mid-enable: ...while the VM-side shim/patch are reverted", cancelA.remoteCalls() >= 2);
+
+  // (b) cancelled at the NEXT await — the local server's listen — where a server does
+  //     exist by the time dispose lands.
+  const cancelSpawnsB = [];
+  const cancelB = fakeHostAudio("work-vm", cancelSpawnsB, { pauseListen: true });
+  const cancelBEnable = cancelB.h.enable();
+  cancelB.gateEnable.resolve();            // the VM answers; the enable moves to step 2
+  await tick(6);
+  ok("dispose mid-listen: the enable is paused binding its local server", cancelSpawnsB.length === 0);
+  cancelB.h.dispose();                     // deactivate() lands in that window
+  cancelB.gateListen.resolve();            // the server finishes binding afterwards
+  const cancelBRes = await cancelBEnable;
+  eq("dispose mid-listen: the enable reports it was cancelled", cancelBRes.error, "disposed");
+  ok("dispose mid-listen: ...the server it bound is closed again", cancelB.netState.closed === true);
+  ok("dispose mid-listen: ...no tunnel child was spawned", cancelSpawnsB.length === 0);
+  eq("dispose mid-listen: ...and it is not enabled", cancelB.h.enabled, false);
+
+  // (c) cancelled in the TUNNEL's settle window — the last await, and the only one where
+  //     an `ssh -R` child already exists when dispose lands.
+  const cancelSpawnsC = [];
+  const cancelC = fakeHostAudio("third-vm", cancelSpawnsC, { settleMs: 200 });
+  const cancelCEnable = cancelC.h.enable();
+  cancelC.gateEnable.resolve();
+  await sleep(20);                         // the child is spawned, the window still open
+  ok("dispose mid-tunnel: the ssh -R child exists and is alive", cancelSpawnsC.length === 1);
+  cancelC.h.dispose();                     // deactivate() during the settle window
+  const cancelCRes = await cancelCEnable;
+  eq("dispose mid-tunnel: the enable reports it was cancelled", cancelCRes.error, "disposed");
+  ok("dispose mid-tunnel: ...the tunnel child it spawned is killed", cancelSpawnsC[0].child.killed === true);
+  ok("dispose mid-tunnel: ...its server is closed", cancelC.netState.closed === true);
+  ok("dispose mid-tunnel: ...and nothing reports as enabled",
+    cancelC.h.enabled === false && cancelCRes.ok === false);
+
+  // (c) the CONTROL — the same interleaving with no dispose at all really does open the
+  //     tunnel, which is exactly what used to survive deactivate().
+  const liveSpawns = [];
+  const notCancelled = fakeHostAudio("work-vm", liveSpawns);
+  notCancelled.gateEnable.resolve();
+  const liveRes = await notCancelled.h.enable();
+  ok("dispose control: without the cancellation the enable opens its tunnel",
+    liveRes.ok === true && liveSpawns.length === 1 && liveSpawns[0].child.killed === false);
+  // ...and disposing it afterwards is the ordinary path: the child is killed, the server closed.
+  notCancelled.h.dispose();
+  ok("dispose after enable: the tunnel child is killed and the server closed",
+    liveSpawns[0].child.killed === true && notCancelled.netState.closed === true);
+  // A disposed object refuses to be re-enabled at all (nothing may resurrect it).
+  const reRes = await notCancelled.h.enable();
+  eq("dispose: a disposed HostAudio refuses a later enable", reRes.error, "disposed");
 
   // ── A switch whose workspaceState write REJECTS ────────────────────────────
   // The old catch said the window had switched "for now" while nothing held the new
