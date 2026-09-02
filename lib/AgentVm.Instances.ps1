@@ -369,12 +369,19 @@ function Get-ConstructLocalIdentityProblem {
 # The identity fields that must be UNIQUE across the registry, with the schema name each
 # is reported under. Two instances sharing one are two names for ONE machine (or one key
 # file / one ssh_config Host block): a rebuild of the second would delete the first's VM.
-# Mirrors UNIQUE_FIELDS in extension/src/instances.js.
+# ConfigBranch is one of them for the same reason: the config-sync branch IS that
+# instance's store inside the single host config repo (docs/config-sync.md, "Multiple
+# instances" -- one branch per VM), so two entries on one branch share their VM
+# snapshots, deletion history, merge base and write-backs, and one VM's tick merges (or
+# deletes) the other's configuration. Rule 1 below therefore also RESERVES the default
+# instance's historical branch 'vm' for agent-vm.
+# Mirrors UNIQUE_FIELDS in extension/src/instances.js -- change both together.
 $script:ConstructUniqueFields = @(
-    @{ Key = 'VmName';    Label = 'vmName' },
-    @{ Key = 'VmHost';    Label = 'sshHost' },
-    @{ Key = 'HostAlias'; Label = 'hostAlias' },
-    @{ Key = 'KeyName';   Label = 'keyName' }
+    @{ Key = 'VmName';       Label = 'vmName' },
+    @{ Key = 'VmHost';       Label = 'sshHost' },
+    @{ Key = 'HostAlias';    Label = 'hostAlias' },
+    @{ Key = 'KeyName';      Label = 'keyName' },
+    @{ Key = 'ConfigBranch'; Label = 'configBranch' }
 )
 
 function Get-ConstructInstanceCollision {

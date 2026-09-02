@@ -849,11 +849,13 @@ $chkScript = Get-Content -Raw (Join-Path $here "..\Set-AgentVmCheckpoints.ps1")
 
 ok "checkpoint script: an unreadable checkpoint list is turned into a throw, not a success" (
     $chkScript -match '(?s)if\s*\(-not\s+\$found\.Enumerated\)\s*\{[^}]*throw')
-# The removal loop must be reached only after that guard. Anchor on the CALL
-# ("Remove-VMSnapshot -VMSnapshot"), not the bare name -- which also appears in the
-# script's help text, above everything.
-ok "checkpoint script: the Enumerated guard precedes every Remove-VMSnapshot call" (
-    $chkScript.IndexOf('$found.Enumerated') -lt $chkScript.IndexOf('Remove-VMSnapshot -VMSnapshot'))
+# The removal loop must be reached only after that guard. Anchor on the DRIVER-NEUTRAL
+# call the script actually makes (Remove-ConstructVmCheckpoint -Name): it no longer
+# invokes Remove-VMSnapshot itself -- that name survives only in a comment and in the
+# help text, so the old anchor matched prose and asserted nothing. The AST-based
+# ordering check in test/driver-contract.test.ps1 remains the authoritative one.
+ok "checkpoint script: the Enumerated guard precedes every checkpoint removal" (
+    $chkScript.IndexOf('$found.Enumerated') -lt $chkScript.IndexOf('Remove-ConstructVmCheckpoint -Name'))
 # The panel records "applied" from this file, so writing "ok" must be conditional on the
 # failure flag -- an unconditional write would mark a failed run as applied.
 ok "checkpoint script: the result file reports fail when the run failed" (
