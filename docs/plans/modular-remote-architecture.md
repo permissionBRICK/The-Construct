@@ -434,7 +434,7 @@ Module rules (enforced in review for new code, adopted opportunistically in old)
 
 **Field finding (2026-09-02, `standpc`, WSL 2.6.3):** `wsl.exe` as LocalSystem exits -1 with
 `Wsl/WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED`; a probe as a domain account in a batch logon did not even
-produce output. Decision (the project owner): **do not change the service identity.** The installing
+produce output. Decision (project owner): **do not change the service identity.** The installing
 administrator builds the autoinstall ISO **once, interactively, with their own WSL**; `constructd`
 (LocalSystem) only consumes it. Updating the ISO (new Ubuntu release, new bootstrap key) is again an
 interactive administrator action. The per-VM WSL build stays in the code behind a mode switch for
@@ -591,7 +591,7 @@ endpoint formatting there in the same batch.
 | 2026-09-02 | Phase 2 review round 9 fixes merged (`8d726a7`): forwarder retries after an unanswered capability check (pure `planStartOutcome`), Windows device-stem rule on all three branch validators, one canonical IPv6 host-label rule shared by guest CLI / service (`ForwardHost.cs`) / extension with a 37-entry tri-language matrix, usage export bound to its captured instance + period. |
 | 2026-09-02 | Phase 2 review round 10 fixes merged (`a5954b5`): `construct-` prefix reserved and stripping removed (one derivation rule everywhere), one instance-name rule in JS/PS/C# (alphanumeric first+last, 1–63; C# `\A…\z` parity fix), registry fingerprint-driven retargeting via one serialized transition (debounced `fs.watch` only when the file exists), Start & connect + `lifecycle.run` stale-target gates, instance-scoped narrow webview messages. Node 21 files, dotnet 510, pwsh instances 684. **Code work for this batch is complete; per the one-loop-per-change rule no further review runs without new changes.** |
 | 2026-09-02 | Field test started on `standpc` (WSL 2.6.3, German Windows). Installer fixes from the field, each direct + tested: relative path params resolved against `$PWD` before the elevated relaunch and ACE identities read by SID (`6ceaf98`); parents hardened before children (`8aa8ca6`); LocalSystem task polled via the Schedule.Service COM API in its own folder, `SCHED_S_TASK_RUNNING` is not an exit code (`16405cc`); failed LocalSystem commands report their output (`b56e0e9`). Blocker: `WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED` → §4.10 / B10. |
-| 2026-09-02 | B10 re-scoped (the project owner): service stays LocalSystem, admin builds a pre-built ISO interactively; guest hostname from Hyper-V KVP. Service-account pair cancelled before any commit. |
+| 2026-09-02 | B10 re-scoped (project owner): service stays LocalSystem, admin builds a pre-built ISO interactively; guest hostname from Hyper-V KVP. Service-account pair cancelled before any commit. |
 | 2026-09-02 | B10 merged (`9fc3485`): `IsoOptions.Mode` (Prebuilt default / PerVm; Native, InGuest, HypervisorHost documented), `IIsoMediaBuilder` + `IIsoCatalog`/`FileIsoCatalog` (versioned media, sidecar, atomic pointer, prune skips media Hyper-V holds open), `PrebuiltIsoBuilder`, `admin iso build/status/prune`, installer builds the ISO as the admin between settings and service registration (`-SkipIsoBuild`, `-IsoBuildOnly`), every LocalSystem-WSL step and the task runner removed, `VM_HOSTNAME_SOURCE=hyperv-kvp` first-boot identity source (default media byte-identical), provision.sh belt-and-braces rename. dotnet 572, installer 286, 16 bash suites. |
 | next | Field test resumes on `standpc`: install with the pre-built ISO, verify `admin iso status`, first VM's hostname + `<name>.mshome.net`. |
 
@@ -599,7 +599,7 @@ Process notes: every package ran as an omniloop dev/reviewer pair (opus develope
 gpt-5.6-sol reviewer) in its own worktree; cross-package integration reviews ran on the
 merged tree with the zero-change default path as the primary bar. Workflow budgets must
 be ≥ 720 min because a usage-limit park does not pause the workflow-level timeout.
-Process correction (2026-09-02, the project owner): one review-fix loop per change. Rounds 6–10
+Process correction (2026-09-02, project owner): one review-fix loop per change. Rounds 6–10
 re-ran a fresh integration reviewer on an unchanged tree after each fix pair had been
 approved, which cannot converge on a diff this size. From here: a new review only when
 new changes land; the round-10 fix pair is the last loop for this batch.
