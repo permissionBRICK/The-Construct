@@ -1,5 +1,5 @@
 diff --git a/apps/desktop/src/electron/ElectronProtocol.test.ts b/apps/desktop/src/electron/ElectronProtocol.test.ts
-index 585dd7e7..fb3a65a3 100644
+index 585dd7e7e..fb3a65a38 100644
 --- a/apps/desktop/src/electron/ElectronProtocol.test.ts
 +++ b/apps/desktop/src/electron/ElectronProtocol.test.ts
 @@ -57,7 +57,7 @@ describe("ElectronProtocol", () => {
@@ -25,7 +25,7 @@ index 585dd7e7..fb3a65a3 100644
        "https://clerk.t3.codes",
        "https://challenges.cloudflare.com",
 diff --git a/apps/desktop/src/electron/ElectronProtocol.ts b/apps/desktop/src/electron/ElectronProtocol.ts
-index 845f03db..bbaab1a7 100644
+index 845f03dba..bbaab1a75 100644
 --- a/apps/desktop/src/electron/ElectronProtocol.ts
 +++ b/apps/desktop/src/electron/ElectronProtocol.ts
 @@ -71,6 +71,9 @@ export function makeDesktopContentSecurityPolicy(input: DesktopProtocolRegistrat
@@ -39,10 +39,10 @@ index 845f03db..bbaab1a7 100644
      ...(clerkOrigin ? [clerkOrigin] : []),
      "https://challenges.cloudflare.com",
 diff --git a/apps/desktop/src/settings/DesktopClientSettings.test.ts b/apps/desktop/src/settings/DesktopClientSettings.test.ts
-index e32a5e2d..0707ba2a 100644
+index 1d0c1653f..f2a92502b 100644
 --- a/apps/desktop/src/settings/DesktopClientSettings.test.ts
 +++ b/apps/desktop/src/settings/DesktopClientSettings.test.ts
-@@ -50,6 +50,7 @@ const clientSettings: ClientSettings = {
+@@ -49,6 +49,7 @@ const clientSettings: ClientSettings = {
    sidebarThreadPreviewCount: 6,
    legacySidebarEnabled: false,
    timestampFormat: "24-hour",
@@ -51,7 +51,7 @@ index e32a5e2d..0707ba2a 100644
  };
  
 diff --git a/apps/desktop/src/updates/DesktopUpdates.ts b/apps/desktop/src/updates/DesktopUpdates.ts
-index 483ace0f..17cbe83a 100644
+index 483ace0ff..17cbe83a5 100644
 --- a/apps/desktop/src/updates/DesktopUpdates.ts
 +++ b/apps/desktop/src/updates/DesktopUpdates.ts
 @@ -1,3 +1,5 @@
@@ -128,7 +128,7 @@ index 483ace0f..17cbe83a 100644
          return {
            checked: false,
 diff --git a/apps/server/package.json b/apps/server/package.json
-index fb50816e..09a6dd98 100644
+index 3f7ae6096..25a8b3592 100644
 --- a/apps/server/package.json
 +++ b/apps/server/package.json
 @@ -33,6 +33,7 @@
@@ -148,7 +148,7 @@ index fb50816e..09a6dd98 100644
      "effect-codex-app-server": "workspace:*",
      "vite-plus": "catalog:"
 diff --git a/apps/server/src/auth/RpcAuthorization.ts b/apps/server/src/auth/RpcAuthorization.ts
-index 28ceac4c..6818ca69 100644
+index 28ceac4ce..6818ca692 100644
 --- a/apps/server/src/auth/RpcAuthorization.ts
 +++ b/apps/server/src/auth/RpcAuthorization.ts
 @@ -35,6 +35,9 @@ export const RPC_REQUIRED_SCOPES = {
@@ -162,7 +162,7 @@ index 28ceac4c..6818ca69 100644
    [WS_METHODS.serverRemoveKeybinding]: AuthOrchestrationOperateScope,
    [WS_METHODS.serverGetSettings]: AuthOrchestrationReadScope,
 diff --git a/apps/server/src/cli/auth.ts b/apps/server/src/cli/auth.ts
-index 1b349111..29dfb482 100644
+index 1b3491118..29dfb4824 100644
 --- a/apps/server/src/cli/auth.ts
 +++ b/apps/server/src/cli/auth.ts
 @@ -19,6 +19,7 @@ import {
@@ -190,7 +190,7 @@ index 1b349111..29dfb482 100644
            yield* Console.log(output);
          }),
 diff --git a/apps/server/src/cli/pair.ts b/apps/server/src/cli/pair.ts
-index 38fa3be8..2721ea92 100644
+index 38fa3be8b..2721ea923 100644
 --- a/apps/server/src/cli/pair.ts
 +++ b/apps/server/src/cli/pair.ts
 @@ -53,6 +53,7 @@ import {
@@ -226,10 +226,10 @@ index 38fa3be8..2721ea92 100644
            notes.push(
              "This URL is only reachable from this machine. Re-run with --tailscale, or restart the server with a reachable --host.",
 diff --git a/apps/server/src/environment/ServerEnvironment.ts b/apps/server/src/environment/ServerEnvironment.ts
-index 9c3a0d2a..fc2d6713 100644
+index 0de59db78..c0a6adbe2 100644
 --- a/apps/server/src/environment/ServerEnvironment.ts
 +++ b/apps/server/src/environment/ServerEnvironment.ts
-@@ -159,6 +159,8 @@ export const make = Effect.gen(function* () {
+@@ -215,6 +215,8 @@ export const make = Effect.gen(function* () {
        threadPinning: true,
        threadPinReorder: true,
        threadTitleRegeneration: true,
@@ -240,7 +240,7 @@ index 9c3a0d2a..fc2d6713 100644
        ...(serverSelfUpdate === "boot-service" ? { serverSelfUpdateProgress: true } : {}),
 diff --git a/apps/server/src/publicBaseUrl.test.ts b/apps/server/src/publicBaseUrl.test.ts
 new file mode 100644
-index 00000000..9158b0b7
+index 000000000..9158b0b7c
 --- /dev/null
 +++ b/apps/server/src/publicBaseUrl.test.ts
 @@ -0,0 +1,38 @@
@@ -284,7 +284,7 @@ index 00000000..9158b0b7
 +});
 diff --git a/apps/server/src/publicBaseUrl.ts b/apps/server/src/publicBaseUrl.ts
 new file mode 100644
-index 00000000..81133867
+index 000000000..811338675
 --- /dev/null
 +++ b/apps/server/src/publicBaseUrl.ts
 @@ -0,0 +1,39 @@
@@ -328,7 +328,7 @@ index 00000000..81133867
 +  return setting.kind === "ok" ? setting.origin : undefined;
 +}
 diff --git a/apps/server/src/serverRuntimeStartup.ts b/apps/server/src/serverRuntimeStartup.ts
-index 6bea823b..8f137e71 100644
+index 6bea823b1..8f137e71b 100644
 --- a/apps/server/src/serverRuntimeStartup.ts
 +++ b/apps/server/src/serverRuntimeStartup.ts
 @@ -45,6 +45,7 @@ import {
@@ -377,7 +377,7 @@ index 6bea823b..8f137e71 100644
    Effect.gen(function* () {
      const serverConfig = yield* ServerConfig.ServerConfig;
 diff --git a/apps/server/src/startupAccess.ts b/apps/server/src/startupAccess.ts
-index 7df13166..a167f807 100644
+index 7df131669..a167f8076 100644
 --- a/apps/server/src/startupAccess.ts
 +++ b/apps/server/src/startupAccess.ts
 @@ -6,6 +6,7 @@ import { HttpServer } from "effect/unstable/http";
@@ -412,7 +412,7 @@ index 7df13166..a167f807 100644
  
 diff --git a/apps/server/src/voiceInput.test.ts b/apps/server/src/voiceInput.test.ts
 new file mode 100644
-index 00000000..2c9e0fe7
+index 000000000..2c9e0fe71
 --- /dev/null
 +++ b/apps/server/src/voiceInput.test.ts
 @@ -0,0 +1,134 @@
@@ -552,7 +552,7 @@ index 00000000..2c9e0fe7
 +});
 diff --git a/apps/server/src/voiceInput.ts b/apps/server/src/voiceInput.ts
 new file mode 100644
-index 00000000..689b4c7b
+index 000000000..689b4c7ba
 --- /dev/null
 +++ b/apps/server/src/voiceInput.ts
 @@ -0,0 +1,436 @@
@@ -993,10 +993,10 @@ index 00000000..689b4c7b
 +  );
 +}
 diff --git a/apps/server/src/ws.ts b/apps/server/src/ws.ts
-index 9983de22..b0b2a85a 100644
+index db3b74b7e..10f2f1b45 100644
 --- a/apps/server/src/ws.ts
 +++ b/apps/server/src/ws.ts
-@@ -139,6 +139,7 @@ import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
+@@ -140,6 +140,7 @@ import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
  import * as VcsProcess from "./vcs/VcsProcess.ts";
  import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
  import * as SessionStore from "./auth/SessionStore.ts";
@@ -1004,7 +1004,7 @@ index 9983de22..b0b2a85a 100644
  import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
  import * as RelayClient from "@t3tools/shared/relayClient";
  const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
-@@ -1687,6 +1688,22 @@ const makeWsRpcLayer = (
+@@ -1673,6 +1674,22 @@ const makeWsRpcLayer = (
              ),
              { "rpc.aggregate": "server" },
            ),
@@ -1028,10 +1028,10 @@ index 9983de22..b0b2a85a 100644
            observeRpcEffect(
              WS_METHODS.serverUpsertKeybinding,
 diff --git a/apps/web/src/components/chat/ChatComposer.tsx b/apps/web/src/components/chat/ChatComposer.tsx
-index 68d1a9eb..6b89f562 100644
+index cd69eceb7..67a19495a 100644
 --- a/apps/web/src/components/chat/ChatComposer.tsx
 +++ b/apps/web/src/components/chat/ChatComposer.tsx
-@@ -34,6 +34,7 @@ import {
+@@ -33,6 +33,7 @@ import {
    useState,
  } from "react";
  import { createPortal } from "react-dom";
@@ -1039,7 +1039,7 @@ index 68d1a9eb..6b89f562 100644
  import {
    clampCollapsedComposerCursor,
    type ComposerSubmissionIntent,
-@@ -160,6 +161,56 @@ import {
+@@ -172,6 +173,56 @@ import {
    submitComposerDraft,
  } from "./composerSubmission";
  import { ComposerPromptLengthValidation } from "./ComposerPromptLengthValidation";
@@ -1096,10 +1096,10 @@ index 68d1a9eb..6b89f562 100644
  
  function ComposerVideoThumbnail({ file }: { file: File }) {
    const setVideo = useCallback(
-@@ -800,6 +851,27 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
-     onFileOpen,
-     openingVideoAttachmentId,
+@@ -809,6 +860,27 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
    } = props;
+   const activeTasksProgress = props.threadSyncPhase === null ? props.activeTasksProgress : null;
+   const activeTaskSteps = props.threadSyncPhase === null ? props.activeTaskSteps : null;
 +  const serverConfigs = useServerConfigs();
 +  const supportsVoiceInput =
 +    serverConfigs.get(environmentId)?.environment.capabilities.voiceInput === true;
@@ -1124,7 +1124,7 @@ index 68d1a9eb..6b89f562 100644
    // ------------------------------------------------------------------
    // Store subscriptions (prompt / images / terminal contexts)
    // ------------------------------------------------------------------
-@@ -1200,6 +1272,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
+@@ -1209,6 +1281,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
    const [isComposerPrimaryActionsCompact, setIsComposerPrimaryActionsCompact] = useState(false);
    const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
    const [isComposerFocused, setIsComposerFocused] = useState(false);
@@ -1133,7 +1133,7 @@ index 68d1a9eb..6b89f562 100644
    const [composerSubmissionError, setComposerSubmissionError] = useState<string | null>(null);
    const [providerInputSubmissionError, setProviderInputSubmissionError] = useState<string | null>(
      null,
-@@ -1220,6 +1294,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
+@@ -1228,6 +1302,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
    // Refs
    // ------------------------------------------------------------------
    const composerEditorRef = useRef<ComposerPromptEditorHandle>(null);
@@ -1142,7 +1142,7 @@ index 68d1a9eb..6b89f562 100644
    const attachmentInputRef = useRef<HTMLInputElement>(null);
    const composerFormRef = useRef<HTMLFormElement>(null);
    const composerSurfaceRef = useRef<HTMLDivElement>(null);
-@@ -1968,6 +2044,244 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
+@@ -1975,6 +2051,244 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
      };
    }, [composerCursor, composerTerminalContexts, promptRef]);
  
@@ -1388,9 +1388,9 @@ index 68d1a9eb..6b89f562 100644
      snapshot: { value: string; cursor: number; expandedCursor: number };
      trigger: ComposerTrigger | null;
 @@ -4221,6 +4535,48 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
+                       </Tooltip>
+                     </>
                    ) : null}
-                   {showMobilePendingAnswerActions ? null : inlineTasksBadge}
-                   {showMobilePendingAnswerActions ? null : inlineStashBadge}
 +                  {supportsVoiceInput ? (
 +                    <Tooltip>
 +                      <TooltipTrigger
@@ -1437,27 +1437,27 @@ index 68d1a9eb..6b89f562 100644
                      compact={isComposerPrimaryActionsCompact}
                      activeContextWindow={activeContextWindow}
 diff --git a/apps/web/src/components/settings/SettingsPanels.tsx b/apps/web/src/components/settings/SettingsPanels.tsx
-index b486a0ee..12dedc97 100644
+index ca59fbc37..21694c5f3 100644
 --- a/apps/web/src/components/settings/SettingsPanels.tsx
 +++ b/apps/web/src/components/settings/SettingsPanels.tsx
-@@ -34,6 +34,7 @@ import {
-   MIN_PROMPT_FONT_SIZE,
+@@ -35,6 +35,7 @@ import {
    MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
    MIN_TERMINAL_FONT_SIZE,
+   type QuitConfirmationMode,
 +  VoiceInputSourcePreference,
  } from "@t3tools/contracts/settings";
  import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
  import { createModelSelection } from "@t3tools/shared/model";
-@@ -80,7 +81,7 @@ import {
- import { ensureLocalApi, readLocalApi } from "../../localApi";
- import { isMacPlatform } from "../../lib/utils";
- import { primaryServerObservabilityAtom, primaryServerProvidersAtom } from "../../state/server";
+@@ -85,7 +86,7 @@ import {
+   primaryServerObservabilityAtom,
+   primaryServerProvidersAtom,
+ } from "../../state/server";
 -import { useProjects } from "../../state/entities";
 +import { useProjects, useServerConfigs } from "../../state/entities";
  import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
  import { formatRelativeTimeLabel } from "../../timestampFormat";
  import { Button } from "../ui/button";
-@@ -1858,9 +1859,27 @@ function LegacyFeaturesSection() {
+@@ -1871,9 +1872,27 @@ function LegacyFeaturesSection() {
    );
  }
  
@@ -1485,7 +1485,7 @@ index b486a0ee..12dedc97 100644
    const [backgroundActivityDialogOpen, setBackgroundActivityDialogOpen] = useState(false);
    const lastEnabledProjectGroupingMode = useRef<SidebarProjectGroupingMode>(
      readLastEnabledProjectGroupingMode(),
-@@ -2112,6 +2131,46 @@ export function GeneralSettingsPanel() {
+@@ -2132,6 +2151,46 @@ export function GeneralSettingsPanel() {
            }
          />
  
@@ -1533,12 +1533,12 @@ index b486a0ee..12dedc97 100644
            {...searchableSetting("provider-update-checks")}
            description="Check installed provider CLIs for newer available versions."
 diff --git a/apps/web/src/components/settings/settingsSearch.ts b/apps/web/src/components/settings/settingsSearch.ts
-index b924f5f6..be27d2c0 100644
+index a3e5cf4b9..c921a59f9 100644
 --- a/apps/web/src/components/settings/settingsSearch.ts
 +++ b/apps/web/src/components/settings/settingsSearch.ts
-@@ -136,6 +136,11 @@ export const SETTINGS_SEARCH_ITEMS = [
-     title: "Show skills in slash menu",
+@@ -185,6 +185,11 @@ export const SETTINGS_SEARCH_ITEMS = [
      to: "/settings/general",
+     searchTerms: ["command menu dollar $ slash /"],
    },
 +  {
 +    id: "voice-input-source",
@@ -1549,7 +1549,7 @@ index b924f5f6..be27d2c0 100644
      id: "provider-update-checks",
      title: "Provider update checks",
 diff --git a/apps/web/src/components/sidebar/SidebarUpdatePill.tsx b/apps/web/src/components/sidebar/SidebarUpdatePill.tsx
-index f576fdd4..0f2a8414 100644
+index f576fdd4e..0f2a84147 100644
 --- a/apps/web/src/components/sidebar/SidebarUpdatePill.tsx
 +++ b/apps/web/src/components/sidebar/SidebarUpdatePill.tsx
 @@ -173,7 +173,7 @@ function SidebarUpdateControl() {
@@ -1563,7 +1563,7 @@ index f576fdd4..0f2a8414 100644
      : showUpdateDetails
 diff --git a/apps/web/src/state/voiceInput.ts b/apps/web/src/state/voiceInput.ts
 new file mode 100644
-index 00000000..ddf32255
+index 000000000..ddf32255f
 --- /dev/null
 +++ b/apps/web/src/state/voiceInput.ts
 @@ -0,0 +1,64 @@
@@ -1633,7 +1633,7 @@ index 00000000..ddf32255
 +});
 diff --git a/apps/web/src/voice/clientAudioCapture.test.ts b/apps/web/src/voice/clientAudioCapture.test.ts
 new file mode 100644
-index 00000000..2354a120
+index 000000000..2354a1206
 --- /dev/null
 +++ b/apps/web/src/voice/clientAudioCapture.test.ts
 @@ -0,0 +1,177 @@
@@ -1816,7 +1816,7 @@ index 00000000..2354a120
 +});
 diff --git a/apps/web/src/voice/clientAudioCapture.ts b/apps/web/src/voice/clientAudioCapture.ts
 new file mode 100644
-index 00000000..2dd2cd2c
+index 000000000..2dd2cd2c8
 --- /dev/null
 +++ b/apps/web/src/voice/clientAudioCapture.ts
 @@ -0,0 +1,316 @@
@@ -2138,7 +2138,7 @@ index 00000000..2dd2cd2c
 +}
 diff --git a/apps/web/src/voice/voiceAudioSender.test.ts b/apps/web/src/voice/voiceAudioSender.test.ts
 new file mode 100644
-index 00000000..f21ec4f1
+index 000000000..f21ec4f1e
 --- /dev/null
 +++ b/apps/web/src/voice/voiceAudioSender.test.ts
 @@ -0,0 +1,115 @@
@@ -2259,7 +2259,7 @@ index 00000000..f21ec4f1
 +});
 diff --git a/apps/web/src/voice/voiceAudioSender.ts b/apps/web/src/voice/voiceAudioSender.ts
 new file mode 100644
-index 00000000..4d2a6aa8
+index 000000000..4d2a6aa8b
 --- /dev/null
 +++ b/apps/web/src/voice/voiceAudioSender.ts
 @@ -0,0 +1,73 @@
@@ -2338,7 +2338,7 @@ index 00000000..4d2a6aa8
 +}
 diff --git a/apps/web/src/voice/voiceInputFailure.test.ts b/apps/web/src/voice/voiceInputFailure.test.ts
 new file mode 100644
-index 00000000..0c3594b9
+index 000000000..0c3594b9b
 --- /dev/null
 +++ b/apps/web/src/voice/voiceInputFailure.test.ts
 @@ -0,0 +1,49 @@
@@ -2393,7 +2393,7 @@ index 00000000..0c3594b9
 +});
 diff --git a/apps/web/src/voice/voiceInputFailure.ts b/apps/web/src/voice/voiceInputFailure.ts
 new file mode 100644
-index 00000000..b8c7e4ad
+index 000000000..b8c7e4ada
 --- /dev/null
 +++ b/apps/web/src/voice/voiceInputFailure.ts
 @@ -0,0 +1,35 @@
@@ -2433,7 +2433,7 @@ index 00000000..b8c7e4ad
 +  return source === "client" ? CLIENT_VOICE_FAILURE_DESCRIPTION : HOST_VOICE_FAILURE_DESCRIPTION;
 +}
 diff --git a/packages/client-runtime/src/rpc/client.ts b/packages/client-runtime/src/rpc/client.ts
-index bfe57a6c..2845f1a1 100644
+index 50cc029ec..528764dd0 100644
 --- a/packages/client-runtime/src/rpc/client.ts
 +++ b/packages/client-runtime/src/rpc/client.ts
 @@ -57,7 +57,8 @@ export type EnvironmentSubscriptionRpcTag =
@@ -2447,10 +2447,10 @@ index bfe57a6c..2845f1a1 100644
  export type EnvironmentStreamRpcTag =
    | EnvironmentSubscriptionRpcTag
 diff --git a/packages/contracts/src/environment.ts b/packages/contracts/src/environment.ts
-index 805e9da2..aabae11b 100644
+index 08e825990..1182acc08 100644
 --- a/packages/contracts/src/environment.ts
 +++ b/packages/contracts/src/environment.ts
-@@ -89,6 +89,13 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
+@@ -91,6 +91,13 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
    /** Server can stream self-update progress before acknowledging the
        restart. Clients fall back to server.updateServer when absent. */
    serverSelfUpdateProgress: Schema.optionalKey(Schema.Boolean),
@@ -2465,7 +2465,7 @@ index 805e9da2..aabae11b 100644
        currently leave this environment: the publish opt-in is enabled and the
        relay link credentials exist. Clients skip seeding a Live Activity when
 diff --git a/packages/contracts/src/index.ts b/packages/contracts/src/index.ts
-index c6daef86..236c734f 100644
+index c6daef868..236c734ff 100644
 --- a/packages/contracts/src/index.ts
 +++ b/packages/contracts/src/index.ts
 @@ -17,6 +17,7 @@ export * from "./server.ts";
@@ -2477,7 +2477,7 @@ index c6daef86..236c734f 100644
  export * from "./pullRequest.ts";
  export * from "./orchestration.ts";
 diff --git a/packages/contracts/src/rpc.ts b/packages/contracts/src/rpc.ts
-index 7cd67448..8584b9aa 100644
+index 7cd674485..8584b9aa5 100644
 --- a/packages/contracts/src/rpc.ts
 +++ b/packages/contracts/src/rpc.ts
 @@ -205,6 +205,15 @@ import {
@@ -2545,7 +2545,7 @@ index 7cd67448..8584b9aa 100644
    WsServerRemoveKeybindingRpc,
    WsServerGetSettingsRpc,
 diff --git a/packages/contracts/src/settings.ts b/packages/contracts/src/settings.ts
-index b6b09574..46e58c75 100644
+index f9a0d2cf9..e7268d3f1 100644
 --- a/packages/contracts/src/settings.ts
 +++ b/packages/contracts/src/settings.ts
 @@ -120,6 +120,16 @@ export const TerminalFontSize = Schema.Int.check(
@@ -2565,7 +2565,7 @@ index b6b09574..46e58c75 100644
  export const EnvironmentIdentificationMode = Schema.Literals(["artwork", "pill", "none"]);
  export type EnvironmentIdentificationMode = typeof EnvironmentIdentificationMode.Type;
  export const DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE: EnvironmentIdentificationMode = "artwork";
-@@ -268,6 +278,9 @@ export const ClientSettingsSchema = Schema.Struct({
+@@ -290,6 +300,9 @@ export const ClientSettingsSchema = Schema.Struct({
    timestampFormat: TimestampFormat.pipe(
      Schema.withDecodingDefault(Effect.succeed(DEFAULT_TIMESTAMP_FORMAT)),
    ),
@@ -2575,7 +2575,7 @@ index b6b09574..46e58c75 100644
    wordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
  });
  export type ClientSettings = typeof ClientSettingsSchema.Type;
-@@ -977,6 +990,7 @@ export const ClientSettingsPatch = Schema.Struct({
+@@ -1004,6 +1017,7 @@ export const ClientSettingsPatch = Schema.Struct({
    sidebarThreadSortOrder: Schema.optionalKey(SidebarThreadSortOrder),
    sidebarThreadPreviewCount: Schema.optionalKey(SidebarThreadPreviewCount),
    timestampFormat: Schema.optionalKey(TimestampFormat),
@@ -2585,7 +2585,7 @@ index b6b09574..46e58c75 100644
  export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;
 diff --git a/packages/contracts/src/voiceInput.test.ts b/packages/contracts/src/voiceInput.test.ts
 new file mode 100644
-index 00000000..975d5af9
+index 000000000..975d5af99
 --- /dev/null
 +++ b/packages/contracts/src/voiceInput.test.ts
 @@ -0,0 +1,63 @@
@@ -2654,7 +2654,7 @@ index 00000000..975d5af9
 +});
 diff --git a/packages/contracts/src/voiceInput.ts b/packages/contracts/src/voiceInput.ts
 new file mode 100644
-index 00000000..31c4b68a
+index 000000000..31c4b68ac
 --- /dev/null
 +++ b/packages/contracts/src/voiceInput.ts
 @@ -0,0 +1,67 @@
