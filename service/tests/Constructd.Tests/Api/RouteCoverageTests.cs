@@ -28,6 +28,7 @@ public class RouteCoverageTests
         "GET /api/v1/vms/{name}/forwards",
         "POST /api/v1/vms/{name}/forwards",
         "DELETE /api/v1/vms/{name}/forwards/{id}",
+        "POST /api/v1/vms/{name}/forwards/{id}/ack",
         "GET /api/v1/vms/{name}/idle-policy",
         "PUT /api/v1/vms/{name}/idle-policy",
         "POST /api/v1/vms/{name}/activity",

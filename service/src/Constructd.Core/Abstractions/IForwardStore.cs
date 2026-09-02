@@ -22,5 +22,13 @@ public interface IForwardStore
 
     Task AddAsync(PortForward forward, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Records what the owner's extension reported about a client forward (plan §4.6). Durable like
+    /// the forward itself, so a service restart does not lose the link a guest is already printing.
+    /// Returns false when the id is unknown; an existing ack is REPLACED, because the extension
+    /// re-acks after re-establishing a tunnel (<c>docs/expose.md</c>).
+    /// </summary>
+    Task<bool> SetAckAsync(string id, ForwardAck ack, CancellationToken cancellationToken);
+
     Task<bool> RemoveAsync(string id, CancellationToken cancellationToken);
 }
