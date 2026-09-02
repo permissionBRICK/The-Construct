@@ -509,6 +509,8 @@ defines how SMB is reached through the service host. The host side has the same 
 `-VmHost` (ignores the guest-reported `SMB_DNS`, no IPv6 bracketing) — centralize
 endpoint formatting there in the same batch.
 
+**Recorded follow-ups from Phase 2 / B9 (not blocking):** installer prints the SHA-1 thumbprint under "clients pin this" while clients pin SHA-256 (print both); no VM-token rotation (proposed `POST /vms/{name}/token`; today a lost guest token means delete + recreate); no "Remove Remote Host" extension command (globalState/SecretStorage never cleared, client-side uninstall incomplete); forwarder tears down on a single timed-out status probe (consider a consecutive-failure threshold if it flaps in the field); the service does not push client forwards, so remote mode polls every 10 s.
+
 
 ## 6. Progress log
 
@@ -524,7 +526,8 @@ endpoint formatting there in the same batch.
 | 2026-09-02 | B8x merged (`1626d6f`): `extension/src/forwarder.js` (pure planner, injected transport; inotify spool watch local / 10 s poll remote) + `forwarder-ui.js`, service client-forward ack relay (`POST /vms/{name}/forwards/{id}/ack`, VM token excluded), Forwards + idle-policy panel cards, saved → "Resume & connect". 412 dotnet tests, 21 node files. |
 | 2026-09-02 | Phase 2 review round 7 fixes merged (`b5f9051`): installer remote flow uses the shared registry collision logic (pre-create identities, post-create composite endpoint), hyperv-remote canonical `vmName === name`, case-variant backend ids fail closed, one mic-session chain incl. cancellable `HostAudio` enable, remote entries without `sshHost` rejected whole. |
 | 2026-09-02 | Phase 2 review round 8 fixes merged (`93b1f68`): client forwarder is lazy + guest-gated (starts from the existing status probe once the VM is reachable, one capability exec for the spool markers, watcher argv documented as the one default-path addition), forwarder start/stop on the shared handover/session-owner chain, git-invalid branch names rejected in all three validators. |
-| in flight | Phase 2 review round 9; B9 docs pass on `docs/b9`. Remaining: field test on the home domain. |
+| 2026-09-02 | B9 docs merged (`d091279`): 17 markdown files aligned with the code, new `docs/field-test-remote-host.md` (12-step home-domain checklist). |
+| in flight | Phase 2 review round 9. Remaining: field test on the home domain (needs Christoph). |
 
 Process notes: every package ran as an omniloop dev/reviewer pair (opus developer,
 gpt-5.6-sol reviewer) in its own worktree; cross-package integration reviews ran on the
