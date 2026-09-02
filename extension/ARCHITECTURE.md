@@ -2054,6 +2054,10 @@ says what will actually happen.
 - **Destructive flows default to save→restore**; one-time overrides (existing
   backup / clean wipe) live in Settings → Custom reinstall, not as a persisted
   policy. On failure, offer a retry reusing the backup already taken.
+- A compare-API **404** (the recorded `installedCommit` no longer exists upstream — what a
+  history rewrite looks like from a PC installed before it) is `updates.NOT_FOUND`, not a
+  failure: the banner shows "update available" with no count, and the update re-records a
+  marker the remote knows. Every other non-2xx stays null (banner hidden).
 
 ## Key repo references (for resuming)
 
