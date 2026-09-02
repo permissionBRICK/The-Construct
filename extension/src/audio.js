@@ -596,6 +596,12 @@ class HostAudio {
     this.session = null;
     this.tunnel = null;      // the persistent ssh -R child
     this._enabling = false;  // guard against re-entrant enable()
+    // CANCELLED: dispose() has run (the window is going away). enable() re-checks this
+    // after EVERY await — see enable() — because dispose is synchronous and cannot stop
+    // an enable that is already sitting in an SSH call: without the flag that
+    // continuation would go on to bind a server and spawn `ssh -R` AFTER the only
+    // reference to this object had been dropped.
+    this._disposed = false;
     // How long to confirm the ssh -R tunnel stays up before calling enable a success.
     // ExitOnForwardFailure=yes makes ssh exit if the remote -R bind fails, but that
     // (and connect failures) arrive asynchronously after spawn — so we wait out a
@@ -616,9 +622,18 @@ class HostAudio {
    * On any failure it rolls back (disable) so we never leave a half-open tunnel or a
    * server bound with nothing behind it. On-demand capture arms itself later when the
    * shim connects.
+   *
+   * CANCELLATION: every await below is a point at which dispose() can run — the window
+   * closing (extension deactivate) while this enable is mid-SSH. dispose() is
+   * synchronous and tears down what exists AT THAT MOMENT, which mid-enable is nothing;
+   * without a re-check the continuation would then bind the local server and spawn the
+   * `ssh -R` behind it, leaving a live tunnel with no reference in the extension host
+   * that could ever stop it. So each step re-checks `_disposed` and rolls back what it
+   * has built (_abortEnable), reporting { ok: false, error: "disposed" }.
    */
   async enable() {
     if (this.enabled || this._enabling) return { ok: this.enabled };
+    if (this._disposed) return { ok: false, error: "disposed" };
     this._enabling = true;
     // Track whether step 1 (the remote enable) actually mutated the VM. If a LATER
     // local step fails, we must revert the VM (shim + gate patch) too — not just tear
@@ -645,6 +660,9 @@ class HostAudio {
       // Which range ports other windows' tunnels already hold — enable() skips them
       // when picking THIS window's port.
       const busyPorts = parseBusyPorts((r && r.stdout) || "");
+      // Cancelled while the VM was answering: the shim + patch are on the VM, so revert
+      // them, and build nothing local at all.
+      if (this._disposed) return await this._abortEnable(remoteEnabled);
 
       // 2) Start the local TCP server (on-demand mic arming happens per connection).
       this.session = new AudioSession({
@@ -661,6 +679,9 @@ class HostAudio {
         this.onStatus({ enabled: false, capturing: false, error: "server-failed" });
         return { ok: false, error: "server-failed" };
       }
+      // Cancelled while the local server was binding: close it again before it can be
+      // handed a tunnel.
+      if (this._disposed) return await this._abortEnable(remoteEnabled);
 
       // 3) Spawn the persistent reverse tunnel (ssh -R vmPort:127.0.0.1:hostPort) and
       //    CONFIRM it stays up — an ssh that dies right after spawn (missing binary,
@@ -685,6 +706,9 @@ class HostAudio {
         return { ok: false, error };
       }
       this.boundPort = bound;
+      // Cancelled during the tunnel's settle window: the `ssh -R` child exists NOW, and
+      // this is the last moment anything in this process still holds it.
+      if (this._disposed) return await this._abortEnable(remoteEnabled);
 
       this.enabled = true;
       this._enabling = false;
@@ -697,6 +721,20 @@ class HostAudio {
       this.onStatus({ enabled: false, capturing: false, error: "exception" });
       return { ok: false, error: "exception", detail: e && e.message };
     }
+  }
+
+  /**
+   * Roll back a half-built enable that dispose() cancelled, and report it as such.
+   * Local first and unconditionally (kill the tunnel child, close the server), then the
+   * VM side when step 1 already mutated it — the same order and the same guarded remote
+   * script every other rollback path in enable() uses. Never rejects.
+   */
+  async _abortEnable(remoteEnabled) {
+    this._enabling = false;
+    await this._teardownLocal();
+    if (remoteEnabled) await this._remoteDisable();
+    this.onStatus({ enabled: false, capturing: false, error: "disposed" });
+    return { ok: false, error: "disposed" };
   }
 
   /** Spawn the reverse-tunnel child on `vmPort` and confirm it survives a short
@@ -812,6 +850,9 @@ class HostAudio {
    *  are removed on the next explicit disable or are harmless if left (the shim only
    *  streams while a tunnel exists, which it no longer does). */
   dispose() {
+    // FIRST, so an enable that is mid-await sees it the moment its SSH call returns and
+    // rolls back instead of finishing behind us (see enable()'s cancellation note).
+    this._disposed = true;
     this.enabled = false;
     if (this.tunnel) { try { this.tunnel.kill && this.tunnel.kill("SIGTERM"); } catch (_) {} this.tunnel = null; }
     if (this.session) { try { this.session.close(); } catch (_) {} this.session = null; }
