@@ -35,8 +35,19 @@
 #                                  re-enabling T3 restores it.
 #
 # Writes back into config.env: T3CODE_HTTPS, T3CODE_HTTPS_PORT and
-# T3CODE_PUBLIC_BASE_URL (the https origin the patched T3 server advertises in
-# pairing links and startup output; empty = today's http behaviour).
+# T3CODE_PUBLIC_BASE_URL.
+#
+# TWO DIFFERENT SIGNALS, deliberately:
+#   T3CODE_HTTPS           the user's PREFERENCE. Kept as-is across a failed
+#                          setup so the next provision retries.
+#   T3CODE_PUBLIC_BASE_URL the EFFECTIVE origin -- written only when the proxy
+#                          actually came up, and cleared on every failure path
+#                          (offline apt, openssl, nginx). Everything that
+#                          advertises or opens a URL (the patched T3 server, the
+#                          control panel's probe + pairing scripts, the console
+#                          banner) keys off THIS, so a failed setup degrades to
+#                          plain http instead of pointing at a dead listener.
+#                          Empty/absent = today's http behaviour.
 #
 set -euo pipefail
 
@@ -287,11 +298,16 @@ LEAF_KEY="${TLS_DIR}/t3.key"
 LEAF_CRT="${TLS_DIR}/t3.crt"
 LEAF_SANS="${TLS_DIR}/t3.sans"
 
-# nginx -t, then reload (or start when it isn't running yet). The distro default
-# site is left alone unless it is what stops nginx from coming up -- then it is
-# unlinked, loudly, and the start is retried once.
+# nginx -t, then reload (or start when it isn't running yet).
+#
+# The distro default site is left alone unless it is what stops nginx from coming
+# up. "Unless" is PROVEN, not assumed: the symlink is moved aside reversibly and
+# the start retried once; it stays removed only when that retry succeeds, and is
+# put back byte-for-byte when the failure was something else (our own port
+# already in use, a broken unit, ...). Deleting an unrelated site on no evidence
+# would be a silent, unrecoverable change to someone else's web server.
 nginx_apply() {
-  local test_out
+  local test_out default_link="${NGINX_ENABLED_DIR}/default" default_target
   if ! test_out="$(nginx -t 2>&1)"; then
     err "nginx rejected the generated ${SITE_NAME} site:"
     printf '%s\n' "${test_out}" >&2
@@ -303,12 +319,17 @@ nginx_apply() {
   else
     systemctl start nginx && return 0
   fi
-  if [[ -L "${NGINX_ENABLED_DIR}/default" ]]; then
-    warn "nginx did not come up; disabling the distro default site and retrying once"
-    rm -f "${NGINX_ENABLED_DIR}/default"
+  if [[ -L "${default_link}" ]]; then
+    default_target="$(readlink "${default_link}" 2>/dev/null || true)"
+    warn "nginx did not come up; trying once without the distro default site"
+    rm -f "${default_link}"
     if nginx -t >/dev/null 2>&1 && systemctl restart nginx; then
-      warn "removed ${NGINX_ENABLED_DIR}/default (it prevented nginx from starting)"
+      warn "removed ${default_link} (it was what prevented nginx from starting)"
       return 0
+    fi
+    if [[ -n "${default_target}" ]]; then
+      ln -sfn "${default_target}" "${default_link}"
+      warn "the distro default site was not the cause; restored ${default_link}"
     fi
   fi
   err "nginx failed to start; recent status and logs:"
@@ -360,6 +381,7 @@ fi
 for _need in nginx openssl; do
   if ! command -v "${_need}" >/dev/null 2>&1; then
     warn "WARNING: ${_need} is not installed and could not be fetched; T3 Code keeps serving plain HTTP on :${T3CODE_PORT}"
+    # Preference kept (retry next provision), effective origin cleared.
     cfg T3CODE_HTTPS true
     cfg_clear T3CODE_PUBLIC_BASE_URL
     rm -f "${STATUS_FILE}"
@@ -439,6 +461,7 @@ if [[ -n "${regen_reason}" ]]; then
   if [[ "${leaf_ok}" != true || ! -s "${LEAF_CRT}" ]]; then
     err "could not issue the T3 server certificate (openssl failed); leaving HTTPS unconfigured"
     rm -f "${LEAF_CRT}" "${LEAF_SANS}"
+    # Preference kept (retry next provision), effective origin cleared.
     cfg T3CODE_HTTPS true
     cfg_clear T3CODE_PUBLIC_BASE_URL
     rm -f "${STATUS_FILE}"
@@ -462,6 +485,8 @@ rm -f "${site_tmp}"
 ln -sfn "${SITE_FILE}" "${SITE_LINK}"
 if ! nginx_apply; then
   err "the TLS proxy is not serving; T3 Code keeps working over plain HTTP on :${T3CODE_PORT}"
+  # Preference kept (retry next provision), effective origin cleared -- so the
+  # panel, the pairing links and the banner all stay on http.
   cfg T3CODE_HTTPS true
   cfg_clear T3CODE_PUBLIC_BASE_URL
   rm -f "${STATUS_FILE}"

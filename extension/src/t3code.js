@@ -21,7 +21,6 @@ function vsc() { return require("vscode"); }
 
 const SERVICE = "t3code-serve";
 const DEFAULT_PORT = 5177;
-const DEFAULT_HTTPS_PORT = 5178;
 const DEFAULT_HOST_BIND = "0.0.0.0";
 
 // channel -> npm dist-tag, the single mapping on the JS side. The provisioner
@@ -49,7 +48,17 @@ function _resetQueue() { _inflight = Promise.resolve(); }
 // shell-safe literals).
 const PRELUDE = `set -uo pipefail
 CONFIG_FILE=/etc/construct/config.env
-cfgget() { sed -n "s/^$1=//p" "$CONFIG_FILE" 2>/dev/null | head -1; }
+# Undo config-set.sh's rendering: it writes values made only of its safe charset
+# bare, and single-quotes anything else (embedded apostrophes as '\\''). An IPv6
+# public base URL — https://[2001:db8::1]:5178 — has brackets, so it IS stored
+# quoted, and reading the raw line would carry the apostrophes into the value.
+cfgget() {
+  _v="$(sed -n "s/^$1=//p" "$CONFIG_FILE" 2>/dev/null | head -1)"
+  case "$_v" in
+    "'"*"'") _v="\${_v#\\'}"; _v="\${_v%\\'}"; _v="\${_v//\\'\\\\\\'\\'/\\'}" ;;
+  esac
+  printf '%s' "$_v"
+}
 cfgset() {
   mkdir -p "$(dirname "$CONFIG_FILE")"; touch "$CONFIG_FILE"
   if grep -q "^$1=" "$CONFIG_FILE" 2>/dev/null; then sed -i "s|^$1=.*|$1=$2|" "$CONFIG_FILE"; else printf '%s=%s\\n' "$1" "$2" >> "$CONFIG_FILE"; fi
@@ -59,21 +68,19 @@ T3CODE_PORT="$(cfgget T3CODE_PORT)"; T3CODE_PORT="\${T3CODE_PORT:-${DEFAULT_PORT
 WORKSPACE_ROOT="$(cfgget WORKSPACE_ROOT)"; WORKSPACE_ROOT="\${WORKSPACE_ROOT:-/root/repos}"
 `;
 
-// Pairing scripts additionally need the HTTPS front end's state. Both keys are
-// read WITHOUT a default: only a VM where bin/setup-t3-https.sh actually ran has
-// them, and inventing "https" for a VM that serves plain http would mint pairing
-// links to a port nothing listens on.
-const PAIRING_PRELUDE = PRELUDE + `T3CODE_HTTPS="$(cfgget T3CODE_HTTPS)"
-T3CODE_HTTPS_PORT="$(cfgget T3CODE_HTTPS_PORT)"; T3CODE_HTTPS_PORT="\${T3CODE_HTTPS_PORT:-${DEFAULT_HTTPS_PORT}}"
-T3CODE_PUBLIC_BASE_URL="$(cfgget T3CODE_PUBLIC_BASE_URL)"
-# The origin the pairing link is minted against, given the client-reachable host
-# in $1. T3CODE_PUBLIC_BASE_URL (written by bin/setup-t3-https.sh) WINS: T3's DPoP
-# proofs are bound to the exact origin the browser dialled, so the link must name
-# the same one the server was told to advertise.
+// Pairing scripts additionally need the HTTPS front end's EFFECTIVE state, which
+// is T3CODE_PUBLIC_BASE_URL and nothing else: bin/setup-t3-https.sh writes that
+// key only when the TLS proxy actually came up, and clears it on every failure
+// path (offline apt, nginx refused to start) while keeping T3CODE_HTTPS as the
+// retry preference. Reading the PREFERENCE here would mint pairing links to a
+// port nothing listens on after exactly the failure that is meant to degrade to
+// plain http. T3's DPoP proofs are bound to the origin the browser dialled, so
+// the link must name the same one the server was told to advertise.
+const PAIRING_PRELUDE = PRELUDE + `T3CODE_PUBLIC_BASE_URL="$(cfgget T3CODE_PUBLIC_BASE_URL)"
+# The origin the pairing link is minted against, given the client-reachable host in $1.
 t3base() {
   if [ -n "$T3CODE_PUBLIC_BASE_URL" ]; then printf '%s' "$T3CODE_PUBLIC_BASE_URL"; return 0; fi
-  if [ "$T3CODE_HTTPS" = true ]; then printf 'https://%s:%s' "$1" "$T3CODE_HTTPS_PORT"
-  else printf 'http://%s:%s' "$1" "$T3CODE_PORT"; fi
+  printf 'http://%s:%s' "$1" "$T3CODE_PORT"
 }
 `;
 
@@ -391,7 +398,7 @@ function planT3LiveAction(wantT3, hadT3, newCh, oldCh) {
 }
 
 module.exports = {
-  SERVICE, DEFAULT_PORT, DEFAULT_HTTPS_PORT, npmTag,
+  SERVICE, DEFAULT_PORT, npmTag,
   buildInstallScript, buildDisableScript, buildPairingScript,
   extractPairUrl, baseUrl,
   openWebUi, enableOnVm, disableOnVm, setChannelOnVm,

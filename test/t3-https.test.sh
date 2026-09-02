@@ -352,6 +352,112 @@ else
   ok "teardown: an untouched config.env gains no keys at all" \
     test ! -s "${fresh_cfg}"
 
+  # ── The proxy failed to come up ────────────────────────────────────────────
+  # nginx accepts the config but will not (re)start. The preference must survive
+  # for a retry while the ADVERTISED origin is cleared, so nothing points a
+  # browser at a dead listener. Stub systemctl to fail every nginx activation.
+  stubs_fail="${tmp}/stubs-fail"
+  mkdir -p "${stubs_fail}"
+  cp "${stubs}/nginx" "${stubs}/hostname" "${stubs_fail}/"
+  cat >"${stubs_fail}/systemctl" <<EOF
+#!/usr/bin/env bash
+printf 'systemctl %s\n' "\$*" >>"${calls}"
+case "\$*" in
+  *"reload nginx"*|*"start nginx"*|*"restart nginx"*) exit 1 ;;
+esac
+exit 0
+EOF
+  printf '#!/usr/bin/env bash\nexit 0\n' >"${stubs_fail}/journalctl"
+  chmod +x "${stubs_fail}/systemctl" "${stubs_fail}/journalctl"
+
+  fail_cfg="${tmp}/failed.env"
+  : >"${fail_cfg}"
+  bash "${ROOT}/bin/config-set.sh" "${fail_cfg}" T3CODE true
+  fail_tls="${tmp}/failed-tls"
+  fail_status="${tmp}/failed-status"
+  fail_enabled="${tmp}/failed-nginx-enabled"
+  mkdir -p "${fail_enabled}" "${tmp}/failed-nginx-available"
+  # A pre-existing distro default site, so the "was it the cause?" logic runs.
+  printf 'server { listen 80; }\n' >"${tmp}/failed-nginx-available/default"
+  ln -sfn "${tmp}/failed-nginx-available/default" "${fail_enabled}/default"
+  run_failed_setup() {
+    PATH="${stubs_fail}:${PATH}" \
+    CONFIG_FILE="${fail_cfg}" REPO_DIR="${ROOT}" \
+    T3CODE_TLS_DIR="${fail_tls}" T3CODE_HTTPS_STATUS_FILE="${fail_status}" \
+    T3CODE_CA_HANDOFF="${tmp}/failed-ca.crt" \
+    T3CODE_NGINX_AVAILABLE_DIR="${tmp}/failed-nginx-available" \
+    T3CODE_NGINX_ENABLED_DIR="${fail_enabled}" \
+    bash "${SCRIPT}"
+  }
+  run_failed_setup >"${tmp}/failrun.out" 2>&1
+  ok "failed setup: exits non-zero" test "$?" != "0"
+  ok "failed setup: keeps T3CODE_HTTPS=true so the next provision retries" \
+    test "$(sed -n 's/^T3CODE_HTTPS=//p' "${fail_cfg}" | head -1)" = "true"
+  ok "failed setup: does NOT advertise a public https origin" \
+    test -z "$(sed -n 's/^T3CODE_PUBLIC_BASE_URL=//p' "${fail_cfg}" | head -1)"
+  ok "failed setup: writes no host handoff status file" test ! -e "${fail_status}"
+  ok "failed setup: says the GUI stays on plain HTTP" \
+    grep -q "keeps working over plain HTTP" "${tmp}/failrun.out"
+  # ...and the distro default site is still there: it was not the cause.
+  ok "failed setup: an unrelated failure leaves the distro default site intact" \
+    sh -c "test -L '${fail_enabled}/default' && test \"\$(readlink '${fail_enabled}/default')\" = '${tmp}/failed-nginx-available/default'"
+  # The banner must follow suit: http URL, no CA/plain block.
+  banner_out="${tmp}/banner-failed.out"
+  PATH="${stubs}:${PATH}" CONFIG_FILE="${fail_cfg}" \
+    bash "${ROOT}/bin/print-connection-info.sh" >"${banner_out}" 2>/dev/null
+  ok "failed setup: the connection banner advertises the http URL" \
+    grep -q "URL:      http://testvm.mshome.net:5177" "${banner_out}"
+  ok "failed setup: the banner shows no CA/HTTPS block" \
+    sh -c "! grep -q 'CA cert:' '${banner_out}'"
+  ok "failed setup: the banner's pairing hint uses the http origin" \
+    grep -q -- "--base-url http://testvm.mshome.net:5177" "${banner_out}"
+  # A recorded origin, by contrast, IS advertised -- with the CA hint beside it.
+  succ_cfg="${tmp}/succeeded.env"
+  : >"${succ_cfg}"
+  bash "${ROOT}/bin/config-set.sh" "${succ_cfg}" T3CODE true
+  bash "${ROOT}/bin/config-set.sh" "${succ_cfg}" T3CODE_HTTPS true
+  bash "${ROOT}/bin/config-set.sh" "${succ_cfg}" T3CODE_PUBLIC_BASE_URL "https://testvm.mshome.net:5178"
+  succ_banner="${tmp}/banner-ok.out"
+  PATH="${stubs}:${PATH}" CONFIG_FILE="${succ_cfg}" \
+    bash "${ROOT}/bin/print-connection-info.sh" >"${succ_banner}" 2>/dev/null
+  ok "success: the banner advertises the https URL, the CA and the plain fallback" \
+    sh -c "grep -q 'URL:      https://testvm.mshome.net:5178' '${succ_banner}' && \
+           grep -q 'CA cert:' '${succ_banner}' && grep -q 'Plain:    http://' '${succ_banner}'"
+  ok "success: the banner's pairing hint uses the https origin" \
+    grep -q -- "--base-url https://testvm.mshome.net:5178" "${succ_banner}"
+
+  # ── The distro default site really IS the culprit ──────────────────────────
+  # Then, and only then, it stays removed -- and the run succeeds.
+  stubs_culprit="${tmp}/stubs-culprit"
+  mkdir -p "${stubs_culprit}"
+  cp "${stubs}/nginx" "${stubs}/hostname" "${stubs_fail}/journalctl" "${stubs_culprit}/"
+  cat >"${stubs_culprit}/systemctl" <<EOF
+#!/usr/bin/env bash
+printf 'systemctl %s\n' "\$*" >>"${calls}"
+case "\$*" in
+  # Comes up only once the default site is out of the way.
+  *"reload nginx"*|*"start nginx"*|*"restart nginx"*)
+    [ -e "${fail_enabled}/default" ] && exit 1
+    exit 0 ;;
+esac
+exit 0
+EOF
+  chmod +x "${stubs_culprit}/systemctl"
+  bash "${ROOT}/bin/config-set.sh" "${fail_cfg}" T3CODE_PUBLIC_BASE_URL ""
+  PATH="${stubs_culprit}:${PATH}" \
+    CONFIG_FILE="${fail_cfg}" REPO_DIR="${ROOT}" \
+    T3CODE_TLS_DIR="${fail_tls}" T3CODE_HTTPS_STATUS_FILE="${fail_status}" \
+    T3CODE_CA_HANDOFF="${tmp}/failed-ca.crt" \
+    T3CODE_NGINX_AVAILABLE_DIR="${tmp}/failed-nginx-available" \
+    T3CODE_NGINX_ENABLED_DIR="${fail_enabled}" \
+    bash "${SCRIPT}" >"${tmp}/culprit.out" 2>&1
+  ok "default site: a causal default site is removed and the run succeeds" test "$?" = "0"
+  ok "default site: ...it stays removed" test ! -e "${fail_enabled}/default"
+  ok "default site: ...and says why" \
+    grep -q "prevented nginx from starting" "${tmp}/culprit.out"
+  ok "default site: the public origin is advertised again" \
+    test -n "$(sed -n 's/^T3CODE_PUBLIC_BASE_URL=//p' "${fail_cfg}" | head -1)"
+
   # Refusals: a bad port, and the two ports colliding.
   PATH="${stubs}:${PATH}" CONFIG_FILE="${CFG}" REPO_DIR="${ROOT}" \
     T3CODE_HTTPS_PORT=99999 bash "${SCRIPT}" >/dev/null 2>&1
@@ -377,6 +483,37 @@ ok "installer: reconciles HTTPS before the unchanged-build early return" \
   sh -c "[ \"\$(grep -n 'setup-t3-https.sh' '${installer}' | head -1 | cut -d: -f1)\" -lt \"\$(grep -n 'T3 Code build is unchanged' '${installer}' | head -1 | cut -d: -f1)\" ]"
 ok "installer: a failed HTTPS setup warns instead of failing the T3 install" \
   grep -q 'WARNING: T3 Code HTTPS setup failed' "${installer}"
+
+# `t3 serve` reads T3CODE_PUBLIC_BASE_URL from its EnvironmentFile only at START,
+# so the unchanged-build fast path may only skip the restart when the HTTPS
+# reconciliation did NOT change that value -- otherwise the running process keeps
+# advertising the old origin. The decision is a pure function, exercised here
+# through the installer's funcs-only sourcing (a subprocess each time, because
+# that file ships its own `ok` logger).
+can_skip() {
+  CONSTRUCT_AI_TOOLS_FUNCS_ONLY=true bash -c '
+    source "$1" >/dev/null 2>&1
+    t3_can_skip_restart "$2" "$3" "$4" "$5"' _ "${installer}" "$1" "$2" "$3" "$4"
+}
+ok "fast path: same build and unchanged public URL -> skip the restart" \
+  can_skip "buildkey" "buildkey" "https://vm:5178" "https://vm:5178"
+nok "fast path: HTTPS just turned ON (empty -> url) forces a restart" \
+  can_skip "buildkey" "buildkey" "" "https://vm:5178"
+nok "fast path: HTTPS just turned OFF (url -> empty) forces a restart" \
+  can_skip "buildkey" "buildkey" "https://vm:5178" ""
+nok "fast path: a changed port/external host forces a restart" \
+  can_skip "buildkey" "buildkey" "https://vm:5178" "https://vm:6443"
+nok "fast path: a changed build key still forces the reinstall path" \
+  can_skip "buildkey" "otherkey" "https://vm:5178" "https://vm:5178"
+nok "fast path: no recorded build key never skips" \
+  can_skip "" "" "https://vm:5178" "https://vm:5178"
+ok "installer: the fast-path guard is the one used at the early return" \
+  sh -c "grep -q 'if t3_can_skip_restart \"\${_wanted_t3_build}\" \"\${_active_t3_build}\" \"\${_t3_pub_before}\" \"\${_t3_pub_after}\"' '${installer}'"
+ok "installer: samples the public URL before AND after the HTTPS setup" \
+  sh -c "grep -q '_t3_pub_before=' '${installer}' && grep -q '_t3_pub_after=' '${installer}' && \
+         [ \"\$(grep -n '_t3_pub_before=\"\$(sed' '${installer}' | cut -d: -f1)\" -lt \"\$(grep -n 'bash \"\${REPO_DIR}/bin/setup-t3-https.sh\"' '${installer}' | head -1 | cut -d: -f1)\" ]"
+ok "installer: says why it restarts when the public URL changed" \
+  grep -q "public base URL changed" "${installer}"
 ok "installer: defaults T3CODE_HTTPS to true and honours an env override" \
   sh -c "grep -q '_t3_https_override' '${installer}' && grep -q 'T3CODE_HTTPS:-true' '${installer}'"
 ok "provision: T3CODE_HTTPS keeps the saved value when passed empty" \
@@ -393,9 +530,12 @@ ok "export: carries the TLS directory (auth-gated)" \
 ok "restore: restores the TLS directory and reconciles HTTPS" \
   sh -c "grep -q 'etc/construct/tls' '${ROOT}/bin/restore-config.sh' && \
          grep -q 'setup-t3-https.sh' '${ROOT}/bin/restore-config.sh'"
-ok "banner: prints the https URL and the CA path only when HTTPS is on" \
-  sh -c "grep -q 'T3CODE_HTTPS' '${ROOT}/bin/print-connection-info.sh' && \
-         grep -q 'CA cert:' '${ROOT}/bin/print-connection-info.sh'"
+ok "banner: keys the https URL off the RECORDED origin" \
+  grep -qF '"${T3CODE_PUBLIC_BASE_URL}" == https://' "${ROOT}/bin/print-connection-info.sh"
+ok "banner: shows the CA hint" \
+  grep -qF 'CA cert:' "${ROOT}/bin/print-connection-info.sh"
+nok "banner: does NOT branch on the T3CODE_HTTPS preference" \
+  grep -qF '"${T3CODE_HTTPS}" == "true"' "${ROOT}/bin/print-connection-info.sh"
 
 # ── Summary ─────────────────────────────────────────────────────────────────
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"

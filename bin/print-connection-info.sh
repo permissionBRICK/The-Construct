@@ -27,11 +27,11 @@ CODEX_TOKEN_FILE="${CODEX_TOKEN_FILE:-/etc/construct/codex-app-server.token}"
 T3CODE="${T3CODE:-}"
 T3CODE_HOST="${T3CODE_HOST:-0.0.0.0}"
 T3CODE_PORT="${T3CODE_PORT:-5177}"
-# HTTPS front end for the T3 web GUI (bin/setup-t3-https.sh). Only an explicit
-# T3CODE_HTTPS=true changes what is printed, so a VM without the feature keeps
-# the historical banner byte for byte.
-T3CODE_HTTPS="${T3CODE_HTTPS:-}"
-T3CODE_HTTPS_PORT="${T3CODE_HTTPS_PORT:-5178}"
+# HTTPS front end for the T3 web GUI (bin/setup-t3-https.sh). The banner keys off
+# T3CODE_PUBLIC_BASE_URL, which that script writes ONLY when the proxy actually
+# came up (T3CODE_HTTPS alone is the retry preference and stays true across a
+# failed setup) -- so a VM whose proxy failed advertises its working http URL,
+# and a VM without the feature keeps the historical banner byte for byte.
 T3CODE_PUBLIC_BASE_URL="${T3CODE_PUBLIC_BASE_URL:-}"
 T3CODE_TLS_DIR="${T3CODE_TLS_DIR:-/etc/construct/tls}"
 VSCODE_TUNNEL="${VSCODE_TUNNEL:-}"
@@ -149,8 +149,8 @@ if [[ "${T3CODE}" == "true" ]] \
     # microphone capture needs a secure context, and the pairing token is bound
     # to whichever origin minted it.
     t3_url="http://${url_host}:${T3CODE_PORT}"
-    if [[ "${T3CODE_HTTPS}" == "true" ]]; then
-        t3_url="${T3CODE_PUBLIC_BASE_URL:-https://${url_host}:${T3CODE_HTTPS_PORT}}"
+    if [[ "${T3CODE_PUBLIC_BASE_URL}" == https://* ]]; then
+        t3_url="${T3CODE_PUBLIC_BASE_URL}"
     fi
     cat <<EOF
 
@@ -160,7 +160,7 @@ T3 Code (web GUI):
   Bind:     ${T3CODE_HOST}:${T3CODE_PORT}
   URL:      ${t3_url}
 EOF
-    if [[ "${T3CODE_HTTPS}" == "true" ]]; then
+    if [[ "${T3CODE_PUBLIC_BASE_URL}" == https://* ]]; then
         cat <<EOF
   CA cert:  ${T3CODE_TLS_DIR}/ca.crt  (trust it on the client; Firefox also needs security.enterprise_roots.enabled)
   Plain:    http://${url_host}:${T3CODE_PORT}  (unencrypted, for local tooling)

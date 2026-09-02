@@ -227,7 +227,10 @@ param(
 $ErrorActionPreference = "Stop"
 
 # ValidateSet is case-insensitive; downstream bash matches exact lowercase only.
+# (bin/provision.sh reads T3CODE_HTTPS as "anything but the exact string false is
+# true", so an accepted -T3CodeHttps FALSE would silently mean ENABLED.)
 if ($T3CodeChannel) { $T3CodeChannel = $T3CodeChannel.ToLower() }
+if ($T3CodeHttps) { $T3CodeHttps = $T3CodeHttps.ToLower() }
 
 # De-elevated child: signal the parent that Provision-AgentVM.ps1 has started
 # (param binding succeeded, script was found). Written atomically so the parent

@@ -986,6 +986,27 @@ if ($httpsParam) {
 $provSrc = Get-Content -LiteralPath $provPath -Raw
 ok "Provision-AgentVM.ps1: T3CodeHttps reaches the guest as T3CODE_HTTPS" (
     $provSrc -match "T3CODE_HTTPS='\`$T3CodeHttps'")
+# ValidateSet is case-insensitive, so -T3CodeHttps FALSE binds -- and bin/provision.sh
+# treats anything but the exact lowercase "false" as ENABLED. The value must be
+# lowercased after binding, before it reaches the env prefix.
+ok "Provision-AgentVM.ps1: normalizes T3CodeHttps to lowercase after param binding" (
+    $provSrc -match '\$T3CodeHttps\s*=\s*\$T3CodeHttps\.ToLower\(\)')
+ok "Provision-AgentVM.ps1: normalizes T3CodeHttps BEFORE building the env prefix" (
+    $provSrc.IndexOf('$T3CodeHttps = $T3CodeHttps.ToLower()') -lt $provSrc.IndexOf("T3CODE_HTTPS='`$T3CodeHttps'"))
+$httpsNormTest = {
+    param([ValidateSet("", "true", "false")][string]$T3CodeHttps = "")
+    if ($T3CodeHttps) { $T3CodeHttps = $T3CodeHttps.ToLower() }
+    return $T3CodeHttps
+}
+ok "T3CodeHttps normalization: 'FALSE' lowered to 'false' (else the guest reads it as true)" (
+    (& $httpsNormTest -T3CodeHttps "FALSE") -eq "false")
+ok "T3CodeHttps normalization: 'TRUE' lowered to 'true'" ((& $httpsNormTest -T3CodeHttps "TRUE") -eq "true")
+ok "T3CodeHttps normalization: 'False' lowered to 'false'" ((& $httpsNormTest -T3CodeHttps "False") -eq "false")
+ok "T3CodeHttps normalization: empty stays empty (keep-saved semantics)" ((& $httpsNormTest -T3CodeHttps "") -eq "")
+ok "T3CodeHttps normalization: omitted defaults to empty" ((& $httpsNormTest) -eq "")
+$httpsHostileThrew = $false
+try { & $httpsNormTest -T3CodeHttps "false'; rm -rf /" } catch { $httpsHostileThrew = $true }
+ok "T3CodeHttps normalization: hostile value rejected by ValidateSet" $httpsHostileThrew
 ok "Provision-AgentVM.ps1: the CA handoff reads the VM status file and imports by plan" (
     $provSrc -match 'T3CODE_HTTPS_READY=yes' -and
     $provSrc -match 'Get-T3CaImportPlan' -and
