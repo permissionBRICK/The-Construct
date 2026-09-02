@@ -183,7 +183,7 @@ Write-Host "=== Helpers ===" -ForegroundColor Cyan
 foreach ($fn in $functions) {
     if ($fn.Name -in @("Split-PortRange", "Get-ListenPort", "Get-ConstructAclPolicy",
                        "Get-ConstructTrustedSid", "Get-ConstructAncestorRiskMask",
-                       "Get-ConstructWriteRiskMask", "Get-ConstructUnsafeAce", "Resolve-ConstructAceSid",
+                       "Get-ConstructWriteRiskMask", "Get-ConstructUnsafeAce", "Resolve-ConstructAceSid", "Sort-ConstructHardeningOrder",
                        "ConvertTo-ConstructPayload", "New-ConstructRelaunchScript",
                        "New-ConstructLocalSystemScript")) {
         . ([scriptblock]::Create($fn.Extent.Text))
@@ -268,9 +268,9 @@ ok "no policy uses a localizable account name" (
     @(($codePolicy + $dataPolicy) | Where-Object { $_.Sid -notmatch '^S-1-' }).Count -eq 0)
 
 $installAstText = Get-Content -Raw -LiteralPath $installer
-ok "the installer hardens the publish directory" ($installAstText -match 'Set-ConstructPathAcl -Path \$PublishDir\s+-Kind Code')
-ok "the installer hardens the scripts directory" ($installAstText -match 'Set-ConstructPathAcl -Path \$ScriptsDir\s+-Kind Code')
-ok "the installer hardens one protected service root" ($installAstText -match 'Set-ConstructPathAcl -Path \$serviceRoot -Kind Data')
+ok "the installer hardens the publish directory" ($installAstText -match '@\{ Path = \$PublishDir;\s+Kind = ''Code'';\s+Name = "-PublishDir" \}')
+ok "the installer hardens the scripts directory" ($installAstText -match '@\{ Path = \$ScriptsDir;\s+Kind = ''Code'';\s+Name = "-ScriptsDir" \}')
+ok "the installer hardens one protected service root" ($installAstText -match '@\{ Path = \$serviceRoot; Kind = ''Data''; Name = "the service root" \}')
 ok "the WSL distro is imported under the protected root" ($installAstText -match '\$wslRoot = Join-Path \$serviceRoot "wsl"')
 ok "the imported WSL distro is hardened too" ($installAstText -match 'Set-ConstructPathAcl -Path \$importTo -Kind Data')
 ok "the installer refuses reparse points" ($installAstText -match 'ReparsePoint')
@@ -279,7 +279,7 @@ ok "the installer rejects overlapping port ranges" ($installAstText -match 'over
 
 # Hardening has to happen before anything is put in those directories, and long
 # before the service can ever run from them.
-$aclAt      = $installAstText.IndexOf("Set-ConstructPathAcl -Path `$serviceRoot")
+$aclAt      = $installAstText.IndexOf('foreach ($entry in (Sort-ConstructHardeningOrder -Entries $hardening))')
 $importAt   = $installAstText.IndexOf("Provisioning WSL distro")
 $registerAt = $installAstText.IndexOf("Registering the Windows service")
 ok "paths are hardened before the WSL import" ($aclAt -gt 0 -and $aclAt -lt $importAt)
@@ -349,6 +349,23 @@ $mappable = [pscustomobject]@{ Value = 'VORDEFINIERT\Administratoren' }
 $mappable | Add-Member -MemberType ScriptMethod -Name Translate -Value { param($t) [pscustomobject]@{ Value = 'S-1-5-32-544' } }
 ok "resolver: a mappable name is translated" ((Resolve-ConstructAceSid -Identity $mappable) -eq 'S-1-5-32-544')
 ok "resolver: null identity yields an empty (untrusted) SID" ((Resolve-ConstructAceSid -Identity $null) -eq '')
+# Field failure #2 (2026-09-02): -PublishDir C:\Construct\service\publish was hardened BEFORE
+# -ScriptsDir C:\Construct, so its ancestors still carried the stock C:\ inheritance
+# (Authenticated Users: Modify) and the trust check refused the layout the docs recommend.
+$order = @(Sort-ConstructHardeningOrder -Entries @(
+    @{ Path = 'C:\ProgramData\Construct'; Kind = 'Data'; Name = 'root' }
+    @{ Path = 'C:\Construct\service\publish'; Kind = 'Code'; Name = '-PublishDir' }
+    @{ Path = 'C:\Construct\'; Kind = 'Code'; Name = '-ScriptsDir' }
+))
+ok "hardening order: -ScriptsDir (the parent) is hardened before -PublishDir inside it" (($order | ForEach-Object { $_.Name }) -join ',' -eq '-ScriptsDir,root,-PublishDir')
+$order2 = @(Sort-ConstructHardeningOrder -Entries @(
+    @{ Path = 'D:\aaa\bbb'; Kind = 'Code'; Name = 'a' }
+    @{ Path = 'D:\ccc\ddd'; Kind = 'Code'; Name = 'b' }
+))
+ok "hardening order: equal depth keeps the given order" (($order2 | ForEach-Object { $_.Name }) -join ',' -eq 'a,b')
+ok "hardening order: empty list" (@(Sort-ConstructHardeningOrder -Entries @()).Count -eq 0)
+$installBody = Get-Content -Raw -LiteralPath $installer
+ok "the installer hardens through Sort-ConstructHardeningOrder, not a fixed child-first list" ($installBody -match 'foreach \(\$entry in \(Sort-ConstructHardeningOrder -Entries \$hardening\)\)')
 $aceListText = ($functions | Where-Object Name -eq 'ConvertTo-ConstructAceList').Extent.Text
 ok "ACE list asks the ACL for SID-keyed rules instead of translating names" ($aceListText -match 'GetAccessRules\(\$true, \$true, \[System\.Security\.Principal\.SecurityIdentifier\]\)')
 ok "ACE list routes every identity through the resolver" ($aceListText -match 'Resolve-ConstructAceSid -Identity')

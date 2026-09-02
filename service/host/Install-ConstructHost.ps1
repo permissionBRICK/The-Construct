@@ -582,7 +582,7 @@ function Assert-ConstructPathTrustworthy {
                 $unsafe = @(Get-ConstructUnsafeAce -Aces (ConvertTo-ConstructAceList -Acl (Get-Acl -LiteralPath $current)) -RiskMask $ancestorMask)
                 if ($unsafe.Count -gt 0) {
                     $who = ($unsafe | ForEach-Object { $_.Sid }) -join ', '
-                    throw "$Name sits under ${current}, where $who can delete, rename or re-permission it -- which defeats any ACL set on $Path. Move it under a directory only administrators can change (ProgramData, Program Files, or a directory off the drive root), or fix that ACL."
+                    throw "$Name sits under ${current}, where $who can delete, rename or re-permission it -- which defeats any ACL set on $Path. Move it under a directory only administrators can change (ProgramData, Program Files, or a directory off the drive root that this installer also hardens, e.g. -ScriptsDir C:\Construct with -PublishDir inside it), or fix that ACL."
                 }
             }
         }
@@ -592,6 +592,23 @@ function Assert-ConstructPathTrustworthy {
         if (-not $parent -or $parent -eq $current) { break }
         $current = $parent
     }
+}
+
+function Sort-ConstructHardeningOrder {
+    <#
+        Order paths so that every directory comes before anything inside it (shorter
+        normalized path first; ties keep their given order). Pure, so the test can pin
+        the rule: -PublishDir inside -ScriptsDir is hardened AFTER -ScriptsDir.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Entries)
+
+    $indexed = @()
+    for ($i = 0; $i -lt $Entries.Count; $i++) {
+        $normalized = ([string]$Entries[$i].Path).TrimEnd('\', '/')
+        $indexed += @{ Entry = $Entries[$i]; Depth = $normalized.Length; Index = $i }
+    }
+    return @($indexed | Sort-Object -Property @{ Expression = 'Depth' }, @{ Expression = 'Index' } | ForEach-Object { $_.Entry })
 }
 
 function Set-ConstructPathAcl {
@@ -904,9 +921,20 @@ if ($SkipAclHardening) {
 } else {
     # The service root covers the database, the ISO cache and the WSL distro in one
     # hardened tree, and each call verifies the whole ancestor chain above it.
-    Set-ConstructPathAcl -Path $serviceRoot -Kind Data -Name "the service root"
-    Set-ConstructPathAcl -Path $PublishDir  -Kind Code -Name "-PublishDir"
-    Set-ConstructPathAcl -Path $ScriptsDir  -Kind Code -Name "-ScriptsDir"
+    # Parents before children. The trust check judges a path by its ANCESTORS'
+    # ACLs (an ancestor a user can rename is a way to swap the whole tree under the
+    # service's feet), so a directory that contains another one on this list must be
+    # hardened first: once C:\Construct is SYSTEM + Administrators, the ancestors of
+    # C:\Construct\service\publish are too, and a checkout copied onto a stock C:\
+    # (where Authenticated Users inherit Modify) installs without a manual ACL fix.
+    $hardening = @(
+        @{ Path = $serviceRoot; Kind = 'Data'; Name = "the service root" }
+        @{ Path = $PublishDir;  Kind = 'Code'; Name = "-PublishDir" }
+        @{ Path = $ScriptsDir;  Kind = 'Code'; Name = "-ScriptsDir" }
+    )
+    foreach ($entry in (Sort-ConstructHardeningOrder -Entries $hardening)) {
+        Set-ConstructPathAcl -Path $entry.Path -Kind $entry.Kind -Name $entry.Name
+    }
 }
 
 # ── 2. Prerequisites ─────────────────────────────────────────────────────────
