@@ -33,7 +33,7 @@ host service, and the extension is a management UI only.
 | VM reachability | **Host-service port forwards** (per-VM SSH port on the host's LAN address). Plus an **in-VM CLI** (`construct expose <port>`) so agents can self-serve additional forwards for dev servers etc. |
 | VM-CLI auth | **Scoped per-VM token** injected at provision time; valid only for that VM's own forward management. |
 | Provisioning split | **Hybrid**: service does ISO build + VM create + OS install wait; the **client** runs the agent-stack provisioning (`Provision-AgentVM.ps1`) over the forwarded SSH port — user secrets (git creds, agent auth, backups) never transit the service. |
-| ISO build on remote host | ~~WSL checked/used under LocalSystem~~ **Superseded 2026-09-02 (field test):** WSL 2.x refuses LocalSystem (`WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED`). The service stays LocalSystem and consumes a **pre-built autoinstall ISO** that the installing administrator builds interactively with their own WSL (`admin iso build`); the guest takes its hostname from the Hyper-V VM name at first boot (KVP). Proxmox later builds natively. See §4.10. |
+| ISO build on remote host | ~~WSL checked/used under LocalSystem~~ **Superseded 2026-09-02 (field test):** WSL 2.x refuses LocalSystem (`WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED`). The service stays LocalSystem and consumes a **pre-built autoinstall ISO** that the installing administrator builds interactively with their own WSL (`admin iso build`); the guest takes its hostname from the Hyper-V VM name at first boot (KVP). Proxmox later builds natively. See §4.10. Target design: pluggable ISO build strategy + hypervisor-supplied guest identity (§4.11). |
 | Compatibility | **Zero-change default path.** One-liner install, `agent-vm` name, `mshome.net`, existing extension flows all keep working exactly as today. Multi-VM and remote are opt-in. |
 | Process | Plan doc (this file) → analyze/consolidate → parallel worktree implementation with per-chain codex auto-review → merge batches. |
 
@@ -430,7 +430,7 @@ Module rules (enforced in review for new code, adopted opportunistically in old)
   host. Registry/API leave room (`url` on forwards is a field, not a format).
 - **Secret store service**: separate effort; will co-locate with `constructd`.
 
-### 4.10 Pre-built autoinstall ISO, service stays LocalSystem (B10)
+### 4.10 Pre-built autoinstall ISO, service stays LocalSystem (B10 — a stopgap; the target design is §4.11)
 
 **Field finding (2026-09-02, `standpc`, WSL 2.6.3):** `wsl.exe` as LocalSystem exits -1 with
 `Wsl/WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED`; a probe as a domain account in a batch logon did not even
@@ -461,6 +461,35 @@ VM name at first boot. Hyper-V exposes it through KVP data exchange (`hv_kvp_dae
 **Open risk (field):** `linux-cloud-tools-virtual` must be installable during autoinstall (network via
 the Default Switch NAT is available) and `hv_kvp_daemon` must populate pool 3 on Gen2 VMs — the
 checklist verifies `hostname` inside the first VM before anything else.
+
+### 4.11 ISO build strategy (target design; direction from Christoph, 2026-09-02)
+
+The pre-built ISO of §4.10 is **not** the main design. Building install media must be a pluggable
+**strategy**, and per-VM guest identity must come from the **hypervisor's own channel**, so that:
+
+| Strategy (`Constructd:Iso:Mode`) | Where the ISO is built | Status |
+|---|---|---|
+| `Prebuilt` | by an interactive administrator, once; the service consumes a catalog entry | **now** (B10) |
+| `PerVm` (WSL) | by the service through `wsl.exe`, per VM | exists; needs a WSL-capable service identity |
+| `Native` | in-process on Windows (.NET): remaster the stock ISO without xorriso | planned |
+| `InGuest` | inside an existing Construct VM over SSH (xorriso is there); the service copies the result back — this is how the system **self-updates its install media** and fetches new source ISOs for new installs | planned |
+| `HypervisorHost` | natively on the hypervisor host: Proxmox (xorriso on PVE) or any Linux host; the regular autoinstall path when Hyper-V is replaced | planned (Proxmox) |
+
+Rules that every strategy and B10 must respect:
+
+- **One seam:** `IIsoBuilder` + an `IsoCatalog` (versioned files, pointer, sidecar, prune) that any
+  builder publishes into; composition maps mode → builder in one place; `admin iso build` is a
+  thin driver over "a builder + the catalog". Builders do not know about each other.
+- **Generic media, hypervisor-supplied identity:** the autoinstall user-data never bakes a per-VM
+  hostname. The guest adopts its identity at first boot from a pluggable **identity source**
+  (`VM_HOSTNAME_SOURCE`): `hyperv-kvp` now; `cloud-init-metadata` for Proxmox / NoCloud /
+  ConfigDrive, where the hypervisor already supplies per-VM identity natively. The first-boot
+  unit is "source → hostname" with the source isolated, so a second source is additive.
+- **Driver contract stays clean:** neither `IHypervisorDriver` nor the PowerShell driver contract
+  grows KVP or ISO-format assumptions; a driver only receives an `IsoPath` (or, on Proxmox, a
+  cloud-init drive) from the job.
+- **Source ISO acquisition** stays admin-configured (`SourceUrl` + `Sha256`) and reusable by every
+  strategy, including `InGuest` downloading inside the VM.
 
 ## 5. Implementation batches
 
