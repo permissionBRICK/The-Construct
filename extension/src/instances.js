@@ -489,10 +489,12 @@ function toSshCfg(inst) {
 // ── Parsing / validation ─────────────────────────────────────────────────────
 
 /**
- * The identity fields that must be UNIQUE across the registry, with the schema name
- * each one is reported under. Two instances sharing any of them are two names for one
- * machine (or one key file / one ssh_config Host block): a rebuild of the second would
- * delete the first's VM, and a reprovision would overwrite its key.
+ * The identities that must be UNIQUE across the registry, with the schema name each one
+ * is reported under and how its comparison key is built. Two instances sharing any of
+ * them are two names for one machine (or one key file / one ssh_config Host block): a
+ * rebuild of the second would delete the first's VM, and a reprovision would overwrite
+ * its key. Four are single fields; the fifth is the ENDPOINT, the composite
+ * (sshHost, sshPort) — see its entry below.
  *
  * `configBranch` is one of them, and for the same reason: the config-sync branch is the
  * instance's STORE inside the one host config repo (docs/config-sync.md, "Multiple
@@ -503,17 +505,36 @@ function toSshCfg(inst) {
  * that claims it is skipped, exactly like one that claims the default VM's name.
  */
 const UNIQUE_FIELDS = Object.freeze([
-  { key: "vmName", label: "vmName" },
-  { key: "vmHost", label: "sshHost" },
-  { key: "hostAlias", label: "hostAlias" },
-  { key: "keyName", label: "keyName" },
-  { key: "configBranch", label: "configBranch" },
+  { label: "vmName", value: (i) => idKey(i.vmName), show: (i) => i.vmName },
+  // The ENDPOINT is the composite (sshHost, sshPort), not the host alone. Several
+  // `hyperv-remote` instances legitimately live on ONE service host and are told apart
+  // by the SSH forward the service allocated them (§4.4: one port per VM out of
+  // 2201–2299) — the host is the service's, the port is the VM's. Keying on the host
+  // alone made every VM on a shared host collide, and rule 2 below then dropped BOTH
+  // entries, so a perfectly valid two-VM registry lost both VMs. A `hyperv-local`
+  // instance's port is canonically 22 and its host derives from its own name, so local
+  // entries still cannot share an endpoint.
+  { label: "sshHost/sshPort", value: (i) => idKey(i.vmHost) + " port " + portKey(i.sshPort), show: (i) => endpointLabel(i) },
+  { label: "hostAlias", value: (i) => idKey(i.hostAlias), show: (i) => i.hostAlias },
+  { label: "keyName", value: (i) => idKey(i.keyName), show: (i) => i.keyName },
+  { label: "configBranch", value: (i) => idKey(i.configBranch), show: (i) => i.configBranch },
 ]);
 
-/** All five are case-insensitive in the places they land (Hyper-V names, DNS, an
+/** All of them are case-insensitive in the places they land (Hyper-V names, DNS, an
  *  ssh_config alias, an NTFS file name, a Windows loose-ref file), so they are
  *  compared lowercased. */
 function idKey(v) { return String(v == null ? "" : v).toLowerCase(); }
+
+/** The port half of the endpoint key: numeric, so 22 and "22" are one value. */
+function portKey(v) {
+  const n = Number(v);
+  return String(Number.isFinite(n) && n > 0 ? n : DEFAULT_SSH_PORT);
+}
+
+/** How an endpoint is NAMED in a collision problem: "<host>:<port>". */
+function endpointLabel(inst) {
+  return String(inst && inst.vmHost != null ? inst.vmHost : "") + ":" + portKey(inst && inst.sshPort);
+}
 
 /**
  * Cross-entry identity COLLISIONS. Returns { problems, drop } where `drop` is the set of
@@ -536,8 +557,8 @@ function collisionProblems(byName) {
     if (name === DEFAULT_INSTANCE_NAME) continue;
     const inst = byName[name];
     for (const f of UNIQUE_FIELDS) {
-      if (idKey(inst[f.key]) === idKey(DEFAULT_INSTANCE[f.key])) {
-        problems.push('instance "' + name + '": ' + f.label + " " + q(inst[f.key]) +
+      if (f.value(inst) === f.value(DEFAULT_INSTANCE)) {
+        problems.push('instance "' + name + '": ' + f.label + " " + q(f.show(inst)) +
           ' belongs to the default instance "' + DEFAULT_INSTANCE_NAME + '" — skipped');
         drop.add(name);
         break;
@@ -548,9 +569,9 @@ function collisionProblems(byName) {
     for (let j = i + 1; j < names.length; j++) {
       const a = byName[names[i]], b = byName[names[j]];
       for (const f of UNIQUE_FIELDS) {
-        if (idKey(a[f.key]) === idKey(b[f.key])) {
+        if (f.value(a) === f.value(b)) {
           problems.push('instances "' + names[i] + '" and "' + names[j] + '" share the same ' +
-            f.label + " " + q(a[f.key]) + " — both skipped");
+            f.label + " " + q(f.show(a)) + " — both skipped");
           drop.add(names[i]);
           drop.add(names[j]);
           break;
@@ -899,6 +920,23 @@ function createCoalescer(opts) {
 }
 
 /**
+ * The `construct.instance` pin that is actually IN FORCE, or "" when there is none.
+ *
+ * A pin naming an instance the registry no longer holds is SKIPPED by `resolveActive`
+ * (own-property membership — the same test used here, so `"constructor"` is not a pin
+ * either), and the next candidate wins. Treating any non-empty setting as a pin
+ * therefore produced messages that contradicted the window's own active target: a stale
+ * `construct.instance` was reported as the reason the window "still uses" an instance it
+ * had actually resolved away from. Every user-facing statement about the pin — and the
+ * decision of whether a switch took effect — goes through this. Pure.
+ */
+function effectivePin(registry, setting) {
+  const name = str(setting);
+  if (!name) return "";
+  return hasInstance(registry, name) ? name : "";
+}
+
+/**
  * Match a Remote-SSH authority host against the registry, so a window attached to a
  * specific VM auto-selects that instance. `host` is the part after "ssh-remote+";
  * it is compared case-insensitively against each instance's alias and hostname.
@@ -1071,6 +1109,161 @@ function planCapturedFollowUp(gate, target, proceed) {
   if (!proceed) return { run: false, reason: "declined", target: target || null };
   if (targetSuperseded(gate, target)) return { run: false, reason: "superseded", target: target || null };
   return { run: true, reason: "ok", target: target || null };
+}
+
+/**
+ * THE HANDOVER of the ONE live per-VM connection a window may hold (today: the mic
+ * passthrough tunnel) when the active instance changes.
+ *
+ * The decision, given the session that is live right now and the instance we just
+ * switched TO:
+ *   - `teardown` — there is a live session and it terminates on ANOTHER VM. It has to
+ *     go: its `ssh -R` lands on the instance we left.
+ *   - `arm` — the destination has to be EVALUATED for auto-arm unless a live session
+ *     already belongs to it. Gating the evaluation on "a session exists for a different
+ *     instance" (as extension.js did) meant a startup arm that never produced one —
+ *     instance A unreachable, or its preference off — left the switch to B doing
+ *     nothing at all, so B's saved micPassthrough was silently ignored for the rest of
+ *     the window.
+ * Names compare case-sensitively, like every other instance comparison here. Pure.
+ */
+function planHandover(state) {
+  const s = state || {};
+  const live = !!s.live;
+  const name = s.name == null ? null : String(s.name);
+  const next = s.next == null ? null : String(s.next);
+  const mine = live && name !== null && next !== null && name === next;
+  return { teardown: live && !mine, arm: !mine };
+}
+
+/**
+ * SERIALIZED handover across consecutive switches, so A→B→C cannot leave a tunnel
+ * behind or arm the wrong VM.
+ *
+ * Teardown is asynchronous (it stops the tunnel, then reverts the shim on the VM over
+ * SSH) and so is the arm (it reads the destination's preference and probes it). Run
+ * concurrently — the shape extension.js had — A's teardown finishes *after* B's arm and
+ * its trailing "disabled" status overwrites B's, and a third switch can start C's
+ * teardown against a session B has not created yet, leaving B's tunnel with nothing
+ * holding it. So every switch goes through ONE chain: each step tears the live session
+ * down, then arms its OWN captured target, and only then does the next step look at the
+ * world. A step whose target was superseded while it waited arms nothing (its teardown
+ * still runs — that session is on a VM we left either way).
+ *
+ * Injected, so the ordering is unit-tested with deferred promises rather than only
+ * observable in a live window:
+ *   `session()`         → { live, name } for the connection held right now
+ *   `teardown()`        → Promise, tear that session down
+ *   `arm(target)`       → Promise, evaluate + arm the captured destination
+ *   `superseded(target)`→ has the window switched again since `target` was captured?
+ * `switch(target)` returns the step's outcome: { teardown, armed, reason }.
+ */
+function createHandover(opts) {
+  const o = opts || {};
+  const session = typeof o.session === "function" ? o.session : () => ({ live: false, name: null });
+  const teardown = typeof o.teardown === "function" ? o.teardown : () => undefined;
+  const arm = typeof o.arm === "function" ? o.arm : () => undefined;
+  const superseded = typeof o.superseded === "function" ? o.superseded : () => false;
+  const settle = (v) => Promise.resolve(v).then(() => null, () => null);
+  let chain = Promise.resolve();
+  const step = async (target) => {
+    const s = session() || {};
+    const plan = planHandover({ live: s.live, name: s.name, next: target ? target.name : null });
+    // The teardown is decided (and run) when the step starts, not when it was queued:
+    // the previous step may have armed the very session we are looking at.
+    if (plan.teardown) await settle(teardown());
+    if (!plan.arm) return { teardown: plan.teardown, armed: false, reason: "already-armed" };
+    if (superseded(target)) return { teardown: plan.teardown, armed: false, reason: "superseded" };
+    await settle(arm(target));
+    return { teardown: plan.teardown, armed: true, reason: "armed" };
+  };
+  return {
+    /** Queue the handover for `target` behind every earlier one. */
+    switch(target) {
+      const run = () => step(target);
+      chain = chain.then(run, run);
+      return chain;
+    },
+  };
+}
+
+/**
+ * OWNERSHIP OF THE ONE SESSION SLOT, so a late callback from a session we have moved on
+ * from cannot speak for the current one.
+ *
+ * The mic tunnel's status flows out of the HostAudio instance it belongs to (its
+ * `onStatus`, its enable result, its teardown's final "disabled"), and those callbacks
+ * outlive the session: `disable()` reverts the shim over SSH first and reports
+ * afterwards. Ungated, instance A's trailing `{enabled:false}` painted the console
+ * switch off while B's tunnel was up, and A's failed enable cleared the module's
+ * reference to B's HostAudio — leaking B's tunnel with nothing left to dispose it.
+ *
+ * So each enable claims the slot and stamps its callbacks with the claim id;
+ * `owns(id)` is false as soon as a LATER claim exists. Releasing is deliberately not
+ * required: after a plain disable (nothing claimed since) the teardown's own final
+ * status is still the current truth and must go out — that is the single-VM path, which
+ * has to stay exactly as it was. Pure.
+ */
+function createSessionOwner() {
+  let seq = 0;
+  let holder = null;
+  return {
+    /** Take the slot for `name`; returns the claim id its callbacks carry. */
+    claim(name) {
+      seq += 1;
+      holder = { id: seq, name: String(name == null ? "" : name) };
+      return seq;
+    },
+    /** Is `id` still the newest claim? A missing id never owns the slot. */
+    owns(id) { return !!id && id === seq; },
+    /** The current claim id, or null before anything claimed. */
+    get id() { return seq || null; },
+    /** The instance name of the current claim, or null. */
+    get name() { return holder ? holder.name : null; },
+  };
+}
+
+/**
+ * The window-local outcome of a switch whose PERSISTENCE may have failed.
+ *
+ * `workspaceState.update` is a Thenable and can reject (a corrupt/locked storage file).
+ * Reporting "switched for now" while nothing holds the new selection was a lie in both
+ * directions: `activeInstance()` kept resolving the PREVIOUS instance, so the refresh
+ * that followed re-rendered the VM the user had just switched away from. So a failed
+ * write installs an explicit window-local override — the selection stands for this
+ * window exactly as the message says, it simply does not survive a reload.
+ *
+ * `pin` is the `construct.instance` pin that is actually in force (`effectivePin` — a
+ * setting the registry no longer holds pins nothing, and passing the raw setting instead
+ * would make this contradict the window's own active target). It outranks the override
+ * exactly as it outranks workspaceState, so when it names ANOTHER instance the window
+ * does NOT move and the message must not say it did: it reports only that the choice
+ * could not be saved, and the caller's pin warning — driven by the same value — names
+ * the instance still in use. (The override is installed either way: it is what the
+ * window falls back to the moment the pin is cleared.)
+ *
+ * Returns { override, pinned, message } — `override` is the in-memory selection to honour
+ * ("" when the write succeeded and workspaceState holds the truth), `message` the warning
+ * to show (null on success). Pure.
+ */
+function planSwitchPersistence(name, persisted, pin) {
+  const wanted = String(name == null ? "" : name).trim();
+  const inForce = String(pin == null ? "" : pin).trim();
+  const pinned = !!inForce && inForce !== wanted;
+  if (persisted) return { override: "", pinned, message: null };
+  if (pinned) {
+    return {
+      override: wanted,
+      pinned: true,
+      message: `The switch to "${wanted}" couldn't be saved for this window.`,
+    };
+  }
+  return {
+    override: wanted,
+    pinned: false,
+    message: `Switched to "${wanted}" for this window, but the choice couldn't be saved — ` +
+      "it will revert to the previous instance when the window reloads.",
+  };
 }
 
 /**
@@ -1257,10 +1450,11 @@ module.exports = {
   isLocalBackend, canonicalIdentity, localIdentityProblems, collisionProblems,
   deriveBackend, backendProblems,
   deriveDefaults, isDefaultInstance, toSshCfg,
-  parseRegistry, load, list, resolve, resolveActive, hasInstance, matchByRemoteHost,
+  parseRegistry, load, list, resolve, resolveActive, hasInstance, effectivePin, matchByRemoteHost,
   createGate, createCoalescer, createTargetQueue, captureTarget, targetSuperseded,
   describeSyncStatus, createSyncStatusStore,
-  planCapturedFollowUp, planRemoteAdoption, adoptRemoteInstance,
+  planCapturedFollowUp, planHandover, createHandover, createSessionOwner,
+  planSwitchPersistence, planRemoteAdoption, adoptRemoteInstance,
   toFileEntry, toFileDocument, save,
   addInstance, updateInstance, removeInstance, setDefaultInstance,
 };

@@ -17,6 +17,7 @@ const drivers = require("../src/drivers");
 const host = require("../src/host");
 const notify = require("../src/notify");
 const audio = require("../src/audio");
+const { EventEmitter } = require("events");
 const usage = require("../src/usage");
 
 let pass = 0, fail = 0;
@@ -647,6 +648,68 @@ ok("collision: the comparison is case-insensitive (one NTFS file, one DNS name)"
 deepEq("collision: two canonical local instances never collide",
   parse({ version: 1, instances: { "a-vm": {}, "b-vm": {}, "agent-vm": {} } }).problems, []);
 
+// ── The endpoint identity is (sshHost, sshPort), not the host alone ──────────
+// Several hyperv-remote VMs legitimately live on ONE service host and are told apart by
+// the SSH forward the service allocated them (plan §4.4: one port per VM from a
+// configured range). Keyed on the host alone, every VM on a shared host collided and the
+// "drop BOTH" rule then lost the whole registry. Mirrored in test/instances.test.ps1.
+console.log("\n=== endpoint uniqueness: (sshHost, sshPort) ===");
+const sameHost = parse({ version: 1, instances: {
+  "a-vm": { backend: "hyperv-remote", sshHost: "buildbox.example.local", sshPort: 2201 },
+  "b-vm": { backend: "hyperv-remote", sshHost: "BuildBox.Example.local", sshPort: 2202 },
+} });
+ok("endpoint: two remote VMs on ONE service host, different ports, both load",
+  !!sameHost.registry.byName["a-vm"] && !!sameHost.registry.byName["b-vm"]);
+deepEq("endpoint: ...with nothing reported", sameHost.problems, []);
+const samePort = parse({ version: 1, instances: {
+  "a-vm": { backend: "hyperv-remote", sshHost: "buildbox.example.local", sshPort: 2201 },
+  "b-vm": { backend: "hyperv-remote", sshHost: "BuildBox.Example.local", sshPort: 2201 },
+} });
+ok("endpoint: the SAME host and port is still one machine — both dropped",
+  !samePort.registry.byName["a-vm"] && !samePort.registry.byName["b-vm"]);
+ok("endpoint: ...reported once, naming both and the host:port",
+  samePort.problems.filter((p) => p.includes("share the same sshHost/sshPort")).length === 1 &&
+  samePort.problems.some((p) => p.includes("a-vm") && p.includes("b-vm") &&
+    p.includes("buildbox.example.local:2201")));
+ok("endpoint: the port comparison is numeric, so \"2201\" and 2201 are one endpoint",
+  !parse({ version: 1, instances: {
+    "a-vm": { backend: "hyperv-remote", sshHost: "one.local", sshPort: 2201 },
+    "b-vm": { backend: "hyperv-remote", sshHost: "one.local", sshPort: "2201" },
+  } }).registry.byName["a-vm"]);
+// A local instance's port is canonically 22 and its host derives from its own name, so
+// local entries still cannot share an endpoint — but a remote VM reached through a
+// FORWARD on the same machine is a different endpoint and must load.
+const localAndRemote = parse({ version: 1, instances: {
+  "work-vm": { backend: "hyperv-remote", sshHost: "agent-vm.mshome.net", sshPort: 2201 },
+} });
+ok("endpoint: a remote VM forwarded on the default VM's host (other port) loads",
+  !!localAndRemote.registry.byName["work-vm"]);
+deepEq("endpoint: ...and nothing is reported", localAndRemote.problems, []);
+ok("endpoint: the default instance survives it untouched",
+  inst.isDefaultInstance(localAndRemote.registry.byName["agent-vm"]));
+ok("endpoint: ...while the default instance's OWN host:port is still reserved",
+  !parse({ version: 1, instances: {
+    "work-vm": { backend: "hyperv-remote", sshHost: "agent-vm.mshome.net", sshPort: 22 },
+  } }).registry.byName["work-vm"]);
+// Sharing a host must not loosen ANY other identity.
+ok("endpoint: a shared host does not excuse a shared key file",
+  !parse({ version: 1, instances: {
+    "a-vm": { backend: "hyperv-remote", sshHost: "one.local", sshPort: 2201, keyName: "shared_key" },
+    "b-vm": { backend: "hyperv-remote", sshHost: "one.local", sshPort: 2202, keyName: "Shared_Key" },
+  } }).registry.byName["a-vm"]);
+// The write side agrees with the reader, in both directions.
+const epBase = parse({ version: 1, instances: {
+  "a-vm": { backend: "hyperv-remote", sshHost: "buildbox.example.local", sshPort: 2201 },
+} }).registry;
+ok("endpoint: addInstance accepts a second VM on the same host, another port",
+  !!inst.addInstance(epBase, "b-vm", { backend: "hyperv-remote", sshHost: "buildbox.example.local", sshPort: 2202 })
+    .byName["b-vm"]);
+ok("endpoint: addInstance refuses a second VM on the same host AND port",
+  (() => {
+    try { inst.addInstance(epBase, "b-vm", { backend: "hyperv-remote", sshHost: "buildbox.example.local", sshPort: 2201 }); return false; }
+    catch (e) { return /sshHost\/sshPort/.test(e.message); }
+  })());
+
 // ── configBranch is a cross-entry identity ───────────────────────────────────
 // The branch IS the instance's store inside the ONE host config repo (docs/config-sync.md,
 // "Multiple instances"): two entries on one branch share their VM snapshots, deletion
@@ -891,8 +954,14 @@ eq("update: field changed", updated.byName["work-vm"].sshPort, 2299);
 eq("update: untouched field preserved", updated.byName["work-vm"].vmHost, "buildbox.local");
 eq("update: backend preserved", updated.byName["work-vm"].backend, "hyperv-remote");
 ok("update: rejects an unknown name", (() => { try { inst.updateInstance(added, "ghost", {}); return false; } catch (_) { return true; } })());
-ok("update: rejects a change that would collide with the default instance",
-  (() => { try { inst.updateInstance(added, "work-vm", { sshHost: "agent-vm.mshome.net" }); return false; } catch (_) { return true; } })());
+// The ENDPOINT is (sshHost, sshPort): the default VM's HOST on another port is a
+// different endpoint (nothing of the default instance is claimed), its host on port 22
+// is the default instance's own and is refused.
+ok("update: a remote instance may keep the default VM's host on another port",
+  inst.updateInstance(added, "work-vm", { sshHost: "agent-vm.mshome.net" })
+    .byName["work-vm"].vmHost === "agent-vm.mshome.net");
+ok("update: rejects a change that would collide with the default instance's endpoint",
+  (() => { try { inst.updateInstance(added, "work-vm", { sshHost: "agent-vm.mshome.net", sshPort: 22 }); return false; } catch (_) { return true; } })());
 ok("remove: refuses the default instance", (() => { try { inst.removeInstance(updated, "agent-vm"); return false; } catch (_) { return true; } })());
 const removed = inst.removeInstance(updated, "work-vm");
 ok("remove: gone", !removed.byName["work-vm"]);
@@ -1409,6 +1478,74 @@ ok("mic auto-arm: the probe result is discarded (not applied to the new VM) afte
 ok("switch: registry membership is an OWN-property test (a webview name is untrusted)",
   extSrc.includes("if (!instances.hasInstance(reg, wanted)) {") &&
   !/reg\.byName\[wanted\]/.test(extSrc));
+
+// The mic tunnel's HANDOVER across a switch. The integration review found three ways
+// the old shape (disable-if-a-tunnel-exists, then arm concurrently) lost the new VM's
+// tunnel; the ordering rules themselves are modelled with deferred promises in
+// asyncTests() below (createHandover / createSessionOwner).
+ok("mic switch: the destination is ALWAYS evaluated, through ONE serialized handover",
+  extSrc.includes("const audioHandover = instances.createHandover({") &&
+  extSrc.includes("session: () => ({ live: !!hostAudio, name: hostAudioInstance }),") &&
+  extSrc.includes("teardown: () => disableAudio(),") &&
+  extSrc.includes("arm: (target) => maybeAutoEnableAudio(extensionContext, target),") &&
+  extSrc.includes("superseded: (target) => instances.targetSuperseded(instanceGate, target),") &&
+  extSrc.includes("void audioHandover.switch(instances.captureTarget(instanceGate, inst));") &&
+  // ...and the old gate — which armed NOTHING when the previous instance never produced
+  // a tunnel — is gone.
+  !extSrc.includes("if (hostAudio && hostAudioInstance && hostAudioInstance !== inst.name) {"));
+ok("mic switch: ...only when the destination really changed (a single-VM window never re-arms)",
+  extSrc.includes("const micSwitched = inst.name !== audioTargetInstance;") &&
+  extSrc.includes("if (micSwitched) {") &&
+  extSrc.includes("audioTargetInstance = inst.name;") &&
+  // the startup arm records the instance it evaluated, so the first onInstanceChanged
+  // with an unchanged name is a no-op rather than a fresh arm.
+  extSrc.includes("audioTargetInstance = activeInstance().name;") &&
+  extSrc.indexOf("audioTargetInstance = activeInstance().name;") < extSrc.indexOf("maybeAutoEnableAudio(context);"));
+ok("mic switch: the teardown is AWAITABLE, so the destination's arm is sequenced after it",
+  extSrc.includes("if (!hostAudio) { broadcastAudio({ enabled: false, capturing: false }); return Promise.resolve(); }") &&
+  extSrc.includes("return Promise.resolve(vscode.window.withProgress(") &&
+  extSrc.includes(")).catch(() => {});"));
+ok("mic switch: the teardown also waits for an enable still IN FLIGHT on that session",
+  // one enable promise per session, published before anything can await it...
+  extSrc.includes("const started = hostAudio.enable();") &&
+  extSrc.includes("hostAudioEnable = Promise.resolve(started).then(() => null, () => null);") &&
+  extSrc.includes("started.then(handle, () => handle({ ok: false, error: \"enable-failed\" }));") &&
+  extSrc.includes("async () => { handle(await started); }") &&
+  // ...and the teardown captures it and awaits it BEFORE disabling the session, so a
+  // half-enabled HostAudio can't finish its tunnel behind the teardown's back.
+  extSrc.includes("const pendingEnable = hostAudioEnable;") &&
+  extSrc.includes("if (pendingEnable) await pendingEnable;") &&
+  extSrc.indexOf("if (pendingEnable) await pendingEnable;") < extSrc.indexOf("const r = await inst.disable();") &&
+  !/hostAudio\.enable\(\)\.then\(/.test(extSrc));
+ok("mic switch: every status a session emits carries its slot claim, and a superseded one is dropped",
+  extSrc.includes("const audioSlot = instances.createSessionOwner();") &&
+  extSrc.includes("const session = audioSlot.claim(t.name);") &&
+  extSrc.includes("hostAudioSession = session;") &&
+  extSrc.includes("onStatus: (s) => broadcastAudio(s, session),") &&
+  extSrc.includes("function broadcastAudio(status, session) {") &&
+  extSrc.includes("if (session != null && !audioSlot.owns(session)) {") &&
+  // the teardown reports for the session it tore down, not for whatever is armed now
+  extSrc.includes("const session = hostAudioSession;") &&
+  extSrc.includes("broadcastAudio({ enabled: false, capturing: false }, session);"));
+ok("mic switch: a superseded enable RESULT cannot clear the new tunnel's reference",
+  extSrc.includes("if (!audioSlot.owns(session)) {") &&
+  extSrc.indexOf("if (!audioSlot.owns(session)) {") < extSrc.indexOf("      // Reset the switch to off on every surface."));
+ok("switch: a rejected workspaceState write installs a window-local override, so the message is true",
+  extSrc.includes("const persistence = instances.planSwitchPersistence(wanted, persisted, pin);") &&
+  // the pin is read BEFORE the report, so a pinned window is never told it switched
+  extSrc.indexOf("const setting = instanceSetting();") < extSrc.indexOf("const persistence = instances.planSwitchPersistence(") &&
+  extSrc.includes("windowInstanceOverride = persistence.override;") &&
+  extSrc.includes("if (persistence.message) vscode.window.showWarningMessage(persistence.message);") &&
+  extSrc.includes("if (windowInstanceOverride) return windowInstanceOverride;") &&
+  // the old copy claimed a switch "for now" while nothing held the new selection
+  !extSrc.includes("for now, but the choice couldn't be saved for this window"));
+ok("switch: BOTH warnings key off the EFFECTIVE pin (a stale setting pins nothing)",
+  extSrc.includes("const pin = instances.effectivePin(reg, setting);") &&
+  extSrc.includes("if (pin && pin !== wanted) {") &&
+  extSrc.includes('pins every window to "${pin}"') &&
+  // ...and a setting the registry doesn't hold is logged rather than reported as a pin
+  extSrc.includes("if (setting && !pin) {") &&
+  !/setting && setting !== wanted/.test(extSrc));
 
 // ── The async cases: generation gate + Remote-SSH adoption ───────────────────
 // These are the two ordering bugs a live window would only show intermittently, so
@@ -1962,6 +2099,393 @@ async function asyncTests() {
   const clean = await mergeGate(capturedGate("agent-vm", "vm"), Promise.resolve(), Promise.resolve({ conflict: false }));
   ok("merge gate: without a switch the verdict is the repo's own", !clean.blocked && !clean.stale);
   deepEq("merge gate: ...and it merged the captured branch", merges, ["vm", "vm"]);
+
+  // ── The mic tunnel's handover across a switch ──────────────────────────────
+  // Three live failures the integration review found in the old shape (arm only when a
+  // tunnel for another instance existed, then tear down and arm CONCURRENTLY):
+  //   1. instance A never produced a tunnel (unreachable at startup) ⇒ switching to B
+  //      never even looked at B's saved micPassthrough;
+  //   2. A's teardown finished after B's arm and its trailing "disabled" status painted
+  //      B's live tunnel off — and a late enable result of A's cleared the module's
+  //      reference to B's HostAudio, leaking B's tunnel;
+  //   3. A→B→C superseded B's arm mid-flight with nothing sequencing the teardowns.
+  console.log("\n=== mic tunnel handover (no prior tunnel / delayed teardown / A->B->C) ===");
+  // The pure decision first.
+  deepEq("handover: with NO live session the destination is still evaluated",
+    inst.planHandover({ live: false, name: null, next: "work-vm" }), { teardown: false, arm: true });
+  deepEq("handover: a session on ANOTHER VM is torn down, and the destination evaluated",
+    inst.planHandover({ live: true, name: "agent-vm", next: "work-vm" }), { teardown: true, arm: true });
+  deepEq("handover: a session that already belongs to the destination is left alone",
+    inst.planHandover({ live: true, name: "work-vm", next: "work-vm" }), { teardown: false, arm: false });
+  deepEq("handover: names compare case-sensitively, like every instance comparison here",
+    inst.planHandover({ live: true, name: "Work-VM", next: "work-vm" }), { teardown: true, arm: true });
+
+  // The slot owner: a later claim invalidates every earlier one; an unclaimed status
+  // (the single-VM disable, which claims nothing new) still goes out.
+  const owner = inst.createSessionOwner();
+  ok("slot: nothing owns the slot before a claim", !owner.owns(1) && owner.id === null && owner.name === null);
+  const claimA = owner.claim("agent-vm");
+  ok("slot: the claim owns the slot", owner.owns(claimA) && owner.id === claimA && owner.name === "agent-vm");
+  const claimB = owner.claim("work-vm");
+  ok("slot: a later claim supersedes the earlier one", owner.owns(claimB) && !owner.owns(claimA));
+  ok("slot: a missing id never owns the slot", !owner.owns(null) && !owner.owns(undefined) && !owner.owns(0));
+
+  // A MODEL of extension.js's mic wiring — the module-level hostAudio /
+  // hostAudioInstance / hostAudioSession, the slot owner, the gated broadcast, the
+  // awaitable teardown, the captured-target arm and onInstanceChanged's "did the
+  // destination really change" guard — driven with deferred promises so the
+  // interleavings are exact instead of intermittent in a live window.
+  const tick = async (n) => { for (let i = 0; i < (n || 4); i++) await Promise.resolve(); };
+  function micWindow(startName) {
+    const gate = inst.createGate(startName);
+    const slot = inst.createSessionOwner();
+    const mic = { tunnel: null, name: null, session: null };   // the module-level trio
+    let evaluated = startName;                                  // audioTargetInstance
+    let teardown = null;                                        // the pending VM cleanup
+    const log = [], shown = [], tunnels = [], probes = new Map();
+    const probeFor = (name) => {
+      if (!probes.has(name)) probes.set(name, deferred());
+      return probes.get(name);
+    };
+    const broadcast = (status, session) => {
+      if (session != null && !slot.owns(session)) { log.push("status-dropped:" + status.from); return; }
+      shown.push(status);
+    };
+    const target = (name) => ({ ...inst.captureTarget(gate, { name }), name });
+    // enableAudio(): re-checks the capture, claims the slot, opens the tunnel — and its
+    // RESULT lands later, through the same claim.
+    const enableAudio = (t) => {
+      if (inst.targetSuperseded(gate, t)) { log.push("enable-discarded:" + t.name); return null; }
+      const session = slot.claim(t.name);
+      const tunnel = { name: t.name, session, open: true, result: deferred() };
+      tunnels.push(tunnel);
+      mic.tunnel = tunnel; mic.name = t.name; mic.session = session;
+      log.push("armed:" + t.name);
+      tunnel.result.promise.then((okResult) => {
+        if (!slot.owns(session)) { log.push("result-dropped:" + tunnel.name); return; }
+        if (okResult) return;
+        mic.tunnel = null; mic.name = null; mic.session = null;
+        tunnel.open = false;
+        broadcast({ from: tunnel.name, enabled: false }, session);
+      });
+      return tunnel;
+    };
+    // maybeAutoEnableAudio(): capture -> probe -> planCapturedFollowUp -> enable.
+    const arm = async (t) => {
+      const reachable = await probeFor(t.name).promise;
+      const plan = inst.planCapturedFollowUp(gate, t, reachable);
+      if (!plan.run) { log.push("arm-" + plan.reason + ":" + t.name); return; }
+      enableAudio(plan.target);
+    };
+    // disableAudio(): drops the reference at once, finishes over SSH, and reports for
+    // the session it tore down (never for whatever is armed by then).
+    const disable = () => {
+      if (!mic.tunnel) { broadcast({ from: "(none)", enabled: false }); return Promise.resolve(); }
+      const tunnel = mic.tunnel, session = mic.session;
+      mic.tunnel = null; mic.name = null; mic.session = null;
+      teardown = deferred();
+      log.push("teardown-started:" + tunnel.name);
+      return teardown.promise.then(() => {
+        tunnel.open = false;
+        log.push("teardown-done:" + tunnel.name);
+        broadcast({ from: tunnel.name, enabled: false }, session);
+      });
+    };
+    const handover = inst.createHandover({
+      session: () => ({ live: !!mic.tunnel, name: mic.name }),
+      teardown: disable,
+      arm,
+      superseded: (t) => inst.targetSuperseded(gate, t),
+    });
+    return {
+      mic, log, shown, tunnels,
+      probe: (name, reachable) => probeFor(name).resolve(reachable),
+      finishTeardown: () => { const d = teardown; teardown = null; d.resolve(); return d.promise; },
+      /** activate()'s startup auto-arm. */
+      armStartup: (name) => arm(target(name)),
+      /** onInstanceChanged()'s mic half, guard included. */
+      switchTo(name) {
+        gate.set(name);
+        if (name === evaluated) { log.push("no-op:" + name); return Promise.resolve({ armed: false, reason: "unchanged" }); }
+        evaluated = name;
+        return handover.switch(target(name));
+      },
+      broadcast,
+      openTunnels: () => tunnels.filter((t) => t.open).map((t) => t.name),
+    };
+  }
+
+  // 1) A switch with NO prior tunnel still arms the destination. The old gate armed
+  //    nothing here, so a window that started on an unreachable A never honoured B's
+  //    saved micPassthrough at all.
+  const w1 = micWindow("agent-vm");
+  w1.probe("work-vm", true);
+  const r1 = await w1.switchTo("work-vm");
+  ok("no prior tunnel: the destination is evaluated and armed",
+    r1.armed === true && r1.teardown === false && r1.reason === "armed");
+  deepEq("no prior tunnel: ...and the tunnel that opened is the DESTINATION's", w1.openTunnels(), ["work-vm"]);
+
+  // 2) A slow teardown of A: B is armed only after A has let go, and A's later status
+  //    (and its later enable result) cannot speak for B.
+  const w2 = micWindow("agent-vm");
+  w2.probe("agent-vm", true);
+  await w2.armStartup("agent-vm");
+  const tunnelA = w2.tunnels[0];
+  deepEq("delayed teardown: A's tunnel is up to begin with", w2.openTunnels(), ["agent-vm"]);
+  const s2 = w2.switchTo("work-vm");
+  w2.probe("work-vm", true);
+  await tick();
+  ok("delayed teardown: B is NOT armed while A is still tearing down",
+    w2.log.includes("teardown-started:agent-vm") && !w2.log.includes("armed:work-vm"));
+  await w2.finishTeardown();
+  const r2 = await s2;
+  ok("delayed teardown: B is armed only after A let go",
+    r2.armed === true && w2.log.indexOf("teardown-done:agent-vm") < w2.log.indexOf("armed:work-vm"));
+  deepEq("delayed teardown: exactly one tunnel is open, and it is B's", w2.openTunnels(), ["work-vm"]);
+  const shownBefore = w2.shown.length;
+  w2.broadcast({ from: "agent-vm", enabled: false }, tunnelA.session);   // A's late onStatus
+  eq("delayed teardown: A's late status is dropped, not painted over B's", w2.shown.length, shownBefore);
+  ok("delayed teardown: ...and it is recorded as dropped", w2.log.includes("status-dropped:agent-vm"));
+  tunnelA.result.resolve(false);                                        // A's late enable result
+  await tick();
+  eq("delayed teardown: a late FAILED enable of A leaves B's tunnel referenced", w2.mic.name, "work-vm");
+  deepEq("delayed teardown: ...so nothing leaks", w2.openTunnels(), ["work-vm"]);
+  ok("delayed teardown: ...and A's result was discarded", w2.log.includes("result-dropped:agent-vm"));
+
+  // 3) A->B->C while A's teardown is still running: C is armed, B's arm is superseded
+  //    cleanly, and no tunnel is left behind.
+  const w3 = micWindow("agent-vm");
+  w3.probe("agent-vm", true);
+  await w3.armStartup("agent-vm");
+  const s3b = w3.switchTo("work-vm");
+  await tick();
+  const s3c = w3.switchTo("third-vm");
+  w3.probe("work-vm", true);
+  w3.probe("third-vm", true);
+  await w3.finishTeardown();
+  const r3b = await s3b, r3c = await s3c;
+  eq("A->B->C: B's arm is superseded, cleanly", r3b.reason, "superseded");
+  ok("A->B->C: ...and B never opened a tunnel", !w3.log.includes("armed:work-vm"));
+  eq("A->B->C: C is the one that gets armed", r3c.reason, "armed");
+  deepEq("A->B->C: exactly one tunnel is open, and it is C's", w3.openTunnels(), ["third-vm"]);
+  ok("A->B->C: A was torn down exactly once", w3.log.filter((l) => l === "teardown-started:agent-vm").length === 1);
+
+  // 4) The control — a single-VM window never switches, so nothing new happens: no
+  //    teardown, no second arm, byte-identical to the pre-instances behaviour.
+  const w4 = micWindow("agent-vm");
+  w4.probe("agent-vm", true);
+  await w4.armStartup("agent-vm");
+  const r4 = await w4.switchTo("agent-vm");      // e.g. construct.instance edited to the same name
+  eq("single VM: a 'switch' to the instance already active does nothing", r4.reason, "unchanged");
+  deepEq("single VM: ...one tunnel, still A's", w4.openTunnels(), ["agent-vm"]);
+  deepEq("single VM: ...and the window did exactly one thing all session",
+    w4.log, ["armed:agent-vm", "no-op:agent-vm"]);
+
+  // ...and if a handover DOES run for an instance that already holds the tunnel, it
+  // leaves it alone rather than cycling the mic.
+  const idle = inst.createHandover({
+    session: () => ({ live: true, name: "work-vm" }),
+    teardown: () => { throw new Error("must not tear down the destination's own tunnel"); },
+    arm: () => { throw new Error("must not re-arm a live tunnel"); },
+    superseded: () => false,
+  });
+  const idleRes = await idle.switch({ name: "work-vm" });
+  ok("handover: a destination that already holds the tunnel is left alone",
+    idleRes.reason === "already-armed" && idleRes.armed === false && idleRes.teardown === false);
+  // A teardown that FAILS (an unreachable VM) must not wedge the chain — the destination
+  // still gets its tunnel.
+  const wedged = inst.createHandover({
+    session: () => ({ live: true, name: "agent-vm" }),
+    teardown: () => Promise.reject(new Error("ssh died")),
+    arm: () => Promise.resolve(),
+    superseded: () => false,
+  });
+  const wedgedRes = await wedged.switch({ name: "work-vm" });
+  ok("handover: a FAILED teardown still hands over", wedgedRes.armed === true && wedgedRes.teardown === true);
+
+  // ── A switch while the previous instance's enable is STILL IN FLIGHT ───────
+  // The model above opens its tunnel synchronously, so it cannot see this ordering:
+  // HostAudio.disable() tears down what exists WHEN IT RUNS, and mid-enable that is
+  // nothing yet — the enable then opens its AudioSession and `ssh -R` after the teardown
+  // has already passed, leaving a live tunnel on the instance we left that no reference
+  // can reach. Driven against the REAL src/audio.js HostAudio with its ssh runner, net
+  // server and spawner injected, paused before its first awaited SSH result.
+  console.log("\n=== mid-enable switch (the real HostAudio, paused before its first SSH result) ===");
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  function fakeHostAudio(label, spawns) {
+    const gateEnable = deferred();          // releases the enable's remote step
+    const netState = { closed: false, port: null };
+    const server = new EventEmitter();
+    server.listen = (port, host, cb) => { netState.port = 55555; if (cb) setImmediate(cb); return server; };
+    server.address = () => ({ port: netState.port });
+    server.close = () => { netState.closed = true; };
+    let sshCalls = 0;
+    const h = new audio.HostAudio({
+      cfg: { vmHost: label + ".mshome.net", hostAlias: label, keyName: "construct_" + label + "_ed25519" },
+      _ssh: {
+        resolveCfg: ssh.resolveCfg,
+        keyPath: ssh.keyPath,
+        runRemoteScript: () => {
+          sshCalls += 1;
+          // The FIRST call is the enable's remote step: it hangs until the test releases
+          // it. Everything after (the disable script) answers at once.
+          if (sshCalls === 1) return gateEnable.promise.then(() => ({ code: 0, stdout: "", stderr: "" }));
+          return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+        },
+      },
+      _net: { createServer: () => server },
+      _spawn: () => {
+        const child = new EventEmitter();
+        child.killed = false;
+        child.kill = () => { child.killed = true; };
+        spawns.push({ label, child });
+        return child;
+      },
+      _readScript: (b) => "# " + b + "\n",
+      _hasKey: () => true,
+      mic: () => () => {},
+      onStatus: () => {},
+      _tunnelSettleMs: 1,
+    });
+    return { h, gateEnable, netState };
+  }
+
+  const spawns = [];
+  const sessionA = fakeHostAudio("agent-vm", spawns);
+  // extension.js's enableAudio: ONE enable promise per session, published (mapped to
+  // always settle) before anything can await it.
+  const startedA = sessionA.h.enable();
+  const enableA = Promise.resolve(startedA).then(() => null, () => null);
+  await tick();
+  ok("mid-enable: A's enable is paused before its first SSH result",
+    spawns.length === 0 && sessionA.h.enabled === false);
+  // ...and extension.js's disableAudio: wait for that enable to settle, THEN disable.
+  const teardownA = (async () => { await enableA; return sessionA.h.disable(); })();
+  sessionA.gateEnable.resolve();
+  const rA = await teardownA;
+  ok("mid-enable: the enable finished first, so its tunnel existed to tear down", spawns.length === 1);
+  ok("mid-enable: ...and the teardown killed it", spawns[0].child.killed === true);
+  ok("mid-enable: ...closed A's local server", sessionA.netState.closed === true);
+  eq("mid-enable: ...and A is off", sessionA.h.enabled, false);
+  ok("mid-enable: ...having run the VM-side cleanup", rA.ok === true && rA.was === true);
+  // Only NOW is the destination armed — and it is the only live tunnel in the window.
+  const sessionB = fakeHostAudio("work-vm", spawns);
+  sessionB.gateEnable.resolve();
+  const rB = await sessionB.h.enable();
+  const live = spawns.filter((s) => !s.child.killed);
+  ok("mid-enable: after the sequenced teardown exactly ONE tunnel is live", rB.ok === true && live.length === 1);
+  eq("mid-enable: ...and it is the destination's", live[0].label, "work-vm");
+
+  // The control — the ordering the sequencing prevents: disabling a half-enabled
+  // HostAudio (what a concurrent teardown did) leaves the enable free to open its
+  // tunnel afterwards, with the session already dropped from the module.
+  const raceSpawns = [];
+  const orphan = fakeHostAudio("agent-vm", raceSpawns);
+  orphan.h.enable();                       // paused mid-enable, NOT waited for
+  await tick();
+  await orphan.h.disable();                // tears down what exists now: nothing
+  orphan.gateEnable.resolve();
+  await sleep(20);                         // let the enable finish behind the teardown
+  ok("mid-enable control: disabling mid-enable lets the enable open a tunnel anyway",
+    raceSpawns.length === 1 && raceSpawns[0].child.killed === false && orphan.h.enabled === true);
+  orphan.h.dispose();                      // don't leave the fake child behind
+
+  // ── A switch whose workspaceState write REJECTS ────────────────────────────
+  // The old catch said the window had switched "for now" while nothing held the new
+  // selection: activeInstance() kept resolving the PREVIOUS instance and the refresh that
+  // followed re-rendered the VM the user had just switched away from.
+  console.log("\n=== switch persistence (rejected workspaceState.update) ===");
+  const swReg = inst.load({ path: writeRegistry(JSON.stringify({
+    version: 1,
+    defaultInstance: "agent-vm",
+    instances: {
+      "agent-vm": { backend: "hyperv-local" },
+      "work-vm": { backend: "hyperv-remote", sshHost: "buildbox.example.local", sshPort: 2201 },
+    },
+  })) });
+  // The window: workspaceState + the in-memory override, resolved exactly as
+  // extension.js resolves them (setting > workspaceState/override > registry default).
+  const switchWindow = async (storageOk, settingRaw) => {
+    const setting = settingRaw || "";
+    // switchInstance's own order: resolve the EFFECTIVE pin first (a setting the registry
+    // no longer holds pins nothing), then report both warnings off that one value.
+    const pin = inst.effectivePin(swReg, setting);
+    let stored = "", persisted = true;
+    try {
+      if (!storageOk) throw new Error("storage is locked");
+      stored = "work-vm";
+    } catch (_) { persisted = false; }
+    const plan = inst.planSwitchPersistence("work-vm", persisted, pin);
+    const active = inst.resolveActive({
+      registry: swReg, setting, workspaceValue: plan.override || stored,
+    });
+    return {
+      message: plan.message, override: plan.override, pinned: plan.pinned,
+      // the second warning switchInstance shows, driven by the SAME decision
+      pinWarning: pin && pin !== "work-vm" ? pin : null,
+      active: active.instance.name,
+    };
+  };
+  const okSwitch = await switchWindow(true);
+  eq("persist ok: the window is on the instance it switched to", okSwitch.active, "work-vm");
+  eq("persist ok: no override is installed", okSwitch.override, "");
+  eq("persist ok: nothing is reported", okSwitch.message, null);
+  const failedSwitch = await switchWindow(false);
+  eq("persist failed: the window is STILL on the instance it switched to", failedSwitch.active, "work-vm");
+  eq("persist failed: ...held by an explicit window-local override", failedSwitch.override, "work-vm");
+  ok("persist failed: ...and the message names that instance and says it won't persist",
+    typeof failedSwitch.message === "string" && failedSwitch.message.includes('"work-vm"') &&
+    failedSwitch.message.includes("couldn't be saved") && failedSwitch.message.includes("reloads"));
+  // The bug the override fixes: with nothing stored and no override, the window resolves
+  // the PREVIOUS instance while the user is told the switch took effect.
+  eq("persist failed: without the override the window would fall back to the old instance",
+    inst.resolveActive({ registry: swReg, setting: "", workspaceValue: "" }).instance.name, "agent-vm");
+  // The construct.instance pin still outranks the override, exactly as it outranks
+  // workspaceState — the override sits at the same precedence level, not above it.
+  eq("persist failed: the global pin still wins over the override",
+    inst.resolveActive({ registry: swReg, setting: "agent-vm", workspaceValue: failedSwitch.override }).instance.name,
+    "agent-vm");
+  deepEq("persist: a blank/absent name never becomes an override",
+    inst.planSwitchPersistence("", false).override, "");
+  // ...and with construct.instance PINNED to another instance the window does not move
+  // at all, so the failure must not be reported as a switch that took effect. (The two
+  // warnings the user sees — this one and the pin notice — then agree with each other
+  // AND with the active target.)
+  const pinnedFail = await switchWindow(false, "agent-vm");
+  eq("persist failed + pinned: the pin is what the window actually uses", pinnedFail.active, "agent-vm");
+  ok("persist failed + pinned: the message does NOT claim the window switched",
+    typeof pinnedFail.message === "string" && !/Switched to/.test(pinnedFail.message) &&
+    pinnedFail.message.includes('"work-vm"') && pinnedFail.message.includes("couldn't be saved"));
+  eq("persist failed + pinned: ...and it is flagged as pinned", pinnedFail.pinned, true);
+  eq("persist failed + pinned: the override is still installed, for when the pin is cleared",
+    inst.resolveActive({ registry: swReg, setting: "", workspaceValue: pinnedFail.override }).instance.name,
+    "work-vm");
+  const pinnedOk = await switchWindow(true, "agent-vm");
+  eq("persist ok + pinned: a successful write reports nothing (the pin notice stands alone)",
+    pinnedOk.message, null);
+  eq("persist ok + pinned: ...and the pin still wins", pinnedOk.active, "agent-vm");
+  eq("persist: a pin naming the SAME instance is not a pin at all",
+    inst.planSwitchPersistence("work-vm", false, "work-vm").pinned, false);
+  // ...and a STALE `construct.instance` pins nothing: resolveActive skips a name the
+  // registry no longer holds, so the window really does move. Reporting it as a pin made
+  // BOTH warnings contradict the active target.
+  eq("pin: a setting the registry holds is the pin", inst.effectivePin(swReg, "agent-vm"), "agent-vm");
+  eq("pin: ...with surrounding whitespace trimmed", inst.effectivePin(swReg, "  agent-vm  "), "agent-vm");
+  eq("pin: a setting naming a removed instance pins nothing", inst.effectivePin(swReg, "removed-vm"), "");
+  eq("pin: an unset setting pins nothing", inst.effectivePin(swReg, ""), "");
+  eq("pin: membership is an OWN-property test, so \"constructor\" is not a pin",
+    inst.effectivePin(swReg, "constructor"), "");
+  const staleSetting = await switchWindow(false, "removed-vm");
+  eq("persist failed + STALE pin: the window is on the instance it switched to",
+    staleSetting.active, "work-vm");
+  eq("persist failed + STALE pin: ...so it is not treated as pinned", staleSetting.pinned, false);
+  ok("persist failed + STALE pin: ...the message says the switch took effect but won't persist",
+    /Switched to "work-vm" for this window/.test(staleSetting.message) &&
+    staleSetting.message.includes("reloads"));
+  eq("persist failed + STALE pin: ...and no pin warning contradicts it", staleSetting.pinWarning, null);
+  // The control: a LIVE pin still produces both the non-switch wording and the warning.
+  eq("persist failed + live pin: the pin warning names the instance in use",
+    (await switchWindow(false, "agent-vm")).pinWarning, "agent-vm");
 }
 
 asyncTests().then(() => {
