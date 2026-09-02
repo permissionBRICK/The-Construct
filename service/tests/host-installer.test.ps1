@@ -183,7 +183,7 @@ Write-Host "=== Helpers ===" -ForegroundColor Cyan
 foreach ($fn in $functions) {
     if ($fn.Name -in @("Split-PortRange", "Get-ListenPort", "Get-ConstructAclPolicy",
                        "Get-ConstructTrustedSid", "Get-ConstructAncestorRiskMask",
-                       "Get-ConstructWriteRiskMask", "Get-ConstructUnsafeAce", "Resolve-ConstructAceSid", "Sort-ConstructHardeningOrder", "Test-ConstructTaskStillRunning",
+                       "Get-ConstructWriteRiskMask", "Get-ConstructUnsafeAce", "Resolve-ConstructAceSid", "Sort-ConstructHardeningOrder", "Test-ConstructTaskStillRunning", "Format-ConstructCommandOutput",
                        "ConvertTo-ConstructPayload", "New-ConstructRelaunchScript",
                        "New-ConstructLocalSystemScript")) {
         . ([scriptblock]::Create($fn.Extent.Text))
@@ -604,6 +604,10 @@ ok "task runner: the one-shot task lives in its own folder, not the root" ($scri
 ok "task runner: polls through the Schedule.Service COM object" ($installText -match 'New-Object -ComObject Schedule\.Service')
 ok "task runner: the CIM fallback is scoped to the Construct folder" ($installText -match 'Get-ScheduledTask\s+-TaskName \$TaskName -TaskPath \$script:ConstructTaskPath')
 ok "task runner: the exit code comes from the final status, not a pre-loop Get-ScheduledTaskInfo" ($installText -match 'ExitCode = \[int\]\$status\.LastTaskResult' -and -not ($installText -match '\$info = Get-ScheduledTaskInfo -TaskName \$taskName\s*$'))
+ok "failed LocalSystem commands report what they printed, not only the exit code" ($installText -match 'Format-ConstructCommandOutput -Output \$listing\.Output')
+ok "output formatter: empty output" ((Format-ConstructCommandOutput -Output '') -eq ' It printed nothing.')
+ok "output formatter: strips WSL's UTF-16 NULs and blank lines" ((Format-ConstructCommandOutput -Output "W`0S`0L`0 `0e`0r`0r`0o`0r`0`r`n`r`n") -eq " It said:`n    WSL error")
+ok "output formatter: caps the lines shown" ((Format-ConstructCommandOutput -Output ((1..12 | ForEach-Object { "l$_" }) -join "`n") -MaxLines 3) -match '\(\+9 more line\(s\)\)$')
 ok "task runner: cleanup unregisters from the same folder" ($installText -match 'Unregister-ScheduledTask -TaskName \$taskName -TaskPath \$script:ConstructTaskPath')
 ok "it lists the distros LocalSystem can see" (
     $installText -match 'Invoke-AsLocalSystem -FilePath "wsl\.exe" -ArgumentList @\("-l", "-q"\)')
