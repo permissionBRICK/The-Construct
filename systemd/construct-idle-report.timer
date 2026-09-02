@@ -1,0 +1,15 @@
+[Unit]
+Description=Construct guest activity heartbeat timer
+Documentation=file:/opt/construct/repo/docs/expose.md
+
+[Timer]
+# Both intervals are rewritten by provision.sh when
+# CONSTRUCT_IDLE_REPORT_INTERVAL_SEC differs from the 60s default; the shipped
+# file stays a valid unit so `systemd-analyze verify` can check it as-is.
+OnBootSec=60
+OnUnitActiveSec=60
+AccuracySec=5s
+Unit=construct-idle-report.service
+
+[Install]
+WantedBy=timers.target
