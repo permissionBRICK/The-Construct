@@ -534,3 +534,7 @@ Process notes: every package ran as an omniloop dev/reviewer pair (opus develope
 gpt-5.6-sol reviewer) in its own worktree; cross-package integration reviews ran on the
 merged tree with the zero-change default path as the primary bar. Workflow budgets must
 be ≥ 720 min because a usage-limit park does not pause the workflow-level timeout.
+Process correction (2026-09-02, Christoph): one review-fix loop per change. Rounds 6–10
+re-ran a fresh integration reviewer on an unchanged tree after each fix pair had been
+approved, which cannot converge on a diff this size. From here: a new review only when
+new changes land; the round-10 fix pair is the last loop for this batch.
