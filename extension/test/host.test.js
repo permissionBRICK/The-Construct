@@ -174,15 +174,24 @@ try {
   ok("source-managed T3: live enable/channel update cannot replace it with stock npm",
     extensionSource.includes('t3plan.action === "enable" && !sourceManagedT3') &&
     extensionSource.includes('t3plan.action === "setChannel" && !sourceManagedT3'));
-  ok("source-managed T3: agent update action starts Construct reprovision",
+  ok("source-managed T3: agent update action starts Construct reprovision for ITS target",
     extensionSource.includes('requested.includes("t3code")') &&
-    extensionSource.includes("startConstructReprovision(scriptsDir)"));
-  ok("config sync: same-window overlap queues one follow-up instead of reporting contention",
-    extensionSource.includes("syncTickFollowupPromise") &&
-    extensionSource.includes("syncTickFollowupPromise = active.then(function ()"));
-  ok("projects UI: confirmed delete prunes selection and runs config sync",
+    extensionSource.includes("startConstructReprovision(scriptsDir, t)") &&
+    !extensionSource.includes("startConstructReprovision(scriptsDir);"));
+  // The follow-up is queued BY TARGET (instances.createTargetQueue): one global promise
+  // let a "Sync Now" for A, queued behind A's tick, run against whatever the window had
+  // switched to by the time it started -- syncing B's branch and B's store instead.
+  ok("config sync: same-window overlap queues one follow-up PER INSTANCE",
+    extensionSource.includes("const syncTickFollowups = instances.createTargetQueue()") &&
+    extensionSource.includes("syncTickFollowups.queue(syncTarget.name, syncTickPromise, function () {") &&
+    extensionSource.includes("return runConfigSync(syncTarget);") &&
+    !extensionSource.includes("syncTickFollowupPromise"));
+  ok("projects UI: confirmed delete prunes selection and syncs the instance it was captured for",
     extensionSource.includes("runDeleteProject") && extensionSource.includes("Delete project profile") &&
-    extensionSource.includes("host.deleteProjectProfile") && extensionSource.includes("await runConfigSync()"));
+    extensionSource.includes("host.deleteProjectProfile") &&
+    extensionSource.includes("const delTarget = actionTarget();") &&
+    extensionSource.includes("await runConfigSync(delTarget)") &&
+    !extensionSource.includes("await runConfigSync();"));
 
   // ── the automatic-checkpoint "applied" marker ──────────────────────────────
   // Separate from the PREFERENCE: it records what was actually CONFIRMED onto the VM,

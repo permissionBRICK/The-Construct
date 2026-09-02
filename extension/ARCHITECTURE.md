@@ -368,6 +368,19 @@ change them together):
   happens in a wide numeric type *before* any Int32 cast — `[int]999999999999` throws in
   PowerShell, and an exception escaping the reader would break the "never throws"
   contract the whole zero-change path rests on.
+- **The name→instance map is prototype-free, and membership is an OWN-property test.**
+  A plain `{}` inherits `Object.prototype`, so `byName["constructor"]` was truthy for
+  *every* registry: `{"defaultInstance":"constructor","instances":{}}` parsed without a
+  problem and `resolveActive` handed out Object's **constructor function** as the
+  instance (undefined `vmHost`/`keyName` in every ssh argv), while the PowerShell reader
+  — an ordinal `Hashtable` + `ContainsKey` — correctly reported "no entry" and used
+  `agent-vm`. A `construct.instance` pin, a stale `workspaceState` selection and the
+  panel's instance dropdown reach the same lookup, and none of them is name-validated
+  first. So every map is `Object.create(null)` and every test is
+  `hasOwnProperty`-based (`instances.hasInstance`), on parse, resolve, mutate, default
+  selection and active selection alike. An instance genuinely *named* `constructor` is a
+  valid name and still works, in both readers; `__proto__`/`toString` etc. are rejected
+  by the name rule in both. Both suites run the same fixture matrix.
 - **`isDefaultInstance` compares case-sensitively** (`===` / `-ceq`), and the PS
   instance table is an ordinal hashtable. Otherwise a `vmName` of `"agent-vm"` would
   read as the default on one side and as a non-default instance on the other — and only
@@ -410,9 +423,15 @@ change them together):
   branch stays a supported override. **Non-local backends keep free-form** (still
   format-checked) identities — their endpoints are defined on the other side.
 - **Identities are UNIQUE across the registry.** No two entries may share a `vmName`,
-  `sshHost`, `hostAlias` or `keyName` (compared case-insensitively — one Hyper-V name,
-  one DNS name, one `Host` block, one NTFS key file), and a non-default entry may not
-  claim any of the *default* instance's four values. A clash with the default skips the
+  `sshHost`, `hostAlias`, `keyName` or `configBranch` (compared case-insensitively — one
+  Hyper-V name, one DNS name, one `Host` block, one NTFS key file, one Windows loose-ref
+  file), and a non-default entry may not claim any of the *default* instance's five
+  values — which is also what **reserves the branch `vm` for `agent-vm`**. `configBranch`
+  is in that list because the branch *is* the instance's store inside the one host config
+  repo (docs/config-sync.md, "Multiple instances"): two entries on one branch share their
+  VM snapshots, deletion history, merge base and write-backs, so one VM's tick merges —
+  or deletes — the other VM's configuration. The derived branches (`vm-<name>`) are
+  unique by construction, so only a hand-written override can trip it. A clash with the default skips the
   claimant; a clash between two entries skips **both**, because nothing in the file says
   which is the impostor — and dropping both is also what keeps the two readers'
   outcomes independent of key order.
@@ -497,6 +516,57 @@ prompt was open" guard in `offerApplyCheckpoints`.) Confirmation copy gains a
 a single-VM install's prompts are unchanged. Bound this way: shutdown, reprovision,
 reinstall/redownload (both the panel button and `customRebuild`), export, setCheckpoints,
 add-project clone-then-open, and the agent update + its follow-up reprovision.
+
+**The same discipline covers the *deferred* steps** — the ones that resolve long after
+the click, where re-reading the active instance is hardest to spot:
+
+- **The config-sync tick takes its target** (`runConfigSync(target)`): the SSH cfg it
+  reads and writes the VM store with, the `vmBranch` it commits and fast-forwards, the
+  merge gate it completes, the scripts dir it auto-enables discovered profiles into, and
+  the post-tick import scan all come from that one capture. The tick serializes
+  window-wide (the repo lock is repo-wide), so a request that arrives during one is
+  **queued by target** (`instances.createTargetQueue`) — held as one global promise, a
+  "Sync Now" for A ran against whatever the window had switched to by the time it
+  started, syncing B's branch and B's store while A's changes stayed unsynced. Every
+  caller (Sync Now, the lifecycle pre-flight, the refresh pipeline, the `projects` file
+  watcher, profile delete, the remote-config import) passes its own captured target.
+- **A stale capture aborts; it does not "carry on with the old VM".** The generation is
+  re-checked **before every mutation an await could have outlived**: at the tick's entry,
+  when a *queued* follow-up finally starts (the switch usually happens inside exactly
+  that window), after the tick's own awaits and before **either** follow-on step
+  (profile auto-enable *and* the VM import), after the import's SSH scan, after its
+  deletion-history read and before the profile files or the per-instance throttle stamp
+  are written, and once more immediately before the project selection is saved. When the
+  window has moved on, **neither** instance is touched — writing B's file would put A's
+  discoveries in it, and writing A's would act for a VM this window no longer drives;
+  A's own next tick discovers the same profiles again. `targetStale()` is the quiet form
+  of `targetSuperseded()`: a background tick logs why it stopped instead of toasting,
+  while the user-facing flows that wrap it (the lifecycle pre-flight, the reprovision
+  offer) keep their own visible guard.
+- **The merge gate is bounded the same way, and fails CLOSED.**
+  `configsync.completePendingMerge` *writes* — it creates the merge commit whose message
+  names the branch — so `configMergeGate(target)` captures up front, re-checks
+  immediately before that write and again after the repo reads, and a stale gate comes
+  back `{ blocked: true, stale: true }` rather than `{ blocked: false }`. An
+  indeterminate answer must never read as "the repo is clear": the destructive pre-flight
+  cancels and says the window switched, while a background caller (*Open config repo*)
+  simply skips its state refresh.
+- **The scripts dir is part of the capture** (`captureTargetFull` → `{instance, cfg,
+  scriptsDir, token}`, resolved through `resolveScriptsDirFor(instance)` *before* the
+  first await): it holds that instance's `.construct-settings.json` (project selection,
+  mic preference, patch toggles). Re-resolving it in the tail of a flow is what let an
+  import of A — reduced at the time to a bare `{name, cfg}` — auto-enable A's newly
+  discovered repos into B's settings file after a switch.
+- **A prompt answered after a switch does nothing** — the non-modal "Reprovision now"
+  offer captures `scriptsDir` *and* the target before the toast, and a stale answer goes
+  through `targetSuperseded` rather than rebuilding the wrong VM with the wrong scripts.
+- **The mic auto-arm discards its own result**: instance, cfg, scripts dir and generation
+  are captured before `micPassthrough` is read, and the reachability probe's answer is
+  dropped if the window switched while it was in flight — A's "yes" must never install
+  the shim and open a microphone tunnel on B, whose preference may be off. Nothing exists
+  yet for the switch handler to cancel at that moment, which is why the discard has to
+  happen here. The decision itself is the pure `instances.planCapturedFollowUp`, shared
+  with the prompt above and unit-tested with deferred promises.
 
 **UI.** A status-bar item (`construct.switchInstance`) shows the active instance and is
 **hidden when only one instance exists**; the command *The Construct: Switch Instance*

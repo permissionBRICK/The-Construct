@@ -167,6 +167,45 @@ function actionTarget() {
   return instances.captureTarget(instanceGate, activeInstance());
 }
 
+/** The instance a captured target names. Falls back to the active one only for a target
+ *  built without an instance object. */
+function targetInstance(target) {
+  return (target && target.instance) || activeInstance();
+}
+
+/**
+ * Normalize a captured target into the FULL capture a long flow needs: the `instance`,
+ * its ssh `cfg`, the `token` (the generation it was captured at) and the `scriptsDir`
+ * that holds that instance's `.construct-settings.json`.
+ *
+ * The scripts dir is part of the capture, not something the tail of the flow re-resolves:
+ * an import or a sync tick that finishes after a switch would otherwise write the
+ * profiles it discovered on A into B's settings file. A target that carries no token was
+ * captured without a gate (there is no earlier generation to compare against), so it is
+ * stamped with the current one rather than treated as stale.
+ */
+function captureTargetFull(target) {
+  const t = (target && target.cfg && target.name) ? target : actionTarget();
+  const instance = t.instance || targetInstance(t);
+  return {
+    instance,
+    name: t.name,
+    cfg: t.cfg,
+    token: t.token || instanceGate.token(),
+    scriptsDir: t.scriptsDir !== undefined ? t.scriptsDir : resolveScriptsDirFor(instance),
+  };
+}
+
+/** Has the window switched instances since `target` was captured? The QUIET form —
+ *  it logs why a captured flow stopped instead of toasting, for the background steps
+ *  (a sync tick, an import's profile auto-enable) the user never explicitly started. */
+function targetStale(target, what) {
+  if (!instances.targetSuperseded(instanceGate, target)) return false;
+  logLine(`instances: ${what} for "${target.name}" finished after the window switched to ` +
+    `"${activeInstance().name}" — discarded (nothing was written for either instance)`);
+  return true;
+}
+
 /**
  * Refuse to take an irreversible step when the window switched instances since the
  * action started, and say why. Mirrors the existing "changed elsewhere while this
@@ -205,7 +244,11 @@ let lastSyncTickAt = 0;      // ms: last automatic tick (for the 5-min throttle)
 const SYNC_TICK_MIN_MS = 5 * 60 * 1000;
 let syncTickInFlight = false; // exposed as simple state for UI/recovery gates
 let syncTickPromise = null;   // same-window callers queue behind the active tick
-let syncTickFollowupPromise = null; // all queued callers share one fresh follow-up
+// Queued follow-up ticks, keyed BY INSTANCE (instances.createTargetQueue, where the
+// ordering rules are unit-tested). Held as one global promise, a follow-up queued for A
+// ran under whatever the window had switched to by the time it started — syncing B's
+// branch and VM store while A's changes stayed unsynced.
+const syncTickFollowups = instances.createTargetQueue();
 let lastSyncResult = null;    // most recent TickResult (for state.configSync)
 let configWatcher = null;     // fs.watch handle on cfgDir/projects
 // The auto-import scan is coalesced and throttled PER INSTANCE (instances.createCoalescer,
@@ -397,7 +440,9 @@ function withProjects(state) {
  *  can't tell (offline + nothing saved), where the script keeps its own prompt. */
 async function effectiveProjects(inst) {
   try {
-    const scriptsDir = resolveScriptsDir();
+    // The selection lives in THAT instance's scripts dir, not in whichever one the
+    // window shows now — a rebuild of A must provision A's selected profiles.
+    const scriptsDir = resolveScriptsDirFor(inst);
     if (scriptsDir) {
       const saved = host.readSelectedProjects(scriptsDir);
       if (saved && saved.length) return saved;
@@ -449,8 +494,11 @@ async function refreshAll() {
   if (liveWebviews.size === 0) return;
   // Same instance binding as refreshState: capture up front, re-check after every
   // await, and abandon the whole continuation (posts AND cache writes) on a switch.
+  // The captured TARGET (instance + cfg + generation) is what the config-sync tick,
+  // the merge gate and the auto-import below all run against.
   const inst = activeInstance();
-  const gate = instanceGate.token();
+  const refreshTarget = instances.captureTarget(instanceGate, inst);
+  const gate = refreshTarget.token;
   const probed = await probeOnce(inst);
   if (!instanceGate.valid(gate)) return;
   const state = withProjects(await withVmState(withLocalState(probed, inst), inst));
@@ -465,18 +513,18 @@ async function refreshAll() {
   if (withUsage !== aug && usageReport === report) for (const w of liveWebviews) postState(w, withUsage);
   // Config-sync: update the cached state and run a throttled tick. Best-effort.
   try {
-    const cs = await buildConfigSyncState();
+    const cs = await buildConfigSyncState(refreshTarget);
     if (!instanceGate.valid(gate)) return;
     cachedConfigSync = cs;
     for (const w of liveWebviews) postState(w, withUsage !== aug ? withUsage : aug);
-    await maybeAutoSync();
+    await maybeAutoSync(refreshTarget);
     if (!instanceGate.valid(gate)) return;
     // Auto-import runs regardless of git presence, so users without git still get
     // automatic discovery of new VM repos (docs/config-sync.md §10 degraded mode).
     // Scans the instance THIS refresh was captured for, and is throttled per instance.
-    await maybeAutoImport({ name: inst.name, cfg: instances.toSshCfg(inst) });
+    await maybeAutoImport(refreshTarget);
     if (!instanceGate.valid(gate)) return;
-    const cs2 = await buildConfigSyncState();
+    const cs2 = await buildConfigSyncState(refreshTarget);
     if (!instanceGate.valid(gate)) return;
     cachedConfigSync = cs2;
     for (const w of liveWebviews) postState(w, withUsage !== aug ? withUsage : aug);
@@ -726,14 +774,30 @@ function raiseWindowsToast(entry) {
   });
 }
 
-/** Locate the host-side scripts dir: the active instance's pinned `scriptsDir` first
- *  (registry field; null for the default instance), then the `construct.scriptsDir`
- *  override, then newest-install detection — see host.resolveScriptsDir. */
-function resolveScriptsDir() {
+/**
+ * Locate the host-side scripts dir OF ONE INSTANCE: that instance's pinned `scriptsDir`
+ * first (registry field; null for the default instance), then the `construct.scriptsDir`
+ * override, then newest-install detection — see host.resolveScriptsDir.
+ *
+ * The scripts dir also holds the instance's `.construct-settings.json` (the project
+ * selection, the mic preference, the patch toggles), so any flow that already captured a
+ * target MUST resolve it from that target: re-reading "the active instance" after an
+ * await would write A's discoveries into B's settings file, or reprovision B with A's
+ * scripts. `resolveScriptsDir()` (no argument) is the un-captured, right-now answer —
+ * for the default instance both are byte-identical.
+ */
+function resolveScriptsDirFor(instance) {
   const override = vscode.workspace.getConfiguration("construct").get("scriptsDir");
   let pinned = null;
-  try { pinned = activeInstance().scriptsDir; } catch (_) { pinned = null; }
+  try { pinned = instance ? instance.scriptsDir : null; } catch (_) { pinned = null; }
   return host.resolveScriptsDir({ instanceScriptsDir: pinned, scriptsDir: override, env: process.env });
+}
+
+/** The active instance's scripts dir (see resolveScriptsDirFor). */
+function resolveScriptsDir() {
+  let active = null;
+  try { active = activeInstance(); } catch (_) { active = null; }
+  return resolveScriptsDirFor(active);
 }
 
 /** Resolve the config dir. Falls back to null when LOCALAPPDATA/TEMP absent. */
@@ -756,8 +820,11 @@ async function detectGitCached() {
   return gitDetected;
 }
 
-/** Build state.configSync (D9) from the current engine state. Host-derived. */
-async function buildConfigSyncState() {
+/** Build state.configSync (D9) from the current engine state. Host-derived.
+ *  `target` is the captured instance the recovery tick below belongs to (a refresh
+ *  pipeline passes its own); omitted = capture the active one now. */
+async function buildConfigSyncState(target) {
+  const csTarget = target || actionTarget();
   const dir = resolveCfgDir();
   const git = await detectGitCached();
   const out = {
@@ -773,7 +840,7 @@ async function buildConfigSyncState() {
     try {
       var rs = await configsync.repoState(runGit, dir);
       if (rs.mergeInProgress && !rs.conflict && !syncTickInFlight) {
-        var recovered = await runConfigSync();
+        var recovered = await runConfigSync(csTarget);
         if (recovered) {
           out.lastSyncAt = lastSyncTickAt || null;
           out.lastResult = recovered.ok ? "ok" : (recovered.conflict ? "conflict" : (recovered.blocked ? "blocked" : "error"));
@@ -790,22 +857,40 @@ async function buildConfigSyncState() {
   return out;
 }
 
-/** Run a sync tick. Same-window callers wait, then share one follow-up tick so
- * changes made during the active snapshot are not mistaken for having synced. */
-async function runConfigSync() {
+/**
+ * Run a sync tick FOR ONE CAPTURED INSTANCE. Same-window callers wait, then share one
+ * follow-up tick so changes made during the active snapshot are not mistaken for having
+ * synced.
+ *
+ * `target` is captured by the caller (Sync Now, the lifecycle pre-flight, a refresh) and
+ * is the ONLY instance this tick speaks about: the SSH cfg it reads/writes the VM store
+ * with, the `vmBranch` it commits and fast-forwards, the scripts dir it auto-enables
+ * profiles into, and the instance its post-tick import scans. Omitted = capture the
+ * active instance now, before the first await. The follow-up queue is keyed by target
+ * too, so a Sync Now for A queued behind A's tick can never turn into a tick for B —
+ * and when the window has switched by the time that follow-up starts, it runs for
+ * NEITHER instance: the generation is re-checked at the tick's entry, when a queued
+ * follow-up starts, and after the tick's own awaits before either follow-on step.
+ */
+async function runConfigSync(target) {
+  // BEFORE the first await: instance, cfg, scripts dir and generation. Everything below
+  // belongs to this one capture and nothing re-reads "the active instance".
+  var syncTarget = captureTargetFull(target);
   var dir = resolveCfgDir();
   if (!dir) return null;
   var git = await detectGitCached();
   if (!git.present) return null;
+  // A tick that was captured before a switch must not run at all — not against the new
+  // instance (it would sync the wrong branch and store) and not against the old one
+  // (this window no longer drives it, and the caller's own gate has already moved on).
+  if (targetStale(syncTarget, "The config-sync tick")) return null;
   if (syncTickPromise) {
-    if (!syncTickFollowupPromise) {
-      const active = syncTickPromise;
-      syncTickFollowupPromise = active.then(function () {
-        syncTickFollowupPromise = null;
-        return runConfigSync();
-      });
-    }
-    return syncTickFollowupPromise;
+    return syncTickFollowups.queue(syncTarget.name, syncTickPromise, function () {
+      // Re-checked HERE, when the follow-up finally starts: the whole point of queueing
+      // it is that time passes, and the switch usually happens inside that window.
+      if (targetStale(syncTarget, "The queued config-sync tick")) return null;
+      return runConfigSync(syncTarget);
+    });
   }
   syncTickInFlight = true;
   syncTickPromise = (async function () {
@@ -819,10 +904,10 @@ async function runConfigSync() {
     // otherwise they exist on the host but stay outside the persisted selection,
     // and the next reprovision silently provisions without them.
     var profilesBeforeTick = host.listProjectProfiles(dir);
-    // The instance this tick belongs to, captured before the first await: the store
-    // read/write, the branch and the post-tick import all speak about the SAME VM.
-    var syncInstance = activeInstance();
-    var syncTarget = { name: syncInstance.name, cfg: instances.toSshCfg(syncInstance) };
+    // The instance this tick belongs to (captured by the caller, or at entry above):
+    // the store read/write, the branch, the profile auto-enable and the post-tick
+    // import all speak about the SAME VM, whatever the window switches to meanwhile.
+    var syncInstance = targetInstance(syncTarget);
     var syncCfg = syncTarget.cfg;
     var readStore = async function () {
       try {
@@ -859,15 +944,21 @@ async function runConfigSync() {
       if (result.warnings && result.warnings.length) parts.push("warnings: " + result.warnings.join("; "));
       logLine("sync tick: " + parts.join(" | "));
     }
-    if (result && result.ok && !result.lockBusy) {
-      await autoEnableNewProfiles(profilesBeforeTick, host.listProjectProfiles(dir));
+    // The tick itself is done (it ran under the repo lock and has already written, so
+    // its result is still recorded above). BOTH follow-on steps below mutate host state
+    // on this instance's behalf — the selection file and the imported profile files —
+    // so a switch during the tick stops them here. Each also re-checks internally,
+    // because each awaits again on its way to its own write.
+    var followUpsStale = targetStale(syncTarget, "The post-tick follow-ups");
+    if (!followUpsStale && result && result.ok && !result.lockBusy) {
+      await autoEnableNewProfiles(profilesBeforeTick, host.listProjectProfiles(dir), syncTarget);
     }
     // Auto-import: when the VM was reachable this tick, scan for repos not yet
     // covered by a local profile and import them. This replaces the manual
     // "import from VM" button — new configs are discovered automatically on
     // every sync tick. Runs AFTER the sync tick (not inside it) so the lock is
     // released and locally-written profiles don't race the git engine.
-    if (result && result.ok && result.vmReadOk) {
+    if (!followUpsStale && result && result.ok && result.vmReadOk) {
       try { await coalescedImport(true, syncTarget); } catch (e) {
         logLine("auto-import from VM failed: " + (e && e.message ? e.message : e));
       }
@@ -889,8 +980,13 @@ async function runConfigSync() {
  *  only the new names are appended to it — the existing selection is NOT
  *  reseeded from the VM's live list. When no selection has ever been persisted
  *  (the key is absent), effectiveProjects() seeds from the VM live set, and the
- *  fresh names ride along. */
-async function autoEnableNewProfiles(before, after) {
+ *  fresh names ride along.
+ *
+ *  `target` is the captured instance the profiles were discovered FOR. The selection
+ *  lives in THAT instance's scripts dir, so re-resolving the active one here would write
+ *  A's discoveries into B's .construct-settings.json whenever a tick (or an import)
+ *  finishes after a switch. Omitted = the active instance, captured now. */
+async function autoEnableNewProfiles(before, after, target) {
   try {
     var afterArr = after || [];
     var beforeSet = new Set(before || []);
@@ -898,18 +994,26 @@ async function autoEnableNewProfiles(before, after) {
       return n && !beforeSet.has(n) && !projects.isReservedProfileName(n);
     });
     if (!fresh.length) return;
-    var scriptsDir = resolveScriptsDir();
+    var enableTarget = captureTargetFull(target);
+    // The discovery belongs to ONE instance's settings file. Once the window has
+    // switched we write NEITHER file: B's would receive A's discoveries, and A is no
+    // longer this window's VM — its next tick will pick the same profiles up again.
+    if (targetStale(enableTarget, "The project-profile auto-enable")) return;
+    // The scripts dir comes from the CAPTURE, not from a fresh resolution here.
+    var scriptsDir = enableTarget.scriptsDir;
     if (!scriptsDir) return;
     var current;
     if (host.hasPersistedSelection(scriptsDir)) {
       current = host.readSelectedProjects(scriptsDir);
     } else {
-      current = await effectiveProjects();
+      current = await effectiveProjects(enableTarget.instance);
     }
     // Reconcile against the actual post-import profile list (afterArr), not
     // scriptsDir — profiles live in cfgDir and afterArr is the authoritative
     // set of names that exist after the import/sync completed.
     var merged = projects.additiveMergeSelection(current, fresh, afterArr);
+    // effectiveProjects() can probe the VM, so re-check IMMEDIATELY before the write.
+    if (targetStale(enableTarget, "The project-profile auto-enable")) return;
     host.saveSelectedProjects(scriptsDir, merged);
     logLine("auto-enabled new project profile(s) from sync: " + fresh.join(", ") + " (selection now: " + merged.join(", ") + ")");
   } catch (e) {
@@ -917,18 +1021,42 @@ async function autoEnableNewProfiles(before, after) {
   }
 }
 
-async function configMergeGate() {
+/** Why a merge gate came back blocked without the repo being at fault. */
+const STALE_GATE_REASON = "This window switched to another Construct instance while the config repo was being checked, so it is no longer clear which VM this was for.";
+
+/**
+ * The conflict gate for a captured action: complete a pending clean merge on THAT
+ * instance's branch, then report whether the config repo is in a usable state.
+ *
+ * `completePendingMerge` WRITES — it creates the merge commit whose message names the
+ * branch ("sync merge vm-work-vm") — so the branch it is given must be the one the
+ * caller's action is about. Everything is captured before the first await, and the
+ * generation is re-checked immediately before that write and again after the repo reads.
+ * A stale gate is never `{blocked:false}`: it returns `blocked` with `stale: true`, so a
+ * destructive pre-flight fails CLOSED (it cancels and says the window switched) while a
+ * background caller simply skips its state refresh.
+ */
+async function configMergeGate(target) {
+  var gateTarget = captureTargetFull(target);
   var dir = resolveCfgDir();
   var git = await detectGitCached();
   if (!dir || !git.present || !runGit) return { blocked: false, dir: dir };
-  // The active instance's branch: the merge commit this completes is THAT branch's
+  var staleGate = function () {
+    return { blocked: true, stale: true, dir: dir, reason: STALE_GATE_REASON };
+  };
+  // Before the WRITE: git detection above can take seconds on a cold host.
+  if (targetStale(gateTarget, "The config merge gate")) return staleGate();
+  // The target instance's branch: the merge commit this completes is THAT branch's
   // merge, and the message ("sync merge vm-work-vm") is what a later reader of the
   // config repo's history goes by. Every syncTick call already threads it.
-  var pending = await configsync.completePendingMerge(runGit, dir, activeInstance().configBranch);
+  var pending = await configsync.completePendingMerge(runGit, dir, gateTarget.instance.configBranch);
   if (pending.completed) {
     logLine("[configsync] completed pending clean merge");
   }
   var rs = await configsync.repoState(runGit, dir);
+  // ...and after the repo operations, because the answer below decides whether a
+  // destructive action may proceed. An indeterminate answer must not read as "clear".
+  if (targetStale(gateTarget, "The config merge gate")) return staleGate();
   if (rs.conflict || rs.mergeInProgress) {
     return {
       blocked: true,
@@ -938,6 +1066,7 @@ async function configMergeGate() {
   }
   return { blocked: false, dir: dir };
 }
+
 
 /**
  * Shared pre-flight for destructive lifecycle flows (reinstall/redownload/
@@ -974,7 +1103,7 @@ async function lifecyclePreFlight(actionLabel, target) {
   var git = await detectGitCached();
   if (git.present) {
     var syncResult;
-    try { syncResult = await runConfigSync(); } catch (_) { syncResult = null; }
+    try { syncResult = await runConfigSync(target); } catch (_) { syncResult = null; }
     var syncProblem = !syncResult || syncResult.lockBusy || syncResult.blocked
       || (!syncResult.ok && !syncResult.conflict)
       || (syncResult.ok && syncResult.vmReadOk === false);
@@ -992,7 +1121,7 @@ async function lifecyclePreFlight(actionLabel, target) {
     // Fail-CLOSED: an exception from the gate blocks rather than proceeding.
     var gate;
     try {
-      gate = await configMergeGate();
+      gate = await configMergeGate(target);
     } catch (e) {
       return {
         ok: false,
@@ -1001,6 +1130,12 @@ async function lifecyclePreFlight(actionLabel, target) {
           ". Check the config repo for issues, then try again." +
           (e && e.message ? " (" + e.message + ")" : ""),
       };
+    }
+    if (gate.stale) {
+      // Fail-CLOSED, but with the honest reason: nothing is wrong with the repo, we just
+      // can no longer tell which VM the action was for.
+      return { ok: false, reason: STALE_GATE_REASON + " " + actionLabel[0].toUpperCase() + actionLabel.slice(1) +
+        " was cancelled — switch back and try again." };
     }
     if (gate.blocked) {
       return {
@@ -1032,19 +1167,22 @@ function showPreFlightBlock(result) {
   });
 }
 
-/** Throttled sync tick for auto-refresh: only runs if >=5 min since last. */
-async function maybeAutoSync() {
+/** Throttled sync tick for auto-refresh: only runs if >=5 min since last. `target` is
+ *  the refresh pipeline's captured instance — the tick it may start belongs to that VM. */
+async function maybeAutoSync(target) {
   if (Date.now() - lastSyncTickAt < SYNC_TICK_MIN_MS) return;
-  await runConfigSync();
+  await runConfigSync(target);
 }
 
-/** The instance an import runs against: the caller's captured target when it has one
- *  (a lifecycle pre-flight, a sync tick), otherwise the active instance captured NOW —
- *  never re-read later, so a switch mid-scan cannot redirect it. */
+/** The target an import runs against: the caller's captured one when it has one (a
+ *  lifecycle pre-flight, a sync tick), otherwise the active instance captured NOW —
+ *  never re-read later, so a switch mid-scan cannot redirect it. The WHOLE capture is
+ *  kept (instance, cfg, scriptsDir and the generation token), because the scan's tail
+ *  writes that instance's project selection and has to be able to check the generation
+ *  it started under; reducing it to {name, cfg} is what let a scan of A auto-enable its
+ *  discoveries into B's .construct-settings.json. */
 function importTargetOf(target) {
-  if (target && target.cfg && target.name) return { name: target.name, cfg: target.cfg };
-  const inst = activeInstance();
-  return { name: inst.name, cfg: instances.toSshCfg(inst) };
+  return captureTargetFull(target);
 }
 
 /** Coalesced import: if an import IS ALREADY IN FLIGHT FOR THAT INSTANCE, join it
@@ -1078,7 +1216,9 @@ function startConfigWatcher() {
       if (debounce) clearTimeout(debounce);
       debounce = setTimeout(function () {
         debounce = null;
-        runConfigSync().then(function () { refreshAll(); });
+        // Capture at fire time, before the tick's first await: a debounced file change
+        // syncs the instance this window drives NOW, and keeps it for the whole tick.
+        runConfigSync(actionTarget()).then(function () { refreshAll(); });
       }, 2000);
     });
     configWatcher.on("error", function () {});
@@ -1138,7 +1278,10 @@ function persistMicPreference(enabled) {
 function runUpdateAgents(ids) {
   const subset = Array.isArray(ids) && ids.length ? ids : null;
   const requested = subset || ["claude-code", "codex", "opencode", "t3code"];
-  const scriptsDir = resolveScriptsDir();
+  // Multi-minute npm work followed (sometimes) by a reprovision: ONE target for the
+  // settings read, the SSH run and the rebuild, captured before any of them.
+  const t = actionTarget();
+  const scriptsDir = resolveScriptsDirFor(t.instance);
   let sourceManagedT3 = false;
   try {
     const settings = scriptsDir ? host.readSettings(scriptsDir) : {};
@@ -1151,13 +1294,11 @@ function runUpdateAgents(ids) {
     ? requested.filter((id) => id !== "t3code")
     : requested;
   if (sourceManagedT3 && remotelyUpdated.length === 0) {
-    void startConstructReprovision(scriptsDir);
+    void startConstructReprovision(scriptsDir, t);
     return;
   }
   const what = subset ? subset.join(", ") : "coding agents";
   const script = updates.buildAgentUpdateScript(remotelyUpdated);
-  // Multi-minute npm work followed (sometimes) by a reprovision: one target for both.
-  const t = actionTarget();
   vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: `Updating ${what} on the VM…`, cancellable: false },
     async () => {
@@ -1392,14 +1533,27 @@ async function startConstructReprovision(scriptsDir, target) {
   }
 }
 
-function offerReprovisionForPatchSettings(scriptsDir, features) {
+/**
+ * Offer the reprovision that applies provisioning-only settings.
+ *
+ * The notification below is NOT modal: it can sit in the corner for as long as the user
+ * likes, and a switch in the meantime must not redirect the answer. `scriptsDir` and
+ * `target` are both captured by the caller BEFORE the toast — they belong to the
+ * instance whose settings were just written — so an accepted offer rebuilds that VM with
+ * that VM's scripts and .construct-settings.json, and a stale one aborts loudly instead
+ * of reconfiguring the machine the window happens to show now.
+ */
+function offerReprovisionForPatchSettings(scriptsDir, features, target) {
+  const t = target || actionTarget();
   const names = features.join(" and ");
   vscode.window.showWarningMessage(
     `Construct settings saved. Changing ${names} requires a reprovision before it takes effect.`,
     "Reprovision now",
   ).then((pick) => {
-    if (pick !== "Reprovision now") return;
-    void startConstructReprovision(scriptsDir);
+    const plan = instances.planCapturedFollowUp(instanceGate, t, pick === "Reprovision now");
+    if (plan.reason === "superseded") { targetSuperseded(t, "Reprovision"); return; }
+    if (!plan.run) return;
+    void startConstructReprovision(scriptsDir, plan.target);
   });
 }
 
@@ -1575,15 +1729,23 @@ function openProjectFolder() {
  * autoEnableNewProfiles for sync-discovered profiles).
  */
 async function importFromVm(target) {
-  // The instance is captured ONCE, before the scan: the SSH cfg used here and the
-  // throttle stamp below must both belong to the VM this scan actually talked to.
+  // The instance is captured ONCE, before the scan: the SSH cfg used here, the throttle
+  // stamp below, and the settings file the discovered profiles are auto-enabled into
+  // must all belong to the VM this scan actually talked to.
   const scanTarget = importTargetOf(target);
-  const projRoot = resolveCfgDir() || resolveScriptsDir();
+  const projRoot = resolveCfgDir() || scanTarget.scriptsDir;
   if (!projRoot) return null;
   var r;
   try { r = await ssh.runRemoteScript(projects.buildScanScript(), { timeoutMs: 60000, cfg: scanTarget.cfg }); }
   catch (_) { return null; }
   if (!r || r.code !== 0) return null;
+  // The scan describes THAT VM's repos. If the window switched while it ran, none of it
+  // may be acted on: not the profile files (they would be written on B's behalf from A's
+  // repos), not the throttle stamp (it would suppress B's first scan), not the selection
+  // file. Discarding reads as "the VM couldn't be scanned" to the callers, which is the
+  // fail-closed answer — the lifecycle pre-flight aborts on its own targetSuperseded
+  // check first, with the message that names the instance.
+  if (targetStale(scanTarget, "The VM repo scan")) return null;
   var scan = projects.parseScan(r.stdout);
   if (scan == null) return null;
   var existing = {};
@@ -1601,6 +1763,9 @@ async function importFromVm(target) {
   } catch (e) {
     logLine("auto-import: could not read deletion history: " + (e && e.message ? e.message : e));
   }
+  // Re-checked after the deletion-history git read, immediately before the first
+  // mutation: everything below writes files and stamps the per-instance throttle.
+  if (targetStale(scanTarget, "The VM repo import")) return null;
   var plan = projects.planImport(scan, existing, {
     ignoredNames: deleted.names,
     ignoredUrls: deleted.urls,
@@ -1618,7 +1783,9 @@ async function importFromVm(target) {
   importCoalescer.stamp(scanTarget.name);
   if (imported.length) {
     logLine("auto-import from VM: imported " + imported.join(", "));
-    await autoEnableNewProfiles(profilesBefore, host.listProjectProfiles(projRoot));
+    // The SCAN's target, captured before the SSH round-trip above: these profiles were
+    // found on that VM, so they may only ever be enabled in that VM's settings file.
+    await autoEnableNewProfiles(profilesBefore, host.listProjectProfiles(projRoot), scanTarget);
   }
   if (raceSkipped.length) logLine("auto-import: skipped (already exist): " + raceSkipped.join(", "));
   if (failed.length) logLine("auto-import: write failures: " + failed.join(", "));
@@ -1688,13 +1855,23 @@ function makeMicProvider() {
  *  shouldn't nag on every launch). A manual toggle keeps the progress spinner + toasts. */
 function enableAudio(context, webview, opts = {}) {
   if (hostAudio && hostAudio.enabled) { broadcastAudio({ enabled: true, capturing: hostAudio.capturing }); return; }
+  // `opts.target` is a target the CALLER captured before its own awaits (the auto-arm
+  // reads a preference and probes the VM first). Its generation is re-checked here,
+  // immediately before the tunnel is created: A's "yes, reachable, mic wanted" must not
+  // install the shim and open a microphone tunnel on B, whose own preference may be off.
+  // A manual toggle passes no target and captures the current instance right here.
+  const t = opts.target || actionTarget();
+  if (opts.target && instances.targetSuperseded(instanceGate, t)) {
+    logLine(`audio: auto-arm for "${t.name}" was discarded — the window switched to "${activeInstance().name}" while probing`);
+    return;
+  }
   micWarnedReasons = new Set(); // fresh enable: allow one warning per failure reason again
-  hostAudioInstance = activeInstance().name;
+  hostAudioInstance = t.name;
   hostAudio = new audio.HostAudio({
-    // The mic tunnel is per-INSTANCE: the reverse forward lands on the VM this window
-    // currently drives. The VM-side port range (8767+) is per VM, so two instances
+    // The mic tunnel is per-INSTANCE: the reverse forward lands on the VM this enable
+    // was captured for. The VM-side port range (8767+) is per VM, so two instances
     // never contend for it; only the host-side cfg has to follow the switch.
-    cfg: activeCfg(),
+    cfg: t.cfg,
     mic: makeMicProvider(),
     onStatus: (s) => broadcastAudio(s),
   });
@@ -1748,15 +1925,29 @@ function enableAudio(context, webview, opts = {}) {
  *  .construct-settings.json, the settings-form "Microphone passthrough" toggle) is on.
  *  Best-effort and QUIET: gated on the VM being reachable so a down VM never toasts;
  *  the user can still toggle manually. */
-async function maybeAutoEnableAudio(context) {
+async function maybeAutoEnableAudio(context, target) {
   try {
     if (hostAudio && hostAudio.enabled) return;
-    const scriptsDir = resolveScriptsDir();
+    // Instance, cfg, scripts dir and generation are captured BEFORE the preference is
+    // read: micPassthrough lives in that instance's .construct-settings.json and the
+    // probe below dials that instance's VM, so both answers describe one machine.
+    const t = target || actionTarget();
+    const scriptsDir = resolveScriptsDirFor(t.instance);
     if (!scriptsDir) return;
     const raw = host.readRawSettings(scriptsDir);
     if (!raw || raw.micPassthrough !== true) return;
-    if (!(await ssh.isReachable({ timeoutMs: 6000, cfg: activeCfg() }))) return; // VM down — stay off silently
-    enableAudio(context, undefined, { auto: true });
+    const reachable = await ssh.isReachable({ timeoutMs: 6000, cfg: t.cfg });
+    // A result that arrives after a switch is DISCARDED, not applied to the new
+    // instance — the same rule the refresh pipelines use, decided by the pure
+    // instances.planCapturedFollowUp. Silent either way: an auto-arm never toasts.
+    const plan = instances.planCapturedFollowUp(instanceGate, t, reachable);
+    if (!plan.run) {
+      if (plan.reason === "superseded") {
+        logLine(`audio: auto-arm for "${t.name}" was discarded — the window switched to "${activeInstance().name}" while probing`);
+      }
+      return; // VM down (or superseded) — stay off silently
+    }
+    enableAudio(context, undefined, { auto: true, target: plan.target });
   } catch (_) { /* best-effort: never block activation */ }
 }
 
@@ -1798,7 +1989,11 @@ function scheduleStartupRepatch(context) {
  *  Quiet by design — like the mic auto-arm, a startup housekeeping pass shouldn't
  *  toast on every launch; everything is recorded to the Construct output channel. */
 async function verifyPatchesOnStartup(context) {
-  const scriptsDir = resolveScriptsDir();
+  // One target for the whole pass: the settings that say WHICH patches are wanted, the
+  // SSH repair that applies them and the auto-arm retry all belong to one VM. Captured
+  // before the first await; a switch during the pass discards the rest of it.
+  const t = actionTarget();
+  const scriptsDir = resolveScriptsDirFor(t.instance);
   const raw = scriptsDir ? host.readRawSettings(scriptsDir) : {};
   // Streaming defaults ON (matches CLAUDE_PARTIAL_STREAMING:-true on the VM), so treat
   // anything other than an explicit false as on. Mic passthrough is opt-in.
@@ -1818,7 +2013,7 @@ async function verifyPatchesOnStartup(context) {
   if (plan.runPass) {
     const res = await repatch.runStartupRepatch({
       ssh,
-      cfg: activeCfg(),
+      cfg: t.cfg,
       readVmScript: audio.defaultReadScript,
       streamingOn,
       // Only ask for a gate-only repair when a tunnel is already live; otherwise the
@@ -1833,8 +2028,10 @@ async function verifyPatchesOnStartup(context) {
       },
       log: logLine,
     });
-    // A live gate re-patch means the console's mic substatus is authoritative again.
-    if (res.repaired.mic && hostAudio) {
+    // A live gate re-patch means the console's mic substatus is authoritative again --
+    // for the VM we just patched. A tunnel that now belongs to another instance (the
+    // window switched while the repair ran) must not be relabelled from this result.
+    if (res.repaired.mic && hostAudio && hostAudioInstance === t.name) {
       hostAudio.gatePatched = true;
       broadcastAudio({ enabled: true, capturing: hostAudio.capturing, gatePatched: true });
     }
@@ -1847,8 +2044,12 @@ async function verifyPatchesOnStartup(context) {
   // be gated on the SSH pass, which may not have run. Guard on `!hostAudio` (from the
   // plan) so an enable that is still in flight is never clobbered.
   if (plan.retryAutoArm) {
+    if (instances.targetSuperseded(instanceGate, t)) {
+      logLine(`repatch: the pass for "${t.name}" finished after a switch — skipping the auto-arm retry.`);
+      return;
+    }
     logLine("repatch: mic passthrough is on but no tunnel is live — retrying auto-arm.");
-    maybeAutoEnableAudio(context);
+    maybeAutoEnableAudio(context, t);
   }
 }
 
@@ -1952,8 +2153,11 @@ async function runDeleteProject(name) {
     vscode.window.showInformationMessage('"' + safe + '" is reserved and cannot be deleted.');
     return;
   }
-  const projRoot = resolveCfgDir() || resolveScriptsDir();
-  const scriptsDir = resolveScriptsDir();
+  // Captured before the modal: the deletion is synced to the VM the user deleted it
+  // FOR, on that instance's branch, however long the confirmation sits open.
+  const delTarget = actionTarget();
+  const projRoot = resolveCfgDir() || resolveScriptsDirFor(delTarget.instance);
+  const scriptsDir = resolveScriptsDirFor(delTarget.instance);
   if (!projRoot || !scriptsDir) { warnNoScriptsDir(); return; }
   const pick = await vscode.window.showWarningMessage(
     'Delete project profile "' + safe + '"?',
@@ -1969,7 +2173,7 @@ async function runDeleteProject(name) {
     const available = host.listProjectProfiles(projRoot);
     const selected = host.readSelectedProjects(scriptsDir).filter((n) => n !== safe);
     host.saveSelectedProjects(scriptsDir, projects.reconcileSelection(selected, available));
-    const syncResult = await runConfigSync();
+    const syncResult = await runConfigSync(delTarget);
     if (!syncResult || syncResult.lockBusy || !syncResult.ok) {
       vscode.window.showWarningMessage(
         'Deleted profile "' + safe + '" locally; its VM deletion is pending the next successful config sync.'
@@ -2030,7 +2234,10 @@ function syncInstanceStatusItem() {
 async function switchInstance(name) {
   const reg = registryNow(true);
   const wanted = String(name || "").trim();
-  if (!wanted || !reg.byName[wanted]) {
+  // OWN-property membership (instances.hasInstance): the name comes from the webview or
+  // a command argument, and a plain `byName[name]` would accept "constructor" or
+  // "toString" as a registry entry and then persist a selection nothing can resolve.
+  if (!instances.hasInstance(reg, wanted)) {
     vscode.window.showWarningMessage(`"${wanted}" is not a Construct instance in the registry.`);
     return;
   }
@@ -2072,7 +2279,9 @@ async function onInstanceChanged() {
   // re-arm it against the new instance (quietly — same rules as the startup auto-arm).
   if (hostAudio && hostAudioInstance && hostAudioInstance !== inst.name) {
     disableAudio();
-    maybeAutoEnableAudio(extensionContext);
+    // Captured for the instance we just switched TO, so the arm that follows reads that
+    // VM's preference and dials that VM even if another switch beats the probe home.
+    maybeAutoEnableAudio(extensionContext, instances.captureTarget(instanceGate, inst));
   }
   syncInstanceStatusItem();
   await refreshAll();
@@ -2219,7 +2428,12 @@ function handleMessage(message, webview, context) {
       return;
 
     case "saveSettings": {
-      const scriptsDir = resolveScriptsDir();
+      // The settings file is per instance. Capture the target ALONGSIDE its scripts dir:
+      // the reprovision offer below is answered later, and it must rebuild the VM whose
+      // settings were written -- with that VM's scripts -- not whichever one is active
+      // by then.
+      const saveTarget = actionTarget();
+      const scriptsDir = resolveScriptsDirFor(saveTarget.instance);
       if (!scriptsDir) { warnNoScriptsDir(); return; }
       try {
         // Snapshot the previous state BEFORE the write so live T3 changes and
@@ -2227,7 +2441,7 @@ function handleMessage(message, webview, context) {
         const prev = host.readSettings(scriptsDir);
         const merged = host.mapToForm(host.saveSettings(scriptsDir, message.settings));
         const patchChanges = host.patchReprovisionChanges(prev, merged);
-        if (patchChanges.length) offerReprovisionForPatchSettings(scriptsDir, patchChanges);
+        if (patchChanges.length) offerReprovisionForPatchSettings(scriptsDir, patchChanges, saveTarget);
         else vscode.window.showInformationMessage("Construct settings saved.");
         pushSettings(webview); // reflect the normalized, merged on-disk state
         // The "Microphone passthrough" toggle is a live preference: honor it now, not
@@ -2364,11 +2578,12 @@ function handleMessage(message, webview, context) {
       // ── Config-sync commands (C6) ─────────────────────────────────────
       if (id === "syncConfigNow") {
         (async function () {
-          // Capture the instance the button was pressed for, so the scan after the
-          // tick cannot land on another instance the user switched to meanwhile.
+          // Capture the instance the button was pressed for. The tick (and the queued
+          // follow-up it may become), the branch it writes, and the scan after it all
+          // stay on THAT instance — a switch mid-sync must not redirect any of them.
           const syncNowTarget = actionTarget();
           try {
-            await runConfigSync();
+            await runConfigSync(syncNowTarget);
             // Always run import after sync (or instead of it for no-git hosts),
             // bypassing the throttle. Coalesced per instance: joins an in-flight scan
             // OF THAT INSTANCE if one exists.
@@ -2376,12 +2591,15 @@ function handleMessage(message, webview, context) {
           } catch (e) {
             vscode.window.showErrorMessage("Config sync failed: " + (e && e.message ? e.message : e));
           }
-          cachedConfigSync = await buildConfigSyncState();
+          cachedConfigSync = await buildConfigSyncState(syncNowTarget);
           refreshAll();
         })();
         return;
       }
       if (id === "addConfigRemote") {
+        // The prompt below can sit open indefinitely; the recovery tick inside
+        // buildConfigSyncState must run for the instance the button was pressed for.
+        const addRemoteTarget = actionTarget();
         vscode.window.showInputBox({
           title: "Add a remote config repository",
           prompt: "Git URL of the remote config repo",
@@ -2405,24 +2623,28 @@ function handleMessage(message, webview, context) {
             }
           });
           vscode.window.showInformationMessage("Remote config repo added: " + url.trim());
-          buildConfigSyncState().then(function (cs) { cachedConfigSync = cs; refreshAll(); });
+          buildConfigSyncState(addRemoteTarget).then(function (cs) { cachedConfigSync = cs; refreshAll(); });
         });
         return;
       }
       if (id === "removeConfigRemote") {
         var rmUrl = message.url;
         if (!rmUrl) return;
+        const rmRemoteTarget = actionTarget();   // captured before the modal
         vscode.window.showWarningMessage("Remove the remote config repo?\n" + rmUrl, { modal: true }, "Remove").then(function (pick) {
           if (pick !== "Remove") return;
           var dir = resolveCfgDir();
           if (!dir) return;
           var existing = configsync.readRemotes(dir);
           configsync.writeRemotes(dir, existing.filter(function (r) { return r.url !== rmUrl; }));
-          buildConfigSyncState().then(function (cs) { cachedConfigSync = cs; refreshAll(); });
+          buildConfigSyncState(rmRemoteTarget).then(function (cs) { cachedConfigSync = cs; refreshAll(); });
         });
         return;
       }
       if (id === "importRemoteConfigs") {
+        // The import runs through several prompts; the tick that publishes the result
+        // belongs to the instance the button was pressed for.
+        const importRemoteTarget = actionTarget();
         (async () => {
           var dir = resolveCfgDir();
           if (!dir) { warnNoScriptsDir(); return; }
@@ -2554,7 +2776,7 @@ function handleMessage(message, webview, context) {
           if (imported > 0) {
             var remoteUrl = selected[0] ? selected[0].remoteUrl : "remote";
             await configsync.commitAll(runGit, dir, "import from " + remoteUrl);
-            await runConfigSync();
+            await runConfigSync(importRemoteTarget);
           }
           vscode.window.showInformationMessage("Imported " + imported + " profile(s) from remote config repos.");
           refreshAll();
@@ -2670,11 +2892,12 @@ function handleMessage(message, webview, context) {
       if (id === "openConfigRepo") {
         var ocDir = resolveCfgDir();
         if (!ocDir) { warnNoScriptsDir(); return; }
+        const openRepoTarget = actionTarget();
         (async () => {
           try {
-            var gate = await configMergeGate();
+            var gate = await configMergeGate(openRepoTarget);
             if (!gate.blocked && gate.dir) {
-              cachedConfigSync = await buildConfigSyncState();
+              cachedConfigSync = await buildConfigSyncState(openRepoTarget);
               refreshAll();
             }
           } catch (_) {}
