@@ -459,8 +459,10 @@ runner, which is why they can be written down here with confidence.
 
 **Nothing is ever a command string.** Arguments are passed as an argv array (`ProcessStartInfo.ArgumentList`),
 no shell is involved, and every value that reaches a child — VM name, port, path, switch name, seed
-user — is validated first (`Internal/ArgumentGuard`). VM names must match the API's own
-`^[a-z0-9][a-z0-9-]{0,39}$`; paths must be absolute on a drive letter; ports must be 1–65535; nothing
+user — is validated first (`Internal/ArgumentGuard`). VM names must satisfy the shared instance-name rule
+(`VmNameValidator`: 1–63 lowercase letters, digits or hyphens, starting and ending with a letter or
+digit; the `construct-` prefix is reserved — the same rule the extension and the PowerShell readers
+apply); paths must be absolute on a drive letter; ports must be 1–65535; nothing
 may contain a control character.
 
 ### Hyper-V driver
