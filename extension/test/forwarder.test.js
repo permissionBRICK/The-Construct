@@ -13,11 +13,20 @@
 //   • the PLANNER, every action case, plus its idempotence (the property that makes it
 //     safe to run on every event, every poll and every activation);
 //   • the LOCAL flow against a fake transport — request → tunnel argv → atomic ack →
-//     close → kill, port fallback, re-open on activation, and read-only non-ownership;
+//     close → kill, port fallback, re-open on connect, and read-only non-ownership;
 //   • the REMOTE flow against a fake fetch — poll → tunnel → POST ack, entry removed →
 //     kill, and an acked entry left alone;
 //   • tunnel supervision — the settle window, restart with backoff, the error ack after
 //     persistent failure, dispose;
+//   • the LAZY START — the capability check is the first thing to touch the VM, an older
+//     guest gets no watcher and no reconcile at all, and planLifecycle's start/stop rule;
+//   • a MODEL of extension.js's forwarder wiring (the slot claim, the serialized chain and
+//     the status trigger) around REAL Forwarder sessions with BOTH awaits deferred — the
+//     transport build and the guest capability check: disable, deactivation, an
+//     unreachable reading and a switch during either of them, overlapping starts, A→B→A
+//     and the reconnect edge all end with one session (or none), zero orphans and zero
+//     watcher/reconcile spawn after a stop — each with a PRE-FIX control that reproduces
+//     the leak;
 //   • the UI projections — the panel message contract, the idle-policy clamp, the saved
 //     state's power intent;
 //   • ssh.js's new `-L` argv builder.
@@ -34,6 +43,7 @@ const path = require("path");
 const f = require("../src/forwarder");
 const ui = require("../src/forwarder-ui");
 const ssh = require("../src/ssh");
+const inst = require("../src/instances");
 
 let pass = 0, fail = 0;
 function ok(name, cond, detail) {
@@ -117,6 +127,7 @@ function dump(owner, docs) {
   return lines.join("\n") + "\n";
 }
 
+const isCapabilityScript = (s) => s.indexOf('printf \'SPOOL=1') >= 0;
 const isReconcileScript = (s) => s.indexOf("dump R requests") >= 0;
 const isAckScript = (s) => s.indexOf("base64 -d") >= 0;
 const isRemoveScript = (s) => /^set -u\nrm -f /.test(s);
@@ -124,9 +135,12 @@ const isReleaseScript = (s) => s.indexOf('rm -f "$own"') >= 0;
 
 function makeTransport(opts = {}) {
   const t = {
-    scripts: [], acks: [], removes: [], releases: [],
+    scripts: [], acks: [], removes: [], releases: [], capabilities: [],
     watches: [], tunnels: [], fetches: [],
     dump: dump("self", []),
+    /** The guest's answer to the capability check: does it have the spool contract?
+     *  `opts.spool: false` is the older-VM path, `opts.spoolCode` a check that failed. */
+    spool: opts.spool !== false,
     /** null = every port is free; otherwise only these are. */
     freePorts: null,
     /** Successive answers for GET .../forwards. The last one repeats. */
@@ -136,6 +150,14 @@ function makeTransport(opts = {}) {
 
     runRemoteScript(script) {
       t.scripts.push(script);
+      if (isCapabilityScript(script)) {
+        t.capabilities.push(script);
+        return Promise.resolve({
+          code: opts.spoolCode || 0,
+          stdout: t.spool ? f.SPOOL_YES + "\n" : f.SPOOL_NO + "\n",
+          stderr: "",
+        });
+      }
       if (isReconcileScript(script)) return Promise.resolve({ code: opts.readCode || 0, stdout: t.dump, stderr: "" });
       if (isAckScript(script)) { t.acks.push(script); return Promise.resolve({ code: opts.ackCode || 0, stdout: "", stderr: "" }); }
       if (isReleaseScript(script)) { t.releases.push(script); return Promise.resolve({ code: 0, stdout: "", stderr: "" }); }
@@ -201,7 +223,10 @@ function makeForwarder(opts = {}) {
  * one deliberately does nothing, which is what makes dispose() final.
  */
 async function settle(fwd, timers, ms = 5000) {
-  if (fwd._stopped) fwd.start();
+  // start() is LAZY: its first act is the one-shot capability check, and the watcher/poll
+  // only follow once the guest has answered. Awaited here so the tests below see the
+  // started state rather than a half-started one.
+  if (fwd._stopped) await fwd.start();
   const p = fwd.reconcile();
   await timers.advance(ms);
   await p;
@@ -440,6 +465,80 @@ async function settle(fwd, timers, ms = 5000) {
     watch.indexOf("command -v inotifywait >/dev/null 2>&1 || return 1") >= 0);
   ok("watch: a hostile dir stays one quoted literal",
     f.buildWatchScript({ dir: "/tmp/x'; rm -rf /; echo '" }).indexOf("\nrm -rf") < 0);
+
+  // The capability check — the FIRST thing this module runs on a VM, and the whole reason
+  // an older guest never sees a watcher. It tests the exact marker bin/provision.sh
+  // writes: `install -d` of the spool root plus requests/, acks/ and close/, all four.
+  const cap = f.buildCapabilityScript({ dir: "/etc/construct/forwards" });
+  ok("capability: tests the spool root", cap.indexOf('[ -d "$d" ]') >= 0);
+  ok("capability: ...and all three subdirectories provision.sh creates",
+    cap.indexOf('[ -d "$d/requests" ]') >= 0 && cap.indexOf('[ -d "$d/acks" ]') >= 0 &&
+    cap.indexOf('[ -d "$d/close" ]') >= 0);
+  ok("capability: the spool path is one quoted literal", cap.indexOf("d='/etc/construct/forwards'") >= 0);
+  ok("capability: 'this VM does not have it' is an ANSWER, not a failure",
+    cap.indexOf(`printf '${f.SPOOL_NO}`) >= 0 && cap.trim().endsWith("exit 0"));
+  ok("capability: it is cheap — no watcher, no dump, no writes",
+    cap.indexOf("inotifywait") < 0 && cap.indexOf("base64") < 0 && cap.indexOf("mkdir") < 0);
+  ok("capability: a hostile dir stays one quoted literal",
+    f.buildCapabilityScript({ dir: "/tmp/x'; rm -rf /; echo '" }).indexOf("\nrm -rf") < 0);
+
+  ok("capability: SPOOL=1 is a yes", f.parseCapability("SPOOL=1\n"));
+  ok("capability: ...even with noise around it", f.parseCapability("motd line\nSPOOL=1\n"));
+  ok("capability: SPOOL=0 is a no", !f.parseCapability("SPOOL=0\n"));
+  ok("capability: an empty answer is a no, never an assumed yes", !f.parseCapability(""));
+  ok("capability: a null answer is a no", !f.parseCapability(null));
+  ok("capability: a truncated answer is a no", !f.parseCapability("SPOOL="));
+})();
+
+// ── The lazy, guest-gated lifecycle rule (planLifecycle) ───────────────────────
+// The forwarder is not started by activation; it is started by what the window's existing
+// status flow just learned about the captured instance. The decision is pure, so the whole
+// rule — including the deliberate asymmetry between starting and stopping — is tested here
+// rather than only observable in a live window.
+(() => {
+  const plan = (o) => f.planLifecycle(o);
+  deep("lifecycle: a VM the status flow reached is served",
+    plan({ enabled: true, name: "agent-vm", armed: null, online: true, vmState: "running" }),
+    { action: "start", reason: "reachable" });
+  deep("lifecycle: ...but only ONCE per connect (an older guest is not re-probed every tick)",
+    plan({ enabled: true, name: "agent-vm", armed: "agent-vm", online: true, vmState: "running" }),
+    { action: "none", reason: "armed" });
+  deep("lifecycle: a reading for ANOTHER instance starts that one",
+    plan({ enabled: true, name: "work-vm", armed: "agent-vm", online: true, vmState: "running" }),
+    { action: "start", reason: "reachable" });
+  deep("lifecycle: nothing is started before the VM is known reachable",
+    plan({ enabled: true, name: "agent-vm", armed: null, online: false, vmState: "unknown" }),
+    { action: "none", reason: "unreachable" });
+  for (const state of ["off", "saved", "absent"]) {
+    deep(`lifecycle: a VM that is ${state} lets the forwarder go`,
+      plan({ enabled: true, name: "agent-vm", armed: "agent-vm", online: false, vmState: state }),
+      { action: "stop", reason: state });
+    deep(`lifecycle: ...and says nothing when there is nothing to let go of (${state})`,
+      plan({ enabled: true, name: "agent-vm", armed: null, online: false, vmState: state }),
+      { action: "none", reason: state });
+  }
+  // REACHABILITY IS THE RULE IN BOTH DIRECTIONS: a reading that did not reach the VM lets
+  // the forwarder go whatever the host-side power state says, and clears the armed edge so
+  // the next reading that DOES reach it is a reconnect that starts a fresh session.
+  deep("lifecycle: a VM that did not answer is let go even if the host says running",
+    plan({ enabled: true, name: "agent-vm", armed: "agent-vm", online: false, vmState: "running" }),
+    { action: "stop", reason: "unreachable" });
+  deep("lifecycle: ...and with an unknown state",
+    plan({ enabled: true, name: "agent-vm", armed: "agent-vm", online: false, vmState: "unknown" }),
+    { action: "stop", reason: "unreachable" });
+  deep("lifecycle: ...but there is nothing to let go of when nothing is armed",
+    plan({ enabled: true, name: "agent-vm", armed: null, online: false, vmState: "running" }),
+    { action: "none", reason: "unreachable" });
+  deep("lifecycle: the setting off releases what is held",
+    plan({ enabled: false, name: "agent-vm", armed: "agent-vm", online: true, vmState: "running" }),
+    { action: "stop", reason: "disabled" });
+  deep("lifecycle: ...and starts nothing when the setting is off",
+    plan({ enabled: false, name: "agent-vm", armed: null, online: true, vmState: "running" }),
+    { action: "none", reason: "disabled" });
+  deep("lifecycle: an empty armed name is 'nothing armed', not an instance",
+    plan({ enabled: true, name: "agent-vm", armed: "", online: true, vmState: "running" }),
+    { action: "start", reason: "reachable" });
+  deep("lifecycle: a missing reading starts nothing", plan({}), { action: "none", reason: "unreachable" });
 })();
 
 // ── The claim protocol, RUN FOR REAL against a temp spool ──────────────────────
@@ -990,6 +1089,102 @@ async function localFlow() {
   }
 }
 
+// ── Lazy start: the guest is established before anything persistent is spawned ─
+async function lazyStart() {
+  console.log("\n  -- lazy start (guest-gated) --");
+
+  // The supported path: ONE cheap check first, and only then the watcher and the poll.
+  {
+    const { fwd, transport, timers } = makeForwarder();
+    const started = fwd.start();
+    eq("lazy: start() spawns nothing before the guest has answered", transport.watches.length, 0);
+    await started;
+    await timers.advance(5000);
+    eq("lazy: the capability check ran exactly once", transport.capabilities.length, 1);
+    ok("lazy: ...and it was the FIRST thing to touch the VM", isCapabilityScript(transport.scripts[0]));
+    eq("lazy: a supported guest gets the watcher", transport.watches.length, 1);
+    ok("lazy: ...and it is the documented watch script",
+      transport.watches[0].script.indexOf("inotifywait -m -q") >= 0);
+    ok("lazy: ...and the reconcile follows it", transport.scripts.filter(isReconcileScript).length >= 1);
+    eq("lazy: the guest is recorded as supported", fwd.supported, true);
+    fwd.dispose();
+  }
+
+  // The older-guest path — the zero-change bar. One exec, then nothing: no watcher, no
+  // reconcile, no timer, and no retry until the window starts it again.
+  {
+    const { fwd, transport, timers } = makeForwarder({ spool: false });
+    const lines = [];
+    fwd.log = (l) => lines.push(l);
+    await fwd.start();
+    await timers.advance(f.RECONCILE_MS * 4);
+    eq("lazy: an older guest is checked once", transport.capabilities.length, 1);
+    eq("lazy: ...and NO watcher is spawned", transport.watches.length, 0);
+    eq("lazy: ...and no reconcile SSH is run at all",
+      transport.scripts.filter(isReconcileScript).length, 0);
+    eq("lazy: ...and nothing else is either", transport.scripts.length, 1);
+    eq("lazy: ...and no tunnel is opened", transport.tunnels.length, 0);
+    eq("lazy: the guest is recorded as unsupported", fwd.supported, false);
+    ok("lazy: ...and the log says what to do about it",
+      lines.some((l) => l.indexOf("no forward spool") >= 0 && l.indexOf("Reprovision") >= 0));
+    eq("lazy: ...and nothing is rendered", fwd.snapshot().items.length, 0);
+    // A reprovision, and the next start picks it up — standing down is never permanent.
+    transport.spool = true;
+    transport.dump = dump("self", [["R", "1-a", { v: 1, id: "1-a", vmPort: 5173, target: "client" }]]);
+    await settle(fwd, timers);
+    eq("lazy: a reprovisioned VM is served on the next start", transport.tunnels.length, 1);
+    fwd.dispose();
+  }
+
+  // A check that could not be answered (the VM dropped the connection) is NOT an older
+  // guest: nothing is spawned, and nothing is recorded either — the next connect asks again.
+  {
+    const { fwd, transport, timers } = makeForwarder({ spoolCode: 255 });
+    const lines = [];
+    fwd.log = (l) => lines.push(l);
+    await fwd.start();
+    await timers.advance(f.RECONCILE_MS * 2);
+    eq("lazy: an unanswerable check spawns no watcher", transport.watches.length, 0);
+    eq("lazy: ...and no reconcile", transport.scripts.filter(isReconcileScript).length, 0);
+    eq("lazy: ...and does not brand the guest as old", fwd.supported, null);
+    ok("lazy: ...and says so", lines.some((l) => l.indexOf("could not check") >= 0));
+    fwd.dispose();
+  }
+
+  // dispose() while the check is in flight: the continuation must spawn nothing.
+  {
+    const { fwd, transport, timers } = makeForwarder();
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const inner = transport.runRemoteScript;
+    transport.runRemoteScript = (script) => (isCapabilityScript(script)
+      ? gate.then(() => inner(script))
+      : inner(script));
+    const started = fwd.start();
+    fwd.dispose();
+    release();
+    await started;
+    await timers.advance(5000);
+    eq("lazy: a start disposed mid-check spawns no watcher", transport.watches.length, 0);
+    eq("lazy: ...and runs no reconcile", transport.scripts.filter(isReconcileScript).length, 0);
+  }
+
+  // Remote mode has no spool at all: the service is the authority, so there is nothing to
+  // check — and the poll still starts only when the window asks it to.
+  {
+    const { fwd, transport, timers } = makeForwarder({
+      instance: { name: "work-vm", backend: "hyperv-remote", vmName: "work-vm" },
+    });
+    transport.lists = [[]];
+    await fwd.start();
+    await timers.advance(1000);
+    eq("lazy: remote mode runs no capability check", transport.capabilities.length, 0);
+    eq("lazy: ...and opens no watcher", transport.watches.length, 0);
+    ok("lazy: ...and polls the service instead", transport.fetches.length >= 1);
+    fwd.dispose();
+  }
+}
+
 // ── Tunnel supervision ─────────────────────────────────────────────────────────
 async function supervision() {
   console.log("\n  -- tunnel supervision --");
@@ -1490,6 +1685,25 @@ async function remoteFlow() {
   eq("forward port: garbage is null, not 22", ssh.normalizeForwardPort("x"), null);
   eq("forward port: 0 is null", ssh.normalizeForwardPort(0), null);
 
+  // The ONE long-lived process the default path gained (B8x), pinned in full — this is
+  // the argv extension/ARCHITECTURE.md documents next to the zero-change statement, and it
+  // is only ever spawned after the capability check said the guest has the spool.
+  const watchScript = f.buildWatchScript({});
+  const watchArgv = ui.buildStreamArgs(ssh, {}, false, watchScript);
+  // The remote command is rebuilt HERE from the script's own base64 rather than by calling
+  // ssh.wrapScriptCommand, so a change to EITHER the wrapper or the watch script fails this
+  // test instead of sliding past a substring check.
+  const watchCommand = "f=$(mktemp) && printf %s '" +
+    Buffer.from(watchScript, "utf8").toString("base64") +
+    "' | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc";
+  deep("watcher argv: the default instance's ENTIRE argv, byte for byte",
+    watchArgv,
+    ["-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new",
+      "-o", "ConnectTimeout=12", "-o", "ServerAliveInterval=20", "-o", "ServerAliveCountMax=3",
+      "agent-vm", watchCommand]);
+  eq("watcher argv: ...and that is the ssh options plus the alias and the ONE command",
+    watchArgv.length, 13);
+
   const stream = ui.buildStreamArgs(ssh, {}, false, "echo hi");
   ok("stream argv: no tty — it is a data stream", stream.indexOf("-T") >= 0);
   ok("stream argv: keepalives so a dead link is noticed", stream.indexOf("ServerAliveInterval=20") >= 0);
@@ -1499,12 +1713,485 @@ async function remoteFlow() {
     ui.buildStreamArgs(ssh, { sshPort: 2201 }, false, "x").indexOf("-p") >= 0);
 })();
 
+// ── extension.js's forwarder wiring: one session, zero orphans ─────────────────
+// A MODEL of extension.js's forwarder half — the module-level forwarderSession /
+// forwarderInstance / forwarderArmed, the slot claim, the serialized chain and the status
+// trigger — driven with deferred transports so the interleavings are exact instead of
+// intermittent in a live window. The DECISIONS are the production ones (instances.
+// planEnable, instances.createHandover, instances.createSessionOwner and
+// forwarder.planLifecycle); the model supplies only the effects.
+//
+// `serialized: false` is the PRE-FIX control: the shape extension.js had, where the
+// enabled check happened once before the await, a teardown ran beside the chain that was
+// not there, and the continuation published whatever it had built.
+async function lifecycleWiring() {
+  console.log("\n  -- extension.js wiring: one session, zero orphans --");
+  const tick = async (n) => { for (let i = 0; i < (n || 6); i++) await Promise.resolve(); };
+  const deferred = () => {
+    let resolve;
+    const promise = new Promise((res) => { resolve = res; });
+    return { promise, resolve };
+  };
+
+  function forwarderWindow(startName, opts) {
+    const o = opts || {};
+    const serialized = o.serialized !== false;
+    // `gated: false` is the OTHER pre-fix control: a session built without the window's
+    // `eligible` callback, so nothing re-checks the world across the guest capability
+    // check — the second half of the escape this round fixes.
+    const gated = o.gated !== false;
+    // Hold the guest's answer so a test can park a session inside its own await, which is
+    // the window between publishing it and spawning anything.
+    const holdCapability = o.holdCapability === true;
+    const gate = inst.createGate(startName);
+    const slot = inst.createSessionOwner();
+    const sessions = [];                       // every forwarder ever constructed
+    const held = { session: null, name: null };  // forwarderSession / forwarderInstance
+    let armed = null;                          // forwarderArmed
+    let enabled = true;                        // construct.forwards.enabled
+    let closed = false;                        // has deactivate() run?
+    const builds = new Map();                  // buildForwarderTransport, per instance
+    const holds = new Map();                   // the guest capability check, per instance
+    const asked = [];                          // every call of it, in order
+    const log = [];
+    const buildFor = (name, count) => {
+      if (!builds.has(name)) builds.set(name, deferred());
+      if (count) asked.push(name);
+      return builds.get(name);
+    };
+    const holdFor = (name) => {
+      if (!holds.has(name)) {
+        const d = deferred();
+        if (!holdCapability) d.resolve();
+        holds.set(name, d);
+      }
+      return holds.get(name);
+    };
+    const target = (name) => ({ ...inst.captureTarget(gate, { name }), name });
+
+    /** stopForwarder(): drop the reference, dispose, and take the slot away so a start
+     *  still awaiting its transport can publish nothing. */
+    const stop = () => {
+      if (serialized) slot.claim("");
+      const s = held.session;
+      held.session = null; held.name = null;
+      if (s) { s.open = false; try { s.forwarder.dispose(); } catch (_) {} log.push("disposed:" + s.name); }
+    };
+
+    /** startForwarder(): its ONE await is the transport build (SecretStorage, remotely). */
+    async function start(t) {
+      const plan = serialized
+        ? inst.planEnable({
+          live: !!held.session, name: held.name,
+          enabled: !!held.session, pending: false, closed: chain.closed,
+        }, t.name)
+        // PRE-FIX: only an already-live session for THIS instance stopped a second one.
+        : { action: held.session && held.name === t.name ? "report" : "create", reason: "pre-fix" };
+      if (plan.action !== "create") { log.push("plan:" + plan.action + ":" + t.name); return; }
+      if (!enabled) return;
+      if (inst.targetSuperseded(gate, t)) { log.push("superseded:" + t.name); return; }
+      // PRE-FIX: the live session was torn down HERE, beside anything else in flight.
+      if (!serialized) stop();
+      const claim = serialized ? slot.claim(t.name) : null;
+      const transport = await buildFor(t.name, true).promise;
+      if (serialized) {
+        if (!slot.owns(claim)) { log.push("discarded-stopped:" + t.name); return; }
+        if (chain.closed || !enabled) { log.push("discarded-off:" + t.name); return; }
+        if (inst.targetSuperseded(gate, t)) { log.push("discarded-switched:" + t.name); return; }
+      } else if (gate.name !== t.name) {
+        // The pre-fix shape's ONLY post-await check: is this still the active instance?
+        return;
+      }
+      if (!transport) return;
+      // A REAL Forwarder, so the second await this round is about — its own guest
+      // capability check — is exercised rather than modelled.
+      const timers = makeTimers();
+      const fake = makeTransport();
+      const hold = holdFor(t.name);
+      const inner = fake.runRemoteScript;
+      fake.runRemoteScript = (script) => (isCapabilityScript(script)
+        ? hold.promise.then(() => inner(script)) : inner(script));
+      const stillWanted = () => slot.owns(claim) && !chain.closed && enabled
+        && !inst.targetSuperseded(gate, t);
+      const fwd = f.createForwarder({
+        instance: { name: t.name, backend: "hyperv-local" },
+        transport: fake,
+        timers: timers.api,
+        now: timers.now,
+        log: () => {},
+        eligible: gated ? stillWanted : undefined,
+        onChange: () => {},
+      });
+      const session = { name: t.name, open: true, afterClose: closed, forwarder: fwd, transport: fake };
+      sessions.push(session);
+      held.session = session; held.name = t.name;
+      log.push("serving:" + t.name);
+      // RETURNED, exactly as extension.js returns forwarderSession.start(): the chain step
+      // stays open until the guest has answered.
+      return fwd.start();
+    }
+
+    const chain = inst.createHandover({
+      session: () => ({ live: !!held.session, name: held.name }),
+      teardown: stop,
+      arm: (t) => start(t),
+      superseded: (t) => inst.targetSuperseded(gate, t),
+    });
+
+    /** requestForwarderStop(): invalidate the slot SYNCHRONOUSLY (a start parked in either
+     *  of its awaits must not go on to spawn anything), then queue the disposal. */
+    const requestStop = () => {
+      if (!serialized) { stop(); return Promise.resolve(); }
+      slot.claim("");
+      armed = null;
+      return chain.disable();
+    };
+
+    return {
+      log, sessions,
+      /** buildForwarderTransport resolving (null = a remote instance with no credential). */
+      resolveBuild: (name, value) => buildFor(name).resolve(value === null ? null : { name }),
+      /** refreshAll/refreshState's reading — the forwarder's only trigger. */
+      note(name, reading) {
+        const t = target(name);
+        const plan = f.planLifecycle({
+          enabled, name, armed, online: reading.online, vmState: reading.vmState,
+        });
+        log.push("lifecycle:" + plan.action + ":" + name);
+        if (plan.action === "start") {
+          armed = name;
+          return serialized ? chain.enable(t, (x) => start(x)) : start(t);
+        }
+        if (plan.action === "stop") { armed = null; return requestStop(); }
+        return Promise.resolve();
+      },
+      /** The construct.forwards.enabled setting changing. */
+      setEnabled(value) {
+        enabled = value;
+        if (value) return Promise.resolve();
+        return requestStop();
+      },
+      /** onInstanceChanged()'s forwarder half. */
+      switchTo(name) {
+        gate.set(name);
+        if (serialized) {
+          if (held.name !== name || armed !== name) return requestStop();
+          return Promise.resolve();
+        }
+        // PRE-FIX: tear down and start the destination right here, beside what is in flight.
+        if (held.name !== name) { stop(); return start(target(name)); }
+        return Promise.resolve();
+      },
+      /** deactivate(): close the chain FIRST, then dispose the one live session. */
+      close() {
+        closed = true;
+        if (serialized) chain.close();
+        armed = null;
+        stop();
+      },
+      askedFor: (name) => asked.filter((n) => n === name).length,
+      /** The guest answering the capability check for a session that was parked in it. */
+      answerCapability: (name) => { holdFor(name).resolve(); return tick(); },
+      /** Watchers this window ever SPAWNED, and reconciles it ever ran — the traffic. */
+      watchers: () => sessions.reduce((n, s) => n + s.transport.watches.length, 0),
+      reconciles: () => sessions.reduce(
+        (n, s) => n + s.transport.scripts.filter(isReconcileScript).length, 0),
+      /** Watcher children still alive — a leak that outlived its session. */
+      liveWatchers: () => sessions.reduce(
+        (n, s) => n + s.transport.watches.filter((w) => !w.child.killed).length, 0),
+      openSessions: () => sessions.filter((s) => s.open).map((s) => s.name),
+      /** Sessions still OPEN while the window no longer references them — the leak. */
+      orphans: () => sessions.filter((s) => s.open && s !== held.session).map((s) => s.name),
+      builtFor: (name) => sessions.filter((s) => s.name === name).length,
+      armedName: () => armed,
+    };
+  }
+
+  const up = { online: true, vmState: "running" };
+
+  // 0) THE DEFAULT PATH: an untouched window that has established nothing builds no
+  //    transport at all — the activation-level property this whole change is about.
+  {
+    const w = forwarderWindow("agent-vm");
+    await tick();
+    deep("default: a window with no reading serves nothing", w.openSessions(), []);
+    eq("default: ...and never even asked for a transport", w.askedFor("agent-vm"), 0);
+    await w.note("agent-vm", { online: false, vmState: "off" });
+    deep("default: a VM that is off starts nothing", w.openSessions(), []);
+    await w.note("agent-vm", { online: false, vmState: "unknown" });
+    deep("default: an unreachable VM starts nothing either", w.openSessions(), []);
+    eq("default: ...and nothing is armed", w.armedName(), null);
+  }
+
+  // 1) DISABLE DURING A START. The setting goes off while the transport is being built.
+  {
+    const w = forwarderWindow("agent-vm");
+    const started = w.note("agent-vm", up);
+    await tick();
+    const off = w.setEnabled(false);
+    w.resolveBuild("agent-vm");
+    await Promise.all([started, off]);
+    await tick();
+    deep("disable-during-start: nothing is serving", w.openSessions(), []);
+    deep("disable-during-start: ...and nothing is orphaned", w.orphans(), []);
+    ok("disable-during-start: the in-flight start says why it was dropped",
+      w.log.some((l) => l.indexOf("discarded-") === 0));
+  }
+  {
+    const w = forwarderWindow("agent-vm", { serialized: false });
+    const started = w.note("agent-vm", up);
+    await tick();
+    w.setEnabled(false);
+    w.resolveBuild("agent-vm");
+    await started;
+    await tick();
+    deep("control: the pre-fix shape opens a forwarder AFTER the user disabled forwarding",
+      w.openSessions(), ["agent-vm"]);
+  }
+
+  // 2) DEACTIVATE DURING A START. The window shuts down mid-build.
+  {
+    const w = forwarderWindow("agent-vm");
+    const started = w.note("agent-vm", up);
+    await tick();
+    w.close();
+    w.resolveBuild("agent-vm");
+    await started;
+    await tick();
+    deep("deactivate-during-start: nothing survives the window", w.openSessions(), []);
+    deep("deactivate-during-start: ...and nothing is orphaned", w.orphans(), []);
+  }
+  {
+    const w = forwarderWindow("agent-vm", { serialized: false });
+    const started = w.note("agent-vm", up);
+    await tick();
+    w.close();
+    w.resolveBuild("agent-vm");
+    await started;
+    await tick();
+    deep("control: the pre-fix shape leaves a forwarder behind after deactivation",
+      w.openSessions(), ["agent-vm"]);
+    ok("control: ...built after the window was already gone",
+      w.sessions.some((s) => s.open && s.afterClose));
+  }
+
+  // 3) OVERLAPPING STARTS. The VM blinks (one tick reports it off) while the first start
+  //    is still building its transport, and the next reading asks for it again.
+  {
+    const w = forwarderWindow("agent-vm");
+    const first = w.note("agent-vm", up);
+    await tick();
+    const down = w.note("agent-vm", { online: false, vmState: "saved" });
+    const again = w.note("agent-vm", up);
+    w.resolveBuild("agent-vm");
+    await Promise.all([first, down, again]);
+    await tick();
+    deep("overlapping: exactly one forwarder is serving", w.openSessions(), ["agent-vm"]);
+    deep("overlapping: ...and nothing is orphaned", w.orphans(), []);
+  }
+  {
+    const w = forwarderWindow("agent-vm", { serialized: false });
+    const first = w.note("agent-vm", up);
+    await tick();
+    const down = w.note("agent-vm", { online: false, vmState: "saved" });
+    const again = w.note("agent-vm", up);
+    w.resolveBuild("agent-vm");
+    await Promise.all([first, down, again]);
+    await tick();
+    eq("control: the pre-fix shape builds two forwarders for one VM", w.builtFor("agent-vm"), 2);
+    deep("control: ...and orphans the one it stopped referencing", w.orphans(), ["agent-vm"]);
+  }
+
+  // 4) A→B→A. Every step is queued, so the destination's forwarder is built from the
+  //    destination's own capture — and the instance we left keeps nothing.
+  {
+    const w = forwarderWindow("agent-vm");
+    const first = w.note("agent-vm", up);
+    const toB = w.switchTo("work-vm");
+    const noteB = w.note("work-vm", up);
+    const toA = w.switchTo("agent-vm");
+    const noteA = w.note("agent-vm", up);
+    w.resolveBuild("agent-vm");
+    w.resolveBuild("work-vm");
+    await Promise.all([first, toB, noteB, toA, noteA]);
+    await tick();
+    deep("A->B->A: exactly one forwarder is serving, and it is A's", w.openSessions(), ["agent-vm"]);
+    deep("A->B->A: ...and nothing is orphaned", w.orphans(), []);
+    eq("A->B->A: B's forwarder was never built — its target was superseded first",
+      w.builtFor("work-vm"), 0);
+    eq("A->B->A: ...so its transport was never even asked for", w.askedFor("work-vm"), 0);
+  }
+  {
+    const w = forwarderWindow("agent-vm", { serialized: false });
+    const first = w.note("agent-vm", up);
+    await tick();
+    const toB = w.switchTo("work-vm");
+    const toA = w.switchTo("agent-vm");
+    w.resolveBuild("agent-vm");
+    w.resolveBuild("work-vm");
+    await Promise.all([first, toB, toA]);
+    await tick();
+    eq("control: the pre-fix A->B->A builds two forwarders for A", w.builtFor("agent-vm"), 2);
+    deep("control: ...and leaves the first one open with nothing referencing it",
+      w.orphans(), ["agent-vm"]);
+  }
+
+  // 5) THE RECONNECT EDGE. A reading that did not reach the VM lets the live watcher go —
+  //    whatever the host still says about its power state — and the next reading that DOES
+  //    reach it starts exactly one new session, which re-opens whatever is queued in the
+  //    spool. This is the flow behind planLifecycle's stop rule.
+  {
+    const w = forwarderWindow("agent-vm");
+    const first = w.note("agent-vm", up);
+    w.resolveBuild("agent-vm");
+    await first;
+    await tick();
+    eq("reconnect: a reachable reading starts the watcher", w.watchers(), 1);
+    eq("reconnect: ...and it is alive", w.liveWatchers(), 1);
+    // Unreachable, while the HOST still reports the VM as running — the case that used to
+    // leave the watcher and the tunnels holding sockets to a VM this window cannot reach.
+    await w.note("agent-vm", { online: false, vmState: "running" });
+    await tick();
+    eq("reconnect: an unreachable reading kills the watcher", w.liveWatchers(), 0);
+    deep("reconnect: ...and leaves nothing serving", w.openSessions(), []);
+    deep("reconnect: ...and nothing orphaned", w.orphans(), []);
+    eq("reconnect: ...and clears the armed edge, so the next connect is a retry", w.armedName(), null);
+    await w.note("agent-vm", up);
+    await tick();
+    eq("reconnect: the next reachable reading starts EXACTLY one new session", w.builtFor("agent-vm"), 2);
+    deep("reconnect: ...and it is the only one serving", w.openSessions(), ["agent-vm"]);
+    eq("reconnect: ...with one live watcher", w.liveWatchers(), 1);
+    eq("reconnect: ...and no orphaned watcher from the first", w.watchers(), 2);
+    w.close();
+  }
+
+  // 6) A STOP DURING THE GUEST CAPABILITY CHECK. The session is published and then parked
+  //    in its own await; the teardown for a disable / unreachable reading / switch /
+  //    deactivation is queued BEHIND that step, so the session itself has to re-check.
+  //    Nothing may be spawned: no watcher, no reconcile — no SSH after the window said no.
+  for (const [label, act] of [
+    ["disable", (w) => w.setEnabled(false)],
+    ["an unreachable reading", (w) => w.note("agent-vm", { online: false, vmState: "running" })],
+    ["a switch", (w) => w.switchTo("work-vm")],
+    ["deactivation", (w) => { w.close(); return Promise.resolve(); }],
+  ]) {
+    const w = forwarderWindow("agent-vm", { holdCapability: true });
+    const started = w.note("agent-vm", up);
+    w.resolveBuild("agent-vm");
+    await tick();
+    eq(`capability(${label}): the session is parked in the guest check`, w.watchers(), 0);
+    const acted = act(w);
+    await w.answerCapability("agent-vm");
+    await Promise.all([started, acted]);
+    await tick();
+    eq(`capability(${label}): no watcher is ever spawned`, w.watchers(), 0);
+    eq(`capability(${label}): ...and no reconcile is ever run`, w.reconciles(), 0);
+    deep(`capability(${label}): ...and nothing is left serving`, w.openSessions(), []);
+    deep(`capability(${label}): ...and nothing is orphaned`, w.orphans(), []);
+  }
+  {
+    // The control: the same disable, against a session built WITHOUT the window's
+    // eligibility callback. The guest answers, the watcher goes up and the spool is
+    // reconciled — forwarding traffic after the user switched forwarding off — and only
+    // then does the queued teardown reach it.
+    const w = forwarderWindow("agent-vm", { holdCapability: true, gated: false });
+    const started = w.note("agent-vm", up);
+    w.resolveBuild("agent-vm");
+    await tick();
+    const off = w.setEnabled(false);
+    await w.answerCapability("agent-vm");
+    await Promise.all([started, off]);
+    await tick();
+    eq("control: without the re-check the watcher is spawned AFTER the disable", w.watchers(), 1);
+    ok("control: ...and the spool is reconciled too", w.reconciles() >= 1);
+  }
+
+  // 7) A REMOTE INSTANCE WITH NO CREDENTIAL resolves to no transport: nothing is built,
+  //    nothing is armed twice, and the window is not left in a half-started state.
+  {
+    const w = forwarderWindow("work-vm");
+    const started = w.note("work-vm", up);
+    w.resolveBuild("work-vm", null);
+    await started;
+    await tick();
+    deep("no-credential: nothing is serving", w.openSessions(), []);
+    deep("no-credential: ...and nothing is orphaned", w.orphans(), []);
+    await w.note("work-vm", up);
+    eq("no-credential: ...and it is not retried on every refresh", w.askedFor("work-vm"), 1);
+  }
+}
+
+// ── extension.js's wiring, pinned at the source ────────────────────────────────
+// extension.js cannot be required under plain node (it needs `vscode`), so the wiring the
+// model above stands in for is pinned here — the same way instances.test.js pins the mic
+// chain's. What these guard: activation must spawn nothing, every start and stop must go
+// through the one chain, and the trigger must be the status flow's own reading.
+(() => {
+  console.log("\n  -- extension.js wiring (source-pinned) --");
+  const extSrc = fs.readFileSync(path.join(__dirname, "..", "extension.js"), "utf8");
+  ok("activation: nothing forwarding-related is started at activation",
+    extSrc.indexOf("setTimeout(() => { noteForwarderConnected(); }, 3000);") >= 0 &&
+    extSrc.indexOf("void startForwarder(); }, 3000)") < 0);
+  ok("activation: the only free reachability fact is the window's own Remote-SSH attachment",
+    extSrc.indexOf("if (!remote.isConnectedToVm(safeRemoteAuthority(), activeCfg())) return;") >= 0 &&
+    extSrc.indexOf('noteForwarderPresence(actionTarget(), { online: true, vmState: "running" });') >= 0);
+  ok("trigger: both refresh pipelines hand their OWN captured target and reading to it",
+    extSrc.indexOf("noteForwarderPresence(target, state);") >= 0 &&
+    extSrc.indexOf("noteForwarderPresence(refreshTarget, state);") >= 0);
+  ok("trigger: the decision is the pure forwarder.planLifecycle",
+    extSrc.indexOf("const plan = forwarder.planLifecycle({") >= 0 &&
+    extSrc.indexOf("armed: forwarderArmed,") >= 0);
+  ok("chain: every start and stop is queued on ONE serialized chain",
+    extSrc.indexOf("const forwarderChain = instances.createHandover({") >= 0 &&
+    extSrc.indexOf("void forwarderChain.enable(target, (t) => startForwarder(t));") >= 0 &&
+    // ...and nothing starts the forwarder beside it.
+    !/void startForwarder\(\)/.test(extSrc));
+  ok("chain: a switch tears down on the chain and starts nothing",
+    extSrc.indexOf("if (forwarderInstance !== inst.name || forwarderArmed !== inst.name) {\n    void requestForwarderStop();\n  }") >= 0);
+  ok("stop: every stop request invalidates the slot SYNCHRONOUSLY and queues the disposal",
+    extSrc.indexOf("function requestForwarderStop() {\n  forwarderSlot.claim(\"\");\n  forwarderArmed = null;\n  return forwarderChain.disable();\n}") >= 0 &&
+    // ...and nothing bypasses it.
+    extSrc.split("forwarderChain.disable()").length === 2);
+  ok("eligibility: the session re-checks the SAME four conditions around its own await",
+    extSrc.indexOf("const stillWanted = () => forwarderSlot.owns(claim)") >= 0 &&
+    extSrc.indexOf("&& !forwarderChain.closed") >= 0 &&
+    extSrc.indexOf("&& forwardsEnabled()") >= 0 &&
+    extSrc.indexOf("&& !instances.targetSuperseded(instanceGate, t);") >= 0 &&
+    extSrc.indexOf("eligible: stillWanted,") >= 0);
+  ok("slot: the claim is taken BEFORE the one await and re-checked after it",
+    extSrc.indexOf("const claim = forwarderSlot.claim(t.name);") >= 0 &&
+    extSrc.indexOf("const transport = await buildForwarderTransport(inst);") >= 0 &&
+    extSrc.indexOf("if (!forwarderSlot.owns(claim)) {") >= 0 &&
+    extSrc.indexOf("const claim = forwarderSlot.claim(t.name);") <
+      extSrc.indexOf("const transport = await buildForwarderTransport(inst);") &&
+    extSrc.indexOf("const transport = await buildForwarderTransport(inst);") <
+      extSrc.indexOf("if (!forwarderSlot.owns(claim)) {"));
+  ok("slot: ...along with the setting, the shutdown flag and the generation",
+    extSrc.indexOf("if (forwarderChain.closed || !forwardsEnabled()) {") >= 0 &&
+    extSrc.indexOf("if (instances.targetSuperseded(instanceGate, t)) {\n    logLine(`forwards: the start for") >= 0);
+  ok("slot: stopForwarder() invalidates the in-flight starts before it disposes",
+    extSrc.indexOf('function stopForwarder() {\n  // Invalidate first') >= 0 &&
+    extSrc.indexOf('forwarderSlot.claim("");') >= 0);
+  ok("slot: a late snapshot from a session we let go of is dropped",
+    extSrc.indexOf("if (!forwarderSlot.owns(claim)) return;") >= 0 &&
+    !extSrc.includes("if (forwarderInstance !== activeInstance().name) return;"));
+  ok("decision: the single-session rule is instances.planEnable, from one state helper",
+    extSrc.indexOf("const plan = instances.planEnable(forwarderSlotState(), t.name);") >= 0 &&
+    extSrc.indexOf("function forwarderSlotState() {") >= 0);
+  ok("deactivate: the chain is closed BEFORE the one disposal outside it",
+    extSrc.indexOf("try { void forwarderChain.close(); } catch (_) {}") <
+      extSrc.lastIndexOf("stopForwarder();") &&
+    extSrc.indexOf("try { void forwarderChain.close(); } catch (_) {}") >= 0);
+})();
+
 // ── Summary ────────────────────────────────────────────────────────────────────
 (async () => {
   await claimProtocol();
+  await lazyStart();
   await localFlow();
   await supervision();
   await remoteFlow();
+  await lifecycleWiring();
   console.log(`\n  forwarder unit tests — ${pass}/${pass + fail} passed\n`);
   process.exit(fail ? 1 : 0);
 })();
