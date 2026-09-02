@@ -29,7 +29,10 @@
 //                                                       problems, path, synthesized}
 //   list(registry)                        -> instance[] (default first, then a-z)
 //   resolve(registry, name)               -> instance     (unknown name -> default)
+//   hasInstance(registry, name)           -> bool          (OWN-property membership)
 //   resolveActive({registry, setting, workspaceValue}) -> { instance, name, source }
+//   createTargetQueue()                   -> one queued follow-up per target
+//   planCapturedFollowUp(gate, target, proceed) -> { run, reason, target }
 //   isDefaultInstance(instance)           -> bool          (argv/behaviour gate)
 //   toSshCfg(instance)                    -> ssh.js cfg   ({vmHost,hostAlias,keyName,sshPort})
 //   save(path, registry)                  -> writes atomically (tmp + rename)
@@ -84,6 +87,27 @@ const DEFAULT_INSTANCE = Object.freeze({
 function isValidName(name) {
   return typeof name === "string" && NAME_RE.test(name);
 }
+
+// ── Prototype-free registry maps ─────────────────────────────────────────────
+// A name->instance map is keyed by DATA FROM A FILE (and, for the active instance, by a
+// user setting). A plain `{}` inherits Object.prototype, so `byName["constructor"]` is
+// truthy for EVERY registry — a `{"defaultInstance":"constructor","instances":{}}` file
+// (or `construct.instance: "constructor"`) resolved to Object's constructor FUNCTION and
+// handed it out as an instance: undefined vmHost/keyName in every ssh argv, while the
+// PowerShell reader (an ordinal Hashtable + ContainsKey) correctly reported "no entry"
+// and used agent-vm. The two readers must never disagree about the same bytes, so every
+// map here is PROTOTYPE-FREE and every membership test is an OWN-property test. An
+// instance genuinely NAMED "constructor" is a valid name and still works — it is a key
+// in the map like any other.
+
+/** A registry map with no prototype: no key is ever "already there". */
+function emptyMap() { return Object.create(null); }
+/** Own-property membership — never an inherited Object.prototype member. */
+function hasOwn(obj, key) {
+  return !!obj && typeof key === "string" && Object.prototype.hasOwnProperty.call(obj, key);
+}
+/** The instance stored under `name`, or null. Own-property only. */
+function ownInstance(bag, name) { return hasOwn(bag, name) ? bag[name] : null; }
 
 /** The base under which the registry lives. Mirrors host.js localAppData() exactly so
  *  instances.json lands next to the existing config\ dir. */
@@ -467,16 +491,26 @@ function toSshCfg(inst) {
  * each one is reported under. Two instances sharing any of them are two names for one
  * machine (or one key file / one ssh_config Host block): a rebuild of the second would
  * delete the first's VM, and a reprovision would overwrite its key.
+ *
+ * `configBranch` is one of them, and for the same reason: the config-sync branch is the
+ * instance's STORE inside the one host config repo (docs/config-sync.md, "Multiple
+ * instances" — one branch per VM). Two entries on one branch share their VM snapshots,
+ * their deletion history, their merge base and their write-backs, so one VM's tick
+ * merges — or deletes — the other VM's configuration. Rule 1 below also makes the
+ * default instance's historical branch "vm" RESERVED for `agent-vm`: a non-default entry
+ * that claims it is skipped, exactly like one that claims the default VM's name.
  */
 const UNIQUE_FIELDS = Object.freeze([
   { key: "vmName", label: "vmName" },
   { key: "vmHost", label: "sshHost" },
   { key: "hostAlias", label: "hostAlias" },
   { key: "keyName", label: "keyName" },
+  { key: "configBranch", label: "configBranch" },
 ]);
 
-/** All four are case-insensitive in the places they land (Hyper-V names, DNS, an
- *  ssh_config alias, an NTFS file name), so they are compared lowercased. */
+/** All five are case-insensitive in the places they land (Hyper-V names, DNS, an
+ *  ssh_config alias, an NTFS file name, a Windows loose-ref file), so they are
+ *  compared lowercased. */
 function idKey(v) { return String(v == null ? "" : v).toLowerCase(); }
 
 /**
@@ -533,7 +567,7 @@ function collisionProblems(byName) {
  */
 function parseRegistry(text) {
   const problems = [];
-  const byName = {};
+  const byName = emptyMap();
   let defaultInstance = DEFAULT_INSTANCE_NAME;
   let doc = null;
   const raw = String(text == null ? "" : text).replace(/^﻿/, "");
@@ -642,7 +676,7 @@ function parseRegistry(text) {
       if (!isValidName(dflt)) {
         problems.push('defaultInstance "' + dflt + '" is not a valid instance name — using "' +
           DEFAULT_INSTANCE_NAME + '"');
-      } else if (!byName[dflt]) {
+      } else if (!hasOwn(byName, dflt)) {
         problems.push('defaultInstance "' + dflt + '" has no entry in "instances" — using "' +
           DEFAULT_INSTANCE_NAME + '"');
       } else {
@@ -653,8 +687,8 @@ function parseRegistry(text) {
   // The default instance is ALWAYS available, synthesized when absent. That is the
   // zero-change guarantee: a registry that forgets (or never had) "agent-vm" still
   // behaves exactly like today for every caller that asks for it.
-  if (!byName[DEFAULT_INSTANCE_NAME]) byName[DEFAULT_INSTANCE_NAME] = { ...DEFAULT_INSTANCE };
-  if (!byName[defaultInstance]) defaultInstance = DEFAULT_INSTANCE_NAME;
+  if (!hasOwn(byName, DEFAULT_INSTANCE_NAME)) byName[DEFAULT_INSTANCE_NAME] = { ...DEFAULT_INSTANCE };
+  if (!hasOwn(byName, defaultInstance)) defaultInstance = DEFAULT_INSTANCE_NAME;
   return { registry: { byName, defaultInstance }, problems };
 }
 
@@ -716,11 +750,20 @@ function list(registry) {
 /** Resolve one instance by name. An empty/unknown name falls back to the registry's
  *  default instance (and, failing that, to the synthesized default). Pure. */
 function resolve(registry, name) {
-  const bag = (registry && registry.byName) || {};
+  const bag = (registry && registry.byName) || emptyMap();
   const wanted = str(name);
-  if (wanted && bag[wanted]) return bag[wanted];
+  // OWN properties only: a name like "constructor" or "toString" must be "not in the
+  // registry" here exactly as it is for the PowerShell reader's ContainsKey.
+  const direct = ownInstance(bag, wanted);
+  if (direct) return direct;
   const dflt = (registry && registry.defaultInstance) || DEFAULT_INSTANCE_NAME;
-  return bag[dflt] || bag[DEFAULT_INSTANCE_NAME] || { ...DEFAULT_INSTANCE };
+  return ownInstance(bag, dflt) || ownInstance(bag, DEFAULT_INSTANCE_NAME) || { ...DEFAULT_INSTANCE };
+}
+
+/** Does the registry hold an instance under this exact name? Own-property only, so an
+ *  Object.prototype member ("constructor", "toString") is never mistaken for one. Pure. */
+function hasInstance(registry, name) {
+  return !!ownInstance((registry && registry.byName) || null, str(name));
 }
 
 /**
@@ -739,7 +782,7 @@ function resolve(registry, name) {
  */
 function resolveActive(opts = {}) {
   const registry = opts.registry;
-  const bag = (registry && registry.byName) || {};
+  const bag = (registry && registry.byName) || emptyMap();
   const candidates = [
     { value: str(opts.setting), source: "setting" },
     { value: str(opts.workspaceValue), source: "workspace" },
@@ -748,7 +791,10 @@ function resolveActive(opts = {}) {
   const withProblems = (res) => (problems.length ? { ...res, problem: problems[0], problems } : res);
   for (const c of candidates) {
     if (!c.value) continue;
-    if (bag[c.value]) return withProblems({ instance: bag[c.value], name: c.value, source: c.source });
+    // Own-property only. A `construct.instance` of "constructor" is a name the registry
+    // does not have — NOT Object's constructor function handed out as an instance.
+    const found = ownInstance(bag, c.value);
+    if (found) return withProblems({ instance: found, name: c.value, source: c.source });
     problems.push('instance "' + c.value + '" (' + c.source + ') is not in the registry — skipped');
   }
   const inst = resolve(registry, null);
@@ -893,6 +939,70 @@ function targetSuperseded(gate, target) {
 }
 
 /**
+ * A FOLLOW-UP QUEUE KEYED BY TARGET — one pending follow-up per instance, behind the
+ * job that is already running (today: the config-sync tick).
+ *
+ * The tick serializes window-wide (the config repo's lock is repo-wide), so a request
+ * that arrives while one is in flight has to wait and then run its own. Held as a SINGLE
+ * global promise, that queued follow-up lost its subject: an explicit "Sync Now" for A,
+ * queued behind A's tick, ran whatever the window had switched to by the time it
+ * started — syncing B's branch and B's VM store while A's changes stayed unsynced.
+ *
+ * `queue(key, active, start)` returns the ONE follow-up promise for that key (a second
+ * caller for the same key joins it; a different key gets its own), chains it after
+ * `active` — settled either way, because a failed tick must not wedge the queue
+ * forever — and then calls `start()`, the closure the FIRST caller registered, which
+ * carries that caller's captured target. Pure and dependency-free, so the ordering is
+ * unit-tested with deferred promises.
+ */
+function createTargetQueue() {
+  const pending = new Map();
+  const keyOf = (key) => String(key == null ? "" : key);
+  return {
+    queue(key, active, start) {
+      const k = keyOf(key);
+      const already = pending.get(k);
+      if (already) return already;
+      const settled = Promise.resolve(active).then(() => null, () => null);
+      const p = settled.then(() => {
+        // Clear BEFORE start(): the follow-up is now the running job, and a request that
+        // arrives from here on must queue behind it rather than join a job in progress.
+        if (pending.get(k) === p) pending.delete(k);
+        return start();
+      });
+      pending.set(k, p);
+      return p;
+    },
+    /** Is a follow-up queued for this key? */
+    isQueued(key) { return pending.has(keyOf(key)); },
+    /** How many keys have a follow-up queued (one per instance at most). */
+    get size() { return pending.size; },
+  };
+}
+
+/**
+ * Should a step that was DEFERRED past an await still run — and for whom?
+ *
+ * Two flows in extension.js decide this after something slow: a notification the user
+ * answers minutes later ("Reprovision now"), and the mic auto-arm's reachability probe.
+ * Both captured a target up front, and both must refuse to act when the window has
+ * switched since: reprovisioning would rebuild the OTHER VM with this instance's scripts
+ * and settings, and the auto-arm would open a microphone tunnel to a VM whose own
+ * preference may be off. Acting on the CURRENT instance is equally wrong — the answer
+ * (or the probe result) is about the captured one.
+ *
+ * `proceed` is the flow's own yes/no (the button pick, the probe result). Returns
+ * { run, reason: "declined" | "superseded" | "ok", target } — the caller decides whether
+ * a supersede is worth a toast (a user-facing prompt) or a log line (a silent auto-arm).
+ * Pure.
+ */
+function planCapturedFollowUp(gate, target, proceed) {
+  if (!proceed) return { run: false, reason: "declined", target: target || null };
+  if (targetSuperseded(gate, target)) return { run: false, reason: "superseded", target: target || null };
+  return { run: true, reason: "ok", target: target || null };
+}
+
+/**
  * Should a window attached over Remote-SSH adopt the instance it is attached to?
  * Pure, so the decision is unit-tested rather than only observable in a live window.
  *
@@ -956,7 +1066,7 @@ function toFileEntry(inst) {
 
 /** The full schema-v1 document for a registry. Pure. */
 function toFileDocument(registry) {
-  const doc = { version: SCHEMA_VERSION, defaultInstance: registry.defaultInstance || DEFAULT_INSTANCE_NAME, instances: {} };
+  const doc = { version: SCHEMA_VERSION, defaultInstance: registry.defaultInstance || DEFAULT_INSTANCE_NAME, instances: emptyMap() };
   for (const inst of list(registry)) doc.instances[inst.name] = toFileEntry(inst);
   return doc;
 }
@@ -988,7 +1098,7 @@ function save(file, registry, opts = {}) {
 /** A shallow, mutable copy of a registry (so the mutators never edit a loaded one
  *  in place — a caller holding the old object keeps seeing the old state). */
 function cloneRegistry(registry) {
-  const byName = {};
+  const byName = emptyMap();
   for (const inst of list(registry)) byName[inst.name] = { ...inst };
   return { byName, defaultInstance: (registry && registry.defaultInstance) || DEFAULT_INSTANCE_NAME };
 }
@@ -1006,7 +1116,7 @@ function cloneRegistry(registry) {
 function addInstance(registry, name, entry) {
   if (!isValidName(name)) throw new Error('Invalid instance name "' + name + '"');
   const next = cloneRegistry(registry);
-  if (next.byName[name]) throw new Error('Instance "' + name + '" already exists');
+  if (hasOwn(next.byName, name)) throw new Error('Instance "' + name + '" already exists');
   next.byName[name] = validatedInstance(name, entry);
   assertNoCollisions(next);
   return next;
@@ -1015,7 +1125,7 @@ function addInstance(registry, name, entry) {
 /** Merge changes into an existing instance (unknown name -> throw). Pure. */
 function updateInstance(registry, name, patch) {
   const next = cloneRegistry(registry);
-  const cur = next.byName[name];
+  const cur = ownInstance(next.byName, name);
   if (!cur) throw new Error('Unknown instance "' + name + '"');
   next.byName[name] = validatedInstance(name, { ...toFileEntry(cur), ...(patch || {}) });
   assertNoCollisions(next);
@@ -1054,7 +1164,7 @@ function assertNoCollisions(registry) {
 function removeInstance(registry, name) {
   if (name === DEFAULT_INSTANCE_NAME) throw new Error('The default instance cannot be removed');
   const next = cloneRegistry(registry);
-  if (!next.byName[name]) throw new Error('Unknown instance "' + name + '"');
+  if (!hasOwn(next.byName, name)) throw new Error('Unknown instance "' + name + '"');
   delete next.byName[name];
   if (next.defaultInstance === name) next.defaultInstance = DEFAULT_INSTANCE_NAME;
   return next;
@@ -1063,7 +1173,7 @@ function removeInstance(registry, name) {
 /** Point `defaultInstance` at an existing instance. Pure. */
 function setDefaultInstance(registry, name) {
   const next = cloneRegistry(registry);
-  if (!next.byName[name]) throw new Error('Unknown instance "' + name + '"');
+  if (!hasOwn(next.byName, name)) throw new Error('Unknown instance "' + name + '"');
   next.defaultInstance = name;
   return next;
 }
@@ -1076,8 +1186,9 @@ module.exports = {
   isLocalBackend, canonicalIdentity, localIdentityProblems, collisionProblems,
   deriveBackend, backendProblems,
   deriveDefaults, isDefaultInstance, toSshCfg,
-  parseRegistry, load, list, resolve, resolveActive, matchByRemoteHost,
-  createGate, createCoalescer, captureTarget, targetSuperseded, planRemoteAdoption, adoptRemoteInstance,
+  parseRegistry, load, list, resolve, resolveActive, hasInstance, matchByRemoteHost,
+  createGate, createCoalescer, createTargetQueue, captureTarget, targetSuperseded,
+  planCapturedFollowUp, planRemoteAdoption, adoptRemoteInstance,
   toFileEntry, toFileDocument, save,
   addInstance, updateInstance, removeInstance, setDefaultInstance,
 };
