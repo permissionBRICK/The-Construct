@@ -1,7 +1,16 @@
 # T3 Code: client-side voice capture + HTTPS serving
 
-Status: in flight (2026-09-02). Two tracks, built in parallel by dev+reviewer pairs,
-merged by the orchestrator afterwards.
+Status: MERGED to main 2026-09-02 (omniloop `wf_7MJmzOCU_Sr8`, Opus devs + Codex reviewers, both
+tracks approved in round 2). Track A merge `0e786a3`, Track B merge `bf7d9fc`. The T3 source
+branch `feat/construct-voice-client` in `/root/repos/t3code` (v0.0.37 + patch) is kept for reference;
+the shipped artifact is `patches/t3code-construct.patch`.
+
+Deviations accepted at merge: the host downloads the CA from `/etc/construct/t3code-ca.crt`
+(0644 copy; the 0700 TLS dir is unreadable for a seed-user login); `setup-t3-https.sh --teardown`
+removes the proxy without clearing the saved preference when T3 is switched off; readiness is
+`T3CODE_PUBLIC_BASE_URL` (written only when the proxy came up), never `T3CODE_HTTPS`. Not applied
+to `cloud/http.ts` `localOrigin` (loopback endpoint the relay dials). Field test on a real host is
+still pending: certificate trust dialog (non-elevated), Desktop-app mic, browser mic over https.
 
 ## Why
 
