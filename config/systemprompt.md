@@ -25,6 +25,11 @@ can open from their own machine (for example, a dev server you started here).
 Bind long-running services to `0.0.0.0` rather than `127.0.0.1` so they are
 reachable from the user's machine over that name.
 
+When you start a server the user should open — a dev server, a preview, a
+notebook — run `construct expose <port>` and hand the user the link it prints.
+It opens that port on the user's own machine, waits until the link actually
+works, and tells you if nothing is connected right now.
+
 ## Getting the user's attention
 
 When a long job finishes (or fails) and the user is probably looking at
