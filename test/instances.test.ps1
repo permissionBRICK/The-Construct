@@ -281,6 +281,64 @@ ok "parity: uppercase auth reported"        (@($mxReg.Problems | Where-Object { 
 ok "parity: scalar service reported"        (@($mxReg.Problems | Where-Object { $_ -match "'service' must be an object" }).Count -ge 1)
 ok "parity: bad port reported"              (@($mxReg.Problems | Where-Object { $_ -match 'invalid sshPort' }).Count -ge 1)
 
+# ── (g2b) KEY-CASING PARITY (mirrored in extension/test/instances.test.js) ──
+# JSON property lookup is case-SENSITIVE in JavaScript and USED TO BE case-INSENSITIVE
+# here (PSObject.Properties[$name]), so ONE registry's bytes aimed the two readers at
+# DIFFERENT VMs: { "VERSION":1, "DEFAULTINSTANCE":"x", "INSTANCES":{...} } was ignored by
+# the extension (agent-vm) and loaded here -- with 'x' as the DEFAULT instance -- while a
+# wrong-cased 'BACKEND'/'SSHHOST' inside an entry turned a derived hyperv-local instance
+# into a remote one on this side only. Both readers now do an ORDINAL, exact-case lookup
+# for every top-level and nested schema field, so a wrong-cased key is simply ABSENT:
+# never a value, and never a "must be a string" problem either.
+# These strings are the EXACT bytes extension/test/instances.test.js feeds inst.load() --
+# change the two lists together. (Deliberately no fixture spelling the SAME key twice in
+# two casings: ConvertFrom-Json itself refuses such a document on PowerShell 6+, so this
+# reader degrades to "not valid JSON" + the default instance -- fail-closed, not a target
+# disagreement, and not fixable in a 5.1-compatible way.)
+Write-Host ""
+Write-Host "=== key-casing parity (mirrored in extension/test/instances.test.js) ===" -ForegroundColor Cyan
+$caseFixtures = [ordered]@{
+    'upper-top'    = '{"VERSION":1,"DEFAULTINSTANCE":"work-vm","INSTANCES":{"work-vm":{"backend":"hyperv-local"}}}'
+    'mixed-top'    = '{"Version":1,"DefaultInstance":"work-vm","Instances":{"work-vm":{"backend":"hyperv-local"}}}'
+    'upper-nested' = '{"version":1,"instances":{"work-vm":{"BACKEND":"hyperv-remote","SSHHOST":"buildbox.local",' +
+                     '"SSHPORT":2201,"HOSTALIAS":"boxy","KEYNAME":"custom_key","CONFIGBRANCH":"branch-x",' +
+                     '"SCRIPTSDIR":"C:/tools","OWNER":"someone","SERVICE":{"url":"https://x"}}}}'
+    'mixed-nested' = '{"version":1,"instances":{"work-vm":{"Backend":"hyperv-remote","SshHost":"buildbox.local",' +
+                     '"VmName":"BuildBox","SshPort":"2201"}}}'
+    'upper-badtype' = '{"version":1,"instances":{"work-vm":{"SSHHOST":123,"KEYNAME":42}}}'
+}
+# Wrong-cased TOP-LEVEL keys: no version, no instances, no defaultInstance -- i.e. the
+# zero-change default, silently.
+foreach ($k in @('upper-top', 'mixed-top')) {
+    $cr = Read-ConstructInstances -Path (New-RegistryFile $caseFixtures[$k])
+    ok "casing ($k): the wrong-cased 'instances' bag is not read" (-not $cr.Instances.ContainsKey('work-vm'))
+    ok "casing ($k): only the default instance loads"             ($cr.Instances.Keys.Count -eq 1)
+    ok "casing ($k): the wrong-cased defaultInstance pointer is ignored" ($cr.Default -eq 'agent-vm')
+    ok "casing ($k): the default is byte-identical to today" (Test-ConstructDefaultInstance (Get-ConstructInstance -Registry $cr))
+    ok "casing ($k): silent -- an absent key is not a malformed file" (@($cr.Problems).Count -eq 0)
+}
+# Wrong-cased ENTRY fields: the entry loads, but every field is DERIVED (which is also
+# what makes it a canonical hyperv-local instance rather than a skipped one).
+foreach ($k in @('upper-nested', 'mixed-nested', 'upper-badtype')) {
+    $cr = Read-ConstructInstances -Path (New-RegistryFile $caseFixtures[$k])
+    ok "casing ($k): the entry itself still loads (its NAME is exact)" ($cr.Instances.ContainsKey('work-vm'))
+    if (-not $cr.Instances.ContainsKey('work-vm')) { continue }
+    $ce = $cr.Instances['work-vm']
+    ok "casing ($k): 'BACKEND' ignored -> derived hyperv-local" ($ce.Backend -ceq 'hyperv-local')
+    ok "casing ($k): 'SSHHOST' ignored -> derived host"         ($ce.VmHost -ceq 'work-vm.mshome.net')
+    ok "casing ($k): 'SSHPORT' ignored -> 22"                   ($ce.SshPort -eq 22)
+    ok "casing ($k): 'HOSTALIAS' ignored -> derived"            ($ce.HostAlias -ceq 'work-vm')
+    ok "casing ($k): 'VmName' ignored -> derived"               ($ce.VmName -ceq 'work-vm')
+    ok "casing ($k): 'KEYNAME' ignored -> derived"              ($ce.KeyName -ceq 'construct_work-vm_ed25519')
+    ok "casing ($k): 'CONFIGBRANCH' ignored -> derived branch"  ($ce.ConfigBranch -ceq 'vm-work-vm')
+    ok "casing ($k): 'SCRIPTSDIR' ignored -> null"              ($null -eq $ce.ScriptsDir)
+    ok "casing ($k): 'OWNER' ignored -> null"                   ($null -eq $ce.Owner)
+    ok "casing ($k): 'SERVICE' ignored -> null"                 ($null -eq $ce.Service)
+    ok "casing ($k): a wrong-cased entry is a DEFAULT-behaving local instance" (
+        @(Get-ConstructLocalIdentityProblem -Instance $ce).Count -eq 0)
+    ok "casing ($k): no problems (not even a type complaint)"   (@($cr.Problems).Count -eq 0)
+}
+
 # ── (g3) IDENTITY-FIELD FORMAT RULES (mirrored in extension/test/instances.test.js) ──
 # A field of the right TYPE can still be unusable -- or hostile -- once it reaches a
 # PowerShell command line, an ssh argv, a key path or a git ref. Such an entry is
