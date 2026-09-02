@@ -44,8 +44,27 @@ console.log("\n=== instance names ===");
 ok("name: agent-vm ok", inst.isValidName("agent-vm"));
 ok("name: single char ok", inst.isValidName("a"));
 ok("name: leading digit ok", inst.isValidName("9lives"));
-ok("name: 40 chars ok", inst.isValidName("a".repeat(40)));
-ok("name: 41 chars rejected", !inst.isValidName("a".repeat(41)));
+// The 63/64 BOUNDARY — a DNS label's own limit, because the name IS a label of
+// "<name>.mshome.net". Mirrored assertion-for-assertion in test/instances.test.ps1 and
+// service/tests/Constructd.Tests/Core/VmNameValidatorTests.cs.
+ok("name: 63 chars ok (the DNS label limit)", inst.isValidName("a".repeat(63)));
+ok("name: 64 chars rejected", !inst.isValidName("a".repeat(64)));
+ok("name: 63 chars with an interior hyphen ok", inst.isValidName("a".repeat(31) + "-" + "b".repeat(31)));
+// ...and the longest accepted name must still produce an identity the reader accepts.
+// Its key file is "construct_" + 63 + "_ed25519" = 81 characters, which is exactly why
+// KEY_FILE_NAME_RE has its own 128 bound while the ssh-alias token rule stays at 64.
+const LONGEST_NAME = "a".repeat(63);
+deepEq("name: the LONGEST accepted name yields a usable identity",
+  inst.identityProblems(inst.deriveDefaults(LONGEST_NAME, {})), []);
+eq("name: ...whose derived key file is 81 characters",
+  inst.deriveDefaults(LONGEST_NAME, {}).keyName.length, 81);
+ok("name: ...and that key file name is accepted", inst.isKeyFileName("construct_" + LONGEST_NAME + "_ed25519"));
+ok("name: ...while the ssh-ALIAS token rule is unchanged at 64",
+  inst.isSafeToken("a".repeat(64)) && !inst.isSafeToken("a".repeat(65)));
+ok("name: the key-file rule loosened only the LENGTH, not the character class",
+  !inst.isKeyFileName("bad/name") && !inst.isKeyFileName("bad name") &&
+  !inst.isKeyFileName("has..dots") && !inst.isKeyFileName("trailing.") &&
+  !inst.isKeyFileName("CON") && !inst.isKeyFileName("a".repeat(129)));
 ok("name: uppercase rejected", !inst.isValidName("Work-VM"));
 ok("name: underscore rejected", !inst.isValidName("work_vm"));
 ok("name: dot rejected", !inst.isValidName("work.vm"));
@@ -53,6 +72,35 @@ ok("name: slash rejected", !inst.isValidName("work/vm"));
 ok("name: leading dash rejected", !inst.isValidName("-work"));
 ok("name: empty rejected", !inst.isValidName(""));
 ok("name: non-string rejected", !inst.isValidName(null) && !inst.isValidName(7));
+// THE TRAILING-HYPHEN REGRESSION. isValidName used to accept "work-" while the identity
+// it derives — endpoint "work-.mshome.net" — was refused by identityProblems, so a local
+// instance with an "accepted" name could never be recorded. One rule: alphanumeric FIRST
+// AND LAST. Shared fixtures with test/instances.test.ps1 and
+// service/tests/Constructd.Tests/Core/VmNameValidatorTests.cs.
+ok("name: trailing dash rejected", !inst.isValidName("work-"));
+ok("name: a lone dash rejected", !inst.isValidName("-"));
+ok("name: dash in the middle still ok", inst.isValidName("work-vm-2"));
+ok("name: two chars ok", inst.isValidName("ab"));
+ok("name: ...and a trailing dash on a two-char name is not", !inst.isValidName("a-"));
+ok("name: a trailing newline is rejected (the .NET '$' trap)", !inst.isValidName("work\n"));
+// ...and the name a validator accepts must be one identityProblems can build an identity
+// from. That is the whole point of the shared rule, so it is asserted, not assumed.
+ok("name: every accepted name yields a usable identity",
+  ["a", "ab", "work-vm-2", "9lives", "a".repeat(63)]
+    .every((n) => inst.identityProblems(inst.deriveDefaults(n, {})).length === 0));
+// THE RESERVED PREFIX. "construct-<name>" was an abandoned alias convention whose
+// leftover prefix-strip in the branch derivation aliased one instance's config store onto
+// another's. Reserved in all three languages; same fixtures.
+ok("name: the reserved 'construct-' prefix is rejected", !inst.isValidName("construct-work"));
+ok("name: ...at any length", !inst.isValidName("construct-w") && !inst.isValidName("construct-"));
+ok("name: isReservedName is case-insensitive (a display-cased VM name asks the same)",
+  inst.isReservedName("Construct-Work") && inst.isReservedName("CONSTRUCT-work"));
+ok("name: a name merely CONTAINING it is fine", inst.isValidName("my-construct-work"));
+ok("name: 'construct' without the hyphen is a perfectly good name", inst.isValidName("construct"));
+ok("name: 'constructor' still loads (the prototype fixture)", inst.isValidName("constructor"));
+ok("name: 'work' — the instance 'construct-work' used to alias — is valid", inst.isValidName("work"));
+eq("name: the ONE rule is stated once and mentions the reserved prefix",
+  inst.NAME_RULE.includes("construct-") && inst.NAME_RULE.includes("1-63"), true);
 
 // ── The synthesized default: THE ZERO-CHANGE BAR ─────────────────────────────
 console.log("\n=== default instance synthesis (zero-change path) ===");
@@ -941,6 +989,51 @@ ok("proto: a __proto__ entry is skipped and pollutes nothing",
   !polluted.registry.byName["__proto__"] && ({}).vmName === undefined &&
   inst.isDefaultInstance(polluted.registry.byName["agent-vm"]));
 
+// ── END TO END: "work" and "construct-work" in ONE registry ─────────────────
+// The store-aliasing bug, as the file that produced it. Both names satisfied the OLD
+// name rule, so both were valid instances — and the branch derivation stripped the
+// prefix off the second one, initialising and syncing it on `vm-work`, the FIRST one's
+// config store. The prefix is reserved now, so the second entry never loads at all.
+// Byte-identical fixture in test/instances.test.ps1 and (for the name half)
+// service/tests/Constructd.Tests/Core/VmNameValidatorTests.cs.
+// THE FIXTURE BYTES, shared verbatim with test/instances.test.ps1 ($reservedJson) — the
+// two readers must agree about the SAME BYTES, so a re-serialization here (different
+// spacing, different key order) would make the "byte-identical fixture" claim untrue.
+const RESERVED_PREFIX_REGISTRY =
+  '{ "version": 1, "defaultInstance": "work", "instances": { "work": {}, "construct-work": {} } }';
+const reserved = inst.load({ path: writeRegistry(RESERVED_PREFIX_REGISTRY) });
+ok("reserved e2e: 'work' loads", inst.hasInstance(reserved, "work"));
+ok("reserved e2e: 'construct-work' does NOT", !inst.hasInstance(reserved, "construct-work"));
+eq("reserved e2e: exactly two instances remain (work + the synthesized default)",
+  reserved.instances.length, 2);
+ok("reserved e2e: the skip is reported, naming the entry",
+  reserved.problems.some((p) => p.includes("construct-work") && p.includes("is invalid") && p.includes("skipped")));
+eq("reserved e2e: 'work' keeps its own derived branch", inst.resolve(reserved, "work").configBranch, "vm-work");
+eq("reserved e2e: ...and its own derived key", inst.resolve(reserved, "work").keyName, "construct_work_ed25519");
+eq("reserved e2e: the derivation the provisioner would use agrees",
+  life.derivedConfigBranch(inst.resolve(reserved, "work").hostAlias), "vm-work");
+ok("reserved e2e: 'work' is still the registry default (a reserved sibling changes nothing)",
+  reserved.defaultInstance === "work");
+// ...and the same file cannot be written either: the mutators refuse what the reader skips.
+let reservedWriteThrew = false;
+try { inst.addInstance(reserved, "construct-work", {}); } catch (_) { reservedWriteThrew = true; }
+ok("reserved e2e: addInstance refuses to WRITE the reserved name", reservedWriteThrew);
+// A defaultInstance pointing at the reserved name is refused the same way.
+// Byte-identical with test/instances.test.ps1 too.
+const RESERVED_DEFAULT_REGISTRY =
+  '{ "version": 1, "defaultInstance": "construct-work", "instances": { "work": {} } }';
+const reservedDefault = inst.load({ path: writeRegistry(RESERVED_DEFAULT_REGISTRY) });
+eq("reserved e2e: a reserved defaultInstance falls back to agent-vm",
+  reservedDefault.defaultInstance, "agent-vm");
+ok("reserved e2e: ...and says so", reservedDefault.problems.some((p) => p.includes("construct-work")));
+// ...and the "byte-identical fixture" claim is ENFORCED, not asserted in a comment: the
+// PowerShell suite must drive these exact bytes (they are pure double-quoted JSON, so
+// they embed unchanged in a PowerShell single-quoted literal).
+const psSuiteSrc = fs.readFileSync(path.join(__dirname, "..", "..", "test", "instances.test.ps1"), "utf8");
+ok("reserved e2e: the PowerShell suite drives the IDENTICAL fixture bytes",
+  psSuiteSrc.includes("$reservedJson = '" + RESERVED_PREFIX_REGISTRY + "'") &&
+  psSuiteSrc.includes("$reservedDefaultJson = '" + RESERVED_DEFAULT_REGISTRY + "'"));
+
 // Port boundaries + numbers no Int32 can hold. A huge sshPort must be REPORTED and
 // fall back to 22, never crash the reader (PowerShell's [int] cast throws on these,
 // which would have escaped Read-ConstructInstances and broken "never throws").
@@ -1326,7 +1419,16 @@ const repoRootScripts = path.join(__dirname, "..", "..");
 eq("branch: the default alias derives 'vm'", life.derivedConfigBranch("agent-vm"), "vm");
 eq("branch: an empty alias derives 'vm'", life.derivedConfigBranch(""), "vm");
 eq("branch: 'work' derives 'vm-work'", life.derivedConfigBranch("work"), "vm-work");
-eq("branch: a 'construct-' prefix is stripped", life.derivedConfigBranch("construct-work"), "vm-work");
+// THE STORE-ALIASING REGRESSION: the derivation used to STRIP a leading "construct-",
+// which mapped the perfectly valid instance "construct-work" (registry branch
+// "vm-construct-work") onto "vm-work" — the store of the DIFFERENT, equally valid
+// instance "work". No prefix is stripped any more, and the prefix is reserved by every
+// name validator instead (see the reserved-prefix fixtures above), so the two can never
+// name one branch. Same fixture in test/config-sync.test.ps1.
+eq("branch: NO 'construct-' prefix is stripped (it would alias another instance's store)",
+  life.derivedConfigBranch("construct-work"), "vm-construct-work");
+ok("branch: ...so 'work' and 'construct-work' never share a branch",
+  life.derivedConfigBranch("construct-work") !== life.derivedConfigBranch("work"));
 eq("branch: the alias is lowercased+trimmed", life.derivedConfigBranch("  Work-2  "), "vm-work-2");
 eq("branch: an unusable alias falls back to 'vm'", life.derivedConfigBranch("work/one"), "vm");
 eq("branch: an instance whose branch matches the derivation needs no override",
@@ -1476,6 +1578,112 @@ eq("usage: the same instance is stable",
 // committed with the ACTIVE instance's branch in its message.
 console.log("\n=== extension.js wiring (source-pinned) ===");
 const extSrc = fs.readFileSync(path.join(__dirname, "..", "extension.js"), "utf8");
+
+// ── Registry-driven retargeting (the model above, as extension.js wires it) ──
+ok("retarget: the gate is keyed by the FULL target identity, not the name",
+  extSrc.includes("instanceGate.set(picked.instance.name, instances.targetFingerprint(picked.instance));") &&
+  extSrc.includes("function activeFingerprint() { return instances.targetFingerprint(activeInstance()); }") &&
+  // ...and no name-only set() is left anywhere (adoption goes through activeInstance()).
+  !/instanceGate\.set\([^,)]*\)\s*;/.test(extSrc));
+ok("retarget: the gate starts on the DEFAULT target's fingerprint (generation 0 for ever)",
+  extSrc.includes("instances.DEFAULT_INSTANCE_NAME, instances.targetFingerprint(instances.DEFAULT_INSTANCE));"));
+ok("retarget: EVERY route goes through ONE serialized transition",
+  extSrc.includes("function queueInstanceTransition(step) {") &&
+  extSrc.includes("instanceTransition = instanceTransition.then(step, step);") &&
+  // the picker/command, the setting, and the observer — and nothing calls it beside them
+  extSrc.includes("await queueInstanceTransition(onInstanceChanged);") &&
+  extSrc.includes("void queueInstanceTransition(onInstanceChanged);") &&
+  !/void onInstanceChanged\(\)/.test(extSrc));
+ok("retarget: a changed fingerprint is what queues one, and it is not queued twice",
+  extSrc.includes("function retargetIfChanged(why) {") &&
+  extSrc.includes("if (fp === queuedTargetFingerprint) return false;") &&
+  extSrc.includes("queuedTargetFingerprint = fp;"));
+ok("retarget: the transition hands over notify, mic AND forwarder on an identity change",
+  extSrc.includes("const identityChanged = appliedTargetFingerprint !== null && fingerprint !== appliedTargetFingerprint;") &&
+  extSrc.includes("const micSwitched = inst.name !== audioTargetInstance || identityChanged;") &&
+  extSrc.includes("if (notifyInstance !== inst.name || identityChanged) {") &&
+  extSrc.includes("if (forwarderInstance !== inst.name || forwarderArmed !== inst.name || identityChanged) {"));
+ok("retarget: the registry is OBSERVED — a debounced watch plus the refresh tick",
+  extSrc.includes("registryWatcher = fs.watch(dir, { persistent: false }, (_evt, name) => {") &&
+  extSrc.includes('retargetIfChanged("the instance registry changed on disk");') &&
+  extSrc.includes('if (retargetIfChanged("the instance registry changed")) return;'));
+ok("retarget: ZERO-CHANGE — no watcher at all when there is no registry file",
+  extSrc.includes("try { if (!fs.existsSync(file)) return; } catch (_) { return; }") &&
+  extSrc.includes("function stopRegistryWatch() {") &&
+  extSrc.includes("stopRegistryWatch();"));
+
+// ── Start & connect is bound to the instance it was pressed for ─────────────
+ok("start&connect: it captures a target (not just an instance) up front",
+  extSrc.includes("const startTarget = actionTarget();") &&
+  extSrc.includes("const startInstance = startTarget.instance;") &&
+  // ...and no longer re-derives the cfg from a bare instance inside the 150 s poll
+  !extSrc.includes("instances.toSshCfg(startInstance)"));
+ok("start&connect: the capture is re-checked after the credential lookup, every probe, and before the open",
+  extSrc.includes("const startSuperseded = () => {") &&
+  extSrc.includes("const startOpts = await driverOpts(startInstance);\n  // The credential lookup can prompt") &&
+  extSrc.includes("if (startSuperseded()) return;\n  if (!vmpower.startVm(") &&
+  extSrc.includes("const reachable = await ssh.isReachable({ timeoutMs: 6000, cfg: startTarget.cfg });") &&
+  extSrc.includes("if (startSuperseded()) return;\n        if (reachable) {\n          remote.openOnVm("));
+ok("start&connect: a supersession stops QUIETLY — it says the VM may still be starting",
+  extSrc.includes("may still be starting; switch back and connect from there.") &&
+  // ...rather than the generic "nothing was done", which would be untrue after a start
+  extSrc.includes('not opening it (that VM may still be starting)'));
+
+// ── The idle policy: gated extension-side AND scoped for the webview ────────
+ok("idle policy: the save is gated after the credential lookup and after the PUT",
+  extSrc.split('targetSuperseded(target, "The idle-policy change")').length === 3);
+ok("idle policy: the read gates its cache write the same way",
+  extSrc.includes("const token = instanceGate.token();") &&
+  extSrc.split("if (!instanceGate.valid(token)) return cachedIdlePolicy;").length === 3);
+ok("idle policy: the broadcast is SCOPED with the instance it describes",
+  extSrc.includes('safePost(w, { type: "idlePolicy", instance: inst.name, idlePolicy: applied })'));
+// ...and so is EVERY other per-instance narrow producer. Extension-side session gating
+// decides whether to POST; it says nothing about a message already queued behind a full
+// state push for another instance, which is what the scope stamp covers.
+ok("scope: the forwards snapshot names the instance whose forwarder produced it",
+  extSrc.includes("const owner = forwarderInstance || activeInstance().name;") &&
+  extSrc.includes('safePost(w, { type: "forwards", instance: owner, forwards: cachedForwards })'));
+ok("scope: the settings push names the instance whose scriptsDir it was read from",
+  extSrc.includes('safePost(webview, { type: "settings", instance: inst.name, settings })') &&
+  extSrc.includes('safePost(w, { type: "settings", instance: inst.name, settings })') &&
+  // read and stamped together, so the label can never describe another instance's file
+  extSrc.includes("const scriptsDir = resolveScriptsDirFor(inst);"));
+ok("scope: EVERY audio payload goes through the one builder that stamps it",
+  extSrc.includes("function audioMessage(status, instanceName) {") &&
+  extSrc.includes("function audioStatusInstance(session) {") &&
+  extSrc.includes("const msg = audioMessage(status, audioStatusInstance(session));") &&
+  // ...and the `type: "audio"` literal exists in exactly ONE place: the builder. No call
+  // site hand-rolls a payload, so none can forget the stamp.
+  extSrc.split('type: "audio"').length === 2);
+ok("scope: editProject is deliberately UNSCOPED, and says why",
+  extSrc.includes('safePost(webview, { type: "editProject", name: safe, profile });') &&
+  extSrc.includes("// DELIBERATELY UNSCOPED.") &&
+  extSrc.includes("SINGLE host config repo"));
+// ...and the webview's half of the same rule (the model above is of THIS line).
+const panelSrc = fs.readFileSync(path.join(__dirname, "..", "media", "panel.js"), "utf8");
+ok("idle policy (webview): a narrow message naming another instance is discarded",
+  panelSrc.includes("if (m.instance && shownInstance && m.instance !== shownInstance) return;") &&
+  // ...against the instance the last FULL state described
+  panelSrc.includes("shownInstance = s && s.instance ? s.instance : shownInstance;"));
+ok("idle policy (webview): the full state push is handled BEFORE the drop rule",
+  panelSrc.includes('if (m.type === "state") { render(m.state); return; }') &&
+  panelSrc.indexOf('if (m.type === "state") { render(m.state); return; }') <
+    panelSrc.indexOf("if (m.instance && shownInstance && m.instance !== shownInstance) return;"));
+
+// ── Every lifecycle.run carries the caller's captured-target predicate ──────
+// The destructive confirmation lives INSIDE run(), on the other side of an await.
+for (const [label, needle] of [
+  ["setCheckpoints", 'stillCurrent: () => !targetSuperseded(t, "Applying automatic checkpoints"),'],
+  ["reprovision (settings)", 'stillCurrent: () => !targetSuperseded(t, "Reprovision"),'],
+  ["customRebuild", 'stillCurrent: () => !targetSuperseded(rebuildTarget, action === "redownload" ? "Redownload" : "Reinstall"),'],
+  ["exportConfig", 'stillCurrent: () => !targetSuperseded(exportTarget, "Export config"),'],
+  ["reprovision/reinstall/redownload", 'stillCurrent: () => !targetSuperseded(lifeTarget, id === "reprovision" ? "Reprovision" : id === "reinstall" ? "Reinstall" : "Redownload"),'],
+]) {
+  ok(`lifecycle: ${label} passes its captured target into run()`, extSrc.includes(needle));
+}
+ok("lifecycle: EVERY run() call site carries one (none is left unguarded)",
+  extSrc.split("lifecycle.run(").length - 1 === extSrc.split("stillCurrent: () => !targetSuperseded(").length - 1);
+
 ok("import: the scan is coalesced through the per-instance coalescer",
   extSrc.includes("instances.createCoalescer({ throttleMs: SYNC_TICK_MIN_MS })") &&
   extSrc.includes("importCoalescer.run(t.name, force, function () { return importFromVm(t); })") &&
@@ -1618,7 +1826,9 @@ ok("mic switch: the destination is ALWAYS evaluated, through ONE serialized hand
   // a tunnel — is gone.
   !extSrc.includes("if (hostAudio && hostAudioInstance && hostAudioInstance !== inst.name) {"));
 ok("mic switch: ...only when the destination really changed (a single-VM window never re-arms)",
-  extSrc.includes("const micSwitched = inst.name !== audioTargetInstance;") &&
+  // "really changed" is the NAME **or** the identity: a registry rewritten under the same
+  // name puts the tunnel's endpoint somewhere else, and the mic terminates on an endpoint.
+  extSrc.includes("const micSwitched = inst.name !== audioTargetInstance || identityChanged;") &&
   extSrc.includes("if (micSwitched) {") &&
   extSrc.includes("audioTargetInstance = inst.name;") &&
   // the startup arm records the instance it evaluated, so the first onInstanceChanged
@@ -1738,6 +1948,207 @@ async function asyncTests() {
   ok("gate: the old token is now invalid", !gate.valid(t0));
   ok("gate: a token issued after the switch is valid", gate.valid(gate.token()));
   ok("gate: a missing token is never valid", !gate.valid(null) && !gate.valid(undefined));
+
+  // ── The target FINGERPRINT: what the gate really tracks ───────────────────
+  // The live failure: the registry is rewritten by ANOTHER process. Three shapes of it —
+  // the default flipped, the selected entry removed, and the entry rewritten UNDER THE
+  // SAME NAME (a rebuilt remote VM comes back on a different sshHost/sshPort). The third
+  // changed nothing a name-keyed gate could see, while every probe, notification stream,
+  // mic tunnel, forwarding transport, idle-policy cache and sync throttle went on using
+  // the endpoint that no longer existed.
+  console.log("\n=== the target fingerprint (a registry rewrite under one name) ===");
+  const fpBase = inst.deriveDefaults("work-vm", { backend: "hyperv-remote", sshHost: "buildbox.local", sshPort: 2201 });
+  const fpOf = inst.targetFingerprint;
+  eq("fp: a missing instance is the empty fingerprint", fpOf(null), "");
+  eq("fp: the same instance twice is the same fingerprint", fpOf(fpBase), fpOf(inst.deriveDefaults("work-vm",
+    { backend: "hyperv-remote", sshHost: "buildbox.local", sshPort: 2201 })));
+  const fpChanges = [
+    ["sshPort (a rebuilt remote VM's new forward)", { sshPort: 2202 }],
+    ["sshHost (the service moved it)", { sshHost: "buildbox-2.local" }],
+    ["vmName", { vmName: "work-vm-2" }],
+    ["hostAlias", { hostAlias: "other" }],
+    ["keyName", { keyName: "other_ed25519" }],
+    ["configBranch", { configBranch: "vm-other" }],
+    ["scriptsDir", { scriptsDir: "C:\\Other" }],
+    ["the service URL", { service: { url: "https://other.local:7462" } }],
+    ["the service auth kind", { service: { url: "https://buildbox.local:7462", auth: "token" } }],
+    ["owner", { owner: "someone-else" }],
+    ["backend", { backend: "proxmox" }],
+  ];
+  for (const [label, patch] of fpChanges) {
+    const changed = inst.deriveDefaults("work-vm",
+      { backend: "hyperv-remote", sshHost: "buildbox.local", sshPort: 2201, service: { url: "https://buildbox.local:7462" }, ...patch });
+    const base = inst.deriveDefaults("work-vm",
+      { backend: "hyperv-remote", sshHost: "buildbox.local", sshPort: 2201, service: { url: "https://buildbox.local:7462" } });
+    ok(`fp: ${label} changes the fingerprint`, fpOf(changed) !== fpOf(base));
+  }
+  eq("fp: the NAME is part of it too", fpOf(inst.deriveDefaults("a-vm", {})) === fpOf(inst.deriveDefaults("b-vm", {})), false);
+  // The backend is normalized the way the DRIVER lookup normalizes it, so a case-variant
+  // spelling is not read as "this window now drives a different machine".
+  eq("fp: the backend is normalized like the driver lookup (no spurious retarget)",
+    fpOf({ ...fpBase, backend: " HYPERV-REMOTE " }), fpOf(fpBase));
+  eq("fp: a string sshPort and the number it coerces to agree",
+    fpOf({ ...fpBase, sshPort: "2201" }), fpOf(fpBase));
+
+  // The gate keyed by it: same name + different identity IS a change.
+  const fpgate = inst.createGate("work-vm");
+  const beforeRewrite = fpgate.token();
+  eq("gate: it starts tracking the name as its fingerprint", fpgate.fingerprint, "work-vm");
+  ok("gate: re-setting the same name AND identity is not a change",
+    fpgate.set("work-vm", "work-vm") === false && fpgate.valid(beforeRewrite));
+  ok("gate: the SAME NAME with a different identity IS a change",
+    fpgate.set("work-vm", fpOf(fpBase)) === true);
+  ok("gate: ...so every token issued before the rewrite is invalid", !fpgate.valid(beforeRewrite));
+  eq("gate: the name it reports is unchanged (only the machine moved)", fpgate.name, "work-vm");
+  const afterRewrite = fpgate.token();
+  eq("gate: a token carries the identity it was issued under", afterRewrite.fingerprint, fpOf(fpBase));
+  ok("gate: re-setting the same identity again is not a change",
+    fpgate.set("work-vm", fpOf(fpBase)) === false && fpgate.valid(afterRewrite));
+  ok("gate: an omitted fingerprint still behaves exactly as the old name-only gate",
+    inst.createGate("agent-vm").set("work-vm") === true);
+
+  // ── The window that OBSERVES the registry ─────────────────────────────────
+  // extension.js can't be required here (it needs `vscode`), so the wiring it applies —
+  // activeInstance() -> gate.set(name, fingerprint); retargetIfChanged() -> ONE serialized
+  // transition; onInstanceChanged() -> hand over notify / mic / forwarder — is modelled
+  // over a REAL registry file that a "second process" rewrites between ticks. The source
+  // pins further down assert extension.js is wired this exact way.
+  console.log("\n=== registry-driven retargeting (another process rewrites instances.json) ===");
+  const liveDir = fs.mkdtempSync(path.join(tmpRoot, "live-"));
+  const livePath = path.join(liveDir, "instances.json");
+  const writeLive = (doc) => fs.writeFileSync(livePath, typeof doc === "string" ? doc : JSON.stringify(doc), "utf8");
+  const removeLive = () => { try { fs.unlinkSync(livePath); } catch (_) {} };
+
+  function makeWindow(workspaceValue, registryPath) {
+    const gate = inst.createGate(inst.DEFAULT_INSTANCE_NAME, inst.targetFingerprint(inst.DEFAULT_INSTANCE));
+    let applied = null, queued = null;
+    let chain = Promise.resolve();
+    const transitions = [];              // one entry per transition that actually ran
+    const handovers = [];                // "<session> <from> -> <to>" for each retarget
+    const sessions = { notify: null, mic: null, forwarder: null };
+    const queueTransition = (fn) => { chain = chain.then(fn, fn); return chain; };
+    const active = () => {
+      const registry = inst.load({ path: registryPath });
+      const picked = inst.resolveActive({ registry, setting: "", workspaceValue });
+      gate.set(picked.instance.name, inst.targetFingerprint(picked.instance));
+      return picked.instance;
+    };
+    const onInstanceChanged = async () => {
+      const i = active();
+      const fp = inst.targetFingerprint(i);
+      const identityChanged = applied !== null && fp !== applied;
+      applied = fp; queued = fp;
+      const endpoint = `${i.name}@${i.vmHost}:${i.sshPort}`;
+      for (const key of ["notify", "mic", "forwarder"]) {
+        // The extension's conditions, in the shape it writes them: the NAME changed, or
+        // the identity did (a same-name rewrite moves the endpoint all three terminate on).
+        if (sessions[key] !== null && sessions[key].startsWith(i.name + "@") && !identityChanged) continue;
+        handovers.push(`${key} ${sessions[key] || "none"} -> ${endpoint}`);
+        sessions[key] = endpoint;
+      }
+      transitions.push(i.name);
+      await Promise.resolve();           // stands in for the awaited refreshAll()
+    };
+    return {
+      gate, sessions, transitions, handovers,
+      activate() { applied = inst.targetFingerprint(active()); queued = applied; for (const k of ["notify", "mic", "forwarder"]) { const i = active(); sessions[k] = `${i.name}@${i.vmHost}:${i.sshPort}`; } },
+      retargetIfChanged() {
+        const fp = inst.targetFingerprint(active());
+        if (applied === null) { applied = fp; queued = fp; return false; }
+        if (fp === queued) return false;
+        queued = fp;
+        void queueTransition(onInstanceChanged);
+        return true;
+      },
+      settled: () => chain,
+    };
+  }
+
+  const TWO_VMS = {
+    version: 1, defaultInstance: "a-vm",
+    instances: {
+      "a-vm": { backend: "hyperv-remote", sshHost: "host-a.local", sshPort: 2201 },
+      "b-vm": { backend: "hyperv-remote", sshHost: "host-b.local", sshPort: 2202 },
+    },
+  };
+
+  // (1) ANOTHER PROCESS FLIPS THE DEFAULT. This window pins nothing, so its target moves.
+  writeLive(TWO_VMS);
+  const wDefault = makeWindow("", livePath);
+  wDefault.activate();
+  eq("retarget: the window starts on the registry default", wDefault.gate.name, "a-vm");
+  ok("retarget: a tick with nothing changed does nothing", wDefault.retargetIfChanged() === false);
+  writeLive({ ...TWO_VMS, defaultInstance: "b-vm" });
+  ok("retarget: flipping defaultInstance IS observed", wDefault.retargetIfChanged() === true);
+  await wDefault.settled();
+  deepEq("retarget: exactly ONE transition ran", wDefault.transitions, ["b-vm"]);
+  eq("retarget: the notification watcher moved to the new VM", wDefault.sessions.notify, "b-vm@host-b.local:2202");
+  eq("retarget: the mic tunnel too", wDefault.sessions.mic, "b-vm@host-b.local:2202");
+  eq("retarget: the forwarder too", wDefault.sessions.forwarder, "b-vm@host-b.local:2202");
+  ok("retarget: a token captured before it is invalid", true);
+  ok("retarget: a second tick after the transition is a no-op", wDefault.retargetIfChanged() === false);
+
+  // (2) THE SELECTED ENTRY IS REMOVED. resolveActive skips a name the registry no longer
+  //     has, so the window silently starts driving another VM — it must retarget for it.
+  writeLive(TWO_VMS);
+  const wRemoved = makeWindow("b-vm", livePath);
+  wRemoved.activate();
+  eq("retarget: the window starts on its own workspace selection", wRemoved.gate.name, "b-vm");
+  writeLive({ version: 1, defaultInstance: "a-vm", instances: { "a-vm": TWO_VMS.instances["a-vm"] } });
+  ok("retarget: removing the selected entry IS observed", wRemoved.retargetIfChanged() === true);
+  await wRemoved.settled();
+  deepEq("retarget: it falls back to the registry default, once", wRemoved.transitions, ["a-vm"]);
+  eq("retarget: and the sessions follow", wRemoved.sessions.forwarder, "a-vm@host-a.local:2201");
+
+  // (3) THE ENTRY IS REWRITTEN UNDER THE SAME NAME (the pre-fix blind spot). A remote
+  //     rebuild hands the VM back on a new SSH forward: the name does not change at all.
+  writeLive(TWO_VMS);
+  const wRebuilt = makeWindow("b-vm", livePath);
+  wRebuilt.activate();
+  const tokenBeforeRebuild = wRebuilt.gate.token();
+  eq("retarget: the pre-rebuild session holds the old forward", wRebuilt.sessions.notify, "b-vm@host-b.local:2202");
+  writeLive({ ...TWO_VMS, instances: { ...TWO_VMS.instances, "b-vm": { backend: "hyperv-remote", sshHost: "host-b.local", sshPort: 2299 } } });
+  ok("retarget: a same-name endpoint rewrite IS observed (the name-keyed gate saw nothing)",
+    wRebuilt.retargetIfChanged() === true);
+  await wRebuilt.settled();
+  eq("retarget: the name did not change", wRebuilt.gate.name, "b-vm");
+  ok("retarget: ...but the generation did, so in-flight work for the old endpoint is discarded",
+    !wRebuilt.gate.valid(tokenBeforeRebuild));
+  deepEq("retarget: one transition, still on b-vm", wRebuilt.transitions, ["b-vm"]);
+  eq("retarget: the notification watcher was reconnected to the NEW port", wRebuilt.sessions.notify, "b-vm@host-b.local:2299");
+  eq("retarget: the mic tunnel too", wRebuilt.sessions.mic, "b-vm@host-b.local:2299");
+  eq("retarget: the forwarder's transport too", wRebuilt.sessions.forwarder, "b-vm@host-b.local:2299");
+  ok("retarget: all three were handed OVER, not merely relabelled",
+    wRebuilt.handovers.filter((h) => h.includes("2202 -> b-vm@host-b.local:2299")).length === 3);
+
+  // (4) A NO-OP REWRITE. Re-serialized with different whitespace and key order, and with
+  //     fields spelled the way the derivation would fill them in anyway: the normalized
+  //     target is identical, so NOTHING happens — no generation bump, no handover.
+  writeLive(TWO_VMS);
+  const wNoop = makeWindow("b-vm", livePath);
+  wNoop.activate();
+  const noopGeneration = wNoop.gate.generation;
+  const noopToken = wNoop.gate.token();
+  writeLive('{\n  "version": 1,\n  "defaultInstance": "a-vm",\n  "instances": {\n' +
+    '    "b-vm": { "sshPort": "2202", "sshHost": "host-b.local", "backend": "hyperv-remote", "vmName": "b-vm" },\n' +
+    '    "a-vm": { "backend": "hyperv-remote", "sshHost": "host-a.local", "sshPort": 2201 }\n  }\n}');
+  ok("retarget: a no-op rewrite is NOT observed", wNoop.retargetIfChanged() === false);
+  await wNoop.settled();
+  deepEq("retarget: no transition ran", wNoop.transitions, []);
+  deepEq("retarget: nothing was handed over", wNoop.handovers, []);
+  eq("retarget: the generation did not move", wNoop.gate.generation, noopGeneration);
+  ok("retarget: in-flight work keeps running", wNoop.gate.valid(noopToken));
+
+  // (5) THE ZERO-CHANGE CONTROL: no registry file at all. The synthesized default is a
+  //     constant, so the fingerprint never changes and this path can never retarget.
+  removeLive();
+  const wDefaultPath = makeWindow("", livePath);
+  wDefaultPath.activate();
+  eq("retarget: with no registry the window is the synthesized default", wDefaultPath.gate.name, "agent-vm");
+  for (let i = 0; i < 5; i++) ok(`retarget: tick ${i + 1} on the default path does nothing`, wDefaultPath.retargetIfChanged() === false);
+  await wDefaultPath.settled();
+  deepEq("retarget: the single-VM path never runs a transition", wDefaultPath.transitions, []);
+  eq("retarget: ...and never bumps the generation", wDefaultPath.gate.generation, 0);
 
   // The real failure: instance A's slow probe resolves AFTER the user switched to B.
   // A refresh pipeline written the way extension.js writes it must drop A entirely —
@@ -1951,6 +2362,170 @@ async function asyncTests() {
   probeProjects.resolve(["default"]);
   eq("rebuild: aborts when the window switched during the project probe", await rebuild, "aborted");
   deepEq("rebuild: no VM-deleting lifecycle run was launched", launched, []);
+
+  // ── "Start & connect": start A, poll for up to 150 s, then OPEN A ──────────
+  // Two unbounded awaits (a credential lookup that can prompt, and a 4 s-interval SSH
+  // poll) sit between the button press and the window that gets opened. The flow used to
+  // capture only the INSTANCE, so a switch to B during either one still opened A —
+  // silently replacing the window the user was working in. Driven with a deferred probe.
+  console.log("\n=== start & connect is bound to the instance it was pressed for ===");
+  const startAndConnect = ({ guarded }) => {
+    const gate = inst.createGate("agent-vm", inst.targetFingerprint(A));
+    const opened = [];
+    const started = [];
+    const warned = [];
+    const probe = deferred();
+    const target = inst.captureTarget(gate, A);
+    const superseded = () => {
+      if (!inst.targetSuperseded(gate, target)) return false;
+      warned.push(target.name);
+      return true;
+    };
+    const flow = (async () => {
+      started.push(target.name);                    // the VM really is asked to start
+      const reachable = await probe.promise;        // the up-to-150 s poll
+      if (guarded && superseded()) return "abandoned";
+      if (!reachable) return "timed out";
+      opened.push(target.cfg.vmHost);               // ...and this is the window that opens
+      return "opened";
+    })();
+    return { gate, flow, opened, started, warned, probe };
+  };
+  // THE PRE-FIX CONTROL: without the check the continuation opens the instance the window
+  // has already left.
+  const scControl = startAndConnect({ guarded: false });
+  scControl.gate.set("work-vm", inst.targetFingerprint(B));
+  scControl.probe.resolve(true);
+  eq("start&connect(control): unguarded, it opens the VM the window switched AWAY from",
+    await scControl.flow, "opened");
+  deepEq("start&connect(control): ...in the current window", scControl.opened, ["agent-vm.mshome.net"]);
+  // ...and with the capture re-checked after the probe, it stops instead.
+  const scGuarded = startAndConnect({ guarded: true });
+  scGuarded.gate.set("work-vm", inst.targetFingerprint(B));
+  scGuarded.probe.resolve(true);
+  eq("start&connect: a switch during the poll abandons the open", await scGuarded.flow, "abandoned");
+  deepEq("start&connect: NOTHING was opened", scGuarded.opened, []);
+  deepEq("start&connect: the user is told which instance it was for", scGuarded.warned, ["agent-vm"]);
+  deepEq("start&connect: ...but the VM was still started, and is left running",
+    scGuarded.started, ["agent-vm"]);
+  // THE POSITIVE CONTROL: no switch, so it opens the VM it started, over that VM's cfg.
+  const scLive = startAndConnect({ guarded: true });
+  scLive.probe.resolve(true);
+  eq("start&connect: with no switch it opens as before", await scLive.flow, "opened");
+  deepEq("start&connect: on the captured instance's endpoint", scLive.opened, ["agent-vm.mshome.net"]);
+
+  // ── A late idle-policy response ───────────────────────────────────────────
+  // saveIdlePolicy PUTs to A and then caches + broadcasts the answer. Two layers now stop
+  // A's answer from landing on B: the extension-side gate (nothing is cached or sent), and
+  // the message SCOPE (a payload already in flight to a webview is discarded there).
+  console.log("\n=== a late idle-policy response ===");
+  const idleFlow = ({ guarded }) => {
+    const gate = inst.createGate("agent-vm", inst.targetFingerprint(A));
+    const target = inst.captureTarget(gate, A);
+    const put = deferred();
+    const posts = [];
+    const cache = { policy: null, instance: null };
+    const flow = (async () => {
+      const body = await put.promise;               // the PUT to the host service
+      if (guarded && inst.targetSuperseded(gate, target)) return "discarded";
+      cache.policy = body; cache.instance = target.name;
+      posts.push({ type: "idlePolicy", instance: target.name, idlePolicy: body });
+      return "applied";
+    })();
+    return { gate, flow, posts, cache, put };
+  };
+  const idleControl = idleFlow({ guarded: false });
+  idleControl.gate.set("work-vm", inst.targetFingerprint(B));
+  idleControl.put.resolve({ timeoutMinutes: 30, action: "shutdown" });
+  eq("idle(control): unguarded, A's late answer is applied after the switch", await idleControl.flow, "applied");
+  const idleGuarded = idleFlow({ guarded: true });
+  idleGuarded.gate.set("work-vm", inst.targetFingerprint(B));
+  idleGuarded.put.resolve({ timeoutMinutes: 30, action: "shutdown" });
+  eq("idle: a late answer is discarded after a switch", await idleGuarded.flow, "discarded");
+  eq("idle: ...so nothing was cached", idleGuarded.cache.policy, null);
+  deepEq("idle: ...and nothing was broadcast", idleGuarded.posts, []);
+  const idleLive = idleFlow({ guarded: true });
+  idleLive.put.resolve({ timeoutMinutes: 30, action: "shutdown" });
+  eq("idle: with no switch it is applied as before", await idleLive.flow, "applied");
+  eq("idle: the broadcast names the instance it describes", idleLive.posts[0].instance, "agent-vm");
+  // ── LAYER TWO: the WEBVIEW's drop rule, run from the SHIPPED panel.js bytes ───
+  // media/panel.js cannot be required here (it is a DOM IIFE), but its router is two
+  // lines, and both are EXTRACTED FROM THE FILE and executed rather than paraphrased —
+  // so this is a contract test of the code that ships, not of a copy of it. It covers
+  // every scoped narrow type (idlePolicy, forwards, audio, settings), the deliberately
+  // unscoped one (editProject), the unscoped-payload zero-change path, and `state`.
+  console.log("\n=== the webview discards narrow messages for another instance ===");
+  const dropSrc = (panelSrc.match(/\n\s*if \((m\.instance && shownInstance[^\n]*?)\) return;/) || [])[1];
+  const shownSrc = (panelSrc.match(/\n\s*shownInstance = (s && s\.instance \? s\.instance : shownInstance);/) || [])[1];
+  ok("webview: the drop rule was found in the shipped panel.js", !!dropSrc);
+  ok("webview: ...and so was the rule that records which instance is on screen", !!shownSrc);
+  const shippedDrop = new Function("m", "shownInstance", "return !!(" + dropSrc + ");");
+  const shippedShown = new Function("s", "shownInstance", "return " + shownSrc + ";");
+  // The router around them, in the order panel.js writes it: `state` is handled and
+  // RETURNS before the drop rule, which is what lets a state push move the panel.
+  const makePanelRouter = (drop) => {
+    const rendered = Object.create(null);
+    let shown = null;
+    return {
+      rendered,
+      get shown() { return shown; },
+      deliver(m) {
+        if (m.type === "state") { shown = shippedShown(m.state, shown); rendered.state = m.state; return "rendered"; }
+        if (drop(m, shown)) return "dropped";
+        rendered[m.type] = m;
+        return "rendered";
+      },
+    };
+  };
+  // Every narrow producer, with the instance each one stamps (see the source pins below).
+  const NARROW = [
+    ["idlePolicy", (i) => ({ type: "idlePolicy", instance: i, idlePolicy: { timeoutMinutes: 45 } })],
+    ["forwards", (i) => ({ type: "forwards", instance: i, forwards: { items: [{ id: "x" }] } })],
+    ["audio", (i) => ({ type: "audio", instance: i, enabled: false, capturing: false })],
+    ["settings", (i) => ({ type: "settings", instance: i, settings: { gitName: "who" } })],
+  ];
+  // The panel is showing B.
+  const panel = makePanelRouter(shippedDrop);
+  panel.deliver({ type: "state", state: { instance: "b-vm", online: true } });
+  eq("webview: the panel is on B after B's state push", panel.shown, "b-vm");
+  // PRE-FIX CONTROL: the same router WITHOUT the rule renders every one of A's messages
+  // onto the panel showing B — which is exactly the reported failure.
+  const preFixPanel = makePanelRouter(() => false);
+  preFixPanel.deliver({ type: "state", state: { instance: "b-vm", online: true } });
+  for (const [type, build] of NARROW) {
+    eq(`webview(control): without the rule, A's ${type} renders on B`,
+      preFixPanel.deliver(build("a-vm")), "rendered");
+    eq(`webview: A's ${type} is DISCARDED while the panel shows B`,
+      panel.deliver(build("a-vm")), "dropped");
+    ok(`webview: ...so nothing of A's ${type} reached the card`, panel.rendered[type] === undefined);
+    eq(`webview: B's own ${type} is rendered`, panel.deliver(build("b-vm")), "rendered");
+    eq(`webview: ...and it is B's payload`, panel.rendered[type].instance, "b-vm");
+  }
+  // ZERO CHANGE: an UNSCOPED narrow payload still applies — that is the single-VM path,
+  // where nothing stamps an instance that could mismatch.
+  for (const [type] of NARROW) {
+    eq(`webview: an UNSCOPED ${type} still applies (the single-VM path)`,
+      panel.deliver({ type }), "rendered");
+  }
+  // ...and editProject is deliberately unscoped: it is a direct reply about the ONE host
+  // config repo every instance shares, so a modal opened before a switch still populates.
+  eq("webview: editProject is unscoped and always applies",
+    panel.deliver({ type: "editProject", name: "shared", profile: {} }), "rendered");
+  // A full `state` for another instance is NEVER dropped — it IS the switch.
+  eq("webview: a full state for A is rendered, not dropped",
+    panel.deliver({ type: "state", state: { instance: "a-vm", online: true } }), "rendered");
+  eq("webview: ...and the panel is now on A", panel.shown, "a-vm");
+  eq("webview: ...so A's narrow messages are accepted from then on",
+    panel.deliver(NARROW[0][1]("a-vm")), "rendered");
+  eq("webview: ...and B's are discarded", panel.deliver(NARROW[0][1]("b-vm")), "dropped");
+  // A webview that has not rendered a state yet drops nothing (it has no instance to
+  // compare against), and a state push with no instance leaves the last one in place.
+  const fresh = makePanelRouter(shippedDrop);
+  eq("webview: a webview that has not rendered yet drops nothing",
+    fresh.deliver(NARROW[0][1]("a-vm")), "rendered");
+  fresh.deliver({ type: "state", state: { instance: "b-vm" } });
+  fresh.deliver({ type: "state", state: { online: true } });
+  eq("webview: a state push without an instance keeps the last one", fresh.shown, "b-vm");
 
   console.log("\n=== Remote-SSH adoption ===");
   const adoptReg = inst.load({ path: writeRegistry(JSON.stringify({

@@ -124,7 +124,14 @@
       if (name) post({ type: "setInstance", name });
     });
   }
+  // The instance the LAST full state described. A narrow live update (below) that names a
+  // DIFFERENT instance describes a VM this panel is no longer showing, and is dropped.
+  // Recorded from every state push, including the ones that carry no `instances` list —
+  // a single-VM install pushes `instance` all the same, and its value never changes, so
+  // the drop rule can never fire there.
+  let shownInstance = null;
   function renderInstances(s) {
+    shownInstance = s && s.instance ? s.instance : shownInstance;
     if (!instanceSelect) return;
     const names = Array.isArray(s.instances) ? s.instances.filter(Boolean) : [];
     if (names.length < 2) { instanceSelect.hidden = true; return; }
@@ -915,8 +922,18 @@
   window.addEventListener("message", (ev) => {
     const m = ev.data;
     if (!m) return;
-    if (m.type === "state") render(m.state);
-    else if (m.type === "audio") renderAudio(m);
+    if (m.type === "state") { render(m.state); return; }
+    // SCOPE CHECK for the narrow live updates below. A per-instance message that names an
+    // instance this panel is not showing describes another VM: a slow idle-policy PUT for
+    // A answered after the window switched to B, A's trailing "mic tunnel down", A's last
+    // forwards snapshot, A's settings file. Extension-side session gating cannot help any
+    // of them — it decides whether to POST, and these are already posted and queued behind
+    // B's state push. Generic on purpose: every per-instance producer stamps `instance`
+    // (forwards, audio, settings, idlePolicy) and is covered by this one line. A message
+    // with no `instance` (today: only `editProject`, a direct reply about the ONE host
+    // config repo every instance shares) is deliberately unaffected.
+    if (m.instance && shownInstance && m.instance !== shownInstance) return;
+    if (m.type === "audio") renderAudio(m);
     // Narrow live updates, like {type:'audio'}: a tunnel coming up or an applied idle
     // policy repaints one card without going through render(), which would read every
     // absent field of a partial state as "no reading" and blank the rest of the panel.

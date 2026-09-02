@@ -24,7 +24,8 @@
       Read-ConstructInstances                   -> [pscustomobject] @{ Instances; Default; Problems; Path; Exists }
       Get-ConstructInstance -Name               -> one normalised instance (falls back to the default)
       Resolve-ConstructInstanceDefaults -Name   -> the derivation rules, applied
-      Test-ConstructInstanceName -Name          -> [bool]
+      Test-ConstructInstanceName -Name          -> [bool] (the ONE name rule)
+      Test-ConstructReservedInstanceName -Name  -> [bool] (the 'construct-' half of it)
       Get-ConstructInstanceIdentityProblem -Instance [-Entry] -> [string[]] (@() = usable)
       Get-ConstructBackendProblem -Raw           -> [string[]] (the backend field's own rule)
       Get-ConstructCanonicalIdentity -Name      -> the identity a hyperv-local instance MUST have
@@ -48,8 +49,32 @@ $script:ConstructDefaultInstance = 'agent-vm'
 # DEFAULT_BACKEND in extension/src/instances.js and drivers/index.js.
 $script:ConstructDefaultBackend  = 'hyperv-local'
 $script:ConstructBackends        = @('hyperv-local', 'hyperv-remote')
-# Names are used verbatim in file names, ssh aliases and git refs.
-$script:ConstructInstanceNameRe  = '^[a-z0-9][a-z0-9-]{0,39}$'
+# THE ONE INSTANCE-NAME RULE -- mirrored verbatim by NAME_RE in
+# extension/src/instances.js, by the -VmName DNS-label check in Auto-Install.ps1 /
+# Create-AgentVM.ps1 (applied to the lowercased name) and by
+# Constructd.Core.Logic.VmNameValidator. Change all four together.
+#
+# A name is a LOWERCASE DNS LABEL: it becomes the guest hostname's first label, the ssh
+# alias, the construct_<name>_ed25519 key file and the vm-<name> git ref, so it must
+# start AND END alphanumeric ('work-' derives 'work-.mshome.net', which is not a host
+# name at all), and it is 1-63 characters -- the DNS label's own limit. The DERIVED key
+# file of a maximum-length name is 'construct_' + 63 + '_ed25519' = 81 characters, which
+# is why $script:ConstructKeyFileRe carries its own longer bound (the ssh-alias token
+# rule stays at 64; an alias is not a path, and HostAlias is the bare name).
+# \A and \z (not ^ and $): .NET's $ ALSO matches just before a trailing newline, so
+# "work`n" would be a valid name here and an invalid one in JavaScript.
+$script:ConstructInstanceNameRe  = '\A[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\z'
+# A RESERVED name prefix. 'construct-<name>' was an abandoned alias convention: nothing
+# ever shipped it, but the branch derivation used to STRIP it, so the valid instance
+# 'construct-work' derived branch 'vm-construct-work' in the registry and 'vm-work' in
+# the provisioner -- the config store of the DIFFERENT, equally valid instance 'work'.
+# The strip is gone (derivation is now exactly alias = name, key =
+# construct_<name>_ed25519, branch = vm-<name> everywhere) and the prefix is reserved
+# instead. Matched case-insensitively, so a display-cased VM name asks the same question.
+$script:ConstructReservedNamePrefix = 'construct-'
+# The ONE human-readable statement of that rule, shared with the extension
+# (instances.NAME_RULE), the installers and the service's 400. ASCII only.
+$script:ConstructInstanceNameRule = '1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with "construct-" are reserved.'
 
 function Get-ConstructInstancesPath {
     <#
@@ -66,7 +91,16 @@ function Get-ConstructInstancesPath {
 function Test-ConstructInstanceName {
     param([string]$Name)
     if (-not $Name) { return $false }
+    if (Test-ConstructReservedInstanceName $Name) { return $false }
     return [bool]([regex]::IsMatch($Name, $script:ConstructInstanceNameRe))
+}
+
+function Test-ConstructReservedInstanceName {
+    <# Does this name claim the reserved 'construct-' prefix? Case-insensitive, so the
+       callers that validate a display-cased VM name ask the same question. Pure. #>
+    param([string]$Name)
+    if (-not $Name) { return $false }
+    return $Name.ToLowerInvariant().StartsWith($script:ConstructReservedNamePrefix)
 }
 
 function New-ConstructDefaultInstance {
@@ -113,7 +147,15 @@ $script:ConstructIpv6ShapeRe = '\A[0-9A-Fa-f:.]{2,45}\z'
 # The only IPv4 tail an IPv6-mapped address may carry. Pinned here because .NET has
 # historically been lenient about leading zeros ('::ffff:1.2.3.004') where Node is not.
 $script:ConstructIpv4StrictRe = '\A(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\z'
+# An ssh_config Host alias: one path-free, shell-free token (HostAlias is the bare
+# instance name, so 64 is comfortably above the 63-character name limit).
 $script:ConstructSafeTokenRe = '\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z'
+# A key FILE name -- the SAME character class (no path or control-character safety is
+# loosened), with a longer length bound so the derived key of a maximum-length instance
+# name ('construct_' + 63 + '_ed25519' = 81) still fits. 128 is far inside Windows'
+# 255-character file-name limit for ~\.ssh\<KeyName>. Mirrors KEY_FILE_NAME_RE in
+# extension/src/instances.js.
+$script:ConstructKeyFileRe   = '\A[A-Za-z0-9][A-Za-z0-9._-]{0,127}\z'
 $script:ConstructDnsLabelRe  = '\A[A-Za-z0-9][A-Za-z0-9-]{0,62}\z'
 $script:ConstructBranchRe    = '\A[A-Za-z0-9][A-Za-z0-9._-]*\z'
 # Windows device names. They are NOT ordinary files at any path, so ~\.ssh\CON can
@@ -183,10 +225,15 @@ function Test-ConstructInstanceKeyFileName {
           * a reserved device stem (CON, NUL, COM1 ..., with or without an extension) is
             not a creatable file at all, so provisioning would fail after the VM exists.
         HostAlias deliberately keeps the plain token rule: an ssh_config Host alias is
-        not a path. Mirrors isKeyFileName() in extension/src/instances.js.
+        not a path, and it is the bare instance name. The key file's LENGTH bound is its
+        own ($script:ConstructKeyFileRe, 128) so a 63-character instance name's derived
+        key still fits; the character class is identical. Mirrors isKeyFileName() in
+        extension/src/instances.js.
     #>
     param([string]$Value)
-    if (-not (Test-ConstructInstanceToken $Value)) { return $false }
+    if ([string]::IsNullOrEmpty($Value)) { return $false }
+    if ($Value.Contains('..')) { return $false }
+    if (-not ([regex]::IsMatch($Value, $script:ConstructKeyFileRe))) { return $false }
     if ($Value.EndsWith('.')) { return $false }
     $stem = $Value.Split('.')[0]
     return [bool]($script:ConstructWindowsDeviceNames -notcontains $stem.ToLowerInvariant())
@@ -242,6 +289,12 @@ function Get-ConstructInstanceIdentityProblem {
             }
         }
     }
+    # The NAME is an identity field too -- every other one is derived from it.
+    # Read-ConstructInstances already refuses a bad key before it gets here, so this is
+    # the belt to that braces (mirrors identityProblems() in extension/src/instances.js).
+    if (-not (Test-ConstructInstanceName ([string]$Instance.Name))) {
+        & $add "`"name`" '$($Instance.Name)' is not a usable instance name ($($script:ConstructInstanceNameRule))"
+    }
     # The VM name doubles as the guest hostname, so it must be ONE DNS label
     # (Auto-Install.ps1 enforces the same shape before it creates anything).
     if (-not ([regex]::IsMatch([string]$Instance.VmName, $script:ConstructDnsLabelRe))) {
@@ -254,7 +307,7 @@ function Get-ConstructInstanceIdentityProblem {
         & $add "`"hostAlias`" '$($Instance.HostAlias)' is not a usable ssh alias (letters, digits, '.', '_' and '-', max 64)"
     }
     if (-not (Test-ConstructInstanceKeyFileName ([string]$Instance.KeyName))) {
-        & $add ("`"keyName`" '$($Instance.KeyName)' is not a usable key file name (letters, digits, '.', '_' and '-', max 64;" +
+        & $add ("`"keyName`" '$($Instance.KeyName)' is not a usable key file name (letters, digits, '.', '_' and '-', max 128;" +
             " no trailing dot and not a reserved Windows device name)")
     }
     if (-not (Test-ConstructInstanceBranch ([string]$Instance.ConfigBranch))) {
@@ -855,7 +908,7 @@ function ConvertFrom-ConstructInstancesJson {
             foreach ($p in $bag.PSObject.Properties) {
                 $name = $p.Name
                 if (-not (Test-ConstructInstanceName $name)) {
-                    $problems.Add("instance name '$name' is invalid (allowed: a-z, 0-9 and '-', starting with a letter or digit, max 40 chars) -- skipped")
+                    $problems.Add("instance name '$name' is invalid ($($script:ConstructInstanceNameRule)) -- skipped")
                     continue
                 }
                 $entry = $p.Value
@@ -1066,7 +1119,7 @@ function Get-ConstructInstanceEntryProblem {
     )
     $out = New-Object System.Collections.Generic.List[string]
     if (-not (Test-ConstructInstanceName $Name)) {
-        $out.Add("instance name '$Name' is invalid (allowed: a-z, 0-9 and '-', starting with a letter or digit, max 40 chars)")
+        $out.Add("instance name '$Name' is invalid ($($script:ConstructInstanceNameRule))")
         return @($out)
     }
     $obj = ConvertTo-ConstructInstanceEntryObject -Entry $Entry

@@ -34,7 +34,7 @@ internal static class ApiHelpers
     {
         if (!VmNameValidator.IsValid(name))
         {
-            return new VmLookup(null, Problems.BadRequest($"VM name must match {VmNameValidator.Pattern}."));
+            return new VmLookup(null, Problems.BadRequest($"VM name is invalid: {VmNameValidator.Rule}"));
         }
 
         var vm = await vms.GetAsync(name, cancellationToken).ConfigureAwait(false);

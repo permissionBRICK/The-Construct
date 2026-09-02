@@ -539,5 +539,147 @@ for (const action of ["reinstall", "redownload"]) {
 ok("elevate: setCheckpoints is untouched by the backend rule",
   life.buildInvocation("setCheckpoints", { settings: {}, enabled: true }).elevate === true);
 
-console.log(`\n  lifecycle launcher unit tests — ${pass}/${pass + fail} passed\n`);
-process.exit(fail ? 1 : 0);
+// ── run(): the CAPTURED TARGET is re-verified on the other side of the modal ──
+// The destructive confirmation opens INSIDE run(). Callers check their captured
+// generation BEFORE calling it, so between that check and the launch there is an await
+// the user can leave open indefinitely — long enough for another window to change the
+// global selection or rewrite the registry. Accepting then used to delete and rebuild the
+// instance this window had already left. Driven here through the REAL run(), with the
+// same test seams launchHostScript has, and with the confirmation held on a deferred
+// promise so the "switch" lands exactly while the modal is open.
+console.log("\n=== run(): the confirmation is an await, and this is what is on the far side ===");
+
+// A scripts dir whose two scripts DECLARE every parameter a rebuild needs, so the
+// capability gates pass and the flow reaches the confirmation.
+const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "construct-lifecycle-run-"));
+fs.writeFileSync(path.join(runDir, life.AUTO_INSTALL),
+  "param(\n" + EVERY_PARAM.map((p2) => "  [string]$" + p2 + ",").join("\n") +
+  "\n  [string]$Action,\n  [string]$BackupMode,\n  [string]$Projects,\n  [bool]$AutomaticCheckpoints\n)\n", "utf8");
+fs.writeFileSync(path.join(runDir, life.PROVISION),
+  "param(\n" + EVERY_PARAM.map((p2) => "  [string]$" + p2 + ",").join("\n") + "\n  [string]$Action\n)\n", "utf8");
+fs.writeFileSync(path.join(runDir, ".construct-settings.json"), JSON.stringify({ autoCheckpoints: true }), "utf8");
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((r) => { resolve = r; });
+  return { promise, resolve };
+}
+
+/** One run() through the seams. `stillCurrent` is the caller's captured-target predicate
+ *  (omitted = the pre-fix behaviour: nothing is re-checked). */
+function runRebuild(opts) {
+  const launches = [];
+  const warned = [];
+  const modal = deferred();
+  const fakeVs = {
+    window: {
+      showInformationMessage() {},
+      showErrorMessage() {},
+      showWarningMessage(title, options, action) {
+        // The destructive confirm is the 3-argument modal form; anything else is a
+        // plain warning toast, which must not be mistaken for an answer.
+        if (action === undefined) { warned.push(String(title)); return Promise.resolve(undefined); }
+        return modal.promise.then((answer) => (answer ? action : undefined));
+      },
+    },
+  };
+  const started = life.run(opts.action || "reinstall", {
+    scriptsDir: runDir, backupMode: "save", projects: [], instance: opts.instance,
+    stillCurrent: opts.stillCurrent,
+    _vscode: fakeVs, _platform: "win32",
+    _spawn: (file, args, options) => { launches.push({ file, args, options }); return { on() {}, unref() {} }; },
+  });
+  return { started, launches, warned, modal, settled: () => life.runSettled(), vscode: fakeVs };
+}
+
+(async () => {
+  // (a) THE BUG, with a PRE-FIX CONTROL. No predicate = nothing to re-check, and the
+  //     accept launches the rebuild — exactly what shipped, and exactly the failure.
+  const preFix = runRebuild({ instance: LOCAL_INST });
+  ok("run(control): the invocation is under way (the modal is open)", preFix.started === true);
+  ok("run(control): nothing has launched while the modal sits open", preFix.launches.length === 0);
+  preFix.modal.resolve(true);
+  await preFix.settled();
+  ok("run(control): WITHOUT a captured-target predicate the accept launches the rebuild",
+    preFix.launches.length === 1);
+
+  // ...and the same accept, with the predicate reporting that the window moved on.
+  let stale = false;
+  const guarded = runRebuild({ instance: LOCAL_INST, stillCurrent: () => !stale });
+  stale = true;                                  // the switch happens WHILE the modal is open
+  guarded.modal.resolve(true);
+  await guarded.settled();
+  ok("run(): a confirmed rebuild is ABANDONED when the captured target went stale",
+    guarded.launches.length === 0);
+
+  // (b) THE POSITIVE CONTROL: nothing changed, so the accept still rebuilds.
+  const live = runRebuild({ instance: LOCAL_INST, stillCurrent: () => true });
+  live.modal.resolve(true);
+  await live.settled();
+  ok("run(): with the target still current the rebuild launches as before", live.launches.length === 1);
+
+  // (c) A DECLINED confirmation launches nothing either way (and never asks the predicate).
+  let asked = 0;
+  const declined = runRebuild({ instance: LOCAL_INST, stillCurrent: () => { asked++; return true; } });
+  declined.modal.resolve(false);
+  await declined.settled();
+  ok("run(): a declined confirmation launches nothing", declined.launches.length === 0);
+  ok("run(): ...and never even asks whether the target is current", asked === 0);
+
+  // (d) A THROWING predicate fails CLOSED — nothing is deleted on an unusable answer.
+  const boom = runRebuild({ instance: LOCAL_INST, stillCurrent: () => { throw new Error("gate exploded"); } });
+  boom.modal.resolve(true);
+  await boom.settled();
+  ok("run(): an unusable predicate fails closed (nothing launches)", boom.launches.length === 0);
+
+  // (e) The marker clear is on the SAME side of the check: an abandoned rebuild must not
+  //     wipe the applied-checkpoints marker of the instance it did not rebuild.
+  fs.writeFileSync(path.join(runDir, ".construct-settings.json"),
+    JSON.stringify({ autoCheckpoints: true, vmAutoCheckpointsApplied: true }), "utf8");
+  const abandoned = runRebuild({ instance: LOCAL_INST, stillCurrent: () => false });
+  abandoned.modal.resolve(true);
+  await abandoned.settled();
+  const after = JSON.parse(fs.readFileSync(path.join(runDir, ".construct-settings.json"), "utf8"));
+  ok("run(): an abandoned rebuild leaves the applied-checkpoints marker alone",
+    after.vmAutoCheckpointsApplied === true && abandoned.launches.length === 0);
+
+  // ── The confirmation TEXT names the instance for a non-default one ─────────
+  console.log("\n=== the destructive confirmation names which VM it is about ===");
+  const asked2 = [];
+  const askVscode = (answer) => ({
+    window: {
+      showInformationMessage() {}, showErrorMessage() {},
+      showWarningMessage(title, options, action) {
+        asked2.push({ title, detail: options && options.detail });
+        return Promise.resolve(answer ? action : undefined);
+      },
+    },
+  });
+  const inv = life.buildInvocation("reinstall", { settings: {}, backupMode: "save", instance: DEFAULT_INST, instanceParams: EVERY_PARAM });
+  await life.confirmDestructive(inv, DEFAULT_INST, askVscode(false));
+  ok("confirm: the DEFAULT instance's dialog is byte-identical to the single-VM one",
+    asked2[0].title === "Reinstall the Construct VM?" &&
+    asked2[0].detail === "This DELETES the VM and its virtual disk, then rebuilds and reinstalls from the current ISO. This is irreversible and cannot be undone.");
+  await life.confirmDestructive(inv, undefined, askVscode(false));
+  ok("confirm: ...and so is the one for no instance at all",
+    asked2[1].title === asked2[0].title && asked2[1].detail === asked2[0].detail);
+  await life.confirmDestructive(inv, LOCAL_INST, askVscode(false));
+  ok("confirm: a non-default LOCAL instance is named in the title",
+    asked2[2].title.includes("work-vm") && asked2[2].title.startsWith("Reinstall the Construct VM"));
+  ok("confirm: ...without an endpoint (a local VM's address is derived from its name)",
+    !asked2[2].detail.includes("mshome.net"));
+  await life.confirmDestructive(inv, REMOTE_INST, askVscode(false));
+  ok("confirm: a REMOTE instance is named AND located (it lives on somebody else's host)",
+    asked2[3].title.includes("work-vm") &&
+    asked2[3].detail.includes("buildbox.example.local:2201") &&
+    asked2[3].detail.includes("This is irreversible and cannot be undone."));
+  const redown = life.buildInvocation("redownload", { settings: {}, backupMode: "save", instance: DEFAULT_INST, instanceParams: EVERY_PARAM });
+  await life.confirmDestructive(redown, DEFAULT_INST, askVscode(false));
+  ok("confirm: Redownload's default-instance dialog is unchanged too",
+    asked2[4].title === "Redownload the Construct VM?" &&
+    asked2[4].detail.startsWith("This DELETES the VM and its virtual disk, re-downloads the Ubuntu ISO"));
+
+  try { fs.rmSync(runDir, { recursive: true, force: true }); } catch (_) {}
+  console.log(`\n  lifecycle launcher unit tests — ${pass}/${pass + fail} passed\n`);
+  process.exit(fail ? 1 : 0);
+})();

@@ -255,9 +255,9 @@ its **own VM-side branch** inside it:
 
 - **Naming:** the default instance keeps the historical branch **`vm`**; any
   other instance uses **`vm-<instance>`**. A non-default instance's SSH alias is
-  its bare instance name, so the branch is `vm-` + the alias, lowercased (an
-  alias written in the older `construct-<name>` form is stripped of that prefix
-  first, so both spellings map to the same branch). The **slash** form
+  its bare instance name, so the branch is `vm-` + the alias, lowercased. That is
+  the whole rule: **no prefix is stripped**, and instance names may not start with
+  the reserved `construct-` (see below). The **slash** form
   `vm/<name>` is deliberately not used: git cannot hold `refs/heads/vm` and
   `refs/heads/vm/<x>` at the same time, so adding a second instance would break
   the first one's ref. Names are validated — `^[A-Za-z0-9][A-Za-z0-9._-]*$`, no
@@ -278,11 +278,21 @@ its **own VM-side branch** inside it:
   — it is the same device rule `keyName` gets for `~\.ssh\<keyName>`, and it
   matches the stem, not a substring (`console` and `con-work` are ordinary
   branch names).
-  The `-HostAlias` → branch derivation only lowercases and strips a leading
-  `construct-`; it never substitutes characters, so two different aliases can
-  never be folded onto one branch. An alias that does not yield a valid name
-  falls back to `vm`, and provisioning warns that the VM is sharing the default
-  instance's store.
+  The `-HostAlias` → branch derivation **only lowercases**; it never substitutes
+  or removes characters, so two different aliases can never be folded onto one
+  branch. It used to strip a leading `construct-` (from an alias convention that
+  was abandoned mid-project and never shipped), and that fold was a
+  store-aliasing bug rather than compatibility: the registry derives the
+  perfectly valid instance `construct-work` to branch `vm-construct-work`, while
+  the provisioner answered `vm-work` — the store of the *different*, equally
+  valid instance `work`. The strip is gone and the prefix is **reserved**
+  instead: every name validator (the extension's `isValidName`,
+  `lib/AgentVm.Instances.ps1`, `Auto-Install.ps1`/`Create-AgentVM.ps1` and the
+  host service) refuses a name beginning with `construct-`, so the derivation is
+  now exactly one rule everywhere — alias = `<name>`, key =
+  `construct_<name>_ed25519`, branch = `vm-<name>`. An alias that does not yield
+  a valid name falls back to `vm`, and provisioning warns that the VM is sharing
+  the default instance's store.
 - **One branch, one VM — enforced in the registry.** `configBranch` is a
   *cross-entry identity* in `instances.json`, alongside `vmName`/`sshHost`/
   `hostAlias`/`keyName`: no two entries may name the same branch (compared

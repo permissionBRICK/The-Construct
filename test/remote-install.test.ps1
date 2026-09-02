@@ -61,6 +61,18 @@ function Get-InstallerFunctionText([string]$Name) {
     if (-not $fn) { return "" }
     return [string]$fn.Extent.Text
 }
+# The ONE name rule's constants live at SCRIPT scope in Auto-Install.ps1 (the -VmName
+# check defines them before any function runs), and Test-ConstructRemoteInstanceName
+# reads them -- so they are pulled from the same AST rather than copied here, where the
+# two could drift apart silently (an undefined pattern matches everything).
+foreach ($vn in @('ConstructVmNameRe', 'ConstructVmNameRule')) {
+    $assign = $autoAst.FindAll({
+        param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+                  $n.Left.Extent.Text -eq ('$script:' + $vn)
+    }, $true) | Select-Object -First 1
+    ok "extract: Auto-Install.ps1 defines `$script:$vn" ($null -ne $assign)
+    if ($assign) { Invoke-Expression ([string]$assign.Extent.Text) }
+}
 # Invoke-Expression HERE, at script scope, so the functions land where the scenarios
 # below (and each other) can see them -- doing it inside a helper would define them in
 # that helper's scope and nowhere else.
@@ -240,11 +252,32 @@ ok "name: ...and the refusal happens before anything is created" (
     $autoAst.Extent.Text.IndexOf('while (-not (Test-ConstructRemoteInstanceName $instName))') -lt
     $autoAst.Extent.Text.IndexOf('New-ConstructRemoteVmRecord -Name $instName'))
 ok "name: digits and a leading digit are valid" (Test-ConstructRemoteInstanceName "9vm")
-ok "name: 40 characters is the limit" (Test-ConstructRemoteInstanceName ("a" * 40))
-ok "name: 41 is too long" (-not (Test-ConstructRemoteInstanceName ("a" * 41)))
+# The 63/64 boundary -- the DNS label's own limit (the name IS a label of the endpoint).
+# Same fixture in extension/test/instances.test.js, test/instances.test.ps1 and
+# service/tests/Constructd.Tests/Core/VmNameValidatorTests.cs.
+ok "name: 63 characters is the limit" (Test-ConstructRemoteInstanceName ("a" * 63))
+ok "name: 64 is too long" (-not (Test-ConstructRemoteInstanceName ("a" * 64)))
 ok "name: empty is invalid" (-not (Test-ConstructRemoteInstanceName ""))
 ok "name: uppercase is invalid (the SSH alias and the branch are lowercase)" (-not (Test-ConstructRemoteInstanceName "Work-VM"))
 ok "name: a leading hyphen is invalid" (-not (Test-ConstructRemoteInstanceName "-vm"))
+# THE TRAILING-HYPHEN REGRESSION: "work-" was accepted here and by the registry's own
+# isValidName, while the identity it derives ("work-.mshome.net") is not a host name at
+# all -- so a VM created under it could never be recorded. Alphanumeric FIRST AND LAST.
+# Shared fixtures with extension/test/instances.test.js, test/instances.test.ps1 and
+# service/tests/Constructd.Tests/Core/VmNameValidatorTests.cs.
+ok "name: a TRAILING hyphen is invalid" (-not (Test-ConstructRemoteInstanceName "work-"))
+ok "name: a lone hyphen is invalid" (-not (Test-ConstructRemoteInstanceName "-"))
+ok "name: an interior hyphen is still fine" (Test-ConstructRemoteInstanceName "work-vm-2")
+# THE RESERVED PREFIX: "construct-<name>" is the namespace the derived key file and
+# config-sync branch live in, and the exact name whose prefix the branch derivation used
+# to strip -- aliasing a different instance's config store.
+ok "name: the reserved 'construct-' prefix is refused" (
+    -not (Test-ConstructRemoteInstanceName "construct-work"))
+ok "name: ...case-insensitively" (-not (Test-ConstructRemoteInstanceName "Construct-work"))
+ok "name: a name merely CONTAINING it is fine" (Test-ConstructRemoteInstanceName "my-construct-work")
+ok "name: 'construct' without the hyphen is a good name" (Test-ConstructRemoteInstanceName "construct")
+ok "name: 'work' -- the instance 'construct-work' used to alias -- is valid" (
+    Test-ConstructRemoteInstanceName "work")
 ok "name: a dot is invalid (it is a DNS LABEL, not a name)" (-not (Test-ConstructRemoteInstanceName "work.vm"))
 ok "name: a path separator is invalid (it becomes a key FILE name)" (-not (Test-ConstructRemoteInstanceName "a/b"))
 ok "name: whitespace is invalid" (-not (Test-ConstructRemoteInstanceName "work vm"))

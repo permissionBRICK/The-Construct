@@ -143,7 +143,10 @@ let instanceStatusItem = null;
  * one, so a slow stage that resolves AFTER a switch is discarded instead of painting
  * the previous VM's data under the new instance's name.
  */
-const instanceGate = instances.createGate(instances.DEFAULT_INSTANCE_NAME);
+// Seeded with the DEFAULT target's fingerprint, not just its name: an install with no
+// registry resolves that same target for ever, so its gate never bumps at all.
+const instanceGate = instances.createGate(
+  instances.DEFAULT_INSTANCE_NAME, instances.targetFingerprint(instances.DEFAULT_INSTANCE));
 
 /** The instance registry, re-read at most every REGISTRY_TTL_MS. Never throws. */
 function registryNow(force) {
@@ -210,9 +213,18 @@ function activeInstance() {
   // Keep the gate in step with the RESOLVED answer, so a change that arrives by any
   // route (the setting, another window's registry edit, adoption) invalidates in-flight
   // refreshes even when it didn't come through switchInstance().
-  instanceGate.set(picked.instance.name);
+  //
+  // Keyed by the COMPLETE target identity, not by the name: a registry entry rewritten
+  // under the SAME name (a rebuilt remote VM on a new sshHost/sshPort, a changed
+  // configBranch or service URL) reaches a different machine, and a name-keyed gate saw
+  // nothing at all while every in-flight probe kept the old endpoint's answer alive.
+  instanceGate.set(picked.instance.name, instances.targetFingerprint(picked.instance));
   return picked.instance;
 }
+
+/** The fingerprint of the target this window drives right now (instances.targetFingerprint
+ *  of the resolved active instance). */
+function activeFingerprint() { return instances.targetFingerprint(activeInstance()); }
 
 /** The ssh.js cfg for the active instance — the ONE way any module reaches the VM. */
 function activeCfg() {
@@ -751,6 +763,13 @@ function refreshTick() {
       endReprovisionFastRefresh();
     }
   }
+  // Did another process change WHICH VM this window drives (or that VM's endpoint) since
+  // the last tick? Re-read the registry and, if the target really changed, hand the
+  // sessions over through the one serialized transition — which ends in its own
+  // refreshAll, so this tick must not run a second one beside it. On the default path
+  // (no registry file) the fingerprint is a constant and this is a no-op.
+  registryNow(true);
+  if (retargetIfChanged("the instance registry changed")) return;
   refreshAll();
 }
 
@@ -1144,9 +1163,17 @@ function noteForwarderConnected() {
  * Its OWN message type, not a partial `state`: `render(state)` in the webviews treats an
  * absent field as "no reading", so a `{forwards}`-only state would blank the power button,
  * flip the ONLINE pill and reset the install markers. Same reason `{type:'audio'}` exists.
+ *
+ * SCOPED with the instance whose forwarder produced the snapshot. Session-slot ownership
+ * (`forwarderSlot.owns`) stops a superseded session from ever reaching this function, but
+ * it says nothing about a message ALREADY POSTED to a webview: a snapshot for A queued
+ * behind a full state push for B would still render on B's card. With no live session
+ * there is nothing to describe, so the empty snapshot is stamped with the window's current
+ * target — which is exactly what should be shown then.
  */
 function broadcastForwards() {
-  for (const w of liveWebviews) safePost(w, { type: "forwards", forwards: cachedForwards });
+  const owner = forwarderInstance || activeInstance().name;
+  for (const w of liveWebviews) safePost(w, { type: "forwards", instance: owner, forwards: cachedForwards });
 }
 
 /**
@@ -1162,12 +1189,17 @@ async function readIdlePolicy(inst) {
     return null;
   }
   if (cachedIdlePolicyInstance !== target.name) { cachedIdlePolicy = null; cachedIdlePolicyInstance = target.name; }
+  // Same rule as saveIdlePolicy: the credential lookup and the GET both outlive a switch
+  // easily, and the cache they write is what the next state push paints.
+  const token = instanceGate.token();
   try {
     const opts = await driverOpts(target);
+    if (!instanceGate.valid(token)) return cachedIdlePolicy;
     const { client } = hypervRemote.resolveClient(target, { ...opts, log: logLine });
     if (!client) return cachedIdlePolicy;
     const name = hypervRemote.vmNameOf(target);
     const body = await client.request("GET", `/vms/${encodeURIComponent(name)}/idle-policy`);
+    if (!instanceGate.valid(token)) return cachedIdlePolicy;
     const policy = forwarderui.toPanelIdlePolicy(body);
     if (policy) cachedIdlePolicy = policy;
     return cachedIdlePolicy;
@@ -1192,16 +1224,29 @@ async function saveIdlePolicy(policy) {
   const wanted = forwarderui.clampIdlePolicy(policy, cap);
   try {
     const opts = await driverOpts(inst);
+    // The credential lookup can prompt, and the PUT is a network round trip: both are
+    // long enough for a switch. A response for A must not be cached as B's policy, and
+    // must not be broadcast either — the card it paints sits on whatever instance the
+    // panel is showing.
+    if (targetSuperseded(target, "The idle-policy change")) return;
     const { client, problem } = hypervRemote.resolveClient(inst, { ...opts, log: logLine });
     if (!client) throw new Error(problem);
     const body = await client.request("PUT", `/vms/${encodeURIComponent(hypervRemote.vmNameOf(inst))}/idle-policy`,
       { timeoutMinutes: wanted.timeoutMinutes, action: wanted.action });
+    // The PUT ITSELF LANDED — the host service has applied it to the instance it was sent
+    // to, which is the right one either way. Only what we do with the ANSWER is gated:
+    // the cache and the panel belong to whatever this window drives now.
+    if (targetSuperseded(target, "The idle-policy change")) return;
     const applied = forwarderui.toPanelIdlePolicy(body);
     if (applied) {
       cachedIdlePolicy = applied;
       cachedIdlePolicyInstance = inst.name;
-      // Own message type, for the same reason broadcastForwards has one.
-      for (const w of liveWebviews) safePost(w, { type: "idlePolicy", idlePolicy: applied });
+      // Own message type, for the same reason broadcastForwards has one — and SCOPED, so
+      // the webview can drop a payload that describes another instance. The extension-side
+      // gate above and this one are two layers of the same rule: the gate stops a late
+      // response from being cached at all, the scope stops one that is already in flight
+      // to a webview from painting the card of the instance now on screen.
+      for (const w of liveWebviews) safePost(w, { type: "idlePolicy", instance: inst.name, idlePolicy: applied });
       if (applied.clamped) {
         vscode.window.showInformationMessage(
           `Idle timeout set to ${applied.timeoutMinutes} minutes — the host's administrator caps it there.`
@@ -1772,21 +1817,26 @@ function warnNoScriptsDir() {
  *  install folder can't be found — the panel keeps its HTML defaults). */
 function pushSettings(webview) {
   if (!webview) return;
-  const scriptsDir = resolveScriptsDir();
+  // Read and STAMP in the same breath: the file is `<the active instance's scriptsDir>
+  // \.construct-settings.json`, so the settings are per-instance and the name that labels
+  // them must be the one they were just read for.
+  const inst = activeInstance();
+  const scriptsDir = resolveScriptsDirFor(inst);
   if (!scriptsDir) return;
   let settings;
   try { settings = host.readSettings(scriptsDir); } catch (_) { return; }
-  safePost(webview, { type: "settings", settings });
+  safePost(webview, { type: "settings", instance: inst.name, settings });
 }
 
 /** Push the on-disk settings to EVERY live surface (so both mic switches — the
  *  console #voiceSwitch and the settings #setMic — reflect the same persisted value). */
 function broadcastSettings() {
-  const scriptsDir = resolveScriptsDir();
+  const inst = activeInstance();                 // read and stamp together (see pushSettings)
+  const scriptsDir = resolveScriptsDirFor(inst);
   if (!scriptsDir) return;
   let settings;
   try { settings = host.readSettings(scriptsDir); } catch (_) { return; }
-  for (const w of liveWebviews) safePost(w, { type: "settings", settings });
+  for (const w of liveWebviews) safePost(w, { type: "settings", instance: inst.name, settings });
 }
 
 /** Persist the mic-passthrough preference (micPassthrough in .construct-settings.json).
@@ -1910,11 +1960,32 @@ async function runStartAndConnect() {
     );
     return;
   }
-  const startInstance = activeInstance();
+  // CAPTURED, with a generation: this flow has a credential lookup and then an SSH poll
+  // that runs for up to 150 s, and the user can switch instances at any point in it. The
+  // continuation used to start A and then OPEN A in a window that had since moved to B.
+  const startTarget = actionTarget();
+  const startInstance = startTarget.instance;
+  /**
+   * Stop, quietly. Unlike the other captured flows this one may already have STARTED a
+   * VM — that is not undone (the user asked for it, and it is a safe state to leave a VM
+   * in), so the message says what did and did not happen rather than "nothing was done".
+   */
+  const startSuperseded = () => {
+    if (!instances.targetSuperseded(instanceGate, startTarget)) return false;
+    const now = activeInstance().name;
+    logLine(`instances: "Start & connect" was started for "${startTarget.name}" but the window switched to "${now}" — not opening it (that VM may still be starting)`);
+    vscode.window.showWarningMessage(
+      `“Start & connect” was started for the “${startTarget.name}” instance, but this window has since switched to “${now}” — it wasn't opened. “${startTarget.name}” may still be starting; switch back and connect from there.`
+    );
+    return true;
+  };
   // A remote instance is started by its host service over HTTPS, which needs the
   // credential driverOpts() resolves; a local one gets {} and the elevated Start-VM it
   // always got.
   const startOpts = await driverOpts(startInstance);
+  // The credential lookup can prompt, so it is an unbounded await — and the VM has NOT
+  // been asked to start yet, so this abort really does leave both instances untouched.
+  if (startSuperseded()) return;
   if (!vmpower.startVm({ debug: debugEnabled(), instance: startInstance, ...startOpts })) {
     // The driver logs why (no service URL, no token, no PowerShell helper). Say so here
     // too: a silent no-op on a button press is the one thing that must not happen.
@@ -1937,8 +2008,15 @@ async function runStartAndConnect() {
       let waited = 0;
       while (waited < maxMs) {
         if (token.isCancellationRequested) return;
-        if (await ssh.isReachable({ timeoutMs: 6000, cfg: instances.toSshCfg(startInstance) })) {
-          remote.openOnVm({ path: "/root/repos", newWindow: false, cfg: instances.toSshCfg(startInstance) });
+        const reachable = await ssh.isReachable({ timeoutMs: 6000, cfg: startTarget.cfg });
+        // Re-checked after EVERY probe — including the successful one, so the check sits
+        // immediately before openOnVm with nothing awaited in between. 150 s is a long
+        // time to hold a window's identity, and opening the wrong VM is the failure this
+        // guards. The poll simply stops: the VM may well be up by now, and it is left
+        // running rather than powered back off behind the user's back.
+        if (startSuperseded()) return;
+        if (reachable) {
+          remote.openOnVm({ path: "/root/repos", newWindow: false, cfg: startTarget.cfg });
           refreshAll();
           return;
         }
@@ -2030,7 +2108,11 @@ async function offerApplyCheckpoints(scriptsDir, enabled, changed) {
   if (targetSuperseded(t, "Applying automatic checkpoints")) return;
   // Refused (a non-default instance this install can't target) => no console runs, so
   // no result file will ever appear: don't start the poller.
-  if (lifecycle.run("setCheckpoints", { scriptsDir, enabled, instance: t.instance, env: { CONSTRUCT_CHECKPOINT_RESULT: resultFile } }) === false) return;
+  if (lifecycle.run("setCheckpoints", {
+    scriptsDir, enabled, instance: t.instance,
+    stillCurrent: () => !targetSuperseded(t, "Applying automatic checkpoints"),
+    env: { CONSTRUCT_CHECKPOINT_RESULT: resultFile },
+  }) === false) return;
   const startedAt = Date.now();
   const timer = setInterval(() => {
     let res = null;
@@ -2072,7 +2154,10 @@ async function startConstructReprovision(scriptsDir, target) {
     if (targetSuperseded(t, "Reprovision")) return false;
     // run() refuses (and explains) when this install can't TARGET the active instance;
     // nothing was launched then, so don't start polling for a provisioned commit.
-    if (lifecycle.run("reprovision", { scriptsDir, projects: selected, instance: t.instance }) === false) return false;
+    if (lifecycle.run("reprovision", {
+      scriptsDir, projects: selected, instance: t.instance,
+      stillCurrent: () => !targetSuperseded(t, "Reprovision"),
+    }) === false) return false;
     beginReprovisionFastRefresh();
     return true;
   } catch (e) {
@@ -2377,10 +2462,37 @@ function broadcastAudio(status, session) {
     logLine(`audio: a status update from a superseded mic session was dropped — the tunnel slot now belongs to "${audioSlot.name}"`);
     return;
   }
-  const msg = { type: "audio", enabled: !!status.enabled, capturing: !!status.capturing };
+  const msg = audioMessage(status, audioStatusInstance(session));
+  for (const w of liveWebviews) safePost(w, msg);
+}
+
+/**
+ * The instance an audio status DESCRIBES — the mic tunnel's `ssh -R` terminates on one VM.
+ *
+ * The slot check above rejects a status from a session a later enable superseded, but it
+ * cannot help a message that has ALREADY been posted: queued behind a full state push for
+ * B, A's trailing "tunnel down" would still flip B's console switch. So every audio message
+ * carries the instance it is about and the webview discards a mismatch. A status with no
+ * session (the ungated call sites — "there is nothing armed") is about this window's
+ * current target, which is what it is stamped with.
+ */
+function audioStatusInstance(session) {
+  if (session != null && audioSlot.name) return audioSlot.name;
+  return hostAudioInstance || activeInstance().name;
+}
+
+/** One builder for every `{type:'audio'}` payload, so the scope stamp cannot be forgotten
+ *  at one of the direct (single-webview) call sites. */
+function audioMessage(status, instanceName) {
+  const msg = {
+    type: "audio",
+    instance: instanceName || activeInstance().name,
+    enabled: !!status.enabled,
+    capturing: !!status.capturing,
+  };
   if (status.tunnel) msg.tunnel = status.tunnel;
   if (typeof status.gatePatched === "boolean") msg.gatePatched = status.gatePatched;
-  for (const w of liveWebviews) safePost(w, msg);
+  return msg;
 }
 
 /** The mic-capture provider handed to HostAudio (AudioSession.onCapture): armed when
@@ -2488,7 +2600,7 @@ function enableAudio(context, webview, opts = {}) {
       hostAudioInstance = null;
       hostAudioSession = null;
       hostAudioEnable = null;
-      safePost(webview, { type: "audio", enabled: false, capturing: false });
+      safePost(webview, audioMessage({ enabled: false, capturing: false }, t.name));
       broadcastAudio({ enabled: false, capturing: false }, session);
       if (opts.auto) return; // best-effort startup arm: stay silent, the switch shows off
       const why = {
@@ -2558,7 +2670,7 @@ function audioSlotState() {
 function reportAudioState(webview) {
   const on = !!(hostAudio && hostAudio.enabled);
   const status = { enabled: on, capturing: on ? !!hostAudio.capturing : false };
-  if (webview) safePost(webview, { type: "audio", ...status });
+  if (webview) safePost(webview, audioMessage(status, audioStatusInstance(hostAudioSession)));
   broadcastAudio(status, hostAudioSession);
 }
 
@@ -2780,6 +2892,15 @@ function runEditProject(name, webview) {
   if (!projRoot) { warnNoScriptsDir(); return; }
   const existing = host.readProjectProfile(projRoot, safe);
   const profile = projects.sanitizeProfile(safe, existing || {});
+  // DELIBERATELY UNSCOPED. Unlike forwards/audio/settings/idlePolicy this is not a
+  // per-instance broadcast: it is a direct reply to ONE webview's own "edit this profile"
+  // request, and profiles live in the SINGLE host config repo
+  // (%LOCALAPPDATA%\The-Construct\config\projects) that every instance shares — see
+  // docs/config-sync.md "Multiple instances", where only the VM-side BRANCH is per
+  // instance. Stamping it would make a modal opened before a switch refuse to populate
+  // after one, for a resource the switch did not change. (The `|| resolveScriptsDir()`
+  // fallback above is only reached when no %LOCALAPPDATA%/%TEMP% resolves at all, i.e.
+  // when there is no config repo for any instance either.)
   safePost(webview, { type: "editProject", name: safe, profile });
 }
 
@@ -2961,7 +3082,58 @@ async function switchInstance(name) {
     );
   }
   logLine(`instances: active instance -> ${activeInstance().name}`);
-  await onInstanceChanged();
+  // Through the ONE chain, like every other route that retargets this window.
+  await queueInstanceTransition(onInstanceChanged);
+}
+
+// ── Observing the registry ──────────────────────────────────────────────────
+// instances.json belongs to no single process: another window's picker writes it,
+// Auto-Install.ps1 records a VM into it, a hand edit changes the default. None of that
+// raises a VS Code event, so a window whose target changed underneath it would keep
+// probing, watching, tunnelling and forwarding the machine it no longer drives.
+//
+// ZERO-CHANGE: no watcher is started when the file does not exist — a single-VM install
+// has no registry, so it never opens one, and nothing about its behaviour changes. (A
+// file created later is picked up by the periodic check in refreshTick, which is the
+// same comparison at the refresh cadence rather than immediately.)
+let registryWatcher = null;
+let registryWatchTimer = null;
+
+/** Watch the registry file for writes by other processes. Best-effort: a failed watch
+ *  simply leaves the refreshTick check as the only detector. */
+function startRegistryWatch() {
+  if (registryWatcher) return;
+  let file = null;
+  try { file = instances.instancesPath(process.env); } catch (_) { file = null; }
+  if (!file) return;
+  // The DIRECTORY, not the file: the registry is written atomically (tmp + rename), and a
+  // watch on the inode would survive exactly one write. Only starts once the file exists,
+  // so a default install with no %LOCALAPPDATA%\The-Construct\instances.json opens nothing.
+  try { if (!fs.existsSync(file)) return; } catch (_) { return; }
+  const dir = path.dirname(file);
+  const base = path.basename(file);
+  try {
+    registryWatcher = fs.watch(dir, { persistent: false }, (_evt, name) => {
+      // fs.watch reports the file name on Windows and Linux; a null name (some platforms)
+      // is treated as "might be ours" rather than ignored.
+      if (name && String(name) !== base) return;
+      if (registryWatchTimer) clearTimeout(registryWatchTimer);
+      // Debounced: a tmp+rename write fires two or three events, and a writer may be
+      // mid-rewrite when the first one lands.
+      registryWatchTimer = setTimeout(() => {
+        registryWatchTimer = null;
+        registryNow(true);                 // the change is the whole point: re-read it
+        retargetIfChanged("the instance registry changed on disk");
+      }, 400);
+    });
+    registryWatcher.on("error", () => {});
+    logLine(`instances: watching ${file} for changes made by other processes`);
+  } catch (_) { registryWatcher = null; }
+}
+
+function stopRegistryWatch() {
+  if (registryWatchTimer) { try { clearTimeout(registryWatchTimer); } catch (_) {} registryWatchTimer = null; }
+  if (registryWatcher) { try { registryWatcher.close(); } catch (_) {} registryWatcher = null; }
 }
 
 /**
@@ -2977,15 +3149,75 @@ const audioHandover = instances.createHandover({
   superseded: (target) => instances.targetSuperseded(instanceGate, target),
 });
 
+/**
+ * THE ONE SERIALIZED TRANSITION. Every route that can change which VM this window drives
+ * — the picker/command (switchInstance), the `construct.instance` setting, and a registry
+ * rewritten by ANOTHER process (startRegistryWatch / refreshTick → retargetIfChanged) — hands over here,
+ * one at a time. Serializing matters because the handovers below are async chains: two
+ * overlapping transitions would interleave a teardown of A with an arm of C and leave the
+ * mic tunnel or the forwarder pointed at B.
+ */
+let instanceTransition = Promise.resolve();
+function queueInstanceTransition(step) {
+  instanceTransition = instanceTransition.then(step, step);
+  return instanceTransition;
+}
+
+/**
+ * THE TARGET THE LIVE SESSIONS WERE LAST HANDED OVER TO — a fingerprint, not a name.
+ * `null` until activation records the starting one, which is what makes the first check a
+ * no-op instead of a spurious retarget.
+ */
+let appliedTargetFingerprint = null;
+/** ...and the one the LAST QUEUED transition will move them to. Without it, a second
+ *  observation arriving before the queued transition has run (the watcher and the refresh
+ *  tick can both see the same write) would queue a duplicate transition for a change
+ *  already on its way. */
+let queuedTargetFingerprint = null;
+
+/**
+ * Has the ACTIVE TARGET changed since the last transition, and if so, run one.
+ *
+ * The registry is a file other processes write: another window can flip `defaultInstance`,
+ * an installer can remove the selected entry (this window then resolves to another VM), and
+ * a remote rebuild can rewrite `sshHost`/`sshPort` under the SAME name. None of those raise
+ * a VS Code event, and the last one doesn't even change the name — so the change is detected
+ * by comparing the COMPLETE normalized identity (instances.targetFingerprint).
+ *
+ * Returns true when a transition was queued (the caller must not also refresh: the
+ * transition ends in its own refreshAll). A no-op rewrite — same bytes, or a formatting
+ * change that normalizes to the same target — yields the same fingerprint and does nothing
+ * at all, which is what keeps a single-VM window from ever taking this path.
+ */
+function retargetIfChanged(why) {
+  let fp;
+  try { fp = activeFingerprint(); } catch (_) { return false; }
+  if (appliedTargetFingerprint === null) { appliedTargetFingerprint = fp; queuedTargetFingerprint = fp; return false; }
+  if (fp === queuedTargetFingerprint) return false;
+  queuedTargetFingerprint = fp;
+  logLine(`instances: the active target changed (${why}) — retargeting this window's sessions to "${activeInstance().name}"`);
+  void queueInstanceTransition(onInstanceChanged);
+  return true;
+}
+
 /** Re-target everything that holds a per-VM connection or cache, then re-render. */
 async function onInstanceChanged() {
   const inst = activeInstance();   // also bumps instanceGate, invalidating live tokens
+  // The IDENTITY, not the name, is what the live sessions are bound to: a notification
+  // stream, a mic tunnel and a forwarding transport all terminate on an ENDPOINT. A
+  // registry entry rewritten under the same name (a rebuilt remote VM comes back on a new
+  // sshHost/sshPort) leaves every name comparison below equal while all three still point
+  // at the machine that no longer exists — so a changed fingerprint hands them over too.
+  const fingerprint = instances.targetFingerprint(inst);
+  const identityChanged = appliedTargetFingerprint !== null && fingerprint !== appliedTargetFingerprint;
+  appliedTargetFingerprint = fingerprint;
+  queuedTargetFingerprint = fingerprint;   // a switch retargets too: don't observe it twice
   // Did the DESTINATION change since the mic was last evaluated? A window that has not
   // actually changed instance (the construct.instance setting was edited to the name it
   // already resolves to) must do nothing new — that is the single-VM path, which never
   // switches at all. The gate's own name can't answer this: activeInstance() above (and
   // switchInstance's log line before it) has already moved it to the new name.
-  const micSwitched = inst.name !== audioTargetInstance;
+  const micSwitched = inst.name !== audioTargetInstance || identityChanged;
   // VM-derived caches: the probe, the update check's markers and the usage table are
   // all "about a VM", so serving the previous one's results would be a lie.
   inflightProbe = null;
@@ -2995,7 +3227,7 @@ async function onInstanceChanged() {
   cachedIdlePolicy = null; cachedIdlePolicyInstance = null;
   // The notification watcher is one long-lived SSH connection to ONE VM: reconnect it
   // to the new instance (its spool lives on that VM, so nothing is lost on the old one).
-  if (notifyInstance !== inst.name) {
+  if (notifyInstance !== inst.name || identityChanged) {
     stopNotifyWatch();
     if (notificationsEnabled()) startNotifyWatch();
   }
@@ -3017,7 +3249,7 @@ async function onInstanceChanged() {
   // can take over immediately. The teardown is QUEUED on the chain (never run beside it),
   // and the destination is deliberately NOT started here — this window has established
   // nothing about that VM yet. The refresh below takes the reading that starts it.
-  if (forwarderInstance !== inst.name || forwarderArmed !== inst.name) {
+  if (forwarderInstance !== inst.name || forwarderArmed !== inst.name || identityChanged) {
     void requestForwarderStop();
   }
   syncInstanceStatusItem();
@@ -3066,7 +3298,10 @@ async function adoptRemoteInstance() {
     });
     if (res.adopt && res.persisted) {
       logLine(`instances: window is attached to this VM — active instance -> ${res.name}`);
-      instanceGate.set(res.name);
+      // The FULL identity, like every other gate write: the selection is already
+      // persisted, so activeInstance() resolves to the adopted instance and points the
+      // gate at it (name + fingerprint) in one bump rather than two.
+      activeInstance();
     } else if (res.adopt && res.error) {
       logLine(`instances: could not adopt the attached VM's instance (${res.error})`);
     }
@@ -3319,7 +3554,10 @@ async function runNewRemoteVm() {
     ignoreFocusOut: true,
     validateInput: (v) => {
       const s = String(v || "").trim();
-      if (!instances.isValidName(s)) return "1–40 lowercase letters, digits or hyphens, starting with a letter or digit.";
+      // The ONE name rule, stated once (instances.NAME_RULE) rather than paraphrased
+      // here: this box must not advertise a rule the registry, the installers and the
+      // host service would then refuse.
+      if (!instances.isValidName(s)) return instances.NAME_RULE;
       if (reg.byName[s]) return `This PC already has a Construct instance named "${s}".`;
       return null;
     },
@@ -3456,7 +3694,9 @@ function handleMessage(message, webview, context) {
       pushSettings(webview);
       // Reflect live passthrough state so a reloaded webview shows the real switch.
       if (hostAudio && hostAudio.enabled) {
-        safePost(webview, { type: "audio", enabled: true, capturing: hostAudio.capturing, gatePatched: hostAudio.gatePatched });
+        safePost(webview, audioMessage(
+          { enabled: true, capturing: hostAudio.capturing, gatePatched: hostAudio.gatePatched },
+          hostAudioInstance));
       }
       return;
 
@@ -3559,7 +3799,13 @@ function handleMessage(message, webview, context) {
         // pressed for — never on whichever one the window switched to meanwhile.
         const projects = await effectiveProjects(rebuildTarget.instance);
         if (targetSuperseded(rebuildTarget, action === "redownload" ? "Redownload" : "Reinstall")) return;
-        lifecycle.run(action, { scriptsDir: scriptsDir, backupMode: message.backup, projects: projects, instance: rebuildTarget.instance });
+        lifecycle.run(action, {
+          scriptsDir: scriptsDir, backupMode: message.backup, projects: projects,
+          instance: rebuildTarget.instance,
+          // The confirmation modal lives INSIDE run(): re-ask the capture on the other
+          // side of it, or an accept given for this instance rebuilds another one.
+          stillCurrent: () => !targetSuperseded(rebuildTarget, action === "redownload" ? "Redownload" : "Reinstall"),
+        });
       })();
       return;
     }
@@ -3623,7 +3869,12 @@ function handleMessage(message, webview, context) {
       if (id === "exportConfig") {
         const scriptsDir = resolveScriptsDir();
         if (!scriptsDir) { warnNoScriptsDir(); return; }
-        lifecycle.run(id, { scriptsDir, instance: actionTarget().instance }); // export doesn't touch project selection
+        const exportTarget = actionTarget();
+        // export doesn't touch project selection (and isn't destructive, so no modal)
+        lifecycle.run(id, {
+          scriptsDir, instance: exportTarget.instance,
+          stillCurrent: () => !targetSuperseded(exportTarget, "Export config"),
+        });
         return;
       }
       if (id === "reprovision" || id === "reinstall" || id === "redownload") {
@@ -3635,7 +3886,10 @@ function handleMessage(message, webview, context) {
           if (!pf.ok) { showPreFlightBlock(pf); return; }
           const projects = await effectiveProjects(lifeTarget.instance);
           if (targetSuperseded(lifeTarget, id === "reprovision" ? "Reprovision" : id === "reinstall" ? "Reinstall" : "Redownload")) return;
-          const started = lifecycle.run(id, { scriptsDir: scriptsDir, projects: projects, instance: lifeTarget.instance });
+          const started = lifecycle.run(id, {
+            scriptsDir: scriptsDir, projects: projects, instance: lifeTarget.instance,
+            stillCurrent: () => !targetSuperseded(lifeTarget, id === "reprovision" ? "Reprovision" : id === "reinstall" ? "Reinstall" : "Redownload"),
+          });
           if (started !== false && id === "reprovision") beginReprovisionFastRefresh();
         })();
         return;
@@ -4142,7 +4396,7 @@ async function activate(context) {
       // The global instance pin changed: re-resolve and retarget everything.
       if (e.affectsConfiguration("construct.instance")) {
         registryNow(true);
-        void onInstanceChanged();
+        void queueInstanceTransition(onInstanceChanged);
       }
       // Start or tear down the forward server when it is switched on/off. Both go through
       // the chain, so a re-enable cannot overtake the teardown of what was running — and
@@ -4172,6 +4426,13 @@ async function activate(context) {
   // it was for, so onInstanceChanged only re-evaluates when the destination REALLY
   // changed (a single-VM window never switches, so it never re-arms).
   audioTargetInstance = activeInstance().name;
+  // The target the live sessions start on. Recorded BEFORE anything can observe a change,
+  // so the first registry reading is compared against what this window actually armed.
+  appliedTargetFingerprint = activeFingerprint();
+  queuedTargetFingerprint = appliedTargetFingerprint;
+  // Only when a registry exists (see startRegistryWatch): a single-VM install opens no
+  // watcher and behaves exactly as before.
+  startRegistryWatch();
   void requestAudioEnable(context, undefined, { auto: true });
   // Notification watcher: independent of any open dashboard, so an agent can reach
   // the user who never opened the panel. Delayed slightly so the SSH connect doesn't
@@ -4254,6 +4515,9 @@ function deactivate() {
   forwarderArmed = null;
   stopForwarder();
   stopConfigWatcher();
+  stopRegistryWatch();
+  appliedTargetFingerprint = null;
+  queuedTargetFingerprint = null;
 }
 
 module.exports = { activate, deactivate };
