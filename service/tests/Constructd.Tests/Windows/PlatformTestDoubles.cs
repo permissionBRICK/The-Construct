@@ -1,4 +1,5 @@
 using System.Net;
+using Constructd.Core.Abstractions;
 using Constructd.Core.Configuration;
 using Constructd.Tests.Support;
 using Constructd.Windows.Forwards;
@@ -70,7 +71,86 @@ public sealed class FakeIsoFileSystem : IIsoFileSystem
         Sizes.Remove(path);
     }
 
-    public string ComputeSha256(string path) => Hashes.TryGetValue(path, out var hash) ? hash : "0";
+    /// <summary>Every file whose hash was asked for — hashing gigabytes is not free.</summary>
+    public List<string> Hashed { get; } = [];
+
+    public string ComputeSha256(string path)
+    {
+        Hashed.Add(path);
+        return Hashes.TryGetValue(path, out var hash) ? hash : "0";
+    }
+
+    /// <summary>Paths the fake refuses to delete — an ISO Hyper-V has attached to a running VM.</summary>
+    public HashSet<string> Locked { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    public IReadOnlyList<string> ListFiles(string directoryPath, string searchPattern)
+    {
+        var prefix = directoryPath.TrimEnd('\\', '/') + "\\";
+        var star = searchPattern.IndexOf('*');
+        var head = star < 0 ? searchPattern : searchPattern[..star];
+        var tail = star < 0 ? string.Empty : searchPattern[(star + 1)..];
+
+        return Files.Keys.Concat(Sizes.Keys)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(path => path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            .Where(path =>
+            {
+                var name = path[prefix.Length..];
+                return !name.Contains('\\', StringComparison.Ordinal) &&
+                       name.StartsWith(head, StringComparison.OrdinalIgnoreCase) &&
+                       name.EndsWith(tail, StringComparison.OrdinalIgnoreCase) &&
+                       name.Length >= head.Length + tail.Length;
+            })
+            .ToList();
+    }
+
+    public void MoveFile(string sourcePath, string destinationPath, bool overwrite)
+    {
+        if (!overwrite && FileExists(destinationPath))
+        {
+            throw new IOException($"{destinationPath} already exists");
+        }
+
+        if (Files.TryGetValue(sourcePath, out var content))
+        {
+            Files[destinationPath] = content;
+            Written[destinationPath] = content;
+        }
+
+        if (Sizes.TryGetValue(sourcePath, out var size))
+        {
+            Sizes[destinationPath] = size;
+        }
+
+        Moves.Add((sourcePath, destinationPath));
+        Files.Remove(sourcePath);
+        Sizes.Remove(sourcePath);
+    }
+
+    /// <summary>Every rename, in order — the ISO catalog's pointer swap is one of these.</summary>
+    public List<(string Source, string Destination)> Moves { get; } = [];
+
+    public bool TryCreateNewFile(string path)
+    {
+        if (FileExists(path))
+        {
+            return false;
+        }
+
+        Sizes[path] = 0;
+        return true;
+    }
+
+    public bool TryDeleteFile(string path)
+    {
+        if (Locked.Contains(path))
+        {
+            return false;
+        }
+
+        DeleteFile(path);
+        return true;
+    }
 }
 
 /// <summary>Records what would have been downloaded and "writes" it into the fake file system.</summary>
@@ -102,6 +182,49 @@ public sealed class FakeIsoDownloader(FakeIsoFileSystem files) : IIsoDownloader
         files.WithBinary(destinationPath, DownloadedSize, DownloadedSha256);
         progress?.Report("downloaded");
         return Task.CompletedTask;
+    }
+}
+
+/// <summary>
+/// A build strategy that produces a file without WSL, xorriso or three gigabytes of I/O: it records
+/// what it was asked for and "writes" the ISO into the fake file system. Everything the catalog and
+/// the admin CLI do around a build is exercised against it.
+/// </summary>
+public sealed class FakeIsoMediaBuilder(FakeIsoFileSystem files) : IIsoMediaBuilder
+{
+    public List<IsoMediaRequest> Requests { get; } = [];
+
+    /// <summary>Set to make the build fail the way a real one does.</summary>
+    public Exception? Failure { get; set; }
+
+    /// <summary>Size the "built" ISO gets; 0 stands in for a build that produced nothing.</summary>
+    public long BuiltSize { get; set; } = 3_000_000_000;
+
+    public string SourceIso { get; set; } = @"C:\isos\ubuntu-24.04.3-live-server-amd64.iso";
+
+    public string SourceSha256 { get; set; } = "abc123";
+
+    public string BootstrapKeyFingerprint { get; set; } = "SHA256:AAAA";
+
+    public string ScriptSha256 { get; set; } = "script-hash";
+
+    public Task<IsoMediaResult> BuildMediaAsync(
+        IsoMediaRequest request,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        Requests.Add(request);
+
+        if (Failure is not null)
+        {
+            return Task.FromException<IsoMediaResult>(Failure);
+        }
+
+        progress?.Report($"building generic autoinstall media (hostname source: {request.HostnameSource})");
+        files.WithBinary(request.OutputPath, BuiltSize);
+
+        return Task.FromResult(new IsoMediaResult(
+            request.OutputPath, SourceIso, SourceSha256, BootstrapKeyFingerprint, ScriptSha256));
     }
 }
 

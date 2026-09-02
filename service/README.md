@@ -36,7 +36,8 @@ service/
   src/Constructd.Windows/   the Windows platform; every call goes through IProcessRunner
     Process/                ProcessRunner — argv arrays, no shell, ever
     HyperV/                 HyperVDriver + the PowerShell it composes (drivers/Load-ConstructDriver.ps1)
-    Iso/                    WslIsoBuilder, the WSL path mapping, the source-ISO cache
+    Iso/                    the build strategies (WSL, pre-built), the ISO catalog,
+                            the WSL path mapping, the source-ISO cache
     Forwards/               NetshPortForwardManager, the portproxy parser, the TCP-table P/Invoke
     Internal/               ArgumentGuard + PowerShellLiteral — nothing reaches a child unvalidated
   src/Constructd.Api/       ASP.NET Core minimal API host
@@ -391,12 +392,14 @@ Bound from the `Constructd` section of `appsettings.json`, from environment vari
 | `Idle:ForceEnabled` | `false` | With a cap set, also forbid switching idling off. |
 | `Idle:ReportIntervalMinutes` | `5` | Interval the guest reporter posts at. |
 | `Idle:MissingReportGraceMultiple` | `3` | Intervals of silence before the guest counts as idle. |
+| `Iso:Mode` | `Prebuilt` | Which ISO build strategy is in effect: `Prebuilt` (the admin builds the media, the service consumes it) or `PerVm` (the service builds one ISO per VM through WSL). `Native`, `InGuest` and `HypervisorHost` are planned and refused at startup. See *ISO build strategies*. |
+| `Iso:HostnameSource` | `hyperv-kvp` | Where a guest built from generic media takes its hostname at first boot (`VM_HOSTNAME_SOURCE`). `cloud-init-metadata` is planned for Proxmox / NoCloud / ConfigDrive. |
 | `Iso:SeedUser` | `construct` | Seed user of the unattended install. |
 | `Iso:BootstrapPublicKeyPath` | `<ScriptsDir>\keys\bootstrap_ed25519.pub` | Bootstrap key injected into the ISO. |
 | `Iso:SourcePath` | – | The Ubuntu ISO to remaster. Set this **or** `Iso:SourceUrl`; a path wins and is never downloaded or deleted. |
 | `Iso:SourceUrl` | – | Where to fetch the source ISO when no path is set. Admin-configured on purpose: the service does not go looking for "the current LTS", so a host's guests cannot change release because a mirror did. |
 | `Iso:Sha256` | – | Expected SHA-256 of the source ISO. Empty skips the check; when set it is verified on **every** use, not only after the download. |
-| `Iso:CacheDir` | `C:\ProgramData\Construct\service\iso` | Holds the downloaded source ISO and the per-VM autoinstall ISOs. |
+| `Iso:CacheDir` | `C:\ProgramData\Construct\service\iso` | Holds the downloaded source ISO and the ISO catalog (versioned media, sidecars, `current.pointer`). |
 | `Iso:SourceId` | `ubuntu-server-minimal` | `SOURCE_ID` of `bin/build-autoinstall-iso.sh` (`ubuntu-server` for the standard set). |
 | `BootstrapAdmin` | – | Identity seeded as the first admin when the user store is empty. |
 | `BootstrapAdminMaxVms` | `10` | Quota for that admin. |
@@ -441,7 +444,9 @@ exactly one place — `Composition/ServiceComposition.cs`, which has two indepen
 | Interface | Implementation |
 |---|---|
 | `IHypervisorDriver` | `HyperVDriver`: `powershell.exe` running the repo's own `drivers/Load-ConstructDriver.ps1` contract (`docs/drivers.md`). A future Proxmox driver maps the same operations onto its REST API. |
-| `IIsoBuilder` | `WslIsoBuilder`: `wsl.exe` running the existing `bin/build-autoinstall-iso.sh` with its `VM_USER`/`VM_PASS`/`VM_HOST` env contract. |
+| `IIsoBuilder` (consume) | By `Iso:Mode`: `PrebuiltIsoBuilder` (default — hands back the media in the ISO catalog) or `WslIsoBuilder` (builds one ISO per VM through `wsl.exe`). See *ISO build strategies*. |
+| `IIsoMediaBuilder` (produce) | `WslIsoBuilder`: `wsl.exe` running the existing `bin/build-autoinstall-iso.sh`, driven by `admin iso build` as the interactive administrator. Registered whatever the mode is. |
+| `IIsoCatalog` | `FileIsoCatalog`: versioned ISOs, sidecars and the `current.pointer` in `Iso:CacheDir`. Any build strategy publishes into it. |
 | `IPortForwardManager` | `NetshPortForwardManager`: `netsh interface portproxy` rules over `IForwardStore`, reconciled at startup, plus connection counting from the host TCP table for the idle signal. |
 | `IProcessRunner` | `ProcessRunner`: `System.Diagnostics.Process` with an `ArgumentList`. The only way this service starts anything. |
 | `ITcpTableReader` | `IpHlpApiTcpTableReader`: `GetExtendedTcpTable` (`TCP_TABLE_OWNER_PID_ALL`). |
@@ -556,19 +561,98 @@ minutes", "the last output line was not the expected JSON envelope"), and, for t
 driver's own progress lines, which are streamed to the job as they happen. The same rule applies to the
 ISO build and to netsh.
 
+### ISO build strategies
+
+Building install media is a **pluggable strategy**, because where it can be built
+differs per host — and the current answer is a stopgap, not the design.
+
+| `Iso:Mode` | Where media is built | Status |
+|---|---|---|
+| `Prebuilt` *(default)* | by the installing **administrator**, once, interactively (`admin iso build`); the service consumes the catalog entry | **now** |
+| `PerVm` | by the **service**, through `wsl.exe`, one ISO per VM | works wherever the service identity can run WSL |
+| `Native` | in-process on Windows (.NET): remaster the stock ISO without WSL or xorriso | planned |
+| `InGuest` | inside an existing Construct VM over SSH (xorriso is already there), result copied back — this is how the system will **self-update its install media** and fetch new source ISOs | planned |
+| `HypervisorHost` | natively on the hypervisor host (xorriso on a Proxmox node) — the regular autoinstall path once Hyper-V is not the only backend | planned |
+
+**Why `Prebuilt` is the default:** `wsl.exe` refuses to run as LocalSystem
+(`Wsl/WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED`, field-verified 2026-09-02) and LocalSystem is the identity
+the service runs as. The administrator's own WSL builds the media; the service only reads it.
+Configuring a planned mode is refused at startup, naming the two that work.
+
+The seam is two narrow interfaces plus one catalog, and they are what a new strategy plugs into:
+
+- **`IIsoBuilder`** — the *consuming* side. `VmJobs` calls `BuildAsync(vmName, seedUser, seedPassword, …)`
+  and does not know which strategy answers. `PrebuiltIsoBuilder` deliberately **ignores `vmName` and
+  `seedPassword`**: its media is generic and there is no build to hand a password to.
+- **`IIsoMediaBuilder`** — the *producing* side: generic media at a caller-chosen path, plus what went
+  into it (source ISO + SHA-256, bootstrap key fingerprint, build-script SHA-256).
+- **`IIsoCatalog`** — versioned files, sidecars, the current pointer, prune. Any strategy publishes here.
+
+`admin iso build` is a thin driver over "a media builder + the catalog", so a future strategy needs no
+CLI change. Builders never reference each other, and neither `IHypervisorDriver` nor the PowerShell
+driver contract knows anything about ISO formats or KVP — a driver receives an `IsoPath` from the job
+and nothing more.
+
+**Generic media, hypervisor-supplied identity.** Media built for the catalog bakes in no hostname: the
+seed carries the placeholder `construct-seed`, and the guest adopts its real name at first boot from a
+pluggable **identity source** (`Iso:HostnameSource` → the script's `VM_HOSTNAME_SOURCE`):
+
+| Source | How | Status |
+|---|---|---|
+| `hyperv-kvp` | `hv_kvp_daemon`'s pool file `/var/lib/hyperv/.kvp_pool_3`, key `VirtualMachineName` (512-byte key / 2048-byte value records) | now |
+| `cloud-init-metadata` | Proxmox / NoCloud / ConfigDrive, where the hypervisor supplies per-VM identity natively | planned |
+
+That is not cosmetic: the driver contract resolves a VM as `<vm name>.mshome.net`, and the Default
+Switch's DNS publishes the **guest's own hostname**. A first-boot oneshot unit
+(`construct-hostname.service`) reads the source, validates the name as a DNS label, sets it, fixes
+`/etc/hosts`, renews the DHCP lease so DNS learns it, writes a marker and disables itself. Adding a
+source is one `case` in that script. `bin/provision.sh` is the belt-and-braces backstop: a guest still
+called `construct-seed` is renamed to `CONSTRUCT_INSTANCE_NAME`.
+
+### The ISO catalog
+
+In `Iso:CacheDir`:
+
+```
+construct-autoinstall-20260902T141530Z.iso        the media
+construct-autoinstall-20260902T141530Z.iso.json   {builtAt, sourceIso, sourceSha256, seedUser,
+                                                   bootstrapKeyFingerprint, hostnameSource, scriptSha256}
+current.pointer                                    the file name of the current one
+```
+
+Plain files, so an administrator can read and repair them with the service stopped — which is exactly
+when it matters. Two rules come from Hyper-V rather than from taste:
+
+- **Media is never overwritten in place.** An attached ISO is held open by Hyper-V, and a VM may be
+  installing from it right now. Every build writes a *new* versioned file; the pointer is then swapped
+  by writing `current.pointer.tmp` and renaming it over the old one (atomic on NTFS).
+- **`prune` skips what it cannot delete** and says why, instead of failing.
+
+The pointer must name a plain `construct-autoinstall-*.iso` file: a value with a path in it is refused
+rather than followed, because the pointer decides what the service hands to Hyper-V.
+
+`PrebuiltIsoBuilder` refuses media with no readable sidecar (`IsoNotBuiltException`, whose safe message
+names the exact command), and warns loudly when the host's bootstrap key no longer matches the
+fingerprint in the sidecar — the failure that otherwise looks like a successful install and then
+refuses the client's key.
+
 ### WSL ISO build
 
 ```
-wsl.exe [-d <WslDistro>] -u root -- env \
-    VM_USER=<Iso:SeedUser> \
-    VM_PASS=<generated per VM, never stored> \
-    VM_HOST=<vm name, lowercased> \
-    SOURCE_ID=<Iso:SourceId> \
-    BOOTSTRAP_PUBKEY_FILE=/mnt/c/Construct/keys/bootstrap_ed25519.pub \
-    bash /mnt/c/Construct/bin/.build-autoinstall.lf.sh \
-         /mnt/c/…/<source>.iso \
-         /mnt/c/ProgramData/Construct/service/iso/<vm>-autoinstall.iso
+# per VM (Iso:Mode = PerVm)                    # generic media (admin iso build)
+wsl.exe [-d <WslDistro>] -u root -- env \      wsl.exe [-d <WslDistro>] -u root -- env \
+    VM_USER=<Iso:SeedUser> \                       VM_USER=<Iso:SeedUser> \
+    VM_PASS=<generated, never stored> \            VM_PASS=<generated, never stored> \
+    VM_HOST=<vm name, lowercased> \                VM_HOSTNAME_SOURCE=<Iso:HostnameSource> \
+    SOURCE_ID=<Iso:SourceId> \                     SOURCE_ID=<Iso:SourceId> \
+    BOOTSTRAP_PUBKEY_FILE=/mnt/c/… \               BOOTSTRAP_PUBKEY_FILE=/mnt/c/… \
+    bash /mnt/c/…/.build-autoinstall.lf.sh \       bash /mnt/c/…/.build-autoinstall.lf.sh \
+         /mnt/c/…/<source>.iso \                        /mnt/c/…/<source>.iso \
+         /mnt/c/…/iso/<vm>-autoinstall.iso              /mnt/c/…/iso/construct-autoinstall-<utc>.iso
 ```
+
+One environment variable is the whole difference: a baked-in hostname, or an identity source. Both go
+through the same code path below.
 
 This mirrors `Auto-Install.ps1` step for step, because that path is proven and because the guest
 payload has to be identical in every mode (plan §4.1):
@@ -584,13 +668,16 @@ payload has to be identical in every mode (plan §4.1):
   downloaded **once** into `Iso:CacheDir` (to `<name>.part`, then renamed, so an interrupted download is
   never mistaken for a complete one) and reused by every later build. Size must be > 0; `Iso:Sha256`, when
   set, is verified on every use.
-- **The output ISO is per VM** (`<vm>-autoinstall.iso`) because the guest hostname is baked into the seed.
+- **The output ISO is per VM** (`<vm>-autoinstall.iso`) in `PerVm` mode, because the guest hostname is
+  baked into the seed; generic media is written to the versioned path the catalog chose.
 - **Builds are serialized** with a `SemaphoreSlim(1)`: the LF copy is one shared file, and one xorriso
   repack of a multi-gigabyte image at a time is what the host can usefully do anyway.
 
 The seed password is a secret. It is generated per VM, never persisted, and never logged: progress
 lines and the failure detail are both passed through a redactor before they exist anywhere, and
-`IsoBuildException`'s message is only *"Building the autoinstall ISO for VM 'work-vm' failed."*
+`IsoBuildException`'s message is only *"Building the autoinstall ISO for VM 'work-vm' failed."* (A
+media build carries its reason in the message instead — it is raised by `admin iso build`, at an
+administrator's console, and the reason is composed here, never taken from the build's output.)
 (It is still visible in the host's own process list while `wsl.exe` runs — the `VM_PASS=` env contract
 of `build-autoinstall-iso.sh` is what `Auto-Install.ps1` has always used, and changing it would change
 the guest payload. It buys an attacker a seed credential that the client's provisioning run replaces.)
@@ -692,7 +779,25 @@ constructd admin users list [--json]
 constructd admin tokens issue DOMAIN\alice --label laptop [--json]
 constructd admin tokens revoke-all DOMAIN\alice
 constructd admin forwards reconcile
+constructd admin iso build [--force] [--json]
+constructd admin iso status [--json]
+constructd admin iso prune [--json]
 ```
+
+**`admin iso …` is how install media exists at all in the default `Prebuilt` mode**, and it is run by
+the interactive administrator — the service cannot do it (WSL refuses to run as LocalSystem). The
+installer's ISO step is exactly `admin iso build`.
+
+- **`build`** resolves the source ISO (downloading and verifying it once when `Iso:SourceUrl` is set),
+  generates a seed password it then discards, builds **generic** media through the configured strategy,
+  writes the sidecar and swaps the pointer. It is **idempotent**: without `--force` it reports the media
+  that is already published instead of spending twenty minutes rebuilding it, which is what makes
+  re-running the installer cheap. `--force` is for a new Ubuntu release or a rotated bootstrap key. The
+  last line is always `ISO: <path>` — the installer parses that.
+- **`status`** prints what is published and what went into it, and exits **3** when nothing usable is
+  there, so the installer and a health check can branch on "this host cannot create VMs".
+- **`prune`** deletes superseded media and its sidecars, skipping (and naming) any ISO a VM still has
+  attached — Hyper-V holds the handle.
 
 It exists because the first admin has to be created before anybody can authenticate, and because an
 operator standing at the host needs a way in when the API will not start or Negotiate is misconfigured.
@@ -739,15 +844,21 @@ dotnet publish service\src\Constructd.Api -c Release -r win-x64 --self-contained
 
 In order: self-elevate → validate the inputs (including that the two port ranges do not overlap) → the
 service root and data directory under `ProgramData` → **lock down everything the service executes or
-trusts** → prerequisites (Hyper-V via the repo's own `Ensure-HyperV`, a WSL distro with `xorriso` +
-`whois` inside it *as LocalSystem sees it*, the OpenSSH client; no .NET runtime is needed when
-published self-contained) → the TLS certificate → firewall rules → `appsettings.Production.json` next
-to the executable → **the first admin and an API token, through the admin CLI, before the service
+trusts** → prerequisites (Hyper-V via the repo's own `Ensure-HyperV`, **your** WSL distro with
+`xorriso` + `whois` inside it, the OpenSSH client; no .NET runtime is needed when published
+self-contained) → the TLS certificate → firewall rules → `appsettings.Production.json` next to the
+executable → **the autoinstall ISO, built as you through your WSL** (`admin iso build`) →
+**the first admin and an API token, through the admin CLI, before the service
 starts** (so nothing contends for the SQLite file and the host is reachable the moment it comes up) →
 register the service as LocalSystem → start it → print the enrollment details.
 
-The ACL step comes **before** the prerequisites on purpose: the WSL distro is imported into the
-service root, so the root has to be protected before anything is placed in it.
+The ACL step comes **before** everything else on purpose: the ISO the service hands to Hyper-V and the
+database it authorizes against are both written into the service root, so the root has to be protected
+before anything is placed in it.
+
+`-IsoBuildOnly` runs *only* the ISO step on an existing install and exits — no ACLs, no certificate, no
+settings, no re-registration; `-SkipIsoBuild` leaves the host without media on purpose (the summary
+says so, and creating a VM then fails with the command that fixes it).
 
 Run it again after publishing a new build: it updates binaries, settings and the service in place.
 
@@ -762,13 +873,14 @@ Run it again after publishing a new build: it updates binaries, settings and the
 | `-CertThumbprint` | – | Use an existing certificate instead of creating one. |
 | `-ServiceName` | `constructd` | Windows service name. |
 | `-SwitchName` | `Default Switch` | Hyper-V switch for new VMs. |
-| `-WslDistro` | `Ubuntu` | Distro the ISO build runs in. |
+| `-WslDistro` | `Ubuntu` | **Your** distro the ISO build runs in. |
 | `-ListenAddress` | `0.0.0.0` | `listenaddress=` of the portproxy rules. |
 | `-IsoSourcePath` / `-IsoSourceUrl` / `-IsoSha256` | – | The Ubuntu ISO to remaster. |
 | `-AdminUser` / `-AdminMaxVms` | current user / `10` | The first admin. |
 | `-SkipPrereqs` | off | Skip the Hyper-V/WSL/OpenSSH checks (a re-run on a host you already prepared). |
 | `-SkipAclHardening` | off | Do not lock the three paths down (see below). |
-| `-ProvisionWslForService` | off | Export the WSL distro and import it for LocalSystem when it is missing there (see below). |
+| `-SkipIsoBuild` | off | Do not build the autoinstall ISO; VM creation then fails until `admin iso build` is run (the summary says so). |
+| `-IsoBuildOnly` | off | (Re)build the ISO on an existing install and change nothing else — a new Ubuntu release, a rotated bootstrap key. |
 | `-RotateAdminToken` | off | Issue a fresh token even when the admin already exists. |
 | `-NoStart` | off | Register the service but do not start it. |
 
@@ -792,17 +904,27 @@ break every client's pin.
 >     [Security.Cryptography.SHA256]::Create().ComputeHash($cert.RawData))) -replace '-', ':'
 > ```
 
-The service runs as **LocalSystem**. It drives Hyper-V, netsh and WSL, none of which a restricted
-service account can do here without further setup — which is also why nothing in this service builds a
-command string. Two consequences the installer handles explicitly:
+The service runs as **LocalSystem**. It drives Hyper-V and netsh, neither of which a restricted service
+account can do here without further setup — which is also why nothing in this service builds a command
+string.
+
+**It does not run WSL, and cannot.** `wsl.exe` under LocalSystem exits with
+`Wsl/WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED` (field-verified 2026-09-02, WSL 2.6.3). That is why the ISO is
+built by the **administrator running the installer**, in *their* WSL, and published into the ISO
+catalog the service reads — see *ISO build strategies*. The installer therefore checks WSL and installs
+`xorriso`/`whois` **as you**, and its ISO step is `<PublishDir>\Constructd.Api.exe admin iso build`,
+run as you, failing closed with whatever the build printed. Nothing in the installer runs as SYSTEM any
+more; the one-shot scheduled-task runner that used to exist for it is gone.
+
+Two consequences the installer handles explicitly:
 
 **Everything the service executes or trusts is locked down before the service is ever registered.**
 LocalSystem *executes* what it finds in `-PublishDir` and `-ScriptsDir` (the published exe, the
 PowerShell driver, the ISO build script), so write access to either is equivalent to running code as
 LocalSystem; the **service root** (the parent of `-DataDir`) holds the authorization database — users,
-token hashes, the VM registry, the audit trail — plus the ISO cache and the filesystem WSL runs as
-LocalSystem. On a host several people can log into, an unprivileged user who can pre-create or modify
-any of them owns the service.
+token hashes, the VM registry, the audit trail — plus the ISO catalog, whose media is what every new VM
+installs itself from. On a host several people can log into, an unprivileged user who can pre-create or
+modify any of them owns the service.
 
 A DACL on the leaf directory alone does not achieve that, because three things sit outside it: the
 directories *above* it, the entries already *inside* it, and links pointing elsewhere. So for each of
@@ -828,9 +950,10 @@ the service root, `-PublishDir` and `-ScriptsDir` the installer:
   `constructd.db` — would otherwise keep its attacker-writable ACL through a `Set-Acl` on the parent;
 - re-reads the **whole tree** afterwards and fails if anything outside that policy can still write.
 
-The **service root**, not `-DataDir`, is the hardened unit: the database, the ISO cache and the
-LocalSystem WSL distro (`<service root>\wsl`) all live under it, so one protected tree covers all
-three and no untrusted directory sits between them.
+The **service root**, not `-DataDir`, is the hardened unit: the database and the ISO catalog both live
+under it, so one protected tree covers both and no untrusted directory sits between them. The catalog
+belongs in it as much as the database does — the media it holds is what every new VM installs itself
+from, and the pointer decides which file that is.
 
 The decision itself — "which of these ACEs are dangerous" — is a pure function over ACEs as plain data
 (`Get-ConstructUnsafeAce`), which is what lets the tests exercise an attacker-writable parent and a
@@ -840,46 +963,37 @@ protected child carrying an explicit untrusted ACE on a machine that has no Wind
 prints what you are taking responsibility for.
 
 **No configurable value is ever concatenated into a script, and nothing crosses a privilege boundary
-through a file the caller can still rewrite.** The installer runs code in two more privileged contexts
-— the self-elevated copy of itself, and one-shot scheduled tasks as LocalSystem — and in both, a
-parameter carrying a quote, a semicolon or a newline would otherwise become another statement running
-elevated or as SYSTEM. So values never appear in generated script text: they are serialized to JSON and
-**splatted** back on the other side. A distro name containing a space stays one argument; an apostrophe
-cannot end a literal. The only things interpolated into a generated script are paths the installer
-itself produced.
+through a file the caller can still rewrite.** The installer runs code in one more privileged context —
+the self-elevated copy of itself — and there a parameter carrying a quote, a semicolon or a newline
+would otherwise become another statement running elevated. So values never appear in generated script
+text: they are serialized to JSON and **splatted** back on the other side. A distro name containing a
+space stays one argument; an apostrophe cannot end a literal. The only thing interpolated into the
+generated script is a path the installer itself produced.
 
-*How* the JSON travels differs by direction, and the difference is the point:
-
-- **Across the elevation boundary** (unelevated → Administrator) the payload is embedded in the
-  encoded command itself, as inert base64. A file would have to sit in the *unelevated* caller's own
-  writable `%TEMP%`, and the elevated copy reads it only after the UAC prompt is answered — so another
-  process running as the same user can watch for the file and swap its contents in that window,
-  choosing the `-ScriptsDir` that then executes as LocalSystem or adding `-SkipAclHardening`. A GUID
-  name prevents guessing the name in advance, not noticing it appear. `-EncodedCommand` is part of the
-  elevated process's command line, which the caller cannot alter once `Start-Process` has been called.
-- **Down to LocalSystem** (already Administrator → SYSTEM) the payload goes through a GUID-named file
-  under `%SystemRoot%\Temp`, which only SYSTEM and Administrators can write — the writer is already
-  elevated, so there is no lower-privileged party in the window.
+The payload is embedded in the encoded command itself, as inert base64. A file would have to sit in the
+*unelevated* caller's own writable `%TEMP%`, and the elevated copy reads it only after the UAC prompt is
+answered — so another process running as the same user can watch for the file and swap its contents in
+that window, choosing the `-ScriptsDir` that then executes as LocalSystem or adding
+`-SkipAclHardening`. A GUID name prevents guessing the name in advance, not noticing it appear.
+`-EncodedCommand` is part of the elevated process's command line, which the caller cannot alter once
+`Start-Process` has been called. Everything else the installer runs — `wsl.exe`, the admin CLI — is
+invoked with an argument **list** in its own (already elevated) context, so no quoting decision exists
+to get wrong.
 
 `Uninstall-ConstructHost.ps1` carries the same transport, and needs it more: it is the script with
 `-RemoveData` on it, so a value able to inject an argument after UAC turns a harmless uninstall into an
 irreversible one against a path of somebody else's choosing. (`-ArgumentList` is not an escape here —
 PowerShell flattens it back into a single command-line string.)
 
-**WSL distros are registered per Windows user, and LocalSystem is a different user.** Checking WSL as
-the elevated administrator says nothing about what the service will see, so an install can report
-success and then fail on the first VM with "there is no distribution with the supplied name". The
-installer therefore runs `wsl -l -q` **as LocalSystem** (through a one-shot scheduled task), installs
-`xorriso`/`whois` inside *that* distro, and fails with the exact remedy when the distro is missing
-there. `-ProvisionWslForService` does the `wsl --export` / `wsl --import`-as-SYSTEM dance for you; it is
-opt-in because the export can be several gigabytes. The imported distro lands in `<service root>\wsl`
-and is hardened like everything else — it is a filesystem WSL runs commands from as LocalSystem.
-
-This check **fails closed**, like every other prerequisite: if the LocalSystem probe cannot run at all
-(no `ScheduledTasks` module, a locked-down host), the install stops rather than reporting success and
-starting a service whose distro was never verified — which is precisely the failure the step exists to
-catch. `-SkipPrereqs` is the explicit override. Under `-WhatIf` nothing runs as LocalSystem, and the
-helper says so rather than letting its empty output read as "LocalSystem has no distro".
+**The ISO step runs as you, and fails closed.** After writing `appsettings.Production.json` (which the
+CLI reads for the cache directory and the source ISO) and before registering the service, the installer
+runs `admin iso build` and stops the install if it fails, showing what the build printed — an exit code
+alone says nothing about why `xorriso`, a download or `mkpasswd` gave up. The build is idempotent, so
+re-running the installer costs nothing; `-SkipIsoBuild` defers it (and the summary then says VM
+creation will fail until it is built), and `-IsoBuildOnly` runs *only* this step on an existing install
+— no ACLs, no certificate, no settings, no re-registration, so it cannot disturb a host that is serving
+VMs. A running install keeps the ISO it has attached: the pointer swap is what makes the new media
+current.
 
 **Re-running is safe and adds no credentials.** "The admin already exists" is not the same as "the admin
 is an admin": the installer reads the account back and fails if its role is not `Admin`, rather than
@@ -959,11 +1073,25 @@ deleting a colleague's VM is not an uninstall step.
   - *Injection*: a VM name that is not a DNS label, a control character in a configured value, and a
     newline in the seed password are all refused **before** any process is started; a quote in a
     configured switch name is escaped rather than closing the PowerShell string.
-  - *ISO build*: the exact `wsl.exe` argv including the WSL path mapping and the env contract; no `-d`
-    when no distro is configured; the LF normalization of the script copy and its removal; the source ISO
-    used as-is when configured, downloaded once and reused otherwise, rejected when truncated or when the
-    checksum does not match; a build that reports success but produces no ISO failing anyway; progress
-    that never repeats the seed password; and builds actually serializing.
+  - *ISO build*: the exact `wsl.exe` argv for **both** halves of the seam — per-VM (`VM_HOST=`) and
+    generic media (`VM_HOSTNAME_SOURCE=`, and no `VM_HOST` at all) — including the WSL path mapping and
+    the env contract; no `-d` when no distro is configured; the LF normalization of the script copy and
+    its removal; the source ISO used as-is when configured, downloaded once and reused otherwise,
+    rejected when truncated or when the checksum does not match; a build that reports success but
+    produces no ISO failing anyway; progress that never repeats the seed password; a per-VM build
+    hashing nothing it does not have to; and builds actually serializing.
+  - *ISO catalog and strategies*: the versioned name reserved rather than merely computed (two
+    allocations in the same second, and a name that already exists, never collide); the sidecar written
+    before the pointer and the pointer swapped through a temporary file; media never overwritten in
+    place; a pointer that names a missing file or anything outside the catalog ignored; prune keeping
+    the current entry and skipping an ISO a VM still holds open; the pre-built strategy handing back the
+    current media, ignoring the VM name and the seed password, refusing media with no readable sidecar,
+    and warning when the host's bootstrap key no longer matches the one in the sidecar; and the mode →
+    strategy wiring, with every planned mode refused by name.
+  - *`admin iso`*: build/status/prune through the real catalog over a fake file system — the versioned
+    file name, the `ISO: <path>` last line the installer parses, idempotence without `--force`, a failed
+    or empty build leaving the previous media current, the audit entry, `status` exiting 3 when nothing
+    usable is published, and prune's in-use skip.
   - *Port forwards*: the exact add/delete argv for the SSH forward and for host forwards; the configurable
     listen address; the durable-before-live ordering; a client forward never touching the host; a forward
     whose rule fails being rolled back and its port freed; a netsh that refuses to delete not blocking a
@@ -992,7 +1120,7 @@ deleting a colleague's VM is not an uninstall step.
   every verb that takes none refused rather than ignored, removal revoking tokens and refusing while VMs
   are owned, a token that validates once and never appears in the audit trail, revoke-all invalidating
   it, `forwards reconcile` reporting the missing platform, and the exit codes.
-- **Host installer tests** (`service/tests/host-installer.test.ps1` — 238 assertions, run by
+- **Host installer tests** (`service/tests/host-installer.test.ps1` — 286 assertions, run by
   `dotnet test` through `HostInstallerTests` wherever `pwsh` exists): both scripts parse with zero
   errors and use no syntax PowerShell 5.1 lacks; every documented parameter exists with its documented
   type and default, and the three new switches are opt-in; the uninstaller's defaults match the
@@ -1004,8 +1132,12 @@ deleting a colleague's VM is not an uninstall step.
   separator, an IPv6 row, an out-of-range port and the `*` wildcard; every settings key the installer
   writes is one the service actually binds; the paths are hardened and the admin is created before the
   service is registered; an existing account's role is verified rather than assumed; a token is issued
-  only on creation or on `-RotateAdminToken`; WSL is checked under LocalSystem with the SID-based task
-  principal; and a missing OpenSSH client is installed rather than warned about. The value transport is
+  only on creation or on `-RotateAdminToken`; the settings are written before the ISO is built and the
+  ISO before the service is registered, the build goes through the admin CLI as an argument list and
+  fails closed with what it printed, `-SkipIsoBuild`/`-IsoBuildOnly` do what they say, and **no trace of
+  the old "run WSL as LocalSystem" path remains** (no task runner, no scheduled task, no distro
+  export/import) — a leftover would fail every install; and a missing OpenSSH client is installed rather
+  than warned about. The value transport is
   driven with everything a parameter could carry — spaces, apostrophes, quotes, semicolons, newlines,
   control characters, subexpressions, backticks — asserting for **both** scripts that the value never
   appears as source in a generated script, that it still decodes back byte for byte on the privileged

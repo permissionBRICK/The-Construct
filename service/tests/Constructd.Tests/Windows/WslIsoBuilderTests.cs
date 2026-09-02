@@ -294,6 +294,117 @@ public sealed class WslIsoBuilderTests
         Assert.Empty(runner.Calls);
     }
 
+    [Fact]
+    public async Task Generic_media_is_built_with_an_identity_SOURCE_and_no_hostname_at_all()
+    {
+        // The other half of the seam: one ISO for every VM. Baking a hostname in is
+        // exactly what must NOT happen here -- the guest adopts the VM's name at first boot.
+        var (builder, runner, files, _) = Builder();
+        var output = @"C:\ProgramData\Construct\service\iso\construct-autoinstall-20260902T141530Z.iso";
+        files.WithBinary(output, 3_000_000_000);
+
+        var result = await builder.BuildMediaAsync(
+            new IsoMediaRequest(output, "construct", "seed-secret", PubKey, "hyperv-kvp"),
+            null,
+            CancellationToken.None);
+
+        Assert.Equal(
+            [
+                "-d", "Ubuntu",
+                "-u", "root",
+                "--",
+                "env",
+                "VM_USER=construct",
+                "VM_PASS=seed-secret",
+                "VM_HOSTNAME_SOURCE=hyperv-kvp",
+                "SOURCE_ID=ubuntu-server-minimal",
+                "BOOTSTRAP_PUBKEY_FILE=/mnt/c/Construct/keys/bootstrap_ed25519.pub",
+                "bash",
+                "/mnt/c/Construct/bin/.build-autoinstall.lf.sh",
+                "/mnt/c/isos/ubuntu-24.04.3-live-server-amd64.iso",
+                "/mnt/c/ProgramData/Construct/service/iso/construct-autoinstall-20260902T141530Z.iso",
+            ],
+            runner[0].Arguments);
+
+        Assert.DoesNotContain(runner[0].Arguments, argument => argument.StartsWith("VM_HOST=", StringComparison.Ordinal));
+        Assert.Equal(output, result.IsoPath);
+    }
+
+    [Fact]
+    public async Task Generic_media_describes_what_went_into_it_so_the_catalog_can_record_it()
+    {
+        var (builder, _, files, _) = Builder();
+        var output = @"C:\ProgramData\Construct\service\iso\construct-autoinstall-20260902T141530Z.iso";
+        files.WithBinary(output, 10);
+        files.Hashes[SourceIso] = "source-hash";
+        files.Hashes[BuildScript] = "script-hash";
+
+        var result = await builder.BuildMediaAsync(
+            new IsoMediaRequest(output, "construct", "seed-secret", PubKey, "hyperv-kvp"),
+            null,
+            CancellationToken.None);
+
+        Assert.Equal(SourceIso, result.SourceIsoPath);
+        Assert.Equal("source-hash", result.SourceSha256);
+        Assert.Equal("script-hash", result.BuildScriptSha256);
+        // The bootstrap key baked in, as ssh-keygen -lf would print it.
+        Assert.StartsWith("SHA256:", result.BootstrapKeyFingerprint, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_per_vm_build_hashes_nothing_it_does_not_have_to()
+    {
+        // Hashing a three-gigabyte ISO would be minutes of I/O on every VM creation, for values only
+        // the catalog records. Without Constructd:Iso:Sha256 configured, nothing is hashed at all.
+        var (builder, _, files, _) = Builder();
+
+        await BuildAsync(builder);
+
+        Assert.Empty(files.Hashed);
+    }
+
+    [Fact]
+    public async Task A_newline_in_the_identity_source_is_refused_rather_than_split_into_another_variable()
+    {
+        var (builder, runner, _, _) = Builder();
+
+        await Assert.ThrowsAsync<InvalidPlatformArgumentException>(
+            () => builder.BuildMediaAsync(
+                new IsoMediaRequest(
+                    @"C:\ProgramData\Construct\service\iso\construct-autoinstall-1.iso",
+                    "construct",
+                    "seed-secret",
+                    PubKey,
+                    "hyperv-kvp\nVM_HOST=evil"),
+                null,
+                CancellationToken.None));
+
+        Assert.Empty(runner.Calls);
+    }
+
+    [Fact]
+    public async Task A_failed_media_build_names_no_vm_because_the_media_is_for_all_of_them()
+    {
+        var (builder, runner, _, _) = Builder();
+        runner.Respond(new ProcessResult(2, string.Empty, "env VM_PASS=seed-secret ...", TimedOut: false));
+
+        var ex = await Assert.ThrowsAsync<IsoBuildException>(() => builder.BuildMediaAsync(
+            new IsoMediaRequest(
+                @"C:\ProgramData\Construct\service\iso\construct-autoinstall-1.iso",
+                "construct",
+                "seed-secret",
+                PubKey,
+                "hyperv-kvp"),
+            null,
+            CancellationToken.None));
+
+        Assert.Null(ex.VmName);
+        // This one is read by an administrator at a console, so it carries its own reason -- composed
+        // here, never from the build's output.
+        Assert.Equal("Building the autoinstall ISO failed: the WSL build exited with 2.", ex.Message);
+        Assert.DoesNotContain("seed-secret", ex.Message, StringComparison.Ordinal);
+    }
+
     private static Task<string> BuildAsync(WslIsoBuilder builder, string vmName = "work-vm") =>
         builder.BuildAsync(vmName, "construct", "seed-secret", PubKey, null, CancellationToken.None);
 
