@@ -164,5 +164,30 @@ ok "script never prunes the build it is about to produce" "$(grep -q '"\${stale_
 ok "freed space is measured with df before/after, not du of victims" "$(grep -q 'free_before_kb=' "${S}" && grep -q 'free_after_kb=' "${S}" && ! grep -q 'reclaimed_kb' "${S}" && echo true || echo false)"
 ok "failure message names the override knob" "$(grep -q 'T3CODE_BUILD_MIN_FREE_GIB=<gib>' "${S}" && echo true || echo false)"
 
+# ── t3_build_apply_patch (exact / fuzz / genuine conflict) ───────────────────
+mkrepo() { # $1 dir: a tiny git repo with one file of numbered lines
+  rm -rf "$1"; mkdir -p "$1"; ( cd "$1" && git init -q && git config user.email t@t && git config user.name t
+    seq 1 40 | sed 's/^/line /' > file.txt && git add . && git commit -qm base ); }
+R="${TMP}/apply"; mkrepo "${R}"
+( cd "${R}" && sed -i 's/^line 20$/line 20 PATCHED/' file.txt && git diff > "${TMP}/exact.patch" && git checkout -q -- . )
+ok "exact patch applies via git apply" "$(cd "${R}" && TAG=vX t3_build_apply_patch "${TMP}/exact.patch" >/dev/null 2>&1 && grep -q 'line 20 PATCHED' file.txt && echo true || echo false)"
+( cd "${R}" && git checkout -q -- . )
+# context drift: upstream edited lines 17 and 23 (inside the 3-line context) but not line 20.
+( cd "${R}" && sed -i 's/^line 17$/line 17 upstream/; s/^line 23$/line 23 upstream/' file.txt && git commit -qam drift )
+ok "drifted context is rejected by plain git apply (precondition)" "$(cd "${R}" && git apply --check "${TMP}/exact.patch" >/dev/null 2>&1 && echo false || echo true)"
+fuzz_out="$(cd "${R}" && TAG=vX t3_build_apply_patch "${TMP}/exact.patch" 2>&1)"; fuzz_rc=$?
+ok "drifted context still applies via fuzz" "${fuzz_rc}"
+ok "fuzz application changed the intended line" "$(grep -q 'line 20 PATCHED' "${R}/file.txt" && echo true || echo false)"
+ok "fuzz application kept upstream's context edits" "$(grep -q 'line 17 upstream' "${R}/file.txt" && grep -q 'line 23 upstream' "${R}/file.txt" && echo true || echo false)"
+ok "fuzz application is reported in the log" "$([[ "${fuzz_out}" == *"needs context fuzz"* && "${fuzz_out}" == *"fuzz"* ]] && echo true || echo false)"
+# genuine conflict: upstream changed line 20 itself.
+mkrepo "${R}"; ( cd "${R}" && sed -i 's/^line 20$/line 20 rewritten upstream/' file.txt && git commit -qam conflict )
+conf_out="$(cd "${R}" && TAG=v9.9.9 t3_build_apply_patch "${TMP}/exact.patch" 2>&1)"; conf_rc=$?
+ok "a genuine conflict fails" "$([[ "${conf_rc}" -ne 0 ]] && echo true || echo false)"
+ok "the failure names the conflicting file and the tag" "$([[ "${conf_out}" == *"file.txt"* && "${conf_out}" == *"v9.9.9"* ]] && echo true || echo false)"
+ok "the failure says to rebase the patch, not that the version changed" "$([[ "${conf_out}" == *"Rebase patches/t3code-construct.patch"* && "${conf_out}" != *"changed incompatibly"* ]] && echo true || echo false)"
+ok "a failed application leaves the tree untouched" "$(cd "${R}" && git status --porcelain | grep -q . && echo false || echo true)"
+ok "script body uses the lenient applier" "$(grep -q 't3_build_apply_patch "\${PATCH_FILE}" || exit 1' "${S}" && ! grep -q 'changed incompatibly' "${S}" && echo true || echo false)"
+
 printf '  t3-build-diskcheck tests — %d passed, %d failed\n' "${pass}" "${fail}"
 [[ "${fail}" -eq 0 ]]
