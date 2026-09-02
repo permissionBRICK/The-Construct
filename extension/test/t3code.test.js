@@ -129,7 +129,17 @@ ok("pairing: silences CLI logs so stdout stays parseable", /--log-level none/.te
 // default instance still reads no CONSTRUCT_EXTERNAL_HOST.
 const PAIRING_DEFAULT_SCRIPT = `set -uo pipefail
 CONFIG_FILE=/etc/construct/config.env
-cfgget() { sed -n "s/^$1=//p" "$CONFIG_FILE" 2>/dev/null | head -1; }
+# Undo config-set.sh's rendering: it writes values made only of its safe charset
+# bare, and single-quotes anything else (embedded apostrophes as '\\''). An IPv6
+# public base URL — https://[2001:db8::1]:5178 — has brackets, so it IS stored
+# quoted, and reading the raw line would carry the apostrophes into the value.
+cfgget() {
+  _v="$(sed -n "s/^$1=//p" "$CONFIG_FILE" 2>/dev/null | head -1)"
+  case "$_v" in
+    "'"*"'") _v="\${_v#\\'}"; _v="\${_v%\\'}"; _v="\${_v//\\'\\\\\\'\\'/\\'}" ;;
+  esac
+  printf '%s' "$_v"
+}
 cfgset() {
   mkdir -p "$(dirname "$CONFIG_FILE")"; touch "$CONFIG_FILE"
   if grep -q "^$1=" "$CONFIG_FILE" 2>/dev/null; then sed -i "s|^$1=.*|$1=$2|" "$CONFIG_FILE"; else printf '%s=%s\\n' "$1" "$2" >> "$CONFIG_FILE"; fi
@@ -137,17 +147,11 @@ cfgset() {
 T3CODE_HOST="$(cfgget T3CODE_HOST)"; T3CODE_HOST="\${T3CODE_HOST:-0.0.0.0}"
 T3CODE_PORT="$(cfgget T3CODE_PORT)"; T3CODE_PORT="\${T3CODE_PORT:-5177}"
 WORKSPACE_ROOT="$(cfgget WORKSPACE_ROOT)"; WORKSPACE_ROOT="\${WORKSPACE_ROOT:-/root/repos}"
-T3CODE_HTTPS="$(cfgget T3CODE_HTTPS)"
-T3CODE_HTTPS_PORT="$(cfgget T3CODE_HTTPS_PORT)"; T3CODE_HTTPS_PORT="\${T3CODE_HTTPS_PORT:-5178}"
 T3CODE_PUBLIC_BASE_URL="$(cfgget T3CODE_PUBLIC_BASE_URL)"
-# The origin the pairing link is minted against, given the client-reachable host
-# in $1. T3CODE_PUBLIC_BASE_URL (written by bin/setup-t3-https.sh) WINS: T3's DPoP
-# proofs are bound to the exact origin the browser dialled, so the link must name
-# the same one the server was told to advertise.
+# The origin the pairing link is minted against, given the client-reachable host in $1.
 t3base() {
   if [ -n "$T3CODE_PUBLIC_BASE_URL" ]; then printf '%s' "$T3CODE_PUBLIC_BASE_URL"; return 0; fi
-  if [ "$T3CODE_HTTPS" = true ]; then printf 'https://%s:%s' "$1" "$T3CODE_HTTPS_PORT"
-  else printf 'http://%s:%s' "$1" "$T3CODE_PORT"; fi
+  printf 'http://%s:%s' "$1" "$T3CODE_PORT"
 }
 
 command -v t3 >/dev/null 2>&1 || { echo "t3 is not installed" >&2; exit 1; }
@@ -157,22 +161,28 @@ t3 auth pairing create --json --ttl 10m --label "construct-control-panel" --base
 ok("pairing(default): the WHOLE script matches the pin",
   pair === PAIRING_DEFAULT_SCRIPT,
   JSON.stringify(pair));
-ok("pairing(default): ...and is still the expected 1551 bytes",
-  Buffer.byteLength(pair, "utf8") === 1551, String(Buffer.byteLength(pair, "utf8")));
+ok("pairing(default): ...and is still the expected 1559 bytes",
+  Buffer.byteLength(pair, "utf8") === 1559, String(Buffer.byteLength(pair, "utf8")));
 ok("pairing(default): reads NO CONSTRUCT_EXTERNAL_HOST", !/CONSTRUCT_EXTERNAL_HOST/.test(pair));
 
 // ── HTTPS-aware pairing URL ──────────────────────────────────────────────────
 // The scheme decision lives in the generated bash, so it is EXECUTED here (with
 // stub config.env files) rather than pattern-matched: the whole point is which
-// --base-url the CLI is finally handed.
+// --base-url the CLI is finally handed. `cfgPairs` are written through the REAL
+// bin/config-set.sh, so the fixtures carry its exact rendering (an IPv6 origin
+// comes out single-quoted) and the prelude's unquoting is exercised for real.
 (() => {
   const cp = require("child_process");
   const os = require("os");
   const fsx = require("fs");
-  const probeBase = (cfgLines, instance) => {
+  const configSet = path.join(repoRoot, "bin", "config-set.sh");
+  const probeBase = (cfgPairs, instance) => {
     const dir = fsx.mkdtempSync(path.join(os.tmpdir(), "t3pair-"));
     const cfg = path.join(dir, "config.env");
-    fsx.writeFileSync(cfg, cfgLines.join("\n") + (cfgLines.length ? "\n" : ""));
+    fsx.writeFileSync(cfg, "");
+    for (const [k, v] of cfgPairs) {
+      cp.spawnSync("bash", [configSet, cfg, k, v], { encoding: "utf8" });
+    }
     const bin = path.join(dir, "bin");
     fsx.mkdirSync(bin);
     // Stubs: `t3` echoes the base URL it was given, `hostname` is fixed.
@@ -194,25 +204,46 @@ ok("pairing(default): reads NO CONSTRUCT_EXTERNAL_HOST", !/CONSTRUCT_EXTERNAL_HO
   }
   const noHttps = probeBase([]);
   ok("pairing: no HTTPS keys -> today's plain http URL", noHttps.out === "http://testvm.mshome.net:5177", noHttps.out + " " + noHttps.err);
-  const httpsOn = probeBase(["T3CODE_HTTPS=true"]);
-  ok("pairing: T3CODE_HTTPS=true -> https on the HTTPS port", httpsOn.out === "https://testvm.mshome.net:5178", httpsOn.out);
-  const httpsPort = probeBase(["T3CODE_HTTPS=true", "T3CODE_HTTPS_PORT=6443"]);
-  ok("pairing: honours T3CODE_HTTPS_PORT", httpsPort.out === "https://testvm.mshome.net:6443", httpsPort.out);
-  const publicUrl = probeBase(["T3CODE_HTTPS=true", "T3CODE_PUBLIC_BASE_URL=https://vm.example.com:5178"]);
-  ok("pairing: T3CODE_PUBLIC_BASE_URL wins (DPoP binds to that exact origin)",
+  const publicUrl = probeBase([["T3CODE_HTTPS", "true"], ["T3CODE_PUBLIC_BASE_URL", "https://vm.example.com:5178"]]);
+  ok("pairing: the recorded public origin is what the link is minted against",
     publicUrl.out === "https://vm.example.com:5178", publicUrl.out);
-  const httpsOff = probeBase(["T3CODE_HTTPS=false", "T3CODE_HTTPS_PORT=5178"]);
+  const publicPort = probeBase([["T3CODE_PUBLIC_BASE_URL", "https://testvm.mshome.net:6443"]]);
+  ok("pairing: honours whatever port that origin carries",
+    publicPort.out === "https://testvm.mshome.net:6443", publicPort.out);
+  // THE FAILED-SETUP CASE. setup-t3-https.sh keeps T3CODE_HTTPS=true as the retry
+  // preference but clears the public origin whenever the proxy did not come up
+  // (offline apt, nginx refused to start). Minting an https link then would point
+  // the browser at a port nothing listens on.
+  const httpsPrefOnly = probeBase([["T3CODE_HTTPS", "true"], ["T3CODE_HTTPS_PORT", "5178"]]);
+  ok("pairing: the T3CODE_HTTPS preference ALONE does not produce an https link",
+    httpsPrefOnly.out === "http://testvm.mshome.net:5177", httpsPrefOnly.out);
+  const httpsCleared = probeBase([["T3CODE_HTTPS", "true"], ["T3CODE_PUBLIC_BASE_URL", ""]]);
+  ok("pairing: an EMPTIED public origin falls back to http (failed setup)",
+    httpsCleared.out === "http://testvm.mshome.net:5177", httpsCleared.out);
+  const httpsOff = probeBase([["T3CODE_HTTPS", "false"], ["T3CODE_HTTPS_PORT", "5178"]]);
   ok("pairing: T3CODE_HTTPS=false stays on http", httpsOff.out === "http://testvm.mshome.net:5177", httpsOff.out);
-  // The instance variant resolves the host differently but must make the SAME
+  // config-set.sh single-quotes an IPv6 origin (it has brackets); the prelude must
+  // decode that or the apostrophes would travel into --base-url.
+  const v6 = probeBase([["T3CODE_PUBLIC_BASE_URL", "https://[2001:db8::1]:5178"]]);
+  ok("pairing: a config-set.sh-quoted IPv6 origin is decoded, not passed with quotes",
+    v6.out === "https://[2001:db8::1]:5178", v6.out);
+  const quoted = probeBase([["T3CODE_PUBLIC_BASE_URL", "https://[2001:db8::1]:5178"]]);
+  ok("pairing: no apostrophes leak into the minted base URL", !/'/.test(quoted.out), quoted.out);
+  // The instance variant resolves the HOST differently but must make the SAME
   // scheme decision.
   const remoteInst = require("../src/instances")
     .deriveDefaults("work-vm", { sshHost: "buildbox.local", sshPort: 2201 });
-  const instHttps = probeBase(["T3CODE_HTTPS=true", "CONSTRUCT_EXTERNAL_HOST=buildbox.local"], remoteInst);
-  ok("pairing(instance): https + the recorded external host",
+  const instHttps = probeBase([["CONSTRUCT_EXTERNAL_HOST", "buildbox.local"],
+    ["T3CODE_PUBLIC_BASE_URL", "https://buildbox.local:5178"]], remoteInst);
+  ok("pairing(instance): the recorded public origin wins there too",
     instHttps.out === "https://buildbox.local:5178", instHttps.out);
-  const instHttp = probeBase(["CONSTRUCT_EXTERNAL_HOST=buildbox.local"], remoteInst);
-  ok("pairing(instance): plain http when the proxy is off",
+  const instHttp = probeBase([["CONSTRUCT_EXTERNAL_HOST", "buildbox.local"]], remoteInst);
+  ok("pairing(instance): plain http when no public origin is recorded",
     instHttp.out === "http://buildbox.local:5177", instHttp.out);
+  const instHttpsPrefOnly = probeBase([["CONSTRUCT_EXTERNAL_HOST", "buildbox.local"],
+    ["T3CODE_HTTPS", "true"]], remoteInst);
+  ok("pairing(instance): the preference alone does not produce https either",
+    instHttpsPrefOnly.out === "http://buildbox.local:5177", instHttpsPrefOnly.out);
 })();
 const instances = require("../src/instances");
 ok("pairing(default instance object): same script as passing nothing",

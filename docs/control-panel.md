@@ -507,7 +507,10 @@ keeps its own trust store, so set `security.enterprise_roots.enabled` to `true` 
 for the host handoff sits at `/etc/construct/t3code-ca.crt`), and it is part of the
 [config backup](backup-restore.md) — so a reinstall does not ask you to trust a new CA.
 Set `T3CODE_HTTPS=false` (see [provisioning](provisioning.md)) to remove the proxy; the CA
-is kept either way.
+is kept either way. If the setup itself fails — an offline `apt` with no nginx on the VM,
+or an nginx that refuses to start — the panel, the pairing links and the console banner all
+stay on the plain-HTTP URL that *does* work (and say so) rather than advertising a dead
+HTTPS origin; the preference is kept, so the next reprovision retries.
 
 The **channel** dropdown next to the toggle selects between **stable** (npm `@latest` —
 the released version) and **nightly** (npm `@nightly` — the latest CI build, which may
