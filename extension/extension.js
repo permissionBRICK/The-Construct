@@ -240,8 +240,16 @@ let runGit = null;           // configsync.makeGitRunner, created once
 let gitDetected = null;      // cached {present, version} with TTL
 let gitDetectedAt = 0;       // ms when gitDetected was cached
 const GIT_DETECT_TTL = 5 * 60 * 1000; // 5 min cache like augmentUpdates
-let lastSyncTickAt = 0;      // ms: last automatic tick (for the 5-min throttle)
 const SYNC_TICK_MIN_MS = 5 * 60 * 1000;
+// The last tick's TIMESTAMP and RESULT, keyed BY INSTANCE (instances.createSyncStatusStore,
+// where the throttle/status rules are unit-tested). A tick belongs to one instance's branch
+// and VM store, so held window-globally these two lied after a switch: the panel reported
+// A's timestamp, result, warnings and blocked reason under B's name, and A's stamp
+// satisfied the 5-minute throttle — suppressing B's first automatic tick for up to five
+// minutes and leaving B's branch and store unsynchronized.
+const syncStatus = instances.createSyncStatusStore({ throttleMs: SYNC_TICK_MIN_MS });
+// ...while the SERIALIZATION stays window-global on purpose: there is ONE config repo and
+// ONE cross-process lock, so a tick for B must still wait behind a tick for A.
 let syncTickInFlight = false; // exposed as simple state for UI/recovery gates
 let syncTickPromise = null;   // same-window callers queue behind the active tick
 // Queued follow-up ticks, keyed BY INSTANCE (instances.createTargetQueue, where the
@@ -249,7 +257,6 @@ let syncTickPromise = null;   // same-window callers queue behind the active tic
 // ran under whatever the window had switched to by the time it started — syncing B's
 // branch and VM store while A's changes stayed unsynced.
 const syncTickFollowups = instances.createTargetQueue();
-let lastSyncResult = null;    // most recent TickResult (for state.configSync)
 let configWatcher = null;     // fs.watch handle on cfgDir/projects
 // The auto-import scan is coalesced and throttled PER INSTANCE (instances.createCoalescer,
 // where the ordering rules are unit-tested): held globally, an in-flight scan of A would
@@ -821,8 +828,10 @@ async function detectGitCached() {
 }
 
 /** Build state.configSync (D9) from the current engine state. Host-derived.
- *  `target` is the captured instance the recovery tick below belongs to (a refresh
- *  pipeline passes its own); omitted = capture the active one now. */
+ *  `target` is the captured instance this state DESCRIBES — its last tick, its recovery
+ *  tick; a refresh pipeline passes its own, omitted = capture the active one now. The
+ *  timestamp/result come from THAT instance's entry in syncStatus, so switching to an
+ *  instance that has never synced reports "never synced" instead of the other VM's tick. */
 async function buildConfigSyncState(target) {
   const csTarget = target || actionTarget();
   const dir = resolveCfgDir();
@@ -830,10 +839,7 @@ async function buildConfigSyncState(target) {
   const out = {
     gitPresent: git.present,
     repoReady: false, conflict: false, conflictFiles: [], mergeInProgress: false,
-    lastSyncAt: lastSyncTickAt || null,
-    lastResult: lastSyncResult ? (lastSyncResult.ok ? "ok" : (lastSyncResult.conflict ? "conflict" : (lastSyncResult.blocked ? "blocked" : "error"))) : null,
-    blockedReason: lastSyncResult ? (lastSyncResult.blockedReason || null) : null,
-    warnings: lastSyncResult ? (lastSyncResult.warnings || []) : [],
+    ...syncStatus.status(csTarget.name),
     remotes: [],
   };
   if (dir && git.present && runGit) {
@@ -842,10 +848,9 @@ async function buildConfigSyncState(target) {
       if (rs.mergeInProgress && !rs.conflict && !syncTickInFlight) {
         var recovered = await runConfigSync(csTarget);
         if (recovered) {
-          out.lastSyncAt = lastSyncTickAt || null;
-          out.lastResult = recovered.ok ? "ok" : (recovered.conflict ? "conflict" : (recovered.blocked ? "blocked" : "error"));
-          out.blockedReason = recovered.blockedReason || null;
-          out.warnings = recovered.warnings || [];
+          // The recovery tick ran for THIS target (runConfigSync records it under the
+          // same name), so its status is that target's entry.
+          Object.assign(out, instances.describeSyncStatus(syncStatus.lastAt(csTarget.name), recovered));
         }
         rs = await configsync.repoState(runGit, dir);
       }
@@ -931,8 +936,9 @@ async function runConfigSync(target) {
       vmBranch: syncInstance.configBranch,
       log: function (level, msg) { logLine("[configsync] [" + level + "] " + msg); },
     });
-    lastSyncResult = result;
-    lastSyncTickAt = Date.now();
+    // Recorded against the CAPTURED target: this tick's timestamp and result describe
+    // that instance's branch and VM store, and nothing about any other instance.
+    syncStatus.record(syncTarget.name, result);
     if (result) {
       var parts = [];
       if (result.ok) parts.push("ok");
@@ -1167,11 +1173,14 @@ function showPreFlightBlock(result) {
   });
 }
 
-/** Throttled sync tick for auto-refresh: only runs if >=5 min since last. `target` is
- *  the refresh pipeline's captured instance — the tick it may start belongs to that VM. */
+/** Throttled sync tick for auto-refresh: only runs if >=5 min since THAT INSTANCE's last
+ *  tick. `target` is the refresh pipeline's captured instance — the tick it may start
+ *  belongs to that VM, so the throttle it is measured against is that VM's too. A global
+ *  stamp made A's tick suppress B's first automatic sync for the whole window. */
 async function maybeAutoSync(target) {
-  if (Date.now() - lastSyncTickAt < SYNC_TICK_MIN_MS) return;
-  await runConfigSync(target);
+  const autoTarget = captureTargetFull(target);
+  if (!syncStatus.dueForAuto(autoTarget.name)) return;
+  await runConfigSync(autoTarget);
 }
 
 /** The target an import runs against: the caller's captured one when it has one (a
