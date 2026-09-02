@@ -1,5 +1,57 @@
+diff --git a/apps/desktop/src/electron/ElectronProtocol.test.ts b/apps/desktop/src/electron/ElectronProtocol.test.ts
+index 585dd7e7..fb3a65a3 100644
+--- a/apps/desktop/src/electron/ElectronProtocol.test.ts
++++ b/apps/desktop/src/electron/ElectronProtocol.test.ts
+@@ -57,7 +57,7 @@ describe("ElectronProtocol", () => {
+           assert.equal(yield* Effect.promise(() => response.text()), "ok");
+           assert.include(
+             response.headers.get("content-security-policy") ?? "",
+-            "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://clerk.t3.codes https://challenges.cloudflare.com",
++            "script-src 'self' 'unsafe-inline' blob: 'wasm-unsafe-eval' https://clerk.t3.codes https://challenges.cloudflare.com",
+           );
+           assert.include(
+             response.headers.get("content-security-policy") ?? "",
+@@ -209,9 +209,12 @@ describe("ElectronProtocol", () => {
+       }),
+     );
+ 
++    // blob: is required for the voice-input AudioWorklet module, which the
++    // renderer builds at runtime; worklet fetches go through script-src.
+     assert.deepEqual(directives["script-src"], [
+       "'self'",
+       "'unsafe-inline'",
++      "blob:",
+       "'wasm-unsafe-eval'",
+       "https://clerk.t3.codes",
+       "https://challenges.cloudflare.com",
+diff --git a/apps/desktop/src/electron/ElectronProtocol.ts b/apps/desktop/src/electron/ElectronProtocol.ts
+index 845f03db..bbaab1a7 100644
+--- a/apps/desktop/src/electron/ElectronProtocol.ts
++++ b/apps/desktop/src/electron/ElectronProtocol.ts
+@@ -71,6 +71,9 @@ export function makeDesktopContentSecurityPolicy(input: DesktopProtocolRegistrat
+   const scriptSources = [
+     "'self'",
+     "'unsafe-inline'",
++    // Voice input's AudioWorklet module is a Blob URL built in the renderer.
++    // Worklet module fetches are checked against script-src, not worker-src.
++    "blob:",
+     "'wasm-unsafe-eval'",
+     ...(clerkOrigin ? [clerkOrigin] : []),
+     "https://challenges.cloudflare.com",
+diff --git a/apps/desktop/src/settings/DesktopClientSettings.test.ts b/apps/desktop/src/settings/DesktopClientSettings.test.ts
+index e32a5e2d..0707ba2a 100644
+--- a/apps/desktop/src/settings/DesktopClientSettings.test.ts
++++ b/apps/desktop/src/settings/DesktopClientSettings.test.ts
+@@ -50,6 +50,7 @@ const clientSettings: ClientSettings = {
+   sidebarThreadPreviewCount: 6,
+   legacySidebarEnabled: false,
+   timestampFormat: "24-hour",
++  voiceInputSource: "auto",
+   wordWrap: true,
+ };
+ 
 diff --git a/apps/desktop/src/updates/DesktopUpdates.ts b/apps/desktop/src/updates/DesktopUpdates.ts
-index 483ace0f..5167cd65 100644
+index 483ace0f..17cbe83a 100644
 --- a/apps/desktop/src/updates/DesktopUpdates.ts
 +++ b/apps/desktop/src/updates/DesktopUpdates.ts
 @@ -1,3 +1,5 @@
@@ -8,29 +60,37 @@ index 483ace0f..5167cd65 100644
  import {
    DesktopUpdateChannelSchema,
    type DesktopRuntimeInfo,
-@@ -17,6 +19,7 @@ import * as Option from "effect/Option";
+@@ -6,6 +8,7 @@ import {
+   type DesktopUpdateCheckResult,
+   type DesktopUpdateState,
+ } from "@t3tools/contracts";
++import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+ import * as Cause from "effect/Cause";
+ import * as Context from "effect/Context";
+ import * as DateTime from "effect/DateTime";
+@@ -17,6 +20,7 @@ import * as Option from "effect/Option";
  import * as Ref from "effect/Ref";
  import * as Schema from "effect/Schema";
  import * as Scope from "effect/Scope";
-+import { spawn } from "node:child_process";
++import * as NodeChildProcess from "node:child_process";
  
  import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
  import * as DesktopConfig from "../app/DesktopConfig.ts";
-@@ -44,6 +47,24 @@ import {
+@@ -44,6 +48,24 @@ import {
  
  const AUTO_UPDATE_STARTUP_DELAY = "15 seconds";
  const AUTO_UPDATE_POLL_INTERVAL = "4 minutes";
 +const CONSTRUCT_MANAGED_UPDATES = true;
 +
-+function launchConstructReprovision(): boolean {
-+  if (process.platform !== "win32") return false;
++function launchConstructReprovision(platform: NodeJS.Platform): boolean {
++  if (platform !== "win32") return false;
 +  const command = [
 +    "$root = Join-Path $env:LOCALAPPDATA 'The-Construct'",
 +    "$script = Get-ChildItem -LiteralPath $root -Filter 'Update-T3Code.ps1' -File -Recurse -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1",
 +    "if (-not $script) { throw 'Construct Update-T3Code.ps1 was not found. Reinstall or update Construct first.' }",
 +    "& $script.FullName",
 +  ].join("; ");
-+  const child = spawn(
++  const child = NodeChildProcess.spawn(
 +    "powershell.exe",
 +    ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
 +    { detached: true, stdio: "ignore", windowsHide: false },
@@ -41,7 +101,7 @@ index 483ace0f..5167cd65 100644
  
  type UpdateAction = "check" | "download" | "install" | "channel";
  
-@@ -742,6 +763,10 @@ export const make = Effect.gen(function* () {
+@@ -742,6 +764,10 @@ export const make = Effect.gen(function* () {
        }
  
        const settings = yield* desktopSettings.get;
@@ -52,12 +112,13 @@ index 483ace0f..5167cd65 100644
        const enabled = yield* shouldEnableAutoUpdates;
        yield* setState(createBaseUpdateState(settings.updateChannel, enabled, environment));
        if (!enabled) {
-@@ -831,6 +856,13 @@ export const make = Effect.gen(function* () {
+@@ -831,6 +857,14 @@ export const make = Effect.gen(function* () {
      }),
      check: Effect.fn("desktop.updates.check")(function* (reason: string) {
        yield* Effect.annotateCurrentSpan({ reason });
 +      if (CONSTRUCT_MANAGED_UPDATES && reason !== "startup" && reason !== "poll") {
-+        const checked = yield* Effect.sync(launchConstructReprovision);
++        const platform = yield* HostProcessPlatform;
++        const checked = yield* Effect.sync(() => launchConstructReprovision(platform));
 +        return { checked, state: yield* Ref.get(updateStateRef) };
 +      }
 +      if (CONSTRUCT_MANAGED_UPDATES) {
@@ -67,7 +128,7 @@ index 483ace0f..5167cd65 100644
          return {
            checked: false,
 diff --git a/apps/server/package.json b/apps/server/package.json
-index ca19f708..d7583604 100644
+index fb50816e..09a6dd98 100644
 --- a/apps/server/package.json
 +++ b/apps/server/package.json
 @@ -33,6 +33,7 @@
@@ -87,48 +148,430 @@ index ca19f708..d7583604 100644
      "effect-codex-app-server": "workspace:*",
      "vite-plus": "catalog:"
 diff --git a/apps/server/src/auth/RpcAuthorization.ts b/apps/server/src/auth/RpcAuthorization.ts
-index 28ceac4c..3cb6396f 100644
+index 28ceac4c..6818ca69 100644
 --- a/apps/server/src/auth/RpcAuthorization.ts
 +++ b/apps/server/src/auth/RpcAuthorization.ts
-@@ -35,6 +35,8 @@ export const RPC_REQUIRED_SCOPES = {
+@@ -35,6 +35,9 @@ export const RPC_REQUIRED_SCOPES = {
    [WS_METHODS.serverUpdateProvider]: AuthOrchestrationOperateScope,
    [WS_METHODS.serverUpdateServer]: AuthOrchestrationOperateScope,
    [WS_METHODS.serverUpdateServerWithProgress]: AuthOrchestrationOperateScope,
 +  [WS_METHODS.voiceInputStart]: AuthOrchestrationOperateScope,
 +  [WS_METHODS.voiceInputStop]: AuthOrchestrationOperateScope,
++  [WS_METHODS.voiceInputAudio]: AuthOrchestrationOperateScope,
    [WS_METHODS.serverUpsertKeybinding]: AuthOrchestrationOperateScope,
    [WS_METHODS.serverRemoveKeybinding]: AuthOrchestrationOperateScope,
    [WS_METHODS.serverGetSettings]: AuthOrchestrationReadScope,
+diff --git a/apps/server/src/cli/auth.ts b/apps/server/src/cli/auth.ts
+index 1b349111..29dfb482 100644
+--- a/apps/server/src/cli/auth.ts
++++ b/apps/server/src/cli/auth.ts
+@@ -19,6 +19,7 @@ import {
+   formatSessionList,
+ } from "../cliAuthFormat.ts";
+ import * as ServerConfig from "../config.ts";
++import { publicBaseUrlOrigin } from "../publicBaseUrl.ts";
+ import {
+   authLocationFlags,
+   type CliAuthLocationFlags,
+@@ -100,9 +101,14 @@ const pairingCreateCommand = Command.make("create", {
+             ...(Option.isSome(flags.ttl) ? { ttl: flags.ttl.value } : {}),
+             ...(Option.isSome(flags.label) ? { label: flags.label.value } : {}),
+           });
++          // An explicit --base-url still wins; otherwise fall back to the
++          // public origin Construct's TLS proxy publishes, when it set one.
++          const baseUrl = Option.isSome(flags.baseUrl)
++            ? flags.baseUrl.value
++            : publicBaseUrlOrigin();
+           const output = formatIssuedPairingCredential(issued, {
+             json: flags.json,
+-            ...(Option.isSome(flags.baseUrl) ? { baseUrl: flags.baseUrl.value } : {}),
++            ...(baseUrl === undefined ? {} : { baseUrl }),
+           });
+           yield* Console.log(output);
+         }),
+diff --git a/apps/server/src/cli/pair.ts b/apps/server/src/cli/pair.ts
+index 38fa3be8..2721ea92 100644
+--- a/apps/server/src/cli/pair.ts
++++ b/apps/server/src/cli/pair.ts
+@@ -53,6 +53,7 @@ import {
+   renderTerminalQrCode,
+   resolveHeadlessConnectionString,
+ } from "../startupAccess.ts";
++import { publicBaseUrlOrigin } from "../publicBaseUrl.ts";
+ import { baseDirFlag, DurationFromString } from "./config.ts";
+ 
+ const WELL_KNOWN_ENVIRONMENT_PATH = "/.well-known/t3/environment";
+@@ -131,8 +132,12 @@ export class ServePortOccupiedError extends Schema.TaggedErrorClass<ServePortOcc
+ }
+ 
+ /** The URL a browser or phone should pair through, absent Tailscale. */
+-export const resolveDirectPairingBaseUrl = (state: PersistedServerRuntimeState): string =>
+-  state.devUrl ?? resolveHeadlessConnectionString(state.host, state.port);
++export const resolveDirectPairingBaseUrl = (
++  state: PersistedServerRuntimeState,
++  /** The origin a TLS proxy publishes for this server, when Construct set one. */
++  publicBaseUrl?: string | undefined,
++): string =>
++  state.devUrl ?? publicBaseUrl ?? resolveHeadlessConnectionString(state.host, state.port);
+ 
+ export class DevServerNotProxiableError extends Schema.TaggedErrorClass<DevServerNotProxiableError>()(
+   "DevServerNotProxiableError",
+@@ -510,7 +515,7 @@ export const pairCommand = Command.make("pair", {
+         pairingBaseUrl = resolved.baseUrl;
+         notes.push(...resolved.notes);
+       } else {
+-        pairingBaseUrl = resolveDirectPairingBaseUrl(target.state);
++        pairingBaseUrl = resolveDirectPairingBaseUrl(target.state, publicBaseUrlOrigin());
+         if (isLoopbackHost(new URL(pairingBaseUrl).hostname)) {
+           notes.push(
+             "This URL is only reachable from this machine. Re-run with --tailscale, or restart the server with a reachable --host.",
 diff --git a/apps/server/src/environment/ServerEnvironment.ts b/apps/server/src/environment/ServerEnvironment.ts
-index 907a5d64..f452d769 100644
+index 9c3a0d2a..fc2d6713 100644
 --- a/apps/server/src/environment/ServerEnvironment.ts
 +++ b/apps/server/src/environment/ServerEnvironment.ts
-@@ -153,6 +153,7 @@ export const make = Effect.gen(function* () {
+@@ -159,6 +159,8 @@ export const make = Effect.gen(function* () {
        threadPinning: true,
        threadPinReorder: true,
        threadTitleRegeneration: true,
 +      voiceInput: process.env.CONSTRUCT_T3_VOICE_INPUT === "true",
++      voiceInputClientAudio: true,
        threadPullRequestLinking: true,
        ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
        ...(serverSelfUpdate === "boot-service" ? { serverSelfUpdateProgress: true } : {}),
+diff --git a/apps/server/src/publicBaseUrl.test.ts b/apps/server/src/publicBaseUrl.test.ts
+new file mode 100644
+index 00000000..9158b0b7
+--- /dev/null
++++ b/apps/server/src/publicBaseUrl.test.ts
+@@ -0,0 +1,38 @@
++import { describe, expect, it } from "@effect/vitest";
++
++import { parsePublicBaseUrl } from "./publicBaseUrl.ts";
++
++describe("parsePublicBaseUrl", () => {
++  it("treats absent and blank values as unset", () => {
++    expect(parsePublicBaseUrl(undefined)).toEqual({ kind: "unset" });
++    expect(parsePublicBaseUrl("")).toEqual({ kind: "unset" });
++    expect(parsePublicBaseUrl("   ")).toEqual({ kind: "unset" });
++  });
++
++  it("keeps the origin and drops everything below it", () => {
++    expect(parsePublicBaseUrl("https://agent-vm.mshome.net:5178")).toEqual({
++      kind: "ok",
++      origin: "https://agent-vm.mshome.net:5178",
++    });
++    expect(parsePublicBaseUrl("  https://agent-vm.mshome.net:5178/pair?x=1#y  ")).toEqual({
++      kind: "ok",
++      origin: "https://agent-vm.mshome.net:5178",
++    });
++    expect(parsePublicBaseUrl("http://agent-vm.mshome.net:5177")).toEqual({
++      kind: "ok",
++      origin: "http://agent-vm.mshome.net:5177",
++    });
++  });
++
++  it("reports values it cannot use instead of guessing", () => {
++    expect(parsePublicBaseUrl("agent-vm.mshome.net:5178")).toEqual({
++      kind: "invalid",
++      raw: "agent-vm.mshome.net:5178",
++    });
++    expect(parsePublicBaseUrl("ws://agent-vm.mshome.net:5178")).toEqual({
++      kind: "invalid",
++      raw: "ws://agent-vm.mshome.net:5178",
++    });
++    expect(parsePublicBaseUrl("not a url")).toEqual({ kind: "invalid", raw: "not a url" });
++  });
++});
+diff --git a/apps/server/src/publicBaseUrl.ts b/apps/server/src/publicBaseUrl.ts
+new file mode 100644
+index 00000000..81133867
+--- /dev/null
++++ b/apps/server/src/publicBaseUrl.ts
+@@ -0,0 +1,39 @@
++/**
++ * The origin humans and browsers should use to reach this server.
++ *
++ * Construct serves T3 Code behind a TLS reverse proxy, so the origin the server
++ * binds to (plain HTTP on the loopback port) is not the one that belongs in a
++ * pairing URL, a QR code or a browser tab. `T3CODE_PUBLIC_BASE_URL` names the
++ * public origin; unset means "use the bind origin", which is the unpatched
++ * behaviour.
++ */
++export type PublicBaseUrlSetting =
++  | { readonly kind: "unset" }
++  | { readonly kind: "invalid"; readonly raw: string }
++  | { readonly kind: "ok"; readonly origin: string };
++
++/** Any path, query or fragment is dropped: callers append their own. */
++export function parsePublicBaseUrl(raw: string | undefined): PublicBaseUrlSetting {
++  const trimmed = raw?.trim();
++  if (!trimmed) return { kind: "unset" };
++  let url: URL;
++  try {
++    url = new URL(trimmed);
++  } catch {
++    return { kind: "invalid", raw: trimmed };
++  }
++  if (url.protocol !== "http:" && url.protocol !== "https:") {
++    return { kind: "invalid", raw: trimmed };
++  }
++  return { kind: "ok", origin: url.origin };
++}
++
++export function readPublicBaseUrl(): PublicBaseUrlSetting {
++  return parsePublicBaseUrl(process.env.T3CODE_PUBLIC_BASE_URL);
++}
++
++/** The configured public origin, or undefined when unset or unusable. */
++export function publicBaseUrlOrigin(): string | undefined {
++  const setting = readPublicBaseUrl();
++  return setting.kind === "ok" ? setting.origin : undefined;
++}
+diff --git a/apps/server/src/serverRuntimeStartup.ts b/apps/server/src/serverRuntimeStartup.ts
+index 6bea823b..8f137e71 100644
+--- a/apps/server/src/serverRuntimeStartup.ts
++++ b/apps/server/src/serverRuntimeStartup.ts
+@@ -45,6 +45,7 @@ import {
+   isWildcardHost,
+   issueHeadlessServeAccessInfo,
+ } from "./startupAccess.ts";
++import { readPublicBaseUrl } from "./publicBaseUrl.ts";
+ 
+ export class ServerRuntimeStartupError extends Schema.TaggedErrorClass<ServerRuntimeStartupError>()(
+   "ServerRuntimeStartupError",
+@@ -262,7 +263,10 @@ const resolveStartupBrowserTarget = Effect.gen(function* () {
+     serverConfig.host && !isWildcardHost(serverConfig.host)
+       ? `http://${formatHostForUrl(serverConfig.host)}:${serverConfig.port}`
+       : localUrl;
+-  const baseTarget = serverConfig.devUrl?.toString() ?? bindUrl;
++  // The desktop app loads its own UI, so only served modes follow the public
++  // origin a TLS proxy publishes on this server's behalf.
++  const publicBaseUrl = yield* resolvePublicBaseUrlForServing(serverConfig.mode);
++  const baseTarget = serverConfig.devUrl?.toString() ?? publicBaseUrl ?? bindUrl;
+   return yield* Effect.succeed(serverConfig.mode === "desktop" ? baseTarget : undefined).pipe(
+     Effect.flatMap((target) =>
+       target ? Effect.succeed(target) : serverAuth.issueStartupPairingUrl(baseTarget),
+@@ -270,6 +274,24 @@ const resolveStartupBrowserTarget = Effect.gen(function* () {
+   );
+ });
+ 
++/**
++ * Resolves `T3CODE_PUBLIC_BASE_URL` for a served runtime, warning instead of
++ * silently falling back when it is set to something unusable.
++ */
++const resolvePublicBaseUrlForServing = Effect.fn("server.startup.publicBaseUrl")(function* (
++  mode: ServerConfig.RuntimeMode,
++) {
++  if (mode === "desktop") return undefined;
++  const setting = readPublicBaseUrl();
++  if (setting.kind === "invalid") {
++    yield* Effect.logWarning(
++      "Ignoring T3CODE_PUBLIC_BASE_URL: it is not an http(s) URL. Using the bind address instead.",
++    ).pipe(Effect.annotateLogs({ publicBaseUrl: setting.raw }));
++    return undefined;
++  }
++  return setting.kind === "ok" ? setting.origin : undefined;
++});
++
+ const maybeOpenBrowser = (target: string) =>
+   Effect.gen(function* () {
+     const serverConfig = yield* ServerConfig.ServerConfig;
+diff --git a/apps/server/src/startupAccess.ts b/apps/server/src/startupAccess.ts
+index 7df13166..a167f807 100644
+--- a/apps/server/src/startupAccess.ts
++++ b/apps/server/src/startupAccess.ts
+@@ -6,6 +6,7 @@ import { HttpServer } from "effect/unstable/http";
+ 
+ import { ServerConfig } from "./config.ts";
+ import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
++import { publicBaseUrlOrigin } from "./publicBaseUrl.ts";
+ 
+ export interface HeadlessServeAccessInfo {
+   readonly connectionString: string;
+@@ -72,7 +73,12 @@ export const resolveHeadlessConnectionString = (
+   host: string | undefined,
+   port: number,
+   interfaces: NetworkInterfacesMap = NodeOS.networkInterfaces(),
++  /** The origin a TLS proxy publishes for this server, when Construct set one. */
++  publicBaseUrl?: string | undefined,
+ ): string => {
++  if (publicBaseUrl) {
++    return publicBaseUrl;
++  }
+   const connectionHost = resolveHeadlessConnectionHost(host, interfaces);
+   return `http://${formatHostForUrl(connectionHost)}:${port}`;
+ };
+@@ -137,6 +143,8 @@ export const issueHeadlessServeAccessInfo = Effect.fn("issueHeadlessServeAccessI
+   const connectionString = resolveHeadlessConnectionString(
+     serverConfig.host,
+     resolveListeningPort(httpServer.address, serverConfig.port),
++    NodeOS.networkInterfaces(),
++    publicBaseUrlOrigin(),
+   );
+   const issued = yield* serverAuth.issueStartupPairingCredential();
+ 
+diff --git a/apps/server/src/voiceInput.test.ts b/apps/server/src/voiceInput.test.ts
+new file mode 100644
+index 00000000..2c9e0fe7
+--- /dev/null
++++ b/apps/server/src/voiceInput.test.ts
+@@ -0,0 +1,134 @@
++import { describe, expect, it, vi } from "@effect/vitest";
++
++import {
++  createVoiceAudioSource,
++  FIRST_CLIENT_CHUNK_TIMEOUT_MS,
++  NO_CLIENT_AUDIO_MESSAGE,
++  routeVoiceAudio,
++  type VoiceAudioSourceHandlers,
++} from "./voiceInput.ts";
++
++const handlers = () => {
++  const audio: Array<Buffer> = [];
++  const failures: Array<string> = [];
++  return {
++    audio,
++    failures,
++    handlers: {
++      audio: (chunk) => audio.push(chunk),
++      fail: (message) => failures.push(message),
++    } satisfies VoiceAudioSourceHandlers,
++  };
++};
++
++describe("voice audio sources", () => {
++  it("defaults to the host recorder when the client did not pick a source", () => {
++    expect(createVoiceAudioSource(undefined).kind).toBe("host");
++    expect(createVoiceAudioSource("host").kind).toBe("host");
++    expect(createVoiceAudioSource("client").kind).toBe("client");
++  });
++
++  it("emits server-side levels only for host audio", () => {
++    expect(createVoiceAudioSource("host").emitsLevels).toBe(true);
++    expect(createVoiceAudioSource("client").emitsLevels).toBe(false);
++  });
++
++  it("refuses pushed audio for a host session without starting the recorder", () => {
++    // Recording happens on the server, so a pushed chunk has nowhere to go.
++    expect(createVoiceAudioSource("host").push(new Uint8Array([1, 2]))).toBe(false);
++  });
++
++  it("drops client chunks that arrive before the transcription socket is open", () => {
++    const source = createVoiceAudioSource("client");
++    expect(source.push(new Uint8Array([1, 2]))).toBe(false);
++  });
++
++  it("forwards client chunks once the session is listening", () => {
++    vi.useFakeTimers();
++    try {
++      const sink = handlers();
++      const source = createVoiceAudioSource("client");
++      source.start(sink.handlers);
++
++      expect(source.push(new Uint8Array([1, 2, 3, 4]))).toBe(true);
++      expect(sink.audio).toHaveLength(1);
++      expect([...sink.audio[0]!]).toEqual([1, 2, 3, 4]);
++
++      // The first chunk arrived, so the "no audio" watchdog must not fire.
++      vi.advanceTimersByTime(FIRST_CLIENT_CHUNK_TIMEOUT_MS * 2);
++      expect(sink.failures).toEqual([]);
++
++      source.stop();
++      expect(source.push(new Uint8Array([5]))).toBe(false);
++    } finally {
++      vi.useRealTimers();
++    }
++  });
++
++  it("ignores empty client chunks", () => {
++    const sink = handlers();
++    const source = createVoiceAudioSource("client");
++    source.start(sink.handlers);
++    expect(source.push(new Uint8Array())).toBe(false);
++    expect(sink.audio).toEqual([]);
++    source.stop();
++  });
++
++  it("fails the session when no client audio arrives at all", () => {
++    vi.useFakeTimers();
++    try {
++      const sink = handlers();
++      const source = createVoiceAudioSource("client");
++      source.start(sink.handlers);
++
++      vi.advanceTimersByTime(FIRST_CLIENT_CHUNK_TIMEOUT_MS - 1);
++      expect(sink.failures).toEqual([]);
++      vi.advanceTimersByTime(1);
++      expect(sink.failures).toEqual([NO_CLIENT_AUDIO_MESSAGE]);
++    } finally {
++      vi.useRealTimers();
++    }
++  });
++
++  it("stops the watchdog when the session ends before any audio", () => {
++    vi.useFakeTimers();
++    try {
++      const sink = handlers();
++      const source = createVoiceAudioSource("client");
++      source.start(sink.handlers);
++      source.stop();
++      vi.advanceTimersByTime(FIRST_CLIENT_CHUNK_TIMEOUT_MS * 2);
++      expect(sink.failures).toEqual([]);
++    } finally {
++      vi.useRealTimers();
++    }
++  });
++});
++
++describe("routeVoiceAudio", () => {
++  it("rejects unknown session ids quietly", () => {
++    const sessions = new Map<string, { pushAudio: (chunk: Uint8Array) => boolean }>();
++    expect(routeVoiceAudio(sessions, "unknown", new Uint8Array([1]))).toBe(false);
++  });
++
++  it("hands the chunk to the session that owns the id", () => {
++    const seen: Array<{ id: string; bytes: number }> = [];
++    const session = (id: string, accepts: boolean) => ({
++      pushAudio: (chunk: Uint8Array) => {
++        seen.push({ id, bytes: chunk.byteLength });
++        return accepts;
++      },
++    });
++    const sessions = new Map([
++      ["client-session", session("client-session", true)],
++      ["host-session", session("host-session", false)],
++    ]);
++
++    expect(routeVoiceAudio(sessions, "client-session", new Uint8Array([1, 2]))).toBe(true);
++    expect(routeVoiceAudio(sessions, "host-session", new Uint8Array([1, 2, 3]))).toBe(false);
++    expect(seen).toEqual([
++      { id: "client-session", bytes: 2 },
++      { id: "host-session", bytes: 3 },
++    ]);
++  });
++});
 diff --git a/apps/server/src/voiceInput.ts b/apps/server/src/voiceInput.ts
 new file mode 100644
-index 00000000..0bb844f1
+index 00000000..689b4c7b
 --- /dev/null
 +++ b/apps/server/src/voiceInput.ts
-@@ -0,0 +1,284 @@
+@@ -0,0 +1,436 @@
 +// @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalDate:off - this module is the
 +// callback boundary for a native recorder and the ws client; their lifetimes are
 +// still scope-bound by the Effect stream returned at the bottom of the file.
-+import { VoiceInputError, type VoiceInputStreamEvent } from "@t3tools/contracts";
++import {
++  VoiceInputError,
++  type VoiceInputSource,
++  type VoiceInputStreamEvent,
++} from "@t3tools/contracts";
 +import * as Effect from "effect/Effect";
 +import * as Queue from "effect/Queue";
 +import * as Stream from "effect/Stream";
-+import { spawn, type ChildProcessByStdio } from "node:child_process";
-+import { readFileSync } from "node:fs";
-+import { homedir } from "node:os";
-+import { join } from "node:path";
-+import type { Readable } from "node:stream";
++import * as NodeChildProcess from "node:child_process";
++import * as NodeFS from "node:fs";
++import * as NodeOS from "node:os";
++import * as NodePath from "node:path";
++import type * as NodeStream from "node:stream";
 +import WebSocket from "ws";
 +
 +const VOICE_STREAM_URL = "wss://api.anthropic.com/api/ws/speech_to_text/voice_stream";
@@ -137,6 +580,10 @@ index 00000000..0bb844f1
 +const MAX_RECORDING_MS = 120_000;
 +const CLOSE_GRACE_MS = 3_000;
 +const LEVEL_INTERVAL_MS = 75;
++export const FIRST_CLIENT_CHUNK_TIMEOUT_MS = 8_000;
++export const NO_CLIENT_AUDIO_MESSAGE = "No microphone audio arrived from the client.";
++export const HOST_BRIDGE_UNAVAILABLE_MESSAGE =
++  "The host microphone bridge is unavailable. Enable microphone passthrough in Construct and keep its VS Code extension running.";
 +const KEYTERMS = [
 +  "VS Code",
 +  "IDE",
@@ -164,14 +611,135 @@ index 00000000..0bb844f1
 +  readonly complete: () => void;
 +};
 +
++/** How a source hands audio and failures back to the session that owns it. */
++export type VoiceAudioSourceHandlers = {
++  /** 16 kHz mono S16LE PCM headed for the transcription socket. */
++  readonly audio: (chunk: Buffer) => void;
++  /** Fatal: the session ends and the client is told why. */
++  readonly fail: (message: string) => void;
++};
++
++/**
++ * Where a session's microphone audio comes from. `start` runs once the
++ * transcription socket is open, so a source never produces audio that would be
++ * dropped on the floor.
++ */
++export interface VoiceAudioSource {
++  readonly kind: VoiceInputSource;
++  /** Whether the server derives the level ring from the audio it sees. */
++  readonly emitsLevels: boolean;
++  start(handlers: VoiceAudioSourceHandlers): void;
++  stop(): void;
++  /** Takes a chunk pushed by a client; false when this source has no use for it. */
++  push(chunk: Uint8Array): boolean;
++}
++
++/** Records on the server through Construct's `rec` shim. */
++class HostAudioSource implements VoiceAudioSource {
++  readonly kind = "host" as const;
++  readonly emitsLevels = true;
++  private recorder: NodeChildProcess.ChildProcessByStdio<
++    null,
++    NodeStream.Readable,
++    NodeStream.Readable
++  > | null = null;
++  private stopped = false;
++
++  start(handlers: VoiceAudioSourceHandlers): void {
++    const recorder = NodeChildProcess.spawn(
++      "rec",
++      [
++        "-q",
++        "--buffer",
++        "1024",
++        "-t",
++        "raw",
++        "-r",
++        "16000",
++        "-e",
++        "signed",
++        "-b",
++        "16",
++        "-c",
++        "1",
++        "-",
++      ],
++      { stdio: ["ignore", "pipe", "pipe"] },
++    );
++    this.recorder = recorder;
++    recorder.stdout.on("data", (chunk: Buffer) => handlers.audio(chunk));
++    recorder.on("error", (error) =>
++      handlers.fail(`Could not start the recorder: ${error.message}`),
++    );
++    recorder.on("exit", (code) => {
++      if (!this.stopped && code !== 0) handlers.fail(HOST_BRIDGE_UNAVAILABLE_MESSAGE);
++    });
++  }
++
++  stop(): void {
++    this.stopped = true;
++    this.recorder?.kill("SIGTERM");
++    this.recorder = null;
++  }
++
++  push(): boolean {
++    return false;
++  }
++}
++
++/** Takes microphone audio the connected client captured and pushed over RPC. */
++class ClientAudioSource implements VoiceAudioSource {
++  readonly kind = "client" as const;
++  readonly emitsLevels = false;
++  private handlers: VoiceAudioSourceHandlers | null = null;
++  private firstChunkTimer: NodeJS.Timeout | null = null;
++
++  start(handlers: VoiceAudioSourceHandlers): void {
++    this.handlers = handlers;
++    // A client that never gets microphone permission would otherwise sit in a
++    // silent "listening" state until the 15 s silence timer ends it with no
++    // explanation at all.
++    this.firstChunkTimer = setTimeout(
++      () => handlers.fail(NO_CLIENT_AUDIO_MESSAGE),
++      FIRST_CLIENT_CHUNK_TIMEOUT_MS,
++    );
++  }
++
++  stop(): void {
++    if (this.firstChunkTimer) clearTimeout(this.firstChunkTimer);
++    this.firstChunkTimer = null;
++    this.handlers = null;
++  }
++
++  push(chunk: Uint8Array): boolean {
++    // Chunks that race ahead of the transcription socket are dropped: the
++    // client only starts pushing once it sees `listening`.
++    const handlers = this.handlers;
++    if (!handlers || chunk.byteLength === 0) return false;
++    if (this.firstChunkTimer) {
++      clearTimeout(this.firstChunkTimer);
++      this.firstChunkTimer = null;
++    }
++    handlers.audio(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength));
++    return true;
++  }
++}
++
++export function createVoiceAudioSource(source: VoiceInputSource | undefined): VoiceAudioSource {
++  return source === "client" ? new ClientAudioSource() : new HostAudioSource();
++}
++
 +function readClaudeAccessToken(): string {
-+  const configDirectory = process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), ".claude");
-+  const credentialsPath = join(configDirectory, ".credentials.json");
++  const configDirectory =
++    process.env.CLAUDE_CONFIG_DIR?.trim() || NodePath.join(NodeOS.homedir(), ".claude");
++  const credentialsPath = NodePath.join(configDirectory, ".credentials.json");
 +  let decoded: unknown;
 +  try {
-+    decoded = JSON.parse(readFileSync(credentialsPath, "utf8"));
++    decoded = JSON.parse(NodeFS.readFileSync(credentialsPath, "utf8"));
 +  } catch {
-+    throw new Error(`Claude credentials were not readable at ${credentialsPath}. Sign in with claude first.`);
++    throw new Error(
++      `Claude credentials were not readable at ${credentialsPath}. Sign in with claude first.`,
++    );
 +  }
 +  const token =
 +    typeof decoded === "object" &&
@@ -183,7 +751,10 @@ index 00000000..0bb844f1
 +    typeof decoded.claudeAiOauth.accessToken === "string"
 +      ? decoded.claudeAiOauth.accessToken.trim()
 +      : "";
-+  if (!token) throw new Error("Claude OAuth credentials do not contain an access token. Sign in with claude first.");
++  if (!token)
++    throw new Error(
++      "Claude OAuth credentials do not contain an access token. Sign in with claude first.",
++    );
 +  return token;
 +}
 +
@@ -204,8 +775,8 @@ index 00000000..0bb844f1
 +class VoiceSession {
 +  readonly id: string;
 +  private readonly callbacks: VoiceSessionCallbacks;
++  private readonly source: VoiceAudioSource;
 +  private socket: WebSocket | null = null;
-+  private recorder: ChildProcessByStdio<null, Readable, Readable> | null = null;
 +  private keepAlive: NodeJS.Timeout | null = null;
 +  private silenceTimer: NodeJS.Timeout | null = null;
 +  private maximumTimer: NodeJS.Timeout | null = null;
@@ -216,9 +787,16 @@ index 00000000..0bb844f1
 +  private stopping = false;
 +  private ended = false;
 +
-+  constructor(id: string, callbacks: VoiceSessionCallbacks) {
++  constructor(id: string, source: VoiceAudioSource, callbacks: VoiceSessionCallbacks) {
 +    this.id = id;
++    this.source = source;
 +    this.callbacks = callbacks;
++  }
++
++  /** Returns false when this session has no use for client-pushed audio. */
++  pushAudio(chunk: Uint8Array): boolean {
++    if (this.stopping || this.ended) return false;
++    return this.source.push(chunk);
 +  }
 +
 +  start(): void {
@@ -240,25 +818,17 @@ index 00000000..0bb844f1
 +      }
 +      this.callbacks.event({ type: "listening" });
 +      socket.send(JSON.stringify({ type: "KeepAlive" }));
-+      const recorder = spawn(
-+        "rec",
-+        ["-q", "--buffer", "1024", "-t", "raw", "-r", "16000", "-e", "signed", "-b", "16", "-c", "1", "-"],
-+        { stdio: ["ignore", "pipe", "pipe"] },
-+      );
-+      this.recorder = recorder;
-+      recorder.stdout.on("data", (chunk: Buffer) => {
-+        if (this.stopping) return;
-+        this.emitAudioLevel(chunk);
-+        if (socket.readyState === WebSocket.OPEN) socket.send(chunk);
-+      });
-+      recorder.on("error", (error) => this.fail(`Could not start the recorder: ${error.message}`, true));
-+      recorder.on("exit", (code) => {
-+        if (!this.stopping && !this.ended && code !== 0) {
-+          this.fail("The host microphone bridge is unavailable. Enable microphone passthrough in Construct and keep its VS Code extension running.", true);
-+        }
++      this.source.start({
++        audio: (chunk) => {
++          if (this.stopping) return;
++          if (this.source.emitsLevels) this.emitAudioLevel(chunk);
++          if (socket.readyState === WebSocket.OPEN) socket.send(chunk);
++        },
++        fail: (message) => this.fail(message, true),
 +      });
 +      this.keepAlive = setInterval(() => {
-+        if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "KeepAlive" }));
++        if (socket.readyState === WebSocket.OPEN)
++          socket.send(JSON.stringify({ type: "KeepAlive" }));
 +      }, KEEP_ALIVE_MS);
 +      this.maximumTimer = setTimeout(() => this.stop(), MAX_RECORDING_MS);
 +      this.resetSilenceTimer();
@@ -302,8 +872,7 @@ index 00000000..0bb844f1
 +  stop(): void {
 +    if (this.stopping || this.ended) return;
 +    this.stopping = true;
-+    this.recorder?.kill("SIGTERM");
-+    this.recorder = null;
++    this.source.stop();
 +    if (this.socket?.readyState === WebSocket.OPEN) {
 +      this.socket.send(JSON.stringify({ type: "CloseStream" }));
 +      this.closeTimer = setTimeout(() => this.finish(), CLOSE_GRACE_MS);
@@ -351,8 +920,7 @@ index 00000000..0bb844f1
 +  private finish(notify = true): void {
 +    if (this.ended) return;
 +    this.ended = true;
-+    this.recorder?.kill("SIGTERM");
-+    this.recorder = null;
++    this.source.stop();
 +    if (this.socket && this.socket.readyState !== WebSocket.CLOSED) this.socket.terminate();
 +    this.socket = null;
 +    for (const timer of [this.keepAlive, this.silenceTimer, this.maximumTimer, this.closeTimer]) {
@@ -366,6 +934,26 @@ index 00000000..0bb844f1
 +
 +const activeVoiceSessions = new Map<string, VoiceSession>();
 +
++/**
++ * Routes one pushed chunk to its session. Unknown ids and host-source sessions
++ * are rejected quietly: a client that pushes into a session it does not own
++ * learns nothing beyond "not accepted".
++ */
++export function routeVoiceAudio(
++  sessions: ReadonlyMap<string, { pushAudio: (chunk: Uint8Array) => boolean }>,
++  sessionId: string,
++  chunk: Uint8Array,
++): boolean {
++  return sessions.get(sessionId)?.pushAudio(chunk) ?? false;
++}
++
++export function pushVoiceAudio(
++  sessionId: string,
++  chunk: Uint8Array,
++): Effect.Effect<{ accepted: boolean }> {
++  return Effect.sync(() => ({ accepted: routeVoiceAudio(activeVoiceSessions, sessionId, chunk) }));
++}
++
 +export function stopVoiceInput(sessionId: string): Effect.Effect<{ stopped: boolean }> {
 +  return Effect.sync(() => {
 +    const session = activeVoiceSessions.get(sessionId);
@@ -374,12 +962,15 @@ index 00000000..0bb844f1
 +  });
 +}
 +
-+export function startVoiceInput(sessionId: string): Stream.Stream<VoiceInputStreamEvent, VoiceInputError> {
++export function startVoiceInput(
++  sessionId: string,
++  source: VoiceInputSource | undefined,
++): Stream.Stream<VoiceInputStreamEvent, VoiceInputError> {
 +  return Stream.callback<VoiceInputStreamEvent, VoiceInputError>((queue) =>
 +    Effect.acquireRelease(
 +      Effect.sync(() => {
 +        for (const active of activeVoiceSessions.values()) active.stop();
-+        const session = new VoiceSession(sessionId, {
++        const session = new VoiceSession(sessionId, createVoiceAudioSource(source), {
 +          event: (event) => void Effect.runFork(Queue.offer(queue, event)),
 +          error: (error) => void Effect.runFork(Queue.fail(queue, error)),
 +          complete: () =>
@@ -402,34 +993,42 @@ index 00000000..0bb844f1
 +  );
 +}
 diff --git a/apps/server/src/ws.ts b/apps/server/src/ws.ts
-index 226c82cd..ab6dbc2b 100644
+index 9983de22..b0b2a85a 100644
 --- a/apps/server/src/ws.ts
 +++ b/apps/server/src/ws.ts
-@@ -133,6 +133,7 @@ import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
+@@ -139,6 +139,7 @@ import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
  import * as VcsProcess from "./vcs/VcsProcess.ts";
  import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
  import * as SessionStore from "./auth/SessionStore.ts";
-+import { startVoiceInput, stopVoiceInput } from "./voiceInput.ts";
++import { pushVoiceAudio, startVoiceInput, stopVoiceInput } from "./voiceInput.ts";
  import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
  import * as RelayClient from "@t3tools/shared/relayClient";
  const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
-@@ -1642,6 +1643,14 @@ const makeWsRpcLayer = (
+@@ -1687,6 +1688,22 @@ const makeWsRpcLayer = (
              ),
              { "rpc.aggregate": "server" },
            ),
 +        [WS_METHODS.voiceInputStart]: (input) =>
-+          observeRpcStream(WS_METHODS.voiceInputStart, startVoiceInput(input.sessionId), {
-+            "rpc.aggregate": "voice-input",
-+          }),
++          observeRpcStream(
++            WS_METHODS.voiceInputStart,
++            startVoiceInput(input.sessionId, input.source),
++            { "rpc.aggregate": "voice-input" },
++          ),
 +        [WS_METHODS.voiceInputStop]: (input) =>
 +          observeRpcEffect(WS_METHODS.voiceInputStop, stopVoiceInput(input.sessionId), {
 +            "rpc.aggregate": "voice-input",
 +          }),
++        [WS_METHODS.voiceInputAudio]: (input) =>
++          observeRpcEffect(
++            WS_METHODS.voiceInputAudio,
++            pushVoiceAudio(input.sessionId, input.chunk),
++            { "rpc.aggregate": "voice-input" },
++          ),
          [WS_METHODS.serverUpsertKeybinding]: (rule) =>
            observeRpcEffect(
              WS_METHODS.serverUpsertKeybinding,
 diff --git a/apps/web/src/components/chat/ChatComposer.tsx b/apps/web/src/components/chat/ChatComposer.tsx
-index 68d1a9eb..1c23e161 100644
+index 68d1a9eb..6b89f562 100644
 --- a/apps/web/src/components/chat/ChatComposer.tsx
 +++ b/apps/web/src/components/chat/ChatComposer.tsx
 @@ -34,6 +34,7 @@ import {
@@ -440,7 +1039,7 @@ index 68d1a9eb..1c23e161 100644
  import {
    clampCollapsedComposerCursor,
    type ComposerSubmissionIntent,
-@@ -160,6 +161,13 @@ import {
+@@ -160,6 +161,56 @@ import {
    submitComposerDraft,
  } from "./composerSubmission";
  import { ComposerPromptLengthValidation } from "./ComposerPromptLengthValidation";
@@ -448,25 +1047,84 @@ index 68d1a9eb..1c23e161 100644
 +import { MicIcon, SquareIcon } from "lucide-react";
 +import { useServerConfigs } from "../../state/entities";
 +import {
++  sendVoiceAudio as sendVoiceAudioCommand,
 +  startVoiceInput as startVoiceInputCommand,
 +  stopVoiceInput as stopVoiceInputCommand,
 +} from "../../state/voiceInput";
++import {
++  canCaptureClientAudio,
++  isSecureContext,
++  resolveVoiceInputSource,
++  startClientAudioCapture,
++  type ClientAudioCapture,
++} from "../../voice/clientAudioCapture";
++import {
++  createVoiceAudioSender,
++  MAX_PENDING_VOICE_CHUNKS,
++  type VoiceAudioSender,
++} from "../../voice/voiceAudioSender";
++import { describeVoiceInputFailure } from "../../voice/voiceInputFailure";
++import { useClientSettings } from "../../hooks/useSettings";
++
++/**
++ * A live voice session's insertion window plus, for client-captured audio, the
++ * microphone and the sender pushing it to the server.
++ */
++type VoiceInsertionState = {
++  sessionId: string;
++  prefix: string;
++  suffix: string;
++  rendered: string;
++  lastSetInput: string;
++  source: "client" | "host";
++  capture: ClientAudioCapture | null;
++  sender: VoiceAudioSender | null;
++  /** Audio captured before the server said `listening`; flushed once it does. */
++  buffered: Array<Uint8Array>;
++  stopRequested: boolean;
++};
++
++/** Idempotent, so every path that drops a session can call it. */
++function releaseVoiceCapture(insertion: VoiceInsertionState | null): void {
++  if (!insertion) return;
++  insertion.capture?.stop();
++  insertion.capture = null;
++  insertion.sender?.stop();
++  insertion.sender = null;
++  insertion.buffered.length = 0;
++}
  
  function ComposerVideoThumbnail({ file }: { file: File }) {
    const setVideo = useCallback(
-@@ -800,6 +808,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
+@@ -800,6 +851,27 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
      onFileOpen,
      openingVideoAttachmentId,
    } = props;
 +  const serverConfigs = useServerConfigs();
 +  const supportsVoiceInput =
 +    serverConfigs.get(environmentId)?.environment.capabilities.voiceInput === true;
++  const supportsClientVoiceAudio =
++    serverConfigs.get(environmentId)?.environment.capabilities.voiceInputClientAudio === true;
++  const voiceInputSourcePreference = useClientSettings((settings) => settings.voiceInputSource);
++  const voiceInputSource = resolveVoiceInputSource({
++    preference: voiceInputSourcePreference,
++    canCaptureHere: canCaptureClientAudio(),
++    serverAcceptsClientAudio: supportsClientVoiceAudio,
++    secureContext: isSecureContext(),
++  });
++  const voiceSourceHint =
++    voiceInputSource.source === "client"
++      ? "records with this device's microphone"
++      : voiceInputSource.source === "host"
++        ? "records through the Construct host bridge"
++        : voiceInputSource.reason;
 +  const runStartVoiceInput = useAtomCommand(startVoiceInputCommand, { reportFailure: false });
 +  const runStopVoiceInput = useAtomCommand(stopVoiceInputCommand, { reportFailure: false });
++  const runSendVoiceAudio = useAtomCommand(sendVoiceAudioCommand, { reportFailure: false });
    // ------------------------------------------------------------------
    // Store subscriptions (prompt / images / terminal contexts)
    // ------------------------------------------------------------------
-@@ -1200,6 +1213,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
+@@ -1200,6 +1272,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
    const [isComposerPrimaryActionsCompact, setIsComposerPrimaryActionsCompact] = useState(false);
    const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
    const [isComposerFocused, setIsComposerFocused] = useState(false);
@@ -475,22 +1133,16 @@ index 68d1a9eb..1c23e161 100644
    const [composerSubmissionError, setComposerSubmissionError] = useState<string | null>(null);
    const [providerInputSubmissionError, setProviderInputSubmissionError] = useState<string | null>(
      null,
-@@ -1220,6 +1235,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
+@@ -1220,6 +1294,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
    // Refs
    // ------------------------------------------------------------------
    const composerEditorRef = useRef<ComposerPromptEditorHandle>(null);
-+  const voiceInsertionRef = useRef<{
-+    sessionId: string;
-+    prefix: string;
-+    suffix: string;
-+    rendered: string;
-+    lastSetInput: string;
-+  } | null>(null);
++  const voiceInsertionRef = useRef<VoiceInsertionState | null>(null);
 +  const voiceShortcutRef = useRef<{ started: boolean; downAt: number } | null>(null);
    const attachmentInputRef = useRef<HTMLInputElement>(null);
    const composerFormRef = useRef<HTMLFormElement>(null);
    const composerSurfaceRef = useRef<HTMLDivElement>(null);
-@@ -1968,6 +1991,158 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
+@@ -1968,6 +2044,244 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
      };
    }, [composerCursor, composerTerminalContexts, promptRef]);
  
@@ -498,27 +1150,75 @@ index 68d1a9eb..1c23e161 100644
 +    setVoiceLevel(0);
 +    const insertion = voiceInsertionRef.current;
 +    if (!insertion) return;
++    insertion.stopRequested = true;
++    releaseVoiceCapture(insertion);
 +    void runStopVoiceInput({ environmentId, sessionId: insertion.sessionId });
 +  }, [environmentId, runStopVoiceInput]);
 +
 +  const startVoiceRecording = useCallback(() => {
 +    if (!supportsVoiceInput || voiceInsertionRef.current || environmentUnavailable !== null) return;
++    if (voiceInputSource.source === null) {
++      toastManager.add({
++        type: "error",
++        title: "Voice input unavailable",
++        description: voiceInputSource.reason,
++      });
++      return;
++    }
++    const source = voiceInputSource.source;
 +    const snapshot = readComposerSnapshot();
 +    const sessionId = randomUUID();
-+    const insertion = {
++    const insertion: VoiceInsertionState = {
 +      sessionId,
 +      prefix: snapshot.value.slice(0, snapshot.expandedCursor),
 +      suffix: snapshot.value.slice(snapshot.expandedCursor),
 +      rendered: "",
 +      lastSetInput: snapshot.value,
++      source,
++      capture: null,
++      sender: null,
++      buffered: [],
++      stopRequested: false,
 +    };
 +    voiceInsertionRef.current = insertion;
 +    setIsVoiceRecording(true);
 +    setVoiceLevel(0);
 +
++    if (source === "client") {
++      // The permission prompt can take seconds, so the microphone comes up in
++      // parallel with the session rather than after it.
++      insertion.capture = startClientAudioCapture({
++        onChunk: (chunk) => {
++          if (voiceInsertionRef.current !== insertion) return;
++          if (insertion.sender) {
++            insertion.sender.push(chunk);
++            return;
++          }
++          // Not listening yet: keep the newest ~0.8 s so the first word
++          // survives the round trip instead of being dropped.
++          insertion.buffered.push(chunk);
++          if (insertion.buffered.length > MAX_PENDING_VOICE_CHUNKS) insertion.buffered.shift();
++        },
++        onLevel: (level) => {
++          if (voiceInsertionRef.current !== insertion) return;
++          setVoiceLevel(level);
++        },
++        onError: (message) => {
++          if (voiceInsertionRef.current !== insertion) return;
++          stopVoiceRecording();
++          toastManager.add({
++            type: "error",
++            title: "Voice input stopped",
++            description: message,
++          });
++        },
++      });
++    }
++
 +    void runStartVoiceInput({
 +      environmentId,
 +      sessionId,
++      source,
 +      onEvent: (event) => {
 +        const active = voiceInsertionRef.current;
 +        if (!active || active.sessionId !== sessionId) return;
@@ -526,7 +1226,23 @@ index 68d1a9eb..1c23e161 100644
 +          setVoiceLevel(event.value);
 +          return;
 +        }
++        if (event.type === "listening") {
++          if (active.source !== "client") return;
++          if (active.stopRequested) {
++            // The user stopped before the server was ready to record.
++            void runStopVoiceInput({ environmentId, sessionId });
++            return;
++          }
++          const sender = createVoiceAudioSender({
++            send: (chunk) => runSendVoiceAudio({ environmentId, sessionId, chunk }),
++          });
++          active.sender = sender;
++          for (const chunk of active.buffered) sender.push(chunk);
++          active.buffered.length = 0;
++          return;
++        }
 +        if (event.type === "stopped") {
++          releaseVoiceCapture(active);
 +          voiceInsertionRef.current = null;
 +          setIsVoiceRecording(false);
 +          setVoiceLevel(0);
@@ -538,6 +1254,7 @@ index 68d1a9eb..1c23e161 100644
 +        // overwriting either the original prompt or the user's new edit.
 +        if (promptRef.current !== active.lastSetInput) {
 +          stopVoiceRecording();
++          releaseVoiceCapture(active);
 +          voiceInsertionRef.current = null;
 +          setIsVoiceRecording(false);
 +          return;
@@ -555,6 +1272,7 @@ index 68d1a9eb..1c23e161 100644
 +        );
 +        if (!applied) {
 +          stopVoiceRecording();
++          releaseVoiceCapture(active);
 +          voiceInsertionRef.current = null;
 +          setIsVoiceRecording(false);
 +          return;
@@ -566,18 +1284,20 @@ index 68d1a9eb..1c23e161 100644
 +        window.requestAnimationFrame(() => composerEditorRef.current?.focusAt(cursor));
 +      },
 +    }).then((result) => {
++      releaseVoiceCapture(insertion);
 +      const active = voiceInsertionRef.current;
 +      if (active?.sessionId === sessionId) {
 +        voiceInsertionRef.current = null;
 +        setIsVoiceRecording(false);
 +        setVoiceLevel(0);
 +      }
-+      if (!AsyncResult.isSuccess(result)) {
++      if (AsyncResult.isFailure(result)) {
 +        toastManager.add({
 +          type: "error",
 +          title: "Voice input stopped",
-+          description:
-+            "Could not transcribe the microphone. Check Claude sign-in and Construct microphone passthrough.",
++          // The server names its own failures (no client audio, host bridge
++          // down, a transcription error); only unexplained ones fall back.
++          description: describeVoiceInputFailure(result.cause, source),
 +        });
 +      }
 +    });
@@ -587,9 +1307,12 @@ index 68d1a9eb..1c23e161 100644
 +    environmentUnavailable,
 +    promptRef,
 +    readComposerSnapshot,
++    runSendVoiceAudio,
 +    runStartVoiceInput,
++    runStopVoiceInput,
 +    stopVoiceRecording,
 +    supportsVoiceInput,
++    voiceInputSource,
 +  ]);
 +
 +  const toggleVoiceRecording = useCallback(() => {
@@ -602,8 +1325,19 @@ index 68d1a9eb..1c23e161 100644
 +  useEffect(() => {
 +    if (!supportsVoiceInput) return;
 +    const onKeyDown = (event: KeyboardEvent) => {
-+      if (event.repeat || event.key.toLowerCase() !== "t" || !event.ctrlKey || event.altKey || event.metaKey) return;
-+      if (!(event.target instanceof Element) || !event.target.closest('[data-chat-composer-form="true"]')) return;
++      if (
++        event.repeat ||
++        event.key.toLowerCase() !== "t" ||
++        !event.ctrlKey ||
++        event.altKey ||
++        event.metaKey
++      )
++        return;
++      if (
++        !(event.target instanceof Element) ||
++        !event.target.closest('[data-chat-composer-form="true"]')
++      )
++        return;
 +      event.preventDefault();
 +      const wasRecording = voiceInsertionRef.current !== null;
 +      if (wasRecording) {
@@ -632,6 +1366,7 @@ index 68d1a9eb..1c23e161 100644
 +    const active = voiceInsertionRef.current;
 +    if (active && prompt !== active.lastSetInput) {
 +      stopVoiceRecording();
++      releaseVoiceCapture(active);
 +      voiceInsertionRef.current = null;
 +      setIsVoiceRecording(false);
 +      setVoiceLevel(0);
@@ -641,7 +1376,10 @@ index 68d1a9eb..1c23e161 100644
 +  useEffect(
 +    () => () => {
 +      const active = voiceInsertionRef.current;
-+      if (active) void runStopVoiceInput({ environmentId, sessionId: active.sessionId });
++      if (active) {
++        releaseVoiceCapture(active);
++        void runStopVoiceInput({ environmentId, sessionId: active.sessionId });
++      }
 +    },
 +    [environmentId, runStopVoiceInput],
 +  );
@@ -649,45 +1387,167 @@ index 68d1a9eb..1c23e161 100644
    const resolveActiveComposerTrigger = useCallback((): {
      snapshot: { value: string; cursor: number; expandedCursor: number };
      trigger: ComposerTrigger | null;
-@@ -4221,6 +4396,38 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
+@@ -4221,6 +4535,48 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                    ) : null}
                    {showMobilePendingAnswerActions ? null : inlineTasksBadge}
                    {showMobilePendingAnswerActions ? null : inlineStashBadge}
 +                  {supportsVoiceInput ? (
-+                    <button
-+                      type="button"
-+                      className={cn(
-+                        "flex h-9 w-9 items-center justify-center rounded-full transition-[color,background-color,box-shadow,transform] duration-75 sm:h-8 sm:w-8",
-+                        isVoiceRecording
-+                          ? "bg-destructive text-white hover:bg-destructive/90"
-+                          : "bg-secondary text-secondary-foreground hover:bg-secondary/80",
-+                      )}
-+                      onPointerDown={(event) => event.preventDefault()}
-+                      onClick={toggleVoiceRecording}
-+                      style={
-+                        isVoiceRecording
-+                          ? {
-+                              transform: `scale(${1 + voiceLevel * 0.12})`,
-+                              boxShadow: `0 0 0 ${2 + voiceLevel * 7}px rgb(239 68 68 / ${0.2 + voiceLevel * 0.45})`,
++                    <Tooltip>
++                      <TooltipTrigger
++                        render={
++                          <button
++                            type="button"
++                            className={cn(
++                              "flex h-9 w-9 items-center justify-center rounded-full transition-[color,background-color,box-shadow,transform] duration-75 sm:h-8 sm:w-8",
++                              isVoiceRecording
++                                ? "bg-destructive text-white hover:bg-destructive/90"
++                                : "bg-secondary text-secondary-foreground hover:bg-secondary/80",
++                            )}
++                            onPointerDown={(event) => event.preventDefault()}
++                            onClick={toggleVoiceRecording}
++                            style={
++                              isVoiceRecording
++                                ? {
++                                    transform: `scale(${1 + voiceLevel * 0.12})`,
++                                    boxShadow: `0 0 0 ${2 + voiceLevel * 7}px rgb(239 68 68 / ${0.2 + voiceLevel * 0.45})`,
++                                  }
++                                : undefined
 +                            }
-+                          : undefined
-+                      }
-+                      data-voice-level={isVoiceRecording ? voiceLevel.toFixed(3) : undefined}
-+                      disabled={environmentUnavailable !== null || isConnecting}
-+                      aria-pressed={isVoiceRecording}
-+                      aria-label={isVoiceRecording ? "Stop voice input" : "Start voice input"}
-+                      title={isVoiceRecording ? "Stop voice input (Ctrl+T)" : "Voice input (Ctrl+T)"}
-+                    >
-+                      {isVoiceRecording ? (
-+                        <SquareIcon className="size-3.5" fill="currentColor" aria-hidden="true" />
-+                      ) : (
-+                        <MicIcon className="size-4" aria-hidden="true" />
-+                      )}
-+                    </button>
++                            data-voice-level={isVoiceRecording ? voiceLevel.toFixed(3) : undefined}
++                            disabled={environmentUnavailable !== null || isConnecting}
++                            aria-pressed={isVoiceRecording}
++                            aria-label={isVoiceRecording ? "Stop voice input" : "Start voice input"}
++                          />
++                        }
++                      >
++                        {isVoiceRecording ? (
++                          <SquareIcon className="size-3.5" fill="currentColor" aria-hidden="true" />
++                        ) : (
++                          <MicIcon className="size-4" aria-hidden="true" />
++                        )}
++                      </TooltipTrigger>
++                      <TooltipPopup side="top">
++                        {`${
++                          isVoiceRecording ? "Stop voice input" : "Voice input"
++                        } (Ctrl+T) — ${voiceSourceHint}`}
++                      </TooltipPopup>
++                    </Tooltip>
 +                  ) : null}
                    <ComposerFooterPrimaryActions
                      compact={isComposerPrimaryActionsCompact}
                      activeContextWindow={activeContextWindow}
+diff --git a/apps/web/src/components/settings/SettingsPanels.tsx b/apps/web/src/components/settings/SettingsPanels.tsx
+index b486a0ee..12dedc97 100644
+--- a/apps/web/src/components/settings/SettingsPanels.tsx
++++ b/apps/web/src/components/settings/SettingsPanels.tsx
+@@ -34,6 +34,7 @@ import {
+   MIN_PROMPT_FONT_SIZE,
+   MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
+   MIN_TERMINAL_FONT_SIZE,
++  VoiceInputSourcePreference,
+ } from "@t3tools/contracts/settings";
+ import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
+ import { createModelSelection } from "@t3tools/shared/model";
+@@ -80,7 +81,7 @@ import {
+ import { ensureLocalApi, readLocalApi } from "../../localApi";
+ import { isMacPlatform } from "../../lib/utils";
+ import { primaryServerObservabilityAtom, primaryServerProvidersAtom } from "../../state/server";
+-import { useProjects } from "../../state/entities";
++import { useProjects, useServerConfigs } from "../../state/entities";
+ import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
+ import { formatRelativeTimeLabel } from "../../timestampFormat";
+ import { Button } from "../ui/button";
+@@ -1858,9 +1859,27 @@ function LegacyFeaturesSection() {
+   );
+ }
+ 
++const VOICE_INPUT_SOURCE_LABELS: Readonly<Record<VoiceInputSourcePreference, string>> = {
++  auto: "Automatic",
++  client: "This device",
++  host: "Construct host bridge",
++};
++
++const isVoiceInputSourcePreference = Schema.is(VoiceInputSourcePreference);
++
+ export function GeneralSettingsPanel() {
+   const settings = usePrimarySettings();
+   const updateSettings = useUpdatePrimarySettings();
++  const serverConfigs = useServerConfigs();
++  // Stock T3 servers have no voice input at all, so the row would be a dead
++  // control there.
++  const showVoiceInputSource = useMemo(
++    () =>
++      [...serverConfigs.values()].some(
++        (config) => config.environment.capabilities.voiceInput === true,
++      ),
++    [serverConfigs],
++  );
+   const [backgroundActivityDialogOpen, setBackgroundActivityDialogOpen] = useState(false);
+   const lastEnabledProjectGroupingMode = useRef<SidebarProjectGroupingMode>(
+     readLastEnabledProjectGroupingMode(),
+@@ -2112,6 +2131,46 @@ export function GeneralSettingsPanel() {
+           }
+         />
+ 
++        {showVoiceInputSource ? (
++          <SettingsRow
++            {...searchableSetting("voice-input-source")}
++            description="Choose where voice input records. Automatic uses this device's microphone when it is available, and the Construct host bridge otherwise."
++            resetAction={
++              settings.voiceInputSource !== DEFAULT_UNIFIED_SETTINGS.voiceInputSource ? (
++                <SettingResetButton
++                  label="voice input source"
++                  onClick={() =>
++                    updateSettings({
++                      voiceInputSource: DEFAULT_UNIFIED_SETTINGS.voiceInputSource,
++                    })
++                  }
++                />
++              ) : null
++            }
++            control={
++              <Select
++                value={settings.voiceInputSource}
++                onValueChange={(value) => {
++                  if (isVoiceInputSourcePreference(value)) {
++                    updateSettings({ voiceInputSource: value });
++                  }
++                }}
++              >
++                <SelectTrigger className="w-full sm:w-52" aria-label="Voice input source">
++                  <SelectValue>{VOICE_INPUT_SOURCE_LABELS[settings.voiceInputSource]}</SelectValue>
++                </SelectTrigger>
++                <SelectPopup align="end" alignItemWithTrigger={false}>
++                  {Object.entries(VOICE_INPUT_SOURCE_LABELS).map(([value, label]) => (
++                    <SelectItem hideIndicator key={value} value={value}>
++                      {label}
++                    </SelectItem>
++                  ))}
++                </SelectPopup>
++              </Select>
++            }
++          />
++        ) : null}
++
+         <SettingsRow
+           {...searchableSetting("provider-update-checks")}
+           description="Check installed provider CLIs for newer available versions."
+diff --git a/apps/web/src/components/settings/settingsSearch.ts b/apps/web/src/components/settings/settingsSearch.ts
+index b924f5f6..be27d2c0 100644
+--- a/apps/web/src/components/settings/settingsSearch.ts
++++ b/apps/web/src/components/settings/settingsSearch.ts
+@@ -136,6 +136,11 @@ export const SETTINGS_SEARCH_ITEMS = [
+     title: "Show skills in slash menu",
+     to: "/settings/general",
+   },
++  {
++    id: "voice-input-source",
++    title: "Voice input source",
++    to: "/settings/general",
++  },
+   {
+     id: "provider-update-checks",
+     title: "Provider update checks",
 diff --git a/apps/web/src/components/sidebar/SidebarUpdatePill.tsx b/apps/web/src/components/sidebar/SidebarUpdatePill.tsx
 index f576fdd4..0f2a8414 100644
 --- a/apps/web/src/components/sidebar/SidebarUpdatePill.tsx
@@ -703,13 +1563,14 @@ index f576fdd4..0f2a8414 100644
      : showUpdateDetails
 diff --git a/apps/web/src/state/voiceInput.ts b/apps/web/src/state/voiceInput.ts
 new file mode 100644
-index 00000000..a265b19f
+index 00000000..ddf32255
 --- /dev/null
 +++ b/apps/web/src/state/voiceInput.ts
-@@ -0,0 +1,39 @@
+@@ -0,0 +1,64 @@
 +import {
 +  WS_METHODS,
 +  type EnvironmentId,
++  type VoiceInputSource,
 +  type VoiceInputStreamEvent,
 +} from "@t3tools/contracts";
 +import { request, runStream } from "@t3tools/client-runtime/rpc";
@@ -728,14 +1589,17 @@ index 00000000..a265b19f
 +  execute: (target: {
 +    readonly environmentId: EnvironmentId;
 +    readonly sessionId: string;
++    /** Absent leaves the choice to the server, which records on the host. */
++    readonly source?: VoiceInputSource;
 +    readonly onEvent: (event: VoiceInputStreamEvent) => void;
 +  }) =>
 +    runStreamInEnvironment(
 +      target.environmentId,
-+      runStream(WS_METHODS.voiceInputStart, { sessionId: target.sessionId }),
-+    ).pipe(
-+      Stream.runForEach((event) => Effect.sync(() => target.onEvent(event))),
-+    ),
++      runStream(WS_METHODS.voiceInputStart, {
++        sessionId: target.sessionId,
++        ...(target.source === undefined ? {} : { source: target.source }),
++      }),
++    ).pipe(Stream.runForEach((event) => Effect.sync(() => target.onEvent(event)))),
 +});
 +
 +export const stopVoiceInput = createRuntimeCommand(connectionAtomRuntime, {
@@ -746,6 +1610,828 @@ index 00000000..a265b19f
 +      request(WS_METHODS.voiceInputStop, { sessionId: target.sessionId }),
 +    ),
 +});
++
++/**
++ * Pushes one chunk of client-captured microphone audio. The server answers
++ * `{ accepted: false }` for a session it does not own or that records on the
++ * host, so a stale sender cannot write into anyone else's transcript.
++ */
++export const sendVoiceAudio = createRuntimeCommand(connectionAtomRuntime, {
++  label: "voice-input:audio",
++  execute: (target: {
++    readonly environmentId: EnvironmentId;
++    readonly sessionId: string;
++    readonly chunk: Uint8Array;
++  }) =>
++    runInEnvironment(
++      target.environmentId,
++      request(WS_METHODS.voiceInputAudio, {
++        sessionId: target.sessionId,
++        chunk: target.chunk,
++      }),
++    ),
++});
+diff --git a/apps/web/src/voice/clientAudioCapture.test.ts b/apps/web/src/voice/clientAudioCapture.test.ts
+new file mode 100644
+index 00000000..2354a120
+--- /dev/null
++++ b/apps/web/src/voice/clientAudioCapture.test.ts
+@@ -0,0 +1,177 @@
++import { describe, expect, it } from "vite-plus/test";
++
++import {
++  computeAudioLevel,
++  createLinearResampler,
++  describeCaptureError,
++  floatToPcm16,
++  resolveVoiceInputSource,
++  VOICE_SAMPLE_RATE,
++} from "./clientAudioCapture";
++
++describe("createLinearResampler", () => {
++  it("passes blocks through untouched when the rates already match", () => {
++    const resample = createLinearResampler(VOICE_SAMPLE_RATE, VOICE_SAMPLE_RATE);
++    const block = new Float32Array([0.1, 0.2, 0.3]);
++    expect(resample(block)).toBe(block);
++  });
++
++  it("decimates an integer ratio exactly", () => {
++    const resample = createLinearResampler(32_000, 16_000);
++    expect([...resample(new Float32Array([0, 1, 2, 3, 4, 5]))]).toEqual([0, 2, 4]);
++  });
++
++  it("interpolates when upsampling", () => {
++    const resample = createLinearResampler(16_000, 32_000);
++    expect([...resample(new Float32Array([0, 1]))]).toEqual([0, 0.5, 1]);
++  });
++
++  it("stays continuous across block boundaries", () => {
++    const whole = new Float32Array(24);
++    for (let index = 0; index < whole.length; index += 1) whole[index] = index;
++
++    const single = createLinearResampler(48_000, 16_000);
++    const expected = [...single(whole)];
++
++    const streamed = createLinearResampler(48_000, 16_000);
++    const chunked = [
++      ...streamed(whole.slice(0, 7)),
++      ...streamed(whole.slice(7, 13)),
++      ...streamed(whole.slice(13)),
++    ];
++
++    expect(chunked).toEqual(expected);
++    // 48 kHz in, 16 kHz out: a third of the samples come back out.
++    expect(chunked).toHaveLength(8);
++  });
++
++  it("produces roughly a chunk's worth of 16 kHz samples from a 44.1 kHz block", () => {
++    const resample = createLinearResampler(44_100, VOICE_SAMPLE_RATE);
++    const block = new Float32Array(4410); // 100 ms at 44.1 kHz
++    expect(resample(block).length).toBe(1600);
++  });
++
++  it("ignores empty blocks", () => {
++    const resample = createLinearResampler(48_000, 16_000);
++    expect(resample(new Float32Array()).length).toBe(0);
++  });
++
++  it("refuses nonsensical rates", () => {
++    expect(() => createLinearResampler(0, 16_000)).toThrow();
++    expect(() => createLinearResampler(48_000, -1)).toThrow();
++  });
++});
++
++describe("floatToPcm16", () => {
++  it("writes signed 16-bit little-endian samples", () => {
++    const bytes = floatToPcm16(new Float32Array([0, 1, -1]));
++    expect(bytes).toHaveLength(6);
++    const view = new DataView(bytes.buffer);
++    expect(view.getInt16(0, true)).toBe(0);
++    expect(view.getInt16(2, true)).toBe(32_767);
++    expect(view.getInt16(4, true)).toBe(-32_767);
++    // Little-endian on every platform, not host order.
++    expect(Array.from(bytes.slice(2, 4))).toEqual([0xff, 0x7f]);
++  });
++
++  it("clamps samples outside the normalized range", () => {
++    const view = new DataView(floatToPcm16(new Float32Array([4, -4])).buffer);
++    expect(view.getInt16(0, true)).toBe(32_767);
++    expect(view.getInt16(2, true)).toBe(-32_767);
++  });
++
++  it("emits two bytes per sample so a 100 ms chunk stays 3200 bytes", () => {
++    expect(floatToPcm16(new Float32Array(1600))).toHaveLength(3200);
++  });
++});
++
++describe("computeAudioLevel", () => {
++  it("is zero for silence and for anything under the noise floor", () => {
++    expect(computeAudioLevel(new Float32Array())).toBe(0);
++    expect(computeAudioLevel(new Float32Array([0, 0, 0]))).toBe(0);
++    expect(computeAudioLevel(new Float32Array([0.005, -0.005]))).toBe(0);
++  });
++
++  it("matches the server's formula", () => {
++    const samples = new Float32Array([0.05, -0.05, 0.05, -0.05]);
++    expect(computeAudioLevel(samples)).toBeCloseTo((0.05 - 0.006) * 10, 6);
++  });
++
++  it("saturates at one", () => {
++    expect(computeAudioLevel(new Float32Array([1, -1]))).toBe(1);
++  });
++});
++
++describe("describeCaptureError", () => {
++  it("explains the errors a user can act on", () => {
++    expect(describeCaptureError({ name: "NotAllowedError" })).toBe("Microphone access was denied.");
++    expect(describeCaptureError({ name: "NotFoundError" })).toBe("No microphone found.");
++    expect(describeCaptureError({ name: "NotReadableError" })).toBe(
++      "The microphone is already in use by another application.",
++    );
++  });
++
++  it("keeps the underlying reason for anything else", () => {
++    expect(describeCaptureError(new Error("boom"))).toBe("Could not start the microphone: boom");
++    expect(describeCaptureError("boom")).toBe("Could not start the microphone.");
++  });
++});
++
++describe("resolveVoiceInputSource", () => {
++  const capable = {
++    canCaptureHere: true,
++    serverAcceptsClientAudio: true,
++    secureContext: true,
++  } as const;
++
++  it("always records on the host when asked to", () => {
++    expect(resolveVoiceInputSource({ ...capable, preference: "host" }).source).toBe("host");
++    expect(
++      resolveVoiceInputSource({
++        preference: "host",
++        canCaptureHere: false,
++        serverAcceptsClientAudio: false,
++        secureContext: false,
++      }).source,
++    ).toBe("host");
++  });
++
++  it("prefers this device on auto and falls back to the host bridge", () => {
++    expect(resolveVoiceInputSource({ ...capable, preference: "auto" }).source).toBe("client");
++    expect(
++      resolveVoiceInputSource({ ...capable, preference: "auto", canCaptureHere: false }).source,
++    ).toBe("host");
++    expect(
++      resolveVoiceInputSource({ ...capable, preference: "auto", serverAcceptsClientAudio: false })
++        .source,
++    ).toBe("host");
++  });
++
++  it("refuses to start, with a reason, when this device was demanded but cannot record", () => {
++    const insecure = resolveVoiceInputSource({
++      preference: "client",
++      canCaptureHere: false,
++      serverAcceptsClientAudio: true,
++      secureContext: false,
++    });
++    expect(insecure.source).toBeNull();
++    expect(insecure.reason).toContain("HTTPS");
++
++    const noMicrophoneApi = resolveVoiceInputSource({
++      preference: "client",
++      canCaptureHere: false,
++      serverAcceptsClientAudio: true,
++      secureContext: true,
++    });
++    expect(noMicrophoneApi.source).toBeNull();
++    expect(noMicrophoneApi.reason).toContain("microphone");
++
++    const oldServer = resolveVoiceInputSource({
++      ...capable,
++      preference: "client",
++      serverAcceptsClientAudio: false,
++    });
++    expect(oldServer.source).toBeNull();
++    expect(oldServer.reason).toContain("host bridge");
++  });
++});
+diff --git a/apps/web/src/voice/clientAudioCapture.ts b/apps/web/src/voice/clientAudioCapture.ts
+new file mode 100644
+index 00000000..2dd2cd2c
+--- /dev/null
++++ b/apps/web/src/voice/clientAudioCapture.ts
+@@ -0,0 +1,316 @@
++/**
++ * Microphone capture in the client.
++ *
++ * The server can record on its own machine through Construct's host bridge, but
++ * that bridge only exists while a VS Code window with the Construct extension is
++ * open. When the client can reach a microphone itself, it captures 16 kHz mono
++ * S16LE PCM here and pushes it to the server instead.
++ *
++ * Everything above the browser calls (resampling, PCM conversion, the level
++ * formula, source selection) is a plain function so it can be tested without a
++ * WebAudio implementation.
++ */
++
++import type { VoiceInputSourcePreference } from "@t3tools/contracts/settings";
++
++/** What the Anthropic speech socket expects, and what the server forwards to it. */
++export const VOICE_SAMPLE_RATE = 16_000;
++/** ~100 ms of audio per pushed chunk. */
++export const VOICE_CHUNK_MS = 100;
++const LEVEL_INTERVAL_MS = 75;
++
++export type VoiceInputSourceResolution =
++  | { readonly source: "client" | "host"; readonly reason?: undefined }
++  /** Nothing can record: the caller must not start a session, and says why. */
++  | { readonly source: null; readonly reason: string };
++
++/**
++ * Picks the audio source for a voice session. `auto` prefers this device and
++ * silently falls back to the host bridge; an explicit `client` preference that
++ * cannot be honoured fails loudly rather than recording somewhere the user did
++ * not ask for.
++ */
++export function resolveVoiceInputSource(input: {
++  readonly preference: VoiceInputSourcePreference;
++  readonly canCaptureHere: boolean;
++  readonly serverAcceptsClientAudio: boolean;
++  readonly secureContext: boolean;
++}): VoiceInputSourceResolution {
++  if (input.preference === "host") return { source: "host" };
++  const clientUsable = input.canCaptureHere && input.serverAcceptsClientAudio;
++  if (input.preference === "auto") return { source: clientUsable ? "client" : "host" };
++  if (clientUsable) return { source: "client" };
++  if (!input.serverAcceptsClientAudio) {
++    return {
++      source: null,
++      reason:
++        "This server does not accept microphone audio from the client. Switch voice input to the Construct host bridge.",
++    };
++  }
++  if (!input.secureContext) {
++    return {
++      source: null,
++      reason:
++        "Browsers only allow microphone access on secure origins. Open T3 Code over HTTPS, or use the desktop app.",
++    };
++  }
++  return { source: null, reason: "This browser does not expose a microphone." };
++}
++
++/** Whether this client can reach a microphone at all. */
++export function canCaptureClientAudio(): boolean {
++  return (
++    typeof window !== "undefined" &&
++    window.isSecureContext === true &&
++    typeof navigator !== "undefined" &&
++    typeof navigator.mediaDevices?.getUserMedia === "function"
++  );
++}
++
++export function isSecureContext(): boolean {
++  return typeof window !== "undefined" && window.isSecureContext === true;
++}
++
++/**
++ * Resamples a stream of Float32 blocks to `outputRate`.
++ *
++ * Browsers may refuse an explicit 16 kHz `AudioContext` (Firefox and Safari
++ * usually hand back the device rate), so the blocks arrive at whatever rate the
++ * context runs at. The returned function keeps the fractional read position and
++ * the previous block's last sample, so interpolation is continuous across block
++ * boundaries instead of clicking every 100 ms.
++ */
++export function createLinearResampler(
++  inputRate: number,
++  outputRate: number,
++): (block: Float32Array) => Float32Array {
++  if (!(inputRate > 0) || !(outputRate > 0)) {
++    throw new Error("Sample rates must be positive.");
++  }
++  const ratio = inputRate / outputRate;
++  if (ratio === 1) return (block) => block;
++
++  let previous = 0;
++  // Read position for the next output sample, relative to the next block's
++  // start. Always > -1, so at most one sample of history is needed.
++  let position = 0;
++
++  return (block) => {
++    if (block.length === 0) return block;
++    const limit = block.length - 1;
++    const count = position > limit ? 0 : Math.floor((limit - position) / ratio) + 1;
++    const output = new Float32Array(count);
++    for (let index = 0; index < count; index += 1) {
++      const read = position + index * ratio;
++      const left = Math.floor(read);
++      const fraction = read - left;
++      const before = left < 0 ? previous : block[left]!;
++      // Reading exactly the last sample has nothing to interpolate towards.
++      const after = left + 1 <= limit ? block[left + 1]! : before;
++      output[index] = before + (after - before) * fraction;
++    }
++    position = position + count * ratio - block.length;
++    previous = block[limit]!;
++    return output;
++  };
++}
++
++/** Converts normalized float samples to the S16LE bytes the speech socket wants. */
++export function floatToPcm16(samples: Float32Array): Uint8Array {
++  const bytes = new Uint8Array(samples.length * 2);
++  const view = new DataView(bytes.buffer);
++  for (let index = 0; index < samples.length; index += 1) {
++    const clamped = Math.max(-1, Math.min(1, samples[index]!));
++    view.setInt16(index * 2, Math.round(clamped * 32_767), true);
++  }
++  return bytes;
++}
++
++/**
++ * The level ring's value, using the same formula the server applies to host
++ * audio so the ring behaves identically for both sources.
++ */
++export function computeAudioLevel(samples: Float32Array): number {
++  if (samples.length === 0) return 0;
++  let sumSquares = 0;
++  for (let index = 0; index < samples.length; index += 1) {
++    const sample = samples[index]!;
++    sumSquares += sample * sample;
++  }
++  const rms = Math.sqrt(sumSquares / samples.length);
++  return Math.min(1, Math.max(0, (rms - 0.006) * 10));
++}
++
++/** Turns a getUserMedia rejection into something worth showing a user. */
++export function describeCaptureError(error: unknown): string {
++  const name =
++    typeof error === "object" && error !== null && "name" in error && typeof error.name === "string"
++      ? error.name
++      : "";
++  switch (name) {
++    case "NotAllowedError":
++    case "SecurityError":
++      return "Microphone access was denied.";
++    case "NotFoundError":
++    case "OverconstrainedError":
++      return "No microphone found.";
++    case "NotReadableError":
++      return "The microphone is already in use by another application.";
++    default:
++      return error instanceof Error && error.message
++        ? `Could not start the microphone: ${error.message}`
++        : "Could not start the microphone.";
++  }
++}
++
++/**
++ * Batches render quanta into fixed-size blocks on the audio thread. Conversion
++ * and resampling stay on the main thread so there is one tested implementation
++ * of each, rather than a second copy inlined in this source string.
++ */
++const CAPTURE_WORKLET_SOURCE = `
++class T3VoiceCaptureProcessor extends AudioWorkletProcessor {
++  constructor(options) {
++    super();
++    this.size = options.processorOptions.blockSize;
++    this.buffer = new Float32Array(this.size);
++    this.filled = 0;
++  }
++
++  process(inputs) {
++    const channel = inputs[0] && inputs[0][0];
++    if (!channel) return true;
++    for (let index = 0; index < channel.length; index += 1) {
++      this.buffer[this.filled] = channel[index];
++      this.filled += 1;
++      if (this.filled === this.size) {
++        this.port.postMessage(this.buffer.slice(0));
++        this.filled = 0;
++      }
++    }
++    return true;
++  }
++}
++
++registerProcessor("t3-voice-capture", T3VoiceCaptureProcessor);
++`;
++
++export type ClientAudioCapture = {
++  /** Idempotent: releases the microphone, the graph and the audio context. */
++  stop(): void;
++};
++
++export type ClientAudioCaptureOptions = {
++  readonly onChunk: (chunk: Uint8Array) => void;
++  readonly onLevel: (level: number) => void;
++  /** Called once with a user-facing reason; the capture is dead afterwards. */
++  readonly onError: (message: string) => void;
++};
++
++/**
++ * Starts capturing the microphone. Returns immediately — the permission prompt
++ * and the audio graph come up in the background — so a caller can open its
++ * server session in parallel.
++ */
++export function startClientAudioCapture(options: ClientAudioCaptureOptions): ClientAudioCapture {
++  let stopped = false;
++  let stream: MediaStream | null = null;
++  let context: AudioContext | null = null;
++  let sourceNode: MediaStreamAudioSourceNode | null = null;
++  let workletNode: AudioWorkletNode | null = null;
++  let moduleUrl: string | null = null;
++  let lastLevelAt = 0;
++
++  const release = () => {
++    if (workletNode) {
++      workletNode.port.close();
++      workletNode.disconnect();
++      workletNode = null;
++    }
++    sourceNode?.disconnect();
++    sourceNode = null;
++    for (const track of stream?.getTracks() ?? []) track.stop();
++    stream = null;
++    if (context && context.state !== "closed") void context.close().catch(() => {});
++    context = null;
++    if (moduleUrl) {
++      URL.revokeObjectURL(moduleUrl);
++      moduleUrl = null;
++    }
++  };
++
++  const fail = (message: string) => {
++    if (stopped) return;
++    stopped = true;
++    release();
++    options.onError(message);
++  };
++
++  void (async () => {
++    try {
++      stream = await navigator.mediaDevices.getUserMedia({
++        audio: {
++          channelCount: 1,
++          echoCancellation: true,
++          noiseSuppression: true,
++          autoGainControl: true,
++        },
++      });
++      if (stopped) return release();
++
++      // Browsers that honour the hint hand back 16 kHz directly; the rest keep
++      // the device rate and the resampler below deals with it.
++      try {
++        context = new AudioContext({ sampleRate: VOICE_SAMPLE_RATE });
++      } catch {
++        context = new AudioContext();
++      }
++      if (context.state === "suspended") await context.resume();
++      if (stopped) return release();
++
++      moduleUrl = URL.createObjectURL(
++        new Blob([CAPTURE_WORKLET_SOURCE], { type: "text/javascript" }),
++      );
++      await context.audioWorklet.addModule(moduleUrl);
++      if (stopped) return release();
++
++      const resample = createLinearResampler(context.sampleRate, VOICE_SAMPLE_RATE);
++      const blockSize = Math.max(128, Math.round((context.sampleRate * VOICE_CHUNK_MS) / 1000));
++      sourceNode = context.createMediaStreamSource(stream);
++      workletNode = new AudioWorkletNode(context, "t3-voice-capture", {
++        numberOfInputs: 1,
++        numberOfOutputs: 1,
++        channelCount: 1,
++        processorOptions: { blockSize },
++      });
++      workletNode.port.addEventListener("message", (event) => {
++        if (stopped) return;
++        const samples = resample((event as MessageEvent<Float32Array>).data);
++        if (samples.length === 0) return;
++        const now = Date.now();
++        if (now - lastLevelAt >= LEVEL_INTERVAL_MS) {
++          lastLevelAt = now;
++          options.onLevel(computeAudioLevel(samples));
++        }
++        options.onChunk(floatToPcm16(samples));
++      });
++      // A port reached through addEventListener stays paused until started.
++      workletNode.port.start();
++      sourceNode.connect(workletNode);
++      // The processor writes nothing, so the destination stays silent; the
++      // connection exists only so browsers keep pulling the node.
++      workletNode.connect(context.destination);
++      if (stopped) release();
++    } catch (error) {
++      fail(describeCaptureError(error));
++    }
++  })();
++
++  return {
++    stop: () => {
++      if (stopped) return;
++      stopped = true;
++      release();
++    },
++  };
++}
+diff --git a/apps/web/src/voice/voiceAudioSender.test.ts b/apps/web/src/voice/voiceAudioSender.test.ts
+new file mode 100644
+index 00000000..f21ec4f1
+--- /dev/null
++++ b/apps/web/src/voice/voiceAudioSender.test.ts
+@@ -0,0 +1,115 @@
++import { describe, expect, it } from "vite-plus/test";
++
++import { createVoiceAudioSender } from "./voiceAudioSender";
++
++const controllableSend = () => {
++  const sent: Array<number> = [];
++  const settle: Array<() => void> = [];
++  return {
++    sent,
++    settle,
++    send: (chunk: Uint8Array) => {
++      sent.push(chunk[0]!);
++      return new Promise<void>((resolve) => settle.push(resolve));
++    },
++  };
++};
++
++const chunk = (id: number) => new Uint8Array([id]);
++
++describe("createVoiceAudioSender", () => {
++  it("sends chunks as they arrive while the link keeps up", async () => {
++    const transport = controllableSend();
++    const sender = createVoiceAudioSender({ send: transport.send, maxInFlight: 2 });
++
++    sender.push(chunk(1));
++    transport.settle.shift()!();
++    await Promise.resolve();
++    sender.push(chunk(2));
++
++    expect(transport.sent).toEqual([1, 2]);
++    expect(sender.droppedChunks).toBe(0);
++  });
++
++  it("holds chunks back once the in-flight bound is reached", () => {
++    const transport = controllableSend();
++    const sender = createVoiceAudioSender({ send: transport.send, maxInFlight: 2 });
++
++    for (const id of [1, 2, 3, 4]) sender.push(chunk(id));
++
++    expect(transport.sent).toEqual([1, 2]);
++    expect(sender.droppedChunks).toBe(0);
++  });
++
++  it("drains the queue as sends settle, oldest first", async () => {
++    const transport = controllableSend();
++    const sender = createVoiceAudioSender({ send: transport.send, maxInFlight: 1 });
++
++    for (const id of [1, 2, 3]) sender.push(chunk(id));
++    expect(transport.sent).toEqual([1]);
++
++    transport.settle.shift()!();
++    await Promise.resolve();
++    expect(transport.sent).toEqual([1, 2]);
++
++    transport.settle.shift()!();
++    await Promise.resolve();
++    expect(transport.sent).toEqual([1, 2, 3]);
++  });
++
++  it("keeps draining after a failed send", async () => {
++    const failures: Array<number> = [];
++    const sent: Array<number> = [];
++    const sender = createVoiceAudioSender({
++      maxInFlight: 1,
++      send: (audio) => {
++        sent.push(audio[0]!);
++        failures.push(audio[0]!);
++        return Promise.reject(new Error("offline"));
++      },
++    });
++
++    sender.push(chunk(1));
++    sender.push(chunk(2));
++    await Promise.resolve();
++    await Promise.resolve();
++
++    expect(sent).toEqual([1, 2]);
++    expect(failures).toEqual([1, 2]);
++  });
++
++  it("drops the oldest waiting chunk instead of growing without bound", () => {
++    const transport = controllableSend();
++    const sender = createVoiceAudioSender({
++      send: transport.send,
++      maxInFlight: 1,
++      maxPending: 2,
++    });
++
++    for (const id of [1, 2, 3, 4, 5]) sender.push(chunk(id));
++
++    expect(transport.sent).toEqual([1]);
++    expect(sender.droppedChunks).toBe(2);
++
++    transport.settle.shift()!();
++    return Promise.resolve().then(() => {
++      // 2 and 3 were dropped; the newest audio is what still matters.
++      expect(transport.sent).toEqual([1, 4]);
++    });
++  });
++
++  it("ignores pushes after stopping and forgets what was queued", async () => {
++    const transport = controllableSend();
++    const sender = createVoiceAudioSender({ send: transport.send, maxInFlight: 1 });
++
++    sender.push(chunk(1));
++    sender.push(chunk(2));
++    sender.stop();
++    sender.push(chunk(3));
++
++    transport.settle.shift()!();
++    await Promise.resolve();
++
++    expect(transport.sent).toEqual([1]);
++  });
++});
+diff --git a/apps/web/src/voice/voiceAudioSender.ts b/apps/web/src/voice/voiceAudioSender.ts
+new file mode 100644
+index 00000000..4d2a6aa8
+--- /dev/null
++++ b/apps/web/src/voice/voiceAudioSender.ts
+@@ -0,0 +1,73 @@
++/**
++ * Paces client-captured audio chunks onto the wire.
++ *
++ * The microphone produces a chunk every ~100 ms whether or not the link keeps
++ * up, so the sender caps how much audio can be outstanding at once and drops
++ * the oldest waiting chunk instead of growing a queue forever. Late audio is
++ * worthless to a live transcript anyway.
++ */
++
++/** Chunks handed to the transport at the same time. */
++export const MAX_IN_FLIGHT_VOICE_CHUNKS = 8;
++/** Chunks allowed to wait behind them (~0.8 s of audio) before the oldest goes. */
++export const MAX_PENDING_VOICE_CHUNKS = 8;
++
++export type VoiceAudioSender = {
++  push(chunk: Uint8Array): void;
++  /** Drops everything still waiting; in-flight sends are left to settle. */
++  stop(): void;
++  /** Chunks dropped because the link could not keep up. */
++  readonly droppedChunks: number;
++};
++
++export function createVoiceAudioSender(options: {
++  readonly send: (chunk: Uint8Array) => Promise<unknown>;
++  readonly maxInFlight?: number;
++  readonly maxPending?: number;
++}): VoiceAudioSender {
++  const maxInFlight = options.maxInFlight ?? MAX_IN_FLIGHT_VOICE_CHUNKS;
++  const maxPending = options.maxPending ?? MAX_PENDING_VOICE_CHUNKS;
++  const pending: Array<Uint8Array> = [];
++  let inFlight = 0;
++  let dropped = 0;
++  let stopped = false;
++
++  const pump = () => {
++    if (stopped) return;
++    while (inFlight < maxInFlight && pending.length > 0) {
++      const chunk = pending.shift()!;
++      inFlight += 1;
++      void options.send(chunk).then(
++        () => {
++          inFlight -= 1;
++          pump();
++        },
++        () => {
++          // A failed push is not worth surfacing on its own: the session's own
++          // stream reports whatever the server made of the audio it did get.
++          inFlight -= 1;
++          pump();
++        },
++      );
++    }
++  };
++
++  return {
++    push: (chunk) => {
++      if (stopped) return;
++      pending.push(chunk);
++      while (pending.length > maxPending) {
++        pending.shift();
++        dropped += 1;
++      }
++      pump();
++    },
++    stop: () => {
++      stopped = true;
++      pending.length = 0;
++    },
++    get droppedChunks() {
++      return dropped;
++    },
++  };
++}
+diff --git a/apps/web/src/voice/voiceInputFailure.test.ts b/apps/web/src/voice/voiceInputFailure.test.ts
+new file mode 100644
+index 00000000..0c3594b9
+--- /dev/null
++++ b/apps/web/src/voice/voiceInputFailure.test.ts
+@@ -0,0 +1,49 @@
++import { VoiceInputError } from "@t3tools/contracts";
++import * as Cause from "effect/Cause";
++import { describe, expect, it } from "vite-plus/test";
++
++import {
++  CLIENT_VOICE_FAILURE_DESCRIPTION,
++  describeVoiceInputFailure,
++  HOST_VOICE_FAILURE_DESCRIPTION,
++} from "./voiceInputFailure";
++
++describe("describeVoiceInputFailure", () => {
++  it("keeps the server's reason for a client session that never sent audio", () => {
++    const cause = Cause.fail(
++      new VoiceInputError({
++        message: "No microphone audio arrived from the client.",
++        fatal: true,
++      }),
++    );
++    expect(describeVoiceInputFailure(cause, "client")).toBe(
++      "No microphone audio arrived from the client.",
++    );
++  });
++
++  it("keeps the server's reason for an unavailable host bridge", () => {
++    const cause = Cause.fail(
++      new VoiceInputError({
++        message:
++          "The host microphone bridge is unavailable. Enable microphone passthrough in Construct and keep its VS Code extension running.",
++        fatal: true,
++      }),
++    );
++    expect(describeVoiceInputFailure(cause, "host")).toContain("host microphone bridge");
++  });
++
++  it("falls back to a source-specific hint when the failure carries no reason", () => {
++    expect(describeVoiceInputFailure(Cause.die(new Error("boom")), "client")).toBe(
++      CLIENT_VOICE_FAILURE_DESCRIPTION,
++    );
++    expect(describeVoiceInputFailure(Cause.interrupt(), "host")).toBe(
++      HOST_VOICE_FAILURE_DESCRIPTION,
++    );
++    expect(describeVoiceInputFailure(Cause.fail({ code: 42 }), "host")).toBe(
++      HOST_VOICE_FAILURE_DESCRIPTION,
++    );
++    expect(
++      describeVoiceInputFailure(Cause.fail(new VoiceInputError({ message: "   " })), "client"),
++    ).toBe(CLIENT_VOICE_FAILURE_DESCRIPTION);
++  });
++});
+diff --git a/apps/web/src/voice/voiceInputFailure.ts b/apps/web/src/voice/voiceInputFailure.ts
+new file mode 100644
+index 00000000..b8c7e4ad
+--- /dev/null
++++ b/apps/web/src/voice/voiceInputFailure.ts
+@@ -0,0 +1,35 @@
++import * as Cause from "effect/Cause";
++import * as Option from "effect/Option";
++
++/**
++ * What to tell the user when a voice session ends badly.
++ *
++ * The server explains its own failures ("The host microphone bridge is
++ * unavailable ...", "No microphone audio arrived from the client.", a
++ * transcription error from Claude), so its message wins. The per-source text
++ * below is only for failures that carry no reason at all — a defect, an
++ * interrupt, or a dropped connection.
++ */
++export const CLIENT_VOICE_FAILURE_DESCRIPTION =
++  "Could not transcribe the microphone. Check Claude sign-in on the T3 Code server.";
++export const HOST_VOICE_FAILURE_DESCRIPTION =
++  "Could not transcribe the microphone. Check Claude sign-in and Construct microphone passthrough.";
++
++export function describeVoiceInputFailure(
++  cause: Cause.Cause<unknown>,
++  source: "client" | "host",
++): string {
++  const error = Cause.findErrorOption(cause);
++  if (Option.isSome(error)) {
++    const failure = error.value;
++    const message =
++      typeof failure === "object" &&
++      failure !== null &&
++      "message" in failure &&
++      typeof failure.message === "string"
++        ? failure.message.trim()
++        : "";
++    if (message) return message;
++  }
++  return source === "client" ? CLIENT_VOICE_FAILURE_DESCRIPTION : HOST_VOICE_FAILURE_DESCRIPTION;
++}
 diff --git a/packages/client-runtime/src/rpc/client.ts b/packages/client-runtime/src/rpc/client.ts
 index bfe57a6c..2845f1a1 100644
 --- a/packages/client-runtime/src/rpc/client.ts
@@ -761,16 +2447,20 @@ index bfe57a6c..2845f1a1 100644
  export type EnvironmentStreamRpcTag =
    | EnvironmentSubscriptionRpcTag
 diff --git a/packages/contracts/src/environment.ts b/packages/contracts/src/environment.ts
-index 939313e8..4ed387d8 100644
+index 805e9da2..aabae11b 100644
 --- a/packages/contracts/src/environment.ts
 +++ b/packages/contracts/src/environment.ts
-@@ -78,6 +78,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
+@@ -89,6 +89,13 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
    /** Server can stream self-update progress before acknowledging the
        restart. Clients fall back to server.updateServer when absent. */
    serverSelfUpdateProgress: Schema.optionalKey(Schema.Boolean),
 +  /** Construct-patched servers can capture host audio through the recorder shim and
 +      stream Claude's live speech transcript into a connected composer. */
 +  voiceInput: Schema.optionalKey(Schema.Boolean),
++  /** Server accepts microphone audio pushed by the client over
++      `voiceInput.audio`. Absent on servers that can only record through the
++      host bridge, so clients fall back to the host source. */
++  voiceInputClientAudio: Schema.optionalKey(Schema.Boolean),
    /** Agent-activity publishes (push notifications and Live Activities)
        currently leave this environment: the publish opt-in is enabled and the
        relay link credentials exist. Clients skip seeding a Live Activity when
@@ -787,14 +2477,16 @@ index c6daef86..236c734f 100644
  export * from "./pullRequest.ts";
  export * from "./orchestration.ts";
 diff --git a/packages/contracts/src/rpc.ts b/packages/contracts/src/rpc.ts
-index 14363cfe..92863cf5 100644
+index 7cd67448..8584b9aa 100644
 --- a/packages/contracts/src/rpc.ts
 +++ b/packages/contracts/src/rpc.ts
-@@ -205,6 +205,13 @@ import {
+@@ -205,6 +205,15 @@ import {
    SourceControlRepositoryLookupInput,
  } from "./sourceControl.ts";
  import { VcsError } from "./vcs.ts";
 +import {
++  VoiceInputAudioInput,
++  VoiceInputAudioResult,
 +  VoiceInputError,
 +  VoiceInputStartInput,
 +  VoiceInputStopInput,
@@ -804,16 +2496,17 @@ index 14363cfe..92863cf5 100644
  
  export const WS_METHODS = {
    // Project registry methods
-@@ -276,6 +283,8 @@ export const WS_METHODS = {
+@@ -276,6 +285,9 @@ export const WS_METHODS = {
    serverUpdateProvider: "server.updateProvider",
    serverUpdateServer: "server.updateServer",
    serverUpdateServerWithProgress: "server.updateServerWithProgress",
 +  voiceInputStart: "voiceInput.start",
 +  voiceInputStop: "voiceInput.stop",
++  voiceInputAudio: "voiceInput.audio",
    serverUpsertKeybinding: "server.upsertKeybinding",
    serverRemoveKeybinding: "server.removeKeybinding",
    serverGetSettings: "server.getSettings",
-@@ -393,6 +402,19 @@ export const WsServerUpdateServerWithProgressRpc = Rpc.make(
+@@ -393,6 +405,27 @@ export const WsServerUpdateServerWithProgressRpc = Rpc.make(
    },
  );
  
@@ -830,30 +2523,178 @@ index 14363cfe..92863cf5 100644
 +  error: EnvironmentAuthorizationError,
 +});
 +
++// Effect RPC has no client-to-server streams, so client-captured microphone
++// audio arrives as one unary call per ~100 ms chunk.
++export const WsVoiceInputAudioRpc = Rpc.make(WS_METHODS.voiceInputAudio, {
++  payload: VoiceInputAudioInput,
++  success: VoiceInputAudioResult,
++  error: EnvironmentAuthorizationError,
++});
++
  export const WsServerGetSettingsRpc = Rpc.make(WS_METHODS.serverGetSettings, {
    payload: Schema.Struct({}),
    success: ServerSettings,
-@@ -1024,6 +1046,8 @@ export const WsRpcGroup = RpcGroup.make(
+@@ -1033,6 +1066,9 @@ export const WsRpcGroup = RpcGroup.make(
    WsServerUpdateProviderRpc,
    WsServerUpdateServerRpc,
    WsServerUpdateServerWithProgressRpc,
 +  WsVoiceInputStartRpc,
 +  WsVoiceInputStopRpc,
++  WsVoiceInputAudioRpc,
    WsServerUpsertKeybindingRpc,
    WsServerRemoveKeybindingRpc,
    WsServerGetSettingsRpc,
+diff --git a/packages/contracts/src/settings.ts b/packages/contracts/src/settings.ts
+index b6b09574..46e58c75 100644
+--- a/packages/contracts/src/settings.ts
++++ b/packages/contracts/src/settings.ts
+@@ -120,6 +120,16 @@ export const TerminalFontSize = Schema.Int.check(
+ export type TerminalFontSize = typeof TerminalFontSize.Type;
+ export const DEFAULT_TERMINAL_FONT_SIZE: TerminalFontSize = 12;
+ 
++/**
++ * Where voice input records. `auto` captures on this device when the browser
++ * or desktop app can reach a microphone and the server accepts pushed audio,
++ * and otherwise falls back to the host recorder bridge. Client-local because
++ * the microphone it picks is this device's.
++ */
++export const VoiceInputSourcePreference = Schema.Literals(["auto", "client", "host"]);
++export type VoiceInputSourcePreference = typeof VoiceInputSourcePreference.Type;
++export const DEFAULT_VOICE_INPUT_SOURCE_PREFERENCE: VoiceInputSourcePreference = "auto";
++
+ export const EnvironmentIdentificationMode = Schema.Literals(["artwork", "pill", "none"]);
+ export type EnvironmentIdentificationMode = typeof EnvironmentIdentificationMode.Type;
+ export const DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE: EnvironmentIdentificationMode = "artwork";
+@@ -268,6 +278,9 @@ export const ClientSettingsSchema = Schema.Struct({
+   timestampFormat: TimestampFormat.pipe(
+     Schema.withDecodingDefault(Effect.succeed(DEFAULT_TIMESTAMP_FORMAT)),
+   ),
++  voiceInputSource: VoiceInputSourcePreference.pipe(
++    Schema.withDecodingDefault(Effect.succeed(DEFAULT_VOICE_INPUT_SOURCE_PREFERENCE)),
++  ),
+   wordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+ });
+ export type ClientSettings = typeof ClientSettingsSchema.Type;
+@@ -977,6 +990,7 @@ export const ClientSettingsPatch = Schema.Struct({
+   sidebarThreadSortOrder: Schema.optionalKey(SidebarThreadSortOrder),
+   sidebarThreadPreviewCount: Schema.optionalKey(SidebarThreadPreviewCount),
+   timestampFormat: Schema.optionalKey(TimestampFormat),
++  voiceInputSource: Schema.optionalKey(VoiceInputSourcePreference),
+   wordWrap: Schema.optionalKey(Schema.Boolean),
+ });
+ export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;
+diff --git a/packages/contracts/src/voiceInput.test.ts b/packages/contracts/src/voiceInput.test.ts
+new file mode 100644
+index 00000000..975d5af9
+--- /dev/null
++++ b/packages/contracts/src/voiceInput.test.ts
+@@ -0,0 +1,63 @@
++import * as Schema from "effect/Schema";
++import { describe, expect, it } from "vite-plus/test";
++
++import {
++  VOICE_INPUT_MAX_CHUNK_BYTES,
++  VoiceInputAudioInput,
++  VoiceInputStartInput,
++} from "./voiceInput.ts";
++
++/** Base64 for `byteLength` zero bytes, without needing a Node Buffer here. */
++const base64OfZeroBytes = (byteLength: number): string => {
++  const groups = Math.floor(byteLength / 3);
++  const remainder = byteLength % 3;
++  return `${"A".repeat(groups * 4)}${remainder === 0 ? "" : remainder === 1 ? "AA==" : "AAA="}`;
++};
++
++const decodeStart = Schema.decodeUnknownSync(VoiceInputStartInput);
++const decodeAudio = Schema.decodeUnknownSync(VoiceInputAudioInput);
++const encodeAudio = Schema.encodeSync(VoiceInputAudioInput);
++
++describe("VoiceInputStartInput", () => {
++  it("leaves the source absent for clients that only know the host bridge", () => {
++    expect(decodeStart({ sessionId: "session-1" }).source).toBeUndefined();
++  });
++
++  it("carries an explicit source", () => {
++    expect(decodeStart({ sessionId: "session-1", source: "client" }).source).toBe("client");
++    expect(decodeStart({ sessionId: "session-1", source: "host" }).source).toBe("host");
++  });
++
++  it("rejects a source it does not know", () => {
++    expect(() => decodeStart({ sessionId: "session-1", source: "bluetooth" })).toThrow();
++  });
++});
++
++describe("VoiceInputAudioInput", () => {
++  it("round-trips a PCM chunk through base64", () => {
++    const pcm = new Uint8Array([0, 1, 255, 128, 64, 32]);
++    const wire = encodeAudio({ sessionId: "session-1", chunk: pcm });
++    expect(wire.chunk).toBe("AAH/gEAg");
++
++    const decoded = decodeAudio(wire);
++    expect(decoded.sessionId).toBe("session-1");
++    expect([...decoded.chunk]).toEqual([...pcm]);
++  });
++
++  it("accepts a full 100 ms chunk of 16 kHz mono S16LE", () => {
++    const chunk = new Uint8Array(3200);
++    expect(decodeAudio(encodeAudio({ sessionId: "session-1", chunk })).chunk.byteLength).toBe(3200);
++  });
++
++  it("rejects chunks past the size bound in both directions", () => {
++    const oversized = new Uint8Array(VOICE_INPUT_MAX_CHUNK_BYTES + 1);
++    expect(() => encodeAudio({ sessionId: "session-1", chunk: oversized })).toThrow();
++    expect(() =>
++      decodeAudio({ sessionId: "session-1", chunk: base64OfZeroBytes(oversized.byteLength) }),
++    ).toThrow();
++  });
++
++  it("rejects a payload that is not base64", () => {
++    expect(() => decodeAudio({ sessionId: "session-1", chunk: "not base64!!" })).toThrow();
++  });
++});
 diff --git a/packages/contracts/src/voiceInput.ts b/packages/contracts/src/voiceInput.ts
 new file mode 100644
-index 00000000..46f67a35
+index 00000000..31c4b68a
 --- /dev/null
 +++ b/packages/contracts/src/voiceInput.ts
-@@ -0,0 +1,39 @@
+@@ -0,0 +1,67 @@
 +import * as Schema from "effect/Schema";
++
++/**
++ * Where the microphone audio for a voice session comes from. `host` records on
++ * the server through Construct's recorder bridge; `client` means the connected
++ * client captures the microphone itself and pushes PCM with `voiceInput.audio`.
++ */
++export const VoiceInputSource = Schema.Literals(["client", "host"]);
++export type VoiceInputSource = typeof VoiceInputSource.Type;
++
++/** Absent `source` means `host`: older clients only know the recorder bridge. */
++export const DEFAULT_VOICE_INPUT_SOURCE: VoiceInputSource = "host";
 +
 +export const VoiceInputStartInput = Schema.Struct({
 +  sessionId: Schema.String,
++  source: Schema.optional(VoiceInputSource),
 +});
 +export type VoiceInputStartInput = typeof VoiceInputStartInput.Type;
++
++/**
++ * Upper bound for one pushed audio chunk. Clients send ~100 ms of 16 kHz mono
++ * S16LE (3200 bytes); the bound keeps a hostile client from spending server
++ * memory on a single base64 payload while leaving room for slower browsers that
++ * batch a few buffers together.
++ */
++export const VOICE_INPUT_MAX_CHUNK_BYTES = 64 * 1024;
++
++export const VoiceInputAudioInput = Schema.Struct({
++  sessionId: Schema.String,
++  chunk: Schema.Uint8ArrayFromBase64.check(Schema.isMaxLength(VOICE_INPUT_MAX_CHUNK_BYTES)),
++});
++export type VoiceInputAudioInput = typeof VoiceInputAudioInput.Type;
++
++export const VoiceInputAudioResult = Schema.Struct({
++  accepted: Schema.Boolean,
++});
++export type VoiceInputAudioResult = typeof VoiceInputAudioResult.Type;
 +
 +export const VoiceInputStopInput = Schema.Struct({
 +  sessionId: Schema.String,
@@ -880,10 +2721,7 @@ index 00000000..46f67a35
 +]);
 +export type VoiceInputStreamEvent = typeof VoiceInputStreamEvent.Type;
 +
-+export class VoiceInputError extends Schema.TaggedErrorClass<VoiceInputError>()(
-+  "VoiceInputError",
-+  {
-+    message: Schema.String,
-+    fatal: Schema.optional(Schema.Boolean),
-+  },
-+) {}
++export class VoiceInputError extends Schema.TaggedErrorClass<VoiceInputError>()("VoiceInputError", {
++  message: Schema.String,
++  fatal: Schema.optional(Schema.Boolean),
++}) {}
