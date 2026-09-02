@@ -522,7 +522,8 @@ endpoint formatting there in the same batch.
 | 2026-09-02 | B7 merged (`c8f390c`): hyperv-remote PS/JS drivers, `lib/AgentVm.Remote.ps1` (Negotiate/token/credential providers, DPAPI token store, cert pinning), Auto-Install mode prompt + remote flows, extension remote-host flows, `docs/remote-host.md`, remote e2e test. |
 | 2026-09-02 | Phase 2 review round 6 fixes merged (`4c8e654`): mic re-arm sequenced across instance switches (handover chain, identity-gated status), honest switch-persistence reporting, registry endpoint uniqueness = composite (sshHost, sshPort) in both readers. Round 7 review submitted. |
 | 2026-09-02 | B8x merged (`1626d6f`): `extension/src/forwarder.js` (pure planner, injected transport; inotify spool watch local / 10 s poll remote) + `forwarder-ui.js`, service client-forward ack relay (`POST /vms/{name}/forwards/{id}/ack`, VM token excluded), Forwards + idle-policy panel cards, saved → "Resume & connect". 412 dotnet tests, 21 node files. |
-| in flight | Phase 2 review round 7 found 4 must-fix (remote multi-VM endpoint check in Auto-Install, hyperv-remote vmName canonical identity, manual-vs-auto mic enable race, remote entries without sshHost) — fix pair on `fix/p2-r7`. Remaining: B9 docs + field test on the home domain. |
+| 2026-09-02 | Phase 2 review round 7 fixes merged (`b5f9051`): installer remote flow uses the shared registry collision logic (pre-create identities, post-create composite endpoint), hyperv-remote canonical `vmName === name`, case-variant backend ids fail closed, one mic-session chain incl. cancellable `HostAudio` enable, remote entries without `sshHost` rejected whole. |
+| in flight | Phase 2 review round 8 (also covers the B8x seams). Remaining: B9 docs + field test on the home domain. |
 
 Process notes: every package ran as an omniloop dev/reviewer pair (opus developer,
 gpt-5.6-sol reviewer) in its own worktree; cross-package integration reviews ran on the
