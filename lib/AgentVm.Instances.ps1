@@ -366,22 +366,39 @@ function Get-ConstructLocalIdentityProblem {
     return @($out)
 }
 
-# The identity fields that must be UNIQUE across the registry, with the schema name each
-# is reported under. Two instances sharing one are two names for ONE machine (or one key
-# file / one ssh_config Host block): a rebuild of the second would delete the first's VM.
+# The identities that must be UNIQUE across the registry, with the schema name each is
+# reported under, the comparison KEY it is compared by and how it is SHOWN in a problem.
+# Two instances sharing one are two names for ONE machine (or one key file / one
+# ssh_config Host block): a rebuild of the second would delete the first's VM.
 # ConfigBranch is one of them for the same reason: the config-sync branch IS that
 # instance's store inside the single host config repo (docs/config-sync.md, "Multiple
 # instances" -- one branch per VM), so two entries on one branch share their VM
 # snapshots, deletion history, merge base and write-backs, and one VM's tick merges (or
 # deletes) the other's configuration. Rule 1 below therefore also RESERVES the default
 # instance's historical branch 'vm' for agent-vm.
+# The ENDPOINT is the composite (sshHost, sshPort), NOT the host alone: several
+# hyperv-remote instances legitimately live on ONE service host and are told apart by the
+# SSH forward the service allocated them (one port per VM out of a configured range), so
+# keying on the host alone made every VM on a shared host collide -- and the "drop BOTH"
+# rule then lost them all. A hyperv-local instance's port is canonically 22 and its host
+# derives from its own name, so local entries still cannot share an endpoint.
 # Mirrors UNIQUE_FIELDS in extension/src/instances.js -- change both together.
 $script:ConstructUniqueFields = @(
-    @{ Key = 'VmName';       Label = 'vmName' },
-    @{ Key = 'VmHost';       Label = 'sshHost' },
-    @{ Key = 'HostAlias';    Label = 'hostAlias' },
-    @{ Key = 'KeyName';      Label = 'keyName' },
-    @{ Key = 'ConfigBranch'; Label = 'configBranch' }
+    @{ Label = 'vmName';
+       Value = { param($i) ([string]$i.VmName).ToLowerInvariant() }
+       Show  = { param($i) [string]$i.VmName } },
+    @{ Label = 'sshHost/sshPort';
+       Value = { param($i) (([string]$i.VmHost).ToLowerInvariant() + ' port ' + [string][int]$i.SshPort) }
+       Show  = { param($i) ([string]$i.VmHost + ':' + [string][int]$i.SshPort) } },
+    @{ Label = 'hostAlias';
+       Value = { param($i) ([string]$i.HostAlias).ToLowerInvariant() }
+       Show  = { param($i) [string]$i.HostAlias } },
+    @{ Label = 'keyName';
+       Value = { param($i) ([string]$i.KeyName).ToLowerInvariant() }
+       Show  = { param($i) [string]$i.KeyName } },
+    @{ Label = 'configBranch';
+       Value = { param($i) ([string]$i.ConfigBranch).ToLowerInvariant() }
+       Show  = { param($i) [string]$i.ConfigBranch } }
 )
 
 function Get-ConstructInstanceCollision {
@@ -408,8 +425,8 @@ function Get-ConstructInstanceCollision {
         if ($name -ceq $script:ConstructDefaultInstance) { continue }
         $inst = $Instances[$name]
         foreach ($f in $script:ConstructUniqueFields) {
-            if (([string]$inst.($f.Key)).ToLowerInvariant() -ceq ([string]$default.($f.Key)).ToLowerInvariant()) {
-                $problems.Add("instance '$name': $($f.Label) `"$($inst.($f.Key))`" belongs to the default instance '$($script:ConstructDefaultInstance)' -- skipped")
+            if ((& $f.Value $inst) -ceq (& $f.Value $default)) {
+                $problems.Add("instance '$name': $($f.Label) `"$(& $f.Show $inst)`" belongs to the default instance '$($script:ConstructDefaultInstance)' -- skipped")
                 if (-not $drop.Contains($name)) { $drop.Add($name) }
                 break
             }
@@ -420,8 +437,8 @@ function Get-ConstructInstanceCollision {
             $a = $Instances[$names[$i]]
             $b = $Instances[$names[$j]]
             foreach ($f in $script:ConstructUniqueFields) {
-                if (([string]$a.($f.Key)).ToLowerInvariant() -ceq ([string]$b.($f.Key)).ToLowerInvariant()) {
-                    $problems.Add("instances '$($names[$i])' and '$($names[$j])' share the same $($f.Label) `"$($a.($f.Key))`" -- both skipped")
+                if ((& $f.Value $a) -ceq (& $f.Value $b)) {
+                    $problems.Add("instances '$($names[$i])' and '$($names[$j])' share the same $($f.Label) `"$(& $f.Show $a)`" -- both skipped")
                     foreach ($n in @($names[$i], $names[$j])) { if (-not $drop.Contains($n)) { $drop.Add($n) } }
                     break
                 }
