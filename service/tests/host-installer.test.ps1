@@ -183,7 +183,7 @@ Write-Host "=== Helpers ===" -ForegroundColor Cyan
 foreach ($fn in $functions) {
     if ($fn.Name -in @("Split-PortRange", "Get-ListenPort", "Get-ConstructAclPolicy",
                        "Get-ConstructTrustedSid", "Get-ConstructAncestorRiskMask",
-                       "Get-ConstructWriteRiskMask", "Get-ConstructUnsafeAce",
+                       "Get-ConstructWriteRiskMask", "Get-ConstructUnsafeAce", "Resolve-ConstructAceSid",
                        "ConvertTo-ConstructPayload", "New-ConstructRelaunchScript",
                        "New-ConstructLocalSystemScript")) {
         . ([scriptblock]::Create($fn.Extent.Text))
@@ -326,6 +326,38 @@ ok "a protected child with an explicit untrusted write ACE is refused" (
 ok "creating entries in a CHILD still counts as write" (
     @(Get-ConstructUnsafeAce -Aces @($usersCreate) -RiskMask $writeMask).Count -eq 1)
 ok "an empty ACL is not a risk" (@(Get-ConstructUnsafeAce -Aces @() -RiskMask $writeMask).Count -eq 0)
+
+# Field failure (German host, 2026-09-02): Get-Acl hands back NTAccount names and
+# translating "APPLICATION PACKAGE AUTHORITY\ALLE ANWENDUNGSPAKETE" (present on every
+# stock C:\Windows) throws IdentityNotMappedException. The SID resolver must never throw
+# and must keep an unmappable identity in the list as an UNTRUSTED one.
+if ($env:OS -eq 'Windows_NT') {
+    # [SecurityIdentifier] cannot be constructed on Linux; the branch is exercised on Windows only.
+    $realSid = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-544')
+    ok "resolver: a SecurityIdentifier is returned as its value" ((Resolve-ConstructAceSid -Identity $realSid) -eq 'S-1-5-32-544')
+}
+$unmappable = [pscustomobject]@{ Value = 'APPLICATION PACKAGE AUTHORITY\ALLE ANWENDUNGSPAKETE' }
+$unmappable | Add-Member -MemberType ScriptMethod -Name Translate -Value { throw (New-Object System.Security.Principal.IdentityNotMappedException("no mapping")) }
+$resolved = Resolve-ConstructAceSid -Identity $unmappable
+ok "resolver: an unmappable name does not throw and keeps the raw name" ($resolved -eq 'APPLICATION PACKAGE AUTHORITY\ALLE ANWENDUNGSPAKETE')
+ok "resolver: ...and that identity is NOT trusted (fails closed when it holds risky rights)" `
+    (@(Get-ConstructUnsafeAce -Aces @(@{ Sid = $resolved; Rights = 0x1F01FF; Type = 'Allow'; InheritOnly = $false }) -RiskMask $ancestorMask).Count -eq 1)
+$orphan = [pscustomobject]@{ Value = 'S-1-5-21-1-2-3-9999' }
+$orphan | Add-Member -MemberType ScriptMethod -Name Translate -Value { throw (New-Object System.Security.Principal.IdentityNotMappedException("no mapping")) }
+ok "resolver: an orphaned SID shown as a name resolves to that SID string" ((Resolve-ConstructAceSid -Identity $orphan) -eq 'S-1-5-21-1-2-3-9999')
+$mappable = [pscustomobject]@{ Value = 'VORDEFINIERT\Administratoren' }
+$mappable | Add-Member -MemberType ScriptMethod -Name Translate -Value { param($t) [pscustomobject]@{ Value = 'S-1-5-32-544' } }
+ok "resolver: a mappable name is translated" ((Resolve-ConstructAceSid -Identity $mappable) -eq 'S-1-5-32-544')
+ok "resolver: null identity yields an empty (untrusted) SID" ((Resolve-ConstructAceSid -Identity $null) -eq '')
+$aceListText = ($functions | Where-Object Name -eq 'ConvertTo-ConstructAceList').Extent.Text
+ok "ACE list asks the ACL for SID-keyed rules instead of translating names" ($aceListText -match 'GetAccessRules\(\$true, \$true, \[System\.Security\.Principal\.SecurityIdentifier\]\)')
+ok "ACE list routes every identity through the resolver" ($aceListText -match 'Resolve-ConstructAceSid -Identity')
+$installText = Get-Content -Raw -LiteralPath $installer
+ok 'relative -ScriptsDir/-PublishDir/-DataDir are made absolute against $PWD before the elevation relaunch' `
+    (($installText.IndexOf("GetUnresolvedProviderPathFromPSPath(`$value)") -gt 0) -and
+     ($installText.IndexOf("GetUnresolvedProviderPathFromPSPath(`$value)") -lt $installText.IndexOf("Relaunching as Administrator")))
+ok 'the trust check does not resolve paths with [System.IO.Path]::GetFullPath (process cwd, not $PWD)' `
+    (-not (($functions | Where-Object Name -eq 'Assert-ConstructPathTrustworthy').Extent.Text -match 'GetFullPath'))
 
 # Inherit-only (IO) ACEs grant nothing on the object carrying them. Stock Windows puts
 # CREATOR OWNER:(OI)(CI)(IO)(F) on C:\ProgramData, so judging them would refuse the

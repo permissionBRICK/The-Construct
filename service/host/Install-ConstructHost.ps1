@@ -149,6 +149,21 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# ── Absolute paths, first thing ──────────────────────────────────────────────
+# Relative -ScriptsDir / -PublishDir / -DataDir (".", ".\service\publish") are only
+# meaningful against THIS session's working directory: the elevated relaunch starts
+# in another directory, and .NET's [System.IO.Path] resolves against the process cwd,
+# not $PWD. Field failure: ".\service\publish" became C:\Windows\System32\service\publish,
+# whose ancestor ACL then blew up the trust check. So every path parameter is made
+# absolute here and only absolute values travel to the elevated copy.
+foreach ($pathParam in @('ScriptsDir', 'PublishDir', 'DataDir', 'IsoSourcePath')) {
+    $value = Get-Variable -Name $pathParam -ValueOnly
+    if ([string]::IsNullOrWhiteSpace($value)) { continue }
+    $absolute = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($value)
+    Set-Variable -Name $pathParam -Value $absolute
+    if ($PSBoundParameters.ContainsKey($pathParam)) { $PSBoundParameters[$pathParam] = $absolute }
+}
+
 # ── Output helpers (the repo idiom; the driver and lib reuse these) ───────────
 function Write-Step($msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)   { Write-Host "    $msg" -ForegroundColor Green }
@@ -466,6 +481,33 @@ function Get-ConstructUnsafeAce {
     return $unsafe
 }
 
+function Resolve-ConstructAceSid {
+    <#
+        The SID string behind an ACE identity, without ever failing.
+
+        A SecurityIdentifier is taken as is. Anything else (an NTAccount) is translated,
+        and when Windows cannot map it -- app-package authorities, orphaned or foreign
+        SIDs -- the raw value is used: if it already reads as a SID ("S-1-...") that IS
+        the SID; otherwise the name itself stands in. Either way the ACE keeps flowing
+        into Get-ConstructUnsafeAce, where an unknown identity is simply not trusted,
+        so an unmappable ACE can only ever make the check stricter, never skip it.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][AllowNull()]$Identity)
+
+    if ($null -eq $Identity) { return '' }
+    if ($Identity -is [System.Security.Principal.SecurityIdentifier]) { return $Identity.Value }
+
+    $raw = [string]$Identity.Value
+    try {
+        $translated = $Identity.Translate([System.Security.Principal.SecurityIdentifier])
+        if ($translated) { return $translated.Value }
+    } catch {
+        # fall through: unmappable identity
+    }
+    return $raw
+}
+
 function ConvertTo-ConstructAceList {
     <#
         A real Windows ACL reduced to the plain data Get-ConstructUnsafeAce works on.
@@ -473,14 +515,21 @@ function ConvertTo-ConstructAceList {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)]$Acl)
 
+    # Ask for the rules keyed by SID up front: translating the display names
+    # Get-Acl shows (NTAccount) back into SIDs fails with IdentityNotMappedException
+    # for "APPLICATION PACKAGE AUTHORITY\..." ACEs -- which every stock C:\Windows and
+    # C:\ProgramData carries -- and for orphaned SIDs; localized hosts make it worse.
+    $rules = $null
+    try {
+        $rules = $Acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])
+    } catch {
+        $rules = $Acl.Access
+    }
+
     $aces = @()
-    foreach ($ace in $Acl.Access) {
-        $sid = $ace.IdentityReference
-        if ($sid -isnot [System.Security.Principal.SecurityIdentifier]) {
-            $sid = $ace.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier])
-        }
+    foreach ($ace in $rules) {
         $aces += @{
-            Sid    = $sid.Value
+            Sid    = Resolve-ConstructAceSid -Identity $ace.IdentityReference
             Rights = [int]$ace.FileSystemRights
             Type   = [string]$ace.AccessControlType
             # (IO): applies to children as they are created, not to this object.
@@ -508,7 +557,7 @@ function Assert-ConstructPathTrustworthy {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Name)
 
-    $full = [System.IO.Path]::GetFullPath($Path)
+    $full = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
 
     foreach ($root in @($env:PUBLIC, (Join-Path $env:SystemDrive "Users"))) {
         if ($root -and $full.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
