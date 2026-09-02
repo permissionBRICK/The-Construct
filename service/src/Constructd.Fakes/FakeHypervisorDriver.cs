@@ -13,7 +13,8 @@ public sealed class FakeHypervisorDriver : IHypervisorDriver
 {
     private readonly ConcurrentDictionary<string, VmState> _states = new(StringComparer.OrdinalIgnoreCase);
 
-    public DriverCapabilities Capabilities { get; set; } = new(Checkpoints: true, Suspend: true, Console: false);
+    public DriverCapabilities Capabilities { get; set; } =
+        new(Checkpoints: true, Suspend: true, Console: DriverConsole.None);
 
     /// <summary>Every driver call, as <c>op:name</c>, in order.</summary>
     public ConcurrentQueue<string> Calls { get; } = new();
