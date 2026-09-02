@@ -235,7 +235,7 @@ const RESERVED_VM_BRANCHES = new Set([
  * alphanumerics / dot / underscore / hyphen, no "..", no trailing ".", no
  * ".lock" suffix (git reserves it), and not one of RESERVED_VM_BRANCHES.
  * Deliberately stricter than check-ref-format — these names come from instance
- * names (^[a-z0-9][a-z0-9-]{0,39}$) and end up in file paths and ssh aliases
+ * names (^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$) and end up in file paths and ssh aliases
  * too — but never LOOSER: everything this accepts, `git check-ref-format
  * --branch` accepts (configsync.test.js drives the fixture list through real
  * git, and config-sync.test.ps1 drives the same list through the PS twin).

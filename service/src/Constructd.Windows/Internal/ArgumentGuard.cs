@@ -31,7 +31,7 @@ internal static class ArgumentGuard
     {
         if (!VmNameValidator.IsValid(value))
         {
-            throw new InvalidPlatformArgumentException(parameterName, $"must match {VmNameValidator.Pattern}");
+            throw new InvalidPlatformArgumentException(parameterName, $"is invalid: {VmNameValidator.Rule}");
         }
 
         return value!;
