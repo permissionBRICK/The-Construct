@@ -40,6 +40,8 @@ where they can't touch your host PC.
 - 🖥️ **Optional T3 Code, patched end to end** — build the selected stable or nightly
   server and Windows Desktop app inside the VM, then keep both updated together. The shared
   patch adds live voice input, Claude usage-limit recovery, and OpenCode task monitoring.
+  The web GUI is served over HTTPS with a locally trusted certificate, so the browser lets
+  it use your microphone.
 - 🤷 **It just works™** — system prompts make agents just install whatever tool they need for the task automatically
 
 <sub>Bonus: auto-deploy MCP servers to all three agents · patched Claude Code extension for faster UI updates · no AI attribution by default.</sub>
@@ -82,7 +84,7 @@ during install:
 | **vscode.dev tunnel** | `https://vscode.dev/tunnel/<name>` — opt-in (`VSCODE_TUNNEL=true`) |
 | **Codex App** | Add `agent-vm` as an SSH host |
 | **Opencode** | `agent-vm.mshome.net:4096` — `opencode serve` autostarts |
-| **T3 Code** | Opt in from Construct settings, then use its paired web UI or automatically installed and patched Windows Desktop app |
+| **T3 Code** | Opt in from Construct settings, then use its paired web UI over HTTPS (`https://agent-vm.mshome.net:5178`, locally trusted CA) or the automatically installed and patched Windows Desktop app |
 | **Windows file share** | `\\agent-vm.mshome.net\repo` — map to a drive with `-MountRepoShare true` |
 | **Terminal** | `ssh agent-vm` — direct root access |
 
