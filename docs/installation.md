@@ -19,6 +19,12 @@ creates and provisions the VM. You answer a few questions up front (RAM, disk si
 projects) through full-screen terminal menus — one screen per choice — and once the
 "all set" banner appears, everything after that runs unattended with normal log output.
 
+> On a machine that has **no** Construct VM yet, the very first screen asks where the VM
+> should run — *Local Hyper-V install* (preselected) or *Remote host install*. Press Enter
+> and everything from there is the install described on this page. The remote path is a
+> separate story: [Several VMs, and VMs on another host](#several-vms-and-vms-on-another-host).
+> An existing install never sees the question.
+
 If the VM already exists, you get a menu:
 
 - **Reprovision** — re-runs the config but keeps your data.
@@ -82,9 +88,16 @@ a plain Ubuntu ISO, configure:
 - User / password: `agent` / `agent`
 - OpenSSH enabled
 
-Then run `Provision-AgentVM.ps1` — it needs no admin access. See
-[Provisioning](provisioning.md) for details, or [Manual setup](manual-setup.md) to skip
-the Windows scripts entirely.
+Then run `Provision-AgentVM.ps1` — it needs no admin access. It defaults to
+`-VmHost agent-vm.mshome.net -HostAlias agent-vm -SshPort 22`; point it at a VM that lives
+somewhere else with
+
+```powershell
+.\Provision-AgentVM.ps1 -VmHost 192.168.1.50 -SshPort 22 -HostAlias my-vm -LocalKeyName construct_my-vm_ed25519
+```
+
+See [Provisioning](provisioning.md) for the full parameter list, or
+[Manual setup](manual-setup.md) to skip the Windows scripts entirely.
 
 ## Option E — add project config (`-Action add-config`)
 
@@ -147,17 +160,120 @@ repo — there's no separate migration step. See
 [Config sync §10](config-sync.md#10-git-on-the-host--never-required-strictly-an-upgrade) for
 the full table.
 
+## Several VMs, and VMs on another host
+
+Everything above describes the **default instance** — one local Hyper-V VM named `Agent-VM`,
+answering as `agent-vm.mshome.net`. Nothing on this page changes if that is all you want:
+the registry below is optional, a missing one *means* the default instance, and no prompt
+or parameter about instances appears.
+
+### The instance registry
+
+`%LOCALAPPDATA%\The-Construct\instances.json` (next to the existing `config\` directory)
+names the VMs this PC knows about. It is read by both halves of Construct —
+`lib/AgentVm.Instances.ps1` for the scripts and `extension/src/instances.js` for the control
+panel — from one schema with one set of rules:
+
+```jsonc
+{
+  "version": 1,
+  "defaultInstance": "agent-vm",
+  "instances": {
+    "agent-vm": {                        // implicit: synthesized when absent
+      "backend": "hyperv-local",
+      "vmName": "Agent-VM",
+      "sshHost": "agent-vm.mshome.net", "sshPort": 22,
+      "hostAlias": "agent-vm",
+      "keyName": "agent_vm_ed25519",
+      "configBranch": "vm",
+      "scriptsDir": null                 // null = the newest install (today's detection)
+    },
+    "work-vm": {
+      "backend": "hyperv-remote",
+      "service": { "url": "https://buildbox.example.local:7462", "auth": "negotiate" },
+      "vmName": "work-vm",
+      "sshHost": "buildbox.example.local", "sshPort": 2201,
+      "hostAlias": "work-vm",
+      "keyName": "construct_work-vm_ed25519",
+      "configBranch": "vm-work-vm",
+      "owner": "DOMAIN\\christoph"
+    }
+  }
+}
+```
+
+- **A missing file, an unreadable file or a missing entry all mean "exactly today's
+  behaviour"**: the `agent-vm` default is synthesized in memory and nothing is written.
+- Instance names are `^[a-z0-9][a-z0-9-]{0,39}$` — they end up verbatim in file names, SSH
+  aliases and git refs.
+- Everything an entry omits is **derived from its name**: alias `<name>`, key
+  `construct_<name>_ed25519`, config-sync branch `vm-<name>`, VM name `<name>`, host
+  `<name>.mshome.net`, port 22. The default instance keeps its historical literals
+  (`agent-vm`, `agent_vm_ed25519`, branch `vm`, `Agent-VM`).
+- Reading is **fail-closed**. An entry whose identity fields are unusable (a hostile host
+  name, a reserved Windows device name as a key file, a branch git would refuse) is skipped
+  whole rather than half-applied; a `backend` that is present but not a usable id — or that
+  differs from a real id only by case — makes the entry unloadable, because the two readers
+  would disagree about what it is. An unknown backend (`proxmox`) is kept but reported: its
+  driver dispatch degrades, so rebuild and checkpoint actions are simply unavailable.
+- Two more rules hold per backend. A `hyperv-local` entry must carry exactly the identity
+  derived from its name — anything else does not describe a customised VM, it *targets a
+  different machine* than the one a rebuild would create. A `hyperv-remote` entry must state
+  its `sshHost` (only the host service knows the endpoint; deriving `<name>.mshome.net`
+  would aim ssh at an unrelated machine on your own LAN) and its `vmName` must equal the
+  instance name (the service addresses the VM by that name, and so does a rebuild).
+- Identities must be **unique across the registry**: `vmName`, `hostAlias`, `keyName`,
+  `configBranch`, and the endpoint as the **composite `(sshHost, sshPort)`**. Two entries
+  sharing one are two names for one machine, so both are dropped. The composite matters for
+  remote VMs: every VM on one service host shares that host's address and is told apart by
+  the SSH forward it was allocated, so a shared host is fine and only a shared *port* is a
+  clash. A non-default entry may also not claim any of the default instance's values.
+
+The control panel surfaces registry problems as a toast and in its log, so a hand-edited
+file that does not load says why.
+
+### A second local VM
+
+`Auto-Install.ps1 -VmName build-vm` creates a second local VM; every derived value follows
+that name (guest hostname `build-vm`, `build-vm.mshome.net`, alias `build-vm`, key
+`construct_build-vm_ed25519`). The installer does **not** write a registry entry for a local
+VM — add one by hand, using exactly the derived identity above, if you want the control
+panel to list and switch to it.
+
+### A VM on a remote host
+
+```powershell
+.\Auto-Install.ps1 -Backend hyperv-remote `
+    -ServiceUrl https://buildbox.example.local:7462 -ServiceAuth negotiate `
+    -InstanceName work-vm -VmCpuCount 4 -VmMemoryGB 8 -VmDiskGB 60 -Projects default
+```
+
+The host service builds the ISO, creates the VM and allocates its SSH forward; your PC then
+runs the ordinary `Provision-AgentVM.ps1` over that endpoint, so your git credentials, agent
+auth and backups never transit the service. The registry entry is written by the installer
+as soon as the endpoint is known. This path needs **no administrator rights on your PC** —
+nothing is created locally.
+
+Passing any of `-Backend` / `-ServiceUrl` / `-InstanceName` skips the mode prompt, as do
+`-VmName`, `-Action`, `-FromPanel` and an existing default instance. The whole flow — admin
+setup, authentication, certificate pinning, the idle policy — is in
+[Remote host](remote-host.md); [Field test](field-test-remote-host.md) walks the first run
+end to end.
+
 ## What the automated flow does
 
 | Step | Script | Action |
 |------|--------|--------|
-| 1 | `Create-AgentVM.ps1` | Ensures OpenSSH + Hyper-V, creates a Gen-2 VM (half host RAM ≤ 24 GB, vCPUs = all host logical processors, Secure Boot off, automatic checkpoints off, nested virtualization exposed when the host supports it), boots the autoinstall ISO, waits for SSH, then calls `Provision-AgentVM.ps1`. |
+| 1 | `Create-AgentVM.ps1` | Ensures OpenSSH + Hyper-V, creates a Gen-2 VM (half host RAM ≤ 24 GB, vCPUs = all host logical processors, Secure Boot off, automatic checkpoints off, nested virtualization exposed when the host supports it), boots the autoinstall ISO, waits for SSH, then calls `Provision-AgentVM.ps1`. Every hypervisor call goes through the [driver contract](drivers.md) (`-Backend`, default `hyperv-local`) rather than raw cmdlets. |
 | 2 | autoinstall ISO (built by `bin/build-autoinstall-iso.sh`) | Installs a blank **minimized** Ubuntu unattended: user/host preset, SSH on, the committed bootstrap key authorized, and a console hint to run the provisioner. |
 | 3 | `Provision-AgentVM.ps1` | Connects (re-using the saved root key when re-provisioning an existing VM, otherwise the bootstrap key), uploads the repo, runs `bin/provision.sh`, obtains the VM's root key, removes the bootstrap key, configures the host's `~\.ssh\` + VS Code, and reboots the VM on a full install/reinstall (a reprovision leaves the running VM up unless a reboot is pending). |
 | 4 | `bin/provision.sh` (on the VM) | `bootstrap.sh` → write `config.env` → root SSH key → install AI tools → generate runtime config → install selected projects' runtimes → start the `construct` service → install the VS Code CLI/server (and, when selected, deploy + register the `code tunnel`). |
 
 Defaults line up across all of these: user `agent`, password `agent`, hostname `agent-vm`
-(→ `agent-vm.mshome.net` on Hyper-V NAT), and `root` as the VS Code connection user.
+(→ `agent-vm.mshome.net` on Hyper-V NAT), and `root` as the VS Code connection user. A VM
+created under another name derives its own set from that name (see
+[Several VMs](#several-vms-and-vms-on-another-host)); the seed user and password are the
+same either way.
 
 ## Building the autoinstall ISO
 
@@ -184,6 +300,13 @@ On **Windows** there's no native `xorriso` — don't run this directly. Use `Aut
 (Option A), which runs this exact script inside WSL and installs the dependencies for you.
 The build requires the committed bootstrap public key at `keys/bootstrap_ed25519.pub`. The
 output is `<source-dir>/<hostname>-autoinstall.iso`.
+
+Because the hostname is baked into the ISO, each VM gets its own: `Create-AgentVM.ps1`
+attaches `-AutoinstallIso <path>` when it is given one, otherwise a named VM looks for
+`<name>-autoinstall.iso` next to the script and **refuses to guess another instance's ISO**,
+while the default VM keeps the historical "newest `*autoinstall*.iso`" discovery. On a
+[remote host](remote-host.md) the service builds the per-VM ISO itself, in WSL, from the
+same script.
 
 What the generated ISO does on first boot:
 

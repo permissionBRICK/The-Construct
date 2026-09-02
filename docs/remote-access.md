@@ -12,13 +12,30 @@ of it.
 
 ### `code serve-web` — browser VS Code
 
-Browser-based VS Code served directly over HTTP, **on by default** (`VSCODE_SERVE_WEB=true`)
-via `code-serve-web.service`. It binds `0.0.0.0:8000` (`VSCODE_SERVE_WEB_HOST`/`PORT`) and is
-reachable at `http://<dns>:<port>/?tkn=<token>`. There is no account sign-in; access is gated
-by a **connection token** generated into `VSCODE_SERVE_WEB_TOKEN_FILE`. Note this is a
-root-level IDE (terminal + filesystem) — keep it on trusted VM networks. (To require an SSH
-tunnel instead of network exposure, set `VSCODE_SERVE_WEB_HOST=127.0.0.1` and reach it via
-`ssh -L 8000:127.0.0.1:8000`.)
+Browser-based VS Code, **on by default** (`VSCODE_SERVE_WEB=true`) via
+`code-serve-web.service`. It binds `0.0.0.0:8000` (`VSCODE_SERVE_WEB_HOST`/`PORT`). There is
+no account sign-in; access is gated by a **connection token** generated into
+`VSCODE_SERVE_WEB_TOKEN_FILE`.
+
+**Open it as `http://localhost:8000/?tkn=<token>`, through a tunnel** — that is what the
+guest's banner and the provisioner both print. serve-web's token authentication only accepts
+a **localhost origin**, so browsing straight to `http://agent-vm.mshome.net:8000/` does not
+authenticate even though the port is listening. Two ways to get a local port:
+
+```powershell
+ssh -L 8000:127.0.0.1:8000 agent-vm       # from your PC, for as long as it runs
+```
+
+```bash
+construct expose 8000 --label "serve-web" # from the VM; prints the localhost link
+```
+
+The second works identically on a [remote-host](remote-host.md) VM, where the address the
+VM sits on is not one your PC can reach at all.
+
+Note this is a root-level IDE (terminal + filesystem). Binding it to `127.0.0.1`
+(`VSCODE_SERVE_WEB_HOST=127.0.0.1`) makes the tunnel mandatory rather than merely the way it
+authenticates.
 
 ### `code tunnel` — no inbound port
 
@@ -42,8 +59,24 @@ so registration survives restarts and re-provisions.
 
 The VM writes connection info to `/etc/issue.d/construct.issue` via
 `construct-console-info.service`, so getty shows it on the physical console before the login
-prompt. On Hyper-V NAT, the banner uses `<hostname>.mshome.net` (e.g. `agent-vm.mshome.net`)
-and prints the current IP only as a fallback.
+prompt.
+
+The address it prints is **`CONSTRUCT_EXTERNAL_HOST` / `CONSTRUCT_EXTERNAL_SSH_PORT`** from
+`/etc/construct/config.env` — the address *clients* use, which is not always something the
+guest could work out for itself. Left empty (the default, and every local install) they fall
+back to `<hostname>.mshome.net` and port 22, so a Hyper-V NAT VM prints exactly what it
+always did, with the current IP as a fallback. A VM behind a
+[host service](remote-host.md) has them filled in with the service host and its allocated
+SSH forward, so the **SSH** line names an address you can actually dial rather than a NAT
+name only the hypervisor host can resolve.
+
+> **The banner tells you where the VM is, not that every port there is open.** The service
+> publishes exactly two kinds of forward: the VM's own SSH port, and the host forwards
+> somebody asked for with `construct expose --to host`. Nothing else — no OpenCode, no
+> T3 Code, no SMB — is mapped automatically, so a URL the banner builds from
+> `CONSTRUCT_EXTERNAL_HOST` for one of those ports names the service host on a port where
+> nothing is listening. On a remote VM, reach an HTTP port with
+> [`construct expose <port>`](expose.md) and open the link it prints.
 
 ## Workspace file share (SMB)
 
@@ -78,11 +111,36 @@ net use Z: \\agent-vm.mshome.net\repo /user:dev <password> /savecred /persistent
   login in Windows Credential Manager; `/persistent:yes` reconnects it at logon and after any
   VM reboot.
 
-Read back the details on the VM from the login banner, or:
+> ⚠ **SMB is a local-VM feature today.** The UNC is built from `CONSTRUCT_EXTERNAL_HOST`, so
+> a VM behind a [host service](remote-host.md) prints `\\<service host>\repo` — and the
+> service publishes **no SMB forward**, only the VM's SSH port and explicit
+> `construct expose --to host` forwards. There is nothing listening on 445 at that address,
+> so the UNC will not connect and `-MountRepoShare` has nothing to map. Use Remote-SSH (or
+> `scp`/`sshfs` over the VM's SSH port) to reach a remote VM's files. This is a known gap,
+> not a configuration mistake.
+
+Read back the details on the VM from the login banner, or (using the instance's SSH alias —
+`agent-vm` for the default VM):
 
 ```bash
 ssh agent-vm "sudo cat /etc/construct/smb-status"
 ```
+
+## Ports an agent opens for you (`construct expose`)
+
+Everything above is a way *in*. The other direction — a dev server, preview or notebook an
+agent started **inside** the VM — goes through `construct expose`:
+
+```console
+$ construct expose 5173 --label "vite dev"
+http://localhost:5173/
+```
+
+By default the port is opened on **your PC**: the extension spawns an `ssh -N -L` tunnel of
+its own to the active instance, and the CLI prints the link only once that forward is
+actually live. Nothing is exposed to the LAN, and it works identically on a local and a
+remote VM. Full contract, the `--to host` alternative, exit codes and configuration:
+[`construct expose`](expose.md).
 
 ## Codex remote
 
@@ -124,7 +182,10 @@ sudo systemctl start|stop|restart|status construct
 
 Provisioning also manages these units (when their tools/features are selected): `opencode-serve`,
 `t3code-serve`, `codex-app-server`, `code-serve-web` (browser VS Code), `code-tunnel` (the VS Code
-remote tunnel), and `smbd` (the workspace file share). Inspect any of them with
+remote tunnel), `smbd` (the workspace file share), and — **only on a VM behind a
+[host service](remote-host.md)** — `construct-idle-report.timer`, the activity heartbeat that
+keeps a busy VM from being idled out. A local install gets no such timer: there is no service
+to report to, and idle policy isn't enforced locally. Inspect any of them with
 `systemctl status <unit>` / `journalctl -u <unit>`.
 
 Container logs:
