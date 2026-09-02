@@ -407,7 +407,14 @@ $badIdentity = @(
     @{ label = 'branch-case-hijack';json = '{ "configBranch": "VM" }';                   field = 'configBranch' },
     # `git check-ref-format --branch vm-work.` fails, so a hand-authored entry ending in a
     # dot must be refused HERE. Same fixture in extension/test/instances.test.js.
-    @{ label = 'branch-trailing-dot';json = '{ "configBranch": "vm-work." }';            field = 'configBranch' }
+    @{ label = 'branch-trailing-dot';json = '{ "configBranch": "vm-work." }';            field = 'configBranch' },
+    # A branch is a FILE too on the host: the config repo keeps loose refs on Windows, so
+    # refs/heads/CON (and its CON.lock) cannot be created -- the same device rule keyName
+    # gets. Linux git accepts these, so only the validator catches them.
+    @{ label = 'branch-device-con'; json = '{ "configBranch": "CON" }';                  field = 'configBranch' },
+    @{ label = 'branch-device-nul'; json = '{ "configBranch": "nul" }';                  field = 'configBranch' },
+    @{ label = 'branch-device-com1';json = '{ "configBranch": "COM1" }';                 field = 'configBranch' },
+    @{ label = 'branch-device-ext'; json = '{ "configBranch": "CON.txt" }';              field = 'configBranch' }
 )
 foreach ($c in $badIdentity) {
     $r = Read-ConstructInstances -Path (New-RegistryFile ('{ "version": 1, "instances": { "bad-vm": ' + $c.json + ' } }'))
@@ -433,6 +440,7 @@ foreach ($good in @(
     '{ "backend": "hyperv-remote", "sshHost": "buildbox.local", "hostAlias": "work-vm.local" }',
     '{ "keyName": "construct_work-vm_ed25519" }',
     '{ "vmName": "Work-VM" }', '{ "configBranch": "vm-work" }', '{ "configBranch": "feature.x_1" }',
+    '{ "configBranch": "console" }', '{ "configBranch": "con-work" }',
     '{ "backend": "hyperv-remote", "sshHost": " buildbox.local\n" }')) {   # both readers TRIM a string field first
     $r = Read-ConstructInstances -Path (New-RegistryFile ('{ "version": 1, "instances": { "work-vm": ' + $good + ' } }'))
     ok "identity: $good is accepted" ($r.Instances.ContainsKey('work-vm'))

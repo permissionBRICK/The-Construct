@@ -1683,6 +1683,31 @@ ok "vmbranch: rejects a trailing dot (git refuses ``foo.`` as a branch)" (
     -not (Test-ConstructVmBranchName -Name "vm.") -and
     -not (Test-ConstructVmBranchName -Name "vm-work."))
 
+# WINDOWS' RULE, NOT GIT'S. The host config repo is a loose-ref repo on Windows, where
+# refs/heads/CON -- and the refs/heads/CON.lock git writes beside it -- cannot be created,
+# with or without an extension. Linux git accepts all of them, so the real-git fixture
+# list below cannot catch these; only this rule can.
+ok "vmbranch: rejects Windows device stems (a loose ref is a file)" (
+    -not (Test-ConstructVmBranchName -Name "CON") -and
+    -not (Test-ConstructVmBranchName -Name "con") -and
+    -not (Test-ConstructVmBranchName -Name "NUL") -and
+    -not (Test-ConstructVmBranchName -Name "PRN") -and
+    -not (Test-ConstructVmBranchName -Name "aux") -and
+    -not (Test-ConstructVmBranchName -Name "COM1") -and
+    -not (Test-ConstructVmBranchName -Name "com9") -and
+    -not (Test-ConstructVmBranchName -Name "LPT1") -and
+    -not (Test-ConstructVmBranchName -Name "lpt9"))
+ok "vmbranch: ...including the extension forms Win32 resolves to the same device" (
+    -not (Test-ConstructVmBranchName -Name "CON.txt") -and
+    -not (Test-ConstructVmBranchName -Name "con.work") -and
+    -not (Test-ConstructVmBranchName -Name "nul.branch.1"))
+ok "vmbranch: ...but the rule is the STEM, not a substring" (
+    (Test-ConstructVmBranchName -Name "console") -and
+    (Test-ConstructVmBranchName -Name "con-work") -and
+    (Test-ConstructVmBranchName -Name "vm-con") -and
+    (Test-ConstructVmBranchName -Name "com10") -and
+    (Test-ConstructVmBranchName -Name "lpt0"))
+
 # THE PROPERTY, against REAL GIT -- the same fixture list the JS twin drives through
 # `git check-ref-format --branch` (extension/test/configsync.test.js). This validator is
 # deliberately stricter than check-ref-format (it also refuses "main", "HEAD", "VM"), but
@@ -1690,7 +1715,9 @@ ok "vmbranch: rejects a trailing dot (git refuses ``foo.`` as a branch)" (
 # configBranch that fails at `git branch` after the instance was promised its own branch.
 $branchFixtures = @(
     'vm', 'vm-work', 'vm-work_2.1', 'WORK', 'Work', 'VM_WORK', 'vm2', 'a',
+    'console', 'con-work', 'com10',
     'main', 'master', 'HEAD', 'stash', 'VM', 'Vm',
+    'CON', 'con', 'NUL', 'PRN', 'aux', 'COM1', 'lpt9', 'CON.txt', 'con.work',
     'foo.', 'vm.', 'vm-work.', 'foo.bar.', 'vm..x', 'a..b', '-vm', '.vm',
     'vm work', 'vm/work', 'vm~1', 'vm.lock', 'x@{y', 'vm^', 'vm:1', 'vm?', 'vm*',
     'vm[1]', 'vm\x', 'vm@{now}', '@'
