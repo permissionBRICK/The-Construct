@@ -15,8 +15,11 @@
 // (which can toast them) while the default instance stands in.
 //
 // ── Public API ───────────────────────────────────────────────────────────────
-//   CONTAINER, INSTANCES_FILE, DEFAULT_INSTANCE_NAME, DEFAULT_INSTANCE, NAME_RE
-//   isValidName(name)                     -> bool          (^[a-z0-9][a-z0-9-]{0,39}$)
+//   CONTAINER, INSTANCES_FILE, DEFAULT_INSTANCE_NAME, DEFAULT_INSTANCE, NAME_RE,
+//   RESERVED_NAME_PREFIX, NAME_RULE
+//   isValidName(name)                     -> bool  (lowercase DNS label, 1-63, alnum
+//                                                   first AND last, no "construct-")
+//   isReservedName(name)                  -> bool          (the reserved-prefix half)
 //   identityProblems(instance, raw?)       -> string[]      (format rules; [] = usable)
 //   backendProblems(rawBackend)           -> string[]      (the backend field's own rule)
 //   canonicalIdentity(name)               -> the identity a hyperv-local instance MUST have
@@ -37,6 +40,7 @@
 //   createTargetQueue()                   -> one queued follow-up per target
 //   createSyncStatusStore(opts)           -> per-target sync timestamp/result + throttle
 //   describeSyncStatus(at, result)        -> the state.configSync fields for one tick
+//   targetFingerprint(instance)           -> string        (the COMPLETE target identity)
 //   planCapturedFollowUp(gate, target, proceed) -> { run, reason, target }
 //   isDefaultInstance(instance)           -> bool          (argv/behaviour gate)
 //   toSshCfg(instance)                    -> ssh.js cfg   ({vmHost,hostAlias,keyName,sshPort})
@@ -72,9 +76,46 @@ const REMOTE_BACKEND = "hyperv-remote";
 const BACKENDS = ["hyperv-local", "hyperv-remote"];
 const DEFAULT_SSH_PORT = 22;
 
-/** Instance names are used verbatim in file names, ssh aliases and git refs, so they
- *  are restricted to a lowercase, slug-safe alphabet. */
-const NAME_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+/**
+ * THE ONE INSTANCE-NAME RULE — mirrored verbatim by lib/AgentVm.Instances.ps1
+ * (`$script:ConstructInstanceNameRe`), Auto-Install.ps1 / Create-AgentVM.ps1 (the
+ * `-VmName` DNS-label check, applied to the lowercased name) and the service's
+ * Constructd.Core.Logic.VmNameValidator. Change all four together.
+ *
+ * A name is a LOWERCASE DNS LABEL: it becomes the guest hostname's first label, the ssh
+ * alias, the `construct_<name>_ed25519` key file and the `vm-<name>` git ref, so:
+ *   • alphanumeric FIRST **and LAST** character — `work-` derives the endpoint
+ *     `work-.mshome.net`, which is not a host name at all (identityProblems rejects it),
+ *     so accepting the name here only produced an instance that could never be recorded;
+ *   • 1-63 characters — the DNS label's own limit, because the name IS a label of
+ *     `<name>.mshome.net`. Every DERIVED value has to stay usable at that length, which
+ *     is why `keyName` carries its own, longer bound: `construct_` + 63 + `_ed25519` is
+ *     81 characters, so KEY_FILE_NAME_RE allows 128 where the ssh-alias token rule keeps
+ *     64 (an alias is not a path, and `hostAlias` is the bare 63-char name anyway). The
+ *     two rules have to agree or the same name would be accepted here and then refused
+ *     by its own derived identity.
+ */
+const NAME_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/**
+ * A RESERVED name prefix. `construct-<name>` was an abandoned alias convention: nothing
+ * ever shipped it, but the branch derivation used to STRIP it, so the valid instance
+ * "construct-work" derived branch `vm-construct-work` in the registry and `vm-work` in
+ * the provisioner — the config store of the DIFFERENT, equally valid instance "work".
+ * The strip is gone (derivation is now exactly `alias = name`, `key =
+ * construct_<name>_ed25519`, `branch = vm-<name>` everywhere) and the prefix is reserved
+ * instead, so no name can ever collide with the `construct_`/`construct-` namespace the
+ * derived file names live in. Matched case-insensitively: the validators that accept a
+ * display-cased VM name (`Construct-Work`) lowercase before asking.
+ */
+const RESERVED_NAME_PREFIX = "construct-";
+
+/** The ONE human-readable statement of that rule, shared by every validator that
+ *  refuses a name (the extension's input box, the PowerShell installers, the service's
+ *  400). ASCII only: it is repeated verbatim in a Windows PowerShell 5.1 script and in
+ *  a C# string. */
+const NAME_RULE = '1-63 lowercase letters, digits or hyphens, starting and ending with a ' +
+  'letter or digit; names starting with "construct-" are reserved.';
 
 /** Today's literals — the instance an existing install implicitly runs. Frozen so a
  *  consumer can never mutate the fallback out from under another one. */
@@ -93,7 +134,15 @@ const DEFAULT_INSTANCE = Object.freeze({
 });
 
 function isValidName(name) {
-  return typeof name === "string" && NAME_RE.test(name);
+  if (typeof name !== "string" || !NAME_RE.test(name)) return false;
+  return !isReservedName(name);
+}
+
+/** Does this name claim the reserved `construct-` prefix? Case-insensitive, so the
+ *  callers that validate a display-cased VM name ask the same question. Pure. */
+function isReservedName(name) {
+  return typeof name === "string" &&
+    name.toLowerCase().indexOf(RESERVED_NAME_PREFIX) === 0;
 }
 
 // ── Prototype-free registry maps ─────────────────────────────────────────────
@@ -169,7 +218,7 @@ const STRING_FIELDS = ["vmName", "sshHost", "vmHost", "hostAlias", "keyName", "c
 // SHAPE of every identity field, and an entry that breaks one is SKIPPED with a
 // problem rather than partially used — half an identity would silently target some
 // OTHER machine. Every DERIVED value satisfies them (instance names are already
-// `^[a-z0-9][a-z0-9-]{0,39}$`), so only a hand-written entry can trip these.
+// `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`), so only a hand-written entry can trip these.
 // lib/AgentVm.Instances.ps1 applies the identical rules — change both together.
 
 /** A DNS host name / FQDN (also matches a dotted IPv4 literal). */
@@ -184,8 +233,16 @@ const IPV6_SHAPE_RE = /^[0-9A-Fa-f:.]{2,45}$/;
  *  .NET's parser has historically been lenient about leading zeros where Node's is
  *  not, so the shape is pinned here rather than left to either. */
 const IPV4_STRICT_RE = /^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}$/;
-/** An ssh alias / key file name: one path-free, shell-free token. */
+/** An ssh_config Host alias: one path-free, shell-free token. `hostAlias` is the bare
+ *  instance name, so 64 is comfortably above the 63-character name limit. */
 const SAFE_TOKEN_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+/** A key FILE name — the SAME character class (nothing about path or control-character
+ *  safety is loosened), with a longer length bound. The derived key of a maximum-length
+ *  instance is `construct_` + 63 + `_ed25519` = 81 characters, which the alias rule's 64
+ *  would refuse: the name rule and the identity rule would then disagree about the same
+ *  instance. 128 is the bound, still far inside Windows' 255-character file-name limit
+ *  for `~\.ssh\<keyName>`. lib/AgentVm.Instances.ps1 applies the identical pair. */
+const KEY_FILE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 /** Windows device names. They are NOT ordinary files at any path, so `~\.ssh\CON`
  *  can never be created — and the reservation applies to the stem before the first
  *  dot, so `CON.txt` is the same device. Case-insensitive. */
@@ -227,10 +284,12 @@ function isSafeToken(v) {
  *   • a reserved device stem (CON, NUL, COM1 … , with or without an extension) is not
  *     a creatable file at all, so provisioning would fail after the VM exists.
  * `hostAlias` deliberately keeps the plain token rule: an ssh_config Host alias is not
- * a path. lib/AgentVm.Instances.ps1 applies the identical rule.
+ * a path, and it is the bare instance name. The key file's LENGTH bound is its own
+ * (KEY_FILE_NAME_RE, 128) so the derived key of a 63-character instance name still fits;
+ * the character class is identical. lib/AgentVm.Instances.ps1 applies the identical rule.
  */
 function isKeyFileName(v) {
-  if (!isSafeToken(v)) return false;
+  if (typeof v !== "string" || !KEY_FILE_NAME_RE.test(v) || v.includes("..")) return false;
   if (v.endsWith(".")) return false;
   return !WINDOWS_DEVICE_NAMES.has(v.split(".")[0].toLowerCase());
 }
@@ -256,6 +315,13 @@ function identityProblems(inst, raw) {
       if (v && !isHostEndpoint(v)) add('"' + f + '" ' + q(v) + " is not a host name or IP address");
     }
   }
+  // The NAME is an identity field too — every other one is derived from it. parseRegistry
+  // already refuses a bad key before it gets here, so this is the belt to that braces:
+  // an instance built by hand (or by a future caller that skips the reader) can never
+  // reach an ssh alias / key file / git ref through a name the one rule refuses.
+  if (!isValidName(inst.name)) {
+    add('"name" ' + q(inst.name) + " is not a usable instance name (" + NAME_RULE + ")");
+  }
   if (!isDnsLabel(inst.vmName)) {
     add('"vmName" ' + q(inst.vmName) + " is not a usable VM/host name (letters, digits and hyphens, starting alphanumeric, max 63)");
   }
@@ -266,7 +332,7 @@ function identityProblems(inst, raw) {
     add('"hostAlias" ' + q(inst.hostAlias) + " is not a usable ssh alias (letters, digits, '.', '_' and '-', max 64)");
   }
   if (!isKeyFileName(inst.keyName)) {
-    add('"keyName" ' + q(inst.keyName) + " is not a usable key file name (letters, digits, '.', '_' and '-', max 64;" +
+    add('"keyName" ' + q(inst.keyName) + " is not a usable key file name (letters, digits, '.', '_' and '-', max 128;" +
       " no trailing dot and not a reserved Windows device name)");
   }
   if (!configsync.isValidVmBranch(inst.configBranch)) {
@@ -711,8 +777,7 @@ function parseRegistry(text) {
     if (bag) {
       for (const name of Object.keys(bag)) {
         if (!isValidName(name)) {
-          problems.push('instance name "' + name + '" is invalid (allowed: a-z, 0-9 and "-", ' +
-            "starting with a letter or digit, max 40 chars) — skipped");
+          problems.push('instance name "' + name + '" is invalid (' + NAME_RULE + ") — skipped");
           continue;
         }
         const entry = bag[name];
@@ -925,27 +990,88 @@ function resolveActive(opts = {}) {
  * Pure and dependency-free, so the discard rule is unit-testable with deferred
  * promises instead of only being observable in a live window.
  */
-function createGate(name) {
+function createGate(name, fingerprintAtStart) {
   let generation = 0;
   let current = name || DEFAULT_INSTANCE_NAME;
+  // What the generation actually tracks. The NAME alone is not the identity: a registry
+  // rewritten by another process (a rebuilt remote VM gets a new sshHost/sshPort, a
+  // hand-edited configBranch, an adopted scriptsDir) changes WHICH MACHINE the same name
+  // reaches, and a gate keyed by name would report "no change" while every probe, tunnel
+  // and cached reading still belonged to the old endpoint. Defaults to the name, so a
+  // caller that only has one behaves exactly as before. Seeded with the STARTING target's
+  // fingerprint when the caller has it, so the first resolve of an unchanged target is not
+  // a "change" — a single-VM window then stays at generation 0 for its whole life.
+  let fingerprint = fingerprintAtStart == null ? current : String(fingerprintAtStart);
   return {
     /** The active instance name this gate is tracking. */
     get name() { return current; },
+    /** The full target identity the generation tracks (see targetFingerprint). */
+    get fingerprint() { return fingerprint; },
     /** Bumped on every real change; tokens carry the value they were issued at. */
     get generation() { return generation; },
     /** Capture the identity a pipeline started under. */
-    token() { return { generation, name: current }; },
-    /** Point the gate at another instance. Returns true when it actually changed. */
-    set(next) {
+    token() { return { generation, name: current, fingerprint }; },
+    /**
+     * Point the gate at another target. `nextFingerprint` is the COMPLETE normalized
+     * identity (omit it and the name stands in). Returns true when it actually changed —
+     * a re-set of the same name AND the same identity is not a change, which is what
+     * keeps a window that never switches at generation 0.
+     */
+    set(next, nextFingerprint) {
       const n = String(next == null ? "" : next);
-      if (!n || n === current) return false;
+      if (!n) return false;
+      const f = nextFingerprint == null ? n : String(nextFingerprint);
+      if (n === current && f === fingerprint) return false;
       current = n;
+      fingerprint = f;
       generation += 1;
       return true;
     },
     /** Is a captured token still the active identity? A missing token is never valid. */
     valid(token) { return !!token && token.generation === generation; },
   };
+}
+
+/**
+ * THE COMPLETE NORMALIZED IDENTITY of a target, as one comparable string.
+ *
+ * "Which VM is this window driving" is not answered by the instance NAME. Three things
+ * change the answer without changing the name:
+ *   • another process flips the registry's `defaultInstance` (this window follows it,
+ *     because nothing pins it) — the name changes, but only a re-read notices;
+ *   • the selected entry is REMOVED — resolveActive falls back to another instance;
+ *   • the entry is REWRITTEN under the same name — a rebuilt remote VM comes back on a
+ *     new sshHost/sshPort, an entry gains a scriptsDir or a service URL. The name is
+ *     identical, so a name-keyed gate sees nothing at all while every probe, notification
+ *     stream, mic tunnel, forwarding transport, idle-policy cache and sync throttle keeps
+ *     using the OLD endpoint.
+ * So every field that decides where a command lands is in here. `backend` is normalized
+ * the way the driver lookup normalizes it (trim + lowercase) so a case-variant spelling
+ * is not read as a retarget; `service` contributes the URL and the auth kind, which is
+ * what decides which host service is asked to start and stop the VM.
+ *
+ * Pure and total (a missing instance is ""), so the change-detection rules are unit-tested
+ * without a live window.
+ */
+function targetFingerprint(instance) {
+  if (!instance) return "";
+  const s = (v) => (v == null ? "" : String(v));
+  const svc = (instance.service && typeof instance.service === "object" && !Array.isArray(instance.service))
+    ? instance.service : null;
+  return JSON.stringify([
+    s(instance.name),
+    s(instance.backend).trim().toLowerCase(),
+    s(instance.vmName),
+    s(instance.vmHost),
+    Number(instance.sshPort) || 0,
+    s(instance.hostAlias),
+    s(instance.keyName),
+    s(instance.configBranch),
+    s(instance.scriptsDir),
+    svc ? s(svc.url) : "",
+    svc ? s(svc.auth) : "",
+    s(instance.owner),
+  ]);
 }
 
 /**
@@ -1638,15 +1764,16 @@ function setDefaultInstance(registry, name) {
 
 module.exports = {
   CONTAINER, INSTANCES_FILE, SCHEMA_VERSION, BACKENDS, NAME_RE,
+  RESERVED_NAME_PREFIX, NAME_RULE,
   DEFAULT_INSTANCE_NAME, DEFAULT_INSTANCE, DEFAULT_SSH_PORT, DEFAULT_BACKEND,
-  isValidName, localAppData, instancesPath,
+  isValidName, isReservedName, localAppData, instancesPath,
   isHostEndpoint, isIpv6Literal, isSafeToken, isKeyFileName, isDnsLabel, identityProblems,
   isLocalBackend, canonicalIdentity, localIdentityProblems, collisionProblems,
   isRemoteBackend, remoteIdentityProblems,
   deriveBackend, backendProblems,
   deriveDefaults, isDefaultInstance, toSshCfg,
   parseRegistry, load, list, resolve, resolveActive, hasInstance, effectivePin, matchByRemoteHost,
-  createGate, createCoalescer, createTargetQueue, captureTarget, targetSuperseded,
+  createGate, createCoalescer, createTargetQueue, captureTarget, targetSuperseded, targetFingerprint,
   describeSyncStatus, createSyncStatusStore,
   planCapturedFollowUp, planHandover, createHandover, planEnable, createSessionOwner,
   planSwitchPersistence, planRemoteAdoption, adoptRemoteInstance,

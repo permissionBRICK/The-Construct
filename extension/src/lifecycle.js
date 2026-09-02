@@ -169,15 +169,20 @@ const ACTION_LABELS = {
 /**
  * The config-sync branch Provision-AgentVM.ps1 DERIVES from a host alias — the mirror
  * of Get-ConstructConfigBranchName (lib/AgentVm.Common.ps1): "agent-vm" (and an empty
- * alias) -> "vm"; anything else -> "vm-<alias>" lowercased, with a leading "construct-"
- * tolerated and stripped; a result the branch validator rejects falls back to "vm".
- * Pure. Change it together with the PowerShell function.
+ * alias) -> "vm"; anything else -> "vm-<alias>" lowercased; a result the branch
+ * validator rejects falls back to "vm". Pure. Change it together with the PowerShell
+ * function.
+ *
+ * NO PREFIX IS STRIPPED. Both sides used to remove a leading "construct-" (an alias
+ * convention abandoned mid-project and never shipped), which made the valid instance
+ * "construct-work" derive "vm-construct-work" in the registry and "vm-work" here — the
+ * config store of the DIFFERENT, equally valid instance "work". The prefix is RESERVED
+ * by every name validator instead (instances.isValidName), so no alias can carry it.
  */
 function derivedConfigBranch(hostAlias) {
   const cs = configsync();
-  let alias = String(hostAlias == null ? "" : hostAlias).trim().toLowerCase();
+  const alias = String(hostAlias == null ? "" : hostAlias).trim().toLowerCase();
   if (!alias || alias === "agent-vm") return cs.DEFAULT_VM_BRANCH;
-  if (alias.indexOf("construct-") === 0) alias = alias.slice("construct-".length);
   const branch = "vm-" + alias;
   return cs.isValidVmBranch(branch) ? branch : cs.DEFAULT_VM_BRANCH;
 }
@@ -766,15 +771,31 @@ function configure(opts = {}) {
   if (opts && typeof opts.isDebug === "function") _isDebug = opts.isDebug;
 }
 
-/** Modal confirm for a destructive (VM-deleting) action. Resolves true to go. */
-async function confirmDestructive(inv) {
-  const vscode = vsc();
+/**
+ * Modal confirm for a destructive (VM-deleting) action. Resolves true to go.
+ *
+ * `instance` (optional) is the CAPTURED target. For the default instance the dialog is
+ * byte-identical to the one a single-VM install has always seen — it has one VM, and
+ * naming it would be noise. For any OTHER instance the title names it and the detail
+ * states the endpoint that is about to be deleted and rebuilt: with several VMs
+ * configured, "Reinstall the Construct VM?" does not say WHICH, and this is the dialog
+ * whose answer deletes a disk.
+ */
+async function confirmDestructive(inv, instance, _vscode) {
+  const vscode = _vscode || vsc();
   const detail = inv.label === "Redownload"
     ? "This DELETES the VM and its virtual disk, re-downloads the Ubuntu ISO, then rebuilds and reinstalls from scratch."
     : "This DELETES the VM and its virtual disk, then rebuilds and reinstalls from the current ISO.";
+  const named = instance && !instances.isDefaultInstance(instance);
+  const title = named ? `${inv.label} the Construct VM “${instance.name}”?` : `${inv.label} the Construct VM?`;
+  // The endpoint only for a REMOTE instance: that VM lives on somebody else's host, so
+  // the address is the only thing that distinguishes it from a local VM of the same name.
+  const where = (named && isRemoteBackend(instance.backend))
+    ? ` The VM is “${instance.vmName}” on ${instance.vmHost}${Number(instance.sshPort) === 22 ? "" : ":" + instance.sshPort}.`
+    : "";
   const pick = await vscode.window.showWarningMessage(
-    `${inv.label} the Construct VM?`,
-    { modal: true, detail: detail + " This is irreversible and cannot be undone." },
+    title,
+    { modal: true, detail: detail + where + " This is irreversible and cannot be undone." },
     inv.label
   );
   return pick === inv.label;
@@ -842,8 +863,12 @@ function launchHostScript(opts) {
 
 /**
  * Run a lifecycle action. `opts`: { scriptsDir, backupMode?, projects?, enabled?, env?,
- * instance? }. `instance` is the active instance (src/instances.js); omitted or default
- * => the launched argv is byte-identical to before instances existed.
+ * instance?, stillCurrent? }. `instance` is the active instance (src/instances.js);
+ * omitted or default => the launched argv is byte-identical to before instances existed.
+ * `stillCurrent` is the caller's captured-target predicate, re-asked AFTER the destructive
+ * confirmation and immediately before anything is cleared or launched (see below) — it is
+ * the only thing standing between a modal the user left open and a rebuild of the instance
+ * this window has since left.
  * scriptsDir must be pre-resolved by the caller (it owns the construct.scriptsDir
  * setting); `enabled` is the setCheckpoints on/off. The destructive actions confirm
  * first; everything launches a new host console.
@@ -854,8 +879,11 @@ function launchHostScript(opts) {
  * way (possibly behind the destructive-action confirmation).
  */
 function run(action, opts = {}) {
-  const vscode = vsc();
-  if (process.platform !== "win32") {
+  // Same test seams launchHostScript has (`_vscode`/`_platform`/`_spawn`, defaulting to
+  // the real ones), so the confirm-then-launch ORDERING — which is where the captured
+  // target is verified — is exercised directly instead of only being modelled.
+  const vscode = opts._vscode || vsc();
+  if ((opts._platform || process.platform) !== "win32") {
     vscode.window.showWarningMessage("Construct lifecycle actions run on the Windows host, which isn't available here.");
     return false;
   }
@@ -903,8 +931,26 @@ function run(action, opts = {}) {
       );
     }
   }
-  Promise.resolve(inv.destructive ? confirmDestructive(inv) : true).then((ok) => {
+  const confirmed = Promise.resolve(inv.destructive ? confirmDestructive(inv, opts.instance, opts._vscode) : true);
+  runPending = confirmed.then((ok) => {
     if (!ok) return;
+    // THE CONFIRMATION IS AN AWAIT, AND THIS IS WHAT IS ON THE OTHER SIDE OF IT.
+    // Callers check their captured generation BEFORE calling run(), but the modal above
+    // opens inside run() and can sit there for as long as the user leaves it — long
+    // enough for another window to change the global selection, or for the registry to be
+    // rewritten. Accepting then would delete and rebuild the instance this window has
+    // already left. `stillCurrent` is the caller's captured-target predicate; it reports
+    // (log + a warning naming both instances) and returns false when the target is gone.
+    // Omitted => nothing to compare against, and the flow is byte-identical to before.
+    if (typeof opts.stillCurrent === "function") {
+      let current = false;
+      try { current = opts.stillCurrent() !== false; }
+      catch (_) { current = false; }   // an unusable predicate fails CLOSED: nothing is deleted
+      if (!current) {
+        (_log || (() => {}))(`lifecycle ${action}: aborted after the confirmation — the window is no longer on "${(opts.instance && opts.instance.name) || "the captured instance"}"`);
+        return;
+      }
+    }
     // A rebuild REPLACES the VM, so what was last confirmed onto the old one says nothing
     // about the new one. Clearing the marker keeps the (permission-gated) apply-offer
     // honest: a stale "already applied off" must not suppress the offer for a fresh VM
@@ -915,10 +961,20 @@ function run(action, opts = {}) {
     launchHostScript({
       scriptsDir, script: inv.script, args: inv.args, argSpec: inv.argSpec,
       elevate: inv.elevate, label: inv.label, env: opts.env,
+      _vscode: opts._vscode, _platform: opts._platform, _spawn: opts._spawn,
     });
   });
   return true;
 }
+
+/**
+ * The tail of the LAST run() — the promise that settles once its confirmation has been
+ * answered and the launch (or the abort) has happened. Test-only observability: run()
+ * itself stays synchronous and returns the same true/false it always did, so no caller
+ * behaviour changes.
+ */
+let runPending = Promise.resolve();
+function runSettled() { return runPending; }
 
 module.exports = {
   PROVISION, AUTO_INSTALL, CHECKPOINTS, BACKUP_DIR_NAME,
@@ -932,5 +988,5 @@ module.exports = {
   scriptSupportsT3CodeLimitResume,
   scriptSupportsOpenCodeBackgroundWatcher,
   psSingleQuote, winQuoteArg, buildChildCommandLine, buildOuterCommand, buildCallCommand, buildHostLaunch,
-  hostLaunchSpawnOptions, launchHostScript, run, configure,
+  hostLaunchSpawnOptions, launchHostScript, run, runSettled, confirmDestructive, configure,
 };
