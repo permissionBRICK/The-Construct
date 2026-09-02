@@ -86,6 +86,15 @@ dotnet publish C:\Construct\service\src\Constructd.Api -c Release -r win-x64 `
 
 **Expect:** `C:\Construct\service\publish\Constructd.Api.exe` exists.
 
+> **Why `C:\Construct` works although a copied checkout inherits `Authenticated Users: Modify`
+> from `C:\`:** the installer hardens `-ScriptsDir` (the whole tree, SYSTEM + Administrators
+> write, Users read/execute) before it checks `-PublishDir` inside it. The check itself is
+> about *ancestors*, not the hardened directory: a non-admin who may rename
+> `C:\Construct\service` can put a different `publish\` at the same path, and LocalSystem
+> would execute it — the ACL on the original directory does not help then. If the installer
+> refuses with "sits under ..., where S-1-5-11 can delete, rename or re-permission it", the
+> named ancestor is outside every directory the installer hardens; move the tree or fix that ACL.
+
 ### 1.3 Run the installer
 
 ```powershell
