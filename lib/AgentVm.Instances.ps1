@@ -432,17 +432,42 @@ function Get-ConstructInstanceCollision {
 }
 
 function Get-ConstructRawProperty {
-    <# The raw property value, or $null when absent. No coercion of any kind. #>
+    <#
+        The raw value of the schema field spelled EXACTLY $Name, or $null when the object
+        has no such field. No coercion of any kind.
+
+        ORDINAL, CASE-SENSITIVE on purpose. $Object.PSObject.Properties[$Name] -- what this
+        used to do -- looks up case-INSENSITIVELY, while JavaScript property access does
+        not. The same bytes therefore read differently on the two sides: a file spelled
+        { "VERSION": 1, "DEFAULTINSTANCE": "x", "INSTANCES": { "x": ... } } was IGNORED by
+        extension/src/instances.js (which sees no version, no instances and no default, so
+        it uses agent-vm) while this reader loaded 'x' and made it the DEFAULT -- so a host
+        script and the extension would drive DIFFERENT VMs from one registry. Wrong-cased
+        NESTED fields did the same one entry at a time ('BACKEND'/'SSHHOST' turned a
+        derived hyperv-local entry into a remote one here and nowhere else).
+        So every top-level and nested schema field is matched byte-for-byte, and a
+        wrong-cased key is simply ABSENT -- exactly what the JS reader makes of it.
+
+        (Known, FAIL-CLOSED divergence left in place: a file that spells the SAME key in
+        two casings -- "version" AND "VERSION" -- makes ConvertFrom-Json itself throw on
+        PowerShell 6+, so the whole file degrades to "not valid JSON" plus the default
+        instance rather than to a wrong target. Windows PowerShell 5.1 has no -AsHashtable
+        to avoid that, and falling back to the default instance is the safe reading.)
+    #>
     param($Object, [string]$Name)
     if ($null -eq $Object) { return $null }
-    $prop = $null
-    try { $prop = $Object.PSObject.Properties[$Name] } catch { return $null }
-    if (-not $prop) { return $null }
-    # `,` keeps an ARRAY value intact: a bare `return $prop.Value` unrolls it into the
-    # pipeline, so a malformed `"configBranch": ["x"]` would arrive at the caller as the
-    # plain string "x" and be accepted -- exactly the mis-normalization the type check
-    # exists to catch.
-    return ,$prop.Value
+    $props = $null
+    try { $props = @($Object.PSObject.Properties) } catch { return $null }
+    foreach ($prop in $props) {
+        if ([string]::Equals([string]$prop.Name, $Name, [System.StringComparison]::Ordinal)) {
+            # `,` keeps an ARRAY value intact: a bare `return $prop.Value` unrolls it into
+            # the pipeline, so a malformed `"configBranch": ["x"]` would arrive at the
+            # caller as the plain string "x" and be accepted -- exactly the
+            # mis-normalization the type check exists to catch.
+            return ,$prop.Value
+        }
+    }
+    return $null
 }
 
 function Test-ConstructBadString {
@@ -699,10 +724,13 @@ function ConvertFrom-ConstructInstancesJson {
     }
 
     if ($null -ne $doc) {
-        $bagProp = $doc.PSObject.Properties['instances']
+        # Get-ConstructRawProperty, not PSObject.Properties['instances']: the lookup is
+        # ORDINAL, so an "INSTANCES" key is absent here exactly as it is for the JS
+        # reader's doc.instances (see Get-ConstructRawProperty).
+        $bagRaw = Get-ConstructRawProperty $doc 'instances'
         $bag = $null
-        if ($bagProp -and $null -ne $bagProp.Value) {
-            if ($bagProp.Value -is [psobject] -and -not ($bagProp.Value -is [array])) { $bag = $bagProp.Value }
+        if ($null -ne $bagRaw) {
+            if ($bagRaw -is [psobject] -and -not ($bagRaw -is [array])) { $bag = $bagRaw }
             else { $problems.Add('instances.json: "instances" must be an object') }
         }
         if ($null -ne $bag) {
