@@ -2698,6 +2698,66 @@ $script:CONSTRUCT_WINDOWS_DEVICE_NAMES = @(
     'com1', 'com2', 'com3', 'com4', 'com5', 'com6', 'com7', 'com8', 'com9',
     'lpt1', 'lpt2', 'lpt3', 'lpt4', 'lpt5', 'lpt6', 'lpt7', 'lpt8', 'lpt9')
 
+function Get-T3CaImportPlan {
+    <#
+        .SYNOPSIS
+        Decide how (and whether) to trust the VM's T3 HTTPS certificate authority
+        on this host. Pure: the caller does the store lookups and the import.
+
+        The VM serves the T3 web GUI over HTTPS with a certificate from its own
+        local CA (bin/setup-t3-https.sh), because a browser only exposes
+        getUserMedia -- T3's client-side microphone capture -- on a secure origin.
+        For the browser to accept it, that CA has to be in a Root store:
+
+          * already in EITHER Root store  -> skip, nothing to do. Re-importing
+            would be a second identical entry, and (unelevated) a second dialog.
+          * elevated                      -> LocalMachine\Root. Silent, and every
+            user + service on the host sees it.
+          * not elevated                  -> CurrentUser\Root. Windows shows ONE
+            confirmation dialog, which the caller must announce BEFORE importing
+            so an unexpected security prompt is never a surprise.
+
+        Never returns a "cannot" verdict: the caller treats this whole step as
+        best-effort and warns instead of failing a provision.
+    #>
+    [CmdletBinding()]
+    param(
+        # Whether this process runs elevated (Administrator).
+        [switch]$Elevated,
+        # Whether a certificate with the same thumbprint is already in
+        # Cert:\LocalMachine\Root ...
+        [switch]$PresentInMachine,
+        # ... or in Cert:\CurrentUser\Root.
+        [switch]$PresentInUser
+    )
+    if ($PresentInMachine -or $PresentInUser) {
+        $where = if ($PresentInMachine) { "LocalMachine" } else { "CurrentUser" }
+        return [pscustomobject]@{
+            Action  = "skip"
+            Store   = ""
+            Scope   = $where
+            Prompts = $false
+            Reason  = "The T3 certificate authority is already trusted in the $where Root store."
+        }
+    }
+    if ($Elevated) {
+        return [pscustomobject]@{
+            Action  = "import"
+            Store   = "Cert:\LocalMachine\Root"
+            Scope   = "LocalMachine"
+            Prompts = $false
+            Reason  = "Elevated: importing into the machine Root store (no prompt, applies to every user)."
+        }
+    }
+    return [pscustomobject]@{
+        Action  = "import"
+        Store   = "Cert:\CurrentUser\Root"
+        Scope   = "CurrentUser"
+        Prompts = $true
+        Reason  = "Not elevated: importing into your user Root store -- Windows shows one confirmation dialog."
+    }
+}
+
 function Test-ConstructVmBranchName {
     <#
         .SYNOPSIS
