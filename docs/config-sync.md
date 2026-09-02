@@ -256,7 +256,8 @@ its **own VM-side branch** inside it:
   `vm/<name>` is deliberately not used: git cannot hold `refs/heads/vm` and
   `refs/heads/vm/<x>` at the same time, so adding a second instance would break
   the first one's ref. Names are validated — `^[A-Za-z0-9][A-Za-z0-9._-]*$`, no
-  `..`, no `.lock` suffix, and not one of a short reserved list git would
+  `..`, no trailing `.` (`git check-ref-format --branch foo.` refuses it), no
+  `.lock` suffix, and not one of a short reserved list git would
   resolve as something else: `main`/`master` (the host-truth trunk) and the
   pseudo-refs `HEAD`, `FETCH_HEAD`, `ORIG_HEAD`, `MERGE_HEAD`, … (which cannot
   be created as branches yet *read* specially), plus any spelling of `vm` other
