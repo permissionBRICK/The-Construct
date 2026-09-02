@@ -28,6 +28,15 @@
       label = "\u23FB Shutdown";
       title = "Shutdown the VM";
       disabled = false;
+    } else if (s && s.vmState === "saved") {
+      // Kept in step with media/panel.js's setPowerAction: the idle policy saved this VM,
+      // so the same start call RESUMES it where it left off. The two surfaces must not
+      // promise the user different things about the same button.
+      cls.push("start");
+      cmd = "startConnect";
+      label = "\u25B6 Resume & connect";
+      title = "Resume the saved VM, then connect";
+      disabled = false;
     } else if (s && s.vmState !== "absent" && s.vmState !== "running") {
       cls.push("start");
       cmd = "startConnect";
