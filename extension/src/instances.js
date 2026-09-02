@@ -32,6 +32,8 @@
 //   hasInstance(registry, name)           -> bool          (OWN-property membership)
 //   resolveActive({registry, setting, workspaceValue}) -> { instance, name, source }
 //   createTargetQueue()                   -> one queued follow-up per target
+//   createSyncStatusStore(opts)           -> per-target sync timestamp/result + throttle
+//   describeSyncStatus(at, result)        -> the state.configSync fields for one tick
 //   planCapturedFollowUp(gate, target, proceed) -> { run, reason, target }
 //   isDefaultInstance(instance)           -> bool          (argv/behaviour gate)
 //   toSshCfg(instance)                    -> ssh.js cfg   ({vmHost,hostAlias,keyName,sshPort})
@@ -981,6 +983,75 @@ function createTargetQueue() {
 }
 
 /**
+ * The user-visible shape of ONE instance's last config-sync tick: the four fields
+ * state.configSync carries about it. Pure, and separated from the store below so the
+ * "which word describes this TickResult" mapping (extension.js used to inline it twice,
+ * once for the last tick and once for a recovery tick) is testable on its own.
+ *   `at`     — when that instance last ticked (ms), or null/0 for "never"
+ *   `result` — that tick's TickResult, or null
+ */
+function describeSyncStatus(at, result) {
+  return {
+    lastSyncAt: at || null,
+    lastResult: result ? (result.ok ? "ok" : (result.conflict ? "conflict" : (result.blocked ? "blocked" : "error"))) : null,
+    blockedReason: result ? (result.blockedReason || null) : null,
+    warnings: result ? (result.warnings || []) : [],
+  };
+}
+
+/**
+ * PER-TARGET CONFIG-SYNC STATUS + AUTO-TICK THROTTLE.
+ *
+ * A sync tick belongs to ONE instance: it commits that instance's branch and reads/writes
+ * that instance's VM store (docs/config-sync.md, "Multiple instances" — one branch per
+ * VM). Its timestamp and its result therefore describe that instance and nothing else.
+ * Held window-globally (as `lastSyncTickAt` / `lastSyncResult` were), they LIED after a
+ * switch: the panel showed A's timestamp, result, warnings and blocked reason under B's
+ * name, and A's stamp satisfied the 5-minute throttle so B's first automatic tick was
+ * suppressed for up to five minutes — leaving B's branch and VM store unsynchronized
+ * exactly when the user had just switched to it.
+ *
+ * So both are keyed by the CAPTURED TARGET's name. What stays global is the thing that is
+ * genuinely repository-wide: the in-flight tick and the config repo's cross-process lock
+ * (one repo, one lock — two instances still serialize against each other).
+ *
+ * `throttleMs` is the automatic-tick spacing; `now` is injectable, so the ordering is
+ * unit-tested with a fake clock instead of only being observable in a live window.
+ */
+function createSyncStatusStore(opts) {
+  const o = opts || {};
+  const throttleMs = typeof o.throttleMs === "number" ? o.throttleMs : 0;
+  const now = typeof o.now === "function" ? o.now : () => Date.now();
+  const byTarget = new Map();
+  const keyOf = (key) => String(key == null ? "" : key);
+  const entry = (key) => byTarget.get(keyOf(key)) || null;
+  return {
+    /** Record a finished tick FOR ONE TARGET. Returns the result, for chaining. */
+    record(key, result) {
+      byTarget.set(keyOf(key), { at: now(), result: result || null });
+      return result;
+    },
+    /** When this target last ticked, or null when it never has. */
+    lastAt(key) { const e = entry(key); return e ? e.at : null; },
+    /** This target's last TickResult, or null. */
+    lastResult(key) { const e = entry(key); return e ? e.result : null; },
+    /** The state.configSync fields for this target (see describeSyncStatus). */
+    status(key) { const e = entry(key); return describeSyncStatus(e ? e.at : null, e ? e.result : null); },
+    /**
+     * May an AUTOMATIC tick run for this target now? A target that has never ticked is
+     * always due — "no stamp" is not "stamped at epoch 0" — and each target's window is
+     * its own, so switching to B never inherits A's suppression.
+     */
+    dueForAuto(key) {
+      const e = entry(key);
+      return !e || (now() - e.at) >= throttleMs;
+    },
+    /** How many targets have a recorded tick (one entry per instance at most). */
+    get size() { return byTarget.size; },
+  };
+}
+
+/**
  * Should a step that was DEFERRED past an await still run — and for whom?
  *
  * Two flows in extension.js decide this after something slow: a notification the user
@@ -1188,6 +1259,7 @@ module.exports = {
   deriveDefaults, isDefaultInstance, toSshCfg,
   parseRegistry, load, list, resolve, resolveActive, hasInstance, matchByRemoteHost,
   createGate, createCoalescer, createTargetQueue, captureTarget, targetSuperseded,
+  describeSyncStatus, createSyncStatusStore,
   planCapturedFollowUp, planRemoteAdoption, adoptRemoteInstance,
   toFileEntry, toFileDocument, save,
   addInstance, updateInstance, removeInstance, setDefaultInstance,

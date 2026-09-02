@@ -262,7 +262,9 @@ VM-derived fields when `online===false` or `probeError`):
 
 **`configSync` is host-derived — NOT cleared by `clearLiveVmData`.** It reflects the
 local config-dir state (git presence, repo conflicts, linked remotes) and survives
-an offline VM. The webview renders it in the "Config sync" strip inside the Projects
+an offline VM. Its `lastSyncAt`/`lastResult`/`blockedReason`/`warnings` describe the
+**active instance's own** last tick (see "Instances"), so an instance that has never
+synced reports exactly that instead of the previous instance's result. The webview renders it in the "Config sync" strip inside the Projects
 module, regardless of `online`.
 
 ## Instances
@@ -381,6 +383,22 @@ change them together):
   selection and active selection alike. An instance genuinely *named* `constructor` is a
   valid name and still works, in both readers; `__proto__`/`toString` etc. are rejected
   by the name rule in both. Both suites run the same fixture matrix.
+- **Schema keys are matched ORDINALLY, exact-case, in both readers.** JavaScript
+  property access is case-sensitive; `$obj.PSObject.Properties['name']` is *not*, so the
+  PS reader used to accept fields JS never sees. `{"VERSION":1,"DEFAULTINSTANCE":"x",
+  "INSTANCES":{"x":{…}}}` was ignored by `instances.js` (which found no version, no bag
+  and no pointer, and used `agent-vm`) and loaded by PowerShell — with `x` as the
+  **default** instance; a wrong-cased `"BACKEND"`/`"SSHHOST"` inside an entry did the
+  same one entry at a time, turning a derived `hyperv-local` instance into a remote one
+  on the PS side only. `Get-ConstructRawProperty` now walks `PSObject.Properties` with
+  `StringComparison.Ordinal` (and the top-level `instances` lookup goes through it), so a
+  wrong-cased key is simply **absent** — never a value, and never a "must be a string"
+  problem either. Both suites feed their reader the *same bytes* (uppercase and mixed-case
+  fixtures, top-level and nested). One divergence is left in place deliberately because
+  it fails closed: a file that spells the same key in two casings (`"version"` **and**
+  `"VERSION"`) makes `ConvertFrom-Json` itself throw on PowerShell 6+, so that reader
+  degrades to "not valid JSON" plus the default instance (Windows PowerShell 5.1 has no
+  `-AsHashtable` to avoid it).
 - **`isDefaultInstance` compares case-sensitively** (`===` / `-ceq`), and the PS
   instance table is an ordinal hashtable. Otherwise a `vmName` of `"agent-vm"` would
   read as the default on one side and as a non-default instance on the other — and only
@@ -530,6 +548,19 @@ the click, where re-reading the active instance is hardest to spot:
   started, syncing B's branch and B's store while A's changes stayed unsynced. Every
   caller (Sync Now, the lifecycle pre-flight, the refresh pipeline, the `projects` file
   watcher, profile delete, the remote-config import) passes its own captured target.
+- **A tick's STATUS and THROTTLE belong to that target too**
+  (`instances.createSyncStatusStore`, keyed by the captured target's name). The timestamp
+  and `TickResult` describe *one* instance's branch and VM store, so window-global they
+  lied after a switch: `buildConfigSyncState` reported A's `lastSyncAt`, result, warnings
+  and blocked reason under B's name, and `maybeAutoSync` saw A's stamp satisfy the
+  five-minute throttle — suppressing B's *first* automatic tick for up to five minutes and
+  leaving B's branch and store unsynchronized exactly when the user had just switched to
+  it. A target that has never ticked is always due ("no stamp" is not "stamped at epoch
+  0"). What stays window-global is what is genuinely repository-wide: the in-flight tick
+  (`syncTickPromise`/`syncTickInFlight`) and the config repo's cross-process lock — one
+  repo, one lock, so a tick for B still waits behind a tick for A. The store is pure and
+  clock-injectable, so the A-syncs-then-switch-to-B case is driven with deferred promises
+  in `extension/test/instances.test.js` rather than only being visible in a live window.
 - **A stale capture aborts; it does not "carry on with the old VM".** The generation is
   re-checked **before every mutation an await could have outlived**: at the tick's entry,
   when a *queued* follow-up finally starts (the switch usually happens inside exactly
