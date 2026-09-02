@@ -64,6 +64,10 @@
         <section class="module">
           <div class="mhead"><h2 class="seclabel">System</h2><button class="btn ghost" data-cmd="refresh">refresh</button></div>
           <div class="row"><span class="k">Hyper-V VM</span><span class="v"><b id="sysVm">—</b></span></div>
+          <!-- Remote instances only: hidden (and left at "—") for hyperv-local, so a
+               single-VM install's System card is pixel-identical to before B7. -->
+          <div class="row" id="sysBackendRow" hidden><span class="k">Backend</span><span class="v" id="sysBackend">—</span></div>
+          <div class="row" id="sysServiceRow" hidden><span class="k">Host service</span><span class="v" id="sysService">—</span></div>
           <div class="row"><span class="k">Reachable at</span><span class="v" id="sysHost">—</span></div>
           <div class="row"><span class="k">RAM / disk</span><span class="v"><span id="sysResources">—</span><!--
             Disk-pressure flag: shown only above 90% full (see panel.js). A full VM

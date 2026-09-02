@@ -187,6 +187,32 @@ param(
     # Forwarded down the chain: -> Create-AgentVM.ps1 -> Provision-AgentVM.ps1, and
     # straight to Provision on the reprovision / add-config paths.
     [string]$ConfigBranch = "",
+    # ── Remote host install (batch B7, docs/remote-host.md, plan §4.5) ─────────
+    # Where the VM is created. "hyperv-local" (the default) is today's path, verbatim.
+    # "hyperv-remote" creates it on a shared Hyper-V host running the constructd
+    # service; NOTHING about the local path changes, and passing any of these three
+    # parameters also SKIPS the mode prompt (so a scripted or panel-launched run never
+    # sees it).
+    [ValidateSet("hyperv-local", "hyperv-remote")]
+    [string]$Backend = "hyperv-local",
+    # The host service's base URL, e.g. https://buildbox.example.local:7462. A bare
+    # host name gets https and the service's default port. Empty = not a remote install
+    # (or: take it from the registry entry named by -InstanceName).
+    [string]$ServiceUrl = "",
+    # How to authenticate to that service. "negotiate" uses this Windows session's
+    # identity (Kerberos/NTLM); "token" uses the admin-issued API token stored for the
+    # host. An interactive run falls back from negotiate to a token / domain credentials
+    # by itself when the service answers 401.
+    [ValidateSet("negotiate", "token")]
+    [string]$ServiceAuth = "negotiate",
+    # The instance (VM) name on the remote host AND in the local instance registry --
+    # a DNS label, e.g. "work-vm". Naming an EXISTING remote instance opens that
+    # instance's menu (reprovision / reinstall / export) instead of creating one.
+    [string]$InstanceName = "",
+    # vCPUs for a REMOTE VM. 0 (the default) means "this script's own default", which is
+    # also what every local install uses -- Create-AgentVM.ps1 decides the local VM's
+    # processor count, so this parameter deliberately does nothing on the local path.
+    [int]$VmCpuCount = 0,
     # GitHub owner/name + ref this install came from. Forwarded down to
     # Provision-AgentVM.ps1, which records the installed-commit update marker for the
     # control panel at the end of a successful provision. Defaults to the canonical
@@ -281,6 +307,225 @@ trap {
     exit 1
 }
 
+# ── Install mode: local Hyper-V, or a remote host service ────────────────────
+# ONE entry point, one extra question, and only on a genuinely fresh machine
+# (docs/plans/modular-remote-architecture.md §4.5). Every existing install -- and every
+# scripted or panel-launched run -- resolves the mode from its parameters and sees NO
+# new prompt at all.
+#
+# WHY IT IS DECIDED HERE, before the self-elevation below: a remote install creates no
+# local VM and therefore needs no administrator rights, and elevating would be actively
+# wrong -- on a machine where UAC switches to a DIFFERENT admin account, the token
+# store, the instance registry and ~\.ssh would all land in that account's profile
+# instead of the user's. So the remote path skips the relaunch entirely.
+$script:ConstructInstallMode  = ""      # "" = not decided yet
+$script:ConstructModePrompted = $false  # did we actually show the prompt?
+
+function Read-ConstructInstanceRegistrySnapshot {
+    <#
+        A read-only view of %LOCALAPPDATA%\The-Construct\instances.json, as plain data.
+
+        Read in a CHILD SCOPE (& { ... }) on purpose: lib\AgentVm.Instances.ps1 enables
+        Set-StrictMode -Version Latest in whatever scope it is dot-sourced into, and the
+        LOCAL install path below must not start running under a mode it was never
+        written for. The child scope contains it.
+
+        Returns $null when the library is missing (an older/partial install) -- callers
+        treat that exactly like "no registry", i.e. today's single-VM behaviour.
+    #>
+    param([string]$ScriptsDir = $PSScriptRoot)
+    $lib = Join-Path (Join-Path $ScriptsDir "lib") "AgentVm.Instances.ps1"
+    if (-not (Test-Path -LiteralPath $lib)) { return $null }
+    try {
+        return & {
+            param($libPath)
+            . $libPath
+            $reg = Read-ConstructInstances
+            $entries = @{}
+            foreach ($k in @($reg.Instances.Keys)) {
+                $i = $reg.Instances[$k]
+                $svcUrl = ""; $svcAuth = ""
+                if ($i.Service) { $svcUrl = [string]$i.Service.Url; $svcAuth = [string]$i.Service.Auth }
+                $entries[[string]$k] = [pscustomobject]@{
+                    Name         = [string]$i.Name
+                    Backend      = [string]$i.Backend
+                    VmName       = [string]$i.VmName
+                    VmHost       = [string]$i.VmHost
+                    SshPort      = [int]$i.SshPort
+                    HostAlias    = [string]$i.HostAlias
+                    KeyName      = [string]$i.KeyName
+                    ConfigBranch = [string]$i.ConfigBranch
+                    ServiceUrl   = $svcUrl
+                    ServiceAuth  = $svcAuth
+                    Owner        = [string]$i.Owner
+                }
+            }
+            [pscustomobject]@{
+                Path     = [string]$reg.Path
+                Exists   = [bool]$reg.Exists
+                Default  = [string]$reg.Default
+                Problems = @($reg.Problems)
+                Entries  = $entries
+            }
+        } $lib
+    } catch {
+        return $null
+    }
+}
+
+function Save-ConstructInstanceEntry {
+    <#
+        Write ONE instance entry into the registry, through lib\AgentVm.Instances.ps1 --
+        never by hand-rolling the JSON, so the two readers (PS and the extension) can
+        never disagree about what was written, and an entry the reader would refuse is
+        rejected here instead of vanishing on the next load.
+
+        Same child-scope discipline as the snapshot reader above. Throws on refusal.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][hashtable]$Entry,
+        [switch]$Replace,
+        [switch]$MakeDefault,
+        [string]$ScriptsDir = $PSScriptRoot
+    )
+    $lib = Join-Path (Join-Path $ScriptsDir "lib") "AgentVm.Instances.ps1"
+    if (-not (Test-Path -LiteralPath $lib)) {
+        throw "Cannot record the instance '$Name': lib/AgentVm.Instances.ps1 is missing from this install. Update The Construct."
+    }
+    return & {
+        param($libPath, $n, $e, $replace, $makeDefault)
+        . $libPath
+        $reg  = Read-ConstructInstances
+        $next = Add-ConstructInstance -Registry $reg -Name $n -Entry $e -Replace:$replace
+        if ($makeDefault) { $next.Default = $n }
+        Save-ConstructInstances -Registry $next
+    } $lib $Name $Entry ([bool]$Replace) ([bool]$MakeDefault)
+}
+
+function Test-ConstructPriorLocalInstall {
+    <#
+        Has a Construct VM ever been provisioned on THIS PC, for THIS user?
+
+        The signal is the VM's private key in the user's own profile
+        (~\.ssh\agent_vm_ed25519 for the default VM, ~\.ssh\construct_<name>_ed25519
+        otherwise): Provision-AgentVM.ps1 writes it on every successful run and nothing
+        else creates it. Deliberately NOT a Hyper-V question -- this runs as the
+        non-elevated desktop user, where Get-VM may answer "access denied" on a machine
+        that very much does have a VM.
+
+        It exists only to SUPPRESS the mode prompt, so being wrong is one-directional and
+        safe: a false $true keeps today's local path (what a machine with a Construct key
+        but no VM would have got anyway), and a false $false merely leaves the decision to
+        the probes around it. Never throws.
+    #>
+    param([string]$VmName = "Agent-VM")
+    try {
+        $guest = ([string]$VmName).ToLowerInvariant()
+        $keyName = if ($guest -eq 'agent-vm') { 'agent_vm_ed25519' } else { "construct_${guest}_ed25519" }
+        # NOT a variable named $home: that IS the automatic $HOME, and assigning it here
+        # would shadow the very fallback the next line reads.
+        $profileDir = $env:USERPROFILE
+        if (-not $profileDir) { $profileDir = $HOME }
+        if (-not $profileDir) { return $false }
+        return (Test-Path -LiteralPath (Join-Path (Join-Path $profileDir ".ssh") $keyName) -PathType Leaf)
+    } catch {
+        return $false
+    }
+}
+
+function Resolve-ConstructInstallMode {
+    <#
+        "hyperv-local" or "hyperv-remote" for THIS run, decided once and cached.
+
+        Explicit parameters always win and never prompt:
+          -Backend                      whatever it says
+          -ServiceUrl                   remote
+          -InstanceName <registered>    whatever that instance's backend is
+
+        Otherwise the prompt is shown only on a FRESH machine, i.e. when ALL of:
+          * this run creates a VM at all (not -SkipCreateVm) and is interactive
+            (not -FromPanel, no pre-selected -Action);
+          * no VM identity was named (-VmName / -VmHost);
+          * the instance registry names no VM (missing file, or only the synthesized
+            default);
+          * this host has no local Construct VM already -- asked twice, because the
+            Hyper-V probe needs rights this (non-elevated) run may not have:
+            Test-ConstructVmPresent AND the user-profile key
+            Test-ConstructPriorLocalInstall looks for;
+          * the TUI helper is actually available (a degraded install falls back to the
+            local path rather than to a broken prompt).
+        Anything else answers "hyperv-local" silently -- which is what makes an existing
+        install's experience byte-identical.
+    #>
+    param([hashtable]$Bound, $Snapshot)
+
+    if ($script:ConstructInstallMode) { return $script:ConstructInstallMode }
+
+    if ($Bound.ContainsKey('Backend')) {
+        $script:ConstructInstallMode = $Backend
+        return $script:ConstructInstallMode
+    }
+    if ($Bound.ContainsKey('ServiceUrl') -and $ServiceUrl) {
+        $script:ConstructInstallMode = 'hyperv-remote'
+        return $script:ConstructInstallMode
+    }
+    if ($Bound.ContainsKey('InstanceName') -and $InstanceName -and
+        $Snapshot -and $Snapshot.Entries.ContainsKey($InstanceName)) {
+        $script:ConstructInstallMode = [string]$Snapshot.Entries[$InstanceName].Backend
+        if (-not $script:ConstructInstallMode) { $script:ConstructInstallMode = 'hyperv-local' }
+        return $script:ConstructInstallMode
+    }
+
+    $script:ConstructInstallMode = 'hyperv-local'
+    if ($SkipCreateVm -or $FromPanel) { return $script:ConstructInstallMode }
+    foreach ($p in @('Action', 'VmName', 'VmHost', 'InstanceName')) {
+        if ($Bound.ContainsKey($p)) { return $script:ConstructInstallMode }
+    }
+    if (-not (Get-Command Show-Menu -ErrorAction SilentlyContinue)) { return $script:ConstructInstallMode }
+    # A registry that names any VM means this machine is already set up -- no prompt.
+    if ($Snapshot -and ($Snapshot.Exists -or @($Snapshot.Entries.Keys).Count -gt 1)) {
+        return $script:ConstructInstallMode
+    }
+    # An existing LOCAL VM likewise. Probed through the driver contract (three-valued,
+    # so an unreadable Hyper-V is "can't tell" and does NOT suppress the prompt).
+    if ((Get-Command Test-ConstructDriverPrereqs -ErrorAction SilentlyContinue) -and
+        (Get-Command Test-ConstructVmPresent -ErrorAction SilentlyContinue)) {
+        try {
+            if ((Test-ConstructDriverPrereqs) -and ((Test-ConstructVmPresent -Name $VmName) -eq $true)) {
+                return $script:ConstructInstallMode
+            }
+        } catch { }
+    }
+    # ...and the same question asked WITHOUT Hyper-V, because at this point we are the
+    # non-elevated desktop user: Get-VM needs administrator rights or membership of
+    # "Hyper-V Administrators" (which the installer grants, but which only takes effect
+    # after the next sign-in), so on a machine that already HAS a Construct VM the probe
+    # above can perfectly well answer "can't tell" -- and an existing install would then
+    # be asked a brand-new question. Provisioning leaves this VM's private key in the
+    # user's own profile, so its presence is a permission-free "this PC has installed a
+    # Construct VM before".
+    if (Test-ConstructPriorLocalInstall -VmName $VmName) { return $script:ConstructInstallMode }
+
+    $script:ConstructModePrompted = $true
+    if (Get-Command Show-TuiScreen -ErrorAction SilentlyContinue) {
+        Show-TuiScreen -Title "Where should this Construct VM run?" -Body @(
+            "A Construct VM can live on THIS PC's Hyper-V (the usual install), or on a",
+            "shared Hyper-V host that runs the Construct host service -- in which case the",
+            "VM keeps running with this PC switched off."
+        )
+    }
+    # The labels are the ones plan section 4.5 specifies, verbatim, with the explanatory
+    # half after them (the same "<choice>  <what it does>" shape every other menu in this
+    # script uses).
+    $pick = Show-Menu -Title "How should this Construct VM run?" -Options @(
+        "Local Hyper-V install   create the VM on THIS PC (the usual install)",
+        "Remote host install     create it on a shared Construct host service"
+    ) -Default 0
+    if ($pick -eq 1) { $script:ConstructInstallMode = 'hyperv-remote' }
+    return $script:ConstructInstallMode
+}
+
 # ── Self-elevate to Administrator from the start ─────────────────────────────
 # The Hyper-V VM creation needs admin rights, so we elevate up front -- before
 # the long download/build. After Create-AgentVM.ps1 returns (VM created, SSH up),
@@ -348,40 +593,70 @@ if (-not $SkipCreateVm) {
         } catch {
             Write-Warning "Could not set up the control panel on the host (continuing): $($_.Exception.Message)"
         }
-        Write-Host "Relaunching as Administrator..." -ForegroundColor Yellow
-        # Forward every bound parameter so the elevated copy keeps the caller's
-        # choices (release, ISO paths, RAM/disk/projects, switches, ...).
-        $argList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"")
-        foreach ($kv in $PSBoundParameters.GetEnumerator()) {
-            if ($kv.Value -is [System.Management.Automation.SwitchParameter]) {
-                if ($kv.Value.IsPresent) { $argList += "-$($kv.Key)" }
-            } else {
-                $argList += "-$($kv.Key)"; $argList += "`"$($kv.Value)`""
-            }
-        }
-        $elevated = Start-Process powershell.exe -Verb RunAs -ArgumentList $argList -PassThru
-        # Bring the new elevated console to the foreground (best-effort): after
-        # the UAC prompt it can open behind this window. We wait briefly for its
-        # main window handle to appear, then focus it. With Windows Terminal as
-        # the default host the window belongs to WindowsTerminal.exe (handle
-        # stays 0 here), so this quietly does nothing -- hence best-effort.
+        # ── Local or remote? Decided BEFORE the relaunch ──────────────────────
+        # A REMOTE install creates no local VM, so it needs no administrator rights --
+        # and elevating would be actively harmful where UAC switches to a different
+        # admin account: the DPAPI token store, instances.json and ~\.ssh would all be
+        # written into THAT account's profile. So the remote path continues here, as
+        # the real desktop user, and never relaunches.
+        #
+        # The mode is cached ($script:ConstructInstallMode), so the resolution below --
+        # and the elevated child, which is handed an explicit -Backend -- never asks twice.
         try {
-            Add-Type -Namespace ConstructWin32 -Name Focus -MemberDefinition @'
+            # Through the driver contract, so the "is there already a local VM?" probe
+            # stays the one in drivers\ rather than a second Get-VM call here.
+            $modeDriverLoader = Join-Path $PSScriptRoot "drivers\Load-ConstructDriver.ps1"
+            if (Test-Path -LiteralPath $modeDriverLoader) { . $modeDriverLoader -Backend "hyperv-local" }
+        } catch { }
+        $modeSnapshot = Read-ConstructInstanceRegistrySnapshot
+        if ((Resolve-ConstructInstallMode -Bound $PSBoundParameters -Snapshot $modeSnapshot) -eq 'hyperv-remote') {
+            # Write-Host, not Write-Note: this runs BEFORE this script's own output
+            # helpers are defined.
+            Write-Host "    Remote host install -- no administrator rights are needed on this PC." -ForegroundColor DarkGray
+        } else {
+            Write-Host "Relaunching as Administrator..." -ForegroundColor Yellow
+            # Forward every bound parameter so the elevated copy keeps the caller's
+            # choices (release, ISO paths, RAM/disk/projects, switches, ...).
+            $argList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"")
+            foreach ($kv in $PSBoundParameters.GetEnumerator()) {
+                if ($kv.Value -is [System.Management.Automation.SwitchParameter]) {
+                    if ($kv.Value.IsPresent) { $argList += "-$($kv.Key)" }
+                } else {
+                    $argList += "-$($kv.Key)"; $argList += "`"$($kv.Value)`""
+                }
+            }
+            # If the mode PROMPT ran and the user chose local, tell the elevated child so
+            # explicitly -- otherwise it would resolve the mode again (with the registry
+            # and Hyper-V still saying "fresh machine") and ask the same question twice.
+            # Only when the prompt actually ran, so an ordinary relaunch's command line is
+            # exactly what it always was.
+            if ($script:ConstructModePrompted -and -not $PSBoundParameters.ContainsKey('Backend')) {
+                $argList += "-Backend"; $argList += "`"hyperv-local`""
+            }
+            $elevated = Start-Process powershell.exe -Verb RunAs -ArgumentList $argList -PassThru
+            # Bring the new elevated console to the foreground (best-effort): after
+            # the UAC prompt it can open behind this window. We wait briefly for its
+            # main window handle to appear, then focus it. With Windows Terminal as
+            # the default host the window belongs to WindowsTerminal.exe (handle
+            # stays 0 here), so this quietly does nothing -- hence best-effort.
+            try {
+                Add-Type -Namespace ConstructWin32 -Name Focus -MemberDefinition @'
 [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
 [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 '@
-            $deadline = (Get-Date).AddSeconds(10)
-            while ((Get-Date) -lt $deadline -and -not $elevated.HasExited) {
-                $elevated.Refresh()
-                if ($elevated.MainWindowHandle -ne [IntPtr]::Zero) {
-                    [ConstructWin32.Focus]::ShowWindow($elevated.MainWindowHandle, 9) | Out-Null   # SW_RESTORE
-                    [ConstructWin32.Focus]::SetForegroundWindow($elevated.MainWindowHandle) | Out-Null
-                    break
+                $deadline = (Get-Date).AddSeconds(10)
+                while ((Get-Date) -lt $deadline -and -not $elevated.HasExited) {
+                    $elevated.Refresh()
+                    if ($elevated.MainWindowHandle -ne [IntPtr]::Zero) {
+                        [ConstructWin32.Focus]::ShowWindow($elevated.MainWindowHandle, 9) | Out-Null   # SW_RESTORE
+                        [ConstructWin32.Focus]::SetForegroundWindow($elevated.MainWindowHandle) | Out-Null
+                        break
+                    }
+                    Start-Sleep -Milliseconds 200
                 }
-                Start-Sleep -Milliseconds 200
-            }
-        } catch { }
-        exit
+            } catch { }
+            exit
+        }
     }
 }
 
@@ -454,6 +729,27 @@ function Show-AllSet([string[]]$Lines) {
     foreach ($s in @($script:chosenSummary)) { if ($s) { Write-Ok $s } }
 }
 
+# Resolve the install mode for the runs that never passed through the pre-elevation
+# block above: an already-elevated console, and -SkipCreateVm. Cached, so a run that
+# already decided (or was told by -Backend) does nothing here and asks nothing.
+if (-not $script:ConstructInstallMode) {
+    $modeSnapshot = Read-ConstructInstanceRegistrySnapshot
+    [void](Resolve-ConstructInstallMode -Bound $PSBoundParameters -Snapshot $modeSnapshot)
+}
+$RemoteInstall = ($script:ConstructInstallMode -eq 'hyperv-remote')
+if ($RemoteInstall -and $SkipCreateVm) {
+    # -SkipCreateVm means "build the autoinstall ISO here and stop". A remote install
+    # builds no ISO on this machine at all (the host service does), so the combination
+    # has no meaning -- and silently ignoring one of two explicit flags is worse than
+    # saying so.
+    throw "-SkipCreateVm builds the autoinstall ISO on THIS PC, which a remote install never does (the host service builds it). Drop one of the two."
+}
+if (-not $RemoteInstall -and $PSBoundParameters.ContainsKey('InstanceName') -and $InstanceName) {
+    # -InstanceName is the REMOTE identity. On the local path the VM is named by
+    # -VmName, so honouring neither and running anyway would act on the DEFAULT VM.
+    throw "-InstanceName names a VM on a remote host service. This is a local install: use -VmName '$InstanceName' instead, or add -Backend hyperv-remote -ServiceUrl <url>."
+}
+
 # Release line used if the latest LTS can't be polled (offline, source changed).
 $FallbackUbuntuLts = "24.04"
 
@@ -495,7 +791,11 @@ function Get-LatestUbuntuLts {
 # Resolve the Ubuntu release line. An explicit -UbuntuRelease always wins; so do
 # -IsoPath / -IsoUrl (which bypass release-based discovery entirely). Otherwise
 # poll for the latest LTS, falling back to a known-good line if the lookup fails.
-if ($PSBoundParameters.ContainsKey('UbuntuRelease') -and -not [string]::IsNullOrWhiteSpace($UbuntuRelease)) {
+if ($RemoteInstall) {
+    # The host service builds the ISO on its own machine, so nothing here needs a
+    # release line -- but keep the variable defined, exactly like the -IsoPath branch.
+    $UbuntuRelease = $FallbackUbuntuLts
+} elseif ($PSBoundParameters.ContainsKey('UbuntuRelease') -and -not [string]::IsNullOrWhiteSpace($UbuntuRelease)) {
     Write-Note "Using requested Ubuntu LTS: $UbuntuRelease"
 } elseif ($IsoPath -or $IsoUrl) {
     $UbuntuRelease = $FallbackUbuntuLts   # unused for discovery, but keep it defined
@@ -738,6 +1038,886 @@ function Test-VmReachable {
     } finally {
         $client.Close()
     }
+}
+
+
+# ═════════════ REMOTE HOST INSTALL (plan §4.5, docs/remote-host.md) ═════════════
+# Everything the remote path needs lives between here and its `return`. It is a
+# SEPARATE flow rather than a set of branches through the local one on purpose: the
+# zero-change bar is "an existing local install behaves and prints identically", and
+# the cheapest way to guarantee that is for the local code below to be unreachable
+# whenever this runs -- and untouched whenever it doesn't.
+
+function Confirm-ConstructRemotePin {
+    <#
+        Make sure we know -- and have confirmed -- which certificate this host service
+        presents, before any credential is sent to it.
+
+          already pinned + matches   -> silent OK
+          already pinned + DIFFERENT -> HARD FAILURE naming both values. A changed
+                                        certificate is either a deliberate host rebuild
+                                        (re-enrol on purpose) or exactly what pinning
+                                        exists to catch; it is never a prompt to click
+                                        through.
+          not pinned yet             -> show the fingerprint, ask ONCE, then pin it.
+
+        http:// has no certificate at all -- allowed for a local development/fake
+        service, with a warning, because there is nothing to verify.
+    #>
+    param([Parameter(Mandatory)][string]$BaseUrl)
+
+    $uri = [System.Uri](ConvertTo-ConstructServiceUrl -Value $BaseUrl)
+    if ($uri.Scheme -ne 'https') {
+        # Refused for anything but a service on this machine, and refused HERE so the
+        # message names the URL the user just typed rather than surfacing on the first
+        # API call. (The client enforces the same rule again at every call.)
+        Assert-ConstructTransportSafe -BaseUrl $BaseUrl
+        Write-Warning "The host service URL is plain http, so its identity cannot be verified. That is accepted only because it is on this machine."
+        return
+    }
+
+    $live   = Get-ConstructRemoteFingerprint -BaseUrl $BaseUrl
+    $pinned = Get-ConstructRemotePin -BaseUrl $BaseUrl
+    if ($pinned) {
+        if (Test-ConstructFingerprintMatch -Expected $pinned -Actual $live) {
+            Write-Ok "Host certificate matches the fingerprint pinned on this machine."
+            return
+        }
+        throw ("The certificate of $($uri.Host) does not match the one pinned on this machine.`n" +
+               "    pinned:    $pinned`n" +
+               "    presented: $live`n" +
+               "Refusing to continue. If the host's certificate was legitimately replaced, delete " +
+               "$(Get-ConstructRemotePinPath -BaseUrl $BaseUrl) and add the host again.")
+    }
+
+    # -DefaultNo: on a non-interactive host Invoke-TuiConfirm answers with the default,
+    # and silently trusting an unseen certificate is not an answer this flow may give.
+    $ok = Invoke-TuiConfirm -ScreenTitle "Confirm the host service's certificate" -Body @(
+        "The Construct host service uses a self-signed certificate, so it is identified",
+        "by its SHA-256 fingerprint rather than by a certificate authority. Compare this",
+        "with what the host's administrator published:",
+        "",
+        "    $live",
+        "",
+        "It is pinned once and then enforced on every later call."
+    ) -Question "Is that the correct fingerprint for $($uri.Host)?" -DefaultNo `
+      -YesLabel "Yes  pin it and continue" `
+      -NoLabel  "No   stop; nothing has been changed"
+    if (-not $ok) {
+        throw "The host service's certificate was not confirmed. Nothing was created or changed."
+    }
+    [void](Save-ConstructRemotePin -BaseUrl $BaseUrl -Fingerprint $live)
+    Write-Ok "Fingerprint pinned for $($uri.Host)."
+}
+
+function Read-ConstructSecretInput {
+    <# Read a secret from the console WITHOUT echoing it. Returns "" when the host is
+       non-interactive (nothing to type into) or the user just pressed Enter. #>
+    param([Parameter(Mandatory)][string]$Prompt)
+    if ([Console]::IsInputRedirected) { return "" }
+    $secure = Read-Host "  $Prompt" -AsSecureString
+    if (-not $secure -or $secure.Length -eq 0) { return "" }
+    $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+    try { return [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
+    finally { [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+}
+
+function Test-ConstructRemoteAuth {
+    <# Does this credential work? GET /whoami, and the identity it answered with (or
+       $null). -NoThrow so a 401 is data, not an exception -- that is the whole point:
+       the enrolment flow BRANCHES on it. #>
+    param([Parameter(Mandatory)][string]$BaseUrl, [Parameter(Mandatory)]$Auth)
+    return (Invoke-ConstructApi -BaseUrl $BaseUrl -Method GET -Path '/whoami' -Auth $Auth -NoThrow)
+}
+
+function Resolve-ConstructRemoteAuth {
+    <#
+        Get a WORKING credential for the host service, or throw.
+
+        Order (plan §4.5 step 2): Windows/Kerberos as the current user, silently, first
+        -- it is the one credential that needs no secret anywhere. Only when the service
+        answers 401 does the user get asked, and then with both alternatives:
+
+          * paste an API token   -> verified, then stored DPAPI-encrypted for this user
+          * domain user+password -> verified, held for this run only, never stored
+
+        A stored token is tried before prompting, so a token-mode host is silent too.
+        Anything that is NOT a 401 (unreachable, TLS, 5xx) is fatal here: retrying with
+        another credential would only produce the same failure with a confusing message.
+
+        Returns @{ Auth; Identity; Mode }.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$BaseUrl,
+        [string]$PreferredMode = 'negotiate'
+    )
+
+    $tryOrder = @()
+    if ($PreferredMode -eq 'token') { $tryOrder = @('token', 'negotiate') }
+    else { $tryOrder = @('negotiate', 'token') }
+
+    foreach ($mode in $tryOrder) {
+        $candidate = $null
+        if ($mode -eq 'negotiate') {
+            $candidate = New-ConstructApiAuth -Mode negotiate
+        } else {
+            $stored = Get-ConstructRemoteToken -BaseUrl $BaseUrl
+            if (-not $stored) { continue }
+            $candidate = New-ConstructApiAuth -Mode token -Token $stored
+        }
+        $me = Test-ConstructRemoteAuth -BaseUrl $BaseUrl -Auth $candidate
+        if ($me) {
+            if ($mode -eq 'negotiate') { Write-Ok "Authenticated with this Windows session's identity." }
+            else { Write-Ok "Authenticated with the API token stored for this host." }
+            return @{ Auth = $candidate; Identity = $me; Mode = $mode }
+        }
+        $status = Get-ConstructApiLastStatus
+        if ($status -ne 401) {
+            throw "Could not talk to the host service at $BaseUrl (HTTP $status): $(Get-ConstructApiLastError)"
+        }
+        if ($mode -eq 'token') { Write-Warning "The API token stored for this host was refused." }
+    }
+
+    # 401 from everything we could try on our own: ask. But there has to be somebody to
+    # ask -- on a non-interactive host Show-Menu answers with its default and the secret
+    # prompt returns nothing, which would spin this loop forever. Fail with the reason
+    # instead.
+    if ([Console]::IsInputRedirected) {
+        throw "The host service at $BaseUrl did not accept this Windows session, and this run is not interactive so no other credential can be entered. Add the host once interactively (so a token is stored), or run with -ServiceAuth token after storing one."
+    }
+    while ($true) {
+        $pick = Show-Menu -Title "The host service did not accept this Windows session. How would you like to sign in?" -Options @(
+            "API token        paste the token the host's administrator issued you",
+            "Domain account   sign in with a user name and password",
+            "Cancel           make no changes and exit"
+        ) -Default 0
+        if ($pick -eq 2) { throw "No credential for the host service. Nothing was created or changed." }
+
+        $candidate = $null
+        $modeName  = ""
+        if ($pick -eq 0) {
+            Show-TuiScreen -Title "API token" -Body @(
+                "Paste the token your administrator issued (it is not echoed).",
+                "It is verified before anything else happens, and then stored encrypted",
+                "for your Windows account only -- never in plaintext."
+            )
+            $token = Read-ConstructSecretInput -Prompt "API token"
+            if (-not $token) { continue }
+            $candidate = New-ConstructApiAuth -Mode token -Token $token
+            $modeName  = 'token'
+        } else {
+            Show-TuiScreen -Title "Domain account" -Body @(
+                "Sign in with a domain user and password. The password is used for this",
+                "run only and is never written anywhere."
+            )
+            $cred = $null
+            try { $cred = Get-Credential -Message "Sign in to the Construct host service" }
+            catch { $cred = $null }
+            if (-not $cred) { continue }
+            $candidate = New-ConstructApiAuth -Mode credential -Credential $cred
+            $modeName  = 'credential'
+        }
+
+        $me = Test-ConstructRemoteAuth -BaseUrl $BaseUrl -Auth $candidate
+        if ($me) {
+            if ($modeName -eq 'token') {
+                # Only a VERIFIED token is stored, and only when DPAPI can protect it.
+                try { [void](Save-ConstructRemoteToken -BaseUrl $BaseUrl -Token $candidate['Token']); Write-Ok "API token stored (encrypted for your Windows account)." }
+                catch { Write-Warning "The token works but could not be stored: $($_.Exception.Message)" }
+            }
+            Write-Ok "Authenticated."
+            # A credential prompt is a per-run credential; a token is the durable one.
+            return @{ Auth = $candidate; Identity = $me; Mode = $(if ($modeName -eq 'token') { 'token' } else { 'negotiate' }) }
+        }
+        $status = Get-ConstructApiLastStatus
+        if ($status -eq 401) { Write-Warning "The host service refused that credential." }
+        else { throw "Could not talk to the host service at $BaseUrl (HTTP $status): $(Get-ConstructApiLastError)" }
+    }
+}
+
+function Show-ConstructRemoteIdentity {
+    <# Report who the service says we are, and stop when it does not know us at all --
+       "you authenticated fine, but nobody enrolled you" is a different problem from
+       "wrong credential", and only /whoami can tell them apart. #>
+    param([Parameter(Mandatory)]$Identity, [Parameter(Mandatory)][string]$BaseUrl)
+    $name = ""; $role = ""; $known = $false; $quota = ""
+    if ($Identity.PSObject.Properties['name'])   { $name  = [string]$Identity.name }
+    if ($Identity.PSObject.Properties['role'])   { $role  = [string]$Identity.role }
+    if ($Identity.PSObject.Properties['known'])  { $known = [bool]$Identity.known }
+    if ($Identity.PSObject.Properties['maxVms'] -and $null -ne $Identity.maxVms) { $quota = [string]$Identity.maxVms }
+    if (-not $known) {
+        throw ("The host service at $BaseUrl authenticated you as '$name', but you are not enrolled on it. " +
+               "Ask its administrator to add you (docs/remote-host.md, 'Admin: set the host up once').")
+    }
+    $line = "Signed in to $BaseUrl as $name"
+    if ($role)  { $line += " (role: $role" }
+    if ($quota) { $line += "$(if ($role) { ', ' } else { ' (' })VM quota: $quota" }
+    if ($role -or $quota) { $line += ")" }
+    Write-Ok $line
+    return $name
+}
+
+function Test-ConstructRemoteInstanceName {
+    <#
+        The registry's name rule, which the service enforces too
+        (Constructd.Core.Logic.VmNameValidator.Pattern is the same expression). Repeated
+        here rather than imported because lib\AgentVm.Instances.ps1 may only be loaded in
+        a child scope (it turns strict mode on).
+
+        'agent-vm' is RESERVED and refused: it is the default instance, always present
+        (synthesized when the registry has no entry for it) and the fallback of every
+        zero-change code path -- so Add-ConstructInstance refuses to replace it. Catching
+        that HERE is the point: the alternative is discovering it after a VM has been
+        built on somebody else's host and can no longer be recorded.
+    #>
+    param([string]$Name)
+    if (-not $Name) { return $false }
+    if ($Name -ceq 'agent-vm') { return $false }
+    return [bool]([regex]::IsMatch($Name, '^[a-z0-9][a-z0-9-]{0,39}$'))
+}
+
+function Assert-ConstructRemoteRegistrySpace {
+    <#
+        Would this instance be REFUSED by the registry once it is written? Checked
+        BEFORE the VM is created on the host, because discovering it afterwards leaves a
+        VM nothing on this PC can address.
+
+        The one that really bites: the reader treats `sshHost` as a UNIQUE identity
+        field, and every VM on one host service shares the service's host name. So a
+        SECOND VM on the same host would make both entries unloadable. Say that here, in
+        those words, instead of creating a VM and then failing to record it.
+    #>
+    param(
+        [Parameter(Mandatory)]$Registry,
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$SshHost
+    )
+    foreach ($k in @($Registry.Entries.Keys)) {
+        if ($k -ceq $Name) { continue }
+        $other = $Registry.Entries[$k]
+        if (([string]$other.VmHost).ToLowerInvariant() -ceq ([string]$SshHost).ToLowerInvariant()) {
+            throw ("The instance registry already has '$k' at the same address ($SshHost), and it treats that " +
+                   "address as a unique identity -- adding '$Name' would make BOTH entries unloadable. " +
+                   "This build therefore supports one VM per host service per PC; remove '$k' first, or " +
+                   "update The Construct once the registry keys instances by host AND port.")
+        }
+    }
+}
+
+function Invoke-RemoteVmConfigExport {
+    <# Provision-AgentVM.ps1 -Action export against a REMOTE instance's endpoint. The
+       local Invoke-VmConfigExport derives "<name>.mshome.net" from the VM name, which
+       is exactly the name convention a remote endpoint does not follow -- so this one
+       is handed the endpoint instead. #>
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)]$Endpoint,
+        [Parameter(Mandatory)][string]$BackupDir,
+        [switch]$ScanReposOnly
+    )
+    $ps = Join-Path $PSScriptRoot "Provision-AgentVM.ps1"
+    if (-not (Test-Path -LiteralPath $ps)) { throw "Provision-AgentVM.ps1 not found in $PSScriptRoot." }
+    $a = @{
+        Action       = 'export'
+        BackupDir    = $BackupDir
+        Auto         = $true
+        VmHost       = [string]$Endpoint.SshHost
+        SshPort      = [int]$Endpoint.SshPort
+        HostAlias    = $Name
+        LocalKeyName = "construct_${Name}_ed25519"
+    }
+    if ($ScanReposOnly) { $a['ScanReposOnly'] = $true }
+    & $ps @a
+}
+
+function New-ConstructRemoteProvisionArgs {
+    <#
+        The splat for Provision-AgentVM.ps1 against a REMOTE instance -- the identity
+        half of plan section 4.5 step 5, in ONE place so the create and the reprovision
+        paths cannot drift apart:
+
+            -VmHost/-SshPort   the endpoint the SERVICE allocated (never a name convention)
+            -HostAlias         the instance name = the ssh_config Host block it writes
+            -LocalKeyName      construct_<name>_ed25519, so a second VM never overwrites
+                               the first VM's ~\.ssh key
+            -ConfigBranch      vm-<name>, so this VM's config store is its own ref
+            -ServiceUrl/-InstanceName/-VmTokenB64  the guest's link back to the service
+
+        -VmTokenB64 is added ONLY when a token was actually issued (a rebuild that could
+        not consume one still provisions; the guest simply gets no heartbeat credential).
+        It is base64 of the raw secret, passed as a PARAMETER VALUE -- never rendered
+        into a command line, printed, or logged.
+
+        The three late-added feature flags are dropped when the installed provisioner
+        does not declare them ($script:RemoteProvCmd), exactly like the local chain's
+        probe-before-splat: an unknown parameter is a BINDING failure, and by this point
+        a rebuild has already deleted the old VM.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)]$Endpoint,
+        [Parameter(Mandatory)][string]$ServiceUrl,
+        [Parameter(Mandatory)][string]$ConfigBranch,
+        [string]$Projects = "",
+        [string]$GitName = "",
+        [string]$GitEmail = "",
+        [string]$CloneCredB64 = "",
+        [string]$VmToken = ""
+    )
+    $a = @{
+        VmHost       = [string]$Endpoint.SshHost
+        SshPort      = [int]$Endpoint.SshPort
+        HostAlias    = $Name
+        LocalKeyName = "construct_${Name}_ed25519"
+        ConfigBranch = $ConfigBranch
+        ServiceUrl   = $ServiceUrl
+        InstanceName = $Name
+        Auto         = $true
+        GitUserName  = $GitName
+        GitEmail     = $GitEmail
+        ClaudePartialStreaming    = $ClaudePartialStreaming
+        MicPassthrough            = $MicPassthrough
+        OpenCodeBackgroundWatcher = $OpenCodeBackgroundWatcher
+        T3Code                    = $T3Code
+        T3CodeChannel             = $T3CodeChannel
+        T3CodeLimitResume         = $T3CodeLimitResume
+    }
+    if ($Projects) { $a['Projects'] = $Projects }
+    if ($CloneCredB64) { $a['GitCloneCredentialsB64'] = $CloneCredB64 }
+    if ($VmToken) {
+        $a['VmTokenB64'] = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($VmToken))
+    }
+    if ($AutoResolve) { $a['AutoResolve'] = $AutoResolve }
+    if ($script:RemoteBound -and ($script:RemoteBound.ContainsKey('Repo') -or $script:RemoteBound.ContainsKey('Ref'))) {
+        $a['Repo'] = $Repo; $a['Ref'] = $Ref
+    }
+    foreach ($opt in @('T3CodeChannel', 'T3CodeLimitResume', 'OpenCodeBackgroundWatcher')) {
+        if ($script:RemoteProvCmd -and -not $script:RemoteProvCmd.Parameters.ContainsKey($opt)) { $a.Remove($opt) }
+    }
+    return $a
+}
+
+if ($RemoteInstall) {
+    # State this flow owns. The LOCAL path declares its own copies further down; they
+    # are separate because that code is unreachable from here.
+    $restoreDir               = ""    # set when a reinstall saved a config to restore
+    $restoredProjectNames     = @()   # project profiles that save generated
+    $script:RemoteRebuildName = ""    # set when this run is REBUILDING a known instance
+    $script:RemoteBound       = $PSBoundParameters
+    # ── The API client + the instance registry ────────────────────────────────
+    $remoteLib = Join-Path $PSScriptRoot "lib\AgentVm.Remote.ps1"
+    if (-not (Test-Path -LiteralPath $remoteLib)) {
+        throw "A remote install needs lib/AgentVm.Remote.ps1, which is missing from this install. Update The Construct."
+    }
+    . $remoteLib
+
+    $registry = Read-ConstructInstanceRegistrySnapshot
+    if ($null -eq $registry) {
+        throw "A remote install needs lib/AgentVm.Instances.ps1 (the instance registry), which is missing from this install. Update The Construct."
+    }
+    foreach ($p in @($registry.Problems)) { if ($p) { Write-Warning "Instance registry: $p" } }
+
+    # ── Version skew, checked BEFORE anything is created or deleted ───────────
+    # A provisioner that cannot be TOLD the endpoint, the key, the branch or the host
+    # service would silently provision the DEFAULT local VM instead. Fail closed here,
+    # while nothing has happened yet -- the same discipline (and the same reason) as the
+    # local path's guard before Remove-AgentVm.
+    $provisionScript = Join-Path $PSScriptRoot "Provision-AgentVM.ps1"
+    if (-not (Test-Path -LiteralPath $provisionScript)) {
+        throw "Provision-AgentVM.ps1 not found in $PSScriptRoot; cannot provision a remote VM."
+    }
+    $provCmd = Get-Command -Name $provisionScript -CommandType ExternalScript -ErrorAction Stop
+    $script:RemoteProvCmd = $provCmd
+    foreach ($p in @('VmHost', 'SshPort', 'HostAlias', 'LocalKeyName', 'ConfigBranch', 'ServiceUrl', 'InstanceName', 'VmTokenB64')) {
+        if (-not $provCmd.Parameters.ContainsKey($p)) {
+            throw "This install's Provision-AgentVM.ps1 does not support -$p, so it could not provision a remote VM. Update The Construct."
+        }
+    }
+
+    # ── Which instance is this about? ─────────────────────────────────────────
+    $existingEntry = $null
+    if ($InstanceName -and $registry.Entries.ContainsKey($InstanceName)) {
+        $existingEntry = $registry.Entries[$InstanceName]
+        if ([string]$existingEntry.Backend -cne 'hyperv-remote') {
+            throw "The instance '$InstanceName' is a '$($existingEntry.Backend)' instance, not a remote one. Drop -Backend hyperv-remote to manage it."
+        }
+    }
+
+    # ── The host service ──────────────────────────────────────────────────────
+    $svcUrl = $ServiceUrl
+    if (-not $svcUrl -and $existingEntry) { $svcUrl = [string]$existingEntry.ServiceUrl }
+    if (-not $svcUrl) {
+        $svcUrl = Invoke-TuiInput -ScreenTitle "Construct host service" -Body @(
+            "Enter the address of the Construct host service that will run this VM.",
+            "Your administrator publishes it, e.g.:",
+            "",
+            "    https://buildbox.example.local:7462",
+            "",
+            "A bare host name gets https and the default port 7462."
+        ) -Prompt "Host service URL"
+    }
+    if (-not $svcUrl) { throw "A remote install needs the host service's URL (-ServiceUrl). Nothing was changed." }
+    $svcUrl = ConvertTo-ConstructServiceUrl -Value $svcUrl
+
+    Write-Step "Connecting to the host service"
+    Write-Note $svcUrl
+
+    # ── Certificate, then credentials, then identity ──────────────────────────
+    Confirm-ConstructRemotePin -BaseUrl $svcUrl
+
+    $preferredAuth = $ServiceAuth
+    if (-not $PSBoundParameters.ContainsKey('ServiceAuth') -and $existingEntry -and $existingEntry.ServiceAuth) {
+        $preferredAuth = [string]$existingEntry.ServiceAuth
+    }
+    $authResult = Resolve-ConstructRemoteAuth -BaseUrl $svcUrl -PreferredMode $preferredAuth
+    $remoteAuth = $authResult.Auth
+    $remoteAuthMode = [string]$authResult.Mode
+    $remoteOwner = Show-ConstructRemoteIdentity -Identity $authResult.Identity -BaseUrl $svcUrl
+
+    # ── The remote driver ─────────────────────────────────────────────────────
+    # From here every VM operation goes through the SAME contract functions the local
+    # path uses (docs/drivers.md) -- they just speak HTTP now. Loading the remote driver
+    # REPLACES the hyperv-local ones loaded earlier, which is safe because this block
+    # returns and no local code runs afterwards.
+    . $driverLoader -Backend "hyperv-remote" -ServiceUrl $svcUrl -Auth $remoteAuth
+
+    # ═══ An instance that already exists: reprovision / reinstall / export ════
+    if ($existingEntry) {
+        $instName = [string]$existingEntry.Name
+        $instKey  = "construct_${instName}_ed25519"
+        $instBranch = [string]$existingEntry.ConfigBranch
+        if (-not $instBranch) { $instBranch = "vm-$instName" }
+
+        # The endpoint is the SERVICE's to state (the forward may have been reallocated
+        # since the registry entry was written), with the registry as the fallback when
+        # the service cannot answer.
+        $endpoint = $null
+        try { $endpoint = Get-ConstructVmEndpoint -Name $instName } catch { $endpoint = $null }
+        if (-not $endpoint) {
+            $endpoint = @{ SshHost = [string]$existingEntry.VmHost; SshPort = [int]$existingEntry.SshPort }
+            Write-Warning "The host service did not report an endpoint for '$instName'; using the address recorded in the instance registry ($($endpoint.SshHost):$($endpoint.SshPort))."
+        }
+
+        Show-TuiScreen -Title "The remote VM '$instName' is already registered on $svcUrl."
+        if ($PSBoundParameters.ContainsKey('Action')) {
+            $choice = switch ($Action) {
+                'reprovision' { 0 }
+                'reinstall'   { 1 }
+                'redownload'  { 1 }   # the host owns its source image; a rebuild is a rebuild
+                'export'      { 2 }
+                default       { -1 }
+            }
+            if ($choice -lt 0) {
+                # 'add-config' is the only one that lands here. It is a local-path flow
+                # (import profiles, then reprovision); doing nothing quietly would look
+                # like success for something the user explicitly asked for.
+                throw "-Action $Action is not available for the remote instance '$InstanceName' in this build. Use reprovision, reinstall or export."
+            }
+            Write-Note "Action selected by the control panel: $Action"
+        } else {
+            $choice = Show-Menu -Title "What would you like to do?" -Options @(
+                "Reprovision    re-run provisioning on the existing VM (keeps all data)",
+                "Reinstall      DELETE the VM on the host and build + install a fresh one",
+                "Export config  save the VM's current agent config + auth to this host (no changes to the VM)",
+                "Quit           make no changes and exit"
+            ) -Default 0
+        }
+
+        if ($choice -eq 2) {
+            try {
+                Show-TuiScreen -Title "Exporting the VM's agent config" -Body @(
+                    "Saving auth, memory, skills, instruction files, and project setup to this host..."
+                )
+                Invoke-RemoteVmConfigExport -Name $instName -Endpoint $endpoint -BackupDir (Get-ConstructBackupDir -Dir $PSScriptRoot)
+                Write-Host ""
+                Write-Ok "Saved the VM's current agent config to:"
+                Write-Host "      $(Get-ConstructBackupDir -Dir $PSScriptRoot)" -ForegroundColor White
+            } catch {
+                Write-Host ""
+                Write-Host "ERROR: config export failed." -ForegroundColor Red
+                Write-Host "    $($_.Exception.Message)" -ForegroundColor Red
+            }
+            Write-Host ""; Wait-Exit
+            return
+        }
+        if ($choice -ge 3) {
+            Write-Note "No changes made."
+            Write-Host ""; Wait-Exit
+            return
+        }
+
+        if ($choice -eq 0) {
+            # Reprovision: straight to the provisioner over the endpoint. Nothing on the
+            # host service is touched at all.
+            $reprovProjects = $Projects
+            if (-not $PSBoundParameters.ContainsKey('Projects')) { $reprovProjects = Select-Projects }
+            Write-Ok "Projects: $reprovProjects"
+
+            $giParams = @{ Dir = $PSScriptRoot }
+            if ($PSBoundParameters.ContainsKey('GitUserName')) { $giParams['Name']  = $GitUserName }
+            if ($PSBoundParameters.ContainsKey('GitEmail'))    { $giParams['Email'] = $GitEmail }
+            if ($giParams.ContainsKey('Name') -and $giParams.ContainsKey('Email')) { $giParams['NoPrompt'] = $true }
+            if ($FromPanel) { $giParams['NoPrompt'] = $true }
+            $reprovGit = Resolve-GitIdentity @giParams
+
+            $reprovCloneCredB64 = ""
+            if (Get-Command Resolve-GitCloneCredential -ErrorAction SilentlyContinue) {
+                $reprovProjDir = if (Get-Command Get-ConstructConfigProjectsDir -ErrorAction SilentlyContinue) {
+                    Get-ConstructConfigProjectsDir -ScriptsDir $PSScriptRoot
+                } else { Join-Path $PSScriptRoot 'projects' }
+                $reprovCloneCredB64 = Resolve-GitCloneCredential -ProjectsDir $reprovProjDir -Names $reprovProjects
+            }
+
+            Show-AllSet @(
+                "All set -- reprovisioning the remote VM now.",
+                "",
+                "This re-runs setup on '$instName' and keeps all its data.",
+                "It usually only takes a few seconds; no further input needed."
+            )
+            $provArgs = New-ConstructRemoteProvisionArgs -Name $instName -Endpoint $endpoint `
+                            -ServiceUrl $svcUrl -ConfigBranch $instBranch `
+                            -Projects $reprovProjects -GitName $reprovGit.Name -GitEmail $reprovGit.Email `
+                            -CloneCredB64 $reprovCloneCredB64
+            if ($PSBoundParameters.ContainsKey('AgentPassword')) { $provArgs['AgentPassword'] = $AgentPassword }
+            try {
+                Write-Step "Reprovisioning '$instName'"
+                & $provisionScript @provArgs
+            } catch {
+                Write-Host ""
+                Write-Host "ERROR: provisioning failed." -ForegroundColor Red
+                Write-Host "    $($_.Exception.Message)" -ForegroundColor Red
+            } finally {
+                Write-Host ""
+                Wait-Exit
+            }
+            return
+        }
+
+        # ── Reinstall: delete on the host, then create + provision a fresh VM ──
+        $bk = Get-ConstructBackupDir -Dir $PSScriptRoot
+        $doSave = $false
+        if (Test-ConstructVmSshPort -SshHost ([string]$endpoint.SshHost) -SshPort ([int]$endpoint.SshPort) -TimeoutMs 5000) {
+            try {
+                Show-TuiScreen -Title "Checking the VM's repos for unsaved work" -Body @(
+                    "Scanning $instName for uncommitted or unpushed changes the reinstall would destroy..."
+                )
+                Invoke-RemoteVmConfigExport -Name $instName -Endpoint $endpoint -BackupDir $bk -ScanReposOnly
+                $scanFile = Join-Path $bk "repo-scan.json"
+                $repos = $null
+                if (Test-Path -LiteralPath $scanFile) {
+                    try { $repos = Get-Content -LiteralPath $scanFile -Raw | ConvertFrom-Json } catch { $repos = $null }
+                }
+                if (-not (Confirm-RepoScan -Repos $repos)) {
+                    Write-Note "Reinstall cancelled (unsaved work in the VM's repos)."
+                    Write-Host ""; Wait-Exit
+                    return
+                }
+            } catch {
+                Write-Warning "Could not scan the VM's repos: $($_.Exception.Message)"
+                Write-Host "    Proceeding without the unsaved-work check." -ForegroundColor DarkGray
+            }
+
+            if ($BackupMode) { $doSave = ($BackupMode -eq 'save') }
+            else {
+                $doSave = Invoke-TuiConfirm -ScreenTitle "Save & restore the agent config" -Body @(
+                    "The VM's current agent config (auth, memory, chat history, skills,",
+                    "instruction files, project setup) can be saved to this host and",
+                    "restored automatically onto the freshly reinstalled VM."
+                ) -Question "Save and auto-restore the config?" `
+                  -YesLabel "Yes  save it now and restore it after the reinstall (recommended)" `
+                  -NoLabel  "No   reinstall completely blank"
+            }
+            if ($doSave) {
+                try {
+                    Show-TuiScreen -Title "Saving the VM's agent config" -Body @(
+                        "Exporting auth, memory, skills, instruction files, and project setup to this host..."
+                    )
+                    Invoke-RemoteVmConfigExport -Name $instName -Endpoint $endpoint -BackupDir $bk
+                    $restoreDir = $bk
+                    $restoredProjectNames = Get-BackupProjectNames -BackupDir $bk
+                    Write-Ok "Config saved; it will be restored automatically after the reinstall."
+                } catch {
+                    Write-Warning "Saving the config failed: $($_.Exception.Message)"
+                    $goOn = Invoke-TuiConfirm -NoScreen -DefaultNo `
+                        -Question "Continue with the reinstall WITHOUT a saved config?" `
+                        -YesLabel "Continue  reinstall blank; the old config is lost" `
+                        -NoLabel  "Cancel    keep the VM as it is"
+                    if (-not $goOn) {
+                        Write-Note "Reinstall cancelled."
+                        Write-Host ""; Wait-Exit
+                        return
+                    }
+                }
+            }
+        } else {
+            Write-Warning "The VM isn't reachable over SSH -- skipping the unsaved-work scan and config save."
+        }
+
+        if (-not $doSave -and (Test-Path -LiteralPath (Join-Path $bk "extracted\backup-info.json"))) {
+            $useBackup = if ($BackupMode) { ($BackupMode -ne 'wipe') } else {
+                Invoke-TuiConfirm -ScreenTitle "Restore a previously saved config?" -Body @(
+                    "A config backup from an earlier run exists on this host. It can restore",
+                    "the agent config automatically after the reinstall."
+                ) -Question "Auto-restore the saved config?" `
+                  -YesLabel "Yes  restore it onto the fresh VM (recommended)" `
+                  -NoLabel  "No   reinstall completely blank"
+            }
+            if ($useBackup) {
+                $restoreDir = $bk
+                $restoredProjectNames = Get-BackupProjectNames -BackupDir $bk
+                Write-Ok "Saved config loaded; it will be restored automatically after the reinstall."
+            }
+        }
+
+        # The same last-chance typed confirmation as the local path -- and the same
+        # -FromPanel exemption, because the panel's modal already asked.
+        if ($FromPanel) {
+            Write-Note "Delete confirmed in the control panel; proceeding with the reinstall."
+        } elseif (-not (Confirm-Reinstall -VmName $instName)) {
+            Write-Note "Reinstall cancelled. No changes made."
+            Write-Host ""; Wait-Exit
+            return
+        }
+        # Point of no return: ask any VS Code window attached to this VM to close, so it
+        # doesn't degrade into reconnect popups while the VM is rebuilt.
+        $closedWindows = Close-VmVsCodeWindow -VmHost $instName
+        if ($closedWindows -gt 0) {
+            Write-Note "Asked $closedWindows VS Code window(s) attached to $instName to close."
+        }
+
+        Show-TuiScreen -Title "Removing the remote VM" -Body @(
+            "Asking $svcUrl to delete '$instName' and release its port forward..."
+        )
+        Remove-ConstructVm -Name $instName
+        $script:RemoteRebuildName = $instName
+    }
+
+    # ═══ Create a VM on the host service ═════════════════════════════════════
+    $instName = $InstanceName
+    if ($script:RemoteRebuildName) { $instName = $script:RemoteRebuildName }
+    while (-not (Test-ConstructRemoteInstanceName $instName)) {
+        if ($instName -ceq 'agent-vm') {
+            Write-Warning "'agent-vm' is reserved for this PC's default (local) instance and cannot name a remote VM. Pick another name, e.g. work-vm."
+        } elseif ($instName) {
+            Write-Warning "'$instName' is not a usable instance name: use 1-40 lowercase letters, digits or hyphens, starting with a letter or digit (e.g. work-vm)."
+        }
+        if ([Console]::IsInputRedirected) {
+            throw "A remote install needs a valid -InstanceName (1-40 lowercase letters, digits or hyphens, and not the reserved name 'agent-vm')."
+        }
+        $instName = (Invoke-TuiInput -ScreenTitle "Name this VM" -Body @(
+            "The name identifies the VM on the host service AND on this PC: it becomes the",
+            "SSH alias you connect with, the name of its key file, and its config-sync",
+            "branch. Lowercase letters, digits and hyphens, e.g. work-vm."
+        ) -Prompt "Instance name").ToLowerInvariant()
+    }
+    if (-not $script:RemoteRebuildName -and $registry.Entries.ContainsKey($instName)) {
+        throw "This PC already has a Construct instance named '$instName'. Pick another name, or pass -InstanceName $instName to manage the existing one."
+    }
+    # DnsSafeHost, not Host: .NET keeps an IPv6 literal's URL brackets, and the registry
+    # records the bare address the service reports.
+    $publicHost = ([System.Uri]$svcUrl).DnsSafeHost
+    # Best-effort PRE-check, before anything is created. The service's advertised
+    # PublicHost can differ from the URL's host, so the same check runs again below with
+    # the endpoint the service actually returned -- but doing it here catches the common
+    # case while there is still nothing to clean up.
+    Assert-ConstructRemoteRegistrySpace -Registry $registry -Name $instName -SshHost $publicHost
+
+    # ── The usual questions, asked up front ───────────────────────────────────
+    # Not the local path's prompts: the recommendation there is "a third of THIS PC's
+    # RAM", and the machine that matters here is the host's -- which we cannot see, and
+    # which has a per-user quota of its own. So the remote prompts recommend a sensible
+    # fixed size and say where the real limit lives.
+    $remoteCpu = if ($VmCpuCount -gt 0) { $VmCpuCount } else { 4 }
+    $chosenMemGB  = $VmMemoryGB
+    $chosenDiskGB = $VmDiskGB
+    if (-not $PSBoundParameters.ContainsKey('VmMemoryGB') -or $chosenMemGB -le 0) {
+        $ans = Invoke-TuiInput -ScreenTitle "VM memory" -Body @(
+            "How much RAM should the VM get on the host? The host's administrator sets",
+            "the limits; 8 GB is a comfortable default for an agent VM."
+        ) -Prompt "Enter VM RAM in GB (press Enter for 8)" -Default "8"
+        $chosenMemGB = [double]$ans
+    }
+    if (-not $PSBoundParameters.ContainsKey('VmDiskGB') -or $chosenDiskGB -le 0) {
+        $ans = Invoke-TuiInput -ScreenTitle "VM disk size" -Body @(
+            "Recommended disk size: 50 GB (grows on demand; this is the cap)"
+        ) -Prompt "Enter disk size in GB (press Enter for 50)" -Default "50"
+        $chosenDiskGB = [int]$ans
+        if ($chosenDiskGB -lt 10) { Write-Warning "Minimum disk size is 10 GB. Using 10 GB."; $chosenDiskGB = 10 }
+    }
+
+    $chosenProjects = $Projects
+    if (-not $PSBoundParameters.ContainsKey('Projects')) { $chosenProjects = Select-Projects }
+    if (@($restoredProjectNames).Count -gt 0) {
+        $names = @(($chosenProjects -split ',') + $restoredProjectNames |
+                   ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
+        $chosenProjects = $names -join ','
+        Write-Ok "Including restored project profile(s): $($restoredProjectNames -join ', ')"
+    }
+
+    $chosenCloneCredB64 = ""
+    if (Get-Command Resolve-GitCloneCredential -ErrorAction SilentlyContinue) {
+        $freshProjDir = if (Get-Command Get-ConstructConfigProjectsDir -ErrorAction SilentlyContinue) {
+            Get-ConstructConfigProjectsDir -ScriptsDir $PSScriptRoot
+        } else { Join-Path $PSScriptRoot 'projects' }
+        $ccParams = @{ ProjectsDir = $freshProjDir; Names = $chosenProjects }
+        if ($restoreDir -and (Get-Command Test-BackupHasGitCredentials -ErrorAction SilentlyContinue) `
+                        -and (Test-BackupHasGitCredentials -BackupDir $restoreDir)) {
+            $ccParams['NoPrompt'] = $true
+            Write-Note "Reusing the saved git credentials from the restore for cloning -- skipping the credential prompt."
+        }
+        $chosenCloneCredB64 = Resolve-GitCloneCredential @ccParams
+    }
+
+    $chosenAgentPassword = $AgentPassword
+    if (-not $PSBoundParameters.ContainsKey('AgentPassword')) {
+        if ($FromPanel) { $chosenAgentPassword = "agent" }
+        else {
+            $chosenAgentPassword = Invoke-TuiInput -ScreenTitle "Agent user password" -Body @(
+                "Optional: login password for the 'agent' user. This is a manual-fallback",
+                "credential only -- normal access is as root over the pre-seeded SSH key."
+            ) -Prompt "Enter agent password (press Enter to keep default 'agent')" -Default "agent"
+        }
+    }
+
+    $giParams = @{ Dir = $PSScriptRoot }
+    if ($PSBoundParameters.ContainsKey('GitUserName')) { $giParams['Name']  = $GitUserName }
+    if ($PSBoundParameters.ContainsKey('GitEmail'))    { $giParams['Email'] = $GitEmail }
+    if ($giParams.ContainsKey('Name') -and $giParams.ContainsKey('Email')) { $giParams['NoPrompt'] = $true }
+    if ($FromPanel) { $giParams['NoPrompt'] = $true }
+    $gitId = Resolve-GitIdentity @giParams
+
+    $pwLabel  = if ($chosenAgentPassword -and $chosenAgentPassword -ne "agent") { "custom" } else { "default" }
+    $gitLabel = if ($gitId.Name -or $gitId.Email) { "$($gitId.Name) <$($gitId.Email)>" } else { "(unset)" }
+    $script:chosenSummary = @(
+        ("Host: {0}  |  Instance: {1}" -f $svcUrl, $instName),
+        ("VM RAM: {0} GB  |  Disk: {1} GB  |  Projects: {2}  |  agent password: {3}" -f $chosenMemGB, $chosenDiskGB, $chosenProjects, $pwLabel),
+        ("Git identity: {0}" -f $gitLabel)
+    )
+    Show-AllSet @(
+        "All set -- sit back and relax!",
+        "",
+        "The host service now builds the ISO, creates the VM and waits for its",
+        "unattended install; this PC then provisions it over SSH.",
+        "This takes about 10 minutes total, with no further input needed."
+    )
+
+    # ── Create (on the host), then provision (from here) ──────────────────────
+    $created = New-ConstructVm -Descriptor @{
+        Name                 = $instName
+        ProcessorCount       = $remoteCpu
+        MemoryGB             = $chosenMemGB
+        DiskGB               = $chosenDiskGB
+        Nested               = $true
+        AutomaticCheckpoints = $false
+    }
+    $endpoint = $created.Endpoint
+    $vmToken  = [string]$created.VmToken
+    Write-Ok "Endpoint: $($endpoint.SshHost):$($endpoint.SshPort)"
+    # Re-check against the address the service REALLY returned. The pre-check above used
+    # the URL's host, but the service advertises its own PublicHost, which can differ --
+    # and nothing exposes it before a VM exists, so this is the first moment the true
+    # address is known.
+    #
+    # A collision here means the VM cannot be recorded, i.e. cannot be reached or
+    # rebuilt from this PC ever again. Rather than leave that orphan behind (holding its
+    # name, its disk and the host's RAM), the create is ROLLED BACK: the same DELETE the
+    # reinstall path uses, and only then the failure. The one-time VM token dies with
+    # the VM, which is exactly what should happen to a credential for a machine that no
+    # longer exists.
+    try {
+        Assert-ConstructRemoteRegistrySpace -Registry $registry -Name $instName -SshHost ([string]$endpoint.SshHost)
+    } catch {
+        $why = $_.Exception.Message
+        Write-Warning "The VM was created, but this PC cannot record it: $why"
+        Write-Note "Rolling the creation back so nothing is left stranded on the host..."
+        try { Remove-ConstructVm -Name $instName } catch {
+            Write-Warning "The rollback failed as well: $($_.Exception.Message)"
+            throw "$why`nThe VM '$instName' still EXISTS on $svcUrl and could not be removed automatically -- delete it there before trying again."
+        }
+        throw "$why`nThe VM '$instName' was removed from $svcUrl again, so nothing was left behind."
+    }
+
+    # ── Record the instance, BEFORE provisioning ──────────────────────────────
+    # Written through lib\AgentVm.Instances.ps1 (never hand-rolled JSON) so the PS and JS
+    # readers can never disagree about what is in the file.
+    #
+    # WHY HERE and not after a successful provision: the registry entry is the ONLY
+    # handle this PC has on a remote VM. Locally, a provision that fails still leaves a
+    # VM that Get-VM finds and the existing-VM menu offers to reprovision; remotely there
+    # is nothing to enumerate, so an unrecorded VM would be unreachable AND un-recreatable
+    # (the service refuses a second VM of the same name). Recording it first turns the
+    # common failure -- provisioning, which touches the network, apt and ssh -- into
+    # "re-run and pick Reprovision".
+    #
+    # Best-effort by design: if the write itself fails, provisioning is still worth doing
+    # (it configures this PC's ssh config and key, so the VM stays reachable), so this
+    # warns with what the user needs to clean up instead of aborting.
+    $makeDefault = (-not $registry.Exists)
+    try {
+        [void](Save-ConstructInstanceEntry -Name $instName -Replace -MakeDefault:$makeDefault -Entry @{
+            backend      = 'hyperv-remote'
+            vmName       = $instName
+            sshHost      = [string]$endpoint.SshHost
+            sshPort      = [int]$endpoint.SshPort
+            hostAlias    = $instName
+            keyName      = "construct_${instName}_ed25519"
+            configBranch = "vm-$instName"
+            service      = @{ url = $svcUrl; auth = $remoteAuthMode }
+            owner        = $remoteOwner
+        })
+        Write-Ok "Recorded the instance '$instName' in $($registry.Path)"
+    } catch {
+        Write-Warning ("The VM '$instName' was created on $svcUrl but could not be recorded in the instance registry: " +
+                       "$($_.Exception.Message)`n    Provisioning continues, but the control panel will not list it. " +
+                       "Fix the registry ($($registry.Path)) and re-run, or delete the VM on the host.")
+    }
+
+    # The service already waited for SSH inside its own network; this proves the port
+    # FORWARD is reachable from HERE, which the host cannot test for us. Non-fatal.
+    [void](Wait-ConstructVmReachable -Name $instName -TimeoutSeconds 600)
+
+    Write-Step "Provisioning '$instName' over SSH from this PC"
+    $provArgs = New-ConstructRemoteProvisionArgs -Name $instName -Endpoint $endpoint `
+                    -ServiceUrl $svcUrl -ConfigBranch "vm-$instName" `
+                    -Projects $chosenProjects -GitName $gitId.Name -GitEmail $gitId.Email `
+                    -CloneCredB64 $chosenCloneCredB64 -VmToken $vmToken
+    $provArgs['AgentPassword'] = $chosenAgentPassword
+    if ($restoreDir) { $provArgs['RestoreDir'] = $restoreDir }
+
+    try {
+        # Called DIRECTLY, not through Invoke-DeElevatedProvision: a remote install never
+        # elevated in the first place, so there is nothing to step back down from.
+        & $provisionScript @provArgs
+
+        # ── Open it in VS Code, exactly like the local path ───────────────────
+        $openLink = Get-RemoteOpenLink -VmHost $instName -WorkspaceRoot "/root/repos"
+        if (Open-RemoteWorkspace -Link $openLink) {
+            Show-Banner @(
+                "Your Construct VM is ready on $publicHost.",
+                "",
+                "Opening it in VS Code (Remote-SSH) -- the control panel",
+                "opens alongside."
+            )
+            Write-Note "If VS Code doesn't open, paste this link into a browser:  $openLink"
+        } else {
+            Show-Banner @(
+                "Your Construct VM is ready on $publicHost.",
+                "",
+                "Open it in VS Code (Remote-SSH) -- the control panel opens alongside:",
+                "",
+                "  $openLink"
+            )
+            Write-Note "Tip: paste that link into a browser, or run:  start `"$openLink`""
+        }
+    } catch {
+        Write-Host ""
+        Write-Host "ERROR: install failed." -ForegroundColor Red
+        Write-Host "    $($_.Exception.Message)" -ForegroundColor Red
+    } finally {
+        Write-Host ""
+        Wait-Exit
+    }
+    return
 }
 
 # ── Handle an already-installed VM (reprovision / reinstall / quit) ──────────
