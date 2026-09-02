@@ -11,7 +11,7 @@ namespace Constructd.Tests.Core;
 public class ForwardHostTests
 {
     [Theory]
-    [InlineData("christoph-pc", "christoph-pc")]
+    [InlineData("alice-pc", "alice-pc")]
     [InlineData("pc.home.example", "pc.home.example")]
     [InlineData("10.0.0.7", "10.0.0.7")]
     [InlineData("  pc  ", "pc")]
@@ -47,7 +47,7 @@ public class ForwardHostTests
         Assert.Null(ForwardHost.Normalize(label));
 
     [Theory]
-    [InlineData("christoph-pc", "christoph-pc")]
+    [InlineData("alice-pc", "alice-pc")]
     [InlineData("10.0.0.7", "10.0.0.7")]
     // EXACTLY ONE bracket pair, from either spelling — the double-bracket bug in one line.
     [InlineData("fe80::1", "[fe80::1]")]

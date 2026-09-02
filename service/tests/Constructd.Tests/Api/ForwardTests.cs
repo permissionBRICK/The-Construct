@@ -316,10 +316,10 @@ public class ForwardTests
         var forward = await AddClientForwardAsync(owner);
 
         var acked = await (await owner.PostJsonAsync($"/api/v1/vms/work-vm/forwards/{forward.Id}/ack",
-            new { status = "open", localPort = 15173, hostLabel = "christoph-pc" })).ReadAsync<ForwardResponse>();
+            new { status = "open", localPort = 15173, hostLabel = "alice-pc" })).ReadAsync<ForwardResponse>();
 
-        Assert.Equal("christoph-pc", acked.HostLabel);
-        Assert.Equal("http://christoph-pc:15173/", acked.Url);
+        Assert.Equal("alice-pc", acked.HostLabel);
+        Assert.Equal("http://alice-pc:15173/", acked.Url);
     }
 
     [Fact]
@@ -513,7 +513,7 @@ public class ForwardTests
         var forward = await AddClientForwardAsync(owner);
 
         await owner.PostJsonAsync($"/api/v1/vms/work-vm/forwards/{forward.Id}/ack",
-            new { status = "open", localPort = 5173, hostLabel = "christoph-pc" });
+            new { status = "open", localPort = 5173, hostLabel = "alice-pc" });
 
         var entries = await (await admin.GetAsync("/api/v1/audit?limit=1000")).ReadAsync<List<AuditResponse>>();
         var entry = Assert.Single(entries, e => e.Action == "forward.ack");
@@ -577,10 +577,10 @@ public class ForwardTests
         var forward = await AddClientForwardAsync(owner);
 
         await owner.PostJsonAsync($"/api/v1/vms/work-vm/forwards/{forward.Id}/ack",
-            new { status = "open", localPort = 5173, hostLabel = "christoph-pc" });
+            new { status = "open", localPort = 5173, hostLabel = "alice-pc" });
 
         var vm = await (await owner.GetAsync("/api/v1/vms/work-vm")).ReadAsync<VmResponse>();
 
-        Assert.Equal("http://christoph-pc:5173/", Assert.Single(vm.Forwards).Url);
+        Assert.Equal("http://alice-pc:5173/", Assert.Single(vm.Forwards).Url);
     }
 }

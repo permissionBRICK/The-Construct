@@ -196,7 +196,7 @@ panel — from one schema with one set of rules:
       "hostAlias": "work-vm",
       "keyName": "construct_work-vm_ed25519",
       "configBranch": "vm-work-vm",
-      "owner": "DOMAIN\\christoph"
+      "owner": "DOMAIN\\alice"
     }
   }
 }

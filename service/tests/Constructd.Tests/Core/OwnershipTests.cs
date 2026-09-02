@@ -12,23 +12,23 @@ public class OwnershipTests
 
     [Fact]
     public void Owner_may_access_their_own_vm() =>
-        Assert.True(Ownership.CanAccessVm("DOMAIN\\christoph", Role.User, VmOwnedBy("DOMAIN\\christoph")));
+        Assert.True(Ownership.CanAccessVm("DOMAIN\\alice", Role.User, VmOwnedBy("DOMAIN\\alice")));
 
     [Fact]
     public void Owner_match_is_case_insensitive_like_windows_identities() =>
-        Assert.True(Ownership.CanAccessVm("domain\\Christoph", Role.User, VmOwnedBy("DOMAIN\\christoph")));
+        Assert.True(Ownership.CanAccessVm("domain\\Alice", Role.User, VmOwnedBy("DOMAIN\\alice")));
 
     [Fact]
     public void Another_user_may_not_access_it() =>
-        Assert.False(Ownership.CanAccessVm("DOMAIN\\mallory", Role.User, VmOwnedBy("DOMAIN\\christoph")));
+        Assert.False(Ownership.CanAccessVm("DOMAIN\\mallory", Role.User, VmOwnedBy("DOMAIN\\alice")));
 
     [Fact]
     public void Admins_may_access_every_vm() =>
-        Assert.True(Ownership.CanAccessVm("DOMAIN\\admin", Role.Admin, VmOwnedBy("DOMAIN\\christoph")));
+        Assert.True(Ownership.CanAccessVm("DOMAIN\\admin", Role.Admin, VmOwnedBy("DOMAIN\\alice")));
 
     [Fact]
     public void Anonymous_may_not_access_anything() =>
-        Assert.False(Ownership.CanAccessVm(null, Role.User, VmOwnedBy("DOMAIN\\christoph")));
+        Assert.False(Ownership.CanAccessVm(null, Role.User, VmOwnedBy("DOMAIN\\alice")));
 
     [Fact]
     public void Vm_tokens_reach_only_their_own_vm()
@@ -45,7 +45,7 @@ public class OwnershipTests
     [InlineData(0, 0, false)]
     public void Quota_is_enforced_on_creation(int maxVms, int owned, bool allowed)
     {
-        var user = new User("DOMAIN\\christoph", Role.User, maxVms, Now);
+        var user = new User("DOMAIN\\alice", Role.User, maxVms, Now);
         Assert.Equal(allowed, Ownership.CanCreateVm(user, owned));
     }
 }

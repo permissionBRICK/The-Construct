@@ -434,7 +434,7 @@ literals, and nothing in the UI or in any launched command line changes.
       "hostAlias": "work-vm",
       "keyName": "construct_work-vm_ed25519",
       "configBranch": "vm-work-vm",
-      "owner": "DOMAIN\\christoph"
+      "owner": "DOMAIN\\alice"
     }
   }
 }
@@ -1347,7 +1347,7 @@ configuration. So:
 | `construct.forwards.hostLabel` | binds | link |
 |---|---|---|
 | empty (default) | `127.0.0.1` | `http://localhost:<port>/` — private to this PC |
-| set, e.g. `christoph-pc` | `0.0.0.0` | `http://christoph-pc:<port>/` — reachable at that name |
+| set, e.g. `alice-pc` | `0.0.0.0` | `http://alice-pc:<port>/` — reachable at that name |
 
 One setting, one consistent meaning (`bindHostFor`, read by the argv, the port probe *and*
 the rendered link, so they cannot disagree). **Changing it across that boundary restarts

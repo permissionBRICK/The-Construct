@@ -20,10 +20,10 @@ public sealed class AdminCliTests
     {
         var cli = new Cli();
 
-        var exit = await cli.RunAsync("users", "add", @"DOMAIN\christoph", "--role", "Admin", "--max-vms", "10");
+        var exit = await cli.RunAsync("users", "add", @"DOMAIN\alice", "--role", "Admin", "--max-vms", "10");
 
         Assert.Equal(AdminExitCode.Ok, exit);
-        var user = await cli.Users.GetAsync(@"DOMAIN\christoph", CancellationToken.None);
+        var user = await cli.Users.GetAsync(@"DOMAIN\alice", CancellationToken.None);
         Assert.Equal(Role.Admin, user!.Role);
         Assert.Equal(10, user.MaxVms);
         Assert.True(user.AllowHostForwards);

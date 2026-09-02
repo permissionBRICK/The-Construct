@@ -15,8 +15,8 @@ value="$3"
 # (opencode-serve, codex). Values made only of a safe character set are written
 # bare, so systemd-consumed keys like OPENCODE_HOST stay simple; anything else
 # (spaces, quotes, $, ...) is single-quoted so `source` can't misparse it -- e.g.
-# a git user.name like "Christoph Ambrosch", which otherwise makes `. config.env`
-# try to run "Ambrosch" and abort the whole provision with exit 127.
+# a git user.name like "Jane Doe", which otherwise makes `. config.env`
+# try to run "Doe" and abort the whole provision with exit 127.
 render_value() {
   local v="$1"
   if [[ "${v}" =~ ^[A-Za-z0-9_.,:@/=+-]*$ ]]; then

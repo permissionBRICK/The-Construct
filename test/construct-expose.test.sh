@@ -137,11 +137,11 @@ for _ in $(seq 1 40); do
   if [[ -n "$(requests)" ]]; then id="$(request_id)"; break; fi
   sleep 0.25
 done
-printf '{"v":1,"id":"%s","status":"open","localPort":15173,"hostLabel":"christoph-pc"}\n' \
+printf '{"v":1,"id":"%s","status":"open","localPort":15173,"hostLabel":"alice-pc"}\n' \
   "${id}" >"${spool}/acks/${id}.json"
 wait "${waiter}" 2>/dev/null
 ok "ack: a hostLabel + remapped port build the link" \
-  test "$(cat "${out}")" = "http://christoph-pc:15173/"
+  test "$(cat "${out}")" = "http://alice-pc:15173/"
 
 # ── the ONE host-label rule (docs/expose.md) ─────────────────────────────────
 # hostLabel travels BARE and is bracketed exactly once, here, when the link is built.
@@ -234,7 +234,7 @@ for v6 in "${ipv6_invalid[@]}"; do
     test "$(link_host "${v6}")" = "localhost"
 done
 ok "host rule: a zone id is not a wire host label" test "$(link_host 'fe80::1%eth0')" = "localhost"
-ok "host rule: a host name passes through" test "$(link_host 'christoph-pc')" = "christoph-pc"
+ok "host rule: a host name passes through" test "$(link_host 'alice-pc')" = "alice-pc"
 ok "host rule: an empty label is loopback" test "$(link_host '')" = "localhost"
 
 # An error ack is a final answer, not "keep waiting".
@@ -417,7 +417,7 @@ ok "--list against an unreadable 2xx body exits 8 instead of printing nothing" \
 # Host forwards disabled for this user.
 reset_stub
 printf '403' >"${stub_dir}/code"
-printf '{"type":"about:blank","title":"Forbidden","status":403,"detail":"Host-target forwards are disabled for '\''DOMAIN\\\\christoph'\''. Use target=client."}' \
+printf '{"type":"about:blank","title":"Forbidden","status":403,"detail":"Host-target forwards are disabled for '\''DOMAIN\\\\alice'\''. Use target=client."}' \
   >"${stub_dir}/response"
 remote 3000 --to host >"${tmp}/forbidden.out" 2>"${tmp}/forbidden.err"
 ok "remote: a 403 exits 7" test "$?" = 7

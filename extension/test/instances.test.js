@@ -146,7 +146,7 @@ const explicit = inst.deriveDefaults("work-vm", {
   backend: "hyperv-remote", vmName: "BuildBox-3", sshHost: "buildbox.example.local", sshPort: 2201,
   hostAlias: "custom-alias", keyName: "custom_key", configBranch: "branch-x",
   scriptsDir: "C:\\tools\\construct",
-  service: { url: "https://buildbox:7462", auth: "token" }, owner: "DOMAIN\\christoph",
+  service: { url: "https://buildbox:7462", auth: "token" }, owner: "DOMAIN\\alice",
 });
 eq("explicit: backend", explicit.backend, "hyperv-remote");
 eq("explicit: vmName", explicit.vmName, "BuildBox-3");
@@ -157,7 +157,7 @@ eq("explicit: keyName", explicit.keyName, "custom_key");
 eq("explicit: configBranch", explicit.configBranch, "branch-x");
 eq("explicit: scriptsDir", explicit.scriptsDir, "C:\\tools\\construct");
 eq("explicit: service auth", explicit.service.auth, "token");
-eq("explicit: owner", explicit.owner, "DOMAIN\\christoph");
+eq("explicit: owner", explicit.owner, "DOMAIN\\alice");
 
 // A spelled-out agent-vm with today's values still IS the default...
 ok("spelled-out agent-vm is still the default",
@@ -177,7 +177,7 @@ const regFile = writeRegistry(JSON.stringify({
     "agent-vm": { backend: "hyperv-local", vmName: "Agent-VM", sshHost: "agent-vm.mshome.net", sshPort: 22 },
     "work-vm": {
       backend: "hyperv-remote", vmName: "work-vm", sshHost: "buildbox.example.local", sshPort: 2201,
-      service: { url: "https://buildbox.example.local:7462", auth: "negotiate" }, owner: "DOMAIN\\christoph",
+      service: { url: "https://buildbox.example.local:7462", auth: "negotiate" }, owner: "DOMAIN\\alice",
     },
   },
 }, null, 2));

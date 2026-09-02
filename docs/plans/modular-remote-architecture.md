@@ -1,7 +1,7 @@
 # Modular / Remote Architecture Plan
 
 Status: **in execution** · plan 2026-09-01, progress log at the end
-Scope decided with Christoph via Q&A; findings below come from a four-way repo/notes audit
+Scope decided with the project owner via Q&A; findings below come from a four-way repo/notes audit
 (assumption map, idea mining, jarvis logs, pipeline anatomy).
 
 ## 1. Goal
@@ -29,7 +29,7 @@ host service, and the extension is a management UI only.
 | Layering | Hypervisor **driver contract + shared core**. Local Hyper-V = driver #1, remote Hyper-V = driver #2, Proxmox later. ISO build, in-guest provisioning, config sync stay backend-agnostic. |
 | VM identity | **Client-side instance registry**; each VM is a named instance. `agent-vm` remains the implicit default instance → existing installs need no migration. |
 | Remote control channel | **HTTP API** from a **.NET minimal API** Windows service on the Hyper-V host. |
-| Auth | **Kerberos/Negotiate first** (VS Code process identity, fallback: manually entered domain user+password), **admin-issued tokens** as the alternative. Admin explicitly adds users; per-VM ownership; per-user quota. Testable on Christoph's home domain. |
+| Auth | **Kerberos/Negotiate first** (VS Code process identity, fallback: manually entered domain user+password), **admin-issued tokens** as the alternative. Admin explicitly adds users; per-VM ownership; per-user quota. Testable on the project owner's home domain. |
 | VM reachability | **Host-service port forwards** (per-VM SSH port on the host's LAN address). Plus an **in-VM CLI** (`construct expose <port>`) so agents can self-serve additional forwards for dev servers etc. |
 | VM-CLI auth | **Scoped per-VM token** injected at provision time; valid only for that VM's own forward management. |
 | Provisioning split | **Hybrid**: service does ISO build + VM create + OS install wait; the **client** runs the agent-stack provisioning (`Provision-AgentVM.ps1`) over the forwarded SSH port — user secrets (git creds, agent auth, backups) never transit the service. |
@@ -192,7 +192,7 @@ why the remote-Hyper-V API below deliberately mirrors that shape.
       "sshHost": "buildbox.example.local", "sshPort": 2201,
       "hostAlias": "work-vm",
       "keyName": "construct_work-vm_ed25519",
-      "owner": "DOMAIN\\christoph"
+      "owner": "DOMAIN\\alice"
     }
   }
 }
@@ -434,7 +434,7 @@ Module rules (enforced in review for new code, adopted opportunistically in old)
 
 **Field finding (2026-09-02, `standpc`, WSL 2.6.3):** `wsl.exe` as LocalSystem exits -1 with
 `Wsl/WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED`; a probe as a domain account in a batch logon did not even
-produce output. Decision (Christoph): **do not change the service identity.** The installing
+produce output. Decision (project owner): **do not change the service identity.** The installing
 administrator builds the autoinstall ISO **once, interactively, with their own WSL**; `constructd`
 (LocalSystem) only consumes it. Updating the ISO (new Ubuntu release, new bootstrap key) is again an
 interactive administrator action. The per-VM WSL build stays in the code behind a mode switch for
@@ -462,7 +462,7 @@ VM name at first boot. Hyper-V exposes it through KVP data exchange (`hv_kvp_dae
 the Default Switch NAT is available) and `hv_kvp_daemon` must populate pool 3 on Gen2 VMs — the
 checklist verifies `hostname` inside the first VM before anything else.
 
-### 4.11 ISO build strategy (target design; direction from Christoph, 2026-09-02)
+### 4.11 ISO build strategy (target design; direction from the project owner, 2026-09-02)
 
 The pre-built ISO of §4.10 is **not** the main design. Building install media must be a pluggable
 **strategy**, and per-VM guest identity must come from the **hypervisor's own channel**, so that:
@@ -591,7 +591,7 @@ endpoint formatting there in the same batch.
 | 2026-09-02 | Phase 2 review round 9 fixes merged (`8d726a7`): forwarder retries after an unanswered capability check (pure `planStartOutcome`), Windows device-stem rule on all three branch validators, one canonical IPv6 host-label rule shared by guest CLI / service (`ForwardHost.cs`) / extension with a 37-entry tri-language matrix, usage export bound to its captured instance + period. |
 | 2026-09-02 | Phase 2 review round 10 fixes merged (`a5954b5`): `construct-` prefix reserved and stripping removed (one derivation rule everywhere), one instance-name rule in JS/PS/C# (alphanumeric first+last, 1–63; C# `\A…\z` parity fix), registry fingerprint-driven retargeting via one serialized transition (debounced `fs.watch` only when the file exists), Start & connect + `lifecycle.run` stale-target gates, instance-scoped narrow webview messages. Node 21 files, dotnet 510, pwsh instances 684. **Code work for this batch is complete; per the one-loop-per-change rule no further review runs without new changes.** |
 | 2026-09-02 | Field test started on `standpc` (WSL 2.6.3, German Windows). Installer fixes from the field, each direct + tested: relative path params resolved against `$PWD` before the elevated relaunch and ACE identities read by SID (`6ceaf98`); parents hardened before children (`8aa8ca6`); LocalSystem task polled via the Schedule.Service COM API in its own folder, `SCHED_S_TASK_RUNNING` is not an exit code (`16405cc`); failed LocalSystem commands report their output (`b56e0e9`). Blocker: `WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED` → §4.10 / B10. |
-| 2026-09-02 | B10 re-scoped (Christoph): service stays LocalSystem, admin builds a pre-built ISO interactively; guest hostname from Hyper-V KVP. Service-account pair cancelled before any commit. |
+| 2026-09-02 | B10 re-scoped (project owner): service stays LocalSystem, admin builds a pre-built ISO interactively; guest hostname from Hyper-V KVP. Service-account pair cancelled before any commit. |
 | 2026-09-02 | B10 merged (`9fc3485`): `IsoOptions.Mode` (Prebuilt default / PerVm; Native, InGuest, HypervisorHost documented), `IIsoMediaBuilder` + `IIsoCatalog`/`FileIsoCatalog` (versioned media, sidecar, atomic pointer, prune skips media Hyper-V holds open), `PrebuiltIsoBuilder`, `admin iso build/status/prune`, installer builds the ISO as the admin between settings and service registration (`-SkipIsoBuild`, `-IsoBuildOnly`), every LocalSystem-WSL step and the task runner removed, `VM_HOSTNAME_SOURCE=hyperv-kvp` first-boot identity source (default media byte-identical), provision.sh belt-and-braces rename. dotnet 572, installer 286, 16 bash suites. |
 | next | Field test resumes on `standpc`: install with the pre-built ISO, verify `admin iso status`, first VM's hostname + `<name>.mshome.net`. |
 
@@ -599,7 +599,7 @@ Process notes: every package ran as an omniloop dev/reviewer pair (opus develope
 gpt-5.6-sol reviewer) in its own worktree; cross-package integration reviews ran on the
 merged tree with the zero-change default path as the primary bar. Workflow budgets must
 be ≥ 720 min because a usage-limit park does not pause the workflow-level timeout.
-Process correction (2026-09-02, Christoph): one review-fix loop per change. Rounds 6–10
+Process correction (2026-09-02, project owner): one review-fix loop per change. Rounds 6–10
 re-ran a fresh integration reviewer on an unchanged tree after each fix pair had been
 approved, which cannot converge on a diff this size. From here: a new review only when
 new changes land; the round-10 fix pair is the last loop for this batch.

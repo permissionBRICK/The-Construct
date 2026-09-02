@@ -5,7 +5,7 @@ namespace Constructd.Core.Domain;
 /// authenticated Windows identity that has no <see cref="User"/> record is authenticated but
 /// unauthorized.
 /// </summary>
-/// <param name="Name">Identity name as the auth scheme reports it (e.g. <c>DOMAIN\christoph</c>).</param>
+/// <param name="Name">Identity name as the auth scheme reports it (e.g. <c>DOMAIN\alice</c>).</param>
 /// <param name="MaxVms">Quota: how many VMs this user may own. 0 means "may not create VMs".</param>
 /// <param name="AllowHostForwards">
 /// Admin flag (default <c>true</c>): may this user's VMs materialize LAN-reachable

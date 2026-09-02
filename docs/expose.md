@@ -163,7 +163,7 @@ extension re-opens the tunnel for anything still queued.
 ### Ack — `acks/<id>.json`, written by the extension
 
 ```json
-{"v":1,"id":"1756742400-a3f1","status":"open","localPort":5173,"hostLabel":"christoph-pc","message":""}
+{"v":1,"id":"1756742400-a3f1","status":"open","localPort":5173,"hostLabel":"alice-pc","message":""}
 ```
 
 - `status` — `open` when the port is listening on the user's PC, `error` when it could not be

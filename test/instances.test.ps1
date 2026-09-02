@@ -193,7 +193,7 @@ $entry = [pscustomobject]@{
     hostAlias = 'custom-alias'; keyName = 'custom_key'; configBranch = 'branch-x'
     scriptsDir = 'C:\tools\construct'
     service = [pscustomobject]@{ url = 'https://buildbox:7462'; auth = 'negotiate' }
-    owner = 'DOMAIN\christoph'
+    owner = 'DOMAIN\alice'
 }
 $r = Resolve-ConstructInstanceDefaults -Name 'work-vm' -Entry $entry
 ok "explicit: backend honoured"      ($r.Backend -eq 'hyperv-remote')
@@ -206,7 +206,7 @@ ok "explicit: configBranch honoured" ($r.ConfigBranch -eq 'branch-x')
 ok "explicit: scriptsDir honoured"   ($r.ScriptsDir -eq 'C:\tools\construct')
 ok "explicit: service url honoured"  ($r.Service.Url -eq 'https://buildbox:7462')
 ok "explicit: service auth honoured" ($r.Service.Auth -eq 'negotiate')
-ok "explicit: owner honoured"        ($r.Owner -eq 'DOMAIN\christoph')
+ok "explicit: owner honoured"        ($r.Owner -eq 'DOMAIN\alice')
 
 # An explicitly-spelled-out agent-vm with today's values is still THE DEFAULT.
 $spelled = Resolve-ConstructInstanceDefaults -Name 'agent-vm' -Entry ([pscustomobject]@{
@@ -228,7 +228,7 @@ $file = New-RegistryFile @'
     "agent-vm": { "backend": "hyperv-local", "vmName": "Agent-VM", "sshHost": "agent-vm.mshome.net", "sshPort": 22 },
     "work-vm":  { "backend": "hyperv-remote", "vmName": "work-vm", "sshHost": "buildbox.example.local", "sshPort": 2201,
                   "service": { "url": "https://buildbox.example.local:7462", "auth": "negotiate" },
-                  "owner": "DOMAIN\\christoph" }
+                  "owner": "DOMAIN\\alice" }
   }
 }
 '@

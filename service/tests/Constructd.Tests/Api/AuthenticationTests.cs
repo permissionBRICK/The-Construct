@@ -93,8 +93,8 @@ public class AuthenticationTests
     public async Task The_negotiate_stand_in_scheme_resolves_a_role_from_the_user_store()
     {
         using var app = new TestApp();
-        await app.AddUserAsync("DOMAIN\\christoph", Role.Admin, maxVms: 3);
-        using var client = app.CreateTestIdentityClient("DOMAIN\\christoph");
+        await app.AddUserAsync("DOMAIN\\alice", Role.Admin, maxVms: 3);
+        using var client = app.CreateTestIdentityClient("DOMAIN\\alice");
 
         var body = await (await client.GetAsync("/api/v1/whoami")).ReadAsync<WhoAmIResponse>();
 
@@ -108,8 +108,8 @@ public class AuthenticationTests
     public async Task Identity_matching_is_case_insensitive_like_windows_names()
     {
         using var app = new TestApp();
-        await app.AddUserAsync("DOMAIN\\christoph");
-        using var client = app.CreateTestIdentityClient("domain\\CHRISTOPH");
+        await app.AddUserAsync("DOMAIN\\alice");
+        using var client = app.CreateTestIdentityClient("domain\\ALICE");
 
         var body = await (await client.GetAsync("/api/v1/whoami")).ReadAsync<WhoAmIResponse>();
 

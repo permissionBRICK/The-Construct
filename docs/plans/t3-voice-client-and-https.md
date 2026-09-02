@@ -24,7 +24,7 @@ Everything else already lives on the VM and is independent of VS Code: the Claud
 (`~/.claude/.credentials.json`), the Anthropic speech WebSocket, transcript assembly, the level
 ring, the composer insertion logic. Only the **audio source** is VS Code-bound.
 
-Decision (Christoph, 2026-09-02): T3 clients capture the microphone **themselves** (browser
+Decision (project owner, 2026-09-02): T3 clients capture the microphone **themselves** (browser
 `getUserMedia` or the Electron desktop app) and push PCM to the server; the `rec` host-bridge
 path stays untouched as the fallback and for every other `rec` caller on the VM (Claude Code
 CLI `/voice`, the VS Code chat mic). Because browsers only expose `getUserMedia` on secure

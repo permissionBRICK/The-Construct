@@ -46,7 +46,7 @@ public sealed class SqlitePersistenceTests : IDisposable
     [Fact]
     public async Task Users_and_vms_survive_a_restart()
     {
-        var vm = new Vm("work-vm", "DOMAIN\\christoph", 4, 8, 64, Now, VmState.Running, 2201, "hash",
+        var vm = new Vm("work-vm", "DOMAIN\\alice", 4, 8, 64, Now, VmState.Running, 2201, "hash",
             new IdlePolicy(45, IdleAction.Shutdown), Vm.NoForwards);
 
         {
@@ -55,13 +55,13 @@ public sealed class SqlitePersistenceTests : IDisposable
             var vms = new SqliteVmRepository(database);
 
             Assert.True(await users.CreateAsync(
-                new User("DOMAIN\\christoph", Role.Admin, 3, Now, AllowHostForwards: false), CancellationToken.None));
+                new User("DOMAIN\\alice", Role.Admin, 3, Now, AllowHostForwards: false), CancellationToken.None));
             Assert.Equal(VmAddOutcome.Added, await vms.AddAsync(vm, maxVms: 3, CancellationToken.None));
         }
 
         // "Restart": brand new objects over the same file.
         var reopened = Open();
-        var user = await new SqliteUserStore(reopened).GetAsync("domain\\CHRISTOPH", CancellationToken.None);
+        var user = await new SqliteUserStore(reopened).GetAsync("domain\\ALICE", CancellationToken.None);
         var stored = await new SqliteVmRepository(reopened).GetAsync("work-vm", CancellationToken.None);
 
         Assert.NotNull(user);
@@ -313,9 +313,9 @@ public sealed class SqlitePersistenceTests : IDisposable
             forwardId = forward.Id;
 
             var acked = await (await bob.PostJsonAsync($"/api/v1/vms/work-vm/forwards/{forwardId}/ack",
-                new { status = "open", localPort = 18800, hostLabel = "christoph-pc" }))
+                new { status = "open", localPort = 18800, hostLabel = "alice-pc" }))
                 .ReadAsync<ForwardResponse>();
-            Assert.Equal("http://christoph-pc:18800/", acked.Url);
+            Assert.Equal("http://alice-pc:18800/", acked.Url);
         }
 
         using (var restarted = TestApp.WithSqlite(_path))
@@ -328,8 +328,8 @@ public sealed class SqlitePersistenceTests : IDisposable
             Assert.Equal(forwardId, forward.Id);
             Assert.Equal("open", forward.Status);
             Assert.Equal(18800, forward.LocalPort);
-            Assert.Equal("christoph-pc", forward.HostLabel);
-            Assert.Equal("http://christoph-pc:18800/", forward.Url);
+            Assert.Equal("alice-pc", forward.HostLabel);
+            Assert.Equal("http://alice-pc:18800/", forward.Url);
         }
     }
 

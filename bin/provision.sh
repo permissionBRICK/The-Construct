@@ -577,7 +577,7 @@ configure_passwordless_sudo() {
 run_step optional "Granting ${SSH_USER} passwordless sudo" configure_passwordless_sudo
 
 # Heal a config.env poisoned by a pre-fix run that wrote an unquoted git name
-# with a space (e.g. GIT_USER_NAME=Christoph Ambrosch), which makes every later
+# with a space (e.g. GIT_USER_NAME=Jane Doe), which makes every later
 # `. config.env` abort with exit 127 -- including bootstrap.sh's login-banner
 # step, before we'd ever rewrite the file. We no longer store git identity in
 # config.env (it's set via `git config --global` below), so just drop any legacy

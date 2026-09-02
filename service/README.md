@@ -267,8 +267,8 @@ The list projects it **inline and flat**:
 
 ```json
 {"id":"…","vmName":"work-vm","vmPort":5173,"publicPort":null,"target":"client","label":"vite dev",
- "created":"…","url":"http://christoph-pc:18800/","status":"open","localPort":18800,
- "hostLabel":"christoph-pc","message":"","ackedAt":"…"}
+ "created":"…","url":"http://alice-pc:18800/","status":"open","localPort":18800,
+ "hostLabel":"alice-pc","message":"","ackedAt":"…"}
 ```
 
 - `url` is `http://<hostLabel>:<localPort>/` when the extension reported a host label, and
@@ -772,7 +772,7 @@ The same executable, with `admin` as the first argument, is a command-line mode 
 directly — no HTTP, no authentication, no listener, no jobs:
 
 ```powershell
-constructd admin users add DOMAIN\christoph --role Admin --max-vms 10
+constructd admin users add DOMAIN\alice --role Admin --max-vms 10
 constructd admin users add DOMAIN\alice --role User --max-vms 2 --no-host-forwards
 constructd admin users remove DOMAIN\alice
 constructd admin users list [--json]

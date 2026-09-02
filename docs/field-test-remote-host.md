@@ -16,7 +16,7 @@ Names used throughout — substitute your own:
 |---|---|
 | Hyper-V host | `buildbox` (`buildbox.home.example`) |
 | Domain | `HOME` |
-| Admin identity | `HOME\christoph` |
+| Admin identity | `HOME\alice` |
 | Test user | `HOME\alice` |
 | Service URL | `https://buildbox.home.example:7462` |
 | The two VMs | `work-vm`, `lab-vm` |
@@ -101,7 +101,7 @@ C:\Construct\service\host\Install-ConstructHost.ps1 `
     -ScriptsDir C:\Construct `
     -PublishDir C:\Construct\service\publish `
     -PublicHost buildbox.home.example `
-    -AdminUser HOME\christoph `
+    -AdminUser HOME\alice `
     -IsoSourceUrl https://releases.ubuntu.com/24.04/ubuntu-24.04.3-live-server-amd64.iso
 ```
 
@@ -126,7 +126,7 @@ pick up a new Ubuntu release or a rotated bootstrap key.
 ```
   Service URL   : https://buildbox.home.example:7462
   Certificate   : <40 hex characters>
-  Admin token for HOME\christoph (shown once):
+  Admin token for HOME\alice (shown once):
   <token>
 
   Autoinstall ISO:

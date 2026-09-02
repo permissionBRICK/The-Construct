@@ -253,7 +253,7 @@ async function settle(fwd, timers, ms = 5000) {
   eq("sanitizeText: caps the length", f.sanitizeText("x".repeat(500), 10), "x".repeat(10));
   eq("sanitizeText: null reads as empty", f.sanitizeText(null, 10), "");
 
-  eq("hostLabel: a plain machine name survives", f.sanitizeHostLabel("christoph-pc"), "christoph-pc");
+  eq("hostLabel: a plain machine name survives", f.sanitizeHostLabel("alice-pc"), "alice-pc");
   eq("hostLabel: an FQDN survives", f.sanitizeHostLabel("pc.home.example"), "pc.home.example");
   eq("hostLabel: whitespace is removed, not a separator", f.sanitizeHostLabel("  pc  "), "pc");
   eq("hostLabel: a slash is refused outright", f.sanitizeHostLabel("pc/evil"), "");
@@ -318,7 +318,7 @@ async function settle(fwd, timers, ms = 5000) {
   eq("hostLabel: ...bracketed too", f.sanitizeHostLabel("[fe80::1%25eth0]"), "");
   eq("hostLabel: nested brackets are not a label", f.sanitizeHostLabel("[[fe80::1]]"), "");
 
-  eq("urlHost: a name is used as it stands", f.urlHostFor("christoph-pc"), "christoph-pc");
+  eq("urlHost: a name is used as it stands", f.urlHostFor("alice-pc"), "alice-pc");
   eq("urlHost: an IPv4 literal too", f.urlHostFor("10.0.0.7"), "10.0.0.7");
   eq("urlHost: an IPv6 literal gets exactly one bracket pair", f.urlHostFor("fe80::1"), "[fe80::1]");
   eq("urlHost: ...and a bracketed one gets exactly one pair as well, never two",
@@ -411,7 +411,7 @@ async function settle(fwd, timers, ms = 5000) {
   eq("bind: no host label means loopback, explicitly", f.bindHostFor(""), f.BIND_LOOPBACK);
   eq("bind: ...and undefined too", f.bindHostFor(undefined), f.BIND_LOOPBACK);
   eq("bind: a host label opts in to all interfaces, or the link it advertises is dead",
-    f.bindHostFor("christoph-pc"), f.BIND_ALL);
+    f.bindHostFor("alice-pc"), f.BIND_ALL);
   eq("bind: a REJECTED host label stays loopback (it is not advertised either)",
     f.bindHostFor("pc/evil"), f.BIND_LOOPBACK);
 
@@ -865,13 +865,13 @@ async function localFlow() {
 
   // The host label ends up in the ack and in the link.
   {
-    const { fwd, transport, timers } = makeForwarder({ hostLabel: "christoph-pc" });
+    const { fwd, transport, timers } = makeForwarder({ hostLabel: "alice-pc" });
     transport.dump = dump("self", [["R", "1-a", { v: 1, id: "1-a", vmPort: 5173, target: "client" }]]);
     await settle(fwd, timers);
     const b64 = /printf %s '([A-Za-z0-9+/=]+)'/.exec(transport.acks[0])[1];
     eq("local: the host label rides in the ack",
-      JSON.parse(Buffer.from(b64, "base64").toString("utf8")).hostLabel, "christoph-pc");
-    eq("local: ...and names the PC in the link", fwd.snapshot().items[0].url, "http://christoph-pc:5173/");
+      JSON.parse(Buffer.from(b64, "base64").toString("utf8")).hostLabel, "alice-pc");
+    eq("local: ...and names the PC in the link", fwd.snapshot().items[0].url, "http://alice-pc:5173/");
     fwd.dispose();
   }
 
@@ -1133,7 +1133,7 @@ async function localFlow() {
     eq("local: the first tunnel binds loopback", transport.tunnels[0].bindHost, f.BIND_LOOPBACK);
     const first = transport.tunnels[0].child;
 
-    fwd.setHostLabel("christoph-pc");
+    fwd.setHostLabel("alice-pc");
     await timers.advance(5000);
 
     eq("local: '' -> label KILLS the loopback-only listener", first.killed, 1);
@@ -1145,7 +1145,7 @@ async function localFlow() {
     eq("local: ...and only then is the new ack written", transport.acks.length, 2);
     const b64 = /printf %s '([A-Za-z0-9+/=]+)'/.exec(transport.acks[1])[1];
     eq("local: ...with the new label",
-      JSON.parse(Buffer.from(b64, "base64").toString("utf8")).hostLabel, "christoph-pc");
+      JSON.parse(Buffer.from(b64, "base64").toString("utf8")).hostLabel, "alice-pc");
 
     // ...and the reverse, which is the security-sensitive direction: clearing the label
     // must actually STOP listening on 0.0.0.0, not merely re-advertise localhost.
@@ -1451,13 +1451,13 @@ async function remoteFlow() {
   {
     const { fwd, transport, timers } = makeForwarder({
       instance: { name: "work-vm", backend: "hyperv-remote", vmName: "work-vm" },
-      hostLabel: "christoph-pc",
+      hostLabel: "alice-pc",
     });
     transport.lists = [[entry()]];
     await settle(fwd, timers);
     const post = transport.fetches.find((r) => r.method === "POST");
     deep("remote: the ack body carries the host label",
-      post.body, { status: "open", localPort: 5173, hostLabel: "christoph-pc" });
+      post.body, { status: "open", localPort: 5173, hostLabel: "alice-pc" });
     fwd.dispose();
   }
 

@@ -122,7 +122,7 @@ public class ExposeCliContractTests
         await owner.PostAsJsonAsync("/api/v1/vms/work-vm/forwards",
             new { vmPort = 8080, label = "webhook", target = "host" }, ApiJson.Options);
         await owner.PostAsJsonAsync($"/api/v1/vms/work-vm/forwards/{id}/ack",
-            new { status = "open", localPort = 5173, hostLabel = "christoph-pc" }, ApiJson.Options);
+            new { status = "open", localPort = 5173, hostLabel = "alice-pc" }, ApiJson.Options);
 
         var body = await ListAsync(guest);
 
@@ -178,16 +178,16 @@ public class ExposeCliContractTests
 
         var id = await AddClientAsync(owner);
         await owner.PostAsJsonAsync($"/api/v1/vms/work-vm/forwards/{id}/ack",
-            new { status = "open", localPort = 18800, hostLabel = "christoph-pc" }, ApiJson.Options);
+            new { status = "open", localPort = 18800, hostLabel = "alice-pc" }, ApiJson.Options);
 
         var forward = Assert.Single(JsonObjects(await ListAsync(guest)));
         var (outcome, text) = LinkFromForward(forward);
 
         Assert.Equal(CliOutcome.Link, outcome);
-        Assert.Equal("http://christoph-pc:18800/", text);
+        Assert.Equal("http://alice-pc:18800/", text);
         // ...and the ack fields the CLI would fall back on say the same thing.
         Assert.Equal("18800", JsonField(forward, "localPort"));
-        Assert.Equal("christoph-pc", JsonField(forward, "hostLabel"));
+        Assert.Equal("alice-pc", JsonField(forward, "hostLabel"));
     }
 
     /// <remarks>
