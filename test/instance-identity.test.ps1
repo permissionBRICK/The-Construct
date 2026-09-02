@@ -333,6 +333,69 @@ if (Get-Command Get-ExternalEnvSuffix -ErrorAction SilentlyContinue) {
         ((Get-ExternalEnvSuffix -VmHost "o'brien-vm.mshome.net" -SshPort 22 -ExplicitlyBound $true) -eq " CONSTRUCT_EXTERNAL_HOST='o'\''brien-vm.mshome.net' CONSTRUCT_EXTERNAL_SSH_PORT='22'")
 }
 
+# ── Remote host service params (batch B7) ───────────────────────────────────
+# The zero-change bar for the remote work: all three new provisioner parameters and all
+# four new installer parameters default to something INERT, so an install that never
+# names a remote host behaves -- and splats -- exactly as before.
+Write-Host ""
+Write-Host "=== Remote host service params (B7) ===" -ForegroundColor Cyan
+foreach ($pn in @('ServiceUrl', 'InstanceName', 'VmTokenB64')) {
+    $rp = Get-ScriptParam (Join-Path $repoRoot "Provision-AgentVM.ps1") $pn
+    ok "Provision-AgentVM has -$pn param" ($null -ne $rp)
+    ok "Provision-AgentVM -$pn defaults to EMPTY (inert)" ((Get-ParamDefaultValue $rp) -eq '""')
+}
+$abp = Get-ScriptParam (Join-Path $repoRoot "Auto-Install.ps1") "Backend"
+ok "Auto-Install has -Backend param" ($null -ne $abp)
+ok "Auto-Install -Backend defaults to hyperv-local (today's path)" ((Get-ParamDefaultValue $abp) -eq '"hyperv-local"')
+$asu = Get-ScriptParam (Join-Path $repoRoot "Auto-Install.ps1") "ServiceUrl"
+ok "Auto-Install has -ServiceUrl param" ($null -ne $asu)
+ok "Auto-Install -ServiceUrl defaults to EMPTY" ((Get-ParamDefaultValue $asu) -eq '""')
+$asa = Get-ScriptParam (Join-Path $repoRoot "Auto-Install.ps1") "ServiceAuth"
+ok "Auto-Install has -ServiceAuth param" ($null -ne $asa)
+ok "Auto-Install -ServiceAuth defaults to negotiate" ((Get-ParamDefaultValue $asa) -eq '"negotiate"')
+$ain = Get-ScriptParam (Join-Path $repoRoot "Auto-Install.ps1") "InstanceName"
+ok "Auto-Install has -InstanceName param" ($null -ne $ain)
+ok "Auto-Install -InstanceName defaults to EMPTY" ((Get-ParamDefaultValue $ain) -eq '""')
+$acpu = Get-ScriptParam (Join-Path $repoRoot "Auto-Install.ps1") "VmCpuCount"
+ok "Auto-Install has -VmCpuCount param" ($null -ne $acpu)
+ok "Auto-Install -VmCpuCount defaults to 0 (= the script's own default)" ((Get-ParamDefaultValue $acpu) -eq '0')
+
+# The env prefix carries the guest-side contract names (bin/provision.sh reads these).
+ok "envPrefix includes CONSTRUCT_SERVICE_URL" ($provContent -match "CONSTRUCT_SERVICE_URL=")
+ok "envPrefix includes CONSTRUCT_INSTANCE_NAME" ($provContent -match "CONSTRUCT_INSTANCE_NAME=")
+ok "envPrefix includes CONSTRUCT_VM_TOKEN_B64" ($provContent -match "CONSTRUCT_VM_TOKEN_B64=")
+ok "envPrefix appends the service suffix after the external one" ($provContent -match '\$externalEnv \+ \$serviceEnv')
+
+# Get-ServiceEnvSuffix: pure, so every case is testable without a VM. Extracted from the
+# script's AST exactly like Get-ExternalEnvSuffix above.
+$fnSvc = $provAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-ServiceEnvSuffix' }, $true) | Select-Object -First 1
+ok "Provision-AgentVM defines Get-ServiceEnvSuffix" ($null -ne $fnSvc)
+if ($fnSvc) {
+    Invoke-Expression $fnSvc.Extent.Text
+    # THE ZERO-CHANGE CASE: nothing set -> nothing appended, so a local VM's remote
+    # command line, provisioning log and config.env are byte-identical to before.
+    ok "service suffix: nothing set -> empty (zero-change)" `
+        ((Get-ServiceEnvSuffix -ServiceUrl "" -InstanceName "" -VmTokenB64 "") -eq "")
+    ok "service suffix: whitespace-only is treated as unset" `
+        ((Get-ServiceEnvSuffix -ServiceUrl "   " -InstanceName "" -VmTokenB64 "") -eq "")
+    ok "service suffix: URL only" `
+        ((Get-ServiceEnvSuffix -ServiceUrl "https://buildbox:7462" -InstanceName "" -VmTokenB64 "") -eq " CONSTRUCT_SERVICE_URL='https://buildbox:7462'")
+    ok "service suffix: all three, in the contract order" `
+        ((Get-ServiceEnvSuffix -ServiceUrl "https://b:7462" -InstanceName "work-vm" -VmTokenB64 "dG9rZW4=") -eq
+         " CONSTRUCT_SERVICE_URL='https://b:7462' CONSTRUCT_INSTANCE_NAME='work-vm' CONSTRUCT_VM_TOKEN_B64='dG9rZW4='")
+    ok "service suffix: a token can be sent without a name" `
+        ((Get-ServiceEnvSuffix -ServiceUrl "https://b:7462" -InstanceName "" -VmTokenB64 "abc") -eq
+         " CONSTRUCT_SERVICE_URL='https://b:7462' CONSTRUCT_VM_TOKEN_B64='abc'")
+    # Every value crosses a shell boundary, so every value is POSIX-quoted -- a URL with
+    # an apostrophe (or anything else) can neither break nor extend the command.
+    ok "service suffix: an apostrophe is POSIX-quoted, not interpolated" `
+        ((Get-ServiceEnvSuffix -ServiceUrl "https://o'brien:7462" -InstanceName "" -VmTokenB64 "") -eq
+         " CONSTRUCT_SERVICE_URL='https://o'\''brien:7462'")
+    ok "service suffix: a hostile instance name cannot inject a command" `
+        ((Get-ServiceEnvSuffix -ServiceUrl "" -InstanceName "x'; rm -rf /; '" -VmTokenB64 "") -eq
+         " CONSTRUCT_INSTANCE_NAME='x'\''; rm -rf /; '\'''")
+}
+
 # ── Summary ─────────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "==============================" -ForegroundColor Cyan

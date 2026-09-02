@@ -34,6 +34,7 @@ const importui = require("./src/importui");
 const zip = require("./src/zip");
 const themes = require("./src/themes");
 const notify = require("./src/notify");
+const remotehost = require("./src/remotehost");
 
 /** The single editor-tab panel instance, if open. */
 let panel; // vscode.WebviewPanel | undefined
@@ -359,7 +360,14 @@ function instanceState(inst) {
     const reg = registryNow();
     const target = inst || activeInstance();
     const names = instances.list(reg).map((i) => i.name);
-    const out = { instance: target.name };
+    const out = { instance: target.name, backend: target.backend };
+    // The service HOST, not the whole URL: the panel renders it in a one-line row, and
+    // the scheme + port are noise there. Only for an instance that has one — the panel
+    // hides both rows for hyperv-local, so a single-VM install is pixel-identical.
+    if (target.service && target.service.url) {
+      try { out.serviceHost = remotehost.urlParts(target.service.url).host; }
+      catch (_) { out.serviceHost = String(target.service.url); }
+    }
     // The dropdown renders ONLY when more than one instance exists, so a single-VM
     // install's panel is pixel-identical to before.
     if (names.length > 1) out.instances = names;
@@ -392,11 +400,43 @@ function postState(target, state) {
 async function withVmState(state, inst) {
   try {
     if (state && state.online) return { ...state, vmState: "running" };
-    const vmState = await vmpower.queryVmState({ instance: inst || activeInstance() });
+    const target = inst || activeInstance();
+    const vmState = await vmpower.queryVmState({ instance: target, ...(await driverOpts(target)) });
     return { ...state, vmState };
   } catch (_) {
     return { ...state, vmState: "unknown" };
   }
+}
+
+/**
+ * The extra driver options an instance's backend needs — `{}` for `hyperv-local`, so
+ * every local call is byte-for-byte the one it always made.
+ *
+ * A remote instance is reached over HTTPS with a credential, and the two things the
+ * driver cannot get for itself both live here: the API token (VS Code SecretStorage,
+ * which src/remotehost.js deliberately never touches) and the path of
+ * lib/AgentVm.Remote.ps1 (the Negotiate provider spawns it, because Node has no SSPI).
+ * Without these the driver reports "unknown" and refuses to start anything — which is
+ * correct, but only because it is never asked to guess.
+ *
+ * The token is NOT substituted with the Windows identity when it is missing: the driver
+ * treats that as the problem it is.
+ */
+async function driverOpts(inst) {
+  const backend = String((inst && inst.backend) || "").trim().toLowerCase();
+  if (backend !== "hyperv-remote") return {};
+  const url = inst && inst.service && inst.service.url;
+  if (!url) return {};
+  const out = { remoteLib: remoteLibPath(), log: logLine };
+  if (String(inst.service.auth || "") === "token") {
+    let token = "";
+    try { token = (await extensionContext.secrets.get(remotehost.tokenSecretKey(url))) || ""; }
+    catch (_) { token = ""; }
+    out.auth = { kind: "token", token };
+  } else {
+    out.auth = { kind: "negotiate" };
+  }
+  return out;
 }
 
 /**
@@ -1377,7 +1417,7 @@ const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 /** Start the (stopped) VM via an elevated Hyper-V Start-VM, then poll SSH until it
  *  answers and open it in this window. Mirrors the "Start & connect" affordance the
  *  webview shows when the VM is installed but off. */
-function runStartAndConnect() {
+async function runStartAndConnect() {
   if (process.platform !== "win32") {
     vscode.window.showWarningMessage("Starting the Construct VM runs on the Windows host, which isn't available here.");
     return;
@@ -1389,8 +1429,25 @@ function runStartAndConnect() {
     return;
   }
   const startInstance = activeInstance();
-  if (!vmpower.startVm({ debug: debugEnabled(), instance: startInstance })) return; // startVm surfaces its own failure
-  vscode.window.showInformationMessage("Starting the Construct VM — approve the UAC prompt.");
+  // A remote instance is started by its host service over HTTPS, which needs the
+  // credential driverOpts() resolves; a local one gets {} and the elevated Start-VM it
+  // always got.
+  const startOpts = await driverOpts(startInstance);
+  if (!vmpower.startVm({ debug: debugEnabled(), instance: startInstance, ...startOpts })) {
+    // The driver logs why (no service URL, no token, no PowerShell helper). Say so here
+    // too: a silent no-op on a button press is the one thing that must not happen.
+    if (startOpts.auth) {
+      vscode.window.showWarningMessage(
+        `Couldn't ask ${(startInstance.service && startInstance.service.url) || "the host service"} to start “${startInstance.name}”. See “The Construct” in the output panel for the reason.`
+      );
+    }
+    return; // startVm surfaces its own failure
+  }
+  vscode.window.showInformationMessage(
+    startOpts.auth
+      ? `Asking the host service to start “${startInstance.name}”…`
+      : "Starting the Construct VM — approve the UAC prompt."
+  );
   vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: "Waiting for the Construct VM to come online…", cancellable: true },
     async (_progress, token) => {
@@ -2345,6 +2402,320 @@ async function adoptRemoteInstance() {
   } catch (_) { /* best-effort: never break activation */ }
 }
 
+// ── Remote hosts (`constructd`) ─────────────────────────────────────────────
+// A remote HOST is an enrolment, not a VM: its URL, the credential kind, the pinned
+// certificate fingerprint and the identity the service confirmed. It lives in
+// globalState and NOT in instances.json, because that file describes VMs — an entry for
+// a host with no VM would show up in the instance picker as a machine nothing can
+// reach, and both registry readers would have to invent a meaning for it. The pinned
+// fingerprint is ALSO written to the file lib/AgentVm.Remote.ps1 reads, so a host added
+// here is already trusted when Auto-Install.ps1 runs in a console.
+const REMOTE_HOSTS_KEY = "construct.remoteHosts";
+
+/** The enrolled remote hosts, newest first. Never throws. */
+function remoteHosts() {
+  try {
+    const raw = extensionContext && extensionContext.globalState.get(REMOTE_HOSTS_KEY);
+    return Array.isArray(raw) ? raw.filter((h) => h && typeof h.url === "string") : [];
+  } catch (_) { return []; }
+}
+
+/** Record (or refresh) one enrolled host. */
+async function saveRemoteHost(entry) {
+  const rest = remoteHosts().filter((h) => h.url !== entry.url);
+  await extensionContext.globalState.update(REMOTE_HOSTS_KEY, [entry, ...rest]);
+}
+
+/** lib/AgentVm.Remote.ps1 in the installed scripts dir — the Negotiate provider needs
+ *  it (Node has no SSPI). null when it isn't there, which the callers report. */
+function remoteLibPath() {
+  try {
+    const dir = resolveScriptsDir();
+    if (!dir) return null;
+    const p = path.join(dir, "lib", "AgentVm.Remote.ps1");
+    return fs.existsSync(p) ? p : null;
+  } catch (_) { return null; }
+}
+
+/**
+ * Build a client for a host: the recorded credential kind, with the token fetched from
+ * SecretStorage when that is the kind. Returns null (after a message) when the token is
+ * gone — silently falling back to Negotiate would ask the service a question it has
+ * already refused once.
+ */
+async function remoteClientFor(hostEntry, overrideAuth) {
+  let auth = overrideAuth;
+  if (!auth) {
+    if (hostEntry.auth === "token") {
+      const token = await extensionContext.secrets.get(remotehost.tokenSecretKey(hostEntry.url));
+      if (!token) {
+        vscode.window.showWarningMessage(
+          `The API token for ${hostEntry.url} is no longer stored. Run "The Construct: Add Remote Host" again to re-enter it.`
+        );
+        return null;
+      }
+      auth = { kind: "token", token };
+    } else {
+      auth = { kind: "negotiate" };
+    }
+  }
+  return remotehost.createClient({
+    baseUrl: hostEntry.url, auth, pin: hostEntry.fingerprint,
+    remoteLib: remoteLibPath(), env: process.env, log: logLine,
+  });
+}
+
+/**
+ * "The Construct: Add Remote Host" — URL → fingerprint → credentials → whoami.
+ *
+ * The fingerprint is shown ONCE and confirmed by the user (a self-signed certificate has
+ * no chain to validate, so this confirmation IS the identity check); a CHANGED
+ * fingerprint on a host that was already pinned is refused outright rather than offered
+ * as a choice. Credentials are tried Negotiate-first, silently, and only a 401 leads to
+ * a prompt — exactly like the installer's console flow.
+ */
+async function runAddRemoteHost() {
+  const typed = await vscode.window.showInputBox({
+    title: "Add a Construct remote host",
+    prompt: "The host service's address — your administrator publishes it",
+    placeHolder: "https://buildbox.example.local:7462",
+    ignoreFocusOut: true,
+  });
+  if (!typed) return;
+
+  let url;
+  try { url = remotehost.normalizeServiceUrl(typed); }
+  catch (e) { vscode.window.showErrorMessage(e.message); return; }
+
+  // ── the certificate ───────────────────────────────────────────────────────
+  let fingerprint = "";
+  try {
+    fingerprint = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: `Reading ${remotehost.urlParts(url).host}'s certificate…`, cancellable: false },
+      () => remotehost.fetchFingerprint(url)
+    );
+  } catch (e) {
+    vscode.window.showErrorMessage(e && e.message ? e.message : String(e));
+    return;
+  }
+  if (fingerprint) {
+    const pinned = remotehost.readPin(url, { env: process.env });
+    if (pinned && !remotehost.fingerprintsMatch(pinned, fingerprint)) {
+      vscode.window.showErrorMessage(
+        `The certificate of ${remotehost.urlParts(url).host} does not match the one pinned on this machine.\n` +
+        `pinned: ${pinned}\npresented: ${fingerprint}\n` +
+        "Refusing to continue. If it was legitimately replaced, delete the pin file in %LOCALAPPDATA%\\The-Construct\\remote and try again."
+      );
+      return;
+    }
+    if (!pinned) {
+      const CONFIRM = "Pin & continue";
+      const pick = await vscode.window.showWarningMessage(
+        `Confirm ${remotehost.urlParts(url).host}'s certificate fingerprint`,
+        {
+          modal: true,
+          detail: `${fingerprint}\n\nThe host service uses a self-signed certificate, so it is identified by this ` +
+            "SHA-256 fingerprint. Compare it with what the host's administrator published. It is pinned once and " +
+            "then enforced on every later call.",
+        },
+        CONFIRM
+      );
+      if (pick !== CONFIRM) return;
+      try { remotehost.writePin(url, fingerprint, { env: process.env }); }
+      catch (e) { vscode.window.showWarningMessage("The host was added, but its fingerprint couldn't be stored: " + e.message); }
+    }
+  } else {
+    const GO = "Continue anyway";
+    const pick = await vscode.window.showWarningMessage(
+      "That address uses plain http, so the host's identity cannot be verified.",
+      { modal: true, detail: "Use https for anything but a local development service." },
+      GO
+    );
+    if (pick !== GO) return;
+  }
+
+  // ── credentials: Negotiate first, silently ────────────────────────────────
+  const attempt = async (auth) => {
+    const client = remotehost.createClient({
+      baseUrl: url, auth, pin: fingerprint, remoteLib: remoteLibPath(), env: process.env, log: logLine,
+    });
+    try { return { ok: true, me: await client.whoami(), auth }; }
+    catch (e) { return { ok: false, status: e && e.status, message: e && e.message ? e.message : String(e) }; }
+  };
+
+  let result = await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: "Signing in with your Windows account…", cancellable: false },
+    () => attempt({ kind: "negotiate" })
+  );
+  let token = null;
+  if (!result.ok && result.status !== 401) {
+    vscode.window.showErrorMessage(result.message);
+    return;
+  }
+  while (!result.ok) {
+    const TOKEN = "Paste an API token";
+    const CRED = "Sign in with a domain account";
+    const how = await vscode.window.showQuickPick([TOKEN, CRED], {
+      title: "The host service did not accept your Windows account",
+      placeHolder: "How would you like to sign in?",
+      ignoreFocusOut: true,
+    });
+    if (!how) return;
+    let auth = null;
+    if (how === TOKEN) {
+      const t = await vscode.window.showInputBox({
+        title: "API token", prompt: "The token your administrator issued for this host",
+        password: true, ignoreFocusOut: true,
+      });
+      if (!t) return;
+      auth = { kind: "token", token: t };
+    } else {
+      const user = await vscode.window.showInputBox({
+        title: "Domain account", prompt: "User name", placeHolder: "DOMAIN\\you", ignoreFocusOut: true,
+      });
+      if (!user) return;
+      const password = await vscode.window.showInputBox({
+        title: "Domain account", prompt: `Password for ${user}`, password: true, ignoreFocusOut: true,
+      });
+      if (password == null) return;
+      auth = { kind: "credential", user, password };
+    }
+    result = await attempt(auth);
+    if (result.ok && auth.kind === "token") token = auth.token;
+    if (!result.ok && result.status !== 401) { vscode.window.showErrorMessage(result.message); return; }
+    if (!result.ok) vscode.window.showWarningMessage("The host service refused that credential.");
+  }
+
+  const me = result.me || {};
+  if (me.known === false) {
+    vscode.window.showErrorMessage(
+      `${url} authenticated you as "${me.name}" but you are not enrolled on it. Ask its administrator to add you.`
+    );
+    return;
+  }
+  // Only a VERIFIED token is stored.
+  if (token) await extensionContext.secrets.store(remotehost.tokenSecretKey(url), token);
+  // A domain-credential sign-in is per-run, so the durable record says "negotiate":
+  // the password is never stored, and the next run tries the Windows identity again.
+  await saveRemoteHost({
+    url, auth: token ? "token" : "negotiate", fingerprint,
+    identity: String(me.name || ""), role: String(me.role || ""),
+    maxVms: typeof me.maxVms === "number" ? me.maxVms : null,
+    addedAt: new Date().toISOString(),
+  });
+  logLine(`remotehost: added ${url} as ${me.name} (${me.role})`);
+  vscode.window.showInformationMessage(
+    `Added the Construct host ${remotehost.urlParts(url).host} — signed in as ${me.name}` +
+    (typeof me.maxVms === "number" ? ` (VM quota: ${me.maxVms})` : "") +
+    ". Create a VM on it with “The Construct: New VM on Remote Host”."
+  );
+}
+
+/**
+ * "The Construct: New VM on Remote Host" — pick a host, ask name/CPU/RAM/disk, then
+ * launch Auto-Install.ps1's remote path in a host console.
+ *
+ * It is NOT done over the API from here on purpose: creating the VM is only half the
+ * job, and the other half — `Provision-AgentVM.ps1` — configures THIS PC (ssh config and
+ * key, VS Code Remote-SSH, OpenCode, SMB) and streams a long log the user needs to see.
+ * The installer already owns all of that.
+ */
+async function runNewRemoteVm() {
+  const hosts = remoteHosts();
+  if (!hosts.length) {
+    const ADD = "Add a remote host";
+    const pick = await vscode.window.showInformationMessage(
+      "No Construct remote host is configured yet.", ADD
+    );
+    if (pick === ADD) await runAddRemoteHost();
+    return;
+  }
+  let hostEntry = hosts[0];
+  if (hosts.length > 1) {
+    const picked = await vscode.window.showQuickPick(
+      hosts.map((h) => ({ label: remotehost.urlParts(h.url).host, description: h.identity || "", detail: h.url, entry: h })),
+      { title: "Create a VM on which host?", ignoreFocusOut: true }
+    );
+    if (!picked) return;
+    hostEntry = picked.entry;
+  }
+
+  const reg = registryNow(true);
+  const name = await vscode.window.showInputBox({
+    title: "Name the new VM",
+    prompt: "Lowercase letters, digits and hyphens — it becomes the SSH alias, the key file name and the config-sync branch",
+    placeHolder: "work-vm",
+    ignoreFocusOut: true,
+    validateInput: (v) => {
+      const s = String(v || "").trim();
+      if (!instances.isValidName(s)) return "1–40 lowercase letters, digits or hyphens, starting with a letter or digit.";
+      if (reg.byName[s]) return `This PC already has a Construct instance named "${s}".`;
+      return null;
+    },
+  });
+  if (!name) return;
+
+  const askNumber = async (title, prompt, dflt, min, max) => {
+    const v = await vscode.window.showInputBox({
+      title, prompt, value: String(dflt), ignoreFocusOut: true,
+      validateInput: (x) => {
+        const n = Number(String(x || "").trim());
+        return Number.isInteger(n) && n >= min && n <= max ? null : `A whole number between ${min} and ${max}.`;
+      },
+    });
+    return v == null ? null : Number(String(v).trim());
+  };
+  const cpu = await askNumber("vCPUs", "How many virtual CPUs?", 4, 1, 64);
+  if (cpu == null) return;
+  const ram = await askNumber("Memory (GB)", "How much RAM, in GB?", 8, 1, 1024);
+  if (ram == null) return;
+  const disk = await askNumber("Disk (GB)", "How large should the virtual disk be, in GB?", 50, 8, 8192);
+  if (disk == null) return;
+
+  const scriptsDir = resolveScriptsDir();
+  if (!scriptsDir) {
+    vscode.window.showErrorMessage("Couldn't find the Construct scripts on this PC. Set construct.scriptsDir and try again.");
+    return;
+  }
+  // Fail CLOSED on version skew, exactly like the panel's lifecycle actions: an
+  // Auto-Install.ps1 without these parameters would run the LOCAL path and build a VM
+  // on this PC named after the remote one.
+  const missing = ["Backend", "ServiceUrl", "InstanceName"].filter(
+    (p) => !lifecycle.scriptSupportsParam(scriptsDir, lifecycle.AUTO_INSTALL, p)
+  );
+  if (missing.length) {
+    vscode.window.showErrorMessage(
+      "This PC's Construct scripts are too old to create a VM on a remote host (Auto-Install.ps1 doesn't accept " +
+      missing.map((p) => "-" + p).join(", ") + "). Update The Construct first."
+    );
+    return;
+  }
+
+  const argSpec = [
+    { flag: "-Backend", value: "hyperv-remote" },
+    { flag: "-ServiceUrl", value: hostEntry.url },
+    { flag: "-ServiceAuth", value: hostEntry.auth === "token" ? "token" : "negotiate" },
+    { flag: "-InstanceName", value: name },
+    { flag: "-VmMemoryGB", value: String(ram) },
+    { flag: "-VmDiskGB", value: String(disk) },
+  ];
+  // Capability-gated, like every other optional parameter the panel emits: an older
+  // Auto-Install.ps1 has no -VmCpuCount, and passing one is a BINDING failure that would
+  // stop the create before it starts. Dropping it costs the script's own default.
+  if (lifecycle.scriptSupportsParam(scriptsDir, lifecycle.AUTO_INSTALL, "VmCpuCount")) {
+    argSpec.push({ flag: "-VmCpuCount", value: String(cpu) });
+  } else {
+    logLine(`remotehost: this install's Auto-Install.ps1 has no -VmCpuCount; the VM gets its default vCPU count instead of ${cpu}`);
+  }
+  lifecycle.launchHostScript({
+    scriptsDir, script: lifecycle.AUTO_INSTALL,
+    args: lifecycle.flattenArgPairs(argSpec), argSpec,
+    // No elevation: a remote install creates no local VM, and elevating could put the
+    // token store, instances.json and ~\.ssh into a different account's profile.
+    elevate: false, label: `New VM "${name}" on ${remotehost.urlParts(hostEntry.url).host}`,
+  });
+}
+
 /** " (work-vm)" for the instance an action targets, or "" when only one instance
  *  exists — so a single-VM install's confirmation copy is byte-identical to before,
  *  and a multi-VM one always names the machine it is about to touch. */
@@ -3067,6 +3438,8 @@ async function activate(context) {
     vscode.commands.registerCommand("construct.showLogs", () => showLogs()),
     vscode.commands.registerCommand("construct.chooseTheme", () => openThemePicker(context)),
     vscode.commands.registerCommand("construct.switchInstance", () => runSwitchInstance()),
+    vscode.commands.registerCommand("construct.addRemoteHost", () => runAddRemoteHost()),
+    vscode.commands.registerCommand("construct.newRemoteVm", () => runNewRemoteVm()),
     // Clicking a VM notification's toast opens the control panel: Windows launches
     // the toast's vscode:// URI, which lands here. Data-free by design — the URI is
     // fixed in src/notify.js, so nothing VM-authored ever reaches this handler.

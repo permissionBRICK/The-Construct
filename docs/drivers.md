@@ -1,10 +1,12 @@
 # Hypervisor drivers
 
-> **Status: implemented for `hyperv-local` (batch B4).** This is the contract every
-> backend must satisfy, on both the PowerShell and the extension side. It is the seam
-> that lets a remote-Hyper-V driver (batch B7) and, later, a Proxmox driver slot in
-> without touching the installer, the provisioner, or the control panel. See
-> [the modular/remote architecture plan](plans/modular-remote-architecture.md) §4.2.
+> **Status: implemented for `hyperv-local` (batch B4) and `hyperv-remote` (batch B7).**
+> This is the contract every backend must satisfy, on both the PowerShell and the
+> extension side. It is the seam that let the remote-Hyper-V driver slot in — and that
+> will let a Proxmox driver do the same — without touching the installer, the
+> provisioner, or the control panel. See
+> [the modular/remote architecture plan](plans/modular-remote-architecture.md) §4.2, and
+> [docs/remote-host.md](remote-host.md) for the remote backend end to end.
 
 ## 1. What is and isn't behind the driver
 
@@ -28,10 +30,14 @@ and the rest of the stack needs no changes.
 ```
 drivers/
   Load-ConstructDriver.ps1              loader: backend id -> dot-sourced driver
-  hyperv-local/HyperVLocal.Driver.ps1   backend "hyperv-local" (this build's only one)
+  hyperv-local/HyperVLocal.Driver.ps1   backend "hyperv-local"
+  hyperv-remote/HyperVRemote.Driver.ps1 backend "hyperv-remote" (over the constructd API)
+lib/AgentVm.Remote.ps1                  the API client the remote driver is built on
 extension/src/drivers/
   index.js                              getDriver(backend) dispatch
   hyperv-local.js                       backend "hyperv-local"
+  hyperv-remote.js                      backend "hyperv-remote"
+extension/src/remotehost.js             the JS API client (three credential providers)
 ```
 
 The backend id comes from the instance registry (`instances.json`, plan §4.3). A
@@ -57,6 +63,22 @@ caller afterwards) resolves an id to its driver file and **throws a clear error 
 the known backends** for anything else. Dot-source `lib\AgentVm.Common.ps1` **before**
 the driver: the local driver routes to `Ensure-HyperV`, `Add-HyperVAdminMembership` and
 `Remove-AgentVm` there rather than duplicating them.
+
+A backend that talks to a **service** rather than to local cmdlets needs to be told
+where that service is. The loader takes two optional parameters for it and applies them
+after dot-sourcing, by calling the driver's own `Set-ConstructDriverContext` when the
+driver defines one:
+
+```powershell
+. $driverLoader -Backend "hyperv-remote" -ServiceUrl $url -Auth $auth
+```
+
+`-ServiceUrl`/`-Auth` are **empty by default and inert**: with no `-ServiceUrl` the
+loader calls nothing, so the local path's `. $driverLoader -Backend "hyperv-local"` is
+byte-for-byte the call it always made. `-Auth` is a credential-provider object from
+`lib\AgentVm.Remote.ps1` (`New-ConstructApiAuth`), not a scheme name — the seam the plan
+asks for (§4.4, "the driver API client takes a provider, not a hardcoded scheme"), so a
+future OIDC or Proxmox-token provider needs no driver change.
 
 ### 3.1 Functions
 
@@ -200,12 +222,19 @@ panel already degrades gracefully on `unknown`.
 `capabilities.hostLifecycle` is what gates the VM-destroying lifecycle actions.
 `drivers/index.js` exposes `lifecycleSupport(backend, action)`: `reinstall`,
 `redownload` and `setCheckpoints` (the `HYPERVISOR_ACTIONS`) are refused unless the
-driver declares it, because those actions run through the host's PowerShell scripts,
-which drive the LOCAL Hyper-V — on a remote instance they would create or delete a
-LOCAL VM that merely shares the name. `reprovision` and `exportConfig` are pure SSH to
-an already-running VM and are allowed for every backend. `src/lifecycle.js` asks this
-function rather than testing backend ids, so a new driver enables the actions by
-declaring the capability.
+driver declares it, because those actions run through the host's PowerShell scripts —
+and until a backend's remote path exists in those scripts they drive the LOCAL Hyper-V,
+so on a remote instance they would create or delete a LOCAL VM that merely shares the
+name. `reprovision` and `exportConfig` are pure SSH to an already-running VM and are
+allowed for every backend. `src/lifecycle.js` asks this function rather than testing
+backend ids, so a new driver enables the actions by declaring the capability.
+
+`setCheckpoints` is gated on **`capabilities.checkpoints` as well**: it is a hypervisor
+action *and* a capability-gated feature, and the two are genuinely different questions.
+`hyperv-remote` answers yes to the first (since B7 `Auto-Install.ps1` really can create
+and delete its VMs) and no to the second, and gets a refusal that says the backend has no
+checkpoints rather than the generic "remote lifecycle arrives with the remote driver".
+`hyperv-local` declares both; the unknown-backend driver declares neither.
 
 `src/vmpower.js` stays the panel's entry point and keeps every export and signature it
 had; `queryVmState(opts)` / `queryAutoCheckpoints(opts)` / `startVm(opts)` now take an
@@ -233,9 +262,56 @@ still wins over the instance, so older call sites are unaffected.
    `Set-AgentVmCheckpoints.ps1` will call them, and it deletes things.
 4. **Tests** — extend `test/driver-contract.test.ps1` (stub the backend's API/cmdlets in
    the test scope and assert the state mapping, the endpoint and the call sequence) and
-   `extension/test/drivers.test.js` (dispatch + degradation).
+   `extension/test/drivers.test.js` (dispatch + degradation). A service-backed backend
+   gets a suite of its own too: `test/remote-driver.test.ps1` (contract mapping over a
+   shadowed API client), `test/remote-client.test.ps1` (the client itself, over a
+   shadowed `Invoke-WebRequest`), `extension/test/remotehost.test.js`, and
+   `test/remote-e2e.test.sh`, which drives BOTH clients against a real `constructd` in
+   fake mode — the only place that proves the routes we build are the routes it answers.
 
-## 6. Proxmox mapping notes (design-only)
+## 6. The `hyperv-remote` backend
+
+VMs on somebody else's Hyper-V, driven through the `constructd` HTTP API
+(`service/README.md`). The user-facing guide is [docs/remote-host.md](remote-host.md);
+this is the contract mapping.
+
+| Contract op | `constructd` call |
+|---|---|
+| `Test-ConstructDriverPrereqs` | `GET /whoami` (never throws; `$false` when the service is unreachable or the credentials are refused) |
+| `Ensure-ConstructDriverPrereqs` | the same call, but it **throws** with the reason — there is no host feature to enable, only an enrolment to fix |
+| `New-ConstructVm -Descriptor` | `POST /vms {name, cpu, ramGb, diskGb, opts}` → `202 {jobId}` → `Wait-ConstructJob` |
+| `Remove-ConstructVm` | `DELETE /vms/{name}` → job |
+| `Start-/Stop-/Save-ConstructVm` | `POST /vms/{name}/power {action: start\|stop\|save}` (synchronous) |
+| `Get-ConstructVmState` | `GET /vms/{name}/state`; **only a 404 is `absent`** |
+| `Test-ConstructVmPresent` | `GET /vms/{name}`: 200 → `$true`, 404 → `$false`, anything else → `$null` |
+| `Get-ConstructVmEndpoint` | `GET /vms/{name}/endpoint` → `@{ SshHost; SshPort }` (the service's `PublicHost` + the allocated forward). A `409` means the forward does not exist yet. |
+| `Wait-ConstructVmReachable` | unchanged in kind — a raw socket poll of that endpoint |
+| `Detach-ConstructInstallMedia` | **no-op**: the creation job detaches the media on the host before it reports success |
+| capabilities | `@{ Checkpoints = $false; Console = 'none'; Suspend = $true; Backend = 'hyperv-remote' }` |
+
+Two documented deviations, both additive:
+
+- **`New-ConstructVm` returns a value.** The local driver returns nothing; the remote one
+  returns `@{ Name; Endpoint = @{SshHost; SshPort}; VmToken }` — the create job's result.
+  There is nowhere else to get it: the endpoint is allocated by the service, and the
+  VM-scoped token is a **one-time secret** delivered with the first authorised retrieval of
+  the finished job (`service/README.md`). The caller (`Auto-Install.ps1`) hands both to
+  `Provision-AgentVM.ps1`. Callers that ignore the return value are unaffected.
+- **The four checkpoint functions do not exist.** `Capabilities.Checkpoints` is `$false`,
+  and §5 rule 3 already says a backend must implement them only when it reports `$true`.
+  `Set-AgentVmCheckpoints.ps1` refuses on the flag before it would call one.
+
+`Get-ConstructVmState` maps the service's state enum onto the contract's:
+`running`/`off`/`paused`/`saved` pass through, `absent` comes **only** from a 404, and
+everything else — an unreachable service, a 401/403, a transient state — is `unknown`. That
+is the same discipline as the local driver's `InvalidParameter` test and matters more here:
+"the network is down" must never read as "the VM is gone", because the panel offers to
+*create* one for `absent`.
+
+Progress lines from a job are printed with the host script's `Write-Note`, one per
+`event: progress` line, so a remote create logs like a local one.
+
+## 7. Proxmox mapping notes (design-only)
 
 Recorded from plan §4.2/§4.9 so the next implementer has a checklist. Nothing Proxmox
 is implemented; every contract op maps 1:1 onto the Proxmox REST API:

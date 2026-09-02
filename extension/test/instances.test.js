@@ -479,7 +479,7 @@ const cannotTarget = (label, parsed) => {
 };
 // A GENUINELY unknown backend is kept verbatim: the driver dispatch degrades on it
 // correctly (unknownDriver), which is what refuses the destructive actions.
-for (const backend of ["proxmox", "hyperv-remtoe", "HYPERV-REMOTE"]) {
+for (const backend of ["proxmox", "hyperv-remtoe", "HYPERV-PROXMOX"]) {
   const parsed = parse({ version: 1, instances: { "work-vm": { backend, sshHost: "buildbox.local" } } });
   const entry = parsed.registry.byName["work-vm"];
   ok(`backend(${backend}): the entry survives`, !!entry);
@@ -1070,26 +1070,59 @@ deepEq("instanceArgs: unknown action -> []", life.instanceArgs("nonsense", workI
 // The host PowerShell scripts speak to the LOCAL Hyper-V, so a rebuild of a remote
 // instance would create/delete a LOCAL VM that merely shares the name.
 console.log("\n=== backend capability gate ===");
-const remoteInst = inst.deriveDefaults("work-vm", { backend: "hyperv-remote", sshHost: "buildbox.local", sshPort: 2201 });
+const REMOTE_SVC = { url: "https://buildbox.example.local:7462", auth: "negotiate" };
+const remoteInst = inst.deriveDefaults("work-vm", {
+  backend: "hyperv-remote", sshHost: "buildbox.local", sshPort: 2201, service: REMOTE_SVC,
+});
 eq("gate: the fixture really is hyperv-remote", remoteInst.backend, "hyperv-remote");
-for (const action of ["reinstall", "redownload", "setCheckpoints"]) {
-  const r = life.buildInvocation(action, { settings: SETTINGS, enabled: true, instance: remoteInst, instanceParams: ALL });
-  ok(`gate: ${action} is refused for a hyperv-remote instance`, r.blocked === true);
-  ok(`gate: ${action} explains the remote driver is missing`, /remote driver/i.test(r.reason));
+// B7: a remote instance CAN be rebuilt — Auto-Install.ps1 gained the remote path — but
+// checkpoints stay refused, because the backend has none.
+const REMOTE_ALL = ["Backend", "ServiceUrl", "InstanceName", "ConfigBranch", "VmHost", "HostAlias", "SshPort", "LocalKeyName", "VmName"];
+for (const action of ["reinstall", "redownload"]) {
+  const r = life.buildInvocation(action, { settings: SETTINGS, instance: remoteInst, instanceParams: REMOTE_ALL });
+  ok(`gate: ${action} is ALLOWED for a hyperv-remote instance`, !r.blocked && r.script === life.AUTO_INSTALL);
+  ok(`gate: ${action} targets the SERVICE, not a local VM name`,
+    r.args.includes("-Backend") && r.args.includes("hyperv-remote") &&
+    r.args.includes("-ServiceUrl") && r.args.includes(REMOTE_SVC.url) &&
+    r.args.includes("-InstanceName") && r.args.includes("work-vm") &&
+    !r.args.includes("-VmName"));
+}
+const chk = life.buildInvocation("setCheckpoints", { settings: SETTINGS, enabled: true, instance: remoteInst, instanceParams: REMOTE_ALL });
+ok("gate: setCheckpoints is refused for a hyperv-remote instance", chk.blocked === true);
+ok("gate: ...because the backend has no checkpoints", /no checkpoints/i.test(chk.reason));
+// A remote entry with NO service.url cannot be rebuilt on any version of the scripts:
+// there is nothing to ask for a VM, and an Auto-Install without -ServiceUrl runs local.
+const servicelessInst = inst.deriveDefaults("work-vm", { backend: "hyperv-remote", sshHost: "buildbox.local" });
+for (const action of ["reinstall", "redownload"]) {
+  const r = life.buildInvocation(action, { settings: SETTINGS, instance: servicelessInst, instanceParams: REMOTE_ALL });
+  ok(`gate: ${action} is refused when the entry records no host service`, r.blocked === true);
+  ok(`gate: ...and says so (${action})`, /host service/i.test(r.reason));
+}
+// Version skew fails CLOSED: scripts that predate the remote parameters would run the
+// LOCAL path and rebuild a local VM named after the remote one.
+for (const action of ["reinstall", "redownload"]) {
+  const r = life.buildInvocation(action, { settings: SETTINGS, instance: remoteInst, instanceParams: ["ConfigBranch"] });
+  ok(`gate: ${action} fails closed on an Auto-Install without -ServiceUrl`, r.blocked === true);
+  ok(`gate: ...and names the missing parameters (${action})`,
+    /-Backend/.test(r.reason) && /-ServiceUrl/.test(r.reason) && /-InstanceName/.test(r.reason));
 }
 for (const action of ["reprovision", "exportConfig"]) {
   const r = life.buildInvocation(action, { settings: SETTINGS, backupDir: "C:\\b", instance: remoteInst, instanceParams: ALL });
   ok(`gate: ${action} stays ALLOWED for hyperv-remote (pure SSH to the VM)`, !r.blocked && !!r.script);
   ok(`gate: ${action} still targets the remote endpoint`, r.args.includes("buildbox.local"));
+  ok(`gate: ${action} is unchanged for a remote instance (endpoint identity, no service args)`,
+    !r.args.includes("-ServiceUrl") && !r.args.includes("-Backend"));
 }
-// An unknown backend (a registry written by a newer Construct) is refused the same way.
+// An unknown backend (a registry written by a newer Construct) is still refused.
 const alienInst = inst.deriveDefaults("work-vm", { sshHost: "buildbox.local" });
 alienInst.backend = "proxmox";
 ok("gate: an unknown backend is refused the hypervisor actions",
   life.buildInvocation("reinstall", { settings: {}, instance: alienInst, instanceParams: ALL }).blocked === true);
 ok("gate: drivers.lifecycleSupport is the single source of truth",
   drivers.lifecycleSupport("hyperv-local", "reinstall").ok === true &&
-  drivers.lifecycleSupport("hyperv-remote", "reinstall").ok === false &&
+  drivers.lifecycleSupport("hyperv-remote", "reinstall").ok === true &&
+  drivers.lifecycleSupport("hyperv-remote", "setCheckpoints").ok === false &&
+  drivers.lifecycleSupport("proxmox", "reinstall").ok === false &&
   drivers.lifecycleSupport("hyperv-remote", "reprovision").ok === true);
 ok("gate: the local driver declares the capability the gate reads",
   drivers.getDriver("hyperv-local").capabilities.hostLifecycle === true);
