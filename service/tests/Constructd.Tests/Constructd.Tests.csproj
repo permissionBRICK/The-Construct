@@ -21,6 +21,7 @@
     <ProjectReference Include="..\..\src\Constructd.Api\Constructd.Api.csproj" />
     <ProjectReference Include="..\..\src\Constructd.Core\Constructd.Core.csproj" />
     <ProjectReference Include="..\..\src\Constructd.Fakes\Constructd.Fakes.csproj" />
+    <ProjectReference Include="..\..\src\Constructd.Windows\Constructd.Windows.csproj" />
   </ItemGroup>
 
   <ItemGroup>
