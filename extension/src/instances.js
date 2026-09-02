@@ -21,6 +21,8 @@
 //   backendProblems(rawBackend)           -> string[]      (the backend field's own rule)
 //   canonicalIdentity(name)               -> the identity a hyperv-local instance MUST have
 //   localIdentityProblems(instance)       -> string[]      (that rule; [] = usable/non-local)
+//   remoteIdentityProblems(instance, raw) -> string[]      (the hyperv-remote rules:
+//                                                           vmName === name, sshHost stated)
 //   collisionProblems(byName)             -> { problems, drop } (cross-entry identity clashes)
 //   instancesPath(env)                    -> abs path | null
 //   deriveDefaults(name, raw)             -> normalized instance object
@@ -31,6 +33,7 @@
 //   resolve(registry, name)               -> instance     (unknown name -> default)
 //   hasInstance(registry, name)           -> bool          (OWN-property membership)
 //   resolveActive({registry, setting, workspaceValue}) -> { instance, name, source }
+//   planEnable(slotState, name)           -> { action: create|report|join|refuse, reason }
 //   createTargetQueue()                   -> one queued follow-up per target
 //   createSyncStatusStore(opts)           -> per-target sync timestamp/result + throttle
 //   describeSyncStatus(at, result)        -> the state.configSync fields for one tick
@@ -63,6 +66,9 @@ const DEFAULT_INSTANCE_NAME = "agent-vm";
 /** The backend a missing `backend` field means — today's zero-change path. Mirrors
  *  drivers/index.js DEFAULT_BACKEND (and the driver key it resolves to). */
 const DEFAULT_BACKEND = "hyperv-local";
+/** The backend whose VMs live on a host service — the one with its own canonical
+ *  identity rules (remoteIdentityProblems). Mirrors drivers/hyperv-remote.js. */
+const REMOTE_BACKEND = "hyperv-remote";
 const BACKENDS = ["hyperv-local", "hyperv-remote"];
 const DEFAULT_SSH_PORT = 22;
 
@@ -284,7 +290,9 @@ function identityProblems(inst, raw) {
 // to reach it. Such an entry is SKIPPED with a problem (parseRegistry), never used.
 //
 // NON-LOCAL backends keep free-form (still format-checked) identities: their endpoints
-// are defined by whatever created them on the other side, not by this convention.
+// are defined by whatever created them on the other side, not by this convention. They
+// are not rule-FREE, though — `hyperv-remote` has two of its own (an endpoint it must
+// state, and one VM name shared by the service and the rebuild): remoteIdentityProblems.
 // `configBranch` is deliberately NOT pinned — it is the one field the launched scripts
 // can be TOLD (-ConfigBranch, threaded by lifecycle.configBranchOverride and gated by
 // checkInstanceSupport), so an explicit branch stays a supported override.
@@ -348,6 +356,67 @@ function localIdentityProblems(inst) {
   return out;
 }
 
+// ── The CANONICAL identity of a REMOTE instance ──────────────────────────────
+// Backend `hyperv-remote` has two identity rules of its own, for two different reasons.
+//
+// 1. `vmName` MUST BE THE INSTANCE NAME. A remote VM is addressed BY NAME on the host
+//    service, from two directions that have to mean the same machine: the JS driver
+//    queries and starts `vmName` (drivers/hyperv-remote.js vmNameOf), while a rebuild
+//    emits `-InstanceName <name>` (lifecycle.js REMOTE_INSTANCE_PARAMS) and
+//    Auto-Install.ps1 then uses the registry ENTRY's name to fetch the endpoint, DELETE
+//    the VM and create it again. So an entry keyed `alias-vm` with
+//    `vmName: "service-vm"` splits the identity in half: the panel's power state and
+//    Start act on service-vm while Reinstall deletes and recreates alias-vm — two
+//    different VMs on somebody else's machine, one of which the user never asked about.
+//    Threading both names through every layer is the alternative; pinning them together
+//    is the same decision, for the same reason, as the hyperv-local canonical identity.
+//    Compared EXACTLY (not lowercased like the local Hyper-V display name): this value
+//    goes into a URL path (`/vms/{name}`) and into a `-InstanceName` argument, and
+//    nothing here may assume the service folds case.
+// 2. `sshHost` IS REQUIRED. A remote endpoint is whatever the service allocated — no
+//    name convention can produce it. An entry that omits it derives
+//    `<name>.mshome.net` (the LOCAL Hyper-V convention), and the picker, ssh.js and
+//    every lifecycle action would then target an unrelated machine on this PC's own
+//    network. Only the canonical spelling counts: everything that writes the registry
+//    writes `sshHost` (toFileEntry / ConvertTo-ConstructInstanceEntry), so an entry that
+//    states its endpoint under the JS-internal `vmHost` alias is a hand-written file,
+//    and refusing one is the fail-closed reading.
+// Both are WHOLE-ENTRY rejections: an actionable entry with half an identity (or with a
+// fabricated address) is worse than an instance that visibly does not load.
+// lib/AgentVm.Instances.ps1 applies the identical rules — change both together.
+
+/** Is this backend the REMOTE Hyper-V one? Normalized exactly like drivers/index.js
+ *  getDriver (trimmed, lowercased), so every entry that WOULD be handed the remote driver
+ *  is held to the rules above. A case-variant spelling never gets this far — backendProblems
+ *  refuses the whole entry — but the lookup here matches the driver's rather than assuming
+ *  that, so this rule can never be the looser of the two. */
+function isRemoteBackend(backend) {
+  return String(backend == null ? "" : backend).trim().toLowerCase() === REMOTE_BACKEND;
+}
+
+/**
+ * The problems of a NORMALIZED instance on the remote backend (see above): [] for every
+ * other backend, and for a remote instance that states an endpoint and names its VM
+ * after itself. `raw` is the entry as WRITTEN — the sshHost rule is about what the file
+ * says, not about what the derivation made of it. Pure.
+ */
+function remoteIdentityProblems(inst, raw) {
+  if (!inst || !isRemoteBackend(inst.backend)) return [];
+  const r = (raw && typeof raw === "object" && !Array.isArray(raw)) ? raw : {};
+  const q = (v) => JSON.stringify(v === undefined ? null : v);
+  const out = [];
+  if (!str(r.sshHost)) {
+    out.push('"sshHost" is missing (no sshHost) — a "' + REMOTE_BACKEND + '" instance\'s endpoint is the' +
+      " one its host service allocated, so it cannot be derived from the instance name");
+  }
+  if (String(inst.vmName) !== inst.name) {
+    out.push('"vmName" ' + q(inst.vmName) + " must be " + q(inst.name) + ' for a "' + REMOTE_BACKEND +
+      '" instance (the host service addresses the VM by that name, so the power state, Start and a' +
+      " rebuild would otherwise act on two different VMs)");
+  }
+  return out;
+}
+
 /**
  * The backend of an entry, NEVER coerced. The rule is PRESENCE-AWARE:
  *   • ABSENT (or JSON null) -> "hyperv-local", today's zero-change default;
@@ -375,13 +444,18 @@ function deriveBackend(raw) {
  *   • PRESENT BUT UNUSABLE — `backend: 42`, `backend: ""`, `backend: "  "`. The file
  *     states a backend; it just isn't one. Deriving "hyperv-local" from it would grant
  *     destructive local access to a value the user never wrote.
- *   • A SPELLING THE TWO LOOKUPS READ DIFFERENTLY — "HYPERV-LOCAL", "Hyperv-Local".
- *     Every enum comparison in both readers is case-SENSITIVE (so this is "unknown"),
- *     but drivers/index.js getDriver() trims and lowercases before the lookup (so it
- *     would hand back the LOCAL driver, hostLifecycle: true). A value the two disagree
- *     about is not safe to act on under either reading, so it does not load at all.
+ *   • A SPELLING THE TWO LOOKUPS READ DIFFERENTLY — "HYPERV-LOCAL", "Hyperv-Remote",
+ *     i.e. a case-variant of ANY id this build implements. Every enum comparison in both
+ *     readers is case-SENSITIVE (so the value is "unknown" to them), but
+ *     drivers/index.js getDriver() trims and lowercases before the lookup (so it hands
+ *     back the REAL driver for it — the local one with hostLifecycle: true, or the remote
+ *     one that drives somebody else's host service). The two readings disagree about what
+ *     such an entry IS, so nothing may act on it under either: it does not load at all.
+ *     Restricting this to `hyperv-local` (as it once was) left "HYPERV-REMOTE" loading
+ *     while every message about it claimed it had no driver — and it had one.
  * A genuinely unknown backend ("proxmox") is NOT a problem here — it is reported
- * separately and kept, because the driver dispatch degrades on it correctly.
+ * separately and kept, because the driver dispatch degrades on it correctly (getDriver
+ * finds no entry for it under any casing, so the unknown-driver fallback is what acts).
  * lib/AgentVm.Instances.ps1 applies the identical rule. Pure.
  */
 function backendProblems(raw) {
@@ -392,10 +466,15 @@ function backendProblems(raw) {
       ", or name one of: " + BACKENDS.join(", ") + ")"];
   }
   const v = raw.trim();
-  if (BACKENDS.indexOf(v) < 0 && isLocalBackend(v)) {
-    return ['"backend" ' + q(v) + " is not spelled " + q(DEFAULT_BACKEND) +
+  if (BACKENDS.indexOf(v) >= 0) return [];
+  // The canonical id this value differs from only by case — the one getDriver() would
+  // resolve it to. An empty string never reaches here (it is refused above), so the
+  // local backend's "empty means local" rule plays no part in this comparison.
+  const canonical = BACKENDS.filter((b) => b === v.toLowerCase())[0];
+  if (canonical) {
+    return ['"backend" ' + q(v) + " is not spelled " + q(canonical) +
       " (the backend id is case-sensitive, but the driver lookup is not — a value the two" +
-      " read differently must not drive a local VM)"];
+      " read differently must not drive a VM)"];
   }
   return [];
 }
@@ -417,9 +496,11 @@ function backendProblems(raw) {
  *                                   vmName "<name>",
  *                                   vmHost "<name>.mshome.net" (hyperv-local),
  *                                   sshPort 22, scriptsDir null.
- * A remote backend has no name convention for its host, so `sshHost` is required
- * there — an entry that omits it derives the mshome name and the caller's validation
- * reports the problem. Pure; `raw` is never mutated.
+ * A remote backend has no name convention for its host, so `sshHost` is REQUIRED there:
+ * the derivation below still produces the mshome name (this function normalizes, it does
+ * not judge), but such an entry is REFUSED WHOLE by the caller's validation
+ * (remoteIdentityProblems) rather than loading with a fabricated local address.
+ * Pure; `raw` is never mutated.
  *
  * For `hyperv-local` these derivations are also the ONLY permitted values — an entry
  * that states something else is skipped by parseRegistry (localIdentityProblems), not
@@ -547,6 +628,11 @@ function endpointLabel(inst) {
  *      thinks belongs to the other. Dropping both is also what makes the two readers
  *      agree without depending on key order.
  * Pure.
+ *
+ * (The PowerShell twin takes an extra `-ExcludeLabel` for ONE caller — Auto-Install.ps1
+ * asks this question before the host service has allocated the VM's SSH forward, when
+ * the composite endpoint is not yet knowable. It is a caller-side filter, not a rule:
+ * the RULE SET is identical on both sides, which is why nothing here needs it.)
  */
 function collisionProblems(byName) {
   const names = Object.keys(byName).sort();   // ordinal — the PS reader sorts the same way
@@ -668,19 +754,19 @@ function parseRegistry(text) {
         } else if (entry.service && entry.service.auth != null && entry.service.auth !== "token" && entry.service.auth !== "negotiate") {
           problems.push('instance "' + name + '": unknown service auth ' + JSON.stringify(entry.service.auth) + ' — using negotiate');
         }
-        if (rawBackend === "hyperv-remote" && !str(entry.sshHost)) {
-          problems.push('instance "' + name + '" is hyperv-remote but has no sshHost');
-        }
         const normalized = deriveDefaults(name, entry);
         // A field of the right TYPE can still be unusable (or hostile) as a host name,
         // an ssh alias, a key file name or a git ref. Such an entry is skipped WHOLE:
         // using the rest of it would dial, key or sync some other machine. A local
         // instance is held to its CANONICAL identity on top of that — a deviating one
-        // would rebuild (and then be unable to reach) a different VM than it names —
-        // and an entry whose BACKEND itself is unusable never loads at all.
+        // would rebuild (and then be unable to reach) a different VM than it names — a
+        // REMOTE one to its own (an endpoint it must state, and one VM name for the
+        // service and the rebuild alike), and an entry whose BACKEND itself is unusable
+        // never loads at all.
         const bad = backendBad
           .concat(identityProblems(normalized, entry))
-          .concat(localIdentityProblems(normalized));
+          .concat(localIdentityProblems(normalized))
+          .concat(remoteIdentityProblems(normalized, entry));
         if (bad.length) {
           problems.push('instance "' + name + '": ' + bad.join("; ") + " — skipped");
           continue;
@@ -1150,13 +1236,24 @@ function planHandover(state) {
  * world. A step whose target was superseded while it waited arms nothing (its teardown
  * still runs — that session is on a VM we left either way).
  *
+ * THE SAME CHAIN CARRIES THE MANUAL OPERATIONS (`enable` / `disable`), because a session
+ * is a session however it was asked for. Run beside the chain — the shape extension.js
+ * had — a manual "on" that arrives while a switch is tearing the previous instance down
+ * sees no session (the reference was already dropped), builds one, and the switch's own
+ * arm then builds a SECOND one for the same VM: the newer claim replaces the global
+ * reference, the older object's enable result is discarded as superseded, and nothing is
+ * left that can dispose it — an orphan `ssh -R`. Queued here instead, the manual "on"
+ * runs after the teardown and after the arm, sees the destination's own session and JOINS
+ * it. `disable()` is queued for the mirror reason: an "off" must not overtake an "on"
+ * that is still waiting in the queue and leave the tunnel it opens behind.
+ *
  * Injected, so the ordering is unit-tested with deferred promises rather than only
  * observable in a live window:
  *   `session()`         → { live, name } for the connection held right now
  *   `teardown()`        → Promise, tear that session down
  *   `arm(target)`       → Promise, evaluate + arm the captured destination
  *   `superseded(target)`→ has the window switched again since `target` was captured?
- * `switch(target)` returns the step's outcome: { teardown, armed, reason }.
+ * Every method returns the step's outcome: { teardown, armed, reason }.
  */
 function createHandover(opts) {
   const o = opts || {};
@@ -1166,9 +1263,20 @@ function createHandover(opts) {
   const superseded = typeof o.superseded === "function" ? o.superseded : () => false;
   const settle = (v) => Promise.resolve(v).then(() => null, () => null);
   let chain = Promise.resolve();
-  const step = async (target) => {
+  let closed = false;
+  /** Queue one step behind every earlier one, whether or not the earlier one failed. A
+   *  CLOSED chain runs nothing more: the window is going away (see close()). */
+  const queue = (fn) => {
+    const guarded = () => (closed ? { teardown: false, armed: false, reason: "closed" } : fn());
+    chain = chain.then(guarded, guarded);
+    return chain;
+  };
+  const planFor = (target) => {
     const s = session() || {};
-    const plan = planHandover({ live: s.live, name: s.name, next: target ? target.name : null });
+    return planHandover({ live: s.live, name: s.name, next: target ? target.name : null });
+  };
+  const step = async (target) => {
+    const plan = planFor(target);
     // The teardown is decided (and run) when the step starts, not when it was queued:
     // the previous step may have armed the very session we are looking at.
     if (plan.teardown) await settle(teardown());
@@ -1177,14 +1285,99 @@ function createHandover(opts) {
     await settle(arm(target));
     return { teardown: plan.teardown, armed: true, reason: "armed" };
   };
+  /**
+   * An EXPLICIT enable for `target` (the console toggle, the settings form, the startup
+   * auto-arm). `run(target)` is the caller's own enable, and it is called even when a
+   * session for the destination already exists — an explicit "on" still has to settle its
+   * optimistic switch on the real state, and the caller's enable is what knows how to
+   * JOIN what exists (it holds the session and its in-flight enable). The outcome says
+   * which of the two happened: `armed` for a session this step brought into being,
+   * `joined` for one the destination already had.
+   */
+  const enableStep = async (target, run) => {
+    const plan = planFor(target);
+    if (plan.teardown) await settle(teardown());
+    if (superseded(target)) return { teardown: plan.teardown, armed: false, reason: "superseded" };
+    await settle(run(target));
+    return { teardown: plan.teardown, armed: plan.arm, reason: plan.arm ? "armed" : "joined" };
+  };
   return {
     /** Queue the handover for `target` behind every earlier one. */
-    switch(target) {
-      const run = () => step(target);
-      chain = chain.then(run, run);
-      return chain;
+    switch(target) { return queue(() => step(target)); },
+    /** Queue an explicit enable for `target` (see enableStep). */
+    enable(target, run) {
+      const fn = typeof run === "function" ? run : arm;
+      return queue(() => enableStep(target, fn));
     },
+    /**
+     * Queue an explicit teardown (the manual "off"). `teardown()` is called even with no
+     * live session — that is the single-VM path's own "there is nothing armed" report,
+     * which has to stay exactly as it was.
+     */
+    disable() {
+      return queue(async () => {
+        const live = !!(session() || {}).live;
+        await settle(teardown());
+        return { teardown: live, armed: false, reason: live ? "torn-down" : "idle" };
+      });
+    },
+    /**
+     * SHUT THE CHAIN DOWN (deactivate). Everything queued from here on is refused with
+     * reason "closed" and its `run`/`arm`/`teardown` is never called, and `closed` is
+     * published so a step that is ALREADY RUNNING — an auto-arm sitting in its
+     * reachability probe, say — can refuse to build a session on the way out too
+     * (extension.js asks planEnable, which answers "refuse" for a closed slot).
+     *
+     * It deliberately does NOT tear the live session down: deactivate cannot await SSH,
+     * so the ONE live object is disposed directly by the caller. That is the single
+     * documented exception to "only the chain constructs or disposes a session", and it
+     * is safe precisely because closing first means nothing can construct behind it.
+     * Returns the chain, for a caller that wants to know when the last step settled.
+     */
+    close() { closed = true; return chain; },
+    /** Has the chain been closed? (extension.js folds this into the enable decision.) */
+    get closed() { return closed; },
   };
+}
+
+/**
+ * WHAT AN EXPLICIT ENABLE MUST DO about the session that exists right now — the
+ * single-session rule, as a pure decision, so the branch that used to live inline in
+ * extension.js is driven by tests rather than only by a live window.
+ *
+ * `state` is the module's own slot (extension.js audioSlotState()):
+ *   `live`    — is a session object held right now (`hostAudio`)
+ *   `name`    — the instance it belongs to (`hostAudioInstance`)
+ *   `enabled` — has its enable COMPLETED (`hostAudio.enabled`)
+ *   `pending` — is its enable still in flight (`hostAudioEnable != null`)
+ *   `closed`  — has the window shut the session chain down (createHandover.close())
+ * `name` is the instance this enable was captured for.
+ *
+ * Returns { action, reason }:
+ *   "create"  — nothing is held: build the session. The single-VM path's normal answer.
+ *   "report"  — a session is already enabled: re-report its state and do nothing.
+ *   "join"    — a session exists whose enable is STILL IN FLIGHT. Await THAT promise.
+ *               Constructing a second object here is the orphan bug: it replaces the
+ *               module's only reference to the first, whose own result is then discarded
+ *               as superseded (createSessionOwner) — leaving its `ssh -R` up with nothing
+ *               able to disable it.
+ *   "refuse"  — the window is closing, or a session is held that is neither enabled nor
+ *               being enabled (so there is no promise to join). Nothing may be built over
+ *               it either: that object is still the only thing that can tear its own
+ *               tunnel down.
+ * Pure.
+ */
+function planEnable(state, name) {
+  const s = state || {};
+  // Shutdown first: after close() nothing new may exist, whatever the slot holds.
+  if (s.closed) return { action: "refuse", reason: "closed" };
+  if (!s.live) return { action: "create", reason: "idle" };
+  if (s.enabled) return { action: "report", reason: "already-enabled" };
+  if (s.pending) {
+    const mine = s.name != null && name != null && String(s.name) === String(name);
+    return { action: "join", reason: mine ? "pending" : "pending-other-instance" };
+  }
+  return { action: "refuse", reason: "held" };
 }
 
 /**
@@ -1408,7 +1601,8 @@ function validatedInstance(name, entry) {
   const raw = (entry && typeof entry === "object" && !Array.isArray(entry)) ? entry : {};
   const bad = backendProblems(raw.backend)
     .concat(identityProblems(inst, entry))
-    .concat(localIdentityProblems(inst));
+    .concat(localIdentityProblems(inst))
+    .concat(remoteIdentityProblems(inst, entry));
   if (bad.length) throw new Error('Instance "' + name + '": ' + bad.join("; "));
   return inst;
 }
@@ -1448,12 +1642,13 @@ module.exports = {
   isValidName, localAppData, instancesPath,
   isHostEndpoint, isIpv6Literal, isSafeToken, isKeyFileName, isDnsLabel, identityProblems,
   isLocalBackend, canonicalIdentity, localIdentityProblems, collisionProblems,
+  isRemoteBackend, remoteIdentityProblems,
   deriveBackend, backendProblems,
   deriveDefaults, isDefaultInstance, toSshCfg,
   parseRegistry, load, list, resolve, resolveActive, hasInstance, effectivePin, matchByRemoteHost,
   createGate, createCoalescer, createTargetQueue, captureTarget, targetSuperseded,
   describeSyncStatus, createSyncStatusStore,
-  planCapturedFollowUp, planHandover, createHandover, createSessionOwner,
+  planCapturedFollowUp, planHandover, createHandover, planEnable, createSessionOwner,
   planSwitchPersistence, planRemoteAdoption, adoptRemoteInstance,
   toFileEntry, toFileDocument, save,
   addInstance, updateInstance, removeInstance, setDefaultInstance,
