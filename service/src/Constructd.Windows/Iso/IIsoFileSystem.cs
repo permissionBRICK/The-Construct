@@ -28,6 +28,29 @@ public interface IIsoFileSystem
 
     /// <summary>Lowercase hex SHA-256 of a file.</summary>
     string ComputeSha256(string path);
+
+    /// <summary>
+    /// Full paths of the files in a directory matching a wildcard pattern; empty when the directory is
+    /// not there. Unordered — the catalog sorts what it gets.
+    /// </summary>
+    IReadOnlyList<string> ListFiles(string directoryPath, string searchPattern);
+
+    /// <summary>Rename, replacing the destination. This is the ISO catalog's atomic pointer swap.</summary>
+    void MoveFile(string sourcePath, string destinationPath, bool overwrite);
+
+    /// <summary>
+    /// Create an empty file, failing if it already exists — one atomic operation, not a check
+    /// followed by a create. It is how the ISO catalog RESERVES a versioned name: two administrators
+    /// running a build in the same second are two processes, and nothing in this service can serialize
+    /// them, so the file system has to be the arbiter.
+    /// </summary>
+    bool TryCreateNewFile(string path);
+
+    /// <summary>
+    /// Delete, reporting rather than throwing when the file is locked. Hyper-V holds an open handle on
+    /// an ISO that is attached to a VM, so "cannot delete it" is a normal answer here, not an error.
+    /// </summary>
+    bool TryDeleteFile(string path);
 }
 
 /// <summary>The real thing: <see cref="System.IO"/>.</summary>
@@ -55,5 +78,50 @@ public sealed class IsoFileSystem : IIsoFileSystem
     {
         using var stream = File.OpenRead(path);
         return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+    }
+
+    public IReadOnlyList<string> ListFiles(string directoryPath, string searchPattern) =>
+        Directory.Exists(directoryPath)
+            ? Directory.GetFiles(directoryPath, searchPattern, SearchOption.TopDirectoryOnly)
+            : [];
+
+    public void MoveFile(string sourcePath, string destinationPath, bool overwrite) =>
+        File.Move(sourcePath, destinationPath, overwrite);
+
+    public bool TryCreateNewFile(string path)
+    {
+        try
+        {
+            // CreateNew is CREATE_NEW: the kernel refuses if the name exists, so the winner of a race
+            // between two processes is decided once, by the file system.
+            using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            return true;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    public bool TryDeleteFile(string path)
+    {
+        try
+        {
+            File.Delete(path);
+            return true;
+        }
+        catch (IOException)
+        {
+            // Attached to a running VM: Hyper-V has it open.
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 }
