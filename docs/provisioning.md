@@ -13,10 +13,12 @@ What it does:
 
 1. Packs this repo folder into a `tar.gz` (excludes `.git`, `*.iso`, the host-only
    `.construct-settings.json`, and the secret-bearing `.construct-backup/`).
-2. Waits for the VM on port 22, re-prompting for the Hyper-V hostname if it can't connect.
+2. Waits for the VM on its SSH port (`-SshPort`, default 22), re-prompting for the hostname
+   if it can't connect.
 3. Picks how to connect:
    - **Re-provision fast path** — if the root key from a previous run is saved on this host
-     (`~\.ssh\agent_vm_ed25519`) and still authorizes `root` on the VM, it's used for the whole
+     (`~\.ssh\<-LocalKeyName>`, default `agent_vm_ed25519`) and still authorizes `root` on
+     the VM, it's used for the whole
      run. Every command then runs directly as `root` (no bootstrap key, no agent password, no
      `sudo`) and the VM's root key is left untouched (`SETUP_ROOT_SSH_KEY=false`, not regenerated).
    - **Bootstrap path (fallback)** — otherwise connect as `agent` with the committed bootstrap key
@@ -30,8 +32,11 @@ What it does:
 6. Removes the bootstrap public key from the `agent` user's `authorized_keys` (the fast path never
    installs it, but still strips any leftover copy from a failed/manual prior run).
 7. Configures the Windows host: `~\.ssh\` (private key, `known_hosts`, and a `Host` entry in
-   `~\.ssh\config`) and sets `remote.SSH.remotePlatform` in VS Code so Remote-SSH connects to
-   `agent-vm` as `root` without prompts; then, on a full install/reinstall, reboots the VM.
+   `~\.ssh\config` for `-HostAlias`, carrying a `Port` line when `-SshPort` isn't 22) and
+   sets `remote.SSH.remotePlatform` in VS Code so Remote-SSH connects to that alias
+   (`agent-vm` by default) as `root` without prompts; then, on a full install/reinstall,
+   reboots the VM. The `Host` block is replaced **per alias**, so several instances coexist
+   in one `~\.ssh\config`.
    A reprovision of an already-provisioned VM is left running — every provisioning step
    applies its change live (services are restarted, config is re-read, no kernel is
    replaced) — unless the VM itself reports a pending reboot (`/var/run/reboot-required`,
@@ -50,7 +55,36 @@ From a checkout of this repo on Windows:
 
 Requires the Windows 10/11 OpenSSH client (`ssh`, `scp`, `ssh-keyscan`, `ssh-keygen`) and
 `tar.exe` — all bundled with current Windows; no Posh-SSH dependency. After it finishes,
-connect with `ssh agent-vm` or via the VS Code Remote Explorer.
+connect with `ssh agent-vm` (or `ssh <-HostAlias>`) or via the VS Code Remote Explorer.
+
+### Which VM it targets
+
+Five parameters say *which machine, under which name*. All of them default to the single-VM
+install, so a plain `.\Provision-AgentVM.ps1` is byte-for-byte the run it always was:
+
+| Param | Default | Meaning |
+|---|---|---|
+| `-VmHost` | `agent-vm.mshome.net` | The address this PC dials. On a remote install it's the host service's address, not a `.mshome.net` name. |
+| `-SshPort` | `22` | Threaded into every `ssh`/`scp`/`ssh-keyscan` call. A non-22 port also adds the `Port` line to the `~\.ssh\config` block and switches `known_hosts` to the bracketed `[host]:port` form. |
+| `-HostAlias` | `agent-vm` | The `Host` block written to `~\.ssh\config`, and the name VS Code Remote-SSH connects by. |
+| `-LocalKeyName` | `agent_vm_ed25519` | The file name under `~\.ssh\` the VM's root key is saved as. Named instances use `construct_<name>_ed25519`. |
+| `-ConfigBranch` | *(empty → derived)* | The [config-sync](config-sync.md) branch this VM's host-side store lives on. Empty derives it from `-HostAlias`: `agent-vm` → `vm`, anything else → `vm-<alias>`. Pass it explicitly only when a registry entry names a branch that differs from that derivation. |
+
+Three more are set **only** when the VM lives on a [remote host](remote-host.md); while
+empty they add nothing to the environment `bin/provision.sh` sees, so a local VM's
+provisioning command, log and `config.env` are unchanged by their existence:
+
+| Param | Reaches the guest as | Meaning |
+|---|---|---|
+| `-ServiceUrl` | `CONSTRUCT_SERVICE_URL` | The `constructd` base URL. Non-empty is what switches the guest into remote mode (service-backed `construct expose`, idle heartbeat timer). |
+| `-InstanceName` | `CONSTRUCT_INSTANCE_NAME` | This VM's name on that service — the `{name}` in `/api/v1/vms/{name}/…`. |
+| `-VmTokenB64` | `CONSTRUCT_VM_TOKEN_B64` | The VM-scoped token (base64), written by `provision.sh` to `/etc/construct/vm-token` (mode `0600`). |
+
+The token is a one-time secret and is treated as one: it is passed as a parameter *value*,
+never printed, echoed or logged, and never placed on an argument list on either machine —
+it travels to the guest over ssh's **stdin** into a `0600` file that the remote shell reads
+back into the environment and deletes when provisioning ends, whatever the exit code.
+`bin/provision.sh` still reads the variable from its environment exactly as before.
 
 > SECURITY: the bootstrap key in `keys/` is intentionally committed so a fresh autoinstall VM
 > can be provisioned unattended. Treat it as burned — it's removed from the VM's
@@ -73,9 +107,11 @@ takes them via `PROJECTS=`. See [Project profiles](projects.md) for the profile 
 `bin/provision.sh` is the VM-side, no-prompt counterpart to `ui-setup.sh`. It's what the
 PowerShell script invokes, and you can also run it directly over SSH or in cloud-init. It
 reads all inputs from environment variables (with sensible defaults) and runs the full chain:
-`bootstrap.sh` → write `config.env` → root SSH key → `install-ai-tools.sh` →
-`generate-runtime-config.sh` → `install-sdks.sh` → check out repos →
-`run-provision-commands.sh` → start the service.
+`bootstrap.sh` → write `config.env` → VM service token (remote only) → root SSH key →
+`install-ai-tools.sh` → the `construct` CLI (`project`/`notify`/`expose`, plus the forward
+spool) → the activity-heartbeat timer (remote only) → `generate-runtime-config.sh` →
+`install-sdks.sh` → check out repos → `run-provision-commands.sh` → start the service →
+VS Code server/serve-web/tunnel.
 
 ```bash
 sudo env \
@@ -114,6 +150,12 @@ Recognized variables:
 | `SMB_SHARE_NAME` | `repo` | Share name in the UNC path `\\<vm>\<name>` |
 | `SMB_PASSWORD` | _generated_ | Generated once and persisted; reused on reprovision |
 | `ALLOW_LOW_DISK` | `false` | Provision even when the free-disk preflight says the VM disk is full (see below) |
+| `CONSTRUCT_EXTERNAL_HOST` | *(empty → `$(hostname).mshome.net`)* | The address **clients** use to reach this VM. Everything the guest prints — the console banner, the serve-web/OpenCode URLs, the SMB UNC — is built from it instead of concatenating a Hyper-V name. Empty reproduces the historical output byte for byte |
+| `CONSTRUCT_EXTERNAL_SSH_PORT` | `22` | The port clients use for SSH, for the same printed URLs |
+| `CONSTRUCT_SERVICE_URL` | *(empty)* | Base URL of the `constructd` [host service](remote-host.md). **Empty means local mode**: no service, `construct expose` uses the guest spool, and no idle-heartbeat timer is installed |
+| `CONSTRUCT_INSTANCE_NAME` | lowercased `hostname` | This VM's instance name on that service |
+| `CONSTRUCT_VM_TOKEN_B64` | *(empty)* | The VM-scoped token, base64. Written to `/etc/construct/vm-token` (`0600`); never echoed, logged or stored in `config.env` |
+| `CONSTRUCT_IDLE_REPORT_INTERVAL_SEC` | `60` | Period of the activity heartbeat (`construct-idle-report.timer`). Must be 5–3600; anything else falls back to 60 |
 
 ### Free-disk preflight
 
@@ -197,7 +239,18 @@ SMB_SHARE=true
 SMB_USER=dev
 SMB_SHARE_NAME=repo
 SMB_PASSWORD=
+CONSTRUCT_EXTERNAL_HOST=
+CONSTRUCT_EXTERNAL_SSH_PORT=22
+CONSTRUCT_SERVICE_URL=
+CONSTRUCT_INSTANCE_NAME=
+CONSTRUCT_IDLE_REPORT_INTERVAL_SEC=60
 ```
+
+The last five are the guest half of the modular/remote work. On a local install they keep
+their defaults and nothing about the VM's output or behaviour differs from before they
+existed; a remote install has them filled in by provisioning. `config/config.env.example`
+documents each one inline, and [`construct expose`](expose.md#configuration) covers the
+`CONSTRUCT_EXPOSE_*` / `CONSTRUCT_SERVICE_*` keys that go with them.
 
 ### opencode installs behind a company network
 
