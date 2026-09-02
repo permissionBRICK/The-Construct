@@ -3,9 +3,10 @@
 //
 // An instance (see the instance registry, docs/plans/modular-remote-architecture.md
 // §4.3) names its `backend`; getDriver(backend) hands back the object that knows how
-// to talk to it. Today only "hyperv-local" exists — the default instance, and what a
+// to talk to it. Two exist: "hyperv-local" — the default instance, and what a
 // missing/empty backend resolves to, so an install with no registry file behaves
-// exactly as it always has.
+// exactly as it always has — and "hyperv-remote", a VM on a host running the
+// `constructd` service (docs/remote-host.md).
 //
 // Driver shape:
 //   {
@@ -20,12 +21,14 @@
 // a driver only reads what it needs. See docs/drivers.md.
 
 const hypervLocal = require("./hyperv-local");
+const hypervRemote = require("./hyperv-remote");
 
 /** The backend a missing/empty `backend` field means — today's zero-change path. */
 const DEFAULT_BACKEND = "hyperv-local";
 
 const DRIVERS = {
   "hyperv-local": hypervLocal,
+  "hyperv-remote": hypervRemote,
 };
 
 /**
@@ -82,9 +85,19 @@ function listBackends() {
 // that has one.
 //
 // The gate is a CAPABILITY (`hostLifecycle`), declared by the driver, not a backend
-// name checked in lifecycle.js: a future remote driver re-enables these actions by
-// declaring what it can do.
+// name checked in lifecycle.js: the remote driver re-enabled these actions in B7 by
+// declaring what it can do — Auto-Install.ps1 gained a `-Backend hyperv-remote` path —
+// without a line of lifecycle.js changing.
 const HYPERVISOR_ACTIONS = Object.freeze(["reinstall", "redownload", "setCheckpoints"]);
+
+// setCheckpoints asks a SECOND question on top of hostLifecycle, because the two are
+// genuinely different: "can the host scripts drive this backend's VMs at all?" and
+// "does this backend HAVE checkpoints?". hyperv-remote answers yes to the first and no
+// to the second, so the generic "remote lifecycle arrives with the remote driver"
+// refusal would now be a lie. Stated as a per-action capability requirement rather than
+// as a special case, so a Proxmox driver (snapshots, but a different lifecycle story)
+// slots in the same way.
+const ACTION_CAPABILITY = Object.freeze({ setCheckpoints: "checkpoints" });
 
 /** Does `action` touch the hypervisor (rather than just SSH into the VM)? Pure. */
 function isHypervisorAction(action) {
@@ -100,15 +113,26 @@ function lifecycleSupport(backend, action) {
   if (!isHypervisorAction(action)) return { ok: true };
   const driver = getDriver(backend);
   const caps = driver.capabilities || {};
-  if (caps.hostLifecycle === true) return { ok: true };
-  return {
-    ok: false,
-    reason: `the "${driver.backend || String(backend)}" backend can't be rebuilt or reconfigured from here — ` +
-      "remote lifecycle arrives with the remote driver. Reprovision and Export config still work.",
-  };
+  const name = driver.backend || String(backend);
+  if (caps.hostLifecycle !== true) {
+    return {
+      ok: false,
+      reason: `the "${name}" backend can't be rebuilt or reconfigured from here — ` +
+        "the host scripts drive the local Hyper-V. Reprovision and Export config still work.",
+    };
+  }
+  // The action's own capability, when it has one (setCheckpoints -> checkpoints).
+  const needed = ACTION_CAPABILITY[String(action)];
+  if (needed && caps[needed] !== true) {
+    return {
+      ok: false,
+      reason: `the "${name}" backend has no ${needed} — that setting applies to VMs on this PC's Hyper-V only.`,
+    };
+  }
+  return { ok: true };
 }
 
 module.exports = {
   getDriver, listBackends, unknownDriver, DEFAULT_BACKEND,
-  HYPERVISOR_ACTIONS, isHypervisorAction, lifecycleSupport,
+  HYPERVISOR_ACTIONS, ACTION_CAPABILITY, isHypervisorAction, lifecycleSupport,
 };

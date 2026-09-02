@@ -62,6 +62,16 @@
         "command": "construct.switchInstance",
         "title": "Switch Instance",
         "category": "The Construct"
+      },
+      {
+        "command": "construct.addRemoteHost",
+        "title": "Add Remote Host",
+        "category": "The Construct"
+      },
+      {
+        "command": "construct.newRemoteVm",
+        "title": "New VM on Remote Host",
+        "category": "The Construct"
       }
     ],
     "configuration": {

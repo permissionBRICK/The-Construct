@@ -912,6 +912,142 @@ function ConvertTo-ConstructInstanceEntry {
     }
 }
 
+function ConvertTo-ConstructInstanceEntryObject {
+    <#
+        A raw entry as the READER would see it. Callers build entries as hashtables
+        (@{ backend = 'hyperv-remote'; sshHost = '...'; service = @{ url = ... } }), but
+        every rule in this file reads its input through PSObject.Properties -- which a
+        Hashtable does not expose its keys through, and neither does a nested one.
+
+        Round-tripping through JSON is not a trick: it produces EXACTLY the object shape
+        the entry will have when it is read back off disk, so what is validated here is
+        what the parser will later accept or skip. Anything already object-shaped is
+        passed through untouched.
+    #>
+    param($Entry)
+    if ($null -eq $Entry) { return $null }
+    if (-not ($Entry -is [System.Collections.IDictionary])) { return $Entry }
+    return (($Entry | ConvertTo-Json -Depth 8) | ConvertFrom-Json)
+}
+
+function Get-ConstructInstanceEntryProblem {
+    <#
+        Every rule the READER applies to one entry, as strings (@() = it will load).
+        The name rule, the backend rule, the identity FORMAT rules and -- for a local
+        backend -- the canonical-identity rule, in the order the parser applies them.
+
+        This exists so an entry is refused where it is CREATED rather than written and
+        then silently dropped on the next load: an instance that vanishes from the
+        picker with only a toast to explain it is the worst of both worlds. Mirrors
+        validatedInstance() in extension/src/instances.js. Pure.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        $Entry
+    )
+    $out = New-Object System.Collections.Generic.List[string]
+    if (-not (Test-ConstructInstanceName $Name)) {
+        $out.Add("instance name '$Name' is invalid (allowed: a-z, 0-9 and '-', starting with a letter or digit, max 40 chars)")
+        return @($out)
+    }
+    $obj = ConvertTo-ConstructInstanceEntryObject -Entry $Entry
+    $normalized = Resolve-ConstructInstanceDefaults -Name $Name -Entry $obj
+    $bad = @(Get-ConstructBackendProblem -Raw (Get-ConstructRawProperty $obj 'backend')) +
+           @(Get-ConstructInstanceIdentityProblem -Instance $normalized -Entry $obj) +
+           @(Get-ConstructLocalIdentityProblem -Instance $normalized)
+    foreach ($b in $bad) { if (-not $out.Contains($b)) { $out.Add($b) } }
+    return @($out)
+}
+
+function Add-ConstructInstance {
+    <#
+        Add (or, with -Replace, overwrite) one instance in a registry object and return
+        the UPDATED COPY -- the input registry is never modified, so a caller holding it
+        keeps seeing the old state. The caller persists the result with
+        Save-ConstructInstances.
+
+        Refuses, rather than persisting something the reader would drop:
+          * a name the reader would skip, or an entry that breaks any of its rules
+            (Get-ConstructInstanceEntryProblem);
+          * an existing name without -Replace;
+          * the DEFAULT instance's name in any case -- 'agent-vm' is always present
+            (synthesized when the file has no entry for it), so "adding" it would
+            silently REPLACE the zero-change default with something else;
+          * a cross-entry identity COLLISION (two instances that would name one machine,
+            one key file or one ssh_config Host block).
+
+        Mirrors addInstance()/updateInstance() in extension/src/instances.js.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Registry,
+        [Parameter(Mandatory)][string]$Name,
+        $Entry,
+        [switch]$Replace
+    )
+
+    if ($Name -ceq $script:ConstructDefaultInstance) {
+        throw "The default instance '$($script:ConstructDefaultInstance)' cannot be added or replaced: it is always present and is what every zero-change code path falls back on."
+    }
+    $problems = @(Get-ConstructInstanceEntryProblem -Name $Name -Entry $Entry)
+    if ($problems.Count -gt 0) {
+        throw "Instance '$Name': $($problems -join '; ')"
+    }
+
+    $next = Copy-ConstructInstanceRegistry -Registry $Registry
+    if ($next.Instances.ContainsKey($Name) -and -not $Replace) {
+        throw "Instance '$Name' already exists in the registry. Pass -Replace to overwrite it."
+    }
+    $obj = ConvertTo-ConstructInstanceEntryObject -Entry $Entry
+    $next.Instances[$Name] = Resolve-ConstructInstanceDefaults -Name $Name -Entry $obj
+
+    $collisions = Get-ConstructInstanceCollision -Instances $next.Instances
+    $collisionProblems = @($collisions.Problems)
+    if ($collisionProblems.Count -gt 0) {
+        throw "Instance '$Name' cannot be added: $($collisionProblems[0])"
+    }
+    return $next
+}
+
+function Copy-ConstructInstanceRegistry {
+    <#
+        A shallow, mutable copy of a registry object, so the mutators never edit a loaded
+        one in place. Every property is read defensively (this module runs under
+        Set-StrictMode -Version Latest, and callers may hand in an object built by hand
+        rather than by Read-ConstructInstances).
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Registry)
+
+    $instances = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
+    if ($Registry.PSObject.Properties['Instances'] -and $Registry.Instances) {
+        foreach ($k in @($Registry.Instances.Keys)) { $instances[[string]$k] = $Registry.Instances[$k] }
+    }
+    if (-not $instances.ContainsKey($script:ConstructDefaultInstance)) {
+        $instances[$script:ConstructDefaultInstance] = New-ConstructDefaultInstance
+    }
+
+    $default = $script:ConstructDefaultInstance
+    if ($Registry.PSObject.Properties['Default'] -and $Registry.Default) { $default = [string]$Registry.Default }
+    if (-not $instances.ContainsKey($default)) { $default = $script:ConstructDefaultInstance }
+
+    $path = $null
+    if ($Registry.PSObject.Properties['Path'] -and $Registry.Path) { $path = [string]$Registry.Path }
+    $problems = @()
+    if ($Registry.PSObject.Properties['Problems'] -and $Registry.Problems) { $problems = @($Registry.Problems) }
+    $exists = $false
+    if ($Registry.PSObject.Properties['Exists']) { $exists = [bool]$Registry.Exists }
+
+    return [pscustomobject]@{
+        Instances = $instances
+        Default   = $default
+        Problems  = $problems
+        Path      = $path
+        Exists    = $exists
+    }
+}
+
 function Save-ConstructInstances {
     <#
         Write the registry ATOMICALLY: the full document goes to a sibling temp file

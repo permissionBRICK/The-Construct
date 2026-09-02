@@ -746,6 +746,154 @@ namespaced per instance** (workspaceState key, usage cache key, `notifyInstance`
 `hostAudioInstance`); and the registry file format is a **documented contract** shared
 by the JS and PS readers rather than an implementation detail.
 
+## Remote hosts (`hyperv-remote`)
+
+A remote instance is one whose VM lives on somebody else's Hyper-V, managed by the
+`constructd` service (`service/README.md`, plan §4.4). The end-user/admin guide is
+[`docs/remote-host.md`](../docs/remote-host.md); this section is the extension side.
+
+**The extension is a management UI, never an authority.** The service owns the VM record,
+the port forwards and the idle policy, so the panel *reads* them and *asks* for changes.
+Nothing about a remote VM is recoverable only from this PC — that is the PC-independence
+requirement (plan §1), and it is why "Add Remote Host" stores an enrolment, not state.
+
+### `src/remotehost.js` — the API client
+
+Built to the §4.8 module rules: the **core is free of the vscode API**. Every dependency
+is injected (`fetchImpl`, `spawnImpl`, `tlsConnect`, `secrets`, `confirm`, `prompt`,
+`log`), so the whole client unit-tests under plain node with a fake `fetch`, and the
+extension layer supplies the vscode adapters (SecretStorage, modal, input box, output
+channel). It owns no connection it did not receive.
+
+Three credential providers, one shape (`{ kind, … }`), chosen per host:
+
+| provider | how |
+|---|---|
+| `token` | `Authorization: Bearer <secret>`; the secret comes from VS Code **SecretStorage** under `construct.remote.token:<hostslug>`. Pure HTTPS from Node. |
+| `negotiate` | Node has no SSPI, so the request is delegated to a spawned `powershell.exe -EncodedCommand` that dot-sources `lib/AgentVm.Remote.ps1` and calls `Invoke-ConstructApi` with `-UseDefaultCredentials` — the same encoded-command pattern `vmpower.js` uses for `Get-VM`. It prints one JSON envelope on stdout, which the client parses. |
+| `credential` | prompted domain user + password, handed to the same PowerShell helper as a `PSCredential`. Never persisted. |
+
+The credential itself is **supplied by the extension layer, never fetched by the client**:
+`remotehost.js` has no `vscode`, so `extension.js`'s `driverOpts(instance)` reads the token
+out of SecretStorage and resolves the path of `lib/AgentVm.Remote.ps1`, and passes both to
+every driver call (`vmpower.queryVmState`, `startVm`). A local instance gets `{}` and is
+byte-for-byte unchanged. A **token instance with no stored token is refused**, not quietly
+downgraded to `negotiate`: swapping the credential would ask the service a different
+question and report the answer as if it were about the token.
+
+**Certificate pinning** in Node happens on the **socket**, in an `https.Agent` whose
+`createConnection` connects with `tls.connect` (`rejectUnauthorized: false` — a self-signed
+certificate has no chain), compares `fingerprint256` with the pin, and hands the socket to
+the HTTP layer **only on a match**; a mismatch destroys the socket and fails the connection,
+so the request never exists and the `Authorization` header is never written. It is
+deliberately *not* done in `checkServerIdentity`: Node does not call that hook when
+`rejectUnauthorized` is off, so a pin checked there is not checked at all (a live-TLS test
+in `test/remotehost.test.js` asserts the header does not reach a mismatched server). SNI is
+omitted for IP literals, which TLS forbids as a ServerName. The PowerShell providers pin
+inside `lib/AgentVm.Remote.ps1` (`docs/remote-host.md` §5 explains why 5.1 and 7 differ).
+Either way, **no pin → no call**: an unpinned host is refused with "run Add Remote Host
+first", and a *changed* fingerprint is a hard failure naming both values, not a prompt to
+click through.
+
+**Plain `http` is loopback-only.** Without TLS there is nothing to encrypt a bearer token
+with and no certificate to pin, so both clients refuse an `http://` URL for anything but
+`localhost`/`127.0.0.0/8`/`::1` — in JS when the client is *constructed*, in PowerShell at
+the top of `Invoke-ConstructApi`, i.e. before a credential is selected. The loopback
+exception is what lets the tests drive the fake service.
+
+Errors are mapped once, centrally, so every caller can branch on a `status` rather than on
+a message: `401` → "the host rejected these credentials" (the one the enrolment flow falls
+back on), `403` → "not enrolled / not your VM", `404`, `409` (the endpoint of a VM whose
+forward does not exist yet), and RFC 7807 `detail` text when the body is a problem
+document. A network failure carries `status: 0`.
+
+### `src/drivers/hyperv-remote.js`
+
+Implements the §4 driver contract over the API:
+
+| member | remote behaviour |
+|---|---|
+| `queryVmState` | `GET /vms/{name}/state`; `running` → `running`, `off`/`saved`/`paused` → `off` (a start resumes them), `404` → `absent`, anything else → `unknown` |
+| `queryAutoCheckpoints` | `"unsupported"` — no probing. Checkpoints are not a capability of this backend, so the panel must not ask. |
+| `startVm` | `POST /vms/{name}/power {"action":"start"}` — no UAC, no elevated console; the service does it |
+| `capabilities` | `{ checkpoints: false, console: "none", suspend: true, hostLifecycle: true }` |
+
+`hostLifecycle: true` is the interesting one. It says "the host's own scripts *can* create
+and delete this backend's VMs" — true since B7, because `Auto-Install.ps1` gained the
+remote path. But `setCheckpoints` must stay refused, and it is one of the same
+`HYPERVISOR_ACTIONS`. So `drivers/index.js` `lifecycleSupport` now asks **two** questions:
+`hostLifecycle` for every hypervisor action, **plus `capabilities.checkpoints` for
+`setCheckpoints`** specifically. `hyperv-local` declares both and is unchanged; the
+unknown-backend driver declares neither and is unchanged; `hyperv-remote` gets
+reinstall/redownload and keeps checkpoints refused — with a reason that says *why*
+(the backend has no checkpoints) rather than the generic "remote lifecycle arrives with
+the remote driver".
+
+### Per-instance lifecycle invocations for a remote instance
+
+`Auto-Install.ps1` reaches a remote VM by **instance name plus service URL**, not by
+`-VmName`: the local `-VmName` path derives a guest hostname and an mshome address that do
+not exist for a remote VM, and it runs the local skew guards. So `INSTANCE_PARAMS` is
+backend-aware for the rebuild actions:
+
+| action | local instance | remote instance |
+|---|---|---|
+| `reinstall` / `redownload` | `-VmName -ConfigBranch` | `-Backend -ServiceUrl -InstanceName -ConfigBranch` |
+| `reprovision` / `exportConfig` | `-VmHost -HostAlias -SshPort -LocalKeyName (-ConfigBranch)` | **identical** — provisioning is pure SSH to the endpoint, whoever created the VM |
+
+`REQUIRED_INSTANCE_PARAMS` follows: a remote rebuild is **refused** unless the installed
+`Auto-Install.ps1` declares `-Backend`, `-ServiceUrl` *and* `-InstanceName`, and unless the
+instance actually carries `service.url`. That is the same fail-closed rule as B3 and for the
+same reason — an `Auto-Install.ps1` that silently drops `-ServiceUrl` does not "degrade": it
+runs the **local** path and rebuilds a local VM named after the remote one. `redownload` is
+mapped onto the remote reinstall (the service owns its source image); the panel keeps both
+buttons because the refusal/confirmation copy is shared.
+
+**Elevation is backend-aware too.** A remote rebuild is launched with `elevate: false`: it
+creates no local VM, so it needs no administrator rights — and on a PC where UAC switches to
+a *different* admin account, the elevated console would read and write the DPAPI token
+store, `instances.json` and `~\.ssh` under that account's profile. `Auto-Install.ps1` makes
+the same call for the same reason (it skips its own relaunch on the remote path), but the
+launcher has to agree: if it elevated anyway, the script would already be in the wrong
+profile before it could decide. Local rebuilds — and the default instance — are unchanged
+(`elevate: true`; they drive Hyper-V).
+
+### Commands
+
+* **`construct.addRemoteHost`** — URL → fingerprint → auth → `whoami`. The enrolment
+  (`url`, `auth`, `fingerprint`, `identity`, `addedAt`) is stored in **`globalState`** under
+  `construct.remoteHosts`, and a token in SecretStorage. Deliberately **not** in
+  `instances.json`: that file describes *VMs* — an entry for a host with no VM would appear
+  in the instance picker as a machine nothing can reach, and both readers would have to
+  invent a meaning for it.
+* **`construct.newRemoteVm`** — pick an enrolled host, ask name/CPU/RAM/disk, then launch
+  `Auto-Install.ps1 -Backend hyperv-remote -ServiceUrl … -InstanceName … -VmMemoryGB …
+  -VmDiskGB …` through `lifecycle.launchHostScript`. The console does the create *and* the
+  provisioning, because provisioning configures this PC (ssh config, Remote-SSH, OpenCode,
+  SMB) and cannot be done by the service.
+
+Both commands are no-ops off Windows (the launcher and the Negotiate helper are
+`powershell.exe`), and both are absent from a single-VM install's daily path — they only
+appear in the command palette.
+
+### Panel
+
+`instanceState()` carries `backend` and, for a remote instance, `serviceHost` (the host
+part of the service URL — never the whole URL, which can carry a port and is noise in a
+one-line row). `media/panel.js` renders two extra **System** rows and keeps them `hidden`
+for `hyperv-local`, so a single-VM install's panel is pixel-identical to before.
+
+### Known limitation: one VM per host service, per PC
+
+The registry treats `sshHost` as a **unique identity field** (`UNIQUE_FIELDS` /
+`collisionProblems`), and every VM on one host service shares that host's address,
+differing only by the allocated SSH port. A second VM on the same host would therefore
+make **both** entries unloadable. Until the uniqueness key becomes host **and** port on
+both readers, `Auto-Install.ps1` refuses the second one where it is created — before it
+asks the service for anything, and again against the address the service actually
+returned — rather than writing a registry that silently loses both. Several *users* on
+one host are unaffected (each has their own PC and registry), and so are several hosts.
+
 ## Design decisions
 
 - **UI designs (themes) are pure CSS layers — one markup, one controller, N skins.**
