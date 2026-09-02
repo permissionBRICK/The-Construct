@@ -247,9 +247,24 @@ Ensure-ConstructDriverPrereqs
 # valid DNS label. The default VM keeps the legacy key name byte-for-byte; any other
 # VM gets an instance-scoped key so a standalone "Create-AgentVM.ps1 -VmName work-vm"
 # never overwrites Agent-VM's ~/.ssh key.
+#
+# THE ONE INSTANCE-NAME RULE, repeated verbatim from Auto-Install.ps1 (which validates
+# before it chains here), $script:ConstructInstanceNameRe in lib\AgentVm.Instances.ps1,
+# NAME_RE in extension/src/instances.js and Constructd.Core.Logic.VmNameValidator --
+# a lowercase DNS label, alphanumeric FIRST AND LAST ("work-" derives the endpoint
+# "work-.mshome.net", which is not a host name), 1-63 chars (the label's own limit; the
+# derived "construct_<name>_ed25519" is covered by the registry's longer key-file
+# bound), and the
+# "construct-" prefix RESERVED (it is the namespace those derived names live in, and
+# the exact name the config-branch derivation used to strip the prefix off, aliasing
+# another instance's store). Change all four together.
+$script:ConstructVmNameRule = '1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with "construct-" are reserved.'
 $script:VmGuestName = $VmName.ToLowerInvariant()
-if ($script:VmGuestName -notmatch '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$') {
-    throw "-VmName '$VmName' is not usable as a hostname: use 1-63 letters, digits or hyphens (no spaces or dots), e.g. 'Work-VM'."
+if ($script:VmGuestName.StartsWith('construct-')) {
+    throw "-VmName '$VmName' uses the reserved 'construct-' prefix: $($script:ConstructVmNameRule) Drop the prefix, e.g. 'Work-VM'."
+}
+if ($script:VmGuestName -notmatch '\A[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\z') {
+    throw "-VmName '$VmName' is not usable as a hostname (e.g. 'Work-VM'): $($script:ConstructVmNameRule)"
 }
 $script:VmIsDefault = ($script:VmGuestName -eq 'agent-vm')
 if (-not $LocalKeyName -and -not $script:VmIsDefault) {

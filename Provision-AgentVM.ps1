@@ -164,9 +164,10 @@ param(
     # VM's last-known store. One repo can carry several VM instances, one branch
     # each ('main' stays the host truth for all of them). EMPTY (the default)
     # derives it from -HostAlias: "agent-vm" -> "vm" (today's single-VM
-    # behavior), any other alias -> "vm-<alias>" (a leading "construct-" from
-    # the older alias convention is stripped first, so both spellings of an
-    # instance's alias land on one branch).
+    # behavior), any other alias -> "vm-<alias>", lowercased and otherwise
+    # untransformed. That is the ONE derivation rule everywhere (alias = name,
+    # key = construct_<name>_ed25519, branch = vm-<name>); the "construct-"
+    # prefix is RESERVED by every name validator rather than stripped here.
     # See docs/config-sync.md "Multiple instances".
     [string]$ConfigBranch = "",
     # ── Remote host service (batch B7, docs/remote-host.md) ────────────────────

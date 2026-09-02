@@ -822,11 +822,33 @@ if ($PSBoundParameters.ContainsKey('VmHost') -and -not $PSBoundParameters.Contai
     throw "-VmHost '$VmHost' conflicts with -VmName '$VmName': the guest hostname is derived from -VmName (lowercased). Pass only -VmName."
 }
 
-# The lowercased VM name doubles as guest hostname, mshome DNS label, SSH alias and
-# key-name component, so it must be a single valid DNS label (the display name is
-# the same string; "Work-VM" is fine, "Work VM" or "work.vm" is not).
-if ($VmName.ToLowerInvariant() -notmatch '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$') {
-    throw "-VmName '$VmName' is not usable as a hostname: use 1-63 letters, digits or hyphens (no spaces or dots), e.g. 'Work-VM'."
+# ── THE ONE INSTANCE-NAME RULE ──────────────────────────────────────────────
+# Repeated here (rather than imported) for the reason Test-ConstructRemoteInstanceName
+# gives: lib\AgentVm.Instances.ps1 may only be loaded in a CHILD scope. It is the same
+# expression as $script:ConstructInstanceNameRe there, as NAME_RE in
+# extension/src/instances.js and as Constructd.Core.Logic.VmNameValidator.Pattern --
+# change all four together.
+#   * a LOWERCASE DNS LABEL: the lowercased VM name doubles as guest hostname, mshome
+#     DNS label, SSH alias and key-name component (the display name is the same string;
+#     "Work-VM" is fine, "Work VM" or "work.vm" is not);
+#   * alphanumeric FIRST AND LAST: "work-" derives "work-.mshome.net", which is not a
+#     host name at all, so the registry entry for such a VM could never be recorded;
+#   * 1-63 chars -- the DNS label's own limit. The derived key file of a maximum-length
+#     name ("construct_" + 63 + "_ed25519" = 81) is covered by the registry's own,
+#     longer key-file bound (lib\AgentVm.Instances.ps1 $script:ConstructKeyFileRe);
+#   * "construct-" is RESERVED (see $script:ConstructVmNameRule).
+$script:ConstructVmNameRe   = '\A[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\z'
+$script:ConstructVmNameRule = '1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with "construct-" are reserved.'
+$script:VmNameLower = $VmName.ToLowerInvariant()
+if ($script:VmNameLower.StartsWith('construct-')) {
+    # RESERVED, not merely discouraged: the derived key file is construct_<name>_ed25519
+    # and the derived config-sync branch is vm-<name>, so a "construct-" name lives inside
+    # the namespace those derivations own. It is also the exact name that used to have its
+    # prefix stripped by the branch derivation, aliasing another instance's config store.
+    throw "-VmName '$VmName' uses the reserved 'construct-' prefix: $($script:ConstructVmNameRule) Drop the prefix, e.g. 'Work-VM'."
+}
+if ($script:VmNameLower -notmatch $script:ConstructVmNameRe) {
+    throw "-VmName '$VmName' is not usable as a hostname (e.g. 'Work-VM'): $($script:ConstructVmNameRule)"
 }
 
 # Version-skew guard, BEFORE anything destructive: a non-default VM name needs a
@@ -1262,18 +1284,21 @@ function Test-ConstructRemoteInstanceName {
         The registry's name rule, which the service enforces too
         (Constructd.Core.Logic.VmNameValidator.Pattern is the same expression). Repeated
         here rather than imported because lib\AgentVm.Instances.ps1 may only be loaded in
-        a child scope (it turns strict mode on).
+        a child scope (it turns strict mode on) -- it is the ONE rule
+        ($script:ConstructVmNameRe, defined with the -VmName check above).
 
         'agent-vm' is RESERVED and refused: it is the default instance, always present
         (synthesized when the registry has no entry for it) and the fallback of every
         zero-change code path -- so Add-ConstructInstance refuses to replace it. Catching
         that HERE is the point: the alternative is discovering it after a VM has been
-        built on somebody else's host and can no longer be recorded.
+        built on somebody else's host and can no longer be recorded. The 'construct-'
+        PREFIX is reserved for the same class of reason (see the -VmName check).
     #>
     param([string]$Name)
     if (-not $Name) { return $false }
     if ($Name -ceq 'agent-vm') { return $false }
-    return [bool]([regex]::IsMatch($Name, '^[a-z0-9][a-z0-9-]{0,39}$'))
+    if ($Name.ToLowerInvariant().StartsWith('construct-')) { return $false }
+    return [bool]([regex]::IsMatch($Name, $script:ConstructVmNameRe))
 }
 
 function New-ConstructRemoteInstanceEntry {
@@ -1842,10 +1867,10 @@ if ($RemoteInstall) {
         if ($instName -ceq 'agent-vm') {
             Write-Warning "'agent-vm' is reserved for this PC's default (local) instance and cannot name a remote VM. Pick another name, e.g. work-vm."
         } elseif ($instName) {
-            Write-Warning "'$instName' is not a usable instance name: use 1-40 lowercase letters, digits or hyphens, starting with a letter or digit (e.g. work-vm)."
+            Write-Warning "'$instName' is not a usable instance name: $($script:ConstructVmNameRule) (e.g. work-vm)"
         }
         if ([Console]::IsInputRedirected) {
-            throw "A remote install needs a valid -InstanceName (1-40 lowercase letters, digits or hyphens, and not the reserved name 'agent-vm')."
+            throw "A remote install needs a valid -InstanceName ($($script:ConstructVmNameRule) 'agent-vm' is reserved too)."
         }
         $instName = (Invoke-TuiInput -ScreenTitle "Name this VM" -Body @(
             "The name identifies the VM on the host service AND on this PC: it becomes the",

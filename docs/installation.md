@@ -204,8 +204,14 @@ panel — from one schema with one set of rules:
 
 - **A missing file, an unreadable file or a missing entry all mean "exactly today's
   behaviour"**: the `agent-vm` default is synthesized in memory and nothing is written.
-- Instance names are `^[a-z0-9][a-z0-9-]{0,39}$` — they end up verbatim in file names, SSH
-  aliases and git refs.
+- Instance names are one lowercase DNS label — `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`, and
+  **not** starting with the reserved prefix `construct-`. They end up verbatim in file
+  names, SSH aliases and git refs, so the name must *end* alphanumeric too (`work-` would
+  derive the endpoint `work-.mshome.net`, which is not a host name), it is 1–63 characters
+  (the DNS label's own limit — the derived `construct_<name>_ed25519` is covered by the
+  registry's longer key-file bound), and the `construct-` prefix is reserved because that
+  is the namespace the derived key and branch names live in. The same rule is enforced by
+  the extension, `Auto-Install.ps1`/`Create-AgentVM.ps1` and the host service.
 - Everything an entry omits is **derived from its name**: alias `<name>`, key
   `construct_<name>_ed25519`, config-sync branch `vm-<name>`, VM name `<name>`, host
   `<name>.mshome.net`, port 22. The default instance keeps its historical literals
