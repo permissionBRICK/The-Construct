@@ -384,7 +384,12 @@ let src = readFileSync(bundle, "utf8");
 const version = currentVersion(src);
 
 if (mode === "status") {
-  console.log(JSON.stringify({ patched: version !== null, version, bundle, backup: existsSync(backup) }));
+  const compatible = version === VERSION || (
+    version === null &&
+    countOccurrences(src, ANCHOR_RATELIMIT) === 1 &&
+    countOccurrences(src, ANCHOR_RESULT) === 1
+  );
+  console.log(JSON.stringify({ patched: version !== null, compatible, version, bundle, backup: existsSync(backup) }));
   process.exit(0);
 }
 
