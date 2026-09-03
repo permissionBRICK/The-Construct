@@ -2160,8 +2160,11 @@ if ($Action -eq 'provision') {
 # content hash changed (or when the app was removed); all compiler/package-manager/
 # Rust/Wine dependencies remain inside the disposable VM. Electron Builder's
 # --updated + /S path closes the running app, does not relaunch it, and needs no
-# elevation for this per-user package. This optional handoff must never turn a
-# successful VM provision into a failure merely because the Desktop update failed.
+# elevation for this per-user package -- so when the app WAS running (typically
+# because its own update control launched this reprovision through
+# Update-T3Code.ps1), it is started again afterwards; an app that was closed stays
+# closed. This optional handoff must never turn a successful VM provision into a
+# failure merely because the Desktop update failed.
 if ($Action -eq 'provision') {
     try {
         $t3DesktopStatus = (Invoke-Ssh -Sudo -Command "cat /etc/construct/t3code-desktop-status 2>/dev/null || true" | Out-String)
@@ -2219,6 +2222,21 @@ if ($Action -eq 'provision') {
             if (($installedSha -eq $expectedSha) -and $appPresent) {
                 Write-Ok "Patched T3 Code Desktop $($manifest.desktopVersion) is already current"
             } else {
+                # Remember whether the app is running before the installer closes it.
+                # Process paths can be unreadable for foreign-session processes; those
+                # are simply not ours.
+                $t3WasRunning = $false
+                if ($t3InstallRoot) {
+                    $t3Prefix = $t3InstallRoot.TrimEnd('\') + '\'
+                    foreach ($proc in (Get-Process -ErrorAction SilentlyContinue)) {
+                        try {
+                            if ($proc.Path -and $proc.Path.StartsWith($t3Prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                                $t3WasRunning = $true
+                                break
+                            }
+                        } catch { }
+                    }
+                }
                 Write-Step "Silently installing/updating patched T3 Code Desktop $($manifest.desktopVersion)"
                 $installerProcess = Start-Process -FilePath $localInstaller -ArgumentList @('--updated', '/S') -Wait -PassThru -WindowStyle Hidden
                 if ($installerProcess.ExitCode -ne 0) {
@@ -2228,6 +2246,18 @@ if ($Action -eq 'provision') {
                 Copy-Item -LiteralPath $localManifest -Destination $installedTemp -Force
                 Move-Item -LiteralPath $installedTemp -Destination $installedManifest -Force
                 Write-Ok "Patched T3 Code Desktop $($manifest.desktopVersion) installed/updated silently"
+                if ($t3WasRunning -and $t3InstallRoot) {
+                    $t3Exe = Get-ChildItem -LiteralPath $t3InstallRoot -Filter '*.exe' -File -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Name -notlike 'Uninstall*' } | Select-Object -First 1
+                    if ($t3Exe) {
+                        try {
+                            Start-Process -FilePath $t3Exe.FullName -WorkingDirectory $t3InstallRoot | Out-Null
+                            Write-Host "    T3 Code Desktop was running; restarted the updated app ($($t3Exe.Name))." -ForegroundColor DarkGray
+                        } catch {
+                            Write-Warning "T3 Code Desktop was closed by its updater and could not be restarted ($($_.Exception.Message)). Start it from the Start menu."
+                        }
+                    }
+                }
             }
         }
     } catch {
