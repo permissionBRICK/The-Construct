@@ -9,9 +9,10 @@ the shipped artifact is `patches/t3code-construct.patch`.
 rebased onto v0.0.38 by a fresh Opus dev + Codex reviewer pair (omniloop `wf_C99WJD2IunzK`, approved
 round 1; two conflicts in ChatComposer.tsx and two import collisions in SettingsPanels.tsx). Merged as
 the patch-only commit `b5c8db4`. The T3 branch `feat/construct-voice-client` now sits on v0.0.38
-(pre-rebase history on `backup/pre-v38-rebase`). Known baseline-only failure: 17 desktop
-`DesktopUpdates.test.ts` cases fail because the patch's CONSTRUCT_MANAGED_UPDATES short-circuits the
-electron-updater wiring they assert; outside the gate, left as is. `bin/build-t3code.sh` now applies
+(pre-rebase history on `backup/pre-v38-rebase`). (2026-09-03: the 17 desktop
+`DesktopUpdates.test.ts` cases that failed under the patch's unconditional CONSTRUCT_MANAGED_UPDATES
+gate pass again — Construct-managed updates are now keyed on the `-construct.<hash>` app version, so
+the stock updater path the upstream tests exercise is untouched; see `ConstructUpdates.ts`.) `bin/build-t3code.sh` now applies
 the patch leniently (exact, then context fuzz) and fails only on real conflicts (`2241c61`).
 
 Deviations accepted at merge: the host downloads the CA from `/etc/construct/t3code-ca.crt`

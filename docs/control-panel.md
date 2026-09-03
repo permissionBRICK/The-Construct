@@ -535,8 +535,10 @@ both the VM server/web client and an unsigned Windows x64 Desktop installer from
 checkout. The build toolchain (Node/pnpm, Rust/MinGW, Wine, and Electron Builder) stays in the
 VM. The finished installer is copied to
 `%LOCALAPPDATA%\The-Construct\artifacts\t3code\` and silently installed or updated on
-Windows as part of provisioning. There is no installation prompt and provisioning does not
-launch the app afterward. Construct keys the shared build by the resolved upstream T3 version,
+Windows as part of provisioning. There is no installation prompt; if the Desktop app was
+running when the silent installer closed it (typically because its own update control
+launched the reprovision), provisioning starts the updated app again, otherwise it stays
+closed. Construct keys the shared build by the resolved upstream T3 version,
 the installed Construct revision, and the guarded patch recipe. Routine reprovisions reuse the
 running VM server and Desktop artifact without rebuilding, reinstalling, or restarting T3; a T3
 update or Construct update invalidates that cache. An already-current Desktop installation is
@@ -595,12 +597,39 @@ usage-limit/OpenCode bundle transforms are applied to the freshly built server b
 VM install and Desktop packaging. The auto-resume dispatch authenticates with its own long-lived
 T3 API token (`/etc/construct/t3park-token`, minted on enable).
 
-In the Construct-built Desktop app, the normal update control launches `Update-T3Code.ps1`,
-which reruns Construct reprovisioning with the saved settings. It does not install an upstream
-T3 binary over the patched build. The next installer is again built in the VM and silently
-applied on the host without launching the app. The Construct panel's T3 update action and
-stable/nightly changes follow that same reprovision path while the shared source build is
-enabled, so neither end is replaced by a stock npm update.
+In the Construct-built Desktop app, the normal update control is driven by Construct instead of
+electron-updater. The app reads the same install markers as this panel
+(`.construct-settings.json` under `%LOCALAPPDATA%\The-Construct`) and checks, on start and
+every ten minutes:
+
+- **Construct itself** — the installed commit against the tracked GitHub ref (the panel's
+  header banner). The update control then offers **Update Construct**, which runs
+  `Update-Construct.ps1` in a console window: the same self-update as the panel's
+  **Update Construct** button (scripts + panel on this PC; it does not touch the VM).
+- **The VM** — `provisionedCommit` against `installedCommit` (the panel's yellow
+  **Reprovision** button), and **upstream T3 Code** — this build's T3 version against the
+  npm channel it was built from. Either offers **Reprovision VM**, which runs
+  `Update-T3Code.ps1`: Construct reprovisioning with the saved settings, which rebuilds the
+  patched T3 Code in the VM and silently installs the new Desktop app. It does not install an
+  upstream T3 binary over the patched build. The target is the instance registry's default
+  VM (`instances.json`; `agent-vm` without one), whose SSH identity is passed along when it is
+  not the built-in default; the confirmation names it. A registry this panel itself would
+  reject (unreadable, unknown version, a default entry that is missing, non-canonical for its
+  backend, malformed, or colliding with another entry) blocks the launch rather than guessing. The script's exit code reports the provisioning outcome back
+  to the app (1 = failed, 3 = finished with optional errors).
+
+A Construct update is offered first, since reprovisioning afterwards applies both. Each new
+offer raises one toast with the action as its button (closing it dismisses that offer), the
+sidebar update pill lights up, and **Settings → Providers** gains a **Construct** entry that,
+like the Codex/Claude rows, shows the installed version (`main@<commit>`), the update state and
+the action button, even though Construct is not a selectable chat provider. While a launched
+script runs, the app re-reads the markers every few seconds and re-checks when the console
+closes. With `T3CODE_DISABLE_AUTO_UPDATE` set the entry stays informational (facts shown,
+nothing offered or launched). The About section's update track is read-only in these builds: the channel is the
+VM's **T3 Code channel** (this panel), not a Desktop preference. The Construct panel's T3
+update action and stable/nightly changes follow that same
+reprovision path while the shared source build is enabled, so neither end is replaced by a
+stock npm update.
 
 ## Troubleshooting
 

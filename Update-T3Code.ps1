@@ -70,4 +70,14 @@ foreach ($k in @($identity.Keys)) {
 }
 
 Write-Host 'Starting Construct reprovision to rebuild/update patched T3 Code...' -ForegroundColor Cyan
+# Provision-AgentVM.ps1 owns the error display: without -Auto it catches its own failure,
+# shows the result screen and RETURNS normally, recording the outcome in these globals.
+# The launcher (the Construct-built T3 Desktop app's update control waits on this
+# process) can only see an exit code, so translate: 1 = provisioning failed,
+# 3 = reached the end with optional errors (the provisioner's own result-file codes).
+$global:ConstructProvisionHadErrors = $false
+$global:ConstructProvisionFailureMessage = $null
 & $provision @params
+if ($global:ConstructProvisionFailureMessage) { exit 1 }
+if ($global:ConstructProvisionHadErrors) { exit 3 }
+exit 0
