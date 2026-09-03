@@ -88,35 +88,6 @@ t3_build_toolchain_flags() {
 }
 
 
-# Apply Construct's source patch to the checkout in $PWD, as leniently as is SAFE:
-#   1. exact (`git apply --check` then `git apply`);
-#   2. otherwise GNU patch with fuzz 3 -- only surrounding CONTEXT lines drifted, the
-#      changed lines themselves still match. Applied hunks are reported (offset/fuzz) so
-#      the log shows which files upstream moved around;
-#   3. otherwise fail, naming the files whose hunks no longer fit. That is the one
-#      case where the patch genuinely has to be rebased; a changed version number on
-#      its own is never a reason to refuse.
-# Never leaves a half-applied tree: dry runs precede every real application, and a
-# tracked file is restored from the index if a real application still fails.
-#   $1 = patch file.  Prints notes; returns 0 on success, 1 on failure.
-t3_build_apply_patch() {
-  local patch_file="$1" out failing
-  if git apply --check "${patch_file}" >/dev/null 2>&1; then
-    git apply "${patch_file}" && return 0
-  fi
-  if command -v patch >/dev/null 2>&1 && out="$(patch -p1 --forward --fuzz=3 --dry-run --batch <"${patch_file}" 2>&1)"; then
-    printf '    %s\n' "Construct T3 patch needs context fuzz on ${TAG:-this tag} (changed lines still match; only surrounding lines moved):"
-    printf '%s\n' "${out}" | grep -E 'fuzz|offset' | sed 's/^/      /' || true
-    if patch -p1 --forward --fuzz=3 --batch --silent <"${patch_file}" >/dev/null 2>&1; then
-      return 0
-    fi
-    git checkout -q -- . 2>/dev/null || true
-  fi
-  failing="$(git apply --check "${patch_file}" 2>&1 | sed -n 's/^error: patch failed: \([^:]*\):.*/\1/p' | sort -u | tr '\n' ' ')"
-  printf 'ERROR: %s\n' "Construct's T3 source patch no longer applies to T3 ${TAG:-this tag}: upstream changed ${failing:-the patched files} beyond what context fuzz can bridge. Rebase patches/t3code-construct.patch onto ${TAG:-the new tag} (the previously installed T3 build is left untouched)." >&2
-  return 1
-}
-
 # Return the newest pushed, validated nightly repair ref from ls-remote input.
 # The repair supervisor only pushes these branches after its own exact-patch and
 # focused-test validation, so an unpublished/incomplete agent attempt is never a
@@ -163,6 +134,14 @@ t3_build_bundle_patchers_compatible() {
   rm -rf -- "${work}"
 }
 
+t3_build_integration_hash() {
+  local build_script="$1" transform_script="$2" manifest="$3" overlays="$4" t3park="$5" monitor="$6"
+  {
+    sha256sum "${build_script}" "${transform_script}" "${manifest}" "${t3park}" "${monitor}"
+    find "${overlays}" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
+  } | sha256sum | awk '{print $1}'
+}
+
 # Sourced for the helpers only (unit tests): stop before shell options or anything else changes.
 if [[ "${_FUNCS_ONLY:-}" == "true" ]]; then
   return 0 2>/dev/null || exit 0
@@ -177,7 +156,9 @@ NPM_TAG=latest
 
 CACHE_ROOT="/var/cache/construct/t3code-source"
 ARTIFACT_ROOT="/var/lib/construct/t3code-desktop"
-PATCH_FILE="${REPO_DIR}/patches/t3code-construct.patch"
+SOURCE_TRANSFORMER="${REPO_DIR}/bin/apply-t3code-source.mjs"
+SOURCE_MANIFEST="${REPO_DIR}/patches/t3code-source-transforms.json"
+SOURCE_OVERLAYS="${REPO_DIR}/patches/t3code-overlays"
 T3PARK_PATCHER="${REPO_DIR}/extension/vm/construct-t3park-patch.mjs"
 T3MONITOR_PATCHER="${REPO_DIR}/extension/vm/construct-t3-opencode-monitor-patch.mjs"
 CONSTRUCT_REPO_URL="${CONSTRUCT_REPO_URL:-https://github.com/permissionBRICK/The-Construct.git}"
@@ -195,7 +176,8 @@ trap t3_build_cleanup_candidate EXIT
 note() { printf '    %s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
-[[ -s "${PATCH_FILE}" ]] || fail "T3 source patch is missing: ${PATCH_FILE}"
+[[ -s "${SOURCE_TRANSFORMER}" && -s "${SOURCE_MANIFEST}" && -d "${SOURCE_OVERLAYS}" ]] \
+  || fail "T3 source transformation assets are incomplete under ${REPO_DIR}"
 
 # This source build can be selected even when no JavaScript-based agent was
 # installed earlier in provisioning. Bootstrap the workspace's Node major before
@@ -223,18 +205,23 @@ if [[ "${CHANNEL}" == "stable" ]] \
   if [[ -n "${candidate_ref}" ]] \
     && t3_build_bundle_patchers_compatible "${VERSION}" \
       "${candidate_dir}/extension/vm/construct-t3park-patch.mjs" \
-      "${candidate_dir}/extension/vm/construct-t3-opencode-monitor-patch.mjs"; then
-    PATCH_FILE="${candidate_dir}/patches/t3code-construct.patch"
+      "${candidate_dir}/extension/vm/construct-t3-opencode-monitor-patch.mjs" \
+    && [[ -s "${candidate_dir}/bin/apply-t3code-source.mjs" \
+      && -s "${candidate_dir}/patches/t3code-source-transforms.json" \
+      && -d "${candidate_dir}/patches/t3code-overlays" ]]; then
+    SOURCE_TRANSFORMER="${candidate_dir}/bin/apply-t3code-source.mjs"
+    SOURCE_MANIFEST="${candidate_dir}/patches/t3code-source-transforms.json"
+    SOURCE_OVERLAYS="${candidate_dir}/patches/t3code-overlays"
     T3PARK_PATCHER="${candidate_dir}/extension/vm/construct-t3park-patch.mjs"
     T3MONITOR_PATCHER="${candidate_dir}/extension/vm/construct-t3-opencode-monitor-patch.mjs"
-    note "Stable ${TAG} accepts the bundle patchers from ready nightly repair ${candidate_ref}; testing its source patch."
+    note "Stable ${TAG} accepts the bundle patchers from ready nightly repair ${candidate_ref}; testing its source transforms."
   else
     [[ -z "${candidate_dir}" ]] || rm -rf -- "${candidate_dir}"
     candidate_dir=""
     candidate_ref=""
   fi
 fi
-PATCH_HASH="$({ sha256sum "${PATCH_FILE}" "${REPO_DIR}/bin/build-t3code.sh" "${T3PARK_PATCHER}" "${T3MONITOR_PATCHER}"; } | sha256sum | awk '{print $1}')"
+PATCH_HASH="$(t3_build_integration_hash "${REPO_DIR}/bin/build-t3code.sh" "${SOURCE_TRANSFORMER}" "${SOURCE_MANIFEST}" "${SOURCE_OVERLAYS}" "${T3PARK_PATCHER}" "${T3MONITOR_PATCHER}")"
 BUILD_HASH="$(printf '%s\n%s\n' "${PATCH_HASH}" "${CONSTRUCT_VERSION}" | sha256sum | awk '{print $1}')"
 SOURCE_KEY="${SAFE_VERSION}-${BUILD_HASH:0:12}"
 SOURCE_DIR="${CACHE_ROOT}/${SOURCE_KEY}"
@@ -334,27 +321,31 @@ if [[ ! -d "${SOURCE_DIR}/.git" && ! -s "${SOURCE_DIR}/.construct-upstream-commi
 fi
 cd "${SOURCE_DIR}"
 
-if git apply --reverse --check "${PATCH_FILE}" >/dev/null 2>&1; then
-  note "Construct T3 source patch is already applied."
-else
-  if ! t3_build_apply_patch "${PATCH_FILE}"; then
+if ! node "${SOURCE_TRANSFORMER}" apply --source "${SOURCE_DIR}" --manifest "${SOURCE_MANIFEST}" --overlays "${SOURCE_OVERLAYS}"; then
+    t3_build_cleanup_candidate
     candidate_dir=""
     candidate_ref=""
     if [[ "${CHANNEL}" == "stable" ]]; then
       candidate_dir="$(mktemp -d "${TMPDIR:-/tmp}/construct-nightly-fix.XXXXXX")"
       candidate_ref="$(t3_build_fetch_nightly_candidate "${CONSTRUCT_REPO_URL}" "${candidate_dir}" || true)"
     fi
-    candidate_patch="${candidate_dir}/patches/t3code-construct.patch"
+    candidate_transformer="${candidate_dir}/bin/apply-t3code-source.mjs"
+    candidate_manifest="${candidate_dir}/patches/t3code-source-transforms.json"
+    candidate_overlays="${candidate_dir}/patches/t3code-overlays"
     candidate_t3park="${candidate_dir}/extension/vm/construct-t3park-patch.mjs"
     candidate_monitor="${candidate_dir}/extension/vm/construct-t3-opencode-monitor-patch.mjs"
-    if [[ -n "${candidate_ref}" && -s "${candidate_patch}" && -s "${candidate_t3park}" && -s "${candidate_monitor}" ]] \
-      && t3_build_apply_patch "${candidate_patch}"; then
+    if [[ -n "${candidate_ref}" && -s "${candidate_transformer}" && -s "${candidate_manifest}" \
+      && -d "${candidate_overlays}" && -s "${candidate_t3park}" && -s "${candidate_monitor}" ]] \
+      && node "${candidate_transformer}" apply --source "${SOURCE_DIR}" --manifest "${candidate_manifest}" --overlays "${candidate_overlays}"; then
       note "Stable ${TAG} accepts ready nightly repair ${candidate_ref}; using it for this build."
-      PATCH_FILE="${candidate_patch}"
+      SOURCE_TRANSFORMER="${candidate_transformer}"
+      SOURCE_MANIFEST="${candidate_manifest}"
+      SOURCE_OVERLAYS="${candidate_overlays}"
       T3PARK_PATCHER="${candidate_t3park}"
       T3MONITOR_PATCHER="${candidate_monitor}"
-      PATCH_HASH="$({ sha256sum "${PATCH_FILE}" "${REPO_DIR}/bin/build-t3code.sh" "${T3PARK_PATCHER}" "${T3MONITOR_PATCHER}"; } | sha256sum | awk '{print $1}')"
+      PATCH_HASH="$(t3_build_integration_hash "${REPO_DIR}/bin/build-t3code.sh" "${SOURCE_TRANSFORMER}" "${SOURCE_MANIFEST}" "${SOURCE_OVERLAYS}" "${T3PARK_PATCHER}" "${T3MONITOR_PATCHER}")"
       BUILD_HASH="$(printf '%s\n%s\n' "${PATCH_HASH}" "${CONSTRUCT_VERSION}" | sha256sum | awk '{print $1}')"
+      SOURCE_KEY="${SAFE_VERSION}-${BUILD_HASH:0:12}"
       promoted_source_dir="${CACHE_ROOT}/${SAFE_VERSION}-${BUILD_HASH:0:12}"
       if [[ "${promoted_source_dir}" != "${SOURCE_DIR}" ]]; then
         rm -rf -- "${promoted_source_dir}"
@@ -366,7 +357,6 @@ else
       [[ -z "${candidate_dir}" ]] || rm -rf -- "${candidate_dir}"
       exit 1
     fi
-  fi
 fi
 
 note "Installing T3 source dependencies..."
