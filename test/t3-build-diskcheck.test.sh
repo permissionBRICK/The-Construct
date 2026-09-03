@@ -164,9 +164,8 @@ ok "script never prunes the build it is about to produce" "$(grep -q '"\${stale_
 ok "freed space is measured with df before/after, not du of victims" "$(grep -q 'free_before_kb=' "${S}" && grep -q 'free_after_kb=' "${S}" && ! grep -q 'reclaimed_kb' "${S}" && echo true || echo false)"
 ok "failure message names the override knob" "$(grep -q 'T3CODE_BUILD_MIN_FREE_GIB=<gib>' "${S}" && echo true || echo false)"
 
-# Ready nightly repairs can be used as a no-agent stable fallback. Only the
-# watcher's validated branch namespace is accepted; unrelated/partial refs are
-# ignored, and the newest deterministic ref wins.
+# Historical repair branches remain parseable, but provisioning now uses the
+# two inventories committed on main rather than discovering remote branches.
 refs="$(cat <<'EOF'
 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main
 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb refs/heads/fix/upstream-t3-nightly-0.0.39-nightly.20260902.1260-2026-09-02
@@ -177,9 +176,8 @@ EOF
 )"
 ok "nightly fallback selects the newest validated repair ref" "$([[ "$(printf '%s\n' "${refs}" | t3_build_latest_nightly_fix_ref)" == "refs/heads/fix/upstream-t3-nightly-0.0.39-nightly.20260903.1272-2026-09-03" ]] && echo true || echo false)"
 ok "nightly fallback ignores input without a repair branch" "$([[ -z "$(printf '%s\n' "${refs}" | grep -v upstream-t3-nightly | t3_build_latest_nightly_fix_ref)" ]] && echo true || echo false)"
-ok "stable build has a ready-nightly fallback before giving up" "$(grep -q 'Stable \${TAG} accepts ready nightly repair' "${S}" && grep -q 't3_build_fetch_nightly_candidate' "${S}" && echo true || echo false)"
-ok "stable preflights both published-bundle patchers before the expensive build" "$(grep -q 't3_build_bundle_patchers_compatible "\${VERSION}" "\${T3PARK_PATCHER}" "\${T3MONITOR_PATCHER}"' "${S}" && echo true || echo false)"
-ok "nightly candidate carries transforms, overlays and both bundle patchers" "$(grep -q 'SOURCE_MANIFEST="\${candidate_dir}/patches/t3code-source-transforms.json"' "${S}" && grep -q 'SOURCE_OVERLAYS="\${candidate_dir}/patches/t3code-overlays"' "${S}" && grep -q 'T3PARK_PATCHER="\${candidate_dir}/extension/vm/construct-t3park-patch.mjs"' "${S}" && grep -q 'T3MONITOR_PATCHER="\${candidate_dir}/extension/vm/construct-t3-opencode-monitor-patch.mjs"' "${S}" && echo true || echo false)"
+ok "build selects a distinct release or nightly inventory" "$(grep -q 'INVENTORY_NAME=release' "${S}" && grep -q 't3code-\${INVENTORY_NAME}/source-transforms.json' "${S}" && echo true || echo false)"
+ok "stable retries the local nightly inventory after release apply failure" "$(grep -q 'Release transforms rejected \${TAG}; the local nightly inventory applies' "${S}" && grep -q 'patches/t3code-nightly/source-transforms.json' "${S}" && echo true || echo false)"
 
 printf '  t3-build-diskcheck tests — %d passed, %d failed\n' "${pass}" "${fail}"
 [[ "${fail}" -eq 0 ]]

@@ -20,8 +20,8 @@ ok("npmTag: garbage -> latest (normalize)", t3.npmTag("alpha") === "latest");
 // ── shared patched-source server/Desktop build ─────────────────────────────
 const repoRoot = path.resolve(__dirname, "..", "..");
 const sourceBuild = fs.readFileSync(path.join(repoRoot, "bin", "build-t3code.sh"), "utf8");
-const transformManifest = fs.readFileSync(path.join(repoRoot, "patches", "t3code-source-transforms.json"), "utf8");
-const overlayRoot = path.join(repoRoot, "patches", "t3code-overlays");
+const transformManifest = fs.readFileSync(path.join(repoRoot, "patches", "t3code-release", "source-transforms.json"), "utf8");
+const overlayRoot = path.join(repoRoot, "patches", "t3code-release", "overlays");
 const overlayText = fs.readdirSync(overlayRoot, { recursive: true, withFileTypes: true })
   .filter((entry) => entry.isFile()).map((entry) => fs.readFileSync(path.join(entry.parentPath, entry.name), "utf8")).join("\n");
 const sourceRecipe = transformManifest + "\n" + overlayText;
