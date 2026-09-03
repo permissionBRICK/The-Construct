@@ -186,6 +186,11 @@ MANIFEST_PATH="${ARTIFACT_ROOT}/manifest.json"
 STATUS_PATH="/etc/construct/t3code-desktop-status"
 CONSTRUCT_VERSION="${CONSTRUCT_VERSION:-unversioned}"
 [[ "${CONSTRUCT_VERSION}" =~ ^[0-9a-f]{7,64}$ ]] || CONSTRUCT_VERSION=unversioned
+candidate_dir=""
+t3_build_cleanup_candidate() {
+  [[ -z "${candidate_dir:-}" ]] || rm -rf -- "${candidate_dir}"
+}
+trap t3_build_cleanup_candidate EXIT
 
 note() { printf '    %s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -210,7 +215,6 @@ VERSION="$(npm view "t3@${NPM_TAG}" version 2>/dev/null | tail -1 | tr -d '[:spa
 TAG="v${VERSION}"
 SAFE_VERSION="${VERSION//[^0-9A-Za-z._-]/-}"
 mkdir -p "${CACHE_ROOT}" "${ARTIFACT_ROOT}" /etc/construct
-candidate_dir=""
 candidate_ref=""
 if [[ "${CHANNEL}" == "stable" ]] \
   && ! t3_build_bundle_patchers_compatible "${VERSION}" "${T3PARK_PATCHER}" "${T3MONITOR_PATCHER}"; then
