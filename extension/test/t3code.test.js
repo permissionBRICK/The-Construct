@@ -20,7 +20,11 @@ ok("npmTag: garbage -> latest (normalize)", t3.npmTag("alpha") === "latest");
 // ── shared patched-source server/Desktop build ─────────────────────────────
 const repoRoot = path.resolve(__dirname, "..", "..");
 const sourceBuild = fs.readFileSync(path.join(repoRoot, "bin", "build-t3code.sh"), "utf8");
-const sourcePatch = fs.readFileSync(path.join(repoRoot, "patches", "t3code-construct.patch"), "utf8");
+const transformManifest = fs.readFileSync(path.join(repoRoot, "patches", "t3code-source-transforms.json"), "utf8");
+const overlayRoot = path.join(repoRoot, "patches", "t3code-overlays");
+const overlayText = fs.readdirSync(overlayRoot, { recursive: true, withFileTypes: true })
+  .filter((entry) => entry.isFile()).map((entry) => fs.readFileSync(path.join(entry.parentPath, entry.name), "utf8")).join("\n");
+const sourceRecipe = transformManifest + "\n" + overlayText;
 const updateT3 = fs.readFileSync(path.join(repoRoot, "Update-T3Code.ps1"), "utf8");
 const provisionT3 = fs.readFileSync(path.join(repoRoot, "Provision-AgentVM.ps1"), "utf8");
 const installAiTools = fs.readFileSync(path.join(repoRoot, "bin", "install-ai-tools.sh"), "utf8");
@@ -30,9 +34,9 @@ ok("source build: falls back to codeload and preserves the upstream commit",
   /GIT_TERMINAL_PROMPT=0 git clone/.test(sourceBuild) && /codeload\.github\.com\/pingdotgg\/t3code\/tar\.gz\/refs\/tags\/\$\{TAG\}/.test(sourceBuild) &&
   /api\.github\.com\/repos\/pingdotgg\/t3code\/commits\/\$\{TAG\}/.test(sourceBuild) && /\.construct-upstream-commit/.test(sourceBuild));
 ok("source build: prunes superseded dependency trees before its free-space gate",
-  /for stale_modules in "\$\{CACHE_ROOT\}"\/\*\/node_modules/.test(sourceBuild) &&
-  /dirname "\$\{stale_modules\}"\)" == "\$\{SOURCE_DIR\}"/.test(sourceBuild) &&
-  sourceBuild.indexOf("for stale_modules") < sourceBuild.indexOf('available_kb="$(df'));
+  /for stale_dir in "\$\{CACHE_ROOT\}"\/\*\//.test(sourceBuild) &&
+  /t3_build_prune_candidates "\$\{stale_dir\}"/.test(sourceBuild) &&
+  sourceBuild.indexOf("for stale_dir") < sourceBuild.indexOf('available_kb="$(df'));
 ok("source build: cache is keyed by both T3 and installed Construct versions",
   /CONSTRUCT_VERSION/.test(sourceBuild) && /cached_construct/.test(sourceBuild) &&
   /T3CODE_BUILD_KEY/.test(sourceBuild) && /constructVersion, buildHash/.test(sourceBuild) &&
@@ -41,16 +45,16 @@ ok("source build: an unchanged active build skips T3 reinstall and restart",
   /t3code-installed-build/.test(installAiTools) &&
   /T3 Code build is unchanged and already running; skipping its reinstall\/restart/.test(installAiTools));
 ok("source build: one patched server bundle feeds the VM and Desktop package",
-  /pnpm run build:desktop/.test(sourceBuild) && /construct-t3park-patch\.mjs" apply --bundle/.test(sourceBuild) &&
+  /pnpm run build:desktop/.test(sourceBuild) && /node "\$\{T3PARK_PATCHER\}" apply --bundle/.test(sourceBuild) &&
   /build-desktop-artifact\.ts/.test(sourceBuild) && /ln -sfn "\$\{SOURCE_DIR\}\/apps\/server\/dist\/bin\.mjs" \/usr\/local\/bin\/t3/.test(sourceBuild));
 ok("source build: Windows compiler/NSIS dependencies stay in the VM",
   /mingw-w64/.test(sourceBuild) && /wine32:i386/.test(sourceBuild) && /x86_64-pc-windows-gnu/.test(sourceBuild) && /--target nsis --arch x64/.test(sourceBuild));
-ok("source patch: voice RPC, live cursor-safe insertion, mic UI, and Construct updater are present",
-  /voiceInput\.start/.test(sourcePatch) && /active\.lastSetInput/.test(sourcePatch) && /MicIcon/.test(sourcePatch) &&
-  /Ctrl\+T/.test(sourcePatch) && !/Ctrl\+D/.test(sourcePatch) && /Update-T3Code\.ps1/.test(sourcePatch));
-ok("source patch: streams PCM amplitude into a live mic-button level effect",
-  /readInt16LE/.test(sourcePatch) && /Schema\.Literal\("level"\)/.test(sourcePatch) &&
-  /data-voice-level/.test(sourcePatch) && /boxShadow/.test(sourcePatch));
+ok("source transforms: voice RPC, live cursor-safe insertion, mic UI, and Construct updater are present",
+  /voiceInput\.start/.test(sourceRecipe) && /active\.lastSetInput/.test(sourceRecipe) && /MicIcon/.test(sourceRecipe) &&
+  /Ctrl\+T/.test(sourceRecipe) && !/Ctrl\+D/.test(sourceRecipe) && /Update-T3Code\.ps1/.test(sourceRecipe));
+ok("source transforms: stream PCM amplitude into a live mic-button level effect",
+  /readInt16LE/.test(sourceRecipe) && /Schema\.Literal\(\\?"level\\?"\)/.test(sourceRecipe) &&
+  /data-voice-level/.test(sourceRecipe) && /boxShadow/.test(sourceRecipe));
 ok("desktop update handoff: reprovisions with the saved T3 source-build setting",
   /Provision-AgentVM\.ps1/.test(updateT3) && /Action\s+= 'provision'/.test(updateT3) && /T3CodeLimitResume/.test(updateT3));
 ok("desktop provisioning: installs updates silently, waits, and never prompts or launches the app",

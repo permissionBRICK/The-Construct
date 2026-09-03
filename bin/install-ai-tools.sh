@@ -781,7 +781,7 @@ install_t3code() {
   # so renderer/RPC changes cannot drift between the two ends. The build script
   # resolves latest/nightly through npm, caches identical builds, and leaves an
   # already-installed version untouched if a future upstream tag rejects the
-  # guarded patch.
+  # guarded source-transform recipe.
   if [[ "${T3CODE_LIMIT_RESUME:-false}" == "true" ]]; then
     step "Building Construct's patched T3 server + Windows Desktop app"
     if ! env REPO_DIR="${REPO_DIR}" T3CODE_CHANNEL="${T3CODE_CHANNEL}" \
