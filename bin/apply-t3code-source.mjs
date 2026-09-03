@@ -12,8 +12,8 @@ const valueAfter = (flag, fallback) => {
   return index >= 0 && args[index + 1] ? resolve(args[index + 1]) : fallback
 }
 const sourceDir = valueAfter("--source", process.cwd())
-const manifestPath = valueAfter("--manifest", join(constructDir, "patches", "t3code-source-transforms.json"))
-const overlayDir = valueAfter("--overlays", join(constructDir, "patches", "t3code-overlays"))
+const manifestPath = valueAfter("--manifest", join(constructDir, "patches", "t3code-release", "source-transforms.json"))
+const overlayDir = valueAfter("--overlays", join(constructDir, "patches", "t3code-release", "overlays"))
 
 if (mode !== "apply" && mode !== "status") {
   console.error("usage: apply-t3code-source.mjs apply|status [--source DIR] [--manifest FILE] [--overlays DIR]")
