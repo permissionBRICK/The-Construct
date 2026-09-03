@@ -109,11 +109,49 @@ has_tool() {
 AGENT_SYSTEM_PROMPT_SRC="${REPO_DIR}/config/systemprompt.md"
 AGENT_DNS="${CONSTRUCT_EXTERNAL_HOST:-$(hostname).mshome.net}"
 
+# Checksums of the prompt we last wrote to each destination, one
+# "<sha256>  <path>" line per file. This is what lets a reprovision tell "the
+# managed file is still exactly what we installed" apart from "the user (or an
+# agent) appended their own rules to it".
+AGENT_SYSTEM_PROMPT_STATE="${AGENT_SYSTEM_PROMPT_STATE:-/etc/construct/systemprompt-installed.sha256}"
+
+# The checksum recorded for a destination, empty when we never wrote it.
+agent_system_prompt_recorded() {
+  local dest_file="$1"
+  [[ -f "${AGENT_SYSTEM_PROMPT_STATE}" ]] || return 0
+  awk -v f="${dest_file}" '$0 ~ ("  " f "$") { print $1; exit }' \
+    "${AGENT_SYSTEM_PROMPT_STATE}" || true
+}
+
+# Record (or replace) the checksum for a destination.
+agent_system_prompt_record() {
+  local dest_file="$1" sum="$2" state_dir
+  state_dir="$(dirname "${AGENT_SYSTEM_PROMPT_STATE}")"
+  install -d -m 0755 "${state_dir}"
+  local kept=""
+  if [[ -f "${AGENT_SYSTEM_PROMPT_STATE}" ]]; then
+    kept="$(grep -v -F "  ${dest_file}" "${AGENT_SYSTEM_PROMPT_STATE}" || true)"
+  fi
+  { [[ -n "${kept}" ]] && printf '%s\n' "${kept}"
+    printf '%s  %s\n' "${sum}" "${dest_file}"; } >"${AGENT_SYSTEM_PROMPT_STATE}"
+  chmod 0644 "${AGENT_SYSTEM_PROMPT_STATE}"
+}
+
 # Render the shipped system prompt (substituting the live DNS name) into a tool's
 # GLOBAL agent-instructions file so it applies to every repo the agent touches
-# under that user. We overwrite the destination: it is a managed file owned by
-# the provisioning flow, regenerated on every (re-)provision so the hostname and
-# wording stay current. Relies on AGENT_SYSTEM_PROMPT_SRC existing.
+# under that user.
+#
+# The destination is a managed file, refreshed on every (re-)provision so the
+# hostname and wording stay current -- but only while it is still byte-for-byte
+# what we last installed. Machine-local additions to these files are a normal
+# thing to have (house rules that must not live in this repo, which ships to
+# everyone), and silently overwriting them on an unrelated reprovision loses
+# them with no warning; a reinstall already preserves them, because
+# restore-config.sh overlays the backed-up home after provisioning. So: write
+# when the file is missing, refresh when untouched, keep when locally modified.
+# A destination we have no checksum for (VM provisioned before this bookkeeping
+# existed) is adopted once -- written and recorded -- and protected from then on.
+# Relies on AGENT_SYSTEM_PROMPT_SRC existing.
 install_agent_system_prompt() {
   local dest_file="$1"
   local owner="$2"
@@ -125,10 +163,22 @@ install_agent_system_prompt() {
     return 0
   fi
 
+  local recorded current
+  if [[ -f "${dest_file}" ]]; then
+    recorded="$(agent_system_prompt_recorded "${dest_file}")"
+    current="$(sha256sum "${dest_file}" | cut -d' ' -f1)"
+    if [[ -n "${recorded}" && "${recorded}" != "${current}" ]]; then
+      note "    keeping locally modified ${dest_file} (shipped system prompt not reapplied)"
+      return 0
+    fi
+  fi
+
   step "Installing global agent system prompt to ${dest_file}"
   install -d -m 0755 "${dest_dir}"
   sed "s|__AGENT_DNS__|${AGENT_DNS}|g" "${AGENT_SYSTEM_PROMPT_SRC}" >"${dest_file}"
   chown "${owner}:${owner}" "${dest_file}" 2>/dev/null || true
+  agent_system_prompt_record "${dest_file}" \
+    "$(sha256sum "${dest_file}" | cut -d' ' -f1)"
 }
 
 # Run an official `curl | bash` installer with retries. The opencode installer
