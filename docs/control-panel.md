@@ -530,7 +530,8 @@ visually distinguishable from stable.
 ### Patched T3 Code server + Desktop build
 
 The **Build patched T3 Code + Desktop** toggle (off by default) makes Construct resolve the
-selected npm channel to its exact upstream Git tag, apply one guarded source patch, and build
+selected npm channel to its exact upstream Git tag, apply guarded source transforms plus
+Construct-owned file overlays, and build
 both the VM server/web client and an unsigned Windows x64 Desktop installer from that same
 checkout. The build toolchain (Node/pnpm, Rust/MinGW, Wine, and Electron Builder) stays in the
 VM. The finished installer is copied to
@@ -539,7 +540,7 @@ Windows as part of provisioning. There is no installation prompt; if the Desktop
 running when the silent installer closed it (typically because its own update control
 launched the reprovision), provisioning starts the updated app again, otherwise it stays
 closed. Construct keys the shared build by the resolved upstream T3 version,
-the installed Construct revision, and the guarded patch recipe. Routine reprovisions reuse the
+the installed Construct revision, and the guarded transformation recipe. Routine reprovisions reuse the
 running VM server and Desktop artifact without rebuilding, reinstalling, or restarting T3; a T3
 update or Construct update invalidates that cache. An already-current Desktop installation is
 left alone. Activating a genuinely new build restarts `t3code-serve`, so an open T3 provider
@@ -591,7 +592,7 @@ This is a **reprovision-only** toggle: saving a change persists it and shows a p
 a **Reprovision now** action. The reprovision selects the patched-source or stock install and
 restarts `t3code-serve`. The preference also rides reinstall. For compatibility with existing machines,
 its internal config key remains `T3CODE_LIMIT_RESUME`; the UI and behavior now cover the whole
-source-build feature set. If a newer stable/nightly source tag changes a guarded patch anchor,
+source-build feature set. If a newer stable/nightly source tag changes a guarded transform anchor,
 the new build is refused and the prior working T3 installation is left in place. The established
 usage-limit/OpenCode bundle transforms are applied to the freshly built server before both the
 VM install and Desktop packaging. The auto-resume dispatch authenticates with its own long-lived
