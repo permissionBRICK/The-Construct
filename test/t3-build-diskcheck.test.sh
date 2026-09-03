@@ -187,7 +187,24 @@ ok "a genuine conflict fails" "$([[ "${conf_rc}" -ne 0 ]] && echo true || echo f
 ok "the failure names the conflicting file and the tag" "$([[ "${conf_out}" == *"file.txt"* && "${conf_out}" == *"v9.9.9"* ]] && echo true || echo false)"
 ok "the failure says to rebase the patch, not that the version changed" "$([[ "${conf_out}" == *"Rebase patches/t3code-construct.patch"* && "${conf_out}" != *"changed incompatibly"* ]] && echo true || echo false)"
 ok "a failed application leaves the tree untouched" "$(cd "${R}" && git status --porcelain | grep -q . && echo false || echo true)"
-ok "script body uses the lenient applier" "$(grep -q 't3_build_apply_patch "\${PATCH_FILE}" || exit 1' "${S}" && ! grep -q 'changed incompatibly' "${S}" && echo true || echo false)"
+ok "script body uses the lenient applier" "$(grep -q 'if ! t3_build_apply_patch "\${PATCH_FILE}"' "${S}" && ! grep -q 'changed incompatibly' "${S}" && echo true || echo false)"
+
+# Ready nightly repairs can be used as a no-agent stable fallback. Only the
+# watcher's validated branch namespace is accepted; unrelated/partial refs are
+# ignored, and the newest deterministic ref wins.
+refs="$(cat <<'EOF'
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb refs/heads/fix/upstream-t3-nightly-0.0.39-nightly.20260902.1260-2026-09-02
+cccccccccccccccccccccccccccccccccccccccc refs/heads/fix/upstream-t3-stable-0.0.39-2026-09-03
+dddddddddddddddddddddddddddddddddddddddd refs/heads/fix/upstream-t3-nightly-0.0.39-nightly.20260903.1272-2026-09-03
+eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee refs/pull/2/head
+EOF
+)"
+ok "nightly fallback selects the newest validated repair ref" "$([[ "$(printf '%s\n' "${refs}" | t3_build_latest_nightly_fix_ref)" == "refs/heads/fix/upstream-t3-nightly-0.0.39-nightly.20260903.1272-2026-09-03" ]] && echo true || echo false)"
+ok "nightly fallback ignores input without a repair branch" "$([[ -z "$(printf '%s\n' "${refs}" | grep -v upstream-t3-nightly | t3_build_latest_nightly_fix_ref)" ]] && echo true || echo false)"
+ok "stable build has a ready-nightly fallback before giving up" "$(grep -q 'Stable \${TAG} accepts ready nightly repair' "${S}" && grep -q 't3_build_fetch_nightly_candidate' "${S}" && echo true || echo false)"
+ok "stable preflights both published-bundle patchers before the expensive build" "$(grep -q 't3_build_bundle_patchers_compatible "\${VERSION}" "\${T3PARK_PATCHER}" "\${T3MONITOR_PATCHER}"' "${S}" && echo true || echo false)"
+ok "nightly candidate carries source and both bundle patchers" "$(grep -q 'PATCH_FILE="\${candidate_dir}/patches/t3code-construct.patch"' "${S}" && grep -q 'T3PARK_PATCHER="\${candidate_dir}/extension/vm/construct-t3park-patch.mjs"' "${S}" && grep -q 'T3MONITOR_PATCHER="\${candidate_dir}/extension/vm/construct-t3-opencode-monitor-patch.mjs"' "${S}" && echo true || echo false)"
 
 printf '  t3-build-diskcheck tests — %d passed, %d failed\n' "${pass}" "${fail}"
 [[ "${fail}" -eq 0 ]]
