@@ -2119,10 +2119,25 @@ says what will actually happen.
   - `Get-AgentUsage.ps1` — ccusage over SSH → combined JSON; SSH connection logic
     (key `~/.ssh/<-LocalKeyName>` else the `-HostAlias` alias, on `-SshPort`) mirrored in
     `src/ssh.js`. Defaults are the single-VM literals.
-  - `Update-T3Code.ps1` — launched by the Construct-built T3 Desktop app's update control;
-    reruns provisioning with the saved settings. Takes `-VmHost` / `-HostAlias` /
-    `-SshPort` / `-LocalKeyName` and forwards them with param probing, so an older
-    provisioner is never handed unknown args.
+  - `Update-T3Code.ps1` — launched by the Construct-built T3 Desktop app's update control
+    (its "Reprovision VM" offer: the VM is behind the installed Construct, or a newer
+    upstream T3 Code exists on the build's channel); reruns provisioning with the saved
+    settings; exits 1 when provisioning failed and 3 when it finished with optional errors,
+    so the launcher can tell. Takes `-VmHost` / `-HostAlias` / `-SshPort` / `-LocalKeyName`
+    and forwards them with param probing, so an older provisioner is never handed unknown
+    args — the Desktop app passes them for the registry's default instance whenever that is
+    not the built-in `agent-vm` (a small mirror of `instances.js` lives in the patch). The same
+    Desktop control offers "Update Construct" (runs `Update-Construct.ps1 -Repo -Ref`) when
+    the installed Construct is behind its ref; both scripts run in a visible console via
+    `cmd /d /s /c "start <title> /wait powershell.exe -File ..."` (windowsVerbatimArguments,
+    windowsHide, NOT `detached`). Gotcha behind that shape: Electron's main process has no
+    console, Node's `detached: true` maps to DETACHED_PROCESS (the child gets no console) and
+    `stdio: "ignore"` points its std handles at NUL — the earlier patch spawned powershell.exe
+    that way and ran the whole reprovision invisibly. `start` gives PowerShell a fresh console
+    with working stdin/stdout; `/wait` lets the hidden cmd relay the exit code to the app. The Desktop side lives in the
+    T3 source patch (`patches/t3code-construct.patch`: `apps/desktop/src/updates/
+    ConstructUpdates.ts`), reads the same `.construct-settings.json` markers as `updates.js`
+    and applies the same rules (`isProvisionStale`, compare-API 404 = update available).
   - `lib/AgentVm.Instances.ps1` — the PowerShell twin of `src/instances.js`: same file,
     same schema, same normalization and identity rules. Change both together.
   - `lib/AgentVm.Remote.ps1` — the PowerShell `constructd` client `src/remotehost.js`
