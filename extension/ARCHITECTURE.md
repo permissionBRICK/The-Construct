@@ -2135,7 +2135,7 @@ says what will actually happen.
     `stdio: "ignore"` points its std handles at NUL — the earlier patch spawned powershell.exe
     that way and ran the whole reprovision invisibly. `start` gives PowerShell a fresh console
     with working stdin/stdout; `/wait` lets the hidden cmd relay the exit code to the app. The Desktop side lives in the
-    T3 source overlay (`patches/t3code-overlays/apps/desktop/src/updates/
+    T3 source overlay (`patches/t3code-release/overlays/apps/desktop/src/updates/
     ConstructUpdates.ts`), reads the same `.construct-settings.json` markers as `updates.js`
     and applies the same rules (`isProvisionStale`, compare-API 404 = update available).
   - `lib/AgentVm.Instances.ps1` — the PowerShell twin of `src/instances.js`: same file,

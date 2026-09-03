@@ -157,8 +157,10 @@ NPM_TAG=latest
 CACHE_ROOT="/var/cache/construct/t3code-source"
 ARTIFACT_ROOT="/var/lib/construct/t3code-desktop"
 SOURCE_TRANSFORMER="${REPO_DIR}/bin/apply-t3code-source.mjs"
-SOURCE_MANIFEST="${REPO_DIR}/patches/t3code-source-transforms.json"
-SOURCE_OVERLAYS="${REPO_DIR}/patches/t3code-overlays"
+INVENTORY_NAME=release
+[[ "${CHANNEL}" == "nightly" ]] && INVENTORY_NAME=nightly
+SOURCE_MANIFEST="${REPO_DIR}/patches/t3code-${INVENTORY_NAME}/source-transforms.json"
+SOURCE_OVERLAYS="${REPO_DIR}/patches/t3code-${INVENTORY_NAME}/overlays"
 T3PARK_PATCHER="${REPO_DIR}/extension/vm/construct-t3park-patch.mjs"
 T3MONITOR_PATCHER="${REPO_DIR}/extension/vm/construct-t3-opencode-monitor-patch.mjs"
 CONSTRUCT_REPO_URL="${CONSTRUCT_REPO_URL:-https://github.com/permissionBRICK/The-Construct.git}"
@@ -167,12 +169,6 @@ MANIFEST_PATH="${ARTIFACT_ROOT}/manifest.json"
 STATUS_PATH="/etc/construct/t3code-desktop-status"
 CONSTRUCT_VERSION="${CONSTRUCT_VERSION:-unversioned}"
 [[ "${CONSTRUCT_VERSION}" =~ ^[0-9a-f]{7,64}$ ]] || CONSTRUCT_VERSION=unversioned
-candidate_dir=""
-t3_build_cleanup_candidate() {
-  [[ -z "${candidate_dir:-}" ]] || rm -rf -- "${candidate_dir}"
-}
-trap t3_build_cleanup_candidate EXIT
-
 note() { printf '    %s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
@@ -197,30 +193,6 @@ VERSION="$(npm view "t3@${NPM_TAG}" version 2>/dev/null | tail -1 | tr -d '[:spa
 TAG="v${VERSION}"
 SAFE_VERSION="${VERSION//[^0-9A-Za-z._-]/-}"
 mkdir -p "${CACHE_ROOT}" "${ARTIFACT_ROOT}" /etc/construct
-candidate_ref=""
-if [[ "${CHANNEL}" == "stable" ]] \
-  && ! t3_build_bundle_patchers_compatible "${VERSION}" "${T3PARK_PATCHER}" "${T3MONITOR_PATCHER}"; then
-  candidate_dir="$(mktemp -d "${TMPDIR:-/tmp}/construct-nightly-fix.XXXXXX")"
-  candidate_ref="$(t3_build_fetch_nightly_candidate "${CONSTRUCT_REPO_URL}" "${candidate_dir}" || true)"
-  if [[ -n "${candidate_ref}" ]] \
-    && t3_build_bundle_patchers_compatible "${VERSION}" \
-      "${candidate_dir}/extension/vm/construct-t3park-patch.mjs" \
-      "${candidate_dir}/extension/vm/construct-t3-opencode-monitor-patch.mjs" \
-    && [[ -s "${candidate_dir}/bin/apply-t3code-source.mjs" \
-      && -s "${candidate_dir}/patches/t3code-source-transforms.json" \
-      && -d "${candidate_dir}/patches/t3code-overlays" ]]; then
-    SOURCE_TRANSFORMER="${candidate_dir}/bin/apply-t3code-source.mjs"
-    SOURCE_MANIFEST="${candidate_dir}/patches/t3code-source-transforms.json"
-    SOURCE_OVERLAYS="${candidate_dir}/patches/t3code-overlays"
-    T3PARK_PATCHER="${candidate_dir}/extension/vm/construct-t3park-patch.mjs"
-    T3MONITOR_PATCHER="${candidate_dir}/extension/vm/construct-t3-opencode-monitor-patch.mjs"
-    note "Stable ${TAG} accepts the bundle patchers from ready nightly repair ${candidate_ref}; testing its source transforms."
-  else
-    [[ -z "${candidate_dir}" ]] || rm -rf -- "${candidate_dir}"
-    candidate_dir=""
-    candidate_ref=""
-  fi
-fi
 PATCH_HASH="$(t3_build_integration_hash "${REPO_DIR}/bin/build-t3code.sh" "${SOURCE_TRANSFORMER}" "${SOURCE_MANIFEST}" "${SOURCE_OVERLAYS}" "${T3PARK_PATCHER}" "${T3MONITOR_PATCHER}")"
 BUILD_HASH="$(printf '%s\n%s\n' "${PATCH_HASH}" "${CONSTRUCT_VERSION}" | sha256sum | awk '{print $1}')"
 SOURCE_KEY="${SAFE_VERSION}-${BUILD_HASH:0:12}"
@@ -322,27 +294,13 @@ fi
 cd "${SOURCE_DIR}"
 
 if ! node "${SOURCE_TRANSFORMER}" apply --source "${SOURCE_DIR}" --manifest "${SOURCE_MANIFEST}" --overlays "${SOURCE_OVERLAYS}"; then
-    t3_build_cleanup_candidate
-    candidate_dir=""
-    candidate_ref=""
-    if [[ "${CHANNEL}" == "stable" ]]; then
-      candidate_dir="$(mktemp -d "${TMPDIR:-/tmp}/construct-nightly-fix.XXXXXX")"
-      candidate_ref="$(t3_build_fetch_nightly_candidate "${CONSTRUCT_REPO_URL}" "${candidate_dir}" || true)"
-    fi
-    candidate_transformer="${candidate_dir}/bin/apply-t3code-source.mjs"
-    candidate_manifest="${candidate_dir}/patches/t3code-source-transforms.json"
-    candidate_overlays="${candidate_dir}/patches/t3code-overlays"
-    candidate_t3park="${candidate_dir}/extension/vm/construct-t3park-patch.mjs"
-    candidate_monitor="${candidate_dir}/extension/vm/construct-t3-opencode-monitor-patch.mjs"
-    if [[ -n "${candidate_ref}" && -s "${candidate_transformer}" && -s "${candidate_manifest}" \
-      && -d "${candidate_overlays}" && -s "${candidate_t3park}" && -s "${candidate_monitor}" ]] \
-      && node "${candidate_transformer}" apply --source "${SOURCE_DIR}" --manifest "${candidate_manifest}" --overlays "${candidate_overlays}"; then
-      note "Stable ${TAG} accepts ready nightly repair ${candidate_ref}; using it for this build."
-      SOURCE_TRANSFORMER="${candidate_transformer}"
-      SOURCE_MANIFEST="${candidate_manifest}"
-      SOURCE_OVERLAYS="${candidate_overlays}"
-      T3PARK_PATCHER="${candidate_t3park}"
-      T3MONITOR_PATCHER="${candidate_monitor}"
+    nightly_manifest="${REPO_DIR}/patches/t3code-nightly/source-transforms.json"
+    nightly_overlays="${REPO_DIR}/patches/t3code-nightly/overlays"
+    if [[ "${CHANNEL}" == "stable" && -s "${nightly_manifest}" && -d "${nightly_overlays}" ]] \
+      && node "${SOURCE_TRANSFORMER}" apply --source "${SOURCE_DIR}" --manifest "${nightly_manifest}" --overlays "${nightly_overlays}"; then
+      note "Release transforms rejected ${TAG}; the local nightly inventory applies, using it for this build."
+      SOURCE_MANIFEST="${nightly_manifest}"
+      SOURCE_OVERLAYS="${nightly_overlays}"
       PATCH_HASH="$(t3_build_integration_hash "${REPO_DIR}/bin/build-t3code.sh" "${SOURCE_TRANSFORMER}" "${SOURCE_MANIFEST}" "${SOURCE_OVERLAYS}" "${T3PARK_PATCHER}" "${T3MONITOR_PATCHER}")"
       BUILD_HASH="$(printf '%s\n%s\n' "${PATCH_HASH}" "${CONSTRUCT_VERSION}" | sha256sum | awk '{print $1}')"
       SOURCE_KEY="${SAFE_VERSION}-${BUILD_HASH:0:12}"
@@ -354,7 +312,6 @@ if ! node "${SOURCE_TRANSFORMER}" apply --source "${SOURCE_DIR}" --manifest "${S
         cd "${SOURCE_DIR}"
       fi
     else
-      [[ -z "${candidate_dir}" ]] || rm -rf -- "${candidate_dir}"
       exit 1
     fi
 fi
