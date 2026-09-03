@@ -117,6 +117,52 @@ t3_build_apply_patch() {
   return 1
 }
 
+# Return the newest pushed, validated nightly repair ref from ls-remote input.
+# The repair supervisor only pushes these branches after its own exact-patch and
+# focused-test validation, so an unpublished/incomplete agent attempt is never a
+# candidate. Version/date/build components are zero-padded by upstream and the
+# watcher, making lexical order deterministic.
+t3_build_latest_nightly_fix_ref() {
+  sed -n 's/^[0-9a-f]\{40,64\}[[:space:]]\+\(refs\/heads\/fix\/upstream-t3-nightly-[0-9A-Za-z._-]*\)$/\1/p' \
+    | LC_ALL=C sort | tail -1
+}
+
+# Clone the newest ready nightly repair branch into $2. Prints its ref on
+# success. Network failure or no ready branch is an ordinary miss: callers keep
+# the normal failure path rather than making recovery availability mandatory.
+t3_build_fetch_nightly_candidate() {
+  local repo_url="$1" destination="$2" ref branch
+  ref="$(GIT_TERMINAL_PROMPT=0 git ls-remote --heads "${repo_url}" \
+    'refs/heads/fix/upstream-t3-nightly-*' 2>/dev/null | t3_build_latest_nightly_fix_ref)"
+  [[ -n "${ref}" ]] || return 1
+  branch="${ref#refs/heads/}"
+  rm -rf -- "${destination}"
+  GIT_TERMINAL_PROMPT=0 git clone --quiet --depth 1 --single-branch --branch "${branch}" \
+    "${repo_url}" "${destination}" || { rm -rf -- "${destination}"; return 1; }
+  printf '%s\n' "${ref}"
+}
+
+# Check both runtime patchers against the published npm bundle for a version.
+# This catches compatibility failures before the expensive source/Desktop build,
+# which is early enough for stable to switch to a ready nightly repair inventory.
+t3_build_bundle_patchers_compatible() {
+  local version="$1" t3park="$2" monitor="$3" work tgz bundle status
+  work="$(mktemp -d)"
+  if ! npm pack "t3@${version}" --pack-destination "${work}" --silent >/dev/null 2>&1; then
+    rm -rf -- "${work}"; return 1
+  fi
+  tgz="$(find "${work}" -maxdepth 1 -type f -name '*.tgz' -print -quit)"
+  [[ -n "${tgz}" ]] && tar -xzf "${tgz}" -C "${work}" >/dev/null 2>&1 || { rm -rf -- "${work}"; return 1; }
+  bundle="${work}/package/dist/bin.mjs"
+  [[ -s "${bundle}" ]] || { rm -rf -- "${work}"; return 1; }
+  for patcher in "${t3park}" "${monitor}"; do
+    status="$(node "${patcher}" status --bundle "${bundle}" 2>/dev/null || true)"
+    node -e 'try{process.exit(JSON.parse(process.argv[1]).compatible===true?0:1)}catch{process.exit(1)}' "${status}" \
+      || { rm -rf -- "${work}"; return 1; }
+  done
+  rm -rf -- "${work}"
+}
+
 # Sourced for the helpers only (unit tests): stop before shell options or anything else changes.
 if [[ "${_FUNCS_ONLY:-}" == "true" ]]; then
   return 0 2>/dev/null || exit 0
@@ -132,6 +178,9 @@ NPM_TAG=latest
 CACHE_ROOT="/var/cache/construct/t3code-source"
 ARTIFACT_ROOT="/var/lib/construct/t3code-desktop"
 PATCH_FILE="${REPO_DIR}/patches/t3code-construct.patch"
+T3PARK_PATCHER="${REPO_DIR}/extension/vm/construct-t3park-patch.mjs"
+T3MONITOR_PATCHER="${REPO_DIR}/extension/vm/construct-t3-opencode-monitor-patch.mjs"
+CONSTRUCT_REPO_URL="${CONSTRUCT_REPO_URL:-https://github.com/permissionBRICK/The-Construct.git}"
 INSTALLER_PATH="${ARTIFACT_ROOT}/T3Code-Construct-Setup.exe"
 MANIFEST_PATH="${ARTIFACT_ROOT}/manifest.json"
 STATUS_PATH="/etc/construct/t3code-desktop-status"
@@ -160,12 +209,31 @@ VERSION="$(npm view "t3@${NPM_TAG}" version 2>/dev/null | tail -1 | tr -d '[:spa
 [[ "${VERSION}" =~ ^[0-9A-Za-z.+-]+$ ]] || fail "npm returned an invalid t3@${NPM_TAG} version: ${VERSION}"
 TAG="v${VERSION}"
 SAFE_VERSION="${VERSION//[^0-9A-Za-z._-]/-}"
-PATCH_HASH="$({ sha256sum "${PATCH_FILE}" "${REPO_DIR}/bin/build-t3code.sh" "${REPO_DIR}/extension/vm/construct-t3park-patch.mjs" "${REPO_DIR}/extension/vm/construct-t3-opencode-monitor-patch.mjs"; } | sha256sum | awk '{print $1}')"
+mkdir -p "${CACHE_ROOT}" "${ARTIFACT_ROOT}" /etc/construct
+candidate_dir=""
+candidate_ref=""
+if [[ "${CHANNEL}" == "stable" ]] \
+  && ! t3_build_bundle_patchers_compatible "${VERSION}" "${T3PARK_PATCHER}" "${T3MONITOR_PATCHER}"; then
+  candidate_dir="$(mktemp -d "${TMPDIR:-/tmp}/construct-nightly-fix.XXXXXX")"
+  candidate_ref="$(t3_build_fetch_nightly_candidate "${CONSTRUCT_REPO_URL}" "${candidate_dir}" || true)"
+  if [[ -n "${candidate_ref}" ]] \
+    && t3_build_bundle_patchers_compatible "${VERSION}" \
+      "${candidate_dir}/extension/vm/construct-t3park-patch.mjs" \
+      "${candidate_dir}/extension/vm/construct-t3-opencode-monitor-patch.mjs"; then
+    PATCH_FILE="${candidate_dir}/patches/t3code-construct.patch"
+    T3PARK_PATCHER="${candidate_dir}/extension/vm/construct-t3park-patch.mjs"
+    T3MONITOR_PATCHER="${candidate_dir}/extension/vm/construct-t3-opencode-monitor-patch.mjs"
+    note "Stable ${TAG} accepts the bundle patchers from ready nightly repair ${candidate_ref}; testing its source patch."
+  else
+    [[ -z "${candidate_dir}" ]] || rm -rf -- "${candidate_dir}"
+    candidate_dir=""
+    candidate_ref=""
+  fi
+fi
+PATCH_HASH="$({ sha256sum "${PATCH_FILE}" "${REPO_DIR}/bin/build-t3code.sh" "${T3PARK_PATCHER}" "${T3MONITOR_PATCHER}"; } | sha256sum | awk '{print $1}')"
 BUILD_HASH="$(printf '%s\n%s\n' "${PATCH_HASH}" "${CONSTRUCT_VERSION}" | sha256sum | awk '{print $1}')"
 SOURCE_KEY="${SAFE_VERSION}-${BUILD_HASH:0:12}"
 SOURCE_DIR="${CACHE_ROOT}/${SOURCE_KEY}"
-
-mkdir -p "${CACHE_ROOT}" "${ARTIFACT_ROOT}" /etc/construct
 
 if [[ -s "${MANIFEST_PATH}" && -s "${INSTALLER_PATH}" ]]; then
   cached_version="$(node -e 'try{let m=require(process.argv[1]);process.stdout.write(m.version||"")}catch{}' "${MANIFEST_PATH}")"
@@ -265,7 +333,36 @@ cd "${SOURCE_DIR}"
 if git apply --reverse --check "${PATCH_FILE}" >/dev/null 2>&1; then
   note "Construct T3 source patch is already applied."
 else
-  t3_build_apply_patch "${PATCH_FILE}" || exit 1
+  if ! t3_build_apply_patch "${PATCH_FILE}"; then
+    candidate_dir=""
+    candidate_ref=""
+    if [[ "${CHANNEL}" == "stable" ]]; then
+      candidate_dir="$(mktemp -d "${TMPDIR:-/tmp}/construct-nightly-fix.XXXXXX")"
+      candidate_ref="$(t3_build_fetch_nightly_candidate "${CONSTRUCT_REPO_URL}" "${candidate_dir}" || true)"
+    fi
+    candidate_patch="${candidate_dir}/patches/t3code-construct.patch"
+    candidate_t3park="${candidate_dir}/extension/vm/construct-t3park-patch.mjs"
+    candidate_monitor="${candidate_dir}/extension/vm/construct-t3-opencode-monitor-patch.mjs"
+    if [[ -n "${candidate_ref}" && -s "${candidate_patch}" && -s "${candidate_t3park}" && -s "${candidate_monitor}" ]] \
+      && t3_build_apply_patch "${candidate_patch}"; then
+      note "Stable ${TAG} accepts ready nightly repair ${candidate_ref}; using it for this build."
+      PATCH_FILE="${candidate_patch}"
+      T3PARK_PATCHER="${candidate_t3park}"
+      T3MONITOR_PATCHER="${candidate_monitor}"
+      PATCH_HASH="$({ sha256sum "${PATCH_FILE}" "${REPO_DIR}/bin/build-t3code.sh" "${T3PARK_PATCHER}" "${T3MONITOR_PATCHER}"; } | sha256sum | awk '{print $1}')"
+      BUILD_HASH="$(printf '%s\n%s\n' "${PATCH_HASH}" "${CONSTRUCT_VERSION}" | sha256sum | awk '{print $1}')"
+      promoted_source_dir="${CACHE_ROOT}/${SAFE_VERSION}-${BUILD_HASH:0:12}"
+      if [[ "${promoted_source_dir}" != "${SOURCE_DIR}" ]]; then
+        rm -rf -- "${promoted_source_dir}"
+        mv -- "${SOURCE_DIR}" "${promoted_source_dir}"
+        SOURCE_DIR="${promoted_source_dir}"
+        cd "${SOURCE_DIR}"
+      fi
+    else
+      [[ -z "${candidate_dir}" ]] || rm -rf -- "${candidate_dir}"
+      exit 1
+    fi
+  fi
 fi
 
 note "Installing T3 source dependencies..."
@@ -283,8 +380,8 @@ pnpm run build:desktop
 
 # Apply the established guarded server integrations before packaging. The same
 # dist directory becomes the VM CLI and Desktop's server.asar sidecar.
-node "${REPO_DIR}/extension/vm/construct-t3park-patch.mjs" apply --bundle "${SOURCE_DIR}/apps/server/dist/bin.mjs"
-node "${REPO_DIR}/extension/vm/construct-t3-opencode-monitor-patch.mjs" apply --bundle "${SOURCE_DIR}/apps/server/dist/bin.mjs"
+node "${T3PARK_PATCHER}" apply --bundle "${SOURCE_DIR}/apps/server/dist/bin.mjs"
+node "${T3MONITOR_PATCHER}" apply --bundle "${SOURCE_DIR}/apps/server/dist/bin.mjs"
 
 note "Cross-building the Windows resource monitor..."
 cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target x86_64-pc-windows-gnu
