@@ -35,6 +35,11 @@ _external_host_override="${CONSTRUCT_EXTERNAL_HOST:-}"
 # preference in the environment, which must win over whatever config.env holds.
 _t3_https_override="${T3CODE_HTTPS:-}"
 _t3_https_port_override="${T3CODE_HTTPS_PORT:-}"
+# The port a CLIENT reaches the TLS listener on: set only on a service-managed VM,
+# where the host service forwards it on a public port of its own (plan section 4.12).
+# Empty everywhere else, and setup-t3-https.sh then advertises the listener's own port
+# -- byte-identical to before.
+_t3_public_port_override="${T3CODE_PUBLIC_PORT:-}"
 # The user that Claude Code (CLI + VS Code extension) is installed and
 # configured for. Defaults to the invoking sudo user, falling back to root, but
 # can be overridden (e.g. by provision.sh, which forces root for VS Code use).
@@ -88,6 +93,7 @@ T3CODE_CHANNEL="${T3CODE_CHANNEL:-stable}"
 T3CODE_HTTPS="${_t3_https_override:-${T3CODE_HTTPS:-true}}"
 [[ "${T3CODE_HTTPS}" == "false" ]] || T3CODE_HTTPS=true
 T3CODE_HTTPS_PORT="${_t3_https_port_override:-${T3CODE_HTTPS_PORT:-5178}}"
+T3CODE_PUBLIC_PORT="${_t3_public_port_override:-${T3CODE_PUBLIC_PORT:-}}"
 _t3_npm_tag() { [[ "${T3CODE_CHANNEL}" == "nightly" ]] && echo nightly || echo latest; }
 # The local `code serve-web` server on the VM keeps its data (incl. Machine-scope
 # settings) here; used to seed the Claude Code bypass defaults for the browser IDE
@@ -925,7 +931,12 @@ install_t3code() {
   # T3 install, so a non-zero exit here is reported and then tolerated.
   local _t3_pub_before _t3_pub_after
   _t3_pub_before="$(sed -n 's/^T3CODE_PUBLIC_BASE_URL=//p' "${CONFIG_FILE}" 2>/dev/null | head -1 || true)"
+  # Added only when there is one (a service-managed VM behind a host forward), so the
+  # default path's invocation stays argument-for-argument identical.
+  local _t3_pub_env=()
+  if [[ -n "${T3CODE_PUBLIC_PORT}" ]]; then _t3_pub_env=("T3CODE_PUBLIC_PORT=${T3CODE_PUBLIC_PORT}"); fi
   env T3CODE_HTTPS="${T3CODE_HTTPS}" T3CODE_HTTPS_PORT="${T3CODE_HTTPS_PORT}" \
+    ${_t3_pub_env[@]+"${_t3_pub_env[@]}"} \
     T3CODE_PORT="${T3CODE_PORT}" CONSTRUCT_EXTERNAL_HOST="${CONSTRUCT_EXTERNAL_HOST}" \
     CONFIG_FILE="${CONFIG_FILE}" REPO_DIR="${REPO_DIR}" \
     bash "${REPO_DIR}/bin/setup-t3-https.sh" \

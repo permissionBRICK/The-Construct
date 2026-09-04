@@ -18,6 +18,24 @@ set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT="${ROOT}/bin/setup-t3-https.sh"
 
+# HERMETIC ENVIRONMENT. Every script this suite drives resolves its configuration
+# "environment > config.env > default", and these tests are usually run ON a provisioned
+# Construct VM -- whose login environment exports T3CODE, T3CODE_HTTPS,
+# T3CODE_PUBLIC_BASE_URL and friends. Inherited, they silently ANSWER the very questions
+# under test (a `run_setup` with no value would see the ambient T3CODE_HTTPS=true and
+# resurrect the proxy the disable case just switched off). So the whole family is dropped
+# before anything runs; every case that needs one sets it explicitly.
+while IFS='=' read -r _leaked _; do
+  [[ -n "${_leaked}" ]] && unset "${_leaked}"
+done < <(env | grep -E '^(T3CODE|CONSTRUCT|OPENCODE)[A-Z0-9_]*=' || true)
+unset _leaked
+
+# Does the REAL host already have an nginx site of this name? A machine that is itself a
+# Construct VM does, so "sourcing installs nothing" is asserted as "this did not CHANGE"
+# rather than "this does not exist" -- the claim is about the source, not about the host.
+_pre_site_state=absent
+[[ -e /etc/nginx/sites-available/construct-t3 ]] && _pre_site_state=present
+
 # Pull in the PURE helpers. This must happen BEFORE the test helpers are defined:
 # the script ships its own `ok`/`step`/`warn` loggers (and `set -euo pipefail`),
 # so we shadow the logger and undo the shell options rather than fight them.
@@ -25,6 +43,9 @@ SCRIPT="${ROOT}/bin/setup-t3-https.sh"
 CONSTRUCT_T3_HTTPS_FUNCS_ONLY=true . "${SCRIPT}"
 set +e +o pipefail
 set -u
+
+_post_site_state=absent
+[[ -e /etc/nginx/sites-available/construct-t3 ]] && _post_site_state=present
 
 pass=0
 fail=0
@@ -58,7 +79,7 @@ trap 'rm -rf "${tmp}"' EXIT
 # ── Layer 1: pure functions ──────────────────────────────────────────────────
 
 ok "funcs-only: sourcing installs nothing (no nginx site, no certificates)" \
-  test ! -e /etc/nginx/sites-available/construct-t3
+  test "${_pre_site_state}" = "${_post_site_state}"
 
 # IP vs DNS SAN classification.
 ok "is-ip: IPv4 literal" t3_https_is_ip_literal "192.168.1.5"
@@ -320,6 +341,28 @@ else
   ok "disable: a later run with no environment value keeps it off (saved wins)" \
     sh -c "test ! -e '${LINK}' && test \"\$(sed -n 's/^T3CODE_HTTPS=//p' '${CFG}' | head -1)\" = false"
 
+  # A SERVICE-MANAGED VM with HTTPS off (plan §4.12): the host service publishes the
+  # PLAIN listener on a public port of its own, and that forwarded origin is the only
+  # address a client can reach -- the VM's own :5177 is behind the host's internal
+  # switch. Advertising it is what makes T3's pairing links (and the DPoP proofs bound
+  # to them) point somewhere that answers.
+  T3CODE_HTTPS=false T3CODE_PUBLIC_PORT=2305 run_setup >"${tmp}/run5c.out" 2>&1
+  ok "disable + forwarded port: advertises the forwarded HTTP origin" \
+    test "$(cfgval T3CODE_PUBLIC_BASE_URL)" = "http://testvm.mshome.net:2305"
+  ok "disable + forwarded port: it is NOT the VM-internal port" \
+    sh -c "! grep -q 'T3CODE_PUBLIC_BASE_URL=.*:5177' '${CFG}'"
+  ok "disable + forwarded port: still no site, no status file (nothing is served over TLS)" \
+    sh -c "test ! -e '${LINK}' && test ! -e '${STATUS}'"
+  # ...and the external host is honoured, so the origin carries the VM's PUBLIC name.
+  T3CODE_HTTPS=false T3CODE_PUBLIC_PORT=2305 CONSTRUCT_EXTERNAL_HOST=work-vm.vpn.example \
+    run_setup >"${tmp}/run5d.out" 2>&1
+  ok "disable + forwarded port: the origin uses the VM's public host name" \
+    test "$(cfgval T3CODE_PUBLIC_BASE_URL)" = "http://work-vm.vpn.example:2305"
+  # THE ZERO-CHANGE CONTROL: without a forwarded port the key is cleared, exactly as before.
+  T3CODE_HTTPS=false run_setup >"${tmp}/run5e.out" 2>&1
+  ok "disable without a forwarded port: the public base URL is cleared (unchanged)" \
+    test -z "$(cfgval T3CODE_PUBLIC_BASE_URL)"
+
   # Re-enable (what provision.sh does: it always passes the resolved value):
   # same CA, working proxy again.
   ca_kept="$(sha256sum "${TLS}/ca.crt" | cut -d' ' -f1)"
@@ -328,6 +371,20 @@ else
   ok "re-enable: reuses the same CA" \
     test "$(sha256sum "${TLS}/ca.crt" | cut -d' ' -f1)" = "${ca_kept}"
   ok "re-enable: T3CODE_HTTPS is true again" test "$(cfgval T3CODE_HTTPS)" = "true"
+
+  # With HTTPS on, the forwarded port is what the ADVERTISED origin uses while nginx
+  # keeps binding T3CODE_HTTPS_PORT -- the two are deliberately different numbers.
+  T3CODE_HTTPS=true T3CODE_PUBLIC_PORT=2302 run_setup >"${tmp}/run6b.out" 2>&1
+  ok "https + forwarded port: the advertised origin uses the FORWARDED port" \
+    test "$(cfgval T3CODE_PUBLIC_BASE_URL)" = "https://testvm.mshome.net:2302"
+  ok "https + forwarded port: the status file agrees with config.env" \
+    grep -qx "T3CODE_PUBLIC_BASE_URL=https://testvm.mshome.net:2302" "${STATUS}"
+  ok "https + forwarded port: nginx still LISTENS on T3CODE_HTTPS_PORT, not the forward" \
+    sh -c "grep -q 'listen 0.0.0.0:5178 ssl' '${SITE}' && ! grep -q ':2302' '${SITE}'"
+  # The control: no forwarded port -> the listener's own port, byte-identical to before.
+  T3CODE_HTTPS=true run_setup >"${tmp}/run6c.out" 2>&1
+  ok "https without a forwarded port: the advertised origin is the listener's port" \
+    test "$(cfgval T3CODE_PUBLIC_BASE_URL)" = "https://testvm.mshome.net:5178"
 
   # --teardown: proxy off, but the user's PREFERENCE and the CA stay.
   run_setup >/dev/null 2>&1

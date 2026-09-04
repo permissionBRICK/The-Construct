@@ -1235,6 +1235,68 @@ try {
     Resolve-ConstructInstanceTarget -Name 'build-vm' -Path $targetPath -Explicit @{ ServiceUrl = 'https://elsewhere:7462' } | Out-Null
 } catch { $svcLocalErr = [string]$_.Exception.Message }
 ok "service: pointing a LOCAL instance at a host service is a conflict too" ($svcLocalErr -like "*-ServiceUrl*")
+# ── publicHost: the per-VM web host name (plan section 4.12) ────────────────
+# OPTIONAL, never derived, ignored for a local backend, and NOT part of the endpoint
+# identity -- two VMs on one wildcard domain are told apart by their sshHost/sshPort, as
+# they always were. Mirrored field for field by extension/src/instances.js.
+Write-Host ""
+Write-Host "=== publicHost ===" -ForegroundColor Cyan
+
+$pubPath = New-RegistryFile @'
+{ "version": 1, "defaultInstance": "agent-vm", "instances": {
+  "work-vm": { "backend": "hyperv-remote", "vmName": "work-vm", "sshHost": "buildbox.local",
+               "sshPort": 2201, "hostAlias": "work-vm", "keyName": "construct_work-vm_ed25519",
+               "configBranch": "vm-work-vm", "publicHost": "work-vm.vpn.example" }
+} }
+'@
+$pubReg = Read-ConstructInstances -Path $pubPath
+ok "publicHost: a remote entry keeps it" ($pubReg.Instances['work-vm'].PublicHost -eq 'work-vm.vpn.example')
+ok "publicHost: it produces no problem of its own" (
+    @($pubReg.Problems | Where-Object { $_ -match 'publicHost' }).Count -eq 0)
+ok "publicHost: sshHost is untouched by it (SSH still dials the endpoint)" (
+    $pubReg.Instances['work-vm'].VmHost -eq 'buildbox.local')
+
+# A local instance's identity is derived from its name, and its ONE address is that
+# endpoint -- so the field is dropped rather than carried where nothing can use it.
+$localPubPath = New-RegistryFile @'
+{ "version": 1, "instances": {
+  "work-vm": { "backend": "hyperv-local", "publicHost": "work-vm.vpn.example" }
+} }
+'@
+$localPubReg = Read-ConstructInstances -Path $localPubPath
+ok "publicHost: ignored for a hyperv-local instance" ($null -eq $localPubReg.Instances['work-vm'].PublicHost)
+ok "publicHost: ...and the entry still loads" ($localPubReg.Instances.ContainsKey('work-vm'))
+
+# It becomes CONSTRUCT_EXTERNAL_HOST inside the guest's shell command line and a printed
+# URL, so a value that is not a host name is refused with the entry, exactly like sshHost.
+$badPubPath = New-RegistryFile @'
+{ "version": 1, "instances": {
+  "work-vm": { "backend": "hyperv-remote", "vmName": "work-vm", "sshHost": "buildbox.local",
+               "sshPort": 2201, "publicHost": "-x; calc" }
+} }
+'@
+$badPubReg = Read-ConstructInstances -Path $badPubPath
+ok "publicHost: a hostile value skips the whole entry" (-not $badPubReg.Instances.ContainsKey('work-vm'))
+ok "publicHost: ...and says which field" (@($badPubReg.Problems | Where-Object { $_ -match 'publicHost' }).Count -gt 0)
+
+$typePubPath = New-RegistryFile @'
+{ "version": 1, "instances": {
+  "work-vm": { "backend": "hyperv-remote", "vmName": "work-vm", "sshHost": "buildbox.local",
+               "sshPort": 2201, "publicHost": 42 }
+} }
+'@
+$typePubReg = Read-ConstructInstances -Path $typePubPath
+ok "publicHost: a non-string is reported and the derived default (none) is used" (
+    @($typePubReg.Problems | Where-Object { $_ -match "'publicHost' must be a string" }).Count -gt 0 -and
+    $null -eq $typePubReg.Instances['work-vm'].PublicHost)
+
+$pubOut = Join-Path $tmpRoot "pub/instances.json"
+Save-ConstructInstances -Registry $pubReg -Path $pubOut | Out-Null
+$pubBack = Read-ConstructInstances -Path $pubOut
+ok "publicHost: survives a save/read round-trip" ($pubBack.Instances['work-vm'].PublicHost -eq 'work-vm.vpn.example')
+$pubTxt = [System.IO.File]::ReadAllText($pubOut)
+ok "publicHost: the default instance's entry does not gain the key" (
+    ($pubTxt -split '"agent-vm"')[1] -notmatch 'publicHost')
 
 } finally {
     Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
