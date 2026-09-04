@@ -457,6 +457,10 @@ const DEFAULT_INST = {
 };
 const EVERY_PARAM = ["Backend", "ServiceUrl", "InstanceName", "ConfigBranch", "VmName",
                      "VmHost", "HostAlias", "SshPort", "LocalKeyName"];
+// The same, MINUS "InstanceName": what instanceParamSupport reports for a scripts dir
+// that predates name-only targeting (B11). A probe result carrying "InstanceName" is
+// what selects the name form, so the legacy assertions have to state the legacy probe.
+const LEGACY_PARAM = EVERY_PARAM.filter((p) => p !== "InstanceName");
 
 const deepEq = (name, actual, expected) =>
   ok(name, JSON.stringify(actual) === JSON.stringify(expected),
@@ -483,11 +487,11 @@ deepEq("remote: an explicit branch IS emitted",
 // Reprovision/export are pure SSH to the endpoint, so they are IDENTICAL for both
 // backends — whoever created the VM.
 deepEq("remote: reprovision keeps the endpoint identity, unchanged",
-  life.instanceArgs("reprovision", REMOTE_INST, EVERY_PARAM),
+  life.instanceArgs("reprovision", REMOTE_INST, LEGACY_PARAM),
   ["-VmHost", "buildbox.example.local", "-HostAlias", "work-vm", "-SshPort", "2201",
    "-LocalKeyName", "construct_work-vm_ed25519"]);
 deepEq("local: the rebuild set is unchanged by B7",
-  life.instanceArgs("reinstall", LOCAL_INST, EVERY_PARAM), ["-VmName", "work-vm"]);
+  life.instanceArgs("reinstall", LOCAL_INST, LEGACY_PARAM), ["-VmName", "work-vm"]);
 // THE ZERO-CHANGE BAR: the default instance emits nothing at all, on every action.
 for (const action of ["reprovision", "exportConfig", "reinstall", "redownload", "setCheckpoints"]) {
   deepEq(`zero-change: the default instance emits no target args (${action})`,
@@ -515,6 +519,96 @@ ok("skew: an entry with no service.url is refused on every version of the script
   !!noSvc && noSvc.blocked === true && /host service/i.test(noSvc.reason));
 ok("skew: ...and reprovision still works for it (pure SSH to the endpoint)",
   life.checkInstanceSupport("reprovision", { ...REMOTE_INST, service: null }, EVERY_PARAM) === null);
+
+// ── NAME-ONLY TARGETING (B11, plan §4.12) ────────────────────────────────────
+// One `-InstanceName <name>` in place of the four identity arguments, once the installed
+// scripts can resolve a name. Three things have to hold: the emission, the FALLBACK for
+// older scripts, and the DEFAULT instance still emitting nothing at all.
+console.log("\n=== name-only targeting (-InstanceName) ===");
+
+const NAME_PARAM = ["InstanceName", "ConfigBranch"];
+deepEq("name-only: reprovision emits the NAME instead of the four identity args",
+  life.instanceArgs("reprovision", LOCAL_INST, NAME_PARAM), ["-InstanceName", "work-vm"]);
+deepEq("name-only: exportConfig emits the name (and no branch — it initialises no store)",
+  life.instanceArgs("exportConfig", LOCAL_INST, ["InstanceName"]), ["-InstanceName", "work-vm"]);
+deepEq("name-only: reinstall emits the name instead of -VmName",
+  life.instanceArgs("reinstall", LOCAL_INST, NAME_PARAM), ["-InstanceName", "work-vm"]);
+deepEq("name-only: redownload emits the name too",
+  life.instanceArgs("redownload", LOCAL_INST, NAME_PARAM), ["-InstanceName", "work-vm"]);
+deepEq("name-only: setCheckpoints emits the name instead of -VmName",
+  life.instanceArgs("setCheckpoints", LOCAL_INST, ["InstanceName"]), ["-InstanceName", "work-vm"]);
+deepEq("name-only: a reprovision of a REMOTE instance is name-targeted too (the entry has its endpoint)",
+  life.instanceArgs("reprovision", REMOTE_INST, NAME_PARAM), ["-InstanceName", "work-vm"]);
+deepEq("name-only: an explicit branch still rides along",
+  life.instanceArgs("reprovision", { ...LOCAL_INST, configBranch: "vm-team" }, NAME_PARAM),
+  ["-InstanceName", "work-vm", "-ConfigBranch", "vm-team"]);
+// A REMOTE rebuild keeps its own set: it must also say WHICH host service, and -Backend
+// is what makes Auto-Install.ps1 take the remote path at all.
+deepEq("name-only: a remote REBUILD keeps -Backend/-ServiceUrl beside the name",
+  life.instanceArgs("reinstall", REMOTE_INST, ["Backend", "ServiceUrl", "InstanceName", "ConfigBranch"]),
+  ["-Backend", "hyperv-remote", "-ServiceUrl", "https://buildbox.example.local:7462",
+   "-InstanceName", "work-vm"]);
+// THE ZERO-CHANGE BAR is unchanged by any of this.
+for (const action of ["reprovision", "exportConfig", "reinstall", "redownload", "setCheckpoints"]) {
+  deepEq(`name-only: the default instance still emits nothing (${action})`,
+    life.instanceArgs(action, DEFAULT_INST, NAME_PARAM), []);
+}
+// The gate: the NAME is what makes the action targeted, so that is all it requires — and
+// -ConfigBranch is still the capability marker for instance-keyed config sync.
+ok("name-only: reprovision is allowed when the name is declared",
+  life.checkInstanceSupport("reprovision", LOCAL_INST, NAME_PARAM) === null);
+const noBranch = life.checkInstanceSupport("reprovision", LOCAL_INST, ["InstanceName"]);
+ok("name-only: ...but not without -ConfigBranch (the config store would split)",
+  !!noBranch && noBranch.blocked === true && /ConfigBranch/.test(noBranch.reason));
+for (const declared of [[], ["ConfigBranch"], ["VmHost", "ConfigBranch"]]) {
+  const r = life.checkInstanceSupport("reinstall", LOCAL_INST, declared);
+  ok(`name-only: reinstall stays refused for a scripts dir declaring [${declared}]`,
+    !!r && r.blocked === true);
+}
+
+// The PROBE. The parameter alone is not the question — `-InstanceName` predates this
+// meaning on Provision-AgentVM.ps1 and Auto-Install.ps1 — so the marker FILE decides.
+const sdName = fs.mkdtempSync(path.join(os.tmpdir(), "construct-life-name-"));
+const NAME_ERA_PARAMS = "param(\n  [string]$InstanceName = \"\",\n  [string]$ConfigBranch = \"\",\n" +
+  "  [string]$VmHost,\n  [string]$HostAlias,\n  [int]$SshPort = 22,\n  [string]$LocalKeyName,\n  [string]$VmName\n)\n";
+for (const f of [life.PROVISION, life.AUTO_INSTALL, life.CHECKPOINTS]) {
+  fs.writeFileSync(path.join(sdName, f), NAME_ERA_PARAMS);
+}
+ok("probe: a B7-era scripts dir (parameter present, marker absent) is NOT name-capable",
+  life.supportsNameTargeting(sdName, "reprovision", LOCAL_INST) === false);
+deepEq("probe: ...so it is probed — and emits — the four identity args",
+  life.instanceArgs("reprovision", LOCAL_INST, life.instanceParamSupport(sdName, "reprovision", LOCAL_INST)),
+  ["-VmHost", "work-vm.mshome.net", "-HostAlias", "work-vm", "-SshPort", "22",
+   "-LocalKeyName", "construct_work-vm_ed25519"]);
+fs.mkdirSync(path.join(sdName, "lib"), { recursive: true });
+fs.writeFileSync(path.join(sdName, life.INSTANCE_TARGET_LIB), "# the adapter\n");
+ok("probe: with the marker file installed it IS name-capable",
+  life.supportsNameTargeting(sdName, "reprovision", LOCAL_INST) === true);
+deepEq("probe: ...and instanceParamSupport reports the name set",
+  life.instanceParamSupport(sdName, "reprovision", LOCAL_INST), ["InstanceName", "ConfigBranch"]);
+deepEq("probe: ...so the emitted argv is one argument",
+  life.instanceArgs("reprovision", LOCAL_INST, life.instanceParamSupport(sdName, "reprovision", LOCAL_INST)),
+  ["-InstanceName", "work-vm"]);
+ok("probe: a REMOTE rebuild is never name-only (it needs the service URL as well)",
+  life.supportsNameTargeting(sdName, "reinstall", REMOTE_INST) === false);
+// This fixture's Auto-Install.ps1 declares neither -Backend nor -ServiceUrl, so a remote
+// rebuild is probed for the remote set and comes back INCOMPLETE...
+deepEq("probe: ...and is probed for the remote set, not the name set",
+  life.instanceParamSupport(sdName, "reinstall", REMOTE_INST), ["InstanceName", "ConfigBranch"]);
+const remoteSkew = life.checkInstanceSupport("reinstall", REMOTE_INST,
+  life.instanceParamSupport(sdName, "reinstall", REMOTE_INST));
+ok("probe: ...so the remote rebuild is refused, name in the probe or not",
+  !!remoteSkew && remoteSkew.blocked === true && /-Backend/.test(remoteSkew.reason));
+// The marker on its own is not enough: an argument the target does not declare is a
+// binding failure, i.e. an action that never starts.
+const sdMarkerOnly = fs.mkdtempSync(path.join(os.tmpdir(), "construct-life-marker-"));
+fs.mkdirSync(path.join(sdMarkerOnly, "lib"), { recursive: true });
+fs.writeFileSync(path.join(sdMarkerOnly, life.INSTANCE_TARGET_LIB), "# the adapter\n");
+fs.writeFileSync(path.join(sdMarkerOnly, life.PROVISION), "param(\n  [string]$VmHost\n)\n");
+ok("probe: the marker without the parameter is not name-capable",
+  life.supportsNameTargeting(sdMarkerOnly, "reprovision", LOCAL_INST) === false);
+ok("probe: no scripts dir at all is not name-capable",
+  life.supportsNameTargeting("", "reprovision", LOCAL_INST) === false);
 
 // ── ELEVATION IS BACKEND-AWARE ───────────────────────────────────────────────
 // A remote rebuild creates no local VM, so it needs no administrator rights — and on a

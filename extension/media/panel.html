@@ -31,6 +31,13 @@
           <span class="ub-text"><span class="ub-dot"></span> Construct update available <small id="updateBehind"></small></span>
           <button class="ub-btn" data-cmd="updateConstruct">Update Construct</button>
         </div>
+        <!-- "Register this VM" (B11): shown ONLY when this window is attached over
+             Remote-SSH to a VM no registry entry describes. Hidden — and rendered
+             identically to before — on every local window and every single-VM install. -->
+        <div class="update-banner" id="registerBanner" hidden>
+          <span class="ub-text"><span class="ub-dot"></span> This VM isn't a known instance <small id="registerHost"></small></span>
+          <button class="ub-btn" data-cmd="registerThisVm">Register this VM as an instance</button>
+        </div>
         <span class="promptline">
           <span class="usr">root@<span id="hostShort">agent-vm</span></span><span>:~$</span>
           <span class="cmd">construct status</span>
