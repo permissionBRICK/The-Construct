@@ -2398,6 +2398,37 @@ async function lifecycleWiring() {
     extSrc.indexOf("try { void forwarderChain.close(); } catch (_) {}") >= 0);
 })();
 
+// ── B14: the fallback range is sliced per instance ─────────────────────────────
+(function portSlices() {
+  const dflt = f.instancePortSlice("agent-vm");
+  ok("slice: the default instance keeps the historical 18800–18815",
+    dflt.base === f.PORT_BASE && dflt.count === f.PORT_COUNT && dflt.base === 18800);
+  ok("slice: an unnamed instance is the default one",
+    f.instancePortSlice("").base === 18800 && f.instancePortSlice(null).base === 18800);
+  const work = f.instancePortSlice("work-vm");
+  ok("slice: another instance never gets the default's slice", work.base !== 18800);
+  ok("slice: it is deterministic", f.instancePortSlice("work-vm").base === work.base);
+  ok("slice: every slice is 16 ports and aligned to the base",
+    work.count === 16 && (work.base - 18800) % 16 === 0);
+  ok("slice: every slice stays inside 18800–19311",
+    ["a", "work-vm", "build-vm", "zzz", "x9", "far-vm", "q"].every((n) => {
+      const s = f.instancePortSlice(n);
+      return s.base >= 18800 && s.base + s.count <= 19312;
+    }));
+  ok("slice: no name ever lands back on the default's slice",
+    ["work-vm", "build-vm", "far-vm", "b", "c", "d", "e", "f"].every((n) => f.instancePortSlice(n).base !== 18800));
+  // The session picks it up, and an explicit base/count still wins (tests, a setting).
+  const auto = makeForwarder({ instance: { name: "work-vm" } }).fwd;
+  ok("slice: a session serving an instance probes ITS slice",
+    f.portCandidates(9999, auto._portOpts)[1] === work.base);
+  const dfltSession = makeForwarder({ instance: { name: "agent-vm" } }).fwd;
+  ok("slice: the default instance's session probes exactly the historical ports",
+    f.portCandidates(9999, dfltSession._portOpts)[1] === 18800);
+  const explicit = makeForwarder({ instance: { name: "work-vm" }, portBase: 20000, portCount: 4 }).fwd;
+  ok("slice: an explicit base/count still wins",
+    explicit._portOpts.base === 20000 && explicit._portOpts.count === 4);
+})();
+
 // ── Summary ────────────────────────────────────────────────────────────────────
 (async () => {
   await claimProtocol();
