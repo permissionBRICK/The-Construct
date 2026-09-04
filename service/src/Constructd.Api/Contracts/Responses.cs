@@ -115,14 +115,33 @@ public sealed record VmResponse(
     DateTimeOffset Created,
     VmState State,
     int? SshForwardPort,
+    /// <summary>
+    /// The name this VM's web forwards are advertised under (plan §4.12) — the rendered
+    /// <c>Constructd:PublicHostPattern</c>, or the service's own <c>PublicHost</c> when no pattern
+    /// is configured. It is NOT where SSH is dialled; that is <c>PublicHost</c> plus
+    /// <see cref="SshForwardPort"/>, which <c>GET /vms/{name}/endpoint</c> states in full.
+    /// </summary>
+    string PublicHost,
     /// <summary>True once a removal job has been accepted: the VM is fenced against mutations.</summary>
     bool Deleting,
     IdlePolicyResponse IdlePolicy,
     IReadOnlyList<ForwardResponse> Forwards);
 
-public sealed record EndpointResponse(string SshHost, int SshPort)
+/// <param name="PublicHost">
+/// The name this VM's web forwards are advertised under (plan §4.12). Equal to
+/// <paramref name="SshHost"/> unless the host runs a <c>Constructd:PublicHostPattern</c>; SSH is
+/// dialled on <paramref name="SshHost"/>:<paramref name="SshPort"/> either way.
+/// </param>
+public sealed record EndpointResponse(string SshHost, int SshPort, string PublicHost)
 {
-    public static EndpointResponse From(DomainEndpoint endpoint) => new(endpoint.SshHost, endpoint.SshPort);
+    /// <summary>
+    /// An endpoint with no public host — a driver-reported one, or a creation result stored by a
+    /// build that predates the setting — advertises its SSH host, which is what "no pattern
+    /// configured" means anyway.
+    /// </summary>
+    public static EndpointResponse From(DomainEndpoint endpoint) =>
+        new(endpoint.SshHost, endpoint.SshPort,
+            string.IsNullOrWhiteSpace(endpoint.PublicHost) ? endpoint.SshHost : endpoint.PublicHost);
 }
 
 public sealed record VmStateResponse(VmState State);

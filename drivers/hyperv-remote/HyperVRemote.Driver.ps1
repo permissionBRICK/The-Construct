@@ -310,10 +310,15 @@ function New-ConstructVm {
     $token = ""
     if ($result.PSObject.Properties['vmToken'] -and $result.vmToken) { $token = [string]$result.vmToken }
 
+    # Read through the ONE endpoint reading (lib/AgentVm.Remote.ps1), so a creation result
+    # and GET /vms/{name}/endpoint hand back the same shape -- publicHost included.
+    $endpoint = ConvertFrom-ConstructVmEndpoint -Response $ep
+    if ($null -eq $endpoint) { throw "The host service created '$name' but reported no endpoint to reach it on." }
+
     Write-Ok "VM created on the host service"
     return @{
         Name     = $name
-        Endpoint = @{ SshHost = [string]$ep.sshHost; SshPort = [int]$ep.sshPort }
+        Endpoint = $endpoint
         VmToken  = $token
     }
 }
@@ -443,7 +448,13 @@ function Test-ConstructVmPresent {
 function Get-ConstructVmEndpoint {
     <#
         Where a client dials this VM: @{ SshHost = <the service's PublicHost>;
-        SshPort = <the forward allocated for this VM> }.
+        SshPort = <the forward allocated for this VM>;
+        PublicHost = <the name this VM's WEB endpoints live under> }.
+
+        PublicHost is the service's rendered Constructd:PublicHostPattern (plan section
+        4.12) and equals SshHost when the host runs no pattern; SSH is dialled on SshHost
+        either way. The shape is read by ConvertFrom-ConstructVmEndpoint in
+        lib/AgentVm.Remote.ps1 -- one reading, shared with the creation job's result.
 
         THE key abstraction of the contract -- and the reason the whole remote backend
         needs no changes downstream: the provisioner, ssh config, VS Code Remote-SSH and
@@ -464,10 +475,11 @@ function Get-ConstructVmEndpoint {
         }
         throw "Could not read the endpoint of '$Name' from the host service: $(Get-ConstructApiLastError)"
     }
-    return @{
-        SshHost = [string]$resp.sshHost
-        SshPort = [int]$resp.sshPort
+    $endpoint = ConvertFrom-ConstructVmEndpoint -Response $resp
+    if ($null -eq $endpoint) {
+        throw "The host service returned an endpoint for '$Name' without an ssh host, so there is nothing to dial."
     }
+    return $endpoint
 }
 
 function Test-ConstructVmSshPort {

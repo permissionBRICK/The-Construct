@@ -540,6 +540,68 @@ quoted_out="$(CONSTRUCT_FORWARDS_DIR="${spool}" CONFIG_FILE="${quoted_cfg}" \
 ok "a quoted saved value is decoded (no quote characters leak)" \
   test "${quoted_out}" = "http://[fe80::1%12]:3000/"
 
+# ── --reuse: get-or-create (plan §4.12) ──────────────────────────────────────
+# What makes a REPROVISION idempotent: the service has no upsert, so without this a
+# second run would allocate another public port for the same VM port, every time.
+
+reset_stub
+printf '200' >"${stub_dir}/code-GET"
+printf '[{"id":"fwd-old","vmName":"work-vm","vmPort":4096,"publicPort":2301,"target":"host","label":"opencode server","url":"http://work-vm.vpn.example:2301/"}]' \
+  >"${stub_dir}/response-GET"
+reuse_out="$(remote 4096 --to host --reuse --label "opencode server" 2>&1)"
+ok "--reuse: an existing host forward is printed instead of a second one" \
+  test "${reuse_out}" = "http://work-vm.vpn.example:2301/"
+ok "--reuse: NOTHING is POSTed when one already exists" \
+  sh -c "! grep -q '^POST ' '${stub_dir}/requests'"
+ok "--reuse: it looked the list up first" \
+  grep -qx 'GET https://buildbox.example.local:7462/api/v1/vms/work-vm/forwards' "${stub_dir}/requests"
+
+# A forward on the same port but the OTHER target is a different forward.
+reset_stub
+printf '200' >"${stub_dir}/code-GET"
+printf '[{"id":"fwd-client","vmName":"work-vm","vmPort":4096,"target":"client","url":null}]' \
+  >"${stub_dir}/response-GET"
+printf '201' >"${stub_dir}/code-POST"
+printf '{"id":"fwd-new","vmName":"work-vm","vmPort":4096,"publicPort":2302,"target":"host","url":"http://work-vm.vpn.example:2302/"}' \
+  >"${stub_dir}/response-POST"
+other_target_out="$(remote 4096 --to host --reuse 2>&1)"
+ok "--reuse: a forward with the same port but another TARGET is not reused" \
+  test "${other_target_out}" = "http://work-vm.vpn.example:2302/"
+ok "--reuse: ...so it created the host one" grep -q '^POST ' "${stub_dir}/requests"
+
+# Nothing to reuse: it creates, exactly as without the flag.
+reset_stub
+printf '200' >"${stub_dir}/code-GET"
+printf '[]' >"${stub_dir}/response-GET"
+printf '201' >"${stub_dir}/code-POST"
+printf '{"id":"fwd-fresh","vmName":"work-vm","vmPort":5178,"publicPort":2303,"target":"host","url":"http://work-vm.vpn.example:2303/"}' \
+  >"${stub_dir}/response-POST"
+fresh_out="$(remote 5178 --to host --reuse 2>&1)"
+ok "--reuse: an empty list still creates the forward" \
+  test "${fresh_out}" = "http://work-vm.vpn.example:2303/"
+
+# WITHOUT --reuse the lookup does not happen at all -- an agent asking for a port twice
+# on purpose still gets two forwards.
+reset_stub
+printf '201' >"${stub_dir}/code"
+printf '{"id":"fwd-2nd","vmName":"work-vm","vmPort":4096,"publicPort":2304,"target":"host","url":"http://work-vm.vpn.example:2304/"}' \
+  >"${stub_dir}/response"
+noreuse_out="$(remote 4096 --to host 2>&1)"
+ok "no --reuse: it POSTs without looking" test "${noreuse_out}" = "http://work-vm.vpn.example:2304/"
+ok "no --reuse: ...and never listed first" \
+  sh -c "! grep -q '^GET ' '${stub_dir}/requests'"
+
+# Local mode: the spool is the record, so a queued request for the same port is reused
+# rather than doubled.
+reset_spool
+expose 5173 --label vite --wait 0 >/dev/null 2>&1 || true
+first_id="$(request_id)"
+expose 5173 --label vite --reuse --wait 0 >/dev/null 2>&1 || true
+ok "--reuse (local): a queued request for the same port is not doubled" test "$(requests | wc -l)" = 1
+ok "--reuse (local): ...and it is the SAME request" test "$(request_id)" = "${first_id}"
+expose 5173 --label vite --wait 0 >/dev/null 2>&1 || true
+ok "no --reuse (local): a second request IS spooled" test "$(requests | wc -l)" = 2
+
 # config.env must not be able to set internal variables (it is read key by key,
 # never sourced).
 poison_cfg="${tmp}/config_poison.env"

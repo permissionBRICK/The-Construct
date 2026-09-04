@@ -94,8 +94,13 @@ public static class VmJobs
             progress.Report($"vm {name} ready — provision it with Provision-AgentVM.ps1 " +
                             $"-VmHost {options.PublicHost} -SshPort {port}");
 
-            // The token travels in the one-time channel, never in the (durable) job result.
-            return new JobOutcome(new VmCreateResult(name, new DomainEndpoint(options.PublicHost, port)), vmToken);
+            // The token travels in the one-time channel, never in the (durable) job result. The
+            // endpoint carries the VM's PUBLIC host too (plan §4.12) — the name its web forwards are
+            // advertised under — so the client records it with the instance instead of having to ask
+            // again; without a PublicHostPattern it is the same string as the SSH host.
+            return new JobOutcome(
+                new VmCreateResult(name, new DomainEndpoint(options.PublicHost, port, options.PublicHostFor(name))),
+                vmToken);
         }
         catch (Exception ex)
         {

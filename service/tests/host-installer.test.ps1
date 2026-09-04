@@ -105,7 +105,7 @@ $install = Get-ScriptParameters $installer
 # The batch brief names these; the README documents them. Renaming one silently
 # breaks every runbook that calls the installer.
 $expectedInstall = @(
-    "ScriptsDir", "PublishDir", "ListenUrl", "PublicHost", "DataDir",
+    "ScriptsDir", "PublishDir", "ListenUrl", "PublicHost", "PublicHostPattern", "DataDir",
     "SshPortRange", "AppPortRange", "CertThumbprint", "ServiceName",
     "SwitchName", "WslDistro", "ListenAddress",
     "IsoSourcePath", "IsoSourceUrl", "IsoSha256",
@@ -127,6 +127,9 @@ ok "installer -WslDistro defaults to Ubuntu" ($install["WslDistro"].Default -eq 
 ok "installer -ListenAddress defaults to 0.0.0.0" ($install["ListenAddress"].Default -eq '"0.0.0.0"')
 ok "installer -ServiceName defaults to constructd" ($install["ServiceName"].Default -eq '"constructd"')
 ok "installer -PublicHost defaults to this machine" ($install["PublicHost"].Default -eq '$env:COMPUTERNAME')
+# Empty by default: the pattern is opt-in, and an install that does not ask for one must
+# not gain a settings key it never had (plan section 4.12).
+ok "installer -PublicHostPattern defaults to empty" ($install["PublicHostPattern"].Default -eq '""')
 ok "installer -SkipPrereqs is a switch" ($install["SkipPrereqs"].Type -eq "SwitchParameter")
 ok "installer -NoStart is a switch" ($install["NoStart"].Type -eq "SwitchParameter")
 ok "installer -AdminMaxVms is an int" ($install["AdminMaxVms"].Type -eq "Int32")
@@ -184,7 +187,7 @@ Write-Host "=== Helpers ===" -ForegroundColor Cyan
 # Dot-source just the helper definitions: the installer's body would try to
 # elevate. Taking them from the AST keeps this honest -- it is the shipped code.
 foreach ($fn in $functions) {
-    if ($fn.Name -in @("Split-PortRange", "Get-ListenPort", "Get-ConstructAclPolicy",
+    if ($fn.Name -in @("Split-PortRange", "Get-ListenPort", "Test-PublicHostPattern", "Get-ConstructAclPolicy",
                        "Get-ConstructTrustedSid", "Get-ConstructAncestorRiskMask",
                        "Get-ConstructWriteRiskMask", "Get-ConstructUnsafeAce", "Resolve-ConstructAceSid", "Sort-ConstructHardeningOrder", "Format-ConstructCommandOutput",
                        "ConvertTo-ConstructPayload", "New-ConstructRelaunchScript")) {
@@ -241,6 +244,27 @@ ok "Get-ListenPort handles a host name" ((Get-ListenPort -Url "https://buildbox.
 $threw = $false
 try { Get-ListenPort -Url "not a url" } catch { $threw = $true }
 ok "Get-ListenPort rejects a non-URL" $threw
+
+# ── (d1) The per-VM public host pattern (plan section 4.12) ─────────────────
+# The SAME rule the service applies at startup (PublicHostPatternRulesTests): a typo has
+# to be a refusal before the machine is touched, not a service that writes its settings
+# and then refuses to start.
+ok "an empty pattern is fine (it means: use -PublicHost for every VM)" (
+    (Test-PublicHostPattern -Pattern "") -eq "")
+ok "a usable pattern is accepted" (
+    (Test-PublicHostPattern -Pattern "{name}.vpn.example") -eq "")
+ok "a pattern without {name} is refused" (
+    (Test-PublicHostPattern -Pattern "vpn.example") -match "\{name\}")
+ok "a pattern with two placeholders is refused" (
+    (Test-PublicHostPattern -Pattern "{name}.{name}.vpn.example") -match "exactly once")
+ok "a pattern that cannot render a host name is refused" (
+    (Test-PublicHostPattern -Pattern "{name}-.vpn.example") -match "does not render")
+# The longest instance name is already a full 63-character DNS label, so an affix in the
+# SAME label can never render one -- exactly what the service refuses too.
+ok "an affix inside the name's own label is refused" (
+    (Test-PublicHostPattern -Pattern "vm-{name}.vpn.example") -match "does not render")
+ok "...but the same fixed part in its own label is fine" (
+    (Test-PublicHostPattern -Pattern "{name}.vm.vpn.example") -eq "")
 
 # ── (d2) The ACL policy ──────────────────────────────────────────────────────
 Write-Host ""
@@ -556,6 +580,14 @@ foreach ($key in @("Persistence", "DatabasePath", "ListenUrl", "CertThumbprint",
                    "SeedUser", "BootstrapPublicKeyPath", "CacheDir", "SourcePath", "SourceUrl", "Sha256")) {
     ok "settings carry $key" ($installText -match [regex]::Escape($key))
 }
+
+# The pattern is the ONE setting that is written CONDITIONALLY: an install without one
+# must produce a settings file with exactly the keys it has always had.
+ok "the pattern is only written when it was asked for" (
+    $installText -match '(?m)^if \(\$PublicHostPattern\) \{\s*\r?\n\s*\$settings\.Constructd\[.PublicHostPattern.\]')
+ok "the pattern is validated before anything is touched" (
+    $installText.IndexOf('$patternProblem = Test-PublicHostPattern') -gt 0 -and
+    $installText.IndexOf('$patternProblem = Test-PublicHostPattern') -lt $installText.IndexOf('Write-Step "Writing appsettings.Production.json"'))
 
 ok "settings are written next to the executable" ($installText -match 'appsettings\.Production\.json')
 ok "the service is registered as LocalSystem" ($installText -match 'obj= LocalSystem' -or $installText -match 'New-Service')
