@@ -105,6 +105,14 @@ For the installed agents, from `root`'s home — never from inside the project r
 > profiles fall back into this same singleton backup and *are* overwritten by the next VM's
 > export. If you are running several VMs without git on the host, treat profiles as being
 > as at-risk as everything else here.
+>
+> The host-side files that describe *the VM itself* are not part of this backup either, and
+> do not need to be: the instance registry
+> (`%LOCALAPPDATA%\The-Construct\instances.json`) and each VM's own settings
+> (`%LOCALAPPDATA%\The-Construct\instances\<name>.json`, or the top level of
+> `.construct-settings.json` for the default `agent-vm`) survive a reinstall untouched —
+> they live outside the scripts checkout that a Construct update replaces. Copy them
+> yourself when you move to a **new PC**; nothing in the export/restore flow carries them.
 
 ## Triggering it from the installer
 
