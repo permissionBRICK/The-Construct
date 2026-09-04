@@ -126,7 +126,38 @@ extension/
                       windows + the PS engine),
                       ensureRepo, repoState, syncTick, readRemotes/writeRemotes,
                       ensureStagingClone, listImportCandidates, planUpstreamImport,
-                      mergeFile, commitAll, pushUpstream; see docs/config-sync.md)
+                      mergeFile, commitAll, pushUpstream;
+                      publish (B15, docs/config-sync.md §7 "three verbs") -- PURE:
+                      planPublish (untracked -> publish, tracked -> skip, differing or
+                      case-variant upstream copy -> refuse, failing the
+                      parse/validate/canonicalize gate -> invalid; twin of
+                      Get-ConstructPublishPlan, both measured against
+                      test/fixtures/publish-plan-cases.json), canonicalizeProfileText
+                      (validate BEFORE canonicalize -- the canonicalizer is coercive),
+                      buildPublishPickerItems/filterPublishSelection (the all-ticked
+                      default and the greyed non-selectable rows), publishManifestEntry
+                      (byte-twin of the PS manifest writer), isSafeProfileName
+                      (REUSES host.safeProfileName -- one name rule per engine, plus
+                      "already canonical" because here the name IS the file name),
+                      isValidPublishBranch, buildPublishProfileInputs (listing ->
+                      plan input; an unsafe name is passed through UNREAD so the
+                      planner reports it), urlHasCredentials +
+                      validateConfigRemoteUrl (ONE validator for every URL input
+                      path, run against the TRIMMED value -- a credential-bearing
+                      URL is REFUSED, not redacted, because it would land in git
+                      argv, .git/config, remotes.json and every provenance entry;
+                      no plan record carries a raw URL either),
+                      redactGitOutput/displayRemoteUrl/resolveRemoteUrl (the panel
+                      only ever receives display-safe urls and its answers are
+                      mapped back); IO: ensurePublishClone
+                      (tolerates a not-yet-existing remote via git init + remote add,
+                      and keeps a failed first push RETRYABLE with a marker inside .git)
+                      / checkoutPublishBranch / publishToRemote (default branch, NOT a
+                      review branch; every git step checked, ok only with a real commit
+                      + blob sha, user's own git identity). commitAll is checked the
+                      same way (add + staged diff + commit, redacted output) -- an
+                      unchecked add read a broken repo as "nothing to commit";
+                      see docs/config-sync.md)
     zip.js            hand-rolled ZIP writer (STORED entries, no deps): crc32, buildZip
     themes.js         UI-design registry (THEMES/DEFAULT_THEME/normalizeThemeId/
                       cssFileFor/previewFileFor) + buildPickerHtml (the picker webview
@@ -250,7 +281,12 @@ extension/
     probe.test.js     plain-node ssh-arg + probe-parse units (21 checks)
     configsync.test.js plain-node config-sync engine units — git-based sync tick, staging clones,
                       upstream import planning, merge-file, read/write store scripts, repo state,
-                      seeding, conflict handling (140 checks)
+                      seeding, conflict handling, publish (the SHARED fixtures
+                      test/fixtures/publish-plan-cases.json + publish-manifest.expected.json
+                      that test/config-sync.test.ps1 runs too, the picker model, a real
+                      publish into a local bare repo, push-to-create + retry, and an
+                      injected-failure runner proving a silently failed git step never
+                      surfaces as a publish)
     host.test.js      plain-node scripts-dir resolution + settings merge + readProjectProfile +
                       project-profile list/write/select + traversal + hasPersistedSelection + writeProjectProfileIfAbsent + race test (79 checks; fake %LOCALAPPDATA% tree)
     remote.test.js    plain-node Remote-SSH helpers — isConnectedToVm/remoteFolderUri + repoNameFromUrl/isLikelyGitUrl/buildCloneScript/projectOpenPath/shouldAutoOpenPanel + URI percent-encoding (71 checks)
@@ -322,6 +358,11 @@ Defined in `extension.js` (handleMessage), `media/panel.js` and `media/launcher.
   `importRemoteConfigs` (clone/fetch all remotes → multi-select QuickPick → 3-way merge),
   `shareConfigs` (multi-select profiles → clipboard command or zip bundle),
   `pushConfigUpstream` (+`url`; confirm → push local changes to a new branch),
+  `publishConfigProfiles` (+`url`; B15 — plan untracked profiles → createQuickPick with
+   all-ticked publishable rows and greyed (selection-filtered) tracked/refused/invalid
+   rows → push to the remote's DEFAULT branch → adopt as tracked (manifest + stored base),
+   only on a push that returned a real commit + blob per file),
+  `addRemoteAndPublish` (showInputBox URL → link it → the same publish flow),
   `installGit` (win32-only: visible console running winget install Git.Git),
   `openConfigRepo` (open cfgDir in a new VS Code window for conflict resolution),
   `openForward` (+`forward`; `vscode.env.openExternal` on that forward's link),

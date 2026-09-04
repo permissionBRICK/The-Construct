@@ -154,7 +154,7 @@ param(
     # -FromPanel the redundant confirmations are skipped too (the "type yes" delete,
     # the git-identity prompt and the agent-password prompt -- all already handled by
     # the panel); the dirty-repo scan still warns if the VM has unsaved work.
-    [ValidateSet("reprovision", "reinstall", "redownload", "export", "add-config")]
+    [ValidateSet("reprovision", "reinstall", "redownload", "export", "add-config", "publish-config")]
     [string]$Action,
     # With -Action reinstall/redownload, pre-answer the save/restore prompts:
     #   save     export the current config now and restore it afterwards (default)
@@ -305,6 +305,100 @@ trap {
     Write-Host ""
     Wait-Exit
     exit 1
+}
+
+# ── -Action publish-config: publish local profiles to a linked config repo ───
+# Plan 4.13 / B15. Import and Push back only move files that already carry a
+# provenance manifest entry, so a profile born on THIS PC can never reach a
+# remote. This action publishes untracked local profiles into the config repo's
+# DEFAULT branch and adopts them (manifest + stored base), after which Import and
+# Push back round-trip them like any other tracked file.
+#
+# It runs HERE, before the install-mode resolution and the self-elevation below,
+# because it touches no VM and no Hyper-V: it is a git operation on
+# %LOCALAPPDATA%\The-Construct\config plus one push. Non-interactive, and it
+# exits without ever entering the installer. Every other run falls straight
+# through this block untouched.
+if ($Action -eq 'publish-config') {
+    $pcLib = Join-Path $PSScriptRoot "lib\AgentVm.Common.ps1"
+    if (-not (Test-Path -LiteralPath $pcLib)) { throw "Required helper not found: $pcLib" }
+    . $pcLib
+
+    if (-not $ConfigRepo) {
+        throw "-Action publish-config needs -ConfigRepo <url> (the config repo to publish into)."
+    }
+    # Same git check/prompt as -ConfigRepo add-config: unattended, so a silent
+    # install attempt and a loud abort when it fails.
+    if (-not (Test-ConstructGitAvailable)) {
+        $pcGitOk = $false
+        if (Get-Command Ensure-ConstructGit -ErrorAction SilentlyContinue) {
+            $pcGitOk = Ensure-ConstructGit -AutoMode
+        }
+        if (-not $pcGitOk) {
+            throw "-Action publish-config requires git, but the automatic git install failed. Install git manually (winget install --id Git.Git) and re-run."
+        }
+    }
+
+    $pcConfigDir = Initialize-ConstructConfigStore -ScriptsDir $PSScriptRoot
+    # Publishing records the adoption as a commit in the host config store, so make
+    # sure that store is a repo. Idempotent, and git is guaranteed present here.
+    if (Get-Command Initialize-ConstructConfigRepo -ErrorAction SilentlyContinue) {
+        $null = Initialize-ConstructConfigRepo -ConfigDir $pcConfigDir
+    }
+    $pcNames = $null
+    if ($ImportConfigs) {
+        $pcNames = @($ImportConfigs -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    }
+
+    Write-Host ""
+    Write-Host "==> Publishing local project profiles" -ForegroundColor Cyan
+    # NEVER the raw URL: a publish target on the owner's own git host carries a PAT
+    # in the URL, and this line would otherwise print it (and land in any transcript).
+    Write-Host "    Config repo: $(Format-ConstructRemoteUrlForDisplay -Url $ConfigRepo)" -ForegroundColor DarkGray
+
+    $pcArgs = @{ ConfigDir = $pcConfigDir; RemoteUrl = $ConfigRepo }
+    if ($null -ne $pcNames -and $pcNames.Count -gt 0) { $pcArgs['Names'] = $pcNames }
+    $pcResult = Publish-ConstructConfigProfiles @pcArgs
+
+    $pcRows = @()
+    foreach ($n in @($pcResult.Published)) { $pcRows += [pscustomobject]@{ Name = $n; Result = "published"; Detail = "" } }
+    foreach ($r in @($pcResult.Skipped))   { $pcRows += [pscustomobject]@{ Name = $r.Name; Result = "skipped";  Detail = $r.Reason } }
+    foreach ($r in @($pcResult.Refused))   { $pcRows += [pscustomobject]@{ Name = $r.Name; Result = "refused";  Detail = $r.Reason } }
+    foreach ($r in @($pcResult.Invalid))   { $pcRows += [pscustomobject]@{ Name = $r.Name; Result = "invalid";  Detail = $r.Reason } }
+
+    Write-Host ""
+    if ($pcRows.Count -eq 0) {
+        # Only an honest "nothing to do" -- a run that failed says so below instead.
+        if (@($pcResult.Errors).Count -eq 0) {
+            Write-Host "    No local project profiles to publish." -ForegroundColor DarkGray
+        }
+    } else {
+        $pcWidth = 4
+        foreach ($row in $pcRows) { if ($row.Name.Length -gt $pcWidth) { $pcWidth = $row.Name.Length } }
+        foreach ($row in ($pcRows | Sort-Object Name)) {
+            $pcColor = "DarkGray"
+            if ($row.Result -eq "published") { $pcColor = "Green" }
+            if ($row.Result -eq "refused")   { $pcColor = "Yellow" }
+            if ($row.Result -eq "invalid")   { $pcColor = "Red" }
+            $pcLine = "    {0}  {1}" -f $row.Name.PadRight($pcWidth), $row.Result
+            if ($row.Detail) { $pcLine += "  ({0})" -f $row.Detail }
+            Write-Host $pcLine -ForegroundColor $pcColor
+        }
+    }
+
+    Write-Host ""
+    if ($pcResult.Branch) { Write-Host "    Branch: $($pcResult.Branch)" -ForegroundColor DarkGray }
+    if ($pcResult.Commit) { Write-Host "    Commit: $($pcResult.Commit)" -ForegroundColor DarkGray }
+    Write-Host ("    Published {0}, skipped {1}, refused {2}, invalid {3}." -f @($pcResult.Published).Count, @($pcResult.Skipped).Count, @($pcResult.Refused).Count, @($pcResult.Invalid).Count) -ForegroundColor DarkGray
+
+    if (@($pcResult.Errors).Count -gt 0 -or @($pcResult.Invalid).Count -gt 0) {
+        Write-Host ""
+        foreach ($e in @($pcResult.Errors)) { Write-Host "    ERROR: $e" -ForegroundColor Red }
+        Write-Host ""
+        exit 1
+    }
+    Write-Host ""
+    exit 0
 }
 
 # ── Install mode: local Hyper-V, or a remote host service ────────────────────

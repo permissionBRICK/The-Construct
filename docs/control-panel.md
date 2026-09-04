@@ -276,8 +276,29 @@ host with baseline configs for several projects):
   is shared as the [install one-liner](installation.md#sharing-a-config-as-a-one-liner)
   (command carrier); a selection containing local-only profiles is shared as a zip bundle
   instead (a small `deploy.ps1` plus the profile files).
-- **Push back** — manually push your local versions of a remote's tracked files to a branch
-  on that remote for review; never automatic, since shared config affects other people's VMs.
+- **Push back** (**↑**) — manually push your local versions of a remote's *tracked* files to
+  a branch on that remote for review; never automatic, since shared config affects other
+  people's VMs.
+- **Publish** — the opposite of Import for profiles that were born here. Import and Push
+  back only move files that already carry provenance, so a profile you created locally
+  could never reach a remote. Publish opens a picker of your **untracked** profiles, **all
+  ticked by default**, copies the ticked ones into the remote's **default branch** and then
+  records them as tracked (same manifest + stored base an import writes) — after which
+  Import brings them to your other PCs and Push back carries your later edits. Rows that
+  can't be published are greyed and carry the reason: "already tracked — use Push back",
+  "import it first, then push back" (the repo already has that name with different content),
+  or the validator's message for a profile that isn't valid. Selecting a greyed row snaps
+  back — the picker can't publish it. When no remote is linked yet, **add remote &
+  publish…** asks for the URL, links it and goes straight into the picker; the first push
+  into an empty (or not-yet-created) repo in your own namespace works via push-to-create,
+  and a first push that fails (a PAT still being set up) can simply be retried. The commit
+  that lands in your repo uses **your** git identity. A repo URL with credentials in it
+  (`https://alice:<token>@…`) is refused when you add or publish to it — git would copy that
+  secret into several plain files — so give the plain URL and let Git Credential Manager
+  supply the token; URLs are shown redacted everywhere regardless. The same thing from
+  PowerShell is
+  `Auto-Install.ps1 -Action publish-config -ConfigRepo <url>` (see
+  [Config sync §7](config-sync.md#7-upstream-company-config-repos-optional)).
 
 ## Token usage & cost
 
