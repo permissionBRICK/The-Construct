@@ -314,10 +314,41 @@ install but only applies after the next sign-in.
 | **Reprovision** | re-runs `Provision-AgentVM.ps1` against the instance's endpoint. Keeps all data. Never touches the service. |
 | **Reinstall** | `DELETE /vms/{name}` → `POST /vms` → provision. Same typed-`yes` confirmation as the local path, and the same pre-wipe unsaved-work scan + config save. |
 | **Export config** | pulls the VM's agent config back to this host. No changes to the VM. |
+| **Remove instance** | `DELETE /vms/{name}` **and** removes everything this PC knows about the VM (see below). Needs the instance name typed back. |
 | **Quit** | nothing. |
 
 There is no *Redownload* for a remote instance: the ISO is built on the host, and the
 service decides when to refresh its source image.
+
+### Removing a remote instance, and forgetting the host
+
+`Auto-Install.ps1 -Action remove-instance -InstanceName work-vm` (the menu choice above, or
+**Settings → Remove instance** in the control panel) undoes what creating the VM did *on
+this PC*, and — for a `hyperv-remote` instance — deletes the VM on the host as well:
+
+1. `DELETE /vms/{name}` through the same driver contract *Reinstall* uses. This goes
+   **first**: if the service refuses, nothing local is touched and the run stops, rather
+   than leaving a half-forgotten instance whose VM is still running.
+2. the `~/.ssh/config` block, the `known_hosts` entries and the private key for its alias;
+3. its `remote.SSH.remotePlatform` entry, its OpenCode server entry (matched by the URLs
+   this PC wrote for it *and* by its display name), its T3 certificate authority (file +
+   Root store — the machine store through one narrowly scoped elevated command), its
+   per-instance state file (its settings, its provisioned commit, and the T3 origin and
+   OpenCode url the provisioner recorded for it) and, **last and only if every step
+   before it succeeded**, its registry entry.
+
+Because the VM's disk goes with it, the instance name has to be **typed back** — in the
+console when it is run interactively, and as `-ConfirmInstanceName <name>` when it is not
+(the control panel collects it and passes it along; the script checks it again through the
+same planner, because it is also run by hand). The action never elevates: every file it
+edits belongs to the signed-in user.
+
+The **host enrolment** is separate, and outlives its VMs. **The Construct: Remove Remote
+Host** in VS Code clears the three places *Add Remote Host* wrote — the `globalState`
+record, the API token in SecretStorage and the `.pin` file — and is **refused while any
+registry entry still names that service URL**: those VMs are reached through the host, so
+remove them first. It changes nothing on the host itself. The PowerShell client's own token
+and pin are separate files (see §5); delete them by hand to forget the host in a console.
 
 ---
 

@@ -1181,7 +1181,13 @@ ok("update: a remote instance may keep the default VM's host on another port",
     .byName["work-vm"].vmHost === "agent-vm.mshome.net");
 ok("update: rejects a change that would collide with the default instance's endpoint",
   (() => { try { inst.updateInstance(added, "work-vm", { sshHost: "agent-vm.mshome.net", sshPort: 22 }); return false; } catch (_) { return true; } })());
-ok("remove: refuses the default instance", (() => { try { inst.removeInstance(updated, "agent-vm"); return false; } catch (_) { return true; } })());
+// B14: the default instance's NAME is no longer a refusal — its row is synthesized, so
+// the removal is recorded as an explicit `null` entry instead of a deleted key. The one
+// refusal is the LAST instance.
+ok("remove: the default instance's name is removable while another instance exists",
+  inst.list(inst.removeInstance(updated, "agent-vm")).map((i) => i.name).indexOf("agent-vm") < 0);
+ok("remove: ...and that removal is written down, not just deleted",
+  inst.toFileDocument(inst.removeInstance(updated, "agent-vm")).instances["agent-vm"] === null);
 const removed = inst.removeInstance(updated, "work-vm");
 ok("remove: gone", !removed.byName["work-vm"]);
 ok("remove: agent-vm survives", !!removed.byName["agent-vm"]);
@@ -3693,6 +3699,93 @@ async function asyncTests() {
   eq("persist failed + live pin: the pin warning names the instance in use",
     (await switchWindow(false, "agent-vm")).pinWarning, "agent-vm");
 }
+
+// ── B14: "Remove instance" — the plan, before anything is touched ────────────
+(function removePlans() {
+  const reg = inst.parseRegistry(JSON.stringify({
+    version: 1,
+    defaultInstance: "agent-vm",
+    instances: {
+      "agent-vm": {},
+      "work-vm": { backend: "hyperv-local" },
+      "far-vm": {
+        backend: "hyperv-remote", vmName: "far-vm", sshHost: "buildbox.example.local",
+        service: { url: "https://buildbox.example.local:7462" },
+      },
+    },
+  })).registry;
+  const local = inst.planRemoveInstance({ registry: reg, name: "work-vm" });
+  ok("remove: a local instance needs no typed confirmation",
+    local.ok === true && local.requiresTypedConfirmation === false && local.deletesVm === false);
+  ok("remove: the list names this instance's OWN key file",
+    local.removes.some((r) => r.indexOf("construct_work-vm_ed25519") >= 0));
+  ok("remove: the list names the per-instance state file and the registry entry",
+    local.removes.some((r) => r.indexOf("instances\\work-vm.json") >= 0) &&
+    local.removes.some((r) => r.indexOf("instances.json") >= 0));
+  ok("remove: a local removal says the Hyper-V VM is kept",
+    local.keeps.join(" ").indexOf("NOT deleted") >= 0);
+  ok("remove: the config store is kept", local.keeps.join(" ").indexOf("config-sync branch") >= 0);
+
+  const remote = inst.planRemoveInstance({ registry: reg, name: "far-vm" });
+  ok("remove: a remote instance is refused until its name is typed",
+    remote.ok === false && remote.requiresTypedConfirmation === true && remote.deletesVm === true);
+  ok("remove: the refusal names the service and the disk",
+    remote.refusal.indexOf("buildbox.example.local") >= 0 && remote.refusal.indexOf("disk") >= 0);
+  ok("remove: the wrong case is not the name",
+    inst.planRemoveInstance({ registry: reg, name: "far-vm", confirmation: "FAR-VM" }).ok === false);
+  const confirmed = inst.planRemoveInstance({ registry: reg, name: "far-vm", confirmation: "far-vm" });
+  ok("remove: the typed name accepts it", confirmed.ok === true);
+  ok("remove: the VM deletion is listed FIRST",
+    confirmed.removes[0].indexOf("DELETES") >= 0 || confirmed.removes[0].indexOf("including its disk") >= 0);
+  ok("remove: a remote removal does not claim the VM is kept",
+    confirmed.keeps.join(" ").indexOf("Hyper-V") < 0);
+
+  // THE ONE REFUSAL is "the only instance"; every name is otherwise removable, agent-vm
+  // included — its row is synthesized, so the removal is RECORDED (a null entry).
+  ok("remove: 'agent-vm' is removable while other instances exist",
+    inst.planRemoveInstance({ registry: reg, name: "agent-vm" }).ok === true);
+  const afterDefault = inst.removeInstance(reg, "agent-vm");
+  ok("remove: removing it takes it out of the listing",
+    inst.list(afterDefault).map((i) => i.name).indexOf("agent-vm") < 0);
+  ok("remove: ...and the default moves to a survivor",
+    afterDefault.defaultInstance !== "agent-vm" && inst.hasInstance(afterDefault, afterDefault.defaultInstance));
+  // ROUND TRIP: what is written is read back the same way, with no problems reported.
+  const written = inst.parseRegistry(JSON.stringify(inst.toFileDocument(afterDefault)));
+  ok("remove: the removal survives a save/load round trip",
+    inst.list(written.registry).map((i) => i.name).indexOf("agent-vm") < 0 && written.problems.length === 0);
+  ok("remove: the file records it as an explicit null entry",
+    inst.toFileDocument(afterDefault).instances["agent-vm"] === null);
+  ok("remove: a NAMED default instance is an ordinary removal",
+    inst.planRemoveInstance({ registry: reg, name: "far-vm", confirmation: "far-vm" }).ok === true);
+  ok("remove: an unknown name is refused, not treated as the default",
+    inst.planRemoveInstance({ registry: reg, name: "nope" }).refusal.indexOf("not an instance") >= 0);
+  ok("remove: no name at all is refused",
+    inst.planRemoveInstance({ registry: reg }).ok === false);
+  // A registry whose only NAMED entry is the default one still holds the synthesized
+  // "agent-vm", so removing that named instance is a normal removal.
+  const twoLeft = inst.parseRegistry(JSON.stringify({
+    version: 1, defaultInstance: "solo-vm", instances: { "solo-vm": { backend: "hyperv-local" } },
+  })).registry;
+  ok("remove: the last NAMED instance is removable while agent-vm is still synthesized",
+    inst.planRemoveInstance({ registry: twoLeft, name: "solo-vm" }).ok === true);
+  // ...and once only ONE is left, nothing may be removed.
+  const only = inst.parseRegistry(JSON.stringify({
+    version: 1, defaultInstance: "solo-vm",
+    instances: { "solo-vm": { backend: "hyperv-local" }, "agent-vm": null },
+  })).registry;
+  ok("remove: an explicit null entry keeps the default OUT of the listing",
+    inst.list(only).map((i) => i.name).join(",") === "solo-vm");
+  ok("remove: the only instance left is refused",
+    inst.planRemoveInstance({ registry: only, name: "solo-vm" }).refusal.indexOf("only instance") >= 0);
+  ok("remove: a refused plan carries no list to act on",
+    inst.planRemoveInstance({ registry: only, name: "solo-vm" }).removes.length === 0);
+  let threwLast = false;
+  try { inst.removeInstance(only, "solo-vm"); } catch (_) { threwLast = true; }
+  ok("remove: removeInstance() refuses the last instance too", threwLast);
+  let threwUnknown2 = false;
+  try { inst.removeInstance(reg, "nope"); } catch (_) { threwUnknown2 = true; }
+  ok("remove: removeInstance() still refuses an unknown name", threwUnknown2);
+})();
 
 asyncTests().then(() => {
   try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (_) {}

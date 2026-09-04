@@ -75,6 +75,26 @@ const EVENT_DEBOUNCE_MS = 250;
  *  mirror of the mic tunnel's 8767–8774, for the opposite direction. */
 const PORT_BASE = 18800;
 const PORT_COUNT = 16;
+/**
+ * THE FALLBACK RANGE IS SLICED PER INSTANCE (B14, plan §4.12 "Smaller items folded in").
+ *
+ * 18800–18815 used to be shared by every VM: two instances forwarding the same VM port
+ * from two windows raced for the same 16 numbers, and the loser got a port a user had
+ * already been handed for the OTHER machine. Each instance now owns its own 16-port
+ * slice inside 18800–19311 (32 slices):
+ *
+ *   slice 0 (18800–18815) — RESERVED for the default instance, so a single-VM install
+ *                            probes exactly the ports it always probed.
+ *   slice 1–31            — chosen by an FNV-1a hash of the instance name, so the same
+ *                            VM lands on the same slice in every window and after every
+ *                            restart without anything being written down.
+ *
+ * Two different names CAN hash to one slice (32 slices, no coordination). That costs
+ * nothing: the candidate list is probed, ports this instance already holds are skipped,
+ * and a busy port simply moves to the next candidate — the same thing that happens today
+ * when the VM's own port number is taken.
+ */
+const PORT_SLICE_COUNT = 32;
 
 /** An `ssh -L` that dies within this window never opened the port: that is a failure to
  *  report, not a restart to schedule (same rule, and same number, as audio.js). */
@@ -268,6 +288,27 @@ function portCandidates(vmPort, opts = {}) {
     add(p);
   }
   return out;
+}
+
+/**
+ * The 16-port fallback slice this instance owns. Pure and deterministic: the default
+ * instance always gets the historical [18800, 18816) and every other name gets one of
+ * the 31 slices above it. See PORT_SLICE_COUNT for why collisions are harmless.
+ */
+function instancePortSlice(name) {
+  const n = String(name == null ? "" : name).trim();
+  // "agent-vm" spelled out, as everywhere else in this module (see the constructor):
+  // forwarder.js deliberately depends on nothing but node:net.
+  if (!n || n === "agent-vm") return { base: PORT_BASE, count: PORT_COUNT };
+  // FNV-1a over the name's code units: a few lines, no dependency, and stable across
+  // Node versions (a JS hash of an object's iteration order would not be).
+  let h = 0x811c9dc5;
+  for (let i = 0; i < n.length; i++) {
+    h ^= n.charCodeAt(i) & 0xff;
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  const slot = 1 + (h % (PORT_SLICE_COUNT - 1));
+  return { base: PORT_BASE + slot * PORT_COUNT, count: PORT_COUNT };
 }
 
 /** Reconnect backoff, 2s doubling to 60s. Pure. */
@@ -1099,7 +1140,13 @@ class Forwarder {
     this._settleMs = opts._settleMs != null ? opts._settleMs : TUNNEL_SETTLE_MS;
     this._reconcileMs = opts.reconcileMs || (this.mode === "remote" ? REMOTE_POLL_MS : RECONCILE_MS);
     this._debounceMs = opts.debounceMs != null ? opts.debounceMs : EVENT_DEBOUNCE_MS;
-    this._portOpts = { base: opts.portBase, count: opts.portCount };
+    // An explicit base/count (tests, a future setting) wins; otherwise this instance's
+    // own slice, which is the historical range for the default VM.
+    const slice = instancePortSlice(this.name);
+    this._portOpts = {
+      base: opts.portBase != null ? opts.portBase : slice.base,
+      count: opts.portCount != null ? opts.portCount : slice.count,
+    };
 
     /** id -> tunnel record. THE module's state, and it is per-instance by construction. */
     this._tunnels = new Map();
@@ -1881,7 +1928,7 @@ module.exports = {
   START_SUPPORTED, START_UNSUPPORTED, START_UNANSWERED, START_STOOD_DOWN, START_RUNNING,
   MAX_HOST_LABEL, MAX_MESSAGE, MAX_LABEL,
   BIND_LOOPBACK, BIND_ALL, bindHostFor,
-  isSafeId, sanitizeText, sanitizeHostLabel, urlHostFor, toPort, portCandidates, reconnectDelayMs,
+  isSafeId, sanitizeText, sanitizeHostLabel, urlHostFor, toPort, portCandidates, instancePortSlice, reconnectDelayMs,
   splitLines, shQuote,
   isV1Document, parseRequest, parseAck, parseClose, ackDocument, parseDump,
   isClosedEntry, readForwardList,

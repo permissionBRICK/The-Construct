@@ -260,7 +260,15 @@ const pairRemote = t3.buildPairingScript(instances.deriveDefaults("work-vm", { s
 ok("pairing(instance): prefers the recorded external host", /cfgget CONSTRUCT_EXTERNAL_HOST/.test(pairRemote));
 ok("pairing(instance): still falls back to the mshome name", /ext:-\$\(hostname\)\.mshome\.net/.test(pairRemote));
 ok("pairing(instance): still mints the same kind of link",
-  /t3 auth pairing create --json --ttl 10m --label "construct-control-panel"/.test(pairRemote));
+  /t3 auth pairing create --json --ttl 10m --label "construct-work-vm"/.test(pairRemote));
+// B14: the label NAMES the instance for a non-default VM, so a T3 session list that
+// holds several linked Construct VMs can say which machine a session belongs to. The
+// default instance keeps "construct-control-panel" (asserted with the whole pinned
+// script above).
+ok("pairing(instance): the label names the instance, not the panel",
+  !/construct-control-panel/.test(pairRemote));
+ok("pairing(default): the label is unchanged",
+  /--label "construct-control-panel"/.test(pair));
 
 // ── extractPairUrl ────────────────────────────────────────────────────────────
 const clean = JSON.stringify({ id: "x", credential: "ABC", pairUrl: "http://agent-vm.mshome.net:5177/pair#token=ABC" });

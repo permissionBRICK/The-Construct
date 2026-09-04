@@ -773,6 +773,49 @@ function runRebuild(opts) {
     asked2[4].title === "Redownload the Construct VM?" &&
     asked2[4].detail.startsWith("This DELETES the VM and its virtual disk, re-downloads the Ubuntu ISO"));
 
+  // ── B14: Remove instance ────────────────────────────────────────────────────
+  const rm = life.buildInvocation("removeInstance", { instance: LOCAL_INST, confirmation: "" });
+  ok("remove: it drives Auto-Install.ps1 -Action remove-instance",
+    rm && rm.script === "Auto-Install.ps1" &&
+    rm.args.join(" ").indexOf("-Action remove-instance -InstanceName work-vm") >= 0);
+  ok("remove: it NEVER elevates (it edits the real user's profile, not Hyper-V)",
+    rm.elevate === false);
+  ok("remove: it is not a 'destructive' confirm-modal action (the panel already asked)",
+    rm.destructive === false && rm.label === "Remove instance");
+  ok("remove: -NonInteractive is not passed (Auto-Install.ps1 has no such parameter)",
+    rm.args.indexOf("-NonInteractive") < 0 && rm.args.indexOf("-FromPanel") >= 0);
+  const rmConfirmed = life.buildInvocation("removeInstance", { instance: REMOTE_INST, confirmation: "work-vm" });
+  ok("remove: the typed confirmation rides along for a remote instance",
+    rmConfirmed.args.join(" ").indexOf("-ConfirmInstanceName work-vm") >= 0);
+  // The launcher only refuses a request with no NAME: which names may be removed is the
+  // planner's question (and the script's), because it needs the registry to answer it —
+  // `agent-vm` is removable once another instance is the default.
+  ok("remove: a request with no instance is refused",
+    life.buildInvocation("removeInstance", {}) === null &&
+    life.buildInvocation("removeInstance", { instance: { backend: "hyperv-local" } }) === null);
+  ok("remove: a request that names agent-vm still builds (the planner decides)",
+    life.buildInvocation("removeInstance", { instance: DEFAULT_INST }).args.join(" ")
+      .indexOf("-InstanceName agent-vm") >= 0);
+  // The capability probe: -Action lives in a [ValidateSet], so an older scripts dir
+  // rejects the value at binding time and the action must not be offered at all.
+  const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), "b14-probe-"));
+  fs.writeFileSync(path.join(probeDir, "Auto-Install.ps1"),
+    'param(\n  [ValidateSet("reprovision", "reinstall")]\n  [string]$Action\n)\n');
+  ok("remove: an older Auto-Install.ps1 does not support the action",
+    life.scriptSupportsRemoveInstance(probeDir) === false);
+  fs.writeFileSync(path.join(probeDir, "Auto-Install.ps1"),
+    'param(\n  # remove-instance in a comment must not answer the question\n' +
+    '  [ValidateSet("reprovision", "remove-instance")]\n  [string]$Action\n)\n');
+  ok("remove: a scripts dir whose ValidateSet names it does",
+    life.scriptSupportsRemoveInstance(probeDir) === true);
+  fs.writeFileSync(path.join(probeDir, "Auto-Install.ps1"),
+    'param(\n  # -Action remove-instance\n  [ValidateSet("reprovision")]\n  [string]$Action\n)\n');
+  ok("remove: a mention in a COMMENT never answers the probe",
+    life.scriptSupportsRemoveInstance(probeDir) === false);
+  ok("remove: no scripts dir answers false", life.scriptSupportsRemoveInstance("") === false);
+  ok("remove: THIS repo's Auto-Install.ps1 supports it",
+    life.scriptSupportsRemoveInstance(path.join(__dirname, "..", "..")) === true);
+  try { fs.rmSync(probeDir, { recursive: true, force: true }); } catch (_) {}
   // ── B12: run() replays the TARGET INSTANCE's settings, not the checkout's ──
   console.log("\n=== the settings a run replays belong to the instance it targets ===");
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "construct-lifecycle-state-"));

@@ -77,6 +77,16 @@
         "command": "construct.registerThisVm",
         "title": "Register This VM as an Instance",
         "category": "The Construct"
+      },
+      {
+        "command": "construct.removeInstance",
+        "title": "Remove Instance",
+        "category": "The Construct"
+      },
+      {
+        "command": "construct.removeRemoteHost",
+        "title": "Remove Remote Host",
+        "category": "The Construct"
       }
     ],
     "configuration": {

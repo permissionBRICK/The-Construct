@@ -222,6 +222,7 @@ const ACTION_LABELS = {
   reinstall: "Reinstall",
   redownload: "Redownload",
   setCheckpoints: "Automatic checkpoints",
+  removeInstance: "Remove instance",
 };
 
 /**
@@ -560,6 +561,40 @@ function buildInvocation(action, opts = {}) {
       });
     }
 
+    // Remove THIS PC's record of one VM (B14, plan section 4.12 "Cleanup"): the ssh
+    // block, the key, the remotePlatform entry, the OpenCode server, the T3 certificate
+    // authority, the per-instance state file and the registry entry -- and, for a remote
+    // instance, the VM on its host service. It elevates for NOBODY: it drives no Hyper-V,
+    // and elevating would read and write ~\.ssh, instances.json and the DPAPI token store
+    // under the administrator's profile instead of the user's (the same reason a remote
+    // rebuild does not elevate).
+    //
+    // `destructive: false` is about the CONFIRM MODAL, not about the consequences: the
+    // caller has already had the user TYPE the instance name for a remote removal
+    // (instances.planRemoveInstance), and a second generic "are you sure" on top of that
+    // is noise. -InstanceName is emitted explicitly rather than through instanceArgPairs,
+    // because it is not target identity here -- it IS the operand.
+    case "removeInstance": {
+      // The operand is a NAME, and the refusals (an unknown name, the registry's default
+      // instance, a remote instance without its typed confirmation) belong to
+      // instances.planRemoveInstance and to the script's own planner — both of which see
+      // the registry. A shape-only "is this the default instance object?" test here would
+      // refuse `agent-vm` even after another instance became the default.
+      const target = opts.instance;
+      if (!target || !target.name) return null;
+      addPair("-Action", "remove-instance");
+      addPair("-InstanceName", String(target.name));
+      if (opts.confirmation != null && String(opts.confirmation) !== "") {
+        addPair("-ConfirmInstanceName", String(opts.confirmation));
+      }
+      // NO -NonInteractive: Auto-Install.ps1 has no such parameter (it is
+      // Provision-AgentVM.ps1's), and an advanced function refuses an unknown one at
+      // binding time. -FromPanel above is what tells it this run is unattended.
+      return done(AUTO_INSTALL, {
+        destructive: false, elevate: false, label: "Remove instance",
+      });
+    }
+
     default:
       return null;
   }
@@ -586,6 +621,24 @@ function scriptSupportsCheckpoints(scriptsDir) {
     .replace(/<#[\s\S]*?#>/g, "")   // block comments (the .SYNOPSIS help header)
     .replace(/^[ \t]*#.*$/gm, "");  // whole-line comments
   return /\$AutomaticCheckpoints\s*(?:=|,|\)|$)/im.test(code);
+}
+
+/**
+ * Does the INSTALLED Auto-Install.ps1 know `-Action remove-instance` (B14)? The action
+ * name lives in a [ValidateSet] on -Action, so an older scripts dir refuses it at
+ * BINDING time — the console would flash a parameter error and nothing would be removed.
+ * The set is read out of the script itself, comments stripped first for the same reason
+ * as scriptSupportsCheckpoints: our own doc text must not answer the question.
+ */
+function scriptSupportsRemoveInstance(scriptsDir) {
+  if (!scriptsDir) return false;
+  let txt;
+  try { txt = fs.readFileSync(path.join(scriptsDir, AUTO_INSTALL), "utf8"); } catch (_) { return false; }
+  const code = txt
+    .replace(/<#[\s\S]*?#>/g, "")
+    .replace(/^[ \t]*#.*$/gm, "");
+  const m = code.match(/\[ValidateSet\(([^)]*)\)\]\s*\r?\n?\s*\[string\]\$Action\b/i);
+  return !!m && /["']remove-instance["']/i.test(m[1]);
 }
 
 /**
@@ -1077,6 +1130,7 @@ module.exports = {
   derivedConfigBranch, configBranchOverride,
   scriptSupportsParam, scriptForAction, instanceParamSupport,
   normalizeBackupMode, buildInvocation, scriptSupportsCheckpoints, scriptSupportsT3CodeChannel,
+  scriptSupportsRemoveInstance,
   scriptSupportsT3CodeLimitResume,
   scriptSupportsOpenCodeBackgroundWatcher,
   psSingleQuote, winQuoteArg, buildChildCommandLine, buildOuterCommand, buildCallCommand, buildHostLaunch,

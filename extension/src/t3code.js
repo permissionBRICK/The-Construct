@@ -246,6 +246,13 @@ exit 0
  *   B2 records in config.env, because a remote/port-forwarded VM is NOT reachable at
  *   its own mshome name; it falls back to $(hostname).mshome.net when the key is absent.
  *
+ * THE PAIRING LABEL names the INSTANCE for a non-default VM (`construct-<name>`, plan
+ * section 4.12 "Naming"): T3 Code Desktop links several remotes at once, and a session
+ * list in which every VM's link is called "construct-control-panel" cannot say which
+ * machine a session belongs to. The default instance keeps the historical label, so its
+ * script stays byte-identical. (`construct-` is the reserved INSTANCE-name prefix, which
+ * is exactly why it is safe here: no instance can be named this.)
+ *
  * BOTH variants pick the SCHEME from the VM: Construct now serves T3 over HTTPS
  * (bin/setup-t3-https.sh), and a browser only exposes getUserMedia() — T3's
  * client-side microphone capture — on a secure origin, so the pairing link must
@@ -271,7 +278,7 @@ command -v t3 >/dev/null 2>&1 || { echo "t3 is not installed" >&2; exit 1; }
 # mshome name); absent, fall back to the local $(hostname).mshome.net.
 ext="$(cfgget CONSTRUCT_EXTERNAL_HOST)"
 base="$(t3base "\${ext:-$(hostname).mshome.net}")"
-t3 auth pairing create --json --ttl 10m --label "construct-control-panel" --base-url "$base" --log-level none
+t3 auth pairing create --json --ttl 10m --label "construct-${instance.name}" --base-url "$base" --log-level none
 `;
 }
 

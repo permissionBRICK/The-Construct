@@ -230,6 +230,62 @@ remote path, where it meant something else. A remote *rebuild* keeps `-Backend` 
 The default instance is never blocked by any of this: it needs no targeting in the first
 place.
 
+### Remove instance
+
+**Settings → Remove instance** forgets one VM on *this PC*. Installing a VM writes
+client-side state in half a dozen unrelated places, and removing them by hand is how a
+forgotten ssh alias or a still-trusted certificate authority ends up pointing a tool at a
+machine that no longer exists. The action removes, in this order:
+
+1. for a **remote** instance only: the VM itself on its host service (`DELETE /vms/{name}`),
+   including its disk;
+2. the `~/.ssh/config` `Host` block and the `known_hosts` entries for its alias;
+3. its private key `~/.ssh/construct_<name>_ed25519` (and the `.pub` beside it);
+4. its alias in VS Code's `remote.SSH.remotePlatform`;
+5. its OpenCode server entry (matched by URL *and* by display name);
+6. its T3 Code certificate authority — the file **and** the Root-store entry (the machine
+   store through one narrowly scoped elevated command; if a copy survives, the file is
+   *kept*, because it is the only record of which certificate that was);
+7. its per-instance state file `%LOCALAPPDATA%\The-Construct\instances\<name>.json` —
+   its settings, its provisioned commit and the T3/OpenCode endpoints the provisioner
+   recorded for it. For `agent-vm`, which mirrors its settings into the install's
+   `.construct-settings.json` instead of having a file of its own, that mirror's VM keys
+   are cleared there instead — everything except the small install-wide set
+   (`installedCommit`, `constructRepo`, `constructRef` and the host git identity), so a
+   setting a newer Construct added is treated as the VM's rather than left behind;
+8. the leftover `%TEMP%\construct-known_hosts-<alias>` from a provision;
+9. its entry in `instances.json`.
+
+What it does **not** touch: a local Hyper-V VM's disk (that is what Reinstall is for —
+Reinstall and Redownload keep working on a VM whose client state was removed and write it
+again), and the shared config store or the VM's config-sync branch, which hold agent
+configuration rather than client state.
+
+A **remote** instance's VM is deleted, so the panel asks you to type the instance name
+before it does anything; a local one gets an ordinary confirmation listing the same steps.
+
+Two rules keep a removal from leaving something worse behind:
+
+- **The registry entry goes last, and only if everything else worked.** It is the handle
+  the action is reached by, so a run in which a step failed (a certificate authority that
+  could not be untrusted, a `settings.json` this PowerShell cannot parse) keeps the entry
+  and says so — you fix the reported problem and run it again.
+- **The last instance cannot be removed** — and that is the only refusal. With one left
+  there would be nothing to fall back to: every reader synthesizes the default again, over
+  the client state that was just deleted. `agent-vm` is removable like any other name; because
+  its row is *synthesized* whenever `instances.json` has no entry for it, the removal is
+  written down explicitly (the file gains `"agent-vm": null`, which both readers and the T3
+  Desktop app honour) instead of a line simply being deleted. A registry whose
+  `defaultInstance` pointed at the removed VM moves to a survivor.
+
+The section is hidden entirely on a single-VM install.
+
+The same action is available in a console — `Auto-Install.ps1 -Action remove-instance
+-InstanceName <name>` (add `-ConfirmInstanceName <name>` for a remote instance in an
+unattended run), or as the **Remove instance** choice in the installer's menu. It never
+elevates: every file it edits belongs to the signed-in user, and under a UAC prompt that
+switches to a different administrator they would be the wrong profile's.
+
 ### Remote hosts
 
 Two command-palette entries handle VMs on somebody else's Hyper-V (full story:
@@ -247,6 +303,12 @@ Two command-palette entries handle VMs on somebody else's Hyper-V (full story:
   disk, and the command launches `Auto-Install.ps1`'s remote path in a host console through
   the same launcher every other lifecycle action uses. The console does the create *and* the
   provisioning, because provisioning configures your PC too.
+- **The Construct: Remove Remote Host** — the counterpart of *Add*: it clears the
+  `globalState` record, the API token in SecretStorage and the `.pin` file with the host's
+  pinned certificate. It is **refused while any registry entry still names that service
+  URL** — those VMs are reached *through* the host, and dropping its token would leave them
+  in the picker as machines nothing can talk to. Remove the instances first. Nothing on the
+  host itself is changed; the VMs there keep running.
 
 ## Projects
 
@@ -579,10 +641,19 @@ browsers only expose the microphone (`getUserMedia`) on a **secure origin**: ove
 Windows Desktop app is unaffected — it loads its UI from a scheme registered as secure.
 
 Provisioning copies the CA certificate to
-`%LOCALAPPDATA%\The-Construct\artifacts\t3code\construct-t3-ca.crt` and trusts it for you:
+`%LOCALAPPDATA%\The-Construct\artifacts\t3code\construct-t3-ca.crt` — or, for a VM that is
+not the default instance, `construct-t3-ca-<instance>.crt`, because T3 Code Desktop links
+several remotes at once and every VM's CA has to survive next to the others — and trusts it
+for you:
 elevated it lands in the **machine** Root store silently, and when the run is *not*
 elevated it goes into your **user** Root store — where Windows shows **one** confirmation
-dialog you have to accept. A CA that is already trusted is never imported twice. Firefox
+dialog you have to accept. A CA that is already trusted is never imported twice, and a VM that **re-created** its CA
+has the superseded one taken out of the Root store (the certificate file this provision
+replaces is the record of what was trusted before — no second bookkeeping file, and it is
+replaced only *after* the new certificate is in the store, so a failed or declined import
+can never leave the old one trusted with nothing left to identify it). Removing it from the
+*machine* store needs an elevated run; an unelevated one clears the user store and says what
+is left. Firefox
 keeps its own trust store, so set `security.enterprise_roots.enabled` to `true` in
 `about:config` to make it use the Windows one. On the VM the CA lives in
 `/etc/construct/tls/ca.crt` (private keys stay in that `0700` directory; a readable copy
@@ -617,8 +688,16 @@ launched the reprovision), provisioning starts the updated app again, otherwise 
 closed. Construct keys the shared build by the resolved upstream T3 version,
 the installed Construct revision, and the guarded transformation recipe. Routine reprovisions reuse the
 running VM server and Desktop artifact without rebuilding, reinstalling, or restarting T3; a T3
-update or Construct update invalidates that cache. An already-current Desktop installation is
-left alone. Activating a genuinely new build restarts `t3code-serve`, so an open T3 provider
+update or Construct update invalidates that cache.
+
+**One Desktop install per PC.** `%LOCALAPPDATA%\The-Construct\artifacts\t3code\installed.json`
+records which patched release this PC holds — the upstream `t3Version`, the `channel`, the
+patched `buildHash`, when it was installed and which instance installed it. A reprovision
+that finds exactly that triple already installed skips the installer ("already installed");
+anything else installs. **The last reprovisioned VM wins**: there is no owner instance and no
+newest-wins comparison, because two VMs on different channels would otherwise flip the
+install back and forth on a schedule nobody chose. If the app was running when the silent
+installer closed it, it is started again. Activating a genuinely new build restarts `t3code-serve`, so an open T3 provider
 session may ask you to send a new message afterward; unchanged reprovisions do not interrupt it.
 
 The shared patch adds:
@@ -694,6 +773,34 @@ every ten minutes:
   reject (unreadable, unknown version, a default entry that is missing, non-canonical for its
   backend, malformed, or colliding with another entry) blocks the launch rather than guessing. The script's exit code reports the provisioning outcome back
   to the app (1 = failed, 3 = finished with optional errors).
+
+**One row per linked remote.** T3 Code Desktop links several remotes at once, so
+**Settings → Providers** gets a row for each. The app matches every remote's base URL
+**host and port** against the instance registry:
+
+- the **host** is the VM's own `<name>.mshome.net` (its `sshHost`) or the per-VM public
+  host its host service publishes — **not** its ssh alias, which is a name in
+  `~/.ssh/config` that nothing outside ssh resolves and is therefore no evidence about
+  which VM an HTTP origin belongs to;
+- the **port** is the one the provisioner recorded for that VM in its per-instance state
+  (`t3Port` — the origin the guest actually serves, `T3CODE_PUBLIC_BASE_URL` or the host
+  forward it was given). It is recorded for a **named** instance only: the default VM's
+  state is the install's own `.construct-settings.json`, which a single-VM install must go
+  on writing unchanged, and nothing is lost by it (see the next point);
+- **without** a recorded port a VM reached at its own address still matches on the T3 ports
+  Construct configures (`5177`/`5178`) — which is why the default VM needs no record — but a
+  VM published by a host **service** matches nothing: its forward's port is the service's to
+  allocate and cannot be derived here, so the honest answer is "this PC has not seen that
+  VM's T3 yet" — the next reprovision records it;
+- a host **and** port that two instances claim is ambiguous and matches neither.
+
+A row that matches carries **that instance's** provisioned commit, its own stale state and
+the upstream T3 release on **its own channel** (an instance on the other channel makes the
+app ask npm for that channel too), and its **Reprovision** targets it *by name*
+(`Update-T3Code.ps1 -InstanceName <name>`) — even for the registry's default instance, so a
+row can never mean "whichever VM is default right now". A remote that matches nothing gets a
+read-only row saying it is not a Construct instance of this PC. **Update Construct** stays a
+single host-wide action on the Construct row: `Update-Construct.ps1` takes no target.
 
 A Construct update is offered first, since reprovisioning afterwards applies both. Each new
 offer raises one toast with the action as its button (closing it dismisses that offer), the

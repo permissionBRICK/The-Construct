@@ -154,8 +154,13 @@ param(
     # -FromPanel the redundant confirmations are skipped too (the "type yes" delete,
     # the git-identity prompt and the agent-password prompt -- all already handled by
     # the panel); the dirty-repo scan still warns if the VM has unsaved work.
-    [ValidateSet("reprovision", "reinstall", "redownload", "export", "add-config", "publish-config")]
+    [ValidateSet("reprovision", "reinstall", "redownload", "export", "add-config", "publish-config", "remove-instance")]
     [string]$Action,
+    # With -Action remove-instance on a REMOTE instance (whose VM is DELETED on its host
+    # service, disk and all): the instance name, typed back. Non-interactive runs -- the
+    # control panel, which has already had the user type it -- must supply it; an
+    # interactive console is asked instead. It is never a default and never inferred.
+    [string]$ConfirmInstanceName,
     # With -Action reinstall/redownload, pre-answer the save/restore prompts:
     #   save     export the current config now and restore it afterwards (default)
     #   existing skip the new export; restore a previously saved backup if present
@@ -689,8 +694,12 @@ function Resolve-ConstructInstallMode {
 # (scheduled task as the real desktop user) is currently DISABLED via the kill
 # switch in AgentVm.Common.ps1, so provisioning runs inline in this elevated
 # console until the de-elevated child's spurious prompts are fixed.
-# We skip elevation when only building the ISO (-SkipCreateVm needs no admin rights).
-if (-not $SkipCreateVm) {
+# We skip elevation when only building the ISO (-SkipCreateVm needs no admin rights),
+# and for -Action remove-instance, which drives no Hyper-V at all: it edits ~\.ssh, the
+# VS Code + OpenCode profiles and instances.json, every one of which belongs to the REAL
+# user. Elevating would write them into the administrator's profile on a PC where UAC
+# switches accounts -- the same reason the remote install path never relaunches.
+if (-not $SkipCreateVm -and $Action -ne 'remove-instance') {
     $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
                ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     if (-not $isAdmin) {
@@ -878,6 +887,192 @@ if (-not (Test-Path -LiteralPath $driverLoader)) { throw "Required helper not fo
 if (-not $SkipCreateVm) { Enable-ConstructTui }
 
 Show-ConstructHeader
+
+# ── -Action remove-instance: forget one VM on this PC ────────────────────────
+# Plan 4.12 "Cleanup" / B14. Installing a VM writes client-side state in half a dozen
+# unrelated places (an ssh_config block and a key, known_hosts lines, VS Code's
+# remote.SSH.remotePlatform map, the OpenCode server list, the T3 certificate authority,
+# the per-instance state file, the registry entry); removing one by hand means
+# remembering all of them, and a forgotten alias or a stale trusted CA is exactly the
+# leftover that later points a tool at a machine that no longer exists.
+#
+# It runs HERE -- after the shared helpers and the driver loader, before the install
+# mode, the ISO paths and any VM work -- because it touches none of them, and it runs
+# UNELEVATED (see the elevation gate above): every file it edits belongs to the real
+# user. lib\AgentVm.Cleanup.ps1 decides everything as data; this block prints the plan,
+# gets the confirmation and reports what each step did. Every other run falls straight
+# through it untouched.
+function Invoke-ConstructRemoveInstanceAction {
+    <#
+        Remove one instance's client-side state from THIS PC, following the plan
+        lib\AgentVm.Cleanup.ps1 builds. The outcome goes into
+        $script:ConstructRemoveInstanceRc (0 = done, 1 = refused or a step failed) rather
+        than the pipeline: this function prints, and anything a helper happened to emit
+        would otherwise be indistinguishable from its result.
+
+        -Interactive says whether there is somebody at the console to answer the typed
+        confirmation a remote removal needs. An unattended run must SUPPLY it, never be
+        asked for it: there is nobody to answer, and defaulting to "yes" would delete a VM.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [string]$Confirmation = "",
+        [switch]$Interactive
+    )
+    $riTargetLib = Join-Path $PSScriptRoot "lib\AgentVm.InstanceTarget.ps1"
+    $riCleanupLib = Join-Path $PSScriptRoot "lib\AgentVm.Cleanup.ps1"
+    foreach ($riLib in @($riTargetLib, $riCleanupLib)) {
+        if (-not (Test-Path -LiteralPath $riLib)) { throw "Required helper not found: $riLib" }
+    }
+    . $riTargetLib
+    . $riCleanupLib
+    # B12's per-instance state store: where the recorded OpenCode url lives, and what the
+    # default instance's VM-scoped keys are classified by.
+    $riStateLib = Join-Path $PSScriptRoot "lib\AgentVm.InstanceState.ps1"
+    if (Test-Path -LiteralPath $riStateLib) { . $riStateLib }
+
+    $script:ConstructRemoveInstanceRc = 1
+    $riInventory = Get-ConstructInstanceInventory -Name $Name
+    if (-not $riInventory.Known) {
+        throw "'$Name' is not an instance on this PC. Known: $($riInventory.Names -join ', ')."
+    }
+    $riEntry = $riInventory.Entry
+    $riIsDefault = ($riInventory.Default -ceq $Name)
+
+    # A plan WITHOUT the confirmation first, so the console can print what would happen
+    # and only then ask. The second call is the one that decides.
+    # A URL this PC recorded for the VM's OpenCode server (a host forward's, which the
+    # alias never appears in). Best-effort: the plan derives the direct URL itself, and a
+    # state file that is not there is an instance whose forward this PC never saw.
+    # The url the PROVISIONER recorded when it registered the entry (a host forward's,
+    # which the VM's own name never appears in, and the only thing left to match on when
+    # the user renamed the entry). Read from the instance's OWN state -- B12's store, the
+    # same document the provisioner wrote it to. Best-effort: no record means the direct
+    # url and the display names are what the removal matches on.
+    $riExtraUrls = @()
+    try {
+        $riState = Read-ConstructInstanceState -Name $Name -Dir $PSScriptRoot
+        foreach ($riKey in @('openCodeUrl', 'opencodeUrl')) {
+            if ($riState -and ($riState.PSObject.Properties.Name -contains $riKey) -and $riState.$riKey -and
+                $riExtraUrls -notcontains [string]$riState.$riKey) {
+                $riExtraUrls += [string]$riState.$riKey
+            }
+        }
+    } catch { $riExtraUrls = @() }
+
+    $riPreview = Get-ConstructInstanceRemovalPlan -Name $Name -Identity $riEntry `
+        -InstanceCount $riInventory.Count -IsDefault:$riIsDefault -OpenCodeUrls $riExtraUrls `
+        -HomeDir $HOME -LocalAppData $env:LOCALAPPDATA -AppData $env:APPDATA -TempDir $env:TEMP `
+        -ScriptsDir $PSScriptRoot
+    if (-not $riPreview.Ok -and -not $riPreview.RequiresTypedConfirmation) {
+        Write-Host ""
+        Write-Host "REFUSED: $($riPreview.Refusal)" -ForegroundColor Red
+        Write-Host ""
+        Wait-Exit
+        return
+    }
+
+    Write-Host ""
+    Write-Host "==> Removing the instance '$Name' from this PC" -ForegroundColor Cyan
+    foreach ($riStep in @($riPreview.Steps)) {
+        Write-Host "    - $($riStep.Label)" -ForegroundColor DarkGray
+    }
+    foreach ($riKeep in @($riPreview.Keeps)) {
+        Write-Host "    $riKeep" -ForegroundColor DarkGray
+    }
+
+    $riTyped = $Confirmation
+    if ($riPreview.RequiresTypedConfirmation -and -not $riTyped) {
+        # An unattended run must SUPPLY the confirmation, never be asked for it: there is
+        # nobody at the console to answer, and defaulting to "yes" would delete a VM.
+        if (-not $Interactive -or [Console]::IsInputRedirected) {
+            throw "Removing '$Name' deletes its VM on the host service. An unattended run must pass -ConfirmInstanceName '$Name'."
+        }
+        Write-Host ""
+        Write-Host "    This DELETES the VM '$Name' on its host service, including its disk." -ForegroundColor Yellow
+        $riTyped = Read-Host "    Type the instance name to confirm"
+    }
+    $riPlan = Get-ConstructInstanceRemovalPlan -Name $Name -Identity $riEntry `
+        -InstanceCount $riInventory.Count -IsDefault:$riIsDefault -Confirmation $riTyped `
+        -OpenCodeUrls $riExtraUrls `
+        -HomeDir $HOME -LocalAppData $env:LOCALAPPDATA -AppData $env:APPDATA -TempDir $env:TEMP `
+        -ScriptsDir $PSScriptRoot
+    if (-not $riPlan.Ok) {
+        Write-Host ""
+        Write-Host "REFUSED: $($riPlan.Refusal)" -ForegroundColor Red
+        Write-Host ""
+        Wait-Exit
+        return
+    }
+
+    # The one step this script cannot do itself: the VM lives on somebody's host service,
+    # so its DELETE goes through the remote driver -- the same contract function the
+    # remote reinstall path uses. The credential is the one this PC ALREADY has for that
+    # host (Windows identity, or the token stored at enrolment); a removal is not the
+    # place to enrol a host afresh, so a refusal stops the run before any local state is
+    # touched rather than half-cleaning an instance whose VM is still running.
+    $riDeleteVm = $null
+    if ($riPlan.DeletesVm) {
+        $riServiceUrl = ""
+        foreach ($riStep in @($riPlan.Steps)) {
+            if ($riStep.Kind -eq 'remote-vm-delete') { $riServiceUrl = [string]$riStep.Target; break }
+        }
+        if (-not $riServiceUrl) {
+            throw "The registry entry for '$Name' records no host service (service.url), so there is nothing to ask to delete the VM. Fix the entry, or remove it by hand."
+        }
+        $riRemoteLib = Join-Path $PSScriptRoot "lib\AgentVm.Remote.ps1"
+        if (-not (Test-Path -LiteralPath $riRemoteLib)) {
+            throw "Removing a remote instance needs lib/AgentVm.Remote.ps1, which is missing from this install. Update The Construct."
+        }
+        . $riRemoteLib
+        $riAuth = $null
+        $riStored = Get-ConstructRemoteToken -BaseUrl $riServiceUrl
+        if ($riStored) { $riAuth = New-ConstructApiAuth -Mode token -Token $riStored }
+        else { $riAuth = New-ConstructApiAuth -Mode negotiate }
+        # The pinned certificate is enforced by the API client on every call, so nothing
+        # here re-implements the enrolment pin ceremony.
+        . $driverLoader -Backend "hyperv-remote" -ServiceUrl $riServiceUrl -Auth $riAuth
+        # Invoke-ConstructApi, not the Test-ConstructRemoteAuth wrapper below it: this
+        # block exits before that definition is ever reached.
+        if (-not (Invoke-ConstructApi -BaseUrl $riServiceUrl -Method GET -Path '/whoami' -Auth $riAuth -NoThrow)) {
+            throw "The host service at $riServiceUrl did not accept this PC's stored credential (HTTP $(Get-ConstructApiLastStatus)). Nothing was removed. Add the host again from the control panel, then retry."
+        }
+        $riDeleteVm = { param($name, $url) Remove-ConstructVm -Name $name }
+    }
+
+    $riResults = Invoke-ConstructInstanceRemoval -Plan $riPlan -DeleteVm $riDeleteVm `
+        -RemoveRegistryEntry { param($name) Unregister-ConstructVm -Name $name }
+
+    Write-Host ""
+    $riFailed = 0
+    foreach ($riResult in @($riResults)) {
+        $riColor = "DarkGray"
+        if ($riResult.Status -eq 'removed') { $riColor = "Green" }
+        if ($riResult.Status -eq 'failed') { $riColor = "Red"; $riFailed++ }
+        Write-Host ("    {0,-24} {1}" -f $riResult.Kind, $riResult.Message) -ForegroundColor $riColor
+    }
+    Write-Host ""
+    if ($riFailed -gt 0) {
+        Write-Host "    $riFailed step(s) could not be completed; everything else was removed." -ForegroundColor Yellow
+        Write-Host ""
+        Wait-Exit
+        return
+    }
+    Write-Host "    Instance '$Name' removed from this PC." -ForegroundColor Green
+    Write-Host ""
+    $script:ConstructRemoveInstanceRc = 0
+    Wait-Exit
+    return
+}
+
+if ($Action -eq 'remove-instance') {
+    if (-not $InstanceName) {
+        throw "-Action remove-instance needs -InstanceName <name> (the instance to forget on this PC)."
+    }
+    Invoke-ConstructRemoveInstanceAction -Name $InstanceName -Confirmation $ConfirmInstanceName `
+        -Interactive:(-not $FromPanel)
+    exit $script:ConstructRemoveInstanceRc
+}
 
 # The "all set" banner marks the end of the interactive phase: draw it on a
 # fresh screen, then drop out of TUI mode so everything after it -- download,
@@ -1917,10 +2112,11 @@ if ($RemoteInstall) {
             Write-Note "Action selected by the control panel: $Action"
         } else {
             $choice = Show-Menu -Title "What would you like to do?" -Options @(
-                "Reprovision    re-run provisioning on the existing VM (keeps all data)",
-                "Reinstall      DELETE the VM on the host and build + install a fresh one",
-                "Export config  save the VM's current agent config + auth to this host (no changes to the VM)",
-                "Quit           make no changes and exit"
+                "Reprovision      re-run provisioning on the existing VM (keeps all data)",
+                "Reinstall        DELETE the VM on the host and build + install a fresh one",
+                "Export config    save the VM's current agent config + auth to this host (no changes to the VM)",
+                "Remove instance  DELETE the VM on the host and forget it on this PC",
+                "Quit             make no changes and exit"
             ) -Default 0
         }
 
@@ -1941,7 +2137,14 @@ if ($RemoteInstall) {
             Write-Host ""; Wait-Exit
             return
         }
-        if ($choice -ge 3) {
+        if ($choice -eq 3) {
+            # Remove instance: the same action as -Action remove-instance, asked for from
+            # the menu. This flow never elevated (a remote install needs no admin rights),
+            # so the files it edits are the real user's.
+            Invoke-ConstructRemoveInstanceAction -Name $instName -Interactive
+            return
+        }
+        if ($choice -ge 4) {
             Write-Note "No changes made."
             Write-Host ""; Wait-Exit
             return
@@ -2386,12 +2589,13 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
         Write-Note "Action selected by the control panel: $Action"
     } else {
         $choice = Show-Menu -Title "What would you like to do?" -Options @(
-            "Reprovision    re-run provisioning on the existing VM (keeps all data)",
-            "Reinstall      DELETE the VM and its disk, then build + install fresh (reuse downloaded ISOs)",
-            "Redownload     DELETE the VM, re-download the latest Ubuntu ISO, rebuild + install fresh",
-            "Export config  save the VM's current agent config + auth to this host (no changes to the VM)",
-            "Add config     import project configs from a remote repo or local directory",
-            "Quit           make no changes and exit"
+            "Reprovision      re-run provisioning on the existing VM (keeps all data)",
+            "Reinstall        DELETE the VM and its disk, then build + install fresh (reuse downloaded ISOs)",
+            "Redownload       DELETE the VM, re-download the latest Ubuntu ISO, rebuild + install fresh",
+            "Export config    save the VM's current agent config + auth to this host (no changes to the VM)",
+            "Add config       import project configs from a remote repo or local directory",
+            "Remove instance  forget this VM on this PC (the Hyper-V VM itself is kept)",
+            "Quit             make no changes and exit"
         ) -Default 0
     }
 
@@ -2833,6 +3037,16 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
         return
     }
     elseif ($choice -eq 5) {
+        # Remove instance: forget this VM on this PC. The Hyper-V VM is NOT deleted --
+        # Reinstall is the action that does that -- so this is safe to offer here even
+        # though the local flow runs elevated. It edits per-user files, so it says which
+        # account's profile it is working in; on a PC where UAC switches to a different
+        # administrator, run it unelevated instead (Auto-Install.ps1 -Action remove-instance).
+        Write-Note "Working in the profile of $env:USERNAME ($HOME)."
+        Invoke-ConstructRemoveInstanceAction -Name $VmGuestName -Interactive
+        return
+    }
+    elseif ($choice -eq 6) {
         Write-Note "No changes made."
         Write-Host ""; Wait-Exit
         return
