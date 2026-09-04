@@ -896,7 +896,12 @@ if (Test-Path -LiteralPath $stateLib) { . $stateLib }
 # the instance registry.
 $driverLoader = Join-Path $PSScriptRoot "drivers\Load-ConstructDriver.ps1"
 if (-not (Test-Path -LiteralPath $driverLoader)) { throw "Required helper not found: $driverLoader" }
+# Dot-sourcing the loader binds ITS -Backend/-ServiceUrl/-Pin into this scope (see the
+# mode probe above): keep the caller's values, load, restore.
+$keepBackend = $Backend; $keepServiceUrl = $ServiceUrl
 . $driverLoader -Backend "hyperv-local"
+$Backend = $keepBackend; $ServiceUrl = $keepServiceUrl
+Remove-Variable -Name Pin -Scope Script -ErrorAction SilentlyContinue
 
 # Full-window TUI for the whole interactive phase: every choice below runs as
 # its own screen (wipe + header + the current menu only). Show-AllSet turns it
