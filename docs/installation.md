@@ -128,6 +128,43 @@ Name collisions with an existing profile of different provenance are a hard erro
 the collision — this path never silently overwrites. See [Config sync](config-sync.md) for
 the full import/collision/provenance model.
 
+### Publishing your local profiles to a config repo (`-Action publish-config`)
+
+The reverse direction. Import and Push back only move files that already came *from* a
+remote, so profiles you created on this PC have nowhere to go. `publish-config` pushes
+your **untracked** local profiles into a config repo's default branch and records them as
+tracked, after which your other PCs import them and later edits push back:
+
+```powershell
+.\Auto-Install.ps1 -Action publish-config -ConfigRepo https://git.example.com/alice/construct-config.git
+```
+
+| Param | Meaning |
+|-------|---------|
+| `-Action publish-config` | Trigger this mode. Non-interactive; touches no VM and needs no administrator rights |
+| `-ConfigRepo <url>` | The config repo to publish into. Linked automatically if it isn't already |
+| `-ImportConfigs a,b` | Which profiles to publish, by name. Omit it to publish **every** untracked profile |
+
+It prints one line per profile — `published`, `skipped` (already tracked: use *Push back*
+from the control panel), `refused` (the repo already has a file of that name with different
+content: import it first, then push back) or `invalid` (the profile doesn't validate; it is
+reported and left alone, never "repaired" and pushed) — followed by the branch and the
+commit it pushed, and exits non-zero if anything failed. Requires `git` on the host, and a
+configured git identity: the commit lands in **your** repo, so it is made as you.
+
+The repo may be **empty or not exist yet**: the first push creates it on hosts that support
+push-to-create (GitLab/GitGudLab), using a user PAT rather than a project token. If that
+first push fails — the usual shape while a token is still being set up — just run the
+command again; the half-finished clone stays retryable.
+
+**Don't put the token in the URL.** A URL that carries credentials
+(`https://alice:<token>@…`) is **refused**: git would write it into the staging clone's
+`.git/config`, into `manifest/remotes.json` and into every provenance entry it creates, so
+a secret in a URL doesn't stay secret. Give the plain URL and let your git credential
+helper (Git Credential Manager on Windows) supply the PAT. See
+[Config sync §7](config-sync.md#7-upstream-company-config-repos-optional) for the full
+tracked-vs-untracked model.
+
 ### Sharing a config as a one-liner
 
 Piping to `iex` can't carry arguments, so a shareable one-liner that needs params uses the

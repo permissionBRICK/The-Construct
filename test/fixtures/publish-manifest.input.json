@@ -1,0 +1,7 @@
+{
+  "remoteUrl": "https://git.example.com/alice/construct-config.git",
+  "ref": "main",
+  "name": "billing-api",
+  "baseCommit": "0123456789abcdef0123456789abcdef01234567",
+  "baseBlobSha": "89abcdef0123456789abcdef0123456789abcdef"
+}

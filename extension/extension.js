@@ -1478,7 +1478,14 @@ async function buildConfigSyncState(target) {
       out.repoReady = rs.repo; out.conflict = rs.conflict;
       out.conflictFiles = rs.conflictFiles || []; out.mergeInProgress = rs.mergeInProgress;
     } catch (_) {}
-    try { out.remotes = configsync.readRemotes(dir); } catch (_) {}
+    try {
+      // The panel only ever gets DISPLAY-SAFE urls: a legacy remotes.json entry may
+      // carry a PAT in its userinfo, and the remote row renders this string. Handlers
+      // map the round-tripped value back with configsync.resolveRemoteUrl.
+      out.remotes = configsync.readRemotes(dir).map(function (r) {
+        return { url: configsync.displayRemoteUrl(r.url) };
+      });
+    } catch (_) {}
   }
   return out;
 }
@@ -4038,7 +4045,11 @@ function handleMessage(message, webview, context) {
           prompt: "Git URL of the remote config repo",
           placeHolder: "https://github.com/org/construct-config.git",
           ignoreFocusOut: true,
-          validateInput: function (v) { return remote.isLikelyGitUrl(v) ? null : "Enter an https://, ssh:// or git@host:path git URL."; },
+          // One shared validator for every URL input path, run against the NORMALIZED
+          // value (the same string that gets stored). Secrets never travel in a URL:
+          // it would land in git argv, .git/config, manifest/remotes.json, every
+          // provenance entry and the panel. A git credential helper holds the PAT.
+          validateInput: function (v) { return configsync.validateConfigRemoteUrl(v, remote.isLikelyGitUrl); },
         }).then(function (url) {
           if (!url) return;
           var dir = resolveCfgDir();
@@ -4061,10 +4072,12 @@ function handleMessage(message, webview, context) {
         return;
       }
       if (id === "removeConfigRemote") {
-        var rmUrl = message.url;
+        // The panel holds the display-safe url; map it back to the stored one.
+        var rmDir0 = resolveCfgDir();
+        var rmUrl = rmDir0 ? configsync.resolveRemoteUrl(configsync.readRemotes(rmDir0), message.url) : message.url;
         if (!rmUrl) return;
         const rmRemoteTarget = actionTarget();   // captured before the modal
-        vscode.window.showWarningMessage("Remove the remote config repo?\n" + rmUrl, { modal: true }, "Remove").then(function (pick) {
+        vscode.window.showWarningMessage("Remove the remote config repo?\n" + configsync.displayRemoteUrl(rmUrl), { modal: true }, "Remove").then(function (pick) {
           if (pick !== "Remove") return;
           var dir = resolveCfgDir();
           if (!dir) return;
@@ -4273,10 +4286,11 @@ function handleMessage(message, webview, context) {
         return;
       }
       if (id === "pushConfigUpstream") {
-        var pushUrl = message.url;
+        var puDir0 = resolveCfgDir();
+        var pushUrl = puDir0 ? configsync.resolveRemoteUrl(configsync.readRemotes(puDir0), message.url) : message.url;
         if (!pushUrl) return;
         vscode.window.showWarningMessage(
-          "This commits your local versions of the files imported from " + pushUrl + " to a new branch and pushes.",
+          "This commits your local versions of the files imported from " + configsync.displayRemoteUrl(pushUrl) + " to a new branch and pushes.",
           { modal: true }, "Push"
         ).then(function (pick) {
           if (pick !== "Push") return;
@@ -4305,6 +4319,171 @@ function handleMessage(message, webview, context) {
             else vscode.window.showErrorMessage("Push failed: " + (result.output || "").slice(0, 200));
           }).catch(function (e) { vscode.window.showErrorMessage("Push failed: " + (e && e.message ? e.message : e)); });
         });
+        return;
+      }
+      if (id === "publishConfigProfiles" || id === "addRemoteAndPublish") {
+        // B15 (plan 4.13): publish UNTRACKED local profiles into a linked config
+        // repo and adopt them (manifest entry + stored base), after which Import
+        // and Push back round-trip them like any other tracked file. The IO twin
+        // of Publish-ConstructConfigProfiles in lib/AgentVm.Common.ps1 -- same
+        // pure plan (configsync.planPublish <-> Get-ConstructPublishPlan), same
+        // manifest bytes, same collision rule, same default-branch target.
+        //
+        // NOTHING here prints, logs or shows a raw remote URL: a publish target on
+        // the owner's own git host carries a PAT in the URL.
+        const publishTarget = actionTarget();
+        (async () => {
+          var dir = resolveCfgDir();
+          if (!dir) { warnNoScriptsDir(); return; }
+          var git = await detectGitCached();
+          if (!git.present) { vscode.window.showWarningMessage("Git is not available. Install git first."); return; }
+
+          var pubUrl = configsync.resolveRemoteUrl(configsync.readRemotes(dir), message.url);
+          if (id === "addRemoteAndPublish") {
+            pubUrl = await vscode.window.showInputBox({
+              title: "Add a remote config repo and publish into it",
+              prompt: "Git URL of the config repo to publish your local profiles to",
+              placeHolder: "https://git.example.com/alice/construct-config.git",
+              ignoreFocusOut: true,
+              validateInput: function (v) { return configsync.validateConfigRemoteUrl(v, remote.isLikelyGitUrl); },
+            });
+            if (!pubUrl || !pubUrl.trim()) return;
+            pubUrl = pubUrl.trim();
+            var linked = configsync.readRemotes(dir);
+            if (!linked.some(function (r) { return r.url === pubUrl; })) {
+              linked.push({ url: pubUrl });
+              configsync.writeRemotes(dir, linked);
+            }
+          }
+          if (!pubUrl) return;
+          var shownUrl = configsync.displayRemoteUrl(pubUrl);
+          if (configsync.urlHasCredentials(pubUrl)) {
+            // A legacy entry linked before credential-free URLs were required. Publishing
+            // would copy that secret into every provenance entry it writes.
+            vscode.window.showErrorMessage(
+              "This config repo is linked with credentials in its URL (" + shownUrl + "). Re-link it without them " +
+              "and let your git credential helper supply the token, then publish again.");
+            return;
+          }
+
+          var clone = await configsync.ensurePublishClone(runGit, configsync.stagingRoot(process.env), pubUrl);
+          if (!clone.ok) {
+            vscode.window.showErrorMessage("Could not prepare the config repo clone: " + (clone.output || "").slice(0, 200));
+            return;
+          }
+          var pubBranch = "";
+          if (!clone.created) pubBranch = await configsync.remoteDefaultBranch(runGit, pubUrl);
+          if (!pubBranch || !configsync.isValidPublishBranch(pubBranch)) pubBranch = "main";
+          var co = await configsync.checkoutPublishBranch(runGit, clone.dir, pubBranch);
+          if (!co.ok) {
+            vscode.window.showErrorMessage("Could not switch the config repo clone to \"" + pubBranch + "\": " + (co.output || "").slice(0, 200));
+            return;
+          }
+
+          // Local profiles as they are ON DISK. The parse/validate/canonicalize
+          // gate lives inside planPublish, so an invalid profile is reported --
+          // never silently repaired by the (coercive) canonicalizer and pushed.
+          // The listing -> plan-input step is the pure buildPublishProfileInputs: an
+          // unsafe file name is passed through UNREAD so the planner reports it as
+          // invalid (rather than it silently vanishing from the picker), and no
+          // unsafe name is ever joined onto a path.
+          var localProfiles = configsync.buildPublishProfileInputs(
+            host.listProjectProfiles(dir),
+            function (name) { return fs.readFileSync(path.join(dir, "projects", name + ".json"), "utf8"); });
+          var pubManifest = configsync.readImportManifest(dir);
+          var plan = configsync.planPublish({
+            profiles: localProfiles, manifest: pubManifest, remoteFiles: co.remoteFiles, selected: null,
+          });
+          if (!plan.publish.length && !plan.skipTracked.length && !plan.refuse.length && !plan.invalid.length) {
+            vscode.window.showInformationMessage("No local project profiles to publish.");
+            return;
+          }
+          for (var ri2 = 0; ri2 < plan.skipTracked.length; ri2++) logLine("publish: skipped \"" + plan.skipTracked[ri2].name + "\" -- " + plan.skipTracked[ri2].reason);
+          for (var ri3 = 0; ri3 < plan.refuse.length; ri3++) logLine("publish: refused \"" + plan.refuse[ri3].name + "\" -- " + plan.refuse[ri3].reason);
+          for (var ri4 = 0; ri4 < plan.invalid.length; ri4++) logLine("publish: invalid \"" + plan.invalid[ri4].name + "\" -- " + plan.invalid[ri4].reason);
+          if (!plan.publish.length) {
+            vscode.window.showWarningMessage("Nothing to publish -- every profile is already tracked or cannot be published. See the Construct log.");
+            return;
+          }
+
+          // Picker: publishable profiles first, ALL ticked; tracked / refused /
+          // invalid ones under their own headings, carrying their reason and
+          // GREYED -- selecting one snaps back, so the UI cannot publish it. The
+          // item model and the selection filter are the pure
+          // buildPublishPickerItems / filterPublishSelection (unit-tested).
+          var model = configsync.buildPublishPickerItems(plan);
+          var picked = await new Promise(function (resolve) {
+            var qp = vscode.window.createQuickPick();
+            qp.title = "Publish project profiles to " + shownUrl;
+            qp.placeholder = "Untracked profiles are pre-selected; greyed rows cannot be published";
+            qp.canSelectMany = true;
+            qp.ignoreFocusOut = true;
+            qp.items = model.map(function (m) {
+              if (m.kind === "separator") return { label: m.label, kind: vscode.QuickPickItemKind.Separator };
+              return { label: m.label, description: m.description || undefined, blocked: m.blocked };
+            });
+            qp.selectedItems = qp.items.filter(function (it, ix) { return model[ix].picked; });
+            var settling = false;
+            qp.onDidChangeSelection(function (sel) {
+              if (settling) return;
+              var kept = configsync.filterPublishSelection(sel);
+              if (kept.length !== sel.length) { settling = true; qp.selectedItems = kept; settling = false; }
+            });
+            var done = false;
+            qp.onDidAccept(function () { done = true; resolve(configsync.filterPublishSelection(qp.selectedItems)); qp.hide(); });
+            qp.onDidHide(function () { if (!done) resolve(null); qp.dispose(); });
+            qp.show();
+          });
+          if (!picked || !picked.length) return;
+          var chosen = new Set(picked.map(function (p) { return p.label; }));
+          var files = plan.publish.filter(function (p) { return chosen.has(p.name); });
+          if (!files.length) { vscode.window.showInformationMessage("Nothing selected to publish."); return; }
+
+          var pushed = await configsync.publishToRemote(runGit, {
+            stagingDir: clone.dir, branch: pubBranch, files: files,
+            message: "publish " + files.length + " profiles",
+          });
+          if (!pushed.ok) {
+            vscode.window.showErrorMessage("Publish failed: " + (pushed.output || "").slice(0, 300));
+            logLine("publish: push to " + shownUrl + " (" + pubBranch + ") failed -- " + (pushed.output || ""));
+            return;
+          }
+
+          // Adopt: the manifest entry + stored base an import would have written.
+          // Only now, and only because publishToRemote returned a real commit and a
+          // real blob per file -- a profile must never claim to be tracked upstream
+          // when the push did not land it.
+          fs.mkdirSync(path.join(dir, "manifest"), { recursive: true });
+          fs.mkdirSync(path.join(dir, "bases"), { recursive: true });
+          for (var ai = 0; ai < files.length; ai++) {
+            var entry = configsync.publishManifestEntry({
+              remoteUrl: pubUrl, ref: pubBranch, name: files[ai].name,
+              baseCommit: pushed.commit, baseBlobSha: pushed.blobShas[files[ai].name],
+            });
+            fs.writeFileSync(path.join(dir, "manifest", files[ai].name + ".json"), JSON.stringify(entry, null, 2) + "\n", "utf8");
+            fs.writeFileSync(path.join(dir, "bases", files[ai].name + ".json"), files[ai].content, "utf8");
+            // The stored base is the merge base for the next import, so it must be
+            // the SAME bytes as the local file. Canonical everywhere already, so a
+            // no-op in practice -- but a hand-formatted (still VALID) profile would
+            // otherwise make the first 3-way merge report pure whitespace.
+            var localPath = path.join(dir, "projects", files[ai].name + ".json");
+            var localRaw = null;
+            try { localRaw = fs.readFileSync(localPath, "utf8"); } catch (_) { localRaw = null; }
+            if (localRaw !== files[ai].content) fs.writeFileSync(localPath, files[ai].content, "utf8");
+          }
+          // Adoption always writes NEW manifest/base files, so a run that records
+          // nothing did not record anything: require an actual commit, and put the
+          // git message in the log the toast points at.
+          var stored = await configsync.commitAll(runGit, dir, "publish: " + files.map(function (f) { return f.name; }).join(", "));
+          if (!stored.ok || !stored.committed) {
+            var storeMsg = stored.output || "git reported no change to commit";
+            vscode.window.showWarningMessage("Published, but the local config store could not be committed -- see the Construct log.");
+            logLine("publish: committing the config store failed after publishing " + files.length + " profile(s) -- " + storeMsg);
+          }
+          logLine("publish: " + files.length + " profile(s) to " + shownUrl + " (" + pubBranch + ") at " + pushed.commit.slice(0, 7));
+          vscode.window.showInformationMessage("Published " + files.length + " profile(s) to " + pubBranch + " -- they are tracked now.");
+          buildConfigSyncState(publishTarget).then(function (cs) { cachedConfigSync = cs; refreshAll(); });
+        })().catch(function (e) { vscode.window.showErrorMessage("Publish failed: " + configsync.displayRemoteUrl(e && e.message ? e.message : String(e))); });
         return;
       }
       if (id === "installGit") {

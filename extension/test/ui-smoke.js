@@ -634,6 +634,18 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("config-sync: remote URL text", (await page.locator("#csRemotesList .cs-remote-url").first().textContent()).includes("github.com"));
   check("config-sync: remove button on each remote", (await page.locator("#csRemotesList .cs-remote-rm").count()) === 2);
   check("config-sync: push button on each remote", (await page.locator("#csRemotesList .cs-remote-push").count()) === 2);
+  // B15: a Publish button per linked remote, plus the "no remote yet" affordance.
+  check("config-sync: publish button on each remote", (await page.locator("#csRemotesList .cs-remote-publish").count()) === 2);
+  await page.evaluate(() => { window.__posted.length = 0; });
+  await page.locator("#csRemotesList .cs-remote-publish").first().click();
+  posted = await page.evaluate(() => window.__posted);
+  check("config-sync: publish button posts publishConfigProfiles with its url",
+    posted.some((m) => m.type === "command" && m.id === "publishConfigProfiles" && m.url === "https://github.com/org/config.git"));
+  await page.evaluate(() => { window.__posted.length = 0; });
+  await page.click('[data-cmd="addRemoteAndPublish"]');
+  posted = await page.evaluate(() => window.__posted);
+  check("config-sync: add-remote-and-publish posts addRemoteAndPublish",
+    posted.some((m) => m.type === "command" && m.id === "addRemoteAndPublish"));
   check("config-sync: status line shows result + warning count", (await page.locator("#csResult").textContent()).includes("warning"));
 
   // sync-now button posts syncConfigNow.
