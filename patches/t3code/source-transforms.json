@@ -79,7 +79,8 @@
           "before": ") : activeRightPanelSurface?.kind === \"agents\" ? (",
           "insert": ") : activeRightPanelSurface?.kind === \"omniloop\" ? (\n      <OmniloopPanel environmentId={activeThreadRef?.environmentId ?? null} />\n"
         }
-      ]
+      ],
+      "note": "Stable (0.0.38) and nightly (0.0.39) name this variable differently; both channels are live, so both shapes are here. Delete the activeRightPanelSurface variant once the stable channel builds 0.0.39 or newer."
     },
     {
       "path": "apps/web/src/components/ChatView.tsx",
