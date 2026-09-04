@@ -1180,41 +1180,50 @@ ok "explicit: an empty string never conflicts" (
 ok "explicit: the Hyper-V display name is matched case-insensitively" (
     (Resolve-ConstructInstanceTarget -Name 'build-vm' -Path $targetPath -Explicit @{ VmName = 'BUILD-VM' }).VmName -ceq 'build-vm')
 
+# EXPLICIT VALUES WIN (plan section 4.12 "the explicit identity args ... win when given"):
+# a disagreement is a WARNING that names both values, and the argument is what resolves.
+# The installer relies on it -- it passes the endpoint the host service returned THIS
+# run together with -InstanceName, and a reallocated forward must not abort a reprovision.
 foreach ($case in @(
-    @{ Key = 'VmHost';       Value = 'other.mshome.net';        Schema = 'sshHost' },
-    @{ Key = 'HostAlias';    Value = 'other-vm';                Schema = 'hostAlias' },
-    @{ Key = 'LocalKeyName'; Value = 'agent_vm_ed25519';        Schema = 'keyName' },
-    @{ Key = 'ConfigBranch'; Value = 'vm';                      Schema = 'configBranch' },
-    @{ Key = 'VmName';       Value = 'Agent-VM';                Schema = 'vmName' }
+    @{ Key = 'VmHost';       Value = 'other.mshome.net';        Schema = 'sshHost';      Field = 'VmHost' },
+    @{ Key = 'HostAlias';    Value = 'other-vm';                Schema = 'hostAlias';    Field = 'HostAlias' },
+    @{ Key = 'LocalKeyName'; Value = 'agent_vm_ed25519';        Schema = 'keyName';      Field = 'KeyName' },
+    @{ Key = 'ConfigBranch'; Value = 'vm';                      Schema = 'configBranch'; Field = 'ConfigBranch' }
 )) {
-    $msg = ""
-    try { Resolve-ConstructInstanceTarget -Name 'build-vm' -Path $targetPath -Explicit @{ $case.Key = $case.Value } | Out-Null }
-    catch { $msg = [string]$_.Exception.Message }
-    ok "conflict: -$($case.Key) that disagrees is an error" ($msg -like "*-$($case.Key)*")
-    ok "conflict: -$($case.Key) names the value the caller gave" ($msg -like "*$($case.Value)*")
-    ok "conflict: -$($case.Key) names the registry's field" ($msg -like "*$($case.Schema)*")
+    $warn = @()
+    $res = Resolve-ConstructInstanceTarget -Name 'build-vm' -Path $targetPath -Explicit @{ $case.Key = $case.Value } -WarningVariable warn -WarningAction SilentlyContinue
+    $msg = ($warn | ForEach-Object { [string]$_ }) -join "`n"
+    ok "override: -$($case.Key) that disagrees still resolves" ($null -ne $res)
+    ok "override: -$($case.Key) is what the target carries" ([string]$res.($case.Field) -ceq $case.Value)
+    ok "override: -$($case.Key) warns naming the value the caller gave" ($msg -like "*$($case.Value)*")
+    ok "override: -$($case.Key) warns naming the registry's field" ($msg -like "*$($case.Schema)*")
 }
-$portMsg = ""
-try { Resolve-ConstructInstanceTarget -Name 'build-vm' -Path $targetPath -Explicit @{ SshPort = 2222 } | Out-Null }
-catch { $portMsg = [string]$_.Exception.Message }
-ok "conflict: a differing -SshPort is an error naming both" ($portMsg -like "*2222*" -and $portMsg -like "*22*")
+$portWarn = @()
+$portRes = Resolve-ConstructInstanceTarget -Name 'build-vm' -Path $targetPath -Explicit @{ SshPort = 2222 } -WarningVariable portWarn -WarningAction SilentlyContinue
+ok "override: a differing -SshPort resolves to the argument" ([int]$portRes.SshPort -eq 2222)
+ok "override: ...and warns naming both" ((($portWarn | ForEach-Object { [string]$_ }) -join ' ') -like "*2222*22*")
+# Host names and aliases are case-insensitive: a differently-cased value is no conflict.
+$caseWarn = @()
+[void](Resolve-ConstructInstanceTarget -Name 'build-vm' -Path $targetPath -Explicit @{ VmHost = 'BUILD-VM.mshome.net' } -WarningVariable caseWarn -WarningAction SilentlyContinue)
+ok "override: a differently-cased host is not a conflict" (@($caseWarn).Count -eq 0)
+# THE VM NAME is the exception: another VM name IS another machine.
+$vmNameMsg = ""
+try { Resolve-ConstructInstanceTarget -Name 'build-vm' -Path $targetPath -Explicit @{ VmName = 'Agent-VM' } | Out-Null }
+catch { $vmNameMsg = [string]$_.Exception.Message }
+ok "conflict: a differing -VmName is still an error" ($vmNameMsg -like "*-VmName*" -and $vmNameMsg -like "*Agent-VM*" -and $vmNameMsg -like "*vmName*")
 
-# AN UNKNOWN NAME ALWAYS FAILS -- a stated identity does not buy an exception. BYO and
-# manual setups pass the explicit identity WITHOUT a name, which is what those parameters
-# are for; letting the name through because an endpoint came with it would make one
-# argument mean two different things.
-$byoErr = ""
-try { Resolve-ConstructInstanceTarget -Name 'nope-vm' -Path $targetPath -Explicit @{ VmHost = '10.0.0.9' } | Out-Null }
-catch { $byoErr = [string]$_.Exception.Message }
-ok "unknown: a stated identity does NOT excuse an unknown name" ($byoErr -like "*Unknown instance 'nope-vm'*")
-ok "unknown: ...and the known names are still listed" (
-    $byoErr -like "*build-vm*" -and $byoErr -like "*work-vm*" -and $byoErr -like "*agent-vm*")
-$byoFullErr = ""
-try {
-    Resolve-ConstructInstanceTarget -Name 'nope-vm' -Path $targetPath -Explicit @{
-        VmHost = '10.0.0.9'; HostAlias = 'nope-vm'; SshPort = 2222; LocalKeyName = 'construct_nope-vm_ed25519' } | Out-Null
-} catch { $byoFullErr = [string]$_.Exception.Message }
-ok "unknown: a COMPLETE stated identity does not excuse it either" ($byoFullErr -like "*Unknown instance*")
+# AN UNKNOWN NAME with an endpoint on the command line resolves to THAT identity (BYO /
+# manual setups; the installer's recovery when a remote create was not recorded), with a
+# warning. Without an endpoint it stays an error listing the known names.
+$byoWarn = @()
+$byo = Resolve-ConstructInstanceTarget -Name 'nope-vm' -Path $targetPath -Explicit @{ VmHost = '10.0.0.9' } -WarningVariable byoWarn -WarningAction SilentlyContinue
+ok "unknown+endpoint: resolves to the stated host"       ($byo.VmHost -ceq '10.0.0.9')
+ok "unknown+endpoint: derives the rest from the name"    ($byo.HostAlias -ceq 'nope-vm' -and $byo.KeyName -ceq 'construct_nope-vm_ed25519' -and $byo.ConfigBranch -ceq 'vm-nope-vm')
+ok "unknown+endpoint: warns that the registry lacks it"  ((($byoWarn | ForEach-Object { [string]$_ }) -join ' ') -like "*nope-vm*not in this PC's registry*")
+$byoFull = Resolve-ConstructInstanceTarget -Name 'nope-vm' -Path $targetPath -Explicit @{
+    VmHost = '10.0.0.9'; HostAlias = 'nope-vm'; SshPort = 2222; LocalKeyName = 'construct_nope-vm_ed25519'; ServiceUrl = 'https://svc.example:7462' } -WarningAction SilentlyContinue
+ok "unknown+endpoint: a complete identity is carried whole" ([int]$byoFull.SshPort -eq 2222 -and $byoFull.ServiceUrl -ceq 'https://svc.example:7462')
+ok "unknown+endpoint: a service URL makes it a remote target" ($byoFull.Backend -ceq 'hyperv-remote')
 
 # The host-service identity is resolved and conflict-checked like the rest, so a
 # name-targeted remote reprovision reaches the service the registry names.
@@ -1223,18 +1232,16 @@ ok "service: a remote entry's URL is resolved from the entry" (
 ok "service: an agreeing -ServiceUrl is fine" (
     (Resolve-ConstructInstanceTarget -Name 'work-vm' -Path $targetPath -Explicit @{
         ServiceUrl = 'https://buildbox.example.local:7462' }).ServiceUrl -ceq 'https://buildbox.example.local:7462')
-$svcErr = ""
-try {
-    Resolve-ConstructInstanceTarget -Name 'work-vm' -Path $targetPath -Explicit @{ ServiceUrl = 'https://elsewhere:7462' } | Out-Null
-} catch { $svcErr = [string]$_.Exception.Message }
-ok "service: a differing -ServiceUrl is an error naming both" (
-    $svcErr -like "*-ServiceUrl*" -and $svcErr -like "*https://elsewhere:7462*" -and
-    $svcErr -like "*buildbox.example.local:7462*" -and $svcErr -like "*service.url*")
-$svcLocalErr = ""
-try {
-    Resolve-ConstructInstanceTarget -Name 'build-vm' -Path $targetPath -Explicit @{ ServiceUrl = 'https://elsewhere:7462' } | Out-Null
-} catch { $svcLocalErr = [string]$_.Exception.Message }
-ok "service: pointing a LOCAL instance at a host service is a conflict too" ($svcLocalErr -like "*-ServiceUrl*")
+$svcWarn = @()
+$svcRes = Resolve-ConstructInstanceTarget -Name 'work-vm' -Path $targetPath -Explicit @{ ServiceUrl = 'https://elsewhere:7462' } -WarningVariable svcWarn -WarningAction SilentlyContinue
+$svcMsg = ($svcWarn | ForEach-Object { [string]$_ }) -join ' '
+ok "service: a differing -ServiceUrl wins with a warning naming both" (
+    $svcRes.ServiceUrl -ceq 'https://elsewhere:7462' -and $svcMsg -like "*-ServiceUrl*" -and
+    $svcMsg -like "*https://elsewhere:7462*" -and $svcMsg -like "*buildbox.example.local:7462*" -and $svcMsg -like "*service.url*")
+$svcLocalWarn = @()
+$svcLocalRes = Resolve-ConstructInstanceTarget -Name 'build-vm' -Path $targetPath -Explicit @{ ServiceUrl = 'https://elsewhere:7462' } -WarningVariable svcLocalWarn -WarningAction SilentlyContinue
+ok "service: pointing a LOCAL instance at a host service warns and carries the URL" (
+    $svcLocalRes.ServiceUrl -ceq 'https://elsewhere:7462' -and ((($svcLocalWarn | ForEach-Object { [string]$_ }) -join ' ') -like "*-ServiceUrl*"))
 # ── publicHost: the per-VM web host name (plan section 4.12) ────────────────
 # OPTIONAL, never derived, ignored for a local backend, and NOT part of the endpoint
 # identity -- two VMs on one wildcard domain are told apart by their sshHost/sshPort, as
@@ -1268,7 +1275,8 @@ ok "publicHost: ignored for a hyperv-local instance" ($null -eq $localPubReg.Ins
 ok "publicHost: ...and the entry still loads" ($localPubReg.Instances.ContainsKey('work-vm'))
 
 # It becomes CONSTRUCT_EXTERNAL_HOST inside the guest's shell command line and a printed
-# URL, so a value that is not a host name is refused with the entry, exactly like sshHost.
+# URL, so a value that is not a host name is dropped (and reported) -- but it is a
+# web-only field, so unlike sshHost it never costs the entry.
 $badPubPath = New-RegistryFile @'
 { "version": 1, "instances": {
   "work-vm": { "backend": "hyperv-remote", "vmName": "work-vm", "sshHost": "buildbox.local",
@@ -1276,8 +1284,10 @@ $badPubPath = New-RegistryFile @'
 } }
 '@
 $badPubReg = Read-ConstructInstances -Path $badPubPath
-ok "publicHost: a hostile value skips the whole entry" (-not $badPubReg.Instances.ContainsKey('work-vm'))
-ok "publicHost: ...and says which field" (@($badPubReg.Problems | Where-Object { $_ -match 'publicHost' }).Count -gt 0)
+ok "publicHost: a hostile value is dropped and the entry KEPT" (
+    $badPubReg.Instances.ContainsKey('work-vm') -and $null -eq $badPubReg.Instances['work-vm'].PublicHost)
+ok "publicHost: ...and says which field, and that it was ignored" (
+    @($badPubReg.Problems | Where-Object { $_ -match 'publicHost' -and $_ -match 'ignored' }).Count -gt 0)
 
 $typePubPath = New-RegistryFile @'
 { "version": 1, "instances": {

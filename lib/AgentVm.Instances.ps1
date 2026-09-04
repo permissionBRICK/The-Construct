@@ -289,12 +289,10 @@ function Get-ConstructInstanceIdentityProblem {
     $out = New-Object System.Collections.Generic.List[string]
     $add = { param([string]$m) if (-not $out.Contains($m)) { $out.Add($m) } }
     if ($null -ne $Entry) {
-        # 'publicHost' is checked HERE, on the RAW entry, and for EVERY backend -- even the
-        # ones that ignore it (Resolve-ConstructInstanceDefaults drops it for hyperv-local).
-        # It becomes the provisioner's -PublicHost, CONSTRUCT_EXTERNAL_HOST inside the
-        # guest's shell command line and a printed URL, so a value that is not a host name
-        # is refused where it sits rather than where it lands.
-        foreach ($f in @('sshHost', 'vmHost', 'publicHost')) {
+        # (publicHost is NOT here: it is a web-only name that never reaches ssh or a key
+        # file, so a bad value is reported and IGNORED by the reader instead of costing the
+        # whole entry -- see Read-ConstructInstances.)
+        foreach ($f in @('sshHost', 'vmHost')) {
             $v = Get-ConstructInstanceField $Entry $f
             if ($v -and -not (Test-ConstructInstanceHostEndpoint $v)) {
                 & $add "`"$f`" '$v' is not a host name or IP address"
@@ -956,6 +954,16 @@ function ConvertFrom-ConstructInstancesJson {
                         $problems.Add("instance '$name': '$f' must be a string -- using the derived default")
                     }
                 }
+                # publicHost is a WEB-ONLY name (it becomes -PublicHost / CONSTRUCT_EXTERNAL_HOST
+                # and a printed URL, never an ssh target or a file name): a value that is not
+                # a host name is reported and dropped, and the entry stays usable -- losing
+                # a VM from the picker over a cosmetic field would send every action to the
+                # default VM instead.
+                $rawPub = Get-ConstructInstanceField $entry 'publicHost'
+                if ($rawPub -and -not (Test-ConstructInstanceHostEndpoint $rawPub)) {
+                    $problems.Add("instance '$name': 'publicHost' '$rawPub' is not a host name or IP address -- ignored")
+                    $entry.PSObject.Properties.Remove('publicHost')
+                }
                 # The backend's own rules: an unusable or two-faced spelling makes the
                 # entry unloadable, and is collected with the identity problems below.
                 $backendBad = @(Get-ConstructBackendProblem -Raw (Get-ConstructRawProperty $entry 'backend'))
@@ -1589,7 +1597,9 @@ function Get-ConstructInstanceTargetConflict {
         }
         $g = [string]$given
         if ($g -eq '') { continue }
-        $isMatch = if ($f.Param -eq 'VmName') {
+        $isMatch = if ($f.Param -in @('VmName', 'VmHost', 'HostAlias', 'LocalKeyName', 'ServiceUrl')) {
+            # Host names, ssh aliases, Windows file names and URL hosts are case-insensitive;
+            # only the git branch keeps its exact spelling.
             $g.ToLowerInvariant() -ceq ([string]$have).ToLowerInvariant()
         } else {
             $g -ceq [string]$have
@@ -1612,15 +1622,14 @@ function Resolve-ConstructInstanceTarget {
         (probe-before-splat: only keys that were bound, never a script default). Two
         cases, and only two:
 
-          * the registry KNOWS the name -- every explicit value must AGREE with the entry
-            (Get-ConstructInstanceTargetConflict), and the entry answers everything else;
-          * the registry does NOT know it -- an error listing the names it DOES know.
-            ALWAYS, whatever else the caller passed: -InstanceName means "the instance
-            called this", and there is no such instance. A BYO or manual setup is still
-            served exactly as before -- by passing the explicit identity WITHOUT a name,
-            which is what those parameters are for; letting an unknown name through
-            because an endpoint happened to be supplied would make the same argument mean
-            two different things.
+          * the registry KNOWS the name -- the entry answers everything the caller did
+            not pass; an explicit value that DISAGREES wins with a warning
+            (Get-ConstructInstanceTargetConflict names both), except the VM name, which
+            is a different machine and therefore an error;
+          * the registry does NOT know it -- an error listing the names it DOES know,
+            UNLESS the caller passed an endpoint (-VmHost), in which case the explicit
+            identity is used with a warning (BYO/manual setups, and the installer's own
+            recovery when a remote create could not be recorded).
 
         The result is FLAT (no nested Service object) so a caller can hand it out of the
         child scope this module is loaded in. Never mutates the registry.
@@ -1638,21 +1647,53 @@ function Resolve-ConstructInstanceTarget {
     if ($null -eq $Registry) {
         $Registry = if ($Path) { Read-ConstructInstances -Path $Path } else { Read-ConstructInstances }
     }
+    $ex = if ($Explicit) { $Explicit } else { @{} }
+    $exHost = if ($ex.ContainsKey('VmHost')) { [string]$ex['VmHost'] } else { '' }
     if (-not $Registry.Instances.ContainsKey($Name)) {
         $known = @($Registry.Instances.Keys | Sort-Object)
-        throw ("Unknown instance '$Name'. This PC's instance registry ($($Registry.Path)) knows: " +
-               ($known -join ', ') + ".")
-    }
-    $inst = $Registry.Instances[$Name]
-    $conflicts = @(Get-ConstructInstanceTargetConflict -Instance $inst -Explicit $Explicit)
-    if ($conflicts.Count -gt 0) {
-        throw ("-InstanceName '$Name' was given together with an identity it does not have: " +
-               ($conflicts -join '; ') + ". Pass only the name, or only the identity.")
+        if ($exHost -eq '') {
+            throw ("Unknown instance '$Name'. This PC's instance registry ($($Registry.Path)) knows: " +
+                   ($known -join ', ') + ".")
+        }
+        # A name the registry does not know, WITH an endpoint on the command line: the
+        # explicit identity wins (plan section 4.12 "Name-only targeting": the explicit
+        # identity args stay for BYO/manual setups and win when given). This is also the
+        # installer's own recovery path -- a remote create whose registry write failed
+        # still provisions the VM it just created, by the endpoint the service returned.
+        Write-Warning ("Instance '$Name' is not in this PC's registry ($($Registry.Path)); " +
+                       "using the identity given on the command line.")
+        $exSvc = if ($ex.ContainsKey('ServiceUrl')) { [string]$ex['ServiceUrl'] } else { '' }
+        $entry = [ordered]@{ backend = $(if ($exSvc) { 'hyperv-remote' } else { 'hyperv-local' }); sshHost = $exHost }
+        if ($ex.ContainsKey('SshPort') -and [int]$ex['SshPort'] -gt 0) { $entry['sshPort'] = [int]$ex['SshPort'] }
+        if ($ex.ContainsKey('HostAlias') -and $ex['HostAlias'])       { $entry['hostAlias'] = [string]$ex['HostAlias'] }
+        if ($ex.ContainsKey('LocalKeyName') -and $ex['LocalKeyName']) { $entry['keyName'] = [string]$ex['LocalKeyName'] }
+        if ($ex.ContainsKey('ConfigBranch') -and $ex['ConfigBranch']) { $entry['configBranch'] = [string]$ex['ConfigBranch'] }
+        if ($exSvc) { $entry['service'] = [pscustomobject]@{ url = $exSvc; auth = '' } }
+        if ($ex.ContainsKey('PublicHost') -and $ex['PublicHost'])     { $entry['publicHost'] = [string]$ex['PublicHost'] }
+        $inst = Resolve-ConstructInstanceDefaults -Name $Name -Entry ([pscustomobject]$entry)
+    } else {
+        $inst = $Registry.Instances[$Name]
+        $conflicts = @(Get-ConstructInstanceTargetConflict -Instance $inst -Explicit $ex)
+        if ($conflicts.Count -gt 0) {
+            # The Hyper-V VM name is the one field that cannot be overridden by argument:
+            # a different VM name IS a different machine for every rebuild and power action.
+            $vmNameConflict = @($conflicts | Where-Object { $_ -like '-VmName *' })
+            if ($vmNameConflict.Count -gt 0) {
+                throw ("-InstanceName '$Name' was given together with a VM name it does not have: " +
+                       ($vmNameConflict -join '; ') + ". Pass only the name, or only the identity.")
+            }
+            # Everything else: the argument wins (plan section 4.12). The installer passes the
+            # endpoint the host service returned THIS run, which can legitimately differ from
+            # the entry (a reallocated SSH forward, a renamed PublicHost) -- say so, use it.
+            foreach ($c in $conflicts) { Write-Warning ("$c -- the argument wins.") }
+        }
     }
 
     $svcUrl = ''; $svcAuth = ''
     if ($inst.Service) { $svcUrl = [string]$inst.Service.Url; $svcAuth = [string]$inst.Service.Auth }
-    return [pscustomobject]@{
+    $pub = ''
+    if ($inst.PSObject.Properties['PublicHost'] -and $inst.PublicHost) { $pub = [string]$inst.PublicHost }
+    $out = [pscustomobject]@{
         Name         = [string]$inst.Name
         Backend      = [string]$inst.Backend
         VmName       = [string]$inst.VmName
@@ -1664,8 +1705,19 @@ function Resolve-ConstructInstanceTarget {
         ScriptsDir   = [string]$inst.ScriptsDir
         ServiceUrl   = $svcUrl
         ServiceAuth  = $svcAuth
+        PublicHost   = $pub
         Owner        = [string]$inst.Owner
         IsDefault    = [bool](Test-ConstructDefaultInstance -Instance $inst)
         Path         = [string]$Registry.Path
     }
+    # Overlay the caller's explicit values -- they win, whether they agreed or not.
+    $map = @{ VmHost = 'VmHost'; HostAlias = 'HostAlias'; LocalKeyName = 'KeyName'; ConfigBranch = 'ConfigBranch'; ServiceUrl = 'ServiceUrl'; PublicHost = 'PublicHost' }
+    foreach ($k in $map.Keys) {
+        if ($ex.ContainsKey($k) -and [string]$ex[$k] -ne '') { $out.($map[$k]) = [string]$ex[$k] }
+    }
+    if ($ex.ContainsKey('SshPort')) {
+        $p = 0; try { $p = [int]$ex['SshPort'] } catch { $p = 0 }
+        if ($p -gt 0) { $out.SshPort = $p }
+    }
+    return $out
 }

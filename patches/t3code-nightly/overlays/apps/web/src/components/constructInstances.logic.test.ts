@@ -129,13 +129,25 @@ describe("matchConstructRemoteToInstance", () => {
     );
   });
 
-  it("matches NOTHING for a service-published VM whose port this PC has not seen", () => {
-    // No recorded port and a forward whose number only the service knows: claiming a
-    // remote on an unknown port is that VM would offer a Reprovision for the wrong
-    // machine. The row says so instead, and the next reprovision records the port.
+  it("matches a service-published VM whose port this PC has not seen when it is the ONLY claimant", () => {
+    // No recorded port yet (provisioned before the port was written, or from another PC):
+    // the host name is a per-VM name the service renders, so one claimant is not a
+    // coincidence -- the row is offered and the next reprovision records the port.
     const unseen = [instance({ name: "far-vm", publicHost: "far-vm.vpn.example.local" })];
-    assert.isNull(matchConstructRemoteToInstance("https://far-vm.vpn.example.local:23011", unseen));
-    assert.isNull(matchConstructRemoteToInstance("https://far-vm.vpn.example.local:5178", unseen));
+    assert.equal(matchConstructRemoteToInstance("https://far-vm.vpn.example.local:23011", unseen)?.name, "far-vm");
+    assert.equal(matchConstructRemoteToInstance("https://far-vm.vpn.example.local:5178", unseen)?.name, "far-vm");
+    // ...but a recorded port is exact again, and a LOCAL VM (no publicHost) on a non-T3
+    // port never gets the host-only fallback.
+    const recorded = [instance({ name: "far-vm", publicHost: "far-vm.vpn.example.local", t3Port: 23011 })];
+    assert.isNull(matchConstructRemoteToInstance("https://far-vm.vpn.example.local:5178", recorded));
+    const local = [instance({ name: "work-vm" })];
+    assert.isNull(matchConstructRemoteToInstance("https://work-vm.mshome.net:9999", local));
+    // Two service VMs claiming one host name without a recorded port match nothing.
+    const two = [
+      instance({ name: "far-vm", publicHost: "shared.vpn.example.local" }),
+      instance({ name: "near-vm", publicHost: "shared.vpn.example.local" }),
+    ];
+    assert.isNull(matchConstructRemoteToInstance("https://shared.vpn.example.local:23011", two));
   });
 
   it("does NOT match on an ssh alias", () => {

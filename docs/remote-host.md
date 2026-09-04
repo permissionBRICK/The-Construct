@@ -314,7 +314,7 @@ install but only applies after the next sign-in.
 | **Reprovision** | re-runs `Provision-AgentVM.ps1` against the instance's endpoint. Keeps all data. Never touches the service. |
 | **Reinstall** | `DELETE /vms/{name}` → `POST /vms` → provision. Same typed-`yes` confirmation as the local path, and the same pre-wipe unsaved-work scan + config save. |
 | **Export config** | pulls the VM's agent config back to this host. No changes to the VM. |
-| **Remove instance** | `DELETE /vms/{name}` **and** removes everything this PC knows about the VM (see below). Needs the instance name typed back. |
+| **Remove instance** | `DELETE /vms/{name}` **and** removes everything this PC knows about the VM (see below). Needs the instance name typed back. `-KeepVm` (or the prompt when the host is unreachable) forgets it here and leaves the VM on the host. |
 | **Quit** | nothing. |
 
 There is no *Redownload* for a remote instance: the ISO is built on the host, and the

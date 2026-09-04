@@ -383,9 +383,10 @@ install's own `.construct-settings.json`, which a single-VM install goes on writ
 unchanged, so its mirror never carries them — removing it clears that mirror's VM keys and
 leaves the install-wide ones.) And — **last, and only
 when every step before it succeeded** — its entry in `instances.json`. It prints each step
-and what it did; a run in which something could not be done (a certificate that could not
-be untrusted, a `settings.json` this PowerShell cannot parse) keeps the entry and says so,
-so you fix that and run it again.
+and what it did; a step that could not be done (a certificate that could not be untrusted,
+a `settings.json` this PowerShell cannot parse) is reported with what to do by hand, and
+the entry is removed anyway — keeping it would not make a retry succeed, only wedge the
+instance.
 
 - **A local Hyper-V VM is not deleted.** This forgets the VM on this PC; *Reinstall* is the
   action that deletes one. Reinstall and Redownload keep working afterwards and write the
@@ -393,6 +394,9 @@ so you fix that and run it again.
 - **A remote VM *is* deleted**, disk and all, so the instance name has to be typed back —
   interactively at the prompt, or as `-ConfirmInstanceName <name>` in an unattended run.
   The VM deletion happens first: if the host service refuses, nothing local is touched.
+  If the host cannot be reached at all, an interactive run offers to forget the instance
+  here and leave the VM on the host; `-KeepVm` does the same unattended (and is also the
+  way to keep a VM you still want, before *Remove Remote Host* forgets the host itself).
 - **The last instance cannot be removed** — the only refusal. `agent-vm` itself is
   removable like any other name; since a missing entry *is* that instance, the removal is
   recorded explicitly (`"agent-vm": null` in `instances.json`) rather than by deleting a
