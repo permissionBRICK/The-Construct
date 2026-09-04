@@ -1146,13 +1146,60 @@ ok "T3 install rule: an empty channel or version never matches either" (
     (Get-T3DesktopInstallPlan -T3Version '' -Channel 'stable' -BuildHash 'abc123' -Installed $installed).Install -and
     (Get-T3DesktopInstallPlan -T3Version '0.0.38' -Channel '' -BuildHash 'abc123' -Installed $installed).Install)
 $rec = (Get-T3DesktopInstallPlan -T3Version '0.0.39' -Channel 'nightly' -BuildHash 'h9' -Installed $null -InstanceName 'work-vm' -InstalledAt '2026-09-04T10:00:00Z').Record
-ok "T3 install rule: the record carries the five documented keys" (
-    @($rec.Keys) -join ',' -eq 't3Version,channel,buildHash,installedAt,sourceInstance')
+ok "T3 install rule: the record carries the six documented keys" (
+    @($rec.Keys) -join ',' -eq 't3Version,channel,buildHash,patchHash,installedAt,sourceInstance')
+# THE PATCH HASH decides when both sides state one: the build hash folds in the Construct
+# commit, so every Construct update used to reinstall a byte-identical Desktop -- and two
+# VMs provisioned at different commits took turns doing it.
+$installedP = [pscustomobject]@{ t3Version = '0.0.38'; channel = 'stable'; buildHash = 'abc123'; patchHash = 'p1'; installedAt = 'x'; sourceInstance = 'agent-vm' }
+$sameRecipe = Get-T3DesktopInstallPlan -T3Version '0.0.38' -Channel 'stable' -BuildHash 'zzz999' -PatchHash 'p1' -Installed $installedP
+ok "T3 install rule: the same patch recipe at another Construct commit is already installed" ((-not $sameRecipe.Install) -and $sameRecipe.Reason -match 'already installed')
+$otherRecipe = Get-T3DesktopInstallPlan -T3Version '0.0.38' -Channel 'stable' -BuildHash 'abc123' -PatchHash 'p2' -Installed $installedP
+ok "T3 install rule: a changed patch recipe installs even when the build hash happens to match" ($otherRecipe.Install)
+$recordNoPatch = Get-T3DesktopInstallPlan -T3Version '0.0.38' -Channel 'stable' -BuildHash 'abc123' -PatchHash 'p1' -Installed $installed
+ok "T3 install rule: a record without a patch hash falls back to the build hash (match)" (-not $recordNoPatch.Install)
+$recordNoPatch2 = Get-T3DesktopInstallPlan -T3Version '0.0.38' -Channel 'stable' -BuildHash 'zzz999' -PatchHash 'p1' -Installed $installed
+ok "T3 install rule: ...and installs when that build hash differs" ($recordNoPatch2.Install)
+$manifestNoPatch = Get-T3DesktopInstallPlan -T3Version '0.0.38' -Channel 'stable' -BuildHash 'abc123' -Installed $installedP
+ok "T3 install rule: a manifest without a patch hash falls back to the build hash too" (-not $manifestNoPatch.Install)
+ok "T3 install rule: the record remembers the patch hash it installed" ($sameRecipe.Record.patchHash -eq 'p1' -and $sameRecipe.Record.buildHash -eq 'zzz999')
+ok "T3 install rule: the version still decides ahead of the recipe" ((Get-T3DesktopInstallPlan -T3Version '0.0.39' -Channel 'stable' -BuildHash 'abc123' -PatchHash 'p1' -Installed $installedP).Install)
+ok "provisioner: hands the manifest's patch hash to the planner" ($provSrc -match 'Get-T3DesktopInstallPlan[^\n]*\n[^\n]*\n\s*-PatchHash \(\[string\]\$manifest\.patchHash\)')
 ok "T3 install rule: the record names the instance that installed it" (
     $rec.sourceInstance -eq 'work-vm' -and $rec.t3Version -eq '0.0.39' -and $rec.channel -eq 'nightly' -and
     $rec.buildHash -eq 'h9' -and $rec.installedAt -eq '2026-09-04T10:00:00Z')
 ok "T3 install rule: no instance recorded means the default one" (
     (Get-T3DesktopInstallPlan -T3Version '1' -Channel 'stable' -BuildHash 'h' -Installed $null).Record.sourceInstance -eq 'agent-vm')
+
+# ── Save-ConstructVmSpec: the installers record the size they created the VM with ────
+$specRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("construct-vmspec-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $specRoot -Force | Out-Null
+try {
+    Save-ConstructVmSpec -Dir $specRoot -InstanceName '' -MemoryGB 16 -DiskGB 150 -CpuCount 8 | Out-Null
+    $specSaved = Read-ConstructSettings -Dir $specRoot
+    ok "VM spec: the default instance's size lands in .construct-settings.json" (
+        $specSaved.vmMemoryGB -eq 16 -and $specSaved.vmDiskGB -eq 150 -and $specSaved.vmCpuCount -eq 8)
+    Save-ConstructVmSpec -Dir $specRoot -InstanceName 'agent-vm' -MemoryGB 8.5 -DiskGB 60 | Out-Null
+    $specSaved = Read-ConstructSettings -Dir $specRoot
+    ok "VM spec: a later create overwrites the size, keeps a CPU count it did not choose" (
+        $specSaved.vmMemoryGB -eq 8.5 -and $specSaved.vmDiskGB -eq 60 -and $specSaved.vmCpuCount -eq 8)
+    Save-ConstructVmSpec -Dir $specRoot -InstanceName 'agent-vm' -MemoryGB 0 -DiskGB 0 | Out-Null
+    ok "VM spec: nothing chosen writes nothing" ((Read-ConstructSettings -Dir $specRoot).vmMemoryGB -eq 8.5)
+    # A non-default name without the state library is skipped, never misfiled at the top level.
+    $specOut = Save-ConstructVmSpec -Dir $specRoot -InstanceName 'work-vm' -MemoryGB 4 -DiskGB 40 6>&1
+    ok "VM spec: another instance is not written into the default file when the state library is absent" (
+        (Read-ConstructSettings -Dir $specRoot).vmMemoryGB -eq 8.5 -and ("$specOut" -match 'not recorded'))
+} finally { Remove-Item -LiteralPath $specRoot -Recurse -Force -ErrorAction SilentlyContinue }
+$autoSrc = Get-Content -LiteralPath (Join-Path $here "..\Auto-Install.ps1") -Raw
+$createSrc = Get-Content -LiteralPath (Join-Path $here "..\Create-AgentVM.ps1") -Raw
+ok "Auto-Install.ps1: records the size for the instance on BOTH the local and the remote path" (
+    $autoSrc -match 'Save-ConstructVmSpec -Dir \$PSScriptRoot -InstanceName \$VmInstanceName -MemoryGB \$chosenMemGB -DiskGB \$chosenDiskGB -CpuCount \$VmCpuCount' -and
+    $autoSrc -match 'Save-ConstructVmSpec -Dir \$PSScriptRoot -InstanceName \$instName -MemoryGB \$chosenMemGB -DiskGB \$chosenDiskGB -CpuCount \$remoteCpu')
+ok "Auto-Install.ps1: the remote record is written AFTER the host service created the VM" (
+    $autoSrc.IndexOf('Save-ConstructVmSpec -Dir $PSScriptRoot -InstanceName $instName') -gt $autoSrc.IndexOf('New-ConstructRemoteVmRecord -Name $instName'))
+ok "Auto-Install.ps1: a chosen vCPU count sizes the LOCAL VM too" ($autoSrc -match "if \(\`$VmCpuCount -gt 0\) \{ \`$createArgs\['ProcessorCount'\] = \`$VmCpuCount \}")
+ok "Create-AgentVM.ps1: a hand-run create records its size (not under -Auto, which Auto-Install already recorded)" (
+    $createSrc -match '(?s)if \(-not \$Auto\) \{.*?Save-ConstructVmSpec -Dir \$PSScriptRoot -InstanceName \$specInstance')
 
 # The SMB drive letter.
 $taken = @('C', 'D', 'Z', 'Y')

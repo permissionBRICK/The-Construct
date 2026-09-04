@@ -2657,6 +2657,7 @@ if ($Action -eq 'provision') {
             }
             $t3Plan = Get-T3DesktopInstallPlan -T3Version ([string]$manifest.version) `
                 -Channel ([string]$manifest.channel) -BuildHash ([string]$manifest.buildHash) `
+                -PatchHash ([string]$manifest.patchHash) `
                 -Installed $installedRecord -InstanceName (Get-ConstructRunInstanceName) -AppPresent $t3AppPresent
             if (-not $t3Plan.Install) {
                 Write-Ok $t3Plan.Reason

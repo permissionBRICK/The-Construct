@@ -55,6 +55,11 @@ ok("source transforms: voice RPC, live cursor-safe insertion, mic UI, and Constr
 ok("source transforms: stream PCM amplitude into a live mic-button level effect",
   /readInt16LE/.test(sourceRecipe) && /Schema\.Literal\(\\?"level\\?"\)/.test(sourceRecipe) &&
   /data-voice-level/.test(sourceRecipe) && /boxShadow/.test(sourceRecipe));
+ok("desktop update handoff: an instance that never saved the keep-saved T3/OpenCode toggles keeps the VM's own (no default TRUE patched build)",
+  /if \(\$null -ne \$settings\.t3codeLimitResume\) \{ \$params\.T3CodeLimitResume/.test(updateT3) &&
+  /if \(\$null -ne \$settings\.t3code\) \{ \$params\.T3Code /.test(updateT3) &&
+  /if \(\$null -ne \$settings\.opencodeBackgroundWatcher\)/.test(updateT3) &&
+  !/^\s+T3CodeLimitResume\s*=\s*As-BoolString/m.test(updateT3));
 ok("desktop update handoff: reprovisions with the saved T3 source-build setting",
   /Provision-AgentVM\.ps1/.test(updateT3) && /Action\s+= 'provision'/.test(updateT3) && /T3CodeLimitResume/.test(updateT3));
 ok("desktop provisioning: installs updates silently, waits, and never prompts or launches the app",

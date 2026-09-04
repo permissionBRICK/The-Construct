@@ -2498,6 +2498,11 @@ if ($RemoteInstall) {
                         Nested               = $true
                         AutomaticCheckpoints = $false
                     }
+    # The size this VM was created with, recorded as the control panel's settings for
+    # THIS instance (vmMemoryGB / vmDiskGB / vmCpuCount): the panel shows them and a
+    # rebuild launched from there passes them back, instead of falling back to its own
+    # defaults because the installer never wrote what it had asked for.
+    Save-ConstructVmSpec -Dir $PSScriptRoot -InstanceName $instName -MemoryGB $chosenMemGB -DiskGB $chosenDiskGB -CpuCount $remoteCpu
     $endpoint = $record.Endpoint
     $vmToken  = [string]$record.VmToken
 
@@ -3628,6 +3633,15 @@ $createArgs = @{
     # try/finally owns the final pause.
     Auto          = $true
 }
+# An explicit vCPU count (the control panel's saved `vmCpuCount`, or a -VmCpuCount on
+# the command line) sizes the local VM too; omitted, Create-AgentVM keeps giving the VM
+# every host logical processor, exactly as before.
+if ($VmCpuCount -gt 0) { $createArgs['ProcessorCount'] = $VmCpuCount }
+# The size this VM is created with, recorded as the control panel's settings for THIS
+# instance (vmMemoryGB / vmDiskGB, and the vCPU count when one was chosen): the panel
+# shows them and a rebuild launched from there passes them back, instead of falling
+# back to its own defaults because the installer never wrote what it had asked for.
+Save-ConstructVmSpec -Dir $PSScriptRoot -InstanceName $VmInstanceName -MemoryGB $chosenMemGB -DiskGB $chosenDiskGB -CpuCount $VmCpuCount
 # Version-skew guard: a partially-updated scripts dir can pair THIS script with an
 # older Create-AgentVM.ps1 that has no -AutomaticCheckpoints parameter. Splatting it
 # there is a parameter-binding failure -- and by this point the old VM is already

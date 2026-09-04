@@ -67,6 +67,18 @@ ok("reinstall: threads the OpenCode watcher explicit off", has(rei.args, "-OpenC
 ok("reinstall: omits -T3CodeChannel when absent from settings",
   !rei.args.includes("-T3CodeChannel"));
 
+// The vCPU count rides a rebuild like RAM/disk, gated on the installed Auto-Install
+// declaring -VmCpuCount (an older one would fail to bind and never start the rebuild).
+ok("reinstall: -VmCpuCount from settings", has(life.buildInvocation("reinstall", { settings: { cpu: "8" } }).args, "-VmCpuCount", "8"));
+ok("reinstall: no -VmCpuCount when the setting is absent", !life.buildInvocation("reinstall", { settings: { ram: "16" } }).args.includes("-VmCpuCount"));
+ok("reinstall: -VmCpuCount dropped when the scripts don't support it",
+  !life.buildInvocation("reinstall", { settings: { cpu: "8" }, supportsVmCpuCount: false }).args.includes("-VmCpuCount"));
+ok("redownload: -VmCpuCount from settings", has(life.buildInvocation("redownload", { settings: { cpu: "4" } }).args, "-VmCpuCount", "4"));
+ok("reinstall: no VM size flags at all when the settings hold none (the installer asks, or keeps the VM's size)",
+  !/-Vm(MemoryGB|DiskGB|CpuCount)/.test(life.buildInvocation("reinstall", { settings: {} }).args.join(" ")));
+ok("capability: the repo's Auto-Install declares -VmCpuCount", life.scriptSupportsVmCpuCount(require("path").resolve(__dirname, "..", "..")) === true);
+ok("capability: a scripts dir without Auto-Install has no -VmCpuCount", life.scriptSupportsVmCpuCount(require("os").tmpdir()) === false);
+
 const reiProj = life.buildInvocation("reinstall", { settings: {}, projects: ["web"] });
 ok("reinstall: passes -Projects (Auto-Install forwards it to Provision)", has(reiProj.args, "-Projects", "web"));
 const reiWipe = life.buildInvocation("reinstall", { settings: {}, backupMode: "wipe" });

@@ -222,8 +222,9 @@
 
     <section class="setgroup">
       <div class="gh"><h2 class="seclabel">VM resources</h2><span class="applies reinstall">applied on reinstall / redownload</span></div>
-      <div class="field"><label>Memory (RAM)</label><div class="ctl"><input type="number" id="setRam" value="8" style="max-width:90px" /><span class="suffix">GB</span></div></div>
-      <div class="field"><label>Disk size</label><div class="ctl"><input type="number" id="setDisk" value="80" style="max-width:90px" /><span class="suffix">GB</span></div></div>
+      <div class="field"><label>Memory (RAM)<span class="hint">empty = keep the size the VM has (shown greyed once it is online)</span></label><div class="ctl"><input type="number" id="setRam" placeholder="8" style="max-width:90px" /><span class="suffix">GB</span></div></div>
+      <div class="field"><label>Disk size</label><div class="ctl"><input type="number" id="setDisk" placeholder="50" style="max-width:90px" /><span class="suffix">GB</span></div></div>
+      <div class="field"><label>vCPUs<span class="hint">a remote VM is created with this count by the host service; a local VM gets all host cores unless set</span></label><div class="ctl"><input type="number" id="setCpu" placeholder="4" style="max-width:90px" /><span class="suffix">cores</span></div></div>
       <div class="field"><label>Automatic checkpoints<span class="hint">Hyper-V snapshots the VM at every start &mdash; off by default: on a disposable agent VM it just grows the disk and slows I/O. Saving offers to apply it to the current VM (and remove an existing automatic checkpoint) right away.</span></label><div class="ctl"><div class="switch sm" id="setAutoCheckpoints" role="switch" aria-checked="false" tabindex="0"><span class="knob"></span></div></div></div>
       <div class="field"><label>Ubuntu release<span class="hint">used when Redownloading the ISO</span></label><div class="ctl"><select id="setUbuntu"><option value="24.04">24.04 LTS (latest)</option><option value="22.04">22.04 LTS</option></select></div></div>
       <div class="field"><label>Agent login password</label><div class="ctl"><span class="cost-note" style="margin:0">Reinstalling from here keeps the default 'agent' login (a manual fallback — normal access is as root over SSH). Set a custom one via a direct console run.</span></div></div>

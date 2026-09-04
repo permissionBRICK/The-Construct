@@ -208,6 +208,47 @@ function saveState(st, patch) {
   return merged;
 }
 
+/**
+ * Backfill, ONCE, the facts about a VM that its instance's saved state never recorded,
+ * from what the probe just read off the VM itself: its size (`vmMemoryGB` / `vmDiskGB` /
+ * `vmCpuCount`, probe.parseVmSpec) and its keep-saved config (`t3code`, `t3codeChannel`,
+ * `t3codeLimitResume`, `opencodeBackgroundWatcher`, probe.parseVmConfig).
+ *
+ * WHY: the installers used to size the VM and forget the numbers, and the provisioner
+ * reads an EMPTY value for the keep-saved settings as "leave the VM as it is". An
+ * instance whose state file lacks those keys — every VM installed from the console —
+ * therefore had the settings form show its HTML defaults as if they were saved: a
+ * rebuild resized the VM to 8 GB / 80 GB, and the "patched T3 build" toggle sat unlit
+ * on a VM that kept building it. Recording what the VM actually is makes the form and
+ * the next rebuild/reprovision honest.
+ *
+ * ONLY ABSENT KEYS are written: a value the user saved is theirs, even when the VM has
+ * not been reprovisioned to match it yet. Nothing is written for an offline VM or a
+ * failed probe (no trustworthy facts), and nothing when there is nothing to add.
+ * Returns the patch written, or null. Throws only when the store cannot be written
+ * (no scripts dir for the default instance) — callers treat it as best-effort.
+ */
+const BACKFILL_CONFIG_KEYS = Object.freeze(["t3code", "t3codeChannel", "t3codeLimitResume", "opencodeBackgroundWatcher"]);
+function backfillFromProbe(st, probed) {
+  if (!probed || probed.online !== true || probed.probeError) return null;
+  const spec = (probed.vmSpec && typeof probed.vmSpec === "object") ? probed.vmSpec : {};
+  const cfg = (probed.vmConfig && typeof probed.vmConfig === "object") ? probed.vmConfig : {};
+  const current = readState(st);
+  const has = (k) => Object.prototype.hasOwnProperty.call(current, k);
+  const posInt = (v) => Number.isFinite(v) && v > 0;
+  const patch = {};
+  if (!has("vmMemoryGB") && posInt(spec.ramGb)) patch.vmMemoryGB = spec.ramGb;
+  if (!has("vmDiskGB") && posInt(spec.diskGb)) patch.vmDiskGB = spec.diskGb;
+  if (!has("vmCpuCount") && posInt(spec.cpus)) patch.vmCpuCount = spec.cpus;
+  for (const k of BACKFILL_CONFIG_KEYS) {
+    if (has(k) || cfg[k] === undefined || cfg[k] === null) continue;
+    if (k === "t3codeChannel" ? (cfg[k] === "stable" || cfg[k] === "nightly") : typeof cfg[k] === "boolean") patch[k] = cfg[k];
+  }
+  if (!Object.keys(patch).length) return null;
+  saveState(st, patch);
+  return patch;
+}
+
 // ── Instance-aware twins of the host.js settings helpers ─────────────────────
 // Same contracts as the host.js originals, but resolved against a STORE instead of a
 // scripts dir. For the default instance each one is the host.js call it wraps, so a
@@ -382,7 +423,7 @@ module.exports = {
   CONTAINER, STATE_DIR, SCHEMA_VERSION, INSTALL_WIDE_KEYS, META_KEYS,
   isSafeStateName, isDefaultStore, stateDir, statePath, store,
   readInstallWide, readState, readMerged, saveState, replaceState, writeStateFile,
-  readSettings, saveSettings,
+  readSettings, saveSettings, backfillFromProbe, BACKFILL_CONFIG_KEYS,
   readSelectedProjects, hasPersistedSelection, saveSelectedProjects,
   readAppliedAutoCheckpoints, saveAppliedAutoCheckpoints,
   readMarkers, countStale, provisionedCommitOf, createProvisionWatch,

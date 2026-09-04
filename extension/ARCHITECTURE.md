@@ -732,7 +732,7 @@ Two host-side files, split by what the value is *about*.
 git identity the installer applies to every VM. One checkout, one answer.
 
 **VM-scoped** — everything else the panel and the provisioner exchange: `provisionedCommit`,
-the project selection, `micPassthrough`, `vmMemoryGB`/`vmDiskGB`/`ubuntuRelease`, the VS
+the project selection, `micPassthrough`, `vmMemoryGB`/`vmDiskGB`/`vmCpuCount`/`ubuntuRelease`, the VS
 Code / SMB / patch toggles, the T3 Code toggles and channel, `vmAutoCheckpoints` and
 `vmAutoCheckpointsApplied`.
 
