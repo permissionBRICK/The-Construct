@@ -644,11 +644,33 @@ follow-ups: toggling T3 between HTTP/HTTPS leaves the previous host forward allo
 removed first — use `Remove instance -KeepVm` to keep the VMs; "Register this VM" accepts a
 bare ssh alias as a local host (a lost remote registry could register a local entry).
 
+**First remote VM from a client PC (2026-09-04 evening, haus-pc/standpc + main PC):** the run
+surfaced five defects none of the Linux suites could show, fixed on main the same evening:
+(1) PS 5.1 `Invoke-WebRequest` cannot run a scriptblock certificate callback → compiled pin
+validator; (2) dot-sourcing `Load-ConstructDriver.ps1` overwrote the installer's own
+`-Backend`/`-ServiceUrl` → keep/restore around both loads; (3) the pre-built ISO's seed user is
+`construct` with a minted, discarded password, so the provisioner (seed user `agent`, `sudo -S`)
+could never escalate → generic media grants the seed user passwordless sudo and the remote
+install passes the service's seed user; (4) after the KVP rename a DHCP *renew* did not make
+`<name>.mshome.net` appear on the Default Switch resolver, so the service never allocated the
+forward → the first-boot unit reconfigures the DHCP client; (5) no unattended answer for the
+clone-credential screen → `-GitCloneCredentialsB64`. Host-side facts: Windows Update restarted
+the host mid-day; Defender's ML flagged the unsigned jarvis relay; the tunnel address changes
+between VPN reconnects; the host registered three adapter addresses in AD DNS.
+Follow-ups (**B19 — service field fixes**, one batch, then redeploy constructd on the host):
+the driver takes the guest IPv4 from Hyper-V KVP for the reachability check and the forward's
+connect address (name only as fallback); the create result / `GET /vms/{name}` state the
+`seedUser` and the client uses it instead of the constant; `admin iso build` surfaces the WSL
+stderr on failure; the installer prints and can set the Windows Update restart policy next to
+the sleep timers (B18). Deployment note: the host has no .NET 10 SDK — publish on the dev VM
+(`dotnet publish -r win-x64 --self-contained`) and ship the folder.
+
 **Phase 7 — field-prep follow-ups (§4.13; after Phase 6 merges unless file-disjoint):**
 - **B15 — Publish local profiles** (lib config-sync functions, `Auto-Install.ps1 -Action publish-config`, Projects-tab Publish action, docs/config-sync.md §7/§13, tests PS+node).
 - **B16 — Per-VM disk location** (`-VmPath`, service allowed roots + `storageRoot`, remote installer/extension pickers, registry field, docs).
 - **B17 — `construct expose` client-port leeway** (forwarder planner, guest CLI output, `--strict`, docs/expose.md).
-- **B18 — Host power request in `constructd`** + installer sleep-timeout check.
+- **B18 — Host power request in `constructd`** + installer sleep-timeout check. ✅ merged 2026-09-04.
+- **B19 — Service field fixes** (KVP IPv4 for reachability/forwards, `seedUser` in the API, WSL stderr on `admin iso build` failure, Windows Update restart policy in the installer) + redeploy on the host.
 
 **Known risks to watch in review:** version-skew discipline on every new parameter
 (probe before splat); SSH-config block collisions between instances; Windows OpenSSH
