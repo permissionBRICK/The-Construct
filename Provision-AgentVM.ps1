@@ -655,11 +655,17 @@ function Get-ServiceEnvSuffix {
     param(
         [string]$ServiceUrl,
         [string]$InstanceName,
-        [string]$VmTokenB64
+        [string]$VmTokenB64,
+        # The service's certificate (PEM, base64) for the guest to verify it with. Public
+        # material, so it may ride in the env prefix like the URL. Empty = not sent.
+        [string]$ServiceCaB64 = ""
     )
     $out = ""
     if (-not [string]::IsNullOrWhiteSpace($ServiceUrl)) {
         $out += " CONSTRUCT_SERVICE_URL=$(ConvertTo-PosixSingleQuoted $ServiceUrl)"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ServiceUrl) -and -not [string]::IsNullOrWhiteSpace($ServiceCaB64)) {
+        $out += " CONSTRUCT_SERVICE_CA_B64=$(ConvertTo-PosixSingleQuoted $ServiceCaB64)"
     }
     if (-not [string]::IsNullOrWhiteSpace($InstanceName)) {
         $out += " CONSTRUCT_INSTANCE_NAME=$(ConvertTo-PosixSingleQuoted $InstanceName)"
@@ -2269,7 +2275,25 @@ if ($PublicHost -and $PublicHost -ne $VmHost) {
 # therefore its config.env and its ssh command line) stays byte-identical.
 $guestInstanceName = ""
 if ($ServiceUrl) { $guestInstanceName = $InstanceName }
-$serviceEnv = Get-ServiceEnvSuffix -ServiceUrl $ServiceUrl -InstanceName $guestInstanceName -VmTokenB64 ""
+# The service's certificate, for the guest's own calls (construct expose --to host, the
+# idle heartbeat): the service is self-signed, so without it every guest call fails with
+# "SSL certificate problem" (field, 2026-09-04) -- no host forwards, and a heartbeat the
+# idle policy never sees. Read over TLS and accepted only if it matches the pin this PC
+# confirmed at enrolment. Best-effort: a failure is a warning, the provision goes on.
+$serviceCaB64 = ""
+if ($ServiceUrl) {
+    $remoteLib = Join-Path $PSScriptRoot "lib\AgentVm.Remote.ps1"
+    if (Test-Path -LiteralPath $remoteLib) {
+        try {
+            if (-not (Get-Command Get-ConstructRemoteCertificatePem -ErrorAction SilentlyContinue)) { . $remoteLib }
+            $pem = Get-ConstructRemoteCertificatePem -BaseUrl $ServiceUrl
+            if ($pem) { $serviceCaB64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($pem)) }
+        } catch {
+            Write-Warning "Could not read the host service's certificate for the guest ($($_.Exception.Message)); the VM's own service calls (host forwards, idle heartbeat) will fail until a reprovision succeeds here."
+        }
+    }
+}
+$serviceEnv = Get-ServiceEnvSuffix -ServiceUrl $ServiceUrl -InstanceName $guestInstanceName -VmTokenB64 "" -ServiceCaB64 $serviceCaB64
 if ($ServiceUrl) {
     # Say WHAT was sent, never the token itself.
     Write-Ok "Host service: $ServiceUrl (instance '$InstanceName')$(if ($VmTokenB64) { '; VM token supplied' } else { '' })"

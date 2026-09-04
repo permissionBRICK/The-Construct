@@ -272,6 +272,10 @@ PROVISION="${ROOT}/bin/provision.sh"
 
 # Both halves of the shipped gate, asserted on the source: the step only runs for a
 # service-managed VM, and a VM that is not one has its stale file removed silently.
+ok "service ca: provision.sh persists CONSTRUCT_SERVICE_CA_B64 as /etc/construct/service-ca.pem" \
+  bash -c "grep -q 'CONSTRUCT_SERVICE_CA_B64' '${PROVISION}' && grep -q 'cfg CONSTRUCT_SERVICE_CA_FILE /etc/construct/service-ca.pem' '${PROVISION}'"
+ok "service ca: ...only inside the service-managed block" \
+  bash -c "awk '/if \\[\\[ -n \"\\\$\\{CONSTRUCT_SERVICE_URL\\}\" \\]\\]; then/{f=1} f && /CONSTRUCT_SERVICE_CA_B64/{print \"inside\"; exit}' '${PROVISION}' | grep -q inside"
 ok "host forwards: the step is gated on CONSTRUCT_SERVICE_URL" \
   sh -c "grep -A2 'run_step optional \"Requesting host port forwards' '${PROVISION}' >/dev/null && \
          grep -B4 'run_step optional \"Requesting host port forwards' '${PROVISION}' | grep -q 'if \[\[ -n \"\${CONSTRUCT_SERVICE_URL}\" \]\]'"

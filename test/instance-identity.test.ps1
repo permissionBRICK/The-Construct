@@ -533,6 +533,10 @@ if ($fnSvc) {
         ((Get-ServiceEnvSuffix -ServiceUrl "" -InstanceName "" -VmTokenB64 "") -eq "")
     ok "service suffix: whitespace-only is treated as unset" `
         ((Get-ServiceEnvSuffix -ServiceUrl "   " -InstanceName "" -VmTokenB64 "") -eq "")
+    ok "service env: the service certificate rides along as CONSTRUCT_SERVICE_CA_B64" (
+        ((Get-ServiceEnvSuffix -ServiceUrl "https://h:7462" -InstanceName "x" -VmTokenB64 "" -ServiceCaB64 "QUJD") -like "* CONSTRUCT_SERVICE_CA_B64='QUJD'*"))
+    ok "service env: ...never without a service URL" (
+        ((Get-ServiceEnvSuffix -ServiceUrl "" -InstanceName "" -VmTokenB64 "" -ServiceCaB64 "QUJD") -eq ""))
     ok "service suffix: URL only" `
         ((Get-ServiceEnvSuffix -ServiceUrl "https://buildbox:7462" -InstanceName "" -VmTokenB64 "") -eq " CONSTRUCT_SERVICE_URL='https://buildbox:7462'")
     ok "service suffix: all three, in the contract order" `
