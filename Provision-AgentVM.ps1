@@ -315,6 +315,14 @@ if ($InstanceName) {
     if (-not $PSBoundParameters.ContainsKey('PublicHost') -and $instanceTarget.PSObject.Properties['PublicHost'] -and $instanceTarget.PublicHost) {
         $PublicHost = [string]$instanceTarget.PublicHost
     }
+    # A VM on a host service was installed from the SERVICE's pre-built media, whose seed
+    # user is the service's (IsoOptions.SeedUser, default 'construct'), not the local
+    # installer's 'agent'. Until the create result states it (plan B19), a remote target
+    # defaults to the service default; the root fast path below re-reads the real one
+    # from the guest anyway.
+    if (-not $PSBoundParameters.ContainsKey('SeedUser') -and [string]$instanceTarget.Backend -eq 'hyperv-remote') {
+        $SeedUser = 'construct'
+    }
     # A NON-DEFAULT ENDPOINT WAS STATED -- by name rather than by argument, but stated.
     # $explicitEndpoint below asks "did the caller say where this VM answers", because
     # that is what the guest has to record as its external identity; resolving the same
@@ -1736,6 +1744,21 @@ Write-Ok "Host key stored"
 Write-Step "Checking for a saved root key (re-provision fast path)"
 if (Enter-RootKeyFastPath) {
     Write-Ok "Connected as root with the saved key ($script:LocalRootKeyPath)"
+    # The guest knows its own seed user (SSH_USER in config.env, written on the first
+    # provision); on the root path nothing else needs it, EXCEPT the chown of
+    # /opt/construct and the agent-user steps, which fail outright when the local default
+    # ('agent') is not a user on this VM (pre-built media creates 'construct').
+    if (-not $PSBoundParameters.ContainsKey('SeedUser')) {
+        try {
+            $guestSeed = (Invoke-Ssh -Command "u=`$(sed -n 's/^SSH_USER=//p' /etc/construct/config.env 2>/dev/null | head -1 | tr -d `"'`\`"`"); if [ -n `"`$u`" ] && id -u `"`$u`" >/dev/null 2>&1; then echo `"`$u`"; elif id -u '$SeedUser' >/dev/null 2>&1; then echo '$SeedUser'; elif id -u construct >/dev/null 2>&1; then echo construct; fi").Trim()
+            if ($guestSeed -and $guestSeed -ne $SeedUser -and $guestSeed -match '^[a-z_][a-z0-9_-]*$') {
+                Write-Note "Seed user on this VM is '$guestSeed' (not '$SeedUser'); using it."
+                $SeedUser = $guestSeed
+            }
+        } catch {
+            Write-Warning "Could not read the VM's seed user ($($_.Exception.Message)); keeping '$SeedUser'."
+        }
+    }
 } else {
     # Fall back to the bootstrap key. Autoinstall VMs already have it authorized;
     # a hand-installed (or freshly recreated) VM does not — try installing it via

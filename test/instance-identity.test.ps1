@@ -598,6 +598,10 @@ ok "guest: ...and that is what Get-ServiceEnvSuffix is handed" (
 # THE HOST SERVICE IS PART OF THE TARGET: a name-targeted reprovision of a remote
 # instance has to reach the service the REGISTRY names, not whatever the guest was last
 # told -- and an explicit -ServiceUrl that disagrees is a conflict like any other.
+ok "seed user: a hyperv-remote target defaults -SeedUser to the service's 'construct'" (
+    $provTxt -match "if \(-not \`$PSBoundParameters\.ContainsKey\('SeedUser'\) -and \[string\]\`$instanceTarget\.Backend -eq 'hyperv-remote'\) \{\s*\r?\n\s*\`$SeedUser = 'construct'")
+ok "seed user: the root fast path re-reads SSH_USER from the guest" (
+    $provTxt -match "sed -n 's/\^SSH_USER=//p' /etc/construct/config\.env" -and $provTxt -match "Seed user on this VM is")
 ok "service: -ServiceUrl is conflict-checked with the rest" (
     $provTxt -match "foreach \(\`$tp in @\('VmHost', 'HostAlias', 'SshPort', 'LocalKeyName', 'ConfigBranch', 'ServiceUrl', 'PublicHost'\)\)")
 ok "service: ...and is taken from the entry when the caller did not bind it" (
