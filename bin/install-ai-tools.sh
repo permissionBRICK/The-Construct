@@ -109,53 +109,43 @@ has_tool() {
 AGENT_SYSTEM_PROMPT_SRC="${REPO_DIR}/config/systemprompt.md"
 AGENT_DNS="${CONSTRUCT_EXTERNAL_HOST:-$(hostname).mshome.net}"
 
-# Checksums of the prompt we last wrote to each destination, one
-# "<sha256>  <path>" line per file. This is what lets a reprovision tell "the
-# managed file is still exactly what we installed" apart from "the user (or an
-# agent) appended their own rules to it".
-AGENT_SYSTEM_PROMPT_STATE="${AGENT_SYSTEM_PROMPT_STATE:-/etc/construct/systemprompt-installed.sha256}"
+# Machine-local additions to the shipped prompt. The agents' instruction files
+# are MANAGED: regenerated from the template on every provision and by
+# `construct systemprompt`, so anything edited into them is lost. This file is
+# the supported place for per-VM rules instead (house rules that must not live
+# in this repo, which ships to everyone). It sits in root's home so the per-VM
+# backup carries it (export-config.sh) and a reinstall brings it back
+# (restore-config.sh re-renders after restoring it), and it is appended verbatim
+# below the template for every agent, identically.
+AGENT_SYSTEM_PROMPT_CUSTOM="${AGENT_SYSTEM_PROMPT_CUSTOM:-/root/construct-custom-system-prompt.md}"
+# Where root's and TARGET_USER's homes are (overridable for tests).
+AGENT_SYSTEM_PROMPT_ROOT_HOME="${AGENT_SYSTEM_PROMPT_ROOT_HOME:-/root}"
+AGENT_SYSTEM_PROMPT_HOME_BASE="${AGENT_SYSTEM_PROMPT_HOME_BASE:-/home}"
+# The instruction file of each supported agent, relative to a home directory.
+AGENT_SYSTEM_PROMPT_FILES=(".claude/CLAUDE.md" ".codex/AGENTS.md" ".config/opencode/AGENTS.md")
 
-# The checksum recorded for a destination, empty when we never wrote it.
-agent_system_prompt_recorded() {
-  local dest_file="$1"
-  [[ -f "${AGENT_SYSTEM_PROMPT_STATE}" ]] || return 0
-  awk -v f="${dest_file}" '$0 ~ ("  " f "$") { print $1; exit }' \
-    "${AGENT_SYSTEM_PROMPT_STATE}" || true
-}
-
-# Record (or replace) the checksum for a destination.
-agent_system_prompt_record() {
-  local dest_file="$1" sum="$2" state_dir
-  state_dir="$(dirname "${AGENT_SYSTEM_PROMPT_STATE}")"
-  install -d -m 0755 "${state_dir}"
-  local kept=""
-  if [[ -f "${AGENT_SYSTEM_PROMPT_STATE}" ]]; then
-    kept="$(grep -v -F "  ${dest_file}" "${AGENT_SYSTEM_PROMPT_STATE}" || true)"
+# The full instruction text: the shipped template with the live DNS name, then
+# the custom file (when present and non-empty) separated by one blank line.
+render_agent_system_prompt() {
+  sed "s|__AGENT_DNS__|${AGENT_DNS}|g" "${AGENT_SYSTEM_PROMPT_SRC}"
+  if [[ -s "${AGENT_SYSTEM_PROMPT_CUSTOM}" ]]; then
+    printf '\n'
+    cat "${AGENT_SYSTEM_PROMPT_CUSTOM}"
+    # A custom file saved without a final newline must not glue to whatever
+    # comes after it.
+    [[ "$(tail -c 1 "${AGENT_SYSTEM_PROMPT_CUSTOM}" | od -An -c | tr -d ' ')" == '\n' ]] || printf '\n'
   fi
-  { [[ -n "${kept}" ]] && printf '%s\n' "${kept}"
-    printf '%s  %s\n' "${sum}" "${dest_file}"; } >"${AGENT_SYSTEM_PROMPT_STATE}"
-  chmod 0644 "${AGENT_SYSTEM_PROMPT_STATE}"
 }
 
-# Render the shipped system prompt (substituting the live DNS name) into a tool's
-# GLOBAL agent-instructions file so it applies to every repo the agent touches
-# under that user.
-#
-# The destination is a managed file, refreshed on every (re-)provision so the
-# hostname and wording stay current -- but only while it is still byte-for-byte
-# what we last installed. Machine-local additions to these files are a normal
-# thing to have (house rules that must not live in this repo, which ships to
-# everyone), and silently overwriting them on an unrelated reprovision loses
-# them with no warning; a reinstall already preserves them, because
-# restore-config.sh overlays the backed-up home after provisioning. So: write
-# when the file is missing, refresh when untouched, keep when locally modified.
-# A destination we have no checksum for (VM provisioned before this bookkeeping
-# existed) is adopted once -- written and recorded -- and protected from then on.
+# Write the rendered prompt (template + custom additions) into a tool's GLOBAL
+# agent-instructions file so it applies to every repo the agent touches under
+# that user. Always overwrites: the destination is a managed file, and the only
+# supported way to change it is AGENT_SYSTEM_PROMPT_CUSTOM (or the template).
 # Relies on AGENT_SYSTEM_PROMPT_SRC existing.
 install_agent_system_prompt() {
   local dest_file="$1"
   local owner="$2"
-  local dest_dir
+  local dest_dir tmp
   dest_dir="$(dirname "${dest_file}")"
 
   if [[ ! -f "${AGENT_SYSTEM_PROMPT_SRC}" ]]; then
@@ -163,22 +153,40 @@ install_agent_system_prompt() {
     return 0
   fi
 
-  local recorded current
-  if [[ -f "${dest_file}" ]]; then
-    recorded="$(agent_system_prompt_recorded "${dest_file}")"
-    current="$(sha256sum "${dest_file}" | cut -d' ' -f1)"
-    if [[ -n "${recorded}" && "${recorded}" != "${current}" ]]; then
-      note "    keeping locally modified ${dest_file} (shipped system prompt not reapplied)"
-      return 0
-    fi
-  fi
-
   step "Installing global agent system prompt to ${dest_file}"
   install -d -m 0755 "${dest_dir}"
-  sed "s|__AGENT_DNS__|${AGENT_DNS}|g" "${AGENT_SYSTEM_PROMPT_SRC}" >"${dest_file}"
+  tmp="${dest_file}.construct-tmp.$$"
+  render_agent_system_prompt >"${tmp}"
+  chmod 0644 "${tmp}"
+  mv -f "${tmp}" "${dest_file}"
   chown "${owner}:${owner}" "${dest_file}" 2>/dev/null || true
-  agent_system_prompt_record "${dest_file}" \
-    "$(sha256sum "${dest_file}" | cut -d' ' -f1)"
+  if [[ -s "${AGENT_SYSTEM_PROMPT_CUSTOM}" ]]; then
+    note "    appended the machine-local additions from ${AGENT_SYSTEM_PROMPT_CUSTOM}"
+  fi
+}
+
+# Re-render every agent instruction file this VM has: root's, plus TARGET_USER's
+# when that is a different account. A tool counts as present when its config
+# directory exists. This is what `construct systemprompt` runs after the custom
+# file changed, and what restore-config.sh runs after a backup brought it back.
+install_agent_system_prompts_all() {
+  local owner home rel rendered=0
+  local owners=(root)
+  [[ "${TARGET_USER}" == root ]] || owners+=("${TARGET_USER}")
+  for owner in "${owners[@]}"; do
+    if [[ "${owner}" == root ]]; then
+      home="${AGENT_SYSTEM_PROMPT_ROOT_HOME}"
+    else
+      id "${owner}" >/dev/null 2>&1 || continue
+      home="${AGENT_SYSTEM_PROMPT_HOME_BASE}/${owner}"
+    fi
+    for rel in "${AGENT_SYSTEM_PROMPT_FILES[@]}"; do
+      [[ -d "${home}/$(dirname "${rel}")" ]] || continue
+      install_agent_system_prompt "${home}/${rel}" "${owner}"
+      rendered=$((rendered + 1))
+    done
+  done
+  note "Rendered ${rendered} agent instruction file(s)."
 }
 
 # Run an official `curl | bash` installer with retries. The opencode installer

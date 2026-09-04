@@ -268,6 +268,20 @@ for f in ".claude/CLAUDE.md" ".codex/AGENTS.md" ".config/opencode/AGENTS.md"; do
   [[ -e "${EXPORT_HOME}/${f}" ]] && log "restored ${f}"
 done
 
+# The machine-local prompt additions came back AFTER provisioning already
+# rendered the agents' instruction files from the bare template, so render them
+# again now: template + the restored custom file, for every installed agent.
+if [[ -s "${EXPORT_HOME}/construct-custom-system-prompt.md" ]]; then
+  log "restored construct-custom-system-prompt.md; re-rendering the agent instruction files"
+  if [[ -f "${REPO_DIR:-/opt/construct/repo}/bin/install-ai-tools.sh" ]]; then
+    CONSTRUCT_AI_TOOLS_FUNCS_ONLY=true bash -c 'source "$1"; install_agent_system_prompts_all' \
+      _ "${REPO_DIR:-/opt/construct/repo}/bin/install-ai-tools.sh" \
+      || err "re-rendering the agent instruction files failed; run: construct systemprompt"
+  else
+    err "install-ai-tools.sh missing; run 'construct systemprompt' after provisioning to append the custom prompt"
+  fi
+fi
+
 # Report restored chat history (captured when the export ran with
 # INCLUDE_HISTORY=true), so the provisioning log shows it came back.
 for f in ".claude/history.jsonl" ".codex/sessions" ".local/share/opencode/storage" ".t3/userdata/state.sqlite"; do
