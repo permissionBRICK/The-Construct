@@ -2927,15 +2927,23 @@ if (",$AiTools," -like "*,opencode,*") {
 # again when its display name was changed.
 #
 # Both go into the instance's OWN state document (B12: lib\AgentVm.InstanceState.ps1 --
-# `instances\<name>.json`, or the legacy top level of .construct-settings.json for the
-# default instance). ONE per-VM store, so nothing has to know about a second one, the
-# default path keeps writing exactly the file it always wrote, and "Remove instance"
-# clears these with the rest of that VM's state.
+# `instances\<name>.json`). ONE per-VM store, so nothing has to know about a second one,
+# and "Remove instance" clears these with the rest of that VM's state.
+#
+# NOT for the IMPLICIT DEFAULT instance (Test-ConstructEndpointRecordWanted): its state IS
+# the top level of the install's .construct-settings.json, and a single-VM install must go
+# on writing exactly the keys it always wrote. Nothing is lost -- that VM is matched on
+# the T3 ports Construct configures (5177/5178) and its OpenCode entry is at the direct
+# url the removal derives anyway. The record exists for the answers that CANNOT be
+# derived: a named instance, and a forward whose port the host service allocated.
 #
 # Outside the HTTPS/CA branch above, because a service-managed VM deliberately on plain
 # HTTP has a forward whose port is just as much a fact. A run that can no longer name an
 # endpoint CLEARS the recorded one rather than leaving an old forwarded port authoritative.
-if ($Action -eq 'provision' -and (Get-Command Save-ConstructInstanceState -ErrorAction SilentlyContinue) -and
+if ($Action -eq 'provision' -and
+    (Get-Command Test-ConstructEndpointRecordWanted -ErrorAction SilentlyContinue) -and
+    (Test-ConstructEndpointRecordWanted -InstanceName (Get-ConstructRunInstanceName)) -and
+    (Get-Command Save-ConstructInstanceState -ErrorAction SilentlyContinue) -and
     (Get-Command Get-ConstructT3EndpointRecord -ErrorAction SilentlyContinue)) {
     try {
         $publicBase = ""
