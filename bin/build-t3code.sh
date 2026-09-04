@@ -294,7 +294,7 @@ if [[ ! -d "${SOURCE_DIR}/.git" && ! -s "${SOURCE_DIR}/.construct-upstream-commi
 fi
 cd "${SOURCE_DIR}"
 
-node "${SOURCE_TRANSFORMER}" apply --source "${SOURCE_DIR}" --manifest "${SOURCE_MANIFEST}" --overlays "${SOURCE_OVERLAYS}" \
+node "${SOURCE_TRANSFORMER}" apply --source "${SOURCE_DIR}" --manifest "${SOURCE_MANIFEST}" --overlays "${SOURCE_OVERLAYS}" --channel "${CHANNEL}" \
   || fail "the Construct source transforms do not apply to T3 Code ${TAG}; the inventory needs a repair for this upstream version"
 
 note "Installing T3 source dependencies..."

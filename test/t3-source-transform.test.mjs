@@ -124,21 +124,22 @@ test("every: true inserts next to each occurrence of the anchor", () => {
   assert.equal(status(f).alreadyApplied, 2)
 })
 
-test("variants: the first matching shape decides, each with its own text", () => {
-  const variants = [
-    { after: "new(x);", insert: "newExtra();\n" },
-    { after: "old(x);", insert: "oldExtra();\n" },
+test("channel: a transform tagged for the other channel is skipped, not applied", () => {
+  const transforms = [
+    { path: "owned.ts", channel: "stable", after: "old(x);", insert: "oldExtra();\n" },
+    { path: "owned.ts", channel: "nightly", after: "new(x);", insert: "newExtra();\n" },
   ]
-  const older = fixture({ source: "old(x);\n", transforms: [{ path: "owned.ts", variants }] })
-  assert.equal(run(older).status, 0)
-  assert.equal(owned(older), "old(x);\noldExtra();\n")
-  assert.equal(status(older).alreadyApplied, 2)
-  const newer = fixture({ source: "new(x);\n", transforms: [{ path: "owned.ts", variants }] })
-  assert.equal(run(newer).status, 0)
-  assert.equal(owned(newer), "new(x);\nnewExtra();\n")
-  const neither = fixture({ source: "other();\n", transforms: [{ path: "owned.ts", variants }] })
-  assert.equal(run(neither).status, 1)
-  assert.match(status(neither).conflicts[0], /no variant anchor/)
+  const stable = fixture({ source: "old(x);\n", transforms })
+  assert.equal(run(stable).status, 0) // --channel defaults to stable
+  assert.equal(owned(stable), "old(x);\noldExtra();\n")
+  assert.equal(status(stable).skipped, 1)
+  const nightly = fixture({ source: "new(x);\n", transforms })
+  const r = spawnSync(process.execPath, [script, "apply", "--source", nightly.sourceDir, "--manifest", nightly.manifest, "--overlays", nightly.overlays, "--channel", "nightly"], { encoding: "utf8" })
+  assert.equal(r.status, 0)
+  assert.equal(owned(nightly), "new(x);\nnewExtra();\n")
+  // The stable half against a nightly tree (wrong channel requested) is a real conflict.
+  const wrong = fixture({ source: "new(x);\n", transforms })
+  assert.equal(run(wrong).status, 1)
 })
 
 test("an ambiguous unscoped anchor is a conflict", () => {
