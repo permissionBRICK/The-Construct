@@ -123,18 +123,24 @@ ok "...while INSTALLED_AT is preserved (first install unchanged)" is "${first_in
 # the VM is behind when it is not, or (worse) call it current. Empty reads back as
 # "unknown", which is the honest answer and falls back to the host-side cache.
 MARKER_FILE="${m4}" tmp_notes="${n4}" CONSTRUCT_VERSION="unversioned" record_timestamps
-ok "a version-less reprovision CLEARS the stale commit (never leaves a lie)" is "" "$(key_of "${m4}" CONSTRUCT_COMMIT)"
-ok "...and the key is present-but-empty, not duplicated" is "1" "$(grep -c '^CONSTRUCT_COMMIT=' "${m4}")"
-ok "...and says so in the step output" grep -q 'CONSTRUCT_COMMIT cleared' "${n4}"
-# The same for a malformed value, and clearing is idempotent.
-MARKER_FILE="${m4}" tmp_notes="${n4}" CONSTRUCT_VERSION="not-a-commit" record_timestamps
-ok "a malformed value clears it too" is "" "$(key_of "${m4}" CONSTRUCT_COMMIT)"
-lines_before="$(wc -l <"${m4}")"
-MARKER_FILE="${m4}" tmp_notes="${n4}" record_timestamps
-ok "clearing an ALREADY-empty marker adds nothing" is "${lines_before}" "$(wc -l <"${m4}")"
-# ...and a later real reprovision records the new commit again.
+ok "a version-less reprovision REMOVES the stale commit (never leaves a lie)" no has_key "${m4}" CONSTRUCT_COMMIT
+ok "...leaving NO CONSTRUCT_COMMIT line at all, not an empty one" \
+  no grep -q '^CONSTRUCT_COMMIT=' "${m4}"
+ok "...and says so in the step output" grep -q 'CONSTRUCT_COMMIT removed' "${n4}"
+ok "...while the timestamps it does know are untouched" has_key "${m4}" INSTALLED_AT
+ok "...and REPROVISIONED_AT too" has_key "${m4}" REPROVISIONED_AT
+ok "...and INSTALLED_AT still holds the first install's value" is "${first_installed}" "$(key_of "${m4}" INSTALLED_AT)"
+# The same for a malformed value, and removing is idempotent.
 MARKER_FILE="${m4}" tmp_notes="${n4}" CONSTRUCT_VERSION="3333333" record_timestamps
-ok "a later versioned reprovision records the commit again" is "3333333" "$(key_of "${m4}" CONSTRUCT_COMMIT)"
+MARKER_FILE="${m4}" tmp_notes="${n4}" CONSTRUCT_VERSION="not-a-commit" record_timestamps
+ok "a malformed value removes it too" no has_key "${m4}" CONSTRUCT_COMMIT
+bytes_before="$(wc -c <"${m4}")"
+MARKER_FILE="${m4}" tmp_notes="${n4}" record_timestamps
+ok "removing an ALREADY-absent marker changes nothing" is "${bytes_before}" "$(wc -c <"${m4}")"
+# ...and a later real reprovision records the new commit again.
+MARKER_FILE="${m4}" tmp_notes="${n4}" CONSTRUCT_VERSION="4444444" record_timestamps
+ok "a later versioned reprovision records the commit again" is "4444444" "$(key_of "${m4}" CONSTRUCT_COMMIT)"
+ok "...still exactly one CONSTRUCT_COMMIT line" is "1" "$(grep -c '^CONSTRUCT_COMMIT=' "${m4}")"
 
 # ── 5. The probe reads exactly this file and key ──────────────────────────────
 PROBE="${ROOT}/extension/src/probe.js"

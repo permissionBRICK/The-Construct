@@ -124,6 +124,19 @@ try {
     ok "named: a later save MERGES (t3codeChannel survives)" ($merged.t3codeChannel -eq 'nightly')
     ok "named: ...and adds the new key" (@($merged.projects) -contains 'api')
 
+    # PARITY with extension/src/instancestate.js: an install-wide-ONLY save writes the
+    # install-wide file and creates NO per-instance file. A file holding nothing but
+    # version/instance would be a phantom VM state, and the two writers must agree.
+    $lonelyFile = Join-Path $instanceDir "lonely-vm.json"
+    Save-ConstructInstanceState -Name 'lonely-vm' -Dir $scriptsDir -Values @{ installedCommit = "cafe123" }
+    ok "install-wide only: the install-wide file is written" (
+        (Read-ConstructSettings -Dir $scriptsDir).installedCommit -eq "cafe123")
+    ok "install-wide only: NO per-instance file is created" (-not (Test-Path -LiteralPath $lonelyFile))
+    ok "install-wide only: ...and the instance still reads as 'nothing saved'" (
+        $null -eq (Read-ConstructInstanceState -Name 'lonely-vm' -Dir $scriptsDir))
+    Save-ConstructInstanceState -Name 'lonely-vm' -Dir $scriptsDir -Values @{ smbShare = $true }
+    ok "install-wide only: a later VM-scoped save DOES create it" (Test-Path -LiteralPath $lonelyFile)
+
     # Install-wide keys mixed into a per-instance save are SPLIT OFF.
     Save-ConstructInstanceState -Name 'work-vm' -Dir $scriptsDir -Values @{ installedCommit = "deadbee"; smbShare = $false }
     $workDoc2 = Get-Content -LiteralPath $workFile -Raw | ConvertFrom-Json
