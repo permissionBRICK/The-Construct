@@ -2969,7 +2969,7 @@ try {
 # and it never prints the raw (PAT-carrying) repo URL.
 $aiPubPath = Join-Path $repoRoot "Auto-Install.ps1"
 $aiPubText = [System.IO.File]::ReadAllText($aiPubPath, [System.Text.Encoding]::UTF8)
-ok "auto-install-publish: -Action accepts publish-config" ($aiPubText -match '\[ValidateSet\("reprovision", "reinstall", "redownload", "export", "add-config", "publish-config"\)\]')
+ok "auto-install-publish: -Action accepts publish-config" ($aiPubText -match '\[ValidateSet\([^)]*"publish-config"[^)]*\)\]\s*\r?\n\s*\[string\]\$Action')
 ok "auto-install-publish: the handler is gated on the action" ($aiPubText -match "if \(\`$Action -eq 'publish-config'\) \{")
 $aiPubIdx  = $aiPubText.IndexOf("if (`$Action -eq 'publish-config') {")
 $aiElevIdx = $aiPubText.IndexOf("Self-elevate to Administrator")

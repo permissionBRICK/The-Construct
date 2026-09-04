@@ -123,6 +123,39 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("settings populate: automatic-checkpoints switch driven", (await page.getAttribute("#setAutoCheckpoints", "aria-checked")) === "true");
   check("settings populate: OpenCode watcher switch driven", (await page.getAttribute("#setOpenCodeBackgroundWatcher", "aria-checked")) === "true");
 
+  // Remove instance (B14): the section is absent until the extension offers it, carries
+  // the plan's own wording, names the VM deletion for a remote instance, and posts the
+  // command. A single-VM install pushes `removeOffer: null` and never sees it.
+  check("remove instance: section hidden until offered", await page.locator("#removeInstanceSection").isHidden());
+  await page.evaluate(() => window.postMessage({ type: "state", state: { removeOffer: {
+    name: "work-vm", deletesVm: false,
+    removes: ["the private key ~/.ssh/construct_work-vm_ed25519"],
+    keeps: ["The Hyper-V VM itself is NOT deleted."],
+  } } }, "*"));
+  await page.waitForTimeout(60);
+  check("remove instance: section shown with the instance name",
+    (await page.locator("#removeInstanceSection").isVisible()) &&
+    (await page.locator("#removeInstanceName").innerText()) === "work-vm");
+  check("remove instance: lists what goes and what stays",
+    (await page.locator("#removeInstanceList").innerText()).includes("construct_work-vm_ed25519") &&
+    (await page.locator("#removeInstanceKeeps").innerText()).includes("NOT deleted"));
+  check("remove instance: a local instance's button does not claim a VM deletion",
+    !(await page.locator("#removeInstanceBtn").innerText()).includes("DELETE"));
+  await page.evaluate(() => window.postMessage({ type: "state", state: { removeOffer: {
+    name: "far-vm", deletesVm: true, removes: ["the VM \"far-vm\""], keeps: [],
+  } } }, "*"));
+  await page.waitForTimeout(60);
+  check("remove instance: a remote instance's button says the VM is deleted",
+    (await page.locator("#removeInstanceBtn").innerText()).includes("DELETE"));
+  await page.locator("#removeInstanceBtn").click();
+  await page.waitForTimeout(40);
+  check("remove instance: posts the command",
+    (await page.evaluate(() => window.__posted)).some((m) => m.type === "command" && m.id === "removeInstance"));
+  await page.evaluate(() => window.postMessage({ type: "state", state: { removeOffer: null } }, "*"));
+  await page.waitForTimeout(60);
+  check("remove instance: section disappears when the offer stops applying",
+    await page.locator("#removeInstanceSection").isHidden());
+
   // ...and a PARTIAL payload (e.g. a file the installer wrote with just the git
   // keys) must NOT force the switches it omits to off — regression for applySettings.
   await page.evaluate(() => window.postMessage({ type: "settings", settings: { gitName: "Neo" } }, "*"));

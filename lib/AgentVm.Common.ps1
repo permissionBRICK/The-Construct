@@ -2758,6 +2758,326 @@ function Get-T3CaImportPlan {
     }
 }
 
+function Get-ConstructT3CaFileName {
+    <#
+        .SYNOPSIS
+        The host-side file name for ONE instance's T3 certificate authority under
+        %LOCALAPPDATA%\The-Construct\artifacts\t3code. Pure.
+
+        T3 Code Desktop links SEVERAL remotes at once (plan section 4.12, "T3 Desktop
+        topology"), so every VM's CA has to survive next to the others: a single
+        `construct-t3-ca.crt` meant the last provisioned VM overwrote the previous
+        VM's certificate file, and a later cleanup could no longer tell which
+        certificate belonged to which machine.
+
+        The DEFAULT instance keeps the historical name, so a single-VM install writes
+        exactly the file it always wrote.
+    #>
+    [CmdletBinding()]
+    param([AllowEmptyString()][AllowNull()][string]$InstanceName)
+    $n = ""
+    if ($InstanceName) { $n = $InstanceName.Trim() }
+    # 'agent-vm' is the default instance's name (lib\AgentVm.Instances.ps1 keeps the
+    # rule; this file already spells the literal the same way for the config branch).
+    if (-not $n -or $n -eq 'agent-vm') { return "construct-t3-ca.crt" }
+    return "construct-t3-ca-$n.crt"
+}
+
+function Get-ConstructT3EndpointRecord {
+    <#
+        .SYNOPSIS
+        The record of WHERE this instance's T3 web GUI answers, as data. Pure; the caller
+        writes it to %LOCALAPPDATA%\The-Construct\artifacts\t3code\remote-<name>.json.
+
+        It exists because the PORT is half of the key T3 Code Desktop matches a linked
+        remote on (plan section 4.12, "T3 Desktop updater"), and the port is a fact about
+        the RUNNING VM rather than about its registry entry: a VM behind a host forward
+        answers on a port the service allocated and will reallocate. So the provisioner
+        records the origin the guest itself advertises, and the Desktop app matches
+        host AND port against it instead of accepting any port on a known host.
+
+        -BaseUrl is preferred (T3CODE_PUBLIC_BASE_URL, what the VM tells clients to use);
+        -ForwardUrl is the host forward the guest was given, used when the VM advertises
+        nothing of its own. Returns $null when neither is a usable http(s) origin -- there
+        is then nothing to record, and no file is written.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowEmptyString()][AllowNull()][string]$InstanceName,
+        [AllowEmptyString()][AllowNull()][string]$BaseUrl,
+        [AllowEmptyString()][AllowNull()][string]$ForwardUrl,
+        # The OpenCode server url this provision registered for the VM, when it did.
+        # It rides along because it is the same kind of fact -- where this VM answers --
+        # and "Remove instance" needs it to find an entry whose display name was changed.
+        [AllowEmptyString()][AllowNull()][string]$OpenCodeUrl,
+        [AllowEmptyString()][AllowNull()][string]$UpdatedAt
+    )
+    $candidates = @()
+    if ($BaseUrl) { $candidates += $BaseUrl.Trim() }
+    if ($ForwardUrl) { $candidates += $ForwardUrl.Trim() }
+    foreach ($candidate in $candidates) {
+        $uri = $null
+        try { $uri = [System.Uri]$candidate } catch { $uri = $null }
+        if ($null -eq $uri) { continue }
+        if ($uri.Scheme -ne 'http' -and $uri.Scheme -ne 'https') { continue }
+        if (-not $uri.Host) { continue }
+        # Uri.Port is the scheme default when the origin states none, which is exactly
+        # the port a client would dial.
+        $stamp = $UpdatedAt
+        if (-not $stamp) { $stamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ") }
+        $name = ""
+        if ($InstanceName) { $name = $InstanceName.Trim() }
+        if (-not $name) { $name = 'agent-vm' }
+        $record = [ordered]@{
+            instance  = $name
+            baseUrl   = ("{0}://{1}:{2}" -f $uri.Scheme, $uri.Host, $uri.Port)
+            host      = $uri.Host.Trim('[', ']').ToLowerInvariant()
+            port      = [int]$uri.Port
+            updatedAt = $stamp
+        }
+        if ($OpenCodeUrl) { $record['openCodeUrl'] = $OpenCodeUrl.Trim() }
+        return $record
+    }
+    return $null
+}
+
+function Get-ConstructT3EndpointFileName {
+    <# The file Get-ConstructT3EndpointRecord is written to, per instance. Pure. #>
+    [CmdletBinding()]
+    param([AllowEmptyString()][AllowNull()][string]$InstanceName)
+    $n = ""
+    if ($InstanceName) { $n = $InstanceName.Trim() }
+    if (-not $n) { $n = 'agent-vm' }
+    $safe = ($n -replace '[^A-Za-z0-9_-]', '-')
+    return "remote-$safe.json"
+}
+
+function Get-T3CaCleanupPlan {
+    <#
+        .SYNOPSIS
+        Decide whether the PREVIOUS certificate authority of this instance has to be
+        removed from a Root store, given the CA the VM reports now. Pure: the caller
+        reads the stores and does the removal.
+
+        The record of "the previous CA of this instance" is the certificate FILE this
+        provision is about to overwrite (Get-ConstructT3CaFileName) -- one file per
+        instance, so no second bookkeeping file is introduced. When the VM re-created
+        its CA (a reinstall, or setup-t3-https.sh regenerating it), the old certificate
+        would otherwise stay trusted forever under a name that no longer authenticates
+        anything.
+
+        A thumbprint that is unchanged is NOT a removal: it is the same certificate the
+        caller is about to (re-)import. A previous certificate in the machine store can
+        only be removed by an elevated process; an unelevated run says so instead of
+        pretending it cleaned up.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowEmptyString()][AllowNull()][string]$PreviousThumbprint,
+        [AllowEmptyString()][AllowNull()][string]$NewThumbprint,
+        [switch]$Elevated,
+        # Whether the PREVIOUS thumbprint is present in Cert:\LocalMachine\Root ...
+        [switch]$PresentInMachine,
+        # ... or in Cert:\CurrentUser\Root.
+        [switch]$PresentInUser
+    )
+    $prev = ""
+    if ($PreviousThumbprint) { $prev = $PreviousThumbprint.Trim().ToUpperInvariant() }
+    $new = ""
+    if ($NewThumbprint) { $new = $NewThumbprint.Trim().ToUpperInvariant() }
+    if (-not $prev) {
+        return [pscustomobject]@{ Action = "none"; Stores = @(); Thumbprint = ""; Reason = "No earlier certificate authority is recorded for this instance." }
+    }
+    if ($prev -eq $new) {
+        return [pscustomobject]@{ Action = "none"; Stores = @(); Thumbprint = $prev; Reason = "The VM still uses the same certificate authority." }
+    }
+    if (-not ($PresentInMachine -or $PresentInUser)) {
+        return [pscustomobject]@{ Action = "none"; Stores = @(); Thumbprint = $prev; Reason = "The replaced certificate authority is not in either Root store." }
+    }
+    $stores = @()
+    $blocked = $false
+    if ($PresentInUser) { $stores += "Cert:\CurrentUser\Root" }
+    if ($PresentInMachine) {
+        if ($Elevated) { $stores += "Cert:\LocalMachine\Root" } else { $blocked = $true }
+    }
+    if ($stores.Count -eq 0) {
+        return [pscustomobject]@{
+            Action = "blocked"; Stores = @(); Thumbprint = $prev
+            Reason = "This VM replaced its certificate authority, but the old one sits in the machine Root store and removing it needs an elevated PowerShell (Remove-Item Cert:\LocalMachine\Root\$prev)."
+        }
+    }
+    $reason = "Removing this instance's replaced certificate authority ($prev)."
+    if ($blocked) {
+        $reason += " A copy stays in the machine Root store until an elevated run removes it (Remove-Item Cert:\LocalMachine\Root\$prev)."
+    }
+    return [pscustomobject]@{ Action = "remove"; Stores = $stores; Thumbprint = $prev; Reason = $reason }
+}
+
+function Get-T3DesktopInstallPlan {
+    <#
+        .SYNOPSIS
+        Decide whether the patched T3 Code Desktop installer has to run on this host.
+        Pure: the caller runs the installer and writes the record.
+
+        THE RULE (plan section 4.12, "T3 Desktop version tracking"): there is ONE
+        install of T3 Code Desktop on a PC, and the host records which patched release
+        it holds -- the upstream T3 version, the channel and the patched build hash,
+        all three taken from the VM's own manifest. A reprovision that finds exactly
+        that triple already installed skips the installer; anything else installs.
+        LAST REPROVISIONED VM WINS: there is no owner instance and no newest-wins
+        comparison, because two VMs on different channels would otherwise flip the
+        install back and forth on a schedule nobody chose.
+
+        `Installed` is the parsed installed.json (or $null), read through the CANONICAL
+        keys only. A record written before this rule existed (a copy of the VM manifest,
+        whose T3 version is `version`) is deliberately not read as a match: it is not the
+        record this rule is about, so the first reprovision after the update installs once
+        and writes the canonical file.
+
+        THE TRIPLE IS THE WHOLE DECISION. Nothing else is consulted -- not whether an
+        executable is currently on disk, not how old the record is. An app the user
+        removed by hand therefore stays removed until something changes the triple (a new
+        T3 release, a channel switch, a new Construct build); reinstalling it because the
+        exe went missing would be a fourth rule, and this one is stated to be the only
+        one.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$T3Version,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Channel,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$BuildHash,
+        # The parsed installed.json, or $null when the host has never installed one.
+        $Installed,
+        # Which instance this provision is running for (recorded, never compared).
+        [AllowEmptyString()][AllowNull()][string]$InstanceName,
+        [AllowEmptyString()][AllowNull()][string]$InstalledAt
+    )
+    $field = {
+        param($obj, $name)
+        if ($null -eq $obj) { return "" }
+        if (-not ($obj.PSObject.Properties.Name -contains $name)) { return "" }
+        $v = $obj.$name
+        if ($null -eq $v) { return "" }
+        return ([string]$v).Trim()
+    }
+    # THE TRIPLE, and only the triple, out of the CANONICAL keys. A record written before
+    # this rule existed (a copy of the VM manifest, whose T3 version is `version`) is
+    # deliberately NOT read as a match: it is not the record this rule is about, so the
+    # first reprovision after the update installs once and writes the canonical file.
+    $haveVersion = & $field $Installed 't3Version'
+    $haveChannel = & $field $Installed 'channel'
+    $haveHash = & $field $Installed 'buildHash'
+
+    $stamp = $InstalledAt
+    if (-not $stamp) { $stamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ") }
+    $record = [ordered]@{
+        t3Version      = $T3Version
+        channel        = $Channel
+        buildHash      = $BuildHash
+        installedAt    = $stamp
+        sourceInstance = $(if ($InstanceName) { $InstanceName } else { 'agent-vm' })
+    }
+    # Every part must be present AND equal: an empty side is "not recorded", never a match.
+    $matches = $T3Version -and $Channel -and $BuildHash -and
+        ($haveVersion -eq $T3Version) -and ($haveChannel -eq $Channel) -and ($haveHash -eq $BuildHash)
+    # Was the record written in THIS shape? A pre-B14 host holds a copy of the VM manifest
+    # (whose T3 version is `version`), which is understood above but is not the canonical
+    # five-key record -- so a host that matches exactly would otherwise keep the old schema
+    # forever, because the canonical file is only written when something is installed.
+    $recordIsStale = -not ((& $field $Installed 't3Version') -and (& $field $Installed 'installedAt') -and (& $field $Installed 'sourceInstance'))
+    if ($matches) {
+        return [pscustomobject]@{
+            Install       = $false
+            Reason        = "Patched T3 Code Desktop $T3Version ($Channel) is already installed"
+            Record        = $record
+            RecordIsStale = $recordIsStale
+        }
+    }
+    $why = "a different patched build"
+    if (-not $haveVersion) { $why = "this PC has no record of an installed patched build" }
+    elseif ($haveVersion -ne $T3Version) { $why = "the installed build is T3 $haveVersion" }
+    elseif ($haveChannel -ne $Channel) { $why = "the installed build is on the $haveChannel channel" }
+    elseif (-not $BuildHash) { $why = "this VM's manifest states no build hash" }
+    return [pscustomobject]@{
+        Install       = $true
+        Reason        = "Installing patched T3 Code Desktop $T3Version ($Channel) -- $why"
+        Record        = $record
+        RecordIsStale = $recordIsStale
+    }
+}
+
+function Get-ConstructSmbPreferredLetter {
+    <#
+        .SYNOPSIS
+        Which drive letter this instance's workspace share should PREFER. Pure; the
+        caller (Mount-RepoShare) still reuses an existing mapping to the same share and
+        still falls back when the preferred letter is taken.
+
+        Z is the letter Construct has always used, and it stays the answer for the
+        default instance and for anybody who states `-SmbDriveLetter`. A SECOND VM
+        asking for Z would land on the alternate-letter path on every provision -- and,
+        non-interactively, silently take whatever was free that day. So a non-default
+        instance without an explicit letter starts from the next free one instead.
+
+        `Taken` is the set of letters already in use on this host (mapped drives and
+        local volumes alike). With nothing free the historical preference is returned
+        and the mount path reports the collision as it always did.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowEmptyString()][AllowNull()][string]$Requested,
+        # The instance this provision targets ("" = the default one).
+        [AllowEmptyString()][AllowNull()][string]$InstanceName,
+        # Whether -SmbDriveLetter was BOUND by the caller (never a script default).
+        [switch]$Explicit,
+        [string[]]$Taken
+    )
+    $req = "Z"
+    if ($Requested) { $req = $Requested.TrimEnd(':').Trim() }
+    if ($req) { $req = $req.ToUpperInvariant() }
+    if (-not $req) { $req = "Z" }
+    $name = ""
+    if ($InstanceName) { $name = $InstanceName.Trim() }
+    $isDefault = (-not $name) -or ($name -eq 'agent-vm')
+    if ($Explicit -or $isDefault) { return $req }
+    $used = @{}
+    foreach ($t in @($Taken)) {
+        if (-not $t) { continue }
+        $l = ([string]$t).TrimEnd(':').Trim()
+        if ($l) { $used[$l.ToUpperInvariant()] = $true }
+    }
+    foreach ($code in (90..68)) {          # 'Z'..'D', the same order Mount-RepoShare scans
+        $l = [string][char]$code
+        if (-not $used.ContainsKey($l)) { return $l }
+    }
+    return $req
+}
+
+function Get-ConstructKnownHostsFileName {
+    <#
+        .SYNOPSIS
+        The name of the throw-away known_hosts file a provision keeps in $env:TEMP.
+        Pure.
+
+        It is written with `ssh-keyscan` at the start of a run and deleted at the end,
+        so two provisions running at the same time (two VMs, two consoles) used to
+        overwrite and then delete each other's file -- the second VM's SSH calls then
+        ran against the first VM's host key. Keying it by the ssh ALIAS gives each
+        instance its own; the default alias keeps the historical name so a single-VM
+        install writes exactly the file it always wrote.
+    #>
+    [CmdletBinding()]
+    param([AllowEmptyString()][AllowNull()][string]$HostAlias)
+    $a = ""
+    if ($HostAlias) { $a = $HostAlias.Trim() }
+    if (-not $a -or $a -eq 'agent-vm') { return "construct-known_hosts" }
+    # The alias already passed the registry's one-token rule; reduce it to the plainest
+    # file-name characters all the same, so this can never build a path (no separator,
+    # no '..') whatever a hand-edited registry entry says.
+    $safe = ($a -replace '[^A-Za-z0-9_-]', '-')
+    return "construct-known_hosts-$safe"
+}
+
 function Test-ConstructVmBranchName {
     <#
         .SYNOPSIS

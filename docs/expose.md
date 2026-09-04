@@ -314,8 +314,11 @@ What matters from the guest's side is only this:
   local port), because it changes which address they listen on. Changing one name to
   another only rewrites the acks.
 - **`localPort` really can differ from `vmPort`.** The extension prefers the number you
-  asked for and falls back to `18800`–`18815` when it is already taken on the user's PC.
-  That is exactly why `expose` waits for the ack instead of printing `vmPort`.
+  asked for and falls back to this instance's own sixteen-port slice when it is already
+  taken on the user's PC: `18800`–`18815` for the default VM, and one of the 31 slices
+  above it (inside `18800`–`19311`, chosen deterministically from the instance name) for
+  any other — so two VMs cannot hand out each other's numbers. That is exactly why
+  `expose` waits for the ack instead of printing `vmPort`.
 - **When nothing is listening.** No VS Code attached means no ack, which is exit code 6 and
   a request that stays queued — not an error. The extension re-opens everything still
   queued as soon as a window connects, which is why the spool lives under `/etc`.
