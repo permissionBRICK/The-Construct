@@ -333,10 +333,9 @@ this PC*, and — for a `hyperv-remote` instance — deletes the VM on the host 
 3. its `remote.SSH.remotePlatform` entry, its OpenCode server entry (matched by the URLs
    this PC wrote for it *and* by its display name), its T3 certificate authority (file +
    Root store — the machine store through one narrowly scoped elevated command), its
-   per-instance state file, the endpoints the provisioner recorded for it
-   (`artifacts\t3code\remote-<name>.json` — its T3 origin and the OpenCode url it
-   registered) and, **last and only if every step before it succeeded**, its registry
-   entry.
+   per-instance state file (its settings, its provisioned commit, and the T3 origin and
+   OpenCode url the provisioner recorded for it) and, **last and only if every step
+   before it succeeded**, its registry entry.
 
 Because the VM's disk goes with it, the instance name has to be **typed back** — in the
 console when it is run interactively, and as `-ConfirmInstanceName <name>` when it is not
