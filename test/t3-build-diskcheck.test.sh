@@ -176,7 +176,7 @@ EOF
 )"
 ok "nightly fallback selects the newest validated repair ref" "$([[ "$(printf '%s\n' "${refs}" | t3_build_latest_nightly_fix_ref)" == "refs/heads/fix/upstream-t3-nightly-0.0.39-nightly.20260903.1272-2026-09-03" ]] && echo true || echo false)"
 ok "nightly fallback ignores input without a repair branch" "$([[ -z "$(printf '%s\n' "${refs}" | grep -v upstream-t3-nightly | t3_build_latest_nightly_fix_ref)" ]] && echo true || echo false)"
-ok "build applies the single channel-independent inventory" "$(grep -q 'patches/t3code/source-transforms.json' "${S}" && ! grep -q 't3code-nightly\|t3code-release\|INVENTORY_NAME' "${S}" && echo true || echo false)"
+ok "build selects the release or nightly inventory by channel" "$(grep -q 'INVENTORY_NAME=release' "${S}" && grep -q 't3code-\${INVENTORY_NAME}/source-transforms.json' "${S}" && ! grep -q -- '--channel' "${S}" && echo true || echo false)"
 ok "a rejected transform set fails the build instead of switching inventories" "$(grep -q 'do not apply to T3 Code \${TAG}' "${S}" && echo true || echo false)"
 
 printf '  t3-build-diskcheck tests — %d passed, %d failed\n' "${pass}" "${fail}"

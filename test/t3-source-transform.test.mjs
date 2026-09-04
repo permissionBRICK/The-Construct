@@ -99,18 +99,16 @@ test("an insert already present upstream is a no-op, not a duplicate", () => {
   assert.equal(owned(f).match(/import \{ construct \}/g).length, 1)
 })
 
-test("alternatives and scope pick the spot when a single line is ambiguous", () => {
+test("scope picks the spot when a single line is ambiguous", () => {
   const source = UPSTREAM + '\nexport function other(): string {\n  return "stock";\n}\n'
   const f = fixture({
     source,
     transforms: [
-      { path: "owned.ts", after: ['import { nope } from "./nope";', 'import { b } from "./b";'], insert: "// alt\n" },
       { path: "owned.ts", scope: "export function other()", find: 'return "stock";', replace: 'return "other";' },
     ],
   })
   assert.equal(run(f).status, 0)
   const out = owned(f)
-  assert.match(out, /import \{ b \} from "\.\/b";\n\/\/ alt\n/)
   assert.match(out, /export function run\(\): string \{\n  return "stock";/)
   assert.match(out, /export function other\(\): string \{\n  return "other";/)
 })
@@ -122,24 +120,6 @@ test("every: true inserts next to each occurrence of the anchor", () => {
   assert.equal(owned(f), 'a();\nuse(x);\nextra();\nb();\nuse(x);\nextra();\n')
   assert.equal(run(f).status, 0)
   assert.equal(status(f).alreadyApplied, 2)
-})
-
-test("channel: a transform tagged for the other channel is skipped, not applied", () => {
-  const transforms = [
-    { path: "owned.ts", channel: "stable", after: "old(x);", insert: "oldExtra();\n" },
-    { path: "owned.ts", channel: "nightly", after: "new(x);", insert: "newExtra();\n" },
-  ]
-  const stable = fixture({ source: "old(x);\n", transforms })
-  assert.equal(run(stable).status, 0) // --channel defaults to stable
-  assert.equal(owned(stable), "old(x);\noldExtra();\n")
-  assert.equal(status(stable).skipped, 1)
-  const nightly = fixture({ source: "new(x);\n", transforms })
-  const r = spawnSync(process.execPath, [script, "apply", "--source", nightly.sourceDir, "--manifest", nightly.manifest, "--overlays", nightly.overlays, "--channel", "nightly"], { encoding: "utf8" })
-  assert.equal(r.status, 0)
-  assert.equal(owned(nightly), "new(x);\nnewExtra();\n")
-  // The stable half against a nightly tree (wrong channel requested) is a real conflict.
-  const wrong = fixture({ source: "new(x);\n", transforms })
-  assert.equal(run(wrong).status, 1)
 })
 
 test("an ambiguous unscoped anchor is a conflict", () => {
