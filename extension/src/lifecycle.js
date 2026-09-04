@@ -507,6 +507,10 @@ function buildInvocation(action, opts = {}) {
       pushProjects(); // Auto-Install forwards -Projects to Provision (-Auto gates its prompts)
       pushPair("-VmMemoryGB", s.ram);
       pushPair("-VmDiskGB", s.disk);
+      // The vCPU count rides the rebuild like RAM and disk. Capability-gated for the same
+      // reason as -AutomaticCheckpoints below: an older Auto-Install has no -VmCpuCount
+      // and would fail to bind.
+      if (opts.supportsVmCpuCount !== false) pushPair("-VmCpuCount", s.cpu);
       // Hyper-V automatic checkpoints are decided when the VM is CREATED, which only
       // a rebuild does — so the preference rides reinstall/redownload, not reprovision
       // (which never touches Hyper-V). An existing VM is changed by "setCheckpoints".
@@ -669,6 +673,16 @@ function scriptSupportsT3CodeLimitResume(scriptsDir, action) {
   if (action === "reprovision") return check(PROVISION);
   if (action === "reinstall" || action === "redownload") return check(AUTO_INSTALL);
   return check(PROVISION) && check(AUTO_INSTALL);
+}
+
+/** Capability gate for Auto-Install's -VmCpuCount (same rule as scriptSupportsCheckpoints:
+ *  a real parameter declaration, comments stripped, case-insensitive). */
+function scriptSupportsVmCpuCount(scriptsDir) {
+  if (!scriptsDir) return false;
+  let txt;
+  try { txt = fs.readFileSync(path.join(scriptsDir, AUTO_INSTALL), "utf8"); } catch (_) { return false; }
+  const code = txt.replace(/<#[\s\S]*?#>/g, "").replace(/^[ \t]*#.*$/gm, "");
+  return /\$VmCpuCount\s*(?:=|,|\)|$)/im.test(code);
 }
 
 /** Capability gate for the optional OpenCode background-watcher parameter. */
@@ -1045,6 +1059,7 @@ function run(action, opts = {}) {
     instance: opts.instance,
     instanceParams: instanceParamSupport(scriptsDir, action, opts.instance),
     supportsCheckpoints: scriptSupportsCheckpoints(scriptsDir),
+    supportsVmCpuCount: scriptSupportsVmCpuCount(scriptsDir),
     supportsT3CodeChannel: scriptSupportsT3CodeChannel(scriptsDir, action),
     supportsT3CodeLimitResume: scriptSupportsT3CodeLimitResume(scriptsDir, action),
     supportsOpenCodeBackgroundWatcher: scriptSupportsOpenCodeBackgroundWatcher(scriptsDir, action),
@@ -1129,7 +1144,7 @@ module.exports = {
   instanceArgs, instanceArgPairs, flattenArgPairs, checkInstanceSupport,
   derivedConfigBranch, configBranchOverride,
   scriptSupportsParam, scriptForAction, instanceParamSupport,
-  normalizeBackupMode, buildInvocation, scriptSupportsCheckpoints, scriptSupportsT3CodeChannel,
+  normalizeBackupMode, buildInvocation, scriptSupportsCheckpoints, scriptSupportsVmCpuCount, scriptSupportsT3CodeChannel,
   scriptSupportsRemoveInstance,
   scriptSupportsT3CodeLimitResume,
   scriptSupportsOpenCodeBackgroundWatcher,

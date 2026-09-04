@@ -324,6 +324,7 @@ function mapToForm(raw) {
   if (typeof raw.gitCredentialStore === "boolean") form.gitCred = raw.gitCredentialStore;
   if (has("vmMemoryGB")) form.ram = String(raw.vmMemoryGB);
   if (has("vmDiskGB")) form.disk = String(raw.vmDiskGB);
+  if (has("vmCpuCount")) form.cpu = String(raw.vmCpuCount);
   if (has("ubuntuRelease")) form.ubuntu = String(raw.ubuntuRelease);
   if (typeof raw.vsCodeServeWeb === "boolean") form.serveWeb = raw.vsCodeServeWeb;
   if (typeof raw.vsCodeTunnel === "boolean") form.tunnel = raw.vsCodeTunnel;
@@ -376,6 +377,7 @@ function mapFromForm(form) {
   setBool("gitCredentialStore", form.gitCred);
   setNum("vmMemoryGB", form.ram);
   setNum("vmDiskGB", form.disk);
+  setNum("vmCpuCount", form.cpu);
   setStr("ubuntuRelease", form.ubuntu);
   setBool("vsCodeServeWeb", form.serveWeb);
   setBool("vsCodeTunnel", form.tunnel);

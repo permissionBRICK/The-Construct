@@ -247,5 +247,33 @@ const badCommit = probe.toState(probe.parseProbe("CONSTRUCT_COMMIT\tgarbage\n"))
 ok("state: an unparseable commit is dropped rather than surfaced",
   !("provisionedCommit" in badCommit));
 
+// ── vmSpec / vmConfig: the VM's real size + keep-saved config, as facts ─────────
+// A 16 GB Hyper-V VM shows MemTotal ~15.6 GiB (the probe's %.0f already rounds it), a
+// 150 GB VHDX is exactly 150 GiB on the disk device, nproc is the vCPU count.
+const specState = probe.toState(probe.parseProbe([
+  "MEM_GB\t16", "DISK_DEV_BYTES\t161061273600", "VM_CPUS\t8", "DISK_SIZE\t147G",
+  "T3CODE\ttrue", "T3CODE_CHANNEL\tstable", "T3CODE_LIMIT_RESUME\ttrue", "OPENCODE_BACKGROUND_WATCHER\tfalse",
+].join("\n")));
+ok("vmSpec: RAM, exact disk size from the device, vCPUs",
+  specState.vmSpec && specState.vmSpec.ramGb === 16 && specState.vmSpec.diskGb === 150 && specState.vmSpec.cpus === 8,
+  JSON.stringify(specState.vmSpec));
+ok("vmSpec: the disk comes from the DEVICE size, not df's filesystem size", specState.vmSpec.diskGb !== 147);
+ok("vmConfig: the keep-saved keys as the settings form stores them",
+  specState.vmConfig && specState.vmConfig.t3code === true && specState.vmConfig.t3codeChannel === "stable" &&
+  specState.vmConfig.t3codeLimitResume === true && specState.vmConfig.opencodeBackgroundWatcher === false,
+  JSON.stringify(specState.vmConfig));
+const partialSpec = probe.parseVmSpec({ MEM_GB: "8", DISK_DEV_BYTES: "", VM_CPUS: "garbage" });
+ok("vmSpec: only the parts the VM reported (no zero/garbage numbers)",
+  partialSpec.ramGb === 8 && !("diskGb" in partialSpec) && !("cpus" in partialSpec));
+ok("vmSpec: nothing reported -> absent from the state", !("vmSpec" in probe.toState(probe.parseProbe("HOSTNAME\tx"))));
+ok("vmConfig: an older config.env without the keys -> absent from the state",
+  !("vmConfig" in probe.toState(probe.parseProbe("HOSTNAME\tx\nT3CODE\t\n"))));
+ok("vmConfig: an unknown channel or a non-boolean value is dropped, not guessed",
+  probe.parseVmConfig({ T3CODE_CHANNEL: "alpha", T3CODE_LIMIT_RESUME: "yes" }) === null);
+ok("vmConfig: quoted config-set values are read", probe.parseVmConfig({ T3CODE_LIMIT_RESUME: "'false'" }).t3codeLimitResume === false);
+ok("probe script: asks the VM for its vCPUs, disk device size and the keep-saved T3/OpenCode keys",
+  /VM_CPUS/.test(probe.REMOTE_PROBE) && /DISK_DEV_BYTES/.test(probe.REMOTE_PROBE) &&
+  /T3CODE_LIMIT_RESUME/.test(probe.REMOTE_PROBE) && /OPENCODE_BACKGROUND_WATCHER/.test(probe.REMOTE_PROBE));
+
 console.log(`\n  probe/ssh unit tests — ${pass}/${pass + fail} passed\n`);
 process.exit(fail ? 1 : 0);

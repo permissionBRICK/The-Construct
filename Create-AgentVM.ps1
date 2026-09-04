@@ -235,6 +235,10 @@ function Register-ThisVmInstance {
 $commonLib = Join-Path $PSScriptRoot "lib\AgentVm.Common.ps1"
 if (-not (Test-Path -LiteralPath $commonLib)) { throw "Required helper not found: $commonLib" }
 . $commonLib
+# Per-instance state (where the control panel's VM-scoped settings live). OPTIONAL: an
+# older/partial checkout without it keeps the default instance's legacy file.
+$stateLib = Join-Path $PSScriptRoot "lib\AgentVm.InstanceState.ps1"
+if (Test-Path -LiteralPath $stateLib) { . $stateLib }
 
 # Hypervisor driver: every Hyper-V call below goes through the contract functions
 # it defines (docs/drivers.md), so another backend can be dropped in without this
@@ -468,6 +472,17 @@ if ($DiskSizeGB -gt 0) {
     }
 }
 Write-Ok "Disk size: $diskSizeGB GB"
+
+# A hand-run create records the size it chose as the control panel's settings, so the
+# panel shows it and a later rebuild from there reuses it. Under -Auto the upper script
+# (Auto-Install.ps1) has already recorded the same decision for the right instance; a
+# custom -VmName without an instance name is a VM the panel does not know by name.
+if (-not $Auto) {
+    $specInstance = if ($InstanceName) { $InstanceName } elseif ($VmName -ieq 'Agent-VM') { 'agent-vm' } else { '' }
+    if ($specInstance) {
+        Save-ConstructVmSpec -Dir $PSScriptRoot -InstanceName $specInstance -MemoryGB ($memoryBytes / 1GB) -DiskGB $diskSizeGB -CpuCount $ProcessorCount
+    }
+}
 
 # ── 5. Select Ubuntu Server ISO ──────────────────────────────────────────────
 Write-Step "Select Ubuntu Server ISO"

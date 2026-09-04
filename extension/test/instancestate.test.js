@@ -283,6 +283,47 @@ try {
   ok("watch: ...and its change completes it", defWatch.done() === true);
   ok("watch: ...without ever creating instances\\agent-vm.json",
     !fs.existsSync(path.join(instDir, "agent-vm.json")));
+
+  // ── backfillFromProbe: record what the VM IS, once, only where nothing is saved ──
+  const bf = state.store("field-vm", scriptsDir, env);
+  const probedVm = {
+    online: true,
+    vmSpec: { ramGb: 16, diskGb: 150, cpus: 8 },
+    vmConfig: { t3code: true, t3codeChannel: "stable", t3codeLimitResume: true, opencodeBackgroundWatcher: false },
+  };
+  ok("backfill: an offline VM writes nothing", state.backfillFromProbe(bf, { online: false }) === null);
+  ok("backfill: a failed probe writes nothing", state.backfillFromProbe(bf, { online: true, probeError: "x" }) === null);
+  ok("backfill: ...and no state file came into existence", !fs.existsSync(path.join(instDir, "field-vm.json")));
+  const written = state.backfillFromProbe(bf, probedVm);
+  ok("backfill: a console-installed VM (no keys saved) gets its size + keep-saved config recorded",
+    written && written.vmMemoryGB === 16 && written.vmDiskGB === 150 && written.vmCpuCount === 8 &&
+    written.t3code === true && written.t3codeChannel === "stable" && written.t3codeLimitResume === true &&
+    written.opencodeBackgroundWatcher === false, JSON.stringify(written));
+  ok("backfill: ...into that instance's own file", fs.existsSync(path.join(instDir, "field-vm.json")));
+  ok("backfill: ...which the settings form now reads (ram/disk/cpu + the unlit toggle lit)",
+    (() => { const f = state.readSettings(bf); return f.ram === "16" && f.disk === "150" && f.cpu === "8" && f.t3codeLimitResume === true; })());
+  ok("backfill: a second probe has nothing left to add", state.backfillFromProbe(bf, probedVm) === null);
+  // The user's saved choice wins over what the VM currently is: they may have turned
+  // the patched build OFF and not reprovisioned yet.
+  state.saveSettings(bf, { t3codeLimitResume: false, ram: "" });
+  const saved = state.store("saved-vm", scriptsDir, env);
+  state.saveSettings(saved, { ram: "12", t3codeLimitResume: false });
+  const partial = state.backfillFromProbe(saved, probedVm);
+  ok("backfill: saved keys are never overwritten (12 GB stays, the toggle stays off)",
+    partial && !("vmMemoryGB" in partial) && !("t3codeLimitResume" in partial) && partial.vmDiskGB === 150 &&
+    state.readSettings(saved).ram === "12" && state.readSettings(saved).t3codeLimitResume === false, JSON.stringify(partial));
+  ok("backfill: a probe without the facts (older VM) writes nothing",
+    state.backfillFromProbe(state.store("bare-vm", scriptsDir, env), { online: true, projects: [] }) === null);
+  ok("backfill: an unknown channel / non-boolean is not recorded",
+    (() => { const w = state.backfillFromProbe(state.store("odd-vm", scriptsDir, env), { online: true, vmConfig: { t3codeChannel: "alpha", t3code: "true" } }); return w === null; })());
+  // The default instance backfills into the legacy top level, like every other write.
+  const defBefore = host.readRawSettings(scriptsDir);
+  const defPatch = state.backfillFromProbe(def, { online: true, vmSpec: { ramGb: 20, diskGb: 300, cpus: 12 } });
+  const defAfter = host.readRawSettings(scriptsDir);
+  ok("backfill: the default instance writes only the ABSENT size keys into .construct-settings.json",
+    defPatch && defAfter.vmDiskGB === 300 && defAfter.vmCpuCount === 12 &&
+    ("vmMemoryGB" in defBefore ? defAfter.vmMemoryGB === defBefore.vmMemoryGB : defAfter.vmMemoryGB === 20), JSON.stringify(defPatch));
+  ok("backfill: ...without creating instances\\agent-vm.json", !fs.existsSync(path.join(instDir, "agent-vm.json")));
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }

@@ -373,7 +373,7 @@
     // gathered here — see the deferred note in the settings view.
     return {
       gitName: val("setGitName"), gitEmail: val("setGitEmail"), gitCred: swOn($("setGitCred")),
-      ram: val("setRam"), disk: val("setDisk"), ubuntu: val("setUbuntu"),
+      ram: val("setRam"), disk: val("setDisk"), cpu: val("setCpu"), ubuntu: val("setUbuntu"),
       autoCheckpoints: swOn($("setAutoCheckpoints")),
       serveWeb: swOn($("setServeWeb")), tunnel: swOn($("setTunnel")), smb: swOn($("setSmb")), mic: swOn($("setMic")),
       partialStreaming: swOn($("setPartialStreaming")),
@@ -686,6 +686,13 @@
 
     if (s.vmName != null) text("sysVm", s.vmName || "—");
     if (s.resources != null) text("sysResources", s.resources || "—");
+    // The VM's real size backs the VM-resources inputs as placeholders: an empty field
+    // means "keep what the VM has" (the extension also records these into the instance's
+    // state the first time it sees them), never a fabricated default.
+    if (s.vmSpec) {
+      const ph = (id, v) => { const e = $(id); if (e && v != null) e.placeholder = String(v); };
+      ph("setRam", s.vmSpec.ramGb); ph("setDisk", s.vmSpec.diskGb); ph("setCpu", s.vmSpec.cpus);
+    }
     if (s.diskPct != null) setDiskWarn(s.diskPct);
     if (s.ubuntu != null) text("sysUbuntu", s.ubuntu || "—");
     if (s.constructRev) text("constructRev", s.constructRev);
@@ -988,7 +995,7 @@
     // must leave that toggle's HTML default alone, not force it off.
     const setSw = (id, v) => { if (typeof v === "boolean") setSwitch($(id), v); };
     setVal("setGitName", s.gitName); setVal("setGitEmail", s.gitEmail);
-    setVal("setRam", s.ram); setVal("setDisk", s.disk);
+    setVal("setRam", s.ram); setVal("setDisk", s.disk); setVal("setCpu", s.cpu);
     setVal("setUbuntu", s.ubuntu);
     setSw("setGitCred", s.gitCred); setSw("setServeWeb", s.serveWeb);
     setSw("setTunnel", s.tunnel); setSw("setSmb", s.smb); setSw("setMic", s.mic);
