@@ -540,6 +540,19 @@ shared by all VMs — raise or allocate per instance; the SMB drive letter defau
 instance; `$env:TEMP\construct-known_hosts` is shared between concurrent provisions; the
 `.construct-backup` dir is per checkout, not per VM.
 
+### 4.13 Follow-ups from the 2026-09-04 field preparation (project owner)
+
+Decided while preparing the first haus-pc remote VM; each is a batch of its own (Phase 7),
+none blocks Phase 6.
+
+| Topic | Decision |
+|---|---|
+| Publish local profiles to a linked config repo (**B15**) | The "remote config repo" feature imports from an upstream and pushes back only *tracked* files, so profiles born locally can never be pushed. New **Publish** action (Projects tab + `Auto-Install.ps1`/lib function): for a linked remote, adopt selected (default: all) untracked local profiles — write the provenance manifest entry + stored base as if they had been imported from `projects/<name>.json` of that remote, commit them into the staging clone on the remote's **default branch** (not a review branch; the owner publishes to their own repo) and push. Afterwards *Push back* and *Import* work for every profile. Collision rule: a remote that already has a file of that name with different content is refused per file (import it first, then push back). GitGudLab **push-to-create** is relied on for the very first publish into an empty/nonexistent repo in the owner's namespace (user PAT, not a project token). |
+| Per-VM disk location (**B16**) | `Create-AgentVM.ps1 -VmPath <dir>` (VHDX + VM config under `<dir>\<vmName>`; default = Hyper-V host defaults, byte-identical when absent); `Auto-Install.ps1` asks on the local path only when `-VmPath` is not given and more than one fixed drive exists (default: current behaviour); the service gets `Constructd:VmStorage:AllowedRoots` (list) + `DefaultRoot`, `POST /vms` accepts `storageRoot` which must be one of the allowed roots (else 400 naming them), the remote installer/extension offer the list from `GET /host/storage` and the registry entry records it. Manual local installs accept any path. |
+| `construct expose` client-port leeway (**B17**) | When the requested client port is busy, the client forwarder picks a free port and the guest CLI **prints the port that was actually opened** (the forward record carries `requestedPort` + `clientPort`); a new `--strict` flag makes a busy port an error instead. Applies to the client target only; host forwards are allocated by the service anyway. |
+| Host stays awake while VMs run (**B18**) | The haus-pc slept overnight with VMs expected to run. `constructd` holds a Windows power availability request (`PowerCreateRequest`/`PowerSetRequest`, SystemRequired) while any VM it manages is running and releases it when none is; installer prints the host's sleep timeouts and offers to set AC standby/hibernate to never. Until then the field-prep set the haus-pc timeouts by hand (2026-09-04). |
+| GitGudLab parity | Anything an agent would do against GitLab (push-to-create, CI, MRs) is expected to work on GitGudLab; a gap is filed as a jarvis todo, not worked around silently. |
+
 ## 5. Implementation batches
 
 Ordered for the parallel-worktree pipeline; ownership is file-disjoint per phase so
@@ -617,6 +630,12 @@ single-VM install must behave identically — that's the regression bar for revi
   `installed.json` (version, channel, build hash) reinstall rule, updater checks every linked
   remote with per-instance Reprovision, **Remove instance** and **Remove Remote Host**, forwarder
   range / SMB letter / temp file de-singletoning.
+
+**Phase 7 — field-prep follow-ups (§4.13; after Phase 6 merges unless file-disjoint):**
+- **B15 — Publish local profiles** (lib config-sync functions, `Auto-Install.ps1 -Action publish-config`, Projects-tab Publish action, docs/config-sync.md §7/§13, tests PS+node).
+- **B16 — Per-VM disk location** (`-VmPath`, service allowed roots + `storageRoot`, remote installer/extension pickers, registry field, docs).
+- **B17 — `construct expose` client-port leeway** (forwarder planner, guest CLI output, `--strict`, docs/expose.md).
+- **B18 — Host power request in `constructd`** + installer sleep-timeout check.
 
 **Known risks to watch in review:** version-skew discipline on every new parameter
 (probe before splat); SSH-config block collisions between instances; Windows OpenSSH

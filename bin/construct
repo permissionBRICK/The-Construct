@@ -7,6 +7,8 @@
 #   construct project list                         list stored profile names
 #   construct notify <message> [--title …]         desktop notification on the host
 #   construct expose <port> [--label …]            port forward + the link to open
+#   construct systemprompt                         regenerate every agent's instruction
+#                                                  file (template + ~/construct-custom-system-prompt.md)
 #
 # The canonical store is /opt/construct/projects (overridable via PROJECTS_STORE).
 # Changes sync to the host and survive VM reinstall; anything NOT recorded in a
@@ -31,6 +33,12 @@ usage() {
   cat <<'USAGE'
 Usage: construct project <command> [args]
        construct notify <message> [options]
+       construct systemprompt
+
+systemprompt — regenerate the global instruction file of every installed agent
+  (~/.claude/CLAUDE.md, ~/.codex/AGENTS.md, ~/.config/opencode/AGENTS.md) from
+  Construct's template plus ~/construct-custom-system-prompt.md. Those files are
+  managed: put machine-wide rules in the custom file, then run this.
 
 Project commands:
   set  <name> [--file <path>]   Create or update a project profile.
@@ -189,8 +197,18 @@ case "$1" in
       || die "construct-expose.sh not found (looked next to $0 and in ${CONSTRUCT_REPO_DIR}/bin)"
     exec bash "${expose_impl}" "$@"
     ;;
+  systemprompt|system-prompt)
+    # The renderer lives with the agent installers; source it function-only so
+    # nothing else runs, then re-render root's (and TARGET_USER's) files.
+    [[ "${EUID}" -eq 0 ]] || die "construct systemprompt: run as root (the instruction files belong to root)"
+    installer="${CONSTRUCT_REPO_DIR}/bin/install-ai-tools.sh"
+    [[ -f "${installer}" ]] || die "construct systemprompt: ${installer} not found"
+    REPO_DIR="${CONSTRUCT_REPO_DIR}" CONSTRUCT_AI_TOOLS_FUNCS_ONLY=true \
+      bash -c 'source "$1"; install_agent_system_prompts_all' _ "${installer}"
+    exit $?
+    ;;
   help|--help|-h) usage; exit 0 ;;
-  *) die "Unknown command: $1 (try: construct project set|get|list, construct notify)" ;;
+  *) die "Unknown command: $1 (try: construct project set|get|list, construct notify, construct systemprompt)" ;;
 esac
 
 if [[ $# -lt 1 ]]; then usage >&2; exit 1; fi

@@ -204,6 +204,13 @@ if [[ "${INCLUDE_AUTH}" == "true" ]]; then
   fi
 fi
 
+# ── Machine-local agent instructions ─────────────────────────────────────────
+# The one file whose content survives provisioning: every agent's instruction
+# file is regenerated from Construct's template PLUS this file (see
+# install_agent_system_prompt in install-ai-tools.sh), so the backup must carry
+# it for a reinstall to reproduce the same instructions.
+add "construct-custom-system-prompt.md"
+
 # ── Claude Code ──────────────────────────────────────────────────────────────
 if has_agent "claude-code" || [[ -d "${EXPORT_HOME}/.claude" ]]; then
   add ".claude/CLAUDE.md"

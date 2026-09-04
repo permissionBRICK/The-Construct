@@ -157,10 +157,11 @@ NPM_TAG=latest
 CACHE_ROOT="/var/cache/construct/t3code-source"
 ARTIFACT_ROOT="/var/lib/construct/t3code-desktop"
 SOURCE_TRANSFORMER="${REPO_DIR}/bin/apply-t3code-source.mjs"
-INVENTORY_NAME=release
-[[ "${CHANNEL}" == "nightly" ]] && INVENTORY_NAME=nightly
-SOURCE_MANIFEST="${REPO_DIR}/patches/t3code-${INVENTORY_NAME}/source-transforms.json"
-SOURCE_OVERLAYS="${REPO_DIR}/patches/t3code-${INVENTORY_NAME}/overlays"
+# One inventory serves both channels: its transforms anchor on the smallest upstream
+# fragment each change needs (see patches/t3code/README.md), so a stable tag and the
+# nightlies around it apply the same manifest.
+SOURCE_MANIFEST="${REPO_DIR}/patches/t3code/source-transforms.json"
+SOURCE_OVERLAYS="${REPO_DIR}/patches/t3code/overlays"
 T3PARK_PATCHER="${REPO_DIR}/extension/vm/construct-t3park-patch.mjs"
 T3MONITOR_PATCHER="${REPO_DIR}/extension/vm/construct-t3-opencode-monitor-patch.mjs"
 CONSTRUCT_REPO_URL="${CONSTRUCT_REPO_URL:-https://github.com/permissionBRICK/The-Construct.git}"
@@ -293,28 +294,8 @@ if [[ ! -d "${SOURCE_DIR}/.git" && ! -s "${SOURCE_DIR}/.construct-upstream-commi
 fi
 cd "${SOURCE_DIR}"
 
-if ! node "${SOURCE_TRANSFORMER}" apply --source "${SOURCE_DIR}" --manifest "${SOURCE_MANIFEST}" --overlays "${SOURCE_OVERLAYS}"; then
-    nightly_manifest="${REPO_DIR}/patches/t3code-nightly/source-transforms.json"
-    nightly_overlays="${REPO_DIR}/patches/t3code-nightly/overlays"
-    if [[ "${CHANNEL}" == "stable" && -s "${nightly_manifest}" && -d "${nightly_overlays}" ]] \
-      && node "${SOURCE_TRANSFORMER}" apply --source "${SOURCE_DIR}" --manifest "${nightly_manifest}" --overlays "${nightly_overlays}"; then
-      note "Release transforms rejected ${TAG}; the local nightly inventory applies, using it for this build."
-      SOURCE_MANIFEST="${nightly_manifest}"
-      SOURCE_OVERLAYS="${nightly_overlays}"
-      PATCH_HASH="$(t3_build_integration_hash "${REPO_DIR}/bin/build-t3code.sh" "${SOURCE_TRANSFORMER}" "${SOURCE_MANIFEST}" "${SOURCE_OVERLAYS}" "${T3PARK_PATCHER}" "${T3MONITOR_PATCHER}")"
-      BUILD_HASH="$(printf '%s\n%s\n' "${PATCH_HASH}" "${CONSTRUCT_VERSION}" | sha256sum | awk '{print $1}')"
-      SOURCE_KEY="${SAFE_VERSION}-${BUILD_HASH:0:12}"
-      promoted_source_dir="${CACHE_ROOT}/${SAFE_VERSION}-${BUILD_HASH:0:12}"
-      if [[ "${promoted_source_dir}" != "${SOURCE_DIR}" ]]; then
-        rm -rf -- "${promoted_source_dir}"
-        mv -- "${SOURCE_DIR}" "${promoted_source_dir}"
-        SOURCE_DIR="${promoted_source_dir}"
-        cd "${SOURCE_DIR}"
-      fi
-    else
-      exit 1
-    fi
-fi
+node "${SOURCE_TRANSFORMER}" apply --source "${SOURCE_DIR}" --manifest "${SOURCE_MANIFEST}" --overlays "${SOURCE_OVERLAYS}" \
+  || fail "the Construct source transforms do not apply to T3 Code ${TAG}; the inventory needs a repair for this upstream version"
 
 note "Installing T3 source dependencies..."
 pnpm install --no-frozen-lockfile

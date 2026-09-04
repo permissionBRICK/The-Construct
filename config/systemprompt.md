@@ -61,3 +61,16 @@ in a profile is lost on reinstall.
 
 `provisionCommands` run on EVERY provision (including reprovisions) and must be
 idempotent. `default` is a reserved name — create a named profile instead.
+
+## Changing these instructions
+
+This file is generated: Construct rewrites it from its template on every
+provision, for every agent (Claude, Codex, OpenCode) alike, so edits made here
+are lost. Machine-wide instructions that should apply on this VM go into
+`~/construct-custom-system-prompt.md` instead. That file is backed up and
+restored per VM, and its content is appended below this template in every
+agent's instruction file. After changing it, run
+
+    construct systemprompt
+
+to regenerate the instruction files of all agents right away.

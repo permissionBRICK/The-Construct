@@ -8,14 +8,17 @@ git-ignored `.construct-backup/` folder next to the scripts.
 
 For the installed agents, from `root`'s home — never from inside the project repos:
 
-- Instruction files: `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`,
-  `~/.config/opencode/AGENTS.md` (+ any other `*.md`). Provisioning writes these from
-  the shipped [`config/systemprompt.md`](../config/systemprompt.md), but it only
-  *refreshes* one while it is still byte-for-byte what was installed: once you add your
-  own machine-local rules to a file, later provisions leave it alone (logged as "keeping
-  locally modified …") instead of silently overwriting your additions. Checksums of the
-  last installed version live in `/etc/construct/systemprompt-installed.sha256`; deleting
-  a file's line there makes the next provision take the shipped prompt back over.
+- Machine-local agent instructions: `~/construct-custom-system-prompt.md`. The agents'
+  instruction files (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`,
+  `~/.config/opencode/AGENTS.md`) are *managed*: every provision rewrites them, for all
+  agents alike, from the shipped [`config/systemprompt.md`](../config/systemprompt.md)
+  with this custom file appended below it. So the custom file is what carries your
+  own rules across reprovisions and reinstalls; edits made to the managed files
+  themselves do not survive. After changing the custom file run `construct systemprompt`
+  to regenerate the managed files right away. On restore, the custom file comes back
+  after provisioning rendered the bare template, so `restore-config.sh` renders again.
+- The managed instruction files themselves (+ any other `*.md` beside them) are still
+  captured, so a restore is complete even on a Construct version without the renderer.
 - User-level memory and skills: `~/.claude/projects/<slug>/{memory,MEMORY.md}`,
   `~/.codex/{memories,memories_*.sqlite*}`, `~/.codex/skills` (minus the bundled system
   skills), `~/.claude/skills`.
