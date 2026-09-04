@@ -70,17 +70,16 @@
     },
     {
       "path": "apps/web/src/components/ChatView.tsx",
-      "variants": [
-        {
-          "before": ") : renderedRightPanelSurface?.kind === \"agents\" ? (",
-          "insert": ") : renderedRightPanelSurface?.kind === \"omniloop\" ? (\n      <OmniloopPanel environmentId={activeThreadRef?.environmentId ?? null} />\n"
-        },
-        {
-          "before": ") : activeRightPanelSurface?.kind === \"agents\" ? (",
-          "insert": ") : activeRightPanelSurface?.kind === \"omniloop\" ? (\n      <OmniloopPanel environmentId={activeThreadRef?.environmentId ?? null} />\n"
-        }
-      ],
-      "note": "Stable (0.0.38) and nightly (0.0.39) name this variable differently; both channels are live, so both shapes are here. Delete the activeRightPanelSurface variant once the stable channel builds 0.0.39 or newer."
+      "channel": "nightly",
+      "before": ") : renderedRightPanelSurface?.kind === \"agents\" ? (",
+      "insert": ") : renderedRightPanelSurface?.kind === \"omniloop\" ? (\n      <OmniloopPanel environmentId={activeThreadRef?.environmentId ?? null} />\n"
+    },
+    {
+      "path": "apps/web/src/components/ChatView.tsx",
+      "channel": "stable",
+      "note": "Delete once the stable channel builds 0.0.39 or newer (upstream renamed activeRightPanelSurface to renderedRightPanelSurface).",
+      "before": ") : activeRightPanelSurface?.kind === \"agents\" ? (",
+      "insert": ") : activeRightPanelSurface?.kind === \"omniloop\" ? (\n      <OmniloopPanel environmentId={activeThreadRef?.environmentId ?? null} />\n"
     },
     {
       "path": "apps/web/src/components/ChatView.tsx",

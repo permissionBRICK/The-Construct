@@ -22,9 +22,12 @@ What the inventory adds to T3 Code:
   the thread's own environment. Workflow ids found in the thread's omniloop tool calls
   drive a composer banner ("Omniloop workflow running: …", Open) and the tab badge.
 
-Two applier features exist for these transforms: `every: true` (insert next to every
-occurrence, for a prop passed at several call sites) and `variants: [...]` (per-variant
-anchor AND text, for a spot upstream renamed between versions).
+Two more transform fields exist for these: `every: true` (insert next to every
+occurrence, for a prop passed at several call sites) and `channel: "stable" | "nightly"`
+(the transform belongs to that channel's build only; the build passes `--channel`).
+`channel` is for the rare spot where the two live channels need different text: write
+one plain transform per channel, and delete the stale one once the channels agree again.
+It is not a compatibility mechanism for older versions.
 - `source-transforms.json` — the guarded edits to upstream files, applied by
   `bin/apply-t3code-source.mjs apply|status --source <checkout>`.
 

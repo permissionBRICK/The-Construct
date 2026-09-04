@@ -19,6 +19,9 @@
 //     that occurs more than once in the file.
 //   * "optional": true — a missing file or anchor is skipped, not a conflict (used
 //     for upstream TEST files: they never affect the built server/Desktop app).
+//   * "channel": "stable" | "nightly" — this transform belongs to that channel's
+//     build only (--channel). Used when the two live channels need different text
+//     at one spot; the stale half is deleted once the channels agree again.
 //   * Already applied (insert text / replacement present) is a no-op, so the same
 //     tree can be transformed again after an interrupted build.
 //
@@ -39,9 +42,13 @@ const valueAfter = (flag, fallback) => {
 const sourceDir = valueAfter("--source", process.cwd())
 const manifestPath = valueAfter("--manifest", join(constructDir, "patches", "t3code", "source-transforms.json"))
 const overlayDir = valueAfter("--overlays", join(constructDir, "patches", "t3code", "overlays"))
+// The T3 channel being built (stable|nightly). A transform carrying "channel" is one
+// half of a pair written separately for each channel; the other half is skipped.
+const channelIndex = args.indexOf("--channel")
+const channel = channelIndex >= 0 && args[channelIndex + 1] === "nightly" ? "nightly" : "stable"
 
 if (mode !== "apply" && mode !== "status") {
-  console.error("usage: apply-t3code-source.mjs apply|status [--source DIR] [--manifest FILE] [--overlays DIR]")
+  console.error("usage: apply-t3code-source.mjs apply|status [--source DIR] [--manifest FILE] [--overlays DIR] [--channel stable|nightly]")
   process.exit(1)
 }
 
@@ -113,21 +120,6 @@ const asLines = (text) => (text.endsWith("\n") ? text : `${text}\n`)
 // Apply one transform to `content`. Returns { state, content?, detail? } where state is
 // applied | pending | skipped | conflict.
 function runTransform(operation, content) {
-  if (Array.isArray(operation.variants)) {
-    // Upstream shapes the same spot differently across versions AND the inserted text
-    // must differ with it (a renamed variable): the first variant whose text is already
-    // present, or whose anchor matches, decides.
-    for (const variant of operation.variants) {
-      const probe = { ...variant, path: operation.path, optional: true }
-      if (probe.insert !== undefined && content.includes(asLines(probe.insert))) return { state: "applied" }
-      if (probe.replace !== undefined && content.includes(probe.replace)) return { state: "applied" }
-    }
-    for (const variant of operation.variants) {
-      const result = runTransform({ ...variant, path: operation.path, optional: true }, content)
-      if (result.state !== "skipped") return result
-    }
-    return { state: operation.optional ? "skipped" : "conflict", detail: "no variant anchor found" }
-  }
   if (operation.old !== undefined) {
     // v1 literal hunk
     if (findAll(content, operation.new).length === 1) return { state: "applied" }
@@ -196,6 +188,11 @@ for (const path of manifest.overlays) {
 
 manifest.transforms.forEach((operation, index) => {
   const label = `${operation.path}#${index}`
+  if (operation.channel !== undefined && operation.channel !== channel) {
+    skipped++
+    results.push({ transform: label, state: "skipped", detail: `${operation.channel} channel only` })
+    return
+  }
   const destination = targetPath(sourceDir, operation.path)
   if (!existsSync(destination) && !files.has(destination)) {
     if (operation.optional) {
