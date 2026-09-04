@@ -153,8 +153,11 @@ public sealed class TestApp(
             ["Constructd:SshForwardPorts:End"] = "2299",
             ["Constructd:AppForwardPorts:Start"] = "2300",
             ["Constructd:AppForwardPorts:End"] = "2999",
-            // The scheduler is off in tests; the engine is invoked directly where it matters.
+            // The scheduler is off in tests; the engine is invoked directly where it matters. Both
+            // halves of it: the power reconcile rides on the same loop and would otherwise keep it
+            // running (IdleSchedulerServiceTests covers that combination on its own).
             ["Constructd:Idle:SchedulerEnabled"] = "false",
+            ["Constructd:Power:KeepHostAwake"] = "false",
             ["Constructd:Idle:DefaultTimeoutMinutes"] = "120",
             ["Constructd:Idle:DefaultAction"] = "Save",
             ["Constructd:Idle:MaxTimeoutMinutes"] = "0",

@@ -164,7 +164,21 @@ you dial* change.
    rather than over-grants; `--no-host-forwards` denies that user
    [`construct expose --to host`](expose.md#the-two-targets).
 
-5. **Tell the users the URL and the SHA-256 certificate fingerprint** (the value computed
+5. **The host must not go to sleep under the VMs.** `constructd` holds a Windows power
+   availability request (`PowerRequestSystemRequired`) for as long as any VM it manages is
+   running, and releases it when none is — so the machine's sleep idle timer cannot take a
+   colleague's VM down at three in the morning. It is on by default
+   (`Constructd:Power:KeepHostAwake`, and independent of `Idle:SchedulerEnabled` even
+   though both ride the same once-a-minute loop); `powercfg /requests` shows it on the host, as a
+   SYSTEM `[PROCESS]` entry against `Constructd.Api.exe`. That covers the idle timer while
+   the service is up, and nothing else, so the installer also prints this host's own sleep,
+   hibernate and unattended-sleep timeouts and — with `-KeepHostAwake`, or by asking in an
+   interactive run — sets the **AC** ones to *never* (`-SkipPowerSettings` skips the step
+   entirely, and an unattended run without the switch changes nothing). Closing a laptop lid
+   or picking "Sleep" from the menu still sleeps the host; the request is about the idle
+   timer, not about overruling you.
+
+6. **Tell the users the URL and the SHA-256 certificate fingerprint** (the value computed
    in step 2, not the thumbprint the installer printed). The client shows that fingerprint
    at enrolment and asks for confirmation; publishing it out of band is what makes the
    confirmation meaningful (see §5).
