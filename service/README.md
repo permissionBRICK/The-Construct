@@ -26,10 +26,11 @@ service/
     Abstractions/           IHypervisorDriver, IIsoBuilder, IJobEngine, IJobStore,
                             IPortForwardManager, IForwardStore, IIdlePolicyEngine, IUserStore,
                             ITokenService, IVmRepository, IAuditLog, IClock,
-                            IProcessRunner, ITcpTableReader
+                            IProcessRunner, ITcpTableReader, IHostPowerGuard
     Logic/                  PortAllocator, TokenHasher, VmNameValidator, Ownership,
-                            IdleEvaluator, IdlePolicyRules, TcpConnectionCounter
-    Services/               IdlePolicyEngine, InProcessJobEngine — platform-agnostic, so these are
+                            IdleEvaluator, IdlePolicyRules, TcpConnectionCounter, HostPowerPlanner
+    Services/               IdlePolicyEngine, InProcessJobEngine, HostPowerCoordinator +
+                            HostPowerGuardBase/NullHostPowerGuard — platform-agnostic, so these are
                             the real implementations in every mode
     Configuration/          ConstructdOptions and friends
   src/Constructd.Sqlite/    durable stores: hand-written SQL over Microsoft.Data.Sqlite, no ORM
@@ -39,6 +40,7 @@ service/
     Iso/                    the build strategies (WSL, pre-built), the ISO catalog,
                             the WSL path mapping, the source-ISO cache
     Forwards/               NetshPortForwardManager, the portproxy parser, the TCP-table P/Invoke
+    Power/                  WindowsHostPowerGuard — the PowerCreateRequest/PowerSetRequest P/Invoke
     Internal/               ArgumentGuard + PowerShellLiteral — nothing reaches a child unvalidated
   src/Constructd.Api/       ASP.NET Core minimal API host
     Program.cs              composition root, TLS, Windows-service hook, `admin` CLI entry
@@ -46,14 +48,14 @@ service/
     Auth/                   schemes (Bearer, VmToken, Negotiate seam, test identity), policies
     Endpoints/              one file per area of the API
     Jobs/                   the VM create/remove workflows the job engine runs
-    Hosting/                the once-a-minute idle scheduler
+    Hosting/                the once-a-minute idle scheduler (and the host power reconcile on it)
     Infrastructure/         JSON contract, problem details, centralized auditing
     Contracts/              request/response DTOs — the wire contract
   src/Constructd.Fakes/     in-memory implementation of every interface
   host/                     Install-ConstructHost.ps1 / Uninstall-ConstructHost.ps1 (PS 5.1)
   tests/Constructd.Tests/   xunit: Core unit tests, SQLite persistence tests, API integration tests,
                             Windows platform tests (command lines, parsers, reconciliation)
-  tests/host-installer.test.ps1   pwsh: installer parser + parameter contract
+  tests/host-installer.test.ps1   pwsh: installer parser, parameter contract, powercfg parsing
 ```
 
 `Constructd.Windows` targets plain `net10.0`, **not** `net10.0-windows`: the API references it and the
@@ -68,7 +70,7 @@ package references, and hand-written SQL does not belong in the HTTP host.
 
 ```bash
 dotnet build service/Constructd.sln            # 0 warnings, 0 errors
-dotnet test  service/Constructd.sln            # 412 tests
+dotnet test  service/Constructd.sln            # 594 tests
 
 # run the whole API against the fakes (no Hyper-V, no Windows):
 dotnet run --project service/src/Constructd.Api -- --fake
@@ -351,11 +353,52 @@ needs no grace — the guest itself says it is idle.
 
 The decision logic is the pure `IdleEvaluator`; `IdlePolicyEngine` gathers the signals, applies the
 decision through the driver and audit-logs it; `IdleSchedulerService` ticks it once a minute (and is
-switched off in tests, which call the engine directly).
+switched off in tests, which drive `TickAsync` — or the engine — directly). `Idle:SchedulerEnabled`
+switches **only** the idle evaluation; the same loop also carries the host power reconcile below,
+which has its own setting.
 
 Users set their own VM's policy; the admin sets the service-wide default and an optional cap. The cap
 is applied when a policy is stored **and** when it is evaluated, so lowering it also affects VMs
 configured earlier.
+
+### Keeping the host awake (plan §4.13)
+
+A host that sleeps takes every VM on it down with it. The field host did exactly that overnight —
+S3, reason "System Idle", with VMs that were expected to keep serving. So the service holds a
+**Windows power availability request** (`PowerCreateRequest` / `PowerSetRequest`,
+`PowerRequestSystemRequired`) for as long as at least one VM in its registry is `Running`, and clears
+it when none is.
+
+- **The rule is pure.** `HostPowerPlanner` maps the VM states to "required, because *n* VM(s)
+  running" or "not required". `HostPowerCoordinator` applies that through `IHostPowerGuard`.
+- **No second poller.** The reconcile hangs off the idle scheduler's tick, which already refreshes
+  every VM's state from the hypervisor and writes it to the registry — so "is anything running" is
+  read once, from the registry, right after it has been refreshed. A VM started or stopped through
+  the API therefore changes the request within one tick (`Idle:TickSeconds`, 60 s by default), and a
+  restart of the service reconciles **before** its first tick.
+- **One loop, two independent switches.** `Idle:SchedulerEnabled` and `Power:KeepHostAwake` are
+  read separately: the composition root registers the loop when **either** is on, and a tick runs
+  only the halves that are wanted. Turning idle-saving off therefore does not quietly stop the host
+  staying awake, and vice versa.
+- **One request, held for the service's lifetime.** `HostPowerGuardBase` makes the guard idempotent
+  and thread-safe: only an actual transition reaches the platform, a failed acquire is retried on the
+  next tick rather than remembered as done, and whatever is still held is released when the container
+  disposes the guard at shutdown. Acquiring and releasing are logged at Information with the reason.
+- **Only `SystemRequired`.** The display may still sleep, and away mode (`PowerRequestAwayModeRequired`)
+  is for media playback, not for a machine nobody is sitting at.
+- Off Windows and in fake mode the guard is `NullHostPowerGuard` and nothing at all happens, which is
+  why none of this needs a platform branch above the interface.
+
+To see it on the host:
+
+```powershell
+powercfg /requests     # SYSTEM: [PROCESS] …\Constructd.Api.exe  Construct agent VMs are running
+```
+
+The request stops the **idle** timer; it does not stop somebody closing a laptop lid or an explicit
+"Sleep". The installer therefore also reports the host's own sleep timeouts and offers to switch the
+AC ones off — see *Installing on a host*, `-KeepHostAwake`. Set `Constructd:Power:KeepHostAwake` to
+`false` on a host whose power plan is managed elsewhere; the service then never takes a request.
 
 ## Configuration
 
@@ -392,6 +435,7 @@ Bound from the `Constructd` section of `appsettings.json`, from environment vari
 | `Idle:ForceEnabled` | `false` | With a cap set, also forbid switching idling off. |
 | `Idle:ReportIntervalMinutes` | `5` | Interval the guest reporter posts at. |
 | `Idle:MissingReportGraceMultiple` | `3` | Intervals of silence before the guest counts as idle. |
+| `Power:KeepHostAwake` | `true` | Hold a Windows power availability request while at least one service-managed VM is `Running`, so the host does not sleep under it (*Keeping the host awake*). `false` never takes one. Independent of `Idle:SchedulerEnabled`, though both ride the same loop. No effect off Windows or in fake mode. |
 | `Iso:Mode` | `Prebuilt` | Which ISO build strategy is in effect: `Prebuilt` (the admin builds the media, the service consumes it) or `PerVm` (the service builds one ISO per VM through WSL). `Native`, `InGuest` and `HypervisorHost` are planned and refused at startup. See *ISO build strategies*. |
 | `Iso:HostnameSource` | `hyperv-kvp` | Where a guest built from generic media takes its hostname at first boot (`VM_HOSTNAME_SOURCE`). `cloud-init-metadata` is planned for Proxmox / NoCloud / ConfigDrive. |
 | `Iso:SeedUser` | `construct` | Seed user of the unattended install. |
@@ -846,7 +890,8 @@ In order: self-elevate → validate the inputs (including that the two port rang
 service root and data directory under `ProgramData` → **lock down everything the service executes or
 trusts** → prerequisites (Hyper-V via the repo's own `Ensure-HyperV`, **your** WSL distro with
 `xorriso` + `whois` inside it, the OpenSSH client; no .NET runtime is needed when published
-self-contained) → the TLS certificate → firewall rules → `appsettings.Production.json` next to the
+self-contained) → the TLS certificate → firewall rules → **the host's sleep timeouts** (reported, and
+switched off on request) → `appsettings.Production.json` next to the
 executable → **the autoinstall ISO, built as you through your WSL** (`admin iso build`) →
 **the first admin and an API token, through the admin CLI, before the service
 starts** (so nothing contends for the SQLite file and the host is reachable the moment it comes up) →
@@ -882,6 +927,8 @@ Run it again after publishing a new build: it updates binaries, settings and the
 | `-SkipIsoBuild` | off | Do not build the autoinstall ISO; VM creation then fails until `admin iso build` is run (the summary says so). |
 | `-IsoBuildOnly` | off | (Re)build the ISO on an existing install and change nothing else — a new Ubuntu release, a rotated bootstrap key. |
 | `-RotateAdminToken` | off | Issue a fresh token even when the admin already exists. |
+| `-KeepHostAwake` | *(ask)* | Set this host's AC sleep, hibernate and unattended-sleep timeouts to *never*. Not given: an interactive run asks, an unattended one (no console input, or `-WhatIf`) leaves the power plan alone. |
+| `-SkipPowerSettings` | off | Do not read or change the power plan at all — no report, no prompt. |
 | `-NoStart` | off | Register the service but do not start it. |
 
 **The certificate's identity is the one value that has to leave the machine** — clients pin it at
@@ -995,6 +1042,30 @@ creation will fail until it is built), and `-IsoBuildOnly` runs *only* this step
 VMs. A running install keeps the ISO it has attached: the pointer swap is what makes the new media
 current.
 
+**The host's own sleep timeouts are reported, and changed only when you say so.** The service holds a
+power availability request while VMs run (*Keeping the host awake*), but that covers only the window
+in which it is running, and a host expected never to sleep should say so in its power plan too. The
+installer therefore prints the active scheme's AC and DC values for `STANDBYIDLE`, `HIBERNATEIDLE` and
+the hidden unattended-sleep timeout (`7bc4a2f9-…`) — so the numbers are in the install log either way
+— and then: `-KeepHostAwake` sets the three **AC** values to `0` (*never*), `-KeepHostAwake:$false`
+leaves them, and with neither an interactive run asks while an unattended one (no console input, or
+`-WhatIf`) leaves the machine alone. `-SkipPowerSettings` skips the whole step. It is idempotent: a
+value that is already `0` is not written again, and the battery (DC) values are never touched.
+
+**Whether it may ask is decided before the self-elevation, not after.** The elevated copy is started
+with `Start-Process` and gets a brand new console: it cannot see that the caller's input was
+redirected, that the caller was started `-NonInteractive` (where `Read-Host` *throws* rather than
+returning a default), or that there is no interactive session at all. So the unelevated copy makes
+that call on its own session — `Test-ConstructPromptAllowed`, a pure function over the four facts —
+and, when the answer is "unattended", carries `-KeepHostAwake:$false` in the elevation payload with
+the rest of the parameters. Without that, every automated install would stop at, or fail on, a prompt
+nobody can answer.
+
+Everything is addressed **by GUID** and read out of the hex indices, never by matching what powercfg
+prints: every label it prints is localized, and a text match would report "never" on a German host
+that sleeps in half an hour. A host that has no `powercfg`, or refuses the write, produces a warning
+and not a failed install — the power plan is a comfort setting.
+
 **Re-running is safe and adds no credentials.** "The admin already exists" is not the same as "the admin
 is an admin": the installer reads the account back and fails if its role is not `Admin`, rather than
 reporting success on a host that has no admin at all. And a re-run issues **no new token** unless
@@ -1012,14 +1083,24 @@ deleting a colleague's VM is not an uninstall step.
 
 ## Tests
 
-`dotnet test service/Constructd.sln` — 412 tests, all running on Linux, Windows platform included.
+`dotnet test service/Constructd.sln` — 594 tests, all running on Linux, Windows platform included.
 
 - **Core unit tests**: port allocation (lowest-free, no double allocation, release, exhaustion,
   reservation, concurrency), token hashing (format pinned to a known SHA-256 vector, fixed-time
   comparison), VM name validation, ownership and quota rules, the idle decision matrix including the
   grace-window cases (stale heartbeat, never-reported VM, timeout shorter than the grace), cap
-  clamping, the idle engine against the fake driver, the console-capability mapping, and the pure
-  connection counter (only `Established` rows on the VM's own ports count).
+  clamping, the idle engine against the fake driver, the console-capability mapping, the pure
+  connection counter (only `Established` rows on the VM's own ports count), and the host power
+  guard — the pure rule (only `Running` VMs count), the reconciler following VMs as they start,
+  save, stop and are deleted without ever asking the platform twice, `Power:KeepHostAwake=false`
+  never taking a request at all, a failed acquire being retried rather than remembered as held,
+  concurrent callers never double-acquiring, dispose releasing what is still held, and dispose still
+  closing the platform handle when the release itself throws.
+- **Scheduler tests**: the two responsibilities on the one loop are switched independently — a tick
+  with idle evaluation off still reconciles the power request and a tick with the power request off
+  still evaluates idle policy (both driven through `TickAsync`, so nothing waits on a timer), the
+  startup reconcile happens before the first tick, and the composition root registers the loop when
+  **either** setting is on and not at all when neither is.
 - **Job engine tests**: a store that holds a progress write until completion starts, proving the
   terminal snapshot is what the store ends up with; a store that holds the *terminal* write, proving
   that no terminal state, no state event and no one-time token is observable before it lands; a store
@@ -1120,7 +1201,20 @@ deleting a colleague's VM is not an uninstall step.
   every verb that takes none refused rather than ignored, removal revoking tokens and refusing while VMs
   are owned, a token that validates once and never appears in the audit trail, revoke-all invalidating
   it, `forwards reconcile` reporting the missing platform, and the exit codes.
-- **Host installer tests** (`service/tests/host-installer.test.ps1` — 286 assertions, run by
+- **Host sleep settings** (part of the installer suite): the same `powercfg /q` block in English and
+  in German parses to the *same* numbers — nothing keys off a localized label, only off the hex
+  indices, of which the **last two** are the current AC and DC values (the minimum, maximum and
+  increment lines above them have the identical shape); a dump with no indices yields nothing rather
+  than a wrong number; the three settings travel as GUIDs, the hidden unattended-sleep one included;
+  and the report and the setter are driven against a **mocked** powercfg — every row queried by GUID
+  against the active scheme, a refused query reported as *unavailable*, `/setacvalueindex … 0` written
+  only for a timeout that is not already *never*, the DC (battery) values never touched, `-WhatIf`
+  writing nothing, and a refused write warning instead of failing the install. The unattended
+  decision is covered too: every spelling of `-NonInteractive` recognised (and `-NoProfile`,
+  `-NoExit`, `-NoLogo` not mistaken for it), each of the four unattended facts refusing the prompt on
+  its own, and — structurally — the decision being resolved and put into the elevation payload
+  *before* anything is started elevated, from a copy of `$PSBoundParameters` rather than the live one.
+- **Host installer tests** (`service/tests/host-installer.test.ps1` — 359 assertions, run by
   `dotnet test` through `HostInstallerTests` wherever `pwsh` exists): both scripts parse with zero
   errors and use no syntax PowerShell 5.1 lacks; every documented parameter exists with its documented
   type and default, and the three new switches are opt-in; the uninstaller's defaults match the
