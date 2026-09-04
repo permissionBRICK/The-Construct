@@ -27,6 +27,7 @@ $touchedScripts = @(
     "Provision-AgentVM.ps1",
     "Set-AgentVmCheckpoints.ps1",
     "Get-AgentUsage.ps1",
+    "Get-ConstructT3PairingLink.ps1",
     "Update-T3Code.ps1",
     "lib/AgentVm.Common.ps1",
     "lib/AgentVm.Instances.ps1",
@@ -561,7 +562,7 @@ Write-Host "=== Name-only targeting (-InstanceName) ===" -ForegroundColor Cyan
 
 # Every script the control panel and the T3 Desktop updater launch must ACCEPT the name.
 foreach ($rel in @("Provision-AgentVM.ps1", "Update-T3Code.ps1", "Set-AgentVmCheckpoints.ps1",
-                   "Get-AgentUsage.ps1", "Create-AgentVM.ps1", "Auto-Install.ps1")) {
+                   "Get-AgentUsage.ps1", "Get-ConstructT3PairingLink.ps1", "Create-AgentVM.ps1", "Auto-Install.ps1")) {
     $p = Get-ScriptParam (Join-Path $repoRoot $rel) "InstanceName"
     ok "$rel has -InstanceName" ($null -ne $p)
     ok "$rel -InstanceName defaults to empty (nothing is resolved unless asked)" (
@@ -570,7 +571,7 @@ foreach ($rel in @("Provision-AgentVM.ps1", "Update-T3Code.ps1", "Set-AgentVmChe
 
 # ...and must resolve it through the ONE adapter, never with a second copy of the rules.
 foreach ($rel in @("Provision-AgentVM.ps1", "Update-T3Code.ps1", "Set-AgentVmCheckpoints.ps1",
-                   "Get-AgentUsage.ps1")) {
+                   "Get-AgentUsage.ps1", "Get-ConstructT3PairingLink.ps1")) {
     $txt = [System.IO.File]::ReadAllText((Join-Path $repoRoot $rel))
     ok "$rel resolves it with Resolve-ConstructVmTarget" ($txt -match 'Resolve-ConstructVmTarget')
     ok "$rel loads lib\AgentVm.InstanceTarget.ps1 for it" ($txt -match 'AgentVm\.InstanceTarget\.ps1')

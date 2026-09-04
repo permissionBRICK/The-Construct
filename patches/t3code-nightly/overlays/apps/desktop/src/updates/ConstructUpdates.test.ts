@@ -28,6 +28,12 @@ import {
   readConstructVmTargetFromRegistry,
   resolveConstructAction,
   resolveConstructT3Channel,
+  CONSTRUCT_PAIRING_LINK_SCRIPT,
+  constructT3LinkStorePath,
+  parseConstructPairingLinkOutput,
+  planConstructPairingLink,
+  readConstructT3Link,
+  recordConstructInstanceT3Link,
   type ConstructFileSystem,
   type ConstructJsonResponse,
 } from "./ConstructUpdates.ts";
@@ -1714,5 +1720,169 @@ describe("the default instance's legacy mirror", () => {
     const work = rows.find((r) => r.name === "work-vm")!;
     assert.isNull(work.provisionedCommit);
     assert.isNull(work.channel);
+  });
+});
+
+// ── Auto-link (plan §4.12 "T3 Desktop topology") ──────────────────────────────
+
+describe("readConstructT3Link", () => {
+  it("reads a marker field by field", () => {
+    assert.deepEqual(
+      readConstructT3Link({ status: "linked", at: "2026-09-05T10:00:00Z", environmentId: "env-1", baseUrl: "https://work-vm.mshome.net:5178/" }),
+      { status: "linked", at: "2026-09-05T10:00:00Z", environmentId: "env-1", baseUrl: "https://work-vm.mshome.net:5178", error: null },
+    );
+    assert.deepEqual(
+      readConstructT3Link({ status: "failed", at: "2026-09-05T10:00:00Z", error: "ssh: connect timed out" }),
+      { status: "failed", at: "2026-09-05T10:00:00Z", environmentId: null, baseUrl: null, error: "ssh: connect timed out" },
+    );
+  });
+  it("treats anything malformed as never tried", () => {
+    assert.isNull(readConstructT3Link(undefined));
+    assert.isNull(readConstructT3Link("linked"));
+    assert.isNull(readConstructT3Link({ status: "maybe", at: "2026-09-05T10:00:00Z" }));
+    assert.isNull(readConstructT3Link({ status: "linked", at: "yesterday" }));
+    assert.isNull(readConstructT3Link({ status: "linked" }));
+  });
+  it("is read from the instance's own half, with the VM's T3 opt-in and origin", () => {
+    const state = readConstructMarkers(
+      {},
+      { t3code: true, t3BaseUrl: "https://far-vm.vpn.example.local:23011", t3Link: { status: "failed", at: "2026-09-05T10:00:00Z", error: "x" } },
+    );
+    assert.isTrue(state.t3Enabled);
+    assert.equal(state.t3BaseUrl, "https://far-vm.vpn.example.local:23011");
+    assert.equal(state.t3Link?.status, "failed");
+    // A hand-edited file holding the STRING "false" is off, not truthy.
+    assert.isFalse(readConstructMarkers({}, { t3code: "false" }).t3Enabled);
+    assert.isNull(readConstructMarkers({}, {}).t3Enabled);
+    assert.isNull(readConstructMarkers({}, { t3BaseUrl: "ftp://nope" }).t3BaseUrl);
+  });
+});
+
+describe("recordConstructInstanceT3Link", () => {
+  function writableFs(files: Record<string, string>) {
+    const writes: Record<string, string> = {};
+    const fs: ConstructFileSystem = {
+      listDirectories: () => [],
+      fileMtimeMs: (path) => (path in files || path in writes ? 1 : null),
+      readTextFile: (path) => writes[path] ?? files[path] ?? null,
+      writeTextFile: (path, text) => {
+        writes[path] = text;
+      },
+    };
+    return { fs, writes };
+  }
+  const LINK = { status: "linked" as const, at: "2026-09-05T10:00:00Z", environmentId: "env-1", baseUrl: "https://work-vm.mshome.net:5178", error: null };
+  const FAILED = { status: "failed" as const, at: "2026-09-05T10:00:00Z", environmentId: null, baseUrl: null, error: "ssh" };
+
+  it("writes the marker into a non-default instance's OWN file, keeping every other key", () => {
+    const path = `${LOCAL_APP_DATA}\\The-Construct\\instances\\work-vm.json`;
+    const { fs, writes } = writableFs({
+      [path]: JSON.stringify({ version: 1, instance: "work-vm", provisionedCommit: PROVISIONED, t3Port: 5178 }),
+    });
+    const result = recordConstructInstanceT3Link(LOCAL_APP_DATA, "work-vm", SCRIPTS_DIR, LINK, fs, join);
+    assert.isTrue(result.ok);
+    const doc = JSON.parse(writes[path]!);
+    assert.equal(doc.provisionedCommit, PROVISIONED);
+    assert.equal(doc.t3Port, 5178);
+    assert.equal(doc.instance, "work-vm");
+    assert.deepEqual(doc.t3Link, { status: "linked", at: LINK.at, environmentId: "env-1", baseUrl: LINK.baseUrl });
+    // ...and it reads back through the same reader the instances are collected with.
+    assert.deepEqual(readConstructT3Link(doc.t3Link), LINK);
+  });
+
+  it("creates the file with the meta keys when the instance had none yet", () => {
+    const path = `${LOCAL_APP_DATA}\\The-Construct\\instances\\far-vm.json`;
+    const { fs, writes } = writableFs({});
+    assert.isTrue(recordConstructInstanceT3Link(LOCAL_APP_DATA, "far-vm", SCRIPTS_DIR, FAILED, fs, join).ok);
+    const doc = JSON.parse(writes[path]!);
+    assert.equal(doc.version, 1);
+    assert.equal(doc.instance, "far-vm");
+    assert.deepEqual(doc.t3Link, { status: "failed", at: FAILED.at, error: "ssh" });
+  });
+
+  it("the default instance's marker goes to the legacy top level of .construct-settings.json", () => {
+    const path = `${SCRIPTS_DIR}\\.construct-settings.json`;
+    const { fs, writes } = writableFs({ [path]: JSON.stringify({ installedCommit: INSTALLED, t3code: true }) });
+    assert.equal(constructT3LinkStorePath(LOCAL_APP_DATA, "agent-vm", SCRIPTS_DIR, join), path);
+    assert.isTrue(recordConstructInstanceT3Link(LOCAL_APP_DATA, "agent-vm", SCRIPTS_DIR, LINK, fs, join).ok);
+    const doc = JSON.parse(writes[path]!);
+    assert.equal(doc.installedCommit, INSTALLED);
+    assert.isTrue(doc.t3code);
+    assert.isUndefined(doc.version);
+    assert.equal(doc.t3Link.environmentId, "env-1");
+  });
+
+  it("refuses when nothing resolves, and says so", () => {
+    const { fs } = writableFs({});
+    assert.isFalse(recordConstructInstanceT3Link(LOCAL_APP_DATA, "agent-vm", null, LINK, fs, join).ok);
+    assert.isFalse(recordConstructInstanceT3Link(LOCAL_APP_DATA, "Bad Name", SCRIPTS_DIR, LINK, fs, join).ok);
+    const readOnly: ConstructFileSystem = { listDirectories: () => [], fileMtimeMs: () => null, readTextFile: () => null };
+    const result = recordConstructInstanceT3Link(LOCAL_APP_DATA, "work-vm", SCRIPTS_DIR, LINK, readOnly, join);
+    assert.isFalse(result.ok);
+  });
+});
+
+describe("planConstructPairingLink", () => {
+  const info = {
+    scriptsDir: SCRIPTS_DIR,
+    instances: [
+      { name: "agent-vm", vmHost: "agent-vm.mshome.net", publicHost: null, hostAlias: "agent-vm", isDefault: true, provisionedCommit: null, channel: null, t3Port: null, t3Enabled: true, t3BaseUrl: null, t3Link: null },
+      { name: "work-vm", vmHost: "work-vm.mshome.net", publicHost: null, hostAlias: "work-vm", isDefault: false, provisionedCommit: null, channel: null, t3Port: 5178, t3Enabled: null, t3BaseUrl: null, t3Link: null },
+    ],
+  };
+  const withScript = makeFs({ files: { [`${SCRIPTS_DIR}\\${CONSTRUCT_PAIRING_LINK_SCRIPT}`]: { mtime: 1 } } });
+
+  it("spawns PowerShell hidden on the script, naming the instance, with no console", () => {
+    const planned = planConstructPairingLink("work-vm", info, "win32", withScript, join);
+    assert.isTrue(planned.ok);
+    if (!planned.ok) return;
+    assert.equal(planned.plan.command, "powershell.exe");
+    assert.equal(planned.plan.scriptPath, `${SCRIPTS_DIR}\\${CONSTRUCT_PAIRING_LINK_SCRIPT}`);
+    assert.deepEqual([...planned.plan.args], [
+      "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", planned.plan.scriptPath, "-InstanceName", "work-vm",
+    ]);
+    assert.notInclude(planned.plan.args, "cmd.exe");
+  });
+
+  it("the default instance is named too (the script resolves it to the default VM)", () => {
+    const planned = planConstructPairingLink("agent-vm", info, "win32", withScript, join);
+    assert.isTrue(planned.ok && planned.plan.args.includes("agent-vm"));
+  });
+
+  it("refuses an unknown or unusable name, a non-Windows host, a missing script and an absent Construct", () => {
+    assert.isFalse(planConstructPairingLink("far-vm", info, "win32", withScript, join).ok);
+    assert.isFalse(planConstructPairingLink("construct-x", info, "win32", withScript, join).ok);
+    assert.isFalse(planConstructPairingLink("Work VM", info, "win32", withScript, join).ok);
+    assert.isFalse(planConstructPairingLink("work-vm", info, "linux", withScript, join).ok);
+    const noScript = planConstructPairingLink("work-vm", info, "win32", makeFs({}), join);
+    assert.isFalse(noScript.ok);
+    if (!noScript.ok) assert.include(noScript.error, CONSTRUCT_PAIRING_LINK_SCRIPT);
+    assert.isFalse(planConstructPairingLink("work-vm", { ...info, scriptsDir: null }, "win32", withScript, join).ok);
+    assert.isFalse(planConstructPairingLink("work-vm", null, "win32", withScript, join).ok);
+  });
+});
+
+describe("parseConstructPairingLinkOutput", () => {
+  it("takes the script's JSON line, whatever else landed on stdout", () => {
+    const out = parseConstructPairingLinkOutput(
+      'Warning: something\r\n{"ok":true,"instance":"work-vm","pairUrl":"https://work-vm.mshome.net:5178/pair#token=ABC","scopes":"administrative"}\r\n',
+      { code: 0, stderr: "" },
+    );
+    assert.deepEqual(out, { ok: true, pairUrl: "https://work-vm.mshome.net:5178/pair#token=ABC", scopes: "administrative" });
+  });
+  it("carries the script's own failure reason", () => {
+    const out = parseConstructPairingLinkOutput('{"ok":false,"instance":"far-vm","error":"could not reach far-vm over SSH"}\n', { code: 1, stderr: "" });
+    assert.deepEqual(out, { ok: false, error: "could not reach far-vm over SSH" });
+  });
+  it("an unknown scope value is reported as standard, never as more", () => {
+    const out = parseConstructPairingLinkOutput('{"ok":true,"pairUrl":"http://a:5177/pair#token=x","scopes":"root"}', { code: 0, stderr: "" });
+    assert.isTrue(out.ok && out.scopes === "standard");
+  });
+  it("explains a script that printed nothing usable", () => {
+    const crashed = parseConstructPairingLinkOutput("", { code: 1, stderr: "At line:1 char:1\nsomething broke\n" });
+    assert.isFalse(crashed.ok);
+    if (!crashed.ok) assert.include(crashed.error, "something broke");
+    const silent = parseConstructPairingLinkOutput("", { code: 0, stderr: "" });
+    assert.isFalse(silent.ok);
   });
 });

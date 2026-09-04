@@ -181,6 +181,79 @@ export interface ConstructProviderRow {
   readonly canReprovision: boolean;
   /** Why there is no button, for the read-only row. "" when there is one. */
   readonly note: string;
+  /** Is this row a remote the app is LINKED to (true), or an instance of this PC's
+   *  registry that no linked remote matches (false)? */
+  readonly linked: boolean;
+  /** Is a Link offered? Only for an unlinked instance whose VM runs T3. */
+  readonly canLink: boolean;
+}
+
+/** Does this instance have a T3 server worth linking? The provisioner records the
+ *  origin (`t3BaseUrl`) / port (`t3Port`) of every VM it set T3 up on, and the VM's own
+ *  saved opt-in (`t3Enabled`) covers the default local VM, whose origin is never
+ *  recorded (its ports are the documented defaults). Pure. */
+export function constructInstanceHasT3(instance: ConstructInstanceInfo): boolean {
+  return instance.t3Enabled === true || instance.t3Port !== null || instance.t3BaseUrl !== null;
+}
+
+/** The instances at least one linked remote matches (matchConstructRemoteToInstance's
+ *  rule, so "linked" here means exactly what the Providers rows show). Pure. */
+export function constructLinkedInstanceNames(
+  remotes: ReadonlyArray<ConstructLinkedRemote>,
+  instances: ReadonlyArray<ConstructInstanceInfo>,
+): ReadonlySet<string> {
+  const names = new Set<string>();
+  for (const remote of remotes) {
+    const instance = matchConstructRemoteToInstance(remote.baseUrl, instances);
+    if (instance !== null) names.add(instance.name);
+  }
+  return names;
+}
+
+/** How long a failed automatic link waits before it is tried again. */
+export const CONSTRUCT_AUTO_LINK_RETRY_MS = 30 * 60 * 1000;
+
+/**
+ * Which instances the app should link NOW, on its own (plan §4.12 "T3 Desktop
+ * topology", auto-link): every instance of this PC's registry that runs T3 and that no
+ * linked remote matches — the default local VM included —
+ *
+ *   * never one that is already linked,
+ *   * never one whose marker says "linked": the user removed that connection by hand,
+ *     and the automatic path must not put it back (the row's manual Link still can),
+ *   * a failed one only after CONSTRUCT_AUTO_LINK_RETRY_MS, so a VM that is off does
+ *     not get an SSH attempt every poll,
+ *   * never one an attempt is already in flight for,
+ *   * nothing at all while a Construct script runs (a reprovision is rebuilding the
+ *     very server a link would pair with).
+ *
+ * Pure.
+ */
+export function planConstructAutoLink(input: {
+  readonly info: ConstructUpdateInfo | null;
+  readonly remotes: ReadonlyArray<ConstructLinkedRemote>;
+  readonly inFlight: ReadonlySet<string>;
+  readonly now: number;
+  readonly retryAfterMs?: number;
+}): ReadonlyArray<string> {
+  const info = input.info;
+  if (info === null || info.runningAction !== null || info.scriptsDir === null) return [];
+  const retryAfter = input.retryAfterMs ?? CONSTRUCT_AUTO_LINK_RETRY_MS;
+  const linked = constructLinkedInstanceNames(input.remotes, info.instances);
+  const out: string[] = [];
+  for (const instance of info.instances) {
+    if (!constructInstanceHasT3(instance)) continue;
+    if (linked.has(instance.name)) continue;
+    if (input.inFlight.has(instance.name)) continue;
+    const marker = instance.t3Link ?? null;
+    if (marker !== null) {
+      if (marker.status === "linked") continue;
+      const at = Date.parse(marker.at);
+      if (!Number.isNaN(at) && input.now - at < retryAfter) continue;
+    }
+    out.push(instance.name);
+  }
+  return out;
 }
 
 /** Is `latest` newer than `installed` on the same channel? The renderer's copy of the
@@ -232,7 +305,43 @@ export function planConstructProviderRows(input: {
   const running = info?.runningAction ?? null;
   const t3Version = info?.t3Version ?? "";
   const latestByChannel = input.t3LatestByChannel ?? {};
-  return input.remotes.map((remote) => {
+  const linkedNames = constructLinkedInstanceNames(input.remotes, instances);
+  // UNLINKED instances follow the linked remotes: one row each for a VM of this PC's
+  // registry that runs T3 but that the app is not connected to, offering Link (the
+  // manual counterpart of the automatic link, which ignores the marker's "linked"
+  // memory of a connection the user removed). A VM without T3 has nothing to link to
+  // and gets no row.
+  const unlinkedRows: ConstructProviderRow[] = instances
+    .filter((instance) => !linkedNames.has(instance.name) && constructInstanceHasT3(instance))
+    .map((instance) => {
+      const endpoint = instance.t3BaseUrl === null ? null : constructRemoteEndpoint(instance.t3BaseUrl);
+      const marker = instance.t3Link ?? null;
+      const note =
+        marker === null
+          ? "Not linked in this app yet."
+          : marker.status === "failed"
+            ? `Automatic link failed: ${marker.error ?? "unknown error"}`
+            : "Linked before; the connection was removed from this app.";
+      return {
+        id: `instance:${instance.name}`,
+        baseUrl: instance.t3BaseUrl ?? "",
+        label: instance.name,
+        instanceName: instance.name,
+        host: endpoint?.host ?? instance.publicHost ?? instance.vmHost,
+        port: endpoint?.port ?? instance.t3Port,
+        installedCommit,
+        provisionedCommit: instance.provisionedCommit,
+        provisionStale: false,
+        t3Version,
+        t3LatestVersion: null,
+        t3UpdateAvailable: false,
+        canReprovision: false,
+        note: running === null ? note : "A Construct action is already running.",
+        linked: false,
+        canLink: running === null,
+      };
+    });
+  return [...input.remotes.map((remote) => {
     const endpoint = constructRemoteEndpoint(remote.baseUrl);
     const instance = matchConstructRemoteToInstance(remote.baseUrl, instances);
     const host = endpoint?.host ?? "";
@@ -243,6 +352,8 @@ export function planConstructProviderRows(input: {
       port: endpoint?.port ?? null,
       installedCommit,
       t3Version,
+      linked: true,
+      canLink: false,
     };
     if (instance === null) {
       return {
@@ -276,12 +387,13 @@ export function planConstructProviderRows(input: {
       canReprovision: running === null,
       note: running === null ? "" : "A Construct action is already running.",
     };
-  });
+  }), ...unlinkedRows];
 }
 
 /** The one-line detail under a row: what this instance is, and what it needs. Pure. */
 export function getConstructRowDetail(row: ConstructProviderRow): string {
   if (row.instanceName === null) return row.note;
+  if (!row.linked) return row.note;
   const parts: string[] = [];
   parts.push(
     row.provisionedCommit === null

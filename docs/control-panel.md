@@ -693,15 +693,19 @@ VM. The finished installer is copied to
 Windows as part of provisioning. There is no installation prompt; if the Desktop app was
 running when the silent installer closed it (typically because its own update control
 launched the reprovision), provisioning starts the updated app again, otherwise it stays
-closed. Construct keys the shared build by the resolved upstream T3 version,
-the installed Construct revision, and the guarded transformation recipe. Routine reprovisions reuse the
-running VM server and Desktop artifact without rebuilding, reinstalling, or restarting T3; a T3
-update or Construct update invalidates that cache.
+closed. Construct keys the shared build by the resolved upstream T3 version and the
+guarded transformation recipe (`patchHash`); the Construct commit that built it is recorded
+in the manifest but does not invalidate anything. Routine reprovisions -- including one
+after a Construct update -- reuse the running VM server and Desktop artifact without
+rebuilding, reinstalling, or restarting T3; only a T3 release or a recipe change rebuilds. A
+stock install (patch toggle off) follows the same rule: when the channel still resolves to
+the installed release, the npm install and the service restart are skipped too.
 
 **One Desktop install per PC.** `%LOCALAPPDATA%\The-Construct\artifacts\t3code\installed.json`
 records which patched release this PC holds — the upstream `t3Version`, the `channel`, the
-patched `buildHash`, when it was installed and which instance installed it. A reprovision
-that finds exactly that triple already installed skips the installer ("already installed");
+patched `buildHash` and `patchHash`, when it was installed and which instance installed it. A
+reprovision that finds that T3 version, channel and patch recipe already installed skips the
+installer ("already installed");
 anything else installs — including a matching record whose app is no longer on disk (removed
 by hand, a wiped profile): "the host already has that release" is only true while it does. **The last reprovisioned VM wins**: there is no owner instance and no
 newest-wins comparison, because two VMs on different channels would otherwise flip the
@@ -782,6 +786,22 @@ every ten minutes:
   reject (unreadable, unknown version, a default entry that is missing, non-canonical for its
   backend, malformed, or colliding with another entry) blocks the launch rather than guessing. The script's exit code reports the provisioning outcome back
   to the app (1 = failed, 3 = finished with optional errors).
+
+**Every VM with a T3 server is linked automatically.** A Construct-built Desktop app
+links each instance of this PC's registry that runs T3 -- the default local VM included --
+as a remote environment on its own, as soon as no linked remote matches it (the same
+host-and-port match the rows below use). It runs `Get-ConstructT3PairingLink.ps1
+-InstanceName <name>` hidden (no console, no prompt): the script mints a one-time pairing
+link on the VM over SSH, bound to the origin the VM advertises and carrying the
+**administrative** scope set when the VM's T3 build understands `--scopes` (a patched
+build; a stock T3 issues its standard client scopes), and the app registers the remote
+exactly as if the link had been pasted into Settings → Connections. The outcome is
+recorded as `t3Link` in the instance's own state file, which is what keeps it honest: an
+instance is linked once, a failed attempt is retried after 30 minutes (and shows its
+reason on the row), and a connection you **remove by hand stays removed** -- the marker
+still says "linked", so the automatic path leaves it alone. Removing a remote is always
+yours to do. An unlinked instance gets a row of its own with a **Link** button, the manual
+counterpart (it also re-adds a removed connection).
 
 **One row per linked remote.** T3 Code Desktop links several remotes at once, so
 **Settings → Providers** gets a row for each. The app matches every remote's base URL

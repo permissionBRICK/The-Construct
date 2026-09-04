@@ -837,7 +837,7 @@ t3_node_ok() {
 }
 
 install_t3code() {
-  local t3_bin resolved t3_bundle _wanted_t3_build _active_t3_build
+  local t3_bin resolved t3_bundle _wanted_t3_build _active_t3_build _t3_stock_key _t3_stock_unchanged=false
   step "Installing T3 Code (t3 CLI + web GUI server)"
 
   # Construct's optional T3 feature set is built from one upstream source tag.
@@ -857,7 +857,6 @@ install_t3code() {
     # A stock install must not leave a prior patched Desktop artifact advertised
     # to the host after this feature is disabled.
     rm -f /etc/construct/t3code-desktop-status
-    rm -f /etc/construct/t3code-installed-build
 
     # t3 ships only as an npm package. Node may not be provisioned yet (this runs
     # before install-sdks.sh), or a project SDK may have pinned an older major --
@@ -883,15 +882,32 @@ install_t3code() {
     # node-pty (terminal support) and msgpackr-extract must run their build
     # scripts; newer npm gates install scripts behind --allow-scripts, older npm
     # ignores the unknown flag and runs them anyway -- one call covers both.
-    local _tag
+    local _tag _wanted_ver _have_ver
     _tag="$(_t3_npm_tag)"
-    if command -v t3 >/dev/null 2>&1; then
-      note "t3 already installed; installing t3@${_tag} (channel=${T3CODE_CHANNEL})"
-      if ! npm install -g "t3@${_tag}" --allow-scripts=node-pty,msgpackr-extract; then
-        warn "t3 update failed; keeping the existing version"
-      fi
+    # Same rule as the patched build: an unchanged T3 is left alone. The marker records
+    # which STOCK release the last stock run installed ("stock:<version>"); when the
+    # channel still resolves to that version and it is what is on PATH, there is nothing
+    # to install -- and, below, nothing to re-patch or restart either. A marker that
+    # holds a patched build key (or none), or a version that no longer matches, installs.
+    _wanted_ver="$(npm view "t3@${_tag}" version 2>/dev/null | tail -1 | tr -d '[:space:]')"
+    [[ "${_wanted_ver}" =~ ^[0-9A-Za-z.+-]+$ ]] || _wanted_ver=""
+    _have_ver="$(t3 --version 2>/dev/null | grep -oE '[0-9]+[.][0-9]+[.][0-9]+([-.][0-9A-Za-z.]+)?' | head -1 || true)"
+    _t3_stock_key=""
+    [[ -n "${_wanted_ver}" ]] && _t3_stock_key="stock:${_wanted_ver}"
+    if [[ -n "${_t3_stock_key}" && "${_have_ver}" == "${_wanted_ver}" && \
+          "$(cat /etc/construct/t3code-installed-build 2>/dev/null || true)" == "${_t3_stock_key}" ]]; then
+      note "t3 ${_wanted_ver} (stock, channel=${T3CODE_CHANNEL}) is already installed; skipping the npm install."
+      _t3_stock_unchanged=true
     else
-      npm install -g "t3@${_tag}" --allow-scripts=node-pty,msgpackr-extract
+      rm -f /etc/construct/t3code-installed-build
+      if command -v t3 >/dev/null 2>&1; then
+        note "t3 already installed; installing t3@${_tag} (channel=${T3CODE_CHANNEL})"
+        if ! npm install -g "t3@${_tag}" --allow-scripts=node-pty,msgpackr-extract; then
+          warn "t3 update failed; keeping the existing version"
+        fi
+      else
+        npm install -g "t3@${_tag}" --allow-scripts=node-pty,msgpackr-extract
+      fi
     fi
   fi
 
@@ -958,6 +974,18 @@ install_t3code() {
     if [[ "${_t3_pub_before}" != "${_t3_pub_after}" ]]; then
       note "T3 Code's public base URL changed (${_t3_pub_before:-<none>} -> ${_t3_pub_after:-<none>}); restarting t3code-serve so the server picks it up."
     fi
+  elif [[ "${_t3_stock_unchanged}" == true ]]; then
+    # The stock twin of the rule above: the same release is installed and running, and
+    # the last run of THIS mode already reverted the runtime patches and wrote the unit.
+    _active_t3_build="$(cat /etc/construct/t3code-installed-build 2>/dev/null || true)"
+    if t3_can_skip_restart "${_t3_stock_key}" "${_active_t3_build}" "${_t3_pub_before}" "${_t3_pub_after}" && \
+       systemctl is-active --quiet t3code-serve; then
+      note "T3 Code ${_wanted_ver} (stock) is unchanged and already running; skipping its reinstall/restart."
+      return 0
+    fi
+    if [[ "${_t3_pub_before}" != "${_t3_pub_after}" ]]; then
+      note "T3 Code's public base URL changed (${_t3_pub_before:-<none>} -> ${_t3_pub_after:-<none>}); restarting t3code-serve so the server picks it up."
+    fi
   fi
 
   # The legacy env key remains for settings compatibility and now selects the
@@ -996,6 +1024,9 @@ install_t3code() {
   if systemctl is-active --quiet t3code-serve; then
     if [[ "${T3CODE_LIMIT_RESUME:-false}" == "true" ]]; then
       sed -n 's/^T3CODE_BUILD_KEY=//p' /etc/construct/t3code-desktop-status | head -1 > /etc/construct/t3code-installed-build
+    elif [[ -n "${_t3_stock_key}" ]]; then
+      # Only once the stock server is up: a failed run must not let the next one skip.
+      printf '%s\n' "${_t3_stock_key}" > /etc/construct/t3code-installed-build
     fi
     echo "t3code-serve is running on ${T3CODE_HOST}:${T3CODE_PORT}"
     # Only claim HTTPS when the proxy actually came up (the setup script writes
