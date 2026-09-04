@@ -1625,6 +1625,85 @@ async function adoptRemoteInstance(opts = {}) {
   }
 }
 
+// ── "Register this VM" (B11, plan §4.12) ─────────────────────────────────────
+//
+// The mirror image of adoption. A window attached over Remote-SSH to a host the
+// registry does NOT know (planRemoteAdoption reason "unknown-host") is almost always a
+// Construct VM this PC built before local VMs were recorded — or one built from another
+// PC. Rather than leave the panel describing a machine the user is not on, offer the one
+// action that fixes it: name the VM and write its entry.
+//
+// It offers ONLY for "unknown-host". Every other reason means the question is already
+// answered — a local window has no VM to register, a pin is an explicit choice, and a
+// host that matches an instance is registered by definition.
+
+/**
+ * Should the panel offer "Register this VM as an instance"? Same inputs as
+ * planRemoteAdoption (it defers to it for the decision, so the two can never disagree
+ * about what "unknown" means). `suggestedName` is the ssh host's first label when that
+ * is a usable instance name, "" otherwise — a default for the prompt, never a silent
+ * choice. Pure.
+ */
+function planRegisterAttachedVm(registry, remoteAuthority, setting, currentName) {
+  const plan = planRemoteAdoption(registry, remoteAuthority, setting, currentName);
+  if (plan.reason !== "unknown-host") return { offer: false, reason: plan.reason };
+  const m = /^ssh-remote\+(.+)$/i.exec(String(remoteAuthority || ""));
+  const host = m ? m[1] : "";
+  const label = String(host).split(".")[0].toLowerCase();
+  return {
+    offer: true,
+    reason: "unknown-host",
+    host,
+    suggestedName: isValidName(label) ? label : "",
+  };
+}
+
+/**
+ * The entry that would register the machine answering at `host` as the local instance
+ * `name` — or a refusal with the reason, which the caller shows verbatim.
+ *
+ * THE REFUSAL IS THE POINT. A `hyperv-local` entry's identity is DERIVED from its name
+ * (canonicalIdentity): host `<name>.mshome.net`, alias `<name>`, port 22. That is not a
+ * formatting preference — it is what a rebuild recreates, and the reader SKIPS an entry
+ * that says anything else. So if the window is attached to `buildbox.example.local`,
+ * there is no name for which a local entry describes that machine, and inventing one
+ * would produce an instance that either vanishes on the next load or points every
+ * lifecycle action at a different VM. Such a host needs the remote flow (a host service),
+ * not a registry edit. Pure.
+ */
+function planLocalRegistration(registry, name, host) {
+  const n = str(name);
+  if (!n || !isValidName(n)) {
+    return { ok: false, reason: 'Not a usable instance name: ' + NAME_RULE };
+  }
+  if (hasInstance(registry, n)) {
+    return { ok: false, reason: 'This PC already has an instance named "' + n + '".' };
+  }
+  const c = canonicalIdentity(n);
+  const h = String(host == null ? "" : host).trim().toLowerCase().replace(/\.$/, "");
+  if (h !== c.vmHost && h !== c.hostAlias) {
+    return {
+      ok: false,
+      reason: 'This window is attached to "' + host + '", but a local Hyper-V instance named "' + n +
+        '" answers at "' + c.vmHost + '" (or "' + c.hostAlias + '"). The registry cannot describe ' +
+        'that machine as a "' + DEFAULT_BACKEND + '" instance — a VM on another host is added ' +
+        'through "Add remote host" instead.',
+    };
+  }
+  return {
+    ok: true,
+    name: n,
+    entry: {
+      backend: DEFAULT_BACKEND,
+      vmName: c.vmName,
+      sshHost: c.vmHost,
+      sshPort: c.sshPort,
+      hostAlias: c.hostAlias,
+      keyName: c.keyName,
+    },
+  };
+}
+
 // ── Writing (atomic) ─────────────────────────────────────────────────────────
 
 /** The on-disk (schema v1) form of a normalized instance. Fields that equal the
@@ -1777,6 +1856,7 @@ module.exports = {
   describeSyncStatus, createSyncStatusStore,
   planCapturedFollowUp, planHandover, createHandover, planEnable, createSessionOwner,
   planSwitchPersistence, planRemoteAdoption, adoptRemoteInstance,
+  planRegisterAttachedVm, planLocalRegistration,
   toFileEntry, toFileDocument, save,
   addInstance, updateInstance, removeInstance, setDefaultInstance,
 };

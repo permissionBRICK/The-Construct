@@ -223,7 +223,22 @@ was. Pick **Remote host** and the installer walks:
    ```
 
    Same provisioner, same steps, same output — just over `host:port` instead of
-   `agent-vm.mshome.net:22`.
+   `agent-vm.mshome.net:22`. The installer spells the identity out because it has just
+   fetched the endpoint; a later run against the recorded instance can say the same thing
+   with one argument, which is what the control panel emits:
+
+   ```
+   Provision-AgentVM.ps1 -InstanceName work-vm
+   ```
+
+   `-InstanceName` resolves the endpoint, alias, port, key file, config-sync branch **and
+   the host service's URL** out of the registry entry above (see [Installation § Targeting
+   one VM by name](installation.md#targeting-one-vm-by-name)), so the guest is linked back
+   to the service the entry names rather than to whatever it was last told. It is the same
+   parameter the guest receives as `CONSTRUCT_INSTANCE_NAME` — and the name still reaches
+   the guest only together with a service URL, i.e. only for a service-managed VM, which is
+   why a local instance's env prefix is unchanged. The one-time VM token is never in the
+   registry and a reprovision does not need one.
 10. VS Code opens on the new VM exactly as it does locally.
 
 Scripted (no prompts at all):
