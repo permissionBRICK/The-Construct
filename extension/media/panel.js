@@ -135,15 +135,19 @@
     if (!instanceSelect) return;
     const names = Array.isArray(s.instances) ? s.instances.filter(Boolean) : [];
     if (names.length < 2) { instanceSelect.hidden = true; return; }
+    // The instance this WINDOW is attached to over Remote-SSH (state.connectedInstance).
+    // Not necessarily the selected one: adoption only preselects it and the user can
+    // switch away, so the entry that holds this window's terminals and files is labelled.
+    const connected = s.connectedInstance || "";
     // Rebuild only when the set or the selection actually changed, so a 30s refresh
     // never yanks an open dropdown shut under the pointer.
-    const signature = names.join("\u0000") + "\u0001" + (s.instance || "");
+    const signature = names.join("\u0000") + "\u0001" + (s.instance || "") + "\u0001" + connected;
     if (instanceSelect.dataset.signature !== signature) {
       instanceSelect.dataset.signature = signature;
       instanceSelect.textContent = "";
       names.forEach((n) => {
         const opt = document.createElement("option");
-        opt.value = n; opt.textContent = n;
+        opt.value = n; opt.textContent = n === connected ? n + " (connected)" : n;
         if (n === s.instance) opt.selected = true;
         instanceSelect.appendChild(opt);
       });

@@ -35,6 +35,15 @@ With **two or more** instances in `%LOCALAPPDATA%\The-Construct\instances.json`:
   on the left of the status bar. Either one switches; so does **The Construct: Switch
   Instance** from the command palette, which lists each instance with its endpoint and
   backend and ticks the current one.
+- The instance this window is **attached to over Remote-SSH** is marked *connected* in both
+  pickers. It is not necessarily the selected one: adoption only preselects it, and you can
+  switch the panel to another VM while still working on this one.
+- The status-bar item also counts the instances that are **behind the installed Construct**
+  — `$(vm) agent-vm (2 to reprovision)`. The yellow **Reprovision** button only ever speaks
+  for the instance currently selected, and a VM you have not switched to in a while is
+  exactly the one that quietly falls behind. The count comes from the per-VM markers cached
+  on this PC, so it needs no VM to be running and never fans out over SSH; it disappears at
+  zero.
 - The choice is **per window** and persists across reloads, so two windows can drive two
   VMs at once. Setting **`construct.instance`** in VS Code settings *pins* every window to
   one instance instead — the panel says so rather than letting a switch silently not take
@@ -258,11 +267,37 @@ subdirectory of that config directory.
   inline **▷** on a chip opens that project's folder on the VM in a new window. The
   **default** chip shows a lock icon and refuses the edit modal — it's a reserved,
   read-only seed; customize it by creating a named profile instead.
-- **select profiles** — tick which profiles are active. The selection is recorded (in
-  `.construct-settings.json`) for the **next** Reprovision / Reinstall; it does not
+- **select profiles** — tick which profiles are active. The selection is recorded **per VM**
+  (see [Where settings are stored](#where-settings-are-stored)) for the **next**
+  Reprovision / Reinstall; it does not
   re-provision a running VM. Profile *edits* made on the VM, though, reach the host
   automatically between reprovisions via the sync tick below — you don't need to reprovision
   just to pick up a VM-side change.
+
+### Where settings are stored
+
+Two files, split by what the value is *about*:
+
+- **Install-wide** facts stay in `.construct-settings.json` next to the host scripts: which
+  Construct is installed (`installedCommit`, `constructRepo`, `constructRef`) and the git
+  identity the installer applies to every VM it provisions.
+- **Per-VM** settings belong to one instance: the commit that VM was last provisioned with
+  (`provisionedCommit`), its project selection, its microphone preference, its RAM/disk/
+  release, its VS Code / SMB / patch toggles, its T3 Code toggles and channel, and its
+  automatic-checkpoint preference.
+
+The **default instance (`agent-vm`) keeps its per-VM settings at the top level of
+`.construct-settings.json`, exactly where they have always been** — an install with one VM
+gains no new files and behaves identically. Every *other* instance keeps its own
+`%LOCALAPPDATA%\The-Construct\instances\<name>.json` (beside `instances.json`, and outside
+any scripts checkout, so a Construct self-update never touches it). That is what makes
+"reprovision pending", the project selection and the mic preference answers about **one VM**
+rather than about this PC.
+
+The VM keeps its own copy of the commit it was provisioned with, in
+`/etc/construct/provisioned.env` (`CONSTRUCT_COMMIT`). That is the source of truth: the panel
+reads it during the status probe, so a VM provisioned from a *different* PC is still judged
+correctly, and the host-side marker is only the cache used while the VM is off.
 
 ### Sync status
 
@@ -647,8 +682,8 @@ every ten minutes:
   header banner). The update control then offers **Update Construct**, which runs
   `Update-Construct.ps1` in a console window: the same self-update as the panel's
   **Update Construct** button (scripts + panel on this PC; it does not touch the VM).
-- **The VM** — `provisionedCommit` against `installedCommit` (the panel's yellow
-  **Reprovision** button), and **upstream T3 Code** — this build's T3 version against the
+- **The VM** — that instance's own `provisionedCommit` against `installedCommit` (the panel's
+  yellow **Reprovision** button), and **upstream T3 Code** — this build's T3 version against the
   npm channel it was built from. Either offers **Reprovision VM**, which runs
   `Update-T3Code.ps1`: Construct reprovisioning with the saved settings, which rebuilds the
   patched T3 Code in the VM and silently installs the new Desktop app. It does not install an

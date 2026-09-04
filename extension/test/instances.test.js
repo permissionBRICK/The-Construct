@@ -1127,6 +1127,19 @@ eq("match: the default instance's own alias", inst.matchByRemoteHost(reg, "agent
 eq("match: unknown host -> null", inst.matchByRemoteHost(reg, "somewhere-else"), null);
 eq("match: empty -> null", inst.matchByRemoteHost(reg, ""), null);
 
+// ── B12: which instance THIS WINDOW is attached to over Remote-SSH ───────────
+// Distinct from the ACTIVE one: adoption only PRESELECTS the attached VM and the user can
+// switch away, so the picker has to be able to mark the entry whose terminals and files
+// this window actually holds.
+eq("connected: an ssh-remote authority naming an alias", inst.connectedInstanceName(reg, "ssh-remote+work-vm"), "work-vm");
+eq("connected: ...or its hostname", inst.connectedInstanceName(reg, "ssh-remote+buildbox.example.local"), "work-vm");
+eq("connected: case-insensitive on both halves", inst.connectedInstanceName(reg, "SSH-Remote+BuildBox.Example.Local"), "work-vm");
+eq("connected: the default instance is markable too", inst.connectedInstanceName(reg, "ssh-remote+agent-vm"), "agent-vm");
+eq("connected: a LOCAL window is attached to nothing", inst.connectedInstanceName(reg, ""), "");
+eq("connected: a non-ssh authority (wsl, dev-container) is not a VM", inst.connectedInstanceName(reg, "wsl+ubuntu"), "");
+eq("connected: an ssh host the registry does not know", inst.connectedInstanceName(reg, "ssh-remote+somewhere-else"), "");
+eq("connected: a null/undefined authority never throws", inst.connectedInstanceName(reg, null), "");
+
 // ── Mutation + atomic save round-trip ────────────────────────────────────────
 console.log("\n=== add / update / remove + atomic save ===");
 const base = inst.load({ path: path.join(tmpRoot, "fresh", "instances.json") });

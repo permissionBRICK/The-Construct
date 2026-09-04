@@ -1182,6 +1182,22 @@ function matchByRemoteHost(registry, host) {
 }
 
 /**
+ * The registry instance this window is ATTACHED to over Remote-SSH — "" when the window
+ * is local, or when the authority names a host the registry does not know.
+ *
+ * Distinct from the ACTIVE instance: adoption (planRemoteAdoption) only PRESELECTS the
+ * attached VM, and the user can switch away from it, so the picker has to be able to say
+ * which of the offered instances is the one this window's terminals and files live on.
+ * Pure.
+ */
+function connectedInstanceName(registry, remoteAuthority) {
+  const m = /^ssh-remote\+(.+)$/i.exec(String(remoteAuthority || ""));
+  if (!m) return "";
+  const matched = matchByRemoteHost(registry, m[1]);
+  return matched ? matched.name : "";
+}
+
+/**
  * Capture the target of a USER ACTION at its entry point.
  *
  * A command is not one atomic step: shutdown shows a modal, a rebuild probes the VM for
@@ -1871,6 +1887,7 @@ module.exports = {
   deriveBackend, backendProblems,
   deriveDefaults, isDefaultInstance, toSshCfg,
   parseRegistry, load, list, resolve, resolveActive, hasInstance, effectivePin, matchByRemoteHost,
+  connectedInstanceName,
   createGate, createCoalescer, createTargetQueue, captureTarget, targetSuperseded, targetFingerprint,
   describeSyncStatus, createSyncStatusStore,
   planCapturedFollowUp, planHandover, createHandover, planEnable, createSessionOwner,
