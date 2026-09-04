@@ -412,7 +412,8 @@ try {
 # shipped script and fail if any string-literal token carries a non-ASCII char.
 $repoRoot = Split-Path -Parent $here
 $shipped = @("install.ps1","Auto-Install.ps1","Create-AgentVM.ps1","Provision-AgentVM.ps1",
-             "Update-Construct.ps1","Update-T3Code.ps1","Get-AgentUsage.ps1","lib/AgentVm.Common.ps1")
+             "Update-Construct.ps1","Update-T3Code.ps1","Get-AgentUsage.ps1","lib/AgentVm.Common.ps1",
+             "lib/AgentVm.InstanceState.ps1")
 foreach ($rel in $shipped) {
     $p = Join-Path $repoRoot $rel
     if (-not (Test-Path -LiteralPath $p)) { continue }
@@ -1017,6 +1018,38 @@ $updT3Src = Get-Content -LiteralPath (Join-Path $here "..\Update-T3Code.ps1") -R
 ok "Update-T3Code.ps1: forwards t3codeHttps only when set and supported" (
     $updT3Src -match "settings\.t3codeHttps" -and
     $updT3Src -match "Parameters\.ContainsKey\('T3CodeHttps'\)")
+# B12: the per-VM state each script reads and writes is keyed by ONE resolution point --
+# built on the instance B11's name-only targeting already resolved -- so a second VM never
+# replays the first VM's toggles, and B11's successors have a single line to re-point.
+ok "Update-T3Code.ps1: has ONE instance-resolution point" (
+    $updT3Src -match "(?m)^function Get-ConstructStateInstanceName \{" -and
+    $updT3Src -match "(?m)^\`$instanceName = Get-ConstructStateInstanceName")
+ok "Update-T3Code.ps1: it prefers B11's -InstanceName, then the alias, then the default" (
+    $updT3Src -match "if \(\`$InstanceName\) \{ return .\`$InstanceName..Trim\(\)\.ToLowerInvariant\(\) \}" -and
+    $updT3Src -match "if \(\`$HostAlias\)    \{ return .\`$HostAlias..Trim\(\)\.ToLowerInvariant\(\) \}" -and
+    $updT3Src -match "return 'agent-vm'")
+ok "Update-T3Code.ps1: reads that instance's state, not the checkout's file" (
+    $updT3Src -match "Read-ConstructInstanceState -Name \`$name -Dir \`$dir")
+ok "Update-T3Code.ps1: loads the state library in a CHILD scope" (
+    $updT3Src -match "AgentVm\.InstanceState\.ps1" -and $updT3Src -match "&\s*\{")
+ok "Update-T3Code.ps1: still degrades to the single-file read without the library" (
+    $updT3Src -match "\.construct-settings\.json")
+# B12: the provisioned marker is keyed by the instance the run provisioned.
+$provSrc = Get-Content -LiteralPath (Join-Path $here "..\Provision-AgentVM.ps1") -Raw
+ok "Provision-AgentVM.ps1: has ONE instance-resolution point" (
+    $provSrc -match "(?m)^function Get-ConstructStateInstanceName \{" -and
+    $provSrc -match "if \(\`$InstanceName\) \{ return .\`$InstanceName..Trim\(\)\.ToLowerInvariant\(\) \}")
+ok "Provision-AgentVM.ps1: records the provisioned marker for that instance" (
+    $provSrc -match "Set-ConstructProvisionedMarker -Dir \`$PSScriptRoot -InstanceName \(Get-ConstructStateInstanceName\)")
+ok "Provision-AgentVM.ps1: saves the auto-enabled selection to that instance's state" (
+    $provSrc -match "Save-ConstructInstanceState -Name \(Get-ConstructStateInstanceName\) -Dir \`$PSScriptRoot -Values @\{ projects")
+ok "Provision-AgentVM.ps1: still reads installedCommit from the INSTALL-WIDE file" (
+    $provSrc -match "\`$constructSettings = Read-ConstructSettings -Dir \`$PSScriptRoot")
+$autoSrc = Get-Content -LiteralPath (Join-Path $here "..\Auto-Install.ps1") -Raw
+ok "Auto-Install.ps1: names the instance from B11's resolved identity" (
+    $autoSrc -match "(?m)^\`$VmInstanceName = \`$script:VmIdentity\.Name")
+ok "Auto-Install.ps1: reads the saved checkpoint preference of the VM it is installing" (
+    $autoSrc -match "Read-ConstructInstanceState -Name \`$VmInstanceName -Dir \`$PSScriptRoot")
 
 # ── T3CodeChannel lowercase normalization ──────────────────────────────────
 # ValidateSet is case-insensitive: PowerShell happily binds "NIGHTLY" to the

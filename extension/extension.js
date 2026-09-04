@@ -19,6 +19,7 @@ const crypto = require("crypto");
 const probe = require("./src/probe");
 const ssh = require("./src/ssh");
 const host = require("./src/host");
+const instancestate = require("./src/instancestate");
 const instances = require("./src/instances");
 const lifecycle = require("./src/lifecycle");
 const updates = require("./src/updates");
@@ -134,11 +135,16 @@ let forwarderArmed = null;
 let cachedForwards = null;
 /**
  * The T3 web origin the LAST probed state reported (https once Construct's TLS
- * proxy is on, else plain http). Only used as the ▷ button's fallback when
- * minting a pairing link fails; null whenever the probe saw no T3 Code, so a
- * stale origin can never outlive an instance switch.
+ * proxy is on, else plain http), KEYED BY INSTANCE. Only used as the ▷ button's
+ * fallback when minting a pairing link fails; an instance whose probe saw no T3 Code has
+ * no entry, so a stale origin can never outlive it.
+ *
+ * A single global was a cross-VM leak: a refresh of A landing after a switch to B left B's
+ * button opening A's VM in the browser. Each entry is stamped with the instance the state
+ * push it came from DESCRIBES (never "whatever is active now"), and read back for the
+ * instance the ▷ action captured.
  */
-let lastT3WebUrl = null;
+const lastT3WebUrl = new Map();   // instance name -> origin
 /** The active instance's idle policy (remote only), cached for the state push. */
 let cachedIdlePolicy = null;
 let cachedIdlePolicyInstance = null;
@@ -404,11 +410,16 @@ function probeOnce(inst) {
 
 /** Fold host-side update info (GitHub) into a probed state. Best-effort: returns
  *  the same object reference when nothing was added, so callers can skip a re-push. */
-async function augmentUpdates(state) {
+async function augmentUpdates(state, inst) {
   try {
-    const scriptsDir = resolveScriptsDir();
+    const target = inst || activeInstance();
+    const scriptsDir = resolveScriptsDirFor(target);
     const raw = scriptsDir ? host.readRawSettings(scriptsDir) : {};
-    return await updates.augment(state, raw);
+    // repo/ref/installedCommit describe the INSTALL; `provisionedCommit` describes THIS
+    // VM, so it comes from that instance's own state (and, when the probe brought one
+    // back, from the guest's marker on `state.provisionedCommit`, which outranks both).
+    const instanceRaw = instancestate.readState(stateStore(target, scriptsDir));
+    return await updates.augment(state, raw, { instanceRaw });
   } catch (_) { return state; }
 }
 
@@ -451,7 +462,15 @@ function instanceState(inst) {
     }
     // The dropdown renders ONLY when more than one instance exists, so a single-VM
     // install's panel is pixel-identical to before.
-    if (names.length > 1) out.instances = names;
+    if (names.length > 1) {
+      out.instances = names;
+      // Which of them this WINDOW is attached to over Remote-SSH. Adoption only
+      // preselects it and the user can switch away, so the picker has to say which entry
+      // is the machine the terminals and files actually live on. Only sent alongside the
+      // list, so a single-VM install's payload is unchanged.
+      const connectedName = instances.connectedInstanceName(reg, safeRemoteAuthority());
+      if (connectedName) out.connectedInstance = connectedName;
+    }
     return out;
   } catch (_) { return {}; }
 }
@@ -468,7 +487,12 @@ function postState(target, state) {
   // sees a freshly probed agents list.
   if (Array.isArray(state.agents)) {
     const t3 = state.agents.find((a) => a && a.id === "t3code");
-    lastT3WebUrl = (t3 && typeof t3.url === "string" && t3.url) ? t3.url : null;
+    // Stamped with the instance the payload is LABELLED with (instanceState puts it
+    // there), never with "whatever is active now" — the payload may be a slow refresh
+    // landing after a switch.
+    const forName = state.instance || activeInstance().name;
+    if (t3 && typeof t3.url === "string" && t3.url) lastT3WebUrl.set(forName, t3.url);
+    else lastT3WebUrl.delete(forName);
   }
   const extra = { usagePeriod: usageReport };
   if (cachedConfigSync) extra.configSync = cachedConfigSync;
@@ -588,20 +612,24 @@ async function driverOpts(inst) {
  * probe's projects untouched. Synchronous. Returns the same object ref when nothing
  * was added, so callers can skip a re-push.
  */
-function withProjects(state) {
+function withProjects(state, inst) {
   // Prefer cfgDir (the config-sync location); fall back to scriptsDir when cfgDir
   // is null (no LOCALAPPDATA / TEMP).
   let projRoot;
+  let target;
+  try { target = inst || activeInstance(); } catch (_) { target = null; }
   try {
     const dir = cfgDir || host.configDir(process.env);
-    if (dir) { projRoot = dir; } else { projRoot = resolveScriptsDir(); }
+    if (dir) { projRoot = dir; } else { projRoot = resolveScriptsDirFor(target); }
   } catch (_) { return state; }
   if (!projRoot) return state;
   let available, selected;
   try {
     available = host.listProjectProfiles(projRoot);
-    const scriptsDir = resolveScriptsDir();
-    selected = scriptsDir ? host.readSelectedProjects(scriptsDir) : [];
+    // The SELECTION is per VM (instancestate), even though the profiles it names are
+    // shared: two instances legitimately provision different subsets of one profile set.
+    const scriptsDir = resolveScriptsDirFor(target);
+    selected = scriptsDir ? instancestate.readSelectedProjects(stateStore(target, scriptsDir)) : [];
   } catch (_) { return state; }
   if (!available.length) return state;
   if (!selected.length && state && Array.isArray(state.projects)) {
@@ -622,7 +650,7 @@ async function effectiveProjects(inst) {
     // window shows now — a rebuild of A must provision A's selected profiles.
     const scriptsDir = resolveScriptsDirFor(inst);
     if (scriptsDir) {
-      const saved = host.readSelectedProjects(scriptsDir);
+      const saved = instancestate.readSelectedProjects(stateStore(inst, scriptsDir));
       if (saved && saved.length) return saved;
     }
   } catch (_) { /* fall through to the live set */ }
@@ -649,13 +677,13 @@ async function refreshState(webview) {
   const gate = target.token;
   const probed = await probeOnce(inst);
   if (!instanceGate.valid(gate)) return;
-  const state = withProjects(await withVmState(withLocalState(probed, inst), inst));
+  const state = withProjects(await withVmState(withLocalState(probed, inst), inst), inst);
   if (!instanceGate.valid(gate)) return;
   postState(webview, state);
   // The reading this window just took IS the forwarder's trigger — it never probes on its
   // own, and never starts against a VM nothing has established is up.
   noteForwarderPresence(target, state);
-  const aug = await augmentUpdates(state);
+  const aug = await augmentUpdates(state, inst);
   if (!instanceGate.valid(gate)) return;
   if (aug !== state) postState(webview, aug);
   // Usage is a slower SSH+ccusage round-trip: BIND it to the report we start with and
@@ -683,13 +711,13 @@ async function refreshAll() {
   const gate = refreshTarget.token;
   const probed = await probeOnce(inst);
   if (!instanceGate.valid(gate)) return;
-  const state = withProjects(await withVmState(withLocalState(probed, inst), inst));
+  const state = withProjects(await withVmState(withLocalState(probed, inst), inst), inst);
   if (!instanceGate.valid(gate)) return;
   for (const w of liveWebviews) postState(w, state);
   // Same reading, same trigger (see refreshState): the forwarder is started — or let go —
   // by what the status flow established about the instance THIS refresh captured.
   noteForwarderPresence(refreshTarget, state);
-  const aug = await augmentUpdates(state);
+  const aug = await augmentUpdates(state, inst);
   if (!instanceGate.valid(gate)) return;
   if (aug !== state) for (const w of liveWebviews) postState(w, aug);
   const report = usageReport;
@@ -741,33 +769,30 @@ let autoRefreshMs = 0;                       // interval the live timer is curre
 // elapses, then fall back to 30s. null = not fast-polling. A plain reprovision that lands
 // the same commit relies on the cap; the common case (reprovision after a Construct update)
 // changes the commit and reverts promptly.
-let reprovisionBaselineCommit = null;
-let fastRefreshDeadline = 0;
-
-/** The provisioned-commit hash the provisioner writes to the host settings at the end of a
- *  run ("" if unknown). Cheap local file read — the same marker isProvisionStale/augment use. */
-function provisionedCommitNow() {
-  try {
-    const dir = resolveScriptsDir();
-    return dir ? (updates.readMarkers(host.readRawSettings(dir)).provisionedCommit || "") : "";
-  } catch (_) { return ""; }
-}
+// The instancestate.createProvisionWatch bound to the reprovision in flight, or null when
+// there is none. The marker is per VM now, so the poll has to keep asking about the VM the
+// console is actually rebuilding — re-reading "the active instance" would compare instance
+// B's marker against instance A's baseline, and end the fast poll on the first refresh
+// after a switch (or never end it at all). The whole rule lives in the module, where the
+// A/B behaviour is unit-tested.
+let reprovisionWatch = null;
 
 /** True while we're in the post-reprovision fast-poll window. */
-function fastRefreshActive() { return reprovisionBaselineCommit !== null; }
+function fastRefreshActive() { return reprovisionWatch !== null; }
 
-/** Enter the 5s fast-poll after a reprovision starts. Ends (see refreshTick) when the
+/** Enter the 5s fast-poll after a reprovision starts. `store` is the store of the EXACT
+ *  target the console was launched for — the same instance AND the same scripts dir that
+ *  were handed to lifecycle.run, captured before the pre-flight and the confirmation modal
+ *  rather than re-resolved after them. Ends (see refreshTick) when THAT instance's
  *  provisioned commit changes or FAST_REFRESH_MAX_MS elapses. */
-function beginReprovisionFastRefresh() {
-  reprovisionBaselineCommit = provisionedCommitNow();
-  fastRefreshDeadline = Date.now() + FAST_REFRESH_MAX_MS;
+function beginReprovisionFastRefresh(store) {
+  reprovisionWatch = instancestate.createProvisionWatch(store, { maxMs: FAST_REFRESH_MAX_MS });
   syncAutoRefresh(); // switch the live timer to the fast cadence
 }
 
 /** Leave fast-poll and return to the normal cadence. */
 function endReprovisionFastRefresh() {
-  reprovisionBaselineCommit = null;
-  fastRefreshDeadline = 0;
+  reprovisionWatch = null;
   syncAutoRefresh();
 }
 
@@ -775,12 +800,9 @@ function endReprovisionFastRefresh() {
  *  new provisioned commit (or the cap elapsed) and, if so, drop back to the normal
  *  cadence — then push fresh state to the open dashboards either way. */
 function refreshTick() {
-  if (fastRefreshActive()) {
-    const now = provisionedCommitNow();
-    if ((now && now !== reprovisionBaselineCommit) || Date.now() >= fastRefreshDeadline) {
-      endReprovisionFastRefresh();
-    }
-  }
+  // Asks the store the reprovision was STARTED against, never the one this window happens
+  // to show now.
+  if (fastRefreshActive() && reprovisionWatch.done()) endReprovisionFastRefresh();
   // Did another process change WHICH VM this window drives (or that VM's endpoint) since
   // the last tick? Re-read the registry and, if the target really changed, hand the
   // sessions over through the one serialized transition — which ends in its own
@@ -822,6 +844,8 @@ let installedMarkerWatch = null; // { file, commit }
 function installedCommitNow() {
   try {
     const dir = resolveScriptsDir();
+    // INSTALL-WIDE: which Construct is installed on this PC. Never per instance — one
+    // checkout, one installedCommit — so this stays on .construct-settings.json.
     return dir ? (updates.readMarkers(host.readRawSettings(dir)).installedCommit || "") : "";
   } catch (_) { return ""; }
 }
@@ -1428,6 +1452,32 @@ function resolveScriptsDir() {
   return resolveScriptsDirFor(active);
 }
 
+/**
+ * The PER-INSTANCE STATE STORE of one instance (src/instancestate.js): which instance's
+ * VM-scoped settings to read/write, and the scripts dir that holds the install-wide half
+ * (`installedCommit`, `constructRepo`/`constructRef`, the host git identity).
+ *
+ * For the DEFAULT instance the store IS that scripts dir's `.construct-settings.json`, so
+ * every call below is byte-for-byte the `host.*` call it replaced — an install with one
+ * local VM and no registry writes exactly the files it always wrote, and no
+ * `instances\agent-vm.json` is ever created. Any other instance reads and writes only
+ * `%LOCALAPPDATA%\The-Construct\instances\<name>.json`.
+ *
+ * Like resolveScriptsDirFor, the instance comes from the CAPTURED target of a flow, never
+ * from a fresh "whatever is active now" read after an await.
+ */
+function stateStore(instance, scriptsDir) {
+  const dir = scriptsDir !== undefined ? scriptsDir : resolveScriptsDirFor(instance);
+  return instancestate.store(instance || activeInstance(), dir, process.env);
+}
+
+/** The active instance's store (see stateStore). */
+function activeStore() {
+  let inst = null;
+  try { inst = activeInstance(); } catch (_) { inst = null; }
+  return stateStore(inst);
+}
+
 /** Resolve the config dir. Falls back to null when LOCALAPPDATA/TEMP absent. */
 function resolveCfgDir() {
   if (cfgDir === null) cfgDir = host.configDir(process.env) || null;
@@ -1637,8 +1687,9 @@ async function autoEnableNewProfiles(before, after, target) {
     var scriptsDir = enableTarget.scriptsDir;
     if (!scriptsDir) return;
     var current;
-    if (host.hasPersistedSelection(scriptsDir)) {
-      current = host.readSelectedProjects(scriptsDir);
+    var enableStore = stateStore(enableTarget.instance, scriptsDir);
+    if (instancestate.hasPersistedSelection(enableStore)) {
+      current = instancestate.readSelectedProjects(enableStore);
     } else {
       current = await effectiveProjects(enableTarget.instance);
     }
@@ -1648,7 +1699,7 @@ async function autoEnableNewProfiles(before, after, target) {
     var merged = projects.additiveMergeSelection(current, fresh, afterArr);
     // effectiveProjects() can probe the VM, so re-check IMMEDIATELY before the write.
     if (targetStale(enableTarget, "The project-profile auto-enable")) return;
-    host.saveSelectedProjects(scriptsDir, merged);
+    instancestate.saveSelectedProjects(enableStore, merged);
     logLine("auto-enabled new project profile(s) from sync: " + fresh.join(", ") + " (selection now: " + merged.join(", ") + ")");
   } catch (e) {
     logLine("auto-enable of new profiles failed: " + (e && e.message ? e.message : e));
@@ -1885,7 +1936,7 @@ function pushSettings(webview) {
   const scriptsDir = resolveScriptsDirFor(inst);
   if (!scriptsDir) return;
   let settings;
-  try { settings = host.readSettings(scriptsDir); } catch (_) { return; }
+  try { settings = instancestate.readSettings(stateStore(inst, scriptsDir)); } catch (_) { return; }
   safePost(webview, { type: "settings", instance: inst.name, settings });
 }
 
@@ -1896,7 +1947,7 @@ function broadcastSettings() {
   const scriptsDir = resolveScriptsDirFor(inst);
   if (!scriptsDir) return;
   let settings;
-  try { settings = host.readSettings(scriptsDir); } catch (_) { return; }
+  try { settings = instancestate.readSettings(stateStore(inst, scriptsDir)); } catch (_) { return; }
   for (const w of liveWebviews) safePost(w, { type: "settings", instance: inst.name, settings });
 }
 
@@ -1907,9 +1958,9 @@ function broadcastSettings() {
  *  works this session). Re-broadcasts settings so the settings-form switch stays in sync. */
 function persistMicPreference(enabled) {
   try {
-    const scriptsDir = resolveScriptsDir();
-    if (!scriptsDir) return;
-    host.saveSettings(scriptsDir, { mic: !!enabled });
+    const store = activeStore();
+    if (!store.scriptsDir) return;
+    instancestate.saveSettings(store, { mic: !!enabled });
     broadcastSettings();
   } catch (_) { /* best-effort */ }
 }
@@ -1926,7 +1977,7 @@ function runUpdateAgents(ids) {
   const scriptsDir = resolveScriptsDirFor(t.instance);
   let sourceManagedT3 = false;
   try {
-    const settings = scriptsDir ? host.readSettings(scriptsDir) : {};
+    const settings = scriptsDir ? instancestate.readSettings(stateStore(t.instance, scriptsDir)) : {};
     sourceManagedT3 =
       requested.includes("t3code") &&
       settings.t3code === true &&
@@ -1969,6 +2020,8 @@ function runUpdateAgents(ids) {
 function runUpdateConstruct() {
   const scriptsDir = resolveScriptsDir();
   if (!scriptsDir) { warnNoScriptsDir(); return; }
+  // Update-Construct.ps1 is INSTALL-WIDE (it refreshes the scripts + the extension, not a
+  // VM), so its -Repo/-Ref come from the install-wide settings — no instance is involved.
   const markers = updates.readMarkers(host.readRawSettings(scriptsDir));
   const resultFile = path.join(os.tmpdir(), `construct-update-${Date.now()}.result`);
   try { fs.unlinkSync(resultFile); } catch (_) {}
@@ -2128,7 +2181,8 @@ async function offerApplyCheckpoints(scriptsDir, enabled, changed) {
   const t = actionTarget();
   const actual = await vmpower.queryAutoCheckpoints({ instance: t.instance });
   let applied = null;
-  try { applied = host.readAppliedAutoCheckpoints(scriptsDir); } catch (_) { applied = null; }
+  const ckStore = stateStore(t.instance, scriptsDir);
+  try { applied = instancestate.readAppliedAutoCheckpoints(ckStore); } catch (_) { applied = null; }
   logLine(`checkpoints: want=${enabled ? "on" : "off"} actual=${actual} applied=${applied} changed=${!!changed}`);
   if (!vmpower.shouldOfferCheckpointApply(actual, enabled, applied)) return;
   const scriptPath = path.join(scriptsDir, lifecycle.CHECKPOINTS);
@@ -2154,7 +2208,7 @@ async function offerApplyCheckpoints(scriptsDir, enabled, changed) {
   // its own copy of this flow) may have saved the OPPOSITE value while this dialog sat
   // open, and applying the stale one would leave the VM disagreeing with the file.
   let stillWanted = enabled;
-  try { stillWanted = host.readSettings(scriptsDir).autoCheckpoints === true; } catch (_) { /* keep the captured value */ }
+  try { stillWanted = instancestate.readSettings(ckStore).autoCheckpoints === true; } catch (_) { /* keep the captured value */ }
   if (stillWanted !== enabled) {
     vscode.window.showWarningMessage(
       `Automatic checkpoints were changed to ${stillWanted ? "on" : "off"} elsewhere while this prompt was open — nothing was applied. Save again to apply the current setting.`
@@ -2185,7 +2239,7 @@ async function offerApplyCheckpoints(scriptsDir, enabled, changed) {
       if (res === "ok") {
         // Only a CONFIRMED run updates the marker; a failure leaves it stale-but-honest
         // so the next save offers again.
-        try { host.saveAppliedAutoCheckpoints(scriptsDir, enabled); } catch (e) { logLine(`checkpoints: marker write failed — ${e && e.message ? e.message : e}`); }
+        try { instancestate.saveAppliedAutoCheckpoints(ckStore, enabled); } catch (e) { logLine(`checkpoints: marker write failed — ${e && e.message ? e.message : e}`); }
         vscode.window.showInformationMessage(`Automatic checkpoints are now ${enabled ? "on" : "off"} on the Construct VM.`);
       } else {
         vscode.window.showWarningMessage("Changing automatic checkpoints didn't complete — see the console window for the error.");
@@ -2219,7 +2273,9 @@ async function startConstructReprovision(scriptsDir, target) {
       scriptsDir, projects: selected, instance: t.instance,
       stillCurrent: () => !targetSuperseded(t, "Reprovision"),
     }) === false) return false;
-    beginReprovisionFastRefresh();
+    // The EXACT store the launch used: t.instance with the scriptsDir that was handed to
+    // lifecycle.run, not one re-resolved after the pre-flight and the modal.
+    beginReprovisionFastRefresh(stateStore(t.instance, scriptsDir));
     return true;
   } catch (e) {
     vscode.window.showErrorMessage("Couldn't start reprovision: " + (e && e.message ? e.message : e));
@@ -2302,9 +2358,11 @@ function runOpenProject(name) {
     );
     return;
   }
-  const projRoot = resolveCfgDir() || resolveScriptsDir();
+  // CAPTURED: the profile lookup and the window that gets opened must name one VM.
+  const openTarget = actionTarget();
+  const projRoot = resolveCfgDir() || resolveScriptsDirFor(openTarget.instance);
   const profile = projRoot ? host.readProjectProfile(projRoot, name) : null;
-  remote.openOnVm({ path: remote.projectOpenPath(profile), newWindow: true, cfg: activeCfg() });
+  remote.openOnVm({ path: remote.projectOpenPath(profile), newWindow: true, cfg: openTarget.cfg });
 }
 
 /** Clone a git URL into /root/repos on the VM over SSH, then open it in a NEW
@@ -2773,7 +2831,7 @@ async function maybeAutoEnableAudio(context, target) {
     const t = target || actionTarget();
     const scriptsDir = resolveScriptsDirFor(t.instance);
     if (!scriptsDir) return;
-    const raw = host.readRawSettings(scriptsDir);
+    const raw = instancestate.readState(stateStore(t.instance, scriptsDir));
     if (!raw || raw.micPassthrough !== true) return;
     const reachable = await ssh.isReachable({ timeoutMs: 6000, cfg: t.cfg });
     // A result that arrives after a switch is DISCARDED, not applied to the new
@@ -2835,7 +2893,7 @@ async function verifyPatchesOnStartup(context) {
   // before the first await; a switch during the pass discards the rest of it.
   const t = actionTarget();
   const scriptsDir = resolveScriptsDirFor(t.instance);
-  const raw = scriptsDir ? host.readRawSettings(scriptsDir) : {};
+  const raw = scriptsDir ? instancestate.readState(stateStore(t.instance, scriptsDir)) : {};
   // Streaming defaults ON (matches CLAUDE_PARTIAL_STREAMING:-true on the VM), so treat
   // anything other than an explicit false as on. Mic passthrough is opt-in.
   const streamingOn = raw.claudePartialStreaming !== false;
@@ -2903,17 +2961,22 @@ async function verifyPatchesOnStartup(context) {
  * QuickPick copy says so.
  */
 async function runSelectProfiles() {
-  const scriptsDir = resolveScriptsDir();
+  // The selection is written to ONE instance's state, and the QuickPick below is an
+  // unbounded await: capture the target up front so a switch while it is open cannot
+  // land A's ticks in B's store.
+  const selTarget = actionTarget();
+  const scriptsDir = resolveScriptsDirFor(selTarget.instance);
   if (!scriptsDir) { warnNoScriptsDir(); return; }
-  // Profile listing comes from cfgDir (where profiles now live); the selection
-  // storage (readSelectedProjects/saveSelectedProjects) stays in scriptsDir.
+  const selStore = stateStore(selTarget.instance, scriptsDir);
+  // Profile listing comes from cfgDir (where profiles now live); the SELECTION is
+  // per VM, so it is read and written through that instance's own state store.
   const profileRoot = resolveCfgDir() || scriptsDir;
   const available = host.listProjectProfiles(profileRoot);
   if (!available.length) {
     vscode.window.showInformationMessage("No project profiles found. New repos are auto-discovered from the VM, or use \u201c+ add project\u201d to add one.");
     return;
   }
-  const selected = new Set(host.readSelectedProjects(scriptsDir));
+  const selected = new Set(instancestate.readSelectedProjects(selStore));
   const items = available.map((name) => ({ label: name, picked: selected.has(name) }));
   const picks = await vscode.window.showQuickPick(items, {
     canPickMany: true,
@@ -2922,8 +2985,9 @@ async function runSelectProfiles() {
   });
   if (picks == null) return; // cancelled — leave the stored selection untouched
   const chosen = projects.reconcileSelection(picks.map((p) => p.label), available);
+  if (targetSuperseded(selTarget, "Selecting project profiles")) return;
   try {
-    host.saveSelectedProjects(scriptsDir, chosen);
+    instancestate.saveSelectedProjects(selStore, chosen);
     vscode.window.showInformationMessage(
       chosen.length
         ? `Selected ${chosen.length} profile(s). Applied on the next Reprovision / Reinstall.`
@@ -3021,8 +3085,9 @@ async function runDeleteProject(name) {
   try {
     host.deleteProjectProfile(projRoot, safe);
     const available = host.listProjectProfiles(projRoot);
-    const selected = host.readSelectedProjects(scriptsDir).filter((n) => n !== safe);
-    host.saveSelectedProjects(scriptsDir, projects.reconcileSelection(selected, available));
+    const delStore = stateStore(delTarget.instance, scriptsDir);
+    const selected = instancestate.readSelectedProjects(delStore).filter((n) => n !== safe);
+    instancestate.saveSelectedProjects(delStore, projects.reconcileSelection(selected, available));
     const syncResult = await runConfigSync(delTarget);
     if (!syncResult || syncResult.lockBusy || !syncResult.ok) {
       vscode.window.showWarningMessage(
@@ -3081,8 +3146,17 @@ function disableAudio() {
 // (notification watcher, mic tunnel), and re-probe — otherwise the panel would show the
 // previous VM's status pills, versions, projects and usage under the new name.
 
-/** Update (or hide) the status-bar instance indicator. Hidden with exactly one
- *  instance, so a single-VM install's status bar is unchanged. */
+/**
+ * Update (or hide) the status-bar instance indicator. Hidden with exactly one instance,
+ * so a single-VM install's status bar is unchanged.
+ *
+ * With several instances it also carries HOW MANY of them are behind the installed
+ * Construct — "(n to reprovision)" — because the yellow Reprovision button only ever
+ * speaks for the ACTIVE one, and a VM you have not switched to in a while is exactly the
+ * one that silently falls behind. The count comes from the per-instance host caches
+ * (instancestate.countStale): no SSH fan-out, so it is free to run on every refresh and
+ * is right for a VM that is switched off. Omitted at 0, which is the common state.
+ */
 function syncInstanceStatusItem() {
   try {
     if (!instanceStatusItem) return;
@@ -3090,8 +3164,11 @@ function syncInstanceStatusItem() {
     const all = instances.list(reg);
     if (all.length < 2) { instanceStatusItem.hide(); return; }
     const inst = activeInstance();
-    instanceStatusItem.text = "$(vm) " + inst.name;
-    instanceStatusItem.tooltip = `The Construct instance: ${inst.name} (${inst.vmHost}:${inst.sshPort}) — click to switch`;
+    let stale = 0;
+    try { stale = instancestate.countStale(all.map((i) => stateStore(i))); } catch (_) { stale = 0; }
+    instanceStatusItem.text = "$(vm) " + inst.name + (stale > 0 ? ` (${stale} to reprovision)` : "");
+    instanceStatusItem.tooltip = `The Construct instance: ${inst.name} (${inst.vmHost}:${inst.sshPort}) — click to switch` +
+      (stale > 0 ? `\n${stale} instance(s) were provisioned with an older Construct — switch to one and reprovision.` : "");
     instanceStatusItem.show();
   } catch (_) { /* a status-bar item is never worth an exception */ }
 }
@@ -3329,11 +3406,16 @@ async function runSwitchInstance() {
     );
     return;
   }
+  // The instance this window is ATTACHED to over Remote-SSH — not necessarily the active
+  // one, since adoption only preselects it and the user can switch away.
+  const connectedName = instances.connectedInstanceName(reg, safeRemoteAuthority());
   const pick = await vscode.window.showQuickPick(
     all.map((i) => ({
       label: (i.name === current ? "$(check) " : "") + i.name,
       description: i.vmHost + (i.sshPort === 22 ? "" : ":" + i.sshPort),
-      detail: i.backend + (i.name === reg.defaultInstance ? " · registry default" : ""),
+      detail: i.backend +
+        (i.name === reg.defaultInstance ? " · registry default" : "") +
+        (i.name === connectedName ? " · connected (this window)" : ""),
       name: i.name,
     })),
     { title: "Switch the Construct instance", placeHolder: "The VM this window's panel drives" }
@@ -3850,8 +3932,9 @@ function handleMessage(message, webview, context) {
       try {
         // Snapshot the previous state BEFORE the write so live T3 changes and
         // provisioning-only patch prompts key on transitions, not absolute values.
-        const prev = host.readSettings(scriptsDir);
-        const merged = host.mapToForm(host.saveSettings(scriptsDir, message.settings));
+        const saveStore = stateStore(saveTarget.instance, scriptsDir);
+        const prev = instancestate.readSettings(saveStore);
+        const merged = host.mapToForm(instancestate.saveSettings(saveStore, message.settings));
         const patchChanges = host.patchReprovisionChanges(prev, merged);
         if (patchChanges.length) offerReprovisionForPatchSettings(scriptsDir, patchChanges, saveTarget);
         else vscode.window.showInformationMessage("Construct settings saved.");
@@ -3876,14 +3959,18 @@ function handleMessage(message, webview, context) {
         const t3plan = t3code.planT3LiveAction(wantT3, hadT3, newCh, oldCh);
         if (t3plan) {
           const sourceManagedT3 = merged.t3codeLimitResume === true;
+          // The CAPTURED target the settings were written for — not "whatever is active
+          // now": these are multi-minute npm runs on one VM, and `instance` is also what
+          // keys t3code's per-VM serialization queue, so enabling on A cannot block B.
+          // (It also picks the pairing-script variant openWebUi mints with; the default
+          // instance keeps the original command verbatim.)
+          const t3opts = { cfg: saveTarget.cfg, instance: saveTarget.instance };
           if (t3plan.action === "enable" && !sourceManagedT3) {
-            // `instance` only picks the pairing-script variant openWebUi mints with
-            // (the default instance keeps the original command verbatim).
-            t3code.enableOnVm({ channel: t3plan.channel, cfg: activeCfg(), instance: activeInstance() }).then(() => refreshAll());
+            t3code.enableOnVm({ channel: t3plan.channel, ...t3opts }).then(() => refreshAll());
           } else if (t3plan.action === "disable") {
-            t3code.disableOnVm({ cfg: activeCfg() }).then(() => refreshAll());
+            t3code.disableOnVm(t3opts).then(() => refreshAll());
           } else if (t3plan.action === "setChannel" && !sourceManagedT3) {
-            t3code.setChannelOnVm(t3plan.channel, { cfg: activeCfg() }).then(() => refreshAll());
+            t3code.setChannelOnVm(t3plan.channel, t3opts).then(() => refreshAll());
           }
         }
         // Automatic checkpoints are a HYPER-V property, decided when the VM is
@@ -3979,11 +4066,24 @@ function handleMessage(message, webview, context) {
         // The agents-list ▷ button: only T3 Code has a browser UI today. Mints a
         // one-time pairing link over SSH and opens it in the host browser.
         if (message.agent === "t3code") {
-          t3code.openWebUi({ cfg: activeCfg(), instance: activeInstance(), webUrl: lastT3WebUrl });
+          // One capture for the SSH pairing call, the instance the pairing script is
+          // built for and the fallback origin — all three must describe one VM.
+          const webTarget = actionTarget();
+          t3code.openWebUi({
+            cfg: webTarget.cfg,
+            instance: webTarget.instance,
+            webUrl: lastT3WebUrl.get(webTarget.name) || null,
+          });
         }
         return;
       }
-      if (id === "connect") { remote.openOnVm({ path: "/root/repos", newWindow: false, cfg: activeCfg() }); return; }
+      if (id === "connect") {
+        // CAPTURED: opening a remote window is not undoable, and re-reading the active
+        // instance here would connect to whatever the window switched to since the click.
+        const connectTarget = actionTarget();
+        remote.openOnVm({ path: "/root/repos", newWindow: false, cfg: connectTarget.cfg });
+        return;
+      }
       if (id === "startConnect") { runStartAndConnect(); return; }
       if (id === "shutdown") { runShutdown(); return; }
       if (id === "exportConfig") {
@@ -4010,7 +4110,10 @@ function handleMessage(message, webview, context) {
             scriptsDir: scriptsDir, projects: projects, instance: lifeTarget.instance,
             stillCurrent: () => !targetSuperseded(lifeTarget, id === "reprovision" ? "Reprovision" : id === "reinstall" ? "Reinstall" : "Redownload"),
           });
-          if (started !== false && id === "reprovision") beginReprovisionFastRefresh();
+          if (started !== false && id === "reprovision") {
+            // The EXACT store the launch used (see startConstructReprovision).
+            beginReprovisionFastRefresh(stateStore(lifeTarget.instance, scriptsDir));
+          }
         })();
         return;
       }

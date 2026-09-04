@@ -856,6 +856,12 @@ $commonLib = Join-Path $PSScriptRoot "lib\AgentVm.Common.ps1"
 if (-not (Test-Path -LiteralPath $commonLib)) { throw "Required helper not found: $commonLib" }
 . $commonLib
 
+# Per-instance state (the VM-scoped half of what the control panel saves). OPTIONAL: an
+# older/partial checkout without it falls back to the legacy top-level keys, which is
+# exactly today's single-VM behaviour.
+$stateLib = Join-Path $PSScriptRoot "lib\AgentVm.InstanceState.ps1"
+if (Test-Path -LiteralPath $stateLib) { . $stateLib }
+
 # Hypervisor driver: every Hyper-V touch in this script (the existence probe, the
 # prerequisite install, the teardown, the reachability endpoint) goes through the
 # contract functions it defines -- see docs/drivers.md. "hyperv-local" is today's
@@ -2311,6 +2317,13 @@ $VmDnsName   = $script:VmIdentity.VmHost
 $VmIsDefault = $script:VmIdentity.IsDefault
 $VmAlias     = $script:VmIdentity.HostAlias
 $VmKeyName   = $script:VmIdentity.KeyName
+# WHICH INSTANCE this local run's per-VM state belongs to (B12) -- taken from the SAME
+# resolved identity as every value above, so there is one answer and one line to re-point.
+# The default instance resolves to the legacy top-level keys of .construct-settings.json;
+# any other one to %LOCALAPPDATA%\The-Construct\instances\<name>.json. The REMOTE path
+# never reaches here -- it returns inside the `if ($RemoteInstall)` block above, where the
+# instance name is -InstanceName.
+$VmInstanceName = $script:VmIdentity.Name
 # The config-sync branch THIS run owns: an explicit -ConfigBranch wins, otherwise the
 # SAME derivation Provision-AgentVM.ps1 applies ("agent-vm" -> "vm", anything else ->
 # "vm-<alias>"). Every sync this script performs -- the PRE-WIPE tick below included --
@@ -2934,7 +2947,14 @@ if (-not $SkipCreateVm -and -not $existingVmHandled -and
 $effectiveAutoCheckpoints = $AutomaticCheckpoints
 if (-not $PSBoundParameters.ContainsKey('AutomaticCheckpoints')) {
     try {
-        $savedSettings = Read-ConstructSettings -Dir $PSScriptRoot
+        # THIS VM's saved preference ($VmInstanceName is the one place that answers "which
+        # instance"), so the default VM reads the legacy top-level key and any other VM
+        # reads its own state file.
+        $savedSettings = if (Get-Command Read-ConstructInstanceState -ErrorAction SilentlyContinue) {
+            Read-ConstructInstanceState -Name $VmInstanceName -Dir $PSScriptRoot
+        } else {
+            Read-ConstructSettings -Dir $PSScriptRoot
+        }
         if ($savedSettings -and $null -ne $savedSettings.vmAutoCheckpoints) {
             # NOT [bool]: every non-empty PowerShell string is truthy, so a hand-edited
             # settings file holding the STRING "false" would coerce to $true and silently

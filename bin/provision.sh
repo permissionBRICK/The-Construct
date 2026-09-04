@@ -1186,6 +1186,32 @@ record_timestamps() {
   fi
   mark REPROVISIONED_AT "${now}" || return
   note "    REPROVISIONED_AT=${now}"
+  # The Construct commit THIS run provisioned with -- the guest's own copy of the host's
+  # per-instance provisionedCommit marker, and the SOURCE OF TRUTH for "is this VM behind
+  # the installed Construct": the control panel probes it, so a VM some other PC
+  # provisioned is still judged correctly. CONSTRUCT_VERSION is already in the environment
+  # (Provision-AgentVM.ps1 passes the installed commit, or the literal 'unversioned' when
+  # it could not resolve one). An UNKNOWN value leaves the key ABSENT rather than
+  # recording a lie -- a run without a version writes a byte-identical marker file and
+  # prints nothing extra.
+  local commit="${CONSTRUCT_VERSION:-}"
+  if [[ "${commit}" =~ ^[0-9a-f]{7,64}$ ]]; then
+    mark CONSTRUCT_COMMIT "${commit}" || return
+    note "    CONSTRUCT_COMMIT=${commit}"
+  elif [[ -f "${MARKER_FILE}" ]] && grep -Eq '^CONSTRUCT_COMMIT=' "${MARKER_FILE}"; then
+    # THIS run could not say which commit it provisioned with, so whatever is recorded is
+    # now a statement about a DIFFERENT provisioning than the one that just happened -- a
+    # lie the panel would compare against installedCommit. REMOVE the key rather than
+    # empty it: "absent" is the one shape both readers already treat as unknown, and the
+    # contract is that an unset/unusable CONSTRUCT_VERSION leaves no key behind at all.
+    # Rewritten in place (> keeps the inode, the owner and the mode; the chmod below is
+    # belt and braces), and only when a key is actually there -- a marker file that never
+    # had one keeps exactly the bytes it has today.
+    local kept
+    kept="$(grep -v '^CONSTRUCT_COMMIT=' "${MARKER_FILE}" || true)"
+    printf '%s\n' "${kept}" >"${MARKER_FILE}" || return
+    note "    CONSTRUCT_COMMIT removed (this Construct could not resolve its own commit)"
+  fi
   chmod 0644 "${MARKER_FILE}"
 }
 run_step optional "Recording provisioning timestamps" record_timestamps

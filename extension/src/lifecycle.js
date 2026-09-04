@@ -24,6 +24,7 @@ const fs = require("fs");
 const path = require("path");
 const host = require("./host");
 const instances = require("./instances");
+const instancestate = require("./instancestate");
 
 function vsc() { return require("vscode"); }
 
@@ -975,10 +976,15 @@ function run(action, opts = {}) {
   if (!scriptsDir) return false; // caller warns when it can't resolve the scripts dir
   // Prefer the caller-supplied selection (the extension computes the EFFECTIVE set —
   // saved selection, else the VM's current projects); fall back to the saved selection.
+  // The settings and the project selection a run replays belong to the INSTANCE it
+  // targets, not to the checkout: for the default instance the store IS this scripts
+  // dir's .construct-settings.json (byte-identical to before), for any other one it is
+  // that VM's own state file.
+  const store = instancestate.store(opts.instance, scriptsDir);
   let projects = Array.isArray(opts.projects) ? opts.projects : null;
-  if (!projects) { try { projects = host.readSelectedProjects(scriptsDir); } catch (_) { projects = []; } }
+  if (!projects) { try { projects = instancestate.readSelectedProjects(store); } catch (_) { projects = []; } }
   const inv = buildInvocation(action, {
-    settings: host.readSettings(scriptsDir),
+    settings: instancestate.readSettings(store),
     backupDir: path.join(scriptsDir, BACKUP_DIR_NAME),
     backupMode: opts.backupMode,
     projects,
@@ -1008,7 +1014,7 @@ function run(action, opts = {}) {
     // product default, so a user who never touched it still expects a rebuilt VM to have
     // checkpoints disabled. Only an explicit `true` is unaffected by an old script.
     let wantsOff = true;
-    try { wantsOff = host.readSettings(scriptsDir).autoCheckpoints !== true; } catch (_) {}
+    try { wantsOff = instancestate.readSettings(store).autoCheckpoints !== true; } catch (_) {}
     if (wantsOff && !scriptSupportsCheckpoints(scriptsDir)) {
       vscode.window.showWarningMessage(
         "These host scripts are too old to honour the “Automatic checkpoints: off” setting, so the rebuilt VM will have Hyper-V's automatic checkpoints ON. Update Construct first to avoid that."
@@ -1040,7 +1046,7 @@ function run(action, opts = {}) {
     // honest: a stale "already applied off" must not suppress the offer for a fresh VM
     // that an old script just created with checkpoints on.
     if (inv.destructive) {
-      try { host.saveAppliedAutoCheckpoints(scriptsDir, null); } catch (_) { /* best-effort */ }
+      try { instancestate.saveAppliedAutoCheckpoints(store, null); } catch (_) { /* best-effort */ }
     }
     launchHostScript({
       scriptsDir, script: inv.script, args: inv.args, argSpec: inv.argSpec,

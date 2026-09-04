@@ -219,5 +219,33 @@ const noHostReady = t3agentOf("T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://vm.
 ok("state: a recorded origin yields a url even without a probed host",
   !!noHostReady && noHostReady.url === "https://vm.example.com:5178");
 
+// ── B12: the guest's own Construct commit (CONSTRUCT_COMMIT) ─────────────────
+// bin/provision.sh records it in /etc/construct/provisioned.env at the end of a run. It
+// is the SOURCE OF TRUTH for "is this VM behind the installed Construct" — right even
+// for a VM another PC provisioned — so the probe has to bring it back.
+ok("probe script reads CONSTRUCT_COMMIT from the marker file",
+  /emit CONSTRUCT_COMMIT "\$\(sed -n 's\/\^CONSTRUCT_COMMIT=\/\/p' "\$mark" \| head -1\)"/.test(probe.REMOTE_PROBE));
+ok("probe script reads it from the SAME marker file as the timestamps", (() => {
+  const block = probe.REMOTE_PROBE.slice(probe.REMOTE_PROBE.indexOf("mark=/etc/construct/provisioned.env"));
+  return block.indexOf("CONSTRUCT_COMMIT") > 0 && block.indexOf("CONSTRUCT_COMMIT") < block.indexOf("\nfi");
+})());
+
+ok("commit: 7-64 hex is accepted and lowercased", probe.parseCommit(" ABC1234def ") === "abc1234def");
+ok("commit: a config-set.sh quoted value is unquoted first", probe.parseCommit("'abc1234'") === "abc1234");
+ok("commit: too short -> unknown", probe.parseCommit("abc123") === "");
+ok("commit: non-hex -> unknown", probe.parseCommit("not-a-commit") === "");
+ok("commit: empty/null -> unknown", probe.parseCommit("") === "" && probe.parseCommit(null) === "");
+ok("commit: a 64-char sha is accepted", probe.parseCommit("a".repeat(64)) === "a".repeat(64));
+ok("commit: 65 hex chars -> unknown", probe.parseCommit("a".repeat(65)) === "");
+
+const withCommit = probe.toState(probe.parseProbe("CONSTRUCT_COMMIT\tABC1234\n"));
+ok("state: a reported commit becomes provisionedCommit (lowercased)", withCommit.provisionedCommit === "abc1234");
+const noCommit = probe.toState(probe.parseProbe("INSTALLED_AT\t2026-06-01T10:15:00Z\n"));
+ok("state: a VM that reports no commit carries NO provisionedCommit key",
+  !("provisionedCommit" in noCommit));
+const badCommit = probe.toState(probe.parseProbe("CONSTRUCT_COMMIT\tgarbage\n"));
+ok("state: an unparseable commit is dropped rather than surfaced",
+  !("provisionedCommit" in badCommit));
+
 console.log(`\n  probe/ssh unit tests — ${pass}/${pass + fail} passed\n`);
 process.exit(fail ? 1 : 0);
