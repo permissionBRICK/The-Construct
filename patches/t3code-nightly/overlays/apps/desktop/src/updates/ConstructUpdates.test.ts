@@ -16,6 +16,7 @@ import {
   isConstructProvisionStale,
   isNewerConstructT3Version,
   planConstructLaunch,
+  constructInstanceStatePath,
   readConstructMarkers,
   readConstructMarkersFromDir,
   readConstructVmTarget,
@@ -705,6 +706,112 @@ describe("ConstructUpdates markers on disk", () => {
     assert.isNull(readConstructMarkersFromDir(SCRIPTS_DIR, broken, join).installedCommit);
     const missing: ConstructFileSystem = { ...fs, readTextFile: () => null };
     assert.isNull(readConstructMarkersFromDir(SCRIPTS_DIR, missing, join).installedCommit);
+  });
+
+  // ── B12: provisionedCommit is PER VM ──────────────────────────────────────
+  // installedCommit / repo / ref describe the INSTALL (one checkout, one answer);
+  // provisionedCommit describes ONE VM. The default instance keeps both at the legacy top
+  // level of .construct-settings.json, so nothing changes for a single-VM PC; every other
+  // instance keeps its own under `The-Construct\instances\<name>.json`.
+  const STATE_DIR = `${LOCAL_APP_DATA}\\The-Construct\\instances`;
+  const OTHER_PROVISIONED = "0e786a3cccccccccccccccccccccccccccccccc0";
+
+  it("resolves the per-instance state path only for a non-default instance", () => {
+    assert.isNull(constructInstanceStatePath(LOCAL_APP_DATA, "agent-vm", join));
+    assert.isNull(constructInstanceStatePath(LOCAL_APP_DATA, "", join));
+    assert.isNull(constructInstanceStatePath(undefined, "work-vm", join));
+    assert.equal(constructInstanceStatePath(LOCAL_APP_DATA, "work-vm", join), `${STATE_DIR}\\work-vm.json`);
+  });
+
+  it("holds the name to THE ONE name rule, case included", () => {
+    // "Agent-VM" is not a valid instance name at all, so it is refused rather than
+    // silently treated as the default — the same call instancestate.js and
+    // Test-ConstructDefaultInstanceStore make.
+    assert.isNull(constructInstanceStatePath(LOCAL_APP_DATA, "Agent-VM", join));
+    assert.isNull(constructInstanceStatePath(LOCAL_APP_DATA, "Work-VM", join));
+    assert.isNull(constructInstanceStatePath(LOCAL_APP_DATA, "work_vm", join));
+    assert.isNull(constructInstanceStatePath(LOCAL_APP_DATA, "work-", join));
+    assert.isNull(constructInstanceStatePath(LOCAL_APP_DATA, "construct-work", join));
+    assert.isNull(constructInstanceStatePath(LOCAL_APP_DATA, "a".repeat(64), join));
+    assert.isNotNull(constructInstanceStatePath(LOCAL_APP_DATA, "a".repeat(63), join));
+  });
+
+  it("refuses a name that would escape the instances directory", () => {
+    assert.isNull(constructInstanceStatePath(LOCAL_APP_DATA, "../evil", join));
+    assert.isNull(constructInstanceStatePath(LOCAL_APP_DATA, "a\\b", join));
+    assert.isNull(constructInstanceStatePath(LOCAL_APP_DATA, "a..b", join));
+  });
+
+  it("reads a non-default instance's provisionedCommit from its own file", () => {
+    const base = installedFs({ installedCommit: INSTALLED, provisionedCommit: PROVISIONED });
+    const withState: ConstructFileSystem = {
+      ...base,
+      readTextFile: (path) =>
+        path === `${STATE_DIR}\\work-vm.json`
+          ? JSON.stringify({ version: 1, instance: "work-vm", provisionedCommit: OTHER_PROVISIONED })
+          : base.readTextFile(path),
+    };
+    const markers = readConstructMarkersFromDir(SCRIPTS_DIR, withState, join, {
+      localAppData: LOCAL_APP_DATA,
+      instanceName: "work-vm",
+    });
+    assert.equal(markers.installedCommit, INSTALLED, "installedCommit stays install-wide");
+    assert.equal(markers.provisionedCommit, OTHER_PROVISIONED);
+  });
+
+  it("does NOT let a non-default instance inherit the legacy top-level marker", () => {
+    const base = installedFs({ installedCommit: INSTALLED, provisionedCommit: PROVISIONED });
+    const markers = readConstructMarkersFromDir(SCRIPTS_DIR, base, join, {
+      localAppData: LOCAL_APP_DATA,
+      instanceName: "work-vm",
+    });
+    assert.equal(markers.installedCommit, INSTALLED);
+    assert.isNull(markers.provisionedCommit, "an instance with no state file is unknown, not the default VM's");
+  });
+
+  it("keeps the default instance on the legacy single file", () => {
+    const base = installedFs({ installedCommit: INSTALLED, provisionedCommit: PROVISIONED });
+    const markers = readConstructMarkersFromDir(SCRIPTS_DIR, base, join, {
+      localAppData: LOCAL_APP_DATA,
+      instanceName: "agent-vm",
+    });
+    assert.equal(markers.provisionedCommit, PROVISIONED);
+    // ...and identical to the call with no options at all (an older caller).
+    assert.deepEqual(markers, readConstructMarkersFromDir(SCRIPTS_DIR, base, join));
+  });
+
+  it("never lets a per-instance file shadow the installed commit", () => {
+    const base = installedFs({ installedCommit: INSTALLED, constructRepo: "permissionBRICK/The-Construct", constructRef: "main" });
+    const hostile: ConstructFileSystem = {
+      ...base,
+      readTextFile: (path) =>
+        path === `${STATE_DIR}\\work-vm.json`
+          ? JSON.stringify({
+              installedCommit: OTHER_PROVISIONED,
+              constructRepo: "evil/repo",
+              constructRef: "evil",
+              provisionedCommit: OTHER_PROVISIONED,
+            })
+          : base.readTextFile(path),
+    };
+    const markers = readConstructMarkersFromDir(SCRIPTS_DIR, hostile, join, {
+      localAppData: LOCAL_APP_DATA,
+      instanceName: "work-vm",
+    });
+    assert.equal(markers.installedCommit, INSTALLED);
+    assert.equal(markers.repo, "permissionBRICK/The-Construct");
+    assert.equal(markers.ref, "main");
+    assert.equal(markers.provisionedCommit, OTHER_PROVISIONED);
+  });
+
+  it("judges a non-default target's staleness from its own marker", () => {
+    const stale = readConstructMarkers(
+      { installedCommit: INSTALLED },
+      { provisionedCommit: OTHER_PROVISIONED },
+    );
+    assert.isTrue(isConstructProvisionStale(stale));
+    const fresh = readConstructMarkers({ installedCommit: INSTALLED }, { provisionedCommit: INSTALLED });
+    assert.isFalse(isConstructProvisionStale(fresh));
   });
 });
 
