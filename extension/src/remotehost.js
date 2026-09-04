@@ -648,6 +648,69 @@ function mapVmState(raw) {
   return "unknown";
 }
 
+/**
+ * "Remove Remote Host" as DATA (B14, plan §4.12 "Cleanup"; the missing counterpart the
+ * B9 review recorded). Adding a host writes THREE things in three different stores —
+ * the globalState record, the API token in SecretStorage and the pinned certificate
+ * fingerprint in a .pin file — and until now nothing removed any of them, so an
+ * uninstall left a token and a pin behind for a machine the user had walked away from.
+ *
+ * REFUSED while any registry entry still names this service URL: those VMs are reached
+ * THROUGH the host, and dropping its token would leave them in the picker as instances
+ * nothing can talk to. Remove the instances first (planRemoveInstance), then the host.
+ *
+ * `instances` is the registry's instance list (instances.list(registry)); URLs are
+ * compared after normalizeServiceUrl, so "https://h:7462" and "h" are one host.
+ * Returns { ok, refusal, url, referencedBy, removes }. Pure.
+ */
+function planForgetRemoteHost(opts = {}) {
+  const out = { ok: false, refusal: "", url: "", referencedBy: [], removes: [] };
+  let url;
+  try { url = normalizeServiceUrl(opts.url); }
+  catch (e) { return { ...out, refusal: e && e.message ? e.message : String(e) }; }
+  out.url = url;
+  const known = Array.isArray(opts.hosts) ? opts.hosts.filter((h) => h && typeof h.url === "string") : [];
+  if (known.length && !known.some((h) => sameServiceUrl(h.url, url))) {
+    return { ...out, refusal: `${urlParts(url).host} is not an enrolled Construct host on this PC.` };
+  }
+  const referencedBy = [];
+  for (const inst of (Array.isArray(opts.instances) ? opts.instances : [])) {
+    const u = inst && inst.service && inst.service.url;
+    if (u && sameServiceUrl(u, url)) referencedBy.push(String(inst.name));
+  }
+  if (referencedBy.length) {
+    return {
+      ...out,
+      referencedBy,
+      refusal: `${urlParts(url).host} still hosts ${referencedBy.length === 1 ? "the instance" : "the instances"} ` +
+        referencedBy.map((n) => `"${n}"`).join(", ") +
+        ". Remove them first — without this host's token and pinned certificate nothing could reach them.",
+    };
+  }
+  return {
+    ...out,
+    ok: true,
+    // ORDER MATTERS: the globalState record is the HANDLE this command is reached by
+    // (it is what the host picker lists). Clearing it first and then failing to delete
+    // the token or the pin would leave those behind with no way to retry — so the two
+    // stores that hold something go first, and the record is dropped only after them.
+    removes: [
+      { kind: "token", label: "its API token in SecretStorage", secretKey: tokenSecretKey(url) },
+      { kind: "pin", label: "its pinned certificate fingerprint", path: pinPath(url, opts.env) },
+      { kind: "record", label: `the enrolment record for ${urlParts(url).host}` },
+    ],
+  };
+}
+
+/** Are these two service URLs the same host? Normalized first, so scheme/port/IPv6
+ *  spelling differences are not two hosts. Pure; never throws on a bad URL. */
+function sameServiceUrl(a, b) {
+  let na, nb;
+  try { na = normalizeServiceUrl(a); } catch (_) { return false; }
+  try { nb = normalizeServiceUrl(b); } catch (_) { return false; }
+  return na.toLowerCase() === nb.toLowerCase();
+}
+
 module.exports = {
   DEFAULT_PORT, CONTAINER, REMOTE_DIR, TOKEN_KEY_PREFIX,
   normalizeServiceUrl, bareHost, sniName, isLoopbackHost, assertTransportSafe,
@@ -656,4 +719,5 @@ module.exports = {
   apiPath, mapError, apiError, parseBody, nodeHttp, pinnedHttpsAgent,
   psSingleQuote, buildDelegateScript, buildDelegateLaunch, parseDelegateOutput, runDelegate,
   createClient, mapVmState, readEndpoint,
+  planForgetRemoteHost, sameServiceUrl,
 };

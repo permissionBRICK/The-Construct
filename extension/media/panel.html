@@ -255,6 +255,19 @@
         <button class="btn danger" data-cmd="customReinstall">&#x2297; Reinstall with these settings</button>
       </div>
     </section>
+
+    <!-- Remove instance (B14, plan §4.12 "Cleanup"). Hidden unless the ACTIVE instance is
+         one the removal planner would accept: on a single-VM install there is nothing to
+         remove (every reader falls back to the implicit default VM), so the section is
+         not there at all. panel.js fills the list and the warning from the plan. -->
+    <section class="setgroup" id="removeInstanceSection" style="border-color:rgba(255,93,93,0.28)" hidden>
+      <div class="gh"><h2 class="seclabel" style="color:#ff8a8a">Remove instance</h2><span class="applies reinstall">one-time action</span></div>
+      <p class="lead" style="margin:0 0 13px">Forget <b style="color:var(--dim)" id="removeInstanceName">this VM</b> on this PC: <span id="removeInstanceList"></span></p>
+      <p class="lead" style="margin:0 0 13px" id="removeInstanceKeeps"></p>
+      <div class="settings-actions" style="margin-top:14px">
+        <button class="btn danger" data-cmd="removeInstance" id="removeInstanceBtn">&#x2716; Remove instance</button>
+      </div>
+    </section>
   </div>
 
   <footer>THE CONSTRUCT &middot; disposable agent VM &nbsp;&middot;&nbsp; <a href="https://github.com/permissionBRICK/The-Construct#readme">readme</a> &middot; <a href="https://github.com/permissionBRICK/The-Construct/tree/main/docs">docs</a> &middot; <a href="https://github.com/permissionBRICK/The-Construct">github</a></footer>

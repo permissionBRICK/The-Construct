@@ -15,7 +15,13 @@ import {
   isConstructManagedBuild,
   isConstructProvisionStale,
   isNewerConstructT3Version,
+  collectConstructInstances,
+  planConstructInstanceReprovision,
   planConstructLaunch,
+  readConstructInstanceState,
+  readConstructInstanceT3Endpoint,
+  readConstructInstances,
+  readConstructInstancesFromRegistry,
   readConstructMarkers,
   readConstructMarkersFromDir,
   readConstructVmTarget,
@@ -219,7 +225,7 @@ describe("ConstructUpdates remote results", () => {
 });
 
 describe("ConstructUpdates action + state derivation", () => {
-  it("prefers updating Construct on the PC, then reprovisioning", () => {
+  it("offers ONLY Update Construct host-wide — a reprovision belongs to a row", () => {
     assert.equal(
       resolveConstructAction({
         scriptsDir: SCRIPTS_DIR,
@@ -229,23 +235,24 @@ describe("ConstructUpdates action + state derivation", () => {
       }),
       "update-construct",
     );
-    assert.equal(
+    // B14: a stale VM, or a newer upstream T3, is a fact about ONE instance — T3 links
+    // several at once, so a host-wide "reprovision" would mean "whichever VM the registry
+    // currently calls default", which is the ambiguity the per-row buttons remove.
+    assert.isNull(
       resolveConstructAction({
         scriptsDir: SCRIPTS_DIR,
         constructUpdateAvailable: false,
         provisionStale: true,
         t3UpdateAvailable: false,
       }),
-      "reprovision",
     );
-    assert.equal(
+    assert.isNull(
       resolveConstructAction({
         scriptsDir: SCRIPTS_DIR,
         constructUpdateAvailable: false,
         provisionStale: false,
         t3UpdateAvailable: true,
       }),
-      "reprovision",
     );
     assert.isNull(
       resolveConstructAction({
@@ -269,11 +276,13 @@ describe("ConstructUpdates action + state derivation", () => {
   it("folds an available action into an `available` state the stock pill understands", () => {
     const info = deriveConstructUpdateInfo({
       scriptsDir: SCRIPTS_DIR,
+      instances: [],
       target: DEFAULT_CONSTRUCT_VM_TARGET,
       markers: readConstructMarkers({ installedCommit: INSTALLED, provisionedCommit: INSTALLED }),
       compare: { available: true, behind: 3 },
       t3Version: "0.0.38",
       t3LatestVersion: "0.0.38",
+      t3LatestByChannel: { latest: null, nightly: null },
       channel: "latest",
       runningAction: null,
       checkedAt: "2026-09-03T10:00:00.000Z",
@@ -289,43 +298,57 @@ describe("ConstructUpdates action + state derivation", () => {
     assert.equal(state.construct, info);
   });
 
-  it("labels a reprovision by the newer T3 release when there is one, else by the installed commit", () => {
+  it("still PUBLISHES per-VM staleness, which is what a row shows and offers", () => {
     const t3 = deriveConstructUpdateInfo({
       scriptsDir: SCRIPTS_DIR,
+      instances: [],
       target: DEFAULT_CONSTRUCT_VM_TARGET,
       markers: readConstructMarkers({ installedCommit: INSTALLED, provisionedCommit: INSTALLED }),
       compare: { available: false, behind: 0 },
       t3Version: "0.0.38",
       t3LatestVersion: "0.0.39",
+      t3LatestByChannel: { latest: null, nightly: null },
       channel: "latest",
       runningAction: null,
       checkedAt: null,
       error: null,
     });
-    assert.equal(t3.action, "reprovision");
-    assert.equal(constructAvailableVersionLabel(t3), "T3 Code 0.0.39");
+    // A newer upstream T3 is a fact about an instance, not a host-wide action any more.
+    assert.isNull(t3.action);
+    assert.isTrue(t3.t3UpdateAvailable);
+    // ...and the label helper still words it for a row that is running one.
+    assert.equal(
+      constructAvailableVersionLabel({ ...t3, runningAction: "reprovision" }),
+      "T3 Code 0.0.39",
+    );
 
     const stale = deriveConstructUpdateInfo({
       scriptsDir: SCRIPTS_DIR,
+      instances: [],
       target: DEFAULT_CONSTRUCT_VM_TARGET,
       markers: readConstructMarkers({ installedCommit: INSTALLED, provisionedCommit: PROVISIONED }),
       compare: { available: false, behind: 0 },
       t3Version: "0.0.38",
       t3LatestVersion: "0.0.38",
+      t3LatestByChannel: { latest: null, nightly: null },
       channel: "latest",
       runningAction: null,
       checkedAt: null,
       error: null,
     });
-    assert.equal(stale.action, "reprovision");
+    assert.isNull(stale.action);
     assert.isTrue(stale.provisionStale);
-    assert.equal(constructAvailableVersionLabel(stale), "Construct main@dc44958");
+    assert.equal(
+      constructAvailableVersionLabel({ ...stale, runningAction: "reprovision" }),
+      "Construct main@dc44958",
+    );
   });
 
   it("marks a running script as an indeterminate download and a failed check as an error", () => {
     const running = applyConstructInfoToState(baseState, {
       ...deriveConstructUpdateInfo({
         scriptsDir: SCRIPTS_DIR,
+        instances: [],
         target: DEFAULT_CONSTRUCT_VM_TARGET,
         markers: readConstructMarkers({
           installedCommit: INSTALLED,
@@ -334,6 +357,7 @@ describe("ConstructUpdates action + state derivation", () => {
         compare: null,
         t3Version: "0.0.38",
         t3LatestVersion: null,
+        t3LatestByChannel: { latest: null, nightly: null },
         channel: "latest",
         runningAction: "reprovision",
         checkedAt: null,
@@ -347,11 +371,13 @@ describe("ConstructUpdates action + state derivation", () => {
       baseState,
       deriveConstructUpdateInfo({
         scriptsDir: SCRIPTS_DIR,
+        instances: [],
         target: DEFAULT_CONSTRUCT_VM_TARGET,
         markers: readConstructMarkers({ installedCommit: INSTALLED, provisionedCommit: INSTALLED }),
         compare: null,
         t3Version: "0.0.38",
         t3LatestVersion: null,
+        t3LatestByChannel: { latest: null, nightly: null },
         channel: "latest",
         runningAction: null,
         checkedAt: null,
@@ -366,11 +392,13 @@ describe("ConstructUpdates action + state derivation", () => {
       baseState,
       deriveConstructUpdateInfo({
         scriptsDir: SCRIPTS_DIR,
+        instances: [],
         target: DEFAULT_CONSTRUCT_VM_TARGET,
         markers: readConstructMarkers({ installedCommit: INSTALLED, provisionedCommit: INSTALLED }),
         compare: { available: false, behind: 0 },
         t3Version: "0.0.38",
         t3LatestVersion: "0.0.38",
+        t3LatestByChannel: { latest: null, nightly: null },
         channel: "latest",
         runningAction: null,
         checkedAt: null,
@@ -430,7 +458,8 @@ describe("checkConstructUpdates", () => {
     });
     assert.deepEqual(calls, [COMPARE_URL, NPM_NIGHTLY_URL]);
     assert.isTrue(info.t3UpdateAvailable);
-    assert.equal(info.action, "reprovision");
+    // The FACT is published; the action for it belongs to the matched instance's row.
+    assert.isNull(info.action);
   });
 
   it("keeps the local stale-provision signal when the network is down", async () => {
@@ -447,11 +476,12 @@ describe("checkConstructUpdates", () => {
     });
     assert.isFalse(info.constructUpdateAvailable);
     assert.isTrue(info.provisionStale);
-    assert.equal(info.action, "reprovision");
+    // The staleness is published for the instance's row; the host-wide control has
+    // nothing to offer, so the folded state reports the check error instead.
+    assert.isNull(info.action);
     assert.include(info.error ?? "", "GitHub");
     assert.include(info.error ?? "", "npm");
-    // An offer still wins over the error in the folded state.
-    assert.equal(applyConstructInfoToState(baseState, info).status, "available");
+    assert.equal(applyConstructInfoToState(baseState, info).status, "error");
   });
 
   it("reports a missing Construct install instead of offering anything", async () => {
@@ -481,6 +511,7 @@ describe("checkConstructUpdates", () => {
       scriptsDir: SCRIPTS_DIR,
       vmName: "agent-vm",
       vmHost: "agent-vm.mshome.net",
+      instances: [],
       installedCommit: INSTALLED,
       provisionedCommit: PROVISIONED,
       behind: 0,
@@ -488,6 +519,7 @@ describe("checkConstructUpdates", () => {
       provisionStale: true,
       t3Version: "0.0.38",
       t3LatestVersion: "0.0.38",
+      t3LatestByChannel: { latest: "0.0.38", nightly: null },
       t3UpdateAvailable: false,
       action: "reprovision",
       runningAction: "reprovision",
@@ -518,6 +550,7 @@ describe("checkConstructUpdates", () => {
       scriptsDir: SCRIPTS_DIR,
       vmName: "agent-vm",
       vmHost: "agent-vm.mshome.net",
+      instances: [],
       installedCommit: PROVISIONED,
       provisionedCommit: PROVISIONED,
       behind: 2,
@@ -525,6 +558,7 @@ describe("checkConstructUpdates", () => {
       provisionStale: false,
       t3Version: "0.0.38",
       t3LatestVersion: "0.0.38",
+      t3LatestByChannel: { latest: "0.0.38", nightly: null },
       t3UpdateAvailable: false,
       action: "update-construct",
       runningAction: "update-construct",
@@ -545,7 +579,7 @@ describe("checkConstructUpdates", () => {
     assert.isFalse(info.constructUpdateAvailable);
     assert.isNull(info.behind);
     assert.isTrue(info.provisionStale);
-    assert.equal(info.action, "reprovision");
+    assert.isNull(info.action);
   });
 });
 
@@ -780,7 +814,7 @@ describe("ConstructUpdates target VM (instances.json)", () => {
     assert.deepEqual(constructReprovisionIdentityArgs(target, true), ["-InstanceName", '"work"']);
     // The implicit default VM still forwards NOTHING, either way — that is the
     // zero-change path, and an older provisioner keeps working on it.
-    assert.deepEqual(constructReprovisionIdentityArgs(plain, true), []);
+    assert.deepEqual(constructReprovisionIdentityArgs(DEFAULT_CONSTRUCT_VM_TARGET, true), []);
     // A local instance with its canonical identity (derived when absent) is accepted.
     const local = readConstructVmTarget({
       version: 1,
@@ -1117,5 +1151,422 @@ describe("ConstructUpdates target VM (instances.json)", () => {
       join,
     );
     assert.isTrue(update.ok);
+  });
+});
+
+// ── B14: every instance this PC manages ──────────────────────────────────────
+
+const MULTI_REGISTRY = {
+  version: 1,
+  defaultInstance: "agent-vm",
+  instances: {
+    "agent-vm": {},
+    "work-vm": { backend: "hyperv-local" },
+    "far-vm": {
+      backend: "hyperv-remote",
+      vmName: "far-vm",
+      sshHost: "buildbox.example.local",
+      publicHost: "far-vm.vpn.example.local",
+      service: { url: "https://buildbox.example.local:7462" },
+    },
+  },
+};
+
+describe("readConstructInstances", () => {
+  it("reads every accepted entry, sorted, with the default marked", () => {
+    const view = readConstructInstances(MULTI_REGISTRY);
+    assert.isNull(view.problem);
+    assert.deepEqual(
+      view.instances.map((i) => i.name),
+      ["agent-vm", "far-vm", "work-vm"],
+    );
+    assert.equal(view.defaultName, "agent-vm");
+    assert.isTrue(view.instances.find((i) => i.name === "agent-vm")!.isDefault);
+    assert.isFalse(view.instances.find((i) => i.name === "work-vm")!.isDefault);
+    assert.equal(view.instances.find((i) => i.name === "work-vm")!.vmHost, "work-vm.mshome.net");
+    assert.equal(
+      view.instances.find((i) => i.name === "far-vm")!.publicHost,
+      "far-vm.vpn.example.local",
+    );
+    // A LOCAL entry never carries a publicHost, whatever the file says.
+    assert.isNull(view.instances.find((i) => i.name === "work-vm")!.publicHost);
+  });
+
+  it("synthesizes agent-vm — an absent registry IS that one instance", () => {
+    for (const view of [
+      readConstructInstances(null),
+      readConstructInstances({ version: 1, instances: {} }),
+      readConstructInstancesFromRegistry(LOCAL_APP_DATA, makeFs({ files: {} }), join),
+      readConstructInstancesFromRegistry(undefined, makeFs({ files: {} }), join),
+    ]) {
+      assert.deepEqual(
+        view.instances.map((i) => i.name),
+        ["agent-vm"],
+      );
+      assert.isTrue(view.instances[0]!.isDefault);
+      assert.equal(view.instances[0]!.vmHost, "agent-vm.mshome.net");
+      assert.isNull(view.problem);
+    }
+  });
+
+  it("keeps the implicit default beside the named instances", () => {
+    const view = readConstructInstances({ version: 1, instances: { "work-vm": {} } });
+    assert.deepEqual(
+      view.instances.map((i) => i.name),
+      ["agent-vm", "work-vm"],
+    );
+  });
+
+  it("the TARGET reader honours the removal too, and picks the same survivor", () => {
+    // Both registry readers move the default to the alphabetically first survivor when
+    // it was removed; the target reader must agree, or the host-wide scripts would be
+    // aimed at the very VM the removal took away.
+    const target = readConstructVmTarget({
+      version: 1,
+      defaultInstance: "agent-vm",
+      instances: { "agent-vm": null, "work-vm": { backend: "hyperv-local" } },
+    });
+    assert.isNull(target.problem);
+    assert.equal(target.name, "work-vm");
+    assert.equal(target.vmHost, "work-vm.mshome.net");
+    assert.isFalse(target.isDefault);
+    // Nothing left at all is a problem, not a silent fallback to the removed VM.
+    const empty = readConstructVmTarget({
+      version: 1,
+      defaultInstance: "agent-vm",
+      instances: { "agent-vm": null },
+    });
+    assert.include(empty.problem ?? "", "removed");
+  });
+
+  it("normalizes a default that is not there to the same survivor as the other readers", () => {
+    const view = readConstructInstances({
+      version: 1,
+      defaultInstance: "agent-vm",
+      instances: { "agent-vm": null, "work-vm": { backend: "hyperv-local" }, "zz-vm": {} },
+    });
+    assert.equal(view.defaultName, "work-vm");
+    assert.isTrue(view.instances.find((i) => i.name === "work-vm")!.isDefault);
+    assert.equal(
+      readConstructVmTarget({
+        version: 1,
+        defaultInstance: "agent-vm",
+        instances: { "agent-vm": null, "work-vm": { backend: "hyperv-local" }, "zz-vm": {} },
+      }).name,
+      "work-vm",
+    );
+  });
+
+  it("gives the legacy mirror to agent-vm, never to whichever VM is default now", () => {
+    // .construct-settings.json is the DEFAULT STORE, fixed to `agent-vm`. Making another
+    // VM the registry default must not hand it agent-vm's commit and channel.
+    const rows = collectConstructInstances(
+      readConstructInstances({
+        version: 1,
+        defaultInstance: "work-vm",
+        instances: { "agent-vm": {}, "work-vm": { backend: "hyperv-local" } },
+      }),
+      LOCAL_APP_DATA,
+      makeFs({ files: {} }),
+      { provisionedCommit: PROVISIONED, channel: "nightly" },
+      join,
+    );
+    const agent = rows.find((r) => r.name === "agent-vm")!;
+    const work = rows.find((r) => r.name === "work-vm")!;
+    assert.equal(agent.provisionedCommit, PROVISIONED);
+    assert.equal(agent.channel, "nightly");
+    assert.isFalse(agent.isDefault);
+    assert.isNull(work.provisionedCommit);
+    assert.isNull(work.channel);
+    assert.isTrue(work.isDefault);
+  });
+
+  it("honours an explicit removal of the synthesized default", () => {
+    // "Remove instance" writes `null` for a row a reader would otherwise invent back
+    // (extension/src/instances.js parseRegistry, lib/AgentVm.Instances.ps1). Without
+    // this the Providers page would keep offering a VM whose client state was deleted.
+    const view = readConstructInstances({
+      version: 1,
+      defaultInstance: "work-vm",
+      instances: { "work-vm": { backend: "hyperv-local" }, "agent-vm": null },
+    });
+    assert.deepEqual(
+      view.instances.map((i) => i.name),
+      ["work-vm"],
+    );
+    assert.isNull(view.problem);
+  });
+
+  it("skips a rejected entry instead of guessing, and keeps the rest", () => {
+    const view = readConstructInstances({
+      version: 1,
+      instances: {
+        "work-vm": { backend: "hyperv-local", sshHost: "somewhere.else" }, // not canonical
+        "good-vm": { backend: "hyperv-local" },
+      },
+    });
+    assert.deepEqual(
+      view.instances.map((i) => i.name),
+      ["agent-vm", "good-vm"],
+    );
+  });
+
+  it("ignores a document of another schema version whole, and says why", () => {
+    const view = readConstructInstances({ version: 2, instances: { "work-vm": {} } });
+    assert.deepEqual(
+      view.instances.map((i) => i.name),
+      ["agent-vm"],
+    );
+    assert.include(view.problem ?? "", "version 2");
+  });
+
+  it("reads the file when there is one", () => {
+    const path = `${LOCAL_APP_DATA}\\The-Construct\\instances.json`;
+    const fs = makeFs({ files: { [path]: { mtime: 1, text: JSON.stringify(MULTI_REGISTRY) } } });
+    assert.lengthOf(readConstructInstancesFromRegistry(LOCAL_APP_DATA, fs, join).instances, 3);
+  });
+});
+
+describe("readConstructInstanceState", () => {
+  const statePath = `${LOCAL_APP_DATA}\\The-Construct\\instances\\work-vm.json`;
+
+  it("reads the per-instance state file", () => {
+    const fs = makeFs({
+      files: {
+        [statePath]: {
+          mtime: 1,
+          text: JSON.stringify({
+            provisionedCommit: PROVISIONED,
+            t3codeChannel: "nightly",
+            t3Port: 5178,
+          }),
+        },
+      },
+    });
+    const state = readConstructInstanceState(LOCAL_APP_DATA, "work-vm", fs, join);
+    assert.equal(state.provisionedCommit, PROVISIONED);
+    assert.equal(state.channel, "nightly");
+    assert.equal(state.t3Port, 5178);
+  });
+
+  it("maps the VM's channel spelling to the npm dist-tag", () => {
+    const withChannel = (value: unknown) =>
+      readConstructInstanceState(
+        LOCAL_APP_DATA,
+        "work-vm",
+        makeFs({ files: { [statePath]: { mtime: 1, text: JSON.stringify({ t3codeChannel: value }) } } }),
+        join,
+      ).channel;
+    assert.equal(withChannel("stable"), "latest");
+    assert.equal(withChannel("nightly"), "nightly");
+    assert.isNull(withChannel("something-else"));
+    assert.isNull(withChannel(7));
+  });
+
+  it("answers empty for a missing file, a bad commit and an invalid name", () => {
+    const fs = makeFs({
+      files: { [statePath]: { mtime: 1, text: JSON.stringify({ provisionedCommit: "nope" }) } },
+    });
+    assert.isNull(readConstructInstanceState(LOCAL_APP_DATA, "work-vm", fs, join).provisionedCommit);
+    assert.isNull(readConstructInstanceState(LOCAL_APP_DATA, "other-vm", fs, join).provisionedCommit);
+    assert.isNull(readConstructInstanceState(LOCAL_APP_DATA, "../evil", fs, join).provisionedCommit);
+    assert.isNull(readConstructInstanceState(undefined, "work-vm", fs, join).provisionedCommit);
+  });
+});
+
+describe("collectConstructInstances", () => {
+  const statePath = (name: string) =>
+    `${LOCAL_APP_DATA}\\The-Construct\\instances\\${name}.json`;
+
+  it("gives every instance its OWN provisioned commit and channel", () => {
+    const fs = makeFs({
+      files: {
+        [statePath("work-vm")]: {
+          mtime: 1,
+          text: JSON.stringify({ provisionedCommit: PROVISIONED, t3codeChannel: "nightly" }),
+        },
+      },
+    });
+    const rows = collectConstructInstances(
+      readConstructInstances(MULTI_REGISTRY),
+      LOCAL_APP_DATA,
+      fs,
+      { provisionedCommit: INSTALLED, channel: null },
+      join,
+    );
+    const byName = Object.fromEntries(rows.map((r) => [r.name, r]));
+    assert.equal(byName["work-vm"]!.provisionedCommit, PROVISIONED);
+    assert.equal(byName["work-vm"]!.channel, "nightly");
+    // The DEFAULT instance falls back to the install-wide mirror in
+    // .construct-settings.json, so a PC without per-instance files still reports it.
+    assert.equal(byName["agent-vm"]!.provisionedCommit, INSTALLED);
+    assert.isTrue(byName["agent-vm"]!.isDefault);
+    // A non-default instance with no state file says "unknown" rather than borrowing it.
+    assert.isNull(byName["far-vm"]!.provisionedCommit);
+    assert.equal(byName["far-vm"]!.publicHost, "far-vm.vpn.example.local");
+  });
+});
+
+describe("planConstructInstanceReprovision", () => {
+  const view = readConstructInstances(MULTI_REGISTRY);
+  const scriptsFs = (nameCapable: boolean): ConstructFileSystem => {
+    const base = installedFs({});
+    return {
+      ...base,
+      readTextFile: (path) =>
+        path === `${SCRIPTS_DIR}\\Update-T3Code.ps1`
+          ? nameCapable
+            ? 'param(\n  [string]$VmHost,\n  [string]$InstanceName = ""\n)\n'
+            : "param(\n  [string]$VmHost\n)\n"
+          : base.readTextFile(path),
+    };
+  };
+  const info = { scriptsDir: SCRIPTS_DIR, repo: "permissionBRICK/The-Construct", ref: "main" };
+
+  it("targets the named instance", () => {
+    const plan = planConstructInstanceReprovision(
+      "work-vm",
+      view,
+      info,
+      "win32",
+      scriptsFs(true),
+      join,
+    );
+    assert.isTrue(plan.ok);
+    if (plan.ok) assert.include(plan.plan.args[3], '-InstanceName "work-vm"');
+  });
+
+  it("falls back to the four identity arguments on an older Update-T3Code.ps1", () => {
+    const plan = planConstructInstanceReprovision(
+      "work-vm",
+      view,
+      info,
+      "win32",
+      scriptsFs(false),
+      join,
+    );
+    assert.isTrue(plan.ok);
+    if (plan.ok) {
+      assert.include(plan.plan.args[3], '-VmHost "work-vm.mshome.net"');
+      assert.include(plan.plan.args[3], '-LocalKeyName "construct_work-vm_ed25519"');
+    }
+  });
+
+  it("names even the DEFAULT instance, so a row can never mean 'whichever is default'", () => {
+    const plan = planConstructInstanceReprovision(
+      "agent-vm",
+      view,
+      info,
+      "win32",
+      scriptsFs(true),
+      join,
+    );
+    assert.isTrue(plan.ok);
+    if (plan.ok) assert.include(plan.plan.args[3], '-InstanceName "agent-vm"');
+  });
+
+  it("refuses a name the registry does not hold", () => {
+    const plan = planConstructInstanceReprovision(
+      "nope",
+      view,
+      info,
+      "win32",
+      scriptsFs(true),
+      join,
+    );
+    assert.isFalse(plan.ok);
+    if (!plan.ok) assert.include(plan.error, "not a Construct instance");
+  });
+
+  it("refuses when the registry itself was unusable", () => {
+    const broken = readConstructInstances({ version: 9 });
+    const plan = planConstructInstanceReprovision(
+      "agent-vm",
+      broken,
+      info,
+      "win32",
+      scriptsFs(true),
+      join,
+    );
+    assert.isFalse(plan.ok);
+    if (!plan.ok) assert.include(plan.error, "instances.json");
+  });
+});
+
+describe("readConstructInstanceT3Endpoint", () => {
+  const endpointPath = `${LOCAL_APP_DATA}\\The-Construct\\artifacts\\t3code\\remote-far-vm.json`;
+
+  it("reads the origin the provisioner published", () => {
+    const fs = makeFs({
+      files: {
+        [endpointPath]: {
+          mtime: 1,
+          text: JSON.stringify({
+            instance: "far-vm",
+            baseUrl: "https://far-vm.vpn.example.local:23011",
+            host: "far-vm.vpn.example.local",
+            port: 23011,
+          }),
+        },
+      },
+    });
+    const endpoint = readConstructInstanceT3Endpoint(LOCAL_APP_DATA, "far-vm", fs, join);
+    assert.equal(endpoint.port, 23011);
+    assert.equal(endpoint.baseUrl, "https://far-vm.vpn.example.local:23011");
+  });
+
+  it("answers null when this PC has not seen that VM's T3", () => {
+    const fs = makeFs({ files: {} });
+    assert.isNull(readConstructInstanceT3Endpoint(LOCAL_APP_DATA, "far-vm", fs, join).port);
+    assert.isNull(readConstructInstanceT3Endpoint(undefined, "far-vm", fs, join).port);
+    assert.isNull(readConstructInstanceT3Endpoint(LOCAL_APP_DATA, "../evil", fs, join).port);
+  });
+});
+
+describe("the default instance's legacy mirror", () => {
+  it("readConstructMarkers maps the saved channel to the npm dist-tag", () => {
+    assert.equal(readConstructMarkers({ t3codeChannel: "nightly" }).channel, "nightly");
+    assert.equal(readConstructMarkers({ t3codeChannel: "stable" }).channel, "latest");
+    assert.isNull(readConstructMarkers({ t3codeChannel: "sideways" }).channel);
+    assert.isNull(readConstructMarkers({}).channel);
+  });
+
+  it("a no-registry install still reports the default VM's own channel and commit", () => {
+    // The single-VM path: no instances.json, no per-instance state file — everything the
+    // row needs is mirrored in .construct-settings.json.
+    const rows = collectConstructInstances(
+      readConstructInstances(null),
+      LOCAL_APP_DATA,
+      makeFs({ files: {} }),
+      { provisionedCommit: PROVISIONED, channel: "nightly" },
+      join,
+    );
+    assert.lengthOf(rows, 1);
+    assert.equal(rows[0]!.name, "agent-vm");
+    assert.isTrue(rows[0]!.isDefault);
+    assert.equal(rows[0]!.provisionedCommit, PROVISIONED);
+    assert.equal(rows[0]!.channel, "nightly");
+    // ...and on the stable channel, which is the zero-change default.
+    const stable = collectConstructInstances(
+      readConstructInstances(null),
+      LOCAL_APP_DATA,
+      makeFs({ files: {} }),
+      { provisionedCommit: PROVISIONED, channel: "latest" },
+      join,
+    );
+    assert.equal(stable[0]!.channel, "latest");
+  });
+
+  it("a NON-default instance never borrows the mirror", () => {
+    const rows = collectConstructInstances(
+      readConstructInstances(MULTI_REGISTRY),
+      LOCAL_APP_DATA,
+      makeFs({ files: {} }),
+      { provisionedCommit: PROVISIONED, channel: "nightly" },
+      join,
+    );
+    const work = rows.find((r) => r.name === "work-vm")!;
+    assert.isNull(work.provisionedCommit);
+    assert.isNull(work.channel);
   });
 });

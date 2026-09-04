@@ -1049,6 +1049,134 @@ $hostileThrew = $false
 try { & $normTest -T3CodeChannel "nightly'; rm -rf /" } catch { $hostileThrew = $true }
 ok "T3CodeChannel normalization: hostile value rejected by ValidateSet" $hostileThrew
 
+# ── B14: per-instance client-side names, the T3 Desktop install rule, the CA
+#         replacement plan, the SMB letter and the temp known_hosts file ───────
+Write-Host ""
+Write-Host "=== B14 per-instance client state ===" -ForegroundColor Cyan
+
+# The CA file: the default instance keeps the historical name (a single-VM install
+# writes exactly the file it always wrote); every other VM gets its own.
+ok "T3 CA file: default instance keeps construct-t3-ca.crt" ((Get-ConstructT3CaFileName -InstanceName 'agent-vm') -eq 'construct-t3-ca.crt')
+ok "T3 CA file: an empty name is the default too" ((Get-ConstructT3CaFileName -InstanceName '') -eq 'construct-t3-ca.crt')
+ok "T3 CA file: a named instance gets its own file" ((Get-ConstructT3CaFileName -InstanceName 'work-vm') -eq 'construct-t3-ca-work-vm.crt')
+
+# The CA replacement plan.
+$caSame = Get-T3CaCleanupPlan -PreviousThumbprint 'AABB' -NewThumbprint 'aabb' -PresentInUser
+ok "T3 CA cleanup: the same CA (any case) is never removed" ($caSame.Action -eq 'none')
+$caNone = Get-T3CaCleanupPlan -PreviousThumbprint '' -NewThumbprint 'AABB' -PresentInUser
+ok "T3 CA cleanup: nothing recorded means nothing to remove" ($caNone.Action -eq 'none')
+$caGone = Get-T3CaCleanupPlan -PreviousThumbprint 'OLD' -NewThumbprint 'NEW'
+ok "T3 CA cleanup: a replaced CA that is in no store is not a removal" ($caGone.Action -eq 'none')
+$caUser = Get-T3CaCleanupPlan -PreviousThumbprint 'OLD' -NewThumbprint 'NEW' -PresentInUser
+ok "T3 CA cleanup: a replaced CA in the user store is removed there" (
+    $caUser.Action -eq 'remove' -and $caUser.Thumbprint -eq 'OLD' -and
+    @($caUser.Stores) -contains 'Cert:\CurrentUser\Root' -and @($caUser.Stores).Count -eq 1)
+$caMachineUnelevated = Get-T3CaCleanupPlan -PreviousThumbprint 'OLD' -NewThumbprint 'NEW' -PresentInMachine
+ok "T3 CA cleanup: the machine store needs elevation, and says so instead of pretending" (
+    $caMachineUnelevated.Action -eq 'blocked' -and $caMachineUnelevated.Reason -match 'elevated')
+$caBoth = Get-T3CaCleanupPlan -PreviousThumbprint 'OLD' -NewThumbprint 'NEW' -Elevated -PresentInMachine -PresentInUser
+ok "T3 CA cleanup: elevated, both stores are cleared" (@($caBoth.Stores).Count -eq 2 -and $caBoth.Action -eq 'remove')
+$caMixed = Get-T3CaCleanupPlan -PreviousThumbprint 'OLD' -NewThumbprint 'NEW' -PresentInMachine -PresentInUser
+ok "T3 CA cleanup: unelevated clears the user store and reports the machine one" (
+    $caMixed.Action -eq 'remove' -and @($caMixed.Stores).Count -eq 1 -and $caMixed.Reason -match 'machine Root store')
+
+# The T3 Desktop install rule: (t3Version, channel, buildHash), last reprovision wins.
+$installed = [pscustomobject]@{ t3Version = '0.0.38'; channel = 'stable'; buildHash = 'abc123'; installedAt = 'x'; sourceInstance = 'agent-vm' }
+$same = Get-T3DesktopInstallPlan -T3Version '0.0.38' -Channel 'stable' -BuildHash 'abc123' -Installed $installed
+ok "T3 install rule: the exact triple already installed is skipped" ((-not $same.Install) -and $same.Reason -match 'already installed')
+$otherChannel = Get-T3DesktopInstallPlan -T3Version '0.0.38' -Channel 'nightly' -BuildHash 'abc123' -Installed $installed
+ok "T3 install rule: another channel installs (last reprovisioned VM wins)" ($otherChannel.Install -and $otherChannel.Reason -match 'stable channel')
+$otherHash = Get-T3DesktopInstallPlan -T3Version '0.0.38' -Channel 'stable' -BuildHash 'zzz999' -Installed $installed
+ok "T3 install rule: the same release with another patched build installs" ($otherHash.Install)
+$otherVersion = Get-T3DesktopInstallPlan -T3Version '0.0.39' -Channel 'stable' -BuildHash 'abc123' -Installed $installed
+ok "T3 install rule: another T3 version installs" ($otherVersion.Install -and $otherVersion.Reason -match '0\.0\.38')
+# THE TRIPLE IS THE WHOLE DECISION: whether an exe is on disk is not consulted at all.
+$gone = Get-T3DesktopInstallPlan -T3Version '0.0.38' -Channel 'stable' -BuildHash 'abc123' -Installed $installed
+ok "T3 install rule: an exact triple skips, whatever is on disk" ((-not $gone.Install) -and $gone.Reason -match 'already installed')
+$never = Get-T3DesktopInstallPlan -T3Version '0.0.38' -Channel 'stable' -BuildHash 'abc123' -Installed $null
+ok "T3 install rule: no record at all installs" ($never.Install -and $never.Reason -match 'no record')
+# The pre-B14 installed.json was a copy of the VM manifest, whose T3 version is `version`.
+# The rule is the exact triple out of the CANONICAL keys. A pre-B14 record (a copy of the
+# VM manifest, whose T3 version is `version`) is not that record, so it installs once and
+# the canonical file is written -- rather than a compatibility substitution that would
+# make "the same triple" mean two different things.
+$legacy = [pscustomobject]@{ version = '0.0.38'; channel = 'stable'; buildHash = 'abc123'; sha256 = ('a' * 64) }
+$legacyPlan = Get-T3DesktopInstallPlan -T3Version '0.0.38' -Channel 'stable' -BuildHash 'abc123' -Installed $legacy
+ok "T3 install rule: a pre-B14 record is not an exact triple, so it installs" ($legacyPlan.Install)
+ok "T3 install rule: ...and says this PC has no record of a patched build" ($legacyPlan.Reason -match 'no record')
+ok "T3 install rule: a canonical record needs no rewrite" (-not $same.RecordIsStale)
+ok "T3 install rule: a host with no record at all writes the canonical one" ($never.RecordIsStale)
+$noHash = Get-T3DesktopInstallPlan -T3Version '0.0.38' -Channel 'stable' -BuildHash '' -Installed $installed
+ok "T3 install rule: an unknown build hash never counts as a match" ($noHash.Install)
+ok "T3 install rule: ...and says the manifest states none" ($noHash.Reason -match 'no build hash')
+ok "T3 install rule: an empty channel or version never matches either" (
+    (Get-T3DesktopInstallPlan -T3Version '' -Channel 'stable' -BuildHash 'abc123' -Installed $installed).Install -and
+    (Get-T3DesktopInstallPlan -T3Version '0.0.38' -Channel '' -BuildHash 'abc123' -Installed $installed).Install)
+$rec = (Get-T3DesktopInstallPlan -T3Version '0.0.39' -Channel 'nightly' -BuildHash 'h9' -Installed $null -InstanceName 'work-vm' -InstalledAt '2026-09-04T10:00:00Z').Record
+ok "T3 install rule: the record carries the five documented keys" (
+    @($rec.Keys) -join ',' -eq 't3Version,channel,buildHash,installedAt,sourceInstance')
+ok "T3 install rule: the record names the instance that installed it" (
+    $rec.sourceInstance -eq 'work-vm' -and $rec.t3Version -eq '0.0.39' -and $rec.channel -eq 'nightly' -and
+    $rec.buildHash -eq 'h9' -and $rec.installedAt -eq '2026-09-04T10:00:00Z')
+ok "T3 install rule: no instance recorded means the default one" (
+    (Get-T3DesktopInstallPlan -T3Version '1' -Channel 'stable' -BuildHash 'h' -Installed $null).Record.sourceInstance -eq 'agent-vm')
+
+# The SMB drive letter.
+$taken = @('C', 'D', 'Z', 'Y')
+ok "SMB letter: the default instance still prefers Z" ((Get-ConstructSmbPreferredLetter -Requested 'Z' -InstanceName 'agent-vm' -Taken $taken) -eq 'Z')
+ok "SMB letter: an unnamed instance is the default one" ((Get-ConstructSmbPreferredLetter -Requested 'Z' -InstanceName '' -Taken $taken) -eq 'Z')
+ok "SMB letter: an EXPLICIT letter always wins" ((Get-ConstructSmbPreferredLetter -Requested 'Q' -InstanceName 'work-vm' -Explicit -Taken $taken) -eq 'Q')
+ok "SMB letter: a non-default instance takes the next free letter" ((Get-ConstructSmbPreferredLetter -Requested 'Z' -InstanceName 'work-vm' -Taken $taken) -eq 'X')
+ok "SMB letter: a colon and lower case in -Taken are still that letter" ((Get-ConstructSmbPreferredLetter -Requested 'Z' -InstanceName 'work-vm' -Taken @('z:', 'y:', 'x')) -eq 'W')
+ok "SMB letter: nothing free falls back to the historical preference" (
+    (Get-ConstructSmbPreferredLetter -Requested 'Z' -InstanceName 'work-vm' -Taken ([char[]](68..90) | ForEach-Object { [string]$_ })) -eq 'Z')
+
+# The throw-away known_hosts file: per instance, so two concurrent provisions cannot
+# clobber (and then delete) each other's.
+ok "known_hosts temp: the default alias keeps the historical name" ((Get-ConstructKnownHostsFileName -HostAlias 'agent-vm') -eq 'construct-known_hosts')
+ok "known_hosts temp: an empty alias keeps it too" ((Get-ConstructKnownHostsFileName -HostAlias '') -eq 'construct-known_hosts')
+ok "known_hosts temp: another alias gets its own file" ((Get-ConstructKnownHostsFileName -HostAlias 'work-vm') -eq 'construct-known_hosts-work-vm')
+$khHostile = Get-ConstructKnownHostsFileName -HostAlias '..\evil'
+ok "known_hosts temp: the name can never become a path" (
+    $khHostile -notmatch '[\\/:]' -and $khHostile -notmatch '\.\.' -and $khHostile -match '^construct-known_hosts-')
+
+# The provisioner really uses them (and still writes the historical names by default).
+$provB14 = Get-Content -LiteralPath (Join-Path $PSScriptRoot "..\Provision-AgentVM.ps1") -Raw
+ok "provisioner: the CA file name comes from the helper" ($provB14 -match 'Get-ConstructT3CaFileName -InstanceName \$script:InstanceLabel')
+ok "provisioner: the replaced CA is untrusted through the plan" ($provB14 -match 'Get-T3CaCleanupPlan -PreviousThumbprint \$previousCaThumb')
+ok "provisioner: the previous thumbprint is read from the file it replaces" ($provB14 -match '\$previousCaThumb = \(New-Object System\.Security\.Cryptography\.X509Certificates\.X509Certificate2')
+ok "provisioner: the desktop install rule is the shared planner" ($provB14 -match 'Get-T3DesktopInstallPlan -T3Version')
+ok "provisioner: the build hash comes from the guest manifest, never a substitute" (
+    $provB14 -match '-BuildHash \(\[string\]\$manifest\.buildHash\)' -and
+    $provB14 -notmatch '\$t3BuildHash = \$expectedSha')
+ok "provisioner: the endpoint record is NOT written for the default instance" (
+    $provB14 -match "if \(\`$Action -eq 'provision' -and \`$script:InstanceLabel -ne 'agent-vm' -and")
+ok "provisioner: it is written outside the HTTPS/CA branch, so a plain-HTTP forward is recorded too" (
+    $provB14.IndexOf('WHERE THIS VM ANSWERS, recorded for the T3 Code Desktop app') -gt
+    $provB14.IndexOf('Set-OpenCodeRemote -Url'))
+ok "provisioner: a run with no usable endpoint CLEARS the stale record" (
+    $provB14 -match '\} elseif \(Test-Path -LiteralPath \$endpointFile\) \{[\s\S]{0,120}Remove-Item -LiteralPath \$endpointFile')
+ok "provisioner: the registered OpenCode url is recorded for the removal to find" (
+    $provB14 -match '\$script:OpenCodeRegisteredUrl = \[string\]\$openCodePlan\.Url' -and
+    $provB14 -match '-OpenCodeUrl \$script:OpenCodeRegisteredUrl')
+ok "provisioner: installed.json records the plan, not the VM manifest" ($provB14 -match '\(\$t3Plan\.Record \| ConvertTo-Json')
+ok "provisioner: a matching but pre-B14 record is canonicalised without reinstalling" (
+    $provB14 -match 'if \(\$t3Plan\.RecordIsStale\) \{')
+ok "provisioner: the replaced CA file is moved into place only AFTER the import" (
+    $provB14.IndexOf('Import-Certificate -FilePath $caTemp') -gt 0 -and
+    $provB14.IndexOf('Import-Certificate -FilePath $caTemp') -lt $provB14.IndexOf('Move-Item -LiteralPath $caTemp -Destination $localCa'))
+ok "provisioner: the CA is imported from the DOWNLOAD, never from the record it replaces" (
+    $provB14 -notmatch 'Import-Certificate -FilePath \$localCa')
+ok "provisioner: the record is written only after a successful install" (
+    $provB14 -match 'installer exited \$\(\$installerProcess\.ExitCode\)[\s\S]{0,400}\$t3Plan\.Record')
+ok "provisioner: the temp known_hosts file is per instance" ($provB14 -match 'Get-ConstructKnownHostsFileName -HostAlias \$HostAlias')
+ok "provisioner: no code path still names the shared temp file" (
+    ($provB14 -split "`n" | Where-Object { $_ -match '\$env:TEMP\\construct-known_hosts' -and $_ -notmatch '^\s*#' }).Count -eq 0)
+ok "provisioner: the SMB preference is the shared planner" ($provB14 -match 'Get-ConstructSmbPreferredLetter -Requested \$SmbDriveLetter')
+ok "provisioner: the default instance skips the free-letter snapshot entirely" (
+    $provB14 -match "if \(-not \`$script:SmbLetterStated -and \`$script:InstanceLabel -ne 'agent-vm' -and")
+ok "provisioner: -SmbDriveLetter still defaults to Z" ($provB14 -match '\[string\]\$SmbDriveLetter = "Z"')
+
 Write-Host ""
 Write-Host ("  host-lib unit tests - {0}/{1} passed" -f $script:pass, ($script:pass + $script:fail))
 Write-Host ""
