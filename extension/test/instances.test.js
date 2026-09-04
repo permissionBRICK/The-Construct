@@ -1934,6 +1934,79 @@ function deferred() {
   return { promise, resolve };
 }
 
+// ── publicHost: the per-VM web host name (plan §4.12) ───────────────────────
+// OPTIONAL, never derived, ignored for a local backend, and NOT part of the endpoint
+// identity — two VMs on one wildcard domain are still told apart by sshHost/sshPort.
+// Mirrored assertion for assertion in test/instances.test.ps1.
+console.log("\n=== publicHost ===");
+{
+  const remoteEntry = {
+    backend: "hyperv-remote", vmName: "work-vm", sshHost: "buildbox.local", sshPort: 2201,
+    hostAlias: "work-vm", keyName: "construct_work-vm_ed25519", configBranch: "vm-work-vm",
+    publicHost: "work-vm.vpn.example",
+  };
+  const r = inst.load({ path: writeRegistry(JSON.stringify({
+    version: 1, defaultInstance: "agent-vm", instances: { "work-vm": remoteEntry },
+  })) });
+  eq("publicHost: a remote entry keeps it", r.byName["work-vm"].publicHost, "work-vm.vpn.example");
+  eq("publicHost: it produces no problem of its own",
+    r.problems.filter((p) => /publicHost/.test(p)).length, 0);
+  eq("publicHost: sshHost is untouched by it (SSH still dials the endpoint)",
+    r.byName["work-vm"].vmHost, "buildbox.local");
+  // toSshCfg is the whole ssh.js contract: publicHost must not leak into it.
+  eq("publicHost: toSshCfg does not carry it",
+    Object.prototype.hasOwnProperty.call(inst.toSshCfg(r.byName["work-vm"]), "publicHost"), false);
+
+  // A local instance's identity is derived from its name, and its ONE address is that
+  // endpoint — so the field is dropped rather than carried where nothing can use it.
+  const localReg = inst.load({ path: writeRegistry(JSON.stringify({
+    version: 1, instances: { "work-vm": { backend: "hyperv-local", publicHost: "work-vm.vpn.example" } },
+  })) });
+  eq("publicHost: ignored for a hyperv-local instance", localReg.byName["work-vm"].publicHost, null);
+  ok("publicHost: ...and the entry still loads", !!localReg.byName["work-vm"]);
+
+  // It becomes CONSTRUCT_EXTERNAL_HOST inside the guest's shell command line and a
+  // printed URL, so a value that is not a host name is refused with the entry.
+  const hostile = inst.load({ path: writeRegistry(JSON.stringify({
+    version: 1, instances: { "work-vm": { ...remoteEntry, publicHost: "-x; calc" } },
+  })) });
+  ok("publicHost: a hostile value skips the whole entry", !hostile.byName["work-vm"]);
+  ok("publicHost: ...and says which field", hostile.problems.some((p) => /publicHost/.test(p)));
+
+  const wrongType = inst.load({ path: writeRegistry(JSON.stringify({
+    version: 1, instances: { "work-vm": { ...remoteEntry, publicHost: 42 } },
+  })) });
+  ok("publicHost: a non-string is reported and the derived default (none) is used",
+    wrongType.problems.some((p) => /"publicHost" must be a string/.test(p)) &&
+    wrongType.byName["work-vm"].publicHost === null);
+
+  // Round-trip through the writer, and the default instance never gains the key.
+  const out = path.join(fs.mkdtempSync(path.join(tmpRoot, "pub-")), "instances.json");
+  inst.save(out, r);
+  const back = inst.load({ path: out });
+  eq("publicHost: survives a save/read round-trip", back.byName["work-vm"].publicHost, "work-vm.vpn.example");
+  const doc = JSON.parse(fs.readFileSync(out, "utf8"));
+  eq("publicHost: the default instance's entry does not gain the key",
+    Object.prototype.hasOwnProperty.call(doc.instances["agent-vm"], "publicHost"), false);
+  eq("publicHost: the remote entry writes it", doc.instances["work-vm"].publicHost, "work-vm.vpn.example");
+
+  // Two VMs behind ONE wildcard domain differ in publicHost and in nothing else that is
+  // unique — the endpoint composite (sshHost, sshPort) is still what tells them apart.
+  const two = inst.load({ path: writeRegistry(JSON.stringify({
+    version: 1, instances: {
+      "work-vm": remoteEntry,
+      "play-vm": {
+        backend: "hyperv-remote", vmName: "play-vm", sshHost: "buildbox.local", sshPort: 2202,
+        hostAlias: "play-vm", keyName: "construct_play-vm_ed25519", configBranch: "vm-play-vm",
+        publicHost: "play-vm.vpn.example",
+      },
+    },
+  })) });
+  ok("publicHost: two VMs on one host service both load",
+    !!two.byName["work-vm"] && !!two.byName["play-vm"]);
+  eq("publicHost: ...with their own names", two.byName["play-vm"].publicHost, "play-vm.vpn.example");
+}
+
 async function asyncTests() {
   console.log("\n=== generation gate (stale refresh after a switch) ===");
   const gate = inst.createGate("agent-vm");

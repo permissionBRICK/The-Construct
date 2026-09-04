@@ -43,15 +43,18 @@
 //   targetFingerprint(instance)           -> string        (the COMPLETE target identity)
 //   planCapturedFollowUp(gate, target, proceed) -> { run, reason, target }
 //   isDefaultInstance(instance)           -> bool          (argv/behaviour gate)
-//   toSshCfg(instance)                    -> ssh.js cfg   ({vmHost,hostAlias,keyName,sshPort})
+//   toSshCfg(instance)                    -> ssh.js cfg   ({vmHost,hostAlias,keyName,sshPort};
+//                                                           publicHost is deliberately NOT in it —
+//                                                           SSH always dials sshHost:sshPort)
 //   save(path, registry)                  -> writes atomically (tmp + rename)
 //   addInstance / updateInstance / removeInstance / setDefaultInstance
 //
 // ── The normalized instance object (the shape passed between JS modules) ─────
 //   { name, backend, vmName, vmHost, sshPort, hostAlias, keyName, configBranch,
-//     scriptsDir, service, owner }
+//     scriptsDir, service, owner, publicHost }
 // `vmHost` is the registry's `sshHost` (the JS side calls it vmHost because that is
-// what ssh.js/probe.js already call it).
+// what ssh.js/probe.js already call it). `publicHost` is the OPTIONAL name the VM's
+// WEB endpoints are reachable under (plan §4.12) — never where SSH is dialled.
 
 const fs = require("fs");
 const path = require("path");
@@ -131,6 +134,7 @@ const DEFAULT_INSTANCE = Object.freeze({
   scriptsDir: null,
   service: null,
   owner: null,
+  publicHost: null,
 });
 
 function isValidName(name) {
@@ -209,7 +213,7 @@ function badString(v) { return v != null && v !== "" && typeof v !== "string"; }
 /** `backend` is deliberately NOT in this list: "report it and use the derived default"
  *  is the wrong answer for the one field whose derived default is the LOCAL hypervisor.
  *  It has its own, stricter check — backendProblems() — which SKIPS the entry. */
-const STRING_FIELDS = ["vmName", "sshHost", "vmHost", "hostAlias", "keyName", "configBranch", "scriptsDir", "owner"];
+const STRING_FIELDS = ["vmName", "sshHost", "vmHost", "hostAlias", "keyName", "configBranch", "scriptsDir", "owner", "publicHost"];
 
 // ── Identity-field FORMAT rules ──────────────────────────────────────────────
 // Type-checking a field ("it is a string") is not enough for the ones that end up in
@@ -310,7 +314,12 @@ function identityProblems(inst, raw) {
   const q = (v) => JSON.stringify(v === undefined ? null : v);
   const add = (msg) => { if (out.indexOf(msg) < 0) out.push(msg); };
   if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-    for (const f of ["sshHost", "vmHost"]) {
+    // `publicHost` is checked HERE, on the RAW entry, and for every backend — even the
+    // ones that ignore it (deriveDefaults drops it for hyperv-local). It ends up in the
+    // provisioner's `-PublicHost`, in CONSTRUCT_EXTERNAL_HOST inside the guest's shell
+    // command line and in printed URLs, so a value that is not a host name is refused
+    // where it sits rather than where it lands.
+    for (const f of ["sshHost", "vmHost", "publicHost"]) {
       const v = str(raw[f]);
       if (v && !isHostEndpoint(v)) add('"' + f + '" ' + q(v) + " is not a host name or IP address");
     }
@@ -588,6 +597,12 @@ function deriveDefaults(name, raw) {
     scriptsDir: str(r.scriptsDir),
     service: normalizeService(r.service),
     owner: str(r.owner),
+    // OPTIONAL and NEVER derived (plan §4.12): the host service states it
+    // (GET /vms/{name}/endpoint -> publicHost) and the installer records it. It is
+    // IGNORED for a local backend, where the one address a VM has is its endpoint —
+    // dropping it here rather than carrying it means no consumer has to re-ask which
+    // backend it is looking at.
+    publicHost: isLocalBackend(backend) ? null : str(r.publicHost),
   };
 }
 
@@ -604,9 +619,10 @@ function normalizeService(s) {
  * gate the zero-change path hangs on: it must be true for a synthesized default AND
  * for a registry that spells the default out with today's values.
  *
- * `scriptsDir`, `service` and `owner` are deliberately NOT part of the comparison —
- * scriptsDir is handled by host.resolveScriptsDir (it can't reach the VM args), and
- * the other two carry no argv/SSH consequence for a local instance.
+ * `scriptsDir`, `service`, `owner` and `publicHost` are deliberately NOT part of the
+ * comparison — scriptsDir is handled by host.resolveScriptsDir (it can't reach the VM
+ * args), and the others carry no argv/SSH consequence for a local instance (`publicHost`
+ * cannot even be set on one: deriveDefaults drops it for a local backend).
  */
 function isDefaultInstance(inst) {
   if (!inst) return true;
@@ -1644,6 +1660,9 @@ function toFileEntry(inst) {
   };
   out.service = inst.service ? { url: inst.service.url, auth: inst.service.auth } : null;
   out.owner = inst.owner == null ? null : inst.owner;
+  // Optional: written only when there is one, so a local (or pattern-less remote) entry
+  // is byte-identical to what earlier builds wrote.
+  if (inst.publicHost) out.publicHost = inst.publicHost;
   return out;
 }
 

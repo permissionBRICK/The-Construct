@@ -160,10 +160,17 @@ function toState(map, opts = {}) {
     // start) deliberately keeps it true so the next provision retries, while
     // clearing the public origin. Keying off the origin means such a VM shows
     // and opens its working http URL instead of a dead https listener.
+    //
+    // A PLAIN-HTTP advertised origin counts too (plan §4.12): a VM whose web ports are
+    // published by a host service reaches T3 on the FORWARD the service allocated, not
+    // on the listener's own port, so `http://<host>:5177` — which is what this used to
+    // fall back to — is a dead link there. The "· https" badge stays keyed on the
+    // scheme; only the URL follows the advertised origin.
     const t3base = cfgUnquote((map.T3CODE_PUBLIC_BASE_URL || "").trim());
-    const t3ready = isSafeOrigin(t3base) && t3base.startsWith("https://");
-    const t3shownPort = t3ready
-      ? (originPort(t3base) || (map.T3CODE_HTTPS_PORT || "").trim() || "5178")
+    const t3origin = isSafeOrigin(t3base) ? t3base : "";
+    const t3ready = t3origin.startsWith("https://");
+    const t3shownPort = t3origin
+      ? (originPort(t3origin) || (t3ready ? (map.T3CODE_HTTPS_PORT || "").trim() || "5178" : t3port))
       : t3port;
     const t3detail = "web GUI :" + t3shownPort +
       (t3ready ? " · https" : "") + (t3ch === "nightly" ? " · nightly" : "");
@@ -173,8 +180,8 @@ function toState(map, opts = {}) {
       webui: map.T3_ACTIVE === "active",
       channel: t3ch === "nightly" ? "nightly" : "stable",
     };
-    if (t3ready) {
-      entry.url = t3base;
+    if (t3origin) {
+      entry.url = t3origin;
     } else if (opts.host) {
       entry.url = `http://${urlHost(opts.host)}:${t3port}`;
     }

@@ -1,5 +1,6 @@
 using Constructd.Core.Abstractions;
 using Constructd.Core.Configuration;
+using Constructd.Core.Logic;
 using Constructd.Core.Services;
 using Constructd.Fakes;
 using Constructd.Sqlite;
@@ -30,6 +31,14 @@ public static class ServiceComposition
         ConstructdOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
+
+        // Platform-agnostic and therefore checked in EVERY mode, fake included: a
+        // PublicHostPattern that does not render to a host name would otherwise surface as a
+        // URL nobody can open, weeks after it was configured (plan §4.12).
+        if (PublicHostPatternRules.Validate(options.PublicHostPattern) is { } patternProblem)
+        {
+            throw new InvalidOperationException(patternProblem);
+        }
 
         services.AddConstructdStores(options);
 

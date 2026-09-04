@@ -38,7 +38,9 @@
 
     A normalised instance object has these properties (mirroring the JS shape):
       Name, Backend, VmName, VmHost, SshPort, HostAlias, KeyName, ConfigBranch,
-      ScriptsDir, Service, Owner
+      ScriptsDir, Service, Owner, PublicHost
+    PublicHost is the OPTIONAL name the VM's WEB endpoints are reachable under
+    (plan section 4.12) -- never where SSH is dialled, and never set for a local VM.
 #>
 
 Set-StrictMode -Version Latest
@@ -117,6 +119,7 @@ function New-ConstructDefaultInstance {
         ScriptsDir   = $null
         Service      = $null
         Owner        = $null
+        PublicHost   = $null
     }
 }
 
@@ -125,7 +128,7 @@ function New-ConstructDefaultInstance {
 # in step. 'backend' is deliberately NOT here: "report it and use the derived default" is
 # the wrong answer for the one field whose derived default is the LOCAL hypervisor, so it
 # has its own, stricter check (Get-ConstructBackendProblem) which SKIPS the entry.
-$script:ConstructStringFields = @('vmName', 'sshHost', 'vmHost', 'hostAlias', 'keyName', 'configBranch', 'scriptsDir', 'owner')
+$script:ConstructStringFields = @('vmName', 'sshHost', 'vmHost', 'hostAlias', 'keyName', 'configBranch', 'scriptsDir', 'owner', 'publicHost')
 
 # ── Identity-field FORMAT rules (mirror of extension/src/instances.js) ────────
 # Being a string is not enough for the fields that end up in a PowerShell command
@@ -282,7 +285,12 @@ function Get-ConstructInstanceIdentityProblem {
     $out = New-Object System.Collections.Generic.List[string]
     $add = { param([string]$m) if (-not $out.Contains($m)) { $out.Add($m) } }
     if ($null -ne $Entry) {
-        foreach ($f in @('sshHost', 'vmHost')) {
+        # 'publicHost' is checked HERE, on the RAW entry, and for EVERY backend -- even the
+        # ones that ignore it (Resolve-ConstructInstanceDefaults drops it for hyperv-local).
+        # It becomes the provisioner's -PublicHost, CONSTRUCT_EXTERNAL_HOST inside the
+        # guest's shell command line and a printed URL, so a value that is not a host name
+        # is refused where it sits rather than where it lands.
+        foreach ($f in @('sshHost', 'vmHost', 'publicHost')) {
             $v = Get-ConstructInstanceField $Entry $f
             if ($v -and -not (Test-ConstructInstanceHostEndpoint $v)) {
                 & $add "`"$f`" '$v' is not a host name or IP address"
@@ -798,6 +806,12 @@ function Resolve-ConstructInstanceDefaults {
         ScriptsDir   = (Get-ConstructInstanceField $Entry 'scriptsDir')
         Service      = $service
         Owner        = (Get-ConstructInstanceField $Entry 'owner')
+        # OPTIONAL and NEVER derived (plan section 4.12): the host service states it
+        # (GET /vms/{name}/endpoint -> publicHost) and the installer records it. IGNORED
+        # for a local backend, where the one address a VM has is its endpoint -- dropping
+        # it here rather than carrying it means no consumer has to re-ask which backend it
+        # is looking at. Mirrors deriveDefaults() in extension/src/instances.js.
+        PublicHost   = $(if (Test-ConstructLocalBackend $backend) { $null } else { Get-ConstructInstanceField $Entry 'publicHost' })
     }
 }
 
@@ -1069,7 +1083,7 @@ function ConvertTo-ConstructInstanceEntry {
     param($Instance)
     $svc = $null
     if ($Instance.Service) { $svc = [ordered]@{ url = $Instance.Service.Url; auth = $Instance.Service.Auth } }
-    return [ordered]@{
+    $entry = [ordered]@{
         backend      = $Instance.Backend
         vmName       = $Instance.VmName
         sshHost      = $Instance.VmHost
@@ -1081,6 +1095,13 @@ function ConvertTo-ConstructInstanceEntry {
         service      = $svc
         owner        = $Instance.Owner
     }
+    # Optional: written only when there is one, so a local (or pattern-less remote) entry
+    # is byte-identical to what earlier builds wrote. Mirrors toFileEntry() in
+    # extension/src/instances.js.
+    $pub = $null
+    if ($Instance.PSObject.Properties['PublicHost']) { $pub = $Instance.PublicHost }
+    if ($pub) { $entry['publicHost'] = $pub }
+    return $entry
 }
 
 function ConvertTo-ConstructInstanceEntryObject {

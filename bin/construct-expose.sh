@@ -47,6 +47,7 @@ die() { printf 'construct expose: %s\n' "$*" >&2; exit 1; }
 usage() {
   cat <<'USAGE'
 Usage: construct expose <port> [--label <text>] [--to client|host] [--wait <sec>]
+                            [--reuse]
        construct expose --list
        construct expose --close <id|port>
 
@@ -73,6 +74,10 @@ Options:
   -t, --to client|host  Forward target (default: client).
   -w, --wait <sec>      How long to wait for a client forward to come up
                         (default: 30).
+  -r, --reuse           Get-or-create: reuse this VM's existing forward for the
+                        same port and target instead of allocating a second one,
+                        and print its link. This is what makes re-running
+                        provisioning idempotent.
       --list            List this VM's forwards.
       --close <id|port> Close a forward.
   -h, --help            This text.
@@ -396,11 +401,34 @@ queued_message() {
   printf '  to this VM. Check with: construct expose --list\n' >&2
 }
 
+# --reuse, local mode: the id of an existing CLIENT request for this port, if any.
+# The spool is the record: a request the extension has not picked up yet is still
+# this VM's forward for that port, and a second one would just queue behind it.
+local_find_request() {
+  local port="$1" file request
+  [[ -d "${REQUEST_DIR}" ]] || return 1
+  shopt -s nullglob
+  for file in "${REQUEST_DIR}"/*.json; do
+    request="$(cat "${file}" 2>/dev/null || true)"
+    if [[ "$(json_field "${request}" vmPort)" == "${port}" \
+       && "$(json_field "${request}" target)" == "client" ]]; then
+      basename "${file}" .json
+      shopt -u nullglob
+      return 0
+    fi
+  done
+  shopt -u nullglob
+  return 1
+}
+
 local_expose_client() {
-  local port="$1" label="$2" wait_sec="$3" id rc=0
+  local port="$1" label="$2" wait_sec="$3" id="" rc=0
   ensure_spool
-  id="$(new_id)"
-  write_request "${id}" "${port}" "${label}"
+  if [[ "${REUSE}" == "true" ]]; then id="$(local_find_request "${port}")" || id=""; fi
+  if [[ -z "${id}" ]]; then
+    id="$(new_id)"
+    write_request "${id}" "${port}" "${label}"
+  fi
   wait_for_ack "${id}" "${wait_sec}" || rc=$?
   if (( rc == 0 )); then return 0; fi
   if (( rc == 2 )); then exit 1; fi
@@ -611,15 +639,43 @@ remote_find_forward() {
   return 1
 }
 
-remote_expose() {
-  local port="$1" label="$2" target="$3" wait_sec="$4" id link deadline object rc=0
-  api_call POST "$(forwards_path)" \
-    "{\"vmPort\":${port},\"label\":\"$(json_escape "${label}")\",\"target\":\"${target}\"}"
-  api_ok || api_fail "open port ${port}"
-  api_body_is object || api_unreadable "$(forwards_path)"
+# --reuse, remote mode: this VM's existing forward for a port AND target, if the
+# service already has one. Result in FOUND_FORWARD; returns 1 when there is none.
+# Like remote_find_forward it is NOT called in a command substitution, so an API
+# failure ends the command with the right exit code instead of reading as "none".
+remote_find_by_port() {
+  local want_port="$1" want_target="$2" object
+  FOUND_FORWARD=""
+  api_call GET "$(forwards_path)"
+  api_ok || api_fail "list the forwards of ${INSTANCE_NAME}"
+  api_body_is array || api_unreadable "$(forwards_path)"
+  while IFS= read -r object; do
+    [[ -n "${object}" ]] || continue
+    [[ "$(json_field "${object}" vmPort)" == "${want_port}" ]] || continue
+    [[ "$(json_field "${object}" target)" == "${want_target}" ]] || continue
+    FOUND_FORWARD="${object}"
+    return 0
+  done < <(json_objects "${API_BODY}")
+  return 1
+}
 
-  id="$(json_field "${API_BODY}" id)"
-  link="$(link_from_forward "${API_BODY}")" || rc=$?
+remote_expose() {
+  local port="$1" label="$2" target="$3" wait_sec="$4" id="" link deadline object rc=0 body=""
+  # GET-OR-CREATE. Provisioning runs on every reprovision and must not leave a second
+  # host forward (and a second public port) behind for the same VM port each time; the
+  # service has no upsert, so the lookup is here.
+  if [[ "${REUSE}" == "true" ]] && remote_find_by_port "${port}" "${target}"; then
+    body="${FOUND_FORWARD}"
+  else
+    api_call POST "$(forwards_path)" \
+      "{\"vmPort\":${port},\"label\":\"$(json_escape "${label}")\",\"target\":\"${target}\"}"
+    api_ok || api_fail "open port ${port}"
+    api_body_is object || api_unreadable "$(forwards_path)"
+    body="${API_BODY}"
+  fi
+
+  id="$(json_field "${body}" id)"
+  link="$(link_from_forward "${body}")" || rc=$?
   if (( rc == 2 )); then exit 1; fi
   if (( rc == 0 )) && [[ -n "${link}" ]]; then printf '%s\n' "${link}"; return 0; fi
 
@@ -720,6 +776,7 @@ label=""
 target=""
 wait_sec=""
 close_ref=""
+REUSE=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -729,6 +786,7 @@ while [[ $# -gt 0 ]]; do
     -l|--label) shift; [[ $# -gt 0 ]] || die "--label requires a value"; label="$1" ;;
     -t|--to) shift; [[ $# -gt 0 ]] || die "--to requires client or host"; target="$1" ;;
     -w|--wait) shift; [[ $# -gt 0 ]] || die "--wait requires a number of seconds"; wait_sec="$1" ;;
+    -r|--reuse) REUSE=true ;;
     --) shift; if [[ $# -gt 0 ]]; then port="$1"; shift; fi; break ;;
     -*) die "unknown option: $1 (try: construct expose --help)" ;;
     *)

@@ -372,6 +372,37 @@ namespace ConstructTest {
     ok "job: a job that never finishes times out" $threw
     ok "job: ...and says how to check on it" ($msg -match '/jobs/j1')
 
+    # ── The ONE endpoint reading (plan section 4.12) ────────────────────────
+    # GET /vms/{name}/endpoint and a creation job's `endpoint` have the same shape, and
+    # both go through this one function -- so the driver and the installer can never
+    # disagree about where a VM's web endpoints live.
+    Write-Host ""
+    Write-Host "=== Endpoint reading ===" -ForegroundColor Cyan
+
+    $ep = ConvertFrom-ConstructVmEndpoint -Response ([pscustomobject]@{ sshHost = 'buildbox.local'; sshPort = 2201; publicHost = 'work-vm.vpn.example' })
+    ok "endpoint: sshHost is read" ($ep.SshHost -eq 'buildbox.local')
+    ok "endpoint: sshPort is read as an int" ($ep.SshPort -is [int] -and $ep.SshPort -eq 2201)
+    ok "endpoint: publicHost is read" ($ep.PublicHost -eq 'work-vm.vpn.example')
+
+    # A service with no PublicHostPattern (or an older build) states nothing, and the
+    # answer is the SSH host -- which is what "no pattern configured" means there. No
+    # caller needs a special case for it.
+    $epNoPublic = ConvertFrom-ConstructVmEndpoint -Response ([pscustomobject]@{ sshHost = 'buildbox.local'; sshPort = 2201 })
+    ok "endpoint: a missing publicHost falls back to the ssh host" ($epNoPublic.PublicHost -eq 'buildbox.local')
+
+    $epEmptyPublic = ConvertFrom-ConstructVmEndpoint -Response ([pscustomobject]@{ sshHost = 'buildbox.local'; sshPort = 2201; publicHost = '  ' })
+    ok "endpoint: a blank publicHost falls back too" ($epEmptyPublic.PublicHost -eq 'buildbox.local')
+
+    $epNoPort = ConvertFrom-ConstructVmEndpoint -Response ([pscustomobject]@{ sshHost = 'buildbox.local' })
+    ok "endpoint: a missing sshPort is 22" ($epNoPort.SshPort -eq 22)
+
+    $epBadPort = ConvertFrom-ConstructVmEndpoint -Response ([pscustomobject]@{ sshHost = 'buildbox.local'; sshPort = 99999 })
+    ok "endpoint: an out-of-range sshPort is 22, not a nonsense dial" ($epBadPort.SshPort -eq 22)
+
+    ok "endpoint: no ssh host at all is `$null (there is nothing to dial)" (
+        $null -eq (ConvertFrom-ConstructVmEndpoint -Response ([pscustomobject]@{ sshPort = 2201 })))
+    ok "endpoint: `$null in, `$null out" ($null -eq (ConvertFrom-ConstructVmEndpoint -Response $null))
+
 } finally {
     if (Test-Path -LiteralPath $store) { Remove-Item -LiteralPath $store -Recurse -Force -ErrorAction SilentlyContinue }
 }

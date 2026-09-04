@@ -79,7 +79,8 @@ foreach ($vn in @('ConstructVmNameRe', 'ConstructVmNameRule')) {
 foreach ($fname in @('Test-ConstructPriorLocalInstall', 'Resolve-ConstructInstallMode',
                      'Test-ConstructRemoteInstanceName', 'New-ConstructRemoteInstanceEntry',
                      'Get-ConstructRemoteInstanceConflict', 'New-ConstructRemoteVmRecord',
-                     'Save-ConstructInstanceEntry', 'New-ConstructRemoteProvisionArgs')) {
+                     'Save-ConstructInstanceEntry', 'New-ConstructRemoteProvisionArgs',
+                     'Get-ConstructEndpointPublicHost')) {
     $fnText = Get-InstallerFunctionText $fname
     ok "extract: Auto-Install.ps1 defines $fname" ($fnText -ne "")
     if ($fnText) { Invoke-Expression $fnText }
@@ -388,7 +389,7 @@ $fullParams = @{}
 foreach ($p in @('VmHost','SshPort','HostAlias','LocalKeyName','ConfigBranch','ServiceUrl','InstanceName','VmTokenB64',
                  'Projects','GitUserName','GitEmail','GitCloneCredentialsB64','AgentPassword','RestoreDir','AutoResolve',
                  'Auto','Repo','Ref','ClaudePartialStreaming','MicPassthrough','OpenCodeBackgroundWatcher',
-                 'T3Code','T3CodeChannel','T3CodeLimitResume')) { $fullParams[$p] = $true }
+                 'T3Code','T3CodeChannel','T3CodeLimitResume','PublicHost')) { $fullParams[$p] = $true }
 $script:RemoteProvCmd = [pscustomobject]@{ Parameters = $fullParams }
 
 $ep = @{ SshHost = 'buildbox.example.local'; SshPort = 2201 }
@@ -431,6 +432,68 @@ foreach ($p in @('T3CodeChannel', 'T3CodeLimitResume', 'OpenCodeBackgroundWatche
 ok "args: ...while the identity arguments are still there (they are non-negotiable)" `
     ($args4['VmHost'] -eq 'buildbox.example.local' -and $args4['ServiceUrl'] -eq 'https://b:7462')
 $script:RemoteProvCmd = [pscustomobject]@{ Parameters = $fullParams }
+
+# ── (f1b) The per-VM public host (plan section 4.12) ────────────────────────
+# It is what the guest's CONSTRUCT_EXTERNAL_HOST becomes, so the T3 certificate's SANs,
+# T3CODE_PUBLIC_BASE_URL and every printed URL use it -- while SSH keeps going to the
+# endpoint above, which on a host with a wildcard pattern is a DIFFERENT name.
+Write-Host ""
+Write-Host "=== The per-VM public host ===" -ForegroundColor Cyan
+
+# The installer's own progress helper, which the skew path below reports through.
+if (-not (Get-Command Write-Note -ErrorAction SilentlyContinue)) { function Write-Note { param($m) } }
+# The registry library owns the per-entry rules the assertions below ask about.
+if (-not (Get-Command Get-ConstructInstanceEntryProblem -ErrorAction SilentlyContinue)) {
+    . (Join-Path $repoRoot "lib/AgentVm.Instances.ps1")
+}
+
+ok "endpoint: publicHost is read from a hashtable endpoint" (
+    (Get-ConstructEndpointPublicHost -Endpoint @{ SshHost = 'b'; SshPort = 2201; PublicHost = 'work-vm.vpn.example' }) -eq 'work-vm.vpn.example')
+ok "endpoint: publicHost is read from an object endpoint" (
+    (Get-ConstructEndpointPublicHost -Endpoint ([pscustomobject]@{ SshHost = 'b'; SshPort = 2201; PublicHost = 'work-vm.vpn.example' })) -eq 'work-vm.vpn.example')
+ok "endpoint: an endpoint that states none answers empty (not an error)" (
+    (Get-ConstructEndpointPublicHost -Endpoint @{ SshHost = 'b'; SshPort = 2201 }) -eq "")
+ok "endpoint: `$null answers empty" ((Get-ConstructEndpointPublicHost -Endpoint $null) -eq "")
+
+$argsPub = New-ConstructRemoteProvisionArgs -Name 'work-vm' -Endpoint $ep -ServiceUrl 'https://b:7462' `
+              -ConfigBranch 'vm-work-vm' -PublicHost 'work-vm.vpn.example'
+ok "args: -PublicHost is passed to the provisioner" ($argsPub['PublicHost'] -eq 'work-vm.vpn.example')
+ok "args: ...while -VmHost stays the SSH endpoint" ($argsPub['VmHost'] -eq 'buildbox.example.local')
+
+$argsNoPub = New-ConstructRemoteProvisionArgs -Name 'work-vm' -Endpoint $ep -ServiceUrl 'https://b:7462' -ConfigBranch 'vm-work-vm'
+ok "args: NO -PublicHost when the service stated none (the default path is untouched)" (
+    -not $argsNoPub.ContainsKey('PublicHost'))
+
+# Skew: probe before splat. A provisioner without -PublicHost must not be handed one --
+# an unknown parameter is a BINDING failure, and a rebuild has already deleted the VM.
+$noPubParams = @{}
+foreach ($p in $fullParams.Keys) { if ($p -ne 'PublicHost') { $noPubParams[$p] = $true } }
+$script:RemoteProvCmd = [pscustomobject]@{ Parameters = $noPubParams }
+$argsSkew = New-ConstructRemoteProvisionArgs -Name 'work-vm' -Endpoint $ep -ServiceUrl 'https://b:7462' `
+               -ConfigBranch 'vm-work-vm' -PublicHost 'work-vm.vpn.example'
+ok "args: -PublicHost is dropped when the installed provisioner does not declare it" (
+    -not $argsSkew.ContainsKey('PublicHost'))
+ok "args: ...and the install still proceeds with its identity arguments" (
+    $argsSkew['VmHost'] -eq 'buildbox.example.local' -and $argsSkew['InstanceName'] -eq 'work-vm')
+$script:RemoteProvCmd = [pscustomobject]@{ Parameters = $fullParams }
+
+# The registry entry: recorded only when it says something the SSH host does not.
+$entryPub = New-ConstructRemoteInstanceEntry -Name 'work-vm' -SshHost 'buildbox.example.local' -SshPort 2201 `
+               -ServiceUrl 'https://b:7462' -PublicHost 'work-vm.vpn.example'
+ok "entry: publicHost is recorded" ($entryPub['publicHost'] -eq 'work-vm.vpn.example')
+$entrySame = New-ConstructRemoteInstanceEntry -Name 'work-vm' -SshHost 'buildbox.example.local' -SshPort 2201 `
+                -ServiceUrl 'https://b:7462' -PublicHost 'buildbox.example.local'
+ok "entry: a publicHost equal to the ssh host is NOT recorded (it says nothing new)" (
+    -not $entrySame.ContainsKey('publicHost'))
+$entryNone = New-ConstructRemoteInstanceEntry -Name 'work-vm' -SshHost 'buildbox.example.local' -SshPort 2201 `
+                -ServiceUrl 'https://b:7462'
+ok "entry: no publicHost at all when the service stated none" (-not $entryNone.ContainsKey('publicHost'))
+ok "entry: an entry WITH a publicHost still loads (the reader accepts the field)" (
+    @(Get-ConstructInstanceEntryProblem -Name 'work-vm' -Entry $entryPub).Count -eq 0)
+ok "entry: a publicHost that is not a host name is refused where it is built" (
+    @(Get-ConstructInstanceEntryProblem -Name 'work-vm' -Entry (
+        New-ConstructRemoteInstanceEntry -Name 'work-vm' -SshHost 'buildbox.example.local' -SshPort 2201 `
+            -ServiceUrl 'https://b:7462' -PublicHost '-x; calc')).Count -gt 0)
 
 # ── (f2) The create path, DRIVEN end to end (and its ordering) ──────────────
 # The create -> registry-check -> rollback-or-record sequence lives in ONE function

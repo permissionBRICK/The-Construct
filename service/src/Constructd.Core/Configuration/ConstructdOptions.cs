@@ -52,6 +52,24 @@ public sealed class ConstructdOptions
     public string PublicHost { get; set; } = "localhost";
 
     /// <summary>
+    /// Optional per-VM host name template, e.g. <c>{name}.vpn.example</c> (plan §4.12): with a
+    /// wildcard DNS record pointing at this host, every VM gets its OWN name, which is what lets two
+    /// VMs serve web UIs that browsers keep apart (cookies are scoped by host, not by port).
+    /// Rendered by <see cref="PublicHostFor"/> and validated at startup
+    /// (<c>Constructd.Core.Logic.PublicHostPatternRules</c>). Empty — the default — means every VM is
+    /// advertised on <see cref="PublicHost"/>, exactly as before this setting existed.
+    /// The API certificate is unaffected: it stays bound to <see cref="PublicHost"/>.
+    /// </summary>
+    public string PublicHostPattern { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The host name one VM's endpoint and forwards are advertised under: the rendered
+    /// <see cref="PublicHostPattern"/>, or <see cref="PublicHost"/> when no pattern is configured.
+    /// </summary>
+    public string PublicHostFor(string? vmName) =>
+        Logic.PublicHostPatternRules.Resolve(PublicHostPattern, PublicHost, vmName);
+
+    /// <summary>
     /// Hyper-V virtual switch new VMs are attached to. The service host's own switch (plan §4.4
     /// creates an internal NAT switch at install); the default is Hyper-V's <c>Default Switch</c>, so
     /// a host that has nothing else configured still works.

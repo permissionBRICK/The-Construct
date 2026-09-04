@@ -14,6 +14,18 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
 
+# HERMETIC ENVIRONMENT. The scripts under test resolve their identity
+# "environment > config.env > default", and this suite is usually run ON a provisioned
+# Construct VM -- whose login environment exports T3CODE, T3CODE_HTTPS,
+# T3CODE_PUBLIC_BASE_URL and friends. Inherited, they answer the very questions under
+# test: the byte-diff below would compare the base commit's banner (which had no T3
+# HTTPS block) against a banner rendered from the HOST's own T3 origin. Drop the whole
+# family; every case that needs a value sets it explicitly.
+while IFS='=' read -r _leaked _; do
+  [[ -n "${_leaked}" ]] && unset "${_leaked}"
+done < <(env | grep -E '^(T3CODE|CONSTRUCT|OPENCODE)[A-Z0-9_]*=' || true)
+unset _leaked
+
 pass=0
 fail=0
 ok() {
@@ -248,6 +260,190 @@ ok "print-connection-info: IPv6 SSH line uses raw address" \
 
 ok "print-connection-info: IPv6 SSH line includes -p port flag" \
   sh -c "grep -E '^  ssh ' '${new_pci_ipv6}' | grep -q -- '-p 2201'"
+
+# ── bin/provision.sh: the host-forward status file (plan §4.12) ───────────────
+# A SERVICE-MANAGED VM asks the host service to forward its web services and records the
+# result where the host provisioner reads it back. A LOCAL VM must do none of that: no
+# request, no file, no output — which is the same zero-change bar the banner cases above
+# hold. Extracted from the shipped script (its body provisions a machine, so it cannot be
+# sourced), exactly like test/provision-hostname.test.sh does.
+
+PROVISION="${ROOT}/bin/provision.sh"
+
+# Both halves of the shipped gate, asserted on the source: the step only runs for a
+# service-managed VM, and a VM that is not one has its stale file removed silently.
+ok "host forwards: the step is gated on CONSTRUCT_SERVICE_URL" \
+  sh -c "grep -A2 'run_step optional \"Requesting host port forwards' '${PROVISION}' >/dev/null && \
+         grep -B4 'run_step optional \"Requesting host port forwards' '${PROVISION}' | grep -q 'if \[\[ -n \"\${CONSTRUCT_SERVICE_URL}\" \]\]'"
+ok "host forwards: a local VM removes any stale status file, silently" \
+  sh -c "grep -A7 'run_step optional \"Requesting host port forwards' '${PROVISION}' | grep -q 'rm -f \"\${HOST_FORWARDS_FILE}\"'"
+ok "host forwards: the request goes through construct expose --to host --reuse" \
+  grep -q -- '--to host --reuse' "${PROVISION}"
+
+hf_lib="${tmp}/hostforwards.sh"
+{
+  sed -n '/^_cfg_unquote() {$/,/^}$/p' "${PROVISION}"
+  sed -n '/^host_forward_authority() {$/,/^}$/p' "${PROVISION}"
+  sed -n '/^setup_host_forwards() {$/,/^}$/p' "${PROVISION}"
+  sed -n '/^record_t3_forward_url() {$/,/^}$/p' "${PROVISION}"
+} >"${hf_lib}"
+# A stub repo whose construct-expose.sh records its argv and answers from a script the
+# test writes — so nothing here talks to a service, and the `--reuse` contract is
+# asserted at the boundary provision.sh actually uses.
+hf_repo="${tmp}/hf-repo"
+mkdir -p "${hf_repo}/bin"
+cat >"${hf_repo}/bin/construct-expose.sh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${EXPOSE_LOG}"
+port="$1"
+answer="${EXPOSE_DIR}/answer-${port}"
+[[ -f "${answer}" ]] || answer="${EXPOSE_DIR}/answer"
+code_file="${EXPOSE_DIR}/code-${port}"
+[[ -f "${code_file}" ]] || code_file="${EXPOSE_DIR}/code"
+[[ -f "${answer}" ]] && cat "${answer}"
+if [[ -f "${code_file}" ]]; then exit "$(cat "${code_file}")"; fi
+exit 0
+STUB
+chmod +x "${hf_repo}/bin/construct-expose.sh"
+
+run_host_forwards() { # <ai_tools> <t3code> <t3code_https>
+  (
+    set -u
+    # The provisioner's reporting helpers, silenced: the assertions are about the FILE.
+    ok()   { :; }
+    warn() { printf '%s\n' "$*" >>"${EXPOSE_DIR}/warnings"; }
+    REPO_DIR="${hf_repo}"
+    CONFIG_FILE="${tmp}/hf-config.env"
+    HOST_FORWARDS_FILE="${hf_out}"
+    AI_TOOLS="$1"; T3CODE="$2"; T3CODE_HTTPS="$3"
+    OPENCODE_PORT=4096; T3CODE_PORT=5177; T3CODE_HTTPS_PORT=5178
+    # shellcheck source=/dev/null
+    . "${hf_lib}"
+    setup_host_forwards
+  )
+}
+
+export EXPOSE_DIR="${tmp}/expose"
+export EXPOSE_LOG="${EXPOSE_DIR}/argv"
+mkdir -p "${EXPOSE_DIR}"
+: >"${tmp}/hf-config.env"
+hf_out="${tmp}/host-forwards"
+
+printf 'http://work-vm.vpn.example:2301/\n' >"${EXPOSE_DIR}/answer-4096"
+printf 'http://work-vm.vpn.example:2302/\n' >"${EXPOSE_DIR}/answer-5178"
+run_host_forwards "opencode,claude-code" "true" "true"
+
+ok "host forwards: OPENCODE is recorded as host:port" \
+  grep -qx 'OPENCODE=work-vm.vpn.example:2301' "${hf_out}"
+ok "host forwards: T3 is recorded as host:port" \
+  grep -qx 'T3=work-vm.vpn.example:2302' "${hf_out}"
+ok "host forwards: the T3 request is for the HTTPS listener" \
+  grep -q '^5178 --to host --reuse' "${EXPOSE_LOG}"
+ok "host forwards: every request is get-or-create" \
+  sh -c "! grep -v -- '--reuse' '${EXPOSE_LOG}' | grep -q ."
+ok "host forwards: the file is only these two lines" test "$(wc -l <"${hf_out}")" = 2
+
+# Re-running provisioning must produce the SAME file, not a second forward: the
+# idempotence lives in --reuse, which the CLI's own suite pins.
+cp "${hf_out}" "${tmp}/host-forwards.first"
+run_host_forwards "opencode,claude-code" "true" "true"
+ok "host forwards: a second provision writes an identical file" \
+  cmp -s "${tmp}/host-forwards.first" "${hf_out}"
+
+# Plain HTTP T3 asks for the plain listener instead.
+: >"${EXPOSE_LOG}"
+printf 'http://work-vm.vpn.example:2305/\n' >"${EXPOSE_DIR}/answer-5177"
+run_host_forwards "opencode" "true" "false"
+ok "host forwards: T3 without HTTPS asks for the plain port" \
+  grep -q '^5177 --to host --reuse' "${EXPOSE_LOG}"
+
+# A service the VM does not run asks for nothing, and its key is simply absent.
+run_host_forwards "claude-code,codex" "false" "true"
+ok "host forwards: no opencode, no T3 -> an empty file" test ! -s "${hf_out}"
+
+# Refused (exit 7) is recorded as such: the host provisioner prints the manual path
+# instead of a URL that cannot work.
+printf '7' >"${EXPOSE_DIR}/code-4096"
+: >"${EXPOSE_DIR}/answer-4096"
+run_host_forwards "opencode" "false" "true"
+ok "host forwards: a refusal is recorded as 'denied'" grep -qx 'OPENCODE=denied' "${hf_out}"
+ok "host forwards: ...and reads back as no URL" \
+  sh -c "test \"\$(sed -n 's/^OPENCODE=//p' '${hf_out}')\" = denied"
+
+# Any other failure is 'error' — NOT 'denied': the user is not the reason.
+printf '8' >"${EXPOSE_DIR}/code-4096"
+run_host_forwards "opencode" "false" "true"
+ok "host forwards: a service failure is recorded as 'error'" grep -qx 'OPENCODE=error' "${hf_out}"
+rm -f "${EXPOSE_DIR}/code-4096"
+
+# host_forward_authority: what provision.sh itself reads back to build T3's public port.
+printf 'T3=work-vm.vpn.example:2302\nOPENCODE=denied\n' >"${hf_out}"
+ok "host forwards: the authority of a recorded key is read back" \
+  bash -c "HOST_FORWARDS_FILE='${hf_out}'; . '${hf_lib}'; test \"\$(host_forward_authority T3)\" = 'work-vm.vpn.example:2302'"
+ok "host forwards: a denied key reads back as nothing" \
+  bash -c "HOST_FORWARDS_FILE='${hf_out}'; . '${hf_lib}'; test -z \"\$(host_forward_authority OPENCODE)\""
+ok "host forwards: an absent file reads back as nothing" \
+  bash -c "HOST_FORWARDS_FILE='${tmp}/no-such-file'; . '${hf_lib}'; test -z \"\$(host_forward_authority T3)\""
+
+# ── The EFFECTIVE forwarded T3 origin ─────────────────────────────────────────
+# The allocated forward alone is AMBIGUOUS: it is requested for the TLS port whenever
+# HTTPS is wanted, BEFORE setup-t3-https.sh runs, and every failure path in that script
+# clears the advertised origin while the forward stays. So the guest records what T3 was
+# really told to advertise, and the host provisioner prints only that.
+
+run_record_t3() { # <T3CODE_PUBLIC_BASE_URL line, or "" for none>
+  (
+    set -u
+    ok()   { :; }
+    warn() { printf '%s\n' "$*" >>"${EXPOSE_DIR}/warnings"; }
+    CONFIG_FILE="${tmp}/hf-t3-config.env"
+    HOST_FORWARDS_FILE="${hf_out}"
+    : >"${CONFIG_FILE}"
+    [[ -n "$1" ]] && printf 'T3CODE_PUBLIC_BASE_URL=%s\n' "$1" >>"${CONFIG_FILE}"
+    # shellcheck source=/dev/null
+    . "${hf_lib}"
+    record_t3_forward_url
+  )
+}
+t3url() { sed -n 's/^T3_URL=//p' "${hf_out}" | head -1; }
+
+# HTTPS came up: the origin names the forwarded port, so it IS the answer.
+printf 'T3=work-vm.vpn.example:2302\n' >"${hf_out}"
+run_record_t3 "https://work-vm.vpn.example:2302"
+ok "t3 origin: an https origin on the forwarded port is recorded" \
+  test "$(t3url)" = "https://work-vm.vpn.example:2302"
+ok "t3 origin: the forward line survives the rewrite" grep -qx 'T3=work-vm.vpn.example:2302' "${hf_out}"
+
+# HTTPS deliberately OFF: the plain listener is forwarded and really serves it.
+printf 'T3=work-vm.vpn.example:2305\n' >"${hf_out}"
+run_record_t3 "http://work-vm.vpn.example:2305"
+ok "t3 origin: a plain-http origin on the forwarded port is recorded too" \
+  test "$(t3url)" = "http://work-vm.vpn.example:2305"
+
+# HTTPS REQUESTED BUT THE SETUP FAILED: setup-t3-https.sh cleared the origin, the forward
+# for the TLS port stays. Nothing may be advertised -- this is the case that would
+# otherwise print an http:// URL for a TLS port nothing serves.
+printf 'T3=work-vm.vpn.example:2302\n' >"${hf_out}"
+run_record_t3 ""
+ok "t3 origin: a failed HTTPS setup records NO url" test -z "$(t3url)"
+ok "t3 origin: ...while the allocated forward is still recorded" \
+  grep -qx 'T3=work-vm.vpn.example:2302' "${hf_out}"
+
+# An origin on the VM's OWN port is not something a client can reach.
+printf 'T3=work-vm.vpn.example:2302\n' >"${hf_out}"
+run_record_t3 "https://work-vm.vpn.example:5178"
+ok "t3 origin: an origin on the VM-internal port is not advertised" test -z "$(t3url)"
+
+# A stale T3_URL from an earlier provision must not survive a run that has no origin.
+printf 'T3=work-vm.vpn.example:2302\nT3_URL=https://work-vm.vpn.example:2302\n' >"${hf_out}"
+run_record_t3 ""
+ok "t3 origin: a stale url from an earlier provision is dropped" test -z "$(t3url)"
+
+# Denied / no forward at all: nothing to record, and the file is left as it stands.
+printf 'T3=denied\n' >"${hf_out}"
+run_record_t3 "https://work-vm.vpn.example:2302"
+ok "t3 origin: a denied forward records no url" test -z "$(t3url)"
+ok "t3 origin: ...and the denial is preserved" grep -qx 'T3=denied' "${hf_out}"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"
