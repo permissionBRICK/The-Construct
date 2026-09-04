@@ -2538,6 +2538,457 @@ if ($aiPreWipe) {
         $preTeam.VmBranch -eq 'vm-team')
 }
 
+# ── Publish local profiles upstream (plan 4.13 / B15) ────────────────────────
+# Pure-shape checks, the SHARED behaviour fixture both engines must reproduce,
+# then real publishes against a LOCAL BARE REPO plus injected git failures.
+# git itself cannot push-to-create, so that path is simulated the only way it can
+# be locally: an empty bare repo created lazily, plus separate checks that a URL
+# with no repo behind it takes the git-init branch AND that a failed first push
+# stays retryable.
+
+ok "publish-branch: 'main' is valid" (Test-ConstructPublishBranchName -Name "main")
+ok "publish-branch: 'master' is valid (Test-ConstructVmBranchName reserves it)" (Test-ConstructPublishBranchName -Name "master")
+ok "publish-branch: 'team/config' is valid" (Test-ConstructPublishBranchName -Name "team/config")
+ok "publish-branch: empty is invalid" (-not (Test-ConstructPublishBranchName -Name ""))
+ok "publish-branch: leading dash is invalid" (-not (Test-ConstructPublishBranchName -Name "-main"))
+ok "publish-branch: '..' is invalid" (-not (Test-ConstructPublishBranchName -Name "a..b"))
+ok "publish-branch: trailing dot is invalid" (-not (Test-ConstructPublishBranchName -Name "main."))
+ok "publish-branch: .lock suffix is invalid" (-not (Test-ConstructPublishBranchName -Name "main.lock"))
+ok "publish-branch: trailing slash is invalid" (-not (Test-ConstructPublishBranchName -Name "team/"))
+ok "publish-branch: space is invalid" (-not (Test-ConstructPublishBranchName -Name "my branch"))
+
+ok "publish-name: a plain name is safe" (Test-ConstructSafeProfileName -Name "billing-api")
+ok "publish-name: a dotted name is safe" (Test-ConstructSafeProfileName -Name "team.eu")
+ok "publish-name: empty is unsafe" (-not (Test-ConstructSafeProfileName -Name ""))
+ok "publish-name: a path separator is unsafe" (-not (Test-ConstructSafeProfileName -Name "a/b"))
+ok "publish-name: a backslash is unsafe" (-not (Test-ConstructSafeProfileName -Name "a\b"))
+ok "publish-name: '..' is unsafe" (-not (Test-ConstructSafeProfileName -Name "up..dir"))
+ok "publish-name: a colon is unsafe (Windows)" (-not (Test-ConstructSafeProfileName -Name "co:lon"))
+ok "publish-name: surrounding space is unsafe" (-not (Test-ConstructSafeProfileName -Name " pad "))
+
+# Credential-bearing URLs are REFUSED, not merely redacted: a URL reaches git's
+# argv, the staging clone's .git/config, manifest/remotes.json and every provenance
+# entry, so redaction could only ever protect what is DISPLAYED.
+ok "publish-cred: https with user:secret is refused" (Test-ConstructUrlHasCredentials -Url "https://alice:glpat-tok@git.example.com/x.git")
+ok "publish-cred: https with a bare token user is refused" (Test-ConstructUrlHasCredentials -Url "https://glpat-tok@git.example.com/x.git")
+ok "publish-cred: http with userinfo is refused" (Test-ConstructUrlHasCredentials -Url "http://alice:pw@h/x.git")
+ok "publish-cred: ssh://git@host is fine (a user, not a secret)" (-not (Test-ConstructUrlHasCredentials -Url "ssh://git@git.example.com/x.git"))
+ok "publish-cred: ssh://user:secret@host is refused" (Test-ConstructUrlHasCredentials -Url "ssh://git:s3cret@git.example.com/x.git")
+ok "publish-cred: scp-style git@host:path is fine" (-not (Test-ConstructUrlHasCredentials -Url "git@git.example.com:alice/x.git"))
+ok "publish-cred: a plain https URL is fine" (-not (Test-ConstructUrlHasCredentials -Url "https://git.example.com/alice/x.git"))
+ok "publish-cred: empty is fine" (-not (Test-ConstructUrlHasCredentials -Url ""))
+# Padding must not slip a credential past the check: callers trim before storing,
+# so a check anchored at the untrimmed first character would accept the padded form
+# and then persist the trimmed, credential-carrying value.
+ok "publish-cred: a PADDED credential URL is still detected" (
+    Test-ConstructUrlHasCredentials -Url "  https://alice:glpat-tok@git.example.com/x.git  ")
+ok "publish-cred: a tab/newline padded credential URL is still detected" (
+    Test-ConstructUrlHasCredentials -Url "`t`nhttps://glpat-tok@git.example.com/x.git`n")
+ok "publish-cred: a padded plain URL is still fine" (
+    -not (Test-ConstructUrlHasCredentials -Url "  https://git.example.com/alice/x.git "))
+ok "publish-cred: whitespace only is fine" (-not (Test-ConstructUrlHasCredentials -Url "   "))
+
+# ONE name rule per engine: the rename-target validator REUSES it rather than
+# restating the character set, so the two can never disagree.
+ok "publish-name: the rename-target validator reuses the one name rule" (
+    (-not (Test-ConstructRenameTarget -ConfigDir $repoRoot -NewName "co:lon").Ok) -and
+    (-not (Test-ConstructRenameTarget -ConfigDir $repoRoot -NewName "pipe|d").Ok) -and
+    (-not (Test-ConstructRenameTarget -ConfigDir $repoRoot -NewName "up..dir").Ok))
+
+ok "publish-redact: PAT userinfo is masked" (
+    (Protect-ConstructGitOutput -Text "remote: https://alice:glpat-secret@git.example.com/x.git") -eq
+    "remote: https://***@git.example.com/x.git")
+ok "publish-redact: a URL without userinfo is untouched" (
+    (Protect-ConstructGitOutput -Text "https://git.example.com/x.git") -eq "https://git.example.com/x.git")
+ok "publish-redact: empty stays empty" ((Protect-ConstructGitOutput -Text "") -eq "")
+ok "publish-redact: the display formatter masks the same way" (
+    (Format-ConstructRemoteUrlForDisplay -Url "https://alice:glpat-secret@git.example.com/x.git") -eq
+    "https://***@git.example.com/x.git")
+
+# Manifest bytes: the SHARED fixture both engines must reproduce.
+$pubFixIn  = Join-Path $repoRoot "test/fixtures/publish-manifest.input.json"
+$pubFixExp = Join-Path $repoRoot "test/fixtures/publish-manifest.expected.json"
+if ((Test-Path -LiteralPath $pubFixIn) -and (Test-Path -LiteralPath $pubFixExp)) {
+    $pfi = Get-Content -LiteralPath $pubFixIn -Raw | ConvertFrom-Json
+    $pfEntry = [ordered]@{
+        remoteUrl    = $pfi.remoteUrl
+        ref          = $pfi.ref
+        pathInRemote = "projects/$($pfi.name).json"
+        importedAs   = $pfi.name
+        baseCommit   = $pfi.baseCommit
+        baseBlobSha  = $pfi.baseBlobSha
+    }
+    $pfActual = (ConvertTo-ConstructJsonValue -Value ([pscustomobject]$pfEntry) -Depth 0) + "`n"
+    $pfExpect = [System.IO.File]::ReadAllText($pubFixExp, [System.Text.Encoding]::UTF8).Replace("`r`n", "`n")
+    ok "publish-manifest: PS writer matches the shared fixture byte for byte" ($pfActual -ceq $pfExpect)
+} else {
+    ok "publish-manifest: shared fixture present" $false
+}
+
+# ── The SHARED planner behaviour fixture ─────────────────────────────────────
+# Get-ConstructPublishPlan and the extension's planPublish must bucket every case
+# identically; extension/test/configsync.test.js runs the same file. Comparing the
+# engines against a recorded artifact (rather than against each other) is what
+# keeps them from drifting apart one "small" fix at a time.
+$pubPlanFix = Join-Path $repoRoot "test/fixtures/publish-plan-cases.json"
+if (Test-Path -LiteralPath $pubPlanFix) {
+    $ppf = Get-Content -LiteralPath $pubPlanFix -Raw | ConvertFrom-Json
+    foreach ($case in @($ppf.cases)) {
+        $ppProfiles = @()
+        foreach ($pp in @($case.profiles)) { $ppProfiles += @{ Name = $pp.name; Raw = $pp.raw } }
+        $ppMan = @{}
+        foreach ($k in @($case.manifest.PSObject.Properties.Name | Where-Object { $_ })) { $ppMan[$k] = $case.manifest.$k }
+        $ppRem = @{}
+        foreach ($k in @($case.remoteFiles.PSObject.Properties.Name | Where-Object { $_ })) { $ppRem[$k] = $case.remoteFiles.$k }
+        $ppSel = $null
+        if ($null -ne $case.selected) { $ppSel = @($case.selected) }
+
+        $ppPlan = Get-ConstructPublishPlan -Profiles $ppProfiles -Manifest $ppMan -RemoteFiles $ppRem -Names $ppSel
+        $gotPub  = @($ppPlan.Publish | ForEach-Object { "$($_.Name):$($_.Adopt)" })
+        $expPub  = @($case.expect.publish | ForEach-Object { "$($_.name):$($_.adopt)" })
+        $gotSkip = @($ppPlan.Skipped | ForEach-Object { $_.Name } | Sort-Object)
+        $gotRef  = @($ppPlan.Refused | ForEach-Object { $_.Name } | Sort-Object)
+        $gotInv  = @($ppPlan.Invalid | ForEach-Object { $_.Name } | Sort-Object)
+        ok "publish-plan[$($case.name)]: publish bucket" (($gotPub -join ',') -eq ($expPub -join ','))
+        ok "publish-plan[$($case.name)]: skipTracked bucket" (($gotSkip -join ',') -eq (@($case.expect.skipTracked) -join ','))
+        ok "publish-plan[$($case.name)]: refuse bucket" (($gotRef -join ',') -eq (@($case.expect.refuse) -join ','))
+        ok "publish-plan[$($case.name)]: invalid bucket" (($gotInv -join ',') -eq (@($case.expect.invalid) -join ','))
+
+        foreach ($rk in @($case.expect.reasonContains.PSObject.Properties.Name | Where-Object { $_ })) {
+            $reasonTxt = "$($ppPlan.Reasons[$rk])"
+            foreach ($needle in @($case.expect.reasonContains.$rk)) {
+                ok "publish-plan[$($case.name)]: reason for '$rk' contains '$needle'" ($reasonTxt.Contains($needle))
+            }
+        }
+        foreach ($rk in @($case.expect.reasonExcludes.PSObject.Properties.Name | Where-Object { $_ })) {
+            $reasonTxt = "$($ppPlan.Reasons[$rk])"
+            foreach ($needle in @($case.expect.reasonExcludes.$rk)) {
+                ok "publish-plan[$($case.name)]: reason for '$rk' NEVER contains '$needle'" (-not $reasonTxt.Contains($needle))
+            }
+        }
+    }
+} else {
+    ok "publish-plan: shared behaviour fixture present" $false
+}
+
+# ── Real publishes ───────────────────────────────────────────────────────────
+$pubBase = Join-Path ([System.IO.Path]::GetTempPath()) ("cs-pub-" + [guid]::NewGuid().ToString("N"))
+$savedPubLA = $env:LOCALAPPDATA
+$savedPubPath = $env:PATH
+try {
+    New-Item -ItemType Directory -Path $pubBase -Force | Out-Null
+    $env:LOCALAPPDATA = Join-Path $pubBase "localappdata"
+    New-Item -ItemType Directory -Path $env:LOCALAPPDATA -Force | Out-Null
+
+    $pubConfigDir = Join-Path $pubBase "config"
+    $null = Initialize-ConstructConfigRepo -ConfigDir $pubConfigDir
+    $utf8Pub = New-Object System.Text.UTF8Encoding $false
+    foreach ($pn in @("alpha", "beta")) {
+        [System.IO.File]::WriteAllText((Join-Path $pubConfigDir "projects/$pn.json"),
+            ('{"name":"' + $pn + '","repos":[],"sdks":{},"mcp":[],"hostPackages":[],"provisionCommands":[],"tests":{}}'), $utf8Pub)
+    }
+
+    # Push-to-create: a URL with no repo behind it must NOT be an error -- the
+    # clone dir is created locally with git init + remote add.
+    $pubMissing = Join-Path $pubBase "not-created-yet.git"
+    $pubMissingUrl = "file://$pubMissing"
+    $pubMissingClone = Initialize-ConstructPublishClone -RemoteUrl $pubMissingUrl
+    ok "publish-clone: a not-yet-existing remote takes the push-to-create path" ($pubMissingClone.Ok -and $pubMissingClone.Created)
+    ok "publish-clone: ...and the local clone has origin set" (
+        (& git -C $pubMissingClone.Dir remote get-url origin 2>$null) -match "not-created-yet")
+    ok "publish-clone: ...and is marked pending INSIDE .git (never in the work tree)" (
+        (Test-Path -LiteralPath (Get-ConstructPublishPendingMarker -CloneDir $pubMissingClone.Dir)) -and
+        -not (Test-Path -LiteralPath (Join-Path $pubMissingClone.Dir "construct-publish-pending")))
+
+    # ...and a publish into it reports the failed push and adopts NOTHING:
+    # claiming a file is tracked upstream when the push never landed is the one
+    # thing this must never do.
+    $pubMissRes = Publish-ConstructConfigProfiles -ConfigDir $pubConfigDir -RemoteUrl $pubMissingUrl -Names @("alpha")
+    ok "publish: an unreachable remote publishes nothing" (@($pubMissRes.Published).Count -eq 0)
+    ok "publish: ...and reports the push failure" (@($pubMissRes.Errors | Where-Object { $_ -match "git push" }).Count -ge 1)
+    ok "publish: ...and writes NO manifest entry" (-not (Test-Path -LiteralPath (Join-Path $pubConfigDir "manifest/alpha.json")))
+    ok "publish: ...and no stored base" (-not (Test-Path -LiteralPath (Join-Path $pubConfigDir "bases/alpha.json")))
+
+    # RETRY: the failed first push left a local commit. The remote is STILL absent,
+    # so the next run must take the push-to-create path again rather than reading
+    # "unreachable origin + existing HEAD" as a real remote we cannot fetch.
+    $pubRetryClone = Initialize-ConstructPublishClone -RemoteUrl $pubMissingUrl
+    ok "publish-clone: a failed first push stays retryable (marker survives)" (
+        $pubRetryClone.Ok -and $pubRetryClone.Created)
+    # ...and once the remote finally exists, the retry succeeds and clears the marker.
+    & git init --bare $pubMissing 2>$null | Out-Null
+    $pubRetryRes = Publish-ConstructConfigProfiles -ConfigDir $pubConfigDir -RemoteUrl $pubMissingUrl -Names @("alpha")
+    ok "publish: the retry publishes once the remote exists" (@($pubRetryRes.Published) -contains "alpha")
+    ok "publish: ...and the pending marker is cleared" (
+        -not (Test-Path -LiteralPath (Get-ConstructPublishPendingMarker -CloneDir $pubRetryClone.Dir)))
+
+    # A credential-bearing URL is refused outright -- nothing is linked, cloned or
+    # pushed, so the secret never reaches git argv, .git/config, remotes.json or a
+    # provenance entry in the first place.
+    $pubCredUrl0 = "https://alice:glpat-secret-token@git.example.com/alice/cfg.git"
+    $pubCredRes0 = Publish-ConstructConfigProfiles -ConfigDir $pubConfigDir -RemoteUrl $pubCredUrl0
+    ok "publish-cred: a URL carrying credentials is refused" (
+        @($pubCredRes0.Errors | Where-Object { $_ -match "carries credentials" }).Count -eq 1)
+    ok "publish-cred: ...and nothing is published" (@($pubCredRes0.Published).Count -eq 0)
+    ok "publish-cred: ...and the refusal itself does not repeat the secret" (
+        -not ((@($pubCredRes0.Errors) -join "`n").Contains("glpat-secret-token")))
+    $pubCredRemotes0 = @()
+    if (Test-Path -LiteralPath (Join-Path $pubConfigDir "manifest/remotes.json")) {
+        $pubCredRemotes0 = @((Get-Content -LiteralPath (Join-Path $pubConfigDir "manifest/remotes.json") -Raw | ConvertFrom-Json))
+    }
+    ok "publish-cred: ...and it is NOT written into manifest/remotes.json" (
+        @($pubCredRemotes0 | Where-Object { "$($_.url)".Contains("glpat-secret-token") }).Count -eq 0)
+
+    # The push-to-create marker is an OPAQUE sentinel, never a copy of the URL.
+    $pubMarkerTxt = ""
+    $pubMarkerPath = Get-ConstructPublishPendingMarker -CloneDir $pubMissingClone.Dir
+    if (Test-Path -LiteralPath $pubMarkerPath) {
+        $pubMarkerTxt = [System.IO.File]::ReadAllText($pubMarkerPath, [System.Text.Encoding]::UTF8)
+    }
+    ok "publish-marker: the marker does not contain the remote URL" (-not $pubMarkerTxt.Contains("not-created-yet"))
+
+    # The real thing, against a lazily created empty bare repo.
+    $pubBare = Join-Path $pubBase "remote.git"
+    & git init --bare $pubBare 2>$null | Out-Null
+    $pubUrl = "file://$pubBare"
+
+    $pubRes = Publish-ConstructConfigProfiles -ConfigDir $pubConfigDir -RemoteUrl $pubUrl
+    ok "publish: the untracked profile is published" (@($pubRes.Published) -contains "beta")
+    ok "publish: the already-published one is skipped as tracked" (
+        @($pubRes.Skipped | Where-Object { $_.Name -eq "alpha" }).Count -eq 1)
+    ok "publish: no errors" (@($pubRes.Errors).Count -eq 0)
+    ok "publish: default branch resolved to main" ($pubRes.Branch -eq "main")
+    ok "publish: a commit sha is reported" ($pubRes.Commit -match '^[0-9a-f]{40}$')
+
+    $pubTree = @(& git --git-dir=$pubBare ls-tree -r --name-only HEAD 2>$null)
+    ok "publish: upstream carries projects/beta.json" ($pubTree -contains "projects/beta.json")
+    ok "publish: upstream commit message names the count" (
+        @(& git --git-dir=$pubBare log --oneline 2>$null | Where-Object { $_ -match "publish 1 profiles" }).Count -eq 1)
+    # The upstream commit is the USER'S identity, never this project's internal
+    # bookkeeping identity -- it lands in the user's own repo.
+    $pubAuthor = "$(& git --git-dir=$pubBare log -1 --pretty=format:'%an <%ae>' 2>$null)".Trim()
+    ok "publish: the upstream commit does NOT use the internal bookkeeping identity" (
+        $pubAuthor -notmatch "The Construct" -and $pubAuthor -notmatch "construct@construct.local")
+
+    # Tracked state: manifest entry + stored base, exactly as an import writes them.
+    $pubManif = Get-Content -LiteralPath (Join-Path $pubConfigDir "manifest/beta.json") -Raw | ConvertFrom-Json
+    ok "publish: manifest remoteUrl" ($pubManif.remoteUrl -eq $pubUrl)
+    ok "publish: manifest ref is the default branch" ($pubManif.ref -eq "main")
+    ok "publish: manifest pathInRemote" ($pubManif.pathInRemote -eq "projects/beta.json")
+    ok "publish: manifest importedAs" ($pubManif.importedAs -eq "beta")
+    ok "publish: manifest baseCommit is the pushed commit" ($pubManif.baseCommit -eq $pubRes.Commit)
+    ok "publish: manifest baseBlobSha is the pushed blob" (
+        $pubManif.baseBlobSha -eq "$(& git --git-dir=$pubBare rev-parse HEAD:projects/beta.json 2>$null)".Trim())
+    $pubBaseTxt  = [System.IO.File]::ReadAllText((Join-Path $pubConfigDir "bases/beta.json"), [System.Text.Encoding]::UTF8)
+    $pubLocalTxt = [System.IO.File]::ReadAllText((Join-Path $pubConfigDir "projects/beta.json"), [System.Text.Encoding]::UTF8)
+    ok "publish: stored base is the published (canonical) content" ($pubBaseTxt -ceq $pubLocalTxt)
+    ok "publish: local profile rewritten in canonical form" ($pubLocalTxt.EndsWith("`n"))
+
+    $pubRemotes = @((Get-Content -LiteralPath (Join-Path $pubConfigDir "manifest/remotes.json") -Raw | ConvertFrom-Json))
+    ok "publish: the remote is linked in manifest/remotes.json" (@($pubRemotes | Where-Object { $_.url -eq $pubUrl }).Count -eq 1)
+    ok "publish: the config repo committed the adoption" (
+        @(& git -C $pubConfigDir log --oneline 2>$null | Where-Object { $_ -match "publish: beta" }).Count -eq 1)
+
+    # Second publish: everything is tracked now, so it is a no-op.
+    $pubHeadBefore = "$(& git --git-dir=$pubBare rev-parse HEAD 2>$null)".Trim()
+    $pubRes2 = Publish-ConstructConfigProfiles -ConfigDir $pubConfigDir -RemoteUrl $pubUrl
+    ok "publish: second run publishes nothing" (@($pubRes2.Published).Count -eq 0)
+    ok "publish: second run skips both as tracked" (@($pubRes2.Skipped).Count -eq 2)
+    ok "publish: second run explains where they go instead" (
+        @($pubRes2.Skipped | Where-Object { $_.Reason -match "Push back" }).Count -eq 2)
+    ok "publish: second run leaves upstream untouched" (
+        "$(& git --git-dir=$pubBare rev-parse HEAD 2>$null)".Trim() -eq $pubHeadBefore)
+
+    # Refusal: an UNTRACKED local profile whose name already exists upstream
+    # with different content.
+    [System.IO.File]::WriteAllText((Join-Path $pubConfigDir "projects/gamma.json"),
+        '{"name":"gamma","repos":[],"sdks":{},"mcp":[],"hostPackages":["local-only"],"provisionCommands":[],"tests":{}}', $utf8Pub)
+    $pubOther = Join-Path $pubBase "other"
+    & git clone $pubUrl $pubOther 2>$null | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $pubOther "projects/gamma.json"),
+        '{"name":"gamma","repos":[],"sdks":{},"mcp":[],"hostPackages":["theirs"],"provisionCommands":[],"tests":{}}' + "`n", $utf8Pub)
+    & git -C $pubOther -c user.name=Test -c user.email=test@test add -A 2>$null | Out-Null
+    & git -C $pubOther -c user.name=Test -c user.email=test@test commit -m "upstream gamma" 2>$null | Out-Null
+    & git -C $pubOther push origin HEAD:refs/heads/main 2>$null | Out-Null
+
+    $pubRes3 = Publish-ConstructConfigProfiles -ConfigDir $pubConfigDir -RemoteUrl $pubUrl
+    ok "publish: a differing upstream file of the same name is refused" (
+        @($pubRes3.Refused | Where-Object { $_.Name -eq "gamma" }).Count -eq 1)
+    ok "publish: ...with the import-first instruction" (
+        @($pubRes3.Refused | Where-Object { $_.Reason -match "import it first" }).Count -eq 1)
+    ok "publish: a refused profile publishes nothing" (@($pubRes3.Published).Count -eq 0)
+    ok "publish: a refused profile stays untracked" (-not (Test-Path -LiteralPath (Join-Path $pubConfigDir "manifest/gamma.json")))
+    ok "publish: a refused profile does not overwrite upstream" (
+        (& git --git-dir=$pubBare show HEAD:projects/gamma.json 2>$null) -match "theirs")
+
+    # An INVALID local profile is reported, never repaired into a publish.
+    [System.IO.File]::WriteAllText((Join-Path $pubConfigDir "projects/broken.json"),
+        '{"name":"broken","repos":"not-an-array","secret":"keep-me"}', $utf8Pub)
+    $pubResBad = Publish-ConstructConfigProfiles -ConfigDir $pubConfigDir -RemoteUrl $pubUrl -Names @("broken")
+    ok "publish: an invalid profile is reported as invalid" (
+        @($pubResBad.Invalid | Where-Object { $_.Name -eq "broken" }).Count -eq 1)
+    ok "publish: an invalid profile publishes nothing" (@($pubResBad.Published).Count -eq 0)
+    ok "publish: an invalid profile is NOT rewritten locally" (
+        ([System.IO.File]::ReadAllText((Join-Path $pubConfigDir "projects/broken.json"), [System.Text.Encoding]::UTF8)) -match "keep-me")
+    ok "publish: an invalid profile never reaches upstream" (
+        -not (@(& git --git-dir=$pubBare ls-tree -r --name-only HEAD 2>$null) -contains "projects/broken.json"))
+    Remove-Item -LiteralPath (Join-Path $pubConfigDir "projects/broken.json") -Force
+
+    # -Names narrows the selection, and an unknown name is an error, not a silent skip.
+    [System.IO.File]::WriteAllText((Join-Path $pubConfigDir "projects/delta.json"),
+        '{"name":"delta","repos":[],"sdks":{},"mcp":[],"hostPackages":[],"provisionCommands":[],"tests":{}}', $utf8Pub)
+    [System.IO.File]::WriteAllText((Join-Path $pubConfigDir "projects/epsilon.json"),
+        '{"name":"epsilon","repos":[],"sdks":{},"mcp":[],"hostPackages":[],"provisionCommands":[],"tests":{}}', $utf8Pub)
+    $pubRes4 = Publish-ConstructConfigProfiles -ConfigDir $pubConfigDir -RemoteUrl $pubUrl -Names @("delta", "nope")
+    ok "publish: -Names publishes only the named profile" (
+        (@($pubRes4.Published).Count -eq 1) -and (@($pubRes4.Published) -contains "delta"))
+    ok "publish: -Names leaves the unnamed profile untracked" (-not (Test-Path -LiteralPath (Join-Path $pubConfigDir "manifest/epsilon.json")))
+    ok "publish: -Names reports a name with no local profile" (
+        @($pubRes4.Errors | Where-Object { $_ -match "No local profile named 'nope'" }).Count -eq 1)
+
+    # An explicit -Branch targets that branch, not the remote default.
+    $pubRes5 = Publish-ConstructConfigProfiles -ConfigDir $pubConfigDir -RemoteUrl $pubUrl -Names @("epsilon") -Branch "shared"
+    ok "publish: -Branch publishes to that branch" ($pubRes5.Branch -eq "shared" -and (@($pubRes5.Published) -contains "epsilon"))
+    ok "publish: ...and the branch exists upstream" (
+        (& git --git-dir=$pubBare rev-parse --verify --quiet refs/heads/shared 2>$null) -match '^[0-9a-f]{40}$')
+    $pubManifEps = Get-Content -LiteralPath (Join-Path $pubConfigDir "manifest/epsilon.json") -Raw | ConvertFrom-Json
+    ok "publish: ...and the manifest records that ref" ($pubManifEps.ref -eq "shared")
+
+    # A reserved profile is never published.
+    [System.IO.File]::WriteAllText((Join-Path $pubConfigDir "projects/default.json"),
+        '{"name":"default","repos":[],"sdks":{},"mcp":[],"hostPackages":[],"provisionCommands":[],"tests":{}}', $utf8Pub)
+    $pubRes6 = Publish-ConstructConfigProfiles -ConfigDir $pubConfigDir -RemoteUrl $pubUrl -Names @("default")
+    ok "publish: the reserved 'default' profile is never published" (@($pubRes6.Published).Count -eq 0)
+
+    # An invalid branch name is refused before anything is touched.
+    $pubRes7 = Publish-ConstructConfigProfiles -ConfigDir $pubConfigDir -RemoteUrl $pubUrl -Branch "bad..name"
+    ok "publish: an invalid -Branch is refused" (
+        (@($pubRes7.Published).Count -eq 0) -and (@($pubRes7.Errors | Where-Object { $_ -match "Invalid branch name" }).Count -eq 1))
+
+    # ── Credentials never reach a returned string ────────────────────────────
+    # A publish target on the owner's own host carries a PAT in the URL. Every
+    # reason and every error the function hands back is shown to the user.
+    # Defence in depth: even for the refused-URL path and for a LEGACY manifest entry
+    # written before credential-free URLs were required, nothing handed back carries
+    # the secret.
+    $pubCredUrl = "https://alice:glpat-secret-token@127.0.0.1:1/alice/cfg.git"
+    [System.IO.File]::WriteAllText((Join-Path $pubConfigDir "projects/zeta.json"),
+        '{"name":"zeta","repos":[],"sdks":{},"mcp":[],"hostPackages":[],"provisionCommands":[],"tests":{}}', $utf8Pub)
+    $pubCredRes = Publish-ConstructConfigProfiles -ConfigDir $pubConfigDir -RemoteUrl $pubCredUrl -Names @("zeta")
+    $pubCredText = (@($pubCredRes.Errors) + @($pubCredRes.Skipped | ForEach-Object { $_.Reason }) +
+                    @($pubCredRes.Refused | ForEach-Object { $_.Reason }) +
+                    @($pubCredRes.Invalid | ForEach-Object { $_.Reason })) -join "`n"
+    ok "publish: the run against a credential URL failed (test precondition)" (@($pubCredRes.Errors).Count -ge 1)
+    ok "publish: ...because the URL was refused, not because git tried it" (
+        @($pubCredRes.Errors | Where-Object { $_ -match "carries credentials" }).Count -eq 1)
+    ok "publish: no returned string carries the PAT" (-not $pubCredText.Contains("glpat-secret-token"))
+    ok "publish: no returned string carries the userinfo" (-not $pubCredText.Contains("alice:"))
+    # A tracked profile's reason is built from the manifest URL, so it is redacted too.
+    $pubCredManif = [ordered]@{ remoteUrl = $pubCredUrl; ref = "main"; pathInRemote = "projects/zeta.json"
+                                importedAs = "zeta"; baseCommit = ""; baseBlobSha = "" }
+    [System.IO.File]::WriteAllText((Join-Path $pubConfigDir "manifest/zeta.json"),
+        (ConvertTo-ConstructJsonValue -Value ([pscustomobject]$pubCredManif) -Depth 0) + "`n", $utf8Pub)
+    $pubCredRes2 = Publish-ConstructConfigProfiles -ConfigDir $pubConfigDir -RemoteUrl $pubUrl -Names @("zeta")
+    $pubCredSkipReason = "$(@($pubCredRes2.Skipped | Where-Object { $_.Name -eq 'zeta' } | ForEach-Object { $_.Reason }))"
+    ok "publish: a tracked-profile reason redacts the manifest URL" (
+        $pubCredSkipReason.Contains("***") -and -not $pubCredSkipReason.Contains("glpat-secret-token"))
+    # The WHOLE result object is what a console prints for a bare `$result`, so no
+    # record may carry a raw URL -- not just the reason strings.
+    $pubCredDump = ($pubCredRes2 | Format-List | Out-String) + ($pubCredRes2.Skipped | Format-List | Out-String) +
+                   ($pubCredRes2 | ConvertTo-Json -Depth 6)
+    ok "publish: formatting the WHOLE result never exposes the credential" (
+        -not $pubCredDump.Contains("glpat-secret-token") -and -not $pubCredDump.Contains("alice:"))
+    ok "publish: a Skipped record carries no raw url property" (
+        @($pubCredRes2.Skipped | Where-Object { $_.PSObject.Properties.Name -contains "RemoteUrl" }).Count -eq 0)
+    ok "publish: ...and still identifies the profile and the reason" (
+        @($pubCredRes2.Skipped | Where-Object { $_.Name -eq "zeta" -and $_.Reason -match "Push back" }).Count -eq 1)
+    # The same for the pure planner, which is what the extension twin also returns.
+    $pubPlanDump = (Get-ConstructPublishPlan -Profiles @(@{ Name = "zeta"; Raw = '{"name":"zeta"}' }) `
+                        -Manifest @{ zeta = ([pscustomobject]@{ remoteUrl = $pubCredUrl }) } `
+                        -RemoteFiles @{} | ConvertTo-Json -Depth 6)
+    ok "publish-plan: serializing the WHOLE plan never exposes the credential" (
+        -not $pubPlanDump.Contains("glpat-secret-token") -and -not $pubPlanDump.Contains("alice:"))
+
+    # ── Injected git failures: no false success, no adoption ─────────────────
+    # A step that silently failed must never surface as a publish. The shim is a
+    # POSIX shell script, so this block only runs where /bin/sh exists.
+    if (Test-Path -LiteralPath "/bin/sh") {
+        $shimDir = Join-Path $pubBase "gitshim"
+        New-Item -ItemType Directory -Path $shimDir -Force | Out-Null
+        $realGit = (Get-Command git).Source
+        $shimBody = @(
+            '#!/bin/sh',
+            '# Test shim: fail the git subcommand named by CONSTRUCT_TEST_GIT_FAIL.',
+            'if [ -n "$CONSTRUCT_TEST_GIT_FAIL" ]; then',
+            '  for a in "$@"; do',
+            '    if [ "$a" = "$CONSTRUCT_TEST_GIT_FAIL" ]; then',
+            '      echo "fatal: simulated failure of git $CONSTRUCT_TEST_GIT_FAIL" >&2',
+            '      exit 7',
+            '    fi',
+            '  done',
+            'fi',
+            ('exec ' + $realGit + ' "$@"')
+        ) -join "`n"
+        [System.IO.File]::WriteAllText((Join-Path $shimDir "git"), $shimBody + "`n", $utf8Pub)
+        & chmod +x (Join-Path $shimDir "git") | Out-Null
+
+        foreach ($failStep in @("add", "commit", "push")) {
+            [System.IO.File]::WriteAllText((Join-Path $pubConfigDir "projects/inj-$failStep.json"),
+                ('{"name":"inj-' + $failStep + '","repos":[],"sdks":{},"mcp":[],"hostPackages":[],"provisionCommands":[],"tests":{}}'), $utf8Pub)
+            $env:PATH = "$shimDir$([System.IO.Path]::PathSeparator)$savedPubPath"
+            $env:CONSTRUCT_TEST_GIT_FAIL = $failStep
+            $injRes = Publish-ConstructConfigProfiles -ConfigDir $pubConfigDir -RemoteUrl $pubUrl -Names @("inj-$failStep")
+            Remove-Item Env:\CONSTRUCT_TEST_GIT_FAIL -ErrorAction SilentlyContinue
+            $env:PATH = $savedPubPath
+
+            ok "publish-fail($failStep): nothing is published" (@($injRes.Published).Count -eq 0)
+            ok "publish-fail($failStep): the git failure is surfaced" (
+                @($injRes.Errors | Where-Object { $_ -match "simulated failure|git $failStep" }).Count -ge 1)
+            ok "publish-fail($failStep): NO manifest entry is written" (
+                -not (Test-Path -LiteralPath (Join-Path $pubConfigDir "manifest/inj-$failStep.json")))
+            ok "publish-fail($failStep): NO stored base is written" (
+                -not (Test-Path -LiteralPath (Join-Path $pubConfigDir "bases/inj-$failStep.json")))
+            ok "publish-fail($failStep): the profile never reaches upstream" (
+                -not (@(& git --git-dir=$pubBare ls-tree -r --name-only refs/heads/main 2>$null) -contains "projects/inj-$failStep.json"))
+        }
+    } else {
+        ok "publish-fail: injected-git-failure block ran" $false
+    }
+} finally {
+    if ($null -ne $savedPubLA) { $env:LOCALAPPDATA = $savedPubLA }
+    else { Remove-Item Env:\LOCALAPPDATA -ErrorAction SilentlyContinue }
+    $env:PATH = $savedPubPath
+    Remove-Item Env:\CONSTRUCT_TEST_GIT_FAIL -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $pubBase -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# ── Auto-Install.ps1 -Action publish-config ──────────────────────────────────
+# Static checks on the installer: the action is declared, the handler is gated on
+# it (so every other run falls straight through), it runs BEFORE the
+# self-elevation block -- publishing touches no VM and must not ask for admin --
+# and it never prints the raw (PAT-carrying) repo URL.
+$aiPubPath = Join-Path $repoRoot "Auto-Install.ps1"
+$aiPubText = [System.IO.File]::ReadAllText($aiPubPath, [System.Text.Encoding]::UTF8)
+ok "auto-install-publish: -Action accepts publish-config" ($aiPubText -match '\[ValidateSet\("reprovision", "reinstall", "redownload", "export", "add-config", "publish-config"\)\]')
+ok "auto-install-publish: the handler is gated on the action" ($aiPubText -match "if \(\`$Action -eq 'publish-config'\) \{")
+$aiPubIdx  = $aiPubText.IndexOf("if (`$Action -eq 'publish-config') {")
+$aiElevIdx = $aiPubText.IndexOf("Self-elevate to Administrator")
+ok "auto-install-publish: the handler runs BEFORE the self-elevation block" ($aiPubIdx -gt 0 -and $aiElevIdx -gt $aiPubIdx)
+ok "auto-install-publish: it calls the lib function" ($aiPubText -match "Publish-ConstructConfigProfiles @pcArgs")
+ok "auto-install-publish: -ImportConfigs narrows the selection" ($aiPubText -match "\`$pcNames = @\(\`$ImportConfigs -split ',' ")
+ok "auto-install-publish: it exits without entering the installer" ($aiPubIdx -gt 0 -and $aiPubText.Substring($aiPubIdx) -match "exit 0")
+$aiPubBlock = ""
+if ($aiPubIdx -gt 0) { $aiPubBlock = $aiPubText.Substring($aiPubIdx, [Math]::Min(4000, $aiPubText.Length - $aiPubIdx)) }
+ok "auto-install-publish: the repo URL is printed through the display formatter" (
+    $aiPubBlock -match "Config repo: \`$\(Format-ConstructRemoteUrlForDisplay -Url \`$ConfigRepo\)")
+ok "auto-install-publish: the raw URL is never written to the console" (
+    -not ($aiPubBlock -match 'Write-Host "    Config repo: \$ConfigRepo'))
+ok "auto-install-publish: invalid profiles get their own result row" ($aiPubBlock -match '\$pcResult\.Invalid')
+ok "auto-install-publish: the config store is made a repo before adopting into it" (
+    $aiPubBlock -match "Initialize-ConstructConfigRepo -ConfigDir \`$pcConfigDir")
+ok "auto-install-publish: a failed run does not claim there was nothing to publish" (
+    $aiPubBlock -match "if \(@\(\`$pcResult\.Errors\)\.Count -eq 0\) \{[\s\S]{0,200}No local project profiles to publish")
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host ("  config-sync unit tests - {0}/{1} passed" -f $script:pass, ($script:pass + $script:fail))
