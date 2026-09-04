@@ -50,6 +50,9 @@ public sealed partial class WindowsHostPowerGuard(ILogger<WindowsHostPowerGuard>
         logger.LogInformation("Holding a power availability request so this host stays awake: {Reason}.", reason);
     }
 
+    protected override void OnReleaseFailed(Exception exception) =>
+        logger.LogWarning(exception, "Could not release the host's power availability request while stopping; the handle is closed, which releases it anyway.");
+
     protected override void Release(string reason)
     {
         if (_request == IntPtr.Zero)

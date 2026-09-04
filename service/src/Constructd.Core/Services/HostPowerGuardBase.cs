@@ -59,6 +59,15 @@ public abstract class HostPowerGuardBase : IHostPowerGuard, IDisposable
     {
     }
 
+    /// <summary>
+    /// A release that failed during <see cref="Dispose"/>. The default keeps quiet; the Windows guard
+    /// logs it. Never called for <see cref="SetRequired"/>, whose failures propagate so the reconciler
+    /// can retry on its next tick.
+    /// </summary>
+    protected virtual void OnReleaseFailed(Exception exception)
+    {
+    }
+
     public void Dispose()
     {
         lock (_gate)
@@ -72,8 +81,10 @@ public abstract class HostPowerGuardBase : IHostPowerGuard, IDisposable
 
             // try/finally, and not for tidiness: if the platform refuses the release (a failing
             // PowerClearRequest), the handle must STILL be closed -- this method never runs again,
-            // because _disposed is already set. The failure is not swallowed either; it propagates
-            // after the cleanup, so a host that cannot let go of the request says so.
+            // because _disposed is already set. The failure is reported through OnReleaseFailed
+            // rather than thrown: Dispose runs while the service host is stopping, and an exception
+            // out of container disposal turns a clean stop into an "unexpected termination" for the
+            // SCM (and its recovery actions). Closing the handle releases the request anyway.
             try
             {
                 if (_required)
@@ -81,6 +92,10 @@ public abstract class HostPowerGuardBase : IHostPowerGuard, IDisposable
                     _required = false;
                     Release("the service is stopping");
                 }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                OnReleaseFailed(ex);
             }
             finally
             {
