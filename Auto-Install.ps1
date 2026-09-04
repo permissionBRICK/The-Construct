@@ -2012,6 +2012,10 @@ function New-ConstructRemoteProvisionArgs {
         ConfigBranch = $ConfigBranch
         ServiceUrl   = $ServiceUrl
         InstanceName = $Name
+        # The pre-built media's seed user is the SERVICE's (IsoOptions.SeedUser, default
+        # 'construct'), not the local installer's 'agent'. Until the create result states
+        # it (follow-up), the service default is what every pre-built ISO carries.
+        SeedUser     = 'construct'
         Auto         = $true
         GitUserName  = $GitName
         GitEmail     = $GitEmail
