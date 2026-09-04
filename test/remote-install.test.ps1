@@ -65,6 +65,10 @@ function Get-InstallerFunctionText([string]$Name) {
 # check defines them before any function runs), and Test-ConstructRemoteInstanceName
 # reads them -- so they are pulled from the same AST rather than copied here, where the
 # two could drift apart silently (an undefined pattern matches everything).
+# Since B11 those assignments ASK lib\AgentVm.InstanceTarget.ps1 for the rule instead of
+# restating it, so the adapter has to be loaded before they are evaluated -- which is
+# also what proves the installer is not carrying its own copy any more.
+. (Join-Path $repoRoot "lib/AgentVm.InstanceTarget.ps1")
 foreach ($vn in @('ConstructVmNameRe', 'ConstructVmNameRule')) {
     $assign = $autoAst.FindAll({
         param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
@@ -76,6 +80,15 @@ foreach ($vn in @('ConstructVmNameRe', 'ConstructVmNameRule')) {
 # Invoke-Expression HERE, at script scope, so the functions land where the scenarios
 # below (and each other) can see them -- doing it inside a helper would define them in
 # that helper's scope and nowhere else.
+# The one LOCAL-identity derivation the installer's helpers ask for. In the real script
+# it loads lib\AgentVm.InstanceTarget.ps1 relative to the script's own folder; here the
+# adapter is already dot-sourced (above), so this stub hands the extracted functions the
+# SAME derivation without the path plumbing. Everything it wraps is covered by
+# test/instances.test.ps1.
+function Get-ConstructDerivedVmIdentity {
+    param([Parameter(Mandatory)][string]$VmName, [string]$ScriptsDir = "")
+    try { return (Get-ConstructLocalVmIdentity -VmName $VmName) } catch { return $null }
+}
 foreach ($fname in @('Test-ConstructPriorLocalInstall', 'Resolve-ConstructInstallMode',
                      'Test-ConstructRemoteInstanceName', 'New-ConstructRemoteInstanceEntry',
                      'Get-ConstructRemoteInstanceConflict', 'New-ConstructRemoteVmRecord',
@@ -662,9 +675,14 @@ ok "token: a local install's provisioning command has no export and no cleanup" 
     ($plainArgv -notlike "*export CONSTRUCT_VM_TOKEN_B64*") -and ($plainArgv -notlike "*rm -f /tmp/.construct-vm-token*"))
 
 # The script's own wiring: the token must not be handed to the env-prefix renderer.
+# The instance name reaches it through $guestInstanceName since B11 (-InstanceName is
+# name-only TARGETING for every backend now, while the GUEST still learns the name only
+# for a service-managed VM) -- the token argument is still the empty string.
 $provText = $provAst.Extent.Text
 ok "token: the provisioning call passes NO token to Get-ServiceEnvSuffix" (
-    $provText -match 'Get-ServiceEnvSuffix -ServiceUrl \$ServiceUrl -InstanceName \$InstanceName -VmTokenB64 ""')
+    $provText -match 'Get-ServiceEnvSuffix -ServiceUrl \$ServiceUrl -InstanceName \$guestInstanceName -VmTokenB64 ""')
+ok "guest: the instance name reaches the guest only for a service-managed VM" (
+    $provText -match '\$guestInstanceName = ""\s*\r?\n\s*if \(\$ServiceUrl\) \{ \$guestInstanceName = \$InstanceName \}')
 ok "token: ...and the command is `$tokenExport + `$envPrefix + ... + `$tokenCleanup" (
     $provText -match '\$tokenExport\$envPrefix bash /opt/construct/repo/bin/provision\.sh\$tokenCleanup')
 ok "token: the upload failure is fatal (nothing is provisioned without it)" (
