@@ -6,6 +6,7 @@ using Constructd.Sqlite;
 using Constructd.Windows.Forwards;
 using Constructd.Windows.HyperV;
 using Constructd.Windows.Iso;
+using Constructd.Windows.Power;
 using Constructd.Windows.Process;
 
 namespace Constructd.Api.Composition;
@@ -66,6 +67,13 @@ public static class ServiceComposition
             sp.GetRequiredService<IHypervisorDriver>(),
             sp.GetRequiredService<IAuditLog>(),
             options.Idle));
+
+        // Keeping the host awake is platform-agnostic policy over the VM registry (plan §4.13); only
+        // the guard under it is a platform call, and off Windows that guard does nothing.
+        services.AddSingleton(sp => new HostPowerCoordinator(
+            sp.GetRequiredService<IVmRepository>(),
+            sp.GetRequiredService<IHostPowerGuard>(),
+            options.Power));
 
         return services;
     }
@@ -159,6 +167,9 @@ public static class ServiceComposition
                 options.AppForwardPorts);
         });
         services.AddSingleton<IPortForwardManager>(sp => sp.GetRequiredService<InMemoryPortForwardManager>());
+
+        // Nothing to keep awake: fake mode manages no real machine.
+        services.AddSingleton<IHostPowerGuard, NullHostPowerGuard>();
     }
 
     /// <summary>
@@ -203,6 +214,10 @@ public static class ServiceComposition
 
         services.AddSingleton<IHypervisorDriver, HyperVDriver>();
         services.AddSingleton<IPortForwardManager, NetshPortForwardManager>();
+
+        // Held while VMs run so the host does not sleep under them; the container disposes it at
+        // shutdown, which clears the request.
+        services.AddSingleton<IHostPowerGuard, WindowsHostPowerGuard>();
 
         services.AddIsoStrategy(options);
 

@@ -99,6 +99,8 @@ public sealed class ConstructdOptions
 
     public IsoOptions Iso { get; set; } = new();
 
+    public PowerOptions Power { get; set; } = new();
+
     /// <summary>
     /// Identity seeded as the first admin when the user store is empty (on Windows: the domain
     /// account that installed the service, which then authenticates via Negotiate).
@@ -169,6 +171,18 @@ public sealed class IdleOptions
 
     /// <summary>How many intervals a heartbeat may be missing before the guest counts as idle.</summary>
     public int MissingReportGraceMultiple { get; set; } = 3;
+}
+
+/// <summary>Host power behaviour while VMs are running (plan §4.13).</summary>
+public sealed class PowerOptions
+{
+    /// <summary>
+    /// Hold a Windows power availability request while at least one service-managed VM is running,
+    /// so the host does not go to sleep under them. On by default — a host serving VMs to other
+    /// people has no business sleeping. Turn it off where the host's own power plan is managed
+    /// elsewhere; the service then never takes a request.
+    /// </summary>
+    public bool KeepHostAwake { get; set; } = true;
 }
 
 /// <summary>
