@@ -509,6 +509,13 @@ ok "entry: a publicHost that is not a host name is DROPPED where it is built (th
     -not $entryBadPub.ContainsKey('publicHost') -and
     @(Get-ConstructInstanceEntryProblem -Name 'work-vm' -Entry $entryBadPub).Count -eq 0)
 
+# The pre-elevation driver load must not clobber the caller's -Backend/-ServiceUrl:
+# dot-sourcing the loader binds ITS parameters into the script scope. Field 2026-09-04:
+# every remote install relaunched as Administrator because of it.
+$aiTxt = Get-Content (Join-Path $PSScriptRoot "..\Auto-Install.ps1") -Raw
+ok "gate: the mode-probe driver load restores -Backend and -ServiceUrl afterwards" (
+    $aiTxt -match '(?s)\$keepBackend = \$Backend; \$keepServiceUrl = \$ServiceUrl\s*\r?\n\s*\. \$modeDriverLoader -Backend "hyperv-local"\s*\r?\n\s*\$Backend = \$keepBackend; \$ServiceUrl = \$keepServiceUrl')
+
 # ── (f2) The create path, DRIVEN end to end (and its ordering) ──────────────
 # The create -> registry-check -> rollback-or-record sequence lives in ONE function
 # (New-ConstructRemoteVmRecord) precisely so it can be RUN here against a fake service

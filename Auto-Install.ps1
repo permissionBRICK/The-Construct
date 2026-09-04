@@ -779,7 +779,17 @@ if (-not $SkipCreateVm -and $Action -ne 'remove-instance') {
             # Through the driver contract, so the "is there already a local VM?" probe
             # stays the one in drivers\ rather than a second Get-VM call here.
             $modeDriverLoader = Join-Path $PSScriptRoot "drivers\Load-ConstructDriver.ps1"
-            if (Test-Path -LiteralPath $modeDriverLoader) { . $modeDriverLoader -Backend "hyperv-local" }
+            if (Test-Path -LiteralPath $modeDriverLoader) {
+                # DOT-SOURCING A PARAMETERISED SCRIPT BINDS ITS PARAMETERS INTO THIS SCOPE:
+                # the loader's own -Backend/-ServiceUrl/-Pin would overwrite the values the
+                # CALLER passed to this installer, and the mode resolution right below would
+                # then see -Backend hyperv-local / an empty -ServiceUrl and relaunch a remote
+                # install as Administrator (field, 2026-09-04). Keep ours, restore after.
+                $keepBackend = $Backend; $keepServiceUrl = $ServiceUrl
+                . $modeDriverLoader -Backend "hyperv-local"
+                $Backend = $keepBackend; $ServiceUrl = $keepServiceUrl
+                Remove-Variable -Name Pin -Scope Script -ErrorAction SilentlyContinue
+            }
         } catch { }
         $modeSnapshot = Read-ConstructInstanceRegistrySnapshot
         if ((Resolve-ConstructInstallMode -Bound $PSBoundParameters -Snapshot $modeSnapshot) -eq 'hyperv-remote') {
