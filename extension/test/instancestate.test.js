@@ -104,6 +104,20 @@ try {
   ok("named: a later save MERGES (t3codeChannel survives)", state.readState(work).t3codeChannel === "nightly");
   ok("named: ...and adds the new key", JSON.stringify(state.readState(work).projects) === '["api"]');
 
+  // PARITY: an install-wide-ONLY save writes the install-wide file and creates NO
+  // per-instance file — the PowerShell twin returns without touching one, and a file
+  // holding nothing but version/instance would be a phantom VM state.
+  const lonely = state.store("lonely-vm", scriptsDir, env);
+  const lonelyFile = path.join(instDir, "lonely-vm.json");
+  state.saveState(lonely, { installedCommit: "cafe123" });
+  ok("install-wide only: the install-wide file is written",
+    host.readRawSettings(scriptsDir).installedCommit === "cafe123");
+  ok("install-wide only: NO per-instance file is created", !fs.existsSync(lonelyFile));
+  ok("install-wide only: ...and the instance still reads as 'nothing saved'",
+    JSON.stringify(state.readState(lonely)) === "{}");
+  ok("install-wide only: a later VM-scoped save DOES create it",
+    (() => { state.saveState(lonely, { smbShare: true }); return fs.existsSync(lonelyFile); })());
+
   state.saveState(work, { installedCommit: "deadbee", smbShare: false });
   const doc2 = JSON.parse(fs.readFileSync(workFile, "utf8"));
   ok("split: an install-wide key never lands in the per-instance file",
@@ -222,6 +236,53 @@ try {
   ok("stale count: zero when every known marker matches", state.countStale([def, unknown]) === 0);
   ok("stale count: an empty list is 0 (a default-only install never shows a count)",
     state.countStale([]) === 0 && state.countStale(null) === 0);
+
+  // ── The post-reprovision fast poll watches ONE instance ────────────────────
+  // The panel polls at 5 s right after it launches a reprovision console and drops back
+  // to the normal cadence when THAT run records a new provisionedCommit. Held against
+  // "the active instance" it lied in both directions across a switch: a reprovision of A
+  // was reported finished the moment the window moved to B (B's marker differs from A's
+  // baseline), and B's own reprovision could never end it. So the subject is captured
+  // once, as a store.
+  const A = state.store("alpha-vm", scriptsDir, env);
+  const B = state.store("beta-vm", scriptsDir, env);
+  state.saveState(A, { provisionedCommit: "aaaaaaa" });
+  state.saveState(B, { provisionedCommit: "bbbbbbb" });
+  let clock = 1000;
+  const watch = state.createProvisionWatch(A, { maxMs: 500, now: () => clock });
+  ok("watch: it records the WATCHED instance's baseline", watch.baseline === "aaaaaaa");
+  ok("watch: nothing has happened yet", watch.done() === false);
+  // The window switches to B and B is reprovisioned: A's watch must not notice.
+  state.saveState(B, { provisionedCommit: "ccccccc" });
+  ok("watch: ANOTHER instance's reprovision does NOT complete it", watch.done() === false);
+  ok("watch: ...and it still reports the watched instance's own marker", watch.current() === "aaaaaaa");
+  // A's own reprovision lands.
+  state.saveState(A, { provisionedCommit: "ddddddd" });
+  ok("watch: the WATCHED instance's new commit completes it", watch.done() === true);
+  ok("watch: ...and current() is that new commit", watch.current() === "ddddddd");
+  // The cap is the other exit: a reprovision that lands the SAME commit records no change.
+  clock = 2000;
+  const capped = state.createProvisionWatch(B, { maxMs: 500, now: () => clock });
+  ok("watch: an unchanged marker does not complete it before the cap", capped.done() === false);
+  clock = 2600;
+  ok("watch: ...and the cap ends it", capped.done() === true);
+  // An instance with no marker at all starts from "" and is still completed by its first.
+  const fresh = state.store("fresh-vm", scriptsDir, env);
+  clock = 3000;
+  const freshWatch = state.createProvisionWatch(fresh, { maxMs: 500, now: () => clock });
+  ok("watch: an instance with no marker starts from an empty baseline", freshWatch.baseline === "");
+  ok("watch: ...and is not complete just for being empty", freshWatch.done() === false);
+  state.saveState(fresh, { provisionedCommit: "eeeeeee" });
+  ok("watch: ...and its FIRST recorded commit completes it", freshWatch.done() === true);
+  // The DEFAULT instance is watched through the legacy file, like everything else.
+  clock = 4000;
+  const defWatch = state.createProvisionWatch(def, { maxMs: 500, now: () => clock });
+  ok("watch: the default instance watches its legacy top-level marker",
+    defWatch.baseline === host.readRawSettings(scriptsDir).provisionedCommit);
+  state.saveState(def, { provisionedCommit: "fffffff" });
+  ok("watch: ...and its change completes it", defWatch.done() === true);
+  ok("watch: ...without ever creating instances\\agent-vm.json",
+    !fs.existsSync(path.join(instDir, "agent-vm.json")));
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }

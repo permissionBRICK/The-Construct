@@ -769,41 +769,30 @@ let autoRefreshMs = 0;                       // interval the live timer is curre
 // elapses, then fall back to 30s. null = not fast-polling. A plain reprovision that lands
 // the same commit relies on the cap; the common case (reprovision after a Construct update)
 // changes the commit and reverts promptly.
-// WHAT is being watched, captured when the reprovision was LAUNCHED: `{ store, commit }`,
-// or null when no reprovision is in flight. The marker is per VM now, so the poll has to
-// keep asking about the VM the console is actually rebuilding — re-reading "the active
-// instance" would compare instance B's marker against instance A's baseline, and end the
-// fast poll on the first refresh after a switch (or never end it at all).
+// The instancestate.createProvisionWatch bound to the reprovision in flight, or null when
+// there is none. The marker is per VM now, so the poll has to keep asking about the VM the
+// console is actually rebuilding — re-reading "the active instance" would compare instance
+// B's marker against instance A's baseline, and end the fast poll on the first refresh
+// after a switch (or never end it at all). The whole rule lives in the module, where the
+// A/B behaviour is unit-tested.
 let reprovisionWatch = null;
-let fastRefreshDeadline = 0;
-
-/** The provisioned-commit hash the provisioner records at the end of a run ("" if unknown),
- *  for ONE instance's store. Cheap local file read — the same marker isProvisionStale and
- *  augment use. */
-function provisionedCommitOf(store) {
-  try {
-    return instancestate.readMarkers(store).provisionedCommit || "";
-  } catch (_) { return ""; }
-}
 
 /** True while we're in the post-reprovision fast-poll window. */
 function fastRefreshActive() { return reprovisionWatch !== null; }
 
-/** Enter the 5s fast-poll after a reprovision starts. `target` is the CAPTURED target the
- *  reprovision was launched for; its store is what the poll watches. Ends (see refreshTick)
- *  when THAT instance's provisioned commit changes or FAST_REFRESH_MAX_MS elapses. */
-function beginReprovisionFastRefresh(target) {
-  const inst = (target && target.instance) || null;
-  const store = stateStore(inst, target && target.scriptsDir !== undefined ? target.scriptsDir : undefined);
-  reprovisionWatch = { store, commit: provisionedCommitOf(store) };
-  fastRefreshDeadline = Date.now() + FAST_REFRESH_MAX_MS;
+/** Enter the 5s fast-poll after a reprovision starts. `store` is the store of the EXACT
+ *  target the console was launched for — the same instance AND the same scripts dir that
+ *  were handed to lifecycle.run, captured before the pre-flight and the confirmation modal
+ *  rather than re-resolved after them. Ends (see refreshTick) when THAT instance's
+ *  provisioned commit changes or FAST_REFRESH_MAX_MS elapses. */
+function beginReprovisionFastRefresh(store) {
+  reprovisionWatch = instancestate.createProvisionWatch(store, { maxMs: FAST_REFRESH_MAX_MS });
   syncAutoRefresh(); // switch the live timer to the fast cadence
 }
 
 /** Leave fast-poll and return to the normal cadence. */
 function endReprovisionFastRefresh() {
   reprovisionWatch = null;
-  fastRefreshDeadline = 0;
   syncAutoRefresh();
 }
 
@@ -811,14 +800,9 @@ function endReprovisionFastRefresh() {
  *  new provisioned commit (or the cap elapsed) and, if so, drop back to the normal
  *  cadence — then push fresh state to the open dashboards either way. */
 function refreshTick() {
-  if (fastRefreshActive()) {
-    // Ask the store the reprovision was STARTED against, not the one this window happens
-    // to show now.
-    const now = provisionedCommitOf(reprovisionWatch.store);
-    if ((now && now !== reprovisionWatch.commit) || Date.now() >= fastRefreshDeadline) {
-      endReprovisionFastRefresh();
-    }
-  }
+  // Asks the store the reprovision was STARTED against, never the one this window happens
+  // to show now.
+  if (fastRefreshActive() && reprovisionWatch.done()) endReprovisionFastRefresh();
   // Did another process change WHICH VM this window drives (or that VM's endpoint) since
   // the last tick? Re-read the registry and, if the target really changed, hand the
   // sessions over through the one serialized transition — which ends in its own
@@ -2289,7 +2273,9 @@ async function startConstructReprovision(scriptsDir, target) {
       scriptsDir, projects: selected, instance: t.instance,
       stillCurrent: () => !targetSuperseded(t, "Reprovision"),
     }) === false) return false;
-    beginReprovisionFastRefresh(t);
+    // The EXACT store the launch used: t.instance with the scriptsDir that was handed to
+    // lifecycle.run, not one re-resolved after the pre-flight and the modal.
+    beginReprovisionFastRefresh(stateStore(t.instance, scriptsDir));
     return true;
   } catch (e) {
     vscode.window.showErrorMessage("Couldn't start reprovision: " + (e && e.message ? e.message : e));
@@ -4124,7 +4110,10 @@ function handleMessage(message, webview, context) {
             scriptsDir: scriptsDir, projects: projects, instance: lifeTarget.instance,
             stillCurrent: () => !targetSuperseded(lifeTarget, id === "reprovision" ? "Reprovision" : id === "reinstall" ? "Reinstall" : "Redownload"),
           });
-          if (started !== false && id === "reprovision") beginReprovisionFastRefresh(lifeTarget);
+          if (started !== false && id === "reprovision") {
+            // The EXACT store the launch used (see startConstructReprovision).
+            beginReprovisionFastRefresh(stateStore(lifeTarget.instance, scriptsDir));
+          }
         })();
         return;
       }

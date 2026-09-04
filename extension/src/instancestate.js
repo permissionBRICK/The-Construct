@@ -197,6 +197,12 @@ function saveState(st, patch) {
     if (!st.scriptsDir) throw new Error("No Construct scripts directory resolved");
     host.writeRawSettings(st.scriptsDir, { ...host.readRawSettings(st.scriptsDir), ...installWide });
   }
+  // An install-wide-ONLY save must not bring a per-instance file into existence: it would
+  // be a file holding nothing but `version`/`instance`, and the PowerShell twin
+  // (Save-ConstructInstanceState) returns here without touching one. A VM with no
+  // VM-scoped setting yet has no file — that is what "no instances\agent-vm.json for a
+  // default-only install" means one level up, and the two writers must agree on it.
+  if (Object.keys(vmScoped).length === 0) return readState(st);
   const merged = { ...readState(st), ...vmScoped };
   writeStateFile(file, st.name, merged);
   return merged;
@@ -330,6 +336,48 @@ function countStale(stores) {
   return n;
 }
 
+/**
+ * WATCH ONE INSTANCE'S PROVISIONED MARKER for the change a reprovision produces.
+ *
+ * The panel polls fast (5 s) right after it launches a reprovision console, and drops back
+ * to its normal cadence as soon as that run has recorded a new `provisionedCommit` — or
+ * when the cap elapses, since a reprovision that lands the SAME commit records no change.
+ *
+ * The subject is captured ONCE, as a store: the marker is per VM now, so a poll that
+ * re-read "the active instance" would compare instance B's marker against instance A's
+ * baseline — ending the fast poll on the first refresh after a switch, or never ending it.
+ * The store must be the one the launch actually used (same instance, same scripts dir),
+ * not one re-resolved after the pre-flight and the confirmation modal have been awaited.
+ *
+ * `done(now)` is the whole rule: true once THIS store reports a different, non-empty
+ * commit, or once `deadline` has passed. Pure apart from the one small file read, so the
+ * A/B behaviour is unit-testable instead of only observable in a live window.
+ */
+function createProvisionWatch(store, opts = {}) {
+  const now = typeof opts.now === "function" ? opts.now : () => Date.now();
+  const baseline = provisionedCommitOf(store);
+  const deadline = now() + (typeof opts.maxMs === "number" ? opts.maxMs : 0);
+  return {
+    store,
+    baseline,
+    deadline,
+    /** The marker THIS watch's instance reports right now. */
+    current() { return provisionedCommitOf(store); },
+    /** Has the watched reprovision finished (or the cap elapsed)? */
+    done() {
+      const current = provisionedCommitOf(store);
+      if (current && current !== baseline) return true;
+      return now() >= deadline;
+    },
+  };
+}
+
+/** One instance's recorded provisioned commit ("" when unknown). The marker
+ *  `isProvisionStale` and `augment` compare against, read for a single store. */
+function provisionedCommitOf(store) {
+  try { return readMarkers(store).provisionedCommit || ""; } catch (_) { return ""; }
+}
+
 module.exports = {
   CONTAINER, STATE_DIR, SCHEMA_VERSION, INSTALL_WIDE_KEYS, META_KEYS,
   isSafeStateName, isDefaultStore, stateDir, statePath, store,
@@ -337,5 +385,5 @@ module.exports = {
   readSettings, saveSettings,
   readSelectedProjects, hasPersistedSelection, saveSelectedProjects,
   readAppliedAutoCheckpoints, saveAppliedAutoCheckpoints,
-  readMarkers, countStale,
+  readMarkers, countStale, provisionedCommitOf, createProvisionWatch,
 };
