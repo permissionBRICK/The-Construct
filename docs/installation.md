@@ -196,6 +196,7 @@ panel — from one schema with one set of rules:
       "hostAlias": "work-vm",
       "keyName": "construct_work-vm_ed25519",
       "configBranch": "vm-work-vm",
+      "publicHost": "work-vm.vpn.example", // optional: where this VM's WEB endpoints live
       "owner": "DOMAIN\\alice"
     }
   }
@@ -228,6 +229,16 @@ panel — from one schema with one set of rules:
   its `sshHost` (only the host service knows the endpoint; deriving `<name>.mshome.net`
   would aim ssh at an unrelated machine on your own LAN) and its `vmName` must equal the
   instance name (the service addresses the VM by that name, and so does a rebuild).
+- `publicHost` is **optional** and never derived. It is the name this VM's *web* endpoints
+  are reachable under — the host service's rendered `Constructd:PublicHostPattern`, recorded
+  by the installer from `GET /vms/{name}/endpoint` (see `docs/remote-host.md`, *Per-VM public
+  host names*). SSH always goes to `sshHost:sshPort`, which on such a host is a different
+  name; the provisioner passes `publicHost` to the guest as `CONSTRUCT_EXTERNAL_HOST`, so the
+  T3 certificate, its public base URL and every printed URL use it. It is **ignored for
+  `hyperv-local`** (a local VM's one address is its endpoint), it is **not** part of the
+  uniqueness rules below (VMs behind one wildcard domain are still told apart by their
+  endpoint), and a value that is not a host name skips the entry like any other identity
+  field.
 - Identities must be **unique across the registry**: `vmName`, `hostAlias`, `keyName`,
   `configBranch`, and the endpoint as the **composite `(sshHost, sshPort)`**. Two entries
   sharing one are two names for one machine, so both are dropped. The composite matters for
