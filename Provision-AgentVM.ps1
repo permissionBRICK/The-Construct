@@ -184,7 +184,14 @@ param(
     # are byte-identical to before these parameters existed.
     #
     #   -ServiceUrl     the host service's base URL   -> CONSTRUCT_SERVICE_URL
-    #   -InstanceName   this VM's name on that host   -> CONSTRUCT_INSTANCE_NAME
+    #   -InstanceName   this VM's name                -> CONSTRUCT_INSTANCE_NAME, but
+    #                   ONLY together with -ServiceUrl. Since B11 the parameter is also
+    #                   NAME-ONLY TARGETING for every backend: it resolves -VmHost /
+    #                   -HostAlias / -SshPort / -LocalKeyName / -ConfigBranch AND
+    #                   -ServiceUrl out of the instance registry (see the resolution
+    #                   block below), so a local instance can be reached by name too --
+    #                   and a local entry names no service, so a local VM's env prefix
+    #                   still carries nothing extra.
     #   -VmTokenB64     the VM-scoped token, base64   -> CONSTRUCT_VM_TOKEN_B64
     #
     # provision.sh writes the decoded token to /etc/construct/vm-token (mode 0600) and
@@ -197,6 +204,15 @@ param(
     [string]$ServiceUrl = "",
     [string]$InstanceName = "",
     [string]$VmTokenB64 = "",
+    # The name this VM's WEB endpoints are reachable under (plan section 4.12): the host
+    # service's rendered Constructd:PublicHostPattern, which the installer read from
+    # GET /vms/{name}/endpoint and recorded in the instance registry. It becomes
+    # CONSTRUCT_EXTERNAL_HOST in the guest, so the T3 certificate's SANs,
+    # T3CODE_PUBLIC_BASE_URL and every printed URL use it -- while SSH keeps dialling
+    # -VmHost:-SshPort, which is a different name on a host that runs a pattern.
+    # EMPTY (the default, and every local install) changes nothing: the guest's external
+    # identity is then exactly what -VmHost/-SshPort say, as before this parameter existed.
+    [string]$PublicHost = "",
     # Set when this script is launched by an upper script (Auto-Install.ps1 /
     # Create-AgentVM.ps1), which owns the final "Press Enter" pause. When run on
     # its own this stays off and the script pauses at the end so a self-launched
@@ -247,6 +263,56 @@ if ($ReadyFile) {
         Write-Warning "Could not publish ready handshake: $($_.Exception.Message)"
         exit 1
     }
+}
+
+# ── NAME-ONLY TARGETING (-InstanceName; B11, plan section 4.12) ──────────────
+# One parameter instead of five. -InstanceName names an entry in the client-side
+# instance registry (%LOCALAPPDATA%\The-Construct\instances.json) and everything this
+# script needs to REACH that VM -- host, alias, port, key file, config-sync branch and
+# the host service it belongs to -- is read from it through lib\AgentVm.Instances.ps1,
+# so a caller (the control panel,
+# Update-T3Code.ps1, a console) states the name once and only one parameter has to be
+# probed for version skew.
+#
+# It is the SAME parameter the remote flow already passed: for a VM on a host service
+# the name is also what the guest is told (CONSTRUCT_INSTANCE_NAME, below). Unifying
+# them is deliberate -- one name per VM, everywhere.
+#
+# EXPLICIT IDENTITY STILL WINS, and a DISAGREEMENT IS AN ERROR: an argument the caller
+# bound is used as given, but if the registry entry says something else the run stops
+# naming both values, because "-InstanceName work-vm -VmHost build-vm.mshome.net" has
+# no reading that isn't destructive. An unknown name is an error listing the known
+# ones; the DEFAULT name with no registry file resolves to exactly today's literals,
+# which is why passing it changes nothing.
+$script:InstanceEndpointStated = $false
+if ($InstanceName) {
+    $instanceTargetLib = Join-Path $PSScriptRoot "lib\AgentVm.InstanceTarget.ps1"
+    if (-not (Test-Path -LiteralPath $instanceTargetLib)) {
+        throw "-InstanceName needs lib/AgentVm.InstanceTarget.ps1, which is missing from this install. Update The Construct, or pass -VmHost/-HostAlias/-SshPort/-LocalKeyName instead."
+    }
+    . $instanceTargetLib
+    $explicitTarget = @{}
+    foreach ($tp in @('VmHost', 'HostAlias', 'SshPort', 'LocalKeyName', 'ConfigBranch', 'ServiceUrl')) {
+        if ($PSBoundParameters.ContainsKey($tp)) { $explicitTarget[$tp] = $PSBoundParameters[$tp] }
+    }
+    $instanceTarget = Resolve-ConstructVmTarget -Name $InstanceName -Explicit $explicitTarget
+    if (-not $PSBoundParameters.ContainsKey('VmHost'))       { $VmHost       = [string]$instanceTarget.VmHost }
+    if (-not $PSBoundParameters.ContainsKey('HostAlias'))    { $HostAlias    = [string]$instanceTarget.HostAlias }
+    if (-not $PSBoundParameters.ContainsKey('SshPort'))      { $SshPort      = [int]$instanceTarget.SshPort }
+    if (-not $PSBoundParameters.ContainsKey('LocalKeyName')) { $LocalKeyName = [string]$instanceTarget.KeyName }
+    if (-not $PSBoundParameters.ContainsKey('ConfigBranch')) { $ConfigBranch = [string]$instanceTarget.ConfigBranch }
+    # THE HOST SERVICE IS PART OF THE TARGET, not a separate thing the caller must also
+    # remember: a VM on somebody's host service is reached at the endpoint above AND
+    # linked back to that service, so "-InstanceName work-vm" has to carry both or the
+    # guest would keep whatever service it was last told about. A LOCAL instance's entry
+    # names no service, so this stays "" -- the same value a local run has always had,
+    # which is what keeps its env prefix byte-identical.
+    if (-not $PSBoundParameters.ContainsKey('ServiceUrl'))   { $ServiceUrl   = [string]$instanceTarget.ServiceUrl }
+    # A NON-DEFAULT ENDPOINT WAS STATED -- by name rather than by argument, but stated.
+    # $explicitEndpoint below asks "did the caller say where this VM answers", because
+    # that is what the guest has to record as its external identity; resolving the same
+    # address out of the registry is the same statement.
+    if ($VmHost -ne "agent-vm.mshome.net" -or $SshPort -ne 22) { $script:InstanceEndpointStated = $true }
 }
 
 # Decode native-command output (ssh/scp stdout) as UTF-8. Windows PowerShell 5.1
@@ -304,19 +370,17 @@ function Get-ConstructStateInstanceName {
         nowhere else, so there is a single line to re-point.
 
         Precedence, the repo's three-level idiom:
-          1. an explicit -InstanceName. On the remote-host path that parameter already IS
-             the registry name (docs/remote-host.md: the service addresses the VM by its
-             instance name, and Auto-Install writes the registry entry under it), so
-             honouring it here is correct today, not a guess about the future.
+          1. -InstanceName, the B11 name-only target. By the time this is asked,
+             Resolve-ConstructVmTarget (lib\AgentVm.InstanceTarget.ps1) has already
+             resolved every other identity argument FROM it, so it is the authoritative
+             name of the VM this run is about.
           2. the ssh alias, LOWERCASED -- alias = name, the one derivation rule, the same
-             normalisation Get-ConstructConfigBranchName applies. Read through
-             $script:HostAlias because the reachability prompt can correct it mid-run.
+             normalisation Get-ConstructConfigBranchName applies. Covers a run driven by
+             the explicit identity arguments (BYO/manual setups, and the panel targeting
+             an install whose scripts predate name-only targeting), and it is read through
+             $script:HostAlias because the reachability prompt can correct it mid-run --
+             which correctly re-points the state at the VM actually reached.
           3. "agent-vm", the implicit default, which resolves to the legacy top-level keys.
-
-        B11 (plan section 4.12, "Name-only targeting") turns -InstanceName into the general
-        name-only target and resolves the remaining identity from the registry through
-        lib\AgentVm.Instances.ps1. When it lands, THIS function is what it re-points; the
-        three call sites below do not change.
     #>
     if ($InstanceName) { return "$InstanceName".Trim().ToLowerInvariant() }
     $alias = "$($script:HostAlias)".Trim().ToLowerInvariant()
@@ -507,22 +571,31 @@ function ConvertTo-PosixSingleQuoted {
 #   default endpoint, params bound          -> sent ONLY when the guest already saved a
 #                                              custom host/port (explicit default = reset)
 #   default endpoint, nothing bound         -> never (zero-change legacy path)
+#
+# -PublicHost (plan section 4.12) REPLACES the host half: on a host service that runs a
+# PublicHostPattern the VM's web endpoints live under its own name, while SSH still goes
+# to -VmHost:-SshPort. It is stated only for such a VM, so it can never be part of the
+# default path -- and when it happens to BE the default identity, the rules above still
+# apply to it unchanged.
 function Get-ExternalEnvSuffix {
     param(
         [string]$VmHost,
         [int]$SshPort,
         [bool]$ExplicitlyBound,
         [string]$SavedHost = "",
-        [string]$SavedPort = ""
+        [string]$SavedPort = "",
+        [string]$PublicHost = ""
     )
-    $isDefault = ($VmHost -eq "agent-vm.mshome.net" -and $SshPort -eq 22)
+    $externalHost = $VmHost
+    if ($PublicHost) { $externalHost = $PublicHost }
+    $isDefault = ($externalHost -eq "agent-vm.mshome.net" -and $SshPort -eq 22)
     if ($isDefault) {
         if (-not $ExplicitlyBound) { return "" }
         $savedCustom = (-not [string]::IsNullOrEmpty($SavedHost)) -or
                        ((-not [string]::IsNullOrEmpty($SavedPort)) -and $SavedPort -ne "22")
         if (-not $savedCustom) { return "" }
     }
-    return " CONSTRUCT_EXTERNAL_HOST=$(ConvertTo-PosixSingleQuoted $VmHost) CONSTRUCT_EXTERNAL_SSH_PORT='$SshPort'"
+    return " CONSTRUCT_EXTERNAL_HOST=$(ConvertTo-PosixSingleQuoted $externalHost) CONSTRUCT_EXTERNAL_SSH_PORT='$SshPort'"
 }
 
 # Which host-service identity (if any) to append to provision.sh's env prefix. PURE,
@@ -557,6 +630,94 @@ function Get-ServiceEnvSuffix {
         $out += " CONSTRUCT_VM_TOKEN_B64=$(ConvertTo-PosixSingleQuoted $VmTokenB64)"
     }
     return $out
+}
+
+# ── The guest's host-forward status file (plan section 4.12) ─────────────────
+# /etc/construct/host-forwards, written by bin/provision.sh for a SERVICE-MANAGED VM
+# only: one KEY=<host>:<port> line per web service the host service forwards (a URL
+# authority, so an IPv6 literal keeps its brackets), or KEY=denied when the owner may
+# not have host forwards at all. A local VM has no such file, and both helpers then
+# answer "nothing", which is exactly today's behaviour. PURE (unit-tested).
+function ConvertFrom-HostForwardStatus {
+    param([string]$Raw)
+    $map = @{}
+    foreach ($line in ([string]$Raw -split "`r?`n")) {
+        $l = $line.Trim()
+        if (-not $l -or $l.StartsWith('#')) { continue }
+        $i = $l.IndexOf('=')
+        if ($i -lt 1) { continue }
+        $key = $l.Substring(0, $i).Trim()
+        $value = $l.Substring($i + 1).Trim().Trim("'")
+        if ($key) { $map[$key] = $value }
+    }
+    return $map
+}
+
+# The URL one forwarded service is reachable at, or "" when there is no usable
+# forward (absent, refused, or the guest could not reach the service). The SCHEME is
+# the caller's to state: OpenCode is plain HTTP inside the VM, T3 is HTTPS whenever its
+# proxy came up.
+function Get-HostForwardUrl {
+    param($Forwards, [string]$Key, [string]$Scheme = "http")
+    if ($null -eq $Forwards -or -not $Forwards.ContainsKey($Key)) { return "" }
+    $value = [string]$Forwards[$Key]
+    if (-not $value -or $value -eq 'denied' -or $value -eq 'error') { return "" }
+    return "${Scheme}://$value"
+}
+
+# Did the HOST SERVICE refuse this VM a host forward? A distinct answer from "there is
+# none": the user has to be told where the manual path is, instead of being handed a
+# URL that cannot work or silently getting nothing.
+function Test-HostForwardDenied {
+    param($Forwards, [string]$Key)
+    if ($null -eq $Forwards -or -not $Forwards.ContainsKey($Key)) { return $false }
+    return ([string]$Forwards[$Key] -eq 'denied')
+}
+
+# The URL a client can really open on this VM's T3 host forward, or "" when there is
+# none. It is NOT derived here, and deliberately so: the forward alone is AMBIGUOUS,
+# because bin/provision.sh requests it for the TLS port whenever HTTPS is wanted -- BEFORE
+# bin/setup-t3-https.sh runs -- and every failure path in that script clears the HTTPS
+# status while the forward stays. "A forward and no HTTPS status" would then mean both
+# "HTTPS is off, the plain listener is forwarded" and "HTTPS was wanted and nothing came
+# up", and guessing http for the second prints a URL for a TLS port nothing serves.
+#
+# So the GUEST states the answer: bin/provision.sh records T3_URL from the origin T3 was
+# actually told to advertise (T3CODE_PUBLIC_BASE_URL), and only when its port is the
+# forwarded one. Validated here anyway -- it crosses the SSH boundary and is printed --
+# so nothing but an http(s) origin with a port can ever reach the console. PURE.
+function Get-T3ForwardUrl {
+    param($Forwards)
+    if ($null -eq $Forwards -or -not $Forwards.ContainsKey('T3_URL')) { return "" }
+    $url = [string]$Forwards['T3_URL']
+    if ($url -notmatch '\Ahttps?://(\[[0-9A-Fa-f:.]{2,45}\]|[A-Za-z0-9._-]{1,253}):[0-9]{1,5}\z') { return "" }
+    return $url
+}
+
+# What to do about the OpenCode server entry (and the line about it in the summary),
+# given the guest's forward status and whether this VM is SERVICE-MANAGED. PURE, so both
+# call sites make the same decision and the branch itself is unit-tested.
+#
+# The distinction that matters: a remote VM sits on the host service's internal switch,
+# so "http://<VmHost>:<OpencodePort>" is not merely unhelpful there, it is a DEAD link --
+# a server entry pointing at it would fail to connect forever. Only the local/default
+# path may use that direct URL; a service-managed VM without a usable forward gets NO
+# entry and a note saying why.
+#   Action 'register' + Url  -> write/print that URL
+#   Action 'omit', Reason 'denied'  -> the owner may not have host forwards
+#   Action 'omit', Reason 'missing' -> no forward was allocated (or the status could not
+#                                      be read); re-run provisioning or use a client forward
+function Get-OpenCodeServerPlan {
+    param($Forwards, [bool]$ServiceManaged, [string]$DirectUrl)
+    if (-not $ServiceManaged) {
+        return @{ Action = 'register'; Url = $DirectUrl; Reason = 'direct' }
+    }
+    $url = Get-HostForwardUrl -Forwards $Forwards -Key 'OPENCODE'
+    if ($url) { return @{ Action = 'register'; Url = $url; Reason = 'forward' } }
+    if (Test-HostForwardDenied -Forwards $Forwards -Key 'OPENCODE') {
+        return @{ Action = 'omit'; Url = ''; Reason = 'denied' }
+    }
+    return @{ Action = 'omit'; Url = ''; Reason = 'missing' }
 }
 
 # Parse the guest's saved external identity as printed by the remote read command
@@ -2030,7 +2191,7 @@ if (-not $checkoutArg) {
 # a custom value saved (explicit default = reset). A stock guest -- with or without the
 # legacy explicit "-VmHost agent-vm.mshome.net -HostAlias agent-vm" -- gets the
 # unchanged remote command, provisioning log and config.env.
-$explicitEndpoint = [bool]($PSBoundParameters.ContainsKey('VmHost') -or $PSBoundParameters.ContainsKey('SshPort'))
+$explicitEndpoint = [bool]($PSBoundParameters.ContainsKey('VmHost') -or $PSBoundParameters.ContainsKey('SshPort') -or $script:InstanceEndpointStated)
 $savedExtHost = ""; $savedExtPort = ""
 if ($explicitEndpoint -and $VmHost -eq "agent-vm.mshome.net" -and $SshPort -eq 22) {
     # Only the reset case needs the guest's saved keys (values may carry config-set.sh's
@@ -2044,7 +2205,10 @@ if ($explicitEndpoint -and $VmHost -eq "agent-vm.mshome.net" -and $SshPort -eq 2
         Write-Warning "Could not read the VM's saved external identity ($($_.Exception.Message)); assuming none."
     }
 }
-$externalEnv = Get-ExternalEnvSuffix -VmHost $VmHost -SshPort $SshPort -ExplicitlyBound $explicitEndpoint -SavedHost $savedExtHost -SavedPort $savedExtPort
+$externalEnv = Get-ExternalEnvSuffix -VmHost $VmHost -SshPort $SshPort -ExplicitlyBound $explicitEndpoint -SavedHost $savedExtHost -SavedPort $savedExtPort -PublicHost $PublicHost
+if ($PublicHost -and $PublicHost -ne $VmHost) {
+    Write-Ok "Public host for this VM's web endpoints: $PublicHost (SSH stays on ${VmHost}:$SshPort)"
+}
 # Host-service identity for a remote VM: empty (and therefore absent from the env
 # prefix) unless -ServiceUrl / -InstanceName / -VmTokenB64 were supplied.
 #
@@ -2053,7 +2217,14 @@ $externalEnv = Get-ExternalEnvSuffix -VmHost $VmHost -SshPort $SshPort -Explicit
 # ARGUMENT of ssh.exe -- readable by any process listing on this PC -- and again as an
 # argument of the guest's `env`. bin/provision.sh's contract is unchanged either way: it
 # reads CONSTRUCT_VM_TOKEN_B64 out of its ENVIRONMENT.
-$serviceEnv = Get-ServiceEnvSuffix -ServiceUrl $ServiceUrl -InstanceName $InstanceName -VmTokenB64 ""
+# The GUEST learns the instance name only for a SERVICE-MANAGED VM. -InstanceName is
+# now the name-only targeting parameter for every backend, but bin/provision.sh writes
+# CONSTRUCT_INSTANCE_NAME into config.env only when CONSTRUCT_SERVICE_URL is set, and
+# its contract is not changed in this batch -- so a LOCAL instance's env prefix (and
+# therefore its config.env and its ssh command line) stays byte-identical.
+$guestInstanceName = ""
+if ($ServiceUrl) { $guestInstanceName = $InstanceName }
+$serviceEnv = Get-ServiceEnvSuffix -ServiceUrl $ServiceUrl -InstanceName $guestInstanceName -VmTokenB64 ""
 if ($ServiceUrl) {
     # Say WHAT was sent, never the token itself.
     Write-Ok "Host service: $ServiceUrl (instance '$InstanceName')$(if ($VmTokenB64) { '; VM token supplied' } else { '' })"
@@ -2138,6 +2309,33 @@ if ($RestoreDir) {
     }
 }
 
+# What the host service forwards for this VM's web services (plan section 4.12). Read
+# ONLY for a service-managed VM: a local install has no such file, asks nothing, and
+# every URL below stays exactly what it has always been. Best-effort -- a failed read
+# degrades to "no forwards", i.e. today's behaviour.
+$script:HostForwards = @{}
+if ($Action -eq 'provision' -and $ServiceUrl) {
+    try {
+        $hostForwardRaw = (Invoke-Ssh -Sudo -Command "cat /etc/construct/host-forwards 2>/dev/null || true" | Out-String)
+        $script:HostForwards = ConvertFrom-HostForwardStatus -Raw $hostForwardRaw
+    } catch {
+        Write-Warning "Could not read the VM's host-forward status ($($_.Exception.Message)); assuming none."
+    }
+}
+
+# The guest's HTTPS status, read ONCE into script scope. The CA import below is its only
+# consumer today -- the forwarded-T3 line deliberately does NOT derive anything from it
+# (see Get-T3ForwardUrl: this file cannot tell a working plain forward from a TLS forward
+# whose proxy failed, so the guest states the answer instead). Best-effort.
+$script:T3HttpsStatus = ""
+if ($Action -eq 'provision') {
+    try {
+        $script:T3HttpsStatus = (Invoke-Ssh -Sudo -Command "cat /etc/construct/t3code-https-status 2>/dev/null || true" | Out-String)
+    } catch {
+        Write-Warning "Could not read the VM's T3 HTTPS status ($($_.Exception.Message)); assuming plain HTTP."
+    }
+}
+
 # The VM now serves the T3 web GUI over HTTPS (bin/setup-t3-https.sh) with a
 # certificate issued by its OWN local CA -- a browser only exposes getUserMedia,
 # which is how T3 captures the microphone client-side, on a secure origin. For
@@ -2146,7 +2344,7 @@ if ($RestoreDir) {
 # an un-trusted CA costs one browser warning, never a failed provision.
 if ($Action -eq 'provision') {
     try {
-        $t3HttpsStatus = (Invoke-Ssh -Sudo -Command "cat /etc/construct/t3code-https-status 2>/dev/null || true" | Out-String)
+        $t3HttpsStatus = $script:T3HttpsStatus
         if ($t3HttpsStatus -match '(?m)^T3CODE_HTTPS_READY=yes\s*$') {
             $t3CaRoot = if ($env:LOCALAPPDATA) {
                 Join-Path $env:LOCALAPPDATA 'The-Construct\artifacts\t3code'
@@ -2529,7 +2727,22 @@ Write-Step "Configuring the Windows host (~\.ssh and VS Code)"
 $keyPath = Set-HostSshConfig -PrivateKeyText $privateKeyText
 Set-VsCodeRemotePlatform
 if (",$AiTools," -like "*,opencode,*") {
-    Set-OpenCodeRemote -Url "http://${VmHost}:${OpencodePort}" -DisplayName $HostAlias
+    # On a service-managed VM the OpenCode server is reachable through the HOST FORWARD
+    # the guest requested, not on the VM's own port -- the VM sits on the host's internal
+    # switch, so the direct URL is a DEAD link from here (plan section 4.12). Which of the
+    # three answers applies is decided once, by the pure Get-OpenCodeServerPlan.
+    $openCodePlan = Get-OpenCodeServerPlan -Forwards $script:HostForwards `
+                        -ServiceManaged ([bool]$ServiceUrl) -DirectUrl "http://${VmHost}:${OpencodePort}"
+    if ($openCodePlan.Action -eq 'register') {
+        Set-OpenCodeRemote -Url ([string]$openCodePlan.Url) -DisplayName $HostAlias
+    } elseif ($openCodePlan.Reason -eq 'denied') {
+        Write-Host "    OpenCode server not registered: the host service does not allow host forwards for this VM's owner." -ForegroundColor Yellow
+        Write-Host "    Open it from inside the VM instead:  ssh $HostAlias `"construct expose $OpencodePort`"" -ForegroundColor DarkGray
+    } else {
+        Write-Host "    OpenCode server not registered: the host service allocated no forward for port $OpencodePort." -ForegroundColor Yellow
+        Write-Host "    This VM is on the host's internal switch, so http://${VmHost}:$OpencodePort is not reachable from here." -ForegroundColor DarkGray
+        Write-Host "    Re-run provisioning to ask again, or open it for this session:  ssh $HostAlias `"construct expose $OpencodePort`"" -ForegroundColor DarkGray
+    }
 }
 
 # Clean up temporary known_hosts.
@@ -2588,9 +2801,54 @@ Write-Host "    3. Use the Claude Code icon in the top-right of the editor to st
 if (",$AiTools," -like "*,opencode,*") {
     Write-Host ""
     Write-Host "OpenCode remote URL:" -ForegroundColor White
-    Write-Host "    http://${VmHost}:${OpencodePort}" -ForegroundColor Yellow
-    Write-Host "This was added to the OpenCode GUI app automatically (if its config was present)." -ForegroundColor DarkGray
-    Write-Host "    If not, add it by hand -> Manage Servers -> Add Server. Paste the hostname, leave user and pw unchanged." -ForegroundColor DarkGray
+    # The SAME decision the registration above made (one pure function, two call sites),
+    # so the summary can never advertise a URL the entry does not carry.
+    $openCodeSummary = Get-OpenCodeServerPlan -Forwards $script:HostForwards `
+                          -ServiceManaged ([bool]$ServiceUrl) -DirectUrl "http://${VmHost}:${OpencodePort}"
+    if ($openCodeSummary.Action -eq 'register') {
+        Write-Host "    $($openCodeSummary.Url)" -ForegroundColor Yellow
+        if ($openCodeSummary.Reason -eq 'forward') {
+            Write-Host "    (forwarded by the host service -- the VM's own :$OpencodePort is not reachable from here)" -ForegroundColor DarkGray
+        }
+        Write-Host "This was added to the OpenCode GUI app automatically (if its config was present)." -ForegroundColor DarkGray
+        Write-Host "    If not, add it by hand -> Manage Servers -> Add Server. Paste the hostname, leave user and pw unchanged." -ForegroundColor DarkGray
+    } elseif ($openCodeSummary.Reason -eq 'denied') {
+        Write-Host "    (none -- the host service does not allow host forwards for this VM's owner)" -ForegroundColor Yellow
+        Write-Host "    Expose it yourself when you need it:  ssh $HostAlias `"construct expose $OpencodePort`"" -ForegroundColor DarkGray
+    } else {
+        Write-Host "    (none -- the host service allocated no forward for port $OpencodePort)" -ForegroundColor Yellow
+        Write-Host "    Re-run provisioning to ask again, or:  ssh $HostAlias `"construct expose $OpencodePort`"" -ForegroundColor DarkGray
+    }
+}
+
+# The forwarded T3 web GUI. Reported for EVERY service-managed VM that asked for one --
+# not only when the TLS proxy came up: with T3CODE_HTTPS=false the forward is for the
+# plain listener and is just as real, and both a refusal and a forward nothing serves have
+# to be visible rather than silently absent.
+if ($ServiceUrl) {
+    $t3ForwardUrl = Get-T3ForwardUrl -Forwards $script:HostForwards
+    # Non-empty means a forward was ALLOCATED (as opposed to denied, failed or absent);
+    # the scheme is irrelevant here, only the presence.
+    $t3ForwardExists = [bool](Get-HostForwardUrl -Forwards $script:HostForwards -Key 'T3')
+    if ($t3ForwardUrl) {
+        Write-Host ""
+        Write-Host "T3 Code web GUI (forwarded by the host service):" -ForegroundColor White
+        Write-Host "    $t3ForwardUrl" -ForegroundColor Yellow
+        Write-Host "    The VM advertises this origin itself, so its pairing links match it." -ForegroundColor DarkGray
+    } elseif (Test-HostForwardDenied -Forwards $script:HostForwards -Key 'T3') {
+        Write-Host ""
+        Write-Host "T3 Code web GUI:" -ForegroundColor White
+        Write-Host "    (none -- the host service does not allow host forwards for this VM's owner)" -ForegroundColor Yellow
+        Write-Host "    Expose it yourself when you need it:  ssh $HostAlias `"construct expose <the T3 port>`"" -ForegroundColor DarkGray
+    } elseif ($t3ForwardExists) {
+        # The forward is real, but the VM advertises no origin on it -- the HTTPS setup did
+        # not come up (offline apt, openssl, nginx), so the forwarded TLS port serves
+        # nothing. Printing a URL here is exactly what must not happen.
+        Write-Host ""
+        Write-Host "T3 Code web GUI:" -ForegroundColor White
+        Write-Host "    (a host forward exists, but the VM is not serving on it -- its HTTPS setup did not come up)" -ForegroundColor Yellow
+        Write-Host "    Check it in the VM:  ssh $HostAlias `"sudo cat /etc/construct/t3code-https-status`"" -ForegroundColor DarkGray
+    }
 }
 if (",$AiTools," -like "*,codex,*") {
     Write-Host ""

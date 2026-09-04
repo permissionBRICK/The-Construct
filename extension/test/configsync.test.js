@@ -2138,6 +2138,475 @@ async function runTests() {
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   }
 
+  // ── Publish local profiles upstream (plan 4.13 / B15) ─────────────────────
+  // planPublish is pure and is measured against the SHARED behaviour fixture that
+  // test/config-sync.test.ps1 runs too. The IO twin (ensurePublishClone /
+  // checkoutPublishBranch / publishToRemote) runs against a REAL local bare repo,
+  // plus an injected-failure runner proving a silently-failed git step can never
+  // surface as a publish.
+
+  ok("publish-branch: main is valid", cs.isValidPublishBranch("main"));
+  ok("publish-branch: master is valid (isValidVmBranch reserves it)", cs.isValidPublishBranch("master"));
+  ok("publish-branch: team/config is valid", cs.isValidPublishBranch("team/config"));
+  ok("publish-branch: empty is invalid", !cs.isValidPublishBranch(""));
+  ok("publish-branch: leading dash is invalid", !cs.isValidPublishBranch("-main"));
+  ok("publish-branch: .. is invalid", !cs.isValidPublishBranch("a..b"));
+  ok("publish-branch: trailing dot is invalid", !cs.isValidPublishBranch("main."));
+  ok("publish-branch: .lock suffix is invalid", !cs.isValidPublishBranch("main.lock"));
+  ok("publish-branch: trailing slash is invalid", !cs.isValidPublishBranch("team/"));
+  ok("publish-branch: space is invalid", !cs.isValidPublishBranch("my branch"));
+
+  ok("publish-name: a plain name is safe", cs.isSafeProfileName("billing-api"));
+  ok("publish-name: a dotted name is safe", cs.isSafeProfileName("team.eu"));
+  ok("publish-name: empty is unsafe", !cs.isSafeProfileName(""));
+  ok("publish-name: a path separator is unsafe", !cs.isSafeProfileName("a/b"));
+  ok("publish-name: a backslash is unsafe", !cs.isSafeProfileName("a\\b"));
+  ok("publish-name: .. is unsafe", !cs.isSafeProfileName("up..dir"));
+  ok("publish-name: a colon is unsafe (Windows)", !cs.isSafeProfileName("co:lon"));
+  ok("publish-name: surrounding space is unsafe", !cs.isSafeProfileName(" pad "));
+  {
+    // ONE name rule per engine: isSafeProfileName REUSES host.safeProfileName (the
+    // rule every profile read/write already goes through) and only adds "the name
+    // must already be its canonical form", because for publish the string IS the
+    // file name. So the two can never disagree about a character.
+    const hostMod = require("../src/host");
+    const names = ["billing-api", "team.eu", "a/b", "a\\b", "up..dir", "co:lon", " pad ", "",
+      "pipe|d", "q?mark", "star*", 'quo"te', "lt<gt>"];
+    ok("publish-name: the rule is host.safeProfileName + already-canonical",
+      names.every((n) => cs.isSafeProfileName(n) === (n !== "" && hostMod.safeProfileName(n) === n)));
+    ok("publish-name: host.safeProfileName itself refuses the Windows-illegal set",
+      ["co:lon", "pipe|d", "q?mark", "star*", 'quo"te', "lt<gt>"].every((n) => hostMod.safeProfileName(n) === ""));
+  }
+
+  // The handler's listing -> plan-input step (buildPublishProfileInputs).
+  {
+    const read = [];
+    const inputs = cs.buildPublishProfileInputs(
+      ["ok-one", "up..dir", "co:lon", "unreadable"],
+      (n) => { read.push(n); if (n === "unreadable") throw new Error("EACCES"); return '{"name":"' + n + '"}'; });
+    ok("publish-inputs: an unsafe name is NEVER handed to the reader", eq(read, ["ok-one", "unreadable"]));
+    ok("publish-inputs: every listed name reaches the planner",
+      eq(inputs.map((i) => i.name), ["ok-one", "up..dir", "co:lon", "unreadable"]));
+    ok("publish-inputs: an unreadable file becomes empty text, not a dropped row",
+      inputs.find((i) => i.name === "unreadable").raw === "");
+    const plan = cs.planPublish({ profiles: inputs, manifest: {}, remoteFiles: {}, selected: null });
+    ok("publish-inputs: ...so unsafe names are REPORTED as invalid, not silently omitted",
+      eq(plan.invalid.map((i) => i.name).sort(), ["co:lon", "unreadable", "up..dir"]));
+    ok("publish-inputs: an unsafe name gets the name reason, not a parse reason",
+      /not a safe profile file name/.test(plan.reasons["up..dir"]));
+    ok("publish-inputs: only the readable, valid, safe name is publishable",
+      plan.publish.length === 1 && plan.publish[0].name === "ok-one");
+  }
+
+  // Credential-bearing URLs are REFUSED, not merely redacted: a URL reaches git's
+  // argv, .git/config, manifest/remotes.json and every provenance entry, so
+  // redaction could only ever protect what is displayed.
+  ok("publish-cred: https with user:secret is refused", cs.urlHasCredentials("https://alice:glpat-tok@git.example.com/x.git"));
+  ok("publish-cred: https with a bare token user is refused", cs.urlHasCredentials("https://glpat-tok@git.example.com/x.git"));
+  ok("publish-cred: http with userinfo is refused", cs.urlHasCredentials("http://alice:pw@h/x.git"));
+  ok("publish-cred: ssh://git@host is fine (that is a user, not a secret)", !cs.urlHasCredentials("ssh://git@git.example.com/x.git"));
+  ok("publish-cred: ssh://user:secret@host is refused", cs.urlHasCredentials("ssh://git:s3cret@git.example.com/x.git"));
+  ok("publish-cred: scp-style git@host:path is fine", !cs.urlHasCredentials("git@git.example.com:alice/x.git"));
+  ok("publish-cred: a plain https URL is fine", !cs.urlHasCredentials("https://git.example.com/alice/x.git"));
+  ok("publish-cred: empty is fine", !cs.urlHasCredentials(""));
+
+  // Padding must not slip a credential past validation: isLikelyGitUrl trims, so a
+  // check anchored at the untrimmed first character would accept the padded form
+  // and the handler would then store the TRIMMED (credential-carrying) value.
+  ok("publish-cred: a PADDED credential URL is still detected",
+    cs.urlHasCredentials("  https://alice:glpat-tok@git.example.com/x.git  "));
+  ok("publish-cred: a tab/newline padded credential URL is still detected",
+    cs.urlHasCredentials("\t\nhttps://glpat-tok@git.example.com/x.git\n"));
+  {
+    const remoteMod = require("../src/remote");
+    const CRED = /Remove the credentials/;
+    ok("publish-cred: the shared validator rejects a padded credential URL",
+      CRED.test(cs.validateConfigRemoteUrl("  https://alice:glpat-tok@git.example.com/x.git ", remoteMod.isLikelyGitUrl) || ""));
+    ok("publish-cred: ...and an unpadded one",
+      CRED.test(cs.validateConfigRemoteUrl("https://alice:glpat-tok@git.example.com/x.git", remoteMod.isLikelyGitUrl) || ""));
+    ok("publish-cred: a padded PLAIN url is accepted (the value gets trimmed anyway)",
+      cs.validateConfigRemoteUrl("  https://git.example.com/alice/x.git ", remoteMod.isLikelyGitUrl) === null);
+    ok("publish-cred: ssh://git@host is accepted",
+      cs.validateConfigRemoteUrl("ssh://git@git.example.com/x.git", remoteMod.isLikelyGitUrl) === null);
+    ok("publish-cred: a non-git string is rejected on shape",
+      /git URL/.test(cs.validateConfigRemoteUrl("not a url", remoteMod.isLikelyGitUrl) || ""));
+    ok("publish-cred: empty is rejected on shape",
+      /git URL/.test(cs.validateConfigRemoteUrl("   ", remoteMod.isLikelyGitUrl) || ""));
+    ok("publish-cred: the padded credential URL WOULD have passed the shape check alone",
+      remoteMod.isLikelyGitUrl("  https://alice:glpat-tok@git.example.com/x.git "));
+  }
+
+  // A url that came BACK from the webview is the display form; it maps to the real one.
+  ok("publish-cred: a redacted url round-trips to the stored one",
+    cs.resolveRemoteUrl([{ url: "https://alice:tok@h/x.git" }, { url: "https://h/y.git" }], "https://***@h/x.git") ===
+    "https://alice:tok@h/x.git");
+  ok("publish-cred: an exact url still matches",
+    cs.resolveRemoteUrl([{ url: "https://h/y.git" }], "https://h/y.git") === "https://h/y.git");
+  ok("publish-cred: an unknown url resolves to nothing",
+    cs.resolveRemoteUrl([{ url: "https://h/y.git" }], "https://h/other.git") === "");
+
+  ok("publish-redact: PAT userinfo is masked",
+    cs.redactGitOutput("remote: https://alice:glpat-secret@git.example.com/x.git") ===
+    "remote: https://***@git.example.com/x.git");
+  ok("publish-redact: a URL without userinfo is untouched",
+    cs.redactGitOutput("https://git.example.com/x.git") === "https://git.example.com/x.git");
+  ok("publish-redact: empty stays empty", cs.redactGitOutput("") === "");
+  ok("publish-redact: the display formatter masks the same way",
+    cs.displayRemoteUrl("https://alice:glpat-secret@git.example.com/x.git") === "https://***@git.example.com/x.git");
+
+  // Manifest bytes: the SHARED fixture the PowerShell writer must also reproduce.
+  const FIXTURES = path.join(__dirname, "..", "..", "test", "fixtures");
+  {
+    const input = JSON.parse(fs.readFileSync(path.join(FIXTURES, "publish-manifest.input.json"), "utf8"));
+    const expected = fs.readFileSync(path.join(FIXTURES, "publish-manifest.expected.json"), "utf8");
+    const actual = JSON.stringify(cs.publishManifestEntry(input), null, 2) + "\n";
+    ok("publish-manifest: JS writer matches the shared fixture byte for byte", actual === expected, actual);
+    ok("publish-manifest: key order is the import order",
+      eq(Object.keys(cs.publishManifestEntry(input)),
+        ["remoteUrl", "ref", "pathInRemote", "importedAs", "baseCommit", "baseBlobSha"]));
+  }
+
+  // ── The SHARED planner behaviour fixture ──────────────────────────────────
+  // Get-ConstructPublishPlan (PowerShell) runs the exact same file. Measuring both
+  // engines against a recorded artifact is what stops them drifting apart.
+  {
+    const fx = JSON.parse(fs.readFileSync(path.join(FIXTURES, "publish-plan-cases.json"), "utf8"));
+    for (const c of fx.cases) {
+      const plan = cs.planPublish({
+        profiles: c.profiles, manifest: c.manifest, remoteFiles: c.remoteFiles, selected: c.selected,
+      });
+      ok(`publish-plan[${c.name}]: publish bucket`,
+        eq(plan.publish.map((x) => ({ name: x.name, adopt: x.adopt })), c.expect.publish),
+        JSON.stringify(plan.publish.map((x) => ({ name: x.name, adopt: x.adopt }))));
+      ok(`publish-plan[${c.name}]: skipTracked bucket`,
+        eq(plan.skipTracked.map((x) => x.name).sort(), c.expect.skipTracked));
+      ok(`publish-plan[${c.name}]: refuse bucket`, eq(plan.refuse.map((x) => x.name).sort(), c.expect.refuse));
+      ok(`publish-plan[${c.name}]: invalid bucket`, eq(plan.invalid.map((x) => x.name).sort(), c.expect.invalid));
+      for (const [name, needles] of Object.entries(c.expect.reasonContains || {})) {
+        for (const needle of needles) {
+          ok(`publish-plan[${c.name}]: reason for '${name}' contains '${needle}'`,
+            String(plan.reasons[name] || "").includes(needle), plan.reasons[name]);
+        }
+      }
+      for (const [name, needles] of Object.entries(c.expect.reasonExcludes || {})) {
+        for (const needle of needles) {
+          ok(`publish-plan[${c.name}]: reason for '${name}' NEVER contains '${needle}'`,
+            !String(plan.reasons[name] || "").includes(needle), plan.reasons[name]);
+        }
+      }
+    }
+  }
+
+  // The WHOLE plan is printed, logged and serialized by callers, so no record may
+  // carry a raw URL -- not just the reason strings.
+  {
+    const PAT = "https://alice:glpat-secret-token@git.example.com/alice/cfg.git";
+    const plan = cs.planPublish({
+      profiles: [{ name: "beta", raw: projects.canonicalProfileJson("beta", { name: "beta" }) }],
+      manifest: { beta: { remoteUrl: PAT } }, remoteFiles: {}, selected: null,
+    });
+    const dump = JSON.stringify(plan);
+    ok("publish-plan: serializing the WHOLE plan never exposes the credential",
+      !dump.includes("glpat-secret-token") && !dump.includes("alice:"), dump);
+    ok("publish-plan: a skipTracked record carries no raw url field",
+      plan.skipTracked.every((e) => !("remoteUrl" in e)), dump);
+    ok("publish-plan: ...and still identifies the profile and the reason",
+      plan.skipTracked.length === 1 && plan.skipTracked[0].name === "beta" &&
+      /Push back/.test(plan.skipTracked[0].reason));
+  }
+
+  // The coercive-canonicalizer trap, stated once more as its own check: without
+  // the validate gate, canonicalProfileJson would turn this into a valid EMPTY
+  // profile and publish it over the user's file.
+  {
+    const raw = '{"name":"trap","repos":"not-an-array","secret":"keep-me"}';
+    const coerced = projects.canonicalProfileJson("trap", JSON.parse(raw));
+    ok("publish-gate: the canonicalizer alone WOULD repair an invalid profile",
+      !!coerced && !coerced.includes("keep-me") && coerced.includes('"repos": []'));
+    const gate = cs.canonicalizeProfileText("trap", raw);
+    ok("publish-gate: the publish gate refuses it instead", !gate.ok && /not a valid profile/.test(gate.reason));
+    const plan = cs.planPublish({ profiles: [{ name: "trap", raw }], manifest: {}, remoteFiles: {}, selected: null });
+    ok("publish-gate: ...so it never lands in the publish bucket",
+      plan.publish.length === 0 && plan.invalid.length === 1);
+  }
+
+  // ── The picker model (the "greyed rows" contract) ─────────────────────────
+  {
+    const plan = cs.planPublish({
+      profiles: [
+        { name: "alpha", raw: projects.canonicalProfileJson("alpha", { name: "alpha" }) },
+        { name: "delta", raw: projects.canonicalProfileJson("delta", { name: "delta" }) },
+        { name: "beta", raw: projects.canonicalProfileJson("beta", { name: "beta" }) },
+        { name: "gamma", raw: projects.canonicalProfileJson("gamma", { name: "gamma", hostPackages: ["ours"] }) },
+        { name: "eta", raw: '{"name":"eta","repos":"nope"}' },
+      ],
+      manifest: { beta: { remoteUrl: "https://git.example.com/a.git" } },
+      remoteFiles: {
+        delta: projects.canonicalProfileJson("delta", { name: "delta" }),
+        gamma: projects.canonicalProfileJson("gamma", { name: "gamma", hostPackages: ["theirs"] }),
+      },
+      selected: null,
+    });
+    const items = cs.buildPublishPickerItems(plan);
+    const rows = items.filter((i) => i.kind !== "separator");
+    const seps = items.filter((i) => i.kind === "separator").map((i) => i.label);
+    ok("publish-picker: one separator per non-empty group", eq(seps,
+      ["publish", "already tracked -- use Push back", "cannot be published"]));
+    ok("publish-picker: every publishable row is ticked by default",
+      rows.filter((r) => !r.blocked).every((r) => r.picked === true));
+    ok("publish-picker: publishable rows are alpha + delta", eq(rows.filter((r) => !r.blocked).map((r) => r.label).sort(), ["alpha", "delta"]));
+    ok("publish-picker: an adopt-only row says so",
+      rows.find((r) => r.label === "delta").description.includes("adopt only"));
+    ok("publish-picker: tracked/refused/invalid rows are blocked and unticked",
+      rows.filter((r) => r.blocked).every((r) => r.picked === false) &&
+      eq(rows.filter((r) => r.blocked).map((r) => r.label).sort(), ["beta", "eta", "gamma"]));
+    ok("publish-picker: every blocked row carries its reason",
+      rows.filter((r) => r.blocked).every((r) => !!r.description));
+    ok("publish-picker: selecting a blocked row is filtered back out",
+      eq(cs.filterPublishSelection(rows).map((r) => r.label).sort(), ["alpha", "delta"]));
+    ok("publish-picker: separators are never part of a selection",
+      cs.filterPublishSelection(items).every((i) => i.kind !== "separator"));
+    ok("publish-picker: an empty selection stays empty", eq(cs.filterPublishSelection([]), []));
+    ok("publish-picker: an all-empty plan yields no items",
+      eq(cs.buildPublishPickerItems({ publish: [], skipTracked: [], refuse: [], invalid: [] }), []));
+  }
+
+  // ── IO twin, against a real bare repo ─────────────────────────────────────
+  {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "cs-publish-"));
+    try {
+      const staging = mk(root, "staging");
+
+      // A URL with no repo behind it: push-to-create, not an error.
+      const missingUrl = "file://" + path.join(root, "not-created-yet.git");
+      const missingClone = await cs.ensurePublishClone(runGit, staging, missingUrl);
+      ok("ensurePublishClone: a not-yet-existing remote takes the push-to-create path",
+        missingClone.ok && missingClone.created === true);
+      const originUrl = await runGit(["remote", "get-url", "origin"], { cwd: missingClone.dir });
+      ok("ensurePublishClone: ...and origin is set on the local clone", /not-created-yet/.test(originUrl.stdout));
+      ok("ensurePublishClone: ...and the pending marker lives inside .git, not the work tree",
+        fs.existsSync(path.join(missingClone.dir, ".git", "construct-publish-pending")) &&
+        !fs.existsSync(path.join(missingClone.dir, "construct-publish-pending")));
+
+      // The first push fails (no remote yet) and leaves a local commit behind.
+      const orphan = projects.canonicalProfileJson("orphan", { name: "orphan" });
+      const failedPush = await cs.publishToRemote(runGit, {
+        stagingDir: missingClone.dir, branch: "main", files: [{ name: "orphan", content: orphan }],
+      });
+      ok("publishToRemote: a push to a nonexistent remote fails", !failedPush.ok && /git push failed/.test(failedPush.output));
+      ok("publishToRemote: ...and reports no commit/blob provenance",
+        failedPush.commit === "" && eq(failedPush.blobShas, {}));
+      // RETRY: the clone now HAS commits and origin is still unreachable — without
+      // the marker this reads exactly like "a real remote we cannot fetch".
+      const retryClone = await cs.ensurePublishClone(runGit, staging, missingUrl);
+      ok("ensurePublishClone: a failed first push stays retryable", retryClone.ok && retryClone.created === true);
+      execSync(`git init --bare "${path.join(root, "not-created-yet.git")}"`, { stdio: "ignore" });
+      const retryPush = await cs.publishToRemote(runGit, {
+        stagingDir: retryClone.dir, branch: "main", files: [{ name: "orphan", content: orphan }],
+      });
+      ok("publishToRemote: the retry succeeds once the remote exists", retryPush.ok, retryPush.output);
+      ok("publishToRemote: ...and clears the pending marker",
+        !fs.existsSync(path.join(retryClone.dir, ".git", "construct-publish-pending")));
+
+      // The real thing: an empty bare repo, created lazily.
+      const bare = path.join(root, "remote.git");
+      execSync(`git init --bare "${bare}"`, { stdio: "ignore" });
+      const url = "file://" + bare;
+
+      const clone = await cs.ensurePublishClone(runGit, staging, url);
+      ok("ensurePublishClone: an empty remote clones normally", clone.ok);
+      const branch = (await cs.remoteDefaultBranch(runGit, url)) || "main";
+      const co = await cs.checkoutPublishBranch(runGit, clone.dir, branch);
+      ok("checkoutPublishBranch: an empty remote has no upstream profiles",
+        co.ok && Object.keys(co.remoteFiles).length === 0);
+
+      const alpha = projects.canonicalProfileJson("alpha", { name: "alpha", repos: [] });
+      const beta = projects.canonicalProfileJson("beta", { name: "beta", repos: [] });
+      const pushed = await cs.publishToRemote(runGit, {
+        stagingDir: clone.dir, branch,
+        files: [{ name: "alpha", content: alpha }, { name: "beta", content: beta }],
+      });
+      ok("publishToRemote: push succeeded", pushed.ok, pushed.output);
+      ok("publishToRemote: a commit sha is reported", /^[0-9a-f]{40}$/.test(pushed.commit));
+      ok("publishToRemote: a blob sha per published file",
+        /^[0-9a-f]{40}$/.test(pushed.blobShas.alpha || "") && /^[0-9a-f]{40}$/.test(pushed.blobShas.beta || ""));
+      const tree = execSync(`git --git-dir="${bare}" ls-tree -r --name-only HEAD`).toString().trim().split("\n");
+      ok("publishToRemote: upstream carries both profiles",
+        tree.includes("projects/alpha.json") && tree.includes("projects/beta.json"));
+      ok("publishToRemote: upstream content is the canonical profile",
+        execSync(`git --git-dir="${bare}" show HEAD:projects/alpha.json`).toString() === alpha);
+      ok("publishToRemote: the target ref is the default branch, not a review branch",
+        execSync(`git --git-dir="${bare}" rev-parse --verify --quiet refs/heads/${branch}`).toString().trim().length === 40);
+      // The upstream commit is the USER'S configured identity, never this
+      // project's internal bookkeeping identity.
+      const author = execSync(`git --git-dir="${bare}" log -1 --pretty=format:"%an <%ae>"`).toString().trim();
+      ok("publishToRemote: the upstream commit does NOT use the internal bookkeeping identity",
+        !/The Construct/.test(author) && !/construct@construct\.local/.test(author), author);
+
+      // A second publish of the same content is a no-op upstream.
+      const headBefore = execSync(`git --git-dir="${bare}" rev-parse HEAD`).toString().trim();
+      const again = await cs.publishToRemote(runGit, {
+        stagingDir: clone.dir, branch, files: [{ name: "alpha", content: alpha }],
+      });
+      ok("publishToRemote: republishing identical content changes nothing upstream",
+        again.ok && execSync(`git --git-dir="${bare}" rev-parse HEAD`).toString().trim() === headBefore);
+
+      // A fresh clone sees the published files as the remote listing, and
+      // planPublish then refuses a locally-diverged copy of the same name.
+      const staging2 = mk(root, "staging2");
+      const clone2 = await cs.ensurePublishClone(runGit, staging2, url);
+      const co2 = await cs.checkoutPublishBranch(runGit, clone2.dir, branch);
+      ok("checkoutPublishBranch: a populated remote lists its profiles",
+        co2.ok && co2.remoteFiles.alpha === alpha && co2.remoteFiles.beta === beta);
+      const diverged = projects.canonicalProfileJson("alpha", { name: "alpha", hostPackages: ["local"] });
+      const plan2 = cs.planPublish({
+        profiles: [{ name: "alpha", raw: diverged }], manifest: {}, remoteFiles: co2.remoteFiles, selected: null,
+      });
+      ok("planPublish: a locally-diverged copy of an upstream name is refused",
+        plan2.publish.length === 0 && plan2.refuse.length === 1 && plan2.refuse[0].name === "alpha");
+
+      // publishToRemote never writes outside projects/.
+      for (const badName of ["../../evil", "a/b", "up..dir"]) {
+        let escaped = false;
+        try {
+          await cs.publishToRemote(runGit, {
+            stagingDir: clone.dir, branch, files: [{ name: badName, content: "{}" }],
+          });
+        } catch (e) { escaped = /outside projects/.test(e.message); }
+        ok(`publishToRemote: the unsafe name "${badName}" is refused`, escaped);
+      }
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  }
+
+  // ── Injected git failures: no false success, no bogus provenance ──────────
+  // The exact trap the engine must not fall into: a failed `add`, an empty staged
+  // diff and an "Everything up-to-date" push look like a clean no-op publish, and
+  // the caller would then write a manifest entry claiming the file is upstream.
+  {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "cs-publish-fail-"));
+    try {
+      const staging = mk(root, "staging");
+      const bare = path.join(root, "remote.git");
+      execSync(`git init --bare "${bare}"`, { stdio: "ignore" });
+      const url = "file://" + bare;
+      const clone = await cs.ensurePublishClone(runGit, staging, url);
+      await cs.checkoutPublishBranch(runGit, clone.dir, "main");
+      const alpha = projects.canonicalProfileJson("alpha", { name: "alpha" });
+
+      // A runner that fails exactly one git subcommand and forwards the rest.
+      const failing = (step) => async (args, opts) => {
+        const sub = args.find((a) => a !== "-c" && !a.includes("="));
+        if (sub === step) return { code: 7, stdout: "", stderr: "fatal: simulated failure of git " + step };
+        return runGit(args, opts);
+      };
+      for (const step of ["add", "diff", "commit", "push", "rev-parse"]) {
+        const r = await cs.publishToRemote(failing(step), {
+          stagingDir: clone.dir, branch: "main", files: [{ name: "alpha", content: alpha }],
+        });
+        ok(`publishToRemote(fail ${step}): not ok`, !r.ok, JSON.stringify(r));
+        ok(`publishToRemote(fail ${step}): no commit provenance`, r.commit === "");
+        ok(`publishToRemote(fail ${step}): no blob provenance`, eq(r.blobShas, {}));
+        ok(`publishToRemote(fail ${step}): the failure is surfaced`, /simulated failure|git /.test(r.output));
+      }
+      // The precise false-success shape from the review: add fails silently, the
+      // staged diff is empty, push says "Everything up-to-date".
+      const quietlyBroken = async (args, opts) => {
+        const sub = args.find((a) => a !== "-c" && !a.includes("="));
+        if (sub === "add") return { code: 1, stdout: "", stderr: "" };
+        if (sub === "diff") return { code: 1, stdout: "", stderr: "" };
+        if (sub === "push") return { code: 0, stdout: "Everything up-to-date", stderr: "" };
+        return runGit(args, opts);
+      };
+      const quiet = await cs.publishToRemote(quietlyBroken, {
+        stagingDir: clone.dir, branch: "main", files: [{ name: "alpha", content: alpha }],
+      });
+      ok("publishToRemote: a silently failed add + empty diff + up-to-date push is NOT a success",
+        !quiet.ok && quiet.commit === "" && eq(quiet.blobShas, {}), JSON.stringify(quiet));
+
+      // A missing git identity is reported as such, not as a generic commit failure.
+      const noIdentity = async (args, opts) => {
+        const sub = args.find((a) => a !== "-c" && !a.includes("="));
+        if (sub === "commit") {
+          return { code: 128, stdout: "", stderr: "*** Please tell me who you are.\n\nfatal: unable to auto-detect email address" };
+        }
+        return runGit(args, opts);
+      };
+      const ident = await cs.publishToRemote(noIdentity, {
+        stagingDir: clone.dir, branch: "main", files: [{ name: "alpha", content: projects.canonicalProfileJson("alpha", { name: "alpha", hostPackages: ["x"] }) }],
+      });
+      ok("publishToRemote: a missing git identity is named as such",
+        !ident.ok && /no configured identity/.test(ident.output), ident.output);
+
+      // The LOCAL adoption commit (commitAll) had the same false-success shape: an
+      // unchecked add + unchecked staged diff read a broken repo as "nothing to
+      // commit". The extension requires {ok, committed} before it reports success.
+      {
+        const cfgRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cs-commitall-"));
+        try {
+          cs.ensureConfigTree(cfgRoot);
+          await cs.ensureRepo(runGit, cfgRoot, "vm");
+          fs.writeFileSync(path.join(cfgRoot, "projects", "adopted.json"),
+            projects.canonicalProfileJson("adopted", { name: "adopted" }), "utf8");
+
+          const quietlyBroken = async (args, opts) => {
+            const sub = args.find((a) => a !== "-c" && !a.includes("="));
+            if (sub === "add") return { code: 1, stdout: "", stderr: "" };
+            if (sub === "diff") return { code: 1, stdout: "", stderr: "" };
+            return runGit(args, opts);
+          };
+          const broken = await cs.commitAll(quietlyBroken, cfgRoot, "publish: adopted");
+          ok("commitAll: a silently failed add + failed staged diff is NOT a success",
+            !broken.ok && broken.committed === false, JSON.stringify(broken));
+          ok("commitAll: ...and it says WHICH git step failed", /git add failed/.test(broken.output), broken.output);
+
+          const commitFails = async (args, opts) => {
+            const sub = args.find((a) => a !== "-c" && !a.includes("="));
+            if (sub === "commit") return { code: 128, stdout: "", stderr: "fatal: simulated commit failure" };
+            return runGit(args, opts);
+          };
+          const cf = await cs.commitAll(commitFails, cfgRoot, "publish: adopted");
+          ok("commitAll: a failed commit is reported with git's message",
+            !cf.ok && /simulated commit failure/.test(cf.output), cf.output);
+
+          const good = await cs.commitAll(runGit, cfgRoot, "publish: adopted");
+          ok("commitAll: a real adoption commits and says so", good.ok && good.committed === true);
+          const noop = await cs.commitAll(runGit, cfgRoot, "publish: adopted");
+          ok("commitAll: nothing to do is ok but NOT committed", noop.ok && noop.committed === false);
+          ok("commitAll: a credential in git's message is redacted",
+            cs.redactGitOutput("fatal: could not read https://alice:tok@h/x.git") === "fatal: could not read https://***@h/x.git");
+        } finally { fs.rmSync(cfgRoot, { recursive: true, force: true }); }
+      }
+
+      // The push-to-create marker is an OPAQUE sentinel, never a copy of the URL.
+      {
+        const markerRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cs-marker-"));
+        try {
+          const st = mk(markerRoot, "staging");
+          const credUrl = "file://" + path.join(markerRoot, "absent.git");
+          const c = await cs.ensurePublishClone(runGit, st, credUrl);
+          const markerTxt = fs.readFileSync(path.join(c.dir, ".git", "construct-publish-pending"), "utf8");
+          ok("publish-marker: the marker does not contain the remote URL", !markerTxt.includes("absent.git"), markerTxt);
+          ok("publish-marker: it is an opaque sentinel", /push-to-create pending/.test(markerTxt));
+        } finally { fs.rmSync(markerRoot, { recursive: true, force: true }); }
+      }
+
+      // checkoutPublishBranch surfaces a failed reset/clean instead of publishing leftovers.
+      for (const step of ["reset", "clean"]) {
+        const r = await cs.checkoutPublishBranch(failing(step), clone.dir, "main");
+        ok(`checkoutPublishBranch(fail ${step}): not ok`, !r.ok && /simulated failure/.test(r.output));
+      }
+      // ensurePublishClone surfaces a remote that cannot be re-pointed.
+      const noRemote = async (args, opts) => {
+        const sub = args.find((a) => a !== "-c" && !a.includes("="));
+        if (sub === "remote") return { code: 7, stdout: "", stderr: "fatal: simulated failure of git remote" };
+        return runGit(args, opts);
+      };
+      const badRemote = await cs.ensurePublishClone(noRemote, staging, url);
+      ok("ensurePublishClone: a remote that cannot be re-pointed is an error",
+        !badRemote.ok && /simulated failure/.test(badRemote.output));
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  }
+
   // Print summary.
   console.log(`\n  config-sync unit tests — ${pass}/${pass + fail} passed\n`);
   process.exit(fail ? 1 : 0);

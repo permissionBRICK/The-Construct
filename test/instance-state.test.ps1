@@ -48,18 +48,43 @@ try {
     ok "dir: instances\ sits beside instances.json" ((Get-ConstructInstanceStateDir) -eq $instanceDir)
     ok "path: the default instance has NO state file" ($null -eq (Get-ConstructInstanceStatePath -Name 'agent-vm'))
     ok "path: an absent name is the default store too" ($null -eq (Get-ConstructInstanceStatePath -Name ''))
-    ok "path: 'Agent-VM' is the default store (case-insensitive)" (Test-ConstructDefaultInstanceStore 'Agent-VM')
+    # CASE-SENSITIVE, like instances.isDefaultInstance and the registry: 'Agent-VM' is not
+    # a valid instance name at all, so silently treating it as the default would have this
+    # module and the registry disagree about which VM a caller meant.
+    ok "path: 'agent-vm' is the default store" (Test-ConstructDefaultInstanceStore 'agent-vm')
+    ok "path: 'Agent-VM' is NOT the default store (case-sensitive, like the registry)" (
+        -not (Test-ConstructDefaultInstanceStore 'Agent-VM'))
+    ok "path: ...and it is refused outright rather than given a file" (
+        $null -eq (Get-ConstructInstanceStatePath -Name 'Agent-VM'))
     ok "path: a named instance gets instances\<name>.json" (
         (Get-ConstructInstanceStatePath -Name 'work-vm') -eq (Join-Path $instanceDir "work-vm.json"))
 
-    # Path-safety guard: the name becomes a FILE NAME here.
-    ok "guard: a traversal name resolves to no path" ($null -eq (Get-ConstructInstanceStatePath -Name '../evil'))
-    ok "guard: a separator name resolves to no path" ($null -eq (Get-ConstructInstanceStatePath -Name 'a\b'))
-    ok "guard: a dot-dot name resolves to no path" ($null -eq (Get-ConstructInstanceStatePath -Name 'a..b'))
+    # THE ONE NAME RULE (Test-ConstructInstanceName), asked of lib/AgentVm.Instances.ps1 --
+    # not a second regex here. A lowercase DNS label cannot hold a separator or a dot, so
+    # passing that rule is also what makes the name safe as a FILE NAME.
+    ok "name rule: a traversal name resolves to no path" ($null -eq (Get-ConstructInstanceStatePath -Name '../evil'))
+    ok "name rule: a separator name resolves to no path" ($null -eq (Get-ConstructInstanceStatePath -Name 'a\b'))
+    ok "name rule: a dotted name resolves to no path" ($null -eq (Get-ConstructInstanceStatePath -Name 'a..b'))
+    ok "name rule: an uppercase name resolves to no path" ($null -eq (Get-ConstructInstanceStatePath -Name 'Work-VM'))
+    ok "name rule: an underscore name resolves to no path" ($null -eq (Get-ConstructInstanceStatePath -Name 'work_vm'))
+    ok "name rule: a trailing hyphen resolves to no path" ($null -eq (Get-ConstructInstanceStatePath -Name 'work-'))
+    ok "name rule: the RESERVED construct- prefix resolves to no path" (
+        $null -eq (Get-ConstructInstanceStatePath -Name 'construct-work'))
+    ok "name rule: a 64-character name is over the DNS label limit" (
+        $null -eq (Get-ConstructInstanceStatePath -Name ('a' * 64)))
+    ok "name rule: a 63-character name is accepted" (
+        $null -ne (Get-ConstructInstanceStatePath -Name ('a' * 63)))
+    ok "name rule: the verdict matches Test-ConstructInstanceName itself" ((@(
+            'work-vm', 'a', 'Work-VM', 'work_vm', 'work-', 'construct-work', 'a..b'
+        ) | Where-Object {
+            $viaState = [bool](Test-ConstructInstanceStateName $_)
+            $viaRule  = [bool](& { param($m, $n) . $m; Test-ConstructInstanceName $n } (Join-Path $repoRoot "lib/AgentVm.Instances.ps1") $_)
+            $viaState -ne $viaRule
+        }).Count -eq 0)
     $guardThrew = $false
     try { Save-ConstructInstanceState -Name '../evil' -Dir $scriptsDir -Values @{ micPassthrough = $true } }
     catch { $guardThrew = $true }
-    ok "guard: saving under an unusable name throws instead of writing" $guardThrew
+    ok "name rule: saving under an unusable name throws instead of writing" $guardThrew
 
     # ── ZERO-CHANGE: the default instance keeps the legacy file, and only it ──
     Save-ConstructInstanceState -Name 'agent-vm' -Dir $scriptsDir -Values @{ micPassthrough = $true; projects = @('web') }
@@ -124,6 +149,14 @@ try {
     ok 'read: a corrupt file yields $null (never throws)' ($null -eq (Read-ConstructInstanceState -Name 'corrupt' -Dir $scriptsDir))
     Set-Content -LiteralPath $corrupt -Value '{"version":1,"instance":"corrupt"}' -Encoding UTF8
     ok 'read: a file with only metadata yields $null' ($null -eq (Read-ConstructInstanceState -Name 'corrupt' -Dir $scriptsDir))
+    # A JSON root that is not an OBJECT is "nothing saved" -- the same answer readJsonObject
+    # gives in the JS twin. Without the check ConvertFrom-Json hands back an array and the
+    # reader would surface PowerShell's own array metadata (Length, Count) as settings.
+    foreach ($bad in @('[1,2]', '"a string"', '42', 'true', 'null')) {
+        Set-Content -LiteralPath $corrupt -Value $bad -Encoding UTF8
+        ok "read: a non-object JSON root ($bad) yields `$null, like the JS twin" (
+            $null -eq (Read-ConstructInstanceState -Name 'corrupt' -Dir $scriptsDir))
+    }
     # A corrupt file is REPLACED, not merged into.
     Save-ConstructInstanceState -Name 'corrupt' -Dir $scriptsDir -Values @{ smbShare = $true }
     ok "write: a corrupt file is replaced by a valid one" (

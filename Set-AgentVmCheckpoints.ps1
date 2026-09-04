@@ -29,6 +29,11 @@
 .PARAMETER VmName
     The Hyper-V VM to change. Defaults to the Construct VM, "Agent-VM".
 
+.PARAMETER InstanceName
+    Name-only targeting (plan section 4.12): the Construct instance to change, resolved
+    through the client-side registry -- -VmName and -Backend then come from its entry.
+    An explicit -VmName/-Backend that disagrees with the entry is an error.
+
 .PARAMETER RemoveExisting
     "true" (default) to also delete existing automatic checkpoints when disabling;
     "false" to change the policy only and leave any existing checkpoint in place.
@@ -54,8 +59,59 @@ param(
     [string]$Backend = "hyperv-local",
     [ValidateSet("true", "false")]
     [string]$RemoveExisting = "true",
+    # NAME-ONLY TARGETING (B11, plan section 4.12). Empty = today's behaviour exactly:
+    # nothing is read, nothing is resolved, -VmName/-Backend stand as given.
+    [string]$InstanceName = "",
     [switch]$FromPanel
 )
+
+# ── -InstanceName -> -VmName/-Backend, BEFORE the elevation below ────────────
+# Resolved HERE, while this process is still the one the user started, and forwarded to
+# the elevated copy as the RESOLVED values: the instance registry lives in %LOCALAPPDATA%,
+# and where UAC switches to a different admin account the elevated process would read that
+# account's profile instead -- and find no registry at all. (A panel launch is already
+# elevated when it gets here, so it reads whichever profile that console runs as; that is
+# the same profile constraint the rest of the panel's rebuild flow has.)
+#
+# The error path is spelled out rather than thrown: this is ABOVE the try/finally that
+# owns the -FromPanel pause contract, and an unhandled throw here would close a
+# panel-launched console before the message could be read.
+if ($InstanceName) {
+    try {
+        $instanceTargetLib = Join-Path $PSScriptRoot "lib\AgentVm.InstanceTarget.ps1"
+        if (-not (Test-Path -LiteralPath $instanceTargetLib)) {
+            throw "-InstanceName needs lib/AgentVm.InstanceTarget.ps1, which is missing from this install. Update The Construct, or pass -VmName instead."
+        }
+        . $instanceTargetLib
+        $explicitTarget = @{}
+        foreach ($tp in @('VmName', 'Backend')) {
+            if ($PSBoundParameters.ContainsKey($tp)) { $explicitTarget[$tp] = $PSBoundParameters[$tp] }
+        }
+        $instanceTarget = Resolve-ConstructVmTarget -Name $InstanceName -Explicit $explicitTarget
+        if (-not $PSBoundParameters.ContainsKey('VmName'))  { $VmName  = [string]$instanceTarget.VmName }
+        if (-not $PSBoundParameters.ContainsKey('Backend')) { $Backend = [string]$instanceTarget.Backend }
+        # The elevated relaunch forwards $PSBoundParameters verbatim, so hand it the
+        # RESOLVED identity and drop the name -- the child must not resolve it again.
+        [void]$PSBoundParameters.Remove('InstanceName')
+        $PSBoundParameters['VmName']  = $VmName
+        $PSBoundParameters['Backend'] = $Backend
+    } catch {
+        Write-Host ""
+        Write-Host "  ERROR: $($_.Exception.Message)" -ForegroundColor Red
+        # Same result-file contract as the main finally block: the panel only records the
+        # setting as applied on "ok", so a refusal must be reported, not left unanswered.
+        if ($env:CONSTRUCT_CHECKPOINT_RESULT) {
+            try {
+                $failTmp = "$($env:CONSTRUCT_CHECKPOINT_RESULT).tmp"
+                Set-Content -LiteralPath $failTmp -Value "fail" -Encoding ASCII -NoNewline
+                Move-Item -LiteralPath $failTmp -Destination $env:CONSTRUCT_CHECKPOINT_RESULT -Force
+            } catch { }
+        }
+        Write-Host ""
+        if (-not [Console]::IsInputRedirected) { [void](Read-Host "  Press Enter to exit") }
+        exit 1
+    }
+}
 
 # ── Self-elevate to Administrator ────────────────────────────────────────────
 # Hyper-V's Set-VM / Remove-VMSnapshot need admin. Launched from the control panel

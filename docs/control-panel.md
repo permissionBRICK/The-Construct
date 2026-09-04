@@ -51,6 +51,15 @@ With **two or more** instances in `%LOCALAPPDATA%\The-Construct\instances.json`:
 - A window attached to a known instance's VM over Remote-SSH **adopts** that instance on
   activation, so the panel describes the machine you are actually working on rather than
   whichever one was selected last.
+- A window attached over Remote-SSH to a host **no entry describes** gets one offer instead:
+  a banner (and **The Construct: Register This VM as an Instance** in the command palette)
+  that asks for a name — the ssh host's first label is proposed — and writes the entry, then
+  switches to it. The name follows the one instance-name rule, and the entry is written with
+  the same writer and the same rules the installer uses, so the identity is *derived*: a
+  local instance answers at `<name>.mshome.net` on port 22 with alias `<name>`. If the host
+  this window is on is not that address the offer refuses and says so, because the registry
+  cannot describe a machine on somebody else's host as a local Hyper-V instance — that one
+  is added through **Add remote host** instead.
 
 Switching retargets everything that holds a per-VM connection or cache in one sequence: the
 in-flight status probe, the usage table, the git/config-sync state and the cached idle
@@ -208,6 +217,16 @@ and refuses with the reason rather than running an action that would hit the wro
   action would silently run against the default VM or split one VM's config across two
   branches — so the panel blocks it and tells you to update the scripts.
 
+Which parameters it emits depends on what the installed scripts can do. A current install
+targets **by name** — one `-InstanceName <name>`, and the script resolves the endpoint,
+alias, port, key file, branch and (for a VM on a host service) that service's URL out of
+the registry itself. An older one gets the four
+identity arguments it understands (`-VmHost -HostAlias -SshPort -LocalKeyName`, or `-VmName`
+for a rebuild). The panel decides by looking for `lib\AgentVm.InstanceTarget.ps1` in the
+scripts directory rather than for the parameter: `-InstanceName` existed before this, on the
+remote path, where it meant something else. A remote *rebuild* keeps `-Backend` and
+`-ServiceUrl` beside the name — it has to say which host service.
+
 The default instance is never blocked by any of this: it needs no targeting in the first
 place.
 
@@ -311,8 +330,29 @@ host with baseline configs for several projects):
   is shared as the [install one-liner](installation.md#sharing-a-config-as-a-one-liner)
   (command carrier); a selection containing local-only profiles is shared as a zip bundle
   instead (a small `deploy.ps1` plus the profile files).
-- **Push back** — manually push your local versions of a remote's tracked files to a branch
-  on that remote for review; never automatic, since shared config affects other people's VMs.
+- **Push back** (**↑**) — manually push your local versions of a remote's *tracked* files to
+  a branch on that remote for review; never automatic, since shared config affects other
+  people's VMs.
+- **Publish** — the opposite of Import for profiles that were born here. Import and Push
+  back only move files that already carry provenance, so a profile you created locally
+  could never reach a remote. Publish opens a picker of your **untracked** profiles, **all
+  ticked by default**, copies the ticked ones into the remote's **default branch** and then
+  records them as tracked (same manifest + stored base an import writes) — after which
+  Import brings them to your other PCs and Push back carries your later edits. Rows that
+  can't be published are greyed and carry the reason: "already tracked — use Push back",
+  "import it first, then push back" (the repo already has that name with different content),
+  or the validator's message for a profile that isn't valid. Selecting a greyed row snaps
+  back — the picker can't publish it. When no remote is linked yet, **add remote &
+  publish…** asks for the URL, links it and goes straight into the picker; the first push
+  into an empty (or not-yet-created) repo in your own namespace works via push-to-create,
+  and a first push that fails (a PAT still being set up) can simply be retried. The commit
+  that lands in your repo uses **your** git identity. A repo URL with credentials in it
+  (`https://alice:<token>@…`) is refused when you add or publish to it — git would copy that
+  secret into several plain files — so give the plain URL and let Git Credential Manager
+  supply the token; URLs are shown redacted everywhere regardless. The same thing from
+  PowerShell is
+  `Auto-Install.ps1 -Action publish-config -ConfigRepo <url>` (see
+  [Config sync §7](config-sync.md#7-upstream-company-config-repos-optional)).
 
 ## Token usage & cost
 
@@ -648,8 +688,9 @@ every ten minutes:
   `Update-T3Code.ps1`: Construct reprovisioning with the saved settings, which rebuilds the
   patched T3 Code in the VM and silently installs the new Desktop app. It does not install an
   upstream T3 binary over the patched build. The target is the instance registry's default
-  VM (`instances.json`; `agent-vm` without one), whose SSH identity is passed along when it is
-  not the built-in default; the confirmation names it. A registry this panel itself would
+  VM (`instances.json`; `agent-vm` without one), which is passed along when it is not the
+  built-in default — as `-InstanceName <name>` when the installed `Update-T3Code.ps1`
+  declares it, and as the four SSH identity arguments otherwise; the confirmation names it. A registry this panel itself would
   reject (unreadable, unknown version, a default entry that is missing, non-canonical for its
   backend, malformed, or colliding with another entry) blocks the launch rather than guessing. The script's exit code reports the provisioning outcome back
   to the app (1 = failed, 3 = finished with optional errors).

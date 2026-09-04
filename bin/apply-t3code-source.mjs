@@ -113,6 +113,21 @@ const asLines = (text) => (text.endsWith("\n") ? text : `${text}\n`)
 // Apply one transform to `content`. Returns { state, content?, detail? } where state is
 // applied | pending | skipped | conflict.
 function runTransform(operation, content) {
+  if (Array.isArray(operation.variants)) {
+    // Upstream shapes the same spot differently across versions AND the inserted text
+    // must differ with it (a renamed variable): the first variant whose text is already
+    // present, or whose anchor matches, decides.
+    for (const variant of operation.variants) {
+      const probe = { ...variant, path: operation.path, optional: true }
+      if (probe.insert !== undefined && content.includes(asLines(probe.insert))) return { state: "applied" }
+      if (probe.replace !== undefined && content.includes(probe.replace)) return { state: "applied" }
+    }
+    for (const variant of operation.variants) {
+      const result = runTransform({ ...variant, path: operation.path, optional: true }, content)
+      if (result.state !== "skipped") return result
+    }
+    return { state: operation.optional ? "skipped" : "conflict", detail: "no variant anchor found" }
+  }
   if (operation.old !== undefined) {
     // v1 literal hunk
     if (findAll(content, operation.new).length === 1) return { state: "applied" }
@@ -125,6 +140,17 @@ function runTransform(operation, content) {
     const insert = asLines(operation.insert)
     if (content.includes(insert)) return { state: "applied" }
     const where = operation.after !== undefined ? "after" : "before"
+    if (operation.every) {
+      // The same insert next to EVERY occurrence (an upstream prop passed at several call sites).
+      const hits = asList(operation[where]).map((anchor) => findAll(content, anchor)).find((found) => found.length)
+      if (!hits) return { state: operation.optional ? "skipped" : "conflict", detail: `${where} anchor not found` }
+      let updated = content
+      for (const hit of [...hits].reverse()) {
+        const at = where === "after" ? lineEnd(updated, hit.end) : lineStart(updated, hit.start)
+        updated = updated.slice(0, at) + insert + updated.slice(at)
+      }
+      return { state: "pending", content: updated, detail: hits[0].how }
+    }
     const found = locate(content, asList(operation[where]), operation.scope, ambiguous)
     if (!found) return { state: operation.optional ? "skipped" : "conflict", detail: describeMiss(where, ambiguous) }
     const at = where === "after" ? lineEnd(content, found.hit.end) : lineStart(content, found.hit.start)

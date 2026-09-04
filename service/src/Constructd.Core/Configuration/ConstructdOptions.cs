@@ -52,6 +52,24 @@ public sealed class ConstructdOptions
     public string PublicHost { get; set; } = "localhost";
 
     /// <summary>
+    /// Optional per-VM host name template, e.g. <c>{name}.vpn.example</c> (plan §4.12): with a
+    /// wildcard DNS record pointing at this host, every VM gets its OWN name, which is what lets two
+    /// VMs serve web UIs that browsers keep apart (cookies are scoped by host, not by port).
+    /// Rendered by <see cref="PublicHostFor"/> and validated at startup
+    /// (<c>Constructd.Core.Logic.PublicHostPatternRules</c>). Empty — the default — means every VM is
+    /// advertised on <see cref="PublicHost"/>, exactly as before this setting existed.
+    /// The API certificate is unaffected: it stays bound to <see cref="PublicHost"/>.
+    /// </summary>
+    public string PublicHostPattern { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The host name one VM's endpoint and forwards are advertised under: the rendered
+    /// <see cref="PublicHostPattern"/>, or <see cref="PublicHost"/> when no pattern is configured.
+    /// </summary>
+    public string PublicHostFor(string? vmName) =>
+        Logic.PublicHostPatternRules.Resolve(PublicHostPattern, PublicHost, vmName);
+
+    /// <summary>
     /// Hyper-V virtual switch new VMs are attached to. The service host's own switch (plan §4.4
     /// creates an internal NAT switch at install); the default is Hyper-V's <c>Default Switch</c>, so
     /// a host that has nothing else configured still works.
@@ -98,6 +116,8 @@ public sealed class ConstructdOptions
     public IdleOptions Idle { get; set; } = new();
 
     public IsoOptions Iso { get; set; } = new();
+
+    public PowerOptions Power { get; set; } = new();
 
     /// <summary>
     /// Identity seeded as the first admin when the user store is empty (on Windows: the domain
@@ -169,6 +189,18 @@ public sealed class IdleOptions
 
     /// <summary>How many intervals a heartbeat may be missing before the guest counts as idle.</summary>
     public int MissingReportGraceMultiple { get; set; } = 3;
+}
+
+/// <summary>Host power behaviour while VMs are running (plan §4.13).</summary>
+public sealed class PowerOptions
+{
+    /// <summary>
+    /// Hold a Windows power availability request while at least one service-managed VM is running,
+    /// so the host does not go to sleep under them. On by default — a host serving VMs to other
+    /// people has no business sleeping. Turn it off where the host's own power plan is managed
+    /// elsewhere; the service then never takes a request.
+    /// </summary>
+    public bool KeepHostAwake { get; set; } = true;
 }
 
 /// <summary>

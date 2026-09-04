@@ -7,33 +7,65 @@ param(
     [string]$HostAlias,
     [ValidateRange(0, 65535)]
     [int]$SshPort = 0,
-    [string]$LocalKeyName
+    [string]$LocalKeyName,
+    # NAME-ONLY TARGETING (B11, plan section 4.12): the instance to rebuild, resolved
+    # through the client-side registry (lib\AgentVm.InstanceTarget.ps1). It replaces the
+    # four overrides above -- the T3 Desktop updater passes one name instead of matching
+    # a remote's base URL to four derived values. Empty (and the default instance) means
+    # exactly what it always did: no identity is forwarded and the provisioner uses its
+    # own defaults. An identity override that DISAGREES with the named entry is an error.
+    [string]$InstanceName = ""
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Resolve -InstanceName BEFORE anything else: it decides which VM every argument below
+# is about. Explicit overrides still win (and must agree with the entry); an unknown
+# name stops the run naming the instances this PC does know.
+if ($InstanceName) {
+    $instanceTargetLib = Join-Path $PSScriptRoot 'lib\AgentVm.InstanceTarget.ps1'
+    if (-not (Test-Path -LiteralPath $instanceTargetLib)) {
+        throw "-InstanceName needs lib/AgentVm.InstanceTarget.ps1, which is missing from this install. Update The Construct, or pass -VmHost/-HostAlias/-SshPort/-LocalKeyName instead."
+    }
+    . $instanceTargetLib
+    $explicitTarget = @{}
+    foreach ($tp in @('VmHost', 'HostAlias', 'SshPort', 'LocalKeyName')) {
+        if ($PSBoundParameters.ContainsKey($tp)) { $explicitTarget[$tp] = $PSBoundParameters[$tp] }
+    }
+    $instanceTarget = Resolve-ConstructVmTarget -Name $InstanceName -Explicit $explicitTarget
+    # The DEFAULT instance forwards NOTHING, exactly as a param-less run always did: an
+    # older provisioner keeps working, and the identity block below stays empty.
+    if (-not $instanceTarget.IsDefault) {
+        if (-not $PSBoundParameters.ContainsKey('VmHost'))       { $VmHost       = [string]$instanceTarget.VmHost }
+        if (-not $PSBoundParameters.ContainsKey('HostAlias'))    { $HostAlias    = [string]$instanceTarget.HostAlias }
+        if (-not $PSBoundParameters.ContainsKey('SshPort'))      { $SshPort      = [int]$instanceTarget.SshPort }
+        if (-not $PSBoundParameters.ContainsKey('LocalKeyName')) { $LocalKeyName = [string]$instanceTarget.KeyName }
+    }
+}
+
+
 function Get-ConstructStateInstanceName {
     <#
-        WHICH INSTANCE's saved settings this rebuild replays -- the ONE answer, asked here
-        and nowhere else.
+        WHICH INSTANCE's saved settings this rebuild replays (B12) -- the ONE answer, asked
+        here and nowhere else, built on the instance B11 already resolved above.
 
-        The settings belong to a VM, not to the checkout, and the ssh alias IS that VM's
-        instance name (alias = name, the one derivation rule), LOWERCASED exactly the way
-        Get-ConstructConfigBranchName normalises it. The default alias reads the legacy
-        top-level keys of .construct-settings.json -- byte-identical to what this script
-        always read -- and any other one reads
+        The settings belong to a VM, not to the checkout. -InstanceName is that name when
+        it was given (every other argument was resolved from it above); otherwise the ssh
+        alias IS the instance name -- alias = name, the one derivation rule -- lowercased
+        exactly the way Get-ConstructConfigBranchName normalises it, whether it came from
+        the caller or from the resolved target; otherwise the implicit default.
+
+        The default instance reads the legacy top-level keys of .construct-settings.json,
+        byte-identical to what this script always read; any other one reads
         %LOCALAPPDATA%\The-Construct\instances\<name>.json, so reprovisioning a second VM
         from the Desktop app can never replay the first VM's toggles.
 
-        DELIBERATELY NOT a -InstanceName parameter of its own yet: this script forwards the
-        identity it was given straight to Provision-AgentVM.ps1, and a name that selected
-        the settings WITHOUT also retargeting the provisioner would read VM B's toggles and
-        rebuild VM A. B11 (plan section 4.12, "Name-only targeting") adds -InstanceName to
-        both scripts together; when it lands, this function is what it re-points.
+        $InstanceName / $HostAlias, not $PSBoundParameters: inside a function that
+        automatic variable holds THIS function's parameters, not the script's -- and both
+        may have been ASSIGNED from the resolved target rather than bound.
     #>
-    # $HostAlias, not $PSBoundParameters: inside a function that automatic variable holds
-    # THIS function's parameters, not the script's. The parameter has no default, so an
-    # empty value is exactly "not given".
-    if ($HostAlias) { return "$HostAlias".Trim().ToLowerInvariant() }
+    if ($InstanceName) { return "$InstanceName".Trim().ToLowerInvariant() }
+    if ($HostAlias)    { return "$HostAlias".Trim().ToLowerInvariant() }
     return 'agent-vm'
 }
 $instanceName = Get-ConstructStateInstanceName
@@ -98,11 +130,13 @@ $provCmd = Get-Command -Name $provision -CommandType ExternalScript -ErrorAction
 if ($null -ne $settings.t3codeHttps -and $provCmd.Parameters.ContainsKey('T3CodeHttps')) {
     $params.T3CodeHttps = As-BoolString $settings.t3codeHttps $true
 }
+# A value counts as "supplied" when the caller bound it OR when -InstanceName resolved
+# it above -- a name-targeted rebuild has to reach the same VM a four-argument one does.
 $identity = @{}
-if ($PSBoundParameters.ContainsKey('VmHost')       -and $VmHost)        { $identity['VmHost']       = $VmHost }
-if ($PSBoundParameters.ContainsKey('HostAlias')    -and $HostAlias)     { $identity['HostAlias']    = $HostAlias }
-if ($PSBoundParameters.ContainsKey('SshPort')      -and $SshPort -ne 0) { $identity['SshPort']      = $SshPort }
-if ($PSBoundParameters.ContainsKey('LocalKeyName') -and $LocalKeyName)  { $identity['LocalKeyName'] = $LocalKeyName }
+if ($VmHost)        { $identity['VmHost']       = $VmHost }
+if ($HostAlias)     { $identity['HostAlias']    = $HostAlias }
+if ($SshPort -ne 0) { $identity['SshPort']      = $SshPort }
+if ($LocalKeyName)  { $identity['LocalKeyName'] = $LocalKeyName }
 foreach ($k in @($identity.Keys)) {
     if (-not $provCmd.Parameters.ContainsKey($k)) {
         throw "Provision-AgentVM.ps1 in $PSScriptRoot does not support -$k; update The Construct or omit -$k."

@@ -27,9 +27,146 @@
     "apps/web/src/state/constructDiskSpace.ts",
     "apps/web/src/components/constructDiskSpace.logic.ts",
     "apps/web/src/components/constructDiskSpace.logic.test.ts",
-    "apps/web/src/components/ConstructDiskSpaceNotification.tsx"
+    "apps/web/src/components/ConstructDiskSpaceNotification.tsx",
+    "packages/contracts/src/constructOmniloop.ts",
+    "apps/server/src/constructOmniloop.ts",
+    "apps/server/src/constructOmniloop.test.ts",
+    "apps/server/src/constructOmniloopProxy.ts",
+    "apps/server/src/constructOmniloopProxy.test.ts",
+    "apps/web/src/state/constructOmniloop.ts",
+    "apps/web/src/components/omniloop/omniloopSurface.tsx",
+    "apps/web/src/components/omniloop/OmniloopPanel.tsx",
+    "apps/web/src/components/omniloop/omniloopWorkflows.logic.ts",
+    "apps/web/src/components/omniloop/omniloopWorkflows.logic.test.ts",
+    "apps/web/src/components/omniloop/useConstructOmniloopThread.tsx"
   ],
   "transforms": [
+    {
+      "path": "apps/web/src/components/ChatView.tsx",
+      "after": "import { AgentsPanel } from \"./AgentsPanel\";",
+      "insert": "import { OmniloopPanel } from \"./omniloop/OmniloopPanel\";\nimport { useConstructOmniloopThread } from \"./omniloop/useConstructOmniloopThread\";\n"
+    },
+    {
+      "path": "apps/web/src/components/ChatView.tsx",
+      "after": "useRightPanelStore.getState().open(activeThreadRef, \"agents\");\n}, [activeThreadRef]);",
+      "insert": "  const addOmniloopSurface = useCallback(() => {\n    if (!activeThreadRef) return;\n    useRightPanelStore.getState().open(activeThreadRef, \"omniloop\");\n  }, [activeThreadRef]);\n  const constructOmniloop = useConstructOmniloopThread({\n    threadRef: activeThreadRef,\n    activities: threadActivities,\n    onOpen: addOmniloopSurface,\n  });\n"
+    },
+    {
+      "path": "apps/web/src/components/ChatView.tsx",
+      "after": "const parkedThreadItems = parkedThreadBannerItem === null ? [] : [parkedThreadBannerItem];",
+      "insert": "    const omniloopItems = constructOmniloop.bannerItem === null ? [] : [constructOmniloop.bannerItem];\n"
+    },
+    {
+      "path": "apps/web/src/components/ChatView.tsx",
+      "scope": "const composerBannerItems = useMemo",
+      "after": "...parkedThreadItems,",
+      "insert": "        ...omniloopItems,\n",
+      "every": true
+    },
+    {
+      "path": "apps/web/src/components/ChatView.tsx",
+      "after": "    backgroundLivenessBannerItem,",
+      "insert": "    constructOmniloop.bannerItem,\n"
+    },
+    {
+      "path": "apps/web/src/components/ChatView.tsx",
+      "variants": [
+        {
+          "before": ") : renderedRightPanelSurface?.kind === \"agents\" ? (",
+          "insert": ") : renderedRightPanelSurface?.kind === \"omniloop\" ? (\n      <OmniloopPanel environmentId={activeThreadRef?.environmentId ?? null} />\n"
+        },
+        {
+          "before": ") : activeRightPanelSurface?.kind === \"agents\" ? (",
+          "insert": ") : activeRightPanelSurface?.kind === \"omniloop\" ? (\n      <OmniloopPanel environmentId={activeThreadRef?.environmentId ?? null} />\n"
+        }
+      ],
+      "note": "Stable (0.0.38) and nightly (0.0.39) name this variable differently; both channels are live, so both shapes are here. Delete the activeRightPanelSurface variant once the stable channel builds 0.0.39 or newer."
+    },
+    {
+      "path": "apps/web/src/components/ChatView.tsx",
+      "after": "liveAgentCount={agentPanelModel.liveCount}",
+      "insert": "          onAddOmniloop={addOmniloopSurface}\n          omniloopAvailable={constructOmniloop.available}\n          omniloopBadgeCount={constructOmniloop.liveCount}\n",
+      "every": true
+    },
+    {
+      "path": "apps/web/src/components/RightPanelTabs.tsx",
+      "after": "} from \"lucide-react\";",
+      "insert": "import {\n  OMNILOOP_DISABLED_REASON,\n  OMNILOOP_SURFACE_DESCRIPTION,\n  OMNILOOP_SURFACE_LABEL,\n  OMNILOOP_SURFACE_SHORTCUT,\n  OMNILOOP_UNAVAILABLE_HINT,\n  OmniloopIcon,\n} from \"./omniloop/omniloopSurface\";\n"
+    },
+    {
+      "path": "apps/web/src/components/RightPanelTabs.tsx",
+      "scope": "interface RightPanelTabsProps",
+      "after": "liveAgentCount: number;",
+      "insert": "  /** Optional: only the thread view offers the Omniloop surface (see useConstructOmniloopThread). */\n  onAddOmniloop?: (() => void) | undefined;\n  /** The thread's VM runs omniloop right now. */\n  omniloopAvailable?: boolean | undefined;\n  /** Live omniloop workflows of the thread; badges the Omniloop card. */\n  omniloopBadgeCount?: number | undefined;\n"
+    },
+    {
+      "path": "apps/web/src/components/RightPanelTabs.tsx",
+      "scope": "function RightPanelEmptyState",
+      "after": "liveAgentCount: number;",
+      "insert": "  onAddOmniloop: () => void;\n  omniloopAvailable: boolean;\n  omniloopBadgeCount: number;\n"
+    },
+    {
+      "path": "apps/web/src/components/RightPanelTabs.tsx",
+      "after": "badgeCount: props.liveAgentCount,\n},",
+      "insert": "    {\n      label: OMNILOOP_SURFACE_LABEL,\n      description: OMNILOOP_SURFACE_DESCRIPTION,\n      icon: OmniloopIcon,\n      shortcut: OMNILOOP_SURFACE_SHORTCUT,\n      available: props.omniloopAvailable,\n      disabledReason: OMNILOOP_UNAVAILABLE_HINT,\n      onClick: props.onAddOmniloop,\n      badgeCount: props.omniloopBadgeCount,\n    },\n"
+    },
+    {
+      "path": "apps/web/src/components/RightPanelTabs.tsx",
+      "after": "return \"Agents\";",
+      "insert": "    case \"omniloop\":\n      return OMNILOOP_SURFACE_LABEL;\n"
+    },
+    {
+      "path": "apps/web/src/components/RightPanelTabs.tsx",
+      "after": "return <Bot className=\"size-3 shrink-0\" />;",
+      "insert": "    case \"omniloop\":\n      return <OmniloopIcon className=\"size-3 shrink-0\" />;\n"
+    },
+    {
+      "path": "apps/web/src/components/RightPanelTabs.tsx",
+      "after": "export function RightPanelTabs(props: RightPanelTabsProps) {",
+      "insert": "  // Offered only where the caller can open it (the thread view) and the VM's daemon runs.\n  const omniloopAvailable = props.omniloopAvailable === true && props.onAddOmniloop !== undefined;\n  const onAddOmniloop = props.onAddOmniloop ?? (() => {});\n"
+    },
+    {
+      "path": "apps/web/src/components/RightPanelTabs.tsx",
+      "after": "onClick: props.onAddAgents,\n},",
+      "insert": "    {\n      label: OMNILOOP_SURFACE_LABEL,\n      icon: OmniloopIcon,\n      shortcut: OMNILOOP_SURFACE_SHORTCUT,\n      available: omniloopAvailable,\n      disabledReason: OMNILOOP_DISABLED_REASON,\n      onClick: onAddOmniloop,\n    },\n"
+    },
+    {
+      "path": "apps/web/src/components/RightPanelTabs.tsx",
+      "after": "liveAgentCount={props.liveAgentCount}",
+      "insert": "            onAddOmniloop={onAddOmniloop}\n            omniloopAvailable={omniloopAvailable}\n            omniloopBadgeCount={props.omniloopBadgeCount ?? 0}\n"
+    },
+    {
+      "path": "apps/web/src/rightPanelStore.ts",
+      "scope": "RIGHT_PANEL_KINDS",
+      "after": "\"agents\",",
+      "insert": "  \"omniloop\",\n"
+    },
+    {
+      "path": "apps/web/src/rightPanelStore.ts",
+      "before": "| { id: \"agents\"; kind: \"agents\" };",
+      "insert": "  | { id: \"omniloop\"; kind: \"omniloop\" }\n"
+    },
+    {
+      "path": "apps/web/src/rightPanelStore.ts",
+      "after": "return { id: \"agents\", kind };",
+      "insert": "    case \"omniloop\":\n      return { id: \"omniloop\", kind };\n"
+    },
+    {
+      "path": "apps/server/src/server.ts",
+      "after": "import * as McpHttpServer from \"./mcp/McpHttpServer.ts\";",
+      "insert": "import { constructOmniloopProxyRouteLayer } from \"./constructOmniloopProxy.ts\";\n"
+    },
+    {
+      "path": "apps/server/src/server.ts",
+      "scope": "export const makeRoutesLayer",
+      "after": "otlpTracesProxyRouteLayer,",
+      "insert": "    constructOmniloopProxyRouteLayer,\n"
+    },
+    {
+      "path": "packages/shared/src/devProxy.ts",
+      "find": "\"/.well-known\", \"/ws\"] as const",
+      "replace": "\"/.well-known\", \"/ws\", \"/construct\"] as const"
+    },
     {
       "path": "apps/desktop/src/electron/ElectronProtocol.test.ts",
       "find": "            \"script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://clerk.t3.codes https://challenges.cloudflare.com\",",
@@ -176,6 +313,11 @@
       "insert": "  [WS_METHODS.constructDiskSpace]: AuthOrchestrationReadScope,\n"
     },
     {
+      "path": "apps/server/src/auth/RpcAuthorization.ts",
+      "after": "[WS_METHODS.serverUpdateServerWithProgress]: AuthOrchestrationOperateScope,",
+      "insert": "  [WS_METHODS.constructOmniloopStatus]: AuthOrchestrationReadScope,\n  [WS_METHODS.constructOmniloopTicket]: AuthOrchestrationReadScope,\n  [WS_METHODS.constructOmniloopWorkflows]: AuthOrchestrationReadScope,\n"
+    },
+    {
       "path": "apps/server/src/cli/auth.ts",
       "after": "import * as ServerConfig from \"../config.ts\";",
       "insert": "import { publicBaseUrlOrigin } from \"../publicBaseUrl.ts\";\n"
@@ -209,6 +351,11 @@
       "path": "apps/server/src/environment/ServerEnvironment.ts",
       "after": "threadTitleRegeneration: true,",
       "insert": "      constructDiskSpace: true,\n"
+    },
+    {
+      "path": "apps/server/src/environment/ServerEnvironment.ts",
+      "after": "threadTitleRegeneration: true,",
+      "insert": "      constructOmniloop: true,\n"
     },
     {
       "path": "apps/server/src/serverRuntimeStartup.ts",
@@ -260,6 +407,16 @@
       "path": "apps/server/src/ws.ts",
       "before": "[WS_METHODS.serverUpsertKeybinding]: (rule) =>",
       "insert": "        [WS_METHODS.constructDiskSpace]: (_input) =>\n          observeRpcEffect(WS_METHODS.constructDiskSpace, readConstructDiskSpace(), {\n            \"rpc.aggregate\": \"construct-disk-space\",\n          }),\n"
+    },
+    {
+      "path": "apps/server/src/ws.ts",
+      "after": "import * as SessionStore from \"./auth/SessionStore.ts\";",
+      "insert": "import { issueOmniloopTicket, readOmniloopStatus, readOmniloopWorkflows } from \"./constructOmniloop.ts\";\n"
+    },
+    {
+      "path": "apps/server/src/ws.ts",
+      "before": "[WS_METHODS.serverUpsertKeybinding]: (rule) =>",
+      "insert": "        [WS_METHODS.constructOmniloopStatus]: (_input) =>\n          observeRpcEffect(WS_METHODS.constructOmniloopStatus, readOmniloopStatus(), {\n            \"rpc.aggregate\": \"construct-omniloop\",\n          }),\n        [WS_METHODS.constructOmniloopTicket]: (_input) =>\n          observeRpcEffect(WS_METHODS.constructOmniloopTicket, issueOmniloopTicket(), {\n            \"rpc.aggregate\": \"construct-omniloop\",\n          }),\n        [WS_METHODS.constructOmniloopWorkflows]: (input) =>\n          observeRpcEffect(\n            WS_METHODS.constructOmniloopWorkflows,\n            readOmniloopWorkflows(input.workflowIds),\n            { \"rpc.aggregate\": \"construct-omniloop\" },\n          ),\n"
     },
     {
       "path": "apps/web/src/components/chat/ChatComposer.tsx",
@@ -432,6 +589,11 @@
       "insert": "  /** Construct-patched servers answer `construct.diskSpace` (free space on the VM disk). */\n  constructDiskSpace: Schema.optionalKey(Schema.Boolean),\n"
     },
     {
+      "path": "packages/contracts/src/environment.ts",
+      "after": "serverSelfUpdateProgress: Schema.optionalKey(Schema.Boolean),",
+      "insert": "  /** Construct-patched servers proxy the VM's omniloop dashboard and answer `construct.omniloop*`. */\n  constructOmniloop: Schema.optionalKey(Schema.Boolean),\n"
+    },
+    {
       "path": "packages/contracts/src/index.ts",
       "after": "export * from \"./vcs.ts\";",
       "insert": "export * from \"./voiceInput.ts\";\n"
@@ -440,6 +602,11 @@
       "path": "packages/contracts/src/index.ts",
       "after": "export * from \"./vcs.ts\";",
       "insert": "export * from \"./constructDiskSpace.ts\";\n"
+    },
+    {
+      "path": "packages/contracts/src/index.ts",
+      "after": "export * from \"./vcs.ts\";",
+      "insert": "export * from \"./constructOmniloop.ts\";\n"
     },
     {
       "path": "packages/contracts/src/ipc.ts",
@@ -495,6 +662,26 @@
       "path": "packages/contracts/src/rpc.ts",
       "after": "WsServerUpdateServerWithProgressRpc,",
       "insert": "  WsConstructDiskSpaceRpc,\n"
+    },
+    {
+      "path": "packages/contracts/src/rpc.ts",
+      "after": "import { VcsError } from \"./vcs.ts\";",
+      "insert": "import {\n  ConstructOmniloopError,\n  ConstructOmniloopStatus,\n  ConstructOmniloopTicket,\n  ConstructOmniloopWorkflowsInput,\n  ConstructOmniloopWorkflowsResult,\n} from \"./constructOmniloop.ts\";\n"
+    },
+    {
+      "path": "packages/contracts/src/rpc.ts",
+      "after": "serverUpdateServerWithProgress: \"server.updateServerWithProgress\",",
+      "insert": "  constructOmniloopStatus: \"construct.omniloopStatus\",\n  constructOmniloopTicket: \"construct.omniloopTicket\",\n  constructOmniloopWorkflows: \"construct.omniloopWorkflows\",\n"
+    },
+    {
+      "path": "packages/contracts/src/rpc.ts",
+      "before": "export const WsServerGetSettingsRpc = Rpc.make(WS_METHODS.serverGetSettings, {",
+      "insert": "export const WsConstructOmniloopStatusRpc = Rpc.make(WS_METHODS.constructOmniloopStatus, {\n  payload: Schema.Struct({}),\n  success: ConstructOmniloopStatus,\n  error: Schema.Union([ConstructOmniloopError, EnvironmentAuthorizationError]),\n});\n\nexport const WsConstructOmniloopTicketRpc = Rpc.make(WS_METHODS.constructOmniloopTicket, {\n  payload: Schema.Struct({}),\n  success: ConstructOmniloopTicket,\n  error: Schema.Union([ConstructOmniloopError, EnvironmentAuthorizationError]),\n});\n\nexport const WsConstructOmniloopWorkflowsRpc = Rpc.make(WS_METHODS.constructOmniloopWorkflows, {\n  payload: ConstructOmniloopWorkflowsInput,\n  success: ConstructOmniloopWorkflowsResult,\n  error: Schema.Union([ConstructOmniloopError, EnvironmentAuthorizationError]),\n});\n\n"
+    },
+    {
+      "path": "packages/contracts/src/rpc.ts",
+      "after": "WsServerUpdateServerWithProgressRpc,",
+      "insert": "  WsConstructOmniloopStatusRpc,\n  WsConstructOmniloopTicketRpc,\n  WsConstructOmniloopWorkflowsRpc,\n"
     },
     {
       "path": "packages/contracts/src/settings.ts",
