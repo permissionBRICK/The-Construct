@@ -126,6 +126,13 @@ try {
   ok("mapFromForm: OpenCode watcher off persists", disk.opencodeBackgroundWatcher === false);
   ok("mapFromForm: trims string values", disk.gitUserName === "Neo");
   ok("mapFromForm: numeric coercion (int + float)", disk.vmMemoryGB === 16 && disk.vmDiskGB === 120.5);
+  ok("mapToForm: vmCpuCount -> cpu (stringified)", host.mapToForm({ vmCpuCount: 8 }).cpu === "8");
+  ok("mapToForm: cpu omitted when absent (placeholder from the VM stands)", !("cpu" in host.mapToForm({ vmMemoryGB: 16 })));
+  ok("mapFromForm: cpu -> vmCpuCount (number)", host.mapFromForm({ cpu: "8" }).vmCpuCount === 8);
+  ok("mapFromForm: an EMPTY size field writes nothing (keep the VM's size, never a default)",
+    !("vmMemoryGB" in host.mapFromForm({ ram: "", disk: "", cpu: "" })) &&
+    !("vmDiskGB" in host.mapFromForm({ ram: "", disk: "", cpu: "" })) &&
+    !("vmCpuCount" in host.mapFromForm({ ram: "", disk: "", cpu: "" })));
   const exotic = host.mapFromForm({ ram: "1e3", disk: "+8" });
   ok("mapFromForm: coerces sci/signed number-input values", exotic.vmMemoryGB === 1000 && exotic.vmDiskGB === 8);
   ok("mapFromForm: non-numeric numeric-field falls back to string", host.mapFromForm({ ram: "abc" }).vmMemoryGB === "abc");

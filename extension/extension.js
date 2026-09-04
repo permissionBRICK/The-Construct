@@ -408,6 +408,21 @@ function probeOnce(inst) {
   return promise;
 }
 
+/** Record, once, the VM facts this instance's state never held (its size, its keep-saved
+ *  config) from a fresh probe — instancestate.backfillFromProbe has the rule. Best-effort;
+ *  a write re-pushes the settings so an open form stops showing its HTML defaults. */
+function backfillVmFacts(inst, probed) {
+  try {
+    const target = inst || activeInstance();
+    const scriptsDir = resolveScriptsDirFor(target);
+    if (!scriptsDir) return;
+    const patch = instancestate.backfillFromProbe(stateStore(target, scriptsDir), probed);
+    if (!patch) return;
+    logLine(`state: recorded ${Object.keys(patch).join(", ")} for ${target.name} from the VM itself`);
+    broadcastSettings();
+  } catch (_) { /* best-effort */ }
+}
+
 /** Fold host-side update info (GitHub) into a probed state. Best-effort: returns
  *  the same object reference when nothing was added, so callers can skip a re-push. */
 async function augmentUpdates(state, inst) {
@@ -683,6 +698,7 @@ async function refreshState(webview) {
   const gate = target.token;
   const probed = await probeOnce(inst);
   if (!instanceGate.valid(gate)) return;
+  backfillVmFacts(inst, probed);
   const state = withProjects(await withVmState(withLocalState(probed, inst), inst), inst);
   if (!instanceGate.valid(gate)) return;
   postState(webview, state);
@@ -717,6 +733,7 @@ async function refreshAll() {
   const gate = refreshTarget.token;
   const probed = await probeOnce(inst);
   if (!instanceGate.valid(gate)) return;
+  backfillVmFacts(inst, probed);
   const state = withProjects(await withVmState(withLocalState(probed, inst), inst), inst);
   if (!instanceGate.valid(gate)) return;
   for (const w of liveWebviews) postState(w, state);

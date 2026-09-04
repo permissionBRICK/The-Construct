@@ -968,6 +968,59 @@ function Resolve-GitIdentity {
     return @{ Name = $resName; Email = $resEmail; CredentialStore = $resCred }
 }
 
+function Save-ConstructVmSpec {
+    <#
+        Record the VM SIZE an install decided on -- RAM, disk and (when the caller sized
+        it) the vCPU count -- as the control panel's `vmMemoryGB` / `vmDiskGB` /
+        `vmCpuCount` settings for THAT instance.
+
+        The installers ask for these once, hand them to the hypervisor and used to forget
+        them: the panel's Settings tab then showed its own defaults as if they were the
+        saved choice, and a rebuild launched from there resized the VM. Recording the
+        decision where the panel reads it closes that gap (a value the panel already
+        holds is simply overwritten with the same number).
+
+        Which store: Save-ConstructInstanceState (lib\AgentVm.InstanceState.ps1) when it
+        is loaded -- the default instance's keys go to the scripts dir's
+        .construct-settings.json, any other instance's to its own state file; without
+        that library the default instance still gets its legacy file and any other name
+        is skipped with a note. Best-effort: a write failure warns, never fails an
+        install.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Dir,
+        [AllowEmptyString()][string]$InstanceName = "",
+        [double]$MemoryGB = 0,
+        [double]$DiskGB = 0,
+        [int]$CpuCount = 0
+    )
+    $values = @{}
+    if ($MemoryGB -gt 0) { $values['vmMemoryGB'] = [double]$MemoryGB }
+    if ($DiskGB -gt 0)   { $values['vmDiskGB']   = [double]$DiskGB }
+    if ($CpuCount -gt 0) { $values['vmCpuCount'] = [int]$CpuCount }
+    if ($values.Count -eq 0) { return }
+    $name = "$InstanceName".Trim().ToLowerInvariant()
+    if (-not $name) { $name = 'agent-vm' }
+    try {
+        if (Get-Command Save-ConstructInstanceState -ErrorAction SilentlyContinue) {
+            Save-ConstructInstanceState -Name $name -Dir $Dir -Values $values
+        } elseif ($name -ceq 'agent-vm') {
+            Save-ConstructSettings -Dir $Dir -Values $values
+        } else {
+            Write-Host "    (VM size not recorded for '$name': this install has no lib\AgentVm.InstanceState.ps1)" -ForegroundColor DarkGray
+            return
+        }
+        $parts = @()
+        if ($values.ContainsKey('vmMemoryGB')) { $parts += ("{0} GB RAM" -f $values['vmMemoryGB']) }
+        if ($values.ContainsKey('vmDiskGB'))   { $parts += ("{0} GB disk" -f $values['vmDiskGB']) }
+        if ($values.ContainsKey('vmCpuCount')) { $parts += ("{0} vCPU" -f $values['vmCpuCount']) }
+        Write-Host ("    Recorded the VM size for the control panel ({0}): {1}" -f $name, ($parts -join ', ')) -ForegroundColor DarkGray
+    } catch {
+        Write-Warning "Could not record the VM size for the control panel: $($_.Exception.Message)"
+    }
+}
+
 # ── Saved agent-config backup (export/restore across reinstall) ──────────────
 # Helpers for the "save current config and restore it after a reinstall" feature
 # and the Feature-2 clone-credential prompt. The export/restore SSH work itself
@@ -2984,6 +3037,14 @@ function Get-T3DesktopInstallPlan {
         [Parameter(Mandatory)][AllowEmptyString()][string]$T3Version,
         [Parameter(Mandatory)][AllowEmptyString()][string]$Channel,
         [Parameter(Mandatory)][AllowEmptyString()][string]$BuildHash,
+        # The hash of the PATCH RECIPE alone (the manifest's `patchHash`: transforms,
+        # overlays and patchers, without the Construct commit). When both sides state one
+        # it is THE thing compared, because it is what changes the Desktop artifact: the
+        # build hash also folds in the Construct commit, so every Construct update made a
+        # byte-for-byte identical Desktop count as "a different patched build" and
+        # reinstalled it -- and two VMs provisioned at different commits took turns doing
+        # so. Empty (an older manifest or record) falls back to the build hash.
+        [AllowEmptyString()][AllowNull()][string]$PatchHash = "",
         # The parsed installed.json, or $null when the host has never installed one.
         $Installed,
         # Which instance this provision is running for (recorded, never compared).
@@ -3009,6 +3070,8 @@ function Get-T3DesktopInstallPlan {
     $haveVersion = & $field $Installed 't3Version'
     $haveChannel = & $field $Installed 'channel'
     $haveHash = & $field $Installed 'buildHash'
+    $havePatch = & $field $Installed 'patchHash'
+    $PatchHash = "$PatchHash".Trim()
 
     $stamp = $InstalledAt
     if (-not $stamp) { $stamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ") }
@@ -3016,12 +3079,16 @@ function Get-T3DesktopInstallPlan {
         t3Version      = $T3Version
         channel        = $Channel
         buildHash      = $BuildHash
+        patchHash      = $PatchHash
         installedAt    = $stamp
         sourceInstance = $(if ($InstanceName) { $InstanceName } else { 'agent-vm' })
     }
     # Every part must be present AND equal: an empty side is "not recorded", never a match.
-    $matches = $T3Version -and $Channel -and $BuildHash -and
-        ($haveVersion -eq $T3Version) -and ($haveChannel -eq $Channel) -and ($haveHash -eq $BuildHash)
+    # The build identity is the patch hash when both the manifest and the record state
+    # one (see the parameter), otherwise the build hash.
+    $sameBuild = if ($PatchHash -and $havePatch) { $havePatch -eq $PatchHash } else { $BuildHash -and ($haveHash -eq $BuildHash) }
+    $matches = $T3Version -and $Channel -and
+        ($haveVersion -eq $T3Version) -and ($haveChannel -eq $Channel) -and $sameBuild
     # Was the record written in THIS shape? A pre-B14 host holds a copy of the VM manifest
     # (whose T3 version is `version`), which is understood above but is not the canonical
     # five-key record -- so a host that matches exactly would otherwise keep the old schema

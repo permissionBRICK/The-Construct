@@ -13,6 +13,8 @@ emit MEM_GB "$(awk '/MemTotal/{printf "%.0f",$2/1024/1024}' /proc/meminfo 2>/dev
 emit DISK_SIZE "$(df -BG / 2>/dev/null | awk 'NR==2{print $2}')"
 emit DISK_USED "$(df -BG / 2>/dev/null | awk 'NR==2{print $3}')"
 emit DISK_PCT "$(df -P / 2>/dev/null | awk 'NR==2{print $5}')"
+emit VM_CPUS "$(nproc 2>/dev/null)"
+emit DISK_DEV_BYTES "$(lsblk -b -d -n -o SIZE,TYPE 2>/dev/null | awk '$2=="disk"{print $1; exit}')"
 cfg=/etc/construct/config.env
 if [ -r "$cfg" ]; then
   emit AGENT_NAME "$(sed -n 's/^AGENT_NAME=//p' "$cfg" | head -1)"
@@ -24,6 +26,8 @@ if [ -r "$cfg" ]; then
   emit T3CODE_HTTPS "$(sed -n 's/^T3CODE_HTTPS=//p' "$cfg" | head -1)"
   emit T3CODE_HTTPS_PORT "$(sed -n 's/^T3CODE_HTTPS_PORT=//p' "$cfg" | head -1)"
   emit T3CODE_PUBLIC_BASE_URL "$(sed -n 's/^T3CODE_PUBLIC_BASE_URL=//p' "$cfg" | head -1)"
+  emit T3CODE_LIMIT_RESUME "$(sed -n 's/^T3CODE_LIMIT_RESUME=//p' "$cfg" | head -1)"
+  emit OPENCODE_BACKGROUND_WATCHER "$(sed -n 's/^OPENCODE_BACKGROUND_WATCHER=//p' "$cfg" | head -1)"
 fi
 mark=/etc/construct/provisioned.env
 if [ -r "$mark" ]; then
@@ -42,6 +46,50 @@ command -v opencode >/dev/null 2>&1 && emit V_OPENCODE "$(ver opencode)"
 command -v t3       >/dev/null 2>&1 && emit V_T3       "$(ver t3)"
 emit T3_ACTIVE "$(systemctl is-active t3code-serve 2>/dev/null)"
 `;
+
+/**
+ * The VM's SIZE as the guest sees it, in the units the control panel's VM-resources
+ * settings use (whole GB, a vCPU count) — or null when the probe reported nothing usable.
+ *
+ * Exactness: the virtual disk is `lsblk`'s byte size of the first disk device, which IS
+ * the VHDX's virtual size (a 150 GB Hyper-V disk reads 150 GiB exactly). RAM is
+ * /proc/meminfo's MemTotal rounded to whole GB: the firmware and kernel reserve a few
+ * percent below the configured amount (16 GB configured shows ~15.6), so rounding
+ * recovers a whole-GB configuration; a fractional one (2.5 GB) rounds to its nearest
+ * neighbour. The probe's MEM_GB is already that rounded figure.
+ */
+function parseVmSpec(map) {
+  const num = (v) => { const n = Number(String(v == null ? "" : v).trim()); return Number.isFinite(n) && n > 0 ? n : null; };
+  const out = {};
+  const ram = num(map.MEM_GB);
+  if (ram !== null) out.ramGb = Math.round(ram);
+  const bytes = num(map.DISK_DEV_BYTES);
+  if (bytes !== null) out.diskGb = Math.round(bytes / (1024 * 1024 * 1024));
+  const cpus = num(map.VM_CPUS);
+  if (cpus !== null) out.cpus = Math.round(cpus);
+  return Object.keys(out).length ? out : null;
+}
+
+/**
+ * The VM's saved "keep-saved" settings (config.env), as the booleans/strings the settings
+ * form stores — only the keys the VM actually reported with a recognisable value. These
+ * are the settings whose EMPTY provisioner argument means "keep what the VM has": when
+ * the host holds no saved value the panel used to show its HTML default while the VM
+ * kept doing something else (a patched T3 source build behind an unlit toggle).
+ */
+function parseVmConfig(map) {
+  const bool = (v) => { const s = cfgUnquote(v).trim().toLowerCase(); return s === "true" ? true : s === "false" ? false : null; };
+  const out = {};
+  const t3 = bool(map.T3CODE);
+  if (t3 !== null) out.t3code = t3;
+  const ch = cfgUnquote(map.T3CODE_CHANNEL).trim();
+  if (ch === "stable" || ch === "nightly") out.t3codeChannel = ch;
+  const park = bool(map.T3CODE_LIMIT_RESUME);
+  if (park !== null) out.t3codeLimitResume = park;
+  const watcher = bool(map.OPENCODE_BACKGROUND_WATCHER);
+  if (watcher !== null) out.opencodeBackgroundWatcher = watcher;
+  return Object.keys(out).length ? out : null;
+}
 
 /** Pull the first semver out of a version string, e.g. "codex-cli 0.142.4" -> "0.142.4". */
 function extractVersion(s) {
@@ -233,6 +281,13 @@ function toState(map, opts = {}) {
   // Only when the VM actually reported one: an absent key must stay absent, so the update
   // logic falls back to the host-side cache instead of comparing against "".
   if (provisionedCommit) out.provisionedCommit = provisionedCommit;
+  // The VM's size and its keep-saved config, for the settings form's placeholders and
+  // for the one-time backfill of an instance whose host-side state never recorded them
+  // (instancestate.backfillFromProbe). Absent when the VM reported nothing usable.
+  const vmSpec = parseVmSpec(map);
+  if (vmSpec) out.vmSpec = vmSpec;
+  const vmConfig = parseVmConfig(map);
+  if (vmConfig) out.vmConfig = vmConfig;
   return out;
 }
 
@@ -248,4 +303,4 @@ async function probe(opts = {}) {
   return { online: true, host, hostShort, ...toState(parseProbe(r.stdout), { host }) };
 }
 
-module.exports = { REMOTE_PROBE, extractVersion, formatMarker, parseCommit, parseDiskPct, parseProbe, toState, probe, isSafeOrigin, cfgUnquote, originPort };
+module.exports = { REMOTE_PROBE, extractVersion, formatMarker, parseCommit, parseDiskPct, parseVmSpec, parseVmConfig, parseProbe, toState, probe, isSafeOrigin, cfgUnquote, originPort };
