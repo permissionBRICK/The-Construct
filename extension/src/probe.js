@@ -29,6 +29,7 @@ mark=/etc/construct/provisioned.env
 if [ -r "$mark" ]; then
   emit INSTALLED_AT "$(sed -n 's/^INSTALLED_AT=//p' "$mark" | head -1)"
   emit REPROVISIONED_AT "$(sed -n 's/^REPROVISIONED_AT=//p' "$mark" | head -1)"
+  emit CONSTRUCT_COMMIT "$(sed -n 's/^CONSTRUCT_COMMIT=//p' "$mark" | head -1)"
 fi
 # Version detection. Capture BOTH stdout and stderr (some CLIs -- e.g. codex -- print
 # --version to stderr, which the old '2>/dev/null | head -1' dropped, showing "-") and
@@ -75,6 +76,18 @@ function parseDiskPct(s) {
   if (!m) return null;
   const n = Number(m[1]);
   return n >= 0 && n <= 100 ? n : null;
+}
+
+/**
+ * A Construct commit id as `/etc/construct/provisioned.env` records it: 7–64 hex,
+ * lowercased. config.env-style values are written by bin/config-set.sh, which quotes
+ * anything outside its safe charset — a hex id never is, but the value is decoded anyway
+ * so a hand-quoted marker still reads. Anything else (a truncated write, a hand-edited
+ * marker) yields "" = "unknown", never a value the stale check would compare. Pure.
+ */
+function parseCommit(s) {
+  const v = cfgUnquote(String(s == null ? "" : s).trim()).trim().toLowerCase();
+  return /^[0-9a-f]{7,64}$/.test(v) ? v : "";
 }
 
 /** Parse TAB-separated KEY\tVALUE lines into a map. */
@@ -195,6 +208,12 @@ function toState(map, opts = {}) {
 
   const installed = formatMarker(map.INSTALLED_AT);
   const reprovisioned = formatMarker(map.REPROVISIONED_AT);
+  // The Construct commit the GUEST records for itself (bin/provision.sh writes
+  // CONSTRUCT_COMMIT into /etc/construct/provisioned.env from the CONSTRUCT_VERSION it was
+  // provisioned with). It is the SOURCE OF TRUTH for staleness — right even for a VM some
+  // other PC provisioned — while the host-side per-instance marker is only an offline
+  // cache. Absent on a VM provisioned before this existed, which is exactly "unknown".
+  const provisionedCommit = parseCommit(map.CONSTRUCT_COMMIT);
 
   const out = { vmName: map.AGENT_NAME || "", ubuntu: map.UBUNTU || "", resources, agents, projects };
   // Only emit these when the VM actually reported a marker — the webview shows the
@@ -204,6 +223,9 @@ function toState(map, opts = {}) {
   // null (unknown) is deliberately NOT sent: the webview then leaves the warning
   // as-is rather than claiming a healthy disk it has no reading for.
   if (diskPct !== null) out.diskPct = diskPct;
+  // Only when the VM actually reported one: an absent key must stay absent, so the update
+  // logic falls back to the host-side cache instead of comparing against "".
+  if (provisionedCommit) out.provisionedCommit = provisionedCommit;
   return out;
 }
 
@@ -219,4 +241,4 @@ async function probe(opts = {}) {
   return { online: true, host, hostShort, ...toState(parseProbe(r.stdout), { host }) };
 }
 
-module.exports = { REMOTE_PROBE, extractVersion, formatMarker, parseDiskPct, parseProbe, toState, probe, isSafeOrigin, cfgUnquote, originPort };
+module.exports = { REMOTE_PROBE, extractVersion, formatMarker, parseCommit, parseDiskPct, parseProbe, toState, probe, isSafeOrigin, cfgUnquote, originPort };

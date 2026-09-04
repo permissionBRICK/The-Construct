@@ -34,13 +34,31 @@ function npmTag(channel) { return channel === "nightly" ? "nightly" : "latest"; 
 // first and the still-running installer would then re-write T3CODE=true and
 // start the service against the final off setting. Queuing each transition
 // behind the previous one makes the LAST action win.
-let _inflight = Promise.resolve();
-function _serial(fn) {
-  const run = _inflight.then(fn, fn);
-  _inflight = run.then(() => {}, () => {});
+//
+// The queue is PER INSTANCE. Held globally it serialized across VMs that share nothing:
+// enabling T3 on A (a multi-minute npm install) blocked the enable on B behind it, and a
+// disable on B queued behind A's install could not "win" over anything on its own VM.
+// The key is the target's full identity (instances.targetFingerprint), not its name — a
+// registry entry rewritten under the same name reaches a different machine, and its
+// transitions must not queue behind the old endpoint's.
+const _inflight = new Map();   // instance key -> the tail of that VM's queue
+function _queueKey(opts) {
+  const inst = opts && opts.instance;
+  if (!inst) return "";        // no instance given => today's single, default queue
+  return instances.targetFingerprint(inst);
+}
+function _serial(opts, fn) {
+  const key = _queueKey(opts);
+  const prev = _inflight.get(key) || Promise.resolve();
+  const run = prev.then(fn, fn);
+  const settled = run.then(() => {}, () => {});
+  _inflight.set(key, settled);
+  // Drop the entry once this VM's queue has drained, so the map can't grow without
+  // bound over a long session of switching between instances.
+  settled.then(() => { if (_inflight.get(key) === settled) _inflight.delete(key); });
   return run;
 }
-function _resetQueue() { _inflight = Promise.resolve(); }
+function _resetQueue() { _inflight.clear(); }
 
 // Shared bash prelude: read the T3CODE_* bind settings (and workspace root) from
 // config.env with the same defaults the provisioner uses, plus an idempotent
@@ -307,7 +325,7 @@ async function openWebUi(opts = {}) {
  *  install on the next reprovision instead. Serialized against disableOnVm.
  *  `opts.channel` ("stable"|"nightly") decides the npm dist-tag. */
 function enableOnVm(opts = {}) {
-  return _serial(() => _enableNow(opts));
+  return _serial(opts, () => _enableNow(opts));
 }
 
 function _enableNow(opts = {}) {
@@ -338,7 +356,7 @@ function _enableNow(opts = {}) {
  *  Serialized against enableOnVm so a disable can't interleave with a running
  *  install. */
 function disableOnVm(opts = {}) {
-  return _serial(() => _disableNow(opts));
+  return _serial(opts, () => _disableNow(opts));
 }
 
 async function _disableNow(opts = {}) {
@@ -362,7 +380,7 @@ async function _disableNow(opts = {}) {
  *  through the same queue as enable/disable so a rapid stable→nightly→stable
  *  doesn't interleave npm runs. */
 function setChannelOnVm(channel, opts = {}) {
-  return _serial(() => _setChannelNow(channel, opts));
+  return _serial(opts, () => _setChannelNow(channel, opts));
 }
 
 async function _setChannelNow(channel, opts = {}) {
