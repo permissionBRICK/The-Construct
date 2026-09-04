@@ -694,6 +694,15 @@
     if (s.update && s.update.available) { if (b) b.hidden = false; text("updateBehind", s.update.behind || ""); }
     else if (s.update && b) { b.hidden = true; }
 
+    // "Register this VM": null on every push that has no offer (a local window, a
+    // single-VM install, or a VM that was just registered), so the banner appears and
+    // disappears with the state rather than sticking around.
+    if (s.registerOffer !== undefined) {
+      const rb = $("registerBanner");
+      if (rb) rb.hidden = !s.registerOffer;
+      text("registerHost", s.registerOffer ? s.registerOffer.host : "");
+    }
+
     if (Array.isArray(s.agents)) renderAgents(s.agents);
     if (Array.isArray(s.projects)) renderProjects(s.projects);
     if (s.usage) { renderUsage(s.usage); shownUsagePeriod = s.usagePeriod || shownUsagePeriod; }
