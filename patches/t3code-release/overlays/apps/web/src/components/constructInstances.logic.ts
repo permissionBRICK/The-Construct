@@ -144,7 +144,18 @@ export function matchConstructRemoteToInstance(
     ),
   );
   const hits = byHost.filter((instance) => instanceAnswersOnPort(instance, endpoint.port));
-  return hits.length === 1 ? hits[0]! : null;
+  if (hits.length === 1) return hits[0]!;
+  // A service-published VM whose T3 port this PC has not recorded yet (provisioned before
+  // the port was written, or by another PC) is still THE instance at that host when it
+  // is the only one claiming it: the host name is a per-VM name on a service that
+  // renders one, so one claimant is not a coincidence. The next reprovision records the
+  // port and the exact rule takes over.
+  if (hits.length === 0 && byHost.length === 1) {
+    const only = byHost[0]!;
+    const publishedByService = only.t3Port === null && only.publicHost !== null && only.publicHost !== "";
+    if (publishedByService) return only;
+  }
+  return null;
 }
 
 export interface ConstructProviderRow {

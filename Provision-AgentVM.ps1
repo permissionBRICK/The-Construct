@@ -292,7 +292,7 @@ if ($InstanceName) {
     }
     . $instanceTargetLib
     $explicitTarget = @{}
-    foreach ($tp in @('VmHost', 'HostAlias', 'SshPort', 'LocalKeyName', 'ConfigBranch', 'ServiceUrl')) {
+    foreach ($tp in @('VmHost', 'HostAlias', 'SshPort', 'LocalKeyName', 'ConfigBranch', 'ServiceUrl', 'PublicHost')) {
         if ($PSBoundParameters.ContainsKey($tp)) { $explicitTarget[$tp] = $PSBoundParameters[$tp] }
     }
     $instanceTarget = Resolve-ConstructVmTarget -Name $InstanceName -Explicit $explicitTarget
@@ -308,6 +308,13 @@ if ($InstanceName) {
     # names no service, so this stays "" -- the same value a local run has always had,
     # which is what keeps its env prefix byte-identical.
     if (-not $PSBoundParameters.ContainsKey('ServiceUrl'))   { $ServiceUrl   = [string]$instanceTarget.ServiceUrl }
+    # The per-VM web host name (plan section 4.12) is part of the entry too: a
+    # name-targeted reprovision (Update-T3Code.ps1, the panel) must keep the guest's
+    # CONSTRUCT_EXTERNAL_HOST, the T3 certificate's SAN and its public base URL on the
+    # name the host service published, not regress them to the SSH host.
+    if (-not $PSBoundParameters.ContainsKey('PublicHost') -and $instanceTarget.PSObject.Properties['PublicHost'] -and $instanceTarget.PublicHost) {
+        $PublicHost = [string]$instanceTarget.PublicHost
+    }
     # A NON-DEFAULT ENDPOINT WAS STATED -- by name rather than by argument, but stated.
     # $explicitEndpoint below asks "did the caller say where this VM answers", because
     # that is what the guest has to record as its external identity; resolving the same
@@ -2109,10 +2116,17 @@ if (Get-Command Initialize-ConstructConfigStore -ErrorAction SilentlyContinue) {
             # THIS VM's selection, not the checkout's (Get-ConstructStateInstanceName is
             # the one place that answers "which instance"): the default instance writes the
             # legacy top-level key and any other one writes its own file.
-            if (Get-Command Save-ConstructInstanceState -ErrorAction SilentlyContinue) {
-                Save-ConstructInstanceState -Name (Get-ConstructStateInstanceName) -Dir $PSScriptRoot -Values @{ projects = $selection }
-            } elseif (Get-Command Save-ConstructSettings -ErrorAction SilentlyContinue) {
-                Save-ConstructSettings -Dir $PSScriptRoot -Values @{ projects = $selection }
+            # Best-effort, like the provisioned marker: a state file that cannot be written
+            # (an alias that is not an instance name on a BYO run, a locked file) must not
+            # abort a provision that has already configured the VM.
+            try {
+                if (Get-Command Save-ConstructInstanceState -ErrorAction SilentlyContinue) {
+                    Save-ConstructInstanceState -Name (Get-ConstructStateInstanceName) -Dir $PSScriptRoot -Values @{ projects = $selection }
+                } elseif (Get-Command Save-ConstructSettings -ErrorAction SilentlyContinue) {
+                    Save-ConstructSettings -Dir $PSScriptRoot -Values @{ projects = $selection }
+                }
+            } catch {
+                Write-Warning "Could not record the project selection on the host: $($_.Exception.Message)"
             }
         }
     }
@@ -2579,7 +2593,7 @@ if ($Action -eq 'provision') {
             # electron-builder derives this stable per-user directory from the
             # app id; stable and nightly intentionally update the same install. It is
             # where the installer puts the app and where the restart below looks for it --
-            # NOT an input to the install decision, which is the recorded triple alone.
+            # The install dir: where the app lives when present (see -AppPresent below).
             $t3InstallRoot = if ($env:LOCALAPPDATA) {
                 Join-Path $env:LOCALAPPDATA 'Programs\t3code'
             } else { $null }
@@ -2587,9 +2601,16 @@ if ($Action -eq 'provision') {
             # The build hash comes FROM THE GUEST MANIFEST and from nowhere else (plan
             # section 4.12): the rule is the exact (t3Version, channel, buildHash) triple,
             # so a manifest that states none simply does not match and installs.
+            # "The host already HAS that release" is only true while the app is on disk: a
+            # matching record with no app (removed by hand, a wiped profile) installs again.
+            $t3AppPresent = $null
+            if ($t3InstallRoot) {
+                $t3AppPresent = [bool]((Test-Path -LiteralPath $t3InstallRoot) -and
+                    @(Get-ChildItem -LiteralPath $t3InstallRoot -Filter '*.exe' -ErrorAction SilentlyContinue).Count -gt 0)
+            }
             $t3Plan = Get-T3DesktopInstallPlan -T3Version ([string]$manifest.version) `
                 -Channel ([string]$manifest.channel) -BuildHash ([string]$manifest.buildHash) `
-                -Installed $installedRecord -InstanceName (Get-ConstructRunInstanceName)
+                -Installed $installedRecord -InstanceName (Get-ConstructRunInstanceName) -AppPresent $t3AppPresent
             if (-not $t3Plan.Install) {
                 Write-Ok $t3Plan.Reason
                 # The record matched, but it may still be the PRE-B14 shape (a copy of the

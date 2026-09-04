@@ -133,10 +133,24 @@ if ($null -ne $settings.t3codeHttps -and $provCmd.Parameters.ContainsKey('T3Code
 # A value counts as "supplied" when the caller bound it OR when -InstanceName resolved
 # it above -- a name-targeted rebuild has to reach the same VM a four-argument one does.
 $identity = @{}
-if ($VmHost)        { $identity['VmHost']       = $VmHost }
-if ($HostAlias)     { $identity['HostAlias']    = $HostAlias }
-if ($SshPort -ne 0) { $identity['SshPort']      = $SshPort }
-if ($LocalKeyName)  { $identity['LocalKeyName'] = $LocalKeyName }
+if ($InstanceName -and -not $instanceTarget.IsDefault) {
+    # Name-only targeting (plan section 4.12): the provisioner next to this script carries
+    # the same lib/AgentVm.InstanceTarget.ps1 (checked above), so it resolves the SAME
+    # entry -- endpoint, key, branch AND the host service URL and the per-VM public host
+    # name, which the four identity arguments cannot carry. Forwarding only those four
+    # would reprovision a service-managed VM as a plain SSH box (dead OpenCode URL,
+    # regressed T3 host name). Explicitly bound identity values still ride along; the
+    # provisioner lets them win.
+    $identity['InstanceName'] = $InstanceName
+    foreach ($tp in @('VmHost', 'HostAlias', 'SshPort', 'LocalKeyName')) {
+        if ($PSBoundParameters.ContainsKey($tp)) { $identity[$tp] = $PSBoundParameters[$tp] }
+    }
+} else {
+    if ($VmHost)        { $identity['VmHost']       = $VmHost }
+    if ($HostAlias)     { $identity['HostAlias']    = $HostAlias }
+    if ($SshPort -ne 0) { $identity['SshPort']      = $SshPort }
+    if ($LocalKeyName)  { $identity['LocalKeyName'] = $LocalKeyName }
+}
 foreach ($k in @($identity.Keys)) {
     if (-not $provCmd.Parameters.ContainsKey($k)) {
         throw "Provision-AgentVM.ps1 in $PSScriptRoot does not support -$k; update The Construct or omit -$k."

@@ -2975,12 +2975,9 @@ function Get-T3DesktopInstallPlan {
         record this rule is about, so the first reprovision after the update installs once
         and writes the canonical file.
 
-        THE TRIPLE IS THE WHOLE DECISION. Nothing else is consulted -- not whether an
-        executable is currently on disk, not how old the record is. An app the user
-        removed by hand therefore stays removed until something changes the triple (a new
-        T3 release, a channel switch, a new Construct build); reinstalling it because the
-        exe went missing would be a fourth rule, and this one is stated to be the only
-        one.
+        The triple decides; the one thing that can override a match is -AppPresent $false:
+        "the host already HAS that release" is only true while the app is on disk, so an
+        app the user removed by hand (or a wiped profile) is installed again.
     #>
     [CmdletBinding()]
     param(
@@ -2991,7 +2988,11 @@ function Get-T3DesktopInstallPlan {
         $Installed,
         # Which instance this provision is running for (recorded, never compared).
         [AllowEmptyString()][AllowNull()][string]$InstanceName,
-        [AllowEmptyString()][AllowNull()][string]$InstalledAt
+        [AllowEmptyString()][AllowNull()][string]$InstalledAt,
+        # Whether the Desktop app is actually on this PC. $null = unknown (the triple
+        # decides alone); $false = "the host HAS that release" is not true whatever the
+        # record says, so it installs (the user removed the app by hand, a wiped profile).
+        [AllowNull()]$AppPresent
     )
     $field = {
         param($obj, $name)
@@ -3026,7 +3027,7 @@ function Get-T3DesktopInstallPlan {
     # five-key record -- so a host that matches exactly would otherwise keep the old schema
     # forever, because the canonical file is only written when something is installed.
     $recordIsStale = -not ((& $field $Installed 't3Version') -and (& $field $Installed 'installedAt') -and (& $field $Installed 'sourceInstance'))
-    if ($matches) {
+    if ($matches -and -not ($null -ne $AppPresent -and -not [bool]$AppPresent)) {
         return [pscustomobject]@{
             Install       = $false
             Reason        = "Patched T3 Code Desktop $T3Version ($Channel) is already installed"
@@ -3035,7 +3036,8 @@ function Get-T3DesktopInstallPlan {
         }
     }
     $why = "a different patched build"
-    if (-not $haveVersion) { $why = "this PC has no record of an installed patched build" }
+    if ($matches) { $why = "the record matches but the app is not installed on this PC" }
+    elseif (-not $haveVersion) { $why = "this PC has no record of an installed patched build" }
     elseif ($haveVersion -ne $T3Version) { $why = "the installed build is T3 $haveVersion" }
     elseif ($haveChannel -ne $Channel) { $why = "the installed build is on the $haveChannel channel" }
     elseif (-not $BuildHash) { $why = "this VM's manifest states no build hash" }
@@ -5612,10 +5614,9 @@ function Format-ConstructRemoteUrlForDisplay {
 
 function Test-ConstructUrlHasCredentials {
     <#
-        True when a remote URL carries credentials in its userinfo. An http(s) URL
-        has no legitimate userinfo at all (that is where a PAT gets pasted); for any
-        other scheme only a bare user is legitimate (ssh://git@host), never
-        user:secret. Pure; twin of urlHasCredentials in
+        True when a remote URL carries credentials in its userinfo -- user:secret. A
+        bare user name is legitimate for every scheme (https://alice@host selects the
+        stored credential; ssh://git@host). Pure; twin of urlHasCredentials in
         extension/src/configsync.js.
 
         Why refuse rather than redact: a URL reaches git's argv, is written verbatim
@@ -5633,10 +5634,28 @@ function Test-ConstructUrlHasCredentials {
     $u = $Url.Trim()
     if (-not $u) { return $false }
     if ($u -notmatch '^([A-Za-z][A-Za-z0-9+.-]*)://([^/@\s]+)@') { return $false }
-    $scheme = $Matches[1].ToLowerInvariant()
+    # A bare user NAME (https://alice@host/x.git, ssh://git@host) carries no secret --
+    # it is how a credential helper is told WHICH stored credential to use (GitGudLab
+    # project tokens require one). user:secret is refused for every scheme, and so is a
+    # bare user that is plainly a token (a known token prefix, or 32+ characters).
     $userInfo = $Matches[2]
-    if ($scheme -eq "http" -or $scheme -eq "https") { return $true }
-    return $userInfo.Contains(":")
+    if ($userInfo.Contains(":")) { return $true }
+    return Test-ConstructTokenLikeUser -User $userInfo
+}
+
+function Test-ConstructTokenLikeUser {
+    <#
+        A userinfo value that is a TOKEN rather than a name: a known access-token prefix
+        (GitHub, GitLab, GitGudLab) or the length no human account name has. Pure; twin of
+        tokenLikeUser in extension/src/configsync.js.
+    #>
+    [CmdletBinding()]
+    param([AllowEmptyString()][AllowNull()][string]$User)
+    if ([string]::IsNullOrEmpty($User)) { return $false }
+    if ($User -match '^gitgud-project(\.|$)') { return $false }   # GitGudLab project-token user names
+    # Tokens are long and dot-free; account names that long carry dots (project users).
+    if ($User.Length -ge 32 -and -not $User.Contains('.')) { return $true }
+    return ($User -match '^(ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|glpat-|glptt-|gldt-|glrt-|ggpat_|ggpt_|ggjt_|oauth2$|x-access-token$)')
 }
 
 function Test-ConstructSafeProfileName {
@@ -6099,6 +6118,12 @@ function Publish-ConstructConfigProfiles {
 
     if (-not $branchName) {
         if (-not $clone.Created) { $branchName = Get-ConstructRemoteDefaultBranch -RemoteUrl $url }
+        if (-not $branchName -and -not $clone.Created) {
+            # An empty repo answers ls-remote with nothing; the clone's own HEAD still says
+            # which branch the server created it with (main or master).
+            $head = Invoke-ConstructConfigGit -Arguments @("symbolic-ref", "--short", "HEAD") -WorkingDir $cloneDir
+            if ($head.Code -eq 0 -and $head.Output) { $branchName = ([string]$head.Output).Trim() }
+        }
         if (-not $branchName) { $branchName = "main" }
         if (-not (Test-ConstructPublishBranchName -Name $branchName)) { $branchName = "main" }
     }

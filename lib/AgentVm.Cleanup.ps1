@@ -810,20 +810,20 @@ function Invoke-ConstructInstanceRemoval {
             'instance-state' { $results.Add((Remove-ConstructInstanceFile -Kind $step.Kind -Path $step.Target)) }
             'temp-known-hosts' { $results.Add((Remove-ConstructInstanceFile -Kind $step.Kind -Path $step.Target)) }
             'registry-entry' {
-                # LAST, and only when everything before it worked. The registry entry is
-                # the handle this action is reached BY: dropping it while a required
-                # removal failed (an un-untrustable CA in the machine store, a settings
-                # file this PowerShell cannot parse) would leave those artefacts behind
-                # with no way left to retry.
+                # LAST. A local step that failed (a settings file this PowerShell cannot
+                # parse, a CA the machine store would not give up, a locked file) is
+                # ADVISORY: each such result already says what to do by hand, and keeping
+                # the entry would not make a retry succeed -- it would only wedge the
+                # instance (and, once the VM on the host is gone, wedge it for good). The
+                # one blocking failure is the VM deletion itself, which returns before this.
                 $failedSoFar = @($results | Where-Object { $_.Status -eq 'failed' })
-                if ($failedSoFar.Count -gt 0) {
-                    $results.Add((New-ConstructCleanupResult $step.Kind 'failed' "'$($Plan.Name)' was KEPT in instances.json because $($failedSoFar.Count) step(s) failed -- fix them and run Remove instance again."))
-                } elseif ($null -eq $RemoveRegistryEntry) {
+                if ($null -eq $RemoveRegistryEntry) {
                     $results.Add((New-ConstructCleanupResult $step.Kind 'skipped' "No registry writer was supplied; '$($Plan.Name)' is still in instances.json."))
                 } else {
                     try {
                         & $RemoveRegistryEntry $Plan.Name | Out-Null
-                        $results.Add((New-ConstructCleanupResult $step.Kind 'removed' "Removed '$($Plan.Name)' from instances.json."))
+                        $note = if ($failedSoFar.Count -gt 0) { " $($failedSoFar.Count) step(s) above failed and need doing by hand." } else { "" }
+                        $results.Add((New-ConstructCleanupResult $step.Kind 'removed' "Removed '$($Plan.Name)' from instances.json.$note"))
                     } catch {
                         $results.Add((New-ConstructCleanupResult $step.Kind 'failed' "Could not update instances.json ($($_.Exception.Message))."))
                     }

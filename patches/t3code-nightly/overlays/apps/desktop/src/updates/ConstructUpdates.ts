@@ -1067,15 +1067,11 @@ export interface ConstructCheckSnapshot {
 }
 
 /**
- * Which script the HOST-WIDE update control launches — and it is only ever
- * `Update-Construct.ps1` (B14, plan §4.12 "T3 Desktop updater": "Update Construct stays
- * the single host-wide action").
- *
- * A REPROVISION is per instance now: T3 links several VMs at once, so "reprovision" with
- * no target would mean "whichever VM the registry currently calls default", which is
- * exactly the ambiguity the per-row buttons exist to remove. `provisionStale` and
- * `t3UpdateAvailable` are still published — they are what a row shows and what makes its
- * own Reprovision an offer rather than a plain button.
+ * Which script the HOST-WIDE update control launches. `Update-Construct.ps1` is the one
+ * host-wide UPDATE (B14, plan §4.12 "T3 Desktop updater"); a reprovision offered here
+ * targets the registry's default instance by name, while every other linked VM has its
+ * own Providers row. `provisionStale` and `t3UpdateAvailable` describe that default
+ * instance (the rows compute their own).
  */
 export function resolveConstructAction(input: {
   readonly scriptsDir: string | null;
@@ -1085,6 +1081,12 @@ export function resolveConstructAction(input: {
 }): ConstructUpdateAction | null {
   if (input.scriptsDir === null) return null;
   if (input.constructUpdateAvailable) return "update-construct";
+  // The proactive offer for the DEFAULT instance stays (the pill, the notification, the
+  // About button): a stale VM must be offered a reprovision even before any remote is
+  // linked or matched -- that is exactly the offline / not-yet-paired case this control
+  // exists for. The launch itself targets the registry's default instance by name; every
+  // other instance is reprovisioned from its own Providers row.
+  if (input.provisionStale || input.t3UpdateAvailable) return "reprovision";
   return null;
 }
 

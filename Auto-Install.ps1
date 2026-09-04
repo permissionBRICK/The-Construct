@@ -161,6 +161,11 @@ param(
     # control panel, which has already had the user type it -- must supply it; an
     # interactive console is asked instead. It is never a default and never inferred.
     [string]$ConfirmInstanceName,
+    # With -Action remove-instance on a REMOTE instance: forget it on this PC but leave
+    # the VM on its host service untouched (the host is unreachable, or you still want
+    # the VM -- to enrol it from another PC, say). An interactive run is offered this
+    # when the host service cannot be reached.
+    [switch]$KeepVm,
     # With -Action reinstall/redownload, pre-answer the save/restore prompts:
     #   save     export the current config now and restore it afterwards (default)
     #   existing skip the new export; restore a previously saved backup if present
@@ -396,7 +401,10 @@ if ($Action -eq 'publish-config') {
     if ($pcResult.Commit) { Write-Host "    Commit: $($pcResult.Commit)" -ForegroundColor DarkGray }
     Write-Host ("    Published {0}, skipped {1}, refused {2}, invalid {3}." -f @($pcResult.Published).Count, @($pcResult.Skipped).Count, @($pcResult.Refused).Count, @($pcResult.Invalid).Count) -ForegroundColor DarkGray
 
-    if (@($pcResult.Errors).Count -gt 0 -or @($pcResult.Invalid).Count -gt 0) {
+    # Exit 1 on ERRORS (nothing or not everything reached the remote). An INVALID local
+    # profile is reported in the table above and skipped; it does not fail the publish of
+    # every other profile.
+    if (@($pcResult.Errors).Count -gt 0) {
         Write-Host ""
         foreach ($e in @($pcResult.Errors)) { Write-Host "    ERROR: $e" -ForegroundColor Red }
         Write-Host ""
@@ -917,7 +925,8 @@ function Invoke-ConstructRemoveInstanceAction {
     param(
         [Parameter(Mandatory)][string]$Name,
         [string]$Confirmation = "",
-        [switch]$Interactive
+        [switch]$Interactive,
+        [switch]$KeepVm
     )
     $riTargetLib = Join-Path $PSScriptRoot "lib\AgentVm.InstanceTarget.ps1"
     $riCleanupLib = Join-Path $PSScriptRoot "lib\AgentVm.Cleanup.ps1"
@@ -1012,7 +1021,10 @@ function Invoke-ConstructRemoveInstanceAction {
     # place to enrol a host afresh, so a refusal stops the run before any local state is
     # touched rather than half-cleaning an instance whose VM is still running.
     $riDeleteVm = $null
-    if ($riPlan.DeletesVm) {
+    if ($riPlan.DeletesVm -and $KeepVm) {
+        Write-Host ""
+        Write-Host "    -KeepVm: the VM '$Name' stays on its host service; only this PC forgets it." -ForegroundColor Yellow
+    } elseif ($riPlan.DeletesVm) {
         $riServiceUrl = ""
         foreach ($riStep in @($riPlan.Steps)) {
             if ($riStep.Kind -eq 'remote-vm-delete') { $riServiceUrl = [string]$riStep.Target; break }
@@ -1035,9 +1047,24 @@ function Invoke-ConstructRemoveInstanceAction {
         # Invoke-ConstructApi, not the Test-ConstructRemoteAuth wrapper below it: this
         # block exits before that definition is ever reached.
         if (-not (Invoke-ConstructApi -BaseUrl $riServiceUrl -Method GET -Path '/whoami' -Auth $riAuth -NoThrow)) {
-            throw "The host service at $riServiceUrl did not accept this PC's stored credential (HTTP $(Get-ConstructApiLastStatus)). Nothing was removed. Add the host again from the control panel, then retry."
+            $riWhy = "The host service at $riServiceUrl did not answer or did not accept this PC's stored credential (HTTP $(Get-ConstructApiLastStatus))."
+            # An unreachable host must not make the instance un-removable from THIS PC (a
+            # laptop that left the site, a host that is off): offer to keep the VM and
+            # forget it locally. Unattended runs say so and stop; -KeepVm is the answer.
+            $riKeepAnyway = $false
+            if ($Interactive -and -not [Console]::IsInputRedirected) {
+                Write-Host ""
+                Write-Host "    $riWhy" -ForegroundColor Yellow
+                $riAns = Read-Host "    Forget '$Name' on this PC anyway and leave the VM on the host? [y/N]"
+                $riKeepAnyway = ($riAns -match '^\s*[yY]')
+            }
+            if (-not $riKeepAnyway) {
+                throw "$riWhy Nothing was removed. Add the host again from the control panel and retry, or run with -KeepVm to forget the instance on this PC only."
+            }
+            $riDeleteVm = $null
+        } else {
+            $riDeleteVm = { param($name, $url) Remove-ConstructVm -Name $name }
         }
-        $riDeleteVm = { param($name, $url) Remove-ConstructVm -Name $name }
     }
 
     $riResults = Invoke-ConstructInstanceRemoval -Plan $riPlan -DeleteVm $riDeleteVm `
@@ -1070,7 +1097,7 @@ if ($Action -eq 'remove-instance') {
         throw "-Action remove-instance needs -InstanceName <name> (the instance to forget on this PC)."
     }
     Invoke-ConstructRemoveInstanceAction -Name $InstanceName -Confirmation $ConfirmInstanceName `
-        -Interactive:(-not $FromPanel)
+        -Interactive:(-not $FromPanel) -KeepVm:$KeepVm
     exit $script:ConstructRemoveInstanceRc
 }
 
@@ -1740,7 +1767,16 @@ function New-ConstructRemoteInstanceEntry {
         owner        = $Owner
     }
     if ($ServiceUrl) { $entry['service'] = @{ url = $ServiceUrl; auth = $ServiceAuth } }
-    if ($PublicHost -and $PublicHost -ne $SshHost) { $entry['publicHost'] = $PublicHost }
+    if ($PublicHost -and $PublicHost -ne $SshHost) {
+        # A web-only name: recorded when it is a host name, dropped (with a warning) when the
+        # service handed back something that is not -- never a reason to refuse the entry,
+        # which is this PC's only handle on a VM that already exists.
+        if ([System.Uri]::CheckHostName($PublicHost) -ne [System.UriHostNameType]::Unknown) {
+            $entry['publicHost'] = $PublicHost
+        } else {
+            Write-Warning "The host service stated a publicHost that is not a host name ('$PublicHost'); it was not recorded."
+        }
+    }
     return $entry
 }
 
