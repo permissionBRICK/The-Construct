@@ -1854,7 +1854,12 @@ says what will actually happen.
   feedback). `runUpdateConstruct` polls the file and, on `ok`, runs
   `workbench.action.reloadWindow` so the refreshed panel loads with no manual reopen (a
   detached host console can't reload VS Code itself); on `fail` the script's console pauses
-  with a "reopen VS Code" message and the panel shows a toast. The full window reload is
+  with a "reopen VS Code" message and the panel shows a toast. The script is also launched
+  by the Construct-built T3 Code Desktop app (which passes the same env var, so that console
+  closes by itself too) and by hand; those launches can't reach this window's poll, so
+  `watchInstalledMarker` (activate) polls the scripts dir's `.construct-settings.json` every
+  3 s and reloads the window when `installedCommit` changes. The script writes that marker
+  LAST — after the vsix reinstall — so a reload triggered by it always loads the new panel. The full window reload is
   reserved for a self-update (it swaps the extension itself); ordinary VM-side changes (a
   reprovision, power on/off) are picked up by `syncAutoRefresh`'s `refreshAll` timer,
   which runs only while a dashboard is open — no reload needed. It ticks every 30s
@@ -2135,7 +2140,7 @@ says what will actually happen.
     `stdio: "ignore"` points its std handles at NUL — the earlier patch spawned powershell.exe
     that way and ran the whole reprovision invisibly. `start` gives PowerShell a fresh console
     with working stdin/stdout; `/wait` lets the hidden cmd relay the exit code to the app. The Desktop side lives in the
-    T3 source overlay (`patches/t3code-release/overlays/apps/desktop/src/updates/
+    T3 source overlay (`patches/t3code/overlays/apps/desktop/src/updates/
     ConstructUpdates.ts`), reads the same `.construct-settings.json` markers as `updates.js`
     and applies the same rules (`isProvisionStale`, compare-API 404 = update available).
   - `lib/AgentVm.Instances.ps1` — the PowerShell twin of `src/instances.js`: same file,

@@ -51,18 +51,6 @@ try {
     try { . (Join-Path $root.FullName "lib\AgentVm.Common.ps1") }
     catch { Write-Warning "Could not load helpers: $($_.Exception.Message)" }
 
-    # Record what we fetched. Set-ConstructInstalledMarker writes the (repo, ref,
-    # commit) tuple atomically: on a failed SHA lookup it PRESERVES the prior marker
-    # (it does not blank installedCommit), so a transient GitHub blip during an update
-    # can't hide the panel's update banner.
-    if (Get-Command Set-ConstructInstalledMarker -ErrorAction SilentlyContinue) {
-        $sha = Set-ConstructInstalledMarker -Root $root.FullName -Repo $Repo -Ref $Ref
-        Write-Host "==> Updated Construct files in $($root.FullName)" -ForegroundColor Green
-        if ($sha) { Write-Host "    installed commit: $sha" -ForegroundColor DarkGray }
-    } else {
-        Write-Warning "Refreshed the files but couldn't record the update marker (helpers unavailable)."
-    }
-
     # Reinstall the control-panel extension (repackage + code --install-extension). Both a
     # MISSING helper (the dot-source above failed) and a falsey return are real failures -
     # otherwise the panel would reload into the OLD panel thinking the update succeeded.
@@ -71,6 +59,20 @@ try {
     }
     if (-not [bool](Install-ControlPanelExtension -SourceRoot $root.FullName)) {
         throw "The control-panel extension didn't install."
+    }
+
+    # Record what we fetched - AFTER the extension install: open VS Code windows watch
+    # this marker and reload themselves when installedCommit changes, so it must only
+    # change once the new panel is really installed. Set-ConstructInstalledMarker writes
+    # the (repo, ref, commit) tuple atomically: on a failed SHA lookup it PRESERVES the
+    # prior marker (it does not blank installedCommit), so a transient GitHub blip during
+    # an update can't hide the panel's update banner.
+    if (Get-Command Set-ConstructInstalledMarker -ErrorAction SilentlyContinue) {
+        $sha = Set-ConstructInstalledMarker -Root $root.FullName -Repo $Repo -Ref $Ref
+        Write-Host "==> Updated Construct files in $($root.FullName)" -ForegroundColor Green
+        if ($sha) { Write-Host "    installed commit: $sha" -ForegroundColor DarkGray }
+    } else {
+        Write-Warning "Refreshed the files but couldn't record the update marker (helpers unavailable)."
     }
     $ok = $true
 } catch {
@@ -85,9 +87,10 @@ if ($ResultFile) {
 Write-Host ""
 if ($ok) {
     if ($ResultFile) {
-        # The panel is polling; it will reload this window. No pause - the reload is the
-        # feedback (and the window closes because it's launched without -NoExit).
-        Write-Host "Update complete - reloading VS Code to load the refreshed panel..." -ForegroundColor Green
+        # Launched by the VS Code panel or the T3 Code Desktop app: no pause, the console
+        # closes by itself (it's launched without -NoExit). Open VS Code windows reload
+        # on their own once they see the new install marker.
+        Write-Host "Update complete. Open VS Code windows reload the refreshed panel automatically." -ForegroundColor Green
     } else {
         Write-Host "Update complete. Reload/restart VS Code to pick up the refreshed panel." -ForegroundColor Cyan
         if (-not [Console]::IsInputRedirected) { Read-Host "Press Enter to close" | Out-Null }

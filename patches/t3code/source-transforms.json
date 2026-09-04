@@ -1,0 +1,515 @@
+{
+  "version": 2,
+  "overlays": [
+    "apps/desktop/src/updates/ConstructUpdates.test.ts",
+    "apps/desktop/src/updates/ConstructUpdates.ts",
+    "apps/server/src/publicBaseUrl.test.ts",
+    "apps/server/src/publicBaseUrl.ts",
+    "apps/server/src/voiceInput.test.ts",
+    "apps/server/src/voiceInput.ts",
+    "apps/web/src/components/ConstructUpdateNotification.tsx",
+    "apps/web/src/components/constructUpdate.logic.test.ts",
+    "apps/web/src/components/constructUpdate.logic.ts",
+    "apps/web/src/components/constructUpdate.ts",
+    "apps/web/src/components/settings/ConstructProviderRow.tsx",
+    "apps/web/src/state/voiceInput.ts",
+    "apps/web/src/voice/clientAudioCapture.test.ts",
+    "apps/web/src/voice/clientAudioCapture.ts",
+    "apps/web/src/voice/voiceAudioSender.test.ts",
+    "apps/web/src/voice/voiceAudioSender.ts",
+    "apps/web/src/voice/voiceInputFailure.test.ts",
+    "apps/web/src/voice/voiceInputFailure.ts",
+    "packages/contracts/src/voiceInput.test.ts",
+    "packages/contracts/src/voiceInput.ts",
+    "packages/contracts/src/constructDiskSpace.ts",
+    "apps/server/src/constructDiskSpace.ts",
+    "apps/server/src/constructDiskSpace.test.ts",
+    "apps/web/src/state/constructDiskSpace.ts",
+    "apps/web/src/components/constructDiskSpace.logic.ts",
+    "apps/web/src/components/constructDiskSpace.logic.test.ts",
+    "apps/web/src/components/ConstructDiskSpaceNotification.tsx"
+  ],
+  "transforms": [
+    {
+      "path": "apps/desktop/src/electron/ElectronProtocol.test.ts",
+      "find": "            \"script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://clerk.t3.codes https://challenges.cloudflare.com\",",
+      "replace": "            \"script-src 'self' 'unsafe-inline' blob: 'wasm-unsafe-eval' https://clerk.t3.codes https://challenges.cloudflare.com\",",
+      "optional": true
+    },
+    {
+      "path": "apps/desktop/src/electron/ElectronProtocol.test.ts",
+      "find": "    assert.deepEqual(directives[\"script-src\"], [\n      \"'self'\",\n      \"'unsafe-inline'\",",
+      "replace": "    // blob: is required for the voice-input AudioWorklet module, which the\n    // renderer builds at runtime; worklet fetches go through script-src.\n    assert.deepEqual(directives[\"script-src\"], [\n      \"'self'\",\n      \"'unsafe-inline'\",\n      \"blob:\",",
+      "optional": true
+    },
+    {
+      "path": "apps/desktop/src/electron/ElectronProtocol.ts",
+      "after": "\"'unsafe-inline'\",",
+      "insert": "    // Voice input's AudioWorklet module is a Blob URL built in the renderer.\n    // Worklet module fetches are checked against script-src, not worker-src.\n    \"blob:\",\n"
+    },
+    {
+      "path": "apps/desktop/src/settings/DesktopClientSettings.test.ts",
+      "after": "timestampFormat: \"24-hour\",",
+      "insert": "  voiceInputSource: \"auto\",\n",
+      "optional": true
+    },
+    {
+      "path": "apps/desktop/src/updates/DesktopUpdates.test.ts",
+      "before": "import { assert, describe, it } from \"@effect/vitest\";",
+      "insert": "// @effect-diagnostics nodeBuiltinImport:off - the Construct-build cases lay out a fake\n// %LOCALAPPDATA%\\The-Construct install on disk for the updater to read.\n",
+      "optional": true
+    },
+    {
+      "path": "apps/desktop/src/updates/DesktopUpdates.test.ts",
+      "after": "import * as TestClock from \"effect/testing/TestClock\";",
+      "insert": "import * as NodeFS from \"node:fs\";\nimport * as NodeOS from \"node:os\";\nimport * as NodePath from \"node:path\";\n",
+      "optional": true
+    },
+    {
+      "path": "apps/desktop/src/updates/DesktopUpdates.test.ts",
+      "after": "readonly env?: Record<string, string | undefined>;",
+      "insert": "  /** Construct builds carry `<t3 version>-construct.<hash>`; the default is a stock build. */\n  readonly appVersion?: string;\n",
+      "optional": true
+    },
+    {
+      "path": "apps/desktop/src/updates/DesktopUpdates.test.ts",
+      "find": "    appVersion: \"1.2.3\",",
+      "replace": "    appVersion: options.appVersion ?? \"1.2.3\",",
+      "optional": true
+    },
+    {
+      "path": "apps/desktop/src/updates/DesktopUpdates.test.ts",
+      "before": "describe(\"DesktopUpdates\", () => {",
+      "insert": "/** A fake %LOCALAPPDATA% holding one extracted Construct repo whose markers say the VM\n *  was provisioned with an OLDER Construct than the one installed on this PC. */\nfunction makeConstructInstall(): string {\n  const localAppData = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), \"t3-construct-updates-\"));\n  const scriptsDir = NodePath.join(\n    localAppData,\n    \"The-Construct\",\n    \"permissionBRICK-The-Construct-main\",\n    \"The-Construct-main\",\n  );\n  NodeFS.mkdirSync(scriptsDir, { recursive: true });\n  NodeFS.writeFileSync(NodePath.join(scriptsDir, \"Auto-Install.ps1\"), \"# marker\\n\");\n  NodeFS.writeFileSync(NodePath.join(scriptsDir, \"Update-T3Code.ps1\"), \"# reprovision\\n\");\n  NodeFS.writeFileSync(\n    NodePath.join(scriptsDir, \".construct-settings.json\"),\n    \"\\uFEFF\" +\n      JSON.stringify({\n        installedCommit: \"dc44958114c7c43145c8f7830f6185235a1d752b\",\n        provisionedCommit: \"b262652aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n      }),\n  );\n  return localAppData;\n}\n\ndescribe(\"DesktopUpdates (Construct builds)\", () => {\n  it.effect(\"seeds the Construct facts from the local markers at configure time\", () =>\n    Effect.gen(function* () {\n      const localAppData = makeConstructInstall();\n      const harness = makeHarness({\n        appVersion: \"0.0.38-construct.bb8cb346\",\n        env: { LOCALAPPDATA: localAppData },\n      });\n      yield* Effect.gen(function* () {\n        const updates = yield* DesktopUpdates.DesktopUpdates;\n        yield* Effect.scoped(updates.configure);\n        const state = yield* updates.getState;\n        assert.isTrue(state.enabled);\n        assert.equal(state.status, \"available\");\n        assert.equal(state.channel, \"latest\");\n        assert.isDefined(state.construct);\n        assert.equal(state.construct?.installedCommit, \"dc44958114c7c43145c8f7830f6185235a1d752b\");\n        assert.isTrue(state.construct?.provisionStale);\n        assert.equal(state.construct?.action, \"reprovision\");\n        assert.equal(state.construct?.vmName, \"agent-vm\");\n        // electron-updater never ran an update check.\n        assert.equal(harness.checkCount(), 0);\n        // The channel preference cannot be changed on a Construct build.\n        const afterChannel = yield* updates.setChannel(\"nightly\");\n        assert.equal(afterChannel.channel, \"latest\");\n      }).pipe(Effect.provide(harness.layer));\n      NodeFS.rmSync(localAppData, { recursive: true, force: true });\n    }),\n  );\n\n  it.effect(\"keeps the facts but launches nothing while auto-updates are disabled\", () =>\n    Effect.gen(function* () {\n      const localAppData = makeConstructInstall();\n      const harness = makeHarness({\n        appVersion: \"0.0.38-construct.bb8cb346\",\n        env: { LOCALAPPDATA: localAppData, T3CODE_DISABLE_AUTO_UPDATE: \"true\" },\n      });\n      yield* Effect.gen(function* () {\n        const updates = yield* DesktopUpdates.DesktopUpdates;\n        yield* Effect.scoped(updates.configure);\n        const state = yield* updates.getState;\n        assert.isFalse(state.enabled);\n        assert.equal(state.status, \"disabled\");\n        assert.isTrue(state.construct?.provisionStale);\n        assert.equal(state.construct?.action, \"reprovision\");\n        assert.isTrue(Option.isSome(yield* updates.disabledReason));\n        const check = yield* updates.check(\"web-ui\");\n        assert.isFalse(check.checked);\n        const download = yield* updates.download;\n        assert.isFalse(download.completed);\n        assert.equal(download.state.status, \"disabled\");\n        assert.include(download.state.message ?? \"\", \"T3CODE_DISABLE_AUTO_UPDATE\");\n        assert.isNull(download.state.construct?.runningAction ?? null);\n      }).pipe(Effect.provide(harness.layer));\n      NodeFS.rmSync(localAppData, { recursive: true, force: true });\n    }),\n  );\n});\n",
+      "optional": true
+    },
+    {
+      "path": "apps/desktop/src/updates/updatesTestHarness.ts",
+      "after": "readonly env?: Record<string, string | undefined>;",
+      "insert": "  /** Construct builds carry `<t3 version>-construct.<hash>`; the default is a stock build. */\n  readonly appVersion?: string;\n",
+      "optional": true
+    },
+    {
+      "path": "apps/desktop/src/updates/updatesTestHarness.ts",
+      "find": "    appVersion: \"1.2.3\",",
+      "replace": "    appVersion: options.appVersion ?? \"1.2.3\",",
+      "optional": true
+    },
+    {
+      "path": "apps/desktop/src/updates/DesktopUpdates.ts",
+      "after": "import * as Cause from \"effect/Cause\";",
+      "insert": "import type { ConstructUpdateAction, ConstructUpdateInfo } from \"@t3tools/contracts\";\n"
+    },
+    {
+      "path": "apps/desktop/src/updates/DesktopUpdates.ts",
+      "after": "import * as Cause from \"effect/Cause\";",
+      "insert": "import * as Config from \"effect/Config\";\n"
+    },
+    {
+      "path": "apps/desktop/src/updates/DesktopUpdates.ts",
+      "after": "import * as Scope from \"effect/Scope\";",
+      "insert": "import * as Semaphore from \"effect/Semaphore\";\n"
+    },
+    {
+      "path": "apps/desktop/src/updates/DesktopUpdates.ts",
+      "after": "import * as DesktopAppSettings from \"../settings/DesktopAppSettings.ts\";",
+      "insert": "import * as ConstructUpdates from \"./ConstructUpdates.ts\";\n"
+    },
+    {
+      "path": "apps/desktop/src/updates/DesktopUpdates.ts",
+      "after": "const AUTO_UPDATE_POLL_INTERVAL = \"4 minutes\";",
+      "insert": "// Construct-built Desktop apps (see ConstructUpdates.ts) replace electron-updater with\n// checks against Construct's GitHub ref + the T3 npm channel. GitHub allows 60\n// unauthenticated requests/hour per IP and the VS Code control panel polls too, so\n// the full check runs rarely; while a launched script runs only the local markers\n// are re-read, and the script's exit triggers the next full check.\nconst CONSTRUCT_POLL_INTERVAL = \"10 minutes\";\nconst CONSTRUCT_RUNNING_REFRESH_INTERVAL = \"15 seconds\";\nconst CONSTRUCT_DISABLED_BY_ENV_REASON =\n  \"Construct-managed updates are disabled by the T3CODE_DISABLE_AUTO_UPDATE setting.\";\n"
+    },
+    {
+      "path": "apps/desktop/src/updates/DesktopUpdates.ts",
+      "before": "const readAppUpdateYml = fileSystem.readFileString(environment.appUpdateYmlPath, \"utf-8\").pipe(",
+      "insert": "  // ── Construct-managed updates ──────────────────────────────────────────────\n  const constructManaged = ConstructUpdates.isConstructManagedBuild(environment.appVersion);\n  const constructDisabledReason = config.disableAutoUpdate\n    ? Option.some(CONSTRUCT_DISABLED_BY_ENV_REASON)\n    : Option.none<string>();\n  const constructEnabled = constructManaged && Option.isNone(constructDisabledReason);\n  const constructLocalAppData = yield* Config.string(\"LOCALAPPDATA\").pipe(\n    Config.option,\n    Effect.orElseSucceed(() => Option.none<string>()),\n    Effect.map(Option.getOrUndefined),\n  );\n  // The T3 channel of a Construct build is fixed by the VM's T3CODE_CHANNEL that built\n  // it, so the state reports the channel derived from the build version; the desktop\n  // updateChannel preference is not consulted (and setChannel is a no-op).\n  const constructChannel = ConstructUpdates.resolveConstructT3Channel(\n    ConstructUpdates.constructT3BaseVersion(environment.appVersion),\n  );\n  const constructInfoRef = yield* Ref.make<ConstructUpdateInfo | null>(null);\n  const constructRunningRef = yield* Ref.make<ConstructUpdateAction | null>(null);\n  // One refresh or launch at a time: a poll that read the markers before a launch must\n  // not publish its stale snapshot over the running state, and the script-exit refresh\n  // must not interleave with a scheduled one.\n  const constructMutex = yield* Semaphore.make(1);\n  const constructContext = yield* Effect.context<never>();\n  const runConstructEffect = (effect: Effect.Effect<void>) => {\n    void Effect.runPromiseWith(constructContext)(effect);\n  };\n\n  /** Re-read the Construct markers on this PC and (in \"full\" mode) ask GitHub + npm,\n   *  then fold the result into the broadcast state. Never fails. */\n  const refreshConstruct = Effect.fn(\"desktop.updates.construct.refresh\")(function* (\n    reason: string,\n    mode: \"full\" | \"local\",\n  ) {\n    yield* Effect.annotateCurrentSpan({ reason, mode });\n    return yield* constructMutex.withPermits(1)(refreshConstructLocked(reason, mode));\n  });\n\n  const refreshConstructLocked = Effect.fn(\"desktop.updates.construct.refreshLocked\")(function* (\n    reason: string,\n    mode: \"full\" | \"local\",\n  ) {\n    const previous = yield* Ref.get(constructInfoRef);\n    const runningAction = yield* Ref.get(constructRunningRef);\n    const checkedAt = yield* currentIsoTimestamp;\n    if (mode === \"full\") {\n      yield* updateState((current) => reduceDesktopUpdateStateOnCheckStart(current, checkedAt));\n    }\n    const info = yield* Effect.promise(() =>\n      ConstructUpdates.checkConstructUpdates({\n        appVersion: environment.appVersion,\n        localAppData: constructLocalAppData,\n        fs: ConstructUpdates.nodeConstructFileSystem,\n        ...(mode === \"full\" ? { fetchJson: ConstructUpdates.fetchConstructJson } : {}),\n        previous,\n        runningAction,\n        now: () => checkedAt,\n      }),\n    );\n    // A script finished (or was launched) while the check was in flight: its own\n    // handler publishes the authoritative state; this snapshot is stale.\n    if ((yield* Ref.get(constructRunningRef)) !== runningAction) {\n      yield* logUpdaterInfo(\"construct update check superseded\", { reason, mode });\n      return previous ?? info;\n    }\n    yield* Ref.set(constructInfoRef, info);\n    // With T3CODE_DISABLE_AUTO_UPDATE the Construct facts are still published (the\n    // Providers entry and the read-only update track need them) but the control stays\n    // disabled and nothing is offered.\n    yield* updateState((current) => ({\n      ...ConstructUpdates.applyConstructInfoToState(current, info),\n      channel: constructChannel,\n      ...(constructEnabled ? {} : { enabled: false, status: \"disabled\" as const }),\n    }));\n    yield* logUpdaterInfo(\"construct update check\", {\n      reason,\n      mode,\n      action: info.action,\n      runningAction: info.runningAction,\n      installedCommit: info.installedCommit,\n      provisionedCommit: info.provisionedCommit,\n      behind: info.behind,\n      t3LatestVersion: info.t3LatestVersion,\n      error: info.error,\n    });\n    return info;\n  });\n\n  const handleConstructExit = Effect.fn(\"desktop.updates.construct.exit\")(function* (\n    action: ConstructUpdateAction,\n    result: { readonly code: number | null; readonly error: string | null },\n  ) {\n    yield* Ref.set(constructRunningRef, null);\n    yield* finishUpdateAction(\"download\");\n    yield* logUpdaterInfo(\"construct script finished\", {\n      action,\n      code: result.code,\n      error: result.error,\n    });\n    const info = yield* refreshConstruct(\"script-exit\", \"full\");\n    if (result.error === null && (result.code === null || result.code === 0)) return;\n    // Update-T3Code.ps1 exits 1 when provisioning failed and 3 when it finished with\n    // optional errors (the provisioner's own codes); Update-Construct.ps1 exits 1.\n    const message =\n      result.error ??\n      (result.code === 3\n        ? `${ConstructUpdates.constructScriptFileName(action)} finished with optional errors (exit code 3). See its console output for details.`\n        : `${ConstructUpdates.constructScriptFileName(action)} exited with code ${result.code}. See its console output for details.`);\n    const failed: ConstructUpdateInfo = {\n      ...info,\n      error: info.error === null ? message : `${message} ${info.error}`,\n    };\n    yield* Ref.set(constructInfoRef, failed);\n    yield* updateState((current) => ({\n      ...ConstructUpdates.applyConstructInfoToState(current, failed),\n      message,\n      errorContext: \"download\",\n      canRetry: true,\n    }));\n    yield* logUpdaterError(message, { action, code: result.code });\n  });\n\n  /** Re-read the local markers every few seconds while a script runs, so the state\n   *  follows Update-Construct.ps1 (installedCommit moves) / the provisioner\n   *  (provisionedCommit moves) without waiting for the console to close. */\n  const watchConstructRun = Effect.gen(function* () {\n    while (true) {\n      yield* Effect.sleep(CONSTRUCT_RUNNING_REFRESH_INTERVAL);\n      if ((yield* Ref.get(constructRunningRef)) === null) return;\n      yield* refreshConstruct(\"script-running\", \"local\");\n    }\n  }).pipe(\n    Effect.catchCause((cause) =>\n      Cause.hasInterruptsOnly(cause)\n        ? Effect.void\n        : logUpdaterWarning(\"construct run watcher failed\", { cause: Cause.pretty(cause) }),\n    ),\n    Effect.withSpan(\"desktop.updates.construct.watchRun\"),\n  );\n\n  /** The update control was clicked: run the script the last check offered. */\n  const launchConstruct = Effect.fn(\"desktop.updates.construct.launch\")(function* () {\n    return yield* constructMutex.withPermits(1)(launchConstructLocked());\n  });\n\n  const launchConstructLocked = Effect.fn(\"desktop.updates.construct.launchLocked\")(function* () {\n    const info = yield* Ref.get(constructInfoRef);\n    if (info === null || info.action === null || info.runningAction !== null) {\n      return { accepted: false, completed: false };\n    }\n    if (!constructEnabled) {\n      // The renderer gates its controls on `enabled`; a call that still gets here\n      // (an older web client) is answered with the reason, never with a launch.\n      yield* updateState((current) => ({\n        ...current,\n        message: CONSTRUCT_DISABLED_BY_ENV_REASON,\n        errorContext: \"download\",\n      }));\n      return { accepted: true, completed: false };\n    }\n    if (!(yield* tryStartUpdateAction(\"download\"))) {\n      return { accepted: false, completed: false };\n    }\n    const action = info.action;\n    // Re-read the registry now: the target VM is what Update-T3Code.ps1 is told to\n    // reprovision, and it must match what the check displayed a moment ago.\n    const target = ConstructUpdates.readConstructVmTargetFromRegistry(\n      constructLocalAppData,\n      ConstructUpdates.nodeConstructFileSystem,\n    );\n    const planned = ConstructUpdates.planConstructLaunch(\n      action,\n      info,\n      target,\n      environment.platform,\n      ConstructUpdates.nodeConstructFileSystem,\n    );\n    if (!planned.ok) {\n      yield* finishUpdateAction(\"download\");\n      const failed: ConstructUpdateInfo = { ...info, error: planned.error };\n      yield* Ref.set(constructInfoRef, failed);\n      yield* updateState((current) => ({\n        ...ConstructUpdates.applyConstructInfoToState(current, failed),\n        message: planned.error,\n        errorContext: \"download\",\n        canRetry: true,\n      }));\n      yield* logUpdaterError(planned.error, { action });\n      return { accepted: true, completed: false };\n    }\n    yield* Ref.set(constructRunningRef, action);\n    const running: ConstructUpdateInfo = { ...info, runningAction: action, error: null };\n    yield* Ref.set(constructInfoRef, running);\n    yield* updateState((current) => ConstructUpdates.applyConstructInfoToState(current, running));\n    const handle = ConstructUpdates.spawnConstructLaunch(planned.plan, (result) => {\n      runConstructEffect(\n        handleConstructExit(action, result).pipe(\n          Effect.catchCause((cause) =>\n            Cause.hasInterruptsOnly(cause)\n              ? Effect.void\n              : logUpdaterError(\"construct script exit handling failed\", {\n                  cause: Cause.pretty(cause),\n                }),\n          ),\n        ),\n      );\n    });\n    if (handle !== null) {\n      yield* logUpdaterInfo(\"launched construct script\", {\n        action,\n        scriptPath: planned.plan.scriptPath,\n        target: target.isDefault\n          ? \"default\"\n          : `${target.name} (${target.vmHost}:${target.sshPort})`,\n        pid: handle.pid ?? null,\n      });\n      runConstructEffect(watchConstructRun);\n    }\n    return { accepted: true, completed: false };\n  });\n\n  const startConstructPollers: Effect.Effect<void, never, Scope.Scope> = Effect.gen(function* () {\n    const poll = (reason: string) =>\n      Ref.get(constructRunningRef).pipe(\n        Effect.flatMap((running) => refreshConstruct(reason, running === null ? \"full\" : \"local\")),\n        Effect.asVoid,\n      );\n    yield* Effect.sleep(AUTO_UPDATE_STARTUP_DELAY).pipe(\n      Effect.andThen(poll(\"startup\")),\n      Effect.catchCause((cause) => {\n        if (Cause.hasInterruptsOnly(cause)) {\n          return Effect.void;\n        }\n        const error = new DesktopUpdatePollerError({ poller: \"startup\", cause });\n        return logUpdaterError(error.message, { errorTag: error._tag, poller: error.poller });\n      }),\n      Effect.forkScoped,\n    );\n    yield* Effect.sleep(CONSTRUCT_POLL_INTERVAL).pipe(\n      Effect.andThen(poll(\"poll\")),\n      Effect.forever,\n      Effect.catchCause((cause) => {\n        if (Cause.hasInterruptsOnly(cause)) {\n          return Effect.void;\n        }\n        const error = new DesktopUpdatePollerError({ poller: \"poll\", cause });\n        return logUpdaterError(error.message, { errorTag: error._tag, poller: error.poller });\n      }),\n      Effect.forkScoped,\n    );\n  }).pipe(Effect.withSpan(\"desktop.updates.construct.startPollers\"));\n\n"
+    },
+    {
+      "path": "apps/desktop/src/updates/DesktopUpdates.ts",
+      "find": "    disabledReason: resolveDisabledReason,",
+      "replace": "    disabledReason: constructManaged\n      ? Effect.succeed(constructDisabledReason)\n      : resolveDisabledReason,"
+    },
+    {
+      "path": "apps/desktop/src/updates/DesktopUpdates.ts",
+      "after": "const settings = yield* desktopSettings.get;",
+      "insert": "      if (constructManaged) {\n        yield* setState(createBaseUpdateState(constructChannel, constructEnabled, environment));\n        // Seed the Construct facts from the local markers/registry right away (no\n        // network): the renderer's first read must already know this is a Construct\n        // build, whether or not the remote checks are enabled.\n        yield* refreshConstruct(\"configure\", \"local\");\n        if (!constructEnabled) {\n          return;\n        }\n        yield* logUpdaterInfo(\"construct-managed updates enabled\", {\n          appVersion: environment.appVersion,\n        });\n        yield* startConstructPollers;\n        return;\n      }\n"
+    },
+    {
+      "path": "apps/desktop/src/updates/DesktopUpdates.ts",
+      "after": "return state;\n}",
+      "insert": "        if (constructManaged) {\n          // The channel is decided by the VM's T3CODE_CHANNEL (Construct control panel);\n          // the About section hides the selector for Construct builds.\n          return state;\n        }\n"
+    },
+    {
+      "path": "apps/desktop/src/updates/DesktopUpdates.ts",
+      "after": "check: Effect.fn(\"desktop.updates.check\")(function* (reason: string) {\nyield* Effect.annotateCurrentSpan({ reason });",
+      "insert": "      if (constructManaged) {\n        if (!constructEnabled) {\n          return { checked: false, state: yield* Ref.get(updateStateRef) };\n        }\n        if ((yield* Ref.get(constructRunningRef)) !== null) {\n          // A launched script is running: its exit triggers the full check.\n          yield* refreshConstruct(reason, \"local\");\n          return { checked: true, state: yield* Ref.get(updateStateRef) };\n        }\n        if (yield* tryStartUpdateAction(\"check\")) {\n          yield* refreshConstruct(reason, \"full\").pipe(\n            Effect.ensuring(finishUpdateAction(\"check\")),\n          );\n        }\n        return { checked: true, state: yield* Ref.get(updateStateRef) };\n      }\n"
+    },
+    {
+      "path": "apps/desktop/src/updates/DesktopUpdates.ts",
+      "find": "      const result = yield* downloadAvailableUpdate;",
+      "replace": "      const result = constructManaged ? yield* launchConstruct() : yield* downloadAvailableUpdate;"
+    },
+    {
+      "path": "apps/desktop/src/updates/DesktopUpdates.ts",
+      "find": "      if (yield* Ref.get(desktopState.quitting)) {",
+      "replace": "      if (constructManaged || (yield* Ref.get(desktopState.quitting))) {"
+    },
+    {
+      "path": "apps/server/package.json",
+      "after": "\"node-pty\": \"^1.1.0\",",
+      "insert": "    \"ws\": \"^8.18.3\",\n"
+    },
+    {
+      "path": "apps/server/package.json",
+      "after": "\"@types/node\": \"catalog:\",",
+      "insert": "    \"@types/ws\": \"^8.18.1\",\n"
+    },
+    {
+      "path": "apps/server/src/auth/RpcAuthorization.ts",
+      "after": "[WS_METHODS.serverUpdateServerWithProgress]: AuthOrchestrationOperateScope,",
+      "insert": "  [WS_METHODS.voiceInputStart]: AuthOrchestrationOperateScope,\n  [WS_METHODS.voiceInputStop]: AuthOrchestrationOperateScope,\n  [WS_METHODS.voiceInputAudio]: AuthOrchestrationOperateScope,\n"
+    },
+    {
+      "path": "apps/server/src/auth/RpcAuthorization.ts",
+      "after": "[WS_METHODS.serverUpdateServerWithProgress]: AuthOrchestrationOperateScope,",
+      "insert": "  [WS_METHODS.constructDiskSpace]: AuthOrchestrationReadScope,\n"
+    },
+    {
+      "path": "apps/server/src/cli/auth.ts",
+      "after": "import * as ServerConfig from \"../config.ts\";",
+      "insert": "import { publicBaseUrlOrigin } from \"../publicBaseUrl.ts\";\n"
+    },
+    {
+      "path": "apps/server/src/cli/auth.ts",
+      "find": "          const output = formatIssuedPairingCredential(issued, {\n            json: flags.json,\n            ...(Option.isSome(flags.baseUrl) ? { baseUrl: flags.baseUrl.value } : {}),",
+      "replace": "          // An explicit --base-url still wins; otherwise fall back to the\n          // public origin Construct's TLS proxy publishes, when it set one.\n          const baseUrl = Option.isSome(flags.baseUrl)\n            ? flags.baseUrl.value\n            : publicBaseUrlOrigin();\n          const output = formatIssuedPairingCredential(issued, {\n            json: flags.json,\n            ...(baseUrl === undefined ? {} : { baseUrl }),"
+    },
+    {
+      "path": "apps/server/src/cli/pair.ts",
+      "after": "} from \"../startupAccess.ts\";",
+      "insert": "import { publicBaseUrlOrigin } from \"../publicBaseUrl.ts\";\n"
+    },
+    {
+      "path": "apps/server/src/cli/pair.ts",
+      "find": "export const resolveDirectPairingBaseUrl = (state: PersistedServerRuntimeState): string =>\n  state.devUrl ?? resolveHeadlessConnectionString(state.host, state.port);",
+      "replace": "export const resolveDirectPairingBaseUrl = (\n  state: PersistedServerRuntimeState,\n  /** The origin a TLS proxy publishes for this server, when Construct set one. */\n  publicBaseUrl?: string | undefined,\n): string =>\n  state.devUrl ?? publicBaseUrl ?? resolveHeadlessConnectionString(state.host, state.port);"
+    },
+    {
+      "path": "apps/server/src/cli/pair.ts",
+      "find": "        pairingBaseUrl = resolveDirectPairingBaseUrl(target.state);",
+      "replace": "        pairingBaseUrl = resolveDirectPairingBaseUrl(target.state, publicBaseUrlOrigin());"
+    },
+    {
+      "path": "apps/server/src/environment/ServerEnvironment.ts",
+      "after": "threadTitleRegeneration: true,",
+      "insert": "      voiceInput: process.env.CONSTRUCT_T3_VOICE_INPUT === \"true\",\n      voiceInputClientAudio: true,\n"
+    },
+    {
+      "path": "apps/server/src/environment/ServerEnvironment.ts",
+      "after": "threadTitleRegeneration: true,",
+      "insert": "      constructDiskSpace: true,\n"
+    },
+    {
+      "path": "apps/server/src/serverRuntimeStartup.ts",
+      "after": "} from \"./startupAccess.ts\";",
+      "insert": "import { readPublicBaseUrl } from \"./publicBaseUrl.ts\";\n"
+    },
+    {
+      "path": "apps/server/src/serverRuntimeStartup.ts",
+      "find": "  const baseTarget = serverConfig.devUrl?.toString() ?? bindUrl;",
+      "replace": "  // The desktop app loads its own UI, so only served modes follow the public\n  // origin a TLS proxy publishes on this server's behalf.\n  const publicBaseUrl = yield* resolvePublicBaseUrlForServing(serverConfig.mode);\n  const baseTarget = serverConfig.devUrl?.toString() ?? publicBaseUrl ?? bindUrl;"
+    },
+    {
+      "path": "apps/server/src/serverRuntimeStartup.ts",
+      "before": "const maybeOpenBrowser = (target: string) =>",
+      "insert": "/**\n * Resolves `T3CODE_PUBLIC_BASE_URL` for a served runtime, warning instead of\n * silently falling back when it is set to something unusable.\n */\nconst resolvePublicBaseUrlForServing = Effect.fn(\"server.startup.publicBaseUrl\")(function* (\n  mode: ServerConfig.RuntimeMode,\n) {\n  if (mode === \"desktop\") return undefined;\n  const setting = readPublicBaseUrl();\n  if (setting.kind === \"invalid\") {\n    yield* Effect.logWarning(\n      \"Ignoring T3CODE_PUBLIC_BASE_URL: it is not an http(s) URL. Using the bind address instead.\",\n    ).pipe(Effect.annotateLogs({ publicBaseUrl: setting.raw }));\n    return undefined;\n  }\n  return setting.kind === \"ok\" ? setting.origin : undefined;\n});\n\n"
+    },
+    {
+      "path": "apps/server/src/startupAccess.ts",
+      "after": "import * as EnvironmentAuth from \"./auth/EnvironmentAuth.ts\";",
+      "insert": "import { publicBaseUrlOrigin } from \"./publicBaseUrl.ts\";\n"
+    },
+    {
+      "path": "apps/server/src/startupAccess.ts",
+      "scope": "export const resolveHeadlessConnectionString = (",
+      "find": "): string => {",
+      "replace": "  /** The origin a TLS proxy publishes for this server, when Construct set one. */\n  publicBaseUrl?: string | undefined,\n): string => {\n  if (publicBaseUrl) {\n    return publicBaseUrl;\n  }"
+    },
+    {
+      "path": "apps/server/src/startupAccess.ts",
+      "after": "resolveListeningPort(httpServer.address, serverConfig.port),",
+      "insert": "    NodeOS.networkInterfaces(),\n    publicBaseUrlOrigin(),\n"
+    },
+    {
+      "path": "apps/server/src/ws.ts",
+      "after": "import * as SessionStore from \"./auth/SessionStore.ts\";",
+      "insert": "import { pushVoiceAudio, startVoiceInput, stopVoiceInput } from \"./voiceInput.ts\";\n"
+    },
+    {
+      "path": "apps/server/src/ws.ts",
+      "before": "[WS_METHODS.serverUpsertKeybinding]: (rule) =>",
+      "insert": "        [WS_METHODS.voiceInputStart]: (input) =>\n          observeRpcStream(\n            WS_METHODS.voiceInputStart,\n            startVoiceInput(input.sessionId, input.source),\n            { \"rpc.aggregate\": \"voice-input\" },\n          ),\n        [WS_METHODS.voiceInputStop]: (input) =>\n          observeRpcEffect(WS_METHODS.voiceInputStop, stopVoiceInput(input.sessionId), {\n            \"rpc.aggregate\": \"voice-input\",\n          }),\n        [WS_METHODS.voiceInputAudio]: (input) =>\n          observeRpcEffect(\n            WS_METHODS.voiceInputAudio,\n            pushVoiceAudio(input.sessionId, input.chunk),\n            { \"rpc.aggregate\": \"voice-input\" },\n          ),\n"
+    },
+    {
+      "path": "apps/server/src/ws.ts",
+      "after": "import * as SessionStore from \"./auth/SessionStore.ts\";",
+      "insert": "import { readConstructDiskSpace } from \"./constructDiskSpace.ts\";\n"
+    },
+    {
+      "path": "apps/server/src/ws.ts",
+      "before": "[WS_METHODS.serverUpsertKeybinding]: (rule) =>",
+      "insert": "        [WS_METHODS.constructDiskSpace]: (_input) =>\n          observeRpcEffect(WS_METHODS.constructDiskSpace, readConstructDiskSpace(), {\n            \"rpc.aggregate\": \"construct-disk-space\",\n          }),\n"
+    },
+    {
+      "path": "apps/web/src/components/chat/ChatComposer.tsx",
+      "after": "import { createPortal } from \"react-dom\";",
+      "insert": "import { AsyncResult } from \"effect/unstable/reactivity\";\n"
+    },
+    {
+      "path": "apps/web/src/components/chat/ChatComposer.tsx",
+      "after": [
+        "import { ComposerPromptLengthValidation } from \"./ComposerPromptLengthValidation\";",
+        "import { createPortal } from \"react-dom\";"
+      ],
+      "insert": "import { useAtomCommand } from \"../../state/use-atom-command\";\n"
+    },
+    {
+      "path": "apps/web/src/components/chat/ChatComposer.tsx",
+      "after": [
+        "import { ComposerPromptLengthValidation } from \"./ComposerPromptLengthValidation\";",
+        "import { createPortal } from \"react-dom\";"
+      ],
+      "insert": "import { MicIcon, SquareIcon } from \"lucide-react\";\nimport { useServerConfigs } from \"../../state/entities\";\nimport {\n  sendVoiceAudio as sendVoiceAudioCommand,\n  startVoiceInput as startVoiceInputCommand,\n  stopVoiceInput as stopVoiceInputCommand,\n} from \"../../state/voiceInput\";\nimport {\n  canCaptureClientAudio,\n  isSecureContext,\n  resolveVoiceInputSource,\n  startClientAudioCapture,\n  type ClientAudioCapture,\n} from \"../../voice/clientAudioCapture\";\nimport {\n  createVoiceAudioSender,\n  MAX_PENDING_VOICE_CHUNKS,\n  type VoiceAudioSender,\n} from \"../../voice/voiceAudioSender\";\nimport { describeVoiceInputFailure } from \"../../voice/voiceInputFailure\";\nimport { useClientSettings } from \"../../hooks/useSettings\";\n\n/**\n * A live voice session's insertion window plus, for client-captured audio, the\n * microphone and the sender pushing it to the server.\n */\ntype VoiceInsertionState = {\n  sessionId: string;\n  prefix: string;\n  suffix: string;\n  rendered: string;\n  lastSetInput: string;\n  source: \"client\" | \"host\";\n  capture: ClientAudioCapture | null;\n  sender: VoiceAudioSender | null;\n  /** Audio captured before the server said `listening`; flushed once it does. */\n  buffered: Array<Uint8Array>;\n  stopRequested: boolean;\n};\n\n/** Idempotent, so every path that drops a session can call it. */\nfunction releaseVoiceCapture(insertion: VoiceInsertionState | null): void {\n  if (!insertion) return;\n  insertion.capture?.stop();\n  insertion.capture = null;\n  insertion.sender?.stop();\n  insertion.sender = null;\n  insertion.buffered.length = 0;\n}\n"
+    },
+    {
+      "path": "apps/web/src/components/chat/ChatComposer.tsx",
+      "after": "const activeTaskSteps = props.threadSyncPhase === null ? props.activeTaskSteps : null;",
+      "insert": "  const serverConfigs = useServerConfigs();\n  const supportsVoiceInput =\n    serverConfigs.get(environmentId)?.environment.capabilities.voiceInput === true;\n  const supportsClientVoiceAudio =\n    serverConfigs.get(environmentId)?.environment.capabilities.voiceInputClientAudio === true;\n  const voiceInputSourcePreference = useClientSettings((settings) => settings.voiceInputSource);\n  const voiceInputSource = resolveVoiceInputSource({\n    preference: voiceInputSourcePreference,\n    canCaptureHere: canCaptureClientAudio(),\n    serverAcceptsClientAudio: supportsClientVoiceAudio,\n    secureContext: isSecureContext(),\n  });\n  const voiceSourceHint =\n    voiceInputSource.source === \"client\"\n      ? \"records with this device's microphone\"\n      : voiceInputSource.source === \"host\"\n        ? \"records through the Construct host bridge\"\n        : voiceInputSource.reason;\n  const runStartVoiceInput = useAtomCommand(startVoiceInputCommand, { reportFailure: false });\n  const runStopVoiceInput = useAtomCommand(stopVoiceInputCommand, { reportFailure: false });\n  const runSendVoiceAudio = useAtomCommand(sendVoiceAudioCommand, { reportFailure: false });\n"
+    },
+    {
+      "path": "apps/web/src/components/chat/ChatComposer.tsx",
+      "after": "const [isComposerFocused, setIsComposerFocused] = useState(false);",
+      "insert": "  const [isVoiceRecording, setIsVoiceRecording] = useState(false);\n  const [voiceLevel, setVoiceLevel] = useState(0);\n"
+    },
+    {
+      "path": "apps/web/src/components/chat/ChatComposer.tsx",
+      "after": "const composerEditorRef = useRef<ComposerPromptEditorHandle>(null);",
+      "insert": "  const voiceInsertionRef = useRef<VoiceInsertionState | null>(null);\n  const voiceShortcutRef = useRef<{ started: boolean; downAt: number } | null>(null);\n"
+    },
+    {
+      "path": "apps/web/src/components/chat/ChatComposer.tsx",
+      "after": "}, [composerCursor, composerTerminalContexts, promptRef]);",
+      "insert": "  const stopVoiceRecording = useCallback(() => {\n    setVoiceLevel(0);\n    const insertion = voiceInsertionRef.current;\n    if (!insertion) return;\n    insertion.stopRequested = true;\n    releaseVoiceCapture(insertion);\n    void runStopVoiceInput({ environmentId, sessionId: insertion.sessionId });\n  }, [environmentId, runStopVoiceInput]);\n\n  const startVoiceRecording = useCallback(() => {\n    if (!supportsVoiceInput || voiceInsertionRef.current || environmentUnavailable !== null) return;\n    if (voiceInputSource.source === null) {\n      toastManager.add({\n        type: \"error\",\n        title: \"Voice input unavailable\",\n        description: voiceInputSource.reason,\n      });\n      return;\n    }\n    const source = voiceInputSource.source;\n    const snapshot = readComposerSnapshot();\n    const sessionId = randomUUID();\n    const insertion: VoiceInsertionState = {\n      sessionId,\n      prefix: snapshot.value.slice(0, snapshot.expandedCursor),\n      suffix: snapshot.value.slice(snapshot.expandedCursor),\n      rendered: \"\",\n      lastSetInput: snapshot.value,\n      source,\n      capture: null,\n      sender: null,\n      buffered: [],\n      stopRequested: false,\n    };\n    voiceInsertionRef.current = insertion;\n    setIsVoiceRecording(true);\n    setVoiceLevel(0);\n\n    if (source === \"client\") {\n      // The permission prompt can take seconds, so the microphone comes up in\n      // parallel with the session rather than after it.\n      insertion.capture = startClientAudioCapture({\n        onChunk: (chunk) => {\n          if (voiceInsertionRef.current !== insertion) return;\n          if (insertion.sender) {\n            insertion.sender.push(chunk);\n            return;\n          }\n          // Not listening yet: keep the newest ~0.8 s so the first word\n          // survives the round trip instead of being dropped.\n          insertion.buffered.push(chunk);\n          if (insertion.buffered.length > MAX_PENDING_VOICE_CHUNKS) insertion.buffered.shift();\n        },\n        onLevel: (level) => {\n          if (voiceInsertionRef.current !== insertion) return;\n          setVoiceLevel(level);\n        },\n        onError: (message) => {\n          if (voiceInsertionRef.current !== insertion) return;\n          stopVoiceRecording();\n          toastManager.add({\n            type: \"error\",\n            title: \"Voice input stopped\",\n            description: message,\n          });\n        },\n      });\n    }\n\n    void runStartVoiceInput({\n      environmentId,\n      sessionId,\n      source,\n      onEvent: (event) => {\n        const active = voiceInsertionRef.current;\n        if (!active || active.sessionId !== sessionId) return;\n        if (event.type === \"level\") {\n          setVoiceLevel(event.value);\n          return;\n        }\n        if (event.type === \"listening\") {\n          if (active.source !== \"client\") return;\n          if (active.stopRequested) {\n            // The user stopped before the server was ready to record.\n            void runStopVoiceInput({ environmentId, sessionId });\n            return;\n          }\n          const sender = createVoiceAudioSender({\n            send: (chunk) => runSendVoiceAudio({ environmentId, sessionId, chunk }),\n          });\n          active.sender = sender;\n          for (const chunk of active.buffered) sender.push(chunk);\n          active.buffered.length = 0;\n          return;\n        }\n        if (event.type === \"stopped\") {\n          releaseVoiceCapture(active);\n          voiceInsertionRef.current = null;\n          setIsVoiceRecording(false);\n          setVoiceLevel(0);\n          return;\n        }\n        if (event.type !== \"transcript\") return;\n        // Claude's composer stops voice mode if the user edits while a partial\n        // transcript is live. That full-value guard prevents a later interim from\n        // overwriting either the original prompt or the user's new edit.\n        if (promptRef.current !== active.lastSetInput) {\n          stopVoiceRecording();\n          releaseVoiceCapture(active);\n          voiceInsertionRef.current = null;\n          setIsVoiceRecording(false);\n          return;\n        }\n        const transcript = event.text.trim();\n        const leading = transcript && active.prefix && !/\\s$/u.test(active.prefix) ? \" \" : \"\";\n        const trailing = transcript && active.suffix && !/^\\s/u.test(active.suffix) ? \" \" : \"\";\n        const rendered = transcript ? `${leading}${transcript}${trailing}` : \"\";\n        const nextInput = `${active.prefix}${rendered}${active.suffix}`;\n        const applied = applyPromptReplacement(\n          active.prefix.length,\n          active.prefix.length + active.rendered.length,\n          rendered,\n          { expectedText: active.rendered, focusEditorAfterReplace: false },\n        );\n        if (!applied) {\n          stopVoiceRecording();\n          releaseVoiceCapture(active);\n          voiceInsertionRef.current = null;\n          setIsVoiceRecording(false);\n          return;\n        }\n        active.rendered = rendered;\n        active.lastSetInput = nextInput;\n        const expandedCursor = active.prefix.length + leading.length + transcript.length;\n        const cursor = collapseExpandedComposerCursor(nextInput, expandedCursor);\n        window.requestAnimationFrame(() => composerEditorRef.current?.focusAt(cursor));\n      },\n    }).then((result) => {\n      releaseVoiceCapture(insertion);\n      const active = voiceInsertionRef.current;\n      if (active?.sessionId === sessionId) {\n        voiceInsertionRef.current = null;\n        setIsVoiceRecording(false);\n        setVoiceLevel(0);\n      }\n      if (AsyncResult.isFailure(result)) {\n        toastManager.add({\n          type: \"error\",\n          title: \"Voice input stopped\",\n          // The server names its own failures (no client audio, host bridge\n          // down, a transcription error); only unexplained ones fall back.\n          description: describeVoiceInputFailure(result.cause, source),\n        });\n      }\n    });\n  }, [\n    applyPromptReplacement,\n    environmentId,\n    environmentUnavailable,\n    promptRef,\n    readComposerSnapshot,\n    runSendVoiceAudio,\n    runStartVoiceInput,\n    runStopVoiceInput,\n    stopVoiceRecording,\n    supportsVoiceInput,\n    voiceInputSource,\n  ]);\n\n  const toggleVoiceRecording = useCallback(() => {\n    if (voiceInsertionRef.current) stopVoiceRecording();\n    else startVoiceRecording();\n  }, [startVoiceRecording, stopVoiceRecording]);\n\n  // Ctrl+T mirrors Claude's tap/hold behavior: tap once to start, tap again to\n  // stop, or hold the first press and recording stops when the key is released.\n  useEffect(() => {\n    if (!supportsVoiceInput) return;\n    const onKeyDown = (event: KeyboardEvent) => {\n      if (\n        event.repeat ||\n        event.key.toLowerCase() !== \"t\" ||\n        !event.ctrlKey ||\n        event.altKey ||\n        event.metaKey\n      )\n        return;\n      if (\n        !(event.target instanceof Element) ||\n        !event.target.closest('[data-chat-composer-form=\"true\"]')\n      )\n        return;\n      event.preventDefault();\n      const wasRecording = voiceInsertionRef.current !== null;\n      if (wasRecording) {\n        stopVoiceRecording();\n        voiceShortcutRef.current = { started: false, downAt: performance.now() };\n      } else {\n        startVoiceRecording();\n        voiceShortcutRef.current = { started: true, downAt: performance.now() };\n      }\n    };\n    const onKeyUp = (event: KeyboardEvent) => {\n      if (event.key.toLowerCase() !== \"t\" || !event.ctrlKey) return;\n      const shortcut = voiceShortcutRef.current;\n      voiceShortcutRef.current = null;\n      if (shortcut?.started && performance.now() - shortcut.downAt >= 400) stopVoiceRecording();\n    };\n    document.addEventListener(\"keydown\", onKeyDown, true);\n    document.addEventListener(\"keyup\", onKeyUp, true);\n    return () => {\n      document.removeEventListener(\"keydown\", onKeyDown, true);\n      document.removeEventListener(\"keyup\", onKeyUp, true);\n    };\n  }, [startVoiceRecording, stopVoiceRecording, supportsVoiceInput]);\n\n  useEffect(() => {\n    const active = voiceInsertionRef.current;\n    if (active && prompt !== active.lastSetInput) {\n      stopVoiceRecording();\n      releaseVoiceCapture(active);\n      voiceInsertionRef.current = null;\n      setIsVoiceRecording(false);\n      setVoiceLevel(0);\n    }\n  }, [prompt, stopVoiceRecording]);\n\n  useEffect(\n    () => () => {\n      const active = voiceInsertionRef.current;\n      if (active) {\n        releaseVoiceCapture(active);\n        void runStopVoiceInput({ environmentId, sessionId: active.sessionId });\n      }\n    },\n    [environmentId, runStopVoiceInput],\n  );\n\n"
+    },
+    {
+      "path": "apps/web/src/components/chat/ChatComposer.tsx",
+      "before": "<ComposerFooterPrimaryActions",
+      "insert": "                  {supportsVoiceInput ? (\n                    <Tooltip>\n                      <TooltipTrigger\n                        render={\n                          <button\n                            type=\"button\"\n                            className={cn(\n                              \"flex h-9 w-9 items-center justify-center rounded-full transition-[color,background-color,box-shadow,transform] duration-75 sm:h-8 sm:w-8\",\n                              isVoiceRecording\n                                ? \"bg-destructive text-white hover:bg-destructive/90\"\n                                : \"bg-secondary text-secondary-foreground hover:bg-secondary/80\",\n                            )}\n                            onPointerDown={(event) => event.preventDefault()}\n                            onClick={toggleVoiceRecording}\n                            style={\n                              isVoiceRecording\n                                ? {\n                                    transform: `scale(${1 + voiceLevel * 0.12})`,\n                                    boxShadow: `0 0 0 ${2 + voiceLevel * 7}px rgb(239 68 68 / ${0.2 + voiceLevel * 0.45})`,\n                                  }\n                                : undefined\n                            }\n                            data-voice-level={isVoiceRecording ? voiceLevel.toFixed(3) : undefined}\n                            disabled={environmentUnavailable !== null || isConnecting}\n                            aria-pressed={isVoiceRecording}\n                            aria-label={isVoiceRecording ? \"Stop voice input\" : \"Start voice input\"}\n                          />\n                        }\n                      >\n                        {isVoiceRecording ? (\n                          <SquareIcon className=\"size-3.5\" fill=\"currentColor\" aria-hidden=\"true\" />\n                        ) : (\n                          <MicIcon className=\"size-4\" aria-hidden=\"true\" />\n                        )}\n                      </TooltipTrigger>\n                      <TooltipPopup side=\"top\">\n                        {`${\n                          isVoiceRecording ? \"Stop voice input\" : \"Voice input\"\n                        } (Ctrl+T) — ${voiceSourceHint}`}\n                      </TooltipPopup>\n                    </Tooltip>\n                  ) : null}\n"
+    },
+    {
+      "path": "apps/web/src/components/desktopUpdate.logic.ts",
+      "after": "import type { DesktopUpdateActionResult, DesktopUpdateState } from \"@t3tools/contracts\";",
+      "insert": "import { getConstructUpdateInfo, getConstructUpdateTooltip } from \"./constructUpdate.logic\";\n\n"
+    },
+    {
+      "path": "apps/web/src/components/desktopUpdate.logic.ts",
+      "after": "export function getDesktopUpdateButtonTooltip(state: DesktopUpdateState): string {",
+      "insert": "  // Construct-built Desktop apps: the offer is a host script, not a download.\n  const construct = getConstructUpdateInfo(state);\n  if (construct !== null) {\n    return getConstructUpdateTooltip(construct);\n  }\n"
+    },
+    {
+      "path": "apps/web/src/components/settings/ProviderSettingsPanel.tsx",
+      "after": "import { AddProviderInstanceDialog } from \"./AddProviderInstanceDialog\";",
+      "insert": "import { ConstructProviderSection } from \"./ConstructProviderRow\";\n"
+    },
+    {
+      "path": "apps/web/src/components/settings/ProviderSettingsPanel.tsx",
+      "scope": "function ProviderSettingsPanelContent",
+      "before": "</>\n);\n}",
+      "insert": "      {/* Construct-built Desktop apps track Construct + upstream T3 Code here too. Kept\n          outside the environment sections: it describes this PC and its VM, and must stay\n          visible while that VM is offline or not yet connected. */}\n      <ConstructProviderSection />\n"
+    },
+    {
+      "path": "apps/web/src/components/settings/SettingsPanels.tsx",
+      "after": "type QuitConfirmationMode,",
+      "insert": "  VoiceInputSourcePreference,\n"
+    },
+    {
+      "path": "apps/web/src/components/settings/SettingsPanels.tsx",
+      "find": "import { useProjects } from \"../../state/entities\";",
+      "replace": "import { useProjects, useServerConfigs } from \"../../state/entities\";"
+    },
+    {
+      "path": "apps/web/src/components/settings/SettingsPanels.tsx",
+      "after": "import { formatRelativeTimeLabel } from \"../../timestampFormat\";",
+      "insert": "import { startConstructUpdate } from \"../constructUpdate\";\nimport {\n  getConstructUpdateButtonLabel,\n  getConstructUpdateDetail,\n  getConstructUpdateHeadline,\n  getConstructUpdateInfo,\n} from \"../constructUpdate.logic\";\n"
+    },
+    {
+      "path": "apps/web/src/components/settings/SettingsPanels.tsx",
+      "before": "if (action === \"download\") {",
+      "insert": "    // Construct-built Desktop apps: the offer is a host script (Update-Construct.ps1 /\n    // Update-T3Code.ps1), launched through the same IPC.\n    const constructInfo = getConstructUpdateInfo(updateState);\n    if (constructInfo !== null && action === \"download\") {\n      if (isUpdateActionPending) return;\n      setIsUpdateActionPending(true);\n      void startConstructUpdate(bridge, constructInfo).finally(() =>\n        setIsUpdateActionPending(false),\n      );\n      return;\n    }\n\n"
+    },
+    {
+      "path": "apps/web/src/components/settings/SettingsPanels.tsx",
+      "find": "  const buttonLabel =\n    actionLabel[action] ?? statusLabel[updateState?.status ?? \"\"] ?? \"Check for Updates\";\n  const description =\n    action === \"download\" || action === \"install\"\n      ? \"Update available.\"\n      : \"Current version of the application.\";",
+      "replace": "  const constructInfo = getConstructUpdateInfo(updateState);\n  const buttonLabel =\n    constructInfo !== null && updateState?.status !== \"checking\"\n      ? getConstructUpdateButtonLabel(constructInfo)\n      : (actionLabel[action] ?? statusLabel[updateState?.status ?? \"\"] ?? \"Check for Updates\");\n  const description =\n    constructInfo !== null\n      ? constructInfo.action !== null ||\n        constructInfo.runningAction !== null ||\n        constructInfo.error !== null\n        ? `${getConstructUpdateHeadline(constructInfo)}. ${getConstructUpdateDetail(constructInfo)}`\n        : \"Built by Construct from upstream T3 Code; updates arrive through Construct reprovisioning.\"\n      : action === \"download\" || action === \"install\"\n        ? \"Update available.\"\n        : \"Current version of the application.\";"
+    },
+    {
+      "path": "apps/web/src/components/settings/SettingsPanels.tsx",
+      "find": "      {hasDesktopBridge ? (",
+      "replace": "      {hasDesktopBridge && constructInfo !== null ? (\n        <SettingsRow\n          title=\"Update track\"\n          description=\"Fixed by the VM's T3 Code channel that built this app. Change it in the Construct control panel (T3 Code channel) and reprovision.\"\n          control={\n            <span className=\"text-sm text-muted-foreground\">\n              {selectedUpdateChannel === \"nightly\" ? \"Nightly\" : \"Stable\"}\n            </span>\n          }\n        />\n      ) : hasDesktopBridge ? ("
+    },
+    {
+      "path": "apps/web/src/components/settings/SettingsPanels.tsx",
+      "before": "export function GeneralSettingsPanel() {",
+      "insert": "const VOICE_INPUT_SOURCE_LABELS: Readonly<Record<VoiceInputSourcePreference, string>> = {\n  auto: \"Automatic\",\n  client: \"This device\",\n  host: \"Construct host bridge\",\n};\n\nconst isVoiceInputSourcePreference = Schema.is(VoiceInputSourcePreference);\n\n"
+    },
+    {
+      "path": "apps/web/src/components/settings/SettingsPanels.tsx",
+      "after": "export function GeneralSettingsPanel() {",
+      "insert": "  const serverConfigs = useServerConfigs();\n  // Stock T3 servers have no voice input at all, so the row would be a dead\n  // control there.\n  const showVoiceInputSource = useMemo(\n    () =>\n      [...serverConfigs.values()].some(\n        (config) => config.environment.capabilities.voiceInput === true,\n      ),\n    [serverConfigs],\n  );\n"
+    },
+    {
+      "path": "apps/web/src/components/settings/SettingsPanels.tsx",
+      "before": [
+        "<SettingsRow\n{...searchableSetting(\"provider-update-checks\")}",
+        "<SettingsRow\nserverScoped\n{...searchableSetting(\"provider-update-checks\")}"
+      ],
+      "insert": "        {showVoiceInputSource ? (\n          <SettingsRow\n            {...searchableSetting(\"voice-input-source\")}\n            description=\"Choose where voice input records. Automatic uses this device's microphone when it is available, and the Construct host bridge otherwise.\"\n            resetAction={\n              settings.voiceInputSource !== DEFAULT_UNIFIED_SETTINGS.voiceInputSource ? (\n                <SettingResetButton\n                  label=\"voice input source\"\n                  onClick={() =>\n                    updateSettings({\n                      voiceInputSource: DEFAULT_UNIFIED_SETTINGS.voiceInputSource,\n                    })\n                  }\n                />\n              ) : null\n            }\n            control={\n              <Select\n                value={settings.voiceInputSource}\n                onValueChange={(value) => {\n                  if (isVoiceInputSourcePreference(value)) {\n                    updateSettings({ voiceInputSource: value });\n                  }\n                }}\n              >\n                <SelectTrigger className=\"w-full sm:w-52\" aria-label=\"Voice input source\">\n                  <SelectValue>{VOICE_INPUT_SOURCE_LABELS[settings.voiceInputSource]}</SelectValue>\n                </SelectTrigger>\n                <SelectPopup align=\"end\" alignItemWithTrigger={false}>\n                  {Object.entries(VOICE_INPUT_SOURCE_LABELS).map(([value, label]) => (\n                    <SelectItem hideIndicator key={value} value={value}>\n                      {label}\n                    </SelectItem>\n                  ))}\n                </SelectPopup>\n              </Select>\n            }\n          />\n        ) : null}\n\n"
+    },
+    {
+      "path": "apps/web/src/components/settings/settingsSearch.ts",
+      "before": "{\nid: \"provider-update-checks\",",
+      "insert": "  {\n    id: \"voice-input-source\",\n    title: \"Voice input source\",\n    to: \"/settings/general\",\n  },\n"
+    },
+    {
+      "path": "apps/web/src/components/sidebar/SidebarUpdatePill.tsx",
+      "after": "import { useDesktopUpdateState } from \"../../state/desktopUpdate\";",
+      "insert": "import { startConstructUpdate } from \"../constructUpdate\";\nimport { getConstructUpdateInfo } from \"../constructUpdate.logic\";\n"
+    },
+    {
+      "path": "apps/web/src/components/sidebar/SidebarUpdatePill.tsx",
+      "find": "      : \"Check for updates\";",
+      "replace": "      : state?.construct\n        ? \"Check for Construct and T3 Code updates\"\n        : \"Check for updates\";"
+    },
+    {
+      "path": "apps/web/src/components/sidebar/SidebarUpdatePill.tsx",
+      "after": "setIsActionPending(true);",
+      "insert": "    // Construct-built Desktop apps: \"download\" launches the offered host script\n    // (Update-Construct.ps1 / Update-T3Code.ps1) instead of fetching an installer.\n    const constructInfo = getConstructUpdateInfo(state);\n    if (constructInfo !== null && action === \"download\") {\n      void startConstructUpdate(bridge, constructInfo).finally(() => setIsActionPending(false));\n      return;\n    }\n\n"
+    },
+    {
+      "path": "apps/web/src/routes/__root.tsx",
+      "after": "import { ConnectOnboardingDialog } from \"../components/cloud/ConnectOnboardingDialog\";",
+      "insert": "import { ConstructUpdateNotification } from \"../components/ConstructUpdateNotification\";\n"
+    },
+    {
+      "path": "apps/web/src/routes/__root.tsx",
+      "after": "{primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}",
+      "insert": "        <ConstructUpdateNotification />\n"
+    },
+    {
+      "path": "apps/web/src/routes/__root.tsx",
+      "after": "import { ConnectOnboardingDialog } from \"../components/cloud/ConnectOnboardingDialog\";",
+      "insert": "import { ConstructDiskSpaceNotification } from \"../components/ConstructDiskSpaceNotification\";\n"
+    },
+    {
+      "path": "apps/web/src/routes/__root.tsx",
+      "after": "{primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}",
+      "insert": "        <ConstructDiskSpaceNotification />\n"
+    },
+    {
+      "path": "packages/client-runtime/src/rpc/client.ts",
+      "after": "export type EnvironmentStreamCommandRpcTag =",
+      "insert": "  | typeof WS_METHODS.voiceInputStart\n"
+    },
+    {
+      "path": "packages/contracts/src/environment.ts",
+      "after": "serverSelfUpdateProgress: Schema.optionalKey(Schema.Boolean),",
+      "insert": "  /** Construct-patched servers can capture host audio through the recorder shim and\n      stream Claude's live speech transcript into a connected composer. */\n  voiceInput: Schema.optionalKey(Schema.Boolean),\n  /** Server accepts microphone audio pushed by the client over\n      `voiceInput.audio`. Absent on servers that can only record through the\n      host bridge, so clients fall back to the host source. */\n  voiceInputClientAudio: Schema.optionalKey(Schema.Boolean),\n"
+    },
+    {
+      "path": "packages/contracts/src/environment.ts",
+      "after": "serverSelfUpdateProgress: Schema.optionalKey(Schema.Boolean),",
+      "insert": "  /** Construct-patched servers answer `construct.diskSpace` (free space on the VM disk). */\n  constructDiskSpace: Schema.optionalKey(Schema.Boolean),\n"
+    },
+    {
+      "path": "packages/contracts/src/index.ts",
+      "after": "export * from \"./vcs.ts\";",
+      "insert": "export * from \"./voiceInput.ts\";\n"
+    },
+    {
+      "path": "packages/contracts/src/index.ts",
+      "after": "export * from \"./vcs.ts\";",
+      "insert": "export * from \"./constructDiskSpace.ts\";\n"
+    },
+    {
+      "path": "packages/contracts/src/ipc.ts",
+      "before": "export interface DesktopUpdateState {",
+      "insert": "/**\n * What the Construct-built Desktop app's update control does when clicked.\n *  - `update-construct`: run Update-Construct.ps1 on this PC (refreshes the\n *    Construct scripts + VS Code control panel, like the panel's own\n *    \"Update Construct\").\n *  - `reprovision`: run Update-T3Code.ps1, which reprovisions the VM with the\n *    installed Construct and rebuilds/installs the patched T3 Code.\n */\nexport type ConstructUpdateAction = \"update-construct\" | \"reprovision\";\nexport const ConstructUpdateActionSchema = Schema.Literals([\"update-construct\", \"reprovision\"]);\n\n/**\n * Construct-managed update tracking, present only in Construct-built Desktop\n * apps (`<t3 version>-construct.<hash>`). The Desktop main process reads the\n * Construct install markers on this PC (`.construct-settings.json`), compares\n * the installed Construct commit with its GitHub ref, the VM's provisioned\n * commit with the installed one, and this build's T3 base version with the\n * npm channel. Mirrors the VS Code control panel's update banner + yellow\n * Reprovision button.\n */\nexport interface ConstructUpdateInfo {\n  /** GitHub `owner/repo` the installed Construct tracks. */\n  repo: string;\n  /** Branch/ref the installed Construct tracks. */\n  ref: string;\n  /** Where the Construct scripts were found on this PC; null when not found. */\n  scriptsDir: string | null;\n  /** The VM a reprovision targets: the registry's default instance (`agent-vm` when\n   *  there is no registry) and its SSH host. */\n  vmName: string;\n  vmHost: string;\n  /** Installed Construct commit (scripts + VS Code panel); null when unknown. */\n  installedCommit: string | null;\n  /** Commit the VM was last provisioned with; null when unknown. */\n  provisionedCommit: string | null;\n  /** Commits the installed Construct is behind its ref; null when unknown. */\n  behind: number | null;\n  /** A newer Construct commit exists on the tracked ref. */\n  constructUpdateAvailable: boolean;\n  /** The VM was provisioned with a different Construct than the one installed here. */\n  provisionStale: boolean;\n  /** This build's upstream T3 Code version (the `-construct.<hash>` suffix stripped). */\n  t3Version: string;\n  /** Newest upstream T3 Code release on this build's channel; null when unknown. */\n  t3LatestVersion: string | null;\n  /** A newer upstream T3 Code release exists on this build's channel. */\n  t3UpdateAvailable: boolean;\n  /** What the update control does now; null when everything is current. */\n  action: ConstructUpdateAction | null;\n  /** A launched host script is still running; the control is inert meanwhile. */\n  runningAction: ConstructUpdateAction | null;\n  /** Last successful or failed check, ISO timestamp. */\n  checkedAt: string | null;\n  /** Why the last check or launch failed; null when it succeeded. */\n  error: string | null;\n}\n\nexport const ConstructUpdateInfoSchema = Schema.Struct({\n  repo: Schema.String,\n  ref: Schema.String,\n  scriptsDir: Schema.NullOr(Schema.String),\n  vmName: Schema.String,\n  vmHost: Schema.String,\n  installedCommit: Schema.NullOr(Schema.String),\n  provisionedCommit: Schema.NullOr(Schema.String),\n  behind: Schema.NullOr(Schema.Number),\n  constructUpdateAvailable: Schema.Boolean,\n  provisionStale: Schema.Boolean,\n  t3Version: Schema.String,\n  t3LatestVersion: Schema.NullOr(Schema.String),\n  t3UpdateAvailable: Schema.Boolean,\n  action: Schema.NullOr(ConstructUpdateActionSchema),\n  runningAction: Schema.NullOr(ConstructUpdateActionSchema),\n  checkedAt: Schema.NullOr(Schema.String),\n  error: Schema.NullOr(Schema.String),\n});\n\n"
+    },
+    {
+      "path": "packages/contracts/src/ipc.ts",
+      "after": "canRetry: boolean;",
+      "insert": "  /** Construct-managed update details; absent in stock (electron-updater) builds. */\n  construct?: ConstructUpdateInfo;\n"
+    },
+    {
+      "path": "packages/contracts/src/ipc.ts",
+      "after": "canRetry: Schema.Boolean,",
+      "insert": "  construct: Schema.optionalKey(ConstructUpdateInfoSchema),\n"
+    },
+    {
+      "path": "packages/contracts/src/rpc.ts",
+      "after": "import { VcsError } from \"./vcs.ts\";",
+      "insert": "import {\n  VoiceInputAudioInput,\n  VoiceInputAudioResult,\n  VoiceInputError,\n  VoiceInputStartInput,\n  VoiceInputStopInput,\n  VoiceInputStopResult,\n  VoiceInputStreamEvent,\n} from \"./voiceInput.ts\";\n"
+    },
+    {
+      "path": "packages/contracts/src/rpc.ts",
+      "after": "serverUpdateServerWithProgress: \"server.updateServerWithProgress\",",
+      "insert": "  voiceInputStart: \"voiceInput.start\",\n  voiceInputStop: \"voiceInput.stop\",\n  voiceInputAudio: \"voiceInput.audio\",\n"
+    },
+    {
+      "path": "packages/contracts/src/rpc.ts",
+      "before": "export const WsServerGetSettingsRpc = Rpc.make(WS_METHODS.serverGetSettings, {",
+      "insert": "export const WsVoiceInputStartRpc = Rpc.make(WS_METHODS.voiceInputStart, {\n  payload: VoiceInputStartInput,\n  success: VoiceInputStreamEvent,\n  error: Schema.Union([VoiceInputError, EnvironmentAuthorizationError]),\n  stream: true,\n});\n\nexport const WsVoiceInputStopRpc = Rpc.make(WS_METHODS.voiceInputStop, {\n  payload: VoiceInputStopInput,\n  success: VoiceInputStopResult,\n  error: EnvironmentAuthorizationError,\n});\n\n// Effect RPC has no client-to-server streams, so client-captured microphone\n// audio arrives as one unary call per ~100 ms chunk.\nexport const WsVoiceInputAudioRpc = Rpc.make(WS_METHODS.voiceInputAudio, {\n  payload: VoiceInputAudioInput,\n  success: VoiceInputAudioResult,\n  error: EnvironmentAuthorizationError,\n});\n\n"
+    },
+    {
+      "path": "packages/contracts/src/rpc.ts",
+      "after": "WsServerUpdateServerWithProgressRpc,",
+      "insert": "  WsVoiceInputStartRpc,\n  WsVoiceInputStopRpc,\n  WsVoiceInputAudioRpc,\n"
+    },
+    {
+      "path": "packages/contracts/src/rpc.ts",
+      "after": "import { VcsError } from \"./vcs.ts\";",
+      "insert": "import { ConstructDiskSpace, ConstructDiskSpaceError } from \"./constructDiskSpace.ts\";\n"
+    },
+    {
+      "path": "packages/contracts/src/rpc.ts",
+      "after": "serverUpdateServerWithProgress: \"server.updateServerWithProgress\",",
+      "insert": "  constructDiskSpace: \"construct.diskSpace\",\n"
+    },
+    {
+      "path": "packages/contracts/src/rpc.ts",
+      "before": "export const WsServerGetSettingsRpc = Rpc.make(WS_METHODS.serverGetSettings, {",
+      "insert": "export const WsConstructDiskSpaceRpc = Rpc.make(WS_METHODS.constructDiskSpace, {\n  payload: Schema.Struct({}),\n  success: ConstructDiskSpace,\n  error: Schema.Union([ConstructDiskSpaceError, EnvironmentAuthorizationError]),\n});\n\n"
+    },
+    {
+      "path": "packages/contracts/src/rpc.ts",
+      "after": "WsServerUpdateServerWithProgressRpc,",
+      "insert": "  WsConstructDiskSpaceRpc,\n"
+    },
+    {
+      "path": "packages/contracts/src/settings.ts",
+      "after": "export const DEFAULT_TERMINAL_FONT_SIZE: TerminalFontSize = 12;",
+      "insert": "/**\n * Where voice input records. `auto` captures on this device when the browser\n * or desktop app can reach a microphone and the server accepts pushed audio,\n * and otherwise falls back to the host recorder bridge. Client-local because\n * the microphone it picks is this device's.\n */\nexport const VoiceInputSourcePreference = Schema.Literals([\"auto\", \"client\", \"host\"]);\nexport type VoiceInputSourcePreference = typeof VoiceInputSourcePreference.Type;\nexport const DEFAULT_VOICE_INPUT_SOURCE_PREFERENCE: VoiceInputSourcePreference = \"auto\";\n\n"
+    },
+    {
+      "path": "packages/contracts/src/settings.ts",
+      "before": "wordWrap: Schema.Boolean.pipe(",
+      "insert": "  voiceInputSource: VoiceInputSourcePreference.pipe(\n    Schema.withDecodingDefault(Effect.succeed(DEFAULT_VOICE_INPUT_SOURCE_PREFERENCE)),\n  ),\n"
+    },
+    {
+      "path": "packages/contracts/src/settings.ts",
+      "after": "timestampFormat: Schema.optionalKey(TimestampFormat),",
+      "insert": "  voiceInputSource: Schema.optionalKey(VoiceInputSourcePreference),\n"
+    }
+  ]
+}
