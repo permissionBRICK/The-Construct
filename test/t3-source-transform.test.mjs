@@ -115,6 +115,32 @@ test("alternatives and scope pick the spot when a single line is ambiguous", () 
   assert.match(out, /export function other\(\): string \{\n  return "other";/)
 })
 
+test("every: true inserts next to each occurrence of the anchor", () => {
+  const source = 'a();\nuse(x);\nb();\nuse(x);\n'
+  const f = fixture({ source, transforms: [{ path: "owned.ts", after: "use(x);", insert: "extra();\n", every: true }] })
+  assert.equal(run(f).status, 0)
+  assert.equal(owned(f), 'a();\nuse(x);\nextra();\nb();\nuse(x);\nextra();\n')
+  assert.equal(run(f).status, 0)
+  assert.equal(status(f).alreadyApplied, 2)
+})
+
+test("variants: the first matching shape decides, each with its own text", () => {
+  const variants = [
+    { after: "new(x);", insert: "newExtra();\n" },
+    { after: "old(x);", insert: "oldExtra();\n" },
+  ]
+  const older = fixture({ source: "old(x);\n", transforms: [{ path: "owned.ts", variants }] })
+  assert.equal(run(older).status, 0)
+  assert.equal(owned(older), "old(x);\noldExtra();\n")
+  assert.equal(status(older).alreadyApplied, 2)
+  const newer = fixture({ source: "new(x);\n", transforms: [{ path: "owned.ts", variants }] })
+  assert.equal(run(newer).status, 0)
+  assert.equal(owned(newer), "new(x);\nnewExtra();\n")
+  const neither = fixture({ source: "other();\n", transforms: [{ path: "owned.ts", variants }] })
+  assert.equal(run(neither).status, 1)
+  assert.match(status(neither).conflicts[0], /no variant anchor/)
+})
+
 test("an ambiguous unscoped anchor is a conflict", () => {
   const source = UPSTREAM + '\nexport function other(): string {\n  return "stock";\n}\n'
   const f = fixture({ source, transforms: [{ path: "owned.ts", find: 'return "stock";', replace: 'return "x";' }] })

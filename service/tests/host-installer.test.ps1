@@ -105,12 +105,13 @@ $install = Get-ScriptParameters $installer
 # The batch brief names these; the README documents them. Renaming one silently
 # breaks every runbook that calls the installer.
 $expectedInstall = @(
-    "ScriptsDir", "PublishDir", "ListenUrl", "PublicHost", "DataDir",
+    "ScriptsDir", "PublishDir", "ListenUrl", "PublicHost", "PublicHostPattern", "DataDir",
     "SshPortRange", "AppPortRange", "CertThumbprint", "ServiceName",
     "SwitchName", "WslDistro", "ListenAddress",
     "IsoSourcePath", "IsoSourceUrl", "IsoSha256",
     "AdminUser", "AdminMaxVms", "SkipPrereqs", "SkipAclHardening",
-    "SkipIsoBuild", "IsoBuildOnly", "RotateAdminToken", "NoStart")
+    "SkipIsoBuild", "IsoBuildOnly", "RotateAdminToken",
+    "KeepHostAwake", "SkipPowerSettings", "NoStart")
 
 foreach ($name in $expectedInstall) {
     ok "installer has -$name" ($install.ContainsKey($name))
@@ -127,6 +128,9 @@ ok "installer -WslDistro defaults to Ubuntu" ($install["WslDistro"].Default -eq 
 ok "installer -ListenAddress defaults to 0.0.0.0" ($install["ListenAddress"].Default -eq '"0.0.0.0"')
 ok "installer -ServiceName defaults to constructd" ($install["ServiceName"].Default -eq '"constructd"')
 ok "installer -PublicHost defaults to this machine" ($install["PublicHost"].Default -eq '$env:COMPUTERNAME')
+# Empty by default: the pattern is opt-in, and an install that does not ask for one must
+# not gain a settings key it never had (plan section 4.12).
+ok "installer -PublicHostPattern defaults to empty" ($install["PublicHostPattern"].Default -eq '""')
 ok "installer -SkipPrereqs is a switch" ($install["SkipPrereqs"].Type -eq "SwitchParameter")
 ok "installer -NoStart is a switch" ($install["NoStart"].Type -eq "SwitchParameter")
 ok "installer -AdminMaxVms is an int" ($install["AdminMaxVms"].Type -eq "Int32")
@@ -139,6 +143,12 @@ ok "installer -IsoBuildOnly is opt-in" (
 ok "the installer no longer takes -ProvisionWslForService" (-not $install.ContainsKey("ProvisionWslForService"))
 ok "installer -RotateAdminToken is opt-in" (
     $install["RotateAdminToken"].Type -eq "SwitchParameter" -and $null -eq $install["RotateAdminToken"].Default)
+# Not a [bool] with a default: "not given" has to stay distinguishable from "given as false",
+# because that is what decides between prompting and leaving the machine alone.
+ok "installer -KeepHostAwake is an unbound switch (absent means 'ask, or leave it alone')" (
+    $install["KeepHostAwake"].Type -eq "SwitchParameter" -and $null -eq $install["KeepHostAwake"].Default)
+ok "installer -SkipPowerSettings is opt-in" (
+    $install["SkipPowerSettings"].Type -eq "SwitchParameter" -and $null -eq $install["SkipPowerSettings"].Default)
 
 $uninstall = Get-ScriptParameters $uninstaller
 foreach ($name in @("ServiceName", "DataDir", "PublicHost", "SshPortRange", "AppPortRange",
@@ -184,10 +194,15 @@ Write-Host "=== Helpers ===" -ForegroundColor Cyan
 # Dot-source just the helper definitions: the installer's body would try to
 # elevate. Taking them from the AST keeps this honest -- it is the shipped code.
 foreach ($fn in $functions) {
-    if ($fn.Name -in @("Split-PortRange", "Get-ListenPort", "Get-ConstructAclPolicy",
+    if ($fn.Name -in @("Split-PortRange", "Get-ListenPort", "Test-PublicHostPattern", "Get-ConstructAclPolicy",
                        "Get-ConstructTrustedSid", "Get-ConstructAncestorRiskMask",
                        "Get-ConstructWriteRiskMask", "Get-ConstructUnsafeAce", "Resolve-ConstructAceSid", "Sort-ConstructHardeningOrder", "Format-ConstructCommandOutput",
-                       "ConvertTo-ConstructPayload", "New-ConstructRelaunchScript")) {
+                       "ConvertTo-ConstructPayload", "New-ConstructRelaunchScript",
+                       "Get-ConstructPowerSetting", "ConvertFrom-ConstructPowerQuery",
+                       "ConvertFrom-ConstructActiveScheme", "Format-ConstructPowerTimeout",
+                       "Get-ConstructPowerReport", "Set-ConstructPowerNever",
+                       "Test-ConstructNonInteractiveArgument", "Test-ConstructPromptAllowed",
+                       "Write-Ok", "Write-Note")) {
         . ([scriptblock]::Create($fn.Extent.Text))
     }
 }
@@ -241,6 +256,27 @@ ok "Get-ListenPort handles a host name" ((Get-ListenPort -Url "https://buildbox.
 $threw = $false
 try { Get-ListenPort -Url "not a url" } catch { $threw = $true }
 ok "Get-ListenPort rejects a non-URL" $threw
+
+# ── (d1) The per-VM public host pattern (plan section 4.12) ─────────────────
+# The SAME rule the service applies at startup (PublicHostPatternRulesTests): a typo has
+# to be a refusal before the machine is touched, not a service that writes its settings
+# and then refuses to start.
+ok "an empty pattern is fine (it means: use -PublicHost for every VM)" (
+    (Test-PublicHostPattern -Pattern "") -eq "")
+ok "a usable pattern is accepted" (
+    (Test-PublicHostPattern -Pattern "{name}.vpn.example") -eq "")
+ok "a pattern without {name} is refused" (
+    (Test-PublicHostPattern -Pattern "vpn.example") -match "\{name\}")
+ok "a pattern with two placeholders is refused" (
+    (Test-PublicHostPattern -Pattern "{name}.{name}.vpn.example") -match "exactly once")
+ok "a pattern that cannot render a host name is refused" (
+    (Test-PublicHostPattern -Pattern "{name}-.vpn.example") -match "does not render")
+# The longest instance name is already a full 63-character DNS label, so an affix in the
+# SAME label can never render one -- exactly what the service refuses too.
+ok "an affix inside the name's own label is refused" (
+    (Test-PublicHostPattern -Pattern "vm-{name}.vpn.example") -match "does not render")
+ok "...but the same fixed part in its own label is fine" (
+    (Test-PublicHostPattern -Pattern "{name}.vm.vpn.example") -eq "")
 
 # ── (d2) The ACL policy ──────────────────────────────────────────────────────
 Write-Host ""
@@ -557,6 +593,14 @@ foreach ($key in @("Persistence", "DatabasePath", "ListenUrl", "CertThumbprint",
     ok "settings carry $key" ($installText -match [regex]::Escape($key))
 }
 
+# The pattern is the ONE setting that is written CONDITIONALLY: an install without one
+# must produce a settings file with exactly the keys it has always had.
+ok "the pattern is only written when it was asked for" (
+    $installText -match '(?m)^if \(\$PublicHostPattern\) \{\s*\r?\n\s*\$settings\.Constructd\[.PublicHostPattern.\]')
+ok "the pattern is validated before anything is touched" (
+    $installText.IndexOf('$patternProblem = Test-PublicHostPattern') -gt 0 -and
+    $installText.IndexOf('$patternProblem = Test-PublicHostPattern') -lt $installText.IndexOf('Write-Step "Writing appsettings.Production.json"'))
+
 ok "settings are written next to the executable" ($installText -match 'appsettings\.Production\.json')
 ok "the service is registered as LocalSystem" ($installText -match 'obj= LocalSystem' -or $installText -match 'New-Service')
 ok "the certificate thumbprint is printed for pinning" ($installText -match 'Certificate\s+:')
@@ -682,6 +726,237 @@ ok "an ISO a VM still holds open is reported, not fatal" (
 ok "the data note mentions the media" ($uninstallText -match 'autoinstall ISOs')
 ok "nothing in the uninstaller talks about a LocalSystem WSL distro" (
     -not ($uninstallText -match 'imports it for LocalSystem'))
+
+# ── (i) The host's sleep settings ────────────────────────────────────────────
+Write-Host ""
+Write-Host "=== Host sleep settings ===" -ForegroundColor Cyan
+
+# powercfg prints LOCALIZED labels. A parser that matches on words reports "never" on a
+# German host that sleeps in 30 minutes -- which is exactly the failure this batch is
+# about. So the same block, in two languages, must read identically.
+$queryEnglish = @"
+Power Scheme GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (Balanced)
+  Subgroup GUID: 238c9fa8-0aad-41ed-83f4-97be242c8f20  (Sleep)
+    Power Setting GUID: 29f6c1db-86da-48c5-9fdb-f2b67b1f44da  (Sleep after)
+      Minimum Possible Setting: 0x00000000
+      Maximum Possible Setting: 0xffffffff
+      Possible Settings increment: 0x00000001
+      Possible Settings units: Seconds
+    Current AC Power Setting Index: 0x00000708
+    Current DC Power Setting Index: 0x00000384
+"@
+
+$queryGerman = @"
+Energieschema-GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (Ausbalanciert)
+  Untergruppen-GUID: 238c9fa8-0aad-41ed-83f4-97be242c8f20  (Energie sparen)
+    Energieeinstellungs-GUID: 29f6c1db-86da-48c5-9fdb-f2b67b1f44da  (Standbymodus nach)
+      Moegliche Mindesteinstellung: 0x00000000
+      Moegliche Hoechsteinstellung: 0xffffffff
+      Moegliche Einstellungen: Schritte: 0x00000001
+      Moegliche Einstellungen: Einheiten: Sekunden
+    Aktueller Wechselstromwert-Index: 0x00000708
+    Aktueller Gleichstromwert-Index: 0x00000384
+"@
+
+$parsedEnglish = ConvertFrom-ConstructPowerQuery -Output $queryEnglish
+$parsedGerman  = ConvertFrom-ConstructPowerQuery -Output $queryGerman
+
+ok "powercfg parse: the AC index is read (English)" ($parsedEnglish.Ac -eq 1800)
+ok "powercfg parse: the DC index is read (English)" ($parsedEnglish.Dc -eq 900)
+ok "powercfg parse: a German host reads exactly the same" (
+    $parsedGerman.Ac -eq $parsedEnglish.Ac -and $parsedGerman.Dc -eq $parsedEnglish.Dc)
+ok "powercfg parse: the minimum/maximum/increment lines are not mistaken for the value" (
+    $parsedEnglish.Ac -ne 0 -and $parsedEnglish.Ac -ne 4294967295 -and $parsedEnglish.Ac -ne 1)
+ok "powercfg parse: 'never' comes through as 0" (
+    (ConvertFrom-ConstructPowerQuery -Output "  X: 0x00000001`n  A: 0x00000000`n  B: 0x00000000").Ac -eq 0)
+ok "powercfg parse: output with no indices yields nothing" (
+    $null -eq (ConvertFrom-ConstructPowerQuery -Output "Ungueltige Parameter"))
+ok "powercfg parse: empty output yields nothing" ($null -eq (ConvertFrom-ConstructPowerQuery -Output ""))
+ok "powercfg parse: a CRLF dump still parses" (
+    (ConvertFrom-ConstructPowerQuery -Output "  A: 0x0000000a`r`n  B: 0x00000014`r`n").Dc -eq 20)
+
+ok "active scheme: the GUID is read, not the localized name" (
+    (ConvertFrom-ConstructActiveScheme -Output "Energieschema-GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (Ausbalanciert)") -eq
+    "381b4222-f694-41f0-9685-ff5bb260df2e")
+ok "active scheme: no GUID yields an empty string, not an error" (
+    (ConvertFrom-ConstructActiveScheme -Output "access denied") -eq "")
+
+ok "timeout format: 0 is never" ((Format-ConstructPowerTimeout -Seconds 0) -eq "never")
+ok "timeout format: whole minutes" ((Format-ConstructPowerTimeout -Seconds 1800) -eq "30 min")
+ok "timeout format: seconds that are not whole minutes" ((Format-ConstructPowerTimeout -Seconds 90) -eq "90 s")
+ok "timeout format: an unreadable value says so" ((Format-ConstructPowerTimeout -Seconds $null) -eq "unavailable")
+
+# The three settings, by GUID -- the hidden unattended-sleep timeout among them, which
+# has no powercfg alias at all.
+$powerSettings = @(Get-ConstructPowerSetting)
+ok "three sleep settings are reported on" ($powerSettings.Count -eq 3)
+ok "all three sit in SUB_SLEEP" (
+    @($powerSettings | Where-Object { $_.SubGroup -eq '238c9fa8-0aad-41ed-83f4-97be242c8f20' }).Count -eq 3)
+ok "STANDBYIDLE is one of them" (
+    @($powerSettings | Where-Object { $_.Setting -eq '29f6c1db-86da-48c5-9fdb-f2b67b1f44da' }).Count -eq 1)
+ok "HIBERNATEIDLE is one of them" (
+    @($powerSettings | Where-Object { $_.Setting -eq '9d7815a6-7ee4-497e-8888-515a05f02364' }).Count -eq 1)
+ok "the hidden unattended-sleep timeout is one of them" (
+    @($powerSettings | Where-Object { $_.Setting -eq '7bc4a2f9-d8fc-4469-b07b-33eb785aaca0' }).Count -eq 1)
+ok "every setting travels as a GUID, never as a localizable alias" (
+    @($powerSettings | Where-Object { $_.Setting -notmatch '^[0-9a-f]{8}-' }).Count -eq 0)
+
+# ── The report and the setter, against a MOCKED powercfg ─────────────────────
+# No powercfg on this machine, and none needed: the seam is the -Query scriptblock.
+
+# Script-scope state rather than a closure: a scriptblock from GetNewClosure() gets its
+# own module scope, and $script: inside it would then not be this script's.
+$script:powercfgCalls   = @()
+$script:powercfgValues  = @{}
+$script:powercfgExitCode = 0
+
+$mockPowercfg = {
+    param([string[]]$Arguments)
+
+    $script:powercfgCalls += ,@($Arguments)
+
+    if ($script:powercfgExitCode -ne 0) { return @{ ExitCode = $script:powercfgExitCode; Output = "denied" } }
+    if ($Arguments[0] -ne "/q") { return @{ ExitCode = 0; Output = "" } }
+
+    # The shape powercfg prints: some hex lines that are NOT the value, then AC and DC.
+    $setting = $Arguments[3]
+    $seconds = 0
+    if ($script:powercfgValues.ContainsKey($setting)) { $seconds = $script:powercfgValues[$setting] }
+    $hex = "0x{0:x8}" -f $seconds
+    return @{ ExitCode = 0; Output = "  GUID: $setting  (whatever)`n  Min: 0x00000000`n  AC: $hex`n  DC: $hex" }
+}
+
+function Reset-MockPowercfg {
+    param([hashtable]$Values = @{}, [int]$ExitCode = 0)
+    $script:powercfgCalls    = @()
+    $script:powercfgValues   = $Values
+    $script:powercfgExitCode = $ExitCode
+}
+
+Reset-MockPowercfg -Values @{ '29f6c1db-86da-48c5-9fdb-f2b67b1f44da' = 1800 }
+$report = @(Get-ConstructPowerReport -SchemeGuid "SCHEME_CURRENT" -Query $mockPowercfg)
+
+ok "report: one row per setting" ($report.Count -eq 3)
+ok "report: every row was queried by GUID against the active scheme" (
+    @($script:powercfgCalls | Where-Object { $_[0] -eq "/q" -and $_[1] -eq "SCHEME_CURRENT" }).Count -eq 3)
+ok "report: nothing but /q is run while reading" (
+    @($script:powercfgCalls | Where-Object { $_[0] -ne "/q" }).Count -eq 0)
+ok "report: the standby row carries the queried value" (
+    @($report | Where-Object { $_.Key -eq 'StandbyIdle' })[0].Ac -eq 1800)
+ok "report: a setting this host has at never reads as 0" (
+    @($report | Where-Object { $_.Key -eq 'HibernateIdle' })[0].Ac -eq 0)
+
+Reset-MockPowercfg -ExitCode 1
+$failing = @(Get-ConstructPowerReport -SchemeGuid "SCHEME_CURRENT" -Query $mockPowercfg)
+ok "report: a refused query reports 'unavailable' rather than a wrong number" (
+    (Format-ConstructPowerTimeout -Seconds $failing[0].Ac) -eq "unavailable")
+
+# The setter: it writes only what is not already "never".
+Reset-MockPowercfg
+$standbyRow = @($report | Where-Object { $_.Key -eq 'StandbyIdle' })[0]
+$changed = Set-ConstructPowerNever -SchemeGuid "SCHEME_CURRENT" -Row $standbyRow -Query $mockPowercfg
+ok "set: a non-zero timeout is changed" ($changed -eq $true)
+ok "set: through /setacvalueindex, by GUID, to 0" (
+    @($script:powercfgCalls | Where-Object {
+        $_[0] -eq "/setacvalueindex" -and $_[1] -eq "SCHEME_CURRENT" -and
+        $_[2] -eq '238c9fa8-0aad-41ed-83f4-97be242c8f20' -and
+        $_[3] -eq '29f6c1db-86da-48c5-9fdb-f2b67b1f44da' -and $_[4] -eq "0" }).Count -eq 1)
+ok "set: the DC (battery) timeouts are left alone" (
+    @($script:powercfgCalls | Where-Object { $_[0] -eq "/setdcvalueindex" }).Count -eq 0)
+
+Reset-MockPowercfg
+$alreadyNever = @($report | Where-Object { $_.Key -eq 'HibernateIdle' })[0]
+$changed = Set-ConstructPowerNever -SchemeGuid "SCHEME_CURRENT" -Row $alreadyNever -Query $mockPowercfg
+ok "set: idempotent -- a timeout that is already never is not written again" (
+    $changed -eq $false -and $script:powercfgCalls.Count -eq 0)
+
+Reset-MockPowercfg -ExitCode 5
+$refused = Set-ConstructPowerNever -SchemeGuid "SCHEME_CURRENT" -Row $standbyRow `
+    -Query $mockPowercfg -WarningAction SilentlyContinue
+ok "set: a refused write warns and reports no change, it does not fail the install" ($refused -eq $false)
+
+Reset-MockPowercfg
+$whatIf = Set-ConstructPowerNever -SchemeGuid "SCHEME_CURRENT" -Row $standbyRow -Query $mockPowercfg -WhatIf
+ok "set: -WhatIf writes nothing" ($whatIf -eq $false -and $script:powercfgCalls.Count -eq 0)
+
+# ── The step in the installer itself ─────────────────────────────────────────
+
+ok "the installer has a sleep-settings step" ($installText -match "The host's sleep settings")
+ok "...that reports the timeouts before changing anything" (
+    $installText.IndexOf('Get-ConstructPowerReport -SchemeGuid $activeScheme') -gt 0 -and
+    $installText.IndexOf('Get-ConstructPowerReport -SchemeGuid $activeScheme') -lt
+    $installText.IndexOf('Set-ConstructPowerNever -SchemeGuid $activeScheme'))
+ok "...against the ACTIVE scheme, through powercfg's own alias" ($installText -match '\$activeScheme = "SCHEME_CURRENT"')
+# The seam the tests above mock is the one the installer really fills, with its own runner.
+ok "the report and the setter both get the real powercfg runner" (
+    ([regex]::Matches($installText, '-Query \$\{function:Invoke-ConstructPowercfg\}')).Count -eq 2)
+ok "-SkipPowerSettings skips the whole step" ($installText -match 'if \(\$SkipPowerSettings\)')
+ok "an explicit -KeepHostAwake decides instead of the prompt" (
+    $installText -match '\$PSBoundParameters\.ContainsKey\("KeepHostAwake"\)')
+ok "an unattended run leaves the power plan alone" (
+    $installText -match 'elseif \(-not \(Test-ConstructInteractive\)\)' -and
+    $installText -match 'Unattended run: leaving the power plan alone')
+ok "the changed scheme is re-applied so it takes effect" ($installText -match '"/setactive", \$activeScheme')
+ok "the summary says how to see the request the service holds" ($installText -match 'powercfg /requests')
+ok "the hidden unattended-sleep GUID is in the installer" (
+    $installText -match '7bc4a2f9-d8fc-4469-b07b-33eb785aaca0')
+# The whole point of the hex-index rule: nothing may key off a word powercfg prints.
+ok "nothing parses powercfg's localized labels" (
+    -not ($installText -match 'Current AC Power Setting') -and
+    -not ($installText -match 'Sleep after:'))
+
+# ── (j) "May we prompt?" -- decided BEFORE the self-elevation ────────────────
+Write-Host ""
+Write-Host "=== Unattended detection ===" -ForegroundColor Cyan
+
+# Read-Host does not merely hang under -NonInteractive: it throws. So an automation run
+# that self-elevates must not reach the prompt at all -- and the elevated copy gets a
+# brand new console, so it cannot work this out for itself.
+foreach ($spelling in @("-NonInteractive", "-noninteractive", "-NONINTERACTIVE", "-noni", "/NonInteractive", "--NonInteractive")) {
+    ok "non-interactive detected: '$spelling'" (
+        Test-ConstructNonInteractiveArgument -Arguments @("powershell.exe", $spelling, "-File", "x.ps1"))
+}
+foreach ($spelling in @("-NoProfile", "-NoExit", "-NoLogo", "-File", "-Command", "C:\Construct\Install-ConstructHost.ps1")) {
+    ok "not mistaken for non-interactive: '$spelling'" (
+        -not (Test-ConstructNonInteractiveArgument -Arguments @("powershell.exe", $spelling)))
+}
+ok "non-interactive detection: an empty command line is not non-interactive" (
+    -not (Test-ConstructNonInteractiveArgument -Arguments @()))
+ok "non-interactive detection: a null command line is not non-interactive" (
+    -not (Test-ConstructNonInteractiveArgument -Arguments $null))
+
+ok "prompt allowed when nothing says otherwise" (
+    Test-ConstructPromptAllowed -InputRedirected $false -NonInteractiveHost $false -UserInteractive $true -WhatIf $false)
+ok "prompt refused when input is redirected" (
+    -not (Test-ConstructPromptAllowed -InputRedirected $true -NonInteractiveHost $false -UserInteractive $true -WhatIf $false))
+ok "prompt refused under -NonInteractive" (
+    -not (Test-ConstructPromptAllowed -InputRedirected $false -NonInteractiveHost $true -UserInteractive $true -WhatIf $false))
+ok "prompt refused without an interactive session (scheduled task, remoting, CI)" (
+    -not (Test-ConstructPromptAllowed -InputRedirected $false -NonInteractiveHost $false -UserInteractive $false -WhatIf $false))
+ok "prompt refused under -WhatIf" (
+    -not (Test-ConstructPromptAllowed -InputRedirected $false -NonInteractiveHost $false -UserInteractive $true -WhatIf $true))
+
+# The elevation boundary: the decision is resolved on the CALLER's session and carried,
+# not inferred on the other side.
+$resolveAt  = $installText.IndexOf("if (-not `$forward.ContainsKey('KeepHostAwake') -and -not (Test-ConstructInteractive))")
+$relaunchAt = $installText.IndexOf('$relaunch = New-ConstructRelaunchScript')
+$elevateAt  = $installText.IndexOf('Start-Process powershell.exe -Verb RunAs')
+ok "the prompt decision is resolved before the elevated copy is built" (
+    $resolveAt -gt 0 -and $relaunchAt -gt 0 -and $resolveAt -lt $relaunchAt)
+ok "...and before anything is started elevated" ($resolveAt -gt 0 -and $elevateAt -gt 0 -and $resolveAt -lt $elevateAt)
+ok "the helpers exist before the elevation block that calls them" (
+    $installText.IndexOf('function Test-ConstructInteractive') -gt 0 -and
+    $installText.IndexOf('function Test-ConstructInteractive') -lt $elevateAt)
+ok "the elevated copy is handed the resolved parameters, not the raw bound ones" (
+    $installText -match 'ConvertTo-ConstructPayload -Values \$forward' -and
+    -not ($installText -match 'ConvertTo-ConstructPayload -Values \$PSBoundParameters'))
+ok 'resolving does not mutate the live $PSBoundParameters' (
+    $installText -match 'foreach \(\$bound in \$PSBoundParameters\.GetEnumerator\(\)\) \{ \$forward\[\$bound\.Key\] = \$bound\.Value \}')
+
+# And the resolved answer survives the trip as a real $false, not as a missing key.
+$unattended = ConvertFrom-Json (ConvertTo-ConstructPayload -Values @{ ScriptsDir = "C:\Construct"; KeepHostAwake = $false })
+ok "an unattended run reaches the elevated copy as -KeepHostAwake:`$false" (
+    $unattended.PSObject.Properties.Name -contains 'KeepHostAwake' -and $unattended.KeepHostAwake -eq $false)
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 Write-Host ""

@@ -111,7 +111,8 @@ one dry run first.
 In order it: validates the inputs → creates the service root and data directory → **locks
 down** `-PublishDir`, `-ScriptsDir` and the service root (LocalSystem executes what it finds
 there) → checks the prerequisites → creates the TLS certificate → adds three inbound
-firewall rules (API port, SSH range, app range) → writes
+firewall rules (API port, SSH range, app range) → **reports this host's sleep timeouts**
+(and, with `-KeepHostAwake` or a yes at the prompt, sets the AC ones to *never*) → writes
 `appsettings.Production.json` → **builds the autoinstall ISO as you, through your WSL**
 (minutes: it downloads the source ISO on the first run and repacks it) → **creates the first
 admin and issues its token before the service starts** → registers `constructd` as
@@ -198,6 +199,62 @@ curl.exe -k -H "Authorization: Bearer <admin token>" https://buildbox.home.examp
 service logs there when hosted as a Windows service. A service that starts and immediately
 stops is usually a configuration refusal (a `ScriptsDir` that is not a Construct checkout,
 overlapping ranges, or an unreadable portproxy table); all of them say so in the event log.
+
+### 1.5 The host stays awake while VMs run
+
+The reason this step exists: the field host slept overnight ("System Idle") with VMs that
+were expected to keep serving, and every one of them went down with it.
+
+Two independent things, checked separately.
+
+**The service's power request.** With no VM running yet, on the host:
+
+```powershell
+powercfg /requests
+```
+
+**Expect:** nothing under `SYSTEM:` (or at least no `Constructd.Api.exe`). Come back here
+after step 3 has created and started `work-vm` and run it again:
+
+```
+SYSTEM:
+[PROCESS] \Device\HarddiskVolume3\Construct\service\publish\Constructd.Api.exe
+Construct agent VMs are running
+```
+
+It appears within one idle tick (60 s by default), not instantly. Save or shut the VM down,
+wait another tick, and the entry is gone again. The event log says the same in words:
+
+```powershell
+Get-EventLog -LogName Application -Source constructd -Newest 50 |
+    Where-Object Message -match "power availability request"
+```
+
+**Expect:** `Holding a power availability request so this host stays awake: 1 VM(s) running.`
+and, after the VM is saved, `Released the host's power availability request: no VM is
+running.`
+
+**If nothing appears:** check `Constructd:Power:KeepHostAwake` in
+`C:\Construct\service\publish\appsettings.Production.json` — absent means the default,
+`true`. `Idle:SchedulerEnabled` is a *separate* switch: turning it off stops VMs being saved
+automatically but leaves the power request working, because the loop the reconcile rides on
+runs when either of the two is on.
+
+**The host's own timeouts.** Independently of the service:
+
+```powershell
+powercfg /q SCHEME_CURRENT SUB_SLEEP 29f6c1db-86da-48c5-9fdb-f2b67b1f44da   # sleep after
+powercfg /q SCHEME_CURRENT SUB_SLEEP 9d7815a6-7ee4-497e-8888-515a05f02364   # hibernate after
+powercfg /q SCHEME_CURRENT SUB_SLEEP 7bc4a2f9-d8fc-4469-b07b-33eb785aaca0   # unattended sleep
+```
+
+**Expect:** on a host installed with `-KeepHostAwake`, the **AC** index (the second-to-last
+`0x…` line of each block) reads `0x00000000` — powercfg's "never". The installer printed the
+same three values at install time, before and after. The battery (DC) values are deliberately
+left as they were.
+
+**If they are not 0** and you want them to be, re-run the installer with `-KeepHostAwake`; it
+changes nothing else about a host that is already installed except these three values.
 
 ---
 
@@ -1138,6 +1195,7 @@ make it claim "removed 0" while leaving every rule behind.
 | The idle heartbeat | `journalctl -u construct-idle-report -n 50` on the VM; `CONSTRUCT_IDLE_DRY_RUN=1 construct-idle-report.sh` to see the JSON without posting it. |
 | The guest's view of itself | `/etc/construct/config.env` (`CONSTRUCT_EXTERNAL_HOST`, `CONSTRUCT_EXTERNAL_SSH_PORT`, `CONSTRUCT_SERVICE_URL`, `CONSTRUCT_INSTANCE_NAME`) and `/etc/construct/vm-token` (mode `0600`). |
 | Provisioning | The console it ran in; on the VM, `journalctl -u construct`. |
+| The host went to sleep under the VMs | `powercfg /requests` (the service's request while a VM runs), `powercfg /q SCHEME_CURRENT SUB_SLEEP <setting GUID>` (the host's own timeouts), `powercfg /lastwake` and `powercfg /sleepstudy`. Step 1.5 is the check; the request covers the idle timer only, not a closed lid. |
 
 ## See also
 

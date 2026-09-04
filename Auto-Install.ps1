@@ -154,7 +154,7 @@ param(
     # -FromPanel the redundant confirmations are skipped too (the "type yes" delete,
     # the git-identity prompt and the agent-password prompt -- all already handled by
     # the panel); the dirty-repo scan still warns if the VM has unsaved work.
-    [ValidateSet("reprovision", "reinstall", "redownload", "export", "add-config")]
+    [ValidateSet("reprovision", "reinstall", "redownload", "export", "add-config", "publish-config")]
     [string]$Action,
     # With -Action reinstall/redownload, pre-answer the save/restore prompts:
     #   save     export the current config now and restore it afterwards (default)
@@ -307,6 +307,100 @@ trap {
     exit 1
 }
 
+# ── -Action publish-config: publish local profiles to a linked config repo ───
+# Plan 4.13 / B15. Import and Push back only move files that already carry a
+# provenance manifest entry, so a profile born on THIS PC can never reach a
+# remote. This action publishes untracked local profiles into the config repo's
+# DEFAULT branch and adopts them (manifest + stored base), after which Import and
+# Push back round-trip them like any other tracked file.
+#
+# It runs HERE, before the install-mode resolution and the self-elevation below,
+# because it touches no VM and no Hyper-V: it is a git operation on
+# %LOCALAPPDATA%\The-Construct\config plus one push. Non-interactive, and it
+# exits without ever entering the installer. Every other run falls straight
+# through this block untouched.
+if ($Action -eq 'publish-config') {
+    $pcLib = Join-Path $PSScriptRoot "lib\AgentVm.Common.ps1"
+    if (-not (Test-Path -LiteralPath $pcLib)) { throw "Required helper not found: $pcLib" }
+    . $pcLib
+
+    if (-not $ConfigRepo) {
+        throw "-Action publish-config needs -ConfigRepo <url> (the config repo to publish into)."
+    }
+    # Same git check/prompt as -ConfigRepo add-config: unattended, so a silent
+    # install attempt and a loud abort when it fails.
+    if (-not (Test-ConstructGitAvailable)) {
+        $pcGitOk = $false
+        if (Get-Command Ensure-ConstructGit -ErrorAction SilentlyContinue) {
+            $pcGitOk = Ensure-ConstructGit -AutoMode
+        }
+        if (-not $pcGitOk) {
+            throw "-Action publish-config requires git, but the automatic git install failed. Install git manually (winget install --id Git.Git) and re-run."
+        }
+    }
+
+    $pcConfigDir = Initialize-ConstructConfigStore -ScriptsDir $PSScriptRoot
+    # Publishing records the adoption as a commit in the host config store, so make
+    # sure that store is a repo. Idempotent, and git is guaranteed present here.
+    if (Get-Command Initialize-ConstructConfigRepo -ErrorAction SilentlyContinue) {
+        $null = Initialize-ConstructConfigRepo -ConfigDir $pcConfigDir
+    }
+    $pcNames = $null
+    if ($ImportConfigs) {
+        $pcNames = @($ImportConfigs -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    }
+
+    Write-Host ""
+    Write-Host "==> Publishing local project profiles" -ForegroundColor Cyan
+    # NEVER the raw URL: a publish target on the owner's own git host carries a PAT
+    # in the URL, and this line would otherwise print it (and land in any transcript).
+    Write-Host "    Config repo: $(Format-ConstructRemoteUrlForDisplay -Url $ConfigRepo)" -ForegroundColor DarkGray
+
+    $pcArgs = @{ ConfigDir = $pcConfigDir; RemoteUrl = $ConfigRepo }
+    if ($null -ne $pcNames -and $pcNames.Count -gt 0) { $pcArgs['Names'] = $pcNames }
+    $pcResult = Publish-ConstructConfigProfiles @pcArgs
+
+    $pcRows = @()
+    foreach ($n in @($pcResult.Published)) { $pcRows += [pscustomobject]@{ Name = $n; Result = "published"; Detail = "" } }
+    foreach ($r in @($pcResult.Skipped))   { $pcRows += [pscustomobject]@{ Name = $r.Name; Result = "skipped";  Detail = $r.Reason } }
+    foreach ($r in @($pcResult.Refused))   { $pcRows += [pscustomobject]@{ Name = $r.Name; Result = "refused";  Detail = $r.Reason } }
+    foreach ($r in @($pcResult.Invalid))   { $pcRows += [pscustomobject]@{ Name = $r.Name; Result = "invalid";  Detail = $r.Reason } }
+
+    Write-Host ""
+    if ($pcRows.Count -eq 0) {
+        # Only an honest "nothing to do" -- a run that failed says so below instead.
+        if (@($pcResult.Errors).Count -eq 0) {
+            Write-Host "    No local project profiles to publish." -ForegroundColor DarkGray
+        }
+    } else {
+        $pcWidth = 4
+        foreach ($row in $pcRows) { if ($row.Name.Length -gt $pcWidth) { $pcWidth = $row.Name.Length } }
+        foreach ($row in ($pcRows | Sort-Object Name)) {
+            $pcColor = "DarkGray"
+            if ($row.Result -eq "published") { $pcColor = "Green" }
+            if ($row.Result -eq "refused")   { $pcColor = "Yellow" }
+            if ($row.Result -eq "invalid")   { $pcColor = "Red" }
+            $pcLine = "    {0}  {1}" -f $row.Name.PadRight($pcWidth), $row.Result
+            if ($row.Detail) { $pcLine += "  ({0})" -f $row.Detail }
+            Write-Host $pcLine -ForegroundColor $pcColor
+        }
+    }
+
+    Write-Host ""
+    if ($pcResult.Branch) { Write-Host "    Branch: $($pcResult.Branch)" -ForegroundColor DarkGray }
+    if ($pcResult.Commit) { Write-Host "    Commit: $($pcResult.Commit)" -ForegroundColor DarkGray }
+    Write-Host ("    Published {0}, skipped {1}, refused {2}, invalid {3}." -f @($pcResult.Published).Count, @($pcResult.Skipped).Count, @($pcResult.Refused).Count, @($pcResult.Invalid).Count) -ForegroundColor DarkGray
+
+    if (@($pcResult.Errors).Count -gt 0 -or @($pcResult.Invalid).Count -gt 0) {
+        Write-Host ""
+        foreach ($e in @($pcResult.Errors)) { Write-Host "    ERROR: $e" -ForegroundColor Red }
+        Write-Host ""
+        exit 1
+    }
+    Write-Host ""
+    exit 0
+}
+
 # ── Install mode: local Hyper-V, or a remote host service ────────────────────
 # ONE entry point, one extra question, and only on a genuinely fresh machine
 # (docs/plans/modular-remote-architecture.md §4.5). Every existing install -- and every
@@ -403,6 +497,62 @@ function Save-ConstructInstanceEntry {
     } $lib $Name $Entry ([bool]$Replace) ([bool]$MakeDefault)
 }
 
+function Get-ConstructDerivedVmIdentity {
+    <#
+        The DERIVED identity of the local VM called -VmName -- guest hostname, mshome
+        address, ssh alias, ~\.ssh key file, config-sync branch -- straight from
+        lib\AgentVm.Instances.ps1 through the adapter, so no function in this script
+        states any of those formulas (or the name rule) a second time.
+
+        Returns $null when this install cannot answer at all (a partial checkout, or a
+        name that breaks the rule). Callers decide what that means: the best-effort
+        probes treat it as "don't know", the ones that would otherwise act on the WRONG
+        VM refuse. The identity block further down hard-requires the same library, so by
+        the time anything destructive runs, $null is not reachable.
+
+        Same child-scope discipline as the wrappers above: the adapter contains the
+        registry module's strict mode.
+    #>
+    param([Parameter(Mandatory)][string]$VmName, [string]$ScriptsDir = $PSScriptRoot)
+    $lib = Join-Path (Join-Path $ScriptsDir "lib") "AgentVm.InstanceTarget.ps1"
+    if (-not (Test-Path -LiteralPath $lib)) { return $null }
+    try {
+        . $lib
+        return (Get-ConstructLocalVmIdentity -VmName $VmName)
+    } catch {
+        return $null
+    }
+}
+
+function Register-ConstructLocalVmInstance {
+    <#
+        Record a LOCAL VM in the instance registry (B11, plan section 4.12), through
+        lib\AgentVm.InstanceTarget.ps1 -> lib\AgentVm.Instances.ps1 -- the same writer and
+        the same rules the remote flow uses, never hand-rolled JSON.
+
+        ZERO-CHANGE RULE: a default-only install writes NOTHING. A missing instances.json
+        IS the `agent-vm` instance, so Save-ConstructLocalInstance materialises the
+        default only when the file already exists; creating a SECOND VM writes both
+        entries in one document, because the registry object always carries the default.
+
+        Never fatal: this runs about a VM that already exists, so a registry that cannot
+        be written is reported and the install carries on. It deliberately runs in the
+        same process (and therefore the same user profile) that writes ~\.ssh\<key> and
+        the ssh_config block, so the entry and the key it names never land in two
+        different profiles.
+    #>
+    param([Parameter(Mandatory)][string]$Name, [string]$ConfigBranch = "", [string]$ScriptsDir = $PSScriptRoot)
+    $lib = Join-Path (Join-Path $ScriptsDir "lib") "AgentVm.InstanceTarget.ps1"
+    if (-not (Test-Path -LiteralPath $lib)) { return $null }
+    try {
+        . $lib
+        return (Register-ConstructLocalVm -Name $Name -ConfigBranch $ConfigBranch)
+    } catch {
+        Write-Warning "Could not record the instance '$Name' in the instance registry ($($_.Exception.Message)). The VM itself is fine; the control panel may not list it."
+        return $null
+    }
+}
+
 function Test-ConstructPriorLocalInstall {
     <#
         Has a Construct VM ever been provisioned on THIS PC, for THIS user?
@@ -421,8 +571,12 @@ function Test-ConstructPriorLocalInstall {
     #>
     param([string]$VmName = "Agent-VM")
     try {
-        $guest = ([string]$VmName).ToLowerInvariant()
-        $keyName = if ($guest -eq 'agent-vm') { 'agent_vm_ed25519' } else { "construct_${guest}_ed25519" }
+        # The key file name is DERIVED, and the derivation lives in one place
+        # (Get-ConstructDerivedVmIdentity). "Can't answer" is a $false here, which is the
+        # safe direction: it only leaves the decision to the probes around this one.
+        $identity = Get-ConstructDerivedVmIdentity -VmName $VmName
+        if (-not $identity) { return $false }
+        $keyName = [string]$identity.KeyName
         # NOT a variable named $home: that IS the automatic $HOME, and assigning it here
         # would shadow the very fallback the next line reads.
         $profileDir = $env:USERPROFILE
@@ -442,6 +596,8 @@ function Resolve-ConstructInstallMode {
           -Backend                      whatever it says
           -ServiceUrl                   remote
           -InstanceName <registered>    whatever that instance's backend is
+          -InstanceName <new>           local (B11: a name this PC does not know yet is
+                                        the LOCAL VM this run is about to build)
 
         Otherwise the prompt is shown only on a FRESH machine, i.e. when ALL of:
           * this run creates a VM at all (not -SkipCreateVm) and is interactive
@@ -751,9 +907,27 @@ if ($RemoteInstall -and $SkipCreateVm) {
     throw "-SkipCreateVm builds the autoinstall ISO on THIS PC, which a remote install never does (the host service builds it). Drop one of the two."
 }
 if (-not $RemoteInstall -and $PSBoundParameters.ContainsKey('InstanceName') -and $InstanceName) {
-    # -InstanceName is the REMOTE identity. On the local path the VM is named by
-    # -VmName, so honouring neither and running anyway would act on the DEFAULT VM.
-    throw "-InstanceName names a VM on a remote host service. This is a local install: use -VmName '$InstanceName' instead, or add -Backend hyperv-remote -ServiceUrl <url>."
+    # -InstanceName IS the name of a VM, whichever host it lives on (B11, plan section
+    # 4.12). On the local path it names the Hyper-V VM this script builds: the display
+    # name, the guest hostname, the ~\.ssh key file and the config-sync branch are all
+    # derived from it, by the one rule in lib\AgentVm.Instances.ps1 -- never a second
+    # copy here. (Before B11 this combination was refused outright, because -InstanceName
+    # only meant "a VM on a host service".)
+    $instanceTargetLib = Join-Path $PSScriptRoot "lib\AgentVm.InstanceTarget.ps1"
+    if (-not (Test-Path -LiteralPath $instanceTargetLib)) {
+        throw "-InstanceName needs lib/AgentVm.InstanceTarget.ps1, which is missing from this install. Update The Construct, or use -VmName '$InstanceName' instead."
+    }
+    . $instanceTargetLib
+    $localInstanceIdentity = Get-ConstructLocalVmIdentity -Name $InstanceName
+    if ($PSBoundParameters.ContainsKey('VmName') -and
+        $VmName.ToLowerInvariant() -ne $localInstanceIdentity.VmName.ToLowerInvariant()) {
+        # Never silently pick one of two machines the caller named.
+        throw "-InstanceName '$InstanceName' and -VmName '$VmName' name two different VMs. Pass only one (the Hyper-V name is derived from the instance name)."
+    }
+    $VmName = $localInstanceIdentity.VmName
+    # Bound from here on, so the -VmHost reconciliation and the skew guards below treat
+    # this exactly like an explicit -VmName.
+    $PSBoundParameters['VmName'] = $VmName
 }
 
 # Release line used if the latest LTS can't be polled (offline, source changed).
@@ -828,34 +1002,30 @@ if ($PSBoundParameters.ContainsKey('VmHost') -and -not $PSBoundParameters.Contai
     throw "-VmHost '$VmHost' conflicts with -VmName '$VmName': the guest hostname is derived from -VmName (lowercased). Pass only -VmName."
 }
 
-# ── THE ONE INSTANCE-NAME RULE ──────────────────────────────────────────────
-# Repeated here (rather than imported) for the reason Test-ConstructRemoteInstanceName
-# gives: lib\AgentVm.Instances.ps1 may only be loaded in a CHILD scope. It is the same
-# expression as $script:ConstructInstanceNameRe there, as NAME_RE in
-# extension/src/instances.js and as Constructd.Core.Logic.VmNameValidator.Pattern --
-# change all four together.
+# ── THE ONE INSTANCE-NAME RULE, AND THE ONE DERIVATION ──────────────────────
+# Both are ASKED FOR, never restated. lib\AgentVm.Instances.ps1 owns the rule (the same
+# expression as NAME_RE in extension/src/instances.js and
+# Constructd.Core.Logic.VmNameValidator.Pattern) and every value derived from a name --
+# the guest hostname / mshome address, the ssh alias, the ~\.ssh key file and the
+# config-sync branch. It may only be loaded in a CHILD scope (it turns strict mode on),
+# which is exactly what lib\AgentVm.InstanceTarget.ps1 exists for, so this script holds
+# no copy of either the pattern or the formulas:
 #   * a LOWERCASE DNS LABEL: the lowercased VM name doubles as guest hostname, mshome
 #     DNS label, SSH alias and key-name component (the display name is the same string;
 #     "Work-VM" is fine, "Work VM" or "work.vm" is not);
 #   * alphanumeric FIRST AND LAST: "work-" derives "work-.mshome.net", which is not a
 #     host name at all, so the registry entry for such a VM could never be recorded;
-#   * 1-63 chars -- the DNS label's own limit. The derived key file of a maximum-length
-#     name ("construct_" + 63 + "_ed25519" = 81) is covered by the registry's own,
-#     longer key-file bound (lib\AgentVm.Instances.ps1 $script:ConstructKeyFileRe);
-#   * "construct-" is RESERVED (see $script:ConstructVmNameRule).
-$script:ConstructVmNameRe   = '\A[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\z'
-$script:ConstructVmNameRule = '1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with "construct-" are reserved.'
-$script:VmNameLower = $VmName.ToLowerInvariant()
-if ($script:VmNameLower.StartsWith('construct-')) {
-    # RESERVED, not merely discouraged: the derived key file is construct_<name>_ed25519
-    # and the derived config-sync branch is vm-<name>, so a "construct-" name lives inside
-    # the namespace those derivations own. It is also the exact name that used to have its
-    # prefix stripped by the branch derivation, aliasing another instance's config store.
-    throw "-VmName '$VmName' uses the reserved 'construct-' prefix: $($script:ConstructVmNameRule) Drop the prefix, e.g. 'Work-VM'."
-}
-if ($script:VmNameLower -notmatch $script:ConstructVmNameRe) {
-    throw "-VmName '$VmName' is not usable as a hostname (e.g. 'Work-VM'): $($script:ConstructVmNameRule)"
-}
+#   * 1-63 chars -- the DNS label's own limit;
+#   * "construct-" is RESERVED (the namespace the derived key and branch names live in).
+$identityLib = Join-Path $PSScriptRoot "lib\AgentVm.InstanceTarget.ps1"
+if (-not (Test-Path -LiteralPath $identityLib)) { throw "Required helper not found: $identityLib" }
+. $identityLib
+# Kept as script variables because Test-ConstructRemoteInstanceName asks the same
+# question about a REMOTE instance name -- one source, two callers.
+$script:ConstructVmNameRe   = Get-ConstructInstanceNamePattern
+$script:ConstructVmNameRule = Get-ConstructInstanceNameRule
+# Validates AND derives in one call; throws naming -VmName when the rule is broken.
+$script:VmIdentity = Get-ConstructLocalVmIdentity -VmName $VmName -ParameterLabel 'VmName'
 
 # Version-skew guard, BEFORE anything destructive: a non-default VM name needs a
 # Create-AgentVM.ps1 that accepts -VmName. An older colocated script would silently
@@ -1014,13 +1184,18 @@ function Invoke-VmConfigExport {
         BackupDir = $BackupDir
         Auto      = $true
     }
-    # Non-default VM: address it by its own alias/key (the default path passes no
-    # identity so its invocation is unchanged).
-    $exportGuest = $VmName.ToLowerInvariant()
-    if ($exportGuest -ne 'agent-vm') {
-        $a['VmHost']       = "$exportGuest.mshome.net"
-        $a['HostAlias']    = $exportGuest
-        $a['LocalKeyName'] = "construct_${exportGuest}_ed25519"
+    # Non-default VM: address it by its own endpoint/alias/key, all DERIVED in one place
+    # (the default path passes no identity, so its invocation is unchanged). Fails closed
+    # -- an install that cannot derive the identity would otherwise export the DEFAULT VM
+    # under this VM's name.
+    $exportIdentity = Get-ConstructDerivedVmIdentity -VmName $VmName
+    if (-not $exportIdentity) {
+        throw "Cannot derive the identity of the VM '$VmName' (lib/AgentVm.Instances.ps1 is missing or the name is unusable); refusing to export, because a run without it would export the default VM."
+    }
+    if (-not $exportIdentity.IsDefault) {
+        $a['VmHost']       = [string]$exportIdentity.VmHost
+        $a['HostAlias']    = [string]$exportIdentity.HostAlias
+        $a['LocalKeyName'] = [string]$exportIdentity.KeyName
     }
     if ($ScanReposOnly) { $a['ScanReposOnly'] = $true }
     & $ps @a
@@ -1048,14 +1223,19 @@ function Test-VmReachable {
     # Where to dial comes from the driver (local Hyper-V: <name>.mshome.net:22), so
     # a non-local backend probes its real endpoint instead of a name convention.
     # Falls back to the local convention if the driver isn't loaded (version skew).
-    $epHost = "$($VmName.ToLowerInvariant()).mshome.net"
-    $epPort = 22
+    $epIdentity = Get-ConstructDerivedVmIdentity -VmName $VmName
+    $epHost = if ($epIdentity) { [string]$epIdentity.VmHost } else { "" }
+    $epPort = if ($epIdentity) { [int]$epIdentity.SshPort } else { 22 }
     if (Get-Command Get-ConstructVmEndpoint -ErrorAction SilentlyContinue) {
         try {
             $ep = Get-ConstructVmEndpoint -Name $VmName
             if ($ep -and $ep.SshHost) { $epHost = [string]$ep.SshHost; $epPort = [int]$ep.SshPort }
         } catch { }
     }
+    # No endpoint at all (no driver AND no derivable identity) means "cannot be reached
+    # from here", which is what an unreachable VM answers anyway -- and BeginConnect on an
+    # empty host would throw rather than say so.
+    if (-not $epHost) { return $false }
     $client = New-Object System.Net.Sockets.TcpClient
     try {
         $iar = $client.BeginConnect($epHost, $epPort, $null, $null)
@@ -1307,6 +1487,25 @@ function Test-ConstructRemoteInstanceName {
     return [bool]([regex]::IsMatch($Name, $script:ConstructVmNameRe))
 }
 
+function Get-ConstructEndpointPublicHost {
+    <#
+        The publicHost an endpoint object states (plan section 4.12), or "" when it states
+        none. -Endpoint is what Get-ConstructVmEndpoint / New-ConstructVm return -- a
+        hashtable on some paths, a PSCustomObject on others -- so BOTH shapes are read
+        here rather than at three call sites. An older host service, and any host with no
+        Constructd:PublicHostPattern, states nothing, which is exactly "use the SSH host".
+        Pure.
+    #>
+    param($Endpoint)
+    if ($null -eq $Endpoint) { return "" }
+    if ($Endpoint -is [System.Collections.IDictionary]) {
+        if ($Endpoint.Contains('PublicHost')) { return ([string]$Endpoint['PublicHost']).Trim() }
+        return ""
+    }
+    if ($Endpoint.PSObject.Properties['PublicHost']) { return ([string]$Endpoint.PublicHost).Trim() }
+    return ""
+}
+
 function New-ConstructRemoteInstanceEntry {
     <#
         The registry entry a remote VM is recorded as -- built in ONE place so the
@@ -1317,6 +1516,12 @@ function New-ConstructRemoteInstanceEntry {
         pre-create check) the service URL's own host stands in and the endpoint identity
         is excluded from the check instead of guessed at -- see
         Get-ConstructRemoteInstanceConflict.
+
+        -PublicHost is the name this VM's WEB endpoints live under (plan section 4.12):
+        the service's rendered Constructd:PublicHostPattern, as GET /vms/{name}/endpoint
+        reported it. OPTIONAL and only recorded when it says something the SSH host does
+        not -- a host with no pattern reports its own PublicHost for every VM, and writing
+        that as a per-VM field would be noise the reader has to ignore anyway.
     #>
     param(
         [Parameter(Mandatory)][string]$Name,
@@ -1324,7 +1529,8 @@ function New-ConstructRemoteInstanceEntry {
         [int]$SshPort = 22,
         [string]$ServiceUrl = "",
         [string]$ServiceAuth = "",
-        [string]$Owner = ""
+        [string]$Owner = "",
+        [string]$PublicHost = ""
     )
     $entry = @{
         backend      = 'hyperv-remote'
@@ -1339,6 +1545,7 @@ function New-ConstructRemoteInstanceEntry {
         owner        = $Owner
     }
     if ($ServiceUrl) { $entry['service'] = @{ url = $ServiceUrl; auth = $ServiceAuth } }
+    if ($PublicHost -and $PublicHost -ne $SshHost) { $entry['publicHost'] = $PublicHost }
     return $entry
 }
 
@@ -1431,9 +1638,13 @@ function New-ConstructRemoteVmRecord {
     Write-Ok "Endpoint: $($endpoint.SshHost):$($endpoint.SshPort)"
     # The entry this VM will be recorded as -- built ONCE, so what is checked below is
     # byte-for-byte what is written.
+    # The endpoint's own publicHost when the service stated one (an older service, or one
+    # with no PublicHostPattern, reports none and the field is simply absent from the entry).
+    $endpointPublicHost = Get-ConstructEndpointPublicHost -Endpoint $endpoint
     $entry = New-ConstructRemoteInstanceEntry -Name $Name `
                  -SshHost ([string]$endpoint.SshHost) -SshPort ([int]$endpoint.SshPort) `
-                 -ServiceUrl $ServiceUrl -ServiceAuth $ServiceAuth -Owner $Owner
+                 -ServiceUrl $ServiceUrl -ServiceAuth $ServiceAuth -Owner $Owner `
+                 -PublicHost $endpointPublicHost
     # NOW the FULL registry check, endpoint included: this is the first moment the true
     # address is known (nothing exposes the service's allocated forward -- or its own
     # advertised PublicHost, which can differ from the URL's -- before a VM exists).
@@ -1516,6 +1727,9 @@ function New-ConstructRemoteProvisionArgs {
                                the first VM's ~\.ssh key
             -ConfigBranch      vm-<name>, so this VM's config store is its own ref
             -ServiceUrl/-InstanceName/-VmTokenB64  the guest's link back to the service
+            -PublicHost        the name the VM's WEB endpoints live under (plan 4.12),
+                               when the host service renders one; SSH still goes to the
+                               endpoint above
 
         -VmTokenB64 is added ONLY when a token was actually issued (a rebuild that could
         not consume one still provisions; the guest simply gets no heartbeat credential).
@@ -1536,7 +1750,8 @@ function New-ConstructRemoteProvisionArgs {
         [string]$GitName = "",
         [string]$GitEmail = "",
         [string]$CloneCredB64 = "",
-        [string]$VmToken = ""
+        [string]$VmToken = "",
+        [string]$PublicHost = ""
     )
     $a = @{
         VmHost       = [string]$Endpoint.SshHost
@@ -1560,6 +1775,16 @@ function New-ConstructRemoteProvisionArgs {
     if ($CloneCredB64) { $a['GitCloneCredentialsB64'] = $CloneCredB64 }
     if ($VmToken) {
         $a['VmTokenB64'] = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($VmToken))
+    }
+    # Probe before splat, like the three feature flags below: an installed provisioner
+    # without -PublicHost would fail to BIND, and by this point a rebuild has already
+    # deleted the old VM. Dropping it costs the per-VM web host name, not the install.
+    if ($PublicHost) {
+        if ($script:RemoteProvCmd -and -not $script:RemoteProvCmd.Parameters.ContainsKey('PublicHost')) {
+            Write-Note "This install's Provision-AgentVM.ps1 has no -PublicHost; the VM's web endpoints will use $($Endpoint.SshHost) instead of $PublicHost."
+        } else {
+            $a['PublicHost'] = $PublicHost
+        }
     }
     if ($AutoResolve) { $a['AutoResolve'] = $AutoResolve }
     if ($script:RemoteBound -and ($script:RemoteBound.ContainsKey('Repo') -or $script:RemoteBound.ContainsKey('Ref'))) {
@@ -1668,7 +1893,9 @@ if ($RemoteInstall) {
         $endpoint = $null
         try { $endpoint = Get-ConstructVmEndpoint -Name $instName } catch { $endpoint = $null }
         if (-not $endpoint) {
-            $endpoint = @{ SshHost = [string]$existingEntry.VmHost; SshPort = [int]$existingEntry.SshPort }
+            $entryPublicHost = ""
+            if ($existingEntry.PSObject.Properties['PublicHost'] -and $existingEntry.PublicHost) { $entryPublicHost = [string]$existingEntry.PublicHost }
+            $endpoint = @{ SshHost = [string]$existingEntry.VmHost; SshPort = [int]$existingEntry.SshPort; PublicHost = $entryPublicHost }
             Write-Warning "The host service did not report an endpoint for '$instName'; using the address recorded in the instance registry ($($endpoint.SshHost):$($endpoint.SshPort))."
         }
 
@@ -1751,7 +1978,8 @@ if ($RemoteInstall) {
             $provArgs = New-ConstructRemoteProvisionArgs -Name $instName -Endpoint $endpoint `
                             -ServiceUrl $svcUrl -ConfigBranch $instBranch `
                             -Projects $reprovProjects -GitName $reprovGit.Name -GitEmail $reprovGit.Email `
-                            -CloneCredB64 $reprovCloneCredB64
+                            -CloneCredB64 $reprovCloneCredB64 `
+                            -PublicHost (Get-ConstructEndpointPublicHost -Endpoint $endpoint)
             if ($PSBoundParameters.ContainsKey('AgentPassword')) { $provArgs['AgentPassword'] = $AgentPassword }
             try {
                 Write-Step "Reprovisioning '$instName'"
@@ -2013,7 +2241,8 @@ if ($RemoteInstall) {
     $provArgs = New-ConstructRemoteProvisionArgs -Name $instName -Endpoint $endpoint `
                     -ServiceUrl $svcUrl -ConfigBranch "vm-$instName" `
                     -Projects $chosenProjects -GitName $gitId.Name -GitEmail $gitId.Email `
-                    -CloneCredB64 $chosenCloneCredB64 -VmToken $vmToken
+                    -CloneCredB64 $chosenCloneCredB64 -VmToken $vmToken `
+                    -PublicHost (Get-ConstructEndpointPublicHost -Endpoint $endpoint)
     $provArgs['AgentPassword'] = $chosenAgentPassword
     if ($restoreDir) { $provArgs['RestoreDir'] = $restoreDir }
 
@@ -2075,41 +2304,33 @@ $existingVmHandled    = $false # set once the existing-VM menu runs, so the fres
 $HyperVmName = $VmName
 # Derive the mshome DNS name and host alias ONCE from the VM name; used everywhere
 # below instead of re-computing "$($HyperVmName.ToLowerInvariant()).mshome.net" each time.
-$VmGuestName = $HyperVmName.ToLowerInvariant()            # guest hostname (ISO) = mshome DNS label
-$VmDnsName   = "$VmGuestName.mshome.net"
-# SSH alias = the guest name (the first DNS label -- the convention every shared lib
-# helper derives from the host). Saved-key name: the default VM keeps agent_vm_ed25519
-# byte-for-byte; any other VM gets an instance-scoped key so a second VM never
-# overwrites the first VM's ~/.ssh key (docs/plans/modular-remote-architecture.md §4.3).
-# Identity args are passed to the provisioner ONLY for a non-default VM, so the default
-# path's provisioner invocation (and thus the guest's config.env) is unchanged.
-$VmIsDefault = ($VmGuestName -eq 'agent-vm')
-$VmAlias     = $VmGuestName
-$VmKeyName   = if ($VmIsDefault) { 'agent_vm_ed25519' } else { "construct_${VmGuestName}_ed25519" }
-# WHICH INSTANCE this local run's per-VM state belongs to -- derived here, in the one block
-# that derives every identity, so there is a single line to re-point. alias = name, already
-# lowercased above; the default resolves to the legacy top-level keys of
-# .construct-settings.json. (B11, plan section 4.12 "Name-only targeting", makes the local
-# path write a registry entry under exactly this name and adds -InstanceName as the
-# name-only target; this variable is what it re-points. The REMOTE path never reaches here
-# -- it returns inside the `if ($RemoteInstall)` block above, where the name is
-# -InstanceName.)
-$VmInstanceName = $VmAlias
-# The config-sync branch THIS run owns, derived ONCE and exactly the way
-# Provision-AgentVM.ps1 derives it (explicit -ConfigBranch wins, otherwise the alias:
-# "agent-vm" -> "vm", anything else -> "vm-<alias>"). Every sync this script performs
-# -- the PRE-WIPE tick below included -- has to run on it: a tick that runs on the
-# default 'vm' ref for a non-default VM reads THAT VM's store into the DEFAULT
-# instance's branch and merges it into main (docs/config-sync.md, "Multiple instances").
-$VmConfigBranch = if ($ConfigBranch) {
-    $ConfigBranch
-} elseif ($VmIsDefault) {
-    'vm'
-} elseif (Get-Command Get-ConstructConfigBranchName -ErrorAction SilentlyContinue) {
-    Get-ConstructConfigBranchName -HostAlias $VmAlias
-} else {
-    'vm'
-}
+# Every one of these comes from $script:VmIdentity (lib\AgentVm.Instances.ps1 via the
+# adapter, resolved with the name rule above): guest hostname (ISO) = mshome DNS label,
+# the mshome address, the SSH alias (the first DNS label -- the convention every shared
+# lib helper derives from the host) and the saved-key name. The default VM keeps
+# agent_vm_ed25519 byte-for-byte; any other VM gets an instance-scoped key so a second VM
+# never overwrites the first VM's ~/.ssh key (docs/plans/modular-remote-architecture.md
+# section 4.3). Identity args are passed to the provisioner ONLY for a non-default VM, so
+# the default path's provisioner invocation (and thus the guest's config.env) is unchanged.
+$VmGuestName = $script:VmIdentity.Name
+$VmDnsName   = $script:VmIdentity.VmHost
+$VmIsDefault = $script:VmIdentity.IsDefault
+$VmAlias     = $script:VmIdentity.HostAlias
+$VmKeyName   = $script:VmIdentity.KeyName
+# WHICH INSTANCE this local run's per-VM state belongs to (B12) -- taken from the SAME
+# resolved identity as every value above, so there is one answer and one line to re-point.
+# The default instance resolves to the legacy top-level keys of .construct-settings.json;
+# any other one to %LOCALAPPDATA%\The-Construct\instances\<name>.json. The REMOTE path
+# never reaches here -- it returns inside the `if ($RemoteInstall)` block above, where the
+# instance name is -InstanceName.
+$VmInstanceName = $script:VmIdentity.Name
+# The config-sync branch THIS run owns: an explicit -ConfigBranch wins, otherwise the
+# SAME derivation Provision-AgentVM.ps1 applies ("agent-vm" -> "vm", anything else ->
+# "vm-<alias>"). Every sync this script performs -- the PRE-WIPE tick below included --
+# has to run on it: a tick that runs on the default 'vm' ref for a non-default VM reads
+# THAT VM's store into the DEFAULT instance's branch and merges it into main
+# (docs/config-sync.md, "Multiple instances").
+$VmConfigBranch = if ($ConfigBranch) { $ConfigBranch } else { $script:VmIdentity.ConfigBranch }
 # Version skew, checked HERE -- before the menu, the pre-wipe sync and the delete --
 # rather than at the sync call with the VM already gone. A non-default branch that the
 # installed library cannot name, or cannot be TOLD, must be a hard stop: falling back
@@ -2122,7 +2343,12 @@ $VmConfigBranch = if ($ConfigBranch) {
 # pure loss. An UNBOUND -Action (the interactive menu) is gated: the choice is not known
 # yet and the check has to happen before the delete.
 $VmBranchNeeded = ($Action -ne 'export')
-if ($VmBranchNeeded -and -not $VmIsDefault -and $VmConfigBranch -eq 'vm' -and -not $ConfigBranch) {
+# The OTHER half of the pair: Provision-AgentVM.ps1 derives its own branch through
+# AgentVm.Common.ps1's Get-ConstructConfigBranchName, so a scripts dir whose library
+# lacks it would initialise this VM's store on 'vm' while everything here uses
+# 'vm-<alias>'. A capability question, not one inferred from the value.
+if ($VmBranchNeeded -and -not $VmIsDefault -and -not $ConfigBranch -and
+    -not (Get-Command Get-ConstructConfigBranchName -ErrorAction SilentlyContinue)) {
     throw "This install's Construct library cannot derive a config-sync branch for the VM '$VmName' (Get-ConstructConfigBranchName is missing); update The Construct scripts, or pass -ConfigBranch explicitly, before running this action."
 }
 if ($VmBranchNeeded -and $VmConfigBranch -ne 'vm') {
@@ -2140,6 +2366,11 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
     ((Test-ConstructVmPresent -Name $HyperVmName) -eq $true)) {
 
     $existingVmHandled = $true
+    # The VM exists on THIS PC: record it before any action runs, so a VM created before
+    # B11 (or by a script that predates the registry) is listed by the control panel from
+    # its next reprovision/export onward. Writes nothing for a default-only install.
+    $recordedInstancePath = Register-ConstructLocalVmInstance -Name $VmGuestName -ConfigBranch $ConfigBranch
+    if ($recordedInstancePath) { Write-Note "Instance '$VmGuestName' recorded in $recordedInstancePath" }
     Show-TuiScreen -Title "The agent VM '$HyperVmName' is already installed on this host."
 
     if ($PSBoundParameters.ContainsKey('Action')) {

@@ -287,7 +287,7 @@ this is the contract mapping.
 | `Start-/Stop-/Save-ConstructVm` | `POST /vms/{name}/power {action: start\|stop\|save}` (synchronous) |
 | `Get-ConstructVmState` | `GET /vms/{name}/state`; **only a 404 is `absent`** |
 | `Test-ConstructVmPresent` | `GET /vms/{name}`: 200 → `$true`, 404 → `$false`, anything else → `$null` |
-| `Get-ConstructVmEndpoint` | `GET /vms/{name}/endpoint` → `@{ SshHost; SshPort }` (the service's `PublicHost` + the allocated forward). A `409` means the forward does not exist yet. |
+| `Get-ConstructVmEndpoint` | `GET /vms/{name}/endpoint` → `@{ SshHost; SshPort; PublicHost }` (the service's `PublicHost` + the allocated forward, plus the name this VM's WEB endpoints live under — the rendered `Constructd:PublicHostPattern`, equal to `SshHost` when there is none). A `409` means the forward does not exist yet. |
 | `Wait-ConstructVmReachable` | unchanged in kind — a raw socket poll of that endpoint |
 | `Detach-ConstructInstallMedia` | **no-op**: the creation job detaches the media on the host before it reports success |
 | capabilities | `@{ Checkpoints = $false; Console = 'none'; Suspend = $true; Backend = 'hyperv-remote' }` |

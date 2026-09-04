@@ -153,12 +153,20 @@ function writeRawSettings(scriptsDir, obj) {
 // These helpers stay in this pure fs/path module (no vscode) so they unit-test the
 // same way readProjectProfile does, against a fake scripts dir.
 
-// A project name must be a single, safe filename: no path separator, no "..", and
-// nothing that would let a VM-supplied or webview-supplied name escape the projects
-// dir. Mirrors the guard in readProjectProfile. Pure; returns the trimmed name or "".
+// THE profile-name rule for this engine -- one place, reused by every read, write,
+// delete and by publish (extension/src/configsync.js). A project name must be a
+// single, safe filename: no path separator, no "..", nothing that would let a
+// VM-supplied or webview-supplied name escape the projects dir, and none of the
+// characters Windows refuses in a file name (a profile file has to exist on the
+// host, and these names travel between the PowerShell and JS engines through a git
+// repo -- lib/AgentVm.Common.ps1's Test-ConstructSafeProfileName is the twin).
+// Pure; returns the trimmed name or "".
 function safeProfileName(name) {
   const s = String(name == null ? "" : name).trim();
   if (!s || /[\/\\]/.test(s) || s.includes("..")) return "";
+  if (/[:*?"<>|]/.test(s)) return "";
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x1f]/.test(s)) return "";
   return s;
 }
 

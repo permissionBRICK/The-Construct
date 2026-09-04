@@ -54,7 +54,7 @@ test diffs them against the previous commit. The verb documents itself through
 ## Command reference
 
 ```
-construct expose <port> [--label <text>] [--to client|host] [--wait <sec>]
+construct expose <port> [--label <text>] [--to client|host] [--wait <sec>] [--reuse]
 construct expose --list
 construct expose --close <id|port>
 construct expose --help
@@ -65,6 +65,7 @@ construct expose --help
 | `construct expose 3000` | Requests a client forward for VM port 3000, waits (default 30 s) until it is open, prints the link. |
 | `construct expose 3000 --label "api"` | Same, with a label that shows up in `--list` and in the extension's UI. |
 | `construct expose 3000 --to host` | Requests a host forward. Local mode prints the VM's own externally reachable URL (NAT already reaches it); remote mode asks the service to publish a port and prints the URL it returns. |
+| `construct expose 3000 --reuse` | **Get-or-create**: reuses this VM's existing forward for the same port *and* target instead of allocating a second one, and prints its link. |
 | `construct expose --list` | Lists this VM's forwards with id, port, target, status, label and URL. |
 | `construct expose --close 3000` | Closes the forward for VM port 3000. An id works too; a port that has several forwards is ambiguous and is rejected. |
 
@@ -78,6 +79,15 @@ Notes:
   client connects. The CLI says so and exits 6 so a script can tell the difference.
 - Local `--to host` forwards are stateless — the VM is already reachable at that address, so
   there is nothing to allocate, nothing to close and nothing for `--list` to show.
+- **`--reuse` (get-or-create)** exists because the service has no upsert and provisioning
+  runs again on every reprovision: `bin/provision.sh` asks for one host forward per enabled
+  web service (plan §4.12), and without `--reuse` each run would leave another public port
+  behind for the same VM port. It matches on **`vmPort` *and* `target`** — a client forward
+  for port 3000 is not a host forward for port 3000 — and it looks the list up *before*
+  creating anything. In local mode the guest spool is the record, so a request for the same
+  port that no client has picked up yet is reused rather than doubled. Without the flag
+  nothing is looked up: an agent that deliberately asks for the same port twice still gets
+  two forwards.
 
 ## Exit codes
 
@@ -247,11 +257,16 @@ the VM token:
 | Step | Call |
 |---|---|
 | create | `POST {url}/api/v1/vms/{instance}/forwards` with `{"vmPort":5173,"label":"vite dev","target":"client"}` → `201 {id, vmPort, publicPort, target, label, created, url}` |
+| get-or-create (`--reuse`) | `GET …/forwards` first; the first entry with the same `vmPort` **and** `target` is used as-is and nothing is created |
 | wait / list | `GET {url}/api/v1/vms/{instance}/forwards` → the array of the same objects |
 | close | `DELETE {url}/api/v1/vms/{instance}/forwards/{id}` → `204` |
 
 - **Host target**: the service materializes a LAN port and answers with `url` — the CLI
-  prints it and exits.
+  prints it and exits. That `url`'s host is the VM's own **`publicHost`** when the service
+  runs a `Constructd:PublicHostPattern` (`docs/remote-host.md`, *Per-VM public host names*),
+  and the service's `PublicHost` otherwise. The CLI does not compute it: `url` is a field,
+  not a format. `bin/provision.sh` uses exactly this — with `--reuse` — to publish a
+  service-managed VM's OpenCode and T3 ports; see `docs/remote-host.md`.
 - **Client target**: the service records the forward and relays it to the owner's extension,
   which opens the port on the user's PC. The CLI polls the list until the entry for its id
   reports a link, then prints it. The entry is read leniently: a `url`, or a

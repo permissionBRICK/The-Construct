@@ -459,6 +459,26 @@ if ! [[ "${CONSTRUCT_IDLE_REPORT_INTERVAL_SEC}" =~ ^[0-9]+$ ]] \
   CONSTRUCT_IDLE_REPORT_INTERVAL_SEC=60
 fi
 
+# The web-service ports a SERVICE-MANAGED VM asks the host to forward (plan section
+# 4.12). Same three-level precedence as everything above; the defaults are
+# bin/install-ai-tools.sh's, which owns these ports -- and they have to agree, because
+# on a FIRST provision config.env does not carry them yet. Nothing here is written back
+# or printed, so a local install is untouched.
+_opencode_port_saved=""
+_t3code_port_saved=""
+_t3code_https_port_saved=""
+if [[ -f "${CONFIG_FILE}" ]]; then
+  _opencode_port_saved="$(_cfg_unquote "$(sed -n 's/^OPENCODE_PORT=//p' "${CONFIG_FILE}" | head -1 || true)")"
+  _t3code_port_saved="$(_cfg_unquote "$(sed -n 's/^T3CODE_PORT=//p' "${CONFIG_FILE}" | head -1 || true)")"
+  _t3code_https_port_saved="$(_cfg_unquote "$(sed -n 's/^T3CODE_HTTPS_PORT=//p' "${CONFIG_FILE}" | head -1 || true)")"
+fi
+OPENCODE_PORT="${OPENCODE_PORT:-${_opencode_port_saved:-4096}}"
+T3CODE_PORT="${T3CODE_PORT:-${_t3code_port_saved:-5177}}"
+T3CODE_HTTPS_PORT="${T3CODE_HTTPS_PORT:-${_t3code_https_port_saved:-5178}}"
+[[ "${OPENCODE_PORT}" =~ ^[0-9]+$ ]] && (( OPENCODE_PORT >= 1 && OPENCODE_PORT <= 65535 )) || OPENCODE_PORT=4096
+[[ "${T3CODE_PORT}" =~ ^[0-9]+$ ]] && (( T3CODE_PORT >= 1 && T3CODE_PORT <= 65535 )) || T3CODE_PORT=5177
+[[ "${T3CODE_HTTPS_PORT}" =~ ^[0-9]+$ ]] && (( T3CODE_HTTPS_PORT >= 1 && T3CODE_HTTPS_PORT <= 65535 )) || T3CODE_HTTPS_PORT=5178
+
 # Belt and braces for GENERIC install media (plan section 4.10). A VM installed from
 # the pre-built ISO boots as 'construct-seed' and adopts the name the hypervisor gave
 # it at first boot. If that never happened -- no KVP daemon on this generation of VM,
@@ -674,6 +694,162 @@ if [[ -n "${CONSTRUCT_VM_TOKEN_B64:-}" ]]; then
   run_step optional "Installing the VM service token" write_vm_token
 fi
 
+# 2c. HOST PORT FORWARDS for this VM's web services (plan section 4.12, "Web ports
+#     on remote VMs"). ONLY for a SERVICE-MANAGED VM: on a local Hyper-V install NAT
+#     already reaches the VM at its own name and there is no service to allocate
+#     anything, so this whole block does not run -- no output, no file, no request.
+#
+#     The requests go through `construct expose --to host --reuse`, i.e. the same
+#     machinery an agent uses, authenticated with this VM's scoped token. --reuse is
+#     what makes a reprovision idempotent: the service has no upsert, so without it
+#     every run would allocate a second public port for the same VM port.
+#
+#     The result is a STATUS FILE the host provisioner reads back over SSH -- the only
+#     channel that survives the SSH command boundary. One `KEY=<host>:<port>` line per
+#     web service (a URL authority, so an IPv6 literal keeps its brackets), or
+#     `KEY=denied` when the host service refuses host forwards to this VM's owner.
+HOST_FORWARDS_FILE="${CONSTRUCT_HOST_FORWARDS_FILE:-/etc/construct/host-forwards}"
+
+# The authority (host:port) recorded for one key, or "" -- how this script and
+# Provision-AgentVM.ps1 read the same file.
+host_forward_authority() {
+  local key="$1" value=""
+  [[ -f "${HOST_FORWARDS_FILE}" ]] || return 0
+  value="$(sed -n "s/^${key}=//p" "${HOST_FORWARDS_FILE}" | head -1 || true)"
+  case "${value}" in
+    denied|error|"") printf '' ;;
+    *) printf '%s' "${value}" ;;
+  esac
+}
+
+setup_host_forwards() {
+  local expose="${REPO_DIR}/bin/construct-expose.sh" lines="" tmp
+  local entry key label port url rc authority rest
+
+  # KEY|label|port, one per ENABLED web service ('|' because a label may carry a
+  # colon). A service that is switched off asks for nothing, so its key is simply
+  # absent from the file.
+  local -a wanted=()
+  case ",${AI_TOOLS}," in
+    *,opencode,*) wanted+=("OPENCODE|opencode server|${OPENCODE_PORT}") ;;
+  esac
+  if [[ "${T3CODE}" == "true" ]]; then
+    # The port a browser must reach: the TLS listener when T3 is served over HTTPS
+    # (bin/setup-t3-https.sh), the plain one otherwise.
+    if [[ "${T3CODE_HTTPS}" == "false" ]]; then
+      wanted+=("T3|T3 Code web GUI|${T3CODE_PORT}")
+    else
+      wanted+=("T3|T3 Code web GUI (https)|${T3CODE_HTTPS_PORT}")
+    fi
+  fi
+
+  for entry in ${wanted[@]+"${wanted[@]}"}; do
+    key="${entry%%|*}"
+    rest="${entry#*|}"
+    label="${rest%|*}"
+    port="${rest##*|}"
+    rc=0
+    # stdout is the link and nothing else; the CLI's own diagnostics go to stderr and
+    # therefore into the provisioning log the host is streaming.
+    url="$(CONFIG_FILE="${CONFIG_FILE}" bash "${expose}" "${port}" --to host --reuse --label "${label}")" || rc=$?
+    authority=""
+    if (( rc == 0 )) && [[ -n "${url}" ]]; then
+      authority="${url#*://}"
+      authority="${authority%%/*}"
+    fi
+    if [[ -n "${authority}" ]]; then
+      lines="${lines}${key}=${authority}"$'\n'
+      ok "  ${key}: ${url}"
+    elif (( rc == 7 )); then
+      # The owner may not have host forwards. Recorded, not guessed at: the host
+      # provisioner prints the manual path instead of a URL that cannot work.
+      lines="${lines}${key}=denied"$'\n'
+      warn "  ${key}: the host service does not allow host forwards for this VM's owner"
+    else
+      lines="${lines}${key}=error"$'\n'
+      warn "  ${key}: no host forward for port ${port} (construct expose exited ${rc})"
+    fi
+  done
+
+  # Rewritten whole, atomically: a key whose service was switched off must not survive
+  # as a stale line the host would then advertise.
+  mkdir -p "$(dirname "${HOST_FORWARDS_FILE}")" || return 1
+  tmp="${HOST_FORWARDS_FILE}.tmp.$$"
+  printf '%s' "${lines}" >"${tmp}" || { rm -f "${tmp}"; return 1; }
+  chmod 0644 "${tmp}" || { rm -f "${tmp}"; return 1; }
+  mv -f "${tmp}" "${HOST_FORWARDS_FILE}" || { rm -f "${tmp}"; return 1; }
+}
+
+if [[ -n "${CONSTRUCT_SERVICE_URL}" ]]; then
+  run_step optional "Requesting host port forwards for this VM's web services" setup_host_forwards
+else
+  # A VM that was service-managed and is not any more must not keep advertising ports
+  # nothing forwards. Silent: the default path has no such file and prints nothing.
+  rm -f "${HOST_FORWARDS_FILE}"
+fi
+
+# The EFFECTIVE forwarded T3 origin (plan section 4.12), recorded for the HOST
+# provisioner after T3 has actually been set up. It exists because the allocated forward
+# alone is AMBIGUOUS: the forward is requested BEFORE setup-t3-https.sh runs, for the TLS
+# port whenever HTTPS is wanted, and every failure path in that script (offline apt,
+# openssl, nginx) clears the HTTPS status and the advertised origin while the forward
+# stays. "A forward for :5178 and no HTTPS status" therefore means either "HTTPS was off
+# and this is a working plain forward" or "HTTPS was wanted and nothing came up" -- and
+# guessing http for both would print a URL for a TLS port nothing serves.
+#
+# T3CODE_PUBLIC_BASE_URL is the unambiguous answer: setup-t3-https.sh writes it ONLY when
+# something is really serving that origin (https when the proxy came up, http when HTTPS
+# is off and a forwarded port was stated) and clears it on every failure. So the origin is
+# recorded as T3_URL, and only when its PORT is the forwarded one -- an origin on the VM's
+# own port is not something a client can reach and must not be advertised as if it were.
+record_t3_forward_url() {
+  local authority origin want_port origin_port lines tmp
+  authority="$(host_forward_authority T3)"
+  lines="$(grep -v '^T3_URL=' "${HOST_FORWARDS_FILE}" 2>/dev/null || true)"
+  origin=""
+  if [[ -n "${authority}" ]]; then
+    origin="$(_cfg_unquote "$(sed -n 's/^T3CODE_PUBLIC_BASE_URL=//p' "${CONFIG_FILE}" 2>/dev/null | head -1 || true)")"
+    want_port="${authority##*:}"
+    origin_port="${origin##*:}"
+    # The HOST halves may legitimately be spelled differently (the service advertises the
+    # VM's public name, the guest its CONSTRUCT_EXTERNAL_HOST); the PORT is what says
+    # whether the origin is the forwarded one.
+    if [[ -z "${origin}" || "${origin_port}" != "${want_port}" ]]; then origin=""; fi
+  fi
+  tmp="${HOST_FORWARDS_FILE}.tmp.$$"
+  # `if`, not `[[ … ]] && printf`: the last test in the group decides the group's exit
+  # status, so a run with nothing to advertise would "fail" and leave the STALE file --
+  # which is precisely the case this rewrite exists to clear.
+  {
+    if [[ -n "${lines}" ]]; then printf '%s\n' "${lines}"; fi
+    if [[ -n "${origin}" ]]; then printf 'T3_URL=%s\n' "${origin}"; fi
+  } >"${tmp}" || { rm -f "${tmp}"; return 1; }
+  chmod 0644 "${tmp}" || { rm -f "${tmp}"; return 1; }
+  mv -f "${tmp}" "${HOST_FORWARDS_FILE}" || { rm -f "${tmp}"; return 1; }
+  if [[ -n "${origin}" ]]; then
+    ok "  T3: reachable at ${origin}"
+  elif [[ -n "${authority}" ]]; then
+    warn "  T3: the host forwards ${authority}, but the VM advertises no origin on it (its HTTPS setup did not come up)"
+  fi
+}
+
+# The public PORT T3's advertised origin has to use: through a host forward a browser
+# reaches the TLS listener on the port the SERVICE allocated, not on T3CODE_HTTPS_PORT,
+# and T3CODE_PUBLIC_BASE_URL is what its pairing links (and the DPoP proofs bound to
+# them) are built from. Empty everywhere else -- including every local install -- which
+# is exactly today's behaviour.
+#
+# Read back from the status file rather than kept in a variable: run_step pipes the
+# step into `tee`, so it runs in a SUBSHELL and nothing it assigns survives.
+T3CODE_PUBLIC_PORT=""
+_t3_forward_authority="$(host_forward_authority T3)"
+if [[ -n "${_t3_forward_authority}" ]]; then
+  _t3_forward_port="${_t3_forward_authority##*:}"
+  if [[ "${_t3_forward_port}" =~ ^[0-9]+$ ]] && (( _t3_forward_port >= 1 && _t3_forward_port <= 65535 )); then
+    T3CODE_PUBLIC_PORT="${_t3_forward_port}"
+  fi
+fi
+
 # 2b. Global git identity for the users that operate on the VM: CLAUDE_USER
 #     (root -- used by VS Code Remote-SSH and the AI tools) and the SSH/seed user
 #     (interactive logins). Values arrive from the host, defaulted there to the
@@ -760,10 +936,16 @@ done
 #     is honoured both ways (the install itself is left in place -- cheap, and
 #     re-enabling is then instant).
 if [[ "${T3CODE}" == "true" ]]; then
+  # The public-port override is ADDED to the environment only when there is one, so a
+  # local install's invocation is argument-for-argument what it has always been.
+  _t3_public_port_env=()
+  if [[ -n "${T3CODE_PUBLIC_PORT}" ]]; then
+    _t3_public_port_env=("T3CODE_PUBLIC_PORT=${T3CODE_PUBLIC_PORT}")
+  fi
   run_step optional "Installing T3 Code web GUI" \
     env TARGET_USER="${CLAUDE_USER}" AI_TOOLS_OVERRIDE=t3code AI_CONSOLE_INTEGRATION=false \
     T3CODE_CHANNEL="${T3CODE_CHANNEL}" T3CODE_LIMIT_RESUME="${T3CODE_LIMIT_RESUME}" \
-    T3CODE_HTTPS="${T3CODE_HTTPS}" \
+    T3CODE_HTTPS="${T3CODE_HTTPS}" ${_t3_public_port_env[@]+"${_t3_public_port_env[@]}"} \
     bash "${REPO_DIR}/bin/install-ai-tools.sh"
 else
   # A disabled T3 deployment must not cause the host handoff to offer a stale
@@ -782,6 +964,13 @@ else
     run_step optional "Disabling T3 Code web GUI (T3CODE=false)" \
       systemctl disable --now t3code-serve
   fi
+fi
+
+# Now that T3 has been set up (or switched off), record what a client can really open on
+# the T3 host forward. Service-managed VMs only: a local install has no forwards file and
+# this step does not run, so its output is unchanged.
+if [[ -n "${CONSTRUCT_SERVICE_URL}" ]]; then
+  run_step optional "Recording the forwarded T3 address" record_t3_forward_url
 fi
 
 run_step optional "Installing AI tool console integration" \

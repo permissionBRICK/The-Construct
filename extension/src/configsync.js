@@ -28,6 +28,9 @@ const os = require("os");
 const crypto = require("crypto");
 
 const projects = require("./projects");
+// The profile-name rule lives in host.js and is reused here (never re-implemented):
+// one authoritative rule per engine, shared by every profile read/write and publish.
+const hostNames = require("./host");
 
 // ── Git runner (injectable spawn) ────────────────────────────────────────────
 
@@ -1499,14 +1502,39 @@ async function mergeFile(runGit, { ours, base, theirs }) {
 }
 
 /**
- * Stage + commit everything in the config dir. Returns {ok, committed}.
+ * Stage + commit everything in the config dir. Returns {ok, committed, output}.
+ *
+ * Every step is checked. An unchecked `add` followed by an unchecked
+ * `diff --cached` reads a broken repo as "nothing to commit" and reports success,
+ * which is exactly how a caller ends up telling the user their work was recorded
+ * when it was not. `output` carries the (redacted) git message on any failure, so
+ * a caller pointing at the log has something to show there.
  */
 async function commitAll(runGit, configDir, message) {
-  await runGit([...GIT_IDENTITY, "add", "-A"], { cwd: configDir });
+  const add = await runGit([...GIT_IDENTITY, "add", "-A"], { cwd: configDir });
+  if (add.code !== 0) return { ok: false, committed: false, output: redactGitOutput("git add failed: " + add.stderr) };
   const staged = await runGit(["diff", "--cached", "--name-only"], { cwd: configDir });
-  if (!staged.stdout.trim()) return { ok: true, committed: false };
+  if (staged.code !== 0) return { ok: false, committed: false, output: redactGitOutput("git diff --cached failed: " + staged.stderr) };
+  if (!staged.stdout.trim()) return { ok: true, committed: false, output: "" };
   const c = await runGit([...GIT_IDENTITY, "commit", "-m", message], { cwd: configDir });
-  return { ok: c.code === 0, committed: c.code === 0 };
+  if (c.code !== 0) return { ok: false, committed: false, output: redactGitOutput("git commit failed: " + c.stderr + "\n" + c.stdout) };
+  return { ok: true, committed: true, output: "" };
+}
+
+/**
+ * Resolve a remote URL that came BACK from the webview to the real linked URL.
+ * The panel is only ever handed display-safe URLs (a legacy remotes.json entry may
+ * still carry a credential), so a round-tripped string can be the redacted form;
+ * match it exactly first, then by display form. Returns "" when nothing matches.
+ * Pure.
+ */
+function resolveRemoteUrl(remotes, fromWebview) {
+  const wanted = String(fromWebview == null ? "" : fromWebview);
+  if (!wanted) return "";
+  const list = (remotes || []).map((r) => String(r && r.url ? r.url : "")).filter(Boolean);
+  if (list.includes(wanted)) return wanted;
+  const hit = list.find((u) => displayRemoteUrl(u) === wanted);
+  return hit || "";
 }
 
 /**
@@ -1542,6 +1570,506 @@ async function pushUpstream(runGit, { stagingDir, files, branch, message }) {
   return { ok: push.code === 0, branch, output: push.code === 0 ? push.stdout.trim() : push.stderr.trim() };
 }
 
+// ── Publish local profiles upstream (plan 4.13 / B15) ───────────────────────
+
+/**
+ * Redact URL userinfo ("https://user:token@host/..." -> "https://***@host/...").
+ * Pure; twin of Protect-ConstructGitOutput / Format-ConstructRemoteUrlForDisplay
+ * in lib/AgentVm.Common.ps1. Used for BOTH captured git output and every URL that
+ * reaches a toast, a log line or a picker title: a publish target on the owner's
+ * own git host is authenticated with a PAT carried IN the URL, so any display
+ * string built from the raw URL is a credential leak.
+ */
+function redactGitOutput(text) {
+  if (!text) return "";
+  return String(text).replace(/(?<=:\/\/)[^/@\s]+(?=@)/g, "***");
+}
+
+/** The display form of a remote URL: never printed, logged or shown raw. */
+function displayRemoteUrl(url) {
+  return redactGitOutput(String(url == null ? "" : url));
+}
+
+/**
+ * True when a profile name is usable AS IS as a bare file name. It REUSES the one
+ * name rule (host.safeProfileName) rather than restating it, and adds the single
+ * thing publish needs on top: the name must already BE its canonical form, because
+ * here the string IS the on-disk file name -- a name that only becomes safe after
+ * trimming would target a different file than the one it came from. Twin of
+ * Test-ConstructSafeProfileName in lib/AgentVm.Common.ps1. Pure.
+ */
+function isSafeProfileName(name) {
+  const s = String(name == null ? "" : name);
+  return s !== "" && hostNames.safeProfileName(s) === s;
+}
+
+/**
+ * True when a remote URL carries credentials in its userinfo. An http(s) URL has
+ * no legitimate userinfo at all (that is where a PAT gets pasted); for any other
+ * scheme only a bare user is legitimate (ssh://git@host), never user:secret.
+ * Pure; twin of Test-ConstructUrlHasCredentials.
+ */
+function urlHasCredentials(url) {
+  // TRIM first: every caller trims the value before storing or handing it to git,
+  // so a check anchored at the untrimmed first character would pass a padded
+  // " https://alice:secret@host/x.git" that is then persisted without the padding.
+  const m = String(url == null ? "" : url).trim().match(/^([A-Za-z][A-Za-z0-9+.-]*):\/\/([^/@\s]+)@/);
+  if (!m) return false;
+  const scheme = m[1].toLowerCase();
+  if (scheme === "http" || scheme === "https") return true;
+  return m[2].includes(":");
+}
+
+/**
+ * THE validation for a remote-config-repo URL typed by the user, shared by every
+ * input path (add remote, add remote & publish) so none of them can drift. The
+ * git-URL shape check is injected (remote.isLikelyGitUrl) to keep this module free
+ * of the vscode-aware layer. Validates the NORMALIZED value -- the same string the
+ * caller goes on to store. Returns null when acceptable, else the message to show.
+ */
+function validateConfigRemoteUrl(url, isLikelyGitUrl) {
+  const s = String(url == null ? "" : url).trim();
+  const SHAPE = "Enter an https://, ssh:// or git@host:path git URL.";
+  if (!s) return SHAPE;
+  if (typeof isLikelyGitUrl === "function" && !isLikelyGitUrl(s)) return SHAPE;
+  if (urlHasCredentials(s)) {
+    return "Remove the credentials from the URL -- let your git credential helper supply them.";
+  }
+  return null;
+}
+
+/**
+ * The provenance manifest entry a publish writes -- deliberately the SAME shape
+ * and key ORDER an import writes, because publishing IS adopting the file as if
+ * it had been imported from projects/<name>.json of that remote. Serialized with
+ * JSON.stringify(entry, null, 2) + "\n", byte-identical to the PowerShell
+ * writer's ConvertTo-ConstructJsonValue output. Pure.
+ */
+function publishManifestEntry({ remoteUrl, ref, name, baseCommit, baseBlobSha }) {
+  return {
+    remoteUrl: String(remoteUrl || ""),
+    ref: String(ref || ""),
+    pathInRemote: "projects/" + String(name) + ".json",
+    importedAs: String(name),
+    baseCommit: String(baseCommit || ""),
+    baseBlobSha: String(baseBlobSha || ""),
+  };
+}
+
+/**
+ * True when the name is safe as an upstream branch AND as a bare git ref
+ * operand. Looser than isValidVmBranch on purpose -- that one governs THIS
+ * repo's vm-<name> branches and reserves "main"/"master", which are exactly the
+ * names an upstream default branch has. Pure; twin of
+ * Test-ConstructPublishBranchName.
+ */
+function isValidPublishBranch(name) {
+  const n = String(name == null ? "" : name);
+  if (!n) return false;
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(n)) return false;
+  if (n.includes("..")) return false;
+  if (n.includes("//")) return false;
+  if (n.endsWith(".")) return false;
+  if (n.endsWith("/")) return false;
+  if (n.endsWith(".lock")) return false;
+  return true;
+}
+
+/**
+ * Canonicalize on-disk profile text through the SAME gate every other config
+ * write uses: parse -> projects.validateProfile -> projects.canonicalProfileJson.
+ * Returns {ok, content} or {ok:false, reason}. Pure.
+ *
+ * The validate step is NOT optional decoration: canonicalProfileJson is
+ * COERCIVE (sanitizeProfile drops unknown keys and replaces wrong-typed ones
+ * with empty defaults), so canonicalizing an invalid profile silently repairs it
+ * into something the user never wrote -- and a publish would then push that
+ * repaired value AND write it back over the local file. Invalid profiles are
+ * reported, never repaired.
+ */
+function canonicalizeProfileText(name, raw) {
+  let obj;
+  try { obj = JSON.parse(raw); }
+  catch (e) { return { ok: false, reason: "cannot be parsed as JSON (" + e.message + ")" }; }
+  const v = projects.validateProfile(name, obj);
+  if (!v.ok) return { ok: false, reason: "is not a valid profile: " + v.errors.join("; ") };
+  const content = projects.canonicalProfileJson(name, obj);
+  if (!content) return { ok: false, reason: "could not be canonicalized" };
+  return { ok: true, content };
+}
+
+/**
+ * Plan a publish (B15). Pure: no IO, no git. The decision core BOTH engines run --
+ * lib/AgentVm.Common.ps1's Get-ConstructPublishPlan is its twin, and
+ * test/fixtures/publish-plan-cases.json is the shared behaviour fixture they are
+ * both measured against.
+ *
+ *   profiles      [{name, raw}] -- local profiles as they are ON DISK (raw text)
+ *   manifest      {name -> manifestEntry} (config/manifest, minus remotes.json)
+ *   remoteFiles   {name -> content} for projects/<name>.json already upstream
+ *                 ({} when the remote is empty or brand new)
+ *   selected      optional string[] narrowing the selection (null = all)
+ *
+ * Rules:
+ *   - reserved names, *.sample names and names that are not safe bare filenames
+ *     are never published (the first two silently, the last as invalid)
+ *   - a profile that fails the parse/validate/canonicalize gate is INVALID and is
+ *     reported, never repaired
+ *   - a profile with ANY manifest entry is already tracked -> skipTracked
+ *     (it goes through Push back, not Publish)
+ *   - the remote already has projects/<name>.json with DIFFERENT content
+ *     -> refuse (import it first, then push back). The comparison is
+ *     canonical-vs-canonical when the upstream file is itself a valid profile,
+ *     so a merely reformatted copy is not a conflict
+ *   - an upstream file whose name differs only by CASE is the same file on
+ *     Windows -> refuse, whatever its content
+ *   - an upstream copy with identical content is adopted (published with
+ *     adopt:true -- nothing to commit, everything to track)
+ *
+ * Returns {publish, skipTracked, refuse, invalid, reasons}; reasons is a flat
+ * {name -> reason} map for logging and the picker. Every reason is display-safe
+ * (URLs redacted).
+ */
+function planPublish({ profiles, manifest, remoteFiles, selected }) {
+  const publish = [];
+  const skipTracked = [];
+  const refuse = [];
+  const invalid = [];
+  const reasons = {};
+  const man = manifest || {};
+  const remote = remoteFiles || {};
+  const want = Array.isArray(selected) ? new Set(selected.map((n) => String(n))) : null;
+
+  // Case-insensitive index of the upstream listing: on Windows projects/Alpha.json
+  // and projects/alpha.json are ONE file, so a case variant is a collision.
+  const remoteByLower = new Map();
+  for (const key of Object.keys(remote)) remoteByLower.set(key.toLowerCase(), key);
+
+  for (const p of (profiles || [])) {
+    const name = String(p && p.name != null ? p.name : "");
+    if (!name) continue;
+    if (projects.isReservedProfileName(name)) continue;
+    if (name.toLowerCase().endsWith(".sample")) continue;
+    if (want && !want.has(name)) continue;
+
+    if (!isSafeProfileName(name)) {
+      const reason = "is not a safe profile file name";
+      reasons[name] = reason;
+      invalid.push({ name, reason });
+      continue;
+    }
+    if (man[name]) {
+      const url = displayRemoteUrl(man[name].remoteUrl || "");
+      const reason = url
+        ? "already tracked by " + url + " -- use Push back"
+        : "already tracked -- use Push back";
+      reasons[name] = reason;
+      // The record carries NO raw URL: a plan is returned to callers that print,
+      // log and serialize it whole, and a legacy manifest entry can hold a PAT.
+      // Everything downstream needs the name and the (redacted) reason.
+      skipTracked.push({ name, reason });
+      continue;
+    }
+
+    const gate = canonicalizeProfileText(name, p.raw);
+    if (!gate.ok) {
+      reasons[name] = gate.reason;
+      invalid.push({ name, reason: gate.reason });
+      continue;
+    }
+
+    const upstreamKey = remoteByLower.get(name.toLowerCase());
+    if (upstreamKey != null && upstreamKey !== name) {
+      const reason = "the remote already has projects/" + upstreamKey +
+        ".json, which is the SAME file as projects/" + name +
+        ".json on Windows -- rename one of them, or import it first";
+      reasons[name] = reason;
+      refuse.push({ name, reason });
+      continue;
+    }
+    const upstream = upstreamKey != null ? remote[upstreamKey] : null;
+    if (upstream != null) {
+      // Compare canonical-vs-canonical when the upstream file is itself a valid
+      // profile, so reformatting alone is never a conflict.
+      const upGate = canonicalizeProfileText(name, upstream);
+      const upstreamCmp = upGate.ok ? upGate.content : upstream;
+      if (upstreamCmp !== gate.content) {
+        const reason = "the remote already has projects/" + name +
+          ".json with different content -- import it first, then push back";
+        reasons[name] = reason;
+        refuse.push({ name, reason });
+        continue;
+      }
+    }
+    publish.push({
+      name,
+      pathInRemote: "projects/" + name + ".json",
+      content: gate.content,
+      adopt: upstream != null,
+    });
+  }
+  return { publish, skipTracked, refuse, invalid, reasons };
+}
+
+/**
+ * Turn a profile-name listing into the planner's input. The reader is injected, so
+ * this is the handler's whole "listing -> plan input" step and is unit-testable.
+ *
+ * An UNSAFE name is passed through with empty text and is NEVER handed to the
+ * reader: the planner rejects it on the name alone (so it is reported as invalid
+ * instead of silently vanishing from the picker), and no unsafe name is ever
+ * joined onto a path. An unreadable file becomes empty text too, which the gate
+ * reports as unparseable rather than dropping.
+ */
+function buildPublishProfileInputs(names, readRaw) {
+  const out = [];
+  for (const n of (names || [])) {
+    const name = String(n == null ? "" : n);
+    if (!name) continue;
+    if (!isSafeProfileName(name)) { out.push({ name, raw: "" }); continue; }
+    let raw = null;
+    try { raw = readRaw(name); } catch (_) { raw = null; }
+    out.push({ name, raw: raw == null ? "" : raw });
+  }
+  return out;
+}
+
+/**
+ * The QuickPick model for the publish picker. Pure, so the picker's behaviour is
+ * unit-tested rather than only clicked: publishable profiles come first and are
+ * ALL ticked by default (the mirror image of Import's none-ticked rule -- pulling
+ * someone else's config is opt-in, publishing your own is why the button was
+ * pressed); tracked and refused/invalid ones follow under their own separator,
+ * carry their reason, and are marked blocked so the caller can keep them
+ * de-selected. Returns [{label, description, kind, picked, blocked}] where
+ * kind === "separator" rows are headings.
+ */
+function buildPublishPickerItems(plan) {
+  const items = [];
+  const p = plan || {};
+  const pub = p.publish || [];
+  const tracked = p.skipTracked || [];
+  const bad = (p.refuse || []).concat(p.invalid || []);
+  if (pub.length) {
+    items.push({ label: "publish", kind: "separator" });
+    for (const e of pub) {
+      items.push({
+        label: e.name,
+        description: e.adopt ? "already upstream, identical -- adopt only" : "",
+        picked: true, blocked: false,
+      });
+    }
+  }
+  if (tracked.length) {
+    items.push({ label: "already tracked -- use Push back", kind: "separator" });
+    for (const e of tracked) items.push({ label: e.name, description: e.reason, picked: false, blocked: true });
+  }
+  if (bad.length) {
+    items.push({ label: "cannot be published", kind: "separator" });
+    for (const e of bad) items.push({ label: e.name, description: e.reason, picked: false, blocked: true });
+  }
+  return items;
+}
+
+/**
+ * The selection filter behind the picker's greying: a blocked row that somehow
+ * ends up selected is dropped again, so the UI can never publish a tracked or
+ * refused profile. Pure; returns the kept items.
+ */
+function filterPublishSelection(selection) {
+  return (selection || []).filter((i) => i && !i.blocked && i.kind !== "separator");
+}
+
+/**
+ * Ask the REMOTE which branch its HEAD points at. Returns "" when the remote is
+ * unreachable or does not exist yet (the push-to-create case); the caller falls
+ * back to "main".
+ */
+async function remoteDefaultBranch(runGit, url) {
+  const r = await runGit(["ls-remote", "--symref", url, "HEAD"], { timeoutMs: 60000 });
+  if (r.code !== 0) return "";
+  const m = String(r.stdout || "").match(/^ref:\s+refs\/heads\/(\S+)\s/m);
+  return m ? m[1] : "";
+}
+
+// A staging clone created for push-to-create is marked INSIDE .git (never in the
+// work tree, so `git add -A` cannot pick it up). Without the marker a first push
+// that fails -- the common case while a PAT is still being set up -- would wedge
+// the flow forever: the retry finds a local repo whose fetch still fails and
+// whose HEAD now exists (the failed attempt's commit), which is exactly the
+// signature of "a real remote we cannot reach". The marker tells the two apart,
+// and is removed once a push has actually landed.
+const PUBLISH_PENDING_MARKER = "construct-publish-pending";
+// The marker is an OPAQUE sentinel, never a copy of the remote URL: the URL is the
+// one thing that could carry a credential, and this file is a plain unencrypted
+// file in the staging cache. Which remote it belongs to is already the directory
+// name (the slug), and git itself holds the URL in .git/config.
+const PUBLISH_PENDING_SENTINEL = "push-to-create pending\n";
+
+function publishPendingMarkerPath(cloneDir) {
+  return path.join(cloneDir, ".git", PUBLISH_PENDING_MARKER);
+}
+
+/**
+ * The staging clone used by a publish -- the SAME cache dir and slug an import
+ * uses, so a publish and a later import/push-back share one clone. The one
+ * difference: publishing tolerates a remote that does not exist YET. When the
+ * clone fails, the directory is set up locally with git init + remote add and the
+ * first push creates the repo on hosts that support push-to-create
+ * (GitLab/GitGudLab). A remote that DOES exist but cannot be fetched is an error,
+ * not a push-to-create: starting from an empty tree there would publish a history
+ * that drops everything already in the repo.
+ *
+ * Returns {ok, dir, created, output}.
+ */
+async function ensurePublishClone(runGit, stagingRootDir, url) {
+  const slug = remoteSlug(url);
+  const dir = path.join(stagingRootDir, slug);
+  let isRepo = false;
+  try { isRepo = fs.statSync(path.join(dir, ".git")).isDirectory(); } catch (_) { isRepo = false; }
+
+  if (isRepo) {
+    const setUrl = await runGit(["remote", "set-url", "origin", url], { cwd: dir });
+    if (setUrl.code !== 0) {
+      const add = await runGit(["remote", "add", "origin", url], { cwd: dir });
+      if (add.code !== 0) {
+        return { ok: false, dir, created: false, output: redactGitOutput(setUrl.stderr + "\n" + add.stderr) };
+      }
+    }
+    const fetch = await runGit(["fetch", "origin"], { cwd: dir, timeoutMs: 60000 });
+    if (fetch.code === 0) return { ok: true, dir, created: false, output: "" };
+    // Unreachable origin. Push-to-create only when THIS clone was created for it
+    // (marker), or when it has no commits at all.
+    let pending = false;
+    try { pending = fs.existsSync(publishPendingMarkerPath(dir)); } catch (_) { pending = false; }
+    const head = await runGit(["rev-parse", "--verify", "--quiet", "HEAD"], { cwd: dir });
+    if (pending || head.code !== 0) {
+      try { fs.writeFileSync(publishPendingMarkerPath(dir), PUBLISH_PENDING_SENTINEL, "utf8"); } catch (_) { /* best effort */ }
+      return { ok: true, dir, created: true, output: "" };
+    }
+    return { ok: false, dir, created: false, output: redactGitOutput(fetch.stderr) };
+  }
+
+  fs.mkdirSync(path.dirname(dir), { recursive: true });
+  const clone = await runGit(["clone", url, slug], { cwd: path.dirname(dir), timeoutMs: 60000 });
+  if (clone.code === 0) return { ok: true, dir, created: false, output: "" };
+
+  // Push-to-create: no repo there yet. Start an empty local one.
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  const init = await runGit(["init"], { cwd: dir });
+  if (init.code !== 0) return { ok: false, dir, created: false, output: redactGitOutput(clone.stderr + "\n" + init.stderr) };
+  const add = await runGit(["remote", "add", "origin", url], { cwd: dir });
+  if (add.code !== 0) return { ok: false, dir, created: false, output: redactGitOutput(add.stderr) };
+  try { fs.writeFileSync(publishPendingMarkerPath(dir), PUBLISH_PENDING_SENTINEL, "utf8"); } catch (_) { /* best effort */ }
+  return { ok: true, dir, created: true, output: "" };
+}
+
+/**
+ * Position a staging clone on the target branch and return the profiles already
+ * upstream there as {name -> content}. An unborn HEAD (fresh push-to-create
+ * clone, or an empty repo) points at the branch instead of checking it out.
+ * Every git step that CHANGES state is checked -- a failed reset/clean would
+ * leave an earlier run's files in the tree and publish them.
+ * Returns {ok, remoteFiles, output}.
+ */
+async function checkoutPublishBranch(runGit, cloneDir, branch) {
+  const hasHead = (await runGit(["rev-parse", "--verify", "--quiet", "HEAD"], { cwd: cloneDir })).code === 0;
+  const hasRemoteBranch = (await runGit(["rev-parse", "--verify", "--quiet", "refs/remotes/origin/" + branch], { cwd: cloneDir })).code === 0;
+  let co;
+  if (hasRemoteBranch) co = await runGit(["checkout", "-B", branch, "refs/remotes/origin/" + branch], { cwd: cloneDir });
+  else if (hasHead) co = await runGit(["checkout", "-B", branch], { cwd: cloneDir });
+  else co = await runGit(["symbolic-ref", "HEAD", "refs/heads/" + branch], { cwd: cloneDir });
+  if (co.code !== 0) return { ok: false, remoteFiles: {}, output: redactGitOutput(co.stderr) };
+  if (hasRemoteBranch || hasHead) {
+    // Drop anything an earlier run left behind so the tree IS the branch.
+    const reset = await runGit(["reset", "--hard"], { cwd: cloneDir });
+    if (reset.code !== 0) return { ok: false, remoteFiles: {}, output: redactGitOutput(reset.stderr) };
+    const clean = await runGit(["clean", "-fd"], { cwd: cloneDir });
+    if (clean.code !== 0) return { ok: false, remoteFiles: {}, output: redactGitOutput(clean.stderr) };
+  }
+  const remoteFiles = {};
+  const projDir = path.join(cloneDir, "projects");
+  let entries = [];
+  try { entries = fs.readdirSync(projDir, { withFileTypes: true }); } catch (_) { entries = []; }
+  for (const e of entries) {
+    if (!e.isFile() || !e.name.endsWith(".json")) continue;
+    const base = e.name.slice(0, -5);
+    try { remoteFiles[base] = fs.readFileSync(path.join(projDir, e.name), "utf8"); } catch (_) { /* skip */ }
+  }
+  return { ok: true, remoteFiles, output: "" };
+}
+
+const SHA1_RE = /^[0-9a-f]{40}$/;
+
+/**
+ * Write the planned profiles into the staging clone, commit and push them to the
+ * remote's DEFAULT branch (the owner publishes into their own repo, so no review
+ * branch). Returns {ok, branch, commit, blobShas, output}.
+ *
+ * EVERY git step is checked. The caller adopts the published files -- writes a
+ * manifest entry claiming they are tracked upstream -- purely on the strength of
+ * {commit, blobShas}, so a step that silently failed (a failed `add` followed by
+ * an empty staged diff and an "Everything up-to-date" push) must never surface as
+ * ok:true. ok is returned only with a real 40-hex commit and a real blob sha for
+ * every published file.
+ *
+ * The commit is made with the USER'S configured git identity: it lands in the
+ * user's own upstream repo, so the internal bookkeeping identity the local config
+ * store uses would be wrong there. `core.hooksPath=` is still forced -- hooks from
+ * a cloned repo must not run on this machine.
+ */
+async function publishToRemote(runGit, { stagingDir, branch, files, message }) {
+  const fail = (output) => ({ ok: false, branch, commit: "", blobShas: {}, output: redactGitOutput(output) });
+  const NO_HOOKS = ["-c", "core.hooksPath="];
+  const projDir = path.join(stagingDir, "projects");
+  fs.mkdirSync(projDir, { recursive: true });
+  for (const f of (files || [])) {
+    // The destination path is REBUILT from a bare profile name, never taken from
+    // the caller: a name carrying a separator or ".." is refused outright rather
+    // than quietly collapsed to its basename.
+    const name = String(f && f.name ? f.name : "");
+    if (!isSafeProfileName(name) || name !== path.basename(name)) {
+      throw new Error("refusing to publish outside projects/: " + name);
+    }
+    fs.writeFileSync(path.join(projDir, name + ".json"), f.content, "utf8");
+  }
+  const add = await runGit([...NO_HOOKS, "add", "-A"], { cwd: stagingDir });
+  if (add.code !== 0) return fail("git add failed: " + add.stderr);
+  const staged = await runGit(["diff", "--cached", "--name-only"], { cwd: stagingDir });
+  if (staged.code !== 0) return fail("git diff --cached failed: " + staged.stderr);
+  if (staged.stdout.trim()) {
+    const msg = message || ("publish " + (files || []).length + " profiles");
+    const c = await runGit([...NO_HOOKS, "commit", "-m", msg], { cwd: stagingDir });
+    if (c.code !== 0) {
+      const both = c.stderr + "\n" + c.stdout;
+      if (/Please tell me who you are|empty ident|unable to auto-detect email/i.test(both)) {
+        return fail("git has no configured identity to commit with. Set user.name and user.email " +
+          "(git config --global user.name \"...\"; git config --global user.email \"...\") and publish again.\n" + both);
+      }
+      return fail("git commit failed: " + both);
+    }
+  }
+  const push = await runGit(["push", "origin", "HEAD:refs/heads/" + branch], { cwd: stagingDir, timeoutMs: 60000 });
+  if (push.code !== 0) return fail("git push failed: " + push.stderr);
+
+  const head = await runGit(["rev-parse", "HEAD"], { cwd: stagingDir });
+  const commit = head.code === 0 ? head.stdout.trim() : "";
+  if (!SHA1_RE.test(commit)) return fail("could not resolve the pushed commit: " + (head.stderr || head.stdout));
+  const blobShas = {};
+  for (const f of (files || [])) {
+    const b = await runGit(["rev-parse", "HEAD:projects/" + f.name + ".json"], { cwd: stagingDir });
+    const sha = b.code === 0 ? b.stdout.trim() : "";
+    if (!SHA1_RE.test(sha)) {
+      return fail("\"" + f.name + "\" is not in the pushed commit " + commit.slice(0, 7) + ": " + (b.stderr || b.stdout));
+    }
+    blobShas[f.name] = sha;
+  }
+  // The push landed: this clone is a normal staging clone from now on.
+  try { fs.rmSync(publishPendingMarkerPath(stagingDir), { force: true }); } catch (_) { /* best effort */ }
+  return { ok: true, branch, commit, blobShas, output: redactGitOutput(push.stdout) };
+}
+
 module.exports = {
   makeGitRunner, detectGit,
   ensureConfigTree,
@@ -1555,4 +2083,9 @@ module.exports = {
   readRemotes, writeRemotes, remoteSlug, stagingRoot,
   ensureStagingClone, listImportCandidates, readImportManifest,
   planUpstreamImport, mergeFile, commitAll, pushUpstream,
+  redactGitOutput, displayRemoteUrl, resolveRemoteUrl, urlHasCredentials, validateConfigRemoteUrl,
+  isSafeProfileName, isValidPublishBranch,
+  canonicalizeProfileText, publishManifestEntry, planPublish,
+  buildPublishProfileInputs, buildPublishPickerItems, filterPublishSelection,
+  remoteDefaultBranch, ensurePublishClone, checkoutPublishBranch, publishToRemote,
 };

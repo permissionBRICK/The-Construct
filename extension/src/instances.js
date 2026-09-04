@@ -43,15 +43,18 @@
 //   targetFingerprint(instance)           -> string        (the COMPLETE target identity)
 //   planCapturedFollowUp(gate, target, proceed) -> { run, reason, target }
 //   isDefaultInstance(instance)           -> bool          (argv/behaviour gate)
-//   toSshCfg(instance)                    -> ssh.js cfg   ({vmHost,hostAlias,keyName,sshPort})
+//   toSshCfg(instance)                    -> ssh.js cfg   ({vmHost,hostAlias,keyName,sshPort};
+//                                                           publicHost is deliberately NOT in it —
+//                                                           SSH always dials sshHost:sshPort)
 //   save(path, registry)                  -> writes atomically (tmp + rename)
 //   addInstance / updateInstance / removeInstance / setDefaultInstance
 //
 // ── The normalized instance object (the shape passed between JS modules) ─────
 //   { name, backend, vmName, vmHost, sshPort, hostAlias, keyName, configBranch,
-//     scriptsDir, service, owner }
+//     scriptsDir, service, owner, publicHost }
 // `vmHost` is the registry's `sshHost` (the JS side calls it vmHost because that is
-// what ssh.js/probe.js already call it).
+// what ssh.js/probe.js already call it). `publicHost` is the OPTIONAL name the VM's
+// WEB endpoints are reachable under (plan §4.12) — never where SSH is dialled.
 
 const fs = require("fs");
 const path = require("path");
@@ -131,6 +134,7 @@ const DEFAULT_INSTANCE = Object.freeze({
   scriptsDir: null,
   service: null,
   owner: null,
+  publicHost: null,
 });
 
 function isValidName(name) {
@@ -209,7 +213,7 @@ function badString(v) { return v != null && v !== "" && typeof v !== "string"; }
 /** `backend` is deliberately NOT in this list: "report it and use the derived default"
  *  is the wrong answer for the one field whose derived default is the LOCAL hypervisor.
  *  It has its own, stricter check — backendProblems() — which SKIPS the entry. */
-const STRING_FIELDS = ["vmName", "sshHost", "vmHost", "hostAlias", "keyName", "configBranch", "scriptsDir", "owner"];
+const STRING_FIELDS = ["vmName", "sshHost", "vmHost", "hostAlias", "keyName", "configBranch", "scriptsDir", "owner", "publicHost"];
 
 // ── Identity-field FORMAT rules ──────────────────────────────────────────────
 // Type-checking a field ("it is a string") is not enough for the ones that end up in
@@ -310,7 +314,12 @@ function identityProblems(inst, raw) {
   const q = (v) => JSON.stringify(v === undefined ? null : v);
   const add = (msg) => { if (out.indexOf(msg) < 0) out.push(msg); };
   if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-    for (const f of ["sshHost", "vmHost"]) {
+    // `publicHost` is checked HERE, on the RAW entry, and for every backend — even the
+    // ones that ignore it (deriveDefaults drops it for hyperv-local). It ends up in the
+    // provisioner's `-PublicHost`, in CONSTRUCT_EXTERNAL_HOST inside the guest's shell
+    // command line and in printed URLs, so a value that is not a host name is refused
+    // where it sits rather than where it lands.
+    for (const f of ["sshHost", "vmHost", "publicHost"]) {
       const v = str(raw[f]);
       if (v && !isHostEndpoint(v)) add('"' + f + '" ' + q(v) + " is not a host name or IP address");
     }
@@ -588,6 +597,12 @@ function deriveDefaults(name, raw) {
     scriptsDir: str(r.scriptsDir),
     service: normalizeService(r.service),
     owner: str(r.owner),
+    // OPTIONAL and NEVER derived (plan §4.12): the host service states it
+    // (GET /vms/{name}/endpoint -> publicHost) and the installer records it. It is
+    // IGNORED for a local backend, where the one address a VM has is its endpoint —
+    // dropping it here rather than carrying it means no consumer has to re-ask which
+    // backend it is looking at.
+    publicHost: isLocalBackend(backend) ? null : str(r.publicHost),
   };
 }
 
@@ -604,9 +619,10 @@ function normalizeService(s) {
  * gate the zero-change path hangs on: it must be true for a synthesized default AND
  * for a registry that spells the default out with today's values.
  *
- * `scriptsDir`, `service` and `owner` are deliberately NOT part of the comparison —
- * scriptsDir is handled by host.resolveScriptsDir (it can't reach the VM args), and
- * the other two carry no argv/SSH consequence for a local instance.
+ * `scriptsDir`, `service`, `owner` and `publicHost` are deliberately NOT part of the
+ * comparison — scriptsDir is handled by host.resolveScriptsDir (it can't reach the VM
+ * args), and the others carry no argv/SSH consequence for a local instance (`publicHost`
+ * cannot even be set on one: deriveDefaults drops it for a local backend).
  */
 function isDefaultInstance(inst) {
   if (!inst) return true;
@@ -1641,6 +1657,85 @@ async function adoptRemoteInstance(opts = {}) {
   }
 }
 
+// ── "Register this VM" (B11, plan §4.12) ─────────────────────────────────────
+//
+// The mirror image of adoption. A window attached over Remote-SSH to a host the
+// registry does NOT know (planRemoteAdoption reason "unknown-host") is almost always a
+// Construct VM this PC built before local VMs were recorded — or one built from another
+// PC. Rather than leave the panel describing a machine the user is not on, offer the one
+// action that fixes it: name the VM and write its entry.
+//
+// It offers ONLY for "unknown-host". Every other reason means the question is already
+// answered — a local window has no VM to register, a pin is an explicit choice, and a
+// host that matches an instance is registered by definition.
+
+/**
+ * Should the panel offer "Register this VM as an instance"? Same inputs as
+ * planRemoteAdoption (it defers to it for the decision, so the two can never disagree
+ * about what "unknown" means). `suggestedName` is the ssh host's first label when that
+ * is a usable instance name, "" otherwise — a default for the prompt, never a silent
+ * choice. Pure.
+ */
+function planRegisterAttachedVm(registry, remoteAuthority, setting, currentName) {
+  const plan = planRemoteAdoption(registry, remoteAuthority, setting, currentName);
+  if (plan.reason !== "unknown-host") return { offer: false, reason: plan.reason };
+  const m = /^ssh-remote\+(.+)$/i.exec(String(remoteAuthority || ""));
+  const host = m ? m[1] : "";
+  const label = String(host).split(".")[0].toLowerCase();
+  return {
+    offer: true,
+    reason: "unknown-host",
+    host,
+    suggestedName: isValidName(label) ? label : "",
+  };
+}
+
+/**
+ * The entry that would register the machine answering at `host` as the local instance
+ * `name` — or a refusal with the reason, which the caller shows verbatim.
+ *
+ * THE REFUSAL IS THE POINT. A `hyperv-local` entry's identity is DERIVED from its name
+ * (canonicalIdentity): host `<name>.mshome.net`, alias `<name>`, port 22. That is not a
+ * formatting preference — it is what a rebuild recreates, and the reader SKIPS an entry
+ * that says anything else. So if the window is attached to `buildbox.example.local`,
+ * there is no name for which a local entry describes that machine, and inventing one
+ * would produce an instance that either vanishes on the next load or points every
+ * lifecycle action at a different VM. Such a host needs the remote flow (a host service),
+ * not a registry edit. Pure.
+ */
+function planLocalRegistration(registry, name, host) {
+  const n = str(name);
+  if (!n || !isValidName(n)) {
+    return { ok: false, reason: 'Not a usable instance name: ' + NAME_RULE };
+  }
+  if (hasInstance(registry, n)) {
+    return { ok: false, reason: 'This PC already has an instance named "' + n + '".' };
+  }
+  const c = canonicalIdentity(n);
+  const h = String(host == null ? "" : host).trim().toLowerCase().replace(/\.$/, "");
+  if (h !== c.vmHost && h !== c.hostAlias) {
+    return {
+      ok: false,
+      reason: 'This window is attached to "' + host + '", but a local Hyper-V instance named "' + n +
+        '" answers at "' + c.vmHost + '" (or "' + c.hostAlias + '"). The registry cannot describe ' +
+        'that machine as a "' + DEFAULT_BACKEND + '" instance — a VM on another host is added ' +
+        'through "Add remote host" instead.',
+    };
+  }
+  return {
+    ok: true,
+    name: n,
+    entry: {
+      backend: DEFAULT_BACKEND,
+      vmName: c.vmName,
+      sshHost: c.vmHost,
+      sshPort: c.sshPort,
+      hostAlias: c.hostAlias,
+      keyName: c.keyName,
+    },
+  };
+}
+
 // ── Writing (atomic) ─────────────────────────────────────────────────────────
 
 /** The on-disk (schema v1) form of a normalized instance. Fields that equal the
@@ -1660,6 +1755,9 @@ function toFileEntry(inst) {
   };
   out.service = inst.service ? { url: inst.service.url, auth: inst.service.auth } : null;
   out.owner = inst.owner == null ? null : inst.owner;
+  // Optional: written only when there is one, so a local (or pattern-less remote) entry
+  // is byte-identical to what earlier builds wrote.
+  if (inst.publicHost) out.publicHost = inst.publicHost;
   return out;
 }
 
@@ -1794,6 +1892,7 @@ module.exports = {
   describeSyncStatus, createSyncStatusStore,
   planCapturedFollowUp, planHandover, createHandover, planEnable, createSessionOwner,
   planSwitchPersistence, planRemoteAdoption, adoptRemoteInstance,
+  planRegisterAttachedVm, planLocalRegistration,
   toFileEntry, toFileDocument, save,
   addInstance, updateInstance, removeInstance, setDefaultInstance,
 };

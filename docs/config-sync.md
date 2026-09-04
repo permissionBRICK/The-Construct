@@ -390,6 +390,111 @@ developers spanning several projects whose configs live in different repos.
   to a branch/PR on their origin remote. Never automatic — shared config affects
   other people's VMs and delivered baselines.
 
+### The three verbs: Import, Push back, Publish
+
+Import and Push back only ever move files that already carry a provenance
+manifest entry. A profile **born locally** (created in the Projects tab, or
+discovered on a VM) has no manifest entry, so before **Publish** existed it
+could never reach a remote at all. The three verbs, and the one rule that picks
+between them:
+
+| Verb | Moves | Direction | Target ref |
+|---|---|---|---|
+| **Import** | files in the remote, not yet here | upstream → here | reads the remote's default branch |
+| **Push back** | **tracked** local files (manifest entry) | here → upstream | a timestamped review branch |
+| **Publish** | **untracked** local files (no manifest entry) | here → upstream | the remote's **default branch** |
+
+- **Tracked vs untracked is the whole rule.** Publish operates on untracked
+  profiles only; a tracked one is *skipped with a note* pointing at Push back.
+  Push back keeps operating on tracked ones only. Neither ever guesses.
+- **Publish pushes to the DEFAULT branch, not a review branch.** Push back
+  targets a branch because it edits config other people already depend on;
+  Publish seeds a repo the owner controls, so a review branch would just be a
+  merge chore. (`-Branch <name>` overrides it when a repo wants one.)
+- **Publish adopts what it pushed.** After a successful push it writes exactly
+  the manifest entry + stored base an Import would have written — `remoteUrl`,
+  `ref` = the branch it pushed to, `pathInRemote` = `projects/<name>.json`,
+  `importedAs`, `baseCommit` = the pushed commit, `baseBlobSha`, and the
+  published bytes as the stored base. From that moment the profile is a normal
+  tracked file: other PCs Import it, and future local edits Push back. Nothing
+  is adopted when the push fails — a file must never claim to be tracked
+  upstream when it is not.
+- **Collision rule.** A remote that already carries `projects/<name>.json` with
+  **different** content refuses that one file (the others still publish):
+  import it first, then push back. The comparison is *canonical vs canonical*
+  when the upstream file is itself a valid profile, so a merely reformatted copy
+  is not a conflict — it is adopted in place, with nothing to commit. An upstream
+  file whose name differs only by **case** (`projects/Billing.json` vs
+  `projects/billing.json`) is the *same file* on Windows and is always refused.
+- **Nothing invalid is ever published.** Every candidate goes through the same
+  parse → validate → canonicalize gate as any other config write, in that order.
+  The order matters: the canonicalizer *sanitizes* (unknown keys dropped,
+  wrong-typed values replaced by empty defaults), so canonicalizing without
+  validating first would silently repair a broken profile into something the user
+  never wrote — and publish would push that repaired value *and* write it back
+  over the local file. Invalid profiles are reported as **invalid** with the
+  validator's own message, and are left untouched on disk. Same for a name that
+  is not a safe bare filename.
+- **A remote URL must be credential-free.** A URL carrying userinfo
+  (`https://alice:<token>@host/…`, or a bare-token `https://<token>@host/…`) is
+  **refused** at link and at publish time, in both engines. Redaction alone would
+  not be enough: a URL is passed in git's argv, written verbatim into the staging
+  clone's `.git/config`, into `manifest/remotes.json` and into every per-profile
+  provenance entry, and handed to the webview — so the secret would sit in half a
+  dozen plain files no matter how the console output looked. The PAT belongs to a
+  **git credential helper** (Git Credential Manager on Windows). `ssh://git@host`
+  is fine: that is a user name, not a secret. One validator serves every input
+  path and checks the **trimmed** value — the same string that would be stored —
+  so padding cannot slip a credential past it.
+- **Redaction stays, as defence in depth.** Every console line, result row,
+  reason, log line, picker title and panel row is still built from the redacted
+  form (`https://***@host/…`), so a *legacy* entry linked before this rule — or a
+  credential appearing in git's own output — cannot leak through the UI either.
+  The panel is only ever handed display-safe URLs and its answers are mapped back
+  to the stored URL, and no record in a returned plan carries a raw URL at all
+  (callers print and serialize these objects whole). The push-to-create marker is
+  an opaque sentinel, not a copy of the URL.
+- **The upstream commit uses your own git identity.** It lands in *your* repo, so
+  the internal bookkeeping identity the machine-local config store commits with
+  would be wrong there. Only `core.hooksPath=` is forced, so hooks from a cloned
+  repo never run on this machine. A host with no configured `user.name` /
+  `user.email` is told exactly that.
+- **Push-to-create.** The very first publish into an empty or not-yet-existing
+  repo in the owner's own namespace is fine: the staging clone is created with
+  `git init` + `git remote add`, and the first push creates the repo on hosts
+  that support push-to-create (GitLab/GitGudLab), authenticated with a **user
+  PAT**, not a project token. A remote that *does* exist but cannot be fetched
+  is an error, not a push-to-create — starting from an empty tree there would
+  publish a history that drops everything already in the repo. A first push that
+  *fails* (the usual shape while a PAT is still being set up) stays **retryable**:
+  the clone is marked pending inside its `.git` dir, so the next run takes the
+  push-to-create path again instead of mistaking "unreachable origin + a local
+  commit" for a real remote it cannot fetch. The marker is cleared once a push
+  lands.
+- **Adoption is gated on real provenance.** Every git step is checked, and the
+  manifest entry is written only after a push that landed *and* only with a real
+  commit sha plus a real blob sha for each file. A silently failed `add` followed
+  by an empty staged diff and an "Everything up-to-date" push is reported as a
+  failure, never as a publish. The same rule applies to the *local* commit that
+  records the adoption in the config store: it must actually commit (adoption
+  always writes new files) or the user is told, with git's own message in the log.
+- **Nothing unsafe is silently dropped.** Every name in the projects listing goes
+  to the planner, including one that is not a usable file name — it comes back as
+  **invalid** with a reason instead of quietly disappearing from the picker. Both
+  engines have exactly one name rule and reuse it (`host.safeProfileName` in JS,
+  `Test-ConstructSafeProfileName` in PowerShell, which the rename-target validator
+  also calls); an unsafe name is never joined onto a path.
+
+Publish lives in `Publish-ConstructConfigProfiles`
+([`lib/AgentVm.Common.ps1`](../lib/AgentVm.Common.ps1)), on `Auto-Install.ps1`
+as `-Action publish-config` (§11), and in the Projects tab as the per-remote
+**publish** button (§13). The decision core is a **pure** function in each engine
+— `Get-ConstructPublishPlan` and `planPublish` — and both are measured against
+two recorded artifacts rather than against each other:
+`test/fixtures/publish-plan-cases.json` (every bucketing decision, including the
+redaction of reasons) and `test/fixtures/publish-manifest.expected.json` (the
+manifest bytes). Both test suites read both files.
+
 ## 8. Conflict resolution
 
 Two merge points — **host ↔ VM** (§6) and **local ↔ upstream** (§7) — share
@@ -477,6 +582,7 @@ exists.
 | `-ConfigRepo <url>` | **Remote** source: clone to staging, import selected files. Single URL (see §13 one-repo rule) — also keeps it a scalar across the self-elevation relaunch |
 | `-ConfigDir <path>` | **Local** source: import config files from `<path>\projects\*.json` (the local twin of `-ConfigRepo`) |
 | `-ImportConfigs <a,b>` | Which config files to select; narrows a `-ConfigRepo`/`-ConfigDir` source. Omitted with `-ConfigDir` → import everything in the folder. Collisions follow §7 (CLI: hard error) |
+| `-Action publish-config` | The opposite direction (§7 *three verbs*): publish **untracked** local profiles into the `-ConfigRepo` repo's default branch and adopt them. Non-interactive, touches no VM, needs no elevation — it is a git operation on the host config repo plus one push, and it exits without entering the installer. `-ImportConfigs <a,b>` narrows the selection exactly as it does for `add-config`; omitted publishes every untracked profile. Requires git (same check/prompt as `-ConfigRepo add-config`). Prints a per-profile result table (`published` / `skipped` / `refused` / `invalid`, each with its reason) plus the branch and commit, and the repo URL in its **redacted** form. Exit code 1 when anything failed or was invalid |
 
 **The one genuinely new bit of logic:** today a reprovision *replaces* the
 project selection. `add-config` must instead compute **`PROJECTS = current-on-VM
@@ -525,8 +631,26 @@ flow through `install.ps1` → `Auto-Install.ps1` → (self-elevation) → provi
 
 The Projects tab gains a "Remote config repos" section: add/remove/list linked
 remotes, an aggregated file checklist (grouped by repo, none ticked by
-default), an **Import** action (does the real pull → merge → sync), and a
-**Share** action.
+default), an **Import** action (does the real pull → merge → sync), a
+**Share** action, and — per linked remote — **↑** (push back) and **publish**.
+
+**Publish (§7 *three verbs*)** opens a picker of the **untracked** local
+profiles, **all ticked by default** (the mirror image of Import's none-ticked
+rule: importing someone else's config is opt-in, publishing your own is the
+point of pressing the button). Rows that cannot be published — already tracked,
+refused by the collision rule, or invalid — appear under their own headings,
+carry the reason as their description, and are **greyed**: selecting one snaps
+straight back, so the picker can never publish them. When no remote is linked
+yet, **add remote & publish…** asks for the URL, links it and goes into the same
+picker — the one-step path for "I have 23 local profiles and an empty repo".
+The picker's title shows the **redacted** URL.
+
+The decision core is the pure `planPublish` in
+[`extension/src/configsync.js`](../extension/src/configsync.js), and the picker
+model itself is pure too (`buildPublishPickerItems` / `filterPublishSelection`),
+so the greying and the all-ticked default are unit-tested rather than only
+clicked. The IO twin in `extension.js` writes the same manifest bytes as the
+PowerShell engine.
 
 **Share is per source, one repo at a time.** A share artifact never bundles
 multiple repos — that keeps the param model flat (`-ImportConfigs name,name`
@@ -647,6 +771,7 @@ for steady state.
 | Share scope | One remote repo per share artifact; multiple repos = multiple commands/bundles |
 | Remote vs local share carrier | Remote → share command; local-only → zip bundle with `deploy.ps1` |
 | Upstream push-back | Manual only (VS Code button / PowerShell command) |
+| Publishing locally-born profiles | **Publish** is the third verb (§7): untracked only, pushes to the remote's **default** branch (not a review branch — the owner publishes into their own repo), then adopts what it pushed as a normal tracked import. Tracked profiles are skipped with a note; a differing upstream file of the same name is refused per file. Push-to-create is relied on for the first publish into an empty/nonexistent repo |
 | Keep `install.ps1` small | Yes — generic `$args` passthrough; bundle logic lives in the generated `deploy.ps1` |
 | Git on the Windows host | Never required; strictly upgrades (§10). Installer prompts only when `-ConfigRepo` demands it; the extension offers one-click install for sync; everything degrades to today's behaviour |
 | `-AutoResolve` | `ours` / `theirs` only; no timestamp-based `newer` |
@@ -681,6 +806,20 @@ The touch points that were built for this feature (kept for reference):
 - [`extension/src/projects.js`](../extension/src/projects.js) — remote-repo
   staging + manifest/bases, picker plan, collision policy, `buildShareCommand`
   (pure), canonical serializer, conflict-state detection.
+- **Publish (§7)** — `Get-ConstructPublishPlan` (pure) +
+  `Publish-ConstructConfigProfiles` + `Initialize-ConstructPublishClone` /
+  `Get-ConstructRemoteDefaultBranch` / `ConvertTo-ConstructPublishContent` /
+  `Test-ConstructPublishBranchName` / `Test-ConstructSafeProfileName` /
+  `Protect-ConstructGitOutput` / `Format-ConstructRemoteUrlForDisplay` /
+  `Invoke-ConstructConfigGit` in
+  [`lib/AgentVm.Common.ps1`](../lib/AgentVm.Common.ps1);
+  `Auto-Install.ps1 -Action publish-config`; `planPublish` /
+  `buildPublishPickerItems` / `filterPublishSelection` /
+  `canonicalizeProfileText` / `publishManifestEntry` / `displayRemoteUrl` (pure)
+  + `ensurePublishClone` / `checkoutPublishBranch` / `publishToRemote` in
+  [`extension/src/configsync.js`](../extension/src/configsync.js); the
+  per-remote **publish** button and **add remote & publish…** in the Projects
+  tab; the shared fixtures under `test/fixtures/`.
 - `extension.js` / Projects tab UI — remote-repo section, import action, share
   (command vs zip), `deploy.ps1` generation + zip packing, merge-editor gating,
   "install git" notice.

@@ -281,13 +281,17 @@ export function readConstructMarkersFromDir(
 /**
  * `<localAppData>\The-Construct\instances\<name>.json`, or null when that instance has no
  * state file: the DEFAULT instance (whose VM-scoped keys stay at the legacy top level of
- * `.construct-settings.json`), an unusable name, or no known %LOCALAPPDATA%.
+ * `.construct-settings.json`), a name that is not a usable instance name, or no known
+ * %LOCALAPPDATA%.
  *
- * The default is decided BY NAME, exactly as instancestate.isDefaultStore /
- * Test-ConstructDefaultInstanceStore decide it — not by `ConstructVmTarget.isDefault`,
- * which additionally requires the canonical identity and would send the two sides looking
- * in different files. The name guard is the same PATH-SAFETY superset (the name becomes a
- * file name here), not the instance-name rule.
+ * The default is decided BY NAME and CASE-SENSITIVELY, exactly as instancestate.js's
+ * isDefaultStore and Test-ConstructDefaultInstanceStore decide it — not by
+ * `ConstructVmTarget.isDefault`, which additionally requires the canonical identity and
+ * would send the two sides looking in different files. The name is held to this file's
+ * existing mirror of THE ONE NAME RULE (INSTANCE_NAME_PATTERN + the reserved prefix, the
+ * same pair the registry reader above uses), not to a second rule invented here: a
+ * lowercase DNS label cannot contain a separator or a dot, so passing it is also what
+ * makes the name safe as a file name.
  */
 export function constructInstanceStatePath(
   localAppData: string | undefined,
@@ -296,8 +300,8 @@ export function constructInstanceStatePath(
 ): string | null {
   if (localAppData === undefined || localAppData === "") return null;
   const name = (instanceName ?? "").trim();
-  if (name === "" || name.toLowerCase() === DEFAULT_CONSTRUCT_VM_TARGET.name) return null;
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(name) || name.includes("..")) return null;
+  if (name === "" || name === DEFAULT_CONSTRUCT_VM_TARGET.name) return null;
+  if (!INSTANCE_NAME_PATTERN.test(name) || name.startsWith(RESERVED_INSTANCE_NAME_PREFIX)) return null;
   return joinPath(localAppData, CONSTRUCT_CONTAINER_DIR_NAME, CONSTRUCT_INSTANCE_STATE_DIR_NAME, `${name}.json`);
 }
 
@@ -985,12 +989,40 @@ export function constructScriptFileName(action: ConstructUpdateAction): string {
   return action === "update-construct" ? CONSTRUCT_UPDATE_SCRIPT : CONSTRUCT_REPROVISION_SCRIPT;
 }
 
+/**
+ * Does the INSTALLED Update-T3Code.ps1 declare `$InstanceName` — i.e. does it support
+ * NAME-ONLY TARGETING (B11, plan §4.12)? The same comment-stripped declaration test the
+ * control panel uses (extension/src/lifecycle.js scriptSupportsParam).
+ *
+ * The parameter probe is honest HERE, unlike in the panel: `-InstanceName` never had any
+ * other meaning on this script, so declaring it can only mean the new one. An unreadable
+ * or absent script answers false and the caller falls back to the four identity
+ * arguments, which every version since B1 understands.
+ */
+export function constructSupportsInstanceName(
+  scriptsDir: string,
+  fs: ConstructFileSystem,
+  joinPath: JoinPath = defaultJoinPath,
+): boolean {
+  const text = fs.readTextFile(joinPath(scriptsDir, CONSTRUCT_REPROVISION_SCRIPT));
+  if (text === null) return false;
+  const code = text.replace(/<#[\s\S]*?#>/g, "").replace(/^[ \t]*#.*$/gm, "");
+  return /\$InstanceName\s*(?:=|,|\)|$)/im.test(code);
+}
+
 /** The identity arguments Update-T3Code.ps1 forwards to the provisioner. None for the
- *  implicit default VM (an older provisioner then keeps working); all four for anything
- *  else, so the reprovision can never land on the default VM by accident. Every value
- *  passed the registry's format rules, which exclude spaces and shell metacharacters. */
-export function constructReprovisionIdentityArgs(target: ConstructVmTarget): ReadonlyArray<string> {
+ *  implicit default VM (an older provisioner then keeps working). For anything else:
+ *  `-InstanceName <name>` when the installed script can resolve a name (it then reads
+ *  the endpoint, alias, port and key file out of the same registry this module parsed),
+ *  and otherwise all four identity arguments — either way the reprovision can never land
+ *  on the default VM by accident. Every value passed the registry's format rules, which
+ *  exclude spaces and shell metacharacters. */
+export function constructReprovisionIdentityArgs(
+  target: ConstructVmTarget,
+  supportsInstanceName = false,
+): ReadonlyArray<string> {
   if (target.isDefault) return [];
+  if (supportsInstanceName) return ["-InstanceName", `"${target.name}"`];
   return [
     "-VmHost",
     `"${target.vmHost}"`,
@@ -1060,7 +1092,10 @@ export function planConstructLaunch(
   const scriptArgs =
     action === "update-construct"
       ? ["-Repo", `"${info.repo}"`, "-Ref", `"${info.ref}"`]
-      : constructReprovisionIdentityArgs(target);
+      : constructReprovisionIdentityArgs(
+          target,
+          constructSupportsInstanceName(info.scriptsDir, fs, joinPath),
+        );
   const powershell = [
     "powershell.exe",
     "-NoProfile",

@@ -21,6 +21,13 @@
 #   T3CODE_PORT              plain-HTTP port `t3 serve` listens on (default 5177)
 #   T3CODE_HTTPS             enable the TLS proxy       (default true)
 #   T3CODE_HTTPS_PORT        TLS listen port            (default 5178)
+#   T3CODE_PUBLIC_PORT       port a CLIENT reaches the TLS listener on
+#                            (default: T3CODE_HTTPS_PORT). It differs only on a
+#                            service-managed VM, where the host service forwards
+#                            the listener on a public port of its own choosing
+#                            (plan section 4.12) -- the ADVERTISED origin has to
+#                            be that port, or T3's pairing links point at a port
+#                            nothing listens on. Never changes what nginx binds.
 #   CONSTRUCT_EXTERNAL_HOST  client-reachable name/IP   (default $(hostname).mshome.net)
 #   CONFIG_FILE              construct config.env       (default /etc/construct/config.env)
 #   REPO_DIR                 uploaded repo              (default /opt/construct/repo)
@@ -263,10 +270,17 @@ read_cfg() {
 T3CODE_PORT="${T3CODE_PORT:-$(read_cfg T3CODE_PORT)}";             T3CODE_PORT="${T3CODE_PORT:-5177}"
 T3CODE_HTTPS="${T3CODE_HTTPS:-$(read_cfg T3CODE_HTTPS)}";          T3CODE_HTTPS="${T3CODE_HTTPS:-true}"
 T3CODE_HTTPS_PORT="${T3CODE_HTTPS_PORT:-$(read_cfg T3CODE_HTTPS_PORT)}"; T3CODE_HTTPS_PORT="${T3CODE_HTTPS_PORT:-5178}"
+# The ADVERTISED port. STATED only on a service-managed VM, where the host service
+# forwards the listener on a public port of its own (plan section 4.12); everywhere else
+# it is empty and the listener's own port is advertised -- byte-identical to before.
+# The two are kept apart because the DISABLED path below can only advertise a plain-HTTP
+# origin when somebody really stated a forwarded port.
+T3CODE_PUBLIC_PORT_STATED="${T3CODE_PUBLIC_PORT:-$(read_cfg T3CODE_PUBLIC_PORT)}"
+T3CODE_PUBLIC_PORT="${T3CODE_PUBLIC_PORT_STATED:-${T3CODE_HTTPS_PORT}}"
 CONSTRUCT_EXTERNAL_HOST="${CONSTRUCT_EXTERNAL_HOST:-$(read_cfg CONSTRUCT_EXTERNAL_HOST)}"
 [[ "${T3CODE_HTTPS}" == "true" ]] || T3CODE_HTTPS=false
 [[ "${_teardown}" == "true" ]] && T3CODE_HTTPS=false
-for _port_var in T3CODE_PORT T3CODE_HTTPS_PORT; do
+for _port_var in T3CODE_PORT T3CODE_HTTPS_PORT T3CODE_PUBLIC_PORT; do
   if ! [[ "${!_port_var}" =~ ^[0-9]{1,5}$ ]] || (( ${!_port_var} < 1 || ${!_port_var} > 65535 )); then
     err "${_port_var}=${!_port_var} is not a valid TCP port"
     exit 1
@@ -339,10 +353,19 @@ nginx_apply() {
 }
 
 # ── Disabled path ────────────────────────────────────────────────────────────
-# Tear the proxy down, clear the public base URL (so the patched T3 server falls
-# back to its plain-http origin on the next start) and drop the host handoff
-# file. The CA and the leaf are KEPT: re-enabling must not invalidate the trust
-# the user already imported on Windows.
+# Tear the proxy down, settle the public base URL and drop the host handoff file. The
+# CA and the leaf are KEPT: re-enabling must not invalidate the trust the user already
+# imported on Windows.
+#
+# THE PUBLIC BASE URL HAS TWO ANSWERS HERE:
+#   * no forwarded port stated (every local install, and the teardown that switches T3
+#     itself off) -> CLEARED, so the patched T3 server falls back to its plain-http
+#     origin on the next start. Byte-identical to before this batch.
+#   * a forwarded port stated (a service-managed VM with T3CODE_HTTPS=false, whose
+#     plain listener the host service publishes -- bin/provision.sh requests the
+#     forward for T3CODE_PORT in that mode) -> the FORWARDED http origin. Without it
+#     the VM would advertise http://<publicHost>:5177, the VM-INTERNAL port, which no
+#     remote client can reach (plan section 4.12).
 if [[ "${T3CODE_HTTPS}" != "true" ]]; then
   if [[ "${_teardown}" == "true" ]]; then
     step "Removing the T3 Code HTTPS proxy (T3 Code itself is off; the HTTPS preference is kept)"
@@ -350,7 +373,13 @@ if [[ "${T3CODE_HTTPS}" != "true" ]]; then
     step "T3 Code HTTPS disabled (T3CODE_HTTPS=${T3CODE_HTTPS})"
     cfg T3CODE_HTTPS false
   fi
-  cfg_clear T3CODE_PUBLIC_BASE_URL
+  if [[ "${_teardown}" != "true" && -n "${T3CODE_PUBLIC_PORT_STATED}" ]]; then
+    _disabled_public_host="$(t3_https_public_host "${CONSTRUCT_EXTERNAL_HOST}" "$(hostname 2>/dev/null || echo vm)")"
+    cfg T3CODE_PUBLIC_BASE_URL "http://$(t3_https_url_host "${_disabled_public_host}"):${T3CODE_PUBLIC_PORT_STATED}"
+    note "advertising the forwarded plain-HTTP origin http://$(t3_https_url_host "${_disabled_public_host}"):${T3CODE_PUBLIC_PORT_STATED}"
+  else
+    cfg_clear T3CODE_PUBLIC_BASE_URL
+  fi
   rm -f "${STATUS_FILE}"
   if [[ -e "${SITE_LINK}" || -L "${SITE_LINK}" ]]; then
     rm -f "${SITE_LINK}"
@@ -494,7 +523,9 @@ if ! nginx_apply; then
 fi
 
 # ── 4. Persist the contract + the host handoff ───────────────────────────────
-public_base_url="$(t3_https_public_base_url "${public_host}" "${T3CODE_HTTPS_PORT}")"
+# The ADVERTISED origin, on the port a CLIENT reaches -- the host forward's public
+# port on a service-managed VM, the listener's port everywhere else.
+public_base_url="$(t3_https_public_base_url "${public_host}" "${T3CODE_PUBLIC_PORT}")"
 cfg T3CODE_HTTPS true
 cfg T3CODE_HTTPS_PORT "${T3CODE_HTTPS_PORT}"
 cfg T3CODE_PUBLIC_BASE_URL "${public_base_url}"
