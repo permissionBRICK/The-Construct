@@ -2324,6 +2324,8 @@ ok "chain: Create-AgentVM probes before splatting and fails closed" (
 # handed no branch at all, so a save-mode reinstall of work-vm read work-vm's store
 # into refs/heads/vm and merged it into main -- the default instance's ref. Both halves
 # are exercised against the REAL statements lifted out of the script.
+# The one derivation the installer asks for (B11): the branch under test comes from here.
+. (Join-Path $repoRoot "lib/AgentVm.InstanceTarget.ps1")
 $aiPath = Join-Path $repoRoot "Auto-Install.ps1"
 $aiErrs = $null
 $aiAst  = [System.Management.Automation.Language.Parser]::ParseFile($aiPath, [ref]$null, [ref]$aiErrs)
@@ -2344,8 +2346,13 @@ if ($aiAssign -and $aiGate) {
     # refactor moves them apart, the span below would swallow half the script and the
     # behavioural cases would stop testing what they claim to.
     $aiSpan = $aiText.Substring($aiAssign.Extent.StartOffset, $aiGate.Extent.EndOffset - $aiAssign.Extent.StartOffset)
+    # The bound is generous on purpose (these two statements carry a lot of comment):
+    # what it is really guarding is that a refactor cannot move the landmarks apart and
+    # leave the behavioural cases below silently exercising half the script -- which the
+    # structural checks beside it are the sharper half of.
     ok "auto-install: the lifted derivation span is just those statements" (
-        $aiSpan.Length -lt 2000 -and $aiSpan -notmatch 'Show-TuiScreen')
+        $aiSpan.Length -lt 2600 -and $aiSpan -notmatch 'Show-TuiScreen' -and
+        $aiSpan -notmatch '(?m)^function ')
 }
 ok "auto-install: the pre-wipe sync block was located for execution" ($null -ne $aiPreWipe)
 
@@ -2359,6 +2366,11 @@ function Invoke-AutoInstallBranchBlock {
           [switch]$OldLib, [switch]$NoDeriver)
     $VmName      = $VmAlias
     $VmIsDefault = ($VmAlias -eq 'agent-vm')
+    # Since B11 the branch is READ off the derived identity (lib\AgentVm.Instances.ps1
+    # through the adapter) instead of being re-derived in the installer, so the harness
+    # supplies the real identity rather than a stand-in -- what runs here is what the
+    # installer computes.
+    $script:VmIdentity = Get-ConstructLocalVmIdentity -VmName $VmAlias
     if ($OldLib) {
         function Invoke-ConstructConfigSync { param([string]$ConfigDir, [string]$VmHost, [string]$AutoResolve) }
     } else {
@@ -2427,6 +2439,10 @@ if ($aiAssign -and $aiGate) {
     $aiExplicitOld = Invoke-AutoInstallBranchBlock -Code $aiBranchCode -VmAlias "agent-vm" -ConfigBranch "vm-team" -OldLib
     ok "auto-install-run: an explicit branch an older lib can't carry FAILS CLOSED" ($aiExplicitOld.Threw)
 
+    # The deriver the guard is about is PROVISION's (AgentVm.Common.ps1's
+    # Get-ConstructConfigBranchName): the installer's own branch now comes from the
+    # registry library, but a provisioner that cannot derive the same one would still
+    # initialise the store on 'vm'.
     $aiNoDeriver = Invoke-AutoInstallBranchBlock -Code $aiBranchCode -VmAlias "work-vm" -NoDeriver
     ok "auto-install-run: a library that can't NAME the branch FAILS CLOSED" ($aiNoDeriver.Threw)
     ok "auto-install-run: ...rather than silently using the default instance's ref" (

@@ -484,6 +484,11 @@ function postState(target, state) {
   if (cachedIdlePolicyInstance === activeInstance().name) {
     extra.idlePolicy = cachedIdlePolicy;
   }
+  // "Register this VM" (B11, plan §4.12): a window attached over Remote-SSH to a host
+  // no registry entry describes. Attached to EVERY push — including as `null` — so the
+  // offer disappears from the panel the moment the VM is registered. It is null on every
+  // local window and on every install with one VM, which is the zero-change path.
+  extra.registerOffer = registerThisVmOffer();
   safePost(target, { type: "state", state: { ...state, ...extra } });
 }
 
@@ -3321,6 +3326,62 @@ async function adoptRemoteInstance() {
   } catch (_) { /* best-effort: never break activation */ }
 }
 
+/** The "register this VM" offer for THIS window, or null. The DECISION is pure
+ *  (instances.planRegisterAttachedVm); this only reads what vscode knows. */
+function registerThisVmOffer() {
+  try {
+    const plan = instances.planRegisterAttachedVm(
+      registryNow(), safeRemoteAuthority(), instanceSetting(), activeInstance().name);
+    if (!plan.offer) return null;
+    return { host: plan.host, suggestedName: plan.suggestedName };
+  } catch (_) { return null; }
+}
+
+/**
+ * Name the VM this window is attached to and write its registry entry — the one action
+ * offered when Remote-SSH lands on a host the registry does not know.
+ *
+ * The entry goes through instances.addInstance/save, i.e. THE SAME writer and the same
+ * rules the PowerShell installer uses (lib/AgentVm.Instances.ps1): a local instance's
+ * identity is derived from its name, so if this window's host is not that derivation the
+ * plan REFUSES with the reason rather than writing an entry the reader would drop.
+ */
+async function runRegisterThisVm() {
+  const offer = registerThisVmOffer();
+  if (!offer) {
+    vscode.window.showInformationMessage(
+      "This window isn't attached to an unregistered VM, so there is nothing to register.");
+    return;
+  }
+  const typed = await vscode.window.showInputBox({
+    title: "Register this VM as a Construct instance",
+    prompt: `The VM at ${offer.host} is recorded under this name, and the panel switches to it.`,
+    value: offer.suggestedName,
+    ignoreFocusOut: true,
+    validateInput: (v) => (instances.isValidName(String(v == null ? "" : v).trim()) ? null : instances.NAME_RULE),
+  });
+  const chosen = String(typed == null ? "" : typed).trim();
+  if (!chosen) return;   // cancelled
+  const reg = registryNow(true);
+  const plan = instances.planLocalRegistration(reg, chosen, offer.host);
+  if (!plan.ok) { vscode.window.showWarningMessage(plan.reason); return; }
+  let file = null;
+  try { file = instances.instancesPath(process.env); } catch (_) { file = null; }
+  if (!file) {
+    vscode.window.showErrorMessage("Could not resolve %LOCALAPPDATA%\\The-Construct\\instances.json, so the instance can't be recorded.");
+    return;
+  }
+  try {
+    instances.save(file, instances.addInstance(reg, plan.name, plan.entry));
+  } catch (e) {
+    vscode.window.showErrorMessage(`Could not register "${plan.name}": ${e && e.message ? e.message : e}`);
+    return;
+  }
+  logLine(`instances: registered "${plan.name}" (${offer.host}) in ${file}`);
+  await switchInstance(plan.name);
+  vscode.window.showInformationMessage(`Registered "${plan.name}" — the panel now describes this VM.`);
+}
+
 // ── Remote hosts (`constructd`) ─────────────────────────────────────────────
 // A remote HOST is an enrolment, not a VM: its URL, the credential kind, the pinned
 // certificate fingerprint and the identity the service confirmed. It lives in
@@ -3862,6 +3923,7 @@ function handleMessage(message, webview, context) {
       // own `isSafeId` guard before they reach a spool path or a URL.
       if (id === "openForward") { void openForward(String(message.forward || "")); return; }
       if (id === "closeForward") { void closeForward(String(message.forward || "")); return; }
+      if (id === "registerThisVm") { void runRegisterThisVm(); return; }
       if (id === "updateAgents") { runUpdateAgents(); return; }
       if (id === "updateAgent") {
         // Per-agent ↑ tag. Validate against the known ids — the webview is
@@ -4395,6 +4457,7 @@ async function activate(context) {
     vscode.commands.registerCommand("construct.switchInstance", () => runSwitchInstance()),
     vscode.commands.registerCommand("construct.addRemoteHost", () => runAddRemoteHost()),
     vscode.commands.registerCommand("construct.newRemoteVm", () => runNewRemoteVm()),
+    vscode.commands.registerCommand("construct.registerThisVm", () => runRegisterThisVm()),
     // Clicking a VM notification's toast opens the control panel: Windows launches
     // the toast's vscode:// URI, which lands here. Data-free by design — the URI is
     // fixed in src/notify.js, so nothing VM-authored ever reaches this handler.

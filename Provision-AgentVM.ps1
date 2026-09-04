@@ -184,7 +184,14 @@ param(
     # are byte-identical to before these parameters existed.
     #
     #   -ServiceUrl     the host service's base URL   -> CONSTRUCT_SERVICE_URL
-    #   -InstanceName   this VM's name on that host   -> CONSTRUCT_INSTANCE_NAME
+    #   -InstanceName   this VM's name                -> CONSTRUCT_INSTANCE_NAME, but
+    #                   ONLY together with -ServiceUrl. Since B11 the parameter is also
+    #                   NAME-ONLY TARGETING for every backend: it resolves -VmHost /
+    #                   -HostAlias / -SshPort / -LocalKeyName / -ConfigBranch AND
+    #                   -ServiceUrl out of the instance registry (see the resolution
+    #                   block below), so a local instance can be reached by name too --
+    #                   and a local entry names no service, so a local VM's env prefix
+    #                   still carries nothing extra.
     #   -VmTokenB64     the VM-scoped token, base64   -> CONSTRUCT_VM_TOKEN_B64
     #
     # provision.sh writes the decoded token to /etc/construct/vm-token (mode 0600) and
@@ -247,6 +254,56 @@ if ($ReadyFile) {
         Write-Warning "Could not publish ready handshake: $($_.Exception.Message)"
         exit 1
     }
+}
+
+# ── NAME-ONLY TARGETING (-InstanceName; B11, plan section 4.12) ──────────────
+# One parameter instead of five. -InstanceName names an entry in the client-side
+# instance registry (%LOCALAPPDATA%\The-Construct\instances.json) and everything this
+# script needs to REACH that VM -- host, alias, port, key file, config-sync branch and
+# the host service it belongs to -- is read from it through lib\AgentVm.Instances.ps1,
+# so a caller (the control panel,
+# Update-T3Code.ps1, a console) states the name once and only one parameter has to be
+# probed for version skew.
+#
+# It is the SAME parameter the remote flow already passed: for a VM on a host service
+# the name is also what the guest is told (CONSTRUCT_INSTANCE_NAME, below). Unifying
+# them is deliberate -- one name per VM, everywhere.
+#
+# EXPLICIT IDENTITY STILL WINS, and a DISAGREEMENT IS AN ERROR: an argument the caller
+# bound is used as given, but if the registry entry says something else the run stops
+# naming both values, because "-InstanceName work-vm -VmHost build-vm.mshome.net" has
+# no reading that isn't destructive. An unknown name is an error listing the known
+# ones; the DEFAULT name with no registry file resolves to exactly today's literals,
+# which is why passing it changes nothing.
+$script:InstanceEndpointStated = $false
+if ($InstanceName) {
+    $instanceTargetLib = Join-Path $PSScriptRoot "lib\AgentVm.InstanceTarget.ps1"
+    if (-not (Test-Path -LiteralPath $instanceTargetLib)) {
+        throw "-InstanceName needs lib/AgentVm.InstanceTarget.ps1, which is missing from this install. Update The Construct, or pass -VmHost/-HostAlias/-SshPort/-LocalKeyName instead."
+    }
+    . $instanceTargetLib
+    $explicitTarget = @{}
+    foreach ($tp in @('VmHost', 'HostAlias', 'SshPort', 'LocalKeyName', 'ConfigBranch', 'ServiceUrl')) {
+        if ($PSBoundParameters.ContainsKey($tp)) { $explicitTarget[$tp] = $PSBoundParameters[$tp] }
+    }
+    $instanceTarget = Resolve-ConstructVmTarget -Name $InstanceName -Explicit $explicitTarget
+    if (-not $PSBoundParameters.ContainsKey('VmHost'))       { $VmHost       = [string]$instanceTarget.VmHost }
+    if (-not $PSBoundParameters.ContainsKey('HostAlias'))    { $HostAlias    = [string]$instanceTarget.HostAlias }
+    if (-not $PSBoundParameters.ContainsKey('SshPort'))      { $SshPort      = [int]$instanceTarget.SshPort }
+    if (-not $PSBoundParameters.ContainsKey('LocalKeyName')) { $LocalKeyName = [string]$instanceTarget.KeyName }
+    if (-not $PSBoundParameters.ContainsKey('ConfigBranch')) { $ConfigBranch = [string]$instanceTarget.ConfigBranch }
+    # THE HOST SERVICE IS PART OF THE TARGET, not a separate thing the caller must also
+    # remember: a VM on somebody's host service is reached at the endpoint above AND
+    # linked back to that service, so "-InstanceName work-vm" has to carry both or the
+    # guest would keep whatever service it was last told about. A LOCAL instance's entry
+    # names no service, so this stays "" -- the same value a local run has always had,
+    # which is what keeps its env prefix byte-identical.
+    if (-not $PSBoundParameters.ContainsKey('ServiceUrl'))   { $ServiceUrl   = [string]$instanceTarget.ServiceUrl }
+    # A NON-DEFAULT ENDPOINT WAS STATED -- by name rather than by argument, but stated.
+    # $explicitEndpoint below asks "did the caller say where this VM answers", because
+    # that is what the guest has to record as its external identity; resolving the same
+    # address out of the registry is the same statement.
+    if ($VmHost -ne "agent-vm.mshome.net" -or $SshPort -ne 22) { $script:InstanceEndpointStated = $true }
 }
 
 # Decode native-command output (ssh/scp stdout) as UTF-8. Windows PowerShell 5.1
@@ -1994,7 +2051,7 @@ if (-not $checkoutArg) {
 # a custom value saved (explicit default = reset). A stock guest -- with or without the
 # legacy explicit "-VmHost agent-vm.mshome.net -HostAlias agent-vm" -- gets the
 # unchanged remote command, provisioning log and config.env.
-$explicitEndpoint = [bool]($PSBoundParameters.ContainsKey('VmHost') -or $PSBoundParameters.ContainsKey('SshPort'))
+$explicitEndpoint = [bool]($PSBoundParameters.ContainsKey('VmHost') -or $PSBoundParameters.ContainsKey('SshPort') -or $script:InstanceEndpointStated)
 $savedExtHost = ""; $savedExtPort = ""
 if ($explicitEndpoint -and $VmHost -eq "agent-vm.mshome.net" -and $SshPort -eq 22) {
     # Only the reset case needs the guest's saved keys (values may carry config-set.sh's
@@ -2017,7 +2074,14 @@ $externalEnv = Get-ExternalEnvSuffix -VmHost $VmHost -SshPort $SshPort -Explicit
 # ARGUMENT of ssh.exe -- readable by any process listing on this PC -- and again as an
 # argument of the guest's `env`. bin/provision.sh's contract is unchanged either way: it
 # reads CONSTRUCT_VM_TOKEN_B64 out of its ENVIRONMENT.
-$serviceEnv = Get-ServiceEnvSuffix -ServiceUrl $ServiceUrl -InstanceName $InstanceName -VmTokenB64 ""
+# The GUEST learns the instance name only for a SERVICE-MANAGED VM. -InstanceName is
+# now the name-only targeting parameter for every backend, but bin/provision.sh writes
+# CONSTRUCT_INSTANCE_NAME into config.env only when CONSTRUCT_SERVICE_URL is set, and
+# its contract is not changed in this batch -- so a LOCAL instance's env prefix (and
+# therefore its config.env and its ssh command line) stays byte-identical.
+$guestInstanceName = ""
+if ($ServiceUrl) { $guestInstanceName = $InstanceName }
+$serviceEnv = Get-ServiceEnvSuffix -ServiceUrl $ServiceUrl -InstanceName $guestInstanceName -VmTokenB64 ""
 if ($ServiceUrl) {
     # Say WHAT was sent, never the token itself.
     Write-Ok "Host service: $ServiceUrl (instance '$InstanceName')$(if ($VmTokenB64) { '; VM token supplied' } else { '' })"

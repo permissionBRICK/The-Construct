@@ -102,6 +102,13 @@ param(
     # host alias) all follow this parameter. Must match the name Auto-Install.ps1
     # passes -- the default keeps backward compat with existing installs.
     [string]$VmName = "Agent-VM",
+    # The CONSTRUCT INSTANCE this VM is (B11, plan section 4.12): a lowercase DNS label,
+    # the one name rule (lib\AgentVm.Instances.ps1). Every derived value follows it --
+    # the Hyper-V display name, the guest hostname, the ~\.ssh key file and the
+    # config-sync branch -- so a second VM is created with ONE argument. -VmName keeps
+    # working exactly as before and still names the VM on its own; giving both a name and
+    # a DIFFERENT -VmName is an error rather than a silent choice between two machines.
+    [string]$InstanceName = "",
     # Hypervisor backend to create the VM on. "hyperv-local" (the default) is
     # today's local Hyper-V path; the driver contract behind it (docs/drivers.md)
     # is what a remote-Hyper-V / Proxmox backend plugs into later.
@@ -126,6 +133,32 @@ param(
 )
 
 if ($T3CodeChannel) { $T3CodeChannel = $T3CodeChannel.ToLower() }
+
+# ── -InstanceName -> -VmName, BEFORE the self-elevation below ────────────────
+# The instance name is the ONE name a VM has; the Hyper-V display name, the guest
+# hostname, the key file and the config-sync branch are all derived from it
+# (Get-ConstructLocalVmIdentity, which applies the one name rule from
+# lib\AgentVm.Instances.ps1 -- never a second copy of it here). Resolved BEFORE the
+# elevation so the elevated copy is handed the resolved -VmName and never has to look
+# anything up in a profile that may not be the user's.
+if ($InstanceName) {
+    $instanceTargetLib = Join-Path $PSScriptRoot "lib\AgentVm.InstanceTarget.ps1"
+    if (-not (Test-Path -LiteralPath $instanceTargetLib)) {
+        throw "-InstanceName needs lib/AgentVm.InstanceTarget.ps1, which is missing from this install. Update The Construct, or pass -VmName instead."
+    }
+    . $instanceTargetLib
+    $instanceIdentity = Get-ConstructLocalVmIdentity -Name $InstanceName -ParameterLabel 'InstanceName'
+    if ($PSBoundParameters.ContainsKey('VmName') -and
+        $VmName.ToLowerInvariant() -ne $instanceIdentity.VmName.ToLowerInvariant()) {
+        throw "-InstanceName '$InstanceName' and -VmName '$VmName' name two different VMs. Pass only one (the Hyper-V name is derived from the instance name)."
+    }
+    $VmName = $instanceIdentity.VmName
+    # The elevated relaunch forwards $PSBoundParameters verbatim: hand it the resolved
+    # display name and drop the instance name, so the child follows exactly the -VmName
+    # path every derivation below is already written for.
+    [void]$PSBoundParameters.Remove('InstanceName')
+    $PSBoundParameters['VmName'] = $VmName
+}
 
 # ── Self-elevate to Administrator ────────────────────────────────────────────
 if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -171,6 +204,32 @@ $ErrorActionPreference = "Stop"
 function Write-Step($msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)   { Write-Host "    $msg" -ForegroundColor Green }
 function Write-Note($msg) { Write-Host "    $msg" -ForegroundColor DarkGray }
+
+# ── Recording this VM in the client-side instance registry (B11) ─────────────
+# The control panel lists and switches between the VMs named in
+# %LOCALAPPDATA%\The-Construct\instances.json; until B11 only the REMOTE installer ever
+# wrote to it, so a second local VM was a hand edit and most users never saw the picker.
+#
+# ZERO-CHANGE RULE: a default-only install still writes NOTHING -- a missing file IS the
+# `agent-vm` instance, and Save-ConstructLocalInstance only materialises the default when
+# the file already exists (i.e. when some other instance put it there). The entry itself
+# is written through lib\AgentVm.Instances.ps1, never by hand-rolling JSON, so what is
+# written is exactly what both readers accept.
+#
+# Never fatal: the VM this is about has already been built, so a registry the user's
+# profile will not accept is reported and the run continues.
+function Register-ThisVmInstance {
+    param([string]$ScriptsDir = $PSScriptRoot)
+    $registryLib = Join-Path (Join-Path $ScriptsDir "lib") "AgentVm.InstanceTarget.ps1"
+    if (-not (Test-Path -LiteralPath $registryLib)) { return }
+    try {
+        . $registryLib
+        $written = Register-ConstructLocalVm -Name $script:VmGuestName -ConfigBranch $ConfigBranch
+        if ($written) { Write-Note "Instance '$($script:VmGuestName)' recorded in $written" }
+    } catch {
+        Write-Warning "Could not record the instance '$($script:VmGuestName)' in the instance registry ($($_.Exception.Message)). The VM itself is fine; the control panel may not list it."
+    }
+}
 
 # Shared helpers: interactive menu, reinstall confirmation, VM teardown.
 $commonLib = Join-Path $PSScriptRoot "lib\AgentVm.Common.ps1"
@@ -242,33 +301,21 @@ if (-not (Get-Command ssh.exe -ErrorAction SilentlyContinue)) {
 Ensure-ConstructDriverPrereqs
 
 # ── Instance identity (before ANY branch that provisions or deletes) ─────────
-# Alias = lowercased VM name (the first DNS label -- the convention every shared lib
-# helper derives from the host). It doubles as the guest hostname, so it must be a
-# valid DNS label. The default VM keeps the legacy key name byte-for-byte; any other
-# VM gets an instance-scoped key so a standalone "Create-AgentVM.ps1 -VmName work-vm"
-# never overwrites Agent-VM's ~/.ssh key.
-#
-# THE ONE INSTANCE-NAME RULE, repeated verbatim from Auto-Install.ps1 (which validates
-# before it chains here), $script:ConstructInstanceNameRe in lib\AgentVm.Instances.ps1,
-# NAME_RE in extension/src/instances.js and Constructd.Core.Logic.VmNameValidator --
-# a lowercase DNS label, alphanumeric FIRST AND LAST ("work-" derives the endpoint
-# "work-.mshome.net", which is not a host name), 1-63 chars (the label's own limit; the
-# derived "construct_<name>_ed25519" is covered by the registry's longer key-file
-# bound), and the
-# "construct-" prefix RESERVED (it is the namespace those derived names live in, and
-# the exact name the config-branch derivation used to strip the prefix off, aliasing
-# another instance's store). Change all four together.
-$script:ConstructVmNameRule = '1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with "construct-" are reserved.'
-$script:VmGuestName = $VmName.ToLowerInvariant()
-if ($script:VmGuestName.StartsWith('construct-')) {
-    throw "-VmName '$VmName' uses the reserved 'construct-' prefix: $($script:ConstructVmNameRule) Drop the prefix, e.g. 'Work-VM'."
-}
-if ($script:VmGuestName -notmatch '\A[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\z') {
-    throw "-VmName '$VmName' is not usable as a hostname (e.g. 'Work-VM'): $($script:ConstructVmNameRule)"
-}
-$script:VmIsDefault = ($script:VmGuestName -eq 'agent-vm')
+# ONE NAME RULE, ONE DERIVATION: the alias, the guest hostname, the mshome address, the
+# ~\.ssh key file and the config-sync branch all come from lib\AgentVm.Instances.ps1
+# through the adapter -- this script states none of them itself, so it cannot drift from
+# the registry, the extension (extension/src/instances.js) or the service's validator.
+# The default VM keeps the legacy key name byte-for-byte; any other VM gets an
+# instance-scoped key, so a standalone "Create-AgentVM.ps1 -VmName work-vm" never
+# overwrites Agent-VM's ~/.ssh key.
+$identityLib = Join-Path $PSScriptRoot "lib\AgentVm.InstanceTarget.ps1"
+if (-not (Test-Path -LiteralPath $identityLib)) { throw "Required helper not found: $identityLib" }
+. $identityLib
+$script:VmIdentity  = Get-ConstructLocalVmIdentity -VmName $VmName -ParameterLabel 'VmName'
+$script:VmGuestName = $script:VmIdentity.Name
+$script:VmIsDefault = $script:VmIdentity.IsDefault
 if (-not $LocalKeyName -and -not $script:VmIsDefault) {
-    $LocalKeyName = "construct_$($script:VmGuestName)_ed25519"
+    $LocalKeyName = $script:VmIdentity.KeyName
 }
 # Resolve a named VM's autoinstall ISO up front (explicit -AutoinstallIso wins, else
 # "<name>-autoinstall.iso" next to this script -- never "the newest ISO", which may
@@ -304,6 +351,9 @@ if ((Test-ConstructVmPresent -Name $VmName) -eq $true) {
     if ($choice -eq 0) {
         # Reprovision only -- hand straight to the provisioner and stop here.
         Write-Step "Reprovisioning the existing VM"
+        # The VM exists and is about to be reprovisioned: record it, so a VM created
+        # before B11 (or by an older script) enters the registry on its next run.
+        Register-ThisVmInstance
         $provisionScript = Join-Path $PSScriptRoot "Provision-AgentVM.ps1"
         if (-not (Test-Path -LiteralPath $provisionScript)) { throw "Provision-AgentVM.ps1 not found in $PSScriptRoot." }
         $VmHostname = [string](Get-ConstructVmEndpoint -Name $VmName).SshHost
@@ -536,6 +586,10 @@ if ($isAutoinstall) {
 Write-Step "Cleaning up: removing ISO and DVD drive"
 
 Detach-ConstructInstallMedia -Name $VmName
+
+# The VM exists and answers: record it before provisioning, so a failed provision still
+# leaves an instance the control panel can reprovision.
+Register-ThisVmInstance
 
 if ($isAutoinstall) {
     if ($Auto) {

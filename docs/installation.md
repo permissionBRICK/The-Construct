@@ -240,11 +240,46 @@ file that does not load says why.
 
 ### A second local VM
 
-`Auto-Install.ps1 -VmName build-vm` creates a second local VM; every derived value follows
-that name (guest hostname `build-vm`, `build-vm.mshome.net`, alias `build-vm`, key
-`construct_build-vm_ed25519`). The installer does **not** write a registry entry for a local
-VM — add one by hand, using exactly the derived identity above, if you want the control
-panel to list and switch to it.
+```powershell
+.\Auto-Install.ps1 -InstanceName build-vm
+```
+
+Every derived value follows that name: guest hostname `build-vm`, `build-vm.mshome.net`,
+Hyper-V VM `build-vm`, SSH alias `build-vm`, key `construct_build-vm_ed25519`, config-sync
+branch `vm-build-vm`. `-VmName build-vm` does exactly the same thing and keeps working —
+the two are one name, and passing both with different values is an error rather than a
+silent choice between two machines. `Create-AgentVM.ps1 -InstanceName build-vm` takes it
+too, for the bundle install (Option B/C).
+
+**The installer writes the registry entry**, through the same library both readers use, so
+the control panel lists the VM and can switch to it without any hand editing. A reinstall,
+a redownload or a reprovision of that VM keeps its entry.
+
+A default-only install still writes **no** `instances.json` at all — a missing file *is*
+the `agent-vm` instance. The file appears when the second VM is created, and then carries
+both entries.
+
+### Targeting one VM by name
+
+The scripts a second VM needs take **`-InstanceName <name>`** instead of four identity
+arguments, and read the endpoint, alias, port, key file, config-sync branch — and, for a
+VM on a host service, that service's URL — out of the registry entry:
+
+```powershell
+.\Provision-AgentVM.ps1 -InstanceName build-vm      # reprovision it
+.\Update-T3Code.ps1     -InstanceName build-vm      # rebuild its patched T3 Code
+.\Set-AgentVmCheckpoints.ps1 -InstanceName build-vm -Enabled false
+.\Get-AgentUsage.ps1    -InstanceName build-vm
+```
+
+The explicit `-VmHost` / `-HostAlias` / `-SshPort` / `-LocalKeyName` parameters are still
+there for a BYO or manual setup and are used as given. Passing one *together* with
+`-InstanceName` is only allowed when it agrees with the entry; a disagreement stops the run
+and names both values, because there is no safe way to guess which machine was meant. An
+unknown name is **always** an error listing the names this PC does know — passing an
+explicit endpoint alongside it does not make the name mean something else; a BYO or manual
+setup uses the explicit parameters *without* a name. `-InstanceName agent-vm` on a PC with
+no registry file resolves to exactly today's literals.
 
 ### A VM on a remote host
 

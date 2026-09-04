@@ -7,6 +7,7 @@ import {
   constructAvailableVersionLabel,
   constructT3BaseVersion,
   constructReprovisionIdentityArgs,
+  constructSupportsInstanceName,
   constructUpdateFromCompare,
   DEFAULT_CONSTRUCT_VM_TARGET,
   deriveConstructUpdateInfo,
@@ -546,6 +547,34 @@ describe("checkConstructUpdates", () => {
   });
 });
 
+describe("constructSupportsInstanceName", () => {
+  const script = `${SCRIPTS_DIR}\\Update-T3Code.ps1`;
+  const withScript = (text: string | null): ConstructFileSystem => ({
+    ...installedFs({}),
+    readTextFile: (path) => (path === script ? text : null),
+  });
+
+  it("is false when the script cannot be read at all", () => {
+    assert.isFalse(constructSupportsInstanceName(SCRIPTS_DIR, withScript(null), join));
+  });
+
+  it("is false for a script that predates the parameter", () => {
+    const older = "param(\n  [string]$VmHost,\n  [string]$HostAlias\n)\n";
+    assert.isFalse(constructSupportsInstanceName(SCRIPTS_DIR, withScript(older), join));
+  });
+
+  it("is true once the parameter is declared", () => {
+    const newer = "param(\n  [string]$VmHost,\n  [string]$InstanceName = \"\"\n)\n";
+    assert.isTrue(constructSupportsInstanceName(SCRIPTS_DIR, withScript(newer), join));
+  });
+
+  it("ignores a mention in a comment or a doc block", () => {
+    const commented =
+      "<#\n  .PARAMETER InstanceName\n#>\nparam(\n  # $InstanceName is not declared here\n  [string]$VmHost\n)\n";
+    assert.isFalse(constructSupportsInstanceName(SCRIPTS_DIR, withScript(commented), join));
+  });
+});
+
 describe("planConstructLaunch", () => {
   const info = { scriptsDir: SCRIPTS_DIR, repo: "permissionBRICK/The-Construct", ref: "main" };
 
@@ -727,6 +756,13 @@ describe("ConstructUpdates target VM (instances.json)", () => {
       "-LocalKeyName",
       '"construct_work_ed25519"',
     ]);
+    // NAME-ONLY TARGETING (B11, plan §4.12): once the installed Update-T3Code.ps1
+    // declares -InstanceName it resolves all four out of the same registry this module
+    // parsed, so one argument replaces them.
+    assert.deepEqual(constructReprovisionIdentityArgs(target, true), ["-InstanceName", '"work"']);
+    // The implicit default VM still forwards NOTHING, either way — that is the
+    // zero-change path, and an older provisioner keeps working on it.
+    assert.deepEqual(constructReprovisionIdentityArgs(plain, true), []);
     // A local instance with its canonical identity (derived when absent) is accepted.
     const local = readConstructVmTarget({
       version: 1,
@@ -1023,6 +1059,20 @@ describe("ConstructUpdates target VM (instances.json)", () => {
         plan.plan.args[3],
         `-File "${pinned}\\Update-T3Code.ps1" -VmHost "work.mshome.net" -HostAlias "work" -SshPort 22 -LocalKeyName "construct_work_ed25519"`,
       );
+    }
+    // ...and with a name-capable Update-T3Code.ps1 the same launch carries ONE argument.
+    const nameCapable: ConstructFileSystem = {
+      ...fs,
+      readTextFile: (path) =>
+        path === `${pinned}\\Update-T3Code.ps1`
+          ? 'param(\n  [string]$VmHost,\n  [string]$InstanceName = ""\n)\n'
+          : fs.readTextFile(path),
+    };
+    const named = planConstructLaunch("reprovision", { ...info }, target, "win32", nameCapable, join);
+    assert.isTrue(named.ok);
+    if (named.ok) {
+      assert.include(named.plan.args[3], `-File "${pinned}\\Update-T3Code.ps1" -InstanceName "work"`);
+      assert.notInclude(named.plan.args[3], "-VmHost");
     }
     // An unusable registry is surfaced by the check and blocks the reprovision launch.
     const ambiguous = {

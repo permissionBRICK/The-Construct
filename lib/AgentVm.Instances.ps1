@@ -35,6 +35,10 @@
       Get-ConstructInstanceCollision -Instances  -> @{ Problems; Drop } (cross-entry clashes)
       Test-ConstructDefaultInstance -Instance   -> [bool] "behaves exactly like today"
       Save-ConstructInstances                   -> atomic write (temp file + move)
+      New-ConstructLocalInstanceEntry -Name     -> the raw entry for a local VM (B11)
+      Save-ConstructLocalInstance -Name         -> record a local VM (zero-change default rule)
+      Get-ConstructInstanceTargetConflict       -> [string[]] explicit args vs. the entry
+      Resolve-ConstructInstanceTarget -Name     -> name-only targeting for the host scripts
 
     A normalised instance object has these properties (mirroring the JS shape):
       Name, Backend, VmName, VmHost, SshPort, HostAlias, KeyName, ConfigBranch,
@@ -1265,4 +1269,247 @@ function Save-ConstructInstances {
         throw
     }
     return $Path
+}
+
+# ── LOCAL instance entries + NAME-ONLY TARGETING (B11, plan section 4.12) ─────
+# Two rules the installers and the four launched host scripts share, kept here for the
+# same reason as everything above: the extension writes and reads the SAME file, so a
+# second copy of either rule would let the two halves disagree about what a name means.
+#
+#   * WRITING a local entry -- Auto-Install.ps1 / Create-AgentVM.ps1 record the VM they
+#     just built, with the CANONICAL identity derived from its name (nothing invented,
+#     nothing hand-rolled into JSON).
+#   * READING one by name -- Provision-AgentVM.ps1, Update-T3Code.ps1,
+#     Set-AgentVmCheckpoints.ps1 and Get-AgentUsage.ps1 take -InstanceName instead of
+#     four identity arguments and resolve the endpoint from here.
+
+function New-ConstructLocalInstanceEntry {
+    <#
+        The raw (schema v1) entry for a 'hyperv-local' instance of this name: exactly the
+        CANONICAL identity (Get-ConstructCanonicalIdentity), because that is the only
+        identity such an entry may have -- the parser SKIPS a local entry that states
+        anything else (Get-ConstructLocalIdentityProblem), and a rebuild would overwrite
+        it with the derivation anyway.
+
+        -ConfigBranch is the one field a caller may state: it is what the launched
+        scripts can be TOLD (-ConfigBranch), so an explicit branch is a supported
+        override. Empty leaves it to the derivation ('vm' for the default instance,
+        'vm-<name>' otherwise). Pure.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [string]$ConfigBranch = ""
+    )
+    $c = Get-ConstructCanonicalIdentity -Name $Name
+    $entry = @{
+        backend   = $script:ConstructDefaultBackend
+        vmName    = $c.VmName
+        sshHost   = $c.VmHost
+        sshPort   = [int]$c.SshPort
+        hostAlias = $c.HostAlias
+        keyName   = $c.KeyName
+    }
+    if ($ConfigBranch) { $entry['configBranch'] = $ConfigBranch }
+    return $entry
+}
+
+function Save-ConstructLocalInstance {
+    <#
+        Record a LOCAL VM in the registry. Returns the file path that was written, or
+        $null when nothing had to be written.
+
+        THE ZERO-CHANGE RULE IS THE WHOLE POINT OF THE DEFAULT-NAME BRANCH. An install
+        that only ever creates 'agent-vm' must still leave NO instances.json behind: a
+        missing file IS the default instance, every reader synthesizes it, and writing
+        one would turn a byte-for-byte unchanged install into one that now carries state
+        it never had. So the default instance is materialised only when the file already
+        exists (some other instance put it there) -- and when a SECOND VM is created the
+        default is written alongside it in the same document, because
+        Copy-ConstructInstanceRegistry always carries 'agent-vm' and
+        Save-ConstructInstances writes every instance it holds.
+
+        A named instance that is ALREADY registered keeps its entry (that is what makes
+        reinstall/redownload of a named VM non-destructive to the registry): the identity
+        is re-derived (it cannot differ -- it is derived from the same name), while an
+        explicit branch and a pinned scriptsDir are preserved. An entry under this name
+        that is NOT local is refused rather than silently converted: it describes a VM on
+        somebody else's host, and overwriting it would point every rebuild at this PC.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [string]$ConfigBranch = "",
+        [string]$Path
+    )
+    if (-not (Test-ConstructInstanceName $Name)) {
+        throw "Cannot record the instance '$Name': $($script:ConstructInstanceNameRule)"
+    }
+    $reg = if ($Path) { Read-ConstructInstances -Path $Path } else { Read-ConstructInstances }
+
+    if ($Name -ceq $script:ConstructDefaultInstance) {
+        if (-not $reg.Exists) { return $null }
+        # The file exists, so this PC already manages more than the implicit default:
+        # spell the default out explicitly rather than leave it synthesized-only.
+        $same = Copy-ConstructInstanceRegistry -Registry $reg
+        if ($Path) { return (Save-ConstructInstances -Registry $same -Path $Path) }
+        return (Save-ConstructInstances -Registry $same)
+    }
+
+    $existing = $null
+    if ($reg.Instances.ContainsKey($Name)) { $existing = $reg.Instances[$Name] }
+    if ($existing -and -not (Test-ConstructLocalBackend ([string]$existing.Backend))) {
+        throw ("The instance '$Name' is already registered as a '$($existing.Backend)' instance " +
+               "(endpoint $($existing.VmHost):$($existing.SshPort)). Pick another name, or remove that entry first.")
+    }
+    $branch = $ConfigBranch
+    if (-not $branch -and $existing) { $branch = [string]$existing.ConfigBranch }
+    $entry = New-ConstructLocalInstanceEntry -Name $Name -ConfigBranch $branch
+    if ($existing -and $existing.ScriptsDir) { $entry['scriptsDir'] = [string]$existing.ScriptsDir }
+
+    $next = Add-ConstructInstance -Registry $reg -Name $Name -Entry $entry -Replace
+    if ($Path) { return (Save-ConstructInstances -Registry $next -Path $Path) }
+    return (Save-ConstructInstances -Registry $next)
+}
+
+# The identity a launched script can ALSO be told explicitly, mapped to the normalised
+# instance property it must agree with and to the schema field a conflict message names.
+# One list so the conflict check and the resolver cannot drift apart.
+$script:ConstructTargetFields = @(
+    [pscustomobject]@{ Param = 'VmHost';       Field = 'VmHost';       Schema = 'sshHost' },
+    [pscustomobject]@{ Param = 'HostAlias';    Field = 'HostAlias';    Schema = 'hostAlias' },
+    [pscustomobject]@{ Param = 'SshPort';      Field = 'SshPort';      Schema = 'sshPort' },
+    [pscustomobject]@{ Param = 'LocalKeyName'; Field = 'KeyName';      Schema = 'keyName' },
+    [pscustomobject]@{ Param = 'ConfigBranch'; Field = 'ConfigBranch'; Schema = 'configBranch' },
+    [pscustomobject]@{ Param = 'VmName';       Field = 'VmName';       Schema = 'vmName' },
+    [pscustomobject]@{ Param = 'Backend';      Field = 'Backend';      Schema = 'backend' },
+    [pscustomobject]@{ Param = 'ServiceUrl';   Field = 'ServiceUrl';   Schema = 'service.url' }
+)
+
+function Get-ConstructInstanceTargetConflict {
+    <#
+        The explicit parameters that DISAGREE with the registry entry -- @() when they
+        all agree (or none was given).
+
+        Why this is an error and not "the explicit one wins": -InstanceName says WHICH
+        MACHINE, and so does -VmHost. When the two disagree there is no reading that is
+        obviously right, and both readings are destructive -- one reprovisions a VM the
+        caller did not name, the other writes this instance's ssh block and key onto
+        another instance's endpoint. Saying so, with both values, is the only safe answer.
+
+        -SshPort 0 and an empty string mean "not supplied" (the launched scripts spell an
+        unset identity that way), so they never conflict. The Hyper-V DISPLAY NAME is
+        compared case-insensitively, exactly like Get-ConstructLocalIdentityProblem;
+        everything else is a lowercase token compared verbatim. Pure.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Instance,
+        [hashtable]$Explicit
+    )
+    $out = New-Object System.Collections.Generic.List[string]
+    if ($null -eq $Explicit) { return @($out) }
+    foreach ($f in $script:ConstructTargetFields) {
+        if (-not $Explicit.ContainsKey($f.Param)) { continue }
+        $given = $Explicit[$f.Param]
+        if ($null -eq $given) { continue }
+        # ServiceUrl is not a top-level property of a normalised instance -- it lives
+        # under .Service, and a local instance has none at all (so any explicit value
+        # disagrees with it, which is exactly right: the caller is aiming a local VM at
+        # somebody's host service).
+        $have = if ($f.Param -eq 'ServiceUrl') {
+            if ($Instance.Service) { [string]$Instance.Service.Url } else { '' }
+        } else {
+            $Instance.($f.Field)
+        }
+        if ($f.Param -eq 'SshPort') {
+            $port = 0
+            try { $port = [int]$given } catch { $port = 0 }
+            if ($port -le 0) { continue }
+            if ($port -ne [int]$have) {
+                $out.Add("-SshPort $port conflicts with instance '$($Instance.Name)', whose `"sshPort`" is $([int]$have)")
+            }
+            continue
+        }
+        $g = [string]$given
+        if ($g -eq '') { continue }
+        $isMatch = if ($f.Param -eq 'VmName') {
+            $g.ToLowerInvariant() -ceq ([string]$have).ToLowerInvariant()
+        } else {
+            $g -ceq [string]$have
+        }
+        if (-not $isMatch) {
+            $out.Add("-$($f.Param) '$g' conflicts with instance '$($Instance.Name)', whose `"$($f.Schema)`" is '$have'")
+        }
+    }
+    return @($out)
+}
+
+function Resolve-ConstructInstanceTarget {
+    <#
+        NAME-ONLY TARGETING: everything Provision-AgentVM.ps1, Update-T3Code.ps1,
+        Set-AgentVmCheckpoints.ps1 and Get-AgentUsage.ps1 need in order to act on the
+        instance called $Name, so a caller passes ONE parameter instead of four and only
+        one parameter has to be probed for version skew.
+
+        -Explicit is the hashtable of identity parameters the CALLER actually bound
+        (probe-before-splat: only keys that were bound, never a script default). Two
+        cases, and only two:
+
+          * the registry KNOWS the name -- every explicit value must AGREE with the entry
+            (Get-ConstructInstanceTargetConflict), and the entry answers everything else;
+          * the registry does NOT know it -- an error listing the names it DOES know.
+            ALWAYS, whatever else the caller passed: -InstanceName means "the instance
+            called this", and there is no such instance. A BYO or manual setup is still
+            served exactly as before -- by passing the explicit identity WITHOUT a name,
+            which is what those parameters are for; letting an unknown name through
+            because an endpoint happened to be supplied would make the same argument mean
+            two different things.
+
+        The result is FLAT (no nested Service object) so a caller can hand it out of the
+        child scope this module is loaded in. Never mutates the registry.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [hashtable]$Explicit,
+        $Registry,
+        [string]$Path
+    )
+    if (-not (Test-ConstructInstanceName $Name)) {
+        throw "'$Name' is not a valid instance name: $($script:ConstructInstanceNameRule)"
+    }
+    if ($null -eq $Registry) {
+        $Registry = if ($Path) { Read-ConstructInstances -Path $Path } else { Read-ConstructInstances }
+    }
+    if (-not $Registry.Instances.ContainsKey($Name)) {
+        $known = @($Registry.Instances.Keys | Sort-Object)
+        throw ("Unknown instance '$Name'. This PC's instance registry ($($Registry.Path)) knows: " +
+               ($known -join ', ') + ".")
+    }
+    $inst = $Registry.Instances[$Name]
+    $conflicts = @(Get-ConstructInstanceTargetConflict -Instance $inst -Explicit $Explicit)
+    if ($conflicts.Count -gt 0) {
+        throw ("-InstanceName '$Name' was given together with an identity it does not have: " +
+               ($conflicts -join '; ') + ". Pass only the name, or only the identity.")
+    }
+
+    $svcUrl = ''; $svcAuth = ''
+    if ($inst.Service) { $svcUrl = [string]$inst.Service.Url; $svcAuth = [string]$inst.Service.Auth }
+    return [pscustomobject]@{
+        Name         = [string]$inst.Name
+        Backend      = [string]$inst.Backend
+        VmName       = [string]$inst.VmName
+        VmHost       = [string]$inst.VmHost
+        SshPort      = [int]$inst.SshPort
+        HostAlias    = [string]$inst.HostAlias
+        KeyName      = [string]$inst.KeyName
+        ConfigBranch = [string]$inst.ConfigBranch
+        ScriptsDir   = [string]$inst.ScriptsDir
+        ServiceUrl   = $svcUrl
+        ServiceAuth  = $svcAuth
+        Owner        = [string]$inst.Owner
+        IsDefault    = [bool](Test-ConstructDefaultInstance -Instance $inst)
+        Path         = [string]$Registry.Path
+    }
 }
