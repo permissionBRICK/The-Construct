@@ -1042,6 +1042,262 @@ $txt = [System.IO.File]::ReadAllText($out)
 ok "save: writes schema version 1" ($txt -match '"version"\s*:\s*1')
 ok "save: no UTF-8 BOM" (-not $txt.StartsWith([char]0xFEFF))
 
+# ── (i) Local entries + name-only targeting (B11, plan section 4.12) ────────
+Write-Host ""
+Write-Host "=== Local instance entries (the installer's writer) ===" -ForegroundColor Cyan
+
+# The entry is the CANONICAL identity and nothing else -- what the reader accepts.
+$le = New-ConstructLocalInstanceEntry -Name 'build-vm'
+ok "local entry: backend is the local one"     ($le['backend']   -ceq 'hyperv-local')
+ok "local entry: vmName = the name"            ($le['vmName']    -ceq 'build-vm')
+ok "local entry: sshHost = <name>.mshome.net"  ($le['sshHost']   -ceq 'build-vm.mshome.net')
+ok "local entry: hostAlias = the name"         ($le['hostAlias'] -ceq 'build-vm')
+ok "local entry: keyName = construct_<name>_ed25519" ($le['keyName'] -ceq 'construct_build-vm_ed25519')
+ok "local entry: sshPort = 22"                 ([int]$le['sshPort'] -eq 22)
+ok "local entry: no branch unless asked for"   (-not $le.ContainsKey('configBranch'))
+ok "local entry: an explicit branch is kept"   ((New-ConstructLocalInstanceEntry -Name 'build-vm' -ConfigBranch 'vm-team')['configBranch'] -ceq 'vm-team')
+ok "local entry: the DEFAULT name keeps today's literals" (
+    $(($d = New-ConstructLocalInstanceEntry -Name 'agent-vm'); $d['vmName'] -ceq 'Agent-VM' -and
+      $d['sshHost'] -ceq 'agent-vm.mshome.net' -and $d['keyName'] -ceq 'agent_vm_ed25519'))
+ok "local entry: it is an entry the READER accepts" (
+    @(Get-ConstructInstanceEntryProblem -Name 'build-vm' -Entry $le).Count -eq 0)
+ok "local entry: ...and it passes the canonical-identity rule" (
+    @(Get-ConstructLocalIdentityProblem -Instance (Resolve-ConstructInstanceDefaults -Name 'build-vm' -Entry (ConvertTo-ConstructInstanceEntryObject -Entry $le))).Count -eq 0)
+
+# THE ZERO-CHANGE FIXTURE: a default-only install writes NO instances.json at all.
+$zeroPath = Join-Path $tmpRoot "zero-change/instances.json"
+$zeroRes  = Save-ConstructLocalInstance -Name 'agent-vm' -Path $zeroPath
+ok "zero-change: recording the DEFAULT instance with no registry writes nothing" ($null -eq $zeroRes)
+ok "zero-change: ...and no file appears"                    (-not (Test-Path -LiteralPath $zeroPath))
+ok "zero-change: ...and not even the directory is created"  (-not (Test-Path -LiteralPath (Split-Path -Parent $zeroPath)))
+
+# The SECOND VM: one document carrying both the new instance and the default.
+$twoPath = Join-Path $tmpRoot "two-vms/instances.json"
+$written = Save-ConstructLocalInstance -Name 'build-vm' -Path $twoPath
+ok "second VM: the registry file is written" ($written -eq $twoPath -and (Test-Path -LiteralPath $twoPath))
+$twoReg = Read-ConstructInstances -Path $twoPath
+ok "second VM: both entries are present"     ($twoReg.Instances.Keys.Count -eq 2)
+ok "second VM: the default is spelled out too" ($twoReg.Instances.ContainsKey('agent-vm'))
+ok "second VM: the default still behaves like today" (Test-ConstructDefaultInstance $twoReg.Instances['agent-vm'])
+ok "second VM: the new entry loaded without problems" (@($twoReg.Problems).Count -eq 0)
+ok "second VM: defaultInstance is NOT moved"  ($twoReg.Default -ceq 'agent-vm')
+ok "second VM: its branch is the derived one" ($twoReg.Instances['build-vm'].ConfigBranch -ceq 'vm-build-vm')
+
+# Once the file exists, recording the DEFAULT materialises it (it is no longer the only
+# instance, so leaving it synthesized-only hides nothing).
+ok "default: with a file present it IS written" ((Save-ConstructLocalInstance -Name 'agent-vm' -Path $twoPath) -eq $twoPath)
+ok "default: ...and the other instance survives" ((Read-ConstructInstances -Path $twoPath).Instances.ContainsKey('build-vm'))
+
+# Reinstall/redownload of a NAMED VM keeps its entry (and an explicit branch on it).
+[void](Save-ConstructLocalInstance -Name 'build-vm' -ConfigBranch 'vm-team' -Path $twoPath)
+ok "reinstall: an explicit branch is recorded" ((Read-ConstructInstances -Path $twoPath).Instances['build-vm'].ConfigBranch -ceq 'vm-team')
+[void](Save-ConstructLocalInstance -Name 'build-vm' -Path $twoPath)
+ok "reinstall: re-recording without a branch KEEPS the saved one" (
+    (Read-ConstructInstances -Path $twoPath).Instances['build-vm'].ConfigBranch -ceq 'vm-team')
+ok "reinstall: the entry is not duplicated" ((Read-ConstructInstances -Path $twoPath).Instances.Keys.Count -eq 2)
+
+# A name already held by an instance on somebody else's host is a conflict, not an
+# overwrite: the local rebuild would otherwise point at this PC.
+$remoteHeld = Read-ConstructInstances -Path (Join-Path $tmpRoot "held/instances.json")
+$remoteHeld.Instances['work-vm'] = Resolve-ConstructInstanceDefaults -Name 'work-vm' -Entry ([pscustomobject]@{
+    backend = 'hyperv-remote'; sshHost = 'buildbox.example.local'; sshPort = 2201 })
+[void](Save-ConstructInstances -Registry $remoteHeld -Path (Join-Path $tmpRoot "held/instances.json"))
+$heldErr = ""
+try { Save-ConstructLocalInstance -Name 'work-vm' -Path (Join-Path $tmpRoot "held/instances.json") | Out-Null }
+catch { $heldErr = [string]$_.Exception.Message }
+ok "conflict: a remote instance of that name is not overwritten" ($heldErr -like "*hyperv-remote*")
+ok "conflict: ...and the remote entry is still there" (
+    (Read-ConstructInstances -Path (Join-Path $tmpRoot "held/instances.json")).Instances['work-vm'].Backend -ceq 'hyperv-remote')
+
+$badNameErr = ""
+try { Save-ConstructLocalInstance -Name 'Build VM' -Path (Join-Path $tmpRoot "bad/instances.json") | Out-Null }
+catch { $badNameErr = [string]$_.Exception.Message }
+ok "refusal: an invalid name is refused where it is created" ($badNameErr -ne "")
+ok "refusal: ...and nothing was written" (-not (Test-Path -LiteralPath (Join-Path $tmpRoot "bad/instances.json")))
+
+# ── (j) Name-only targeting: resolution + conflicts ────────────────────────
+Write-Host ""
+Write-Host "=== Name-only targeting (-InstanceName) ===" -ForegroundColor Cyan
+
+$targetPath = Join-Path $tmpRoot "targets/instances.json"
+[void](Save-ConstructLocalInstance -Name 'build-vm' -Path $targetPath)
+$tReg = Read-ConstructInstances -Path $targetPath
+$tReg.Instances['work-vm'] = Resolve-ConstructInstanceDefaults -Name 'work-vm' -Entry ([pscustomobject]@{
+    backend = 'hyperv-remote'; sshHost = 'buildbox.example.local'; sshPort = 2201
+    service = [pscustomobject]@{ url = 'https://buildbox.example.local:7462'; auth = 'negotiate' } })
+[void](Save-ConstructInstances -Registry $tReg -Path $targetPath)
+
+$t = Resolve-ConstructInstanceTarget -Name 'build-vm' -Path $targetPath
+ok "resolve: host from the entry"   ($t.VmHost    -ceq 'build-vm.mshome.net')
+ok "resolve: alias from the entry"  ($t.HostAlias -ceq 'build-vm')
+ok "resolve: port from the entry"   ([int]$t.SshPort -eq 22)
+ok "resolve: key from the entry"    ($t.KeyName   -ceq 'construct_build-vm_ed25519')
+ok "resolve: branch from the entry" ($t.ConfigBranch -ceq 'vm-build-vm')
+ok "resolve: vmName from the entry" ($t.VmName    -ceq 'build-vm')
+ok "resolve: backend from the entry" ($t.Backend  -ceq 'hyperv-local')
+ok "resolve: it is not the default instance" ($t.IsDefault -eq $false)
+ok "resolve: a local entry states no service URL" ($t.ServiceUrl -ceq '')
+
+$tr = Resolve-ConstructInstanceTarget -Name 'work-vm' -Path $targetPath
+ok "resolve: a remote entry's endpoint is its own"  ($tr.VmHost -ceq 'buildbox.example.local')
+ok "resolve: ...with its allocated port"            ([int]$tr.SshPort -eq 2201)
+ok "resolve: ...and its service URL is flattened"   ($tr.ServiceUrl -ceq 'https://buildbox.example.local:7462')
+ok "resolve: ...and its auth"                       ($tr.ServiceAuth -ceq 'negotiate')
+
+# THE ZERO-CHANGE BAR for -InstanceName: the default name with no registry file at all
+# resolves to exactly today's literals, so passing it changes nothing.
+$td = Resolve-ConstructInstanceTarget -Name 'agent-vm' -Path (Join-Path $tmpRoot "no-registry-here.json")
+ok "zero-change: the default name resolves without a registry" ($td.IsDefault -eq $true)
+ok "zero-change: ...to agent-vm.mshome.net"  ($td.VmHost  -ceq 'agent-vm.mshome.net')
+ok "zero-change: ...alias agent-vm"          ($td.HostAlias -ceq 'agent-vm')
+ok "zero-change: ...key agent_vm_ed25519"    ($td.KeyName -ceq 'agent_vm_ed25519')
+ok "zero-change: ...branch vm"               ($td.ConfigBranch -ceq 'vm')
+ok "zero-change: ...port 22"                 ([int]$td.SshPort -eq 22)
+ok "zero-change: ...and no file was created" (-not (Test-Path -LiteralPath (Join-Path $tmpRoot "no-registry-here.json")))
+
+# UNKNOWN NAME: an error that lists what this PC does know.
+$unknownErr = ""
+try { Resolve-ConstructInstanceTarget -Name 'nope-vm' -Path $targetPath | Out-Null }
+catch { $unknownErr = [string]$_.Exception.Message }
+ok "unknown: the name is named"            ($unknownErr -like "*nope-vm*")
+ok "unknown: the known names are listed"   ($unknownErr -like "*build-vm*" -and $unknownErr -like "*work-vm*" -and $unknownErr -like "*agent-vm*")
+ok "unknown: the registry path is named"   ($unknownErr -like "*$([System.IO.Path]::GetFileName($targetPath))*")
+
+$badErr = ""
+try { Resolve-ConstructInstanceTarget -Name 'Build VM' -Path $targetPath | Out-Null }
+catch { $badErr = [string]$_.Exception.Message }
+ok "unknown: an invalid name is refused by the name rule, not listed" ($badErr -like "*not a valid instance name*")
+
+# EXPLICIT-VS-REGISTRY: agreement is fine, disagreement names BOTH values.
+$agree = Resolve-ConstructInstanceTarget -Name 'build-vm' -Path $targetPath -Explicit @{
+    VmHost = 'build-vm.mshome.net'; HostAlias = 'build-vm'; SshPort = 22
+    LocalKeyName = 'construct_build-vm_ed25519'; ConfigBranch = 'vm-build-vm' }
+ok "explicit: values that AGREE resolve normally" ($agree.VmHost -ceq 'build-vm.mshome.net')
+ok "explicit: an unset -SshPort 0 never conflicts" (
+    (Resolve-ConstructInstanceTarget -Name 'build-vm' -Path $targetPath -Explicit @{ SshPort = 0 }).SshPort -eq 22)
+ok "explicit: an empty string never conflicts" (
+    (Resolve-ConstructInstanceTarget -Name 'build-vm' -Path $targetPath -Explicit @{ VmHost = '' }).VmHost -ceq 'build-vm.mshome.net')
+ok "explicit: the Hyper-V display name is matched case-insensitively" (
+    (Resolve-ConstructInstanceTarget -Name 'build-vm' -Path $targetPath -Explicit @{ VmName = 'BUILD-VM' }).VmName -ceq 'build-vm')
+
+foreach ($case in @(
+    @{ Key = 'VmHost';       Value = 'other.mshome.net';        Schema = 'sshHost' },
+    @{ Key = 'HostAlias';    Value = 'other-vm';                Schema = 'hostAlias' },
+    @{ Key = 'LocalKeyName'; Value = 'agent_vm_ed25519';        Schema = 'keyName' },
+    @{ Key = 'ConfigBranch'; Value = 'vm';                      Schema = 'configBranch' },
+    @{ Key = 'VmName';       Value = 'Agent-VM';                Schema = 'vmName' }
+)) {
+    $msg = ""
+    try { Resolve-ConstructInstanceTarget -Name 'build-vm' -Path $targetPath -Explicit @{ $case.Key = $case.Value } | Out-Null }
+    catch { $msg = [string]$_.Exception.Message }
+    ok "conflict: -$($case.Key) that disagrees is an error" ($msg -like "*-$($case.Key)*")
+    ok "conflict: -$($case.Key) names the value the caller gave" ($msg -like "*$($case.Value)*")
+    ok "conflict: -$($case.Key) names the registry's field" ($msg -like "*$($case.Schema)*")
+}
+$portMsg = ""
+try { Resolve-ConstructInstanceTarget -Name 'build-vm' -Path $targetPath -Explicit @{ SshPort = 2222 } | Out-Null }
+catch { $portMsg = [string]$_.Exception.Message }
+ok "conflict: a differing -SshPort is an error naming both" ($portMsg -like "*2222*" -and $portMsg -like "*22*")
+
+# AN UNKNOWN NAME ALWAYS FAILS -- a stated identity does not buy an exception. BYO and
+# manual setups pass the explicit identity WITHOUT a name, which is what those parameters
+# are for; letting the name through because an endpoint came with it would make one
+# argument mean two different things.
+$byoErr = ""
+try { Resolve-ConstructInstanceTarget -Name 'nope-vm' -Path $targetPath -Explicit @{ VmHost = '10.0.0.9' } | Out-Null }
+catch { $byoErr = [string]$_.Exception.Message }
+ok "unknown: a stated identity does NOT excuse an unknown name" ($byoErr -like "*Unknown instance 'nope-vm'*")
+ok "unknown: ...and the known names are still listed" (
+    $byoErr -like "*build-vm*" -and $byoErr -like "*work-vm*" -and $byoErr -like "*agent-vm*")
+$byoFullErr = ""
+try {
+    Resolve-ConstructInstanceTarget -Name 'nope-vm' -Path $targetPath -Explicit @{
+        VmHost = '10.0.0.9'; HostAlias = 'nope-vm'; SshPort = 2222; LocalKeyName = 'construct_nope-vm_ed25519' } | Out-Null
+} catch { $byoFullErr = [string]$_.Exception.Message }
+ok "unknown: a COMPLETE stated identity does not excuse it either" ($byoFullErr -like "*Unknown instance*")
+
+# The host-service identity is resolved and conflict-checked like the rest, so a
+# name-targeted remote reprovision reaches the service the registry names.
+ok "service: a remote entry's URL is resolved from the entry" (
+    (Resolve-ConstructInstanceTarget -Name 'work-vm' -Path $targetPath).ServiceUrl -ceq 'https://buildbox.example.local:7462')
+ok "service: an agreeing -ServiceUrl is fine" (
+    (Resolve-ConstructInstanceTarget -Name 'work-vm' -Path $targetPath -Explicit @{
+        ServiceUrl = 'https://buildbox.example.local:7462' }).ServiceUrl -ceq 'https://buildbox.example.local:7462')
+$svcErr = ""
+try {
+    Resolve-ConstructInstanceTarget -Name 'work-vm' -Path $targetPath -Explicit @{ ServiceUrl = 'https://elsewhere:7462' } | Out-Null
+} catch { $svcErr = [string]$_.Exception.Message }
+ok "service: a differing -ServiceUrl is an error naming both" (
+    $svcErr -like "*-ServiceUrl*" -and $svcErr -like "*https://elsewhere:7462*" -and
+    $svcErr -like "*buildbox.example.local:7462*" -and $svcErr -like "*service.url*")
+$svcLocalErr = ""
+try {
+    Resolve-ConstructInstanceTarget -Name 'build-vm' -Path $targetPath -Explicit @{ ServiceUrl = 'https://elsewhere:7462' } | Out-Null
+} catch { $svcLocalErr = [string]$_.Exception.Message }
+ok "service: pointing a LOCAL instance at a host service is a conflict too" ($svcLocalErr -like "*-ServiceUrl*")
+# ── publicHost: the per-VM web host name (plan section 4.12) ────────────────
+# OPTIONAL, never derived, ignored for a local backend, and NOT part of the endpoint
+# identity -- two VMs on one wildcard domain are told apart by their sshHost/sshPort, as
+# they always were. Mirrored field for field by extension/src/instances.js.
+Write-Host ""
+Write-Host "=== publicHost ===" -ForegroundColor Cyan
+
+$pubPath = New-RegistryFile @'
+{ "version": 1, "defaultInstance": "agent-vm", "instances": {
+  "work-vm": { "backend": "hyperv-remote", "vmName": "work-vm", "sshHost": "buildbox.local",
+               "sshPort": 2201, "hostAlias": "work-vm", "keyName": "construct_work-vm_ed25519",
+               "configBranch": "vm-work-vm", "publicHost": "work-vm.vpn.example" }
+} }
+'@
+$pubReg = Read-ConstructInstances -Path $pubPath
+ok "publicHost: a remote entry keeps it" ($pubReg.Instances['work-vm'].PublicHost -eq 'work-vm.vpn.example')
+ok "publicHost: it produces no problem of its own" (
+    @($pubReg.Problems | Where-Object { $_ -match 'publicHost' }).Count -eq 0)
+ok "publicHost: sshHost is untouched by it (SSH still dials the endpoint)" (
+    $pubReg.Instances['work-vm'].VmHost -eq 'buildbox.local')
+
+# A local instance's identity is derived from its name, and its ONE address is that
+# endpoint -- so the field is dropped rather than carried where nothing can use it.
+$localPubPath = New-RegistryFile @'
+{ "version": 1, "instances": {
+  "work-vm": { "backend": "hyperv-local", "publicHost": "work-vm.vpn.example" }
+} }
+'@
+$localPubReg = Read-ConstructInstances -Path $localPubPath
+ok "publicHost: ignored for a hyperv-local instance" ($null -eq $localPubReg.Instances['work-vm'].PublicHost)
+ok "publicHost: ...and the entry still loads" ($localPubReg.Instances.ContainsKey('work-vm'))
+
+# It becomes CONSTRUCT_EXTERNAL_HOST inside the guest's shell command line and a printed
+# URL, so a value that is not a host name is refused with the entry, exactly like sshHost.
+$badPubPath = New-RegistryFile @'
+{ "version": 1, "instances": {
+  "work-vm": { "backend": "hyperv-remote", "vmName": "work-vm", "sshHost": "buildbox.local",
+               "sshPort": 2201, "publicHost": "-x; calc" }
+} }
+'@
+$badPubReg = Read-ConstructInstances -Path $badPubPath
+ok "publicHost: a hostile value skips the whole entry" (-not $badPubReg.Instances.ContainsKey('work-vm'))
+ok "publicHost: ...and says which field" (@($badPubReg.Problems | Where-Object { $_ -match 'publicHost' }).Count -gt 0)
+
+$typePubPath = New-RegistryFile @'
+{ "version": 1, "instances": {
+  "work-vm": { "backend": "hyperv-remote", "vmName": "work-vm", "sshHost": "buildbox.local",
+               "sshPort": 2201, "publicHost": 42 }
+} }
+'@
+$typePubReg = Read-ConstructInstances -Path $typePubPath
+ok "publicHost: a non-string is reported and the derived default (none) is used" (
+    @($typePubReg.Problems | Where-Object { $_ -match "'publicHost' must be a string" }).Count -gt 0 -and
+    $null -eq $typePubReg.Instances['work-vm'].PublicHost)
+
+$pubOut = Join-Path $tmpRoot "pub/instances.json"
+Save-ConstructInstances -Registry $pubReg -Path $pubOut | Out-Null
+$pubBack = Read-ConstructInstances -Path $pubOut
+ok "publicHost: survives a save/read round-trip" ($pubBack.Instances['work-vm'].PublicHost -eq 'work-vm.vpn.example')
+$pubTxt = [System.IO.File]::ReadAllText($pubOut)
+ok "publicHost: the default instance's entry does not gain the key" (
+    ($pubTxt -split '"agent-vm"')[1] -notmatch 'publicHost')
+
 } finally {
     Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

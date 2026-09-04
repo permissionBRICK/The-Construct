@@ -52,6 +52,7 @@ public static class AdminCli
           tokens issue <user> --label <label>
           tokens revoke-all <user>
           forwards reconcile
+          host status
           iso build [--force]
           iso status
           iso prune
@@ -92,6 +93,7 @@ public static class AdminCli
                 ("tokens", "issue") => await IssueTokenAsync(positional, services, writer, cancellationToken).ConfigureAwait(false),
                 ("tokens", "revoke-all") => await RevokeTokensAsync(positional, services, writer, cancellationToken).ConfigureAwait(false),
                 ("forwards", "reconcile") => await ReconcileAsync(positional, services, writer, cancellationToken).ConfigureAwait(false),
+                ("host", "status") => HostStatus(positional, services, writer),
                 ("iso", "build") => await IsoBuildAsync(positional, services, writer, output, cancellationToken).ConfigureAwait(false),
                 ("iso", "status") => IsoStatus(positional, services, writer),
                 ("iso", "prune") => IsoPrune(positional, services, writer),
@@ -425,6 +427,60 @@ public static class AdminCli
             $"Built and published {entry.FileName}." + Environment.NewLine +
             $"ISO: {entry.Path}");
     }
+
+    /// <summary>
+    /// How this host advertises its VMs: the LAN name endpoints and forwards are published on, and
+    /// the optional per-VM host-name pattern (plan §4.12) with an example rendering, so an admin can
+    /// see at a glance whether the wildcard DNS record is actually in play.
+    /// </summary>
+    private static int HostStatus(IReadOnlyList<string> args, IServiceProvider services, AdminOutput writer)
+    {
+        if (Extra(args, 2) is { } unexpected)
+        {
+            return writer.Usage($"host status takes no options; got '{unexpected}'");
+        }
+
+        var options = services.GetService<ConstructdOptions>();
+        if (options is null)
+        {
+            return writer.Error(AdminExitCode.Failed, "This build has no service configuration to report.");
+        }
+
+        var pattern = (options.PublicHostPattern ?? string.Empty).Trim();
+        var configured = pattern.Length > 0;
+        // The rendering an admin can check against DNS. ExampleVm is a legal instance name, so this
+        // is exactly what a VM of that name would be advertised as.
+        var example = options.PublicHostFor(ExampleVm);
+
+        var lines = new List<string>
+        {
+            $"PublicHost        : {options.PublicHost}",
+            $"PublicHostPattern : {(configured ? pattern : "(unset -- every VM is advertised on PublicHost)")}",
+            $"Example           : VM '{ExampleVm}' is advertised as {example}",
+        };
+
+        if (configured)
+        {
+            lines.Add($"                    point a wildcard DNS record at this host for {pattern.Replace(PublicHostPatternRules.Placeholder, "*", StringComparison.Ordinal)}");
+        }
+
+        lines.Add($"SSH forwards      : {options.SshForwardPorts.Start}-{options.SshForwardPorts.End}");
+        lines.Add($"App forwards      : {options.AppForwardPorts.Start}-{options.AppForwardPorts.End}");
+
+        return writer.Result(
+            new
+            {
+                publicHost = options.PublicHost,
+                publicHostPattern = configured ? pattern : null,
+                example = new { vmName = ExampleVm, publicHost = example },
+                sshForwardPorts = new { start = options.SshForwardPorts.Start, end = options.SshForwardPorts.End },
+                appForwardPorts = new { start = options.AppForwardPorts.Start, end = options.AppForwardPorts.End },
+            },
+            string.Join(Environment.NewLine, lines));
+    }
+
+    /// <summary>The VM name `host status` renders the pattern with. A valid instance name.</summary>
+    private const string ExampleVm = "work-vm";
 
     /// <summary>
     /// What media this host has, and whether a VM could be created right now. Exit code 3 when

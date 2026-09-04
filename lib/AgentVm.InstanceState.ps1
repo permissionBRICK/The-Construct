@@ -52,7 +52,7 @@
       Get-ConstructInstanceStateDir                 -> %LOCALAPPDATA%\The-Construct\instances
       Get-ConstructInstanceStatePath -Name          -> that instance's file ($null for the default)
       Test-ConstructDefaultInstanceStore -Name      -> [bool] "this name uses the legacy store"
-      Test-ConstructInstanceStateName -Name         -> [bool] THE ONE name rule, read from
+      Test-ConstructInstanceStateName -Name         -> [bool] THE ONE name rule, asked of
                                                        lib\AgentVm.Instances.ps1
       Test-ConstructInstallWideKey -Key             -> [bool]
       Test-ConstructInstanceStateMetaKey -Key       -> [bool]
@@ -81,34 +81,38 @@ $script:ConstructInstallWideKeys = @(
 # Written into every per-instance file and skipped when it is read back as settings.
 $script:ConstructInstanceStateMetaKeys = @('version', 'instance')
 
-# THE ONE INSTANCE-NAME RULE, READ FROM ITS SINGLE DEFINITION -- never restated here.
+# THE ONE INSTANCE-NAME RULE, ASKED OF ITS SINGLE DEFINITION -- never restated here.
 # The name becomes a FILE NAME in instances\, so it has to be validated; but a second
 # regex would be a second rule, and the two would drift. lib\AgentVm.Instances.ps1 is
-# loaded in a CHILD SCOPE (it enables Set-StrictMode -Version Latest in whatever scope it
-# is dot-sourced into, and the installers that dot-source THIS file were not written for
-# that) and only the rule's two values come back. Loaded LAZILY, on the first non-default
-# name: a single-VM install never asks.
+# loaded in a CHILD SCOPE -- it enables Set-StrictMode -Version Latest in whatever scope
+# it is dot-sourced into, and the installers that dot-source THIS file were not written
+# for that -- and only the ANSWER comes back. That is exactly the containment
+# lib\AgentVm.InstanceTarget.ps1 (B11) exists for, so its module resolver is used when it
+# has been loaded; this file falls back to its own sibling path when it is dot-sourced on
+# its own (Update-T3Code.ps1's child-scope read).
+#
+# Answers are MEMOISED per name: the module is a thousand lines and statePath() is asked
+# several times per run. Only ever asked for a NON-default name, so a single-VM install
+# never loads it at all.
 #
 # FAIL CLOSED. Without that library there is no rule to apply, so no per-instance path
 # resolves -- which leaves the default instance on its legacy file, i.e. today's
 # behaviour, instead of guessing at a file name from an unvalidated string.
-$script:ConstructStateNameRule = $null      # @{ Re = <regex>; Reserved = <prefix> } once loaded
-$script:ConstructStateNameRuleTried = $false
+# ORDINAL-keyed: a plain @{} compares keys case-INSENSITIVELY, so memoising "work-vm" as
+# valid would answer "Work-VM" out of the same bucket and hand an invalid name a file.
+$script:ConstructStateNameAnswers = New-Object 'System.Collections.Hashtable' ([System.StringComparer]::Ordinal)
 
-function Get-ConstructStateNameRule {
-    if ($script:ConstructStateNameRuleTried) { return $script:ConstructStateNameRule }
-    $script:ConstructStateNameRuleTried = $true
-    try {
-        $lib = Join-Path $PSScriptRoot "AgentVm.Instances.ps1"
-        if (Test-Path -LiteralPath $lib) {
-            $script:ConstructStateNameRule = & {
-                param($libPath)
-                . $libPath
-                @{ Re = $script:ConstructInstanceNameRe; Reserved = $script:ConstructReservedNamePrefix }
-            } $lib
-        }
-    } catch { $script:ConstructStateNameRule = $null }
-    return $script:ConstructStateNameRule
+function Get-ConstructStateInstancesModule {
+    <# Where lib\AgentVm.Instances.ps1 is, or "" when this install does not carry it.
+       Prefers the B11 adapter's resolver when that file has been dot-sourced, so both
+       paths name the same copy. #>
+    if (Get-Command Get-ConstructInstancesModulePath -ErrorAction SilentlyContinue) {
+        $viaAdapter = Get-ConstructInstancesModulePath
+        if ($viaAdapter) { return $viaAdapter }
+    }
+    $sibling = Join-Path $PSScriptRoot "AgentVm.Instances.ps1"
+    if (Test-Path -LiteralPath $sibling) { return $sibling }
+    return ""
 }
 
 function Get-ConstructInstanceStateDir {
@@ -123,17 +127,27 @@ function Get-ConstructInstanceStateDir {
 }
 
 function Test-ConstructInstanceStateName {
-    <# Is this a usable instance name for a state file? THE ONE NAME RULE
-       (Test-ConstructInstanceName in lib\AgentVm.Instances.ps1), applied through
-       Get-ConstructStateNameRule so this file holds no copy of it. A lowercase DNS label
-       cannot contain a separator or a dot, so passing it is also what makes the name safe
-       as a file name. Fails closed when the rule is unavailable. Pure. #>
+    <# Is this a usable instance name for a state file? THE ONE NAME RULE -- literally
+       Test-ConstructInstanceName from lib\AgentVm.Instances.ps1, asked in a child scope,
+       so this file holds no copy of the regex NOR of the reserved-prefix rule. A lowercase
+       DNS label cannot contain a separator or a dot, so passing that rule is also what
+       makes the name safe as a file name. Fails closed when the module is unavailable. #>
     param([string]$Name)
     if (-not $Name) { return $false }
-    $rule = Get-ConstructStateNameRule
-    if (-not $rule) { return $false }
-    if ($Name.ToLowerInvariant().StartsWith($rule.Reserved)) { return $false }
-    return [bool]([regex]::IsMatch($Name, $rule.Re))
+    if ($script:ConstructStateNameAnswers.ContainsKey($Name)) { return $script:ConstructStateNameAnswers[$Name] }
+    $ok = $false
+    try {
+        $module = Get-ConstructStateInstancesModule
+        if ($module) {
+            $ok = [bool](& {
+                param($modulePath, $n)
+                . $modulePath
+                Test-ConstructInstanceName $n
+            } $module $Name)
+        }
+    } catch { $ok = $false }
+    $script:ConstructStateNameAnswers[$Name] = $ok
+    return $ok
 }
 
 function Test-ConstructDefaultInstanceStore {

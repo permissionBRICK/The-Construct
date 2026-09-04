@@ -735,6 +735,49 @@ function Invoke-ConstructApi {
     }
 }
 
+function ConvertFrom-ConstructVmEndpoint {
+    <#
+        The ONE reading of an endpoint document -- GET /vms/{name}/endpoint, and the
+        `endpoint` object inside a creation job's result, which have the same shape:
+
+            { "sshHost": "buildbox.local", "sshPort": 2201, "publicHost": "work-vm.vpn.example" }
+
+        Returns @{ SshHost; SshPort; PublicHost }, or $null when the document carries no
+        usable SSH host.
+
+        publicHost (plan section 4.12) is where this VM's WEB endpoints live -- the
+        service's rendered Constructd:PublicHostPattern. SSH is dialled on SshHost either
+        way. A service that does not send it (an older build, or one with no pattern) is
+        NOT a special case for the caller: PublicHost then falls back to SshHost, which is
+        exactly what "no pattern configured" means on the service side.
+
+        PURE (no HTTP), so the shape is unit-testable; mirrors readEndpoint() in
+        extension/src/remotehost.js.
+    #>
+    [CmdletBinding()]
+    param($Response)
+
+    if ($null -eq $Response) { return $null }
+    $sshHost = ""
+    if ($Response.PSObject.Properties['sshHost']) { $sshHost = [string]$Response.sshHost }
+    $sshHost = $sshHost.Trim()
+    if (-not $sshHost) { return $null }
+
+    $sshPort = 22
+    if ($Response.PSObject.Properties['sshPort']) {
+        $parsed = 0
+        if ([int]::TryParse([string]$Response.sshPort, [ref]$parsed) -and $parsed -ge 1 -and $parsed -le 65535) {
+            $sshPort = $parsed
+        }
+    }
+
+    $publicHost = ""
+    if ($Response.PSObject.Properties['publicHost']) { $publicHost = ([string]$Response.publicHost).Trim() }
+    if (-not $publicHost) { $publicHost = $sshHost }
+
+    return @{ SshHost = $sshHost; SshPort = $sshPort; PublicHost = $publicHost }
+}
+
 function Wait-ConstructJob {
     <#
         Follow a long operation to its end: poll GET /jobs/{id}, print every NEW

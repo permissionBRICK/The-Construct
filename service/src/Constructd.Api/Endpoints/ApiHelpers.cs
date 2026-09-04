@@ -78,6 +78,10 @@ internal static class ApiHelpers
         CancellationToken cancellationToken)
     {
         var list = await forwards.ListAsync(vm.Name, cancellationToken).ConfigureAwait(false);
+        // ONE public host per VM (plan §4.12): the VM's own rendered name when the host runs a
+        // PublicHostPattern, the service's PublicHost otherwise — so every forward of this VM is
+        // advertised under the same name its endpoint reports.
+        var publicHost = options.PublicHostFor(vm.Name);
         return new VmResponse(
             vm.Name,
             vm.Owner,
@@ -87,9 +91,10 @@ internal static class ApiHelpers
             vm.Created,
             vm.State,
             vm.SshForwardPort,
+            publicHost,
             vm.Deleting,
             ToResponse(vm.IdlePolicy, options.Idle, clamped: false),
-            [.. list.Select(f => ForwardResponse.From(f, options.PublicHost))]);
+            [.. list.Select(f => ForwardResponse.From(f, publicHost))]);
     }
 
     public static IdlePolicyResponse ToResponse(IdlePolicy policy, IdleOptions idle, bool clamped) =>

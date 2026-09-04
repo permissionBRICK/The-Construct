@@ -128,6 +128,43 @@ Name collisions with an existing profile of different provenance are a hard erro
 the collision — this path never silently overwrites. See [Config sync](config-sync.md) for
 the full import/collision/provenance model.
 
+### Publishing your local profiles to a config repo (`-Action publish-config`)
+
+The reverse direction. Import and Push back only move files that already came *from* a
+remote, so profiles you created on this PC have nowhere to go. `publish-config` pushes
+your **untracked** local profiles into a config repo's default branch and records them as
+tracked, after which your other PCs import them and later edits push back:
+
+```powershell
+.\Auto-Install.ps1 -Action publish-config -ConfigRepo https://git.example.com/alice/construct-config.git
+```
+
+| Param | Meaning |
+|-------|---------|
+| `-Action publish-config` | Trigger this mode. Non-interactive; touches no VM and needs no administrator rights |
+| `-ConfigRepo <url>` | The config repo to publish into. Linked automatically if it isn't already |
+| `-ImportConfigs a,b` | Which profiles to publish, by name. Omit it to publish **every** untracked profile |
+
+It prints one line per profile — `published`, `skipped` (already tracked: use *Push back*
+from the control panel), `refused` (the repo already has a file of that name with different
+content: import it first, then push back) or `invalid` (the profile doesn't validate; it is
+reported and left alone, never "repaired" and pushed) — followed by the branch and the
+commit it pushed, and exits non-zero if anything failed. Requires `git` on the host, and a
+configured git identity: the commit lands in **your** repo, so it is made as you.
+
+The repo may be **empty or not exist yet**: the first push creates it on hosts that support
+push-to-create (GitLab/GitGudLab), using a user PAT rather than a project token. If that
+first push fails — the usual shape while a token is still being set up — just run the
+command again; the half-finished clone stays retryable.
+
+**Don't put the token in the URL.** A URL that carries credentials
+(`https://alice:<token>@…`) is **refused**: git would write it into the staging clone's
+`.git/config`, into `manifest/remotes.json` and into every provenance entry it creates, so
+a secret in a URL doesn't stay secret. Give the plain URL and let your git credential
+helper (Git Credential Manager on Windows) supply the PAT. See
+[Config sync §7](config-sync.md#7-upstream-company-config-repos-optional) for the full
+tracked-vs-untracked model.
+
 ### Sharing a config as a one-liner
 
 Piping to `iex` can't carry arguments, so a shareable one-liner that needs params uses the
@@ -196,6 +233,7 @@ panel — from one schema with one set of rules:
       "hostAlias": "work-vm",
       "keyName": "construct_work-vm_ed25519",
       "configBranch": "vm-work-vm",
+      "publicHost": "work-vm.vpn.example", // optional: where this VM's WEB endpoints live
       "owner": "DOMAIN\\alice"
     }
   }
@@ -228,6 +266,16 @@ panel — from one schema with one set of rules:
   its `sshHost` (only the host service knows the endpoint; deriving `<name>.mshome.net`
   would aim ssh at an unrelated machine on your own LAN) and its `vmName` must equal the
   instance name (the service addresses the VM by that name, and so does a rebuild).
+- `publicHost` is **optional** and never derived. It is the name this VM's *web* endpoints
+  are reachable under — the host service's rendered `Constructd:PublicHostPattern`, recorded
+  by the installer from `GET /vms/{name}/endpoint` (see `docs/remote-host.md`, *Per-VM public
+  host names*). SSH always goes to `sshHost:sshPort`, which on such a host is a different
+  name; the provisioner passes `publicHost` to the guest as `CONSTRUCT_EXTERNAL_HOST`, so the
+  T3 certificate, its public base URL and every printed URL use it. It is **ignored for
+  `hyperv-local`** (a local VM's one address is its endpoint), it is **not** part of the
+  uniqueness rules below (VMs behind one wildcard domain are still told apart by their
+  endpoint), and a value that is not a host name skips the entry like any other identity
+  field.
 - Identities must be **unique across the registry**: `vmName`, `hostAlias`, `keyName`,
   `configBranch`, and the endpoint as the **composite `(sshHost, sshPort)`**. Two entries
   sharing one are two names for one machine, so both are dropped. The composite matters for
@@ -274,11 +322,46 @@ from another PC is still judged correctly, and this host-side file is only the o
 
 ### A second local VM
 
-`Auto-Install.ps1 -VmName build-vm` creates a second local VM; every derived value follows
-that name (guest hostname `build-vm`, `build-vm.mshome.net`, alias `build-vm`, key
-`construct_build-vm_ed25519`). The installer does **not** write a registry entry for a local
-VM — add one by hand, using exactly the derived identity above, if you want the control
-panel to list and switch to it.
+```powershell
+.\Auto-Install.ps1 -InstanceName build-vm
+```
+
+Every derived value follows that name: guest hostname `build-vm`, `build-vm.mshome.net`,
+Hyper-V VM `build-vm`, SSH alias `build-vm`, key `construct_build-vm_ed25519`, config-sync
+branch `vm-build-vm`. `-VmName build-vm` does exactly the same thing and keeps working —
+the two are one name, and passing both with different values is an error rather than a
+silent choice between two machines. `Create-AgentVM.ps1 -InstanceName build-vm` takes it
+too, for the bundle install (Option B/C).
+
+**The installer writes the registry entry**, through the same library both readers use, so
+the control panel lists the VM and can switch to it without any hand editing. A reinstall,
+a redownload or a reprovision of that VM keeps its entry.
+
+A default-only install still writes **no** `instances.json` at all — a missing file *is*
+the `agent-vm` instance. The file appears when the second VM is created, and then carries
+both entries.
+
+### Targeting one VM by name
+
+The scripts a second VM needs take **`-InstanceName <name>`** instead of four identity
+arguments, and read the endpoint, alias, port, key file, config-sync branch — and, for a
+VM on a host service, that service's URL — out of the registry entry:
+
+```powershell
+.\Provision-AgentVM.ps1 -InstanceName build-vm      # reprovision it
+.\Update-T3Code.ps1     -InstanceName build-vm      # rebuild its patched T3 Code
+.\Set-AgentVmCheckpoints.ps1 -InstanceName build-vm -Enabled false
+.\Get-AgentUsage.ps1    -InstanceName build-vm
+```
+
+The explicit `-VmHost` / `-HostAlias` / `-SshPort` / `-LocalKeyName` parameters are still
+there for a BYO or manual setup and are used as given. Passing one *together* with
+`-InstanceName` is only allowed when it agrees with the entry; a disagreement stops the run
+and names both values, because there is no safe way to guess which machine was meant. An
+unknown name is **always** an error listing the names this PC does know — passing an
+explicit endpoint alongside it does not make the name mean something else; a BYO or manual
+setup uses the explicit parameters *without* a name. `-InstanceName agent-vm` on a PC with
+no registry file resolves to exactly today's literals.
 
 ### A VM on a remote host
 

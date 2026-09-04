@@ -206,6 +206,36 @@ ok("pin: a malformed fingerprint is refused",
   try { await dead.whoami(); } catch (e) { eNet = e; }
   eq("error: a transport failure is status 0", eNet.status, 0);
 
+  console.log("\n=== the endpoint reading (plan §4.12) ===");
+  // GET /vms/{name}/endpoint and a creation job's `endpoint` have the same shape, and
+  // both go through readEndpoint — mirrored by ConvertFrom-ConstructVmEndpoint in
+  // lib/AgentVm.Remote.ps1, which runs the same matrix in test/remote-client.test.ps1.
+  eq("endpoint: sshHost, sshPort and publicHost are read",
+    JSON.stringify(rh.readEndpoint({ sshHost: "buildbox.local", sshPort: 2201, publicHost: "work-vm.vpn.example" })),
+    JSON.stringify({ sshHost: "buildbox.local", sshPort: 2201, publicHost: "work-vm.vpn.example" }));
+  // A service with no PublicHostPattern (or an older build) states nothing, and the
+  // answer is the SSH host — which is what "no pattern configured" means there.
+  eq("endpoint: a missing publicHost falls back to the ssh host",
+    rh.readEndpoint({ sshHost: "buildbox.local", sshPort: 2201 }).publicHost, "buildbox.local");
+  eq("endpoint: a blank publicHost falls back too",
+    rh.readEndpoint({ sshHost: "buildbox.local", sshPort: 2201, publicHost: "  " }).publicHost, "buildbox.local");
+  eq("endpoint: a missing sshPort is 22", rh.readEndpoint({ sshHost: "b" }).sshPort, 22);
+  eq("endpoint: an out-of-range sshPort is 22, not a nonsense dial",
+    rh.readEndpoint({ sshHost: "b", sshPort: 99999 }).sshPort, 22);
+  eq("endpoint: no ssh host at all is null (there is nothing to dial)",
+    rh.readEndpoint({ sshPort: 2201 }), null);
+  eq("endpoint: a non-object is null", rh.readEndpoint("nope"), null);
+
+  const sinkEp = newSink();
+  const epClient = rh.createClient({
+    baseUrl: SVC, auth: { kind: "token", token: "x" }, pin: FP_A,
+    fetchImpl: fakeHttp({ status: 200, text: '{"sshHost":"buildbox.local","sshPort":2201,"publicHost":"work-vm.vpn.example"}' }, sinkEp),
+  });
+  const endpoint = await epClient.getEndpoint("work-vm");
+  eq("endpoint: getEndpoint returns the normalised shape", endpoint.publicHost, "work-vm.vpn.example");
+  eq("endpoint: ...and still dials the ssh host", endpoint.sshHost, "buildbox.local");
+  eq("endpoint: it hits the endpoint route", sinkEp.calls[0].url, SVC + "/api/v1/vms/work-vm/endpoint");
+
   console.log("\n=== the PowerShell delegate (Negotiate / credentials) ===");
   const script = rh.buildDelegateScript({
     remoteLib: "C:\\scripts\\lib\\AgentVm.Remote.ps1", baseUrl: SVC,

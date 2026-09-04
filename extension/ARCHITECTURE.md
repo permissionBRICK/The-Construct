@@ -133,7 +133,38 @@ extension/
                       windows + the PS engine),
                       ensureRepo, repoState, syncTick, readRemotes/writeRemotes,
                       ensureStagingClone, listImportCandidates, planUpstreamImport,
-                      mergeFile, commitAll, pushUpstream; see docs/config-sync.md)
+                      mergeFile, commitAll, pushUpstream;
+                      publish (B15, docs/config-sync.md §7 "three verbs") -- PURE:
+                      planPublish (untracked -> publish, tracked -> skip, differing or
+                      case-variant upstream copy -> refuse, failing the
+                      parse/validate/canonicalize gate -> invalid; twin of
+                      Get-ConstructPublishPlan, both measured against
+                      test/fixtures/publish-plan-cases.json), canonicalizeProfileText
+                      (validate BEFORE canonicalize -- the canonicalizer is coercive),
+                      buildPublishPickerItems/filterPublishSelection (the all-ticked
+                      default and the greyed non-selectable rows), publishManifestEntry
+                      (byte-twin of the PS manifest writer), isSafeProfileName
+                      (REUSES host.safeProfileName -- one name rule per engine, plus
+                      "already canonical" because here the name IS the file name),
+                      isValidPublishBranch, buildPublishProfileInputs (listing ->
+                      plan input; an unsafe name is passed through UNREAD so the
+                      planner reports it), urlHasCredentials +
+                      validateConfigRemoteUrl (ONE validator for every URL input
+                      path, run against the TRIMMED value -- a credential-bearing
+                      URL is REFUSED, not redacted, because it would land in git
+                      argv, .git/config, remotes.json and every provenance entry;
+                      no plan record carries a raw URL either),
+                      redactGitOutput/displayRemoteUrl/resolveRemoteUrl (the panel
+                      only ever receives display-safe urls and its answers are
+                      mapped back); IO: ensurePublishClone
+                      (tolerates a not-yet-existing remote via git init + remote add,
+                      and keeps a failed first push RETRYABLE with a marker inside .git)
+                      / checkoutPublishBranch / publishToRemote (default branch, NOT a
+                      review branch; every git step checked, ok only with a real commit
+                      + blob sha, user's own git identity). commitAll is checked the
+                      same way (add + staged diff + commit, redacted output) -- an
+                      unchecked add read a broken repo as "nothing to commit";
+                      see docs/config-sync.md)
     zip.js            hand-rolled ZIP writer (STORED entries, no deps): crc32, buildZip
     themes.js         UI-design registry (THEMES/DEFAULT_THEME/normalizeThemeId/
                       cssFileFor/previewFileFor) + buildPickerHtml (the picker webview
@@ -257,7 +288,12 @@ extension/
     probe.test.js     plain-node ssh-arg + probe-parse units (21 checks)
     configsync.test.js plain-node config-sync engine units — git-based sync tick, staging clones,
                       upstream import planning, merge-file, read/write store scripts, repo state,
-                      seeding, conflict handling (140 checks)
+                      seeding, conflict handling, publish (the SHARED fixtures
+                      test/fixtures/publish-plan-cases.json + publish-manifest.expected.json
+                      that test/config-sync.test.ps1 runs too, the picker model, a real
+                      publish into a local bare repo, push-to-create + retry, and an
+                      injected-failure runner proving a silently failed git step never
+                      surfaces as a publish)
     host.test.js      plain-node scripts-dir resolution + settings merge + readProjectProfile +
                       project-profile list/write/select + traversal + hasPersistedSelection + writeProjectProfileIfAbsent + race test (79 checks; fake %LOCALAPPDATA% tree)
     remote.test.js    plain-node Remote-SSH helpers — isConnectedToVm/remoteFolderUri + repoNameFromUrl/isLikelyGitUrl/buildCloneScript/projectOpenPath/shouldAutoOpenPanel + URI percent-encoding (71 checks)
@@ -329,6 +365,11 @@ Defined in `extension.js` (handleMessage), `media/panel.js` and `media/launcher.
   `importRemoteConfigs` (clone/fetch all remotes → multi-select QuickPick → 3-way merge),
   `shareConfigs` (multi-select profiles → clipboard command or zip bundle),
   `pushConfigUpstream` (+`url`; confirm → push local changes to a new branch),
+  `publishConfigProfiles` (+`url`; B15 — plan untracked profiles → createQuickPick with
+   all-ticked publishable rows and greyed (selection-filtered) tracked/refused/invalid
+   rows → push to the remote's DEFAULT branch → adopt as tracked (manifest + stored base),
+   only on a push that returned a real commit + blob per file),
+  `addRemoteAndPublish` (showInputBox URL → link it → the same publish flow),
   `installGit` (win32-only: visible console running winget install Git.Git),
   `openConfigRepo` (open cfgDir in a new VS Code window for conflict resolution),
   `openForward` (+`forward`; `vscode.env.openExternal` on that forward's link),
@@ -1070,6 +1111,28 @@ what must be declared, and `checkInstanceSupport` returns a structured refusal
 an invocation. The *default* instance is never blocked: it needs no targeting, and its
 argv stays byte-identical.
 
+**Name-only targeting (B11, plan §4.12).** Once the installed scripts can resolve a name,
+all of the above collapses to **one argument**: `-InstanceName <name>`, and the script reads
+the endpoint, alias, port, key file, config-sync branch and host-service URL out of the same
+registry the panel did (`lib/AgentVm.Instances.ps1` — the two halves cannot disagree, because it is one
+file). `NAME_TARGET_PARAMS` is the emitted set, `REQUIRED_NAME_TARGET_PARAMS` the gate (the
+name, and nothing else — everything the four arguments stated is derived from it), and
+`-ConfigBranch` stays alongside it as the capability marker for instance-keyed config sync,
+carrying the very field the resolver reads.
+
+**The probe is a FILE, not the parameter.** `-InstanceName` already existed on
+`Provision-AgentVM.ps1` (the remote service identity, `CONSTRUCT_INSTANCE_NAME`) and on
+`Auto-Install.ps1` (the remote instance name, which a *local* run used to refuse outright),
+so "the script declares `$InstanceName`" is true on B7-era installs where it means something
+else and the action would land on the default VM. `supportsNameTargeting` therefore asks for
+`lib/AgentVm.InstanceTarget.ps1` (`INSTANCE_TARGET_LIB`) — the adapter every host script
+resolves the name through, which ships with the new meaning and nothing else — *and* for the
+parameter's declaration (the file alone could have been dropped in, and an undeclared
+argument is a binding failure). Absent → the four-argument form above, which those installs
+do understand. `instanceParamSupport` returns whichever set it probed, so the probe result
+itself says which form the caller is in (`usesNameTargeting`). A remote *rebuild* is
+excluded: it must also state its host service, so it keeps `REMOTE_INSTANCE_PARAMS`.
+
 **Backend capability gate.** The host scripts drive the LOCAL Hyper-V, so
 reinstall / redownload / setCheckpoints are refused for any backend whose driver does
 not declare `hostLifecycle` (`drivers/index.js` `lifecycleSupport`, capability table
@@ -1258,6 +1321,11 @@ backend-aware for the rebuild actions:
 | `reinstall` / `redownload` | `-VmName -ConfigBranch` | `-Backend -ServiceUrl -InstanceName -ConfigBranch` |
 | `reprovision` / `exportConfig` | `-VmHost -HostAlias -SshPort -LocalKeyName (-ConfigBranch)` | **identical** — provisioning is pure SSH to the endpoint, whoever created the VM |
 
+(On an install with name-only targeting the local column — and both `reprovision` /
+`exportConfig` columns — become `-InstanceName (-ConfigBranch)`. The remote *rebuild* column
+does not: `-Backend` is what makes `Auto-Install.ps1` take the remote path at all, and
+`-ServiceUrl` names the host service.)
+
 `REQUIRED_INSTANCE_PARAMS` follows: a remote rebuild is **refused** unless the installed
 `Auto-Install.ps1` declares `-Backend`, `-ServiceUrl` *and* `-InstanceName`, and unless the
 instance actually carries `service.url`. That is the same fail-closed rule as B3 and for the
@@ -1283,6 +1351,19 @@ profile before it could decide. Local rebuilds — and the default instance — 
   `instances.json`: that file describes *VMs* — an entry for a host with no VM would appear
   in the instance picker as a machine nothing can reach, and both readers would have to
   invent a meaning for it.
+* **`construct.registerThisVm`** — offered (as a panel banner and in the palette) when this
+  window is attached over Remote-SSH to a host **no registry entry describes**
+  (`instances.planRegisterAttachedVm`, which defers to `planRemoteAdoption` so "unknown"
+  means one thing). It asks for a name — the ssh host's first label when that is a usable
+  one — validates it with the one name rule, and writes the entry through
+  `instances.addInstance`/`save`, i.e. the same writer and the same rules the PowerShell
+  installer uses. `planLocalRegistration` is where it can REFUSE: a `hyperv-local` entry's
+  identity is *derived* from its name, so a window attached to `buildbox.example.local` has
+  no name for which a local entry describes that machine — inventing one would produce an
+  instance the reader drops on the next load, or one that aims every lifecycle action
+  somewhere else. Such a host goes through **Add remote host** instead. All of the decision
+  is pure and unit-tested; `extension.js` only reads `vscode.env.remoteAuthority`, shows the
+  input box and adopts the result.
 * **`construct.newRemoteVm`** — pick an enrolled host, ask name/CPU/RAM/disk, then launch
   `Auto-Install.ps1 -Backend hyperv-remote -ServiceUrl … -InstanceName … -VmMemoryGB …
   -VmDiskGB …` through `lifecycle.launchHostScript`. The console does the create *and* the

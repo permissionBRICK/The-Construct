@@ -1,0 +1,380 @@
+{
+  "description": "Shared behaviour fixture for the publish planner (plan 4.13 / B15). extension/src/configsync.js planPublish and lib/AgentVm.Common.ps1 Get-ConstructPublishPlan must produce the SAME buckets for every case; each engine's test suite iterates this file. Names in the expected buckets are sorted. reasonContains / reasonExcludes assert display safety (no URL credentials) and the wording users act on.",
+  "cases": [
+    {
+      "name": "an untracked profile with no upstream copy is published",
+      "profiles": [
+        {
+          "name": "alpha",
+          "raw": "{\"name\":\"alpha\",\"repos\":[],\"sdks\":{},\"mcp\":[],\"hostPackages\":[],\"provisionCommands\":[],\"tests\":{}}"
+        }
+      ],
+      "manifest": {},
+      "remoteFiles": {},
+      "selected": null,
+      "expect": {
+        "publish": [
+          {
+            "name": "alpha",
+            "adopt": false
+          }
+        ],
+        "skipTracked": [],
+        "refuse": [],
+        "invalid": []
+      }
+    },
+    {
+      "name": "a tracked profile is skipped and its reason never carries the PAT",
+      "profiles": [
+        {
+          "name": "beta",
+          "raw": "{\"name\":\"beta\",\"repos\":[],\"sdks\":{},\"mcp\":[],\"hostPackages\":[],\"provisionCommands\":[],\"tests\":{}}"
+        }
+      ],
+      "manifest": {
+        "beta": {
+          "remoteUrl": "https://alice:glpat-secret-token@git.example.com/alice/cfg.git"
+        }
+      },
+      "remoteFiles": {},
+      "selected": null,
+      "expect": {
+        "publish": [],
+        "skipTracked": [
+          "beta"
+        ],
+        "refuse": [],
+        "invalid": [],
+        "reasonContains": {
+          "beta": [
+            "Push back",
+            "***",
+            "git.example.com"
+          ]
+        },
+        "reasonExcludes": {
+          "beta": [
+            "glpat-secret-token",
+            "alice:"
+          ]
+        }
+      }
+    },
+    {
+      "name": "a differing upstream file of the same name is refused",
+      "profiles": [
+        {
+          "name": "gamma",
+          "raw": "{\"name\":\"gamma\",\"repos\":[],\"sdks\":{},\"mcp\":[],\"hostPackages\":[\"ours\"],\"provisionCommands\":[],\"tests\":{}}"
+        }
+      ],
+      "manifest": {},
+      "remoteFiles": {
+        "gamma": "{\"name\":\"gamma\",\"repos\":[],\"sdks\":{},\"mcp\":[],\"hostPackages\":[\"theirs\"],\"provisionCommands\":[],\"tests\":{}}"
+      },
+      "selected": null,
+      "expect": {
+        "publish": [],
+        "skipTracked": [],
+        "refuse": [
+          "gamma"
+        ],
+        "invalid": [],
+        "reasonContains": {
+          "gamma": [
+            "import it first"
+          ]
+        }
+      }
+    },
+    {
+      "name": "a byte-identical upstream copy is adopted, not refused",
+      "profiles": [
+        {
+          "name": "delta",
+          "raw": "{\"name\":\"delta\",\"repos\":[],\"sdks\":{},\"mcp\":[],\"hostPackages\":[],\"provisionCommands\":[],\"tests\":{}}"
+        }
+      ],
+      "manifest": {},
+      "remoteFiles": {
+        "delta": "{\"name\":\"delta\",\"repos\":[],\"sdks\":{},\"mcp\":[],\"hostPackages\":[],\"provisionCommands\":[],\"tests\":{}}"
+      },
+      "selected": null,
+      "expect": {
+        "publish": [
+          {
+            "name": "delta",
+            "adopt": true
+          }
+        ],
+        "skipTracked": [],
+        "refuse": [],
+        "invalid": []
+      }
+    },
+    {
+      "name": "a REFORMATTED but semantically equal upstream copy is adopted, not refused",
+      "profiles": [
+        {
+          "name": "epsilon",
+          "raw": "{\"name\":\"epsilon\",\"repos\":[],\"sdks\":{},\"mcp\":[],\"hostPackages\":[],\"provisionCommands\":[],\"tests\":{}}"
+        }
+      ],
+      "manifest": {},
+      "remoteFiles": {
+        "epsilon": "{\n    \"name\": \"epsilon\",\n    \"repos\": [],\n    \"sdks\": {},\n    \"mcp\": [],\n    \"hostPackages\": [],\n    \"provisionCommands\": [],\n    \"tests\": {}\n}\n"
+      },
+      "selected": null,
+      "expect": {
+        "publish": [
+          {
+            "name": "epsilon",
+            "adopt": true
+          }
+        ],
+        "skipTracked": [],
+        "refuse": [],
+        "invalid": []
+      }
+    },
+    {
+      "name": "an upstream file differing only by CASE is the same file on Windows and is refused",
+      "profiles": [
+        {
+          "name": "zeta",
+          "raw": "{\"name\":\"zeta\",\"repos\":[],\"sdks\":{},\"mcp\":[],\"hostPackages\":[],\"provisionCommands\":[],\"tests\":{}}"
+        }
+      ],
+      "manifest": {},
+      "remoteFiles": {
+        "Zeta": "{\"name\":\"Zeta\",\"repos\":[],\"sdks\":{},\"mcp\":[],\"hostPackages\":[],\"provisionCommands\":[],\"tests\":{}}"
+      },
+      "selected": null,
+      "expect": {
+        "publish": [],
+        "skipTracked": [],
+        "refuse": [
+          "zeta"
+        ],
+        "invalid": [],
+        "reasonContains": {
+          "zeta": [
+            "SAME file",
+            "projects/Zeta.json"
+          ]
+        }
+      }
+    },
+    {
+      "name": "a reserved name is silently excluded from every bucket",
+      "profiles": [
+        {
+          "name": "default",
+          "raw": "{\"name\":\"default\",\"repos\":[],\"sdks\":{},\"mcp\":[],\"hostPackages\":[],\"provisionCommands\":[],\"tests\":{}}"
+        },
+        {
+          "name": "alpha",
+          "raw": "{\"name\":\"alpha\",\"repos\":[],\"sdks\":{},\"mcp\":[],\"hostPackages\":[],\"provisionCommands\":[],\"tests\":{}}"
+        }
+      ],
+      "manifest": {},
+      "remoteFiles": {},
+      "selected": null,
+      "expect": {
+        "publish": [
+          {
+            "name": "alpha",
+            "adopt": false
+          }
+        ],
+        "skipTracked": [],
+        "refuse": [],
+        "invalid": []
+      }
+    },
+    {
+      "name": "a *.sample name is silently excluded from every bucket",
+      "profiles": [
+        {
+          "name": "team.sample",
+          "raw": "{\"name\":\"team.sample\",\"repos\":[],\"sdks\":{},\"mcp\":[],\"hostPackages\":[],\"provisionCommands\":[],\"tests\":{}}"
+        },
+        {
+          "name": "alpha",
+          "raw": "{\"name\":\"alpha\",\"repos\":[],\"sdks\":{},\"mcp\":[],\"hostPackages\":[],\"provisionCommands\":[],\"tests\":{}}"
+        }
+      ],
+      "manifest": {},
+      "remoteFiles": {},
+      "selected": null,
+      "expect": {
+        "publish": [
+          {
+            "name": "alpha",
+            "adopt": false
+          }
+        ],
+        "skipTracked": [],
+        "refuse": [],
+        "invalid": []
+      }
+    },
+    {
+      "name": "a wrong-typed profile is INVALID, never coerced into a repaired publish",
+      "profiles": [
+        {
+          "name": "eta",
+          "raw": "{\"name\":\"eta\",\"repos\":\"not-an-array\",\"secret\":\"keep-me\"}"
+        }
+      ],
+      "manifest": {},
+      "remoteFiles": {},
+      "selected": null,
+      "expect": {
+        "publish": [],
+        "skipTracked": [],
+        "refuse": [],
+        "invalid": [
+          "eta"
+        ],
+        "reasonContains": {
+          "eta": [
+            "not a valid profile"
+          ]
+        }
+      }
+    },
+    {
+      "name": "unparseable JSON is INVALID",
+      "profiles": [
+        {
+          "name": "theta",
+          "raw": "{ this is not json"
+        }
+      ],
+      "manifest": {},
+      "remoteFiles": {},
+      "selected": null,
+      "expect": {
+        "publish": [],
+        "skipTracked": [],
+        "refuse": [],
+        "invalid": [
+          "theta"
+        ],
+        "reasonContains": {
+          "theta": [
+            "cannot be parsed as JSON"
+          ]
+        }
+      }
+    },
+    {
+      "name": "a name that disagrees with the file name is INVALID",
+      "profiles": [
+        {
+          "name": "iota",
+          "raw": "{\"name\":\"not-iota\",\"repos\":[],\"sdks\":{},\"mcp\":[],\"hostPackages\":[],\"provisionCommands\":[],\"tests\":{}}"
+        }
+      ],
+      "manifest": {},
+      "remoteFiles": {},
+      "selected": null,
+      "expect": {
+        "publish": [],
+        "skipTracked": [],
+        "refuse": [],
+        "invalid": [
+          "iota"
+        ],
+        "reasonContains": {
+          "iota": [
+            "not a valid profile"
+          ]
+        }
+      }
+    },
+    {
+      "name": "an unsafe file name is INVALID and never reaches the canonicalizer",
+      "profiles": [
+        {
+          "name": "a/b",
+          "raw": "{\"name\":\"a/b\",\"repos\":[],\"sdks\":{},\"mcp\":[],\"hostPackages\":[],\"provisionCommands\":[],\"tests\":{}}"
+        },
+        {
+          "name": "up..dir",
+          "raw": "{\"name\":\"up..dir\",\"repos\":[],\"sdks\":{},\"mcp\":[],\"hostPackages\":[],\"provisionCommands\":[],\"tests\":{}}"
+        },
+        {
+          "name": "co:lon",
+          "raw": "{\"name\":\"co:lon\",\"repos\":[],\"sdks\":{},\"mcp\":[],\"hostPackages\":[],\"provisionCommands\":[],\"tests\":{}}"
+        }
+      ],
+      "manifest": {},
+      "remoteFiles": {},
+      "selected": null,
+      "expect": {
+        "publish": [],
+        "skipTracked": [],
+        "refuse": [],
+        "invalid": [
+          "a/b",
+          "co:lon",
+          "up..dir"
+        ],
+        "reasonContains": {
+          "a/b": [
+            "not a safe profile file name"
+          ]
+        }
+      }
+    },
+    {
+      "name": "selected narrows every bucket",
+      "profiles": [
+        {
+          "name": "alpha",
+          "raw": "{\"name\":\"alpha\",\"repos\":[],\"sdks\":{},\"mcp\":[],\"hostPackages\":[],\"provisionCommands\":[],\"tests\":{}}"
+        },
+        {
+          "name": "beta",
+          "raw": "{\"name\":\"beta\",\"repos\":[],\"sdks\":{},\"mcp\":[],\"hostPackages\":[],\"provisionCommands\":[],\"tests\":{}}"
+        }
+      ],
+      "manifest": {
+        "beta": {
+          "remoteUrl": "https://git.example.com/a.git"
+        }
+      },
+      "remoteFiles": {},
+      "selected": [
+        "alpha"
+      ],
+      "expect": {
+        "publish": [
+          {
+            "name": "alpha",
+            "adopt": false
+          }
+        ],
+        "skipTracked": [],
+        "refuse": [],
+        "invalid": []
+      }
+    },
+    {
+      "name": "an empty store yields an empty plan",
+      "profiles": [],
+      "manifest": {},
+      "remoteFiles": {},
+      "selected": null,
+      "expect": {
+        "publish": [],
+        "skipTracked": [],
+        "refuse": [],
+        "invalid": []
+      }
+    }
+  ]
+}

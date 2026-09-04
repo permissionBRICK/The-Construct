@@ -316,9 +316,9 @@ input:focus, select:focus { outline: none; border-color: var(--rain); box-shadow
 .cs-remotes-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
 .cs-remote-row { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text); padding: 4px 0; }
 .cs-remote-url { flex: 1; word-break: break-all; }
-.cs-remote-rm, .cs-remote-push { font-family: var(--mono); font-size: 12px; color: var(--dim); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 2px 7px; cursor: pointer; line-height: 1; }
+.cs-remote-rm, .cs-remote-push, .cs-remote-publish { font-family: var(--mono); font-size: 12px; color: var(--dim); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 2px 7px; cursor: pointer; line-height: 1; }
 .cs-remote-rm:hover { color: var(--crit); border-color: rgba(255,93,93,0.5); }
-.cs-remote-push:hover { color: var(--rain); border-color: var(--line-strong); }
+.cs-remote-push:hover, .cs-remote-publish:hover { color: var(--rain); border-color: var(--line-strong); }
 .cs-remotes-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 /* Forwards (B8): one row per port an agent asked for with `construct expose`. */
 .fwd-list { display: flex; flex-direction: column; }

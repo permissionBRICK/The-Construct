@@ -13,6 +13,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const host = require("../src/host");
+const instances = require("../src/instances");
 const state = require("../src/instancestate");
 
 let pass = 0, fail = 0;
@@ -36,17 +37,35 @@ try {
   ok("dir: instances\\ sits beside instances.json", state.stateDir(env) === instDir);
   ok("path: the default instance has NO state file", state.statePath("agent-vm", env) === null);
   ok("path: an absent name is the default store too", state.statePath("", env) === null);
-  ok("path: 'Agent-VM' is the default store (case-insensitive)", state.isDefaultStore("Agent-VM"));
+  // CASE-SENSITIVE, like instances.isDefaultInstance and the registry: "Agent-VM" is not
+  // a valid instance name at all, so silently treating it as the default would have this
+  // module and the registry disagree about which VM a caller meant.
+  ok("path: 'agent-vm' is the default store", state.isDefaultStore("agent-vm"));
+  ok("path: 'Agent-VM' is NOT the default store (case-sensitive, like the registry)",
+    !state.isDefaultStore("Agent-VM"));
+  ok("path: ...and it is refused outright rather than given a file",
+    state.statePath("Agent-VM", env) === null);
   ok("path: a named instance gets instances\\<name>.json",
     state.statePath("work-vm", env) === path.join(instDir, "work-vm.json"));
   ok("path: no LOCALAPPDATA/TEMP -> no path", state.statePath("work-vm", {}) === null);
 
-  // Path-safety guard: the name becomes a FILE NAME here. Deliberately a SUPERSET of the
-  // instance-name rule, which lives in instances.js and is applied long before this.
-  ok("guard: a traversal name resolves to no path", state.statePath("../evil", env) === null);
-  ok("guard: a separator name resolves to no path", state.statePath("a/b", env) === null);
-  ok("guard: a dot-dot name resolves to no path", state.statePath("a..b", env) === null);
-  ok("guard: saving under an unusable name throws instead of writing", (() => {
+  // THE ONE NAME RULE (instances.isValidName) — not a second regex here. A lowercase DNS
+  // label cannot hold a separator or a dot, so passing that rule is also what makes the
+  // name safe as a FILE NAME.
+  ok("name rule: a traversal name resolves to no path", state.statePath("../evil", env) === null);
+  ok("name rule: a separator name resolves to no path", state.statePath("a/b", env) === null);
+  ok("name rule: a dotted name resolves to no path", state.statePath("a..b", env) === null);
+  ok("name rule: an uppercase name resolves to no path", state.statePath("Work-VM", env) === null);
+  ok("name rule: an underscore name resolves to no path", state.statePath("work_vm", env) === null);
+  ok("name rule: a trailing hyphen resolves to no path", state.statePath("work-", env) === null);
+  ok("name rule: the RESERVED construct- prefix resolves to no path",
+    state.statePath("construct-work", env) === null);
+  ok("name rule: 63 chars ok, 64 rejected (the DNS label limit)",
+    state.statePath("a".repeat(63), env) !== null && state.statePath("a".repeat(64), env) === null);
+  ok("name rule: the verdict is instances.isValidName's, for every shape",
+    ["work-vm", "a", "Work-VM", "work_vm", "work-", "construct-work", "a..b", "a/b"]
+      .every((n) => state.isSafeStateName(n) === instances.isValidName(n)));
+  ok("name rule: saving under an unusable name throws instead of writing", (() => {
     try { state.saveState(state.store("../evil", scriptsDir, env), { micPassthrough: true }); return false; }
     catch (_) { return true; }
   })());
@@ -111,8 +130,13 @@ try {
   const corrupt = state.store("corrupt", scriptsDir, env);
   fs.writeFileSync(path.join(instDir, "corrupt.json"), "{ not json", "utf8");
   ok("read: a corrupt file yields {} (never throws)", JSON.stringify(state.readState(corrupt)) === "{}");
-  fs.writeFileSync(path.join(instDir, "corrupt.json"), '["an","array"]', "utf8");
-  ok("read: a non-object file yields {}", JSON.stringify(state.readState(corrupt)) === "{}");
+  // A JSON root that is not an OBJECT is "nothing saved" — the same answer the PowerShell
+  // twin gives ($null), where an unchecked array would have surfaced PowerShell's own
+  // array metadata (Length, Count) as if they were settings.
+  for (const bad of ['["an","array"]', '"a string"', "42", "true", "null"]) {
+    fs.writeFileSync(path.join(instDir, "corrupt.json"), bad, "utf8");
+    ok(`read: a non-object JSON root (${bad}) yields {}`, JSON.stringify(state.readState(corrupt)) === "{}");
+  }
   fs.writeFileSync(path.join(instDir, "bom.json"), "﻿" + '{"version":1,"instance":"bom","smbShare":true}', "utf8");
   ok("read: a UTF-8 BOM (PowerShell 5.1's Set-Content) is stripped",
     state.readState(state.store("bom", scriptsDir, env)).smbShare === true);

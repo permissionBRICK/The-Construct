@@ -15,6 +15,16 @@ What the inventory adds to T3 Code:
 - **Disk-space warning** (`construct.diskSpace` RPC, capability `constructDiskSpace`):
   the web UI asks each Construct server once a minute and raises a prompt when the VM
   disk is almost full or only the root reserve is left (non-root writes fail there).
+- **Omniloop tab** (`construct.omniloop*` RPCs, capability `constructOmniloop`, proxy
+  route `/construct/omniloop/<ticket>/*`): when the thread's VM runs the omniloop
+  daemon, the right panel offers its dashboard, served through the T3 server behind a
+  ticket so it loads in every client (browser, Desktop app, relay) and always points at
+  the thread's own environment. Workflow ids found in the thread's omniloop tool calls
+  drive a composer banner ("Omniloop workflow running: …", Open) and the tab badge.
+
+Two applier features exist for these transforms: `every: true` (insert next to every
+occurrence, for a prop passed at several call sites) and `variants: [...]` (per-variant
+anchor AND text, for a spot upstream renamed between versions).
 - `source-transforms.json` — the guarded edits to upstream files, applied by
   `bin/apply-t3code-source.mjs apply|status --source <checkout>`.
 

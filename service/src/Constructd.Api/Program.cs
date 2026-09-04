@@ -65,7 +65,10 @@ builder.Services.AddConstructdServices(options);
 builder.Services.AddConstructdAuthentication(options);
 builder.Services.AddConstructdAuthorization();
 
-if (options.Idle.SchedulerEnabled)
+// One loop, two responsibilities: the idle evaluation (§4.7) and the host power reconcile (§4.13)
+// both ride on the same tick, so either one being wanted is reason enough to run it. Turning idle
+// evaluation off must not silently take the host's power request with it.
+if (options.Idle.SchedulerEnabled || options.Power.KeepHostAwake)
 {
     builder.Services.AddHostedService<IdleSchedulerService>();
 }

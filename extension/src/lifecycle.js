@@ -39,6 +39,10 @@ const PROVISION = "Provision-AgentVM.ps1";   // reprovision + export (no admin)
 const AUTO_INSTALL = "Auto-Install.ps1";     // reinstall + redownload (self/explicitly elevated)
 const CHECKPOINTS = "Set-AgentVmCheckpoints.ps1"; // apply the checkpoint policy to the LIVE VM (elevated)
 const BACKUP_DIR_NAME = ".construct-backup"; // mirrors Get-ConstructBackupDir
+// The CAPABILITY MARKER for name-only targeting (B11): the adapter every host script
+// resolves -InstanceName through. See NAME_TARGET_PARAMS for why its PRESENCE, and not
+// the parameter's declaration, is what the probe asks about.
+const INSTANCE_TARGET_LIB = path.join("lib", "AgentVm.InstanceTarget.ps1");
 
 /** Coerce a backup-mode to the validated set Auto-Install.ps1 accepts. The plain
  *  Reinstall/Redownload buttons (and any unknown value) default to save&restore. */
@@ -100,6 +104,42 @@ const REMOTE_INSTANCE_PARAMS = {
   redownload: ["Backend", "ServiceUrl", "InstanceName", "ConfigBranch"],
 };
 
+// ── …and the SAME actions once the install supports NAME-ONLY TARGETING ──────
+// B11 (plan §4.12): the host scripts take `-InstanceName <name>` and resolve the
+// endpoint, the alias, the port, the key file and the config-sync branch out of the
+// registry themselves (lib/AgentVm.Instances.ps1). One argument replaces four, and one
+// parameter is probed instead of four — which is the whole point: every added identity
+// parameter used to need its own skew gate.
+//
+// -ConfigBranch stays in the list even though the entry already carries the value. It
+// is the CAPABILITY MARKER for instance-keyed config sync (see checkInstanceSupport),
+// and the value emitted is `instance.configBranch` — the very field the resolver reads
+// — so it can never contradict the entry.
+//
+// WHY THE PROBE IS A FILE AND NOT THE PARAMETER: `-InstanceName` already existed on
+// Provision-AgentVM.ps1 (the remote service identity) and on Auto-Install.ps1 (the
+// remote instance name, which a LOCAL run used to refuse outright). "The script declares
+// $InstanceName" is therefore true on B7-era installs, where the parameter means
+// something else entirely and the action would run against the DEFAULT VM. The adapter
+// FILE (INSTANCE_TARGET_LIB) ships with the new meaning and with nothing else, so its
+// presence is the honest question — and its absence falls back to the four-argument
+// form, which those installs do understand.
+const NAME_TARGET_PARAMS = {
+  reprovision: ["InstanceName", "ConfigBranch"],
+  exportConfig: ["InstanceName"],
+  reinstall: ["InstanceName", "ConfigBranch"],
+  redownload: ["InstanceName", "ConfigBranch"],
+  setCheckpoints: ["InstanceName"],
+};
+
+/** Is `declared` (the probe result) the NAME-ONLY set? instanceParamSupport only ever
+ *  reports "InstanceName" for a local action when the marker file is there, so this
+ *  reads the probe rather than the disk a second time. `undefined` (no probe) keeps the
+ *  legacy set, exactly as every other gate treats it. Pure. */
+function usesNameTargeting(declared) {
+  return Array.isArray(declared) && declared.indexOf("InstanceName") >= 0;
+}
+
 /** Is this backend one whose VMs live on a host service? Normalized exactly like
  *  getDriver() (trimmed, lowercased) so a differently-cased registry value can't be
  *  read one way here and another there. Pure. */
@@ -107,11 +147,14 @@ function isRemoteBackend(backend) {
   return String(backend == null ? "" : backend).trim().toLowerCase() === "hyperv-remote";
 }
 
-/** The instance parameters an action emits for THIS instance's backend. Pure. */
-function paramsForAction(action, instance) {
+/** The instance parameters an action emits for THIS instance's backend, given what the
+ *  installed script declares. A REMOTE rebuild is already name-based (it must also carry
+ *  the service URL), so it keeps its own list. Pure. */
+function paramsForAction(action, instance, declared) {
   if (instance && isRemoteBackend(instance.backend) && REMOTE_INSTANCE_PARAMS[action]) {
     return REMOTE_INSTANCE_PARAMS[action];
   }
+  if (usesNameTargeting(declared) && NAME_TARGET_PARAMS[action]) return NAME_TARGET_PARAMS[action];
   return INSTANCE_PARAMS[action];
 }
 
@@ -149,10 +192,24 @@ const REQUIRED_REMOTE_INSTANCE_PARAMS = {
   redownload: ["Backend", "ServiceUrl", "InstanceName"],
 };
 
+/** The name-only form's requirement: the NAME, and nothing else. Everything the four
+ *  arguments used to state is derived from it by the script, so a run that carries the
+ *  name is fully targeted — and one that does not is refused by the legacy list. */
+const REQUIRED_NAME_TARGET_PARAMS = {
+  reprovision: ["InstanceName"],
+  exportConfig: ["InstanceName"],
+  reinstall: ["InstanceName"],
+  redownload: ["InstanceName"],
+  setCheckpoints: ["InstanceName"],
+};
+
 /** What an action MUST be able to state for this instance. Pure. */
-function requiredParamsForAction(action, instance) {
+function requiredParamsForAction(action, instance, declared) {
   if (instance && isRemoteBackend(instance.backend) && REQUIRED_REMOTE_INSTANCE_PARAMS[action]) {
     return REQUIRED_REMOTE_INSTANCE_PARAMS[action];
+  }
+  if (usesNameTargeting(declared) && REQUIRED_NAME_TARGET_PARAMS[action]) {
+    return REQUIRED_NAME_TARGET_PARAMS[action];
   }
   return REQUIRED_INSTANCE_PARAMS[action] || [];
 }
@@ -241,7 +298,7 @@ function instanceParamValue(param, instance) {
  */
 function instanceArgPairs(action, instance, declared) {
   if (!instance || instances.isDefaultInstance(instance)) return [];
-  const wanted = paramsForAction(action, instance);
+  const wanted = paramsForAction(action, instance, declared);
   if (!wanted) return [];
   const supported = Array.isArray(declared) ? declared : null;
   const out = [];
@@ -302,7 +359,7 @@ function checkInstanceSupport(action, instance, declared) {
   }
   const supported = Array.isArray(declared) ? declared : null;
   if (!supported) return null;
-  const required = requiredParamsForAction(action, instance);
+  const required = requiredParamsForAction(action, instance, declared);
   const missing = required.filter((p) => supported.indexOf(p) < 0);
   if (missing.length) {
     return {
@@ -320,7 +377,7 @@ function checkInstanceSupport(action, instance, declared) {
   // panel syncs refs/heads/vm-work-vm, splitting one VM across two host-config refs.
   // That is just as true for the canonical "vm-<name>" branch (nothing to emit) as for
   // an explicit override, which is why the check no longer looks at the override.
-  const emitted = paramsForAction(action, instance) || [];
+  const emitted = paramsForAction(action, instance, declared) || [];
   if (emitted.indexOf("ConfigBranch") >= 0 && supported.indexOf("ConfigBranch") < 0) {
     const branch = instance.configBranch || derivedConfigBranch(instance.hostAlias);
     return {
@@ -613,6 +670,29 @@ function scriptForAction(action) {
 }
 
 /**
+ * Does this scripts dir implement NAME-ONLY TARGETING for this action? Two conditions,
+ * and both are needed:
+ *
+ *   1. the adapter FILE every host script resolves -InstanceName through is installed
+ *      (INSTANCE_TARGET_LIB) — the honest capability question, because the PARAMETER
+ *      name predates this meaning on two of the three scripts (see NAME_TARGET_PARAMS);
+ *   2. the script the action launches declares $InstanceName at all — the file could
+ *      have been dropped in on its own, and an argument the target does not declare is
+ *      a binding failure, i.e. an action that never starts.
+ *
+ * A REMOTE instance's rebuild is excluded: it already targets by name and additionally
+ * has to carry the service URL, so REMOTE_INSTANCE_PARAMS stays its list.
+ */
+function supportsNameTargeting(scriptsDir, action, instance) {
+  if (!scriptsDir || !NAME_TARGET_PARAMS[action]) return false;
+  if (instance && isRemoteBackend(instance.backend) && REMOTE_INSTANCE_PARAMS[action]) return false;
+  const file = scriptForAction(action);
+  if (!file) return false;
+  try { fs.statSync(path.join(scriptsDir, INSTANCE_TARGET_LIB)); } catch (_) { return false; }
+  return scriptSupportsParam(scriptsDir, file, "InstanceName");
+}
+
+/**
  * The subset of an action's instance parameters that the INSTALLED script declares —
  * the version-skew gate for per-instance targeting. A scripts dir that predates B1
  * yields [] and the action runs against the script's own defaults (which is exactly
@@ -622,8 +702,12 @@ function instanceParamSupport(scriptsDir, action, instance) {
   // Backend-aware: a remote instance's rebuild is probed for the REMOTE parameters
   // (-Backend/-ServiceUrl/-InstanceName), because those are the ones it would emit. The
   // union would be wrong in both directions -- it would report a local-only parameter as
-  // "declared" for a remote rebuild and vice versa.
-  const wanted = paramsForAction(action, instance);
+  // "declared" for a remote rebuild and vice versa. An install that can target by name
+  // is probed for THAT set, which is what makes the returned list say which form the
+  // caller is in (usesNameTargeting).
+  const wanted = supportsNameTargeting(scriptsDir, action, instance)
+    ? NAME_TARGET_PARAMS[action]
+    : paramsForAction(action, instance, null);
   const file = scriptForAction(action);
   if (!wanted || !file) return [];
   return wanted.filter((p) => scriptSupportsParam(scriptsDir, file, p));
@@ -986,6 +1070,8 @@ module.exports = {
   PROVISION, AUTO_INSTALL, CHECKPOINTS, BACKUP_DIR_NAME,
   INSTANCE_PARAMS, REQUIRED_INSTANCE_PARAMS, ACTION_LABELS,
   REMOTE_INSTANCE_PARAMS, REQUIRED_REMOTE_INSTANCE_PARAMS,
+  NAME_TARGET_PARAMS, REQUIRED_NAME_TARGET_PARAMS, INSTANCE_TARGET_LIB,
+  usesNameTargeting, supportsNameTargeting,
   isRemoteBackend, paramsForAction, requiredParamsForAction,
   instanceArgs, instanceArgPairs, flattenArgPairs, checkInstanceSupport,
   derivedConfigBranch, configBranchOverride,
