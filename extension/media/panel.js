@@ -908,6 +908,13 @@
           urlSpan.className = "cs-remote-url";
           urlSpan.textContent = r.url;
           row.appendChild(urlSpan);
+          const pubBtn = document.createElement("button");
+          pubBtn.type = "button";
+          pubBtn.className = "cs-remote-publish";
+          pubBtn.textContent = "publish";
+          pubBtn.title = "Publish untracked local profiles into this repo";
+          pubBtn.addEventListener("click", () => post({ type: "command", id: "publishConfigProfiles", url: r.url }));
+          row.appendChild(pubBtn);
           const pushBtn = document.createElement("button");
           pushBtn.type = "button";
           pushBtn.className = "cs-remote-push";
