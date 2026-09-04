@@ -803,6 +803,42 @@ function stopAutoRefresh() {
   if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; autoRefreshMs = 0; }
 }
 
+// ── Auto-reload after an EXTERNAL Construct update ───────────────────────────
+// Update-Construct.ps1 is not only launched by this panel: the Construct-built T3 Code
+// Desktop app runs it too, and so does the user by hand. None of those can reload VS
+// Code. The script writes `installedCommit` into the scripts dir's
+// .construct-settings.json as its LAST step (after the extension is reinstalled), so
+// watching that marker is enough: when it changes under a running window, the refreshed
+// panel is already installed and this window reloads itself. Polling one small file
+// every few seconds is the cheapest reliable watch on Windows.
+const INSTALLED_MARKER_POLL_MS = 3000;
+let installedMarkerWatch = null; // { file, commit }
+
+function installedCommitNow() {
+  try {
+    const dir = resolveScriptsDir();
+    return dir ? (updates.readMarkers(host.readRawSettings(dir)).installedCommit || "") : "";
+  } catch (_) { return ""; }
+}
+
+function watchInstalledMarker(context) {
+  const dir = resolveScriptsDir();
+  if (!dir) return;
+  const file = host.settingsPath(dir);
+  installedMarkerWatch = { file, commit: installedCommitNow() };
+  const onChange = () => {
+    if (!installedMarkerWatch) return;
+    const now = installedCommitNow();
+    if (!now || now === installedMarkerWatch.commit) return;
+    logLine(`update: installed marker changed ${installedMarkerWatch.commit.slice(0, 7) || "(none)"} → ${now.slice(0, 7)}; reloading window`);
+    fs.unwatchFile(file, onChange);
+    installedMarkerWatch = null;
+    vscode.commands.executeCommand("workbench.action.reloadWindow");
+  };
+  fs.watchFile(file, { interval: INSTALLED_MARKER_POLL_MS, persistent: false }, onChange);
+  context.subscriptions.push({ dispose: () => { fs.unwatchFile(file, onChange); installedMarkerWatch = null; } });
+}
+
 // ── VM → desktop notifications ───────────────────────────────────────────────
 // An agent on the VM runs `construct notify "…"`; entries arrive here over ONE
 // long-lived SSH connection that blocks on the VM until something is queued, and we
@@ -4384,6 +4420,9 @@ async function activate(context) {
   instanceStatusItem.command = "construct.switchInstance";
   context.subscriptions.push(instanceStatusItem);
   syncInstanceStatusItem();
+  // Reload this window by itself when Update-Construct.ps1 (run from the T3 Code Desktop
+  // app, another window, or by hand) installs a newer panel.
+  watchInstalledMarker(context);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider("construct.panel", new ConstructViewProvider(context), {
       webviewOptions: { retainContextWhenHidden: true },
