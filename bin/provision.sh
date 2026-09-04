@@ -653,6 +653,20 @@ write_configuration() {
   # install's config.env stays byte-identical (empty = "there is no service").
   if [[ -n "${CONSTRUCT_SERVICE_URL}" ]]; then
     cfg CONSTRUCT_SERVICE_URL "${CONSTRUCT_SERVICE_URL}" || return
+    # The service's certificate (PEM, base64 from the provisioner): what construct expose
+    # and the idle heartbeat verify the self-signed service with. Written 0644 (public
+    # material) and recorded as CONSTRUCT_SERVICE_CA_FILE; absent env = keep what is saved.
+    if [[ -n "${CONSTRUCT_SERVICE_CA_B64:-}" ]]; then
+      if printf '%s' "${CONSTRUCT_SERVICE_CA_B64}" | base64 -d > /etc/construct/service-ca.pem.tmp 2>/dev/null \
+         && grep -q 'BEGIN CERTIFICATE' /etc/construct/service-ca.pem.tmp; then
+        chmod 0644 /etc/construct/service-ca.pem.tmp
+        mv -f /etc/construct/service-ca.pem.tmp /etc/construct/service-ca.pem
+        cfg CONSTRUCT_SERVICE_CA_FILE /etc/construct/service-ca.pem || return
+      else
+        rm -f /etc/construct/service-ca.pem.tmp
+        warn "CONSTRUCT_SERVICE_CA_B64 did not decode to a PEM certificate; the service certificate was not updated"
+      fi
+    fi
     cfg CONSTRUCT_INSTANCE_NAME "${CONSTRUCT_INSTANCE_NAME}" || return
   fi
   if [[ -n "${_idle_interval_saved}" || "${CONSTRUCT_IDLE_REPORT_INTERVAL_SEC}" != "60" ]]; then
