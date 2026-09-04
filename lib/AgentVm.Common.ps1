@@ -2799,11 +2799,43 @@ function Get-ConstructT3CaFileName {
     return "construct-t3-ca-$n.crt"
 }
 
+function Test-ConstructEndpointRecordWanted {
+    <#
+        .SYNOPSIS
+        Should this run record WHERE its VM answers (its T3 origin and the OpenCode server
+        url it registered)? Pure.
+
+        NO for the implicit default instance, and that is a zero-change rule rather than a
+        preference: the default instance's VM-scoped state IS the top level of the
+        install's `.construct-settings.json` (B12), so writing these keys there would add
+        `t3Port`, `t3BaseUrl` and `openCodeUrl` to the file a one-VM install has always
+        written -- new keys on the path whose whole bar is that it writes byte-identically
+        to before.
+
+        Nothing is lost by it. The Desktop app matches that VM on the T3 ports Construct
+        configures it with (5177 / 5178, `T3CODE_PORT` / `T3CODE_HTTPS_PORT`), which it
+        already knows, and its OpenCode entry is at the direct
+        `http://<vmHost>:<OpencodePort>` the removal derives anyway. The record exists for
+        the VMs whose answer CANNOT be derived: a named instance, and a VM behind a host
+        forward whose port the service allocated.
+
+        New behaviour is therefore reached by NAMING a VM, which is the same activation
+        boundary as everything else in this batch.
+    #>
+    [CmdletBinding()]
+    param([AllowEmptyString()][AllowNull()][string]$InstanceName)
+    $n = ""
+    if ($InstanceName) { $n = $InstanceName.Trim() }
+    if (-not $n) { return $false }
+    return ($n -ne 'agent-vm')
+}
+
 function Get-ConstructT3EndpointRecord {
     <#
         .SYNOPSIS
         The record of WHERE this instance's T3 web GUI answers, as data. Pure; the caller
-        writes it to %LOCALAPPDATA%\The-Construct\artifacts\t3code\remote-<name>.json.
+        saves it into that instance's own state (lib\AgentVm.InstanceState.ps1 --
+        `instances\<name>.json`), beside the rest of its VM-scoped settings.
 
         It exists because the PORT is half of the key T3 Code Desktop matches a linked
         remote on (plan section 4.12, "T3 Desktop updater"), and the port is a fact about
@@ -2812,10 +2844,14 @@ function Get-ConstructT3EndpointRecord {
         records the origin the guest itself advertises, and the Desktop app matches
         host AND port against it instead of accepting any port on a known host.
 
+        NOT asked for the IMPLICIT DEFAULT instance -- see
+        Test-ConstructEndpointRecordWanted: that VM's state IS the install's own settings
+        file, and a single-VM install must keep writing exactly the keys it always wrote.
+
         -BaseUrl is preferred (T3CODE_PUBLIC_BASE_URL, what the VM tells clients to use);
         -ForwardUrl is the host forward the guest was given, used when the VM advertises
         nothing of its own. Returns $null when neither is a usable http(s) origin -- there
-        is then nothing to record, and no file is written.
+        is then nothing to record.
     #>
     [CmdletBinding()]
     param(

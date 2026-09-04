@@ -246,13 +246,13 @@ machine that no longer exists. The action removes, in this order:
 6. its T3 Code certificate authority — the file **and** the Root-store entry (the machine
    store through one narrowly scoped elevated command; if a copy survives, the file is
    *kept*, because it is the only record of which certificate that was);
-7. its per-instance state file `%LOCALAPPDATA%\The-Construct\instances\<name>.json` and the
-   endpoints the provisioner recorded for it (`artifacts\t3code\remote-<name>.json`) — for
-   `agent-vm`, which mirrors its settings into the install's `.construct-settings.json`
-   instead of having a file of its own, that mirror's VM keys are cleared there instead —
-   everything except the small install-wide set (`installedCommit`, `constructRepo`,
-   `constructRef` and the host git identity), so a setting a newer Construct added is
-   treated as the VM's rather than left behind;
+7. its per-instance state file `%LOCALAPPDATA%\The-Construct\instances\<name>.json` —
+   its settings, its provisioned commit and the T3/OpenCode endpoints the provisioner
+   recorded for it. For `agent-vm`, which mirrors its settings into the install's
+   `.construct-settings.json` instead of having a file of its own, that mirror's VM keys
+   are cleared there instead — everything except the small install-wide set
+   (`installedCommit`, `constructRepo`, `constructRef` and the host git identity), so a
+   setting a newer Construct added is treated as the VM's rather than left behind;
 8. the leftover `%TEMP%\construct-known_hosts-<alias>` from a provision;
 9. its entry in `instances.json`.
 
@@ -778,17 +778,20 @@ every ten minutes:
 **Settings → Providers** gets a row for each. The app matches every remote's base URL
 **host and port** against the instance registry:
 
-- the **host** is the VM's own `<name>.mshome.net`, its ssh alias, or the per-VM public
-  host its host service publishes;
-- the **port** is the one the provisioner published for that VM — it records the origin the
-  guest actually serves (`T3CODE_PUBLIC_BASE_URL`, or the host forward it was given) in
-  `%LOCALAPPDATA%\The-Construct\artifacts\t3code\remote-<instance>.json`, and a
-  per-instance state file's `t3Port` wins over it when there is one;
+- the **host** is the VM's own `<name>.mshome.net` (its `sshHost`) or the per-VM public
+  host its host service publishes — **not** its ssh alias, which is a name in
+  `~/.ssh/config` that nothing outside ssh resolves and is therefore no evidence about
+  which VM an HTTP origin belongs to;
+- the **port** is the one the provisioner recorded for that VM in its per-instance state
+  (`t3Port` — the origin the guest actually serves, `T3CODE_PUBLIC_BASE_URL` or the host
+  forward it was given). It is recorded for a **named** instance only: the default VM's
+  state is the install's own `.construct-settings.json`, which a single-VM install must go
+  on writing unchanged, and nothing is lost by it (see the next point);
 - **without** a recorded port a VM reached at its own address still matches on the T3 ports
-  Construct configures (`5177`/`5178`), but a VM published by a host **service** matches
-  nothing: its forward's port is the service's to allocate and cannot be derived here, so
-  the honest answer is "this PC has not seen that VM's T3 yet" — the next reprovision
-  records it;
+  Construct configures (`5177`/`5178`) — which is why the default VM needs no record — but a
+  VM published by a host **service** matches nothing: its forward's port is the service's to
+  allocate and cannot be derived here, so the honest answer is "this PC has not seen that
+  VM's T3 yet" — the next reprovision records it;
 - a host **and** port that two instances claim is ambiguous and matches neither.
 
 A row that matches carries **that instance's** provisioned commit, its own stale state and

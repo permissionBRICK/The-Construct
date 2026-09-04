@@ -376,10 +376,12 @@ Undoes what creating that VM wrote **on this PC**: the `~/.ssh/config` block, th
 `known_hosts` entries and the private key for its alias, its `remote.SSH.remotePlatform`
 entry, its OpenCode server entry, its T3 Code certificate authority (the file *and* the
 Root-store entry), the leftover `%TEMP%\construct-known_hosts-<alias>`, its per-instance
-state file `%LOCALAPPDATA%\The-Construct\instances\<name>.json` (for `agent-vm`, whose
-settings are mirrored into the install's `.construct-settings.json`, that mirror's VM keys
-instead — the install-wide ones stay), the endpoints the provisioner recorded for it
-(`artifacts\t3code\remote-<name>.json`), and — **last, and only
+state file `%LOCALAPPDATA%\The-Construct\instances\<name>.json` — its settings, its
+provisioned commit and the T3/OpenCode endpoints the provisioner recorded for it. (Those
+endpoint keys are written for a **named** instance only: `agent-vm`'s state is the
+install's own `.construct-settings.json`, which a single-VM install goes on writing
+unchanged, so its mirror never carries them — removing it clears that mirror's VM keys and
+leaves the install-wide ones.) And — **last, and only
 when every step before it succeeded** — its entry in `instances.json`. It prints each step
 and what it did; a run in which something could not be done (a certificate that could not
 be untrusted, a `settings.json` this PowerShell cannot parse) keeps the entry and says so,

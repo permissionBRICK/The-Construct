@@ -1182,13 +1182,51 @@ ok "provisioner: the desktop install rule is the shared planner" ($provB14 -matc
 ok "provisioner: the build hash comes from the guest manifest, never a substitute" (
     $provB14 -match '-BuildHash \(\[string\]\$manifest\.buildHash\)' -and
     $provB14 -notmatch '\$t3BuildHash = \$expectedSha')
-# The endpoint facts go into the instance's OWN state document (B12's store), which for
-# the DEFAULT instance is the legacy top level of .construct-settings.json -- so there is
-# no second file to gate on any more, and no new file on the default path.
+# The endpoint facts go into the instance's OWN state document (B12's store) -- and NOT
+# for the implicit default instance, whose state IS the install's own settings file.
 ok "provisioner: the endpoint facts are written through B12's per-instance store" (
     $provB14 -match 'Save-ConstructInstanceState -Name \(Get-ConstructRunInstanceName\) -Dir \$PSScriptRoot -Values \$endpointValues')
 ok "provisioner: there is no second endpoint store beside it" (
     $provB14 -notmatch 'artifacts\\t3code\\remote-' -and $provB14 -notmatch 'Get-ConstructT3EndpointFileName')
+ok "provisioner: the endpoint write is gated on the shared opt-in test" (
+    $provB14 -match 'Test-ConstructEndpointRecordWanted -InstanceName \(Get-ConstructRunInstanceName\)')
+
+# ── The default path writes NO new settings key ──────────────────────────────
+# The bar is byte-identical, so this is asked of the real thing: the gate says no for the
+# implicit default, and Save-ConstructSettings (which is what a default-instance state
+# write would land in) is therefore never reached with those keys.
+ok "endpoint opt-in: the implicit default instance is NOT recorded" (
+    -not (Test-ConstructEndpointRecordWanted -InstanceName 'agent-vm'))
+ok "endpoint opt-in: an unnamed run is not either" (
+    (-not (Test-ConstructEndpointRecordWanted -InstanceName '')) -and
+    (-not (Test-ConstructEndpointRecordWanted -InstanceName $null)))
+ok "endpoint opt-in: a NAMED instance is recorded" (
+    (Test-ConstructEndpointRecordWanted -InstanceName 'work-vm') -and
+    (Test-ConstructEndpointRecordWanted -InstanceName ' far-vm '))
+# ...and the file the default instance shares with the install keeps exactly its keys.
+$epDir = Join-Path ([System.IO.Path]::GetTempPath()) ("b14-ep-" + [Guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $epDir -Force | Out-Null
+try {
+    $epFile = Join-Path $epDir ".construct-settings.json"
+    $epBefore = @{ installedCommit = ('a' * 40); constructRepo = 'permissionBRICK/The-Construct'
+                   constructRef = 'main'; provisionedCommit = ('b' * 40); t3codeChannel = 'stable' } | ConvertTo-Json -Depth 8
+    [System.IO.File]::WriteAllText($epFile, $epBefore)
+    $epKeysBefore = @((Get-Content -LiteralPath $epFile -Raw | ConvertFrom-Json).PSObject.Properties.Name | Sort-Object)
+    # What the provisioner would do for the default instance: nothing at all.
+    if (Test-ConstructEndpointRecordWanted -InstanceName 'agent-vm') {
+        Save-ConstructSettings -Dir $epDir -Values @{ t3BaseUrl = 'https://x:1'; t3Port = 1; openCodeUrl = $null }
+    }
+    $epKeysAfter = @((Get-Content -LiteralPath $epFile -Raw | ConvertFrom-Json).PSObject.Properties.Name | Sort-Object)
+    ok "endpoint opt-in: the default instance's settings KEY SET is unchanged" (
+        ($epKeysBefore -join ',') -eq ($epKeysAfter -join ','))
+    ok "endpoint opt-in: ...and so are its bytes" (
+        ([System.IO.File]::ReadAllText($epFile)) -eq $epBefore)
+    ok "endpoint opt-in: none of the B14 endpoint keys appear in it" (
+        ($epKeysAfter -notcontains 't3BaseUrl') -and ($epKeysAfter -notcontains 't3Port') -and
+        ($epKeysAfter -notcontains 'openCodeUrl'))
+} finally {
+    Remove-Item -LiteralPath $epDir -Recurse -Force -ErrorAction SilentlyContinue
+}
 ok "provisioner: it is written outside the HTTPS/CA branch, so a plain-HTTP forward is recorded too" (
     $provB14.IndexOf('WHERE THIS VM ANSWERS, recorded for the T3 Code Desktop app') -gt
     $provB14.IndexOf('Set-OpenCodeRemote -Url'))
