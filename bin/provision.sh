@@ -849,6 +849,19 @@ if [[ -n "${_t3_forward_authority}" ]]; then
     T3CODE_PUBLIC_PORT="${_t3_forward_port}"
   fi
 fi
+# Persist it for the standalone re-runs of setup-t3-https.sh / install-ai-tools.sh (the
+# panel's T3 toggle, a manual re-run): they read T3CODE_PUBLIC_PORT back from config.env
+# and would otherwise rebuild T3CODE_PUBLIC_BASE_URL on the VM-internal port, which no
+# client of a service-managed VM can reach. Service-managed VMs only -- a local
+# install's config.env never gains (or loses) the key, so it stays byte-identical.
+if [[ -n "${CONSTRUCT_SERVICE_URL:-}" ]]; then
+  if [[ -n "${T3CODE_PUBLIC_PORT}" ]]; then
+    cfg T3CODE_PUBLIC_PORT "${T3CODE_PUBLIC_PORT}"
+  elif [[ -f "${CONFIG_FILE}" ]] && grep -q '^T3CODE_PUBLIC_PORT=' "${CONFIG_FILE}"; then
+    # No forward this run (denied / error / T3 off): a stale port must not be advertised.
+    sed -i '/^T3CODE_PUBLIC_PORT=/d' "${CONFIG_FILE}"
+  fi
+fi
 
 # 2b. Global git identity for the users that operate on the VM: CLAUDE_USER
 #     (root -- used by VS Code Remote-SSH and the AI tools) and the SSH/seed user

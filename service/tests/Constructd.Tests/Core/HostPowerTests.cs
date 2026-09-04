@@ -206,7 +206,8 @@ public class HostPowerTests
         guard.FailRelease = true;
 
         // The failure is reported rather than swallowed...
-        Assert.Throws<InvalidOperationException>(() => guard.Dispose());
+        guard.Dispose(); // must not throw: the host is stopping
+        Assert.NotNull(guard.ReleaseFailure);
 
         // ...and the handle is closed all the same. This method never runs again.
         Assert.True(guard.DisposedCore);
@@ -254,6 +255,10 @@ public class HostPowerTests
         public int Attempts { get; private set; }
 
         public bool DisposedCore { get; private set; }
+
+        public Exception? ReleaseFailure { get; private set; }
+
+        protected override void OnReleaseFailed(Exception exception) => ReleaseFailure = exception;
 
         protected override void Acquire(string reason)
         {
