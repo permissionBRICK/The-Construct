@@ -37,13 +37,24 @@ ok("source build: prunes superseded dependency trees before its free-space gate"
   /for stale_dir in "\$\{CACHE_ROOT\}"\/\*\//.test(sourceBuild) &&
   /t3_build_prune_candidates "\$\{stale_dir\}"/.test(sourceBuild) &&
   sourceBuild.indexOf("for stale_dir") < sourceBuild.indexOf('available_kb="$(df'));
-ok("source build: cache is keyed by both T3 and installed Construct versions",
-  /CONSTRUCT_VERSION/.test(sourceBuild) && /cached_construct/.test(sourceBuild) &&
+ok("source build: cache is keyed by the T3 version + patch recipe; the Construct commit is recorded, not compared",
+  /BUILD_HASH="\$\(printf '%s\\n' "\$\{PATCH_HASH\}" \| sha256sum/.test(sourceBuild) && !/cached_construct/.test(sourceBuild) &&
+  /"\$\{cached_version\}" == "\$\{VERSION\}" && "\$\{cached_hash\}" == "\$\{PATCH_HASH\}" && -x/.test(sourceBuild) &&
   /T3CODE_BUILD_KEY/.test(sourceBuild) && /constructVersion, buildHash/.test(sourceBuild) &&
   /CONSTRUCT_VERSION='\$constructVersion'/.test(provisionT3));
+ok("source build: a build cached under the old commit-folded key is found through the manifest's buildHash (no rebuild on upgrade)",
+  /cached_dir="\$\{CACHE_ROOT\}\/\$\{SAFE_VERSION\}-\$\{cached_build:0:12\}"/.test(sourceBuild) &&
+  /BUILD_HASH="\$\{cached_build\}"/.test(sourceBuild));
 ok("source build: an unchanged active build skips T3 reinstall and restart",
   /t3code-installed-build/.test(installAiTools) &&
   /T3 Code build is unchanged and already running; skipping its reinstall\/restart/.test(installAiTools));
+ok("stock install: an unchanged stock release skips the npm install AND the restart (marker stock:<version>)",
+  /_t3_stock_key="stock:\$\{_wanted_ver\}"/.test(installAiTools) &&
+  /skipping the npm install/.test(installAiTools) &&
+  /t3_can_skip_restart "\$\{_t3_stock_key\}" "\$\{_active_t3_build\}" "\$\{_t3_pub_before\}" "\$\{_t3_pub_after\}"/.test(installAiTools) &&
+  /T3 Code \$\{_wanted_ver\} \(stock\) is unchanged and already running/.test(installAiTools) &&
+  /printf '%s\\n' "\$\{_t3_stock_key\}" > \/etc\/construct\/t3code-installed-build/.test(installAiTools) &&
+  installAiTools.indexOf("setup-t3-https.sh") < installAiTools.indexOf("(stock) is unchanged and already running"));
 ok("source build: one patched server bundle feeds the VM and Desktop package",
   /pnpm run build:desktop/.test(sourceBuild) && /node "\$\{T3PARK_PATCHER\}" apply --bundle/.test(sourceBuild) &&
   /build-desktop-artifact\.ts/.test(sourceBuild) && /ln -sfn "\$\{SOURCE_DIR\}\/apps\/server\/dist\/bin\.mjs" \/usr\/local\/bin\/t3/.test(sourceBuild));
@@ -60,6 +71,30 @@ ok("desktop update handoff: an instance that never saved the keep-saved T3/OpenC
   /if \(\$null -ne \$settings\.t3code\) \{ \$params\.T3Code /.test(updateT3) &&
   /if \(\$null -ne \$settings\.opencodeBackgroundWatcher\)/.test(updateT3) &&
   !/^\s+T3CodeLimitResume\s*=\s*As-BoolString/m.test(updateT3));
+// Auto-link (plan §4.12 "T3 Desktop topology"): the Desktop app links every VM with a T3
+// server on its own, through a hidden host script; the same in BOTH inventories.
+for (const channel of ["release", "nightly"]) {
+  const manifest = JSON.parse(fs.readFileSync(path.join(repoRoot, "patches", `t3code-${channel}`, "source-transforms.json"), "utf8"));
+  const inserts = manifest.transforms.map((t) => (t.insert || t.replace || "")).join("\n");
+  ok(`auto-link (${channel}): the overlay files are listed and mounted at the root`,
+    manifest.overlays.includes("apps/web/src/components/ConstructAutoLink.tsx") &&
+    manifest.overlays.includes("apps/web/src/components/constructInstances.link.ts") &&
+    /<ConstructAutoLink \/>/.test(inserts));
+  ok(`auto-link (${channel}): the bridge mints a link and records the marker (IPC both ways)`,
+    /linkConstructInstance: \(name: string\) => Promise<ConstructPairingLinkResult>/.test(inserts) &&
+    /recordConstructInstanceT3Link: \(name: string, link: ConstructT3LinkInfo\) => Promise<boolean>/.test(inserts) &&
+    /CONSTRUCT_LINK_INSTANCE_CHANNEL/.test(inserts) && /CONSTRUCT_RECORD_T3_LINK_CHANNEL/.test(inserts) &&
+    /ConstructUpdates\.runConstructPairingLink\(planned\.plan\)/.test(inserts) &&
+    /ConstructUpdates\.recordConstructInstanceT3Link\(/.test(inserts));
+  ok(`auto-link (${channel}): \`t3 auth pairing create --scopes administrative\` exists in the patched build`,
+    /Flag\.string\("scopes"\)/.test(inserts) && /AuthAdministrativeScopes\n\s*: AuthStandardClientScopes/.test(inserts));
+}
+const autoLink = fs.readFileSync(path.join(repoRoot, "patches", "t3code-release", "overlays", "apps", "web", "src", "components", "ConstructAutoLink.tsx"), "utf8");
+ok("auto-link: the renderer links off the planner and never twice per session",
+  /planConstructAutoLink\(/.test(autoLink) && /attemptedRef\.current\.add\(name\)/.test(autoLink) && /linkConstructInstance\(\{ bridge, name, connectPairing \}\)/.test(autoLink));
+const pairingScript = fs.readFileSync(path.join(repoRoot, "Get-ConstructT3PairingLink.ps1"), "utf8");
+ok("auto-link: the host script the Desktop runs is non-interactive and prints one JSON line",
+  !/Read-Host|Invoke-Tui|Start-Sleep/.test(pairingScript) && /ConvertTo-Json -Compress/.test(pairingScript) && /-InstanceName/.test(pairingScript));
 ok("desktop update handoff: reprovisions with the saved T3 source-build setting",
   /Provision-AgentVM\.ps1/.test(updateT3) && /Action\s+= 'provision'/.test(updateT3) && /T3CodeLimitResume/.test(updateT3));
 ok("desktop provisioning: installs updates silently, waits, and never prompts or launches the app",
