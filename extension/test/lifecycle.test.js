@@ -679,6 +679,66 @@ function runRebuild(opts) {
     asked2[4].title === "Redownload the Construct VM?" &&
     asked2[4].detail.startsWith("This DELETES the VM and its virtual disk, re-downloads the Ubuntu ISO"));
 
+  // ── B12: run() replays the TARGET INSTANCE's settings, not the checkout's ──
+  console.log("\n=== the settings a run replays belong to the instance it targets ===");
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "construct-lifecycle-state-"));
+  const prevLocalAppData = process.env.LOCALAPPDATA;
+  process.env.LOCALAPPDATA = stateRoot;
+  try {
+    const instFile = path.join(stateRoot, "The-Construct", "instances", "work-vm.json");
+    fs.mkdirSync(path.dirname(instFile), { recursive: true });
+    // The launched command is a base64 -EncodedCommand, so read the PowerShell back out
+    // of it — the whole point is WHICH VALUES reached the script.
+    const launchedCommand = (launch) => {
+      const joined = (launch && launch.args ? launch.args : []).join(" ");
+      const m = /-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(joined);
+      return m ? Buffer.from(m[1], "base64").toString("utf16le") : joined;
+    };
+
+    // The checkout says checkpoints ON; the TARGET VM's own state says OFF. A rebuild of
+    // work-vm must carry work-vm's answer.
+    fs.writeFileSync(path.join(runDir, ".construct-settings.json"),
+      JSON.stringify({ vmAutoCheckpoints: true, ubuntuRelease: "from-the-checkout" }), "utf8");
+    fs.writeFileSync(instFile,
+      JSON.stringify({ version: 1, instance: "work-vm", vmAutoCheckpoints: false, ubuntuRelease: "from-the-instance" }) + "\n", "utf8");
+
+    const named = runRebuild({ action: "redownload", instance: LOCAL_INST, stillCurrent: () => true });
+    named.modal.resolve(true);
+    await named.settled();
+    const namedCmd = launchedCommand(named.launches[0]);
+    ok("run(): a named instance's rebuild carries ITS OWN checkpoint preference",
+      /-AutomaticCheckpoints false/.test(namedCmd), namedCmd);
+    ok("run(): ...and ITS OWN saved values", /-UbuntuRelease from-the-instance/.test(namedCmd), namedCmd);
+    ok("run(): ...never the checkout's", !/from-the-checkout/.test(namedCmd), namedCmd);
+
+    // The DEFAULT instance still reads the checkout's file — the zero-change path.
+    const defaulted = runRebuild({ action: "redownload", instance: DEFAULT_INST, stillCurrent: () => true });
+    defaulted.modal.resolve(true);
+    await defaulted.settled();
+    const defCmd = launchedCommand(defaulted.launches[0]);
+    ok("run(): the DEFAULT instance still replays the checkout's .construct-settings.json",
+      /-AutomaticCheckpoints true/.test(defCmd) && /-UbuntuRelease from-the-checkout/.test(defCmd), defCmd);
+    ok("run(): ...and no instances\\agent-vm.json is ever created",
+      !fs.existsSync(path.join(stateRoot, "The-Construct", "instances", "agent-vm.json")));
+
+    // The applied-checkpoints marker a destructive rebuild clears is that instance's.
+    fs.writeFileSync(instFile,
+      JSON.stringify({ version: 1, instance: "work-vm", vmAutoCheckpointsApplied: true }) + "\n", "utf8");
+    fs.writeFileSync(path.join(runDir, ".construct-settings.json"),
+      JSON.stringify({ vmAutoCheckpoints: true, vmAutoCheckpointsApplied: true }), "utf8");
+    const cleared = runRebuild({ instance: LOCAL_INST, stillCurrent: () => true });
+    cleared.modal.resolve(true);
+    await cleared.settled();
+    ok("run(): a rebuild clears the marker in the TARGET instance's own file",
+      JSON.parse(fs.readFileSync(instFile, "utf8")).vmAutoCheckpointsApplied === undefined);
+    ok("run(): ...and leaves the checkout's (the default instance's) marker alone",
+      JSON.parse(fs.readFileSync(path.join(runDir, ".construct-settings.json"), "utf8")).vmAutoCheckpointsApplied === true);
+  } finally {
+    if (prevLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = prevLocalAppData;
+    try { fs.rmSync(stateRoot, { recursive: true, force: true }); } catch (_) {}
+  }
+
   try { fs.rmSync(runDir, { recursive: true, force: true }); } catch (_) {}
   console.log(`\n  lifecycle launcher unit tests — ${pass}/${pass + fail} passed\n`);
   process.exit(fail ? 1 : 0);

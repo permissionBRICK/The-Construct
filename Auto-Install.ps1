@@ -700,6 +700,12 @@ $commonLib = Join-Path $PSScriptRoot "lib\AgentVm.Common.ps1"
 if (-not (Test-Path -LiteralPath $commonLib)) { throw "Required helper not found: $commonLib" }
 . $commonLib
 
+# Per-instance state (the VM-scoped half of what the control panel saves). OPTIONAL: an
+# older/partial checkout without it falls back to the legacy top-level keys, which is
+# exactly today's single-VM behaviour.
+$stateLib = Join-Path $PSScriptRoot "lib\AgentVm.InstanceState.ps1"
+if (Test-Path -LiteralPath $stateLib) { . $stateLib }
+
 # Hypervisor driver: every Hyper-V touch in this script (the existence probe, the
 # prerequisite install, the teardown, the reachability endpoint) goes through the
 # contract functions it defines -- see docs/drivers.md. "hyperv-local" is today's
@@ -2080,6 +2086,15 @@ $VmDnsName   = "$VmGuestName.mshome.net"
 $VmIsDefault = ($VmGuestName -eq 'agent-vm')
 $VmAlias     = $VmGuestName
 $VmKeyName   = if ($VmIsDefault) { 'agent_vm_ed25519' } else { "construct_${VmGuestName}_ed25519" }
+# WHICH INSTANCE this local run's per-VM state belongs to -- derived here, in the one block
+# that derives every identity, so there is a single line to re-point. alias = name, already
+# lowercased above; the default resolves to the legacy top-level keys of
+# .construct-settings.json. (B11, plan section 4.12 "Name-only targeting", makes the local
+# path write a registry entry under exactly this name and adds -InstanceName as the
+# name-only target; this variable is what it re-points. The REMOTE path never reaches here
+# -- it returns inside the `if ($RemoteInstall)` block above, where the name is
+# -InstanceName.)
+$VmInstanceName = $VmAlias
 # The config-sync branch THIS run owns, derived ONCE and exactly the way
 # Provision-AgentVM.ps1 derives it (explicit -ConfigBranch wins, otherwise the alias:
 # "agent-vm" -> "vm", anything else -> "vm-<alias>"). Every sync this script performs
@@ -2701,7 +2716,14 @@ if (-not $SkipCreateVm -and -not $existingVmHandled -and
 $effectiveAutoCheckpoints = $AutomaticCheckpoints
 if (-not $PSBoundParameters.ContainsKey('AutomaticCheckpoints')) {
     try {
-        $savedSettings = Read-ConstructSettings -Dir $PSScriptRoot
+        # THIS VM's saved preference ($VmInstanceName is the one place that answers "which
+        # instance"), so the default VM reads the legacy top-level key and any other VM
+        # reads its own state file.
+        $savedSettings = if (Get-Command Read-ConstructInstanceState -ErrorAction SilentlyContinue) {
+            Read-ConstructInstanceState -Name $VmInstanceName -Dir $PSScriptRoot
+        } else {
+            Read-ConstructSettings -Dir $PSScriptRoot
+        }
         if ($savedSettings -and $null -ne $savedSettings.vmAutoCheckpoints) {
             # NOT [bool]: every non-empty PowerShell string is truthy, so a hand-edited
             # settings file holding the STRING "false" would coerce to $true and silently

@@ -22,26 +22,62 @@ const TTL_MS = 10 * 60 * 1000; // cache a successful result for 10 min (GitHub u
 const NEG_TTL_MS = 60 * 1000;  // cache a FAILURE (null) only briefly, so a transient
                                // offline/rate-limit blip doesn't hide the banner for 10 min
 
-/** Read the Construct update markers from raw settings, applying defaults.
+/** Read the Construct update markers, applying defaults.
+ *
+ *  `raw` is the INSTALL-WIDE half (.construct-settings.json): which Construct is
+ *  installed — repo, ref, installedCommit.
+ *  `state` is the ACTIVE INSTANCE's VM-scoped half (src/instancestate.js): what THAT VM
+ *  was last provisioned with. It defaults to `raw`, which is exactly right for the
+ *  default instance — its state IS the top level of the same file — so a one-VM install
+ *  reads the same two markers out of the same object it always did.
+ *
  *  installedCommit = the installed Construct (extension + scripts; set by install/update).
  *  provisionedCommit = what the VM was last provisioned with (set by Provision). */
-function readMarkers(raw) {
+function readMarkers(raw, state) {
   raw = raw || {};
+  const st = state || raw;
   return {
     repo: (raw.constructRepo && String(raw.constructRepo).trim()) || DEFAULT_REPO,
     ref: (raw.constructRef && String(raw.constructRef).trim()) || DEFAULT_REF,
     installedCommit: raw.installedCommit ? String(raw.installedCommit).trim() : "",
-    provisionedCommit: raw.provisionedCommit ? String(raw.provisionedCommit).trim() : "",
+    provisionedCommit: st.provisionedCommit ? String(st.provisionedCommit).trim() : "",
   };
 }
 
+/** A commit id as the guest and the host record it: 7–64 lowercase hex. Anything else
+ *  (a hand-edited marker, a truncated read) is "unknown", never a value we compare. */
+const COMMIT_RE = /^[0-9a-f]{7,64}$/;
+function normalizeCommit(v) {
+  const s = String(v == null ? "" : v).trim().toLowerCase();
+  return COMMIT_RE.test(s) ? s : "";
+}
+
+/**
+ * WHICH commit a VM counts as provisioned with. The guest's own
+ * `/etc/construct/provisioned.env` (`CONSTRUCT_COMMIT`, surfaced by probe.toState as
+ * `provisionedCommit`) is the SOURCE OF TRUTH — it is right even for a VM another PC
+ * provisioned — and the host-side per-instance marker is only the offline cache used
+ * when the VM did not answer (or predates the guest marker). Pure.
+ */
+function effectiveProvisionedCommit(markers, guestCommit) {
+  const guest = normalizeCommit(guestCommit);
+  if (guest) return guest;
+  return (markers && markers.provisionedCommit) || "";
+}
+
 /** Whether the VM was provisioned with a DIFFERENT commit than the installed Construct
- *  (so a reprovision would apply the update to the VM). Conservative: only true when BOTH
- *  markers are known and differ — an unknown provisionedCommit (a VM provisioned before
- *  this tracking existed) is not flagged until its next reprovision records one. */
-function isProvisionStale(markers) {
-  return !!(markers && markers.installedCommit && markers.provisionedCommit &&
-            markers.installedCommit !== markers.provisionedCommit);
+ *  (so a reprovision would apply the update to the VM). `guestCommit` is the VM's own
+ *  `/etc/construct/provisioned.env` marker when a probe brought one back; it wins over the
+ *  host-side cache. Conservative: only true when BOTH sides are known and differ — an
+ *  unknown provisioned commit (a VM provisioned before this tracking existed) is not
+ *  flagged until its next reprovision records one. */
+function isProvisionStale(markers, guestCommit) {
+  if (!markers || !markers.installedCommit) return false;
+  const provisioned = effectiveProvisionedCommit(markers, guestCommit);
+  // PLAIN STRING INEQUALITY, never a history/compare lookup: the answer must survive a
+  // repo whose history was rewritten (the compare API then 404s and cannot resolve the
+  // base at all), and it must not need the network to be taken.
+  return !!provisioned && markers.installedCommit !== provisioned;
 }
 
 /** GET a URL and parse JSON, FOLLOWING redirects (up to opts.maxRedirects, default 3)
@@ -355,14 +391,16 @@ async function augment(state, raw, opts = {}) {
   if (!state || typeof state !== "object") return state;
   let next = state;
   try {
-    const markers = readMarkers(raw);
+    const markers = readMarkers(raw, opts.instanceRaw || raw);
     if (markers.installedCommit) {
       next = { ...next, constructRev: `${markers.ref}@${markers.installedCommit.slice(0, 7)}` };
     }
     // The VM is behind the installed Construct → the panel flags the Provision button.
     // Only set it when TRUE (keep the "no marker → unchanged" fast path; the webview
     // treats an absent flag as not-stale and re-toggles the class on every render).
-    if (isProvisionStale(markers)) next = { ...next, provisionStale: true };
+    // The GUEST's own marker wins when the probe brought one back (state.provisionedCommit
+    // from probe.toState); the host-side per-instance cache stands in when it did not.
+    if (isProvisionStale(markers, state.provisionedCommit)) next = { ...next, provisionStale: true };
     const c = await checkConstructCached(markers, opts);
     if (c) next = { ...next, update: { available: c.available, behind: behindText(c.count) } };
     // Agent update detection (only when the VM is online with probed agents).
@@ -395,7 +433,7 @@ module.exports = {
   DEFAULT_REPO, DEFAULT_REF, TTL_MS, NEG_TTL_MS, AGENT_LATEST,
   readMarkers, acceptFor, fetchJson, NOT_FOUND, constructUpdateFromCompare, checkConstruct, checkConstructCached,
   behindText, semverParts, isNewer, isNewerNightly, prereleasePart, comparePrerelease,
-  isProvisionStale, t3codeUrl,
+  isProvisionStale, effectiveProvisionedCommit, normalizeCommit, t3codeUrl,
   fetchAgentLatest, augmentAgents, buildAgentUpdateScript,
   augment, constructRefreshArgs, constructRefreshArgPairs,
 };

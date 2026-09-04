@@ -292,6 +292,37 @@ if (Test-Path -LiteralPath $commonLib) { . $commonLib }
 if ($Action -eq 'provision' -and -not (Get-Command ConvertFrom-ConstructProvisionResult -ErrorAction SilentlyContinue)) {
     throw "Required host helper library is missing or invalid: $commonLib"
 }
+# Per-instance state (provisionedCommit, the project selection, the panel's VM-scoped
+# toggles). OPTIONAL on purpose: an older/partial checkout without it keeps writing the
+# legacy top-level keys, which is exactly today's single-VM behaviour.
+$stateLib = Join-Path $PSScriptRoot "lib\AgentVm.InstanceState.ps1"
+if (Test-Path -LiteralPath $stateLib) { . $stateLib }
+
+function Get-ConstructStateInstanceName {
+    <#
+        WHICH INSTANCE's state this run reads and writes -- the ONE answer, asked here and
+        nowhere else, so there is a single line to re-point.
+
+        Precedence, the repo's three-level idiom:
+          1. an explicit -InstanceName. On the remote-host path that parameter already IS
+             the registry name (docs/remote-host.md: the service addresses the VM by its
+             instance name, and Auto-Install writes the registry entry under it), so
+             honouring it here is correct today, not a guess about the future.
+          2. the ssh alias, LOWERCASED -- alias = name, the one derivation rule, the same
+             normalisation Get-ConstructConfigBranchName applies. Read through
+             $script:HostAlias because the reachability prompt can correct it mid-run.
+          3. "agent-vm", the implicit default, which resolves to the legacy top-level keys.
+
+        B11 (plan section 4.12, "Name-only targeting") turns -InstanceName into the general
+        name-only target and resolves the remaining identity from the registry through
+        lib\AgentVm.Instances.ps1. When it lands, THIS function is what it re-points; the
+        three call sites below do not change.
+    #>
+    if ($InstanceName) { return "$InstanceName".Trim().ToLowerInvariant() }
+    $alias = "$($script:HostAlias)".Trim().ToLowerInvariant()
+    if ($alias) { return $alias }
+    return 'agent-vm'
+}
 
 # --- Dependencies -----------------------------------------------------------
 
@@ -1883,7 +1914,12 @@ if (Get-Command Initialize-ConstructConfigStore -ErrorAction SilentlyContinue) {
             foreach ($np in $newProfiles) { if ($selection -notcontains $np) { $selection += $np } }
             $Projects = $selection -join ','
             Write-Ok "Auto-enabled new project profile(s) from the VM: $($newProfiles -join ', ') (projects now: $Projects)"
-            if (Get-Command Save-ConstructSettings -ErrorAction SilentlyContinue) {
+            # THIS VM's selection, not the checkout's (Get-ConstructStateInstanceName is
+            # the one place that answers "which instance"): the default instance writes the
+            # legacy top-level key and any other one writes its own file.
+            if (Get-Command Save-ConstructInstanceState -ErrorAction SilentlyContinue) {
+                Save-ConstructInstanceState -Name (Get-ConstructStateInstanceName) -Dir $PSScriptRoot -Values @{ projects = $selection }
+            } elseif (Get-Command Save-ConstructSettings -ErrorAction SilentlyContinue) {
                 Save-ConstructSettings -Dir $PSScriptRoot -Values @{ projects = $selection }
             }
         }
@@ -2518,7 +2554,8 @@ Write-Host ""
 # "update available" banner. Best-effort: guarded + never fatal.
 if ($Action -eq "provision" -and (Get-Command Set-ConstructProvisionedMarker -ErrorAction SilentlyContinue)) {
     try {
-        $pvSha = Set-ConstructProvisionedMarker -Dir $PSScriptRoot
+        # Keyed by the instance this run provisioned (Get-ConstructStateInstanceName).
+        $pvSha = Set-ConstructProvisionedMarker -Dir $PSScriptRoot -InstanceName (Get-ConstructStateInstanceName)
         Write-Host ""
         Write-Host "Recorded provisioned commit for the control panel: $pvSha" -ForegroundColor DarkGray
     } catch {

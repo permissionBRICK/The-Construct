@@ -48,6 +48,11 @@ export const CONSTRUCT_SCRIPTS_MARKER = "Auto-Install.ps1";
 export const CONSTRUCT_SETTINGS_FILE = ".construct-settings.json";
 /** The client-side instance registry (extension/src/instances.js, lib/AgentVm.Instances.ps1). */
 export const CONSTRUCT_INSTANCES_FILE = "instances.json";
+/** Per-instance state, beside the registry: `<container>\instances\<name>.json`
+ *  (extension/src/instancestate.js, lib/AgentVm.InstanceState.ps1). Holds the VM-scoped
+ *  half — `provisionedCommit` among it — for every instance EXCEPT the default one, whose
+ *  VM-scoped keys stay at the legacy top level of `.construct-settings.json`. */
+export const CONSTRUCT_INSTANCE_STATE_DIR_NAME = "instances";
 export const CONSTRUCT_UPDATE_SCRIPT = "Update-Construct.ps1";
 export const CONSTRUCT_REPROVISION_SCRIPT = "Update-T3Code.ps1";
 
@@ -111,16 +116,29 @@ function readCommit(value: unknown): string | null {
   return COMMIT_PATTERN.test(trimmed) ? trimmed : null;
 }
 
-/** Parse `.construct-settings.json` (the same defaults the panel's updates.js applies). */
-export function readConstructMarkers(raw: unknown): ConstructMarkers {
+/**
+ * Parse the update markers (the same defaults the panel's updates.js applies).
+ *
+ * `raw` is `.construct-settings.json`: the INSTALL-WIDE half — which Construct is
+ * installed (repo, ref, installedCommit). `state` is the TARGET INSTANCE's VM-scoped half
+ * (`instances\<name>.json`); it defaults to `raw`, which is exactly right for the default
+ * instance, whose state IS the top level of that same file.
+ */
+export function readConstructMarkers(raw: unknown, state?: unknown): ConstructMarkers {
   const record = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+  const stateRecord =
+    state === undefined
+      ? record
+      : typeof state === "object" && state !== null
+        ? (state as Record<string, unknown>)
+        : {};
   const repo = typeof record.constructRepo === "string" ? record.constructRepo.trim() : "";
   const ref = typeof record.constructRef === "string" ? record.constructRef.trim() : "";
   return {
     repo: REPO_PATTERN.test(repo) ? repo : DEFAULT_CONSTRUCT_REPO,
     ref: REF_PATTERN.test(ref) ? ref : DEFAULT_CONSTRUCT_REF,
     installedCommit: readCommit(record.installedCommit),
-    provisionedCommit: readCommit(record.provisionedCommit),
+    provisionedCommit: readCommit(stateRecord.provisionedCommit),
   };
 }
 
@@ -238,12 +256,49 @@ export function resolveConstructScriptsDir(
   return findConstructScriptsDir(localAppData, fs, joinPath);
 }
 
+/**
+ * The markers for ONE target VM: repo/ref/installedCommit from the scripts dir's
+ * install-wide settings, `provisionedCommit` from that instance's own state.
+ *
+ * The DEFAULT instance has no state file at all — its VM-scoped keys live at the legacy
+ * top level of `.construct-settings.json` — so it reads exactly the one file this
+ * function has always read. A non-default target reads its `instances\<name>.json`
+ * instead, which is what makes the Desktop app's per-instance Reprovision row honest:
+ * two VMs on one PC no longer share one provisionedCommit.
+ */
 export function readConstructMarkersFromDir(
   scriptsDir: string,
   fs: ConstructFileSystem,
   joinPath: JoinPath = defaultJoinPath,
+  options?: { readonly localAppData?: string; readonly instanceName?: string },
 ): ConstructMarkers {
-  return readConstructMarkers(readJsonFile(joinPath(scriptsDir, CONSTRUCT_SETTINGS_FILE), fs));
+  const raw = readJsonFile(joinPath(scriptsDir, CONSTRUCT_SETTINGS_FILE), fs);
+  const statePath = constructInstanceStatePath(options?.localAppData, options?.instanceName, joinPath);
+  if (statePath === null) return readConstructMarkers(raw);
+  return readConstructMarkers(raw, readJsonFile(statePath, fs) ?? {});
+}
+
+/**
+ * `<localAppData>\The-Construct\instances\<name>.json`, or null when that instance has no
+ * state file: the DEFAULT instance (whose VM-scoped keys stay at the legacy top level of
+ * `.construct-settings.json`), an unusable name, or no known %LOCALAPPDATA%.
+ *
+ * The default is decided BY NAME, exactly as instancestate.isDefaultStore /
+ * Test-ConstructDefaultInstanceStore decide it — not by `ConstructVmTarget.isDefault`,
+ * which additionally requires the canonical identity and would send the two sides looking
+ * in different files. The name guard is the same PATH-SAFETY superset (the name becomes a
+ * file name here), not the instance-name rule.
+ */
+export function constructInstanceStatePath(
+  localAppData: string | undefined,
+  instanceName: string | undefined,
+  joinPath: JoinPath = defaultJoinPath,
+): string | null {
+  if (localAppData === undefined || localAppData === "") return null;
+  const name = (instanceName ?? "").trim();
+  if (name === "" || name.toLowerCase() === DEFAULT_CONSTRUCT_VM_TARGET.name) return null;
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(name) || name.includes("..")) return null;
+  return joinPath(localAppData, CONSTRUCT_CONTAINER_DIR_NAME, CONSTRUCT_INSTANCE_STATE_DIR_NAME, `${name}.json`);
 }
 
 // ── The target VM (instance registry) ───────────────────────────────────────────
@@ -860,7 +915,10 @@ export async function checkConstructUpdates(
   const markers =
     scriptsDir === null
       ? readConstructMarkers({})
-      : readConstructMarkersFromDir(scriptsDir, options.fs, joinPath);
+      : readConstructMarkersFromDir(scriptsDir, options.fs, joinPath, {
+          localAppData: options.localAppData,
+          instanceName: target.name,
+        });
   const previous = options.previous;
   const errors: string[] = [];
   if (scriptsDir === null) errors.push(constructScriptsMissingMessage(options.localAppData));
