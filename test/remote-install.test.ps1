@@ -513,6 +513,9 @@ ok "entry: a publicHost that is not a host name is DROPPED where it is built (th
 # dot-sourcing the loader binds ITS parameters into the script scope. Field 2026-09-04:
 # every remote install relaunched as Administrator because of it.
 $aiTxt = Get-Content (Join-Path $PSScriptRoot "..\Auto-Install.ps1") -Raw
+ok "gate: every script-scope load of the local driver restores -Backend and -ServiceUrl" (
+    ([regex]::Matches($aiTxt, '(?m)^\s*\. \$\w*[Dd]river\w* -Backend "hyperv-local"')).Count -eq 2 -and
+    ([regex]::Matches($aiTxt, '(?s)\$keepBackend = \$Backend; \$keepServiceUrl = \$ServiceUrl\s*\r?\n\s*\. \$\w*[Dd]river\w* -Backend "hyperv-local"\s*\r?\n\s*\$Backend = \$keepBackend; \$ServiceUrl = \$keepServiceUrl')).Count -eq 2)
 ok "gate: the mode-probe driver load restores -Backend and -ServiceUrl afterwards" (
     $aiTxt -match '(?s)\$keepBackend = \$Backend; \$keepServiceUrl = \$ServiceUrl\s*\r?\n\s*\. \$modeDriverLoader -Backend "hyperv-local"\s*\r?\n\s*\$Backend = \$keepBackend; \$ServiceUrl = \$keepServiceUrl')
 
