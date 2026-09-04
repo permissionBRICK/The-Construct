@@ -513,6 +513,12 @@ function postState(target, state) {
   // offer disappears from the panel the moment the VM is registered. It is null on every
   // local window and on every install with one VM, which is the zero-change path.
   extra.registerOffer = registerThisVmOffer();
+  // "Remove instance" (B14, plan §4.12 "Cleanup"): the panel shows the action only for an
+  // instance the removal planner would accept, so a single-VM install — where every
+  // reader falls back to the implicit default — never sees a button that can only refuse.
+  // Attached to every push, `null` included, so it disappears the moment it stops
+  // applying (a switch back to the default VM).
+  extra.removeOffer = removeInstanceOffer();
   safePost(target, { type: "state", state: { ...state, ...extra } });
 }
 
@@ -3507,6 +3513,84 @@ async function runRegisterThisVm() {
   vscode.window.showInformationMessage(`Registered "${plan.name}" — the panel now describes this VM.`);
 }
 
+/**
+ * The "Remove instance" offer for the ACTIVE instance, or null (B14, plan §4.12).
+ * instances.planRemoveInstance owns every rule — this only asks it, so the panel, the
+ * command and Auto-Install.ps1 refuse exactly the same cases. Never throws.
+ */
+function removeInstanceOffer() {
+  try {
+    const plan = instances.planRemoveInstance({
+      registry: registryNow(),
+      name: activeInstance().name,
+    });
+    if (!plan.ok && !plan.requiresTypedConfirmation) return null;
+    return {
+      name: plan.name,
+      deletesVm: plan.deletesVm,
+      removes: plan.removes,
+      keeps: plan.keeps,
+    };
+  } catch (_) { return null; }
+}
+
+/**
+ * Remove one instance's client-side state from this PC. The typed confirmation for a
+ * REMOTE instance (whose VM is deleted, disk and all) is collected HERE and handed to
+ * Auto-Install.ps1, which checks it again through the same planner — the script is also
+ * run by hand, so it cannot trust a caller to have asked.
+ */
+async function runRemoveInstance() {
+  const scriptsDir = resolveScriptsDir();
+  if (!scriptsDir) { warnNoScriptsDir(); return; }
+  const target = actionTarget();
+  const plan = instances.planRemoveInstance({
+    registry: registryNow(true),
+    name: target.name,
+  });
+  if (!plan.ok && !plan.requiresTypedConfirmation) {
+    vscode.window.showWarningMessage(plan.refusal);
+    return;
+  }
+  if (!lifecycle.scriptSupportsRemoveInstance(scriptsDir)) {
+    vscode.window.showWarningMessage(
+      "This install's Auto-Install.ps1 does not know -Action remove-instance. Update Construct first.");
+    return;
+  }
+  let confirmation = "";
+  if (plan.requiresTypedConfirmation) {
+    confirmation = await vscode.window.showInputBox({
+      title: `Remove the instance "${plan.name}"`,
+      prompt: `This DELETES the VM "${plan.name}" on its host service, including its disk. Type the instance name to confirm.`,
+      placeHolder: plan.name,
+      ignoreFocusOut: true,
+      validateInput: (value) => (String(value).trim() === plan.name ? null : `Type "${plan.name}" exactly.`),
+    }) || "";
+    if (confirmation.trim() !== plan.name) return;
+  } else {
+    const yes = "Remove instance";
+    const picked = await vscode.window.showWarningMessage(
+      `Remove "${plan.name}" from this PC?`,
+      { modal: true, detail: plan.removes.map((r) => "• " + r).join("\n") + "\n\n" + plan.keeps.join("\n") },
+      yes);
+    if (picked !== yes) return;
+  }
+  if (targetSuperseded(target, "Remove instance")) return;
+  lifecycle.run("removeInstance", {
+    scriptsDir,
+    instance: target.instance,
+    confirmation,
+    stillCurrent: () => !targetSuperseded(target, "Remove instance"),
+  });
+  // The console does the work and rewrites instances.json; the registry watcher below
+  // (fs.watch on the container dir) picks that up and runs the ONE serialized retarget — which is what
+  // tears down this instance's mic tunnel, notification watcher and port forwarder and
+  // moves the window to the default instance. Nothing extra is torn down here: doing it
+  // twice, from outside that chain, is exactly the race the chain exists to prevent.
+  // This refresh only repaints sooner than the next tick would.
+  setTimeout(() => { void refreshAll(); }, 2000);
+}
+
 // ── Remote hosts (`constructd`) ─────────────────────────────────────────────
 // A remote HOST is an enrolment, not a VM: its URL, the credential kind, the pinned
 // certificate fingerprint and the identity the service confirmed. It lives in
@@ -3579,6 +3663,72 @@ async function remoteClientFor(hostEntry, overrideAuth) {
  * as a choice. Credentials are tried Negotiate-first, silently, and only a 401 leads to
  * a prompt — exactly like the installer's console flow.
  */
+/**
+ * "Remove Remote Host" (B14, plan §4.12 "Cleanup"; the missing counterpart the B9 review
+ * recorded). Enrolment writes THREE things in three stores — the globalState record, the
+ * API token in SecretStorage and the pinned certificate in a .pin file — and nothing used
+ * to remove any of them. remotehost.planForgetRemoteHost owns the rules (including the
+ * refusal while a registered VM still lives on that host); this only picks the host,
+ * confirms, and carries the plan out.
+ */
+async function runRemoveRemoteHost() {
+  const hosts = remoteHosts();
+  if (!hosts.length) {
+    vscode.window.showInformationMessage("No Construct remote hosts are enrolled on this PC.");
+    return;
+  }
+  const picked = await vscode.window.showQuickPick(
+    hosts.map((h) => ({ label: remotehost.urlParts(h.url).host, description: h.identity || "", detail: h.url, entry: h })),
+    { title: "Remove a Construct remote host", placeHolder: "Its token and pinned certificate are removed from this PC" });
+  if (!picked) return;
+
+  const plan = remotehost.planForgetRemoteHost({
+    url: picked.entry.url,
+    hosts,
+    instances: instances.list(registryNow(true)),
+    env: process.env,
+  });
+  if (!plan.ok) { vscode.window.showWarningMessage(plan.refusal); return; }
+  const yes = "Remove host";
+  const confirmed = await vscode.window.showWarningMessage(
+    `Remove the Construct host ${remotehost.urlParts(plan.url).host} from this PC?`,
+    { modal: true, detail: "This removes " + plan.removes.map((r) => r.label).join(", ") + ".\n\nNothing on the host itself is changed." },
+    yes);
+  if (confirmed !== yes) return;
+
+  // In the plan's order — token and pin first, the enrolment record last — and the
+  // record is dropped ONLY when both succeeded. A half-forgotten host whose handle is
+  // gone (so the command cannot even list it again) while its token still sits in
+  // SecretStorage is exactly the leftover this command exists to prevent.
+  const failures = [];
+  for (const step of plan.removes) {
+    if (step.kind === "record" && failures.length > 0) {
+      failures.push(`${step.label} was KEPT so you can retry: ${failures.length} store(s) could not be cleared`);
+      continue;
+    }
+    try {
+      if (step.kind === "record") {
+        await extensionContext.globalState.update(
+          REMOTE_HOSTS_KEY, remoteHosts().filter((h) => !remotehost.sameServiceUrl(h.url, plan.url)));
+      } else if (step.kind === "token") {
+        await extensionContext.secrets.delete(step.secretKey);
+      } else if (step.kind === "pin" && step.path) {
+        fs.rmSync(step.path, { force: true });
+      }
+    } catch (e) {
+      failures.push(`${step.label} (${e && e.message ? e.message : e})`);
+    }
+  }
+  logLine(`remotehost: removed ${plan.url}` + (failures.length ? ` with ${failures.length} problem(s)` : ""));
+  if (failures.length) {
+    vscode.window.showWarningMessage(
+      `${remotehost.urlParts(plan.url).host} was NOT fully removed — ${failures.join("; ")}. Fix that and run the command again.`);
+  } else {
+    vscode.window.showInformationMessage(`Removed the Construct host ${remotehost.urlParts(plan.url).host} from this PC.`);
+  }
+  refreshAll();
+}
+
 async function runAddRemoteHost() {
   const typed = await vscode.window.showInputBox({
     title: "Add a Construct remote host",
@@ -4054,6 +4204,7 @@ function handleMessage(message, webview, context) {
       if (id === "openForward") { void openForward(String(message.forward || "")); return; }
       if (id === "closeForward") { void closeForward(String(message.forward || "")); return; }
       if (id === "registerThisVm") { void runRegisterThisVm(); return; }
+      if (id === "removeInstance") { void runRemoveInstance(); return; }
       if (id === "updateAgents") { runUpdateAgents(); return; }
       if (id === "updateAgent") {
         // Per-agent ↑ tag. Validate against the known ids — the webview is
@@ -4779,6 +4930,8 @@ async function activate(context) {
     vscode.commands.registerCommand("construct.addRemoteHost", () => runAddRemoteHost()),
     vscode.commands.registerCommand("construct.newRemoteVm", () => runNewRemoteVm()),
     vscode.commands.registerCommand("construct.registerThisVm", () => runRegisterThisVm()),
+    vscode.commands.registerCommand("construct.removeInstance", () => runRemoveInstance()),
+    vscode.commands.registerCommand("construct.removeRemoteHost", () => runRemoveRemoteHost()),
     // Clicking a VM notification's toast opens the control panel: Windows launches
     // the toast's vscode:// URI, which lands here. Data-free by design — the URI is
     // fixed in src/notify.js, so nothing VM-authored ever reaches this handler.

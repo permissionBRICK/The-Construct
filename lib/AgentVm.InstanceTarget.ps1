@@ -186,3 +186,55 @@ function Register-ConstructLocalVm {
         Save-ConstructLocalInstance -Name $n -ConfigBranch $branch
     } $module $Name $ConfigBranch
 }
+
+function Unregister-ConstructVm {
+    <#
+        Remove one VM from the instance registry (Remove-ConstructInstance +
+        Save-ConstructInstances), in the registry module's own strict scope. Returns the
+        path written. Throws on a refusal (the default instance, an unknown name) and on
+        an I/O failure -- "Remove instance" reports its steps, so a registry write that
+        did not happen must not be reported as one that did.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name)
+    $module = Get-ConstructInstancesModulePath
+    if (-not $module) {
+        throw "Cannot remove the instance '$Name': lib/AgentVm.Instances.ps1 is missing from this install. Update The Construct."
+    }
+    return & {
+        param($modulePath, $n)
+        . $modulePath
+        $reg = Read-ConstructInstances
+        $next = Remove-ConstructInstance -Registry $reg -Name $n
+        Save-ConstructInstances -Registry $next
+    } $module $Name
+}
+
+function Get-ConstructInstanceInventory {
+    <#
+        The registry as "Remove instance" needs to see it: every instance name, which one
+        is the default, and the resolved identity of ONE of them. Read in the registry
+        module's own strict scope, so no caller has to load it.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name)
+    $module = Get-ConstructInstancesModulePath
+    if (-not $module) {
+        throw "Cannot read the instance registry: lib/AgentVm.Instances.ps1 is missing from this install. Update The Construct."
+    }
+    return & {
+        param($modulePath, $n)
+        . $modulePath
+        $reg = Read-ConstructInstances
+        $names = @($reg.Instances.Keys | Sort-Object)
+        $entry = $null
+        if ($reg.Instances.ContainsKey($n)) { $entry = $reg.Instances[$n] }
+        [pscustomobject]@{
+            Names   = $names
+            Count   = $names.Count
+            Default = [string]$reg.Default
+            Known   = ($null -ne $entry)
+            Entry   = $entry
+        }
+    } $module $Name
+}

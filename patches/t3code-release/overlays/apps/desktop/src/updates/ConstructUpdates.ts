@@ -25,6 +25,7 @@
 // the Effect wiring (pollers, state broadcast, action locking).
 
 import type {
+  ConstructInstanceInfo,
   ConstructUpdateAction,
   ConstructUpdateInfo,
   DesktopUpdateChannel,
@@ -108,6 +109,13 @@ export interface ConstructMarkers {
   readonly installedCommit: string | null;
   /** What the VM was last provisioned with; written by Provision-AgentVM at the end of a run. */
   readonly provisionedCommit: string | null;
+  /** The VM's saved T3 channel, mapped to the npm dist-tag. Read from the same VM-scoped
+   *  half as `provisionedCommit`: the instance's own state file, or the legacy top level
+   *  of `.construct-settings.json` for the default instance. */
+  readonly channel: DesktopUpdateChannel | null;
+  /** The T3 web GUI port the provisioner last recorded for this VM (`t3Port`); null when
+   *  this PC has not seen it. Half the key a linked remote is matched on. */
+  readonly t3Port: number | null;
 }
 
 function readCommit(value: unknown): string | null {
@@ -139,7 +147,24 @@ export function readConstructMarkers(raw: unknown, state?: unknown): ConstructMa
     ref: REF_PATTERN.test(ref) ? ref : DEFAULT_CONSTRUCT_REF,
     installedCommit: readCommit(record.installedCommit),
     provisionedCommit: readCommit(stateRecord.provisionedCommit),
+    // The VM-scoped channel comes from the SAME half as the commit (B12's split): the
+    // instance's own state file, or the legacy top level for the default instance.
+    channel: readConstructChannel(stateRecord.t3codeChannel),
+    // ...and so does the T3 port the provisioner recorded for it (B14): it is a fact
+    // about the running VM, and it is half the key a linked remote is matched on.
+    t3Port: portField(stateRecord.t3Port),
   };
+}
+
+/** The VM-side channel spelling ("stable"/"nightly", config.env `T3CODE_CHANNEL` and the
+ *  control panel's saved setting) as the npm dist-tag the Desktop app speaks. Anything
+ *  else — including an absent value — is "not known", never a guess. Pure. */
+export function readConstructChannel(value: unknown): DesktopUpdateChannel | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (trimmed === "nightly") return "nightly";
+  if (trimmed === "stable") return "latest";
+  return null;
 }
 
 /** The VM was provisioned with a DIFFERENT commit than the installed Construct, so a
@@ -381,6 +406,10 @@ const INSTANCE_STRING_FIELDS = [
   "configBranch",
   "scriptsDir",
   "owner",
+  // The name a host service publishes a remote VM under (plan §4.12). Listed for the
+  // same reason as the others — a non-string value means a malformed file — and read
+  // below, because it is how a linked T3 remote is matched to its instance.
+  "publicHost",
 ] as const;
 
 function isIpv6Literal(value: string): boolean {
@@ -464,6 +493,9 @@ interface ConstructInstanceEntry {
   readonly backend: string;
   readonly vmName: string;
   readonly vmHost: string;
+  /** Only ever a REMOTE instance's: a local VM's one address is its endpoint (the same
+   *  rule as deriveDefaults() in extension/src/instances.js). */
+  readonly publicHost: string | null;
   readonly hostAlias: string;
   readonly sshPort: number;
   readonly keyName: string;
@@ -484,6 +516,8 @@ function deriveInstanceEntry(name: string, raw: Record<string, unknown>): Constr
     hostAlias:
       stringField(raw.hostAlias) ??
       (isImplicitDefault ? DEFAULT_CONSTRUCT_VM_TARGET.hostAlias : name),
+    publicHost:
+      stringField(raw.backend) === "hyperv-remote" ? stringField(raw.publicHost) : null,
     sshPort: portField(raw.sshPort) ?? DEFAULT_CONSTRUCT_VM_TARGET.sshPort,
     keyName:
       stringField(raw.keyName) ??
@@ -566,16 +600,21 @@ export function readConstructVmTarget(raw: unknown): ConstructVmTarget {
   // is SKIPPED (the panel toasts it), so it neither becomes the target nor takes part
   // in the collision check below. Only the selected entry's own reason is reported.
   const entries = new Map<string, ConstructInstanceEntry>();
+  const removed = new Set<string>();
   let defaultEntryProblem: string | null = null;
   for (const name of Object.keys(bag)) {
     const rawEntry = bag[name];
-    if (
-      !INSTANCE_NAME_PATTERN.test(name) ||
-      name.startsWith(RESERVED_INSTANCE_NAME_PREFIX) ||
-      typeof rawEntry !== "object" ||
-      rawEntry === null ||
-      Array.isArray(rawEntry)
-    ) {
+    if (!INSTANCE_NAME_PATTERN.test(name) || name.startsWith(RESERVED_INSTANCE_NAME_PREFIX)) {
+      if (name === defaultName) defaultEntryProblem = "is not an object";
+      continue;
+    }
+    // An explicit `null` is a REMOVAL, not a malformed entry (see readConstructInstances
+    // and parseRegistry in extension/src/instances.js): the name is simply not here.
+    if (rawEntry === null) {
+      removed.add(name);
+      continue;
+    }
+    if (typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
       if (name === defaultName) defaultEntryProblem = "is not an object";
       continue;
     }
@@ -587,25 +626,41 @@ export function readConstructVmTarget(raw: unknown): ConstructVmTarget {
     }
     entries.set(name, entry);
   }
-  if (defaultEntryProblem !== null) {
+  if (defaultEntryProblem !== null && !removed.has(defaultName)) {
     return ignoredRegistry(
       `instances.json: instance "${defaultName}" ${defaultEntryProblem}; using the default VM.`,
     );
   }
   const isImplicitDefault = defaultName === DEFAULT_CONSTRUCT_VM_TARGET.name;
+  let targetName = defaultName;
   if (!entries.has(defaultName)) {
-    // The panel resolves an unknown name to the default instance. That is only safe to
-    // act on when the default IS the implicit one.
-    if (isImplicitDefault) return DEFAULT_CONSTRUCT_VM_TARGET;
-    return ignoredRegistry(
-      `instances.json names ${JSON.stringify(defaultName)} as the default instance but has no such entry; using the default VM.`,
-    );
+    // A REMOVED default (the tombstone above) is not an error and must not fall back to
+    // the very VM that was removed: both registry readers move the default to the
+    // alphabetically first survivor, so this one does exactly the same — one rule, one
+    // answer, whichever reader is asked.
+    if (removed.has(defaultName)) {
+      const survivor = [...entries.keys()].sort()[0];
+      if (survivor === undefined) {
+        return ignoredRegistry(
+          `instances.json records ${JSON.stringify(defaultName)} as removed and holds no other instance; using the default VM.`,
+        );
+      }
+      targetName = survivor;
+    } else if (isImplicitDefault) {
+      // The panel resolves an unknown name to the default instance. That is only safe to
+      // act on when the default IS the implicit one.
+      return DEFAULT_CONSTRUCT_VM_TARGET;
+    } else {
+      return ignoredRegistry(
+        `instances.json names ${JSON.stringify(defaultName)} as the default instance but has no such entry; using the default VM.`,
+      );
+    }
   }
-  const entry = entries.get(defaultName)!;
+  const entry = entries.get(targetName)!;
   const backendProblemOfTarget = targetBackendProblem(entry);
   if (backendProblemOfTarget !== null) {
     return ignoredRegistry(
-      `instances.json: instance "${defaultName}" ${backendProblemOfTarget}; using the default VM.`,
+      `instances.json: instance "${targetName}" ${backendProblemOfTarget}; using the default VM.`,
     );
   }
   // Cross-entry collisions (instances.js collisionProblems) among the ACCEPTED entries:
@@ -660,6 +715,256 @@ export function readConstructVmTargetFromRegistry(
     return ignoredRegistry("instances.json is not valid JSON; using the default VM.");
   }
   return readConstructVmTarget(parsed);
+}
+
+// ── Every instance this PC manages (B14, plan §4.12) ────────────────────────
+//
+// T3 Code Desktop links SEVERAL remotes at once — one per Construct VM, plus whatever
+// else the user added — so the update control cannot be about "the" VM any more.
+// readConstructVmTarget above answers only "which VM would an argument-less
+// Update-T3Code.ps1 reprovision"; this section reads the WHOLE registry and each
+// instance's own state, publishes it on ConstructUpdateInfo, and can plan a reprovision
+// aimed at one named instance.
+//
+// The RENDERER owns the other half: it is the side that knows which remotes T3 is
+// actually connected to (its environment catalog), so the matching and the row shape
+// live in apps/web/src/components/constructInstances.logic.ts. Nothing is duplicated
+// across the two — this file reads the filesystem, that one does the pairing.
+
+export interface ConstructInstanceRow {
+  readonly name: string;
+  readonly backend: string;
+  readonly vmHost: string;
+  /** The name a host service publishes this VM under, when it has one. */
+  readonly publicHost: string | null;
+  readonly hostAlias: string;
+  readonly sshPort: number;
+  readonly keyName: string;
+  readonly scriptsDir: string | null;
+  readonly isDefault: boolean;
+}
+
+export interface ConstructRegistryView {
+  readonly instances: ReadonlyArray<ConstructInstanceRow>;
+  readonly defaultName: string;
+  /** Why the file was ignored whole (null when it was absent or usable). */
+  readonly problem: string | null;
+}
+
+/** What an ABSENT registry means: exactly one instance, `agent-vm`, with today's
+ *  literals — the same synthesis both readers do (extension/src/instances.js,
+ *  lib/AgentVm.Instances.ps1). It is NOT "no instances": a default-only install has one,
+ *  and a T3 linked to it must still match a row. */
+const DEFAULT_INSTANCE_ROW: ConstructInstanceRow = Object.freeze({
+  name: DEFAULT_CONSTRUCT_VM_TARGET.name,
+  backend: "hyperv-local",
+  vmHost: DEFAULT_CONSTRUCT_VM_TARGET.vmHost,
+  publicHost: null,
+  hostAlias: DEFAULT_CONSTRUCT_VM_TARGET.hostAlias,
+  sshPort: DEFAULT_CONSTRUCT_VM_TARGET.sshPort,
+  keyName: DEFAULT_CONSTRUCT_VM_TARGET.keyName,
+  scriptsDir: null,
+  isDefault: true,
+});
+
+const SYNTHESIZED_REGISTRY_VIEW: ConstructRegistryView = Object.freeze({
+  instances: [DEFAULT_INSTANCE_ROW],
+  defaultName: DEFAULT_CONSTRUCT_VM_TARGET.name,
+  problem: null,
+});
+
+function ignoredRegistryView(problem: string): ConstructRegistryView {
+  return { ...SYNTHESIZED_REGISTRY_VIEW, problem };
+}
+
+function toInstanceRow(entry: ConstructInstanceEntry, defaultName: string): ConstructInstanceRow {
+  return {
+    name: entry.name,
+    backend: entry.backend,
+    vmHost: entry.vmHost,
+    publicHost: entry.publicHost,
+    hostAlias: entry.hostAlias,
+    sshPort: entry.sshPort,
+    keyName: entry.keyName,
+    scriptsDir: entry.scriptsDir,
+    isDefault: entry.name === defaultName,
+  };
+}
+
+/** Every ACCEPTED entry in the registry document, by the same rules readConstructVmTarget
+ *  applies to the default one: a rejected entry is skipped (never guessed at), a document
+ *  this build does not understand is ignored whole, and `agent-vm` is synthesized when the
+ *  file does not spell it out. Pure. */
+export function readConstructInstances(raw: unknown): ConstructRegistryView {
+  if (raw === null || raw === undefined) return SYNTHESIZED_REGISTRY_VIEW;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    return ignoredRegistryView("instances.json is not a JSON object; using the default VM.");
+  }
+  const doc = raw as Record<string, unknown>;
+  if (doc.version !== undefined && doc.version !== null && doc.version !== 1) {
+    return ignoredRegistryView(
+      `instances.json has version ${JSON.stringify(doc.version)}; this build only understands version 1, using the default VM.`,
+    );
+  }
+  const defaultName = stringField(doc.defaultInstance) ?? DEFAULT_CONSTRUCT_VM_TARGET.name;
+  const bag =
+    typeof doc.instances === "object" && doc.instances !== null && !Array.isArray(doc.instances)
+      ? (doc.instances as Record<string, unknown>)
+      : {};
+  const rows: ConstructInstanceRow[] = [];
+  /** Names the file EXPLICITLY records as not on this PC (a `null` entry) — how "Remove
+   *  instance" removes a row a reader would otherwise SYNTHESIZE. Same rule as
+   *  parseRegistry in extension/src/instances.js. */
+  const removed = new Set<string>();
+  for (const name of Object.keys(bag)) {
+    const rawEntry = bag[name];
+    if (!INSTANCE_NAME_PATTERN.test(name) || name.startsWith(RESERVED_INSTANCE_NAME_PREFIX)) {
+      continue;
+    }
+    if (rawEntry === null) {
+      removed.add(name);
+      continue;
+    }
+    if (typeof rawEntry !== "object" || Array.isArray(rawEntry)) continue;
+    const entry = deriveInstanceEntry(name, rawEntry as Record<string, unknown>);
+    if (instanceEntryProblem(entry, rawEntry as Record<string, unknown>) !== null) continue;
+    rows.push(toInstanceRow(entry, defaultName));
+  }
+  // The implicit default is always there — a missing entry IS that instance — unless the
+  // file says in so many words that it is gone.
+  if (
+    !removed.has(DEFAULT_CONSTRUCT_VM_TARGET.name) &&
+    !rows.some((row) => row.name === DEFAULT_CONSTRUCT_VM_TARGET.name)
+  ) {
+    rows.push({
+      ...DEFAULT_INSTANCE_ROW,
+      isDefault: defaultName === DEFAULT_CONSTRUCT_VM_TARGET.name,
+    });
+  }
+  rows.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  // A default that is not here any more (removed, or simply never written) moves to the
+  // alphabetically first survivor — the same normalization readConstructVmTarget and both
+  // registry readers apply, so no two of them can disagree about which VM is the default.
+  let effectiveDefault = defaultName;
+  if (!rows.some((row) => row.name === defaultName)) {
+    effectiveDefault = rows.length > 0 ? rows[0]!.name : DEFAULT_CONSTRUCT_VM_TARGET.name;
+  }
+  return {
+    instances: rows.map((row) => ({ ...row, isDefault: row.name === effectiveDefault })),
+    defaultName: effectiveDefault,
+    problem: null,
+  };
+}
+
+export function readConstructInstancesFromRegistry(
+  localAppData: string | undefined,
+  fs: ConstructFileSystem,
+  joinPath: JoinPath = defaultJoinPath,
+): ConstructRegistryView {
+  if (!localAppData) return SYNTHESIZED_REGISTRY_VIEW;
+  const path = joinPath(localAppData, CONSTRUCT_CONTAINER_DIR_NAME, CONSTRUCT_INSTANCES_FILE);
+  const text = fs.readTextFile(path);
+  if (text === null) return SYNTHESIZED_REGISTRY_VIEW;
+  if (text.replace(UTF8_BOM, "").trim().length === 0) return SYNTHESIZED_REGISTRY_VIEW;
+  const parsed = readJsonFile(path, fs);
+  if (parsed === null) {
+    return ignoredRegistryView("instances.json is not valid JSON; using the default VM.");
+  }
+  return readConstructInstances(parsed);
+}
+
+/**
+ * ONE instance's own VM-scoped state, read through B12's store: `instances\<name>.json`,
+ * or the legacy top level of `.construct-settings.json` for the DEFAULT instance (which
+ * has no file of its own). `constructInstanceStatePath` decides which, BY NAME — so there
+ * is exactly one place this half of an instance's settings is ever read from, and no
+ * second store beside it.
+ *
+ * Everything in it is optional: an instance whose file has not been written yet is not an
+ * error, it is an instance whose commit, channel and T3 port this PC does not know.
+ */
+export function readConstructInstanceState(
+  localAppData: string | undefined,
+  instanceName: string,
+  scriptsDir: string | null,
+  fs: ConstructFileSystem,
+  joinPath: JoinPath = defaultJoinPath,
+): ConstructMarkers {
+  const settings =
+    scriptsDir === null ? {} : (readJsonFile(joinPath(scriptsDir, CONSTRUCT_SETTINGS_FILE), fs) ?? {});
+  const statePath = constructInstanceStatePath(localAppData, instanceName, joinPath);
+  if (statePath === null) return readConstructMarkers(settings);
+  return readConstructMarkers(settings, readJsonFile(statePath, fs) ?? {});
+}
+
+/** The instance facts the RENDERER needs to pair its linked remotes with this PC's VMs
+ *  and to say what each one is missing. Published on ConstructUpdateInfo. */
+export function collectConstructInstances(
+  registry: ConstructRegistryView,
+  localAppData: string | undefined,
+  fs: ConstructFileSystem,
+  /** Where `.construct-settings.json` is — the install-wide half, and the DEFAULT
+   *  instance's VM-scoped half. Null when Construct was not found on this PC. */
+  scriptsDir: string | null,
+  joinPath: JoinPath = defaultJoinPath,
+): ReadonlyArray<ConstructInstanceInfo> {
+  return registry.instances.map((instance) => {
+    // ONE read per instance, through the ONE store. Which file that is, is decided BY
+    // NAME (constructInstanceStatePath): `agent-vm` keeps its VM-scoped keys at the
+    // legacy top level of `.construct-settings.json`, everything else has its own file.
+    // Deciding it by the registry's mutable `isDefault` pointer instead would hand
+    // agent-vm's commit and channel to whichever VM the user last made default.
+    const state = readConstructInstanceState(localAppData, instance.name, scriptsDir, fs, joinPath);
+    return {
+      name: instance.name,
+      vmHost: instance.vmHost,
+      publicHost: instance.publicHost,
+      hostAlias: instance.hostAlias,
+      isDefault: instance.isDefault,
+      provisionedCommit: state.provisionedCommit,
+      channel: state.channel,
+      t3Port: state.t3Port,
+    };
+  });
+}
+
+/**
+ * The launch plan for ONE named instance's Reprovision: Update-T3Code.ps1 aimed at it by
+ * name (B11's name-only targeting, through the same planConstructLaunch every other
+ * launch uses — nothing here builds a second command line). Refuses a name the registry
+ * does not hold, so a per-row button can never fall back to the default VM.
+ */
+export function planConstructInstanceReprovision(
+  instanceName: string,
+  registry: ConstructRegistryView,
+  info: Pick<ConstructUpdateInfo, "scriptsDir" | "repo" | "ref">,
+  platform: NodeJS.Platform,
+  fs: ConstructFileSystem,
+  joinPath: JoinPath = defaultJoinPath,
+  tempDir: string = NodeOS.tmpdir(),
+): ConstructLaunchPlanResult {
+  const instance = registry.instances.find((i) => i.name === instanceName);
+  if (instance === undefined) {
+    return {
+      ok: false,
+      error: `"${instanceName}" is not a Construct instance of this PC, so there is nothing to reprovision.`,
+    };
+  }
+  const target: ConstructVmTarget = {
+    name: instance.name,
+    vmHost: instance.vmHost,
+    hostAlias: instance.hostAlias,
+    sshPort: instance.sshPort,
+    keyName: instance.keyName,
+    scriptsDir: instance.scriptsDir,
+    // NEVER "the default target": even the registry's default instance is reprovisioned
+    // BY NAME from here, because this call names one machine out of several and an
+    // argument-less Update-T3Code.ps1 would reprovision whichever one the registry
+    // currently calls default.
+    isDefault: false,
+    problem: registry.problem,
+  };
+  return planConstructLaunch("reprovision", info, target, platform, fs, joinPath, tempDir);
 }
 
 // ── Remote checks ───────────────────────────────────────────────────────────────
@@ -747,18 +1052,31 @@ export interface ConstructCheckSnapshot {
   readonly scriptsDir: string | null;
   readonly markers: ConstructMarkers;
   readonly target: ConstructVmTarget;
+  /** Every instance this PC manages, with its own provisioned commit and channel — the
+   *  renderer pairs them with the remotes T3 is linked to (B14, plan §4.12). */
+  readonly instances: ReadonlyArray<ConstructInstanceInfo>;
   readonly compare: ConstructCompareResult | null;
   readonly t3Version: string;
   readonly t3LatestVersion: string | null;
+  /** The newest release on each channel this PC's instances run (see the check). */
+  readonly t3LatestByChannel: { latest: string | null; nightly: string | null };
   readonly channel: DesktopUpdateChannel;
   readonly runningAction: ConstructUpdateAction | null;
   readonly checkedAt: string | null;
   readonly error: string | null;
 }
 
-/** Which script the update control launches. A Construct update comes first: updating
- *  the PC's Construct and then reprovisioning applies both; the reverse order would
- *  provision the VM with scripts that are about to change again. */
+/**
+ * Which script the HOST-WIDE update control launches — and it is only ever
+ * `Update-Construct.ps1` (B14, plan §4.12 "T3 Desktop updater": "Update Construct stays
+ * the single host-wide action").
+ *
+ * A REPROVISION is per instance now: T3 links several VMs at once, so "reprovision" with
+ * no target would mean "whichever VM the registry currently calls default", which is
+ * exactly the ambiguity the per-row buttons exist to remove. `provisionStale` and
+ * `t3UpdateAvailable` are still published — they are what a row shows and what makes its
+ * own Reprovision an offer rather than a plain button.
+ */
 export function resolveConstructAction(input: {
   readonly scriptsDir: string | null;
   readonly constructUpdateAvailable: boolean;
@@ -767,7 +1085,6 @@ export function resolveConstructAction(input: {
 }): ConstructUpdateAction | null {
   if (input.scriptsDir === null) return null;
   if (input.constructUpdateAvailable) return "update-construct";
-  if (input.provisionStale || input.t3UpdateAvailable) return "reprovision";
   return null;
 }
 
@@ -785,6 +1102,7 @@ export function deriveConstructUpdateInfo(snapshot: ConstructCheckSnapshot): Con
     scriptsDir: snapshot.scriptsDir,
     vmName: snapshot.target.name,
     vmHost: snapshot.target.vmHost,
+    instances: snapshot.instances,
     installedCommit: snapshot.markers.installedCommit,
     provisionedCommit: snapshot.markers.provisionedCommit,
     behind: snapshot.compare?.behind ?? null,
@@ -792,6 +1110,7 @@ export function deriveConstructUpdateInfo(snapshot: ConstructCheckSnapshot): Con
     provisionStale,
     t3Version: snapshot.t3Version,
     t3LatestVersion: snapshot.t3LatestVersion,
+    t3LatestByChannel: snapshot.t3LatestByChannel,
     t3UpdateAvailable,
     action: resolveConstructAction({
       scriptsDir: snapshot.scriptsDir,
@@ -915,14 +1234,27 @@ export async function checkConstructUpdates(
   const t3Version = constructT3BaseVersion(options.appVersion);
   const channel = resolveConstructT3Channel(t3Version);
   const target = readConstructVmTargetFromRegistry(options.localAppData, options.fs, joinPath);
+  const registry = readConstructInstancesFromRegistry(options.localAppData, options.fs, joinPath);
   const scriptsDir = resolveConstructScriptsDir(options.localAppData, target, options.fs, joinPath);
   const markers =
     scriptsDir === null
       ? readConstructMarkers({})
       : readConstructMarkersFromDir(scriptsDir, options.fs, joinPath, {
-          localAppData: options.localAppData,
+          // OMITTED, not `undefined`: the workspace compiles with
+          // exactOptionalPropertyTypes, under which an optional `string` property may not
+          // be handed an explicit undefined.
+          ...(options.localAppData === undefined ? {} : { localAppData: options.localAppData }),
           instanceName: target.name,
         });
+  // Every instance's own half, read through the same store (B12) — one row per VM needs
+  // one read per VM, not the target's markers repeated.
+  const instances = collectConstructInstances(
+    registry,
+    options.localAppData,
+    options.fs,
+    scriptsDir,
+    joinPath,
+  );
   const previous = options.previous;
   const errors: string[] = [];
   if (scriptsDir === null) errors.push(constructScriptsMissingMessage(options.localAppData));
@@ -932,6 +1264,16 @@ export async function checkConstructUpdates(
   // check as long as they still describe the same installed commit / channel.
   let compare: ConstructCompareResult | null = null;
   let t3LatestVersion: string | null = null;
+  // The upstream release per channel. Rows are per instance and instances can be on
+  // DIFFERENT channels (plan §4.12), so a row on the other channel would otherwise be
+  // told about a release that is not on its own. The second npm lookup is made only when
+  // some instance actually runs the other channel.
+  const t3LatestByChannel: { latest: string | null; nightly: string | null } = {
+    latest: null,
+    nightly: null,
+  };
+  const otherChannel: DesktopUpdateChannel = channel === "nightly" ? "latest" : "nightly";
+  const someInstanceOnOtherChannel = instances.some((i) => i.channel === otherChannel);
   if (options.fetchJson) {
     const compareUrl = constructCompareUrl(markers);
     if (compareUrl !== null) {
@@ -942,11 +1284,22 @@ export async function checkConstructUpdates(
       await options.fetchJson(constructT3RegistryUrl(channel)),
     );
     if (t3LatestVersion === null) errors.push("Could not check npm for T3 Code releases.");
+    t3LatestByChannel[channel] = t3LatestVersion;
+    if (someInstanceOnOtherChannel) {
+      t3LatestByChannel[otherChannel] = constructT3VersionFromRegistry(
+        await options.fetchJson(constructT3RegistryUrl(otherChannel)),
+      );
+    }
   } else if (previous !== null) {
     if (previous.installedCommit === markers.installedCommit && previous.installedCommit !== null) {
       compare = { available: previous.constructUpdateAvailable, behind: previous.behind };
     }
     t3LatestVersion = previous.t3LatestVersion;
+    // Optional chaining: `previous` can come from a state this build did not write
+    // (an older Desktop, a restored snapshot), and a missing map is "not asked", not a
+    // crash in the local-only refresh that runs while a script is going.
+    t3LatestByChannel.latest = previous.t3LatestByChannel?.latest ?? null;
+    t3LatestByChannel.nightly = previous.t3LatestByChannel?.nightly ?? null;
     if (previous.error !== null && scriptsDir !== null && target.problem === null) {
       errors.push(previous.error);
     }
@@ -956,9 +1309,11 @@ export async function checkConstructUpdates(
     scriptsDir,
     markers,
     target,
+    instances,
     compare,
     t3Version,
     t3LatestVersion,
+    t3LatestByChannel,
     channel,
     runningAction: options.runningAction,
     checkedAt: options.now(),

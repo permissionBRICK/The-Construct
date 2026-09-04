@@ -1373,6 +1373,56 @@ profile before it could decide. Local rebuilds — and the default instance — 
   provisioning, because provisioning configures this PC (ssh config, Remote-SSH, OpenCode,
   SMB) and cannot be done by the service.
 
+* **`construct.removeRemoteHost`** — the counterpart of *Add* (B14, plan §4.12
+  "Cleanup"). `remotehost.planForgetRemoteHost` is the whole decision: it normalises the
+  URL, refuses a host that was never enrolled, and **refuses while any registry entry still
+  names that service URL** (those VMs are reached *through* the host — dropping its token
+  would leave them in the picker as machines nothing can talk to). What it returns is the
+  three stores enrolment wrote, each with the key/path it wrote: the `globalState` record,
+  the SecretStorage token key (`remotehost.tokenSecretKey`) and the `.pin` path
+  (`remotehost.pinPath`) — so the removal can never look somewhere the enrolment never
+  wrote. `extension.js` clears each one independently and reports what failed: a
+  half-forgotten host (record gone, token still in SecretStorage) is exactly the leftover
+  the command exists to prevent.
+* **The T3 Desktop Providers page** (B14) is split across two processes for the same
+  reason: `apps/desktop/src/updates/ConstructUpdates.ts` reads the filesystem (the whole
+  registry, each VM's own state file, and `planConstructInstanceReprovision`, which builds
+  the launch through the same `planConstructLaunch` as everything else) and publishes the
+  instances on `ConstructUpdateInfo`; `apps/web/src/components/constructInstances.logic.ts`
+  is the RENDERER's half, because it is the side that knows which remotes the app is
+  connected to (its environment catalog). It pairs a remote's base URL **host and port**
+  with an instance and returns one row per remote. The per-row Reprovision goes out over an
+  additive IPC of its own, `reprovisionConstructInstance(name)` — `downloadUpdate` stays
+  the host-wide control and keeps its signature.
+
+* **The `null` entry (schema v1, B14).** `instances.json` may carry `"agent-vm": null`,
+  which means "this instance is NOT on this PC" — the one way a row that a reader would
+  otherwise SYNTHESIZE can be removed. All three readers implement it identically
+  (`parseRegistry` here, `ConvertFrom-ConstructInstancesJson`, and the T3 Desktop
+  overlay's `readConstructInstances`): a `null` value is not a malformed entry and raises
+  no problem, and it suppresses the synthesis of that name. It is written only by
+  `removeInstance`/`Remove-ConstructInstance`, which refuse to remove the LAST instance —
+  with one left there would be nothing to fall back to. A registry that has never seen a
+  removal is byte-identical to before, and the no-file default fallback is untouched.
+
+* **`construct.removeInstance`** — "forget this VM on this PC". `instances.planRemoveInstance`
+  is the pure planner and the twin of `Get-ConstructInstanceRemovalPlan` in
+  `lib/AgentVm.Cleanup.ps1`: both refuse the same two cases (an unknown name, and the
+  **last** instance — with one left there is nothing to fall back to), both remove the
+  registry row for every other name including `agent-vm` (recorded as the `null` entry
+  above, since its row is synthesized), and both require the instance name to be **typed**
+  for a `hyperv-remote` instance, whose VM is deleted disk and all. The extension collects the typed name and hands it to
+  `Auto-Install.ps1 -Action remove-instance -InstanceName <name> -ConfirmInstanceName <name>`
+  (`lifecycle.buildInvocation("removeInstance", …)`, gated on
+  `lifecycle.scriptSupportsRemoveInstance`, which reads the value out of the script's
+  `[ValidateSet]` — an older scripts dir would refuse it at *binding* time). The script
+  checks the confirmation again through its own planner, because it is also run by hand.
+  The invocation carries **no `-NonInteractive`** (that is `Provision-AgentVM.ps1`'s
+  parameter, not Auto-Install's) and **never elevates**: every file it edits belongs to the
+  real user, and under a UAC prompt that switches administrator they would be the wrong
+  profile's. The panel's own offer (`state.removeOffer`, rendered as a Settings section) is
+  the same plan, so a single-VM install never sees a button that could only refuse.
+
 Both commands are no-ops off Windows (the launcher and the Negotiate helper are
 `powershell.exe`), and both are absent from a single-VM install's daily path — they only
 appear in the command palette.
@@ -1512,6 +1562,25 @@ free that is not.
 The range is a *host*-side de-confliction range, like the mic tunnel's 8767–8774 but for
 the opposite direction; two instances cannot collide inside it because the planner is told
 which ports are in use and every `Forwarder` probes the real socket before binding.
+
+**One slice per instance (B14).** 18800–18815 used to be *shared* by every VM: two
+instances forwarding the same VM port from two windows raced for the same sixteen numbers,
+and the loser got a port a user had already been handed for the other machine. Each
+instance now owns its own sixteen-port slice inside **18800–19311** (32 slices):
+
+| instance | slice |
+|---|---|
+| `agent-vm` (the default) | slice 0 — **18800–18815**, exactly the historical range |
+| anything else | slice `1 + FNV1a(name) mod 31`, i.e. `18800 + slice*16` |
+
+`forwarder.instancePortSlice(name)` is the whole rule: deterministic (the same VM lands on
+the same slice in every window and after every restart, with nothing written down) and
+dependency-free (the module still requires only `node:net`, so the default name is spelled
+out here as it is in the constructor). Two names *can* hash to one slice — 32 slices, no
+coordination — and that costs nothing: candidates are probed, this instance's own ports are
+skipped, and a busy port simply moves to the next candidate, which is what already happens
+when the VM's own port number is taken. An explicit `portBase`/`portCount` (tests, a future
+setting) still wins.
 
 ### Spool ownership: one window writes
 
