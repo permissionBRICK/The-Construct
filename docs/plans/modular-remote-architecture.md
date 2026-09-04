@@ -491,6 +491,55 @@ Rules that every strategy and B10 must respect:
 - **Source ISO acquisition** stays admin-configured (`SourceUrl` + `Sha256`) and reusable by every
   strategy, including `InGuest` downloading inside the VM.
 
+### 4.12 Multi-instance client completion (decisions with the project owner, 2026-09-03)
+
+Phase 2 shipped the registry, the per-window picker, Remote-SSH adoption and one serialized
+retarget chain, and the host side already keys the SSH block, the VS Code `remotePlatform` map
+and the OpenCode server list by alias. What is **not** multi-instance yet was audited on
+2026-09-03 and comes down to five gaps; the decisions below close them. As everywhere in this
+plan, the zero-change default path is the regression bar: an install with one local `agent-vm`
+must behave and print exactly as today.
+
+**The five gaps**
+
+1. **Local VMs never enter the registry.** Only the remote path calls
+   `Save-ConstructInstanceEntry`; a second local VM is a hand edit, so most users never see the
+   picker.
+2. **All VM-scoped settings live in one file per scripts checkout.** `.construct-settings.json`
+   holds `provisionedCommit`, mic preference, project selection, T3 toggles/channel and patch
+   toggles for *every* VM. `provisionStale` is therefore a per-install signal, not per VM.
+3. **T3 Code Desktop is a singleton.** One install, one CA file name, one manifest; the updater
+   targets `defaultInstance` instead of the VM it is paired to; two VMs on different channels
+   flip-flop the install on every reprovision.
+4. **Web ports never reach a remote VM.** The service forwards SSH only, so the OpenCode entry
+   written for a remote instance points at a dead URL and T3 needs `construct expose` by hand.
+5. **Host scripts take four identity arguments, not a name.** Every caller re-derives
+   `-VmHost -HostAlias -SshPort -LocalKeyName` and probes each one for version skew.
+
+**Decisions (settled)**
+
+| Topic | Decision |
+|---|---|
+| Registry for local VMs | `Auto-Install.ps1` writes the entry for a **local** install too (the default one on first run, a named one for `-InstanceName`/`-VmName`), through the shared library. `Create-AgentVM.ps1` takes the instance name, not only the Hyper-V name. |
+| Name-only targeting | `Provision-AgentVM.ps1`, `Update-T3Code.ps1`, `Set-AgentVmCheckpoints.ps1`, `Get-AgentUsage.ps1` gain **`-InstanceName`**, resolved through `lib/AgentVm.Instances.ps1`. The extension and the T3 Desktop updater pass one name and probe one parameter. The explicit identity args stay for BYO/manual setups and win when given. |
+| Per-VM state location | A **separate per-instance file**: `%LOCALAPPDATA%\The-Construct\instances\<name>.json`, next to the registry and independent of the scripts checkout. Holds `provisionedCommit`, mic preference, project selection, AI-tool set, T3 toggles/channel, patch toggles, T3 pairing hint. Install-wide facts (`installedCommit`, `constructRepo`, `constructRef`) stay in `.construct-settings.json`. The **default instance keeps mirroring** its legacy top-level keys in `.construct-settings.json` so old readers keep working. |
+| VM-side marker | The guest records the Construct commit it was provisioned with in `/etc/construct/provisioned.env` (`CONSTRUCT_COMMIT`, from the `CONSTRUCT_VERSION` already passed in). It is the **source of truth**; the host file is a cache for offline display. The probe reads it, so a VM provisioned from another PC is judged correctly. |
+| Stale detection | **Plain commit-string inequality**, never a history lookup: `installedCommit != provisionedCommit` (host cache or probed guest value). Must keep working when the Construct repo was reset/cleaned and the compare API cannot resolve the base — the banner then says "update available, unknown number of commits" (the existing 404 path) and the per-VM state still says "reprovision pending". |
+| Update flow | `Update-Construct.ps1` stays install-wide (no target). Afterwards every instance whose own `provisionedCommit` differs shows the **yellow Reprovision** button when connected/switched to; the **status-bar item shows a count** of stale instances. No batch "reprovision all" for now. |
+| Connected VM | Remote-SSH adoption stays **preselect, switchable**; the picker marks the attached instance as *connected*. Remaining live reads (`connect`, `openProject`, `openWebUi`, the global `lastT3WebUrl`, the global T3 enable/disable serialization in `t3code.js`) move to captured, instance-stamped targets. Attaching to a host the registry does not know offers **"register this VM"**. |
+| Public hostname per VM | Two T3 web UIs on one remote host must not share a hostname and differ only by port (cookie rule, §3.3). **Service config `Constructd:PublicHostPattern`** (e.g. `{name}.vpnhost.domain`, behind a wildcard DNS record pointing at the host) → `GET /vms/{name}/endpoint` returns `publicHost` next to `sshHost`; falls back to `PublicHost` when unset. The registry stores `publicHost`; the provisioner passes it as `CONSTRUCT_EXTERNAL_HOST`, so the T3 CA/SAN, `T3CODE_PUBLIC_BASE_URL` and the printed URLs use it. Target design remains Proxmox with one LAN IP + hostname per VM; the wildcard is the Hyper-V-era bridge. |
+| Web ports on remote VMs | **Host forwards for both OpenCode and T3**, requested **by the guest at provision time** (`construct expose --to host` with the VM token, one per enabled web service, idempotent). They survive PC-off and are re-created on reinstall. The provisioner reads the allocated ports back and writes the OpenCode server entry (`http(s)://<publicHost>:<port>`) and the T3 public base URL from them. A user with `--no-host-forwards` gets the entries omitted with a printed note (the extension's client forwarder remains the manual path). |
+| T3 Desktop topology | **One install** (`%LOCALAPPDATA%\Programs\t3code`); T3 links **several remotes at once**, so each VM is paired as one more connection, named by instance. CA file keyed by instance (`construct-t3-ca-<name>.crt`; the store already dedupes by thumbprint). |
+| T3 Desktop version tracking | The host's `installed.json` records the **T3 release version, channel and patched build hash**. A reprovision **does not reinstall** when the host already has that exact patched release; **otherwise it reinstalls** (last reprovisioned VM wins — no "newest wins", no owner instance). |
+| T3 Desktop updater | Checks **every linked remote**: match each remote's base URL to a registry entry, one row per instance under Settings → Providers, **Reprovision per instance** (name-only targeting). Update Construct stays the single host-wide action. |
+| Cleanup | New **Remove instance** action (panel + `Auto-Install.ps1` choice): removes the SSH block, `remotePlatform` key, OpenCode entry, T3 CA cert + pairing hint, per-instance file and the registry entry; for `hyperv-remote` it also `DELETE`s the VM after the typed confirmation. Also adds the missing **Remove Remote Host** (globalState + SecretStorage + pin). Reinstall keeps all of these. |
+| Naming | **Instance name everywhere**: OpenCode `displayName`, T3 remote label, status bar, per-instance file, agent-name default `<name>-agent`. Default stays `agent-vm`. No host suffix, no free-form display name. |
+
+**Smaller items folded in:** the client forwarder's local fallback range (18800–18815) is now
+shared by all VMs — raise or allocate per instance; the SMB drive letter defaults to `Z` for every
+instance; `$env:TEMP\construct-known_hosts` is shared between concurrent provisions; the
+`.construct-backup` dir is per checkout, not per VM.
+
 ## 5. Implementation batches
 
 Ordered for the parallel-worktree pipeline; ownership is file-disjoint per phase so
@@ -550,6 +599,25 @@ single-VM install must behave identically — that's the regression bar for revi
   manual-setup/ARCHITECTURE, README; field test on the home domain (Kerberos both
   paths, two VMs on one host, expose flow, PC-off survival of forwards).
 
+**Phase 6 — multi-instance client completion (§4.12, decided 2026-09-03; plan only, not started):**
+- **B11 — Registry for local VMs + name-only targeting.** `Auto-Install.ps1`/`Create-AgentVM.ps1`
+  write local entries; `-InstanceName` on Provision / Update-T3Code / Set-AgentVmCheckpoints /
+  Get-AgentUsage resolved via `AgentVm.Instances.ps1`; `lifecycle.js` and the T3 Desktop updater
+  emit the name; skew probe reduced to one parameter; "register this VM" for an unknown
+  Remote-SSH host.
+- **B12 — Per-instance state + VM marker + update flow.** `instances\<name>.json` (PS + JS
+  readers/writers, default-instance mirroring), `CONSTRUCT_COMMIT` in `provisioned.env` and in
+  the probe, per-VM `provisionStale`, stale count on the status-bar item, connected marker in the
+  picker, remaining live reads moved to captured targets.
+- **B13 — Public hostname + guest host forwards.** `Constructd:PublicHostPattern` + `publicHost`
+  on the endpoint, registry field, `CONSTRUCT_EXTERNAL_HOST` from it; `provision.sh` requests
+  host forwards for the enabled web services; provisioner reads ports back and writes the
+  OpenCode entry / T3 base URL; `--no-host-forwards` degradation.
+- **B14 — T3 Desktop multi-link + host version tracking + cleanup.** Per-instance CA files,
+  `installed.json` (version, channel, build hash) reinstall rule, updater checks every linked
+  remote with per-instance Reprovision, **Remove instance** and **Remove Remote Host**, forwarder
+  range / SMB letter / temp file de-singletoning.
+
 **Known risks to watch in review:** version-skew discipline on every new parameter
 (probe before splat); SSH-config block collisions between instances; Windows OpenSSH
 key-ACL handling on new key names; netsh portproxy + VM IP churn; Negotiate from a
@@ -593,6 +661,7 @@ endpoint formatting there in the same batch.
 | 2026-09-02 | Field test started on `standpc` (WSL 2.6.3, German Windows). Installer fixes from the field, each direct + tested: relative path params resolved against `$PWD` before the elevated relaunch and ACE identities read by SID (`6ceaf98`); parents hardened before children (`8aa8ca6`); LocalSystem task polled via the Schedule.Service COM API in its own folder, `SCHED_S_TASK_RUNNING` is not an exit code (`16405cc`); failed LocalSystem commands report their output (`b56e0e9`). Blocker: `WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED` → §4.10 / B10. |
 | 2026-09-02 | B10 re-scoped (project owner): service stays LocalSystem, admin builds a pre-built ISO interactively; guest hostname from Hyper-V KVP. Service-account pair cancelled before any commit. |
 | 2026-09-02 | B10 merged (`9fc3485`): `IsoOptions.Mode` (Prebuilt default / PerVm; Native, InGuest, HypervisorHost documented), `IIsoMediaBuilder` + `IIsoCatalog`/`FileIsoCatalog` (versioned media, sidecar, atomic pointer, prune skips media Hyper-V holds open), `PrebuiltIsoBuilder`, `admin iso build/status/prune`, installer builds the ISO as the admin between settings and service registration (`-SkipIsoBuild`, `-IsoBuildOnly`), every LocalSystem-WSL step and the task runner removed, `VM_HOSTNAME_SOURCE=hyperv-kvp` first-boot identity source (default media byte-identical), provision.sh belt-and-braces rename. dotnet 572, installer 286, 16 bash suites. |
+| 2026-09-03 | §4.12 written: multi-instance client completion decided with the project owner (per-instance state file, VM-side commit marker, name-only targeting, wildcard public hostnames + guest-requested host forwards, one T3 Desktop with multi-link, cleanup action). Batches B11–B14 defined; **no implementation started**. |
 | next | Field test resumes on `standpc`: install with the pre-built ISO, verify `admin iso status`, first VM's hostname + `<name>.mshome.net`. |
 
 Process notes: every package ran as an omniloop dev/reviewer pair (opus developer,
