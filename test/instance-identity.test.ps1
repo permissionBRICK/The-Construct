@@ -333,7 +333,158 @@ if (Get-Command Get-ExternalEnvSuffix -ErrorAction SilentlyContinue) {
         ((Get-ExternalEnvSuffix -VmHost 'agent-vm.mshome.net' -SshPort 22 -ExplicitlyBound $true -SavedHost $portOnly.Host -SavedPort $portOnly.Port) -eq "")
     ok "suffix: apostrophe in host is POSIX-quoted" `
         ((Get-ExternalEnvSuffix -VmHost "o'brien-vm.mshome.net" -SshPort 22 -ExplicitlyBound $true) -eq " CONSTRUCT_EXTERNAL_HOST='o'\''brien-vm.mshome.net' CONSTRUCT_EXTERNAL_SSH_PORT='22'")
+
+    # ── -PublicHost: the per-VM web host name (plan section 4.12) ───────────
+    # On a host service that renders one, the guest's external identity is the VM's OWN
+    # name (T3 SANs, T3CODE_PUBLIC_BASE_URL, printed URLs) while SSH keeps going to the
+    # endpoint. Empty -- every local install -- changes nothing at all.
+    ok "suffix: -PublicHost empty leaves the default path byte-identical" `
+        ((Get-ExternalEnvSuffix -VmHost 'agent-vm.mshome.net' -SshPort 22 -ExplicitlyBound $false -PublicHost "") -eq "")
+    ok "suffix: -PublicHost replaces the host half, keeping the ssh PORT" `
+        ((Get-ExternalEnvSuffix -VmHost 'buildbox.example.local' -SshPort 2201 -ExplicitlyBound $true -PublicHost 'work-vm.vpn.example') -eq " CONSTRUCT_EXTERNAL_HOST='work-vm.vpn.example' CONSTRUCT_EXTERNAL_SSH_PORT='2201'")
+    ok "suffix: -PublicHost is sent even when nothing was bound (it is never the default)" `
+        ((Get-ExternalEnvSuffix -VmHost 'buildbox.example.local' -SshPort 2201 -ExplicitlyBound $false -PublicHost 'work-vm.vpn.example') -eq " CONSTRUCT_EXTERNAL_HOST='work-vm.vpn.example' CONSTRUCT_EXTERNAL_SSH_PORT='2201'")
+    ok "suffix: -PublicHost is POSIX-quoted like every other crossing value" `
+        ((Get-ExternalEnvSuffix -VmHost 'buildbox.example.local' -SshPort 2201 -ExplicitlyBound $true -PublicHost "o'brien.vpn.example") -eq " CONSTRUCT_EXTERNAL_HOST='o'\''brien.vpn.example' CONSTRUCT_EXTERNAL_SSH_PORT='2201'")
+    # A -PublicHost that IS the default identity is still judged by the rules above, so
+    # it can never turn the zero-change path into a non-default one.
+    ok "suffix: a -PublicHost equal to the default identity keeps the legacy silence" `
+        ((Get-ExternalEnvSuffix -VmHost 'agent-vm.mshome.net' -SshPort 22 -ExplicitlyBound $false -PublicHost 'agent-vm.mshome.net') -eq "")
 }
+
+# ── The guest's host-forward status file (plan section 4.12) ────────────────
+# /etc/construct/host-forwards is how the guest tells the provisioner which public
+# addresses the host service allocated. A local VM has no such file, and the parsers
+# then answer "nothing" -- which is what keeps the OpenCode URL and the summary text
+# byte-identical on a local install.
+Write-Host ""
+Write-Host "=== Host-forward status file ===" -ForegroundColor Cyan
+foreach ($fnName in @('ConvertFrom-HostForwardStatus', 'Get-HostForwardUrl', 'Test-HostForwardDenied',
+                      'Get-T3ForwardUrl', 'Get-OpenCodeServerPlan')) {
+    $fn = $provAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $fnName }, $true) | Select-Object -First 1
+    ok "Provision-AgentVM defines $fnName" ($null -ne $fn)
+    if ($fn) { Invoke-Expression $fn.Extent.Text }
+}
+if (Get-Command ConvertFrom-HostForwardStatus -ErrorAction SilentlyContinue) {
+    $hf = ConvertFrom-HostForwardStatus -Raw "OPENCODE=work-vm.vpn.example:2301`nT3=work-vm.vpn.example:2302`n"
+    ok "forwards: both keys are read" ($hf['OPENCODE'] -eq 'work-vm.vpn.example:2301' -and $hf['T3'] -eq 'work-vm.vpn.example:2302')
+    ok "forwards: the OpenCode URL is http on the forwarded authority" `
+        ((Get-HostForwardUrl -Forwards $hf -Key 'OPENCODE') -eq 'http://work-vm.vpn.example:2301')
+    ok "forwards: T3's URL is https (its listener is the TLS proxy)" `
+        ((Get-HostForwardUrl -Forwards $hf -Key 'T3' -Scheme 'https') -eq 'https://work-vm.vpn.example:2302')
+    ok "forwards: nothing is denied here" (-not (Test-HostForwardDenied -Forwards $hf -Key 'OPENCODE'))
+
+    # An IPv6 authority keeps the brackets the guest CLI put there -- one bracketing
+    # place, exactly like docs/expose.md's host rule.
+    $hf6 = ConvertFrom-HostForwardStatus -Raw "OPENCODE=[fe80::1]:2301`n"
+    ok "forwards: an IPv6 authority is passed through bracketed" `
+        ((Get-HostForwardUrl -Forwards $hf6 -Key 'OPENCODE') -eq 'http://[fe80::1]:2301')
+
+    $denied = ConvertFrom-HostForwardStatus -Raw "OPENCODE=denied`n"
+    ok "forwards: 'denied' is not a URL" ((Get-HostForwardUrl -Forwards $denied -Key 'OPENCODE') -eq "")
+    ok "forwards: ...and is reported as a refusal, not as 'no forward'" (Test-HostForwardDenied -Forwards $denied -Key 'OPENCODE')
+
+    $failed = ConvertFrom-HostForwardStatus -Raw "OPENCODE=error`n"
+    ok "forwards: 'error' is not a URL either" ((Get-HostForwardUrl -Forwards $failed -Key 'OPENCODE') -eq "")
+    ok "forwards: ...and is NOT a refusal (the user is not the reason)" (-not (Test-HostForwardDenied -Forwards $failed -Key 'OPENCODE'))
+
+    # The LOCAL path: no file, so the raw read is empty and every answer is 'nothing'.
+    $none = ConvertFrom-HostForwardStatus -Raw ""
+    ok "forwards: an absent file parses to no keys" ($none.Keys.Count -eq 0)
+    ok "forwards: ...so there is no URL" ((Get-HostForwardUrl -Forwards $none -Key 'OPENCODE') -eq "")
+    ok "forwards: ...and nothing was denied" (-not (Test-HostForwardDenied -Forwards $none -Key 'OPENCODE'))
+
+    $noisy = ConvertFrom-HostForwardStatus -Raw "# a comment`n`nOPENCODE=work-vm.vpn.example:2301`nnot a line`n"
+    ok "forwards: comments and junk lines are ignored" ($noisy.Keys.Count -eq 1 -and $noisy['OPENCODE'] -eq 'work-vm.vpn.example:2301')
+}
+
+# ── The OpenCode server entry: three answers, one decision ──────────────────
+# A remote VM sits on the host service's internal switch, so http://<VmHost>:<port> is a
+# DEAD link there -- it may only ever be used on the local/default path. The branch is a
+# pure function precisely so the registration and the summary cannot drift apart.
+Write-Host ""
+Write-Host "=== The OpenCode server entry ===" -ForegroundColor Cyan
+if (Get-Command Get-OpenCodeServerPlan -ErrorAction SilentlyContinue) {
+    $direct = 'http://agent-vm.mshome.net:4096'
+
+    # LOCAL / DEFAULT PATH: the direct URL, verbatim, whatever the (absent) status says.
+    $planLocal = Get-OpenCodeServerPlan -Forwards @{} -ServiceManaged $false -DirectUrl $direct
+    ok "opencode: a local VM registers the direct URL" ($planLocal.Action -eq 'register' -and $planLocal.Url -eq $direct)
+    ok "opencode: ...and says it came from the direct path" ($planLocal.Reason -eq 'direct')
+    $planLocalNoisy = Get-OpenCodeServerPlan -Forwards (ConvertFrom-HostForwardStatus -Raw "OPENCODE=denied`n") -ServiceManaged $false -DirectUrl $direct
+    ok "opencode: a local VM is never affected by a stale status file" (
+        $planLocalNoisy.Action -eq 'register' -and $planLocalNoisy.Url -eq $direct)
+
+    # SERVICE-MANAGED: the forwarded URL, or NO entry at all.
+    $fwd = ConvertFrom-HostForwardStatus -Raw "OPENCODE=work-vm.vpn.example:2301`n"
+    $planFwd = Get-OpenCodeServerPlan -Forwards $fwd -ServiceManaged $true -DirectUrl $direct
+    ok "opencode: a service-managed VM registers the FORWARDED URL" (
+        $planFwd.Action -eq 'register' -and $planFwd.Url -eq 'http://work-vm.vpn.example:2301')
+
+    $planDenied = Get-OpenCodeServerPlan -Forwards (ConvertFrom-HostForwardStatus -Raw "OPENCODE=denied`n") -ServiceManaged $true -DirectUrl $direct
+    ok "opencode: a refusal omits the entry" ($planDenied.Action -eq 'omit')
+    ok "opencode: ...and is reported as the owner's policy" ($planDenied.Reason -eq 'denied')
+
+    # THE DEAD-LINK CASE: a failed request, or a status file that could not be read, must
+    # NOT fall back to the VM's own port -- that entry could never connect.
+    $planError = Get-OpenCodeServerPlan -Forwards (ConvertFrom-HostForwardStatus -Raw "OPENCODE=error`n") -ServiceManaged $true -DirectUrl $direct
+    ok "opencode: a failed forward omits the entry (never the dead direct URL)" (
+        $planError.Action -eq 'omit' -and $planError.Url -eq "")
+    ok "opencode: ...and is NOT reported as a refusal" ($planError.Reason -eq 'missing')
+
+    $planAbsent = Get-OpenCodeServerPlan -Forwards @{} -ServiceManaged $true -DirectUrl $direct
+    ok "opencode: an absent/unreadable status file omits the entry too" (
+        $planAbsent.Action -eq 'omit' -and $planAbsent.Reason -eq 'missing')
+}
+
+# ── The forwarded T3 URL: stated by the guest, never guessed ───────────────
+# The allocated forward ALONE is ambiguous: provision.sh requests it for the TLS port
+# whenever HTTPS is wanted, BEFORE setup-t3-https.sh runs, and every failure path in that
+# script clears the HTTPS status while the forward stays. So the guest records T3_URL --
+# the origin T3 was really told to advertise -- and this side only validates it.
+if (Get-Command Get-T3ForwardUrl -ErrorAction SilentlyContinue) {
+    $t3Https = ConvertFrom-HostForwardStatus -Raw "T3=work-vm.vpn.example:2302`nT3_URL=https://work-vm.vpn.example:2302`n"
+    ok "t3: an HTTPS VM's forwarded URL is reported as https" (
+        (Get-T3ForwardUrl -Forwards $t3Https) -eq 'https://work-vm.vpn.example:2302')
+
+    # EXPLICIT T3CODE_HTTPS=false: the PLAIN listener is forwarded and really serves it.
+    $t3Plain = ConvertFrom-HostForwardStatus -Raw "T3=work-vm.vpn.example:2305`nT3_URL=http://work-vm.vpn.example:2305`n"
+    ok "t3: a deliberately plain-HTTP VM's forwarded URL is reported as http" (
+        (Get-T3ForwardUrl -Forwards $t3Plain) -eq 'http://work-vm.vpn.example:2305')
+
+    # HTTPS REQUESTED BUT THE SETUP FAILED: the forward exists (for the TLS port) and the
+    # guest advertises nothing on it. The two cases above differ ONLY in T3_URL, which is
+    # exactly why the scheme may not be inferred from the forward.
+    $t3Failed = ConvertFrom-HostForwardStatus -Raw "T3=work-vm.vpn.example:2302`n"
+    ok "t3: a forward whose HTTPS setup failed yields NO url" ((Get-T3ForwardUrl -Forwards $t3Failed) -eq "")
+    ok "t3: ...while the forward itself is still visible as allocated" (
+        (Get-HostForwardUrl -Forwards $t3Failed -Key 'T3') -ne "")
+    ok "t3: ...and it is not a refusal" (-not (Test-HostForwardDenied -Forwards $t3Failed -Key 'T3'))
+
+    ok "t3: a denied forward yields no url either" (
+        (Get-T3ForwardUrl -Forwards (ConvertFrom-HostForwardStatus -Raw "T3=denied`n")) -eq "")
+    ok "t3: an absent status file yields no url" ((Get-T3ForwardUrl -Forwards @{}) -eq "")
+
+    # T3_URL crosses the SSH boundary and is printed, so anything that is not an http(s)
+    # origin with a port is refused rather than echoed.
+    foreach ($bad in @('javascript:alert(1)', 'https://work-vm.vpn.example', 'http://x y:2302', "https://a:2302`nX")) {
+        ok "t3: a T3_URL that is not an origin is refused ('$($bad -replace "`n", '\n')')" (
+            (Get-T3ForwardUrl -Forwards @{ 'T3_URL' = $bad }) -eq "")
+    }
+    ok "t3: an IPv6 origin is accepted (one bracket pair, as the guest wrote it)" (
+        (Get-T3ForwardUrl -Forwards @{ 'T3_URL' = 'https://[2001:db8::1]:2302' }) -eq 'https://[2001:db8::1]:2302')
+}
+
+# The summary must not hide any of the three answers behind the CA-import block, which
+# only runs when the TLS proxy came up.
+ok "t3: the forwarded-URL summary is gated on the service, not on HTTPS readiness" (
+    $provContent -match '(?ms)^if \(\$ServiceUrl\) \{\r?\n\s+\$t3ForwardUrl = Get-T3ForwardUrl')
+ok "t3: ...and the URL is the guest's, not one this side assembles" (
+    $provContent -notmatch 'Get-T3ForwardScheme')
+ok "t3: an allocated forward with no origin is reported rather than skipped" (
+    $provContent -match 'a host forward exists, but the VM is not serving on it')
+ok "opencode: both call sites go through the one plan function" (
+    ([regex]::Matches($provContent, 'Get-OpenCodeServerPlan -Forwards')).Count -ge 2)
 
 # ── Remote host service params (batch B7) ───────────────────────────────────
 # The zero-change bar for the remote work: all three new provisioner parameters and all
@@ -341,7 +492,9 @@ if (Get-Command Get-ExternalEnvSuffix -ErrorAction SilentlyContinue) {
 # names a remote host behaves -- and splats -- exactly as before.
 Write-Host ""
 Write-Host "=== Remote host service params (B7) ===" -ForegroundColor Cyan
-foreach ($pn in @('ServiceUrl', 'InstanceName', 'VmTokenB64')) {
+# -PublicHost (plan section 4.12) joins them: inert while empty, which is every local
+# install and every remote host without a PublicHostPattern.
+foreach ($pn in @('ServiceUrl', 'InstanceName', 'VmTokenB64', 'PublicHost')) {
     $rp = Get-ScriptParam (Join-Path $repoRoot "Provision-AgentVM.ps1") $pn
     ok "Provision-AgentVM has -$pn param" ($null -ne $rp)
     ok "Provision-AgentVM -$pn defaults to EMPTY (inert)" ((Get-ParamDefaultValue $rp) -eq '""')

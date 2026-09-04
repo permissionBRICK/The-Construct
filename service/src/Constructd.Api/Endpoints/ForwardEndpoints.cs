@@ -53,7 +53,10 @@ public static class ForwardEndpoints
         }
 
         var list = await forwards.ListAsync(lookup.Vm!.Name, cancellationToken).ConfigureAwait(false);
-        return TypedResults.Ok(list.Select(f => ForwardResponse.From(f, options.PublicHost)).ToList());
+        // Advertised under THIS VM's public host (plan §4.12) — the service's PublicHost unless the
+        // host runs a PublicHostPattern, in which case every VM has its own name.
+        var publicHost = options.PublicHostFor(lookup.Vm!.Name);
+        return TypedResults.Ok(list.Select(f => ForwardResponse.From(f, publicHost)).ToList());
     }
 
     private static async Task<IResult> CreateAsync(
@@ -146,7 +149,7 @@ public static class ForwardEndpoints
 
         return TypedResults.Created(
             $"/api/v1/vms/{vm.Name}/forwards/{forward.Id}",
-            ForwardResponse.From(forward, options.PublicHost));
+            ForwardResponse.From(forward, options.PublicHostFor(vm.Name)));
     }
 
     private static async Task<IResult> DeleteAsync(
@@ -280,7 +283,7 @@ public static class ForwardEndpoints
             $"id={id}, status={ApiHelpers.Name(status)}, localPort={localPort?.ToString() ?? "-"}" +
             $", hostLabel={(string.IsNullOrEmpty(hostLabel) ? "-" : hostLabel)}");
 
-        return TypedResults.Ok(ForwardResponse.From(forward with { Ack = ack }, options.PublicHost));
+        return TypedResults.Ok(ForwardResponse.From(forward with { Ack = ack }, options.PublicHostFor(vm.Name)));
     }
 
     /// <summary>A host label ends up in a URL the CLI prints; a message ends up on its stderr.</summary>

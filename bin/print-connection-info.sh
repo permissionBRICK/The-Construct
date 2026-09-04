@@ -148,10 +148,16 @@ if [[ "${T3CODE}" == "true" ]] \
     # With the TLS proxy on, the https origin IS the address to use: browser
     # microphone capture needs a secure context, and the pairing token is bound
     # to whichever origin minted it.
+    #
+    # A PLAIN-HTTP public origin is honoured too (plan section 4.12): on a VM whose
+    # web ports are published by a host service, the reachable port is the forward the
+    # service allocated, not the listener's own -- so the advertised origin is the only
+    # address that works from a client. An empty value (every local install with no
+    # HTTPS, and every failed HTTPS setup) leaves the historical line untouched.
     t3_url="http://${url_host}:${T3CODE_PORT}"
-    if [[ "${T3CODE_PUBLIC_BASE_URL}" == https://* ]]; then
-        t3_url="${T3CODE_PUBLIC_BASE_URL}"
-    fi
+    case "${T3CODE_PUBLIC_BASE_URL}" in
+        https://*|http://*) t3_url="${T3CODE_PUBLIC_BASE_URL}" ;;
+    esac
     cat <<EOF
 
 T3 Code (web GUI):
