@@ -130,33 +130,25 @@ function Remove-ConstructOpenCodeServerEntries {
 }
 
 # `.construct-settings.json` is TWO things in one file: a handful of facts about the
-# INSTALL, and the default instance's VM-scoped settings (plan section 4.12, "Per-VM state
-# location" -- `agent-vm` mirrors its state into the legacy top-level keys instead of
-# having a per-instance file). Removing that instance has to clear the second kind and
-# keep the first; deleting `instances\agent-vm.json` would clear nothing, because it never
-# existed.
+# INSTALL, and the DEFAULT instance's VM-scoped settings (B12 / plan section 4.12,
+# "Per-VM state location" -- `agent-vm` mirrors its state into the legacy top-level keys
+# instead of having a per-instance file). Removing that instance has to clear the second
+# kind and keep the first; deleting `instances\agent-vm.json` would clear nothing,
+# because it never existed.
 #
-# THE LIST BELOW IS THE INSTALL-WIDE ONE, deliberately -- it is the SMALL, CLOSED set, and
-# everything else in the file belongs to the VM. A list of VM keys would have to be
-# extended every time a setting is added, and the one that was forgotten would silently
-# survive a removal; this way a new setting is VM-scoped by default, which is the safe
-# direction. (`vmAutoCheckpointsApplied` is exactly that case: it is state, not a form
-# field, so a VM-key list would not have had it.)
-$script:ConstructInstallWideSettingKeys = @(
-    # Which Construct is installed on this PC, and where it came from.
-    'installedCommit', 'constructRepo', 'constructRef',
-    # The host's git identity: the person, not the machine. It is shared by every VM the
-    # installer provisions and is what the installer itself prompts for once.
-    'gitUserName', 'gitEmail', 'gitCredentialStore'
-)
+# WHICH KEY IS WHICH IS NOT DECIDED HERE. lib\AgentVm.InstanceState.ps1 owns that split
+# (Test-ConstructInstallWideKey, mirrored by INSTALL_WIDE_KEYS in
+# extension/src/instancestate.js), and it is the small CLOSED set -- everything else in
+# the file belongs to the VM. A second list here would drift the moment a setting was
+# added, and the one that was forgotten would silently survive a removal.
 
 function Remove-ConstructDefaultStoreVmKeys {
     <#
         .SYNOPSIS
         Drop the DEFAULT INSTANCE's VM-scoped keys from a parsed `.construct-settings.json`.
-        Everything in $script:ConstructInstallWideSettingKeys stays; EVERYTHING ELSE goes,
-        including a key this build has never heard of. Returns
-        @{ Settings = <object>; Removed = <string[]> }. Pure.
+        Every key B12's Test-ConstructInstallWideKey calls install-wide stays; EVERYTHING
+        ELSE goes, including a key this build has never heard of. Returns
+        @{ Settings = <object>; Removed = <string[]> }. Pure apart from that lookup.
 
         The direction matters: a key a newer Construct added is far more likely to be one
         more VM setting than one more fact about the install, and a removal that left it
@@ -167,8 +159,12 @@ function Remove-ConstructDefaultStoreVmKeys {
     param($Settings)
     $gone = @()
     if ($null -eq $Settings) { return @{ Settings = $Settings; Removed = $gone } }
+    if (-not (Get-Command Test-ConstructInstallWideKey -ErrorAction SilentlyContinue)) {
+        throw "Removing the default instance's settings needs lib/AgentVm.InstanceState.ps1 (Test-ConstructInstallWideKey) to be dot-sourced first."
+    }
     foreach ($key in @($Settings.PSObject.Properties.Name)) {
-        if ($script:ConstructInstallWideSettingKeys -contains $key) { continue }
+        # The ONE classification, asked of its single definition.
+        if (Test-ConstructInstallWideKey $key) { continue }
         $Settings.PSObject.Properties.Remove($key)
         $gone += $key
     }
@@ -352,14 +348,8 @@ function Get-ConstructInstanceRemovalPlan {
             & $add 'default-store' "Clear this instance's settings from .construct-settings.json (the install's own keys stay)" `
                 (Join-Path $ScriptsDir ".construct-settings.json")
         }
-        & $add 'instance-state' "Delete the per-instance state file instances\$Name.json" `
+        & $add 'instance-state' "Delete the per-instance state file instances\$Name.json (its settings, provisioned commit, recorded T3 endpoint and OpenCode url)" `
             (Join-Path $LocalAppData "The-Construct\instances\$Name.json")
-        # Where this VM answered, recorded by the provisioner for the T3 Desktop app (its
-        # T3 origin and the OpenCode server url it registered). Per-instance client state,
-        # so it goes with the rest of it.
-        $endpointName = Get-ConstructT3EndpointFileName -InstanceName $Name
-        & $add 't3-endpoint' "Delete this instance's recorded endpoints ($endpointName)" `
-            (Join-Path $LocalAppData "The-Construct\artifacts\t3code\$endpointName")
     }
     if ($TempDir) {
         $khName = Get-ConstructKnownHostsFileName -HostAlias $alias
@@ -818,7 +808,6 @@ function Invoke-ConstructInstanceRemoval {
             't3-ca' { $results.Add((Remove-ConstructT3CaTrust -Path $step.Target)) }
             'default-store' { $results.Add((Remove-ConstructDefaultStoreEntry -Path $step.Target)) }
             'instance-state' { $results.Add((Remove-ConstructInstanceFile -Kind $step.Kind -Path $step.Target)) }
-            't3-endpoint' { $results.Add((Remove-ConstructInstanceFile -Kind $step.Kind -Path $step.Target)) }
             'temp-known-hosts' { $results.Add((Remove-ConstructInstanceFile -Kind $step.Kind -Path $step.Target)) }
             'registry-entry' {
                 # LAST, and only when everything before it worked. The registry entry is

@@ -100,6 +100,82 @@ function ok(name, cond, detail) {
   const aFresh = await updates.augment(base, { installedCommit: "aaaaaaa", provisionedCommit: "aaaaaaa", constructRef: "main" }, { fetchJson: fakeFetch({ ahead_by: 0 }), noCache: true });
   ok("augment: in-sync VM -> no provisionStale key", aFresh.provisionStale === undefined);
 
+  // ── B12: two markers from two files, and the guest's own marker on top ───────
+  // readMarkers' second argument is the ACTIVE INSTANCE's VM-scoped state; omitted, it IS
+  // the install-wide object, which is exactly the default instance's single file.
+  ok("markers: omitted state -> both markers from `raw` (today's single-file read)", (() => {
+    const m = updates.readMarkers({ installedCommit: "aaaaaaa", provisionedCommit: "bbbbbbb" });
+    return m.installedCommit === "aaaaaaa" && m.provisionedCommit === "bbbbbbb";
+  })());
+  ok("markers: a per-instance state supplies provisionedCommit", (() => {
+    const m = updates.readMarkers({ installedCommit: "aaaaaaa", provisionedCommit: "bbbbbbb", constructRef: "dev" },
+      { provisionedCommit: "ccccccc" });
+    return m.installedCommit === "aaaaaaa" && m.provisionedCommit === "ccccccc" && m.ref === "dev";
+  })());
+  ok("markers: a per-instance state WITHOUT the key does not inherit the legacy one", (() => {
+    const m = updates.readMarkers({ installedCommit: "aaaaaaa", provisionedCommit: "bbbbbbb" }, { micPassthrough: true });
+    return m.provisionedCommit === "";
+  })());
+  ok("markers: repo/ref/installedCommit are NEVER taken from the per-instance state", (() => {
+    const m = updates.readMarkers({ installedCommit: "aaaaaaa", constructRepo: "o/r", constructRef: "main" },
+      { installedCommit: "zzzzzzz", constructRepo: "evil/repo", constructRef: "evil" });
+    return m.installedCommit === "aaaaaaa" && m.repo === "o/r" && m.ref === "main";
+  })());
+
+  // The GUEST's own /etc/construct/provisioned.env marker (probe.toState ->
+  // state.provisionedCommit) is the source of truth: it is right even for a VM another PC
+  // provisioned, so it outranks the host-side cache in BOTH directions.
+  ok("stale: the guest marker outranks a matching host cache (host says fresh, guest is behind)",
+    updates.isProvisionStale({ installedCommit: "aaaaaaa", provisionedCommit: "aaaaaaa" }, "bbbbbbb") === true);
+  ok("stale: the guest marker outranks a stale host cache (host says behind, guest is current)",
+    updates.isProvisionStale({ installedCommit: "aaaaaaa", provisionedCommit: "bbbbbbb" }, "aaaaaaa") === false);
+  ok("stale: an absent guest marker falls back to the host cache",
+    updates.isProvisionStale({ installedCommit: "aaaaaaa", provisionedCommit: "bbbbbbb" }, "") === true);
+  ok("stale: an unparseable guest marker is ignored, not compared",
+    updates.isProvisionStale({ installedCommit: "aaaaaaa", provisionedCommit: "aaaaaaa" }, "not-a-commit") === false);
+  ok("stale: the guest marker is compared case-insensitively (it is normalized)",
+    updates.isProvisionStale({ installedCommit: "aaaaaaa", provisionedCommit: "" }, "AAAAAAA") === false);
+  ok("effective: the guest wins, else the host cache, else \"\"", (() => {
+    const m = { installedCommit: "aaaaaaa", provisionedCommit: "bbbbbbb" };
+    return updates.effectiveProvisionedCommit(m, "ccccccc") === "ccccccc" &&
+      updates.effectiveProvisionedCommit(m, "") === "bbbbbbb" &&
+      updates.effectiveProvisionedCommit({ installedCommit: "aaaaaaa", provisionedCommit: "" }, "") === "";
+  })());
+  ok("normalizeCommit: only 7-64 hex, lowercased", (() => (
+    updates.normalizeCommit(" ABC1234 ") === "abc1234" &&
+    updates.normalizeCommit("abc123") === "" &&
+    updates.normalizeCommit("zzzzzzz") === "" &&
+    updates.normalizeCommit(null) === ""))());
+
+  const aGuest = await updates.augment(
+    { ...base, provisionedCommit: "bbbbbbb" },
+    { installedCommit: "aaaaaaa", provisionedCommit: "aaaaaaa", constructRef: "main" },
+    { fetchJson: fakeFetch({ ahead_by: 0 }), noCache: true });
+  ok("augment: a probed guest marker decides staleness", aGuest.provisionStale === true);
+  const aInstanceRaw = await updates.augment(base,
+    { installedCommit: "aaaaaaa", provisionedCommit: "aaaaaaa", constructRef: "main" },
+    { instanceRaw: { provisionedCommit: "bbbbbbb" }, fetchJson: fakeFetch({ ahead_by: 0 }), noCache: true });
+  ok("augment: opts.instanceRaw supplies the per-instance marker", aInstanceRaw.provisionStale === true);
+
+  // ── RESET REPO: the installed commit no longer exists upstream ───────────────
+  // A history rewrite (or a force-push) makes the compare API 404, so the DISTANCE is
+  // unknowable — but the update itself is real, and the VM is still behind. Both signals
+  // must survive: the banner ("update available, unknown number of commits") AND the
+  // yellow Reprovision button. This is exactly the case a history/compare-based staleness
+  // rule would get wrong, which is why the rule is plain string inequality.
+  const aReset = await updates.augment(base,
+    { installedCommit: "aaaaaaa", constructRepo: "o/r", constructRef: "main" },
+    { instanceRaw: { provisionedCommit: "bbbbbbb" }, fetchJson: async () => updates.NOT_FOUND, noCache: true });
+  ok("reset repo: the update banner still shows", aReset.update && aReset.update.available === true);
+  ok("reset repo: ...with no commit distance to claim", aReset.update.behind === "");
+  ok("reset repo: ...AND the yellow reprovision flag is set from the markers alone",
+    aReset.provisionStale === true);
+  const aResetGuest = await updates.augment({ ...base, provisionedCommit: "bbbbbbb" },
+    { installedCommit: "aaaaaaa", constructRepo: "o/r", constructRef: "main" },
+    { fetchJson: async () => updates.NOT_FOUND, noCache: true });
+  ok("reset repo: the guest's own marker reaches the same verdict offline of any compare",
+    aResetGuest.update.available === true && aResetGuest.provisionStale === true);
+
   const a4 = await updates.augment(base, { installedCommit: "abc1234567" }, { fetchJson: async () => null, noCache: true });
   ok("augment: network fail still sets constructRev, no update", a4.constructRev === "main@abc1234" && a4.update === undefined);
 

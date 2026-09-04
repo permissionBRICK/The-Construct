@@ -870,6 +870,40 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("forwards: ...and the instance picker",
     (await page.locator("#instanceSelect").isVisible()) === pickerBefore);
 
+  // ── B12: the picker marks the instance THIS WINDOW is attached to ─────────
+  // Adoption only PRESELECTS the attached VM and the user can switch away, so the entry
+  // whose terminals and files this window holds is labelled — on whichever entry it is,
+  // not necessarily the selected one.
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h",
+    vmState: "running", instances: ["agent-vm", "work-vm"], instance: "agent-vm", connectedInstance: "work-vm" } }, "*"));
+  await page.waitForTimeout(60);
+  check("picker: the attached instance is marked connected",
+    (await page.locator("#instanceSelect option[value='work-vm']").textContent()) === "work-vm (connected)");
+  check("picker: ...and the others are not",
+    (await page.locator("#instanceSelect option[value='agent-vm']").textContent()) === "agent-vm");
+  check("picker: ...while the SELECTED one is still the active instance",
+    (await page.locator("#instanceSelect").inputValue()) === "agent-vm");
+  check("picker: the option VALUE stays the bare name (it is what setInstance posts)",
+    (await page.locator("#instanceSelect option").count()) === 2);
+  // A LOCAL window reports no connected instance: no entry may be labelled.
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h",
+    vmState: "running", instances: ["agent-vm", "work-vm"], instance: "agent-vm" } }, "*"));
+  await page.waitForTimeout(60);
+  check("picker: a local window labels nothing as connected",
+    (await page.locator("#instanceSelect").innerText()).indexOf("connected") === -1);
+  // ...and the marker can move without the selection changing (the signature includes it).
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h",
+    vmState: "running", instances: ["agent-vm", "work-vm"], instance: "agent-vm", connectedInstance: "agent-vm" } }, "*"));
+  await page.waitForTimeout(60);
+  check("picker: the connected marker re-renders when it moves",
+    (await page.locator("#instanceSelect option[value='agent-vm']").textContent()) === "agent-vm (connected)");
+
+  // Back to the state the following checks assume.
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h",
+    vmState: "running", installed: "2026-09-01", instances: ["agent-vm", "work-vm"], instance: "agent-vm",
+    forwards: { mode: "local", owner: true, visible: true, items: [] } } }, "*"));
+  await page.waitForTimeout(60);
+
   // The same for the idle-policy card.
   await page.evaluate(() => window.postMessage({ type: "idlePolicy", idlePolicy:
     { timeoutMinutes: 15, action: "save", maxTimeoutMinutes: 0, clamped: false } }, "*"));

@@ -120,6 +120,13 @@ extension/
                       .construct-settings.json (form<->disk mapping; pure fs/path, no vscode);
                       configDir(env) resolves %LOCALAPPDATA%\The-Construct\config (machine-wide,
                       NOT slug-scoped — outside any zip checkout)
+    instancestate.js  the PER-INSTANCE state store (pure fs, no vscode; PS twin
+                      lib/AgentVm.InstanceState.ps1). store(instance, scriptsDir, env) ->
+                      the handle every reader/writer takes; readState/saveState/replaceState,
+                      readMerged (state over the install-wide keys), readSettings/saveSettings,
+                      readSelectedProjects/hasPersistedSelection/saveSelectedProjects,
+                      readAppliedAutoCheckpoints/saveAppliedAutoCheckpoints, readMarkers,
+                      countStale. See "Per-instance state" below
     configsync.js     config-sync engine: git-based profile sync between host and VM
                       (makeGitRunner, detectGit, ensureConfigTree, acquireSyncLock/
                       releaseSyncLock (cross-process .sync.lock, serializes ticks across
@@ -402,6 +409,10 @@ VM-derived fields when `online===false` or `probeError`):
 { online, connected, vmState:'running'|'off'|'saved'|'absent'|'unknown',
   instance,                                // active instance NAME (always present)
   instances:[name],                        // only when >1 exists — renders the picker
+  connectedInstance,                       // only with the list: the instance THIS window
+                                           // is attached to over Remote-SSH ("connected")
+  provisionedCommit,                       // the GUEST's own /etc/construct/provisioned.env
+                                           // CONSTRUCT_COMMIT, when it reported one
   host, hostShort, vmName, ubuntu, resources, constructRev,
   installed, reprovisioned, update:{available,behind},
   agents:[{id,name,detail,version,updateAvailable,latest}],
@@ -712,6 +723,55 @@ field is omitted.
 The default instance keeps `agent-vm` / `Agent-VM` / `agent-vm.mshome.net` / `22` /
 `agent_vm_ed25519` / `vm` byte-for-byte.
 
+### Per-instance state
+
+Two host-side files, split by what the value is *about*.
+
+**Install-wide** — `.construct-settings.json` in the scripts checkout, unchanged:
+`installedCommit`, `constructRepo`, `constructRef` (which Construct is installed) and the
+git identity the installer applies to every VM. One checkout, one answer.
+
+**VM-scoped** — everything else the panel and the provisioner exchange: `provisionedCommit`,
+the project selection, `micPassthrough`, `vmMemoryGB`/`vmDiskGB`/`ubuntuRelease`, the VS
+Code / SMB / patch toggles, the T3 Code toggles and channel, `vmAutoCheckpoints` and
+`vmAutoCheckpointsApplied`.
+
+Where the VM-scoped half lives is the whole point:
+
+- **The DEFAULT instance keeps it at the LEGACY TOP LEVEL of `.construct-settings.json`, and
+  nothing else.** No `instances\agent-vm.json` is ever created. That is the zero-change bar:
+  an install with one local VM and no registry writes exactly the files it always wrote, and
+  every `instancestate.*` call on that path is byte-for-byte the `host.*` call it replaced.
+- **Every other instance uses only `%LOCALAPPDATA%\The-Construct\instances\<name>.json`**
+  (`{version:1, instance:"<name>", …}`), beside `instances.json` and OUTSIDE any scripts
+  checkout — so a self-update's `Expand-Archive` never touches it and two checkouts cannot
+  disagree about one VM. Writes are atomic (temp file + rename); a missing or corrupt file
+  reads as "nothing saved", the same tolerance `readRawSettings` always had. Install-wide
+  keys are split off on write and ignored on read, so a hand-edited per-instance file can
+  never shadow the installed commit.
+
+`instancestate.readMerged` lays the VM-scoped half over the install-wide keys, which is what
+the settings form and every "replay the saved settings" consumer (`lifecycle.run`,
+`Update-T3Code.ps1`) read — otherwise a rebuild of the second VM would drop the git identity.
+
+The **store is part of a captured target**, exactly like `scriptsDir`: `stateStore(instance,
+scriptsDir)` is built from the instance a flow captured, never from a fresh "whatever is
+active now" read after an await, or an import that finished after a switch would write A's
+discoveries into B's file.
+
+**The guest holds the source of truth.** `bin/provision.sh` records the commit it provisioned
+with as `CONSTRUCT_COMMIT` in `/etc/construct/provisioned.env`; the probe reads it and
+`probe.toState` exposes it as `state.provisionedCommit`. Staleness is
+`installedCommit !== (guest commit, else the host-side per-instance cache)` — **plain string
+inequality, never a history or compare lookup**, so it keeps working when the Construct repo
+was reset and the compare API 404s (that path still shows "update available, unknown number
+of commits" *and* the yellow Reprovision button). A VM provisioned from a different PC is
+therefore judged correctly, and the host file is only the cache used while the VM is off.
+
+The status-bar item counts the stale instances (`instancestate.countStale`) from those host
+caches alone — no SSH fan-out, right for a VM that is switched off, hidden at zero and
+hidden entirely when there is a single default instance without a registry.
+
 ### The active instance
 
 Precedence (`instances.resolveActive`, unit-tested):
@@ -849,7 +909,7 @@ for another instance. So **every per-instance narrow producer stamps `instance`*
 | `idlePolicy` | the captured target | one VM's policy on one host service |
 | `forwards` | `forwarderInstance` (else the active one) | the `ssh -L` transports terminate on one VM |
 | `audio` | the mic session's slot owner (else the active one) | the `ssh -R` tunnel terminates on one VM |
-| `settings` | the instance whose `scriptsDir` was just read | `.construct-settings.json` is per scripts dir |
+| `settings` | the instance whose store was just read | the VM-scoped half is per instance (see "Per-instance state") |
 
 — and the webview's message router drops any narrow message naming an instance other than
 the one the last full `state` described. One generic line covers all four; `state` itself is
@@ -912,10 +972,11 @@ the click, where re-reading the active instance is hardest to spot:
   simply skips its state refresh.
 - **The scripts dir is part of the capture** (`captureTargetFull` → `{instance, cfg,
   scriptsDir, token}`, resolved through `resolveScriptsDirFor(instance)` *before* the
-  first await): it holds that instance's `.construct-settings.json` (project selection,
-  mic preference, patch toggles). Re-resolving it in the tail of a flow is what let an
-  import of A — reduced at the time to a bare `{name, cfg}` — auto-enable A's newly
-  discovered repos into B's settings file after a switch.
+  first await), and so is the **state store** built from it (`stateStore(instance,
+  scriptsDir)`, see "Per-instance state"): that pair is what holds the project selection,
+  the mic preference and the patch toggles of *that* VM. Re-resolving either in the tail of
+  a flow is what let an import of A — reduced at the time to a bare `{name, cfg}` —
+  auto-enable A's newly discovered repos into B's state after a switch.
 - **A prompt answered after a switch does nothing** — the non-modal "Reprovision now"
   offer captures `scriptsDir` *and* the target before the toast, and a stale answer goes
   through `targetSuperseded` rather than rebuilding the wrong VM with the wrong scripts.
@@ -1124,8 +1185,10 @@ single-VM behaviour) instead of failing to bind.
 
 `host.resolveScriptsDir` gained a third, most-specific source: the active instance's
 pinned `scriptsDir`, then the `construct.scriptsDir` setting, then newest-install
-detection. `.construct-settings.json` stays **per scripts dir** — two instances that
-share a scripts dir deliberately share its settings.
+detection. `.construct-settings.json` stays **per scripts dir**, but it now only carries
+the INSTALL-WIDE half; the VM-scoped half is per instance, so two instances sharing a
+scripts dir share the installed commit and the git identity and nothing else (see
+"Per-instance state").
 
 ### Collision analysis: notifications and mic passthrough (§4.8)
 
@@ -1975,8 +2038,14 @@ says what will actually happen.
   fresh each render. `probe.test.js` covers the emit/parse/format + the omit-when-absent
   contract. (Reprovision = `Provision-AgentVM.ps1 -Action provision`, which runs
   `provision.sh` on the VM, so the same marker step covers first install and reprovision.)
-- **Two commit markers: installed vs provisioned.** `.construct-settings.json` records
-  TWO commits. `installedCommit` = the installed Construct (extension + scripts) — written
+- **Two commit markers: installed vs provisioned — and they live in TWO PLACES.**
+  `installedCommit` is INSTALL-WIDE and stays in `.construct-settings.json`;
+  `provisionedCommit` is PER VM and lives in that instance's own store (see "Per-instance
+  state": the legacy top level of the same file for the default instance,
+  `instances\<name>.json` for every other). The VM ALSO keeps its own copy in
+  `/etc/construct/provisioned.env` (`CONSTRUCT_COMMIT`), which the probe reads and which
+  outranks the host-side cache — so a VM provisioned from a different PC is judged
+  correctly. `installedCommit` = the installed Construct (extension + scripts) — written
   by the INSTALL path (`Auto-Install.ps1`'s non-elevated pre-step, right after it installs
   the vsix) and by `Update-Construct.ps1` on refresh; it drives the "update available"
   banner (`updates.augment` compares `installedCommit...ref` via GitHub → `{update:{available,
@@ -1989,7 +2058,12 @@ says what will actually happen.
   subtext/tooltip — "the VM is behind the installed Construct; reprovision to apply it."
   Conservative: only when BOTH markers are known and differ (an unknown `provisionedCommit`
   — a VM provisioned before this tracking — isn't flagged until its next reprovision records
-  one). It's BEST-EFFORT and CACHED (10 min for
+  one). The comparison is **plain string inequality, never a history or compare lookup**, so
+  it survives a Construct repo whose history was rewritten (the compare API then 404s and the
+  banner says "update available" with no distance, while the per-VM verdict is unaffected).
+  The status-bar instance item additionally shows how many instances are behind
+  (`instancestate.countStale`, from the host caches alone — no SSH fan-out). It's
+  BEST-EFFORT and CACHED (10 min for
   a real result; 60 s for a failure, so a transient blip doesn't hide the banner for
   10 min): no marker, offline, or rate-limited → no `update` key → banner hidden.
   `updateConstruct` (`runUpdateConstruct`) launches `Update-Construct.ps1` on the host
@@ -2008,7 +2082,8 @@ says what will actually happen.
   by the Construct-built T3 Code Desktop app (which passes the same env var, so that console
   closes by itself too) and by hand; those launches can't reach this window's poll, so
   `watchInstalledMarker` (activate) polls the scripts dir's `.construct-settings.json` every
-  3 s and reloads the window when `installedCommit` changes. The script writes that marker
+  3 s and reloads the window when `installedCommit` changes — install-wide by nature, so this
+  one really is the scripts dir's file and not a per-instance store. The script writes that marker
   LAST — after the vsix reinstall — so a reload triggered by it always loads the new panel. The full window reload is
   reserved for a self-update (it swaps the extension itself); ordinary VM-side changes (a
   reprovision, power on/off) are picked up by `syncAutoRefresh`'s `refreshAll` timer,
@@ -2052,8 +2127,9 @@ says what will actually happen.
   mic (Construct is a per-user, per-host VM).
 - **Mic passthrough = ONE persistent setting.** Both switches — the console
   `#voiceSwitch` and the settings `#setMic` — drive the SAME `micPassthrough` key in
-  `.construct-settings.json`. Toggling the console switch persists it (`persistMicPreference`
-  → `host.saveSettings({mic})`, merge-only) and `broadcastSettings` keeps `#setMic` in
+  the ACTIVE INSTANCE's own state (see "Per-instance state"). Toggling the console switch
+  persists it (`persistMicPreference` → `instancestate.saveSettings(activeStore(), {mic})`,
+  merge-only) and `broadcastSettings` keeps `#setMic` in
   sync; saving the settings form reconciles live audio immediately (arm if newly on,
   disarm if newly off) and `broadcastAudio` keeps `#voiceSwitch` in sync. So "enable on
   the main page" sticks. `activate()` → `maybeAutoEnableAudio` reads `micPassthrough` and,
@@ -2070,13 +2146,14 @@ says what will actually happen.
   VM's installed `anthropic.claude-code-*/extension.js`. Applied on audio-enable,
   reverted on disable; only ever touches this VM's copy.
 - **sox in provisioning, everything else extension-driven** (committed: `4931140`).
-- **Settings persistence** uses the same `.construct-settings.json` the installer
-  uses (interop keys `gitUserName`/`gitEmail`/`gitCredentialStore`). **Do NOT
-  persist the agent password** to that file (plaintext); pass it at reinstall time.
-  `src/host.js` owns the file: `mapFromForm` writes the git interop keys plus
-  forward-compat keys the installer can adopt later (`vmMemoryGB`, `vmDiskGB`,
-  `ubuntuRelease`, `vsCodeServeWeb`, `vsCodeTunnel`, `smbShare`, `micPassthrough`),
-  and `saveSettings` merges over the existing file so unmanaged keys (e.g. the
+- **Settings persistence** shares the installer's interop keys
+  (`gitUserName`/`gitEmail`/`gitCredentialStore`). **Do NOT persist the agent password**
+  (plaintext); pass it at reinstall time. `src/host.js` owns the FILE FORMAT and the
+  form↔disk mapping: `mapFromForm` writes the git interop keys plus forward-compat keys the
+  installer can adopt later (`vmMemoryGB`, `vmDiskGB`, `ubuntuRelease`, `vsCodeServeWeb`,
+  `vsCodeTunnel`, `smbShare`, `micPassthrough`). `src/instancestate.js` owns WHICH FILE each
+  key lands in (`readSettings`/`saveSettings` on a store; see "Per-instance state") and
+  merges over what is there so unmanaged keys (e.g. the
   update marker `installedCommit`) survive. Empty text/number fields are omitted
   (don't clobber a stored value with a blank); booleans always write (toggle-off
   persists). Reads strip a UTF-8 BOM (Windows PS 5.1 `Set-Content -Encoding UTF8`).
@@ -2290,11 +2367,18 @@ says what will actually happen.
     `stdio: "ignore"` points its std handles at NUL — the earlier patch spawned powershell.exe
     that way and ran the whole reprovision invisibly. `start` gives PowerShell a fresh console
     with working stdin/stdout; `/wait` lets the hidden cmd relay the exit code to the app. The Desktop side lives in the
-    T3 source overlay (`patches/t3code-release/overlays/apps/desktop/src/updates/
-    ConstructUpdates.ts`), reads the same `.construct-settings.json` markers as `updates.js`
-    and applies the same rules (`isProvisionStale`, compare-API 404 = update available).
+    T3 source overlay (`patches/t3code-<channel>/overlays/apps/desktop/src/updates/
+    ConstructUpdates.ts`, one copy per channel), reads the same markers as `updates.js` —
+    `installedCommit` from `.construct-settings.json`, `provisionedCommit` from the TARGET
+    INSTANCE's own store (`constructInstanceStatePath`) — and applies the same rules
+    (`isProvisionStale`, compare-API 404 = update available).
   - `lib/AgentVm.Instances.ps1` — the PowerShell twin of `src/instances.js`: same file,
     same schema, same normalization and identity rules. Change both together.
+  - `lib/AgentVm.InstanceState.ps1` — the PowerShell twin of `src/instancestate.js`: the
+    per-instance state store, the same install-wide/VM-scoped split and the same
+    default-instance rule (the legacy top level, no `instances\agent-vm.json`). Change both
+    together. It asks `lib/AgentVm.Instances.ps1` for the name rule rather than restating
+    it, in a child scope (the containment `lib/AgentVm.InstanceTarget.ps1` exists for).
   - `lib/AgentVm.Remote.ps1` — the PowerShell `constructd` client `src/remotehost.js`
     mirrors: `New-ConstructApiAuth` (credential providers), `Invoke-ConstructApi`,
     `Wait-ConstructJob`, the DPAPI token store and the shared `<slug>.pin` file.
@@ -2302,7 +2386,9 @@ says what will actually happen.
     its caller's scope) to get the backend's contract functions; `-ServiceUrl`/`-Auth` are
     empty and inert for the local path. Contract: `docs/drivers.md`.
   - `lib/AgentVm.Common.ps1` — `Get-ConstructSettingsPath` (`.construct-settings.json`
-    next to scripts), `Read/Save-ConstructSettings` (merge), `Resolve-GitIdentity`,
+    next to scripts — the INSTALL-WIDE half), `Read/Save-ConstructSettings` (merge),
+    `Set-ConstructProvisionedMarker -InstanceName` (reads `installedCommit` install-wide,
+    writes `provisionedCommit` to that instance's store), `Resolve-GitIdentity`,
     `Get-ConstructBackupDir` (backup dir next to scripts), `Invoke-TuiConfirm`,
     `Get-AgentVmAutomaticCheckpoint`/`Get-AgentVmAutomaticCheckpointId`/
     `Test-AgentVmCheckpointNamePattern` (automatic-checkpoint classification;

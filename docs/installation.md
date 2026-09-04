@@ -289,6 +289,40 @@ panel — from one schema with one set of rules:
 The control panel surfaces registry problems as a toast and in its log, so a hand-edited
 file that does not load says why.
 
+### Per-instance state (`instances\`)
+
+Beside the registry, `%LOCALAPPDATA%\The-Construct\instances\<name>.json` holds the
+settings that belong to **one VM**: the commit it was last provisioned with
+(`provisionedCommit`), its project selection, its microphone preference, its RAM/disk/
+release, its VS Code / SMB / patch toggles, its T3 Code toggles and channel, and its
+automatic-checkpoint preference. It lives outside any scripts checkout, so a Construct
+self-update never touches it and two checkouts cannot disagree about one VM.
+
+```jsonc
+{
+  "version": 1,
+  "instance": "work-vm",
+  "micPassthrough": false,
+  "projects": ["api"],
+  "provisionedCommit": "0e786a3…",
+  "t3codeChannel": "nightly"
+}
+```
+
+Two rules keep the single-VM install unchanged:
+
+- **The default instance has no file here.** `agent-vm` keeps its per-VM settings at the top
+  level of `.construct-settings.json`, exactly where they have always been; no
+  `instances\agent-vm.json` is ever created. Delete the `instances\` directory on a one-VM
+  PC and nothing is lost, because nothing was ever written to it.
+- **Install-wide facts never move here.** `installedCommit`, `constructRepo`, `constructRef`
+  and the git identity stay in `.construct-settings.json` and are shared by every instance;
+  a copy of them inside a per-instance file is ignored on read.
+
+The VM keeps its own copy of the provisioning commit in `/etc/construct/provisioned.env`
+(`CONSTRUCT_COMMIT`), which the control panel reads when it probes — so a VM provisioned
+from another PC is still judged correctly, and this host-side file is only the offline cache.
+
 ### A second local VM
 
 ```powershell
