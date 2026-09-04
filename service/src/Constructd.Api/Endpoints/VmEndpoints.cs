@@ -357,8 +357,12 @@ public static class VmEndpoints
         }
 
         var vm = lookup.Vm!;
+        // sshHost is where SSH is dialled (the service host plus the allocated forward); publicHost is
+        // the name this VM's WEB forwards are advertised under (plan §4.12). Without a
+        // PublicHostPattern the two are the same string, which is what makes this addition invisible
+        // to an existing host.
         return vm.SshForwardPort is int port
-            ? TypedResults.Ok(new EndpointResponse(options.PublicHost, port))
+            ? TypedResults.Ok(new EndpointResponse(options.PublicHost, port, options.PublicHostFor(vm.Name)))
             : Problems.UnavailableYet(
                 $"VM '{vm.Name}' has no ssh forward yet; wait for its creation job to finish.");
     }

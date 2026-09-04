@@ -1301,6 +1301,25 @@ function Test-ConstructRemoteInstanceName {
     return [bool]([regex]::IsMatch($Name, $script:ConstructVmNameRe))
 }
 
+function Get-ConstructEndpointPublicHost {
+    <#
+        The publicHost an endpoint object states (plan section 4.12), or "" when it states
+        none. -Endpoint is what Get-ConstructVmEndpoint / New-ConstructVm return -- a
+        hashtable on some paths, a PSCustomObject on others -- so BOTH shapes are read
+        here rather than at three call sites. An older host service, and any host with no
+        Constructd:PublicHostPattern, states nothing, which is exactly "use the SSH host".
+        Pure.
+    #>
+    param($Endpoint)
+    if ($null -eq $Endpoint) { return "" }
+    if ($Endpoint -is [System.Collections.IDictionary]) {
+        if ($Endpoint.Contains('PublicHost')) { return ([string]$Endpoint['PublicHost']).Trim() }
+        return ""
+    }
+    if ($Endpoint.PSObject.Properties['PublicHost']) { return ([string]$Endpoint.PublicHost).Trim() }
+    return ""
+}
+
 function New-ConstructRemoteInstanceEntry {
     <#
         The registry entry a remote VM is recorded as -- built in ONE place so the
@@ -1311,6 +1330,12 @@ function New-ConstructRemoteInstanceEntry {
         pre-create check) the service URL's own host stands in and the endpoint identity
         is excluded from the check instead of guessed at -- see
         Get-ConstructRemoteInstanceConflict.
+
+        -PublicHost is the name this VM's WEB endpoints live under (plan section 4.12):
+        the service's rendered Constructd:PublicHostPattern, as GET /vms/{name}/endpoint
+        reported it. OPTIONAL and only recorded when it says something the SSH host does
+        not -- a host with no pattern reports its own PublicHost for every VM, and writing
+        that as a per-VM field would be noise the reader has to ignore anyway.
     #>
     param(
         [Parameter(Mandatory)][string]$Name,
@@ -1318,7 +1343,8 @@ function New-ConstructRemoteInstanceEntry {
         [int]$SshPort = 22,
         [string]$ServiceUrl = "",
         [string]$ServiceAuth = "",
-        [string]$Owner = ""
+        [string]$Owner = "",
+        [string]$PublicHost = ""
     )
     $entry = @{
         backend      = 'hyperv-remote'
@@ -1333,6 +1359,7 @@ function New-ConstructRemoteInstanceEntry {
         owner        = $Owner
     }
     if ($ServiceUrl) { $entry['service'] = @{ url = $ServiceUrl; auth = $ServiceAuth } }
+    if ($PublicHost -and $PublicHost -ne $SshHost) { $entry['publicHost'] = $PublicHost }
     return $entry
 }
 
@@ -1425,9 +1452,13 @@ function New-ConstructRemoteVmRecord {
     Write-Ok "Endpoint: $($endpoint.SshHost):$($endpoint.SshPort)"
     # The entry this VM will be recorded as -- built ONCE, so what is checked below is
     # byte-for-byte what is written.
+    # The endpoint's own publicHost when the service stated one (an older service, or one
+    # with no PublicHostPattern, reports none and the field is simply absent from the entry).
+    $endpointPublicHost = Get-ConstructEndpointPublicHost -Endpoint $endpoint
     $entry = New-ConstructRemoteInstanceEntry -Name $Name `
                  -SshHost ([string]$endpoint.SshHost) -SshPort ([int]$endpoint.SshPort) `
-                 -ServiceUrl $ServiceUrl -ServiceAuth $ServiceAuth -Owner $Owner
+                 -ServiceUrl $ServiceUrl -ServiceAuth $ServiceAuth -Owner $Owner `
+                 -PublicHost $endpointPublicHost
     # NOW the FULL registry check, endpoint included: this is the first moment the true
     # address is known (nothing exposes the service's allocated forward -- or its own
     # advertised PublicHost, which can differ from the URL's -- before a VM exists).
@@ -1510,6 +1541,9 @@ function New-ConstructRemoteProvisionArgs {
                                the first VM's ~\.ssh key
             -ConfigBranch      vm-<name>, so this VM's config store is its own ref
             -ServiceUrl/-InstanceName/-VmTokenB64  the guest's link back to the service
+            -PublicHost        the name the VM's WEB endpoints live under (plan 4.12),
+                               when the host service renders one; SSH still goes to the
+                               endpoint above
 
         -VmTokenB64 is added ONLY when a token was actually issued (a rebuild that could
         not consume one still provisions; the guest simply gets no heartbeat credential).
@@ -1530,7 +1564,8 @@ function New-ConstructRemoteProvisionArgs {
         [string]$GitName = "",
         [string]$GitEmail = "",
         [string]$CloneCredB64 = "",
-        [string]$VmToken = ""
+        [string]$VmToken = "",
+        [string]$PublicHost = ""
     )
     $a = @{
         VmHost       = [string]$Endpoint.SshHost
@@ -1554,6 +1589,16 @@ function New-ConstructRemoteProvisionArgs {
     if ($CloneCredB64) { $a['GitCloneCredentialsB64'] = $CloneCredB64 }
     if ($VmToken) {
         $a['VmTokenB64'] = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($VmToken))
+    }
+    # Probe before splat, like the three feature flags below: an installed provisioner
+    # without -PublicHost would fail to BIND, and by this point a rebuild has already
+    # deleted the old VM. Dropping it costs the per-VM web host name, not the install.
+    if ($PublicHost) {
+        if ($script:RemoteProvCmd -and -not $script:RemoteProvCmd.Parameters.ContainsKey('PublicHost')) {
+            Write-Note "This install's Provision-AgentVM.ps1 has no -PublicHost; the VM's web endpoints will use $($Endpoint.SshHost) instead of $PublicHost."
+        } else {
+            $a['PublicHost'] = $PublicHost
+        }
     }
     if ($AutoResolve) { $a['AutoResolve'] = $AutoResolve }
     if ($script:RemoteBound -and ($script:RemoteBound.ContainsKey('Repo') -or $script:RemoteBound.ContainsKey('Ref'))) {
@@ -1662,7 +1707,9 @@ if ($RemoteInstall) {
         $endpoint = $null
         try { $endpoint = Get-ConstructVmEndpoint -Name $instName } catch { $endpoint = $null }
         if (-not $endpoint) {
-            $endpoint = @{ SshHost = [string]$existingEntry.VmHost; SshPort = [int]$existingEntry.SshPort }
+            $entryPublicHost = ""
+            if ($existingEntry.PSObject.Properties['PublicHost'] -and $existingEntry.PublicHost) { $entryPublicHost = [string]$existingEntry.PublicHost }
+            $endpoint = @{ SshHost = [string]$existingEntry.VmHost; SshPort = [int]$existingEntry.SshPort; PublicHost = $entryPublicHost }
             Write-Warning "The host service did not report an endpoint for '$instName'; using the address recorded in the instance registry ($($endpoint.SshHost):$($endpoint.SshPort))."
         }
 
@@ -1745,7 +1792,8 @@ if ($RemoteInstall) {
             $provArgs = New-ConstructRemoteProvisionArgs -Name $instName -Endpoint $endpoint `
                             -ServiceUrl $svcUrl -ConfigBranch $instBranch `
                             -Projects $reprovProjects -GitName $reprovGit.Name -GitEmail $reprovGit.Email `
-                            -CloneCredB64 $reprovCloneCredB64
+                            -CloneCredB64 $reprovCloneCredB64 `
+                            -PublicHost (Get-ConstructEndpointPublicHost -Endpoint $endpoint)
             if ($PSBoundParameters.ContainsKey('AgentPassword')) { $provArgs['AgentPassword'] = $AgentPassword }
             try {
                 Write-Step "Reprovisioning '$instName'"
@@ -2007,7 +2055,8 @@ if ($RemoteInstall) {
     $provArgs = New-ConstructRemoteProvisionArgs -Name $instName -Endpoint $endpoint `
                     -ServiceUrl $svcUrl -ConfigBranch "vm-$instName" `
                     -Projects $chosenProjects -GitName $gitId.Name -GitEmail $gitId.Email `
-                    -CloneCredB64 $chosenCloneCredB64 -VmToken $vmToken
+                    -CloneCredB64 $chosenCloneCredB64 -VmToken $vmToken `
+                    -PublicHost (Get-ConstructEndpointPublicHost -Endpoint $endpoint)
     $provArgs['AgentPassword'] = $chosenAgentPassword
     if ($restoreDir) { $provArgs['RestoreDir'] = $restoreDir }
 

@@ -115,11 +115,11 @@ Everything lives under `/api/v1`, speaks JSON with camelCase properties and came
 | `GET /audit` | admin | Audit trail, newest first, `?limit=`. |
 | `GET /vms` | user | The caller's VMs; all of them for an admin. |
 | `POST /vms` | user | `{name, cpu, ramGb, diskGb, opts:{nested?, automaticCheckpoints?, idlePolicy?}}` → `202 {jobId}`. Name uniqueness and the quota are enforced by the insert itself. |
-| `GET /vms/{name}` | owner/admin | The VM including its forwards. Never exposes the VM token hash. |
+| `GET /vms/{name}` | owner/admin | The VM including its `publicHost` and its forwards. Never exposes the VM token hash. |
 | `DELETE /vms/{name}` | owner/admin | → `202 {jobId}`; accepting it fences the VM (see below) and the job removes the VM, its forwards and its SSH port. |
 | `POST /vms/{name}/power` | owner/admin | `{action: start\|stop\|save}`, synchronous, returns the new state. `save` needs the driver's suspend capability. |
 | `GET /vms/{name}/state` | owner/admin | Live state from the driver (and refreshes the registry). |
-| `GET /vms/{name}/endpoint` | owner/admin | `{sshHost, sshPort}` — the service host plus the allocated forward. Until that forward exists the call answers `409`: the VM sits on the host's own switch (`SwitchName`, `Default Switch` unless configured) and has no client-dialable address yet. |
+| `GET /vms/{name}/endpoint` | owner/admin | `{sshHost, sshPort, publicHost}` — the service host plus the allocated forward, and the name this VM's **web** forwards are advertised under (`PublicHostPattern`, else `PublicHost`; SSH is always dialled on `sshHost`). Until that forward exists the call answers `409`: the VM sits on the host's own switch (`SwitchName`, `Default Switch` unless configured) and has no client-dialable address yet. |
 | `GET /vms/{name}/forwards` | owner/admin **or that VM's own token** | Lists forwards, each with its client ack inline (see below). |
 | `POST /vms/{name}/forwards` | owner/admin **or that VM's own token** | `{vmPort, label, target}` → `{id, publicPort?, url?}`. `target` defaults to `client`. |
 | `DELETE /vms/{name}/forwards/{id}` | owner/admin **or that VM's own token** | Removes one forward. |
@@ -147,7 +147,7 @@ data: {"at":"2026-09-01T20:44:16+00:00","text":"building autoinstall ISO for wor
 
 event: state
 data: {"id":"…","kind":"create-vm","state":"succeeded",
-       "result":{"name":"work-vm","endpoint":{"sshHost":"…","sshPort":2201},"vmToken":"<once>"}}
+       "result":{"name":"work-vm","endpoint":{"sshHost":"…","sshPort":2201,"publicHost":"…"},"vmToken":"<once>"}}
 ```
 
 The VM creation job is the hybrid split of plan §4.4: build the ISO → create the VM → wait for SSH →
@@ -372,7 +372,8 @@ Bound from the `Constructd` section of `appsettings.json`, from environment vari
 | `CertThumbprint` | – | Certificate from `LocalMachine\My` (what the client pins at enrollment). |
 | `ScriptsDir` | – | The Construct checkout the service invokes (`drivers\`, `lib\`, `bin\`). Validated at startup. |
 | `WslDistro` | `Ubuntu` | WSL distro used for the ISO build. Empty uses WSL's default distro (no `-d`). |
-| `PublicHost` | `localhost` | LAN name/IP that endpoints and forwards are advertised on. |
+| `PublicHost` | `localhost` | LAN name/IP that endpoints and forwards are advertised on, and what the API certificate is bound to. |
+| `PublicHostPattern` | – (empty) | Per-VM host name template, e.g. `{name}.vpn.example`. With a wildcard DNS record pointing at this host, every VM gets its OWN name, so two VMs' web UIs are separate origins (browsers scope cookies by host, not by port). `{name}` must appear exactly once and the pattern must render to a valid DNS name for every VM name — checked at startup. Empty = every VM is advertised on `PublicHost`. The certificate is unaffected. |
 | `SwitchName` | `Default Switch` | Hyper-V virtual switch new VMs are attached to. |
 | `VmStorageRoot` | – (empty) | Folder the per-VM VHDX is created in. Empty leaves the path to the driver, i.e. Hyper-V's own default folder — the same location a local install uses. |
 | `ListenAddress` | `0.0.0.0` | `listenaddress=` of the host's portproxy rules. Narrow it to one LAN address on a multi-homed host. |
@@ -779,10 +780,16 @@ constructd admin users list [--json]
 constructd admin tokens issue DOMAIN\alice --label laptop [--json]
 constructd admin tokens revoke-all DOMAIN\alice
 constructd admin forwards reconcile
+constructd admin host status [--json]
 constructd admin iso build [--force] [--json]
 constructd admin iso status [--json]
 constructd admin iso prune [--json]
 ```
+
+**`admin host status`** prints how this host advertises its VMs: `PublicHost`, the configured
+`PublicHostPattern` (or that there is none), the name an example VM would be advertised as, the
+wildcard DNS record the pattern needs, and the two forward ranges. It is the quickest way to tell
+whether the wildcard is actually in play before hunting for a broken URL.
 
 **`admin iso …` is how install media exists at all in the default `Prebuilt` mode**, and it is run by
 the interactive administrator — the service cannot do it (WSL refuses to run as LocalSystem). The

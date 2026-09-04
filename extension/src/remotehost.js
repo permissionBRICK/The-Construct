@@ -599,12 +599,38 @@ function createClient(opts = {}) {
     listVms: () => request("GET", "/vms"),
     getVm: (name) => request("GET", `/vms/${encodeURIComponent(name)}`),
     getState: (name) => request("GET", `/vms/${encodeURIComponent(name)}/state`),
-    getEndpoint: (name) => request("GET", `/vms/${encodeURIComponent(name)}/endpoint`),
+    getEndpoint: async (name) =>
+      readEndpoint(await request("GET", `/vms/${encodeURIComponent(name)}/endpoint`)),
     power: (name, action) => request("POST", `/vms/${encodeURIComponent(name)}/power`, { action }),
     createVm: (spec) => request("POST", "/vms", spec),
     deleteVm: (name) => request("DELETE", `/vms/${encodeURIComponent(name)}`),
     getJob: (id) => request("GET", `/jobs/${encodeURIComponent(id)}`),
   };
+}
+
+/**
+ * The ONE reading of an endpoint document — `GET /vms/{name}/endpoint`, and the `endpoint`
+ * object inside a creation job's result, which have the same shape:
+ *
+ *     { sshHost: "buildbox.local", sshPort: 2201, publicHost: "work-vm.vpn.example" }
+ *
+ * `publicHost` (plan §4.12) is where this VM's WEB endpoints live — the service's rendered
+ * `Constructd:PublicHostPattern`. SSH is dialled on `sshHost` either way, which is why
+ * instances.toSshCfg has no idea this field exists. A service that does not send it (an
+ * older build, or one with no pattern) is NOT a special case for the caller: `publicHost`
+ * falls back to `sshHost`, which is exactly what "no pattern configured" means there.
+ *
+ * Returns null when the document carries no usable ssh host. Pure; mirrors
+ * ConvertFrom-ConstructVmEndpoint in lib/AgentVm.Remote.ps1.
+ */
+function readEndpoint(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  const sshHost = typeof body.sshHost === "string" ? body.sshHost.trim() : "";
+  if (!sshHost) return null;
+  const port = Number(body.sshPort);
+  const sshPort = Number.isInteger(port) && port >= 1 && port <= 65535 ? port : 22;
+  const stated = typeof body.publicHost === "string" ? body.publicHost.trim() : "";
+  return { sshHost, sshPort, publicHost: stated || sshHost };
 }
 
 /**
@@ -629,5 +655,5 @@ module.exports = {
   formatFingerprint, fingerprintsMatch, readPin, writePin, fetchFingerprint,
   apiPath, mapError, apiError, parseBody, nodeHttp, pinnedHttpsAgent,
   psSingleQuote, buildDelegateScript, buildDelegateLaunch, parseDelegateOutput, runDelegate,
-  createClient, mapVmState,
+  createClient, mapVmState, readEndpoint,
 };

@@ -65,8 +65,10 @@ you dial* change.
    **builds the autoinstall ISO as you, through your WSL**, and registers `constructd` as a
    Windows service. See
    [`service/README.md`](../service/README.md) for the configuration keys
-   (`PublicHost`, `SshForwardPorts`, the idle defaults, the certificate) and the full
-   parameter table. Publish the service first
+   (`PublicHost`, `PublicHostPattern`, `SshForwardPorts`, the idle defaults, the
+   certificate) and the full parameter table. If you want one host name per VM — and you do
+   as soon as two VMs serve web UIs — add `-PublicHostPattern` and a wildcard DNS record
+   (see *Per-VM public host names* below). Publish the service first
    (`dotnet publish service\src\Constructd.Api -c Release -r win-x64 --self-contained true
    -o <publish dir>`); no .NET runtime is then needed on the host. Re-run the installer
    after publishing a new build — it updates binaries, settings and the service in place.
@@ -322,9 +324,12 @@ pixel-identical), the instance picker lists local and remote VMs side by side, a
   `CONSTRUCT_EXTERNAL_HOST`, i.e. the service host) points at an address where nothing is
   listening on 445, and `-MountRepoShare` has nothing to map. Reach the files over
   Remote-SSH instead. Known gap, recorded in the plan's IPv6/SMB follow-up.
-* **Web ports in general.** OpenCode, T3 Code and `code serve-web` are not mapped
-  automatically either. Use [`construct expose <port>`](expose.md) — that is what it is
-  for, and its client target works identically in both modes.
+* **Web ports other than OpenCode and T3.** Those two *are* mapped automatically: a
+  service-managed VM requests one host forward for each of them at provision time (see
+  *Per-VM public host names, and the web ports of a remote VM* below). Everything else —
+  `code serve-web`, your own dev servers — is manual: use
+  [`construct expose <port>`](expose.md), whose client target works identically in both
+  modes and needs no host-forward policy.
 
 **What the panel will NOT do for a remote instance:**
 
@@ -441,6 +446,121 @@ new unit. Details in [`construct expose` § Activity heartbeat](expose.md#activi
 | "this PC's instance registry would refuse …" | an identity clash with an instance you already have — the message names it and the field (a shared `configBranch`, `keyName`, `hostAlias`, `vmName`, or the same `sshHost` **and** `sshPort`). Before the VM is created nothing has happened; after it, the create is rolled back. See the section below. |
 | `Refusing to talk to the Construct host service … over plain http` | you gave an `http://` URL for a host that is not this machine. There is nothing to pin and nothing to encrypt, so a token or a Windows credential would cross the network in clear. Both clients refuse before sending anything. Use `https`; plain http is accepted only for a service on `localhost` (which is how the tests drive the fake service). |
 | A warning about sending a Windows credential over plain http | you pointed at a service on **this** machine over `http://`. That is allowed, but Kerberos/NTLM is not encrypted in transit there, so the client says so once. |
+
+## Per-VM public host names, and the web ports of a remote VM
+
+A remote VM sits on the host's own switch, so the only way to a port inside it is a forward
+the service publishes. Two things follow, and they are why this section exists.
+
+### Why one host name per VM
+
+Two VMs' web UIs on one host would otherwise be `https://buildbox:2301` and
+`https://buildbox:2302` — **the same origin as far as cookies are concerned**, because a
+browser scopes cookies by host and ignores the port. Logging into the second T3 web GUI
+logs you out of the first. The fix is a name per VM:
+
+1. **One wildcard DNS record**, pointing at the service host:
+
+   ```
+   *.vpn.example.        A     10.0.0.7        ; or CNAME buildbox.example.local.
+   ```
+
+   Any DNS you already run works — the domain controller's zone, a home router, a VPN's
+   resolver. Nothing about it is Construct-specific: every name under the wildcard has to
+   resolve to the host the service runs on, because that is where the forwards are
+   published. A **hosts file cannot do this**: it has no wildcards, so trying the feature
+   out that way means one explicit line per VM (`10.0.0.7  work-vm.vpn.example`) on every
+   client that opens the UI — fine for a first look, not a deployment.
+
+2. **One service setting**, `Constructd:PublicHostPattern`:
+
+   ```powershell
+   .\service\host\Install-ConstructHost.ps1 -PublicHostPattern "{name}.vpn.example"
+   ```
+
+   `{name}` is substituted with the VM's name (`work-vm` → `work-vm.vpn.example`). It must
+   appear **exactly once**, and the pattern must render a valid DNS name for *every* legal
+   VM name — both the installer and the service check that at startup, by rendering the
+   shortest and the longest name the one instance-name rule allows. A fixed part in the
+   *same label* as the name (`vm-{name}.vpn.example`) is therefore refused: the longest
+   instance name is already a full 63-character label. Put it in its own label
+   (`{name}.vm.vpn.example`).
+
+   ```powershell
+   & $constructd admin host status      # what this host advertises, with an example rendering
+   ```
+
+**The certificate is untouched.** The API certificate stays bound to `-PublicHost` and
+clients keep pinning it by fingerprint; the pattern only changes the names *VMs* are
+advertised under. The T3 web GUI inside each VM serves its own HTTPS with its own local CA
+(`bin/setup-t3-https.sh`), whose certificate now carries the VM's public name in its SANs —
+which is what the provisioner imports into this PC's trust store.
+
+Unset (the default) means every VM is advertised on `PublicHost`, exactly as before this
+setting existed. The target design is one LAN address per VM (Proxmox); the wildcard is the
+Hyper-V-era bridge.
+
+### What the client does with it
+
+`GET /vms/{name}/endpoint` now answers `{sshHost, sshPort, publicHost}`. **SSH is unchanged**
+— it always dials `sshHost:sshPort`, i.e. the service host plus the forward it allocated.
+`publicHost` is recorded in the instance registry (`docs/installation.md`, *The instance
+registry*) and handed to `Provision-AgentVM.ps1` as `-PublicHost`, which passes it to the
+guest as `CONSTRUCT_EXTERNAL_HOST`. The guest's T3 certificate SANs, its
+`T3CODE_PUBLIC_BASE_URL` and every URL it prints then use the VM's own name.
+
+### The forwards the guest asks for
+
+At provision time a **service-managed** VM requests one host forward per enabled web service,
+through the same `construct expose --to host` machinery an agent uses and with its own scoped
+token (`docs/expose.md`):
+
+| Service | VM port | Enabled when |
+|---|---|---|
+| OpenCode server | `OPENCODE_PORT` (4096) | `opencode` is in `AI_TOOLS` |
+| T3 Code web GUI | `T3CODE_HTTPS_PORT` (5178), or `T3CODE_PORT` (5177) without HTTPS | `T3CODE=true` |
+
+The requests are **get-or-create** (`--reuse`), so a reprovision never allocates a second
+public port for the same VM port, and the forwards survive your PC being off. The result is
+written to `/etc/construct/host-forwards` in the guest — one `KEY=<host>:<port>` line per
+service, plus `T3_URL=<origin>` once T3 is up — which the provisioner reads back to:
+
+* register the OpenCode server entry at `http://<publicHost>:<forwarded port>` (the VM's own
+  `:4096` is not reachable from your PC at all), and
+* print the forwarded T3 and OpenCode URLs in its closing summary.
+
+T3's own advertised origin uses the forwarded port too: `provision.sh` requests the forward
+*before* installing T3 and passes the public port to `bin/setup-t3-https.sh`, so
+`T3CODE_PUBLIC_BASE_URL` — and the pairing links and DPoP proofs bound to it — point at the
+port you can actually reach. That holds **with or without HTTPS**: with `T3CODE_HTTPS=false`
+the forward is for the plain listener and the advertised origin is
+`http://<publicHost>:<forwarded port>`, which is equally the only address a client can reach.
+The guest banner, the panel's T3 entry and the provisioner's summary all follow that origin.
+
+Because the forward is requested *before* T3 is set up, the forward alone does not say what
+is listening on it: a request for the TLS port whose HTTPS setup then failed looks exactly
+like a working plain forward. So the guest records the **effective** origin as a second line,
+`T3_URL=`, taken from `T3CODE_PUBLIC_BASE_URL` and only when that origin really names the
+forwarded port. The provisioner prints that line and nothing else — when the HTTPS setup did
+not come up it says so instead of advertising a TLS port that serves nothing.
+
+**If a forward is missing, no dead link is written.** A remote VM sits on the host's internal
+switch, so `http://<sshHost>:4096` could never connect — that direct URL is only ever used on
+a **local** install. On a service-managed VM the OpenCode entry is written **only** from a
+real forward; otherwise it is omitted and the provisioner says which case it is:
+
+| Case | What happens |
+|---|---|
+| forward allocated | the OpenCode server entry is `http://<publicHost>:<port>`, and the summary prints it |
+| `--no-host-forwards` for the VM's owner | the guest records `denied`; the entry is omitted and the note points at `construct expose` |
+| the request failed, or the status could not be read | the entry is omitted with "no forward was allocated"; re-run provisioning, or use a client forward for the session |
+
+The extension's client forwarder (`construct expose` with the default `client` target) always
+works and needs no host policy — it just lives only while VS Code is connected.
+
+**A local Hyper-V VM does none of this**: NAT already reaches it at its own name, no request
+is made, `/etc/construct/host-forwards` does not exist, and the OpenCode URL and the summary
+text are exactly what they have always been.
 
 ## Several VMs on one host service, and what the registry refuses
 

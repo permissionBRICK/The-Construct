@@ -53,6 +53,14 @@
     LAN name clients dial and the self-signed certificate is bound to. Defaults to
     this machine's name.
 
+.PARAMETER PublicHostPattern
+    OPTIONAL per-VM host name template, e.g. "{name}.vpn.example". With a wildcard DNS
+    record (*.vpn.example) pointing at this host, every VM is advertised under its OWN
+    name, which is what keeps two VMs' web UIs apart for a browser (cookies are scoped
+    by host, not by port). "{name}" must appear exactly once. Left empty -- the default
+    -- every VM is advertised on -PublicHost, exactly as before. The certificate is
+    unaffected either way: it stays bound to -PublicHost.
+
 .PARAMETER DataDir
     Where the database and the ISO cache live.
 
@@ -113,6 +121,10 @@ param(
     [string]$ListenUrl = "https://0.0.0.0:7462",
 
     [string]$PublicHost = $env:COMPUTERNAME,
+
+    # Empty (the default) writes no PublicHostPattern setting at all, so an existing
+    # host's appsettings.Production.json keeps exactly the keys it has today.
+    [string]$PublicHostPattern = "",
 
     [string]$DataDir = "C:\ProgramData\Construct\service",
 
@@ -292,6 +304,41 @@ function Split-PortRange {
         throw "$Name must be a port range like 2201-2299 (1-65535, start <= end); got '$Range'."
     }
     return @{ Start = $start; End = $end }
+}
+
+function Test-PublicHostPattern {
+    <#
+        The SAME rule the service applies at startup
+        (Constructd.Core.Logic.PublicHostPatternRules): "{name}" exactly once, and a
+        rendering that is a DNS name for EVERY valid VM name -- proved by rendering the
+        shortest and the longest one rather than by reasoning about the pattern. Returns
+        the reason it is unusable, or "" when it is fine (an empty pattern is fine: it
+        means "unset").
+
+        Checked HERE so a typo is a refusal before anything on this machine is touched,
+        rather than a service that writes its settings and then refuses to start.
+    #>
+    param([string]$Pattern)
+
+    if (-not $Pattern) { return "" }
+    $value = $Pattern.Trim()
+    $count = ([regex]::Matches($value, [regex]::Escape("{name}"))).Count
+    if ($count -eq 0) {
+        return "-PublicHostPattern '$value' does not contain '{name}', so every VM would be advertised on the same host name. Write it as '{name}.vpn.example', or leave it empty to use -PublicHost for every VM."
+    }
+    if ($count -gt 1) {
+        return "-PublicHostPattern '$value' contains '{name}' $count times; it must appear exactly once."
+    }
+    # a, and the longest instance name the one name rule allows (63 characters).
+    $probes = @("a", ("a" + ("b" * 61) + "c"))
+    $hostNameRe = '\A(?=.{1,253}\z)[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\z'
+    foreach ($probe in $probes) {
+        $rendered = $value.Replace("{name}", $probe)
+        if (-not [regex]::IsMatch($rendered, $hostNameRe)) {
+            return "-PublicHostPattern '$value' does not render to a valid DNS name for every VM name: the VM '$probe' would be advertised as '$rendered'."
+        }
+    }
+    return ""
 }
 
 function Get-ListenPort {
@@ -861,6 +908,12 @@ if ($IsoBuildOnly) {
     exit 0
 }
 
+$patternProblem = Test-PublicHostPattern -Pattern $PublicHostPattern
+if ($patternProblem) { throw $patternProblem }
+if ($PublicHostPattern) {
+    Write-Ok "Per-VM public host names: $PublicHostPattern (needs a wildcard DNS record for $($PublicHostPattern.Replace('{name}', '*')) pointing at this host)"
+}
+
 $listenPort = Get-ListenPort -Url $ListenUrl
 $sshRange   = Split-PortRange -Range $SshPortRange -Name "-SshPortRange"
 $appRange   = Split-PortRange -Range $AppPortRange -Name "-AppPortRange"
@@ -1059,6 +1112,14 @@ $settings = [ordered]@{
             Sha256                = $IsoSha256
         }
     }
+}
+
+# Optional per-VM host names (plan section 4.12). Added ONLY when the admin asked for
+# one, so a host that does not use them keeps a settings file with exactly the keys it
+# has always had -- and the service, which refuses to start on an unusable pattern,
+# never sees the key at all.
+if ($PublicHostPattern) {
+    $settings.Constructd['PublicHostPattern'] = $PublicHostPattern
 }
 
 $settingsPath = Join-Path $PublishDir "appsettings.Production.json"
