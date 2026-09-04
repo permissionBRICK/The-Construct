@@ -114,6 +114,11 @@ param(
     [string]$VmName = "Agent-VM",
     [string]$Projects,
     [string]$AgentPassword,
+    # Clone credentials for private http(s) repos, pre-built for an unattended run: the
+    # base64 of newline-joined `<proto>://<user>:<token>@<host>` lines (exactly what the
+    # interactive "Git credentials for cloning project repos" screen produces). When
+    # given, that screen is skipped.
+    [string]$GitCloneCredentialsB64 = "",
     [string]$GitUserName,
     [string]$GitEmail,
     # Forwarded down (Create-AgentVM.ps1 -> Provision-AgentVM.ps1): patch the Claude
@@ -2220,7 +2225,7 @@ if ($RemoteInstall) {
                 $reprovProjDir = if (Get-Command Get-ConstructConfigProjectsDir -ErrorAction SilentlyContinue) {
                     Get-ConstructConfigProjectsDir -ScriptsDir $PSScriptRoot
                 } else { Join-Path $PSScriptRoot 'projects' }
-                $reprovCloneCredB64 = Resolve-GitCloneCredential -ProjectsDir $reprovProjDir -Names $reprovProjects
+                $reprovCloneCredB64 = if ($GitCloneCredentialsB64) { $GitCloneCredentialsB64 } else { Resolve-GitCloneCredential -ProjectsDir $reprovProjDir -Names $reprovProjects }
             }
 
             Show-AllSet @(
@@ -2433,7 +2438,12 @@ if ($RemoteInstall) {
             $ccParams['NoPrompt'] = $true
             Write-Note "Reusing the saved git credentials from the restore for cloning -- skipping the credential prompt."
         }
-        $chosenCloneCredB64 = Resolve-GitCloneCredential @ccParams
+        if ($GitCloneCredentialsB64) {
+            $chosenCloneCredB64 = $GitCloneCredentialsB64
+            Write-Note "Using the clone credentials passed with -GitCloneCredentialsB64 -- skipping the credential prompt."
+        } else {
+            $chosenCloneCredB64 = Resolve-GitCloneCredential @ccParams
+        }
     }
 
     $chosenAgentPassword = $AgentPassword
@@ -2671,7 +2681,7 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
             $reprovProjDir = if (Get-Command Get-ConstructConfigProjectsDir -ErrorAction SilentlyContinue) {
                 Get-ConstructConfigProjectsDir -ScriptsDir $PSScriptRoot
             } else { Join-Path $PSScriptRoot 'projects' }
-            $reprovCloneCredB64 = Resolve-GitCloneCredential -ProjectsDir $reprovProjDir -Names $reprovProjects
+            $reprovCloneCredB64 = if ($GitCloneCredentialsB64) { $GitCloneCredentialsB64 } else { Resolve-GitCloneCredential -ProjectsDir $reprovProjDir -Names $reprovProjects }
         }
 
         # No download/build/create on this path -- just re-run the provisioner
