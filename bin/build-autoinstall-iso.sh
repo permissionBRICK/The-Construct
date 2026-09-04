@@ -305,7 +305,12 @@ renew_dhcp() {
 
   if command -v networkctl >/dev/null 2>&1; then
     for _link in $(networkctl list --no-legend 2>/dev/null | awk '$3 == "ether" { print $2 }'); do
-      if networkctl renew "${_link}" >/dev/null 2>&1; then _renewed=0; fi
+      # A RENEW (DHCPREQUEST) is not enough for Hyper-V's Default Switch resolver, which
+      # keeps the name it learnt with the first lease; a reconfigure restarts the client
+      # (DISCOVER with the new hostname), which is what makes <name>.mshome.net appear
+      # (field, 2026-09-04). renew stays as the fallback for older networkctl.
+      if networkctl reconfigure "${_link}" >/dev/null 2>&1; then _renewed=0
+      elif networkctl renew "${_link}" >/dev/null 2>&1; then _renewed=0; fi
     done
   fi
 
@@ -412,10 +417,19 @@ if [[ "${GENERIC_MEDIA}" -eq 1 ]]; then
     - echo ${HOSTNAME_UNIT_B64} | base64 -d > /target/etc/systemd/system/construct-hostname.service
     - chmod 0644 /target/etc/systemd/system/construct-hostname.service
     - ln -sf /etc/systemd/system/construct-hostname.service /target/etc/systemd/system/multi-user.target.wants/construct-hostname.service
+    - mkdir -p /target/etc/sudoers.d
+    - echo '${VM_USER} ALL=(ALL) NOPASSWD:ALL' > /target/etc/sudoers.d/90-construct-seed
+    - chmod 0440 /target/etc/sudoers.d/90-construct-seed
   packages:
     - linux-cloud-tools-virtual
 EOF
 fi
+# GENERIC media carries a seed password nobody knows (the service mints and discards it),
+# so the provisioner cannot escalate through `sudo -S`: the seed user gets passwordless
+# sudo from the media itself. provision.sh grants the same later on every VM, and the
+# bootstrap key is still removed at the end of provisioning -- the seed user's only
+# credential from outside is the key this PC holds. Local media is untouched (its seed
+# password is known to the installer).
 
 # --- Patch GRUB: prepend an autoinstall entry, make it the default ----------
 xorriso -osirrox on -indev "${SRC_ISO}" \

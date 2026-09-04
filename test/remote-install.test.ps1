@@ -420,6 +420,7 @@ ok "args: NO -VmTokenB64 when no token was issued (a rebuild still provisions)" 
 ok "args: nothing local leaks in (-VmName would name a Hyper-V VM here)" (-not $args1.ContainsKey('VmName'))
 ok "args: -Repo/-Ref only when the caller bound them" (-not $args1.ContainsKey('Repo'))
 $script:RemoteBound = @{ Repo = $true }
+ok "args: the pre-built media's seed user ('construct', the service default) is passed" ($args1['SeedUser'] -eq 'construct')
 $args2 = New-ConstructRemoteProvisionArgs -Name 'work-vm' -Endpoint $ep -ServiceUrl 'https://b:7462' -ConfigBranch 'vm-work-vm'
 ok "args: ...and then BOTH are passed as a pair" ($args2['Repo'] -eq 'owner/repo' -and $args2['Ref'] -eq 'main')
 $script:RemoteBound = @{}

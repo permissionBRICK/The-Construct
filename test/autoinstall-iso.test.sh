@@ -207,6 +207,10 @@ ok "the unit is enabled by symlink (no in-target execution)" \
   contains "${kvp_user_data}" "/target/etc/systemd/system/multi-user.target.wants/construct-hostname.service"
 ok "the identity source is delivered as a config file, not baked into the script" \
   contains "${kvp_user_data}" "/target/etc/default/construct-hostname"
+ok "the seed user gets passwordless sudo on generic media (its password is minted and discarded)" \
+  contains "${kvp_user_data}" "NOPASSWD:ALL' > /target/etc/sudoers.d/90-construct-seed"
+ok "default media does not grant it (its seed password is known)" \
+  fails grep -q 'sudoers.d/90-construct-seed' "${now}/nocloud/user-data"
 ok "the banner does not promise a hostname the media does not have" \
   fails grep -q 'agent-vm.mshome.net' "${kvp}/nocloud/user-data"
 ok "grub.cfg is the same in both modes" is "$(cat "${now}/grub.cfg")" "$(cat "${kvp}/grub.cfg")"
