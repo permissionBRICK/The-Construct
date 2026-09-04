@@ -1,11 +1,14 @@
 import { ArrowUpCircleIcon, LoaderIcon, RefreshCwIcon, ServerCogIcon } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 
+import { connectPairing as connectPairingAtom } from "~/connection/onboarding";
 import { isElectron } from "../../env";
 import { cn } from "../../lib/utils";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { useEnvironments } from "../../state/environments";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { startConstructUpdate } from "../constructUpdate";
+import { linkConstructInstance } from "../constructInstances.link";
 import {
   constructLinkedRemotes,
   getConstructRowDetail,
@@ -211,9 +214,12 @@ function ConstructProviderSectionContent() {
 }
 
 /**
- * One linked remote. A row this PC's registry recognises offers **Reprovision** for THAT
- * instance (`reprovisionConstructInstance`, which runs `Update-T3Code.ps1 -InstanceName
- * <name>`); anything else is read-only and says why.
+ * One linked remote, or one UNLINKED instance. A linked row this PC's registry
+ * recognises offers **Reprovision** for THAT instance (`reprovisionConstructInstance`,
+ * which runs `Update-T3Code.ps1 -InstanceName <name>`); a remote that matches nothing
+ * is read-only and says why. An instance of the registry that runs T3 but that no
+ * remote matches offers **Link** — the manual counterpart of the automatic link
+ * (ConstructAutoLink.tsx), which also re-adds a connection the user removed by hand.
  */
 function ConstructInstanceRow({
   row,
@@ -225,6 +231,45 @@ function ConstructInstanceRow({
   const [isBusy, setIsBusy] = useState(false);
   const detail = getConstructRowDetail(row);
   const offer = row.provisionStale || row.t3UpdateAvailable;
+  const connectPairing = useAtomCommand(connectPairingAtom, { reportFailure: false });
+
+  const link = useCallback(async () => {
+    const bridge = window.desktopBridge;
+    if (!bridge || row.instanceName === null || isBusy) return;
+    if (typeof bridge.linkConstructInstance !== "function") {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: `Could not link ${row.instanceName}`,
+          description: "This Desktop build cannot mint pairing links; pair the VM from the Construct panel instead.",
+        }),
+      );
+      return;
+    }
+    setIsBusy(true);
+    try {
+      const outcome = await linkConstructInstance({ bridge, name: row.instanceName, connectPairing });
+      if (outcome.ok) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "success",
+            title: `Linked ${row.instanceName}`,
+            description: "The VM's T3 server was added as a remote environment. It reconnects on app startup.",
+          }),
+        );
+      } else if (!outcome.interrupted) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: `Could not link ${row.instanceName}`,
+            description: outcome.error,
+          }),
+        );
+      }
+    } finally {
+      setIsBusy(false);
+    }
+  }, [connectPairing, isBusy, row.instanceName]);
 
   const reprovision = useCallback(async () => {
     const bridge = window.desktopBridge;
@@ -294,7 +339,20 @@ function ConstructInstanceRow({
         </span>
       </span>
       <span className="flex h-5 shrink-0 items-center">
-        {row.instanceName === null ? null : (
+        {row.instanceName === null ? null : !row.linked ? (
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            disabled={isBusy || !row.canLink || disabledReason !== null}
+            title={disabledReason ?? (row.canLink ? undefined : row.note)}
+            onClick={() => void link()}
+            aria-label={`Link ${row.instanceName}`}
+          >
+            {isBusy ? <LoaderIcon className={cn("size-3", "animate-spin")} /> : null}
+            Link
+          </Button>
+        ) : (
           <Button
             type="button"
             size="xs"

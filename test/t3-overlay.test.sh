@@ -89,6 +89,37 @@ ok "pristine worktree of the T3 source" 0
     [[ -e "${work}/${d}" ]] || { mkdir -p "$(dirname "${work}/${d}")"; ln -sfn "${src}/${d}" "${work}/${d}"; }
   done
 
+# The WORKSPACE packages the inventory transforms (@t3tools/contracts and friends) must
+# resolve to the WORKTREE's copy. An app's node_modules/@t3tools/<pkg> is a relative
+# symlink pnpm wrote into the cache; followed from a node_modules that is itself a link
+# into the cache, it lands in the cache's (previously transformed) package -- and a
+# contract this inventory adds would be invisible to the typecheck and the tests. So a
+# node_modules that carries @t3tools becomes a real directory of per-entry links, with
+# each @t3tools package re-pointed at ${work}/packages/<name> when the worktree has it.
+shadow_workspace_links() {
+  local nm="$1" cache_nm="${src}/$1" work_nm="${work}/$1" entry name pkg
+  [[ -d "${cache_nm}/@t3tools" ]] || return 0
+  rm -f "${work_nm}"; mkdir -p "${work_nm}"
+  for entry in "${cache_nm}"/* "${cache_nm}"/.[!.]*; do
+    [[ -e "${entry}" || -L "${entry}" ]] || continue
+    name="$(basename "${entry}")"
+    [[ "${name}" == "@t3tools" ]] && continue
+    ln -sfn "${entry}" "${work_nm}/${name}"
+  done
+  mkdir -p "${work_nm}/@t3tools"
+  for pkg in "${cache_nm}"/@t3tools/*; do
+    [[ -e "${pkg}" || -L "${pkg}" ]] || continue
+    name="$(basename "${pkg}")"
+    if [[ -d "${work}/packages/${name}" ]]; then
+      ln -sfn "${work}/packages/${name}" "${work_nm}/@t3tools/${name}"
+    else
+      ln -sfn "${pkg}" "${work_nm}/@t3tools/${name}"
+    fi
+  done
+}
+( cd "${src}" && find . -maxdepth 3 -name node_modules -type d -not -path "*/node_modules/*" | sed 's|^\./||' ) |
+  while read -r d; do shadow_workspace_links "${d}"; done
+
 node "${repo}/bin/apply-t3code-source.mjs" apply \
   --source "${work}" \
   --manifest "${repo}/patches/t3code-${channel}/source-transforms.json" \

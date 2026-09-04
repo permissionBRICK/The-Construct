@@ -197,19 +197,35 @@ TAG="v${VERSION}"
 SAFE_VERSION="${VERSION//[^0-9A-Za-z._-]/-}"
 mkdir -p "${CACHE_ROOT}" "${ARTIFACT_ROOT}" /etc/construct
 PATCH_HASH="$(t3_build_integration_hash "${REPO_DIR}/bin/build-t3code.sh" "${SOURCE_TRANSFORMER}" "${SOURCE_MANIFEST}" "${SOURCE_OVERLAYS}" "${T3PARK_PATCHER}" "${T3MONITOR_PATCHER}")"
-BUILD_HASH="$(printf '%s\n%s\n' "${PATCH_HASH}" "${CONSTRUCT_VERSION}" | sha256sum | awk '{print $1}')"
+# THE BUILD IDENTITY is the upstream T3 version plus the patch recipe -- the two things
+# that change what gets built. The Construct commit is RECORDED in the manifest
+# (constructVersion) but is not part of the key: it used to be, and every Construct
+# update then rebuilt an identical server + Desktop from scratch on every VM (and, with
+# two VMs at different commits, reinstalled the Desktop on the host in turns). The host's
+# install rule compares the same recipe hash (Get-T3DesktopInstallPlan -PatchHash).
+BUILD_HASH="$(printf '%s\n' "${PATCH_HASH}" | sha256sum | awk '{print $1}')"
 SOURCE_KEY="${SAFE_VERSION}-${BUILD_HASH:0:12}"
 SOURCE_DIR="${CACHE_ROOT}/${SOURCE_KEY}"
 
 if [[ -s "${MANIFEST_PATH}" && -s "${INSTALLER_PATH}" ]]; then
   cached_version="$(node -e 'try{let m=require(process.argv[1]);process.stdout.write(m.version||"")}catch{}' "${MANIFEST_PATH}")"
   cached_hash="$(node -e 'try{let m=require(process.argv[1]);process.stdout.write(m.patchHash||"")}catch{}' "${MANIFEST_PATH}")"
-  cached_construct="$(node -e 'try{let m=require(process.argv[1]);process.stdout.write(m.constructVersion||"")}catch{}' "${MANIFEST_PATH}")"
-  if [[ "${cached_version}" == "${VERSION}" && "${cached_hash}" == "${PATCH_HASH}" && "${cached_construct}" == "${CONSTRUCT_VERSION}" && -x "${SOURCE_DIR}/apps/server/dist/bin.mjs" ]]; then
+  cached_build="$(node -e 'try{let m=require(process.argv[1]);process.stdout.write(m.buildHash||"")}catch{}' "${MANIFEST_PATH}")"
+  # A build made under the OLD key (commit folded in) lives in a directory named by that
+  # key; the manifest's buildHash finds it, so the switch to the new key costs no rebuild.
+  cached_dir="${SOURCE_DIR}"
+  if [[ "${cached_build}" =~ ^[0-9a-f]{12,64}$ && ! -x "${SOURCE_DIR}/apps/server/dist/bin.mjs" ]]; then
+    cached_dir="${CACHE_ROOT}/${SAFE_VERSION}-${cached_build:0:12}"
+  fi
+  if [[ "${cached_version}" == "${VERSION}" && "${cached_hash}" == "${PATCH_HASH}" && -x "${cached_dir}/apps/server/dist/bin.mjs" ]]; then
+    SOURCE_DIR="${cached_dir}"
     ln -sfn "${SOURCE_DIR}/apps/server/dist/bin.mjs" /usr/local/bin/t3
+    # The key the ARTIFACT carries, so install-ai-tools.sh sees an unchanged build and
+    # leaves the running server alone.
+    [[ "${cached_build}" =~ ^[0-9a-f]{12,64}$ ]] && BUILD_HASH="${cached_build}"
     printf 'T3CODE_DESKTOP_READY=yes\nT3CODE_DESKTOP_VERSION=%s\nT3CODE_DESKTOP_CHANNEL=%s\nT3CODE_DESKTOP_INSTALLER=%s\nT3CODE_BUILD_KEY=%s\n' \
       "${VERSION}" "${CHANNEL}" "${INSTALLER_PATH}" "${BUILD_HASH}" >"${STATUS_PATH}"
-    note "T3 Code ${VERSION} patched build is already current; reusing its VM server and Windows installer."
+    note "T3 Code ${VERSION} patched build is already current (same upstream version, same patch recipe); reusing its VM server and Windows installer."
     exit 0
   fi
 fi

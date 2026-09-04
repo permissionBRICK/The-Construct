@@ -412,8 +412,8 @@ try {
 # shipped script and fail if any string-literal token carries a non-ASCII char.
 $repoRoot = Split-Path -Parent $here
 $shipped = @("install.ps1","Auto-Install.ps1","Create-AgentVM.ps1","Provision-AgentVM.ps1",
-             "Update-Construct.ps1","Update-T3Code.ps1","Get-AgentUsage.ps1","lib/AgentVm.Common.ps1",
-             "lib/AgentVm.InstanceState.ps1")
+             "Update-Construct.ps1","Update-T3Code.ps1","Get-AgentUsage.ps1","Get-ConstructT3PairingLink.ps1",
+             "lib/AgentVm.Common.ps1","lib/AgentVm.InstanceState.ps1")
 foreach ($rel in $shipped) {
     $p = Join-Path $repoRoot $rel
     if (-not (Test-Path -LiteralPath $p)) { continue }
@@ -1200,6 +1200,25 @@ ok "Auto-Install.ps1: the remote record is written AFTER the host service create
 ok "Auto-Install.ps1: a chosen vCPU count sizes the LOCAL VM too" ($autoSrc -match "if \(\`$VmCpuCount -gt 0\) \{ \`$createArgs\['ProcessorCount'\] = \`$VmCpuCount \}")
 ok "Create-AgentVM.ps1: a hand-run create records its size (not under -Auto, which Auto-Install already recorded)" (
     $createSrc -match '(?s)if \(-not \$Auto\) \{.*?Save-ConstructVmSpec -Dir \$PSScriptRoot -InstanceName \$specInstance')
+
+# ── Get-ConstructT3PairingLink.ps1: the Desktop app's auto-link mints links through it ──
+$plSrc = Get-Content -LiteralPath (Join-Path $here "..\Get-ConstructT3PairingLink.ps1") -Raw
+ok "pairing link: never prompts, pauses or draws a screen (the Desktop runs it hidden)" (
+    $plSrc -notmatch 'Read-Host' -and $plSrc -notmatch 'Invoke-Tui' -and $plSrc -notmatch 'Show-ConstructHeader' -and
+    $plSrc -notmatch '(?i)press enter' -and $plSrc -notmatch 'Start-Sleep')
+ok "pairing link: stdout is ONE JSON line, success and failure alike" (
+    $plSrc -match '\[Console\]::Out\.WriteLine\(\(\[pscustomobject\]\$ordered \| ConvertTo-Json -Compress' -and
+    $plSrc -match 'Write-Result @\{ ok = \$false; instance = \$script:ResolvedName; error = \$why \}' -and
+    $plSrc -match 'Write-Result @\{ ok = \$true; instance = \$script:ResolvedName; pairUrl = \$pairUrl; scopes = \$scopesUsed \}')
+ok "pairing link: asks the VM's t3 for the ADMINISTRATIVE scopes when its build has the flag, standard otherwise" (
+    $plSrc -match "grep -q -- '--scopes'" -and $plSrc -match 'extra="--scopes administrative"' -and $plSrc -match 'scopes=standard')
+ok "pairing link: the VM decides the origin (public base URL first), the label names the instance" (
+    $plSrc -match 'T3CODE_PUBLIC_BASE_URL' -and $plSrc -match 'CONSTRUCT_EXTERNAL_HOST' -and
+    $plSrc -match 'construct-t3-desktop-\$\(\$script:ResolvedName\)')
+ok "pairing link: the script rides to the VM base64-encoded (no CRLF, no quoting on the command line)" (
+    $plSrc -match 'ToBase64String' -and $plSrc -match "base64 -d \| bash")
+ok "pairing link: the same SSH conventions as Get-AgentUsage.ps1 (key file first, alias fallback, batch mode)" (
+    $plSrc -match 'IdentitiesOnly=yes' -and $plSrc -match 'BatchMode=yes' -and $plSrc -match 'StrictHostKeyChecking=accept-new')
 
 # The SMB drive letter.
 $taken = @('C', 'D', 'Z', 'Y')

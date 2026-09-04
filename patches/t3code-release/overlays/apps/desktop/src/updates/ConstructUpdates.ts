@@ -26,6 +26,8 @@
 
 import type {
   ConstructInstanceInfo,
+  ConstructPairingLinkResult,
+  ConstructT3LinkInfo,
   ConstructUpdateAction,
   ConstructUpdateInfo,
   DesktopUpdateChannel,
@@ -56,6 +58,11 @@ export const CONSTRUCT_INSTANCES_FILE = "instances.json";
 export const CONSTRUCT_INSTANCE_STATE_DIR_NAME = "instances";
 export const CONSTRUCT_UPDATE_SCRIPT = "Update-Construct.ps1";
 export const CONSTRUCT_REPROVISION_SCRIPT = "Update-T3Code.ps1";
+/** Mints a one-time T3 pairing link for one instance over SSH and prints it as JSON
+ *  (auto-link, plan §4.12 "T3 Desktop topology"). Non-interactive: no prompt, no pause. */
+export const CONSTRUCT_PAIRING_LINK_SCRIPT = "Get-ConstructT3PairingLink.ps1";
+/** The per-instance state key that records what this app linked (or why it could not). */
+export const CONSTRUCT_T3_LINK_KEY = "t3Link";
 
 const CONSTRUCT_BUILD_VERSION_PATTERN = /-construct\.[0-9a-f]{6,}$/i;
 const COMMIT_PATTERN = /^[0-9a-f]{7,64}$/i;
@@ -116,6 +123,55 @@ export interface ConstructMarkers {
   /** The T3 web GUI port the provisioner last recorded for this VM (`t3Port`); null when
    *  this PC has not seen it. Half the key a linked remote is matched on. */
   readonly t3Port: number | null;
+  /** The VM's saved T3 opt-in (`t3code`, the panel's toggle / config.env T3CODE); null
+   *  when the state does not say. With `t3Port`/`t3BaseUrl` it decides whether the VM
+   *  has a T3 server worth linking at all. */
+  readonly t3Enabled: boolean | null;
+  /** The origin the provisioner recorded the VM's T3 web GUI at (`t3BaseUrl`), or null. */
+  readonly t3BaseUrl: string | null;
+  /** What this app recorded about linking the VM's T3 as a remote (`t3Link`), or null
+   *  when it never tried. */
+  readonly t3Link: ConstructT3LinkInfo | null;
+}
+
+/** An http(s) origin string as the provisioner records it, or null. */
+function readHttpOrigin(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!/^https?:\/\/[^\s/]+\/?$/i.test(trimmed)) return null;
+  return trimmed.replace(/\/$/, "");
+}
+
+/** The saved boolean of a config toggle, or null: a state file written by hand may hold
+ *  the STRING "false", and every non-empty string is truthy, so only real booleans and
+ *  the two literal spellings count. */
+function readSavedBoolean(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const trimmed = value.trim().toLowerCase();
+    if (trimmed === "true") return true;
+    if (trimmed === "false") return false;
+  }
+  return null;
+}
+
+/** The recorded link marker, validated field by field; anything malformed is "never
+ *  tried" rather than a guess. Pure. */
+export function readConstructT3Link(value: unknown): ConstructT3LinkInfo | null {
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  const status = record.status;
+  if (status !== "linked" && status !== "failed") return null;
+  const at = typeof record.at === "string" ? record.at.trim() : "";
+  if (at === "" || Number.isNaN(Date.parse(at))) return null;
+  const optional = (v: unknown) => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
+  return {
+    status,
+    at,
+    environmentId: optional(record.environmentId),
+    baseUrl: readHttpOrigin(record.baseUrl),
+    error: optional(record.error),
+  };
 }
 
 function readCommit(value: unknown): string | null {
@@ -153,6 +209,9 @@ export function readConstructMarkers(raw: unknown, state?: unknown): ConstructMa
     // ...and so does the T3 port the provisioner recorded for it (B14): it is a fact
     // about the running VM, and it is half the key a linked remote is matched on.
     t3Port: portField(stateRecord.t3Port),
+    t3Enabled: readSavedBoolean(stateRecord.t3code),
+    t3BaseUrl: readHttpOrigin(stateRecord.t3BaseUrl),
+    t3Link: readConstructT3Link(stateRecord[CONSTRUCT_T3_LINK_KEY]),
   };
 }
 
@@ -187,6 +246,10 @@ export interface ConstructFileSystem {
   readonly fileMtimeMs: (path: string) => number | null;
   /** File contents, or null when unreadable. */
   readonly readTextFile: (path: string) => string | null;
+  /** Write a file ATOMICALLY (temp file + rename), creating its directory; throws on
+   *  failure. Optional: the read-only consumers never need it, and a test double that
+   *  predates it still satisfies the shape. */
+  readonly writeTextFile?: (path: string, text: string) => void;
 }
 
 export const nodeConstructFileSystem: ConstructFileSystem = {
@@ -212,6 +275,23 @@ export const nodeConstructFileSystem: ConstructFileSystem = {
       return NodeFS.readFileSync(path, "utf8");
     } catch {
       return null;
+    }
+  },
+  writeTextFile: (path, text) => {
+    NodeFS.mkdirSync(NodePath.dirname(path), { recursive: true });
+    // pid + a monotonic tick: unique enough for one writer, and no wall-clock read (the
+    // Effect diagnostics reserve those for its Clock).
+    const tmp = `${path}.tmp.${process.pid}.${process.hrtime.bigint().toString(36)}`;
+    try {
+      NodeFS.writeFileSync(tmp, text, "utf8");
+      NodeFS.renameSync(tmp, path);
+    } catch (error) {
+      try {
+        NodeFS.rmSync(tmp, { force: true });
+      } catch {
+        // ignore
+      }
+      throw error;
     }
   },
 };
@@ -924,7 +1004,232 @@ export function collectConstructInstances(
       provisionedCommit: state.provisionedCommit,
       channel: state.channel,
       t3Port: state.t3Port,
+      t3Enabled: state.t3Enabled,
+      t3BaseUrl: state.t3BaseUrl,
+      t3Link: state.t3Link,
     };
+  });
+}
+
+// ── Auto-link: the T3 pairing link + the marker that remembers it ────────────────
+//
+// Plan §4.12 "T3 Desktop topology": T3 links several remotes at once, one per VM. The
+// renderer knows which remotes the app is linked to and pairs them with this PC's
+// instances (constructInstances.logic.ts); for an instance with a T3 server that no
+// remote matches it asks the main process for a pairing link — Get-ConstructT3PairingLink.ps1
+// over SSH, run hidden, printing one JSON line — registers the remote through the app's
+// own connect command, and reports back so the marker below is written.
+//
+// THE MARKER (`t3Link` in the instance's own state) is what keeps this idempotent: a
+// linked instance is not linked twice, a failed mint backs off instead of retrying every
+// poll, and a connection the user removed by hand is not re-added (its marker still says
+// "linked", so the automatic path leaves it alone; the row's manual Link ignores markers).
+
+/** The state file the marker goes to: the instance's own file, or the legacy top level
+ *  of `.construct-settings.json` for the default instance (B12's split, by NAME). Null
+ *  when neither resolves. Pure. */
+export function constructT3LinkStorePath(
+  localAppData: string | undefined,
+  instanceName: string,
+  scriptsDir: string | null,
+  joinPath: JoinPath = defaultJoinPath,
+): string | null {
+  const own = constructInstanceStatePath(localAppData, instanceName, joinPath);
+  if (own !== null) return own;
+  const name = instanceName.trim();
+  if (name !== DEFAULT_CONSTRUCT_VM_TARGET.name) return null;
+  return scriptsDir === null ? null : joinPath(scriptsDir, CONSTRUCT_SETTINGS_FILE);
+}
+
+/**
+ * Record what this app did about linking one instance's T3. Merges ONE key into the
+ * instance's state document and preserves every other key (and the `version`/`instance`
+ * meta keys of a per-instance file — written when the file is created here, exactly as
+ * extension/src/instancestate.js writes them). Returns why it could not, if it could not.
+ */
+export function recordConstructInstanceT3Link(
+  localAppData: string | undefined,
+  instanceName: string,
+  scriptsDir: string | null,
+  link: ConstructT3LinkInfo,
+  fs: ConstructFileSystem,
+  joinPath: JoinPath = defaultJoinPath,
+): { readonly ok: true; readonly path: string } | { readonly ok: false; readonly error: string } {
+  const path = constructT3LinkStorePath(localAppData, instanceName, scriptsDir, joinPath);
+  if (path === null) {
+    return { ok: false, error: `No state file resolves for the instance "${instanceName}".` };
+  }
+  if (fs.writeTextFile === undefined) {
+    return { ok: false, error: "This file system cannot write." };
+  }
+  const existing = readJsonFile(path, fs);
+  const doc: Record<string, unknown> =
+    typeof existing === "object" && existing !== null && !Array.isArray(existing)
+      ? { ...(existing as Record<string, unknown>) }
+      : {};
+  const own = constructInstanceStatePath(localAppData, instanceName, joinPath) !== null;
+  if (own && existing === null) {
+    doc.version = 1;
+    doc.instance = instanceName.trim();
+  }
+  doc[CONSTRUCT_T3_LINK_KEY] = {
+    status: link.status,
+    at: link.at,
+    ...(link.environmentId === null ? {} : { environmentId: link.environmentId }),
+    ...(link.baseUrl === null ? {} : { baseUrl: link.baseUrl }),
+    ...(link.error === null ? {} : { error: link.error }),
+  };
+  try {
+    fs.writeTextFile(path, `${JSON.stringify(doc, null, 2)}\n`);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+  return { ok: true, path };
+}
+
+export interface ConstructPairingLinkPlan {
+  readonly instanceName: string;
+  readonly scriptPath: string;
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+}
+
+export type ConstructPairingLinkPlanResult =
+  | { readonly ok: true; readonly plan: ConstructPairingLinkPlan }
+  | { readonly ok: false; readonly error: string };
+
+/**
+ * The hidden PowerShell invocation that mints a pairing link for one instance. Unlike
+ * planConstructLaunch there is no console: the script prints one JSON line and exits,
+ * so powershell.exe is spawned directly with its stdout piped. Refuses a name outside
+ * the registry (never a fallback to the default VM) and an install without the script
+ * (an older Construct: the manual pairing path still works). Pure.
+ */
+export function planConstructPairingLink(
+  instanceName: string,
+  info: Pick<ConstructUpdateInfo, "scriptsDir" | "instances"> | null,
+  platform: NodeJS.Platform,
+  fs: ConstructFileSystem,
+  joinPath: JoinPath = defaultJoinPath,
+): ConstructPairingLinkPlanResult {
+  if (platform !== "win32") {
+    return { ok: false, error: "T3 pairing links can only be minted from the Windows Desktop app." };
+  }
+  const name = instanceName.trim();
+  if (!INSTANCE_NAME_PATTERN.test(name) || name.startsWith(RESERVED_INSTANCE_NAME_PREFIX)) {
+    return { ok: false, error: `"${instanceName}" is not a usable Construct instance name.` };
+  }
+  if (info === null || info.scriptsDir === null) {
+    return { ok: false, error: "Construct is not installed on this PC, so no pairing link can be minted." };
+  }
+  if (!info.instances.some((instance) => instance.name === name)) {
+    return { ok: false, error: `"${name}" is not an instance in this PC's Construct registry.` };
+  }
+  const scriptPath = joinPath(info.scriptsDir, CONSTRUCT_PAIRING_LINK_SCRIPT);
+  if (fs.fileMtimeMs(scriptPath) === null) {
+    return {
+      ok: false,
+      error: `This Construct install has no ${CONSTRUCT_PAIRING_LINK_SCRIPT}; update Construct to link VMs automatically.`,
+    };
+  }
+  return {
+    ok: true,
+    plan: {
+      instanceName: name,
+      scriptPath,
+      command: "powershell.exe",
+      args: [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        scriptPath,
+        "-InstanceName",
+        name,
+      ],
+    },
+  };
+}
+
+/** The script's one JSON line, out of whatever else landed on stdout. Pure. */
+export function parseConstructPairingLinkOutput(
+  stdout: string,
+  exit: { readonly code: number | null; readonly stderr: string },
+): ConstructPairingLinkResult {
+  const lines = stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("{") && line.endsWith("}"));
+  for (const line of lines.reverse()) {
+    try {
+      const parsed = JSON.parse(line) as Record<string, unknown>;
+      if (parsed.ok === true && typeof parsed.pairUrl === "string" && parsed.pairUrl !== "") {
+        return {
+          ok: true,
+          pairUrl: parsed.pairUrl,
+          scopes: parsed.scopes === "administrative" ? "administrative" : "standard",
+        };
+      }
+      if (parsed.ok === false) {
+        return {
+          ok: false,
+          error: typeof parsed.error === "string" && parsed.error !== "" ? parsed.error : "The pairing link script failed.",
+        };
+      }
+    } catch {
+      // not this line
+    }
+  }
+  const tail = exit.stderr.trim().split(/\r?\n/).filter(Boolean).slice(-1)[0] ?? "";
+  return {
+    ok: false,
+    error:
+      exit.code === 0
+        ? "The pairing link script printed no result."
+        : `The pairing link script exited with code ${exit.code ?? "unknown"}${tail ? ` (${tail})` : ""}.`,
+  };
+}
+
+/** Run the planned script hidden and resolve with its result. Never rejects. The
+ *  deadline is the child's own (`timeout` kills it), so no timer is kept here. */
+export function runConstructPairingLink(
+  plan: ConstructPairingLinkPlan,
+  spawn: typeof NodeChildProcess.spawn = NodeChildProcess.spawn,
+  timeoutMs = 90_000,
+): Promise<ConstructPairingLinkResult> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let stdout = "";
+    let stderr = "";
+    const settle = (result: ConstructPairingLinkResult) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+    try {
+      const child = spawn(plan.command, [...plan.args], {
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: timeoutMs,
+      });
+      child.stdout?.on("data", (chunk: Buffer | string) => {
+        stdout += String(chunk);
+      });
+      child.stderr?.on("data", (chunk: Buffer | string) => {
+        stderr += String(chunk);
+      });
+      child.on("error", (error) => settle({ ok: false, error: error.message }));
+      child.on("close", (code, signal) => {
+        if (code === null && signal !== null) {
+          settle({ ok: false, error: "The pairing link script did not finish in time." });
+          return;
+        }
+        settle(parseConstructPairingLinkOutput(stdout, { code, stderr }));
+      });
+    } catch (error) {
+      settle({ ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
   });
 }
 

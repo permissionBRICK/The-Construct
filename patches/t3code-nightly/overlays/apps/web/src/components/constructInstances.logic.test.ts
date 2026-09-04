@@ -2,10 +2,14 @@ import { assert, describe, it } from "@effect/vitest";
 import type { ConstructInstanceInfo, ConstructUpdateInfo } from "@t3tools/contracts";
 
 import {
+  CONSTRUCT_AUTO_LINK_RETRY_MS,
+  constructInstanceHasT3,
+  constructLinkedInstanceNames,
   constructLinkedRemotes,
   constructRemoteEndpoint,
   getConstructRowDetail,
   matchConstructRemoteToInstance,
+  planConstructAutoLink,
   planConstructProviderRows,
 } from "./constructInstances.logic.ts";
 
@@ -21,6 +25,9 @@ function instance(over: Partial<ConstructInstanceInfo> & { name: string }): Cons
     provisionedCommit: null,
     channel: null,
     t3Port: null,
+    t3Enabled: null,
+    t3BaseUrl: null,
+    t3Link: null,
     ...over,
   };
 }
@@ -228,12 +235,62 @@ describe("planConstructProviderRows", () => {
       remotes: [{ id: "x", baseUrl: "https://laptop.local:5178", label: "My laptop" }],
       info: info(),
     });
-    assert.lengthOf(rows, 1);
+    // The laptop's row, then far-vm: the one instance with a T3 server that no linked
+    // remote matches gets an UNLINKED row of its own (see "unlinked instances" below).
+    assert.lengthOf(rows, 2);
     assert.equal(rows[0]!.label, "My laptop");
     assert.isNull(rows[0]!.instanceName);
     assert.isFalse(rows[0]!.canReprovision);
+    assert.isTrue(rows[0]!.linked);
     assert.include(rows[0]!.note, "Not a Construct instance of this PC");
     assert.equal(getConstructRowDetail(rows[0]!), rows[0]!.note);
+    assert.equal(rows[1]!.instanceName, "far-vm");
+    assert.isFalse(rows[1]!.linked);
+  });
+
+  it("appends an UNLINKED row for every instance with a T3 server that no remote matches", () => {
+    const rows = planConstructProviderRows({ remotes: [remotes[1]!], info: info() });
+    assert.deepEqual(
+      rows.map((r) => [r.label, r.linked, r.canLink]),
+      [
+        ["work-vm", true, false],
+        ["far-vm", false, true],
+      ],
+    );
+    const far = rows[1]!;
+    assert.equal(far.id, "instance:far-vm");
+    assert.equal(far.host, "far-vm.vpn.example.local");
+    assert.equal(far.port, 23011);
+    assert.isFalse(far.canReprovision);
+    assert.include(getConstructRowDetail(far), "Not linked in this app yet");
+    // agent-vm / work-vm state nothing about T3, so they are not offered: nothing to link.
+    assert.isFalse(rows.some((r) => r.label === "agent-vm" && !r.linked));
+  });
+
+  it("an unlinked row explains a failed automatic link, and a removed connection", () => {
+    const failed = instance({
+      name: "far-vm",
+      t3BaseUrl: "https://far-vm.vpn.example.local:23011",
+      t3Link: { status: "failed", at: "2026-09-05T10:00:00Z", environmentId: null, baseUrl: null, error: "could not reach far-vm over SSH" },
+    });
+    const removed = instance({
+      name: "work-vm",
+      t3Enabled: true,
+      t3Link: { status: "linked", at: "2026-09-05T10:00:00Z", environmentId: "env-1", baseUrl: "https://work-vm.mshome.net:5178", error: null },
+    });
+    const rows = planConstructProviderRows({ remotes: [], info: info({ instances: [failed, removed] }) });
+    assert.include(rows[0]!.note, "could not reach far-vm over SSH");
+    assert.equal(rows[0]!.host, "far-vm.vpn.example.local");
+    assert.equal(rows[0]!.port, 23011);
+    assert.include(rows[1]!.note, "removed from this app");
+    assert.isTrue(rows.every((r) => r.canLink));
+  });
+
+  it("offers no Link either while another Construct action is running", () => {
+    const rows = planConstructProviderRows({ remotes: [], info: info({ runningAction: "reprovision" }) });
+    const far = rows.find((r) => r.instanceName === "far-vm")!;
+    assert.isFalse(far.canLink);
+    assert.include(far.note, "already running");
   });
 
   it("offers no button while another Construct action is running", () => {
@@ -362,5 +419,69 @@ describe("constructLinkedRemotes", () => {
       rows.map((r) => r.label),
       ["work-vm", "far-vm", "through a tunnel"],
     );
+  });
+});
+
+describe("constructInstanceHasT3", () => {
+  it("counts a recorded origin, a recorded port or the VM's own opt-in", () => {
+    assert.isTrue(constructInstanceHasT3(instance({ name: "a", t3Port: 5178 })));
+    assert.isTrue(constructInstanceHasT3(instance({ name: "a", t3BaseUrl: "https://a.mshome.net:5178" })));
+    assert.isTrue(constructInstanceHasT3(instance({ name: "a", t3Enabled: true })));
+  });
+  it("counts nothing for a VM whose state says T3 is off or says nothing", () => {
+    assert.isFalse(constructInstanceHasT3(instance({ name: "a" })));
+    assert.isFalse(constructInstanceHasT3(instance({ name: "a", t3Enabled: false })));
+  });
+});
+
+describe("planConstructAutoLink", () => {
+  const NOW = Date.parse("2026-09-05T12:00:00Z");
+  // Every instance runs T3: the default local VM by its own opt-in, work-vm by a recorded
+  // origin, far-vm by the port the provisioner published.
+  const agent = instance({ name: "agent-vm", isDefault: true, t3Enabled: true });
+  const work = instance({ name: "work-vm", t3BaseUrl: "https://work-vm.mshome.net:5178" });
+  const far = instance({ name: "far-vm", vmHost: "buildbox.example.local", publicHost: "far-vm.vpn.example.local", t3Port: 23011 });
+  const all = info({ instances: [agent, work, far] });
+  const none = new Set<string>();
+
+  it("links every instance with a T3 server that no linked remote matches -- the default one too", () => {
+    assert.deepEqual(planConstructAutoLink({ info: all, remotes: [], inFlight: none, now: NOW }), ["agent-vm", "work-vm", "far-vm"]);
+  });
+
+  it("skips what is already linked, by the same match the Providers rows use", () => {
+    const remotes = [
+      { id: "1", baseUrl: "https://agent-vm.mshome.net:5178" },
+      { id: "3", baseUrl: "https://far-vm.vpn.example.local:23011" },
+    ];
+    assert.deepEqual(constructLinkedInstanceNames(remotes, all.instances), new Set(["agent-vm", "far-vm"]));
+    assert.deepEqual(planConstructAutoLink({ info: all, remotes, inFlight: none, now: NOW }), ["work-vm"]);
+  });
+
+  it("skips a VM without a T3 server: nothing to link", () => {
+    const quiet = instance({ name: "quiet-vm" });
+    assert.deepEqual(planConstructAutoLink({ info: info({ instances: [quiet] }), remotes: [], inFlight: none, now: NOW }), []);
+  });
+
+  it("never re-adds a connection the user removed (marker says linked, no remote matches)", () => {
+    const removed = { ...work, t3Link: { status: "linked" as const, at: "2026-09-05T10:00:00Z", environmentId: "env-1", baseUrl: "https://work-vm.mshome.net:5178", error: null } };
+    assert.deepEqual(planConstructAutoLink({ info: info({ instances: [removed] }), remotes: [], inFlight: none, now: NOW }), []);
+  });
+
+  it("backs off after a failure, then tries again", () => {
+    const failedAt = new Date(NOW - 5 * 60 * 1000).toISOString();
+    const failed = { ...far, t3Link: { status: "failed" as const, at: failedAt, environmentId: null, baseUrl: null, error: "ssh" } };
+    const only = info({ instances: [failed] });
+    assert.deepEqual(planConstructAutoLink({ info: only, remotes: [], inFlight: none, now: NOW }), []);
+    assert.deepEqual(planConstructAutoLink({ info: only, remotes: [], inFlight: none, now: NOW + CONSTRUCT_AUTO_LINK_RETRY_MS }), ["far-vm"]);
+    // An unparseable timestamp is not a reason to wait forever.
+    const odd = { ...far, t3Link: { status: "failed" as const, at: "garbage", environmentId: null, baseUrl: null, error: "ssh" } };
+    assert.deepEqual(planConstructAutoLink({ info: info({ instances: [odd] }), remotes: [], inFlight: none, now: NOW }), ["far-vm"]);
+  });
+
+  it("skips an attempt in flight, a running Construct action, and a PC without Construct", () => {
+    assert.deepEqual(planConstructAutoLink({ info: all, remotes: [], inFlight: new Set(["work-vm"]), now: NOW }), ["agent-vm", "far-vm"]);
+    assert.deepEqual(planConstructAutoLink({ info: info({ instances: [agent], runningAction: "reprovision" }), remotes: [], inFlight: none, now: NOW }), []);
+    assert.deepEqual(planConstructAutoLink({ info: info({ instances: [agent], scriptsDir: null }), remotes: [], inFlight: none, now: NOW }), []);
+    assert.deepEqual(planConstructAutoLink({ info: null, remotes: [], inFlight: none, now: NOW }), []);
   });
 });

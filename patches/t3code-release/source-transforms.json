@@ -3,17 +3,35 @@
   "overlays": [
     "apps/desktop/src/updates/ConstructUpdates.test.ts",
     "apps/desktop/src/updates/ConstructUpdates.ts",
+    "apps/server/src/constructDiskSpace.test.ts",
+    "apps/server/src/constructDiskSpace.ts",
+    "apps/server/src/constructOmniloop.test.ts",
+    "apps/server/src/constructOmniloop.ts",
+    "apps/server/src/constructOmniloopProxy.test.ts",
+    "apps/server/src/constructOmniloopProxy.ts",
     "apps/server/src/publicBaseUrl.test.ts",
     "apps/server/src/publicBaseUrl.ts",
     "apps/server/src/voiceInput.test.ts",
     "apps/server/src/voiceInput.ts",
+    "apps/web/src/components/ConstructAutoLink.tsx",
+    "apps/web/src/components/ConstructDiskSpaceNotification.tsx",
     "apps/web/src/components/ConstructUpdateNotification.tsx",
+    "apps/web/src/components/constructDiskSpace.logic.test.ts",
+    "apps/web/src/components/constructDiskSpace.logic.ts",
+    "apps/web/src/components/constructInstances.link.ts",
+    "apps/web/src/components/constructInstances.logic.test.ts",
+    "apps/web/src/components/constructInstances.logic.ts",
     "apps/web/src/components/constructUpdate.logic.test.ts",
     "apps/web/src/components/constructUpdate.logic.ts",
-    "apps/web/src/components/constructInstances.logic.ts",
-    "apps/web/src/components/constructInstances.logic.test.ts",
     "apps/web/src/components/constructUpdate.ts",
+    "apps/web/src/components/omniloop/OmniloopPanel.tsx",
+    "apps/web/src/components/omniloop/omniloopSurface.tsx",
+    "apps/web/src/components/omniloop/omniloopWorkflows.logic.test.ts",
+    "apps/web/src/components/omniloop/omniloopWorkflows.logic.ts",
+    "apps/web/src/components/omniloop/useConstructOmniloopThread.tsx",
     "apps/web/src/components/settings/ConstructProviderRow.tsx",
+    "apps/web/src/state/constructDiskSpace.ts",
+    "apps/web/src/state/constructOmniloop.ts",
     "apps/web/src/state/voiceInput.ts",
     "apps/web/src/voice/clientAudioCapture.test.ts",
     "apps/web/src/voice/clientAudioCapture.ts",
@@ -21,26 +39,10 @@
     "apps/web/src/voice/voiceAudioSender.ts",
     "apps/web/src/voice/voiceInputFailure.test.ts",
     "apps/web/src/voice/voiceInputFailure.ts",
-    "packages/contracts/src/voiceInput.test.ts",
-    "packages/contracts/src/voiceInput.ts",
     "packages/contracts/src/constructDiskSpace.ts",
-    "apps/server/src/constructDiskSpace.ts",
-    "apps/server/src/constructDiskSpace.test.ts",
-    "apps/web/src/state/constructDiskSpace.ts",
-    "apps/web/src/components/constructDiskSpace.logic.ts",
-    "apps/web/src/components/constructDiskSpace.logic.test.ts",
-    "apps/web/src/components/ConstructDiskSpaceNotification.tsx",
     "packages/contracts/src/constructOmniloop.ts",
-    "apps/server/src/constructOmniloop.ts",
-    "apps/server/src/constructOmniloop.test.ts",
-    "apps/server/src/constructOmniloopProxy.ts",
-    "apps/server/src/constructOmniloopProxy.test.ts",
-    "apps/web/src/state/constructOmniloop.ts",
-    "apps/web/src/components/omniloop/omniloopSurface.tsx",
-    "apps/web/src/components/omniloop/OmniloopPanel.tsx",
-    "apps/web/src/components/omniloop/omniloopWorkflows.logic.ts",
-    "apps/web/src/components/omniloop/omniloopWorkflows.logic.test.ts",
-    "apps/web/src/components/omniloop/useConstructOmniloopThread.tsx"
+    "packages/contracts/src/voiceInput.test.ts",
+    "packages/contracts/src/voiceInput.ts"
   ],
   "transforms": [
     {
@@ -216,7 +218,7 @@
     {
       "path": "apps/desktop/src/updates/DesktopUpdates.ts",
       "after": "import * as Cause from \"effect/Cause\";",
-      "insert": "import type { ConstructUpdateAction, ConstructUpdateInfo } from \"@t3tools/contracts\";\n"
+      "insert": "import type {\n  ConstructPairingLinkResult,\n  ConstructT3LinkInfo,\n  ConstructUpdateAction,\n  ConstructUpdateInfo,\n} from \"@t3tools/contracts\";\n"
     },
     {
       "path": "apps/desktop/src/updates/DesktopUpdates.ts",
@@ -583,7 +585,7 @@
     {
       "path": "packages/contracts/src/ipc.ts",
       "before": "export interface DesktopUpdateState {",
-      "insert": "/**\n * What the Construct-built Desktop app's update control does when clicked.\n *  - `update-construct`: run Update-Construct.ps1 on this PC (refreshes the\n *    Construct scripts + VS Code control panel, like the panel's own\n *    \"Update Construct\").\n *  - `reprovision`: run Update-T3Code.ps1, which reprovisions the VM with the\n *    installed Construct and rebuilds/installs the patched T3 Code.\n */\nexport type ConstructUpdateAction = \"update-construct\" | \"reprovision\";\nexport const ConstructUpdateActionSchema = Schema.Literals([\"update-construct\", \"reprovision\"]);\n\n/**\n * One Construct VM this PC manages, as the Desktop app needs it (B14, plan §4.12).\n * The main process reads them from `%LOCALAPPDATA%\\The-Construct\\instances.json` and\n * each VM's own state file; the renderer pairs them with the remotes T3 is linked to and\n * renders one Providers row per remote.\n */\nexport interface ConstructInstanceInfo {\n  /** The instance name — also its ssh alias and, for a local VM, its host label. */\n  name: string;\n  /** The address this PC reaches the VM at over SSH. */\n  vmHost: string;\n  /** The name a host service publishes a remote VM's web ports under; null otherwise. */\n  publicHost: string | null;\n  hostAlias: string;\n  /** The registry's default instance — the one an argument-less reprovision would hit. */\n  isDefault: boolean;\n  /** The Construct commit THIS VM was last provisioned with; null when unknown. */\n  provisionedCommit: string | null;\n  /** The npm dist-tag this VM's T3 build tracks; null when its state is unknown. */\n  channel: DesktopUpdateChannel | null;\n  /** The T3 web GUI port this VM was last reached on; null when unknown. */\n  t3Port: number | null;\n}\n\nexport const ConstructInstanceInfoSchema = Schema.Struct({\n  name: Schema.String,\n  vmHost: Schema.String,\n  publicHost: Schema.NullOr(Schema.String),\n  hostAlias: Schema.String,\n  isDefault: Schema.Boolean,\n  provisionedCommit: Schema.NullOr(Schema.String),\n  channel: Schema.NullOr(DesktopUpdateChannelSchema),\n  t3Port: Schema.NullOr(Schema.Number),\n});\n\n/**\n * Construct-managed update tracking, present only in Construct-built Desktop\n * apps (`<t3 version>-construct.<hash>`). The Desktop main process reads the\n * Construct install markers on this PC (`.construct-settings.json`), compares\n * the installed Construct commit with its GitHub ref, the VM's provisioned\n * commit with the installed one, and this build's T3 base version with the\n * npm channel. Mirrors the VS Code control panel's update banner + yellow\n * Reprovision button.\n */\nexport interface ConstructUpdateInfo {\n  /** GitHub `owner/repo` the installed Construct tracks. */\n  repo: string;\n  /** Branch/ref the installed Construct tracks. */\n  ref: string;\n  /** Where the Construct scripts were found on this PC; null when not found. */\n  scriptsDir: string | null;\n  /** The VM a reprovision targets: the registry's default instance (`agent-vm` when\n   *  there is no registry) and its SSH host. */\n  vmName: string;\n  vmHost: string;\n  /** EVERY instance this PC manages (the default one alone when there is no registry).\n   *  T3 links several remotes at once, so the Providers page renders one row per linked\n   *  remote and matches it against these. */\n  instances: ReadonlyArray<ConstructInstanceInfo>;\n  /** Installed Construct commit (scripts + VS Code panel); null when unknown. */\n  installedCommit: string | null;\n  /** Commit the VM was last provisioned with; null when unknown. */\n  provisionedCommit: string | null;\n  /** Commits the installed Construct is behind its ref; null when unknown. */\n  behind: number | null;\n  /** A newer Construct commit exists on the tracked ref. */\n  constructUpdateAvailable: boolean;\n  /** The VM was provisioned with a different Construct than the one installed here. */\n  provisionStale: boolean;\n  /** This build's upstream T3 Code version (the `-construct.<hash>` suffix stripped). */\n  t3Version: string;\n  /** Newest upstream T3 Code release on this build's channel; null when unknown. */\n  t3LatestVersion: string | null;\n  /** A newer upstream T3 Code release exists on this build's channel. */\n  t3UpdateAvailable: boolean;\n  /** The newest upstream release on EACH channel this PC's instances run — the app's own\n   *  channel always, the other one only when some instance is on it. Null means the\n   *  channel was not asked about (or the check failed). */\n  t3LatestByChannel: { latest: string | null; nightly: string | null };\n  /** What the update control does now; null when everything is current. */\n  action: ConstructUpdateAction | null;\n  /** A launched host script is still running; the control is inert meanwhile. */\n  runningAction: ConstructUpdateAction | null;\n  /** Last successful or failed check, ISO timestamp. */\n  checkedAt: string | null;\n  /** Why the last check or launch failed; null when it succeeded. */\n  error: string | null;\n}\n\nexport const ConstructUpdateInfoSchema = Schema.Struct({\n  repo: Schema.String,\n  ref: Schema.String,\n  scriptsDir: Schema.NullOr(Schema.String),\n  vmName: Schema.String,\n  vmHost: Schema.String,\n  instances: Schema.Array(ConstructInstanceInfoSchema),\n  installedCommit: Schema.NullOr(Schema.String),\n  provisionedCommit: Schema.NullOr(Schema.String),\n  behind: Schema.NullOr(Schema.Number),\n  constructUpdateAvailable: Schema.Boolean,\n  provisionStale: Schema.Boolean,\n  t3Version: Schema.String,\n  t3LatestVersion: Schema.NullOr(Schema.String),\n  t3UpdateAvailable: Schema.Boolean,\n  t3LatestByChannel: Schema.Struct({\n    latest: Schema.NullOr(Schema.String),\n    nightly: Schema.NullOr(Schema.String),\n  }),\n  action: Schema.NullOr(ConstructUpdateActionSchema),\n  runningAction: Schema.NullOr(ConstructUpdateActionSchema),\n  checkedAt: Schema.NullOr(Schema.String),\n  error: Schema.NullOr(Schema.String),\n});\n\n"
+      "insert": "/**\n * What the Construct-built Desktop app's update control does when clicked.\n *  - `update-construct`: run Update-Construct.ps1 on this PC (refreshes the\n *    Construct scripts + VS Code control panel, like the panel's own\n *    \"Update Construct\").\n *  - `reprovision`: run Update-T3Code.ps1, which reprovisions the VM with the\n *    installed Construct and rebuilds/installs the patched T3 Code.\n */\nexport type ConstructUpdateAction = \"update-construct\" | \"reprovision\";\nexport const ConstructUpdateActionSchema = Schema.Literals([\"update-construct\", \"reprovision\"]);\n\n/**\n * One Construct VM this PC manages, as the Desktop app needs it (B14, plan §4.12).\n * The main process reads them from `%LOCALAPPDATA%\\The-Construct\\instances.json` and\n * each VM's own state file; the renderer pairs them with the remotes T3 is linked to and\n * renders one Providers row per remote.\n */\nexport interface ConstructInstanceInfo {\n  /** The instance name — also its ssh alias and, for a local VM, its host label. */\n  name: string;\n  /** The address this PC reaches the VM at over SSH. */\n  vmHost: string;\n  /** The name a host service publishes a remote VM's web ports under; null otherwise. */\n  publicHost: string | null;\n  hostAlias: string;\n  /** The registry's default instance — the one an argument-less reprovision would hit. */\n  isDefault: boolean;\n  /** The Construct commit THIS VM was last provisioned with; null when unknown. */\n  provisionedCommit: string | null;\n  /** The npm dist-tag this VM's T3 build tracks; null when its state is unknown. */\n  channel: DesktopUpdateChannel | null;\n  /** The T3 web GUI port this VM was last reached on; null when unknown. */\n  t3Port: number | null;\n  /** The VM's saved T3 opt-in (the control panel's toggle); null when its state does not say. */\n  t3Enabled: boolean | null;\n  /** The origin the provisioner recorded the VM's T3 web GUI at; null when unknown. */\n  t3BaseUrl: string | null;\n  /** What this app recorded about linking the VM's T3 as a remote; null when it never tried. */\n  t3Link: ConstructT3LinkInfo | null;\n}\n\n/**\n * The auto-link marker (plan §4.12 \"T3 Desktop topology\"): what the Construct-built\n * Desktop app did about linking one VM's T3 server as a remote environment, kept in\n * that instance's own state file so it is done once, backs off after a failure and\n * never re-adds a connection the user removed by hand.\n */\nexport interface ConstructT3LinkInfo {\n  status: \"linked\" | \"failed\";\n  /** ISO timestamp of the attempt. */\n  at: string;\n  /** The environment the link created; null for a failure. */\n  environmentId: string | null;\n  /** The origin the pairing link named; null when unknown. */\n  baseUrl: string | null;\n  /** Why linking failed; null for a success. */\n  error: string | null;\n}\n\nexport const ConstructT3LinkInfoSchema = Schema.Struct({\n  status: Schema.Literals([\"linked\", \"failed\"]),\n  at: Schema.String,\n  environmentId: Schema.NullOr(Schema.String),\n  baseUrl: Schema.NullOr(Schema.String),\n  error: Schema.NullOr(Schema.String),\n});\n\n/** What minting a T3 pairing link for one instance produced (Get-ConstructT3PairingLink.ps1). */\nexport type ConstructPairingLinkResult =\n  | { readonly ok: true; readonly pairUrl: string; readonly scopes: \"administrative\" | \"standard\" }\n  | { readonly ok: false; readonly error: string };\n\nexport const ConstructPairingLinkResultSchema = Schema.Union([\n  Schema.Struct({\n    ok: Schema.Literal(true),\n    pairUrl: Schema.String,\n    scopes: Schema.Literals([\"administrative\", \"standard\"]),\n  }),\n  Schema.Struct({ ok: Schema.Literal(false), error: Schema.String }),\n]);\n\nexport const ConstructInstanceInfoSchema = Schema.Struct({\n  name: Schema.String,\n  vmHost: Schema.String,\n  publicHost: Schema.NullOr(Schema.String),\n  hostAlias: Schema.String,\n  isDefault: Schema.Boolean,\n  provisionedCommit: Schema.NullOr(Schema.String),\n  channel: Schema.NullOr(DesktopUpdateChannelSchema),\n  t3Port: Schema.NullOr(Schema.Number),\n  t3Enabled: Schema.NullOr(Schema.Boolean),\n  t3BaseUrl: Schema.NullOr(Schema.String),\n  t3Link: Schema.NullOr(ConstructT3LinkInfoSchema),\n});\n\n/**\n * Construct-managed update tracking, present only in Construct-built Desktop\n * apps (`<t3 version>-construct.<hash>`). The Desktop main process reads the\n * Construct install markers on this PC (`.construct-settings.json`), compares\n * the installed Construct commit with its GitHub ref, the VM's provisioned\n * commit with the installed one, and this build's T3 base version with the\n * npm channel. Mirrors the VS Code control panel's update banner + yellow\n * Reprovision button.\n */\nexport interface ConstructUpdateInfo {\n  /** GitHub `owner/repo` the installed Construct tracks. */\n  repo: string;\n  /** Branch/ref the installed Construct tracks. */\n  ref: string;\n  /** Where the Construct scripts were found on this PC; null when not found. */\n  scriptsDir: string | null;\n  /** The VM a reprovision targets: the registry's default instance (`agent-vm` when\n   *  there is no registry) and its SSH host. */\n  vmName: string;\n  vmHost: string;\n  /** EVERY instance this PC manages (the default one alone when there is no registry).\n   *  T3 links several remotes at once, so the Providers page renders one row per linked\n   *  remote and matches it against these. */\n  instances: ReadonlyArray<ConstructInstanceInfo>;\n  /** Installed Construct commit (scripts + VS Code panel); null when unknown. */\n  installedCommit: string | null;\n  /** Commit the VM was last provisioned with; null when unknown. */\n  provisionedCommit: string | null;\n  /** Commits the installed Construct is behind its ref; null when unknown. */\n  behind: number | null;\n  /** A newer Construct commit exists on the tracked ref. */\n  constructUpdateAvailable: boolean;\n  /** The VM was provisioned with a different Construct than the one installed here. */\n  provisionStale: boolean;\n  /** This build's upstream T3 Code version (the `-construct.<hash>` suffix stripped). */\n  t3Version: string;\n  /** Newest upstream T3 Code release on this build's channel; null when unknown. */\n  t3LatestVersion: string | null;\n  /** A newer upstream T3 Code release exists on this build's channel. */\n  t3UpdateAvailable: boolean;\n  /** The newest upstream release on EACH channel this PC's instances run — the app's own\n   *  channel always, the other one only when some instance is on it. Null means the\n   *  channel was not asked about (or the check failed). */\n  t3LatestByChannel: { latest: string | null; nightly: string | null };\n  /** What the update control does now; null when everything is current. */\n  action: ConstructUpdateAction | null;\n  /** A launched host script is still running; the control is inert meanwhile. */\n  runningAction: ConstructUpdateAction | null;\n  /** Last successful or failed check, ISO timestamp. */\n  checkedAt: string | null;\n  /** Why the last check or launch failed; null when it succeeded. */\n  error: string | null;\n}\n\nexport const ConstructUpdateInfoSchema = Schema.Struct({\n  repo: Schema.String,\n  ref: Schema.String,\n  scriptsDir: Schema.NullOr(Schema.String),\n  vmName: Schema.String,\n  vmHost: Schema.String,\n  instances: Schema.Array(ConstructInstanceInfoSchema),\n  installedCommit: Schema.NullOr(Schema.String),\n  provisionedCommit: Schema.NullOr(Schema.String),\n  behind: Schema.NullOr(Schema.Number),\n  constructUpdateAvailable: Schema.Boolean,\n  provisionStale: Schema.Boolean,\n  t3Version: Schema.String,\n  t3LatestVersion: Schema.NullOr(Schema.String),\n  t3UpdateAvailable: Schema.Boolean,\n  t3LatestByChannel: Schema.Struct({\n    latest: Schema.NullOr(Schema.String),\n    nightly: Schema.NullOr(Schema.String),\n  }),\n  action: Schema.NullOr(ConstructUpdateActionSchema),\n  runningAction: Schema.NullOr(ConstructUpdateActionSchema),\n  checkedAt: Schema.NullOr(Schema.String),\n  error: Schema.NullOr(Schema.String),\n});\n\n"
     },
     {
       "path": "packages/contracts/src/ipc.ts",
@@ -709,6 +711,76 @@
       "path": "apps/desktop/src/updates/DesktopUpdates.ts",
       "after": "    }).pipe(Effect.withSpan(\"desktop.updates.download\")),",
       "insert": "    reprovisionConstructInstance: Effect.fn(\"desktop.updates.constructReprovisionInstance\")(\n      function* (name: string) {\n        if (!constructManaged) {\n          return {\n            accepted: false,\n            completed: false,\n            state: yield* Ref.get(updateStateRef),\n          };\n        }\n        const result = yield* launchConstruct(name);\n        return {\n          accepted: result.accepted,\n          completed: result.completed,\n          state: yield* Ref.get(updateStateRef),\n        };\n      },\n    ),\n"
+    },
+    {
+      "path": "packages/contracts/src/ipc.ts",
+      "after": "reprovisionConstructInstance: (name: string) => Promise<DesktopUpdateActionResult>;",
+      "insert": "  /** Construct-built builds (plan section 4.12 \"T3 Desktop topology\", auto-link): mint a\n   *  one-time T3 pairing link for one instance (Get-ConstructT3PairingLink.ps1 over SSH,\n   *  run hidden). Stock builds answer `ok: false`. */\n  linkConstructInstance: (name: string) => Promise<ConstructPairingLinkResult>;\n  /** ...and remember what the renderer did with it, in that instance's state file. */\n  recordConstructInstanceT3Link: (name: string, link: ConstructT3LinkInfo) => Promise<boolean>;\n"
+    },
+    {
+      "path": "apps/desktop/src/ipc/channels.ts",
+      "after": "export const CONSTRUCT_REPROVISION_INSTANCE_CHANNEL = \"desktop:construct-reprovision-instance\";",
+      "insert": "// Auto-link (plan section 4.12 \"T3 Desktop topology\"): mint a pairing link for one\n// instance, and record the link the renderer made with it.\nexport const CONSTRUCT_LINK_INSTANCE_CHANNEL = \"desktop:construct-link-instance\";\nexport const CONSTRUCT_RECORD_T3_LINK_CHANNEL = \"desktop:construct-record-t3-link\";\n"
+    },
+    {
+      "path": "apps/desktop/src/ipc/methods/updates.ts",
+      "after": "import {",
+      "insert": "  ConstructPairingLinkResultSchema,\n  ConstructT3LinkInfoSchema,\n"
+    },
+    {
+      "path": "apps/desktop/src/ipc/methods/updates.ts",
+      "before": "export const getUpdateState = DesktopIpc.makeIpcMethod({",
+      "insert": "/** Mint a one-time T3 pairing link for ONE Construct instance (auto-link, plan section\n *  4.12). A build whose updater cannot do it answers `ok: false` rather than failing. */\nexport const linkConstructInstance = DesktopIpc.makeIpcMethod({\n  channel: IpcChannels.CONSTRUCT_LINK_INSTANCE_CHANNEL,\n  payload: Schema.String,\n  result: ConstructPairingLinkResultSchema,\n  handler: Effect.fn(\"desktop.ipc.updates.constructLinkInstance\")(function* (name) {\n    const updates = yield* DesktopUpdates.DesktopUpdates;\n    if (updates.linkConstructInstance === undefined) {\n      return { ok: false as const, error: \"This build cannot mint T3 pairing links.\" };\n    }\n    return yield* updates.linkConstructInstance(name);\n  }),\n});\n\n/** Record what the renderer did with a pairing link, in the instance's own state file. */\nexport const recordConstructInstanceT3Link = DesktopIpc.makeIpcMethod({\n  channel: IpcChannels.CONSTRUCT_RECORD_T3_LINK_CHANNEL,\n  payload: Schema.Struct({ name: Schema.String, link: ConstructT3LinkInfoSchema }),\n  result: Schema.Boolean,\n  handler: Effect.fn(\"desktop.ipc.updates.constructRecordT3Link\")(function* (input) {\n    const updates = yield* DesktopUpdates.DesktopUpdates;\n    if (updates.recordConstructInstanceT3Link === undefined) return false;\n    return yield* updates.recordConstructInstanceT3Link(input.name, input.link);\n  }),\n});\n\n"
+    },
+    {
+      "path": "apps/desktop/src/ipc/DesktopIpcHandlers.ts",
+      "after": "  reprovisionConstructInstance,",
+      "insert": "  linkConstructInstance,\n  recordConstructInstanceT3Link,\n"
+    },
+    {
+      "path": "apps/desktop/src/ipc/DesktopIpcHandlers.ts",
+      "after": "yield* ipc.handle(reprovisionConstructInstance);",
+      "insert": "  yield* ipc.handle(linkConstructInstance);\n  yield* ipc.handle(recordConstructInstanceT3Link);\n"
+    },
+    {
+      "path": "apps/desktop/src/preload.ts",
+      "after": "ipcRenderer.invoke(IpcChannels.CONSTRUCT_REPROVISION_INSTANCE_CHANNEL, name),",
+      "insert": "  linkConstructInstance: (name) =>\n    ipcRenderer.invoke(IpcChannels.CONSTRUCT_LINK_INSTANCE_CHANNEL, name),\n  recordConstructInstanceT3Link: (name, link) =>\n    ipcRenderer.invoke(IpcChannels.CONSTRUCT_RECORD_T3_LINK_CHANNEL, { name, link }),\n"
+    },
+    {
+      "path": "apps/desktop/src/updates/DesktopUpdates.ts",
+      "after": ") => Effect.Effect<DesktopUpdateActionResult>;",
+      "insert": "    /** Construct-managed builds: mint a T3 pairing link for ONE named instance (auto-link,\n     *  plan section 4.12). Optional for the same reason as reprovisionConstructInstance. */\n    readonly linkConstructInstance?: (name: string) => Effect.Effect<ConstructPairingLinkResult>;\n    /** ...and record what the renderer did with it. True when the marker was written. */\n    readonly recordConstructInstanceT3Link?: (\n      name: string,\n      link: ConstructT3LinkInfo,\n    ) => Effect.Effect<boolean>;\n"
+    },
+    {
+      "path": "apps/desktop/src/updates/DesktopUpdates.ts",
+      "after": "}).pipe(Effect.withSpan(\"desktop.updates.download\")),",
+      "insert": "    linkConstructInstance: Effect.fn(\"desktop.updates.constructLinkInstance\")(function* (\n      name: string,\n    ) {\n      if (!constructManaged) {\n        return { ok: false as const, error: \"Not a Construct-built Desktop app.\" };\n      }\n      const info = yield* Ref.get(constructInfoRef);\n      const planned = ConstructUpdates.planConstructPairingLink(\n        name,\n        info,\n        environment.platform,\n        ConstructUpdates.nodeConstructFileSystem,\n      );\n      if (!planned.ok) return { ok: false as const, error: planned.error };\n      yield* logUpdaterInfo(\"minting a T3 pairing link\", { instance: name });\n      const result = yield* Effect.promise(() =>\n        ConstructUpdates.runConstructPairingLink(planned.plan),\n      );\n      if (!result.ok) {\n        yield* logUpdaterWarning(\"T3 pairing link failed\", { instance: name, error: result.error });\n      }\n      return result;\n    }),\n    recordConstructInstanceT3Link: Effect.fn(\"desktop.updates.constructRecordT3Link\")(\n      function* (name: string, link: ConstructT3LinkInfo) {\n        if (!constructManaged) return false;\n        const info = yield* Ref.get(constructInfoRef);\n        const written = ConstructUpdates.recordConstructInstanceT3Link(\n          constructLocalAppData,\n          name,\n          info?.scriptsDir ?? null,\n          link,\n          ConstructUpdates.nodeConstructFileSystem,\n        );\n        if (!written.ok) {\n          yield* logUpdaterWarning(\"could not record the T3 link\", { instance: name, error: written.error });\n          return false;\n        }\n        yield* logUpdaterInfo(\"recorded the T3 link\", { instance: name, status: link.status });\n        // Re-read the markers so the published instances carry the new marker at once.\n        yield* refreshConstruct(\"t3-link\", \"local\");\n        return true;\n      },\n    ),\n"
+    },
+    {
+      "path": "apps/web/src/routes/__root.tsx",
+      "after": "import { ConstructUpdateNotification } from \"../components/ConstructUpdateNotification\";",
+      "insert": "import { ConstructAutoLink } from \"../components/ConstructAutoLink\";\n"
+    },
+    {
+      "path": "apps/web/src/routes/__root.tsx",
+      "after": "<ConstructUpdateNotification />",
+      "insert": "        <ConstructAutoLink />\n"
+    },
+    {
+      "path": "apps/server/src/cli/auth.ts",
+      "before": "const tokenOnlyFlag = Flag.boolean(\"token-only\").pipe(",
+      "insert": "// Construct: a pairing link with the ADMINISTRATIVE scope set, for the Desktop app's\n// automatic link of a VM (Get-ConstructT3PairingLink.ps1 asks for it when the flag exists).\nconst scopesFlag = Flag.string(\"scopes\").pipe(\n  Flag.withDescription(\"Scope set of the token: `standard` (default) or `administrative`.\"),\n  Flag.optional,\n);\n\n"
+    },
+    {
+      "path": "apps/server/src/cli/auth.ts",
+      "after": "  baseUrl: baseUrlFlag,",
+      "insert": "  scopes: scopesFlag,\n"
+    },
+    {
+      "path": "apps/server/src/cli/auth.ts",
+      "find": "            scopes: AuthStandardClientScopes,\n            subject: \"one-time-token\",",
+      "replace": "            scopes:\n              Option.isSome(flags.scopes) && flags.scopes.value === \"administrative\"\n                ? AuthAdministrativeScopes\n                : AuthStandardClientScopes,\n            subject: \"one-time-token\","
     }
   ]
 }
