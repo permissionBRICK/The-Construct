@@ -4742,7 +4742,9 @@ function Test-ConstructRenameTarget {
     if (-not $nm) {
         return [pscustomobject]@{ Ok = $false; Reason = "Profile name must be non-empty." }
     }
-    if ($nm -match '[\\/:*?"<>|]' -or $nm -match '[\x00-\x1f]') {
+    # ONE name rule for this engine (Test-ConstructSafeProfileName), reused here and
+    # by publish -- never restated. host.js's safeProfileName is its JS twin.
+    if (-not (Test-ConstructSafeProfileName -Name $nm)) {
         return [pscustomobject]@{ Ok = $false; Reason = "Profile name '$nm' contains filename-unsafe characters." }
     }
     if ($script:RESERVED_PROFILE_NAMES -contains $nm.ToLowerInvariant()) {
@@ -5182,4 +5184,718 @@ function Push-ConstructConfigUpstream {
         Branch = $branchName
         Output = $outStr
     }
+}
+
+# ── Publish local profiles upstream (plan 4.13 / B15) ────────────────────────
+
+function Invoke-ConstructConfigGit {
+    <#
+        Run git and CAPTURE both streams. Windows PowerShell 5.1 surfaces native
+        stderr as ErrorRecords, which THROW under $ErrorActionPreference='Stop'
+        (every caller of this library runs that way), so the call is wrapped in a
+        SilentlyContinue window and stderr is folded into stdout with 2>&1.
+        Returns @{Code; Output} -- never throws, never prints. The caller decides
+        what to surface, and runs it through Protect-ConstructGitOutput first.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string[]]$Arguments,
+        [string]$WorkingDir
+    )
+
+    $argv = @()
+    if ($WorkingDir) { $argv += @("-C", $WorkingDir) }
+    $argv += $Arguments
+
+    $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+    $out = $null
+    $code = 1
+    try {
+        $out = & git @argv 2>&1
+        $code = $LASTEXITCODE
+    } catch {
+        $out = $_.Exception.Message
+        $code = 1
+    }
+    $ErrorActionPreference = $prev
+    if ($null -eq $code) { $code = 1 }
+
+    $text = ""
+    if ($null -ne $out) { $text = ((@($out) | ForEach-Object { "$_" }) -join "`n") }
+    return [pscustomobject]@{ Code = $code; Output = $text }
+}
+
+function Protect-ConstructGitOutput {
+    <#
+        Redact URL userinfo ("https://user:token@host/..." -> "https://***@host/...")
+        from captured git output before it is printed or returned. Pure; twin of
+        redactGitOutput in extension/src/configsync.js.
+    #>
+    [CmdletBinding()]
+    param([AllowEmptyString()][AllowNull()][string]$Text)
+    if ([string]::IsNullOrEmpty($Text)) { return "" }
+    return ($Text -replace '(?<=://)[^/@\s]+(?=@)', '***')
+}
+
+function Format-ConstructRemoteUrlForDisplay {
+    <#
+        The DISPLAY form of a remote URL. A publish target on the owner's own git
+        host is authenticated with a PAT carried IN the URL, so no console line,
+        no result table, no reason string and no log may ever be built from the
+        raw URL -- only git and the provenance manifest get that. Pure.
+    #>
+    [CmdletBinding()]
+    param([AllowEmptyString()][AllowNull()][string]$Url)
+    return (Protect-ConstructGitOutput -Text $Url)
+}
+
+function Test-ConstructUrlHasCredentials {
+    <#
+        True when a remote URL carries credentials in its userinfo. An http(s) URL
+        has no legitimate userinfo at all (that is where a PAT gets pasted); for any
+        other scheme only a bare user is legitimate (ssh://git@host), never
+        user:secret. Pure; twin of urlHasCredentials in
+        extension/src/configsync.js.
+
+        Why refuse rather than redact: a URL reaches git's argv, is written verbatim
+        into the staging clone's .git/config, into manifest/remotes.json and into
+        every per-profile provenance entry, and is handed to the webview. Redaction
+        can only protect what is DISPLAYED -- the secret still lives in half a dozen
+        plain files. Credentials belong in a git credential helper.
+    #>
+    [CmdletBinding()]
+    param([AllowEmptyString()][AllowNull()][string]$Url)
+    if ([string]::IsNullOrEmpty($Url)) { return $false }
+    # TRIM first: callers trim before storing or handing the value to git, so a
+    # check anchored at the untrimmed first character would pass a padded
+    # " https://alice:secret@host/x.git" that is then persisted without the padding.
+    $u = $Url.Trim()
+    if (-not $u) { return $false }
+    if ($u -notmatch '^([A-Za-z][A-Za-z0-9+.-]*)://([^/@\s]+)@') { return $false }
+    $scheme = $Matches[1].ToLowerInvariant()
+    $userInfo = $Matches[2]
+    if ($scheme -eq "http" -or $scheme -eq "https") { return $true }
+    return $userInfo.Contains(":")
+}
+
+function Test-ConstructSafeProfileName {
+    <#
+        True when a profile name is safe as a bare file name on Windows AND POSIX:
+        non-empty, no surrounding whitespace, no path separator, no ".." and none
+        of the Windows-illegal characters or control characters. Pure; identical
+        to isSafeProfileName in extension/src/configsync.js -- publish is the one
+        path where a name travels from one engine to the other through a git repo,
+        so both must agree exactly.
+    #>
+    [CmdletBinding()]
+    param([AllowEmptyString()][AllowNull()][string]$Name)
+    if ([string]::IsNullOrEmpty($Name)) { return $false }
+    if ($Name -cne $Name.Trim()) { return $false }
+    if ($Name -match '[\\/:*?"<>|]') { return $false }
+    if ($Name -match '[\x00-\x1f]') { return $false }
+    if ($Name.Contains("..")) { return $false }
+    return $true
+}
+
+function Test-ConstructPublishBranchName {
+    <#
+        True when the name is safe as an upstream branch AND as a bare git ref
+        operand: starts alphanumeric, then alphanumerics / dot / underscore /
+        hyphen / slash, no "..", no trailing "." and no ".lock" suffix. Looser
+        than Test-ConstructVmBranchName on purpose -- that one governs THIS
+        repo's vm-<name> branches and reserves "main"/"master", which are exactly
+        the names an upstream default branch has. Pure.
+    #>
+    [CmdletBinding()]
+    param([AllowEmptyString()][AllowNull()][string]$Name)
+    if ([string]::IsNullOrEmpty($Name)) { return $false }
+    if ($Name -notmatch '^[A-Za-z0-9][A-Za-z0-9._/-]*$') { return $false }
+    if ($Name.Contains("..")) { return $false }
+    if ($Name.Contains("//")) { return $false }
+    if ($Name.EndsWith(".")) { return $false }
+    if ($Name.EndsWith("/")) { return $false }
+    if ($Name.EndsWith(".lock")) { return $false }
+    return $true
+}
+
+function ConvertTo-ConstructPublishContent {
+    <#
+        Canonicalize on-disk profile TEXT through the SAME gate every other config
+        write uses: parse -> Test-ConstructProfile -> ConvertTo-ConstructCanonicalJson.
+        Returns @{Ok; Content; Reason}. Pure.
+
+        The validate step is not decoration: the canonicalizer SANITIZES (unknown
+        keys dropped, wrong-typed values replaced by empty defaults), so
+        canonicalizing an invalid profile silently repairs it into something the
+        user never wrote -- and a publish would push that repaired value AND write
+        it back over the local file. Invalid profiles are reported, never repaired.
+        Twin of canonicalizeProfileText in extension/src/configsync.js.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Name,
+        [Parameter(Mandatory)][AllowEmptyString()][AllowNull()][string]$Raw
+    )
+    $obj = $null
+    try {
+        $obj = $Raw | ConvertFrom-Json
+    } catch {
+        return [pscustomobject]@{ Ok = $false; Content = ""; Reason = "cannot be parsed as JSON ($($_.Exception.Message))" }
+    }
+    $v = Test-ConstructProfile -Name $Name -Object $obj
+    if (-not $v.Ok) {
+        return [pscustomobject]@{ Ok = $false; Content = ""; Reason = "is not a valid profile: $($v.Errors -join '; ')" }
+    }
+    $canonical = ConvertTo-ConstructCanonicalJson -Name $Name -Object $obj
+    if ($null -eq $canonical) {
+        return [pscustomobject]@{ Ok = $false; Content = ""; Reason = "could not be canonicalized" }
+    }
+    return [pscustomobject]@{ Ok = $true; Content = $canonical; Reason = "" }
+}
+
+function Get-ConstructPublishPlan {
+    <#
+        The PURE decision core of a publish (B15) -- no IO, no git. Twin of
+        planPublish in extension/src/configsync.js, measured against the shared
+        behaviour fixture test/fixtures/publish-plan-cases.json.
+
+          -Profiles     @( @{Name; Raw} )  local profiles as they are ON DISK
+          -Manifest     hashtable Name -> manifest entry (object or hashtable)
+          -RemoteFiles  hashtable Name -> upstream projects/<Name>.json content
+          -Names        optional name filter (null/empty = all)
+
+        Rules: reserved names, *.sample names and names that are not safe bare
+        filenames are never published (the last is reported as invalid); a profile
+        failing the parse/validate/canonicalize gate is INVALID and is reported,
+        never repaired; any manifest entry means already tracked -> Skipped (Push
+        back's job); an upstream file of the same name with DIFFERENT content is
+        Refused (canonical-vs-canonical when the upstream file is itself a valid
+        profile, so reformatting alone is not a conflict); an upstream file whose
+        name differs only by CASE is the same file on Windows -> Refused; an
+        identical upstream copy is adopted (Publish with Adopt=$true).
+
+        Returns @{Publish; Skipped; Refused; Invalid; Reasons}. Every Reason is
+        display-safe (URLs redacted).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$Profiles,
+        $Manifest,
+        $RemoteFiles,
+        [string[]]$Names
+    )
+
+    $publish = @()
+    $skipped = @()
+    $refused = @()
+    $invalid = @()
+    $reasons = @{}
+
+    $man = @{}
+    if ($Manifest -is [System.Collections.IDictionary]) {
+        foreach ($k in @($Manifest.Keys)) { $man["$k"] = $Manifest[$k] }
+    }
+    $remote = @{}
+    if ($RemoteFiles -is [System.Collections.IDictionary]) {
+        foreach ($k in @($RemoteFiles.Keys)) { $remote["$k"] = "$($RemoteFiles[$k])" }
+    }
+    # Case-insensitive index of the upstream listing: on Windows projects/Alpha.json
+    # and projects/alpha.json are ONE file, so a case variant is a collision.
+    $remoteByLower = @{}
+    foreach ($k in @($remote.Keys)) { $remoteByLower[$k.ToLowerInvariant()] = $k }
+
+    $wanted = $null
+    if ($null -ne $Names) {
+        $wanted = @($Names | ForEach-Object { "$_" } | Where-Object { $_ })
+    }
+
+    foreach ($p in @($Profiles)) {
+        $name = ""
+        if ($null -ne $p) { $name = "$($p.Name)" }
+        if (-not $name) { continue }
+        if ($script:RESERVED_PROFILE_NAMES -contains $name.ToLowerInvariant()) { continue }
+        if ($name.ToLowerInvariant().EndsWith(".sample")) { continue }
+        if ($null -ne $wanted -and $wanted -notcontains $name) { continue }
+
+        if (-not (Test-ConstructSafeProfileName -Name $name)) {
+            $reason = "is not a safe profile file name"
+            $reasons[$name] = $reason
+            $invalid += [pscustomobject]@{ Name = $name; Reason = $reason }
+            continue
+        }
+        if ($man.ContainsKey($name)) {
+            $trackedUrl = ""
+            try { $trackedUrl = Format-ConstructRemoteUrlForDisplay -Url "$($man[$name].remoteUrl)" } catch { $trackedUrl = "" }
+            $reason = "already tracked -- use Push back"
+            if ($trackedUrl) { $reason = "already tracked by $trackedUrl -- use Push back" }
+            $reasons[$name] = $reason
+            # The record carries NO raw URL: the plan is returned to callers that
+            # print, log and format it whole (a bare `$result` in a console renders
+            # every property), and a legacy manifest entry can hold a PAT.
+            # Everything downstream needs the name and the (redacted) reason.
+            $skipped += [pscustomobject]@{ Name = $name; Reason = $reason }
+            continue
+        }
+
+        $gate = ConvertTo-ConstructPublishContent -Name $name -Raw "$($p.Raw)"
+        if (-not $gate.Ok) {
+            $reasons[$name] = $gate.Reason
+            $invalid += [pscustomobject]@{ Name = $name; Reason = $gate.Reason }
+            continue
+        }
+
+        $upstreamKey = $null
+        $lower = $name.ToLowerInvariant()
+        if ($remoteByLower.ContainsKey($lower)) { $upstreamKey = $remoteByLower[$lower] }
+        if ($null -ne $upstreamKey -and $upstreamKey -cne $name) {
+            $reason = "the remote already has projects/$upstreamKey.json, which is the SAME file as projects/$name.json on Windows -- rename one of them, or import it first"
+            $reasons[$name] = $reason
+            $refused += [pscustomobject]@{ Name = $name; Reason = $reason }
+            continue
+        }
+        $adopt = $false
+        if ($null -ne $upstreamKey) {
+            $adopt = $true
+            $upstreamRaw = $remote[$upstreamKey]
+            $upGate = ConvertTo-ConstructPublishContent -Name $name -Raw $upstreamRaw
+            $upstreamCmp = $upstreamRaw
+            if ($upGate.Ok) { $upstreamCmp = $upGate.Content }
+            if ($upstreamCmp -cne $gate.Content) {
+                $reason = "the remote already has projects/$name.json with different content -- import it first, then push back"
+                $reasons[$name] = $reason
+                $refused += [pscustomobject]@{ Name = $name; Reason = $reason }
+                continue
+            }
+        }
+        $publish += [pscustomobject]@{
+            Name         = $name
+            PathInRemote = "projects/$name.json"
+            Content      = $gate.Content
+            Adopt        = $adopt
+        }
+    }
+
+    return [pscustomobject]@{
+        Publish = @($publish)
+        Skipped = @($skipped)
+        Refused = @($refused)
+        Invalid = @($invalid)
+        Reasons = $reasons
+    }
+}
+
+function Get-ConstructRemoteDefaultBranch {
+    <#
+        Ask the REMOTE which branch its HEAD points at
+        (git ls-remote --symref <url> HEAD). Returns the short branch name, or ""
+        when the remote is unreachable or does not exist yet -- the push-to-create
+        case, where the caller falls back to "main". Never throws.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$RemoteUrl)
+
+    $r = Invoke-ConstructConfigGit -Arguments @("ls-remote", "--symref", $RemoteUrl, "HEAD")
+    if ($r.Code -ne 0) { return "" }
+    foreach ($line in ($r.Output -split "`n")) {
+        if ($line -match '^ref:\s+refs/heads/(\S+)\s') { return $Matches[1] }
+    }
+    return ""
+}
+
+# A staging clone created for push-to-create is marked INSIDE .git (never in the
+# work tree, so `git add -A` cannot pick it up). Without the marker a first push
+# that fails -- the common case while a PAT is still being set up -- would wedge
+# the flow forever: the retry finds a local repo whose fetch still fails and whose
+# HEAD now exists (the failed attempt's commit), which is exactly the signature of
+# "a real remote we cannot reach". The marker tells the two apart, and is removed
+# once a push has actually landed.
+$script:CONSTRUCT_PUBLISH_PENDING_MARKER = "construct-publish-pending"
+# The marker is an OPAQUE sentinel, never a copy of the remote URL: the URL is the
+# one thing that could carry a credential, and this is a plain unencrypted file in
+# the staging cache. Which remote it belongs to is already the directory name.
+$script:CONSTRUCT_PUBLISH_PENDING_SENTINEL = "push-to-create pending"
+
+function Get-ConstructPublishPendingMarker {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$CloneDir)
+    return (Join-Path (Join-Path $CloneDir ".git") $script:CONSTRUCT_PUBLISH_PENDING_MARKER)
+}
+
+function Initialize-ConstructPublishClone {
+    <#
+        The staging clone used by Publish-ConstructConfigProfiles. It lives in the
+        SAME D2 staging cache, under the SAME slug, as Update-ConstructStagingClone
+        -- so a publish and a later import/push-back share one clone.
+
+        The one difference: publishing tolerates a remote that does not exist yet.
+        When the clone fails (empty namespace / repo not created), the directory is
+        set up locally with `git init` + `git remote add origin`, and the first push
+        creates the repo on hosts that support push-to-create (GitLab/GitGudLab).
+        A remote that DOES exist but cannot be fetched is an error, not a
+        push-to-create: silently starting from an empty tree there would publish a
+        history that drops everything already in the repo.
+
+        Returns @{Ok; Dir; Created; Output}.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$RemoteUrl)
+
+    $cacheBase = $null
+    if ($env:LOCALAPPDATA) { $cacheBase = $env:LOCALAPPDATA }
+    elseif ($env:TEMP) { $cacheBase = $env:TEMP }
+    else { $cacheBase = [System.IO.Path]::GetTempPath() }
+    $stagingRoot = Join-Path (Join-Path $cacheBase "The-Construct") "cache/config-remotes"
+    $slug = ($RemoteUrl -replace '[^A-Za-z0-9._-]', '-')
+    $cloneDir = Join-Path $stagingRoot $slug
+
+    if (Test-Path -LiteralPath (Join-Path $cloneDir ".git")) {
+        # Keep origin pointing at the URL we were asked to publish to (the user may
+        # have re-linked the same repo under a different URL form).
+        $setUrl = Invoke-ConstructConfigGit -Arguments @("remote", "set-url", "origin", $RemoteUrl) -WorkingDir $cloneDir
+        if ($setUrl.Code -ne 0) {
+            $addRemote = Invoke-ConstructConfigGit -Arguments @("remote", "add", "origin", $RemoteUrl) -WorkingDir $cloneDir
+            if ($addRemote.Code -ne 0) {
+                return [pscustomobject]@{ Ok = $false; Dir = $cloneDir; Created = $false; Output = (Protect-ConstructGitOutput -Text ($setUrl.Output + "`n" + $addRemote.Output)) }
+            }
+        }
+        $fetch = Invoke-ConstructConfigGit -Arguments @("fetch", "origin") -WorkingDir $cloneDir
+        if ($fetch.Code -eq 0) {
+            return [pscustomobject]@{ Ok = $true; Dir = $cloneDir; Created = $false; Output = "" }
+        }
+        # Unreachable origin. Push-to-create only when THIS clone was created for
+        # it (marker), or when it has no commits at all.
+        $marker = Get-ConstructPublishPendingMarker -CloneDir $cloneDir
+        $pending = Test-Path -LiteralPath $marker
+        $head = Invoke-ConstructConfigGit -Arguments @("rev-parse", "--verify", "--quiet", "HEAD") -WorkingDir $cloneDir
+        if ($pending -or $head.Code -ne 0) {
+            try { [System.IO.File]::WriteAllText($marker, "$script:CONSTRUCT_PUBLISH_PENDING_SENTINEL`n") } catch { }
+            return [pscustomobject]@{ Ok = $true; Dir = $cloneDir; Created = $true; Output = "" }
+        }
+        return [pscustomobject]@{ Ok = $false; Dir = $cloneDir; Created = $false; Output = (Protect-ConstructGitOutput -Text $fetch.Output) }
+    }
+
+    if (-not (Test-Path -LiteralPath $stagingRoot)) {
+        New-Item -ItemType Directory -Path $stagingRoot -Force | Out-Null
+    }
+    $clone = Invoke-ConstructConfigGit -Arguments @("clone", $RemoteUrl, $cloneDir)
+    if ($clone.Code -eq 0) {
+        return [pscustomobject]@{ Ok = $true; Dir = $cloneDir; Created = $false; Output = "" }
+    }
+
+    # Push-to-create: no repo there yet. Start an empty local one.
+    Remove-Item -LiteralPath $cloneDir -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Path $cloneDir -Force | Out-Null
+    $init = Invoke-ConstructConfigGit -Arguments @("init") -WorkingDir $cloneDir
+    if ($init.Code -ne 0) {
+        return [pscustomobject]@{ Ok = $false; Dir = $cloneDir; Created = $false; Output = (Protect-ConstructGitOutput -Text ($clone.Output + "`n" + $init.Output)) }
+    }
+    $add = Invoke-ConstructConfigGit -Arguments @("remote", "add", "origin", $RemoteUrl) -WorkingDir $cloneDir
+    if ($add.Code -ne 0) {
+        return [pscustomobject]@{ Ok = $false; Dir = $cloneDir; Created = $false; Output = (Protect-ConstructGitOutput -Text $add.Output) }
+    }
+    try { [System.IO.File]::WriteAllText((Get-ConstructPublishPendingMarker -CloneDir $cloneDir), "$script:CONSTRUCT_PUBLISH_PENDING_SENTINEL`n") } catch { }
+    return [pscustomobject]@{ Ok = $true; Dir = $cloneDir; Created = $true; Output = "" }
+}
+
+function Publish-ConstructConfigProfiles {
+    <#
+        Publish LOCAL (untracked) project profiles into a linked upstream config
+        repo -- the third verb next to Import and Push back (plan 4.13 / B15).
+
+        Import and Push back only ever move files that already carry a provenance
+        manifest entry, so a profile born on this PC could never reach a remote at
+        all. Publish closes that gap: it copies the selected untracked profiles
+        into the remote's DEFAULT branch (the owner publishes into their OWN repo,
+        so no review branch) and then writes exactly the manifest entry + stored
+        base Import-ConstructConfigs would have written. From that moment the
+        profile is tracked and Import / Push back round-trip it like any other.
+
+        The decisions are made by the pure Get-ConstructPublishPlan (shared
+        behaviour with the extension's planPublish); this function is the IO around
+        it. EVERY git step is checked: adoption writes a manifest entry claiming a
+        file is tracked upstream, so it happens only after a push that landed, and
+        only with a real commit sha and a real blob sha for every published file.
+
+        The upstream commit is made with the USER'S configured git identity -- it
+        lands in the user's own repo, where this project's internal bookkeeping
+        identity would be wrong. Only `core.hooksPath=` is forced, so hooks from a
+        cloned repo never run on this machine. A missing git identity is reported
+        as such.
+
+        -Names narrows the selection (default: every untracked profile). The remote
+        is registered in manifest/remotes.json as the first side effect (naming it
+        as a publish target IS linking it); the network is only touched once there
+        is at least one publishable candidate.
+
+        Returns @{Published; Skipped; Refused; Invalid; Errors; Branch; Commit} --
+        Published is a name list, Skipped/Refused/Invalid are @{Name; Reason}
+        records. No returned string ever carries URL credentials.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ConfigDir,
+        [Parameter(Mandatory)][string]$RemoteUrl,
+        [string[]]$Names,
+        [string]$Branch
+    )
+
+    $published = @()
+    $skipped   = @()
+    $refused   = @()
+    $invalid   = @()
+    $errors    = @()
+    $branchName = ""
+    $commitSha  = ""
+
+    # One exit shape for every path below.
+    $emit = {
+        [pscustomobject]@{
+            Published = @($published)
+            Skipped   = @($skipped)
+            Refused   = @($refused)
+            Invalid   = @($invalid)
+            Errors    = @($errors)
+            Branch    = $branchName
+            Commit    = $commitSha
+        }
+    }
+
+    if (-not (Test-ConstructGitAvailable)) {
+        $errors += "git is not available on this host; publishing config profiles needs git."
+        return (& $emit)
+    }
+    $url = "$RemoteUrl".Trim()
+    $urlForDisplay = Format-ConstructRemoteUrlForDisplay -Url $url
+    if (-not $url -or $url.StartsWith("-")) {
+        $errors += "Invalid remote URL '$urlForDisplay'."
+        return (& $emit)
+    }
+    if (Test-ConstructUrlHasCredentials -Url $url) {
+        $errors += "The config repo URL '$urlForDisplay' carries credentials. Remove them and let a git credential helper supply the token -- a URL is written into git's config, the remotes manifest and every provenance entry, so a secret in it does not stay secret."
+        return (& $emit)
+    }
+    $branchName = "$Branch".Trim()
+    if ($branchName -and -not (Test-ConstructPublishBranchName -Name $branchName)) {
+        $errors += "Invalid branch name '$branchName'."
+        $branchName = ""
+        return (& $emit)
+    }
+
+    $projDir  = Join-Path $ConfigDir "projects"
+    $manifDir = Join-Path $ConfigDir "manifest"
+    $basesDir = Join-Path $ConfigDir "bases"
+    foreach ($d in @($projDir, $manifDir, $basesDir)) {
+        if (-not (Test-Path -LiteralPath $d)) {
+            New-Item -ItemType Directory -Path $d -Force | Out-Null
+        }
+    }
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+
+    # Naming the remote as a publish target links it (idempotent).
+    Register-ConstructConfigRemote -ConfigDir $ConfigDir -RemoteUrl $url
+
+    # ── Gather the inputs the pure planner needs ─────────────────────────────
+    $localProfiles = @()
+    foreach ($f in @(Get-ChildItem -LiteralPath $projDir -Filter *.json -File -ErrorAction SilentlyContinue |
+                     Sort-Object Name)) {
+        $raw = ""
+        try { $raw = [System.IO.File]::ReadAllText($f.FullName, [System.Text.Encoding]::UTF8) } catch { $raw = "" }
+        $localProfiles += @{ Name = $f.BaseName; Raw = $raw }
+    }
+    $manifestMap = @{}
+    foreach ($mf in @(Get-ChildItem -LiteralPath $manifDir -Filter *.json -File -ErrorAction SilentlyContinue)) {
+        if ($mf.Name -eq "remotes.json") { continue }
+        try { $manifestMap[$mf.BaseName] = (Get-Content -LiteralPath $mf.FullName -Raw | ConvertFrom-Json) } catch { continue }
+    }
+
+    $wanted = $null
+    if ($null -ne $Names) {
+        $wanted = @($Names | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+        foreach ($w in $wanted) {
+            if (@($localProfiles | Where-Object { $_.Name -eq $w }).Count -eq 0) {
+                $errors += "No local profile named '$w'."
+            }
+        }
+    }
+
+    # First pass with NO upstream listing: enough to tell whether anything is even
+    # publishable, so a fully-tracked store never touches the network.
+    $prePlan = Get-ConstructPublishPlan -Profiles $localProfiles -Manifest $manifestMap -RemoteFiles @{} -Names $wanted
+    if (@($prePlan.Publish).Count -eq 0) {
+        $skipped = @($prePlan.Skipped)
+        $refused = @($prePlan.Refused)
+        $invalid = @($prePlan.Invalid)
+        return (& $emit)
+    }
+
+    # ── Staging clone + target branch ────────────────────────────────────────
+    $clone = Initialize-ConstructPublishClone -RemoteUrl $url
+    if (-not $clone.Ok) {
+        $errors += "Could not prepare the staging clone for the config repo: $($clone.Output)"
+        return (& $emit)
+    }
+    $cloneDir = $clone.Dir
+
+    if (-not $branchName) {
+        if (-not $clone.Created) { $branchName = Get-ConstructRemoteDefaultBranch -RemoteUrl $url }
+        if (-not $branchName) { $branchName = "main" }
+        if (-not (Test-ConstructPublishBranchName -Name $branchName)) { $branchName = "main" }
+    }
+
+    $hasHead = ((Invoke-ConstructConfigGit -Arguments @("rev-parse", "--verify", "--quiet", "HEAD") -WorkingDir $cloneDir).Code -eq 0)
+    $hasRemoteBranch = ((Invoke-ConstructConfigGit -Arguments @("rev-parse", "--verify", "--quiet", "refs/remotes/origin/$branchName") -WorkingDir $cloneDir).Code -eq 0)
+    if ($hasRemoteBranch) {
+        $co = Invoke-ConstructConfigGit -Arguments @("checkout", "-B", $branchName, "refs/remotes/origin/$branchName") -WorkingDir $cloneDir
+    } elseif ($hasHead) {
+        $co = Invoke-ConstructConfigGit -Arguments @("checkout", "-B", $branchName) -WorkingDir $cloneDir
+    } else {
+        # No commits at all (fresh push-to-create clone, or an empty repo): the
+        # branch does not exist yet, so point the unborn HEAD at it.
+        $co = Invoke-ConstructConfigGit -Arguments @("symbolic-ref", "HEAD", "refs/heads/$branchName") -WorkingDir $cloneDir
+    }
+    if ($co.Code -ne 0) {
+        $errors += "Could not switch the staging clone to '$branchName': $(Protect-ConstructGitOutput -Text $co.Output)"
+        return (& $emit)
+    }
+    if ($hasRemoteBranch -or $hasHead) {
+        # Drop anything an earlier run left behind so the tree IS the branch. A
+        # failed reset/clean would publish that leftover, so both are checked.
+        $reset = Invoke-ConstructConfigGit -Arguments @("reset", "--hard") -WorkingDir $cloneDir
+        if ($reset.Code -ne 0) {
+            $errors += "Could not reset the staging clone: $(Protect-ConstructGitOutput -Text $reset.Output)"
+            return (& $emit)
+        }
+        $clean = Invoke-ConstructConfigGit -Arguments @("clean", "-fd") -WorkingDir $cloneDir
+        if ($clean.Code -ne 0) {
+            $errors += "Could not clean the staging clone: $(Protect-ConstructGitOutput -Text $clean.Output)"
+            return (& $emit)
+        }
+    }
+
+    # ── Plan again, now against the real upstream listing ───────────────────
+    $remoteFiles = @{}
+    $cloneProjDir = Join-Path $cloneDir "projects"
+    foreach ($rf in @(Get-ChildItem -LiteralPath $cloneProjDir -Filter *.json -File -ErrorAction SilentlyContinue)) {
+        try { $remoteFiles[$rf.BaseName] = [System.IO.File]::ReadAllText($rf.FullName, [System.Text.Encoding]::UTF8) } catch { continue }
+    }
+    $plan = Get-ConstructPublishPlan -Profiles $localProfiles -Manifest $manifestMap -RemoteFiles $remoteFiles -Names $wanted
+    $skipped = @($plan.Skipped)
+    $refused = @($plan.Refused)
+    $invalid = @($plan.Invalid)
+    $toPublish = @($plan.Publish)
+
+    if ($toPublish.Count -eq 0) {
+        return (& $emit)
+    }
+
+    # ── Write, commit, push ─────────────────────────────────────────────────
+    if (-not (Test-Path -LiteralPath $cloneProjDir)) {
+        New-Item -ItemType Directory -Path $cloneProjDir -Force | Out-Null
+    }
+    foreach ($p in $toPublish) {
+        [System.IO.File]::WriteAllText((Join-Path $cloneProjDir "$($p.Name).json"), $p.Content, $utf8NoBom)
+    }
+
+    # Only hooks are forced off (a cloned repo's hooks must never run here); the
+    # identity is the user's own, because this commit lands in the user's repo.
+    $noHooks = @("-c", "core.hooksPath=")
+    $add = Invoke-ConstructConfigGit -Arguments ($noHooks + @("add", "-A")) -WorkingDir $cloneDir
+    if ($add.Code -ne 0) {
+        $errors += "git add failed in the staging clone: $(Protect-ConstructGitOutput -Text $add.Output)"
+        return (& $emit)
+    }
+    $staged = Invoke-ConstructConfigGit -Arguments @("diff", "--cached", "--name-only") -WorkingDir $cloneDir
+    if ($staged.Code -ne 0) {
+        $errors += "git diff --cached failed in the staging clone: $(Protect-ConstructGitOutput -Text $staged.Output)"
+        return (& $emit)
+    }
+    if ("$($staged.Output)".Trim()) {
+        $msg = "publish $($toPublish.Count) profiles"
+        $ci = Invoke-ConstructConfigGit -Arguments ($noHooks + @("commit", "-m", $msg)) -WorkingDir $cloneDir
+        if ($ci.Code -ne 0) {
+            $ciOut = Protect-ConstructGitOutput -Text $ci.Output
+            if ($ciOut -match "Please tell me who you are|empty ident|unable to auto-detect email") {
+                $errors += "git has no configured identity to commit with. Set user.name and user.email (git config --global user.name '...'; git config --global user.email '...') and publish again. $ciOut"
+            } else {
+                $errors += "Could not commit the published profiles: $ciOut"
+            }
+            return (& $emit)
+        }
+    }
+
+    $push = Invoke-ConstructConfigGit -Arguments @("push", "origin", "HEAD:refs/heads/$branchName") -WorkingDir $cloneDir
+    if ($push.Code -ne 0) {
+        $errors += "git push to the config repo ($branchName) failed: $(Protect-ConstructGitOutput -Text $push.Output)"
+        return (& $emit)
+    }
+
+    # ── Provenance: no adoption without a real commit and a real blob ───────
+    $headSha = Invoke-ConstructConfigGit -Arguments @("rev-parse", "HEAD") -WorkingDir $cloneDir
+    if ($headSha.Code -eq 0) { $commitSha = "$($headSha.Output)".Trim() }
+    if ($commitSha -notmatch '^[0-9a-f]{40}$') {
+        $commitSha = ""
+        $errors += "Could not resolve the pushed commit: $(Protect-ConstructGitOutput -Text $headSha.Output)"
+        return (& $emit)
+    }
+    $blobShas = @{}
+    foreach ($p in $toPublish) {
+        $blob = Invoke-ConstructConfigGit -Arguments @("rev-parse", "HEAD:$($p.PathInRemote)") -WorkingDir $cloneDir
+        $sha = ""
+        if ($blob.Code -eq 0) { $sha = "$($blob.Output)".Trim() }
+        if ($sha -notmatch '^[0-9a-f]{40}$') {
+            $errors += "'$($p.Name)' is not in the pushed commit $($commitSha.Substring(0,7)): $(Protect-ConstructGitOutput -Text $blob.Output)"
+            $commitSha = ""
+            return (& $emit)
+        }
+        $blobShas[$p.Name] = $sha
+    }
+
+    # The push landed: this clone is a normal staging clone from now on.
+    Remove-Item -LiteralPath (Get-ConstructPublishPendingMarker -CloneDir $cloneDir) -Force -ErrorAction SilentlyContinue
+
+    # ── Adopt: manifest entry + stored base, byte-identical to an import ─────
+    foreach ($p in $toPublish) {
+        $manifEntry = [ordered]@{
+            remoteUrl    = $url
+            ref          = $branchName
+            pathInRemote = $p.PathInRemote
+            importedAs   = $p.Name
+            baseCommit   = $commitSha
+            baseBlobSha  = $blobShas[$p.Name]
+        }
+        $manifJson = ConvertTo-ConstructJsonValue -Value ([pscustomobject]$manifEntry) -Depth 0
+        [System.IO.File]::WriteAllText((Join-Path $manifDir "$($p.Name).json"), "$manifJson`n", $utf8NoBom)
+        [System.IO.File]::WriteAllText((Join-Path $basesDir "$($p.Name).json"), $p.Content, $utf8NoBom)
+        # The stored base is the merge base for the next import, so it must be the
+        # SAME bytes as the local file. Every writer already produces canonical
+        # form, so this is a no-op in practice -- but a hand-formatted (still
+        # VALID) profile would otherwise leave base != ours and make the first
+        # 3-way merge report a diff that is only whitespace.
+        $localFile = Join-Path $projDir "$($p.Name).json"
+        $localRaw = ""
+        try { $localRaw = [System.IO.File]::ReadAllText($localFile, [System.Text.Encoding]::UTF8) } catch { $localRaw = "" }
+        if ($localRaw -cne $p.Content) {
+            [System.IO.File]::WriteAllText($localFile, $p.Content, $utf8NoBom)
+        }
+        $published += $p.Name
+    }
+
+    if ($published.Count -gt 0) {
+        # The LOCAL config store keeps its own bookkeeping identity (that repo is
+        # machine-local and never pushed anywhere) -- unchanged from every other
+        # config write. Failures here are reported: the files are on disk, but the
+        # store is left dirty and the user should know.
+        $gitIdent = @("-c", "user.name=The Construct", "-c", "user.email=construct@construct.local", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=")
+        $addCfg = Invoke-ConstructConfigGit -Arguments @("add", "-A") -WorkingDir $ConfigDir
+        if ($addCfg.Code -ne 0) {
+            $errors += "Published, but staging the config store failed: $(Protect-ConstructGitOutput -Text $addCfg.Output)"
+        } else {
+            $ciCfg = Invoke-ConstructConfigGit -Arguments ($gitIdent + @("commit", "-m", "publish: $($published -join ', ')")) -WorkingDir $ConfigDir
+            if ($ciCfg.Code -ne 0) {
+                $errors += "Published, but committing the config store failed: $(Protect-ConstructGitOutput -Text $ciCfg.Output)"
+            }
+        }
+    }
+
+    return (& $emit)
 }
