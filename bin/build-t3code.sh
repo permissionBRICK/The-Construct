@@ -157,11 +157,13 @@ NPM_TAG=latest
 CACHE_ROOT="/var/cache/construct/t3code-source"
 ARTIFACT_ROOT="/var/lib/construct/t3code-desktop"
 SOURCE_TRANSFORMER="${REPO_DIR}/bin/apply-t3code-source.mjs"
-# One inventory serves both channels: its transforms anchor on the smallest upstream
-# fragment each change needs (see patches/t3code/README.md), so a stable tag and the
-# nightlies around it apply the same manifest.
-SOURCE_MANIFEST="${REPO_DIR}/patches/t3code/source-transforms.json"
-SOURCE_OVERLAYS="${REPO_DIR}/patches/t3code/overlays"
+# One inventory per channel, each written against the LATEST tag of that channel
+# only (see patches/README.md): its transforms anchor on the smallest upstream
+# fragment each change needs, and carry no logic for other upstream versions.
+INVENTORY_NAME=release
+[[ "${CHANNEL}" == "nightly" ]] && INVENTORY_NAME=nightly
+SOURCE_MANIFEST="${REPO_DIR}/patches/t3code-${INVENTORY_NAME}/source-transforms.json"
+SOURCE_OVERLAYS="${REPO_DIR}/patches/t3code-${INVENTORY_NAME}/overlays"
 T3PARK_PATCHER="${REPO_DIR}/extension/vm/construct-t3park-patch.mjs"
 T3MONITOR_PATCHER="${REPO_DIR}/extension/vm/construct-t3-opencode-monitor-patch.mjs"
 CONSTRUCT_REPO_URL="${CONSTRUCT_REPO_URL:-https://github.com/permissionBRICK/The-Construct.git}"
@@ -294,7 +296,7 @@ if [[ ! -d "${SOURCE_DIR}/.git" && ! -s "${SOURCE_DIR}/.construct-upstream-commi
 fi
 cd "${SOURCE_DIR}"
 
-node "${SOURCE_TRANSFORMER}" apply --source "${SOURCE_DIR}" --manifest "${SOURCE_MANIFEST}" --overlays "${SOURCE_OVERLAYS}" --channel "${CHANNEL}" \
+node "${SOURCE_TRANSFORMER}" apply --source "${SOURCE_DIR}" --manifest "${SOURCE_MANIFEST}" --overlays "${SOURCE_OVERLAYS}" \
   || fail "the Construct source transforms do not apply to T3 Code ${TAG}; the inventory needs a repair for this upstream version"
 
 note "Installing T3 source dependencies..."

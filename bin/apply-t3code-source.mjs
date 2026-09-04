@@ -13,15 +13,15 @@
 //     re-indenting upstream never breaks a match; only the code we depend on does.
 //   * Inserts are line-based: the anchor picks a line, the insert text (full lines,
 //     with their own indentation) goes after/before it.
-//   * An anchor/find may be an ARRAY of alternatives: the first one that matches wins
-//     (one inventory can cover several upstream versions).
 //   * "scope": "<text>" starts the search after that text — only for the rare anchor
 //     that occurs more than once in the file.
+//   * "every": true — insert next to every occurrence (a prop passed at several
+//     identical call sites).
 //   * "optional": true — a missing file or anchor is skipped, not a conflict (used
 //     for upstream TEST files: they never affect the built server/Desktop app).
-//   * "channel": "stable" | "nightly" — this transform belongs to that channel's
-//     build only (--channel). Used when the two live channels need different text
-//     at one spot; the stale half is deleted once the channels agree again.
+//   * One inventory per channel (patches/t3code-release, patches/t3code-nightly),
+//     each written against the latest tag of its channel only. A transform never
+//     carries logic for more than one upstream shape (see patches/README.md).
 //   * Already applied (insert text / replacement present) is a no-op, so the same
 //     tree can be transformed again after an interrupted build.
 //
@@ -40,15 +40,11 @@ const valueAfter = (flag, fallback) => {
   return index >= 0 && args[index + 1] ? resolve(args[index + 1]) : fallback
 }
 const sourceDir = valueAfter("--source", process.cwd())
-const manifestPath = valueAfter("--manifest", join(constructDir, "patches", "t3code", "source-transforms.json"))
-const overlayDir = valueAfter("--overlays", join(constructDir, "patches", "t3code", "overlays"))
-// The T3 channel being built (stable|nightly). A transform carrying "channel" is one
-// half of a pair written separately for each channel; the other half is skipped.
-const channelIndex = args.indexOf("--channel")
-const channel = channelIndex >= 0 && args[channelIndex + 1] === "nightly" ? "nightly" : "stable"
+const manifestPath = valueAfter("--manifest", join(constructDir, "patches", "t3code-release", "source-transforms.json"))
+const overlayDir = valueAfter("--overlays", join(constructDir, "patches", "t3code-release", "overlays"))
 
 if (mode !== "apply" && mode !== "status") {
-  console.error("usage: apply-t3code-source.mjs apply|status [--source DIR] [--manifest FILE] [--overlays DIR] [--channel stable|nightly]")
+  console.error("usage: apply-t3code-source.mjs apply|status [--source DIR] [--manifest FILE] [--overlays DIR]")
   process.exit(1)
 }
 
@@ -90,23 +86,19 @@ function findAll(text, needle, from = 0) {
   return hits
 }
 
-const asList = (value) => (Array.isArray(value) ? value : [value])
-
-// Locate one of the alternative anchors. Without a scope the anchor must occur exactly
-// once; with a scope the first occurrence after the scope text is the one. Returns
-// { hit, anchor } or null; `ambiguous` collects anchors that matched several times.
-function locate(text, alternatives, scope, ambiguous) {
+// Locate the anchor. Without a scope it must occur exactly once; with a scope the
+// first occurrence after the scope text is the one. Returns { hit } or null;
+// `ambiguous` records an anchor that matched several times.
+function locate(text, anchor, scope, ambiguous) {
   let from = 0
   if (scope) {
     const scoped = findAll(text, scope)
     if (!scoped.length) return null
     from = scoped[0].end
   }
-  for (const anchor of alternatives) {
-    const hits = findAll(text, anchor, from)
-    if (hits.length === 1 || (scope && hits.length)) return { hit: hits[0], anchor }
-    if (hits.length > 1) ambiguous.push(anchor)
-  }
+  const hits = findAll(text, anchor, from)
+  if (hits.length === 1 || (scope && hits.length)) return { hit: hits[0] }
+  if (hits.length > 1) ambiguous.push(anchor)
   return null
 }
 
@@ -134,8 +126,8 @@ function runTransform(operation, content) {
     const where = operation.after !== undefined ? "after" : "before"
     if (operation.every) {
       // The same insert next to EVERY occurrence (an upstream prop passed at several call sites).
-      const hits = asList(operation[where]).map((anchor) => findAll(content, anchor)).find((found) => found.length)
-      if (!hits) return { state: operation.optional ? "skipped" : "conflict", detail: `${where} anchor not found` }
+      const hits = findAll(content, operation[where])
+      if (!hits.length) return { state: operation.optional ? "skipped" : "conflict", detail: `${where} anchor not found` }
       let updated = content
       for (const hit of [...hits].reverse()) {
         const at = where === "after" ? lineEnd(updated, hit.end) : lineStart(updated, hit.start)
@@ -143,14 +135,14 @@ function runTransform(operation, content) {
       }
       return { state: "pending", content: updated, detail: hits[0].how }
     }
-    const found = locate(content, asList(operation[where]), operation.scope, ambiguous)
+    const found = locate(content, operation[where], operation.scope, ambiguous)
     if (!found) return { state: operation.optional ? "skipped" : "conflict", detail: describeMiss(where, ambiguous) }
     const at = where === "after" ? lineEnd(content, found.hit.end) : lineStart(content, found.hit.start)
     return { state: "pending", content: content.slice(0, at) + insert + content.slice(at), detail: found.hit.how }
   }
   if (operation.find !== undefined) {
     if (content.includes(operation.replace)) return { state: "applied" }
-    const found = locate(content, asList(operation.find), operation.scope, ambiguous)
+    const found = locate(content, operation.find, operation.scope, ambiguous)
     if (!found) return { state: operation.optional ? "skipped" : "conflict", detail: describeMiss("find", ambiguous) }
     return {
       state: "pending",
@@ -188,11 +180,6 @@ for (const path of manifest.overlays) {
 
 manifest.transforms.forEach((operation, index) => {
   const label = `${operation.path}#${index}`
-  if (operation.channel !== undefined && operation.channel !== channel) {
-    skipped++
-    results.push({ transform: label, state: "skipped", detail: `${operation.channel} channel only` })
-    return
-  }
   const destination = targetPath(sourceDir, operation.path)
   if (!existsSync(destination) && !files.has(destination)) {
     if (operation.optional) {
