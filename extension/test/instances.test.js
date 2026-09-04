@@ -1516,18 +1516,30 @@ eq("quoting: ...so a leading-dash value is still emitted bare, as before",
 console.log("\n=== parameter probing against the real scripts ===");
 const repoRoot = path.join(__dirname, "..", "..");
 if (fs.existsSync(path.join(repoRoot, life.PROVISION))) {
-  const provParams = life.instanceParamSupport(repoRoot, "reprovision");
-  ok("probe: Provision-AgentVM.ps1 declares -VmHost", provParams.includes("VmHost"));
-  ok("probe: Provision-AgentVM.ps1 declares -HostAlias", provParams.includes("HostAlias"));
-  ok("probe: Provision-AgentVM.ps1 declares -SshPort", provParams.includes("SshPort"));
-  ok("probe: Provision-AgentVM.ps1 declares -LocalKeyName", provParams.includes("LocalKeyName"));
-  ok("probe: Provision-AgentVM.ps1 declares -ConfigBranch", provParams.includes("ConfigBranch"));
-  // Auto-Install DERIVES the guest hostname/alias/key from -VmName and throws on a
-  // conflicting -VmHost, so identity there is -VmName only (+ the optional branch).
-  const aiParams = life.instanceParamSupport(repoRoot, "reinstall");
-  deepEq("probe: reinstall considers -VmName and -ConfigBranch only", aiParams, ["VmName", "ConfigBranch"]);
-  deepEq("probe: setCheckpoints only ever considers -VmName",
-    life.instanceParamSupport(repoRoot, "setCheckpoints"), ["VmName"]);
+  // THIS repo carries lib/AgentVm.InstanceTarget.ps1, so it targets BY NAME (B11): the
+  // four identity arguments are what an older scripts dir gets, and that fallback is
+  // pinned against a fixture in extension/test/lifecycle.test.js.
+  ok("probe: the real scripts support name-only targeting",
+    life.supportsNameTargeting(repoRoot, "reprovision") === true);
+  deepEq("probe: reprovision is the name plus the config-sync branch",
+    life.instanceParamSupport(repoRoot, "reprovision"), ["InstanceName", "ConfigBranch"]);
+  deepEq("probe: exportConfig is the name alone (it initialises no config store)",
+    life.instanceParamSupport(repoRoot, "exportConfig"), ["InstanceName"]);
+  deepEq("probe: reinstall is the name plus the branch",
+    life.instanceParamSupport(repoRoot, "reinstall"), ["InstanceName", "ConfigBranch"]);
+  deepEq("probe: setCheckpoints is the name alone",
+    life.instanceParamSupport(repoRoot, "setCheckpoints"), ["InstanceName"]);
+  // The identity parameters are all still DECLARED — name-only targeting replaces the
+  // arguments the panel emits, not the ones a console or a BYO setup can pass.
+  for (const p2 of ["VmHost", "HostAlias", "SshPort", "LocalKeyName", "ConfigBranch", "InstanceName"]) {
+    ok(`probe: Provision-AgentVM.ps1 declares -${p2}`, life.scriptSupportsParam(repoRoot, life.PROVISION, p2));
+  }
+  for (const p2 of ["VmName", "ConfigBranch", "InstanceName"]) {
+    ok(`probe: Auto-Install.ps1 declares -${p2}`, life.scriptSupportsParam(repoRoot, life.AUTO_INSTALL, p2));
+  }
+  for (const p2 of ["VmName", "InstanceName"]) {
+    ok(`probe: Set-AgentVmCheckpoints.ps1 declares -${p2}`, life.scriptSupportsParam(repoRoot, life.CHECKPOINTS, p2));
+  }
   ok("probe: a made-up parameter is not found",
     !life.scriptSupportsParam(repoRoot, life.PROVISION, "TotallyNotAParameter"));
 } else {
@@ -2567,6 +2579,68 @@ async function asyncTests() {
   // No setActive at all must not throw either.
   ok("adopt: a missing setActive is tolerated",
     (await inst.adoptRemoteInstance({ registry: adoptReg, remoteAuthority: "ssh-remote+work-vm", setting: "", currentName: "agent-vm" })).adopt);
+
+  // ── "Register this VM" (B11, plan §4.12) ──────────────────────────────────
+  // The mirror of adoption: attached over Remote-SSH to a host NO entry describes, the
+  // panel offers to name it and record it. The offer is pure, and so is the refusal that
+  // keeps a machine the registry cannot describe out of it.
+  console.log("\n=== register this VM (an unknown Remote-SSH host) ===");
+  const offer = (auth, setting, current) => inst.planRegisterAttachedVm(adoptReg, auth, setting, current);
+  ok("register: a local window is offered nothing", !offer(undefined, "", "agent-vm").offer);
+  eq("register: ...and says why", offer(undefined, "", "agent-vm").reason, "not-remote");
+  ok("register: a non-ssh authority is offered nothing", !offer("wsl+Ubuntu", "", "agent-vm").offer);
+  ok("register: a host that IS an instance is offered nothing (it is registered)",
+    !offer("ssh-remote+work-vm", "", "agent-vm").offer);
+  ok("register: the implicit default is a known host too",
+    !offer("ssh-remote+agent-vm", "", "agent-vm").offer);
+  ok("register: an explicit pin is an answer already given", !offer("ssh-remote+somewhere", "agent-vm", "agent-vm").offer);
+  const unknown = offer("ssh-remote+build-vm.mshome.net", "", "agent-vm");
+  ok("register: an unknown host IS offered", unknown.offer === true && unknown.reason === "unknown-host");
+  eq("register: the host is reported verbatim", unknown.host, "build-vm.mshome.net");
+  eq("register: the suggested name is the host's first label", unknown.suggestedName, "build-vm");
+  eq("register: a host whose first label is not a usable name suggests nothing",
+    offer("ssh-remote+Build_VM.local", "", "agent-vm").suggestedName, "");
+  eq("register: ...and a reserved prefix is not suggested either",
+    offer("ssh-remote+construct-work.mshome.net", "", "agent-vm").suggestedName, "");
+
+  // The entry itself: the canonical local identity, derived from the NAME.
+  const reg1 = inst.planLocalRegistration(adoptReg, "build-vm", "build-vm.mshome.net");
+  ok("register: a canonical local host is accepted", reg1.ok === true);
+  eq("register: backend", reg1.entry.backend, "hyperv-local");
+  eq("register: vmName", reg1.entry.vmName, "build-vm");
+  eq("register: sshHost", reg1.entry.sshHost, "build-vm.mshome.net");
+  eq("register: sshPort", reg1.entry.sshPort, 22);
+  eq("register: hostAlias", reg1.entry.hostAlias, "build-vm");
+  eq("register: keyName", reg1.entry.keyName, "construct_build-vm_ed25519");
+  ok("register: the SSH ALIAS form of the same machine is accepted too",
+    inst.planLocalRegistration(adoptReg, "build-vm", "build-vm").ok === true);
+  ok("register: ...case-insensitively, and a trailing dot is not a different host",
+    inst.planLocalRegistration(adoptReg, "build-vm", "BUILD-VM.MSHOME.NET.").ok === true);
+  // THE WRITE IS THE SAME WRITE: what the planner produces must survive addInstance +
+  // save + parse, or the instance would vanish from the picker on the next load.
+  const registered = inst.addInstance(adoptReg, reg1.name, reg1.entry);
+  const roundTrip = inst.parseRegistry(JSON.stringify(inst.toFileDocument(registered)));
+  eq("register: the entry round-trips through the reader", roundTrip.problems.length, 0);
+  eq("register: ...and the instance is there afterwards",
+    inst.resolve(roundTrip.registry, "build-vm").vmHost, "build-vm.mshome.net");
+  ok("register: ...still a local instance", inst.isLocalBackend(inst.resolve(roundTrip.registry, "build-vm").backend));
+
+  // THE REFUSAL. A hyperv-local entry's identity is derived from its name, so there is
+  // no name for which one describes a machine on somebody else's host.
+  const refused = inst.planLocalRegistration(adoptReg, "build-vm", "buildbox.example.local");
+  ok("register: a host that is not the derivation is REFUSED", refused.ok === false);
+  ok("register: ...naming the host the window is on", refused.reason.includes("buildbox.example.local"));
+  ok("register: ...and the address the entry would claim", refused.reason.includes("build-vm.mshome.net"));
+  ok("register: ...and points at the remote flow instead", /remote host/i.test(refused.reason));
+  ok("register: an invalid name is refused with the ONE name rule",
+    inst.planLocalRegistration(adoptReg, "Build VM", "build-vm.mshome.net").reason.includes(inst.NAME_RULE));
+  ok("register: a reserved name is refused too",
+    inst.planLocalRegistration(adoptReg, "construct-build", "construct-build.mshome.net").ok === false);
+  ok("register: an empty name is refused", inst.planLocalRegistration(adoptReg, "", "build-vm.mshome.net").ok === false);
+  ok("register: a name this PC already uses is refused",
+    inst.planLocalRegistration(adoptReg, "work-vm", "work-vm.mshome.net").ok === false);
+  ok("register: ...including the default instance, which is always present",
+    inst.planLocalRegistration(adoptReg, "agent-vm", "agent-vm.mshome.net").ok === false);
 
   // ── The keyed follow-up queue (config-sync ticks) ──────────────────────────
   // The real failure: A's tick is in flight, the user hits "Sync Now" for A, then

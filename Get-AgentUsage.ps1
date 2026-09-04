@@ -39,6 +39,12 @@
 .PARAMETER OutFile
     Write the combined JSON straight to this path and skip the file picker.
 
+.PARAMETER InstanceName
+    Name-only targeting (plan section 4.12): the Construct instance to read usage from,
+    resolved through the client-side registry -- -VmHost, -HostAlias, -SshPort and
+    -LocalKeyName then come from its entry. An explicit value that disagrees with the
+    entry is an error. Empty (and the default instance) = today's literals exactly.
+
 .NOTES
     Read-only: it never modifies agent data, only installs ccusage if missing.
 #>
@@ -54,11 +60,33 @@ param(
     [ValidateSet("session", "daily", "weekly", "monthly")]
     [string]$Report      = "session",
     [string]$OutFile     = "",
+    # NAME-ONLY TARGETING (B11, plan section 4.12): one parameter instead of four.
+    [string]$InstanceName = "",
     # Set when launched by an upper script that owns the final pause.
     [switch]$Auto
 )
 
 $ErrorActionPreference = "Stop"
+
+# Resolve -InstanceName before anything reads the identity below. Explicit values still
+# win and must agree with the entry; an unknown name stops the run listing the known
+# ones; the default instance resolves to exactly the defaults above.
+if ($InstanceName) {
+    $instanceTargetLib = Join-Path $PSScriptRoot "lib\AgentVm.InstanceTarget.ps1"
+    if (-not (Test-Path -LiteralPath $instanceTargetLib)) {
+        throw "-InstanceName needs lib/AgentVm.InstanceTarget.ps1, which is missing from this install. Update The Construct, or pass -VmHost/-HostAlias/-SshPort/-LocalKeyName instead."
+    }
+    . $instanceTargetLib
+    $explicitTarget = @{}
+    foreach ($tp in @('VmHost', 'HostAlias', 'SshPort', 'LocalKeyName')) {
+        if ($PSBoundParameters.ContainsKey($tp)) { $explicitTarget[$tp] = $PSBoundParameters[$tp] }
+    }
+    $instanceTarget = Resolve-ConstructVmTarget -Name $InstanceName -Explicit $explicitTarget
+    if (-not $PSBoundParameters.ContainsKey('VmHost'))       { $VmHost       = [string]$instanceTarget.VmHost }
+    if (-not $PSBoundParameters.ContainsKey('HostAlias'))    { $HostAlias    = [string]$instanceTarget.HostAlias }
+    if (-not $PSBoundParameters.ContainsKey('SshPort'))      { $SshPort      = [int]$instanceTarget.SshPort }
+    if (-not $PSBoundParameters.ContainsKey('LocalKeyName')) { $LocalKeyName = [string]$instanceTarget.KeyName }
+}
 
 # Decode native-command output (ssh stdout) as UTF-8 so the remote's JSON and any
 # box-drawing/emoji bytes survive Windows PowerShell 5.1's default OEM decoding.

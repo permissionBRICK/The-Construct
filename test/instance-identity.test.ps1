@@ -28,7 +28,9 @@ $touchedScripts = @(
     "Set-AgentVmCheckpoints.ps1",
     "Get-AgentUsage.ps1",
     "Update-T3Code.ps1",
-    "lib/AgentVm.Common.ps1"
+    "lib/AgentVm.Common.ps1",
+    "lib/AgentVm.Instances.ps1",
+    "lib/AgentVm.InstanceTarget.ps1"
 )
 foreach ($rel in $touchedScripts) {
     $full = Join-Path $repoRoot $rel
@@ -394,6 +396,286 @@ if ($fnSvc) {
     ok "service suffix: a hostile instance name cannot inject a command" `
         ((Get-ServiceEnvSuffix -ServiceUrl "" -InstanceName "x'; rm -rf /; '" -VmTokenB64 "") -eq
          " CONSTRUCT_INSTANCE_NAME='x'\''; rm -rf /; '\'''")
+}
+
+# ── Name-only targeting: -InstanceName on the four launched scripts (B11) ───
+Write-Host ""
+Write-Host "=== Name-only targeting (-InstanceName) ===" -ForegroundColor Cyan
+
+# Every script the control panel and the T3 Desktop updater launch must ACCEPT the name.
+foreach ($rel in @("Provision-AgentVM.ps1", "Update-T3Code.ps1", "Set-AgentVmCheckpoints.ps1",
+                   "Get-AgentUsage.ps1", "Create-AgentVM.ps1", "Auto-Install.ps1")) {
+    $p = Get-ScriptParam (Join-Path $repoRoot $rel) "InstanceName"
+    ok "$rel has -InstanceName" ($null -ne $p)
+    ok "$rel -InstanceName defaults to empty (nothing is resolved unless asked)" (
+        (Get-ParamDefaultValue $p) -eq '""')
+}
+
+# ...and must resolve it through the ONE adapter, never with a second copy of the rules.
+foreach ($rel in @("Provision-AgentVM.ps1", "Update-T3Code.ps1", "Set-AgentVmCheckpoints.ps1",
+                   "Get-AgentUsage.ps1")) {
+    $txt = [System.IO.File]::ReadAllText((Join-Path $repoRoot $rel))
+    ok "$rel resolves it with Resolve-ConstructVmTarget" ($txt -match 'Resolve-ConstructVmTarget')
+    ok "$rel loads lib\AgentVm.InstanceTarget.ps1 for it" ($txt -match 'AgentVm\.InstanceTarget\.ps1')
+    ok "$rel only resolves when a name was given" ($txt -match '(?m)^if \(\$InstanceName\) \{')
+}
+foreach ($rel in @("Create-AgentVM.ps1", "Auto-Install.ps1")) {
+    $txt = [System.IO.File]::ReadAllText((Join-Path $repoRoot $rel))
+    ok "$rel derives the VM name with Get-ConstructLocalVmIdentity" ($txt -match 'Get-ConstructLocalVmIdentity')
+}
+
+# THE CAPABILITY MARKER the control panel probes for (extension/src/lifecycle.js
+# INSTANCE_TARGET_LIB): a file, because the PARAMETER name predates this meaning.
+ok "the marker file exists" (Test-Path -LiteralPath (Join-Path $repoRoot "lib/AgentVm.InstanceTarget.ps1"))
+$lifecycleJs = [System.IO.File]::ReadAllText((Join-Path $repoRoot "extension/src/lifecycle.js"))
+ok "the panel probes for that exact file name" ($lifecycleJs -match 'AgentVm\.InstanceTarget\.ps1')
+
+# The GUEST still learns the instance name only for a SERVICE-MANAGED VM: a local
+# instance's env prefix (and therefore its config.env) is unchanged.
+$provTxt = [System.IO.File]::ReadAllText((Join-Path $repoRoot "Provision-AgentVM.ps1"))
+ok "guest: the name is gated on -ServiceUrl before it reaches the env prefix" (
+    $provTxt -match '\$guestInstanceName = ""\s*\r?\n\s*if \(\$ServiceUrl\) \{ \$guestInstanceName = \$InstanceName \}')
+ok "guest: ...and that is what Get-ServiceEnvSuffix is handed" (
+    $provTxt -match 'Get-ServiceEnvSuffix -ServiceUrl \$ServiceUrl -InstanceName \$guestInstanceName')
+
+# THE HOST SERVICE IS PART OF THE TARGET: a name-targeted reprovision of a remote
+# instance has to reach the service the REGISTRY names, not whatever the guest was last
+# told -- and an explicit -ServiceUrl that disagrees is a conflict like any other.
+ok "service: -ServiceUrl is conflict-checked with the rest" (
+    $provTxt -match "foreach \(\`$tp in @\('VmHost', 'HostAlias', 'SshPort', 'LocalKeyName', 'ConfigBranch', 'ServiceUrl'\)\)")
+ok "service: ...and is taken from the entry when the caller did not bind it" (
+    $provTxt -match "if \(-not \`$PSBoundParameters\.ContainsKey\('ServiceUrl'\)\)\s*\{\s*\`$ServiceUrl\s*=\s*\[string\]\`$instanceTarget\.ServiceUrl \}")
+
+# An endpoint resolved BY NAME is still an endpoint the caller stated, so the guest
+# records it exactly as it would from -VmHost.
+ok "endpoint: a resolved non-default endpoint counts as explicitly stated" (
+    $provTxt -match '\$script:InstanceEndpointStated = \$true')
+ok "endpoint: ...and feeds the same `$explicitEndpoint gate" (
+    $provTxt -match '\$explicitEndpoint = \[bool\]\(\$PSBoundParameters\.ContainsKey\(''VmHost''\) -or \$PSBoundParameters\.ContainsKey\(''SshPort''\) -or \$script:InstanceEndpointStated\)')
+
+# ── Local registry writing from the installers (B11) ───────────────────────
+Write-Host ""
+Write-Host "=== Local instance recording ===" -ForegroundColor Cyan
+$createTxt = [System.IO.File]::ReadAllText((Join-Path $repoRoot "Create-AgentVM.ps1"))
+ok "Create-AgentVM records the VM through the shared writer" ($createTxt -match 'Register-ConstructLocalVm ')
+ok "Create-AgentVM records it after the install media is detached" (
+    $createTxt.IndexOf('Detach-ConstructInstallMedia -Name $VmName') -lt $createTxt.LastIndexOf('Register-ThisVmInstance'))
+ok "Create-AgentVM also records on the reprovision branch" (
+    ([regex]::Matches($createTxt, 'Register-ThisVmInstance')).Count -ge 3)
+$autoTxt = [System.IO.File]::ReadAllText((Join-Path $repoRoot "Auto-Install.ps1"))
+ok "Auto-Install records an existing local VM through the shared writer" (
+    $autoTxt -match 'Register-ConstructLocalVmInstance -Name \$VmGuestName')
+ok "Auto-Install never hand-rolls the entry JSON" ($autoTxt -notmatch '"backend"\s*:\s*"hyperv-local"')
+
+# ── The adapter both installers derive through (lib\AgentVm.InstanceTarget.ps1) ──
+# THE TWO WAYS IN ARE NOT CASE-EQUIVALENT, and that asymmetry is the whole point:
+# -VmName is a Hyper-V DISPLAY name (case-insensitive, lowercased to get the instance
+# name), while -InstanceName IS the instance name and is held to the one rule AS
+# SUPPLIED. An installer that lowercased the latter would happily create a VM under a
+# spelling extension/src/instances.js, Resolve-ConstructInstanceTarget and the panel's
+# "Register this VM" box all refuse -- an instance nothing could name afterwards.
+Write-Host ""
+Write-Host "=== The identity adapter ===" -ForegroundColor Cyan
+. (Join-Path $repoRoot "lib/AgentVm.InstanceTarget.ps1")
+
+function Get-IdentityError([scriptblock]$Script) {
+    try { & $Script | Out-Null; return "" } catch { return [string]$_.Exception.Message }
+}
+
+$idDefault = Get-ConstructLocalVmIdentity -VmName 'Agent-VM'
+ok "adapter: -VmName keeps the DISPLAY case Hyper-V was given" ($idDefault.VmName -ceq 'Agent-VM')
+ok "adapter: ...and lowercases it for the instance name"       ($idDefault.Name -ceq 'agent-vm')
+ok "adapter: ...deriving today's literals for the default VM" (
+    $idDefault.VmHost -ceq 'agent-vm.mshome.net' -and $idDefault.HostAlias -ceq 'agent-vm' -and
+    $idDefault.KeyName -ceq 'agent_vm_ed25519' -and $idDefault.ConfigBranch -ceq 'vm' -and
+    [int]$idDefault.SshPort -eq 22 -and $idDefault.IsDefault -eq $true)
+$idNamed = Get-ConstructLocalVmIdentity -VmName 'Work-VM'
+ok "adapter: a display-cased NON-default VM is accepted"  ($idNamed.Name -ceq 'work-vm')
+ok "adapter: ...and its display name is returned as given" ($idNamed.VmName -ceq 'Work-VM')
+ok "adapter: ...with the instance-scoped derivations"      (
+    $idNamed.VmHost -ceq 'work-vm.mshome.net' -and $idNamed.HostAlias -ceq 'work-vm' -and
+    $idNamed.KeyName -ceq 'construct_work-vm_ed25519' -and $idNamed.ConfigBranch -ceq 'vm-work-vm' -and
+    $idNamed.IsDefault -eq $false)
+$idByName = Get-ConstructLocalVmIdentity -Name 'work-vm' -ParameterLabel 'InstanceName'
+ok "adapter: -InstanceName derives the same identity" (
+    $idByName.VmName -ceq 'work-vm' -and $idByName.KeyName -ceq $idNamed.KeyName -and
+    $idByName.ConfigBranch -ceq $idNamed.ConfigBranch)
+
+# THE ASYMMETRY, pinned in both directions.
+$upperInstance = Get-IdentityError { Get-ConstructLocalVmIdentity -Name 'Work-VM' -ParameterLabel 'InstanceName' }
+ok "adapter: an UPPERCASE -InstanceName is REFUSED (the registry could never name it)" ($upperInstance -ne "")
+ok "adapter: ...named as -InstanceName, not -VmName" ($upperInstance -like "*-InstanceName 'Work-VM'*")
+ok "adapter: ...with the ONE rule, and a lowercase example" (
+    $upperInstance -like "*$(Get-ConstructInstanceNameRule)*" -and $upperInstance -like "*e.g. 'work-vm'*")
+ok "adapter: ...and the very same spelling IS accepted as a -VmName" (
+    (Get-IdentityError { Get-ConstructLocalVmIdentity -VmName 'Work-VM' }) -eq "")
+# The registry reader agrees with the strict half -- that is what "could never name it" means.
+ok "adapter: the registry reader refuses that instance name too" (
+    -not (& { . (Join-Path $repoRoot "lib/AgentVm.Instances.ps1"); Test-ConstructInstanceName 'Work-VM' }))
+
+foreach ($bad in @('Work VM', 'work.vm', 'work-', '-work', '')) {
+    ok "adapter: '$bad' is refused as a -VmName" (
+        (Get-IdentityError { Get-ConstructLocalVmIdentity -VmName $bad }) -ne "")
+}
+$reserved = Get-IdentityError { Get-ConstructLocalVmIdentity -VmName 'Construct-Work' }
+ok "adapter: the reserved prefix is refused case-insensitively" ($reserved -ne "")
+ok "adapter: ...and is reported as its own problem" ($reserved -like "*reserved*prefix*")
+ok "adapter: exactly one of -Name / -VmName is required" (
+    (Get-IdentityError { Get-ConstructLocalVmIdentity }) -ne "" -and
+    (Get-IdentityError { Get-ConstructLocalVmIdentity -Name 'work-vm' -VmName 'Work-VM' }) -ne "")
+ok "adapter: the rule and the pattern come from the registry library" (
+    (Get-ConstructInstanceNameRule) -eq (& { . (Join-Path $repoRoot "lib/AgentVm.Instances.ps1"); $script:ConstructInstanceNameRule }) -and
+    (Get-ConstructInstanceNamePattern) -eq (& { . (Join-Path $repoRoot "lib/AgentVm.Instances.ps1"); $script:ConstructInstanceNameRe }))
+
+# ── ONE NAME RULE, ONE DERIVATION: the installers may hold no copy ──────────
+# The guard that fails the moment either installer re-states the rule or a formula
+# instead of asking lib\AgentVm.Instances.ps1 (through the adapter) for it. Comments and
+# doc blocks are stripped first: they DESCRIBE the rule on purpose, and describing it is
+# not the problem -- executing a second copy of it is.
+Write-Host ""
+Write-Host "=== One name rule, one derivation ===" -ForegroundColor Cyan
+
+function Get-ScriptCode {
+    param([string]$Path)
+    $txt = [System.IO.File]::ReadAllText($Path)
+    # <# .. #> blocks, then whole-line # comments (the same comment-stripping the
+    # extension's scriptSupportsParam probe uses).
+    $txt = [regex]::Replace($txt, '(?s)<#.*?#>', '')
+    return [regex]::Replace($txt, '(?m)^[ \t]*#.*$', '')
+}
+
+# Auto-Install.ps1's REMOTE half derives a remote VM's identity from the name the SERVICE
+# knows it by -- a different contract (docs/remote-host.md), owned elsewhere, and not
+# what this guard is about. It is one contiguous region, so the local guard runs on the
+# code outside it; the split itself is asserted, so the guard cannot silently start
+# covering nothing.
+$autoFull = Get-ScriptCode (Join-Path $repoRoot "Auto-Install.ps1")
+$remoteBanner = 'REMOTE HOST INSTALL'
+$remoteEnd    = '# -- Handle an already-installed VM'
+$autoRaw      = [System.IO.File]::ReadAllText((Join-Path $repoRoot "Auto-Install.ps1"))
+$remoteStartIx = $autoRaw.IndexOf($remoteBanner)
+$remoteEndIx   = $autoRaw.IndexOf('Handle an already-installed VM')
+ok "guard: Auto-Install's remote region is found and is one contiguous block" (
+    $remoteStartIx -gt 0 -and $remoteEndIx -gt $remoteStartIx)
+$autoLocalRaw = $autoRaw.Substring(0, $remoteStartIx) + $autoRaw.Substring($remoteEndIx)
+$autoLocalCode = [regex]::Replace([regex]::Replace($autoLocalRaw, '(?s)<#.*?#>', ''), '(?m)^[ \t]*#.*$', '')
+
+$installerCode = @{
+    "Create-AgentVM.ps1"            = Get-ScriptCode (Join-Path $repoRoot "Create-AgentVM.ps1")
+    "Auto-Install.ps1 (local half)" = $autoLocalCode
+}
+foreach ($rel in $installerCode.Keys) {
+    $code = $installerCode[$rel]
+    ok "$rel does not restate the name REGEX" ($code -notmatch '\[a-z0-9\]\(\[a-z0-9-\]\{0,61\}')
+    ok "$rel does not restate the name RULE text" ($code -notmatch '1-63 lowercase letters')
+    ok "$rel does not build '<name>.mshome.net' itself" ($code -notmatch '\.mshome\.net')
+    ok "$rel does not build a key file name itself" ($code -notmatch "agent_vm_ed25519" -and $code -notmatch 'construct_\$')
+    ok "$rel does not build 'vm-<alias>' itself" ($code -notmatch '"vm-\$')
+    ok "$rel asks the library for the derived identity" ($code -match 'Get-ConstructLocalVmIdentity|Get-ConstructDerivedVmIdentity')
+}
+$autoCode = Get-ScriptCode (Join-Path $repoRoot "Auto-Install.ps1")
+
+# Create-AgentVM's local identity comes from ONE call, and every derived value below it
+# reads that object rather than re-deriving.
+$createCode = $installerCode["Create-AgentVM.ps1"]
+ok "Create-AgentVM derives its identity exactly once" (
+    @([regex]::Matches($createCode, '\$script:VmIdentity\s*=\s*Get-ConstructLocalVmIdentity')).Count -eq 1)
+ok "Create-AgentVM reads the guest name off it"  ($createCode -match '\$script:VmGuestName\s*=\s*\$script:VmIdentity\.Name')
+ok "Create-AgentVM reads 'is this the default' off it" ($createCode -match '\$script:VmIsDefault\s*=\s*\$script:VmIdentity\.IsDefault')
+ok "Create-AgentVM reads the key name off it"    ($createCode -match '\$LocalKeyName\s*=\s*\$script:VmIdentity\.KeyName')
+ok "Auto-Install derives its identity exactly once" (
+    @([regex]::Matches($autoCode, '\$script:VmIdentity\s*=\s*Get-ConstructLocalVmIdentity')).Count -eq 1)
+foreach ($pair in @(
+    @{ Var = 'VmGuestName'; Field = 'Name' },
+    @{ Var = 'VmDnsName';   Field = 'VmHost' },
+    @{ Var = 'VmIsDefault'; Field = 'IsDefault' },
+    @{ Var = 'VmAlias';     Field = 'HostAlias' },
+    @{ Var = 'VmKeyName';   Field = 'KeyName' }
+)) {
+    ok "Auto-Install reads `$$($pair.Var) off the derived identity" (
+        $autoCode -match ("\`$$($pair.Var)\s*=\s*\`$script:VmIdentity\.$($pair.Field)"))
+}
+ok "Auto-Install takes the config-sync branch from it (explicit -ConfigBranch still wins)" (
+    $autoCode -match '\$VmConfigBranch = if \(\$ConfigBranch\) \{ \$ConfigBranch \} else \{ \$script:VmIdentity\.ConfigBranch \}')
+ok "Auto-Install sources the name rule instead of stating it" (
+    $autoCode -match '\$script:ConstructVmNameRe\s*=\s*Get-ConstructInstanceNamePattern' -and
+    $autoCode -match '\$script:ConstructVmNameRule\s*=\s*Get-ConstructInstanceNameRule')
+# ...and the derived identity the rest of the installer's local helpers use comes from
+# the same library through one loader.
+ok "Auto-Install's local helpers share one derivation loader" (
+    @([regex]::Matches($autoCode, 'Get-ConstructDerivedVmIdentity -VmName')).Count -ge 3)
+
+# ── ZERO-CHANGE: a default-only install writes nothing AND prints nothing ───
+# The registration step is the ONE thing B11 adds to the default local path, so the
+# fixture is its complete captured output. Pre-B11 that step did not exist, so the
+# fixture it is diffed against is the empty transcript -- anything at all on ANY stream
+# (Write-Note, Write-Warning, a stray object) is a visible change to an install that must
+# look exactly like it always did.
+Write-Host ""
+Write-Host "=== Zero-change: the default local path ===" -ForegroundColor Cyan
+
+$zcRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("construct-b11-zerochange-" + [Guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $zcRoot -Force | Out-Null
+$savedLocalAppData = $env:LOCALAPPDATA
+try {
+    $env:LOCALAPPDATA = Join-Path $zcRoot "appdata"
+
+    # The installers' own registration functions, lifted from their ASTs and run against
+    # a real (empty) profile -- not a re-implementation of them.
+    function Get-FunctionText([string]$ScriptPath, [string]$Name) {
+        $errs = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($ScriptPath, [ref]$null, [ref]$errs)
+        $fn = $ast.FindAll({
+            param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $Name
+        }, $true) | Select-Object -First 1
+        if ($fn) { return [string]$fn.Extent.Text }
+        return ""
+    }
+
+    # Auto-Install's wrapper: the existing-VM path's registration, with -ScriptsDir
+    # pointed at this checkout (which IS a scripts dir).
+    $autoFnText = Get-FunctionText (Join-Path $repoRoot "Auto-Install.ps1") 'Register-ConstructLocalVmInstance'
+    ok "zero-change: Auto-Install's registration function was found" ($autoFnText -ne "")
+    Invoke-Expression $autoFnText
+    $autoTranscript = & {
+        Register-ConstructLocalVmInstance -Name 'agent-vm' -ScriptsDir $repoRoot
+    } *>&1 | Out-String
+    ok "zero-change: the DEFAULT install's registration prints nothing at all" ($autoTranscript -eq "")
+    ok "zero-change: ...and returns nothing to print"  ($null -eq (Register-ConstructLocalVmInstance -Name 'agent-vm' -ScriptsDir $repoRoot))
+
+    # Create-AgentVM's wrapper, which reads $script:VmGuestName / $ConfigBranch from its
+    # caller's scope and prints through Write-Note / Write-Warning.
+    $createFnText = Get-FunctionText (Join-Path $repoRoot "Create-AgentVM.ps1") 'Register-ThisVmInstance'
+    ok "zero-change: Create-AgentVM's registration function was found" ($createFnText -ne "")
+    $createTranscript = & {
+        function Write-Note($msg) { Write-Host "    $msg" }
+        $script:VmGuestName = 'agent-vm'
+        $ConfigBranch = ""
+        Invoke-Expression $createFnText
+        Register-ThisVmInstance -ScriptsDir $repoRoot
+    } *>&1 | Out-String
+    ok "zero-change: Create-AgentVM's registration prints nothing either" ($createTranscript -eq "")
+
+    $zcRegistry = Join-Path (Join-Path $env:LOCALAPPDATA "The-Construct") "instances.json"
+    ok "zero-change: no instances.json was created" (-not (Test-Path -LiteralPath $zcRegistry))
+    ok "zero-change: not even its directory"        (-not (Test-Path -LiteralPath (Split-Path -Parent $zcRegistry)))
+
+    # The CONTROL: a non-default VM does write, and does say so -- proving the assertions
+    # above are about the default path and not about a helper that never runs.
+    $namedTranscript = & {
+        Register-ConstructLocalVmInstance -Name 'build-vm' -ScriptsDir $repoRoot
+    } *>&1 | Out-String
+    ok "control: a NAMED VM does write the registry" (Test-Path -LiteralPath $zcRegistry)
+    ok "control: ...and the path is what the caller reports" ($namedTranscript.Trim() -eq $zcRegistry)
+    ok "control: ...and the default is written alongside it" (
+        ([System.IO.File]::ReadAllText($zcRegistry) -match '"agent-vm"') -and
+        ([System.IO.File]::ReadAllText($zcRegistry) -match '"build-vm"'))
+    # ...and once the file exists, the default IS materialised (no longer the only VM).
+    ok "control: the default is recorded once a registry exists" (
+        (Register-ConstructLocalVmInstance -Name 'agent-vm' -ScriptsDir $repoRoot) -eq $zcRegistry)
+} finally {
+    $env:LOCALAPPDATA = $savedLocalAppData
+    Remove-Item -LiteralPath $zcRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 # ── Summary ─────────────────────────────────────────────────────────────────

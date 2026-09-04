@@ -1010,6 +1010,28 @@ what must be declared, and `checkInstanceSupport` returns a structured refusal
 an invocation. The *default* instance is never blocked: it needs no targeting, and its
 argv stays byte-identical.
 
+**Name-only targeting (B11, plan §4.12).** Once the installed scripts can resolve a name,
+all of the above collapses to **one argument**: `-InstanceName <name>`, and the script reads
+the endpoint, alias, port, key file, config-sync branch and host-service URL out of the same
+registry the panel did (`lib/AgentVm.Instances.ps1` — the two halves cannot disagree, because it is one
+file). `NAME_TARGET_PARAMS` is the emitted set, `REQUIRED_NAME_TARGET_PARAMS` the gate (the
+name, and nothing else — everything the four arguments stated is derived from it), and
+`-ConfigBranch` stays alongside it as the capability marker for instance-keyed config sync,
+carrying the very field the resolver reads.
+
+**The probe is a FILE, not the parameter.** `-InstanceName` already existed on
+`Provision-AgentVM.ps1` (the remote service identity, `CONSTRUCT_INSTANCE_NAME`) and on
+`Auto-Install.ps1` (the remote instance name, which a *local* run used to refuse outright),
+so "the script declares `$InstanceName`" is true on B7-era installs where it means something
+else and the action would land on the default VM. `supportsNameTargeting` therefore asks for
+`lib/AgentVm.InstanceTarget.ps1` (`INSTANCE_TARGET_LIB`) — the adapter every host script
+resolves the name through, which ships with the new meaning and nothing else — *and* for the
+parameter's declaration (the file alone could have been dropped in, and an undeclared
+argument is a binding failure). Absent → the four-argument form above, which those installs
+do understand. `instanceParamSupport` returns whichever set it probed, so the probe result
+itself says which form the caller is in (`usesNameTargeting`). A remote *rebuild* is
+excluded: it must also state its host service, so it keeps `REMOTE_INSTANCE_PARAMS`.
+
 **Backend capability gate.** The host scripts drive the LOCAL Hyper-V, so
 reinstall / redownload / setCheckpoints are refused for any backend whose driver does
 not declare `hostLifecycle` (`drivers/index.js` `lifecycleSupport`, capability table
@@ -1198,6 +1220,11 @@ backend-aware for the rebuild actions:
 | `reinstall` / `redownload` | `-VmName -ConfigBranch` | `-Backend -ServiceUrl -InstanceName -ConfigBranch` |
 | `reprovision` / `exportConfig` | `-VmHost -HostAlias -SshPort -LocalKeyName (-ConfigBranch)` | **identical** — provisioning is pure SSH to the endpoint, whoever created the VM |
 
+(On an install with name-only targeting the local column — and both `reprovision` /
+`exportConfig` columns — become `-InstanceName (-ConfigBranch)`. The remote *rebuild* column
+does not: `-Backend` is what makes `Auto-Install.ps1` take the remote path at all, and
+`-ServiceUrl` names the host service.)
+
 `REQUIRED_INSTANCE_PARAMS` follows: a remote rebuild is **refused** unless the installed
 `Auto-Install.ps1` declares `-Backend`, `-ServiceUrl` *and* `-InstanceName`, and unless the
 instance actually carries `service.url`. That is the same fail-closed rule as B3 and for the
@@ -1223,6 +1250,19 @@ profile before it could decide. Local rebuilds — and the default instance — 
   `instances.json`: that file describes *VMs* — an entry for a host with no VM would appear
   in the instance picker as a machine nothing can reach, and both readers would have to
   invent a meaning for it.
+* **`construct.registerThisVm`** — offered (as a panel banner and in the palette) when this
+  window is attached over Remote-SSH to a host **no registry entry describes**
+  (`instances.planRegisterAttachedVm`, which defers to `planRemoteAdoption` so "unknown"
+  means one thing). It asks for a name — the ssh host's first label when that is a usable
+  one — validates it with the one name rule, and writes the entry through
+  `instances.addInstance`/`save`, i.e. the same writer and the same rules the PowerShell
+  installer uses. `planLocalRegistration` is where it can REFUSE: a `hyperv-local` entry's
+  identity is *derived* from its name, so a window attached to `buildbox.example.local` has
+  no name for which a local entry describes that machine — inventing one would produce an
+  instance the reader drops on the next load, or one that aims every lifecycle action
+  somewhere else. Such a host goes through **Add remote host** instead. All of the decision
+  is pure and unit-tested; `extension.js` only reads `vscode.env.remoteAuthority`, shows the
+  input box and adopts the result.
 * **`construct.newRemoteVm`** — pick an enrolled host, ask name/CPU/RAM/disk, then launch
   `Auto-Install.ps1 -Backend hyperv-remote -ServiceUrl … -InstanceName … -VmMemoryGB …
   -VmDiskGB …` through `lifecycle.launchHostScript`. The console does the create *and* the

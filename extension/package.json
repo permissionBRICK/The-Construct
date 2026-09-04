@@ -72,6 +72,11 @@
         "command": "construct.newRemoteVm",
         "title": "New VM on Remote Host",
         "category": "The Construct"
+      },
+      {
+        "command": "construct.registerThisVm",
+        "title": "Register This VM as an Instance",
+        "category": "The Construct"
       }
     ],
     "configuration": {
