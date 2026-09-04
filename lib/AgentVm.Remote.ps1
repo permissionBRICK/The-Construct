@@ -589,6 +589,58 @@ function Resolve-ConstructApiPin {
     return $fp
 }
 
+function Get-ConstructPinValidatorCallback {
+    <#
+        A RemoteCertificateValidationCallback that accepts exactly the certificate whose
+        SHA-256 fingerprint is -Expected, as a COMPILED delegate (Add-Type, once per
+        process). Windows PowerShell 5.1 invokes this callback on a worker thread without
+        a runspace, where a PowerShell scriptblock cannot run; the compiled validator can.
+        Falls back to a scriptblock only when no C# compiler is available, which keeps
+        older hosts exactly where they were.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Expected)
+    $fp = Format-ConstructFingerprint -Value $Expected
+    if (-not $fp) { throw "'$Expected' is not a SHA-256 certificate fingerprint." }
+    if (-not ('Construct.PinValidator' -as [type])) {
+        try {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Net.Security;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+namespace Construct {
+    public static class PinValidator {
+        // The pinned SHA-256 fingerprint, "AA:BB:...", set before every call.
+        public static string Expected;
+        public static bool Validate(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors errors) {
+            if (certificate == null || string.IsNullOrEmpty(Expected)) { return false; }
+            byte[] hash;
+            using (var sha = SHA256.Create()) { hash = sha.ComputeHash(certificate.GetRawCertData()); }
+            var actual = BitConverter.ToString(hash).Replace("-", ":");
+            return string.Equals(actual, Expected, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+}
+'@ -ErrorAction Stop
+        } catch {
+            Write-Warning "Could not compile the certificate pin validator ($($_.Exception.Message)); using the scriptblock fallback."
+        }
+    }
+    $type = 'Construct.PinValidator' -as [type]
+    if ($type) {
+        $type::Expected = $fp
+        return [System.Delegate]::CreateDelegate([System.Net.Security.RemoteCertificateValidationCallback], $type.GetMethod('Validate'))
+    }
+    $pinned = $fp
+    return {
+        param($sender, $certificate, $chain, $errors)
+        if (-not $certificate) { return $false }
+        $actual = Get-ConstructCertificateFingerprint -Certificate $certificate
+        return (Test-ConstructFingerprintMatch -Expected $pinned -Actual $actual)
+    }.GetNewClosure()
+}
+
 function Invoke-ConstructApi {
     <#
         One call against the host service. Returns the parsed response body ($null for
@@ -696,18 +748,21 @@ function Invoke-ConstructApi {
         } elseif ($isHttps) {
             # Windows PowerShell 5.1: pin INSIDE the handshake. Scoped to this call and
             # restored in the finally -- this is process-global state.
+            #
+            # The validator is COMPILED (Get-ConstructPinValidatorCallback), not a
+            # scriptblock: Invoke-WebRequest runs the certificate callback on a thread
+            # that has no PowerShell runspace, where a scriptblock cannot execute -- the
+            # handshake then fails with "An unexpected error occurred on a send" on every
+            # call (field, 2026-09-04). A compiled delegate has no such dependency.
             $restoreSpm   = $true
             $prevCallback = [System.Net.ServicePointManager]::ServerCertificateValidationCallback
             $prevProtocol = [System.Net.ServicePointManager]::SecurityProtocol
-            [System.Net.ServicePointManager]::SecurityProtocol =
-                [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.ServicePointManager]::SecurityProtocol
-            $pinned = $expected
-            [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {
-                param($sender, $certificate, $chain, $errors)
-                if (-not $certificate) { return $false }
-                $fp = Get-ConstructCertificateFingerprint -Certificate $certificate
-                return (Test-ConstructFingerprintMatch -Expected $pinned -Actual $fp)
-            }.GetNewClosure()
+            $protocols = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.ServicePointManager]::SecurityProtocol
+            # TLS 1.3 (12288) exists on .NET Framework 4.8 / Windows 11 only; offer it when the enum knows it.
+            if ([enum]::IsDefined([System.Net.SecurityProtocolType], 12288)) { $protocols = $protocols -bor 12288 }
+            [System.Net.ServicePointManager]::SecurityProtocol = $protocols
+            [System.Net.ServicePointManager]::ServerCertificateValidationCallback =
+                Get-ConstructPinValidatorCallback -Expected $expected
         }
 
         $resp = Invoke-WebRequest @req
