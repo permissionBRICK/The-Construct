@@ -1198,15 +1198,19 @@ record_timestamps() {
   if [[ "${commit}" =~ ^[0-9a-f]{7,64}$ ]]; then
     mark CONSTRUCT_COMMIT "${commit}" || return
     note "    CONSTRUCT_COMMIT=${commit}"
-  elif [[ -f "${MARKER_FILE}" ]] && grep -Eq '^CONSTRUCT_COMMIT=.+' "${MARKER_FILE}"; then
+  elif [[ -f "${MARKER_FILE}" ]] && grep -Eq '^CONSTRUCT_COMMIT=' "${MARKER_FILE}"; then
     # THIS run could not say which commit it provisioned with, so whatever is recorded is
-    # now a statement about a DIFFERENT provisioning than the one that just happened --
-    # a lie the panel would compare against installedCommit. Clear it to the empty value
-    # ("unknown", which the probe's sed and parseCommit both read as absent) instead of
-    # leaving the stale one standing. Only when a value is actually there: a marker file
-    # that never had the key keeps exactly the bytes it has today.
-    mark CONSTRUCT_COMMIT "" || return
-    note "    CONSTRUCT_COMMIT cleared (this Construct could not resolve its own commit)"
+    # now a statement about a DIFFERENT provisioning than the one that just happened -- a
+    # lie the panel would compare against installedCommit. REMOVE the key rather than
+    # empty it: "absent" is the one shape both readers already treat as unknown, and the
+    # contract is that an unset/unusable CONSTRUCT_VERSION leaves no key behind at all.
+    # Rewritten in place (> keeps the inode, the owner and the mode; the chmod below is
+    # belt and braces), and only when a key is actually there -- a marker file that never
+    # had one keeps exactly the bytes it has today.
+    local kept
+    kept="$(grep -v '^CONSTRUCT_COMMIT=' "${MARKER_FILE}" || true)"
+    printf '%s\n' "${kept}" >"${MARKER_FILE}" || return
+    note "    CONSTRUCT_COMMIT removed (this Construct could not resolve its own commit)"
   fi
   chmod 0644 "${MARKER_FILE}"
 }
