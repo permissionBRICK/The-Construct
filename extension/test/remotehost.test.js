@@ -505,6 +505,46 @@ ok("pin: a malformed fingerprint is refused",
     /const startOpts = await driverOpts\(startInstance\)/.test(startFn));
   ok("wiring: ...and passes it to startVm", /startVm\(\{[^}]*\.\.\.startOpts/.test(startFn));
 
+  // ── B14: "Remove Remote Host" ───────────────────────────────────────────────
+  const hosts = [{ url: "https://buildbox.example.local:7462", identity: "alice" }];
+  const forget = rh.planForgetRemoteHost({
+    url: "buildbox.example.local", hosts, instances: [], env: { LOCALAPPDATA: "C:\\Users\\alice\\AppData\\Local" },
+  });
+  ok("forget: an enrolled host is accepted, named by its normalized URL",
+    forget.ok === true && forget.url === "https://buildbox.example.local:7462");
+  ok("forget: all three stores are cleared, the enrolment record LAST",
+    forget.removes.map((r) => r.kind).join(",") === "token,pin,record");
+  ok("forget: the token key and the pin path are the SAME ones enrolment wrote",
+    forget.removes[0].secretKey === rh.tokenSecretKey("https://buildbox.example.local:7462") &&
+    forget.removes[1].path === rh.pinPath("https://buildbox.example.local:7462", { LOCALAPPDATA: "C:\\Users\\alice\\AppData\\Local" }));
+  const referenced = rh.planForgetRemoteHost({
+    url: "https://buildbox.example.local:7462", hosts,
+    instances: [{ name: "far-vm", service: { url: "buildbox.example.local" } },
+                { name: "other-vm", service: { url: "https://elsewhere:7462" } }],
+  });
+  ok("forget: refused while a registered VM still lives on that host",
+    referenced.ok === false && referenced.referencedBy.join(",") === "far-vm" &&
+    referenced.refusal.indexOf('"far-vm"') >= 0);
+  ok("forget: a host that was never enrolled is refused",
+    rh.planForgetRemoteHost({ url: "elsewhere.example", hosts, instances: [] }).refusal.indexOf("not an enrolled") >= 0);
+  ok("forget: an unusable URL is refused with the URL error, not a crash",
+    rh.planForgetRemoteHost({ url: "ftp://x", hosts, instances: [] }).ok === false);
+  ok("forget: two spellings of one host are one host",
+    rh.sameServiceUrl("buildbox.example.local", "https://buildbox.example.local:7462") === true &&
+    rh.sameServiceUrl("buildbox.example.local", "https://buildbox.example.local:9999") === false &&
+    rh.sameServiceUrl("not a url", "https://x:7462") === false);
+  ok("wiring: the enrolment record is KEPT when an earlier store could not be cleared",
+    /if \(step\.kind === "record" && failures\.length > 0\)/.test(extSrc) &&
+    /was KEPT so you can retry/.test(extSrc));
+  ok("wiring: a partial removal is reported as NOT removed",
+    /was NOT fully removed/.test(extSrc));
+  ok("wiring: the extension command carries the plan out store by store",
+    /planForgetRemoteHost\(\{/.test(extSrc) &&
+    /secrets\.delete\(step\.secretKey\)/.test(extSrc) &&
+    /fs\.rmSync\(step\.path, \{ force: true \}\)/.test(extSrc));
+  ok("wiring: it is registered as a command",
+    extSrc.indexOf('registerCommand("construct.removeRemoteHost"') >= 0);
+
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
   console.log(`\n  remote-host client tests — ${pass}/${pass + fail} passed`);
   if (fail) process.exitCode = 1;

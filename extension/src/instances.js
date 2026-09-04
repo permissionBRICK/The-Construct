@@ -759,6 +759,9 @@ function collisionProblems(byName) {
 function parseRegistry(text) {
   const problems = [];
   const byName = emptyMap();
+  /** Names the file EXPLICITLY records as not on this PC (a `null` entry). Only ever
+   *  meaningful for a name a reader would otherwise synthesize. */
+  const removed = emptyMap();
   let defaultInstance = DEFAULT_INSTANCE_NAME;
   let doc = null;
   const raw = String(text == null ? "" : text).replace(/^﻿/, "");
@@ -797,6 +800,13 @@ function parseRegistry(text) {
           continue;
         }
         const entry = bag[name];
+        // AN EXPLICIT `null` IS A REMOVAL, not a malformed entry (schema v1, B14). It is
+        // how "Remove instance" records that a VM whose row would otherwise be
+        // SYNTHESIZED — `agent-vm`, and only it — is not on this PC any more. Without it
+        // the default instance could never be removed at all: every reader invents it
+        // back the moment the file has no entry for it. No problem is reported: the file
+        // says exactly what it means.
+        if (entry === null && hasOwn(bag, name)) { removed[name] = true; continue; }
         if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
           problems.push('instance "' + name + '" is not an object — skipped');
           continue;
@@ -876,10 +886,19 @@ function parseRegistry(text) {
   }
   // The default instance is ALWAYS available, synthesized when absent. That is the
   // zero-change guarantee: a registry that forgets (or never had) "agent-vm" still
-  // behaves exactly like today for every caller that asks for it.
-  if (!hasOwn(byName, DEFAULT_INSTANCE_NAME)) byName[DEFAULT_INSTANCE_NAME] = { ...DEFAULT_INSTANCE };
-  if (!hasOwn(byName, defaultInstance)) defaultInstance = DEFAULT_INSTANCE_NAME;
-  return { registry: { byName, defaultInstance }, problems };
+  // behaves exactly like today for every caller that asks for it — UNLESS the file says
+  // in so many words that it is gone (the `null` entry above), which is the one way a
+  // synthesized row can be removed.
+  if (!hasOwn(byName, DEFAULT_INSTANCE_NAME) && !hasOwn(removed, DEFAULT_INSTANCE_NAME)) {
+    byName[DEFAULT_INSTANCE_NAME] = { ...DEFAULT_INSTANCE };
+  }
+  if (!hasOwn(byName, defaultInstance)) {
+    const survivor = Object.keys(byName).sort()[0];
+    defaultInstance = hasOwn(byName, DEFAULT_INSTANCE_NAME) || survivor === undefined
+      ? DEFAULT_INSTANCE_NAME
+      : survivor;
+  }
+  return { registry: { byName, defaultInstance, removed }, problems };
 }
 
 /**
@@ -917,6 +936,7 @@ function finishLoad(file, exists, parsed, extraProblems) {
     instances: sortInstances(names.map((n) => byName[n]), parsed.registry.defaultInstance),
     defaultInstance: parsed.registry.defaultInstance,
     problems: extraProblems.concat(parsed.problems),
+    removed: parsed.registry.removed || emptyMap(),
     synthesized: names.length === 1 && names[0] === DEFAULT_INSTANCE_NAME && !exists,
   };
 }
@@ -1765,6 +1785,15 @@ function toFileEntry(inst) {
 function toFileDocument(registry) {
   const doc = { version: SCHEMA_VERSION, defaultInstance: registry.defaultInstance || DEFAULT_INSTANCE_NAME, instances: emptyMap() };
   for (const inst of list(registry)) doc.instances[inst.name] = toFileEntry(inst);
+  // The removals are part of the document: a `null` entry is the only way to say that an
+  // instance a reader would otherwise SYNTHESIZE is not on this PC (see parseRegistry).
+  // Written after the real entries and never for a name that is one again.
+  const removed = (registry && registry.removed) || null;
+  if (removed) {
+    for (const name of Object.keys(removed).sort()) {
+      if (!hasOwn(doc.instances, name)) doc.instances[name] = null;
+    }
+  }
   return doc;
 }
 
@@ -1797,7 +1826,14 @@ function save(file, registry, opts = {}) {
 function cloneRegistry(registry) {
   const byName = emptyMap();
   for (const inst of list(registry)) byName[inst.name] = { ...inst };
-  return { byName, defaultInstance: (registry && registry.defaultInstance) || DEFAULT_INSTANCE_NAME };
+  const removed = emptyMap();
+  const was = (registry && registry.removed) || null;
+  if (was) for (const name of Object.keys(was)) removed[name] = true;
+  return {
+    byName,
+    defaultInstance: (registry && registry.defaultInstance) || DEFAULT_INSTANCE_NAME,
+    removed,
+  };
 }
 
 /**
@@ -1854,18 +1890,121 @@ function assertNoCollisions(registry) {
 }
 
 /**
- * Remove an instance. The DEFAULT instance ("agent-vm") cannot be removed — it is the
- * fallback every code path lands on, and a registry without it would just synthesize
- * it back on the next load. Removing the registry's `defaultInstance` resets that
- * pointer to "agent-vm". Pure.
+ * Remove an instance. Every name may go, `agent-vm` included — but because its row is
+ * SYNTHESIZED whenever the file has no entry for it, deleting the key is not enough: the
+ * removal is written down explicitly (`removed`, saved as a `null` entry; see
+ * parseRegistry/toFileDocument), which is what stops the next load from inventing it
+ * back. The ONE refusal is the LAST instance: with one left there is nothing to fall back
+ * to. Removing the registry's `defaultInstance` moves that pointer to a survivor. Pure.
  */
 function removeInstance(registry, name) {
-  if (name === DEFAULT_INSTANCE_NAME) throw new Error('The default instance cannot be removed');
   const next = cloneRegistry(registry);
   if (!hasOwn(next.byName, name)) throw new Error('Unknown instance "' + name + '"');
+  // The ONE refusal: an install must keep at least one instance. Removing the last one
+  // would leave every reader falling back to a synthesized `agent-vm` whose client state
+  // had just been deleted — which is the same thing as not having removed it.
+  if (Object.keys(next.byName).length <= 1) {
+    throw new Error('"' + name + '" is the only instance on this PC and cannot be removed');
+  }
   delete next.byName[name];
-  if (next.defaultInstance === name) next.defaultInstance = DEFAULT_INSTANCE_NAME;
+  // `agent-vm` is SYNTHESIZED whenever the file has no entry for it, so deleting the key
+  // is not enough to make it gone: the removal has to be written down (see parseRegistry).
+  if (name === DEFAULT_INSTANCE_NAME) next.removed[name] = true;
+  if (next.defaultInstance === name) {
+    // Pick a survivor rather than a name that is no longer there.
+    const survivor = hasOwn(next.byName, DEFAULT_INSTANCE_NAME)
+      ? DEFAULT_INSTANCE_NAME
+      : Object.keys(next.byName).sort()[0];
+    next.defaultInstance = survivor || DEFAULT_INSTANCE_NAME;
+  }
   return next;
+}
+
+/**
+ * "Remove instance <name>" as DATA, before anything is touched (B14, plan §4.12
+ * "Cleanup"). The twin of Get-ConstructInstanceRemovalPlan in lib/AgentVm.Cleanup.ps1:
+ * the panel shows this list and collects the typed confirmation, the installer's
+ * `-Action remove-instance` does the removing. Both must refuse the same cases, or the
+ * panel would offer an action the script then declines.
+ *
+ * Returns
+ *   ok / refusal                 whether the action may run at all
+ *   requiresTypedConfirmation    true for a remote instance — its VM is DELETED on the
+ *                                host service, disk and all, so the user types the name
+ *   confirmationOk               whether `confirmation` matches (exactly, case included)
+ *   deletesVm                    same thing, said plainly for the modal
+ *   removes / keeps              the human list, in the order the removal happens
+ *
+ * REFUSALS (identical to the PowerShell planner):
+ *   • the LAST instance — with one left there is nothing to fall back to: every reader
+ *     synthesizes the default again, over the client state that was just deleted;
+ *   • an unknown name.
+ * Everything else goes, "agent-vm" included: because its row is SYNTHESIZED whenever the
+ * file has no entry for it, removeInstance() records the removal EXPLICITLY (a `null`
+ * entry) instead of deleting a key that would come straight back.
+ * Pure.
+ */
+function planRemoveInstance(opts = {}) {
+  const registry = opts.registry || null;
+  const name = str(opts.name);
+  const all = list(registry);
+  const inst = registry ? (hasInstance(registry, name) ? resolve(registry, name) : null) : null;
+  const defaultName = (registry && registry.defaultInstance) || DEFAULT_INSTANCE_NAME;
+  const base = {
+    ok: false, refusal: "", name,
+    backend: inst ? inst.backend : "",
+    deletesVm: false, requiresTypedConfirmation: false, confirmationOk: true,
+    removes: [], keeps: [],
+  };
+  if (!name) return { ...base, refusal: "No instance was named." };
+  if (!inst) {
+    return { ...base, refusal: `"${name}" is not an instance on this PC.` };
+  }
+  // THE ONE REFUSAL (plan §4.12): an install must keep an instance. With one left there
+  // is nothing to fall back to — every reader would synthesize the default again, over
+  // the client state that was just deleted. Every other name goes, `agent-vm` included:
+  // its row is synthesized, so the removal is written down explicitly (removeInstance).
+  if (all.length <= 1) {
+    return {
+      ...base,
+      refusal: `"${name}" is the only instance on this PC. Removing it would leave Construct ` +
+        "describing a VM whose client state had just been deleted. Add another instance first, " +
+        "or uninstall Construct.",
+    };
+  }
+  const remote = isRemoteBackend(inst.backend);
+  const serviceUrl = (inst.service && inst.service.url) ? inst.service.url : "";
+  const typed = str(opts.confirmation);
+  const removes = [
+    `the ~/.ssh/config Host block and known_hosts entries for "${inst.hostAlias}"`,
+    `the private key ~/.ssh/${inst.keyName}`,
+    `"${inst.hostAlias}" from VS Code's remote.SSH.remotePlatform`,
+    `the OpenCode server entry for "${name}"`,
+    "this VM's T3 Code certificate authority (file and Root store)",
+    `the per-instance state file instances\\${name}.json`,
+    `"${name}" from instances.json`,
+  ];
+  if (remote) {
+    removes.unshift(`the VM "${name}" on ${serviceUrl || "its host service"} — including its disk`);
+  }
+  const keeps = [];
+  if (!remote) {
+    keeps.push("The Hyper-V VM itself is NOT deleted; Reinstall and Redownload keep working and write the client state again.");
+  }
+  keeps.push("The shared config store and this VM's config-sync branch are kept: they hold agent configuration, not client state.");
+  const plan = {
+    ...base,
+    ok: true, removes, keeps,
+    deletesVm: remote,
+    requiresTypedConfirmation: remote,
+    confirmationOk: remote ? typed === name : true,
+  };
+  if (remote && !plan.confirmationOk) {
+    plan.ok = false;
+    plan.refusal = `Removing "${name}" DELETES the VM on ${serviceUrl || "its host"}, including its disk. ` +
+      `Type the instance name exactly ("${name}") to confirm.`;
+  }
+  return plan;
 }
 
 /** Point `defaultInstance` at an existing instance. Pure. */
@@ -1894,5 +2033,5 @@ module.exports = {
   planSwitchPersistence, planRemoteAdoption, adoptRemoteInstance,
   planRegisterAttachedVm, planLocalRegistration,
   toFileEntry, toFileDocument, save,
-  addInstance, updateInstance, removeInstance, setDefaultInstance,
+  addInstance, updateInstance, removeInstance, setDefaultInstance, planRemoveInstance,
 };

@@ -861,6 +861,9 @@ function ConvertFrom-ConstructInstancesJson {
     # and NOT in JS (whose byName is a plain object). Names are lowercase-only by
     # validation, so this only removes a way for the two readers to disagree.
     $instances = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
+    # Names the file EXPLICITLY records as not on this PC (a `null` entry). Only ever
+    # meaningful for a name a reader would otherwise synthesize.
+    $removed   = New-Object System.Collections.Generic.List[string]
     $default   = $script:ConstructDefaultInstance
     $doc       = $null
 
@@ -930,7 +933,18 @@ function ConvertFrom-ConstructInstancesJson {
                     continue
                 }
                 $entry = $p.Value
-                if ($null -eq $entry -or ($entry -is [array]) -or -not ($entry -is [psobject])) {
+                # AN EXPLICIT `null` IS A REMOVAL, not a malformed entry (schema v1, B14).
+                # It is how "Remove instance" records that a VM whose row would otherwise
+                # be SYNTHESIZED -- 'agent-vm', and only it -- is not on this PC any more.
+                # Without it the default instance could never be removed at all: every
+                # reader invents it back the moment the file has no entry for it. No
+                # problem is reported: the file says exactly what it means. Mirrors
+                # parseRegistry in extension/src/instances.js.
+                if ($null -eq $entry) {
+                    [void]$removed.Add($name)
+                    continue
+                }
+                if (($entry -is [array]) -or -not ($entry -is [psobject])) {
                     $problems.Add("instance '$name' is not an object -- skipped")
                     continue
                 }
@@ -1013,14 +1027,25 @@ function ConvertFrom-ConstructInstancesJson {
 
     # The default instance is ALWAYS present, synthesized when absent -- the zero-change
     # guarantee: a registry that never had 'agent-vm' still behaves exactly like today.
-    if (-not $instances.ContainsKey($script:ConstructDefaultInstance)) {
+    # UNLESS the file says in so many words that it is gone (the `null` entry above),
+    # which is the one way a synthesized row can be removed.
+    if (-not $instances.ContainsKey($script:ConstructDefaultInstance) -and
+        -not $removed.Contains($script:ConstructDefaultInstance)) {
         $instances[$script:ConstructDefaultInstance] = New-ConstructDefaultInstance
     }
-    if (-not $instances.ContainsKey($default)) { $default = $script:ConstructDefaultInstance }
+    if (-not $instances.ContainsKey($default)) {
+        $survivor = @($instances.Keys | Sort-Object) | Select-Object -First 1
+        if ($instances.ContainsKey($script:ConstructDefaultInstance) -or -not $survivor) {
+            $default = $script:ConstructDefaultInstance
+        } else {
+            $default = [string]$survivor
+        }
+    }
 
     return [pscustomobject]@{
         Instances = $instances
         Default   = $default
+        Removed   = @($removed)
         Problems  = @($problems)
     }
 }
@@ -1057,6 +1082,11 @@ function Read-ConstructInstances {
     return [pscustomobject]@{
         Instances = $parsed.Instances
         Default   = $parsed.Default
+        # CARRIED THROUGH, not dropped: the removals are part of the document, so a caller
+        # that loads the registry, changes one instance and saves it again must write them
+        # back -- otherwise saving any surviving instance would resurrect a removed one
+        # (every reader synthesizes 'agent-vm' the moment the file has no entry for it).
+        Removed   = @($parsed.Removed)
         Problems  = @($problems)
         Path      = $Path
         Exists    = $exists
@@ -1207,6 +1237,66 @@ function Add-ConstructInstance {
     return $next
 }
 
+function Remove-ConstructInstance {
+    <#
+        Remove one instance from a registry object and return the UPDATED COPY (the input
+        is never modified). The caller persists the result with Save-ConstructInstances.
+
+        Refuses only the LAST instance, exactly as removeInstance() in
+        extension/src/instances.js does. 'agent-vm' can be removed like any other name --
+        because its row is SYNTHESIZED whenever the file has no entry for it, the removal
+        is recorded EXPLICITLY (a `null` entry, see ConvertFrom-ConstructInstancesJson)
+        rather than by deleting a key. A registry whose `defaultInstance` pointed at the
+        removed instance falls back to a survivor.
+
+        Throws on an unknown name: "Remove instance" must never report success for a
+        name that was never there.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Registry,
+        [Parameter(Mandatory)][string]$Name
+    )
+
+    $next = Copy-ConstructInstanceRegistry -Registry $Registry
+    if (-not $next.Instances.ContainsKey($Name)) {
+        throw "Unknown instance '$Name'."
+    }
+    # The ONE refusal: an install must keep at least one instance. Removing the last one
+    # would leave every reader falling back to a synthesized 'agent-vm' whose client state
+    # had just been deleted -- which is the same thing as not having removed it.
+    if ($next.Instances.Count -le 1) {
+        throw "'$Name' is the only instance on this PC and cannot be removed."
+    }
+    $next.Instances.Remove($Name)
+    # 'agent-vm' is SYNTHESIZED whenever the file has no entry for it, so deleting the key
+    # is not enough to make it gone: the removal has to be written down (see the reader).
+    $removed = New-Object System.Collections.Generic.List[string]
+    foreach ($r in @($next.Removed)) { if ($r) { [void]$removed.Add([string]$r) } }
+    if ($Name -ceq $script:ConstructDefaultInstance -and -not $removed.Contains($Name)) {
+        [void]$removed.Add($Name)
+    }
+    $next = [pscustomobject]@{
+        Instances = $next.Instances
+        Default   = $next.Default
+        Removed   = @($removed)
+        Problems  = $next.Problems
+        Path      = $(if ($next.PSObject.Properties['Path']) { $next.Path } else { $null })
+        Exists    = $(if ($next.PSObject.Properties['Exists']) { $next.Exists } else { $false })
+    }
+    if ($next.Default -ceq $Name) {
+        $survivor = @($next.Instances.Keys | Sort-Object) | Select-Object -First 1
+        if ($next.Instances.ContainsKey($script:ConstructDefaultInstance)) {
+            $next.Default = $script:ConstructDefaultInstance
+        } elseif ($survivor) {
+            $next.Default = [string]$survivor
+        } else {
+            $next.Default = $script:ConstructDefaultInstance
+        }
+    }
+    return $next
+}
+
 function Copy-ConstructInstanceRegistry {
     <#
         A shallow, mutable copy of a registry object, so the mutators never edit a loaded
@@ -1221,13 +1311,26 @@ function Copy-ConstructInstanceRegistry {
     if ($Registry.PSObject.Properties['Instances'] -and $Registry.Instances) {
         foreach ($k in @($Registry.Instances.Keys)) { $instances[[string]$k] = $Registry.Instances[$k] }
     }
-    if (-not $instances.ContainsKey($script:ConstructDefaultInstance)) {
+    $removed = New-Object System.Collections.Generic.List[string]
+    if ($Registry.PSObject.Properties['Removed'] -and $Registry.Removed) {
+        foreach ($r in @($Registry.Removed)) { if ($r -and -not $removed.Contains([string]$r)) { [void]$removed.Add([string]$r) } }
+    }
+    # Same rule as the reader: synthesized unless the registry says it was removed.
+    if (-not $instances.ContainsKey($script:ConstructDefaultInstance) -and
+        -not $removed.Contains($script:ConstructDefaultInstance)) {
         $instances[$script:ConstructDefaultInstance] = New-ConstructDefaultInstance
     }
 
     $default = $script:ConstructDefaultInstance
     if ($Registry.PSObject.Properties['Default'] -and $Registry.Default) { $default = [string]$Registry.Default }
-    if (-not $instances.ContainsKey($default)) { $default = $script:ConstructDefaultInstance }
+    if (-not $instances.ContainsKey($default)) {
+        $survivor = @($instances.Keys | Sort-Object) | Select-Object -First 1
+        if ($instances.ContainsKey($script:ConstructDefaultInstance) -or -not $survivor) {
+            $default = $script:ConstructDefaultInstance
+        } else {
+            $default = [string]$survivor
+        }
+    }
 
     $path = $null
     if ($Registry.PSObject.Properties['Path'] -and $Registry.Path) { $path = [string]$Registry.Path }
@@ -1239,6 +1342,7 @@ function Copy-ConstructInstanceRegistry {
     return [pscustomobject]@{
         Instances = $instances
         Default   = $default
+        Removed   = @($removed)
         Problems  = $problems
         Path      = $path
         Exists    = $exists
@@ -1270,6 +1374,14 @@ function Save-ConstructInstances {
     $entries = [ordered]@{}
     foreach ($name in ($Registry.Instances.Keys | Sort-Object)) {
         $entries[$name] = ConvertTo-ConstructInstanceEntry $Registry.Instances[$name]
+    }
+    # The removals are part of the document: a `null` entry is the only way to say that an
+    # instance a reader would otherwise SYNTHESIZE is not on this PC. Mirrors
+    # toFileDocument() in extension/src/instances.js.
+    if ($Registry.PSObject.Properties['Removed'] -and $Registry.Removed) {
+        foreach ($name in (@($Registry.Removed) | Sort-Object)) {
+            if ($name -and -not $entries.Contains([string]$name)) { $entries[[string]$name] = $null }
+        }
     }
     $doc = [ordered]@{
         version         = $script:ConstructSchemaVersion
@@ -1372,7 +1484,30 @@ function Save-ConstructLocalInstance {
         if (-not $reg.Exists) { return $null }
         # The file exists, so this PC already manages more than the implicit default:
         # spell the default out explicitly rather than leave it synthesized-only.
+        #
+        # AND: this is what UNDOES a removal of the default instance. "Remove instance"
+        # records it as a `null` entry precisely because a deleted key would be
+        # synthesized straight back; installing that VM again is the moment that record
+        # stops being true, so the tombstone is cleared and the entry materialised. It is
+        # the documented recovery -- Reinstall / Redownload keep working on a VM whose
+        # client state was removed -- and it has to be deliberate, not a side effect of
+        # some other save.
         $same = Copy-ConstructInstanceRegistry -Registry $reg
+        $keep = New-Object System.Collections.Generic.List[string]
+        foreach ($r in @($same.Removed)) {
+            if ($r -and ([string]$r) -cne $script:ConstructDefaultInstance) { [void]$keep.Add([string]$r) }
+        }
+        $same = [pscustomobject]@{
+            Instances = $same.Instances
+            Default   = $same.Default
+            Removed   = @($keep)
+            Problems  = $same.Problems
+            Path      = $(if ($same.PSObject.Properties['Path']) { $same.Path } else { $null })
+            Exists    = $(if ($same.PSObject.Properties['Exists']) { $same.Exists } else { $false })
+        }
+        if (-not $same.Instances.ContainsKey($script:ConstructDefaultInstance)) {
+            $same.Instances[$script:ConstructDefaultInstance] = New-ConstructDefaultInstance
+        }
         if ($Path) { return (Save-ConstructInstances -Registry $same -Path $Path) }
         return (Save-ConstructInstances -Registry $same)
     }

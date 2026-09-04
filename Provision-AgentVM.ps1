@@ -388,6 +388,37 @@ function Get-ConstructStateInstanceName {
     return 'agent-vm'
 }
 
+# ── ONE NAME FOR THIS RUN'S CLIENT-SIDE STATE (B14, plan section 4.12) ───────
+# The CA file, the SMB drive letter and this run's per-instance state are all per-VM state
+# on THIS PC, and until now every VM wrote them under the same name -- so two VMs
+# overwrote each other's, and two concurrent provisions raced on the temp file.
+#
+# The name is Get-ConstructStateInstanceName's -- B12's ONE answer to "which instance is
+# this run about", asked in one place so there is a single line to re-point. Using a
+# second derivation here would let the CA file and the state file disagree about which VM
+# a provision just configured.
+#
+# The throw-away known_hosts file below is the ONE exception, and deliberately: it is
+# keyed by the ALIAS because what it must not collide with is another concurrent
+# provision's ssh session, and that is what an alias identifies (the alias can also be
+# corrected mid-run, which must NOT rename a file that is already open).
+# ASKED, never snapshotted: the ssh alias it falls back on can still be corrected by the
+# reachability prompt below, which correctly re-points every name at the VM actually
+# reached. A value captured here would name the VM this run was aimed at instead.
+function Get-ConstructRunInstanceName { return Get-ConstructStateInstanceName }
+$script:KnownHostsFile = Join-Path $env:TEMP "construct-known_hosts"
+if (Get-Command Get-ConstructKnownHostsFileName -ErrorAction SilentlyContinue) {
+    $script:KnownHostsFile = Join-Path $env:TEMP (Get-ConstructKnownHostsFileName -HostAlias $HostAlias)
+}
+# Whether the caller BOUND -SmbDriveLetter (never the script's own default): an explicit
+# letter always wins, so the preference below is only ever the fallback. Captured here,
+# next to the other per-instance names, because $PSBoundParameters is the parameter block's
+# and reading it later inside a function would answer about that function's parameters.
+$script:SmbLetterStated = $PSBoundParameters.ContainsKey('SmbDriveLetter')
+# The OpenCode server url this run registered (see Set-OpenCodeRemote), "" when none was.
+$script:OpenCodeRegisteredUrl = ""
+
+
 # --- Dependencies -----------------------------------------------------------
 
 function Ensure-Tar {
@@ -470,7 +501,7 @@ function Ensure-BootstrapKey {
         "-i", $secureKey,
         "-o", "IdentitiesOnly=yes",
         "-o", "StrictHostKeyChecking=accept-new",
-        "-o", "UserKnownHostsFile=$env:TEMP\construct-known_hosts",
+        "-o", "UserKnownHostsFile=$script:KnownHostsFile",
         "-o", "BatchMode=yes",
         "-o", "ConnectTimeout=15"
     )
@@ -490,7 +521,7 @@ function Ensure-VmReachable {
         $probeOpts = @(
             "-o", "BatchMode=yes",
             "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=$env:TEMP\construct-known_hosts",
+            "-o", "UserKnownHostsFile=$script:KnownHostsFile",
             "-o", "ConnectTimeout=5",
             "-o", "PreferredAuthentications=none"
         )
@@ -534,7 +565,7 @@ function Ensure-VmReachable {
 $script:SshOpts = @(
     "-i", $BootstrapKey,
     "-o", "StrictHostKeyChecking=accept-new",
-    "-o", "UserKnownHostsFile=$env:TEMP\construct-known_hosts",
+    "-o", "UserKnownHostsFile=$script:KnownHostsFile",
     "-o", "BatchMode=yes",
     "-o", "ConnectTimeout=15",
     # Detect a dead connection (e.g. the VM going down during the post-provision
@@ -985,7 +1016,7 @@ function Install-BootstrapKeyViaPassword {
         "-o", "PubkeyAuthentication=no",
         "-o", "NumberOfPasswordPrompts=3",
         "-o", "StrictHostKeyChecking=accept-new",
-        "-o", "UserKnownHostsFile=$env:TEMP\construct-known_hosts",
+        "-o", "UserKnownHostsFile=$script:KnownHostsFile",
         "-o", "ConnectTimeout=15"
     )
     if ($SshPort -ne 22) { $pwOpts += @("-p", "$SshPort") }
@@ -1046,7 +1077,7 @@ function Enter-RootKeyFastPath {
         "-i", $secureKey,
         "-o", "IdentitiesOnly=yes",
         "-o", "StrictHostKeyChecking=accept-new",
-        "-o", "UserKnownHostsFile=$env:TEMP\construct-known_hosts",
+        "-o", "UserKnownHostsFile=$script:KnownHostsFile",
         "-o", "BatchMode=yes",
         "-o", "ConnectTimeout=15",
         "-o", "ServerAliveInterval=15",
@@ -1681,7 +1712,7 @@ Ensure-VmReachable
 # Accept the VM's host key before any SSH operations (overwrite to clear stale keys from previous VMs).
 Write-Step "Accepting VM host key"
 $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-& ssh-keyscan -T 5 @script:SshPortArgs $VmHost 2>$null | Out-File -Encoding ascii "$env:TEMP\construct-known_hosts"
+& ssh-keyscan -T 5 @script:SshPortArgs $VmHost 2>$null | Out-File -Encoding ascii $script:KnownHostsFile
 $ErrorActionPreference = $prevEAP
 Write-Ok "Host key stored"
 
@@ -1804,7 +1835,7 @@ if ($Action -eq 'export') {
 
     # Local cleanup (mirrors the end-of-provision cleanup) and stop here -- export
     # mode never provisions or reboots. The finally block owns the optional pause.
-    Remove-Item "$env:TEMP\construct-known_hosts" -Force -ErrorAction SilentlyContinue
+    Remove-Item $script:KnownHostsFile -Force -ErrorAction SilentlyContinue
     if ($script:SecureKeyPath)     { Remove-Item -LiteralPath $script:SecureKeyPath     -Force -ErrorAction SilentlyContinue }
     if ($script:SecureRootKeyPath) { Remove-Item -LiteralPath $script:SecureRootKeyPath -Force -ErrorAction SilentlyContinue }
     Write-Host ""
@@ -2352,14 +2383,38 @@ if ($Action -eq 'provision') {
                 Join-Path $env:TEMP 'The-Construct\artifacts\t3code'
             }
             New-Item -ItemType Directory -Path $t3CaRoot -Force | Out-Null
-            $localCa = Join-Path $t3CaRoot 'construct-t3-ca.crt'
+            # ONE CA FILE PER INSTANCE (B14, plan section 4.12 "T3 Desktop topology"):
+            # T3 Code Desktop links several remotes at once, so every VM's certificate
+            # authority has to survive next to the others. The default instance keeps the
+            # historical name, so a single-VM install writes exactly the file it always
+            # wrote.
+            $caFileName = 'construct-t3-ca.crt'
+            if (Get-Command Get-ConstructT3CaFileName -ErrorAction SilentlyContinue) {
+                $caFileName = Get-ConstructT3CaFileName -InstanceName (Get-ConstructRunInstanceName)
+            }
+            $localCa = Join-Path $t3CaRoot $caFileName
+            # The certificate file this run is about to replace IS the record of "the CA
+            # this instance was last trusted with" -- no second bookkeeping file. Read its
+            # thumbprint BEFORE overwriting it, so a VM that re-created its CA can have the
+            # superseded one taken out of the Root store below.
+            $previousCaThumb = ''
+            if (Test-Path -LiteralPath $localCa) {
+                try {
+                    $previousCaThumb = (New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 -ArgumentList $localCa).Thumbprint
+                } catch { $previousCaThumb = '' }
+            }
             $caTemp = "$localCa.download"
             # The private keys live in a 0700 directory the seed user cannot read;
             # the VM publishes the public CA certificate at this readable path.
             Invoke-ScpFrom -RemotePath '/etc/construct/t3code-ca.crt' -LocalPath $caTemp
             $caCert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 -ArgumentList $caTemp
-            Move-Item -LiteralPath $caTemp -Destination $localCa -Force
             $caThumb = $caCert.Thumbprint
+            # NOTE: the downloaded file is NOT moved over $localCa yet. That file is this
+            # instance's record of "the CA we last trusted", and the import below can
+            # fail (a declined Windows dialog, a locked store) -- replacing the record
+            # first would leave the OLD certificate trusted with nothing left on disk to
+            # identify it, on this run and on every run after it. The move happens once
+            # the store is in the state the file claims.
             # Thumbprint lookup, not a name match: the CN carries the VM hostname,
             # and a re-created CA must be recognised as a DIFFERENT certificate.
             $inMachineRoot = Test-Path -LiteralPath "Cert:\LocalMachine\Root\$caThumb"
@@ -2376,9 +2431,83 @@ if ($Action -eq 'provision') {
                     Write-Host "    Windows shows ONE security confirmation dialog for this certificate." -ForegroundColor Yellow
                     Write-Host "    Accept it, or T3 Code's HTTPS page (and its browser microphone) stays untrusted." -ForegroundColor Yellow
                 }
-                Import-Certificate -FilePath $localCa -CertStoreLocation $caPlan.Store | Out-Null
+                Import-Certificate -FilePath $caTemp -CertStoreLocation $caPlan.Store | Out-Null
                 Write-Ok "T3 certificate authority trusted (thumbprint $caThumb)"
             }
+            # THE ORPHAN LEDGER. The certificate FILE is this instance's record of what it
+            # trusts, and it is about to be replaced -- so a previous CA that could not be
+            # untrusted (an unelevated run finding it in the machine store, a locked
+            # store) has to be written down somewhere, or the next reprovision could only
+            # ever recover the NEW thumbprint and the old one would stay trusted with
+            # nothing left pointing at it. `<ca file>.orphan` holds one thumbprint per
+            # line; it is written ONLY when a removal is blocked, so the steady state on
+            # every install still writes exactly the files it always wrote. The removal
+            # action reads it too, and refuses to finish while it is not empty.
+            $caOrphanFile = "$localCa.orphan"
+            $caOrphans = New-Object System.Collections.Generic.List[string]
+            if (Test-Path -LiteralPath $caOrphanFile) {
+                foreach ($line in (Get-Content -LiteralPath $caOrphanFile -ErrorAction SilentlyContinue)) {
+                    $t = ([string]$line).Trim().ToUpperInvariant()
+                    if ($t -match '^[0-9A-F]{40}$' -and -not $caOrphans.Contains($t)) { $caOrphans.Add($t) }
+                }
+            }
+            # The VM replaced its CA: take the superseded one out of the Root store, or
+            # it stays trusted forever under a name that no longer authenticates
+            # anything. Nothing is printed when there is nothing to remove, which is the
+            # normal steady state.
+            if (Get-Command Get-T3CaCleanupPlan -ErrorAction SilentlyContinue) {
+                $caCleanup = Get-T3CaCleanupPlan -PreviousThumbprint $previousCaThumb -NewThumbprint $caThumb `
+                    -Elevated:$isElevatedForCa `
+                    -PresentInMachine:(Test-Path -LiteralPath "Cert:\LocalMachine\Root\$previousCaThumb") `
+                    -PresentInUser:(Test-Path -LiteralPath "Cert:\CurrentUser\Root\$previousCaThumb")
+                if ($caCleanup.Action -eq 'remove') {
+                    Write-Step $caCleanup.Reason
+                    foreach ($store in @($caCleanup.Stores)) {
+                        try {
+                            Remove-Item -LiteralPath (Join-Path $store $caCleanup.Thumbprint) -Force -ErrorAction Stop
+                            Write-Ok "Untrusted $($caCleanup.Thumbprint) in $store"
+                        } catch {
+                            Write-Warning "Could not untrust the replaced certificate authority in $store ($($_.Exception.Message))."
+                        }
+                    }
+                } elseif ($caCleanup.Action -eq 'blocked') {
+                    Write-Warning $caCleanup.Reason
+                }
+                # Anything the plan wanted gone that is STILL in a store joins the ledger.
+                if ($caCleanup.Thumbprint -and $caCleanup.Action -ne 'none') {
+                    if ((Test-Path -LiteralPath "Cert:\LocalMachine\Root\$($caCleanup.Thumbprint)") -or
+                        (Test-Path -LiteralPath "Cert:\CurrentUser\Root\$($caCleanup.Thumbprint)")) {
+                        if (-not $caOrphans.Contains($caCleanup.Thumbprint)) { $caOrphans.Add($caCleanup.Thumbprint) }
+                    }
+                }
+            }
+            # Retry every thumbprint the ledger still carries, and keep only the ones that
+            # are still there. An elevated reprovision is what usually clears a machine-store
+            # entry an unelevated one could not touch.
+            $caStillOrphaned = New-Object System.Collections.Generic.List[string]
+            foreach ($orphan in $caOrphans) {
+                if ($orphan -eq $caThumb) { continue }   # that is the CA we just trusted
+                $orphanLeft = $false
+                foreach ($store in @("Cert:\CurrentUser\Root", "Cert:\LocalMachine\Root")) {
+                    $orphanPath = Join-Path $store $orphan
+                    try {
+                        if (Test-Path -LiteralPath $orphanPath) {
+                            Remove-Item -LiteralPath $orphanPath -Force -ErrorAction Stop
+                            Write-Ok "Untrusted the superseded certificate authority $orphan in $store"
+                        }
+                    } catch { $orphanLeft = $true }
+                }
+                if ($orphanLeft) { $caStillOrphaned.Add($orphan) }
+            }
+            if ($caStillOrphaned.Count -gt 0) {
+                Write-Warning "$($caStillOrphaned.Count) superseded T3 certificate authority/authorities are still trusted in the machine Root store; an elevated reprovision (or Remove instance) clears them. Recorded in $caOrphanFile."
+                Set-Content -LiteralPath $caOrphanFile -Value ($caStillOrphaned -join "`n") -Encoding ASCII
+            } elseif (Test-Path -LiteralPath $caOrphanFile) {
+                Remove-Item -LiteralPath $caOrphanFile -Force -ErrorAction SilentlyContinue
+            }
+            # The store now holds what the new certificate claims, and anything it replaced
+            # is either gone or written down, so the file that records it can be replaced.
+            Move-Item -LiteralPath $caTemp -Destination $localCa -Force
             if ($t3HttpsStatus -match '(?m)^T3CODE_PUBLIC_BASE_URL=(\S+)\s*$') {
                 Write-Host "    T3 Code web GUI over HTTPS: $($matches[1])" -ForegroundColor DarkGray
             }
@@ -2435,26 +2564,47 @@ if ($Action -eq 'provision') {
                 Move-Item -LiteralPath $installerTemp -Destination $localInstaller -Force
             }
             Move-Item -LiteralPath $manifestTemp -Destination $localManifest -Force
-            $installedSha = ''
+            # THE INSTALL RULE (B14, plan section 4.12 "T3 Desktop version tracking"):
+            # one install of T3 Code Desktop on this PC, and installed.json records WHICH
+            # patched release it is -- the upstream T3 version, the channel and the
+            # patched build hash, all three from the VM's own manifest. A reprovision that
+            # finds exactly that triple installed skips the installer; anything else
+            # installs. Last reprovisioned VM wins: no owner instance, no newest-wins.
+            $installedRecord = $null
             if (Test-Path -LiteralPath $installedManifest) {
                 try {
-                    $installed = Get-Content -LiteralPath $installedManifest -Raw | ConvertFrom-Json
-                    $installedSha = ([string]$installed.sha256).Trim().ToLowerInvariant()
-                } catch { }
+                    $installedRecord = Get-Content -LiteralPath $installedManifest -Raw | ConvertFrom-Json
+                } catch { $installedRecord = $null }
             }
             # electron-builder derives this stable per-user directory from the
-            # app id; stable and nightly intentionally update the same install.
+            # app id; stable and nightly intentionally update the same install. It is
+            # where the installer puts the app and where the restart below looks for it --
+            # NOT an input to the install decision, which is the recorded triple alone.
             $t3InstallRoot = if ($env:LOCALAPPDATA) {
                 Join-Path $env:LOCALAPPDATA 'Programs\t3code'
             } else { $null }
-            $appPresent = $false
-            if ($t3InstallRoot -and (Test-Path -LiteralPath $t3InstallRoot)) {
-                $appPresent = $null -ne (Get-ChildItem -LiteralPath $t3InstallRoot -Filter '*.exe' -File -ErrorAction SilentlyContinue |
-                    Where-Object { $_.Name -notlike 'Uninstall*' } | Select-Object -First 1)
-            }
 
-            if (($installedSha -eq $expectedSha) -and $appPresent) {
-                Write-Ok "Patched T3 Code Desktop $($manifest.desktopVersion) is already current"
+            # The build hash comes FROM THE GUEST MANIFEST and from nowhere else (plan
+            # section 4.12): the rule is the exact (t3Version, channel, buildHash) triple,
+            # so a manifest that states none simply does not match and installs.
+            $t3Plan = Get-T3DesktopInstallPlan -T3Version ([string]$manifest.version) `
+                -Channel ([string]$manifest.channel) -BuildHash ([string]$manifest.buildHash) `
+                -Installed $installedRecord -InstanceName (Get-ConstructRunInstanceName)
+            if (-not $t3Plan.Install) {
+                Write-Ok $t3Plan.Reason
+                # The record matched, but it may still be the PRE-B14 shape (a copy of the
+                # VM manifest). Rewrite it in the canonical five-key form -- the install
+                # itself is not repeated, only the bookkeeping catches up, so a host that
+                # is already current does not keep an old schema forever.
+                if ($t3Plan.RecordIsStale) {
+                    try {
+                        $upgradeTemp = "$installedManifest.download"
+                        ($t3Plan.Record | ConvertTo-Json -Depth 5) | Set-Content -LiteralPath $upgradeTemp -Encoding UTF8
+                        Move-Item -LiteralPath $upgradeTemp -Destination $installedManifest -Force
+                    } catch {
+                        Write-Warning "Could not update the T3 Desktop install record ($($_.Exception.Message)); it still describes the same build."
+                    }
+                }
             } else {
                 # Remember whether the app is running before the installer closes it.
                 # Process paths can be unreadable for foreign-session processes; those
@@ -2472,12 +2622,15 @@ if ($Action -eq 'provision') {
                     }
                 }
                 Write-Step "Silently installing/updating patched T3 Code Desktop $($manifest.desktopVersion)"
+                Write-Host "    $($t3Plan.Reason)" -ForegroundColor DarkGray
                 $installerProcess = Start-Process -FilePath $localInstaller -ArgumentList @('--updated', '/S') -Wait -PassThru -WindowStyle Hidden
                 if ($installerProcess.ExitCode -ne 0) {
                     throw "Patched T3 Desktop installer exited $($installerProcess.ExitCode)."
                 }
+                # Written only after the installer succeeded, so a failed install is never
+                # recorded as the build this PC holds.
                 $installedTemp = "$installedManifest.download"
-                Copy-Item -LiteralPath $localManifest -Destination $installedTemp -Force
+                ($t3Plan.Record | ConvertTo-Json -Depth 5) | Set-Content -LiteralPath $installedTemp -Encoding UTF8
                 Move-Item -LiteralPath $installedTemp -Destination $installedManifest -Force
                 Write-Ok "Patched T3 Code Desktop $($manifest.desktopVersion) installed/updated silently"
                 if ($t3WasRunning -and $t3InstallRoot) {
@@ -2557,8 +2710,25 @@ if ($Action -eq "provision" -and $smbStatus['SMB_ENABLED'] -eq "yes" -and $Mount
         # Belt-and-suspenders: the mount is a convenience and must NEVER abort the
         # provision (the repos are already set up on the VM). Mount-RepoShare is
         # already non-throwing, but guard the call too so nothing here is fatal.
+        # Z is the letter Construct has always mapped the workspace share to, and it stays
+        # the answer for the default instance and for anybody who states -SmbDriveLetter. A
+        # SECOND VM asking for Z would take the alternate-letter path on every provision --
+        # non-interactively that means "whatever was free today" -- so a non-default
+        # instance starts from the next free letter instead. Mount-RepoShare still reuses an
+        # existing mapping to the SAME share, so a re-provisioned VM keeps its letter.
+        # The default instance and an explicit -SmbDriveLetter skip this entirely -- not
+        # only would the answer be $SmbDriveLetter either way, the free-letter snapshot
+        # itself is an extra `net use` this path never used to run.
+        $smbPreferred = $SmbDriveLetter
+        if (-not $script:SmbLetterStated -and (Get-ConstructRunInstanceName) -ne 'agent-vm' -and
+            (Get-Command Get-ConstructSmbPreferredLetter -ErrorAction SilentlyContinue)) {
+            $letterMaps = Get-DriveMaps
+            $takenLetters = @($letterMaps.Net.Keys) + @($letterMaps.Local.Keys)
+            $smbPreferred = Get-ConstructSmbPreferredLetter -Requested $SmbDriveLetter `
+                -InstanceName (Get-ConstructRunInstanceName) -Explicit:$script:SmbLetterStated -Taken $takenLetters
+        }
         try {
-            $smbMountedDrive = Mount-RepoShare -UncPath $smbUnc -SmbUser $smbUser -SmbPassword $smbPass -Preferred $SmbDriveLetter
+            $smbMountedDrive = Mount-RepoShare -UncPath $smbUnc -SmbUser $smbUser -SmbPassword $smbPass -Preferred $smbPreferred
         } catch {
             Write-Warning "Auto-mount of $smbUnc failed ($($_.Exception.Message)); the share is still available on the VM."
         }
@@ -2734,6 +2904,10 @@ if (",$AiTools," -like "*,opencode,*") {
     $openCodePlan = Get-OpenCodeServerPlan -Forwards $script:HostForwards `
                         -ServiceManaged ([bool]$ServiceUrl) -DirectUrl "http://${VmHost}:${OpencodePort}"
     if ($openCodePlan.Action -eq 'register') {
+        # Remembered for "Remove instance": the entry it has to find again may be under a
+        # HOST-FORWARD url the VM's own name never appears in, and a user who renamed the
+        # entry leaves nothing but that url to match on.
+        $script:OpenCodeRegisteredUrl = [string]$openCodePlan.Url
         Set-OpenCodeRemote -Url ([string]$openCodePlan.Url) -DisplayName $HostAlias
     } elseif ($openCodePlan.Reason -eq 'denied') {
         Write-Host "    OpenCode server not registered: the host service does not allow host forwards for this VM's owner." -ForegroundColor Yellow
@@ -2745,8 +2919,55 @@ if (",$AiTools," -like "*,opencode,*") {
     }
 }
 
+# ── WHERE THIS VM ANSWERS, recorded for the T3 Code Desktop app (B14, §4.12) ──
+# Its Providers page matches a linked remote on host AND PORT, and the port is a fact
+# about the RUNNING VM rather than about its registry entry: a VM behind a host forward
+# answers on a port the service allocated and will reallocate. The OpenCode server url
+# this run registered goes with it, because "Remove instance" needs it to find that entry
+# again when its display name was changed.
+#
+# Both go into the instance's OWN state document (B12: lib\AgentVm.InstanceState.ps1 --
+# `instances\<name>.json`). ONE per-VM store, so nothing has to know about a second one,
+# and "Remove instance" clears these with the rest of that VM's state.
+#
+# NOT for the IMPLICIT DEFAULT instance (Test-ConstructEndpointRecordWanted): its state IS
+# the top level of the install's .construct-settings.json, and a single-VM install must go
+# on writing exactly the keys it always wrote. Nothing is lost -- that VM is matched on
+# the T3 ports Construct configures (5177/5178) and its OpenCode entry is at the direct
+# url the removal derives anyway. The record exists for the answers that CANNOT be
+# derived: a named instance, and a forward whose port the host service allocated.
+#
+# Outside the HTTPS/CA branch above, because a service-managed VM deliberately on plain
+# HTTP has a forward whose port is just as much a fact. A run that can no longer name an
+# endpoint CLEARS the recorded one rather than leaving an old forwarded port authoritative.
+if ($Action -eq 'provision' -and
+    (Get-Command Test-ConstructEndpointRecordWanted -ErrorAction SilentlyContinue) -and
+    (Test-ConstructEndpointRecordWanted -InstanceName (Get-ConstructRunInstanceName)) -and
+    (Get-Command Save-ConstructInstanceState -ErrorAction SilentlyContinue) -and
+    (Get-Command Get-ConstructT3EndpointRecord -ErrorAction SilentlyContinue)) {
+    try {
+        $publicBase = ""
+        if ($script:T3HttpsStatus -match '(?m)^T3CODE_PUBLIC_BASE_URL=(\S+)\s*$') { $publicBase = $matches[1] }
+        $endpointRecord = Get-ConstructT3EndpointRecord -InstanceName (Get-ConstructRunInstanceName) `
+            -BaseUrl $publicBase -ForwardUrl (Get-T3ForwardUrl -Forwards $script:HostForwards) `
+            -OpenCodeUrl $script:OpenCodeRegisteredUrl
+        # $null (no usable origin) still writes: the keys are set to $null, which is how
+        # Save-ConstructInstanceState records "this is no longer true" rather than leaving
+        # the previous run's answer standing.
+        $endpointValues = @{ t3BaseUrl = $null; t3Port = $null; openCodeUrl = $null }
+        if ($endpointRecord) {
+            $endpointValues['t3BaseUrl']   = [string]$endpointRecord.baseUrl
+            $endpointValues['t3Port']      = [int]$endpointRecord.port
+            if ($endpointRecord.Contains('openCodeUrl')) { $endpointValues['openCodeUrl'] = [string]$endpointRecord.openCodeUrl }
+        }
+        Save-ConstructInstanceState -Name (Get-ConstructRunInstanceName) -Dir $PSScriptRoot -Values $endpointValues
+    } catch {
+        Write-Warning "Could not record this VM's endpoints for the Desktop app ($($_.Exception.Message)); its Providers row will say the port is unknown."
+    }
+}
+
 # Clean up temporary known_hosts.
-Remove-Item "$env:TEMP\construct-known_hosts" -Force -ErrorAction SilentlyContinue
+Remove-Item $script:KnownHostsFile -Force -ErrorAction SilentlyContinue
 
 # Remove the temporary owner-only copies of the private keys (last SSH op is done).
 if ($script:SecureKeyPath) {

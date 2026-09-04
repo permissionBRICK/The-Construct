@@ -707,6 +707,23 @@
       text("registerHost", s.registerOffer ? s.registerOffer.host : "");
     }
 
+    // "Remove instance": same contract as registerOffer — null on every push where the
+    // action does not apply, so the section appears and disappears with the state
+    // instead of sticking around after a switch back to the default VM.
+    if (s.removeOffer !== undefined) {
+      const rs = $("removeInstanceSection");
+      if (rs) rs.hidden = !s.removeOffer;
+      if (s.removeOffer) {
+        text("removeInstanceName", s.removeOffer.name);
+        text("removeInstanceList", (s.removeOffer.removes || []).join("; ") + ".");
+        text("removeInstanceKeeps", (s.removeOffer.keeps || []).join(" "));
+        const rb2 = $("removeInstanceBtn");
+        if (rb2) rb2.textContent = s.removeOffer.deletesVm
+          ? "\u2716 Remove instance and DELETE its VM"
+          : "\u2716 Remove instance";
+      }
+    }
+
     if (Array.isArray(s.agents)) renderAgents(s.agents);
     if (Array.isArray(s.projects)) renderProjects(s.projects);
     if (s.usage) { renderUsage(s.usage); shownUsagePeriod = s.usagePeriod || shownUsagePeriod; }

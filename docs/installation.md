@@ -33,6 +33,9 @@ If the VM already exists, you get a menu:
   uncommitted/unpushed work in the repos.
 - **Export config** — saves the current agent config to the host without reprovisioning or
   rebooting the VM.
+- **Remove instance** — forgets this VM on this PC (ssh config + key, VS Code and OpenCode
+  entries, its T3 certificate authority, its registry entry). The Hyper-V VM itself is
+  kept; see [Removing one VM from this PC](#removing-one-vm-from-this-pc--action-remove-instance).
 
 See [Saving & restoring config](backup-restore.md) for what gets saved and restored.
 
@@ -362,6 +365,45 @@ unknown name is **always** an error listing the names this PC does know — pass
 explicit endpoint alongside it does not make the name mean something else; a BYO or manual
 setup uses the explicit parameters *without* a name. `-InstanceName agent-vm` on a PC with
 no registry file resolves to exactly today's literals.
+
+### Removing one VM from this PC (`-Action remove-instance`)
+
+```powershell
+.\Auto-Install.ps1 -Action remove-instance -InstanceName build-vm
+```
+
+Undoes what creating that VM wrote **on this PC**: the `~/.ssh/config` block, the
+`known_hosts` entries and the private key for its alias, its `remote.SSH.remotePlatform`
+entry, its OpenCode server entry, its T3 Code certificate authority (the file *and* the
+Root-store entry), the leftover `%TEMP%\construct-known_hosts-<alias>`, its per-instance
+state file `%LOCALAPPDATA%\The-Construct\instances\<name>.json` — its settings, its
+provisioned commit and the T3/OpenCode endpoints the provisioner recorded for it. (Those
+endpoint keys are written for a **named** instance only: `agent-vm`'s state is the
+install's own `.construct-settings.json`, which a single-VM install goes on writing
+unchanged, so its mirror never carries them — removing it clears that mirror's VM keys and
+leaves the install-wide ones.) And — **last, and only
+when every step before it succeeded** — its entry in `instances.json`. It prints each step
+and what it did; a run in which something could not be done (a certificate that could not
+be untrusted, a `settings.json` this PowerShell cannot parse) keeps the entry and says so,
+so you fix that and run it again.
+
+- **A local Hyper-V VM is not deleted.** This forgets the VM on this PC; *Reinstall* is the
+  action that deletes one. Reinstall and Redownload keep working afterwards and write the
+  client state again.
+- **A remote VM *is* deleted**, disk and all, so the instance name has to be typed back —
+  interactively at the prompt, or as `-ConfirmInstanceName <name>` in an unattended run.
+  The VM deletion happens first: if the host service refuses, nothing local is touched.
+- **The last instance cannot be removed** — the only refusal. `agent-vm` itself is
+  removable like any other name; since a missing entry *is* that instance, the removal is
+  recorded explicitly (`"agent-vm": null` in `instances.json`) rather than by deleting a
+  line that every reader would invent back.
+- **It never elevates.** Every file it edits belongs to the signed-in user; under a UAC
+  prompt that switches to another administrator they would be the wrong profile's. It is
+  also offered as the **Remove instance** choice in the installer's existing-VM menu, and
+  as **Settings → Remove instance** in the [control panel](control-panel.md).
+
+The shared config store and the VM's config-sync branch are kept: they hold agent
+configuration, not client state.
 
 ### A VM on a remote host
 
