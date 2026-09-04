@@ -2571,6 +2571,9 @@ ok "publish-name: surrounding space is unsafe" (-not (Test-ConstructSafeProfileN
 # entry, so redaction could only ever protect what is DISPLAYED.
 ok "publish-cred: https with user:secret is refused" (Test-ConstructUrlHasCredentials -Url "https://alice:glpat-tok@git.example.com/x.git")
 ok "publish-cred: https with a bare token user is refused" (Test-ConstructUrlHasCredentials -Url "https://glpat-tok@git.example.com/x.git")
+ok "publish-cred: https with a bare USER NAME is fine (it selects the stored credential)" (-not (Test-ConstructUrlHasCredentials -Url "https://alice@git.example.com/x.git"))
+ok "publish-cred: a GitGudLab project-token user name is fine" (-not (Test-ConstructUrlHasCredentials -Url "https://gitgud-project.alice.construct-config@git.example.com/alice/construct-config.git"))
+ok "publish-cred: a 32+ character bare user is treated as a token" (Test-ConstructUrlHasCredentials -Url ("https://" + ("a" * 40) + "@git.example.com/x.git"))
 ok "publish-cred: http with userinfo is refused" (Test-ConstructUrlHasCredentials -Url "http://alice:pw@h/x.git")
 ok "publish-cred: ssh://git@host is fine (a user, not a secret)" (-not (Test-ConstructUrlHasCredentials -Url "ssh://git@git.example.com/x.git"))
 ok "publish-cred: ssh://user:secret@host is refused" (Test-ConstructUrlHasCredentials -Url "ssh://git:s3cret@git.example.com/x.git")

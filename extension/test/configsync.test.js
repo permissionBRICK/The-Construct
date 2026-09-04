@@ -2203,6 +2203,9 @@ async function runTests() {
   // redaction could only ever protect what is displayed.
   ok("publish-cred: https with user:secret is refused", cs.urlHasCredentials("https://alice:glpat-tok@git.example.com/x.git"));
   ok("publish-cred: https with a bare token user is refused", cs.urlHasCredentials("https://glpat-tok@git.example.com/x.git"));
+  ok("publish-cred: https with a bare USER NAME is fine (it selects the stored credential)", !cs.urlHasCredentials("https://alice@git.example.com/x.git"));
+  ok("publish-cred: a GitGudLab project-token user name is fine", !cs.urlHasCredentials("https://gitgud-project.alice.construct-config@git.example.com/alice/construct-config.git"));
+  ok("publish-cred: a 32+ character bare user is treated as a token", cs.urlHasCredentials("https://" + "a".repeat(40) + "@git.example.com/x.git"));
   ok("publish-cred: http with userinfo is refused", cs.urlHasCredentials("http://alice:pw@h/x.git"));
   ok("publish-cred: ssh://git@host is fine (that is a user, not a secret)", !cs.urlHasCredentials("ssh://git@git.example.com/x.git"));
   ok("publish-cred: ssh://user:secret@host is refused", cs.urlHasCredentials("ssh://git:s3cret@git.example.com/x.git"));

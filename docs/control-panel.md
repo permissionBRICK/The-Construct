@@ -256,6 +256,14 @@ machine that no longer exists. The action removes, in this order:
 8. the leftover `%TEMP%\construct-known_hosts-<alias>` from a provision;
 9. its entry in `instances.json`.
 
+A local step that cannot be done (a `settings.json` with comments this PowerShell cannot
+parse, a certificate the machine store would not give up) is reported with what to do by
+hand and does **not** keep the entry: the registry entry is removed anyway, so the instance
+never wedges. Only the VM deletion itself is blocking — if the host service refuses it,
+nothing local is touched. If the host service cannot be **reached** (the host is off, a
+laptop that left the site), an interactive run offers to forget the instance on this PC and
+leave the VM on the host; unattended runs get the same with `-KeepVm`.
+
 What it does **not** touch: a local Hyper-V VM's disk (that is what Reinstall is for —
 Reinstall and Redownload keep working on a VM whose client state was removed and write it
 again), and the shared config store or the VM's config-sync branch, which hold agent
@@ -694,7 +702,8 @@ update or Construct update invalidates that cache.
 records which patched release this PC holds — the upstream `t3Version`, the `channel`, the
 patched `buildHash`, when it was installed and which instance installed it. A reprovision
 that finds exactly that triple already installed skips the installer ("already installed");
-anything else installs. **The last reprovisioned VM wins**: there is no owner instance and no
+anything else installs — including a matching record whose app is no longer on disk (removed
+by hand, a wiped profile): "the host already has that release" is only true while it does. **The last reprovisioned VM wins**: there is no owner instance and no
 newest-wins comparison, because two VMs on different channels would otherwise flip the
 install back and forth on a schedule nobody chose. If the app was running when the silent
 installer closed it, it is started again. Activating a genuinely new build restarts `t3code-serve`, so an open T3 provider
@@ -788,10 +797,12 @@ every ten minutes:
   state is the install's own `.construct-settings.json`, which a single-VM install must go
   on writing unchanged, and nothing is lost by it (see the next point);
 - **without** a recorded port a VM reached at its own address still matches on the T3 ports
-  Construct configures (`5177`/`5178`) — which is why the default VM needs no record — but a
-  VM published by a host **service** matches nothing: its forward's port is the service's to
-  allocate and cannot be derived here, so the honest answer is "this PC has not seen that
-  VM's T3 yet" — the next reprovision records it;
+  Construct configures (`5177`/`5178`) — which is why the default VM needs no record. A
+  VM published by a host **service** has a per-VM host name, so when it is the **only**
+  instance claiming that host it matches on the host alone (a VM provisioned before the
+  port was recorded, or from another PC); the next reprovision records the port and the
+  exact rule takes over. Two service VMs on one host name without a recorded port match
+  nothing;
 - a host **and** port that two instances claim is ambiguous and matches neither.
 
 A row that matches carries **that instance's** provisioned commit, its own stale state and
@@ -800,7 +811,11 @@ app ask npm for that channel too), and its **Reprovision** targets it *by name*
 (`Update-T3Code.ps1 -InstanceName <name>`) — even for the registry's default instance, so a
 row can never mean "whichever VM is default right now". A remote that matches nothing gets a
 read-only row saying it is not a Construct instance of this PC. **Update Construct** stays a
-single host-wide action on the Construct row: `Update-Construct.ps1` takes no target.
+single host-wide action on the Construct row: `Update-Construct.ps1` takes no target. The
+row's own **Reprovision** offer (the pill, the toast, the About button) still exists and
+targets the registry's **default** instance by name — a stale VM is offered a reprovision
+even before any remote is linked or matched, which is the offline / not-yet-paired case
+this control exists for. Every other instance is reprovisioned from its own row.
 
 A Construct update is offered first, since reprovisioning afterwards applies both. Each new
 offer raises one toast with the action as its button (closing it dismisses that offer), the

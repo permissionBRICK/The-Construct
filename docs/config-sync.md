@@ -435,9 +435,11 @@ between them:
   over the local file. Invalid profiles are reported as **invalid** with the
   validator's own message, and are left untouched on disk. Same for a name that
   is not a safe bare filename.
-- **A remote URL must be credential-free.** A URL carrying userinfo
-  (`https://alice:<token>@host/…`, or a bare-token `https://<token>@host/…`) is
-  **refused** at link and at publish time, in both engines. Redaction alone would
+- **A remote URL must be secret-free.** A URL carrying a *password* in its userinfo
+  (`https://alice:<token>@host/…`) is **refused** at link and at publish time, in both
+  engines. A bare user name (`https://alice@host/…`) is fine and often needed: it is
+  how the credential helper is told *which* stored credential to use (GitGudLab
+  project tokens require one). Redaction alone would
   not be enough: a URL is passed in git's argv, written verbatim into the staging
   clone's `.git/config`, into `manifest/remotes.json` and into every per-profile
   provenance entry, and handed to the webview — so the secret would sit in half a

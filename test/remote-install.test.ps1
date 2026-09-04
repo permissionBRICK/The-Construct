@@ -503,10 +503,11 @@ $entryNone = New-ConstructRemoteInstanceEntry -Name 'work-vm' -SshHost 'buildbox
 ok "entry: no publicHost at all when the service stated none" (-not $entryNone.ContainsKey('publicHost'))
 ok "entry: an entry WITH a publicHost still loads (the reader accepts the field)" (
     @(Get-ConstructInstanceEntryProblem -Name 'work-vm' -Entry $entryPub).Count -eq 0)
-ok "entry: a publicHost that is not a host name is refused where it is built" (
-    @(Get-ConstructInstanceEntryProblem -Name 'work-vm' -Entry (
-        New-ConstructRemoteInstanceEntry -Name 'work-vm' -SshHost 'buildbox.example.local' -SshPort 2201 `
-            -ServiceUrl 'https://b:7462' -PublicHost '-x; calc')).Count -gt 0)
+$entryBadPub = New-ConstructRemoteInstanceEntry -Name 'work-vm' -SshHost 'buildbox.example.local' -SshPort 2201 `
+    -ServiceUrl 'https://b:7462' -PublicHost '-x; calc' -WarningAction SilentlyContinue
+ok "entry: a publicHost that is not a host name is DROPPED where it is built (the entry survives)" (
+    -not $entryBadPub.ContainsKey('publicHost') -and
+    @(Get-ConstructInstanceEntryProblem -Name 'work-vm' -Entry $entryBadPub).Count -eq 0)
 
 # ── (f2) The create path, DRIVEN end to end (and its ordering) ──────────────
 # The create -> registry-check -> rollback-or-record sequence lives in ONE function

@@ -361,14 +361,16 @@ try {
     # is a DIRECTORY -- Test-Path says it exists, reading it throws.
     $failingPlan = Get-Plan -Identity (New-TestIdentity)
     $failingPlan.Steps[0].Target = $work
-    $failedWalk = Invoke-ConstructInstanceRemoval -Plan $failingPlan -RemoveRegistryEntry { param($n) throw "must not be called" }
+    $script:failWriterCalled = $false
+    $failedWalk = Invoke-ConstructInstanceRemoval -Plan $failingPlan -RemoveRegistryEntry { param($n) $script:failWriterCalled = $true }
     $registryResult = @($failedWalk | Where-Object { $_.Kind -eq 'registry-entry' })[0]
-    ok "walk: a failed step KEEPS the registry entry, so the action can be retried" (
-        (@($failedWalk | Where-Object { $_.Status -eq 'failed' }).Count -ge 1) -and
-        $registryResult.Status -eq 'failed' -and $registryResult.Message -match 'was KEPT')
+    ok "walk: a failed LOCAL step is advisory -- the registry entry is still removed, and the failure counted" (
+        (@($failedWalk | Where-Object { $_.Status -eq 'failed' }).Count -ge 1) -and $script:failWriterCalled -and
+        $registryResult.Status -eq 'removed' -and $registryResult.Message -match 'need doing by hand')
 
-    # THE WHOLE WALK with both parse failures: the entry stays, and the writer is never
-    # called, so the instance is still there to try again.
+    # THE WHOLE WALK with both parse failures: both are reported (each says what to do by
+    # hand), and the entry is removed anyway -- keeping it would not make a retry parse
+    # those files, it would only wedge the instance.
     $parsePlan = Get-Plan -Identity (New-TestIdentity)
     $parseWork = Join-Path $work "parse"
     New-Item -ItemType Directory -Path $parseWork -Force | Out-Null
@@ -384,8 +386,8 @@ try {
     $parseWalk = Invoke-ConstructInstanceRemoval -Plan $parsePlan -RemoveRegistryEntry { param($n) $script:writerCalled = $true }
     ok "walk: both parse failures are reported as failures" (
         @($parseWalk | Where-Object { $_.Kind -in @('vscode-remote-platform', 'opencode-server') -and $_.Status -eq 'failed' }).Count -eq 2)
-    ok "walk: ...the registry entry is KEPT and the writer never ran" (
-        (@($parseWalk | Where-Object { $_.Kind -eq 'registry-entry' })[0].Message -match 'was KEPT') -and -not $script:writerCalled)
+    ok "walk: ...the registry entry is removed regardless, noting the by-hand steps" (
+        (@($parseWalk | Where-Object { $_.Kind -eq 'registry-entry' })[0].Message -match '2 step\(s\) above failed') -and $script:writerCalled)
 
     $noWriter = Invoke-ConstructInstanceRemoval -Plan (Get-Plan -Identity (New-TestIdentity))
     ok "walk: without a registry writer the entry is honestly reported as still there" (

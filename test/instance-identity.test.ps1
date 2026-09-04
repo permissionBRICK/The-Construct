@@ -595,7 +595,7 @@ ok "guest: ...and that is what Get-ServiceEnvSuffix is handed" (
 # instance has to reach the service the REGISTRY names, not whatever the guest was last
 # told -- and an explicit -ServiceUrl that disagrees is a conflict like any other.
 ok "service: -ServiceUrl is conflict-checked with the rest" (
-    $provTxt -match "foreach \(\`$tp in @\('VmHost', 'HostAlias', 'SshPort', 'LocalKeyName', 'ConfigBranch', 'ServiceUrl'\)\)")
+    $provTxt -match "foreach \(\`$tp in @\('VmHost', 'HostAlias', 'SshPort', 'LocalKeyName', 'ConfigBranch', 'ServiceUrl', 'PublicHost'\)\)")
 ok "service: ...and is taken from the entry when the caller did not bind it" (
     $provTxt -match "if \(-not \`$PSBoundParameters\.ContainsKey\('ServiceUrl'\)\)\s*\{\s*\`$ServiceUrl\s*=\s*\[string\]\`$instanceTarget\.ServiceUrl \}")
 

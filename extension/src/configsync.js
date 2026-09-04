@@ -1604,10 +1604,9 @@ function isSafeProfileName(name) {
 }
 
 /**
- * True when a remote URL carries credentials in its userinfo. An http(s) URL has
- * no legitimate userinfo at all (that is where a PAT gets pasted); for any other
- * scheme only a bare user is legitimate (ssh://git@host), never user:secret.
- * Pure; twin of Test-ConstructUrlHasCredentials.
+ * True when a remote URL carries credentials in its userinfo -- user:secret. A bare
+ * user name is legitimate for every scheme (https://alice@host selects the stored
+ * credential; ssh://git@host). Pure; twin of Test-ConstructUrlHasCredentials.
  */
 function urlHasCredentials(url) {
   // TRIM first: every caller trims the value before storing or handing it to git,
@@ -1615,9 +1614,26 @@ function urlHasCredentials(url) {
   // " https://alice:secret@host/x.git" that is then persisted without the padding.
   const m = String(url == null ? "" : url).trim().match(/^([A-Za-z][A-Za-z0-9+.-]*):\/\/([^/@\s]+)@/);
   if (!m) return false;
-  const scheme = m[1].toLowerCase();
-  if (scheme === "http" || scheme === "https") return true;
-  return m[2].includes(":");
+  // A bare user NAME (https://alice@host/x.git, ssh://git@host) carries no secret -- it
+  // is how a credential helper is told WHICH stored credential to use (GitGudLab project
+  // tokens require one). user:secret is refused for every scheme, and so is a bare user
+  // that is plainly a token (a known token prefix, or 32+ characters).
+  if (m[2].includes(":")) return true;
+  return tokenLikeUser(m[2]);
+}
+
+/**
+ * A userinfo value that is a TOKEN rather than a name: a known access-token prefix
+ * (GitHub, GitLab, GitGudLab) or the length no human account name has. Pure; twin of
+ * Test-ConstructTokenLikeUser.
+ */
+function tokenLikeUser(user) {
+  const u = String(user == null ? "" : user);
+  if (!u) return false;
+  if (/^gitgud-project(\.|$)/.test(u)) return false; // GitGudLab project-token user names
+  // Tokens are long and dot-free; account names that long carry dots (project users).
+  if (u.length >= 32 && !u.includes(".")) return true;
+  return /^(ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|glpat-|glptt-|gldt-|glrt-|ggpat_|ggpt_|ggjt_|oauth2$|x-access-token$)/.test(u);
 }
 
 /**

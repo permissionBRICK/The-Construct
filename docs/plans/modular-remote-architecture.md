@@ -631,6 +631,19 @@ single-VM install must behave identically — that's the regression bar for revi
   remote with per-instance Reprovision, **Remove instance** and **Remove Remote Host**, forwarder
   range / SMB letter / temp file de-singletoning.
 
+**Scope pass after Phase 6/7a (2026-09-04, orchestrator):** over-guards the dev/reviewer
+pairs added beyond the plan were relaxed on main (explicit identity args win over the registry
+with a warning, unknown name + endpoint resolves, `publicHost` problems drop the field not the
+entry, Remove instance no longer wedges on advisory failures and gains `-KeepVm`, bare-user
+URLs publish, invalid profiles do not fail a publish, the T3 Desktop reprovision offer for the
+default instance is back, a service VM without a recorded T3 port matches when it is the only
+claimant, the install rule re-installs a missing app, per-row Reprovision confirms, the guest
+persists the forwarded T3 port, the power guard does not throw at service stop). Recorded
+follow-ups: toggling T3 between HTTP/HTTPS leaves the previous host forward allocated (needs a
+`--close` of the stale key); `Remove Remote Host` requires every instance on that host to be
+removed first — use `Remove instance -KeepVm` to keep the VMs; "Register this VM" accepts a
+bare ssh alias as a local host (a lost remote registry could register a local entry).
+
 **Phase 7 — field-prep follow-ups (§4.13; after Phase 6 merges unless file-disjoint):**
 - **B15 — Publish local profiles** (lib config-sync functions, `Auto-Install.ps1 -Action publish-config`, Projects-tab Publish action, docs/config-sync.md §7/§13, tests PS+node).
 - **B16 — Per-VM disk location** (`-VmPath`, service allowed roots + `storageRoot`, remote installer/extension pickers, registry field, docs).

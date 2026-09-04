@@ -225,7 +225,7 @@ describe("ConstructUpdates remote results", () => {
 });
 
 describe("ConstructUpdates action + state derivation", () => {
-  it("offers ONLY Update Construct host-wide — a reprovision belongs to a row", () => {
+  it("offers Update Construct first, then a reprovision of the default instance", () => {
     assert.equal(
       resolveConstructAction({
         scriptsDir: SCRIPTS_DIR,
@@ -235,24 +235,26 @@ describe("ConstructUpdates action + state derivation", () => {
       }),
       "update-construct",
     );
-    // B14: a stale VM, or a newer upstream T3, is a fact about ONE instance — T3 links
-    // several at once, so a host-wide "reprovision" would mean "whichever VM the registry
-    // currently calls default", which is the ambiguity the per-row buttons remove.
-    assert.isNull(
+    // A stale VM, or a newer upstream T3, keeps its proactive offer (pill, toast, About
+    // button) for the DEFAULT instance -- the offline / not-yet-paired case the control
+    // exists for. Every other linked VM is reprovisioned from its own Providers row.
+    assert.equal(
       resolveConstructAction({
         scriptsDir: SCRIPTS_DIR,
         constructUpdateAvailable: false,
         provisionStale: true,
         t3UpdateAvailable: false,
       }),
+      "reprovision",
     );
-    assert.isNull(
+    assert.equal(
       resolveConstructAction({
         scriptsDir: SCRIPTS_DIR,
         constructUpdateAvailable: false,
         provisionStale: false,
         t3UpdateAvailable: true,
       }),
+      "reprovision",
     );
     assert.isNull(
       resolveConstructAction({
@@ -298,7 +300,7 @@ describe("ConstructUpdates action + state derivation", () => {
     assert.equal(state.construct, info);
   });
 
-  it("still PUBLISHES per-VM staleness, which is what a row shows and offers", () => {
+  it("publishes per-VM staleness and keeps the default instance's reprovision offer", () => {
     const t3 = deriveConstructUpdateInfo({
       scriptsDir: SCRIPTS_DIR,
       instances: [],
@@ -313,8 +315,9 @@ describe("ConstructUpdates action + state derivation", () => {
       checkedAt: null,
       error: null,
     });
-    // A newer upstream T3 is a fact about an instance, not a host-wide action any more.
-    assert.isNull(t3.action);
+    // A newer upstream T3 is published per instance AND still offered host-wide for the
+    // default instance.
+    assert.equal(t3.action, "reprovision");
     assert.isTrue(t3.t3UpdateAvailable);
     // ...and the label helper still words it for a row that is running one.
     assert.equal(
@@ -336,7 +339,7 @@ describe("ConstructUpdates action + state derivation", () => {
       checkedAt: null,
       error: null,
     });
-    assert.isNull(stale.action);
+    assert.equal(stale.action, "reprovision");
     assert.isTrue(stale.provisionStale);
     assert.equal(
       constructAvailableVersionLabel({ ...stale, runningAction: "reprovision" }),
@@ -458,8 +461,8 @@ describe("checkConstructUpdates", () => {
     });
     assert.deepEqual(calls, [COMPARE_URL, NPM_NIGHTLY_URL]);
     assert.isTrue(info.t3UpdateAvailable);
-    // The FACT is published; the action for it belongs to the matched instance's row.
-    assert.isNull(info.action);
+    // The fact is published for the rows, and the default instance's offer stands.
+    assert.equal(info.action, "reprovision");
   });
 
   it("keeps the local stale-provision signal when the network is down", async () => {
@@ -476,12 +479,11 @@ describe("checkConstructUpdates", () => {
     });
     assert.isFalse(info.constructUpdateAvailable);
     assert.isTrue(info.provisionStale);
-    // The staleness is published for the instance's row; the host-wide control has
-    // nothing to offer, so the folded state reports the check error instead.
-    assert.isNull(info.action);
+    // The local stale signal survives a dead network: the default instance's reprovision
+    // is still offered, and the check errors ride along.
+    assert.equal(info.action, "reprovision");
     assert.include(info.error ?? "", "GitHub");
     assert.include(info.error ?? "", "npm");
-    assert.equal(applyConstructInfoToState(baseState, info).status, "error");
   });
 
   it("reports a missing Construct install instead of offering anything", async () => {
@@ -579,7 +581,7 @@ describe("checkConstructUpdates", () => {
     assert.isFalse(info.constructUpdateAvailable);
     assert.isNull(info.behind);
     assert.isTrue(info.provisionStale);
-    assert.isNull(info.action);
+    assert.equal(info.action, "reprovision");
   });
 });
 

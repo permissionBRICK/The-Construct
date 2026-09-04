@@ -229,6 +229,17 @@ function ConstructInstanceRow({
   const reprovision = useCallback(async () => {
     const bridge = window.desktopBridge;
     if (!bridge || row.instanceName === null || isBusy) return;
+      // Same guard as the host-wide button: this restarts the VM's T3 server, so running
+      // agent sessions there may ask for a new message afterwards.
+      if (
+        typeof window !== "undefined" &&
+        !window.confirm(
+          `Reprovision the Construct VM "${row.instanceName}" now?\n\nThis reruns Construct provisioning with its saved settings and rebuilds the patched T3 Code. The VM's T3 server restarts when a new build is activated, so running agent sessions may ask you to send a new message afterwards.`,
+        )
+      ) {
+        return;
+      }
+
     setIsBusy(true);
     try {
       const result = await bridge.reprovisionConstructInstance(row.instanceName);

@@ -314,12 +314,10 @@ function identityProblems(inst, raw) {
   const q = (v) => JSON.stringify(v === undefined ? null : v);
   const add = (msg) => { if (out.indexOf(msg) < 0) out.push(msg); };
   if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-    // `publicHost` is checked HERE, on the RAW entry, and for every backend — even the
-    // ones that ignore it (deriveDefaults drops it for hyperv-local). It ends up in the
-    // provisioner's `-PublicHost`, in CONSTRUCT_EXTERNAL_HOST inside the guest's shell
-    // command line and in printed URLs, so a value that is not a host name is refused
-    // where it sits rather than where it lands.
-    for (const f of ["sshHost", "vmHost", "publicHost"]) {
+    // (publicHost is NOT here: it is a web-only name that never reaches ssh or a key
+    // file, so a bad value is reported and IGNORED by the reader instead of costing the
+    // whole entry — see parseRegistry.)
+    for (const f of ["sshHost", "vmHost"]) {
       const v = str(raw[f]);
       if (v && !isHostEndpoint(v)) add('"' + f + '" ' + q(v) + " is not a host name or IP address");
     }
@@ -818,6 +816,15 @@ function parseRegistry(text) {
           if (badString(entry[f])) {
             problems.push('instance "' + name + '": "' + f + '" must be a string — using the derived default');
           }
+        }
+        // publicHost is a WEB-ONLY name (it becomes -PublicHost / CONSTRUCT_EXTERNAL_HOST
+        // and a printed URL, never an ssh target or a file name): a value that is not a
+        // host name is reported and dropped, and the entry stays usable — losing a VM from
+        // the picker over a cosmetic field would send every action to the default VM.
+        const rawPub = str(entry.publicHost);
+        if (rawPub && !isHostEndpoint(rawPub)) {
+          problems.push('instance "' + name + '": "publicHost" ' + JSON.stringify(rawPub) + " is not a host name or IP address — ignored");
+          entry.publicHost = null;
         }
         // The backend's own rules (backendProblems): an unusable or two-faced spelling
         // makes the entry unloadable, and is collected with the identity problems below.

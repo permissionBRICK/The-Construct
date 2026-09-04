@@ -1997,12 +1997,13 @@ console.log("\n=== publicHost ===");
   ok("publicHost: ...and the entry still loads", !!localReg.byName["work-vm"]);
 
   // It becomes CONSTRUCT_EXTERNAL_HOST inside the guest's shell command line and a
-  // printed URL, so a value that is not a host name is refused with the entry.
+  // printed URL, so a value that is not a host name is dropped (reported) — but it is a
+  // web-only field, so the entry itself stays usable.
   const hostile = inst.load({ path: writeRegistry(JSON.stringify({
     version: 1, instances: { "work-vm": { ...remoteEntry, publicHost: "-x; calc" } },
   })) });
-  ok("publicHost: a hostile value skips the whole entry", !hostile.byName["work-vm"]);
-  ok("publicHost: ...and says which field", hostile.problems.some((p) => /publicHost/.test(p)));
+  ok("publicHost: a hostile value is dropped and the entry KEPT", !!hostile.byName["work-vm"] && hostile.byName["work-vm"].publicHost === null);
+  ok("publicHost: ...and says which field, and that it was ignored", hostile.problems.some((p) => /publicHost/.test(p) && /ignored/.test(p)));
 
   const wrongType = inst.load({ path: writeRegistry(JSON.stringify({
     version: 1, instances: { "work-vm": { ...remoteEntry, publicHost: 42 } },
