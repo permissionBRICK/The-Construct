@@ -49,6 +49,11 @@ export const CONSTRUCT_SCRIPTS_MARKER = "Auto-Install.ps1";
 export const CONSTRUCT_SETTINGS_FILE = ".construct-settings.json";
 /** The client-side instance registry (extension/src/instances.js, lib/AgentVm.Instances.ps1). */
 export const CONSTRUCT_INSTANCES_FILE = "instances.json";
+/** Per-instance state, beside the registry: `<container>\instances\<name>.json`
+ *  (extension/src/instancestate.js, lib/AgentVm.InstanceState.ps1). Holds the VM-scoped
+ *  half — `provisionedCommit` among it — for every instance EXCEPT the default one, whose
+ *  VM-scoped keys stay at the legacy top level of `.construct-settings.json`. */
+export const CONSTRUCT_INSTANCE_STATE_DIR_NAME = "instances";
 export const CONSTRUCT_UPDATE_SCRIPT = "Update-Construct.ps1";
 export const CONSTRUCT_REPROVISION_SCRIPT = "Update-T3Code.ps1";
 
@@ -104,11 +109,13 @@ export interface ConstructMarkers {
   readonly installedCommit: string | null;
   /** What the VM was last provisioned with; written by Provision-AgentVM at the end of a run. */
   readonly provisionedCommit: string | null;
-  /** The DEFAULT instance's saved T3 channel, mapped to the npm dist-tag. It lives here
-   *  and not in a per-instance file because the default instance keeps MIRRORING its
-   *  VM-scoped settings into `.construct-settings.json` (plan §4.12, "Per-VM state
-   *  location") — so on a single-VM install this is the only place it is written. */
+  /** The VM's saved T3 channel, mapped to the npm dist-tag. Read from the same VM-scoped
+   *  half as `provisionedCommit`: the instance's own state file, or the legacy top level
+   *  of `.construct-settings.json` for the default instance. */
   readonly channel: DesktopUpdateChannel | null;
+  /** The T3 web GUI port the provisioner last recorded for this VM (`t3Port`); null when
+   *  this PC has not seen it. Half the key a linked remote is matched on. */
+  readonly t3Port: number | null;
 }
 
 function readCommit(value: unknown): string | null {
@@ -117,17 +124,35 @@ function readCommit(value: unknown): string | null {
   return COMMIT_PATTERN.test(trimmed) ? trimmed : null;
 }
 
-/** Parse `.construct-settings.json` (the same defaults the panel's updates.js applies). */
-export function readConstructMarkers(raw: unknown): ConstructMarkers {
+/**
+ * Parse the update markers (the same defaults the panel's updates.js applies).
+ *
+ * `raw` is `.construct-settings.json`: the INSTALL-WIDE half — which Construct is
+ * installed (repo, ref, installedCommit). `state` is the TARGET INSTANCE's VM-scoped half
+ * (`instances\<name>.json`); it defaults to `raw`, which is exactly right for the default
+ * instance, whose state IS the top level of that same file.
+ */
+export function readConstructMarkers(raw: unknown, state?: unknown): ConstructMarkers {
   const record = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+  const stateRecord =
+    state === undefined
+      ? record
+      : typeof state === "object" && state !== null
+        ? (state as Record<string, unknown>)
+        : {};
   const repo = typeof record.constructRepo === "string" ? record.constructRepo.trim() : "";
   const ref = typeof record.constructRef === "string" ? record.constructRef.trim() : "";
   return {
     repo: REPO_PATTERN.test(repo) ? repo : DEFAULT_CONSTRUCT_REPO,
     ref: REF_PATTERN.test(ref) ? ref : DEFAULT_CONSTRUCT_REF,
     installedCommit: readCommit(record.installedCommit),
-    provisionedCommit: readCommit(record.provisionedCommit),
-    channel: readConstructChannel(record.t3codeChannel),
+    provisionedCommit: readCommit(stateRecord.provisionedCommit),
+    // The VM-scoped channel comes from the SAME half as the commit (B12's split): the
+    // instance's own state file, or the legacy top level for the default instance.
+    channel: readConstructChannel(stateRecord.t3codeChannel),
+    // ...and so does the T3 port the provisioner recorded for it (B14): it is a fact
+    // about the running VM, and it is half the key a linked remote is matched on.
+    t3Port: portField(stateRecord.t3Port),
   };
 }
 
@@ -256,12 +281,53 @@ export function resolveConstructScriptsDir(
   return findConstructScriptsDir(localAppData, fs, joinPath);
 }
 
+/**
+ * The markers for ONE target VM: repo/ref/installedCommit from the scripts dir's
+ * install-wide settings, `provisionedCommit` from that instance's own state.
+ *
+ * The DEFAULT instance has no state file at all — its VM-scoped keys live at the legacy
+ * top level of `.construct-settings.json` — so it reads exactly the one file this
+ * function has always read. A non-default target reads its `instances\<name>.json`
+ * instead, which is what makes the Desktop app's per-instance Reprovision row honest:
+ * two VMs on one PC no longer share one provisionedCommit.
+ */
 export function readConstructMarkersFromDir(
   scriptsDir: string,
   fs: ConstructFileSystem,
   joinPath: JoinPath = defaultJoinPath,
+  options?: { readonly localAppData?: string; readonly instanceName?: string },
 ): ConstructMarkers {
-  return readConstructMarkers(readJsonFile(joinPath(scriptsDir, CONSTRUCT_SETTINGS_FILE), fs));
+  const raw = readJsonFile(joinPath(scriptsDir, CONSTRUCT_SETTINGS_FILE), fs);
+  const statePath = constructInstanceStatePath(options?.localAppData, options?.instanceName, joinPath);
+  if (statePath === null) return readConstructMarkers(raw);
+  return readConstructMarkers(raw, readJsonFile(statePath, fs) ?? {});
+}
+
+/**
+ * `<localAppData>\The-Construct\instances\<name>.json`, or null when that instance has no
+ * state file: the DEFAULT instance (whose VM-scoped keys stay at the legacy top level of
+ * `.construct-settings.json`), a name that is not a usable instance name, or no known
+ * %LOCALAPPDATA%.
+ *
+ * The default is decided BY NAME and CASE-SENSITIVELY, exactly as instancestate.js's
+ * isDefaultStore and Test-ConstructDefaultInstanceStore decide it — not by
+ * `ConstructVmTarget.isDefault`, which additionally requires the canonical identity and
+ * would send the two sides looking in different files. The name is held to this file's
+ * existing mirror of THE ONE NAME RULE (INSTANCE_NAME_PATTERN + the reserved prefix, the
+ * same pair the registry reader above uses), not to a second rule invented here: a
+ * lowercase DNS label cannot contain a separator or a dot, so passing it is also what
+ * makes the name safe as a file name.
+ */
+export function constructInstanceStatePath(
+  localAppData: string | undefined,
+  instanceName: string | undefined,
+  joinPath: JoinPath = defaultJoinPath,
+): string | null {
+  if (localAppData === undefined || localAppData === "") return null;
+  const name = (instanceName ?? "").trim();
+  if (name === "" || name === DEFAULT_CONSTRUCT_VM_TARGET.name) return null;
+  if (!INSTANCE_NAME_PATTERN.test(name) || name.startsWith(RESERVED_INSTANCE_NAME_PREFIX)) return null;
+  return joinPath(localAppData, CONSTRUCT_CONTAINER_DIR_NAME, CONSTRUCT_INSTANCE_STATE_DIR_NAME, `${name}.json`);
 }
 
 // ── The target VM (instance registry) ───────────────────────────────────────────
@@ -665,14 +731,6 @@ export function readConstructVmTargetFromRegistry(
 // live in apps/web/src/components/constructInstances.logic.ts. Nothing is duplicated
 // across the two — this file reads the filesystem, that one does the pairing.
 
-/** The per-instance state directory (plan §4.12; B12 writes the files). */
-export const CONSTRUCT_INSTANCE_STATE_DIR = "instances";
-/** The T3 web GUI's ports on a VM that is reached at its own address: plain HTTP and
- *  the TLS proxy (config.env `T3CODE_PORT` / `T3CODE_HTTPS_PORT`, bin/setup-t3-https.sh).
- *  A VM behind a host forward answers on an allocated port instead, which is why the
- *  per-instance state's recorded T3 port wins whenever there is one. */
-export const CONSTRUCT_T3_PORTS: ReadonlyArray<number> = [5177, 5178];
-
 export interface ConstructInstanceRow {
   readonly name: string;
   readonly backend: string;
@@ -815,83 +873,28 @@ export function readConstructInstancesFromRegistry(
   return readConstructInstances(parsed);
 }
 
-/** One instance's own state (plan §4.12 "Per-VM state location":
- *  `%LOCALAPPDATA%\The-Construct\instances\<name>.json`, written by B12). Everything in
- *  it is optional: an instance whose file has not been written yet is not an error, it is
- *  an instance whose commit and channel this PC does not know. */
-export interface ConstructInstanceState {
-  readonly provisionedCommit: string | null;
-  /** The T3 channel this VM builds (`T3CODE_CHANNEL`), mapped to the npm dist-tag. */
-  readonly channel: DesktopUpdateChannel | null;
-  /** The T3 web GUI port this VM was last reached on, when the state records one. */
-  readonly t3Port: number | null;
-}
-
-const EMPTY_INSTANCE_STATE: ConstructInstanceState = Object.freeze({
-  provisionedCommit: null,
-  channel: null,
-  t3Port: null,
-});
-
+/**
+ * ONE instance's own VM-scoped state, read through B12's store: `instances\<name>.json`,
+ * or the legacy top level of `.construct-settings.json` for the DEFAULT instance (which
+ * has no file of its own). `constructInstanceStatePath` decides which, BY NAME — so there
+ * is exactly one place this half of an instance's settings is ever read from, and no
+ * second store beside it.
+ *
+ * Everything in it is optional: an instance whose file has not been written yet is not an
+ * error, it is an instance whose commit, channel and T3 port this PC does not know.
+ */
 export function readConstructInstanceState(
   localAppData: string | undefined,
-  name: string,
+  instanceName: string,
+  scriptsDir: string | null,
   fs: ConstructFileSystem,
   joinPath: JoinPath = defaultJoinPath,
-): ConstructInstanceState {
-  if (!localAppData || !INSTANCE_NAME_PATTERN.test(name)) return EMPTY_INSTANCE_STATE;
-  const path = joinPath(
-    localAppData,
-    CONSTRUCT_CONTAINER_DIR_NAME,
-    CONSTRUCT_INSTANCE_STATE_DIR,
-    `${name}.json`,
-  );
-  const parsed = readJsonFile(path, fs);
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return EMPTY_INSTANCE_STATE;
-  }
-  const record = parsed as Record<string, unknown>;
-  return {
-    provisionedCommit: readCommit(record.provisionedCommit),
-    channel: readConstructChannel(record.t3codeChannel),
-    t3Port: portField(record.t3Port),
-  };
-}
-
-/**
- * The T3 web GUI endpoint the provisioner LAST PUBLISHED for one instance
- * (`%LOCALAPPDATA%\The-Construct\artifacts\t3code\remote-<name>.json`, written by
- * Provision-AgentVM.ps1 from the origin the guest actually serves —
- * `T3CODE_PUBLIC_BASE_URL`, or the host forward it was given).
- *
- * It exists because the PORT is half of the key a linked remote is matched on, and a
- * port is a fact about the running VM rather than about its registry entry: a host
- * forward's port is allocated by the service and reallocated when it restarts. Null
- * means this PC has not seen that VM's T3 yet — which is "no match", not "any port".
- */
-export function readConstructInstanceT3Endpoint(
-  localAppData: string | undefined,
-  name: string,
-  fs: ConstructFileSystem,
-  joinPath: JoinPath = defaultJoinPath,
-): { readonly baseUrl: string | null; readonly port: number | null } {
-  if (!localAppData || !INSTANCE_NAME_PATTERN.test(name)) return { baseUrl: null, port: null };
-  const path = joinPath(
-    localAppData,
-    CONSTRUCT_CONTAINER_DIR_NAME,
-    "artifacts",
-    "t3code",
-    `remote-${name}.json`,
-  );
-  const parsed = readJsonFile(path, fs);
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return { baseUrl: null, port: null };
-  }
-  const record = parsed as Record<string, unknown>;
-  return {
-    baseUrl: stringField(record.baseUrl),
-    port: portField(record.port),
-  };
+): ConstructMarkers {
+  const settings =
+    scriptsDir === null ? {} : (readJsonFile(joinPath(scriptsDir, CONSTRUCT_SETTINGS_FILE), fs) ?? {});
+  const statePath = constructInstanceStatePath(localAppData, instanceName, joinPath);
+  if (statePath === null) return readConstructMarkers(settings);
+  return readConstructMarkers(settings, readJsonFile(statePath, fs) ?? {});
 }
 
 /** The instance facts the RENDERER needs to pair its linked remotes with this PC's VMs
@@ -900,38 +903,27 @@ export function collectConstructInstances(
   registry: ConstructRegistryView,
   localAppData: string | undefined,
   fs: ConstructFileSystem,
-  /** The install-wide markers — where the DEFAULT instance's state is mirrored. */
-  markers: Pick<ConstructMarkers, "provisionedCommit" | "channel">,
+  /** Where `.construct-settings.json` is — the install-wide half, and the DEFAULT
+   *  instance's VM-scoped half. Null when Construct was not found on this PC. */
+  scriptsDir: string | null,
   joinPath: JoinPath = defaultJoinPath,
 ): ReadonlyArray<ConstructInstanceInfo> {
   return registry.instances.map((instance) => {
-    const state = readConstructInstanceState(localAppData, instance.name, fs, joinPath);
-    // The DEFAULT instance keeps mirroring its commit into `.construct-settings.json`
-    // (plan §4.12), which is where `installWideProvisionedCommit` comes from — so a PC
-    // that predates the per-instance files still reports its one VM honestly.
-    // THE LEGACY MIRROR BELONGS TO `agent-vm`, NOT TO "whichever VM is default now".
-    // `.construct-settings.json` holds the DEFAULT STORE's VM-scoped keys, and that store
-    // is fixed to the instance named `agent-vm` (plan §4.12: it "keeps mirroring its
-    // legacy top-level keys"). `isDefault` is the mutable registry pointer — reading the
-    // mirror through it would hand `agent-vm`'s commit and channel to whichever VM the
-    // user last made default, and leave agent-vm itself unknown.
-    const usesLegacyStore = instance.name === DEFAULT_CONSTRUCT_VM_TARGET.name;
-    const provisionedCommit =
-      state.provisionedCommit ?? (usesLegacyStore ? markers.provisionedCommit : null);
-    const channel = state.channel ?? (usesLegacyStore ? markers.channel : null);
-    const endpoint = readConstructInstanceT3Endpoint(localAppData, instance.name, fs, joinPath);
+    // ONE read per instance, through the ONE store. Which file that is, is decided BY
+    // NAME (constructInstanceStatePath): `agent-vm` keeps its VM-scoped keys at the
+    // legacy top level of `.construct-settings.json`, everything else has its own file.
+    // Deciding it by the registry's mutable `isDefault` pointer instead would hand
+    // agent-vm's commit and channel to whichever VM the user last made default.
+    const state = readConstructInstanceState(localAppData, instance.name, scriptsDir, fs, joinPath);
     return {
       name: instance.name,
       vmHost: instance.vmHost,
       publicHost: instance.publicHost,
       hostAlias: instance.hostAlias,
       isDefault: instance.isDefault,
-      provisionedCommit,
-      channel,
-      // The per-instance state's port wins when it is there (B12 records it beside the
-      // rest of the VM's state); the endpoint the provisioner published is what every
-      // install has today.
-      t3Port: state.t3Port ?? endpoint.port,
+      provisionedCommit: state.provisionedCommit,
+      channel: state.channel,
+      t3Port: state.t3Port,
     };
   });
 }
@@ -1247,8 +1239,22 @@ export async function checkConstructUpdates(
   const markers =
     scriptsDir === null
       ? readConstructMarkers({})
-      : readConstructMarkersFromDir(scriptsDir, options.fs, joinPath);
-  const instances = collectConstructInstances(registry, options.localAppData, options.fs, markers, joinPath);
+      : readConstructMarkersFromDir(scriptsDir, options.fs, joinPath, {
+          // OMITTED, not `undefined`: the workspace compiles with
+          // exactOptionalPropertyTypes, under which an optional `string` property may not
+          // be handed an explicit undefined.
+          ...(options.localAppData === undefined ? {} : { localAppData: options.localAppData }),
+          instanceName: target.name,
+        });
+  // Every instance's own half, read through the same store (B12) — one row per VM needs
+  // one read per VM, not the target's markers repeated.
+  const instances = collectConstructInstances(
+    registry,
+    options.localAppData,
+    options.fs,
+    scriptsDir,
+    joinPath,
+  );
   const previous = options.previous;
   const errors: string[] = [];
   if (scriptsDir === null) errors.push(constructScriptsMissingMessage(options.localAppData));

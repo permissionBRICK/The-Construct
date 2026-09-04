@@ -21,6 +21,9 @@ function ok($name, $cond) {
 }
 
 . (Join-Path $repoRoot "lib/AgentVm.Common.ps1")
+# B12's per-instance state store -- it owns the install-wide / VM-scoped key split the
+# default-store cleanup below classifies by.
+. (Join-Path $repoRoot "lib/AgentVm.InstanceState.ps1")
 . (Join-Path $repoRoot "lib/AgentVm.Cleanup.ps1")
 
 $HOMEDIR = "/tmp/b14-home"
@@ -69,7 +72,7 @@ $local = Get-Plan -Identity (New-TestIdentity)
 ok "local: the plan is accepted without any typed confirmation" ($local.Ok -and -not $local.RequiresTypedConfirmation)
 ok "local: no VM is deleted" (-not $local.DeletesVm)
 $kinds = @($local.Steps | ForEach-Object { $_.Kind })
-foreach ($kind in @('ssh-config', 'known-hosts', 'ssh-key', 'vscode-remote-platform', 'opencode-server', 't3-ca', 'instance-state', 't3-endpoint', 'temp-known-hosts', 'registry-entry')) {
+foreach ($kind in @('ssh-config', 'known-hosts', 'ssh-key', 'vscode-remote-platform', 'opencode-server', 't3-ca', 'instance-state', 'temp-known-hosts', 'registry-entry')) {
     ok "local: the plan covers '$kind'" ($kinds -contains $kind)
 }
 ok "local: it does NOT ask a host service to delete anything" (-not ($kinds -contains 'remote-vm-delete'))
@@ -91,7 +94,8 @@ ok "local: the ssh key target is this instance's own key file" ($targets['ssh-ke
 ok "local: the CA target is this instance's own certificate file" ($targets['t3-ca'] -match 'construct-t3-ca-work-vm\.crt$')
 ok "local: the state file target is instances\<name>.json" ($targets['instance-state'] -match 'work-vm\.json$')
 ok "local: the temp file target is this instance's known_hosts" ($targets['temp-known-hosts'] -match 'construct-known_hosts-work-vm$')
-ok "local: the recorded endpoints file is removed too" ($targets['t3-endpoint'] -match 'remote-work-vm\.json$')
+ok "local: the state file carries this instance's endpoints, and goes with it" (
+    $targets['instance-state'] -match 'work-vm\.json$')
 
 # ── Refusals ─────────────────────────────────────────────────────────────────
 Write-Host ""
@@ -251,13 +255,14 @@ try {
     # END TO END: what the PROVISIONER writes is what the removal looks for and deletes.
     $endpointRecord = Get-ConstructT3EndpointRecord -InstanceName 'work-vm' `
         -BaseUrl 'https://work-vm.vpn.example:23011' -OpenCodeUrl 'https://work-vm.vpn.example:23012'
-    $endpointName = Get-ConstructT3EndpointFileName -InstanceName 'work-vm'
-    $endpointPath = Join-Path $work $endpointName
+    $endpointPath = Join-Path $work "work-vm.json"
     ($endpointRecord | ConvertTo-Json -Depth 5) | Set-Content -LiteralPath $endpointPath -Encoding UTF8
     ok "effect: the provisioner's endpoint record carries the port AND the OpenCode url" (
         $endpointRecord.port -eq 23011 -and $endpointRecord.openCodeUrl -eq 'https://work-vm.vpn.example:23012')
-    $rEnd = Remove-ConstructInstanceFile -Kind 't3-endpoint' -Path $endpointPath
-    ok "effect: the removal deletes the file the provisioner wrote" (
+    # Those facts live in the instance's OWN state document (B12), which the removal
+    # deletes with the rest of that VM's state -- there is no second store to clean up.
+    $rEnd = Remove-ConstructInstanceFile -Kind 'instance-state' -Path $endpointPath
+    ok "effect: the removal deletes the state file the provisioner wrote them to" (
         $rEnd.Status -eq 'removed' -and -not (Test-Path -LiteralPath $endpointPath))
     # ...and the url it recorded is what reaches the OpenCode matcher, so an entry whose
     # display name was changed is still found.
@@ -480,9 +485,9 @@ ok "auto-install: an unattended run must SUPPLY the confirmation, never be asked
     $ai -match 'if \(-not \$Interactive -or \[Console\]::IsInputRedirected\) \{[\s\S]{0,300}-ConfirmInstanceName')
 ok "auto-install: the removal is given the URLs it needs to match an OpenCode entry" (
     $ai -match '-OpenCodeUrls \$riExtraUrls')
-ok "auto-install: those URLs come from the file the PROVISIONER writes" (
-    $ai -match 'Get-ConstructT3EndpointFileName -InstanceName \$Name' -and
-    $ai -match 'The-Construct\\instances\\\$Name\.json')
+ok "auto-install: those URLs come from the instance's OWN state (B12's store)" (
+    $ai -match 'Read-ConstructInstanceState -Name \$Name -Dir \$PSScriptRoot' -and
+    $ai -notmatch 'artifacts\\t3code\\')
 ok "auto-install: the local menu offers it" ($ai -match '"Remove instance  forget this VM on this PC')
 ok "auto-install: the remote menu offers it" ($ai -match '"Remove instance  DELETE the VM on the host')
 

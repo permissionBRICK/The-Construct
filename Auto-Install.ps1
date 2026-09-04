@@ -865,6 +865,12 @@ $commonLib = Join-Path $PSScriptRoot "lib\AgentVm.Common.ps1"
 if (-not (Test-Path -LiteralPath $commonLib)) { throw "Required helper not found: $commonLib" }
 . $commonLib
 
+# Per-instance state (the VM-scoped half of what the control panel saves). OPTIONAL: an
+# older/partial checkout without it falls back to the legacy top-level keys, which is
+# exactly today's single-VM behaviour.
+$stateLib = Join-Path $PSScriptRoot "lib\AgentVm.InstanceState.ps1"
+if (Test-Path -LiteralPath $stateLib) { . $stateLib }
+
 # Hypervisor driver: every Hyper-V touch in this script (the existence probe, the
 # prerequisite install, the teardown, the reachability endpoint) goes through the
 # contract functions it defines -- see docs/drivers.md. "hyperv-local" is today's
@@ -920,6 +926,10 @@ function Invoke-ConstructRemoveInstanceAction {
     }
     . $riTargetLib
     . $riCleanupLib
+    # B12's per-instance state store: where the recorded OpenCode url lives, and what the
+    # default instance's VM-scoped keys are classified by.
+    $riStateLib = Join-Path $PSScriptRoot "lib\AgentVm.InstanceState.ps1"
+    if (Test-Path -LiteralPath $riStateLib) { . $riStateLib }
 
     $script:ConstructRemoveInstanceRc = 1
     $riInventory = Get-ConstructInstanceInventory -Name $Name
@@ -935,25 +945,20 @@ function Invoke-ConstructRemoveInstanceAction {
     # alias never appears in). Best-effort: the plan derives the direct URL itself, and a
     # state file that is not there is an instance whose forward this PC never saw.
     # The url the PROVISIONER recorded when it registered the entry (a host forward's,
-    # which the VM's own name never appears in). Read from the file that provision
-    # writes -- Get-ConstructT3EndpointRecord's `openCodeUrl` -- and from the
-    # per-instance state file too, so it keeps working when that store takes the
-    # endpoint facts over. Best-effort: no record means the direct url and the display
-    # name are what the removal matches on.
+    # which the VM's own name never appears in, and the only thing left to match on when
+    # the user renamed the entry). Read from the instance's OWN state -- B12's store, the
+    # same document the provisioner wrote it to. Best-effort: no record means the direct
+    # url and the display names are what the removal matches on.
     $riExtraUrls = @()
-    $riEndpointFile = Join-Path $env:LOCALAPPDATA ("The-Construct\artifacts\t3code\" + (Get-ConstructT3EndpointFileName -InstanceName $Name))
-    foreach ($riSource in @($riEndpointFile, (Join-Path $env:LOCALAPPDATA "The-Construct\instances\$Name.json"))) {
-        try {
-            if (-not (Test-Path -LiteralPath $riSource)) { continue }
-            $riRecord = Get-Content -LiteralPath $riSource -Raw | ConvertFrom-Json
-            foreach ($riKey in @('openCodeUrl', 'opencodeUrl')) {
-                if (($riRecord.PSObject.Properties.Name -contains $riKey) -and $riRecord.$riKey -and
-                    $riExtraUrls -notcontains [string]$riRecord.$riKey) {
-                    $riExtraUrls += [string]$riRecord.$riKey
-                }
+    try {
+        $riState = Read-ConstructInstanceState -Name $Name -Dir $PSScriptRoot
+        foreach ($riKey in @('openCodeUrl', 'opencodeUrl')) {
+            if ($riState -and ($riState.PSObject.Properties.Name -contains $riKey) -and $riState.$riKey -and
+                $riExtraUrls -notcontains [string]$riState.$riKey) {
+                $riExtraUrls += [string]$riState.$riKey
             }
-        } catch { }
-    }
+        }
+    } catch { $riExtraUrls = @() }
 
     $riPreview = Get-ConstructInstanceRemovalPlan -Name $Name -Identity $riEntry `
         -InstanceCount $riInventory.Count -IsDefault:$riIsDefault -OpenCodeUrls $riExtraUrls `
@@ -2515,6 +2520,13 @@ $VmDnsName   = $script:VmIdentity.VmHost
 $VmIsDefault = $script:VmIdentity.IsDefault
 $VmAlias     = $script:VmIdentity.HostAlias
 $VmKeyName   = $script:VmIdentity.KeyName
+# WHICH INSTANCE this local run's per-VM state belongs to (B12) -- taken from the SAME
+# resolved identity as every value above, so there is one answer and one line to re-point.
+# The default instance resolves to the legacy top-level keys of .construct-settings.json;
+# any other one to %LOCALAPPDATA%\The-Construct\instances\<name>.json. The REMOTE path
+# never reaches here -- it returns inside the `if ($RemoteInstall)` block above, where the
+# instance name is -InstanceName.
+$VmInstanceName = $script:VmIdentity.Name
 # The config-sync branch THIS run owns: an explicit -ConfigBranch wins, otherwise the
 # SAME derivation Provision-AgentVM.ps1 applies ("agent-vm" -> "vm", anything else ->
 # "vm-<alias>"). Every sync this script performs -- the PRE-WIPE tick below included --
@@ -3149,7 +3161,14 @@ if (-not $SkipCreateVm -and -not $existingVmHandled -and
 $effectiveAutoCheckpoints = $AutomaticCheckpoints
 if (-not $PSBoundParameters.ContainsKey('AutomaticCheckpoints')) {
     try {
-        $savedSettings = Read-ConstructSettings -Dir $PSScriptRoot
+        # THIS VM's saved preference ($VmInstanceName is the one place that answers "which
+        # instance"), so the default VM reads the legacy top-level key and any other VM
+        # reads its own state file.
+        $savedSettings = if (Get-Command Read-ConstructInstanceState -ErrorAction SilentlyContinue) {
+            Read-ConstructInstanceState -Name $VmInstanceName -Dir $PSScriptRoot
+        } else {
+            Read-ConstructSettings -Dir $PSScriptRoot
+        }
         if ($savedSettings -and $null -ne $savedSettings.vmAutoCheckpoints) {
             # NOT [bool]: every non-empty PowerShell string is truthy, so a hand-edited
             # settings file holding the STRING "false" would coerce to $true and silently
