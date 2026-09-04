@@ -97,6 +97,19 @@
     creates no new credential -- otherwise every reinstall would leave another
     permanent token behind.
 
+.PARAMETER KeepHostAwake
+    Set this host's AC sleep, hibernate and unattended-sleep timeouts to "never" on
+    the active power scheme. Without it the installer only PRINTS them and, in an
+    interactive run, asks. In an unattended run (no console input, or -WhatIf) an
+    absent switch means "leave the power plan alone".
+
+    The service holds a power availability request while any VM is running, which
+    already stops the idle timer; this is the belt to that pair of braces, for the
+    window before the service starts and for a host that is expected never to sleep.
+
+.PARAMETER SkipPowerSettings
+    Do not read or change this host's power plan at all -- no report, no prompt.
+
 .EXAMPLE
     .\Install-ConstructHost.ps1 -ScriptsDir C:\Construct -PublishDir C:\Construct\service\publish `
         -PublicHost buildbox.example.local `
@@ -155,6 +168,10 @@ param(
 
     [switch]$RotateAdminToken,
 
+    [switch]$KeepHostAwake,
+
+    [switch]$SkipPowerSettings,
+
     [switch]$NoStart
 )
 
@@ -179,6 +196,73 @@ foreach ($pathParam in @('ScriptsDir', 'PublishDir', 'DataDir', 'IsoSourcePath')
 function Write-Step($msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)   { Write-Host "    $msg" -ForegroundColor Green }
 function Write-Note($msg) { Write-Host "    $msg" -ForegroundColor DarkGray }
+
+# ── May we ask the operator a question? ──────────────────────────────────────
+# Decided in ONE place, and it has to be decided BEFORE the self-elevation: the
+# elevated copy is started with Start-Process and gets a brand new console, so it
+# cannot see that THIS session had its input redirected, was launched
+# -NonInteractive, or has no interactive desktop at all. Inferring it after
+# elevation would turn every unattended install into a prompt nobody can answer.
+
+function Test-ConstructNonInteractiveArgument {
+    <#
+        Was this PowerShell started -NonInteractive? It matters more than it looks:
+        there Read-Host THROWS rather than returning a default, so a prompt does not
+        hang the install, it fails it.
+
+        PowerShell accepts the usual abbreviations (-noni) and both prefix
+        characters; -NoProfile, -NoExit and -NoLogo must NOT match. Pure, so every
+        spelling is under test.
+    #>
+    [CmdletBinding()]
+    param([AllowNull()][AllowEmptyCollection()][string[]]$Arguments)
+
+    if (-not $Arguments) { return $false }
+    foreach ($argument in $Arguments) {
+        # -match is case-insensitive, and a file path cannot start with - or /.
+        if ($argument -match '^[-/]+noni') { return $true }
+    }
+    return $false
+}
+
+function Test-ConstructPromptAllowed {
+    <#
+        THE decision, pure, over the four facts that make a run unattended -- any one
+        of them is enough:
+
+          * input is redirected: something is driving this script, not somebody;
+          * the process was started -NonInteractive;
+          * there is no interactive session at all (a scheduled task, a remoting
+            session, CI);
+          * -WhatIf: a dry run must not change the machine, and must not stop for an
+            answer either.
+    #>
+    [CmdletBinding()]
+    param(
+        [bool]$InputRedirected,
+        [bool]$NonInteractiveHost,
+        [bool]$UserInteractive,
+        [bool]$WhatIf
+    )
+
+    if ($InputRedirected)    { return $false }
+    if ($NonInteractiveHost) { return $false }
+    if (-not $UserInteractive) { return $false }
+    if ($WhatIf)             { return $false }
+    return $true
+}
+
+function Test-ConstructInteractive {
+    <# The facts about THIS session, handed to the pure decision above. #>
+    [CmdletBinding()]
+    param()
+
+    return (Test-ConstructPromptAllowed `
+        -InputRedirected ([Console]::IsInputRedirected) `
+        -NonInteractiveHost (Test-ConstructNonInteractiveArgument -Arguments ([Environment]::GetCommandLineArgs())) `
+        -UserInteractive ([Environment]::UserInteractive) `
+        -WhatIf ([bool]$WhatIfPreference))
+}
 
 # ── Value transport ──────────────────────────────────────────────────────────
 # One place here starts a process in a MORE privileged context: the self-elevation
@@ -266,8 +350,17 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
         ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Host "Relaunching as Administrator..." -ForegroundColor Yellow
 
+    # A copy, because $PSBoundParameters is live, plus the one decision the elevated
+    # copy cannot make for itself: whether it may ask about the power plan. Unattended
+    # here means "leave the plan alone" there, which is exactly -KeepHostAwake:$false.
+    $forward = @{}
+    foreach ($bound in $PSBoundParameters.GetEnumerator()) { $forward[$bound.Key] = $bound.Value }
+    if (-not $forward.ContainsKey('KeepHostAwake') -and -not (Test-ConstructInteractive)) {
+        $forward['KeepHostAwake'] = $false
+    }
+
     $relaunch = New-ConstructRelaunchScript -ScriptPath $PSCommandPath `
-                    -PayloadJson (ConvertTo-ConstructPayload -Values $PSBoundParameters)
+                    -PayloadJson (ConvertTo-ConstructPayload -Values $forward)
     $encoded  = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($relaunch))
 
     $elevated = Start-Process powershell.exe -Verb RunAs -PassThru -Wait -ArgumentList @(
@@ -708,6 +801,178 @@ function Set-ConstructFirewallRule {
     Write-Ok "$DisplayName ($LocalPort)"
 }
 
+function Get-ConstructPowerSetting {
+    <#
+        The sleep timeouts this installer reports on, BY GUID.
+
+        powercfg's aliases (SUB_SLEEP, STANDBYIDLE) and every label it prints are
+        localized; the GUIDs are not, and the unattended-sleep timeout is hidden and
+        has no alias at all. So the GUIDs are what travels.
+    #>
+    [CmdletBinding()]
+    param()
+
+    $sleep = '238c9fa8-0aad-41ed-83f4-97be242c8f20'   # SUB_SLEEP
+    return @(
+        @{ Key = 'StandbyIdle';     SubGroup = $sleep; Setting = '29f6c1db-86da-48c5-9fdb-f2b67b1f44da'; Label = 'Sleep after (STANDBYIDLE)' }
+        @{ Key = 'HibernateIdle';   SubGroup = $sleep; Setting = '9d7815a6-7ee4-497e-8888-515a05f02364'; Label = 'Hibernate after (HIBERNATEIDLE)' }
+        @{ Key = 'UnattendedSleep'; SubGroup = $sleep; Setting = '7bc4a2f9-d8fc-4469-b07b-33eb785aaca0'; Label = 'Unattended sleep timeout' }
+    )
+}
+
+function ConvertFrom-ConstructPowerQuery {
+    <#
+        The AC and DC values out of "powercfg /q <scheme> <subgroup> <setting>",
+        without reading a single WORD of it.
+
+        Every label powercfg prints is localized ("Aktueller Wechselstromwert..."), so
+        matching on text is wrong on any host that is not English -- and the failure
+        mode is the bad one: reporting "never" on a machine that sleeps. What is NOT
+        localized is the SHAPE. The block ends with the current AC value and then the
+        current DC value, each a hex number after the last colon on its line. The
+        lines above them (minimum, maximum, increment) have that same shape, which is
+        exactly why it is the LAST two that matter.
+
+        Returns @{ Ac = <int64>; Dc = <int64> } in seconds, or $null when the output
+        holds no such pair (a failed query, or a setting this host does not have).
+    #>
+    [CmdletBinding()]
+    param([AllowNull()][AllowEmptyString()][string]$Output)
+
+    if ([string]::IsNullOrWhiteSpace($Output)) { return $null }
+
+    $values = @()
+    foreach ($line in ($Output -split "\r?\n")) {
+        $match = [regex]::Match($line, ':\s*0x([0-9a-fA-F]{1,8})\s*$')
+        if ($match.Success) { $values += [Convert]::ToInt64($match.Groups[1].Value, 16) }
+    }
+
+    if ($values.Count -lt 2) { return $null }
+    return @{ Ac = $values[$values.Count - 2]; Dc = $values[$values.Count - 1] }
+}
+
+function ConvertFrom-ConstructActiveScheme {
+    <#
+        The active scheme's GUID out of "powercfg /getactivescheme" -- the GUID, never
+        the localized name printed next to it. Only for the report; the commands
+        themselves use powercfg's own SCHEME_CURRENT alias, so nothing depends on this
+        having worked.
+    #>
+    [CmdletBinding()]
+    param([AllowNull()][AllowEmptyString()][string]$Output)
+
+    if ([string]::IsNullOrWhiteSpace($Output)) { return "" }
+    $match = [regex]::Match($Output, '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}')
+    if ($match.Success) { return $match.Value }
+    return ""
+}
+
+function Format-ConstructPowerTimeout {
+    <# A timeout in seconds as a person reads it. 0 is powercfg's "never". #>
+    [CmdletBinding()]
+    param([AllowNull()]$Seconds)
+
+    if ($null -eq $Seconds) { return "unavailable" }
+    $value = [int64]$Seconds
+    if ($value -le 0) { return "never" }
+    if (($value % 60) -eq 0) { return "$($value / 60) min" }
+    return "$value s"
+}
+
+function Invoke-ConstructPowercfg {
+    <#
+        powercfg.exe with an argument LIST, as @{ ExitCode; Output }. The ONE place
+        that runs it, which is what lets everything above be exercised against canned
+        output from a non-English host.
+
+        A host without powercfg (or one that refuses the query) is reported, not
+        fatal: the power plan is a comfort setting, and failing an install over it
+        would be worse than the nap it prevents.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+
+    try {
+        $output = & powercfg.exe @Arguments 2>&1 | Out-String
+        return @{ ExitCode = $LASTEXITCODE; Output = $output }
+    } catch {
+        return @{ ExitCode = -1; Output = $_.Exception.Message }
+    }
+}
+
+function Get-ConstructPowerReport {
+    <#
+        What this host's sleep timeouts are right now: one row per setting, AC and DC
+        in seconds ($null when the query failed).
+
+        -Query is the seam. The installer passes its own powercfg runner; the tests
+        pass canned output -- including a German host's -- so the parsing is under test
+        on a machine that has no powercfg at all.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$SchemeGuid,
+        [Parameter(Mandatory = $true)][scriptblock]$Query
+    )
+
+    $rows = @()
+    foreach ($setting in (Get-ConstructPowerSetting)) {
+        $result = & $Query -Arguments @("/q", $SchemeGuid, $setting.SubGroup, $setting.Setting)
+
+        $values = $null
+        if ($result -and $result.ExitCode -eq 0) {
+            $values = ConvertFrom-ConstructPowerQuery -Output $result.Output
+        }
+
+        $ac = $null
+        $dc = $null
+        if ($values) { $ac = $values.Ac; $dc = $values.Dc }
+
+        $rows += @{
+            Key      = $setting.Key
+            Label    = $setting.Label
+            SubGroup = $setting.SubGroup
+            Setting  = $setting.Setting
+            Ac       = $ac
+            Dc       = $dc
+        }
+    }
+    return $rows
+}
+
+function Set-ConstructPowerNever {
+    <#
+        Set one AC timeout to 0 ("never") on the active scheme. Idempotent: a value
+        that is already 0 is left alone and reported as unchanged, so a re-run of the
+        installer writes nothing. Returns $true only when it actually changed
+        something, so the caller knows whether the scheme has to be re-applied.
+    #>
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param(
+        [Parameter(Mandatory = $true)][string]$SchemeGuid,
+        [Parameter(Mandatory = $true)][hashtable]$Row,
+        [Parameter(Mandatory = $true)][scriptblock]$Query
+    )
+
+    if ($null -ne $Row.Ac -and [int64]$Row.Ac -eq 0) {
+        Write-Note "$($Row.Label): already never (unchanged)"
+        return $false
+    }
+
+    if (-not $PSCmdlet.ShouldProcess($Row.Label, "Set the AC timeout to never on the active power scheme")) { return $false }
+
+    $result = & $Query -Arguments @("/setacvalueindex", $SchemeGuid, $Row.SubGroup, $Row.Setting, "0")
+    if (-not $result -or $result.ExitCode -ne 0) {
+        $said = ""
+        if ($result) { $said = Format-ConstructCommandOutput -Output $result.Output }
+        Write-Warning "powercfg could not set $($Row.Label) to never; set it by hand in the power options.$said"
+        return $false
+    }
+
+    Write-Ok "$($Row.Label): set to never (AC)"
+    return $true
+}
+
 function Resolve-ConstructCertificate {
     <#
         The TLS certificate. An explicit thumbprint is used as-is; otherwise a
@@ -1022,6 +1287,68 @@ Set-ConstructFirewallRule -DisplayName "Construct constructd SSH forwards" -Loca
 Set-ConstructFirewallRule -DisplayName "Construct constructd app forwards" -LocalPort "$($appRange.Start)-$($appRange.End)"
 Write-Note "The forward ranges are what makes a VM reachable from the LAN; narrow the rules' scope if that is too broad for this network."
 
+# ── 4b. The host's own sleep settings ────────────────────────────────────────
+# Field failure (2026-09-04): the host dropped into S3 overnight ("System Idle") with
+# VMs that were expected to keep serving. The service now holds a power availability
+# request while any VM of its is running, which stops the idle timer -- but only while
+# the service is up, and only for the sleep the timer causes. So this step REPORTS what
+# the machine is set to (so the number is in the install log either way) and, when
+# asked, switches the AC timers off.
+#
+# Nothing here is read by matching localized text: the settings travel as GUIDs and the
+# values come out of the hex indices, which is the same on every host language.
+
+Write-Step "The host's sleep settings"
+if ($SkipPowerSettings) {
+    Write-Note "-SkipPowerSettings: this host's power plan was neither read nor changed."
+} else {
+    # SCHEME_CURRENT is powercfg's own alias for the active scheme; the GUID is read
+    # separately for the report only, so a failure there changes nothing.
+    $activeScheme = "SCHEME_CURRENT"
+    $schemeResult = Invoke-ConstructPowercfg -Arguments @("/getactivescheme")
+    $schemeGuid = ConvertFrom-ConstructActiveScheme -Output $schemeResult.Output
+    if ($schemeGuid) { Write-Note "Active power scheme: $schemeGuid" }
+
+    $powerRows = @(Get-ConstructPowerReport -SchemeGuid $activeScheme -Query ${function:Invoke-ConstructPowercfg})
+    foreach ($row in $powerRows) {
+        Write-Note ("{0,-26} AC {1,-10}  DC {2}" -f $row.Label,
+            (Format-ConstructPowerTimeout -Seconds $row.Ac), (Format-ConstructPowerTimeout -Seconds $row.Dc))
+    }
+
+    # -KeepHostAwake decides when it is given -- including when the UNELEVATED copy
+    # resolved it to $false before relaunching, which is how an unattended run reaches
+    # here without a console of its own. Otherwise: ask, or leave the machine alone.
+    $setPowerNever = $false
+    if ($PSBoundParameters.ContainsKey("KeepHostAwake")) {
+        $setPowerNever = [bool]$KeepHostAwake
+    } elseif (-not (Test-ConstructInteractive)) {
+        Write-Note "Unattended run: leaving the power plan alone. Pass -KeepHostAwake to set the AC timers to never."
+    } else {
+        $answer = Read-Host "    Set the AC sleep/hibernate timers to never on this host? [Y/n]"
+        $setPowerNever = ($answer -notmatch '^\s*[nN]')
+    }
+
+    if ($setPowerNever) {
+        $powerChanged = $false
+        foreach ($row in $powerRows) {
+            if (Set-ConstructPowerNever -SchemeGuid $activeScheme -Row $row -Query ${function:Invoke-ConstructPowercfg}) {
+                $powerChanged = $true
+            }
+        }
+
+        # /setacvalueindex writes the scheme; /setactive is what makes the running
+        # configuration pick it up.
+        if ($powerChanged -and $PSCmdlet.ShouldProcess("the active power scheme", "Apply the changed timeouts")) {
+            $applied = Invoke-ConstructPowercfg -Arguments @("/setactive", $activeScheme)
+            if ($applied.ExitCode -ne 0) {
+                Write-Warning "powercfg could not re-apply the active scheme; the new timeouts take effect at the next sign-in."
+            }
+        }
+    } else {
+        Write-Note "Power plan left as it is. The service still holds a power request while VMs run (powercfg /requests)."
+    }
+}
+
 # ── 5. appsettings.Production.json ───────────────────────────────────────────
 
 Write-Step "Writing appsettings.Production.json"
@@ -1210,6 +1537,10 @@ Write-Host "    & `"$exe`" admin tokens issue DOMAIN\someone --label laptop"
 Write-Host ""
 Write-Host "  Check it answers:"
 Write-Host "    curl -H `"Authorization: Bearer <token>`" $clientUrl/api/v1/whoami"
+Write-Host ""
+Write-Host "  Host stays awake while VMs run (Constructd:Power:KeepHostAwake):"
+Write-Host "    powercfg /requests                        # the SYSTEM request the service holds"
+Write-Host "    powercfg /q SCHEME_CURRENT SUB_SLEEP      # this host's sleep timeouts"
 Write-Host ""
 Write-Host "  Logs: Get-EventLog -LogName Application -Source $ServiceName -Newest 50"
 Write-Host ""
