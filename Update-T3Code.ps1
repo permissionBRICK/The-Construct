@@ -43,10 +43,51 @@ if ($InstanceName) {
     }
 }
 
-$settingsPath = Join-Path $PSScriptRoot '.construct-settings.json'
+
+function Get-ConstructStateInstanceName {
+    <#
+        WHICH INSTANCE's saved settings this rebuild replays (B12) -- the ONE answer, asked
+        here and nowhere else, built on the instance B11 already resolved above.
+
+        The settings belong to a VM, not to the checkout. -InstanceName is that name when
+        it was given (every other argument was resolved from it above); otherwise the ssh
+        alias IS the instance name -- alias = name, the one derivation rule -- lowercased
+        exactly the way Get-ConstructConfigBranchName normalises it, whether it came from
+        the caller or from the resolved target; otherwise the implicit default.
+
+        The default instance reads the legacy top-level keys of .construct-settings.json,
+        byte-identical to what this script always read; any other one reads
+        %LOCALAPPDATA%\The-Construct\instances\<name>.json, so reprovisioning a second VM
+        from the Desktop app can never replay the first VM's toggles.
+
+        $InstanceName / $HostAlias, not $PSBoundParameters: inside a function that
+        automatic variable holds THIS function's parameters, not the script's -- and both
+        may have been ASSIGNED from the resolved target rather than bound.
+    #>
+    if ($InstanceName) { return "$InstanceName".Trim().ToLowerInvariant() }
+    if ($HostAlias)    { return "$HostAlias".Trim().ToLowerInvariant() }
+    return 'agent-vm'
+}
+$instanceName = Get-ConstructStateInstanceName
 $settings = @{}
-if (Test-Path -LiteralPath $settingsPath) {
-    try { $settings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json } catch { }
+$stateLib = Join-Path $PSScriptRoot 'lib\AgentVm.InstanceState.ps1'
+if (Test-Path -LiteralPath $stateLib) {
+    # Loaded in a CHILD SCOPE so the library can never leak state into this script's
+    # scope; only the resolved settings object comes back.
+    try {
+        $loaded = & {
+            param($libPath, $name, $dir)
+            . $libPath
+            Read-ConstructInstanceState -Name $name -Dir $dir
+        } $stateLib $instanceName $PSScriptRoot
+        if ($loaded) { $settings = $loaded }
+    } catch { }
+} else {
+    # An older/partial checkout without the state library: today's single-file read.
+    $settingsPath = Join-Path $PSScriptRoot '.construct-settings.json'
+    if (Test-Path -LiteralPath $settingsPath) {
+        try { $settings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json } catch { }
+    }
 }
 
 function As-BoolString($value, [bool]$fallback) {

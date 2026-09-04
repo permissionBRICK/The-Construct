@@ -18,8 +18,8 @@ import {
   collectConstructInstances,
   planConstructInstanceReprovision,
   planConstructLaunch,
+  constructInstanceStatePath,
   readConstructInstanceState,
-  readConstructInstanceT3Endpoint,
   readConstructInstances,
   readConstructInstancesFromRegistry,
   readConstructMarkers,
@@ -740,6 +740,112 @@ describe("ConstructUpdates markers on disk", () => {
     const missing: ConstructFileSystem = { ...fs, readTextFile: () => null };
     assert.isNull(readConstructMarkersFromDir(SCRIPTS_DIR, missing, join).installedCommit);
   });
+
+  // ── B12: provisionedCommit is PER VM ──────────────────────────────────────
+  // installedCommit / repo / ref describe the INSTALL (one checkout, one answer);
+  // provisionedCommit describes ONE VM. The default instance keeps both at the legacy top
+  // level of .construct-settings.json, so nothing changes for a single-VM PC; every other
+  // instance keeps its own under `The-Construct\instances\<name>.json`.
+  const STATE_DIR = `${LOCAL_APP_DATA}\\The-Construct\\instances`;
+  const OTHER_PROVISIONED = "0e786a3cccccccccccccccccccccccccccccccc0";
+
+  it("resolves the per-instance state path only for a non-default instance", () => {
+    assert.isNull(constructInstanceStatePath(LOCAL_APP_DATA, "agent-vm", join));
+    assert.isNull(constructInstanceStatePath(LOCAL_APP_DATA, "", join));
+    assert.isNull(constructInstanceStatePath(undefined, "work-vm", join));
+    assert.equal(constructInstanceStatePath(LOCAL_APP_DATA, "work-vm", join), `${STATE_DIR}\\work-vm.json`);
+  });
+
+  it("holds the name to THE ONE name rule, case included", () => {
+    // "Agent-VM" is not a valid instance name at all, so it is refused rather than
+    // silently treated as the default — the same call instancestate.js and
+    // Test-ConstructDefaultInstanceStore make.
+    assert.isNull(constructInstanceStatePath(LOCAL_APP_DATA, "Agent-VM", join));
+    assert.isNull(constructInstanceStatePath(LOCAL_APP_DATA, "Work-VM", join));
+    assert.isNull(constructInstanceStatePath(LOCAL_APP_DATA, "work_vm", join));
+    assert.isNull(constructInstanceStatePath(LOCAL_APP_DATA, "work-", join));
+    assert.isNull(constructInstanceStatePath(LOCAL_APP_DATA, "construct-work", join));
+    assert.isNull(constructInstanceStatePath(LOCAL_APP_DATA, "a".repeat(64), join));
+    assert.isNotNull(constructInstanceStatePath(LOCAL_APP_DATA, "a".repeat(63), join));
+  });
+
+  it("refuses a name that would escape the instances directory", () => {
+    assert.isNull(constructInstanceStatePath(LOCAL_APP_DATA, "../evil", join));
+    assert.isNull(constructInstanceStatePath(LOCAL_APP_DATA, "a\\b", join));
+    assert.isNull(constructInstanceStatePath(LOCAL_APP_DATA, "a..b", join));
+  });
+
+  it("reads a non-default instance's provisionedCommit from its own file", () => {
+    const base = installedFs({ installedCommit: INSTALLED, provisionedCommit: PROVISIONED });
+    const withState: ConstructFileSystem = {
+      ...base,
+      readTextFile: (path) =>
+        path === `${STATE_DIR}\\work-vm.json`
+          ? JSON.stringify({ version: 1, instance: "work-vm", provisionedCommit: OTHER_PROVISIONED })
+          : base.readTextFile(path),
+    };
+    const markers = readConstructMarkersFromDir(SCRIPTS_DIR, withState, join, {
+      localAppData: LOCAL_APP_DATA,
+      instanceName: "work-vm",
+    });
+    assert.equal(markers.installedCommit, INSTALLED, "installedCommit stays install-wide");
+    assert.equal(markers.provisionedCommit, OTHER_PROVISIONED);
+  });
+
+  it("does NOT let a non-default instance inherit the legacy top-level marker", () => {
+    const base = installedFs({ installedCommit: INSTALLED, provisionedCommit: PROVISIONED });
+    const markers = readConstructMarkersFromDir(SCRIPTS_DIR, base, join, {
+      localAppData: LOCAL_APP_DATA,
+      instanceName: "work-vm",
+    });
+    assert.equal(markers.installedCommit, INSTALLED);
+    assert.isNull(markers.provisionedCommit, "an instance with no state file is unknown, not the default VM's");
+  });
+
+  it("keeps the default instance on the legacy single file", () => {
+    const base = installedFs({ installedCommit: INSTALLED, provisionedCommit: PROVISIONED });
+    const markers = readConstructMarkersFromDir(SCRIPTS_DIR, base, join, {
+      localAppData: LOCAL_APP_DATA,
+      instanceName: "agent-vm",
+    });
+    assert.equal(markers.provisionedCommit, PROVISIONED);
+    // ...and identical to the call with no options at all (an older caller).
+    assert.deepEqual(markers, readConstructMarkersFromDir(SCRIPTS_DIR, base, join));
+  });
+
+  it("never lets a per-instance file shadow the installed commit", () => {
+    const base = installedFs({ installedCommit: INSTALLED, constructRepo: "permissionBRICK/The-Construct", constructRef: "main" });
+    const hostile: ConstructFileSystem = {
+      ...base,
+      readTextFile: (path) =>
+        path === `${STATE_DIR}\\work-vm.json`
+          ? JSON.stringify({
+              installedCommit: OTHER_PROVISIONED,
+              constructRepo: "evil/repo",
+              constructRef: "evil",
+              provisionedCommit: OTHER_PROVISIONED,
+            })
+          : base.readTextFile(path),
+    };
+    const markers = readConstructMarkersFromDir(SCRIPTS_DIR, hostile, join, {
+      localAppData: LOCAL_APP_DATA,
+      instanceName: "work-vm",
+    });
+    assert.equal(markers.installedCommit, INSTALLED);
+    assert.equal(markers.repo, "permissionBRICK/The-Construct");
+    assert.equal(markers.ref, "main");
+    assert.equal(markers.provisionedCommit, OTHER_PROVISIONED);
+  });
+
+  it("judges a non-default target's staleness from its own marker", () => {
+    const stale = readConstructMarkers(
+      { installedCommit: INSTALLED },
+      { provisionedCommit: OTHER_PROVISIONED },
+    );
+    assert.isTrue(isConstructProvisionStale(stale));
+    const fresh = readConstructMarkers({ installedCommit: INSTALLED }, { provisionedCommit: INSTALLED });
+    assert.isFalse(isConstructProvisionStale(fresh));
+  });
 });
 
 describe("ConstructUpdates target VM (instances.json)", () => {
@@ -1258,8 +1364,8 @@ describe("readConstructInstances", () => {
   });
 
   it("gives the legacy mirror to agent-vm, never to whichever VM is default now", () => {
-    // .construct-settings.json is the DEFAULT STORE, fixed to `agent-vm`. Making another
-    // VM the registry default must not hand it agent-vm's commit and channel.
+    // .construct-settings.json is the DEFAULT STORE, fixed to `agent-vm` BY NAME (B12).
+    // Making another VM the registry default must not hand it agent-vm's state.
     const rows = collectConstructInstances(
       readConstructInstances({
         version: 1,
@@ -1267,8 +1373,15 @@ describe("readConstructInstances", () => {
         instances: { "agent-vm": {}, "work-vm": { backend: "hyperv-local" } },
       }),
       LOCAL_APP_DATA,
-      makeFs({ files: {} }),
-      { provisionedCommit: PROVISIONED, channel: "nightly" },
+      makeFs({
+        files: {
+          [`${SCRIPTS_DIR}\\.construct-settings.json`]: {
+            mtime: 1,
+            text: JSON.stringify({ provisionedCommit: PROVISIONED, t3codeChannel: "nightly" }),
+          },
+        },
+      }),
+      SCRIPTS_DIR,
       join,
     );
     const agent = rows.find((r) => r.name === "agent-vm")!;
@@ -1329,8 +1442,9 @@ describe("readConstructInstances", () => {
 
 describe("readConstructInstanceState", () => {
   const statePath = `${LOCAL_APP_DATA}\\The-Construct\\instances\\work-vm.json`;
+  const settingsPath = `${SCRIPTS_DIR}\\.construct-settings.json`;
 
-  it("reads the per-instance state file", () => {
+  it("reads a NAMED instance's own state file", () => {
     const fs = makeFs({
       files: {
         [statePath]: {
@@ -1343,10 +1457,31 @@ describe("readConstructInstanceState", () => {
         },
       },
     });
-    const state = readConstructInstanceState(LOCAL_APP_DATA, "work-vm", fs, join);
+    const state = readConstructInstanceState(LOCAL_APP_DATA, "work-vm", SCRIPTS_DIR, fs, join);
     assert.equal(state.provisionedCommit, PROVISIONED);
     assert.equal(state.channel, "nightly");
     assert.equal(state.t3Port, 5178);
+  });
+
+  it("reads the DEFAULT instance from the legacy top level, where B12 keeps it", () => {
+    const fs = makeFs({
+      files: {
+        [settingsPath]: {
+          mtime: 1,
+          text: JSON.stringify({
+            installedCommit: INSTALLED,
+            provisionedCommit: PROVISIONED,
+            t3codeChannel: "stable",
+            t3Port: 5177,
+          }),
+        },
+      },
+    });
+    const state = readConstructInstanceState(LOCAL_APP_DATA, "agent-vm", SCRIPTS_DIR, fs, join);
+    assert.equal(state.provisionedCommit, PROVISIONED);
+    assert.equal(state.channel, "latest");
+    assert.equal(state.t3Port, 5177);
+    assert.equal(state.installedCommit, INSTALLED);
   });
 
   it("maps the VM's channel spelling to the npm dist-tag", () => {
@@ -1354,6 +1489,7 @@ describe("readConstructInstanceState", () => {
       readConstructInstanceState(
         LOCAL_APP_DATA,
         "work-vm",
+        SCRIPTS_DIR,
         makeFs({ files: { [statePath]: { mtime: 1, text: JSON.stringify({ t3codeChannel: value }) } } }),
         join,
       ).channel;
@@ -1367,23 +1503,41 @@ describe("readConstructInstanceState", () => {
     const fs = makeFs({
       files: { [statePath]: { mtime: 1, text: JSON.stringify({ provisionedCommit: "nope" }) } },
     });
-    assert.isNull(readConstructInstanceState(LOCAL_APP_DATA, "work-vm", fs, join).provisionedCommit);
-    assert.isNull(readConstructInstanceState(LOCAL_APP_DATA, "other-vm", fs, join).provisionedCommit);
-    assert.isNull(readConstructInstanceState(LOCAL_APP_DATA, "../evil", fs, join).provisionedCommit);
-    assert.isNull(readConstructInstanceState(undefined, "work-vm", fs, join).provisionedCommit);
+    assert.isNull(readConstructInstanceState(LOCAL_APP_DATA, "work-vm", SCRIPTS_DIR, fs, join).provisionedCommit);
+    assert.isNull(readConstructInstanceState(LOCAL_APP_DATA, "other-vm", SCRIPTS_DIR, fs, join).provisionedCommit);
+    // An unusable name has no state FILE, so it falls back to the settings file — which
+    // is empty here. It never reads a path built from that name.
+    assert.isNull(readConstructInstanceState(LOCAL_APP_DATA, "../evil", SCRIPTS_DIR, fs, join).provisionedCommit);
+    assert.isNull(readConstructInstanceState(undefined, "work-vm", SCRIPTS_DIR, fs, join).provisionedCommit);
+    assert.isNull(readConstructInstanceState(LOCAL_APP_DATA, "work-vm", null, fs, join).provisionedCommit);
   });
 });
 
 describe("collectConstructInstances", () => {
   const statePath = (name: string) =>
     `${LOCAL_APP_DATA}\\The-Construct\\instances\\${name}.json`;
+  const settingsPath = `${SCRIPTS_DIR}\\.construct-settings.json`;
 
-  it("gives every instance its OWN provisioned commit and channel", () => {
+  it("gives every instance its OWN commit, channel and T3 port", () => {
     const fs = makeFs({
       files: {
+        // The DEFAULT instance's VM-scoped half: the legacy top level (B12).
+        [settingsPath]: {
+          mtime: 1,
+          text: JSON.stringify({
+            installedCommit: INSTALLED,
+            provisionedCommit: INSTALLED,
+            t3codeChannel: "stable",
+            t3Port: 5178,
+          }),
+        },
         [statePath("work-vm")]: {
           mtime: 1,
-          text: JSON.stringify({ provisionedCommit: PROVISIONED, t3codeChannel: "nightly" }),
+          text: JSON.stringify({
+            provisionedCommit: PROVISIONED,
+            t3codeChannel: "nightly",
+            t3Port: 23011,
+          }),
         },
       },
     });
@@ -1391,18 +1545,20 @@ describe("collectConstructInstances", () => {
       readConstructInstances(MULTI_REGISTRY),
       LOCAL_APP_DATA,
       fs,
-      { provisionedCommit: INSTALLED, channel: null },
+      SCRIPTS_DIR,
       join,
     );
     const byName = Object.fromEntries(rows.map((r) => [r.name, r]));
     assert.equal(byName["work-vm"]!.provisionedCommit, PROVISIONED);
     assert.equal(byName["work-vm"]!.channel, "nightly");
-    // The DEFAULT instance falls back to the install-wide mirror in
-    // .construct-settings.json, so a PC without per-instance files still reports it.
+    assert.equal(byName["work-vm"]!.t3Port, 23011);
     assert.equal(byName["agent-vm"]!.provisionedCommit, INSTALLED);
+    assert.equal(byName["agent-vm"]!.channel, "latest");
+    assert.equal(byName["agent-vm"]!.t3Port, 5178);
     assert.isTrue(byName["agent-vm"]!.isDefault);
     // A non-default instance with no state file says "unknown" rather than borrowing it.
     assert.isNull(byName["far-vm"]!.provisionedCommit);
+    assert.isNull(byName["far-vm"]!.t3Port);
     assert.equal(byName["far-vm"]!.publicHost, "far-vm.vpn.example.local");
   });
 });
@@ -1493,36 +1649,6 @@ describe("planConstructInstanceReprovision", () => {
   });
 });
 
-describe("readConstructInstanceT3Endpoint", () => {
-  const endpointPath = `${LOCAL_APP_DATA}\\The-Construct\\artifacts\\t3code\\remote-far-vm.json`;
-
-  it("reads the origin the provisioner published", () => {
-    const fs = makeFs({
-      files: {
-        [endpointPath]: {
-          mtime: 1,
-          text: JSON.stringify({
-            instance: "far-vm",
-            baseUrl: "https://far-vm.vpn.example.local:23011",
-            host: "far-vm.vpn.example.local",
-            port: 23011,
-          }),
-        },
-      },
-    });
-    const endpoint = readConstructInstanceT3Endpoint(LOCAL_APP_DATA, "far-vm", fs, join);
-    assert.equal(endpoint.port, 23011);
-    assert.equal(endpoint.baseUrl, "https://far-vm.vpn.example.local:23011");
-  });
-
-  it("answers null when this PC has not seen that VM's T3", () => {
-    const fs = makeFs({ files: {} });
-    assert.isNull(readConstructInstanceT3Endpoint(LOCAL_APP_DATA, "far-vm", fs, join).port);
-    assert.isNull(readConstructInstanceT3Endpoint(undefined, "far-vm", fs, join).port);
-    assert.isNull(readConstructInstanceT3Endpoint(LOCAL_APP_DATA, "../evil", fs, join).port);
-  });
-});
-
 describe("the default instance's legacy mirror", () => {
   it("readConstructMarkers maps the saved channel to the npm dist-tag", () => {
     assert.equal(readConstructMarkers({ t3codeChannel: "nightly" }).channel, "nightly");
@@ -1533,12 +1659,21 @@ describe("the default instance's legacy mirror", () => {
 
   it("a no-registry install still reports the default VM's own channel and commit", () => {
     // The single-VM path: no instances.json, no per-instance state file — everything the
-    // row needs is mirrored in .construct-settings.json.
+    // row needs is at the legacy top level of .construct-settings.json.
+    const settings = (channel: string) =>
+      makeFs({
+        files: {
+          [`${SCRIPTS_DIR}\\.construct-settings.json`]: {
+            mtime: 1,
+            text: JSON.stringify({ provisionedCommit: PROVISIONED, t3codeChannel: channel }),
+          },
+        },
+      });
     const rows = collectConstructInstances(
       readConstructInstances(null),
       LOCAL_APP_DATA,
-      makeFs({ files: {} }),
-      { provisionedCommit: PROVISIONED, channel: "nightly" },
+      settings("nightly"),
+      SCRIPTS_DIR,
       join,
     );
     assert.lengthOf(rows, 1);
@@ -1547,22 +1682,31 @@ describe("the default instance's legacy mirror", () => {
     assert.equal(rows[0]!.provisionedCommit, PROVISIONED);
     assert.equal(rows[0]!.channel, "nightly");
     // ...and on the stable channel, which is the zero-change default.
-    const stable = collectConstructInstances(
-      readConstructInstances(null),
-      LOCAL_APP_DATA,
-      makeFs({ files: {} }),
-      { provisionedCommit: PROVISIONED, channel: "latest" },
-      join,
+    assert.equal(
+      collectConstructInstances(
+        readConstructInstances(null),
+        LOCAL_APP_DATA,
+        settings("stable"),
+        SCRIPTS_DIR,
+        join,
+      )[0]!.channel,
+      "latest",
     );
-    assert.equal(stable[0]!.channel, "latest");
   });
 
-  it("a NON-default instance never borrows the mirror", () => {
+  it("a NON-default instance never borrows the default store", () => {
     const rows = collectConstructInstances(
       readConstructInstances(MULTI_REGISTRY),
       LOCAL_APP_DATA,
-      makeFs({ files: {} }),
-      { provisionedCommit: PROVISIONED, channel: "nightly" },
+      makeFs({
+        files: {
+          [`${SCRIPTS_DIR}\\.construct-settings.json`]: {
+            mtime: 1,
+            text: JSON.stringify({ provisionedCommit: PROVISIONED, t3codeChannel: "nightly" }),
+          },
+        },
+      }),
+      SCRIPTS_DIR,
       join,
     );
     const work = rows.find((r) => r.name === "work-vm")!;

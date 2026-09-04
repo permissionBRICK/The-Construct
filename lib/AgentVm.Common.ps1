@@ -2399,16 +2399,32 @@ function Set-ConstructProvisionedMarker {
         -- i.e. the version of the scripts doing this provision -- rather than a fresh
         fetch, so it can't claim a newer commit than what's actually installed. Best-effort;
         never throws. Returns the recorded sha ("" if no installedCommit is known yet).
+
+        installedCommit is INSTALL-WIDE (one Construct per checkout) and is always read
+        from -Dir. provisionedCommit is PER VM, so it is written to -InstanceName's own
+        state (lib\AgentVm.InstanceState.ps1): for the default instance that IS -Dir's
+        settings file at the legacy top level -- byte-identical to what this function has
+        always written -- and for any other instance it is
+        %LOCALAPPDATA%\The-Construct\instances\<name>.json. An omitted -InstanceName, or
+        an install whose lib\AgentVm.InstanceState.ps1 is missing (a partial/older
+        checkout), falls back to the legacy write, which is exactly today's behaviour.
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$Dir)
+    param(
+        [Parameter(Mandatory)][string]$Dir,
+        [string]$InstanceName = ""
+    )
     $sha = ""
     try {
         $existing = Read-ConstructSettings -Dir $Dir
         if ($existing -and $existing.installedCommit) { $sha = [string]$existing.installedCommit }
     } catch { }
     try {
-        Save-ConstructSettings -Dir $Dir -Values @{ provisionedCommit = $sha }
+        if ($InstanceName -and (Get-Command Save-ConstructInstanceState -ErrorAction SilentlyContinue)) {
+            Save-ConstructInstanceState -Name $InstanceName -Dir $Dir -Values @{ provisionedCommit = $sha }
+        } else {
+            Save-ConstructSettings -Dir $Dir -Values @{ provisionedCommit = $sha }
+        }
     } catch {
         Write-Warning "Could not record the provisioned marker: $($_.Exception.Message)"
     }
@@ -2839,17 +2855,6 @@ function Get-ConstructT3EndpointRecord {
         return $record
     }
     return $null
-}
-
-function Get-ConstructT3EndpointFileName {
-    <# The file Get-ConstructT3EndpointRecord is written to, per instance. Pure. #>
-    [CmdletBinding()]
-    param([AllowEmptyString()][AllowNull()][string]$InstanceName)
-    $n = ""
-    if ($InstanceName) { $n = $InstanceName.Trim() }
-    if (-not $n) { $n = 'agent-vm' }
-    $safe = ($n -replace '[^A-Za-z0-9_-]', '-')
-    return "remote-$safe.json"
 }
 
 function Get-T3CaCleanupPlan {

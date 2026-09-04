@@ -412,7 +412,8 @@ try {
 # shipped script and fail if any string-literal token carries a non-ASCII char.
 $repoRoot = Split-Path -Parent $here
 $shipped = @("install.ps1","Auto-Install.ps1","Create-AgentVM.ps1","Provision-AgentVM.ps1",
-             "Update-Construct.ps1","Update-T3Code.ps1","Get-AgentUsage.ps1","lib/AgentVm.Common.ps1")
+             "Update-Construct.ps1","Update-T3Code.ps1","Get-AgentUsage.ps1","lib/AgentVm.Common.ps1",
+             "lib/AgentVm.InstanceState.ps1")
 foreach ($rel in $shipped) {
     $p = Join-Path $repoRoot $rel
     if (-not (Test-Path -LiteralPath $p)) { continue }
@@ -1017,6 +1018,38 @@ $updT3Src = Get-Content -LiteralPath (Join-Path $here "..\Update-T3Code.ps1") -R
 ok "Update-T3Code.ps1: forwards t3codeHttps only when set and supported" (
     $updT3Src -match "settings\.t3codeHttps" -and
     $updT3Src -match "Parameters\.ContainsKey\('T3CodeHttps'\)")
+# B12: the per-VM state each script reads and writes is keyed by ONE resolution point --
+# built on the instance B11's name-only targeting already resolved -- so a second VM never
+# replays the first VM's toggles, and B11's successors have a single line to re-point.
+ok "Update-T3Code.ps1: has ONE instance-resolution point" (
+    $updT3Src -match "(?m)^function Get-ConstructStateInstanceName \{" -and
+    $updT3Src -match "(?m)^\`$instanceName = Get-ConstructStateInstanceName")
+ok "Update-T3Code.ps1: it prefers B11's -InstanceName, then the alias, then the default" (
+    $updT3Src -match "if \(\`$InstanceName\) \{ return .\`$InstanceName..Trim\(\)\.ToLowerInvariant\(\) \}" -and
+    $updT3Src -match "if \(\`$HostAlias\)    \{ return .\`$HostAlias..Trim\(\)\.ToLowerInvariant\(\) \}" -and
+    $updT3Src -match "return 'agent-vm'")
+ok "Update-T3Code.ps1: reads that instance's state, not the checkout's file" (
+    $updT3Src -match "Read-ConstructInstanceState -Name \`$name -Dir \`$dir")
+ok "Update-T3Code.ps1: loads the state library in a CHILD scope" (
+    $updT3Src -match "AgentVm\.InstanceState\.ps1" -and $updT3Src -match "&\s*\{")
+ok "Update-T3Code.ps1: still degrades to the single-file read without the library" (
+    $updT3Src -match "\.construct-settings\.json")
+# B12: the provisioned marker is keyed by the instance the run provisioned.
+$provSrc = Get-Content -LiteralPath (Join-Path $here "..\Provision-AgentVM.ps1") -Raw
+ok "Provision-AgentVM.ps1: has ONE instance-resolution point" (
+    $provSrc -match "(?m)^function Get-ConstructStateInstanceName \{" -and
+    $provSrc -match "if \(\`$InstanceName\) \{ return .\`$InstanceName..Trim\(\)\.ToLowerInvariant\(\) \}")
+ok "Provision-AgentVM.ps1: records the provisioned marker for that instance" (
+    $provSrc -match "Set-ConstructProvisionedMarker -Dir \`$PSScriptRoot -InstanceName \(Get-ConstructStateInstanceName\)")
+ok "Provision-AgentVM.ps1: saves the auto-enabled selection to that instance's state" (
+    $provSrc -match "Save-ConstructInstanceState -Name \(Get-ConstructStateInstanceName\) -Dir \`$PSScriptRoot -Values @\{ projects")
+ok "Provision-AgentVM.ps1: still reads installedCommit from the INSTALL-WIDE file" (
+    $provSrc -match "\`$constructSettings = Read-ConstructSettings -Dir \`$PSScriptRoot")
+$autoSrc = Get-Content -LiteralPath (Join-Path $here "..\Auto-Install.ps1") -Raw
+ok "Auto-Install.ps1: names the instance from B11's resolved identity" (
+    $autoSrc -match "(?m)^\`$VmInstanceName = \`$script:VmIdentity\.Name")
+ok "Auto-Install.ps1: reads the saved checkpoint preference of the VM it is installing" (
+    $autoSrc -match "Read-ConstructInstanceState -Name \`$VmInstanceName -Dir \`$PSScriptRoot")
 
 # ── T3CodeChannel lowercase normalization ──────────────────────────────────
 # ValidateSet is case-insensitive: PowerShell happily binds "NIGHTLY" to the
@@ -1142,20 +1175,25 @@ ok "known_hosts temp: the name can never become a path" (
 
 # The provisioner really uses them (and still writes the historical names by default).
 $provB14 = Get-Content -LiteralPath (Join-Path $PSScriptRoot "..\Provision-AgentVM.ps1") -Raw
-ok "provisioner: the CA file name comes from the helper" ($provB14 -match 'Get-ConstructT3CaFileName -InstanceName \$script:InstanceLabel')
+ok "provisioner: the CA file name comes from the helper" ($provB14 -match 'Get-ConstructT3CaFileName -InstanceName \(Get-ConstructRunInstanceName\)')
 ok "provisioner: the replaced CA is untrusted through the plan" ($provB14 -match 'Get-T3CaCleanupPlan -PreviousThumbprint \$previousCaThumb')
 ok "provisioner: the previous thumbprint is read from the file it replaces" ($provB14 -match '\$previousCaThumb = \(New-Object System\.Security\.Cryptography\.X509Certificates\.X509Certificate2')
 ok "provisioner: the desktop install rule is the shared planner" ($provB14 -match 'Get-T3DesktopInstallPlan -T3Version')
 ok "provisioner: the build hash comes from the guest manifest, never a substitute" (
     $provB14 -match '-BuildHash \(\[string\]\$manifest\.buildHash\)' -and
     $provB14 -notmatch '\$t3BuildHash = \$expectedSha')
-ok "provisioner: the endpoint record is NOT written for the default instance" (
-    $provB14 -match "if \(\`$Action -eq 'provision' -and \`$script:InstanceLabel -ne 'agent-vm' -and")
+# The endpoint facts go into the instance's OWN state document (B12's store), which for
+# the DEFAULT instance is the legacy top level of .construct-settings.json -- so there is
+# no second file to gate on any more, and no new file on the default path.
+ok "provisioner: the endpoint facts are written through B12's per-instance store" (
+    $provB14 -match 'Save-ConstructInstanceState -Name \(Get-ConstructRunInstanceName\) -Dir \$PSScriptRoot -Values \$endpointValues')
+ok "provisioner: there is no second endpoint store beside it" (
+    $provB14 -notmatch 'artifacts\\t3code\\remote-' -and $provB14 -notmatch 'Get-ConstructT3EndpointFileName')
 ok "provisioner: it is written outside the HTTPS/CA branch, so a plain-HTTP forward is recorded too" (
     $provB14.IndexOf('WHERE THIS VM ANSWERS, recorded for the T3 Code Desktop app') -gt
     $provB14.IndexOf('Set-OpenCodeRemote -Url'))
-ok "provisioner: a run with no usable endpoint CLEARS the stale record" (
-    $provB14 -match '\} elseif \(Test-Path -LiteralPath \$endpointFile\) \{[\s\S]{0,120}Remove-Item -LiteralPath \$endpointFile')
+ok "provisioner: a run with no usable endpoint CLEARS the recorded one" (
+    $provB14 -match 'endpointValues = @\{ t3BaseUrl = \$null; t3Port = \$null; openCodeUrl = \$null \}')
 ok "provisioner: the registered OpenCode url is recorded for the removal to find" (
     $provB14 -match '\$script:OpenCodeRegisteredUrl = \[string\]\$openCodePlan\.Url' -and
     $provB14 -match '-OpenCodeUrl \$script:OpenCodeRegisteredUrl')
@@ -1173,8 +1211,11 @@ ok "provisioner: the temp known_hosts file is per instance" ($provB14 -match 'Ge
 ok "provisioner: no code path still names the shared temp file" (
     ($provB14 -split "`n" | Where-Object { $_ -match '\$env:TEMP\\construct-known_hosts' -and $_ -notmatch '^\s*#' }).Count -eq 0)
 ok "provisioner: the SMB preference is the shared planner" ($provB14 -match 'Get-ConstructSmbPreferredLetter -Requested \$SmbDriveLetter')
+ok "provisioner: one instance identity per run, asked of B12's single answer" (
+    $provB14 -match 'function Get-ConstructRunInstanceName \{ return Get-ConstructStateInstanceName \}' -and
+    $provB14 -notmatch '\$script:InstanceLabel')
 ok "provisioner: the default instance skips the free-letter snapshot entirely" (
-    $provB14 -match "if \(-not \`$script:SmbLetterStated -and \`$script:InstanceLabel -ne 'agent-vm' -and")
+    $provB14 -match "if \(-not \`$script:SmbLetterStated -and \(Get-ConstructRunInstanceName\) -ne 'agent-vm' -and")
 ok "provisioner: -SmbDriveLetter still defaults to Z" ($provB14 -match '\[string\]\$SmbDriveLetter = "Z"')
 
 Write-Host ""

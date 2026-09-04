@@ -358,22 +358,54 @@ if (Test-Path -LiteralPath $commonLib) { . $commonLib }
 if ($Action -eq 'provision' -and -not (Get-Command ConvertFrom-ConstructProvisionResult -ErrorAction SilentlyContinue)) {
     throw "Required host helper library is missing or invalid: $commonLib"
 }
+# Per-instance state (provisionedCommit, the project selection, the panel's VM-scoped
+# toggles). OPTIONAL on purpose: an older/partial checkout without it keeps writing the
+# legacy top-level keys, which is exactly today's single-VM behaviour.
+$stateLib = Join-Path $PSScriptRoot "lib\AgentVm.InstanceState.ps1"
+if (Test-Path -LiteralPath $stateLib) { . $stateLib }
+
+function Get-ConstructStateInstanceName {
+    <#
+        WHICH INSTANCE's state this run reads and writes -- the ONE answer, asked here and
+        nowhere else, so there is a single line to re-point.
+
+        Precedence, the repo's three-level idiom:
+          1. -InstanceName, the B11 name-only target. By the time this is asked,
+             Resolve-ConstructVmTarget (lib\AgentVm.InstanceTarget.ps1) has already
+             resolved every other identity argument FROM it, so it is the authoritative
+             name of the VM this run is about.
+          2. the ssh alias, LOWERCASED -- alias = name, the one derivation rule, the same
+             normalisation Get-ConstructConfigBranchName applies. Covers a run driven by
+             the explicit identity arguments (BYO/manual setups, and the panel targeting
+             an install whose scripts predate name-only targeting), and it is read through
+             $script:HostAlias because the reachability prompt can correct it mid-run --
+             which correctly re-points the state at the VM actually reached.
+          3. "agent-vm", the implicit default, which resolves to the legacy top-level keys.
+    #>
+    if ($InstanceName) { return "$InstanceName".Trim().ToLowerInvariant() }
+    $alias = "$($script:HostAlias)".Trim().ToLowerInvariant()
+    if ($alias) { return $alias }
+    return 'agent-vm'
+}
 
 # ── ONE NAME FOR THIS RUN'S CLIENT-SIDE STATE (B14, plan section 4.12) ───────
-# The CA file, the SMB drive letter and the throw-away known_hosts file below are all
-# per-VM state on THIS PC, and until now every VM wrote them under the same name -- so
-# two VMs overwrote each other's, and two concurrent provisions raced on the temp file.
-# THE INSTANCE NAME, and only that. New per-VM behaviour is reached by NAMING a VM
-# (-InstanceName, or a registry entry that resolved one), never by a run that merely
-# happens to pass a different ssh alias: a BYO `-VmHost ... -HostAlias whatever` run is
-# not an instance, so it keeps every default-path name. Without a name this is 'agent-vm',
-# which is what a single-VM install has always effectively been.
+# The CA file, the SMB drive letter and this run's per-instance state are all per-VM state
+# on THIS PC, and until now every VM wrote them under the same name -- so two VMs
+# overwrote each other's, and two concurrent provisions raced on the temp file.
+#
+# The name is Get-ConstructStateInstanceName's -- B12's ONE answer to "which instance is
+# this run about", asked in one place so there is a single line to re-point. Using a
+# second derivation here would let the CA file and the state file disagree about which VM
+# a provision just configured.
 #
 # The throw-away known_hosts file below is the ONE exception, and deliberately: it is
 # keyed by the ALIAS because what it must not collide with is another concurrent
-# provision's ssh session, and that is what an alias identifies.
-$script:InstanceLabel = 'agent-vm'
-if ($InstanceName) { $script:InstanceLabel = $InstanceName }
+# provision's ssh session, and that is what an alias identifies (the alias can also be
+# corrected mid-run, which must NOT rename a file that is already open).
+# ASKED, never snapshotted: the ssh alias it falls back on can still be corrected by the
+# reachability prompt below, which correctly re-points every name at the VM actually
+# reached. A value captured here would name the VM this run was aimed at instead.
+function Get-ConstructRunInstanceName { return Get-ConstructStateInstanceName }
 $script:KnownHostsFile = Join-Path $env:TEMP "construct-known_hosts"
 if (Get-Command Get-ConstructKnownHostsFileName -ErrorAction SilentlyContinue) {
     $script:KnownHostsFile = Join-Path $env:TEMP (Get-ConstructKnownHostsFileName -HostAlias $HostAlias)
@@ -2074,7 +2106,12 @@ if (Get-Command Initialize-ConstructConfigStore -ErrorAction SilentlyContinue) {
             foreach ($np in $newProfiles) { if ($selection -notcontains $np) { $selection += $np } }
             $Projects = $selection -join ','
             Write-Ok "Auto-enabled new project profile(s) from the VM: $($newProfiles -join ', ') (projects now: $Projects)"
-            if (Get-Command Save-ConstructSettings -ErrorAction SilentlyContinue) {
+            # THIS VM's selection, not the checkout's (Get-ConstructStateInstanceName is
+            # the one place that answers "which instance"): the default instance writes the
+            # legacy top-level key and any other one writes its own file.
+            if (Get-Command Save-ConstructInstanceState -ErrorAction SilentlyContinue) {
+                Save-ConstructInstanceState -Name (Get-ConstructStateInstanceName) -Dir $PSScriptRoot -Values @{ projects = $selection }
+            } elseif (Get-Command Save-ConstructSettings -ErrorAction SilentlyContinue) {
                 Save-ConstructSettings -Dir $PSScriptRoot -Values @{ projects = $selection }
             }
         }
@@ -2353,7 +2390,7 @@ if ($Action -eq 'provision') {
             # wrote.
             $caFileName = 'construct-t3-ca.crt'
             if (Get-Command Get-ConstructT3CaFileName -ErrorAction SilentlyContinue) {
-                $caFileName = Get-ConstructT3CaFileName -InstanceName $script:InstanceLabel
+                $caFileName = Get-ConstructT3CaFileName -InstanceName (Get-ConstructRunInstanceName)
             }
             $localCa = Join-Path $t3CaRoot $caFileName
             # The certificate file this run is about to replace IS the record of "the CA
@@ -2552,7 +2589,7 @@ if ($Action -eq 'provision') {
             # so a manifest that states none simply does not match and installs.
             $t3Plan = Get-T3DesktopInstallPlan -T3Version ([string]$manifest.version) `
                 -Channel ([string]$manifest.channel) -BuildHash ([string]$manifest.buildHash) `
-                -Installed $installedRecord -InstanceName $script:InstanceLabel
+                -Installed $installedRecord -InstanceName (Get-ConstructRunInstanceName)
             if (-not $t3Plan.Install) {
                 Write-Ok $t3Plan.Reason
                 # The record matched, but it may still be the PRE-B14 shape (a copy of the
@@ -2683,12 +2720,12 @@ if ($Action -eq "provision" -and $smbStatus['SMB_ENABLED'] -eq "yes" -and $Mount
         # only would the answer be $SmbDriveLetter either way, the free-letter snapshot
         # itself is an extra `net use` this path never used to run.
         $smbPreferred = $SmbDriveLetter
-        if (-not $script:SmbLetterStated -and $script:InstanceLabel -ne 'agent-vm' -and
+        if (-not $script:SmbLetterStated -and (Get-ConstructRunInstanceName) -ne 'agent-vm' -and
             (Get-Command Get-ConstructSmbPreferredLetter -ErrorAction SilentlyContinue)) {
             $letterMaps = Get-DriveMaps
             $takenLetters = @($letterMaps.Net.Keys) + @($letterMaps.Local.Keys)
             $smbPreferred = Get-ConstructSmbPreferredLetter -Requested $SmbDriveLetter `
-                -InstanceName $script:InstanceLabel -Explicit:$script:SmbLetterStated -Taken $takenLetters
+                -InstanceName (Get-ConstructRunInstanceName) -Explicit:$script:SmbLetterStated -Taken $takenLetters
         }
         try {
             $smbMountedDrive = Mount-RepoShare -UncPath $smbUnc -SmbUser $smbUser -SmbPassword $smbPass -Preferred $smbPreferred
@@ -2885,38 +2922,37 @@ if (",$AiTools," -like "*,opencode,*") {
 # ── WHERE THIS VM ANSWERS, recorded for the T3 Code Desktop app (B14, §4.12) ──
 # Its Providers page matches a linked remote on host AND PORT, and the port is a fact
 # about the RUNNING VM rather than about its registry entry: a VM behind a host forward
-# answers on a port the service allocated and will reallocate. The same file carries the
-# OpenCode server url this run registered, which "Remove instance" needs to find that
-# entry again. Both are per-instance client state, so the removal action deletes it.
+# answers on a port the service allocated and will reallocate. The OpenCode server url
+# this run registered goes with it, because "Remove instance" needs it to find that entry
+# again when its display name was changed.
 #
-# NOT written for the implicit default instance: it is reached at its own address on the
-# T3 ports Construct configures, which the Desktop app already knows -- and a single-VM
-# install must write exactly the files it always wrote. Outside the HTTPS/CA branch above,
-# because a service-managed VM deliberately on plain HTTP has a forward whose port is just
-# as much a fact. A run that can no longer name an endpoint CLEARS the stale record rather
-# than leaving an old forwarded port authoritative.
-if ($Action -eq 'provision' -and $script:InstanceLabel -ne 'agent-vm' -and
+# Both go into the instance's OWN state document (B12: lib\AgentVm.InstanceState.ps1 --
+# `instances\<name>.json`, or the legacy top level of .construct-settings.json for the
+# default instance). ONE per-VM store, so nothing has to know about a second one, the
+# default path keeps writing exactly the file it always wrote, and "Remove instance"
+# clears these with the rest of that VM's state.
+#
+# Outside the HTTPS/CA branch above, because a service-managed VM deliberately on plain
+# HTTP has a forward whose port is just as much a fact. A run that can no longer name an
+# endpoint CLEARS the recorded one rather than leaving an old forwarded port authoritative.
+if ($Action -eq 'provision' -and (Get-Command Save-ConstructInstanceState -ErrorAction SilentlyContinue) -and
     (Get-Command Get-ConstructT3EndpointRecord -ErrorAction SilentlyContinue)) {
     try {
-        $endpointRoot = if ($env:LOCALAPPDATA) {
-            Join-Path $env:LOCALAPPDATA 'The-Construct\artifacts\t3code'
-        } else {
-            Join-Path $env:TEMP 'The-Construct\artifacts\t3code'
-        }
-        $endpointFile = Join-Path $endpointRoot (Get-ConstructT3EndpointFileName -InstanceName $script:InstanceLabel)
         $publicBase = ""
         if ($script:T3HttpsStatus -match '(?m)^T3CODE_PUBLIC_BASE_URL=(\S+)\s*$') { $publicBase = $matches[1] }
-        $endpointRecord = Get-ConstructT3EndpointRecord -InstanceName $script:InstanceLabel `
+        $endpointRecord = Get-ConstructT3EndpointRecord -InstanceName (Get-ConstructRunInstanceName) `
             -BaseUrl $publicBase -ForwardUrl (Get-T3ForwardUrl -Forwards $script:HostForwards) `
             -OpenCodeUrl $script:OpenCodeRegisteredUrl
+        # $null (no usable origin) still writes: the keys are set to $null, which is how
+        # Save-ConstructInstanceState records "this is no longer true" rather than leaving
+        # the previous run's answer standing.
+        $endpointValues = @{ t3BaseUrl = $null; t3Port = $null; openCodeUrl = $null }
         if ($endpointRecord) {
-            New-Item -ItemType Directory -Path $endpointRoot -Force | Out-Null
-            $endpointTemp = "$endpointFile.download"
-            ($endpointRecord | ConvertTo-Json -Depth 5) | Set-Content -LiteralPath $endpointTemp -Encoding UTF8
-            Move-Item -LiteralPath $endpointTemp -Destination $endpointFile -Force
-        } elseif (Test-Path -LiteralPath $endpointFile) {
-            Remove-Item -LiteralPath $endpointFile -Force -ErrorAction SilentlyContinue
+            $endpointValues['t3BaseUrl']   = [string]$endpointRecord.baseUrl
+            $endpointValues['t3Port']      = [int]$endpointRecord.port
+            if ($endpointRecord.Contains('openCodeUrl')) { $endpointValues['openCodeUrl'] = [string]$endpointRecord.openCodeUrl }
         }
+        Save-ConstructInstanceState -Name (Get-ConstructRunInstanceName) -Dir $PSScriptRoot -Values $endpointValues
     } catch {
         Write-Warning "Could not record this VM's endpoints for the Desktop app ($($_.Exception.Message)); its Providers row will say the port is unknown."
     }
@@ -2944,7 +2980,8 @@ Write-Host ""
 # "update available" banner. Best-effort: guarded + never fatal.
 if ($Action -eq "provision" -and (Get-Command Set-ConstructProvisionedMarker -ErrorAction SilentlyContinue)) {
     try {
-        $pvSha = Set-ConstructProvisionedMarker -Dir $PSScriptRoot
+        # Keyed by the instance this run provisioned (Get-ConstructStateInstanceName).
+        $pvSha = Set-ConstructProvisionedMarker -Dir $PSScriptRoot -InstanceName (Get-ConstructStateInstanceName)
         Write-Host ""
         Write-Host "Recorded provisioned commit for the control panel: $pvSha" -ForegroundColor DarkGray
     } catch {

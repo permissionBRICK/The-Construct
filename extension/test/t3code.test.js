@@ -426,6 +426,59 @@ try {
   ok("queue rejection: subsequent op completed (queue not stuck)", afterOk && vmChannel === "stable");
   ok("queue rejection: maxActive still 1 (serialized through failure)", maxActive === 1);
 
+  // ── B12: the queue is PER INSTANCE ──────────────────────────────────────────
+  // Held globally it serialized across VMs that share nothing: enabling T3 on A (a
+  // multi-minute npm install) blocked the enable on B behind it. Two DIFFERENT instances
+  // must run concurrently; two ops on the SAME instance must still not overlap.
+  t3._resetQueue();
+  active = 0; maxActive = 0; log.length = 0; resolvers.length = 0;
+  const instA = instances.deriveDefaults("alpha", { backend: "hyperv-local" });
+  const instB = instances.deriveDefaults("beta", { backend: "hyperv-local" });
+  const pa = t3.setChannelOnVm("nightly", { _vscode: vs, _ssh: deferredSsh("A1", "nightly"), instance: instA });
+  const pb = t3.setChannelOnVm("nightly", { _vscode: vs, _ssh: deferredSsh("B1", "nightly"), instance: instB });
+  await new Promise((r) => setTimeout(r, 20));
+  ok("per-instance queue: A and B start CONCURRENTLY (B is not blocked behind A)",
+    resolvers.length === 2 && active === 2 && maxActive === 2);
+  const a2started = () => log.includes("start:A2");
+  const pa2 = t3.setChannelOnVm("stable", { _vscode: vs, _ssh: deferredSsh("A2", "stable"), instance: instA });
+  await new Promise((r) => setTimeout(r, 20));
+  ok("per-instance queue: a SECOND op on A waits behind A's first", !a2started() && resolvers.length === 2);
+  resolvers[0]();  // A1
+  await new Promise((r) => setTimeout(r, 20));
+  ok("per-instance queue: ...and starts as soon as A's first resolves", a2started());
+  resolvers[1]();  // B1
+  resolvers[2]();  // A2
+  await Promise.all([pa, pb, pa2]);
+  ok("per-instance queue: every op completed", log.filter((l) => l.startsWith("end:")).length === 3);
+
+  // The identity, not the name: a registry entry rewritten under the SAME name reaches a
+  // different machine, so its transitions must not queue behind the old endpoint's.
+  t3._resetQueue();
+  active = 0; maxActive = 0; log.length = 0; resolvers.length = 0;
+  const before = instances.deriveDefaults("moved", { backend: "hyperv-remote", sshHost: "old.example", sshPort: 2201, vmName: "moved" });
+  const after = instances.deriveDefaults("moved", { backend: "hyperv-remote", sshHost: "new.example", sshPort: 2202, vmName: "moved" });
+  const pOld = t3.setChannelOnVm("nightly", { _vscode: vs, _ssh: deferredSsh("old", "nightly"), instance: before });
+  const pNew = t3.setChannelOnVm("nightly", { _vscode: vs, _ssh: deferredSsh("new", "nightly"), instance: after });
+  await new Promise((r) => setTimeout(r, 20));
+  ok("per-instance queue: a retargeted entry gets its OWN queue (keyed by identity)",
+    resolvers.length === 2 && active === 2);
+  resolvers[0](); resolvers[1]();
+  await Promise.all([pOld, pNew]);
+
+  // Zero-change: no instance at all keeps a single queue, exactly as before.
+  t3._resetQueue();
+  active = 0; maxActive = 0; log.length = 0; resolvers.length = 0;
+  const pn1 = t3.setChannelOnVm("nightly", { _vscode: vs, _ssh: deferredSsh("n1", "nightly") });
+  const pn2 = t3.setChannelOnVm("stable", { _vscode: vs, _ssh: deferredSsh("n2", "stable") });
+  await new Promise((r) => setTimeout(r, 20));
+  ok("per-instance queue: with no instance given, ops still serialize (default path)",
+    resolvers.length === 1 && maxActive === 1);
+  resolvers[0]();
+  await new Promise((r) => setTimeout(r, 20));
+  resolvers[1]();
+  await Promise.all([pn1, pn2]);
+  ok("per-instance queue: ...and the default path never overlapped", maxActive === 1);
+
   console.log(`\n  t3code unit tests — ${pass}/${pass + fail} passed\n`);
   process.exit(fail ? 1 : 0);
 })();
