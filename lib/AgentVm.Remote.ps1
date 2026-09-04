@@ -383,6 +383,57 @@ function Get-ConstructRemoteFingerprint {
     }
 }
 
+function Get-ConstructRemoteCertificatePem {
+    <#
+        The host service's certificate as PEM, for a GUEST to verify the service with
+        (CONSTRUCT_SERVICE_CA_FILE: the guest's `construct expose` and idle heartbeat pass
+        it to curl --cacert). Read over a fresh TLS handshake and REFUSED unless its
+        SHA-256 fingerprint matches -Pin (default: the fingerprint pinned on this PC), so
+        the guest only ever trusts what this PC already confirmed at enrolment.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$BaseUrl,
+        [string]$Pin = "",
+        [string]$StoreDir,
+        [int]$TimeoutMs = 10000
+    )
+    $normal = ConvertTo-ConstructServiceUrl -Value $BaseUrl
+    $uri = [System.Uri]$normal
+    if ($uri.Scheme -ne 'https') { return "" }
+    $expected = $Pin
+    if (-not $expected) { $expected = Get-ConstructRemotePin -BaseUrl $normal -StoreDir $StoreDir }
+    if (-not $expected) { throw "No certificate fingerprint is pinned for $normal on this PC; add the host first." }
+    $client = New-Object System.Net.Sockets.TcpClient
+    $ssl = $null
+    try {
+        $dialHost = $uri.DnsSafeHost
+        $iar = $client.BeginConnect($dialHost, $uri.Port, $null, $null)
+        if (-not $iar.AsyncWaitHandle.WaitOne($TimeoutMs)) { throw "Timed out connecting to $($dialHost):$($uri.Port)." }
+        $client.EndConnect($iar)
+        $validate = [System.Net.Security.RemoteCertificateValidationCallback]{ param($s, $c, $ch, $e) return $true }
+        $ssl = New-Object System.Net.Security.SslStream($client.GetStream(), $false, $validate)
+        $ssl.AuthenticateAsClient($dialHost)
+        $remote = $ssl.RemoteCertificate
+        if (-not $remote) { throw "The service at $normal presented no certificate." }
+        $actual = Get-ConstructCertificateFingerprint -Certificate $remote
+        if (-not (Test-ConstructFingerprintMatch -Expected $expected -Actual $actual)) {
+            throw "Certificate fingerprint mismatch for $normal (pinned $expected, presented $actual)."
+        }
+        $b64 = [Convert]::ToBase64String($remote.GetRawCertData())
+        $lines = New-Object System.Collections.Generic.List[string]
+        $lines.Add("-----BEGIN CERTIFICATE-----")
+        for ($i = 0; $i -lt $b64.Length; $i += 64) { $lines.Add($b64.Substring($i, [Math]::Min(64, $b64.Length - $i))) }
+        $lines.Add("-----END CERTIFICATE-----")
+        return (($lines -join "`n") + "`n")
+    } catch {
+        throw "Could not read the certificate of $normal`: $($_.Exception.Message)"
+    } finally {
+        if ($ssl) { try { $ssl.Dispose() } catch { } }
+        try { $client.Close() } catch { }
+    }
+}
+
 function Save-ConstructRemotePin {
     <#
         Pin a host's certificate fingerprint. NOT a secret (it is a public hash), so it
