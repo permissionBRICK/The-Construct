@@ -286,8 +286,8 @@
     },
     {
       "path": "apps/web/src/components/settings/SettingsPanels.tsx",
-      "old": "          </Tooltip>\n        }\n      />\n      {hasDesktopBridge ? (\n        <SettingsRow\n          title=\"Update track\"\n          description=\"Stable follows full releases. Nightly follows the nightly desktop channel and can switch back to stable immediately.\"\n",
-      "new": "          </Tooltip>\n        }\n      />\n      {hasDesktopBridge && constructInfo !== null ? (\n        <SettingsRow\n          title=\"Update track\"\n          description=\"Fixed by the VM's T3 Code channel that built this app. Change it in the Construct control panel (T3 Code channel) and reprovision.\"\n          control={\n            <span className=\"text-sm text-muted-foreground\">\n              {selectedUpdateChannel === \"nightly\" ? \"Nightly\" : \"Stable\"}\n            </span>\n          }\n        />\n      ) : hasDesktopBridge ? (\n        <SettingsRow\n          title=\"Update track\"\n          description=\"Stable follows full releases. Nightly follows the nightly desktop channel and can switch back to stable immediately.\"\n"
+      "old": "          </Tooltip>\n        }\n      />\n      {hasDesktopBridge ? (\n        <SettingsRow\n          title=\"Update track\"\n          description=\"Use stable releases or nightly builds. Switch back anytime.\"\n",
+      "new": "          </Tooltip>\n        }\n      />\n      {hasDesktopBridge && constructInfo !== null ? (\n        <SettingsRow\n          title=\"Update track\"\n          description=\"Fixed by the VM's T3 Code channel that built this app. Change it in the Construct control panel (T3 Code channel) and reprovision.\"\n          control={\n            <span className=\"text-sm text-muted-foreground\">\n              {selectedUpdateChannel === \"nightly\" ? \"Nightly\" : \"Stable\"}\n            </span>\n          }\n        />\n      ) : hasDesktopBridge ? (\n        <SettingsRow\n          title=\"Update track\"\n          description=\"Use stable releases or nightly builds. Switch back anytime.\"\n"
     },
     {
       "path": "apps/web/src/components/settings/SettingsPanels.tsx",
@@ -301,8 +301,8 @@
     },
     {
       "path": "apps/web/src/components/settings/settingsSearch.ts",
-      "old": "    to: \"/settings/general\",\n    searchTerms: [\"command menu dollar $ slash /\"],\n  },\n  {\n    id: \"provider-update-checks\",\n    title: \"Provider update checks\",\n",
-      "new": "    to: \"/settings/general\",\n    searchTerms: [\"command menu dollar $ slash /\"],\n  },\n  {\n    id: \"voice-input-source\",\n    title: \"Voice input source\",\n    to: \"/settings/general\",\n  },\n  {\n    id: \"provider-update-checks\",\n    title: \"Provider update checks\",\n"
+      "old": "  {\n    id: \"composer-collapse\",\n    title: \"Collapse composer\",\n    to: \"/settings/general\",\n    searchTerms: [\n      \"composer rest resting unfocus blur focus click away scroll wheel conversation timeline shrink minimize\",\n    ],\n  },\n  {\n    id: \"provider-update-checks\",\n    title: \"Provider update checks\",\n",
+      "new": "  {\n    id: \"composer-collapse\",\n    title: \"Collapse composer\",\n    to: \"/settings/general\",\n    searchTerms: [\n      \"composer rest resting unfocus blur focus click away scroll wheel conversation timeline shrink minimize\",\n    ],\n  },\n  {\n    id: \"voice-input-source\",\n    title: \"Voice input source\",\n    to: \"/settings/general\",\n  },\n  {\n    id: \"provider-update-checks\",\n    title: \"Provider update checks\",\n"
     },
     {
       "path": "apps/web/src/components/sidebar/SidebarUpdatePill.tsx",
