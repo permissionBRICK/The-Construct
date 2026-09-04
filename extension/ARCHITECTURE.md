@@ -120,6 +120,13 @@ extension/
                       .construct-settings.json (form<->disk mapping; pure fs/path, no vscode);
                       configDir(env) resolves %LOCALAPPDATA%\The-Construct\config (machine-wide,
                       NOT slug-scoped — outside any zip checkout)
+    instancestate.js  the PER-INSTANCE state store (pure fs, no vscode; PS twin
+                      lib/AgentVm.InstanceState.ps1). store(instance, scriptsDir, env) ->
+                      the handle every reader/writer takes; readState/saveState/replaceState,
+                      readMerged (state over the install-wide keys), readSettings/saveSettings,
+                      readSelectedProjects/hasPersistedSelection/saveSelectedProjects,
+                      readAppliedAutoCheckpoints/saveAppliedAutoCheckpoints, readMarkers,
+                      countStale. See "Per-instance state" below
     configsync.js     config-sync engine: git-based profile sync between host and VM
                       (makeGitRunner, detectGit, ensureConfigTree, acquireSyncLock/
                       releaseSyncLock (cross-process .sync.lock, serializes ticks across
@@ -361,6 +368,10 @@ VM-derived fields when `online===false` or `probeError`):
 { online, connected, vmState:'running'|'off'|'saved'|'absent'|'unknown',
   instance,                                // active instance NAME (always present)
   instances:[name],                        // only when >1 exists — renders the picker
+  connectedInstance,                       // only with the list: the instance THIS window
+                                           // is attached to over Remote-SSH ("connected")
+  provisionedCommit,                       // the GUEST's own /etc/construct/provisioned.env
+                                           // CONSTRUCT_COMMIT, when it reported one
   host, hostShort, vmName, ubuntu, resources, constructRev,
   installed, reprovisioned, update:{available,behind},
   agents:[{id,name,detail,version,updateAvailable,latest}],
@@ -670,6 +681,55 @@ field is omitted.
 
 The default instance keeps `agent-vm` / `Agent-VM` / `agent-vm.mshome.net` / `22` /
 `agent_vm_ed25519` / `vm` byte-for-byte.
+
+### Per-instance state
+
+Two host-side files, split by what the value is *about*.
+
+**Install-wide** — `.construct-settings.json` in the scripts checkout, unchanged:
+`installedCommit`, `constructRepo`, `constructRef` (which Construct is installed) and the
+git identity the installer applies to every VM. One checkout, one answer.
+
+**VM-scoped** — everything else the panel and the provisioner exchange: `provisionedCommit`,
+the project selection, `micPassthrough`, `vmMemoryGB`/`vmDiskGB`/`ubuntuRelease`, the VS
+Code / SMB / patch toggles, the T3 Code toggles and channel, `vmAutoCheckpoints` and
+`vmAutoCheckpointsApplied`.
+
+Where the VM-scoped half lives is the whole point:
+
+- **The DEFAULT instance keeps it at the LEGACY TOP LEVEL of `.construct-settings.json`, and
+  nothing else.** No `instances\agent-vm.json` is ever created. That is the zero-change bar:
+  an install with one local VM and no registry writes exactly the files it always wrote, and
+  every `instancestate.*` call on that path is byte-for-byte the `host.*` call it replaced.
+- **Every other instance uses only `%LOCALAPPDATA%\The-Construct\instances\<name>.json`**
+  (`{version:1, instance:"<name>", …}`), beside `instances.json` and OUTSIDE any scripts
+  checkout — so a self-update's `Expand-Archive` never touches it and two checkouts cannot
+  disagree about one VM. Writes are atomic (temp file + rename); a missing or corrupt file
+  reads as "nothing saved", the same tolerance `readRawSettings` always had. Install-wide
+  keys are split off on write and ignored on read, so a hand-edited per-instance file can
+  never shadow the installed commit.
+
+`instancestate.readMerged` lays the VM-scoped half over the install-wide keys, which is what
+the settings form and every "replay the saved settings" consumer (`lifecycle.run`,
+`Update-T3Code.ps1`) read — otherwise a rebuild of the second VM would drop the git identity.
+
+The **store is part of a captured target**, exactly like `scriptsDir`: `stateStore(instance,
+scriptsDir)` is built from the instance a flow captured, never from a fresh "whatever is
+active now" read after an await, or an import that finished after a switch would write A's
+discoveries into B's file.
+
+**The guest holds the source of truth.** `bin/provision.sh` records the commit it provisioned
+with as `CONSTRUCT_COMMIT` in `/etc/construct/provisioned.env`; the probe reads it and
+`probe.toState` exposes it as `state.provisionedCommit`. Staleness is
+`installedCommit !== (guest commit, else the host-side per-instance cache)` — **plain string
+inequality, never a history or compare lookup**, so it keeps working when the Construct repo
+was reset and the compare API 404s (that path still shows "update available, unknown number
+of commits" *and* the yellow Reprovision button). A VM provisioned from a different PC is
+therefore judged correctly, and the host file is only the cache used while the VM is off.
+
+The status-bar item counts the stale instances (`instancestate.countStale`) from those host
+caches alone — no SSH fan-out, right for a VM that is switched off, hidden at zero and
+hidden entirely when there is a single default instance without a registry.
 
 ### The active instance
 
