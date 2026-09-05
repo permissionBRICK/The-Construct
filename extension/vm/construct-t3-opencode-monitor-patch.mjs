@@ -55,12 +55,10 @@ if (!existsSync(bundle)) {
   process.exit(1);
 }
 
-const ANCHOR = String.raw`				case "message.part.updated": {
-					const part = event.properties.part;
-					context.partById.set(part.id, part);
+const ANCHOR = String.raw`					const part = event.properties.part;
 `;
 
-const INJECTION = ANCHOR + String.raw`					${MARKER}
+const BLOCK = String.raw`					${MARKER}
 					if (part.type === "tool" && part.tool === "background" && part.state.status === "completed" && part.state.metadata?.wait === true) {
 						const __constructTaskId = typeof part.state.metadata.id === "string" ? part.state.metadata.id.trim() : "";
 						if (__constructTaskId) yield* emit({
@@ -109,6 +107,8 @@ const INJECTION = ANCHOR + String.raw`					${MARKER}
 					}
 `;
 
+const INJECTION = ANCHOR + BLOCK;
+
 function countOccurrences(haystack, needle) {
   let count = 0;
   let offset = 0;
@@ -152,7 +152,7 @@ if (mode === "revert") {
     console.log("t3-opencode-monitor: bundle is stock; nothing to revert");
     process.exit(0);
   }
-  const injectionCount = countOccurrences(source, INJECTION);
+  const injectionCount = countOccurrences(source, BLOCK);
   if (injectionCount !== 1) {
     console.warn(
       "t3-opencode-monitor: patched block found " + injectionCount +
@@ -160,7 +160,7 @@ if (mode === "revert") {
     );
     process.exit(0);
   }
-  if (replaceAtomically(source.replace(INJECTION, ANCHOR))) {
+  if (replaceAtomically(source.replace(BLOCK, ""))) {
     console.log("t3-opencode-monitor: reverted " + bundle);
   }
   process.exit(0);

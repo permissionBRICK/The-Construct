@@ -22,7 +22,7 @@ function* handleSubscribedEvent(context, event) {
 \tswitch (event.type) {
 \t\t\t\tcase "message.part.updated": {
 \t\t\t\t\tconst part = event.properties.part;
-\t\t\t\t\tcontext.partById.set(part.id, part);
+\t\t\t\t\tif (part.type !== "tool") context.partById.set(part.id, part);
 \t\t\t\t\tif (part.type === "tool") {}
 \t\t\t\t\tbreak;
 \t\t\t\t}
@@ -119,6 +119,18 @@ try {
   const reverted = run("revert", bundle);
   assert.equal(reverted.status, 0, reverted.stderr);
   assert.equal(readFileSync(bundle, "utf8"), fixture, "revert must restore the stock adapter block");
+
+  // Previously installed v1 blocks lived after the cache write. Revert removes
+  // the block without depending on the old anchor's position.
+  const partLine = '\t\t\t\t\tconst part = event.properties.part;\n';
+  const cacheLine = '\t\t\t\t\tcontext.partById.set(part.id, part);\n';
+  const blockStart = once.indexOf(partLine) + partLine.length;
+  const blockEnd = once.indexOf('\t\t\t\t\tif (part.type !== "tool")', blockStart);
+  const injectedBlock = once.slice(blockStart, blockEnd);
+  const oldFixture = fixture.replace('if (part.type !== "tool") context.partById.set(part.id, part);', 'context.partById.set(part.id, part);');
+  writeFileSync(bundle, oldFixture.replace(cacheLine, cacheLine + injectedBlock));
+  assert.equal(run("revert", bundle).status, 0);
+  assert.equal(readFileSync(bundle, "utf8"), oldFixture);
 
   const incompatible = join(temporary, "unknown.mjs");
   const unknownSource = "export const untouched = true;\n";
