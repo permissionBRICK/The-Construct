@@ -13,15 +13,20 @@ try {
   const fixture = path.join(root, 'repo');
   const driver = path.join(fixture, 'bin/build-t3code.sh');
   put(driver, fs.readFileSync(path.join(repo, 'bin/build-t3code.sh')));
-  put(path.join(fixture, 'bin/t3code-build-recipe.sh'), `
+  const realRecipe = fs.readFileSync(path.join(repo, 'bin/t3code-build-recipe.sh'), 'utf8');
+  put(path.join(fixture, 'bin/t3code-build-recipe.sh'), realRecipe.split('t3_recipe_prepare_source() {')[0] + `
 t3_recipe_prepare_source() { echo prepare >> "$TEST_LOG"; }
 t3_recipe_compile() {
+  [[ "$(command -v node)" == "$T3_NODE_DIR/bin/node" ]]
+  [[ "$npm_config_cache" == "$COMPILER_CACHE/npm" ]]
   echo compile >> "$TEST_LOG"
   [[ "\${TEST_FAIL_COMPILE:-}" != yes ]] || return 1
   mkdir -p apps/server/dist node_modules
   echo 'server' > apps/server/dist/bin.mjs
 }
 t3_recipe_package() {
+  [[ "$(command -v node)" == "$T3_NODE_DIR/bin/node" ]]
+  [[ "$npm_config_cache" == "$COMPILER_CACHE/npm" ]]
   echo package >> "$TEST_LOG"
   [[ "\${TEST_FAIL_PACKAGE:-}" != yes ]] || return 1
   mkdir -p "$output_dir" "$COMPILER_CACHE/resource-monitor"
@@ -36,7 +41,9 @@ t3_recipe_package() {
   }
   const fake = path.join(root,'tools');
   for (const [name, body] of Object.entries({
-    npm: 'echo npm >> "$TEST_LOG"; echo "${TEST_VERSION:-1.0.0}"',
+    node: 'echo v22.22.0',
+    npm: 'echo Unexpected profile npm invocation >&2; exit 99',
+    uname: 'echo x86_64',
     git: 'if [[ "$1" == clone ]]; then mkdir -p "${@: -1}/.git"; else echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; fi',
     pnpm: 'exit 1',
     'dpkg-query': 'exit 1',
@@ -46,8 +53,16 @@ t3_recipe_package() {
     // The disk policy itself is covered by t3-build-diskcheck.test.sh.
     df: "printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\nfixture 99000000 0 99000000 0%% /\\n'",
   })) { put(path.join(fake,name), '#!/bin/bash\n'+body+'\n'); fs.chmodSync(path.join(fake,name),0o755); }
+  const runtime = path.join(root, 'runtimes/node-v26.8.1-linux-x64/bin');
+  for (const [name, body] of Object.entries({
+    node: 'if [[ "$1" == --version ]]; then echo v26.8.1; else exec "$TEST_REAL_NODE" "$@"; fi',
+    npm: '[[ "$npm_config_cache" == "$T3CODE_COMPILER_CACHE/npm" ]] || exit 98; echo npm >> "$TEST_LOG"; echo "${TEST_VERSION:-1.0.0}"',
+  })) { put(path.join(runtime,name), '#!/bin/bash\n'+body+'\n'); fs.chmodSync(path.join(runtime,name),0o755); }
+  const nativeCache = path.join(root, 'home/.npm/_npx/existing/node_modules/addon.node');
+  put(nativeCache, 'profile ABI 127 sentinel');
   const log = path.join(root,'calls');
   const env = {...process.env, PATH: `${fake}:${process.env.PATH}`, HOME:path.join(root,'home'),
+    TEST_REAL_NODE:process.execPath, T3CODE_NODE_ROOT:path.join(root,'runtimes'),
     REPO_DIR:fixture, TEST_LOG:log, T3CODE_CHANNEL:'stable', CONSTRUCT_VERSION:'aaaaaaa', T3CODE_CACHE_ROOT:path.join(root,'sources'),
     T3CODE_COMPILER_CACHE:path.join(root,'compiler'), T3CODE_ARTIFACT_ROOT:path.join(root,'artifacts'),
     T3CODE_STATUS_PATH:path.join(root,'status'), T3CODE_LAUNCHER:path.join(root,'t3'),
@@ -56,6 +71,8 @@ t3_recipe_package() {
   const run = (mode, extra={}, success=true) => {
     const r = spawnSync('bash',[driver],{env:{...env,T3CODE_BUILD_MODE:mode,...extra},encoding:'utf8'});
     assert.equal(r.status === 0, success, `${mode}: ${r.stdout}\n${r.stderr}`);
+    assert.equal(fs.readFileSync(nativeCache, 'utf8'), 'profile ABI 127 sentinel');
+    assert.equal(spawnSync('node', ['--version'], {env, encoding:'utf8'}).stdout.trim(), 'v22.22.0');
     return r;
   };
   const calls = name => fs.readFileSync(log,'utf8').split('\n').filter(x=>x===name).length;
