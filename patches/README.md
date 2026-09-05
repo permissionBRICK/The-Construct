@@ -81,3 +81,54 @@ through re-indentation) and the list of `conflicts`.
   route `/construct/omniloop/<ticket>/*`): the omniloop dashboard of the thread's own
   VM in the right panel, served through the T3 server behind a ticket, plus a composer
   banner and tab badge for the workflows the thread started.
+
+## Build cache and Windows handoff
+
+`bin/t3code-build-recipe.sh` owns artifact-producing commands. Its contents, the
+source transformer, the selected channel inventory, and the two server patchers
+form `patchHash`. The upstream T3 version plus that recipe identifies a build;
+the Construct commit and the orchestration code in `bin/build-t3code.sh` do not.
+Hash inputs use repository-relative paths and LF checkouts on Windows and Linux.
+Changes to build semantics belong in the recipe so they invalidate artifacts.
+
+Windows provisioning sets `T3CODE_BUILD_MODE=server`. The guest compiles shared
+server/web/Desktop JavaScript once and writes `server-manifest.json` under
+`/var/lib/construct/t3code-desktop`. It skips all compilation on an unchanged
+build. The host compares that identity with its per-user, cross-VM record at
+`%LOCALAPPDATA%\The-Construct\artifacts\t3code\installed.json` before requesting
+Windows packaging or downloading an EXE.
+
+Only a host that needs an install requests `T3CODE_BUILD_MODE=desktop`. This stage
+uses the prepared server's exact version/channel/recipe (no second npm channel
+lookup), keeps its compiled bundle untouched, and writes the installer plus
+`manifest.json`. A matching cached installer with a valid SHA-256 skips packaging.
+Calling the driver directly without a mode retains the combined build behavior
+(`all`), which only activates a new server after packaging succeeds.
+
+The source cache is `/var/cache/construct/t3code-source`. pnpm's shared package
+store survives source changes; Windows Cargo outputs and Wine setup now also
+survive them in `/var/cache/construct/t3code-compiler`. Superseded source cleanup
+keeps the previous active server until provisioning can restart it. These caches
+survive reprovisioning, but a VM rebuild/reinstall removes them. JavaScript build
+outputs are reused for an identical build; changed source still recompiles.
+
+The new recipe identity requires one rebuild per VM on first upgrade, and one
+Desktop installation per Windows user. Subsequent VMs with the same T3 version,
+channel, and recipe skip Windows packaging, download, and installation.
+
+Focused verification (all use temporary fixtures, with no live service restart):
+
+```sh
+node test/t3-build-cache.test.mjs
+pwsh -NoProfile -File test/t3-desktop-handoff.test.ps1
+bash test/t3-build-diskcheck.test.sh
+node extension/test/t3code.test.js
+pwsh -NoProfile -File test/host-lib.test.ps1
+```
+
+CI can set `T3CODE_SOURCE_VERSION` to pin the exact upstream tag and
+`T3CODE_INVENTORY=release|nightly` to select a whole inventory independently of
+the output channel. This lets the separate publisher test a prepared nightly
+inventory against a new stable tag without adding compatibility branches to any
+patch. Desktop packaging retains the inventory from `server-manifest.json`.
+The service restart key includes the upstream version as well as the patch hash.

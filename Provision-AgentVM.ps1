@@ -2340,7 +2340,7 @@ if ($VmTokenB64) {
     $tokenExport  = "export CONSTRUCT_VM_TOKEN_B64=`"`$(cat '$vmTokenRemotePath')`"; "
     $tokenCleanup = "; __rc=`$?; rm -f '$vmTokenRemotePath'; exit `$__rc"
 }
-$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit' CONSTRUCT_VERSION='$constructVersion' SMB_SHARE='$SmbShare' CLAUDE_PARTIAL_STREAMING='$ClaudePartialStreaming' MIC_PASSTHROUGH='$MicPassthrough' OPENCODE_BACKGROUND_WATCHER='$OpenCodeBackgroundWatcher' T3CODE='$T3Code' T3CODE_CHANNEL='$T3CodeChannel' T3CODE_LIMIT_RESUME='$T3CodeLimitResume' T3CODE_HTTPS='$T3CodeHttps'" + $externalEnv + $serviceEnv
+$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit' CONSTRUCT_VERSION='$constructVersion' SMB_SHARE='$SmbShare' CLAUDE_PARTIAL_STREAMING='$ClaudePartialStreaming' MIC_PASSTHROUGH='$MicPassthrough' OPENCODE_BACKGROUND_WATCHER='$OpenCodeBackgroundWatcher' T3CODE='$T3Code' T3CODE_CHANNEL='$T3CodeChannel' T3CODE_LIMIT_RESUME='$T3CodeLimitResume' T3CODE_HTTPS='$T3CodeHttps'" + $externalEnv + $serviceEnv + " T3CODE_BUILD_MODE='server'"
 Write-Host "  --- live provisioning output ---" -ForegroundColor DarkGray
 $provisionStream = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "$tokenExport$envPrefix bash /opt/construct/repo/bin/provision.sh$tokenCleanup"
 Write-Host "  --- end provisioning output ---" -ForegroundColor DarkGray
@@ -2579,20 +2579,15 @@ if ($Action -eq 'provision') {
     }
 }
 
-# A patched-source T3 provision leaves an unsigned Windows NSIS installer in a
-# fixed VM artifact path. Pull it onto the host and silently install it when its
-# content hash changed (or when the app was removed); all compiler/package-manager/
-# Rust/Wine dependencies remain inside the disposable VM. Electron Builder's
-# --updated + /S path closes the running app, does not relaunch it, and needs no
-# elevation for this per-user package -- so when the app WAS running (typically
-# because its own update control launched this reprovision through
-# Update-T3Code.ps1), it is started again afterwards; an app that was closed stays
-# closed. This optional handoff must never turn a successful VM provision into a
-# failure merely because the Desktop update failed.
+# The guest prepares the shared T3 sources first. Compare that build with this
+# Windows user's installed record, then request Windows packaging only on a miss.
+# Compiler/package-manager/Rust/Wine dependencies remain inside the VM. The
+# optional Desktop handoff never turns a successful VM provision into a failure.
+# --updated /S closes the app; restart it below only if it was already running.
 if ($Action -eq 'provision') {
     try {
         $t3DesktopStatus = (Invoke-Ssh -Sudo -Command "cat /etc/construct/t3code-desktop-status 2>/dev/null || true" | Out-String)
-        if ($t3DesktopStatus -match '(?m)^T3CODE_DESKTOP_READY=yes\s*$') {
+        if ($t3DesktopStatus -match '(?m)^T3CODE_SERVER_READY=yes\s*$') {
             $t3ArtifactRoot = if ($env:LOCALAPPDATA) {
                 Join-Path $env:LOCALAPPDATA 'The-Construct\artifacts\t3code'
             } else {
@@ -2603,34 +2598,11 @@ if ($Action -eq 'provision') {
             $installedManifest = Join-Path $t3ArtifactRoot 'installed.json'
             $localInstaller = Join-Path $t3ArtifactRoot 'T3Code-Construct-Setup.exe'
             $manifestTemp = "$localManifest.download"
-            Invoke-ScpFrom -RemotePath '/var/lib/construct/t3code-desktop/manifest.json' -LocalPath $manifestTemp
+            Invoke-ScpFrom -RemotePath '/var/lib/construct/t3code-desktop/server-manifest.json' -LocalPath $manifestTemp
             $manifest = Get-Content -LiteralPath $manifestTemp -Raw | ConvertFrom-Json
-            $expectedSha = ([string]$manifest.sha256).Trim().ToLowerInvariant()
-            if ($expectedSha -notmatch '^[0-9a-f]{64}$') {
-                throw 'The patched T3 Desktop manifest has no valid SHA-256.'
-            }
-            $needsDownload = $true
-            if (Test-Path -LiteralPath $localInstaller) {
-                $localSha = (Get-FileHash -LiteralPath $localInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
-                $needsDownload = $localSha -ne $expectedSha
-            }
-            if ($needsDownload) {
-                Write-Step "Downloading patched T3 Code Desktop $($manifest.desktopVersion) installer to this host"
-                $installerTemp = "$localInstaller.download"
-                Invoke-ScpFrom -RemotePath '/var/lib/construct/t3code-desktop/T3Code-Construct-Setup.exe' -LocalPath $installerTemp
-                $downloadedSha = (Get-FileHash -LiteralPath $installerTemp -Algorithm SHA256).Hash.ToLowerInvariant()
-                if ($downloadedSha -ne $expectedSha) {
-                    throw "Patched T3 Desktop installer hash mismatch (expected $expectedSha, got $downloadedSha)."
-                }
-                Move-Item -LiteralPath $installerTemp -Destination $localInstaller -Force
-            }
-            Move-Item -LiteralPath $manifestTemp -Destination $localManifest -Force
-            # THE INSTALL RULE (B14, plan section 4.12 "T3 Desktop version tracking"):
-            # one install of T3 Code Desktop on this PC, and installed.json records WHICH
-            # patched release it is -- the upstream T3 version, the channel and the
-            # patched build hash, all three from the VM's own manifest. A reprovision that
-            # finds exactly that triple installed skips the installer; anything else
-            # installs. Last reprovisioned VM wins: no owner instance, no newest-wins.
+            # One installed record per Windows user, shared across VM instances.
+            # Decide from the server's version/channel/recipe BEFORE requesting an
+            # installer: a second VM only needs to compile its own Linux server.
             $installedRecord = $null
             if (Test-Path -LiteralPath $installedManifest) {
                 try {
@@ -2645,15 +2617,12 @@ if ($Action -eq 'provision') {
                 Join-Path $env:LOCALAPPDATA 'Programs\t3code'
             } else { $null }
 
-            # The build hash comes FROM THE GUEST MANIFEST and from nowhere else (plan
-            # section 4.12): the rule is the exact (t3Version, channel, buildHash) triple,
-            # so a manifest that states none simply does not match and installs.
-            # "The host already HAS that release" is only true while the app is on disk: a
-            # matching record with no app (removed by hand, a wiped profile) installs again.
+            # A matching record only counts while the actual application remains.
             $t3AppPresent = $null
             if ($t3InstallRoot) {
                 $t3AppPresent = [bool]((Test-Path -LiteralPath $t3InstallRoot) -and
-                    @(Get-ChildItem -LiteralPath $t3InstallRoot -Filter '*.exe' -ErrorAction SilentlyContinue).Count -gt 0)
+                    @(Get-ChildItem -LiteralPath $t3InstallRoot -Filter '*.exe' -File -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Name -notlike 'Uninstall*' }).Count -gt 0)
             }
             $t3Plan = Get-T3DesktopInstallPlan -T3Version ([string]$manifest.version) `
                 -Channel ([string]$manifest.channel) -BuildHash ([string]$manifest.buildHash) `
@@ -2661,6 +2630,7 @@ if ($Action -eq 'provision') {
                 -Installed $installedRecord -InstanceName (Get-ConstructRunInstanceName) -AppPresent $t3AppPresent
             if (-not $t3Plan.Install) {
                 Write-Ok $t3Plan.Reason
+                Move-Item -LiteralPath $manifestTemp -Destination $localManifest -Force
                 # The record matched, but it may still be the PRE-B14 shape (a copy of the
                 # VM manifest). Rewrite it in the canonical five-key form -- the install
                 # itself is not repeated, only the bookkeeping catches up, so a host that
@@ -2675,6 +2645,39 @@ if ($Action -eq 'provision') {
                     }
                 }
             } else {
+                Write-Step "Preparing the Windows installer for T3 Code $($manifest.version)"
+                $desktopBuild = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "env REPO_DIR=/opt/construct/repo T3CODE_BUILD_MODE=desktop bash /opt/construct/repo/bin/build-t3code.sh"
+                if ($desktopBuild.ExitCode -ne 0) {
+                    throw "Patched T3 Desktop packaging failed (exit $($desktopBuild.ExitCode))."
+                }
+                Invoke-ScpFrom -RemotePath '/var/lib/construct/t3code-desktop/manifest.json' -LocalPath $manifestTemp
+                $packagedManifest = Get-Content -LiteralPath $manifestTemp -Raw | ConvertFrom-Json
+                foreach ($key in @('version', 'channel', 'patchHash', 'buildHash')) {
+                    if (-not $manifest.$key -or $manifest.$key -ne $packagedManifest.$key) {
+                        throw "The packaged T3 Desktop $key differs from the prepared VM server; provision again."
+                    }
+                }
+                $manifest = $packagedManifest
+                $expectedSha = ([string]$manifest.sha256).Trim().ToLowerInvariant()
+                if ($expectedSha -notmatch '^[0-9a-f]{64}$') {
+                    throw 'The patched T3 Desktop manifest has no valid SHA-256.'
+                }
+                $needsDownload = $true
+                if (Test-Path -LiteralPath $localInstaller) {
+                    $localSha = (Get-FileHash -LiteralPath $localInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
+                    $needsDownload = $localSha -ne $expectedSha
+                }
+                if ($needsDownload) {
+                    Write-Step "Downloading patched T3 Code Desktop $($manifest.desktopVersion) installer to this host"
+                    $installerTemp = "$localInstaller.download"
+                    Invoke-ScpFrom -RemotePath '/var/lib/construct/t3code-desktop/T3Code-Construct-Setup.exe' -LocalPath $installerTemp
+                    $downloadedSha = (Get-FileHash -LiteralPath $installerTemp -Algorithm SHA256).Hash.ToLowerInvariant()
+                    if ($downloadedSha -ne $expectedSha) {
+                        throw "Patched T3 Desktop installer hash mismatch (expected $expectedSha, got $downloadedSha)."
+                    }
+                    Move-Item -LiteralPath $installerTemp -Destination $localInstaller -Force
+                }
+                Move-Item -LiteralPath $manifestTemp -Destination $localManifest -Force
                 # Remember whether the app is running before the installer closes it.
                 # Process paths can be unreadable for foreign-session processes; those
                 # are simply not ours.

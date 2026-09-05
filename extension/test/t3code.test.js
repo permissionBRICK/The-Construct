@@ -19,7 +19,9 @@ ok("npmTag: garbage -> latest (normalize)", t3.npmTag("alpha") === "latest");
 
 // ── shared patched-source server/Desktop build ─────────────────────────────
 const repoRoot = path.resolve(__dirname, "..", "..");
-const sourceBuild = fs.readFileSync(path.join(repoRoot, "bin", "build-t3code.sh"), "utf8");
+const buildDriver = fs.readFileSync(path.join(repoRoot, "bin", "build-t3code.sh"), "utf8");
+const buildRecipe = fs.readFileSync(path.join(repoRoot, "bin", "t3code-build-recipe.sh"), "utf8");
+const sourceBuild = buildDriver + "\n" + buildRecipe;
 const transformManifest = fs.readFileSync(path.join(repoRoot, "patches", "t3code-release", "source-transforms.json"), "utf8");
 const overlayRoot = path.join(repoRoot, "patches", "t3code-release", "overlays");
 const overlayText = fs.readdirSync(overlayRoot, { recursive: true, withFileTypes: true })
@@ -38,13 +40,12 @@ ok("source build: prunes superseded dependency trees before its free-space gate"
   /t3_build_prune_candidates "\$\{stale_dir\}"/.test(sourceBuild) &&
   sourceBuild.indexOf("for stale_dir") < sourceBuild.indexOf('available_kb="$(df'));
 ok("source build: cache is keyed by the T3 version + patch recipe; the Construct commit is recorded, not compared",
-  /BUILD_HASH="\$\(printf '%s\\n' "\$\{PATCH_HASH\}" \| sha256sum/.test(sourceBuild) && !/cached_construct/.test(sourceBuild) &&
-  /"\$\{cached_version\}" == "\$\{VERSION\}" && "\$\{cached_hash\}" == "\$\{PATCH_HASH\}" && -x/.test(sourceBuild) &&
+  /BUILD_HASH="\$\(printf '%s\\n' "\$\{VERSION\}" "\$\{CHANNEL\}" "\$\{PATCH_HASH\}" \| sha256sum/.test(sourceBuild) && !/cached_construct/.test(sourceBuild) &&
   /T3CODE_BUILD_KEY/.test(sourceBuild) && /constructVersion, buildHash/.test(sourceBuild) &&
   /CONSTRUCT_VERSION='\$constructVersion'/.test(provisionT3));
-ok("source build: a build cached under the old commit-folded key is found through the manifest's buildHash (no rebuild on upgrade)",
-  /cached_dir="\$\{CACHE_ROOT\}\/\$\{SAFE_VERSION\}-\$\{cached_build:0:12\}"/.test(sourceBuild) &&
-  /BUILD_HASH="\$\{cached_build\}"/.test(sourceBuild));
+ok("source build: hashes the artifact recipe independently of the provisioning driver",
+  /t3_build_integration_hash "\$\{RECIPE\}"/.test(buildDriver) &&
+  !/sha256sum "\$\{build_script\}"/.test(buildDriver));
 ok("source build: an unchanged active build skips T3 reinstall and restart",
   /t3code-installed-build/.test(installAiTools) &&
   /T3 Code build is unchanged and already running; skipping its reinstall\/restart/.test(installAiTools));
@@ -57,7 +58,7 @@ ok("stock install: an unchanged stock release skips the npm install AND the rest
   installAiTools.indexOf("setup-t3-https.sh") < installAiTools.indexOf("(stock) is unchanged and already running"));
 ok("source build: one patched server bundle feeds the VM and Desktop package",
   /pnpm run build:desktop/.test(sourceBuild) && /node "\$\{T3PARK_PATCHER\}" apply --bundle/.test(sourceBuild) &&
-  /build-desktop-artifact\.ts/.test(sourceBuild) && /ln -sfn "\$\{SOURCE_DIR\}\/apps\/server\/dist\/bin\.mjs" \/usr\/local\/bin\/t3/.test(sourceBuild));
+  /build-desktop-artifact\.ts/.test(sourceBuild) && /ln -sfn "\$\{SOURCE_DIR\}\/apps\/server\/dist\/bin\.mjs" "\$\{LAUNCHER\}"/.test(sourceBuild));
 ok("source build: Windows compiler/NSIS dependencies stay in the VM",
   /mingw-w64/.test(sourceBuild) && /wine32:i386/.test(sourceBuild) && /x86_64-pc-windows-gnu/.test(sourceBuild) && /--target nsis --arch x64/.test(sourceBuild));
 ok("source transforms: voice RPC, live cursor-safe insertion, mic UI, and Construct updater are present",
