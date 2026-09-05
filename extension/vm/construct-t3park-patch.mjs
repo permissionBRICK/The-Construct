@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // construct-t3park-patch.mjs — opt-in runtime patch for the installed T3 Code
 // server (`t3` npm package): park a thread when a Claude turn dies on a
-// usage/session limit and auto-resume it once the limit window resets.
+// usage/session limit and auto-resume it once the limit window resets. Patched
+// source builds also retry terminal Codex model-capacity failures, at most ten times.
 //
 // T3 Code upstream won't ship this feature, so Construct patches the installed
 // dist bundle the same way it patches the Claude Code VS Code extension
@@ -33,7 +34,7 @@
 import { readFileSync, writeFileSync, copyFileSync, existsSync, renameSync, chmodSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 
-const VERSION = "v5";
+const VERSION = "v6";
 const MARKER = "/*__T3PARK " + VERSION + "*/";
 const MARKER_RE = /\/\*__T3PARK (v\d+)\*\//;
 const TOKEN_FILE = "/etc/construct/t3park-token";
@@ -80,7 +81,7 @@ const PATCH_RESULT =
 // No backticks / template literals in here — it is embedded in this string.
 // ---------------------------------------------------------------------------
 
-const FOOTER = "\n" + MARKER + "\n" + String.raw`import { readFileSync as __t3park_read, writeFileSync as __t3park_write, mkdirSync as __t3park_mkdir } from "node:fs";
+const FOOTER = "\n" + MARKER + "\n" + String.raw`import { readFileSync as __t3park_read, writeFileSync as __t3park_write, mkdirSync as __t3park_mkdir, renameSync as __t3park_rename } from "node:fs";
 import { homedir as __t3park_home } from "node:os";
 import { resolve as __t3park_resolve } from "node:path";
 (() => {
@@ -168,6 +169,7 @@ import { resolve as __t3park_resolve } from "node:path";
       if (!pending[threadId]) { S.visibilityTimers.delete(threadId); return; }
       const headers = apiHeaders();
       const thread = await readThread(headers, threadId);
+      if (loadPending()[threadId]?.parkedAt !== pending[threadId]?.parkedAt) return;
       if (!thread) { log("thread", threadId, "no longer exists; dropping park"); dropPending(threadId); return; }
       if (hasManualContinuation(thread, parkedAt)) {
         log("thread", threadId, "was continued manually after parking; dropping auto-resume");
@@ -211,11 +213,13 @@ import { resolve as __t3park_resolve } from "node:path";
     }
   };
   const resume = async (threadId, attempt) => {
+    if (loadPending()[threadId]?.kind === "capacity") return resumeCapacity(threadId, attempt);
     try {
       const headers = apiHeaders();
       const pending = loadPending();
       const parkedAt = Number(pending[threadId] && pending[threadId].parkedAt) || 0;
       const thread = await readThread(headers, threadId);
+      if (loadPending()[threadId]?.parkedAt !== pending[threadId]?.parkedAt) return;
       if (!thread) { log("thread", threadId, "no longer exists; dropping park"); dropPending(threadId); return; }
       if (hasManualContinuation(thread, parkedAt)) {
         log("thread", threadId, "was continued manually after parking; dropping auto-resume");
@@ -260,30 +264,165 @@ import { resolve as __t3park_resolve } from "node:path";
       }
     }
   };
-  const schedule = (threadId, resumeAt, reason, persist, parkedAt) => {
+  const schedule = (threadId, resumeAt, reason, persist, parkedAt, kind) => {
     const prior = S.timers.get(threadId);
     if (prior) clearTimeout(prior);
     const parkedTimestamp = Number(parkedAt) || Date.now();
     if (persist) {
       const p = loadPending();
       p[threadId] = {
+        ...(kind ? { kind } : {}),
         resumeAt: resumeAt,
         parkedAt: parkedTimestamp,
         reason: String(reason || "").slice(0, 300),
       };
       savePending(p);
     }
-    const naturalDelay = Math.min(Math.max(resumeAt + RESUME_MARGIN_MS - Date.now(), MIN_DELAY_MS), MAX_PARK_MS);
+    const margin = kind === "capacity" ? 0 : RESUME_MARGIN_MS;
+    const minimum = kind === "capacity" ? 0 : MIN_DELAY_MS;
+    const naturalDelay = Math.min(Math.max(resumeAt + margin - Date.now(), minimum), MAX_PARK_MS);
     const delay = TEST_DELAY_MS === null ? naturalDelay : TEST_DELAY_MS;
     const t = setTimeout(() => resume(threadId, 0), delay);
     if (typeof t.unref === "function") t.unref();
     S.timers.set(threadId, t);
-    const visibleUntil = Math.max(resumeAt + RESUME_MARGIN_MS, Date.now() + delay + 1000);
+    const visibleUntil = Math.max(resumeAt + margin, Date.now() + delay + 1000);
     showPark(threadId, visibleUntil, parkedTimestamp, 0);
     log("parked thread", threadId, "until", new Date(Date.now() + delay).toISOString(),
       "(limit reset", new Date(resumeAt).toISOString() + ", source", (persist ? "turn" : "restore") + ")");
   };
+  // Capacity is a consecutive-failure budget, separate from a pending timer:
+  // accepting a retry must not erase the count before its result arrives.
+  const capacityPath = S.pendingDir + "/t3park-capacity.json";
+  const capacityErrors = new Map();
+  const loadCapacity = () => {
+    try { return JSON.parse(__t3park_read(capacityPath, "utf8")); } catch { return {}; }
+  };
+  const saveCapacity = (state) => {
+    __t3park_mkdir(S.pendingDir, { recursive: true });
+    __t3park_write(capacityPath + ".tmp", JSON.stringify(state));
+    __t3park_rename(capacityPath + ".tmp", capacityPath);
+  };
+  const clearCapacity = (id) => {
+    const state = loadCapacity();
+    delete state[id];
+    saveCapacity(state);
+    capacityErrors.delete(id);
+    if (loadPending()[id]?.kind === "capacity") dropPending(id);
+  };
+  const sameCapacity = (id, c) => loadCapacity()[id]?.failureTurnId === c.failureTurnId;
+  const capacityNotice = (c) => c.attempts >= 10 && c.exhausted
+    ? "Construct stopped after 10 automatic capacity retries. Continue manually to try again."
+    : "Construct will retry this model in " + c.delayMs / 1000 + " seconds (retry " + c.attempts + "/10).";
+  const onCodexEvent = (thread, event) => {
+    try {
+      if (event.provider !== "codex" || !thread?.id || !event.turnId ||
+          !["runtime.error", "turn.started", "turn.completed"].includes(event.type)) return;
+      const id = thread.id;
+      const state = loadCapacity();
+      let c = state[id];
+      const userAt = thread.latestUserMessageAt || null;
+      // The auto command has a persisted timestamp. Any other new user message
+      // starts a fresh chain, including one submitted while a timer was pending.
+      if (c && userAt !== c.userAt && userAt !== c.command?.createdAt) {
+        clearCapacity(id);
+        c = undefined;
+      }
+      if (event.type === "runtime.error") {
+        capacityErrors.set(id, { turnId: event.turnId, message: event.payload.message });
+        return;
+      }
+      if (event.type === "turn.started") {
+        if (c && userAt === c.command?.createdAt && loadPending()[id]?.kind === "capacity") dropPending(id);
+        return;
+      }
+      if (event.type !== "turn.completed") return;
+      const error = capacityErrors.get(id);
+      const message = event.payload.errorMessage ||
+        (error?.turnId === event.turnId ? error.message : "") ||
+        (thread.session?.activeTurnId === event.turnId ? thread.session.lastError : "") || "";
+      capacityErrors.delete(id);
+      if (event.payload.state !== "failed" || !/\bselected model is at capacity\b/i.test(message)) {
+        clearCapacity(id);
+        return;
+      }
+      if (c?.failureTurnId === event.turnId) return message + " — " + capacityNotice(c);
+      const attempts = c?.attempts || 0;
+      const parkedAt = Date.now();
+      c = {
+        attempts: Math.min(attempts + 1, 10),
+        exhausted: attempts >= 10,
+        failureTurnId: event.turnId,
+        userAt,
+        parkedAt,
+        delayMs: Math.min(5000 * 2 ** attempts, 60000),
+        command: null,
+      };
+      state[id] = c;
+      saveCapacity(state);
+      if (!c.exhausted) schedule(id, parkedAt + c.delayMs, message, true, parkedAt, "capacity");
+      else if (loadPending()[id]?.kind === "capacity") dropPending(id);
+      return message + " — " + capacityNotice(c);
+    } catch (e) { log("capacity classification failed:", e.message); }
+  };
+  const resumeCapacity = async (id, attempt) => {
+    const c = loadCapacity()[id];
+    if (!c || c.exhausted || loadPending()[id]?.kind !== "capacity") return;
+    try {
+      const headers = apiHeaders();
+      const thread = await readThread(headers, id);
+      if (!sameCapacity(id, c)) return;
+      if (!thread) { clearCapacity(id); return; }
+      const userAt = thread.latestUserMessageAt || null;
+      if (c.command && userAt === c.command.createdAt) {
+        // The server accepted the persisted command before a lost response or
+        // restart. Do not create a second turn; recover a missed failed result.
+        dropPending(id);
+        if (thread.latestTurn?.state === "error") {
+          onCodexEvent(thread, { provider: "codex", type: "turn.completed",
+            turnId: thread.latestTurn.turnId,
+            payload: { state: "failed", errorMessage: thread.session?.lastError } });
+        } else if (thread.latestTurn?.state === "completed" || thread.latestTurn?.state === "interrupted") clearCapacity(id);
+        return;
+      }
+      if (userAt !== c.userAt) { clearCapacity(id); return; }
+      if (thread.latestTurn?.state === "running" || thread.session?.status === "starting" || thread.session?.status === "running") {
+        throw new Error("waiting for the failed turn to settle");
+      }
+      if (!c.command) {
+        c.command = {
+          type: "thread.turn.start", commandId: globalThis.crypto.randomUUID(), threadId: id,
+          message: { messageId: globalThis.crypto.randomUUID(), role: "user", attachments: [],
+            text: "[construct auto-resume] The selected model was temporarily at capacity. Retry " + c.attempts + "/10: continue the task from where you left off, checking any partial work first." },
+          createdAt: new Date().toISOString(),
+          runtimeMode: thread.runtimeMode || "approval-required",
+          interactionMode: thread.interactionMode || "default",
+          ...(thread.modelSelection ? { modelSelection: thread.modelSelection } : {}),
+        };
+        const state = loadCapacity();
+        state[id] = c;
+        saveCapacity(state); // same command/message IDs on every transport retry
+      }
+      const res = await fetch(apiBase() + "/api/orchestration/dispatch", {
+        method: "POST", headers, body: JSON.stringify(c.command),
+      });
+      if (!res.ok) throw new Error("capacity dispatch -> " + res.status);
+      // A fast result may already have scheduled the NEXT retry during fetch.
+      if (sameCapacity(id, c)) dropPending(id);
+      log("capacity retry", c.attempts, "/10 accepted for", id);
+    } catch (e) {
+      if (!sameCapacity(id, c) || loadPending()[id]?.kind !== "capacity") return;
+      if (attempt < MAX_ATTEMPTS) {
+        const timer = setTimeout(() => resumeCapacity(id, attempt + 1), RETRY_MS);
+        timer.unref?.();
+        S.timers.set(id, timer);
+      } else {
+        log("capacity dispatch failed; stopping automatic retries for", id, e.message);
+        dropPending(id);
+      }
+    }
+  };
   globalThis.__t3park = {
+    onCodexEvent,
     noteRateLimit(context, message) {
       try {
         if (message && message.rate_limit_info) {
@@ -339,7 +478,7 @@ import { resolve as __t3park_resolve } from "node:path";
     const ids = Object.keys(p);
     if (ids.length) log("restoring", ids.length, "pending park(s) after restart");
     for (const tid of ids) schedule(tid, Number(p[tid].resumeAt) || Date.now(), p[tid].reason, false,
-      Number(p[tid].parkedAt) || 0);
+      Number(p[tid].parkedAt) || 0, p[tid].kind);
   } catch (e) { log("pending-park restore failed:", e.message); }
 })();
 `;

@@ -1,8 +1,6 @@
 import type { ConstructUpdateInfo, DesktopBridge } from "@t3tools/contracts";
 
-import { ensureLocalApi } from "../localApi";
 import {
-  getConstructLaunchConfirmationMessage,
   getConstructLaunchOutcome,
   getConstructUpdateActionLabel,
 } from "./constructUpdate.logic";
@@ -14,31 +12,13 @@ type ConstructUpdateBridge = Pick<DesktopBridge, "downloadUpdate">;
  * Run the Construct action the Desktop app currently offers (`downloadUpdate` is the
  * stock IPC the Construct build repurposes for "launch the host script"). Shared by the
  * sidebar pill, the About section, the update popup and the Providers entry so they
- * confirm, launch and report identically. Resolves true when a script was started.
+ * launch and report identically. Resolves true when a script was started.
  */
 export async function startConstructUpdate(
   bridge: ConstructUpdateBridge,
   info: ConstructUpdateInfo,
 ): Promise<boolean> {
   if (info.action === null || info.runningAction !== null) return false;
-  const confirmation = getConstructLaunchConfirmationMessage(info);
-  if (confirmation !== null) {
-    let confirmed = false;
-    try {
-      confirmed = await ensureLocalApi().dialogs.confirm(confirmation);
-    } catch (error) {
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "Could not confirm the reprovision",
-          description: error instanceof Error ? error.message : "Confirmation failed.",
-        }),
-      );
-      return false;
-    }
-    if (!confirmed) return false;
-  }
-
   const actionLabel = getConstructUpdateActionLabel(info.action);
   try {
     const outcome = getConstructLaunchOutcome(await bridge.downloadUpdate());

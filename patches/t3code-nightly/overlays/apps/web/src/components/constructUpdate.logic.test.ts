@@ -6,7 +6,6 @@ import type {
 } from "@t3tools/contracts";
 
 import {
-  getConstructLaunchConfirmationMessage,
   getConstructLaunchOutcome,
   getConstructUpdateButtonLabel,
   getConstructUpdateDetail,
@@ -71,7 +70,6 @@ describe("construct update presentation", () => {
     expect(getConstructUpdateTooltip(current)).toBe("Construct and T3 Code are up to date");
     expect(getConstructUpdateButtonLabel(current)).toBe("Check for Updates");
     expect(getConstructUpdateNotificationKey(current)).toBeNull();
-    expect(getConstructLaunchConfirmationMessage(current)).toBeNull();
   });
 
   it("offers the Construct update with its distance", () => {
@@ -88,7 +86,6 @@ describe("construct update presentation", () => {
       "Construct update available — click to update Construct on this PC.",
     );
     expect(getConstructUpdateButtonLabel(info)).toBe("Update Construct");
-    expect(getConstructLaunchConfirmationMessage(info)).toBeNull();
     expect(getConstructUpdateNotificationKey(info)).toBe(
       `construct:update-construct:${INSTALLED}:${INSTALLED}:-`,
     );
@@ -107,9 +104,7 @@ describe("construct update presentation", () => {
     expect(getConstructUpdateDetail(stale)).toContain("provisioned with Construct b262652");
     expect(getConstructUpdateDetail(stale)).toContain("this PC has dc44958");
     expect(getConstructUpdateButtonLabel(stale)).toBe("Reprovision VM");
-    expect(getConstructLaunchConfirmationMessage(stale)).toContain(
-      'Reprovision the Construct VM "agent-vm" (agent-vm.mshome.net) now?',
-    );
+
 
     const t3: ConstructUpdateInfo = {
       ...current,

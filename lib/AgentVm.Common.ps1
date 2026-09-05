@@ -3007,6 +3007,51 @@ function Get-T3CaCleanupPlan {
     return [pscustomobject]@{ Action = "remove"; Stores = $stores; Thumbprint = $prev; Reason = $reason }
 }
 
+function Receive-ConstructBinary {
+    # Stream straight to disk. Windows PowerShell 5.1's Invoke-WebRequest progress
+    # rendering can dominate a large binary download even on a fast connection.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][uri]$Uri, [Parameter(Mandatory)][string]$OutFile)
+    Add-Type -AssemblyName System.Net.Http
+    $client = [System.Net.Http.HttpClient]::new()
+    $client.Timeout = [TimeSpan]::FromMinutes(30)
+    $response = $null; $inputStream = $null; $outputStream = $null
+    try {
+        $response = $client.GetAsync($Uri, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+        $null = $response.EnsureSuccessStatusCode()
+        $inputStream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+        $outputStream = [System.IO.File]::Create($OutFile)
+        $null = $inputStream.CopyToAsync($outputStream).GetAwaiter().GetResult()
+    } finally {
+        if ($outputStream) { $outputStream.Dispose() }
+        if ($inputStream) { $inputStream.Dispose() }
+        if ($response) { $response.Dispose() }
+        $client.Dispose()
+    }
+}
+
+function New-T3DesktopStartInfo {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$FilePath, [Parameter(Mandatory)][string]$WorkingDirectory)
+    $info = [System.Diagnostics.ProcessStartInfo]::new()
+    $info.FileName = $FilePath
+    $info.WorkingDirectory = $WorkingDirectory
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    # Electron explicitly attaches to its parent's console unless this is set.
+    # Keep it scoped to the new app; its normal file logging remains available.
+    $info.EnvironmentVariables['ELECTRON_NO_ATTACH_CONSOLE'] = '1'
+    return $info
+}
+
+function Start-T3DesktopDetached {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$FilePath, [Parameter(Mandatory)][string]$WorkingDirectory)
+    $info = New-T3DesktopStartInfo -FilePath $FilePath -WorkingDirectory $WorkingDirectory
+    $process = [System.Diagnostics.Process]::Start($info)
+    $process.Dispose() # release our handle, without waiting or terminating the app
+}
+
 function Get-T3DesktopInstallPlan {
     <#
         .SYNOPSIS

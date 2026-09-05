@@ -769,6 +769,11 @@
       "path": "apps/server/src/cli/auth.ts",
       "find": "            scopes: AuthStandardClientScopes,\n            subject: \"one-time-token\",",
       "replace": "            scopes:\n              Option.isSome(flags.scopes) && flags.scopes.value === \"administrative\"\n                ? AuthAdministrativeScopes\n                : AuthStandardClientScopes,\n            subject: \"one-time-token\","
+    },
+    {
+      "path": "apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts",
+      "before": "      const acceptedTurnStartedSourcePlan =",
+      "insert": "      // Handle only terminal Codex failures; runtime.warning is Codex's own retry.\n      if (shouldApplyThreadLifecycle && !conflictsWithActiveTurn && event.provider === \"codex\" &&\n          (event.type === \"runtime.error\" || event.type === \"turn.started\" || event.type === \"turn.completed\")) {\n        const notice = (globalThis as typeof globalThis & {\n          __t3park?: { onCodexEvent?: (thread: unknown, event: unknown) => string | undefined };\n        }).__t3park?.onCodexEvent?.(thread, event);\n        if (notice && event.type === \"turn.completed\") {\n          event = { ...event, payload: { ...event.payload, errorMessage: notice } };\n        }\n      }\n"
     }
   ]
 }
