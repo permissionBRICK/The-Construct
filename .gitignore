@@ -11,3 +11,6 @@ runtime/
 
 # Generated Python caches
 __pycache__/
+
+# Agent-local worktrees must not become broken public submodules
+.claude/worktrees/
