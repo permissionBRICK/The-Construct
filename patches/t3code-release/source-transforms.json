@@ -786,6 +786,17 @@
       "path": "apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts",
       "before": "      const acceptedTurnStartedSourcePlan =",
       "insert": "      // Handle only terminal Codex failures; runtime.warning is Codex's own retry.\n      if (shouldApplyThreadLifecycle && !conflictsWithActiveTurn && event.provider === \"codex\" &&\n          (event.type === \"runtime.error\" || event.type === \"turn.started\" || event.type === \"turn.completed\")) {\n        const notice = (globalThis as typeof globalThis & {\n          __t3park?: { onCodexEvent?: (thread: unknown, event: unknown) => string | undefined };\n        }).__t3park?.onCodexEvent?.(thread, event);\n        if (notice && event.type === \"turn.completed\") {\n          event = { ...event, payload: { ...event.payload, errorMessage: notice } };\n        }\n      }\n"
+    },
+    {
+      "path": "apps/desktop/src/electron/ElectronProtocol.ts",
+      "find": "    \"frame-src 'self' https://challenges.cloudflare.com\",",
+      "replace": "    // The Omniloop panel embeds a ticketed dashboard from the selected VM.\n    // Keep cross-origin frames restricted to that proxy path.\n    \"frame-src 'self' http://*:*/construct/omniloop/ https://*:*/construct/omniloop/ https://challenges.cloudflare.com\","
+    },
+    {
+      "path": "apps/desktop/src/electron/ElectronProtocol.test.ts",
+      "after": "    assert.deepEqual(directives[\"connect-src\"], [\"'self'\", \"http:\", \"https:\", \"ws:\", \"wss:\"]);",
+      "insert": "    assert.deepEqual(directives[\"frame-src\"], [\n      \"'self'\",\n      \"http://*:*/construct/omniloop/\",\n      \"https://*:*/construct/omniloop/\",\n      \"https://challenges.cloudflare.com\",\n    ]);\n",
+      "optional": true
     }
   ]
 }

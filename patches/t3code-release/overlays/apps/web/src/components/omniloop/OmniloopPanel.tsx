@@ -63,7 +63,7 @@ export function OmniloopPanel({
       </div>
     );
   }
-  const src = `${httpBaseUrl ?? ""}${current.guiPath}${workflowId ? `#/w/${workflowId}` : ""}`;
+  const src = `${(httpBaseUrl ?? "").replace(/\/+$/, "")}${current.guiPath}${workflowId ? `#/w/${encodeURIComponent(workflowId)}` : ""}`;
   return (
     // No sandbox: the dashboard is served by this same server behind a ticket and
     // keeps its token in localStorage, so it needs the same-origin scripts a
