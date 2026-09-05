@@ -63,3 +63,28 @@ Retained node_modules saved about 2.5–5.1 s on dependency installation, with n
 build-phase gain. Cargo compiler targets and package/Electron downloads remain
 cached because those are reusable. The detailed disposable benchmark report was
 `/var/tmp/t3-release-benchmark.gH37yN/REPORT.md`.
+
+## Voice input in pending questions
+
+The 2026-09-05 follow-up fixes dictation into an Ask User Question custom answer.
+Voice input used the normal chat draft for its edit guard and the shared prompt
+ref for incoming transcript checks, although the editor displays the separate
+pending answer. Both inventories now guard the displayed value and bind a session
+to the thread/request/question identity. Transcript insertion reads the current
+editor snapshot and synchronizes the replacement ref before writing. Changing
+questions or manually editing cancels the session; late results cannot write to
+the wrong question. No changes to audio capture or speech recognition were needed.
+
+`test/t3-voice-question.browser.test.mjs` runs the inventory's actual voice callbacks
+and the upstream replacement callback in React/Chromium, with synthetic streamed
+transcripts at the transport boundary. It covers cumulative custom-answer text,
+a stale shared ref, manual edits, switching questions with identical answer text,
+and ordinary chat. It failed against `fe6d3a2` and passed for the release inventory
+on 0.0.38 and nightly inventory on 0.0.39-nightly.20260905.1287. Both inventories
+also applied successfully to their respective clean tags.
+
+Run with `T3_TEST_SOURCE` pointing at the matching upstream checkout (with React
+installed) and `T3_TEST_TOOLS` pointing at a package directory containing `esbuild`
+and `playwright`. `T3_TEST_CHANNEL=nightly` selects the nightly inventory;
+`T3_TEST_CHROMIUM` optionally selects an installed Chromium executable.
+`T3_TEST_BASELINE=fe6d3a2` runs the old inventory for regression reproduction.
