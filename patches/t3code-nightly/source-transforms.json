@@ -411,7 +411,7 @@
     },
     {
       "path": "apps/web/src/components/chat/ChatComposer.tsx",
-      "after": "const [isComposerFocused, setIsComposerFocused] = useState(false);",
+      "before": "const composerEditorRef = useRef<ComposerPromptEditorHandle>(null);",
       "insert": "  const [isVoiceRecording, setIsVoiceRecording] = useState(false);\n  const [voiceLevel, setVoiceLevel] = useState(0);\n"
     },
     {
