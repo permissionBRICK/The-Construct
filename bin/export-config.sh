@@ -30,6 +30,7 @@
 #                                         Codex   ~/.codex/.credentials.json
 #                                         Opencode ~/.local/share/opencode/mcp-auth.json
 #   - npm registry auth (INCLUDE_AUTH): ~/.npmrc (registry _authToken / _auth)
+#   - GitLab CLI auth (INCLUDE_AUTH)  : ~/.config/glab-cli (config.yml + settings)
 #   - User secrets store (INCLUDE_AUTH): ~/.secrets -- everything in it, verbatim
 #   - Agent settings/config           : ~/.claude/settings.json, ~/.codex/config.toml,
 #                                       ~/.config/opencode/opencode.json
@@ -127,6 +128,11 @@ add ".gitconfig"
 add ".git-credentials"
 # GitHub CLI: hosts.yml holds the login/OAuth token, config.yml the settings.
 add ".config/gh"
+
+# GitLab CLI: config.yml holds host tokens alongside settings.
+if [[ "${INCLUDE_AUTH}" == "true" ]]; then
+  add ".config/glab-cli"
+fi
 
 # ── Outbound SSH keys (VM→remote) ────────────────────────────────────────────
 # The private key material the agent uses to reach remotes (deploy hosts, git
