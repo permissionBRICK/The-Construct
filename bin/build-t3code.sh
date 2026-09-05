@@ -189,16 +189,12 @@ fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 case "${BUILD_MODE}" in all|server|desktop) ;; *) fail "Invalid T3CODE_BUILD_MODE: ${BUILD_MODE}" ;; esac
 
-# Resolve channels and run the source tooling with the workspace's Node major.
-node_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
-if ! command -v npm >/dev/null 2>&1 || [[ "${node_major}" -lt 24 ]]; then
-  export DEBIAN_FRONTEND=noninteractive
-  apt-get update
-  apt-get install -y --no-install-recommends ca-certificates curl
-  curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
-  apt-get install -y nodejs
-fi
-command -v npm >/dev/null 2>&1 || fail "npm is required to resolve the T3 channel"
+# Build tools belong to T3, not to the profile-selected SDK. This also runs on
+# cache hits and late Desktop packaging, before any npm or Node invocation.
+[[ -s "${RECIPE}" ]] || fail "T3 build recipe is missing: ${RECIPE}"
+# shellcheck source=bin/t3code-build-recipe.sh
+source "${RECIPE}"
+t3_recipe_use_node
 
 # Packaging uses the exact server selected by this provision, even if the npm
 # channel advances between the two stages. It never recompiles or activates it.
@@ -229,8 +225,6 @@ T3PARK_PATCHER="${REPO_DIR}/extension/vm/construct-t3park-patch.mjs"
 T3MONITOR_PATCHER="${REPO_DIR}/extension/vm/construct-t3-opencode-monitor-patch.mjs"
 [[ -s "${RECIPE}" && -s "${SOURCE_TRANSFORMER}" && -s "${SOURCE_MANIFEST}" && -d "${SOURCE_OVERLAYS}" ]] \
   || fail "T3 build inputs are incomplete under ${REPO_DIR}"
-# shellcheck source=bin/t3code-build-recipe.sh
-source "${RECIPE}"
 mkdir -p "${CACHE_ROOT}" "${ARTIFACT_ROOT}" "$(dirname "${STATUS_PATH}")"
 PATCH_HASH="$(t3_build_integration_hash "${RECIPE}" "${SOURCE_TRANSFORMER}" "${SOURCE_MANIFEST}" "${SOURCE_OVERLAYS}" "${T3PARK_PATCHER}" "${T3MONITOR_PATCHER}")"
 BUILD_HASH="$(printf '%s\n' "${VERSION}" "${CHANNEL}" "${PATCH_HASH}" | sha256sum | awk '{print $1}')"
