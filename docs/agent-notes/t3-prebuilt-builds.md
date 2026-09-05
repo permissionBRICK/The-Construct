@@ -88,3 +88,35 @@ installed) and `T3_TEST_TOOLS` pointing at a package directory containing `esbui
 and `playwright`. `T3_TEST_CHANNEL=nightly` selects the nightly inventory;
 `T3_TEST_CHROMIUM` optionally selects an installed Chromium executable.
 `T3_TEST_BASELINE=fe6d3a2` runs the old inventory for regression reproduction.
+
+## Capacity retries and Windows reprovision fixes (2026-09-05)
+
+The v6 `construct-t3park-patch.mjs` runtime handles terminal Codex failures with
+`Selected model is at capacity`. Each channel's source inventory calls the hook
+from provider runtime ingestion, after its lifecycle guard. Codex's own retry
+warnings are ignored. Delays are 5, 10, 20, 40, then 60 seconds, at most ten
+automatic turns, retaining the selected model and interaction/runtime modes.
+`userdata/t3park-capacity.json` persists the consecutive-failure budget separately
+from the pending snooze/timer file. Successful turns or manual continuations reset
+it. HTTP retries reuse persisted command/message IDs; a lost response is reconciled
+against the thread shell before another command is submitted. Claude's existing
+usage-limit handling remains unchanged. Synthetic tests cover the capacity cap,
+duplicate results, immediate-result races, manual cancellation, transport failure,
+and persistence without consuming a real provider turn.
+
+The host provisioner now honors `NonInteractive`/`Auto` for all three saved Git
+choices. Explicit T3 reprovision actions launch directly without a second dialog.
+Prebuilt installers already travelled directly from GitHub to Windows; the download
+now streams with HttpClient instead of Windows PowerShell's expensive web-request
+progress rendering. SHA-256 verification and shared host installer reuse still apply.
+The desktop restart uses a per-child ProcessStartInfo with CreateNoWindow and
+ELECTRON_NO_ATTACH_CONSOLE=1. Electron explicitly attaches to a parent's console
+without that variable (`shell/app/electron_main_win.cc` upstream); file logging
+continues normally. This prevents the app from retaining the provisioning console
+or receiving its Ctrl+C/close events.
+
+`test/t3-reprovision-host.test.mjs` runs real streamed HTTP/redirect/error checks
+and the provisioner's Git selection block. On Windows it uses PowerShell 5.1 and a
+native console probe to verify child console isolation. The dedicated regression
+workflow runs this alongside the installer handoff test and runtime tests. No live
+`t3code-serve` restart is part of these checks.
