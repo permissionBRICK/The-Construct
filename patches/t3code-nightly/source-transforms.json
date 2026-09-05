@@ -13,6 +13,7 @@
     "apps/server/src/publicBaseUrl.ts",
     "apps/server/src/voiceInput.test.ts",
     "apps/server/src/voiceInput.ts",
+    "apps/web/public/construct-pwa-icon.svg",
     "apps/web/src/components/ConstructAutoLink.tsx",
     "apps/web/src/components/ConstructDiskSpaceNotification.tsx",
     "apps/web/src/components/ConstructUpdateNotification.tsx",
@@ -769,6 +770,16 @@
       "path": "apps/server/src/cli/auth.ts",
       "find": "            scopes: AuthStandardClientScopes,\n            subject: \"one-time-token\",",
       "replace": "            scopes:\n              Option.isSome(flags.scopes) && flags.scopes.value === \"administrative\"\n                ? AuthAdministrativeScopes\n                : AuthStandardClientScopes,\n            subject: \"one-time-token\","
+    },
+    {
+      "path": "apps/web/public/manifest.webmanifest",
+      "after": "\"id\": \"/\",",
+      "insert": "  \"name\": \"T3 Code\",\n"
+    },
+    {
+      "path": "apps/web/public/manifest.webmanifest",
+      "after": "\"icons\": [",
+      "insert": "    {\n      \"src\": \"/construct-pwa-icon.svg\",\n      \"sizes\": \"any\",\n      \"type\": \"image/svg+xml\"\n    },\n"
     }
   ]
 }
