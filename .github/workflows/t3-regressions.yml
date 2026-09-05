@@ -20,6 +20,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Test Windows PowerShell 5.1 download, saved settings and console detachment
+        shell: powershell
         run: node test/t3-reprovision-host.test.mjs
       - name: Test installer handoff and shared host cache
         shell: powershell
