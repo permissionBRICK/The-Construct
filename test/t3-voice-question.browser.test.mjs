@@ -65,6 +65,7 @@ function Harness() {
  window.changeQuestion = () => setPending(p => ({...p, id:'question-2'}));
  window.leaveQuestion = () => setPending(null);
  window.staleRef = () => {promptRef.current=prompt};
+ window.changeChatDraft = () => setPrompt('saved background draft');
  return React.createElement('form',{'data-chat-composer-form':'true'},
    React.createElement('textarea',{ref:element,value:pending?.customAnswer ?? prompt,onChange:e=>pending?setPending({...pending,customAnswer:e.target.value}):setPrompt(e.target.value)}),
    React.createElement('button',{type:'button',onPointerDown:e=>e.preventDefault(),onClick:toggleVoiceRecording,'data-recording':String(isVoiceRecording)},'Mic'),
@@ -91,12 +92,14 @@ try {
  await page.locator('textarea').evaluate(el=>el.setSelectionRange(el.value.length,el.value.length));
  await page.getByText('Mic',{exact:true}).click();
  await recording(true);
+ await page.evaluate(()=>window.changeChatDraft());
+ await recording(true);
  await page.evaluate(()=>{window.staleRef();window.transcript('spoken')});
  await page.waitForFunction(()=>document.querySelector('textarea').value==='answer prefix spoken');
  await recording(true);
  await page.evaluate(()=>window.transcript('spoken answer'));
  await page.waitForFunction(()=>document.querySelector('textarea').value==='answer prefix spoken answer');
- assert.equal(await page.locator('output').textContent(),'chat draft stays here');
+ assert.equal(await page.locator('output').textContent(),'saved background draft');
  assert.deepEqual(await page.evaluate(()=>window.writes),['question-1','question-1']);
  assert.equal(await page.evaluate(()=>window.stops),0,'dictation must not stop itself');
  await page.locator('textarea').fill('my manual edit');
