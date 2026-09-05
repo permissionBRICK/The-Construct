@@ -6,6 +6,8 @@ on:
       - 'Provision-AgentVM.ps1'
       - 'lib/AgentVm.Common.ps1'
       - 'extension/vm/construct-t3park-patch.mjs'
+      - 'bin/build-t3code.sh'
+      - 'bin/t3code-build-recipe.sh'
       - 'test/t3*'
       - '.github/workflows/t3-regressions.yml'
   workflow_dispatch:
@@ -27,7 +29,7 @@ jobs:
         run: ./test/t3-desktop-handoff.test.ps1
   runtime:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -35,3 +37,8 @@ jobs:
       - run: node test/t3park-patch.test.mjs
       - run: node test/t3-capacity-retry.test.mjs
       - run: node test/t3-source-transform.test.mjs
+      - run: node test/t3-build-cache.test.mjs
+      - run: bash test/t3-build-node.test.sh
+      - run: bash test/t3-build-diskcheck.test.sh
+      - run: python3 test/t3-install-source.test.py
+      - run: python3 test/t3-prebuilt.test.py
