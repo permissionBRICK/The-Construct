@@ -134,13 +134,6 @@ export function getConstructUpdateButtonLabel(info: ConstructUpdateInfo): string
   return "Check for Updates";
 }
 
-/** Reprovisioning restarts the VM's T3 server, which interrupts running provider
- *  sessions, so it asks first. A Construct update only touches this PC. */
-export function getConstructLaunchConfirmationMessage(info: ConstructUpdateInfo): string | null {
-  if (info.action !== "reprovision") return null;
-  return `Reprovision the Construct VM "${info.vmName}" (${info.vmHost}) now?\n\nThis reruns Construct provisioning with your saved settings and rebuilds the patched T3 Code. The VM's T3 server restarts when a new build is activated, so running agent sessions may ask you to send a new message afterwards. If a new Desktop build is installed, T3 Code closes and reopens on its own.`;
-}
-
 /** Identity of an offer, for "show the popup once per offer". Excludes the behind-count
  *  so every new upstream commit does not re-raise a dismissed prompt. */
 export function getConstructUpdateNotificationKey(info: ConstructUpdateInfo): string | null {

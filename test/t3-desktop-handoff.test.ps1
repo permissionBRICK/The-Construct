@@ -36,8 +36,15 @@ function Invoke-ScpFrom {
         default { throw "Unexpected download $RemotePath" }
     }
 }
-function Get-Process { @() }
-function Invoke-WebRequest {
+function Get-Process {
+    if ($script:running) { [pscustomobject]@{Path=($script:app.TrimEnd('\') + '\T3 Code.exe')} }
+}
+function Start-T3DesktopDetached {
+    param($FilePath, $WorkingDirectory)
+    Assert ($WorkingDirectory -eq $script:app) 'Restart must use the installed app directory'
+    $script:calls.Add('restart-detached')
+}
+function Receive-ConstructBinary {
     param($Uri, $OutFile, [switch]$UseBasicParsing)
     $script:calls.Add('https-download')
     Copy-Item $script:installer $OutFile
@@ -77,9 +84,12 @@ try {
     Assert ($script:warnings.Count -eq 0) "Second provision failed: $script:warnings"
     Assert ($script:calls.Count -eq 1 -and $script:calls[0] -like '*/server-manifest.json') 'Second VM must only download the server identity: no packaging, EXE download or install'
     Assert ((Get-Content $recordPath -Raw) -eq $savedRecord) 'Skipping must preserve the real installer provenance'
+    $script:running = $true
     $script:manifest.patchHash = 'p2'; $script:manifest.buildHash = 'b2'
     Run-Handoff
     Assert ($script:calls.Contains('install')) 'Changed recipe must install'
+    Assert ($script:calls.Contains('restart-detached')) 'A previously running app must restart detached'
+    $script:running = $false
     Assert (-not ($script:calls | Where-Object { $_ -like '*.exe' })) 'Identical cached installer bytes must not be downloaded again'
     Remove-Item (Join-Path $script:app 'T3 Code.exe')
     Set-Content (Join-Path $script:app 'Uninstall T3 Code.exe') 'uninstaller'
