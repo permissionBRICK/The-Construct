@@ -106,14 +106,14 @@ const port = fakeApi.address().port;
 try {
   runPatcher("apply");
   const status = JSON.parse(runPatcher("status"));
-  ok("apply: installs v5 with a pristine backup", () => {
+  ok("apply: installs v6 with a pristine backup", () => {
     assert.equal(status.patched, true);
-    assert.equal(status.version, "v5");
+    assert.equal(status.version, "v6");
     assert.equal(status.backup, true);
   });
   ok("apply: remains idempotent", () => {
-    assert.match(runPatcher("apply"), /already patched \(v5\)/);
-    assert.equal((readFileSync(bundle, "utf8").match(/\/\*__T3PARK v5\*\//g) || []).length, 1);
+    assert.match(runPatcher("apply"), /already patched \(v6\)/);
+    assert.equal((readFileSync(bundle, "utf8").match(/\/\*__T3PARK v6\*\//g) || []).length, 1);
   });
 
   process.env.T3CODE_HOME = join(tmp, "isolated-t3");
@@ -127,7 +127,7 @@ try {
   process.env.T3PARK_VISIBILITY_SETTLE_MS = "0";
   process.env.T3PARK_DEBUG = "true";
 
-  const fixture = await import(pathToFileURL(bundle).href + "?v=5");
+  const fixture = await import(pathToFileURL(bundle).href + "?v=6");
   const ordinary = fixture.handleResultMessage({ session: { threadId: "22222222-2222-4222-8222-222222222222" } }, {
     type: "result",
     subtype: "success",
