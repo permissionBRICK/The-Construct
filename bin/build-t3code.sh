@@ -53,13 +53,17 @@ t3_build_installed_dir() {
 # stray file in an otherwise empty store does not count as warm.
 #   $1 wine installed (1/0)   $2 pnpm store size in MiB   $3 electron cache size in MiB
 #   $4 Rust Windows target installed in the ACTIVE toolchain (1/0)
+#   $5 optional build mode (server avoids budgeting the Windows toolchain)
 # T3CODE_BUILD_MIN_FREE_GIB (integer, 1..9999) overrides the whole heuristic.
 t3_build_required_kb() {
-  local wine="$1" store_mib="$2" electron_mib="$3" rust="$4" gib=6 credit
+  local wine="$1" store_mib="$2" electron_mib="$3" rust="$4" mode="${5:-all}" gib=6 credit
   if [[ "${T3CODE_BUILD_MIN_FREE_GIB:-}" =~ ^[0-9]{1,4}$ && "$(( 10#${T3CODE_BUILD_MIN_FREE_GIB} ))" -ge 1 ]]; then
     echo $(( 10#${T3CODE_BUILD_MIN_FREE_GIB} * 1048576 )); return 0
   fi
-  [[ "${wine}" == 1 ]] || gib=$(( gib + 4 ))
+  # A server-only run needs neither Wine nor the Windows Rust toolchain.
+  if [[ "${mode}" == server ]]; then gib=3; else
+    [[ "${wine}" == 1 ]] || gib=$(( gib + 4 ))
+  fi
   [[ "${store_mib}" =~ ^[0-9]+$ ]] || store_mib=0
   [[ "${electron_mib}" =~ ^[0-9]+$ ]] || electron_mib=0
   # pnpm store: 3 GiB cap, credited per whole GiB present (2.x GiB present -> 1 GiB still needed).
@@ -67,7 +71,7 @@ t3_build_required_kb() {
   gib=$(( gib + 3 - credit ))
   # electron caches: 1 GiB cap, credited once at least 100 MiB (the electron zip) is there.
   [[ "${electron_mib}" -ge 100 ]] || gib=$(( gib + 1 ))
-  [[ "${rust}" == 1 ]] || gib=$(( gib + 1 ))
+  [[ "${mode}" == server || "${rust}" == 1 ]] || gib=$(( gib + 1 ))
   echo $(( gib * 1048576 ))
 }
 
@@ -134,12 +138,23 @@ t3_build_bundle_patchers_compatible() {
   rm -rf -- "${work}"
 }
 
+# Paths are relative to the recipe's repository, so identical inputs in different
+# checkouts have the same identity. Only build inputs belong here, not this driver.
 t3_build_integration_hash() {
-  local build_script="$1" transform_script="$2" manifest="$3" overlays="$4" t3park="$5" monitor="$6"
-  {
-    sha256sum "${build_script}" "${transform_script}" "${manifest}" "${t3park}" "${monitor}"
-    find "${overlays}" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
-  } | sha256sum | awk '{print $1}'
+  local recipe="$1" transform_script="$2" manifest="$3" overlays="$4" t3park="$5" monitor="$6"
+  local root file
+  root="$(cd "$(dirname "${recipe}")/.." && pwd)"
+  (
+    cd "${root}"
+    for file in "${recipe}" "${transform_script}" "${manifest}" "${t3park}" "${monitor}"; do
+      sha256sum "${file#"${root}/"}"
+    done
+    find "${overlays#"${root}/"}" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
+  ) | sha256sum | awk '{print $1}'
+}
+
+t3_build_manifest_field() {
+  node -e 'try{process.stdout.write(String(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))[process.argv[2]]||""))}catch{}' "$1" "$2"
 }
 
 # Sourced for the helpers only (unit tests): stop before shell options or anything else changes.
@@ -154,33 +169,27 @@ CHANNEL="${T3CODE_CHANNEL:-stable}"
 NPM_TAG=latest
 [[ "${CHANNEL}" == "nightly" ]] && NPM_TAG=nightly
 
-CACHE_ROOT="/var/cache/construct/t3code-source"
-ARTIFACT_ROOT="/var/lib/construct/t3code-desktop"
+# Overrides support isolated build verification; normal provisions use these defaults.
+CACHE_ROOT="${T3CODE_CACHE_ROOT:-/var/cache/construct/t3code-source}"
+COMPILER_CACHE="${T3CODE_COMPILER_CACHE:-/var/cache/construct/t3code-compiler}"
+ARTIFACT_ROOT="${T3CODE_ARTIFACT_ROOT:-/var/lib/construct/t3code-desktop}"
+LAUNCHER="${T3CODE_LAUNCHER:-/usr/local/bin/t3}"
+BUILD_MODE="${T3CODE_BUILD_MODE:-all}"
+RECIPE="${REPO_DIR}/bin/t3code-build-recipe.sh"
 SOURCE_TRANSFORMER="${REPO_DIR}/bin/apply-t3code-source.mjs"
-# One inventory per channel, each written against the LATEST tag of that channel
-# only (see patches/README.md): its transforms anchor on the smallest upstream
-# fragment each change needs, and carry no logic for other upstream versions.
-INVENTORY_NAME=release
-[[ "${CHANNEL}" == "nightly" ]] && INVENTORY_NAME=nightly
-SOURCE_MANIFEST="${REPO_DIR}/patches/t3code-${INVENTORY_NAME}/source-transforms.json"
-SOURCE_OVERLAYS="${REPO_DIR}/patches/t3code-${INVENTORY_NAME}/overlays"
-T3PARK_PATCHER="${REPO_DIR}/extension/vm/construct-t3park-patch.mjs"
-T3MONITOR_PATCHER="${REPO_DIR}/extension/vm/construct-t3-opencode-monitor-patch.mjs"
 CONSTRUCT_REPO_URL="${CONSTRUCT_REPO_URL:-https://github.com/permissionBRICK/The-Construct.git}"
 INSTALLER_PATH="${ARTIFACT_ROOT}/T3Code-Construct-Setup.exe"
 MANIFEST_PATH="${ARTIFACT_ROOT}/manifest.json"
-STATUS_PATH="/etc/construct/t3code-desktop-status"
+STATUS_PATH="${T3CODE_STATUS_PATH:-/etc/construct/t3code-desktop-status}"
+SERVER_MANIFEST="${ARTIFACT_ROOT}/server-manifest.json"
 CONSTRUCT_VERSION="${CONSTRUCT_VERSION:-unversioned}"
 [[ "${CONSTRUCT_VERSION}" =~ ^[0-9a-f]{7,64}$ ]] || CONSTRUCT_VERSION=unversioned
 note() { printf '    %s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
-[[ -s "${SOURCE_TRANSFORMER}" && -s "${SOURCE_MANIFEST}" && -d "${SOURCE_OVERLAYS}" ]] \
-  || fail "T3 source transformation assets are incomplete under ${REPO_DIR}"
+case "${BUILD_MODE}" in all|server|desktop) ;; *) fail "Invalid T3CODE_BUILD_MODE: ${BUILD_MODE}" ;; esac
 
-# This source build can be selected even when no JavaScript-based agent was
-# installed earlier in provisioning. Bootstrap the workspace's Node major before
-# using npm to resolve the selected T3 channel.
+# Resolve channels and run the source tooling with the workspace's Node major.
 node_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
 if ! command -v npm >/dev/null 2>&1 || [[ "${node_major}" -lt 24 ]]; then
   export DEBIAN_FRONTEND=noninteractive
@@ -191,45 +200,68 @@ if ! command -v npm >/dev/null 2>&1 || [[ "${node_major}" -lt 24 ]]; then
 fi
 command -v npm >/dev/null 2>&1 || fail "npm is required to resolve the T3 channel"
 
-VERSION="$(npm view "t3@${NPM_TAG}" version 2>/dev/null | tail -1 | tr -d '[:space:]')"
-[[ "${VERSION}" =~ ^[0-9A-Za-z.+-]+$ ]] || fail "npm returned an invalid t3@${NPM_TAG} version: ${VERSION}"
+# Packaging uses the exact server selected by this provision, even if the npm
+# channel advances between the two stages. It never recompiles or activates it.
+if [[ "${BUILD_MODE}" == desktop ]]; then
+  VERSION="$(t3_build_manifest_field "${SERVER_MANIFEST}" version)"
+  CHANNEL="$(t3_build_manifest_field "${SERVER_MANIFEST}" channel)"
+elif [[ -n "${T3CODE_SOURCE_VERSION:-}" ]]; then
+  VERSION="${T3CODE_SOURCE_VERSION}"
+else
+  VERSION="$(npm view "t3@${NPM_TAG}" version 2>/dev/null | tail -1 | tr -d '[:space:]')"
+fi
+[[ "${VERSION}" =~ ^[0-9A-Za-z.+-]+$ ]] || fail "No valid T3 version resolved for ${BUILD_MODE} build"
+[[ "${CHANNEL}" == stable || "${CHANNEL}" == nightly ]] || fail "Invalid cached T3 channel"
 TAG="v${VERSION}"
 SAFE_VERSION="${VERSION//[^0-9A-Za-z._-]/-}"
-mkdir -p "${CACHE_ROOT}" "${ARTIFACT_ROOT}" /etc/construct
-PATCH_HASH="$(t3_build_integration_hash "${REPO_DIR}/bin/build-t3code.sh" "${SOURCE_TRANSFORMER}" "${SOURCE_MANIFEST}" "${SOURCE_OVERLAYS}" "${T3PARK_PATCHER}" "${T3MONITOR_PATCHER}")"
-# THE BUILD IDENTITY is the upstream T3 version plus the patch recipe -- the two things
-# that change what gets built. The Construct commit is RECORDED in the manifest
-# (constructVersion) but is not part of the key: it used to be, and every Construct
-# update then rebuilt an identical server + Desktop from scratch on every VM (and, with
-# two VMs at different commits, reinstalled the Desktop on the host in turns). The host's
-# install rule compares the same recipe hash (Get-T3DesktopInstallPlan -PatchHash).
-BUILD_HASH="$(printf '%s\n' "${PATCH_HASH}" | sha256sum | awk '{print $1}')"
+INVENTORY_NAME=release
+[[ "${CHANNEL}" == nightly ]] && INVENTORY_NAME=nightly
+if [[ "${BUILD_MODE}" == desktop ]]; then
+  cached_inventory="$(t3_build_manifest_field "${SERVER_MANIFEST}" inventory)"
+  INVENTORY_NAME="${cached_inventory:-${INVENTORY_NAME}}"
+else
+  INVENTORY_NAME="${T3CODE_INVENTORY:-${INVENTORY_NAME}}"
+fi
+[[ "${INVENTORY_NAME}" == release || "${INVENTORY_NAME}" == nightly ]] || fail "Invalid T3 source inventory"
+SOURCE_MANIFEST="${REPO_DIR}/patches/t3code-${INVENTORY_NAME}/source-transforms.json"
+SOURCE_OVERLAYS="${REPO_DIR}/patches/t3code-${INVENTORY_NAME}/overlays"
+T3PARK_PATCHER="${REPO_DIR}/extension/vm/construct-t3park-patch.mjs"
+T3MONITOR_PATCHER="${REPO_DIR}/extension/vm/construct-t3-opencode-monitor-patch.mjs"
+[[ -s "${RECIPE}" && -s "${SOURCE_TRANSFORMER}" && -s "${SOURCE_MANIFEST}" && -d "${SOURCE_OVERLAYS}" ]] \
+  || fail "T3 build inputs are incomplete under ${REPO_DIR}"
+# shellcheck source=bin/t3code-build-recipe.sh
+source "${RECIPE}"
+mkdir -p "${CACHE_ROOT}" "${ARTIFACT_ROOT}" "$(dirname "${STATUS_PATH}")"
+PATCH_HASH="$(t3_build_integration_hash "${RECIPE}" "${SOURCE_TRANSFORMER}" "${SOURCE_MANIFEST}" "${SOURCE_OVERLAYS}" "${T3PARK_PATCHER}" "${T3MONITOR_PATCHER}")"
+BUILD_HASH="$(printf '%s\n' "${VERSION}" "${CHANNEL}" "${PATCH_HASH}" | sha256sum | awk '{print $1}')"
 SOURCE_KEY="${SAFE_VERSION}-${BUILD_HASH:0:12}"
 SOURCE_DIR="${CACHE_ROOT}/${SOURCE_KEY}"
 
-if [[ -s "${MANIFEST_PATH}" && -s "${INSTALLER_PATH}" ]]; then
-  cached_version="$(node -e 'try{let m=require(process.argv[1]);process.stdout.write(m.version||"")}catch{}' "${MANIFEST_PATH}")"
-  cached_hash="$(node -e 'try{let m=require(process.argv[1]);process.stdout.write(m.patchHash||"")}catch{}' "${MANIFEST_PATH}")"
-  cached_build="$(node -e 'try{let m=require(process.argv[1]);process.stdout.write(m.buildHash||"")}catch{}' "${MANIFEST_PATH}")"
-  # A build made under the OLD key (commit folded in) lives in a directory named by that
-  # key; the manifest's buildHash finds it, so the switch to the new key costs no rebuild.
-  cached_dir="${SOURCE_DIR}"
-  if [[ "${cached_build}" =~ ^[0-9a-f]{12,64}$ && ! -x "${SOURCE_DIR}/apps/server/dist/bin.mjs" ]]; then
-    cached_dir="${CACHE_ROOT}/${SAFE_VERSION}-${cached_build:0:12}"
-  fi
-  if [[ "${cached_version}" == "${VERSION}" && "${cached_hash}" == "${PATCH_HASH}" && -x "${cached_dir}/apps/server/dist/bin.mjs" ]]; then
-    SOURCE_DIR="${cached_dir}"
-    ln -sfn "${SOURCE_DIR}/apps/server/dist/bin.mjs" /usr/local/bin/t3
-    # The key the ARTIFACT carries, so install-ai-tools.sh sees an unchanged build and
-    # leaves the running server alone.
-    [[ "${cached_build}" =~ ^[0-9a-f]{12,64}$ ]] && BUILD_HASH="${cached_build}"
-    printf 'T3CODE_DESKTOP_READY=yes\nT3CODE_DESKTOP_VERSION=%s\nT3CODE_DESKTOP_CHANNEL=%s\nT3CODE_DESKTOP_INSTALLER=%s\nT3CODE_BUILD_KEY=%s\n' \
-      "${VERSION}" "${CHANNEL}" "${INSTALLER_PATH}" "${BUILD_HASH}" >"${STATUS_PATH}"
-    note "T3 Code ${VERSION} patched build is already current (same upstream version, same patch recipe); reusing its VM server and Windows installer."
-    exit 0
-  fi
+server_current=false
+if [[ "$(t3_build_manifest_field "${SERVER_MANIFEST}" version)" == "${VERSION}" &&
+      "$(t3_build_manifest_field "${SERVER_MANIFEST}" channel)" == "${CHANNEL}" &&
+      "$(t3_build_manifest_field "${SERVER_MANIFEST}" patchHash)" == "${PATCH_HASH}" &&
+      -x "${SOURCE_DIR}/apps/server/dist/bin.mjs" ]]; then
+  server_current=true
 fi
+if [[ "${BUILD_MODE}" == desktop && "${server_current}" != true ]]; then
+  fail "The prepared T3 server no longer matches this recipe; provision it again before packaging"
+fi
+write_status() {
+  printf 'T3CODE_SERVER_READY=yes\nT3CODE_DESKTOP_READY=%s\nT3CODE_DESKTOP_VERSION=%s\nT3CODE_DESKTOP_CHANNEL=%s\nT3CODE_DESKTOP_INSTALLER=%s\nT3CODE_BUILD_KEY=%s\n' \
+    "$1" "${VERSION}" "${CHANNEL}" "${INSTALLER_PATH}" "${BUILD_HASH}" >"${STATUS_PATH}"
+}
+activate_server() {
+  ln -sfn "${SOURCE_DIR}/apps/server/dist/bin.mjs" "${LAUNCHER}"
+  write_status no
+}
 
+if [[ "${server_current}" == true ]]; then
+  note "T3 Code ${VERSION} server is already current (same upstream version and build recipe)."
+  if [[ "${BUILD_MODE}" == server ]]; then activate_server; fi
+  if [[ "${BUILD_MODE}" == server ]]; then exit 0; fi
+else
+note "T3 build cache miss: upstream version/channel or recipe changed, or the cached server is missing."
 # Do not let a failed rebuild advertise an older installer as the result of the
 # current provision. The previous server binary remains installed until the new
 # build is complete, but the host handoff is re-enabled only after success.
@@ -239,7 +271,7 @@ rm -f "${STATUS_PATH}"
 # runs from only loses regenerable output (see t3_build_prune_candidates), so it keeps
 # working -- including after a restart -- until this build succeeds, as promised above.
 # Other superseded builds are removed whole: nothing runs from them.
-installed_dir="$(t3_build_installed_dir /usr/local/bin/t3)"
+installed_dir="$(t3_build_installed_dir "${LAUNCHER}")"
 free_before_kb="$(df -Pk "${CACHE_ROOT}" | awk 'NR==2 {print $4}')"
 for stale_dir in "${CACHE_ROOT}"/*/; do
   stale_dir="${stale_dir%/}"
@@ -261,7 +293,7 @@ fi
 
 # The requirement depends on how much of the toolchain is already on disk.
 read -r tc_wine tc_store_mib tc_electron_mib tc_rust <<<"$(t3_build_toolchain_flags)"
-required_kb="$(t3_build_required_kb "${tc_wine}" "${tc_store_mib}" "${tc_electron_mib}" "${tc_rust}")"
+required_kb="$(t3_build_required_kb "${tc_wine}" "${tc_store_mib}" "${tc_electron_mib}" "${tc_rust}" "${BUILD_MODE}")"
 available_kb="$(df -Pk "${CACHE_ROOT}" | awk 'NR==2 {print $4}')"
 toolchain_note="wine=${tc_wine} pnpm-store=${tc_store_mib}MiB electron-cache=${tc_electron_mib}MiB rust-windows-target=${tc_rust}"
 if [[ "${available_kb:-0}" -lt "${required_kb}" ]]; then
@@ -269,25 +301,7 @@ if [[ "${available_kb:-0}" -lt "${required_kb}" ]]; then
 fi
 note "Free space: $(( ${available_kb:-0} / 1024 )) MiB available, $(( required_kb / 1048576 )) GiB required (${toolchain_note})."
 
-export DEBIAN_FRONTEND=noninteractive
-if ! dpkg --print-foreign-architectures | grep -qx i386; then
-  dpkg --add-architecture i386
-fi
-apt-get update
-apt-get install -y --no-install-recommends \
-  build-essential ca-certificates curl git mingw-w64 python3 wine wine64 wine32:i386
-
-# T3's source workspace pins pnpm 11. Keep the build toolchain in the disposable
-# VM; the Windows host only receives the finished installer.
-if ! command -v pnpm >/dev/null 2>&1 || [[ "$(pnpm --version 2>/dev/null | cut -d. -f1)" != "11" ]]; then
-  npm install -g pnpm@11.10.0
-fi
-
-if ! command -v rustup >/dev/null 2>&1; then
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
-fi
-export PATH="/root/.cargo/bin:${PATH}"
-rustup target add x86_64-pc-windows-gnu
+t3_recipe_prepare_source
 
 if [[ -e "${SOURCE_DIR}" && ! -d "${SOURCE_DIR}/.git" && ! -s "${SOURCE_DIR}/.construct-upstream-commit" ]]; then
   rm -rf -- "${SOURCE_DIR}"
@@ -312,78 +326,70 @@ if [[ ! -d "${SOURCE_DIR}/.git" && ! -s "${SOURCE_DIR}/.construct-upstream-commi
 fi
 cd "${SOURCE_DIR}"
 
-node "${SOURCE_TRANSFORMER}" apply --source "${SOURCE_DIR}" --manifest "${SOURCE_MANIFEST}" --overlays "${SOURCE_OVERLAYS}" \
-  || fail "the Construct source transforms do not apply to T3 Code ${TAG}; the inventory needs a repair for this upstream version"
-
-note "Installing T3 source dependencies..."
-pnpm install --no-frozen-lockfile
-export PATH="${SOURCE_DIR}/node_modules/.bin:${PATH}"
-
-# Release tags can intentionally retain the previous package versions in Git;
-# upstream's release workflow rewrites them before producing artifacts. Mirror
-# that step so the VM UI/server and Desktop package report the resolved channel
-# version rather than the pre-release source value.
-node scripts/update-release-package-versions.ts "${VERSION}"
-
-note "Building the shared T3 server/web/Desktop sources..."
-pnpm run build:desktop
-
-# Apply the established guarded server integrations before packaging. The same
-# dist directory becomes the VM CLI and Desktop's server.asar sidecar.
-node "${T3PARK_PATCHER}" apply --bundle "${SOURCE_DIR}/apps/server/dist/bin.mjs"
-node "${T3MONITOR_PATCHER}" apply --bundle "${SOURCE_DIR}/apps/server/dist/bin.mjs"
-
-note "Cross-building the Windows resource monitor..."
-cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target x86_64-pc-windows-gnu
-mkdir -p native/resource-monitor/target/x86_64-pc-windows-msvc/release
-cp native/resource-monitor/target/x86_64-pc-windows-gnu/release/t3-resource-monitor.exe \
-  native/resource-monitor/target/x86_64-pc-windows-msvc/release/t3-resource-monitor.exe
-
-pty_manifest="$(node -e 'console.log(require.resolve("node-pty/package.json",{paths:[process.argv[1]]}))' "${SOURCE_DIR}/apps/server")"
-pty_dir="$(dirname "${pty_manifest}")"
-pty_prebuild="${pty_dir}/build/Release/pty.node"
-[[ -s "${pty_prebuild}" ]] || fail "Linux node-pty prebuild was not produced: ${pty_prebuild}"
-
-desktop_version="${VERSION}-construct.${BUILD_HASH:0:8}"
-output_dir="${ARTIFACT_ROOT}/build-${SOURCE_KEY}"
-note "Packaging unsigned Windows x64 installer..."
-WINEPREFIX="${CACHE_ROOT}/wine-${SOURCE_KEY}" WINEDEBUG=-all \
-  T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR=true \
-  node scripts/build-desktop-artifact.ts \
-    --platform win --target nsis --arch x64 --skip-build \
-    --build-version "${desktop_version}" --output-dir "${output_dir}" \
-    --wsl-prebuild "${pty_prebuild}"
-
-built_installer="$(find "${output_dir}" -maxdepth 1 -type f -name '*.exe' ! -name '*unpacked*' -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2-)"
-[[ -n "${built_installer}" && -s "${built_installer}" ]] || fail "electron-builder did not produce a Windows installer"
-cp "${built_installer}" "${INSTALLER_PATH}.tmp"
-mv -f "${INSTALLER_PATH}.tmp" "${INSTALLER_PATH}"
-chmod 0644 "${INSTALLER_PATH}"
-
+t3_recipe_compile
+chmod +x apps/server/dist/bin.mjs
 if [[ -d .git ]]; then
   commit="$(git rev-parse HEAD)"
 else
   commit="$(tr -d '[:space:]' <.construct-upstream-commit)"
 fi
-installer_sha="$(sha256sum "${INSTALLER_PATH}" | awk '{print $1}')"
-node - "${MANIFEST_PATH}.tmp" "${VERSION}" "${desktop_version}" "${CHANNEL}" "${TAG}" "${commit}" "${PATCH_HASH}" "${CONSTRUCT_VERSION}" "${BUILD_HASH}" "${installer_sha}" <<'NODE'
+node - "${SERVER_MANIFEST}.tmp" "${VERSION}" "${CHANNEL}" "${TAG}" "${commit}" "${PATCH_HASH}" "${CONSTRUCT_VERSION}" "${BUILD_HASH}" "${INVENTORY_NAME}" <<'NODE'
 const fs = require("node:fs");
-const [path, version, desktopVersion, channel, sourceTag, commit, patchHash, constructVersion, buildHash, sha256] = process.argv.slice(2);
-fs.writeFileSync(path, JSON.stringify({
-  version, desktopVersion, channel, sourceTag, commit, patchHash, constructVersion, buildHash, sha256,
-  installer: "T3Code-Construct-Setup.exe",
-  builtAt: new Date().toISOString(),
-}, null, 2) + "\n");
+const [path, version, channel, sourceTag, commit, patchHash, constructVersion, buildHash, inventory] = process.argv.slice(2);
+fs.writeFileSync(path, JSON.stringify({version, channel, sourceTag, commit, patchHash, constructVersion, buildHash, inventory}, null, 2) + "\n");
+NODE
+mv -f "${SERVER_MANIFEST}.tmp" "${SERVER_MANIFEST}"
+if [[ "${BUILD_MODE}" == server ]]; then activate_server; fi
+# Keep the previously active server until provisioning has restarted the service.
+# The compiler cache lives outside CACHE_ROOT and survives source-tree pruning.
+find "${CACHE_ROOT}" -mindepth 1 -maxdepth 1 -type d ! -name "${SOURCE_KEY}" \
+  ! -name "$(basename "${installed_dir:-none}")" -exec rm -rf -- {} +
+fi
+
+if [[ "${BUILD_MODE}" == server ]]; then
+  note "T3 server is ready; Windows packaging is deferred until the host needs it."
+  exit 0
+fi
+
+# A server-only provision does not discard a previously built installer. Reuse it
+# when another host later requests the same Desktop, without reinstalling deps.
+if [[ "$(t3_build_manifest_field "${MANIFEST_PATH}" version)" == "${VERSION}" &&
+      "$(t3_build_manifest_field "${MANIFEST_PATH}" channel)" == "${CHANNEL}" &&
+      "$(t3_build_manifest_field "${MANIFEST_PATH}" patchHash)" == "${PATCH_HASH}" &&
+      -s "${INSTALLER_PATH}" &&
+      "$(t3_build_manifest_field "${MANIFEST_PATH}" sha256)" == "$(sha256sum "${INSTALLER_PATH}" | awk '{print $1}')" ]]; then
+  if [[ "${BUILD_MODE}" == all ]]; then activate_server; fi
+  write_status yes
+  note "Windows installer is already cached; skipping packaging."
+  exit 0
+fi
+write_status no
+# Packaging can be requested long after the server was compiled; check its
+# current free space separately before installing the Windows toolchain.
+read -r tc_wine tc_store_mib tc_electron_mib tc_rust <<<"$(t3_build_toolchain_flags)"
+required_kb="$(t3_build_required_kb "${tc_wine}" "${tc_store_mib}" "${tc_electron_mib}" "${tc_rust}")"
+available_kb="$(df -Pk "${CACHE_ROOT}" | awk '{if (NR==2) print $4}')"
+[[ "${available_kb:-0}" -ge "${required_kb}" ]] || fail "Windows packaging needs $(( required_kb / 1048576 )) GiB free; $(( ${available_kb:-0} / 1024 )) MiB available"
+cd "${SOURCE_DIR}"
+export PATH="${SOURCE_DIR}/node_modules/.bin:/root/.cargo/bin:${PATH}"
+desktop_version="${VERSION}-construct.${BUILD_HASH:0:8}"
+output_dir="${ARTIFACT_ROOT}/build-${SOURCE_KEY}"
+t3_recipe_package "${desktop_version}" "${output_dir}"
+built_installer="$(find "${output_dir}" -maxdepth 1 -type f -name '*.exe' ! -name '*unpacked*' -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2-)"
+[[ -n "${built_installer}" && -s "${built_installer}" ]] || fail "electron-builder did not produce a Windows installer"
+cp "${built_installer}" "${INSTALLER_PATH}.tmp"
+mv -f "${INSTALLER_PATH}.tmp" "${INSTALLER_PATH}"
+chmod 0644 "${INSTALLER_PATH}"
+installer_sha="$(sha256sum "${INSTALLER_PATH}" | awk '{print $1}')"
+node - "${SERVER_MANIFEST}" "${MANIFEST_PATH}.tmp" "${desktop_version}" "${installer_sha}" <<'NODE'
+const fs = require("node:fs");
+const [server, path, desktopVersion, sha256] = process.argv.slice(2);
+const manifest = JSON.parse(fs.readFileSync(server, "utf8"));
+fs.writeFileSync(path, JSON.stringify({...manifest, desktopVersion, sha256,
+  installer: "T3Code-Construct-Setup.exe", builtAt: new Date().toISOString()}, null, 2) + "\n");
 NODE
 mv -f "${MANIFEST_PATH}.tmp" "${MANIFEST_PATH}"
-
-chmod +x apps/server/dist/bin.mjs
-ln -sfn "${SOURCE_DIR}/apps/server/dist/bin.mjs" /usr/local/bin/t3
-printf 'T3CODE_DESKTOP_READY=yes\nT3CODE_DESKTOP_VERSION=%s\nT3CODE_DESKTOP_CHANNEL=%s\nT3CODE_DESKTOP_INSTALLER=%s\nT3CODE_BUILD_KEY=%s\n' \
-  "${VERSION}" "${CHANNEL}" "${INSTALLER_PATH}" "${BUILD_HASH}" >"${STATUS_PATH}"
-
-# Keep only the selected channel build. pnpm's global content store retains shared
-# packages, while stale checked-out node_modules trees would otherwise consume the VM disk.
-find "${CACHE_ROOT}" -mindepth 1 -maxdepth 1 -type d ! -name "${SOURCE_KEY}" -exec rm -rf -- {} +
+if [[ "${BUILD_MODE}" == all ]]; then activate_server; fi
+write_status yes
 find "${ARTIFACT_ROOT}" -mindepth 1 -maxdepth 1 -type d -name 'build-*' -exec rm -rf -- {} +
 note "Patched T3 ${VERSION} server and Windows installer are ready."
