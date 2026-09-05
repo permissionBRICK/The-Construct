@@ -37,6 +37,11 @@ function Invoke-ScpFrom {
     }
 }
 function Get-Process { @() }
+function Invoke-WebRequest {
+    param($Uri, $OutFile, [switch]$UseBasicParsing)
+    $script:calls.Add('https-download')
+    Copy-Item $script:installer $OutFile
+}
 function Start-Process {
     param($FilePath, $ArgumentList, [switch]$Wait, [switch]$PassThru, $WindowStyle)
     Assert ($ArgumentList -join ' ' -eq '--updated /S') 'Unexpected install command'
@@ -97,6 +102,23 @@ try {
     $script:sha = 'a' * 64
     Run-Handoff
     Assert ($script:warnings.Count -eq 1 -and -not $script:calls.Contains('install')) 'Corrupt download must be rejected before installation'
+    $script:manifest.patchHash = 'c' * 64
+    $script:manifest.buildHash = 'd' * 64
+    $script:manifest.installationMode = 'prebuilt'
+    $script:manifest.sha256 = (Get-FileHash $script:installer -Algorithm SHA256).Hash.ToLowerInvariant()
+    $script:manifest.desktopVersion = '1.0.0-construct.prebuilt'
+    $script:manifest.downloadUrl = "https://github.com/permissionBRICK/construct-t3-builds/releases/download/t3-1.0.0-$('d' * 64)/T3Code-Construct-Setup.exe"
+    Remove-Item (Join-Path $root 'The-Construct/artifacts/t3code/T3Code-Construct-Setup.exe') -Force
+    Run-Handoff
+    Assert ($script:warnings.Count -eq 0) "Prebuilt handoff failed: $script:warnings"
+    Assert ($script:calls.Contains('https-download') -and $script:calls.Contains('install')) 'Prebuilt must download from GitHub and install'
+    Assert (-not $script:calls.Contains('package')) 'Prebuilt must never invoke local Windows packaging'
+    Run-Handoff
+    Assert ($script:calls.Count -eq 1) 'Second VM using prebuilt must skip download and install'
+    $script:manifest.patchHash = 'e' * 64
+    $script:manifest.downloadUrl = 'https://example.com/other.exe'
+    Run-Handoff
+    Assert ($script:warnings.Count -eq 1 -and -not $script:calls.Contains('https-download')) 'Non-release download URL must be rejected'
     Write-Host 'PASS: shared host tracking, deferred packaging/download, missing app, and failure handling'
 } finally {
     $env:LOCALAPPDATA = $previousLocalAppData

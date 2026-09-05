@@ -300,6 +300,14 @@ async function augmentAgents(agents, opts = {}) {
   if (!Array.isArray(agents)) return agents;
   return Promise.all(agents.map(async (a) => {
     if (!a || !a.id || !a.version || a.version === "—" || !AGENT_LATEST[a.id]) return a;
+    if (a.id === 't3code' && a.channel === 'stable' && a.installationMode === 'prebuilt') {
+      const manifest = await cached('agent:t3code:prebuilt', async () => {
+        const value = await (opts.fetchJson || fetchJson)('https://github.com/permissionBRICK/construct-t3-builds/releases/latest/download/manifest.json', opts);
+        return value && value.channel === 'stable' && /^[0-9a-f]{64}$/.test(value.buildHash) && extractVersion(value.version) ? value : null;
+      }, opts);
+      if (!manifest || manifest.buildHash === a.buildHash) return a;
+      return { ...a, latest: manifest.version, updateAvailable: true };
+    }
     // Thread the agent's probed channel so fetchAgentLatest hits the right registry tag.
     const agentOpts = a.id === "t3code" && a.channel ? { ...opts, t3codeChannel: a.channel } : opts;
     const latest = await fetchAgentLatest(a.id, agentOpts);

@@ -45,6 +45,8 @@ command -v codex    >/dev/null 2>&1 && emit V_CODEX    "$(ver codex)"
 command -v opencode >/dev/null 2>&1 && emit V_OPENCODE "$(ver opencode)"
 command -v t3       >/dev/null 2>&1 && emit V_T3       "$(ver t3)"
 emit T3_ACTIVE "$(systemctl is-active t3code-serve 2>/dev/null)"
+emit T3_INSTALLATION_MODE "$(sed -n 's/^T3CODE_INSTALLATION_MODE=//p' /etc/construct/t3code-desktop-status 2>/dev/null | head -1)"
+emit T3_BUILD_HASH "$(sed -n 's/^T3CODE_BUILD_KEY=//p' /etc/construct/t3code-desktop-status 2>/dev/null | head -1)"
 `;
 
 /**
@@ -241,6 +243,10 @@ function toState(map, opts = {}) {
       webui: map.T3_ACTIVE === "active",
       channel: t3ch === "nightly" ? "nightly" : "stable",
     };
+    if (map.T3_INSTALLATION_MODE === 'prebuilt') {
+      entry.installationMode = 'prebuilt';
+      entry.buildHash = (map.T3_BUILD_HASH || '').trim();
+    }
     if (t3origin) {
       entry.url = t3origin;
     } else if (opts.host) {

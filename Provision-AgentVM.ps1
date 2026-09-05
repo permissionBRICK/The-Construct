@@ -107,6 +107,9 @@ param(
     # ($envPrefix interpolates it into a single-quoted remote assignment).
     [ValidateSet("", "stable", "nightly")]
     [string]$T3CodeChannel = "",
+    # Stable patched builds default to the published pair; empty keeps the VM preference.
+    [ValidateSet("", "prebuilt", "local")]
+    [string]$T3CodeBuildSource = "",
     # Serve the T3 Code web GUI over HTTPS from the VM (nginx + a locally trusted
     # certificate; bin/setup-t3-https.sh). A browser only exposes getUserMedia on a
     # secure origin, so T3's client-side microphone capture needs it. On by default
@@ -246,6 +249,7 @@ $ErrorActionPreference = "Stop"
 # (bin/provision.sh reads T3CODE_HTTPS as "anything but the exact string false is
 # true", so an accepted -T3CodeHttps FALSE would silently mean ENABLED.)
 if ($T3CodeChannel) { $T3CodeChannel = $T3CodeChannel.ToLower() }
+if ($T3CodeBuildSource) { $T3CodeBuildSource = $T3CodeBuildSource.ToLower() }
 if ($T3CodeHttps) { $T3CodeHttps = $T3CodeHttps.ToLower() }
 
 # De-elevated child: signal the parent that Provision-AgentVM.ps1 has started
@@ -2340,7 +2344,7 @@ if ($VmTokenB64) {
     $tokenExport  = "export CONSTRUCT_VM_TOKEN_B64=`"`$(cat '$vmTokenRemotePath')`"; "
     $tokenCleanup = "; __rc=`$?; rm -f '$vmTokenRemotePath'; exit `$__rc"
 }
-$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit' CONSTRUCT_VERSION='$constructVersion' SMB_SHARE='$SmbShare' CLAUDE_PARTIAL_STREAMING='$ClaudePartialStreaming' MIC_PASSTHROUGH='$MicPassthrough' OPENCODE_BACKGROUND_WATCHER='$OpenCodeBackgroundWatcher' T3CODE='$T3Code' T3CODE_CHANNEL='$T3CodeChannel' T3CODE_LIMIT_RESUME='$T3CodeLimitResume' T3CODE_HTTPS='$T3CodeHttps'" + $externalEnv + $serviceEnv + " T3CODE_BUILD_MODE='server'"
+$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit' CONSTRUCT_VERSION='$constructVersion' SMB_SHARE='$SmbShare' CLAUDE_PARTIAL_STREAMING='$ClaudePartialStreaming' MIC_PASSTHROUGH='$MicPassthrough' OPENCODE_BACKGROUND_WATCHER='$OpenCodeBackgroundWatcher' T3CODE='$T3Code' T3CODE_CHANNEL='$T3CodeChannel' T3CODE_BUILD_SOURCE='$T3CodeBuildSource' T3CODE_LIMIT_RESUME='$T3CodeLimitResume' T3CODE_HTTPS='$T3CodeHttps'" + $externalEnv + $serviceEnv + " T3CODE_BUILD_MODE='server'"
 Write-Host "  --- live provisioning output ---" -ForegroundColor DarkGray
 $provisionStream = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "$tokenExport$envPrefix bash /opt/construct/repo/bin/provision.sh$tokenCleanup"
 Write-Host "  --- end provisioning output ---" -ForegroundColor DarkGray
@@ -2602,7 +2606,7 @@ if ($Action -eq 'provision') {
             $manifest = Get-Content -LiteralPath $manifestTemp -Raw | ConvertFrom-Json
             # One installed record per Windows user, shared across VM instances.
             # Decide from the server's version/channel/recipe BEFORE requesting an
-            # installer: a second VM only needs to compile its own Linux server.
+            # installer: a second VM can reuse the same published pair.
             $installedRecord = $null
             if (Test-Path -LiteralPath $installedManifest) {
                 try {
@@ -2645,19 +2649,28 @@ if ($Action -eq 'provision') {
                     }
                 }
             } else {
-                Write-Step "Preparing the Windows installer for T3 Code $($manifest.version)"
-                $desktopBuild = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "env REPO_DIR=/opt/construct/repo T3CODE_BUILD_MODE=desktop bash /opt/construct/repo/bin/build-t3code.sh"
-                if ($desktopBuild.ExitCode -ne 0) {
-                    throw "Patched T3 Desktop packaging failed (exit $($desktopBuild.ExitCode))."
-                }
-                Invoke-ScpFrom -RemotePath '/var/lib/construct/t3code-desktop/manifest.json' -LocalPath $manifestTemp
-                $packagedManifest = Get-Content -LiteralPath $manifestTemp -Raw | ConvertFrom-Json
-                foreach ($key in @('version', 'channel', 'patchHash', 'buildHash')) {
-                    if (-not $manifest.$key -or $manifest.$key -ne $packagedManifest.$key) {
-                        throw "The packaged T3 Desktop $key differs from the prepared VM server; provision again."
+                $isPrebuilt = $manifest.PSObject.Properties['installationMode'] -and $manifest.installationMode -eq 'prebuilt'
+                if ($isPrebuilt) {
+                    $expectedUrl = "https://github.com/permissionBRICK/construct-t3-builds/releases/download/t3-$($manifest.version)-$($manifest.buildHash)/T3Code-Construct-Setup.exe"
+                    if ($manifest.buildHash -notmatch '^[0-9a-f]{64}$' -or $manifest.version -notmatch '^\d+\.\d+\.\d+$' -or
+                        $manifest.channel -ne 'stable' -or $manifest.downloadUrl -cne $expectedUrl) {
+                        throw 'The prebuilt T3 Desktop manifest has an invalid release URL or identity.'
                     }
+                } else {
+                    Write-Step "Preparing the Windows installer for T3 Code $($manifest.version)"
+                    $desktopBuild = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "env REPO_DIR=/opt/construct/repo T3CODE_BUILD_MODE=desktop bash /opt/construct/repo/bin/build-t3code.sh"
+                    if ($desktopBuild.ExitCode -ne 0) {
+                        throw "Patched T3 Desktop packaging failed (exit $($desktopBuild.ExitCode))."
+                    }
+                    Invoke-ScpFrom -RemotePath '/var/lib/construct/t3code-desktop/manifest.json' -LocalPath $manifestTemp
+                    $packagedManifest = Get-Content -LiteralPath $manifestTemp -Raw | ConvertFrom-Json
+                    foreach ($key in @('version', 'channel', 'patchHash', 'buildHash')) {
+                        if (-not $manifest.$key -or $manifest.$key -ne $packagedManifest.$key) {
+                            throw "The packaged T3 Desktop $key differs from the prepared VM server; provision again."
+                        }
+                    }
+                    $manifest = $packagedManifest
                 }
-                $manifest = $packagedManifest
                 $expectedSha = ([string]$manifest.sha256).Trim().ToLowerInvariant()
                 if ($expectedSha -notmatch '^[0-9a-f]{64}$') {
                     throw 'The patched T3 Desktop manifest has no valid SHA-256.'
@@ -2670,7 +2683,11 @@ if ($Action -eq 'provision') {
                 if ($needsDownload) {
                     Write-Step "Downloading patched T3 Code Desktop $($manifest.desktopVersion) installer to this host"
                     $installerTemp = "$localInstaller.download"
-                    Invoke-ScpFrom -RemotePath '/var/lib/construct/t3code-desktop/T3Code-Construct-Setup.exe' -LocalPath $installerTemp
+                    if ($isPrebuilt) {
+                        Invoke-WebRequest -Uri $manifest.downloadUrl -OutFile $installerTemp -UseBasicParsing
+                    } else {
+                        Invoke-ScpFrom -RemotePath '/var/lib/construct/t3code-desktop/T3Code-Construct-Setup.exe' -LocalPath $installerTemp
+                    }
                     $downloadedSha = (Get-FileHash -LiteralPath $installerTemp -Algorithm SHA256).Hash.ToLowerInvariant()
                     if ($downloadedSha -ne $expectedSha) {
                         throw "Patched T3 Desktop installer hash mismatch (expected $expectedSha, got $downloadedSha)."
