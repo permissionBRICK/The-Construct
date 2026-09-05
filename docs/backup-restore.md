@@ -64,7 +64,12 @@ For the installed agents, from `root`'s home — never from inside the project r
   preference).
 - Global git config + credentials: `~/.gitconfig`, `~/.git-credentials`.
 - GitHub CLI login + config: `~/.config/gh/` (`hosts.yml` holds the `gh auth` token).
-  The `gh` CLI is installed by default during provisioning.
+  Saved regardless of `INCLUDE_AUTH`. The `gh` CLI is installed by default during
+  provisioning.
+- **GitLab CLI login + config**: `~/.config/glab-cli/` (`config.yml` holds host
+  tokens alongside settings). Saved only when auth is included —
+  `INCLUDE_AUTH=false` omits the entire directory. Restore overlays it into the
+  user's home, preserving the saved file permissions.
 - **npm registry auth**: `~/.npmrc`, so `npm publish`/installs from private registries keep
   working after a reinstall (it holds the registry `_authToken`). Saved only when auth is
   included — `INCLUDE_AUTH=false` omits it.
