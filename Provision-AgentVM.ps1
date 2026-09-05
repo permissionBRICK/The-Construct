@@ -1710,7 +1710,7 @@ if ($Action -eq 'provision') {
         $giParams = @{ Dir = $PSScriptRoot }
         if ($PSBoundParameters.ContainsKey('GitUserName')) { $giParams['Name']  = $GitUserName }
         if ($PSBoundParameters.ContainsKey('GitEmail'))    { $giParams['Email'] = $GitEmail }
-        if ($giParams.ContainsKey('Name') -and $giParams.ContainsKey('Email')) { $giParams['NoPrompt'] = $true }
+        if ($Auto -or $NonInteractive -or ($giParams.ContainsKey('Name') -and $giParams.ContainsKey('Email'))) { $giParams['NoPrompt'] = $true }
         $gitIdentity = Resolve-GitIdentity @giParams
     } else {
         $gitIdentity = @{ Name = $GitUserName; Email = $GitEmail }
@@ -2684,7 +2684,7 @@ if ($Action -eq 'provision') {
                     Write-Step "Downloading patched T3 Code Desktop $($manifest.desktopVersion) installer to this host"
                     $installerTemp = "$localInstaller.download"
                     if ($isPrebuilt) {
-                        Invoke-WebRequest -Uri $manifest.downloadUrl -OutFile $installerTemp -UseBasicParsing
+                        Receive-ConstructBinary -Uri $manifest.downloadUrl -OutFile $installerTemp
                     } else {
                         Invoke-ScpFrom -RemotePath '/var/lib/construct/t3code-desktop/T3Code-Construct-Setup.exe' -LocalPath $installerTemp
                     }
@@ -2727,7 +2727,7 @@ if ($Action -eq 'provision') {
                         Where-Object { $_.Name -notlike 'Uninstall*' } | Select-Object -First 1
                     if ($t3Exe) {
                         try {
-                            Start-Process -FilePath $t3Exe.FullName -WorkingDirectory $t3InstallRoot | Out-Null
+                            Start-T3DesktopDetached -FilePath $t3Exe.FullName -WorkingDirectory $t3InstallRoot
                             Write-Host "    T3 Code Desktop was running; restarted the updated app ($($t3Exe.Name))." -ForegroundColor DarkGray
                         } catch {
                             Write-Warning "T3 Code Desktop was closed by its updater and could not be restarted ($($_.Exception.Message)). Start it from the Start menu."

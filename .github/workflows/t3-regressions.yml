@@ -1,0 +1,36 @@
+name: T3 provisioning regressions
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Provision-AgentVM.ps1'
+      - 'lib/AgentVm.Common.ps1'
+      - 'extension/vm/construct-t3park-patch.mjs'
+      - 'test/t3*'
+      - '.github/workflows/t3-regressions.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-host:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Test Windows PowerShell 5.1 download, saved settings and console detachment
+        run: node test/t3-reprovision-host.test.mjs
+      - name: Test installer handoff and shared host cache
+        shell: powershell
+        run: ./test/t3-desktop-handoff.test.ps1
+  runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - run: node test/t3park-patch.test.mjs
+      - run: node test/t3-capacity-retry.test.mjs
+      - run: node test/t3-source-transform.test.mjs
