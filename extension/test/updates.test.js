@@ -415,6 +415,20 @@ function ok(name, cond, detail) {
   ok("augmentAgents: t3code alpha installed + nightly latest -> no update (non-nightly prerelease)",
     augT3alpha[0].updateAvailable === false);
 
+  const prebuiltAgent = { id: 't3code', version: '0.0.38', channel: 'stable', installationMode: 'prebuilt', buildHash: 'a'.repeat(64) };
+  const prebuiltUrl = 'https://github.com/permissionBRICK/construct-t3-builds/releases/latest/download/manifest.json';
+  const unchangedPair = await updates.augmentAgents([prebuiltAgent], { noCache: true, fetchJson: fakeByUrl({
+    [prebuiltUrl]: { channel: 'stable', version: '0.0.38', buildHash: 'a'.repeat(64) },
+    'https://registry.npmjs.org/t3/latest': { version: '0.0.39' },
+  }) });
+  ok('prebuilt updates: incompatible newer npm stable does not advertise an update', unchangedPair[0] === prebuiltAgent);
+  const patchedPair = await updates.augmentAgents([prebuiltAgent], { noCache: true, fetchJson: fakeByUrl({
+    [prebuiltUrl]: { channel: 'stable', version: '0.0.38', buildHash: 'b'.repeat(64) },
+  }) });
+  ok('prebuilt updates: changed patch hash on the same upstream version advertises an update', patchedPair[0].updateAvailable === true);
+  const offlinePair = await updates.augmentAgents([prebuiltAgent], { noCache: true, fetchJson: async () => null });
+  ok('prebuilt updates: unavailable release preserves current state', offlinePair[0] === prebuiltAgent);
+
   // ── augment folds agent updates into state ──────────────────────────────────
   const st = await updates.augment(
     { online: true, agents: [{ id: "codex", name: "Codex", version: "0.142.4", updateAvailable: false }] },

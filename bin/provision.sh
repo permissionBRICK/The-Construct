@@ -353,6 +353,12 @@ if [[ -f "${CONFIG_FILE}" ]]; then
 fi
 T3CODE_CHANNEL="${T3CODE_CHANNEL:-${_t3code_channel_saved:-stable}}"
 [[ "${T3CODE_CHANNEL}" == "nightly" ]] || T3CODE_CHANNEL=stable
+_t3code_build_source_saved=""
+if [[ -f "${CONFIG_FILE}" ]]; then
+  _t3code_build_source_saved="$(sed -n 's/^T3CODE_BUILD_SOURCE=//p' "${CONFIG_FILE}" | head -1 || true)"
+fi
+T3CODE_BUILD_SOURCE="${T3CODE_BUILD_SOURCE:-${_t3code_build_source_saved:-prebuilt}}"
+case "${T3CODE_BUILD_SOURCE}" in prebuilt|local) ;; *) echo "Invalid T3CODE_BUILD_SOURCE" >&2; exit 1 ;; esac
 # Serve the T3 web GUI over HTTPS (nginx in the VM, locally trusted certificate;
 # bin/setup-t3-https.sh). On by default whenever T3 Code is enabled -- a browser
 # only exposes getUserMedia() on a secure origin, so client-side microphone
@@ -532,6 +538,7 @@ note "    CLAUDE_PARTIAL_STREAMING=${CLAUDE_PARTIAL_STREAMING}"
 note "    MIC_PASSTHROUGH=${MIC_PASSTHROUGH}"
 note "    T3CODE=${T3CODE}"
 note "    T3CODE_CHANNEL=${T3CODE_CHANNEL}"
+note "    T3CODE_BUILD_SOURCE=${T3CODE_BUILD_SOURCE}"
 note "    T3CODE_HTTPS=${T3CODE_HTTPS}"
 note "    T3CODE_LIMIT_RESUME=${T3CODE_LIMIT_RESUME}"
 note "    OPENCODE_BACKGROUND_WATCHER=${OPENCODE_BACKGROUND_WATCHER}"
@@ -633,6 +640,7 @@ write_configuration() {
   cfg MIC_PASSTHROUGH "${MIC_PASSTHROUGH}" || return
   cfg T3CODE "${T3CODE}" || return
   cfg T3CODE_CHANNEL "${T3CODE_CHANNEL}" || return
+  cfg T3CODE_BUILD_SOURCE "${T3CODE_BUILD_SOURCE}" || return
   # Only carries information once T3 Code is in play (or a preference was saved
   # earlier), so a VM that never opted in keeps its config.env byte-identical.
   if [[ "${T3CODE}" == "true" || -n "${_t3code_https_saved:-}" ]]; then
@@ -971,7 +979,7 @@ if [[ "${T3CODE}" == "true" ]]; then
   fi
   run_step optional "Installing T3 Code web GUI" \
     env TARGET_USER="${CLAUDE_USER}" AI_TOOLS_OVERRIDE=t3code AI_CONSOLE_INTEGRATION=false \
-    T3CODE_CHANNEL="${T3CODE_CHANNEL}" T3CODE_LIMIT_RESUME="${T3CODE_LIMIT_RESUME}" \
+    T3CODE_BUILD_SOURCE="${T3CODE_BUILD_SOURCE}" T3CODE_CHANNEL="${T3CODE_CHANNEL}" T3CODE_LIMIT_RESUME="${T3CODE_LIMIT_RESUME}" \
     T3CODE_HTTPS="${T3CODE_HTTPS}" ${_t3_public_port_env[@]+"${_t3_public_port_env[@]}"} \
     bash "${REPO_DIR}/bin/install-ai-tools.sh"
 else

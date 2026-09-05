@@ -82,7 +82,7 @@ through re-indentation) and the list of `conflicts`.
   VM in the right panel, served through the T3 server behind a ticket, plus a composer
   banner and tab badge for the workflows the thread started.
 
-## Build cache and Windows handoff
+## Local build cache and Windows handoff
 
 `bin/t3code-build-recipe.sh` owns artifact-producing commands. Its contents, the
 source transformer, the selected channel inventory, and the two server patchers
@@ -91,7 +91,7 @@ the Construct commit and the orchestration code in `bin/build-t3code.sh` do not.
 Hash inputs use repository-relative paths and LF checkouts on Windows and Linux.
 Changes to build semantics belong in the recipe so they invalidate artifacts.
 
-Windows provisioning sets `T3CODE_BUILD_MODE=server`. The guest compiles shared
+For local builds, Windows provisioning sets `T3CODE_BUILD_MODE=server`. The guest compiles shared
 server/web/Desktop JavaScript once and writes `server-manifest.json` under
 `/var/lib/construct/t3code-desktop`. It skips all compilation on an unchanged
 build. The host compares that identity with its per-user, cross-VM record at
@@ -112,7 +112,7 @@ keeps the previous active server until provisioning can restart it. These caches
 survive reprovisioning, but a VM rebuild/reinstall removes them. JavaScript build
 outputs are reused for an identical build; changed source still recompiles.
 
-The new recipe identity requires one rebuild per VM on first upgrade, and one
+In local mode, the new recipe identity requires one rebuild per VM on first upgrade, and one
 Desktop installation per Windows user. Subsequent VMs with the same T3 version,
 channel, and recipe skip Windows packaging, download, and installation.
 
@@ -132,3 +132,45 @@ the output channel. This lets the separate publisher test a prepared nightly
 inventory against a new stable tag without adding compatibility branches to any
 patch. Desktop packaging retains the inventory from `server-manifest.json`.
 The service restart key includes the upstream version as well as the patch hash.
+
+## Prebuilt stable pairs
+
+Patched stable provisioning now defaults to downloading the last validated pair
+from [construct-t3-builds](https://github.com/permissionBRICK/construct-t3-builds).
+That public repo owns its workflow and releases. It polls npm stable and Construct
+main every 30 minutes; unrelated commits reuse the same binaries. If the release
+inventory cannot apply to a new stable, it tries the complete nightly inventory
+against that exact stable source. Failed patch checks/builds preserve the last
+published pair. No cross-repository credential is needed.
+
+The VM downloads `manifest.json`, then the immutable Linux asset URL from it,
+verifies SHA-256 and size, extracts the runtime, and checks startup before changing
+the launcher. Node and the native runtime dependencies are bundled; the VM does
+not install build tools or compile T3. A matching cached runtime skips download
+and extraction. Windows downloads its matched EXE directly from GitHub only when
+the host's shared installed record differs. Nightly still uses the local builder.
+The panel's prebuilt update check follows the published pair's identity, including
+patch-only updates, rather than independently following npm latest.
+
+To opt into local builds, provision with:
+
+```powershell
+.\Provision-AgentVM.ps1 -Action provision -T3CodeBuildSource local
+```
+
+Or set `T3CODE_BUILD_SOURCE=local` in `/etc/construct/config.env` on the VM.
+`prebuilt` switches back. Empty/omitted keeps the saved preference. Download errors
+are reported without silently launching an expensive local build. The stable
+pair can intentionally lag npm latest until a compatible patch is published.
+
+Prebuilt runtimes live under `/var/cache/construct/t3code-prebuilt/<buildHash>`.
+Old runtime directories remain available so a still-running process is never
+modified or removed mid-session. After successful activation outside a T3 session,
+unused old directories can be removed. The installer itself never restarts T3;
+normal provisioning owns activation. Isolated verification:
+
+```sh
+python3 test/t3-prebuilt.test.py -v
+pwsh -NoProfile -File test/t3-desktop-handoff.test.ps1
+node extension/test/updates.test.js
+```

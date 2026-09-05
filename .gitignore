@@ -8,3 +8,6 @@ runtime/
 # Saved agent config exported from the VM (auth tokens, memory, skills, project
 # profiles) for restore-after-reinstall. Contains PLAINTEXT secrets; never committed.
 .construct-backup/
+
+# Generated Python caches
+__pycache__/
