@@ -33,6 +33,7 @@ AI_CONSOLE_INTEGRATION="${AI_CONSOLE_INTEGRATION:-true}"
 _external_host_override="${CONSTRUCT_EXTERNAL_HOST:-}"
 # Same rule for the T3 HTTPS keys: provision.sh (and the panel) pass the resolved
 # preference in the environment, which must win over whatever config.env holds.
+_t3_build_source_override="${T3CODE_BUILD_SOURCE:-}"
 _t3_https_override="${T3CODE_HTTPS:-}"
 _t3_https_port_override="${T3CODE_HTTPS_PORT:-}"
 # The port a CLIENT reaches the TLS listener on: set only on a service-managed VM,
@@ -84,6 +85,7 @@ T3CODE_HOST="${T3CODE_HOST:-0.0.0.0}"
 T3CODE_PORT="${T3CODE_PORT:-5177}"
 # Channel ("stable"|"nightly") decides the npm dist-tag. stable -> @latest,
 # nightly -> @nightly. Anything that isn't exactly "nightly" normalizes to stable.
+T3CODE_BUILD_SOURCE="${_t3_build_source_override:-${T3CODE_BUILD_SOURCE:-prebuilt}}"
 T3CODE_CHANNEL="${T3CODE_CHANNEL:-stable}"
 [[ "${T3CODE_CHANNEL}" == "nightly" ]] || T3CODE_CHANNEL=stable
 # Serve the T3 web GUI over HTTPS through a local nginx (bin/setup-t3-https.sh).
@@ -837,21 +839,24 @@ t3_node_ok() {
 }
 
 install_t3code() {
-  local t3_bin resolved t3_bundle _wanted_t3_build _active_t3_build _t3_stock_key _t3_stock_unchanged=false
+  local _t3_prebuilt=false t3_bin resolved t3_bundle _wanted_t3_build _active_t3_build _t3_stock_key _t3_stock_unchanged=false
   step "Installing T3 Code (t3 CLI + web GUI server)"
 
-  # Construct's optional T3 feature set is built from one upstream source tag.
-  # That checkout produces both the VM server and the Windows Desktop installer,
-  # so renderer/RPC changes cannot drift between the two ends. The build script
-  # resolves latest/nightly through npm, caches identical builds, and leaves an
-  # already-installed version untouched if a future upstream tag rejects the
-  # guarded source-transform recipe.
+  # Patched stable defaults to the published, validated server/Desktop pair.
+  # Explicit local builds and nightly use one source tag for both ends.
   if [[ "${T3CODE_LIMIT_RESUME:-false}" == "true" ]]; then
-    step "Building Construct's patched T3 server + Windows Desktop app"
-    if ! env REPO_DIR="${REPO_DIR}" T3CODE_CHANNEL="${T3CODE_CHANNEL}" \
-      bash "${REPO_DIR}/bin/build-t3code.sh"; then
-      err "patched T3 source/Desktop build failed; the previous T3 install was left in place"
-      return 1
+    case "${T3CODE_BUILD_SOURCE}" in prebuilt|local) ;; *) err "Invalid T3CODE_BUILD_SOURCE"; return 1 ;; esac
+    if [[ "${T3CODE_CHANNEL}" == stable && "${T3CODE_BUILD_SOURCE}" == prebuilt ]]; then
+      step "Installing Construct's prebuilt stable T3 pair"
+      python3 "${REPO_DIR}/bin/install-t3code-prebuilt.py" || return 1
+      _t3_prebuilt=true
+    else
+      step "Building Construct's patched T3 server + Windows Desktop app"
+      if ! env REPO_DIR="${REPO_DIR}" T3CODE_CHANNEL="${T3CODE_CHANNEL}" \
+        bash "${REPO_DIR}/bin/build-t3code.sh"; then
+        err "patched T3 source/Desktop build failed; the previous T3 install was left in place"
+        return 1
+      fi
     fi
   else
     # A stock install must not leave a prior patched Desktop artifact advertised
@@ -928,6 +933,9 @@ install_t3code() {
     ln -sf "${resolved}" /usr/local/bin/t3
   fi
   t3_bundle="$(readlink -f "$(command -v t3)" 2>/dev/null || command -v t3)"
+  if [[ "${_t3_prebuilt}" == true ]]; then
+    t3_bundle="$(dirname "$(dirname "${t3_bundle}")")/apps/server/dist/bin.mjs"
+  fi
 
   # Persist the bind settings so the unit's EnvironmentFile always defines them
   # (an older config.env predating T3 Code has no T3CODE_* keys, and systemd
@@ -993,11 +1001,13 @@ install_t3code() {
   # bundle transforms here is idempotent and also keeps stock-mode reversion
   # behavior compatible with older Construct-provisioned installs.
   if [[ "${T3CODE_LIMIT_RESUME:-false}" == "true" ]]; then
-    step "Applying T3 Code extra-feature patches"
-    node "${REPO_DIR}/extension/vm/construct-t3park-patch.mjs" apply --bundle "${t3_bundle}" \
-      || warn "WARNING: usage-limit auto-resume patch not applied (see above); t3 runs stock"
-    node "${REPO_DIR}/extension/vm/construct-t3-opencode-monitor-patch.mjs" apply --bundle "${t3_bundle}" \
-      || warn "WARNING: OpenCode background-monitoring patch not applied (see above); t3 continues without it"
+    if [[ "${_t3_prebuilt}" != true ]]; then
+      step "Applying T3 Code extra-feature patches"
+      node "${REPO_DIR}/extension/vm/construct-t3park-patch.mjs" apply --bundle "${t3_bundle}" \
+        || warn "WARNING: usage-limit auto-resume patch not applied (see above); t3 runs stock"
+      node "${REPO_DIR}/extension/vm/construct-t3-opencode-monitor-patch.mjs" apply --bundle "${t3_bundle}" \
+        || warn "WARNING: OpenCode background-monitoring patch not applied (see above); t3 continues without it"
+    fi
   else
     node "${REPO_DIR}/extension/vm/construct-t3park-patch.mjs" revert --bundle "${t3_bundle}" >/dev/null 2>&1 || true
     node "${REPO_DIR}/extension/vm/construct-t3-opencode-monitor-patch.mjs" revert --bundle "${t3_bundle}" >/dev/null 2>&1 || true
