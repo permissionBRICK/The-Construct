@@ -5,3 +5,8 @@
 *.sh        text eol=lf
 /bin/construct text eol=lf
 bootstrap.sh   text eol=lf
+# These bytes form T3's cross-VM build identity; Windows checkouts must agree.
+/bin/apply-t3code-source.mjs text eol=lf
+/extension/vm/construct-t3*-patch.mjs text eol=lf
+/patches/t3code-release/** text eol=lf
+/patches/t3code-nightly/** text eol=lf

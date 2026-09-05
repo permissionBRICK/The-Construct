@@ -47,6 +47,9 @@ ok "a non-integer override is ignored" "$([[ "$(T3CODE_BUILD_MIN_FREE_GIB=lots t
 ok "an empty override is ignored" "$([[ "$(T3CODE_BUILD_MIN_FREE_GIB= t3_build_required_kb 1 3072 250 1)" == "$(gib 6)" ]] && echo true || echo false)"
 ok "the override result is never negative (9999 GiB stays positive)" "$([[ "$(T3CODE_BUILD_MIN_FREE_GIB=9999 t3_build_required_kb 0 0 0 0)" -gt 0 ]] && echo true || echo false)"
 
+ok "server-only cold build does not budget Wine or Windows Rust" "$([[ "$(t3_build_required_kb 0 0 0 0 server)" == "$(gib 7)" ]] && echo true || echo false)"
+ok "server-only warm build needs 3 GiB" "$([[ "$(t3_build_required_kb 1 3072 250 1 server)" == "$(gib 3)" ]] && echo true || echo false)"
+
 # ── t3_build_prune_candidates (the INSTALLED build keeps its runtime set) ────
 B="${TMP}/build with space"
 mkdir -p "${B}/.git" "${B}/node_modules/.pnpm/node-pty@1/node_modules/node-pty" "${B}/apps/server/dist/client" \
@@ -157,7 +160,7 @@ S="${REPO}/bin/build-t3code.sh"
 ok "script no longer hardcodes the 15 GiB kB constant" "$(grep -q '15728640' "${S}" && echo false || echo true)"
 ok "helpers + _FUNCS_ONLY guard sit above set -Eeuo pipefail" "$([[ "$(grep -n '_FUNCS_ONLY' "${S}" | head -1 | cut -d: -f1)" -lt "$(grep -n '^set -Eeuo pipefail' "${S}" | cut -d: -f1)" ]] && echo true || echo false)"
 ok "script derives the requirement from the toolchain probe" "$(grep -q 't3_build_required_kb "\${tc_wine}" "\${tc_store_mib}" "\${tc_electron_mib}" "\${tc_rust}"' "${S}" && echo true || echo false)"
-ok "script resolves the installed build before pruning" "$(grep -q 'installed_dir="\$(t3_build_installed_dir /usr/local/bin/t3)"' "${S}" && echo true || echo false)"
+ok "script resolves the installed build before pruning" "$(grep -q 'installed_dir="\$(t3_build_installed_dir "\${LAUNCHER}")"' "${S}" && echo true || echo false)"
 ok "script prunes the installed build only via the candidate list" "$(grep -q 't3_build_prune_candidates "\${stale_dir}"' "${S}" && echo true || echo false)"
 ok "script removes other superseded builds whole" "$(grep -q 'Removing superseded T3 build' "${S}" && echo true || echo false)"
 ok "script never prunes the build it is about to produce" "$(grep -q '"\${stale_dir}" == "\${SOURCE_DIR}" \]\] && continue' "${S}" && echo true || echo false)"
@@ -177,7 +180,7 @@ EOF
 ok "nightly fallback selects the newest validated repair ref" "$([[ "$(printf '%s\n' "${refs}" | t3_build_latest_nightly_fix_ref)" == "refs/heads/fix/upstream-t3-nightly-0.0.39-nightly.20260903.1272-2026-09-03" ]] && echo true || echo false)"
 ok "nightly fallback ignores input without a repair branch" "$([[ -z "$(printf '%s\n' "${refs}" | grep -v upstream-t3-nightly | t3_build_latest_nightly_fix_ref)" ]] && echo true || echo false)"
 ok "build selects the release or nightly inventory by channel" "$(grep -q 'INVENTORY_NAME=release' "${S}" && grep -q 't3code-\${INVENTORY_NAME}/source-transforms.json' "${S}" && ! grep -q -- '--channel' "${S}" && echo true || echo false)"
-ok "a rejected transform set fails the build instead of switching inventories" "$(grep -q 'do not apply to T3 Code \${TAG}' "${S}" && echo true || echo false)"
+ok "a rejected transform set fails the build instead of switching inventories" "$(grep -q 'do not apply to T3 Code \${TAG}' "${REPO}/bin/t3code-build-recipe.sh" && echo true || echo false)"
 
 printf '  t3-build-diskcheck tests — %d passed, %d failed\n' "${pass}" "${fail}"
 [[ "${fail}" -eq 0 ]]
