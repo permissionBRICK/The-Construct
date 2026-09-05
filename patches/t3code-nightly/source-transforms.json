@@ -9,6 +9,7 @@
     "apps/server/src/constructOmniloop.ts",
     "apps/server/src/constructOmniloopProxy.test.ts",
     "apps/server/src/constructOmniloopProxy.ts",
+    "apps/server/src/constructPwa.test.ts",
     "apps/server/src/publicBaseUrl.test.ts",
     "apps/server/src/publicBaseUrl.ts",
     "apps/server/src/voiceInput.test.ts",
@@ -780,6 +781,16 @@
       "path": "apps/web/public/manifest.webmanifest",
       "after": "\"icons\": [",
       "insert": "    {\n      \"src\": \"/construct-pwa-icon.svg\",\n      \"sizes\": \"any\",\n      \"type\": \"image/svg+xml\"\n    },\n"
+    },
+    {
+      "path": "apps/server/src/http.ts",
+      "before": "import Mime from \"@effect/platform-node/Mime\";",
+      "insert": "import { hostname as constructPwaHostname } from \"node:os\";\n"
+    },
+    {
+      "path": "apps/server/src/http.ts",
+      "after": "const staticRoot = path.resolve(staticDir);",
+      "insert": "    if (url.value.pathname === \"/manifest.webmanifest\") {\n      const constructManifestFs = yield* FileSystem.FileSystem;\n      // @effect-diagnostics-next-line preferSchemaOverJson:off - preserve the upstream-owned manifest.\n      const manifest = JSON.parse(\n        yield* constructManifestFs.readFileString(path.join(staticRoot, \"manifest.webmanifest\")),\n      );\n      const instance = process.env.CONSTRUCT_INSTANCE_NAME?.trim() || constructPwaHostname();\n      // @effect-diagnostics-next-line preferSchemaOverJson:off - serialize the upstream manifest with VM labels.\n      return HttpServerResponse.text(JSON.stringify({\n        ...manifest,\n        name: `T3 Code (${instance})`,\n        short_name: `T3 ${instance}`,\n      }), {\n        contentType: \"application/manifest+json\",\n        headers: { \"Cache-Control\": \"no-cache\" },\n      });\n    }\n"
     }
   ]
 }
