@@ -24,6 +24,7 @@ public sealed class NativeIsoBuilderTests
         Assert.Equal(Tool, call.FileName);
         Assert.Equal(["--request-stdin"], call.Arguments);
         using var json = JsonDocument.Parse(call.StandardInput!);
+        Assert.True(json.RootElement.GetProperty("Overwrite").GetBoolean());
         Assert.Equal(secret, json.RootElement.GetProperty("Password").GetString());
         Assert.Equal(Source, json.RootElement.GetProperty("SourceIso").GetString());
         Assert.Equal(Output, json.RootElement.GetProperty("OutputIso").GetString());

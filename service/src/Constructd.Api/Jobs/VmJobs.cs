@@ -23,7 +23,8 @@ public static class VmJobs
         VmDescriptor descriptor,
         string actor,
         IProgress<string> progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool redownload = false)
     {
         await using var scope = scopes.CreateAsyncScope();
         var services = scope.ServiceProvider;
@@ -54,7 +55,7 @@ public static class VmJobs
                 seedPassword,
                 options.Iso.BootstrapPublicKeyPath,
                 progress,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken, redownload).ConfigureAwait(false);
 
             vmMayExist = true;
             await driver.CreateVmAsync(descriptor with { IsoPath = isoPath }, progress, cancellationToken)

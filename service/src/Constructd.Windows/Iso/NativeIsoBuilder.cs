@@ -27,7 +27,9 @@ public sealed class NativeIsoBuilder(IProcessRunner processes, IIsoFileSystem fi
         {
             SourceIso = sourceIso, OutputIso = outputIso, BootstrapPublicKeyPath = pubKey,
             User = user, Password = password, Hostname = Identity("VM_HOST", "agent-vm"),
-            HostnameSource = Identity("VM_HOSTNAME_SOURCE", "static"), SourceId = sourceId
+            HostnameSource = Identity("VM_HOSTNAME_SOURCE", "static"), SourceId = sourceId,
+            // The catalog reserves a new output with an empty file before invoking us.
+            Overwrite = true
         });
         return _processes.RunAsync(builderPath, ["--request-stdin"], request, BuildTimeout, progress, cancellationToken);
     }

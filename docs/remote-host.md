@@ -119,16 +119,17 @@ you dial* change.
    `admin iso build` uses the configured native executable (`Iso:NativeBuilderPath`).
    `Install-ConstructHost.ps1 -IsoBuildOnly` also refreshes that executable from local
    source or the pinned release before building.
-   The service only consumes what is published. A rebuild never overwrites the ISO in
+   The service reuses published media, builds missing media on demand, and downloads and
+   patches fresh media when a client selects Redownload. Configure `Iso:SourceUrl` for
+   redownload; see [native ISO builds](native-iso.md). A rebuild never overwrites the ISO in
    place — Hyper-V holds an open handle on media a VM has attached — it writes
    `construct-autoinstall-<utc>.iso` next to it, with a sidecar recording when it was
    built, from which source ISO and SHA-256, and which bootstrap key fingerprint is inside;
    then the `current.pointer` swap makes it the one new VMs get. `.\service\host\Install-ConstructHost.ps1
    -IsoBuildOnly` does the same from the installer.
 
-   > **No media, no VMs.** Creating a VM fails with *"No autoinstall ISO is available on
-   > this host"* and the exact command to fix it. That is also what `-SkipIsoBuild` leaves
-   > behind on purpose.
+   > **Deferred media build.** With `-SkipIsoBuild`, the native tool is installed and
+   > the first VM creation downloads and patches media on the host.
 
 4. **Add a user and issue their token.** The admin CLI is the same executable and works
    the stores directly — no HTTP, no listener, no authentication beyond already being an

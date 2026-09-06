@@ -13,6 +13,7 @@ public sealed class FakeIsoBuilder : IIsoBuilder
 
     /// <summary>Every build this fake was asked for, in order.</summary>
     public List<string> Built { get; } = [];
+    public List<bool> Redownloads { get; } = [];
 
     public Task<string> BuildAsync(
         string vmName,
@@ -20,7 +21,8 @@ public sealed class FakeIsoBuilder : IIsoBuilder
         string seedPassword,
         string bootstrapPubKeyPath,
         IProgress<string>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool redownload = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -33,6 +35,7 @@ public sealed class FakeIsoBuilder : IIsoBuilder
         lock (Built)
         {
             Built.Add(vmName);
+            Redownloads.Add(redownload);
         }
 
         var path = $"/fake/isos/{vmName}-autoinstall.iso";

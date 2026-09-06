@@ -214,10 +214,8 @@ public sealed class PowerOptions
 public enum IsoBuildMode
 {
     /// <summary>
-    /// The service consumes media an administrator built once, interactively
-    /// (<c>constructd admin iso build</c>), and published into the ISO catalog. The default, because
-    /// WSL refuses to run as LocalSystem (<c>WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED</c>) and that is the
-    /// identity the service runs as. The guest takes its name from the hypervisor at first boot.
+    /// Compatibility name for native catalog media. Reuse published media, build missing media
+    /// on demand, and download and rebuild when a client requests redownload.
     /// </summary>
     Prebuilt,
 
@@ -227,7 +225,7 @@ public enum IsoBuildMode
     /// </summary>
     PerVm,
 
-    /// <summary>Build generic media with the self-contained .NET tool; consume it through the catalog.</summary>
+    /// <summary>Build generic media on demand with the self-contained .NET tool; cache it through the catalog.</summary>
     Native,
 
     /// <summary>

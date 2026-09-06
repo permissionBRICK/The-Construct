@@ -116,7 +116,9 @@ public sealed class WslIsoBuilderTests
 
         var cached = @"C:\ProgramData\Construct\service\iso\ubuntu-24.04.3-live-server-amd64.iso";
         Assert.Single(downloader.Downloads);
-        Assert.Equal(cached, downloader.Downloads[0].Destination);
+        Assert.StartsWith(cached + ".", downloader.Downloads[0].Destination);
+        Assert.False(files.FileExists(downloader.Downloads[0].Destination));
+        Assert.True(files.FileExists(cached));
         Assert.Contains(
             "/mnt/c/ProgramData/Construct/service/iso/ubuntu-24.04.3-live-server-amd64.iso",
             runner[1].Arguments);

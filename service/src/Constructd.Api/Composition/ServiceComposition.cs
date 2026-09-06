@@ -273,11 +273,12 @@ public static class ServiceComposition
         {
             case IsoBuildMode.Prebuilt:
             case IsoBuildMode.Native:
-                services.AddSingleton<IIsoBuilder>(sp => new PrebuiltIsoBuilder(
+                services.AddSingleton<IIsoBuilder>(sp => new OnDemandIsoBuilder(
                     sp.GetRequiredService<IIsoCatalog>(),
+                    sp.GetRequiredService<IIsoMediaBuilder>(),
                     sp.GetRequiredService<IIsoFileSystem>(),
-                    options,
-                    sp.GetRequiredService<ILoggerFactory>().CreateLogger<PrebuiltIsoBuilder>()));
+                    sp.GetRequiredService<IClock>(),
+                    options));
                 break;
 
             case IsoBuildMode.PerVm:

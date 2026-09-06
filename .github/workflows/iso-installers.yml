@@ -33,6 +33,8 @@ jobs:
         run: |
           ./test/native-iso-host.test.ps1
           ./service/tests/host-installer.test.ps1
+          ./test/remote-driver.test.ps1
+          ./test/remote-install.test.ps1
       - name: Download and run the pinned executable
         shell: powershell
         run: |

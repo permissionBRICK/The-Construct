@@ -44,19 +44,25 @@ Omit `-SkipCreateVm` for a normal local installation. `-Force` rebuilds existing
 the tool replaces it only after a complete new image is ready. If Hyper-V holds the old
 ISO open, replacement fails and preserves the old file.
 
-For an existing remote host, first publish/deploy the updated service so its native
-builder adapter is available, then rebuild its catalog media:
+For an existing remote host, publish and deploy the updated service and run the host
+installer to install the native executable. Updating the client scripts alone does not
+upgrade the running host service. `-SkipIsoBuild` installs the executable and defers the
+first media build until a VM is requested; `-IsoBuildOnly` remains available for an
+explicit administrative rebuild.
 
-```powershell
-dotnet publish .\service\src\Constructd.Api -c Release -r win-x64 --self-contained true -o .\service\publish
-.\service\host\Install-ConstructHost.ps1 -IsoBuildOnly
-```
+Both `Native` and the legacy `Prebuilt` configuration now build missing media on demand.
+Normal installations reuse the published ISO. Remote **Redownload**, `-Redownload`, or
+`-Action redownload` sends `opts.redownload=true` in the create request: the service
+fetches `Iso:SourceUrl` again, verifies `Iso:Sha256` when configured, patches a new
+versioned ISO with the native tool, publishes it, and then creates the VM. Progress
+streams through the existing installation job.
 
-The normal host installer writes `Iso:Mode=Native` and `Iso:NativeBuilderPath`. ISO-only
-rebuilds also select the native tool when upgrading an older configuration. `Native` and
-`Prebuilt` consume versioned catalog images and use the native producer; existing VMs keep
-their attached image. The catalog's `BuildScriptSha256` provenance field records the
-executable hash for native builds.
+The source URL is chosen by the host administrator; redownload does not change the
+configured Ubuntu release. A host configured only with `Iso:SourcePath` must also set
+`Iso:SourceUrl` to support redownload. During redownload, the URL takes precedence over
+the local source path. Failed downloads or checksum checks preserve the previous source;
+failed builds preserve the published ISO. Existing VMs keep their attached version.
+The catalog's `BuildScriptSha256` provenance field records the executable hash.
 
 The initial real-image validation uses Ubuntu Server **24.04.4 amd64**. The tool checks
 the ISO layout and rejects unsupported images. Its repository contains the real-image

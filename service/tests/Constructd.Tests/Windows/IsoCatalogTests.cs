@@ -401,8 +401,8 @@ public sealed class IsoCatalogTests
     // ── Mode wiring ──────────────────────────────────────────────────────────────────────────────
 
     [Theory]
-    [InlineData(IsoBuildMode.Prebuilt, typeof(PrebuiltIsoBuilder))]
-    [InlineData(IsoBuildMode.Native, typeof(PrebuiltIsoBuilder))]
+    [InlineData(IsoBuildMode.Prebuilt, typeof(OnDemandIsoBuilder))]
+    [InlineData(IsoBuildMode.Native, typeof(OnDemandIsoBuilder))]
     [InlineData(IsoBuildMode.PerVm, typeof(WslIsoBuilder))]
     public void The_mode_decides_which_strategy_the_job_gets(IsoBuildMode mode, Type expected)
     {

@@ -2116,6 +2116,8 @@ if ($RemoteInstall) {
     # returns and no local code runs afterwards.
     . $driverLoader -Backend "hyperv-remote" -ServiceUrl $svcUrl -Auth $remoteAuth
 
+    $remoteRedownload = [bool]$Redownload -or $Action -eq 'redownload'
+
     # ═══ An instance that already exists: reprovision / reinstall / export ════
     if ($existingEntry) {
         $instName = [string]$existingEntry.Name
@@ -2140,7 +2142,7 @@ if ($RemoteInstall) {
             $choice = switch ($Action) {
                 'reprovision' { 0 }
                 'reinstall'   { 1 }
-                'redownload'  { 1 }   # the host owns its source image; a rebuild is a rebuild
+                'redownload'  { 1 }
                 'export'      { 2 }
                 default       { -1 }
             }
@@ -2151,15 +2153,20 @@ if ($RemoteInstall) {
                 throw "-Action $Action is not available for the remote instance '$InstanceName' in this build. Use reprovision, reinstall or export."
             }
             Write-Note "Action selected by the control panel: $Action"
+        } elseif ($Redownload) {
+            $choice = 1
         } else {
             $choice = Show-Menu -Title "What would you like to do?" -Options @(
                 "Reprovision      re-run provisioning on the existing VM (keeps all data)",
                 "Reinstall        DELETE the VM on the host and build + install a fresh one",
                 "Export config    save the VM's current agent config + auth to this host (no changes to the VM)",
                 "Remove instance  DELETE the VM on the host and forget it on this PC",
-                "Quit             make no changes and exit"
+                "Quit             make no changes and exit",
+                "Redownload       DELETE the VM, download and patch a fresh ISO on the host, then install"
             ) -Default 0
         }
+
+        if ($choice -eq 5) { $remoteRedownload = $true; $choice = 1 }
 
         if ($choice -eq 2) {
             try {
@@ -2478,6 +2485,7 @@ if ($RemoteInstall) {
                         DiskGB               = $chosenDiskGB
                         Nested               = $true
                         AutomaticCheckpoints = $false
+                        Redownload           = $remoteRedownload
                     }
     # The size this VM was created with, recorded as the control panel's settings for
     # THIS instance (vmMemoryGB / vmDiskGB / vmCpuCount): the panel shows them and a

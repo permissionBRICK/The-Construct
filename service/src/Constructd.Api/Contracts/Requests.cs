@@ -13,7 +13,7 @@ public sealed record CreateVmRequest(string? Name, int? Cpu, int? RamGb, int? Di
 /// <param name="Nested">Expose virtualization extensions to the guest.</param>
 /// <param name="AutomaticCheckpoints">Hyper-V automatic checkpoints (capability-gated).</param>
 /// <param name="IdlePolicy">Initial idle policy; the service default is used when omitted.</param>
-public sealed record CreateVmOptions(bool? Nested, bool? AutomaticCheckpoints, IdlePolicyRequest? IdlePolicy);
+public sealed record CreateVmOptions(bool? Nested, bool? AutomaticCheckpoints, IdlePolicyRequest? IdlePolicy, bool? Redownload = null);
 
 public sealed record PowerRequest(string? Action);
 

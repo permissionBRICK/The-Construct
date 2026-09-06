@@ -39,7 +39,8 @@ public sealed record IsoMediaRequest(
     string SeedUser,
     string SeedPassword,
     string BootstrapPublicKeyPath,
-    string HostnameSource);
+    string HostnameSource,
+    bool Redownload = false);
 
 /// <summary>
 /// The finished media plus everything the catalog records about it, so that "what is this ISO?" can

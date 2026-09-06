@@ -87,9 +87,8 @@
     they can write in the data directory is the authorization database.
 
 .PARAMETER SkipIsoBuild
-    Do NOT build the autoinstall ISO. The install finishes without install media,
-    and VM creation fails until you build it:
-        <PublishDir>\Constructd.Api.exe admin iso build
+    Defer building the autoinstall ISO until the first VM creation. The native
+    executable is still installed so the service can download and patch on demand.
 
 .PARAMETER IsoBuildOnly
     Only (re)build the autoinstall ISO on an existing install and exit. Nothing
@@ -1432,7 +1431,10 @@ Write-Ok $settingsPath
 
 Write-Step "Building the autoinstall ISO with the native .NET tool"
 if ($SkipIsoBuild) {
-    Write-Warning "-SkipIsoBuild: no install media was built, so creating a VM will fail until you run:"
+    if ($PSCmdlet.ShouldProcess($ScriptsDir, "Install the native ISO builder for on-demand service builds")) {
+        [void](Resolve-ConstructIsoBuilder -ScriptsDir $ScriptsDir)
+    }
+    Write-Note "-SkipIsoBuild: the host will build media on the first VM creation. To build it now:"
     Write-Host "    & `"$exe`" admin iso build" -ForegroundColor Yellow
 } else {
     Invoke-ConstructIsoBuild -Exe $exe
@@ -1547,7 +1549,7 @@ if ($token) {
 }
 Write-Host ""
 if ($SkipIsoBuild) {
-    Write-Host "  NO INSTALL MEDIA: creating a VM will fail until you build it." -ForegroundColor Yellow
+    Write-Host "  Install media will be built on demand when the first VM is created." -ForegroundColor Yellow
     Write-Host "    & `"$exe`" admin iso build"
 } else {
     Write-Host "  Autoinstall ISO:"

@@ -667,8 +667,8 @@ ok "the published path is read from the CLI's last line" ($installText -match '\
 ok "the build streams while it runs and is still captured" ($installText -match 'Tee-Object -Variable isoOutput')
 
 # -SkipIsoBuild defers it; -IsoBuildOnly is nothing but it.
-ok "-SkipIsoBuild skips the build and says what will fail" (
-    $installText -match '-SkipIsoBuild: no install media was built')
+ok "-SkipIsoBuild defers the build to the first VM creation" (
+    $installText -match '-SkipIsoBuild: the host will build media on the first VM creation')
 ok "-SkipIsoBuild prints the command to run later" (
     $installText -match '\$exe`" admin iso build')
 ok "-IsoBuildOnly rebuilds and stops before anything else" (

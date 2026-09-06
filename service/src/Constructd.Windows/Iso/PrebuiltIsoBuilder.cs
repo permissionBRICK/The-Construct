@@ -65,9 +65,11 @@ public sealed class PrebuiltIsoBuilder(
         string seedPassword,
         string bootstrapPubKeyPath,
         IProgress<string>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool redownload = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (redownload) throw Fail("this catalog-only builder cannot redownload media");
 
         var entry = _catalog.GetCurrent()
                     ?? throw Fail("none has been built yet, or the current one is gone");
