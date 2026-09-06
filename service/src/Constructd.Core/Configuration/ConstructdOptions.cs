@@ -107,6 +107,9 @@ public sealed class ConstructdOptions
     /// <summary>Cap on extra forwards per VM (the scoped VM token is "capped count/range", plan §4.6).</summary>
     public int MaxForwardsPerVm { get; set; } = 16;
 
+    /// <summary>Retry host forward reconciliation after boot and DHCP changes. Zero disables periodic passes.</summary>
+    public int ForwardReconcileSeconds { get; set; } = 30;
+
     /// <summary>How long VM creation waits for SSH to answer.</summary>
     public int VmReachableTimeoutMinutes { get; set; } = 30;
 
