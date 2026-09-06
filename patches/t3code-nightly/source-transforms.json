@@ -543,6 +543,11 @@
       "insert": "  | typeof WS_METHODS.voiceInputStart\n"
     },
     {
+      "path": "packages/client-runtime/src/state/runtime.ts",
+      "before": "function runInEnvironment<A, E, R>(",
+      "insert": "export { runInEnvironment };\n\n"
+    },
+    {
       "path": "packages/contracts/src/environment.ts",
       "after": "serverSelfUpdateProgress: Schema.optionalKey(Schema.Boolean),",
       "insert": "  /** Construct-patched servers can capture host audio through the recorder shim and\n      stream Claude's live speech transcript into a connected composer. */\n  voiceInput: Schema.optionalKey(Schema.Boolean),\n  /** Server accepts microphone audio pushed by the client over\n      `voiceInput.audio`. Absent on servers that can only record through the\n      host bridge, so clients fall back to the host source. */\n  voiceInputClientAudio: Schema.optionalKey(Schema.Boolean),\n"
@@ -599,7 +604,7 @@
     },
     {
       "path": "packages/contracts/src/rpc.ts",
-      "before": "export const WsServerGetSettingsRpc = Rpc.make(WS_METHODS.serverGetSettings, {",
+      "before": "const WsServerGetSettingsRpc = Rpc.make(WS_METHODS.serverGetSettings, {",
       "insert": "export const WsVoiceInputStartRpc = Rpc.make(WS_METHODS.voiceInputStart, {\n  payload: VoiceInputStartInput,\n  success: VoiceInputStreamEvent,\n  error: Schema.Union([VoiceInputError, EnvironmentAuthorizationError]),\n  stream: true,\n});\n\nexport const WsVoiceInputStopRpc = Rpc.make(WS_METHODS.voiceInputStop, {\n  payload: VoiceInputStopInput,\n  success: VoiceInputStopResult,\n  error: EnvironmentAuthorizationError,\n});\n\n// Effect RPC has no client-to-server streams, so client-captured microphone\n// audio arrives as one unary call per ~100 ms chunk.\nexport const WsVoiceInputAudioRpc = Rpc.make(WS_METHODS.voiceInputAudio, {\n  payload: VoiceInputAudioInput,\n  success: VoiceInputAudioResult,\n  error: EnvironmentAuthorizationError,\n});\n\n"
     },
     {
@@ -619,7 +624,7 @@
     },
     {
       "path": "packages/contracts/src/rpc.ts",
-      "before": "export const WsServerGetSettingsRpc = Rpc.make(WS_METHODS.serverGetSettings, {",
+      "before": "const WsServerGetSettingsRpc = Rpc.make(WS_METHODS.serverGetSettings, {",
       "insert": "export const WsConstructDiskSpaceRpc = Rpc.make(WS_METHODS.constructDiskSpace, {\n  payload: Schema.Struct({}),\n  success: ConstructDiskSpace,\n  error: Schema.Union([ConstructDiskSpaceError, EnvironmentAuthorizationError]),\n});\n\n"
     },
     {
@@ -639,7 +644,7 @@
     },
     {
       "path": "packages/contracts/src/rpc.ts",
-      "before": "export const WsServerGetSettingsRpc = Rpc.make(WS_METHODS.serverGetSettings, {",
+      "before": "const WsServerGetSettingsRpc = Rpc.make(WS_METHODS.serverGetSettings, {",
       "insert": "export const WsConstructOmniloopStatusRpc = Rpc.make(WS_METHODS.constructOmniloopStatus, {\n  payload: Schema.Struct({}),\n  success: ConstructOmniloopStatus,\n  error: Schema.Union([ConstructOmniloopError, EnvironmentAuthorizationError]),\n});\n\nexport const WsConstructOmniloopTicketRpc = Rpc.make(WS_METHODS.constructOmniloopTicket, {\n  payload: Schema.Struct({}),\n  success: ConstructOmniloopTicket,\n  error: Schema.Union([ConstructOmniloopError, EnvironmentAuthorizationError]),\n});\n\nexport const WsConstructOmniloopWorkflowsRpc = Rpc.make(WS_METHODS.constructOmniloopWorkflows, {\n  payload: ConstructOmniloopWorkflowsInput,\n  success: ConstructOmniloopWorkflowsResult,\n  error: Schema.Union([ConstructOmniloopError, EnvironmentAuthorizationError]),\n});\n\n"
     },
     {
@@ -649,7 +654,7 @@
     },
     {
       "path": "packages/contracts/src/settings.ts",
-      "after": "export const DEFAULT_TERMINAL_FONT_SIZE: TerminalFontSize = 12;",
+      "after": "const DEFAULT_TERMINAL_FONT_SIZE: TerminalFontSize = 12;",
       "insert": "/**\n * Where voice input records. `auto` captures on this device when the browser\n * or desktop app can reach a microphone and the server accepts pushed audio,\n * and otherwise falls back to the host recorder bridge. Client-local because\n * the microphone it picks is this device's.\n */\nexport const VoiceInputSourcePreference = Schema.Literals([\"auto\", \"client\", \"host\"]);\nexport type VoiceInputSourcePreference = typeof VoiceInputSourcePreference.Type;\nexport const DEFAULT_VOICE_INPUT_SOURCE_PREFERENCE: VoiceInputSourcePreference = \"auto\";\n\n"
     },
     {
@@ -771,6 +776,11 @@
       "path": "apps/server/src/cli/auth.ts",
       "find": "            scopes: AuthStandardClientScopes,\n            subject: \"one-time-token\",",
       "replace": "            scopes:\n              Option.isSome(flags.scopes) && flags.scopes.value === \"administrative\"\n                ? AuthAdministrativeScopes\n                : AuthStandardClientScopes,\n            subject: \"one-time-token\","
+    },
+    {
+      "path": "apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts",
+      "find": "        isTerminalTurn\n",
+      "replace": "        event.type === \"turn.completed\" ||\n        event.type === \"turn.aborted\"\n"
     },
     {
       "path": "apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts",

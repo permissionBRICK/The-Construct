@@ -57,7 +57,6 @@ if (!existsSync(bundle)) {
 
 const ANCHOR = String.raw`				case "message.part.updated": {
 					const part = event.properties.part;
-					context.partById.set(part.id, part);
 `;
 
 const INJECTION = ANCHOR + String.raw`					${MARKER}
