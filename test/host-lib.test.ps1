@@ -1293,6 +1293,20 @@ try {
 } finally {
     Remove-Item -LiteralPath $epDir -Recurse -Force -ErrorAction SilentlyContinue
 }
+$forwardRecord = Get-ConstructT3EndpointRecord -InstanceName 'haus-vm' -ServiceManaged `
+    -BaseUrl 'https://standpc.dc.htl-sky.net:5178' -ForwardUrl 'https://standpc.dc.htl-sky.net:2301'
+ok "endpoint: service-managed VM records the reachable forward rather than its internal port" (
+    $forwardRecord.port -eq 2301 -and $forwardRecord.baseUrl -eq 'https://standpc.dc.htl-sky.net:2301')
+foreach ($missingForward in @('', 'error', 'denied')) {
+    $missingRecord = Get-ConstructT3EndpointRecord -InstanceName 'haus-vm' -ServiceManaged `
+        -BaseUrl 'https://standpc.dc.htl-sky.net:5178' -ForwardUrl $missingForward
+    ok "endpoint: service-managed VM with forward '$missingForward' cannot publish an internal port" ($null -eq $missingRecord)
+}
+$directRecord = Get-ConstructT3EndpointRecord -InstanceName 'direct-vm' `
+    -BaseUrl 'https://direct-vm.example:5178'
+ok "endpoint: a directly reachable VM retains its advertised origin" ($directRecord.port -eq 5178)
+ok "provisioner: endpoint recording distinguishes service-managed VMs" (
+    $provB14 -match '-ServiceManaged:\(\[bool\]\$ServiceUrl\)')
 ok "provisioner: it is written outside the HTTPS/CA branch, so a plain-HTTP forward is recorded too" (
     $provB14.IndexOf('WHERE THIS VM ANSWERS, recorded for the T3 Code Desktop app') -gt
     $provB14.IndexOf('Set-OpenCodeRemote -Url'))
