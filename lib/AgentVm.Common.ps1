@@ -2901,7 +2901,9 @@ function Get-ConstructT3EndpointRecord {
         Test-ConstructEndpointRecordWanted: that VM's state IS the install's own settings
         file, and a single-VM install must keep writing exactly the keys it always wrote.
 
-        -BaseUrl is preferred (T3CODE_PUBLIC_BASE_URL, what the VM tells clients to use);
+        For a service-managed VM, only -ForwardUrl is client-reachable. An internal
+        origin from HTTPS setup must not replace a failed or missing host forward.
+        Otherwise -BaseUrl is preferred (T3CODE_PUBLIC_BASE_URL);
         -ForwardUrl is the host forward the guest was given, used when the VM advertises
         nothing of its own. Returns $null when neither is a usable http(s) origin -- there
         is then nothing to record.
@@ -2911,6 +2913,7 @@ function Get-ConstructT3EndpointRecord {
         [AllowEmptyString()][AllowNull()][string]$InstanceName,
         [AllowEmptyString()][AllowNull()][string]$BaseUrl,
         [AllowEmptyString()][AllowNull()][string]$ForwardUrl,
+        [switch]$ServiceManaged,
         # The OpenCode server url this provision registered for the VM, when it did.
         # It rides along because it is the same kind of fact -- where this VM answers --
         # and "Remove instance" needs it to find an entry whose display name was changed.
@@ -2918,7 +2921,7 @@ function Get-ConstructT3EndpointRecord {
         [AllowEmptyString()][AllowNull()][string]$UpdatedAt
     )
     $candidates = @()
-    if ($BaseUrl) { $candidates += $BaseUrl.Trim() }
+    if ($BaseUrl -and -not $ServiceManaged) { $candidates += $BaseUrl.Trim() }
     if ($ForwardUrl) { $candidates += $ForwardUrl.Trim() }
     foreach ($candidate in $candidates) {
         $uri = $null
