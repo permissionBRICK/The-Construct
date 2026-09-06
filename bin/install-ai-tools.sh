@@ -842,13 +842,13 @@ install_t3code() {
   local _t3_prebuilt=false t3_bin resolved t3_bundle _wanted_t3_build _active_t3_build _t3_stock_key _t3_stock_unchanged=false
   step "Installing T3 Code (t3 CLI + web GUI server)"
 
-  # Patched stable defaults to the published, validated server/Desktop pair.
-  # Explicit local builds and nightly use one source tag for both ends.
+  # Both patched channels default to their published, validated server/Desktop pair.
+  # Explicit local builds use the build repository at one commit for both ends.
   if [[ "${T3CODE_LIMIT_RESUME:-false}" == "true" ]]; then
     case "${T3CODE_BUILD_SOURCE}" in prebuilt|local) ;; *) err "Invalid T3CODE_BUILD_SOURCE"; return 1 ;; esac
-    if [[ "${T3CODE_CHANNEL}" == stable && "${T3CODE_BUILD_SOURCE}" == prebuilt ]]; then
-      step "Installing Construct's prebuilt stable T3 pair"
-      python3 "${REPO_DIR}/bin/install-t3code-prebuilt.py" || return 1
+    if [[ "${T3CODE_BUILD_SOURCE}" == prebuilt ]]; then
+      step "Installing Construct's prebuilt ${T3CODE_CHANNEL} T3 pair"
+      T3CODE_CHANNEL="${T3CODE_CHANNEL}" python3 "${REPO_DIR}/bin/install-t3code-prebuilt.py" || return 1
       _t3_prebuilt=true
     else
       step "Building Construct's patched T3 server + Windows Desktop app"
@@ -996,23 +996,8 @@ install_t3code() {
     fi
   fi
 
-  # The legacy env key remains for settings compatibility and now selects the
-  # shared patched-source server/Desktop build. Re-running the established
-  # bundle transforms here is idempotent and also keeps stock-mode reversion
-  # behavior compatible with older Construct-provisioned installs.
-  if [[ "${T3CODE_LIMIT_RESUME:-false}" == "true" ]]; then
-    if [[ "${_t3_prebuilt}" != true ]]; then
-      step "Applying T3 Code extra-feature patches"
-      node "${REPO_DIR}/extension/vm/construct-t3park-patch.mjs" apply --bundle "${t3_bundle}" \
-        || warn "WARNING: usage-limit auto-resume patch not applied (see above); t3 runs stock"
-      node "${REPO_DIR}/extension/vm/construct-t3-opencode-monitor-patch.mjs" apply --bundle "${t3_bundle}" \
-        || warn "WARNING: OpenCode background-monitoring patch not applied (see above); t3 continues without it"
-    fi
-  else
-    node "${REPO_DIR}/extension/vm/construct-t3park-patch.mjs" revert --bundle "${t3_bundle}" >/dev/null 2>&1 || true
-    node "${REPO_DIR}/extension/vm/construct-t3-opencode-monitor-patch.mjs" revert --bundle "${t3_bundle}" >/dev/null 2>&1 || true
-  fi
-
+  # Source and prebuilt builds already contain their runtime patches. Stock
+  # mode installs a pristine npm package before reaching this point.
   install -d -m 0755 "${WORKSPACE_ROOT}"
   install -m 0644 "${REPO_DIR}/systemd/t3code-serve.service" /etc/systemd/system/t3code-serve.service
   sed -i "s|^WorkingDirectory=.*|WorkingDirectory=${WORKSPACE_ROOT}|" /etc/systemd/system/t3code-serve.service
@@ -1047,7 +1032,10 @@ install_t3code() {
     # Fresh VMs have no t3 DB when the patch step above runs, so the token mint
     # there can fail; retry now that the server has started once.
     if [[ "${T3CODE_LIMIT_RESUME:-false}" == "true" && ! -s /etc/construct/t3park-token ]]; then
-      node "${REPO_DIR}/extension/vm/construct-t3park-patch.mjs" mint-token --bundle "${t3_bundle}" \
+      local _t3_patch_root _t3_patch_node=node
+      _t3_patch_root="$(python3 "${REPO_DIR}/bin/t3code-build-source.py" --installed)" || return 1
+      [[ ! -x "${_t3_patch_root}/bin/node" ]] || _t3_patch_node="${_t3_patch_root}/bin/node"
+      "${_t3_patch_node}" "${_t3_patch_root}/extension/vm/construct-t3park-patch.mjs" mint-token --bundle "${t3_bundle}" \
         || warn "WARNING: could not mint the auto-resume API token; parked threads can't restart until one exists"
     fi
   else

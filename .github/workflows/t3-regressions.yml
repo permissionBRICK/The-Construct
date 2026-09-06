@@ -7,7 +7,11 @@ on:
       - 'lib/AgentVm.Common.ps1'
       - 'extension/vm/construct-t3park-patch.mjs'
       - 'bin/build-t3code.sh'
-      - 'bin/t3code-build-recipe.sh'
+      - 'bin/t3code-build-source.py'
+      - 'bin/install-t3code-prebuilt.py'
+      - 'bin/install-ai-tools.sh'
+      - 'extension/src/updates.js'
+      - 'extension/test/updates.test.js'
       - 'test/t3*'
       - '.github/workflows/t3-regressions.yml'
   workflow_dispatch:
@@ -34,11 +38,8 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
-      - run: node test/t3park-patch.test.mjs
-      - run: node test/t3-capacity-retry.test.mjs
-      - run: node test/t3-source-transform.test.mjs
-      - run: node test/t3-build-cache.test.mjs
-      - run: bash test/t3-build-node.test.sh
-      - run: bash test/t3-build-diskcheck.test.sh
       - run: python3 test/t3-install-source.test.py
       - run: python3 test/t3-prebuilt.test.py
+      - run: python3 test/t3-build-source.test.py
+      - run: node extension/test/updates.test.js
+      - run: node extension/test/t3code.test.js

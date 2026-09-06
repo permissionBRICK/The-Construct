@@ -125,6 +125,14 @@ try {
     Assert (-not $script:calls.Contains('package')) 'Prebuilt must never invoke local Windows packaging'
     Run-Handoff
     Assert ($script:calls.Count -eq 1) 'Second VM using prebuilt must skip download and install'
+    $script:manifest.version = '1.0.1-nightly.20260906.1'
+    $script:manifest.channel = 'nightly'
+    $script:manifest.buildHash = 'f' * 64
+    $script:manifest.patchHash = 'f' * 64
+    $script:manifest.downloadUrl = "https://github.com/permissionBRICK/construct-t3-builds/releases/download/t3-$($script:manifest.version)-$($script:manifest.buildHash)/T3Code-Construct-Setup.exe"
+    Run-Handoff
+    Assert ($script:warnings.Count -eq 0 -and $script:calls.Contains('install')) 'Nightly prebuilt must install without local packaging'
+    Assert (-not $script:calls.Contains('package')) 'Nightly prebuilt must never invoke local packaging'
     $script:manifest.patchHash = 'e' * 64
     $script:manifest.downloadUrl = 'https://example.com/other.exe'
     Run-Handoff
