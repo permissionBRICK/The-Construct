@@ -22,7 +22,7 @@ function* handleSubscribedEvent(context, event) {
 \tswitch (event.type) {
 \t\t\t\tcase "message.part.updated": {
 \t\t\t\t\tconst part = event.properties.part;
-\t\t\t\t\tcontext.partById.set(part.id, part);
+\t\t\t\t\tif (part.type !== "tool") context.partById.set(part.id, part);
 \t\t\t\t\tif (part.type === "tool") {}
 \t\t\t\t\tbreak;
 \t\t\t\t}
