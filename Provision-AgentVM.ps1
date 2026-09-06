@@ -3044,6 +3044,7 @@ if ($Action -eq 'provision' -and
         $publicBase = ""
         if ($script:T3HttpsStatus -match '(?m)^T3CODE_PUBLIC_BASE_URL=(\S+)\s*$') { $publicBase = $matches[1] }
         $endpointRecord = Get-ConstructT3EndpointRecord -InstanceName (Get-ConstructRunInstanceName) `
+            -ServiceManaged:([bool]$ServiceUrl) `
             -BaseUrl $publicBase -ForwardUrl (Get-T3ForwardUrl -Forwards $script:HostForwards) `
             -OpenCodeUrl $script:OpenCodeRegisteredUrl
         # $null (no usable origin) still writes: the keys are set to $null, which is how
