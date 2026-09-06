@@ -224,7 +224,7 @@ public enum IsoBuildMode
     /// </summary>
     PerVm,
 
-    /// <summary>Planned: remaster the stock ISO in-process on Windows, no WSL and no xorriso.</summary>
+    /// <summary>Build generic media with the self-contained .NET tool; consume it through the catalog.</summary>
     Native,
 
     /// <summary>
@@ -243,6 +243,8 @@ public enum IsoBuildMode
 /// <summary>Inputs for the autoinstall ISO build.</summary>
 public sealed class IsoOptions
 {
+    /// <summary>Absolute path to the self-contained Construct.Iso executable resolved by the host installer.</summary>
+    public string NativeBuilderPath { get; set; } = string.Empty;
     /// <summary>
     /// Which build strategy is in effect. <see cref="IsoBuildMode.Prebuilt"/> by default — see the
     /// enum for why, and <c>service/README.md</c> ("ISO build strategies") for the whole picture.

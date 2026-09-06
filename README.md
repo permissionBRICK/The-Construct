@@ -59,12 +59,12 @@ One command, zero VM interaction: it builds an Ubuntu autoinstall ISO, creates t
 VM, installs Ubuntu unattended, provisions the full agent stack, and wires up your host's
 SSH + VS Code config. Answer a few questions up front — then just hit connect.
 
-> **Requirements:** Windows 10/11 with Hyper-V, and WSL — *yours*, as the user who
-> installs — for the ISO build (`wsl --install -d Ubuntu` if missing). On a
-> [remote host](docs/remote-host.md) the administrator builds that ISO once and the
-> service reuses it; the service itself never runs WSL. Already have a VM? The installer offers
-> **reprovision**, **reinstall** (with [config save & restore](docs/backup-restore.md)),
-> and **export config**. Other paths — bundled ISO, BYO VM, no-admin — are in the
+> **Requirements:** Windows 10/11 with Hyper-V. ISO builds use a self-contained .NET
+> tool; no WSL or installed .NET runtime is required. The installer builds a local
+> `construct-iso` checkout when its SDK is available, otherwise downloads a pinned
+> release. See [native ISO builds](docs/native-iso.md). Already have a VM? The installer
+> offers **reprovision**, **reinstall** (with [config save & restore](docs/backup-restore.md)),
+> and **export config**. Bundled ISO, BYO VM, and no-admin paths are in the
 > [installation guide](docs/installation.md).
 
 <div align="center">
