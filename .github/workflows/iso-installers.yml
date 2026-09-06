@@ -1,0 +1,54 @@
+name: Native ISO installer integration
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Auto-Install.ps1'
+      - 'lib/Construct.Iso.ps1'
+      - 'config/iso-builder.json'
+      - 'service/**'
+      - 'test/native-iso-host.test.ps1'
+      - '.github/workflows/iso-installers.yml'
+  pull_request:
+    paths:
+      - 'Auto-Install.ps1'
+      - 'lib/Construct.Iso.ps1'
+      - 'config/iso-builder.json'
+      - 'service/**'
+      - 'test/native-iso-host.test.ps1'
+      - '.github/workflows/iso-installers.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-installer:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Windows PowerShell 5.1 resolver and installer contracts
+        shell: powershell
+        run: |
+          ./test/native-iso-host.test.ps1
+          ./service/tests/host-installer.test.ps1
+      - name: Download and run the pinned executable
+        shell: powershell
+        run: |
+          . ./lib/Construct.Iso.ps1
+          $exe = Resolve-ConstructIsoBuilder -ScriptsDir $PWD.Path -SourceDir (Join-Path $env:TEMP 'absent-iso-source')
+          $env:DOTNET_ROOT = 'C:\nonexistent-dotnet'
+          & $exe --help
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+  service:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet test service/tests/Constructd.Tests -c Release

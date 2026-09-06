@@ -14,7 +14,7 @@
       1. Self-elevates (the whole thing needs Administrator).
       2. Prerequisites: Hyper-V and the platform features (via the repo's own
          Ensure-HyperV in lib\AgentVm.Common.ps1 -- the same check the local
-         installer runs), YOUR WSL distro with xorriso + whois inside it, and the
+         installer runs), the native ISO builder (resolved automatically), and the
          Windows OpenSSH client. No .NET runtime is required: publish the service
          self-contained.
       3. Data directory (database + ISO cache) under ProgramData.
@@ -23,11 +23,8 @@
          enrollment, so it is the one value that has to leave this machine.
       5. Firewall: inbound TCP for the API port and both forward port ranges.
       6. appsettings.Production.json next to the published executable.
-      7. The autoinstall ISO, built AS YOU through your own WSL
-         ('constructd admin iso build'). The service runs as LocalSystem, and WSL
-         refuses to run as LocalSystem (WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED), so the
-         media is built once here and the service only consumes it -- see
-         docs/plans/modular-remote-architecture.md section 4.10.
+      7. The autoinstall ISO, built by the standalone .NET tool and published through
+         'constructd admin iso build'. No WSL or installed .NET runtime is needed.
       8. The first admin user plus an API token, created through the service's own
          admin CLI BEFORE the service starts (so nothing contends for the
          database, and so the host is reachable the moment it comes up).
@@ -1082,15 +1079,13 @@ function Invoke-ConstructIsoBuild {
         Build the autoinstall ISO through the service's own admin CLI, and report the
         path it published.
 
-        It runs AS THE ADMINISTRATOR RUNNING THIS INSTALLER, not as the service:
-        wsl.exe refuses to run as LocalSystem (Wsl/WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED,
-        field-verified 2026-09-02) and LocalSystem is the service's identity. The
-        service only consumes what is published here (plan section 4.10).
+        Resolves the independent .NET builder from a local checkout/SDK or pinned
+        self-contained release, then publishes generic media through the catalog.
 
         Idempotent without -Force: the CLI reports media that is already there rather
         than spending twenty minutes rebuilding it, so re-running the installer is
         cheap. Fails closed, showing what the build printed -- an exit code alone says
-        nothing about why xorriso or a download gave up.
+        nothing about why the native tool or a download gave up.
     #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
@@ -1098,7 +1093,7 @@ function Invoke-ConstructIsoBuild {
         [switch]$Force
     )
 
-    if (-not $PSCmdlet.ShouldProcess("the autoinstall ISO", "Build it through WSL and publish it")) { return }
+    if (-not $PSCmdlet.ShouldProcess("the autoinstall ISO", "Build it with the native .NET tool and publish it")) { return }
 
     # An argument LIST, never a command string: nothing here is quoted by hand.
     $arguments = @("admin", "iso", "build")
@@ -1106,9 +1101,19 @@ function Invoke-ConstructIsoBuild {
 
     # Tee, so a build that takes twenty minutes is visible while it runs AND readable
     # afterwards. 2>&1 keeps the CLI's diagnostics (stderr) in the capture too.
+    $nativeTool = Resolve-ConstructIsoBuilder -ScriptsDir $ScriptsDir
+    $previousBuilder = $env:Constructd__Iso__NativeBuilderPath
+    $previousMode = $env:Constructd__Iso__Mode
     $isoOutput = $null
-    & $Exe @arguments 2>&1 | Tee-Object -Variable isoOutput
-    $isoExit = $LASTEXITCODE
+    try {
+        $env:Constructd__Iso__NativeBuilderPath = $nativeTool
+        $env:Constructd__Iso__Mode = 'Native'
+        & $Exe @arguments 2>&1 | Tee-Object -Variable isoOutput
+        $isoExit = $LASTEXITCODE
+    } finally {
+        $env:Constructd__Iso__NativeBuilderPath = $previousBuilder
+        $env:Constructd__Iso__Mode = $previousMode
+    }
     $text = ($isoOutput | Out-String)
 
     if ($isoExit -ne 0) {
@@ -1126,13 +1131,14 @@ function Invoke-ConstructIsoBuild {
 Write-Step "Checking the inputs"
 
 if (-not (Test-Path -LiteralPath $ScriptsDir)) { throw "-ScriptsDir does not exist: $ScriptsDir" }
-foreach ($rel in @("drivers\Load-ConstructDriver.ps1", "lib\AgentVm.Common.ps1", "bin\build-autoinstall-iso.sh")) {
+foreach ($rel in @("drivers\Load-ConstructDriver.ps1", "lib\AgentVm.Common.ps1", "lib\Construct.Iso.ps1", "config\iso-builder.json")) {
     $full = Join-Path $ScriptsDir $rel
     if (-not (Test-Path -LiteralPath $full)) {
         throw "-ScriptsDir does not look like a Construct checkout: $full is missing."
     }
 }
 Write-Ok "Construct checkout: $ScriptsDir"
+. (Join-Path $ScriptsDir "lib\Construct.Iso.ps1")
 
 $exe = Get-ConstructdExe -Dir $PublishDir
 Write-Ok "Service executable: $exe"
@@ -1268,44 +1274,6 @@ if ($SkipPrereqs) {
     }
     Write-Ok "Hyper-V is available"
 
-    Write-Step "Checking WSL (the ISO build runs xorriso inside it, as YOU)"
-    # YOUR WSL, not the service's. wsl.exe refuses to run as LocalSystem
-    # (Wsl/WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED, field-verified 2026-09-02), which is the
-    # identity the service runs as -- so the media is built here, once, by the
-    # administrator running this installer, and the service only consumes it
-    # (plan section 4.10).
-    if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
-        throw "WSL is not installed. Install it and a distro, then re-run:`n    wsl --install -d Ubuntu"
-    }
-    $distros = @(& wsl.exe -l -q 2>$null | ForEach-Object { ($_ -replace "`0", "").Trim() } | Where-Object { $_ })
-    if ($distros.Count -eq 0) {
-        throw "WSL is installed but has no distro. Install one, then re-run:`n    wsl --install -d Ubuntu"
-    }
-    if ($WslDistro -and ($distros -notcontains $WslDistro)) {
-        throw "WSL distro '$WslDistro' is not installed. Present: $($distros -join ', ')."
-    }
-    Write-Ok "WSL distro: $(if ($WslDistro) { $WslDistro } else { $distros[0] })"
-
-    Write-Step "Ensuring xorriso + whois inside your WSL distro"
-    # Every value travels as an ARGUMENT LIST element, never as script text: a distro
-    # name with a space stays one argument, and an apostrophe cannot end a literal and
-    # start another command. The bash snippet itself is a constant.
-    $distroArgs = @()
-    if ($WslDistro) { $distroArgs = @("-d", $WslDistro) }
-
-    if ($PSCmdlet.ShouldProcess("WSL", "Install xorriso and whois inside the distro")) {
-        $ensureArgs = $distroArgs + @(
-            "-u", "root", "--", "bash", "-lc",
-            "command -v xorriso >/dev/null 2>&1 && command -v mkpasswd >/dev/null 2>&1 || { apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y xorriso whois; }")
-
-        $ensureOutput = (& wsl.exe @ensureArgs 2>&1 | Out-String)
-        if ($LASTEXITCODE -ne 0) {
-            $said = Format-ConstructCommandOutput -Output $ensureOutput
-            throw "Could not install xorriso/whois inside WSL (exit $LASTEXITCODE). The ISO build needs both.$said"
-        }
-    }
-    Write-Ok "xorriso + whois present in your WSL distro"
-
     Write-Step "Checking the OpenSSH client"
     if (Get-Command ssh.exe -ErrorAction SilentlyContinue) {
         Write-Ok "ssh.exe is available"
@@ -1426,10 +1394,9 @@ $settings = [ordered]@{
         SshForwardPorts  = [ordered]@{ Start = $sshRange.Start; End = $sshRange.End }
         AppForwardPorts  = [ordered]@{ Start = $appRange.Start; End = $appRange.End }
         Iso              = [ordered]@{
-            # Prebuilt: the service consumes the media built below, as you. It cannot
-            # build media itself -- WSL refuses to run as LocalSystem. 'PerVm' is the
-            # other implemented strategy (see service/README.md, ISO build strategies).
-            Mode                  = "Prebuilt"
+            # Generic native media is published once and consumed through the catalog.
+            Mode                  = "Native"
+            NativeBuilderPath     = (Get-ConstructIsoBuilderPath -ScriptsDir $ScriptsDir)
             HostnameSource        = "hyperv-kvp"
             SeedUser              = "construct"
             BootstrapPublicKeyPath = $bootstrapKey
@@ -1458,14 +1425,10 @@ if ($PSCmdlet.ShouldProcess($settingsPath, "Write the service configuration")) {
 }
 Write-Ok $settingsPath
 
-# ── 6. The autoinstall ISO (built as YOU, through your own WSL) ──────────────
-# The service is LocalSystem and WSL will not run there, so the media is built here,
-# by the administrator running this installer, and published into the catalog the
-# service reads (plan section 4.10). It is idempotent: without -Force the command
-# reports the media that is already there instead of spending twenty minutes
-# rebuilding it.
+# ── 6. Build native generic media and publish it into the ISO catalog ────────
+# Idempotent without -Force; existing VMs retain their versioned media.
 
-Write-Step "Building the autoinstall ISO (as you, via WSL)"
+Write-Step "Building the autoinstall ISO with the native .NET tool"
 if ($SkipIsoBuild) {
     Write-Warning "-SkipIsoBuild: no install media was built, so creating a VM will fail until you run:"
     Write-Host "    & `"$exe`" admin iso build" -ForegroundColor Yellow
@@ -1552,8 +1515,8 @@ if ($existingService) {
 }
 
 # LocalSystem: it has to drive Hyper-V and netsh, neither of which a restricted service
-# account can do here without further setup. It does NOT run WSL -- wsl.exe refuses to run
-# as LocalSystem, which is why the ISO was built above, as you.
+# account can do here without further setup. ISO builds use the native tool rather than WSL;
+# media is published once into the catalog above.
 Write-Note "Running as LocalSystem"
 
 if ($NoStart) {

@@ -11,13 +11,13 @@
          before any download): reprovision the existing VM, completely
          reinstall it (delete the VM + disk after confirmation, then build +
          install fresh), or quit.
-      1. Ensures WSL (with a Linux distro) is available -- the ISO remaster needs
-         xorriso, which only works properly on Linux. WSL runs the existing
-         bin/build-autoinstall-iso.sh unchanged.
+      1. Resolves the self-contained .NET ISO builder: builds a local construct-iso
+         checkout when a .NET 10 SDK is available, otherwise downloads its pinned
+         GitHub release. No WSL or installed .NET runtime is required.
       2. Downloads the Ubuntu Server live ISO (latest point release of the
          chosen LTS) and verifies its SHA256, unless one is supplied.
       3. Builds agent-vm-autoinstall.iso next to this script by invoking the
-         bash builder inside WSL.
+         native .NET builder.
       4. Hands off to Create-AgentVM.ps1, which auto-detects that ISO, creates
          the Gen-2 VM, waits for the unattended install, then runs
          Provision-AgentVM.ps1.
@@ -50,7 +50,7 @@
     Ubuntu install source: 'ubuntu-server-minimal' (default) or 'ubuntu-server'.
 
 .PARAMETER WslDistro
-    Specific WSL distro to use (defaults to your configured default distro).
+    Retained for compatibility; Windows ISO builds now use the native .NET tool.
 
 .PARAMETER VmMemoryGB
     VM RAM in GB to pass to Create-AgentVM.ps1. If omitted, you are prompted up
@@ -87,7 +87,7 @@
 .PARAMETER Force
     Rebuild the autoinstall ISO even if it already exists. By default, if the
     target autoinstall ISO is already in the folder, both the Ubuntu download
-    and the WSL build are skipped and the script goes straight to creating the VM.
+    and the native ISO build are skipped and the script goes straight to creating the VM.
 
 .PARAMETER Redownload
     Force a fresh download of the latest Ubuntu Server ISO (overwriting any local
@@ -311,7 +311,7 @@ function Wait-Exit {
     }
 }
 
-# Any terminating error NOT handled by a try/catch below (e.g. missing WSL,
+# Any terminating error NOT handled by a try/catch below (e.g. a missing ISO tool,
 # virtualization disabled in firmware) would normally close the self-elevated
 # window before its guidance can be read. Hold the window open instead.
 trap {
@@ -1333,27 +1333,8 @@ if ($ConfigBranch) {
 }
 
 if (-not $OutputIso) { $OutputIso = Join-Path $PSScriptRoot "$($VmName.ToLowerInvariant())-autoinstall.iso" }
-$buildScript = Join-Path $PSScriptRoot "bin\build-autoinstall-iso.sh"
+. (Join-Path $PSScriptRoot "lib\Construct.Iso.ps1")
 $bootstrapPubKey = Join-Path $PSScriptRoot "keys\bootstrap_ed25519.pub"
-
-# Common WSL args: the distro selector is optional.
-$wslDistroArgs = @()
-if ($WslDistro) { $wslDistroArgs = @("-d", $WslDistro) }
-
-# Convert a Windows path to its /mnt/c/... WSL form.
-# We map it ourselves rather than calling `wslpath`, because passing a path with
-# backslashes through PowerShell -> wsl.exe strips them (wslpath then sees e.g.
-# "C:UsersmeDesktop..."). The default WSL automount layout is deterministic:
-#   C:\Users\me\x.iso  ->  /mnt/c/Users/me/x.iso
-function ConvertTo-WslPath([string]$winPath) {
-    $full = [System.IO.Path]::GetFullPath($winPath)
-    if ($full -match '^([A-Za-z]):\\(.*)$') {
-        $drive = $matches[1].ToLower()
-        $rest  = $matches[2] -replace '\\', '/'
-        return "/mnt/$drive/$rest"
-    }
-    throw "Cannot convert to a WSL path (expected a drive-letter path): $winPath"
-}
 
 # Prompt the user to pick which project profiles from projects/ to load.
 # Returns a comma-separated PROJECTS value (or "default" if none chosen). The
@@ -3370,12 +3351,12 @@ if (-not $SkipCreateVm) {
     # Confirm the host can actually run the VM BEFORE the long download. This
     # enables Hyper-V + the platform features (rebooting if needed) or aborts
     # with BIOS / Windows-Home guidance. The "all set" banner comes later, once
-    # we know the unattended phase can really proceed (ISO present, or WSL OK).
+    # we know the unattended phase can really proceed (ISO present, or native builder ready).
     Ensure-ConstructDriverPrereqs
 }
 
 # If the target autoinstall ISO is already here, skip both the Ubuntu download
-# and the WSL build entirely and go straight to creating the VM (-Force / the
+# and the native ISO build entirely and go straight to creating the VM (-Force / the
 # Redownload choice rebuild instead).
 $needBuild = $Force -or $forceDownload -or -not (Test-Path -LiteralPath $OutputIso)
 if (-not $needBuild) {
@@ -3397,59 +3378,26 @@ if (-not $needBuild) {
 }
 
 if ($needBuild) {
-# One screen for the whole pre-build phase: the WSL/xorriso checks below log
+# One screen for the whole pre-build phase: the native tool checks below log
 # beneath it, and the "all set" banner that follows ends the TUI phase.
 Show-TuiScreen -Title "Preparing the unattended install" -Body @(
-    "Checking the build prerequisites (repo files, WSL, xorriso)..."
+    "Checking the ISO builder and bootstrap key..."
 )
 
 # ── 0. Sanity: required repo files present ───────────────────────────────────
 Write-Step "Checking repo files"
-foreach ($f in @($buildScript, $bootstrapPubKey)) {
+foreach ($f in @($bootstrapPubKey)) {
     if (-not (Test-Path -LiteralPath $f)) {
         throw "Required file missing: $f`n    Run this from your checkout/unzipped construct repo."
     }
 }
-Write-Ok "build script and bootstrap key found"
+Write-Ok "bootstrap key found"
 
-# ── 1. Ensure WSL + a Linux distro ───────────────────────────────────────────
-Write-Step "Checking WSL"
-if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
-    throw @"
-WSL is not installed. The ISO remaster needs Linux tooling (xorriso).
-Install it once, reboot, then re-run this script:
+# ── 1. Resolve the native ISO tool ───────────────────────────────────────────
+Write-Step "Preparing the .NET ISO builder"
+$nativeIsoTool = Resolve-ConstructIsoBuilder -ScriptsDir $PSScriptRoot
+Write-Ok "Native ISO builder ready"
 
-    wsl --install -d Ubuntu
-
-(After reboot, complete the one-time Ubuntu user setup, then re-run .\Auto-Install.ps1)
-
-Alternatively if you do not need WSL, you can download the precompiled autoinstall ISO from the latest release.
-"@
-}
-
-# `wsl -l -q` lists installed distros (UTF-16, may contain blanks).
-$prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-$distros = (& wsl.exe -l -q 2>$null) | ForEach-Object { ($_ -replace "`0", "").Trim() } | Where-Object { $_ }
-$ErrorActionPreference = $prevEAP
-if (-not $distros) {
-    throw @"
-WSL is present but no Linux distribution is installed. Install one, reboot if
-prompted, complete its first-run user setup, then re-run this script:
-
-    wsl --install -d Ubuntu
-"@
-}
-Write-Ok ("WSL distro(s): {0}" -f ($distros -join ", "))
-
-# Ensure xorriso + whois (mkpasswd) inside WSL. Run as root so no sudo prompt.
-Write-Step "Ensuring xorriso + whois inside WSL"
-& wsl.exe @wslDistroArgs -u root -- bash -lc "command -v xorriso >/dev/null 2>&1 && command -v mkpasswd >/dev/null 2>&1 || { apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y xorriso whois; }"
-if ($LASTEXITCODE -ne 0) { throw "Failed to install xorriso/whois inside WSL." }
-Write-Ok "xorriso + whois present in WSL"
-
-# WSL is confirmed working, so the download + build + create + provision can all
-# run unattended now -- tell the user they can step away (unless we're only
-# building the ISO, in which case there's nothing to sit through afterwards).
 if (-not $SkipCreateVm) {
     Show-AllSet @(
         "All set -- sit back and relax!",
@@ -3552,35 +3500,11 @@ if ($IsoPath) {
     }
 }
 
-# ── 3. Build the autoinstall ISO inside WSL ──────────────────────────────────
-Write-Step "Building autoinstall ISO via WSL"
-
-$wslSrc    = ConvertTo-WslPath $srcIso
-$wslOut    = ConvertTo-WslPath $OutputIso
-$wslPubKey = ConvertTo-WslPath $bootstrapPubKey
-
-# Write a LF-normalized copy of the builder next to the original (inside bin/, so
-# $0's dirname still resolves the repo if anything relies on it) and run THAT
-# directly. We avoid an inline multi-line `bash -lc` script entirely: passing a
-# here-string through PowerShell -> wsl.exe -> bash mangles CR/quoting and breaks
-# commands like `trap` ("trap: usage"). Running a real file with env + args as
-# separate argv elements sidesteps all shell-quoting issues.
-$normalized = (Get-Content -Raw -LiteralPath $buildScript) -replace "`r", ""
-$lfScript   = Join-Path (Join-Path $PSScriptRoot "bin") ".build-autoinstall.lf.sh"
-[System.IO.File]::WriteAllText($lfScript, $normalized)   # UTF-8, no BOM, LF only
-$wslLfScript = ConvertTo-WslPath $lfScript
-
-try {
-    & wsl.exe @wslDistroArgs -u root -- env `
-        "VM_USER=$VmUser" "VM_PASS=$VmPass" "VM_HOST=$VmGuestName" "SOURCE_ID=$SourceId" `
-        "BOOTSTRAP_PUBKEY_FILE=$wslPubKey" `
-        bash $wslLfScript $wslSrc $wslOut
-    $buildExit = $LASTEXITCODE
-} finally {
-    Remove-Item -LiteralPath $lfScript -Force -ErrorAction SilentlyContinue
-}
-if ($buildExit -ne 0) { throw "autoinstall ISO build failed inside WSL (exit $buildExit)." }
-if (-not (Test-Path -LiteralPath $OutputIso)) { throw "Build reported success but $OutputIso is missing." }
+# ── 3. Build the autoinstall ISO natively ────────────────────────────────────
+Write-Step "Building autoinstall ISO with the .NET tool"
+Invoke-ConstructNativeIsoBuild -ToolPath $nativeIsoTool -SourceIso $srcIso -OutputIso $OutputIso `
+    -BootstrapPublicKeyPath $bootstrapPubKey -User $VmUser -Password $VmPass `
+    -Hostname $VmGuestName -SourceId $SourceId -Overwrite
 Write-Ok "Built: $OutputIso"
 
 # The autoinstall ISO is built and verified present, so the large source ISO is

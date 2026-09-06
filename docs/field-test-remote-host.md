@@ -58,23 +58,15 @@ Names used throughout — substitute your own:
 
 ## 1. Host — install `constructd`
 
-### 1.1 WSL — **yours**, not the service's
+### 1.1 Native ISO builder
 
-The ISO build runs `xorriso` inside WSL, and it runs **as the administrator installing this**.
-It cannot run as the service: `wsl.exe` exits with `Wsl/WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED`
-under LocalSystem, which is the identity `constructd` runs as (this is the field finding
-that produced [plan §4.10](plans/modular-remote-architecture.md)). So the media is built
-once, here, and the service only consumes it.
+No WSL is needed. The host installer builds a sibling `construct-iso` checkout (or
+`CONSTRUCT_ISO_SOURCE_DIR`) when a .NET 10 SDK is available; otherwise it downloads the
+pinned self-contained Windows executable and verifies the archive and executable hashes.
 
-```powershell
-wsl --install -d Ubuntu        # if there is no distro at all; reboot when asked
-wsl -l -q                      # what YOU have
-```
-
-**Expect:** `wsl -l -q` lists a distro. The installer ensures `xorriso` and `whois` inside
-it (step 1.3) and fails, showing what the package manager printed, if it cannot.
-**If it fails:** nothing about LocalSystem is involved any more — this is your own WSL, so
-fix it the ordinary way. `-SkipPrereqs` is the deliberate override, not a workaround.
+**Expect:** `.construct-tools/iso/Construct.Iso.exe` under the Construct checkout after
+an ISO build. Test without a local source checkout to exercise the release-download path.
+See [native ISO builds](native-iso.md) for the resolver and release contract.
 
 ### 1.2 Publish the service
 
@@ -113,7 +105,7 @@ down** `-PublishDir`, `-ScriptsDir` and the service root (LocalSystem executes w
 there) → checks the prerequisites → creates the TLS certificate → adds three inbound
 firewall rules (API port, SSH range, app range) → **reports this host's sleep timeouts**
 (and, with `-KeepHostAwake` or a yes at the prompt, sets the AC ones to *never*) → writes
-`appsettings.Production.json` → **builds the autoinstall ISO as you, through your WSL**
+`appsettings.Production.json` → **builds the autoinstall ISO with the native .NET tool**
 (minutes: it downloads the source ISO on the first run and repacks it) → **creates the first
 admin and issues its token before the service starts** → registers `constructd` as
 LocalSystem → starts it → prints the enrolment details.
@@ -137,7 +129,7 @@ pick up a new Ubuntu release or a rotated bootstrap key.
 and, further up, the ISO step's own last line:
 
 ```
-==> Building the autoinstall ISO (as you, via WSL)
+==> Building the autoinstall ISO with the native .NET tool
     ISO: C:\ProgramData\Construct\service\iso\construct-autoinstall-<utc>.iso
 ```
 
@@ -163,7 +155,7 @@ shows at enrolment (step 3.1).
 **If the install fails:** it stops at the failing step and says which. Common ones —
 overlapping port ranges (fix the arguments), an ancestor directory an untrusted account can
 delete or a reparse point in the path (move the directory, or take responsibility with
-`-SkipAclHardening`), or the ISO build (it prints what `xorriso`, the download or `mkpasswd`
+`-SkipAclHardening`), or the ISO build (it prints what the native ISO tool or download
 said; fix that and re-run with `-IsoBuildOnly`).
 
 ### 1.3b Verify the install media
