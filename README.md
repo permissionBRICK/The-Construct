@@ -22,8 +22,8 @@ where they can't touch your host PC.
 
 ## ✨ Features
 
-- 🤖 **Agents preinstalled, zero config** — Claude Code, Codex & Opencode, ready in
-  unattended bypass mode: no permission prompts, real root shell.
+- 🤖 **Agents preconfigured with full access** — Claude Code, Codex & Opencode, ready in
+  unattended bypass mode: no permission prompts, root shell.
 - 🔒 **Sandboxed by design** — a throwaway Hyper-V VM stands between the agents and your PC.
 - 🎛️ **One-screen control panel** — a VS Code extension on your host runs the whole VM:
   status, power, lifecycle, projects, updates, usage.
@@ -37,12 +37,9 @@ where they can't touch your host PC.
   Remote-SSH.
 - 🔌 **Agents hand you links** — `construct expose 5173` on the VM opens that port on *your*
   PC — over an SSH tunnel the extension opens to that VM — and prints the URL to open.
-- 🖥️ **Optional T3 Code, patched end to end** — build the selected stable or nightly
-  server and Windows Desktop app inside the VM, then keep both updated together. The shared
-  patch adds live voice input recorded by the T3 app itself (no VS Code window needed),
-  Claude usage-limit recovery, and OpenCode task monitoring.
-  The web GUI is served over HTTPS with a locally trusted certificate, so the browser lets
-  it use your microphone.
+- 🖥️ **T3 Code, patched with extra features** — Patches the VM and Windows client for live
+  voice input for T3 code in the UI using Claude, auto-restore on session limit resets, as
+  well as deeper integration with the construct.
 - 🤷 **It just works™** — system prompts make agents just install whatever tool they need for the task automatically
 
 <sub>Bonus: auto-deploy MCP servers to all three agents · patched Claude Code extension for faster UI updates · no AI attribution by default.</sub>
@@ -55,7 +52,7 @@ Open **PowerShell** on Windows and paste:
 irm https://raw.githubusercontent.com/permissionBRICK/The-Construct/main/install.ps1 | iex
 ```
 
-One command, zero VM interaction: it builds an Ubuntu autoinstall ISO, creates the Hyper-V
+The script automatically builds an Ubuntu autoinstall ISO, creates the Hyper-V
 VM, installs Ubuntu unattended, provisions the full agent stack, and wires up your host's
 SSH + VS Code config. After some initial questions the setup runs completely unattended.
 
@@ -81,7 +78,7 @@ during install:
 | **vscode.dev tunnel** | `https://vscode.dev/tunnel/<name>` — opt-in (`VSCODE_TUNNEL=true`) |
 | **Codex App** | Add `agent-vm` as an SSH host |
 | **Opencode** | `agent-vm.mshome.net:4096` — `opencode serve` autostarts |
-| **T3 Code** | Opt in from Construct settings, then use its paired web UI over HTTPS (`https://agent-vm.mshome.net:5178`, locally trusted CA) or the automatically installed and patched Windows Desktop app |
+| **T3 Code** | Opt in from Construct settings, then use its paired web UI or the Windows Desktop app |
 | **Windows file share** | `\\agent-vm.mshome.net\repo` — map to a drive with `-MountRepoShare true` |
 | **Terminal** | `ssh agent-vm` — direct root access |
 
