@@ -73,6 +73,11 @@ if (options.Idle.SchedulerEnabled || options.Power.KeepHostAwake)
     builder.Services.AddHostedService<IdleSchedulerService>();
 }
 
+if (options.ForwardReconcileSeconds > 0)
+{
+    builder.Services.AddHostedService<ForwardReconciliationService>();
+}
+
 var app = builder.Build();
 
 if (options.Fake)
