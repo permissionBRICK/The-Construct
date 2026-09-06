@@ -186,7 +186,7 @@ public static class ServiceComposition
     /// <list type="bullet">
     /// <item><c>IHypervisorDriver</c> → <c>powershell.exe</c> running the repo's own
     /// <c>drivers/Load-ConstructDriver.ps1</c> contract,</item>
-    /// <item><c>IIsoBuilder</c> → <c>wsl.exe</c> running <c>bin/build-autoinstall-iso.sh</c>,</item>
+    /// <item><c>IIsoBuilder</c> → the ISO catalog, with native media production by default,</item>
     /// <item><c>IPortForwardManager</c> → <c>netsh interface portproxy</c> plus TCP-table connection
     /// counting for the idle signal.</item>
     /// </list>
@@ -204,7 +204,7 @@ public static class ServiceComposition
         if (!OperatingSystem.IsWindows())
         {
             throw new InvalidOperationException(
-                "constructd has no hypervisor platform here: the Hyper-V driver, the WSL ISO build and " +
+                "constructd has no hypervisor platform here: the Hyper-V driver, the ISO catalog and " +
                 "the portproxy forward manager need Windows, and this process is running on " +
                 $"{Environment.OSVersion.Platform}. Start the service with --fake (or " +
                 "Constructd:Fake=true); persistence works in both modes.");
@@ -263,14 +263,16 @@ public static class ServiceComposition
             options.Iso.CacheDir,
             sp.GetRequiredService<ILoggerFactory>().CreateLogger<FileIsoCatalog>()));
 
-        // WSL is what can build media on a Windows host today; the interactive administrator's WSL,
-        // not the service's (it has none — that is the whole reason Prebuilt is the default).
+        // Native media is the Windows default; the shell strategy remains explicit legacy PerVm.
         services.AddSingleton<WslIsoBuilder>();
-        services.AddSingleton<IIsoMediaBuilder>(sp => sp.GetRequiredService<WslIsoBuilder>());
+        services.AddSingleton<NativeIsoBuilder>();
+        services.AddSingleton<IIsoMediaBuilder>(sp => options.Iso.Mode == IsoBuildMode.PerVm
+            ? sp.GetRequiredService<WslIsoBuilder>() : sp.GetRequiredService<NativeIsoBuilder>());
 
         switch (options.Iso.Mode)
         {
             case IsoBuildMode.Prebuilt:
+            case IsoBuildMode.Native:
                 services.AddSingleton<IIsoBuilder>(sp => new PrebuiltIsoBuilder(
                     sp.GetRequiredService<IIsoCatalog>(),
                     sp.GetRequiredService<IIsoFileSystem>(),
@@ -305,7 +307,7 @@ public static class ServiceComposition
     /// </summary>
     private static void ValidatePlatformOptions(ConstructdOptions options)
     {
-        if (options.Iso.Mode is not (IsoBuildMode.Prebuilt or IsoBuildMode.PerVm))
+        if (options.Iso.Mode is not (IsoBuildMode.Prebuilt or IsoBuildMode.PerVm or IsoBuildMode.Native))
         {
             throw new InvalidOperationException(UnimplementedModeMessage(options.Iso.Mode));
         }
