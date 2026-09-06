@@ -1,5 +1,7 @@
 # Modular / Remote Architecture Plan
 
+> Follow-on design (2026-09-06): [remote host administration and temporary child VMs](host-administration-and-child-vms.md), with a separate [implementation plan](host-administration-implementation.md). These define the agreed next scope for admin UI, user delegation, general-purpose child VMs, sharing, capacity and host updates. They are planning documents, not implemented features.
+
 Status: **in execution** · plan 2026-09-01, progress log at the end
 Scope decided with the project owner via Q&A; findings below come from a four-way repo/notes audit
 (assumption map, idea mining, jarvis logs, pipeline anatomy).
