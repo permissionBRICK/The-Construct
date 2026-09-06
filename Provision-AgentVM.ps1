@@ -1754,7 +1754,12 @@ if (Enter-RootKeyFastPath) {
     # ('agent') is not a user on this VM (pre-built media creates 'construct').
     if (-not $PSBoundParameters.ContainsKey('SeedUser')) {
         try {
-            $guestSeed = (Invoke-Ssh -Command "u=`$(sed -n 's/^SSH_USER=//p' /etc/construct/config.env 2>/dev/null | head -1 | tr -d `"'`\`"`"); if [ -n `"`$u`" ] && id -u `"`$u`" >/dev/null 2>&1; then echo `"`$u`"; elif id -u '$SeedUser' >/dev/null 2>&1; then echo '$SeedUser'; elif id -u construct >/dev/null 2>&1; then echo construct; fi").Trim()
+            # Windows PowerShell 5.1 strips embedded double quotes from native
+            # arguments. Encode this shell query so tr's quote set and "$u"
+            # survive ssh.exe's argument transport (including the root wrapper).
+            $seedQuery = "u=`$(sed -n 's/^SSH_USER=//p' /etc/construct/config.env 2>/dev/null | head -1 | tr -d `"'`\`"`"); if [ -n `"`$u`" ] && id -u `"`$u`" >/dev/null 2>&1; then echo `"`$u`"; elif id -u '$SeedUser' >/dev/null 2>&1; then echo '$SeedUser'; elif id -u construct >/dev/null 2>&1; then echo construct; fi"
+            $seedQueryB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($seedQuery))
+            $guestSeed = (Invoke-Ssh -Command "printf %s '$seedQueryB64' | base64 -d | bash").Trim()
             if ($guestSeed -and $guestSeed -ne $SeedUser -and $guestSeed -match '^[a-z_][a-z0-9_-]*$') {
                 Write-Note "Seed user on this VM is '$guestSeed' (not '$SeedUser'); using it."
                 $SeedUser = $guestSeed
