@@ -1,3 +1,24 @@
+# T3 build repository split (2026-09-06)
+
+All T3 inventories, overlays, source/runtime patchers, build code and focused tests
+now live in [construct-t3-builds](https://github.com/permissionBRICK/construct-t3-builds).
+Its README is the current publisher contract. Construct owns provisioning, channel
+selection, manifest verification, service setup and Windows installation.
+
+Both stable and nightly default to their latest validated pair. Nightly releases
+are prereleases and do not replace stable latest. Local builds remain opt-in;
+`bin/t3code-build-source.py` fetches one build-repository commit and deferred Windows
+packaging reuses the commit recorded in the prepared server manifest.
+
+Jarvis Lite checks T3 dist-tags every 15 minutes and validates only new upstream
+versions. Repair PRs target the builds repository and merging triggers publication.
+An unchanged upstream does not revalidate after repository changes; `--force`
+is available for an intentional retry. Other upstream watches remain daily.
+
+## Earlier implementation and verification history
+
+The following records describe the pre-split paths and stable-only publisher.
+
 # T3 prebuilt pair publishing (2026-09-05)
 
 The publisher is https://github.com/permissionBRICK/construct-t3-builds. It owns
