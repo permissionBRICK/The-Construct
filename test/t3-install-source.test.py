@@ -35,8 +35,8 @@ REPO_DIR=/fixture
         self.assertEqual('prebuilt', self.run_case(saved='local', override='prebuilt').stdout.strip())
         self.assertEqual('local', self.run_case(saved='prebuilt', override='local').stdout.strip())
 
-    def test_nightly_remains_local(self):
-        self.assertEqual('local', self.run_case(channel='nightly').stdout.strip())
+    def test_nightly_defaults_to_prebuilt(self):
+        self.assertEqual('prebuilt', self.run_case(channel='nightly').stdout.strip())
 
     def test_download_failure_never_falls_back_to_compilation(self):
         result = self.run_case(fail=True)

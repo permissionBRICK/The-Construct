@@ -2652,8 +2652,9 @@ if ($Action -eq 'provision') {
                 $isPrebuilt = $manifest.PSObject.Properties['installationMode'] -and $manifest.installationMode -eq 'prebuilt'
                 if ($isPrebuilt) {
                     $expectedUrl = "https://github.com/permissionBRICK/construct-t3-builds/releases/download/t3-$($manifest.version)-$($manifest.buildHash)/T3Code-Construct-Setup.exe"
-                    if ($manifest.buildHash -notmatch '^[0-9a-f]{64}$' -or $manifest.version -notmatch '^\d+\.\d+\.\d+$' -or
-                        $manifest.channel -ne 'stable' -or $manifest.downloadUrl -cne $expectedUrl) {
+                    $versionPattern = if ($manifest.channel -eq 'nightly') { '^\d+\.\d+\.\d+-nightly\.\d+\.\d+$' } else { '^\d+\.\d+\.\d+$' }
+                    if ($manifest.buildHash -notmatch '^[0-9a-f]{64}$' -or $manifest.version -notmatch $versionPattern -or
+                        $manifest.channel -notin @('stable', 'nightly') -or $manifest.downloadUrl -cne $expectedUrl) {
                         throw 'The prebuilt T3 Desktop manifest has an invalid release URL or identity.'
                     }
                 } else {

@@ -429,6 +429,20 @@ function ok(name, cond, detail) {
   const offlinePair = await updates.augmentAgents([prebuiltAgent], { noCache: true, fetchJson: async () => null });
   ok('prebuilt updates: unavailable release preserves current state', offlinePair[0] === prebuiltAgent);
 
+  const nightlyAgent = {...prebuiltAgent, channel:'nightly', version:'0.0.39-nightly.20260906.1'};
+  const nightlyTag = `t3-${nightlyAgent.version}-${'b'.repeat(64)}`;
+  const nightlyRelease = {tag_name:nightlyTag, prerelease:true, draft:false, published_at:'2026-09-06T00:00:00Z',
+    assets:['manifest.json','SHA256SUMS','T3Code-Construct-Setup.exe','t3code-server-linux-x64.tar.gz'].map(name=>({name}))};
+  const nightlyPair = await updates.augmentAgents([nightlyAgent], {noCache:true, fetchJson:fakeByUrl({
+    'https://api.github.com/repos/permissionBRICK/construct-t3-builds/releases?per_page=100&page=1':[
+      {...nightlyRelease, draft:true}, {...nightlyRelease, assets:[]}, nightlyRelease],
+    [`https://github.com/permissionBRICK/construct-t3-builds/releases/download/${nightlyTag}/manifest.json`]:
+      {channel:'nightly',version:nightlyAgent.version,buildHash:'b'.repeat(64)},
+  })});
+  ok('prebuilt nightly follows the validated pair including patch-only updates', nightlyPair[0].updateAvailable === true);
+  const noNightly = await updates.augmentAgents([nightlyAgent], {noCache:true,fetchJson:async()=>[]});
+  ok('prebuilt nightly without a published pair never falls back to npm', noNightly[0] === nightlyAgent);
+
   // ── augment folds agent updates into state ──────────────────────────────────
   const st = await updates.augment(
     { online: true, agents: [{ id: "codex", name: "Codex", version: "0.142.4", updateAvailable: false }] },

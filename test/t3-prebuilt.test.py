@@ -20,6 +20,7 @@ class Prebuilt(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.environ = patch.dict(os.environ, {
+            'T3CODE_CHANNEL': 'stable',
             'T3CODE_PREBUILT_CACHE': str(self.root / 'cache'),
             'T3CODE_ARTIFACT_ROOT': str(self.root / 'artifacts'),
             'T3CODE_LAUNCHER': str(self.root / 't3'),
@@ -98,6 +99,27 @@ class Prebuilt(unittest.TestCase):
         self.manifest['assets'][p.SERVER]['url'] = f'{p.BASE}/latest/download/{p.SERVER}'
         with self.assertRaisesRegex(ValueError, 'immutable release'):
             p.install(self.fetch)
+
+    def test_nightly_selects_complete_prerelease_and_rejects_wrong_channel(self):
+        self.manifest.update(channel='nightly', version='1.0.1-nightly.20260906.1')
+        self.refresh()
+        release = dict(tag_name=self.manifest['releaseTag'], draft=False, prerelease=True,
+                       published_at='2026-09-06T12:00:00Z',
+                       assets=[dict(name=n) for n in (p.SERVER, p.DESKTOP, 'manifest.json', 'SHA256SUMS')])
+        def fetch(url, destination):
+            if 'api.github.com' in url:
+                destination.write_text(json.dumps([
+                    {**release, 'draft': True, 'published_at':'2026-09-07T00:00:00Z'},
+                    {**release, 'assets': []}, {**release, 'prerelease': False}, release]))
+            else:
+                self.fetch(url, destination)
+        with patch.dict(os.environ, T3CODE_CHANNEL='nightly'):
+            p.install(fetch)
+            self.assertIn(f"/download/{release['tag_name']}/manifest.json", self.calls[0])
+            self.assertIn('T3CODE_DESKTOP_CHANNEL=nightly', (self.root / 'status').read_text())
+            self.manifest['channel'] = 'stable'
+            with self.assertRaisesRegex(ValueError, 'format/channel'):
+                p.install(fetch)
 
     def test_unsafe_archive_cannot_write_outside_staging(self):
         with tarfile.open(self.archive, 'w:gz') as tar:

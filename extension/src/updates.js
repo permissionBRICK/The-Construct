@@ -300,10 +300,28 @@ async function augmentAgents(agents, opts = {}) {
   if (!Array.isArray(agents)) return agents;
   return Promise.all(agents.map(async (a) => {
     if (!a || !a.id || !a.version || a.version === "—" || !AGENT_LATEST[a.id]) return a;
-    if (a.id === 't3code' && a.channel === 'stable' && a.installationMode === 'prebuilt') {
-      const manifest = await cached('agent:t3code:prebuilt', async () => {
-        const value = await (opts.fetchJson || fetchJson)('https://github.com/permissionBRICK/construct-t3-builds/releases/latest/download/manifest.json', opts);
-        return value && value.channel === 'stable' && /^[0-9a-f]{64}$/.test(value.buildHash) && extractVersion(value.version) ? value : null;
+    if (a.id === 't3code' && a.installationMode === 'prebuilt') {
+      const manifest = await cached(`agent:t3code:prebuilt:${a.channel}`, async () => {
+        const get = opts.fetchJson || fetchJson;
+        const base = 'https://github.com/permissionBRICK/construct-t3-builds/releases';
+        let url = `${base}/latest/download/manifest.json`;
+        if (a.channel === 'nightly') {
+          for (let page = 1; ; page++) {
+            const releases = await get(`https://api.github.com/repos/permissionBRICK/construct-t3-builds/releases?per_page=100&page=${page}`, opts);
+            if (!Array.isArray(releases)) return null;
+            const candidates = releases.filter(r => !r.draft && r.prerelease &&
+              /^t3-\d+\.\d+\.\d+-nightly\.\d+\.\d+-[a-f0-9]{64}$/.test(r.tag_name) &&
+              ['manifest.json', 'SHA256SUMS', 'T3Code-Construct-Setup.exe', 't3code-server-linux-x64.tar.gz'].every(name => r.assets?.some(asset => asset.name === name)));
+            if (candidates.length) {
+              candidates.sort((x, y) => y.published_at.localeCompare(x.published_at));
+              url = `${base}/download/${candidates[0].tag_name}/manifest.json`;
+              break;
+            }
+            if (releases.length < 100) return null;
+          }
+        }
+        const value = await get(url, opts);
+        return value && value.channel === a.channel && /^[0-9a-f]{64}$/.test(value.buildHash) && extractVersion(value.version) ? value : null;
       }, opts);
       if (!manifest || manifest.buildHash === a.buildHash) return a;
       return { ...a, latest: manifest.version, updateAvailable: true };

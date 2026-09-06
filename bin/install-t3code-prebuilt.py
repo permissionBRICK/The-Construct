@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install the last validated stable pair without compilers or a service restart."""
+"""Install the last validated pair for the selected channel without compilers or a service restart."""
 import fcntl
 import hashlib
 import json
@@ -19,11 +19,12 @@ SERVER = 't3code-server-linux-x64.tar.gz'
 DESKTOP = 'T3Code-Construct-Setup.exe'
 
 
-def read_manifest(manifest):
-    if manifest.get('formatVersion') != 1 or manifest.get('channel') != 'stable':
+def read_manifest(manifest, channel="stable"):
+    if manifest.get('formatVersion') != 1 or manifest.get('channel') != channel:
         raise ValueError('Unsupported prebuilt manifest format/channel')
-    if not re.fullmatch(r'\d+\.\d+\.\d+', manifest.get('version', '')):
-        raise ValueError('Invalid stable version')
+    pattern = r'\d+\.\d+\.\d+-nightly\.\d+\.\d+' if channel == 'nightly' else r'\d+\.\d+\.\d+'
+    if not re.fullmatch(pattern, manifest.get('version', '')):
+        raise ValueError('Invalid channel version')
     for key in ('buildHash', 'patchHash'):
         if not re.fullmatch(r'[a-f0-9]{64}', manifest.get(key, '')):
             raise ValueError(f'Invalid {key}')
@@ -53,7 +54,31 @@ def atomic_json(path, value):
     temporary.replace(path)
 
 
+def manifest_url(channel, fetch, temporary):
+    if channel == 'stable':
+        return f'{BASE}/latest/download/manifest.json'
+    # GitHub's latest endpoint excludes prereleases. Follow a complete nightly
+    # release and then its immutable URLs, never a mixture of channel assets.
+    page = 1
+    while True:
+        listing = temporary / 'releases.json'
+        fetch(f'https://api.github.com/repos/{REPOSITORY}/releases?per_page=100&page={page}', listing)
+        releases = json.loads(listing.read_text())
+        candidates = [r for r in releases if not r['draft'] and r['prerelease']
+                      and re.fullmatch(r't3-\d+\.\d+\.\d+-nightly\.\d+\.\d+-[a-f0-9]{64}', r['tag_name'])
+                      and {SERVER, DESKTOP, 'manifest.json', 'SHA256SUMS'} <= {a['name'] for a in r['assets']}]
+        if candidates:
+            latest = max(candidates, key=lambda r: r['published_at'])
+            return f'{BASE}/download/{latest["tag_name"]}/manifest.json'
+        if len(releases) < 100:
+            raise ValueError('No validated nightly T3 pair has been published')
+        page += 1
+
+
 def install(fetch=download):
+    channel = os.environ.get('T3CODE_CHANNEL', 'stable')
+    if channel not in ('stable', 'nightly'):
+        raise ValueError('Invalid T3CODE_CHANNEL')
     if platform.machine() != 'x86_64' or platform.system() != 'Linux':
         raise ValueError('Prebuilt T3 requires Linux x64; select T3CODE_BUILD_SOURCE=local on other targets')
     cache = Path(os.environ.get('T3CODE_PREBUILT_CACHE', '/var/cache/construct/t3code-prebuilt'))
@@ -65,8 +90,8 @@ def install(fetch=download):
     with (cache / '.install.lock').open('w') as lock, tempfile.TemporaryDirectory(prefix='.download-', dir=cache) as scratch:
         fcntl.flock(lock, fcntl.LOCK_EX)
         temporary = Path(scratch)
-        fetch(f'{BASE}/latest/download/manifest.json', temporary / 'manifest.json')
-        manifest = read_manifest(json.loads((temporary / 'manifest.json').read_text()))
+        fetch(manifest_url(channel, fetch, temporary), temporary / 'manifest.json')
+        manifest = read_manifest(json.loads((temporary / 'manifest.json').read_text()), channel)
         destination = cache / manifest['buildHash']
         receipt = destination / '.construct-prebuilt-manifest.json'
         current = False
@@ -107,7 +132,7 @@ def install(fetch=download):
         pending.replace(launcher)
         pending_status = status.with_name(status.name + '.tmp')
         pending_status.write_text(f'T3CODE_SERVER_READY=yes\nT3CODE_DESKTOP_READY=yes\n'
-                                  f'T3CODE_DESKTOP_VERSION={manifest["version"]}\nT3CODE_DESKTOP_CHANNEL=stable\n'
+                                  f'T3CODE_DESKTOP_VERSION={manifest["version"]}\nT3CODE_DESKTOP_CHANNEL={channel}\n'
                                   f'T3CODE_BUILD_KEY={manifest["buildHash"]}\nT3CODE_INSTALLATION_MODE=prebuilt\n')
         pending_status.replace(status)
     print('Prebuilt server and matching Windows download are ready.')
