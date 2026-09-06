@@ -2,6 +2,7 @@ runtime/
 .env
 *.local
 *.iso
+.construct-tools/
 # Host-side persisted setup choices (git identity, ...), kept next to the scripts
 # so reprovisions don't re-prompt. Local to each machine; never committed.
 .construct-settings.json

@@ -6,7 +6,7 @@ VMs on it from the VS Code extension and the PowerShell scripts
 
 **Status: complete (batches B6 + B6b).** The API surface, the domain model, the idle-policy engine and
 the durable SQLite stores landed with the contract-first scaffold (B6); the Windows platform — the
-Hyper-V driver, the WSL ISO build, the `netsh` port forwards — plus the admin CLI and the host
+Hyper-V driver, the native ISO build, the `netsh` port forwards — plus the admin CLI and the host
 installer landed with B6b, without changing an endpoint, a policy or a job.
 
 Everything Windows-specific still sits behind the same interfaces, and every child process goes
@@ -37,7 +37,7 @@ service/
   src/Constructd.Windows/   the Windows platform; every call goes through IProcessRunner
     Process/                ProcessRunner — argv arrays, no shell, ever
     HyperV/                 HyperVDriver + the PowerShell it composes (drivers/Load-ConstructDriver.ps1)
-    Iso/                    the build strategies (WSL, pre-built), the ISO catalog,
+    Iso/                    the build strategies (native, WSL, catalog), the ISO catalog,
                             the WSL path mapping, the source-ISO cache
     Forwards/               NetshPortForwardManager, the portproxy parser, the TCP-table P/Invoke
     Power/                  WindowsHostPowerGuard — the PowerCreateRequest/PowerSetRequest P/Invoke
@@ -437,7 +437,8 @@ Bound from the `Constructd` section of `appsettings.json`, from environment vari
 | `Idle:ReportIntervalMinutes` | `5` | Interval the guest reporter posts at. |
 | `Idle:MissingReportGraceMultiple` | `3` | Intervals of silence before the guest counts as idle. |
 | `Power:KeepHostAwake` | `true` | Hold a Windows power availability request while at least one service-managed VM is `Running`, so the host does not sleep under it (*Keeping the host awake*). `false` never takes one. Independent of `Idle:SchedulerEnabled`, though both ride the same loop. No effect off Windows or in fake mode. |
-| `Iso:Mode` | `Prebuilt` | Which ISO build strategy is in effect: `Prebuilt` (the admin builds the media, the service consumes it) or `PerVm` (the service builds one ISO per VM through WSL). `Native`, `InGuest` and `HypervisorHost` are planned and refused at startup. See *ISO build strategies*. |
+| `Iso:Mode` | `Prebuilt` | Which ISO build strategy is in effect: `Prebuilt` (the admin builds the media, the service consumes it) or `PerVm` (the service builds one ISO per VM through WSL). `Native` uses the .NET tool and catalog; `InGuest` and `HypervisorHost` remain planned and refused at startup. See *ISO build strategies*. |
+| `Iso:NativeBuilderPath` | `<ScriptsDir>\.construct-tools\iso\Construct.Iso.exe` | Self-contained native builder resolved by the installer; empty uses this path. |
 | `Iso:HostnameSource` | `hyperv-kvp` | Where a guest built from generic media takes its hostname at first boot (`VM_HOSTNAME_SOURCE`). `cloud-init-metadata` is planned for Proxmox / NoCloud / ConfigDrive. |
 | `Iso:SeedUser` | `construct` | Seed user of the unattended install. |
 | `Iso:BootstrapPublicKeyPath` | `<ScriptsDir>\keys\bootstrap_ed25519.pub` | Bootstrap key injected into the ISO. |
@@ -490,7 +491,7 @@ exactly one place — `Composition/ServiceComposition.cs`, which has two indepen
 |---|---|
 | `IHypervisorDriver` | `HyperVDriver`: `powershell.exe` running the repo's own `drivers/Load-ConstructDriver.ps1` contract (`docs/drivers.md`). A future Proxmox driver maps the same operations onto its REST API. |
 | `IIsoBuilder` (consume) | By `Iso:Mode`: `PrebuiltIsoBuilder` (default — hands back the media in the ISO catalog) or `WslIsoBuilder` (builds one ISO per VM through `wsl.exe`). See *ISO build strategies*. |
-| `IIsoMediaBuilder` (produce) | `WslIsoBuilder`: `wsl.exe` running the existing `bin/build-autoinstall-iso.sh`, driven by `admin iso build` as the interactive administrator. Registered whatever the mode is. |
+| `IIsoMediaBuilder` (produce) | `NativeIsoBuilder` for `Native` and `Prebuilt`; `WslIsoBuilder` only for explicit `PerVm`. Driven by `admin iso build`. |
 | `IIsoCatalog` | `FileIsoCatalog`: versioned ISOs, sidecars and the `current.pointer` in `Iso:CacheDir`. Any build strategy publishes into it. |
 | `IPortForwardManager` | `NetshPortForwardManager`: `netsh interface portproxy` rules over `IForwardStore`, reconciled at startup, plus connection counting from the host TCP table for the idle signal. |
 | `IProcessRunner` | `ProcessRunner`: `System.Diagnostics.Process` with an `ArgumentList`. The only way this service starts anything. |
@@ -615,14 +616,14 @@ differs per host — and the current answer is a stopgap, not the design.
 |---|---|---|
 | `Prebuilt` *(default)* | by the installing **administrator**, once, interactively (`admin iso build`); the service consumes the catalog entry | **now** |
 | `PerVm` | by the **service**, through `wsl.exe`, one ISO per VM | works wherever the service identity can run WSL |
-| `Native` | in-process on Windows (.NET): remaster the stock ISO without WSL or xorriso | planned |
+| `Native` | standalone self-contained .NET tool, generic media in the catalog | **Windows installer default**; [details](../docs/native-iso.md) |
 | `InGuest` | inside an existing Construct VM over SSH (xorriso is already there), result copied back — this is how the system will **self-update its install media** and fetch new source ISOs | planned |
 | `HypervisorHost` | natively on the hypervisor host (xorriso on a Proxmox node) — the regular autoinstall path once Hyper-V is not the only backend | planned |
 
-**Why `Prebuilt` is the default:** `wsl.exe` refuses to run as LocalSystem
-(`Wsl/WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED`, field-verified 2026-09-02) and LocalSystem is the identity
-the service runs as. The administrator's own WSL builds the media; the service only reads it.
-Configuring a planned mode is refused at startup, naming the two that work.
+The Windows host installer selects `Native`: `admin iso build` produces generic media with
+`NativeIsoBuilder` and `PrebuiltIsoBuilder` consumes it through the catalog. `Prebuilt` remains
+the configuration API default for existing deployments and also uses the native producer.
+`PerVm` explicitly retains the WSL strategy. `InGuest` and `HypervisorHost` are still refused.
 
 The seam is two narrow interfaces plus one catalog, and they are what a new strategy plugs into:
 
@@ -681,7 +682,19 @@ names the exact command), and warns loudly when the host's bootstrap key no long
 fingerprint in the sidecar — the failure that otherwise looks like a successful install and then
 refuses the client's key.
 
-### WSL ISO build
+### Native ISO build
+
+The host installer resolves `.construct-tools/iso/Construct.Iso.exe` from a local source
+checkout/SDK or the pinned, checksum-verified GitHub release. `Iso:NativeBuilderPath` can
+override that path. `NativeIsoBuilder` calls it with `--request-stdin`; credentials and native
+Windows paths travel as JSON on stdin, never shell arguments. The catalog's legacy
+`BuildScriptSha256` field records the executable SHA-256 for native media. Download caching,
+source verification, serialization, output checks and progress redaction are shared with
+the retained shell strategy in `IsoBuilderBase`.
+
+See [native ISO builds](../docs/native-iso.md) for release management and local testing.
+
+### WSL ISO build (explicit legacy `PerVm` strategy)
 
 ```
 # per VM (Iso:Mode = PerVm)                    # generic media (admin iso build)
@@ -835,9 +848,8 @@ constructd admin iso prune [--json]
 wildcard DNS record the pattern needs, and the two forward ranges. It is the quickest way to tell
 whether the wildcard is actually in play before hunting for a broken URL.
 
-**`admin iso …` is how install media exists at all in the default `Prebuilt` mode**, and it is run by
-the interactive administrator — the service cannot do it (WSL refuses to run as LocalSystem). The
-installer's ISO step is exactly `admin iso build`.
+**`admin iso …` publishes install media for `Native` and `Prebuilt` modes**. The
+installer's ISO step is exactly `admin iso build`, using the native producer.
 
 - **`build`** resolves the source ISO (downloading and verifying it once when `Iso:SourceUrl` is set),
   generates a seed password it then discards, builds **generic** media through the configured strategy,
@@ -895,11 +907,10 @@ dotnet publish service\src\Constructd.Api -c Release -r win-x64 --self-contained
 
 In order: self-elevate → validate the inputs (including that the two port ranges do not overlap) → the
 service root and data directory under `ProgramData` → **lock down everything the service executes or
-trusts** → prerequisites (Hyper-V via the repo's own `Ensure-HyperV`, **your** WSL distro with
-`xorriso` + `whois` inside it, the OpenSSH client; no .NET runtime is needed when published
+trusts** → prerequisites (Hyper-V via the repo's own `Ensure-HyperV`, the OpenSSH client; no .NET runtime is needed when published
 self-contained) → the TLS certificate → firewall rules → **the host's sleep timeouts** (reported, and
 switched off on request) → `appsettings.Production.json` next to the
-executable → **the autoinstall ISO, built as you through your WSL** (`admin iso build`) →
+executable → **the autoinstall ISO, built with the native .NET tool** (`admin iso build`) →
 **the first admin and an API token, through the admin CLI, before the service
 starts** (so nothing contends for the SQLite file and the host is reachable the moment it comes up) →
 register the service as LocalSystem → start it → print the enrollment details.
@@ -929,7 +940,7 @@ Run it again after publishing a new build: it updates binaries, settings and the
 | `-ListenAddress` | `0.0.0.0` | `listenaddress=` of the portproxy rules. |
 | `-IsoSourcePath` / `-IsoSourceUrl` / `-IsoSha256` | – | The Ubuntu ISO to remaster. |
 | `-AdminUser` / `-AdminMaxVms` | current user / `10` | The first admin. |
-| `-SkipPrereqs` | off | Skip the Hyper-V/WSL/OpenSSH checks (a re-run on a host you already prepared). |
+| `-SkipPrereqs` | off | Skip the Hyper-V/OpenSSH checks (a re-run on a host you already prepared). |
 | `-SkipAclHardening` | off | Do not lock the three paths down (see below). |
 | `-SkipIsoBuild` | off | Do not build the autoinstall ISO; VM creation then fails until `admin iso build` is run (the summary says so). |
 | `-IsoBuildOnly` | off | (Re)build the ISO on an existing install and change nothing else — a new Ubuntu release, a rotated bootstrap key. |
@@ -962,19 +973,16 @@ The service runs as **LocalSystem**. It drives Hyper-V and netsh, neither of whi
 account can do here without further setup — which is also why nothing in this service builds a command
 string.
 
-**It does not run WSL, and cannot.** `wsl.exe` under LocalSystem exits with
-`Wsl/WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED` (field-verified 2026-09-02, WSL 2.6.3). That is why the ISO is
-built by the **administrator running the installer**, in *their* WSL, and published into the ISO
-catalog the service reads — see *ISO build strategies*. The installer therefore checks WSL and installs
-`xorriso`/`whois` **as you**, and its ISO step is `<PublishDir>\Constructd.Api.exe admin iso build`,
-run as you, failing closed with whatever the build printed. Nothing in the installer runs as SYSTEM any
-more; the one-shot scheduled-task runner that used to exist for it is gone.
+**Windows ISO builds use the native tool.** The installer resolves a self-contained executable,
+then runs `<PublishDir>\Constructd.Api.exe admin iso build` to publish generic media into
+the catalog. No distro or package installation is involved. The shell strategy is retained
+for explicit legacy use and future Linux/Proxmox hosting.
 
 Two consequences the installer handles explicitly:
 
 **Everything the service executes or trusts is locked down before the service is ever registered.**
 LocalSystem *executes* what it finds in `-PublishDir` and `-ScriptsDir` (the published exe, the
-PowerShell driver, the ISO build script), so write access to either is equivalent to running code as
+PowerShell driver, the ISO builder executable), so write access to either is equivalent to running code as
 LocalSystem; the **service root** (the parent of `-DataDir`) holds the authorization database — users,
 token hashes, the VM registry, the audit trail — plus the ISO catalog, whose media is what every new VM
 installs itself from. On a host several people can log into, an unprivileged user who can pre-create or
@@ -1030,7 +1038,7 @@ answered — so another process running as the same user can watch for the file 
 that window, choosing the `-ScriptsDir` that then executes as LocalSystem or adding
 `-SkipAclHardening`. A GUID name prevents guessing the name in advance, not noticing it appear.
 `-EncodedCommand` is part of the elevated process's command line, which the caller cannot alter once
-`Start-Process` has been called. Everything else the installer runs — `wsl.exe`, the admin CLI — is
+`Start-Process` has been called. Everything else the installer runs — the ISO tool, the admin CLI — is
 invoked with an argument **list** in its own (already elevated) context, so no quoting decision exists
 to get wrong.
 
@@ -1042,7 +1050,7 @@ PowerShell flattens it back into a single command-line string.)
 **The ISO step runs as you, and fails closed.** After writing `appsettings.Production.json` (which the
 CLI reads for the cache directory and the source ISO) and before registering the service, the installer
 runs `admin iso build` and stops the install if it fails, showing what the build printed — an exit code
-alone says nothing about why `xorriso`, a download or `mkpasswd` gave up. The build is idempotent, so
+alone says nothing about why the native ISO tool or a download failed. The build is idempotent, so
 re-running the installer costs nothing; `-SkipIsoBuild` defers it (and the summary then says VM
 creation will fail until it is built), and `-IsoBuildOnly` runs *only* this step on an existing install
 — no ACLs, no certificate, no settings, no re-registration, so it cannot disturb a host that is serving

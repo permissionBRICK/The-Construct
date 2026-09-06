@@ -318,7 +318,7 @@ ok "the installer rejects overlapping port ranges" ($installAstText -match 'over
 # Hardening has to happen before anything is put in those directories, and long
 # before the service can ever run from them.
 $aclAt      = $installAstText.IndexOf('foreach ($entry in (Sort-ConstructHardeningOrder -Entries $hardening))')
-$isoAt      = $installAstText.IndexOf("Building the autoinstall ISO (as you, via WSL)")
+$isoAt      = $installAstText.IndexOf("Building the autoinstall ISO with the native .NET tool")
 $registerAt = $installAstText.IndexOf("Registering the Windows service")
 ok "paths are hardened before anything is built into them" ($aclAt -gt 0 -and $aclAt -lt $isoAt)
 ok "paths are hardened before the service is registered" ($aclAt -gt 0 -and $aclAt -lt $registerAt)
@@ -638,17 +638,11 @@ ok "nothing runs wsl.exe as LocalSystem any more" (
 ok "the WSL distro is no longer exported/imported" (
     -not ($installText -match 'wsl\.exe --export') -and -not ($installText -match '"--import"'))
 
-# What replaces it.
-ok "the interactive WSL check stays" ($installText -match 'Checking WSL \(the ISO build runs xorriso inside it, as YOU\)')
-ok "a missing WSL is still a hard error" ($installText -match 'WSL is not installed')
-ok "a missing distro is still a hard error" ($installText -match 'WSL is installed but has no distro')
-ok "xorriso + whois are ensured in the ADMIN's distro" (
-    $installText -match 'Ensuring xorriso \+ whois inside your WSL distro')
-ok "...as root inside the distro, through an argument list" (
-    $installText -match '"-u", "root", "--", "bash", "-lc"' -and $installText -match '& wsl\.exe @ensureArgs')
-ok "a failed package install fails the install, showing what it printed" (
-    $installText -match 'Could not install xorriso/whois inside WSL' -and
-    $installText -match 'Format-ConstructCommandOutput -Output \$ensureOutput')
+# Both normal and ISO-only installs resolve the independent native tool.
+ok "the ISO tool is resolved by the build command" ($installText -match 'Resolve-ConstructIsoBuilder -ScriptsDir')
+ok "the installer never invokes WSL" (-not ($installText -match '& wsl\.exe|Get-Command wsl\.exe'))
+ok "the native executable is passed to the admin CLI via configuration" ($installText -match 'Constructd__Iso__NativeBuilderPath = \$nativeTool')
+ok "the native strategy is selected even for old ISO-only installations" ($installText -match "Constructd__Iso__Mode = 'Native'")
 
 # The CLI reads appsettings.Production.json for the cache directory and the source ISO, so
 # the environment has to be selected before the FIRST invocation, not before the admin steps.
@@ -663,8 +657,8 @@ ok "the ISO is built through the service's own admin CLI" (
     $installText -match '@\("admin", "iso", "build"\)')
 ok "the build is invoked with an argument list, never a command string" (
     $installText -match '& \$Exe @arguments')
-ok "the step says whose WSL it uses" (
-    $installText -match 'Building the autoinstall ISO \(as you, via WSL\)')
+ok "the step names the native builder" (
+    $installText -match 'Building the autoinstall ISO with the native \.NET tool')
 ok "a failed ISO build fails the install (fail closed)" (
     $installText -match 'Building the autoinstall ISO failed \(exit \$isoExit\)')
 ok "...and shows what the build printed" (
@@ -691,7 +685,7 @@ ok "the enrollment summary prints how to inspect the media" (
     $installText -match 'admin iso status')
 
 # The settings must select the strategy the installer just built for.
-ok "the service is configured for the pre-built strategy" ($installText -match 'Mode\s+= "Prebuilt"')
+ok "the service is configured for the native strategy" ($installText -match 'Mode\s+= "Native"')
 ok "the guest identity source is written into the settings" (
     $installText -match 'HostnameSource\s+= "hyperv-kvp"')
 
@@ -708,7 +702,7 @@ ok "a missing OpenSSH client is a hard error" ($installText -match 'The OpenSSH 
 # ISO), and the service is registered only after the admin exists, so the host is
 # reachable the moment it comes up and nothing contends for the SQLite file.
 $settingsAt = $installText.IndexOf("Writing appsettings.Production.json")
-$isoBuildAt = $installText.IndexOf("Building the autoinstall ISO (as you, via WSL)")
+$isoBuildAt = $installText.IndexOf("Building the autoinstall ISO with the native .NET tool")
 $adminAt    = $installText.IndexOf('"admin", "users", "add"')
 $serviceAt  = $installText.IndexOf("Registering the Windows service")
 ok "the settings are written before the ISO is built" ($settingsAt -gt 0 -and $settingsAt -lt $isoBuildAt)

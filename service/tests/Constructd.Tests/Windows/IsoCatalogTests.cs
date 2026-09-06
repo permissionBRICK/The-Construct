@@ -402,6 +402,7 @@ public sealed class IsoCatalogTests
 
     [Theory]
     [InlineData(IsoBuildMode.Prebuilt, typeof(PrebuiltIsoBuilder))]
+    [InlineData(IsoBuildMode.Native, typeof(PrebuiltIsoBuilder))]
     [InlineData(IsoBuildMode.PerVm, typeof(WslIsoBuilder))]
     public void The_mode_decides_which_strategy_the_job_gets(IsoBuildMode mode, Type expected)
     {
@@ -415,17 +416,17 @@ public sealed class IsoCatalogTests
     {
         // `admin iso build` must work in Prebuilt mode — that is the whole point of the mode — and it
         // is the interactive administrator's WSL that does the building either way.
-        foreach (var mode in new[] { IsoBuildMode.Prebuilt, IsoBuildMode.PerVm })
+        foreach (var mode in new[] { IsoBuildMode.Prebuilt, IsoBuildMode.PerVm, IsoBuildMode.Native })
         {
             using var provider = Strategy(mode);
 
-            Assert.IsType<WslIsoBuilder>(provider.GetRequiredService<IIsoMediaBuilder>());
+            Assert.Equal(mode == IsoBuildMode.PerVm ? typeof(WslIsoBuilder) : typeof(NativeIsoBuilder),
+                provider.GetRequiredService<IIsoMediaBuilder>().GetType());
             Assert.IsType<FileIsoCatalog>(provider.GetRequiredService<IIsoCatalog>());
         }
     }
 
     [Theory]
-    [InlineData(IsoBuildMode.Native)]
     [InlineData(IsoBuildMode.InGuest)]
     [InlineData(IsoBuildMode.HypervisorHost)]
     public void A_planned_strategy_is_refused_with_what_to_use_instead(IsoBuildMode mode)

@@ -40,8 +40,8 @@ If the VM already exists, you get a menu:
 See [Saving & restoring config](backup-restore.md) for what gets saved and restored.
 
 > Installs from `permissionBRICK/The-Construct`; pass `-Repo owner/name` for a fork.
-> Requires WSL with a Linux distro for the ISO build — if it's missing, the installer tells
-> you to run `wsl --install -d Ubuntu`, reboot, and re-run. The one-liner sets execution
+> Uses the [native .NET ISO builder](native-iso.md), built locally when available or
+> downloaded as a verified self-contained executable. No WSL is needed. The one-liner sets execution
 > policy `Bypass` for its own process only. `install.ps1` doesn't declare most params
 > itself — it forwards unknown args straight through to `Auto-Install.ps1` generically, so
 > new Auto-Install options (like the config-sync ones below) work through the one-liner for
@@ -57,8 +57,8 @@ autoinstall ISO, then creates and provisions the VM:
 ```
 
 Override the release or supply your own source ISO with `-UbuntuRelease 24.04`,
-`-IsoPath …`, or `-IsoUrl …`; add `-SkipCreateVm` to only build the ISO. Same WSL
-requirement and reprovision/reset menu as the one-liner above.
+`-IsoPath …`, or `-IsoUrl …`; add `-SkipCreateVm` to only build the ISO. Same native ISO builder
+and reprovision/reset menu as the one-liner above.
 
 ## Option B — full bundle (repo + ISO together)
 
@@ -467,8 +467,11 @@ VM_USER=agent VM_PASS=agent VM_HOST=agent-vm \
   bash bin/build-autoinstall-iso.sh /path/to/ubuntu-live-server.iso /path/to/out.iso
 ```
 
-On **Windows** there's no native `xorriso` — don't run this directly. Use `Auto-Install.ps1`
-(Option A), which runs this exact script inside WSL and installs the dependencies for you.
+On **Windows**, both `Auto-Install.ps1` and the remote-host installer use the independent
+[native .NET ISO builder](native-iso.md). It builds a local source checkout when a .NET 10
+SDK is available, otherwise downloads a checksum-verified self-contained Windows release.
+No WSL, Docker, or installed .NET runtime is needed. The shell builder above remains for
+Linux/Proxmox use.
 The build requires the committed bootstrap public key at `keys/bootstrap_ed25519.pub`. The
 output is `<source-dir>/<hostname>-autoinstall.iso`.
 
@@ -476,8 +479,8 @@ Because the hostname is baked into the ISO, each VM gets its own: `Create-AgentV
 attaches `-AutoinstallIso <path>` when it is given one, otherwise a named VM looks for
 `<name>-autoinstall.iso` next to the script and **refuses to guess another instance's ISO**,
 while the default VM keeps the historical "newest `*autoinstall*.iso`" discovery. On a
-[remote host](remote-host.md) the service builds the per-VM ISO itself, in WSL, from the
-same script.
+[remote host](remote-host.md) the native tool builds generic media, which the service publishes and consumes
+through its ISO catalog; the guest adopts its name through Hyper-V KVP.
 
 What the generated ISO does on first boot:
 

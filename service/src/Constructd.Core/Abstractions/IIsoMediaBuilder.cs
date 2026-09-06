@@ -52,7 +52,7 @@ public sealed record IsoMediaRequest(
 /// The bootstrap key baked into it, as <c>SHA256:…</c> — the one value that tells an admin whether
 /// their client can still get in.
 /// </param>
-/// <param name="BuildScriptSha256">SHA-256 of the build script that produced it.</param>
+/// <param name="BuildScriptSha256">SHA-256 of the producing script or native executable (legacy field name).</param>
 public sealed record IsoMediaResult(
     string IsoPath,
     string SourceIsoPath,

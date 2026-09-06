@@ -471,7 +471,7 @@ The pre-built ISO of §4.10 is **not** the main design. Building install media m
 |---|---|---|
 | `Prebuilt` | by an interactive administrator, once; the service consumes a catalog entry | **now** (B10) |
 | `PerVm` (WSL) | by the service through `wsl.exe`, per VM | exists; needs a WSL-capable service identity |
-| `Native` | in-process on Windows (.NET): remaster the stock ISO without xorriso | planned |
+| `Native` | self-contained .NET tool; generic media published through the catalog | **Windows local/remote default**, independent [construct-iso](https://github.com/permissionBRICK/construct-iso) releases |
 | `InGuest` | inside an existing Construct VM over SSH (xorriso is there); the service copies the result back — this is how the system **self-updates its install media** and fetches new source ISOs for new installs | planned |
 | `HypervisorHost` | natively on the hypervisor host: Proxmox (xorriso on PVE) or any Linux host; the regular autoinstall path when Hyper-V is replaced | planned (Proxmox) |
 

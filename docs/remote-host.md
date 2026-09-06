@@ -24,7 +24,7 @@ idle policy keep running, because the host service owns them
 ┌──────────── your PC ────────────┐        ┌──────── the remote Hyper-V host ────────┐
 │ Auto-Install.ps1 / VS Code      │        │ constructd (Windows service, HTTPS)     │
 │   · picks the mode, asks the    │        │   · users, tokens, quotas, audit        │
-│     questions                   │ HTTPS  │   · builds the autoinstall ISO (WSL)    │
+│     questions                   │ HTTPS  │   · builds the autoinstall ISO (.NET)    │
 │   · lib/AgentVm.Remote.ps1 ─────┼───────▶│   · creates the VM on the configured   │
 │     (API client + credentials)  │Negotiate│    switch (Default Switch by default)  │
 │                                 │ /token │   · waits for SSH, allocates a forward  │
@@ -41,7 +41,7 @@ The split is deliberate ([plan §4.4](plans/modular-remote-architecture.md), "hy
 | Step | Who does it | Why |
 |---|---|---|
 | Create the VM from the pre-built autoinstall ISO, wait for the OS install, allocate the SSH port | **the service** | it owns the hypervisor and the port range |
-| Build that ISO, once, before any VM exists | **the host's administrator**, interactively | `wsl.exe` refuses to run as LocalSystem (`WSL_E_LOCAL_SYSTEM_NOT_SUPPORTED`), and LocalSystem is the service's identity. The installer does it as *you*; `constructd admin iso build` repeats it later ([plan §4.10](plans/modular-remote-architecture.md)). |
+| Build that ISO, once, before any VM exists | **the host's administrator**, interactively | The native .NET tool publishes generic media through `constructd admin iso build`; no WSL or installed .NET runtime is needed. |
 | Run `bin/provision.sh`, install the agent stack, restore backups, wire *your* machine (ssh config, VS Code Remote-SSH, OpenCode) | **your PC**, over SSH | provisioning carries your git credentials, agent auth and backups. None of that may transit a shared service. |
 
 The **guest payload is identical in every mode** — same ISO inputs, same `provision.sh`
@@ -58,11 +58,10 @@ you dial* change.
    .\service\host\Install-ConstructHost.ps1
    ```
 
-   It checks the prerequisites (Hyper-V, **your** WSL distro with `xorriso` + `whois` for
-   the ISO build), hardens the paths the
+   It checks Hyper-V and OpenSSH, resolves the [native ISO tool](native-iso.md), and hardens the paths the
    service executes and trusts, generates the self-signed TLS certificate, opens three
    inbound firewall rules (the API port, the SSH forward range, the app forward range),
-   **builds the autoinstall ISO as you, through your WSL**, and registers `constructd` as a
+   **builds the autoinstall ISO with the native .NET tool**, and registers `constructd` as a
    Windows service. See
    [`service/README.md`](../service/README.md) for the configuration keys
    (`PublicHost`, `PublicHostPattern`, `SshForwardPorts`, the idle defaults, the
@@ -117,8 +116,9 @@ you dial* change.
    & $constructd admin iso prune           # delete superseded ISOs nothing has attached
    ```
 
-   `admin iso build` runs **as you**, through **your** WSL: `wsl.exe` refuses to run as
-   LocalSystem, which is the service's identity ([plan §4.10](plans/modular-remote-architecture.md)).
+   `admin iso build` uses the configured native executable (`Iso:NativeBuilderPath`).
+   `Install-ConstructHost.ps1 -IsoBuildOnly` also refreshes that executable from local
+   source or the pinned release before building.
    The service only consumes what is published. A rebuild never overwrites the ISO in
    place — Hyper-V holds an open handle on media a VM has attached — it writes
    `construct-autoinstall-<utc>.iso` next to it, with a sidecar recording when it was
