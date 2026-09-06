@@ -239,8 +239,13 @@ public sealed class StubHostAddressResolver : IHostAddressResolver
         return this;
     }
 
-    public Task<IPAddress?> ResolveIPv4Async(string host, CancellationToken cancellationToken) =>
-        Task.FromResult(Addresses.TryGetValue(host, out var address) ? IPAddress.Parse(address) : null);
+    public int Reads { get; private set; }
+
+    public Task<IPAddress?> ResolveIPv4Async(string host, CancellationToken cancellationToken)
+    {
+        Reads++;
+        return Task.FromResult(Addresses.TryGetValue(host, out var address) ? IPAddress.Parse(address) : null);
+    }
 }
 
 /// <summary>Collects progress reports so a test can assert what a job would have seen.</summary>
