@@ -6,7 +6,7 @@ namespace Constructd.Core.Abstractions;
 /// <summary>
 /// Owns the service host's port forwards (plan §4.4, §4.6). The Windows implementation (B7/B8)
 /// materializes <see cref="ForwardTarget.Host"/> forwards as <c>netsh interface portproxy</c> rules
-/// and reconciles them against the store at startup; <see cref="ForwardTarget.Client"/> forwards are
+/// and reconciles them against the store at startup and periodically; <see cref="ForwardTarget.Client"/> forwards are
 /// only recorded here and relayed to the owner's extension.
 ///
 /// Forward state lives in the service, so it survives the user's PC being off (PC-independence).

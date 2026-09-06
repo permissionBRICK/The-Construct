@@ -48,7 +48,7 @@ service/
     Auth/                   schemes (Bearer, VmToken, Negotiate seam, test identity), policies
     Endpoints/              one file per area of the API
     Jobs/                   the VM create/remove workflows the job engine runs
-    Hosting/                the once-a-minute idle scheduler (and the host power reconcile on it)
+    Hosting/                idle/power scheduler and periodic host forward reconciliation
     Infrastructure/         JSON contract, problem details, centralized auditing
     Contracts/              request/response DTOs — the wire contract
   src/Constructd.Fakes/     in-memory implementation of every interface
@@ -429,6 +429,7 @@ Bound from the `Constructd` section of `appsettings.json`, from environment vari
 | `VmReachableTimeoutMinutes` | `30` | How long creation waits for SSH. |
 | `AuditQueryLimit` | `200` | Default page size of `GET /audit`. |
 | `Idle:SchedulerEnabled` | `true` | Run the background evaluator. |
+| `ForwardReconcileSeconds` | `30` | Retry host forward reconciliation after boot and VM IP changes; independent of idle/power settings. Minimum 5 s; `0` disables periodic passes. |
 | `Idle:TickSeconds` | `60` | Evaluation interval. |
 | `Idle:DefaultTimeoutMinutes` | `120` | Policy a new VM gets. |
 | `Idle:DefaultAction` | `Save` | `Save`, `Shutdown` or `Off`. |
@@ -493,7 +494,7 @@ exactly one place — `Composition/ServiceComposition.cs`, which has two indepen
 | `IIsoBuilder` (consume) | By `Iso:Mode`: `PrebuiltIsoBuilder` (default — hands back the media in the ISO catalog) or `WslIsoBuilder` (builds one ISO per VM through `wsl.exe`). See *ISO build strategies*. |
 | `IIsoMediaBuilder` (produce) | `NativeIsoBuilder` for `Native` and `Prebuilt`; `WslIsoBuilder` only for explicit `PerVm`. Driven by `admin iso build`. |
 | `IIsoCatalog` | `FileIsoCatalog`: versioned ISOs, sidecars and the `current.pointer` in `Iso:CacheDir`. Any build strategy publishes into it. |
-| `IPortForwardManager` | `NetshPortForwardManager`: `netsh interface portproxy` rules over `IForwardStore`, reconciled at startup, plus connection counting from the host TCP table for the idle signal. |
+| `IPortForwardManager` | `NetshPortForwardManager`: `netsh interface portproxy` rules over `IForwardStore`, reconciled at startup and periodically, plus connection counting from the host TCP table for the idle signal. |
 | `IProcessRunner` | `ProcessRunner`: `System.Diagnostics.Process` with an `ArgumentList`. The only way this service starts anything. |
 | `ITcpTableReader` | `IpHlpApiTcpTableReader`: `GetExtendedTcpTable` (`TCP_TABLE_OWNER_PID_ALL`). |
 | `IUserStore`, `IVmRepository`, `ITokenService`, `IAuditLog`, `IJobStore`, `IForwardStore` | `Constructd.Sqlite`. |
@@ -776,7 +777,18 @@ LAN-wide is too broad for the network the host sits on.
 
 ### Reconciliation semantics
 
-`ReconcileAsync` runs at startup (`Bootstrap`) and on demand (`constructd admin forwards reconcile`).
+`ReconcileAsync` runs at startup (`Bootstrap`), every 30 seconds by default
+(`ForwardReconciliationService`), and on demand (`constructd admin forwards reconcile`).
+The periodic pass retries when startup preceded guest networking and follows later DHCP changes,
+including restarts outside Construct. It does not depend on idle evaluation or host wake-lock settings.
+Unchanged rules are left alone. Failures during a periodic pass are logged safely and retried on the
+next tick; they do not stop the API. The initial pass still reserves persisted port allocations before
+accepting requests.
+
+Reconciliation and forward mutations share one gate: a pass cannot resurrect a concurrently removed
+forward or overwrite a reused public port. Each VM address is resolved once per pass (including an
+unavailable result), keeping its SSH and app forwards consistent and avoiding a Hyper-V process per
+forward.
 netsh rules survive reboots and the store survives restarts, but they drift apart — so:
 
 1. Read the host's rules (`show v4tov4`). The parser reads **rows by shape**, not by column header:
@@ -797,7 +809,7 @@ netsh rules survive reboots and the store survives restarts, but they drift apar
    grandfathered: logged, then left completely alone, with no netsh call either way. "This service only
    touches rules inside its configured ranges" has to hold for the rules it would *add* just as much as
    for the ones it would delete.
-3. For each expected forward, resolve the VM's current address and:
+3. For each expected forward, use the VM's current address and:
    - no rule on that port → **add** it;
    - a rule with a different `connectaddress`/`connectport` → **delete and add** (netsh has no update);
    - a matching rule → leave it alone.

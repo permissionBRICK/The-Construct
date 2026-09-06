@@ -47,7 +47,7 @@ public sealed class PortForwardException : Exception, IConstructdError
 /// <summary>
 /// <see cref="IPortForwardManager"/> on <c>netsh interface portproxy</c> (plan §4.4, §4.6).
 ///
-/// The bookkeeping — the two <see cref="PortAllocator"/> ranges, the per-VM gate, the durable-before-live
+/// The bookkeeping — the two <see cref="PortAllocator"/> ranges, the mutation gate, the durable-before-live
 /// ordering, the per-VM cap — is the same as the in-memory manager's, because it is the part that has to
 /// hold whatever materializes the forward. What this adds is the host side: a v4tov4 rule per
 /// <see cref="ForwardTarget.Host"/> forward, and a reconciliation pass that makes the host's actual
@@ -78,9 +78,9 @@ public sealed class NetshPortForwardManager : IPortForwardManager
 
     private readonly ConcurrentDictionary<string, int> _sshForwards = new(StringComparer.OrdinalIgnoreCase);
 
-    // One gate per VM: allocation, adding a forward and tearing all of them down are state transitions
-    // of the same VM and must not interleave (the in-memory manager documents the same rule).
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _vmGates = new(StringComparer.OrdinalIgnoreCase);
+    // Reconciliation snapshots every VM and rule. Serialize all mutations with that snapshot
+    // so it cannot resurrect a removed forward or overwrite a newly allocated port.
+    private readonly SemaphoreSlim _mutationGate = new(1, 1);
 
     public NetshPortForwardManager(
         IClock clock,
@@ -131,7 +131,7 @@ public sealed class NetshPortForwardManager : IPortForwardManager
     public async Task<int> AllocateSshForwardAsync(string vmName, CancellationToken cancellationToken)
     {
         var name = ArgumentGuard.VmName(vmName);
-        var gate = GateFor(name);
+        var gate = _mutationGate;
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -177,7 +177,7 @@ public sealed class NetshPortForwardManager : IPortForwardManager
     public async Task<bool> ReleaseSshForwardAsync(string vmName, CancellationToken cancellationToken)
     {
         var name = ArgumentGuard.VmName(vmName);
-        var gate = GateFor(name);
+        var gate = _mutationGate;
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -225,7 +225,7 @@ public sealed class NetshPortForwardManager : IPortForwardManager
         // Counting, checking that the VM is still there, allocating and storing behind the VM's gate,
         // so concurrent requests cannot exceed the cap, share a public port, or slip a forward past a
         // teardown that is already running.
-        var gate = GateFor(name);
+        var gate = _mutationGate;
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -293,27 +293,35 @@ public sealed class NetshPortForwardManager : IPortForwardManager
 
     public async Task<bool> RemoveForwardAsync(string vmName, string id, CancellationToken cancellationToken)
     {
-        var forward = await _store.GetAsync(id, cancellationToken).ConfigureAwait(false);
-        if (forward is null || !string.Equals(forward.VmName, vmName, StringComparison.OrdinalIgnoreCase))
+        await _mutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            return false;
-        }
+            var forward = await _store.GetAsync(id, cancellationToken).ConfigureAwait(false);
+            if (forward is null || !string.Equals(forward.VmName, vmName, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
 
-        if (!await _store.RemoveAsync(id, cancellationToken).ConfigureAwait(false))
+            if (!await _store.RemoveAsync(id, cancellationToken).ConfigureAwait(false))
+            {
+                return false;
+            }
+
+            await ReleasePublicPortAsync(forward, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        finally
         {
-            return false;
+            _mutationGate.Release();
         }
-
-        await ReleasePublicPortAsync(forward, cancellationToken).ConfigureAwait(false);
-        return true;
     }
 
     public async Task<int> RemoveAllForwardsAsync(string vmName, CancellationToken cancellationToken)
     {
         var name = ArgumentGuard.VmName(vmName);
 
-        // Under the VM's gate, so an add cannot land between the enumeration and the removals.
-        var gate = GateFor(name);
+        // Under the mutation gate, so an add cannot land between the enumeration and the removals.
+        var gate = _mutationGate;
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -353,126 +361,146 @@ public sealed class NetshPortForwardManager : IPortForwardManager
     /// </summary>
     public async Task<int> ReconcileAsync(CancellationToken cancellationToken)
     {
-        var rules = await ShowRulesAsync(cancellationToken).ConfigureAwait(false);
-        var existing = rules
-            .Where(rule => string.Equals(rule.ListenAddress, _listenAddress, StringComparison.Ordinal))
-            .GroupBy(rule => rule.ListenPort)
-            .ToDictionary(group => group.Key, group => group.First());
-
-        // Every port the store accounts for — including one whose VM address cannot be resolved right
-        // now, so a temporary DNS failure never makes reconciliation delete a live rule.
-        var known = new HashSet<int>();
-        var wanted = new List<(string VmName, int PublicPort, string ConnectAddress, int ConnectPort)>();
-
-        foreach (var vm in await _vms.ListAsync(owner: null, cancellationToken).ConfigureAwait(false))
+        await _mutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            if (vm.SshForwardPort is not int port)
+            var rules = await ShowRulesAsync(cancellationToken).ConfigureAwait(false);
+            var existing = rules
+                .Where(rule => string.Equals(rule.ListenAddress, _listenAddress, StringComparison.Ordinal))
+                .GroupBy(rule => rule.ListenPort)
+                .ToDictionary(group => group.Key, group => group.First());
+
+            // Every port the store accounts for — including one whose VM address cannot be resolved right
+            // now, so a temporary DNS failure never makes reconciliation delete a live rule.
+            var known = new HashSet<int>();
+            var wanted = new List<(string VmName, int PublicPort, string ConnectAddress, int ConnectPort)>();
+
+            var endpoints = new Dictionary<string, (string Address, int SshPort)?>(StringComparer.OrdinalIgnoreCase);
+            async Task<(string Address, int SshPort)?> ResolveOnceAsync(string vmName)
             {
-                continue;
+                if (!endpoints.TryGetValue(vmName, out var endpoint))
+                {
+                    endpoint = await TryResolveAsync(vmName, cancellationToken).ConfigureAwait(false);
+                    endpoints.Add(vmName, endpoint);
+                }
+
+                return endpoint;
             }
 
-            known.Add(port);
-            _sshForwards[vm.Name] = port;
-            Reserve(port);
-
-            // Against the SSH range specifically, not the union: a port that now falls in the APP
-            // range is not one this allocator can account for, and re-materializing it would leave a
-            // live rule on a port _appPorts still considers free and will hand to somebody else.
-            if (!IsSshPort(port))
+            foreach (var vm in await _vms.ListAsync(owner: null, cancellationToken).ConfigureAwait(false))
             {
-                // Allocated under a wider (or different) range that the admin has since narrowed. It is
-                // grandfathered: left exactly as it is, and no netsh call is made for it either way —
-                // "this service only touches rules inside its configured ranges" has to hold for the
-                // rules it would add just as much as for the ones it would delete.
-                WarnOutOfRange("the SSH forward of VM", vm.Name, port, _sshPorts);
-                continue;
-            }
-
-            var endpoint = await TryResolveAsync(vm.Name, cancellationToken).ConfigureAwait(false);
-            if (endpoint is { } ssh)
-            {
-                wanted.Add((vm.Name, port, ssh.Address, ssh.SshPort));
-            }
-        }
-
-        foreach (var forward in await _store.ListAsync(vmName: null, cancellationToken).ConfigureAwait(false))
-        {
-            if (forward.PublicPort is not int port)
-            {
-                continue;
-            }
-
-            known.Add(port);
-            Reserve(port);
-
-            if (forward.Target != ForwardTarget.Host)
-            {
-                continue;
-            }
-
-            if (!IsAppPort(port))
-            {
-                WarnOutOfRange("a host forward of VM", forward.VmName, port, _appPorts);
-                continue;
-            }
-
-            var endpoint = await TryResolveAsync(forward.VmName, cancellationToken).ConfigureAwait(false);
-            if (endpoint is { } vmAddress)
-            {
-                wanted.Add((forward.VmName, port, vmAddress.Address, forward.VmPort));
-            }
-        }
-
-        var repaired = 0;
-
-        foreach (var (vmName, publicPort, connectAddress, connectPort) in wanted)
-        {
-            if (existing.TryGetValue(publicPort, out var rule))
-            {
-                if (string.Equals(rule.ConnectAddress, connectAddress, StringComparison.Ordinal) &&
-                    rule.ConnectPort == connectPort)
+                if (vm.SshForwardPort is not int port)
                 {
                     continue;
                 }
 
-                // netsh has no "update"; the pair is the update. If the delete does not take, the add
-                // would land on top of a rule still pointing at the old address — so this fails loudly
-                // rather than leaving the forward wrong and reporting it repaired.
-                if (!await DeleteRuleAsync(publicPort, cancellationToken).ConfigureAwait(false))
+                known.Add(port);
+                _sshForwards[vm.Name] = port;
+                Reserve(port);
+
+                // Against the SSH range specifically, not the union: a port that now falls in the APP
+                // range is not one this allocator can account for, and re-materializing it would leave a
+                // live rule on a port _appPorts still considers free and will hand to somebody else.
+                if (!IsSshPort(port))
                 {
-                    throw Fail(vmName, publicPort, "netsh delete left the stale rule in place");
+                    // Allocated under a wider (or different) range that the admin has since narrowed. It is
+                    // grandfathered: left exactly as it is, and no netsh call is made for it either way —
+                    // "this service only touches rules inside its configured ranges" has to hold for the
+                    // rules it would add just as much as for the ones it would delete.
+                    WarnOutOfRange("the SSH forward of VM", vm.Name, port, _sshPorts);
+                    continue;
+                }
+
+                var endpoint = await ResolveOnceAsync(vm.Name).ConfigureAwait(false);
+                if (endpoint is { } ssh)
+                {
+                    wanted.Add((vm.Name, port, ssh.Address, ssh.SshPort));
                 }
             }
 
-            await AddRuleAsync(vmName, publicPort, connectAddress, connectPort, cancellationToken).ConfigureAwait(false);
-            repaired++;
-        }
+            foreach (var forward in await _store.ListAsync(vmName: null, cancellationToken).ConfigureAwait(false))
+            {
+                if (forward.PublicPort is not int port)
+                {
+                    continue;
+                }
 
-        foreach (var rule in existing.Values)
+                known.Add(port);
+                Reserve(port);
+
+                if (forward.Target != ForwardTarget.Host)
+                {
+                    continue;
+                }
+
+                if (!IsAppPort(port))
+                {
+                    WarnOutOfRange("a host forward of VM", forward.VmName, port, _appPorts);
+                    continue;
+                }
+
+                var endpoint = await ResolveOnceAsync(forward.VmName).ConfigureAwait(false);
+                if (endpoint is { } vmAddress)
+                {
+                    wanted.Add((forward.VmName, port, vmAddress.Address, forward.VmPort));
+                }
+            }
+
+            var repaired = 0;
+
+            foreach (var (vmName, publicPort, connectAddress, connectPort) in wanted)
+            {
+                if (existing.TryGetValue(publicPort, out var rule))
+                {
+                    if (string.Equals(rule.ConnectAddress, connectAddress, StringComparison.Ordinal) &&
+                        rule.ConnectPort == connectPort)
+                    {
+                        continue;
+                    }
+
+                    // netsh has no "update"; the pair is the update. If the delete does not take, the add
+                    // would land on top of a rule still pointing at the old address — so this fails loudly
+                    // rather than leaving the forward wrong and reporting it repaired.
+                    if (!await DeleteRuleAsync(publicPort, cancellationToken).ConfigureAwait(false))
+                    {
+                        throw Fail(vmName, publicPort, "netsh delete left the stale rule in place");
+                    }
+                }
+
+                await AddRuleAsync(vmName, publicPort, connectAddress, connectPort, cancellationToken).ConfigureAwait(false);
+                repaired++;
+            }
+
+            foreach (var rule in existing.Values)
+            {
+                if (known.Contains(rule.ListenPort) || !IsOurs(rule.ListenPort))
+                {
+                    continue;
+                }
+
+                _logger.LogWarning(
+                    "Removing an unknown port-proxy rule on {Address}:{Port} — it is inside a configured range " +
+                    "but no VM or forward accounts for it.",
+                    _listenAddress,
+                    rule.ListenPort);
+
+                // The whole point of this sweep is that the rule stops existing: it is inside our range,
+                // nothing accounts for it, and it is exposed on the LAN. Counting a delete that netsh
+                // refused would report the host as reconciled while the rule is still live and forwarding.
+                if (!await DeleteRuleAsync(rule.ListenPort, cancellationToken).ConfigureAwait(false))
+                {
+                    throw Fail(string.Empty, rule.ListenPort, "netsh delete left an unaccounted-for rule in place");
+                }
+
+                repaired++;
+            }
+
+            return repaired;
+        }
+        finally
         {
-            if (known.Contains(rule.ListenPort) || !IsOurs(rule.ListenPort))
-            {
-                continue;
-            }
-
-            _logger.LogWarning(
-                "Removing an unknown port-proxy rule on {Address}:{Port} — it is inside a configured range " +
-                "but no VM or forward accounts for it.",
-                _listenAddress,
-                rule.ListenPort);
-
-            // The whole point of this sweep is that the rule stops existing: it is inside our range,
-            // nothing accounts for it, and it is exposed on the LAN. Counting a delete that netsh
-            // refused would report the host as reconciled while the rule is still live and forwarding.
-            if (!await DeleteRuleAsync(rule.ListenPort, cancellationToken).ConfigureAwait(false))
-            {
-                throw Fail(string.Empty, rule.ListenPort, "netsh delete left an unaccounted-for rule in place");
-            }
-
-            repaired++;
+            _mutationGate.Release();
         }
-
-        return repaired;
     }
 
     /// <summary>
@@ -728,9 +756,6 @@ public sealed class NetshPortForwardManager : IPortForwardManager
     /// allocator that has to have the port reserved.
     /// </summary>
     private bool IsOurs(int port) => IsSshPort(port) || IsAppPort(port);
-
-    private SemaphoreSlim GateFor(string vmName) =>
-        _vmGates.GetOrAdd(vmName, _ => new SemaphoreSlim(1, 1));
 
     /// <summary>
     /// Builds the exception and logs the failure. <paramref name="reason"/> is composed here and never

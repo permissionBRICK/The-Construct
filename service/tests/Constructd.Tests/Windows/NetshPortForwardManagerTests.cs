@@ -217,6 +217,114 @@ public sealed class NetshPortForwardManagerTests
     }
 
     [Fact]
+    public async Task Periodic_retry_repairs_all_host_forwards_after_guest_networking_arrives()
+    {
+        var world = new World();
+        await world.AddVmAsync("work-vm", sshForwardPort: 2201);
+        foreach (var (port, vmPort) in new[] { (2300, 4096), (2301, 5178), (2302, 4700) })
+        {
+            await world.Forwards.AddAsync(
+                new PortForward($"f{port}", "work-vm", vmPort, port, ForwardTarget.Host, "app", world.Clock.UtcNow),
+                CancellationToken.None);
+        }
+        await world.Forwards.AddAsync(
+            new PortForward("client", "work-vm", 8080, null, ForwardTarget.Client, "local", world.Clock.UtcNow),
+            CancellationToken.None);
+        string[] oldRules = [
+            "0.0.0.0 2201 172.20.144.5 22", "0.0.0.0 2300 172.20.144.5 4096",
+            "0.0.0.0 2301 172.20.144.5 5178", "0.0.0.0 2302 172.20.144.5 4700",
+            "0.0.0.0 8080 10.0.0.9 80", "192.168.1.10 2301 10.0.0.9 80",
+        ];
+
+        // Service startup precedes guest DHCP: preserve all rules and allocations.
+        world.Resolver.Addresses.Clear();
+        world.Runner.RespondStdout(oldRules);
+        Assert.Equal(0, await world.Manager.ReconcileAsync(CancellationToken.None));
+        Assert.Single(world.Runner.Calls);
+        Assert.Equal(1, world.Resolver.Reads);
+
+        var service = new Constructd.Api.Hosting.ForwardReconciliationService(
+            world.Manager, new ConstructdOptions(),
+            NullLogger<Constructd.Api.Hosting.ForwardReconciliationService>.Instance);
+        world.Resolver.With("work-vm.fake.local", "172.20.144.99");
+        world.Runner.RespondStdout(oldRules);
+
+        await service.TickAsync(CancellationToken.None);
+
+        var adds = world.Runner.Calls.Where(call => call.Arguments[2] == "add").ToArray();
+        Assert.Equal(4, adds.Length);
+        Assert.All(adds, call => Assert.Contains("connectaddress=172.20.144.99", call.Arguments));
+        Assert.Equal(new[] { "connectport=22", "connectport=4096", "connectport=5178", "connectport=4700" },
+            adds.Select(call => call.Arguments.Last()));
+        Assert.Equal(2, world.Resolver.Reads);
+        Assert.Equal(4, (await world.Forwards.ListAsync("work-vm", CancellationToken.None)).Count);
+
+        // The next pass sees the new address and does not disrupt established connections.
+        var before = world.Runner.Calls.Count;
+        world.Runner.RespondStdout(oldRules.Select(rule => rule.Replace("172.20.144.5", "172.20.144.99")).ToArray());
+        await service.TickAsync(CancellationToken.None);
+        Assert.Equal(before + 1, world.Runner.Calls.Count);
+    }
+
+    [Fact]
+    public async Task Periodic_reconciliation_retries_after_a_transient_failure_without_logging_dependency_text()
+    {
+        var logs = new LogSink();
+        var world = new World();
+        await world.AddVmAsync("work-vm", sshForwardPort: 2201);
+        var service = new Constructd.Api.Hosting.ForwardReconciliationService(
+            world.Manager, new ConstructdOptions(), logs.Logger<Constructd.Api.Hosting.ForwardReconciliationService>());
+        world.Runner.Failure = new InvalidOperationException("SENTINEL-SECRET");
+        await service.TickAsync(CancellationToken.None);
+        Assert.DoesNotContain("SENTINEL-SECRET", logs.Text);
+        Assert.Contains("reconcile failed", logs.Text);
+
+        world.Runner.Failure = null;
+        world.Runner.RespondStdout("0.0.0.0 2201 172.20.144.7 22");
+        await service.TickAsync(CancellationToken.None);
+        Assert.Contains("connectaddress=172.20.144.5", world.Runner.Calls.Last().Arguments);
+    }
+
+    [Fact]
+    public async Task Removing_a_forward_during_reconciliation_cannot_leave_a_resurrected_rule()
+    {
+        var resolver = new BlockingResolver();
+        var world = new World(resolverOverride: resolver);
+        await world.AddVmAsync("work-vm", sshForwardPort: 2201);
+        await world.Forwards.AddAsync(
+            new PortForward("app", "work-vm", 5178, 2301, ForwardTarget.Host, "T3", world.Clock.UtcNow),
+            CancellationToken.None);
+        world.Runner.RespondStdout("0.0.0.0 2201 172.20.144.7 22", "0.0.0.0 2301 172.20.144.7 5178");
+        var reconcile = world.Manager.ReconcileAsync(CancellationToken.None);
+        await resolver.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var remove = world.Manager.RemoveForwardAsync("work-vm", "app", CancellationToken.None);
+        try
+        {
+            Assert.False(remove.IsCompleted);
+        }
+        finally
+        {
+            resolver.Release.TrySetResult(System.Net.IPAddress.Parse("172.20.144.99"));
+        }
+        await reconcile.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(await remove.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Null(await world.Forwards.GetAsync("app", CancellationToken.None));
+        Assert.Equal("delete", world.Runner.Calls.Last().Arguments[2]);
+        Assert.Contains("listenport=2301", world.Runner.Calls.Last().Arguments);
+    }
+
+    private sealed class BlockingResolver : IHostAddressResolver
+    {
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<System.Net.IPAddress?> Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task<System.Net.IPAddress?> ResolveIPv4Async(string host, CancellationToken cancellationToken)
+        {
+            Entered.TrySetResult();
+            return Release.Task.WaitAsync(cancellationToken);
+        }
+    }
+
+    [Fact]
     public async Task Reconcile_deletes_a_rule_in_our_range_that_nothing_accounts_for()
     {
         // A VM removed while the service was down leaves a rule pointing at nothing.
@@ -540,7 +648,7 @@ public sealed class NetshPortForwardManagerTests
     /// <summary>Everything one manager needs, wired to fakes.</summary>
     private sealed class World
     {
-        public World(Action<ConstructdOptions>? configure = null, LogSink? logs = null)
+        public World(Action<ConstructdOptions>? configure = null, LogSink? logs = null, IHostAddressResolver? resolverOverride = null)
         {
             var options = PlatformOptions.Create(configure);
             Clock = new MutableClock();
@@ -552,7 +660,7 @@ public sealed class NetshPortForwardManagerTests
             TcpTable = new FakeTcpTableReader();
 
             Manager = new NetshPortForwardManager(
-                Clock, Vms, Forwards, Driver, Runner, Resolver, TcpTable, options,
+                Clock, Vms, Forwards, Driver, Runner, resolverOverride ?? Resolver, TcpTable, options,
                 logs is null
                     ? NullLogger<NetshPortForwardManager>.Instance
                     : logs.Logger<NetshPortForwardManager>());
