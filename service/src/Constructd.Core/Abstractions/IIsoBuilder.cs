@@ -1,9 +1,8 @@
 namespace Constructd.Core.Abstractions;
 
 /// <summary>
-/// Builds the autoinstall ISO. Backend-agnostic by design: the Windows implementation shells out to
-/// the proven <c>bin/build-autoinstall-iso.sh</c> through <c>wsl.exe</c> with the same
-/// <c>VM_USER</c>/<c>VM_PASS</c>/<c>VM_HOST</c> + bootstrap-pubkey env contract (plan §3.2, §4.4).
+/// Selects or builds the autoinstall ISO on the host. Redownload forces a fresh source fetch
+/// and patch before returning media for VM creation.
 ///
 /// The seed password is a secret: it must not appear in an exception, a log line or a process listing.
 /// The service does not rely on that either — an exception from this interface is reduced to its type
@@ -18,5 +17,6 @@ public interface IIsoBuilder
         string seedPassword,
         string bootstrapPubKeyPath,
         IProgress<string>? progress,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        bool redownload = false);
 }

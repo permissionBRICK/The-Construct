@@ -438,7 +438,7 @@ Bound from the `Constructd` section of `appsettings.json`, from environment vari
 | `Idle:ReportIntervalMinutes` | `5` | Interval the guest reporter posts at. |
 | `Idle:MissingReportGraceMultiple` | `3` | Intervals of silence before the guest counts as idle. |
 | `Power:KeepHostAwake` | `true` | Hold a Windows power availability request while at least one service-managed VM is `Running`, so the host does not sleep under it (*Keeping the host awake*). `false` never takes one. Independent of `Idle:SchedulerEnabled`, though both ride the same loop. No effect off Windows or in fake mode. |
-| `Iso:Mode` | `Prebuilt` | Which ISO build strategy is in effect: `Prebuilt` (the admin builds the media, the service consumes it) or `PerVm` (the service builds one ISO per VM through WSL). `Native` uses the .NET tool and catalog; `InGuest` and `HypervisorHost` remain planned and refused at startup. See *ISO build strategies*. |
+| `Iso:Mode` | `Prebuilt` | Which ISO build strategy is in effect: `Prebuilt` (compatibility alias for on-demand native catalog media) or `PerVm` (the service builds one ISO per VM through WSL). `Native` uses the .NET tool and catalog; `InGuest` and `HypervisorHost` remain planned and refused at startup. See *ISO build strategies*. |
 | `Iso:NativeBuilderPath` | `<ScriptsDir>\.construct-tools\iso\Construct.Iso.exe` | Self-contained native builder resolved by the installer; empty uses this path. |
 | `Iso:HostnameSource` | `hyperv-kvp` | Where a guest built from generic media takes its hostname at first boot (`VM_HOSTNAME_SOURCE`). `cloud-init-metadata` is planned for Proxmox / NoCloud / ConfigDrive. |
 | `Iso:SeedUser` | `construct` | Seed user of the unattended install. |
@@ -491,8 +491,8 @@ exactly one place — `Composition/ServiceComposition.cs`, which has two indepen
 | Interface | Implementation |
 |---|---|
 | `IHypervisorDriver` | `HyperVDriver`: `powershell.exe` running the repo's own `drivers/Load-ConstructDriver.ps1` contract (`docs/drivers.md`). A future Proxmox driver maps the same operations onto its REST API. |
-| `IIsoBuilder` (consume) | By `Iso:Mode`: `PrebuiltIsoBuilder` (default — hands back the media in the ISO catalog) or `WslIsoBuilder` (builds one ISO per VM through `wsl.exe`). See *ISO build strategies*. |
-| `IIsoMediaBuilder` (produce) | `NativeIsoBuilder` for `Native` and `Prebuilt`; `WslIsoBuilder` only for explicit `PerVm`. Driven by `admin iso build`. |
+| `IIsoBuilder` (consume) | By `Iso:Mode`: `OnDemandIsoBuilder` (default — reuses media or builds it on demand) or `WslIsoBuilder` (builds one ISO per VM through `wsl.exe`). See *ISO build strategies*. |
+| `IIsoMediaBuilder` (produce) | `NativeIsoBuilder` for `Native` and `Prebuilt`; `WslIsoBuilder` only for explicit `PerVm`. Driven by on-demand VM jobs and `admin iso build`. |
 | `IIsoCatalog` | `FileIsoCatalog`: versioned ISOs, sidecars and the `current.pointer` in `Iso:CacheDir`. Any build strategy publishes into it. |
 | `IPortForwardManager` | `NetshPortForwardManager`: `netsh interface portproxy` rules over `IForwardStore`, reconciled at startup and periodically, plus connection counting from the host TCP table for the idle signal. |
 | `IProcessRunner` | `ProcessRunner`: `System.Diagnostics.Process` with an `ArgumentList`. The only way this service starts anything. |
@@ -611,26 +611,26 @@ ISO build and to netsh.
 ### ISO build strategies
 
 Building install media is a **pluggable strategy**, because where it can be built
-differs per host — and the current answer is a stopgap, not the design.
+differs per host.
 
 | `Iso:Mode` | Where media is built | Status |
 |---|---|---|
-| `Prebuilt` *(default)* | by the installing **administrator**, once, interactively (`admin iso build`); the service consumes the catalog entry | **now** |
+| `Prebuilt` *(default)* | native producer on demand, with catalog reuse; compatibility name | **now** |
 | `PerVm` | by the **service**, through `wsl.exe`, one ISO per VM | works wherever the service identity can run WSL |
 | `Native` | standalone self-contained .NET tool, generic media in the catalog | **Windows installer default**; [details](../docs/native-iso.md) |
 | `InGuest` | inside an existing Construct VM over SSH (xorriso is already there), result copied back — this is how the system will **self-update its install media** and fetch new source ISOs | planned |
 | `HypervisorHost` | natively on the hypervisor host (xorriso on a Proxmox node) — the regular autoinstall path once Hyper-V is not the only backend | planned |
 
 The Windows host installer selects `Native`: `admin iso build` produces generic media with
-`NativeIsoBuilder` and `PrebuiltIsoBuilder` consumes it through the catalog. `Prebuilt` remains
+`NativeIsoBuilder`; `OnDemandIsoBuilder` reuses it or builds missing/requested media. `Prebuilt` remains
 the configuration API default for existing deployments and also uses the native producer.
 `PerVm` explicitly retains the WSL strategy. `InGuest` and `HypervisorHost` are still refused.
 
 The seam is two narrow interfaces plus one catalog, and they are what a new strategy plugs into:
 
 - **`IIsoBuilder`** — the *consuming* side. `VmJobs` calls `BuildAsync(vmName, seedUser, seedPassword, …)`
-  and does not know which strategy answers. `PrebuiltIsoBuilder` deliberately **ignores `vmName` and
-  `seedPassword`**: its media is generic and there is no build to hand a password to.
+  and does not know which strategy answers. `OnDemandIsoBuilder` selects catalog media or
+  invokes the producer for missing media or a redownload request.
 - **`IIsoMediaBuilder`** — the *producing* side: generic media at a caller-chosen path, plus what went
   into it (source ISO + SHA-256, bootstrap key fingerprint, build-script SHA-256).
 - **`IIsoCatalog`** — versioned files, sidecars, the current pointer, prune. Any strategy publishes here.
@@ -678,10 +678,9 @@ when it matters. Two rules come from Hyper-V rather than from taste:
 The pointer must name a plain `construct-autoinstall-*.iso` file: a value with a path in it is refused
 rather than followed, because the pointer decides what the service hands to Hyper-V.
 
-`PrebuiltIsoBuilder` refuses media with no readable sidecar (`IsoNotBuiltException`, whose safe message
-names the exact command), and warns loudly when the host's bootstrap key no longer matches the
-fingerprint in the sidecar — the failure that otherwise looks like a successful install and then
-refuses the client's key.
+`OnDemandIsoBuilder` rebuilds media with a missing sidecar, changed seed user or hostname
+source, or a known bootstrap-key mismatch. A failed replacement leaves the previous
+published media intact.
 
 ### Native ISO build
 
@@ -954,7 +953,7 @@ Run it again after publishing a new build: it updates binaries, settings and the
 | `-AdminUser` / `-AdminMaxVms` | current user / `10` | The first admin. |
 | `-SkipPrereqs` | off | Skip the Hyper-V/OpenSSH checks (a re-run on a host you already prepared). |
 | `-SkipAclHardening` | off | Do not lock the three paths down (see below). |
-| `-SkipIsoBuild` | off | Do not build the autoinstall ISO; VM creation then fails until `admin iso build` is run (the summary says so). |
+| `-SkipIsoBuild` | off | Install the native tool but defer media creation until the first VM request. |
 | `-IsoBuildOnly` | off | (Re)build the ISO on an existing install and change nothing else — a new Ubuntu release, a rotated bootstrap key. |
 | `-RotateAdminToken` | off | Issue a fresh token even when the admin already exists. |
 | `-KeepHostAwake` | *(ask)* | Set this host's AC sleep, hibernate and unattended-sleep timeouts to *never*. Not given: an interactive run asks, an unattended one (no console input, or `-WhatIf`) leaves the power plan alone. |
@@ -1307,3 +1306,14 @@ deleting a colleague's VM is not an uninstall step.
   the `VM_PASS=` env contract of `bin/build-autoinstall-iso.sh`, which the local installer has always
   used; changing it would change the guest payload, and what it buys is a seed credential the client's
   provisioning run replaces.
+
+### On-demand native media and remote redownload
+
+`Native` and the compatibility `Prebuilt` mode now use the native producer during VM
+creation when no media is published. `POST /api/v1/vms` accepts
+`opts.redownload: true` to force a fresh fetch from the host-configured `Iso:SourceUrl`
+and a new patch before creating the VM. Normal creates reuse catalog media.
+The source checksum is verified before replacing the cached download; builds publish
+new versioned files so other installations retain their mounted media.
+`-SkipIsoBuild` on the host installer installs the tool but defers media creation.
+See [native ISO builds](../docs/native-iso.md) for upgrade and source configuration.

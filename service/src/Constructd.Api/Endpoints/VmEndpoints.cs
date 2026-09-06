@@ -165,7 +165,7 @@ public static class VmEndpoints
                 JobKinds.CreateVm,
                 name,
                 actor,
-                (progress, jobToken) => VmJobs.CreateAsync(scopes, descriptor, actor, progress, jobToken),
+                (progress, jobToken) => VmJobs.CreateAsync(scopes, descriptor, actor, progress, jobToken, request.Opts?.Redownload == true),
                 cancellationToken).ConfigureAwait(false);
         }
         catch

@@ -7,6 +7,18 @@ namespace Constructd.Tests.Api;
 
 public class VmLifecycleTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Redownload_option_reaches_the_host_builder(bool redownload)
+    {
+        using var app = new TestApp();
+        using var client = await app.CreateUserClientAsync("iso-user");
+        var job = await client.WaitForJobAsync(await client.StartCreateVmAsync("refresh-vm", opts: new { redownload }));
+        Assert.Equal(JobState.Succeeded, job.State);
+        Assert.Equal(redownload, Assert.Single(app.IsoBuilder.Redownloads));
+    }
+
     [Fact]
     public async Task Creating_a_vm_runs_the_whole_job_and_returns_the_endpoint_and_vm_token()
     {
