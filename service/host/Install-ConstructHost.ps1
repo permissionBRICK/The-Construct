@@ -717,7 +717,9 @@ function Sort-ConstructHardeningOrder {
     $indexed = @()
     for ($i = 0; $i -lt $Entries.Count; $i++) {
         $normalized = ([string]$Entries[$i].Path).TrimEnd('\', '/')
-        $indexed += @{ Entry = $Entries[$i]; Depth = $normalized.Length; Index = $i }
+        # PS 5.1 Sort-Object cannot reliably resolve string expressions against hashtable
+        # keys. Real properties keep the parent-first ordering identical on PS 5.1 and 7.
+        $indexed += [pscustomobject]@{ Entry = $Entries[$i]; Depth = $normalized.Length; Index = $i }
     }
     return @($indexed | Sort-Object -Property @{ Expression = 'Depth' }, @{ Expression = 'Index' } | ForEach-Object { $_.Entry })
 }
