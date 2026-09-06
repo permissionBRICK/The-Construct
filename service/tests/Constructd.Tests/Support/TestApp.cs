@@ -158,6 +158,7 @@ public sealed class TestApp(
             // running (IdleSchedulerServiceTests covers that combination on its own).
             ["Constructd:Idle:SchedulerEnabled"] = "false",
             ["Constructd:Power:KeepHostAwake"] = "false",
+            ["Constructd:ForwardReconcileSeconds"] = "0",
             ["Constructd:Idle:DefaultTimeoutMinutes"] = "120",
             ["Constructd:Idle:DefaultAction"] = "Save",
             ["Constructd:Idle:MaxTimeoutMinutes"] = "0",
