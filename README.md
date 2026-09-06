@@ -57,15 +57,9 @@ irm https://raw.githubusercontent.com/permissionBRICK/The-Construct/main/install
 
 One command, zero VM interaction: it builds an Ubuntu autoinstall ISO, creates the Hyper-V
 VM, installs Ubuntu unattended, provisions the full agent stack, and wires up your host's
-SSH + VS Code config. Answer a few questions up front — then just hit connect.
+SSH + VS Code config. After some initial questions the setup runs completely unattended.
 
-> **Requirements:** Windows 10/11 with Hyper-V. ISO builds use a self-contained .NET
-> tool; no WSL or installed .NET runtime is required. The installer builds a local
-> `construct-iso` checkout when its SDK is available, otherwise downloads a pinned
-> release. See [native ISO builds](docs/native-iso.md). Already have a VM? The installer
-> offers **reprovision**, **reinstall** (with [config save & restore](docs/backup-restore.md)),
-> and **export config**. Bundled ISO, BYO VM, and no-admin paths are in the
-> [installation guide](docs/installation.md).
+> **Requirements:** Windows 10/11 with local admin access, and some free disk space as well as about 15 min time.
 
 <div align="center">
 
