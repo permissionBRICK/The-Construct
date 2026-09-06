@@ -99,7 +99,8 @@ public abstract class IsoBuilderBase : IIsoBuilder, IIsoMediaBuilder, IDisposabl
         string seedPassword,
         string bootstrapPubKeyPath,
         IProgress<string>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool redownload = false)
     {
         var name = ArgumentGuard.VmName(vmName);
         var guestHost = name.ToLowerInvariant();
@@ -117,7 +118,7 @@ public abstract class IsoBuilderBase : IIsoBuilder, IIsoMediaBuilder, IDisposabl
             describing: $"building the autoinstall ISO for {guestHost}",
             describeContents: false,
             progress,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken, redownload).ConfigureAwait(false);
 
         return result.IsoPath;
     }
@@ -149,7 +150,7 @@ public abstract class IsoBuilderBase : IIsoBuilder, IIsoMediaBuilder, IDisposabl
             describing: $"building generic autoinstall media (hostname source: {hostnameSource})",
             describeContents: true,
             progress,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken, request.Redownload).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -167,7 +168,8 @@ public abstract class IsoBuilderBase : IIsoBuilder, IIsoMediaBuilder, IDisposabl
         string describing,
         bool describeContents,
         IProgress<string>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool redownload)
     {
         var name = vmName;
 
@@ -191,7 +193,7 @@ public abstract class IsoBuilderBase : IIsoBuilder, IIsoMediaBuilder, IDisposabl
         {
             _files.CreateDirectory(cacheDir);
 
-            var sourceIso = await ResolveSourceIsoAsync(name, cacheDir, safeProgress, cancellationToken)
+            var sourceIso = await ResolveSourceIsoAsync(name, cacheDir, safeProgress, cancellationToken, redownload)
                 .ConfigureAwait(false);
 
             var buildScript = GetBuilderPath(scriptsDir);
@@ -254,9 +256,13 @@ public abstract class IsoBuilderBase : IIsoBuilder, IIsoMediaBuilder, IDisposabl
         string? vmName,
         string cacheDir,
         IProgress<string>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool redownload)
     {
-        if (!string.IsNullOrWhiteSpace(_options.Iso.SourcePath))
+        if (redownload && string.IsNullOrWhiteSpace(_options.Iso.SourceUrl))
+            throw Fail(vmName, "redownload requires Constructd:Iso:SourceUrl; a local SourcePath cannot be downloaded");
+
+        if (!redownload && !string.IsNullOrWhiteSpace(_options.Iso.SourcePath))
         {
             var configured = ArgumentGuard.WindowsPath(_options.Iso.SourcePath, "Constructd:Iso:SourcePath");
             if (!_files.FileExists(configured) || _files.FileLength(configured) <= 0)
@@ -293,15 +299,25 @@ public abstract class IsoBuilderBase : IIsoBuilder, IIsoMediaBuilder, IDisposabl
 
         var cached = $@"{cacheDir}\{fileName}";
 
-        if (!_files.FileExists(cached) || _files.FileLength(cached) <= 0)
+        if (redownload || !_files.FileExists(cached) || _files.FileLength(cached) <= 0)
         {
+            var pending = cached + "." + Guid.NewGuid().ToString("N") + ".download";
             try
             {
-                await _downloader.DownloadAsync(url, cached, progress, cancellationToken).ConfigureAwait(false);
+                await _downloader.DownloadAsync(url, pending, progress, cancellationToken).ConfigureAwait(false);
+                if (!_files.FileExists(pending) || _files.FileLength(pending) <= 0)
+                    throw Fail(vmName, "the downloaded source ISO is missing or empty");
+                VerifyChecksum(vmName, pending);
+                _files.MoveFile(pending, cached, overwrite: true);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 throw Fail(vmName, $"downloading the source ISO failed: {SafeError.Describe(ex)}");
+            }
+            finally
+            {
+                _files.TryDeleteFile(pending);
+                _files.TryDeleteFile(pending + ".part");
             }
 
             if (!_files.FileExists(cached) || _files.FileLength(cached) <= 0)

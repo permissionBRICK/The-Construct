@@ -199,11 +199,12 @@ $script:jobResult = [pscustomobject]@{
     endpoint = [pscustomobject]@{ sshHost = 'buildbox.example.local'; sshPort = 2201 }
     vmToken = 'ONE-TIME-SECRET'
 }
-$created = New-ConstructVm -Descriptor @{ Name = 'work-vm'; ProcessorCount = 4; MemoryGB = 8; DiskGB = 50; Nested = $true; AutomaticCheckpoints = $false }
+$created = New-ConstructVm -Descriptor @{ Name = 'work-vm'; ProcessorCount = 4; MemoryGB = 8; DiskGB = 50; Nested = $true; AutomaticCheckpoints = $false; Redownload = $true }
 ok "create: POSTs to /vms" ($script:calls[0].Method -eq 'POST' -and $script:calls[0].Path -eq '/vms')
 ok "create: the descriptor becomes the service's request shape" `
     ($script:calls[0].Body['name'] -eq 'work-vm' -and $script:calls[0].Body['cpu'] -eq 4 -and
      $script:calls[0].Body['ramGb'] -eq 8 -and $script:calls[0].Body['diskGb'] -eq 50)
+ok "create: redownload reaches the host" ($script:calls[0].Body['opts']['redownload'] -eq $true)
 ok "create: opts carry the capability-shaped fields" `
     ($script:calls[0].Body['opts']['nested'] -eq $true -and $script:calls[0].Body['opts']['automaticCheckpoints'] -eq $false)
 ok "create: HOST-side descriptor fields are NOT forwarded (the service owns them)" `

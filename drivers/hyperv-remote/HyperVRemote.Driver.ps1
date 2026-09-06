@@ -291,6 +291,7 @@ function New-ConstructVm {
     $diskGb = Resolve-ConstructRemoteGb -Descriptor $Descriptor -BytesKey 'DiskBytes'   -GbKey 'DiskGB'   -What 'virtual disk size'
 
     $opts = @{}
+    if ($Descriptor.ContainsKey('Redownload')) { $opts['redownload'] = [bool]$Descriptor['Redownload'] }
     if ($Descriptor.ContainsKey('Nested')) { $opts['nested'] = [bool]$Descriptor['Nested'] }
     if ($Descriptor.ContainsKey('AutomaticCheckpoints')) { $opts['automaticCheckpoints'] = [bool]$Descriptor['AutomaticCheckpoints'] }
 
