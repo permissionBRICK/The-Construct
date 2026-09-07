@@ -2713,7 +2713,7 @@ namespace Constructd.Core.Abstractions
     }
 
     /// <param name="HealthToken">Random secret written only into the SYSTEM-only handoff file; the new binary accepts it on loopback /health for the full body.</param>
-    public sealed record UpdateHandoff(string UpdateId, string Commit, string StagedPath, string PublishDir, string ScriptsDir, string DataDir, string ServiceName, string PreviousCommit, string HealthUrl, string CertificateThumbprint, string AdminCliPath, string HealthToken, DateTimeOffset WrittenAt);
+    public sealed record UpdateHandoff(string UpdateId, string Commit, string StagedPath, string PublishDir, string ScriptsDir, string DataDir, string ServiceName, string PreviousCommit, string HealthUrl, string CertificateThumbprint, string AdminCliPath, string HealthToken, DateTimeOffset WrittenAt, int PreviousSchemaVersion = 0, int HealthTimeoutSeconds = 120);
     /// <summary>What the fence permits, scoped to ONE update id (§11.7). Checked by the updater under updater.lock before stop, replace and rollback.</summary>
     public enum FenceDisposition
     {
@@ -2729,6 +2729,9 @@ namespace Constructd.Core.Abstractions
     {
         /// <summary>Writes the handoff durably, THEN creates and starts the one-shot SYSTEM task (§11.5).</summary>
         Task LaunchAsync(UpdateHandoff handoff, CancellationToken ct);
+        Task PrepareAsync(UpdateHandoff handoff, CancellationToken ct);
+        Task ResumeAsync(UpdateHandoff handoff, CancellationToken ct);
+        Task<UpdateFence?> ReadFenceAsync(CancellationToken ct);
         Task<UpdateHandoff?> ReadHandoffAsync(CancellationToken ct);
         /// <summary>The updater's last-update.json, or null.</summary>
         Task<RecoveryRecord?> ReadRecoveryRecordAsync(CancellationToken ct);
@@ -3662,3 +3665,40 @@ package references; `git diff --check` passed.
 | `test/t3-https.test.sh` | 133 | 0 | 0 |
 | `test/vscode-download.test.sh` | 6 | 0 | 0 |
 | `extension/test/ui-smoke.js` | 311 | 0 | 0 |
+
+### Deviations — Phase 6 release implementation notes (ha/s2-release)
+
+Under **Deviations**, the following small implementation choices apply:
+
+- `config/host-release.pub` is intentionally empty pending the owner's production public
+  key. No private key was invented or committed. The workflow requires the environment
+  secret's derived public key to equal that file; hosts refuse updates without a configured
+  trust root. Local tests generate temporary Ed25519 keys. This is a deployment prerequisite,
+  not an unsigned production mode.
+- `IHostUpdateAdmission` is an additive update-specific seam: update state, queued job and
+  operation-key response commit in one SQLite transaction. The VM/media admission plan is
+  unchanged. `IUpdaterLauncher` gains additive prepare/resume/fence-read methods and
+  `UpdateHandoff` gains optional previous-schema/health-timeout fields needed by the task.
+- The mutation freeze starts immediately after drain, before the durable handoff steps,
+  and waits for already admitted inline mutations to finish. This closes the gap between
+  a heartbeat/lifecycle write accepted during draining and the updater's database backup.
+  The API guard transfers a reference-counted admission into legacy primary jobs; their
+  provisioning bodies are unchanged. Scheduler and bootstrap guard hooks are also required
+  to prevent writes from reopening during recovery.
+- A closed pre-replacement interruption requires a fresh apply with a newly built backup.
+  The service holds `updater.lock` while retiring the old closed fence and incomplete backup
+  after the new drain; a scheduled `-Resume` alone still refuses a closed fence. Terminal recovery artifacts are retained for status and immutable resume guards;
+  a newer active update takes precedence over an older retained handoff.
+- ZIP entries are stored without compression to guarantee the contract's maximum 4×
+  extraction ratio for any publish output. The GitHub release list is bounded to its latest
+  100 entries; host-release retention is documented in `docs/host-release.md`.
+
+First host rollout is manual. This branch performs no Windows-host deployment and makes no
+new Hyper-V validation claim. The production signing key and real SCM/TLS/ACL/VM-continuity
+field tests remain deployment prerequisites.
+
+Phase 6 recovery refinement: `cancel` additionally accepts an `interrupted` row only
+when its matching `closed` fence and absence of replacement are verified under
+`updater.lock`. It becomes `cancelled`; the closed fence remains to revoke delayed
+execution. This lets a host with a task-launch failure stage a different release
+without requiring an installer-created file ledger or a successful retry.

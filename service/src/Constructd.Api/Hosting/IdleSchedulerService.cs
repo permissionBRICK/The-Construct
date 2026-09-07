@@ -25,7 +25,7 @@ public sealed class IdleSchedulerService(
     HostPowerCoordinator power,
     IClock clock,
     ConstructdOptions options,
-    ILogger<IdleSchedulerService> logger) : BackgroundService
+    ILogger<IdleSchedulerService> logger, IMaintenanceGate? maintenance = null) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -69,6 +69,8 @@ public sealed class IdleSchedulerService(
     /// </summary>
     public async Task TickAsync(CancellationToken cancellationToken)
     {
+        using var mutation = maintenance?.TryEnter("mutation:scheduler", Guid.NewGuid().ToString("n"), null);
+        if (maintenance is not null && mutation is null) return;
         if (options.Idle.SchedulerEnabled)
         {
             var outcomes = await engine.EvaluateAsync(clock.UtcNow, cancellationToken).ConfigureAwait(false);

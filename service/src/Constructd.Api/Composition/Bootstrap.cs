@@ -11,13 +11,17 @@ namespace Constructd.Api.Composition;
 /// </summary>
 public static class Bootstrap
 {
-    public static async Task RunAsync(IServiceProvider services, CancellationToken cancellationToken)
+    public static async Task RunAsync(IServiceProvider services, CancellationToken cancellationToken, bool resumeAfterUpdate = false)
     {
         await using var scope = services.CreateAsyncScope();
         var provider = scope.ServiceProvider;
         var options = provider.GetRequiredService<ConstructdOptions>();
         var logger = provider.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(Bootstrap));
 
+        if (!resumeAfterUpdate && provider.GetService<IMaintenanceGate>()?.State == MaintenanceState.Maintenance) return;
+        var hostConfig = provider.GetRequiredService<IHostConfigStore>();
+        if (!string.IsNullOrWhiteSpace(options.HostAdmin.Updates.ManifestPublicKey) && await hostConfig.GetAsync<UpdatesConfig>("updates", cancellationToken) is null)
+            await hostConfig.SetAsync("updates", HostAdminDefaults.Updates with { ManifestPublicKey=options.HostAdmin.Updates.ManifestPublicKey }, "installer", cancellationToken);
         await SeedAdminAsync(provider, options, logger, cancellationToken).ConfigureAwait(false);
 
         // A job that was still running when the process ended cannot be resumed; mark it failed so
@@ -30,11 +34,16 @@ public static class Bootstrap
             logger.LogWarning("Marked {Count} job(s) as failed: they were interrupted by a restart.", interrupted);
         }
 
-        var forwards = provider.GetRequiredService<IPortForwardManager>();
-        var repaired = await forwards.ReconcileAsync(cancellationToken).ConfigureAwait(false);
-        if (repaired > 0)
+        try
         {
-            logger.LogInformation("Reconciled {Count} port forward(s) against the host.", repaired);
+            var forwards = provider.GetRequiredService<IPortForwardManager>();
+            var repaired = await forwards.ReconcileAsync(cancellationToken).ConfigureAwait(false);
+            if (repaired > 0) logger.LogInformation("Reconciled {Count} port forward(s) against the host.", repaired);
+        }
+        catch (Exception ex) when (resumeAfterUpdate && ex is not OperationCanceledException)
+        {
+            // Jobs are terminal already; the periodic reconciler can retry forwards after reopening.
+            logger.LogWarning("Forward reconciliation after update failed; the periodic reconciler will retry.");
         }
     }
 

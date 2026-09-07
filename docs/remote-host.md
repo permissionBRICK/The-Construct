@@ -754,3 +754,28 @@ registry — and so are several hosts.
 * [`docs/plans/modular-remote-architecture.md`](plans/modular-remote-architecture.md) —
   §4.2 driver contract, §4.3 registry, §4.4 the service, §4.5 installer UX, §4.7 idle.
 * [`extension/ARCHITECTURE.md`](../extension/ARCHITECTURE.md) — the extension side.
+
+## Updating the host
+
+After the first manual rollout of the update-capable service, an Admin can use the host
+panel's Maintenance tab to check `main`, stage its signed release, and apply it. Checking
+shows the pinned commit and compatibility result. Staging downloads and verifies the
+package without stopping the service; applying drains conflicting host jobs, hands off
+to a SYSTEM scheduled task, restarts the service, and verifies service/database health.
+
+VM creation/deletion, media work, ISO builds and host reachability waits must finish
+before replacement. New conflicting work receives `503 maintenance` with `Retry-After`.
+PC-driven provisioning and ordinary guest activity do not block draining. The short
+replacement/recovery window freezes all host mutations. Existing Hyper-V VMs are not
+stopped by the updater. Settings, certificates, media, users, tokens, VM registrations
+and unowned files are preserved.
+
+Reconnect and read `/api/v1/host/updates/status` to recover the persisted result. Reuse
+an operation key when retrying stage/apply; do not blindly repeat a mutation after a
+connection failure. An interrupted/mixed installation stays in maintenance until the
+Admin resumes or resolves it. `last-update.json` under the service data directory's
+`updates` folder remains readable if the service cannot start.
+
+Release signing setup, manual first deployment, retention, recovery fences and rollback
+limits are documented in [Host releases and deployment](host-release.md). No real-host
+update has been validated by the Linux test run.

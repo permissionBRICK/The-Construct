@@ -22,7 +22,7 @@ namespace Constructd.Core.Services;
 /// its message, stack trace, <c>Data</c> or inner exceptions, so nothing outside this class ever sees
 /// it: not job state, not the SSE stream, not the audit trail, and not the log.
 /// </param>
-public sealed class InProcessJobEngine(IClock clock, IJobStore store, Action<Job, string>? diagnostics = null)
+public sealed class InProcessJobEngine(IClock clock, IJobStore store, Action<Job, string>? diagnostics = null, IMaintenanceGate? maintenance = null)
     : IJobEngine, IPersistedJobRunner, IDisposable
 {
     private readonly ConcurrentDictionary<string, JobEntry> _jobs = new(StringComparer.Ordinal);
@@ -50,10 +50,16 @@ public sealed class InProcessJobEngine(IClock clock, IJobStore store, Action<Job
             Created: clock.UtcNow,
             Finished: null));
 
-        _jobs[entry.Snapshot.Id] = entry;
-        await store.UpsertAsync(entry.Snapshot, cancellationToken).ConfigureAwait(false);
-
-        _ = Task.Run(() => RunAsync(entry, work), CancellationToken.None);
+        IDisposable? handle = null;
+        if (maintenance is not null && kind is "create-vm" or "remove-vm" or "iso-build" or "iso-acquire" or "host-install" or "host-reachability")
+            handle = MaintenanceAdmission.Current.Value?.Retain(kind) ?? maintenance.TryEnter(kind, entry.Snapshot.Id, vmName) ?? throw new UpdateException("maintenance");
+        try
+        {
+            await store.UpsertAsync(entry.Snapshot, cancellationToken).ConfigureAwait(false);
+            _jobs[entry.Snapshot.Id] = entry;
+            _ = Task.Run(async () => { try { await RunAsync(entry, work); } finally { handle?.Dispose(); } }, CancellationToken.None);
+        }
+        catch { handle?.Dispose(); throw; }
         return entry.Snapshot;
     }
 
@@ -96,6 +102,7 @@ public sealed class InProcessJobEngine(IClock clock, IJobStore store, Action<Job
     {
         if (_jobs.TryGetValue(id, out var entry))
         {
+            if(entry.Finished && entry.Snapshot.Kind=="host-update") return await store.GetAsync(id,cancellationToken).ConfigureAwait(false);
             return entry.Snapshot;
         }
 

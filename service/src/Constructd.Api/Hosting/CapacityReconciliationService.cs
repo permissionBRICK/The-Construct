@@ -5,13 +5,17 @@ namespace Constructd.Api.Hosting;
 
 /// <summary>Hosted services start after Bootstrap completes its interrupted-job and forwarding recovery.</summary>
 public sealed class CapacityReconciliationService(ICapacityLedger ledger, IHostConfigStore config,
-    ILogger<CapacityReconciliationService> logger) : BackgroundService
+    ILogger<CapacityReconciliationService> logger, IMaintenanceGate? maintenance = null) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
         {
-            try { await ledger.ReconcileAsync(stoppingToken); }
+            try
+            {
+                using var mutation=maintenance?.TryEnter("mutation:capacity",Guid.NewGuid().ToString("n"),null);
+                if(maintenance is null || mutation is not null) await ledger.ReconcileAsync(stoppingToken);
+            }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
             catch { logger.LogWarning("Capacity reconciliation failed; reservations remain retained."); }
             var seconds = HostAdminDefaults.Capacity.ReconcileSeconds;
