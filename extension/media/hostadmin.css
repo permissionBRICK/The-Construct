@@ -1,0 +1,59 @@
+/* Host administration webview — layered AFTER panel.css and the design theme, so every
+   token (colours, fonts, .module/.row/.btn) is the panel's own; this file only adds the
+   tab strip, the tables, the capacity bars and the small inline forms. */
+.ha-shell { max-width: 1180px; }
+/* The `hidden` attribute must win over every display: flex/grid rule below. */
+.ha-shell [hidden] { display: none !important; }
+.ha-title { font-size: 26px; word-break: break-all; }
+.ha-maint .ub-text { color: var(--warn); }
+
+.ha-notice { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin: 0 0 14px; padding: 9px 12px; border: 1px solid var(--line-strong); border-radius: 6px; font-size: 12px; color: var(--text); background: rgba(0,0,0,0.25); white-space: pre-wrap; }
+.ha-notice.error { border-color: rgba(255,93,93,0.5); color: #ff8a8a; }
+.ha-notice-x { background: transparent; border: 0; color: var(--dim); font-size: 16px; line-height: 1; cursor: pointer; }
+
+.ha-state .lead { white-space: pre-wrap; }
+.ha-state-actions, .ha-inline-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
+
+.ha-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 14px; }
+.ha-tabs .btn.sel { color: var(--title); border-color: var(--line-strong); background: rgba(0,255,102,0.12); }
+.ha-tabs .btn[disabled] { opacity: 0.45; cursor: default; }
+
+.ha-table { display: flex; flex-direction: column; font-size: 11.5px; }
+.ha-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.ha-row:last-child { border-bottom: none; }
+.ha-row.head { color: var(--dim); text-transform: uppercase; font-size: 10px; letter-spacing: 1px; }
+.ha-row.child { padding-left: 22px; }
+.ha-row.overdue .ha-lease, .ha-row.failed .ha-state-cell, .ha-row.error .ha-state-cell { color: var(--crit); }
+.ha-row.disabled { opacity: 0.55; }
+.ha-cell { min-width: 70px; }
+.ha-cell.name { font-family: var(--mono); color: var(--title); font-weight: 600; min-width: 140px; }
+.ha-cell.wide { flex: 1 1 220px; color: var(--dim); word-break: break-word; }
+.ha-cell.mono { font-family: var(--mono); }
+.ha-cell.actions { display: flex; gap: 5px; margin-left: auto; }
+.ha-cell.actions .btn { padding: 2px 7px; font-size: 11px; }
+.ha-badge { font-size: 10px; letter-spacing: 0.5px; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; border: 1px solid var(--line); color: var(--dim); }
+.ha-badge.shared { color: var(--warn); border-color: rgba(255,194,77,0.5); }
+.ha-badge.child { color: var(--accent); }
+.ha-badge.enforce { color: var(--warn); border-color: rgba(255,194,77,0.5); }
+.ha-badge.off { color: var(--crit); border-color: rgba(255,93,93,0.5); }
+
+.ha-bars { display: flex; flex-direction: column; gap: 10px; }
+.ha-bar-label { display: flex; justify-content: space-between; font-size: 11px; color: var(--dim); }
+.ha-bar { height: 8px; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; background: rgba(0,0,0,0.3); }
+.ha-bar > span { display: block; height: 100%; background: var(--accent); }
+.ha-bar.hot > span { background: var(--warn); }
+.ha-bar.full > span { background: var(--crit); }
+.ha-bar-text { font-size: 10.5px; color: var(--faint); margin-top: 3px; }
+
+.ha-form { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px 14px; margin: 8px 0; }
+.ha-form label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--dim); }
+.ha-form input, .ha-form select, .ha-form textarea, .ha-inline-actions input { font-family: var(--mono); font-size: 12px; color: var(--text); background: rgba(0,0,0,0.35); border: 1px solid var(--line); border-radius: 4px; padding: 5px 7px; }
+.ha-form .problem { color: var(--crit); font-size: 10.5px; }
+
+.ha-section { margin: 10px 0; }
+.ha-section-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.ha-section textarea { width: 100%; box-sizing: border-box; min-height: 90px; font-family: var(--mono); font-size: 11.5px; color: var(--text); background: rgba(0,0,0,0.35); border: 1px solid var(--line); border-radius: 4px; padding: 6px; }
+.ha-section.dirty textarea { border-color: var(--warn); }
+.ha-section .problem { color: var(--crit); font-size: 11px; margin: 3px 0 0; white-space: pre-wrap; }
+.ha-pre { font-family: var(--mono); font-size: 11px; color: var(--dim); background: rgba(0,0,0,0.35); border: 1px solid var(--line); border-radius: 4px; padding: 8px; white-space: pre-wrap; max-height: 240px; overflow: auto; }
+.ha-new-user { align-items: end; }

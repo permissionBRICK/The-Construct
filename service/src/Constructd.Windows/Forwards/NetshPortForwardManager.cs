@@ -211,13 +211,28 @@ public sealed class NetshPortForwardManager : IPortForwardManager
         }
     }
 
-    public async Task<AddForwardResult> TryAddForwardAsync(
+    public Task<AddForwardResult> TryAddForwardAsync(string vmName, int vmPort, ForwardTarget target,
+        string label, int maxForwards, CancellationToken cancellationToken) =>
+        AddForwardAsync(vmName, vmPort, target, label, maxForwards, cancellationToken, null);
+
+    public Task<AddForwardResult> TryAddDestinationForwardAsync(ForwardRequest request,
+        ForwardDestination destination, CancellationToken cancellationToken)
+    {
+        if (!string.Equals(request.TargetVm, destination.VmName, StringComparison.OrdinalIgnoreCase) ||
+            request.ConnectPort != destination.ConnectPort || destination.ConnectPort is < 1 or > 65535 ||
+            (request.Target == ForwardTarget.Host && (!destination.Verified || destination.ConnectAddress is null)))
+            throw new InvalidOperationException("Invalid or unverified forward destination.");
+        return AddForwardAsync(request.TargetVm, request.VmPort, request.Target, request.Label,
+            request.MaxForwards, cancellationToken, destination);
+    }
+
+    private async Task<AddForwardResult> AddForwardAsync(
         string vmName,
         int vmPort,
         ForwardTarget target,
         string label,
         int maxForwards,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, ForwardDestination? destination)
     {
         var name = ArgumentGuard.VmName(vmName);
         ArgumentGuard.Port(vmPort, "vm port");
@@ -249,7 +264,8 @@ public sealed class NetshPortForwardManager : IPortForwardManager
                 PublicPort: publicPort,
                 Target: target,
                 Label: label,
-                Created: _clock.UtcNow);
+                Created: _clock.UtcNow,
+                Destination: destination);
 
             try
             {
@@ -270,8 +286,8 @@ public sealed class NetshPortForwardManager : IPortForwardManager
             {
                 try
                 {
-                    var address = await ResolveVmAddressAsync(name, port, cancellationToken).ConfigureAwait(false);
-                    await AddRuleAsync(name, port, address.Address, vmPort, cancellationToken).ConfigureAwait(false);
+                    var address = destination?.ConnectAddress ?? (await ResolveVmAddressAsync(name, port, cancellationToken).ConfigureAwait(false)).Address;
+                    await AddRuleAsync(name, port, address, destination?.ConnectPort ?? vmPort, cancellationToken).ConfigureAwait(false);
                 }
                 catch
                 {
@@ -439,6 +455,15 @@ public sealed class NetshPortForwardManager : IPortForwardManager
                     continue;
                 }
 
+                if (forward.Destination is { } destination)
+                {
+                    // Child host exposure is admitted only by a future address authority.
+                    if (destination.Verified && destination.ConnectAddress is { } address)
+                        wanted.Add((forward.VmName, port, address, destination.ConnectPort));
+                    else if (existing.ContainsKey(port) && !await DeleteRuleAsync(port, cancellationToken))
+                        throw Fail(forward.VmName, port, "netsh delete left an unverified destination in place");
+                    continue;
+                }
                 var endpoint = await ResolveOnceAsync(forward.VmName).ConfigureAwait(false);
                 if (endpoint is { } vmAddress)
                 {

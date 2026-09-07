@@ -353,12 +353,14 @@ survive the SSH/PowerShell layers intact, like `GIT_USER_NAME_B64`). The token i
 echoed, never logged, never written to `config.env` and never placed on a command line; the
 provisioning step reports only that a token was installed.
 
-**Rotation is not implemented.** The service issues a VM token in exactly one place — the VM
-creation job — and exposes no route or admin verb to mint another, so re-provisioning cannot
-replace a lost one (it can only re-deliver a token it was handed). Recovering from a
-destroyed or lost VM token today means deleting and re-creating the VM. A VM whose token file
-is missing or unreadable in remote mode gets a clear error from `expose` (exit 8) and a
-logged warning from the heartbeat — never a stack trace and never the token itself.
+**Rotation is explicit.** An owner/Admin user can call `POST /vms/{name}/token` (default
+kind `primary`) or use `Provision-AgentVM.ps1 -RotateVmToken`; the old hash is invalidated
+immediately and the new plaintext travels once through the existing SSH-stdin provisioning
+channel. Ordinary reprovisioning does not rotate. Existing primaries migrated from an older
+service keep a `legacy` token until upgraded: it still authorizes this VM's existing
+heartbeat and self-forward routes, but no child delegation. A VM whose token file is missing
+or unreadable in remote mode gets a clear error from `expose` (exit 8) and a logged warning
+from the heartbeat—never a stack trace and never the token itself.
 
 ## Activity heartbeat
 
@@ -407,6 +409,9 @@ Environment overrides (used by `test/idle-report.test.sh`, and available for deb
 
 ## Related
 
+- [`construct vm`](child-vms.md) manages temporary child VMs from a service-managed
+  primary. Its `forward` command targets a child explicitly; `construct expose` keeps
+  targeting the current primary and its existing flat forward contract is unchanged.
 - `docs/plans/modular-remote-architecture.md` §4.6 (forwards), §4.7 (idle), §4.8 (module rules)
 - `extension/ARCHITECTURE.md` §Forwards — the extension half of this contract
 - [`docs/control-panel.md` § Forwards](control-panel.md#forwards-construct-expose) — what
@@ -415,3 +420,27 @@ Environment overrides (used by `test/idle-report.test.sh`, and available for deb
 - `service/README.md` — the host service's API and authentication, including the ack relay
 - [`docs/remote-host.md`](remote-host.md) — the host service this VM talks to in remote mode
 - `docs/remote-access.md` — how the VM is reached in the first place
+
+## Child destinations on remote hosts
+
+`construct expose` keeps its primary/self-forward protocol. A general-purpose child
+has no Construct token and cannot request exposure itself. An authorized user or
+primary requests `POST /api/v1/vms/CHILD/forwards` with `vmPort`, optional
+`connectPort`, `target: "client"` and optional `via` (the requester's primary).
+The response's `destination` names the child separately from the requester and
+SSH carrier. Shared callers use their own primary, never the owner's SSH credentials.
+
+The owning extension polls `/vms/PRIMARY/forwards?via=PRIMARY`, tunnels to
+`destination.connectAddress:connectPort`, and acknowledges using the **child's**
+forward route. Only the human owner of `destination.via` or an admin may ack.
+An unknown address is recorded with `status: "error"` and
+`message: "guest address unknown yet"`. Address changes/conflicts invalidate the
+ack with `message: "guest address changed"`; a usable address clears the ack for
+fresh establishment. Revoked sharing removes shared-requester rows so the extension
+closes their tunnels on its next poll.
+
+Hyper-V child addresses are guest-reported and **unverified**. Child host exposure
+is refused even if the host and owner's host-forward switches allow it, because no
+IP allocation authority is installed. Direct reporting is conditional on guest
+integration services. The service reports `isolation: "none"`; intended network
+rules do not filter packets. See [child networking](remote-host.md#child-networking).

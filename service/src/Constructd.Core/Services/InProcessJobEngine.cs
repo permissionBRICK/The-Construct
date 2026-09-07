@@ -22,8 +22,8 @@ namespace Constructd.Core.Services;
 /// its message, stack trace, <c>Data</c> or inner exceptions, so nothing outside this class ever sees
 /// it: not job state, not the SSE stream, not the audit trail, and not the log.
 /// </param>
-public sealed class InProcessJobEngine(IClock clock, IJobStore store, Action<Job, string>? diagnostics = null)
-    : IJobEngine, IDisposable
+public sealed class InProcessJobEngine(IClock clock, IJobStore store, Action<Job, string>? diagnostics = null, IMaintenanceGate? maintenance = null)
+    : IJobEngine, IPersistedJobRunner, IDisposable
 {
     private readonly ConcurrentDictionary<string, JobEntry> _jobs = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, string> _secrets = new(StringComparer.Ordinal);
@@ -50,17 +50,59 @@ public sealed class InProcessJobEngine(IClock clock, IJobStore store, Action<Job
             Created: clock.UtcNow,
             Finished: null));
 
-        _jobs[entry.Snapshot.Id] = entry;
-        await store.UpsertAsync(entry.Snapshot, cancellationToken).ConfigureAwait(false);
-
-        _ = Task.Run(() => RunAsync(entry, work), CancellationToken.None);
+        IDisposable? handle = null;
+        if (maintenance is not null && kind is "create-vm" or "remove-vm" or "iso-build" or "iso-acquire" or "host-install" or "host-reachability")
+            handle = MaintenanceAdmission.Current.Value?.Retain(kind) ?? maintenance.TryEnter(kind, entry.Snapshot.Id, vmName) ?? throw new UpdateException("maintenance");
+        try
+        {
+            await store.UpsertAsync(entry.Snapshot, cancellationToken).ConfigureAwait(false);
+            _jobs[entry.Snapshot.Id] = entry;
+            _ = Task.Run(async () => { try { await RunAsync(entry, work); } finally { handle?.Dispose(); } }, CancellationToken.None);
+        }
+        catch { handle?.Dispose(); throw; }
         return entry.Snapshot;
+    }
+
+    public Task StartPersistedAsync(Job queued, IDisposable gateHandle, Func<IProgress<string>, CancellationToken, Task<JobOutcome>> work, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(gateHandle);
+        ArgumentNullException.ThrowIfNull(work);
+        ct.ThrowIfCancellationRequested();
+        if (queued.State != JobState.Queued) throw new ArgumentException("Expected a queued job.", nameof(queued));
+        var entry = new JobEntry(queued);
+        if (!_jobs.TryAdd(queued.Id, entry)) throw new InvalidOperationException("Job is already running.");
+        _ = Task.Run(async () =>
+        {
+            try { await RunAsync(entry, work).ConfigureAwait(false); }
+            finally { gateHandle.Dispose(); }
+        }, CancellationToken.None);
+        return Task.CompletedTask;
+    }
+
+    public async Task SetPhaseAsync(string jobId, string phase, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (!_jobs.TryGetValue(jobId, out var entry)) throw new InvalidOperationException("Job is not running.");
+        Job snapshot;
+        lock (entry.Gate)
+        {
+            if (entry.Finished || entry.Completing) return;
+            entry.Snapshot = entry.Snapshot with { Phase = phase };
+            snapshot = entry.Snapshot;
+        }
+        await EnqueueWriteAsync(entry, snapshot).ConfigureAwait(false);
+        lock (entry.Gate)
+        {
+            foreach (var subscriber in entry.Subscribers)
+                subscriber.Writer.TryWrite(new JobEvent(JobEventKind.Phase, new JobProgressLine(clock.UtcNow, phase), null));
+        }
     }
 
     public async Task<Job?> GetAsync(string id, CancellationToken cancellationToken)
     {
         if (_jobs.TryGetValue(id, out var entry))
         {
+            if(entry.Finished && entry.Snapshot.Kind=="host-update") return await store.GetAsync(id,cancellationToken).ConfigureAwait(false);
             return entry.Snapshot;
         }
 
@@ -205,6 +247,7 @@ public sealed class InProcessJobEngine(IClock clock, IJobStore store, Action<Job
             {
                 State = JobState.Failed,
                 Error = safe,
+                Result = ex is JobFailureException failed ? failed.Result : null,
                 Finished = clock.UtcNow,
             }).ConfigureAwait(false);
         }

@@ -23,48 +23,43 @@ public static class VmEndpoints
     public static RouteGroupBuilder MapVmEndpoints(this RouteGroupBuilder api)
     {
         api.MapGet("/vms", ListAsync)
-            .RequireAuthorization(Policies.User).WithName("ListVms");
+            .RequireAuthorization(Policies.UserOrPrimaryToken).WithName("ListVms");
 
         api.MapPost("/vms", CreateAsync)
             .RequireAuthorization(Policies.User).Audited("vm.create").WithName("CreateVm");
 
         api.MapGet("/vms/{name}", GetAsync)
-            .RequireAuthorization(Policies.User).WithName("GetVm");
+            .RequireAuthorization(Policies.UserOrPrimaryToken).WithName("GetVm");
 
         api.MapDelete("/vms/{name}", DeleteAsync)
-            .RequireAuthorization(Policies.User).Audited("vm.delete").WithName("DeleteVm");
+            .RequireAuthorization(Policies.UserOrPrimaryToken).Audited("vm.delete").WithName("DeleteVm");
 
         api.MapPost("/vms/{name}/power", PowerAsync)
             .RequireAuthorization(Policies.User).Audited("vm.power").WithName("PowerVm");
 
         api.MapGet("/vms/{name}/state", StateAsync)
-            .RequireAuthorization(Policies.User).WithName("GetVmState");
+            .RequireAuthorization(Policies.UserOrPrimaryToken).WithName("GetVmState");
 
         api.MapGet("/vms/{name}/endpoint", EndpointAsync)
-            .RequireAuthorization(Policies.User).WithName("GetVmEndpoint");
+            .RequireAuthorization(Policies.UserOrPrimaryToken).WithName("GetVmEndpoint");
 
         return api;
     }
 
-    private static async Task<IResult> ListAsync(
-        HttpContext http,
-        IVmRepository repository,
-        IPortForwardManager forwards,
-        ConstructdOptions options,
-        CancellationToken cancellationToken)
+    private static async Task<IResult> ListAsync(HttpContext http, IVmRepository repository, VmInventoryProjection projection, CancellationToken cancellationToken)
     {
-        // Admins see every VM; everyone else only their own.
-        var owner = http.User.IsAdmin() ? null : http.User.NameOrEmpty();
-        var vms = await repository.ListAsync(owner, cancellationToken).ConfigureAwait(false);
-
-        var responses = new List<VmResponse>(vms.Count);
-        foreach (var vm in vms)
+        var kind = http.Request.Query["kind"].ToString(); var ownerFilter = http.Request.Query["owner"].ToString(); var parent = http.Request.Query["parent"].ToString();
+        if (kind is not ("" or "all" or "primary" or "child")) return CodedProblems.Validation("kind", "Expected primary, child or all.");
+        if (ownerFilter.Length > 0 && !http.User.IsAdmin()) return Problems.Forbidden("Only admins may filter by owner.");
+        var owner = http.User.IsAdmin() ? (ownerFilter.Length > 0 ? ownerFilter : null) : http.User.IsVmToken() ? null : http.User.NameOrEmpty();
+        var all = await repository.ListAsync(owner, cancellationToken); var result = new List<VmResponse>();
+        foreach (var vm in all)
         {
-            responses.Add(await ApiHelpers.ToResponseAsync(vm, forwards, options, cancellationToken)
-                .ConfigureAwait(false));
+            if (http.User.IsVmToken() && !Ownership.SameName(vm.Name, http.User.VmTokenName()) && !Ownership.SameName(vm.Parent, http.User.VmTokenName())) continue;
+            if (kind == "primary" && vm.Kind != VmKind.Primary || kind == "child" && vm.Kind != VmKind.Child || parent.Length > 0 && !Ownership.SameName(vm.Parent, parent)) continue;
+            result.Add(await projection.ProjectAsync(vm, http.User, cancellationToken));
         }
-
-        return TypedResults.Ok(responses);
+        return Results.Ok(result);
     }
 
     private static async Task<IResult> CreateAsync(
@@ -131,53 +126,9 @@ public static class VmEndpoints
             IdlePolicy: policy,
             Forwards: Vm.NoForwards);
 
-        // Name uniqueness and the quota are enforced by the insert itself, so two concurrent creates
-        // cannot both pass a check that was true a moment earlier. The record also reserves the name
-        // and is what authorizes the job's own reads.
-        var outcome = await repository.AddAsync(vm, user.MaxVms, cancellationToken).ConfigureAwait(false);
-
-        if (outcome == VmAddOutcome.NameTaken)
-        {
-            http.SetAuditDetail("name already taken");
-            return Problems.Conflict($"A VM named '{name}' already exists on this host.");
-        }
-
-        if (outcome == VmAddOutcome.QuotaExceeded)
-        {
-            var owned = await repository.CountByOwnerAsync(actor, cancellationToken).ConfigureAwait(false);
-            http.SetAuditDetail($"quota {owned}/{user.MaxVms}");
-            return Problems.Forbidden($"Quota reached: you own {owned} of {user.MaxVms} allowed VMs.");
-        }
-
-        var descriptor = new VmDescriptor(
-            name,
-            cpu,
-            ramGb,
-            diskGb,
-            IsoPath: null,
-            Nested: request.Opts?.Nested ?? false,
-            AutomaticCheckpoints: request.Opts?.AutomaticCheckpoints ?? false);
-
-        Job job;
-        try
-        {
-            job = await jobs.SubmitAsync(
-                JobKinds.CreateVm,
-                name,
-                actor,
-                (progress, jobToken) => VmJobs.CreateAsync(scopes, descriptor, actor, progress, jobToken, request.Opts?.Redownload == true),
-                cancellationToken).ConfigureAwait(false);
-        }
-        catch
-        {
-            // The job could not be queued durably, so nothing will ever create this VM: give the name
-            // and the quota slot back instead of leaving a reservation nobody works on.
-            await repository.RemoveAsync(name, CancellationToken.None).ConfigureAwait(false);
-            throw;
-        }
-
-        http.SetAuditDetail($"job={job.Id}, cpu={cpu}, ramGb={ramGb}, diskGb={diskGb}");
-        return TypedResults.Accepted($"/api/v1/jobs/{job.Id}", new JobAcceptedResponse(job.Id));
+        var descriptor = new VmDescriptor(name, cpu, ramGb, diskGb, IsoPath: null,
+            Nested: request.Opts?.Nested ?? false, AutomaticCheckpoints: request.Opts?.AutomaticCheckpoints ?? false);
+        return await PrimaryVmAdmission.CreateAsync(vm, descriptor, request, http, cancellationToken);
     }
 
     private static async Task<IResult> GetAsync(
@@ -185,15 +136,14 @@ public static class VmEndpoints
         HttpContext http,
         IVmRepository repository,
         IAuthorizationService authorization,
-        IPortForwardManager forwards,
-        ConstructdOptions options,
+        VmInventoryProjection projection,
         CancellationToken cancellationToken)
     {
         var lookup = await ApiHelpers.ResolveVmAsync(http, repository, authorization, name,
-            Policies.VmOwnerOrAdmin, cancellationToken).ConfigureAwait(false);
+            Policies.ChildOperator, cancellationToken).ConfigureAwait(false);
 
         return lookup.Ok
-            ? TypedResults.Ok(await ApiHelpers.ToResponseAsync(lookup.Vm!, forwards, options, cancellationToken)
+            ? TypedResults.Ok(await projection.ProjectAsync(lookup.Vm!, http.User, cancellationToken)
                 .ConfigureAwait(false))
             : lookup.Failure!;
     }
@@ -204,48 +154,28 @@ public static class VmEndpoints
         IVmRepository repository,
         IAuthorizationService authorization,
         IJobEngine jobs,
+        IVmOperationGate gate,
+        IVmMetadataStore metadata,
         IServiceScopeFactory scopes,
         CancellationToken cancellationToken)
     {
-        var lookup = await ApiHelpers.ResolveVmAsync(http, repository, authorization, name,
-            Policies.VmOwnerOrAdmin, cancellationToken).ConfigureAwait(false);
-
-        if (!lookup.Ok)
+        var initial = await repository.GetAsync(name, cancellationToken);
+        if (initial is null) return Problems.NotFound("Unknown VM.");
+        var policy = initial.Kind == VmKind.Child ? Policies.ChildOwnerOrAdmin : Policies.VmOwnerOrAdmin;
+        if (!(await authorization.AuthorizeAsync(http.User, initial, policy)).Succeeded) return LifecycleEndpoints.Problem("not-owner", 403);
+        await using var handle = await PrimaryOperationGate.AcquireAsync(gate, name, http.TraceIdentifier, cancellationToken);
+        if (handle is null)
         {
-            return lookup.Failure!;
+            var latest = await repository.GetAsync(name, cancellationToken);
+            if (latest is { Deleting: true } && await LifecycleEndpoints.LiveAsync(latest, http.RequestServices, cancellationToken))
+                return Results.Ok(new { jobId = latest.CurrentJobId, replayed = true });
+            gate.IsHeld(name, out var currentOperation); return LifecycleEndpoints.Busy(currentOperation);
         }
-
-        var actor = http.User.NameOrEmpty();
-        var vm = lookup.Vm!;
-        var vmName = vm.Name;
-
-        // Fence the VM the moment the removal is accepted, and revoke its scoped token in the same
-        // write: nothing may be attached to it behind the job that is tearing it down, and the guest
-        // stops being able to authenticate at all.
-        await repository.UpdateAsync(vm with { Deleting = true, VmTokenHash = null }, cancellationToken)
-            .ConfigureAwait(false);
-
-        Job job;
-        try
-        {
-            job = await jobs.SubmitAsync(
-                JobKinds.RemoveVm,
-                vmName,
-                actor,
-                (progress, jobToken) => VmJobs.RemoveAsync(scopes, vmName, actor, progress, jobToken),
-                cancellationToken).ConfigureAwait(false);
-        }
-        catch
-        {
-            // The fence was an advance on a job that does not exist: nothing will ever remove this VM,
-            // so put it back the way it was — including its scoped token — instead of leaving a VM that
-            // is refused every mutation and whose guest can no longer authenticate.
-            await repository.UpdateAsync(vm, CancellationToken.None).ConfigureAwait(false);
-            throw;
-        }
-
-        http.SetAuditDetail($"job={job.Id}");
-        return TypedResults.Accepted($"/api/v1/jobs/{job.Id}", new JobAcceptedResponse(job.Id));
+        var vm = await repository.GetAsync(name, cancellationToken);
+        if (vm is null) return Problems.NotFound("Unknown VM.");
+        if (!(await authorization.AuthorizeAsync(http.User, vm, policy)).Succeeded) return LifecycleEndpoints.Problem("not-owner", 403);
+        return vm.Kind == VmKind.Child ? await ChildVmEndpoints.DeleteAsync(vm, http, cancellationToken) :
+            await CascadeEndpoints.DeleteAsync(vm, http, cancellationToken);
     }
 
     private static async Task<IResult> PowerAsync(
@@ -266,6 +196,7 @@ public static class VmEndpoints
         }
 
         var vm = lookup.Vm!;
+        if (vm.Kind == VmKind.Child) return CodedProblems.Create(400, "child-lifecycle-route", "Use the child lifecycle route.");
 
         if (ApiHelpers.FenceDeleting(vm) is { } fenced)
         {
@@ -287,21 +218,42 @@ public static class VmEndpoints
             return Problems.Conflict("This host's driver cannot suspend VMs.");
         }
 
-        switch (action)
+        var services = http.RequestServices;
+        var vmGate = services.GetRequiredService<IVmOperationGate>();
+        await using var held = await PrimaryOperationGate.AcquireAsync(vmGate, vm.Name, http.TraceIdentifier, cancellationToken);
+        if (held is null) { vmGate.IsHeld(vm.Name, out var operation); return LifecycleEndpoints.Busy(operation); }
+        vm = (await repository.GetAsync(vm.Name, cancellationToken))!;
+        if (vm is null) return Problems.NotFound("Unknown VM.");
+        if (ApiHelpers.FenceDeleting(vm) is { } latestFence) return latestFence;
+        if (await LifecycleEndpoints.LiveAsync(vm, services, cancellationToken)) return LifecycleEndpoints.Busy(vm.CurrentJobId);
+        VmState state;
+        if (action == "start")
         {
-            case "start":
-                await driver.StartAsync(vm.Name, cancellationToken).ConfigureAwait(false);
-                break;
-            case "stop":
-                await driver.StopAsync(vm.Name, cancellationToken).ConfigureAwait(false);
-                break;
-            default:
-                await driver.SaveAsync(vm.Name, cancellationToken).ConfigureAwait(false);
-                break;
+            // Keep the legacy idempotent Running answer; Off/Saved/Paused starts use the shared ledger.
+            state = await driver.GetStateAsync(vm.Name, cancellationToken);
+            if (state != VmState.Running)
+            {
+                var supplied = http.Request.Headers["X-Construct-Operation-Key"].FirstOrDefault();
+                if (supplied is not null && !OperationFingerprint.ValidKey(supplied)) return CodedProblems.Validation("operationKey", "Invalid operation key.");
+                var key = new OperationKeyRecord(vm.Owner, "lifecycle-start", supplied ?? Guid.NewGuid().ToString("n"), "primary-power-start:" + vm.Name,
+                    vm.Name, null, OperationKeyState.InFlight, null, vm.PowerGeneration, null, services.GetRequiredService<IClock>().UtcNow);
+                try
+                {
+                    var reply = await services.GetRequiredService<LifecycleStart>().RunAsync(vm, null, null, key, cancellationToken);
+                    if (reply.Code is not null) return LifecycleEndpoints.Problem(reply.Code);
+                    state = reply.State;
+                }
+                catch (LifecycleException ex) { return ex.Capacity is { } decision ? PrimaryVmAdmission.CapacityProblem(decision) : LifecycleEndpoints.Problem(ex.Code); }
+            }
         }
-
-        var state = await driver.GetStateAsync(vm.Name, cancellationToken).ConfigureAwait(false);
-        await repository.UpdateAsync(vm with { State = state }, cancellationToken).ConfigureAwait(false);
+        else
+        {
+            if (action == "stop") await driver.StopAsync(vm.Name, cancellationToken);
+            else await driver.SaveAsync(vm.Name, cancellationToken);
+            state = await driver.GetStateAsync(vm.Name, cancellationToken);
+            try { await services.GetRequiredService<ChildLifecycleJobs>().PersistState(vm, state, null, true, cancellationToken); }
+            catch (LifecycleException ex) { return LifecycleEndpoints.Problem(ex.Code); }
+        }
 
         http.SetAuditDetail($"action={action}, state={state}");
         return TypedResults.Ok(new VmStateResponse(state));
@@ -316,7 +268,7 @@ public static class VmEndpoints
         CancellationToken cancellationToken)
     {
         var lookup = await ApiHelpers.ResolveVmAsync(http, repository, authorization, name,
-            Policies.VmOwnerOrAdmin, cancellationToken).ConfigureAwait(false);
+            Policies.ChildOperator, cancellationToken).ConfigureAwait(false);
 
         if (!lookup.Ok)
         {
@@ -326,11 +278,8 @@ public static class VmEndpoints
         var vm = lookup.Vm!;
         var state = await driver.GetStateAsync(vm.Name, cancellationToken).ConfigureAwait(false);
 
-        if (state != vm.State)
-        {
-            await repository.UpdateAsync(vm with { State = state }, cancellationToken).ConfigureAwait(false);
-        }
-
+        // This is a read. Reconciliation persists observed transitions under the VM gate,
+        // preserving pending start intents and their power-generation fence.
         return TypedResults.Ok(new VmStateResponse(state));
     }
 
@@ -349,7 +298,7 @@ public static class VmEndpoints
         CancellationToken cancellationToken)
     {
         var lookup = await ApiHelpers.ResolveVmAsync(http, repository, authorization, name,
-            Policies.VmOwnerOrAdmin, cancellationToken).ConfigureAwait(false);
+            Policies.ChildOperator, cancellationToken).ConfigureAwait(false);
 
         if (!lookup.Ok)
         {
@@ -357,6 +306,7 @@ public static class VmEndpoints
         }
 
         var vm = lookup.Vm!;
+        if (vm.Kind == VmKind.Child) return CodedProblems.Create(409, "no-endpoint", "Children have no primary SSH endpoint.");
         // sshHost is where SSH is dialled (the service host plus the allocated forward); publicHost is
         // the name this VM's WEB forwards are advertised under (plan §4.12). Without a
         // PublicHostPattern the two are the same string, which is what makes this addition invisible

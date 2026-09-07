@@ -28,6 +28,7 @@ public static class AuthenticationSetup
             scheme.ForwardDefaultSelector = context =>
             {
                 var authScheme = AuthorizationHeader.SchemeOf(context.Request);
+                if (string.Equals(authScheme, UpdateHandoffAuthenticationHandler.SchemeName, StringComparison.OrdinalIgnoreCase)) return UpdateHandoffAuthenticationHandler.SchemeName;
 
                 if (string.Equals(authScheme, ConstructdSchemes.VmToken, StringComparison.OrdinalIgnoreCase))
                 {
@@ -53,6 +54,8 @@ public static class AuthenticationSetup
                 return testIdentityEnabled ? ConstructdSchemes.TestIdentity : ConstructdSchemes.Bearer;
             };
         });
+
+        builder.AddScheme<AuthenticationSchemeOptions, UpdateHandoffAuthenticationHandler>(UpdateHandoffAuthenticationHandler.SchemeName, _ => { });
 
         builder.AddScheme<AuthenticationSchemeOptions, BearerTokenAuthenticationHandler>(
             ConstructdSchemes.Bearer, displayName: "API token", configureOptions: null);

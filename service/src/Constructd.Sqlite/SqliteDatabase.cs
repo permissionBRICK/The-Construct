@@ -68,6 +68,7 @@ public sealed class SqliteDatabase
     public void EnsureCreated()
     {
         using var connection = Open();
+        Migrations.SqliteMigrationRunner.CheckCompatibility(connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             CREATE TABLE IF NOT EXISTS users (
@@ -160,6 +161,9 @@ public sealed class SqliteDatabase
         AddColumnIfMissing(connection, "forwards", "ack_host_label", "TEXT NULL");
         AddColumnIfMissing(connection, "forwards", "ack_message", "TEXT NULL");
         AddColumnIfMissing(connection, "forwards", "ack_at", "TEXT NULL");
+        Migrations.SqliteMigrationRunner.Apply(connection, typeof(SqliteDatabase).Assembly
+            .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+            .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion.Split('+').ElementAtOrDefault(1) ?? "unknown");
     }
 
     /// <summary>

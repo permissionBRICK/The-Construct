@@ -1,0 +1,67 @@
+using Constructd.Core.Abstractions;
+using Constructd.Core.Domain;
+namespace Constructd.Core.Services;
+
+/// <summary>Explicit failures until a feature registers its implementation. Never acknowledges a mutation.</summary>
+public sealed class UnsupportedFeaturePlatform : IMediaStore, IMediaTransfer, IHypervisorInventory, IReleaseSource, IUpdateStager, IUpdaterLauncher, IHostUpdateStore, IHostLock, IGuestAddressProvider, IAccessExposure, IOperationKeyStore, IAdmissionStore, IPersistedJobRunner
+{
+    Task<MediaItem?> IMediaStore.GetAsync(string id, CancellationToken ct) => Task.FromResult<MediaItem?>(null);
+    Task<IReadOnlyList<MediaItem>> IMediaStore.ListAsync(string? owner, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<int> IMediaStore.CountByOwnerAsync(string owner, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task IMediaStore.AddAsync(MediaItem item, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<bool> IMediaStore.TryTransitionAsync(string id, MediaState expected, MediaItem updated, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<bool> IMediaStore.RemoveAsync(string id, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<IReadOnlyList<MediaReference>> IMediaStore.ListReferencesAsync(string mediaId, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<IReadOnlyList<MediaReference>> IMediaStore.ListReferencesForVmAsync(string vmName, CancellationToken ct) => Task.FromResult<IReadOnlyList<MediaReference>>([]);
+    Task<bool> IMediaStore.TryAddReferenceAsync(MediaReference reference, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<bool> IMediaStore.RemoveReferenceAsync(string mediaId, string vmName, MediaSlot slot, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<MediaUpload?> IMediaStore.GetUploadAsync(string id, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task IMediaStore.AddUploadAsync(MediaUpload upload, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<bool> IMediaStore.TryTransitionUploadAsync(string id, UploadState expected, MediaUpload updated, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<bool> IMediaStore.RecordChunkAsync(string uploadId, int index, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<IReadOnlyList<MediaUpload>> IMediaStore.ListExpiredUploadsAsync(DateTimeOffset now, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<TransferResult> IMediaTransfer.AcquireAsync(MediaItem item, Uri source, long maxBytes, TimeSpan timeout, IProgress<string>? progress, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task IMediaTransfer.WriteChunkAsync(MediaUpload upload, int index, Stream body, long contentLength, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<string> IMediaTransfer.HashAsync(string path, IProgress<string>? progress, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<bool> IMediaTransfer.LooksLikeIsoAsync(string path, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<bool> IMediaTransfer.TryDeleteAsync(string path, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<IReadOnlyList<string>> IMediaTransfer.ListFilesAsync(CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<InventorySnapshot> IHypervisorInventory.ReadAsync(CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<IReadOnlyList<ReleaseDescriptor>> IReleaseSource.ListHostReleasesAsync(string repository, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task IReleaseSource.DownloadAsync(ReleaseAsset asset, string destinationPath, IProgress<string>? progress, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<StagedUpdate> IUpdateStager.StageAsync(string updateId, ReleaseDescriptor release, IProgress<string>? progress, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<bool> IUpdateStager.VerifyStagedAsync(StagedUpdate staged, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task IUpdateStager.RemoveStagedAsync(string updateId, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task IUpdaterLauncher.LaunchAsync(UpdateHandoff handoff, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<UpdateHandoff?> IUpdaterLauncher.ReadHandoffAsync(CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<RecoveryRecord?> IUpdaterLauncher.ReadRecoveryRecordAsync(CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<bool> IUpdaterLauncher.TryWriteFenceAsync(UpdateFence fence, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<UpdateHandoff?> IUpdaterLauncher.ReadOwnHandoffAsync(string expectedCommit, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<HostUpdateRecord?> IHostUpdateStore.GetAsync(string id, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<HostUpdateRecord?> IHostUpdateStore.GetActiveAsync(CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<IReadOnlyList<HostUpdateRecord>> IHostUpdateStore.ListAsync(int limit, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<bool> IHostUpdateStore.TryStartAsync(HostUpdateRecord record, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task IHostUpdateStore.UpsertAsync(HostUpdateRecord record, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<IAsyncDisposable?> IHostLock.TryAcquireAsync(string name, TimeSpan wait, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    bool IHostLock.IsHeldByAnotherProcess(string name) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<IReadOnlyList<GuestAddress>> IGuestAddressProvider.GetReportedAddressesAsync(string vmName, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<IReadOnlyList<GuestAdapter>> IGuestAddressProvider.GetAdaptersAsync(string vmName, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<IReadOnlyList<HostNeighbor>> IGuestAddressProvider.GetNeighborsAsync(CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<IReadOnlyList<GuestSubnet>> IGuestAddressProvider.GetGuestSubnetsAsync(CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<IReadOnlyList<System.Net.IPAddress>> IGuestAddressProvider.GetHostAddressesAsync(CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<ExposeResult> IAccessExposure.TryExposeAsync(ForwardRequest request, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<int> IAccessExposure.RevokeForRequesterAsync(string targetVm, string requesterPrincipal, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<int> IAccessExposure.RevokeNonOwnerAsync(string targetVm, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<IReadOnlyList<PortForward>> IAccessExposure.ListViaAsync(string viaVm, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<IReadOnlyList<OperationKeyRecord>> IOperationKeyStore.ListInFlightAsync(string vmName, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<OperationKeyRecord?> IOperationKeyStore.GetAsync(string owner, string kind, string key, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<(OperationKeyOutcome Outcome, OperationKeyRecord? Existing)> IOperationKeyStore.TryInsertAsync(OperationKeyRecord record, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<bool> IOperationKeyStore.CompleteAsync(string owner, string kind, string key, string responseJson, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<bool> IOperationKeyStore.RemoveAsync(string owner, string kind, string key, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<int> IOperationKeyStore.SweepAsync(DateTimeOffset olderThan, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<AdmissionResult> IAdmissionStore.AdmitAsync(AdmissionPlan plan, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<AdmissionResult> IAdmissionStore.MutateAsync(OperationKeyRecord? key, Func<IAdmissionScope, Task<bool>> mutation, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task IAdmissionStore.MarkStartFailedAsync(string jobId, string error, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task IPersistedJobRunner.StartPersistedAsync(Job queued, IDisposable gateHandle, Func<IProgress<string>, CancellationToken, Task<JobOutcome>> work, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task IPersistedJobRunner.SetPhaseAsync(string jobId, string phase, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+}

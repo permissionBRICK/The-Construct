@@ -28,7 +28,10 @@ public sealed record Job(
     object? Result,
     string? Error,
     DateTimeOffset Created,
-    DateTimeOffset? Finished);
+    DateTimeOffset? Finished,
+    string? Initiator = null,
+    string? OperationKey = null,
+    string? Phase = null);
 
 /// <summary>Well-known <see cref="Job.Kind"/> values.</summary>
 public static class JobKinds
@@ -58,6 +61,7 @@ public enum JobEventKind
 {
     Progress,
     State,
+    Phase,
 }
 
 /// <summary>
