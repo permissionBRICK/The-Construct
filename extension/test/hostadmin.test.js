@@ -437,6 +437,11 @@ function fakeClient(answers = {}) {
     const offers = ha.firstVmOffers({ hosts, instances: insts, sameUrl: same });
     deep("offers: only the host with zero own VMs", offers.map((o) => o.url), ["https://other:7462"]);
     eq("offers: none without hosts", ha.firstVmOffers({ hosts: [], instances: insts }).length, 0);
+    const configured = { name: "cli-vm", backend: "hyperv-remote", service: { url: "https://cli.example:7462", auth: "token" } };
+    const explicit = { url: "https://cli.example:7462", auth: "negotiate", fingerprint: "saved-pin" };
+    deep("discovery: command-line hosts preserve auth without inventing a role", ha.discoverHosts([], [configured], same), [{ url: configured.service.url, auth: "token" }]);
+    deep("discovery: explicit enrolment wins and shared hosts deduplicate", ha.discoverHosts([explicit], [configured, configured], same), [explicit]);
+    deep("discovery: local instances do not invent a remote host", ha.discoverHosts([], [{ ...configured, backend: "hyperv-local" }], same), []);
     eq("hostEntryFor: finds the enrolment", ha.hostEntryFor(insts[0], hosts, same).identity, "alice");
     eq("hostEntryFor: a local instance has none", ha.hostEntryFor({ name: "agent-vm" }, hosts, same), null);
   }

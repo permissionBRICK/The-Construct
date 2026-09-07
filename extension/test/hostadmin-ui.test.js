@@ -387,6 +387,22 @@ const lastState = (entry) => [...entry.panel.posted].reverse().find((m) => m.typ
     ok("wiring: deactivate disposes the feature", /hostAdmin\.dispose\(\)/.test(extSrc));
   }
 
+  {
+    const { feature, vscode, client } = makeFeature({ hosts: [] });
+    const offer = await feature.hostAdminOfferFor(INST);
+    ok("installer-only host offers administration after live admin probe", offer && offer.url === INST.service.url);
+    ok("installer-only offer checks identity", client.calls.some((c) => c.method === "whoami"));
+    await feature.runOpenHostAdmin();
+    ok("installer-only host opens without Add Remote Host", vscode.rec.panels.length === 1 && vscode.rec.infos.length === 0);
+    feature.dispose();
+  }
+  {
+    const client = fakeClient({ health: HEALTH, whoami: { name: "ordinary", role: "user", known: true, enabled: true } });
+    const { feature } = makeFeature({ hosts: [], client });
+    eq("installer-only host does not grant admin to ordinary users", await feature.hostAdminOfferFor(INST), null);
+    feature.dispose();
+  }
+
   console.log(`\n  host-administration adapter tests — ${pass}/${pass + fail} passed\n`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(2); });
