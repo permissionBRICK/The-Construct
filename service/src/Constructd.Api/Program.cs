@@ -100,6 +100,7 @@ app.UseStatusCodePages();
 app.UseRouting();
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseMiddleware<MaintenanceFilter>();
 
 app.MapGroup("/api/v1")
     .MapIdentityEndpoints()
@@ -115,7 +116,10 @@ app.MapGroup("/api/v1")
     .MapDelegationEndpoints()
     .MapMediaEndpoints()
     .MapConsoleEndpoints()
-    .MapChildVmEndpoints();
+    .MapChildVmEndpoints()
+    .MapUpdateEndpoints();
+
+await app.Services.GetRequiredService<UpdateRecoveryService>().ReconcileAsync(CancellationToken.None);
 
 await Bootstrap.RunAsync(app.Services, CancellationToken.None);
 

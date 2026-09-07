@@ -1710,3 +1710,34 @@ Final cleanup readback used `Get-WmiObject` in `root\virtualization\v2`,
 `Msvm_ComputerSystem`, with a filter on that exact failed-creation GUID; it
 reported **probeGuidInstances:0**. The failed probe is neither registered nor
 represented by a matching artifact under the default Hyper-V configuration root.
+## Host release updates
+
+The Admin-only `/api/v1/host/updates/{check,stage,apply,cancel,resolve}` POST routes and
+`GET /api/v1/host/updates/status` implement the signed `main` release protocol. Status
+and phase history persist in migration 600's `host_updates` table. Staging/application
+acceptance persists the queued job, replay key and update transition in one SQLite
+transaction. The job's operation ID remains readable after reconnecting.
+
+`Update-ConstructHost.ps1` is an independent Windows PowerShell 5.1 scheduled task. It
+performs list-based replacement, retains complete verified backups, preserves production
+settings/data, checks the TLS-pinned loopback health handshake and `admin db check
+--json`, and records recovery outcomes locally. `Install-ConstructHost.ps1 -AclOnly`
+reuses the existing hardening logic without changing configuration or service registration.
+Mutating admin CLI verbs hold `admin.lock` and recheck the maintenance marker;
+`admin db check --json` opens SQLite read-only and runs `PRAGMA quick_check` without
+migration, platform initialization or taking that lock.
+
+The `updates` API feature becomes available after manual installation. The production
+public-key file remains empty until the owner supplies the trust root; update mutations
+return `409 signing-key-missing` and publishing fails until configured. See
+[release/deployment notes](../docs/host-release.md) and
+[Updating the host](../docs/remote-host.md#updating-the-host).
+
+Additional Linux checks:
+
+```sh
+bash test/host-package.test.sh
+pwsh -NoProfile -File service/tests/host-updater.test.ps1
+pwsh -NoProfile -File service/tests/host-release-installer.test.ps1
+dotnet test service/Constructd.sln --filter 'FullyQualifiedName~Updates'
+```

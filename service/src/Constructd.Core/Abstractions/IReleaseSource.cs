@@ -39,7 +39,7 @@ public interface IUpdateStager
 }
 
 /// <param name="HealthToken">Random secret written only into the SYSTEM-only handoff file; the new binary accepts it on loopback /health for the full body.</param>
-public sealed record UpdateHandoff(string UpdateId, string Commit, string StagedPath, string PublishDir, string ScriptsDir, string DataDir, string ServiceName, string PreviousCommit, string HealthUrl, string CertificateThumbprint, string AdminCliPath, string HealthToken, DateTimeOffset WrittenAt);
+public sealed record UpdateHandoff(string UpdateId, string Commit, string StagedPath, string PublishDir, string ScriptsDir, string DataDir, string ServiceName, string PreviousCommit, string HealthUrl, string CertificateThumbprint, string AdminCliPath, string HealthToken, DateTimeOffset WrittenAt, int PreviousSchemaVersion = 0, int HealthTimeoutSeconds = 120);
 /// <summary>What the fence permits, scoped to ONE update id (§11.7). Checked by the updater under updater.lock before stop, replace and rollback.</summary>
 public enum FenceDisposition
 {
@@ -55,6 +55,9 @@ public interface IUpdaterLauncher
 {
     /// <summary>Writes the handoff durably, THEN creates and starts the one-shot SYSTEM task (§11.5).</summary>
     Task LaunchAsync(UpdateHandoff handoff, CancellationToken ct);
+    Task PrepareAsync(UpdateHandoff handoff, CancellationToken ct) => Task.CompletedTask;
+    Task ResumeAsync(UpdateHandoff handoff, CancellationToken ct) => LaunchAsync(handoff, ct);
+    Task<UpdateFence?> ReadFenceAsync(CancellationToken ct) => Task.FromResult<UpdateFence?>(null);
     Task<UpdateHandoff?> ReadHandoffAsync(CancellationToken ct);
     /// <summary>The updater's last-update.json, or null.</summary>
     Task<RecoveryRecord?> ReadRecoveryRecordAsync(CancellationToken ct);

@@ -15,7 +15,7 @@ public sealed class InMemoryMaintenanceGate : IMaintenanceGate
     {
         lock (_gate)
         {
-            if (_state != MaintenanceState.Open) return null;
+            if (_state == MaintenanceState.Maintenance || (_state == MaintenanceState.Draining && !kind.StartsWith("mutation:", StringComparison.Ordinal))) return null;
             if (!_live.TryAdd(operationId, (kind, vmName))) throw new InvalidOperationException("Operation already admitted.");
             return new Handle(() => { lock (_gate) { _live.Remove(operationId); Signal(); } });
         }
@@ -29,8 +29,8 @@ public sealed class InMemoryMaintenanceGate : IMaintenanceGate
             Task changed; TimeSpan remaining;
             lock (_gate)
             {
-                if (_live.Count == 0) return new(true, [], started.Elapsed);
-                if (started.Elapsed >= timeout) return new(false, _live.Select(x => (x.Key, x.Value.Kind, x.Value.Vm)).ToArray(), started.Elapsed);
+                if (!_live.Values.Any(v => !v.Kind.StartsWith("mutation:", StringComparison.Ordinal))) return new(true, [], started.Elapsed);
+                if (started.Elapsed >= timeout) return new(false, _live.Where(x => !x.Value.Kind.StartsWith("mutation:", StringComparison.Ordinal)).Select(x => (x.Key, x.Value.Kind, x.Value.Vm)).ToArray(), started.Elapsed);
                 changed = _changed.Task; remaining = timeout - started.Elapsed;
                 if (remaining <= TimeSpan.Zero) continue;
             }

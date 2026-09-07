@@ -11,7 +11,7 @@ namespace Constructd.Api.Hosting;
 public sealed class ForwardReconciliationService(
     IPortForwardManager forwards,
     ConstructdOptions options,
-    ILogger<ForwardReconciliationService> logger) : BackgroundService
+    ILogger<ForwardReconciliationService> logger, IMaintenanceGate? maintenance = null) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -33,6 +33,8 @@ public sealed class ForwardReconciliationService(
     /// <summary>A single retry, also callable by tests without waiting on wall clock time.</summary>
     public async Task TickAsync(CancellationToken cancellationToken)
     {
+        using var mutation = maintenance?.TryEnter("mutation:scheduler", Guid.NewGuid().ToString("n"), null);
+        if (maintenance is not null && mutation is null) return;
         try
         {
             var repaired = await forwards.ReconcileAsync(cancellationToken).ConfigureAwait(false);
