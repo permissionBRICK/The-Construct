@@ -3686,7 +3686,7 @@ package references; `git diff --check` passed.
   Gen 1 operation.
 
 Console increment validation (Linux, 2026-09-07): build **0 warnings, 0 errors**;
-.NET **928 passed, 0 failed, 0 skipped** (44 new tests relative to integrated
+.NET **929 passed, 0 failed, 0 skipped** (45 new tests relative to integrated
 cab8301's 884); **24/24 Node files**, **17/17 PowerShell suites**, **20/20 bash
 suites**, including **38/38** fake-service end-to-end checks. The extra console
 script suite passed **163/163** checks: screen state/device lookup, every input

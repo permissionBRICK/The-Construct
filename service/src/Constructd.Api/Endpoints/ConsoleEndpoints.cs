@@ -129,7 +129,9 @@ public static class ConsoleEndpoints
         if (!ConsoleSessionRules.Valid(input)) return CodedProblems.Validation("keyboard", "Invalid keyboard input.");
         Audit(http, "console-keyboard", $"kind={kind.ToString().ToLowerInvariant()}, chars={r.Text?.Length ?? 0}");
         if (transport.Capabilities.Keyboard == CapabilityLevel.Unsupported) return Unavailable("keyboard");
-        var result = await transport.KeyboardAsync(Vm(http).Name, input, ct);
+        ConsoleInputResult result;
+        try { result = await transport.KeyboardAsync(Vm(http).Name, input, ct); }
+        catch (ConsoleTransportException) { return Unavailable("keyboard"); }
         return result.Applied ? Results.Ok(new { accepted = true, returnValue = 0 }) : Unavailable("keyboard", result.ReturnValue);
     }
     private static async Task<IResult> Mouse(string sid, HttpContext http, IConsoleTransport transport, IConsoleSessionStore sessions, IClock clock, CancellationToken ct)

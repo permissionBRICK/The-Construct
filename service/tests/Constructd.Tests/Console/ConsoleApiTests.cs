@@ -1,3 +1,5 @@
+using Microsoft.Extensions.DependencyInjection;
+using Constructd.Windows.Console;
 using System.Net;
 using System.Text.Json;
 using Constructd.Api.Contracts;
@@ -182,6 +184,23 @@ public sealed class ConsoleApiTests
         var limited = await owner.GetAsync(path + "/screenshot");
         Assert.Equal(1, (await limited.ReadAsync<JsonElement>()).GetProperty("retryAfterSeconds").GetInt32());
         Assert.Equal(TimeSpan.FromSeconds(1), limited.Headers.RetryAfter!.Delta);
+    }
+
+    [Fact]
+    public async Task Windows_keyboard_process_failure_keeps_device_context_and_sanitizes_output()
+    {
+        var runner = new RecordingProcessRunner()
+            .RespondStdout("""{"nativeWidth":1,"nativeHeight":1,"videoHeadPresent":true,"keyboardPresent":true,"syntheticMousePresent":true,"ps2MousePresent":false}""")
+            .Respond(new ProcessResult(1, "private-process-output", "private-process-error", false));
+        using var app = new TestApp(configureServices: services => services.AddSingleton<IConsoleTransport>(new HyperVConsoleTransport(runner)));
+        using var owner = await app.CreateUserClientAsync("owner"); await owner.CreateVmAsync("probe-vm"); var path = await Session(owner);
+        var response = await owner.PostJsonAsync(path + "/keyboard", new { kind = "ctrlAltDel" });
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var body = await response.ReadAsync<JsonElement>();
+        Assert.Equal("console-unavailable", body.GetProperty("code").GetString());
+        Assert.Equal("keyboard", body.GetProperty("device").GetString());
+        Assert.DoesNotContain("private-process-", body.GetRawText());
+        Assert.DoesNotContain("private-process-", app.Logs.AllText());
     }
 
 }
