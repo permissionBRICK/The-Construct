@@ -626,8 +626,10 @@ the admin panel, or delete its children first.
 A remote primary receives a `primary` token when newly created. A primary migrated from
 an older database keeps its existing token as `legacy`: old heartbeat and self-forwarding
 continue unchanged, but `construct vm identity` reports that delegation is unavailable.
-The owner upgrades it explicitly with **Reprovision (upgrade VM credential)** in VS Code,
-or `Provision-AgentVM.ps1 -RotateVmToken`; rotation invalidates the old token immediately.
+The owner upgrades it explicitly with
+`Provision-AgentVM.ps1 -InstanceName <primary> -RotateVmToken`; rotation invalidates the
+old token immediately. The planned **Reprovision (upgrade VM credential)** menu item is
+not wired into VS Code or Auto-Install yet; ordinary reprovisioning does not upgrade it.
 
 Inside an upgraded primary, [`construct vm`](child-vms.md) is the complete child interface:
 public-URL or resumable-upload media, explicit CPU/RAM/disk/lifetime, powered-off creation,

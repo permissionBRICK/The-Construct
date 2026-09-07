@@ -138,8 +138,9 @@ rollout is therefore manual; later ones use Maintenance. Do not rerun
 - [ ] `[FIELD]` Inside `haus-vm`, run `construct vm identity --json` **before** credential
       upgrade. A migrated token should report `legacy` and refuse child management without
       breaking heartbeat or existing primary forwards.
-- [ ] `[FIELD]` Use **Reprovision (upgrade VM credential)** or the documented
-      `Provision-AgentVM.ps1 -RotateVmToken` flow once. Re-run `construct vm identity --json`.
+- [ ] `[FIELD]` Run `Provision-AgentVM.ps1 -InstanceName haus-vm -RotateVmToken` once
+      from the owner PC. The planned credential-upgrade menu item is not wired into
+      VS Code or Auto-Install yet. Re-run `construct vm identity --json`.
       **Expect:** token kind `primary`; the previous token is immediately invalid; no token value
       appears in logs or job results.
 

@@ -37,7 +37,9 @@ An older primary may still have a `legacy` token, which deliberately retains onl
 old heartbeat/forward scope. The CLI exits 9 and asks the owner to reprovision with
 `-RotateVmToken`, or to choose **Reprovision (upgrade VM credential)** in VS Code. Policy
 is evaluated by the service again for every operation; a credential does not freeze an
-old allowance.
+old allowance. The CLI's hint also names a planned VS Code credential-upgrade menu item
+that is not wired yet. Use `Provision-AgentVM.ps1 -InstanceName <primary> -RotateVmToken`
+from the owner PC; ordinary reprovisioning does not rotate the token.
 
 ## Create a child
 

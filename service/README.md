@@ -71,7 +71,7 @@ package references, and hand-written SQL does not belong in the HTTP host.
 
 ```bash
 dotnet build service/Constructd.sln            # 0 warnings, 0 errors
-dotnet test  service/Constructd.sln            # 1,178 tests at the stage-4 baseline
+dotnet test  service/Constructd.sln            # 1,183 tests at stage 5 on Linux
 
 # run the whole API against the fakes (no Hyper-V, no Windows):
 dotnet run --project service/src/Constructd.Api -- --fake
@@ -1302,7 +1302,7 @@ deleting a colleague's VM is not an uninstall step.
 
 ## Tests
 
-`dotnet test service/Constructd.sln` — 1,178 tests at the stage-4 integration baseline,
+`dotnet test service/Constructd.sln` — 1,183 tests at stage 5 on Linux,
 all runnable on Linux; Windows-specific behavior is exercised with recording runners and
 PowerShell fixtures, not a live Hyper-V service.
 

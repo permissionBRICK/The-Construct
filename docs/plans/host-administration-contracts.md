@@ -4415,3 +4415,178 @@ maintenance regression cases, including the **70** story checks; the build staye
 at **0 warnings, 0 errors**. CA and forwarding refusal assertions now inspect the
 CLI diagnostic as well as its exit code. No Windows execution is implied by the
 platform guard.
+
+## Integration notes (stage 5)
+
+Integrated on 2026-09-07 in `ha/integ-5`, reset to stage-4 `feat/host-admin`
+(`028c832`). Merged sequentially with `--no-ff`: `ha/s4-e2e` (`17dc668`,
+merge `e8d4b75`) then `ha/s4-docs` (`4b4fe1a`, merge `539d28f`). Both branches
+had one commit beyond the base; neither was skipped. Both merges were clean,
+including the automatic composition of the two `service/README.md` changes.
+No feature, route registration, migration or DTO was discarded. Handover moves
+only the local `feat/host-admin` ref; nothing is pushed or deployed.
+
+### Integrated changes and corrections
+
+- Added the real-HTTPS Kestrel/SQLite child-administration story driven by the
+  guest CLI and extension HTTP client, plus four maintenance-response cases.
+  Test controls remain inside the test assembly. The new story also has its
+  own Bash wrapper and a Linux/toolchain availability guard.
+- Retained both end-to-end fixes: UTF-8 byte-length framing for Node DELETE
+  bodies (cascade confirmations), and complete RFC 7807 maintenance refusals
+  with phase, retry delay, update identity and `Retry-After` across admission
+  paths. The primary provisioning algorithm was not rewritten.
+- Integrated the operator guides, complete route inventory, current limitations,
+  phase status and `docs/field-test-host-admin.md` rollout/recovery checklist.
+- Corrected the child guide, remote-host guide and field checklist to use the
+  implemented `Provision-AgentVM.ps1 -InstanceName <primary> -RotateVmToken`
+  path. The documented credential-upgrade menu item is not implemented; ordinary
+  reprovisioning does not rotate a token. These are documentation corrections,
+  not new UI behavior.
+
+### Recorded defects and limitations
+
+No regression caused by either merge has been found. Two existing integration
+omissions are confirmed by source inspection and remain unresolved:
+
+1. `GET /api/v1/host/iso-catalog` is requested by the extension but is not mapped
+   by the service. The Admin Media tab cannot read the primary catalog; child
+   media remains available. The workaround is host-local
+   `constructd admin iso status`. This defect was already identified by the
+   documentation branch and needs an endpoint/projection with authorization
+   and response coverage, beyond a few-line merge fix.
+2. The planned **Reprovision (upgrade VM credential)** entry is absent from both
+   VS Code and Auto-Install. The CLI and existing admin rotation UI still mention
+   it. The PowerShell switch and rotation API exist; use the explicit command
+   above. Wiring the menu, feature/token-kind detection and launch parameters
+   needs a later implementation change; the operator docs now state the limit.
+
+The separate, previously recorded Auto-Install cascade-confirmation gap remains:
+remove/reinstall of a primary with children stops at the service's confirmation
+problem; use Admin cascade deletion or delete children first. Primary Observe-mode
+safety exceptions, same-request configuration recovery, unsupported disk growth,
+unverified child addresses, refused child host forwards and no packet isolation
+remain as documented in stage 4. The production release signing key is still
+empty and first rollout remains manual.
+
+This run makes no Hyper-V, Windows PowerShell 5.1, LocalSystem, actual installer
+media, signed-release deployment, service update/rollback or active-VM continuity
+claim. All execution is on Linux; the new story simulates update maintenance,
+not a Windows update. The field checklist remains outstanding.
+
+### Validation and per-suite results
+
+All **69 requested suites** and the additional browser smoke suite passed on
+Linux, with no failed matrix invocation. The explicit solution build reported
+**0 warnings, 0 errors**; the full .NET run passed **1183/1183**, **545** above
+the original 638-test baseline. The new HTTPS story also passed separately through
+its Bash wrapper: **70 named checks**, exact audit parity for **59 HTTP mutations**,
+and service-log secret hygiene/SQLite persistence assertions. The wrapper reports
+one passing .NET scenario; it is already included in the 1183-test solution total.
+
+| Family | Suites | Passed checks/groups | Failed | Explicit skips |
+|---|---:|---:|---:|---:|
+| .NET | 1 | 1183 | 0 | 0 |
+| Node | 24 | 5152 | 0 | 1 |
+| PowerShell | 22 | 3318 | 0 | 1 |
+| Bash | 22 | 1141 | 0 | 0 |
+| Browser | 1 | 311 | 0 | 0 |
+
+The Bash total includes the 70 named HTTPS-story checks; the two additional
+server-side assertions are described above, not added to that total. Counts
+across families are not unique assertions: .NET also invokes PowerShell fixtures
+and the new end-to-end story. Seed-user reports seven scenario groups; each T3
+host suite reports one successful group rather than an assertion count. Explicit
+skips are Node's unwritable-spool case under root and PowerShell's Windows-only
+DPAPI round trip. The optional `t3-reprovision-host -DownloadBase` HTTP/native
+Windows checks were not requested or exercised.
+
+Environment: .NET SDK **10.0.301**, Node **26.8.1**, Linux pwsh **7.4.6**;
+`DOTNET_PROCESSOR_COUNT=2`, MSBuild server/node reuse and shared compilation
+disabled, serialized .NET builds/tests. Process-only fixtures were
+`init.defaultBranch=main`, `T3CODE_BUILD_SOURCE=prebuilt` and
+`SYSTEMD_UNIT_PATH=/usr/lib/systemd/system`. `/home/agent` already existed and
+was left alone. Browser dependencies were installed from the existing
+`extension/test/package-lock.json` with `npm ci --ignore-scripts`; no lockfile
+changed. The browser smoke used the default classic theme.
+
+The old fake remote end-to-end test used port **59769** and passed **45/45**;
+its listener was verified closed afterward. The HTTPS story used disposable
+dynamic loopback listeners. The package fixture passed **88** assertions over
+**78** payload files; its executable is a fixture, not a Windows publish.
+No validation-owned .NET/Node/PowerShell/browser/service processes remained;
+the active omniloop coordination process was left running. Local Markdown file targets and `git diff --check` passed. All local corrections
+were documentation-only; no repeat of already-passing production suites was needed.
+
+| Suite | Passed checks/groups | Failed | Explicit skips |
+|---|---:|---:|---:|
+| `dotnet test service/Constructd.sln` | 1183 | 0 | 0 |
+| `extension/test/audio.test.js` | 233 | 0 | 0 |
+| `extension/test/configsync.test.js` | 475 | 0 | 0 |
+| `extension/test/drivers.test.js` | 79 | 0 | 0 |
+| `extension/test/forwarder.test.js` | 715 | 0 | 1 |
+| `extension/test/host.test.js` | 118 | 0 | 0 |
+| `extension/test/hostadmin-ui.test.js` | 84 | 0 | 0 |
+| `extension/test/hostadmin.test.js` | 267 | 0 | 0 |
+| `extension/test/importui.test.js` | 24 | 0 | 0 |
+| `extension/test/instances.test.js` | 1528 | 0 | 0 |
+| `extension/test/instancestate.test.js` | 105 | 0 | 0 |
+| `extension/test/lifecycle.test.js` | 265 | 0 | 0 |
+| `extension/test/notify.test.js` | 103 | 0 | 0 |
+| `extension/test/probe.test.js` | 98 | 0 | 0 |
+| `extension/test/project-set.test.js` | 63 | 0 | 0 |
+| `extension/test/projects.test.js` | 167 | 0 | 0 |
+| `extension/test/remote.test.js` | 71 | 0 | 0 |
+| `extension/test/remotehost.test.js` | 210 | 0 | 0 |
+| `extension/test/repatch.test.js` | 39 | 0 | 0 |
+| `extension/test/t3code.test.js` | 89 | 0 | 0 |
+| `extension/test/themes.test.js` | 43 | 0 | 0 |
+| `extension/test/updates.test.js` | 143 | 0 | 0 |
+| `extension/test/usage.test.js` | 131 | 0 | 0 |
+| `extension/test/vmpower.test.js` | 81 | 0 | 0 |
+| `extension/test/zip.test.js` | 21 | 0 | 0 |
+| `service/tests/Constructd.Tests/Capacity/inventory.test.ps1` | 16 | 0 | 0 |
+| `service/tests/Constructd.Tests/Console/console-script.test.ps1` | 163 | 0 | 0 |
+| `service/tests/Constructd.Tests/Network/network-script.test.ps1` | 29 | 0 | 0 |
+| `service/tests/host-installer.test.ps1` | 368 | 0 | 0 |
+| `service/tests/host-release-installer.test.ps1` | 14 | 0 | 0 |
+| `service/tests/host-updater.test.ps1` | 49 | 0 | 0 |
+| `test/config-sync.test.ps1` | 568 | 0 | 0 |
+| `test/driver-contract.test.ps1` | 132 | 0 | 0 |
+| `test/host-admin-client.test.ps1` | 19 | 0 | 0 |
+| `test/host-lib.test.ps1` | 309 | 0 | 0 |
+| `test/instance-cleanup.test.ps1` | 124 | 0 | 0 |
+| `test/instance-identity.test.ps1` | 242 | 0 | 0 |
+| `test/instance-state.test.ps1` | 64 | 0 | 0 |
+| `test/instances.test.ps1` | 781 | 0 | 0 |
+| `test/native-iso-host.test.ps1` | 23 | 0 | 0 |
+| `test/notify-toast.test.ps1` | 22 | 0 | 0 |
+| `test/provision-seed-user.test.ps1` | 7 | 0 | 0 |
+| `test/remote-client.test.ps1` | 93 | 0 | 1 |
+| `test/remote-driver.test.ps1` | 87 | 0 | 0 |
+| `test/remote-install.test.ps1` | 206 | 0 | 0 |
+| `test/t3-desktop-handoff.test.ps1` | 1 | 0 | 0 |
+| `test/t3-reprovision-host.test.ps1` | 1 | 0 | 0 |
+| `test/autoinstall-iso.test.sh` | 59 | 0 | 0 |
+| `test/construct-expose.test.sh` | 170 | 0 | 0 |
+| `test/construct-notify.test.sh` | 36 | 0 | 0 |
+| `test/construct-vm.test.sh` | 172 | 0 | 0 |
+| `test/contracts-compile.test.sh` | 5 | 0 | 0 |
+| `test/export-config.test.sh` | 12 | 0 | 0 |
+| `test/external-host.test.sh` | 61 | 0 | 0 |
+| `test/host-admin-e2e.test.sh` | 70 | 0 | 0 |
+| `test/host-package.test.sh` | 88 | 0 | 0 |
+| `test/idle-report.test.sh` | 103 | 0 | 0 |
+| `test/opencode-install.test.sh` | 20 | 0 | 0 |
+| `test/partial-streaming.test.sh` | 6 | 0 | 0 |
+| `test/patch-status.test.sh` | 12 | 0 | 0 |
+| `test/provision-diskcheck.test.sh` | 24 | 0 | 0 |
+| `test/provision-hostname.test.sh` | 28 | 0 | 0 |
+| `test/provision-marker.test.sh` | 32 | 0 | 0 |
+| `test/provision-steprunner.test.sh` | 17 | 0 | 0 |
+| `test/remote-e2e.test.sh` | 45 | 0 | 0 |
+| `test/restore-config.test.sh` | 25 | 0 | 0 |
+| `test/systemprompt-install.test.sh` | 17 | 0 | 0 |
+| `test/t3-https.test.sh` | 133 | 0 | 0 |
+| `test/vscode-download.test.sh` | 6 | 0 | 0 |
+| `extension/test/ui-smoke.js` | 311 | 0 | 0 |
