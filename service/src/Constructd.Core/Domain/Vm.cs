@@ -29,7 +29,22 @@ public sealed record Vm(
     string? VmTokenHash,
     IdlePolicy IdlePolicy,
     IReadOnlyList<PortForward> Forwards,
-    bool Deleting = false)
+    bool Deleting = false,
+    long PowerGeneration = 0,
+    VmKind Kind = VmKind.Primary,
+    string? Parent = null,
+    SharingScope Sharing = SharingScope.Private,
+    VmTokenKind TokenKind = VmTokenKind.Legacy,
+    int? RamMb = null,
+    string? Incarnation = null,
+    Lease? Lease = null,
+    ChildHardware? Hardware = null,
+    GuestReport? Guest = null,
+    HostObservation? Observed = null,
+    bool ChildCreationClosed = false,
+    string? CurrentJobId = null)
 {
+    public long RamBytes => RamMb is int mb ? mb * 1048576L : RamGb * 1073741824L;
+
     public static IReadOnlyList<PortForward> NoForwards { get; } = Array.Empty<PortForward>();
 }

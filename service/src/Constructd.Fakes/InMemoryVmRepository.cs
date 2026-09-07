@@ -6,7 +6,7 @@ using Constructd.Core.Logic;
 namespace Constructd.Fakes;
 
 /// <summary>In-memory VM registry plus the latest activity heartbeat per VM.</summary>
-public sealed class InMemoryVmRepository : IVmRepository
+public sealed partial class InMemoryVmRepository(IJobStore? jobs = null, IClock? clock = null) : IVmRepository, IVmDelegationRepository, IVmMetadataStore
 {
     private readonly Lock _writeGate = new();
     private readonly ConcurrentDictionary<string, Vm> _vms = new(StringComparer.OrdinalIgnoreCase);
@@ -43,7 +43,7 @@ public sealed class InMemoryVmRepository : IVmRepository
                 return Task.FromResult(VmAddOutcome.NameTaken);
             }
 
-            if (_vms.Values.Count(existing => Ownership.SameName(existing.Owner, vm.Owner)) >= maxVms)
+            if (_vms.Values.Count(existing => Ownership.SameName(existing.Owner, vm.Owner) && existing.Kind == VmKind.Primary) >= maxVms)
             {
                 return Task.FromResult(VmAddOutcome.QuotaExceeded);
             }
@@ -58,13 +58,13 @@ public sealed class InMemoryVmRepository : IVmRepository
         ArgumentNullException.ThrowIfNull(vm);
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (!_vms.ContainsKey(vm.Name))
+        lock (_writeGate)
         {
-            return Task.FromResult(false);
+            if (!_vms.TryGetValue(vm.Name, out var old)) return Task.FromResult(false);
+            _vms[vm.Name] = old with { Owner=vm.Owner,Cpu=vm.Cpu,RamGb=vm.RamGb,DiskGb=vm.DiskGb,State=vm.State,
+                SshForwardPort=vm.SshForwardPort,VmTokenHash=vm.VmTokenHash,IdlePolicy=vm.IdlePolicy,Deleting=vm.Deleting };
+            return Task.FromResult(true);
         }
-
-        _vms[vm.Name] = vm;
-        return Task.FromResult(true);
     }
 
     public Task<bool> RemoveAsync(string name, CancellationToken cancellationToken)

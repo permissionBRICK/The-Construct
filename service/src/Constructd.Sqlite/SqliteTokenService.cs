@@ -10,7 +10,7 @@ namespace Constructd.Sqlite;
 /// in the issuing response and nowhere else, which the persistence tests assert against the raw file.
 /// </summary>
 public sealed class SqliteTokenService(SqliteDatabase database, IClock clock, IUserStore users, IVmRepository vms)
-    : ITokenService
+    : ITokenService, IVmTokenIssuer
 {
     public async Task<IssuedToken> IssueAsync(string userName, string label, CancellationToken cancellationToken)
     {
@@ -26,17 +26,19 @@ public sealed class SqliteTokenService(SqliteDatabase database, IClock clock, IU
         CancellationToken cancellationToken) =>
         StoreAsync(userName, label, plaintext, cancellationToken);
 
-    public async Task<string> IssueVmTokenAsync(string vmName, CancellationToken cancellationToken)
+    public Task<string> IssueVmTokenAsync(string vmName, CancellationToken ct) => IssueVmTokenAsync(vmName, VmTokenKind.Legacy, ct);
+    public async Task<string> IssueVmTokenAsync(string vmName, VmTokenKind kind, CancellationToken ct)
     {
-        var vm = await vms.GetAsync(vmName, cancellationToken).ConfigureAwait(false)
-                 ?? throw new InvalidOperationException($"Unknown VM '{vmName}'.");
-
+        if (!Enum.IsDefined(kind)) throw new ArgumentException("Unknown VM token kind.");
         var plaintext = TokenHasher.GenerateSecret();
-        await vms.UpdateAsync(vm with { VmTokenHash = TokenHasher.Hash(plaintext) }, cancellationToken)
-            .ConfigureAwait(false);
-
+        if (!await WriteTokenAsync(vmName, TokenHasher.Hash(plaintext), kind, ct))
+            throw new InvalidOperationException("VM is missing, deleting, or is not a primary.");
         return plaintext;
     }
+    public Task<bool> RevokeVmTokenAsync(string vmName, CancellationToken ct) => WriteTokenAsync(vmName, null, VmTokenKind.Legacy, ct);
+    private Task<bool> WriteTokenAsync(string vmName, string? hash, VmTokenKind kind, CancellationToken ct) =>
+        (vms as IVmMetadataStore ?? throw new InvalidOperationException("VM repository must implement IVmMetadataStore."))
+            .SetTokenAsync(vmName,hash,kind,ct);
 
     public async Task<TokenPrincipal?> ValidateAsync(string plaintext, CancellationToken cancellationToken)
     {
@@ -61,7 +63,7 @@ public sealed class SqliteTokenService(SqliteDatabase database, IClock clock, IU
         {
             // An orphaned token (user deleted) authenticates nobody.
             var user = await users.GetAsync(userName, cancellationToken).ConfigureAwait(false);
-            if (user is null)
+            if (user is null || !user.Enabled)
             {
                 return null;
             }
@@ -75,7 +77,7 @@ public sealed class SqliteTokenService(SqliteDatabase database, IClock clock, IU
         }
 
         await using var vmLookup = connection.CreateCommand();
-        vmLookup.CommandText = "SELECT name FROM vms WHERE vm_token_hash = @hash;";
+        vmLookup.CommandText = "SELECT v.name FROM vms v JOIN users u ON u.name=v.owner WHERE v.vm_token_hash=@hash AND v.kind='primary' AND v.deleting=0 AND u.enabled=1;";
         vmLookup.With("@hash", hash);
         var vmName = (string?)await vmLookup.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
 

@@ -42,6 +42,7 @@ public static class ServiceComposition
         }
 
         services.AddConstructdStores(options);
+        services.AddHostAdminCore(options);
 
         if (options.Fake)
         {

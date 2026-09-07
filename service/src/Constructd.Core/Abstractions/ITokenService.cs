@@ -36,6 +36,8 @@ public interface ITokenService
     /// Issues the VM-scoped token for a VM and stores its hash on the VM record, replacing any
     /// previous one. Returns the plaintext.
     /// </summary>
+    // Compatibility overload: explicitly issues LEGACY kind, including on reissue.
+    // New primary creation/rotation must call IVmTokenIssuer with Primary.
     Task<string> IssueVmTokenAsync(string vmName, CancellationToken cancellationToken);
 
     /// <summary>Resolves a token secret to a principal, or null when it matches nothing.</summary>

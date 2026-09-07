@@ -3150,3 +3150,25 @@ unique assertions across languages.
 | `test/systemprompt-install.test.sh` | 17 | 0 | 0 |
 | `test/t3-https.test.sh` | 133 | 0 | 0 |
 | `test/vscode-download.test.sh` | 6 | 0 | 0 |
+
+## Deviations
+
+Stage 1 foundation:
+
+- `cascades.parent_incarnation` is nullable. Section 1.2's `NOT NULL` conflicts
+  with section 13.1's explicit nullable incarnation for migrated primaries and
+  creates in flight; strict equality still includes null.
+- Added `IHostConfigMetadata` alongside the frozen `IHostConfigStore`. The API
+  requires source/timestamp metadata and atomic multi-section compare-and-set,
+  which the generic single-section interface cannot express. Existing signatures
+  remain unchanged.
+- Until each backend lands, discovery advertises only `host-admin`; child,
+  console, network and update capabilities are unsupported. Production adapters
+  refuse unimplemented operations. The existing primary capabilities remain as
+  reported by the existing driver. A later stage adds its feature name when its
+  routes and backend are installed.
+- Added `IVmMetadataStore` for field-specific incarnation and credential writes.
+  `IVmRepository.UpdateAsync` and `IUserStore.UpdateAsync` retain their legacy
+  column scope (plus `User.Enabled`), consistently in both stores. Reports,
+  observations, leases, token kinds and allowances use explicit seams, so an
+  old lifecycle snapshot cannot silently erase newer metadata.

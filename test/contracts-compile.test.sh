@@ -63,6 +63,9 @@ cat > "${tmp}/ContractCheck.csproj" <<PROJ
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- The frozen declarations intentionally shadow the now-implemented Core types. -->
+    <NoWarn>CS0436</NoWarn>
+    <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
   <ItemGroup>
@@ -70,6 +73,34 @@ cat > "${tmp}/ContractCheck.csproj" <<PROJ
   </ItemGroup>
 </Project>
 PROJ
+
+cat > "${tmp}/Program.cs" <<'CS'
+using System.Reflection;
+
+var actual = typeof(Constructd.Core.Domain.Vm).Assembly;
+var expected = Assembly.GetExecutingAssembly();
+static string Shape(Type t) => t.IsByRef ? Shape(t.GetElementType()!) + "&" : t.IsArray ? Shape(t.GetElementType()!) + "[]" : t.IsGenericType
+    ? t.GetGenericTypeDefinition().FullName + "[" + string.Join(",", t.GetGenericArguments().Select(Shape)) + "]"
+    : t.FullName!;
+static string[] Members(Type t) => t.IsEnum
+    ? Enum.GetNames(t).Select(n => n + "=" + Convert.ToInt64(Enum.Parse(t, n))).Order().ToArray()
+    : t.GetMembers(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly)
+        .Where(m => m is PropertyInfo || m is MethodInfo { IsSpecialName: false } || m is ConstructorInfo)
+        .Select(m => m switch {
+            PropertyInfo p => p.Name + ":" + Shape(p.PropertyType),
+            MethodInfo method => method.Name + ":" + Shape(method.ReturnType) + "(" + string.Join(",", method.GetParameters().Select(p => Shape(p.ParameterType))) + ")",
+            ConstructorInfo ctor => ".ctor(" + string.Join(",", ctor.GetParameters().Select(p => Shape(p.ParameterType) + (p.HasDefaultValue ? "=" + p.DefaultValue : ""))) + ")",
+            _ => throw new Exception()
+        }).Order().ToArray();
+foreach (var type in expected.GetExportedTypes().Where(t => t.Namespace?.StartsWith("Constructd.Core.") == true)) {
+    var real = actual.GetType(type.FullName!);
+    if (real is null || !Members(type).SequenceEqual(Members(real))) {
+        Console.Error.WriteLine("Contract differs: " + type.FullName);
+        return 1;
+    }
+}
+return 0;
+CS
 
 build_log="${tmp}/build.log"
 build() {
@@ -80,6 +111,9 @@ if [[ "${fail}" -gt 0 ]]; then
   printf '\n--- build output ---\n'
   grep -E "error|warning" "${build_log}" | head -40
 fi
+
+parity() { dotnet "${tmp}/bin/Debug/net10.0/ContractCheck.dll"; }
+ok "the production Core types match the frozen public signatures" parity
 
 # The block must not smuggle in behaviour: interfaces, records and enums only.
 no_bodies() { ! grep -Eq '\)[[:space:]]*\{[[:space:]]*$' "${tmp}/Contract.cs" || ! grep -Eq '^[[:space:]]*(return|await|throw) ' "${tmp}/Contract.cs"; }

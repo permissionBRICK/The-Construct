@@ -37,13 +37,13 @@ public sealed class UserClaimsTransformation(IUserStore users) : IClaimsTransfor
         }
 
         var user = await users.GetAsync(name, CancellationToken.None).ConfigureAwait(false);
-        if (user is null)
+        if (user is null || !user.Enabled)
         {
             return principal;
         }
 
         // Clone: the transformation may run more than once per request on a cached principal.
-        var transformed = principal.Clone();
+        var transformed = new ClaimsPrincipal(principal.Identities.Select(i => i.Clone()));
         var identity = (ClaimsIdentity)transformed.Identity!;
         identity.AddClaim(new Claim(ConstructdClaims.KnownUser, "true"));
         identity.AddClaim(new Claim(identity.RoleClaimType, user.Role.ToString()));

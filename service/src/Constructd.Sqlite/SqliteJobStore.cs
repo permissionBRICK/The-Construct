@@ -24,11 +24,11 @@ public sealed class SqliteJobStore(SqliteDatabase database) : IJobStore
         await using var connection = await database.OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO jobs (id, kind, vm_name, owner, state, progress, result, error, created, finished)
-            VALUES (@id, @kind, @vmName, @owner, @state, @progress, @result, @error, @created, @finished)
+            INSERT INTO jobs (id, kind, vm_name, owner, state, progress, result, error, created, finished, initiator, operation_key, phase)
+            VALUES (@id, @kind, @vmName, @owner, @state, @progress, @result, @error, @created, @finished, @initiator, @operationKey, @phase)
             ON CONFLICT(id) DO UPDATE
                SET state = excluded.state, progress = excluded.progress, result = excluded.result,
-                   error = excluded.error, finished = excluded.finished;
+                   error = excluded.error, finished = excluded.finished, initiator = excluded.initiator, operation_key = excluded.operation_key, phase = excluded.phase;
             """;
         command
             .With("@id", job.Id)
@@ -40,7 +40,8 @@ public sealed class SqliteJobStore(SqliteDatabase database) : IJobStore
             .With("@result", job.Result is null ? null : JsonSerializer.Serialize(job.Result, Json))
             .With("@error", job.Error)
             .With("@created", SqliteDatabase.Text(job.Created))
-            .With("@finished", SqliteDatabase.TextOrNull(job.Finished));
+            .With("@finished", SqliteDatabase.TextOrNull(job.Finished))
+            .With("@initiator", job.Initiator).With("@operationKey", job.OperationKey).With("@phase", job.Phase);
 
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -85,6 +86,7 @@ public sealed class SqliteJobStore(SqliteDatabase database) : IJobStore
             resultJson is null ? null : JsonSerializer.Deserialize<JsonElement>(resultJson, Json),
             reader.GetStringOrNull("error"),
             SqliteDatabase.ReadTime(reader.GetString("created")),
-            SqliteDatabase.ReadTimeOrNull(reader.GetStringOrNull("finished")));
+            SqliteDatabase.ReadTimeOrNull(reader.GetStringOrNull("finished")),
+            reader.GetStringOrNull("initiator"), reader.GetStringOrNull("operation_key"), reader.GetStringOrNull("phase"));
     }
 }
