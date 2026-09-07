@@ -83,10 +83,12 @@ public static class AuthorizationSetup
     {
         services.AddSingleton<IAuthorizationHandler, VmAccessHandler>();
         services.AddSingleton<IAuthorizationHandler, DelegationAuthorization>();
+        services.AddSingleton<IAuthorizationHandler, ForwardRequesterHandler>();
         var builder = services.AddAuthorizationBuilder();
+        builder.AddPolicy(Policies.ForwardRequester, p => p.RequireAuthenticatedUser().AddRequirements(new ForwardRequesterRequirement()));
         builder.AddPolicy(Policies.UserOrPrimaryToken, p => p.RequireAuthenticatedUser()
             .RequireAssertion(c => c.User.IsKnownUser() || c.User.IsPrimaryToken()));
-        foreach (var name in new[] { Policies.ChildOperator, Policies.ChildOwnerOrAdmin, Policies.ParentDelegate, Policies.ForwardRequester, Policies.ConsoleOperator, Policies.JobReader })
+        foreach (var name in new[] { Policies.ChildOperator, Policies.ChildOwnerOrAdmin, Policies.ParentDelegate, Policies.ConsoleOperator, Policies.JobReader })
             builder.AddPolicy(name, p => p.RequireAuthenticatedUser().AddRequirements(new DelegationRequirement(name)));
 
         services.AddAuthorizationBuilder()

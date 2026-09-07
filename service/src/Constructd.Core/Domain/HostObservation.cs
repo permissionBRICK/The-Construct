@@ -1,6 +1,6 @@
 namespace Constructd.Core.Domain;
 
-public sealed record GuestAddress(string Address, GuestAddressFamily Family, GuestAddressSource Source, DateTimeOffset ObservedAt, bool Verified);
+public sealed record GuestAddress(string Address, GuestAddressFamily Family, GuestAddressSource Source, DateTimeOffset ObservedAt, bool Verified, string? AdapterId = null);
 
 /// <summary>Host-authoritative facts about ONE VM adapter (never guest-supplied).</summary>
 public sealed record GuestAdapter(string VmId, string AdapterId, string MacAddress, bool MacSpoofingEnabled, string? SwitchName);

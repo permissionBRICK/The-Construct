@@ -11,6 +11,12 @@ public interface IAddressAuthority
     Task<IReadOnlyList<GuestAddress>> GetAssignedAddressesAsync(string vmName, CancellationToken ct);
 }
 
+/// <summary>Captures all managed guest and host facts once for a request or reconciliation pass.</summary>
+public interface IGuestAddressSnapshotProvider
+{
+    Task<IGuestAddressProvider> CaptureAsync(CancellationToken ct);
+}
+
 public interface IGuestAddressProvider
 {
     /// <summary>Guest-reported (KVP) addresses for THIS VM's adapters (by VM id). Untrusted input; empty is normal (no OS yet).</summary>
@@ -55,6 +61,7 @@ public interface INetworkPolicyReconciler
     Task OnSharingChangedAsync(Vm vm, SharingScope previous, CancellationToken ct);
     Task OnAddressChangedAsync(string vmName, IReadOnlyList<GuestAddress> addresses, CancellationToken ct);
     Task<int> ReconcileAsync(CancellationToken ct);
+    Task<int> ReconcileAsync(IGuestAddressProvider snapshot, CancellationToken ct) => ReconcileAsync(ct);
     Task<IReadOnlyList<NetworkRule>> ListRulesAsync(string vmName, CancellationToken ct);
 }
 

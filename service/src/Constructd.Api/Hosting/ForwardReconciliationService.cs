@@ -11,7 +11,8 @@ namespace Constructd.Api.Hosting;
 public sealed class ForwardReconciliationService(
     IPortForwardManager forwards,
     ConstructdOptions options,
-    ILogger<ForwardReconciliationService> logger, IMaintenanceGate? maintenance = null) : BackgroundService
+    ILogger<ForwardReconciliationService> logger, IMaintenanceGate? maintenance = null, Constructd.Core.Services.AccessExposure? exposure = null,
+    INetworkPolicyReconciler? network = null, IGuestAddressProvider? addresses = null, IVmRepository? vms = null) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -35,22 +36,33 @@ public sealed class ForwardReconciliationService(
     {
         using var mutation = maintenance?.TryEnter("mutation:scheduler", Guid.NewGuid().ToString("n"), null);
         if (maintenance is not null && mutation is null) return;
-        try
+        // Primary repair goes first and has an independent failure boundary.
+        await RunPassAsync("Host forward", async () =>
         {
             var repaired = await forwards.ReconcileAsync(cancellationToken).ConfigureAwait(false);
-            if (repaired > 0)
+            if (repaired > 0) logger.LogInformation("Reconciled {Count} host port forward(s).", repaired);
+        }, cancellationToken);
+        IGuestAddressProvider? snapshot = addresses is IGuestAddressSnapshotProvider ? null : addresses;
+        await RunPassAsync("Guest network snapshot", async () =>
+        {
+            if (addresses is IGuestAddressSnapshotProvider snapshots && vms is not null &&
+                (await vms.ListAsync(null, cancellationToken)).Any(v => v.Kind == Constructd.Core.Domain.VmKind.Child))
+                snapshot = await snapshots.CaptureAsync(cancellationToken);
+        }, cancellationToken);
+        if (exposure is not null)
+            await RunPassAsync("Child forward", async () => await exposure.ReconcileAsync(cancellationToken, snapshot), cancellationToken);
+        if (network is not null)
+            await RunPassAsync("Network policy", async () =>
             {
-                logger.LogInformation("Reconciled {Count} host port forward(s).", repaired);
-            }
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            // A transient netsh/Hyper-V failure must not stop the API or prevent the next retry.
-            logger.LogWarning("Host forward reconcile failed: {Error}.", SafeError.Describe(ex));
-        }
+                if (snapshot is null) await network.ReconcileAsync(cancellationToken);
+                else await network.ReconcileAsync(snapshot, cancellationToken);
+            }, cancellationToken);
+    }
+
+    private async Task RunPassAsync(string pass, Func<Task> action, CancellationToken ct)
+    {
+        try { await action(); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex) { logger.LogWarning("{Pass} reconcile failed: {Error}.", pass, SafeError.Describe(ex)); }
     }
 }
