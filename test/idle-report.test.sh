@@ -448,9 +448,12 @@ cli_out="$(run_prov_fn install_construct_cli)"
 ok "installing the CLI prints nothing (the default path stays byte-identical)" test -z "${cli_out}"
 ok "the construct CLI is installed executable" test -x "${prov_bin}/construct"
 ok "the expose implementation lands next to it" test -x "${prov_bin}/construct-expose.sh"
+ok "the child-VM implementation lands next to it" test -x "${prov_bin}/construct-vm.sh"
 ok "the heartbeat reporter is installed too" test -x "${prov_bin}/construct-idle-report.sh"
 ok "the installed CLI finds its expose helper" \
   sh -c "CONFIG_FILE='${empty_cfg}' bash '${prov_bin}/construct' expose --help | grep -q 'construct expose'"
+ok "the installed CLI finds its child-VM helper" \
+  sh -c "CONFIG_FILE='${empty_cfg}' bash '${prov_bin}/construct' vm --help | grep -q 'construct vm'"
 ok "the forward spool is created" \
   sh -c "test -d '${prov_forwards}/requests' -a -d '${prov_forwards}/acks' -a -d '${prov_forwards}/close'"
 ok "the forward spool is 0755, not world-writable" \
@@ -611,7 +614,7 @@ ok "the provisioning marker is removed when the run finishes" \
 # already-present code is still 64 new findings to read past.
 
 if command -v shellcheck >/dev/null 2>&1; then
-  for f in bin/construct bin/construct-expose.sh bin/construct-idle-report.sh \
+  for f in bin/construct bin/construct-expose.sh bin/construct-vm.sh bin/construct-idle-report.sh \
            bin/provision.sh test/construct-expose.test.sh test/idle-report.test.sh; do
     now_count="$(shellcheck -f gcc "${ROOT}/${f}" 2>/dev/null | wc -l)"
     base_count=0
