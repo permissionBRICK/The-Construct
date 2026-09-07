@@ -41,7 +41,7 @@ public static class HostAdminComposition
             services.AddSingleton<IAdmissionStore, InMemoryAdmissionStore>();
         }
         else services.AddSingleton<IAdmissionStore>(sp => sp.GetRequiredService<UnsupportedFeaturePlatform>());
-        services.AddSingleton<IPersistedJobRunner>(sp => sp.GetRequiredService<UnsupportedFeaturePlatform>());
+        services.AddSingleton<IPersistedJobRunner>(sp => (IPersistedJobRunner)sp.GetRequiredService<IJobEngine>());
         return services;
     }
 }

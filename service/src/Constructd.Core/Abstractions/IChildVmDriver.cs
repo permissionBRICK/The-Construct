@@ -29,3 +29,17 @@ public interface IChildVmDriver
     /// <summary>Immutable hypervisor id of the VM (Hyper-V VM GUID) — the child's incarnation.</summary>
     Task<string?> GetVmIdAsync(string name, CancellationToken ct);
 }
+
+/// <summary>Read-only placement resolution before capacity admission, including Hyper-V defaults.</summary>
+public sealed record ChildStoragePlacement(string DiskPath, string DiskVolume, string ConfigVolume);
+public interface IChildVmStorage
+{
+    Task<ChildStoragePlacement> ResolveStorageAsync(string name, CancellationToken ct);
+}
+
+/// <summary>Creation ownership survives a partial driver failure; rollback must match the admitted job.</summary>
+public interface IChildVmCreationOwnership
+{
+    Task CreateOwnedAsync(ChildVmDescriptor descriptor, string operationId, IProgress<string>? progress, CancellationToken ct);
+    Task<string?> GetCreationOperationAsync(string name, CancellationToken ct);
+}

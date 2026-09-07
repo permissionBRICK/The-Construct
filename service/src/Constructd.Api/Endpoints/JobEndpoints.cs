@@ -93,6 +93,11 @@ public static class JobEndpoints
                     name = "progress";
                     payload = Serialize(JobProgressResponse.From(evt.Progress!));
                 }
+                else if (evt.Kind == JobEventKind.Phase)
+                {
+                    name = "phase";
+                    payload = Serialize(new { at = evt.Progress!.At, phase = evt.Progress.Text });
+                }
                 else
                 {
                     name = "state";

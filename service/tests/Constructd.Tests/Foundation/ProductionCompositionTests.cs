@@ -29,7 +29,8 @@ public sealed class ProductionCompositionTests
                 Assert.True(guard.Message.Contains("need Windows", StringComparison.Ordinal),
                     "Only the pre-existing Windows platform adapters are skipped on Linux; the production host-admin registrations must execute.");
                 services.AddSingleton<IHypervisorDriver, FakeHypervisorDriver>();
-                services.AddSingleton<IProcessRunner, RecordingProcessRunner>();
+                services.AddSingleton<IProcessRunner, Constructd.Fakes.RecordingProcessRunner>();
+                services.AddSingleton<IJobEngine>(sp => new InProcessJobEngine(sp.GetRequiredService<IClock>(), sp.GetRequiredService<IJobStore>()));
                 services.AddSingleton<IPortForwardManager>(sp => new InMemoryPortForwardManager(sp.GetRequiredService<IClock>(),
                     sp.GetRequiredService<IVmRepository>(), sp.GetRequiredService<IForwardStore>(), options.SshForwardPorts, options.AppForwardPorts));
             }
@@ -45,7 +46,7 @@ public sealed class ProductionCompositionTests
             Assert.IsType<SqliteVmRepository>(provider.GetRequiredService<IVmRepository>());
             Assert.IsType<SqliteHostConfigStore>(provider.GetRequiredService<IHostConfigStore>());
             Assert.IsType<Constructd.Sqlite.SqliteCapacityLedger>(provider.GetRequiredService<ICapacityLedger>());
-            Assert.IsType<UnsupportedChildVmDriver>(provider.GetRequiredService<IChildVmDriver>());
+            Assert.IsType<Constructd.Windows.HyperV.HyperVChildDriver>(provider.GetRequiredService<IChildVmDriver>());
             Assert.IsType<UnsupportedConsoleTransport>(provider.GetRequiredService<IConsoleTransport>());
             Assert.IsType<ReleaseInfo>(provider.GetRequiredService<IReleaseInfo>());
         }
