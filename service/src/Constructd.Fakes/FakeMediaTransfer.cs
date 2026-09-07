@@ -47,3 +47,27 @@ public sealed class FakeMediaTransfer : IMediaTransfer, IDisposable
     public Task<IReadOnlyList<string>> ListFilesAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(Directory.GetFiles(Root));
     public void Dispose() => Directory.Delete(Root, true);
 }
+
+/// <summary>Byte storage for transfer/race tests without disk or network access.</summary>
+public sealed class InMemoryMediaFiles : IMediaFiles
+{
+    private readonly Dictionary<string, (byte[] Bytes, DateTimeOffset Modified)> _files = [];
+    public bool HeldOpen { get; set; }
+    public string Root => Path.GetFullPath(Path.Combine(Path.GetTempPath(), "construct-media-memory"));
+    public string PathFor(string id, bool partial = false)
+    { if (id.Length != 32 || !id.All(Uri.IsHexDigit)) throw new MediaException("media-path-refused"); return Path.Combine(Root, id + (partial ? ".part" : ".iso")); }
+    private void Check(string path)
+    { if (Path.GetDirectoryName(path) != Root || Path.GetFileNameWithoutExtension(path).Length != 32 || !Path.GetFileNameWithoutExtension(path).All(Uri.IsHexDigit) || Path.GetExtension(path) is not ".iso" and not ".part") throw new MediaException("media-path-refused"); }
+    public Task CreateAsync(string path, long size, CancellationToken ct)
+    { ct.ThrowIfCancellationRequested(); Check(path); lock (_files) _files.Add(path, (new byte[checked((int)size)], DateTimeOffset.UtcNow)); return Task.CompletedTask; }
+    public Task<Stream> OpenReadAsync(string path, CancellationToken ct)
+    { ct.ThrowIfCancellationRequested(); Check(path); lock (_files) return Task.FromResult<Stream>(new MemoryStream(_files[path].Bytes.ToArray(), false)); }
+    public Task WriteAsync(string path, long offset, ReadOnlyMemory<byte> bytes, CancellationToken ct)
+    { ct.ThrowIfCancellationRequested(); Check(path); lock (_files) { var data = _files[path].Bytes; if (data.LongLength < offset + bytes.Length) Array.Resize(ref data, checked((int)(offset + bytes.Length))); bytes.CopyTo(data.AsMemory(checked((int)offset))); _files[path] = (data, DateTimeOffset.UtcNow); } return Task.CompletedTask; }
+    public Task PublishAsync(string partial, string destination, CancellationToken ct)
+    { ct.ThrowIfCancellationRequested(); Check(partial); Check(destination); lock (_files) { _files.Add(destination, _files[partial]); _files.Remove(partial); } return Task.CompletedTask; }
+    public Task<bool> DeleteAsync(string path, CancellationToken ct)
+    { ct.ThrowIfCancellationRequested(); Check(path); lock (_files) { if (HeldOpen) return Task.FromResult(false); _files.Remove(path); return Task.FromResult(true); } }
+    public Task<IReadOnlyList<(string Path, DateTimeOffset Modified)>> ListAsync(CancellationToken ct)
+    { ct.ThrowIfCancellationRequested(); lock (_files) return Task.FromResult<IReadOnlyList<(string, DateTimeOffset)>>(_files.Select(f => (f.Key, f.Value.Modified)).ToArray()); }
+}

@@ -3153,6 +3153,17 @@ unique assertions across languages.
 
 ## Deviations
 
+Stage 2 media:
+
+- Added `IMediaFiles` beside the frozen media seams for sparse creation, streaming
+  reads, ranged writes, atomic publish, and timestamped enumeration. The frozen
+  `IMediaTransfer` lacks those operations; its signatures remain unchanged. This
+  supports both the confined filesystem adapter and a byte-only in-memory fake.
+- Updated the foundation migration assertions to include M200. These assertions
+  previously fixed the entire registry to the stage-1-only range and count; this
+  is a narrow shared-test integration change required by the new migration.
+
+
 Stage 1 foundation:
 
 - `cascades.parent_incarnation` is nullable. Section 1.2's `NOT NULL` conflicts
