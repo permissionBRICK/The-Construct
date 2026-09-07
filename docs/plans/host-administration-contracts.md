@@ -2996,7 +2996,7 @@ must keep running throughout; `capacity.mode` switched to `enforce` for items 7�
 | 12 | Delete the parent primary with one private and one shared child; interrupt the cascade once (stop the service mid-job) | preview lists both with the shared flag and expiry; typed name required; after the interruption the parent is a tombstone with the remaining child, a repeated `DELETE` finishes; all three gone; media references released; dedicated media removed; no orphan files under the media root; unrelated `haus-vm` untouched |
 | 13 | Stage an update from a real `host-*` release; apply while a media acquire is running; use the documented nested layout | `draining` waits for the acquire; new child creates and chunk writes get `503 maintenance`; existing VMs keep running; the new binary answers `maintenance` until the updater commits; clients reconnect; `install.json` and `/host/updates/status` report the pinned commit; `service\publish` and `service\host` both intact |
 | 14 | Apply a deliberately broken package (tampered SHA256SUMS; then a build whose health check fails); kill the updater once mid-`replace` and resume | first refused at verify; second rolls back automatically, status `rolledBack`, DB intact; the resumed run reuses the backup and completes; `last-update.json` readable with the service stopped |
-| 15 | Old client (pre-change extension/PS) against the new service; induce an unreadable state probe and delayed start on a disposable primary | existing create/provision/expose/idle/remove and `GET /vms/{self}/forwards` remain compatible; verify the S3 documented exceptions: Unknown create/start refuses safely even in Observe; start waits for confirmed Running (up to 30 seconds) |
+| 15 | Old client (pre-change extension/PS) against the new service; induce an unreadable state probe and delayed start on a disposable primary | existing create/provision/expose/idle/remove and `GET /vms/{self}/forwards` remain compatible; verify the S3 documented exceptions: Unknown create/start refuses safely even in Observe; primary start promptly returns the actual observed state, including Unknown during a delayed start |
 
 Record the outcome of each item, the release commit, and any capability that had to be
 downgraded to `unsupported`, in `docs/plans/host-administration-field-test.md`.
@@ -4017,8 +4017,9 @@ S3 review round 5 clarifications against §0.1's zero-change primary default:
   exception: it is not an inventory-capacity refusal; the service cannot establish the
   operation's starting state or exclude a same-name VM which the legacy create rollback
   could delete. Confirmed existing/absent/Off/Saved/Paused behavior remains covered by
-  regression tests. The primary start route also waits up to 30 seconds for Running and
-  answers `start-failed` on unconfirmed start, instead of returning an immediate 200 Off.
+  regression tests. At this S3 checkpoint, primary start waited up to 30 seconds for
+  Running. That behavior is superseded by the final-review deviation: primary start
+  now returns the observed state promptly.
   Field-test item 15 must exercise unreadable state probes and delayed startup on a
   disposable primary before rollout; no such host validation happened in this run.
 - A same-name primary-create retry may atomically adopt retained storage from its own
@@ -4188,9 +4189,10 @@ The earlier stage-2/3 gaps for SQLite VM/media admission, primary capacity
 admission and delegated lifecycle/sharing/cascade/network wiring are superseded
 by these branches. Primary create/start admission retains Observe by default.
 The delegation branch's documented safety deviations remain: unreadable primary
-state refuses create/start, start waits up to 30 seconds for observed Running,
-and primary state reads no longer overwrite stored inventory. These require
-later field validation; this integration does not silently undo them.
+state refuses create/start and primary state reads no longer overwrite stored inventory.
+At this integration checkpoint, start also waited up to 30 seconds; the final review
+supersedes that behavior with an immediate observed-state response. The remaining
+exceptions require later field validation.
 
 Hyper-V child addresses remain unverified, child host forwards are refused,
 and network rules record intended access without packet isolation. Interrupted
@@ -4446,20 +4448,12 @@ only the local `feat/host-admin` ref; nothing is pushed or deployed.
 
 ### Recorded defects and limitations
 
-No regression caused by either merge has been found. Two existing integration
-omissions are confirmed by source inspection and remain unresolved:
-
-1. `GET /api/v1/host/iso-catalog` is requested by the extension but is not mapped
-   by the service. The Admin Media tab cannot read the primary catalog; child
-   media remains available. The workaround is host-local
-   `constructd admin iso status`. This defect was already identified by the
-   documentation branch and needs an endpoint/projection with authorization
-   and response coverage, beyond a few-line merge fix.
-2. The planned **Reprovision (upgrade VM credential)** entry is absent from both
-   VS Code and Auto-Install. The CLI and existing admin rotation UI still mention
-   it. The PowerShell switch and rotation API exist; use the explicit command
-   above. Wiring the menu, feature/token-kind detection and launch parameters
-   needs a later implementation change; the operator docs now state the limit.
+At the stage-5 integration checkpoint, the ISO catalog endpoint and credential-upgrade
+menu were missing. The final review implements the Admin catalog endpoint and isolates
+catalog failures from child inventory. The planned **Reprovision (upgrade VM credential)**
+menu remains absent; CLI, panel and provisioning recovery hints now consistently use
+`Provision-AgentVM.ps1 -InstanceName <primary> -RotateVmToken`. Ordinary reprovisioning
+does not rotate credentials. See the final-review dispositions below.
 
 The separate, previously recorded Auto-Install cascade-confirmation gap remains:
 remove/reinstall of a primary with children stops at the service's confirmation
@@ -4590,3 +4584,62 @@ were documentation-only; no repeat of already-passing production suites was need
 | `test/t3-https.test.sh` | 133 | 0 | 0 |
 | `test/vscode-download.test.sh` | 6 | 0 | 0 |
 | `extension/test/ui-smoke.js` | 311 | 0 | 0 |
+
+## Deviations — final delivery review (ha/s5-final)
+
+The [final-review dispositions](host-administration-final-review.md) cover every
+round-1 blocking and nonblocking item, evidence and remaining field work.
+
+- **Update trust (§11.3):** production repository, manifest key and signature requirement
+  are host-local authority (`Constructd:HostAdmin:Updates:*`), not remote Admin-editable
+  execution trust. API config cannot override them; an empty local key refuses staging.
+  This closes a remote Admin-to-SYSTEM trust-selection path. Unpinned fake fixtures
+  retain configurable signing settings. Production apply requires `CertThumbprint`;
+  CertPath-only hosts receive `update-health-pin-required` before drain.
+- **Observe compatibility:** admission records use the periodic cached inventory rather
+  than starting a foreground host inventory process. Missing primary storage placement
+  records a conservative unknown-volume liability; Enforce still fails closed without
+  evidence. Primary start returns its actual observed state immediately, preserving the
+  old synchronous API behavior; it does not wait 30 seconds for Running. A failed start
+  settles its key and releases only liabilities whose observed state permits release.
+  Same-owner/path failed-create retries may request a smaller disk in Observe while
+  retaining the larger original liability. Foreign artifacts are never adopted.
+- **Remaining primary API differences from the pre-administration service:** unknown
+  create/start state, actual concurrent VM operations, incomplete configuration and
+  foreign retained artifacts produce structured 409 problems even in Observe mode.
+  The background reconcile gate itself is waited on. GET state is observational and
+  does not persist; list state follows periodic reconciliation (in-memory fake mode
+  has no production background refresh). Delete of an unknown/invalid unmatched name
+  is 404, nonowner deletion is a coded 403, and accepted live-job replay is 200 instead
+  of a new 202. These preserve ownership, intent and accounting fences; they are
+  explicit compatibility exceptions, not a claim of universal zero-change behavior.
+- **Client/protocol additions:** remote clients probe/cache host features and identity
+  before child polling. JSON IPC requests include their UTF-8 byte `Content-Length` when framing is
+  otherwise absent, avoiding body loss through the existing SSH HTTP bridge. Existing local primary provisioning is not
+  rewritten, and legacy tokens retain their former authority rather than gaining
+  delegation automatically.
+- **Abandoned admission recovery:** production SQLite reconciliation removes never-started
+  interrupted child creates only with complete absence evidence for VM, owned disks and
+  relevant unfinished media. Otherwise deletion stays fenced and liabilities held.
+  Started failures keep their normal explicit cleanup/retry path. Removal/retention is
+  audited as `vm.create.abandoned`.
+- **Schema compatibility:** a newer recorded breaking migration refuses startup before
+  schema writes. Newer additive migration rows remain permitted. Existing numbered
+  migration DDL remains replay-safe; this change does not renumber migrations.
+- **Diagnostics and verification:** only allowlisted updater/child codes cross process
+  boundaries, not dependency exception text. Linux PowerShell tests mock the entire
+  health transport; Windows Task Scheduler XML, ACL, TLS, CLI health and VM path layout
+  remain field checks. The ISO catalog endpoint is now implemented and client failures
+  there do not prevent child inventory loading.
+
+
+### Final-review recovery clarification
+
+Unknown primary storage placement is temporary accounting evidence: once fenced inventory
+proves the boot disk identity and volume, reconciliation replaces the placeholder and
+any duplicate disk hold with their maximum liability, and resolves the saved-state
+volume. Incomplete/ambiguous evidence keeps the hold. The abandoned-child rule also
+includes null-phase `MarkStartFailedAsync` outcomes, not only restart interruptions.
+Optional ISO catalog `lastBuild` is omitted; catalog entries/source status are available.
+The observation-gate fallback remains request-cancellable but can wait behind a later
+operation that wins the gate race; this nonblocking latency limitation is recorded.

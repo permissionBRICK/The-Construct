@@ -18,6 +18,7 @@ public sealed partial class SqliteCapacityLedger : ICapacityReconciliationStore
         if (current is null || current.PowerGeneration != expected.PowerGeneration || current.CurrentJobId != expected.CurrentJobId || current.Incarnation != expected.Incarnation)
             return [];
         if (Operations?.Alive().Any(op => Ownership.SameName(op.VmName, current.Name)) == true) return [];
+        if (RecoverAbandonedChild(tx, current, freshState, inventory)) return [];
         var preserveStartGeneration = false;
         using (var intent = tx.Connection.CreateCommand())
         {
@@ -33,6 +34,7 @@ public sealed partial class SqliteCapacityLedger : ICapacityReconciliationStore
         if (mismatch || actual is null && current.Incarnation is not null &&
             (!inventory.Complete || inventory.Vms.Any(v => Ownership.SameName(v.Id, current.Incarnation))))
             freshState = VmState.Unknown;
+        if (!mismatch) ResolvePrimaryPlacement(tx, current, actual, inventory, captured);
         var capturedIds = captured.Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
         var outcomes = new List<OrphanOutcome>();
         foreach (var row in tx.Rows.Where(r => Ownership.SameName(r.VmName, current.Name) && capturedIds.Contains(r.Id)))

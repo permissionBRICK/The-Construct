@@ -232,7 +232,7 @@ ok 'an unmanaged guest says why' grep -q 'not service-managed' "${tmp}/unmanaged
 reset_stub
 VM_SCENARIO=legacy vm list >"${tmp}/legacy.out" 2>"${tmp}/legacy.err"
 ok 'a legacy credential exits 9' test "$?" = 9
-ok 'legacy refusal prints the documented upgrade hint' grep -q 'Reprovision (upgrade VM credential)' "${tmp}/legacy.err"
+ok 'legacy refusal prints the documented upgrade hint' grep -q 'Provision-AgentVM.ps1 -InstanceName <primary> -RotateVmToken' "${tmp}/legacy.err"
 VM_SCENARIO=legacy vm identity --json >"${tmp}/identity.json" 2>/dev/null
 ok 'identity is the one command allowed for a legacy token' test "$?" = 0
 ok 'identity preserves the token kind' jq -e '.tokenKind=="legacy"' "${tmp}/identity.json"

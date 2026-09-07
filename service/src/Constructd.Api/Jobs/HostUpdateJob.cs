@@ -70,6 +70,7 @@ public sealed class HostUpdateJob(IHostUpdateStore store, IReleaseSource source,
     }
     public async Task<object> ApplyAsync(string id, string actor, CancellationToken ct, OperationKeyRecord? operation=null)
     {
+        if (!options.Fake && string.IsNullOrWhiteSpace(options.CertThumbprint)) throw new UpdateException("update-health-pin-required");
         await checker.RequireKeyAsync(ct);
         var row=await store.GetAsync(id,ct) ?? throw new UpdateException("update-not-staged");
         var fence=await launcher.ReadFenceAsync(ct);

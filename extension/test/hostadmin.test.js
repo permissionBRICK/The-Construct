@@ -441,6 +441,15 @@ function fakeClient(answers = {}) {
     eq("hostEntryFor: a local instance has none", ha.hostEntryFor({ name: "agent-vm" }, hosts, same), null);
   }
 
+  {
+    const c = fakeClient({ health: HEALTH_FULL, whoami: ME_ADMIN, isoCatalog: apiErr(404), media: [{ id: "retained" }] });
+    const m = ha.createHostAdminModel({ client: c, host: H, backend: "hyperv-remote" });
+    await m.detect(); await m.load("media");
+    eq("catalog 404 preserves child inventory", m.state.media.items[0].id, "retained");
+    eq("catalog 404 clears stale catalog", m.state.media.catalog, null);
+    ok("catalog failure is reported separately", !!m.state.media.catalogProblem && !m.state.media.mediaProblem);
+  }
+
   console.log("\n=== the model ===");
   {
     const c = fakeClient({

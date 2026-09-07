@@ -32,6 +32,14 @@ public sealed class ConsoleTransportTests
         var actual = await new HyperVConsoleTransport(runner).GetScreenAsync("probe-vm", default);
         Assert.Equal(new(1024, 768, true, true, true, false), actual); Invocation(runner[0], "screen");
     }
+    [Fact]
+    public async Task ConfiguredPowerShellExecutableIsUsed()
+    {
+        var runner = new RecordingProcessRunner().RespondStdout(Screen);
+        var options = new Constructd.Core.Configuration.ConstructdOptions { PowerShellPath = @"D:\Windows\powershell.exe" };
+        await new HyperVConsoleTransport(runner, options).GetScreenAsync("probe-vm", default);
+        Assert.Equal(options.PowerShellPath, runner[0].FileName);
+    }
     [Theory]
     [InlineData("text", null)] [InlineData("key", true)] [InlineData("key", false)] [InlineData("key", null)]
     [InlineData("scancodes", null)] [InlineData("ctrlAltDel", null)]

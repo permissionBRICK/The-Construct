@@ -158,6 +158,21 @@ public static class ConstructUpdateTls {
     } while ([DateTimeOffset]::UtcNow -lt $deadline)
     return $false
 }
+# Only fixed diagnostics cross into the recovery record; dependency text may contain secrets.
+function Get-UpdateFailureCode([string]$Message) {
+    switch -Exact ($Message) {
+        'Update health failed.' { return 'update-health-failed' }
+        'Rollback health failed.' { return 'rollback-health-failed' }
+        'Old service health failed.' { return 'old-service-health-failed' }
+        'Installation mixed.' { return 'installation-mixed' }
+        'Incomplete backup after replacement.' { return 'backup-incomplete' }
+        'Backup hash mismatch.' { return 'backup-hash-mismatch' }
+        'Invalid health endpoint.' { return 'invalid-health-endpoint' }
+        'Administrative rollback requested.' { return 'admin-rollback' }
+        default { return 'updater-step-failed' }
+    }
+}
+
 function Invoke-ConstructHostUpdate([string]$HandoffPath, [bool]$IsResume, [bool]$WantRollback) {
     $h = Read-UpdateJson $HandoffPath
     if (-not $h -or $h.updateId -notmatch '^[0-9a-f]{32}$') { throw 'Invalid handoff.' }
@@ -261,6 +276,7 @@ function Invoke-ConstructHostUpdate([string]$HandoffPath, [bool]$IsResume, [bool
             Get-ChildItem -LiteralPath $root -Directory | Where-Object { $_.Name -match '^[0-9a-f]{32}$' -and $_.Name -ne $h.updateId } | ForEach-Object { Assert-UpdateNoLinks $_.FullName; Remove-Item -LiteralPath $_.FullName -Recurse -Force }
             return 0
         } catch {
+            $failureCode = Get-UpdateFailureCode $_.Exception.Message
             # A terminal result is immutable even if cleanup failed afterwards.
             if (Test-UpdateTerminal (Read-UpdateJson $recordPath) $h.updateId) { return 0 }
             $a = Get-UpdateAuthority $r (Read-UpdateJson $fencePath) $h.updateId
@@ -271,7 +287,7 @@ function Invoke-ConstructHostUpdate([string]$HandoffPath, [bool]$IsResume, [bool
                         Start-UpdateService $h.serviceName
                         if (-not (Test-UpdateHealth $h $h.previousCommit $h.previousSchemaVersion $h.healthTimeoutSeconds {$r.healthAttempts++; Write-UpdateJson $recordPath $r})) { throw 'Old service health failed.' }
                     }
-                    $r.outcome='applyFailed'; $r.error='update-failed-before-replace'; Write-UpdateJson $recordPath $r
+                    $r.outcome='applyFailed'; $r.error=$failureCode; Write-UpdateJson $recordPath $r
                     Write-UpdateJson $fencePath @{updateId=$h.updateId;disposition='closed';actor='updater';at=[DateTimeOffset]::UtcNow.ToString('o')}
                     return 1
                 }
@@ -309,11 +325,11 @@ function Invoke-ConstructHostUpdate([string]$HandoffPath, [bool]$IsResume, [bool
                 if ($mode -eq 'database') { $expectedSchema=$h.previousSchemaVersion }
                 if (-not (Test-UpdateHealth $h $h.previousCommit $expectedSchema $h.healthTimeoutSeconds {$r.healthAttempts++; Write-UpdateJson $recordPath $r})) { throw 'Rollback health failed.' }
                 $r.outcome='rolledBack'; if ($mode -eq 'database') { $r.outcome='rolledBackWithDatabase' }
-                $r.error='update-failed'; Write-UpdateJson $recordPath $r
+                $r.error=$failureCode; Write-UpdateJson $recordPath $r
                 Write-UpdateJson $fencePath @{updateId=$h.updateId;disposition='closed';actor='updater';at=[DateTimeOffset]::UtcNow.ToString('o')}
                 return 0
             } catch {
-                $r.outcome='recoveryFailed'; $r.error='manual-recovery-required'
+                $r.outcome='recoveryFailed'; $r.error=Get-UpdateFailureCode $_.Exception.Message
                 $r.manualSteps=@('Keep the service in maintenance. Inspect this record and backup/files.json.', 'Repair from the complete backup, or repair the staged installation. Do not restore a database after commitOnly or a terminal outcome.', 'Use the admin update resolve API to commit, abort or close after verifying the installed files.')
                 Write-UpdateJson $recordPath $r
                 & schtasks.exe /Change /TN Construct-HostUpdate /Disable 2>$null | Out-Null

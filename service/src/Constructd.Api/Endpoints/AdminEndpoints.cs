@@ -43,6 +43,8 @@ public static class AdminEndpoints
         }
 
         http.SetAuditTarget(name);
+        if (name.StartsWith("vm:", StringComparison.OrdinalIgnoreCase))
+            return Problems.BadRequest("The 'vm:' user-name prefix is reserved for VM credentials.");
 
         if (!ApiHelpers.TryParseEnum<Role>(request!.Role, out var role))
         {

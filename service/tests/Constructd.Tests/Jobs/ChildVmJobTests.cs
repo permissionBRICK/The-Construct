@@ -166,6 +166,47 @@ public sealed class ChildVmJobTests
         Assert.Empty((await app.Service<ICapacityLedger>().SnapshotAsync(false, default)).Reservations);
         Assert.NotNull(await app.Service<IMediaStore>().GetAsync("install", default));
     }
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task DedicatedMediaUsesRealUploadAccounting(bool sharedReference, bool pending)
+    {
+        await using var app = new TestApp(); using var client = await Setup(app);
+        var begin = await client.PostAsJsonAsync("/api/v1/media/uploads", new { name = "aux.iso", role = "auxiliary", sizeBytes = 40000, dedicatedTo = "child" });
+        Assert.Equal(HttpStatusCode.Created, begin.StatusCode);
+        var id = (await begin.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("mediaId").GetString()!;
+        if (!pending)
+        {
+            var bytes = new byte[40000]; new byte[] { 1, 67, 68, 48, 48, 49, 1 }.CopyTo(bytes, 32768);
+            using var chunk = new ByteArrayContent(bytes); chunk.Headers.ContentType = new("application/octet-stream");
+            Assert.Equal(HttpStatusCode.NoContent, (await client.PutAsync("/api/v1/media/uploads/" + id + "/chunks/0", chunk)).StatusCode);
+            Assert.Equal(HttpStatusCode.Created, (await client.PostAsync("/api/v1/media/uploads/" + id + "/complete", null)).StatusCode);
+        }
+        var item = (await app.Service<IMediaStore>().GetAsync(id, default))!;
+        Assert.Contains((await app.Service<ICapacityLedger>().SnapshotAsync(false, default)).Reservations, r => r.Artifact == item.Path);
+        Assert.Equal(JobState.Succeeded, (await Finish(app, await client.PostAsJsonAsync("/api/v1/vms/parent/children", Request()))).State);
+        if (sharedReference)
+        {
+            await app.Vms.AddAsync(new("other", "alice", 1, 1, 1, app.Clock.UtcNow, VmState.Off, null, null, IdlePolicy.Disabled, [], Kind: VmKind.Child, Parent: "parent"), 5, default);
+            Assert.True(await app.Service<IMediaStore>().TryAddReferenceAsync(new(id, "other", MediaSlot.Auxiliary, app.Clock.UtcNow), default));
+        }
+        Assert.Equal(JobState.Succeeded, (await Finish(app, await client.DeleteAsync("/api/v1/vms/child"))).State);
+        Assert.Null(await app.Vms.GetAsync("child", default));
+        var remaining = (await app.Service<ICapacityLedger>().SnapshotAsync(false, default)).Reservations;
+        Assert.DoesNotContain(remaining, r => r.VmName == "child");
+        if (sharedReference)
+        {
+            Assert.Equal(item.Path, (await app.Service<IMediaStore>().GetAsync(id, default))!.Path);
+            Assert.Equal(item.Path, Assert.Single(remaining).Artifact);
+            Assert.Equal("other", Assert.Single(await app.Service<IMediaStore>().ListReferencesAsync(id, default)).VmName);
+        }
+        else
+        {
+            Assert.Null(await app.Service<IMediaStore>().GetAsync(id, default));
+            Assert.Empty(remaining); Assert.Empty(await app.Service<IMediaFiles>().ListAsync(default));
+        }
+    }
     [Fact]
     public async Task FailedStartRollsBackHardwareAndRetainsSharedMedia()
     {

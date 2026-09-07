@@ -586,10 +586,11 @@ cancel, retry buttons for failed deletes and cleanups, the audit log), Configura
 Maintenance (the host service's own update: check, stage, apply, resume, cancel,
 resolve — see §11 of the contract).
 
-The current extension asks the service for `GET /host/iso-catalog`, but this service build
-does not map that route. Until the endpoint is added, the Media tab cannot load the
-read-only primary Construct catalog; child media under `/media` still works. Use
-`constructd admin iso status` locally on the host for the primary catalog.
+The Admin-only `GET /host/iso-catalog` projects the primary source and patched catalog.
+The Media tab loads child inventory independently: a failed or unavailable catalog read
+shows a catalog-specific problem while child media remains usable. Source URLs omit
+credentials, query strings and fragments. `constructd admin iso status` remains available
+locally on the host.
 
 **What it deliberately lacks.** No guest update, provision, reinstall or redownload —
 those stay in each instance's own panel and console. No child start/resume, console or
@@ -895,3 +896,24 @@ for the future adapter inputs and events.
 The forward slot limit is per **target child**, shared by its owner and all shared
 consumers. A shared consumer can occupy the child's available slots; the owner or
 parent can remove unwanted forwards. Per-requester slot budgets are not implemented.
+
+### Final-review compatibility notes
+
+Observe mode records capacity decisions from periodic inventory and tolerates unavailable
+primary storage placement with unknown-volume accounting. It still refuses unknown VM
+state at create/start, active operations, incomplete configuration and foreign retained
+disk ownership with structured 409 problems. Background observation is waited on instead
+of causing a transient operation conflict. Primary start returns the state actually
+observed; successful driver invocation alone does not promise Running.
+
+GET state does not persist a refresh; list state follows reconciliation. An unmatched
+primary delete name returns 404, nonowner deletion returns a coded 403, and replay of a
+live delete job returns 200 with that job. Remote feature/identity probes are cached;
+children are queried only after feature support is known. IPC JSON requests include
+`Content-Length` when framing is otherwise absent so the SSH bridge preserves their body. The local provisioning flow and existing legacy-token authority
+remain intact; these explicit remote API exceptions are recorded in the frozen contract.
+
+If delivery fails after an explicit credential rotation, the previously installed token
+has already been invalidated. Restore SSH reachability, then rerun
+`Provision-AgentVM.ps1 -InstanceName <primary> -RotateVmToken` to issue and deliver a new
+credential. Ordinary reprovisioning does not recover the invalidated credential.

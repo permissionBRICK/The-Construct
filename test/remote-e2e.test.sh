@@ -92,7 +92,7 @@ fi
 
 # A free-ish port well away from the service's real default (7462) and from the mic
 # tunnel range, so a developer's running service is never mistaken for this one.
-PORT="${CONSTRUCT_E2E_PORT:-7913}"
+PORT="${CONSTRUCT_E2E_PORT:-$(node -e 'const s=require("net").createServer();s.listen(0,"127.0.0.1",()=>{console.log(s.address().port);s.close();});')}"
 BASE="http://127.0.0.1:${PORT}"
 ADMIN_TOKEN="e2e-$(date +%s)-$$"
 
@@ -119,10 +119,11 @@ for _ in $(seq 1 90); do
   sleep 1
 done
 if [[ "${up}" != "1" ]]; then
-  skip "remote end-to-end" "the fake service did not come up on ${BASE} (see the log below)"
+  fail=$((fail + 1))
+  printf '  FAIL  fake service did not start on %s\n' "${BASE}"
   tail -20 "${tmp}/service.log" | sed 's/^/    | /'
   printf '\n  %d passed, %d failed, %d skipped\n\n' "${pass}" "${fail}" "${skipped}"
-  exit 0
+  exit 1
 fi
 printf '  service is up\n\n'
 

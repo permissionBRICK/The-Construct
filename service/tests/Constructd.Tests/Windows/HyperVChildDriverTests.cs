@@ -24,6 +24,26 @@ public sealed class HyperVChildDriverTests
     private static ProcessResult Ok(object? value) => new(0, JsonSerializer.Serialize(new { ok = true, value }, Json), "", false);
     private static string Script(RecordedProcess call) => Encoding.Unicode.GetString(Convert.FromBase64String(call.Arguments[5]));
 
+    [Theory]
+    [InlineData("vm-not-off")]
+    [InlineData("secure-boot-template-locked")]
+    [InlineData("artifact-ownership-unverified")]
+    public async Task SafeDriverCodesCrossTheEnvelope(string code)
+    {
+        var runner = new RecordingProcessRunner().RespondStdout(JsonSerializer.Serialize(new { ok = false, code }));
+        var driver = new HyperVChildDriver(runner, new ConstructdOptions { ScriptsDir = @"C:\Construct", VmStorageRoot = @"C:\VMs" }, new FakeHypervisorDriver());
+        var error = await Assert.ThrowsAsync<ChildValidationException>(() => driver.RemoveAsync("child", null, default));
+        Assert.Equal(code, error.Code);
+        Assert.Contains("-ccontains $code", Script(Assert.Single(runner.Calls)));
+    }
+    [Fact]
+    public async Task UnknownDriverCodeCannotExposeDependencyText()
+    {
+        var runner = new RecordingProcessRunner().RespondStdout("{\"ok\":false,\"code\":\"sentinel-secret\"}");
+        var driver = new HyperVChildDriver(runner, new ConstructdOptions { ScriptsDir = @"C:\Construct", VmStorageRoot = @"C:\VMs" }, new FakeHypervisorDriver());
+        var error = await Assert.ThrowsAsync<HypervisorOperationException>(() => driver.RemoveAsync("child", null, default));
+        Assert.DoesNotContain("sentinel-secret", error.ToString());
+    }
     [Fact]
     public async Task CreateUsesFixedArgvAndStdinDescriptorWithoutPrimaryProvisioning()
     {

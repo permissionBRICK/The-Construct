@@ -80,14 +80,21 @@ public sealed class PackageTests : IDisposable
     [Fact] public async Task Scheduled_task_argv_is_pinned_and_health_secret_is_only_in_handoff()
     {
         var runner=new RecordingRunner();var launcher=new ScheduledTaskUpdaterLauncher(runner,new FileHostLock(_root),_root);
-        var handoff=new UpdateHandoff(new string('a',32),new string('b',40),Path.Combine(_root,"staged path"),"C:\\Construct\\service\\publish","C:\\Construct",_root,"constructd",new string('c',40),"https://127.0.0.1:7462/api/v1/health",new string('d',40),"Constructd.Api.exe","test-health-secret",DateTimeOffset.UtcNow);
+        var handoff=new UpdateHandoff(new string('a',32),new string('b',40),Path.Combine(_root,new string('s', 150),"staged path"),"C:\\Construct\\service\\publish","C:\\Construct",_root,"constructd",new string('c',40),"https://127.0.0.1:7462/api/v1/health",new string('d',40),"Constructd.Api.exe","test-health-secret",DateTimeOffset.UtcNow);
         await launcher.LaunchAsync(handoff,default);
         Assert.Equal(2,runner.Calls.Count);var create=runner.Calls[0];Assert.Equal("schtasks.exe",create.File);
-        Assert.Equal(new[]{"/Create","/TN","Construct-HostUpdate","/SC","ONCE","/ST"},create.Args.Take(6));
-        Assert.Equal(new[]{"/RU","SYSTEM","/RL","HIGHEST","/F","/TR"},create.Args.Skip(7).Take(6));
-        Assert.Contains("-File \"",create.Args.Last());Assert.DoesNotContain(handoff.HealthToken,string.Join(" ",create.Args));
+        Assert.Equal(new[]{"/Create","/TN","Construct-HostUpdate","/XML",Path.Combine(_root,"updates","updater-task.xml"),"/F"},create.Args);
+        var xml = await File.ReadAllTextAsync(create.Args[4]);
+        Assert.Contains("S-1-5-18", xml); Assert.DoesNotContain(handoff.HealthToken, xml);
+        Assert.DoesNotContain("/TR", create.Args);
         Assert.Equal(new[]{"/Run","/TN","Construct-HostUpdate"},runner.Calls[1].Args);
-        await launcher.ResumeAsync(handoff,default);Assert.EndsWith(" -Resume",runner.Calls[2].Args.Last());
+        await launcher.ResumeAsync(handoff,default);
+        var task = System.Xml.Linq.XDocument.Load(create.Args[4]);
+        Assert.True(task.Descendants().Single(e => e.Name.LocalName == "Arguments").Value.Length > 261);
+        Assert.EndsWith(" -Resume", task.Descendants().Single(e => e.Name.LocalName == "Arguments").Value);
+        // Paths longer than the default Windows layout are represented without truncation.
+        Assert.Contains(Path.Combine(handoff.StagedPath,"extracted","updater","Update-ConstructHost.ps1"),
+            task.Descendants().Single(e => e.Name.LocalName == "Arguments").Value);
     }
     [Fact] public async Task Automatic_closed_fence_cannot_hide_a_replacement_recorded_before_lock_acquisition()
     {

@@ -20,9 +20,11 @@ public sealed class HyperVInventory(IProcessRunner runner, ConstructdOptions opt
         try
         {
             var artifacts = new List<object>();
+            var items = media is null ? [] : await media.ListAsync(null, ct);
             foreach (var row in reservations.Where(r => r.Resource == ReservationResource.Storage))
             {
                 string? path = null;
+                var isMedia = false;
                 if (row.Artifact?.StartsWith("disk:", StringComparison.OrdinalIgnoreCase) == true) path = row.Artifact[5..];
                 else if (media is not null && row.Artifact is { } artifact)
                 {
@@ -30,10 +32,14 @@ public sealed class HyperVInventory(IProcessRunner runner, ConstructdOptions opt
                     if (artifact.StartsWith("media:", StringComparison.Ordinal)) item = await media.GetAsync(artifact[6..], ct);
                     else if (artifact.StartsWith("upload:", StringComparison.Ordinal) && await media.GetUploadAsync(artifact[7..], ct) is { } upload)
                         item = await media.GetAsync(upload.MediaId, ct);
-                    if (item is not null) path = item.Path;
+                    item ??= items.FirstOrDefault(i => string.Equals(i.Path, artifact, StringComparison.OrdinalIgnoreCase));
+                    if (item is not null) { path = item.Path; isMedia = true; }
+                    // A deleted row can leave an orphan path-keyed reservation after a crash.
+                    else if (artifact.Length > 3 && char.IsAsciiLetter(artifact[0]) && artifact[1] == ':' && artifact[2] == '\\')
+                    { path = artifact; isMedia = true; }
                 }
                 if (path is not null) ArgumentGuard.WindowsPath(path, "capacity artifact");
-                artifacts.Add(new { row.Artifact, Path = path, row.Volume });
+                artifacts.Add(new { row.Artifact, Path = path, row.Volume, IsMedia = isMedia });
             }
             var root = ArgumentGuard.WindowsPath(options.ScriptsDir, "Constructd:ScriptsDir").TrimEnd('\\', '/');
             var script = $$"""

@@ -1573,11 +1573,9 @@ service's `400 validation {field, reason}` and `409 config-conflict` shown inlin
 the section; `/host/capabilities` read-only), Maintenance (`/host/updates/status`,
 check / stage / apply / resume / cancel / resolve per `updateActionsFor`).
 
-Known integration gap: the extension requests `GET /api/v1/host/iso-catalog`, but the
-current service endpoint set does not map it. Until the service and client are reconciled,
-the Media tab reports that catalog read as unavailable; the host operator can inspect the
-primary-media catalog with `constructd admin iso status`. General-purpose `/media` inventory
-and mutations are unaffected.
+The service maps Admin-only `GET /api/v1/host/iso-catalog` to the read-only primary
+catalog projection. The client catches catalog failures separately from `/media`;
+a catalog-specific problem leaves child inventory and its actions available.
 
 **Absent by contract (§10.5):** no guest update / provision / reinstall / redownload
 anywhere in the module (those stay per instance), no host filesystem access, no local

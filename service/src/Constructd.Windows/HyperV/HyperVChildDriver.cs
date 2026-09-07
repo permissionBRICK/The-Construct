@@ -125,7 +125,13 @@ public sealed class HyperVChildDriver(IProcessRunner processes, ConstructdOption
         {
             using var document = JsonDocument.Parse(result.StandardOutput.Trim());
             var root = document.RootElement;
-            if (!root.TryGetProperty("ok", out var ok) || ok.ValueKind != JsonValueKind.True) throw Fail(operation);
+            if (!root.TryGetProperty("ok", out var ok) || ok.ValueKind != JsonValueKind.True)
+            {
+                if (root.TryGetProperty("code", out var code) && code.ValueKind == JsonValueKind.String &&
+                    HyperVChildScript.SafeCodes.Contains(code.GetString(), StringComparer.Ordinal))
+                    throw new ChildValidationException(code.GetString()!, "vm");
+                throw Fail(operation);
+            }
             return root.GetProperty("value").Clone();
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException) { throw Fail(operation); }

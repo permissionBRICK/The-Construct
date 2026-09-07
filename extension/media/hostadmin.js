@@ -311,9 +311,9 @@
   function renderMedia(s) {
     const m = s.media;
     if (!m) return;
-    const c = m.catalog;
+    const c = m.catalog || { mode: "unavailable", source: {}, entries: [] };
     text("isoMode", c.mode);
-    text("isoSource", `${c.source.path || c.source.url || "—"} · ${c.source.present ? "present" : "absent"} · ${c.source.size}${c.source.sha256Configured ? " · sha256 configured" : ""}`);
+    text("isoSource", m.catalogProblem || `${c.source.path || c.source.url || "—"} · ${c.source.present ? "present" : "absent"} · ${c.source.size}${c.source.sha256Configured ? " · sha256 configured" : ""}`);
     text("isoCurrent", c.current ? `${c.current.fileName} · ${c.current.size} · built ${c.current.builtAt}` : "none");
     text("isoLastBuild", c.lastBuild ? `${c.lastBuild.outcome} at ${c.lastBuild.at}` : "—");
     const e = $("isoEntries");

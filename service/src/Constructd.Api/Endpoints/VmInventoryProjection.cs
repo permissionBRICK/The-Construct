@@ -46,7 +46,7 @@ public sealed class VmInventoryProjection(IVmRepository vms, IVmDelegationReposi
             CurrentOperation = job is null ? null : new(job.Id, job.Kind, job.Phase, job.Initiator),
             Children = vm.Kind == VmKind.Primary ? (await delegation.ListChildrenAsync(vm.Name, ct)).Select(v => v.Name).ToArray() : null,
             AllowedActions = relationship is null ? [] : await policy.AllowedActionsAsync(vm, caller.NameOrEmpty(), relationship.Value, ct),
-            Forwards = owned ? result.Forwards : (await forwards.ListAsync(vm.Name, ct)).Where(f => f.Destination?.RequestedBy == caller.NameOrEmpty()).Select(f => ForwardResponse.From(f, options.PublicHostFor(vm.Name))).ToArray()
+            Forwards = owned ? result.Forwards : (await forwards.ListAsync(vm.Name, ct)).Where(f => Ownership.SameName(f.Destination?.RequestedBy, ForwardRequesterHandler.Requester(caller))).Select(f => ForwardResponse.From(f, options.PublicHostFor(vm.Name))).ToArray()
         };
     }
 }

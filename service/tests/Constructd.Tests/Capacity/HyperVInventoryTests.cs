@@ -28,6 +28,27 @@ public class HyperVInventoryTests
         using var stdin = JsonDocument.Parse(call.StandardInput!);
         Assert.Equal(@"C:\VMs\a.vhdx", stdin.RootElement.GetProperty("artifacts")[0].GetProperty("path").GetString());
     }
+    [Fact]
+    public async Task PathKeyedMediaAndOrphansIncludePartialFileEvidence()
+    {
+        var runner = new RecordingProcessRunner().RespondStdout("{\"ok\":false}");
+        var media = new InMemoryMediaStore();
+        var path = @"C:\media\aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.iso";
+        await media.AddAsync(new("a", "alice", "aux.iso", Constructd.Core.Domain.MediaRole.Auxiliary,
+            Constructd.Core.Domain.MediaSource.Upload, null, path, Constructd.Core.Domain.MediaState.Pending,
+            10, 10, null, null, null, null, "child", Now, null, null), default);
+        var inventory = new HyperVInventory(runner, new ConstructdOptions { ScriptsDir = @"C:\Construct" }, new MutableClock(), media);
+        await inventory.ReadAsync([Row(Constructd.Core.Domain.ReservationResource.Storage, artifact: path)], default);
+        await media.RemoveAsync("a", default);
+        await inventory.ReadAsync([Row(Constructd.Core.Domain.ReservationResource.Storage, artifact: path)], default);
+        foreach (var call in runner.Calls)
+        {
+            using var input = JsonDocument.Parse(call.StandardInput!);
+            var artifact = input.RootElement.GetProperty("artifacts")[0];
+            Assert.Equal(path, artifact.GetProperty("path").GetString());
+            Assert.True(artifact.GetProperty("isMedia").GetBoolean());
+        }
+    }
     [Theory]
     [InlineData("not json")] [InlineData("{\"ok\":false,\"error\":\"sentinel-secret\"}")]
     [InlineData("{\"ok\":true,\"value\":{}}")]

@@ -5,7 +5,7 @@ namespace Constructd.Api.Jobs;
 
 public sealed class ChildDeleteJob(IVmRepository vms, IVmDelegationRepository metadata, IChildVmDriver driver,
     IHypervisorDriver hypervisor, IChildVmCreationOwnership ownership, ICapacityLedger capacity, IMediaStore media, IMediaGate mediaGate,
-    IMediaTransfer transfer, IPortForwardManager forwards, INetworkPolicyReconciler network,
+    MediaJobs mediaJobs, IPortForwardManager forwards, INetworkPolicyReconciler network,
     IVmOperationGate vmGate, IPersistedJobRunner runner, IAuditLog audit, IClock clock)
 {
     public async Task<JobOutcome> RunAsync(Job job, Vm vm, IProgress<string> progress, CancellationToken ct)
@@ -71,12 +71,18 @@ public sealed class ChildDeleteJob(IVmRepository vms, IVmDelegationRepository me
                 await using var handle = await mediaGate.AcquireAsync(item.Id, "delete:" + vm.Name, ct);
                 var current = await media.GetAsync(item.Id, ct);
                 if (current is null) continue;
-                if ((await media.ListReferencesAsync(item.Id, ct)).Count > 0) throw new ChildValidationException("cleanup-retained", "dedicated-media");
-                if (current.State != MediaState.Deleting && !await media.TryTransitionAsync(item.Id, current.State, current with { State = MediaState.Deleting }, ct)) throw new ChildValidationException("cleanup-retained", "dedicated-media");
-                if (!await transfer.TryDeleteAsync(item.Path, ct)) throw new ChildValidationException("cleanup-retained", "dedicated-media");
-                var mediaIds = (await capacity.SnapshotAsync(false, ct)).Reservations.Where(x => x.Artifact == "media:" + item.Id).Select(x => x.Id).ToArray();
-                await capacity.ReleaseAsync(mediaIds, VmState.Absent, "dedicated media removed", ct);
-                await media.RemoveAsync(item.Id, ct);
+                // Another VM may legitimately use dedicated media through an admin attachment.
+                if ((await media.ListReferencesAsync(item.Id, ct)).Count > 0) continue;
+                if (await media.GetUploadAsync(item.Id, ct) is { State: UploadState.Open or UploadState.Completing } upload)
+                    await mediaJobs.AbortLockedAsync(upload, false, "system", ct);
+                current = await media.GetAsync(item.Id, ct);
+                if (current is null) continue;
+                if (current.State is MediaState.Pending or MediaState.Transferring)
+                {
+                    await mediaJobs.FailLockedAsync(current, "vm-deleted");
+                    current = (await media.GetAsync(item.Id, ct))!;
+                }
+                if (!await mediaJobs.DeleteLockedAsync(current, ct)) throw new ChildValidationException("cleanup-retained", "dedicated-media");
             }
         }
         if (phase is not null) await phase("storage");

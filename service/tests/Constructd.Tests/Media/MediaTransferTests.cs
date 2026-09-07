@@ -36,6 +36,8 @@ public sealed class MediaTransferTests
     [InlineData("192.0.0.1")] [InlineData("0.1.2.3")] [InlineData("224.0.0.1")] [InlineData("255.255.255.255")]
     [InlineData("fe80::1")] [InlineData("fc00::1")] [InlineData("ff02::1")] [InlineData("::ffff:127.0.0.1")]
     [InlineData("::127.0.0.1")] [InlineData("64:ff9b::a00:1")] [InlineData("::")]
+    [InlineData("2002:7f00:1::")][InlineData("2001::1")][InlineData("64:ff9b:1::a00:1")][InlineData("100::1")]
+    [InlineData("192.0.2.1")][InlineData("198.51.100.1")][InlineData("203.0.113.1")]
     public void Ssrf_matrix(string address) => Assert.False(new UrlAdmissionRules().Check(new Uri("https://public.example/"), [IPAddress.Parse("93.184.216.34"),IPAddress.Parse(address)],false,false).Allowed);
     [Theory]
     [InlineData("127.0.0.1")] [InlineData("169.254.169.254")] [InlineData("[::1]")]

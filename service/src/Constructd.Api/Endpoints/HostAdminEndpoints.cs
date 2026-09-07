@@ -132,6 +132,7 @@ public static class HostAdminEndpoints
             object value = row is null ? fallback : JsonSerializer.Deserialize(row.ValueJson, fallback.GetType(), ApiJson.Options)!;
             if (row is null && key == "capacity") value = HostAdminDefaults.Capacity with { Mode = options.HostAdmin.Capacity.Mode };
             if (row is null && key == "updates") value = HostAdminDefaults.Updates with { ManifestPublicKey = options.HostAdmin.Updates.ManifestPublicKey };
+            if (value is UpdatesConfig updates) value = HostUpdateTrust.Apply(updates, options);
             // Fields stay at section level; source and updatedAt describe the whole section.
             var fields = JsonSerializer.SerializeToNode(value, ApiJson.Options)!.AsObject();
             fields["source"] = row is null ? "default" : "stored"; fields["updatedAt"] = row?.UpdatedAt;
@@ -164,6 +165,8 @@ public static class HostAdminEndpoints
             }
             catch (Exception ex) when (ex is JsonException or FormatException or InvalidOperationException) { return CodedProblems.Validation(property.Name, "Invalid section value."); }
             if (HostConfigValidation.Validate(value) is { } error) return CodedProblems.Validation(property.Name, error);
+            if (value is UpdatesConfig updates && HostUpdateTrust.Apply(updates, options) != updates)
+                return CodedProblems.Validation("updates", "The update repository, signing key and signature requirement are pinned by the host-local installation.");
             sections.Add(new(property.Name, JsonSerializer.Serialize(value, ApiJson.Options), clock.UtcNow, http.User.Actor()));
         }
         if (sections.Count == 0) return CodedProblems.Validation("config", "At least one section is required.");

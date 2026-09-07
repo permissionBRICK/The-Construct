@@ -90,7 +90,7 @@ die() { printf 'construct vm: %s\n' "$*" >&2; exit "${EXIT_USAGE}"; }
 
 legacy_hint() {
   printf '%s\n' 'construct vm: this VM has a legacy credential and cannot manage child VMs.' >&2
-  printf '%s\n' 'Ask the VM owner to reprovision this VM with -RotateVmToken, or run "Reprovision (upgrade VM credential)" in VS Code.' >&2
+  printf '%s\n' 'Ask the VM owner to run Provision-AgentVM.ps1 -InstanceName <primary> -RotateVmToken.' >&2
 }
 
 _cfg_unquote() {

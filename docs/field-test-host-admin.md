@@ -333,9 +333,8 @@ This is why all destructive children belong to `ha-parent`, not `haus-vm`.
       `not run`. Include exact Windows/Hyper-V version, service commit, extension commit, switch,
       service account and timestamps.
 - [ ] `[FIELD]` File implementation defects separately from environmental limitations. In
-      particular, record the known missing `GET /api/v1/host/iso-catalog` route: the Admin Media
-      tab's primary catalog read is expected to fail in this candidate, while
-      `constructd admin iso status` and general-purpose `/media` must still work.
+      particular, verify the Admin Media primary catalog against `constructd admin iso status`,
+      then simulate catalog failure and confirm child `/media` inventory remains usable.
 - [ ] `[FIELD]` Do not declare the host-admin release field-validated until migration, both child
       hardware paths, console, sharing/revocation, expiry, drain, rollback and cascade all have a
       recorded result. A skipped item stays a known limitation.
@@ -355,3 +354,18 @@ Store the following in the project owner's approved private location, not in the
 
 The automated Linux evidence proves contract wiring and deterministic failure handling. This
 bundle is what turns those simulations into a defensible Hyper-V field result.
+
+## Final-review field checks
+
+- [ ] `[FIELD]` Exercise task launch and resume in the default nested installation layout
+      and with a longer data/staging path. Verify `/XML` registration, SYSTEM execution,
+      lock ownership, HTTP certificate pin and read-only `admin db check` transport.
+- [ ] `[FIELD]` Record `New-VM -Path`, actual VM `Path` and `ConfigurationLocation`; repeat
+      cleanup after interruption before the marker gains a VM id. Both direct and
+      name-subdirectory paths are supported by Linux doubles, not yet by field evidence.
+- [ ] `[FIELD]` Interrupt initial child creation before/after atomic marker publication;
+      restart the service under the approved field procedure and verify evidence-based
+      abandoned-row cleanup versus retained/deleting liabilities.
+- [ ] `[FIELD]` Verify handoff ACLs exclude ordinary users and that its credential fails
+      outside loopback maintenance. Verify host-local release trust cannot be changed
+      through the remote configuration API.

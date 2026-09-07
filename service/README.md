@@ -1856,8 +1856,9 @@ the discovered VM rather than duplicated. Discovery now advertises `children` an
 Primary state reads no longer update the stored inventory row. In SQLite mode, listings
 reflect the latest capacity reconciliation; memory-mode primary listings retain the last
 service mutation state. State-probe failures (`unknown`) refuse create/start even in
-Observe mode, and primary start waits up to 30 seconds for Running. These deliberate
-safety exceptions to the legacy default need the later real-host field check.
+Observe mode. Primary start returns the state observed immediately after the driver
+call; it does not wait for Running. Validate these compatibility exceptions on the
+real host, including a delayed start that initially reports Unknown.
 
 Owner/admin and the owning primary token may update an off child's hardware or media with
 `PUT /vms/{child}/hardware` and `PUT /vms/{child}/media`. Shared callers are refused.
@@ -1965,3 +1966,9 @@ to the test and are disposed afterward. The update test exercises its real gate,
 not release staging, scheduled-task handoff or a Windows service restart. Fake
 hardware, ISO signatures and console PNGs do not demonstrate a bootable installer,
 guest OS installation, packet isolation or Hyper-V/LocalSystem operation.
+
+Final delivery review adds the Admin-only `/api/v1/host/iso-catalog` projection,
+evidence-based abandoned admission recovery and stricter host-local update trust.
+See [review dispositions](../docs/plans/host-administration-final-review.md) for
+regressions, explicit compatibility deviations and remaining Windows field checks.
+Unenrolled identities receive only the reduced health response.

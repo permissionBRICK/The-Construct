@@ -23,6 +23,7 @@ public sealed class SqliteAdmissionStore(SqliteCapacityLedger ledger, IClock clo
     public async Task<AdmissionResult> AdmitAsync(AdmissionPlan plan, CancellationToken ct)
     {
         await using var tx = plan.Reservation is null ? await ledger.BeginMutationAsync(ct) : await ledger.BeginAsync(ct);
+        tx.Sql.Save("admission");
         if (Key(tx, plan.OperationKey, false) is { } prior) return prior;
         var newPrimary = plan.VmToInsert is { Kind: VmKind.Primary } candidate && !tx.Vms.Any(v => Constructd.Core.Logic.Ownership.SameName(v.Name, candidate.Name));
         if (plan.VmToInsert is { } vm)
@@ -57,9 +58,15 @@ public sealed class SqliteAdmissionStore(SqliteCapacityLedger ledger, IClock clo
         CapacityDecision? decision = null;
         if (plan.Reservation is { } request)
         {
-            if (newPrimary && plan.JobToInsert is { Kind: "create-vm" }) tx.AdoptAbandonedPrimaryStorage(request);
+            if (newPrimary && plan.JobToInsert is { Kind: "create-vm" }) request = tx.AdoptAbandonedPrimaryStorage(request);
             decision = Reserve(tx, request);
-            if (!decision.Allowed) return Result(AdmissionOutcome.CapacityRefused, capacity: decision);
+            if (!decision.Allowed)
+            {
+                tx.Sql.Rollback("admission");
+                tx.Audit("capacity.refuse", request.Owner, request.VmName ?? request.OperationId, decision.Reason, true);
+                tx.Commit();
+                return Result(AdmissionOutcome.CapacityRefused, capacity: decision);
+            }
         }
         CascadeAcceptance? cascade = null;
         if (plan.CascadeToAccept is { } preview)
@@ -99,11 +106,21 @@ public sealed class SqliteAdmissionStore(SqliteCapacityLedger ledger, IClock clo
     {
         // A mutation may re-admit swept reservations, so refresh inventory before opening SQLite.
         await using var tx = await ledger.BeginAsync(ct);
+        tx.Sql.Save("mutation");
         if (Key(tx, key, true) is { } prior) return prior;
         var scope = new Scope(tx, clock, ct);
         try
         {
-            if (!await mutation(scope) || scope.Conflict) return Result(AdmissionOutcome.VersionConflict);
+            if (!await mutation(scope) || scope.Conflict)
+            {
+                if (scope.Refusal is { } refusal)
+                {
+                    tx.Sql.Rollback("mutation");
+                    tx.Audit("capacity.refuse", refusal.Request.Owner, refusal.Request.VmName ?? refusal.Request.OperationId, refusal.Decision.Reason, true);
+                    tx.Commit();
+                }
+                return Result(AdmissionOutcome.VersionConflict);
+            }
             ct.ThrowIfCancellationRequested();
             tx.Commit();
             return Result(AdmissionOutcome.Accepted);
@@ -132,6 +149,7 @@ public sealed class SqliteAdmissionStore(SqliteCapacityLedger ledger, IClock clo
     {
         internal bool Active = true;
         internal bool Conflict;
+        internal (ReservationRequest Request, CapacityDecision Decision)? Refusal;
         private void Check() { if (!Active) throw new InvalidOperationException("Admission scope is no longer active."); ct.ThrowIfCancellationRequested(); }
         private bool Cas(bool value) { Conflict |= !value; return value; }
         public async Task<bool> UpdateLeaseAsync(string vmName, Lease lease, long expectedVersion)
@@ -166,7 +184,7 @@ public sealed class SqliteAdmissionStore(SqliteCapacityLedger ledger, IClock clo
         public Task<Vm?> ReadVmAsync(string vmName)
         { Check(); return SqliteVmRepository.ReadInTransaction(tx.Connection, tx.Sql, vmName, ct); }
         public Task<CapacityDecision> ReserveAsync(ReservationRequest request)
-        { Check(); return Task.FromResult(Reserve(tx, request)); }
+        { Check(); var decision = Reserve(tx, request); if (!decision.Allowed) Refusal = (request, decision); return Task.FromResult(decision); }
         public Task ConfirmReservationsAsync(IReadOnlyList<string> ids, VmState observed)
         { Check(); tx.ConfirmInTransaction(ids, observed); return Task.CompletedTask; }
         public Task ReleaseReservationsAsync(IReadOnlyList<string> ids, VmState observed, string reason)

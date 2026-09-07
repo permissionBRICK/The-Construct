@@ -34,6 +34,108 @@ public sealed class CapacityReconciliationTests : IDisposable
             : [new(ReservationResource.Ram, 8 * Gb, null, null), new(ReservationResource.Cpu, 2, null, null)], TimeSpan.FromMinutes(10)), default);
     }
     [Theory]
+    [InlineData(ArtifactPresence.Absent, true, null, false)]
+    [InlineData(ArtifactPresence.Present, true, null, false)]
+    [InlineData(ArtifactPresence.Unknown, true, null, false)]
+    [InlineData(ArtifactPresence.Absent, false, null, false)]
+    [InlineData(ArtifactPresence.Absent, true, "create", false)]
+    [InlineData(ArtifactPresence.Absent, true, null, true)]
+    public async Task InterruptedAdmissionUsesArtifactEvidenceBeforeReleasingChildSlot(ArtifactPresence presence, bool complete, string? phase, bool partial)
+    {
+        await _vms.AddAsync(Vm("parent"), 10, default);
+        await _vms.AddAsync(Vm() with { Kind = VmKind.Child, Parent = "parent", CurrentJobId = "interrupted", Incarnation = null }, 10, default);
+        var jobs = new SqliteJobStore(_database);
+        await jobs.UpsertAsync(new("interrupted", "child-create", "a", "alice", JobState.Queued, [], null, null, Now, null, Phase: phase), default);
+        await jobs.MarkInterruptedAsync(Now, default);
+        var artifact = @"disk:C:\a.vhdx";
+        await _ledger.TryReserveAsync(new("alice", "a", "interrupted", [new(ReservationResource.Storage, 20 * Gb, artifact, @"C:\"),
+            new(ReservationResource.Ram, Gb, null, null)], TimeSpan.FromMinutes(10)), default);
+        if (partial)
+            await new SqliteMediaStore(_database).AddAsync(new("pending", "alice", "aux.iso", MediaRole.Auxiliary, MediaSource.Upload,
+                null, @"C:\media\aux.iso", MediaState.Pending, 10, 10, null, null, null, null, "a", Now, null, null), default);
+        _inventory.Snapshot = Inventory() with { Complete = complete, Artifacts = [new(artifact, @"C:\a.vhdx", @"C:\", 0, presence)] };
+        _driver.SetState("a", VmState.Absent);
+        await _reconciler.ReconcileAsync(default);
+        var removed = presence == ArtifactPresence.Absent && complete && phase is null && !partial;
+        var current = await _vms.GetAsync("a", default);
+        if (removed)
+        {
+            Assert.Null(current);
+            Assert.DoesNotContain(await _ledger.ReadReservationsAsync(default), r => r.VmName == "a");
+        }
+        else
+        {
+            Assert.NotNull(current); Assert.Equal(phase is null, current.Deleting);
+            Assert.Contains(await _ledger.ReadReservationsAsync(default), r => r.VmName == "a");
+        }
+        using var connection = _database.Open(); using var query = connection.CreateCommand();
+        query.CommandText = "SELECT COUNT(*) FROM audit WHERE action='vm.create.abandoned'";
+        Assert.Equal(phase is null ? 1L : 0L, query.ExecuteScalar());
+    }
+    [Theory]
+    [InlineData(ArtifactPresence.Absent)]
+    [InlineData(ArtifactPresence.Present)]
+    [InlineData(ArtifactPresence.Unknown)]
+    public async Task FailedLaunchUsesTheSameAbandonedAdmissionRecovery(ArtifactPresence presence)
+    {
+        await _vms.AddAsync(Vm("parent"), 10, default);
+        var vm = Vm() with { Kind = VmKind.Child, Parent = "parent", CurrentJobId = "not-launched", Incarnation = null, RamMb = 1024,
+            Hardware = new(2, 1024, 20, 2, false, null, false, [], true),
+            Lease = new("1h", 3600, null, null, LeaseState.Inactive, 0, null, null) };
+        var job = new Job("not-launched", "child-create", "a", "alice", JobState.Queued, [], null, null, Now, null);
+        var media = new MediaItem("ready", "alice", "install.iso", MediaRole.Install, MediaSource.Upload,
+            null, @"C:\media\install.iso", MediaState.Ready, 10, 10, null, null, null, null, "a", Now, Now, null);
+        var artifact = @"disk:C:\a.vhdx";
+        var admission = new SqliteAdmissionStore(_ledger, _clock);
+        var plan = new AdmissionPlan(null, vm, new(10, true, 10, null, null, null, null, true, true, true),
+            [media], [], [new("ready", "a", MediaSlot.Install, Now)],
+            new("alice", "a", job.Id, [new(ReservationResource.Storage, 20 * Gb, artifact, @"C:\"),
+                new(ReservationResource.Ram, Gb, null, null)], TimeSpan.FromMinutes(10)), null, job, null, null, false);
+        Assert.Equal(AdmissionOutcome.Accepted, (await admission.AdmitAsync(plan, default)).Outcome);
+        await admission.MarkStartFailedAsync(job.Id, "launch failed", default);
+        await new SqliteJobStore(_database).MarkInterruptedAsync(Now, default);
+        _inventory.Snapshot = Inventory() with { Artifacts = [new(artifact, @"C:\a.vhdx", @"C:\", 0, presence)] };
+        _driver.SetState("a", VmState.Absent);
+        await _reconciler.ReconcileAsync(default);
+        var references = await new SqliteMediaStore(_database).ListReferencesForVmAsync("a", default);
+        if (presence == ArtifactPresence.Absent)
+        {
+            Assert.Null(await _vms.GetAsync("a", default)); Assert.Empty(references);
+            Assert.DoesNotContain(await _ledger.ReadReservationsAsync(default), r => r.VmName == "a");
+        }
+        else
+        {
+            Assert.True((await _vms.GetAsync("a", default))!.Deleting); Assert.Single(references);
+            Assert.All((await _ledger.ReadReservationsAsync(default)).Where(r => r.VmName == "a"), r => Assert.Equal(ReservationPhase.Held, r.Phase));
+        }
+        using var connection = _database.Open(); using var query = connection.CreateCommand();
+        query.CommandText = "SELECT COUNT(*) FROM audit WHERE action='vm.create.abandoned'";
+        Assert.Equal(1L, query.ExecuteScalar());
+    }
+    [Theory]
+    [InlineData("incarnation")]
+    [InlineData("generation")]
+    [InlineData("ambiguous")]
+    public async Task UnresolvedPlacementCannotConsumeStaleOrAmbiguousIdentityEvidence(string conflict)
+    {
+        var vm = Vm() with { Incarnation = conflict == "ambiguous" ? null : "a-id" };
+        await _vms.AddAsync(vm, 10, default);
+        var reserved = await _ledger.TryReserveAsync(new("alice", "a", "create",
+            [new(ReservationResource.Storage, 20 * Gb, "unresolved-primary-disk:a", "unknown")], TimeSpan.FromMinutes(1)), default);
+        await _ledger.ConfirmAsync(reserved.ReservationIds, VmState.Running, default);
+        var captured = await _ledger.ReadReservationsAsync(default);
+        var actual = Actual(state: VmState.Running) with { Id = conflict == "incarnation" ? "other-id" : "a-id",
+            Disks = [new(@"C:\a.vhdx", 20 * Gb, Gb, null, @"C:\", true)] };
+        if (conflict == "generation")
+        {
+            using var c = _database.Open(); using var cmd = c.CreateCommand();
+            cmd.CommandText = "UPDATE vms SET power_generation=1 WHERE name='a'"; cmd.ExecuteNonQuery();
+        }
+        var evidence = conflict == "ambiguous" ? Inventory(28 * Gb, actual, actual with { Id = "duplicate-id" }) : Inventory(28 * Gb, actual);
+        await _ledger.ApplyVmAsync(vm, VmState.Running, evidence, captured, default);
+        Assert.Contains(await _ledger.ReadReservationsAsync(default), r => r.Artifact == "unresolved-primary-disk:a" && r.Amount == 20 * Gb);
+    }
+    [Theory]
     [InlineData(VmState.Off)] [InlineData(VmState.Saved)] [InlineData(VmState.Unknown)] [InlineData(VmState.Running)]
     public async Task LiveOperationKeepsPendingInEveryState(VmState state)
     {

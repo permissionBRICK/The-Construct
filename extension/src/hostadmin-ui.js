@@ -267,13 +267,13 @@ function createHostAdminFeature(deps = {}) {
           break;
         case "rotateVmToken": {
           const kind = str(args.kind).toLowerCase() === "legacy" ? "legacy" : "primary";
-          if (!(await modal(`Rotate the VM token of "${name}" (${kind} kind)?`, "The previous token stops working the moment the new one is issued: the guest loses `construct expose` and its heartbeat until the new token is delivered (Provision-AgentVM.ps1 -RotateVmToken, or the instance's Reprovision with credential upgrade).", "Rotate token"))) return;
+          if (!(await modal(`Rotate the VM token of "${name}" (${kind} kind)?`, `The previous token stops working immediately. To restore the guest credential, run Provision-AgentVM.ps1 -InstanceName ${name} -RotateVmToken. That command issues and delivers a fresh token.`, "Rotate token"))) return;
           const r = await model.perform("rotateVmToken", { name, kind });
-          if (r.ok) await showSecretOnce(`VM token of ${name} (${r.kind})`, r.secret, "Deliver it to the guest with Provision-AgentVM.ps1 -RotateVmToken, or reprovision the instance.");
+          if (r.ok) await showSecretOnce(`VM token of ${name} (${r.kind})`, r.secret, `To issue and deliver a fresh guest credential, run Provision-AgentVM.ps1 -InstanceName ${name} -RotateVmToken.`);
           break;
         }
         case "revokeVmToken":
-          if (!(await modal(`Revoke the VM token of "${name}"?`, "The guest loses `construct expose` and its heartbeat until it is reprovisioned.", "Revoke token"))) return;
+          if (!(await modal(`Revoke the VM token of "${name}"?`, `The guest loses expose and heartbeat. Restore its credential with Provision-AgentVM.ps1 -InstanceName ${name} -RotateVmToken.`, "Revoke token"))) return;
           await model.perform("revokeVmToken", { name });
           break;
         case "loadOverrides": {

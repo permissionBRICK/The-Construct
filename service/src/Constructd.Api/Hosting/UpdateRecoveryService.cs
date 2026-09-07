@@ -11,6 +11,7 @@ public sealed class UpdateRecoveryService(HostUpdateJob work,IHostUpdateStore st
     IMaintenanceGate gate,IHostConfigStore config,IReleaseInfo release,IUpdateStager stager,ConstructdOptions options,IClock clock,IServiceProvider services,IJobStore jobs,ILogger<UpdateRecoveryService> logger) : BackgroundService
 {
     private bool _initialized;
+    private string? _settledUpdate;
     private bool _wasFrozen;
     public override async Task StartAsync(CancellationToken ct) { await ReconcileAsync(ct); await base.StartAsync(ct); }
     protected override async Task ExecuteAsync(CancellationToken ct)
@@ -24,6 +25,7 @@ public sealed class UpdateRecoveryService(HostUpdateJob work,IHostUpdateStore st
         if(!await work.Acceptance.WaitAsync(0,ct)) return;
         try
         {
+            if (_settledUpdate is not null && gate.State == MaintenanceState.Open && await store.GetActiveAsync(ct) is null) return;
             var marker=await config.GetAsync<MaintenanceMarker>("maintenance",ct);
             if(!_initialized && marker?.State==MaintenanceState.Maintenance)
             {gate.Enter(MaintenanceState.Maintenance,marker.UpdateId);_wasFrozen=true;}
@@ -73,6 +75,7 @@ public sealed class UpdateRecoveryService(HostUpdateJob work,IHostUpdateStore st
             }
             var row=await store.GetAsync(h.UpdateId,ct);
             if(row is null) {await FreezeAsync(h.UpdateId,ct);return;}
+            if (gate.State == MaintenanceState.Open && _settledUpdate == h.UpdateId && pending is null) return;
             var record=await launcher.ReadRecoveryRecordAsync(ct);if(record?.UpdateId!=h.UpdateId)record=null;
             if(row.State==HostUpdateState.Draining || (row.State==HostUpdateState.HandedOff && record is null && (work.LaunchInProgress || DateTimeOffset.UtcNow<work.LaunchDeadline)))return;
             var fence=await launcher.ReadFenceAsync(ct);if(fence?.UpdateId!=h.UpdateId)fence=null;
@@ -112,12 +115,13 @@ public sealed class UpdateRecoveryService(HostUpdateJob work,IHostUpdateStore st
                 }
             }
             else await FreezeAsync(h.UpdateId,ct);
+            if (open && row.State is HostUpdateState.Succeeded or HostUpdateState.RolledBack or HostUpdateState.RolledBackWithDatabase or HostUpdateState.ResolvedByAdmin or HostUpdateState.Cancelled) _settledUpdate = h.UpdateId;
         }
         catch(Exception ex) when(ex is not OperationCanceledException)
         {
             // Preserve the previous gate state and retry. A normal host with no recovery work must
             // not be locked out because of a transient filesystem/store read failure.
-            if(!_initialized) {gate.Enter(MaintenanceState.Maintenance,null);_wasFrozen=true;}
+            // Only a marker, active update or handoff observed above can close the gate.
             logger.LogWarning("Update recovery check failed; retrying with the current maintenance state.");
         }
         finally {work.Acceptance.Release();}

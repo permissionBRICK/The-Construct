@@ -14,6 +14,15 @@ namespace Constructd.Tests.Updates;
 public sealed class RecoveryTests
 {
     private static UpdateHandoff Handoff(string previous)=>new(new string('a',32),new string('b',40),"stage","publish","scripts","data","constructd",previous,"https://127.0.0.1:7462/api/v1/health",new string('c',40),"cli",new string('e',64),DateTimeOffset.UtcNow);
+    [Fact]
+    public async Task InitialReadFailureWithoutRecoveryEvidenceDoesNotSuppressBootstrap()
+    {
+        var launcher = new FakeUpdaterLauncher { FailNextRead = true };
+        using var app = new TestApp(new Dictionary<string, string?> { ["Constructd:BootstrapAdmin"] = "seeded-admin" },
+            services => services.AddSingleton<IUpdaterLauncher>(launcher));
+        Assert.Equal(MaintenanceState.Open, app.Service<IMaintenanceGate>().State);
+        Assert.NotNull(await app.Users.GetAsync("seeded-admin", default));
+    }
     [Fact] public async Task Dead_updater_before_replace_is_fenced_before_writes_reopen()
     {
         using var app=new TestApp();var release=app.Service<IReleaseInfo>();var h=Handoff(release.Installed.Commit);
@@ -46,6 +55,9 @@ public sealed class RecoveryTests
         await app.Service<UpdateRecoveryService>().ReconcileAsync(default);
         Assert.Equal(MaintenanceState.Open,app.Service<IMaintenanceGate>().State);
         Assert.Equal(HostUpdateState.Succeeded,(await app.Service<IHostUpdateStore>().GetAsync(h.UpdateId,default))!.State);
+        var reads = launcher.RecoveryReadCount;
+        await app.Service<UpdateRecoveryService>().ReconcileAsync(default);
+        Assert.Equal(reads, launcher.RecoveryReadCount);
     }
     [Fact] public async Task Health_handoff_authentication_is_loopback_health_only_and_has_no_role()
     {

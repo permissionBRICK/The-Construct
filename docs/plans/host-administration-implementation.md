@@ -161,9 +161,8 @@ Acceptance:
 ## Phase 4: extension administration and minimal user view
 
 Status: **implemented on Linux, not field-validated**. The webview and minimal user view have
-plain-node coverage. The extension currently requests `/api/v1/host/iso-catalog`, which the
-service does not map, so the primary-media catalog read in the Media tab is a known integration
-gap; use `constructd admin iso status` until it is reconciled.
+plain-node coverage. The service implements the Admin-only primary ISO catalog projection;
+the Media tab loads child inventory even when the catalog read fails.
 
 Build native VS Code views backed by the API, not host filesystem access or commands that
 quietly assume the service is local. Connect/register a host before any primary exists.
@@ -211,7 +210,9 @@ target; console works at the demonstrated backend capability level before guest 
 ## Phase 6: host release and update mechanism
 
 Status: **implemented on Linux, not field-validated**. Signed staging, drain, helper handoff,
-health verification and rollback paths have fake-mode coverage. The repository deliberately
+rollback and health-result handling have fake-mode coverage. The PowerShell suite replaces
+`Test-UpdateHealth` completely: it does not exercise its HTTP, certificate pinning or
+Windows CLI transport. The repository deliberately
 ships no production signing key, the first rollout must be manual, and Windows service/task,
 active-VM drain and rollback behavior remain field-test items.
 

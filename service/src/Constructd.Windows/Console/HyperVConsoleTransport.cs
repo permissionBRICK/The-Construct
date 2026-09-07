@@ -8,7 +8,7 @@ using Constructd.Core.Logic;
 
 namespace Constructd.Windows.Console;
 
-public sealed class HyperVConsoleTransport(IProcessRunner runner) : IConsoleTransport
+public sealed class HyperVConsoleTransport(IProcessRunner runner, Constructd.Core.Configuration.ConstructdOptions? options = null) : IConsoleTransport
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     { Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) } };
@@ -25,7 +25,7 @@ public sealed class HyperVConsoleTransport(IProcessRunner runner) : IConsoleTran
         await gate.WaitAsync(ct);
         try
         {
-            var r = await runner.RunAsync("powershell.exe", Arguments, JsonSerializer.Serialize(payload, Json), TimeSpan.FromSeconds(20), null, ct);
+            var r = await runner.RunAsync(options?.PowerShellPath ?? "powershell.exe", Arguments, JsonSerializer.Serialize(payload, Json), TimeSpan.FromSeconds(20), null, ct);
             if (!r.Succeeded || r.StandardOutput.Length > 6 * 1024 * 1024) throw new ConsoleTransportException();
             return JsonDocument.Parse(r.StandardOutput);
         }

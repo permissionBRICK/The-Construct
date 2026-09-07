@@ -7,7 +7,7 @@ namespace Constructd.Api.Jobs;
 
 /// <summary>Caller holds the VM gate. An accepted start keeps its original clock across retries.</summary>
 public sealed class LifecycleStart(IVmRepository vms, IHypervisorDriver driver, IChildVmStorage storage,
-    ICapacityLedger capacity, IAdmissionStore admission, IOperationKeyStore keys, IClock clock, ChildStartIntent childStarts, IJobStore jobs)
+    ICapacityLedger capacity, IAdmissionStore admission, IOperationKeyStore keys, IClock clock, ChildStartIntent childStarts, IJobStore jobs, IOperationRegistry operations)
 {
     public sealed record Intent(string? Lifetime, long? Seconds, long LeaseVersion, DateTimeOffset ActivationBase,
         IReadOnlyList<ReservationLine> Lines, string OperationId, bool Restart = false);
@@ -57,9 +57,12 @@ public sealed class LifecycleStart(IVmRepository vms, IHypervisorDriver driver, 
             // The stopped VM's old save liability is released only on confirmed Off; reserve its next run.
             if (driver.Capabilities.Suspend && (state == VmState.Off || !rows.Any(ReservationRules.SavedState)))
             {
-                var placement = await storage.ResolveStorageAsync(vm.Name, ct);
+                ChildStoragePlacement? placement = null;
+                try { placement = vm.Kind == VmKind.Primary ? await storage.ResolvePrimaryStorageAsync(vm.Name, ct) : await storage.ResolveStorageAsync(vm.Name, ct); }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch when (vm.Kind == VmKind.Primary) { }
                 lines.Add(new(ReservationResource.Storage, vm.RamBytes + CapacityMath.SavedStateOverhead,
-                    "saved-state:" + (vm.Incarnation ?? vm.Name), placement.ConfigVolume));
+                    "saved-state:" + (vm.Incarnation ?? vm.Name), placement?.ConfigVolume ?? "unknown"));
             }
             var intent = new Intent(lifetime, seconds, vm.Lease?.Version ?? 0, clock.UtcNow, lines, Guid.NewGuid().ToString("n"), proposed.Kind == "restart-start");
             key = proposed with { IntentJson = JsonSerializer.Serialize(intent, ApiJson.Options), PowerGeneration = vm.PowerGeneration };
@@ -89,6 +92,7 @@ public sealed class LifecycleStart(IVmRepository vms, IHypervisorDriver driver, 
     {
         if ((await keys.ListInFlightAsync(vm.Name, ct)).Any(k => ConfigurationIntent.Applies(k, vm))) throw new LifecycleException("configuration-incomplete");
         var intent = JsonSerializer.Deserialize<Intent>(key.IntentJson!, ApiJson.Options)!;
+        using var active = operations.Register(intent.OperationId, "lifecycle-start", vm.Name);
         if (vm.PowerGeneration != key.PowerGeneration) throw new LifecycleException("power-state-changed");
         if (state is not (VmState.Running or VmState.Off or VmState.Saved or VmState.Paused)) throw new LifecycleException("vm-state-unknown");
         var rows = (await capacity.SnapshotAsync(false, ct)).Reservations.Where(r => Ownership.SameName(r.VmName, vm.Name)).ToArray();
@@ -123,26 +127,42 @@ public sealed class LifecycleStart(IVmRepository vms, IHypervisorDriver driver, 
                 if (readmitted.Outcome != AdmissionOutcome.Accepted) throw new LifecycleException("operation-key-conflict");
                 if (!decision!.Allowed) return new(state, vm.Lease, decision.Reason == "inventory-incomplete" ? "capacity-unavailable" : "capacity-exhausted");
             }
+            var failed = false;
             try { await driver.StartAsync(vm.Name, ct); }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch { throw new LifecycleException("start-failed"); }
-            state = await driver.GetStateAsync(vm.Name, ct);
+            catch { failed = true; }
+            try { state = await driver.GetStateAsync(vm.Name, ct); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch { state = VmState.Unknown; }
+            // The primary API returns the driver's observed state, as before host administration.
             var waiting = System.Diagnostics.Stopwatch.StartNew();
-            while (state == VmState.Unknown && waiting.Elapsed < TimeSpan.FromSeconds(30))
+            while (!failed && vm.Kind == VmKind.Child && state == VmState.Unknown && waiting.Elapsed < TimeSpan.FromSeconds(30))
             {
                 await Task.Delay(TimeSpan.FromMilliseconds(250), ct);
                 state = await driver.GetStateAsync(vm.Name, ct);
             }
-            if (state != VmState.Running) throw new LifecycleException("start-failed");
+            if (state != VmState.Running && (failed || vm.Kind == VmKind.Child || ReservationRules.Terminal(state)))
+            {
+                var failedReply = new Reply(state, vm.Lease, failed || vm.Kind == VmKind.Child ? "start-failed" : null);
+                var held = (await capacity.SnapshotAsync(false, ct)).Reservations.Where(r => Ownership.SameName(r.VmName, vm.Name)).ToArray();
+                await admission.MutateAsync(key, async scope =>
+                {
+                    // Off/Saved is direct evidence that this start consumes no RAM/CPU.
+                    await scope.ReleaseReservationsAsync(held.Where(r => r.Resource != ReservationResource.Storage || ReservationRules.SavedState(r)).Select(r => r.Id).ToArray(), state, "start-finished-without-running");
+                    await scope.UpdatePowerStateAsync(vm.Name, state, key.PowerGeneration!.Value);
+                    return await scope.CompleteOperationKeyAsync(key.Owner, key.Kind, key.Key, JsonSerializer.Serialize(failedReply, ApiJson.Options));
+                }, ct);
+                return failedReply;
+            }
         }
         rows = (await capacity.SnapshotAsync(false, ct)).Reservations.Where(r => Ownership.SameName(r.VmName, vm.Name)).ToArray();
         var lease = vm.Lease is null || intent.Restart ? null : LeaseRules.Activate(vm.Lease, intent.Lifetime!, intent.Seconds, intent.ActivationBase);
         var reply = new Reply(state, lease ?? vm.Lease);
         var completed = await admission.MutateAsync(key, async scope =>
         {
-            if (!await scope.UpdatePowerStateAsync(vm.Name, VmState.Running, key.PowerGeneration!.Value)) return false;
+            if (!await scope.UpdatePowerStateAsync(vm.Name, state, key.PowerGeneration!.Value)) return false;
             if (lease is not null && !await scope.UpdateLeaseAsync(vm.Name, lease, intent.LeaseVersion)) return false;
-            await scope.ConfirmReservationsAsync(rows.Select(r => r.Id).ToArray(), VmState.Running);
+            await scope.ConfirmReservationsAsync(rows.Select(r => r.Id).ToArray(), state);
             return await scope.CompleteOperationKeyAsync(key.Owner, key.Kind, key.Key, JsonSerializer.Serialize(reply, ApiJson.Options));
         }, ct);
         if (completed.Outcome is not (AdmissionOutcome.Accepted or AdmissionOutcome.Replay)) throw new LifecycleException("power-state-changed");

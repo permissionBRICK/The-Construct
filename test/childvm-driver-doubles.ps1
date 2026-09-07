@@ -6,7 +6,8 @@
     function Get-VMHost { if($script:probeHostFailure){throw 'host defaults must not be queried'}; [pscustomobject]@{VirtualHardDiskPath=$root;VirtualMachinePath=$root} }
     function Get-VM { param($Name) if($script:probeVm){$script:probeVm} }
     function New-VM { param($Name,$Path,$Generation,$MemoryStartupBytes,[switch]$NoVHD,$SwitchName)
-        $null=New-Item -ItemType Directory -Path $Path
+        $Path=Join-Path $Path $Name
+        $null=New-Item -ItemType Directory -Path $Path -Force
         $script:probeVm=[pscustomobject]@{Name=$Name;Id=[Guid]::NewGuid();Path=$Path;ConfigurationLocation=$Path;Generation=$Generation;State='Off'}
         if($script:probeFail){throw 'simulated failure after allocation'}
         $script:probeVm
@@ -36,6 +37,15 @@
     $d=@{name='child';hardware=$h;installMediaPath=$iso;auxiliaryMediaPath=$aux;switchName='Default Switch';operationId='test'}
     $disk=Join-Path $root 'child.vhdx';$marker=$disk+'.childvm.json'
     try {
+        foreach ($command in @('Set-ConstructChildHardware','Set-ConstructChildMedia','Stop-ConstructChildVmGracefully','Get-ConstructChildVmCapabilities')) {
+            $rejected=$false
+            try { & $command -Name '*' } catch { $rejected=$_.Exception.Message -eq 'validation' }
+            ok "$command rejects wildcard names before cmdlet execution" $rejected
+        }
+        $script:probeHostFailure=$true
+        try { New-ConstructChildVm $d } catch { }
+        ok 'host-default failure cannot leave an empty ownership marker' (-not (Test-Path $marker))
+        $script:probeHostFailure=$false
         New-ConstructChildVm $d
         ok 'real create allocates fixed hardware and dual media' ($script:probeVm -and (Test-Path $disk) -and $script:probeDvds.Count -eq 2 -and $script:probeOrder.Count -eq 4)
         $script:probeHostFailure=$true
@@ -55,7 +65,7 @@
         $script:probeFail=$true
         try{New-ConstructChildVm $d}catch{}
         $record=Get-Content $marker -Raw|ConvertFrom-Json
-        ok 'failure after New-VM leaves durable path ownership before ID' ($script:probeVm -and -not $record.id -and $record.configPath -eq $script:probeVm.Path)
+        ok 'failure after New-VM leaves durable path ownership before ID' ($script:probeVm -and -not $record.id -and (Join-Path $record.configPath child) -eq $script:probeVm.Path)
         $ownPath=$script:probeVm.Path;$script:probeVm.Path=$root
         $refused=$false;try{Remove-ConstructChildVm child}catch{$refused=$true}
         ok 'null-ID marker never owns a same-name VM at another path' ($refused -and $script:probeVm)

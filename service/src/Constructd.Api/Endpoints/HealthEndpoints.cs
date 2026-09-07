@@ -26,7 +26,7 @@ public static class HealthEndpoints
                 ["maintenance"] = gate.State == MaintenanceState.Open ? null :
                     new { phase = gate.State, since=marker?.Since, updateId=marker?.UpdateId, retryAfterSeconds = 30 }
             };
-            if (http.User.Identity?.IsAuthenticated == true)
+            if (http.User.Identity?.IsAuthenticated == true && (http.User.IsKnownUser() || http.User.IsVmToken() || http.User.Identity.AuthenticationType == UpdateHandoffAuthenticationHandler.SchemeName))
             { body["commit"] = release.Installed.Commit; body["packageVersion"] = release.Installed.PackageVersion; body["installedAt"] = release.Installed.InstalledAt; }
             return Results.Ok(body);
         }).AllowAnonymous().WithName("Health");
