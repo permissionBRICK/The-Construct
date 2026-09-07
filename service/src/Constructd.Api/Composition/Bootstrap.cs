@@ -19,9 +19,6 @@ public static class Bootstrap
         var logger = provider.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(Bootstrap));
 
         if (!resumeAfterUpdate && provider.GetService<IMaintenanceGate>()?.State == MaintenanceState.Maintenance) return;
-        var hostConfig = provider.GetRequiredService<IHostConfigStore>();
-        if (!string.IsNullOrWhiteSpace(options.HostAdmin.Updates.ManifestPublicKey) && await hostConfig.GetAsync<UpdatesConfig>("updates", cancellationToken) is null)
-            await hostConfig.SetAsync("updates", Constructd.Core.Logic.HostUpdateTrust.Apply(HostAdminDefaults.Updates, options), "installer", cancellationToken);
         await SeedAdminAsync(provider, options, logger, cancellationToken).ConfigureAwait(false);
 
         // A job that was still running when the process ended cannot be resumed; mark it failed so

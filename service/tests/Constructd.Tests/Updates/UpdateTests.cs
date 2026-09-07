@@ -78,15 +78,14 @@ public class UpdateTests
         }
         finally {Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();Directory.Delete(dir,true);}
     }
-    [Fact] public async Task Update_api_is_admin_only_and_requires_a_key()
+    [Fact] public async Task Update_api_is_admin_only_and_check_needs_no_key()
     {
         using var app=new TestApp();using var user=await app.CreateUserClientAsync("user");using var admin=await app.CreateUserClientAsync("admin",Role.Admin);
         foreach(var action in new[]{"check","stage","apply","cancel","resolve"})
         {
             Assert.Equal(HttpStatusCode.Forbidden,(await user.PostAsJsonAsync("/api/v1/host/updates/"+action,new{})).StatusCode);
-            var refused=await admin.PostAsJsonAsync("/api/v1/host/updates/"+action,new{});
-            Assert.Equal(HttpStatusCode.Conflict,refused.StatusCode);Assert.Contains("signing-key-missing",await refused.Content.ReadAsStringAsync());
         }
+        Assert.Equal(HttpStatusCode.OK,(await admin.PostAsJsonAsync("/api/v1/host/updates/check",new{})).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden,(await user.GetAsync("/api/v1/host/updates/status")).StatusCode);
         Assert.Equal(HttpStatusCode.OK,(await admin.GetAsync("/api/v1/host/updates/status")).StatusCode);
     }
@@ -104,7 +103,7 @@ public class UpdateTests
     [Fact] public async Task Failed_stage_survives_reconnect_and_is_audited()
     {
         using var app=new TestApp();using var admin=await app.CreateUserClientAsync("admin",Role.Admin);
-        await app.Service<IHostConfigStore>().SetAsync("updates",HostAdminDefaults.Updates with{RequireSignature=false},"test",default);
+        await app.Service<IHostConfigStore>().SetAsync("updates",HostAdminDefaults.Updates,"test",default);
         var response=await admin.PostAsJsonAsync("/api/v1/host/updates/stage",new{operationKey="stage-test-1"});
         Assert.Equal(HttpStatusCode.Accepted,response.StatusCode);var body=await response.Content.ReadFromJsonAsync<JsonElement>();
         var id=body.GetProperty("updateId").GetString()!;

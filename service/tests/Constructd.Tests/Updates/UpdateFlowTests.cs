@@ -22,9 +22,9 @@ public sealed class UpdateFlowTests
             using var app=new TestApp(new Dictionary<string,string?>{["Constructd:DatabasePath"]=Path.Combine(root,"db"),["Constructd:ScriptsDir"]=root},
                 s=>s.AddSingleton<IUpdateStager>(sp=>sp.GetRequiredService<PackageStager>()));
             using var admin=await app.CreateUserClientAsync("admin",Role.Admin);
-            var config=app.Service<IHostConfigStore>();await config.SetAsync("updates",HostAdminDefaults.Updates with {RequireSignature=false},"test",default);
+            var config=app.Service<IHostConfigStore>();await config.SetAsync("updates",HostAdminDefaults.Updates,"test",default);
             var source=app.Service<FakeReleaseSource>();
-            var assets=new[]{("manifest.json",JsonSerializer.SerializeToUtf8Bytes(m,UpdateFiles.Json)),("manifest.json.sig",new byte[64]),(m.PayloadAsset,zip)}.Select(a=>{
+            var assets=new[]{("manifest.json",JsonSerializer.SerializeToUtf8Bytes(m,UpdateFiles.Json)),(m.PayloadAsset,zip)}.Select(a=>{
                 var uri=new Uri("https://github.com/permissionBRICK/The-Construct/releases/download/"+m.ReleaseTag+"/"+a.Item1);source.Assets[uri]=a.Item2;return new ReleaseAsset(a.Item1,uri,a.Item2.Length);}).ToArray();
             source.Releases.Add(new(m.ReleaseTag,m.Commit,DateTimeOffset.UtcNow,assets));
             var stage=await admin.PostAsJsonAsync("/api/v1/host/updates/stage",new{operationKey="flow-stage"});Assert.Equal(HttpStatusCode.Accepted,stage.StatusCode);
@@ -62,7 +62,7 @@ public sealed class UpdateFlowTests
     {
         using var app=new TestApp();using var admin=await app.CreateUserClientAsync("admin",Role.Admin);
         using var fixture=new PackageTests();var(m,_)=fixture.Package();var id=new string('a',32);
-        var config=app.Service<IHostConfigStore>();await config.SetAsync("updates",HostAdminDefaults.Updates with{RequireSignature=false},"test",default);
+        var config=app.Service<IHostConfigStore>();await config.SetAsync("updates",HostAdminDefaults.Updates,"test",default);
         var staged=new StagedUpdate(id,m,"stage",[]);app.Service<FakeUpdateStager>().Staged[id]=staged;
         await config.SetAsync("update-staged:"+id,staged,"test",default);
         await app.Service<IHostUpdateStore>().TryStartAsync(UpdateTests.Row(id) with{State=HostUpdateState.HandedOff},default);
@@ -81,7 +81,7 @@ public sealed class UpdateFlowTests
     [Fact] public async Task Resume_immediately_after_abort_is_accepted()
     {
         using var app=new TestApp();using var admin=await app.CreateUserClientAsync("admin",Role.Admin);
-        var config=app.Service<IHostConfigStore>();await config.SetAsync("updates",HostAdminDefaults.Updates with{RequireSignature=false},"test",default);
+        var config=app.Service<IHostConfigStore>();await config.SetAsync("updates",HostAdminDefaults.Updates,"test",default);
         using var fixture=new PackageTests();var(m,_)=fixture.Package();var id=new string('a',32);
         var staged=new StagedUpdate(id,m,"stage",[]);app.Service<FakeUpdateStager>().Staged[id]=staged;await config.SetAsync("update-staged:"+id,staged,"test",default);
         await app.Service<IHostUpdateStore>().TryStartAsync(UpdateTests.Row(id) with{State=HostUpdateState.Interrupted},default);
@@ -96,7 +96,7 @@ public sealed class UpdateFlowTests
     {
         using var app=new TestApp();using var admin=await app.CreateUserClientAsync("admin",Role.Admin);
         using var fixture=new PackageTests();var(m,_)=fixture.Package();var id=new string('a',32);
-        var config=app.Service<IHostConfigStore>();await config.SetAsync("updates",HostAdminDefaults.Updates with{RequireSignature=false},"test",default);
+        var config=app.Service<IHostConfigStore>();await config.SetAsync("updates",HostAdminDefaults.Updates,"test",default);
         var staged=new StagedUpdate(id,m,"stage",[]);app.Service<FakeUpdateStager>().Staged[id]=staged;await config.SetAsync("update-staged:"+id,staged,"test",default);
         await app.Service<IHostUpdateStore>().TryStartAsync(UpdateTests.Row(id),default);
         using var blocker=app.Service<IMaintenanceGate>().TryEnter("iso-build","blocking-job",null);
@@ -108,15 +108,6 @@ public sealed class UpdateFlowTests
         Assert.Equal(HostUpdateState.Cancelled,(await app.Service<IHostUpdateStore>().GetAsync(id,default))!.State);
         Assert.Equal(MaintenanceState.Open,app.Service<IMaintenanceGate>().State);
     }
-    [Fact] public async Task Bootstrap_key_is_seeded_once_and_never_rotates_a_stored_key()
-    {
-        var key=Convert.ToBase64String(new byte[32]);var old=HostAdminDefaults.Updates with{ManifestPublicKey=Convert.ToBase64String(Enumerable.Repeat((byte)1,32).ToArray())};
-        using(var app=new TestApp(new Dictionary<string,string?>{["Constructd:HostAdmin:Updates:ManifestPublicKey"]=key}))
-            Assert.Equal(key,(await app.Service<IHostConfigStore>().GetAsync<UpdatesConfig>("updates",default))!.ManifestPublicKey);
-        var config=new InMemoryHostConfigStore(new MutableClock());await config.SetAsync("updates",old,"owner",default);
-        using var existing=new TestApp(new Dictionary<string,string?>{["Constructd:HostAdmin:Updates:ManifestPublicKey"]=key},s=>s.AddSingleton<IHostConfigStore>(config));
-        Assert.Equal(old,await existing.Service<IHostConfigStore>().GetAsync<UpdatesConfig>("updates",default));
-    }
     [Theory] [InlineData(false)] [InlineData(true)]
     public async Task Closed_pre_replace_interruption_can_be_cancelled_then_a_different_release_staged(bool hasHandoff)
     {
@@ -126,7 +117,7 @@ public sealed class UpdateFlowTests
         {
             using var app=new TestApp(new Dictionary<string,string?>{["Constructd:DatabasePath"]=Path.Combine(root,"db")},s=>s.AddSingleton<IUpdateStager>(sp=>sp.GetRequiredService<PackageStager>()));
             using var admin=await app.CreateUserClientAsync("admin",Role.Admin);
-            await app.Service<IHostConfigStore>().SetAsync("updates",HostAdminDefaults.Updates with{RequireSignature=false},"test",default);
+            await app.Service<IHostConfigStore>().SetAsync("updates",HostAdminDefaults.Updates,"test",default);
             var id=new string('d',32);var old=UpdateTests.Row(id) with{Commit=new string('e',40),State=HostUpdateState.HandedOff};
             await app.Service<IHostUpdateStore>().TryStartAsync(old,default);
             var launcher=app.Service<FakeUpdaterLauncher>();
@@ -138,7 +129,7 @@ public sealed class UpdateFlowTests
             Assert.Equal(HostUpdateState.Cancelled,(await app.Service<IHostUpdateStore>().GetAsync(id,default))!.State);
             Assert.Equal(FenceDisposition.Closed,launcher.Fence!.Disposition);
             var source=app.Service<FakeReleaseSource>();
-            var assets=new[]{("manifest.json",JsonSerializer.SerializeToUtf8Bytes(m,UpdateFiles.Json)),("manifest.json.sig",new byte[64]),(m.PayloadAsset,zip)}.Select(a=>{
+            var assets=new[]{("manifest.json",JsonSerializer.SerializeToUtf8Bytes(m,UpdateFiles.Json)),(m.PayloadAsset,zip)}.Select(a=>{
                 var uri=new Uri("https://github.com/permissionBRICK/The-Construct/releases/download/"+m.ReleaseTag+"/"+a.Item1);source.Assets[uri]=a.Item2;return new ReleaseAsset(a.Item1,uri,a.Item2.Length);}).ToArray();
             source.Releases.Add(new(m.ReleaseTag,m.Commit,DateTimeOffset.UtcNow,assets));
             var response=await admin.PostAsJsonAsync("/api/v1/host/updates/stage",new{releaseTag=m.ReleaseTag});Assert.Equal(HttpStatusCode.Accepted,response.StatusCode);

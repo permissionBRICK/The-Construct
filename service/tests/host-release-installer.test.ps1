@@ -4,26 +4,13 @@ function Assert($Condition,[string]$Message){if(-not $Condition){throw $Message}
 $installer=Join-Path $PSScriptRoot '../host/Install-ConstructHost.ps1'
 $tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseFile($installer,[ref]$tokens,[ref]$errors)
 Assert ($errors.Count -eq 0) 'installer parse errors'
-foreach($name in @('Add-ConstructHostReleaseBootstrap','Sort-ConstructHardeningOrder')) {
+foreach($name in @('Sort-ConstructHardeningOrder')) {
  $fn=$ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true)
  . ([ScriptBlock]::Create($fn.Extent.Text))
 }
 $root=Join-Path ([IO.Path]::GetTempPath()) ('host-install-update-test-'+[Guid]::NewGuid().ToString('n'))
 [IO.Directory]::CreateDirectory((Join-Path $root 'config'))|Out-Null
 try {
- $keyPath=Join-Path $root 'config/host-release.pub';$settings=[ordered]@{Constructd=[ordered]@{Existing='keep'}}
- Add-ConstructHostReleaseBootstrap $settings $root
- Assert (-not $settings.Constructd.Contains('HostAdmin')) 'missing key altered defaults'
- [IO.File]::WriteAllText($keyPath,'');Add-ConstructHostReleaseBootstrap $settings $root
- Assert (-not $settings.Constructd.Contains('HostAdmin')) 'empty key altered defaults'
- $key=[Convert]::ToBase64String((New-Object byte[] 32));[IO.File]::WriteAllText($keyPath,$key)
- $settings.Constructd['HostAdmin']=@{Media=@{RootDir='custom-media'}}
- Add-ConstructHostReleaseBootstrap $settings $root
- Assert ($settings.Constructd.HostAdmin.Updates.ManifestPublicKey -eq $key) 'public key not seeded'
- Assert ($settings.Constructd.HostAdmin.Media.RootDir -eq 'custom-media' -and $settings.Constructd.Existing -eq 'keep') 'unrelated settings overwritten'
- [IO.File]::WriteAllText($keyPath,'bad');$refused=$false
- try {Add-ConstructHostReleaseBootstrap $settings $root}catch{$refused=$true}
- Assert $refused 'malformed key accepted'
  $ScriptsDir=Join-Path $root 'scripts';$PublishDir=Join-Path $ScriptsDir 'service/publish';$DataDir=Join-Path $root 'data/service'
  [IO.Directory]::CreateDirectory($PublishDir)|Out-Null
  $settingsPath=Join-Path $PublishDir 'appsettings.Production.json'

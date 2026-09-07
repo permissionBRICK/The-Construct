@@ -1,5 +1,9 @@
 # Final delivery review — ha/s5-final
 
+> Update 2026-09-07: the owner removed the host-only signing requirement.
+> Current releases use GitHub HTTPS and SHA-256 verification without keys; see
+> [Host releases](../host-release.md). Signing statements below describe the original review.
+
 This closes the Linux implementation review of the integrated host-administration
 candidate. It does not establish Windows/Hyper-V readiness. All host-side execution
 still requires the [field checklist](../field-test-host-admin.md). The frozen

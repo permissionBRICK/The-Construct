@@ -445,7 +445,6 @@
   function renderMaintenance(s) {
     const u = s.maintenanceTab;
     if (!u) return;
-    text("updSigning", u.signingKeyConfigured ? "signing key configured" : "NO SIGNING KEY — updates cannot be verified");
     text("updInstalled", `${u.installed.packageVersion} · ${u.installed.commit} · ${u.installed.source} · ${u.installed.installedAt}${u.installed.previousCommit ? " · previous " + u.installed.previousCommit : ""}`);
     text("updLatest", u.latestKnown ? `${u.latestKnown.packageVersion} · ${u.latestKnown.commit} · published ${u.latestKnown.publishedAt} · checked ${u.latestKnown.checkedAt}` : "not checked yet");
     const cur = u.current;

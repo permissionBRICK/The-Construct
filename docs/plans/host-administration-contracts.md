@@ -1,5 +1,9 @@
 # Host administration contracts (Phase 0 design amendment)
 
+> Owner correction, 2026-09-07: host updates require no signing keys. Sections 11 and
+> 13 reflect the current HTTPS/SHA-256 protocol. Later implementation-history entries
+> mentioning signing describe the superseded design; see [Host releases](../host-release.md).
+
 Status: **frozen contract** for the host-administration and child-VM delivery.
 Date: 2026-09-07 (revision 10 after review). Branch: `ha/s0-contracts`.
 Inputs: [requirements](host-administration-and-child-vms.md),
@@ -64,7 +68,6 @@ Every row is a new choice; each states its rationale and its effect on existing 
 | Shared client forwards ride the **requester's** primary (§8.11) | `via` = requester's primary | host sharing grants no SSH into the owner's primary | none |
 | Guest addresses are untrusted until verified (§12.5) | subnet + adapter-association checks; host exposure refused when unverifiable | KVP values come from an arbitrary guest OS | none |
 | Updater hand-off by one-shot SYSTEM scheduled task (§11.5) | `schtasks` | a child of a stopping service is not guaranteed to survive; a task is | none |
-| Manifest signing key (§11.3) | Ed25519 private key in the `host-release` GitHub environment secret; public key in `config/host-release.pub` and in host config | a signed manifest is the trust root the requirements ask for | the installer seeds the key |
 | `constructd admin db check` (§11.6) | new admin verb | the health check needs a real database open, not a config print | none |
 | ISO-catalog reference counting deferred (§6.6) | catalog keeps `current.pointer` + prune | the catalog is the primary path; touching its retention is out of the zero-change bar | recorded as a limitation |
 | Dynamic memory seam | `ChildHardware.DynamicMemory` reserved, refused by every current backend | keeps the future Proxmox/ballooning input without promising it | none |
@@ -261,11 +264,11 @@ and `MaintenanceMarker` (§13.1).
 | `lifecycle` | `gracefulShutdownTimeoutSeconds: int`, `leaseTickSeconds: int`, `leaseRetrySeconds: int` | `300` (D6), `30`, `600` |
 | `media` | `maxBytes: long`, `maxItemsPerUser: int`, `uploadChunkBytes: int`, `uploadTtlHours: int`, `acquireTimeoutMinutes: int`, `allowHttp: bool`, `unreferencedTtlHours: int?` | `16 GiB`, `20`, `8 MiB`, `24`, `180`, `true` (http only with a checksum, §6.3), `null` (unreferenced media is kept until its owner deletes it) |
 | `network` | `hostForwardsEnabled: bool`, `directAddressReporting: bool` | `true`, `true` |
-| `updates` | `repository: string`, `channel: string`, `drainTimeoutMinutes: int`, `healthTimeoutSeconds: int`, `requireSignature: bool`, `manifestPublicKey: string?` | `"permissionBRICK/The-Construct"`, `"main"`, `60`, `120`, `true`, `null` (no update can be verified until the installer or an admin sets it) |
+| `updates` | `repository: string`, `channel: string`, `drainTimeoutMinutes: int`, `healthTimeoutSeconds: int` | `"permissionBRICK/The-Construct"`, `"main"`, `60`, `120` |
 | `maintenance` | `state`, `updateId?`, `since` — written by the service when it enters draining/maintenance, cleared on reopen | absent = open. The admin CLI reads it (§7.4). |
 
 `ConstructdOptions` gains `HostAdmin` bootstrap values used only when a row is absent
-(`Constructd:HostAdmin:Updates:ManifestPublicKey`, `Constructd:HostAdmin:Capacity:Mode`,
+(`Constructd:HostAdmin:Updates:Repository`, `Constructd:HostAdmin:Capacity:Mode`,
 `Constructd:HostAdmin:Media:RootDir`), so the installer can seed them.
 
 ### 1.6 Token kinds (D4)
@@ -1394,8 +1397,8 @@ their `guest.*` stays unknown and `observed.lastBootAt` is the only boot evidenc
 | Method, path | Auth | Request | Response | Errors |
 |---|---|---|---|---|
 | `GET /host/updates/status` | `Admin` | – | `200 HostUpdateStatusResponse` (persistent, §11.8) | |
-| `POST /host/updates/check` | `Admin`, audited `host.update.check` | `{ releaseTag? }` | synchronous §11.3 steps 1–3: `200 { installed: { commit, packageVersion }, latest: { commit, packageVersion, publishedAt, releaseTag, compatible: bool, reasons: string[] }?, checkedAt }` (`compatible=false` with `reasons` is a `200`) | `502 release-source-unreachable`, `422 unsigned-manifest`, `409 signing-key-missing` |
-| `POST /host/updates/stage` | `Admin`, audited | `{ releaseTag?: string, operationKey? }` (default latest) | `202 { jobId, updateId }`; the job repeats §11.3 steps 1–7 and reports any refusal as the job error with the same code string (`unsigned-manifest`, `unsupported-downgrade`, `incompatible`, `release-source-unreachable`, `payload-hash-mismatch`, `extraction-refused`, `coverage-failed`) and state `stageFailed` | pre-flight HTTP only: `409 update-in-progress`, `409 signing-key-missing` |
+| `POST /host/updates/check` | `Admin`, audited `host.update.check` | `{ releaseTag? }` | synchronous §11.3 steps 1–3: `200 { installed: { commit, packageVersion }, latest: { commit, packageVersion, publishedAt, releaseTag, compatible: bool, reasons: string[] }?, checkedAt }` (`compatible=false` with `reasons` is a `200`) | `502 release-source-unreachable` |
+| `POST /host/updates/stage` | `Admin`, audited | `{ releaseTag?: string, operationKey? }` (default latest) | `202 { jobId, updateId }`; the job repeats §11.3 steps 1–7 and reports any refusal as the job error with the same code string (`unsupported-downgrade`, `incompatible`, `release-source-unreachable`, `payload-hash-mismatch`, `extraction-refused`, `coverage-failed`) and state `stageFailed` | pre-flight HTTP only: `409 update-in-progress` |
 | `POST /host/updates/resolve` | `Admin`, audited `host.update.resolve` | `{ updateId, action: "commit"\|"abort"\|"close" }` — accepted for rows in `interrupted` **or** `recoveryFailed`; `commit` only when the running binary's commit equals `handoff.commit`, the service passes its own health gate (schema migrated, `db check` clean) **and** the installed `service/` + `scripts/` file set hash-verifies against the staged manifest with previously-owned removed files absent (§11.7); `abort` only when `RecoveryRecord.BackupComplete` is true; `close` only when the running binary's commit equals `handoff.previousCommit` and every file of the previous `install.json.files` hashes equal (the installation **is** the old one) — see §11.7 | `200 { state: "resolvedByAdmin", action }` (§11.7 fence) | `409 updater-running`, `409 update-not-resolvable { state }` (row neither `interrupted` nor `recoveryFailed`), `409 update-not-commitable { reason: "wrong-binary"\|"health-failed"\|"backup-incomplete"\|"installation-mixed" }` |
 | `POST /host/updates/apply` | `Admin`, audited | `{ updateId, operationKey? }` | `202 { jobId, updateId }`. Two forms: **fresh apply** of a `staged` row (gated: `503 maintenance` while the gate is not `open`), and **resume** when `updateId` names an `interrupted` row — only that form carries `MaintenanceExempt` (§7.4) and re-launches the updater with `-Resume` after re-verifying the staged package and reading the fence | `409 update-not-staged`, `409 update-in-progress`, `409 update-not-interrupted` (resume form on a row that is not `interrupted`), `409 updater-running`, `503 maintenance` (fresh form only) |
 | `POST /host/updates/cancel` | `Admin`, audited | `{ updateId }` | `200 { state }` | `409 update-not-cancellable` (past hand-off) |
@@ -1429,7 +1432,7 @@ their `guest.*` stays unknown and `observed.lastBootAt` is the only boot evidenc
 | `cascade-confirmation-required`, `cascade-scope-changed` | 409 | `children`, `cascadeToken`, `expiresAt` |
 | `cascade-token-expired` | 409 | |
 | `media-not-ready`, `media-in-use`, `media-limit`, `upload-incomplete`, `upload-not-open`, `upload-expired`, `operation-key-conflict` | 409 | per §6/§7 |
-| `update-in-progress`, `update-not-staged`, `update-not-cancellable`, `update-not-interrupted`, `update-not-resolvable`, `updater-running`, `unsupported-downgrade`, `signing-key-missing` | 409 | `updateId?`, `state?` |
+| `update-in-progress`, `update-not-staged`, `update-not-cancellable`, `update-not-interrupted`, `update-not-resolvable`, `updater-running`, `unsupported-downgrade` | 409 | `updateId?`, `state?` |
 | `update-not-commitable` | 409 | `reason`, `mismatches?` |
 | `vm-state-unknown` | 409 | |
 | `configuration-incomplete` | 409 | none; a current-incarnation configuration intent must be completed before start or a different configuration |
@@ -1439,14 +1442,14 @@ their `guest.*` stays unknown and `observed.lastBootAt` is the only boot evidenc
 | `intent-expired` | 409 | `activationBase`, `lifetime` |
 | `console-session-expired` | 410 | |
 | `media-too-large`, `screenshot-too-large` | 413 | `maxBytes` |
-| `checksum-mismatch`, `not-an-iso`, `unsigned-manifest`, `incompatible` | 422 | `reasons?` |
+| `checksum-mismatch`, `not-an-iso`, `incompatible` | 422 | `reasons?` |
 | `rate-limited` | 429 | `retryAfterSeconds` |
 | `release-source-unreachable` | 502 | |
 | `maintenance` | 503 | `phase`, `retryAfterSeconds`, `updateId?` (+ `Retry-After` header) |
 
 Job-level error strings (in `job.error`, not HTTP codes): `guest-shutdown-unavailable`,
 `shutdown-timeout`, `cancelled`, `drain-timeout`, the `stageFailed` codes of §8.15
-(`unsigned-manifest`, `unsupported-downgrade`, `incompatible`,
+(`unsupported-downgrade`, `incompatible`,
 `release-source-unreachable`, `payload-hash-mismatch`, `extraction-refused`,
 `coverage-failed`), and the safe descriptions of `SafeError`. Implementation: `Problems.Coded(int status, string code, string title,
 string detail, object? extensions = null)` in `Infrastructure/CodedProblems.cs`; existing
@@ -1631,17 +1634,16 @@ New workflow `.github/workflows/host-release.yml`, triggers: `push` to `main` to
 `if: github.ref == 'refs/heads/main'` (a dispatch from any other ref is a no-op job).
 Steps: `dotnet test service/Constructd.sln`; `dotnet publish service/src/Constructd.Api
 -c Release -r win-x64 --self-contained true`; build the payload and `SHA256SUMS`; zip;
-write `manifest.json` (contains the zip hash); sign the manifest with the Ed25519 key from
-the **`host-release` GitHub environment secret** (`HOST_RELEASE_SIGNING_KEY`); `gh
-release create host-<commit40>` with the three assets. Release tag pattern:
-`host-<40-hex commit>`; `latest` = the newest `host-*` release whose signed manifest
-carries `ref = "refs/heads/main"` (the service cannot verify ancestry offline; it trusts
-the signature over `commit` + `ref`, which only the workflow can produce). The ISO tool is
+write `manifest.json` (contains the zip hash); `gh release create host-<commit40>`
+with the two assets. Release tag pattern: `host-<40-hex commit>`; `latest` is the
+newest matching release whose manifest declares `refs/heads/main`. Repository
+authenticity relies on GitHub HTTPS and the configured repository, as in other
+Construct update paths; no signing secret is required. The ISO tool is
 **not** rebuilt (D5); the payload ships `config/iso-builder.json` as is.
 
 ### 11.2 Assets, package layout and manifest (non-circular)
 
-Three release assets:
+Two release assets:
 
 ```
 construct-host-<commit7>-win-x64.zip      the PAYLOAD (never contains the manifest)
@@ -1651,11 +1653,10 @@ construct-host-<commit7>-win-x64.zip      the PAYLOAD (never contains the manife
                                           Provision-AgentVM.ps1, service/host/*.ps1, docs/ (text only)
   updater/Update-ConstructHost.ps1        the independent updater (Windows PowerShell 5.1)
 manifest.json                             DETACHED; hashes the finished zip and its SHA256SUMS
-manifest.json.sig                         Ed25519 signature over the exact bytes of manifest.json
 ```
 
 Order of production: payload files → `SHA256SUMS` → zip → `sha256(zip)`,
-`sha256(SHA256SUMS)` → `manifest.json` → signature. Nothing inside the zip depends on the
+`sha256(SHA256SUMS)` → `manifest.json`. Nothing inside the zip depends on the
 manifest, so the layout is producible and verifiable.
 
 `manifest.json` (`ReleaseManifest` in §13.1):
@@ -1673,22 +1674,15 @@ manifest, so the layout is producible and verifiable.
 
 ### 11.3 Trust root, verification and extraction (service side)
 
-**Signing key (decided here).** The Ed25519 private key lives only in the `host-release`
-GitHub environment secret. The public key is committed as `config/host-release.pub`
-(base64, 32 bytes) and printed by the workflow. `Install-ConstructHost.ps1` reads that
-file from the checkout it installs and seeds `host_config.updates.manifestPublicKey`
-(it never overwrites an existing stored key). Rotation: commit the new public key, then
-an admin runs `PUT /host/config { updates: { manifestPublicKey } }` **before** the first
-release signed with the new key; the package's own `config/host-release.pub` is
-informational and is never used to verify the package that carries it. Without a stored
-key every update route answers `409 signing-key-missing`; `requireSignature=false` is
-honoured only when `Fake=true`.
+**Release source.** Production uses the host-local repository setting and GitHub HTTPS.
+API configuration cannot redirect it. No signing keys, signatures or key distribution
+are required (owner correction, 2026-09-07). SHA-256 checks verify payload integrity.
 
 Verification order — steps 1–3 run synchronously in `POST /host/updates/check` and again,
 with steps 4–7, inside the `host-update` job's `check`/`download`/`verify` phases:
 
 1. Release list from `https://api.github.com/repos/<updates.repository>/releases` over TLS with system roots; only assets of that repository are ever downloaded; the release's tag must match `host-<commit>` and the manifest's `commit`.
-2. Download `manifest.json` and `manifest.json.sig`; verify the signature over the exact manifest bytes with the stored public key → `422 unsigned-manifest` on failure. Check `ref == "refs/heads/main"` and `repository` equals the configured one.
+2. Download and parse `manifest.json`. Check `ref == "refs/heads/main"` and `repository` equals the configured one.
 3. Compatibility: refuse `unsupported-downgrade` when `manifest.database.schemaVersion < installed MinReadableBy` or `manifest.config.settingsSchemaVersion < installed settings MinReadableBy`; refuse `incompatible` when `manifest.compat.minSchemaVersionToUpdateFrom > installed SchemaVersion`, when `manifest.schemaVersion` is unknown to this service, or when a key listed in `manifest.config.requiredKeys` is absent from `appsettings.Production.json` (reported in `reasons`); free space ≥ 2 × payload size + 1 GiB on both the service and data volumes. **Configuration policy (D5, decided here):** `appsettings.Production.json` is never rewritten by the service or the updater; every new key is optional with a default (`newKeysWithDefaults` is informational); a release that cannot run without a new key declares it in `requiredKeys` and is refused until the admin adds it; `settingsSchemaVersion`/`minReadableBy` follow the database rule (additive only in this delivery, `Breaking` refused by review), so rollback never needs a config restore — the file is untouched. (`check` answers these as HTTP problems / `compatible=false`; the `stage` job records them as `stageFailed` with the same code, §8.15.)
 4. Download the payload to `updates\<updateId>\package.zip`; `sha256(zip) == payloadSha256`.
 5. Extract with validation: every entry path is relative, contains no `..`, no drive or root, no symlink/reparse entries, total extracted size ≤ 4 × zip size, entry count ≤ 20 000; anything else aborts.
@@ -1798,7 +1792,7 @@ string is ever interpreted):
 updater-running` when a live updater holds it — a merely slow updater therefore cannot be
 raced), checks the action's precondition — `commit`: the running binary's commit equals
 `handoff.commit`, the service passes its own health gate (migrated schema, `db check`
-clean), **and the installed file set verifies against the staged signed manifest**: every
+clean), **and the installed file set verifies against the staged manifest**: every
 `service/*` and `scripts/*` file of `verified.json.files` exists at its target path with
 its `SHA256SUMS` hash, and every file of the previous `install.json.files` that is not in
 the new list is absent — preserved paths (`appsettings.Production.json`, `*.db*`,
@@ -1849,8 +1843,7 @@ HostUpdateStatusResponse {
               started, finished?, error?, blockingJobs: [] },
   history: [ …last 10 rows… ],
   recoveryRecord?: last-update.json contents when its outcome is not succeeded,
-  latestKnown?: { commit, packageVersion, publishedAt, checkedAt },
-  signingKeyConfigured: bool }
+  latestKnown?: { commit, packageVersion, publishedAt, checkedAt } }
 ```
 
 `HostUpdateState` = `checking, staged, stageFailed, draining, handedOff, applying,
@@ -2114,7 +2107,7 @@ namespace Constructd.Core.Domain
     public sealed record LifecycleConfig(int GracefulShutdownTimeoutSeconds, int LeaseTickSeconds, int LeaseRetrySeconds);
     public sealed record MediaConfig(long MaxBytes, int MaxItemsPerUser, int UploadChunkBytes, int UploadTtlHours, int AcquireTimeoutMinutes, bool AllowHttp, int? UnreferencedTtlHours);
     public sealed record NetworkConfig(bool HostForwardsEnabled, bool DirectAddressReporting);
-    public sealed record UpdatesConfig(string Repository, string Channel, int DrainTimeoutMinutes, int HealthTimeoutSeconds, bool RequireSignature, string? ManifestPublicKey);
+    public sealed record UpdatesConfig(string Repository, string Channel, int DrainTimeoutMinutes, int HealthTimeoutSeconds);
     public sealed record MaintenanceMarker(MaintenanceState State, string? UpdateId, DateTimeOffset Since);
 
     // ---- Constructd.Core/Domain/MediaItem.cs --------------------------------------------
@@ -2888,7 +2881,7 @@ that claim; `UserClaimsTransformation` gains the `Enabled` check;
 | **Capacity** | `Core/Abstractions/{ICapacityLedger, IHypervisorInventory}.cs`; `Core/Logic/{CapacityMath, ReservationRules}.cs`; `Core/Services/CapacityReconciler.cs`; `Sqlite/Migrations/M300_CapacityLedger.cs`; `Sqlite/SqliteCapacityLedger.cs`; `Windows/HyperV/HyperVInventory.cs` + the `Get-ConstructHostInventory` function in `drivers/hyperv-local/HyperVLocal.ChildVm.ps1` (section marked `# capacity`); `Api/Endpoints/CapacityEndpoints.cs` (`/host/capacity`); `Api/Hosting/CapacityReconciliationService.cs`; `Composition/CapacityComposition.cs`; `Fakes/{InMemoryCapacityLedger, FakeHypervisorInventory}.cs`; tests `Tests/Capacity/*` | `Program.cs`, `SqliteMigrations.All`, `HostAdminComposition.cs`; call sites in `DelegationEndpoints`/`ChildLifecycleJobs`/`VmEndpoints`/`VmJobs` are **written by the integrator against the fake ledger**, so the capacity pair never edits them |
 | **Child-VM driver + jobs** | `Core/Abstractions/{IChildVmDriver, IOperationKeyStore, IPersistedJobRunner}.cs`; `Core/Logic/{HardwarePresets, BootOrderRules, OperationFingerprint}.cs`; `Windows/HyperV/{HyperVChildDriver, HyperVChildScript}.cs`; `drivers/hyperv-local/HyperVLocal.ChildVm.ps1` (create/remove/hardware/media/graceful shutdown/capabilities/VM id; the `# capacity` and `# network` sections belong to those pairs); `drivers/Load-ConstructDriver.ps1` `-Include` switch; `Api/Jobs/{ChildCreateJob, ChildDeleteJob}.cs`; `Sqlite/Migrations/M400_JobOperationKeys.cs`; `Sqlite/SqliteOperationKeyStore.cs`; `Core/Services/InProcessJobEngine.cs` (phase, operation keys, gate handle — additive), `Core/Abstractions/IJobEngine.cs` (overload + `SetPhaseAsync`); `Fakes/{FakeChildVmDriver, InMemoryOperationKeyStore}.cs`; tests `Tests/Windows/HyperVChildDriverTests.cs`, `Tests/Jobs/*`, `test/driver-contract.test.ps1` additions | `SqliteMigrations.All`; `HostAdminComposition.cs`; `Api/Endpoints/JobEndpoints.cs` only through the integrator |
 | **Console** | `Core/Abstractions/{IConsoleTransport, IConsoleSessionStore}.cs`; `Core/Logic/{Rgb565Png (pure), ConsoleSessionRules}.cs`; `Windows/Console/{HyperVConsoleTransport, HyperVConsoleScript}.cs` (self-contained WMI scripts, stdin payload for text); `Api/Endpoints/ConsoleEndpoints.cs`; `Api/Contracts/ConsoleContracts.cs`; `Composition/ConsoleComposition.cs`; `Fakes/{FakeConsoleTransport, InMemoryConsoleSessionStore}.cs`; tests `Tests/Console/*` (PNG conversion pinned with the feasibility fixtures' layout: 4-byte big-endian length prefix + RGB565) | `Program.cs`, `HostAdminComposition.cs` |
-| **Host release + updater** | `.github/workflows/host-release.yml`; `config/host-release.pub`; `service/host/{Update-ConstructHost.ps1, New-ConstructHostPackage.ps1}`; `Core/Abstractions/{IMaintenanceGate, IReleaseSource, IUpdateStager, IUpdaterLauncher, IHostUpdateStore, IHostLock}.cs`; `Windows/Updates/FileHostLock.cs`; `Api/Auth/UpdateHandoffAuthenticationHandler.cs` (loopback-only `UpdateHandoff` scheme, active only inside the update window); `Core/Logic/{ManifestRules, UpdateCompatibility, ZipEntryRules}.cs`; `Core/Services/InMemoryMaintenanceGate.cs`; `Sqlite/Migrations/M600_HostUpdates.cs`; `Sqlite/SqliteHostUpdateStore.cs`; `Windows/Updates/{GitHubReleaseSource, PackageStager, ScheduledTaskUpdaterLauncher, Ed25519Verifier}.cs`; `Api/Endpoints/UpdateEndpoints.cs`; `Api/Jobs/HostUpdateJob.cs`; `Api/Infrastructure/MaintenanceFilter.cs`; `Api/Admin/AdminDbCheck.cs` (`admin db check`); `Composition/UpdateComposition.cs`; `Fakes/*` for the five interfaces; tests `Tests/Updates/*`, `service/tests/host-updater.test.ps1`; installer changes (`-AclOnly`, `install.json`, `updates.manifestPublicKey`, media root block from the media pair, maintenance-marker check in `AdminCli`) | `Program.cs`, `SqliteMigrations.All`, `HostAdminComposition.cs`, `InProcessJobEngine.SubmitAsync` (gate handle — agreed with the child-jobs pair), `Install-ConstructHost.ps1` (sections marked), `Api/Admin/AdminCli.cs` (one verb + one marker check) |
+| **Host release + updater** | `.github/workflows/host-release.yml`; `service/host/{Update-ConstructHost.ps1, New-ConstructHostPackage.ps1}`; `Core/Abstractions/{IMaintenanceGate, IReleaseSource, IUpdateStager, IUpdaterLauncher, IHostUpdateStore, IHostLock}.cs`; `Windows/Updates/FileHostLock.cs`; `Api/Auth/UpdateHandoffAuthenticationHandler.cs` (loopback-only `UpdateHandoff` scheme, active only inside the update window); `Core/Logic/{ManifestRules, UpdateCompatibility, ZipEntryRules}.cs`; `Core/Services/InMemoryMaintenanceGate.cs`; `Sqlite/Migrations/M600_HostUpdates.cs`; `Sqlite/SqliteHostUpdateStore.cs`; `Windows/Updates/{GitHubReleaseSource, PackageStager, ScheduledTaskUpdaterLauncher}.cs`; `Api/Endpoints/UpdateEndpoints.cs`; `Api/Jobs/HostUpdateJob.cs`; `Api/Infrastructure/MaintenanceFilter.cs`; `Api/Admin/AdminDbCheck.cs` (`admin db check`); `Composition/UpdateComposition.cs`; `Fakes/*` for the five interfaces; tests `Tests/Updates/*`, `service/tests/host-updater.test.ps1`; installer changes (`-AclOnly`, `install.json`, media root block from the media pair, maintenance-marker check in `AdminCli`) | `Program.cs`, `SqliteMigrations.All`, `HostAdminComposition.cs`, `InProcessJobEngine.SubmitAsync` (gate handle — agreed with the child-jobs pair), `Install-ConstructHost.ps1` (sections marked), `Api/Admin/AdminCli.cs` (one verb + one marker check) |
 | **Extension** | `extension/src/hostadmin.js`, `extension/media/hostadmin.*`, `extension/test/hostadmin.test.js`; additive helpers in `extension/src/remotehost.js` and `extension/src/drivers/hyperv-remote.js`; the `destination` branch in `extension/src/forwarder.js`; panel children rows in `extension/media/panel.js` (guarded by feature flag) | `extension/extension.js` (one registration block), `extension/package.json` (commands/menus), `extension/ARCHITECTURE.md` (new section) |
 | **Guest CLI** | `bin/construct-vm.sh`, `test/construct-vm.test.sh` (bash, fake `curl`), `docs/child-vms.md` (user guide) | `bin/construct` (`vm)` case + usage text), `bin/provision.sh` (guest-report post, one function; `CONSTRUCT_PROVISION_EVENT`), `Provision-AgentVM.ps1` (`-RotateVmToken`, one block; attempt report), `docs/expose.md` (cross-link) |
 | **Network** | `Core/Abstractions/{IGuestAddressProvider, IAccessExposure, INetworkPolicyReconciler, IHostNetworkPolicy}.cs`; `Core/Domain/ForwardDestination.cs`; `Core/Logic/{ForwardRelationshipRules, GuestAddressRules}.cs`; `Core/Services/NoIsolationNetworkPolicy.cs`; `Sqlite/Migrations/M700_NetworkPolicy.cs`; `Sqlite/SqliteNetworkRuleStore.cs`; `Windows/Network/HyperVGuestAddressProvider.cs` + `Get-ConstructVmAddresses` in `HyperVLocal.ChildVm.ps1` (section `# network`); `Api/Auth/ForwardRequesterHandler.cs`; `Api/Endpoints/NetworkEndpoints.cs` (`/addresses`); `Api/Contracts/NetworkContracts.cs`; `Composition/NetworkComposition.cs`; `Fakes/{FakeGuestAddressProvider, InMemoryAccessExposure}.cs`; tests | `Program.cs`, `SqliteMigrations.All`, `HostAdminComposition.cs`, `Api/Endpoints/ForwardEndpoints.cs` (policy name swap on the three routes, `via`, `?via=`; the **only** pair allowed to edit this file), `Sqlite/SqliteForwardStore.cs` (new columns), `Windows/Forwards/NetshPortForwardManager.cs` (connect address from the destination, one branch), `Api/Hosting/ForwardReconciliationService.cs` (address re-validation call, one line) |
@@ -2911,7 +2904,7 @@ Shared touchpoints and their owners:
 | `drivers/hyperv-local/HyperVLocal.ChildVm.ps1` | sections `# childvm`, `# capacity`, `# network` | child-vm pair owns the file; the other two own their marked sections |
 | `drivers/Load-ConstructDriver.ps1` | `-Include` switch | child-vm pair |
 | `bin/construct`, `bin/provision.sh`, `Provision-AgentVM.ps1` | `vm)` case, guest-report post, `-RotateVmToken` | guest CLI pair |
-| `service/host/Install-ConstructHost.ps1`, `Api/Admin/AdminCli.cs` | `-AclOnly`, `install.json`, `Media:RootDir`, `updates.manifestPublicKey`, `db check`, maintenance marker | updater pair (media pair supplies its block) |
+| `service/host/Install-ConstructHost.ps1`, `Api/Admin/AdminCli.cs` | `-AclOnly`, `install.json`, `Media:RootDir`, `db check`, maintenance marker | updater pair (media pair supplies its block) |
 | `Api/Hosting/ForwardReconciliationService.cs` | address re-validation call | network pair |
 | `extension/extension.js`, `extension/package.json` | one registration block | extension pair |
 
@@ -2938,7 +2931,7 @@ suite); no secret in any log, exception, argument, job result or test output.
 | **S7 network** | §12 | primary-target forwards for owner/admin/the VM's own token take the existing path and serialize byte-identically (snapshot of request and response shapes for all three principals; `via`/`connectPort` on a primary → 400); relationship resolution order for children pinned; child cannot self-forward (no credential path exists); host target refused when either switch is off, also via parent and via shared; `via` must be owned by the requester; ack only by `via`'s owner; two shared consumers get separate rows and acks; address rules of §12.5 with fixtures: host forward to a child ⇒ `address-unverifiable` always; `destination.verified` serialized `false`; per-VM `network.hostForward` is `unsupported` for a child and `supported` for a primary; a `GuestSubnet` with an overlapping CIDR on another switch never matches; client tunnel with a KVP address ⇒ recorded with `verified: false`; a child reporting another managed VM's address (same MAC or not) ⇒ conflict, neither usable; wrong switch / overlapping subnet on another switch ⇒ not matched; host address / link-local ⇒ refused; primary host forwards unchanged; re-validation on reconciliation flips a stale forward to error; destination on child-target forwards, omitted for every primary-target forward (serialized-bytes test with the expose parser); `?via=` listing; addresses route; `NoIsolationNetworkPolicy` reports `none`, never `enforced`; netsh argv pinned with the verified connect address; extension forwarder tunnels through `via` (unit test with fake spawn) |
 | **S8 extension** | §10 | node tests: state machine for every row of §10.3, admin module absent for local and for `role=user`, host switching re-resolves identity, old-service detection by 404, maintenance banner, cascade dialog content lists children and shared flags and expiry, child rows offer exactly Shut down and Delete, Shut down sends `lifecycle shutdown` (never `power save`), Media tab shows the ISO catalog projection, no guest update/provision/reinstall action in the module (snapshot test of the command list); `ui-smoke.js` green |
 | **S9 guest CLI** | §9 | `test/construct-vm.test.sh` with a fake `curl`: identity gate (legacy → exit 9), every command's request shape (including attach/detach/hardware), create waits for media readiness and derives sub-keys, JSON pass-through, NDJSON progress, exit-code table, `--yes` gating on non-TTY, operation-id reuse on retry and conflict handling, token never in argv, console text only from stdin/file (fake curl asserts `-H @file` and no text in argv); `remote-e2e.test.sh` extended with a child create/list/shutdown/delete round trip against the fake service |
-| **S10 host release + updater** | §11 | workflow file validated (actionlint or schema check in tests) including the `main`-ref guard; `New-ConstructHostPackage.ps1` produces a payload whose SHA256SUMS covers every file and a detached manifest whose hashes match (pwsh test); `Update-ConstructHost.ps1` tested under pwsh with a fake service directory, the **documented nested layout** (`ScriptsDir=C:\Construct`, `PublishDir=C:\Construct\service\publish`) and a stub `Start-Service`/`Stop-Service`/`schtasks` layer: phases, list-based replace never touching publish/data/media/tools/keys, deletion of removed files only, backup reuse on resume, health loop, rollback with and without DB restore per manifest, `recoveryFailed` leaves the backup intact, record written at every phase; service tests: manifest signature/hash tampering refused, extraction rules, downgrade/compat rules exactly as §11.3 step 3, `signing-key-missing`, drain gate refuses gated kinds and chunk writes with `503 maintenance`, admits nothing behind the zero-handle check (interleaving test), lets ungated ones through, maintenance freezes every mutation, hand-off order (row and file before task), startup rules for old/new binary, a dead updater leaves the new binary in `maintenance` until `resolve`, `resolve` refused while a paused updater holds `updater.lock` (race test with a held lock) and a fenced `-Resume` refuses to roll back, backup-complete marker (interruption during backup before replace ⇒ rebuilt; after `ReplaceStarted` with an incomplete backup ⇒ `recoveryFailed`), `admin.lock` held by a running admin CLI operation blocks drain until released or the drain times out (race test), the full service→updater lock sequence of §7.4 with two fake processes (service releases at hand-off, updater acquires before stop, `db check` runs read-only without the lock while the updater holds it), the startup/fence table of §11.7 row by row (old binary restarted during backup with a live updater stays in maintenance; with a dead updater writes a `closed` fence and reopens, after which `-Resume -Rollback` is refused as `superseded` and the stale backup is discarded; a `commitOnly` fence survives a service restart with the gate open and takes precedence over an earlier `recoveryFailed` outcome; `commit` on the old binary over a partially replaced tree is refused `update-not-commitable`; `commit` on the new executable with an old child-driver script (or a stale updater script) passes HTTP/DB health but is refused `installation-mixed` until repaired, and succeeds after the file set verifies; `close` succeeds only when the previous file list hashes verify; `recoveryFailed` → repair → `resolve` → restart stays open; resolve-abort → completed rollback (terminal outcome written, fence retired to `closed`) → new writes → a later `-Resume -Rollback` exits `already-terminal` and restores nothing; a crash between writing the terminal outcome and retiring the fence converges to open on the verified old binary at the next start; a resumption after `succeeded` is a no-op; new binary with a dead updater stays in maintenance; `resolve` and the resume form of `apply` pass the real maintenance filter while a fresh `apply` and every other mutation get 503), the loopback `UpdateHandoff` handshake returns the full health body without a bootstrap token, satisfies no other policy and is refused off-loopback or outside the window, config `requiredKeys` refusal, `TryStartAsync` serialization, `admin db check` opens the database |
+| **S10 host release + updater** | §11 | workflow file validated (actionlint or schema check in tests) including the `main`-ref guard; `New-ConstructHostPackage.ps1` produces a payload whose SHA256SUMS covers every file and a detached manifest whose hashes match (pwsh test); `Update-ConstructHost.ps1` tested under pwsh with a fake service directory, the **documented nested layout** (`ScriptsDir=C:\Construct`, `PublishDir=C:\Construct\service\publish`) and a stub `Start-Service`/`Stop-Service`/`schtasks` layer: phases, list-based replace never touching publish/data/media/tools/keys, deletion of removed files only, backup reuse on resume, health loop, rollback with and without DB restore per manifest, `recoveryFailed` leaves the backup intact, record written at every phase; service tests: manifest signature/hash tampering refused, extraction rules, downgrade/compat rules exactly as §11.3 step 3, drain gate refuses gated kinds and chunk writes with `503 maintenance`, admits nothing behind the zero-handle check (interleaving test), lets ungated ones through, maintenance freezes every mutation, hand-off order (row and file before task), startup rules for old/new binary, a dead updater leaves the new binary in `maintenance` until `resolve`, `resolve` refused while a paused updater holds `updater.lock` (race test with a held lock) and a fenced `-Resume` refuses to roll back, backup-complete marker (interruption during backup before replace ⇒ rebuilt; after `ReplaceStarted` with an incomplete backup ⇒ `recoveryFailed`), `admin.lock` held by a running admin CLI operation blocks drain until released or the drain times out (race test), the full service→updater lock sequence of §7.4 with two fake processes (service releases at hand-off, updater acquires before stop, `db check` runs read-only without the lock while the updater holds it), the startup/fence table of §11.7 row by row (old binary restarted during backup with a live updater stays in maintenance; with a dead updater writes a `closed` fence and reopens, after which `-Resume -Rollback` is refused as `superseded` and the stale backup is discarded; a `commitOnly` fence survives a service restart with the gate open and takes precedence over an earlier `recoveryFailed` outcome; `commit` on the old binary over a partially replaced tree is refused `update-not-commitable`; `commit` on the new executable with an old child-driver script (or a stale updater script) passes HTTP/DB health but is refused `installation-mixed` until repaired, and succeeds after the file set verifies; `close` succeeds only when the previous file list hashes verify; `recoveryFailed` → repair → `resolve` → restart stays open; resolve-abort → completed rollback (terminal outcome written, fence retired to `closed`) → new writes → a later `-Resume -Rollback` exits `already-terminal` and restores nothing; a crash between writing the terminal outcome and retiring the fence converges to open on the verified old binary at the next start; a resumption after `succeeded` is a no-op; new binary with a dead updater stays in maintenance; `resolve` and the resume form of `apply` pass the real maintenance filter while a fresh `apply` and every other mutation get 503), the loopback `UpdateHandoff` handshake returns the full health body without a bootstrap token, satisfies no other policy and is refused off-loopback or outside the window, config `requiredKeys` refusal, `TryStartAsync` serialization, `admin db check` opens the database |
 | **S11 integration** | all | `remote-e2e.test.sh` full round trip; route inventory and audit coverage tests cover every route of §8; `dotnet build` 0/0; all pwsh/bash/node suites green; docs updated (`service/README.md`, `docs/remote-host.md`, `docs/drivers.md`, `docs/expose.md`, `extension/ARCHITECTURE.md`, new `docs/child-vms.md`, `docs/host-updates.md`); the field-test checklist below handed to the owner |
 
 ### 14.2 Documented limitations (this delivery)
@@ -2963,7 +2956,7 @@ suite); no secret in any log, exception, argument, job result or test output.
 | Client forwards to a child require a guest-reported address reachable from the requester's primary | tunnel via `via` | forward `status: error` until an address is reported |
 | No media content download; auxiliary contents never leave the host | secrets in answer files | §6.2 |
 | UDF-only ISOs accepted only with a checksum | signature check limits | `not-an-iso` |
-| Updates require a signed manifest and a stored public key; unsigned only in fake mode; main ancestry is trusted through the signed `ref`, not verified offline | trust | `unsigned-manifest`, `signing-key-missing` |
+| Updates use the host-local GitHub repository over HTTPS, with manifest identity and SHA-256 payload checks; no signing configuration | trust | `payload-hash-mismatch`, `coverage-failed` |
 | The updater's scheduled-task hand-off, list-based replacement and rollback are tested with stubs under pwsh, not on Windows | D3 | field test items 13–14 |
 | Child destination addresses are never verified on Hyper-V: host forwards to children are refused and client tunnels to children carry `verified: false` (a spoofing child on the same switch could receive the tunnel) | no IP allocation authority | §12.5, `network.addressVerification = unsupported`, CLI warning |
 | An update that ends `interrupted` keeps the host in maintenance until an admin resolves it (except the old-binary-before-replace case, which fences and reopens itself) | fencing over availability | §11.7 |
@@ -3802,7 +3795,7 @@ commits beyond the base; neither was skipped. The handover moves only the local
   zero package references.
 
 The merged increment adds bounded console sessions/screenshots/keyboard/mouse,
-plus signed host release packaging, persistent update API/jobs, maintenance and
+plus host release packaging, persistent update API/jobs, maintenance and
 recovery gates, and the independent PowerShell updater with verified rollback.
 
 ### Defects and limitations
@@ -3815,7 +3808,7 @@ pending-work list is superseded. Console session entries are denied by deletion
 fences, but physical removal at fence time still awaits the lifecycle hook; they
 expire within 60 seconds as documented by the console branch.
 
-The production signing public key remains intentionally empty, so signed release
+The production signing public key remains intentionally empty, so release
 publishing and production update mutations require the owner's trust root.
 First host rollout remains manual. This integration made no Windows-host probe,
 service change or Hyper-V test. LocalSystem console execution, actual Windows
