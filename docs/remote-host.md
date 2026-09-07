@@ -568,7 +568,11 @@ enrolled host when there are several), the **⚙ Host** button in the control pa
 (shown only when the active instance's host says you are an admin), or the *Host
 administration: `<host>`* row in *Switch Instance*. Enrolment is enough — you do not need
 a VM on the host yet; the Overview offers **Create first Construct VM here**, which is
-the ordinary *New VM on Remote Host* flow with the host preselected.
+the ordinary *New VM on Remote Host* flow with the host preselected. Hosts already
+configured in the local VM registry are also discovered, including VMs created by
+`Auto-Install.ps1`; they do not need a second **Add Remote Host** enrollment. The
+existing certificate pin and authentication mode are reused, and admin status is
+checked against the host.
 
 **What it shows.** Overview (service version, health, capacity bars with the
 `observe`/`enforce` badge, maintenance state, active jobs, overdue leases, unmanaged
