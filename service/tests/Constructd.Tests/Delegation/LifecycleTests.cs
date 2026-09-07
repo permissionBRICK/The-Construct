@@ -177,7 +177,7 @@ public sealed class LifecycleTests
         Assert.Equal(HttpStatusCode.Forbidden, (await bob.PostAsJsonAsync("/api/v1/vms/child/lifecycle", new { action = "save" })).StatusCode);
     }
     [Fact]
-    public async Task FailedStartCanBeSupersededByANewOperationWithoutDuplicateRuntime()
+    public async Task FailedStartIsCompletedAndANewOperationDoesNotDuplicateRuntime()
     {
         await using var app = new TestApp(); using var client = await Setup(app, false);
         app.Driver.PowerFailure = new InvalidOperationException("private failure");
@@ -186,7 +186,7 @@ public sealed class LifecycleTests
         app.Driver.PowerFailure = null;
         (await client.PostAsJsonAsync("/api/v1/vms/child/lifecycle", new { action = "start", lifetime = "20m", operationKey = "second-attempt" })).EnsureSuccessStatusCode();
         var old = await client.PostAsJsonAsync("/api/v1/vms/child/lifecycle", new { action = "start", lifetime = "10m", operationKey = "first-attempt" });
-        Assert.Contains("superseded", await old.Content.ReadAsStringAsync());
+        Assert.Contains("start-failed", await old.Content.ReadAsStringAsync());
         var rows = (await app.Service<ICapacityLedger>().SnapshotAsync(false, default)).Reservations;
         Assert.Single(rows, r => r.Resource == ReservationResource.Ram); Assert.Single(rows, r => r.Resource == ReservationResource.Cpu);
     }

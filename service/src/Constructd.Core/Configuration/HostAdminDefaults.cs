@@ -19,5 +19,5 @@ public sealed class HostAdminOptions
     public HostAdminMediaOptions Media { get; set; } = new();
 }
 public sealed class HostAdminCapacityOptions { public CapacityMode Mode { get; set; } = CapacityMode.Observe; }
-public sealed class HostAdminUpdatesOptions { public string? ManifestPublicKey { get; set; } }
+public sealed class HostAdminUpdatesOptions { public string? ManifestPublicKey { get; set; } public string? Repository { get; set; } }
 public sealed class HostAdminMediaOptions { public string? RootDir { get; set; } }

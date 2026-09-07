@@ -68,6 +68,7 @@ public sealed class SqliteDatabase
     public void EnsureCreated()
     {
         using var connection = Open();
+        Migrations.SqliteMigrationRunner.CheckCompatibility(connection);
         using var command = connection.CreateCommand();
         command.CommandText = """
             CREATE TABLE IF NOT EXISTS users (

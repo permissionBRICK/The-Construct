@@ -2353,7 +2353,7 @@ $tokenCleanup = ""
 if ($VmTokenB64) {
     $vmTokenRemotePath = "/tmp/.construct-vm-token.$([guid]::NewGuid().ToString('N'))"
     if (-not (Send-GuestSecret -Content $VmTokenB64 -RemotePath $vmTokenRemotePath)) {
-        throw "Could not hand the VM's host-service token to the guest. Nothing was provisioned."
+        throw "Could not hand the VM's host-service token to the guest. Re-run Provision-AgentVM.ps1 -InstanceName $InstanceName -RotateVmToken to restore its credential."
     }
     # Double quotes so the substitution happens IN THE GUEST; the path is a literal this
     # script generated, so there is nothing to inject through it.

@@ -163,7 +163,7 @@ public static class VmEndpoints
         if (initial is null) return Problems.NotFound("Unknown VM.");
         var policy = initial.Kind == VmKind.Child ? Policies.ChildOwnerOrAdmin : Policies.VmOwnerOrAdmin;
         if (!(await authorization.AuthorizeAsync(http.User, initial, policy)).Succeeded) return LifecycleEndpoints.Problem("not-owner", 403);
-        await using var handle = await gate.TryAcquireAsync(name, http.TraceIdentifier, cancellationToken);
+        await using var handle = await PrimaryOperationGate.AcquireAsync(gate, name, http.TraceIdentifier, cancellationToken);
         if (handle is null)
         {
             var latest = await repository.GetAsync(name, cancellationToken);
@@ -220,7 +220,7 @@ public static class VmEndpoints
 
         var services = http.RequestServices;
         var vmGate = services.GetRequiredService<IVmOperationGate>();
-        await using var held = await vmGate.TryAcquireAsync(vm.Name, http.TraceIdentifier, cancellationToken);
+        await using var held = await PrimaryOperationGate.AcquireAsync(vmGate, vm.Name, http.TraceIdentifier, cancellationToken);
         if (held is null) { vmGate.IsHeld(vm.Name, out var operation); return LifecycleEndpoints.Busy(operation); }
         vm = (await repository.GetAsync(vm.Name, cancellationToken))!;
         if (vm is null) return Problems.NotFound("Unknown VM.");

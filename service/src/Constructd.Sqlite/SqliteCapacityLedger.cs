@@ -32,7 +32,7 @@ public sealed partial class SqliteCapacityLedger(SqliteDatabase database, IClock
             if (admission || refresh) using (var read = database.Open())
             {
                 var config = Config(read, null);
-                if (refresh || _invalidated || _snapshot is null || _clock.UtcNow - _readAt >= TimeSpan.FromSeconds(config.ReconcileSeconds))
+                if (refresh || config.Mode == CapacityMode.Enforce && (_invalidated || _snapshot is null || _clock.UtcNow - _readAt >= TimeSpan.FromSeconds(config.ReconcileSeconds)))
                 {
                     try { _snapshot = await inventory.ReadAsync(ReadRows(read, null), ct); }
                     catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -147,21 +147,24 @@ public sealed partial class SqliteCapacityLedger(SqliteDatabase database, IClock
         // Only primary-create admission calls this, after proving the registry name was absent.
         // A failed create may leave a disk hold after its unchanged registry rollback. Reuse that
         // liability for the same owner/path; never take it from a live job or shrink unknown storage.
-        internal void AdoptAbandonedPrimaryStorage(ReservationRequest request)
+        internal ReservationRequest AdoptAbandonedPrimaryStorage(ReservationRequest request)
         {
             foreach (var row in Rows.Where(r => r.Resource == ReservationResource.Storage && r.OperationId is not null &&
                 Ownership.SameName(r.ScopeOwner, request.Owner) && Ownership.SameName(r.VmName, request.VmName)))
             {
-                if (!request.Lines.Any(l => l.Resource == row.Resource && l.Amount >= row.Amount &&
+                if (!request.Lines.Any(l => l.Resource == row.Resource && (l.Amount >= row.Amount || _ledger.Config(Connection, Sql).Mode == CapacityMode.Observe) &&
                     StringComparer.OrdinalIgnoreCase.Equals(l.Artifact, row.Artifact) && StringComparer.OrdinalIgnoreCase.Equals(l.Volume, row.Volume))) continue;
                 if (_ledger.Operations?.IsAlive(row.OperationId!) == true) continue;
                 using var job = Connection.CreateCommand(); job.Transaction = Sql;
                 job.CommandText = "SELECT COUNT(*) FROM jobs WHERE id=@id AND kind='create-vm' AND state IN ('Failed','Cancelled')";
                 job.With("@id", row.OperationId);
                 if (Convert.ToInt64(job.ExecuteScalar()) != 1) continue;
+                request = request with { Lines = request.Lines.Select(l => l.Resource == row.Resource &&
+                    StringComparer.OrdinalIgnoreCase.Equals(l.Artifact, row.Artifact) ? l with { Amount = Math.Max(l.Amount, row.Amount) } : l).ToArray() };
                 Delete(row.Id);
                 Audit("capacity.adopt", request.Owner, request.VmName!, "failed-primary-create");
             }
+            return request;
         }
         public CapacityDecision ReserveInTransaction(ReservationRequest request)
         {

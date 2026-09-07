@@ -86,6 +86,20 @@ try {
     Assert ((Invoke-ConstructHostUpdate $f.path $false $false) -eq 1) 'bad rollback reported success'
     Assert ((Read-UpdateJson $f.record).outcome -eq 'recoveryFailed') 'recovery record missing'
     Assert ((Read-UpdateJson $f.record).manualSteps.Count -gt 0) 'manual recovery instructions missing'
+    # Exercise the actual authorized recovery entry, not just its authority selector.
+    Write-UpdateJson (Join-Path (Split-Path $f.path -Parent) 'fence.json') @{updateId=$f.h.updateId;disposition='rollbackAuthorized'}
+    $script:failAll=$false
+    Assert ((Invoke-ConstructHostUpdate $f.path $true $true) -eq 0) 'authorized rollback resume failed'
+    Assert ((Read-UpdateJson $f.record).outcome -eq 'rolledBack') 'authorized rollback did not reach durable terminal state'
+    Assert ([IO.File]::ReadAllText((Join-Path $f.h.publishDir 'Constructd.Api.exe')) -eq 'old') 'authorized rollback did not retain old binary'
+    $f=New-Fixture 'commit-only';$script:failNew=$false
+    Assert ((Invoke-ConstructHostUpdate $f.path $false $false) -eq 0) 'commit-only fixture apply failed'
+    $r=Read-UpdateJson $f.record;$r.outcome=$null;Write-UpdateJson $f.record $r
+    Write-UpdateJson (Join-Path (Split-Path $f.path -Parent) 'fence.json') @{updateId=$f.h.updateId;disposition='commitOnly'}
+    $before=$script:stops
+    Assert ((Invoke-ConstructHostUpdate $f.path $true $false) -eq 0) 'commit-only resume failed'
+    Assert ($script:stops -eq $before) 'commit-only recovery stopped service'
+    Assert ((Read-UpdateJson $f.record).outcome -eq 'succeeded') 'commit-only recovery did not commit'
     $f=New-Fixture 'bad-manifest';[IO.File]::WriteAllText((Join-Path $f.h.stagedPath 'package.zip'),'tampered');$before=$script:stops
     Assert ((Invoke-ConstructHostUpdate $f.path $false $false) -eq 1) 'bad manifest accepted'
     Assert ($script:stops -eq $before) 'bad manifest stopped service'

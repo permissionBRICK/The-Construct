@@ -15,6 +15,14 @@ public static class SqliteMigrationRunner
                 id INTEGER PRIMARY KEY, name TEXT NOT NULL, breaking INTEGER NOT NULL,
                 applied_at TEXT NOT NULL, applied_by_commit TEXT NOT NULL);
             """);
+        using (var version = connection.CreateCommand())
+        {
+            version.Transaction = transaction;
+            version.CommandText = "SELECT COALESCE(MAX(id),0), COALESCE(MAX(CASE WHEN breaking=1 THEN id END),0) FROM schema_migrations";
+            using var row = version.ExecuteReader(); row.Read();
+            if (row.GetInt32(1) > SqliteMigrations.SchemaVersion)
+                throw new InvalidOperationException("The database requires a newer constructd binary (breaking schema migration).");
+        }
         foreach (var migration in ordered)
         {
             using var probe = connection.CreateCommand();
@@ -32,6 +40,16 @@ public static class SqliteMigrationRunner
             record.ExecuteNonQuery();
         }
         transaction.Commit();
+    }
+
+    internal static void CheckCompatibility(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='schema_migrations'";
+        if (Convert.ToInt64(command.ExecuteScalar()) == 0) return;
+        command.CommandText = "SELECT COALESCE(MAX(id),0) FROM schema_migrations WHERE breaking=1";
+        if (Convert.ToInt64(command.ExecuteScalar()) > SqliteMigrations.SchemaVersion)
+            throw new InvalidOperationException("The database requires a newer constructd binary (breaking schema migration).");
     }
 
     internal static void Execute(SqliteConnection connection, SqliteTransaction transaction, string sql)

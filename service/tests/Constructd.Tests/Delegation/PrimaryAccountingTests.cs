@@ -34,23 +34,25 @@ public sealed class PrimaryAccountingTests
         Assert.Equal(VmState.Off, app.Driver.StateOf("primary"));
     }
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task FailedPrimaryCreateRetryAdoptsExactlyOneOwnDiskLiability(bool sqlite)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task FailedPrimaryCreateRetryAdoptsExactlyOneOwnDiskLiability(bool sqlite, bool smaller)
     {
         var root = Path.Combine(Path.GetTempPath(), "primary-retry-" + Guid.NewGuid().ToString("n")); Directory.CreateDirectory(root);
         try
         {
             await using var app = sqlite ? TestApp.WithSqlite(Path.Combine(root, "state.db")) : new TestApp();
             using var owner = await app.CreateUserClientAsync("alice"); app.Driver.Reachable = false;
-            Assert.Equal(JobState.Failed, (await LifecycleTests.Finish(app, await owner.PostAsJsonAsync("/api/v1/vms", Primary("primary")))).State);
+            Assert.Equal(JobState.Failed, (await LifecycleTests.Finish(app, await owner.PostAsJsonAsync("/api/v1/vms", new { name = "primary", cpu = 1, ramGb = 1, diskGb = smaller ? 16 : 8 }))).State);
             Assert.Null(await app.Vms.GetAsync("primary", default));
             Assert.StartsWith("disk:", Assert.Single((await app.Service<ICapacityLedger>().SnapshotAsync(false, default)).Reservations).Artifact);
             app.Driver.Reachable = true;
-            var retry = await LifecycleTests.Finish(app, await owner.PostAsJsonAsync("/api/v1/vms", Primary("primary")));
+            var retry = await LifecycleTests.Finish(app, await owner.PostAsJsonAsync("/api/v1/vms", new { name = "primary", cpu = 1, ramGb = 1, diskGb = 8 }));
             Assert.Equal(JobState.Succeeded, retry.State);
             var disk = Assert.Single((await app.Service<ICapacityLedger>().SnapshotAsync(false, default)).Reservations, r => r.Artifact?.StartsWith("disk:", StringComparison.Ordinal) == true);
-            Assert.Equal("alice", disk.ScopeOwner); Assert.Equal(retry.Id, disk.OperationId);
+            Assert.Equal("alice", disk.ScopeOwner); Assert.Equal(retry.Id, disk.OperationId); Assert.Equal((smaller ? 16L : 8L) << 30, disk.Amount);
         }
         finally { SqliteConnection.ClearAllPools(); Directory.Delete(root, true); }
     }

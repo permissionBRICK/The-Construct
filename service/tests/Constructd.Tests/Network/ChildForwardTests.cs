@@ -26,6 +26,19 @@ public sealed class ChildForwardTests
         return child;
     }
     [Fact]
+    public async Task SharedForwardProjectionUsesTheSameCaseInsensitiveRequesterAsTheForwardList()
+    {
+        using var app = new TestApp(); using var alice = await app.CreateUserClientAsync("alice"); await alice.CreateVmAsync("parent");
+        await Child(app, sharing: SharingScope.Host);
+        using var bob = await app.CreateUserClientAsync("bob"); await bob.CreateVmAsync("bob-primary");
+        app.Service<FakeGuestAddressProvider>().Adapters["bob-primary"] = [new("id", "nic", "aa", false, "switch")];
+        (await bob.PostJsonAsync("/api/v1/vms/child/forwards", new { vmPort = 80, via = "bob-primary" })).EnsureSuccessStatusCode();
+        using var upper = app.CreateTestIdentityClient("BOB");
+        var vm = await upper.GetFromJsonAsync<JsonElement>("/api/v1/vms/child");
+        Assert.Single(vm.GetProperty("forwards").EnumerateArray());
+        Assert.Single(await (await upper.GetAsync("/api/v1/vms/child/forwards")).ReadAsync<List<ForwardResponse>>());
+    }
+    [Fact]
     public async Task Parent_requests_child_and_owner_lists_acks_removes_without_changing_primary_shape()
     {
         using var app = new TestApp(); using var owner = await app.CreateUserClientAsync("alice");

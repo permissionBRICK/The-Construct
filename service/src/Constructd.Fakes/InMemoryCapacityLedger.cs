@@ -59,20 +59,23 @@ public sealed partial class InMemoryCapacityLedger(IClock clock) : ICapacityLedg
 
         }
     }
-    internal void AdoptAbandonedPrimaryStorage(ReservationRequest request, InMemoryJobStore jobs)
+    internal ReservationRequest AdoptAbandonedPrimaryStorage(ReservationRequest request, InMemoryJobStore jobs)
     {
         lock (InMemoryTransaction.Gate)
         {
             foreach (var row in _reservations.Values.Where(r => r.Resource == ReservationResource.Storage && r.OperationId is not null &&
                 Ownership.SameName(r.ScopeOwner, request.Owner) && Ownership.SameName(r.VmName, request.VmName)).ToArray())
             {
-                if (!request.Lines.Any(l => l.Resource == row.Resource && l.Amount >= row.Amount &&
+                if (!request.Lines.Any(l => l.Resource == row.Resource && (l.Amount >= row.Amount || Mode == CapacityMode.Observe) &&
                     StringComparer.OrdinalIgnoreCase.Equals(l.Artifact, row.Artifact) && StringComparer.OrdinalIgnoreCase.Equals(l.Volume, row.Volume))) continue;
                 if (Operations?.IsAlive(row.OperationId!) == true || jobs.GetAsync(row.OperationId!, default).GetAwaiter().GetResult() is not
                     { Kind: "create-vm", State: JobState.Failed or JobState.Cancelled }) continue;
+                request = request with { Lines = request.Lines.Select(l => l.Resource == row.Resource &&
+                    StringComparer.OrdinalIgnoreCase.Equals(l.Artifact, row.Artifact) ? l with { Amount = Math.Max(l.Amount, row.Amount) } : l).ToArray() };
                 _reservations.Remove(row.Id);
                 Audit?.AppendAsync(new(clock.UtcNow, request.Owner, "capacity.adopt", request.VmName!, AuditOutcome.Success, "failed-primary-create"), default).GetAwaiter().GetResult();
             }
+            return request;
         }
     }
     public Task ConfirmAsync(IReadOnlyList<string> ids, VmState observed, CancellationToken ct)

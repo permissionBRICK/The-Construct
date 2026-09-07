@@ -1,3 +1,4 @@
+using System.Xml.Linq;
 using Constructd.Core.Abstractions;
 using Constructd.Core.Logic;
 namespace Constructd.Windows.Updates;
@@ -32,12 +33,23 @@ public sealed class ScheduledTaskUpdaterLauncher(IProcessRunner runner, IHostLoc
             if (value.Any(c => c < 32 || c == '"')) throw new UpdateException("invalid-update-path");
             return "\"" + value.TrimEnd('\\') + "\"";
         }
-        var command = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File " +
+        var arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File " +
             Quote(Path.Combine(handoff.StagedPath, "extracted", "updater", "Update-ConstructHost.ps1")) + " -Handoff " +
             Quote(Path.Combine(Root, "handoff.json")) + (resume ? " -Resume" : "");
-        // schtasks /TR is a documented executable command-line argument, not shell source.
-        var create = await runner.RunAsync("schtasks.exe", ["/Create", "/TN", "Construct-HostUpdate", "/SC", "ONCE", "/ST",
-            DateTime.Now.AddMinutes(1).ToString("HH:mm"), "/RU", "SYSTEM", "/RL", "HIGHEST", "/F", "/TR", command], null, TimeSpan.FromSeconds(20), null, ct);
+        // XML avoids schtasks' 261-character /TR limit, including resume and long install paths.
+        XNamespace ns = "http://schemas.microsoft.com/windows/2004/02/mit/task";
+        var task = new XDocument(new XElement(ns + "Task", new XAttribute("version", "1.2"),
+            new XElement(ns + "Principals", new XElement(ns + "Principal", new XAttribute("id", "System"),
+                new XElement(ns + "UserId", "S-1-5-18"), new XElement(ns + "LogonType", "ServiceAccount"),
+                new XElement(ns + "RunLevel", "HighestAvailable"))),
+            new XElement(ns + "Settings", new XElement(ns + "MultipleInstancesPolicy", "IgnoreNew"),
+                new XElement(ns + "DisallowStartIfOnBatteries", false), new XElement(ns + "StopIfGoingOnBatteries", false)),
+            new XElement(ns + "Actions", new XAttribute("Context", "System"), new XElement(ns + "Exec",
+                new XElement(ns + "Command", "powershell.exe"), new XElement(ns + "Arguments", arguments)))));
+        var taskPath = Path.Combine(Root, "updater-task.xml");
+        UpdateFiles.NoLinks(taskPath);
+        await File.WriteAllTextAsync(taskPath, task.ToString(), ct);
+        var create = await runner.RunAsync("schtasks.exe", ["/Create", "/TN", "Construct-HostUpdate", "/XML", taskPath, "/F"], null, TimeSpan.FromSeconds(20), null, ct);
         if (!create.Succeeded) throw new UpdateException("updater-launch-failed");
         var run = await runner.RunAsync("schtasks.exe", ["/Run", "/TN", "Construct-HostUpdate"], null, TimeSpan.FromSeconds(20), null, ct);
         if (!run.Succeeded)

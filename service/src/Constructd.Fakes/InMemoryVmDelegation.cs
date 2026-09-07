@@ -185,7 +185,7 @@ public sealed partial class InMemoryVmRepository
         {
             {
                 if (!_vms.TryGetValue(name, out var vm) || vm.Kind != VmKind.Primary || vm.Deleting) return Task.FromResult(false);
-                _vms[name] = vm with { VmTokenHash = hash, TokenKind = kind }; return Task.FromResult(true);
+                _vms[name] = vm with { VmTokenHash = hash, TokenKind = hash is null ? vm.TokenKind : kind }; return Task.FromResult(true);
             }
 
         }

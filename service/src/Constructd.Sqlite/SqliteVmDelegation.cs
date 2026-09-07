@@ -239,7 +239,7 @@ public sealed partial class SqliteVmRepository
     public async Task<bool> SetTokenAsync(string name, string? hash, VmTokenKind kind, CancellationToken ct)
     {
         await using var c = await database.OpenAsync(ct); await using var cmd = c.CreateCommand();
-        cmd.CommandText = "UPDATE vms SET vm_token_hash=@hash,vm_token_kind=@kind WHERE name=@name AND kind='primary' AND deleting=0";
+        cmd.CommandText = "UPDATE vms SET vm_token_hash=@hash,vm_token_kind=CASE WHEN @hash IS NULL THEN vm_token_kind ELSE @kind END WHERE name=@name AND kind='primary' AND deleting=0";
         cmd.With("@name", name).With("@hash", hash).With("@kind", WireJson.Enum(kind)); return await cmd.ExecuteNonQueryAsync(ct) == 1;
     }
 

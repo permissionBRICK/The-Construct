@@ -45,6 +45,7 @@ public sealed class PersistenceFoundationTests : IDisposable
         await vms.UpdateAsync(stale with { State = VmState.Running }, Ct);
         Assert.Null(await tokens.ValidateAsync(original, Ct)); Assert.NotNull(await tokens.ValidateAsync(rotated, Ct));
         Assert.True(await issuer.RevokeVmTokenAsync("parent", Ct));
+        Assert.Equal(VmTokenKind.Primary, (await vms.GetAsync("parent", Ct))!.TokenKind);
         await vms.UpdateAsync(stale with { State = VmState.Off }, Ct);
         Assert.Null(await tokens.ValidateAsync(original, Ct)); Assert.Null(await tokens.ValidateAsync(rotated, Ct));
         Assert.True(await ((IVmDelegationRepository)vms).TryFenceAsync("parent", "deletion", true, Ct));

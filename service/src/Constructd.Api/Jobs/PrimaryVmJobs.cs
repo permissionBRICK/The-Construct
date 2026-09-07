@@ -17,12 +17,18 @@ public sealed class PrimaryVmJobs(IServiceScopeFactory scopes, IVmOperationGate 
             var result = await VmJobs.CreateAsync(scopes, descriptor, admitted.Owner, progress, ct, redownload);
             var vm = await vms.GetAsync(admitted.Name, ct) ?? throw new LifecycleException("vm-deleting");
             var state = await driver.GetStateAsync(vm.Name, ct);
-            var incarnation = await childDriver.GetVmIdAsync(vm.Name, ct);
+            string? incarnation = null;
+            try { incarnation = await childDriver.GetVmIdAsync(vm.Name, ct); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch { /* The existing primary workflow succeeded; identity evidence can be reconciled later. */ }
             if (incarnation is not null) await metadata.UpdateIncarnationAsync(vm.Name, incarnation, ct);
+            var runtime = (await capacity.SnapshotAsync(false, ct)).Reservations.Where(r => reservationIds.Contains(r.Id) && (r.Resource != ReservationResource.Storage || ReservationRules.SavedState(r))).Select(r => r.Id).ToArray();
             var confirmed = await admission.MutateAsync(null, async scope =>
             {
                 if (!await scope.UpdatePowerStateAsync(vm.Name, state, vm.PowerGeneration)) return false;
-                await scope.ConfirmReservationsAsync(reservationIds, state); return true;
+                await scope.ConfirmReservationsAsync(reservationIds, state);
+                if (ReservationRules.Terminal(state)) await scope.ReleaseReservationsAsync(runtime, state, "primary-create-terminal");
+                return true;
             }, ct);
             if (confirmed.Outcome != AdmissionOutcome.Accepted) throw new LifecycleException("power-state-changed");
             return result;

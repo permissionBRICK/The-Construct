@@ -68,7 +68,7 @@ public sealed class InMemoryAdmissionStore(InMemoryVmRepository vms, InMemoryUse
             if (!Done(media.TryAddReferenceAsync(reference, ct))) return Result(AdmissionOutcome.MediaNotReady);
         CapacityDecision? decision = null;
         if (plan.Reservation is { } request)
-        { if (newPrimary && plan.JobToInsert is { Kind: "create-vm" }) capacity.AdoptAbandonedPrimaryStorage(request, jobs);
+        { if (newPrimary && plan.JobToInsert is { Kind: "create-vm" }) request = capacity.AdoptAbandonedPrimaryStorage(request, jobs);
           decision = Done(capacity.TryReserveAsync(request, ct)); if (!decision.Allowed) return Result(AdmissionOutcome.CapacityRefused, capacity: decision); }
         CascadeAcceptance? cascade = null;
         if (plan.CascadeToAccept is { } preview)

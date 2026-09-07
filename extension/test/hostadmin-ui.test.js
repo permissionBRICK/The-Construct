@@ -277,6 +277,7 @@ const lastState = (entry) => [...entry.panel.posted].reverse().find((m) => m.typ
     eq("secrets: Copy puts it on the clipboard", t.vscode.rec.clipboard[0], "PLAINTEXT-ONE");
     await entry.panel.send({ type: "hostadmin.action", action: "rotateVmToken", args: { name: "work-vm" } });
     ok("secrets: rotation asks first and shows the VM token once", t.vscode.rec.warnings.some((x) => /Rotate the VM token of "work-vm"/.test(x.message)) && t.vscode.rec.infos.some((x) => (x.detail || "").indexOf("VM-PLAINTEXT") >= 0));
+    ok("rotation dialogs name the supported credential recovery command", t.vscode.rec.warnings.concat(t.vscode.rec.infos).filter(x => /VM token/.test(x.message)).every(x => /Provision-AgentVM.ps1 -InstanceName work-vm -RotateVmToken/.test(x.detail)));
     const everything = JSON.stringify(entry.panel.posted) + t.logs.join("\n") + JSON.stringify(entry.model.state);
     ok("secrets: neither plaintext reached the webview, the log or the state", everything.indexOf("PLAINTEXT-ONE") < 0 && everything.indexOf("VM-PLAINTEXT") < 0);
   }

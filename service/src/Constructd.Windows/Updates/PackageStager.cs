@@ -11,8 +11,7 @@ public sealed record CheckedRelease(ReleaseDescriptor Release, ReleaseManifest M
 public sealed class PackageStager(IReleaseSource source, IHostConfigStore config, ConstructdOptions options, IReleaseInfo installed) : IUpdateStager
 {
     public string UpdatesDir => Path.Combine(Path.GetDirectoryName(Path.GetFullPath(options.DatabasePath))!, "updates");
-    public async Task<UpdatesConfig> SettingsAsync(CancellationToken ct) => await config.GetAsync<UpdatesConfig>("updates", ct) ??
-        HostAdminDefaults.Updates with { ManifestPublicKey = options.HostAdmin.Updates.ManifestPublicKey };
+    public async Task<UpdatesConfig> SettingsAsync(CancellationToken ct) => HostUpdateTrust.Apply(await config.GetAsync<UpdatesConfig>("updates", ct) ?? HostAdminDefaults.Updates, options);
     public async Task RequireKeyAsync(CancellationToken ct)
     {
         var settings = await SettingsAsync(ct);

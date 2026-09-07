@@ -165,6 +165,12 @@ public static class ServiceComposition
 
         services.AddSingleton<FakeIsoBuilder>();
         services.AddSingleton<IIsoBuilder>(sp => sp.GetRequiredService<FakeIsoBuilder>());
+        // Read-only catalog status is available in fake mode too; building remains faked.
+        services.AddSingleton<IIsoFileSystem, IsoFileSystem>();
+        services.AddSingleton<IIsoCatalog>(sp => new FileIsoCatalog(
+            sp.GetRequiredService<IIsoFileSystem>(), sp.GetRequiredService<IClock>(),
+            sp.GetRequiredService<ConstructdOptions>().Iso.CacheDir,
+            sp.GetRequiredService<ILoggerFactory>().CreateLogger<FileIsoCatalog>()));
 
         services.AddSingleton(sp =>
         {

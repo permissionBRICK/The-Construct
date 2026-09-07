@@ -829,7 +829,7 @@ function childRows(children, now) {
     .map((c) => {
       const lease = c.lease && typeof c.lease === "object" ? c.lease : null;
       const overdue = !!(lease && (lease.overdue === true || str(lease.state).toLowerCase() === "overdue"));
-      const sharing = str(c.sharing).toLowerCase() || "private";
+      const sharing = str(c.sharing).toLowerCase();
       const state = str(c.state).toLowerCase() || "unknown";
       const op = operationText(c.currentOperation);
       return {
@@ -986,12 +986,12 @@ function cascadeConfirmation(input = {}) {
 function childDeleteConfirmation(child) {
   const c = child && typeof child === "object" ? child : { name: child };
   const name = str(c.name) || "this child VM";
-  const sharing = str(c.sharing).toLowerCase() || "private";
+  const sharing = str(c.sharing).toLowerCase();
   const shared = sharing === "host" || c.shared === true;
   return {
     title: `Delete the child VM "${name}"?`,
     detail:
-      `${name} is ${shared ? "SHARED HOST-WIDE — other users may be using it" : "private"}` +
+      `${name} is ${shared ? "SHARED HOST-WIDE — other users may be using it" : sharing === "private" ? "private" : "of unknown sharing scope — other users may be using it"}` +
       (str(c.state) ? ` and currently ${str(c.state)}` : "") + ".\n\n" +
       "Its disk, saved state and dedicated media are removed permanently. " +
       "A running VM is powered off for deletion.",
@@ -1112,7 +1112,9 @@ function createHostAdminModel(deps = {}) {
       } else if (id === "users") {
         state.users = { rows: (await client.users()).map(toUserRow).sort((a, b) => a.name.localeCompare(b.name)) };
       } else if (id === "media") {
-        const catalog = toIsoCatalogView(await client.isoCatalog());
+        let catalog = null, catalogProblem = "";
+        try { catalog = toIsoCatalogView(await client.isoCatalog()); }
+        catch (e) { if (refused(e)) return state; catalogProblem = errText(e); }
         let items = null, mediaProblem = "";
         if (state.features.media) {
           try { items = (await client.media({ owner: "all" })).map(toMediaRow); }
@@ -1120,7 +1122,7 @@ function createHostAdminModel(deps = {}) {
         } else {
           mediaProblem = "child media is not available on this host version";
         }
-        state.media = { catalog, items: items || [], mediaProblem };
+        state.media = { catalog, catalogProblem, items: items || [], mediaProblem };
       } else if (id === "operations") {
         const jobs = (await client.jobs({ limit: 100 })).map(toJobRow);
         let audit = [], auditProblem = "";
@@ -1270,12 +1272,12 @@ function createHostAdminModel(deps = {}) {
         case "rotateVmToken": {
           const kind = str(args.kind).toLowerCase() === "legacy" ? "legacy" : "primary";
           const res = await client.rotateVmToken(str(args.name), { kind });
-          notice("info", `The VM token of ${str(args.name)} was rotated (${kind}); deliver it with Provision-AgentVM.ps1 -RotateVmToken or paste it once.`);
+          notice("info", `The VM token of ${str(args.name)} was rotated (${kind}); issue and deliver a fresh guest credential with Provision-AgentVM.ps1 -InstanceName ${str(args.name)} -RotateVmToken.`);
           return { ok: true, secret: str(res && res.vmToken), kind };
         }
         case "revokeVmToken": {
           await client.revokeVmToken(str(args.name));
-          notice("info", `The VM token of ${str(args.name)} was revoked; the guest loses expose/heartbeat until reprovisioned.`);
+          notice("info", `The VM token of ${str(args.name)} was revoked; restore expose/heartbeat with Provision-AgentVM.ps1 -InstanceName ${str(args.name)} -RotateVmToken.`);
           return { ok: true };
         }
         case "saveConfig": {

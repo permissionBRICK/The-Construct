@@ -186,7 +186,7 @@ public static class LifecycleEndpoints
     {
         services.GetRequiredService<IConsoleSessionStore>().RemoveForVmExcept(vm.Name, [vm.Owner, "vm:" + vm.Parent]);
         var exposure = services.GetRequiredService<IAccessExposure>();
-        if (exposure is not Constructd.Core.Services.UnsupportedFeaturePlatform) await exposure.RevokeNonOwnerAsync(vm.Name, ct);
+        await exposure.RevokeNonOwnerAsync(vm.Name, ct);
         await services.GetRequiredService<INetworkPolicyReconciler>().OnSharingChangedAsync(vm with { Sharing = SharingScope.Private }, SharingScope.Host, ct);
     }
 }

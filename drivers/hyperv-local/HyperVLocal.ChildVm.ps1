@@ -97,7 +97,7 @@ function Get-ConstructHostInventory {
                 $null = Get-Item -LiteralPath $probeRoot -ErrorAction Stop
                 $volume = Get-CapacityVolumeRoot $probeRoot
                 $candidates = @($path)
-                if ([string]$artifact.artifact -like 'media:*' -or [string]$artifact.artifact -like 'upload:*') {
+                if ($artifact.isMedia -or [string]$artifact.artifact -like 'media:*' -or [string]$artifact.artifact -like 'upload:*') {
                     $candidates += ($path + '.part')
                     $candidates += [IO.Path]::ChangeExtension($path, '.part')
                 }
@@ -151,9 +151,14 @@ function Assert-ConstructChildHardware {
     }
 }
 
+function Assert-ConstructChildVmName {
+    param([string]$Name)
+    if ($Name -cnotmatch '\A[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\z' -or $Name -like 'construct-*') { throw 'validation' }
+}
+
 function Get-ConstructChildDiskPath {
     param([string]$Name, [string]$VhdPath)
-    if ($Name -cnotmatch '\A[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\z' -or $Name -like 'construct-*') { throw 'validation' }
+    Assert-ConstructChildVmName $Name
     if ($VhdPath) { return $VhdPath }
     Join-Path (Get-VMHost -ErrorAction Stop).VirtualHardDiskPath ($Name + '.vhdx')
 }
@@ -169,6 +174,7 @@ function Get-ConstructChildVmObject {
 
 function Set-ConstructChildHardware {
     param([string]$Name, $Hardware, [bool]$ResendTemplate = $false)
+    Assert-ConstructChildVmName $Name
     Assert-ConstructChildHardware $Hardware
     $vm = Get-VM -Name $Name -ErrorAction Stop
     if ([string]$vm.State -ne 'Off') { throw 'vm-not-off' }
@@ -202,6 +208,7 @@ function Set-ConstructChildHardware {
 
 function Set-ConstructChildMedia {
     param([string]$Name, [string]$InstallMediaPath, [string]$AuxiliaryMediaPath, [string[]]$BootOrder)
+    Assert-ConstructChildVmName $Name
     $vm = Get-VM -Name $Name -ErrorAction Stop
     if ([string]$vm.State -ne 'Off') { throw 'vm-not-off' }
     foreach ($path in @($InstallMediaPath, $AuxiliaryMediaPath)) {
@@ -232,14 +239,15 @@ function Set-ConstructChildMedia {
 }
 
 function Write-ConstructChildOwnership {
-    param([string]$Marker, $Record)
+    param([string]$Marker, $Record, [switch]$CreateNew)
     # Preserve the previous valid record across interruption of an update.
     $temporary = $Marker + '.' + [Guid]::NewGuid().ToString('N') + '.tmp'
     try {
         $bytes = [Text.Encoding]::UTF8.GetBytes(($Record | ConvertTo-Json -Compress))
         $stream = [IO.File]::Open($temporary, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
         try { $stream.Write($bytes, 0, $bytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
-        [IO.File]::Replace($temporary, $Marker, [System.Management.Automation.Language.NullString]::Value)
+        if ($CreateNew) { [IO.File]::Move($temporary, $Marker) }
+        else { [IO.File]::Replace($temporary, $Marker, [System.Management.Automation.Language.NullString]::Value) }
     } finally {
         if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -ErrorAction Stop }
     }
@@ -259,13 +267,11 @@ function New-ConstructChildVm {
     if (Test-Path -LiteralPath $disk) { throw 'name-taken' }
     $marker = $disk + '.childvm.json'
     if ($Descriptor.ownershipPath) { $marker = [string]$Descriptor.ownershipPath }
-    # Exclusive marker makes cleanup retries possible even after Remove-VM succeeded.
-    $stream = [IO.File]::Open($marker, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
-    $stream.Dispose()
     $configPath = Join-Path (Get-VMHost -ErrorAction Stop).VirtualMachinePath ('childvm-' + [Guid]::NewGuid().ToString('N'))
     if (Test-Path -LiteralPath $configPath) { throw 'name-taken' }
     $record = @{ configPath = $configPath; name = $name; id = $null; disks = @($disk); rootDisk = $disk; operationId = $Descriptor.operationId }
-    Write-ConstructChildOwnership -Marker $marker -Record $record
+    # Publish a complete record exclusively BEFORE creating any VM artifacts.
+    Write-ConstructChildOwnership -Marker $marker -Record $record -CreateNew
     $creationParameters = @{ Path = $configPath; Name = $name; Generation = 2; MemoryStartupBytes = ([long]$h.ramMb * 1MB); NoVHD = $true; ErrorAction = 'Stop' }
     if ($h.networkAttached) { $creationParameters.SwitchName = $Descriptor.switchName }
     $vm = New-VM @creationParameters
@@ -295,7 +301,7 @@ function Remove-ConstructChildVm {
         if (-not $record.id) {
             # New-VM can succeed before its ID is journalled. Its unique configuration
             # location, recorded before allocation, is independent ownership evidence.
-            if (-not $record.configPath -or [string]$vm.Path -ne [string]$record.configPath) { throw 'vm-incarnation-conflict' }
+            if (-not $record.configPath -or ([string]$vm.Path -ne [string]$record.configPath -and [string]$vm.Path -ne (Join-Path $record.configPath $Name))) { throw 'vm-incarnation-conflict' }
             $record.id = [string]$vm.Id
         } elseif ([string]$vm.Id -ne $record.id) { throw 'vm-incarnation-conflict' }
         # Record checkpoint-chain paths BEFORE deleting the VM; keep them on partial failure.
@@ -339,6 +345,7 @@ function Get-ConstructChildAttachedMedia {
 
 function Stop-ConstructChildVmGracefully {
     param([string]$Name, [int]$TimeoutSeconds = 300)
+    Assert-ConstructChildVmName $Name
     if ($TimeoutSeconds -lt 1) { throw 'validation' }
     $vm = Get-VM -Name $Name -ErrorAction Stop
     if ([string]$vm.State -eq 'Off') { return 'completed' }
@@ -365,6 +372,7 @@ function Get-ConstructChildVmId {
 
 function Get-ConstructChildVmCapabilities {
     param([string]$Name)
+    Assert-ConstructChildVmName $Name
     $vm = Get-VM -Name $Name -ErrorAction Stop
     $system = Get-WmiObject -Namespace root\virtualization\v2 -Class Msvm_ComputerSystem -Filter ("Name='" + $vm.Id + "'") -ErrorAction Stop
     $video = @($system.GetRelated('Msvm_VideoHead'))

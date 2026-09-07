@@ -51,7 +51,8 @@ public sealed class ChildLifecycleJobs(IVmRepository vms, IHypervisorDriver hype
             vm = (await vms.GetAsync(vm.Name, ct))!;
             if (restart)
             {
-                if (state != VmState.Off || LeaseRules.Due(vm.Lease, clock.UtcNow)) throw new LifecycleException("lease-due");
+                if (LeaseRules.Due(vm.Lease, clock.UtcNow)) throw new LifecycleException("lease-due");
+                if (state != VmState.Off) throw new LifecycleException("vm-state-unknown");
                 await Phase("start");
                 var proposed = new OperationKeyRecord(vm.Owner, "restart-start", job.Id + ":start", job.Id, vm.Name, job.Id,
                     OperationKeyState.InFlight, "{\"restart\":true}", vm.PowerGeneration, null, clock.UtcNow);

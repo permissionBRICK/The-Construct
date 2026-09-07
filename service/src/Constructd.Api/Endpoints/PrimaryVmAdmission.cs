@@ -23,7 +23,7 @@ public static class PrimaryVmAdmission
         var prior = key is null ? null : await services.GetRequiredService<IOperationKeyStore>().GetAsync(vm.Owner, key.Kind, key.Key, ct);
         if (prior is not null) return prior.Fingerprint == key!.Fingerprint && Ownership.SameName(prior.Target, vm.Name)
             ? LifecycleEndpoints.Replay(prior) : LifecycleEndpoints.Problem("operation-key-conflict");
-        await using var gate = await services.GetRequiredService<IVmOperationGate>().TryAcquireAsync(vm.Name, id, ct);
+        await using var gate = await PrimaryOperationGate.AcquireAsync(services.GetRequiredService<IVmOperationGate>(), vm.Name, id, ct);
         if (gate is null) return LifecycleEndpoints.Busy(null);
         var observed = await services.GetRequiredService<IHypervisorDriver>().GetStateAsync(vm.Name, ct);
         if (observed != VmState.Absent)
@@ -32,11 +32,14 @@ public static class PrimaryVmAdmission
             return observed == VmState.Unknown ? LifecycleEndpoints.Problem("vm-state-unknown") :
                 Problems.Conflict($"A VM named '{vm.Name}' already exists on this host.");
         }
-        var placement = await services.GetRequiredService<IChildVmStorage>().ResolvePrimaryStorageAsync(vm.Name, ct);
+        ChildStoragePlacement? placement = null;
+        try { placement = await services.GetRequiredService<IChildVmStorage>().ResolvePrimaryStorageAsync(vm.Name, ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch { /* Unknown placement is evidence for the ledger, never a new primary-driver dependency. */ }
         var lines = new List<ReservationLine> { new(ReservationResource.Ram, vm.RamBytes, null, null),
-            new(ReservationResource.Cpu, vm.Cpu, null, null), new(ReservationResource.Storage, vm.DiskGb * 1073741824L, "disk:" + placement.DiskPath, placement.DiskVolume) };
+            new(ReservationResource.Cpu, vm.Cpu, null, null), new(ReservationResource.Storage, vm.DiskGb * 1073741824L, placement is null ? "unresolved-primary-disk:" + vm.Name : "disk:" + placement.DiskPath, placement?.DiskVolume ?? "unknown") };
         if (services.GetRequiredService<IHypervisorDriver>().Capabilities.Suspend)
-            lines.Add(new(ReservationResource.Storage, vm.RamBytes + CapacityMath.SavedStateOverhead, "saved-state:" + vm.Name, placement.ConfigVolume));
+            lines.Add(new(ReservationResource.Storage, vm.RamBytes + CapacityMath.SavedStateOverhead, "saved-state:" + vm.Name, placement?.ConfigVolume ?? "unknown"));
         var job = new Job(id, "create-vm", vm.Name, vm.Owner, JobState.Queued, [], null, null, clock.UtcNow, null, http.User.Actor(), supplied);
         var allowance = await services.GetRequiredService<IDelegationPolicy>().ResolveAsync(vm.Owner, null, ct);
         var admission = services.GetRequiredService<IAdmissionStore>();

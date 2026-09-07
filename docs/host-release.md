@@ -18,11 +18,20 @@ The owner must provision an Ed25519 PEM private key as `HOST_RELEASE_SIGNING_KEY
 GitHub **host-release** environment and commit the corresponding base64 32-byte public
 key in `config/host-release.pub`. That file is intentionally empty in this delivery:
 no production key was supplied. Publishing fails closed unless the secret's public key
-matches that file. The installer seeds a nonempty key into bootstrap configuration;
-startup copies it into a missing `host_config.updates` section without overwriting an
-existing stored key. Updates require that stored key. Key rotation requires updating
-host configuration before publishing with the new key. No private signing key belongs
-in the repository or on a host.
+matches that file. The installer seeds a nonempty public key into host-local
+`Constructd:HostAdmin:Updates:ManifestPublicKey`. Production staging always uses that
+local key and `Constructd:HostAdmin:Updates:Repository` (default
+`permissionBRICK/The-Construct`), with signature verification required. Stored API config
+cannot override them. API attempts to change these trust fields return `400 validation`;
+rotate trust in the host-local service configuration before publishing with the new key,
+and activate that configuration through the operator's normal maintenance procedure.
+An empty local key refuses staging even if an older database row contains a key.
+No private signing key belongs in the repository or on a host.
+
+Production apply requires `Constructd:CertThumbprint` for the updater's loopback health
+pin. A host configured only with `CertPath` is refused with
+`update-health-pin-required` before drain or replacement; configure a supported
+certificate-store thumbprint before using host updates.
 
 For a local package, publish to a new directory, then invoke:
 
@@ -57,7 +66,11 @@ Recovery files are under `<DataDir>\updates`: `handoff.json` (contains a one-tim
 credential; do not copy it into logs), `last-update.json`, `fence.json`, the staged files,
 and `backup-<updateId>`. Read `last-update.json` when the service cannot start. It records
 the failed phase, complete-backup flag, replacement flag, health attempts and manual
-steps. Never rebuild an incomplete backup from an installation whose replacement began.
+steps. Failure details are allowlisted diagnostic codes; arbitrary PowerShell exception
+messages are deliberately excluded because dependencies can include secrets. Never rebuild an incomplete backup from an installation whose replacement began.
+
+Task creation uses a Task Scheduler XML file, avoiding the `schtasks /TR` length limit
+on default-layout resume commands. The XML contains no health credential.
 
 The task exclusively holds `updater.lock` and `admin.lock`. Successful outcomes are
 immutable: every resumption checks them before stop/replace/rollback. A `commitOnly`
@@ -83,7 +96,9 @@ as a successful rollback.
 
 Linux validation uses PowerShell service/health fakes, recording process runners,
 SQLite persistence, in-process HTTP integration tests, and signed package fixtures.
-SCM survival, LocalSystem ACLs, real certificate pinning, running Hyper-V VM continuity,
+`Test-UpdateHealth` is fully replaced in the PowerShell suite; its real HTTP, certificate
+and read-only CLI calls are not exercised there. Authorized rollback and `commitOnly`
+resume control flow are exercised with those fakes. SCM survival, LocalSystem ACLs, real certificate pinning, running Hyper-V VM continuity,
 and a Windows-client reconnection remain items for the contract's field-test checklist.
 
 Phase 6 validation on Linux: .NET build **0 warnings / 0 errors**, **932 / 932**
@@ -93,3 +108,11 @@ packaging fixture 87. The Bash total includes the frozen-contract compile check
 (5 checks) and fake-service end-to-end (38 checks). Existing platform-specific
 skips remain. A self-contained `win-x64` cross-publish and complete payload hash
 verification also succeeded; the executable was not run on Windows.
+
+Final-review packaging limits: the local packager labels current tracked script content
+with the supplied commit without independently proving a clean, matching checkout; use
+the guarded main-branch workflow for production. `minInstalledCommitDate` is emitted but
+not enforced against an installed commit date. Preserved-name collisions are rejected
+by the updater at apply, rather than during stage. A drain-state race can surface as a
+failed operation instead of a dedicated conflict response. These remain follow-up items;
+Linux package fixtures do not establish production provenance or Windows update health.
