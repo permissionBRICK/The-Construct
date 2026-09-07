@@ -4908,6 +4908,7 @@ class ConstructViewProvider {
   }
   resolveWebviewView(webviewView) {
     const { extensionUri } = this.context;
+    const webview = webviewView.webview;
     webviewView.webview.options = webviewOptions(extensionUri);
     // The sidebar is a compact launcher: status + quick lifecycle actions + a
     // button to pop the full panel (settings / usage / projects) as an editor tab.
@@ -4920,7 +4921,7 @@ class ConstructViewProvider {
     syncAutoRefresh();
     this.context.subscriptions.push(webviewView.onDidDispose(() => {
       if (launcherView === webviewView) launcherView = undefined;
-      liveWebviews.delete(webviewView.webview);
+      liveWebviews.delete(webview);
       syncAutoRefresh();
     }));
   }
@@ -4930,6 +4931,7 @@ class ConstructViewProvider {
 function setupPanel(p, context) {
   const { extensionUri } = context;
   panel = p;
+  const webview = p.webview;
   p.webview.options = webviewOptions(extensionUri);
   p.iconPath = vscode.Uri.joinPath(extensionUri, "media", "icon.svg");
   p.webview.html = buildHtml(p.webview, extensionUri, "panel.html", "panel.js");
@@ -4940,7 +4942,7 @@ function setupPanel(p, context) {
   p.webview.onDidReceiveMessage((m) => handleMessage(m, p.webview, context));
   liveWebviews.add(p.webview);
   syncAutoRefresh();
-  p.onDidDispose(() => { liveWebviews.delete(p.webview); if (panel === p) panel = undefined; syncAutoRefresh(); });
+  p.onDidDispose(() => { liveWebviews.delete(webview); if (panel === p) panel = undefined; syncAutoRefresh(); });
 }
 
 // ── UI design (theme) picker ─────────────────────────────────────────────────
