@@ -3155,6 +3155,35 @@ unique assertions across languages.
 
 Stage 2 media:
 
+- URL admission conservatively reserves `maxBytes` before opening the transfer;
+  it does not perform a separate HEAD/header probe. The transfer checks declared
+  length before creating a partial file and trims the reservation to actual bytes
+  at completion. This keeps the accepted job and its full possible liability in
+  one admission transaction, at the cost of temporarily reserving more storage
+  for smaller downloads even when the eventual response has Content-Length.
+
+- Chunk mutations are audited as `media.upload.chunk`, following the explicit
+  implementation brief's every-mutation audit requirement. The table lists audit
+  names only for begin/complete/abort; no content or inner file name is recorded.
+- Cleanup uses a one-second linked cancellation timeout when taking media gates
+  because the frozen gate has no non-blocking acquisition method. Busy items are
+  returned as retained with reason `busy`; explicit deletion refuses pending or
+  transferring media before waiting. A held-file delete queues an item-only retry.
+
+- Added `IMediaStore.CompleteUploadAsync` for the required atomic upload-Done /
+  media-Ready transition. The two existing independent CAS methods cannot commit
+  that pair atomically. SQLite uses one immediate transaction; the fake uses its
+  shared transaction lock. Existing interface signatures are preserved.
+- Uses the foundation's `Constructd:HostAdmin:Media:RootDir` configuration property
+  for the contract's `Media:RootDir`, avoiding an unrelated shared options edit.
+- Narrow shared-test updates register the eleven media routes in the exhaustive
+  API surface test and correct the foundation fake ISO fixture to contain the
+  full primary descriptor/version (and expect the safe media exception).
+- Production admission, capacity and persisted job execution remain owned by their
+  respective parallel branches. Media does not replace those placeholders with
+  non-atomic writes. Its SQL insertion helpers and job bodies are ready for their
+  composition; tests inject the shared in-memory seams and a recording runner.
+
 - Added `IMediaFiles` beside the frozen media seams for sparse creation, streaming
   reads, ranged writes, atomic publish, and timestamped enumeration. The frozen
   `IMediaTransfer` lacks those operations; its signatures remain unchanged. This

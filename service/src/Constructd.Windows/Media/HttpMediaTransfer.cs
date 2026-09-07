@@ -22,6 +22,7 @@ public sealed class HttpMediaTransfer(IMediaFiles files, IMediaDnsResolver dns, 
                     throw new MediaException("url-refused");
                 var addresses = await dns.ResolveAsync(url.IdnHost, token);
                 if (!policy.Check(url, addresses, true, item.ExpectedSha256 is not null).Allowed) throw new MediaException("url-refused");
+                progress?.Report("downloading from " + url.IdnHost);
                 using var handler = handlerFactory?.Invoke(url, addresses) ?? PinnedAddressHandler.Create(url, addresses, policy, connections);
                 using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
                 using var request = new HttpRequestMessage(HttpMethod.Get, url);
@@ -61,7 +62,7 @@ public sealed class HttpMediaTransfer(IMediaFiles files, IMediaDnsResolver dns, 
         catch (Exception ex)
         {
             // Cleanup/accounting belongs to MediaJobs, which records failed deletion for retry.
-            throw new MediaException(ex is MediaException safe ? safe.Code : ct.IsCancellationRequested ? "cancelled" : "media-transfer-failed");
+            throw new MediaException(ex is MediaException safe ? safe.Code : ct.IsCancellationRequested ? "cancelled" : overall.IsCancellationRequested ? "media-timeout" : "media-transfer-failed");
         }
     }
     public async Task WriteChunkAsync(MediaUpload upload, int index, Stream body, long contentLength, CancellationToken ct)

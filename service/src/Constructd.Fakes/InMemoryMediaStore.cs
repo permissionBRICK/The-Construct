@@ -125,6 +125,17 @@ public sealed partial class InMemoryMediaStore : IMediaStore
 
         }
     }
+    public Task<bool> CompleteUploadAsync(string uploadId, MediaItem ready, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        lock(InMemoryTransaction.Gate)
+        {
+            if(!_uploads.TryGetValue(uploadId,out var upload) || upload.State != UploadState.Completing || upload.MediaId != ready.Id ||
+                !_items.TryGetValue(ready.Id,out var item) || item.State != MediaState.Transferring || ready.State != MediaState.Ready ||
+                !Ownership.SameName(item.Owner,ready.Owner)) return Task.FromResult(false);
+            _items[ready.Id]=ready; _uploads[uploadId]=upload with {State=UploadState.Done}; return Task.FromResult(true);
+        }
+    }
     public Task<IReadOnlyList<MediaUpload>> ListExpiredUploadsAsync(DateTimeOffset now, CancellationToken ct)
     {
         lock (InMemoryTransaction.Gate)

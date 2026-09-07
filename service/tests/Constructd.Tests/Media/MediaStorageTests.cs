@@ -36,6 +36,12 @@ public sealed class MediaStorageTests
             Assert.False(await store.RecordChunkAsync("upload", 2, default));
             Assert.True(await store.TryTransitionUploadAsync("upload", UploadState.Open, upload with { State = UploadState.Completing }, default));
             Assert.False(await store.RecordChunkAsync("upload", 0, default));
+            Assert.False(await store.CompleteUploadAsync(upload.Id,item with {State=MediaState.Ready},default));
+            Assert.True(await store.TryTransitionAsync(item.Id,MediaState.Deleting,item with {State=MediaState.Transferring},default));
+            Assert.True(await store.CompleteUploadAsync(upload.Id,item with {State=MediaState.Ready},default));
+            Assert.Equal(UploadState.Done,(await store.GetUploadAsync(upload.Id,default))!.State);
+            Assert.Equal(MediaState.Ready,(await store.GetAsync(item.Id,default))!.State);
+            Assert.False(await store.RecordChunkAsync(upload.Id,0,default));
             Assert.True(await store.RemoveAsync(item.Id, default));
         }
         finally { Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); Directory.Delete(root, true); }

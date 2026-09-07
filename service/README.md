@@ -1372,3 +1372,99 @@ The source checksum is verified before replacing the cached download; builds pub
 new versioned files so other installations retain their mounted media.
 `-SkipIsoBuild` on the host installer installs the tool but defers media creation.
 See [native ISO builds](../docs/native-iso.md) for upgrade and source configuration.
+
+## Child-VM media registry
+
+Child media uses its own M200 SQLite registry and private media directory. It never
+calls the primary Construct ISO catalog, downloader, patcher, or provisioner.
+`Constructd:HostAdmin:Media:RootDir` selects the directory (default
+`C:\ProgramData\Construct\service\media`). This is the existing stage-1 option
+for the contract's `Media:RootDir`; fake mode uses a disposable directory. Real
+host deployment must grant only the service identity, SYSTEM and administrators
+access to this directory, including auxiliary answer-file media. The updater pair
+owns installer hardening; this branch does not edit the installer.
+
+The `/api/v1/media` routes accept enrolled users and upgraded primary tokens.
+Owners see their media; administrators can inspect all owners. A shared-child
+consumer can read only the attached item's `id`, `name`, `role` and `sizeBytes`.
+There is no media-content download route. Full metadata omits host paths; checksums
+and source metadata for auxiliary ISOs stay behind owner/admin access.
+
+- `POST /media/acquire` accepts `url`, `role`, optional `name`,
+  `expectedSha256`, `dedicatedTo` and `operationKey`, returning a `media-acquire`
+  job and media id. HTTP requires a checksum and the `media.allowHttp` policy.
+  The transport refuses credentials, proxies, cookies, private/reserved addresses,
+  private connected peers, TLS downgrades and more than five redirects. DNS is
+  validated at each hop and the connection uses a validated IP directly. Query
+  strings and fragments are removed from persisted source URLs; progress includes
+  host names and byte counts only. URL admission conservatively reserves the full
+  item limit until completion; it does not make a header probe before admission.
+- `POST /media/uploads` accepts `name`, `role`, `sizeBytes` and the optional
+  checksum, dedicated VM and operation key. It returns `uploadId`, `mediaId`,
+  `chunkSizeBytes`, `chunkCount`, `expiresAt` and received indexes. Send exact-size
+  octet-stream chunks with Content-Length to
+  `PUT /media/uploads/{id}/chunks/{index}`. `GET /media/uploads/{id}` returns
+  received and missing indexes for resumption. Re-sending an index overwrites it.
+- `POST /media/uploads/{id}/complete` freezes writes, hashes the file, verifies
+  the expected checksum (when supplied), and checks the ISO primary descriptor
+  when no checksum was supplied. Completion returns 201, subsequent completion
+  returns 200, and verification above 2 GiB uses a `media-verify` job (202).
+  Aborting through `DELETE /media/uploads/{id}` wins over an in-flight hash.
+- `GET /media`, `GET /media/{id}`, `GET /media/{id}/references` and
+  `DELETE /media/{id}` expose registry status and retention. Any VM reference
+  prevents deletion, including an administrator's cross-owner attachment. Storage
+  is charged once to the media owner. Reference removal is a backend primitive:
+  child jobs must confirm detachment/removal before calling it.
+- Admin `POST /media/cleanup` and the daily cleanup job expire open uploads,
+  retry deletion, collect eligible failed/unreferenced items, and remove managed
+  orphan files older than one hour. Ready-item collection is opt-in through
+  `media.unreferencedTtlHours`. Dedicated items whose VM still exists are retained
+  unless deletion was explicitly requested. Failed deletion stays visible and
+  retains its reservation until both `.part` and `.iso` are confirmed absent.
+  Startup recovery fails interrupted transfers/completions and cleans their files;
+  open, unexpired uploads with a partial file remain resumable.
+
+Media policy is stored in the `media` host-config section: default limits are
+16 GiB per item, 20 active items per owner, 8 MiB chunks, a 24-hour upload TTL,
+180-minute acquisition timeout and a 120-second read-idle timeout. Size overflow,
+checksum mismatch, incomplete uploads, in-use media and URL refusals use coded
+RFC 7807 responses. Every mutation is audited without source queries, media
+contents or host paths. Upload begin and acquisition accept the operation-key
+header (which overrides the body key) and use the shared atomic admission seam.
+
+Integration boundary: this media branch supplies `SqliteMediaStore.InsertInTransaction`
+overloads for media, uploads and references, and consumes `IAdmissionStore`,
+`ICapacityLedger` and `IPersistedJobRunner`. The stage-1 production admission and
+persisted-job implementations are still explicit placeholders; the integrator,
+capacity and child-jobs branches must supply them before production acquisition
+or admission works. Linux tests exercise the real media routes with the in-memory
+admission/capacity stores, a recording persisted runner, simulated DNS/connections,
+and both SQLite and in-memory media stores. No new Hyper-V or Windows execution
+is claimed here.
+
+Installer hook supplied to the updater pair (Windows PowerShell 5.1 syntax):
+set `$mediaRootDir = Join-Path $DataDir 'media'`, include it in the existing
+ShouldProcess-controlled directory-creation loop, and add
+`@{ Path = $mediaRootDir; Kind = 'Data'; Name = 'child media registry' }` to the
+existing sorted `$hardening` entries. Add
+`HostAdmin = [ordered]@{ Media = [ordered]@{ RootDir = $mediaRootDir } }` under
+`$settings.Constructd`, merging any other HostAdmin sections. The existing
+`Set-ConstructPathAcl` supplies the SYSTEM/Administrators-only ACL and ancestor
+checks. Upgrades must preserve an already-configured media root and its contents.
+
+Cleanup jobs return `{ removed: [ids], retained: [{ id, reason }] }`. Reasons include
+`busy`, `held-open`, `referenced`, `dedicated` and `not-eligible`; each media-gate
+wait is limited to one second so an active download cannot block the whole sweep.
+A user's held-file deletion retries only that item. Inline verification continues
+when its HTTP client disconnects; clients can poll completion safely. Unsupported
+admission/job backends return `unsupported-capability`, and a failed job start
+marks the media failed immediately, releasing storage only after confirming files
+are absent. Chunk routes set their request-body limit from the accepted upload's
+chunk size (the host-config validator permits 1–64 MiB). Chunks are audited to
+satisfy this delivery's explicit requirement to audit every mutation.
+
+Child-deletion integration must check that dedicated media belongs to the child's
+owner (or was selected by an administrator): a `dedicatedTo` name can refer to a
+future VM and is not proof of ownership. The integrator also owns the shared
+JobReader authorization and `/jobs/{id}/cancel` routes; this branch records job
+initiators and honors runner cancellation without editing those shared routes.

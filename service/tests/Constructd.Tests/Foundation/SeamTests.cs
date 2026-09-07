@@ -118,11 +118,11 @@ public sealed class SeamTests
     public async Task FakeMediaUsesScopedFilesAndRefusesBadChecksumAndOversizedChunk()
     {
         using var transfer = new FakeMediaTransfer(); var uri = new Uri("https://example.org/a.iso");
-        var bytes = new byte[32774]; "CD001"u8.CopyTo(bytes.AsSpan(32769)); transfer.Sources[uri] = bytes;
+        var bytes = new byte[32775]; bytes[32768] = 1; bytes[32774] = 1; "CD001"u8.CopyTo(bytes.AsSpan(32769)); transfer.Sources[uri] = bytes;
         var item = new MediaItem("id", "alice", "a.iso", MediaRole.Install, MediaSource.Url, null, "id.iso", MediaState.Pending, null, 40000, null, null, null, null, null, DateTimeOffset.UtcNow, null, null);
         var result = await transfer.AcquireAsync(item, uri, 40000, TimeSpan.FromMinutes(1), null, Ct);
         Assert.Equal(result.Sha256, await transfer.HashAsync(item.Path, null, Ct)); Assert.True(await transfer.LooksLikeIsoAsync(item.Path, Ct));
-        await Assert.ThrowsAsync<IOException>(() => transfer.AcquireAsync(item with { ExpectedSha256 = "bad" }, uri, 40000, TimeSpan.FromMinutes(1), null, Ct));
+        await Assert.ThrowsAsync<MediaException>(() => transfer.AcquireAsync(item with { ExpectedSha256 = "bad" }, uri, 40000, TimeSpan.FromMinutes(1), null, Ct));
         var upload = new MediaUpload("up", "id", "alice", 4, 4, [], UploadState.Open, null, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddDays(1));
         await Assert.ThrowsAsync<IOException>(() => transfer.WriteChunkAsync(upload, 0, new MemoryStream(new byte[5]), 4, Ct));
         transfer.FilesHeldOpen = true; Assert.False(await transfer.TryDeleteAsync(item.Path, Ct));

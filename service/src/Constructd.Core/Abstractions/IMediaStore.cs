@@ -20,6 +20,8 @@ public interface IMediaStore
     Task AddUploadAsync(MediaUpload upload, CancellationToken ct);
     Task<bool> TryTransitionUploadAsync(string id, UploadState expected, MediaUpload updated, CancellationToken ct);
     Task<bool> RecordChunkAsync(string uploadId, int index, CancellationToken ct);
+    /// <summary>Atomically mark the completing upload Done and its Transferring media Ready.</summary>
+    Task<bool> CompleteUploadAsync(string uploadId, MediaItem ready, CancellationToken ct) => throw new NotSupportedException("Media completion is unavailable.");
     Task<IReadOnlyList<MediaUpload>> ListExpiredUploadsAsync(DateTimeOffset now, CancellationToken ct);
 }
 
@@ -56,7 +58,7 @@ public interface IMediaFiles
 }
 
 /// <summary>Contains only a fixed safe code, never a URL or a filesystem exception.</summary>
-public sealed class MediaException(string code) : Exception(code)
+public sealed class MediaException(string code) : Exception(code), Constructd.Core.Logic.IConstructdError
 {
     public string Code { get; } = code;
 }

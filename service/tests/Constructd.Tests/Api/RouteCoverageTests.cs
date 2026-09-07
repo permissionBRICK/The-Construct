@@ -13,6 +13,17 @@ public class RouteCoverageTests
 {
     private static readonly string[] ExpectedRoutes =
     [
+        "POST /api/v1/media/acquire",
+        "POST /api/v1/media/uploads",
+        "PUT /api/v1/media/uploads/{id}/chunks/{index:int}",
+        "GET /api/v1/media/uploads/{id}",
+        "POST /api/v1/media/uploads/{id}/complete",
+        "DELETE /api/v1/media/uploads/{id}",
+        "GET /api/v1/media",
+        "GET /api/v1/media/{id}",
+        "GET /api/v1/media/{id}/references",
+        "DELETE /api/v1/media/{id}",
+        "POST /api/v1/media/cleanup",
         "GET /api/v1/whoami",
         "GET /api/v1/health",
         "GET /api/v1/host/status",

@@ -2,7 +2,7 @@ using Constructd.Core.Abstractions;
 namespace Constructd.Windows.Media;
 
 /// <summary>Owns only flat, generated .part/.iso files. External sources and links are refused.</summary>
-public sealed class MediaFileStore(string root) : IMediaFiles
+public sealed class MediaFileStore(string root, IReadOnlyList<string>? protectedPaths = null) : IMediaFiles
 {
     public string Root { get; } = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
     public string PathFor(string id, bool partial = false)
@@ -13,6 +13,8 @@ public sealed class MediaFileStore(string root) : IMediaFiles
     private string Confine(string path)
     {
         var full = Path.GetFullPath(path);
+        if(protectedPaths?.Any(p => !string.IsNullOrWhiteSpace(p) && string.Equals(Path.GetFullPath(p),full,
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)) == true) throw new MediaException("media-path-refused");
         var name = Path.GetFileName(full);
         if (!string.Equals(Path.GetDirectoryName(full), Root, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal) ||
             name.Length != 36 && name.Length != 37 || !name[..32].All(Uri.IsHexDigit) ||

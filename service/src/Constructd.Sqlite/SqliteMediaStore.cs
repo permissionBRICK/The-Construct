@@ -111,6 +111,17 @@ public sealed class SqliteMediaStore(SqliteDatabase database) : IMediaStore
         using var write = Command(c,tx,"UPDATE media_uploads SET received_json=$received WHERE id=$id;").With("$id",uploadId).With("$received",JsonSerializer.Serialize(u.Received.Append(index).Distinct().Order()));
         write.ExecuteNonQuery(); tx.Commit(); return Task.FromResult(true);
     }
+    public Task<bool> CompleteUploadAsync(string uploadId, MediaItem ready, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested(); if(ready.State != MediaState.Ready) return Task.FromResult(false);
+        using var c=database.Open(); using var tx=c.BeginTransaction(deferred:false);
+        using var upload=Command(c,tx,"UPDATE media_uploads SET state='done' WHERE id=$upload AND media_id=$id AND owner=$owner AND state='completing';")
+            .With("$upload",uploadId).With("$id",ready.Id).With("$owner",ready.Owner);
+        if(upload.ExecuteNonQuery()!=1) return Task.FromResult(false);
+        using var item=Command(c,tx,"UPDATE media SET state='ready',sha256=$sha256,ready_at=$ready_at,reserved_bytes=$reserved_bytes WHERE id=$id AND owner=$owner AND state='transferring';");
+        Bind(item,ready); if(item.ExecuteNonQuery()!=1) return Task.FromResult(false);
+        tx.Commit(); return Task.FromResult(true);
+    }
     public Task<IReadOnlyList<MediaUpload>> ListExpiredUploadsAsync(DateTimeOffset now, CancellationToken ct)
     { ct.ThrowIfCancellationRequested(); using var c = database.Open(); using var cmd = Command(c,null,"SELECT * FROM media_uploads WHERE state='open' AND expires_at<=$now;").With("$now",SqliteDatabase.Text(now)); using var r = cmd.ExecuteReader(); var list = new List<MediaUpload>(); while(r.Read()) list.Add(ReadUpload(r)); return Task.FromResult<IReadOnlyList<MediaUpload>>(list); }
 }
