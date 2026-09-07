@@ -52,6 +52,7 @@ public static class AdminCli
           tokens issue <user> --label <label>
           tokens revoke-all <user>
           forwards reconcile
+          db check
           host status
           iso build [--force]
           iso status
@@ -85,6 +86,7 @@ public static class AdminCli
 
         try
         {
+            await using var maintenance = await AdminMaintenance.EnterAsync(services, positional, cancellationToken);
             return (positional[0].ToLowerInvariant(), positional.ElementAtOrDefault(1)?.ToLowerInvariant()) switch
             {
                 ("users", "add") => await AddUserAsync(positional, services, writer, cancellationToken).ConfigureAwait(false),
@@ -93,6 +95,7 @@ public static class AdminCli
                 ("tokens", "issue") => await IssueTokenAsync(positional, services, writer, cancellationToken).ConfigureAwait(false),
                 ("tokens", "revoke-all") => await RevokeTokensAsync(positional, services, writer, cancellationToken).ConfigureAwait(false),
                 ("forwards", "reconcile") => await ReconcileAsync(positional, services, writer, cancellationToken).ConfigureAwait(false),
+                ("db", "check") => await AdminDbCheck.RunAsync(positional, services, output, cancellationToken),
                 ("host", "status") => HostStatus(positional, services, writer),
                 ("iso", "build") => await IsoBuildAsync(positional, services, writer, output, cancellationToken).ConfigureAwait(false),
                 ("iso", "status") => IsoStatus(positional, services, writer),

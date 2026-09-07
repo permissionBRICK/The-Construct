@@ -13,7 +13,56 @@ public class RouteCoverageTests
 {
     private static readonly string[] ExpectedRoutes =
     [
+        "GET /api/v1/host/updates/status",
+        "POST /api/v1/host/updates/check",
+        "POST /api/v1/host/updates/stage",
+        "POST /api/v1/host/updates/apply",
+        "POST /api/v1/host/updates/cancel",
+        "POST /api/v1/host/updates/resolve",
+        "POST /api/v1/media/acquire",
+        "POST /api/v1/media/uploads",
+        "PUT /api/v1/media/uploads/{id}/chunks/{index:int}",
+        "GET /api/v1/media/uploads/{id}",
+        "POST /api/v1/media/uploads/{id}/complete",
+        "DELETE /api/v1/media/uploads/{id}",
+        "GET /api/v1/media",
+        "GET /api/v1/media/{id}",
+        "GET /api/v1/media/{id}/references",
+        "DELETE /api/v1/media/{id}",
+        "POST /api/v1/media/cleanup",
+        "GET /api/v1/vms/{name}/console/capabilities",
+        "POST /api/v1/vms/{name}/console/sessions",
+        "POST /api/v1/vms/{name}/console/sessions/{sid}/renew",
+        "DELETE /api/v1/vms/{name}/console/sessions/{sid}",
+        "GET /api/v1/vms/{name}/console/sessions/{sid}/screenshot",
+        "POST /api/v1/vms/{name}/console/sessions/{sid}/keyboard",
+        "POST /api/v1/vms/{name}/console/sessions/{sid}/mouse",
         "GET /api/v1/whoami",
+        "GET /api/v1/health",
+        "GET /api/v1/host/status",
+        "GET /api/v1/host/iso-catalog",
+        "GET /api/v1/host/capacity",
+        "GET /api/v1/host/capabilities",
+        "GET /api/v1/host/config",
+        "PUT /api/v1/host/config",
+        "GET /api/v1/users",
+        "GET /api/v1/users/{name}",
+        "PUT /api/v1/users/{name}",
+        "GET /api/v1/users/{name}/allowance",
+        "PUT /api/v1/users/{name}/allowance",
+        "GET /api/v1/users/{name}/tokens",
+        "DELETE /api/v1/users/{name}/tokens/{id}",
+        "GET /api/v1/vms/{name}/identity",
+        "POST /api/v1/vms/{name}/guest-report",
+        "POST /api/v1/vms/{name}/token",
+        "DELETE /api/v1/vms/{name}/token",
+        "GET /api/v1/vms/{name}/overrides",
+        "PUT /api/v1/vms/{name}/overrides",
+        "DELETE /api/v1/vms/{name}/overrides",
+        "GET /api/v1/vms/{name}/children",
+        "GET /api/v1/vms/shared",
+        "GET /api/v1/vms/{name}/addresses",
+            "GET /api/v1/vms/{name}/capabilities",
         "POST /api/v1/users",
         "DELETE /api/v1/users/{name}",
         "POST /api/v1/users/{name}/tokens",
@@ -23,6 +72,7 @@ public class RouteCoverageTests
         "GET /api/v1/vms/{name}",
         "DELETE /api/v1/vms/{name}",
         "POST /api/v1/vms/{name}/power",
+        "POST /api/v1/vms/{parent}/children",
         "GET /api/v1/vms/{name}/state",
         "GET /api/v1/vms/{name}/endpoint",
         "GET /api/v1/vms/{name}/forwards",
@@ -32,6 +82,13 @@ public class RouteCoverageTests
         "GET /api/v1/vms/{name}/idle-policy",
         "PUT /api/v1/vms/{name}/idle-policy",
         "POST /api/v1/vms/{name}/activity",
+        "GET /api/v1/jobs",
+        "POST /api/v1/jobs/{id}/cancel",
+        "POST /api/v1/vms/{name}/lifecycle",
+        "POST /api/v1/vms/{name}/lease",
+        "PUT /api/v1/vms/{name}/sharing",
+        "PUT /api/v1/vms/{name}/hardware",
+        "PUT /api/v1/vms/{name}/media",
         "GET /api/v1/jobs/{id}",
         "GET /api/v1/jobs/{id}/events",
     ];
@@ -45,6 +102,19 @@ public class RouteCoverageTests
                 Endpoint: endpoint))
             .ToList();
 
+    [Fact]
+    public async Task EveryProtectedRouteChallengesAnonymousRequests()
+    {
+        using var app = new TestApp(); using var anonymous = app.CreateAnonymousClient();
+        foreach (var route in Routes(app).Where(r => r.Route != "GET /api/v1/health"))
+        {
+            var parts = route.Route.Split(' ', 2);
+            var path = System.Text.RegularExpressions.Regex.Replace(parts[1], @"\{[^}]+\}", "1");
+            using var request = new HttpRequestMessage(new(parts[0]), path) { Content = System.Net.Http.Json.JsonContent.Create(new { }) };
+            var response = await anonymous.SendAsync(request);
+            Assert.True(response.StatusCode == System.Net.HttpStatusCode.Unauthorized, route.Route + ": " + response.StatusCode);
+        }
+    }
     [Fact]
     public void The_api_exposes_exactly_the_documented_routes()
     {
@@ -65,6 +135,7 @@ public class RouteCoverageTests
             .Select(r => r.Route)
             .ToList();
 
-        Assert.Empty(unprotected);
+        Assert.Equal(["GET /api/v1/health"], unprotected);
+        Assert.NotNull(Routes(app).Single(r => r.Route == "GET /api/v1/health").Endpoint.Metadata.GetMetadata<IAllowAnonymous>());
     }
 }

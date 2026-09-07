@@ -336,6 +336,10 @@ public class VmLifecycleTests
         var job = await bob.WaitForJobAsync((await accepted.ReadAsync<JobAcceptedResponse>()).JobId);
 
         Assert.Equal(JobState.Succeeded, job.State);
+        Assert.Null(job.Phase);
+        var progress = string.Join("\n", job.Progress.Select(p => p.Text));
+        Assert.Contains("and the ssh forward", progress); Assert.Contains("vm work-vm removed", progress);
+        Assert.DoesNotContain("Cascade deletion:", progress);
         Assert.Equal(HttpStatusCode.NotFound, (await bob.GetAsync("/api/v1/vms/work-vm")).StatusCode);
         Assert.Empty(await app.Forwards.ListAsync("work-vm", CancellationToken.None));
         Assert.Empty(app.Forwards.Materialized);

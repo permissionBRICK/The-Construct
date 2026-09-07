@@ -42,6 +42,11 @@ public interface IPortForwardManager
         int maxForwards,
         CancellationToken cancellationToken);
 
+    /// <summary>Adds a distinct child destination atomically with the forward under the manager gate.</summary>
+    Task<AddForwardResult> TryAddDestinationForwardAsync(
+        ForwardRequest request, ForwardDestination destination, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Child destination forwarding is unavailable.");
+
     /// <summary>Removes one forward of a VM. Returns false when the id does not belong to that VM.</summary>
     Task<bool> RemoveForwardAsync(string vmName, string id, CancellationToken cancellationToken);
 

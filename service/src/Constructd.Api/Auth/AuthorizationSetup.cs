@@ -12,6 +12,14 @@ public static class Policies
     /// so an identity can find out that an admin still has to add it). VM-scoped tokens are rejected:
     /// they are valid for their own VM's forwards and heartbeat and for nothing else.
     /// </summary>
+    public const string UserOrPrimaryToken = "UserOrPrimaryToken";
+    public const string ChildOperator = "ChildOperator";
+    public const string ChildOwnerOrAdmin = "ChildOwnerOrAdmin";
+    public const string ParentDelegate = "ParentDelegate";
+    public const string ForwardRequester = "ForwardRequester";
+    public const string ConsoleOperator = "ConsoleOperator";
+    public const string JobReader = "JobReader";
+
     public const string AnyUserIdentity = "any-user-identity";
 
     /// <summary>An enrolled user. VM-scoped tokens are rejected.</summary>
@@ -74,6 +82,14 @@ public static class AuthorizationSetup
     public static IServiceCollection AddConstructdAuthorization(this IServiceCollection services)
     {
         services.AddSingleton<IAuthorizationHandler, VmAccessHandler>();
+        services.AddSingleton<IAuthorizationHandler, DelegationAuthorization>();
+        services.AddSingleton<IAuthorizationHandler, ForwardRequesterHandler>();
+        var builder = services.AddAuthorizationBuilder();
+        builder.AddPolicy(Policies.ForwardRequester, p => p.RequireAuthenticatedUser().AddRequirements(new ForwardRequesterRequirement()));
+        builder.AddPolicy(Policies.UserOrPrimaryToken, p => p.RequireAuthenticatedUser()
+            .RequireAssertion(c => c.User.IsKnownUser() || c.User.IsPrimaryToken()));
+        foreach (var name in new[] { Policies.ChildOperator, Policies.ChildOwnerOrAdmin, Policies.ParentDelegate, Policies.ConsoleOperator, Policies.JobReader })
+            builder.AddPolicy(name, p => p.RequireAuthenticatedUser().AddRequirements(new DelegationRequirement(name)));
 
         services.AddAuthorizationBuilder()
             .AddPolicy(Policies.AnyUserIdentity, policy => policy

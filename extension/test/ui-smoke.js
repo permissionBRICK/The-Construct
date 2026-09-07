@@ -23,6 +23,7 @@ function buildPage(htmlFile, scriptFile) {
   html = html.replace(/<meta http-equiv="Content-Security-Policy"[\s\S]*?\/>/, "");
   html = html.replace(/{{cspSource}}/g, "").replace(/{{styleUri}}/g, "panel.css")
              .replace(/{{themeUri}}/g, "themes/" + THEME + ".css")
+             .replace(/{{adminStyleUri}}/g, "hostadmin.css")
              .replace(/{{scriptUri}}/g, scriptFile).replace(/{{nonce}}/g, "test");
   const mock =
     '<script>window.__posted=[];window.acquireVsCodeApi=function(){return{' +
@@ -32,7 +33,11 @@ function buildPage(htmlFile, scriptFile) {
 }
 
 function serve() {
-  const pages = { "/": buildPage("panel.html", "panel.js"), "/launcher": buildPage("launcher.html", "launcher.js") };
+  const pages = {
+    "/": buildPage("panel.html", "panel.js"),
+    "/launcher": buildPage("launcher.html", "launcher.js"),
+    "/hostadmin": buildPage("hostadmin.html", "hostadmin.js"),
+  };
   const types = { ".css": "text/css", ".js": "text/javascript" };
   const server = http.createServer((req, res) => {
     const url = req.url.split("?")[0];
@@ -984,6 +989,200 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await page.waitForTimeout(60);
   check("power: an off VM still says Start & connect",
     (await page.locator("#powerBtn").innerText()).includes("Start"));
+
+  // ── Child VMs card + Host button (host-administration contract §10.2) ────────
+  check("children: card hidden when the state carries no children", !(await page.locator("#childrenModule").isVisible()));
+  check("children: Host button hidden without an admin offer", !(await page.locator("#hostAdminBtn").isVisible()));
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h", children: null, hostAdminOffer: null } }, "*"));
+  await page.waitForTimeout(60);
+  check("children: an explicit null hides the card (local instance / old service)", !(await page.locator("#childrenModule").isVisible()));
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h",
+    hostAdminOffer: { host: "buildbox.example.local", url: "https://buildbox.example.local:7462" },
+    children: { primary: "work-vm", visible: true, problem: "", items: [
+      { name: "work-vm-a1b2", state: "running", lease: "expires in 2h 5m (2026-09-07 12:05 UTC)", overdue: false, sharing: "host", shared: true, busy: false, operation: "", canShutdown: true, canDelete: true },
+      { name: "work-vm-c3d4", state: "off", lease: "OVERDUE — unavailable (shutdown due; retried)", overdue: true, sharing: "private", shared: false, busy: false, operation: "", canShutdown: false, canDelete: true },
+      { name: "work-vm-e5f6", state: "running", lease: "no expiry", overdue: false, sharing: "private", shared: false, busy: true, operation: "vm-shutdown (wait)", canShutdown: false, canDelete: false },
+    ] } } }, "*"));
+  await page.waitForTimeout(60);
+  check("children: card visible with children", await page.locator("#childrenModule").isVisible());
+  check("children: one row per child", (await page.locator("#childrenList .child-row").count()) === 3);
+  check("children: the primary is named", (await page.locator("#childrenMeta").textContent()).includes("work-vm"));
+  check("children: a shared child says so", (await page.locator("#childrenList .child-row").nth(0).locator(".fwd-target").textContent()).includes("shared host-wide"));
+  check("children: an overdue lease is rendered as an error row with its reason",
+    (await page.locator("#childrenList .child-row").nth(1).getAttribute("class")).includes("error")
+    && (await page.locator("#childrenList .child-row").nth(1).locator(".fwd-label").textContent()).includes("OVERDUE"));
+  check("children: exactly two actions per row", (await page.locator("#childrenList .child-row").nth(0).locator("button").count()) === 2);
+  check("children: an off child cannot be shut down but can be deleted",
+    await page.locator("#childrenList .child-row").nth(1).locator(".child-shutdown").isDisabled()
+    && !(await page.locator("#childrenList .child-row").nth(1).locator(".child-delete").isDisabled()));
+  check("children: a busy child offers nothing and names its operation",
+    await page.locator("#childrenList .child-row").nth(2).locator(".child-shutdown").isDisabled()
+    && await page.locator("#childrenList .child-row").nth(2).locator(".child-delete").isDisabled()
+    && (await page.locator("#childrenList .child-row").nth(2).locator(".fwd-state").textContent()).includes("vm-shutdown"));
+  check("children: no start/resume/console/share control exists", (await page.locator("#childrenModule button").count()) === 6);
+  check("children: Host button shown with an admin offer", await page.locator("#hostAdminBtn").isVisible());
+  await page.evaluate(() => { window.__posted.length = 0; });
+  await page.locator("#childrenList .child-row").nth(0).locator(".child-shutdown").click();
+  await page.locator("#childrenList .child-row").nth(1).locator(".child-delete").click();
+  await page.click("#hostAdminBtn");
+  posted = await page.evaluate(() => window.__posted);
+  check("children: Shut down posts childShutdown with the child's name",
+    posted.some((m) => m.type === "command" && m.id === "childShutdown" && m.child === "work-vm-a1b2"));
+  check("children: Delete posts childDelete with the child's name",
+    posted.some((m) => m.type === "command" && m.id === "childDelete" && m.child === "work-vm-c3d4"));
+  check("children: the Host button posts openHostAdmin", posted.some((m) => m.type === "command" && m.id === "openHostAdmin"));
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: false, host: "h", children: { primary: "work-vm", visible: true, problem: "HTTP 500", items: [] } } }, "*"));
+  await page.waitForTimeout(60);
+  check("children: a failed read shows the problem, offline or not", await page.locator("#childrenModule").isVisible()
+    && (await page.locator("#childrenProblem").textContent()).includes("HTTP 500"));
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h", children: null, hostAdminOffer: null } }, "*"));
+  await page.waitForTimeout(60);
+  check("children: a null push hides the card and the Host button again (host switch)",
+    !(await page.locator("#childrenModule").isVisible()) && !(await page.locator("#hostAdminBtn").isVisible()));
+
+  // ── Host administration webview (contract §10.2/§10.3) ─────────────────────
+  const admin = await browser.newPage();
+  const adminErrors = [];
+  admin.on("console", (m) => { if (m.type() === "error") adminErrors.push(m.text()); });
+  admin.on("pageerror", (e) => adminErrors.push(String(e)));
+  await admin.goto(`http://127.0.0.1:${port}/hostadmin`, { waitUntil: "networkidle" });
+  await admin.waitForTimeout(150);
+  check("admin: no console/page errors on load", adminErrors.length === 0, adminErrors.join(" | "));
+  let aposted = await admin.evaluate(() => window.__posted);
+  check("admin: posts hostadmin.ready on load", aposted.some((m) => m.type === "hostadmin.ready"));
+  const TABS = [
+    { id: "overview", label: "Overview", available: true, reason: "" }, { id: "vms", label: "VMs", available: true, reason: "" },
+    { id: "users", label: "Users", available: true, reason: "" }, { id: "media", label: "Media", available: true, reason: "" },
+    { id: "operations", label: "Operations", available: true, reason: "" }, { id: "config", label: "Configuration", available: true, reason: "" },
+    { id: "maintenance", label: "Maintenance", available: false, reason: "not available on this host version" },
+  ];
+  const pushAdmin = (state) => admin.evaluate((st) => window.postMessage({ type: "hostadmin.state", state: st }, "*"), state);
+  await pushAdmin({ host: "buildbox.example.local", mode: "unavailable", message: "Cannot reach buildbox.example.local: ECONNREFUSED", retryable: true, tabs: TABS, activeTab: "overview" });
+  await admin.waitForTimeout(60);
+  check("admin: Unavailable shows the state card, not the module",
+    await admin.locator("#haState").isVisible() && !(await admin.locator("#haAdmin").isVisible()));
+  check("admin: ...with the message and a Retry button",
+    (await admin.locator("#haStateMessage").textContent()).includes("Cannot reach") && await admin.locator("#haRetry").isVisible());
+  await pushAdmin({ host: "h", mode: "old-service", message: "This host's service predates host administration. Update it on the host (service/host/Install-ConstructHost.ps1); no update can be driven from here.", tabs: TABS, activeTab: "overview" });
+  await admin.waitForTimeout(60);
+  check("admin: Old service says to update on the host", (await admin.locator("#haStateMessage").textContent()).includes("no update can be driven from here"));
+  await pushAdmin({ host: "h", mode: "sign-in", message: "rejected", tabs: TABS, activeTab: "overview" });
+  await admin.waitForTimeout(60);
+  check("admin: Sign in again offers the sign-in button", await admin.locator("#haSignIn").isVisible() && !(await admin.locator("#haRetry").isVisible()));
+  await admin.evaluate(() => { window.__posted.length = 0; });
+  await admin.click("#haSignIn");
+  aposted = await admin.evaluate(() => window.__posted);
+  check("admin: ...which posts hostadmin.signIn", aposted.some((m) => m.type === "hostadmin.signIn"));
+  await pushAdmin({ host: "h", mode: "denied", message: "DOMAIN\\bob is not enrolled", tabs: TABS, activeTab: "overview" });
+  await admin.waitForTimeout(60);
+  check("admin: Denied shows the message, no tabs", (await admin.locator("#haStateMessage").textContent()).includes("not enrolled") && !(await admin.locator("#haAdmin").isVisible()));
+  await pushAdmin({ host: "h", mode: "user", message: "not an administrator", identity: { name: "bob", role: "user" }, tabs: TABS, activeTab: "overview", offers: { createFirstVm: true } });
+  await admin.waitForTimeout(60);
+  check("admin: an ordinary user gets no module at all", !(await admin.locator("#haAdmin").isVisible()) && !(await admin.locator("#haTabs button").count()));
+  check("admin: ...but the first-VM offer when the host has none of theirs", await admin.locator("#haCreateFirst").isVisible());
+  await admin.evaluate(() => { window.__posted.length = 0; });
+  await admin.click("#haCreateFirst");
+  aposted = await admin.evaluate(() => window.__posted);
+  check("admin: the offer posts createFirstVm", aposted.some((m) => m.type === "hostadmin.action" && m.action === "createFirstVm"));
+
+  const ADMIN_STATE = {
+    host: "buildbox.example.local", mode: "admin", message: "", identity: { name: "DOMAIN\\alice", role: "admin" },
+    features: { hostAdmin: true, children: true, media: true, console: false, updates: false, network: true },
+    tabs: TABS, activeTab: "overview", busy: false, notice: { level: "info", text: "Graceful shutdown of work-vm-a1 requested (job j1)." },
+    maintenance: null, offers: { createFirstVm: false },
+    overview: { version: { commit: "deadbeef", packageVersion: "1.2.3", installedAt: "2026-09-01 00:00 UTC", source: "release" },
+      health: { hypervisor: "ok", database: "ok", media: "ok", inventory: "complete" }, problems: [], capacityMode: "enforce",
+      capacity: [{ id: "ram", label: "RAM", pct: 69, text: "10 GiB available of 32 GiB" }, { id: "cpu", label: "CPU", pct: 50, text: "8 active vCPU on 16 logical CPUs (no budget)" }],
+      capacityEpoch: { epoch: "7", observedAt: "2026-09-07 09:59 UTC", complete: true }, maintenance: null,
+      activeJobs: [{ id: "j1", kind: "vm-shutdown", vmName: "work-vm-a1", owner: "alice", initiator: "", phase: "wait", created: "2026-09-07 09:58 UTC" }],
+      leaseOverdueCount: 1, unmanagedVmCount: 2 },
+    vms: { childrenFeature: true, rows: [
+      { name: "work-vm", owner: "alice", kind: "primary", parent: "", sharing: "private", shared: false, state: "running", tokenKind: "primary", deleting: false, childCreationClosed: false, resources: "4 vCPU · 8.0 GiB · 80 GB disk", lease: "", overdue: false, operation: "", operationJobId: "", guest: "Construct unknown · provisioned unknown · reinstalled unknown", reservations: "", children: ["work-vm-a1"], allowedActions: ["inspect", "shutdown", "delete", "overrides", "rotateToken"], media: 0 },
+      { name: "work-vm-a1", owner: "alice", kind: "child", parent: "work-vm", sharing: "host", shared: false, state: "running", tokenKind: null, deleting: false, childCreationClosed: false, resources: "2 vCPU · 2.0 GiB · 20 GB disk", lease: "expires in 2h 5m", overdue: false, operation: "vm-shutdown (wait)", operationJobId: "j1", guest: "", reservations: "", children: [], allowedActions: ["inspect", "shutdown", "delete"], media: 1 },
+    ] },
+    users: { rows: [{ name: "alice", role: "admin", enabled: true, maxVms: 2, allowHostForwards: true, created: "—", primaries: 1, children: 1, tokens: 1, allowance: { allowChildCreation: "", maxRetainedChildren: "3", cpuBudget: "", ramBudgetGiB: "16", storageBudgetGiB: "", maxChildLifetime: "12h", allowNeverLifetime: "", allowSharing: "false" }, effective: "2 primaries · 3 children" }] },
+    media: { catalog: { mode: "native", source: { path: "C:\\iso\\u.iso", url: "", sha256Configured: true, present: true, size: "2.0 GiB" }, current: { fileName: "construct-autoinstall-1.iso", size: "2.0 GiB", builtAt: "2026-09-01 00:00 UTC" }, entries: [{ fileName: "construct-autoinstall-1.iso", size: "2.0 GiB", isCurrent: true, builtAt: "—", sidecarReadable: true }], lastBuild: null }, mediaProblem: "", items: [{ id: "m1", owner: "alice", name: "ubuntu.iso", role: "install", source: "url", sourceUrl: "", state: "ready", size: "3.0 GiB", reserved: "3.0 GiB", error: "", jobId: "", dedicatedTo: "", created: "—", readyAt: "—", references: 1, deletable: false }] },
+    operations: { jobs: [{ id: "j2", kind: "child-delete", vmName: "work-vm-b2", owner: "alice", initiator: "", state: "failed", phase: "vm", error: "boom", created: "—", completed: "—", terminal: true, cancellable: false, retry: { action: "deleteVm", name: "work-vm-b2", kind: "child" } }], audit: [], auditProblem: "" },
+    config: { sections: [{ key: "capacity", source: "stored", updatedAt: "2026-09-07 09:00 UTC", expectedUpdatedAt: "2026-09-07T09:00:00Z", text: "{\n  \"mode\": \"observe\"\n}", present: true }], capabilities: { backend: "hyperv-local", rows: [{ key: "console.interactive", value: "unsupported" }], notes: [] }, problems: [{ field: "capacity.mode", reason: "must be observe or enforce" }] },
+    maintenanceTab: null,
+  };
+  await pushAdmin(ADMIN_STATE);
+  await admin.waitForTimeout(80);
+  check("admin: the module renders for an admin", await admin.locator("#haAdmin").isVisible() && !(await admin.locator("#haState").isVisible()));
+  check("admin: seven tabs", (await admin.locator("#haTabs button").count()) === 7);
+  check("admin: an unavailable tab is disabled and says so",
+    await admin.locator('#haTabs button[data-tab="maintenance"]').isDisabled()
+    && (await admin.locator('#haTabs button[data-tab="maintenance"]').getAttribute("title")).includes("not available on this host version"));
+  check("admin: the notice from the last action is shown", (await admin.locator("#haNoticeText").textContent()).includes("Graceful shutdown"));
+  check("admin: overview capacity bars with the enforce badge",
+    (await admin.locator("#ovCapacity .ha-bar").count()) === 2 && (await admin.locator("#ovCapMode").textContent()) === "enforce");
+  check("admin: overview active job listed", (await admin.locator("#ovJobs .ha-row").count()) === 2);
+  check("admin: overdue count rendered", (await admin.locator("#ovOverdue").textContent()) === "1");
+  await admin.evaluate(() => { window.__posted.length = 0; });
+  await admin.click('#haTabs button[data-tab="vms"]');
+  aposted = await admin.evaluate(() => window.__posted);
+  check("admin: clicking a tab posts hostadmin.tab", aposted.some((m) => m.type === "hostadmin.tab" && m.tab === "vms"));
+  await pushAdmin({ ...ADMIN_STATE, activeTab: "vms", notice: null });
+  await admin.waitForTimeout(60);
+  check("admin: the VMs tab is shown and the notice cleared", await admin.locator("#tab-vms").isVisible() && !(await admin.locator("#haNotice").isVisible()));
+  check("admin: one row per VM, the child indented under its parent",
+    (await admin.locator("#vmsTable .ha-row").count()) === 3 && (await admin.locator("#vmsTable .ha-row").nth(2).getAttribute("class")).includes("child"));
+  check("admin: the shared child is badged", /shared host-wide/i.test(await admin.locator("#vmsTable .ha-row").nth(2).innerText()));
+  check("admin: unknown guest facts print unknown", (await admin.locator("#vmsTable .ha-row").nth(1).innerText()).includes("provisioned unknown"));
+  check("admin: a busy child's buttons are disabled", await admin.locator("#vmsTable .ha-row").nth(2).locator("button").first().isDisabled());
+  const buttonLabels = await admin.locator("#haAdmin button").allInnerTexts();
+  check("admin: no guest update/provision/reinstall action in the module",
+    buttonLabels.length > 0 && !buttonLabels.some((t) => /provision|reinstall|redownload|update guest|update agents/i.test(t)));
+  await admin.evaluate(() => { window.__posted.length = 0; });
+  await admin.locator("#vmsTable .ha-row").nth(1).locator("button", { hasText: "Shut down" }).click();
+  await admin.locator("#vmsTable .ha-row").nth(1).locator("button", { hasText: "Delete" }).click();
+  aposted = await admin.evaluate(() => window.__posted);
+  check("admin: Shut down posts shutdownVm with the name", aposted.some((m) => m.type === "hostadmin.action" && m.action === "shutdownVm" && m.args.name === "work-vm"));
+  check("admin: Delete posts deleteVm with name and kind", aposted.some((m) => m.action === "deleteVm" && m.args.name === "work-vm" && m.args.kind === "primary"));
+  await pushAdmin({ ...ADMIN_STATE, activeTab: "users" });
+  await admin.waitForTimeout(60);
+  await admin.locator("#usrTable button", { hasText: "Edit" }).click();
+  await admin.waitForTimeout(40);
+  check("admin: the user editor opens with the stored allowance", await admin.locator("#usrEditCard").isVisible()
+    && (await admin.locator("#ua_maxChildLifetime").inputValue()) === "12h" && (await admin.locator("#ua_ramBudgetGiB").inputValue()) === "16");
+  await admin.evaluate(() => { window.__posted.length = 0; });
+  await admin.fill("#ua_maxRetainedChildren", "5");
+  await admin.click("#ueSaveAllowance");
+  aposted = await admin.evaluate(() => window.__posted);
+  check("admin: Save allowance posts the form", aposted.some((m) => m.action === "saveAllowance" && m.args.name === "alice" && m.args.form.maxRetainedChildren === "5"));
+  await admin.evaluate(() => window.postMessage({ type: "hostadmin.tokens", name: "alice", tokens: [{ id: "t1", label: "laptop", created: "—", lastUsed: "never" }] }, "*"));
+  await admin.waitForTimeout(40);
+  check("admin: tokens render with a Revoke button", (await admin.locator("#ueTokens button", { hasText: "Revoke" }).count()) === 1);
+  await pushAdmin({ ...ADMIN_STATE, activeTab: "operations" });
+  await admin.waitForTimeout(60);
+  await admin.evaluate(() => { window.__posted.length = 0; });
+  await admin.locator("#jobsTable button", { hasText: "Retry delete" }).click();
+  aposted = await admin.evaluate(() => window.__posted);
+  check("admin: a failed delete's Retry posts deleteVm for the child", aposted.some((m) => m.action === "deleteVm" && m.args.name === "work-vm-b2" && m.args.kind === "child"));
+  await pushAdmin({ ...ADMIN_STATE, activeTab: "config" });
+  await admin.waitForTimeout(60);
+  check("admin: config renders the section with its inline problem",
+    (await admin.locator("#cfgSections .ha-section").count()) === 1 && (await admin.locator("#cfgSections .problem").textContent()).includes("must be observe or enforce"));
+  await admin.evaluate(() => { window.__posted.length = 0; });
+  await admin.click("#cfgSave");
+  aposted = await admin.evaluate(() => window.__posted);
+  check("admin: saving with nothing changed posts no sections", aposted.some((m) => m.action === "saveConfig" && m.args.sections.length === 0));
+  await admin.fill("#cfgSections textarea", '{"mode":"enforce"}');
+  await admin.click("#cfgSave");
+  aposted = await admin.evaluate(() => window.__posted);
+  check("admin: an edited section is posted with its CAS stamp",
+    aposted.some((m) => m.action === "saveConfig" && m.args.sections.length === 1 && m.args.sections[0].key === "capacity" && m.args.sections[0].expectedUpdatedAt === "2026-09-07T09:00:00Z"));
+  await pushAdmin({ ...ADMIN_STATE, activeTab: "media" });
+  await admin.waitForTimeout(60);
+  check("admin: a referenced media item cannot be deleted from here", await admin.locator("#mediaTable button", { hasText: "Delete" }).isDisabled());
+  await pushAdmin({ ...ADMIN_STATE, activeTab: "overview", maintenance: { phase: "draining", retryAfterSeconds: 5, updateId: "u1" } });
+  await admin.waitForTimeout(60);
+  check("admin: maintenance shows the banner with the phase",
+    await admin.locator("#haMaint").isVisible() && (await admin.locator("#haMaintPhase").textContent()).includes("draining"));
+  check("admin: ...and disables every mutation", await admin.locator('button[data-act="capacityRefresh"]').isDisabled());
+  check("admin: ...while the tabs stay usable", !(await admin.locator('#haTabs button[data-tab="vms"]').isDisabled()));
+  check("admin: no console/page errors after every state", adminErrors.length === 0, adminErrors.join(" | "));
+  await admin.close();
 
   await browser.close();
   server.close();

@@ -30,5 +30,9 @@ public interface IForwardStore
     /// </summary>
     Task<bool> SetAckAsync(string id, ForwardAck ack, CancellationToken cancellationToken);
 
+    /// <summary>Updates a child address and clears a stale ack atomically; never recreates a removed row.</summary>
+    Task<bool> SetDestinationAsync(string id, ForwardDestination destination, ForwardAck? ack, CancellationToken ct) =>
+        throw new NotSupportedException("Child destination updates are unavailable.");
+
     Task<bool> RemoveAsync(string id, CancellationToken cancellationToken);
 }

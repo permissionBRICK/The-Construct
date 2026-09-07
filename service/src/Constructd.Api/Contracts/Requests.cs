@@ -1,10 +1,11 @@
+using Constructd.Core.Domain;
 namespace Constructd.Api.Contracts;
 
 // Request bodies. Every field is nullable so a missing field is a validation error rather than a
 // silent default, and every enum arrives as a string that the endpoint parses explicitly — a typo
 // then produces a 400 problem document instead of a deserializer exception.
 
-public sealed record CreateUserRequest(string? Name, string? Role, int? MaxVms, bool? AllowHostForwards);
+public sealed record CreateUserRequest(string? Name, string? Role, int? MaxVms, bool? AllowHostForwards, UserAllowance? Allowance = null);
 
 public sealed record CreateTokenRequest(string? Label);
 
@@ -17,7 +18,7 @@ public sealed record CreateVmOptions(bool? Nested, bool? AutomaticCheckpoints, I
 
 public sealed record PowerRequest(string? Action);
 
-public sealed record CreateForwardRequest(int? VmPort, string? Label, string? Target);
+public sealed record CreateForwardRequest(int? VmPort, string? Label, string? Target, int? ConnectPort = null, string? Via = null);
 
 /// <param name="Status"><c>open</c> or <c>error</c>.</param>
 /// <param name="LocalPort">The port the extension actually opened. Required for <c>open</c>.</param>
@@ -28,3 +29,7 @@ public sealed record ForwardAckRequest(string? Status, int? LocalPort, string? H
 public sealed record IdlePolicyRequest(int? TimeoutMinutes, string? Action);
 
 public sealed record ActivityRequest(bool? Busy, IReadOnlyList<string>? Reasons);
+
+/// <summary>Optional confirmation shape reserved for the child-lifecycle implementation.</summary>
+public sealed record DeleteVmRequest(CascadeConfirmation? Cascade = null);
+public sealed record CascadeConfirmation(string? Token);

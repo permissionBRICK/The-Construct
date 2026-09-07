@@ -152,13 +152,28 @@ public sealed class InMemoryPortForwardManager : IPortForwardManager
         }
     }
 
-    public async Task<AddForwardResult> TryAddForwardAsync(
+    public Task<AddForwardResult> TryAddForwardAsync(string vmName, int vmPort, ForwardTarget target,
+        string label, int maxForwards, CancellationToken cancellationToken) =>
+        AddForwardAsync(vmName, vmPort, target, label, maxForwards, cancellationToken, null);
+
+    public Task<AddForwardResult> TryAddDestinationForwardAsync(ForwardRequest request,
+        ForwardDestination destination, CancellationToken cancellationToken)
+    {
+        if (!string.Equals(request.TargetVm, destination.VmName, StringComparison.OrdinalIgnoreCase) ||
+            request.ConnectPort != destination.ConnectPort || destination.ConnectPort is < 1 or > 65535 ||
+            (request.Target == ForwardTarget.Host && (!destination.Verified || destination.ConnectAddress is null)))
+            throw new InvalidOperationException("Invalid or unverified forward destination.");
+        return AddForwardAsync(request.TargetVm, request.VmPort, request.Target, request.Label,
+            request.MaxForwards, cancellationToken, destination);
+    }
+
+    private async Task<AddForwardResult> AddForwardAsync(
         string vmName,
         int vmPort,
         ForwardTarget target,
         string label,
         int maxForwards,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, ForwardDestination? destination)
     {
         ThrowIfFailing();
 
@@ -189,7 +204,8 @@ public sealed class InMemoryPortForwardManager : IPortForwardManager
                 PublicPort: publicPort,
                 Target: target,
                 Label: label,
-                Created: _clock.UtcNow);
+                Created: _clock.UtcNow,
+                Destination: destination);
 
             try
             {
@@ -341,7 +357,7 @@ public sealed class InMemoryPortForwardManager : IPortForwardManager
     }
 
     private void Materialize(PortForward forward, int publicPort) =>
-        Materialized[forward.Id] = Rule(publicPort, forward.VmName, forward.VmPort);
+        Materialized[forward.Id] = Rule(publicPort, forward.Destination?.ConnectAddress ?? forward.VmName, forward.Destination?.ConnectPort ?? forward.VmPort);
 
     private void ReleasePublicPort(PortForward forward)
     {

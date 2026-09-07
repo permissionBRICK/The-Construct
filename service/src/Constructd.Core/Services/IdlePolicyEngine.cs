@@ -42,7 +42,7 @@ public sealed class IdlePolicyEngine(
             var all = await vms.ListAsync(owner: null, cancellationToken).ConfigureAwait(false);
             var outcomes = new List<IdleOutcome>(all.Count);
 
-            foreach (var vm in all.OrderBy(v => v.Name, StringComparer.Ordinal))
+            foreach (var vm in all.Where(v => v.Kind == VmKind.Primary).OrderBy(v => v.Name, StringComparer.Ordinal))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 outcomes.Add(await EvaluateVmAsync(vm, now, cancellationToken).ConfigureAwait(false));

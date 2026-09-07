@@ -32,7 +32,6 @@ public static class VmJobs
         var isoBuilder = services.GetRequiredService<IIsoBuilder>();
         var driver = services.GetRequiredService<IHypervisorDriver>();
         var forwards = services.GetRequiredService<IPortForwardManager>();
-        var tokens = services.GetRequiredService<ITokenService>();
         var vms = services.GetRequiredService<IVmRepository>();
         var audit = services.GetRequiredService<IAuditLog>();
         var clock = services.GetRequiredService<IClock>();
@@ -78,7 +77,8 @@ public static class VmJobs
 
             // Issued after the forward so a failure earlier never leaves a live token behind. This
             // also writes the hash onto the VM record, hence the re-read below.
-            var vmToken = await tokens.IssueVmTokenAsync(name, cancellationToken).ConfigureAwait(false);
+            var vmToken = await scope.ServiceProvider.GetRequiredService<IVmTokenIssuer>()
+                .IssueVmTokenAsync(name, VmTokenKind.Primary, cancellationToken).ConfigureAwait(false);
             progress.Report("vm-scoped token issued (handed out once, to the first retrieval of this job)");
 
             var state = await driver.GetStateAsync(name, cancellationToken).ConfigureAwait(false);
@@ -179,7 +179,8 @@ public static class VmJobs
         string name,
         string actor,
         IProgress<string> progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeRegistryRemoval = null)
     {
         await using var scope = scopes.CreateAsyncScope();
         var services = scope.ServiceProvider;
@@ -197,6 +198,7 @@ public static class VmJobs
             await forwards.ReleaseSshForwardAsync(name, cancellationToken).ConfigureAwait(false);
             progress.Report($"released {removed} forward(s) and the ssh forward");
 
+            if (beforeRegistryRemoval is not null) await beforeRegistryRemoval(cancellationToken).ConfigureAwait(false);
             await vms.RemoveAsync(name, cancellationToken).ConfigureAwait(false);
             progress.Report($"vm {name} removed");
 

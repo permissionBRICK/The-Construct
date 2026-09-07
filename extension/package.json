@@ -87,6 +87,11 @@
         "command": "construct.removeRemoteHost",
         "title": "Remove Remote Host",
         "category": "The Construct"
+      },
+      {
+        "command": "construct.openHostAdmin",
+        "title": "Host Administration",
+        "category": "The Construct"
       }
     ],
     "configuration": {

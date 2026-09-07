@@ -8,10 +8,15 @@ public sealed class SqliteAuditLog(SqliteDatabase database) : IAuditLog
 {
     public async Task AppendAsync(AuditEntry entry, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(entry);
-
-        await using var connection = await database.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var connection = await database.OpenAsync(cancellationToken);
+        await using var tx = connection.BeginTransaction(deferred: false);
+        await AppendInTransaction(connection, tx, entry, cancellationToken);
+        await tx.CommitAsync(cancellationToken);
+    }
+    internal static async Task AppendInTransaction(Microsoft.Data.Sqlite.SqliteConnection connection, Microsoft.Data.Sqlite.SqliteTransaction tx, AuditEntry entry, CancellationToken cancellationToken)
+    {
         await using var command = connection.CreateCommand();
+        command.Transaction = tx;
         command.CommandText = """
             INSERT INTO audit (at, actor, action, target, outcome, detail)
             VALUES (@at, @actor, @action, @target, @outcome, @detail);

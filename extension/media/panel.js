@@ -581,6 +581,88 @@
     });
   }
 
+  // ── Child VMs (host-administration contract §10.2) ──────────────────────────
+  // The minimal user view: this primary's children with EXACTLY two actions. `null`
+  // hides the card (a local instance, or a host whose service has no child VMs); the
+  // extension validates every child name against what it listed, so the buttons only
+  // carry the name. Shut down is a graceful request — never a save or a force-off — and
+  // the outcome is reported by the extension, honestly, when the job ends.
+  function renderChildren(c) {
+    const mod = $("childrenModule");
+    if (!mod) return;
+    if (!c || !c.visible) { mod.hidden = true; return; }
+    mod.hidden = false;
+    const items = Array.isArray(c.items) ? c.items : [];
+    text("childrenMeta", c.primary ? "under " + c.primary : "");
+    const problem = $("childrenProblem");
+    if (problem) { problem.hidden = !c.problem; problem.textContent = c.problem ? "Could not read the child VMs: " + c.problem : ""; }
+    const empty = $("childrenEmpty");
+    if (empty) empty.hidden = items.length > 0 || !!c.problem;
+    const host = $("childrenList");
+    if (!host) return;
+    host.textContent = "";
+    items.forEach((item) => {
+      const row = document.createElement("div");
+      row.className = "fwd-row child-row" + (item.overdue ? " error" : item.state === "running" ? " open" : " queued");
+
+      const name = document.createElement("span");
+      name.className = "fwd-port";
+      name.textContent = item.name;
+      row.appendChild(name);
+
+      const state = document.createElement("span");
+      state.className = "fwd-state";
+      state.textContent = item.busy ? (item.operation || "busy") : item.state;
+      row.appendChild(state);
+
+      const sharing = document.createElement("span");
+      sharing.className = "fwd-target";
+      sharing.textContent = item.shared ? "shared host-wide" : "private";
+      // Sharing is a MANAGEMENT grant (who may operate it through Construct), never network
+      // isolation: the contract records rules and enforces none (§12.2, isolation "none").
+      sharing.title = item.shared
+        ? "Other users of this host may be using it"
+        : "Only you and the host's administrators can operate it through Construct. This is not network isolation — VMs on the host's switch can still reach it.";
+      row.appendChild(sharing);
+
+      const lease = document.createElement("span");
+      lease.className = "fwd-label";
+      lease.textContent = item.lease || "";
+      if (item.overdue) lease.title = "The lease expired and the graceful shutdown did not succeed; the service keeps retrying. Delete it, or fix the guest and shut it down.";
+      row.appendChild(lease);
+
+      const stop = document.createElement("button");
+      stop.type = "button";
+      stop.className = "fwd-open child-shutdown";
+      stop.textContent = "Shut down";
+      stop.title = item.canShutdown ? "Ask the guest to shut down gracefully (never a force-off)" : (item.busy ? "An operation is in progress" : "Not running");
+      stop.disabled = !item.canShutdown;
+      stop.setAttribute("aria-label", "Shut down child VM " + item.name);
+      stop.addEventListener("click", () => post({ type: "command", id: "childShutdown", child: item.name }));
+      row.appendChild(stop);
+
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "fwd-close child-delete";
+      del.textContent = "Delete";
+      del.title = item.canDelete ? "Delete this child VM (its disk, saved state and dedicated media are removed permanently)" : (item.busy ? "An operation is in progress" : "Not allowed for you");
+      del.disabled = !item.canDelete;
+      del.setAttribute("aria-label", "Delete child VM " + item.name);
+      del.addEventListener("click", () => post({ type: "command", id: "childDelete", child: item.name }));
+      row.appendChild(del);
+
+      host.appendChild(row);
+    });
+  }
+
+  /** The header's Host button (§10.2): present only with an admin offer. */
+  function renderHostAdminOffer(offer) {
+    const b = $("hostAdminBtn");
+    if (!b) return;
+    b.hidden = !offer;
+    if (offer) b.title = "Administer " + (offer.host || "this host");
+  }
+
   // ── Idle policy (B8, plan §4.7) ─────────────────────────────────────────────
   // Remote instances only: the host service is what enforces it (which is the point — it
   // works with this PC switched off), so a local VM has nothing to configure and the card
@@ -679,6 +761,10 @@
     // offline early-return and neither is cleared by clearLiveVmData.
     if (s.forwards !== undefined) renderForwards(s.forwards);
     if (s.idlePolicy !== undefined) renderIdlePolicy(s.idlePolicy);
+    // Child VMs and the host-administration offer are host-service-derived too (§10.2):
+    // rendered before the offline early-return, `null` hides, absent leaves them as they are.
+    if (s.children !== undefined) renderChildren(s.children);
+    if (s.hostAdminOffer !== undefined) renderHostAdminOffer(s.hostAdminOffer);
 
     // Unreachable, or reachable but the probe script failed: we have no trustworthy
     // VM data, so clear it rather than show stale values.
@@ -983,6 +1069,7 @@
     // absent field of a partial state as "no reading" and blank the rest of the panel.
     else if (m.type === "forwards") renderForwards(m.forwards);
     else if (m.type === "idlePolicy") renderIdlePolicy(m.idlePolicy);
+    else if (m.type === "children") renderChildren(m.children);
     else if (m.type === "settings") applySettings(m.settings);
     else if (m.type === "editProject") populateModal(m.name, m.profile);
   });

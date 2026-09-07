@@ -42,6 +42,7 @@ public static class ServiceComposition
         }
 
         services.AddConstructdStores(options);
+        services.AddHostAdminCore(options);
 
         if (options.Fake)
         {
@@ -66,7 +67,7 @@ public static class ServiceComposition
                 // rendered form would carry the dependency's message, stack trace and Data with it.
                 (job, error) => logger.LogError(
                     "Job {JobId} ({Kind}) for {Vm} failed: {Error}.",
-                    job.Id, job.Kind, job.VmName ?? "-", error));
+                    job.Id, job.Kind, job.VmName ?? "-", error), sp.GetRequiredService<IMaintenanceGate>());
         });
         services.AddSingleton<IJobEngine>(sp => sp.GetRequiredService<InProcessJobEngine>());
 
@@ -164,6 +165,12 @@ public static class ServiceComposition
 
         services.AddSingleton<FakeIsoBuilder>();
         services.AddSingleton<IIsoBuilder>(sp => sp.GetRequiredService<FakeIsoBuilder>());
+        // Read-only catalog status is available in fake mode too; building remains faked.
+        services.AddSingleton<IIsoFileSystem, IsoFileSystem>();
+        services.AddSingleton<IIsoCatalog>(sp => new FileIsoCatalog(
+            sp.GetRequiredService<IIsoFileSystem>(), sp.GetRequiredService<IClock>(),
+            sp.GetRequiredService<ConstructdOptions>().Iso.CacheDir,
+            sp.GetRequiredService<ILoggerFactory>().CreateLogger<FileIsoCatalog>()));
 
         services.AddSingleton(sp =>
         {

@@ -296,7 +296,33 @@ function apiError(status, body, context) {
   const e = new Error(mapError(status, body, context));
   e.status = status;
   e.body = body;
+  // The kebab-case `code` of a coded problem document (host-administration contract
+  // §8.17), "" when the body carries none. Callers branch on it the way they branch on
+  // `status`: a 409 is "not right now", a 409 `cascade-confirmation-required` is a
+  // dialog to open.
+  e.code = problemCode(body);
   return e;
+}
+
+/** The `code` extension member of an RFC 7807 problem document, or "". Pure. */
+function problemCode(body) {
+  return body && typeof body === "object" && typeof body.code === "string" ? body.code : "";
+}
+
+/**
+ * "?kind=all&owner=alice" from a plain object. null/undefined/"" values are omitted
+ * (the service's defaults apply), everything else is URL-encoded. "" when nothing is
+ * left, so `"/vms" + buildQuery(q)` is the whole route either way. Pure.
+ */
+function buildQuery(params) {
+  if (!params || typeof params !== "object") return "";
+  const parts = [];
+  for (const key of Object.keys(params)) {
+    const v = params[key];
+    if (v == null || v === "") continue;
+    parts.push(encodeURIComponent(key) + "=" + encodeURIComponent(typeof v === "boolean" ? String(v) : String(v)));
+  }
+  return parts.length ? "?" + parts.join("&") : "";
 }
 
 /** Parse a response body: JSON when it parses, the raw string otherwise, null when
@@ -381,13 +407,19 @@ function nodeHttp(url, init = {}) {
   const u = new URL(url);
   const isHttps = u.protocol === "https:";
   const pin = init.pin || "";
+  const headers = { ...(init.headers || {}) };
+  // Node does not automatically frame DELETE bodies. Cascade confirmations must
+  // reach the service, including when the JSON contains multibyte characters.
+  if (init.body != null && !Object.keys(headers).some(k => /^(content-length|transfer-encoding)$/i.test(k))) {
+    headers["Content-Length"] = Buffer.byteLength(init.body);
+  }
   return new Promise((resolve, reject) => {
     const options = {
       method: init.method || "GET",
       hostname: u.hostname,
       port: u.port,
       path: u.pathname + u.search,
-      headers: init.headers || {},
+      headers,
       timeout: init.timeoutMs || 100000,
     };
     if (isHttps) {
@@ -603,8 +635,72 @@ function createClient(opts = {}) {
       readEndpoint(await request("GET", `/vms/${encodeURIComponent(name)}/endpoint`)),
     power: (name, action) => request("POST", `/vms/${encodeURIComponent(name)}/power`, { action }),
     createVm: (spec) => request("POST", "/vms", spec),
-    deleteVm: (name) => request("DELETE", `/vms/${encodeURIComponent(name)}`),
+    // `body` is the ADDITIVE cascade confirmation of a primary with children
+    // (`{ cascade: { token } }`, contract §8.8); without one the call is byte-for-byte
+    // the DELETE it always was.
+    deleteVm: (name, body) => request("DELETE", `/vms/${encodeURIComponent(name)}`, body == null ? null : body),
     getJob: (id) => request("GET", `/jobs/${encodeURIComponent(id)}`),
+
+    // ── Host administration (contract §8, one helper per route, same error mapping) ──
+    // Discovery and identity (§8.1). `health` is the feature-detection probe: an old
+    // service answers 404, a current one lists `apiFeatures`.
+    health: () => request("GET", "/health"),
+    hostCapabilities: () => request("GET", "/host/capabilities"),
+    vmIdentity: (name) => request("GET", `/vms/${encodeURIComponent(name)}/identity`),
+    vmCapabilities: (name) => request("GET", `/vms/${encodeURIComponent(name)}/capabilities`),
+    // Host status and configuration (§8.2, §8.18; admin).
+    hostStatus: () => request("GET", "/host/status"),
+    hostCapacity: (refresh) => request("GET", "/host/capacity" + buildQuery({ refresh: refresh ? "true" : null })),
+    hostConfig: () => request("GET", "/host/config"),
+    putHostConfig: (body) => request("PUT", "/host/config", body),
+    isoCatalog: () => request("GET", "/host/iso-catalog"),
+    // Users and allowances (§8.4; admin). `createUser`/`deleteUser`/`issueUserToken` are
+    // the EXISTING routes, reached through the same client for the first time.
+    users: () => request("GET", "/users"),
+    getUser: (name) => request("GET", `/users/${encodeURIComponent(name)}`),
+    createUser: (body) => request("POST", "/users", body),
+    updateUser: (name, body) => request("PUT", `/users/${encodeURIComponent(name)}`, body),
+    deleteUser: (name) => request("DELETE", `/users/${encodeURIComponent(name)}`),
+    userAllowance: (name) => request("GET", `/users/${encodeURIComponent(name)}/allowance`),
+    putUserAllowance: (name, body) => request("PUT", `/users/${encodeURIComponent(name)}/allowance`, body),
+    userTokens: (name) => request("GET", `/users/${encodeURIComponent(name)}/tokens`),
+    issueUserToken: (name, body) => request("POST", `/users/${encodeURIComponent(name)}/tokens`, body || {}),
+    revokeUserToken: (name, id) => request("DELETE", `/users/${encodeURIComponent(name)}/tokens/${encodeURIComponent(id)}`),
+    // Inventory (§8.3). `vms()` with no query is the existing `listVms` answer.
+    vms: (query) => request("GET", "/vms" + buildQuery(query)),
+    sharedVms: () => request("GET", "/vms/shared"),
+    children: (parent) => request("GET", `/vms/${encodeURIComponent(parent)}/children`),
+    // Per-VM overrides (§8.5; admin, restrict-only).
+    overrides: (name) => request("GET", `/vms/${encodeURIComponent(name)}/overrides`),
+    putOverrides: (name, body) => request("PUT", `/vms/${encodeURIComponent(name)}/overrides`, body),
+    deleteOverrides: (name) => request("DELETE", `/vms/${encodeURIComponent(name)}/overrides`),
+    // Lifecycle (§8.7): `{ action: "start"|"shutdown"|"save"|"restart", lifetime?, operationKey? }`.
+    // `shutdown` is the GRACEFUL guest shutdown (job `vm-shutdown`), never a force-off.
+    lifecycle: (name, body) => request("POST", `/vms/${encodeURIComponent(name)}/lifecycle`, body),
+    // Token rotation (§8.13). The plaintext is in the answer ONCE and is never logged here.
+    rotateVmToken: (name, body) => request("POST", `/vms/${encodeURIComponent(name)}/token`, body || {}),
+    revokeVmToken: (name) => request("DELETE", `/vms/${encodeURIComponent(name)}/token`),
+    // Media (§8.10). `media({ owner: "all" })` is the admin inventory.
+    media: (query) => request("GET", "/media" + buildQuery(query)),
+    mediaItem: (id) => request("GET", `/media/${encodeURIComponent(id)}`),
+    mediaReferences: (id) => request("GET", `/media/${encodeURIComponent(id)}/references`),
+    deleteMedia: (id) => request("DELETE", `/media/${encodeURIComponent(id)}`),
+    mediaCleanup: () => request("POST", "/media/cleanup", {}),
+    // Jobs and audit (§8.16).
+    jobs: (query) => request("GET", "/jobs" + buildQuery(query)),
+    cancelJob: (id) => request("POST", `/jobs/${encodeURIComponent(id)}/cancel`, {}),
+    audit: (query) => request("GET", "/audit" + buildQuery(query)),
+    // Forwards whose destination rides THIS primary (§8.11, §12.2): what the extension of
+    // the primary's owner polls to tunnel child-target forwards.
+    forwardsVia: (primary) => request("GET",
+      `/vms/${encodeURIComponent(primary)}/forwards` + buildQuery({ via: primary })),
+    // Host updates (§8.15; admin).
+    updatesStatus: () => request("GET", "/host/updates/status"),
+    updatesCheck: (body) => request("POST", "/host/updates/check", body || {}),
+    updatesStage: (body) => request("POST", "/host/updates/stage", body || {}),
+    updatesApply: (body) => request("POST", "/host/updates/apply", body),
+    updatesCancel: (body) => request("POST", "/host/updates/cancel", body),
+    updatesResolve: (body) => request("POST", "/host/updates/resolve", body),
   };
 }
 
@@ -716,7 +812,7 @@ module.exports = {
   normalizeServiceUrl, bareHost, sniName, isLoopbackHost, assertTransportSafe,
   urlParts, hostSlug, remoteStoreDir, pinPath, tokenSecretKey,
   formatFingerprint, fingerprintsMatch, readPin, writePin, fetchFingerprint,
-  apiPath, mapError, apiError, parseBody, nodeHttp, pinnedHttpsAgent,
+  apiPath, mapError, apiError, problemCode, buildQuery, parseBody, nodeHttp, pinnedHttpsAgent,
   psSingleQuote, buildDelegateScript, buildDelegateLaunch, parseDelegateOutput, runDelegate,
   createClient, mapVmState, readEndpoint,
   planForgetRemoteHost, sameServiceUrl,

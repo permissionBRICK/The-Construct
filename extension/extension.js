@@ -39,6 +39,7 @@ const remotehost = require("./src/remotehost");
 const forwarder = require("./src/forwarder");
 const forwarderui = require("./src/forwarder-ui");
 const hypervRemote = require("./src/drivers/hyperv-remote");
+const hostadminui = require("./src/hostadmin-ui");
 
 /** The single editor-tab panel instance, if open. */
 let panel; // vscode.WebviewPanel | undefined
@@ -148,6 +149,13 @@ const lastT3WebUrl = new Map();   // instance name -> origin
 /** The active instance's idle policy (remote only), cached for the state push. */
 let cachedIdlePolicy = null;
 let cachedIdlePolicyInstance = null;
+/** Host administration (docs/plans/host-administration-contracts.md §10): the panel's
+ *  Child VMs card and its "Host administration" offer, resolved per ACTIVE instance like
+ *  the idle policy (null = hide), and the feature object itself (src/hostadmin-ui.js). */
+let hostAdmin = null;
+let cachedChildren = null;
+let cachedHostAdminOffer = null;
+let cachedHostAdminInstance = null;
 /** The status-bar item showing the active instance (only when >1 exists). */
 let instanceStatusItem = null;
 /**
@@ -523,6 +531,12 @@ function postState(target, state) {
   if (cachedIdlePolicyInstance === activeInstance().name) {
     extra.idlePolicy = cachedIdlePolicy;
   }
+  // Child VMs + the host-administration offer (§10.2), same contract as idlePolicy: a
+  // resolved `null` HIDES the card/button, and before resolution nothing is sent.
+  if (cachedHostAdminInstance === activeInstance().name) {
+    extra.children = cachedChildren;
+    extra.hostAdminOffer = cachedHostAdminOffer;
+  }
   // "Register this VM" (B11, plan §4.12): a window attached over Remote-SSH to a host
   // no registry entry describes. Attached to EVERY push — including as `null` — so the
   // offer disappears from the panel the moment the VM is registered. It is null on every
@@ -751,6 +765,12 @@ async function refreshAll() {
   // check. A local instance resolves to null, which is what hides the card.
   try {
     await readIdlePolicy(inst);
+    if (!instanceGate.valid(gate)) return;
+    for (const w of liveWebviews) postState(w, withUsage !== aug ? withUsage : aug);
+  } catch (_) { /* never break a refresh over an optional card */ }
+  // Child VMs and the host-administration offer (remote instances only; §10.2/§10.3).
+  try {
+    await readHostAdminExtras(inst);
     if (!instanceGate.valid(gate)) return;
     for (const w of liveWebviews) postState(w, withUsage !== aug ? withUsage : aug);
   } catch (_) { /* never break a refresh over an optional card */ }
@@ -1024,7 +1044,11 @@ async function buildForwarderTransport(inst) {
     logLine(`forwards: not serving "${inst.name}" — ${problem}`);
     return null;
   }
-  return forwarderui.createRemoteTransport({ ssh, cfg, client });
+  // The service's feature list decides whether child-target forwards are polled
+  // (`?via=`, host-administration contract §12.2); an older service is polled as before.
+  let features = [];
+  try { features = (await hypervRemote.queryFeatures(inst, { ...opts, log: logLine })).features || []; } catch (_) { features = []; }
+  return forwarderui.createRemoteTransport({ ssh, cfg, client, features });
 }
 
 /**
@@ -1308,6 +1332,69 @@ async function readIdlePolicy(inst) {
     logLine(`idle policy: could not read "${target.name}" — ${(e && e.message) || e}`);
     return cachedIdlePolicy;
   }
+}
+
+// ── Host administration (contract §10; src/hostadmin.js + src/hostadmin-ui.js) ──────
+// ONE registration block: the feature object gets every VS Code-side dependency injected
+// here, and the rest of this file only calls it at four hooks (postState, refreshAll,
+// handleMessage's command branch, the instance picker).
+function hostAdminFeature() {
+  if (hostAdmin) return hostAdmin;
+  hostAdmin = hostadminui.createHostAdminFeature({
+    vscode,
+    context: extensionContext,
+    log: logLine,
+    remoteHosts,
+    clientFor: (entry) => remoteClientFor(entry),
+    // The background offer probe: the SILENT credential path every other background
+    // reader uses (driverOpts → resolveClient), never remoteClientFor, which warns when
+    // the token is gone — a toast every minute from an optional button would be a nag.
+    offerClient: async (entry) => {
+      const inst = { name: remotehost.urlParts(entry.url).host, backend: "hyperv-remote", service: { url: entry.url, auth: entry.auth === "token" ? "token" : "negotiate" } };
+      const opts = await driverOpts(inst);
+      return hypervRemote.resolveClient(inst, { ...opts, pin: entry.fingerprint || undefined, log: logLine }).client;
+    },
+    instanceClient: async (inst) => {
+      const opts = await driverOpts(inst);
+      return hypervRemote.resolveClient(inst, { ...opts, log: logLine });
+    },
+    queryChildren: async (inst) => hypervRemote.queryChildren(inst, { ...(await driverOpts(inst)), log: logLine }),
+    registryList: () => instances.list(registryNow()),
+    activeInstance,
+    addRemoteHost: () => runAddRemoteHost(),
+    newRemoteVm: (entry) => runNewRemoteVm(entry),
+    refreshAll: () => { void refreshAll(); },
+    themeCssFile: () => themes.cssFileFor(currentThemeId()),
+    nonce: getNonce,
+  });
+  return hostAdmin;
+}
+
+/**
+ * The Child VMs card and the "Host administration" offer for the ACTIVE instance (null
+ * for a local instance, for a host without the feature, and while unresolved). Cached per
+ * instance and re-resolved on every refresh — identity is per host and re-evaluated on
+ * every host switch (§10.3). Best-effort: a failure leaves the last values.
+ */
+async function readHostAdminExtras(inst) {
+  const target = inst || activeInstance();
+  if (String(target.backend || "").trim().toLowerCase() !== "hyperv-remote") {
+    cachedChildren = null; cachedHostAdminOffer = null; cachedHostAdminInstance = target.name;
+    return;
+  }
+  if (cachedHostAdminInstance !== target.name) { cachedChildren = null; cachedHostAdminOffer = null; cachedHostAdminInstance = target.name; }
+  const token = instanceGate.token();
+  const feature = hostAdminFeature();
+  try {
+    const children = await feature.childrenStateFor(target);
+    if (!instanceGate.valid(token)) return;
+    cachedChildren = children;
+  } catch (e) { logLine(`hostadmin: children of "${target.name}" — ${(e && e.message) || e}`); }
+  try {
+    const offer = await feature.hostAdminOfferFor(target);
+    if (!instanceGate.valid(token)) return;
+    cachedHostAdminOffer = offer;
+  } catch (e) { logLine(`hostadmin: offer for "${target.name}" — ${(e && e.message) || e}`); }
 }
 
 /** The panel's "apply" on the idle-policy card. Clamps to the admin cap first, so the
@@ -3386,6 +3473,7 @@ async function onInstanceChanged() {
   gitDetected = null; gitDetectedAt = 0;
   cachedConfigSync = null;
   cachedIdlePolicy = null; cachedIdlePolicyInstance = null;
+  cachedChildren = null; cachedHostAdminOffer = null; cachedHostAdminInstance = null;
   // The notification watcher is one long-lived SSH connection to ONE VM: reconnect it
   // to the new instance (its spool lives on that VM, so nothing is lost on the old one).
   if (notifyInstance !== inst.name || identityChanged) {
@@ -3422,7 +3510,11 @@ async function runSwitchInstance() {
   const reg = registryNow(true);
   const all = instances.list(reg);
   const current = activeInstance().name;
-  if (all.length < 2) {
+  // Host-administration rows (§10.2): "Host administration: <host>" for an enrolled host
+  // whose identity is admin, "Create first Construct VM on <host>" for one with zero own
+  // VMs. Both absent on a local install, so the single-VM message below is unchanged.
+  const hostRows = hostAdminFeature().pickerItems();
+  if (all.length < 2 && !hostRows.length) {
     vscode.window.showInformationMessage(
       "Only one Construct instance is configured (" + current + "). Add more in " +
       (reg.path || "%LOCALAPPDATA%\\The-Construct\\instances.json") + "."
@@ -3440,10 +3532,11 @@ async function runSwitchInstance() {
         (i.name === reg.defaultInstance ? " · registry default" : "") +
         (i.name === connectedName ? " · connected (this window)" : ""),
       name: i.name,
-    })),
+    })).concat(hostRows),
     { title: "Switch the Construct instance", placeHolder: "The VM this window's panel drives" }
   );
   if (!pick) return;
+  if (await hostAdminFeature().handlePickerItem(pick)) return;
   await switchInstance(pick.name);
 }
 
@@ -3892,7 +3985,7 @@ async function runAddRemoteHost() {
  * key, VS Code Remote-SSH, OpenCode, SMB) and streams a long log the user needs to see.
  * The installer already owns all of that.
  */
-async function runNewRemoteVm() {
+async function runNewRemoteVm(preferred) {
   const hosts = remoteHosts();
   if (!hosts.length) {
     const ADD = "Add a remote host";
@@ -3902,8 +3995,10 @@ async function runNewRemoteVm() {
     if (pick === ADD) await runAddRemoteHost();
     return;
   }
-  let hostEntry = hosts[0];
-  if (hosts.length > 1) {
+  // `preferred` (host administration's "Create first Construct VM here", §10.2) skips the
+  // host question; the flow itself is unchanged.
+  let hostEntry = (preferred && preferred.url && hosts.find((h) => remotehost.sameServiceUrl(h.url, preferred.url))) || hosts[0];
+  if (hosts.length > 1 && !(preferred && preferred.url)) {
     const picked = await vscode.window.showQuickPick(
       hosts.map((h) => ({ label: remotehost.urlParts(h.url).host, description: h.identity || "", detail: h.url, entry: h })),
       { title: "Create a VM on which host?", ignoreFocusOut: true }
@@ -4222,6 +4317,13 @@ function handleMessage(message, webview, context) {
       if (id === "closeForward") { void closeForward(String(message.forward || "")); return; }
       if (id === "registerThisVm") { void runRegisterThisVm(); return; }
       if (id === "removeInstance") { void runRemoveInstance(); return; }
+      // Host administration (§10.2): the Child VMs card's two actions, the Host button
+      // and the first-VM offer. The child name is validated against what THIS window
+      // listed — the webview is untrusted input.
+      if (id === "openHostAdmin" || id === "createFirstVm" || id === "childShutdown" || id === "childDelete") {
+        void hostAdminFeature().handlePanelCommand(id, message, targetInstance(actionTarget()));
+        return;
+      }
       if (id === "updateAgents") { runUpdateAgents(); return; }
       if (id === "updateAgent") {
         // Per-agent ↑ tag. Validate against the known ids — the webview is
@@ -4949,6 +5051,7 @@ async function activate(context) {
     vscode.commands.registerCommand("construct.registerThisVm", () => runRegisterThisVm()),
     vscode.commands.registerCommand("construct.removeInstance", () => runRemoveInstance()),
     vscode.commands.registerCommand("construct.removeRemoteHost", () => runRemoveRemoteHost()),
+    vscode.commands.registerCommand("construct.openHostAdmin", () => hostAdminFeature().runOpenHostAdmin()),
     // Clicking a VM notification's toast opens the control panel: Windows launches
     // the toast's vscode:// URI, which lands here. Data-free by design — the URI is
     // fixed in src/notify.js, so nothing VM-authored ever reaches this handler.
@@ -5072,6 +5175,8 @@ function deactivate() {
   audioTargetInstance = null;
   stopAutoRefresh();
   stopNotifyWatch();
+  try { if (hostAdmin) hostAdmin.dispose(); } catch (_) {}
+  hostAdmin = null;
   // CLOSE THE FORWARDER CHAIN FIRST, for the reason the mic chain is closed first: a start
   // sitting in its transport build must not construct a forwarder — and its `ssh -L`
   // children and listening ports — after the disposal below has already run.

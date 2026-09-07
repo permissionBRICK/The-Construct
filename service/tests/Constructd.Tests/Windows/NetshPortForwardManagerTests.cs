@@ -646,6 +646,36 @@ public sealed class NetshPortForwardManagerTests
     }
 
     /// <summary>Everything one manager needs, wired to fakes.</summary>
+    [Theory]
+    [InlineData(ForwardTarget.Client)]
+    [InlineData(ForwardTarget.Host)]
+    public async Task Child_destination_is_atomic_and_host_argv_uses_child_address_and_connect_port(ForwardTarget target)
+    {
+        var world = new World(); await world.AddVmAsync("child");
+        var request = new ForwardRequest("vm:parent", ForwardRelationship.Parent, "child", "parent", target, 3000, 8080, "child", 16);
+        var destination = new ForwardDestination("child", "parent", "172.20.144.99", 8080, "vm:parent", ForwardRelationship.Parent, target == ForwardTarget.Host);
+        var result = await world.Manager.TryAddDestinationForwardAsync(request, destination, default);
+        Assert.Equal(destination, result.Forward!.Destination);
+        Assert.Equal(destination, (await world.Manager.ListAsync("child", default))[0].Destination);
+        if (target == ForwardTarget.Client) Assert.Empty(world.Runner.Calls);
+        else
+        {
+            // A synthetic future-authority input, not a capability exposed by Hyper-V today.
+            Assert.Equal(new[] { "interface", "portproxy", "add", "v4tov4", "listenaddress=0.0.0.0", "listenport=2300", "connectaddress=172.20.144.99", "connectport=8080" }, world.Runner[0].Arguments);
+            await world.Manager.ReconcileAsync(default);
+            Assert.Contains(world.Runner.Calls, c => c.Arguments.Contains("connectaddress=172.20.144.99"));
+        }
+    }
+    [Fact]
+    public async Task Child_host_destination_without_authority_is_refused_before_allocating_or_running_netsh()
+    {
+        var world = new World(); await world.AddVmAsync("child");
+        var request = new ForwardRequest("vm:parent", ForwardRelationship.Parent, "child", null, ForwardTarget.Host, 80, 80, "", 16);
+        var d = new ForwardDestination("child", null, "172.20.144.99", 80, "vm:parent", ForwardRelationship.Parent, false);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => world.Manager.TryAddDestinationForwardAsync(request, d, default));
+        Assert.Empty(world.Runner.Calls); Assert.Empty(await world.Manager.ListAsync(null, default));
+    }
+
     private sealed class World
     {
         public World(Action<ConstructdOptions>? configure = null, LogSink? logs = null, IHostAddressResolver? resolverOverride = null)

@@ -8,6 +8,8 @@ namespace Constructd.Core.Configuration;
 /// </summary>
 public sealed class ConstructdOptions
 {
+    public HostAdminOptions HostAdmin { get; set; } = new();
+
     public const string SectionName = "Constructd";
 
     /// <summary>
