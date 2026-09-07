@@ -22,11 +22,19 @@ public sealed class MaintenanceFilter(RequestDelegate next)
         finally { MaintenanceAdmission.Current.Value = null; }
     }
     public static async Task Problem(HttpContext http, IMaintenanceGate gate, IHostConfigStore config)
+        => await (await RefusedAsync(http, gate, config)).ExecuteAsync(http);
+
+    /// <summary>The same contract applies when draining wins after HTTP admission.</summary>
+    public static Task<IResult> RefusedAsync(HttpContext http) => RefusedAsync(http,
+        http.RequestServices.GetRequiredService<IMaintenanceGate>(),
+        http.RequestServices.GetRequiredService<IHostConfigStore>());
+
+    private static async Task<IResult> RefusedAsync(HttpContext http, IMaintenanceGate gate, IHostConfigStore config)
     {
         var marker = await config.GetAsync<MaintenanceMarker>("maintenance", http.RequestAborted);
         http.Response.Headers.RetryAfter = "30";
-        await Results.Problem(statusCode:503, title:"maintenance", type:"urn:construct:problem:maintenance",
+        return Results.Problem(statusCode:503, title:"maintenance", type:"urn:construct:problem:maintenance",
             extensions:new Dictionary<string,object?> { ["code"]="maintenance", ["phase"]=gate.State,
-                ["retryAfterSeconds"]=30, ["updateId"]=marker?.UpdateId }).ExecuteAsync(http);
+                ["retryAfterSeconds"]=30, ["updateId"]=marker?.UpdateId });
     }
 }

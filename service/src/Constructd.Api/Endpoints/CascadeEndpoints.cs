@@ -48,7 +48,7 @@ public static class CascadeEndpoints
             [], null, null, clock.UtcNow, null, http.User.Actor());
         var childGates = new List<IAsyncDisposable>();
         IDisposable? maintenance = s.GetRequiredService<IMaintenanceGate>().TryEnter(job.Kind, id, parent.Name);
-        if (maintenance is null) return LifecycleEndpoints.Problem("maintenance", 503);
+        if (maintenance is null) return await MaintenanceFilter.RefusedAsync(http);
         maintenance = new Handles(maintenance, s.GetRequiredService<IOperationRegistry>().Register(id, job.Kind, parent.Name));
         try
         {

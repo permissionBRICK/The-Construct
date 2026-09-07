@@ -106,9 +106,10 @@ public static class LifecycleEndpoints
         catch (ChildValidationException ex) { return CodedProblems.Validation(ex.Field, "Invalid value."); }
         catch (LifecycleException ex)
         {
+            if (ex.Code == "maintenance") return await MaintenanceFilter.RefusedAsync(http);
             if (ex.Capacity is { } d) return Problem(ex.Code, extra: new() { ["resource"] = d.Resource, ["scope"] = d.Scope,
                 ["requested"] = d.Requested, ["allowed"] = d.AllowedAmount, ["available"] = d.Available, ["reason"] = d.Reason, ["epoch"] = d.Epoch });
-            return Problem(ex.Code == "power-state-changed" ? "operation-key-conflict" : ex.Code, ex.Code == "maintenance" ? 503 : ex.Code == "job-start-failed" ? 500 : 409, extra: new() { ["reason"] = ex.Code });
+            return Problem(ex.Code == "power-state-changed" ? "operation-key-conflict" : ex.Code, ex.Code == "job-start-failed" ? 500 : 409, extra: new() { ["reason"] = ex.Code });
         }
     }
     internal static IResult Replay(OperationKeyRecord key)

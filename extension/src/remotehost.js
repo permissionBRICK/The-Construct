@@ -407,13 +407,19 @@ function nodeHttp(url, init = {}) {
   const u = new URL(url);
   const isHttps = u.protocol === "https:";
   const pin = init.pin || "";
+  const headers = { ...(init.headers || {}) };
+  // Node does not automatically frame DELETE bodies. Cascade confirmations must
+  // reach the service, including when the JSON contains multibyte characters.
+  if (init.body != null && !Object.keys(headers).some(k => /^(content-length|transfer-encoding)$/i.test(k))) {
+    headers["Content-Length"] = Buffer.byteLength(init.body);
+  }
   return new Promise((resolve, reject) => {
     const options = {
       method: init.method || "GET",
       hostname: u.hostname,
       port: u.port,
       path: u.pathname + u.search,
-      headers: init.headers || {},
+      headers,
       timeout: init.timeoutMs || 100000,
     };
     if (isHttps) {

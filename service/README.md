@@ -1883,3 +1883,41 @@ Snapshot collection skips registry rows already marked absent. A missing, in-fli
 or replaced VM produces a per-VM empty result and sanitized warning; sibling VM
 reports and host facts remain available. Host-wide collection failures still fail
 closed for the complete snapshot.
+
+## Linux host-administration end-to-end validation
+
+Run `bash test/host-admin-e2e.test.sh` (requires .NET 10, Node, curl and jq).
+`HostAdminEndToEndTests` also runs in the normal solution test suite. It skips
+itself off Linux or when bash, Node, curl or jq is missing from PATH, so the
+portable solution test command remains usable on other hosts. The Bash wrapper
+requires its tools and fails if they are missing. The test launches
+the real API entry point on a dynamically assigned loopback Kestrel HTTPS port,
+using the `Constructd:Fake=true` composition (equivalent to `--fake`) and a private
+SQLite database. A temporary certificate is trusted by the guest CLI through
+`CONSTRUCT_SERVICE_CA_FILE` and pinned by the actual extension HTTP transport.
+The Node story invokes `bin/construct vm`, `extension/src/remotehost.js` and HTTPS
+requests; it never substitutes their HTTP implementations.
+
+The test assembly controls the clock, inventory, shutdown outcome and update
+maintenance gate over its child process's stdin/stdout. No test-control endpoints
+or configuration bypasses are added to the service. Media uses the production
+HTTP transfer/upload implementation with a test-only loopback URL policy and
+socket handler, backed by a local HTTP ISO fixture server. This exercises actual
+bytes, hashing, upload chunks and references; production public-address/DNS
+pinning remains covered by the media unit tests.
+
+Coverage includes enrollment and allowances; primary creation and token rotation;
+URL and dual-upload child creation; shared inspection, lifecycle, console and
+client forwards with owner-only operations refused; revocation on private sharing;
+two concurrent starts competing for the last GiB; shutdown/save/restart semantics;
+failed and successful lease expiry with retry; disabled host forwarding through
+both child and parent; drain/freeze/refusal/reopening; legacy token restrictions;
+and cascade confirmation invalidation when another child is created. It compares
+HTTP mutation counts against SQLite audit entries, including failures, and checks
+CLI/job/audit/service logs for credential and auxiliary-media sentinels.
+
+All listeners, subprocesses, media, token files, certificates and databases belong
+to the test and are disposed afterward. The update test exercises its real gate,
+not release staging, scheduled-task handoff or a Windows service restart. Fake
+hardware, ISO signatures and console PNGs do not demonstrate a bootable installer,
+guest OS installation, packet isolation or Hyper-V/LocalSystem operation.
