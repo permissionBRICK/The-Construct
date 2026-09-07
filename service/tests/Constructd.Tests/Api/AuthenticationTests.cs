@@ -132,16 +132,20 @@ public class AuthenticationTests
     }
 
     /// <summary>
-    /// A VM-scoped token is valid for exactly four calls — its own VM's forwards (list, add, remove)
-    /// and its own heartbeat. Every other route in the API, including <c>/whoami</c>, must refuse it.
+    /// Legacy credentials reach six own-VM routes; primary credentials also reach delegated discovery.
+    /// Neither kind authenticates as a user or grants administration rights.
     /// </summary>
-    [Fact]
-    public async Task A_vm_token_reaches_only_its_own_forwards_and_heartbeat()
+    [Theory]
+    [InlineData(VmTokenKind.Legacy)]
+    [InlineData(VmTokenKind.Primary)]
+    public async Task A_vm_token_reaches_only_the_routes_allowed_for_its_kind(VmTokenKind kind)
     {
         using var app = new TestApp();
         using var owner = await app.CreateUserClientAsync("bob");
         var job = await owner.CreateVmAsync("work-vm");
-        using var guest = app.CreateVmTokenClient(job.VmToken());
+        // Existing credentials remain legacy; new create jobs intentionally issue primary kind.
+        var token = await app.Service<Constructd.Core.Abstractions.IVmTokenIssuer>().IssueVmTokenAsync("work-vm", kind, default);
+        using var guest = app.CreateVmTokenClient(token);
 
         (string Method, string Url)[] allowed =
         [
@@ -149,6 +153,8 @@ public class AuthenticationTests
             ("POST", "/api/v1/vms/work-vm/forwards"),
             ("DELETE", "/api/v1/vms/work-vm/forwards/nope"),
             ("POST", "/api/v1/vms/work-vm/activity"),
+            ("GET", "/api/v1/vms/work-vm/identity"),
+            ("POST", "/api/v1/vms/work-vm/guest-report"),
         ];
 
         (string Method, string Url)[] refused =
@@ -170,6 +176,30 @@ public class AuthenticationTests
             ("POST", "/api/v1/users/bob/tokens"),
             ("GET", "/api/v1/audit"),
         ];
+
+        (string Method, string Url)[] adminOnly =
+        [
+            ("GET", "/api/v1/host/status"), ("GET", "/api/v1/host/config"), ("PUT", "/api/v1/host/config"),
+            ("GET", "/api/v1/users"), ("GET", "/api/v1/users/bob"), ("PUT", "/api/v1/users/bob"),
+            ("GET", "/api/v1/users/bob/allowance"), ("PUT", "/api/v1/users/bob/allowance"),
+            ("GET", "/api/v1/users/bob/tokens"), ("DELETE", "/api/v1/users/bob/tokens/nope"),
+            ("POST", "/api/v1/vms/work-vm/token"), ("DELETE", "/api/v1/vms/work-vm/token"),
+            ("GET", "/api/v1/vms/work-vm/overrides"), ("PUT", "/api/v1/vms/work-vm/overrides"),
+            ("DELETE", "/api/v1/vms/work-vm/overrides"), ("POST", "/api/v1/vms/work-vm/forwards/nope/ack"),
+        ];
+        (string Method, string Url)[] primaryDiscovery =
+        [
+            ("GET", "/api/v1/vms"), ("GET", "/api/v1/vms/work-vm"),
+            ("GET", "/api/v1/vms/work-vm/state"), ("GET", "/api/v1/vms/work-vm/endpoint"),
+            ("GET", "/api/v1/host/capabilities"), ("GET", "/api/v1/vms/work-vm/children"),
+            ("GET", "/api/v1/vms/shared"), ("GET", "/api/v1/vms/work-vm/capabilities"),
+        ];
+        refused = refused.Concat(adminOnly).Concat(primaryDiscovery).Distinct().ToArray();
+        if (kind == VmTokenKind.Primary)
+        {
+            refused = refused.Except(primaryDiscovery).ToArray();
+            allowed = allowed.Concat(primaryDiscovery).ToArray();
+        }
 
         foreach (var (method, url) in refused)
         {

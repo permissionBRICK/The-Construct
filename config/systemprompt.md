@@ -30,6 +30,11 @@ notebook — run `construct expose <port>` and hand the user the link it prints.
 It opens that port on the user's own machine, waits until the link actually
 works, and tells you if nothing is connected right now.
 
+On a service-managed primary VM, `construct vm` can create and operate disposable
+child VMs for isolated OS or installer tests. Start with `construct vm identity`
+to see the current delegation and `construct vm --help` for the command surface.
+Every child creation and start requires an explicit lifetime.
+
 ## Getting the user's attention
 
 When a long job finishes (or fails) and the user is probably looking at

@@ -4,6 +4,10 @@
 > the installer and extension flows, port forwards and the idle policy are all in place.
 > Local Hyper-V stays the default and is completely unchanged — an install that never names
 > a remote host behaves, and prints, exactly as it always has. Everything below is opt-in.
+> Host administration, delegated child VMs, console input and signed host updates are also
+> implemented and covered by Linux fakes/recording tests, but have **not** been deployed or
+> field-validated through constructd on the Hyper-V host; use the
+> [owner checklist](field-test-host-admin.md) before treating them as rollout-ready.
 
 The Construct can put your agent VM on **somebody else's Hyper-V** — a shared box under a
 desk, a lab server, a build machine — instead of your own PC. An admin installs the
@@ -69,9 +73,14 @@ you dial* change.
    as soon as two VMs serve web UIs — add `-PublicHostPattern` and a wildcard DNS record
    (see *Per-VM public host names* below). Publish the service first
    (`dotnet publish service\src\Constructd.Api -c Release -r win-x64 --self-contained true
-   -o <publish dir>`); no .NET runtime is then needed on the host. Re-run the installer
-   after publishing a new build — it updates binaries, settings and the service in place.
-   `service/host/Uninstall-ConstructHost.ps1` is the companion.
+   -o <publish dir>`); no .NET runtime is then needed on the host. A host installed before
+   the update API exists needs one carefully backed-up **manual first rollout** of the new
+   service and matching scripts. Preserve the current settings rather than rerunning the
+   installer with defaults, and merge the approved public release key into
+   `Constructd:HostAdmin:Updates:ManifestPublicKey`; after that, use the Maintenance
+   tab's signed updater. The exact first-rollout and rollback record is in
+   [the host-admin field test](field-test-host-admin.md). `service/host/Uninstall-ConstructHost.ps1`
+   is the companion.
 
    > **The VMs go on the switch you configure, not on a switch the service creates.**
    > `-SwitchName` (and `Constructd:SwitchName`) default to Hyper-V's **`Default Switch`**,
@@ -164,6 +173,27 @@ you dial* change.
    defaults to `0`, which means "may not create VMs", so a quota typed carelessly refuses
    rather than over-grants; `--no-host-forwards` denies that user
    [`construct expose --to host`](expose.md#the-two-targets).
+
+   `--max-vms` is the primary-VM count only. Child delegation is a separate allowance,
+   edited in the Host administration **Users** tab or through
+   `PUT /api/v1/users/{name}/allowance`. Null fields inherit `userDefaults`; the shipped
+   defaults allow one retained child, sharing and `never` lifetimes, with no guessed
+   per-user CPU/RAM/storage budget (host capacity still applies). For example:
+
+   ```powershell
+   $allowance = @{
+     allowChildCreation = $true; maxRetainedChildren = 2
+     cpuBudget = 8; ramBudgetBytes = 17179869184; storageBudgetBytes = 214748364800
+     maxChildLifetimeSeconds = 14400; allowNeverLifetime = $false; allowSharing = $true
+   } | ConvertTo-Json
+   Invoke-RestMethod -UseDefaultCredentials -Method Put `
+     -Uri 'https://buildbox.example.local:7462/api/v1/users/DOMAIN%5Calice/allowance' `
+     -ContentType application/json -Body $allowance
+   ```
+
+   Host `userCaps` can only narrow those values; a per-primary override can only narrow
+   delegation again. Policy is re-evaluated on every request, so disabling a user or
+   lowering an allowance takes effect without replacing credentials.
 
 5. **The host must not go to sleep under the VMs.** `constructd` holds a Windows power
    availability request (`PowerRequestSystemRequired`) for as long as any VM it manages is
@@ -412,7 +442,7 @@ pixel-identical), the instance picker lists local and remote VMs side by side, a
 | **Kerberos** | nothing stored | `Invoke-RestMethod -UseDefaultCredentials` uses the process identity. |
 | **Domain password** | nothing stored | prompted per run, held in a `PSCredential` for that run only. |
 | **Pinned certificate thumbprint** | `%LOCALAPPDATA%\The-Construct\remote\<hostslug>.pin` (plaintext — it is not a secret) | enforced on every call. |
-| **The VM's scoped token** | `/etc/construct/vm-token` **inside the guest**, mode 0600 | written by `provision.sh` from `CONSTRUCT_VM_TOKEN_B64`. It authorises only that one VM's port forwards and its idle heartbeat. |
+| **The VM's scoped token** | `/etc/construct/vm-token` **inside the guest**, mode 0600 | written by `provision.sh` from `CONSTRUCT_VM_TOKEN_B64`. Legacy credentials authorise that VM's forwards/heartbeat plus identity/reporting. New primary credentials also discover effective delegation; they never grant user/admin access. |
 
 **The VM token is a one-time secret.** The create job hands it out on the **first**
 authorised retrieval and never again — not on a re-poll, not on an SSE reconnect, not after
@@ -430,13 +460,30 @@ CONSTRUCT_VM_TOKEN_B64="$(cat …)"`), and the file is deleted the moment provis
 ends, whatever its exit code. `bin/provision.sh` still reads the variable from its
 environment exactly as before — the contract is unchanged, only the delivery is.
 
-> **A lost VM token cannot currently be re-issued.** The service mints one in exactly one
-> place — the VM creation job — and exposes no rotation route or admin verb. If the guest's
-> `/etc/construct/vm-token` is destroyed, or the one-time delivery is lost, that VM's
-> `construct expose` and its idle heartbeat stay broken until the VM is **deleted and created
-> again** (`DELETE /vms/{name}` → `POST /vms` → provision, i.e. what *Reinstall* does).
-> A reprovision alone does not help: it can only re-deliver a token it was given. Recorded as
-> an open point in [`service/README.md`](../service/README.md).
+**A lost token can be replaced.** An owner/admin user credential can call
+`POST /vms/{name}/token` and deliver the replacement with
+`Provision-AgentVM.ps1 -RotateVmToken -ServiceUrl <url> -InstanceName <name>`.
+This explicit switch invalidates the old credential before provisioning and uses the same SSH stdin
+secret channel. Ordinary reprovisioning keeps the existing token. The optional `-ServiceApiAuth`
+hashtable selects the existing token/Negotiate authentication flow; the remote installer supplies it
+from enrollment. Never put a plaintext token in an external command line.
+
+### Host administration PowerShell client functions
+
+These functions are in `lib/AgentVm.Remote.ps1` and reuse its certificate pinning and authentication:
+
+| Function | Parameters and result |
+|---|---|
+| `Send-ConstructGuestReport` | `-BaseUrl`, `-VmName`, `-Event provisioned|reinstalled|attempt`, optional `-Outcome succeeded|failed`, `-ConstructCommit`, `-Auth`, `-Pin`, `-StoreDir`. Returns a boolean; errors are advisory and the HTTP timeout is five seconds. Empty host/VM makes no call. |
+| `Request-ConstructVmTokenRotation` | `-BaseUrl`, `-VmName`, optional `-Kind primary|legacy` (primary default), `-Auth`, `-Pin`, `-StoreDir`. Returns the one-time `{vmToken,kind,issuedAt}` response. Failure throws a fixed error without transport details. |
+
+After a parsed, clean guest provisioning result, `Provision-AgentVM.ps1` reports Construct commit
+and successful provisioning time. `-ProvisionEvent reinstalled` records reinstall time separately;
+the remote installer's reinstall path supplies it. Failed/invalid final guest results report an
+attempt without changing earlier success facts. Failures before the final guest result is reached
+cannot submit that completion hook. Reporting never changes provisioning's exit result and local
+provisioning does not contact constructd. Guest timestamps are reports with provenance; a host boot
+observation never means that a child OS was provisioned.
 
 ### TLS pinning, and why it looks different on PS 5.1 and PS 7
 
@@ -507,6 +554,104 @@ new unit. Details in [`construct expose` § Activity heartbeat](expose.md#activi
 | "this PC's instance registry would refuse …" | an identity clash with an instance you already have — the message names it and the field (a shared `configBranch`, `keyName`, `hostAlias`, `vmName`, or the same `sshHost` **and** `sshPort`). Before the VM is created nothing has happened; after it, the create is rolled back. See the section below. |
 | `Refusing to talk to the Construct host service … over plain http` | you gave an `http://` URL for a host that is not this machine. There is nothing to pin and nothing to encrypt, so a token or a Windows credential would cross the network in clear. Both clients refuse before sending anything. Use `https`; plain http is accepted only for a service on `localhost` (which is how the tests drive the fake service). |
 | A warning about sending a Windows credential over plain http | you pointed at a service on **this** machine over `http://`. That is allowed, but Kerberos/NTLM is not encrypted in transit there, so the client says so once. |
+
+## 8. Administering the host from VS Code
+
+An **administrator** of the host (a user with the `admin` role) gets a native
+**Host administration** panel in VS Code; everybody else gets nothing of it — the module
+is absent for a local install and for a remote identity that is not an admin, not merely
+greyed out. It is the API client of `service/README.md`'s host-administration routes
+(contract: `docs/plans/host-administration-contracts.md` §10) and never touches the
+host's filesystem or assumes the service runs on this PC.
+
+**Opening it.** *The Construct: Host Administration* from the palette (it asks which
+enrolled host when there are several), the **⚙ Host** button in the control panel header
+(shown only when the active instance's host says you are an admin), or the *Host
+administration: `<host>`* row in *Switch Instance*. Enrolment is enough — you do not need
+a VM on the host yet; the Overview offers **Create first Construct VM here**, which is
+the ordinary *New VM on Remote Host* flow with the host preselected.
+
+**What it shows.** Overview (service version, health, capacity bars with the
+`observe`/`enforce` badge, maintenance state, active jobs, overdue leases, unmanaged
+VMs), VMs (every user's primaries and their children: kind, parent, sharing, power state,
+resources, lease or **OVERDUE**, the operation in progress, and the guest's reported
+Construct commit / provision / reinstall times — printed as *unknown* when nothing was
+reported; a successful boot never counts as provisioned), Users (register/remove, role,
+enable/disable, primary quota, host-forward permission, the delegation allowance —
+empty = inherit the host default —, per-VM overrides, and token issue/revoke; a new
+token is shown once with a Copy button and never stored), Media (the primary ISO catalog,
+read-only; the child media inventory with delete and cleanup), Operations (jobs with
+cancel, retry buttons for failed deletes and cleanups, the audit log), Configuration
+(the host-config sections as JSON, validation problems shown next to the section) and
+Maintenance (the host service's own update: check, stage, apply, resume, cancel,
+resolve — see §11 of the contract).
+
+The Admin-only `GET /host/iso-catalog` projects the primary source and patched catalog.
+The Media tab loads child inventory independently: a failed or unavailable catalog read
+shows a catalog-specific problem while child media remains usable. Source URLs omit
+credentials, query strings and fragments. `constructd admin iso status` remains available
+locally on the host.
+
+**What it deliberately lacks.** No guest update, provision, reinstall or redownload —
+those stay in each instance's own panel and console. No child start/resume, console or
+sharing for ordinary users in the panel; `construct vm …` inside the primary has them.
+
+**Useful states instead of errors.** An unreachable host says so and offers Retry (with
+the last successful read); a host whose service predates host administration says so
+and tells you to update it *on the host* (`service/host/Install-ConstructHost.ps1`) —
+nothing can be driven from here; a host missing one feature disables just that tab
+("not available on this host version"); a rejected credential offers *Sign in again*;
+an identity that is not enrolled or is disabled is told so; a role that changes to user
+while the panel is open flips it to the ordinary-user state on the next call; while the
+host is updating a banner shows the phase, every mutation is disabled and the panel
+re-polls `/health` every five seconds.
+
+**Every user: the Child VMs card.** Under a remote primary the control panel lists its
+child VMs (name, state, lease expiry or *OVERDUE* with the last outcome, private or
+*shared host-wide*) with exactly two actions. **Shut down** asks the guest to shut down
+gracefully — the same request the panel's own Shutdown makes, never a save and never a
+force-off — and reports the real outcome: a guest without integration services, or one
+that does not power off within the host's timeout, is reported as *not* shut down.
+**Delete** confirms with the child's name, its sharing state and "disk, saved state and
+dedicated media are removed permanently". The card is hidden when the host's service has
+no child VMs. Deleting a **primary** that has children from the admin panel shows the
+cascade confirmation: every child, shared ones highlighted, the permanent disk removal,
+and the instance name typed to confirm; if a child appears or changes meanwhile the list
+is shown again. *Remove instance* (the console's `Auto-Install.ps1 -Action
+remove-instance`) does **not** handle that confirmation yet: for a primary with children
+it stops at the service's `409 cascade-confirmation-required`; delete such a primary from
+the admin panel, or delete its children first.
+
+## 9. Children, sharing and allowances
+
+A remote primary receives a `primary` token when newly created. A primary migrated from
+an older database keeps its existing token as `legacy`: old heartbeat and self-forwarding
+continue unchanged, but `construct vm identity` reports that delegation is unavailable.
+The owner upgrades it explicitly with
+`Provision-AgentVM.ps1 -InstanceName <primary> -RotateVmToken`; rotation invalidates the
+old token immediately. The planned **Reprovision (upgrade VM credential)** menu item is
+not wired into VS Code or Auto-Install yet; ordinary reprovisioning does not upgrade it.
+
+Inside an upgraded primary, [`construct vm`](child-vms.md) is the complete child interface:
+public-URL or resumable-upload media, explicit CPU/RAM/disk/lifetime, powered-off creation,
+lifecycle and lease renewal, sharing, hardware/media changes, console screenshots/input,
+jobs and child-target forwards. Children have exactly one primary parent, inherit its
+human owner and receive no Construct credential. Child slots and storage remain charged
+while Off or Saved; runtime RAM/CPU is released only after the hypervisor confirms a
+terminal state.
+
+Children begin `private`. `host` sharing lets registered users and their upgraded
+primaries inspect and operate the child, use the console, and request an eligible client
+forward. It does not reveal guest credentials, move ownership, permit deletion or
+hardware/media changes, or provide network isolation. Every resource remains charged to
+the owner. Deleting a primary always cascades to all of its children, including shared
+ones, after an expiring scope preview and typed confirmation.
+
+Finite lifetimes are wall-clock leases. Creation and every start/resume require an
+explicit lifetime; restart, sharing, guest reboot and service restart do not renew it.
+Expiry requests a graceful guest shutdown. If integration services are unavailable or
+the timeout expires, the child stays running and `overdue`; there is no force-off, save or
+delete fallback.
 
 ## Per-VM public host names, and the web ports of a remote VM
 
@@ -676,3 +821,99 @@ registry — and so are several hosts.
 * [`docs/plans/modular-remote-architecture.md`](plans/modular-remote-architecture.md) —
   §4.2 driver contract, §4.3 registry, §4.4 the service, §4.5 installer UX, §4.7 idle.
 * [`extension/ARCHITECTURE.md`](../extension/ARCHITECTURE.md) — the extension side.
+
+## Updating the host
+
+After the first manual rollout of the update-capable service, an Admin can use the host
+panel's Maintenance tab to check `main`, stage its signed release, and apply it. Checking
+shows the pinned commit and compatibility result. Staging downloads and verifies the
+package without stopping the service; applying drains conflicting host jobs, hands off
+to a SYSTEM scheduled task, restarts the service, and verifies service/database health.
+
+VM creation/deletion, media work, ISO builds and host reachability waits must finish
+before replacement. New conflicting work receives `503 maintenance` with `Retry-After`.
+PC-driven provisioning and ordinary guest activity do not block draining. The short
+replacement/recovery window freezes all host mutations. Existing Hyper-V VMs are not
+stopped by the updater. Settings, certificates, media, users, tokens, VM registrations
+and unowned files are preserved.
+
+Reconnect and read `/api/v1/host/updates/status` to recover the persisted result. Reuse
+an operation key when retrying stage/apply; do not blindly repeat a mutation after a
+connection failure. An interrupted/mixed installation stays in maintenance until the
+Admin resumes or resolves it. `last-update.json` under the service data directory's
+`updates` folder remains readable if the service cannot start.
+
+Release signing setup, manual first deployment, retention, recovery fences and rollback
+limits are documented in [Host releases and deployment](host-release.md). No real-host
+update has been validated by the Linux test run. The repository's
+`config/host-release.pub` is intentionally empty until the owner supplies the production
+trust root; check/stage returns `409 signing-key-missing` until that key is stored.
+
+### Child networking
+
+A child receives no Construct credential. Its parent primary (with a `primary`
+token), its owner, an administrator or an eligible host-shared consumer requests
+`POST /api/v1/vms/CHILD/forwards`. Use `target: "client"` (the default), `vmPort`,
+and optionally `connectPort` and `via`. A user with multiple primaries must name
+`via`; a primary token implies itself. A shared consumer uses their own primary's
+SSH connection. An administrator accessing another owner's child must explicitly
+name a primary they own.
+
+Child forward responses carry `destination` with the child VM, requester,
+relationship, `via`, address, port and `verified: false`. The extension polls
+`GET /api/v1/vms/PRIMARY/forwards?via=PRIMARY`, opens an SSH local forward from that
+primary to the child's reported address, then acknowledges on the child's route.
+Only the `via` primary's human owner or an administrator may acknowledge. Each
+request has its own row; shared consumers cannot overwrite other consumers' acks.
+Owner/admin/parent listings can use `?includeChildren=true` on their primary.
+Existing primary forwards retain their flat response shape and credential rules.
+
+`GET /api/v1/vms/CHILD/addresses` reports KVP addresses; an empty list is normal
+before guest networking/integration services work. Direct reporting can be disabled
+with `network.directAddressReporting`. Child client destinations must share a
+switch/subnet with `via`, match the recorded child incarnation and reporting adapter,
+and exclude host, loopback, link-local, multicast, broadcast and conflicting managed
+VM addresses. These checks prevent accidents; they do not prove IP ownership.
+Unknown addresses produce an error forward that can recover when an address appears.
+Periodic reconciliation clears stale acknowledgements on address change and removes
+forwards whose requester, primary or sharing grant is no longer eligible.
+
+Host forwarding is independently controlled by `network.hostForwardsEnabled` and
+the **child owner's** `AllowHostForwards`, including shared and parent requests.
+Even when both allow it, Hyper-V child host forwards return `409 address-unverifiable`
+with `reason: "no-address-authority"`. Hyper-V cannot establish IP ownership from
+KVP, MAC spoofing protection or neighbor-table entries. Primary host forwards keep
+the existing endpoint mechanism.
+
+Isolation is **none**. The service persists parent-child and shared-consumer rules
+as **intended**, never enforced. The network reconciliation interface accepts VM
+creation/deletion, sharing and address change events and repairs intended state
+periodically. The lifecycle sharing endpoint must call `OnSharingChangedAsync`
+after committing a change; that endpoint is a separate integration increment.
+No firewall or Proxmox adapter is installed. See [the service networking seams](../service/README.md#child-network-adapters)
+for the future adapter inputs and events.
+
+The forward slot limit is per **target child**, shared by its owner and all shared
+consumers. A shared consumer can occupy the child's available slots; the owner or
+parent can remove unwanted forwards. Per-requester slot budgets are not implemented.
+
+### Final-review compatibility notes
+
+Observe mode records capacity decisions from periodic inventory and tolerates unavailable
+primary storage placement with unknown-volume accounting. It still refuses unknown VM
+state at create/start, active operations, incomplete configuration and foreign retained
+disk ownership with structured 409 problems. Background observation is waited on instead
+of causing a transient operation conflict. Primary start returns the state actually
+observed; successful driver invocation alone does not promise Running.
+
+GET state does not persist a refresh; list state follows reconciliation. An unmatched
+primary delete name returns 404, nonowner deletion returns a coded 403, and replay of a
+live delete job returns 200 with that job. Remote feature/identity probes are cached;
+children are queried only after feature support is known. IPC JSON requests include
+`Content-Length` when framing is otherwise absent so the SSH bridge preserves their body. The local provisioning flow and existing legacy-token authority
+remain intact; these explicit remote API exceptions are recorded in the frozen contract.
+
+If delivery fails after an explicit credential rotation, the previously installed token
+has already been invalidated. Restore SSH reachability, then rerun
+`Provision-AgentVM.ps1 -InstanceName <primary> -RotateVmToken` to issue and deliver a new
+credential. Ordinary reprovisioning does not recover the invalidated credential.

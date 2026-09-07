@@ -7,6 +7,7 @@
 #   construct project list                         list stored profile names
 #   construct notify <message> [--title …]         desktop notification on the host
 #   construct expose <port> [--label …]            port forward + the link to open
+#   construct vm <command> [args]                    manage delegated child VMs
 #   construct systemprompt                         regenerate every agent's instruction
 #                                                  file (template + ~/construct-custom-system-prompt.md)
 #
@@ -196,6 +197,12 @@ case "$1" in
     expose_impl="$(find_helper construct-expose.sh)" \
       || die "construct-expose.sh not found (looked next to $0 and in ${CONSTRUCT_REPO_DIR}/bin)"
     exec bash "${expose_impl}" "$@"
+    ;;
+  vm)
+    shift
+    vm_impl="$(find_helper construct-vm.sh)" \
+      || die "construct-vm.sh not found (looked next to $0 and in ${CONSTRUCT_REPO_DIR}/bin)"
+    exec bash "${vm_impl}" "$@"
     ;;
   systemprompt|system-prompt)
     # The renderer lives with the agent installers; source it function-only so

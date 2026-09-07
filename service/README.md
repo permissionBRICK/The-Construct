@@ -55,6 +55,7 @@ service/
   host/                     Install-ConstructHost.ps1 / Uninstall-ConstructHost.ps1 (PS 5.1)
   tests/Constructd.Tests/   xunit: Core unit tests, SQLite persistence tests, API integration tests,
                             Windows platform tests (command lines, parsers, reconciliation)
+  tests/Constructd.Tests/Network/network-script.test.ps1  guest-network snapshot contract (also Windows PS 5.1 CI)
   tests/host-installer.test.ps1   pwsh: installer parser, parameter contract, powercfg parsing
 ```
 
@@ -70,7 +71,7 @@ package references, and hand-written SQL does not belong in the HTTP host.
 
 ```bash
 dotnet build service/Constructd.sln            # 0 warnings, 0 errors
-dotnet test  service/Constructd.sln            # 594 tests
+dotnet test  service/Constructd.sln            # 1,183 tests at stage 5 on Linux
 
 # run the whole API against the fakes (no Hyper-V, no Windows):
 dotnet run --project service/src/Constructd.Api -- --fake
@@ -111,13 +112,13 @@ Everything lives under `/api/v1`, speaks JSON with camelCase properties and came
 | Route | Who | What it does |
 |---|---|---|
 | `GET /whoami` | any authenticated user identity | Resolved identity, role, quota. Answers for identities that are *not* enrolled too (`known: false`), which is how enrollment tells "wrong credential" from "ask your admin to add you". VM tokens are refused. |
-| `POST /users` | admin | Creates a user `{name, role, maxVms, allowHostForwards?}`. There is no self-registration. |
+| `POST /users` | admin | Creates a user `{name, role, maxVms, allowHostForwards?, allowance?}`. With `allowance` supplied, omitted `maxVms` uses the host default; the legacy request still requires `maxVms`. There is no self-registration. |
 | `DELETE /users/{name}` | admin | Removes a user and revokes their tokens. Refused while they still own VMs, and for the caller's own account. |
 | `POST /users/{name}/tokens` | admin | Issues an API token `{label}`; the plaintext is in the response **once** and is never stored or logged. |
 | `GET /audit` | admin | Audit trail, newest first, `?limit=`. |
-| `GET /vms` | user | The caller's VMs; all of them for an admin. |
+| `GET /vms` | user or primary token | Owned VMs (token: its primary and children); all for admin. Optional `kind=primary|child|all`, `parent`, and admin-only `owner` filters. |
 | `POST /vms` | user | `{name, cpu, ramGb, diskGb, opts:{nested?, automaticCheckpoints?, idlePolicy?}}` → `202 {jobId}`. Name uniqueness and the quota are enforced by the insert itself. |
-| `GET /vms/{name}` | owner/admin | The VM including its `publicHost` and its forwards. Never exposes the VM token hash. |
+| `GET /vms/{name}` | owner/admin | The VM including its `publicHost`, forwards and host-administration metadata. Never exposes the VM token hash. |
 | `DELETE /vms/{name}` | owner/admin | → `202 {jobId}`; accepting it fences the VM (see below) and the job removes the VM, its forwards and its SSH port. |
 | `POST /vms/{name}/power` | owner/admin | `{action: start\|stop\|save}`, synchronous, returns the new state. `save` needs the driver's suspend capability. |
 | `GET /vms/{name}/state` | owner/admin | Live state from the driver (and refreshes the registry). |
@@ -131,6 +132,74 @@ Everything lives under `/api/v1`, speaks JSON with camelCase properties and came
 | `GET /jobs/{id}` | job submitter/admin | Job state, progress lines, result, error. The first retrieval of a succeeded creation job also gets `result.vmToken`. |
 | `GET /jobs/{id}/events` | job submitter/admin | `text/event-stream`. |
 
+### Host administration foundation
+
+| Route | Who | What it does |
+|---|---|---|
+| `GET /health` | anonymous | Status, schema versions and feature names; authenticated callers also receive installed commit/version. |
+| `GET /host/status` | admin | Installed release, health, capacity snapshot, maintenance phase, active jobs and overdue leases. Incomplete capacity is reported honestly until its backend lands. |
+| `GET /host/capabilities` | user or primary token | Backend capabilities and current host policy. Unavailable adapters report `unsupported`. |
+| `GET` / `PUT /host/config` | admin | Read defaults/stored sections; atomically validate and replace supplied sections, optionally comparing each `expectedUpdatedAt`. |
+| `GET /users`, `GET /users/{name}` | admin | Enabled state, allowances, effective policy, VM counts and token count; no hashes. |
+| `PUT /users/{name}` | admin | Patch `role`, `enabled`, `maxVms`, `allowHostForwards`. Self-demotion/disable and removal of the last enabled admin are refused. |
+| `GET` / `PUT /users/{name}/allowance` | admin | Read stored/effective allowance; replace nullable stored allowance fields. Null inherits host defaults. |
+| `GET /users/{name}/tokens`, `DELETE /users/{name}/tokens/{id}` | admin | List credential metadata or revoke one token. Existing create/delete-user and issue-token routes remain. |
+| `GET /vms/{name}/identity` | owner/admin or that VM's token | Kind, parent, owner, token kind, effective delegation, service version/features. Legacy tokens receive no delegation. |
+| `POST /vms/{name}/guest-report` | owner/admin or that VM's token | `{event, reporter, at?, constructCommit?, outcome?}`. Independent success (`provisioned`, `reinstalled`) and `attempt` fields. Children are refused. |
+| `POST` / `DELETE /vms/{name}/token` | owner/admin user | Rotate (one-time plaintext) or revoke the primary's credential. Children never receive tokens. |
+| `GET` / `PUT` / `DELETE /vms/{name}/overrides` | admin | Per-primary restrictions, combined with current owner and host policy. |
+| `GET /vms/{name}/children` | owner/admin or parent primary token | Classified children inventory. |
+| `GET /vms/shared` | user or primary token | Accessible host-shared children; disabled owners' children are hidden from shared callers. |
+| `GET /vms/{name}/capabilities` | owner/admin/parent or shared caller | Per-VM capability view, lowered by backend availability and current policy. |
+
+`whoami` adds `enabled`, `effective` and `apiFeatures`. VM inventory adds `kind`, `parent`, sharing,
+lease/resources, guest reports and separate host observations, reservations, operation metadata and
+`allowedActions`. These describe current policy; authorization reads current user state on every
+request. Disabling a user immediately rejects their Bearer tokens and their VMs' credentials. Legacy
+VM tokens retain only the existing forwards/activity scope plus identity and guest-report intake.
+New primary creation issues a `primary` token; it never grants user identity or admin access.
+
+Discovery advertises `host-admin`, `children`, `media`, `console`, `updates` and `network`
+in production and fake mode. SQLite admission, media/capacity adapters, child lifecycle,
+console, updates and child connectivity are integrated. The fake admission store commits
+or rolls back participating stores under one lock, including readers; its scope accepts
+only synchronously completing store calls.
+The persisted child runner owns operation and maintenance handles through completion.
+These additions have Linux coverage; the current host probe attempt is blocked as
+recorded below.
+
+### Complete route inventory
+
+The two tables above describe the original and host-foundation routes in detail. This is
+the complete mapped surface in the current service; every path has the `/api/v1` prefix.
+“Operator” below means an owner, parent primary, admin or eligible host-shared caller as
+allowed for that particular child. `UserOrPrimaryToken` is only the outer authentication
+gate: the resource policy is evaluated again inside every handler.
+
+| Area | Routes | Effective access |
+|---|---|---|
+| Discovery | `GET /health` | Anonymous reduced body; authenticated callers additionally get release details. |
+| Identity | `GET /whoami` | Any authenticated user identity; VM tokens refused. |
+| Admin users | `POST /users`; `GET /users`; `GET`, `PUT`, `DELETE /users/{name}`; `GET`, `PUT /users/{name}/allowance`; `POST`, `GET /users/{name}/tokens`; `DELETE /users/{name}/tokens/{id}` | Admin. Token plaintext is returned once only. |
+| Admin host | `GET /host/status`; `GET /host/capabilities`; `GET`, `PUT /host/config`; `GET /host/capacity` | Status/config/capacity are Admin; capabilities also allow an enrolled user or primary token. |
+| Audit | `GET /audit` | Admin; filters are `actor`, `target`, `action`, `since`, `limit`. |
+| VM inventory | `GET /vms`; `GET /vms/{name}`; `GET /vms/{name}/state`; `GET /vms/{name}/endpoint`; `GET /vms/{name}/capabilities`; `GET /vms/{name}/children`; `GET /vms/shared` | Filtered by owner/parent/sharing; Admin sees all. A primary token sees itself and its children, subject to token kind and current policy. |
+| Primary lifecycle | `POST /vms`; `POST /vms/{name}/power`; `DELETE /vms/{name}` | Enrolled user for create/power; owner/Admin for delete. Primary delete uses the cascade preview/token flow when children exist. |
+| Primary identity | `GET /vms/{name}/identity`; `POST /vms/{name}/guest-report`; `POST`, `DELETE /vms/{name}/token`; `GET`, `PUT`, `DELETE /vms/{name}/overrides` | Self/owner/Admin for identity/report; owner/Admin user credential for token rotation; Admin for overrides. |
+| Idle policy/activity | `GET`, `PUT /vms/{name}/idle-policy`; `POST /vms/{name}/activity` | Owner/Admin user credential for policy; the matching VM token or owner/Admin for activity. |
+| Child lifecycle | `POST /vms/{parent}/children`; `POST /vms/{name}/lifecycle`; `POST /vms/{name}/lease`; `PUT /vms/{name}/sharing`; `PUT /vms/{name}/hardware`; `PUT /vms/{name}/media`; `DELETE /vms/{name}` | Parent delegate creates; operator lifecycle; owner/Admin-only lease, sharing, configuration and deletion. Shared callers cannot delete or configure. |
+| Addresses/forwards | `GET /vms/{name}/addresses`; `GET`, `POST /vms/{name}/forwards`; `DELETE /vms/{name}/forwards/{id}`; `POST /vms/{name}/forwards/{id}/ack` | Existing self/owner rules for a primary; child relationship rules for a child. Ack always requires a user credential and, for a child, the owner of the `via` primary or Admin. |
+| Jobs | `GET /jobs`; `GET /jobs/{id}`; `GET /jobs/{id}/events`; `POST /jobs/{id}/cancel` | Owner/initiator or Admin. Event streams replay progress and phase history, then one terminal state. |
+| Media | `GET /media`; `POST /media/acquire`; `POST /media/uploads`; `GET /media/uploads/{id}`; `PUT /media/uploads/{id}/chunks/{index}`; `POST /media/uploads/{id}/complete`; `DELETE /media/uploads/{id}`; `GET /media/{id}`; `GET /media/{id}/references`; `DELETE /media/{id}`; `POST /media/cleanup` | Owner primary/user or Admin; a shared operator gets only reduced metadata for attached media. Cleanup is Admin-only. |
+| Console | `GET /vms/{name}/console/capabilities`; `POST /vms/{name}/console/sessions`; `POST /vms/{name}/console/sessions/{sid}/renew`; `DELETE /vms/{name}/console/sessions/{sid}`; `GET /vms/{name}/console/sessions/{sid}/screenshot`; `POST .../{sid}/keyboard`; `POST .../{sid}/mouse` | Current VM operator; session remains bound to its creating principal and is re-authorized on every call. |
+| Host updates | `GET /host/updates/status`; `POST /host/updates/check`; `POST /host/updates/stage`; `POST /host/updates/apply`; `POST /host/updates/cancel`; `POST /host/updates/resolve` | Admin. Apply (including resume) and resolve are the only narrowly maintenance-exempt mutations. |
+
+There is deliberately no child-media content download route and no interactive-video
+console route. One contract/client mismatch remains: the extension calls
+`GET /host/iso-catalog`, but this build does **not** map it. Until that endpoint is added,
+use `constructd admin iso status` on the host; the Admin panel's primary-catalog read fails
+while its child-media inventory remains available.
+
 ### Jobs, the event stream and the one-time secret
 
 Nothing terminal about a job becomes visible before its terminal state is durable: while that write is
@@ -142,6 +211,13 @@ Long operations answer `202 {jobId}` plus a `Location` header. `GET /jobs/{id}/e
 `event: progress` per line — replaying the lines already recorded, so a client that attaches late (or
 reconnects) still sees the whole log — and then exactly one terminal `event: state` carrying the
 finished job, after which the stream ends.
+
+Current job kinds are `create-vm`, `remove-vm`, `parent-cascade-delete`, `child-create`,
+`child-delete`, `vm-shutdown`, `vm-restart`, `media-acquire`, `media-verify`,
+`media-cleanup` and `host-update`. Child/update jobs persist their latest `phase`; SSE
+clients receive `phase` events in addition to progress and terminal state. Job results
+never contain credentials. `GET /jobs` accepts `kind`, `state`, `vm`, `since` and `limit`;
+cancel is best-effort and cannot undo an external action that already completed.
 
 ```
 event: progress
@@ -167,13 +243,12 @@ restart sees `vmToken: null` while `name` and `endpoint` stay.
 client acknowledges it, so a response lost in transit loses the token. That is deliberate: nothing
 about the delivery is retriable without weakening "once".
 
-**There is currently no way to re-issue one.** `ITokenService.IssueVmTokenAsync` is called from
-exactly one place — the VM creation job — and no route or admin verb exposes it. A VM whose token
-was lost (or whose guest file was destroyed) therefore keeps a token nothing can replace: its
-`construct expose` and its idle heartbeat stay broken until the VM is **deleted and created
-again** (`DELETE /vms/{name}` → `POST /vms` → provision, which is what the installer's *Reinstall*
-does). A rotation endpoint — `POST /vms/{name}/token`, invalidating the previous hash — is the
-obvious follow-up; see *Open points* below.
+**An owner or admin can rotate a VM token.** `POST /vms/{name}/token {kind?: "primary"|"legacy"}`
+returns `{vmToken, kind, issuedAt}` once and immediately invalidates the previous hash. The default
+kind is `primary`; existing migrated tokens remain `legacy` until explicitly rotated. `DELETE` on
+the same route revokes the credential. VM tokens themselves cannot rotate it. Reprovision with
+`Provision-AgentVM.ps1 -RotateVmToken` to rotate and deliver the replacement through the existing
+SSH stdin secret channel; ordinary reprovisioning does not rotate.
 
 If any creation step fails, the job rolls back: the partially created VM is removed from the
 hypervisor (an orphan VM would keep consuming disk while its name was handed back), the ports are
@@ -437,6 +512,7 @@ Bound from the `Constructd` section of `appsettings.json`, from environment vari
 | `Idle:ForceEnabled` | `false` | With a cap set, also forbid switching idling off. |
 | `Idle:ReportIntervalMinutes` | `5` | Interval the guest reporter posts at. |
 | `Idle:MissingReportGraceMultiple` | `3` | Intervals of silence before the guest counts as idle. |
+| `Lease:SchedulerEnabled` | `true` | Runs child lease expiry/retry ticks. This is a test/diagnostic switch; normal hosts leave it enabled. |
 | `Power:KeepHostAwake` | `true` | Hold a Windows power availability request while at least one service-managed VM is `Running`, so the host does not sleep under it (*Keeping the host awake*). `false` never takes one. Independent of `Idle:SchedulerEnabled`, though both ride the same loop. No effect off Windows or in fake mode. |
 | `Iso:Mode` | `Prebuilt` | Which ISO build strategy is in effect: `Prebuilt` (compatibility alias for on-demand native catalog media) or `PerVm` (the service builds one ISO per VM through WSL). `Native` uses the .NET tool and catalog; `InGuest` and `HypervisorHost` remain planned and refused at startup. See *ISO build strategies*. |
 | `Iso:NativeBuilderPath` | `<ScriptsDir>\.construct-tools\iso\Construct.Iso.exe` | Self-contained native builder resolved by the installer; empty uses this path. |
@@ -448,15 +524,132 @@ Bound from the `Constructd` section of `appsettings.json`, from environment vari
 | `Iso:Sha256` | – | Expected SHA-256 of the source ISO. Empty skips the check; when set it is verified on **every** use, not only after the download. |
 | `Iso:CacheDir` | `C:\ProgramData\Construct\service\iso` | Holds the downloaded source ISO and the ISO catalog (versioned media, sidecars, `current.pointer`). |
 | `Iso:SourceId` | `ubuntu-server-minimal` | `SOURCE_ID` of `bin/build-autoinstall-iso.sh` (`ubuntu-server` for the standard set). |
+| `HostAdmin:Capacity:Mode` | `Observe` | Bootstrap capacity policy when no stored section exists. Used when no stored capacity section exists; migrated hosts remain in observe mode. |
+| `HostAdmin:Updates:ManifestPublicKey` | – | Base64 Ed25519 public key used to seed a missing stored `updates` section. Empty means signed host updates fail closed with `signing-key-missing`. |
+| `HostAdmin:Media:RootDir` | `C:\ProgramData\Construct\service\media` | Private child-media files and partial uploads; the installer hardens it with the data directory. |
 | `BootstrapAdmin` | – | Identity seeded as the first admin when the user store is empty. |
 | `BootstrapAdminMaxVms` | `10` | Quota for that admin. |
 | `BootstrapAdminToken` | – | Optional plaintext token for the bootstrap admin (hashed at startup). Only for hosts that cannot use Negotiate; remove it once a real token has been issued. |
 
+Host policy is stored separately in `host_config` and takes precedence over bootstrap defaults.
+`GET /host/config` returns each section's fields plus `source` and `updatedAt`. `PUT` accepts one or
+more complete sections (all required fields present); optional fields omitted become null. Invalid
+sections roll back the entire request. `expectedUpdatedAt: null` requires that no stored section
+exists; a timestamp requires an exact match. A conflict returns `409 config-conflict`.
+
+| Section | Configuration fields | Default when no row exists |
+|---|---|---|
+| `capacity` | `mode`, `ramHeadroomBytes`, `storageHeadroomBytes`, `cpuBudget`, `maxVcpusPerVm`, `reconcileSeconds`, `orphanReservationTimeoutSeconds` | `observe`, null RAM headroom, 20 GiB storage headroom, null CPU/per-VM caps, 60 s reconcile, 600 s orphan timeout |
+| `userDefaults` | `maxPrimaries`, `allowChildCreation`, `maxRetainedChildren`, `cpuBudget`, `ramBudgetBytes`, `storageBudgetBytes`, `maxChildLifetimeSeconds`, `allowNeverLifetime`, `allowSharing` | `1, true, 1, null, null, null, null, true, true` in field order |
+| `userCaps` | Caps on retained children, CPU/RAM/storage, lifetime, never-lifetime and sharing; null leaves the value uncapped. | every cap null |
+| `lifecycle` | `gracefulShutdownTimeoutSeconds`, `leaseTickSeconds`, `leaseRetrySeconds` | `300, 30, 600` seconds |
+| `media` | `maxBytes`, `maxItemsPerUser`, `uploadChunkBytes`, `uploadTtlHours`, `acquireTimeoutMinutes`, `allowHttp`, `unreferencedTtlHours` | 16 GiB, 20 items, 8 MiB chunks, 24 h, 180 min, HTTP allowed, no automatic unreferenced cleanup |
+| `network` | `hostForwardsEnabled`, `directAddressReporting` | both true |
+| `updates` | `repository`, `channel`, `drainTimeoutMinutes`, `healthTimeoutSeconds`, `requireSignature`, `manifestPublicKey` | `permissionBRICK/The-Construct`, `main`, 60 min, 120 s, signature required, null key (or installer bootstrap key) |
+
+Disabling `network.hostForwardsEnabled` refuses new primary host forwards immediately; the default
+preserves existing behavior. Stored user allowances override defaults, host caps narrow them, and
+per-primary overrides can only restrict the result. Lowered limits do not delete existing VMs.
+
+## Capacity accounting
+
+The capacity ledger stores pending and held RAM, CPU and storage reservations in SQLite
+(migration 300). `GET /host/capacity` is admin-only and returns the frozen summary,
+problems, reservations, unmanaged VMs and per-user usage. `/host/status` uses the same
+summary; allowance usage in both SQLite and fake mode includes pending operations, retained disks, media
+and saved-state storage, aggregated across all of an owner's primaries and children.
+Unmanaged VMs reduce host capacity without acquiring a Construct owner.
+Reporting (`refresh=false`) never starts an inventory process: it uses the last observed
+epoch and current ledger rows. Before the first inventory it reports incomplete. An
+explicit refresh, admission with an invalid/expired epoch, or the reconciliation tick
+performs the inventory read. A reconciliation pass reads inventory once, regardless of
+VM count; its individual database mutations never call the hypervisor.
+
+RAM admission uses the lesser of the physical-free and committed-allocation bounds.
+Both retain OS headroom. Memory promised to pending **or held** reservations but not yet
+assigned by Hyper-V is subtracted from physical free RAM. Thus a restart's intermediate
+Off and a partially allocated Starting VM cannot give the same bytes to another caller.
+CPU aggregate budgets are optional. Storage reserves each disk's full virtual maximum,
+parent/checkpoint chains, media/upload maxima and `RAM + 64 MiB` for saved state. Already
+allocated file bytes are counted through physical free space; only the remaining growth
+is subtracted again. Artifacts and paths are deduplicated within one inventory epoch.
+
+`capacity.mode=observe` records a would-refuse decision as `capacity.observe` and retains
+the reservations; `enforce` rejects an incomplete inventory or insufficient capacity.
+Requests are never resized. A capacity decision carries `resource`, `scope`, `requested`,
+`allowed` (`AllowedAmount` in Core), `available`, `reason` and `epoch`. Runtime capacity
+is released only after observed Off/Saved/Absent. A failed start with Unknown state keeps
+its hold; Saved keeps disks and saved-state storage. Cleanup callers may pass Absent for
+a disk/media reservation only after confirming the **artifact** was removed, not merely
+that the VM registration disappeared.
+
+Stored `host_config.capacity` takes precedence over bootstrap mode. Configure it with
+`PUT /host/config` using the complete section:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `mode` | `observe` for migrated hosts | Accounting only, or enforced admission. Fresh installers may explicitly select `enforce`. |
+| `ramHeadroomBytes` | null | Null computes `max(4 GiB, physical RAM / 8)`. |
+| `storageHeadroomBytes` | 20 GiB | Headroom on each volume. |
+| `cpuBudget` | null | Optional host active-vCPU budget. |
+| `maxVcpusPerVm` | null | Optional per-VM CPU ceiling; backend hardware validation also applies. |
+| `reconcileSeconds` | 60 | Startup reconciliation, then periodic passes; maximum cached inventory age. |
+| `orphanReservationTimeoutSeconds` | 600 | Caller default for pending reservation deadlines. A live operation extends its reservations; elapsed time alone never proves release is safe. |
+
+User RAM/storage/CPU budgets resolve stored user values against `userDefaults` and
+`userCaps` in the **same transaction** as reservations. Null leaves the aggregate
+unlimited by user policy; host and volume bounds still apply. Per-primary overrides
+restrict delegation/count/lifetime/sharing as defined in the frozen contract and do not
+provide a way around resource budgets.
+
+Reconciliation reads all hypervisor VMs without VM/ledger gates, then tries each VM gate
+without waiting, re-reads its state, and compares the persisted power-generation/job fence
+inside the ledger transaction. Live operations are left alone. Orphan runtime reservations
+are promoted on active/unknown evidence or released after a terminal observation and
+the deadline; orphan storage requires present/absent/unreadable artifact evidence. Service
+restart retains the table. Unreadable evidence keeps liabilities charged and fails closed
+in enforce mode. The primary ISO catalog is physically accounted for by volume free space;
+its in-flight build maximum remains the contract's explicit limitation.
+
+Integration boundary for the capacity branch: `SqliteCapacityLedger.BeginAsync` takes
+the one ledger gate and refreshes inventory before opening its IMMEDIATE transaction.
+`BeginMutationAsync` skips inventory I/O and refuses `ReserveInTransaction`; use it for
+mutations that cannot reserve, including reconciliation.
+The returned `Transaction` exposes `Connection`, `Sql`, `ReserveInTransaction`,
+`ConfirmInTransaction`, `ReleaseInTransaction` and explicit `Commit`; dispose without
+commit rolls back every participating write. The integrator-owned `SqliteAdmissionStore`
+must use this transaction for the whole `AdmissionPlan`/`MutateAsync` and must never call
+standalone ledger methods from inside it. VM/media gates precede the ledger gate.
+Before reserving a start, hold the VM operation gate and read the driver state. When it
+confirms Off, release stale **held runtime** rows for that VM with
+`ReleaseInTransaction(ids, Off)` before `ReserveInTransaction` in the same admission
+transaction (or run the gate-protected per-VM reconciliation first). Do not sweep live
+pending rows or infer Off from a timeout. This prevents an external stop followed quickly
+by start from producing a stale-hold conflict in enforce mode or a duplicate hold in
+observe mode.
+
+Primary create/power/job call sites, child start intents/lease completion and abandoned
+create-row/media cleanup remain integrator-owned. Those hooks must call `ReconcileAsync`
+after power/job completion. This branch does not rewrite the existing provisioning flow
+or claim that those later call sites already enforce capacity.
+
+Pass-through/physical disks currently report `passthrough-disk-unavailable` and make
+inventory incomplete. This is a deliberate conservative backend limitation, not a
+transient failure: **enforce mode is unavailable on hosts with such an attachment**.
+Observe mode remains usable. The initial adapter cannot prove the physical disk's
+exclusion from all host volumes, so it does not guess zero growth. Supporting those
+attachments requires an explicit physical-disk/volume mapping and a later field test.
+
+The Windows adapter uses `IProcessRunner` argv and stdin artifact metadata. Its inventory
+PowerShell is read-only and parsed/tested under Linux pwsh. No Hyper-V, LocalSystem or
+Windows PowerShell 5.1 execution of this implementation has been performed.
+
 ## Persistence
 
-One SQLite file, hand-written SQL, no ORM and no migration machinery yet (the schema is created if
-missing; evolving it is a deliberate decision to make when the first change comes). Tables: `users`,
-`tokens`, `vms`, `activity`, `forwards`, `audit`, `jobs`. Name columns are `COLLATE NOCASE`, because identities
+One SQLite file, hand-written SQL and no ORM. `SqliteMigrationRunner` applies additive feature
+migrations and records each version in `schema_migrations`; the base schema is created if missing.
+Core tables include `users`, `tokens`, `vms`, `activity`, `forwards`, `audit`, `jobs`, with host
+configuration, allowances, overrides and cascades added by M100. Name columns are `COLLATE NOCASE`, because identities
 (`DOMAIN\user`) and VM names are compared case-insensitively everywhere else too.
 
 - **Only hashes are stored.** A persistence test reads the raw database file and asserts that neither
@@ -1109,7 +1302,9 @@ deleting a colleague's VM is not an uninstall step.
 
 ## Tests
 
-`dotnet test service/Constructd.sln` — 594 tests, all running on Linux, Windows platform included.
+`dotnet test service/Constructd.sln` — 1,183 tests at stage 5 on Linux,
+all runnable on Linux; Windows-specific behavior is exercised with recording runners and
+PowerShell fixtures, not a live Hyper-V service.
 
 - **Core unit tests**: port allocation (lowest-free, no double allocation, release, exhaustion,
   reservation, concurrency), token hashing (format pinned to a known SHA-256 vector, fixed-time
@@ -1279,27 +1474,25 @@ deleting a colleague's VM is not an uninstall step.
   long-poll or an SSE stream would cut the latency and the chatter; the poll is what B8 shipped
   because it needs nothing new on either side.
 - The `url` on a forward is advisory (`http://<publicHost>:<port>/` for a host target, the client's
-  reported link for a client target). Per-VM hostnames for cookie-sensitive services stay out of
-  scope (plan §4.9).
-- **No VM-token rotation.** `IssueVmTokenAsync` is only ever called by the VM creation job, so a
-  lost VM token cannot be replaced — the VM has to be deleted and re-created. A
-  `POST /vms/{name}/token` route (issue, invalidate the previous hash, hand the plaintext out once
-  under the same rules as the create job) is a contained addition.
+  reported link for a client target). `PublicHostPattern` supplies implemented per-VM host names;
+  DNS and certificates remain the administrator's responsibility.
 - Quota semantics: `maxVms` is a plain cap and `0` means "may not create VMs"; "unlimited" has to be
   expressed as a large number.
-- Schema evolution is `SqliteDatabase.AddColumnIfMissing` and nothing more: additive nullable
-  columns, applied on every start, introduced by the forward ack (B8). A rename, a drop or a data
-  backfill still needs a real migration story — and a version stamp to decide when to run it.
-- The capability's console **kind** (`vmconnect`, a URL, none) is read from the driver and carried on
-  `DriverCapabilities`, but **no endpoint exposes it**. It has no consumer either: the extension's
-  `hyperv-remote` driver hardcodes `console: "none"` (there is no `vmconnect` to a machine you are not
-  sitting at), so the panel offers no console affordance for a remote VM. Surfacing it — for a
-  backend that *does* have a console URL, e.g. Proxmox's noVNC — is a response field, not a redesign.
+- Schema evolution now uses the additive feature migration runner and `schema_migrations`.
+  M100 backfills existing VMs as primaries with legacy credentials. Breaking migrations remain
+  outside this delivery; per-feature ranges and compatibility rules are in the host-admin contract.
+- The legacy driver console **kind** (`vmconnect`, a URL, none) remains separate from the service's
+  bounded screenshot/keyboard/mouse capability model. `/host/capabilities`,
+  `/vms/{name}/capabilities` and `/vms/{name}/console/*` expose the latter; interactive video is
+  still unsupported for remote Hyper-V.
 - Plan §4.4 has the service create its **own internal NAT switch** at install. `Constructd:SwitchName`
   is the seam for that and defaults to Hyper-V's `Default Switch`, which is what a host with nothing
   else configured has; the installer does not create a switch yet.
-- The service creates VMs but does not **update the checkout** it invokes (`constructd update` in the
-  plan's sketch). Today that is the admin re-running the installer after a `git pull`.
+- The signed host updater replaces the service and its matching host scripts after its first manual
+  rollout. It intentionally does not update the user's PC-side Construct installation or the
+  separately pinned ISO builder release.
+- The Admin UI/client expects `GET /host/iso-catalog`, but the service does not map it yet. Use
+  `constructd admin iso status` locally; child media is unaffected.
 - No **wake-on-SSH**: a connection to a saved VM's forward is not detected, so a saved VM is resumed by
   a user action rather than by dialing it (recorded as a stretch goal in plan §4.7).
 - The seed password is visible in the host's own process list for the duration of the ISO build. It is
@@ -1317,3 +1510,465 @@ The source checksum is verified before replacing the cached download; builds pub
 new versioned files so other installations retain their mounted media.
 `-SkipIsoBuild` on the host installer installs the tool but defers media creation.
 See [native ISO builds](../docs/native-iso.md) for upgrade and source configuration.
+
+## Child-VM media registry
+
+Child media uses its own M200 SQLite registry and private media directory. It never
+calls the primary Construct ISO catalog, downloader, patcher, or provisioner.
+`Constructd:HostAdmin:Media:RootDir` selects the directory (default
+`C:\ProgramData\Construct\service\media`). This is the existing stage-1 option
+for the contract's `Media:RootDir`; fake mode uses a disposable directory. Real
+host deployment must grant only the service identity, SYSTEM and administrators
+access to this directory, including auxiliary answer-file media. The updater pair
+owns installer hardening; this branch does not edit the installer.
+
+The `/api/v1/media` routes accept enrolled users and upgraded primary tokens.
+Owners see their media; administrators can inspect all owners. A shared-child
+consumer can read only the attached item's `id`, `name`, `role` and `sizeBytes`.
+There is no media-content download route. Full metadata omits host paths; checksums
+and source metadata for auxiliary ISOs stay behind owner/admin access.
+
+- `POST /media/acquire` accepts `url`, `role`, optional `name`,
+  `expectedSha256`, `dedicatedTo` and `operationKey`, returning a `media-acquire`
+  job and media id. HTTP requires a checksum and the `media.allowHttp` policy.
+  The transport refuses credentials, proxies, cookies, private/reserved addresses,
+  private connected peers, TLS downgrades and more than five redirects. DNS is
+  validated at each hop and the connection uses a validated IP directly. Query
+  strings and fragments are removed from persisted source URLs; progress includes
+  host names and byte counts only. URL admission conservatively reserves the full
+  item limit until completion; it does not make a header probe before admission.
+- `POST /media/uploads` accepts `name`, `role`, `sizeBytes` and the optional
+  checksum, dedicated VM and operation key. It returns `uploadId`, `mediaId`,
+  `chunkSizeBytes`, `chunkCount`, `expiresAt` and received indexes. Send exact-size
+  octet-stream chunks with Content-Length to
+  `PUT /media/uploads/{id}/chunks/{index}`. `GET /media/uploads/{id}` returns
+  received and missing indexes for resumption. Re-sending an index overwrites it.
+- `POST /media/uploads/{id}/complete` freezes writes, hashes the file, verifies
+  the expected checksum (when supplied), and checks the ISO primary descriptor
+  when no checksum was supplied. Completion returns 201, subsequent completion
+  returns 200, and verification above 2 GiB uses a `media-verify` job (202).
+  Aborting through `DELETE /media/uploads/{id}` wins over an in-flight hash.
+- `GET /media`, `GET /media/{id}`, `GET /media/{id}/references` and
+  `DELETE /media/{id}` expose registry status and retention. Any VM reference
+  prevents deletion, including an administrator's cross-owner attachment. Storage
+  is charged once to the media owner. Reference removal is a backend primitive:
+  child jobs must confirm detachment/removal before calling it.
+- Admin `POST /media/cleanup` and the daily cleanup job expire open uploads,
+  retry deletion, collect eligible failed/unreferenced items, and remove managed
+  orphan files older than one hour. Ready-item collection is opt-in through
+  `media.unreferencedTtlHours`. Dedicated items whose VM still exists are retained
+  unless deletion was explicitly requested. Failed deletion stays visible and
+  retains its reservation until both `.part` and `.iso` are confirmed absent.
+  Startup recovery fails interrupted transfers/completions and cleans their files;
+  open, unexpired uploads with a partial file remain resumable.
+
+Media policy is stored in the `media` host-config section: default limits are
+16 GiB per item, 20 active items per owner, 8 MiB chunks, a 24-hour upload TTL,
+180-minute acquisition timeout and a 120-second read-idle timeout. Size overflow,
+checksum mismatch, incomplete uploads, in-use media and URL refusals use coded
+RFC 7807 responses. Every mutation is audited without source queries, media
+contents or host paths. Upload begin and acquisition accept the operation-key
+header (which overrides the body key) and use the shared atomic admission seam.
+
+Integration boundary: this media branch supplies `SqliteMediaStore.InsertInTransaction`
+overloads for media, uploads and references, and consumes `IAdmissionStore`,
+`ICapacityLedger` and `IPersistedJobRunner`. Production now uses the integrated
+SQLite admission transaction and persisted job runner. Linux tests exercise the
+real media routes with both SQLite and in-memory admission, and with the in-memory
+admission/capacity stores, a recording persisted runner, simulated DNS/connections,
+and both SQLite and in-memory media stores. No new Hyper-V or Windows execution
+is claimed here.
+
+Installer hook supplied to the updater pair (Windows PowerShell 5.1 syntax):
+set `$mediaRootDir = Join-Path $DataDir 'media'`, include it in the existing
+ShouldProcess-controlled directory-creation loop, and add
+`@{ Path = $mediaRootDir; Kind = 'Data'; Name = 'child media registry' }` to the
+existing sorted `$hardening` entries. Add
+`HostAdmin = [ordered]@{ Media = [ordered]@{ RootDir = $mediaRootDir } }` under
+`$settings.Constructd`, merging any other HostAdmin sections. The existing
+`Set-ConstructPathAcl` supplies the SYSTEM/Administrators-only ACL and ancestor
+checks. Upgrades must preserve an already-configured media root and its contents.
+
+Cleanup jobs return `{ removed: [ids], retained: [{ id, reason }] }`. Reasons include
+`busy`, `held-open`, `referenced`, `dedicated` and `not-eligible`; each media-gate
+wait is limited to one second so an active download cannot block the whole sweep.
+A user's held-file deletion retries only that item. Inline verification continues
+when its HTTP client disconnects; clients can poll completion safely. Unsupported
+admission/job backends return `unsupported-capability`, and a failed job start
+marks the media failed immediately, releasing storage only after confirming files
+are absent. Chunk routes set their request-body limit from the accepted upload's
+chunk size (the host-config validator permits 1–64 MiB). Chunks are audited to
+satisfy this delivery's explicit requirement to audit every mutation.
+
+Child-deletion integration must check that dedicated media belongs to the child's
+owner (or was selected by an administrator): a `dedicatedTo` name can refer to a
+future VM and is not proof of ownership. The integrator also owns the shared
+JobReader authorization and `/jobs/{id}/cancel` routes; this branch records job
+initiators and honors runner cancellation without editing those shared routes.
+
+### Stage 2 child VM driver and jobs
+
+`POST /api/v1/vms/{parent}/children` accepts explicit `cpus`, `ramMb`, `diskGb`,
+`lifetime` and ready media ids. Optional `windows`/`linux` presets supply firmware
+hints only; `start:false` leaves hardware Off with an inactive lease. Owner/admin
+access uses the foundation's `ParentDelegate` policy hook; rotated primary tokens
+can create their own children under the owner's current allowance. Existing child list/read and
+capability routes project the new records. `DELETE /vms/{child}` runs `child-delete`.
+Primary creation and ISO patching are unchanged.
+
+Admission uses `IAdmissionStore`: the queued job, child record, media references,
+operation key and capacity reservations commit together. The job runner owns the
+maintenance handle from before admission through terminal completion. Phases are
+persisted and streamed as `phase` SSE events alongside existing progress/state
+messages. `X-Construct-Operation-Key` (or request `operationKey`) supports replay;
+a conflicting fingerprint is refused. Migration 400 adds the durable key store
+and exposes `InsertInTransaction` for the integrator's SQLite admission store.
+
+`ChildCreateJob` validates hardware before allocation, resolves ready media,
+creates hardware/disk/DVDs through `IChildVmDriver`, verifies the immutable id and
+attached media, persists a derived start intent before boot, confirms Running,
+activates the lease from the original intent timestamp and
+confirms reservations. The result contains boot/state/network facts and no guest
+installation claim or credential. Guest addresses remain unverified. Failures
+attempt rollback; unverifiable ownership and incomplete cleanup retain the VM row
+and capacity for recovery. `ChildDeleteJob` removes forwards/network intent,
+references, dedicated auxiliary media and capacity only after successful cleanup.
+
+`HyperVChildDriver` invokes the optional PowerShell contract through fixed argv
+and a JSON stdin descriptor. Dependency stdout/stderr and exception details are
+never forwarded to logs or job progress. The driver resolves Hyper-V's default
+storage before admission when `VmStorageRoot` is empty. It writes an exclusive
+ownership sidecar at the canonical configured/default VHD location for partial-create
+and partial-delete retries, including when the descriptor overrides the disk path.
+
+The integrated service supplies SQLite admission, media registry/transfer and
+capacity inventory/reconciliation. Lease scheduling, cascade deletion and delegated
+creation are described below. Guest-address adapters remain separately owned;
+network capability reports remain authoritative. Linux recording-runner tests
+establish command construction, not Hyper-V execution.
+
+Probe attempts on 2026-09-07: the relay returned Windows PowerShell
+5.1.26100.9168. Initial attempts failed to start because of host thread/paging-file
+resource exhaustion. A later read-only check reported 6,598,504 KiB free physical
+memory, and the latest driver probe reached `New-VM`, which threw
+`System.OutOfMemoryException`. Its `finally` removed the ownership marker and
+probe files and reported `CLEANUP COMPLETE`, including a VM absence check.
+Storage placement ran, but no successful child creation, firmware, TPM, media,
+boot order or shutdown validation is claimed. A subsequent read-only inventory
+query successfully exercised `Get-VM`, `Get-VMHardDiskDrive -VM`, `Get-VHD -Path`
+and `Get-VMNetworkAdapter -VM`, including sizes, disk paths and reported addresses.
+It also confirmed zero probe VMs and absence of the probe directory, disk and marker. No service or host
+settings were changed. The stage-0 feasibility report is separate prior evidence.
+
+Stage 2 Linux verification: solution build **0 warnings, 0 errors**; **748 .NET tests**
+(42 added to the integrated 706-test baseline); **22 Node suites / 4,686 checks**;
+**17 PowerShell suites / 3,046 checks or scenario groups** (child driver contract 131,
+host installer 368); **19 Bash suites / 801 checks**, including contract parity (5)
+and fake-service end-to-end (38). The Node root-only unwritable-spool check and
+PowerShell Windows-only DPAPI check are skipped. The end-to-end test used the existing
+build and stopped its test service. Local primary-driver source remains byte-identical.
+
+Reproducing this matrix on this Linux VM requires the suite environment used by
+this run: `T3CODE_BUILD_SOURCE=prebuilt` and
+`SYSTEMD_UNIT_PATH=/usr/lib/systemd/system` for Bash, and an existing `/home/agent`
+for `provision-diskcheck` (this run created it temporarily and removed it after
+testing). Without those prerequisites, `idle-report` and `provision-diskcheck`
+fail on both the baseline and this branch. Git-initializing tests use process-only
+`GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=init.defaultBranch GIT_CONFIG_VALUE_0=main`.
+The final child script also parsed on the actual Windows PowerShell
+5.1.26100.9168 host with **zero parser errors**, using in-memory source only.
+
+### Console API
+
+`console` in `apiFeatures` advertises the bounded screenshot/input API. All
+paths below start with `/api/v1/vms/{name}/console`. Every call uses the current
+`ConsoleOperator` policy: owner/admin for a primary (including its own primary
+VM token); the foundation's child owner/parent/shared-caller policy for children.
+Legacy VM tokens are refused. Sessions are bound to their creating principal
+and VM, and cannot bypass disabled users, changed sharing, or deletion fences.
+
+| Route | Result |
+|---|---|
+| `GET /capabilities` | Device presence, native resolution, capability levels and interactive-video refusal reason. |
+| `POST /sessions` with `{}` | `201 {sessionId, expiresAt, screen:{width,height}, capabilities}`; expires in 60 seconds, at most four sessions per VM. |
+| `POST /sessions/{sid}/renew` | Extends expiry by 60 seconds and refreshes native dimensions. |
+| `DELETE /sessions/{sid}` | Closes this caller's session. |
+| `GET /sessions/{sid}/screenshot?width=&height=` | `image/png`; omitted dimensions use current native; `X-Construct-Screen-Width/Height` report native dimensions. |
+| `POST /sessions/{sid}/keyboard` | `{kind:"text",text}` (512 chars), `{kind:"key",keyCode,press}` (true/down, false/up, null/tap), `{kind:"scancodes",scancodes:[...]}` (64 bytes), or `{kind:"ctrlAltDel"}`. |
+| `POST /sessions/{sid}/mouse` | `{kind:"moveAbsolute",x,y}`, `{kind:"moveRelative",dx,dy}` (−128…127), or `{kind:"click"|"press"|"release",button:1|2|3}`. |
+
+Sessions permit four captures and 50 combined keyboard/mouse events per second. Rate-limit responses include
+`retryAfterSeconds` and `Retry-After` (1 second for events, 60 for the session cap).
+Bodies are bounded at 16 KiB, images at 4 MiB, and captures at 4,194,304 pixels.
+Dimensions must be positive and no larger than native; absolute coordinates are
+native pixels within the current screen. Session restart/expiry returns `410
+console-session-expired`; limits return `429 rate-limited`. Keyboard/capture
+runtime failures return `409 console-unavailable` with the numeric WMI return
+value. Mouse failures return `applied:false` and the device, return value and
+available relative fallback; absent devices return `409`. If only PS/2 is present, absolute movement
+returns `device:syntheticMouse` with `fallback:moveRelative`. Every mutation is
+audited with operation, owner, initiator and target; text is recorded only as a
+character count. Screenshot responses are not cacheable.
+
+Sessions live in memory and end on service restart. Explicit key/button down
+operations should be paired with releases by the client. There is no video
+stream or guest application delivery acknowledgement. `--fake` returns a
+deterministic one-pixel PNG, keyboard success and a synthetic-mouse failure;
+a VM observed Off cannot open a fake console session.
+
+Implementation and transport details: [driver guide](../docs/drivers.md#service-console-transport).
+The Windows program is PowerShell 5.1-compatible; no deployment or LocalSystem
+service validation is implied by Linux tests or elevated relay probes.
+
+Console adapter probe attempt, 2026-09-07: Windows PowerShell **5.1.26100.9168**
+was read successfully through the elevated relay. A read-only inventory showed
+only `haus-vm`; free physical memory was **7,345,060 KiB**. Two attempts to stage
+and execute the console probe encountered Windows PowerShell CLR startup failure
+`HRESULT 80004005` (`exit -65536`), including a staging-only invocation. The
+console WMI program and probe VM creation **did not run**. The partial file under
+`C:\Temp\hostadmin-probe\console-s2` was removed; final readback reported
+`probeCount:0` and `tempExists:false`. No services, existing VMs, firewall rules,
+scheduled tasks or service data were changed. The earlier feasibility report's
+successful WMI probes remain historical evidence; they do not validate this
+new adapter. Production `IProcessRunner` execution on Windows, LocalSystem,
+guest text/pointer behavior and PS/2 fallback still require host validation.
+
+A later retry after review reached Hyper-V: the fixed script was staged under
+`C:\Temp\hostadmin-probe\console-s2`, then this exact creation was attempted:
+`New-VM -Name hostadmin-probe-console -Generation 2 -MemoryStartupBytes 512MB
+-NoVHD -SwitchName 'Default Switch'`. It failed while accessing the configuration
+store with **0x800705AA**, insufficient system resources, reporting prospective
+GUID `ad3d75e7-06a5-43c4-aa56-b23c7864c1de`. No Start-VM, console WMI call, input,
+or screenshot capture ran. The staging directory was removed by `finally`;
+filesystem readback under the default Hyper-V root found **0** matching GUID
+artifacts and `tempExists:false`. A subsequent in-memory, no-VM conversion check
+of the production RGB565 block failed with `System.OutOfMemoryException` and
+returned no PNG. These later attempts add **no successful adapter or conversion
+validation**. The reviewer's separately reported successful synthetic conversion
+is their evidence only, not this implementation's Hyper-V validation.
+
+Final cleanup readback used `Get-WmiObject` in `root\virtualization\v2`,
+`Msvm_ComputerSystem`, with a filter on that exact failed-creation GUID; it
+reported **probeGuidInstances:0**. The failed probe is neither registered nor
+represented by a matching artifact under the default Hyper-V configuration root.
+## Host release updates
+
+The Admin-only `/api/v1/host/updates/{check,stage,apply,cancel,resolve}` POST routes and
+`GET /api/v1/host/updates/status` implement the signed `main` release protocol. Status
+and phase history persist in migration 600's `host_updates` table. Staging/application
+acceptance persists the queued job, replay key and update transition in one SQLite
+transaction. The job's operation ID remains readable after reconnecting.
+
+`Update-ConstructHost.ps1` is an independent Windows PowerShell 5.1 scheduled task. It
+performs list-based replacement, retains complete verified backups, preserves production
+settings/data, checks the TLS-pinned loopback health handshake and `admin db check
+--json`, and records recovery outcomes locally. `Install-ConstructHost.ps1 -AclOnly`
+reuses the existing hardening logic without changing configuration or service registration.
+Mutating admin CLI verbs hold `admin.lock` and recheck the maintenance marker;
+`admin db check --json` opens SQLite read-only and runs `PRAGMA quick_check` without
+migration, platform initialization or taking that lock.
+
+The `updates` API feature becomes available after manual installation. The production
+public-key file remains empty until the owner supplies the trust root; update mutations
+return `409 signing-key-missing` and publishing fails until configured. See
+[release/deployment notes](../docs/host-release.md) and
+[Updating the host](../docs/remote-host.md#updating-the-host).
+
+Additional Linux checks:
+
+```sh
+bash test/host-package.test.sh
+pwsh -NoProfile -File service/tests/host-updater.test.ps1
+pwsh -NoProfile -File service/tests/host-release-installer.test.ps1
+dotnet test service/Constructd.sln --filter 'FullyQualifiedName~Updates'
+```
+
+### Phase 3 admission integration
+
+VM/media admission now uses the production `SqliteAdmissionStore`: the operation key,
+VM, media/upload rows, references, reservations, cascade or deletion fence and queued job
+commit in one IMMEDIATE transaction under the capacity ledger gate. Refusals and failed
+compare-and-set writes roll back the whole plan. Memory persistence uses the equivalent
+in-memory transaction regardless of which hypervisor platform is selected. Earlier
+sections describing production admission as a placeholder are superseded by this section.
+
+A failed job launch retains its fence and capacity for evidence-based recovery. A child
+start whose runtime reservations were swept re-admits missing resources under a derived
+recovery operation id, retaining the create operation's existing storage holds. Durable
+start-intent replay includes those derived holds and keeps the original activation clock.
+Linux tests exercise both persistence modes, including SQLite child creation, partial
+runtime recovery, cascade acceptance/refusal and synchronous mutation rollback. No
+Hyper-V execution is implied by these tests.
+
+### Child delegation, leases and lifecycle
+
+A rotated **primary** VM token can create and manage children of its own primary.
+Legacy VM tokens retain their existing scope; child VMs receive no service credential.
+Identity discovery returns the owner's effective delegation allowance. Requests resolve
+that allowance again, including host caps and primary overrides.
+
+`POST /vms/{name}/lifecycle` accepts `start`, `restart`, `shutdown`, or `save`.
+Child `start` requires a new allowed `lifetime` (`5m` or longer, in minutes/hours/days;
+`never` requires policy permission). Off, Saved and Paused can start; Running answers
+`already-running`. Starts reserve capacity against the **owner**, even for shared callers.
+`POST /vms/{child}/lease` explicitly renews a running child's lease. Restart and save do
+not renew it. Shutdown/restart return jobs, whose graceful shutdown uses
+`lifecycle.gracefulShutdownTimeoutSeconds` (default 300). Unsupported guest integration
+and timeout are structured job failures; neither triggers force-off.
+
+The lease scheduler selects only persisted due deadlines and uses an injectable
+clock. Capacity reconciliation performs external-start detection and completes
+interrupted start intents using its existing per-VM observation; memory mode runs
+that work at the configured capacity reconciliation interval. Powered-off
+creation stays inactive until a start supplies its lifetime. Service/host downtime never
+extends a deadline. Expiry shuts down gracefully and never deletes. Failed expiry marks
+the lease overdue, retains capacity, and retries after `lifecycle.leaseRetrySeconds`.
+A start intent that reached Running before an interruption completes from its original
+clock; stale generations cannot start again. An external start without an active lease
+becomes overdue. Primaries are excluded from lease expiry and children from primary idle
+policy. `Constructd:Lease:SchedulerEnabled=false` disables background ticks for tests.
+
+`PUT /vms/{child}/sharing` accepts only `private` and `host`. Registered users and primary
+tokens may operate host-shared children, subject to the owner's policy. Delete, sharing,
+lease renewal and hardware/media administration remain owner/admin operations. Switching
+back to private removes shared console sessions and invokes exposure/network revocation;
+new requests reauthorize immediately. Already-open job event streams continue. Jobs
+are readable/cancellable by owner/admin or their initiating user/primary token; primary
+tokens cannot consume primary provisioning secrets.
+
+Deleting a primary with children first returns `cascade-confirmation-required`, the
+exact private/shared child list and a ten-minute confirmation token. Submit that token
+as `{ "cascade": { "token": "..." } }` on DELETE. A changed child scope requires a new
+confirmation. Acceptance atomically closes the primary to new children, clears its token,
+fences every child and persists the job. Failed cleanup retains ownership and remaining
+storage charges; repeat deletion with a fresh preview to retry. Disk capacity is released
+only after confirmed artifact removal. The primary is removed only after child cleanup.
+
+These service paths are tested on Linux using the fake hypervisor and real SQLite;
+this stage does not add Hyper-V field-test evidence.
+
+Primary create/start also enters the shared capacity ledger; the primary provisioning
+sequence and one-time credential channel are preserved. Observe remains the default.
+Owner child counts and tightened parent counts are enforced separately and atomically.
+Storage holds survive uncertain cleanup; pre-incarnation save holds are reconciled against
+the discovered VM rather than duplicated. Discovery now advertises `children` and `media`.
+
+Primary state reads no longer update the stored inventory row. In SQLite mode, listings
+reflect the latest capacity reconciliation; memory-mode primary listings retain the last
+service mutation state. State-probe failures (`unknown`) refuse create/start even in
+Observe mode. Primary start returns the state observed immediately after the driver
+call; it does not wait for Running. Validate these compatibility exceptions on the
+real host, including a delayed start that initially reports Unknown.
+
+Owner/admin and the owning primary token may update an off child's hardware or media with
+`PUT /vms/{child}/hardware` and `PUT /vms/{child}/media`. Shared callers are refused.
+CPU/RAM and supported firmware settings are applied through the child driver; disk growth
+currently returns `unsupported-capability`. Media null values detach the corresponding
+slot. References protect both sides of a partial attachment. If configuration is
+interrupted, startup returns `configuration-incomplete`; retry the same configuration
+request to complete it. Runtime capacity is evaluated using the updated hardware on start.
+
+Pending media intents durably project `observed.storageProblem = "media-unverified"`;
+capacity reconciliation cannot clear the flag. Only successful same-request retry or
+VM deletion settles an interrupted attachment. Configuration retries tolerate intervening
+power-generation changes when the same incarnation is confirmed Off under its VM gate.
+
+## Child network adapters
+
+`network` discovery advertises child connectivity through the existing forward
+routes with distinct `ForwardDestination` identity. `ForwardRequesterHandler`
+retains the old policy for primary targets and resolves admin/owner/parent/shared
+relationships for child targets. Host policy is checked after that relationship:
+both `network.hostForwardsEnabled` and the destination owner's `AllowHostForwards`
+must allow it. Hyper-V then refuses child host forwards with
+`409 address-unverifiable`, `reason: no-address-authority`. Client forwards use the
+requester's primary as their SSH carrier. Child guests receive no credentials.
+
+`HyperVGuestAddressProvider` invokes `Get-ConstructVmAddresses` through
+`IProcessRunner` argv and JSON stdin. It resolves the immutable VM id, reads each
+adapter's KVP reports and MAC/switch facts, and correlates management adapter MACs
+with host NICs for switch-bound subnets and neighbor facts. Every reported address
+is unverified. Missing evidence fails closed. `GuestAddressResolver` rejects stale
+incarnations, incompatible switches, forbidden addresses and conflicts with current
+or previously used addresses of other managed VMs. Migration 700 stores child
+forward destinations, address-use history and `network_rules`; primary destination
+columns remain null. Destination changes clear stale acks without resurrecting a
+concurrently removed forward. Host forward argv uses the destination address/port
+only for a verified destination (a future-authority seam tested with synthetic inputs).
+
+`INetworkPolicyReconciler` has `OnVmCreatedAsync`, `OnSharingChangedAsync`,
+`OnAddressChangedAsync`, `OnVmDeletedAsync`, periodic `ReconcileAsync` and rule listing.
+Create/delete jobs invoke their hooks. The sharing endpoint calls its hook after
+committing: it revokes shared exposure and updates intended rules. Periodic
+reconciliation also repairs missed sharing events, missing VMs and disabled consumers.
+`NoIsolationNetworkPolicy` persists `parent-child` and
+`shared-consumer` peers with `state: intended`, returns `IsolationLevel = "none"`,
+and audits changes. It does **not** enforce packet isolation.
+
+A future Proxmox/firewall adapter receives the VM incarnation, reporting adapter,
+switch-bound subnets, host addresses, authoritative IP allocations via
+`IAddressAuthority`, requester/owner/parent/sharing identities, desired peer rules
+and requested ports/modes. It consumes VM-created, VM-deleted, sharing-changed and
+address-changed events, plus periodic reconciliation. It must revoke stale rules,
+report actual enforcement failures and supply an allocation authority before child
+host forwards can be admitted. No Proxmox/firewall adapter or IP authority ships
+here. Linux recording-runner, fake API and pwsh checks are not Hyper-V validation;
+Windows PowerShell 5.1/LocalSystem execution remains a field-test requirement.
+
+Run the guest-network script checks with
+`pwsh -NoProfile -File service/tests/Constructd.Tests/Network/network-script.test.ps1`.
+The same suite is included in the Windows PowerShell 5.1 job of
+`.github/workflows/iso-installers.yml`. Each reconciliation tick repairs primary host
+forwards first, then captures one all-VM network snapshot in one PowerShell process,
+shared by child exposure and intended-rule reconciliation. Each pass has a separate
+failure boundary. Failed snapshot collection logs a bounded category or exit code;
+process output and exception text are never logged.
+
+Snapshot collection skips registry rows already marked absent. A missing, in-flight
+or replaced VM produces a per-VM empty result and sanitized warning; sibling VM
+reports and host facts remain available. Host-wide collection failures still fail
+closed for the complete snapshot.
+
+## Linux host-administration end-to-end validation
+
+Run `bash test/host-admin-e2e.test.sh` (requires .NET 10, Node, curl and jq).
+`HostAdminEndToEndTests` also runs in the normal solution test suite. It skips
+itself off Linux or when bash, Node, curl or jq is missing from PATH, so the
+portable solution test command remains usable on other hosts. The Bash wrapper
+requires its tools and fails if they are missing. The test launches
+the real API entry point on a dynamically assigned loopback Kestrel HTTPS port,
+using the `Constructd:Fake=true` composition (equivalent to `--fake`) and a private
+SQLite database. A temporary certificate is trusted by the guest CLI through
+`CONSTRUCT_SERVICE_CA_FILE` and pinned by the actual extension HTTP transport.
+The Node story invokes `bin/construct vm`, `extension/src/remotehost.js` and HTTPS
+requests; it never substitutes their HTTP implementations.
+
+The test assembly controls the clock, inventory, shutdown outcome and update
+maintenance gate over its child process's stdin/stdout. No test-control endpoints
+or configuration bypasses are added to the service. Media uses the production
+HTTP transfer/upload implementation with a test-only loopback URL policy and
+socket handler, backed by a local HTTP ISO fixture server. This exercises actual
+bytes, hashing, upload chunks and references; production public-address/DNS
+pinning remains covered by the media unit tests.
+
+Coverage includes enrollment and allowances; primary creation and token rotation;
+URL and dual-upload child creation; shared inspection, lifecycle, console and
+client forwards with owner-only operations refused; revocation on private sharing;
+two concurrent starts competing for the last GiB; shutdown/save/restart semantics;
+failed and successful lease expiry with retry; disabled host forwarding through
+both child and parent; drain/freeze/refusal/reopening; legacy token restrictions;
+and cascade confirmation invalidation when another child is created. It compares
+HTTP mutation counts against SQLite audit entries, including failures, and checks
+CLI/job/audit/service logs for credential and auxiliary-media sentinels.
+
+All listeners, subprocesses, media, token files, certificates and databases belong
+to the test and are disposed afterward. The update test exercises its real gate,
+not release staging, scheduled-task handoff or a Windows service restart. Fake
+hardware, ISO signatures and console PNGs do not demonstrate a bootable installer,
+guest OS installation, packet isolation or Hyper-V/LocalSystem operation.
+
+Final delivery review adds the Admin-only `/api/v1/host/iso-catalog` projection,
+evidence-based abandoned admission recovery and stricter host-local update trust.
+See [review dispositions](../docs/plans/host-administration-final-review.md) for
+regressions, explicit compatibility deviations and remaining Windows field checks.
+Unenrolled identities receive only the reduced health response.

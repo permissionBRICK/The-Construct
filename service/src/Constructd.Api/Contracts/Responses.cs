@@ -19,7 +19,10 @@ public sealed record WhoAmIResponse(
     bool Known,
     Role? Role,
     int? MaxVms,
-    bool? AllowHostForwards);
+    bool? AllowHostForwards,
+    bool? Enabled = null,
+    EffectiveAllowanceResponse? Effective = null,
+    IReadOnlyList<string>? ApiFeatures = null);
 
 public sealed record UserResponse(string Name, Role Role, int MaxVms, bool AllowHostForwards, DateTimeOffset Created)
 {
@@ -62,7 +65,8 @@ public sealed record ForwardResponse(
     int? LocalPort = null,
     string? HostLabel = null,
     string? Message = null,
-    DateTimeOffset? AckedAt = null)
+    DateTimeOffset? AckedAt = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] ForwardDestination? Destination = null)
 {
     /// <summary>
     /// <paramref name="publicHost"/> is the LAN name host forwards are advertised on. A client
@@ -83,7 +87,7 @@ public sealed record ForwardResponse(
         {
             return new(
                 forward.Id, forward.VmName, forward.VmPort, forward.PublicPort,
-                forward.Target, forward.Label, forward.Created, url);
+                forward.Target, forward.Label, forward.Created, url, Destination: forward.Destination);
         }
 
         if (ack.Status == AckStatus.Open && ack.LocalPort is int local)
@@ -102,7 +106,7 @@ public sealed record ForwardResponse(
             LocalPort: ack.LocalPort,
             HostLabel: ack.HostLabel,
             Message: ack.Message,
-            AckedAt: ack.At);
+            AckedAt: ack.At, Destination: forward.Destination);
     }
 }
 
@@ -125,7 +129,12 @@ public sealed record VmResponse(
     /// <summary>True once a removal job has been accepted: the VM is fenced against mutations.</summary>
     bool Deleting,
     IdlePolicyResponse IdlePolicy,
-    IReadOnlyList<ForwardResponse> Forwards);
+    IReadOnlyList<ForwardResponse> Forwards,
+    VmKind Kind = VmKind.Primary, string? Parent = null, SharingScope Sharing = SharingScope.Private,
+    bool Shared = false, string? Incarnation = null, VmTokenKind? TokenKind = null, bool ChildCreationClosed = false,
+    LeaseResponse? Lease = null, ChildHardware? Hardware = null, IReadOnlyList<object>? Media = null,
+    GuestReport? Guest = null, HostObservation? Observed = null, VmReservationsResponse? Reservations = null,
+    CurrentOperationResponse? CurrentOperation = null, IReadOnlyList<string>? Children = null, IReadOnlyList<ChildAction>? AllowedActions = null);
 
 /// <param name="PublicHost">
 /// The name this VM's web forwards are advertised under (plan §4.12). Equal to
@@ -170,7 +179,7 @@ public sealed record JobResponse(
     DateTimeOffset? Finished,
     IReadOnlyList<JobProgressResponse> Progress,
     object? Result,
-    string? Error)
+    string? Error, string? Initiator = null, string? OperationKey = null, string? Phase = null)
 {
     /// <param name="vmToken">
     /// The consumed one-time secret, if this projection is the one that got it. It is merged into the
@@ -186,7 +195,7 @@ public sealed record JobResponse(
             job.Finished,
             [.. job.Progress.Select(JobProgressResponse.From)],
             ProjectResult(job, vmToken),
-            job.Error);
+            job.Error, job.Initiator, job.OperationKey, job.Phase);
 
     /// <summary>
     /// Projects the stored (secret-free) result for the wire. For a creation job the VM token is

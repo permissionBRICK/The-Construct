@@ -45,14 +45,38 @@ public static class ForwardEndpoints
         CancellationToken cancellationToken)
     {
         var lookup = await ApiHelpers.ResolveVmAsync(http, repository, authorization, name,
-            Policies.VmSelfOrOwnerOrAdmin, cancellationToken).ConfigureAwait(false);
+            Policies.ForwardRequester, cancellationToken).ConfigureAwait(false);
 
         if (!lookup.Ok)
         {
             return lookup.Failure!;
         }
 
-        var list = await forwards.ListAsync(lookup.Vm!.Name, cancellationToken).ConfigureAwait(false);
+        var vm = lookup.Vm!;
+        IReadOnlyList<PortForward> list = await forwards.ListAsync(vm.Name, cancellationToken);
+        var via = http.Request.Query["via"].FirstOrDefault();
+        if (http.User.IsVmToken() && !http.User.IsPrimaryToken() && (via is not null || string.Equals(http.Request.Query["includeChildren"], "true", StringComparison.OrdinalIgnoreCase)))
+            return Problems.Forbidden("Legacy VM tokens cannot access child forwards.");
+        if (via is not null)
+        {
+            var primary = await repository.GetAsync(via, cancellationToken);
+            if (primary is not { Kind: VmKind.Primary, Deleting: false } ||
+                (http.User.IsVmToken() ? !string.Equals(http.User.VmTokenName(), primary.Name, StringComparison.OrdinalIgnoreCase)
+                    : !string.Equals(http.User.NameOrEmpty(), primary.Owner, StringComparison.OrdinalIgnoreCase)))
+                return Problems.Forbidden("Only the via primary or its owner may poll its tunnels.");
+            list = list.Where(f => f.Destination is null).Concat(await http.RequestServices.GetRequiredService<IAccessExposure>().ListViaAsync(primary.Name, cancellationToken)).DistinctBy(f => f.Id).ToArray();
+        }
+        else if (vm.Kind == VmKind.Primary && string.Equals(http.Request.Query["includeChildren"], "true", StringComparison.OrdinalIgnoreCase))
+        {
+            var children = (await repository.ListAsync(null, cancellationToken)).Where(c => string.Equals(c.Parent, vm.Name, StringComparison.OrdinalIgnoreCase)).Select(c => c.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            list = list.Concat((await forwards.ListAsync(null, cancellationToken)).Where(f => children.Contains(f.VmName))).ToArray();
+        }
+        else if (vm.Kind == VmKind.Child)
+        {
+            var relationship = await DelegationAuthorization.RelationshipAsync(http.User, vm, repository, http.RequestServices.GetRequiredService<IUserStore>(), cancellationToken);
+            if (relationship == ForwardRelationship.Shared)
+                list = list.Where(f => string.Equals(f.Destination?.RequestedBy, ForwardRequesterHandler.Requester(http.User), StringComparison.OrdinalIgnoreCase)).ToArray();
+        }
         // Advertised under THIS VM's public host (plan §4.12) — the service's PublicHost unless the
         // host runs a PublicHostPattern, in which case every VM has its own name.
         var publicHost = options.PublicHostFor(lookup.Vm!.Name);
@@ -65,13 +89,14 @@ public static class ForwardEndpoints
         HttpContext http,
         IVmRepository repository,
         IUserStore users,
+        IHostConfigStore hostConfig,
         IAuthorizationService authorization,
         IPortForwardManager forwards,
         ConstructdOptions options,
         CancellationToken cancellationToken)
     {
         var lookup = await ApiHelpers.ResolveVmAsync(http, repository, authorization, name,
-            Policies.VmSelfOrOwnerOrAdmin, cancellationToken).ConfigureAwait(false);
+            Policies.ForwardRequester, cancellationToken).ConfigureAwait(false);
 
         if (!lookup.Ok)
         {
@@ -79,6 +104,9 @@ public static class ForwardEndpoints
         }
 
         var vm = lookup.Vm!;
+        if (vm.Kind == VmKind.Child) return await ChildForwardOperations.CreateAsync(vm, request, http, cancellationToken);
+        if (request?.ConnectPort is not null || request?.Via is not null)
+            return CodedProblems.Validation("destination", "Primary forwards cannot specify via or connectPort.");
 
         if (ApiHelpers.FenceDeleting(vm) is { } fenced)
         {
@@ -103,6 +131,8 @@ public static class ForwardEndpoints
 
         if (target == ForwardTarget.Host)
         {
+            if ((await hostConfig.GetAsync<NetworkConfig>("network", cancellationToken)) is { HostForwardsEnabled: false })
+                return CodedProblems.Create(403, "host-forwards-disabled", "Host-target forwards are disabled on this host.");
             // The policy follows the VM's OWNER, not the caller: an admin acting on someone else's VM
             // must not be able to route around that user's restriction.
             var owner = await users.GetAsync(vm.Owner, cancellationToken).ConfigureAwait(false);
@@ -162,7 +192,7 @@ public static class ForwardEndpoints
         CancellationToken cancellationToken)
     {
         var lookup = await ApiHelpers.ResolveVmAsync(http, repository, authorization, name,
-            Policies.VmSelfOrOwnerOrAdmin, cancellationToken).ConfigureAwait(false);
+            Policies.ForwardRequester, cancellationToken).ConfigureAwait(false);
 
         if (!lookup.Ok)
         {
@@ -171,6 +201,12 @@ public static class ForwardEndpoints
 
         var vm = lookup.Vm!;
         http.SetAuditDetail($"id={id}");
+        if (vm.Kind == VmKind.Child)
+        {
+            var forward = await http.RequestServices.GetRequiredService<IForwardStore>().GetAsync(id, cancellationToken);
+            if (forward is null || !string.Equals(forward.VmName, vm.Name, StringComparison.OrdinalIgnoreCase)) return Problems.NotFound("Unknown forward.");
+            if (!await ChildForwardOperations.MayRemoveAsync(http, vm, forward, cancellationToken)) return Problems.Forbidden("Only the owner, parent, administrator or requester may remove this forward.");
+        }
 
         return await forwards.RemoveForwardAsync(vm.Name, id, cancellationToken).ConfigureAwait(false)
             ? TypedResults.NoContent()
@@ -198,15 +234,21 @@ public static class ForwardEndpoints
         ConstructdOptions options,
         CancellationToken cancellationToken)
     {
-        var lookup = await ApiHelpers.ResolveVmAsync(http, repository, authorization, name,
-            Policies.VmOwnerOrAdmin, cancellationToken).ConfigureAwait(false);
-
-        if (!lookup.Ok)
+        var candidate = await repository.GetAsync(name, cancellationToken);
+        Vm vm;
+        if (candidate?.Kind == VmKind.Child)
         {
-            return lookup.Failure!;
+            var childForward = await store.GetAsync(id, cancellationToken);
+            if (childForward is null || !string.Equals(childForward.VmName, candidate.Name, StringComparison.OrdinalIgnoreCase)) return Problems.NotFound("Unknown forward.");
+            if (!await ChildForwardOperations.MayAckAsync(http, candidate, childForward, cancellationToken)) return Problems.Forbidden("Only the via primary's owner or an administrator may ack.");
+            vm = candidate;
         }
-
-        var vm = lookup.Vm!;
+        else
+        {
+            var lookup = await ApiHelpers.ResolveVmAsync(http, repository, authorization, name, Policies.VmOwnerOrAdmin, cancellationToken);
+            if (!lookup.Ok) return lookup.Failure!;
+            vm = lookup.Vm!;
+        }
         http.SetAuditDetail($"id={id}");
 
         if (ApiHelpers.FenceDeleting(vm) is { } fenced)
@@ -243,6 +285,8 @@ public static class ForwardEndpoints
             return Problems.BadRequest($"'status' must be one of: {ApiHelpers.Options<AckStatus>()}.");
         }
 
+        if (vm.Kind == VmKind.Child && status == AckStatus.Open && forward.Destination?.ConnectAddress is null)
+            return CodedProblems.Create(409, "address-unverifiable", "The guest address is not usable yet.");
         int? localPort = null;
         if (status == AckStatus.Open)
         {
@@ -273,7 +317,9 @@ public static class ForwardEndpoints
 
         var ack = new ForwardAck(status, localPort, hostLabel, message, clock.UtcNow);
 
-        if (!await store.SetAckAsync(id, ack, cancellationToken).ConfigureAwait(false))
+        if (vm.Kind == VmKind.Child && !await http.RequestServices.GetRequiredService<Constructd.Core.Services.AccessExposure>().TryAckAsync(forward, ack, cancellationToken))
+            return CodedProblems.Create(409, "address-unverifiable", "The child destination changed; poll its forwards again.");
+        if (vm.Kind != VmKind.Child && !await store.SetAckAsync(id, ack, cancellationToken).ConfigureAwait(false))
         {
             // Removed between the read and the write (the guest ran `expose --close`).
             return Problems.NotFound($"VM '{vm.Name}' has no forward '{id}'.");

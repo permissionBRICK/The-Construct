@@ -204,9 +204,11 @@ const state = await driver.queryVmState(instance);   // 'running'|'off'|'absent'
 | Member | Signature | Notes |
 |---|---|---|
 | `backend` | string | the id this driver implements |
-| `capabilities` | `{ checkpoints, console, suspend, hostLifecycle }` | `console`: `"vmconnect"` \| `"none"` \| a URL; `hostLifecycle`: the host's own PowerShell scripts create/delete/reconfigure this backend's VMs |
+| `capabilities` | `{ checkpoints, console, suspend, hostLifecycle, children? }` | `console`: `"vmconnect"` \| `"none"` \| a URL; `hostLifecycle`: the host's own PowerShell scripts create/delete/reconfigure this backend's VMs; optional `children` advertises the service-backed child inventory |
+| `capabilitiesFor` | `(instance, opts) => Promise<object>` | optional effective-capability resolver; `hyperv-remote` probes `/health.apiFeatures` and caches successful answers for 60 seconds |
 | `queryVmState` | `(instance, opts) => Promise<string>` | `running\|off\|absent\|unknown` (`saved`/`paused` collapse to `off`: Start resumes them) |
 | `queryAutoCheckpoints` | `(instance, opts) => Promise<string>` | `on\|off\|absent\|unsupported\|unknown` |
+| `queryChildren` | `(instance, opts) => Promise<Array\|null>` | optional child inventory; `null` means unavailable or failed, while `[]` is a successful empty inventory |
 | `startVm` | `(instance, opts) => bool` | fire-and-forget; `true` = launched |
 
 `instance` is the normalized instance object (`{ name, backend, vmName, vmHost, sshPort,
@@ -243,6 +245,12 @@ unknown-backend driver declares neither.
 had; `queryVmState(opts)` / `queryAutoCheckpoints(opts)` / `startVm(opts)` now take an
 optional `opts.instance` and dispatch through `getDriver`. An explicit `opts.vmName`
 still wins over the instance, so older call sites are unaffected.
+
+The legacy `capabilities.console` value describes a desktop-side console affordance
+(`vmconnect` for a local VM). It does not describe constructd's service console. The
+remote driver therefore keeps `console: "none"`; its optional `children` capability
+instead enables the child inventory, whose console actions use the authenticated
+`/api/v1/vms/{child}/console/*` routes.
 
 ## 5. Adding a backend
 
@@ -291,6 +299,8 @@ this is the contract mapping.
 | `Wait-ConstructVmReachable` | unchanged in kind — a raw socket poll of that endpoint |
 | `Detach-ConstructInstallMedia` | **no-op**: the creation job detaches the media on the host before it reports success |
 | capabilities | `@{ Checkpoints = $false; Console = 'none'; Suspend = $true; Backend = 'hyperv-remote' }` |
+| effective extension capability | `GET /health`; `apiFeatures` containing `children` adds `children: true`; old services and failed probes remain `false` |
+| extension child inventory | `GET /vms/{primary}/children`; failed reads return `null`, not an empty list |
 
 Two documented deviations, both additive:
 
@@ -313,6 +323,11 @@ is the same discipline as the local driver's `InvalidParameter` test and matters
 
 Progress lines from a job are printed with the host script's `Write-Note`, one per
 `event: progress` line, so a remote create logs like a local one.
+
+The service-backed console is intentionally outside the PowerShell driver contract.
+It supports PNG screenshots and authenticated keyboard/mouse injection for children;
+there is no streamed video, and mouse injection can report `applied: false` when the
+host cannot map absolute coordinates safely.
 
 ## 7. Proxmox mapping notes (design-only)
 
@@ -339,3 +354,74 @@ Two things that are Proxmox-shaped and worth doing at the same time: the ISO mus
 uploaded to a storage (`POST /nodes/{node}/storage/{store}/upload`) before it can be
 referenced by `ide2`, and every long operation returns a **UPID task id** — the same
 job/poll shape `constructd` uses, so a shared "wait for job" helper is worth having.
+
+## Optional general-purpose child VM contract
+
+The existing `HyperVLocal.Driver.ps1` functions are unchanged. Opt in with
+`. $driverLoader -Backend hyperv-local -Include ChildVm`; this loads
+`drivers/hyperv-local/HyperVLocal.ChildVm.ps1`. The default loader does not load it.
+
+| Function | Inputs / behavior |
+|---|---|
+| `Get-ConstructDriverExtendedCapabilities` | Backend hardware levels; Gen 2, fixed RAM, both Secure Boot templates, local TPM, two optical slots. Console is supplied by the separate console adapter. |
+| `Get-ConstructChildStorage` | `Name`, optional `VhdPath`; resolves disk and configuration volumes without allocation. |
+| `New-ConstructChildVm` | `Descriptor` with `ChildVmDescriptor` fields (name, hardware, optional VHD and ISO paths, switch name) plus an internal creation operation id. Creates a dynamic VHDX with an explicit maximum and leaves the VM Off. |
+| `Set-ConstructChildHardware` | `Name`, `Hardware`, `ResendTemplate`; VM must be Off. Template is set before TPM initialization; false never resends it. |
+| `Set-ConstructChildMedia` | `Name`, nullable install/auxiliary paths, `BootOrder`; Off only, DVDs at SCSI 0:1 and 0:2, disk at 0:0. Null ejects media. Boot order uses device objects. |
+| `Get-ConstructChildAttachedMedia` | Actual paths by slot and completeness, used to reconcile references. |
+| `Stop-ConstructChildVmGracefully` | `Name`, timeout seconds (300 default); non-forced WMI `InitiateShutdown`, then bounded Off polling. Returns `completed`, `timeout`, `unavailable` or `failed`. No force-off/save fallback. |
+| `Get-ConstructChildVmCapabilities` | VM-id-scoped WMI device presence, dimensions, firmware lock, generation and conditional shutdown availability. |
+| `Get-ConstructChildVmId` | Immutable Hyper-V id; null only after successful inventory confirms absence. |
+| `Get-ConstructChildCreationOperation` | Reads the cleanup ownership record for failed-create rollback. |
+| `Remove-ConstructChildVm` | Explicit deletion may turn off the VM. Removes VM/saved state and owned disk chains; retains the ownership record if cleanup fails so removal can be retried. |
+
+`hardware` carries `cpus`, `ramMb`, `diskGb`, `generation`, `secureBoot`,
+`secureBootTemplate`, `tpm`, `bootOrder`, `networkAttached`, and reserved
+`dynamicMemory` (rejected). No OS installation, credentials, SSH wait or ISO patching
+is part of this contract. Automatic checkpoints are off; automatic stop is Save and
+automatic start is StartIfRunning.
+
+The `.vhdx.childvm.json` ownership record is created exclusively before allocation
+at the canonical configured/default VHD location (also for an explicit disk override).
+It records the VM id, admitted operation id and disk paths needed after VM removal.
+Unverified ownership or a different VM incarnation refuses cleanup. These records
+contain no guest credentials. Storage accounting must retain artifacts until the
+removal call succeeds. Inventory and guest-address provider sections are owned by
+the capacity and network adapters respectively.
+
+## Service console transport
+
+`Constructd.Windows.Console.HyperVConsoleTransport` implements `IConsoleTransport`
+through `IProcessRunner`. It launches Windows PowerShell 5.1 with a fixed
+`-EncodedCommand` program; the VM name and all input arrive as JSON on stdin.
+The console needs no guest agent, network address, SSH, VMConnect window, or
+installed guest OS. The existing local `vmconnect` capability is unchanged.
+
+The script finds the requested VM by exact name, then resolves its video head,
+keyboard and mouse through that VM's GUID and WMI associations. Screenshot
+capture targets the realized `Msvm_VirtualSystemSettingData` path. Conversion
+validates the four-byte big-endian total length, then copies top-down,
+little-endian RGB565 rows into a System.Drawing bitmap, respecting stride.
+Only PNG bytes leave the adapter. Screenshots are at most 4 MiB, dimensions at
+most current native, with a separate 4,194,304-pixel work bound.
+
+Keyboard supports text, virtual-key down/up or `TypeKey`, scan-code byte arrays,
+and Ctrl+Alt+Del. Mouse supports native-pixel absolute positioning and buttons
+1–3; a present PS/2 device enables signed-byte relative movement. A failed
+synthetic call reports its numeric WMI return value and whether relative fallback
+is available. Button operations rejected by a present synthetic device are retried
+on a present PS/2 device, with that device’s actual result reported. Class/device
+discovery never makes a failed operation successful.
+Input operations for a VM are serialized; explicit press/release calls retain
+state in Hyper-V and clients should pair them.
+
+Host levels are screenshot/keyboard supported, absolute mouse conditional,
+relative mouse unsupported on the supported Gen 2 configuration, and interactive
+video unsupported. Per-VM levels lower for missing devices; a present PS/2 mouse
+reports conditional relative support. Interactive video requires a separate
+transport and authentication implementation, which is outside this delivery.
+
+The adapter does not log stdout, stderr, typed text, images or dependency
+exceptions. See [the API guide](../service/README.md#console-api) for sessions and
+limits and [the feasibility findings](plans/host-administration-hyperv-feasibility.md)
+for the precise elevated-account evidence and remaining LocalSystem limitations.

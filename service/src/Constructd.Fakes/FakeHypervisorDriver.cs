@@ -27,6 +27,7 @@ public sealed class FakeHypervisorDriver : IHypervisorDriver
 
     /// <summary>Set to make the power operations throw, standing in for a failing hypervisor.</summary>
     public Exception? PowerFailure { get; set; }
+    public VmState StateAfterStart { get; set; } = VmState.Running;
 
     /// <summary>Host name pattern the fake endpoint uses.</summary>
     public string EndpointHostSuffix { get; set; } = ".fake.local";
@@ -88,7 +89,7 @@ public sealed class FakeHypervisorDriver : IHypervisorDriver
         {
             return Task.FromException(PowerFailure);
         }
-        _states[name] = VmState.Running;
+        _states[name] = StateAfterStart;
         return Task.CompletedTask;
     }
 

@@ -45,7 +45,8 @@ param(
     [string]$Backend = "hyperv-local",
     [string]$ServiceUrl = "",
     $Auth = $null,
-    [string]$Pin = ""
+    [string]$Pin = "",
+    [ValidateSet("ChildVm")][string[]]$Include = @()
 )
 
 function Import-ConstructDriver {
@@ -95,4 +96,9 @@ if ($ServiceUrl) {
         throw "The '$Backend' driver takes no host service, so -ServiceUrl cannot be applied to it."
     }
     [void](Set-ConstructDriverContext -ServiceUrl $ServiceUrl -Auth $Auth -Pin $Pin)
+}
+
+if ($Include -contains "ChildVm") {
+    if ($Backend -ne "hyperv-local") { throw "ChildVm is unsupported for this backend." }
+    . (Join-Path (Join-Path $PSScriptRoot "hyperv-local") "HyperVLocal.ChildVm.ps1")
 }

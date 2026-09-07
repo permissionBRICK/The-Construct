@@ -56,7 +56,8 @@ public sealed class VmTokenAuthenticationHandler(
     IOptionsMonitor<AuthenticationSchemeOptions> options,
     ILoggerFactory logger,
     UrlEncoder encoder,
-    ITokenService tokens)
+    ITokenService tokens,
+    IVmRepository vms)
     : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
 {
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
@@ -72,9 +73,12 @@ public sealed class VmTokenAuthenticationHandler(
             return AuthenticateResult.Fail("Invalid VM token.");
         }
 
+        var vm = await vms.GetAsync(principal.VmName, Context.RequestAborted);
+        if (vm is not { Kind: Core.Domain.VmKind.Primary, Deleting: false }) return AuthenticateResult.Fail("Invalid VM token.");
         var identity = new ClaimsIdentity(ConstructdSchemes.VmToken, ClaimTypes.Name, ClaimTypes.Role);
         identity.AddClaim(new Claim(ClaimTypes.Name, principal.Name));
         identity.AddClaim(new Claim(ConstructdClaims.VmName, principal.VmName));
+        identity.AddClaim(new Claim("constructd:vm-token-kind", vm.TokenKind.ToString().ToLowerInvariant()));
         return AuthenticateResult.Success(
             new AuthenticationTicket(new ClaimsPrincipal(identity), Scheme.Name));
     }

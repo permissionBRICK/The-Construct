@@ -24,6 +24,10 @@
                instance (panel.js keeps it hidden otherwise), so a single-VM install's
                header is unchanged. -->
           <select class="gear instance-select" id="instanceSelect" title="Construct instance (VM) this window drives" hidden aria-label="Construct instance"></select>
+          <!-- Host administration (contract §10.2): shown ONLY when the active instance's
+               host says this identity is an administrator. Absent for local installs and
+               remote non-admins, so every other panel is unchanged. -->
+          <button class="gear" id="hostAdminBtn" data-cmd="openHostAdmin" title="Administer this instance's host" hidden>&#x2699; Host</button>
           <button class="gear" id="openTabBtn" title="Open as editor tab">&#x2922; Tab</button>
           <button class="gear" id="gearBtn">&#x2699; Settings</button>
         </div>
@@ -91,6 +95,17 @@
           <div class="mhead"><h2 class="seclabel">Forwards</h2><span class="meta" id="fwdOwner"></span></div>
           <div class="fwd-list" id="fwdList"></div>
           <p class="cost-note" id="fwdEmpty">No forwards. An agent on the VM opens one with <span class="sans-dim">construct expose &lt;port&gt;</span>.</p>
+        </section>
+
+        <!-- Child VMs (host-administration contract §10.2, the minimal user view): the
+             children of this primary with exactly two actions, Shut down (a graceful guest
+             shutdown request) and Delete (confirmed extension-side). Hidden entirely for a
+             local instance and for a host whose service has no child VMs. -->
+        <section class="module" id="childrenModule" hidden>
+          <div class="mhead"><h2 class="seclabel">Child VMs</h2><span class="meta" id="childrenMeta"></span></div>
+          <p class="cost-note" id="childrenProblem" hidden></p>
+          <div class="fwd-list" id="childrenList"></div>
+          <p class="cost-note" id="childrenEmpty">No child VMs. Create one from inside the VM with <span class="sans-dim">construct vm create</span>.</p>
         </section>
 
         <!-- Idle policy (B8, plan §4.7): remote instances only — the host service enforces

@@ -7,6 +7,7 @@ on:
       - 'lib/Construct.Iso.ps1'
       - 'config/iso-builder.json'
       - 'service/**'
+      - 'drivers/hyperv-local/HyperVLocal.ChildVm.ps1'
       - 'test/native-iso-host.test.ps1'
       - '.github/workflows/iso-installers.yml'
   pull_request:
@@ -15,6 +16,7 @@ on:
       - 'lib/Construct.Iso.ps1'
       - 'config/iso-builder.json'
       - 'service/**'
+      - 'drivers/hyperv-local/HyperVLocal.ChildVm.ps1'
       - 'test/native-iso-host.test.ps1'
       - '.github/workflows/iso-installers.yml'
   workflow_dispatch:
@@ -33,6 +35,7 @@ jobs:
         run: |
           ./test/native-iso-host.test.ps1
           ./service/tests/host-installer.test.ps1
+          ./service/tests/Constructd.Tests/Network/network-script.test.ps1
           ./test/remote-driver.test.ps1
           ./test/remote-install.test.ps1
       - name: Download and run the pinned executable

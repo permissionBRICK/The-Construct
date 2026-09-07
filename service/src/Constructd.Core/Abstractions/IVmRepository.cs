@@ -29,6 +29,9 @@ public interface IVmRepository
     Task<VmAddOutcome> AddAsync(Vm vm, int maxVms, CancellationToken cancellationToken);
 
     /// <summary>Returns false when the VM does not exist.</summary>
+    // Legacy columns only (owner/resources/state/SSH/token hash/idle/deleting).
+    // Use IVmMetadataStore and IVmDelegationRepository for feature fields so stale
+    // lifecycle snapshots cannot overwrite newer report, observation or lease facts.
     Task<bool> UpdateAsync(Vm vm, CancellationToken cancellationToken);
 
     /// <summary>Returns false when the VM does not exist.</summary>

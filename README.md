@@ -37,6 +37,12 @@ where they can't touch your host PC.
   Remote-SSH.
 - 🔌 **Agents hand you links** — `construct expose 5173` on the VM opens that port on *your*
   PC — over an SSH tunnel the extension opens to that VM — and prints the URL to open.
+- 🧪 **Disposable child VMs** — from a service-managed primary, `construct vm create`
+  gives an agent a short-lived ISO-booted Windows or Linux test machine without placing
+  host credentials in the guest.
+- 🛠️ **Shared-host administration** — enrolled host admins get a dedicated VS Code view
+  for users and allowances, all VMs, capacity, child media, jobs, configuration and
+  signed host updates; ordinary users see only their primary's child list and safe actions.
 - 🖥️ **T3 Code, patched with extra features** — Patches the VM and Windows client for live
   voice input for T3 code in the UI using Claude, auto-restore on session limit resets, as
   well as deeper integration with the construct.
@@ -130,6 +136,14 @@ still runs the provisioning, so your git credentials, agent auth and backups nev
 the service. Once it is up, the VM keeps running with your laptop closed — and a remote
 install needs no administrator rights on your own machine, because nothing is created there.
 
+An enrolled administrator can open **The Construct: Host Administration** without first
+creating a VM. User allowances govern child count, CPU, RAM, storage, lifetime and sharing;
+a service-managed primary with an upgraded `primary` token can then use
+[`construct vm`](docs/child-vms.md) to create and operate general-purpose child VMs. The
+host service and guest Construct are updated independently: host updates come from signed
+`main` releases in the Maintenance tab, while guest provisioning stays in the existing
+per-instance workflow.
+
 Several VMs, local or remote, are just as fine: each is a named **instance** in a small
 registry on your PC (`%LOCALAPPDATA%\The-Construct\instances.json`), and the control panel
 gets a picker to switch the window between them. An install that only ever wants the one
@@ -139,7 +153,8 @@ registry means exactly today's behaviour.
 See **[Remote host](docs/remote-host.md)** for the admin setup, authentication
 (Kerberos or admin-issued tokens), certificate pinning and the idle policy, and
 **[Field test](docs/field-test-remote-host.md)** for the step-by-step first run on a
-domain.
+domain. The host-administration and child-VM implementation is Linux-tested but still needs
+the separate **[host-admin Hyper-V field test](docs/field-test-host-admin.md)** before rollout.
 
 ## 🔐 Know the trade
 
@@ -165,7 +180,9 @@ The Construct swaps guardrails for isolation:
 | [Remote access & services](docs/remote-access.md) | serve-web, tunnels, Codex remote, T3 Code, service lifecycle |
 | [Remote host](docs/remote-host.md) | Running the VM on a shared Hyper-V host: the `constructd` service, auth, pinning, idle policy |
 | [Field test checklist](docs/field-test-remote-host.md) | Step-by-step first run of the remote host on a domain, with what to check and where to look when it fails |
+| [Host-admin field test](docs/field-test-host-admin.md) | Owner-run Hyper-V validation for migration, children, console, sharing, expiry, cascade deletion, host update and rollback |
 | [`construct expose`](docs/expose.md) | Self-serve port forwards from the VM, the spool/API contract, the idle heartbeat |
+| [Child VMs](docs/child-vms.md) | `construct vm`: create, lifecycle, media, console, sharing, jobs and automation output |
 | [Hypervisor drivers](docs/drivers.md) | The backend contract (`hyperv-local`, `hyperv-remote`) and how to add one |
 | [Control panel](docs/control-panel.md) | The VS Code operator console, optional voice and patched T3 Code features |
 | [Backup & restore](docs/backup-restore.md) | Carrying agent config and auth across reinstalls |

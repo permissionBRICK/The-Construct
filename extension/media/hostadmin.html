@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src {{cspSource}} data:; style-src {{cspSource}} 'unsafe-inline'; font-src {{cspSource}}; script-src 'nonce-{{nonce}}'; base-uri 'none'; form-action 'none'; object-src 'none';" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="{{styleUri}}" />
+  <link rel="stylesheet" href="{{themeUri}}" />
+  <link rel="stylesheet" href="{{adminStyleUri}}" />
+  <title>The Construct — Host administration</title>
+</head>
+<body>
+<div class="shell ha-shell">
+  <header>
+    <div class="header-inner">
+      <div class="brand">
+        <p class="eyebrow">host administration</p>
+        <h1 class="title ha-title" id="haHost">HOST</h1>
+        <p class="subtitle" id="haIdentity">resolving identity…</p>
+      </div>
+      <div class="header-right">
+        <div class="header-tools">
+          <button class="gear" id="haRefresh" title="Re-read the host">&#x27F3; Refresh</button>
+        </div>
+        <!-- Maintenance banner (§10.3): the host is updating; mutations are disabled and
+             /health is polled every 5 s until it is back. -->
+        <div class="update-banner ha-maint" id="haMaint" hidden>
+          <span class="ub-text"><span class="ub-dot"></span> Host is updating <small id="haMaintPhase"></small> — reconnecting…</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- A notice from the last action (info or error). -->
+  <div class="ha-notice" id="haNotice" hidden><span id="haNoticeText"></span><button class="ha-notice-x" id="haNoticeClose" type="button" aria-label="Dismiss">&times;</button></div>
+
+  <!-- The non-admin states of §10.3: unavailable / old service / sign in / denied / user.
+       Exactly one of this card and the tab strip is visible. -->
+  <section class="module ha-state" id="haState" hidden>
+    <div class="mhead"><h2 class="seclabel" id="haStateTitle">Host</h2><span class="meta" id="haStateMode"></span></div>
+    <p class="lead" id="haStateMessage"></p>
+    <p class="cost-note" id="haStateLastKnown" hidden></p>
+    <div class="settings-actions ha-state-actions">
+      <button class="btn" id="haRetry" data-act="refresh" hidden>&#x27F3; Retry</button>
+      <button class="btn" id="haSignIn" data-act="signIn" hidden>Sign in again</button>
+      <button class="btn" id="haCreateFirst" data-act="createFirstVm" hidden>Create first Construct VM here</button>
+    </div>
+  </section>
+
+  <div id="haAdmin" hidden>
+    <nav class="ha-tabs" id="haTabs" role="tablist" aria-label="Host administration"></nav>
+
+    <!-- OVERVIEW -->
+    <section class="ha-tab" id="tab-overview" hidden>
+      <div class="cols">
+        <div class="col">
+          <section class="module">
+            <div class="mhead"><h2 class="seclabel">Service</h2><span class="meta" id="ovMode"></span></div>
+            <div class="row"><span class="k">Version</span><span class="v" id="ovVersion">—</span></div>
+            <div class="row"><span class="k">Installed</span><span class="v" id="ovInstalled">—</span></div>
+            <div class="row"><span class="k">Health</span><span class="v" id="ovHealth">—</span></div>
+            <div class="row"><span class="k">Maintenance</span><span class="v" id="ovMaint">—</span></div>
+            <div class="row"><span class="k">Leases overdue</span><span class="v" id="ovOverdue">—</span></div>
+            <div class="row"><span class="k">Unmanaged VMs</span><span class="v" id="ovUnmanaged">—</span></div>
+            <div class="settings-actions ha-inline-actions">
+              <button class="btn" data-act="createFirstVm" id="ovCreateFirst" hidden>Create first Construct VM here</button>
+            </div>
+          </section>
+          <section class="module">
+            <div class="mhead"><h2 class="seclabel">Capacity <span class="tag" id="ovCapMode">observe</span></h2><button class="btn ghost" data-act="capacityRefresh">re-inventory</button></div>
+            <div id="ovCapacity" class="ha-bars"></div>
+            <p class="cost-note" id="ovCapEpoch"></p>
+          </section>
+        </div>
+        <div class="col">
+          <section class="module">
+            <div class="mhead"><h2 class="seclabel">Active jobs</h2></div>
+            <div class="ha-table" id="ovJobs"></div>
+            <p class="cost-note" id="ovJobsEmpty">No job is running.</p>
+          </section>
+        </div>
+      </div>
+    </section>
+
+    <!-- VMs -->
+    <section class="ha-tab" id="tab-vms" hidden>
+      <section class="module">
+        <div class="mhead"><h2 class="seclabel">Virtual machines · all users</h2><span class="meta" id="vmsMeta"></span></div>
+        <div class="ha-table" id="vmsTable"></div>
+        <p class="cost-note" id="vmsEmpty" hidden>No VMs are registered on this host.</p>
+        <p class="cost-note">Guest facts are reports from the provisioner; "unknown" means nothing was reported. Shut down is a graceful guest shutdown request, never a force-off. No guest update, provision or reinstall action exists here — those stay in each instance's own panel.</p>
+      </section>
+      <section class="module" id="vmOverridesCard" hidden>
+        <div class="mhead"><h2 class="seclabel">Overrides · <span id="ovrName"></span></h2><button class="btn ghost" id="ovrClose">close</button></div>
+        <p class="cost-note">Restrict-only: an override can only tighten what the owner's allowance grants. Empty = no override.</p>
+        <div class="ha-form" id="ovrForm"></div>
+        <p class="cost-note" id="ovrEffective"></p>
+        <div class="settings-actions ha-inline-actions">
+          <button class="btn danger" id="ovrClear">Clear overrides</button>
+          <button class="save-btn" id="ovrSave">Save overrides</button>
+        </div>
+      </section>
+    </section>
+
+    <!-- USERS -->
+    <section class="ha-tab" id="tab-users" hidden>
+      <section class="module">
+        <div class="mhead"><h2 class="seclabel">Users</h2><button class="btn" id="usrAddToggle">+ register user</button></div>
+        <div class="ha-form ha-new-user" id="usrNew" hidden>
+          <label>Name <input id="nuName" placeholder="DOMAIN\user" /></label>
+          <label>Role <select id="nuRole"><option value="user">user</option><option value="admin">admin</option></select></label>
+          <label>Max primaries <input id="nuMaxVms" type="number" min="0" placeholder="1" /></label>
+          <label>Host forwards <select id="nuHostForwards"><option value="">default</option><option value="true">allowed</option><option value="false">refused</option></select></label>
+          <button class="save-btn" id="nuSave">Register</button>
+        </div>
+        <div class="ha-table" id="usrTable"></div>
+        <p class="cost-note">Tokens are shown once when issued; revoking one takes effect on the next request. Disabling a user revokes their VM tokens' access too.</p>
+      </section>
+      <section class="module" id="usrEditCard" hidden>
+        <div class="mhead"><h2 class="seclabel">Edit · <span id="ueName"></span></h2><button class="btn ghost" id="ueClose">close</button></div>
+        <div class="ha-form" id="ueUserForm"></div>
+        <div class="settings-actions ha-inline-actions"><button class="save-btn" id="ueSaveUser">Save user</button></div>
+        <h3 class="pm-h">Allowance</h3>
+        <p class="cost-note">Empty = inherit the host default. RAM and storage in GiB; lifetime as 12h / 3d; "true"/"false" for switches.</p>
+        <div class="ha-form" id="ueAllowanceForm"></div>
+        <p class="cost-note" id="ueEffective"></p>
+        <div class="settings-actions ha-inline-actions"><button class="save-btn" id="ueSaveAllowance">Save allowance</button></div>
+        <h3 class="pm-h">Tokens</h3>
+        <div class="ha-table" id="ueTokens"></div>
+        <div class="settings-actions ha-inline-actions">
+          <input id="ueTokenLabel" placeholder="label for a new token" />
+          <button class="btn" id="ueIssueToken">Issue token</button>
+          <button class="btn danger" id="ueDeleteUser">Remove user</button>
+        </div>
+      </section>
+    </section>
+
+    <!-- MEDIA -->
+    <section class="ha-tab" id="tab-media" hidden>
+      <section class="module">
+        <div class="mhead"><h2 class="seclabel">Primary ISO catalog</h2><span class="meta" id="isoMode"></span></div>
+        <div class="row"><span class="k">Source</span><span class="v" id="isoSource">—</span></div>
+        <div class="row"><span class="k">Current</span><span class="v" id="isoCurrent">—</span></div>
+        <div class="row"><span class="k">Last build</span><span class="v" id="isoLastBuild">—</span></div>
+        <div class="ha-table" id="isoEntries"></div>
+        <p class="cost-note">Read-only: builds stay <span class="sans-dim">constructd admin iso build</span> on the host, or the create job's on-demand path.</p>
+      </section>
+      <section class="module">
+        <div class="mhead"><h2 class="seclabel">Child media · all users</h2><button class="btn" data-act="mediaCleanup" id="mediaCleanupBtn">run cleanup</button></div>
+        <p class="cost-note" id="mediaProblem" hidden></p>
+        <div class="ha-table" id="mediaTable"></div>
+        <p class="cost-note" id="mediaEmpty" hidden>No child media on this host.</p>
+      </section>
+    </section>
+
+    <!-- OPERATIONS -->
+    <section class="ha-tab" id="tab-operations" hidden>
+      <section class="module">
+        <div class="mhead"><h2 class="seclabel">Jobs</h2><span class="meta" id="jobsMeta"></span></div>
+        <div class="ha-table" id="jobsTable"></div>
+        <p class="cost-note" id="jobsEmpty" hidden>No jobs.</p>
+      </section>
+      <section class="module">
+        <div class="mhead"><h2 class="seclabel">Audit</h2></div>
+        <p class="cost-note" id="auditProblem" hidden></p>
+        <div class="ha-table" id="auditTable"></div>
+      </section>
+    </section>
+
+    <!-- CONFIGURATION -->
+    <section class="ha-tab" id="tab-config" hidden>
+      <section class="module">
+        <div class="mhead"><h2 class="seclabel">Host configuration</h2><button class="save-btn" id="cfgSave">Save changed sections</button></div>
+        <p class="cost-note">One JSON object per section; a section is replaced whole. Validation problems from the host appear next to the section.</p>
+        <div id="cfgSections"></div>
+      </section>
+      <section class="module">
+        <div class="mhead"><h2 class="seclabel">Backend capabilities</h2><span class="meta" id="capBackend"></span></div>
+        <div class="ha-table" id="capTable"></div>
+        <p class="cost-note" id="capNotes"></p>
+      </section>
+    </section>
+
+    <!-- MAINTENANCE -->
+    <section class="ha-tab" id="tab-maintenance" hidden>
+      <section class="module">
+        <div class="mhead"><h2 class="seclabel">Host service update</h2><span class="meta" id="updSigning"></span></div>
+        <div class="row"><span class="k">Installed</span><span class="v" id="updInstalled">—</span></div>
+        <div class="row"><span class="k">Latest known</span><span class="v" id="updLatest">—</span></div>
+        <div class="row"><span class="k">Current update</span><span class="v" id="updCurrent">—</span></div>
+        <p class="cost-note" id="updCheckResult" hidden></p>
+        <div class="settings-actions ha-inline-actions">
+          <input id="updTag" placeholder="release tag (empty = latest)" />
+          <button class="btn" id="updCheck">Check</button>
+          <button class="btn" id="updStage">Stage</button>
+          <button class="btn start" id="updApply">Apply</button>
+          <button class="btn" id="updResume">Resume</button>
+          <button class="btn danger" id="updCancel">Cancel</button>
+        </div>
+        <div class="settings-actions ha-inline-actions" id="updResolveRow" hidden>
+          <span class="cost-note" style="margin:0">Interrupted or unrecovered update:</span>
+          <button class="btn" data-resolve="commit">Resolve: commit</button>
+          <button class="btn" data-resolve="abort">Resolve: abort</button>
+          <button class="btn" data-resolve="close">Resolve: close</button>
+        </div>
+        <pre class="ha-pre" id="updRecovery" hidden></pre>
+        <div class="ha-table" id="updPhases"></div>
+      </section>
+      <section class="module">
+        <div class="mhead"><h2 class="seclabel">Update history</h2></div>
+        <div class="ha-table" id="updHistory"></div>
+        <p class="cost-note">Stage downloads and verifies the signed release; Apply drains host jobs, hands off to the updater and restarts the service. Active guest VMs keep running throughout. Guest provisioning is never touched from here.</p>
+      </section>
+    </section>
+  </div>
+
+  <footer>THE CONSTRUCT &middot; host administration &nbsp;&middot;&nbsp; <a href="https://github.com/permissionBRICK/The-Construct/blob/main/docs/remote-host.md">remote host guide</a></footer>
+</div>
+<script nonce="{{nonce}}" src="{{scriptUri}}"></script>
+</body>
+</html>

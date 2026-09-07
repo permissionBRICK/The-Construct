@@ -173,7 +173,7 @@ function makeTransport(opts = {}) {
 
     spawnTunnel(spec) {
       const child = makeChild();
-      t.tunnels.push({ localPort: spec.localPort, vmPort: spec.vmPort, bindHost: spec.bindHost, child });
+      t.tunnels.push({ ...spec, child });
       return child;
     },
 
@@ -184,6 +184,16 @@ function makeTransport(opts = {}) {
     fetchJson(method, path, body) {
       t.fetches.push({ method, path, body });
       if (t.fetchFail) return Promise.reject(new Error(t.fetchFail));
+      if (method === "GET" && /\/forwards\?via=/.test(path)) {
+        if (t.viaFail) return Promise.reject(new Error(t.viaFail));
+        // The `?via=<self>` poll for child-target forwards (contract §12.2). `viaLists`
+        // works like `lists`; absent, the fake behaves like an older service and answers
+        // the plain list again.
+        if (!t.viaLists) return Promise.resolve(t.lists[Math.min(t.listIndex - 1, t.lists.length - 1)] || []);
+        const list = t.viaLists[Math.min(t.viaIndex, t.viaLists.length - 1)];
+        t.viaIndex += 1;
+        return Promise.resolve(list);
+      }
       if (method === "GET" && /\/forwards$/.test(path)) {
         const list = t.lists[Math.min(t.listIndex, t.lists.length - 1)];
         t.listIndex += 1;
@@ -191,6 +201,10 @@ function makeTransport(opts = {}) {
       }
       return Promise.resolve({});
     },
+    viaLists: null,
+    viaIndex: 0,
+    viaFail: null,
+    viaSupported: opts.viaSupported === true,
   };
   return t;
 }
@@ -1674,6 +1688,143 @@ async function remoteFlow() {
     eq("remote list: ...with its message", read.acks[0].message, "no port");
     deep("remote list: a non-array is empty, not a throw", f.readForwardList(null).requests, []);
   }
+
+  // ── Child-target forwards (host-administration contract §8.11, §12.2) ──────────
+  console.log("\n  -- remote flow: child destinations --");
+  const childEntry = (over) => entry({
+    id: "fwd-c1", vmName: "work-vm-a1", vmPort: 8080, label: "child web",
+    destination: { vmName: "work-vm-a1", via: "work-vm", connectAddress: "172.31.5.9", connectPort: 8080, requestedBy: "alice", relationship: "owner", verified: false },
+    ...(over || {}),
+  });
+  {
+    const read = f.readForwardList([childEntry()]);
+    eq("destination: a child-target entry is a request", read.requests.length, 1);
+    deep("destination: ...carrying the child, via, address and port",
+      read.requests[0].destination, { vmName: "work-vm-a1", via: "work-vm", connectAddress: "172.31.5.9", connectPort: 8080, verified: false });
+    const noAddr = f.readForwardList([childEntry({ status: "error", message: "guest address unknown yet", destination: { vmName: "work-vm-a1", via: "work-vm", connectPort: 8080 } })]);
+    ok("destination: no usable address yet is PENDING, not a request", noAddr.requests.length === 0 && noAddr.pending.length === 1 && noAddr.pending[0].child === "work-vm-a1");
+    const bad = f.readForwardList([childEntry({ destination: { vmName: "work-vm-a1", connectAddress: "10.0.0.1 -o ProxyCommand=evil" } })]);
+    ok("destination: an address that is not an address shape is pending, never an argv", bad.requests.length === 0 && bad.pending.length === 1);
+    const v6 = f.readForwardList([childEntry({ destination: { vmName: "work-vm-a1", connectAddress: "[fe80::1]" } })]);
+    eq("destination: a bracketed IPv6 literal is unbracketed for ssh.js to re-bracket", v6.requests[0].destination.connectAddress, "fe80::1");
+    eq("destination: connectPort defaults to the VM port", v6.requests[0].destination.connectPort, 8080);
+    const svcErr = f.readForwardList([childEntry({ status: "error", message: "guest address changed" })]);
+    ok("destination: the SERVICE's address-state error ack is not this window's final answer",
+      svcErr.requests.length === 1 && svcErr.acks.length === 0);
+    const ownErr = f.readForwardList([childEntry({ status: "error", message: "no free port on this PC" })]);
+    ok("destination: an ordinary error ack is still final", ownErr.acks.length === 1 && ownErr.acks[0].status === "error");
+    ok("destination: a plain entry has none (unchanged shape)", f.readForwardList([entry()]).requests[0].destination === undefined);
+    const plan = f.planActions({ requests: read.requests, acks: [], tunnels: [], owner: true });
+    ok("destination: the open action carries the destination", plan.length === 1 && plan[0].kind === "open" && plan[0].destination.connectAddress === "172.31.5.9");
+    const plain = f.planActions({ requests: f.readForwardList([entry()]).requests, acks: [], tunnels: [], owner: true });
+    ok("destination: a plain open action has no destination key", plain[0].kind === "open" && !("destination" in plain[0]));
+  }
+  // The full flow: the via list is polled (network feature), the tunnel dials the child's
+  // address over THIS primary's SSH, the ack and the close go to the CHILD's routes.
+  {
+    const { fwd, transport, timers } = makeForwarder({
+      instance: { name: "work-vm", backend: "hyperv-remote", vmName: "work-vm" },
+      viaSupported: true,
+    });
+    transport.lists = [[entry()]];
+    transport.viaLists = [[childEntry()]];
+    await settle(fwd, timers);
+    ok("via: the plain list AND the via list were polled",
+      transport.fetches.some((r) => r.path === "/vms/work-vm/forwards") && transport.fetches.some((r) => r.path === "/vms/work-vm/forwards?via=work-vm"));
+    eq("via: two tunnels — the primary's own and the child's", transport.tunnels.length, 2);
+    const childTunnel = transport.tunnels.find((t) => t.vmPort === 8080);
+    ok("via: the child tunnel dials the guest-reported address", childTunnel && childTunnel.connectAddress === "172.31.5.9" && childTunnel.connectPort === 8080);
+    const own = transport.tunnels.find((t) => t.vmPort === 5173);
+    ok("via: the primary's own tunnel carries no destination (unchanged)", own && own.connectAddress === undefined);
+    const childAck = transport.fetches.find((r) => r.method === "POST" && /fwd-c1/.test(r.path));
+    eq("via: the ack goes to the CHILD's forward route", childAck && childAck.path, "/vms/work-vm-a1/forwards/fwd-c1/ack");
+    const ownAck = transport.fetches.find((r) => r.method === "POST" && /fwd-1\//.test(r.path));
+    eq("via: the primary's own ack is unchanged", ownAck && ownAck.path, "/vms/work-vm/forwards/fwd-1/ack");
+    const snap = fwd.snapshot();
+    const item = snap.items.find((i) => i.id === "fwd-c1");
+    eq("via: the snapshot names the child", item && item.child, "work-vm-a1");
+    ok("via: the primary's own item has no child field", !("child" in snap.items.find((i) => i.id === "fwd-1")));
+    const panel = ui.toPanelForwards(snap);
+    eq("via: the panel item names the child", panel.items.find((i) => i.id === "fwd-c1").child, "work-vm-a1");
+    ok("via: ...and a plain item still has exactly its old fields", !("child" in panel.items.find((i) => i.id === "fwd-1")));
+    await fwd.closeForward("fwd-c1");
+    const del = transport.fetches.find((r) => r.method === "DELETE");
+    eq("via: Close deletes on the CHILD's route", del && del.path, "/vms/work-vm-a1/forwards/fwd-c1");
+    fwd.dispose();
+  }
+  {
+    const { fwd, transport, timers } = makeForwarder({
+      instance: { name: "work-vm", backend: "hyperv-remote", vmName: "work-vm" },
+    });
+    transport.lists = [[entry()]];
+    transport.viaLists = [[childEntry()]];
+    await settle(fwd, timers);
+    ok("via: WITHOUT the network feature the via list is never polled (older service asked exactly what it always was)",
+      !transport.fetches.some((r) => /\?via=/.test(r.path)));
+    eq("via: ...and only the primary's own tunnel exists", transport.tunnels.length, 1);
+    fwd.dispose();
+  }
+  {
+    // An older service answers the plain list to `?via=` too: merged by id, nothing doubles.
+    const { fwd, transport, timers } = makeForwarder({
+      instance: { name: "work-vm", backend: "hyperv-remote", vmName: "work-vm" },
+      viaSupported: true,
+    });
+    transport.lists = [[entry()]];
+    await settle(fwd, timers);
+    eq("via: an entry present in both lists is one entry", transport.tunnels.length, 1);
+    eq("via: ...and one ack", transport.fetches.filter((r) => r.method === "POST").length, 1);
+    fwd.dispose();
+  }
+  {
+    // A TRANSIENT `?via=` failure must not read as "the child forwards are gone": the
+    // round is skipped exactly like a failed plain-list poll, and the tunnel survives.
+    const { fwd, transport, timers } = makeForwarder({
+      instance: { name: "work-vm", backend: "hyperv-remote", vmName: "work-vm" },
+      viaSupported: true,
+    });
+    transport.lists = [[]];
+    transport.viaLists = [[childEntry()]];
+    await settle(fwd, timers);
+    eq("via failure: the child tunnel was opened", transport.tunnels.length, 1);
+    const child = transport.tunnels[0].child;
+    transport.viaFail = "timeout";
+    await settle(fwd, timers);
+    eq("via failure: a failed via poll keeps the child tunnel this PC is serving", child.killed, 0);
+    eq("via failure: ...and the id still maps to the child's routes", fwd._targetVmOf("fwd-c1"), "work-vm-a1");
+    ok("via failure: ...and the snapshot still shows it", fwd.snapshot().items.some((i) => i.id === "fwd-c1"));
+    transport.viaFail = null;
+    transport.viaLists = [[]];
+    await settle(fwd, timers);
+    eq("via failure: once the via list really answers without it, the tunnel is closed", child.killed, 1);
+    fwd.dispose();
+  }
+  {
+    const read = f.readForwardList([childEntry({ destination: { vmName: "../evil", via: "work-vm", connectAddress: "10.0.0.1" } })]);
+    ok("destination: an entry naming no usable child is dropped whole (no row that could only hit the wrong route)",
+      read.requests.length === 0 && read.pending.length === 0);
+  }
+  {
+    // No usable address yet: rendered as the service's error, nothing tunnelled, and it
+    // opens the moment an address appears — even though the service wrote an error ack.
+    const { fwd, transport, timers } = makeForwarder({
+      instance: { name: "work-vm", backend: "hyperv-remote", vmName: "work-vm" },
+      viaSupported: true,
+    });
+    transport.lists = [[]];
+    transport.viaLists = [
+      [childEntry({ status: "error", message: "guest address unknown yet", destination: { vmName: "work-vm-a1", via: "work-vm", connectPort: 8080 } })],
+      [childEntry({ status: "error", message: "guest address unknown yet" })],
+    ];
+    await settle(fwd, timers);
+    eq("pending: no tunnel without an address", transport.tunnels.length, 0);
+    const item = fwd.snapshot().items[0];
+    ok("pending: rendered as an error with the service's reason and the child's name",
+      item && item.status === "error" && /guest address unknown yet/.test(item.message) && item.child === "work-vm-a1");
+    await settle(fwd, timers);
+    eq("pending: the tunnel opens once an address appears, despite the stale error ack", transport.tunnels.length, 1);
+    fwd.dispose();
+  }
 }
 
 // ── Snapshot + UI projections ──────────────────────────────────────────────────
@@ -1795,6 +1946,27 @@ async function remoteFlow() {
   eq("ssh -L: a bad VM port is refused too", (() => {
     try { ssh.buildLocalForwardArgs({}, 18800, 70000, false); return "no throw"; } catch (_) { return "threw"; }
   })(), "threw");
+  // Child-target destinations (host-administration contract §12.2).
+  eq("ssh -L: a connect address replaces the VM's loopback as the far end",
+    ssh.buildLocalForwardArgs({}, 18800, 8080, false, { connectAddress: "172.31.5.9", connectPort: 8080 })
+      .find((a, i, all) => all[i - 1] === "-L"),
+    "127.0.0.1:18800:172.31.5.9:8080");
+  eq("ssh -L: an IPv6 destination is bracketed", 
+    ssh.buildLocalForwardArgs({}, 18800, 8080, false, { connectAddress: "fe80::1" })
+      .find((a, i, all) => all[i - 1] === "-L"),
+    "127.0.0.1:18800:[fe80::1]:8080");
+  eq("ssh -L: the connect port defaults to the VM port",
+    ssh.buildLocalForwardArgs({}, 18800, 8080, false, { connectAddress: "child.mshome.net" })
+      .find((a, i, all) => all[i - 1] === "-L"),
+    "127.0.0.1:18800:child.mshome.net:8080");
+  eq("ssh -L: an address that is not an address is refused, never emitted", (() => {
+    try { ssh.buildLocalForwardArgs({}, 18800, 8080, false, { connectAddress: "10.0.0.1 -o ProxyCommand=x" }); return "no throw"; } catch (_) { return "threw"; }
+  })(), "threw");
+  eq("ssh -L: a bad connect port is refused", (() => {
+    try { ssh.buildLocalForwardArgs({}, 18800, 8080, false, { connectAddress: "10.0.0.1", connectPort: 0 }); return "no throw"; } catch (_) { return "threw"; }
+  })(), "threw");
+  eq("connect address: empty is the loopback", ssh.normalizeConnectAddress(""), "127.0.0.1");
+  eq("connect address: garbage is null", ssh.normalizeConnectAddress("a b"), null);
   eq("forward port: a numeric string is accepted", ssh.normalizeForwardPort("5173"), 5173);
   eq("forward port: garbage is null, not 22", ssh.normalizeForwardPort("x"), null);
   eq("forward port: 0 is null", ssh.normalizeForwardPort(0), null);

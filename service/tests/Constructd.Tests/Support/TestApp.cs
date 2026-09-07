@@ -157,6 +157,7 @@ public sealed class TestApp(
             // halves of it: the power reconcile rides on the same loop and would otherwise keep it
             // running (IdleSchedulerServiceTests covers that combination on its own).
             ["Constructd:Idle:SchedulerEnabled"] = "false",
+            ["Constructd:Lease:SchedulerEnabled"] = "false",
             ["Constructd:Power:KeepHostAwake"] = "false",
             ["Constructd:ForwardReconcileSeconds"] = "0",
             ["Constructd:Idle:DefaultTimeoutMinutes"] = "120",
