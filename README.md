@@ -42,7 +42,7 @@ where they can't touch your host PC.
   host credentials in the guest.
 - 🛠️ **Shared-host administration** — enrolled host admins get a dedicated VS Code view
   for users and allowances, all VMs, capacity, child media, jobs, configuration and
-  signed host updates; ordinary users see only their primary's child list and safe actions.
+  host updates; ordinary users see only their primary's child list and safe actions.
 - 🖥️ **T3 Code, patched with extra features** — Patches the VM and Windows client for live
   voice input for T3 code in the UI using Claude, auto-restore on session limit resets, as
   well as deeper integration with the construct.

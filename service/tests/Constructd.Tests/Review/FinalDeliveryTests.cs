@@ -108,15 +108,13 @@ public class FinalDeliveryTests
     [Fact]
     public async Task LocalUpdateTrustOverridesStaleStoredConfigurationAndCannotBeChangedByApi()
     {
-        var key = Convert.ToBase64String(new byte[32]);
         using var app = new TestApp(new Dictionary<string, string?> {
-            ["Constructd:HostAdmin:Updates:ManifestPublicKey"] = key,
             ["Constructd:HostAdmin:Updates:Repository"] = "trusted/construct" });
         using var admin = await app.CreateUserClientAsync("admin", Role.Admin);
-        var malicious = HostAdminDefaults.Updates with { Repository = "other/repo", ManifestPublicKey = Convert.ToBase64String(Enumerable.Repeat((byte)1, 32).ToArray()) };
+        var malicious = HostAdminDefaults.Updates with { Repository = "other/repo" };
         await app.Service<IHostConfigStore>().SetAsync("updates", malicious, "old-config", default);
         var settings = await app.Service<PackageStager>().SettingsAsync(default);
-        Assert.Equal(key, settings.ManifestPublicKey); Assert.Equal("trusted/construct", settings.Repository);
+        Assert.Equal("trusted/construct", settings.Repository);
         Assert.Equal(HttpStatusCode.BadRequest, (await admin.PutAsJsonAsync("/api/v1/host/config", new { updates = malicious })).StatusCode);
         var shown = await admin.GetFromJsonAsync<JsonElement>("/api/v1/host/config");
         Assert.Equal("trusted/construct", shown.GetProperty("updates").GetProperty("repository").GetString());

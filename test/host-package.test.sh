@@ -6,14 +6,12 @@ trap 'rm -r "$task_dir"' EXIT
 mkdir "$task_dir/publish"
 head -c 131072 /dev/urandom > "$task_dir/publish/Constructd.Api.exe"
 printf '{}\n' > "$task_dir/publish/appsettings.json"
-openssl genpkey -algorithm ED25519 -out "$task_dir/key.pem" 2>/dev/null
 commit=$(git rev-parse HEAD)
-pwsh -NoProfile -File service/host/New-ConstructHostPackage.ps1 -PublishDir "$task_dir/publish" -OutputDir "$task_dir/output" -Commit "$commit" -SigningKeyPath "$task_dir/key.pem"
-openssl pkey -in "$task_dir/key.pem" -pubout -out "$task_dir/public.pem" 2>/dev/null
-openssl pkeyutl -verify -pubin -inkey "$task_dir/public.pem" -rawin -in "$task_dir/output/manifest.json" -sigfile "$task_dir/output/manifest.json.sig"
+pwsh -NoProfile -File service/host/New-ConstructHostPackage.ps1 -PublishDir "$task_dir/publish" -OutputDir "$task_dir/output" -Commit "$commit"
 python3 - "$task_dir/output" "$commit" <<'PY'
 import hashlib,json,pathlib,sys,zipfile
 root=pathlib.Path(sys.argv[1]);m=json.loads((root/'manifest.json').read_text());checks=0
+assert not (root/'manifest.json.sig').exists();checks+=1
 assert m['commit']==sys.argv[2] and m['releaseTag']=='host-'+sys.argv[2];checks+=1
 assert m['ref']=='refs/heads/main' and m['database']['schemaVersion']>=600;checks+=1
 zip_path=root/m['payloadAsset']

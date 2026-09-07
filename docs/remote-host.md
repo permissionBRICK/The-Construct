@@ -4,7 +4,7 @@
 > the installer and extension flows, port forwards and the idle policy are all in place.
 > Local Hyper-V stays the default and is completely unchanged — an install that never names
 > a remote host behaves, and prints, exactly as it always has. Everything below is opt-in.
-> Host administration, delegated child VMs, console input and signed host updates are also
+> Host administration, delegated child VMs, console input and host updates are also
 > implemented and covered by Linux fakes/recording tests, but have **not** been deployed or
 > field-validated through constructd on the Hyper-V host; use the
 > [owner checklist](field-test-host-admin.md) before treating them as rollout-ready.
@@ -76,9 +76,8 @@ you dial* change.
    -o <publish dir>`); no .NET runtime is then needed on the host. A host installed before
    the update API exists needs one carefully backed-up **manual first rollout** of the new
    service and matching scripts. Preserve the current settings rather than rerunning the
-   installer with defaults, and merge the approved public release key into
-   `Constructd:HostAdmin:Updates:ManifestPublicKey`; after that, use the Maintenance
-   tab's signed updater. The exact first-rollout and rollback record is in
+   installer with defaults; after that, use the Maintenance
+   tab's updater. The exact first-rollout and rollback record is in
    [the host-admin field test](field-test-host-admin.md). `service/host/Uninstall-ConstructHost.ps1`
    is the companion.
 
@@ -825,7 +824,7 @@ registry — and so are several hosts.
 ## Updating the host
 
 After the first manual rollout of the update-capable service, an Admin can use the host
-panel's Maintenance tab to check `main`, stage its signed release, and apply it. Checking
+panel's Maintenance tab to check `main`, stage its release, and apply it. Checking
 shows the pinned commit and compatibility result. Staging downloads and verifies the
 package without stopping the service; applying drains conflicting host jobs, hands off
 to a SYSTEM scheduled task, restarts the service, and verifies service/database health.
@@ -843,11 +842,9 @@ connection failure. An interrupted/mixed installation stays in maintenance until
 Admin resumes or resolves it. `last-update.json` under the service data directory's
 `updates` folder remains readable if the service cannot start.
 
-Release signing setup, manual first deployment, retention, recovery fences and rollback
+Manual first deployment, retention, recovery fences and rollback
 limits are documented in [Host releases and deployment](host-release.md). No real-host
-update has been validated by the Linux test run. The repository's
-`config/host-release.pub` is intentionally empty until the owner supplies the production
-trust root; check/stage returns `409 signing-key-missing` until that key is stored.
+update has been validated by the Linux test run. No signing-key setup is needed.
 
 ### Child networking
 

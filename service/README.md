@@ -525,7 +525,6 @@ Bound from the `Constructd` section of `appsettings.json`, from environment vari
 | `Iso:CacheDir` | `C:\ProgramData\Construct\service\iso` | Holds the downloaded source ISO and the ISO catalog (versioned media, sidecars, `current.pointer`). |
 | `Iso:SourceId` | `ubuntu-server-minimal` | `SOURCE_ID` of `bin/build-autoinstall-iso.sh` (`ubuntu-server` for the standard set). |
 | `HostAdmin:Capacity:Mode` | `Observe` | Bootstrap capacity policy when no stored section exists. Used when no stored capacity section exists; migrated hosts remain in observe mode. |
-| `HostAdmin:Updates:ManifestPublicKey` | – | Base64 Ed25519 public key used to seed a missing stored `updates` section. Empty means signed host updates fail closed with `signing-key-missing`. |
 | `HostAdmin:Media:RootDir` | `C:\ProgramData\Construct\service\media` | Private child-media files and partial uploads; the installer hardens it with the data directory. |
 | `BootstrapAdmin` | – | Identity seeded as the first admin when the user store is empty. |
 | `BootstrapAdminMaxVms` | `10` | Quota for that admin. |
@@ -545,7 +544,7 @@ exists; a timestamp requires an exact match. A conflict returns `409 config-conf
 | `lifecycle` | `gracefulShutdownTimeoutSeconds`, `leaseTickSeconds`, `leaseRetrySeconds` | `300, 30, 600` seconds |
 | `media` | `maxBytes`, `maxItemsPerUser`, `uploadChunkBytes`, `uploadTtlHours`, `acquireTimeoutMinutes`, `allowHttp`, `unreferencedTtlHours` | 16 GiB, 20 items, 8 MiB chunks, 24 h, 180 min, HTTP allowed, no automatic unreferenced cleanup |
 | `network` | `hostForwardsEnabled`, `directAddressReporting` | both true |
-| `updates` | `repository`, `channel`, `drainTimeoutMinutes`, `healthTimeoutSeconds`, `requireSignature`, `manifestPublicKey` | `permissionBRICK/The-Construct`, `main`, 60 min, 120 s, signature required, null key (or installer bootstrap key) |
+| `updates` | `repository`, `channel`, `drainTimeoutMinutes`, `healthTimeoutSeconds` | `permissionBRICK/The-Construct`, `main`, 60 min, 120 s |
 
 Disabling `network.hostForwardsEnabled` refuses new primary host forwards immediately; the default
 preserves existing behavior. Stored user allowances override defaults, host caps narrow them, and
@@ -1488,7 +1487,7 @@ PowerShell fixtures, not a live Hyper-V service.
 - Plan §4.4 has the service create its **own internal NAT switch** at install. `Constructd:SwitchName`
   is the seam for that and defaults to Hyper-V's `Default Switch`, which is what a host with nothing
   else configured has; the installer does not create a switch yet.
-- The signed host updater replaces the service and its matching host scripts after its first manual
+- The host updater replaces the service and its matching host scripts after its first manual
   rollout. It intentionally does not update the user's PC-side Construct installation or the
   separately pinned ISO builder release.
 - The Admin UI/client expects `GET /host/iso-catalog`, but the service does not map it yet. Use
@@ -1754,7 +1753,7 @@ represented by a matching artifact under the default Hyper-V configuration root.
 ## Host release updates
 
 The Admin-only `/api/v1/host/updates/{check,stage,apply,cancel,resolve}` POST routes and
-`GET /api/v1/host/updates/status` implement the signed `main` release protocol. Status
+`GET /api/v1/host/updates/status` implement the `main` release protocol. Status
 and phase history persist in migration 600's `host_updates` table. Staging/application
 acceptance persists the queued job, replay key and update transition in one SQLite
 transaction. The job's operation ID remains readable after reconnecting.
@@ -1768,9 +1767,9 @@ Mutating admin CLI verbs hold `admin.lock` and recheck the maintenance marker;
 `admin db check --json` opens SQLite read-only and runs `PRAGMA quick_check` without
 migration, platform initialization or taking that lock.
 
-The `updates` API feature becomes available after manual installation. The production
-public-key file remains empty until the owner supplies the trust root; update mutations
-return `409 signing-key-missing` and publishing fails until configured. See
+The `updates` API feature becomes available after manual installation. Releases need no
+signing configuration; downloads use the host-local GitHub repository over HTTPS and
+verify manifest identity and SHA-256 payload coverage. See
 [release/deployment notes](../docs/host-release.md) and
 [Updating the host](../docs/remote-host.md#updating-the-host).
 

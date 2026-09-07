@@ -7,10 +7,8 @@ namespace Constructd.Core.Logic;
 public static class HostUpdateTrust
 {
     public static bool IsPinned(ConstructdOptions options) => !options.Fake ||
-        !string.IsNullOrWhiteSpace(options.HostAdmin.Updates.ManifestPublicKey) ||
         !string.IsNullOrWhiteSpace(options.HostAdmin.Updates.Repository);
 
     public static UpdatesConfig Apply(UpdatesConfig settings, ConstructdOptions options) => !IsPinned(options) ? settings :
-        settings with { ManifestPublicKey = options.HostAdmin.Updates.ManifestPublicKey,
-            Repository = options.HostAdmin.Updates.Repository ?? HostAdminDefaults.Updates.Repository, RequireSignature = true };
+        settings with { Repository = options.HostAdmin.Updates.Repository ?? HostAdminDefaults.Updates.Repository };
 }

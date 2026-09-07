@@ -30,7 +30,6 @@ public sealed class HostUpdateJob(IHostUpdateStore store, IReleaseSource source,
     }
     public async Task<object> StageAsync(string? tag, string actor, CancellationToken ct, OperationKeyRecord? operation=null)
     {
-        await checker.RequireKeyAsync(ct);
         var id=Guid.NewGuid().ToString("n");
         var row=new HostUpdateRecord(id,"",tag,null,HostUpdateState.Checking,"check",[],clock.UtcNow,null,null,release.Installed.Commit,actor,[]);
         if(hostLock.IsHeldByAnotherProcess("updater.lock")) throw new UpdateException("update-in-progress");
@@ -71,7 +70,6 @@ public sealed class HostUpdateJob(IHostUpdateStore store, IReleaseSource source,
     public async Task<object> ApplyAsync(string id, string actor, CancellationToken ct, OperationKeyRecord? operation=null)
     {
         if (!options.Fake && string.IsNullOrWhiteSpace(options.CertThumbprint)) throw new UpdateException("update-health-pin-required");
-        await checker.RequireKeyAsync(ct);
         var row=await store.GetAsync(id,ct) ?? throw new UpdateException("update-not-staged");
         var fence=await launcher.ReadFenceAsync(ct);
         var authorizedRollback=row.State==HostUpdateState.ResolvedByAdmin && fence?.UpdateId==id && fence.Disposition==FenceDisposition.RollbackAuthorized;
