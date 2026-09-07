@@ -1814,3 +1814,16 @@ reflect the latest capacity reconciliation; memory-mode primary listings retain 
 service mutation state. State-probe failures (`unknown`) refuse create/start even in
 Observe mode, and primary start waits up to 30 seconds for Running. These deliberate
 safety exceptions to the legacy default need the later real-host field check.
+
+Owner/admin and the owning primary token may update an off child's hardware or media with
+`PUT /vms/{child}/hardware` and `PUT /vms/{child}/media`. Shared callers are refused.
+CPU/RAM and supported firmware settings are applied through the child driver; disk growth
+currently returns `unsupported-capability`. Media null values detach the corresponding
+slot. References protect both sides of a partial attachment. If configuration is
+interrupted, startup returns `configuration-incomplete`; retry the same configuration
+request to complete it. Runtime capacity is evaluated using the updated hardware on start.
+
+Pending media intents durably project `observed.storageProblem = "media-unverified"`;
+capacity reconciliation cannot clear the flag. Only successful same-request retry or
+VM deletion settles an interrupted attachment. Configuration retries tolerate intervening
+power-generation changes when the same incarnation is confirmed Off under its VM gate.

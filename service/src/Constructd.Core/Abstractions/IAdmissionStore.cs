@@ -61,6 +61,8 @@ public interface IAdmissionScope
     Task<bool> UpdateSharingAsync(string vmName, SharingScope scope);
     Task SetOverrideAsync(VmOverride value);
     Task<bool> SetAllowanceAsync(string userName, UserAllowance allowance);
+    /// <summary>Updates child hardware/resource columns and bumps its generation atomically.</summary>
+    Task<bool> UpdateHardwareAsync(string vmName, ChildHardware hardware, long expectedGeneration);
     /// <summary>Compare-and-bump of the VM's power generation (§5.3b); false when it moved.</summary>
     Task<bool> UpdatePowerStateAsync(string vmName, VmState state, long expectedGeneration);
     Task<bool> BumpPowerGenerationAsync(string vmName, long expected);

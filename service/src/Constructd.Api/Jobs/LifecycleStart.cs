@@ -14,6 +14,7 @@ public sealed class LifecycleStart(IVmRepository vms, IHypervisorDriver driver, 
     public sealed record Reply(VmState State, Lease? Lease, string? Code = null);
     public async Task<Reply> RunAsync(Vm vm, string? lifetime, long? seconds, OperationKeyRecord proposed, CancellationToken ct)
     {
+        if ((await keys.ListInFlightAsync(vm.Name, ct)).Any(k => ConfigurationIntent.Applies(k, vm))) throw new LifecycleException("configuration-incomplete");
         var key = await keys.GetAsync(proposed.Owner, proposed.Kind, proposed.Key, ct);
         if (key is not null && (key.Fingerprint != proposed.Fingerprint || !Ownership.SameName(key.Target, vm.Name)))
             throw new LifecycleException("operation-key-conflict");
@@ -86,6 +87,7 @@ public sealed class LifecycleStart(IVmRepository vms, IHypervisorDriver driver, 
 
     public async Task<Reply> CompleteAsync(Vm vm, OperationKeyRecord key, VmState state, CancellationToken ct)
     {
+        if ((await keys.ListInFlightAsync(vm.Name, ct)).Any(k => ConfigurationIntent.Applies(k, vm))) throw new LifecycleException("configuration-incomplete");
         var intent = JsonSerializer.Deserialize<Intent>(key.IntentJson!, ApiJson.Options)!;
         if (vm.PowerGeneration != key.PowerGeneration) throw new LifecycleException("power-state-changed");
         if (state is not (VmState.Running or VmState.Off or VmState.Saved or VmState.Paused)) throw new LifecycleException("vm-state-unknown");

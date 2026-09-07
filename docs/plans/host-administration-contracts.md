@@ -881,7 +881,7 @@ writers), not by taking media gates; media completion holds its media gate and t
 | Rule | Detail |
 |---|---|
 | Attach at create | the admission plan inserts the `media_references` rows together with the child row (items must be `ready` and not `deleting`; `TryAddReferenceAsync` semantics inside the plan) **before** anything touches the hypervisor. A failed create keeps the references until the rollback (`RemoveAsync` of the VM) is **confirmed** (`GetVmIdAsync` → null); only then are they removed. If the rollback fails, the row stays `Deleting` with its references and the owner's `DELETE` retries. An item in `deleting` can never gain a reference, and an item with a reference can never enter `deleting`: both checks are inside the same media gate. |
-| Replace (`PUT /vms/{child}/media`, VM Off) | under the VM gate then the media gates: add references for the new items → `IChildVmDriver.SetMediaAsync` → `GetAttachedMediaAsync` → references are reconciled to **what is really attached** (old items no longer attached lose their reference; anything still attached keeps it). On a driver failure the same query runs; if it fails too (`Complete=false`), the references stay as the **superset** of old and new items and the VM is flagged `observed.storageProblem = "media-unverified"`; the reconciliation pass (§4.4) re-queries and settles the references later. A reference is therefore never removed while the hypervisor might still hold the file. |
+| Replace (`PUT /vms/{child}/media`, VM Off) | under the VM gate then the media gates: add references for the new items → `IChildVmDriver.SetMediaAsync` → `GetAttachedMediaAsync` → references are reconciled to **what is really attached** (old items no longer attached lose their reference; anything still attached keeps it). On a driver failure or unconfirmed readback, the references stay as the **superset** of old and new items and the persisted configuration intent flags the VM's inventory response with `observed.storageProblem = "media-unverified"`. **S3 implementation deviation:** only a retry of the same media request re-applies the intended configuration and settles references after exact readback; capacity reconciliation does not settle attachments. The durable intent's flag survives capacity reconciliation until successful retry or VM deletion. A reference is therefore never removed while the hypervisor might still hold the file. |
 | Detach on delete | `child-delete` removes references **after** the VM is confirmed removed. |
 | Dedicated media | items with `dedicatedTo = <vm>` are deleted by `child-delete`/cascade after the reference is gone (state `deleting`, file removed, reservation released after confirmation). A dedicated item that is also referenced by another VM (admin attach) is only dereferenced. |
 | Delete (`DELETE /media/{id}`) | under the media gate: `409 media-in-use { references }` while any row exists; otherwise CAS `ready\|failed → deleting` (blocks new references), file removed; a "held open" result keeps `deleting` + `error` and storage charged, retried by cleanup; storage released after the file is confirmed gone, row removed. |
@@ -1432,6 +1432,10 @@ their `guest.*` stays unknown and `observed.lastBootAt` is the only boot evidenc
 | `update-in-progress`, `update-not-staged`, `update-not-cancellable`, `update-not-interrupted`, `update-not-resolvable`, `updater-running`, `unsupported-downgrade`, `signing-key-missing` | 409 | `updateId?`, `state?` |
 | `update-not-commitable` | 409 | `reason`, `mismatches?` |
 | `vm-state-unknown` | 409 | |
+| `configuration-incomplete` | 409 | none; a current-incarnation configuration intent must be completed before start or a different configuration |
+| `configuration-unverified` | 409 | none; the VM was no longer confirmed Off after a configuration driver call |
+| `vm-incarnation-conflict` | 409 | none; recorded and hypervisor VM identities differ |
+| `media-unverified` | 409 | none; attachment readback is incomplete or differs from the intended set |
 | `intent-expired` | 409 | `activationBase`, `lifetime` |
 | `console-session-expired` | 410 | |
 | `media-too-large`, `screenshot-too-large` | 413 | `maxBytes` |
@@ -2459,6 +2463,7 @@ namespace Constructd.Core.Abstractions
         Task<bool> SetAllowanceAsync(string userName, UserAllowance allowance);
         /// <summary>Compare-and-bump of the VM's power generation (§5.3b); false when it moved.</summary>
         Task<bool> BumpPowerGenerationAsync(string vmName, long expected);
+        Task<bool> UpdateHardwareAsync(string vmName, ChildHardware hardware, long expectedGeneration);
         Task<bool> UpdatePowerStateAsync(string vmName, VmState state, long expectedGeneration);
         /// <summary>The VM row as it is INSIDE this transaction (fresh, gate-protected read for §4.4 staleness checks).</summary>
         Task<Vm?> ReadVmAsync(string vmName);
@@ -4021,3 +4026,47 @@ S3 review round 5 clarifications against §0.1's zero-change primary default:
   retained liability. The failed operation's storage and the replacement plan commit as
   one transaction; refusal rolls back the adoption. Conflicting reservation requests
   through the admission seam return coded 409 rather than leaking an internal exception.
+
+### Deviations — S3 child configuration recovery
+
+The §8.9 hardware/media routes use durable `child-hardware` / `child-media` intents.
+`IAdmissionScope.UpdateHardwareAsync` atomically updates hardware and its resource columns,
+compares/bumps the power generation, and completes the intent. Both require Off and the
+recorded incarnation. New starts refuse `configuration-incomplete` while an unfinished
+configuration intent remains; retry the same request to finish it. Media references cover
+both old and intended attachments until readback confirms the intended set, so a partial
+attachment cannot make a referenced ISO deletable. Hardware changes take effect in runtime
+admission on the next start, which resolves the owner's then-current budget.
+
+Disk growth returns `unsupported-capability` on the current driver (the existing stage-2
+restriction); disk shrink is validation failure. No disk-resize implementation is claimed.
+Secure Boot template changes are refused when already locked. An interrupted intent that
+initialized the TPM retries without resending the template: the driver's ordered template
+write precedes key-protector initialization. The original intent and incarnation remain
+required. Changes never alter leases, ownership or sharing.
+
+Configuration intents additionally bind the VM incarnation: an unfinished intent for a
+deleted VM cannot block or mutate a replacement of the same name. The primary adoption
+rollback is pinned in both stores, including preservation of the original reservation id
+and operation id after a refused retry. Only expected artifact/operation reservation
+conflicts are mapped to 409; ledger ownership and transaction invariants still surface as
+internal failures.
+
+S3 configuration review clarifications:
+
+- Configuration recovery requires the same incarnation and observed Off under the VM
+  gate, but ignores the intent's old power generation. An already-off shutdown, lease
+  expiry or intervening power transition may legitimately advance it. Completion still
+  compares and bumps the fresh VM generation atomically. Tests pin shutdown interference
+  on both stores.
+- A pending media intent projects `observed.storageProblem = "media-unverified"` from
+  durable state, so capacity reconciliation cannot erase it. Attachment settlement is by
+  retry only, as amended in §6.5; there is no background attachment settlement in S3.
+- Recovery currently accepts the same request only. If it cannot succeed after resolving
+  the backend failure, the supported escape is owner/admin deletion and recreation of
+  the child. There is no abandon/supersede configuration API. Different requested firmware
+  can conflict with TPM initialization already performed by the first attempt, so this
+  implementation keeps the original complete intent rather than guessing.
+- Off-VM RAM changes leave any pre-existing saved-state hold at its previous size until
+  the next start re-admits the actual target requirement. Off carries no runtime RAM/CPU
+  charge; no save allocation can occur through the API before that admission.

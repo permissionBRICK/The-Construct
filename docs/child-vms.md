@@ -267,3 +267,19 @@ Primary deletion previews **all** private and shared children. The exact scope m
 confirmed with its short-lived token. Acceptance fences the complete scope and revokes
 primary delegation atomically. Cleanup failures retain ownership and remaining storage
 liability; retry from a fresh preview. Expiry never initiates this deletion workflow.
+
+Owner/admin and the owning primary token may update an off child's hardware or media with
+`PUT /vms/{child}/hardware` and `PUT /vms/{child}/media`. Shared callers are refused.
+CPU/RAM and supported firmware settings are applied through the child driver; disk growth
+currently returns `unsupported-capability`. Media null values detach the corresponding
+slot. References protect both sides of a partial attachment. If configuration is
+interrupted, startup returns `configuration-incomplete`; retry the same configuration
+request to complete it. Runtime capacity is evaluated using the updated hardware on start.
+
+An unresolved media change appears as `observed.storageProblem = "media-unverified"`
+in inventory and retains both old and intended media references. Settlement requires
+retrying the same media request; capacity reconciliation does not settle attachments.
+An already-off shutdown or expiry does not prevent that retry. Configuration recovery
+currently accepts the same request only. Resolve the backend failure and retry; if that
+request cannot succeed, the supported escape is owner/admin deletion and recreation of
+the child. There is no abandon/supersede configuration API.

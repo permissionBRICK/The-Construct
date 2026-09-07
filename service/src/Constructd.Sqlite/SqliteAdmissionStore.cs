@@ -123,7 +123,7 @@ public sealed class SqliteAdmissionStore(SqliteCapacityLedger ledger, IClock clo
     private static CapacityDecision Reserve(SqliteCapacityLedger.Transaction tx, ReservationRequest request)
     {
         try { return tx.ReserveInTransaction(request); }
-        catch (InvalidOperationException) { return new(false, [], null, null, 0, 0, 0, "reservation-conflict", tx.Snapshot.Epoch); }
+        catch (ReservationConflictException) { return new(false, [], null, null, 0, 0, 0, "reservation-conflict", tx.Snapshot.Epoch); }
     }
     private static SqliteCommand Command(SqliteCapacityLedger.Transaction tx, string sql)
     { var cmd = tx.Connection.CreateCommand(); cmd.Transaction = tx.Sql; cmd.CommandText = sql; return cmd; }
@@ -145,6 +145,13 @@ public sealed class SqliteAdmissionStore(SqliteCapacityLedger ledger, IClock clo
         { Check(); return SqliteVmRepository.SetOverrideInTransaction(tx.Connection, tx.Sql, value, ct); }
         public async Task<bool> SetAllowanceAsync(string userName, UserAllowance allowance)
         { Check(); return Cas(await SqliteUserStore.SetAllowanceInTransaction(tx.Connection, tx.Sql, userName, allowance, ct)); }
+        public Task<bool> UpdateHardwareAsync(string vmName, ChildHardware hardware, long expectedGeneration)
+        {
+            Check(); using var cmd = Command(tx, "UPDATE vms SET hardware_json=@hardware,cpu=@cpu,ram_mb=@ram,disk_gb=@disk,power_generation=power_generation+1 WHERE name=@name AND kind='child' AND deleting=0 AND power_generation=@expected");
+            cmd.With("@name", vmName).With("@hardware", WireJson.Serialize(hardware)).With("@cpu", hardware.Cpus)
+                .With("@ram", hardware.RamMb).With("@disk", hardware.DiskGb).With("@expected", expectedGeneration);
+            return Task.FromResult(Cas(cmd.ExecuteNonQuery() == 1));
+        }
         public Task<bool> UpdatePowerStateAsync(string vmName, VmState state, long expectedGeneration)
         {
             Check(); using var cmd = Command(tx, "UPDATE vms SET state=@state,power_generation=power_generation+1 WHERE name=@name AND power_generation=@expected");

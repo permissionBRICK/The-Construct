@@ -55,6 +55,28 @@ public sealed class PrimaryAccountingTests
         finally { SqliteConnection.ClearAllPools(); Directory.Delete(root, true); }
     }
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RefusedRetryRollsBackAdoptionOfTheFailedCreatesDisk(bool sqlite)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "adoption-rollback-" + Guid.NewGuid().ToString("n")); Directory.CreateDirectory(root);
+        try
+        {
+            await using var app = sqlite ? TestApp.WithSqlite(Path.Combine(root, "state.db")) : new TestApp();
+            using var owner = await app.CreateUserClientAsync("alice"); app.Driver.Reachable = false;
+            var failed = await LifecycleTests.Finish(app, await owner.PostAsJsonAsync("/api/v1/vms", Primary("primary")));
+            Assert.Equal(JobState.Failed, failed.State);
+            var capacity = app.Service<ICapacityLedger>(); var original = Assert.Single((await capacity.SnapshotAsync(false, default)).Reservations);
+            if (sqlite) await app.Service<IHostConfigStore>().SetAsync("capacity", Constructd.Core.Configuration.HostAdminDefaults.Capacity with { Mode = CapacityMode.Enforce }, "admin", default);
+            else app.Service<InMemoryCapacityLedger>().Mode = CapacityMode.Enforce;
+            app.Driver.Reachable = true;
+            Assert.Equal(HttpStatusCode.Conflict, (await owner.PostAsJsonAsync("/api/v1/vms", Primary("primary"))).StatusCode);
+            Assert.Equal(original, Assert.Single((await capacity.SnapshotAsync(false, default)).Reservations));
+            Assert.Equal(failed.Id, original.OperationId); Assert.Null(await app.Vms.GetAsync("primary", default));
+        }
+        finally { SqliteConnection.ClearAllPools(); Directory.Delete(root, true); }
+    }
+    [Theory]
     [InlineData(CapacityMode.Observe, true)]
     [InlineData(CapacityMode.Enforce, true)]
     [InlineData(CapacityMode.Observe, false)]

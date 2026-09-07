@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Constructd.Api.Auth;
 using Constructd.Api.Contracts;
 using Constructd.Api.Infrastructure;
+using Constructd.Api.Jobs;
 using Constructd.Core.Abstractions;
 using Constructd.Core.Configuration;
 using Constructd.Core.Domain;
@@ -9,7 +10,7 @@ using Constructd.Core.Logic;
 namespace Constructd.Api.Endpoints;
 
 public sealed class VmInventoryProjection(IVmRepository vms, IVmDelegationRepository delegation, IUserStore users,
-    IDelegationPolicy policy, ICapacityLedger capacity, IMediaStore media, IJobStore jobs, IPortForwardManager forwards, ConstructdOptions options)
+    IDelegationPolicy policy, ICapacityLedger capacity, IMediaStore media, IJobStore jobs, IPortForwardManager forwards, ConstructdOptions options, IOperationKeyStore keys)
 {
     public async Task<VmResponse> ProjectAsync(Vm vm, ClaimsPrincipal caller, CancellationToken ct)
     {
@@ -23,6 +24,10 @@ public sealed class VmInventoryProjection(IVmRepository vms, IVmDelegationReposi
                 mediaProjection.Add(new { item.Id, item.Role, item.Name, item.SizeBytes, item.State, dedicated = item.DedicatedTo is not null });
         var job = vm.CurrentJobId is null ? null : await jobs.GetAsync(vm.CurrentJobId, ct);
         var l = vm.Lease;
+        var observed = vm.Observed ?? new(null, null, [], null);
+        // The durable intent is the flag: capacity observation cannot erase an unresolved attachment.
+        if (vm.Kind == VmKind.Child && (await keys.ListInFlightAsync(vm.Name, ct)).Any(k => k.Kind == "child-media" && ConfigurationIntent.Applies(k, vm)))
+            observed = observed with { StorageProblem = "media-unverified" };
         return result with
         {
             Kind = vm.Kind,
@@ -36,7 +41,7 @@ public sealed class VmInventoryProjection(IVmRepository vms, IVmDelegationReposi
             Hardware = vm.Hardware,
             Media = mediaProjection,
             Guest = vm.Guest ?? GuestReport.Unknown,
-            Observed = vm.Observed ?? new(null, null, [], null),
+            Observed = observed,
             Reservations = new(reservation.Where(r => r.Resource == ReservationResource.Ram).Sum(r => r.Amount), checked((int)reservation.Where(r => r.Resource == ReservationResource.Cpu).Sum(r => r.Amount)), reservation.Where(r => r.Resource == ReservationResource.Storage).Sum(r => r.Amount)),
             CurrentOperation = job is null ? null : new(job.Id, job.Kind, job.Phase, job.Initiator),
             Children = vm.Kind == VmKind.Primary ? (await delegation.ListChildrenAsync(vm.Name, ct)).Select(v => v.Name).ToArray() : null,

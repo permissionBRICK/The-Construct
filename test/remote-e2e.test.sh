@@ -270,6 +270,8 @@ const out = (k, v) => console.log(k + "=" + v);
   out("CHILD_LIST", childList.some(vm => vm.name === "e2e-child"));
   await childFinish((await guestCall("POST", "/vms/e2e-child/lifecycle", { action: "shutdown" })).jobId);
   out("CHILD_SHUTDOWN", (await guestCall("GET", "/vms/e2e-child/state")).state);
+  out("CHILD_HARDWARE", (await guestCall("PUT", "/vms/e2e-child/hardware", { ramMb: 1024 })).ramMb);
+  out("CHILD_MEDIA_DETACH", (await guestCall("PUT", "/vms/e2e-child/media", { installMediaId: null })).length);
   await childFinish((await guestCall("DELETE", "/vms/e2e-child")).jobId);
   await guestCall("DELETE", "/media/" + media.id);
   out("CHILD_DELETE", !(await guestCall("GET", "/vms/js-vm/children")).length);
@@ -328,6 +330,8 @@ ok "js: primary token creates a child" contains "CHILD_CREATE=succeeded" "${JS}"
 ok "js: child gets no token" contains "CHILD_NO_TOKEN=true" "${JS}"
 ok "js: primary token lists its child" contains "CHILD_LIST=true" "${JS}"
 ok "js: child graceful shutdown" contains "CHILD_SHUTDOWN=off" "${JS}"
+ok "js: primary token configures child hardware" contains "CHILD_HARDWARE=1024" "${JS}"
+ok "js: primary token detaches child media" contains "CHILD_MEDIA_DETACH=0" "${JS}"
 ok "js: primary token deletes its child" contains "CHILD_DELETE=true" "${JS}"
 ok "js: the driver maps the live state" contains "DRIVER_STATE=running" "${JS}"
 ok "js: the driver reports checkpoints as unsupported (no call made)" contains "DRIVER_CHECKPOINTS=unsupported" "${JS}"

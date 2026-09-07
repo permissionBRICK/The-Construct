@@ -40,13 +40,13 @@ public sealed class LifecycleTests
     public static IEnumerable<object[]> Matrix()
     {
         foreach (var actor in new[] { "owner", "admin", "parent", "shared-user", "shared-primary", "stranger", "legacy" })
-            foreach (var op in new[] { "inspect", "start", "restart", "shutdown", "save", "share", "renew", "delete" })
+            foreach (var op in new[] { "inspect", "start", "restart", "shutdown", "save", "share", "renew", "delete", "hardware", "media" })
                 yield return [actor, op];
     }
     [Theory, MemberData(nameof(Matrix))]
     public async Task ActorOperationMatrix(string actor, string op)
     {
-        await using var app = new TestApp(); using var owner = await Setup(app, op != "start");
+        await using var app = new TestApp(); using var owner = await Setup(app, op is not ("start" or "hardware" or "media"));
         using var admin = await app.CreateUserClientAsync("admin", Role.Admin);
         using var other = await app.CreateUserClientAsync("bob");
         await app.Vms.AddAsync(new("other", "bob", 1, 1, 1, app.Clock.UtcNow, VmState.Running, null, null, IdlePolicy.Disabled, []), 5, default);
@@ -58,6 +58,8 @@ public sealed class LifecycleTests
         var caller = actor switch { "owner" => owner, "admin" => admin, "parent" => parent, "shared-primary" or "legacy" => primary, _ => other };
         using var response = op switch
         {
+            "hardware" => await caller.PutAsJsonAsync("/api/v1/vms/child/hardware", new { ramMb = 1024 }),
+            "media" => await caller.PutAsJsonAsync("/api/v1/vms/child/media", new { installMediaId = "install" }),
             "inspect" => await caller.GetAsync("/api/v1/vms/child"),
             "share" => await caller.PutAsJsonAsync("/api/v1/vms/child/sharing", new { scope = "host" }),
             "renew" => await caller.PostAsJsonAsync("/api/v1/vms/child/lease", new { lifetime = "20m" }),

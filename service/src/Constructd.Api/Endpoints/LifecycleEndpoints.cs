@@ -34,7 +34,7 @@ public static class LifecycleEndpoints
         allowance.MaxChildLifetimeSeconds is not long max || seconds <= max;
     internal static async Task<bool> LiveAsync(Vm vm, IServiceProvider services, CancellationToken ct) => vm.CurrentJobId is not null &&
         await services.GetRequiredService<IJobStore>().GetAsync(vm.CurrentJobId, ct) is { State: JobState.Queued or JobState.Running };
-    private static async Task<IResult?> AuthorizeAsync(Vm vm, HttpContext http, bool ownerOnly, CancellationToken ct)
+    internal static async Task<IResult?> AuthorizeAsync(Vm vm, HttpContext http, bool ownerOnly, CancellationToken ct)
     {
         var policy = vm.Kind == VmKind.Primary ? Policies.VmOwnerOrAdmin : ownerOnly ? Policies.ChildOwnerOrAdmin : Policies.ChildOperator;
         if (!(await http.RequestServices.GetRequiredService<IAuthorizationService>().AuthorizeAsync(http.User, vm, policy)).Succeeded)
