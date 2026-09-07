@@ -25,6 +25,8 @@ public static class IdentityEndpoints
     private static async Task<IResult> WhoAmIAsync(
         HttpContext http,
         IUserStore users,
+        IDelegationPolicy policy,
+        IReleaseInfo release,
         CancellationToken cancellationToken)
     {
         var principal = http.User;
@@ -36,9 +38,12 @@ public static class IdentityEndpoints
             Name: principal.NameOrEmpty(),
             Kind: "user",
             Scheme: scheme,
-            Known: user is not null,
+            Known: user is { Enabled: true },
             Role: user?.Role,
             MaxVms: user?.MaxVms,
-            AllowHostForwards: user?.AllowHostForwards));
+            AllowHostForwards: user?.AllowHostForwards,
+            Enabled: user?.Enabled,
+            Effective: user is null ? null : await HostAdminEndpoints.EffectiveAsync(user.Name, null, policy, cancellationToken),
+            ApiFeatures: release.ApiFeatures));
     }
 }

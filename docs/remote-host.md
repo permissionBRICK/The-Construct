@@ -412,7 +412,7 @@ pixel-identical), the instance picker lists local and remote VMs side by side, a
 | **Kerberos** | nothing stored | `Invoke-RestMethod -UseDefaultCredentials` uses the process identity. |
 | **Domain password** | nothing stored | prompted per run, held in a `PSCredential` for that run only. |
 | **Pinned certificate thumbprint** | `%LOCALAPPDATA%\The-Construct\remote\<hostslug>.pin` (plaintext — it is not a secret) | enforced on every call. |
-| **The VM's scoped token** | `/etc/construct/vm-token` **inside the guest**, mode 0600 | written by `provision.sh` from `CONSTRUCT_VM_TOKEN_B64`. It authorises only that one VM's port forwards and its idle heartbeat. |
+| **The VM's scoped token** | `/etc/construct/vm-token` **inside the guest**, mode 0600 | written by `provision.sh` from `CONSTRUCT_VM_TOKEN_B64`. Legacy credentials authorise that VM's forwards/heartbeat plus identity/reporting. New primary credentials also discover effective delegation; they never grant user/admin access. |
 
 **The VM token is a one-time secret.** The create job hands it out on the **first**
 authorised retrieval and never again — not on a re-poll, not on an SSE reconnect, not after
@@ -430,13 +430,30 @@ CONSTRUCT_VM_TOKEN_B64="$(cat …)"`), and the file is deleted the moment provis
 ends, whatever its exit code. `bin/provision.sh` still reads the variable from its
 environment exactly as before — the contract is unchanged, only the delivery is.
 
-> **A lost VM token cannot currently be re-issued.** The service mints one in exactly one
-> place — the VM creation job — and exposes no rotation route or admin verb. If the guest's
-> `/etc/construct/vm-token` is destroyed, or the one-time delivery is lost, that VM's
-> `construct expose` and its idle heartbeat stay broken until the VM is **deleted and created
-> again** (`DELETE /vms/{name}` → `POST /vms` → provision, i.e. what *Reinstall* does).
-> A reprovision alone does not help: it can only re-deliver a token it was given. Recorded as
-> an open point in [`service/README.md`](../service/README.md).
+**A lost token can be replaced.** An owner/admin user credential can call
+`POST /vms/{name}/token` and deliver the replacement with
+`Provision-AgentVM.ps1 -RotateVmToken -ServiceUrl <url> -InstanceName <name>`.
+This explicit switch invalidates the old credential before provisioning and uses the same SSH stdin
+secret channel. Ordinary reprovisioning keeps the existing token. The optional `-ServiceApiAuth`
+hashtable selects the existing token/Negotiate authentication flow; the remote installer supplies it
+from enrollment. Never put a plaintext token in an external command line.
+
+### Host administration PowerShell client functions
+
+These functions are in `lib/AgentVm.Remote.ps1` and reuse its certificate pinning and authentication:
+
+| Function | Parameters and result |
+|---|---|
+| `Send-ConstructGuestReport` | `-BaseUrl`, `-VmName`, `-Event provisioned|reinstalled|attempt`, optional `-Outcome succeeded|failed`, `-ConstructCommit`, `-Auth`, `-Pin`, `-StoreDir`. Returns a boolean; errors are advisory and the HTTP timeout is five seconds. Empty host/VM makes no call. |
+| `Request-ConstructVmTokenRotation` | `-BaseUrl`, `-VmName`, optional `-Kind primary|legacy` (primary default), `-Auth`, `-Pin`, `-StoreDir`. Returns the one-time `{vmToken,kind,issuedAt}` response. Failure throws a fixed error without transport details. |
+
+After a parsed, clean guest provisioning result, `Provision-AgentVM.ps1` reports Construct commit
+and successful provisioning time. `-ProvisionEvent reinstalled` records reinstall time separately;
+the remote installer's reinstall path supplies it. Failed/invalid final guest results report an
+attempt without changing earlier success facts. Failures before the final guest result is reached
+cannot submit that completion hook. Reporting never changes provisioning's exit result and local
+provisioning does not contact constructd. Guest timestamps are reports with provenance; a host boot
+observation never means that a child OS was provisioned.
 
 ### TLS pinning, and why it looks different on PS 5.1 and PS 7
 

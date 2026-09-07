@@ -10,7 +10,7 @@ namespace Constructd.Fakes;
 /// response" discipline are the real ones (<see cref="TokenHasher"/>); only the storage is a
 /// dictionary. VM tokens are authoritative on the VM record, so re-issuing one invalidates the old.
 /// </summary>
-public sealed class InMemoryTokenService(IClock clock, IUserStore users, IVmRepository vms) : ITokenService
+public sealed class InMemoryTokenService(IClock clock, IUserStore users, IVmRepository vms) : ITokenService, IVmTokenIssuer, IUserTokenRevoker
 {
     private readonly ConcurrentDictionary<string, ApiToken> _byHash = new(StringComparer.Ordinal);
 
@@ -31,16 +31,20 @@ public sealed class InMemoryTokenService(IClock clock, IUserStore users, IVmRepo
         return Task.FromResult(new IssuedToken(token, plaintext));
     }
 
-    public async Task<string> IssueVmTokenAsync(string vmName, CancellationToken cancellationToken)
+    public Task<string> IssueVmTokenAsync(string vmName, CancellationToken ct) => IssueVmTokenAsync(vmName, VmTokenKind.Legacy, ct);
+    public async Task<string> IssueVmTokenAsync(string vmName, VmTokenKind kind, CancellationToken ct)
     {
-        var vm = await vms.GetAsync(vmName, cancellationToken).ConfigureAwait(false)
-                 ?? throw new InvalidOperationException($"Unknown VM '{vmName}'.");
-
+        if (!Enum.IsDefined(kind)) throw new ArgumentException("Unknown VM token kind.");
         var plaintext = TokenHasher.GenerateSecret();
-        await vms.UpdateAsync(vm with { VmTokenHash = TokenHasher.Hash(plaintext) }, cancellationToken)
-            .ConfigureAwait(false);
-
+        if (!await WriteTokenAsync(vmName, TokenHasher.Hash(plaintext), kind, ct))
+            throw new InvalidOperationException("VM is missing, deleting, or is not a primary.");
         return plaintext;
+    }
+    public Task<bool> RevokeVmTokenAsync(string vmName, CancellationToken ct) => WriteTokenAsync(vmName, null, VmTokenKind.Legacy, ct);
+    private async Task<bool> WriteTokenAsync(string vmName, string? hash, VmTokenKind kind, CancellationToken ct)
+    {
+        if (vms is IVmMetadataStore memory) return await memory.SetTokenAsync(vmName, hash, kind, ct);
+        throw new NotSupportedException("Credential writes require IVmMetadataStore.");
     }
 
     public async Task<TokenPrincipal?> ValidateAsync(string plaintext, CancellationToken cancellationToken)
@@ -56,7 +60,7 @@ public sealed class InMemoryTokenService(IClock clock, IUserStore users, IVmRepo
         {
             // An orphaned token (user deleted) authenticates nobody.
             var user = await users.GetAsync(token.UserName, cancellationToken).ConfigureAwait(false);
-            if (user is null)
+            if (user is null || !user.Enabled)
             {
                 return null;
             }
@@ -67,7 +71,8 @@ public sealed class InMemoryTokenService(IClock clock, IUserStore users, IVmRepo
 
         var all = await vms.ListAsync(owner: null, cancellationToken).ConfigureAwait(false);
         var match = all.FirstOrDefault(vm => TokenHasher.HashesEqual(vm.VmTokenHash, hash));
-        return match is null
+        return match is null || match.Kind != VmKind.Primary || match.Deleting ||
+            await users.GetAsync(match.Owner, cancellationToken) is not { Enabled: true }
             ? null
             : new TokenPrincipal(TokenKind.Vm, $"vm:{match.Name}", Role.User, match.Name);
     }
@@ -118,5 +123,10 @@ public sealed class InMemoryTokenService(IClock clock, IUserStore users, IVmRepo
 
         _byHash[token.TokenHash] = token;
         return Task.FromResult(token);
+    }
+    public Task<bool> RevokeAsync(string userName, string id, CancellationToken ct)
+    {
+        var token = _byHash.Values.FirstOrDefault(t => t.Id == id && Ownership.SameName(t.UserName, userName));
+        return Task.FromResult(token is not null && _byHash.TryRemove(token.TokenHash, out _));
     }
 }

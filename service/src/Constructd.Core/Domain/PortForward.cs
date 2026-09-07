@@ -22,7 +22,8 @@ public sealed record PortForward(
     ForwardTarget Target,
     string Label,
     DateTimeOffset Created,
-    ForwardAck? Ack = null);
+    ForwardAck? Ack = null,
+    ForwardDestination? Destination = null);
 
 /// <summary>
 /// The client half of a forward: the extension opened <see cref="LocalPort"/> on the user's PC, or

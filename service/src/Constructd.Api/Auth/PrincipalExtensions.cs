@@ -20,6 +20,9 @@ public static class PrincipalExtensions
 
     public static bool IsVmToken(this ClaimsPrincipal principal) => principal.VmTokenName() is not null;
 
+    public static bool IsPrimaryToken(this ClaimsPrincipal principal) => principal.IsVmToken() &&
+        principal.FindFirst("constructd:vm-token-kind")?.Value == "primary";
+
     public static Role RoleOrDefault(this ClaimsPrincipal principal) =>
         principal.IsInRole(nameof(Role.Admin)) ? Role.Admin : Role.User;
 

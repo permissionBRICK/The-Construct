@@ -28,4 +28,5 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <ItemGroup><None Update="Foundation/PreFeatureSchema.sql" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
 </Project>

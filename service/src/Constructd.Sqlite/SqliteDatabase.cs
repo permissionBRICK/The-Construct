@@ -160,6 +160,9 @@ public sealed class SqliteDatabase
         AddColumnIfMissing(connection, "forwards", "ack_host_label", "TEXT NULL");
         AddColumnIfMissing(connection, "forwards", "ack_message", "TEXT NULL");
         AddColumnIfMissing(connection, "forwards", "ack_at", "TEXT NULL");
+        Migrations.SqliteMigrationRunner.Apply(connection, typeof(SqliteDatabase).Assembly
+            .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+            .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion.Split('+').ElementAtOrDefault(1) ?? "unknown");
     }
 
     /// <summary>

@@ -16,4 +16,6 @@ public sealed record User(
     Role Role,
     int MaxVms,
     DateTimeOffset Created,
-    bool AllowHostForwards = true);
+    bool AllowHostForwards = true,
+    bool Enabled = true,
+    UserAllowance? Allowance = null);
