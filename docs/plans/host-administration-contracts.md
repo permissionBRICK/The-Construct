@@ -2523,11 +2523,15 @@ namespace Constructd.Core.Abstractions
     public sealed record VolumeInfo(string Root, long TotalBytes, long FreeBytes);
     public sealed record HostResourcesInfo(int LogicalCpus, long TotalRamBytes, long FreeRamBytes, IReadOnlyList<VolumeInfo> Volumes, DateTimeOffset ObservedAt);
     /// <summary>ONE epoch: VMs, host resources and volume free space read in the same pass; Complete=false ⇒ admission fails closed.</summary>
-    public sealed record InventorySnapshot(long Epoch, DateTimeOffset ObservedAt, HostResourcesInfo Host, IReadOnlyList<HypervisorVmInfo> Vms, bool Complete, IReadOnlyList<string> Problems);
+    public enum ArtifactPresence { Unknown, Absent, Present }
+    public sealed record CapacityArtifactInfo(string Artifact, string? Path, string Volume, long FileBytes, ArtifactPresence Presence);
+    public sealed record InventorySnapshot(long Epoch, DateTimeOffset ObservedAt, HostResourcesInfo Host, IReadOnlyList<HypervisorVmInfo> Vms, bool Complete, IReadOnlyList<string> Problems,
+        IReadOnlyList<CapacityArtifactInfo>? Artifacts = null);
 
     public interface IHypervisorInventory
     {
         Task<InventorySnapshot> ReadAsync(CancellationToken ct);
+        Task<InventorySnapshot> ReadAsync(IReadOnlyList<Reservation> reservations, CancellationToken ct);
     }
 
     // ---- ICapacityLedger.cs (owner: capacity pair) ----
@@ -2561,7 +2565,8 @@ namespace Constructd.Core.Abstractions
         int? CpuAvailable,
         IReadOnlyList<VolumeCapacity> Volumes,
         IReadOnlyList<Reservation> Reservations,
-        IReadOnlyList<HypervisorVmInfo> Unmanaged);
+        IReadOnlyList<HypervisorVmInfo> Unmanaged,
+        IReadOnlyList<string>? Problems = null);
 
     public interface ICapacityLedger
     {
@@ -2934,6 +2939,7 @@ suite); no secret in any log, exception, argument, job result or test output.
 | Disk position in the boot order was not probed | feasibility | `bootOrder: conditional`, `notes[]` |
 | Secure Boot template cannot change after TPM initialization | Hyper-V | `template-locked` |
 | No memory overcommit, no dynamic memory; the `DynamicMemory` seam is reserved and refused | policy | capabilities `unsupported` |
+| Pass-through/physical disk attachment | Initial inventory cannot prove physical-disk/host-volume exclusion; reports `passthrough-disk-unavailable` | Inventory incomplete; enforce admission unavailable while attached, observe remains usable |
 | Capacity enforcement is `observe` on every migrated host until an admin switches it | zero-change | `capacityMode` in `/health`-authenticated views, `/host/status`, `/whoami` |
 | The primary ISO catalog build in flight is not reserved in the ledger | bounded by the admin-configured source size; catalog files are physically counted | §4.6 |
 | Reference-counted collection of Construct-generated (catalog) ISOs is deferred; the catalog keeps its `current.pointer`/prune retention | zero-change on the primary path | §6.6 |
@@ -3152,6 +3158,41 @@ unique assertions across languages.
 | `test/vscode-download.test.sh` | 6 | 0 | 0 |
 
 ## Deviations
+
+Stage 2 capacity implementation:
+
+- Capacity composition wraps `IDelegationPolicy` with ledger-backed usage in both
+  memory/fake and SQLite modes. Resolution and action policy remain delegated to the
+  integrator-owned implementation; no policy method or shared source is rewritten.
+- Pass-through attachments conservatively return `passthrough-disk-unavailable`.
+  Enforce mode is unavailable on such hosts until a physical-disk/volume mapping is
+  implemented and field-tested; observe mode remains available. The adapter does not
+  assume an unverified physical disk consumes zero host-volume capacity.
+
+- Added optional `InventorySnapshot.Artifacts`, `CapacityArtifactInfo` and a defaulted
+  `IHypervisorInventory.ReadAsync(reservations, ct)` overload. The original seam has no
+  evidence for retained/unattached VHDs, upload partials or media paths; per-artifact
+  presence and byte counts must be collected in the same pass as physical free space.
+  Existing implementations still compile and missing evidence remains conservative.
+  `HostCapacitySnapshot.Problems` is optional so the specified reporting DTO can carry
+  the actual inventory problem codes without a second epoch.
+- The capacity-owned SQL helpers live on the disposable
+  `SqliteCapacityLedger.Transaction` returned by `BeginAsync`. It owns the common gate,
+  inventory preparation, connection and IMMEDIATE transaction; integrator-owned
+  `SqliteAdmissionStore` uses that scope for plan/mutation writes. This makes the
+  shared transaction lifetime explicit without changing `IAdmissionStore` signatures.
+- Added `ICapacityReconciliationStore` for the database half of the reconciler. Its
+  SQLite implementation uses that same transaction scope and compares the captured
+  VM generation/job fence. The frozen `IAdmissionScope` cannot insert an external hold
+  without admission or update observed state, and the SQLite coordinator is not yet
+  implemented in the integrated base. Child intent/lease handling and abandoned-create
+  row/reference removal remain integrator-owned; capacity never deletes those rows
+  on a guessed absence or invents a lease activation timestamp.
+- The new feature needs minimal updates to existing route/schema/composition assertions
+  that explicitly pinned the stage-1-only surface (schema 100, no capacity route,
+  unsupported production ledger). The migration and route registrations are one-line
+  shared hooks. No legacy provisioning/lifecycle call site is changed here.
+
 
 Stage 1 foundation:
 

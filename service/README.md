@@ -483,7 +483,7 @@ Bound from the `Constructd` section of `appsettings.json`, from environment vari
 | `Iso:Sha256` | – | Expected SHA-256 of the source ISO. Empty skips the check; when set it is verified on **every** use, not only after the download. |
 | `Iso:CacheDir` | `C:\ProgramData\Construct\service\iso` | Holds the downloaded source ISO and the ISO catalog (versioned media, sidecars, `current.pointer`). |
 | `Iso:SourceId` | `ubuntu-server-minimal` | `SOURCE_ID` of `bin/build-autoinstall-iso.sh` (`ubuntu-server` for the standard set). |
-| `HostAdmin:Capacity:Mode` | `Observe` | Bootstrap capacity policy when no stored section exists. Stage 1 reports an incomplete inventory; enforcement backend follows separately. |
+| `HostAdmin:Capacity:Mode` | `Observe` | Bootstrap capacity policy when no stored section exists. Used when no stored capacity section exists; migrated hosts remain in observe mode. |
 | `HostAdmin:Updates:ManifestPublicKey` | – | Bootstrap signature-verification public key; updater execution is not installed in stage 1. |
 | `HostAdmin:Media:RootDir` | – | Media root used by health discovery; media acquisition follows separately. |
 | `BootstrapAdmin` | – | Identity seeded as the first admin when the user store is empty. |
@@ -509,6 +509,99 @@ exists; a timestamp requires an exact match. A conflict returns `409 config-conf
 Disabling `network.hostForwardsEnabled` refuses new primary host forwards immediately; the default
 preserves existing behavior. Stored user allowances override defaults, host caps narrow them, and
 per-primary overrides can only restrict the result. Lowered limits do not delete existing VMs.
+
+## Capacity accounting
+
+The capacity ledger stores pending and held RAM, CPU and storage reservations in SQLite
+(migration 300). `GET /host/capacity` is admin-only and returns the frozen summary,
+problems, reservations, unmanaged VMs and per-user usage. `/host/status` uses the same
+summary; allowance usage in both SQLite and fake mode includes pending operations, retained disks, media
+and saved-state storage, aggregated across all of an owner's primaries and children.
+Unmanaged VMs reduce host capacity without acquiring a Construct owner.
+Reporting (`refresh=false`) never starts an inventory process: it uses the last observed
+epoch and current ledger rows. Before the first inventory it reports incomplete. An
+explicit refresh, admission with an invalid/expired epoch, or the reconciliation tick
+performs the inventory read. A reconciliation pass reads inventory once, regardless of
+VM count; its individual database mutations never call the hypervisor.
+
+RAM admission uses the lesser of the physical-free and committed-allocation bounds.
+Both retain OS headroom. Memory promised to pending **or held** reservations but not yet
+assigned by Hyper-V is subtracted from physical free RAM. Thus a restart's intermediate
+Off and a partially allocated Starting VM cannot give the same bytes to another caller.
+CPU aggregate budgets are optional. Storage reserves each disk's full virtual maximum,
+parent/checkpoint chains, media/upload maxima and `RAM + 64 MiB` for saved state. Already
+allocated file bytes are counted through physical free space; only the remaining growth
+is subtracted again. Artifacts and paths are deduplicated within one inventory epoch.
+
+`capacity.mode=observe` records a would-refuse decision as `capacity.observe` and retains
+the reservations; `enforce` rejects an incomplete inventory or insufficient capacity.
+Requests are never resized. A capacity decision carries `resource`, `scope`, `requested`,
+`allowed` (`AllowedAmount` in Core), `available`, `reason` and `epoch`. Runtime capacity
+is released only after observed Off/Saved/Absent. A failed start with Unknown state keeps
+its hold; Saved keeps disks and saved-state storage. Cleanup callers may pass Absent for
+a disk/media reservation only after confirming the **artifact** was removed, not merely
+that the VM registration disappeared.
+
+Stored `host_config.capacity` takes precedence over bootstrap mode. Configure it with
+`PUT /host/config` using the complete section:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `mode` | `observe` for migrated hosts | Accounting only, or enforced admission. Fresh installers may explicitly select `enforce`. |
+| `ramHeadroomBytes` | null | Null computes `max(4 GiB, physical RAM / 8)`. |
+| `storageHeadroomBytes` | 20 GiB | Headroom on each volume. |
+| `cpuBudget` | null | Optional host active-vCPU budget. |
+| `maxVcpusPerVm` | null | Optional per-VM CPU ceiling; backend hardware validation also applies. |
+| `reconcileSeconds` | 60 | Startup reconciliation, then periodic passes; maximum cached inventory age. |
+| `orphanReservationTimeoutSeconds` | 600 | Caller default for pending reservation deadlines. A live operation extends its reservations; elapsed time alone never proves release is safe. |
+
+User RAM/storage/CPU budgets resolve stored user values against `userDefaults` and
+`userCaps` in the **same transaction** as reservations. Null leaves the aggregate
+unlimited by user policy; host and volume bounds still apply. Per-primary overrides
+restrict delegation/count/lifetime/sharing as defined in the frozen contract and do not
+provide a way around resource budgets.
+
+Reconciliation reads all hypervisor VMs without VM/ledger gates, then tries each VM gate
+without waiting, re-reads its state, and compares the persisted power-generation/job fence
+inside the ledger transaction. Live operations are left alone. Orphan runtime reservations
+are promoted on active/unknown evidence or released after a terminal observation and
+the deadline; orphan storage requires present/absent/unreadable artifact evidence. Service
+restart retains the table. Unreadable evidence keeps liabilities charged and fails closed
+in enforce mode. The primary ISO catalog is physically accounted for by volume free space;
+its in-flight build maximum remains the contract's explicit limitation.
+
+Integration boundary for the capacity branch: `SqliteCapacityLedger.BeginAsync` takes
+the one ledger gate and refreshes inventory before opening its IMMEDIATE transaction.
+`BeginMutationAsync` skips inventory I/O and refuses `ReserveInTransaction`; use it for
+mutations that cannot reserve, including reconciliation.
+The returned `Transaction` exposes `Connection`, `Sql`, `ReserveInTransaction`,
+`ConfirmInTransaction`, `ReleaseInTransaction` and explicit `Commit`; dispose without
+commit rolls back every participating write. The integrator-owned `SqliteAdmissionStore`
+must use this transaction for the whole `AdmissionPlan`/`MutateAsync` and must never call
+standalone ledger methods from inside it. VM/media gates precede the ledger gate.
+Before reserving a start, hold the VM operation gate and read the driver state. When it
+confirms Off, release stale **held runtime** rows for that VM with
+`ReleaseInTransaction(ids, Off)` before `ReserveInTransaction` in the same admission
+transaction (or run the gate-protected per-VM reconciliation first). Do not sweep live
+pending rows or infer Off from a timeout. This prevents an external stop followed quickly
+by start from producing a stale-hold conflict in enforce mode or a duplicate hold in
+observe mode.
+
+Primary create/power/job call sites, child start intents/lease completion and abandoned
+create-row/media cleanup remain integrator-owned. Those hooks must call `ReconcileAsync`
+after power/job completion. This branch does not rewrite the existing provisioning flow
+or claim that those later call sites already enforce capacity.
+
+Pass-through/physical disks currently report `passthrough-disk-unavailable` and make
+inventory incomplete. This is a deliberate conservative backend limitation, not a
+transient failure: **enforce mode is unavailable on hosts with such an attachment**.
+Observe mode remains usable. The initial adapter cannot prove the physical disk's
+exclusion from all host volumes, so it does not guess zero growth. Supporting those
+attachments requires an explicit physical-disk/volume mapping and a later field test.
+
+The Windows adapter uses `IProcessRunner` argv and stdin artifact metadata. Its inventory
+PowerShell is read-only and parsed/tested under Linux pwsh. No Hyper-V, LocalSystem or
+Windows PowerShell 5.1 execution of this implementation has been performed.
 
 ## Persistence
 

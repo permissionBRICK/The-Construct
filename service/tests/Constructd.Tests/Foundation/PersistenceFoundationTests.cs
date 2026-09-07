@@ -76,7 +76,7 @@ public sealed class PersistenceFoundationTests : IDisposable
         query.CommandText = "SELECT kind || ':' || vm_token_kind || ':' || vm_token_hash || ':' || ssh_forward_port FROM vms";
         Assert.Equal("primary:legacy:existing-hash:2201", query.ExecuteScalar());
         foreach (var table in new[] { "users", "tokens", "vms", "jobs", "activity", "audit", "forwards", "schema_migrations" })
-        { query.CommandText = $"SELECT COUNT(*) FROM {table}"; Assert.Equal(1L, query.ExecuteScalar()); }
+        { query.CommandText = $"SELECT COUNT(*) FROM {table}"; Assert.Equal(table == "schema_migrations" ? 2L : 1L, query.ExecuteScalar()); }
         query.CommandText = "SELECT enabled || ':' || max_vms FROM users"; Assert.Equal("1:3", query.ExecuteScalar());
         var vm = (await new SqliteVmRepository(db).GetAsync("parent", Ct))!;
         Assert.Equal(VmKind.Primary, vm.Kind); Assert.Equal(VmTokenKind.Legacy, vm.TokenKind); Assert.Equal("existing-hash", vm.VmTokenHash);
@@ -104,8 +104,8 @@ public sealed class PersistenceFoundationTests : IDisposable
     public void MigrationRegistryIsOrderedUniqueAndInItsReservedRange()
     {
         var ids = SqliteMigrations.All.Select(m => m.Id).ToArray();
-        Assert.Equal(ids.Order(), ids); Assert.Equal(ids.Length, ids.Distinct().Count()); Assert.All(ids, id => Assert.InRange(id, 100, 199));
-        Assert.Equal(100, SqliteMigrations.SchemaVersion); Assert.Equal(0, SqliteMigrations.MinReadableBy);
+        Assert.Equal(ids.Order(), ids); Assert.Equal(ids.Length, ids.Distinct().Count()); Assert.All(ids, id => Assert.InRange(id, 100, 399));
+        Assert.Equal(300, SqliteMigrations.SchemaVersion); Assert.Equal(0, SqliteMigrations.MinReadableBy);
     }
 
     [Theory]
