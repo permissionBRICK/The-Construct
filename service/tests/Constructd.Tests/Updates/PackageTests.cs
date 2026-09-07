@@ -88,6 +88,7 @@ public sealed class PackageTests : IDisposable
         var xml = await File.ReadAllTextAsync(create.Args[4]);
         Assert.Contains("S-1-5-18", xml); Assert.DoesNotContain(handoff.HealthToken, xml);
         Assert.DoesNotContain("/TR", create.Args);
+        Assert.Empty(System.Xml.Linq.XDocument.Parse(xml).Descendants().Where(e => e.Name.LocalName == "LogonType"));
         Assert.Equal(new[]{"/Run","/TN","Construct-HostUpdate"},runner.Calls[1].Args);
         await launcher.ResumeAsync(handoff,default);
         var task = System.Xml.Linq.XDocument.Load(create.Args[4]);
