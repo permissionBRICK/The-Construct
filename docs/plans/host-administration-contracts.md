@@ -3760,3 +3760,162 @@ when its matching `closed` fence and absence of replacement are verified under
 `updater.lock`. It becomes `cancelled`; the closed fence remains to revoke delayed
 execution. This lets a host with a task-launch failure stage a different release
 without requiring an installer-created file ledger or a successful retry.
+
+## Integration notes (stage 3)
+
+Integrated on 2026-09-07 in `ha/integ-3`, reset to stage-2 `feat/host-admin`
+(`cab8301`). Merged in order with `--no-ff`: `ha/s2-console` (`db55526`,
+two commits) and `ha/s2-release` (`b200a1c`, one commit). Both branches had
+commits beyond the base; neither was skipped. The handover moves only the local
+`feat/host-admin` ref to the final integration commit; no push or host deployment.
+
+### Merge resolutions and integration fixes
+
+- Console merged cleanly. Release conflicted in four files:
+  `docs/plans/host-administration-contracts.md`, `service/README.md`,
+  `service/src/Constructd.Api/Composition/ReleaseInfo.cs` and
+  `service/src/Constructd.Api/Program.cs`. Both documentation appendices remain.
+  Feature discovery includes `host-admin`, `console` and `updates`; the route
+  chain retains console, child and update endpoints, followed by startup update
+  recovery before bootstrap. No feature was removed to resolve a conflict.
+- Migrations 100, 200, 300, 400 and 600 remain registered in ascending order.
+  Production composition retains the Hyper-V console transport and durable
+  SQLite update stores, together with the existing media, capacity and child jobs.
+- Fixed a small release-branch omission: fake-mode discovery omitted `updates`
+  despite registering its routes. Its feature list now matches production.
+  The discovery test checks parity and both feature names; a new integration test
+  verifies that update maintenance refuses console input before the transport,
+  keeps capability reads available, and permits input after maintenance ends.
+- The existing primary `VmJobs`, local primary driver, `Auto-Install.ps1` and
+  `Provision-AgentVM.ps1` remain byte-identical to the stage-2 base. Core retains
+  zero package references.
+
+The merged increment adds bounded console sessions/screenshots/keyboard/mouse,
+plus signed host release packaging, persistent update API/jobs, maintenance and
+recovery gates, and the independent PowerShell updater with verified rollback.
+
+### Defects and limitations
+
+No new unresolved integration defect was found. The stage-2 defects above remain:
+production SQLite VM/media atomic admission, primary capacity admission hooks,
+and delegated child lifecycle/sharing/cascade/network integration still require
+substantive work. Console routes are now implemented; that portion of stage 2's
+pending-work list is superseded. Console session entries are denied by deletion
+fences, but physical removal at fence time still awaits the lifecycle hook; they
+expire within 60 seconds as documented by the console branch.
+
+The production signing public key remains intentionally empty, so signed release
+publishing and production update mutations require the owner's trust root.
+First host rollout remains manual. This integration made no Windows-host probe,
+service change or Hyper-V test. LocalSystem console execution, actual Windows
+service/task/ACL/TLS behavior, VM continuity during update and Windows-client
+reconnection remain field-test requirements. Interactive video is unsupported.
+
+### Validation and per-suite results
+
+All **67 requested suites** and the additional browser smoke suite passed on
+Linux. The initial .NET run passed 975 tests; after the fake discovery correction
+and added console/maintenance regression, the final full run passed **976/976**
+(**338** above the original 638-test baseline). Both explicit solution builds
+reported **0 warnings, 0 errors**. No suite failed during this integration.
+Other passing suites were not repeated after the isolated fake/test changes.
+
+| Family | Suites | Passed checks/groups | Failed | Explicit skips |
+|---|---:|---:|---:|---:|
+| .NET | 1 | 976 | 0 | 0 |
+| Node | 24 | 5148 | 0 | 1 |
+| PowerShell | 21 | 3288 | 0 | 1 |
+| Bash | 21 | 1063 | 0 | 0 |
+| Browser | 1 | 311 | 0 | 0 |
+
+Counts are reported assertions except `provision-seed-user` (seven scenario
+groups) and the two T3 host suites (one successful group each, no internal
+assertion count). Some .NET tests invoke PowerShell suites, so cross-family
+counts are not unique assertions. The explicit skips are the Node forwarder's
+unwritable-spool test under root and PowerShell's Windows-only DPAPI round trip.
+`t3-reprovision-host` ran without `-DownloadBase`; optional HTTP-download/native
+Windows launch checks were not exercised. PowerShell ran in Linux pwsh 7.4.6,
+not Windows PowerShell 5.1. Browser smoke used the default classic theme.
+
+Environment fixtures followed stage 2: process-only Git `init.defaultBranch=main`,
+`T3CODE_BUILD_SOURCE=prebuilt` and `SYSTEMD_UNIT_PATH=/usr/lib/systemd/system`
+for idle-report, and a temporary empty `/home/agent` only for provision-diskcheck
+(removed afterwards). .NET SDK 10.0.301 used `DOTNET_PROCESSOR_COUNT=2`, disabled
+MSBuild server/node reuse and disabled shared compilation. Node was 26.8.1.
+Browser dependencies were installed with `npm ci --ignore-scripts` from the
+existing lockfile; no lockfile changed. Fake end-to-end used port **17934**,
+passed **38/38**, stopped its own service, and the port was verified closed.
+The signed-package fixture passed **87** checks over **77 payload files**; its
+executable is a fixture, not a Windows publish or execution. No workspace-owned
+dotnet/node/pwsh/browser/service processes remained. `git diff --check` passed.
+
+| Suite | Passed checks/groups | Failed | Explicit skips |
+|---|---:|---:|---:|
+| `dotnet test service/Constructd.sln` | 976 | 0 | 0 |
+| `extension/test/audio.test.js` | 233 | 0 | 0 |
+| `extension/test/configsync.test.js` | 475 | 0 | 0 |
+| `extension/test/drivers.test.js` | 79 | 0 | 0 |
+| `extension/test/forwarder.test.js` | 715 | 0 | 1 |
+| `extension/test/host.test.js` | 118 | 0 | 0 |
+| `extension/test/hostadmin-ui.test.js` | 84 | 0 | 0 |
+| `extension/test/hostadmin.test.js` | 267 | 0 | 0 |
+| `extension/test/importui.test.js` | 24 | 0 | 0 |
+| `extension/test/instances.test.js` | 1528 | 0 | 0 |
+| `extension/test/instancestate.test.js` | 105 | 0 | 0 |
+| `extension/test/lifecycle.test.js` | 265 | 0 | 0 |
+| `extension/test/notify.test.js` | 103 | 0 | 0 |
+| `extension/test/probe.test.js` | 98 | 0 | 0 |
+| `extension/test/project-set.test.js` | 63 | 0 | 0 |
+| `extension/test/projects.test.js` | 167 | 0 | 0 |
+| `extension/test/remote.test.js` | 71 | 0 | 0 |
+| `extension/test/remotehost.test.js` | 206 | 0 | 0 |
+| `extension/test/repatch.test.js` | 39 | 0 | 0 |
+| `extension/test/t3code.test.js` | 89 | 0 | 0 |
+| `extension/test/themes.test.js` | 43 | 0 | 0 |
+| `extension/test/updates.test.js` | 143 | 0 | 0 |
+| `extension/test/usage.test.js` | 131 | 0 | 0 |
+| `extension/test/vmpower.test.js` | 81 | 0 | 0 |
+| `extension/test/zip.test.js` | 21 | 0 | 0 |
+| `test/config-sync.test.ps1` | 568 | 0 | 0 |
+| `test/driver-contract.test.ps1` | 131 | 0 | 0 |
+| `test/host-admin-client.test.ps1` | 19 | 0 | 0 |
+| `test/host-lib.test.ps1` | 309 | 0 | 0 |
+| `test/instance-cleanup.test.ps1` | 124 | 0 | 0 |
+| `test/instance-identity.test.ps1` | 242 | 0 | 0 |
+| `test/instance-state.test.ps1` | 64 | 0 | 0 |
+| `test/instances.test.ps1` | 781 | 0 | 0 |
+| `test/native-iso-host.test.ps1` | 23 | 0 | 0 |
+| `test/notify-toast.test.ps1` | 22 | 0 | 0 |
+| `test/provision-seed-user.test.ps1` | 7 | 0 | 0 |
+| `test/remote-client.test.ps1` | 93 | 0 | 1 |
+| `test/remote-driver.test.ps1` | 87 | 0 | 0 |
+| `test/remote-install.test.ps1` | 206 | 0 | 0 |
+| `test/t3-desktop-handoff.test.ps1` | 1 | 0 | 0 |
+| `test/t3-reprovision-host.test.ps1` | 1 | 0 | 0 |
+| `service/tests/Constructd.Tests/Capacity/inventory.test.ps1` | 16 | 0 | 0 |
+| `service/tests/Constructd.Tests/Console/console-script.test.ps1` | 163 | 0 | 0 |
+| `service/tests/host-installer.test.ps1` | 368 | 0 | 0 |
+| `service/tests/host-release-installer.test.ps1` | 14 | 0 | 0 |
+| `service/tests/host-updater.test.ps1` | 49 | 0 | 0 |
+| `test/autoinstall-iso.test.sh` | 59 | 0 | 0 |
+| `test/construct-expose.test.sh` | 170 | 0 | 0 |
+| `test/construct-notify.test.sh` | 36 | 0 | 0 |
+| `test/construct-vm.test.sh` | 172 | 0 | 0 |
+| `test/contracts-compile.test.sh` | 5 | 0 | 0 |
+| `test/export-config.test.sh` | 12 | 0 | 0 |
+| `test/external-host.test.sh` | 61 | 0 | 0 |
+| `test/host-package.test.sh` | 87 | 0 | 0 |
+| `test/idle-report.test.sh` | 103 | 0 | 0 |
+| `test/opencode-install.test.sh` | 20 | 0 | 0 |
+| `test/partial-streaming.test.sh` | 6 | 0 | 0 |
+| `test/patch-status.test.sh` | 12 | 0 | 0 |
+| `test/provision-diskcheck.test.sh` | 24 | 0 | 0 |
+| `test/provision-hostname.test.sh` | 28 | 0 | 0 |
+| `test/provision-marker.test.sh` | 32 | 0 | 0 |
+| `test/provision-steprunner.test.sh` | 17 | 0 | 0 |
+| `test/remote-e2e.test.sh` | 38 | 0 | 0 |
+| `test/restore-config.test.sh` | 25 | 0 | 0 |
+| `test/systemprompt-install.test.sh` | 17 | 0 | 0 |
+| `test/t3-https.test.sh` | 133 | 0 | 0 |
+| `test/vscode-download.test.sh` | 6 | 0 | 0 |
+| `extension/test/ui-smoke.js` | 311 | 0 | 0 |

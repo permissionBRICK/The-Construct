@@ -20,6 +20,22 @@ public sealed class ConsoleApiTests
         return root + "/sessions/" + json.GetProperty("sessionId").GetString();
     }
     [Fact]
+    public async Task Update_maintenance_blocks_console_input_until_the_gate_reopens()
+    {
+        using var app = new TestApp(); using var owner = await app.CreateUserClientAsync("owner");
+        await owner.CreateVmAsync("probe-vm"); var path = await Session(owner);
+        var gate = app.Service<IMaintenanceGate>();
+        gate.Enter(MaintenanceState.Maintenance, "host-update");
+        using var blocked = await owner.PostJsonAsync(path + "/keyboard", new { kind = "ctrlAltDel" });
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, blocked.StatusCode);
+        Assert.NotNull(blocked.Headers.RetryAfter);
+        Assert.Equal(0, app.Service<FakeConsoleTransport>().KeyboardCalls);
+        Assert.Equal(HttpStatusCode.OK, (await owner.GetAsync(Root + "/capabilities")).StatusCode);
+        gate.Reopen();
+        Assert.Equal(HttpStatusCode.OK, (await owner.PostJsonAsync(path + "/keyboard", new { kind = "ctrlAltDel" })).StatusCode);
+        Assert.Equal(1, app.Service<FakeConsoleTransport>().KeyboardCalls);
+    }
+    [Fact]
     public async Task Session_screenshot_input_renew_close_and_redacted_audit()
     {
         using var app = new TestApp(); using var owner = await app.CreateUserClientAsync("owner", Role.Admin);
