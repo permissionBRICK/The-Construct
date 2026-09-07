@@ -8,3 +8,9 @@ public interface IPersistedJobRunner
     Task StartPersistedAsync(Job queued, IDisposable gateHandle, Func<IProgress<string>, CancellationToken, Task<JobOutcome>> work, CancellationToken ct);
     Task SetPhaseAsync(string jobId, string phase, CancellationToken ct);
 }
+
+/// <summary>A failed job may expose a service-composed, secret-free cleanup result.</summary>
+public sealed class JobFailureException(string message, object result) : Exception(message), Constructd.Core.Logic.IConstructdError
+{
+    public object Result { get; } = result;
+}

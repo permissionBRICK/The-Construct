@@ -137,7 +137,7 @@ Everything lives under `/api/v1`, speaks JSON with camelCase properties and came
 |---|---|---|
 | `GET /health` | anonymous | Status, schema versions and feature names; authenticated callers also receive installed commit/version. |
 | `GET /host/status` | admin | Installed release, health, capacity snapshot, maintenance phase, active jobs and overdue leases. Incomplete capacity is reported honestly until its backend lands. |
-| `GET /host/capabilities` | user or primary token | Backend capabilities and current host policy. Later-stage features are `unsupported`. |
+| `GET /host/capabilities` | user or primary token | Backend capabilities and current host policy. Unavailable adapters report `unsupported`. |
 | `GET` / `PUT /host/config` | admin | Read defaults/stored sections; atomically validate and replace supplied sections, optionally comparing each `expectedUpdatedAt`. |
 | `GET /users`, `GET /users/{name}` | admin | Enabled state, allowances, effective policy, VM counts and token count; no hashes. |
 | `PUT /users/{name}` | admin | Patch `role`, `enabled`, `maxVms`, `allowHostForwards`. Self-demotion/disable and removal of the last enabled admin are refused. |
@@ -158,14 +158,15 @@ request. Disabling a user immediately rejects their Bearer tokens and their VMs'
 VM tokens retain only the existing forwards/activity scope plus identity and guest-report intake.
 New primary creation issues a `primary` token; it never grants user identity or admin access.
 
-Only `host-admin` is advertised in stage 1. Child lifecycle, console input, media acquisition,
-capacity enforcement, updater execution and child network forwarding are later-stage features.
-Their Core contracts, fake implementations and composition/map hooks exist; unavailable production
-operations throw unsupported and no routes acknowledge these operations. SQLite atomic admission
-and the persisted child-job runner await their owning feature migrations/implementation. The fake
-admission store commits or rolls back participating stores under one lock, including readers; its
-scope accepts only the synchronously completing in-memory store calls. No Hyper-V validation has
-been performed for these additions.
+Only `host-admin` is advertised until the separately owned feature adapters are integrated.
+The child driver and create/delete jobs are implemented (see the stage 2 section below),
+with executable API coverage using in-memory admission. Production SQLite admission,
+media/capacity adapters and later console, update and network operations still await
+integration. The fake admission store commits or rolls back participating stores under
+one lock, including readers; its scope accepts only synchronously completing store calls.
+The persisted child runner owns operation and maintenance handles through completion.
+These additions have Linux coverage; the current host probe attempt is blocked as
+recorded below.
 
 ### Jobs, the event stream and the one-time secret
 
@@ -1372,3 +1373,77 @@ The source checksum is verified before replacing the cached download; builds pub
 new versioned files so other installations retain their mounted media.
 `-SkipIsoBuild` on the host installer installs the tool but defers media creation.
 See [native ISO builds](../docs/native-iso.md) for upgrade and source configuration.
+
+### Stage 2 child VM driver and jobs
+
+`POST /api/v1/vms/{parent}/children` accepts explicit `cpus`, `ramMb`, `diskGb`,
+`lifetime` and ready media ids. Optional `windows`/`linux` presets supply firmware
+hints only; `start:false` leaves hardware Off with an inactive lease. Owner/admin
+access uses the foundation's `ParentDelegate` policy hook; primary-token create
+access remains deferred to the delegation stage. Existing child list/read and
+capability routes project the new records. `DELETE /vms/{child}` runs `child-delete`.
+Primary creation and ISO patching are unchanged.
+
+Admission uses `IAdmissionStore`: the queued job, child record, media references,
+operation key and capacity reservations commit together. The job runner owns the
+maintenance handle from before admission through terminal completion. Phases are
+persisted and streamed as `phase` SSE events alongside existing progress/state
+messages. `X-Construct-Operation-Key` (or request `operationKey`) supports replay;
+a conflicting fingerprint is refused. Migration 400 adds the durable key store
+and exposes `InsertInTransaction` for the integrator's SQLite admission store.
+
+`ChildCreateJob` validates hardware before allocation, resolves ready media,
+creates hardware/disk/DVDs through `IChildVmDriver`, verifies the immutable id and
+attached media, persists a derived start intent before boot, confirms Running,
+activates the lease from the original intent timestamp and
+confirms reservations. The result contains boot/state/network facts and no guest
+installation claim or credential. Guest addresses remain unverified. Failures
+attempt rollback; unverifiable ownership and incomplete cleanup retain the VM row
+and capacity for recovery. `ChildDeleteJob` removes forwards/network intent,
+references, dedicated auxiliary media and capacity only after successful cleanup.
+
+`HyperVChildDriver` invokes the optional PowerShell contract through fixed argv
+and a JSON stdin descriptor. Dependency stdout/stderr and exception details are
+never forwarded to logs or job progress. The driver resolves Hyper-V's default
+storage before admission when `VmStorageRoot` is empty. It writes an exclusive
+ownership sidecar at the canonical configured/default VHD location for partial-create
+and partial-delete retries, including when the descriptor overrides the disk path.
+
+Integration boundary: this branch does not implement the separately owned SQLite
+admission transaction, media registry/transfer, capacity inventory/reconciliation,
+or guest-address adapters. The in-memory admission path exercises jobs against
+those seams. Production admission still refuses until the integrator wires the
+owning pairs; `children` is therefore not yet advertised in discovery. Lease
+scheduling, cascade deletion and delegated creation remain stage 3 work. Linux
+recording-runner tests establish command construction, not Hyper-V execution.
+
+Probe attempts on 2026-09-07: the relay returned Windows PowerShell
+5.1.26100.9168. Initial attempts failed to start because of host thread/paging-file
+resource exhaustion. A later read-only check reported 6,598,504 KiB free physical
+memory, and the latest driver probe reached `New-VM`, which threw
+`System.OutOfMemoryException`. Its `finally` removed the ownership marker and
+probe files and reported `CLEANUP COMPLETE`, including a VM absence check.
+Storage placement ran, but no successful child creation, firmware, TPM, media,
+boot order or shutdown validation is claimed. A subsequent read-only inventory
+query successfully exercised `Get-VM`, `Get-VMHardDiskDrive -VM`, `Get-VHD -Path`
+and `Get-VMNetworkAdapter -VM`, including sizes, disk paths and reported addresses.
+It also confirmed zero probe VMs and absence of the probe directory, disk and marker. No service or host
+settings were changed. The stage-0 feasibility report is separate prior evidence.
+
+Stage 2 Linux verification: solution build **0 warnings, 0 errors**; **748 .NET tests**
+(42 added to the integrated 706-test baseline); **22 Node suites / 4,686 checks**;
+**17 PowerShell suites / 3,046 checks or scenario groups** (child driver contract 131,
+host installer 368); **19 Bash suites / 801 checks**, including contract parity (5)
+and fake-service end-to-end (38). The Node root-only unwritable-spool check and
+PowerShell Windows-only DPAPI check are skipped. The end-to-end test used the existing
+build and stopped its test service. Local primary-driver source remains byte-identical.
+
+Reproducing this matrix on this Linux VM requires the suite environment used by
+this run: `T3CODE_BUILD_SOURCE=prebuilt` and
+`SYSTEMD_UNIT_PATH=/usr/lib/systemd/system` for Bash, and an existing `/home/agent`
+for `provision-diskcheck` (this run created it temporarily and removed it after
+testing). Without those prerequisites, `idle-report` and `provision-diskcheck`
+fail on both the baseline and this branch. Git-initializing tests use process-only
+`GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=init.defaultBranch GIT_CONFIG_VALUE_0=main`.
+The final child script also parsed on the actual Windows PowerShell
+5.1.26100.9168 host with **zero parser errors**, using in-memory source only.

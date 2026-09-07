@@ -111,7 +111,8 @@ app.MapGroup("/api/v1")
     // Host administration feature routes: one hook per implementation pair.
     .MapHealthEndpoints()
     .MapHostAdminEndpoints()
-    .MapDelegationEndpoints();
+    .MapDelegationEndpoints()
+    .MapChildVmEndpoints();
 
 await Bootstrap.RunAsync(app.Services, CancellationToken.None);
 

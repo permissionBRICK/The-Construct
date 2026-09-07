@@ -107,7 +107,7 @@ public sealed class InMemoryAdmissionStore(InMemoryVmRepository vms, InMemoryUse
         public Task<bool> SetAllowanceAsync(string userName, UserAllowance allowance) => Cas(() => users.SetAllowanceAsync(userName, allowance, ct));
         public Task<bool> BumpPowerGenerationAsync(string vmName, long expected) => Cas(() => vms.BumpPowerGenerationAsync(vmName, expected));
         public Task<Vm?> ReadVmAsync(string vmName) { Check(); return vms.GetAsync(vmName, ct); }
-        public Task<CapacityDecision> ReserveAsync(ReservationRequest request) { Check(); var result = Done(capacity.TryReserveAsync(request, ct)); Conflict |= !result.Allowed; return Task.FromResult(result); }
+        public Task<CapacityDecision> ReserveAsync(ReservationRequest request) { Check(); var result = Done(capacity.TryReserveAsync(request, ct)); return Task.FromResult(result); }
         public Task ConfirmReservationsAsync(IReadOnlyList<string> ids, VmState observed) { Check(); return capacity.ConfirmAsync(ids, observed, ct); }
         public Task ReleaseReservationsAsync(IReadOnlyList<string> ids, VmState observed, string reason) { Check(); return capacity.ReleaseAsync(ids, observed, reason, ct); }
         public Task<bool> CompleteOperationKeyAsync(string owner, string kind, string key, string responseJson) => Cas(() => keys.CompleteAsync(owner, kind, key, responseJson, ct));

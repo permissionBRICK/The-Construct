@@ -63,7 +63,7 @@ public interface IAdmissionScope
     Task<bool> BumpPowerGenerationAsync(string vmName, long expected);
     /// <summary>The VM row as it is INSIDE this transaction (fresh, gate-protected read for §4.4 staleness checks).</summary>
     Task<Vm?> ReadVmAsync(string vmName);
-    /// <summary>Re-admission of a start whose reservations were swept (§7.3): same rules as AdmitAsync, inside this transaction.</summary>
+    /// <summary>Re-admission of a start whose reservations were swept (§7.3): same rules as AdmitAsync, inside this transaction. A refusal must not mark the scope conflicted: the caller may commit the refusal response atomically, or return false to roll back.</summary>
     Task<CapacityDecision> ReserveAsync(ReservationRequest request);
     Task ConfirmReservationsAsync(IReadOnlyList<string> ids, VmState observed);
     Task ReleaseReservationsAsync(IReadOnlyList<string> ids, VmState observed, string reason);

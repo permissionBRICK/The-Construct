@@ -339,3 +339,37 @@ Two things that are Proxmox-shaped and worth doing at the same time: the ISO mus
 uploaded to a storage (`POST /nodes/{node}/storage/{store}/upload`) before it can be
 referenced by `ide2`, and every long operation returns a **UPID task id** — the same
 job/poll shape `constructd` uses, so a shared "wait for job" helper is worth having.
+
+## Optional general-purpose child VM contract
+
+The existing `HyperVLocal.Driver.ps1` functions are unchanged. Opt in with
+`. $driverLoader -Backend hyperv-local -Include ChildVm`; this loads
+`drivers/hyperv-local/HyperVLocal.ChildVm.ps1`. The default loader does not load it.
+
+| Function | Inputs / behavior |
+|---|---|
+| `Get-ConstructDriverExtendedCapabilities` | Backend hardware levels; Gen 2, fixed RAM, both Secure Boot templates, local TPM, two optical slots. Console is supplied by the separate console adapter. |
+| `Get-ConstructChildStorage` | `Name`, optional `VhdPath`; resolves disk and configuration volumes without allocation. |
+| `New-ConstructChildVm` | `Descriptor` with `ChildVmDescriptor` fields (name, hardware, optional VHD and ISO paths, switch name) plus an internal creation operation id. Creates a dynamic VHDX with an explicit maximum and leaves the VM Off. |
+| `Set-ConstructChildHardware` | `Name`, `Hardware`, `ResendTemplate`; VM must be Off. Template is set before TPM initialization; false never resends it. |
+| `Set-ConstructChildMedia` | `Name`, nullable install/auxiliary paths, `BootOrder`; Off only, DVDs at SCSI 0:1 and 0:2, disk at 0:0. Null ejects media. Boot order uses device objects. |
+| `Get-ConstructChildAttachedMedia` | Actual paths by slot and completeness, used to reconcile references. |
+| `Stop-ConstructChildVmGracefully` | `Name`, timeout seconds (300 default); non-forced WMI `InitiateShutdown`, then bounded Off polling. Returns `completed`, `timeout`, `unavailable` or `failed`. No force-off/save fallback. |
+| `Get-ConstructChildVmCapabilities` | VM-id-scoped WMI device presence, dimensions, firmware lock, generation and conditional shutdown availability. |
+| `Get-ConstructChildVmId` | Immutable Hyper-V id; null only after successful inventory confirms absence. |
+| `Get-ConstructChildCreationOperation` | Reads the cleanup ownership record for failed-create rollback. |
+| `Remove-ConstructChildVm` | Explicit deletion may turn off the VM. Removes VM/saved state and owned disk chains; retains the ownership record if cleanup fails so removal can be retried. |
+
+`hardware` carries `cpus`, `ramMb`, `diskGb`, `generation`, `secureBoot`,
+`secureBootTemplate`, `tpm`, `bootOrder`, `networkAttached`, and reserved
+`dynamicMemory` (rejected). No OS installation, credentials, SSH wait or ISO patching
+is part of this contract. Automatic checkpoints are off; automatic stop is Save and
+automatic start is StartIfRunning.
+
+The `.vhdx.childvm.json` ownership record is created exclusively before allocation
+at the canonical configured/default VHD location (also for an explicit disk override).
+It records the VM id, admitted operation id and disk paths needed after VM removal.
+Unverified ownership or a different VM incarnation refuses cleanup. These records
+contain no guest credentials. Storage accounting must retain artifacts until the
+removal call succeeds. Inventory and guest-address provider sections are owned by
+the capacity and network adapters respectively.

@@ -3207,6 +3207,43 @@ Stage 1 foundation:
   `RestoreUnqueuedDeletionAsync` metadata method under the same VM operation
   gate as rotation; ordinary snapshot writes cannot invoke that rollback.
 
+### Stage 2 child driver/jobs deviations and integration hooks
+
+- Generated child names truncate parent prefixes to 58 characters (trimming a
+  trailing hyphen) before the stable four-character suffix, so a valid long
+  parent can create children without an explicit name.
+- Child ownership markers also record a unique configuration directory before
+  `New-VM -Path`. A missing ID can be recovered only when the VM configuration
+  path matches that directory; matching the VM name alone is insufficient.
+- The in-memory admission scope allows its caller to atomically complete a
+  refused re-admission intent: `ReserveAsync` returns a refusal without marking
+  the entire scope conflicted. The caller decides whether to commit the refusal
+  response or return false to roll back. This implements the frozen §7.3 rule.
+
+- The authoritative optional child-driver file is used; the existing
+  `HyperVLocal.Driver.ps1` is unchanged. Capacity/network implementation sections
+  remain reserved for their owners even though the task also mentions inventory
+  and addresses. Child jobs consume those foundation seams.
+- Added `IChildVmStorage` for pre-admission disk/configuration volume resolution;
+  the frozen descriptor alone cannot resolve the Hyper-V defaults before capacity
+  is reserved. Added `IChildVmCreationOwnership.CreateOwnedAsync` and its ownership query so rollback can distinguish its own partial create
+  from a competing external VM. The disk sidecar persists this ownership and paths
+  for retries after `Remove-VM` has succeeded.
+- Creation endpoints/DTOs live in separate `ChildVmEndpoints`/`ChildVmContracts`
+  files. Minimal dispatcher, phase-SSE, composition and migration registration
+  hooks touch integrator-owned files to make the requested increment executable.
+  The `JobEventKind.Phase` enum addition is necessary for the frozen phase event.
+- Disk creation and media attachment occur inside `IChildVmDriver.CreateAsync`
+  (as its frozen descriptor implies); the job's following `disk`/`attach` phases
+  verify completion and attachments. No primary provisioning algorithm is changed.
+- The fake media transfer's disposal is made idempotent: activating the child job
+  resolves its concrete/interface registrations, and DI disposes that same
+  instance twice. This is required for the new API tests to dispose their hosts.
+- SQLite admission, inventory, capacity and media implementations still await their
+  owning branches. No child discovery flag is advertised until integration.
+  Owner/admin create access is implemented with the existing delegation-policy
+  hook; primary-token creation remains for stage 3 as scoped by the task.
+
 ## Integration notes (stage 1)
 
 Integrated on 2026-09-07 in `ha/integ-1`, after resetting to `feat/host-admin`

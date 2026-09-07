@@ -45,5 +45,5 @@ public sealed class FakeMediaTransfer : IMediaTransfer, IDisposable
     public Task<bool> TryDeleteAsync(string path, CancellationToken ct)
     { ct.ThrowIfCancellationRequested(); var full = Confine(path); if (FilesHeldOpen) return Task.FromResult(false); File.Delete(full); return Task.FromResult(true); }
     public Task<IReadOnlyList<string>> ListFilesAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(Directory.GetFiles(Root));
-    public void Dispose() => Directory.Delete(Root, true);
+    public void Dispose() { if (Directory.Exists(Root)) Directory.Delete(Root, true); }
 }

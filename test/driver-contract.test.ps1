@@ -30,6 +30,7 @@ Write-Host "=== Parser checks ===" -ForegroundColor Cyan
 $touchedScripts = @(
     "drivers/Load-ConstructDriver.ps1",
     "drivers/hyperv-local/HyperVLocal.Driver.ps1",
+    "drivers/hyperv-local/HyperVLocal.ChildVm.ps1",
     "Create-AgentVM.ps1",
     "Set-AgentVmCheckpoints.ps1",
     "Auto-Install.ps1"
@@ -576,6 +577,67 @@ ok "safe delete: the probable-checkpoint removal is inside the typed-'yes' branc
     @($removals | Where-Object {
         $_.Extent.StartOffset -gt $yesIf[0].Extent.StartOffset -and
         $_.Extent.EndOffset   -lt $yesIf[0].Extent.EndOffset }).Count -eq 1)
+
+# General-purpose child functions load only through the optional include.
+ok "child functions are absent on default loader path" (-not (Get-Command New-ConstructChildVm -ErrorAction SilentlyContinue))
+. (Join-Path $repoRoot 'drivers/Load-ConstructDriver.ps1') -Include ChildVm
+ok "optional child driver loaded" ([bool](Get-Command New-ConstructChildVm -ErrorAction SilentlyContinue))
+$caps = Get-ConstructDriverExtendedCapabilities
+ok "child supports generation 2 only" ($caps.generations.Count -eq 1 -and $caps.generations[0] -eq 2)
+ok "child fixed memory only" ($caps.dynamicMemory -eq 'unsupported' -and $caps.memoryOvercommit -eq 'unsupported')
+ok "child dual DVD and TPM" ($caps.maxOpticalDrives -eq 2 -and $caps.tpm -eq 'supported')
+$hardware = @{ cpus=1;ramMb=512;diskGb=1;generation=2;secureBoot=$true;secureBootTemplate='microsoftWindows';tpm=$true;bootOrder=@('installMedia','disk');networkAttached=$true;dynamicMemory=$null }
+Assert-ConstructChildHardware $hardware
+foreach ($field in @('cpus','ramMb','diskGb','generation','dynamicMemory','secureBootTemplate')) {
+    $bad = $hardware.Clone()
+    switch ($field) { 'ramMb' { $bad[$field]=513 }; 'generation' { $bad[$field]=1 }; 'dynamicMemory' { $bad[$field]=@{} }; 'secureBootTemplate' { $bad[$field]='bogus' }; default { $bad[$field]=0 } }
+    $threw=$false; try { Assert-ConstructChildHardware $bad } catch { $threw=$true }
+    ok "child rejects invalid $field" $threw
+}
+$childPath = Join-Path $repoRoot 'drivers/hyperv-local/HyperVLocal.ChildVm.ps1'
+$childAst = [System.Management.Automation.Language.Parser]::ParseFile($childPath, [ref]$null, [ref]$null)
+function ChildFunctionText($name) { ($childAst.FindAll({param($a) $a -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $a.Name -eq $name},$true))[0].Extent.Text }
+$createText = ChildFunctionText 'New-ConstructChildVm'
+$hardwareText = ChildFunctionText 'Set-ConstructChildHardware'
+$shutdownText = ChildFunctionText 'Stop-ConstructChildVmGracefully'
+$removeText = ChildFunctionText 'Remove-ConstructChildVm'
+ok "child creates dynamic disk with explicit maximum" ($createText -match 'New-VHD -Path \$disk -Dynamic -SizeBytes')
+ok "child sets template before TPM key protector" ($hardwareText.IndexOf('Set-VMFirmware @firmware') -lt $hardwareText.IndexOf('Set-VMKeyProtector'))
+ok "child disables automatic checkpoints" ($createText -match '-AutomaticCheckpointsEnabled \$false')
+ok "child fixed RAM cmdlet shape" ($hardwareText -match 'Set-VMMemory -VMName \$Name -DynamicMemoryEnabled \$false -StartupBytes')
+ok "graceful uses non-forced WMI shutdown" ($shutdownText -match 'InitiateShutdown\(\$false,')
+ok "graceful never falls back to power cut or save" ($shutdownText -notmatch 'Stop-VM|Save-VM|Remove-VM|-Force|-TurnOff')
+ok "delete explicitly permits hard power-off" ($removeText -match 'Stop-VM -VM \$vm -TurnOff -Confirm:\$false')
+ok "child never waits for SSH or injects credentials" ($createText -notmatch 'Reachable|ssh|password|token|autoinstall')
+
+# Execute the real hardware/media functions with recording cmdlet doubles.
+& {
+    $script:childCalls = [Collections.Generic.List[string]]::new()
+    $script:childTpm = $false; $script:childProtector = $false
+    function Get-VM { param($Name) [pscustomobject]@{Name=$Name;State='Off';Generation=2} }
+    function Get-VMSecurity { param($VMName) [pscustomobject]@{TpmEnabled=$script:childTpm} }
+    function Get-VMKeyProtector { param($VMName) if($script:childProtector){[byte[]]@(1,2)} }
+    function Get-VMHardDiskDrive { param($VMName) }
+    function Get-VMNetworkAdapter { param($VMName) [pscustomobject]@{Name='nic'} }
+    function Set-VMProcessor { param($VMName,$Count) $script:childCalls.Add('cpu:'+ $Count) }
+    function Set-VMMemory { param($VMName,$DynamicMemoryEnabled,$StartupBytes) $script:childCalls.Add('memory:'+ $DynamicMemoryEnabled + ':' + $StartupBytes) }
+    function Set-VMFirmware { param($VMName,$EnableSecureBoot,$SecureBootTemplate,$BootOrder) $script:childCalls.Add('firmware:'+ $SecureBootTemplate) }
+    function Set-VMKeyProtector { param($VMName,[switch]$NewLocalKeyProtector) $script:childProtector=$true; $script:childCalls.Add('protector') }
+    function Enable-VMTPM { param($VMName) $script:childTpm=$true; $script:childCalls.Add('tpm') }
+    function Disable-VMTPM { param($VMName) $script:childTpm=$false; $script:childCalls.Add('disable-tpm') }
+    Set-ConstructChildHardware -Name 'child' -Hardware $hardware -ResendTemplate $true
+    ok "recorded child firmware precedes key protector and TPM" (($script:childCalls -join ',') -eq 'cpu:1,memory:False:536870912,firmware:microsoftWindows,protector,tpm')
+    $hardware.tpm=$false
+    Set-ConstructChildHardware -Name 'child' -Hardware $hardware -ResendTemplate $false
+    $before=$script:childCalls.Count
+    $threw=$false; try { Set-ConstructChildHardware -Name 'child' -Hardware $hardware -ResendTemplate $true } catch { $threw=$true }
+    ok "disabled TPM still locks template before any mutation" ($threw -and $script:childCalls.Count -eq $before)
+    $hardware.tpm=$true
+    Set-ConstructChildHardware -Name 'child' -Hardware $hardware -ResendTemplate $false
+    ok "re-enabling TPM preserves its existing key protector" (@($script:childCalls | Where-Object { $_ -eq 'protector' }).Count -eq 1)
+}
+
+. (Join-Path $repoRoot 'test/childvm-driver-doubles.ps1')
 
 # ── Summary ─────────────────────────────────────────────────────────────────
 Write-Host ""

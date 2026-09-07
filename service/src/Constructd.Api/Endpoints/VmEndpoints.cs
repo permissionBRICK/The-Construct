@@ -216,7 +216,8 @@ public static class VmEndpoints
         var vm = await repository.GetAsync(name, cancellationToken);
         if (vm is null) return Problems.NotFound("Unknown VM.");
         var vmName = vm.Name;
-        if (vm.Kind == VmKind.Child || (await repository.ListAsync(null, cancellationToken)).Any(v => Ownership.SameName(v.Parent, vm.Name)))
+        if (vm.Kind == VmKind.Child) return await ChildVmEndpoints.DeleteAsync(vm, http, cancellationToken);
+        if ((await repository.ListAsync(null, cancellationToken)).Any(v => Ownership.SameName(v.Parent, vm.Name)))
             return CodedProblems.Create(409, "unsupported-capability", "Child and cascade deletion are not installed.");
 
         // Fence the VM the moment the removal is accepted, and revoke its scoped token in the same

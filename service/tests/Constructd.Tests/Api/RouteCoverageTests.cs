@@ -45,6 +45,7 @@ public class RouteCoverageTests
         "GET /api/v1/vms/{name}",
         "DELETE /api/v1/vms/{name}",
         "POST /api/v1/vms/{name}/power",
+        "POST /api/v1/vms/{parent}/children",
         "GET /api/v1/vms/{name}/state",
         "GET /api/v1/vms/{name}/endpoint",
         "GET /api/v1/vms/{name}/forwards",

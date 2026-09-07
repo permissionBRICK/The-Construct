@@ -61,6 +61,7 @@ public enum JobEventKind
 {
     Progress,
     State,
+    Phase,
 }
 
 /// <summary>
