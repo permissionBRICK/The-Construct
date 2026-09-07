@@ -4,6 +4,10 @@
 > the installer and extension flows, port forwards and the idle policy are all in place.
 > Local Hyper-V stays the default and is completely unchanged — an install that never names
 > a remote host behaves, and prints, exactly as it always has. Everything below is opt-in.
+> Host administration, delegated child VMs, console input and signed host updates are also
+> implemented and covered by Linux fakes/recording tests, but have **not** been deployed or
+> field-validated through constructd on the Hyper-V host; use the
+> [owner checklist](field-test-host-admin.md) before treating them as rollout-ready.
 
 The Construct can put your agent VM on **somebody else's Hyper-V** — a shared box under a
 desk, a lab server, a build machine — instead of your own PC. An admin installs the
@@ -69,9 +73,14 @@ you dial* change.
    as soon as two VMs serve web UIs — add `-PublicHostPattern` and a wildcard DNS record
    (see *Per-VM public host names* below). Publish the service first
    (`dotnet publish service\src\Constructd.Api -c Release -r win-x64 --self-contained true
-   -o <publish dir>`); no .NET runtime is then needed on the host. Re-run the installer
-   after publishing a new build — it updates binaries, settings and the service in place.
-   `service/host/Uninstall-ConstructHost.ps1` is the companion.
+   -o <publish dir>`); no .NET runtime is then needed on the host. A host installed before
+   the update API exists needs one carefully backed-up **manual first rollout** of the new
+   service and matching scripts. Preserve the current settings rather than rerunning the
+   installer with defaults, and merge the approved public release key into
+   `Constructd:HostAdmin:Updates:ManifestPublicKey`; after that, use the Maintenance
+   tab's signed updater. The exact first-rollout and rollback record is in
+   [the host-admin field test](field-test-host-admin.md). `service/host/Uninstall-ConstructHost.ps1`
+   is the companion.
 
    > **The VMs go on the switch you configure, not on a switch the service creates.**
    > `-SwitchName` (and `Constructd:SwitchName`) default to Hyper-V's **`Default Switch`**,
@@ -164,6 +173,27 @@ you dial* change.
    defaults to `0`, which means "may not create VMs", so a quota typed carelessly refuses
    rather than over-grants; `--no-host-forwards` denies that user
    [`construct expose --to host`](expose.md#the-two-targets).
+
+   `--max-vms` is the primary-VM count only. Child delegation is a separate allowance,
+   edited in the Host administration **Users** tab or through
+   `PUT /api/v1/users/{name}/allowance`. Null fields inherit `userDefaults`; the shipped
+   defaults allow one retained child, sharing and `never` lifetimes, with no guessed
+   per-user CPU/RAM/storage budget (host capacity still applies). For example:
+
+   ```powershell
+   $allowance = @{
+     allowChildCreation = $true; maxRetainedChildren = 2
+     cpuBudget = 8; ramBudgetBytes = 17179869184; storageBudgetBytes = 214748364800
+     maxChildLifetimeSeconds = 14400; allowNeverLifetime = $false; allowSharing = $true
+   } | ConvertTo-Json
+   Invoke-RestMethod -UseDefaultCredentials -Method Put `
+     -Uri 'https://buildbox.example.local:7462/api/v1/users/DOMAIN%5Calice/allowance' `
+     -ContentType application/json -Body $allowance
+   ```
+
+   Host `userCaps` can only narrow those values; a per-primary override can only narrow
+   delegation again. Policy is re-evaluated on every request, so disabling a user or
+   lowering an allowance takes effect without replacing credentials.
 
 5. **The host must not go to sleep under the VMs.** `constructd` holds a Windows power
    availability request (`PowerRequestSystemRequired`) for as long as any VM it manages is
@@ -556,6 +586,11 @@ cancel, retry buttons for failed deletes and cleanups, the audit log), Configura
 Maintenance (the host service's own update: check, stage, apply, resume, cancel,
 resolve — see §11 of the contract).
 
+The current extension asks the service for `GET /host/iso-catalog`, but this service build
+does not map that route. Until the endpoint is added, the Media tab cannot load the
+read-only primary Construct catalog; child media under `/media` still works. Use
+`constructd admin iso status` locally on the host for the primary catalog.
+
 **What it deliberately lacks.** No guest update, provision, reinstall or redownload —
 those stay in each instance's own panel and console. No child start/resume, console or
 sharing for ordinary users in the panel; `construct vm …` inside the primary has them.
@@ -585,6 +620,35 @@ is shown again. *Remove instance* (the console's `Auto-Install.ps1 -Action
 remove-instance`) does **not** handle that confirmation yet: for a primary with children
 it stops at the service's `409 cascade-confirmation-required`; delete such a primary from
 the admin panel, or delete its children first.
+
+## 9. Children, sharing and allowances
+
+A remote primary receives a `primary` token when newly created. A primary migrated from
+an older database keeps its existing token as `legacy`: old heartbeat and self-forwarding
+continue unchanged, but `construct vm identity` reports that delegation is unavailable.
+The owner upgrades it explicitly with **Reprovision (upgrade VM credential)** in VS Code,
+or `Provision-AgentVM.ps1 -RotateVmToken`; rotation invalidates the old token immediately.
+
+Inside an upgraded primary, [`construct vm`](child-vms.md) is the complete child interface:
+public-URL or resumable-upload media, explicit CPU/RAM/disk/lifetime, powered-off creation,
+lifecycle and lease renewal, sharing, hardware/media changes, console screenshots/input,
+jobs and child-target forwards. Children have exactly one primary parent, inherit its
+human owner and receive no Construct credential. Child slots and storage remain charged
+while Off or Saved; runtime RAM/CPU is released only after the hypervisor confirms a
+terminal state.
+
+Children begin `private`. `host` sharing lets registered users and their upgraded
+primaries inspect and operate the child, use the console, and request an eligible client
+forward. It does not reveal guest credentials, move ownership, permit deletion or
+hardware/media changes, or provide network isolation. Every resource remains charged to
+the owner. Deleting a primary always cascades to all of its children, including shared
+ones, after an expiring scope preview and typed confirmation.
+
+Finite lifetimes are wall-clock leases. Creation and every start/resume require an
+explicit lifetime; restart, sharing, guest reboot and service restart do not renew it.
+Expiry requests a graceful guest shutdown. If integration services are unavailable or
+the timeout expires, the child stays running and `overdue`; there is no force-off, save or
+delete fallback.
 
 ## Per-VM public host names, and the web ports of a remote VM
 
@@ -778,7 +842,9 @@ Admin resumes or resolves it. `last-update.json` under the service data director
 
 Release signing setup, manual first deployment, retention, recovery fences and rollback
 limits are documented in [Host releases and deployment](host-release.md). No real-host
-update has been validated by the Linux test run.
+update has been validated by the Linux test run. The repository's
+`config/host-release.pub` is intentionally empty until the owner supplies the production
+trust root; check/stage returns `409 signing-key-missing` until that key is stored.
 
 ### Child networking
 

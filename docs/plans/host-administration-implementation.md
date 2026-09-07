@@ -1,13 +1,13 @@
 # Host administration implementation plan
 
-Status: planning only; no implementation authorized by this document.
-Date: 2026-09-06.
+Status: implemented on Linux, not field-validated on Hyper-V.
+Date: 2026-09-07.
 Canonical requirements: [Remote host administration and temporary child VMs](host-administration-and-child-vms.md).
 
-Use this as a handoff for a later implementation workflow. Implement in reviewable phases,
-with each phase's contracts and acceptance checks resolved before the next depends on it.
-Do not treat proposed route names, unspecified defaults or future enterprise features as
-already implemented requirements. Do not rewrite the existing primary provisioning flow.
+This is the delivery plan and current validation record. The implementation followed the
+reviewable phases below without rewriting the existing primary provisioning flow. Acceptance
+items proven only with Linux fakes and recording runners remain field-test requirements, not
+claims about production Hyper-V behavior.
 
 ## Current code map
 
@@ -32,6 +32,11 @@ already implemented requirements. Do not rewrite the existing primary provisioni
 Verify these against the target commit when starting; other work may land before implementation.
 
 ## Phase 0: resolve contracts and investigate backend capabilities
+
+Status: **implemented on Linux, not field-validated**. The schema, permission and capability
+contracts are frozen; console feasibility has recording-runner coverage and historical host
+probes, but LocalSystem screenshot/input and the final host capability set still need the
+field checklist.
 
 Produce a small API/domain design amendment before writing production code:
 
@@ -61,6 +66,10 @@ by a generated implementation workflow.
 
 ## Phase 1: host identity, inventory and administration API
 
+Status: **implemented on Linux, not field-validated**. Migration, inventory, allowances,
+reports and audit are covered by API/persistence tests; migration of the existing `haus-vm`
+and production identity/token continuity have not been exercised against its live database.
+
 Add host status/capabilities, user listing/editing/allowances, VM classification and audit
 coverage. Preserve existing enrollment, Negotiate/token handling, certificate pinning,
 ownership checks and legacy API behavior. Expose effective allowed actions for clients,
@@ -80,6 +89,11 @@ Acceptance:
 - Arbitrary child guests are not falsely marked provisioned by a successful boot.
 
 ## Phase 2: media, capacity and general-purpose child jobs
+
+Status: **implemented on Linux, not field-validated**. Capacity, media, SSRF controls and
+child jobs use deterministic fakes and pinned Hyper-V argv tests. Generation 1, dynamic
+memory, disk growth and arbitrary device pass-through remain unavailable; no child has yet
+been created from public media on the target host.
 
 Implement a media registry separate from the primary Construct patched-ISO catalog, with
 shared reference/cleanup primitives where useful. Accept public URL downloads and local
@@ -114,6 +128,10 @@ Acceptance:
 
 ## Phase 3: delegation, CLI, sharing and lifecycle
 
+Status: **implemented on Linux, not field-validated**. Primary-token upgrade, guest CLI,
+sharing, leases, expiry and cascade recovery are automated; no live primary has yet exercised
+the upgraded credential, sharing, expiry or a cascade on Hyper-V.
+
 Issue scoped primary credentials and expose effective delegation limits to the CLI. Reuse
 job streaming and machine-readable error conventions. Add creation/media upload, inspection,
 lifecycle, sharing and supported console operations. Require explicit lifetime on creation
@@ -142,6 +160,11 @@ Acceptance:
 
 ## Phase 4: extension administration and minimal user view
 
+Status: **implemented on Linux, not field-validated**. The webview and minimal user view have
+plain-node coverage. The extension currently requests `/api/v1/host/iso-catalog`, which the
+service does not map, so the primary-media catalog read in the Media tab is a known integration
+gap; use `constructd admin iso status` until it is reconciled.
+
 Build native VS Code views backed by the API, not host filesystem access or commands that
 quietly assume the service is local. Connect/register a host before any primary exists.
 The admin module is absent for local installs and remote non-admin identities. Preserve
@@ -163,6 +186,11 @@ Acceptance:
 
 ## Phase 5: network and console adapters
 
+Status: **implemented on Linux, not field-validated**. Screenshot and input paths, network
+policy and external-switch creation are pinned by recording-runner tests. There is no streamed
+video or network isolation; child address discovery is unverified, child host forwards are
+refused, and mouse input may honestly return `applied: false`.
+
 Define and wire access-policy interfaces even where the enforcing implementation is deferred:
 
 - Hypervisor capabilities and guest addresses.
@@ -181,6 +209,11 @@ requesting access through its parent; authorized parent/shared access identifies
 target; console works at the demonstrated backend capability level before guest provisioning.
 
 ## Phase 6: host release and update mechanism
+
+Status: **implemented on Linux, not field-validated**. Signed staging, drain, helper handoff,
+health verification and rollback paths have fake-mode coverage. The repository deliberately
+ships no production signing key, the first rollout must be manual, and Windows service/task,
+active-VM drain and rollback behavior remain field-test items.
 
 Build self-contained Windows service packages with matching scripts and a manifest tied to
 one main commit. This is a host release workflow; do not rebuild the independent ISO tool
@@ -220,4 +253,6 @@ session as an incidental test; schedule the explicitly scoped deployment test se
 
 At implementation completion, report what was exercised on Hyper-V versus simulated, the
 release commit, migration/rollback limits, and any unavailable console/network capability.
-This plan is not authorization to start coding, create VMs, deploy a service, or run an update.
+This record is not authorization to create VMs, deploy a service or run an update. Those
+destructive host steps require the project owner's explicit field-test window; follow
+[`docs/field-test-host-admin.md`](../field-test-host-admin.md).

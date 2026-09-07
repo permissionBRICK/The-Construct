@@ -204,9 +204,11 @@ const state = await driver.queryVmState(instance);   // 'running'|'off'|'absent'
 | Member | Signature | Notes |
 |---|---|---|
 | `backend` | string | the id this driver implements |
-| `capabilities` | `{ checkpoints, console, suspend, hostLifecycle }` | `console`: `"vmconnect"` \| `"none"` \| a URL; `hostLifecycle`: the host's own PowerShell scripts create/delete/reconfigure this backend's VMs |
+| `capabilities` | `{ checkpoints, console, suspend, hostLifecycle, children? }` | `console`: `"vmconnect"` \| `"none"` \| a URL; `hostLifecycle`: the host's own PowerShell scripts create/delete/reconfigure this backend's VMs; optional `children` advertises the service-backed child inventory |
+| `capabilitiesFor` | `(instance, opts) => Promise<object>` | optional effective-capability resolver; `hyperv-remote` probes `/health.apiFeatures` and caches successful answers for 60 seconds |
 | `queryVmState` | `(instance, opts) => Promise<string>` | `running\|off\|absent\|unknown` (`saved`/`paused` collapse to `off`: Start resumes them) |
 | `queryAutoCheckpoints` | `(instance, opts) => Promise<string>` | `on\|off\|absent\|unsupported\|unknown` |
+| `queryChildren` | `(instance, opts) => Promise<Array\|null>` | optional child inventory; `null` means unavailable or failed, while `[]` is a successful empty inventory |
 | `startVm` | `(instance, opts) => bool` | fire-and-forget; `true` = launched |
 
 `instance` is the normalized instance object (`{ name, backend, vmName, vmHost, sshPort,
@@ -243,6 +245,12 @@ unknown-backend driver declares neither.
 had; `queryVmState(opts)` / `queryAutoCheckpoints(opts)` / `startVm(opts)` now take an
 optional `opts.instance` and dispatch through `getDriver`. An explicit `opts.vmName`
 still wins over the instance, so older call sites are unaffected.
+
+The legacy `capabilities.console` value describes a desktop-side console affordance
+(`vmconnect` for a local VM). It does not describe constructd's service console. The
+remote driver therefore keeps `console: "none"`; its optional `children` capability
+instead enables the child inventory, whose console actions use the authenticated
+`/api/v1/vms/{child}/console/*` routes.
 
 ## 5. Adding a backend
 
@@ -291,6 +299,8 @@ this is the contract mapping.
 | `Wait-ConstructVmReachable` | unchanged in kind — a raw socket poll of that endpoint |
 | `Detach-ConstructInstallMedia` | **no-op**: the creation job detaches the media on the host before it reports success |
 | capabilities | `@{ Checkpoints = $false; Console = 'none'; Suspend = $true; Backend = 'hyperv-remote' }` |
+| effective extension capability | `GET /health`; `apiFeatures` containing `children` adds `children: true`; old services and failed probes remain `false` |
+| extension child inventory | `GET /vms/{primary}/children`; failed reads return `null`, not an empty list |
 
 Two documented deviations, both additive:
 
@@ -313,6 +323,11 @@ is the same discipline as the local driver's `InvalidParameter` test and matters
 
 Progress lines from a job are printed with the host script's `Write-Note`, one per
 `event: progress` line, so a remote create logs like a local one.
+
+The service-backed console is intentionally outside the PowerShell driver contract.
+It supports PNG screenshots and authenticated keyboard/mouse injection for children;
+there is no streamed video, and mouse injection can report `applied: false` when the
+host cannot map absolute coordinates safely.
 
 ## 7. Proxmox mapping notes (design-only)
 

@@ -8,6 +8,11 @@ or another OS supported by the host backend.
 This command is for the guest shell. Host administrators use the host administration
 API/UI, while the existing primary provisioning flow remains unchanged.
 
+> **Validation status:** the CLI/API flow is implemented and tested on Linux against the
+> fake service and recording runners. It has not yet created or operated a child through
+> the production service on Hyper-V; follow the
+> [host-administration field test](field-test-host-admin.md) before rollout.
+
 ## Before the first command
 
 The CLI reads the same service identity as [`construct expose`](expose.md):
@@ -283,3 +288,18 @@ An already-off shutdown or expiry does not prevent that retry. Configuration rec
 currently accepts the same request only. Resolve the backend failure and retry; if that
 request cannot succeed, the supported escape is owner/admin deletion and recreation of
 the child. There is no abandon/supersede configuration API.
+
+## Current Hyper-V limits
+
+- Generation 2 and fixed RAM are supported; Generation 1, dynamic memory and memory
+  overcommit are not. Disk growth through `hardware --disk-gb` currently returns
+  `unsupported-capability`.
+- Interactive VMConnect/RDP/VNC video is not exposed. Screenshot and keyboard are
+  supported by the bounded WMI transport; mouse is conditional and may return
+  `applied:false`. LocalSystem execution and visible guest input still need the field test.
+- Child addresses are guest-reported and unverified. Client forwarding may use such an
+  address with a warning; host forwarding to a child is refused. Recorded network rules
+  are intended relationships only—this delivery enforces no packet isolation.
+- Secure Boot templates are `microsoftWindows` and
+  `microsoftUefiCertificateAuthority`. Hyper-V locks the template after TPM
+  initialization, so later template changes are refused.

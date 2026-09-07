@@ -425,11 +425,19 @@ auth and backups never transit the service. The registry entry is written by the
 as soon as the endpoint is known. This path needs **no administrator rights on your PC** —
 nothing is created locally.
 
+An administrator can enroll the host from **Construct: Open Host Administration** without
+creating a VM first. Per-user child allowances, host capacity policy, media and signed host
+updates are managed there. A primary created by an older service keeps working, but its
+legacy VM token cannot create children: reprovision it (or rotate its token from the VMs
+tab) once to receive the primary-scoped credential used by `construct vm`.
+
 Passing any of `-Backend` / `-ServiceUrl` / `-InstanceName` skips the mode prompt, as do
 `-VmName`, `-Action`, `-FromPanel` and an existing default instance. The whole flow — admin
 setup, authentication, certificate pinning, the idle policy — is in
 [Remote host](remote-host.md); [Field test](field-test-remote-host.md) walks the first run
-end to end.
+end to end. The later [host-administration field test](field-test-host-admin.md) covers
+allowances, children, sharing, console input and signed service updates; those paths are
+implemented and automated on Linux fakes but have not yet been validated on Hyper-V.
 
 ## What the automated flow does
 
