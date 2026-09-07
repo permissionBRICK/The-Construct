@@ -1,7 +1,7 @@
 # Host administration contracts (Phase 0 design amendment)
 
 Status: **frozen contract** for the host-administration and child-VM delivery.
-Date: 2026-09-07 (revision 4 after review). Branch: `ha/s0-contracts`.
+Date: 2026-09-07 (revision 5 after review). Branch: `ha/s0-contracts`.
 Inputs: [requirements](host-administration-and-child-vms.md),
 [implementation plan](host-administration-implementation.md),
 [Hyper-V feasibility report](host-administration-hyperv-feasibility.md) (lands from branch
@@ -174,7 +174,8 @@ gains the new columns through the reader.
 | `schema_migrations` (new) | `id INTEGER PRIMARY KEY`, `name TEXT NOT NULL`, `breaking INTEGER NOT NULL`, `applied_at TEXT NOT NULL`, `applied_by_commit TEXT NOT NULL` | | runner |
 | `media`, `media_references`, `media_uploads` (new) | §6.1, §6.4 | | 200 |
 | `reservations` (new) | §4.5 | | 300 |
-| `job_operation_keys` (new) | `owner TEXT NOT NULL COLLATE NOCASE`, `kind TEXT NOT NULL`, `operation_key TEXT NOT NULL`, `fingerprint TEXT NOT NULL`, `target TEXT NOT NULL`, `job_id TEXT NULL`, `response_json TEXT NULL`, `created TEXT NOT NULL`, `PRIMARY KEY (owner, kind, operation_key)` | §7.3 | 400 |
+| `job_operation_keys` (new) | `owner TEXT NOT NULL COLLATE NOCASE`, `kind TEXT NOT NULL`, `operation_key TEXT NOT NULL`, `fingerprint TEXT NOT NULL`, `target TEXT NOT NULL`, `job_id TEXT NULL`, `state TEXT NOT NULL DEFAULT 'completed'`, `intent_json TEXT NULL`, `power_generation INTEGER NULL`, `response_json TEXT NULL`, `created TEXT NOT NULL`, `completed_at TEXT NULL`, `PRIMARY KEY (owner, kind, operation_key)`, index `ix_opkeys_inflight ON job_operation_keys (state, target)` | §7.3 | 400 |
+| `vms` | `power_generation INTEGER NOT NULL DEFAULT 0` | §5.3b | 100 |
 | `host_updates` (new) | §11.8 | | 600 |
 | `forwards` | `destination_vm TEXT NULL COLLATE NOCASE`, `destination_via TEXT NULL COLLATE NOCASE`, `destination_connect_address TEXT NULL`, `destination_connect_port INTEGER NULL`, `requested_by TEXT NULL`, `relationship TEXT NULL` | all NULL for today's rows and for every primary-target forward | 700 |
 | `network_rules` (new) | §12.4 | | 700 |
@@ -373,7 +374,10 @@ owner (§4.6) and audited with `owner=<child owner>, initiator=<caller>`.
 `allowedActions` (§8.3) is the exhaustive `ChildAction` enum filtered by this table for
 the caller: `inspect, start, shutdown, save, restart, delete, share, renew, hardware,
 media, console, forwardClient, forwardHost, addresses, overrides, rotateToken`. It is
-presentation only; every route re-checks.
+presentation only; every route re-checks. `forwardHost` is filtered out for a child while
+`network.addressVerification` is `unsupported` (§12.5), so the UI never offers an action
+that cannot succeed; the authorization statement of the table stays true for the day an
+allocation authority exists.
 
 ### 2.3 Re-evaluated on every request
 
@@ -421,7 +425,7 @@ VM/state may still refuse; the runtime answer is authoritative".
 | Boot order | `bootOrder` | `conditional`; `notes`: "disk position in the boot order was not probed (the probe had no disk)" | DVD/NIC order set and read |
 | Console | `console.screenshot`, `.keyboard`, `.mouseAbsolute`, `.mouseRelative`, `.interactive` | `supported`, `supported`, `conditional`, `unsupported` (Gen 2: no `Msvm_Ps2Mouse`), `unsupported` (D2) | screenshots 1×1…native; keyboard methods return 0 with Ctrl+Alt+Del visible; synthetic mouse returns 32768 preboot; no PS/2 instance |
 | Console bounds | `console.maxScreenshotBytes`, `console.nativeResolutionOnly` | `4 MiB`, `true` (requests above native are refused by the service before WMI) | the report's recommended envelope: "positive dimensions at or below the current native dimensions, with an independent byte/pixel cap" — its boundary probes explicitly do **not** establish a hard maximum (some single-dimension oversizes returned 0), so this is policy, not an observed limit |
-| Networking | `network.clientForward`, `.hostForward`, `.directAddressReporting`, `.addressVerification`, `.isolation` | `supported`, `supported` for primaries / **`unsupported` for children** (gated by policy and by address verification), **`conditional`** (needs guest integration services; the probe's KVP component reported no contact, so address reporting is **unverified**), **`unsupported`** (no IP allocation authority on Hyper-V, §12.5), `unsupported` | existing forwards; integration components "Kein Kontakt"; no enforcing adapter exists |
+| Networking | `network.clientForward`, `.hostForwardPrimary`, `.hostForwardChild`, `.directAddressReporting`, `.addressVerification`, `.isolation` | `supported`, `supported` (gated by policy), **`unsupported`** (no address verification), **`conditional`** (needs guest integration services; the probe's KVP component reported no contact, so address reporting is **unverified**), **`unsupported`** (no IP allocation authority on Hyper-V, §12.5), `unsupported` | existing forwards; integration components "Kein Kontakt"; no enforcing adapter exists |
 | Memory | `dynamicMemory`, `memoryOvercommit` | `unsupported`, `unsupported` (fixed RAM policy; `ChildHardware.DynamicMemory` is a reserved seam, refused with `unsupported-capability`) | report: only fixed 512 MiB was booted, dynamic memory was set and read back but never used to boot; the *policy* comes from the requirements (owner-observed Ubuntu dynamic-memory boot failures) |
 | Suspend | `suspend` | `supported` | save/resume measured |
 | Graceful shutdown | `gracefulShutdown` | `conditional` (needs guest integration services) | `InitiateShutdown` → 32768 without a guest |
@@ -445,7 +449,7 @@ VM/state may still refuse; the runtime answer is authoritative".
 | Route | Body |
 |---|---|
 | `GET /host/capabilities` | `{ backend, capabilities: BackendCapabilities, policy: { hostForwardsEnabled, directAddressReporting, allowNeverLifetime, maxChildLifetimeSeconds, capacityMode } }` — `policy` is the host-level view; the caller's effective values are in `/whoami` or `/vms/{name}/identity`. |
-| `GET /vms/{name}/capabilities` | `VmCapabilitiesSnapshot` as `{ vm, state, console: { screenshot, keyboard, mouseAbsolute, mouseRelative, interactive, nativeWidth?, nativeHeight?, videoHeadPresent, keyboardPresent, syntheticMousePresent, ps2MousePresent }, hardware: { generation, secureBootTemplateLocked }, gracefulShutdown }` — levels are the backend levels lowered by device absence (`unsupported` when the device is missing, `conditional` otherwise). |
+| `GET /vms/{name}/capabilities` | `VmCapabilitiesSnapshot` as `{ vm, state, console: { screenshot, keyboard, mouseAbsolute, mouseRelative, interactive, nativeWidth?, nativeHeight?, videoHeadPresent, keyboardPresent, syntheticMousePresent, ps2MousePresent }, hardware: { generation, secureBootTemplateLocked }, gracefulShutdown, network: { clientForward, hostForward, addressVerification } }` — levels are the backend levels lowered by device absence (`unsupported` when the device is missing, `conditional` otherwise); `network.hostForward` is `hostForwardPrimary` for a primary and `hostForwardChild` lowered by the owner/host policy switches for a child. |
 | `GET /health` | `apiFeatures: ["host-admin","children","media","console","updates","network"]` so an old service is detected by absence (§10.3). |
 
 Requests that ask for an `unsupported` capability are refused **before** any VM is
@@ -497,6 +501,10 @@ Worked examples (all in `enforce` mode, `H_ram = 4 GiB`, 32 GiB host):
 | free 8 GiB, one 4 GiB pending Off | 8 GiB | 4 GiB (pending) | 4 GiB | 0 | 24 GiB | 0 GiB | **0 GiB** |
 | one 16 GiB unmanaged VM running, 6 GiB free | 6 GiB | 0 | 0 | 16 GiB | 12 GiB | 2 GiB | 2 GiB |
 | 20 GiB non-VM workload, an 8 GiB **held** VM in a restart's intermediate Off | 8 GiB | 8 GiB (held, Off ⇒ unreflected) | 8 GiB | 0 | 20 GiB | −4 GiB → 0 | **0 GiB** (a second 8 GiB start is refused) |
+
+**Clamp rule:** every admissible quantity (`A_ram`, `A_cpu`, `A_sto(v)`) is clamped at
+zero after computation; a negative value means "refuse every request for that resource",
+which is what the restart example above assumes.
 
 **No double counting (decided here):** bytes already allocated on disk are inside
 `V_free` (they are not free), so an artifact contributes only its *growth* `G(a)`. A
@@ -554,10 +562,16 @@ restart fails and leaves the VM `Off`.
 ### 4.4 Reconciliation
 
 Runs at startup (after `Bootstrap` forwards reconcile), every `capacity.reconcileSeconds`,
-and after every power operation and job completion, always under the ledger gate.
-For each VM it uses `IVmOperationGate.TryAcquireAsync`; **a VM whose gate is held by a
-live operation is skipped** — the operation owns that VM's reservations and will confirm
-or release them itself.
+and after every power operation and job completion. **Acquisition sequence (normative,
+respects the lock order of §6.5):** (1) read the inventory snapshot with no gate held;
+(2) for each managed VM, `IVmOperationGate.TryAcquireAsync` — **non-blocking, never
+waits, never upgrades to a blocking acquire**; a VM whose gate is held by a live operation
+is skipped (the operation owns that VM's reservations and will confirm or release them
+itself); with the VM gate held, take the ledger gate, apply that VM's rows below against
+the snapshot, release both; a VM flagged `media-unverified` additionally takes its media
+gates (in id order, before the ledger gate) to settle references against
+`GetAttachedMediaAsync`; (3) host-level rows (unmanaged VMs, snapshot invalidation) under
+the ledger gate alone. The ledger gate is never held while a VM or media gate is acquired.
 
 | Observation | Action |
 |---|---|
@@ -604,16 +618,19 @@ caller's start of somebody else's child is charged to that child's owner.
 | Storage | null; host capacity still binds | full disk maxima + media (charged to the **media owner** only, §6.2) + saved-state reservations |
 | Max child lifetime | unlimited; `never` allowed | per request |
 
-**Primary path hooks (minimal, no provisioning rewrite).** `POST /vms` keeps its
-algorithm; after the existing `AddAsync` succeeds it calls `TryReserveAsync` for disk +
-RAM + CPU with the job id as operation (the creation job starts the VM); a refusal removes
-the record and answers `409 capacity-exhausted`. `POST /vms/{name}/power {start}` reserves
-RAM/CPU pending with a request-scoped operation id, confirms on `Running`, releases on
-`Off`. `remove-vm` releases after confirmed removal. In `observe` mode (every migrated host
-until an admin changes it) neither call ever refuses, so the existing behaviour is
-identical. The primary ISO catalog (`Iso:CacheDir`) is **not** reserved through the
-ledger: its files are physically present and thus inside `V_free`; a build in flight is
-bounded by the admin-configured source size and is listed as a limitation (§14.2).
+**Primary path (normative, no provisioning rewrite).** `POST /vms` keeps the
+`VmJobs.CreateAsync` body untouched; its **acceptance** becomes one `AdmissionPlan`
+(§7.3: `VmToInsert` with the primary allowance, disk + RAM + CPU `ReservationRequest` with
+the job id as operation, the Queued `create-vm` job) admitted by `IAdmissionStore.AdmitAsync`
+and started by `IPersistedJobRunner`; the old `AddAsync` + `SubmitAsync` pair is removed
+from that endpoint only. `POST /vms/{name}/power {start}` reserves RAM/CPU pending with a
+request-scoped operation, confirms on `Running`, releases on `Off` (through
+`MutateAsync`). `remove-vm` releases after confirmed removal. In `observe` mode (every
+migrated host until an admin changes it) admission never refuses, so the existing
+behaviour is identical. The primary ISO catalog (`Iso:CacheDir`) is **not** reserved
+through the ledger: its files are physically present and thus inside `V_free`; a build in
+flight is bounded by the admin-configured source size and is listed as a limitation
+(§14.2).
 
 Refusals carry `409 capacity-exhausted` with
 `{ resource: "ram"|"cpu"|"storage"|"children"|"primaries", scope: "user"|"host"|"volume",
@@ -668,7 +685,7 @@ already resumes saved and paused VMs) is the driver call in every row.
 
 | Observed state | Lease state | Admission | Effect | Answer |
 |---|---|---|---|---|
-| `Off` | any of `inactive`, `expired`, `overdue`, (never `active`) | RAM+CPU `pending` → confirm on `Running` | activates the lease from the observed `Running` moment with the new lifetime | `200 { state, lease }` |
+| `Off` | any (`inactive`, `expired`, `overdue`, and also `active`/`unlimited` after an explicit shutdown, which preserves the lease) | RAM+CPU `pending` → confirm on `Running` | (re)activates the lease from the observed `Running` moment with the **new** lifetime, replacing whatever was stored | `200 { state, lease }` |
 | `Saved` | `active`, `expired`, `overdue`, `unlimited` | RAM+CPU `pending` → confirm on `Running` (saved-state reservation released after resume) | same | `200` |
 | `Paused` | `active`, `overdue`, `unlimited` | **none** (RAM/CPU already `held`) | resumes; the lease is re-activated from `now` with the new lifetime (a paused VM ran no useful wall clock, but the lease is a lease) | `200` |
 | `Running` | any | – | nothing | `409 already-running` |
@@ -676,6 +693,21 @@ already resumes saved and paused VMs) is the driver call in every row.
 
 `lifetime` is required in every accepting row; `restart` and `shutdown` are the other
 verbs and never change the lease. Acceptance S6 pins every row.
+
+### 5.3b Power generation (durable fence for every power action)
+
+Every VM row carries `power_generation` (`INTEGER NOT NULL DEFAULT 0`, migration 100).
+It is bumped, in the same transaction as the state it records, by **every** power action
+the service issues (`start`, `shutdown` completion, `save`, `restart` phases, delete power
+off) and by every transition reconciliation **observes** (an external start or stop). A
+start intent (§7.3) records the generation it was accepted at; completion and replay use
+`IAdmissionScope.BumpPowerGenerationAsync(vm, expected)` as a compare-and-bump, so any
+intervening power action — including a shutdown, which leaves the lease untouched — turns
+a delayed retry into `409 operation-key-conflict { reason: "power-state-changed" }`
+instead of a fresh start. Reconciliation checks for an `InFlight` start intent on a VM
+**before** classifying an observed `Running` as external: if one exists at the VM's
+current generation, the intent is completed (activation from its `activationBase`, §7.3)
+rather than marked `external-start`.
 
 ### 5.4 Scheduler and the expiry job's re-check
 
@@ -821,8 +853,9 @@ and `media-acquire` take **media gates only** and must never acquire a VM gate w
 holding one (a dedicated item whose VM still exists is not cleanup's to delete; the VM's
 own delete path handles it under the VM gate). The **ledger/admission gate is innermost**:
 VM gate → media gates → ledger gate; whoever holds the ledger gate (admission,
-`TryReserveAsync`, `TrimAsync`, reconciliation) never acquires a VM or media gate inside
-it. An admission plan therefore checks media readiness by **SQL state** inside its
+`TryReserveAsync`, `TrimAsync`, the per-VM step of reconciliation) never acquires a VM or
+media gate inside it (reconciliation takes its VM and media gates *before* the ledger
+gate, §4.4). An admission plan therefore checks media readiness by **SQL state** inside its
 transaction (media state transitions are SQL compare-and-sets too, and SQLite serializes
 writers), not by taking media gates; media completion holds its media gate and then calls
 `TrimAsync` (ledger gate) — consistent with the order.
@@ -894,10 +927,11 @@ beyond the host, typed console text, or checksums of auxiliary media.
 | Primary hook | `POST /vms` builds the same kind of plan (`VmToInsert` with the primary allowance, disk + RAM + CPU reservation, the Queued `create-vm` job) and calls `AdmitAsync` then `StartPersistedAsync` with the **unchanged** `VmJobs.CreateAsync` body; the existing `AddAsync` + `SubmitAsync` pair is replaced only in that endpoint (integrator), the provisioning algorithm is untouched. `DELETE /vms/{primary}` without children uses a plan with the fence and the Queued `remove-vm` job. |
 | Replay | same owner + kind + key + **same fingerprint** → `200 { jobId, replayed: true, …the original accepted body… }` for jobs, or the stored `responseJson` for synchronous mutations, whatever the job's state now. Same key with a different fingerprint or target → `409 operation-key-conflict { jobId, target }`. Authorization is re-evaluated on replay: a caller that may no longer act on the target gets `403`, not the stored answer. |
 | Synchronous **database-only** mutations (`renew`, `sharing`, `overrides`, `allowance`) | `IAdmissionStore.MutateAsync(key, scope => …)`: the key row (`Completed`, with `responseJson`) and the mutation commit in **one** transaction. A crash before commit leaves nothing (the retry executes once); after commit the retry replays the stored response. A renewal can therefore never be applied twice, and a sharing replay never overwrites a newer decision (the second call with a *different* key and fingerprint is a new decision; the same key replays the old response). |
-| Synchronous **external** mutations (`start`) | the key row is inserted `InFlight` with `intentJson = { lifetime, expectedLeaseVersion }` in the same transaction as the pending reservation; then the hypervisor call; then, under the VM gate, the lease activation + reservation confirm + `CompleteAsync(response)` in one transaction. Replay of an `InFlight` key **reconciles** instead of re-issuing: it takes the VM gate, reads the observed state and the stored intent — VM `Running` and lease not yet activated for this intent → completes the activation with the **intent's** lifetime and returns that response; VM `Running` and already activated → returns the stored/derived response; VM `Off`/`Saved` (the start never landed, or an intervening stop happened) → re-issues the start with the intent's lifetime; VM `Unknown` → `409 vm-state-unknown`. It never answers `already-running` for its own intent and never starts a VM whose lease version moved past the intent (`409 operation-key-conflict`). |
+| Synchronous **external** mutations (`start`) | acceptance: the key row is inserted `InFlight` with `intentJson = { lifetime, expectedLeaseVersion, activationBase: acceptedAt }` and `powerGeneration = <the VM's current generation>` in the **same transaction** as the pending reservation (`AdmitAsync` with a key-and-reservation-only plan). Then the hypervisor call. Then completion through `MutateAsync(key, scope => …)` in **one** transaction: `BumpPowerGenerationAsync(vm, intent.generation)` (false ⇒ `VersionConflict`, nothing written), lease activation with the intent's lifetime **from `activationBase`** (never from a later "now", so a delayed retry cannot extend useful wall-clock lifetime), `ConfirmReservationsAsync`, `CompleteOperationKeyAsync(response)`. Replay of an `InFlight` key **reconciles** under the VM gate: generation moved past the intent → `409 operation-key-conflict { reason: "power-state-changed" }` (this covers an intervening stop, save or external transition; nothing is restarted); generation unchanged and VM `Running` → complete exactly as above; generation unchanged and VM `Off`/`Saved` (the start never landed) → re-issue the start and complete; VM `Unknown` → `409 vm-state-unknown`. It never answers `already-running` for its own intent. |
 | Stable targets | generated names/ids derive from `owner + key` (§1.7, §6.1), so a replay after a lost response resolves to the same child or media item. |
 | Composite CLI operations | the CLI derives sub-keys `<key>:install`, `<key>:aux`, `<key>:create` so an install upload, an auxiliary upload and the create are three keys that never alias (§9.5). |
-| Retention | rows are kept while the job is non-terminal and for 24 h after; swept by `media-cleanup`'s tick. A retry that wants a **new** attempt after a terminal failure uses a new key. |
+| Retention | `Completed` rows are kept while the job is non-terminal and for 24 h after `completed_at`; `InFlight` rows (job-less synchronous intents included) are **never** swept by age — they are resolved to `Completed` or to a recorded conflict by the replay path or by reconciliation (§5.3b), and only then age out. Swept by `media-cleanup`'s tick. A retry that wants a **new** attempt after a terminal failure uses a new key. |
+| Who implements the atomic completion | the integrator's `SqliteAdmissionStore` implements `IAdmissionScope` over the per-pair SQL helpers (`SqliteVmRepository.UpdateLeaseInTransaction`, `SqliteCapacityLedger.ConfirmInTransaction`, `SqliteOperationKeyStore.CompleteInTransaction`, `SqliteAuditLog.AppendInTransaction`); the in-memory store does the same under its lock. `MutateAsync` outcomes: `Accepted`, `Replay` (key already `Completed`: the stored response is returned, the mutation is not run), `KeyConflict` (fingerprint/target differ), `VersionConflict` (a compare-and-set inside the scope returned false: nothing written). |
 | Without a key | behaviour is today's: each request starts a job; the CLI always sends one. |
 
 ### 7.4 Maintenance / drain gate (atomic handles)
@@ -940,14 +974,13 @@ the updater run it while it holds the lock itself. Ownership sequence:
 | Step | Holder of `admin.lock` | Protection of the gap |
 |---|---|---|
 | `drain` | the service acquires it (bounded by the drain timeout; a CLI operation in flight blocks drain until it ends) | – |
-| `handoff` step 1–2 | the service, while it writes the durable `maintenance` marker and `handoff.json` | – |
-| `handoff` step 3 | the service **releases** it right after the marker is durable, before launching the task | the marker: any CLI that now takes the lock re-reads `maintenance` and refuses |
+| `handoff` steps 1–2 | the service, while it writes the durable `maintenance` marker and `handoff.json` | – |
+| `handoff` step 3 (§11.5) | the service **releases** it right after the marker is durable, before the gate flip (step 4) and the task launch (step 5) | the marker: any CLI that now takes the lock re-reads `maintenance` and refuses |
 | `stop` … `commit`/rollback | the updater acquires it (with `updater.lock`) **before** `stop`, so the service it stops never holds it | the updater is the only writer; `db check` needs no lock |
 | after `commit` | released by the updater; the reopened service takes it only for its own future drains | – |
 
 `Install-ConstructHost.ps1 -IsoBuildOnly` goes through the CLI and inherits the rule.
 PC-to-primary provisioning, guest SSH activity and Hyper-V VMs themselves are
-never gated.PC-to-primary provisioning, guest SSH activity and Hyper-V VMs themselves are
 never gated.
 
 ### 7.5 Job ownership, initiator and read rules
@@ -1250,11 +1283,11 @@ never by the legacy check.
 
 | Method, path | Auth (new) | Request | Response |
 |---|---|---|---|
-| `POST /vms/{target}/forwards` | `ForwardRequester`: for a **primary** target the existing rules and code path for every existing principal (owner user, admin, the VM's own token of either kind) are **unchanged**; for a **child** target: owner user, admin, parent's primary token, shared caller | existing `CreateForwardRequest`; for a child target additionally `connectPort?` (defaults to `vmPort`) and `via?` (a primary the requester owns; required for a **user** requester when they own more than one primary; implied for a primary token). `via`/`connectPort` on a primary target → `400 validation` | existing `ForwardResponse`; **every forward of a primary target keeps today's serialized shape** (no `destination`, no verified-address requirement — the existing `IHostAddressResolver` endpoint mechanism applies). Child-target forwards carry an additive `destination: { vmName, via?, connectAddress?, connectPort, requestedBy, relationship }`. The property is omitted when null, so `GET /vms/{primary}/forwards` stays flat for `construct expose`'s no-jq parser. |
-| `GET /vms/{target}/forwards` | same relationship set; `?via={primary}` (owner of that primary, or its token) lists every forward whose `destination.via` is that primary — this is what the extension polls | query `?includeChildren=true` (owner/admin/parent token on a primary: its children's forwards too) and `?via=` | existing shape (+ `destination` on non-self entries) |
+| `POST /vms/{target}/forwards` | `ForwardRequester`: for a **primary** target the existing rules and code path for every existing principal (owner user, admin, the VM's own token of either kind) are **unchanged**; for a **child** target: owner user, admin, parent's primary token, shared caller | existing `CreateForwardRequest`; for a child target additionally `connectPort?` (defaults to `vmPort`) and `via?` (a primary the requester owns; required for a **user** requester when they own more than one primary; implied for a primary token). `via`/`connectPort` on a primary target → `400 validation` | existing `ForwardResponse`; **every forward of a primary target keeps today's serialized shape** (no `destination`, no verified-address requirement — the existing `IHostAddressResolver` endpoint mechanism applies). Child-target forwards carry an additive `destination: { vmName, via?, connectAddress?, connectPort, requestedBy, relationship, verified }` (`ForwardDestination`; `verified` is always `false` on Hyper-V here). The property is omitted when null, so `GET /vms/{primary}/forwards` stays flat for `construct expose`'s no-jq parser. |
+| `GET /vms/{target}/forwards` | same relationship set; `?via={primary}` (owner of that primary, or its token) lists every forward whose `destination.via` is that primary — this is what the extension polls | query `?includeChildren=true` (owner/admin/parent token on a primary: its children's forwards too) and `?via=` | existing shape (+ `destination` on child-target entries) |
 | `DELETE /vms/{target}/forwards/{id}` | owner/admin/parent token/the requester (`destination.requestedBy`) | – | `204` |
 | `POST /vms/{target}/forwards/{id}/ack` | primary target: unchanged (owner/admin); child target: the **owner of `destination.via`** (the human whose extension holds that primary's SSH) or admin — never a VM token | existing | existing |
-| `GET /vms/{child}/addresses` | `ChildOperator` | – | `200 { addresses: [{ address, family, source, observedAt, verified }], isolation: "none", directAddressReporting: CapabilityLevel, addressVerification: CapabilityLevel }` (empty is a normal state) |
+| `GET /vms/{child}/addresses` | `ChildOperator` | – | `200 { addresses: [{ address, family, source, observedAt, verified }], isolation: "none", network: { clientForward, hostForward, addressVerification } }` (`VmNetworkCapabilities`; empty `addresses` is a normal state) |
 
 Rules: host target for a child ⇒ owner's `AllowHostForwards` **and**
 `network.hostForwardsEnabled` (for a shared caller: the **owner's** flag, not theirs) **and**
@@ -1344,7 +1377,7 @@ their `guest.*` stays unknown and `observed.lastBootAt` is the only boot evidenc
 | `POST /host/updates/check` | `Admin`, audited `host.update.check` | `{ releaseTag? }` | synchronous §11.3 steps 1–3: `200 { installed: { commit, packageVersion }, latest: { commit, packageVersion, publishedAt, releaseTag, compatible: bool, reasons: string[] }?, checkedAt }` (`compatible=false` with `reasons` is a `200`) | `502 release-source-unreachable`, `422 unsigned-manifest`, `409 signing-key-missing` |
 | `POST /host/updates/stage` | `Admin`, audited | `{ releaseTag?: string, operationKey? }` (default latest) | `202 { jobId, updateId }`; the job repeats §11.3 steps 1–7 and reports any refusal as the job error with the same code string (`unsigned-manifest`, `unsupported-downgrade`, `incompatible`, `release-source-unreachable`, `payload-hash-mismatch`, `extraction-refused`, `coverage-failed`) and state `stageFailed` | pre-flight HTTP only: `409 update-in-progress`, `409 signing-key-missing` |
 | `POST /host/updates/resolve` | `Admin`, audited `host.update.resolve` | `{ updateId, action: "commit"\|"abort" }` | `200 { state: "resolvedByAdmin", action }` (§11.7 fence) | `409 updater-running`, `409 update-not-interrupted` |
-| `POST /host/updates/apply` | `Admin`, audited | `{ updateId, operationKey? }` | `202 { jobId, updateId }` | `409 update-not-staged`, `409 update-in-progress`, `503 maintenance` |
+| `POST /host/updates/apply` | `Admin`, audited | `{ updateId, operationKey? }` | `202 { jobId, updateId }`. Two forms: **fresh apply** of a `staged` row (gated: `503 maintenance` while the gate is not `open`), and **resume** when `updateId` names an `interrupted` row — only that form carries `MaintenanceExempt` (§7.4) and re-launches the updater with `-Resume` after re-verifying the staged package and reading the fence | `409 update-not-staged`, `409 update-in-progress`, `409 update-not-interrupted` (resume form on a row that is not `interrupted`), `409 updater-running`, `503 maintenance` (fresh form only) |
 | `POST /host/updates/cancel` | `Admin`, audited | `{ updateId }` | `200 { state }` | `409 update-not-cancellable` (past hand-off) |
 
 ### 8.16 Jobs and audit (existing routes, additive)
@@ -1372,7 +1405,7 @@ their `guest.*` stays unknown and `observed.lastBootAt` is the only boot evidenc
 | `capacity-exhausted` | 409 | `resource`, `scope`, `requested`, `allowed`, `available`, `reason`, `epoch` |
 | `capacity-unavailable` | 409 | `problems` (inventory incomplete; enforce mode only) |
 | `unsupported-capability` | 409 | `capability`, `level`, `notes` |
-| `template-locked`, `guest-shutdown-unavailable`, `console-unavailable`, `address-unverifiable` | 409 | `device?`, `returnValue?`, `address?` |
+| `template-locked`, `guest-shutdown-unavailable`, `console-unavailable`, `address-unverifiable`, `address-conflict` | 409 | `device?`, `returnValue?`, `address?`, `reason?` |
 | `cascade-confirmation-required`, `cascade-scope-changed` | 409 | `children`, `cascadeToken`, `expiresAt` |
 | `cascade-token-expired` | 409 | |
 | `media-not-ready`, `media-in-use`, `media-limit`, `upload-incomplete`, `upload-not-open`, `upload-expired`, `operation-key-conflict` | 409 | per §6/§7 |
@@ -1659,7 +1692,7 @@ update; the service reports `source: "installer"` and an empty file list.
 |---|---|---|
 | `check`, `download`, `verify` | service | §11.3; state `staged` |
 | `drain` (apply only) | service | `IMaintenanceGate.DrainAsync(drainTimeoutMinutes)`: state `draining`, wait for `LiveHandles == 0`; timeout → `applyFailed { reason: "drain-timeout", blockingJobs }`, gate reopened |
-| `handoff` | service | **in this order:** (1) `host_updates` row → `handedOff` and `host_config.maintenance` written (durable); (2) `handoff.json` written (temp + rename); (3) gate → `maintenance`; (4) `IUpdaterLauncher.LaunchAsync`: `schtasks.exe /Create /TN Construct-HostUpdate /SC ONCE /ST <now+1min> /RU SYSTEM /RL HIGHEST /F /TR "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <staged>\updater\Update-ConstructHost.ps1 -Handoff <path>"` then `/Run` (argv through `IProcessRunner`; **decided here**: a scheduled task survives the service stop, a child process's fate under the SCM does not). If step 4 fails, the row becomes `applyFailed`, the gate reopens and the marker is cleared. |
+| `handoff` | service | **in this order:** (1) `host_updates` row → `handedOff` and `host_config.maintenance` written (durable); (2) `handoff.json` written (temp + rename, with the random `healthToken`); (3) **`admin.lock` released** (the durable marker now protects the gap, §7.4); (4) gate → `maintenance`; (5) `IUpdaterLauncher.LaunchAsync`: `schtasks.exe /Create /TN Construct-HostUpdate /SC ONCE /ST <now+1min> /RU SYSTEM /RL HIGHEST /F /TR "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <staged>\updater\Update-ConstructHost.ps1 -Handoff <path>"` then `/Run` (argv through `IProcessRunner`; **decided here**: a scheduled task survives the service stop, a child process's fate under the SCM does not). If step 5 fails, the row becomes `applyFailed`, the gate reopens, the marker is cleared and `admin.lock` is re-acquired only for the next drain. |
 | `stop` | updater | takes `updater.lock` and `admin.lock` (the service released the latter at hand-off, §7.4); writes `last-update.json` phase `stop`; `Stop-Service`, waits for `Stopped` (timeout 120 s; the service's `maintenance` state makes this quick) |
 | `backup` | updater | copies to `backup-<updateId>\`: the files of the **previous** `install.json.files` (or, on a host without one, the whole publish dir and the scripts dir minus data/media/iso/`.construct-tools`/`keys`), plus `constructd.db`, `-wal`, `-shm`; writes `files.json` (relative path + SHA-256 of every copied file) and, **last**, `backup-complete.json` (temp + rename) and `RecoveryRecord.BackupComplete = true`. A backup directory without the marker is incomplete: before `ReplaceStarted` it is discarded and rebuilt from the untouched installation; after `ReplaceStarted` it is a `recoveryFailed` condition (§11.7). On resume, a complete backup is verified against `files.json` hashes before it is trusted. |
 | `replace` | updater | writes `RecoveryRecord.ReplaceStarted = true` first (temp + rename). **List-based, never mirrored**: copies every `service/*` file of `verified.json.files` to `PublishDir` and every `scripts/*` file to `ScriptsDir`, preserving relative paths; deletes only files that are in the previous `install.json.files` and absent from the new list; never touches `appsettings.Production.json`, `*.db*`, `install.json`, or anything not on either list. Pre-flight refuses (`recoveryFailed` before any change) when a manifest path resolves outside its root, or when `PublishDir`, `DataDir`, `Media:RootDir`, `Iso:CacheDir`, `.construct-tools` or `keys` would be *written* by a listed path. Nested layouts (the documented `ScriptsDir=C:\Construct`, `PublishDir=C:\Construct\service\publish`) are therefore safe by construction: the payload's `scripts/service/host/*.ps1` lands in `C:\Construct\service\host\`, and `C:\Construct\service\publish\` is only ever written through the `service/*` list. ACLs are re-applied with `Install-ConstructHost.ps1 -AclOnly` (new switch, hardening only). |
@@ -1691,9 +1724,12 @@ whether the updater is alive (`IHostLock.IsHeldByAnotherProcess("updater.lock")`
 | present | old | `outcome ∈ {rolledBack, rolledBackWithDatabase}` | – | reopen; row mirrors the outcome |
 | present | any | `outcome = recoveryFailed` | – | stay in `maintenance`; row `recoveryFailed`; admin must resolve |
 | present | new | no outcome, phase ∈ {`replace`, `start`, `health`} | held | the update is running: `maintenance`; poll the record every 2 s |
-| present | new | no outcome | **free** | the updater died: row `interrupted`, **stay in `maintenance`** until an admin resolves (the only exempt routes) — never reopen on a timer |
+| present | new | no outcome, fence `commitOnly` for this update id | any | already resolved by an admin: **reopen**; row stays `resolvedByAdmin`; the updater, if it ever resumes, may only run its `commit` phase |
+| present | new | no outcome, fence `rollbackAuthorized` | any | stay in `maintenance`: a rollback is pending or running |
+| present | new | no outcome, no fence | **free** | the updater died: row `interrupted`, **stay in `maintenance`** until an admin resolves (the only exempt routes) — never reopen on a timer |
 | present | old | no outcome, `ReplaceStarted = false` (phase `stop`/`backup`) | held | the updater is still working (a slow backup): `maintenance`; poll |
-| present | old | no outcome, `ReplaceStarted = false` | **free** | the updater died before touching the installation: the service takes `updater.lock`, writes `fence.json { action: "abort", actor: "service:startup" }`, row `interrupted`, marker cleared, **reopen**, releases the lock. A later `-Resume` sees the fence and refuses to continue (`superseded`, exit 4); the staged package can be applied again from scratch by a new `apply`. |
+| present | old | no outcome, `ReplaceStarted = false`, fence `closed` or none | **free** | the updater died before touching the installation: the service takes `updater.lock`, writes `fence.json { disposition: closed }` for this update id, row `interrupted`, marker cleared, **reopen**, releases the lock. `closed` carries **no rollback authority**: a later `-Resume` of any form refuses (`superseded`, exit 4) and the pre-replacement backup is discarded as stale; the staged package can only be applied again from scratch by a fresh `apply`. |
+| present | old | no outcome, fence `rollbackAuthorized` | any | an admin-authorized rollback is pending: stay in `maintenance` until the rollback outcome is recorded |
 | present | old | no outcome, `ReplaceStarted = true` | any | a mixed installation is running the old binary (partial replace or partial rollback): stay in `maintenance`, row `interrupted`; admin resolution required |
 | present | neither commit matches | – | – | stay in `maintenance`, row `interrupted`, `recoveryRecord` exposed; admin resolution required |
 
@@ -1708,20 +1744,28 @@ or an admin has fenced the updater, a rollback that restores the database loses 
 user did; the `lostJobs` list in the record is therefore empty by construction and is kept
 only as an assertion.
 
-**Updater lock and fence (decided here).** The updater holds the cross-process lock
-`updates\updater.lock` (`IHostLock`, exclusive file handle) from its first phase to its
-last, and re-checks `updates\fence.json` under that lock before **every** phase, in
-particular before `stop`, before `replace` and before any rollback. `POST
-/host/updates/resolve { updateId, action: "commit"|"abort" }` (admin, `MaintenanceExempt`)
-is the way to reopen writes on an `interrupted` update in the new binary: the service
-tries to take `updater.lock` (`409 updater-running` when a live updater holds it — a
-merely slow updater therefore cannot be raced); with the lock held it writes `fence.json`
-(`UpdateFence`), records the row as `resolvedByAdmin` with the action, reopens the gate
-(`commit`) or keeps `maintenance` and instructs the admin to run the updater with `-Resume
--Rollback` (`abort`), and releases the lock. A `-Resume` (also reachable through the
-exempt `apply` route) takes `updater.lock` first and refuses when a fence exists whose
-action it contradicts (`superseded`, exit 4), so a rollback can never discard mutations
-accepted after a `commit` resolution or after a startup abort fence.
+**Updater lock and fence dispositions (decided here).** The updater holds the
+cross-process lock `updates\updater.lock` (`IHostLock`, exclusive file handle) from its
+first phase to its last, and re-reads `updates\fence.json` under that lock before
+**every** phase, in particular before `stop`, before `replace` and before any rollback. A
+fence is scoped to one `updateId` (a fence for another id is ignored) and has exactly one
+of three dispositions, which are the **only** source of recovery authority (no actor
+string is ever interpreted):
+
+| Disposition | Written by | Updater may | Updater must refuse | Service gate |
+|---|---|---|---|---|
+| `closed` | the old binary at startup (dead updater, `ReplaceStarted = false`) | nothing: exit `superseded` (4) | stop, replace, rollback, any `-Resume` | open |
+| `commitOnly` | `resolve { action: "commit" }` | finish the `commit` phase only (install.json, task cleanup, prune) | replace, rollback, `-Resume -Rollback` | open (reopened by the resolution and kept open across restarts, table above) |
+| `rollbackAuthorized` | `resolve { action: "abort" }` | rollback (`-Resume -Rollback`) | replace, commit | `maintenance` until the rollback outcome is recorded |
+
+`POST /host/updates/resolve { updateId, action: "commit"|"abort" }` (admin,
+`MaintenanceExempt`) takes `updater.lock` (`409 updater-running` when a live updater holds
+it — a merely slow updater therefore cannot be raced), writes the fence (temp + rename)
+with the corresponding disposition, records the row as `resolvedByAdmin` with the action,
+reopens the gate for `commit` or keeps `maintenance` for `abort`, and releases the lock.
+Every `-Resume` (also reachable through the exempt `apply` route) takes `updater.lock`
+first and obeys the table, so a rollback can never discard mutations accepted after a
+`commit` resolution or after a startup `closed` fence.
 
 | Situation | Action |
 |---|---|
@@ -1844,7 +1888,7 @@ destination (they prevent accidents, not attacks):
 | Rule | Detail |
 |---|---|
 | Adapter identity | the address must be reported for **this VM's** adapters, looked up by VM id |
-| Switch binding | the address must fall inside a subnet of the vEthernet interface of the **same switch** the child's adapter and the `via` primary's adapter attach to (`GuestAdapter.SwitchName`); overlapping subnets on other switches are never matched |
+| Switch binding | the address must fall inside a `GuestSubnet` whose `SwitchName` equals the child's adapter switch **and** the `via` primary's adapter switch (`GuestAdapter.SwitchName`); a `GuestSubnet` of another switch never matches even when its CIDR overlaps |
 | Family | IPv4 or IPv6 |
 | Forbidden | loopback, unspecified, link-local, multicast, broadcast, any host address (`GetHostAddressesAsync`), any address reported or previously used for a **different** managed VM; when two VMs report the same address neither may use it (`409 address-conflict` for a new request; existing tunnels flip to `status: "error"`) |
 | Freshness | re-validated on every reconciliation pass; an address that disappears or conflicts flips the forward to `status: "error"`, `message: "guest address changed"`; the extension re-acks when a usable address returns |
@@ -1959,6 +2003,8 @@ namespace Constructd.Core.Domain
     public sealed record GuestAdapter(string VmId, string AdapterId, string MacAddress, bool MacSpoofingEnabled, string? SwitchName);
     /// <summary>One host neighbor-table row on a guest-facing interface.</summary>
     public sealed record HostNeighbor(string Address, string MacAddress, string InterfaceAlias, string State);
+    /// <summary>A guest subnet bound to the switch and host interface it belongs to, so overlapping subnets on different switches never match.</summary>
+    public sealed record GuestSubnet(string Cidr, string SwitchName, string InterfaceAlias);
 
     public sealed record HostObservation(
         DateTimeOffset? CreatedAt,
@@ -2096,13 +2142,15 @@ namespace Constructd.Core.Domain
     /// so the flat legacy wire shape is unchanged.
     /// </summary>
     /// <param name="Via">The primary whose SSH endpoint carries a client tunnel; null for host forwards of a primary.</param>
+    /// <param name="Verified">Always false on Hyper-V in this delivery (§12.5); true only when an IAddressAuthority vouched for the address.</param>
     public sealed record ForwardDestination(
         string VmName,
         string? Via,
         string? ConnectAddress,
         int ConnectPort,
         string RequestedBy,
-        ForwardRelationship Relationship);
+        ForwardRelationship Relationship,
+        bool Verified);
 
     // ---- Constructd.Core/Domain/HostUpdateRecord.cs -------------------------------------
     public sealed record HostUpdatePhase(string Name, DateTimeOffset At, string? Outcome, string? Error);
@@ -2136,10 +2184,14 @@ namespace Constructd.Core.Domain
 
     public sealed record NetworkCapabilities(
         CapabilityLevel ClientForward,
-        CapabilityLevel HostForward,
+        CapabilityLevel HostForwardPrimary,
+        CapabilityLevel HostForwardChild,
         CapabilityLevel DirectAddressReporting,
         CapabilityLevel AddressVerification,
         CapabilityLevel Isolation);
+
+    /// <summary>Per-VM network view (child: HostForward = HostForwardChild lowered by policy; primary: HostForwardPrimary).</summary>
+    public sealed record VmNetworkCapabilities(CapabilityLevel ClientForward, CapabilityLevel HostForward, CapabilityLevel AddressVerification);
 
     /// <summary>Superset of the existing DriverCapabilities; the legacy values are embedded unchanged.</summary>
     public sealed record BackendCapabilities(
@@ -2174,7 +2226,8 @@ namespace Constructd.Core.Domain
         int? NativeHeight,
         bool SecureBootTemplateLocked,
         int Generation,
-        CapabilityLevel GracefulShutdown);
+        CapabilityLevel GracefulShutdown,
+        VmNetworkCapabilities Network);
 }
 
 // ---- Constructd.Core/Abstractions ------------------------------------------------------------
@@ -2278,8 +2331,9 @@ namespace Constructd.Core.Abstractions
 
     // ---- IOperationKeyStore.cs (owner: child-vm jobs pair) ----
     public enum OperationKeyState { InFlight, Completed }
-    /// <param name="IntentJson">For external (hypervisor) mutations: the original intent (e.g. the lifetime to activate) so a replay after a crash reconciles that intent instead of re-deciding.</param>
-    public sealed record OperationKeyRecord(string Owner, string Kind, string Key, string Fingerprint, string Target, string? JobId, OperationKeyState State, string? IntentJson, string? ResponseJson, DateTimeOffset Created);
+    /// <param name="IntentJson">For external (hypervisor) mutations: the original intent (lifetime, expected lease version, the activation base) so a replay after a crash reconciles that intent instead of re-deciding.</param>
+    /// <param name="PowerGeneration">The VM's power generation the intent was accepted at (§5.3b); a replay whose VM moved past it is a conflict.</param>
+    public sealed record OperationKeyRecord(string Owner, string Kind, string Key, string Fingerprint, string Target, string? JobId, OperationKeyState State, string? IntentJson, long? PowerGeneration, string? ResponseJson, DateTimeOffset Created);
     public enum OperationKeyOutcome { Inserted, Replay, Conflict }
     public interface IOperationKeyStore
     {
@@ -2312,7 +2366,7 @@ namespace Constructd.Core.Abstractions
         string? FenceJobId,
         bool CloseChildCreation);
 
-    public enum AdmissionOutcome { Accepted, Replay, KeyConflict, NameTaken, QuotaExceeded, ParentClosed, ParentMissing, MediaNotReady, CapacityRefused, CascadeMismatch }
+    public enum AdmissionOutcome { Accepted, Replay, KeyConflict, VersionConflict, NameTaken, QuotaExceeded, ParentClosed, ParentMissing, MediaNotReady, CapacityRefused, CascadeMismatch }
 
     public sealed record AdmissionResult(
         AdmissionOutcome Outcome,
@@ -2326,10 +2380,13 @@ namespace Constructd.Core.Abstractions
         /// <summary>The caller already holds the maintenance-gate handle (§7.4); the plan commits everything or nothing.</summary>
         Task<AdmissionResult> AdmitAsync(AdmissionPlan plan, CancellationToken ct);
         /// <summary>
-        /// Database-only synchronous mutations (sharing, renew, overrides, allowances): the mutation and the
-        /// Completed operation-key row with its response are written in ONE transaction.
+        /// ONE transaction over the scope. Used for database-only synchronous mutations (sharing, renew,
+        /// overrides, allowances: the mutation plus the Completed key with its response) AND for the
+        /// database half of an external mutation after the hypervisor call (lease activation + reservation
+        /// confirm + key completion + power generation, §7.3). The scope itself performs no I/O outside SQLite.
+        /// A null <paramref name="key"/> means "no operation key" (today's path).
         /// </summary>
-        Task<AdmissionResult> MutateAsync(OperationKeyRecord key, Func<IAdmissionScope, Task> mutation, CancellationToken ct);
+        Task<AdmissionResult> MutateAsync(OperationKeyRecord? key, Func<IAdmissionScope, Task<bool>> mutation, CancellationToken ct);
         /// <summary>
         /// When the persisted job cannot be started (in-process failure after commit): the job row is marked
         /// failed with <paramref name="error"/>; every fence, reservation and row the plan created is then
@@ -2345,6 +2402,11 @@ namespace Constructd.Core.Abstractions
         Task<bool> UpdateSharingAsync(string vmName, SharingScope scope);
         Task SetOverrideAsync(VmOverride value);
         Task<bool> SetAllowanceAsync(string userName, UserAllowance allowance);
+        /// <summary>Compare-and-bump of the VM's power generation (§5.3b); false when it moved.</summary>
+        Task<bool> BumpPowerGenerationAsync(string vmName, long expected);
+        Task ConfirmReservationsAsync(IReadOnlyList<string> ids, VmState observed);
+        Task ReleaseReservationsAsync(IReadOnlyList<string> ids, VmState observed, string reason);
+        Task<bool> CompleteOperationKeyAsync(string owner, string kind, string key, string responseJson);
         Task AppendAuditAsync(AuditEntry entry);
     }
 
@@ -2456,7 +2518,7 @@ namespace Constructd.Core.Abstractions
         Task TrimAsync(string id, long amount, CancellationToken ct);
         /// <summary>Keeps a pending reservation alive while its operation runs (extends PendingUntil).</summary>
         Task ExtendAsync(IReadOnlyList<string> ids, TimeSpan by, CancellationToken ct);
-        /// <summary>§4.4 rules; takes each VM's gate with TryAcquire and skips busy VMs. Orphans are resolved per resource (§4.4), never by time alone.</summary>
+        /// <summary>§4.4 sequence: snapshot without gates; per VM TryAcquire the VM gate (no wait, no upgrade) and only then the ledger gate; host-level rules under the ledger gate alone. Orphans are resolved per resource, never by time alone.</summary>
         Task<IReadOnlyList<OrphanOutcome>> ReconcileAsync(CancellationToken ct);
         Task<HostCapacitySnapshot> SnapshotAsync(bool refresh, CancellationToken ct);
     }
@@ -2589,8 +2651,17 @@ namespace Constructd.Core.Abstractions
 
     /// <param name="HealthToken">Random secret written only into the SYSTEM-only handoff file; the new binary accepts it on loopback /health for the full body.</param>
     public sealed record UpdateHandoff(string UpdateId, string Commit, string StagedPath, string PublishDir, string ScriptsDir, string DataDir, string ServiceName, string PreviousCommit, string HealthUrl, string CertificateThumbprint, string AdminCliPath, string HealthToken, DateTimeOffset WrittenAt);
-    /// <summary>Written by the service when an admin resolves a stuck update; the updater refuses to roll back once it exists.</summary>
-    public sealed record UpdateFence(string UpdateId, string Action, string Actor, DateTimeOffset At);
+    /// <summary>What the fence permits, scoped to ONE update id (§11.7). Checked by the updater under updater.lock before stop, replace and rollback.</summary>
+    public enum FenceDisposition
+    {
+        /// <summary>The update is over before replacement; no rollback authority remains; only a fresh apply may follow.</summary>
+        Closed,
+        /// <summary>The new binary is kept; the updater may only finish the commit phase; rollback is refused.</summary>
+        CommitOnly,
+        /// <summary>An admin authorized rollback; the service stays in maintenance until the rollback outcome is recorded.</summary>
+        RollbackAuthorized,
+    }
+    public sealed record UpdateFence(string UpdateId, FenceDisposition Disposition, string Actor, DateTimeOffset At);
     public interface IUpdaterLauncher
     {
         /// <summary>Writes the handoff durably, THEN creates and starts the one-shot SYSTEM task (§11.5).</summary>
@@ -2632,8 +2703,8 @@ namespace Constructd.Core.Abstractions
         Task<IReadOnlyList<GuestAdapter>> GetAdaptersAsync(string vmName, CancellationToken ct);
         /// <summary>Host neighbor table rows on guest-facing (vEthernet) interfaces: address → MAC as the host observed it.</summary>
         Task<IReadOnlyList<HostNeighbor>> GetNeighborsAsync(CancellationToken ct);
-        /// <summary>The host-side subnets a guest address must fall into; empty ⇒ nothing verifiable.</summary>
-        Task<IReadOnlyList<string>> GetGuestSubnetsAsync(CancellationToken ct);
+        /// <summary>The host-side guest subnets, each bound to its switch and interface; empty ⇒ no address usable.</summary>
+        Task<IReadOnlyList<GuestSubnet>> GetGuestSubnetsAsync(CancellationToken ct);
         Task<IReadOnlyList<System.Net.IPAddress>> GetHostAddressesAsync(CancellationToken ct);
     }
 
@@ -2786,11 +2857,11 @@ suite); no secret in any log, exception, argument, job result or test output.
 | **S3 capacity** | §4, `/host/capacity` | concurrency test: two creates/starts cannot both take the last RAM/storage; pending rows owned by a live operation survive reconciliation in every VM state; orphaned pending rows are swept only when the operation is dead **and** the deadline passed; held released only on observed Off/Saved/Absent with no live operation; restart keeps its hold through the intermediate Off; `Unknown` keeps everything; external start creates an owner-charged hold; unmanaged VMs (including dynamic-memory ones charged at maximum) reduce host capacity without an owner; `Complete=false` fails closed in `enforce` and records in `observe`; growth-only storage math with a fixture volume across a trim (no double count, one epoch); `A_ram = min(model, physical)` pinned with the four worked examples of §4.1 (in particular 20 GiB non-VM host consumption plus an 8 GiB pending reservation ⇒ 0 available, and free 8 GiB with 4 GiB pending ⇒ 0); orphan resolution per resource (dead operation + VM Running ⇒ promoted, dead + Off + deadline ⇒ released, dead + Off before deadline ⇒ kept, storage artifact present ⇒ promoted, absent ⇒ released, unreadable ⇒ kept); enqueue-crash leftovers removed only with every liability confirmed absent (a leftover disk keeps the row and promotes the reservation); the restart interleaving of §4.1 (held reservation of an Off VM is unreflected); user aggregate across two primaries; shared start charged to owner; `observe` mode never refuses but audits; `POST /vms` and `/power start` hooks reserve/confirm/release; refusal bodies carry requested/allowed/available/epoch; recording-runner test pins the inventory script |
 | **S4 child driver + jobs** | §8.6–8.8 jobs, `IChildVmDriver`, presets, boot-order filtering, operation keys, phases | recording-runner tests pin: create script sets template **before** TPM, fixed RAM, checkpoints off, DVD slots, boot order by device object, VM id read back; `UpdateHardwareAsync(resendTemplate:false)` never resends the template; graceful shutdown script uses `InitiateShutdown` and polls, never `-Force`/`-TurnOff`/`Save`; `RemoveAsync` may `-TurnOff` (pinned separately); job phases stream; operation-key acceptance is one transaction with the gate handle taken before it (a drain started between commit and runner start still waits for the job), a runner failure after a cascade acceptance leaves the tombstone and is retryable, replay returns the same job, a different fingerprint conflicts, generated names are stable; synchronous replay: renew crash-after-commit replays without a second renewal, sharing replay never overwrites a newer decision, start replay reconciles an `InFlight` intent (Running ⇒ activate with the intent's lifetime; Off ⇒ re-issue; never `already-running` for its own intent); cascade preview stored, token expiry, scope change on add/remove/re-create/sharing, no-children branch re-counts inside the fence transaction, children removed before the parent, parent tombstone on partial failure, retry after a terminal failed delete starts a new job; `driver-contract.test.ps1` parses the new driver file under pwsh; local loader without `-Include` is byte-identical (test diff) |
 | **S5 console** | §8.12 | RGB565 → PNG conversion pinned against the feasibility layout (length prefix) with synthetic fixtures; dims above native refused before any process; byte cap; text travels through stdin (recording runner asserts no text in argv and no text in logs — sentinel); session TTL/renew/expiry/per-VM cap/rate buckets; per-VM device lookup by VM id, never a global first device (script pinned); key press/release/type semantics; mouse unavailable path returns `applied:false` with `returnValue`; shared caller allowed, legacy token refused, revocation removes sessions |
-| **S6 delegation + sharing + lifecycle** | §2, §5, §8.3–8.9, §8.14 | permission matrix as a table-driven test (every cell of §2.2, including `allowedActions`); policy re-evaluated (allowance change refuses the next create without re-auth); allowance resolution pinned with the example table of §1.1 (explicit user value beats the default, caps bound users, overrides only tighten); every row of the §5.3a start table (paused resume without admission and with lease re-activation); lease activation on confirmed Running, start requires lifetime, `already-running`, restart keeps expiry and refuses when due, service restart keeps expiry (MutableClock + fresh app over the same SQLite file), overdue path on `Unavailable`/`Timeout`/`paused` never saves/kills/deletes (fake driver call recording), external start → overdue with `expiresAt=now` and selected by the scheduler, expiry job superseded by a renewal that raced it (version check); sharing table and revocation tear-down; cascade dialog content; guest report never overwrites success facts with attempts; idle engine ignores children; initiator read/cancel rules |
-| **S7 network** | §12 | primary-target forwards for owner/admin/the VM's own token take the existing path and serialize byte-identically (snapshot of request and response shapes for all three principals; `via`/`connectPort` on a primary → 400); relationship resolution order for children pinned; child cannot self-forward (no credential path exists); host target refused when either switch is off, also via parent and via shared; `via` must be owned by the requester; ack only by `via`'s owner; two shared consumers get separate rows and acks; address rules of §12.5 with fixtures: host forward to a child ⇒ `address-unverifiable` always; client tunnel with a KVP address ⇒ recorded with `verified: false`; a child reporting another managed VM's address (same MAC or not) ⇒ conflict, neither usable; wrong switch / overlapping subnet on another switch ⇒ not matched; host address / link-local ⇒ refused; primary host forwards unchanged; re-validation on reconciliation flips a stale forward to error; destination on child-target forwards, omitted for every primary-target forward (serialized-bytes test with the expose parser); `?via=` listing; addresses route; `NoIsolationNetworkPolicy` reports `none`, never `enforced`; netsh argv pinned with the verified connect address; extension forwarder tunnels through `via` (unit test with fake spawn) |
+| **S6 delegation + sharing + lifecycle** | §2, §5, §8.3–8.9, §8.14 | permission matrix as a table-driven test (every cell of §2.2, including `allowedActions`); policy re-evaluated (allowance change refuses the next create without re-auth); allowance resolution pinned with the example table of §1.1 (explicit user value beats the default, caps bound users, overrides only tighten); every row of the §5.3a start table (paused resume without admission and with lease re-activation; Off with an active lease after an explicit shutdown restarts only with a new lifetime); power generation (§5.3b): start intent accepted → crash → shutdown by another caller → replay answers `power-state-changed` and never restarts; start intent accepted → crash before activation → reconciliation completes the intent from `activationBase` instead of marking external-start; delayed replay never extends the deadline; lease activation on confirmed Running, start requires lifetime, `already-running`, restart keeps expiry and refuses when due, service restart keeps expiry (MutableClock + fresh app over the same SQLite file), overdue path on `Unavailable`/`Timeout`/`paused` never saves/kills/deletes (fake driver call recording), external start → overdue with `expiresAt=now` and selected by the scheduler, expiry job superseded by a renewal that raced it (version check); sharing table and revocation tear-down; cascade dialog content; guest report never overwrites success facts with attempts; idle engine ignores children; initiator read/cancel rules |
+| **S7 network** | §12 | primary-target forwards for owner/admin/the VM's own token take the existing path and serialize byte-identically (snapshot of request and response shapes for all three principals; `via`/`connectPort` on a primary → 400); relationship resolution order for children pinned; child cannot self-forward (no credential path exists); host target refused when either switch is off, also via parent and via shared; `via` must be owned by the requester; ack only by `via`'s owner; two shared consumers get separate rows and acks; address rules of §12.5 with fixtures: host forward to a child ⇒ `address-unverifiable` always; `destination.verified` serialized `false`; per-VM `network.hostForward` is `unsupported` for a child and `supported` for a primary; a `GuestSubnet` with an overlapping CIDR on another switch never matches; client tunnel with a KVP address ⇒ recorded with `verified: false`; a child reporting another managed VM's address (same MAC or not) ⇒ conflict, neither usable; wrong switch / overlapping subnet on another switch ⇒ not matched; host address / link-local ⇒ refused; primary host forwards unchanged; re-validation on reconciliation flips a stale forward to error; destination on child-target forwards, omitted for every primary-target forward (serialized-bytes test with the expose parser); `?via=` listing; addresses route; `NoIsolationNetworkPolicy` reports `none`, never `enforced`; netsh argv pinned with the verified connect address; extension forwarder tunnels through `via` (unit test with fake spawn) |
 | **S8 extension** | §10 | node tests: state machine for every row of §10.3, admin module absent for local and for `role=user`, host switching re-resolves identity, old-service detection by 404, maintenance banner, cascade dialog content lists children and shared flags and expiry, child rows offer exactly Shut down and Delete, Shut down sends `lifecycle shutdown` (never `power save`), Media tab shows the ISO catalog projection, no guest update/provision/reinstall action in the module (snapshot test of the command list); `ui-smoke.js` green |
 | **S9 guest CLI** | §9 | `test/construct-vm.test.sh` with a fake `curl`: identity gate (legacy → exit 9), every command's request shape (including attach/detach/hardware), create waits for media readiness and derives sub-keys, JSON pass-through, NDJSON progress, exit-code table, `--yes` gating on non-TTY, operation-id reuse on retry and conflict handling, token never in argv, console text only from stdin/file (fake curl asserts `-H @file` and no text in argv); `remote-e2e.test.sh` extended with a child create/list/shutdown/delete round trip against the fake service |
-| **S10 host release + updater** | §11 | workflow file validated (actionlint or schema check in tests) including the `main`-ref guard; `New-ConstructHostPackage.ps1` produces a payload whose SHA256SUMS covers every file and a detached manifest whose hashes match (pwsh test); `Update-ConstructHost.ps1` tested under pwsh with a fake service directory, the **documented nested layout** (`ScriptsDir=C:\Construct`, `PublishDir=C:\Construct\service\publish`) and a stub `Start-Service`/`Stop-Service`/`schtasks` layer: phases, list-based replace never touching publish/data/media/tools/keys, deletion of removed files only, backup reuse on resume, health loop, rollback with and without DB restore per manifest, `recoveryFailed` leaves the backup intact, record written at every phase; service tests: manifest signature/hash tampering refused, extraction rules, downgrade/compat rules exactly as §11.3 step 3, `signing-key-missing`, drain gate refuses gated kinds and chunk writes with `503 maintenance`, admits nothing behind the zero-handle check (interleaving test), lets ungated ones through, maintenance freezes every mutation, hand-off order (row and file before task), startup rules for old/new binary, a dead updater leaves the new binary in `maintenance` until `resolve`, `resolve` refused while a paused updater holds `updater.lock` (race test with a held lock) and a fenced `-Resume` refuses to roll back, backup-complete marker (interruption during backup before replace ⇒ rebuilt; after `ReplaceStarted` with an incomplete backup ⇒ `recoveryFailed`), `admin.lock` held by a running admin CLI operation blocks drain until released or the drain times out (race test), the full service→updater lock sequence of §7.4 with two fake processes (service releases at hand-off, updater acquires before stop, `db check` runs read-only without the lock while the updater holds it), the startup/fence table of §11.7 row by row (old binary restarted during backup with a live updater stays in maintenance; with a dead updater fences and reopens; new binary with a dead updater stays in maintenance; `resolve` passes the real maintenance filter while every other mutation gets 503), the loopback `UpdateHandoff` handshake returns the full health body without a bootstrap token, satisfies no other policy and is refused off-loopback or outside the window, config `requiredKeys` refusal, `TryStartAsync` serialization, `admin db check` opens the database |
+| **S10 host release + updater** | §11 | workflow file validated (actionlint or schema check in tests) including the `main`-ref guard; `New-ConstructHostPackage.ps1` produces a payload whose SHA256SUMS covers every file and a detached manifest whose hashes match (pwsh test); `Update-ConstructHost.ps1` tested under pwsh with a fake service directory, the **documented nested layout** (`ScriptsDir=C:\Construct`, `PublishDir=C:\Construct\service\publish`) and a stub `Start-Service`/`Stop-Service`/`schtasks` layer: phases, list-based replace never touching publish/data/media/tools/keys, deletion of removed files only, backup reuse on resume, health loop, rollback with and without DB restore per manifest, `recoveryFailed` leaves the backup intact, record written at every phase; service tests: manifest signature/hash tampering refused, extraction rules, downgrade/compat rules exactly as §11.3 step 3, `signing-key-missing`, drain gate refuses gated kinds and chunk writes with `503 maintenance`, admits nothing behind the zero-handle check (interleaving test), lets ungated ones through, maintenance freezes every mutation, hand-off order (row and file before task), startup rules for old/new binary, a dead updater leaves the new binary in `maintenance` until `resolve`, `resolve` refused while a paused updater holds `updater.lock` (race test with a held lock) and a fenced `-Resume` refuses to roll back, backup-complete marker (interruption during backup before replace ⇒ rebuilt; after `ReplaceStarted` with an incomplete backup ⇒ `recoveryFailed`), `admin.lock` held by a running admin CLI operation blocks drain until released or the drain times out (race test), the full service→updater lock sequence of §7.4 with two fake processes (service releases at hand-off, updater acquires before stop, `db check` runs read-only without the lock while the updater holds it), the startup/fence table of §11.7 row by row (old binary restarted during backup with a live updater stays in maintenance; with a dead updater writes a `closed` fence and reopens, after which `-Resume -Rollback` is refused as `superseded` and the stale backup is discarded; a `commitOnly` fence survives a service restart with the gate open; new binary with a dead updater stays in maintenance; `resolve` and the resume form of `apply` pass the real maintenance filter while a fresh `apply` and every other mutation get 503), the loopback `UpdateHandoff` handshake returns the full health body without a bootstrap token, satisfies no other policy and is refused off-loopback or outside the window, config `requiredKeys` refusal, `TryStartAsync` serialization, `admin db check` opens the database |
 | **S11 integration** | all | `remote-e2e.test.sh` full round trip; route inventory and audit coverage tests cover every route of §8; `dotnet build` 0/0; all pwsh/bash/node suites green; docs updated (`service/README.md`, `docs/remote-host.md`, `docs/drivers.md`, `docs/expose.md`, `extension/ARCHITECTURE.md`, new `docs/child-vms.md`, `docs/host-updates.md`); the field-test checklist below handed to the owner |
 
 ### 14.2 Documented limitations (this delivery)
@@ -2842,7 +2913,7 @@ must keep running throughout; `capacity.mode` switched to `enforce` for items 7�
 | 7 | Concurrency: two `start` requests for two saved children when only one fits in RAM | exactly one succeeds; the other gets `capacity-exhausted` with correct numbers and epoch |
 | 8 | Start a child outside the API (`Start-VM`) | reconciliation charges it to the owner and marks the lease `overdue` with `expiresAt=now`; the expiry job shuts it down gracefully |
 | 9 | Let a `15m` lease expire on a child with integration services; and on one without; renew a third child 10 s before expiry | first: `expired`, VM Off, RAM released; second: `overdue`, `guest-shutdown-unavailable`, VM still running, RAM still charged, no save/force/delete; third: the queued expiry job ends `superseded` and the VM keeps running |
-| 10 | Share a child host-wide; from a second user's primary: inspect, start, screenshot, request a client forward (via that user's own primary) and a host forward; attempt delete | operational actions succeed and are charged/audited to the owner with the second user as initiator; the client link opens on the **second** user's PC; delete → 403 |
+| 10 | Share a child host-wide; from a second user's primary: inspect, start, screenshot, request a client forward (via that user's own primary) and a host forward; attempt delete | inspect/start/screenshot/client forward succeed and are charged/audited to the owner with the second user as initiator; the client link opens on the **second** user's PC with the unverified warning; the host forward answers `409 address-unverifiable`; delete → 403 |
 | 11 | Disable host forwards; request host forward for a child via parent and via shared caller (both refused as unverifiable even with forwards enabled); revoke sharing | refused; client forwards still work through the requester's primary with the unverified warning; after revocation the shared consumer's tunnel is torn down on the next poll |
 | 12 | Delete the parent primary with one private and one shared child; interrupt the cascade once (stop the service mid-job) | preview lists both with the shared flag and expiry; typed name required; after the interruption the parent is a tombstone with the remaining child, a repeated `DELETE` finishes; all three gone; media references released; dedicated media removed; no orphan files under the media root; unrelated `haus-vm` untouched |
 | 13 | Stage an update from a real `host-*` release; apply while a media acquire is running; use the documented nested layout | `draining` waits for the acquire; new child creates and chunk writes get `503 maintenance`; existing VMs keep running; the new binary answers `maintenance` until the updater commits; clients reconnect; `install.json` and `/host/updates/status` report the pinned commit; `service\publish` and `service\host` both intact |
