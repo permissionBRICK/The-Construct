@@ -40,7 +40,8 @@ public sealed class ScheduledTaskUpdaterLauncher(IProcessRunner runner, IHostLoc
         XNamespace ns = "http://schemas.microsoft.com/windows/2004/02/mit/task";
         var task = new XDocument(new XElement(ns + "Task", new XAttribute("version", "1.2"),
             new XElement(ns + "Principals", new XElement(ns + "Principal", new XAttribute("id", "System"),
-                new XElement(ns + "UserId", "S-1-5-18"), new XElement(ns + "LogonType", "ServiceAccount"),
+                // SYSTEM is selected by its SID. ServiceAccount is a COM enum, not a legal XML LogonType.
+                new XElement(ns + "UserId", "S-1-5-18"),
                 new XElement(ns + "RunLevel", "HighestAvailable"))),
             new XElement(ns + "Settings", new XElement(ns + "MultipleInstancesPolicy", "IgnoreNew"),
                 new XElement(ns + "DisallowStartIfOnBatteries", false), new XElement(ns + "StopIfGoingOnBatteries", false)),
