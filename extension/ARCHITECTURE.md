@@ -1514,6 +1514,10 @@ Like the remote driver, **the module is a management UI, never an authority**: e
 allowed-action list it renders is presentation (§2.2), every mutation goes to the service,
 and the service decides again.
 
+The module and minimal user view are implemented and covered by plain-node tests. Their
+service interactions have been exercised against Linux fakes, but neither has been
+field-validated on a Hyper-V host.
+
 ### The three files and the one hook
 
 | File | Role |
@@ -1560,7 +1564,7 @@ VMs (`/vms?kind=all`: every user's VMs, children indented under their parent, ki
 sharing / power / resources / lease-or-OVERDUE / current operation / guest facts printed
 as **unknown** when unreported; Shut down, Delete, Overrides, Rotate token — filtered by
 `allowedActions`), Users (`/users`, the allowance editor with `null = inherit`, tokens
-issue/revoke; register/remove), Media (`/host/iso-catalog` read-only + `/media?owner=all`
+issue/revoke; register/remove), Media (`/host/iso-catalog` intended read-only catalog + `/media?owner=all`
 with delete and cleanup), Operations (`/jobs` with cancel and the two retry buttons —
 a failed `child-delete`/`parent-cascade-delete` is retried by deleting again (§8.8), a
 failed `media-cleanup` by running it again — and `/audit`), Configuration (`/host/config`
@@ -1568,6 +1572,12 @@ as one JSON text per §1.5 section, replaced whole, `expectedUpdatedAt` CAS stam
 service's `400 validation {field, reason}` and `409 config-conflict` shown inline next to
 the section; `/host/capabilities` read-only), Maintenance (`/host/updates/status`,
 check / stage / apply / resume / cancel / resolve per `updateActionsFor`).
+
+Known integration gap: the extension requests `GET /api/v1/host/iso-catalog`, but the
+current service endpoint set does not map it. Until the service and client are reconciled,
+the Media tab reports that catalog read as unavailable; the host operator can inspect the
+primary-media catalog with `constructd admin iso status`. General-purpose `/media` inventory
+and mutations are unaffected.
 
 **Absent by contract (§10.5):** no guest update / provision / reinstall / redownload
 anywhere in the module (those stay per instance), no host filesystem access, no local

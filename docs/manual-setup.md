@@ -98,13 +98,15 @@ docker ps
 
 ## 7b. The `construct` CLI (optional)
 
-`bootstrap.sh` does **not** install the `construct` CLI (`project` / `notify` / `expose`) or
+`bootstrap.sh` does **not** install the `construct` CLI (`project` / `notify` / `expose` /
+`vm`) or
 its forward spool — `bin/provision.sh` does. On a hand-built VM, install them the same way
 it would:
 
 ```bash
 sudo install -m 0755 /opt/construct/repo/bin/construct /usr/local/bin/construct
 sudo install -m 0755 /opt/construct/repo/bin/construct-expose.sh /usr/local/bin/construct-expose.sh
+sudo install -m 0755 /opt/construct/repo/bin/construct-vm.sh /usr/local/bin/construct-vm.sh
 sudo install -m 0755 /opt/construct/repo/bin/construct-idle-report.sh /usr/local/bin/construct-idle-report.sh
 sudo install -d -m 0755 /etc/construct/forwards/{,requests,acks,close}
 ```
@@ -112,6 +114,12 @@ sudo install -d -m 0755 /etc/construct/forwards/{,requests,acks,close}
 `construct expose` then works as soon as a VS Code window with the Construct extension is
 attached; without one, requests simply stay queued (exit code 6). See
 [`construct expose`](expose.md).
+
+`construct vm` is available only inside a service-managed **primary** VM whose
+`/etc/construct/config.env` names the service and primary, with a primary-scoped token in
+`/etc/construct/vm-token`. A legacy VM token remains primary-lifecycle-only until the
+user-PC provisioning flow rotates it. See [Child VMs](child-vms.md) for the commands and
+permission model.
 
 ## 8. Connect from VS Code (Remote-SSH)
 

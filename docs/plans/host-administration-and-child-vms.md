@@ -1,13 +1,14 @@
 # Remote host administration and temporary child VMs
 
-Status: agreed product design; implementation has not started.
-Decision date: 2026-09-06. Source: design discussion with Christoph.
+Status: agreed product design; implemented on Linux, not field-validated on Hyper-V.
+Decision date: 2026-09-06. Implementation status updated: 2026-09-07.
 
-This document is the implementation handoff for remote host administration, delegated
+This document is the canonical product design for remote host administration, delegated
 child VMs, and host updates. It supersedes conflicting proposals in the conversation
 and the corresponding future-facing parts of [the remote architecture plan](modular-remote-architecture.md).
 The [implementation plan](host-administration-implementation.md) describes delivery phases,
-validation, and unresolved backend details. Neither document claims these features exist today.
+validation, remaining limitations and field-test requirements. Implemented behavior is documented
+in the operator guides; backend claims remain provisional until the Hyper-V field test.
 
 ## Scope and existing foundation
 
@@ -15,11 +16,12 @@ The first target is a Windows Hyper-V host on someone's PC, administered remotel
 VS Code. Keep backend and API boundaries usable by a future company Proxmox deployment
 and browser administration application; do not build either in this phase.
 
-Existing foundations include constructd user/token authentication, ownership and VM quotas,
-VM lifecycle jobs, progress streaming, Hyper-V adapters, port forwards, an ISO catalog,
-and a host-local admin CLI. The extension currently has a remote API client, but no host
-administration panel. The guest CLI currently lacks child VM management. The existing
-VM token permits its own heartbeat/forwards, not VM creation. Native ISO acquisition and
+At the decision date, the existing foundations included constructd user/token authentication,
+ownership and VM quotas, VM lifecycle jobs, progress streaming, Hyper-V adapters, port
+forwards, an ISO catalog,
+and a host-local admin CLI. The extension then had a remote API client but no host
+administration panel, and the guest CLI lacked child VM management. The pre-existing
+VM token permitted its own heartbeat/forwards, not VM creation. Native ISO acquisition and
 patching for primary Construct installations already exist; arbitrary child media is a
 separate use case and must not automatically enter the Construct patching path.
 
@@ -224,7 +226,7 @@ between scripts and binaries. Retain the previous install for health-check rollb
 Stage a verified self-contained Windows host release and matching Construct scripts.
 The host needs neither a build SDK nor an installed .NET runtime. The separately built
 ISO tool retains its independent release/pin workflow. Host release packaging, a trusted
-update manifest and update execution are new implementation work.
+update manifest and update execution were new implementation work at the decision date.
 
 Block new conflicting host-managed jobs while draining active ones: ISO acquisition/build,
 VM creation/deletion and host-managed install/reachability waits. Do NOT wait for ordinary
@@ -240,12 +242,13 @@ Check config/database migration compatibility before offering automatic binary r
 Failed updates must report phase and recovery outcome after reconnection, or leave an
 accessible local recovery record if the service cannot restart.
 
-## Proposed API and CLI contracts
+## Implemented API and CLI outline
 
-These route/command names are a concrete starting proposal, not existing endpoints or a
-frozen wire schema. Reuse existing authenticated clients and job/progress semantics.
+These route and command families are implemented. The exact wire schema and deviations are
+frozen in [the contracts document](host-administration-contracts.md); the operator-facing
+surface is in [the service README](../../service/README.md) and [child CLI guide](../child-vms.md).
 
-| Surface | Proposed additions |
+| Surface | Implemented additions |
 |---|---|
 | Discovery | Extend identity/capability responses with effective permissions and backend capabilities; scoped primary identity endpoint |
 | Admin host | `GET /host/status`, configuration read/update with validation, capacity and installed version |
@@ -263,7 +266,7 @@ version. Use structured errors with requested/allowed/available capacity and a r
 never silently clamp a request. Persist actor, effective owner, parent/target and operation
 for audit. Revoke delegation on primary deletion or user disable/removal.
 
-Example intended CLI (syntax to finalize during implementation):
+Implemented CLI shape (the frozen wire details live in the contracts document):
 
 ```sh
 construct vm create --iso-url https://example.org/os.iso --cpus 4 --ram-gb 8 --disk-gb 80 --lifetime 4h

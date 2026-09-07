@@ -353,12 +353,14 @@ survive the SSH/PowerShell layers intact, like `GIT_USER_NAME_B64`). The token i
 echoed, never logged, never written to `config.env` and never placed on a command line; the
 provisioning step reports only that a token was installed.
 
-**Rotation is not implemented.** The service issues a VM token in exactly one place — the VM
-creation job — and exposes no route or admin verb to mint another, so re-provisioning cannot
-replace a lost one (it can only re-deliver a token it was handed). Recovering from a
-destroyed or lost VM token today means deleting and re-creating the VM. A VM whose token file
-is missing or unreadable in remote mode gets a clear error from `expose` (exit 8) and a
-logged warning from the heartbeat — never a stack trace and never the token itself.
+**Rotation is explicit.** An owner/Admin user can call `POST /vms/{name}/token` (default
+kind `primary`) or use `Provision-AgentVM.ps1 -RotateVmToken`; the old hash is invalidated
+immediately and the new plaintext travels once through the existing SSH-stdin provisioning
+channel. Ordinary reprovisioning does not rotate. Existing primaries migrated from an older
+service keep a `legacy` token until upgraded: it still authorizes this VM's existing
+heartbeat and self-forward routes, but no child delegation. A VM whose token file is missing
+or unreadable in remote mode gets a clear error from `expose` (exit 8) and a logged warning
+from the heartbeat—never a stack trace and never the token itself.
 
 ## Activity heartbeat
 
