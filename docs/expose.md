@@ -407,6 +407,9 @@ Environment overrides (used by `test/idle-report.test.sh`, and available for deb
 
 ## Related
 
+- [`construct vm`](child-vms.md) manages temporary child VMs from a service-managed
+  primary. Its `forward` command targets a child explicitly; `construct expose` keeps
+  targeting the current primary and its existing flat forward contract is unchanged.
 - `docs/plans/modular-remote-architecture.md` §4.6 (forwards), §4.7 (idle), §4.8 (module rules)
 - `extension/ARCHITECTURE.md` §Forwards — the extension half of this contract
 - [`docs/control-panel.md` § Forwards](control-panel.md#forwards-construct-expose) — what

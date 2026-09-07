@@ -37,6 +37,9 @@ where they can't touch your host PC.
   Remote-SSH.
 - 🔌 **Agents hand you links** — `construct expose 5173` on the VM opens that port on *your*
   PC — over an SSH tunnel the extension opens to that VM — and prints the URL to open.
+- 🧪 **Disposable child VMs** — from a service-managed primary, `construct vm create`
+  gives an agent a short-lived ISO-booted Windows or Linux test machine without placing
+  host credentials in the guest.
 - 🖥️ **T3 Code, patched with extra features** — Patches the VM and Windows client for live
   voice input for T3 code in the UI using Claude, auto-restore on session limit resets, as
   well as deeper integration with the construct.
@@ -166,6 +169,7 @@ The Construct swaps guardrails for isolation:
 | [Remote host](docs/remote-host.md) | Running the VM on a shared Hyper-V host: the `constructd` service, auth, pinning, idle policy |
 | [Field test checklist](docs/field-test-remote-host.md) | Step-by-step first run of the remote host on a domain, with what to check and where to look when it fails |
 | [`construct expose`](docs/expose.md) | Self-serve port forwards from the VM, the spool/API contract, the idle heartbeat |
+| [Child VMs](docs/child-vms.md) | `construct vm`: create, lifecycle, media, console, sharing, jobs and automation output |
 | [Hypervisor drivers](docs/drivers.md) | The backend contract (`hyperv-local`, `hyperv-remote`) and how to add one |
 | [Control panel](docs/control-panel.md) | The VS Code operator console, optional voice and patched T3 Code features |
 | [Backup & restore](docs/backup-restore.md) | Carrying agent config and auth across reinstalls |
