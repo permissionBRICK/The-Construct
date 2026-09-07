@@ -704,6 +704,7 @@ function Invoke-ConstructApi {
         -Body      a hashtable/object, serialised as JSON (a string is sent verbatim)
         -Auth      a provider from New-ConstructApiAuth (default: negotiate)
         -Pin       an explicit expected fingerprint (default: the stored pin)
+        -RawResponse return the unchanged response JSON (preserves empty/singleton arrays).
         -NoThrow   return $null instead of throwing; the status and message stay
                    readable via Get-ConstructApiLastStatus / Get-ConstructApiLastError.
                    This is how the enrolment flow tries Negotiate and falls back on 401.
@@ -721,7 +722,8 @@ function Invoke-ConstructApi {
         [string]$Pin,
         [string]$StoreDir,
         [int]$TimeoutSec = 100,
-        [switch]$NoThrow
+        [switch]$NoThrow,
+        [switch]$RawResponse
     )
 
     $script:ConstructApiLastStatus = 0
@@ -821,6 +823,7 @@ function Invoke-ConstructApi {
         $content = ""
         try { $content = [string]$resp.Content } catch { $content = "" }
         if ([string]::IsNullOrWhiteSpace($content)) { return $null }
+        if ($RawResponse) { return $content }
         try { return ($content | ConvertFrom-Json) }
         catch { return $content }
     } catch {

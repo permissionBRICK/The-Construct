@@ -237,8 +237,9 @@ async function main() {
   const audit = await admin.audit({ limit: 5000 });
   const actions = new Set(audit.map(e => e.action));
   for (const action of ["user.create", "token.issue", "vm.create", "vm.token.rotate", "media.acquire", "media.upload.begin",
-    "media.upload.chunk", "media.upload.complete", "child.create", "vm.lifecycle", "vm.share", "host.config", "forward.add", "forward.remove", "vm.activity", "media.delete"])
+    "media.upload.chunk", "media.upload.complete", "child.create", "vm.lifecycle", "vm.share", "host.config", "forward.add", "forward.remove", "media.delete"])
     check(actions.has(action), "audit contains " + action);
+  check(!actions.has("vm.activity"), "successful heartbeats do not fill the audit trail");
   check(audit.some(e => e.actor === "vm:alice-primary" && e.detail?.includes("owner=alice")), "delegated audit retains initiator and effective owner");
   output.push(JSON.stringify(audit), JSON.stringify(await admin.jobs({ limit: 200 })));
   check(secrets.every(s => s && output.every(text => !text.includes(s))), "CLI output, persisted jobs and audit contain no credential or auxiliary sentinel");

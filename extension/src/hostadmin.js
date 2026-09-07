@@ -380,14 +380,18 @@ function toCapacityBars(summary) {
     pct: pct(ramUsed, ram.totalBytes),
     text: `${formatBytes(ram.availableBytes)} available of ${formatBytes(ram.totalBytes)} (reserved ${formatBytes(ram.reservedBytes)}, unmanaged ${formatBytes(ram.unmanagedBytes)}, headroom ${formatBytes(ram.headroomBytes)})`,
   }, {
-    id: "cpu", label: "CPU",
-    pct: num(cpu.budget) !== null ? pct(cpu.active, cpu.budget) : pct(cpu.active, cpu.logical),
-    text: `${num(cpu.active) === null ? "—" : cpu.active} active vCPU` + (num(cpu.budget) !== null ? ` of a ${cpu.budget} budget` : ` on ${num(cpu.logical) === null ? "—" : cpu.logical} logical CPUs (no budget)`),
+    id: "cpu", label: "CPU allocation",
+    pct: num(cpu.budget) !== null ? pct(cpu.active, cpu.budget) : null,
+    text: `${num(cpu.active) === null ? "—" : cpu.active} allocated vCPU` + (num(cpu.budget) !== null ? ` of a ${cpu.budget} budget` : ` on ${num(cpu.logical) === null ? "—" : cpu.logical} logical CPUs (no budget)`),
   }];
   for (const v of (Array.isArray(s.volumes) ? s.volumes : [])) {
+    // Windows also inventories hidden EFI/recovery volumes. Keep their accounting
+    // on the server, but don't present unmounted, unused partitions as VM storage.
+    const unmounted = /^\\\\\?\\Volume\{[^}]+\}\\?$/i.test(str(v.root));
+    if (unmounted && !(num(v.growthReservedBytes) > 0)) continue;
     const used = (num(v.totalBytes) || 0) - (num(v.availableBytes) || 0);
     bars.push({
-      id: "vol:" + str(v.root), label: `Storage ${str(v.root)}`,
+      id: "vol:" + str(v.root), label: unmounted ? "Storage (unmounted volume)" : `Storage ${str(v.root)}`,
       pct: pct(used, v.totalBytes),
       text: `${formatBytes(v.availableBytes)} available of ${formatBytes(v.totalBytes)} (free ${formatBytes(v.freeBytes)}, growth reserved ${formatBytes(v.growthReservedBytes)}, headroom ${formatBytes(v.headroomBytes)})`,
     });

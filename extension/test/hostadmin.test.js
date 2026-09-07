@@ -224,7 +224,7 @@ function fakeClient(answers = {}) {
     deep("overview: health problems listed", ov.problems, ["media missing-root"]);
     eq("overview: RAM bar pct = reserved+unmanaged+headroom of total", ov.capacity[0].pct, 69);
     ok("overview: RAM bar text", /10 GiB available of 32 GiB/.test(ov.capacity[0].text));
-    eq("overview: CPU bar without budget uses logical", ov.capacity[1].pct, 50);
+    eq("overview: CPU without a budget has no percentage", ov.capacity[1].pct, null);
     ok("overview: CPU text says no budget", /no budget/.test(ov.capacity[1].text));
     eq("overview: one volume bar", ov.capacity.length, 3);
     eq("overview: volume pct", ov.capacity[2].pct, 62);
@@ -235,6 +235,18 @@ function fakeClient(answers = {}) {
     eq("overview: version", ov.version.commit, "deadbeef");
     eq("overview: draining maintenance shows", ha.toOverview({ maintenance: { phase: "draining", since: "2026-09-07T09:00:00Z" } }).maintenance.phase, "draining");
     eq("overview: empty status does not throw", ha.toOverview(null).version.commit, "unknown");
+    const hiddenRoot = "\\\\?\\Volume{a8247be4-28f0-4613-95f3-bb60e74a2876}\\";
+    const storageBars = ha.toCapacityBars({ volumes: [
+      { root: hiddenRoot, totalBytes: 500000000, growthReservedBytes: 0 },
+      { root: "C:\\", totalBytes: 1000000000000 },
+      { root: "C:\\VMs\\", totalBytes: 1000000000000 },
+    ] });
+    eq("overview: hidden unused partitions omitted", storageBars.length, 4);
+    eq("overview: drive letter is readable", storageBars[2].label, "Storage C:\\");
+    eq("overview: directory mount retained", storageBars[3].label, "Storage C:\\VMs\\");
+    const usedHidden = ha.toCapacityBars({ volumes: [{ root: hiddenRoot, growthReservedBytes: 100 }] });
+    eq("overview: unmounted volume with VM reservations retained", usedHidden.length, 3);
+    eq("overview: unmounted volume has readable label", usedHidden[2].label, "Storage (unmounted volume)");
     eq("overview: CPU with a budget", ha.toCapacityBars({ cpu: { logical: 16, budget: 10, active: 5 } })[1].pct, 50);
   }
 

@@ -139,13 +139,15 @@
       const wrap = el("div", "ha-bar-wrap");
       const lbl = el("div", "ha-bar-label");
       lbl.appendChild(el("span", null, b.label));
-      lbl.appendChild(el("span", null, b.pct + "%"));
+      lbl.appendChild(el("span", null, b.pct == null ? "No limit" : b.pct + "%"));
       wrap.appendChild(lbl);
-      const bar = el("div", "ha-bar " + (b.pct >= 95 ? "full" : b.pct >= 80 ? "hot" : ""));
-      const fill = el("span");
-      fill.style.width = b.pct + "%";
-      bar.appendChild(fill);
-      wrap.appendChild(bar);
+      if (b.pct != null) {
+        const bar = el("div", "ha-bar " + (b.pct >= 95 ? "full" : b.pct >= 80 ? "hot" : ""));
+        const fill = el("span");
+        fill.style.width = b.pct + "%";
+        bar.appendChild(fill);
+        wrap.appendChild(bar);
+      }
       wrap.appendChild(el("div", "ha-bar-text", b.text));
       bars.appendChild(wrap);
     });

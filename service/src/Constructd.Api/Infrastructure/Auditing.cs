@@ -9,7 +9,7 @@ namespace Constructd.Api.Infrastructure;
 /// Marks a route as auditable and says what to call the action and where to find its target.
 /// </summary>
 /// <param name="TargetRouteValue">Route parameter holding the target, when the body does not name it.</param>
-public sealed record AuditActionMetadata(string Action, string TargetRouteValue);
+public sealed record AuditActionMetadata(string Action, string TargetRouteValue, bool AuditSuccess = true);
 
 /// <summary>
 /// One middleware owns the outcome of every request: it audits it, and it is where a failure stops.
@@ -121,6 +121,8 @@ public static class AuditContext
 
     internal static Task WriteAsync(HttpContext http, AuditActionMetadata metadata, int status)
     {
+        if (status < 400 && !metadata.AuditSuccess) return Task.CompletedTask;
+
         var audit = http.RequestServices.GetRequiredService<IAuditLog>();
         var clock = http.RequestServices.GetRequiredService<IClock>();
 
@@ -161,6 +163,7 @@ public static class AuditRouteExtensions
     public static RouteHandlerBuilder Audited(
         this RouteHandlerBuilder builder,
         string action,
-        string targetRouteValue = "name") =>
-        builder.WithMetadata(new AuditActionMetadata(action, targetRouteValue));
+        string targetRouteValue = "name",
+        bool auditSuccess = true) =>
+        builder.WithMetadata(new AuditActionMetadata(action, targetRouteValue, auditSuccess));
 }

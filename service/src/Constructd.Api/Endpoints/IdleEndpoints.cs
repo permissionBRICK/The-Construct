@@ -29,7 +29,7 @@ public static class IdleEndpoints
         // The one write a VM-scoped token is allowed besides its forwards.
         api.MapPost("/vms/{name}/activity", PostActivityAsync)
             .RequireAuthorization(Policies.VmScoped)
-            .Audited("vm.activity")
+            .Audited("vm.activity", auditSuccess: false)
             .WithName("PostActivity");
 
         return api;
@@ -102,9 +102,8 @@ public static class IdleEndpoints
 
     /// <remarks>
     /// <c>busy</c> keeps the VM alive even with zero connections — a long unattended agent job is
-    /// exactly the case the idle engine must not kill. Heartbeats are audited like every other
-    /// mutation; they are frequent, so <c>GET /audit</c> is paged and the retention of the audit
-    /// trail is an admin concern.
+    /// exactly the case the idle engine must not kill. Successful heartbeats are telemetry, not administrative
+    /// events. Failures and authorization refusals still enter the audit trail.
     /// </remarks>
     private static async Task<IResult> PostActivityAsync(
         string name,

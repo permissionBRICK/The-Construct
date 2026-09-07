@@ -292,6 +292,16 @@ ok("pin: a malformed fingerprint is refused",
   });
   eq("negotiate: the delegated identity comes back", (await negClient.whoami()).name, "DOMAIN\\bob");
 
+  ok("delegate: preserves the raw JSON response", script.includes("-RawResponse"));
+  for (const rows of [[], [{ name: "haus-vm" }], [{ name: "one" }, { name: "two" }]]) {
+    const rawClient = rh.createClient({
+      baseUrl: SVC, auth: { kind: "negotiate" }, pin: FP_A, remoteLib: "L.ps1",
+      spawnImpl: fakeSpawn({ stdout: "CONSTRUCT_API " + JSON.stringify({ status: 200, body: JSON.stringify(rows) }) + "\n" }),
+    });
+    eq("negotiate: preserves " + rows.length + " list items", JSON.stringify(await rawClient.vms()), JSON.stringify(rows));
+    eq("negotiate: users preserve " + rows.length + " list items", JSON.stringify(await rawClient.users()), JSON.stringify(rows));
+  }
+
   const negDenied = rh.createClient({
     baseUrl: SVC, auth: { kind: "negotiate" }, pin: FP_A, remoteLib: "L.ps1",
     spawnImpl: fakeSpawn({ stdout: 'CONSTRUCT_API {"status":401,"error":"refused","body":null}\n' }),

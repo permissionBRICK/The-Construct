@@ -31,7 +31,7 @@ public class AuditCoverageTests
     }
 
     [Fact]
-    public async Task A_heartbeat_is_audited()
+    public async Task Successful_heartbeats_do_not_fill_the_audit_trail_but_failures_are_recorded()
     {
         using var app = new TestApp();
         using var bob = await app.CreateUserClientAsync("bob");
@@ -41,13 +41,18 @@ public class AuditCoverageTests
 
         await guest.PostJsonAsync("/api/v1/vms/work-vm/activity", new { busy = true, reasons = new[] { "agent" } });
 
+        await guest.PostJsonAsync("/api/v1/vms/work-vm/activity", new { busy = true, reasons = new[] { "agent" } });
         var entries = await (await admin.GetAsync("/api/v1/audit")).ReadAsync<List<AuditResponse>>();
+        Assert.DoesNotContain(entries, e => e.Action == "vm.activity");
 
-        var entry = Assert.Single(entries, e => e.Action == "vm.activity");
-        Assert.Equal("work-vm", entry.Target);
-        Assert.Equal("vm:work-vm", entry.Actor);
-        Assert.Equal(AuditOutcome.Success, entry.Outcome);
-        Assert.Contains("busy=True", entry.Detail);
+        Assert.Equal(HttpStatusCode.BadRequest,
+            (await guest.PostJsonAsync("/api/v1/vms/work-vm/activity", new { reasons = new[] { "agent" } })).StatusCode);
+        using var anonymous = app.CreateAnonymousClient();
+        Assert.Equal(HttpStatusCode.Unauthorized,
+            (await anonymous.PostJsonAsync("/api/v1/vms/work-vm/activity", new { busy = true })).StatusCode);
+        entries = await (await admin.GetAsync("/api/v1/audit")).ReadAsync<List<AuditResponse>>();
+        Assert.Contains(entries, e => e.Action == "vm.activity" && e.Outcome == AuditOutcome.Failure);
+        Assert.Contains(entries, e => e.Action == "vm.activity" && e.Outcome == AuditOutcome.Denied);
     }
 
     [Fact]
