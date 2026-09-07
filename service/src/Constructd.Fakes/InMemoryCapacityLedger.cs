@@ -1,5 +1,7 @@
 using Constructd.Core.Abstractions;
 using Constructd.Core.Domain;
+using Constructd.Core.Logic;
+using Constructd.Core.Configuration;
 namespace Constructd.Fakes;
 
 /// <summary>Deterministic capacity seam. Tests supply one inventory epoch; every write is serialized.</summary>
@@ -8,15 +10,29 @@ public sealed partial class InMemoryCapacityLedger(IClock clock) : ICapacityLedg
     private readonly Dictionary<string, Reservation> _reservations = new();
     public HostCapacitySnapshot Inventory { get; set; } = new(0, DateTimeOffset.MinValue, false, 0, 0, 0, 0, 0, 0, 0, null, 0, null, [], [], []);
     public CapacityMode Mode { get; set; } = CapacityMode.Enforce;
+    // Opt-in full evidence mode for feature tests; the precomputed Inventory seam remains compatible.
+    public Func<InventorySnapshot>? ReadInventory { get; set; }
+    public Func<IReadOnlyList<Vm>>? ReadManagedVms { get; set; }
+    public Func<CapacityConfig>? ReadConfig { get; set; }
+    public Func<string, EffectiveAllowance?>? ReadAllowance { get; set; }
+    public InMemoryAuditLog? Audit { get; set; }
+    public IOperationRegistry? Operations { get; set; }
     public Task<CapacityDecision> TryReserveAsync(ReservationRequest request, CancellationToken ct)
     {
         lock (InMemoryTransaction.Gate)
         {
             ct.ThrowIfCancellationRequested();
             {
-                if (request.Lines.Any(l => l.Amount < 0)) throw new ArgumentException("Reservation amounts cannot be negative.");
-                var snapshot = Snapshot();
-                foreach (var group in request.Lines.GroupBy(l => (l.Resource, l.Volume)))
+                ReservationRules.Validate(request);
+                var evidence = ReadInventory?.Invoke();
+                var snapshot = Snapshot(evidence);
+                CapacityDecision? decision = null;
+                if (ReadInventory is not null)
+                {
+                    decision = CapacityMath.Decide(request, snapshot, ReadConfig?.Invoke() ?? HostAdminDefaults.Capacity with { Mode = Mode }, ReadAllowance?.Invoke(request.Owner), CapacityMath.AccountedReservations(evidence!, _reservations.Values.ToArray(), ReadManagedVms?.Invoke() ?? []));
+                    if (!decision.Allowed) return Task.FromResult(decision);
+                }
+                else foreach (var group in request.Lines.GroupBy(l => (l.Resource, l.Volume)))
                 {
                     var amount = group.Sum(l => l.Amount);
                     var available = group.Key.Resource switch
@@ -34,7 +50,8 @@ public sealed partial class InMemoryCapacityLedger(IClock clock) : ICapacityLedg
                     _reservations[id] = new(id, line.Resource, request.Owner, request.VmName, line.Artifact, line.Volume, line.Amount, ReservationPhase.Pending,
                         ReservationOrigin.Api, request.OperationId, clock.UtcNow, clock.UtcNow + request.PendingTimeout, null);
                 }
-                return Task.FromResult(new CapacityDecision(true, ids, null, null, 0, 0, 0, null, snapshot.Epoch));
+                Audit?.AppendAsync(new(clock.UtcNow, request.Owner, decision?.Reason is null ? "capacity.reserve" : "capacity.observe", request.VmName ?? request.OperationId, AuditOutcome.Success, decision?.Reason), ct).GetAwaiter().GetResult();
+                return Task.FromResult(decision is null ? new CapacityDecision(true, ids, null, null, 0, 0, 0, null, snapshot.Epoch) : decision with { ReservationIds = ids });
             }
 
         }
@@ -44,7 +61,7 @@ public sealed partial class InMemoryCapacityLedger(IClock clock) : ICapacityLedg
         lock (InMemoryTransaction.Gate)
         {
             foreach (var id in ids)
-                if (_reservations.TryGetValue(id, out var r) && (r.Resource == ReservationResource.Storage || observed is VmState.Running or VmState.Paused))
+                if (_reservations.TryGetValue(id, out var r) && ReservationRules.CanConfirm(r, observed))
                     _reservations[id] = r with { Phase = ReservationPhase.Held, ConfirmedAt = clock.UtcNow };
             return Task.CompletedTask;
 
@@ -55,7 +72,7 @@ public sealed partial class InMemoryCapacityLedger(IClock clock) : ICapacityLedg
         lock (InMemoryTransaction.Gate)
         {
             foreach (var id in ids)
-                if (_reservations.TryGetValue(id, out var r) && (observed == VmState.Absent || r.Resource != ReservationResource.Storage && observed is VmState.Off or VmState.Saved))
+                if (_reservations.TryGetValue(id, out var r) && ReservationRules.CanRelease(r, observed))
                     _reservations.Remove(id);
             return Task.CompletedTask;
 
@@ -99,8 +116,10 @@ public sealed partial class InMemoryCapacityLedger(IClock clock) : ICapacityLedg
             return Task.FromResult(Snapshot());
         }
     }
-    private HostCapacitySnapshot Snapshot()
+    private HostCapacitySnapshot Snapshot(InventorySnapshot? evidence = null)
     {
+        if (ReadInventory is not null) return CapacityMath.Calculate(evidence ?? ReadInventory(), ReadConfig?.Invoke() ?? HostAdminDefaults.Capacity with { Mode = Mode },
+            _reservations.Values.ToArray(), ReadManagedVms?.Invoke() ?? []);
         var ram = _reservations.Values.Where(r => r.Resource == ReservationResource.Ram).Sum(r => r.Amount);
         var cpu = _reservations.Values.Where(r => r.Resource == ReservationResource.Cpu).Sum(r => r.Amount);
         return Inventory with

@@ -27,6 +27,7 @@ public class RouteCoverageTests
         "GET /api/v1/whoami",
         "GET /api/v1/health",
         "GET /api/v1/host/status",
+        "GET /api/v1/host/capacity",
         "GET /api/v1/host/capabilities",
         "GET /api/v1/host/config",
         "PUT /api/v1/host/config",

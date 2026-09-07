@@ -111,6 +111,7 @@ app.MapGroup("/api/v1")
     // Host administration feature routes: one hook per implementation pair.
     .MapHealthEndpoints()
     .MapHostAdminEndpoints()
+.MapCapacityEndpoints()
     .MapDelegationEndpoints()
     .MapMediaEndpoints();
 

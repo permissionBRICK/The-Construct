@@ -32,7 +32,8 @@ public sealed record HostCapacitySnapshot(
     int? CpuAvailable,
     IReadOnlyList<VolumeCapacity> Volumes,
     IReadOnlyList<Reservation> Reservations,
-    IReadOnlyList<HypervisorVmInfo> Unmanaged);
+    IReadOnlyList<HypervisorVmInfo> Unmanaged,
+    IReadOnlyList<string>? Problems = null);
 
 public interface ICapacityLedger
 {
@@ -48,4 +49,14 @@ public interface ICapacityLedger
     /// <summary>§4.4 sequence: snapshot without gates; per VM TryAcquire the VM gate (no wait, no upgrade) and only then the ledger gate; host-level rules under the ledger gate alone. Orphans are resolved per resource, never by time alone.</summary>
     Task<IReadOnlyList<OrphanOutcome>> ReconcileAsync(CancellationToken ct);
     Task<HostCapacitySnapshot> SnapshotAsync(bool refresh, CancellationToken ct);
+}
+
+/// <summary>Database half of reconciliation; each Apply call uses the same gate/transaction as admission.
+/// The VM argument is the pre-inventory generation/job fence, never permission to write a stale snapshot.</summary>
+public interface ICapacityReconciliationStore
+{
+    Task<IReadOnlyList<Reservation>> ReadReservationsAsync(CancellationToken ct);
+    Task<IReadOnlyList<OrphanOutcome>> ApplyVmAsync(Vm expected, VmState freshState, InventorySnapshot inventory,
+        IReadOnlyList<Reservation> captured, CancellationToken ct);
+    Task<IReadOnlyList<OrphanOutcome>> ApplyHostAsync(InventorySnapshot inventory, IReadOnlyList<Reservation> captured, CancellationToken ct);
 }
