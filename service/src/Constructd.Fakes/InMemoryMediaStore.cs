@@ -26,7 +26,7 @@ public sealed partial class InMemoryMediaStore : IMediaStore
     {
         lock (InMemoryTransaction.Gate)
         {
-            return Task.FromResult(_items.Values.Count(i => Ownership.SameName(i.Owner, owner)));
+            return Task.FromResult(_items.Values.Count(i => Ownership.SameName(i.Owner, owner) && i.State is MediaState.Pending or MediaState.Transferring or MediaState.Ready));
         }
     }
     public Task AddAsync(MediaItem item, CancellationToken ct)
@@ -41,7 +41,7 @@ public sealed partial class InMemoryMediaStore : IMediaStore
         lock (InMemoryTransaction.Gate)
         {
             {
-                if (!_items.TryGetValue(id, out var old) || old.State != expected || updated.Id != id) return Task.FromResult(false);
+                if (!_items.TryGetValue(id, out var old) || old.State != expected || updated.Id != id || !Ownership.SameName(old.Owner, updated.Owner)) return Task.FromResult(false);
                 if (updated.State == MediaState.Deleting && _references.Any(r => r.MediaId == id)) return Task.FromResult(false);
                 _items[id] = updated; return Task.FromResult(true);
             }
@@ -76,6 +76,7 @@ public sealed partial class InMemoryMediaStore : IMediaStore
             {
                 if (!_items.TryGetValue(reference.MediaId, out var item) || item.State != MediaState.Ready) return Task.FromResult(false);
                 if (!_references.Any(r => r.MediaId == reference.MediaId && Ownership.SameName(r.VmName, reference.VmName) && r.Slot == reference.Slot)) _references.Add(reference);
+                _items[item.Id] = item with { LastReferencedAt = reference.Created };
                 return Task.FromResult(true);
             }
 
@@ -122,6 +123,17 @@ public sealed partial class InMemoryMediaStore : IMediaStore
                 _uploads[uploadId] = u with { Received = u.Received.Append(index).Distinct().Order().ToArray() }; return Task.FromResult(true);
             }
 
+        }
+    }
+    public Task<bool> CompleteUploadAsync(string uploadId, MediaItem ready, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        lock(InMemoryTransaction.Gate)
+        {
+            if(!_uploads.TryGetValue(uploadId,out var upload) || upload.State != UploadState.Completing || upload.MediaId != ready.Id ||
+                !_items.TryGetValue(ready.Id,out var item) || item.State != MediaState.Transferring || ready.State != MediaState.Ready ||
+                !Ownership.SameName(item.Owner,ready.Owner)) return Task.FromResult(false);
+            _items[ready.Id]=ready; _uploads[uploadId]=upload with {State=UploadState.Done}; return Task.FromResult(true);
         }
     }
     public Task<IReadOnlyList<MediaUpload>> ListExpiredUploadsAsync(DateTimeOffset now, CancellationToken ct)

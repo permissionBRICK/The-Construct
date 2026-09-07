@@ -20,6 +20,8 @@ public interface IMediaStore
     Task AddUploadAsync(MediaUpload upload, CancellationToken ct);
     Task<bool> TryTransitionUploadAsync(string id, UploadState expected, MediaUpload updated, CancellationToken ct);
     Task<bool> RecordChunkAsync(string uploadId, int index, CancellationToken ct);
+    /// <summary>Atomically mark the completing upload Done and its Transferring media Ready.</summary>
+    Task<bool> CompleteUploadAsync(string uploadId, MediaItem ready, CancellationToken ct) => throw new NotSupportedException("Media completion is unavailable.");
     Task<IReadOnlyList<MediaUpload>> ListExpiredUploadsAsync(DateTimeOffset now, CancellationToken ct);
 }
 
@@ -40,4 +42,23 @@ public interface IMediaTransfer
     /// <summary>false = held open by the hypervisor (retry later); throws for other errors.</summary>
     Task<bool> TryDeleteAsync(string path, CancellationToken ct);
     Task<IReadOnlyList<string>> ListFilesAsync(CancellationToken ct);
+}
+
+/// <summary>Managed files only; implementations reject paths outside the private media root.</summary>
+public interface IMediaFiles
+{
+    string Root { get; }
+    string PathFor(string id, bool partial = false);
+    Task CreateAsync(string path, long size, CancellationToken ct);
+    Task<Stream> OpenReadAsync(string path, CancellationToken ct);
+    Task WriteAsync(string path, long offset, ReadOnlyMemory<byte> bytes, CancellationToken ct);
+    Task PublishAsync(string partial, string destination, CancellationToken ct);
+    Task<bool> DeleteAsync(string path, CancellationToken ct);
+    Task<IReadOnlyList<(string Path, DateTimeOffset Modified)>> ListAsync(CancellationToken ct);
+}
+
+/// <summary>Contains only a fixed safe code, never a URL or a filesystem exception.</summary>
+public sealed class MediaException(string code) : Exception(code), Constructd.Core.Logic.IConstructdError
+{
+    public string Code { get; } = code;
 }
