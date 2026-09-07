@@ -14,6 +14,9 @@ public static class AdminDbCheck
         {
             if (!await reader.ReadAsync(ct) || reader.GetString(0) != "ok" || await reader.ReadAsync(ct)) return new("failed", 0);
         }
+        // Hosts predating the migration runner have the original schema but no history table.
+        check.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='schema_migrations'";
+        if (Convert.ToInt64(await check.ExecuteScalarAsync(ct)) == 0) return new("ok", 0);
         check.CommandText = "SELECT COALESCE(MAX(id),0) FROM schema_migrations";
         return new("ok", Convert.ToInt32(await check.ExecuteScalarAsync(ct)));
     }
