@@ -78,6 +78,24 @@ public class UpdateTests
         }
         finally {Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();Directory.Delete(dir,true);}
     }
+    [Fact] public async Task Legacy_database_check_reports_schema_zero_without_migrating()
+    {
+        var path=Path.Combine(Path.GetTempPath(),"legacy-db-check-"+Guid.NewGuid().ToString("n")+".db");
+        try
+        {
+            await using(var db=new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={path};Pooling=False"))
+            {
+                await db.OpenAsync();await using var command=db.CreateCommand();
+                command.CommandText="CREATE TABLE users (name TEXT PRIMARY KEY); INSERT INTO users VALUES ('existing-owner')";
+                await command.ExecuteNonQueryAsync();
+            }
+            var before=await File.ReadAllBytesAsync(path);
+            var result=await AdminDbCheck.CheckAsync(path,default);
+            Assert.Equal(new DatabaseHealth("ok",0),result);
+            Assert.Equal(before,await File.ReadAllBytesAsync(path));
+        }
+        finally {File.Delete(path);}
+    }
     [Fact] public async Task Update_api_is_admin_only_and_check_needs_no_key()
     {
         using var app=new TestApp();using var user=await app.CreateUserClientAsync("user");using var admin=await app.CreateUserClientAsync("admin",Role.Admin);
