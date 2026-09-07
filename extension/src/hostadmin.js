@@ -1015,6 +1015,22 @@ function firstVmOffers(input = {}) {
     .map((h) => ({ url: str(h.url), identity: str(h.identity), role: str(h.role) }));
 }
 
+/** Hosts enrolled in the UI or already configured by the command-line VM installer.
+ * Explicit enrolments win so their selected credentials and certificate pins survive.
+ * A registry entry supplies connection details only; admin authority is still probed. */
+function discoverHosts(hosts, instances, sameUrl) {
+  const same = typeof sameUrl === "function" ? sameUrl : (a, b) => str(a).toLowerCase() === str(b).toLowerCase();
+  const result = (Array.isArray(hosts) ? hosts : []).filter((h) => h && str(h.url));
+  for (const instance of Array.isArray(instances) ? instances : []) {
+    if (!instance || str(instance.backend).toLowerCase() !== "hyperv-remote") continue;
+    const service = instance.service;
+    const url = service && str(service.url);
+    if (!url || result.some((h) => same(h.url, url))) continue;
+    result.push({ url, auth: str(service.auth) || "negotiate" });
+  }
+  return result;
+}
+
 /** The enrolment record for an instance's service URL, or null. Pure. */
 function hostEntryFor(instance, hosts, sameUrl) {
   const url = instance && instance.service && str(instance.service.url);
@@ -1351,6 +1367,6 @@ module.exports = {
   parseConfigSection, buildConfigRequest, configProblemsOf,
   childRows, childrenCardState, shutdownOutcome, awaitJob,
   cascadeKindOf, cascadeConfirmation, childDeleteConfirmation,
-  firstVmOffers, hostEntryFor,
+  firstVmOffers, discoverHosts, hostEntryFor,
   createHostAdminModel,
 };

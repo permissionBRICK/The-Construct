@@ -61,8 +61,9 @@ function createHostAdminFeature(deps = {}) {
   const log = typeof deps.log === "function" ? deps.log : () => {};
   const now = typeof deps.now === "function" ? deps.now : () => Date.now();
   const timers = deps.timers || { setTimeout, clearTimeout };
-  const remoteHosts = deps.remoteHosts || (() => []);
+  const enrolledHosts = deps.remoteHosts || (() => []);
   const registryList = deps.registryList || (() => []);
+  const remoteHosts = () => hostadmin.discoverHosts(enrolledHosts(), registryList(), remotehost.sameServiceUrl);
 
   /** url(lower) -> { panel, model, hostEntry, pollTimer, children: Map } */
   const panels = new Map();
