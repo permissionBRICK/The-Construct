@@ -41,7 +41,7 @@ public static class PrimaryVmAdmission
         var allowance = await services.GetRequiredService<IDelegationPolicy>().ResolveAsync(vm.Owner, null, ct);
         var admission = services.GetRequiredService<IAdmissionStore>();
         IDisposable? handle = services.GetRequiredService<IMaintenanceGate>().TryEnter(job.Kind, id, vm.Name);
-        if (handle is null) return LifecycleEndpoints.Problem("maintenance", 503);
+        if (handle is null) return await MaintenanceFilter.RefusedAsync(http);
         handle = new Handles(handle, services.GetRequiredService<IOperationRegistry>().Register(id, job.Kind, vm.Name));
         try
         {

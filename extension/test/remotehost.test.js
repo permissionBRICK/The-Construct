@@ -338,6 +338,32 @@ ok("pin: a malformed fingerprint is refused",
   ok("http: ...with the refusal as the reason",
     /Refusing to talk/.test(remoteDriver.resolveClient(httpInst, { auth: { kind: "token", token: "t" } }).problem));
 
+  // The real transport must frame DELETE bodies; mocked fetch misses this failure.
+  {
+    const received = [];
+    const server = require("http").createServer((req, res) => {
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", chunk => body += chunk);
+      req.on("end", () => {
+        received.push({ body, length: req.headers["content-length"] });
+        res.setHeader("content-type", "application/json");
+        res.end("{}");
+      });
+    });
+    await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const c = rh.createClient({ baseUrl: `http://127.0.0.1:${server.address().port}`, auth: { kind: "token", token: "fixture" } });
+      const confirmation = { cascade: { token: "confirmation-ä" } };
+      await c.deleteVm("parent", confirmation);
+      eq("transport: DELETE sends the complete cascade confirmation", received[0].body, JSON.stringify(confirmation));
+      eq("transport: DELETE content length counts UTF-8 bytes", Number(received[0].length), Buffer.byteLength(JSON.stringify(confirmation)));
+      await c.deleteVm("empty-parent");
+      eq("transport: legacy DELETE still has no body", received[1].body, "");
+      eq("transport: legacy DELETE adds no content length", received[1].length, undefined);
+    } finally { await new Promise(resolve => server.close(resolve)); }
+  }
+
   // ── REAL TLS: the pin is the identity check, so it has to hold on a socket ──
   // Everything above injects the HTTP layer, which proves what the client ASKS for. This
   // proves what the DEFAULT transport does, because that is where pinning can be

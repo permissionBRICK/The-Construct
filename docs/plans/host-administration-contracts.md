@@ -4318,3 +4318,100 @@ dotnet/node/pwsh/browser/service processes remained after validation.
 | `test/t3-https.test.sh` | 133 | 0 | 0 |
 | `test/vscode-download.test.sh` | 6 | 0 | 0 |
 | `extension/test/ui-smoke.js` | 311 | 0 | 0 |
+
+### Deviations — S4 end-to-end harness (ha/s4-e2e)
+
+The new `test/host-admin-e2e.test.sh` uses the existing .NET test host with real
+Kestrel HTTPS and `Constructd:Fake=true` (the same composition selected by
+`--fake`), rather than launching a separate shipping API executable. Reason:
+standalone fake mode has neither an externally controlled clock nor URL fixture
+sources. Keeping the clock/inventory/drain controls and loopback media admission
+inside the test assembly avoids adding test bypasses to production configuration
+or routes. All product operations run through real HTTP, CLI and extension
+transports with SQLite persistence. The media bytes come from a real local HTTP
+server; only URL admission/connection pinning are substituted for that fixture. The
+periodic `CapacityReconciliationService` is removed from this test host: a timer
+reading the static fake snapshot could overwrite states changed through HTTP.
+The harness explicitly invokes the real ledger reconciliation against a coherent
+fixture snapshot before the capacity race; it tests concurrent HTTP admission,
+not concurrent background inventory reconciliation.
+
+The update scenario drives the same `IMaintenanceGate` used by `host-update`
+through draining, full maintenance and reopening. It does not stage a signed
+release or invoke the Windows updater. Existing update unit and PowerShell suites
+remain the Linux evidence for those components; service restart and scheduled
+handoff require the later field test.
+
+The phrase "legacy token limited to its four routes" is tested as preservation
+of its four original heartbeat/forward routes and denial of child/host management.
+The explicitly additive legacy discovery/report exceptions in §8.1 and §8.14
+remain authoritative; the test also checks identity discovery and the CLI's
+upgrade-required exit code. It does not revoke those contractually allowed routes.
+
+### S4 defects fixed by end-to-end validation
+
+- A child admission rejected during drain returned only `code=maintenance`;
+  `phase`, `retryAfterSeconds`, optional `updateId` and `Retry-After` were missing.
+  Child create/delete, late primary/cascade admission and lifecycle refusal now
+  reuse the middleware's complete maintenance result. Media keeps its existing
+  compliant response (the update identity is optional); it is not part of this fix. Four focused regression
+  cases cover child create/delete, primary create and full-freeze sharing, along
+  with reopening and update identity; the HTTPS story checks the CLI exit code.
+- The extension's default Node HTTP transport did not frame a DELETE request
+  body. Kestrel therefore saw an empty cascade confirmation and requested another
+  preview. Bodies now get their UTF-8 byte `Content-Length` when no framing header
+  is supplied. Four real-socket Node checks cover multibyte confirmation bodies
+  and preservation of the bodyless legacy DELETE. The full story creates a child
+  between preview and confirmation, observes `cascade-scope-changed`, and then
+  deletes the exact newly confirmed set.
+
+### Known defects after e2e
+
+No unresolved product defect was identified by the completed story.
+The fixture limitations above and the existing documented Hyper-V, media,
+network and update field-test requirements remain; this is Linux validation only.
+
+### S4 Linux validation results (ha/s4-e2e)
+
+| Family | Suites | Passed checks/groups | Explicit skips |
+|---|---:|---:|---:|
+| .NET solution | 1 | 1183 | 0 |
+| Node unit | 24 | 5152 | 1 |
+| PowerShell | 22 | 3318 | 1 |
+| Existing Bash | 21 | 1070 | 0 |
+| New host-admin HTTPS e2e | 1 | 70 named checks + audit parity for 59 HTTP mutations | 0 |
+| Browser smoke | 1 | 311 | 0 |
+
+The new e2e also runs inside the .NET suite, so counts across families are not
+unique assertions. PowerShell totals retain the prior stage's scenario-group
+convention for seed-user and the two T3 host suites. Explicit skips remain the
+root-only unwritable-spool Node case and Windows-only PowerShell DPAPI round trip.
+The existing fake remote e2e passed **45/45** on port **17943** and stopped its
+service. The new e2e uses dynamic loopback HTTPS/HTTP ports and cleans both up.
+The solution build reported **0 warnings and 0 errors**.
+
+All existing suites passed on their first matrix run. The repeated new e2e found
+a fixture race: `UpdateRecoveryService` correctly reopens an otherwise orphaned
+synthetic maintenance gate. The harness now holds `HostUpdateJob.Acceptance`
+through its drain/freeze/reopen controls, as the actual updater does, and explicitly
+crosses the recovery timer interval before asserting the freeze. The corrected
+story passed with the two-CPU test setting. This required no production recovery
+change. The audit observer also records missing route metadata as a mismatch
+rather than throwing on the server task after a response has started.
+
+Matrix environment: `DOTNET_PROCESSOR_COUNT=2`, MSBuild node reuse/server disabled,
+serialized builds/tests; process-only `init.defaultBranch=main`,
+`T3CODE_BUILD_SOURCE=prebuilt`, `SYSTEMD_UNIT_PATH=/usr/lib/systemd/system`.
+An empty `/home/agent` was created only for the disk-check test and removed after
+it. Browser dependencies came from `extension/test/package-lock.json` via
+`npm ci --ignore-scripts`; no dependency or lockfile was changed. No Windows host
+service, installer, VM or network setting was touched.
+
+Review follow-up: the e2e fact now skips off Linux or without bash/Node/curl/jq on
+PATH, preserving the portable solution test command. A Linux invocation with a
+PATH containing only dotnet returned success with exactly **1 skipped test** and
+a missing-tool explanation. The normal-toolchain rerun passed all **5** e2e and
+maintenance regression cases, including the **70** story checks; the build stayed
+at **0 warnings, 0 errors**. CA and forwarding refusal assertions now inspect the
+CLI diagnostic as well as its exit code. No Windows execution is implied by the
+platform guard.

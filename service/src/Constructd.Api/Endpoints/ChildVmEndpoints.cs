@@ -62,7 +62,7 @@ public static class ChildVmEndpoints
             return Replay(existing, fingerprint, name);
         var job = new Job(Guid.NewGuid().ToString("n"), "child-create", name, parentVm.Owner, JobState.Queued, [], null, null, clock.UtcNow, null, http.User.NameOrEmpty(), key);
         IDisposable? maintenanceHandle = maintenance.TryEnter(job.Kind, job.Id, name);
-        if (maintenanceHandle is null) return CodedProblems.Create(503, "maintenance", "Host maintenance is draining mutations.");
+        if (maintenanceHandle is null) return await MaintenanceFilter.RefusedAsync(http);
         maintenanceHandle = new AdmissionHandle(maintenanceHandle, http.RequestServices.GetRequiredService<IOperationRegistry>().Register(job.Id, job.Kind, name));
         var mediaHandles = new List<IAsyncDisposable>();
         try
@@ -142,7 +142,7 @@ public static class ChildVmEndpoints
             return Replay(existing, fingerprint, vm.Name);
         var job = new Job(Guid.NewGuid().ToString("n"), "child-delete", vm.Name, vm.Owner, JobState.Queued, [], null, null, clock.UtcNow, null, http.User.NameOrEmpty(), key);
         IDisposable? handle = services.GetRequiredService<IMaintenanceGate>().TryEnter(job.Kind, job.Id, vm.Name);
-        if (handle is null) return CodedProblems.Create(503, "maintenance", "Host maintenance is draining mutations.");
+        if (handle is null) return await MaintenanceFilter.RefusedAsync(http);
         handle = new AdmissionHandle(handle, services.GetRequiredService<IOperationRegistry>().Register(job.Id, job.Kind, vm.Name));
         try
         {
