@@ -111,7 +111,14 @@ public sealed class SqliteUserStore(SqliteDatabase database) : IUserStore, IUser
     public async Task<bool> SetAllowanceAsync(string name, UserAllowance allowance, CancellationToken ct)
     {
         await using var connection = await database.OpenAsync(ct);
+        await using var tx = connection.BeginTransaction(deferred: false);
+        var result = await SetAllowanceInTransaction(connection, tx, name, allowance, ct);
+        await tx.CommitAsync(ct); return result;
+    }
+    internal static async Task<bool> SetAllowanceInTransaction(Microsoft.Data.Sqlite.SqliteConnection connection, Microsoft.Data.Sqlite.SqliteTransaction tx, string name, UserAllowance allowance, CancellationToken ct)
+    {
         await using var command = connection.CreateCommand();
+        command.Transaction = tx;
         command.CommandText = "UPDATE users SET allow_child_creation=@allow_child_creation, max_retained_children=@max_retained_children, cpu_budget=@cpu_budget, ram_budget_bytes=@ram_budget_bytes, storage_budget_bytes=@storage_budget_bytes, max_child_lifetime_seconds=@max_child_lifetime_seconds, allow_never_lifetime=@allow_never_lifetime, allow_sharing=@allow_sharing WHERE name=@name";
         command.With("@name", name)
             .With("@allow_child_creation", allowance.AllowChildCreation)

@@ -1741,3 +1741,20 @@ pwsh -NoProfile -File service/tests/host-updater.test.ps1
 pwsh -NoProfile -File service/tests/host-release-installer.test.ps1
 dotnet test service/Constructd.sln --filter 'FullyQualifiedName~Updates'
 ```
+
+### Phase 3 admission integration
+
+VM/media admission now uses the production `SqliteAdmissionStore`: the operation key,
+VM, media/upload rows, references, reservations, cascade or deletion fence and queued job
+commit in one IMMEDIATE transaction under the capacity ledger gate. Refusals and failed
+compare-and-set writes roll back the whole plan. Memory persistence uses the equivalent
+in-memory transaction regardless of which hypervisor platform is selected. Earlier
+sections describing production admission as a placeholder are superseded by this section.
+
+A failed job launch retains its fence and capacity for evidence-based recovery. A child
+start whose runtime reservations were swept re-admits missing resources under a derived
+recovery operation id, retaining the create operation's existing storage holds. Durable
+start-intent replay includes those derived holds and keeps the original activation clock.
+Linux tests exercise both persistence modes, including SQLite child creation, partial
+runtime recovery, cascade acceptance/refusal and synchronous mutation rollback. No
+Hyper-V execution is implied by these tests.

@@ -33,7 +33,7 @@ public sealed class ChildStartIntent(IOperationKeyStore keys, IAdmissionStore ad
         if (vm.PowerGeneration != key.PowerGeneration) throw Error("power-state-changed");
         var state = await hypervisor.GetStateAsync(vm.Name, ct);
         if (state is not (VmState.Running or VmState.Off or VmState.Saved)) throw Error("vm-state-unknown");
-        var holds = snapshot.Reservations.Where(r => r.VmName == vm.Name && r.OperationId == job.Id).ToArray();
+        var holds = snapshot.Reservations.Where(r => r.VmName == vm.Name && (r.OperationId == job.Id || r.OperationId?.StartsWith(job.Id + ":resume:", StringComparison.Ordinal) == true)).ToArray();
         var ids = holds.Select(r => r.Id).ToArray();
         if (state != VmState.Running)
         {
@@ -52,7 +52,7 @@ public sealed class ChildStartIntent(IOperationKeyStore keys, IAdmissionStore ad
                 CapacityDecision? decision = null;
                 var readmitted = await admission.MutateAsync(key, async scope =>
                 {
-                    decision = await scope.ReserveAsync(new(vm.Owner, vm.Name, job.Id, missing, TimeSpan.FromHours(2)));
+                    decision = await scope.ReserveAsync(new(vm.Owner, vm.Name, job.Id + ":resume:" + Guid.NewGuid().ToString("n"), missing, TimeSpan.FromHours(2)));
                     if (!decision.Allowed) return await scope.CompleteOperationKeyAsync(key.Owner, key.Kind, key.Key,
                         JsonSerializer.Serialize(decision.Reason == "inventory-incomplete" ? "capacity-unavailable" : "capacity-exhausted"));
                     return true;

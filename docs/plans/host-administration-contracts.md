@@ -3919,3 +3919,15 @@ dotnet/node/pwsh/browser/service processes remained. `git diff --check` passed.
 | `test/t3-https.test.sh` | 133 | 0 | 0 |
 | `test/vscode-download.test.sh` | 6 | 0 | 0 |
 | `extension/test/ui-smoke.js` | 311 | 0 | 0 |
+
+### Deviations — Phase 3 admission integration (ha/s3-delegation)
+
+- A partially swept child-create start re-admits missing reservations under
+  `<jobId>:resume:<random id>`, and intent recovery includes those derived operation
+  rows. The capacity ledger requires each operation's resource request to remain
+  immutable; reusing the original create id for only missing RAM/CPU would conflict
+  with its retained storage rows. The original start intent and activation time remain
+  unchanged. SQLite and memory recovery tests pin this behavior.
+- The SQL write helpers are internal to Constructd.Sqlite. The coordinator uses the
+  existing ledger transaction and shared VM, job, media, key and audit SQL helpers;
+  public Core seam signatures remain unchanged in this increment.

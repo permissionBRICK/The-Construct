@@ -36,11 +36,11 @@ public static class HostAdminComposition
         services.AddConsolePlatform(options);
         services.AddUpdatePlatform(options);
         services.AddNetworkPlatform(options);
-        if (options.Fake && options.EffectivePersistence == PersistenceMode.Memory)
+        if (options.EffectivePersistence == PersistenceMode.Memory)
         {
             services.AddSingleton<IAdmissionStore, InMemoryAdmissionStore>();
         }
-        else services.AddSingleton<IAdmissionStore>(sp => sp.GetRequiredService<UnsupportedFeaturePlatform>());
+        else services.AddSingleton<IAdmissionStore, SqliteAdmissionStore>();
         services.AddSingleton<IPersistedJobRunner>(sp => (IPersistedJobRunner)sp.GetRequiredService<IJobEngine>());
         return services;
     }

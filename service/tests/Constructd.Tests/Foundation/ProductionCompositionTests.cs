@@ -11,14 +11,16 @@ namespace Constructd.Tests.Foundation;
 
 public sealed class ProductionCompositionTests
 {
-    [Fact]
-    public void EveryFoundationEndpointDependencyResolvesWithProductionPersistenceAndFeatureRegistrations()
+    [Theory]
+    [InlineData(PersistenceMode.Sqlite)]
+    [InlineData(PersistenceMode.Memory)]
+    public void EveryFoundationEndpointDependencyResolvesWithProductionPersistenceAndFeatureRegistrations(PersistenceMode persistence)
     {
         var directory = Path.Combine(Path.GetTempPath(), "foundation-composition-" + Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(directory);
         try
         {
-            var options = new ConstructdOptions { Fake = false, Persistence = PersistenceMode.Sqlite, DatabasePath = Path.Combine(directory, "test.db"), ScriptsDir = directory };
+            var options = new ConstructdOptions { Fake = false, Persistence = persistence, DatabasePath = Path.Combine(directory, "test.db"), ScriptsDir = directory };
             var services = new ServiceCollection(); services.AddLogging(); services.AddSingleton(options);
             if (OperatingSystem.IsWindows()) services.AddConstructdServices(options);
             else
@@ -43,6 +45,12 @@ public sealed class ProductionCompositionTests
                 typeof(INetworkPolicyReconciler), typeof(IHostNetworkPolicy), typeof(IUrlAdmissionPolicy), typeof(IHostLock), typeof(IReleaseSource),
                 typeof(IUpdateStager), typeof(IUpdaterLauncher), typeof(IHostUpdateStore)];
             foreach (var type in required) Assert.NotNull(provider.GetRequiredService(type));
+            if (persistence == PersistenceMode.Memory)
+            {
+                Assert.IsType<InMemoryAdmissionStore>(provider.GetRequiredService<IAdmissionStore>());
+                return;
+            }
+            Assert.IsType<SqliteAdmissionStore>(provider.GetRequiredService<IAdmissionStore>());
             Assert.IsType<SqliteVmRepository>(provider.GetRequiredService<IVmRepository>());
             Assert.IsType<SqliteHostConfigStore>(provider.GetRequiredService<IHostConfigStore>());
             Assert.IsType<Constructd.Sqlite.SqliteCapacityLedger>(provider.GetRequiredService<ICapacityLedger>());

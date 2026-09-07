@@ -91,6 +91,7 @@ public sealed class InMemoryAdmissionStore(InMemoryVmRepository vms, InMemoryUse
             var job = Done(jobs.GetAsync(jobId, ct)) ?? throw new KeyNotFoundException("Unknown queued job.");
             // There is no hypervisor absence evidence here. Retain tombstones/fences/liabilities for
             // reconciliation rather than releasing a disk or RAM hold on an assumed rollback.
+            if (job.State != JobState.Queued) return Task.CompletedTask;
             return jobs.UpsertAsync(job with { State = JobState.Failed, Error = "Persisted job could not start.", Finished = clock.UtcNow }, ct);
         }
     }

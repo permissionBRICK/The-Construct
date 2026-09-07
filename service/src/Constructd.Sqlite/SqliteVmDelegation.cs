@@ -13,7 +13,7 @@ public sealed partial class SqliteVmRepository
     public async Task<int> CountByOwnerAsync(string owner, VmKind kind, CancellationToken ct) =>
         (await ListAsync(owner, ct)).Count(v => v.Kind == kind);
 
-    private static async Task<Vm?> ReadInTransaction(SqliteConnection c, SqliteTransaction tx, string name, CancellationToken ct)
+    internal static async Task<Vm?> ReadInTransaction(SqliteConnection c, SqliteTransaction tx, string name, CancellationToken ct)
     {
         await using var command = c.CreateCommand(); command.Transaction = tx;
         command.CommandText = "SELECT * FROM vms WHERE name=@name"; command.With("@name", name);
@@ -25,6 +25,12 @@ public sealed partial class SqliteVmRepository
     {
         await using var c = await database.OpenAsync(ct);
         await using var tx = c.BeginTransaction(deferred: false);
+        var result = await AddInTransaction(c, tx, vm, allowance, ct);
+        if (result == VmAddDecision.Added) await tx.CommitAsync(ct);
+        return result;
+    }
+    internal static async Task<VmAddDecision> AddInTransaction(SqliteConnection c, SqliteTransaction tx, Vm vm, EffectiveAllowance allowance, CancellationToken ct)
+    {
         if (await ReadInTransaction(c, tx, vm.Name, ct) is not null) return VmAddDecision.NameTaken;
         if (vm.Kind == VmKind.Child)
         {
@@ -48,12 +54,20 @@ public sealed partial class SqliteVmRepository
                         @vmTokenHash, @idleTimeout, @idleAction, @deleting, @power_generation, @kind, @parent, @sharing, @vm_token_kind, @ram_mb, @incarnation, @lease_requested_text, @lease_requested_seconds, @lease_activated_at, @lease_expires_at, @lease_state, @lease_version, @lease_last_attempt_at, @lease_last_outcome, @hardware_json, @guest_construct_commit, @guest_provisioned_at, @guest_reinstalled_at, @guest_reported_at, @guest_provenance, @guest_last_attempt_at, @guest_last_attempt_outcome, @observed_created_at, @observed_last_boot_at, @observed_addresses_json, @observed_storage_problem, @child_creation_closed, @current_job_id);
                 """;
         Bind(insert, vm); await insert.ExecuteNonQueryAsync(ct);
-        await tx.CommitAsync(ct); return VmAddDecision.Added;
+        return VmAddDecision.Added;
     }
 
     public async Task<bool> TryFenceAsync(string name, string jobId, bool closeChildCreation, CancellationToken ct)
     {
-        await using var c = await database.OpenAsync(ct); await using var cmd = c.CreateCommand();
+        await using var c = await database.OpenAsync(ct);
+        await using var tx = c.BeginTransaction(deferred: false);
+        var result = await TryFenceInTransaction(c, tx, name, jobId, closeChildCreation, ct);
+        await tx.CommitAsync(ct); return result;
+    }
+    internal static async Task<bool> TryFenceInTransaction(Microsoft.Data.Sqlite.SqliteConnection c, Microsoft.Data.Sqlite.SqliteTransaction tx, string name, string jobId, bool closeChildCreation, CancellationToken ct)
+    {
+        await using var cmd = c.CreateCommand();
+        cmd.Transaction = tx;
         cmd.CommandText = """
             UPDATE vms SET deleting=1, vm_token_hash=NULL, current_job_id=@job,
               child_creation_closed=CASE WHEN @closed=1 THEN 1 ELSE child_creation_closed END
@@ -65,8 +79,15 @@ public sealed partial class SqliteVmRepository
     }
     public async Task<bool> UpdateLeaseAsync(string name, Lease lease, long expectedVersion, CancellationToken ct)
     {
+        await using var c = await database.OpenAsync(ct); await using var tx = c.BeginTransaction(deferred: false);
+        var result = await UpdateLeaseInTransaction(c, tx, name, lease, expectedVersion, ct);
+        await tx.CommitAsync(ct); return result;
+    }
+    internal static async Task<bool> UpdateLeaseInTransaction(SqliteConnection c, SqliteTransaction tx, string name, Lease lease, long expectedVersion, CancellationToken ct)
+    {
         if (lease.Version != expectedVersion + 1) return false;
-        await using var c = await database.OpenAsync(ct); await using var cmd = c.CreateCommand();
+        await using var cmd = c.CreateCommand();
+        cmd.Transaction = tx;
         cmd.CommandText = """
             UPDATE vms SET lease_requested_text=@text, lease_requested_seconds=@seconds,
               lease_activated_at=@activated, lease_expires_at=@expires, lease_state=@state,
@@ -118,7 +139,14 @@ public sealed partial class SqliteVmRepository
     }
     public async Task SetOverrideAsync(VmOverride value, CancellationToken ct)
     {
-        await using var c = await database.OpenAsync(ct); await using var cmd = c.CreateCommand();
+        await using var c = await database.OpenAsync(ct); await using var tx = c.BeginTransaction(deferred: false);
+        await SetOverrideInTransaction(c, tx, value, ct);
+        await tx.CommitAsync(ct);
+    }
+    internal static async Task SetOverrideInTransaction(SqliteConnection c, SqliteTransaction tx, VmOverride value, CancellationToken ct)
+    {
+        await using var cmd = c.CreateCommand();
+        cmd.Transaction = tx;
         cmd.CommandText = """
             INSERT INTO vm_overrides VALUES (@name,@creation,@children,@lifetime,@never,@sharing,@at)
             ON CONFLICT(vm_name) DO UPDATE SET allow_child_creation=@creation,max_retained_children=@children,
@@ -159,6 +187,12 @@ public sealed partial class SqliteVmRepository
     public async Task<CascadeAcceptance> TryAcceptCascadeAsync(string parent, string token, string jobId, CancellationToken ct)
     {
         await using var c = await database.OpenAsync(ct); await using var tx = c.BeginTransaction(deferred: false);
+        var result = await AcceptCascadeInTransaction(c, tx, parent, token, jobId, clock?.UtcNow ?? DateTimeOffset.UtcNow, ct);
+        if (result.Accepted) await tx.CommitAsync(ct);
+        return result;
+    }
+    internal static async Task<CascadeAcceptance> AcceptCascadeInTransaction(SqliteConnection c, SqliteTransaction tx, string parent, string token, string jobId, DateTimeOffset now, CancellationToken ct)
+    {
         var vm = await ReadInTransaction(c, tx, parent, ct);
         var children = new List<Vm>();
         await using (var cmd = c.CreateCommand())
@@ -184,7 +218,7 @@ public sealed partial class SqliteVmRepository
             if (Convert.ToInt64(await live.ExecuteScalarAsync(ct)) > 0) return new(false, "operation-in-progress", current, null);
         }
 
-        if (vm is null || preview is null || !CascadeRules.Matches(preview, vm, current, token, (clock?.UtcNow ?? DateTimeOffset.UtcNow)))
+        if (vm is null || preview is null || !CascadeRules.Matches(preview, vm, current, token, now))
             return new(false, "cascade-mismatch", current, null);
         await using var fence = c.CreateCommand(); fence.Transaction = tx;
         fence.CommandText = """
@@ -194,7 +228,7 @@ public sealed partial class SqliteVmRepository
             UPDATE cascades SET state='accepted',job_id=@job WHERE parent=@parent;
             """;
         fence.With("@parent", parent).With("@job", jobId); await fence.ExecuteNonQueryAsync(ct);
-        await tx.CommitAsync(ct); return new(true, null, current, null);
+        return new(true, null, current, null);
     }
     public async Task<bool> UpdateIncarnationAsync(string name, string incarnation, CancellationToken ct)
     {
