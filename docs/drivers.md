@@ -373,3 +373,40 @@ Unverified ownership or a different VM incarnation refuses cleanup. These record
 contain no guest credentials. Storage accounting must retain artifacts until the
 removal call succeeds. Inventory and guest-address provider sections are owned by
 the capacity and network adapters respectively.
+
+## Service console transport
+
+`Constructd.Windows.Console.HyperVConsoleTransport` implements `IConsoleTransport`
+through `IProcessRunner`. It launches Windows PowerShell 5.1 with a fixed
+`-EncodedCommand` program; the VM name and all input arrive as JSON on stdin.
+The console needs no guest agent, network address, SSH, VMConnect window, or
+installed guest OS. The existing local `vmconnect` capability is unchanged.
+
+The script finds the requested VM by exact name, then resolves its video head,
+keyboard and mouse through that VM's GUID and WMI associations. Screenshot
+capture targets the realized `Msvm_VirtualSystemSettingData` path. Conversion
+validates the four-byte big-endian total length, then copies top-down,
+little-endian RGB565 rows into a System.Drawing bitmap, respecting stride.
+Only PNG bytes leave the adapter. Screenshots are at most 4 MiB, dimensions at
+most current native, with a separate 4,194,304-pixel work bound.
+
+Keyboard supports text, virtual-key down/up or `TypeKey`, scan-code byte arrays,
+and Ctrl+Alt+Del. Mouse supports native-pixel absolute positioning and buttons
+1–3; a present PS/2 device enables signed-byte relative movement. A failed
+synthetic call reports its numeric WMI return value and whether relative fallback
+is available. Button operations rejected by a present synthetic device are retried
+on a present PS/2 device, with that device’s actual result reported. Class/device
+discovery never makes a failed operation successful.
+Input operations for a VM are serialized; explicit press/release calls retain
+state in Hyper-V and clients should pair them.
+
+Host levels are screenshot/keyboard supported, absolute mouse conditional,
+relative mouse unsupported on the supported Gen 2 configuration, and interactive
+video unsupported. Per-VM levels lower for missing devices; a present PS/2 mouse
+reports conditional relative support. Interactive video requires a separate
+transport and authentication implementation, which is outside this delivery.
+
+The adapter does not log stdout, stderr, typed text, images or dependency
+exceptions. See [the API guide](../service/README.md#console-api) for sessions and
+limits and [the feasibility findings](plans/host-administration-hyperv-feasibility.md)
+for the precise elevated-account evidence and remaining LocalSystem limitations.

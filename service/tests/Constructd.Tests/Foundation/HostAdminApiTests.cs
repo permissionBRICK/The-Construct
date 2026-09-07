@@ -37,7 +37,7 @@ public sealed class HostAdminApiTests
         var status = await admin.GetFromJsonAsync<JsonElement>("/api/v1/host/status"); Assert.Equal("observe", status.GetProperty("capacityMode").GetString());
         Assert.False(status.GetProperty("capacity").GetProperty("complete").GetBoolean()); Assert.Equal(JsonValueKind.Array, status.GetProperty("activeJobs").ValueKind);
         var caps = await admin.GetFromJsonAsync<JsonElement>("/api/v1/host/capabilities"); Assert.Equal("fake", caps.GetProperty("backend").GetString());
-        Assert.Equal("unsupported", caps.GetProperty("capabilities").GetProperty("console").GetProperty("screenshot").GetString());
+        Assert.Equal("supported", caps.GetProperty("capabilities").GetProperty("console").GetProperty("screenshot").GetString());
     }
     [Fact]
     public async Task UserRoutesEditPolicyAndRolesTakeEffectOnExistingCredentials()
@@ -102,7 +102,7 @@ public sealed class HostAdminApiTests
         Assert.Equal(HttpStatusCode.OK, (await guest.GetAsync("/api/v1/vms/parent/children")).StatusCode);
         Assert.Equal(HttpStatusCode.Conflict, (await owner.PostAsJsonAsync("/api/v1/vms/child/token", new { })).StatusCode);
         Assert.Equal(HttpStatusCode.Conflict, (await owner.GetAsync("/api/v1/vms/child/endpoint")).StatusCode);
-        var caps = await owner.GetFromJsonAsync<JsonElement>("/api/v1/vms/child/capabilities"); Assert.Equal("unsupported", caps.GetProperty("console").GetProperty("screenshot").GetString());
+        var caps = await owner.GetFromJsonAsync<JsonElement>("/api/v1/vms/child/capabilities"); Assert.Equal("conditional", caps.GetProperty("console").GetProperty("screenshot").GetString());
     }
     [Fact]
     public async Task OverridesOnlyRestrictAndAreImmediatelyVisible()

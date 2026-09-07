@@ -150,20 +150,8 @@ public static class DelegationEndpoints
         {
             vm = vm.Name,
             state = runtime?.State ?? vm.State,
-            console = new
-            {
-                screenshot = runtime?.VideoHeadPresent == true ? caps.Console.Screenshot : CapabilityLevel.Unsupported,
-                keyboard = runtime?.KeyboardPresent == true ? caps.Console.Keyboard : CapabilityLevel.Unsupported,
-                mouseAbsolute = runtime?.SyntheticMousePresent == true ? caps.Console.MouseAbsolute : CapabilityLevel.Unsupported,
-                mouseRelative = runtime?.Ps2MousePresent == true ? caps.Console.MouseRelative : CapabilityLevel.Unsupported,
-                interactive = CapabilityLevel.Unsupported,
-                nativeWidth = runtime?.NativeWidth,
-                nativeHeight = runtime?.NativeHeight,
-                videoHeadPresent = runtime?.VideoHeadPresent ?? false,
-                keyboardPresent = runtime?.KeyboardPresent ?? false,
-                syntheticMousePresent = runtime?.SyntheticMousePresent ?? false,
-                ps2MousePresent = runtime?.Ps2MousePresent ?? false
-            },
+            console = ConsoleCapabilitiesResponse.From(caps.Console, new ConsoleScreen(runtime?.NativeWidth ?? 0, runtime?.NativeHeight ?? 0,
+                runtime?.VideoHeadPresent ?? false, runtime?.KeyboardPresent ?? false, runtime?.SyntheticMousePresent ?? false, runtime?.Ps2MousePresent ?? false)),
             hardware = new { generation = runtime?.Generation ?? vm.Hardware?.Generation, secureBootTemplateLocked = runtime?.SecureBootTemplateLocked ?? false },
             gracefulShutdown = runtime?.GracefulShutdown ?? CapabilityLevel.Unsupported,
             network = new { clientForward = caps.Network.ClientForward, hostForward, addressVerification = caps.Network.AddressVerification }

@@ -19,8 +19,8 @@ public sealed class InMemoryConsoleSessionStore : IConsoleSessionStore
     }
     public ConsoleSession? Get(string id, DateTimeOffset now)
     { lock (_gate) { if (!_sessions.TryGetValue(id, out var s)) return null; if (s.ExpiresAt <= now) { Remove(id); return null; } return s; } }
-    public ConsoleSession? Renew(string id, TimeSpan ttl, DateTimeOffset now)
-    { lock (_gate) { var s = Get(id, now); if (s is null) return null; return _sessions[id] = s with { ExpiresAt = now + ttl }; } }
+    public ConsoleSession? Renew(string id, TimeSpan ttl, DateTimeOffset now, int? nativeWidth = null, int? nativeHeight = null)
+    { lock (_gate) { var s = Get(id, now); if (s is null) return null; return _sessions[id] = s with { ExpiresAt = now + ttl, NativeWidth = nativeWidth ?? s.NativeWidth, NativeHeight = nativeHeight ?? s.NativeHeight }; } }
     public bool Remove(string id)
     { lock (_gate) { foreach (var k in _rates.Keys.Where(k => k.Id == id).ToArray()) _rates.Remove(k); return _sessions.Remove(id); } }
     private int RemoveWhere(Func<ConsoleSession, bool> predicate)

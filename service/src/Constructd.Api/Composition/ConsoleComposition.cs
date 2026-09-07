@@ -1,6 +1,6 @@
 using Constructd.Core.Abstractions;
 using Constructd.Core.Configuration;
-using Constructd.Core.Services;
+using Constructd.Windows.Console;
 using Constructd.Fakes;
 namespace Constructd.Api.Composition;
 
@@ -10,10 +10,10 @@ public static class ConsoleComposition
     {
         if (options.Fake)
         {
-            services.AddSingleton(_ => new FakeConsoleTransport { Capabilities = UnsupportedCapabilities.Console });
+            services.AddSingleton(sp => new FakeConsoleTransport { IsRunning = name => sp.GetRequiredService<FakeHypervisorDriver>().StateOf(name) == Constructd.Core.Domain.VmState.Running });
             services.AddSingleton<IConsoleTransport>(sp => sp.GetRequiredService<FakeConsoleTransport>());
         }
-        else services.AddSingleton<IConsoleTransport, UnsupportedConsoleTransport>();
+        else services.AddSingleton<IConsoleTransport, HyperVConsoleTransport>();
         services.AddSingleton<IConsoleSessionStore, InMemoryConsoleSessionStore>();
         return services;
     }

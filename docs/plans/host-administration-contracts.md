@@ -1434,7 +1434,7 @@ their `guest.*` stays unknown and `observed.lastBootAt` is the only boot evidenc
 | `vm-state-unknown` | 409 | |
 | `intent-expired` | 409 | `activationBase`, `lifetime` |
 | `console-session-expired` | 410 | |
-| `media-too-large` | 413 | `maxBytes` |
+| `media-too-large`, `screenshot-too-large` | 413 | `maxBytes` |
 | `checksum-mismatch`, `not-an-iso`, `unsigned-manifest`, `incompatible` | 422 | `reasons?` |
 | `rate-limited` | 429 | `retryAfterSeconds` |
 | `release-source-unreachable` | 502 | |
@@ -2653,7 +2653,7 @@ namespace Constructd.Core.Abstractions
         /// <summary>null when the per-VM cap (4) is reached.</summary>
         ConsoleSession? TryCreate(string vmName, string principal, int nativeWidth, int nativeHeight, TimeSpan ttl, DateTimeOffset now);
         ConsoleSession? Get(string id, DateTimeOffset now);
-        ConsoleSession? Renew(string id, TimeSpan ttl, DateTimeOffset now);
+        ConsoleSession? Renew(string id, TimeSpan ttl, DateTimeOffset now, int? nativeWidth = null, int? nativeHeight = null);
         bool Remove(string id);
         int RemoveExpired(DateTimeOffset now);
         int RemoveForVm(string vmName);
@@ -3662,3 +3662,62 @@ package references; `git diff --check` passed.
 | `test/t3-https.test.sh` | 133 | 0 | 0 |
 | `test/vscode-download.test.sh` | 6 | 0 | 0 |
 | `extension/test/ui-smoke.js` | 311 | 0 | 0 |
+
+## Deviations — console implementation (ha/s2-console)
+
+- `IConsoleSessionStore.Renew` accepts optional `nativeWidth`/`nativeHeight`
+  arguments, preserving existing call sites. Section 8.12 requires refreshing
+  native dimensions at renew; the original seam could update only the expiry.
+- `ConsoleCapabilitiesResponse` is reused by the general VM capability endpoint
+  and the console endpoint. This narrow edit to integrator-owned
+  `DelegationEndpoints.cs` keeps the wire projections consistent, including
+  conditional device levels and the reason interactive video is unsupported.
+- Feature discovery adds `console` in `ReleaseInfo` and `FakeReleaseInfo`; the
+  existing route and composition coverage fixtures are updated for the new routes
+  and production transport.
+- Thumbnail conversion stays in the fixed Windows PowerShell 5.1 script using
+  the feasibility report's System.Drawing pipeline (validated big-endian length
+  prefix, little-endian RGB565, row/stride copy). No unused Core PNG encoder is
+  introduced. Pure input and size policy lives in `ConsoleSessionRules`.
+- A present PS/2 mouse reports `conditional` on the per-VM console view and
+  enables relative fallback. The host default remains `unsupported` because the
+  supported Gen 2 configuration has no PS/2 device. Device availability and
+  numeric runtime results are authoritative; there is no claim of verified
+  Gen 1 operation.
+
+Console increment validation (Linux, 2026-09-07): build **0 warnings, 0 errors**;
+.NET **929 passed, 0 failed, 0 skipped** (45 new tests relative to integrated
+cab8301's 884); **24/24 Node files**, **17/17 PowerShell suites**, **20/20 bash
+suites**, including **38/38** fake-service end-to-end checks. The extra console
+script suite passed **163/163** checks: screen state/device lookup, every input
+method and argument type, failure/release behavior, PS/2 fallback, and RGB565
+validation. WMI doubles and Linux substitutes for GDI enum constants are used;
+the encoding sentinel makes no PNG-encoding claim.
+Frozen-contract compile/parity passed **5/5** after updating the Renew signature.
+
+Environment-only reruns used the already documented fixtures: process-only
+`init.defaultBranch=main` for Node/PowerShell config-sync (475/475 and 568/568),
+`T3CODE_BUILD_SOURCE=prebuilt SYSTEMD_UNIT_PATH=/usr/lib/systemd/system` for
+idle-report (103/103), and an empty `/home/agent` for provision-diskcheck (24/24),
+removed afterward. No global Git settings or unrelated sources were changed.
+The fake end-to-end suite stopped its own server. No host deployment occurred;
+the blocked relay probe and verified staging cleanup are recorded in the service
+README's console section.
+
+Console review amendments:
+
+- `screenshot-too-large` names the §8.12 screenshot byte-cap 413 and now appears
+  in §8.17 with `maxBytes`. `rate-limited` includes `retryAfterSeconds` and
+  `Retry-After`: 1 second for an event bucket, 60 seconds for the session cap.
+- When only PS/2 exists, absolute movement returns `409 console-unavailable`
+  with `device=syntheticMouse` and `fallback=moveRelative`; no fabricated WMI
+  return value is supplied. If a present synthetic device rejects a button
+  operation, the script tries that same button operation on a present PS/2 device
+  and reports its actual result.
+- Delete fences immediately deny subsequent console calls. Physical removal of
+  their in-memory session entries at fence time still depends on the integrator's
+  `RemoveForVm` hook; entries expire within 60 seconds and can count toward the
+  four-per-name cap until then. No fenced VM remains accessible through them.
+- Keyboard input now performs one process invocation: the script itself checks
+  the VM-scoped keyboard association. Screenshots and mouse retain the screen
+  pre-check for live coordinate validation; reducing those probes is deferred.

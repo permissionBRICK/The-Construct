@@ -114,6 +114,7 @@ app.MapGroup("/api/v1")
     .MapCapacityEndpoints()
     .MapDelegationEndpoints()
     .MapMediaEndpoints()
+    .MapConsoleEndpoints()
     .MapChildVmEndpoints();
 
 await Bootstrap.RunAsync(app.Services, CancellationToken.None);

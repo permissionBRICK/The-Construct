@@ -47,7 +47,7 @@ public sealed class ProductionCompositionTests
             Assert.IsType<SqliteHostConfigStore>(provider.GetRequiredService<IHostConfigStore>());
             Assert.IsType<Constructd.Sqlite.SqliteCapacityLedger>(provider.GetRequiredService<ICapacityLedger>());
             Assert.IsType<Constructd.Windows.HyperV.HyperVChildDriver>(provider.GetRequiredService<IChildVmDriver>());
-            Assert.IsType<UnsupportedConsoleTransport>(provider.GetRequiredService<IConsoleTransport>());
+            Assert.IsType<Constructd.Windows.Console.HyperVConsoleTransport>(provider.GetRequiredService<IConsoleTransport>());
             Assert.IsType<ReleaseInfo>(provider.GetRequiredService<IReleaseInfo>());
         }
         finally { SqliteConnection.ClearAllPools(); Directory.Delete(directory, true); }
