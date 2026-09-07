@@ -205,6 +205,12 @@ namespace ConstructTest {
     $DEV = "http://127.0.0.1:7999"
 
     Reset-Calls
+    foreach ($json in @('[]', '[{"name":"haus-vm"}]', '[{"name":"one"},{"name":"two"}]', '{"known":true}')) {
+        $script:nextContent = $json
+        $raw = Invoke-ConstructApi -BaseUrl 'http://127.0.0.1:7999' -Path '/vms' -Auth (New-ConstructApiAuth -Mode negotiate) -RawResponse
+        ok "api: raw response preserves $json" ($raw -ceq $json)
+    }
+    Reset-Calls
     $script:nextContent = '{"name":"DOMAIN\\alice","known":true,"role":"user","maxVms":2}'
     $me = Invoke-ConstructApi -BaseUrl $DEV -Method GET -Path '/whoami' -Auth $negotiate
     ok "api: the JSON body comes back parsed" ($me.name -eq 'DOMAIN\alice' -and $me.known -eq $true)

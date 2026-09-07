@@ -483,7 +483,7 @@ function buildDelegateScript(spec) {
   lines.push(
     "$r = Invoke-ConstructApi -BaseUrl " + psSingleQuote(baseUrl) +
       " -Method " + psSingleQuote(method) +
-      " -Path " + psSingleQuote(route) + " -Body $body -Auth $auth -NoThrow",
+      " -Path " + psSingleQuote(route) + " -Body $body -Auth $auth -NoThrow -RawResponse",
     "$envelope = [ordered]@{ status = (Get-ConstructApiLastStatus); error = (Get-ConstructApiLastError); body = $r }",
     "Write-Output ('CONSTRUCT_API ' + ($envelope | ConvertTo-Json -Depth 12 -Compress))"
   );
@@ -539,7 +539,8 @@ function runDelegate(spec, opts = {}) {
           (err.trim() ? ": " + err.trim().slice(0, 300) : ".")
         ));
       }
-      // The helper already parsed the body; re-serialise so the caller sees exactly the
+      // The helper returns raw JSON, preserving empty and singleton arrays. Accept
+      // legacy object envelopes too, so the caller sees exactly the
       // { status, text } shape nodeHttp produces. finish(), not resolve(), so the
       // watchdog timer is cleared — an uncleared one keeps the event loop alive.
       const text = env.body == null ? "" : (typeof env.body === "string" ? env.body : JSON.stringify(env.body));

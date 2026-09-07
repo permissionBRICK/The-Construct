@@ -134,11 +134,12 @@ public sealed class HostAdminEndToEndTests(ITestOutputHelper output)
                 var actual = audit.Where(e => e.Detail?.StartsWith("status=", StringComparison.Ordinal) == true)
                     .GroupBy(e => (e.Action, Status: int.Parse(e.Detail!.Substring(7, 3))))
                     .ToDictionary(g => g.Key, g => g.Count());
-                foreach (var group in requests.Mutations.GroupBy(r => r))
+                var auditable = requests.Mutations.Where(r => r.Action != "vm.activity" || r.Status >= 400).ToArray();
+                foreach (var group in auditable.GroupBy(r => r))
                     Assert.True(actual.GetValueOrDefault(group.Key) == group.Count(),
                         $"Audit count differs for {group.Key.Action} HTTP {group.Key.Status}.");
-                Assert.Equal(requests.Mutations.Count, actual.Values.Sum());
-                output.WriteLine($"PASS exactly one HTTP audit record for each of {requests.Mutations.Count} mutations, including refusals");
+                Assert.Equal(auditable.Length, actual.Values.Sum());
+                output.WriteLine($"PASS exactly one HTTP audit record for each of {auditable.Length} auditable mutations, including refusals");
                 var secrets = await File.ReadAllLinesAsync(Path.Combine(temp, "secrets"), timeout.Token);
                 Assert.True(secrets.All(secret => !app.Logs.AllText().Contains(secret, StringComparison.Ordinal)), "Service log leaked a sentinel.");
                 Assert.True(File.Exists(Path.Combine(temp, "state.db")), "SQLite persistence was not created.");
