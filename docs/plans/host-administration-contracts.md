@@ -2603,6 +2603,8 @@ namespace Constructd.Core.Abstractions
         Task AddUploadAsync(MediaUpload upload, CancellationToken ct);
         Task<bool> TryTransitionUploadAsync(string id, UploadState expected, MediaUpload updated, CancellationToken ct);
         Task<bool> RecordChunkAsync(string uploadId, int index, CancellationToken ct);
+        // Stage 2 additive seam: upload Done and media Ready commit atomically.
+        Task<bool> CompleteUploadAsync(string uploadId, MediaItem ready, CancellationToken ct);
         Task<IReadOnlyList<MediaUpload>> ListExpiredUploadsAsync(DateTimeOffset now, CancellationToken ct);
     }
 
@@ -3482,3 +3484,181 @@ No merge-induced defects or test failures were found, and no branch defects were
 recorded for deferral. The existing fixture prerequisites and platform coverage
 limits above still apply; passing this matrix does not establish host rollout
 readiness.
+
+## Integration notes (stage 2)
+
+Integrated on 2026-09-07 in `ha/integ-2`, reset to stage-1 `feat/host-admin`
+(`f7192f7`). Merged in order with `--no-ff`: `ha/s2-media` (`20a94b6`,
+two commits), `ha/s2-capacity` (`4e78800`), `ha/s2-childvm` (`6457476`),
+`ha/s2-extension` (`f58dd9a`), and `ha/s2-cli` (`82141e3`). Every branch
+had commits beyond the base; none was skipped. No push or host deployment was
+performed. The handover moves the local `feat/host-admin` ref to the final
+integration commit.
+
+### Merge resolutions and fixes
+
+- Media and CLI merged without conflicts. Capacity conflicted in the contract
+  deviations, API route chain, migration registry and migration assertions.
+  Both documentation sections and feature routes remain; migrations 100, 200,
+  300 and 400 are registered in order. Migration tests retain the legacy-row
+  checks while checking the combined registry count, uniqueness, order and range.
+- Child jobs conflicted in the optional PowerShell driver, service README, API
+  route chain, media fake, migration registry/assertions and production-composition
+  test. The driver retains both the capacity inventory and child hardware
+  functions. The combined composition resolves the real SQLite capacity ledger
+  and Hyper-V child driver; media byte-storage fakes and idempotent disposal remain.
+  The test-only Linux composition supplies the newly implemented job engine.
+- Extension conflicted only in the contract deviations. Both the child-job and
+  extension sections remain. No feature was dropped to resolve a conflict.
+- The initial .NET run passed 884 of 886 tests. Two media tests expected the
+  foundation's default persisted runner to be unsupported; the child branch now
+  implements it. Their fixtures explicitly inject `UnsupportedFeaturePlatform`
+  when testing refusal and cleanup. All failure-path assertions remain. This is
+  the only post-merge code/test fix; no production behavior changed for these
+  failures.
+- Contract parity initially passed 4 of 5 checks: the documented additive
+  `IMediaStore.CompleteUploadAsync` member was missing from the checked C# block.
+  Added its declaration to match the already documented and implemented seam;
+  no production signature or parity assertion was weakened.
+
+The integrated features cover media uploads/acquisition/cleanup, persistent capacity
+accounting and inventory, general-purpose child hardware/jobs, extension host
+administration and child-forward planning, and the delegated guest CLI. The
+primary `VmJobs`, local primary driver, `Auto-Install.ps1` and
+`Provision-AgentVM.ps1` remain byte-identical to the stage-1 base.
+
+### Defects and remaining integration work
+
+These are existing feature-stage gaps, not resolved by combining registrations:
+
+- **SQLite atomic admission is still missing.** `HostAdminComposition` resolves
+  `IAdmissionStore` to `UnsupportedFeaturePlatform` outside fake + memory mode.
+  Media/child admission returns `409 unsupported-capability`; production child
+  creation is not usable. M200/M300/M400 and their transaction helpers exist, and
+  the persisted job runner is now implemented, but the transaction coordinator
+  needs substantive implementation and tests. It was not replaced with non-atomic
+  writes during this merge.
+- **Primary capacity admission hooks are still absent.** The existing primary
+  create/power paths do not reserve through the new admission/ledger seam.
+  The ledger and reconciliation tests do not prove end-to-end enforcement for
+  primary creates or starts, even if host policy is set to `enforce`.
+- **The delegated child CLI round trip is not available yet.** Child creation
+  currently accepts owner/admin user credentials, not the primary token used by
+  `construct vm create`. Lifecycle/lease scheduling, sharing, cascade deletion,
+  console and child network routes remain subsequent-stage work. Discovery still
+  advertises only `host-admin`; no unsupported end-to-end child capability was
+  enabled just to expose the UI. The existing fake-service end-to-end suite
+  exercises primary flows, not a child create/list/shutdown/delete round trip.
+
+These gaps exceed a few-line merge correction and are handed to the next stage.
+Existing branch-specific deviations above remain applicable. Linux recording
+runners and fakes do not validate Hyper-V, LocalSystem or Windows PowerShell 5.1
+execution; this integration made no host probe. Earlier probe evidence stays
+attributed to its original branch/report.
+
+### Final validation and per-suite results
+
+All **64 suites** passed on Linux after the two fixture corrections and signature
+synchronization. The final `dotnet build service/Constructd.sln` reported
+**0 warnings, 0 errors**; `dotnet test service/Constructd.sln` passed **886 tests**
+(180 above stage 1, 248 above the original 638-test baseline). The full .NET suite
+was rerun after the fixture correction. Contract parity was rerun after the
+signature fix and passed all five checks. Other passing suites were not repeated.
+Browser smoke used the default classic theme in headless Chromium.
+
+| Family | Suites | Passed checks/groups | Failed | Explicit skips |
+|---|---:|---:|---:|---:|
+| .NET | 1 | 886 | 0 | 0 |
+| Node | 24 | 5148 | 0 | 1 |
+| PowerShell | 18 | 3062 | 0 | 1 |
+| Bash | 20 | 976 | 0 | 0 |
+| Browser | 1 | 311 | 0 | 0 |
+
+Counts are reported assertions except `provision-seed-user` (seven scenario
+groups) and `t3-desktop-handoff` / `t3-reprovision-host` (one successful group
+each; no internal assertion count). The .NET suite itself runs the host-installer
+suite, so totals across families are not unique assertions.
+
+The two explicit skips are the Node forwarder's unwritable-spool case under root
+and PowerShell's Windows-only DPAPI round trip. `t3-reprovision-host` ran without
+`-DownloadBase`; its optional HTTP-download and native Windows launch checks were
+not exercised. PowerShell execution here was Linux pwsh, not Windows PowerShell 5.1.
+
+Environment prerequisites matched the stage-1 run: process-only Git default
+branch `main`, `T3CODE_BUILD_SOURCE=prebuilt` and
+`SYSTEMD_UNIT_PATH=/usr/lib/systemd/system` for `idle-report`, and a temporary empty
+`/home/agent` only for `provision-diskcheck` (removed after the suite). MSBuild
+server/node reuse and shared compilation were disabled; `DOTNET_PROCESSOR_COUNT=2`
+bounded build/test concurrency. Browser dependencies came from
+`extension/test/package-lock.json` via `npm ci --ignore-scripts`; no lockfile changed.
+The fake end-to-end test used port **17924**, stopped its own service, and that
+port was verified closed. No workspace-owned dotnet/node/pwsh/service processes
+remained. No existing VM service was stopped or restarted. Core retains zero
+package references; `git diff --check` passed.
+
+| Suite | Passed checks/groups | Failed | Explicit skips |
+|---|---:|---:|---:|
+| `dotnet test service/Constructd.sln` | 886 | 0 | 0 |
+| `extension/test/audio.test.js` | 233 | 0 | 0 |
+| `extension/test/configsync.test.js` | 475 | 0 | 0 |
+| `extension/test/drivers.test.js` | 79 | 0 | 0 |
+| `extension/test/forwarder.test.js` | 715 | 0 | 1 |
+| `extension/test/host.test.js` | 118 | 0 | 0 |
+| `extension/test/hostadmin-ui.test.js` | 84 | 0 | 0 |
+| `extension/test/hostadmin.test.js` | 267 | 0 | 0 |
+| `extension/test/importui.test.js` | 24 | 0 | 0 |
+| `extension/test/instances.test.js` | 1528 | 0 | 0 |
+| `extension/test/instancestate.test.js` | 105 | 0 | 0 |
+| `extension/test/lifecycle.test.js` | 265 | 0 | 0 |
+| `extension/test/notify.test.js` | 103 | 0 | 0 |
+| `extension/test/probe.test.js` | 98 | 0 | 0 |
+| `extension/test/project-set.test.js` | 63 | 0 | 0 |
+| `extension/test/projects.test.js` | 167 | 0 | 0 |
+| `extension/test/remote.test.js` | 71 | 0 | 0 |
+| `extension/test/remotehost.test.js` | 206 | 0 | 0 |
+| `extension/test/repatch.test.js` | 39 | 0 | 0 |
+| `extension/test/t3code.test.js` | 89 | 0 | 0 |
+| `extension/test/themes.test.js` | 43 | 0 | 0 |
+| `extension/test/updates.test.js` | 143 | 0 | 0 |
+| `extension/test/usage.test.js` | 131 | 0 | 0 |
+| `extension/test/vmpower.test.js` | 81 | 0 | 0 |
+| `extension/test/zip.test.js` | 21 | 0 | 0 |
+| `service/tests/Constructd.Tests/Capacity/inventory.test.ps1` | 16 | 0 | 0 |
+| `service/tests/host-installer.test.ps1` | 368 | 0 | 0 |
+| `test/config-sync.test.ps1` | 568 | 0 | 0 |
+| `test/driver-contract.test.ps1` | 131 | 0 | 0 |
+| `test/host-admin-client.test.ps1` | 19 | 0 | 0 |
+| `test/host-lib.test.ps1` | 309 | 0 | 0 |
+| `test/instance-cleanup.test.ps1` | 124 | 0 | 0 |
+| `test/instance-identity.test.ps1` | 242 | 0 | 0 |
+| `test/instance-state.test.ps1` | 64 | 0 | 0 |
+| `test/instances.test.ps1` | 781 | 0 | 0 |
+| `test/native-iso-host.test.ps1` | 23 | 0 | 0 |
+| `test/notify-toast.test.ps1` | 22 | 0 | 0 |
+| `test/provision-seed-user.test.ps1` | 7 | 0 | 0 |
+| `test/remote-client.test.ps1` | 93 | 0 | 1 |
+| `test/remote-driver.test.ps1` | 87 | 0 | 0 |
+| `test/remote-install.test.ps1` | 206 | 0 | 0 |
+| `test/t3-desktop-handoff.test.ps1` | 1 | 0 | 0 |
+| `test/t3-reprovision-host.test.ps1` | 1 | 0 | 0 |
+| `test/autoinstall-iso.test.sh` | 59 | 0 | 0 |
+| `test/construct-expose.test.sh` | 170 | 0 | 0 |
+| `test/construct-notify.test.sh` | 36 | 0 | 0 |
+| `test/construct-vm.test.sh` | 172 | 0 | 0 |
+| `test/contracts-compile.test.sh` | 5 | 0 | 0 |
+| `test/export-config.test.sh` | 12 | 0 | 0 |
+| `test/external-host.test.sh` | 61 | 0 | 0 |
+| `test/idle-report.test.sh` | 103 | 0 | 0 |
+| `test/opencode-install.test.sh` | 20 | 0 | 0 |
+| `test/partial-streaming.test.sh` | 6 | 0 | 0 |
+| `test/patch-status.test.sh` | 12 | 0 | 0 |
+| `test/provision-diskcheck.test.sh` | 24 | 0 | 0 |
+| `test/provision-hostname.test.sh` | 28 | 0 | 0 |
+| `test/provision-marker.test.sh` | 32 | 0 | 0 |
+| `test/provision-steprunner.test.sh` | 17 | 0 | 0 |
+| `test/remote-e2e.test.sh` | 38 | 0 | 0 |
+| `test/restore-config.test.sh` | 25 | 0 | 0 |
+| `test/systemprompt-install.test.sh` | 17 | 0 | 0 |
+| `test/t3-https.test.sh` | 133 | 0 | 0 |
+| `test/vscode-download.test.sh` | 6 | 0 | 0 |
+| `extension/test/ui-smoke.js` | 311 | 0 | 0 |

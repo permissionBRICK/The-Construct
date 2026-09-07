@@ -233,6 +233,7 @@ public sealed class MediaApiTests
         BlockingTransfer? transfer=null;
         await using var app=new TestApp(configureServices:services=> {
             if(supported) services.AddSingleton<IPersistedJobRunner,Runner>();
+            else services.AddSingleton<IPersistedJobRunner,Constructd.Core.Services.UnsupportedFeaturePlatform>();
             services.AddSingleton<IMediaTransfer>(sp=> {transfer=new BlockingTransfer(sp.GetRequiredService<FakeMediaTransfer>()); transfer.Resume.SetResult(); return transfer;});
         });
         using var alice=await app.CreateUserClientAsync("alice"); await Configure(app);
@@ -302,7 +303,10 @@ public sealed class MediaApiTests
     [Fact]
     public async Task Unsupported_runner_fails_media_immediately_without_losing_accounting()
     {
-        await using var app=new TestApp(configureServices:services=>services.AddSingleton<IMediaDnsResolver,Resolver>());
+        await using var app=new TestApp(configureServices:services=> {
+            services.AddSingleton<IMediaDnsResolver,Resolver>();
+            services.AddSingleton<IPersistedJobRunner,Constructd.Core.Services.UnsupportedFeaturePlatform>();
+        });
         using var alice=await app.CreateUserClientAsync("alice"); await Configure(app);
         var response=await alice.PostAsJsonAsync(Root+"/acquire",new {url="https://public.example/media.iso",role="install",operationKey="no-runner"});
         Assert.Equal(HttpStatusCode.Conflict,response.StatusCode); Assert.Equal("unsupported-capability",(await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("code").GetString());
