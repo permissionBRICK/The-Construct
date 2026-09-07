@@ -383,7 +383,58 @@ function Get-ConstructChildVmCapabilities {
 }
 
 # capacity -- Get-ConstructHostInventory is owned by the capacity pair.
-# network -- Get-ConstructVmAddresses is owned by the network pair.
+# network -- KVP reports are untrusted; MAC/neighbor facts do not prove IP ownership.
+function Get-ConstructVmAddresses {
+    param([string]$Name, [string]$VmId, [object[]]$VmRequests = @())
+    $addresses = @(); $adapters = @(); $neighbors = @(); $subnets = @(); $vmSnapshots = @()
+    if ($Name) { $VmRequests = @(@{ name = $Name; vmId = $VmId }) }
+    foreach ($request in $VmRequests) {
+        $Name = [string]$request.name; $VmId = [string]$request.vmId
+        $addresses = @(); $adapters = @(); $failureCategory = 'vm-not-found'
+        try {
+            # Resolve the immutable id first. Never query an arbitrary recreated child by name.
+            if ($VmId) { $vm = Get-VM -Id ([Guid]$VmId) -ErrorAction Stop }
+            else { $vm = Get-VM -Name $Name -ErrorAction Stop }
+            $failureCategory = 'vm-incarnation-changed'
+            if ($vm.Name -ine $Name) { throw 'vm-incarnation-changed' }
+            $failureCategory = 'adapter-query-failed'
+            foreach ($nic in @(Get-VMNetworkAdapter -VM $vm -ErrorAction Stop)) {
+                $adapters += @{ vmId = [string]$vm.Id; adapterId = [string]$nic.Id; macAddress = [string]$nic.MacAddress;
+                    macSpoofingEnabled = ([string]$nic.MacAddressSpoofing -eq 'On'); switchName = [string]$nic.SwitchName }
+                foreach ($value in @($nic.IPAddresses)) {
+                    $ip = $null
+                    if (-not [Net.IPAddress]::TryParse([string]$value, [ref]$ip)) { continue }
+                    $family = 'ipv4'; if ($ip.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetworkV6) { $family = 'ipv6' }
+                    $addresses += @{ address = $ip.ToString(); family = $family; source = 'kvp'; observedAt = [DateTimeOffset]::UtcNow.ToString('o');
+                        verified = $false; adapterId = [string]$nic.Id }
+                }
+            }
+            $vmSnapshots += @{ name = $Name; addresses = @($addresses); adapters = @($adapters) }
+        } catch {
+            # An absent/in-flight/replaced VM must not discard another VM's KVP report.
+            # Never return exception or cmdlet output from this boundary.
+            $addresses = @(); $adapters = @()
+            $vmSnapshots += @{ name = $Name; addresses = @(); adapters = @(); error = $failureCategory }
+        }
+    }
+    $hostIps = @(Get-NetIPAddress -ErrorAction Stop)
+    $management = @(Get-VMNetworkAdapter -ManagementOS -ErrorAction Stop)
+    $netAdapters = @(Get-NetAdapter -IncludeHidden -ErrorAction Stop)
+    foreach ($nic in $management) {
+        # Bind the actual host adapter by MAC, not a guessed switch/alias string.
+        $mac = ([string]$nic.MacAddress).Replace('-', '').Replace(':', '')
+        foreach ($hostNic in @($netAdapters | Where-Object { ([string]$_.MacAddress).Replace('-', '').Replace(':', '') -ieq $mac })) {
+            foreach ($entry in @($hostIps | Where-Object { $_.InterfaceIndex -eq $hostNic.ifIndex })) {
+                $subnets += @{ cidr = ([string]$entry.IPAddress + '/' + [string]$entry.PrefixLength); switchName = [string]$nic.SwitchName; interfaceAlias = [string]$entry.InterfaceAlias }
+            }
+            foreach ($neighbor in @(Get-NetNeighbor -InterfaceIndex $hostNic.ifIndex -ErrorAction Stop)) {
+                $neighbors += @{ address = [string]$neighbor.IPAddress; macAddress = [string]$neighbor.LinkLayerAddress;
+                    interfaceAlias = [string]$hostNic.Name; state = [string]$neighbor.State }
+            }
+        }
+    }
+    @{ vms = @($vmSnapshots); addresses = @($addresses); adapters = @($adapters); neighbors = @($neighbors); subnets = @($subnets); hostAddresses = @($hostIps | ForEach-Object { [string]$_.IPAddress }) }
+}
 
 # childvm -- storage placement is read before admission, never allocated here.
 function Get-ConstructChildStorage {

@@ -418,3 +418,27 @@ Environment overrides (used by `test/idle-report.test.sh`, and available for deb
 - `service/README.md` — the host service's API and authentication, including the ack relay
 - [`docs/remote-host.md`](remote-host.md) — the host service this VM talks to in remote mode
 - `docs/remote-access.md` — how the VM is reached in the first place
+
+## Child destinations on remote hosts
+
+`construct expose` keeps its primary/self-forward protocol. A general-purpose child
+has no Construct token and cannot request exposure itself. An authorized user or
+primary requests `POST /api/v1/vms/CHILD/forwards` with `vmPort`, optional
+`connectPort`, `target: "client"` and optional `via` (the requester's primary).
+The response's `destination` names the child separately from the requester and
+SSH carrier. Shared callers use their own primary, never the owner's SSH credentials.
+
+The owning extension polls `/vms/PRIMARY/forwards?via=PRIMARY`, tunnels to
+`destination.connectAddress:connectPort`, and acknowledges using the **child's**
+forward route. Only the human owner of `destination.via` or an admin may ack.
+An unknown address is recorded with `status: "error"` and
+`message: "guest address unknown yet"`. Address changes/conflicts invalidate the
+ack with `message: "guest address changed"`; a usable address clears the ack for
+fresh establishment. Revoked sharing removes shared-requester rows so the extension
+closes their tunnels on its next poll.
+
+Hyper-V child addresses are guest-reported and **unverified**. Child host exposure
+is refused even if the host and owner's host-forward switches allow it, because no
+IP allocation authority is installed. Direct reporting is conditional on guest
+integration services. The service reports `isolation: "none"`; intended network
+rules do not filter packets. See [child networking](remote-host.md#child-networking).

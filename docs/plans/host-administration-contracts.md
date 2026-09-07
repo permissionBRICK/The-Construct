@@ -2051,7 +2051,7 @@ namespace Constructd.Core.Domain
     }
 
     // ---- Constructd.Core/Domain/HostObservation.cs --------------------------------------
-    public sealed record GuestAddress(string Address, GuestAddressFamily Family, GuestAddressSource Source, DateTimeOffset ObservedAt, bool Verified);
+    public sealed record GuestAddress(string Address, GuestAddressFamily Family, GuestAddressSource Source, DateTimeOffset ObservedAt, bool Verified, string? AdapterId = null);
 
     /// <summary>Host-authoritative facts about ONE VM adapter (never guest-supplied).</summary>
     public sealed record GuestAdapter(string VmId, string AdapterId, string MacAddress, bool MacSpoofingEnabled, string? SwitchName);
@@ -2815,6 +2815,7 @@ namespace Constructd.Core.Abstractions
         Task OnSharingChangedAsync(Vm vm, SharingScope previous, CancellationToken ct);
         Task OnAddressChangedAsync(string vmName, IReadOnlyList<GuestAddress> addresses, CancellationToken ct);
         Task<int> ReconcileAsync(CancellationToken ct);
+        Task<int> ReconcileAsync(IGuestAddressProvider snapshot, CancellationToken ct);
         Task<IReadOnlyList<NetworkRule>> ListRulesAsync(string vmName, CancellationToken ct);
     }
 
@@ -4070,3 +4071,74 @@ S3 configuration review clarifications:
 - Off-VM RAM changes leave any pre-existing saved-state hold at its previous size until
   the next start re-admits the actual target requirement. Off carries no runtime RAM/CPU
   charge; no save allocation can occur through the API before that admission.
+
+### Deviations — network implementation (ha/s3-network)
+
+- Added an optional `GuestAddress.AdapterId` to retain the KVP report's adapter
+  association. The original signature could not distinguish two adapters on different
+  switches with overlapping subnets; the resolver only accepts an omitted adapter id
+  for a single-adapter VM. The `/addresses` DTO keeps its contracted fields.
+- Added `IPortForwardManager.TryAddDestinationForwardAsync` and
+  `IForwardStore.SetDestinationAsync` (default unsupported implementations preserve
+  existing implementors). Destination allocation must happen inside the existing
+  manager gate; a separate post-insert update could expose a temporarily flat child
+  row or race deletion. Address/ack updates never recreate removed rows.
+- Migration 700 additionally stores `destination_verified` and
+  `network_address_history`, behind the new `INetworkRuleStore`. Verification remains
+  false on every Hyper-V child request. Persistent history is necessary to enforce
+  the contracted "previously used by another managed VM" restriction after forward
+  removal and service restart. Network address history is retained; it is consulted
+  only for VMs still managed by the service.
+- `NoIsolationNetworkPolicy` records real parent/consumer peer intents in SQLite (or
+  the fake store), not the stage-1 in-memory placeholder. Missing immediate sharing
+  events are repaired by periodic reconciliation. The integrated base has no sharing
+  mutation endpoint; the lifecycle integrator must call `OnSharingChangedAsync`
+  after committing sharing, which revokes shared forwards before replacing intents.
+  Existing child create/delete job hooks are used unchanged.
+- Network process collection correlates management-OS adapter MACs to host NIC indices
+  instead of assuming the host NIC alias contains the switch name. This preserves
+  switch binding when a host adapter has been renamed. KVP/neighbor/MAC facts never
+  count as an address authority.
+
+Network validation on Linux: solution build **0 warnings / 0 errors**; full .NET
+**1013/1013** (37 added versus the integrated 976-test baseline); final focused
+regression **143/143** after the case-insensitive legacy-query guard and fail-loud
+netsh cleanup refinements. Node **24 files / 5148 checks**, driver-contract pwsh
+**131**, host-installer pwsh **368**, network-script pwsh **15**, construct-expose bash
+**170**, fake remote end-to-end **38**, contract compilation/reflection **5**; all
+passed. The Node fixture needs process-only `init.defaultBranch=main` (the first
+run failed without that existing fixture convention). Initial stale route/schema
+allowlists were updated for the new route and migration. End-to-end used port
+17935, stopped its own fake service and the port was verified closed. No real
+Hyper-V, Windows PowerShell 5.1 or LocalSystem execution was performed.
+
+Network review refinements: `IGuestAddressSnapshotProvider.CaptureAsync` captures
+all managed VM/host facts in one process. The additive
+`INetworkPolicyReconciler.ReconcileAsync(snapshot, ct)` overload shares that snapshot
+with child exposure for a complete periodic pass. The original method remains for
+existing adapters. Primary host repair runs first and each pass has an independent
+failure boundary. Collection failures produce sanitized warnings. Address history
+is keyed by VM name and is not pruned: a reused VM name inherits its earlier history,
+and an address reassigned between still-managed VMs remains conflicting by the
+contract's conservative previously-used-address rule. Shared consumers use the
+target child's common forward slot budget.
+
+After network review round 1, the complete solution passes **1015/1015** tests
+(39 above the integrated baseline), with **0 warnings / 0 errors**. The targeted
+network/reconciliation set passes **39/39**; the expanded PowerShell network suite
+passes **21**, driver-contract **131**, contract signatures **5**, and the freshly
+rerun fake end-to-end **38**. Prior Node/installer/expose results remain applicable;
+those sources were not changed by this review. The Windows 5.1 CI entry is wired,
+but has not run in this Linux session.
+
+Network review round 2 isolates snapshot failures per VM (`vm-not-found`,
+`vm-incarnation-changed`, `adapter-query-failed`). The provider skips known absent
+rows, logs only the canonical managed VM name and a whitelisted category, discards
+failed VM addresses/adapters, and preserves sibling reports and host facts. Unknown
+error categories are replaced by `vm-query-failed`; no dependency error text is logged.
+
+Final round-2-fix validation: full .NET **1018/1018** (42 added), build **0 warnings /
+0 errors**, focused network **40/40**, network PowerShell **29**, driver-contract
+PowerShell **131**, contract compile/reflection **5**, and fresh fake end-to-end
+**38** all pass. The new per-VM failure tests preserve sibling reports, keep host
+facts, skip known absent rows, and reject untrusted error text in diagnostics.

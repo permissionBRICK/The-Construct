@@ -779,3 +779,51 @@ Admin resumes or resolves it. `last-update.json` under the service data director
 Release signing setup, manual first deployment, retention, recovery fences and rollback
 limits are documented in [Host releases and deployment](host-release.md). No real-host
 update has been validated by the Linux test run.
+
+### Child networking
+
+A child receives no Construct credential. Its parent primary (with a `primary`
+token), its owner, an administrator or an eligible host-shared consumer requests
+`POST /api/v1/vms/CHILD/forwards`. Use `target: "client"` (the default), `vmPort`,
+and optionally `connectPort` and `via`. A user with multiple primaries must name
+`via`; a primary token implies itself. A shared consumer uses their own primary's
+SSH connection. An administrator accessing another owner's child must explicitly
+name a primary they own.
+
+Child forward responses carry `destination` with the child VM, requester,
+relationship, `via`, address, port and `verified: false`. The extension polls
+`GET /api/v1/vms/PRIMARY/forwards?via=PRIMARY`, opens an SSH local forward from that
+primary to the child's reported address, then acknowledges on the child's route.
+Only the `via` primary's human owner or an administrator may acknowledge. Each
+request has its own row; shared consumers cannot overwrite other consumers' acks.
+Owner/admin/parent listings can use `?includeChildren=true` on their primary.
+Existing primary forwards retain their flat response shape and credential rules.
+
+`GET /api/v1/vms/CHILD/addresses` reports KVP addresses; an empty list is normal
+before guest networking/integration services work. Direct reporting can be disabled
+with `network.directAddressReporting`. Child client destinations must share a
+switch/subnet with `via`, match the recorded child incarnation and reporting adapter,
+and exclude host, loopback, link-local, multicast, broadcast and conflicting managed
+VM addresses. These checks prevent accidents; they do not prove IP ownership.
+Unknown addresses produce an error forward that can recover when an address appears.
+Periodic reconciliation clears stale acknowledgements on address change and removes
+forwards whose requester, primary or sharing grant is no longer eligible.
+
+Host forwarding is independently controlled by `network.hostForwardsEnabled` and
+the **child owner's** `AllowHostForwards`, including shared and parent requests.
+Even when both allow it, Hyper-V child host forwards return `409 address-unverifiable`
+with `reason: "no-address-authority"`. Hyper-V cannot establish IP ownership from
+KVP, MAC spoofing protection or neighbor-table entries. Primary host forwards keep
+the existing endpoint mechanism.
+
+Isolation is **none**. The service persists parent-child and shared-consumer rules
+as **intended**, never enforced. The network reconciliation interface accepts VM
+creation/deletion, sharing and address change events and repairs intended state
+periodically. The lifecycle sharing endpoint must call `OnSharingChangedAsync`
+after committing a change; that endpoint is a separate integration increment.
+No firewall or Proxmox adapter is installed. See [the service networking seams](../service/README.md#child-network-adapters)
+for the future adapter inputs and events.
+
+The forward slot limit is per **target child**, shared by its owner and all shared
+consumers. A shared consumer can occupy the child's available slots; the owner or
+parent can remove unwanted forwards. Per-requester slot budgets are not implemented.

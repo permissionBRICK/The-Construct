@@ -55,6 +55,7 @@ service/
   host/                     Install-ConstructHost.ps1 / Uninstall-ConstructHost.ps1 (PS 5.1)
   tests/Constructd.Tests/   xunit: Core unit tests, SQLite persistence tests, API integration tests,
                             Windows platform tests (command lines, parsers, reconciliation)
+  tests/Constructd.Tests/Network/network-script.test.ps1  guest-network snapshot contract (also Windows PS 5.1 CI)
   tests/host-installer.test.ps1   pwsh: installer parser, parameter contract, powercfg parsing
 ```
 
@@ -1827,3 +1828,59 @@ Pending media intents durably project `observed.storageProblem = "media-unverifi
 capacity reconciliation cannot clear the flag. Only successful same-request retry or
 VM deletion settles an interrupted attachment. Configuration retries tolerate intervening
 power-generation changes when the same incarnation is confirmed Off under its VM gate.
+
+## Child network adapters
+
+`network` discovery advertises child connectivity through the existing forward
+routes with distinct `ForwardDestination` identity. `ForwardRequesterHandler`
+retains the old policy for primary targets and resolves admin/owner/parent/shared
+relationships for child targets. Host policy is checked after that relationship:
+both `network.hostForwardsEnabled` and the destination owner's `AllowHostForwards`
+must allow it. Hyper-V then refuses child host forwards with
+`409 address-unverifiable`, `reason: no-address-authority`. Client forwards use the
+requester's primary as their SSH carrier. Child guests receive no credentials.
+
+`HyperVGuestAddressProvider` invokes `Get-ConstructVmAddresses` through
+`IProcessRunner` argv and JSON stdin. It resolves the immutable VM id, reads each
+adapter's KVP reports and MAC/switch facts, and correlates management adapter MACs
+with host NICs for switch-bound subnets and neighbor facts. Every reported address
+is unverified. Missing evidence fails closed. `GuestAddressResolver` rejects stale
+incarnations, incompatible switches, forbidden addresses and conflicts with current
+or previously used addresses of other managed VMs. Migration 700 stores child
+forward destinations, address-use history and `network_rules`; primary destination
+columns remain null. Destination changes clear stale acks without resurrecting a
+concurrently removed forward. Host forward argv uses the destination address/port
+only for a verified destination (a future-authority seam tested with synthetic inputs).
+
+`INetworkPolicyReconciler` has `OnVmCreatedAsync`, `OnSharingChangedAsync`,
+`OnAddressChangedAsync`, `OnVmDeletedAsync`, periodic `ReconcileAsync` and rule listing.
+Create/delete jobs already invoke their hooks. The separately delivered sharing
+mutation must call its hook after committing: it revokes shared exposure and updates
+intended rules. Periodic reconciliation also repairs missed sharing events, missing
+VMs and disabled consumers. `NoIsolationNetworkPolicy` persists `parent-child` and
+`shared-consumer` peers with `state: intended`, returns `IsolationLevel = "none"`,
+and audits changes. It does **not** enforce packet isolation.
+
+A future Proxmox/firewall adapter receives the VM incarnation, reporting adapter,
+switch-bound subnets, host addresses, authoritative IP allocations via
+`IAddressAuthority`, requester/owner/parent/sharing identities, desired peer rules
+and requested ports/modes. It consumes VM-created, VM-deleted, sharing-changed and
+address-changed events, plus periodic reconciliation. It must revoke stale rules,
+report actual enforcement failures and supply an allocation authority before child
+host forwards can be admitted. No Proxmox/firewall adapter or IP authority ships
+here. Linux recording-runner, fake API and pwsh checks are not Hyper-V validation;
+Windows PowerShell 5.1/LocalSystem execution remains a field-test requirement.
+
+Run the guest-network script checks with
+`pwsh -NoProfile -File service/tests/Constructd.Tests/Network/network-script.test.ps1`.
+The same suite is included in the Windows PowerShell 5.1 job of
+`.github/workflows/iso-installers.yml`. Each reconciliation tick repairs primary host
+forwards first, then captures one all-VM network snapshot in one PowerShell process,
+shared by child exposure and intended-rule reconciliation. Each pass has a separate
+failure boundary. Failed snapshot collection logs a bounded category or exit code;
+process output and exception text are never logged.
+
+Snapshot collection skips registry rows already marked absent. A missing, in-flight
+or replaced VM produces a per-VM empty result and sanitized warning; sibling VM
+reports and host facts remain available. Host-wide collection failures still fail
+closed for the complete snapshot.

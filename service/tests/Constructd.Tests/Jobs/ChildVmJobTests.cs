@@ -134,6 +134,7 @@ public sealed class ChildVmJobTests
         var vm = (await app.Vms.GetAsync("child", default))!;
         Assert.Equal(start ? VmState.Running : VmState.Off, vm.State); Assert.Equal(leaseState, vm.Lease!.State);
         Assert.NotNull(vm.Incarnation); Assert.Null(vm.VmTokenHash); Assert.Null(vm.Guest); Assert.Null(vm.SshForwardPort);
+        Assert.Equal("parent-child", Assert.Single(await app.Service<INetworkPolicyReconciler>().ListRulesAsync("child", default)).Kind);
         Assert.Null(await app.Service<IJobEngine>().TakeOneTimeSecretAsync(job.Id, default));
         Assert.DoesNotContain(app.Driver.Calls, x => x.Contains("reachable", StringComparison.OrdinalIgnoreCase));
         var holds = (await app.Service<ICapacityLedger>().SnapshotAsync(false, default)).Reservations;
@@ -156,8 +157,10 @@ public sealed class ChildVmJobTests
     {
         await using var app = new TestApp(); using var client = await Setup(app);
         Assert.Equal(JobState.Succeeded, (await Finish(app, await client.PostAsJsonAsync("/api/v1/vms/parent/children", Request()))).State);
+        Assert.Single(await app.Service<INetworkPolicyReconciler>().ListRulesAsync("child", default));
         var deleted = await Finish(app, await client.DeleteAsync("/api/v1/vms/child"));
         Assert.Equal(JobState.Succeeded, deleted.State);
+        Assert.Empty(await app.Service<INetworkPolicyReconciler>().ListRulesAsync("child", default));
         Assert.Null(await app.Vms.GetAsync("child", default));
         Assert.Empty(await app.Service<IMediaStore>().ListReferencesForVmAsync("child", default));
         Assert.Empty((await app.Service<ICapacityLedger>().SnapshotAsync(false, default)).Reservations);
