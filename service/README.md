@@ -158,10 +158,10 @@ request. Disabling a user immediately rejects their Bearer tokens and their VMs'
 VM tokens retain only the existing forwards/activity scope plus identity and guest-report intake.
 New primary creation issues a `primary` token; it never grants user identity or admin access.
 
-Only `host-admin` is advertised until the separately owned feature adapters are integrated.
+`host-admin` and `console` are advertised; other feature flags await their integration.
 The child driver and create/delete jobs are implemented (see the stage 2 section below),
 with executable API coverage using in-memory admission. Production SQLite admission,
-media/capacity adapters and later console, update and network operations still await
+media/capacity adapters and later update and network operations still await
 integration. The fake admission store commits or rolls back participating stores under
 one lock, including readers; its scope accepts only synchronously completing store calls.
 The persisted child runner owns operation and maintenance handles through completion.
@@ -1636,3 +1636,77 @@ fail on both the baseline and this branch. Git-initializing tests use process-on
 `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=init.defaultBranch GIT_CONFIG_VALUE_0=main`.
 The final child script also parsed on the actual Windows PowerShell
 5.1.26100.9168 host with **zero parser errors**, using in-memory source only.
+
+### Console API
+
+`console` in `apiFeatures` advertises the bounded screenshot/input API. All
+paths below start with `/api/v1/vms/{name}/console`. Every call uses the current
+`ConsoleOperator` policy: owner/admin for a primary (including its own primary
+VM token); the foundation's child owner/parent/shared-caller policy for children.
+Legacy VM tokens are refused. Sessions are bound to their creating principal
+and VM, and cannot bypass disabled users, changed sharing, or deletion fences.
+
+| Route | Result |
+|---|---|
+| `GET /capabilities` | Device presence, native resolution, capability levels and interactive-video refusal reason. |
+| `POST /sessions` with `{}` | `201 {sessionId, expiresAt, screen:{width,height}, capabilities}`; expires in 60 seconds, at most four sessions per VM. |
+| `POST /sessions/{sid}/renew` | Extends expiry by 60 seconds and refreshes native dimensions. |
+| `DELETE /sessions/{sid}` | Closes this caller's session. |
+| `GET /sessions/{sid}/screenshot?width=&height=` | `image/png`; omitted dimensions use current native; `X-Construct-Screen-Width/Height` report native dimensions. |
+| `POST /sessions/{sid}/keyboard` | `{kind:"text",text}` (512 chars), `{kind:"key",keyCode,press}` (true/down, false/up, null/tap), `{kind:"scancodes",scancodes:[...]}` (64 bytes), or `{kind:"ctrlAltDel"}`. |
+| `POST /sessions/{sid}/mouse` | `{kind:"moveAbsolute",x,y}`, `{kind:"moveRelative",dx,dy}` (−128…127), or `{kind:"click"|"press"|"release",button:1|2|3}`. |
+
+Sessions permit four captures and 50 combined keyboard/mouse events per second. Rate-limit responses include
+`retryAfterSeconds` and `Retry-After` (1 second for events, 60 for the session cap).
+Bodies are bounded at 16 KiB, images at 4 MiB, and captures at 4,194,304 pixels.
+Dimensions must be positive and no larger than native; absolute coordinates are
+native pixels within the current screen. Session restart/expiry returns `410
+console-session-expired`; limits return `429 rate-limited`. Keyboard/capture
+runtime failures return `409 console-unavailable` with the numeric WMI return
+value. Mouse failures return `applied:false` and the device, return value and
+available relative fallback; absent devices return `409`. If only PS/2 is present, absolute movement
+returns `device:syntheticMouse` with `fallback:moveRelative`. Every mutation is
+audited with operation, owner, initiator and target; text is recorded only as a
+character count. Screenshot responses are not cacheable.
+
+Sessions live in memory and end on service restart. Explicit key/button down
+operations should be paired with releases by the client. There is no video
+stream or guest application delivery acknowledgement. `--fake` returns a
+deterministic one-pixel PNG, keyboard success and a synthetic-mouse failure;
+a VM observed Off cannot open a fake console session.
+
+Implementation and transport details: [driver guide](../docs/drivers.md#service-console-transport).
+The Windows program is PowerShell 5.1-compatible; no deployment or LocalSystem
+service validation is implied by Linux tests or elevated relay probes.
+
+Console adapter probe attempt, 2026-09-07: Windows PowerShell **5.1.26100.9168**
+was read successfully through the elevated relay. A read-only inventory showed
+only `haus-vm`; free physical memory was **7,345,060 KiB**. Two attempts to stage
+and execute the console probe encountered Windows PowerShell CLR startup failure
+`HRESULT 80004005` (`exit -65536`), including a staging-only invocation. The
+console WMI program and probe VM creation **did not run**. The partial file under
+`C:\Temp\hostadmin-probe\console-s2` was removed; final readback reported
+`probeCount:0` and `tempExists:false`. No services, existing VMs, firewall rules,
+scheduled tasks or service data were changed. The earlier feasibility report's
+successful WMI probes remain historical evidence; they do not validate this
+new adapter. Production `IProcessRunner` execution on Windows, LocalSystem,
+guest text/pointer behavior and PS/2 fallback still require host validation.
+
+A later retry after review reached Hyper-V: the fixed script was staged under
+`C:\Temp\hostadmin-probe\console-s2`, then this exact creation was attempted:
+`New-VM -Name hostadmin-probe-console -Generation 2 -MemoryStartupBytes 512MB
+-NoVHD -SwitchName 'Default Switch'`. It failed while accessing the configuration
+store with **0x800705AA**, insufficient system resources, reporting prospective
+GUID `ad3d75e7-06a5-43c4-aa56-b23c7864c1de`. No Start-VM, console WMI call, input,
+or screenshot capture ran. The staging directory was removed by `finally`;
+filesystem readback under the default Hyper-V root found **0** matching GUID
+artifacts and `tempExists:false`. A subsequent in-memory, no-VM conversion check
+of the production RGB565 block failed with `System.OutOfMemoryException` and
+returned no PNG. These later attempts add **no successful adapter or conversion
+validation**. The reviewer's separately reported successful synthetic conversion
+is their evidence only, not this implementation's Hyper-V validation.
+
+Final cleanup readback used `Get-WmiObject` in `root\virtualization\v2`,
+`Msvm_ComputerSystem`, with a filter on that exact failed-creation GUID; it
+reported **probeGuidInstances:0**. The failed probe is neither registered nor
+represented by a matching artifact under the default Hyper-V configuration root.

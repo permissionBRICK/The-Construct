@@ -9,7 +9,7 @@ public sealed class ReleaseInfo : IReleaseInfo
     public InstalledRelease Installed { get; }
     public int SchemaVersion => SqliteMigrations.SchemaVersion;
     public int SchemaMinReadableBy => SqliteMigrations.MinReadableBy;
-    public IReadOnlyList<string> ApiFeatures => ["host-admin"];
+    public IReadOnlyList<string> ApiFeatures => ["host-admin", "console"];
     public ReleaseInfo()
     {
         var assembly = typeof(ReleaseInfo).Assembly;

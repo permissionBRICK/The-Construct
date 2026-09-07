@@ -27,10 +27,16 @@ public interface IConsoleSessionStore
     /// <summary>null when the per-VM cap (4) is reached.</summary>
     ConsoleSession? TryCreate(string vmName, string principal, int nativeWidth, int nativeHeight, TimeSpan ttl, DateTimeOffset now);
     ConsoleSession? Get(string id, DateTimeOffset now);
-    ConsoleSession? Renew(string id, TimeSpan ttl, DateTimeOffset now);
+    ConsoleSession? Renew(string id, TimeSpan ttl, DateTimeOffset now, int? nativeWidth = null, int? nativeHeight = null);
     bool Remove(string id);
     int RemoveExpired(DateTimeOffset now);
     int RemoveForVm(string vmName);
     int RemoveForPrincipal(string principal);
     bool TryTakeRate(string id, string bucket, int perSecond, DateTimeOffset now);
+}
+
+/// <summary>Sanitized failure; no process output or input may be attached as an inner exception.</summary>
+public sealed class ConsoleTransportException(bool tooLarge = false) : Exception("Console operation unavailable.")
+{
+    public bool TooLarge { get; } = tooLarge;
 }
