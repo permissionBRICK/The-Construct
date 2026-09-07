@@ -33,7 +33,6 @@ public static class UpdateEndpoints
         {
             var actor=http.User.Identity!.Name!;
             CodedProblems.Audit(http,http.TraceIdentifier,actor,target:request.UpdateId);
-            await checker.RequireKeyAsync(ct);
             var key=http.Request.Headers["X-Construct-Operation-Key"].FirstOrDefault() ?? request.OperationKey;
             var kind="host-update:"+action;
             var fingerprint=OperationFingerprint.Compute(http.Request.Path,JsonSerializer.SerializeToElement(request,UpdateFiles.Json));
@@ -75,7 +74,7 @@ public static class UpdateEndpoints
         {
             var code=ex.Code;
             if(code=="maintenance") { http.Response.Headers.RetryAfter="30"; return Results.Problem(statusCode:503,title:code,type:"urn:construct:problem:"+code,extensions:new Dictionary<string,object?>{["code"]=code,["phase"]="maintenance",["retryAfterSeconds"]=30,["updateId"]=request.UpdateId}); }
-            var status=code=="release-source-unreachable" ? 502 : code is "unsigned-manifest" or "coverage-failed" ? 422 : 409;
+            var status=code=="release-source-unreachable" ? 502 : code == "coverage-failed" ? 422 : 409;
             if(code is "wrong-binary" or "health-failed" or "backup-incomplete" or "installation-mixed")
                 return Results.Problem(statusCode:409,title:"update-not-commitable",type:"urn:construct:problem:update-not-commitable",extensions:new Dictionary<string,object?>{["code"]="update-not-commitable",["reason"]=code});
             if(code=="update-not-resolvable")
@@ -93,6 +92,6 @@ public static class UpdateEndpoints
         static object Project(HostUpdateRecord r)=>new{updateId=r.Id,r.Commit,r.State,r.Phase,r.Phases,r.Started,r.Finished,r.Error,r.BlockingJobs};
         return Results.Ok(new{installed=release.Installed,current=rows.FirstOrDefault() is {} current ? Project(current) : null,
             history=rows.Select(Project),recoveryRecord=record?.Outcome=="succeeded" ? null : record,
-            latestKnown=await config.GetAsync<object>("update-latest",ct),signingKeyConfigured=!string.IsNullOrWhiteSpace((await checker.SettingsAsync(ct)).ManifestPublicKey)});
+            latestKnown=await config.GetAsync<object>("update-latest",ct)});
     }
 }

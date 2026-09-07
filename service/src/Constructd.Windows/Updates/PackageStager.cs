@@ -12,14 +12,9 @@ public sealed class PackageStager(IReleaseSource source, IHostConfigStore config
 {
     public string UpdatesDir => Path.Combine(Path.GetDirectoryName(Path.GetFullPath(options.DatabasePath))!, "updates");
     public async Task<UpdatesConfig> SettingsAsync(CancellationToken ct) => HostUpdateTrust.Apply(await config.GetAsync<UpdatesConfig>("updates", ct) ?? HostAdminDefaults.Updates, options);
-    public async Task RequireKeyAsync(CancellationToken ct)
-    {
-        var settings = await SettingsAsync(ct);
-        if (string.IsNullOrWhiteSpace(settings.ManifestPublicKey) && !(options.Fake && !settings.RequireSignature)) throw new UpdateException("signing-key-missing");
-    }
     public async Task<CheckedRelease?> CheckAsync(string? releaseTag, CancellationToken ct)
     {
-        await RequireKeyAsync(ct); var settings = await SettingsAsync(ct);
+        var settings = await SettingsAsync(ct);
         var releases = await source.ListHostReleasesAsync(settings.Repository, ct);
         var release = releases.OrderByDescending(r => r.PublishedAt).FirstOrDefault(r => releaseTag is null || r.Tag == releaseTag);
         if (release is null) return null;
@@ -29,9 +24,8 @@ public sealed class PackageStager(IReleaseSource source, IHostConfigStore config
     }
     private async Task<CheckedRelease> CheckReleaseAsync(ReleaseDescriptor release, string dir, CancellationToken ct)
     {
-        var settings = await SettingsAsync(ct); await RequireKeyAsync(ct);
+        var settings = await SettingsAsync(ct);
         await source.DownloadAsync(Asset(release, "manifest.json", 1024 * 1024), Path.Combine(dir, "manifest.json"), null, ct);
-        await source.DownloadAsync(Asset(release, "manifest.json.sig", 1024), Path.Combine(dir, "manifest.json.sig"), null, ct);
         var manifest = await ReadManifestAsync(dir, release, settings, ct);
         var reasons = UpdateCompatibility.Reasons(manifest, installed.SchemaVersion, installed.SchemaMinReadableBy, 1, HasSetting).ToList();
         var payload = Asset(release, manifest.PayloadAsset, 1024L * 1024 * 1024);
@@ -58,8 +52,6 @@ public sealed class PackageStager(IReleaseSource source, IHostConfigStore config
     private async Task<ReleaseManifest> ReadManifestAsync(string dir, ReleaseDescriptor release, UpdatesConfig settings, CancellationToken ct)
     {
         var bytes = await File.ReadAllBytesAsync(Path.Combine(dir, "manifest.json"), ct);
-        var sig = await File.ReadAllBytesAsync(Path.Combine(dir, "manifest.json.sig"), ct);
-        if (!(options.Fake && !settings.RequireSignature) && !Ed25519Verifier.Verify(bytes, sig, settings.ManifestPublicKey)) throw new UpdateException("unsigned-manifest");
         ReleaseManifest manifest;
         try { manifest = JsonSerializer.Deserialize<ReleaseManifest>(bytes, UpdateFiles.Json) ?? throw new UpdateException("incompatible"); }
         catch (JsonException) { throw new UpdateException("incompatible"); }

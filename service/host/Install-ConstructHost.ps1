@@ -1129,17 +1129,6 @@ function Invoke-ConstructIsoBuild {
     if ($isoLine.Count -gt 0) { Write-Ok $isoLine[0].Trim() } else { Write-Ok "Autoinstall ISO ready" }
 }
 
-function Add-ConstructHostReleaseBootstrap {
-    param([Parameter(Mandatory=$true)]$Settings,[Parameter(Mandatory=$true)][string]$Scripts)
-    $keyPath=Join-Path $Scripts 'config/host-release.pub'
-    if (-not (Test-Path -LiteralPath $keyPath)) { return }
-    [string]$key=Get-Content -LiteralPath $keyPath -Raw
-    if ([string]::IsNullOrWhiteSpace($key)) { return }
-    $key=$key.Trim()
-    if ([Convert]::FromBase64String($key).Length -ne 32) { throw 'Invalid host release public key.' }
-    if (-not $Settings.Constructd.Contains('HostAdmin')) { $Settings.Constructd['HostAdmin']=@{} }
-    $Settings.Constructd.HostAdmin['Updates']=@{ManifestPublicKey=$key}
-}
 
 # Updater-only entry: reuse the existing hardening functions without settings/service changes.
 if ($AclOnly) {
@@ -1449,7 +1438,6 @@ if ($PublicHostPattern) {
     $settings.Constructd['PublicHostPattern'] = $PublicHostPattern
 }
 
-Add-ConstructHostReleaseBootstrap -Settings $settings -Scripts $ScriptsDir
 
 $settingsPath = Join-Path $PublishDir "appsettings.Production.json"
 if ($PSCmdlet.ShouldProcess($settingsPath, "Write the service configuration")) {

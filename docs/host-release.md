@@ -5,8 +5,7 @@ Host releases use the immutable tag `host-<40-character commit>` in
 publishes the self-contained Windows x64 executable, and packages the matching tracked
 host scripts. The ISO builder retains its separate `config/iso-builder.json` pin.
 
-The three release assets are `construct-host-<commit7>-win-x64.zip`, `manifest.json`,
-and its binary Ed25519 signature `manifest.json.sig`. The ZIP contains `service/`,
+The two release assets are `construct-host-<commit7>-win-x64.zip` and `manifest.json`. The ZIP contains `service/`,
 `scripts/`, `updater/Update-ConstructHost.ps1`, and `SHA256SUMS`; the manifest is detached
 so its ZIP hash is not circular. The manifest records the main commit, build time,
 package version, hashes, and database/config compatibility. ZIP entries use stored
@@ -14,19 +13,13 @@ compression to guarantee the extraction ratio bound, including unusually compres
 publish output. `SHA256SUMS` covers every payload file. Releases never include live
 settings, data, private keys, or the separately downloaded ISO executable.
 
-The owner must provision an Ed25519 PEM private key as `HOST_RELEASE_SIGNING_KEY` in the
-GitHub **host-release** environment and commit the corresponding base64 32-byte public
-key in `config/host-release.pub`. That file is intentionally empty in this delivery:
-no production key was supplied. Publishing fails closed unless the secret's public key
-matches that file. The installer seeds a nonempty public key into host-local
-`Constructd:HostAdmin:Updates:ManifestPublicKey`. Production staging always uses that
-local key and `Constructd:HostAdmin:Updates:Repository` (default
-`permissionBRICK/The-Construct`), with signature verification required. Stored API config
-cannot override them. API attempts to change these trust fields return `400 validation`;
-rotate trust in the host-local service configuration before publishing with the new key,
-and activate that configuration through the operator's normal maintenance procedure.
-An empty local key refuses staging even if an older database row contains a key.
-No private signing key belongs in the repository or on a host.
+Host updates use GitHub Releases over HTTPS, matching the other Construct update paths.
+No signing keys or signing secrets are required on hosts, development VMs or CI.
+Production downloads use the host-local `Constructd:HostAdmin:Updates:Repository`
+(default `permissionBRICK/The-Construct`); API configuration cannot redirect that source.
+The manifest identifies the repository, main ref and immutable commit tag. SHA-256
+checks cover the ZIP and every payload file; these checks detect corruption, while
+authenticity relies on HTTPS and control of the configured GitHub repository.
 
 Production apply requires `Constructd:CertThumbprint` for the updater's loopback health
 pin. A host configured only with `CertPath` is refused with
@@ -37,7 +30,7 @@ For a local package, publish to a new directory, then invoke:
 
 ```powershell
 .\service\host\New-ConstructHostPackage.ps1 -PublishDir C:\Temp\publish `
-  -OutputDir C:\Temp\host-release -Commit <commit40> -SigningKeyPath C:\Secure\release.pem
+  -OutputDir C:\Temp\host-release -Commit <commit40>
 ```
 
 The packager uses the current worktree's tracked scripts. A production package must
@@ -95,7 +88,7 @@ verification, service startup, loopback health authentication, and a read-only S
 as a successful rollback.
 
 Linux validation uses PowerShell service/health fakes, recording process runners,
-SQLite persistence, in-process HTTP integration tests, and signed package fixtures.
+SQLite persistence, in-process HTTP integration tests, and package fixtures.
 `Test-UpdateHealth` is fully replaced in the PowerShell suite; its real HTTP, certificate
 and read-only CLI calls are not exercised there. Authorized rollback and `commitOnly`
 resume control flow are exercised with those fakes. SCM survival, LocalSystem ACLs, real certificate pinning, running Hyper-V VM continuity,
@@ -103,7 +96,7 @@ and a Windows-client reconnection remain items for the contract's field-test che
 
 Phase 6 validation on Linux: .NET build **0 warnings / 0 errors**, **932 / 932**
 tests; **24 Node suites**, **19 PowerShell suites**, and **21 Bash suites** passed.
-The new updater suite has 49 assertions, installer/bootstrap suite 14, and signed
+The new updater suite has 49 assertions, installer/bootstrap suite 14, and
 packaging fixture 87. The Bash total includes the frozen-contract compile check
 (5 checks) and fake-service end-to-end (38 checks). Existing platform-specific
 skips remain. A self-contained `win-x64` cross-publish and complete payload hash

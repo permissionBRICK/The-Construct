@@ -1,5 +1,9 @@
 # Host administration implementation plan
 
+> Update 2026-09-07: the owner removed the host-only signing requirement.
+> Current releases use GitHub HTTPS and SHA-256 verification without keys; see
+> [Host releases](../host-release.md). Signing statements below describe the original review.
+
 Status: implemented on Linux, not field-validated on Hyper-V.
 Date: 2026-09-07.
 Canonical requirements: [Remote host administration and temporary child VMs](host-administration-and-child-vms.md).

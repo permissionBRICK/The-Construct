@@ -7,5 +7,5 @@ public sealed record UserDefaultsConfig(int MaxPrimaries, bool AllowChildCreatio
 public sealed record LifecycleConfig(int GracefulShutdownTimeoutSeconds, int LeaseTickSeconds, int LeaseRetrySeconds);
 public sealed record MediaConfig(long MaxBytes, int MaxItemsPerUser, int UploadChunkBytes, int UploadTtlHours, int AcquireTimeoutMinutes, bool AllowHttp, int? UnreferencedTtlHours);
 public sealed record NetworkConfig(bool HostForwardsEnabled, bool DirectAddressReporting);
-public sealed record UpdatesConfig(string Repository, string Channel, int DrainTimeoutMinutes, int HealthTimeoutSeconds, bool RequireSignature, string? ManifestPublicKey);
+public sealed record UpdatesConfig(string Repository, string Channel, int DrainTimeoutMinutes, int HealthTimeoutSeconds);
 public sealed record MaintenanceMarker(MaintenanceState State, string? UpdateId, DateTimeOffset Since);

@@ -584,12 +584,11 @@ function updateActionsFor(status) {
   const inFlight = cur && OPEN_UPDATE_STATES.indexOf(state) >= 0;
   return {
     check: true,
-    stage: !inFlight && s.signingKeyConfigured !== false,
+    stage: !inFlight,
     apply: state === "staged",
     resume: state === "interrupted",
     cancel: !!cur && ["checking", "staged", "draining"].indexOf(state) >= 0,
     resolve: state === "interrupted" || state === "recoveryFailed",
-    signingKeyMissing: s.signingKeyConfigured === false,
   };
 }
 
@@ -612,7 +611,6 @@ function toUpdateView(status) {
     history: (Array.isArray(s.history) ? s.history : []).map(row),
     latestKnown: latest ? { commit: str(latest.commit).slice(0, 12), packageVersion: str(latest.packageVersion), publishedAt: formatWhen(latest.publishedAt), checkedAt: formatWhen(latest.checkedAt) } : null,
     recoveryRecord: s.recoveryRecord && typeof s.recoveryRecord === "object" ? JSON.stringify(s.recoveryRecord, null, 2) : "",
-    signingKeyConfigured: s.signingKeyConfigured !== false,
     actions: updateActionsFor(s),
   };
 }

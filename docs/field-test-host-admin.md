@@ -1,7 +1,7 @@
 # Field test — host administration and child VMs
 
 A step-by-step checklist for the project owner's first deployment of host administration,
-delegated child VMs and signed host updates on the `standpc` Hyper-V host. It assumes the
+delegated child VMs and host updates on the `standpc` Hyper-V host. It assumes the
 original [remote-host field test](field-test-remote-host.md) passed and the existing primary
 `haus-vm` must remain usable throughout.
 
@@ -65,8 +65,7 @@ commands.
       PowerShell, bash and fake-service end-to-end suites. Attach the counts to the field log.
 
 **Stop condition:** do not continue if `haus-vm` is already unhealthy, the database cannot be
-backed up, the candidate commit is dirty/unidentified, or the production release public key is
-not available through the owner's approved secret-handling process.
+backed up, the candidate commit is dirty/unidentified,.
 
 ## 1. Publish and perform the first manual rollout
 
@@ -87,19 +86,11 @@ rollout is therefore manual; later ones use Maintenance. Do not rerun
   ```
 
 - [ ] `[FIELD]` Use the matching tracked `drivers`, `lib`, `bin`, `config`, `service\host`
-      and `Provision-AgentVM.ps1` from that same commit. Record hashes or use the signed host
+      and `Provision-AgentVM.ps1` from that same commit. Record hashes or use the host
       package described in [Host releases](host-release.md); never mix scripts from another
       commit.
-- [ ] `[FIELD]` Verify that `config\host-release.pub` contains the owner's approved public
-      key and that it matches the private key held by the `host-release` publishing workflow.
-      The repository default is intentionally empty, in which case updates must fail closed
-      with `signing-key-missing`.
-- [ ] `[FIELD]` Copy the live `appsettings.Production.json` into the staging service directory.
-      For this manual bootstrap only, merge the nonempty public key as
-      `Constructd:HostAdmin:Updates:ManifestPublicKey`; this is the value the normal installer
-      would seed. Preserve every other existing setting byte-for-value and validate the JSON.
-      Record a redacted diff whose only semantic addition is that **public** verification key;
-      no token, certificate private key or password should appear.
+- [ ] `[FIELD]` Copy the live `appsettings.Production.json` into the staging service directory
+      unchanged. Validate its JSON and record its hash; no signing configuration is needed.
 
 ### 1.2 Back up, swap and verify
 
@@ -271,8 +262,8 @@ rollout is therefore manual; later ones use Maintenance. Do not rerun
 
 - [ ] `[FIELD]` Confirm `haus-vm` and at least one disposable child are Running. Record their VM
       ids, state, uptime and reachable endpoint immediately before the update.
-- [ ] `[FIELD]` In **Maintenance**, Check and Stage an immutable, signed `host-<commit>` release.
-      Confirm the resolved commit, package/script hashes, signature, schema compatibility and
+- [ ] `[FIELD]` In **Maintenance**, Check and Stage an immutable `host-<commit>` release.
+      Confirm the resolved commit, package/script hashes, schema compatibility and
       installed/staged states. A tampered manifest/package must be refused before apply.
 - [ ] `[FIELD]` Start a deliberately long, disposable media acquisition, then select **Apply**.
       **Expect:** phase `draining`; replacement does not begin while the media job is active.
@@ -287,8 +278,8 @@ rollout is therefore manual; later ones use Maintenance. Do not rerun
 
 ## 10. Prove automatic rollback
 
-Do not simulate rollback by corrupting a production release after signing: that only proves
-staging rejection. Use a separately approved, correctly signed field-test release whose service
+Do not simulate rollback by corrupting a production release after publishing: that only proves
+staging rejection. Use a separately approved, checksum-verified field-test release whose service
 payload intentionally fails the updater's bounded health check and whose compatibility metadata
 allows rollback.
 

@@ -28,11 +28,8 @@ public static partial class HostConfigValidation
         LifecycleConfig l when l.GracefulShutdownTimeoutSeconds < 30 || l.LeaseTickSeconds < 30 || l.LeaseRetrySeconds < 30 => "Lifecycle timeouts must be at least 30 seconds.",
         MediaConfig m when m.MaxBytes < 1 || m.MaxItemsPerUser < 1 || m.UploadChunkBytes < 1048576 || m.UploadChunkBytes > 67108864 || m.UploadTtlHours < 1 || m.AcquireTimeoutMinutes < 1 || m.UnreferencedTtlHours < 1 => "Media sizes/counts must be positive; chunks must be 1–64 MiB.",
         UpdatesConfig u when string.IsNullOrEmpty(u.Repository) || !RepositoryPattern().IsMatch(u.Repository) || u.Channel != "main" || u.DrainTimeoutMinutes < 1 || u.HealthTimeoutSeconds < 30 => "Updates require owner/repository, main channel and positive timeouts (health at least 30 seconds).",
-        UpdatesConfig u when u.ManifestPublicKey is not null && !ValidKey(u.ManifestPublicKey) => "Manifest public key must be base64 encoding of 32 bytes.",
         _ => null,
     };
-    public static bool ValidKey(string text)
-    { Span<byte> bytes = stackalloc byte[32]; return Convert.TryFromBase64String(text, bytes, out var written) && written == 32; }
     [GeneratedRegex(@"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")]
     private static partial Regex RepositoryPattern();
 }

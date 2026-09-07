@@ -13,7 +13,6 @@ jobs:
   release:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    environment: host-release
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -21,22 +20,11 @@ jobs:
           dotnet-version: '10.0.x'
       - run: dotnet test service/Constructd.sln -c Release
       - run: dotnet publish service/src/Constructd.Api -c Release -r win-x64 --self-contained true -p:InformationalVersion=1.0.0+${{ github.sha }} -p:IncludeSourceRevisionInInformationalVersion=false -o /tmp/host-publish
-      - name: Package and sign pinned commit
-        shell: bash
-        env:
-          HOST_RELEASE_SIGNING_KEY: ${{ secrets.HOST_RELEASE_SIGNING_KEY }}
-        run: |
-          set -euo pipefail
-          umask 077
-          key=$(mktemp)
-          trap 'rm "$key"' EXIT
-          printf '%s' "$HOST_RELEASE_SIGNING_KEY" > "$key"
-          public=$(openssl pkey -in "$key" -pubout -outform DER | tail -c 32 | base64 -w0)
-          test "$public" = "$(tr -d '\r\n' < config/host-release.pub)"
-          echo "Release signing public key: $public"
-          pwsh -NoProfile -File service/host/New-ConstructHostPackage.ps1 -PublishDir /tmp/host-publish -OutputDir /tmp/host-release -Commit "$GITHUB_SHA" -SigningKeyPath "$key"
+      - name: Package pinned commit
+        shell: pwsh
+        run: ./service/host/New-ConstructHostPackage.ps1 -PublishDir /tmp/host-publish -OutputDir /tmp/host-release -Commit "${{ github.sha }}"
       - name: Publish immutable release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "host-$GITHUB_SHA" --target "$GITHUB_SHA" --title "Construct host $GITHUB_SHA" --notes "Signed self-contained Windows x64 host release from main. See docs/host-release.md for deployment and recovery." /tmp/host-release/*.zip /tmp/host-release/manifest.json /tmp/host-release/manifest.json.sig
+          gh release create "host-$GITHUB_SHA" --target "$GITHUB_SHA" --title "Construct host $GITHUB_SHA" --notes "Self-contained Windows x64 host release from main. See docs/host-release.md for deployment and recovery." /tmp/host-release/*.zip /tmp/host-release/manifest.json

@@ -26,7 +26,6 @@
 
   <ItemGroup>
     <!-- Logging only: the composition root does the DI wiring, so no container dependency here. -->
-    <PackageReference Include="BouncyCastle.Cryptography" Version="2.7.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
   </ItemGroup>
 

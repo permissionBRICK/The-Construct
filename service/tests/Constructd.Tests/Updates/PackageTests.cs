@@ -7,8 +7,6 @@ using Constructd.Core.Configuration;
 using Constructd.Core.Logic;
 using Constructd.Fakes;
 using Constructd.Windows.Updates;
-using Org.BouncyCastle.Crypto.Parameters;
-using Org.BouncyCastle.Crypto.Signers;
 namespace Constructd.Tests.Updates;
 
 public sealed class PackageTests : IDisposable
@@ -35,22 +33,22 @@ public sealed class PackageTests : IDisposable
             "construct-host-aaaaaaa-win-x64.zip",Hash(zip),Hash(sums),"updater/Update-ConstructHost.ps1",Hash(files["updater/Update-ConstructHost.ps1"]),new(600,0,[]),new(1,1,[],[]),new("2026-08-01",0));
         return(m,zip);
     }
-    [Fact] public async Task Signed_stage_is_pinned_and_every_file_is_reverified()
+    [Fact] public async Task Production_stage_without_signing_is_pinned_and_every_file_is_reverified()
     {
-        var (manifest,zip)=Package();var key=new Ed25519PrivateKeyParameters(RandomNumberGenerator.GetBytes(32),0);
-        var bytes=JsonSerializer.SerializeToUtf8Bytes(manifest,UpdateFiles.Json);var signer=new Ed25519Signer();signer.Init(true,key);signer.BlockUpdate(bytes,0,bytes.Length);var sig=signer.GenerateSignature();
-        var source=new FakeReleaseSource();var assets=new[]{("manifest.json",bytes),("manifest.json.sig",sig),(manifest.PayloadAsset,zip)}.Select(a=>{
+        var (manifest,zip)=Package();
+        var bytes=JsonSerializer.SerializeToUtf8Bytes(manifest,UpdateFiles.Json);
+        var source=new FakeReleaseSource();var assets=new[]{("manifest.json",bytes),(manifest.PayloadAsset,zip)}.Select(a=>{
             var uri=new Uri("https://github.com/permissionBRICK/The-Construct/releases/download/"+manifest.ReleaseTag+"/"+a.Item1);source.Assets[uri]=a.Item2;return new ReleaseAsset(a.Item1,uri,a.Item2.Length);}).ToArray();
         var release=new ReleaseDescriptor(manifest.ReleaseTag,manifest.Commit,DateTimeOffset.UtcNow,assets);source.Releases.Add(release);
-        var config=new InMemoryHostConfigStore(new MutableClock());await config.SetAsync("updates",HostAdminDefaults.Updates with{ManifestPublicKey=Convert.ToBase64String(key.GeneratePublicKey().GetEncoded())},"test",default);
-        var stager=new PackageStager(source,config,new(){DatabasePath=Path.Combine(_root,"db"),Fake=true},new FakeReleaseInfo());
+        var config=new InMemoryHostConfigStore(new MutableClock());
+        var stager=new PackageStager(source,config,new(){DatabasePath=Path.Combine(_root,"db"),Fake=false},new FakeReleaseInfo());
         var check=await stager.CheckAsync(null,default);Assert.NotNull(check);Assert.Empty(check.Reasons);
         var staged=await stager.StageAsync(Guid.NewGuid().ToString("n"),release,null,default);
         Assert.True(await stager.VerifyStagedAsync(staged,default));
         await File.WriteAllTextAsync(Path.Combine(staged.StagedPath,"extracted","service","Constructd.Api.exe"),"tampered");
         Assert.False(await stager.VerifyStagedAsync(staged,default));
         source.Assets[assets[0].Url]=Encoding.UTF8.GetBytes("tampered");
-        var error=await Assert.ThrowsAsync<UpdateException>(()=>stager.CheckAsync(null,default));Assert.Equal("unsigned-manifest",error.Code);
+        var error=await Assert.ThrowsAsync<UpdateException>(()=>stager.CheckAsync(null,default));Assert.Equal("incompatible",error.Code);
     }
     [Theory]
     [InlineData("service/../../outside",0,true,"extraction-refused")]
@@ -62,13 +60,16 @@ public sealed class PackageTests : IDisposable
         var(m,zip)=Package(entry,attrs,listed);File.WriteAllBytes(Path.Combine(_root,"package.zip"),zip);
         Assert.Equal(code,Assert.Throws<UpdateException>(()=>PackageStager.ExtractAndVerify(_root,m)).Code);
     }
-    [Fact] public void Signature_checks_exact_bytes_and_wrong_key_fails()
+    [Fact] public void Payload_corruption_is_rejected_without_signatures()
     {
-        var key=new Ed25519PrivateKeyParameters(RandomNumberGenerator.GetBytes(32),0);var signer=new Ed25519Signer();signer.Init(true,key);
-        var bytes=Encoding.UTF8.GetBytes("manifest");signer.BlockUpdate(bytes,0,bytes.Length);var sig=signer.GenerateSignature();
-        Assert.True(Ed25519Verifier.Verify(bytes,sig,Convert.ToBase64String(key.GeneratePublicKey().GetEncoded())));
-        Assert.False(Ed25519Verifier.Verify(bytes,sig,Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))));
-        Assert.False(Ed25519Verifier.Verify([..bytes,10],sig,Convert.ToBase64String(key.GeneratePublicKey().GetEncoded())));
+        var (manifest,zip)=Package();zip[^1]^=1;
+        File.WriteAllBytes(Path.Combine(_root,"package.zip"),zip);
+        Assert.Equal("payload-hash-mismatch",Assert.Throws<UpdateException>(()=>PackageStager.ExtractAndVerify(_root,manifest)).Code);
+    }
+    [Fact] public void Legacy_signing_fields_do_not_block_reading_stored_update_settings()
+    {
+        var legacy="""{"repository":"permissionBRICK/The-Construct","channel":"main","drainTimeoutMinutes":60,"healthTimeoutSeconds":120,"requireSignature":true,"manifestPublicKey":"unused"}""";
+        Assert.Equal(HostAdminDefaults.Updates,JsonSerializer.Deserialize<Constructd.Core.Domain.UpdatesConfig>(legacy,UpdateFiles.Json));
     }
     [Fact] public async Task Host_lock_is_exclusive_and_reusable()
     {
@@ -104,20 +105,17 @@ public sealed class PackageTests : IDisposable
         Assert.False(await launcher.TryWriteFenceAsync(new("update",FenceDisposition.Closed,"system",DateTimeOffset.UtcNow),default));
         Assert.False(File.Exists(Path.Combine(_root,"updates","fence.json")));
     }
-    [Fact] public async Task Local_packager_output_passes_the_production_extractor_and_signature_verifier()
+    [Fact] public async Task Local_packager_without_signing_passes_the_production_extractor()
     {
         var repo=new DirectoryInfo(AppContext.BaseDirectory);
         while(repo is not null && !File.Exists(Path.Combine(repo.FullName,"service/host/New-ConstructHostPackage.ps1"))) repo=repo.Parent;
         Assert.NotNull(repo);
         var publish=Path.Combine(_root,"publish");Directory.CreateDirectory(publish);
         await File.WriteAllBytesAsync(Path.Combine(publish,"Constructd.Api.exe"),RandomNumberGenerator.GetBytes(4096));
-        var key=Path.Combine(_root,"key.pem");var pub=Path.Combine(_root,"pub.der");var output=Path.Combine(_root,"output");
-        await Run("openssl","genpkey","-algorithm","ED25519","-out",key);
-        await Run("openssl","pkey","-in",key,"-pubout","-outform","DER","-out",pub);
-        await Run("pwsh","-NoProfile","-File",Path.Combine(repo.FullName,"service/host/New-ConstructHostPackage.ps1"),"-PublishDir",publish,"-OutputDir",output,"-Commit",new string('a',40),"-SigningKeyPath",key);
+        var output=Path.Combine(_root,"output");
+        await Run("pwsh","-NoProfile","-File",Path.Combine(repo.FullName,"service/host/New-ConstructHostPackage.ps1"),"-PublishDir",publish,"-OutputDir",output,"-Commit",new string('a',40));
         var bytes=await File.ReadAllBytesAsync(Path.Combine(output,"manifest.json"));
         var manifest=JsonSerializer.Deserialize<ReleaseManifest>(bytes,UpdateFiles.Json)!;
-        Assert.True(Ed25519Verifier.Verify(bytes,await File.ReadAllBytesAsync(Path.Combine(output,"manifest.json.sig")),Convert.ToBase64String((await File.ReadAllBytesAsync(pub))[^32..])));
         File.Copy(Path.Combine(output,manifest.PayloadAsset),Path.Combine(_root,"package.zip"));
         var files=PackageStager.ExtractAndVerify(_root,manifest);
         Assert.Contains(files,f=>f.Path=="scripts/service/host/Update-ConstructHost.ps1");

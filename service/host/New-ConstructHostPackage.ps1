@@ -1,12 +1,10 @@
 #requires -Version 5.1
-<# Builds the exact GitHub Release layout locally. SigningKeyPath is an Ed25519 PEM;
-   the private key is never copied into the payload. Requires openssl for signing. #>
+<# Builds the GitHub Release package and manifest with SHA-256 payload checksums. #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory=$true)][string]$PublishDir,
     [Parameter(Mandatory=$true)][string]$OutputDir,
     [Parameter(Mandatory=$true)][ValidatePattern('^[0-9a-f]{40}$')][string]$Commit,
-    [Parameter(Mandatory=$true)][string]$SigningKeyPath,
     [string]$RepositoryRoot = (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent),
     [DateTimeOffset]$BuiltAt = [DateTimeOffset]::UtcNow
 )
@@ -81,7 +79,5 @@ try {
     }
     $manifestPath = Join-Path $OutputDir 'manifest.json'
     [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 10), $utf8)
-    & openssl pkeyutl -sign -rawin -inkey $SigningKeyPath -in $manifestPath -out (Join-Path $OutputDir 'manifest.json.sig')
-    if ($LASTEXITCODE -ne 0) { throw 'Manifest signing failed.' }
     Copy-Item -LiteralPath (Join-Path $payload 'SHA256SUMS') -Destination (Join-Path $OutputDir 'SHA256SUMS')
 } finally { if (Test-Path -LiteralPath $payload) { Remove-Item -LiteralPath $payload -Recurse -Force } }

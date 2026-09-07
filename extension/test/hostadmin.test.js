@@ -299,16 +299,16 @@ function fakeClient(answers = {}) {
     deep("capabilities: notes", caps.notes, ["LocalSystem execution unverified"]);
   }
   {
-    const st = { installed: { commit: "1234567890abcdef", packageVersion: "1.0", installedAt: "2026-09-01T00:00:00Z", source: "release" }, current: { updateId: "u1", commit: "fedcba", state: "staged", phases: [{ name: "verify", at: "2026-09-07T09:00:00Z", outcome: "ok" }], started: "2026-09-07T09:00:00Z", blockingJobs: [] }, history: [], signingKeyConfigured: true };
+    const st = { installed: { commit: "1234567890abcdef", packageVersion: "1.0", installedAt: "2026-09-01T00:00:00Z", source: "release" }, current: { updateId: "u1", commit: "fedcba", state: "staged", phases: [{ name: "verify", at: "2026-09-07T09:00:00Z", outcome: "ok" }], started: "2026-09-07T09:00:00Z", blockingJobs: [] }, history: [] };
     const v = ha.toUpdateView(st);
     eq("updates: installed commit", v.installed.commit, "1234567890abcdef");
     eq("updates: current state", v.current.state, "staged");
     ok("updates: staged offers apply and cancel, not stage", v.actions.apply && v.actions.cancel && !v.actions.stage && !v.actions.resume);
-    const a2 = ha.updateActionsFor({ current: { state: "interrupted" }, signingKeyConfigured: true });
+    const a2 = ha.updateActionsFor({ current: { state: "interrupted" } });
     ok("updates: interrupted offers resume and resolve", a2.resume && a2.resolve && !a2.apply && !a2.stage);
-    const a3 = ha.updateActionsFor({ signingKeyConfigured: false });
-    ok("updates: no signing key means no stage, and says so", !a3.stage && a3.signingKeyMissing);
-    const a4 = ha.updateActionsFor({ current: { state: "succeeded" }, signingKeyConfigured: true });
+    const a3 = ha.updateActionsFor({});
+    ok("updates: stage needs no signing configuration", a3.stage);
+    const a4 = ha.updateActionsFor({ current: { state: "succeeded" } });
     ok("updates: a finished update allows a new stage", a4.stage && !a4.cancel);
     ok("updates: recoveryFailed offers resolve", ha.updateActionsFor({ current: { state: "recoveryFailed" } }).resolve);
     ok("check: same commit is 'latest'", /is the latest release/.test(ha.checkResultText({ installed: { commit: "abc" }, latest: { commit: "abc", releaseTag: "v1" } })));
@@ -459,7 +459,7 @@ function fakeClient(answers = {}) {
       isoCatalog: { mode: "native" }, media: [{ id: "m1", references: 0 }],
       jobs: [{ id: "j1", kind: "vm-shutdown", state: "running" }], audit: [{ at: "2026-09-07T09:00:00Z", action: "x" }],
       hostConfig: { capacity: { value: { mode: "observe" }, source: "stored" } }, hostCapabilities: { backend: "hyperv-local", capabilities: {} },
-      updatesStatus: { installed: { commit: "abc" }, signingKeyConfigured: true },
+      updatesStatus: { installed: { commit: "abc" } },
     });
     const m = ha.createHostAdminModel({ client: c, host: H, url: "https://" + H + ":7462", backend: "hyperv-remote", now: () => NOW });
     eq("model: starts unavailable until detected", m.state.mode, "unavailable");
