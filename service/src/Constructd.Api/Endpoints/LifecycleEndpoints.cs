@@ -82,6 +82,8 @@ public static class LifecycleEndpoints
             {
                 var driver = s.GetRequiredService<IHypervisorDriver>();
                 if (!driver.Capabilities.Suspend) return Problem("unsupported-capability");
+                if (await driver.GetStateAsync(vm.Name, ct) is var savedFrom && savedFrom is not (VmState.Running or VmState.Paused))
+                    return Problem("vm-state-unknown", extra: new() { ["state"] = savedFrom, ["reason"] = "save-requires-running-or-paused" });
                 await driver.SaveAsync(vm.Name, ct);
                 var state = await driver.GetStateAsync(vm.Name, ct);
                 if (state != VmState.Saved) return Problem("vm-state-unknown");
@@ -171,7 +173,7 @@ public static class LifecycleEndpoints
                 {
                     await RevokeSharedAsync(vm, s, ct);
                 }
-                await s.GetRequiredService<INetworkPolicyReconciler>().OnSharingChangedAsync(vm with { Sharing = scope }, vm.Sharing, ct);
+                else await s.GetRequiredService<INetworkPolicyReconciler>().OnSharingChangedAsync(vm with { Sharing = scope }, vm.Sharing, ct);
             }
             CodedProblems.Audit(http, sharing ? "vm.share" : "vm.lease.renew", vm.Owner, vm.Parent, vm.Name);
             return Results.Content(json, "application/json");

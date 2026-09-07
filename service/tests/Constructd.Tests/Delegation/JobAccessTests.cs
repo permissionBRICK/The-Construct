@@ -60,4 +60,25 @@ public sealed class JobAccessTests
         await using var app = new TestApp(); using var client = await app.CreateUserClientAsync("alice");
         Assert.Equal(HttpStatusCode.BadRequest, (await client.GetAsync("/api/v1/jobs?" + query)).StatusCode);
     }
+    [Fact]
+    public async Task HumanCannotImpersonateAVmInitiatorByChoosingItsName()
+    {
+        await using var app = new TestApp(); using var human = await app.CreateUserClientAsync("vm:parent");
+        await app.Service<IJobStore>().UpsertAsync(new("vm-job", "child-create", "child", "alice", JobState.Succeeded, [], null, null, app.Clock.UtcNow, app.Clock.UtcNow, "vm:parent"), default);
+        Assert.Empty((await human.GetFromJsonAsync<JsonElement>("/api/v1/jobs")).EnumerateArray());
+        Assert.Equal(HttpStatusCode.Forbidden, (await human.GetAsync("/api/v1/jobs/vm-job")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await human.PostAsJsonAsync("/api/v1/jobs/vm-job/cancel", new { })).StatusCode);
+    }
+    [Fact]
+    public async Task UserNamedSystemCannotClaimOtherOwnersExpiryJobs()
+    {
+        await using var app = new TestApp(); using var owner = await LifecycleTests.Setup(app); using var human = await app.CreateUserClientAsync("system");
+        app.Clock.Advance(TimeSpan.FromMinutes(11));
+        var id = Assert.Single(await app.Service<Constructd.Api.Hosting.LeaseSchedulerService>().TickAsync(default));
+        await LifecycleTests.Finish(app, id);
+        Assert.Empty((await human.GetFromJsonAsync<JsonElement>("/api/v1/jobs")).EnumerateArray());
+        Assert.Equal(HttpStatusCode.Forbidden, (await human.GetAsync("/api/v1/jobs/" + id)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await human.PostAsJsonAsync("/api/v1/jobs/" + id + "/cancel", new { })).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await owner.GetAsync("/api/v1/jobs/" + id)).StatusCode);
+    }
 }

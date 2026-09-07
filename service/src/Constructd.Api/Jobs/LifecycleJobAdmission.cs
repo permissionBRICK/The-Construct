@@ -10,7 +10,7 @@ public sealed class LifecycleJobAdmission(IAdmissionStore admission, IPersistedJ
     public async Task<Job> SubmitAsync(Vm vm, string initiator, bool restart, long? leaseVersion, OperationKeyRecord? key, CancellationToken ct)
     {
         var job = new Job(Guid.NewGuid().ToString("n"), restart ? "vm-restart" : "vm-shutdown", vm.Name, vm.Owner,
-            JobState.Queued, [], null, null, clock.UtcNow, null, initiator, key?.Key);
+            JobState.Queued, [], null, null, clock.UtcNow, null, leaseVersion is null ? initiator : null, key?.Key);
         IDisposable? handle = maintenance.TryEnter("mutation:" + job.Kind, job.Id, vm.Name);
         if (handle is null) throw new LifecycleException("maintenance");
         handle = new Handles(handle, operations.Register(job.Id, job.Kind, vm.Name));

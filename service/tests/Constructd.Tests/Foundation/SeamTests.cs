@@ -52,6 +52,7 @@ public sealed class SeamTests
         using var app = new TestApp();
         await app.AddUserAsync("alice");
         var admission = app.Service<IAdmissionStore>(); var ledger = app.Service<InMemoryCapacityLedger>();
+        ledger.Mode = CapacityMode.Enforce;
         ledger.Inventory = ledger.Inventory with { Complete = true, RamAvailableBytes = 1024, RamPhysicalFreeBytes = 1024, RamTotalBytes = 1024 };
         var vm = new Vm("parent", "alice", 1, 1, 10, app.Clock.UtcNow, VmState.Off, null, null, IdlePolicy.Disabled, []);
         var key = new OperationKeyRecord("alice", "create", "key", "fp", "parent", "job", OperationKeyState.InFlight, null, null, null, app.Clock.UtcNow);

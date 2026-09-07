@@ -36,10 +36,24 @@ public sealed class InMemoryAdmissionStore(InMemoryVmRepository vms, InMemoryUse
     public Task<AdmissionResult> AdmitAsync(AdmissionPlan plan, CancellationToken ct) => Task.FromResult(Transaction(() =>
     {
         if (InsertKey(plan.OperationKey, ct) is { } replay) return replay;
+        var newPrimary = plan.VmToInsert is { Kind: VmKind.Primary } candidate && Done(vms.GetAsync(candidate.Name, ct)) is null;
         if (plan.VmToInsert is { } vm)
         {
             if (plan.Allowance is null) throw new ArgumentException("VM admission requires an effective allowance.");
-            var added = Done(vms.AddAsync(vm, plan.Allowance, ct));
+            var allowance = plan.Allowance;
+            if (vm.Kind == VmKind.Child && plan.OwnerChildrenLimit is int ownerLimit)
+            {
+                var parentCount = Done(vms.ListChildrenAsync(vm.Parent!, ct)).Count;
+                if (parentCount >= allowance.MaxRetainedChildren)
+                    return Result(AdmissionOutcome.QuotaExceeded, capacity: new(false, [], "children", "user", 1,
+                        allowance.MaxRetainedChildren, Math.Max(0, allowance.MaxRetainedChildren - parentCount), "parent-child-limit", capacity.Inventory.Epoch));
+                var ownerCount = Done(vms.CountByOwnerAsync(vm.Owner, VmKind.Child, ct));
+                if (ownerCount >= ownerLimit)
+                    return Result(AdmissionOutcome.QuotaExceeded, capacity: new(false, [], "children", "user", 1,
+                        ownerLimit, Math.Max(0, ownerLimit - ownerCount), "owner-child-limit", capacity.Inventory.Epoch));
+                allowance = allowance with { MaxRetainedChildren = ownerLimit };
+            }
+            var added = Done(vms.AddAsync(vm, allowance, ct));
             if (added != VmAddDecision.Added) return Result(added switch
             {
                 VmAddDecision.NameTaken => AdmissionOutcome.NameTaken,
@@ -54,7 +68,8 @@ public sealed class InMemoryAdmissionStore(InMemoryVmRepository vms, InMemoryUse
             if (!Done(media.TryAddReferenceAsync(reference, ct))) return Result(AdmissionOutcome.MediaNotReady);
         CapacityDecision? decision = null;
         if (plan.Reservation is { } request)
-        { decision = Done(capacity.TryReserveAsync(request, ct)); if (!decision.Allowed) return Result(AdmissionOutcome.CapacityRefused, capacity: decision); }
+        { if (newPrimary && plan.JobToInsert is { Kind: "create-vm" }) capacity.AdoptAbandonedPrimaryStorage(request, jobs);
+          decision = Done(capacity.TryReserveAsync(request, ct)); if (!decision.Allowed) return Result(AdmissionOutcome.CapacityRefused, capacity: decision); }
         CascadeAcceptance? cascade = null;
         if (plan.CascadeToAccept is { } preview)
         {

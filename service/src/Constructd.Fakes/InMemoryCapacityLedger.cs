@@ -24,6 +24,9 @@ public sealed partial class InMemoryCapacityLedger(IClock clock) : ICapacityLedg
             ct.ThrowIfCancellationRequested();
             {
                 ReservationRules.Validate(request);
+                if (request.Lines.Any(l => l.Resource == ReservationResource.Storage && _reservations.Values.Any(r => r.Resource == ReservationResource.Storage &&
+                    StringComparer.OrdinalIgnoreCase.Equals(r.Artifact, l.Artifact))))
+                    return Task.FromResult(new CapacityDecision(false, [], null, null, 0, 0, 0, "reservation-conflict", Inventory.Epoch));
                 var evidence = ReadInventory?.Invoke();
                 var snapshot = Snapshot(evidence);
                 CapacityDecision? decision = null;
@@ -54,6 +57,22 @@ public sealed partial class InMemoryCapacityLedger(IClock clock) : ICapacityLedg
                 return Task.FromResult(decision is null ? new CapacityDecision(true, ids, null, null, 0, 0, 0, null, snapshot.Epoch) : decision with { ReservationIds = ids });
             }
 
+        }
+    }
+    internal void AdoptAbandonedPrimaryStorage(ReservationRequest request, InMemoryJobStore jobs)
+    {
+        lock (InMemoryTransaction.Gate)
+        {
+            foreach (var row in _reservations.Values.Where(r => r.Resource == ReservationResource.Storage && r.OperationId is not null &&
+                Ownership.SameName(r.ScopeOwner, request.Owner) && Ownership.SameName(r.VmName, request.VmName)).ToArray())
+            {
+                if (!request.Lines.Any(l => l.Resource == row.Resource && l.Amount >= row.Amount &&
+                    StringComparer.OrdinalIgnoreCase.Equals(l.Artifact, row.Artifact) && StringComparer.OrdinalIgnoreCase.Equals(l.Volume, row.Volume))) continue;
+                if (Operations?.IsAlive(row.OperationId!) == true || jobs.GetAsync(row.OperationId!, default).GetAwaiter().GetResult() is not
+                    { Kind: "create-vm", State: JobState.Failed or JobState.Cancelled }) continue;
+                _reservations.Remove(row.Id);
+                Audit?.AppendAsync(new(clock.UtcNow, request.Owner, "capacity.adopt", request.VmName!, AuditOutcome.Success, "failed-primary-create"), default).GetAwaiter().GetResult();
+            }
         }
     }
     public Task ConfirmAsync(IReadOnlyList<string> ids, VmState observed, CancellationToken ct)

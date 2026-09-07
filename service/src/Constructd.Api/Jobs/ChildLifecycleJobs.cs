@@ -83,7 +83,7 @@ public sealed class ChildLifecycleJobs(IVmRepository vms, IHypervisorDriver hype
             throw new JobFailureException(code, new { name = job.VmName, outcome = code == "guest-shutdown-unavailable" ? "unavailable" : code == "shutdown-timeout" ? "timeout" : "failed", finalState = state, code });
         }
         async Task Phase(string phase) { await runner.SetPhaseAsync(job.Id, phase, ct); progress.Report("VM lifecycle: " + phase + "."); }
-        Task Audit(bool success) => audit.AppendAsync(new(clock.UtcNow, job.Initiator ?? job.Owner,
+        Task Audit(bool success) => audit.AppendAsync(new(clock.UtcNow, expiry ? "system" : job.Initiator ?? job.Owner,
             expiry ? "vm.lease.expired" : "vm.lifecycle", job.VmName!, success ? AuditOutcome.Success : AuditOutcome.Failure,
             $"op={(restart ? "restart" : "shutdown")}, owner={job.Owner}, initiator={job.Initiator ?? job.Owner}, target={job.VmName}, job={job.Id}, reason={(expiry ? "lease-expiry" : "user")}"), CancellationToken.None);
     }

@@ -100,7 +100,8 @@ public static class ChildVmEndpoints
             var lines = new List<ReservationLine> { new(ReservationResource.Storage, (long)hardware.DiskGb << 30, "disk:" + placement.DiskPath, placement.DiskVolume), new(ReservationResource.Storage, vm.RamBytes + (64L << 20), "saved-state:" + name, placement.ConfigVolume) };
             if (request.Start) { lines.Add(new(ReservationResource.Ram, vm.RamBytes, null, null)); lines.Add(new(ReservationResource.Cpu, hardware.Cpus, null, null)); }
             OperationKeyRecord? operation = key is null ? null : new(parentVm.Owner, job.Kind, key, fingerprint, name, job.Id, OperationKeyState.Completed, null, null, JsonSerializer.Serialize(new { jobId = job.Id }, ApiJson.Options), clock.UtcNow);
-            var result = await admission.AdmitAsync(new(operation, vm, allowance, [], [], references, new(parentVm.Owner, name, job.Id, lines, TimeSpan.FromHours(2)), null, job, null, null, false), ct);
+            var ownerLimit = (await policy.ResolveAsync(parentVm.Owner, null, ct)).MaxRetainedChildren;
+            var result = await admission.AdmitAsync(new(operation, vm, allowance, [], [], references, new(parentVm.Owner, name, job.Id, lines, TimeSpan.FromHours(2)), null, job, null, null, false, OwnerChildrenLimit: ownerLimit), ct);
             if (result.Outcome == AdmissionOutcome.Replay) return Replay(result.ExistingKey!, fingerprint, name);
             if (result.Outcome != AdmissionOutcome.Accepted) return AdmissionProblem(result);
             try
@@ -175,7 +176,7 @@ public static class ChildVmEndpoints
     private static IResult Replay(OperationKeyRecord existing, string fingerprint, string target) => existing.Fingerprint == fingerprint && Ownership.SameName(existing.Target, target)
         ? Results.Ok(new { jobId = existing.JobId, replayed = true }) : CodedProblems.Create(409, "operation-key-conflict", "Operation key was already used for another request.");
     private static IResult Problem(ChildValidationException ex) => CodedProblems.Create(ex.Code == "validation" ? 400 : 409, ex.Code, ex.Message, ex.Field);
-    private static IResult AdmissionProblem(AdmissionResult result) => CodedProblems.Create(409, result.Outcome switch
+    private static IResult AdmissionProblem(AdmissionResult result) => result.Capacity is { Allowed: false } decision ? PrimaryVmAdmission.CapacityProblem(decision) : CodedProblems.Create(409, result.Outcome switch
     {
         AdmissionOutcome.VersionConflict => "operation-in-progress", AdmissionOutcome.NameTaken => "name-taken", AdmissionOutcome.KeyConflict => "operation-key-conflict", AdmissionOutcome.ParentClosed => "parent-closed",
         AdmissionOutcome.ParentMissing => "not-a-primary", AdmissionOutcome.MediaNotReady => "media-not-ready",

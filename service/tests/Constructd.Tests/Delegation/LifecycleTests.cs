@@ -202,4 +202,13 @@ public sealed class LifecycleTests
         Assert.DoesNotContain("delegation-disabled", await response.Content.ReadAsStringAsync());
         Assert.DoesNotContain("parent-closed", await response.Content.ReadAsStringAsync());
     }
+    [Fact]
+    public async Task SavingAnOffChildIsACodedRefusalBeforeTheDriverCall()
+    {
+        await using var app = new TestApp(); using var client = await Setup(app, false);
+        var response = await client.PostAsJsonAsync("/api/v1/vms/child/lifecycle", new { action = "save" });
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Contains("save-requires-running-or-paused", await response.Content.ReadAsStringAsync());
+        Assert.DoesNotContain("save:child", app.Driver.Calls);
+    }
 }

@@ -39,6 +39,13 @@ public sealed class HyperVChildDriver(IProcessRunner processes, ConstructdOption
         ArgumentGuard.VmName(name);
         return Read<ChildStoragePlacement>(await RunAsync("storage", "Get-ConstructChildStorage", "-Name $inputData.name -VhdPath $inputData.vhdPath", new { name, vhdPath = DiskPath(name) }, ct));
     }
+    public async Task<ChildStoragePlacement> ResolvePrimaryStorageAsync(string name, CancellationToken ct)
+    {
+        ArgumentGuard.VmName(name);
+        // The existing primary driver has this historical default, independently of Get-VMHost.
+        var path = DiskPath(name) ?? @"C:\ProgramData\Microsoft\Windows\Virtual Hard Disks\" + name + ".vhdx";
+        return Read<ChildStoragePlacement>(await RunAsync("storage", "Get-ConstructChildStorage", "-Name $inputData.name -VhdPath $inputData.vhdPath", new { name, vhdPath = path }, ct));
+    }
     public Task CreateAsync(ChildVmDescriptor descriptor, IProgress<string>? progress, CancellationToken ct) =>
         CreateOwnedAsync(descriptor, Guid.NewGuid().ToString("n"), progress, ct);
     public async Task CreateOwnedAsync(ChildVmDescriptor descriptor, string operationId, IProgress<string>? progress, CancellationToken ct)

@@ -1802,3 +1802,15 @@ only after confirmed artifact removal. The primary is removed only after child c
 
 These service paths are tested on Linux using the fake hypervisor and real SQLite;
 this stage does not add Hyper-V field-test evidence.
+
+Primary create/start also enters the shared capacity ledger; the primary provisioning
+sequence and one-time credential channel are preserved. Observe remains the default.
+Owner child counts and tightened parent counts are enforced separately and atomically.
+Storage holds survive uncertain cleanup; pre-incarnation save holds are reconciled against
+the discovered VM rather than duplicated. Discovery now advertises `children` and `media`.
+
+Primary state reads no longer update the stored inventory row. In SQLite mode, listings
+reflect the latest capacity reconciliation; memory-mode primary listings retain the last
+service mutation state. State-probe failures (`unknown`) refuse create/start even in
+Observe mode, and primary start waits up to 30 seconds for Running. These deliberate
+safety exceptions to the legacy default need the later real-host field check.

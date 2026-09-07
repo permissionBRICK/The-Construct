@@ -54,7 +54,7 @@ public sealed class LifecycleStart(IVmRepository vms, IHypervisorDriver driver, 
                 lines.Add(new(ReservationResource.Cpu, vm.Cpu, null, null));
             }
             // The stopped VM's old save liability is released only on confirmed Off; reserve its next run.
-            if (state == VmState.Off || !rows.Any(ReservationRules.SavedState))
+            if (driver.Capabilities.Suspend && (state == VmState.Off || !rows.Any(ReservationRules.SavedState)))
             {
                 var placement = await storage.ResolveStorageAsync(vm.Name, ct);
                 lines.Add(new(ReservationResource.Storage, vm.RamBytes + CapacityMath.SavedStateOverhead,
@@ -69,8 +69,7 @@ public sealed class LifecycleStart(IVmRepository vms, IHypervisorDriver driver, 
                 if (current is null || current.Deleting || current.PowerGeneration != vm.PowerGeneration) return false;
                 if (state == VmState.Off && !restart)
                     await scope.ReleaseReservationsAsync(rows.Where(r => (r.Resource != ReservationResource.Storage || ReservationRules.SavedState(r))).Select(r => r.Id).ToArray(), state, "observed-off");
-                var requested = restart ? lines.Where(line => rows.Where(r => r.Resource == line.Resource &&
-                        (line.Artifact is null || string.Equals(r.Artifact, line.Artifact, StringComparison.OrdinalIgnoreCase))).Sum(r => r.Amount) < line.Amount).ToArray() : lines.ToArray();
+                var requested = restart ? lines.Where(line => rows.Where(r => Matches(r, line)).Sum(r => r.Amount) < line.Amount).ToArray() : lines.ToArray();
                 decision = await scope.ReserveAsync(new(vm.Owner, vm.Name, intent.OperationId, requested, TimeSpan.FromMinutes(10)));
                 return decision.Allowed;
             }, ct);
@@ -80,6 +79,10 @@ public sealed class LifecycleStart(IVmRepository vms, IHypervisorDriver driver, 
         vm = await vms.GetAsync(vm.Name, ct) ?? throw new LifecycleException("vm-deleting");
         return await CompleteAsync(vm, key, state, ct);
     }
+
+    private static bool Matches(Reservation row, ReservationLine line) => row.Resource == line.Resource &&
+        (line.Artifact is null || string.Equals(row.Artifact, line.Artifact, StringComparison.OrdinalIgnoreCase) ||
+         line.Artifact.StartsWith("saved-state:", StringComparison.OrdinalIgnoreCase) && ReservationRules.SavedState(row));
 
     public async Task<Reply> CompleteAsync(Vm vm, OperationKeyRecord key, VmState state, CancellationToken ct)
     {
@@ -99,8 +102,7 @@ public sealed class LifecycleStart(IVmRepository vms, IHypervisorDriver driver, 
                 }, ct);
                 return expired;
             }
-            var missing = intent.Lines.Where(line => rows.Where(r => r.Resource == line.Resource &&
-                (line.Artifact is null || string.Equals(r.Artifact, line.Artifact, StringComparison.OrdinalIgnoreCase))).Sum(r => r.Amount) < line.Amount).ToArray();
+            var missing = intent.Lines.Where(line => rows.Where(r => Matches(r, line)).Sum(r => r.Amount) < line.Amount).ToArray();
             if (missing.Length > 0)
             {
                 CapacityDecision? decision = null;

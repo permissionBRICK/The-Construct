@@ -155,5 +155,6 @@ public static class JobEndpoints
 
     private static bool CanRead(HttpContext http, Job job) =>
         http.User.IsAdmin() || (!http.User.IsVmToken() && Ownership.SameName(http.User.NameOrEmpty(), job.Owner)) ||
+        (http.User.IsVmToken() || job.Initiator?.StartsWith("vm:", StringComparison.OrdinalIgnoreCase) != true) &&
         Ownership.SameName(http.User.Actor(), job.Initiator);
 }

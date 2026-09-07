@@ -68,7 +68,7 @@ field() {
 SVC_PID=""
 cleanup() {
   if [[ -n "${SVC_PID}" ]]; then kill "${SVC_PID}" 2>/dev/null || true; wait "${SVC_PID}" 2>/dev/null || true; fi
-  rm -rf "${tmp}"
+  rm -r "${tmp}"
 }
 trap cleanup EXIT
 
@@ -110,9 +110,11 @@ printf '  starting the fake service on %s ...\n' "${BASE}"
 SVC_PID=$!
 
 # Wait for it to answer, or give up with the log.
+printf 'Authorization: Bearer %s\n' "${ADMIN_TOKEN}" > "${tmp}/admin-header"
+chmod 600 "${tmp}/admin-header"
 up=0
 for _ in $(seq 1 90); do
-  if curl -fsS -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/whoami" >/dev/null 2>&1; then up=1; break; fi
+  if curl -fsS -H "@${tmp}/admin-header" "${BASE}/api/v1/whoami" >/dev/null 2>&1; then up=1; break; fi
   if ! kill -0 "${SVC_PID}" 2>/dev/null; then break; fi
   sleep 1
 done
@@ -237,6 +239,41 @@ const out = (k, v) => console.log(k + "=" + v);
   out("TOKEN_FIRST", !!job.result.vmToken);
   const again = await c.getJob(accepted.jobId);
   out("TOKEN_SECOND", !!again.result.vmToken);
+  await c.putUserAllowance("e2e-admin", { allowChildCreation: true, maxRetainedChildren: 3, allowSharing: true });
+  const primarySecret = job.result.vmToken;
+  async function guestCall(method, route, body, binary = false) {
+    const response = await fetch(base + "/api/v1" + route, { method,
+      headers: { Authorization: "VmToken " + primarySecret, "Content-Type": binary ? "application/octet-stream" : "application/json" },
+      body: body === undefined ? undefined : binary ? body : JSON.stringify(body) });
+    if (!response.ok) throw new Error("Child API failed with status " + response.status);
+    return response.status === 204 ? null : response.json();
+  }
+  const iso = Buffer.alloc(40960); iso[32768] = 1; iso.write("CD001", 32769); iso[32774] = 1;
+  const upload = await guestCall("POST", "/media/uploads", { name: "e2e.iso", role: "install", sizeBytes: iso.length, operationKey: "child-e2e-upload" });
+  await guestCall("PUT", "/media/uploads/" + upload.uploadId + "/chunks/0", iso, true);
+  const media = await guestCall("POST", "/media/uploads/" + upload.uploadId + "/complete", {});
+  const childJob = await guestCall("POST", "/vms/js-vm/children", { name: "e2e-child", cpus: 1, ramMb: 512, diskGb: 1,
+    lifetime: "10m", preset: "windows", media: { installMediaId: media.id }, operationKey: "child-e2e-create" });
+  async function childFinish(id) {
+    for (let attempt = 0; attempt < 120; attempt++) {
+      const current = await guestCall("GET", "/jobs/" + id);
+      if (current.state === "succeeded") return current;
+      if (current.state !== "queued" && current.state !== "running") throw new Error("Child job failed");
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    throw new Error("Child job timed out");
+  }
+  const createdChild = await childFinish(childJob.jobId);
+  out("CHILD_CREATE", createdChild.state);
+  out("CHILD_NO_TOKEN", !createdChild.result.vmToken);
+  const childList = await guestCall("GET", "/vms/js-vm/children");
+  out("CHILD_LIST", childList.some(vm => vm.name === "e2e-child"));
+  await childFinish((await guestCall("POST", "/vms/e2e-child/lifecycle", { action: "shutdown" })).jobId);
+  out("CHILD_SHUTDOWN", (await guestCall("GET", "/vms/e2e-child/state")).state);
+  await childFinish((await guestCall("DELETE", "/vms/e2e-child")).jobId);
+  await guestCall("DELETE", "/media/" + media.id);
+  out("CHILD_DELETE", !(await guestCall("GET", "/vms/js-vm/children")).length);
+
 
   // The DRIVER, against the live service: this is the mapping the panel gates on.
   const inst = { name: "js-vm", vmName: "js-vm", backend: "hyperv-remote", service: { url: base, auth: "token" } };
@@ -287,6 +324,11 @@ ok "js: the job's progress lines are recorded" test "${JS_PROGRESS}" -ge 5
 ok "js: the endpoint comes back" contains "ENDPOINT=127.0.0.1:" "${JS}"
 ok "js: the ONE-TIME VM token is handed out once" contains "TOKEN_FIRST=true" "${JS}"
 ok "js: ...and never again" contains "TOKEN_SECOND=false" "${JS}"
+ok "js: primary token creates a child" contains "CHILD_CREATE=succeeded" "${JS}"
+ok "js: child gets no token" contains "CHILD_NO_TOKEN=true" "${JS}"
+ok "js: primary token lists its child" contains "CHILD_LIST=true" "${JS}"
+ok "js: child graceful shutdown" contains "CHILD_SHUTDOWN=off" "${JS}"
+ok "js: primary token deletes its child" contains "CHILD_DELETE=true" "${JS}"
 ok "js: the driver maps the live state" contains "DRIVER_STATE=running" "${JS}"
 ok "js: the driver reports checkpoints as unsupported (no call made)" contains "DRIVER_CHECKPOINTS=unsupported" "${JS}"
 ok "js: an unknown VM is 'absent'" contains "DRIVER_MISSING=absent" "${JS}"

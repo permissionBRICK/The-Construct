@@ -20,7 +20,8 @@ public sealed record AdmissionPlan(
     string? VmToFence,
     string? FenceJobId,
     bool CloseChildCreation,
-    string? VmToAssignJob = null);
+    string? VmToAssignJob = null,
+    int? OwnerChildrenLimit = null);
 
 public enum AdmissionOutcome { Accepted, Replay, KeyConflict, VersionConflict, NameTaken, QuotaExceeded, ParentClosed, ParentMissing, MediaNotReady, CapacityRefused, CascadeMismatch }
 

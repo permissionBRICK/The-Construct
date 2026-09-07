@@ -207,6 +207,7 @@ public sealed class MediaApiTests
     public async Task Item_limit_serializes_concurrent_begins_and_capacity_refusal_rolls_back()
     {
         await using var app=new TestApp(); using var alice=await app.CreateUserClientAsync("alice");
+        app.Service<InMemoryCapacityLedger>().Mode=CapacityMode.Enforce;
         var refused=await alice.PostAsJsonAsync(Root+"/uploads",new {name="refused",role="install",sizeBytes=40000,operationKey="refused-key"}); Assert.Equal(HttpStatusCode.Conflict,refused.StatusCode);
         Assert.Empty(await app.Service<IMediaStore>().ListAsync(null,default)); Assert.Null(await app.Service<IOperationKeyStore>().GetAsync("alice","media-upload","refused-key",default));
         await Configure(app); await app.Service<IHostConfigStore>().SetAsync("media",HostAdminDefaults.Media with {MaxItemsPerUser=1},"admin",default);

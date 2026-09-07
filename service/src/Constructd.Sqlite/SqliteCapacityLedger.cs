@@ -144,6 +144,25 @@ public sealed partial class SqliteCapacityLedger(SqliteDatabase database, IClock
                 Min(r.GetLongOrNull("ram_budget_bytes") ?? defaults.RamBudgetBytes, caps.RamBudgetBytes),
                 Min(r.GetLongOrNull("storage_budget_bytes") ?? defaults.StorageBudgetBytes, caps.StorageBudgetBytes), null, true, true, true);
         }
+        // Only primary-create admission calls this, after proving the registry name was absent.
+        // A failed create may leave a disk hold after its unchanged registry rollback. Reuse that
+        // liability for the same owner/path; never take it from a live job or shrink unknown storage.
+        internal void AdoptAbandonedPrimaryStorage(ReservationRequest request)
+        {
+            foreach (var row in Rows.Where(r => r.Resource == ReservationResource.Storage && r.OperationId is not null &&
+                Ownership.SameName(r.ScopeOwner, request.Owner) && Ownership.SameName(r.VmName, request.VmName)))
+            {
+                if (!request.Lines.Any(l => l.Resource == row.Resource && l.Amount >= row.Amount &&
+                    StringComparer.OrdinalIgnoreCase.Equals(l.Artifact, row.Artifact) && StringComparer.OrdinalIgnoreCase.Equals(l.Volume, row.Volume))) continue;
+                if (_ledger.Operations?.IsAlive(row.OperationId!) == true) continue;
+                using var job = Connection.CreateCommand(); job.Transaction = Sql;
+                job.CommandText = "SELECT COUNT(*) FROM jobs WHERE id=@id AND kind='create-vm' AND state IN ('Failed','Cancelled')";
+                job.With("@id", row.OperationId);
+                if (Convert.ToInt64(job.ExecuteScalar()) != 1) continue;
+                Delete(row.Id);
+                Audit("capacity.adopt", request.Owner, request.VmName!, "failed-primary-create");
+            }
+        }
         public CapacityDecision ReserveInTransaction(ReservationRequest request)
         {
             Check();

@@ -51,7 +51,8 @@ public sealed partial class SqliteCapacityLedger : ICapacityReconciliationStore
             void Ensure(ReservationResource resource, long amount, string? artifact = null, string? volume = null)
             {
                 var existing = tx.Rows.Where(r => r.Resource == resource && (artifact is null ? Ownership.SameName(r.VmName, current.Name) :
-                    r.Artifact is not null && CapacityMath.Key(r.Artifact) == CapacityMath.Key(artifact))).ToArray();
+                    r.Artifact is not null && (CapacityMath.Key(r.Artifact) == CapacityMath.Key(artifact) ||
+                    artifact.StartsWith("saved-state:", StringComparison.OrdinalIgnoreCase) && ReservationRules.SavedState(r) && Ownership.SameName(r.VmName, current.Name)))).ToArray();
                 var held = existing.Sum(r => r.Amount);
                 if (held >= amount) return;
                 var delta = amount - held;

@@ -34,6 +34,7 @@ public sealed class FakeChildVmDriver(FakeHypervisorDriver hypervisor) : IChildV
     };
     public Task<string?> GetCreationOperationAsync(string name, CancellationToken ct)
     { Check(ct); return Task.FromResult(_creationOperations.GetValueOrDefault(name)); }
+    public Task<ChildStoragePlacement> ResolvePrimaryStorageAsync(string name, CancellationToken ct) => ResolveStorageAsync(name, ct);
     public Task<ChildStoragePlacement> ResolveStorageAsync(string name, CancellationToken ct)
     { Check(ct); return Task.FromResult(new ChildStoragePlacement(@"C:\VMs\" + name + ".vhdx", @"C:\", @"C:\")); }
     public Task<BackendCapabilities> GetCapabilitiesAsync(CancellationToken ct) => Task.FromResult(Capabilities);

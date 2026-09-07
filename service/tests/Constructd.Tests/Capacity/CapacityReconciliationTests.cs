@@ -161,6 +161,26 @@ public sealed class CapacityReconciliationTests : IDisposable
         Assert.Null((await _vms.GetAsync("a", default))!.Observed?.StorageProblem);
     }
     [Fact]
+    public async Task PreIncarnationSavedStateHoldSurvivesReconciliationWithoutDuplication()
+    {
+        await _vms.AddAsync(Vm(), 10, default); _driver.SetState("a", VmState.Running);
+        _inventory.Snapshot = Inventory(20 * Gb, Actual(state: VmState.Running, assigned: 8 * Gb));
+        var accepted = await _ledger.TryReserveAsync(new("alice", "a", "create", [
+            new(ReservationResource.Storage, 8 * Gb + Constructd.Core.Logic.CapacityMath.SavedStateOverhead, "saved-state:a", "C:\\")], TimeSpan.FromMinutes(10)), default);
+        Assert.True(accepted.Allowed);
+        await _ledger.ConfirmAsync(accepted.ReservationIds, VmState.Running, default);
+        await _reconciler.ReconcileAsync(default);
+        var saved = (await _ledger.ReadReservationsAsync(default)).Where(Constructd.Core.Logic.ReservationRules.SavedState).ToArray();
+        Assert.Equal(accepted.ReservationIds[0], Assert.Single(saved).Id);
+        _driver.SetState("a", VmState.Saved);
+        _inventory.Snapshot = Inventory(28 * Gb, Actual(state: VmState.Saved) with { SavedStateBytes = 8 * Gb });
+        await _reconciler.ReconcileAsync(default);
+        Assert.Equal(accepted.ReservationIds[0], Assert.Single(await _ledger.ReadReservationsAsync(default)).Id);
+        var snapshot = await _ledger.SnapshotAsync(true, default);
+        Assert.True(snapshot.Complete);
+        Assert.Equal(Constructd.Core.Logic.CapacityMath.SavedStateOverhead, snapshot.Volumes[0].GrowthReservedBytes);
+    }
+    [Fact]
     public async Task SavedVmWithMissingVmrsFailsClosed()
     {
         await _vms.AddAsync(Vm(), 10, default); _driver.SetState("a", VmState.Saved);

@@ -126,4 +126,17 @@ public sealed class HyperVChildDriverTests
         await Assert.ThrowsAnyAsync<ArgumentException>(() => driver.RemoveAsync(name, null, default));
         Assert.Empty(runner.Calls);
     }
+    [Theory]
+    [InlineData(null, @"C:\ProgramData\Microsoft\Windows\Virtual Hard Disks\primary.vhdx")]
+    [InlineData(@"D:\VMs", @"D:\VMs\primary.vhdx")]
+    public async Task PrimaryAdmissionPlacementPinsTheExistingProvisionersDiskPath(string? root, string expected)
+    {
+        var placement = new ChildStoragePlacement(expected, @"C:\", @"E:\");
+        var runner = new RecordingProcessRunner { Default = Ok(placement) };
+        var driver = new HyperVChildDriver(runner, new ConstructdOptions { ScriptsDir = @"C:\Construct", VmStorageRoot = root ?? "" }, new FakeHypervisorDriver());
+        Assert.Equal(placement, await driver.ResolvePrimaryStorageAsync("primary", default));
+        var call = Assert.Single(runner.Calls);
+        Assert.Equal(6, call.Arguments.Count); Assert.Contains("Get-ConstructChildStorage", Script(call));
+        Assert.Equal(expected, JsonDocument.Parse(call.StandardInput!).RootElement.GetProperty("vhdPath").GetString());
+    }
 }

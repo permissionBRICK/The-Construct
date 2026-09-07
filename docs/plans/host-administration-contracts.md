@@ -2393,6 +2393,7 @@ namespace Constructd.Core.Abstractions
         /// <summary>InFlight → Completed with the response, atomically with the database-only mutation it answers (§7.3).</summary>
         Task<bool> CompleteAsync(string owner, string kind, string key, string responseJson, CancellationToken ct);
         Task<bool> RemoveAsync(string owner, string kind, string key, CancellationToken ct);
+        Task<IReadOnlyList<OperationKeyRecord>> ListInFlightAsync(string vmName, CancellationToken ct);
         Task<int> SweepAsync(DateTimeOffset olderThan, CancellationToken ct);
     }
 
@@ -2415,7 +2416,8 @@ namespace Constructd.Core.Abstractions
         string? VmToFence,
         string? FenceJobId,
         bool CloseChildCreation,
-        string? VmToAssignJob = null);
+        string? VmToAssignJob = null,
+        int? OwnerChildrenLimit = null);
 
     public enum AdmissionOutcome { Accepted, Replay, KeyConflict, VersionConflict, NameTaken, QuotaExceeded, ParentClosed, ParentMissing, MediaNotReady, CapacityRefused, CascadeMismatch }
 
@@ -2659,6 +2661,7 @@ namespace Constructd.Core.Abstractions
         bool Remove(string id);
         int RemoveExpired(DateTimeOffset now);
         int RemoveForVm(string vmName);
+        int RemoveForVmExcept(string vmName, IReadOnlyList<string> principals);
         int RemoveForPrincipal(string principal);
         bool TryTakeRate(string id, string bucket, int perSecond, DateTimeOffset now);
     }
@@ -2987,7 +2990,7 @@ must keep running throughout; `capacity.mode` switched to `enforce` for items 7�
 | 12 | Delete the parent primary with one private and one shared child; interrupt the cascade once (stop the service mid-job) | preview lists both with the shared flag and expiry; typed name required; after the interruption the parent is a tombstone with the remaining child, a repeated `DELETE` finishes; all three gone; media references released; dedicated media removed; no orphan files under the media root; unrelated `haus-vm` untouched |
 | 13 | Stage an update from a real `host-*` release; apply while a media acquire is running; use the documented nested layout | `draining` waits for the acquire; new child creates and chunk writes get `503 maintenance`; existing VMs keep running; the new binary answers `maintenance` until the updater commits; clients reconnect; `install.json` and `/host/updates/status` report the pinned commit; `service\publish` and `service\host` both intact |
 | 14 | Apply a deliberately broken package (tampered SHA256SUMS; then a build whose health check fails); kill the updater once mid-`replace` and resume | first refused at verify; second rolls back automatically, status `rolledBack`, DB intact; the resumed run reuses the backup and completes; `last-update.json` readable with the service stopped |
-| 15 | Old client (pre-change extension/PS) against the new service | every existing flow (create, provision, expose, idle, remove) behaves identically; `GET /vms/{self}/forwards` is byte-compatible for the guest CLI |
+| 15 | Old client (pre-change extension/PS) against the new service; induce an unreadable state probe and delayed start on a disposable primary | existing create/provision/expose/idle/remove and `GET /vms/{self}/forwards` remain compatible; verify the S3 documented exceptions: Unknown create/start refuses safely even in Observe; start waits for confirmed Running (up to 30 seconds) |
 
 Record the outcome of each item, the release commit, and any capability that had to be
 downgraded to `unsupported`, in `docs/plans/host-administration-field-test.md`.
@@ -3974,3 +3977,47 @@ S3 review clarifications:
   matched case-insensitively, implementing §2.4's all-dedicated-media removal rule.
 - Parent relationship authorization precedes policy/state diagnostics on child creation,
   so another owner's allowance and parent fence are not disclosed to strangers.
+
+### Deviations — S3 primary admission and accounting integration
+
+- Existing primary create provisioning remains in `VmJobs.CreateAsync`. A new admission
+  wrapper atomically reserves its VM, queued job and owner-charged resources, then confirms
+  them after the existing workflow succeeds. The primary disk placement resolver is an
+  additive required `IChildVmStorage.ResolvePrimaryStorageAsync` member; it matches the
+  original provisioner's configured path or historical default, not the child default.
+  A preflight refuses an existing unmanaged VM before invoking the provisioner, preventing
+  its legacy rollback from deleting a same-name VM. Failure retains storage reservations
+  without explicit artifact-absence evidence; the original registry rollback remains intact.
+- Existing primary `/power` start keeps its idempotent Running response; Off/Saved/Paused
+  admission uses the common ledger, so a primary cannot bypass an owner's child resource
+  budget. Stop/save keep the original driver operations and settle accounting from observed
+  state under the VM gate. Memory composition uses the same default Observe mode as SQLite.
+- `AdmissionPlan.OwnerChildrenLimit` separates the owner's aggregate retained-child limit
+  from a tightened primary override. Both counts are checked inside the admission transaction;
+  private, shared and retained cleanup records count. An override on one parent does not
+  incorrectly consume the entire owner's allowance.
+- Saved-state reservations created before incarnation discovery keep their identity. The
+  ledger recognizes their VM-name alias during reconciliation and start recovery, counting
+  one liability and the actual VMRS allocation. Existing VM storage lookup uses its own
+  configuration location, avoiding incorrect volume admission after host defaults change.
+- Scheduler expiry jobs have no initiating principal (audit actor remains `system`). Job
+  access grants for `vm:<name>` initiators require a VM-token principal. A human username
+  matching a reserved actor label cannot claim another actor's job.
+
+S3 review round 5 clarifications against §0.1's zero-change primary default:
+
+- A primary create or start with an unreadable (`Unknown`) state probe now refuses with
+  `409 vm-state-unknown`, including in Observe mode. This is an intentional safety
+  exception: it is not an inventory-capacity refusal; the service cannot establish the
+  operation's starting state or exclude a same-name VM which the legacy create rollback
+  could delete. Confirmed existing/absent/Off/Saved/Paused behavior remains covered by
+  regression tests. The primary start route also waits up to 30 seconds for Running and
+  answers `start-failed` on unconfirmed start, instead of returning an immediate 200 Off.
+  Field-test item 15 must exercise unreadable state probes and delayed startup on a
+  disposable primary before rollout; no such host validation happened in this run.
+- A same-name primary-create retry may atomically adopt retained storage from its own
+  failed/cancelled create job when that operation is dead and the registry name was absent.
+  Adoption requires the same owner, VM name, artifact and volume, and cannot shrink a
+  retained liability. The failed operation's storage and the replacement plan commit as
+  one transaction; refusal rolls back the adoption. Conflicting reservation requests
+  through the admission seam return coded 409 rather than leaking an internal exception.

@@ -33,7 +33,7 @@ public static class CapacityComposition
         }
         else
         {
-            services.AddSingleton<InMemoryCapacityLedger>();
+            services.AddSingleton<InMemoryCapacityLedger>(sp => new(sp.GetRequiredService<IClock>()) { Mode = HostAdminDefaults.Capacity.Mode });
             services.AddSingleton<ICapacityLedger>(sp => sp.GetRequiredService<InMemoryCapacityLedger>());
         }
         services.AddSingleton<IDelegationPolicy>(sp => new CapacityDelegationPolicy(

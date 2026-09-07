@@ -1,13 +1,13 @@
 # Executed by driver-contract.test.ps1; real functions, isolated cmdlet doubles.
 & {
-    $script:probeVm=$null; $script:probeDrives=@(); $script:probeDvds=@(); $script:probeFail=$false
+    $script:probeVm=$null; $script:probeDrives=@(); $script:probeDvds=@(); $script:probeFail=$false; $script:probeHostFailure=$false
     $root=Join-Path ([IO.Path]::GetTempPath()) ('child-driver-'+[Guid]::NewGuid().ToString('N'))
     $null=New-Item -ItemType Directory -Path $root
-    function Get-VMHost { [pscustomobject]@{VirtualHardDiskPath=$root;VirtualMachinePath=$root} }
+    function Get-VMHost { if($script:probeHostFailure){throw 'host defaults must not be queried'}; [pscustomobject]@{VirtualHardDiskPath=$root;VirtualMachinePath=$root} }
     function Get-VM { param($Name) if($script:probeVm){$script:probeVm} }
     function New-VM { param($Name,$Path,$Generation,$MemoryStartupBytes,[switch]$NoVHD,$SwitchName)
         $null=New-Item -ItemType Directory -Path $Path
-        $script:probeVm=[pscustomobject]@{Name=$Name;Id=[Guid]::NewGuid();Path=$Path;Generation=$Generation;State='Off'}
+        $script:probeVm=[pscustomobject]@{Name=$Name;Id=[Guid]::NewGuid();Path=$Path;ConfigurationLocation=$Path;Generation=$Generation;State='Off'}
         if($script:probeFail){throw 'simulated failure after allocation'}
         $script:probeVm
     }
@@ -38,6 +38,11 @@
     try {
         New-ConstructChildVm $d
         ok 'real create allocates fixed hardware and dual media' ($script:probeVm -and (Test-Path $disk) -and $script:probeDvds.Count -eq 2 -and $script:probeOrder.Count -eq 4)
+        $script:probeHostFailure=$true
+        try {
+            $placement=Get-ConstructChildStorage -Name child -VhdPath $disk
+            ok 'existing VM storage uses its configuration location, not changed host defaults' ($placement.configVolume -eq [IO.Path]::GetPathRoot($script:probeVm.ConfigurationLocation))
+        } finally { $script:probeHostFailure=$false }
         Set-ConstructChildMedia -Name child -InstallMediaPath $iso -AuxiliaryMediaPath $null -BootOrder @('installMedia','disk')
         ok 'real media detach ejects auxiliary and reapplies device order' (-not $script:probeDvds[1].Path -and $script:probeOrder.Count -eq 2)
         $originalId=$script:probeVm.Id; $script:probeVm.Id=[Guid]::NewGuid()
