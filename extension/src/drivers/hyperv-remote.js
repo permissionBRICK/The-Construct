@@ -29,7 +29,17 @@ const remotehost = require("../remotehost");
  *                          (`-Backend hyperv-remote -ServiceUrl … -InstanceName …`).
  *                          That is what re-enables Reinstall/Redownload in the panel.
  */
-const CAPABILITIES = { checkpoints: false, console: "none", suspend: true, hostLifecycle: true };
+const CAPABILITIES = { checkpoints: false, console: "none", suspend: true, hostLifecycle: true, children: false };
+
+/**
+ * `children: false` above is the STATIC answer — the host-administration contract §10.1
+ * resolves it lazily: a service whose `/health` lists the `children` feature has child
+ * VMs, an older one has not. `capabilitiesFor(instance, opts)` is that resolution, and
+ * `queryFeatures` is the cached probe behind it (one `GET /health` per host per
+ * FEATURE_TTL_MS; a failed probe is not cached, so a host that comes back is asked again).
+ */
+const FEATURE_TTL_MS = 60000;
+const featureCache = new Map();
 
 /** The service URL recorded on an instance, or "" when the entry carries none (which
  *  makes the instance unusable — every call below reports that, once, rather than
@@ -162,9 +172,93 @@ function startVm(instance, opts = {}) {
   return true;
 }
 
+/**
+ * The service's `apiFeatures` (host-administration contract §8.1): an array, or null when
+ * it could not be established — an unreachable host, a refused credential, or an OLD
+ * service, which answers `/health` with 404 (`{ features: null, old: true }`). Never
+ * rejects. Cached per service URL for FEATURE_TTL_MS on success only; `opts.now` and
+ * `opts.noCache` are the test seams.
+ */
+async function queryFeatures(instance, opts = {}) {
+  const url = serviceUrlOf(instance);
+  const now = typeof opts.now === "function" ? opts.now() : Date.now();
+  const key = url.toLowerCase();
+  const cached = !opts.noCache && featureCache.get(key);
+  if (cached && now - cached.at < FEATURE_TTL_MS) return cached.value;
+  const { client, problem } = resolveClient(instance, opts);
+  const log = opts.log || (() => {});
+  if (!client) {
+    log(`hyperv-remote: feature probe skipped — ${problem}`);
+    return { features: null, old: false, problem };
+  }
+  try {
+    const health = await client.health();
+    const features = health && Array.isArray(health.apiFeatures) ? health.apiFeatures.map(String) : [];
+    const value = { features, old: false, problem: "", status: health && health.status === "maintenance" ? "maintenance" : "ok" };
+    featureCache.set(key, { at: now, value });
+    return value;
+  } catch (e) {
+    // 404: the service predates `/health` — an OLD service, which is an answer, not a
+    // failure, and is cached like one (it will not grow the route until it is updated).
+    if (e && e.status === 404) {
+      const value = { features: null, old: true, problem: "" };
+      featureCache.set(key, { at: now, value });
+      return value;
+    }
+    log(`hyperv-remote: feature probe failed — ${e && e.message ? e.message : e}`);
+    return { features: null, old: false, problem: (e && e.message) || String(e) };
+  }
+}
+
+/** Forget every cached feature answer (tests, and "Add Remote Host" re-enrolment). */
+function resetFeatureCache() { featureCache.clear(); }
+
+/**
+ * The capability table with `children` RESOLVED for this instance's host: true only when
+ * `/health` lists the `children` feature. Everything else is the static table. Never
+ * rejects.
+ */
+async function capabilitiesFor(instance, opts = {}) {
+  const probe = await queryFeatures(instance, opts);
+  const features = probe && Array.isArray(probe.features) ? probe.features : [];
+  return { ...CAPABILITIES, children: features.indexOf("children") >= 0 };
+}
+
+/**
+ * The children of this primary (host-administration contract §8.3, `GET
+ * /vms/{parent}/children`), for the panel's minimal user view. Never rejects:
+ *
+ *   { supported: false, items: [], problem }   the host lacks the feature (or is old,
+ *                                              unreachable, or the credential is gone)
+ *   { supported: true,  items: [...], problem: "" }  the rows, possibly none
+ *   { supported: true,  items: null, problem }  the feature exists but this read failed
+ *
+ * `supported: false` is what HIDES the panel's Child VMs card entirely (§10.2), which is
+ * why the feature probe comes first: an older service must not be asked a route it does
+ * not have, and a failed read must not be mistaken for "no children".
+ */
+async function queryChildren(instance, opts = {}) {
+  const probe = await queryFeatures(instance, opts);
+  if (!probe || !Array.isArray(probe.features)) {
+    return { supported: false, items: [], problem: (probe && probe.problem) || (probe && probe.old ? "this host's service predates child VMs" : "the host could not be reached") };
+  }
+  if (probe.features.indexOf("children") < 0) return { supported: false, items: [], problem: "this host's service has no child VMs" };
+  const { client, problem } = resolveClient(instance, opts);
+  if (!client) return { supported: false, items: [], problem };
+  try {
+    const list = await client.children(vmNameOf(instance));
+    return { supported: true, items: Array.isArray(list) ? list : [], problem: "" };
+  } catch (e) {
+    (opts.log || (() => {}))(`hyperv-remote: children read failed — ${e && e.message ? e.message : e}`);
+    return { supported: true, items: null, problem: (e && e.message) || String(e), status: e && e.status };
+  }
+}
+
 module.exports = {
   backend: "hyperv-remote",
   capabilities: CAPABILITIES,
+  FEATURE_TTL_MS,
   serviceUrlOf, vmNameOf, clientFor, resolveClient,
   queryVmState, queryAutoCheckpoints, startVm,
+  queryFeatures, resetFeatureCache, capabilitiesFor, queryChildren,
 };

@@ -136,8 +136,12 @@ function createSshTransport(opts = {}) {
       });
     },
 
-    spawnTunnel({ localPort, vmPort, bindHost }) {
-      const args = ssh.buildLocalForwardArgs(cfg, localPort, vmPort, hasKey(), { bindHost });
+    spawnTunnel({ localPort, vmPort, bindHost, connectAddress, connectPort }) {
+      // `connectAddress`/`connectPort` are set only for a CHILD-target forward (contract
+      // §12.2); a plain forward's argv is byte-for-byte what it always was.
+      const fwdOpts = { bindHost };
+      if (connectAddress) { fwdOpts.connectAddress = connectAddress; fwdOpts.connectPort = connectPort; }
+      const args = ssh.buildLocalForwardArgs(cfg, localPort, vmPort, hasKey(), fwdOpts);
       // stdin ignored: `-N` has no remote command to feed, and an inherited stdin would
       // keep the child alive past the extension host on some platforms.
       return spawn("ssh", args, { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
@@ -161,9 +165,14 @@ function createSshTransport(opts = {}) {
 function createRemoteTransport(opts = {}) {
   const base = createSshTransport(opts);
   const client = opts.client;
+  // The service's `apiFeatures` (from /health), when the caller resolved them. `network`
+  // is what makes the `?via=` poll for child-target forwards worth asking (§12.2); an
+  // older service is polled exactly as before.
+  const features = Array.isArray(opts.features) ? opts.features : [];
 
   return {
     ...base,
+    viaSupported: features.indexOf("network") >= 0,
 
     // Remote mode reads no spool and writes no file on the VM.
     runRemoteScript() {
@@ -241,6 +250,9 @@ function toPanelForwards(snapshot) {
       localPort: item.localPort == null ? null : item.localPort,
       url: item.url || null,
       message: item.message || "",
+      // The child a child-target forward reaches (§12.2) — present ONLY on such an item,
+      // so a plain forward's panel item carries exactly the fields it always did.
+      ...(typeof item.child === "string" && item.child ? { child: item.child } : {}),
       // May THIS window close it? Remotely the service is the authority, so any window
       // may ask it to delete any of the VM's forwards. Locally the spool has one owner,
       // and a non-owner deleting the owner's request/ack documents would tear down a

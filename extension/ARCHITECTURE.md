@@ -248,6 +248,22 @@ extension/
                       shape), probeLocalPort (binds for real), hostLabelOf/forwardsEnabled
                       (settings), and the pure UI projections toPanelForwards /
                       clampIdlePolicy / toPanelIdlePolicy / powerIntentFor
+    hostadmin.js      HOST ADMINISTRATION, the pure half (contract §10; no vscode): the §10.3
+                      state table (featureSet/classifyHost/resolveHostState/applyRefusal), the
+                      tab list per feature set, every DTO → view-model mapping (VMs, users,
+                      media + ISO catalog, jobs/audit, config sections, update status), the
+                      forms (allowance/overrides/user/config/lifetime with the contract's
+                      validation), the §10.4 cascade + child-delete confirmation TEXT as data,
+                      the minimal user view rows + childrenCardState + the honest
+                      shutdownOutcome, and createHostAdminModel — one host's admin state
+                      machine (detect / load(tab) / perform(action)) over an injected client
+    hostadmin-ui.js   its VS Code ADAPTER (the forwarder-ui.js pattern; `vscode` injected):
+                      the webview panel per enrolled host + the `hostadmin.*` message router,
+                      every MODAL (child Delete, the cascade dialog with its typed name and
+                      its retry on cascade-scope-changed, user/token/update confirmations),
+                      one-time secret display (Copy button, never logged, never posted), the
+                      control panel's child Shut down / Delete + Host / first-VM offers, the
+                      picker rows, the per-host admin-offer cache and the 5 s maintenance poll
     repatch.js        startup patch-verification. The claude-code patches (partial streaming +
                       the mic gate) are applied at provision time, but VS Code auto-updates that
                       extension on start, replacing extension.js with a stock (un-patched) build.
@@ -341,6 +357,24 @@ extension/
                       The CLAIM PROTOCOL is executed for real (bash, 5 windows x 25
                       concurrent rounds, stale-record + stale-lock takeover): mutual
                       exclusion is a property of concurrent execution, not of the source
+    hostadmin.test.js plain-node host-administration units (267 checks) — feature detection,
+                      the §10.3 state table in probe order (unreachable/old service/partial
+                      features/401/403/known:false/disabled/user/admin/maintenance), refusals
+                      flipping the state, tabs per feature, every view-model, the forms'
+                      validation, the cascade and child-delete confirmation content, the
+                      minimal user view rows, shutdownOutcome/awaitJob, the offers, and the
+                      model against a scripted client (routes + bodies per action, cascade
+                      as data, 403 → user, 503 → maintenance banner + mutations refused,
+                      secrets never in state or log)
+    hostadmin-ui.test.js plain-node adapter units (84 checks) against a FAKE vscode API —
+                      panel HTML/placeholders, ready→detect→state, tab loads, an unknown tab
+                      id ignored, reveal/dispose, user/old-service/no-credential states, the
+                      maintenance poll + refusal, the cascade dialog (all children listed,
+                      shared highlighted, typed name required, scope-changed retry with the
+                      new token, wrong name sends nothing), child Delete modal, Shut down =
+                      lifecycle shutdown + honest failure, secrets shown once + clipboard and
+                      never in webview/log/state, 403 → user, the control panel's child
+                      actions (unlisted child refused), the per-host offer cache/TTL
     repatch.test.js   plain-node startup patch-verification units — parsePatchStatus (line-anchored/last-wins/CRLF) + planStartupActions (the streamingOff+micOn+no-tunnel retry regression) + decideRepairs (on∧stock truth table) + confirmPatched + runStartupRepatch orchestration vs a fake ssh (unreachable/probe-fail/streaming-only/mic-only/both-patched/no-confirm) (39 checks)
 ```
 
@@ -373,7 +407,13 @@ Defined in `extension.js` (handleMessage), `media/panel.js` and `media/launcher.
   `installGit` (win32-only: visible console running winget install Git.Git),
   `openConfigRepo` (open cfgDir in a new VS Code window for conflict resolution),
   `openForward` (+`forward`; `vscode.env.openExternal` on that forward's link),
-  `closeForward` (+`forward`; kill the tunnel + drop the request/service record).
+  `closeForward` (+`forward`; kill the tunnel + drop the request/service record),
+  `openHostAdmin` (open the host-administration panel of the active instance's host),
+  `createFirstVm` (+`url`; the existing New VM flow for that enrolled host),
+  `childShutdown` / `childDelete` (+`child`; the Child VMs card's two actions — the name
+   is validated against what THIS window listed, then a modal confirmation, then
+   `POST /vms/{child}/lifecycle {action:"shutdown"}` (followed to its outcome) or
+   `DELETE /vms/{child}`; see "Host administration" below).
 - `{type:'setAudio', enabled}` — live mic-passthrough toggle (console switch only).
 - `{type:'saveIdlePolicy', policy:{timeoutMinutes, action}}` — the idle-policy card's
   "apply" (remote instances only; re-clamped to the admin cap extension-side before the
@@ -402,6 +442,7 @@ Defined in `extension.js` (handleMessage), `media/panel.js` and `media/launcher.
   install markers. The full push carries `state.forwards` too, so a webview that opens
   mid-session renders the card on its first `ready`.
 - `{type:'idlePolicy', idlePolicy}` — same, for the idle-policy card after an apply.
+- `{type:'children', children}` — same, for the Child VMs card.
 
 **state shape** (every field optional; `render()` guards each, and clears
 VM-derived fields when `online===false` or `probeError`):
@@ -427,7 +468,10 @@ VM-derived fields when `online===false` or `probeError`):
     items:[{id, vmPort, label, target, status:'open'|'queued'|'error',
             localPort, url, message}]},
   idlePolicy:{timeoutMinutes, action:'save'|'shutdown'|'off',    // remote only; null = hide
-    maxTimeoutMinutes, clamped} }
+    maxTimeoutMinutes, clamped},
+  children:{primary, visible, problem,                           // remote + `children` feature only; null = hide
+    items:[{name, state, lease, overdue, sharing, shared, busy, operation, canShutdown, canDelete}]},
+  hostAdminOffer:{host, url} }                                   // admin identity on the host; null = hide the Host button
 ```
 
 **`vmState:'saved'`** is a LABEL-only distinction. The driver contract collapses
@@ -1459,6 +1503,141 @@ through a copy of them:
 
 Several *users* on one host are unaffected either way (each has their own PC and
 registry), and so are several hosts.
+
+## Host administration
+
+The host-administration module of `docs/plans/host-administration-contracts.md` §10:
+a native webview per enrolled host for administrators, and a **minimal user view** in the
+control panel for everybody with a remote primary. The end-user guide is
+[`docs/remote-host.md` §8](../docs/remote-host.md#8-administering-the-host-from-vs-code).
+Like the remote driver, **the module is a management UI, never an authority**: every
+allowed-action list it renders is presentation (§2.2), every mutation goes to the service,
+and the service decides again.
+
+### The three files and the one hook
+
+| File | Role |
+|---|---|
+| `src/hostadmin.js` | pure; the §10.3 state table, the view-models, the forms, the confirmation texts, and `createHostAdminModel` — one host's `detect() / load(tab) / perform(action, args)` state machine over an injected `remotehost` client |
+| `src/hostadmin-ui.js` | the adapter (`forwarder-ui.js` pattern): `createHostAdminFeature(deps)` takes the vscode API and every extension-side dependency injected, so the whole thing runs under node against a fake |
+| `media/hostadmin.{html,js,css}` | the webview; `panel.css` + the chosen design theme + `hostadmin.css` on top, so a design cannot fork behaviour here either |
+
+`extension.js` has ONE registration block (`hostAdminFeature()`, next to `readIdlePolicy`)
+and four one-line hooks: `postState` attaches `children` + `hostAdminOffer` (resolved per
+active instance, `null` = hide, same contract as `idlePolicy`), `refreshAll` calls
+`readHostAdminExtras`, `handleMessage`'s command branch forwards the four ids above, and
+`runSwitchInstance` appends the feature's picker rows. `buildForwarderTransport` passes
+the service's `apiFeatures` to the forwarder (the `?via=` poll below).
+
+### Detection (§10.3) — per host, re-run on every open and on every host switch
+
+`hostadmin.resolveHostState(client)` runs `GET /health` then `GET /whoami` and
+`classifyHost` maps the answers in the contract's order:
+
+| Signal | `mode` | Shown |
+|---|---|---|
+| `hyperv-local` instance | `local` | nothing; the panel is pixel-identical |
+| `/health` status 0 | `unavailable` | "cannot reach `<host>`", Retry, last successful read |
+| `/health` 404, or no `host-admin` in `apiFeatures` | `old-service` | "predates host administration; update it on the host; no update can be driven from here" |
+| `apiFeatures` lacks a feature | (partial) | that tab is disabled with "not available on this host version"; Media's child inventory and the Maintenance tab are the feature-gated ones |
+| `/whoami` 401 | `sign-in` | a button into the existing enrolment flow |
+| `/whoami` 403, `known=false` or `enabled=false` | `denied` | "`<identity>` is not enrolled (or disabled) on `<host>`" |
+| `role=user` | `user` | the module is ABSENT (no tabs), only the first-VM offer when the host holds none of the user's VMs |
+| `role=admin` | `admin` | the seven tabs |
+| `/health` `status=maintenance` or any `503 maintenance` | `maintenance` flag | banner with the phase, every mutation disabled, `/health` re-polled every 5 s |
+
+A later `403` on ANY admin call flips the model to `user` immediately (`applyRefusal`);
+a `401` to `sign-in`; a `503` sets the banner. The classification is cached per HOST
+(`OFFER_TTL_MS`, 60 s) for the control panel's **Host** button and the picker's
+"Host administration: `<host>`" row, and a host switch resolves the new host's identity
+— nothing is ever carried from one host to another.
+
+### Tabs (§10.2)
+
+Overview (`/host/status`: version, health, capacity bars with the `observe`/`enforce`
+badge, maintenance, active jobs, overdue leases, unmanaged VMs; `/host/capacity?refresh`),
+VMs (`/vms?kind=all`: every user's VMs, children indented under their parent, kind /
+sharing / power / resources / lease-or-OVERDUE / current operation / guest facts printed
+as **unknown** when unreported; Shut down, Delete, Overrides, Rotate token — filtered by
+`allowedActions`), Users (`/users`, the allowance editor with `null = inherit`, tokens
+issue/revoke; register/remove), Media (`/host/iso-catalog` read-only + `/media?owner=all`
+with delete and cleanup), Operations (`/jobs` with cancel and the two retry buttons —
+a failed `child-delete`/`parent-cascade-delete` is retried by deleting again (§8.8), a
+failed `media-cleanup` by running it again — and `/audit`), Configuration (`/host/config`
+as one JSON text per §1.5 section, replaced whole, `expectedUpdatedAt` CAS stamp, the
+service's `400 validation {field, reason}` and `409 config-conflict` shown inline next to
+the section; `/host/capabilities` read-only), Maintenance (`/host/updates/status`,
+check / stage / apply / resume / cancel / resolve per `updateActionsFor`).
+
+**Absent by contract (§10.5):** no guest update / provision / reinstall / redownload
+anywhere in the module (those stay per instance), no host filesystem access, no local
+command that assumes the service is local, no child start / resume / console / sharing
+for ordinary users in the panel (the CLI has them).
+
+### Confirmations (§10.4) — text is data, dialogs are the adapter's
+
+`cascadeConfirmation({ primary, problem })` turns a `409 cascade-confirmation-required`
+(or `cascade-scope-changed`) body into the modal: every child with its state, **shared
+ones marked `SHARED HOST-WIDE (other users may be using it)`**, disk size and dedicated
+media, "virtual disks, saved state and dedicated media are removed permanently", and the
+expiry. The adapter shows it, requires the instance name to be TYPED (the existing rule
+for remote removal), retries with the `cascadeToken`, re-opens on `cascade-scope-changed`
+with the new list (three rounds, then gives up honestly) and reports `cascade-token-
+expired`. `childDeleteConfirmation(child)` is the smaller modal for a child. `Shut down`
+sends `lifecycle {action:"shutdown"}` — a graceful guest shutdown request (D1), never a
+save or a force-off — follows the `vm-shutdown` job and reports `shutdownOutcome`:
+`completed` is the only success; `guest-shutdown-unavailable` and `shutdown-timeout` are
+reported as what they are.
+
+**Secrets.** A newly issued user token and a rotated VM token come back in the model's
+`perform` result as `secret`, are shown ONCE in a modal with a Copy button
+(`vscode.env.clipboard`), and never reach the log, the state or any webview (the tests
+grep for the plaintext in all three).
+
+### The minimal user view
+
+Under a `hyperv-remote` primary the control panel renders a **Child VMs** card: name,
+state, lease expiry or `OVERDUE — <last outcome>`, sharing, and EXACTLY two actions,
+**Shut down** and **Delete**. It is `null` (hidden entirely) for a local instance and for
+a host whose `/health` lacks `children` (`hyperv-remote.queryChildren` probes the feature
+first, cached per host for 60 s, and never asks an older service a route it does not
+have). A failed read on a supporting host keeps the card with the problem — never a
+fabricated empty list. The webview posts only the child's NAME; the adapter accepts it
+only if this window listed it (`knownChild`), which is the same untrusted-input rule the
+forwards' `isSafeId` applies. The card's "private" tooltip says what sharing IS — a
+management grant — and that it is not network isolation (§12.2 records rules, enforces
+none). Both background reads (the children, the admin offer) use the SILENT credential
+path (`driverOpts` → `resolveClient`, `deps.offerClient`), never `remoteClientFor`, whose
+missing-token warning is right for a user-initiated open and wrong every 60 s.
+
+### Host connect / register before any VM exists
+
+Enrolment (`construct.addRemoteHost`) is unchanged and writes nothing to
+`instances.json`. `hostadmin.firstVmOffers` finds enrolled hosts with zero own registry
+instances; the Overview, the user-state card and the instance picker offer **Create first
+Construct VM here**, which runs the existing `runNewRemoteVm` with that host preselected
+(the `preferred` parameter is the only change to that flow). `construct.openHostAdmin`
+works with no instance at all: it picks an enrolled host.
+
+### Child-target forwards (§12.2) — the forwarder's `destination` branch
+
+The service records a forward whose target is a CHILD with `destination: { vmName, via,
+connectAddress, connectPort, verified: false }`. The forwarder of `via`'s owner polls
+`GET /vms/{self}/forwards?via={self}` in addition to the plain list — only when the
+service's `apiFeatures` list `network` (`createRemoteTransport({ features })` →
+`viaSupported`), so an older service is asked exactly what it always was — merges by id,
+and tunnels `-L <local>:<connectAddress>:<connectPort>` over THIS primary's SSH endpoint
+(`ssh.buildLocalForwardArgs` `connectAddress`/`connectPort`; the address is validated as
+an IP literal or a plain host name, an IPv6 literal is bracketed, and a plain forward's
+argv is byte-for-byte what it always was). The ack and the close go to the CHILD's
+routes (`/vms/{child}/forwards/{id}/ack`, §8.11). An entry without a usable address yet
+is `pending`: rendered as the service's own error ("guest address unknown yet"), never
+tunnelled, and opened the moment an address appears — the service's address-state error
+acks are not this window's final answer (`isAddressStateMessage`). A failed `?via=` poll
+skips the round exactly like a failed plain-list poll (a transient error must not read
+as "the child forwards are gone" and close every live child tunnel); an entry whose
+destination names no usable child is dropped whole. Panel items of child-target forwards
+carry `child`; plain items keep exactly their old fields.
 
 ## Forwards (`construct expose`)
 

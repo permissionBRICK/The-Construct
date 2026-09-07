@@ -525,6 +525,67 @@ new unit. Details in [`construct expose` § Activity heartbeat](expose.md#activi
 | `Refusing to talk to the Construct host service … over plain http` | you gave an `http://` URL for a host that is not this machine. There is nothing to pin and nothing to encrypt, so a token or a Windows credential would cross the network in clear. Both clients refuse before sending anything. Use `https`; plain http is accepted only for a service on `localhost` (which is how the tests drive the fake service). |
 | A warning about sending a Windows credential over plain http | you pointed at a service on **this** machine over `http://`. That is allowed, but Kerberos/NTLM is not encrypted in transit there, so the client says so once. |
 
+## 8. Administering the host from VS Code
+
+An **administrator** of the host (a user with the `admin` role) gets a native
+**Host administration** panel in VS Code; everybody else gets nothing of it — the module
+is absent for a local install and for a remote identity that is not an admin, not merely
+greyed out. It is the API client of `service/README.md`'s host-administration routes
+(contract: `docs/plans/host-administration-contracts.md` §10) and never touches the
+host's filesystem or assumes the service runs on this PC.
+
+**Opening it.** *The Construct: Host Administration* from the palette (it asks which
+enrolled host when there are several), the **⚙ Host** button in the control panel header
+(shown only when the active instance's host says you are an admin), or the *Host
+administration: `<host>`* row in *Switch Instance*. Enrolment is enough — you do not need
+a VM on the host yet; the Overview offers **Create first Construct VM here**, which is
+the ordinary *New VM on Remote Host* flow with the host preselected.
+
+**What it shows.** Overview (service version, health, capacity bars with the
+`observe`/`enforce` badge, maintenance state, active jobs, overdue leases, unmanaged
+VMs), VMs (every user's primaries and their children: kind, parent, sharing, power state,
+resources, lease or **OVERDUE**, the operation in progress, and the guest's reported
+Construct commit / provision / reinstall times — printed as *unknown* when nothing was
+reported; a successful boot never counts as provisioned), Users (register/remove, role,
+enable/disable, primary quota, host-forward permission, the delegation allowance —
+empty = inherit the host default —, per-VM overrides, and token issue/revoke; a new
+token is shown once with a Copy button and never stored), Media (the primary ISO catalog,
+read-only; the child media inventory with delete and cleanup), Operations (jobs with
+cancel, retry buttons for failed deletes and cleanups, the audit log), Configuration
+(the host-config sections as JSON, validation problems shown next to the section) and
+Maintenance (the host service's own update: check, stage, apply, resume, cancel,
+resolve — see §11 of the contract).
+
+**What it deliberately lacks.** No guest update, provision, reinstall or redownload —
+those stay in each instance's own panel and console. No child start/resume, console or
+sharing for ordinary users in the panel; `construct vm …` inside the primary has them.
+
+**Useful states instead of errors.** An unreachable host says so and offers Retry (with
+the last successful read); a host whose service predates host administration says so
+and tells you to update it *on the host* (`service/host/Install-ConstructHost.ps1`) —
+nothing can be driven from here; a host missing one feature disables just that tab
+("not available on this host version"); a rejected credential offers *Sign in again*;
+an identity that is not enrolled or is disabled is told so; a role that changes to user
+while the panel is open flips it to the ordinary-user state on the next call; while the
+host is updating a banner shows the phase, every mutation is disabled and the panel
+re-polls `/health` every five seconds.
+
+**Every user: the Child VMs card.** Under a remote primary the control panel lists its
+child VMs (name, state, lease expiry or *OVERDUE* with the last outcome, private or
+*shared host-wide*) with exactly two actions. **Shut down** asks the guest to shut down
+gracefully — the same request the panel's own Shutdown makes, never a save and never a
+force-off — and reports the real outcome: a guest without integration services, or one
+that does not power off within the host's timeout, is reported as *not* shut down.
+**Delete** confirms with the child's name, its sharing state and "disk, saved state and
+dedicated media are removed permanently". The card is hidden when the host's service has
+no child VMs. Deleting a **primary** that has children from the admin panel shows the
+cascade confirmation: every child, shared ones highlighted, the permanent disk removal,
+and the instance name typed to confirm; if a child appears or changes meanwhile the list
+is shown again. *Remove instance* (the console's `Auto-Install.ps1 -Action
+remove-instance`) does **not** handle that confirmation yet: for a primary with children
+it stops at the service's `409 cascade-confirmation-required`; delete such a primary from
+the admin panel, or delete its children first.
+
 ## Per-VM public host names, and the web ports of a remote VM
 
 A remote VM sits on the host's own switch, so the only way to a port inside it is a forward

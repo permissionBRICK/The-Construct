@@ -545,6 +545,86 @@ ok("pin: a malformed fingerprint is refused",
   ok("wiring: it is registered as a command",
     extSrc.indexOf('registerCommand("construct.removeRemoteHost"') >= 0);
 
+  // ── Host administration helpers (contract §8, §10.1): one per route, same client ──
+  console.log("\n=== host-administration helpers ===");
+  {
+    const q = rh.buildQuery;
+    eq("query: empty object is no query", q({}), "");
+    eq("query: null values are omitted", q({ kind: "all", owner: null, parent: "" }), "?kind=all");
+    eq("query: values are encoded", q({ owner: "DOMAIN\\alice", refresh: true }), "?owner=DOMAIN%5Calice&refresh=true");
+    eq("problem code: read from a coded problem", rh.problemCode({ code: "cascade-confirmation-required" }), "cascade-confirmation-required");
+    eq("problem code: absent is empty", rh.problemCode({ title: "x" }), "");
+    const coded = rh.apiError(409, { code: "operation-in-progress", jobId: "j1", title: "Busy" }, "POST /x");
+    eq("error: the problem code rides on the error", coded.code, "operation-in-progress");
+    eq("error: ...next to the status", coded.status, 409);
+    eq("error: an uncoded body has an empty code", rh.apiError(500, "boom").code, "");
+
+    const routes = [];
+    const adminClient = rh.createClient({
+      baseUrl: SVC, auth: { kind: "token", token: "t" }, pin: FP_A,
+      fetchImpl: async (url, init) => { routes.push({ method: init.method, url: url.replace(SVC, ""), body: init.body == null ? null : JSON.parse(init.body) }); return { status: 200, text: "[]" }; },
+    });
+    const last = () => routes[routes.length - 1];
+    await adminClient.health();                    eq("route: health", last().method + " " + last().url, "GET /api/v1/health");
+    await adminClient.hostCapabilities();          eq("route: host capabilities", last().url, "/api/v1/host/capabilities");
+    await adminClient.hostStatus();                eq("route: host status", last().url, "/api/v1/host/status");
+    await adminClient.hostCapacity(true);          eq("route: capacity refresh", last().url, "/api/v1/host/capacity?refresh=true");
+    await adminClient.hostCapacity();              eq("route: capacity plain", last().url, "/api/v1/host/capacity");
+    await adminClient.hostConfig();                eq("route: config", last().method + " " + last().url, "GET /api/v1/host/config");
+    await adminClient.putHostConfig({ capacity: { mode: "enforce" } });
+    ok("route: config PUT with the body", last().method === "PUT" && last().url === "/api/v1/host/config" && last().body.capacity.mode === "enforce");
+    await adminClient.isoCatalog();                eq("route: iso catalog", last().url, "/api/v1/host/iso-catalog");
+    await adminClient.users();                     eq("route: users", last().url, "/api/v1/users");
+    await adminClient.getUser("DOMAIN\\bob");      eq("route: user is encoded", last().url, "/api/v1/users/DOMAIN%5Cbob");
+    await adminClient.createUser({ name: "carol", role: "user", maxVms: 1 });
+    ok("route: create user is the existing POST /users", last().method === "POST" && last().url === "/api/v1/users" && last().body.name === "carol");
+    await adminClient.updateUser("bob", { role: "admin" });
+    ok("route: update user", last().method === "PUT" && last().url === "/api/v1/users/bob" && last().body.role === "admin");
+    await adminClient.deleteUser("bob");           eq("route: delete user", last().method + " " + last().url, "DELETE /api/v1/users/bob");
+    await adminClient.userAllowance("bob");        eq("route: allowance GET", last().url, "/api/v1/users/bob/allowance");
+    await adminClient.putUserAllowance("bob", { allowSharing: false });
+    ok("route: allowance PUT", last().method === "PUT" && last().body.allowSharing === false);
+    await adminClient.userTokens("bob");           eq("route: tokens", last().url, "/api/v1/users/bob/tokens");
+    await adminClient.issueUserToken("bob", { label: "laptop" });
+    ok("route: issue token is the existing POST", last().method === "POST" && last().url === "/api/v1/users/bob/tokens" && last().body.label === "laptop");
+    await adminClient.revokeUserToken("bob", "t1"); eq("route: revoke token", last().method + " " + last().url, "DELETE /api/v1/users/bob/tokens/t1");
+    await adminClient.vms({ kind: "all", owner: "bob" }); eq("route: vms with query", last().url, "/api/v1/vms?kind=all&owner=bob");
+    await adminClient.vms();                       eq("route: vms without query is the plain list", last().url, "/api/v1/vms");
+    await adminClient.sharedVms();                 eq("route: shared", last().url, "/api/v1/vms/shared");
+    await adminClient.children("work-vm");         eq("route: children", last().url, "/api/v1/vms/work-vm/children");
+    await adminClient.vmIdentity("work-vm");       eq("route: identity", last().url, "/api/v1/vms/work-vm/identity");
+    await adminClient.vmCapabilities("work-vm");   eq("route: vm capabilities", last().url, "/api/v1/vms/work-vm/capabilities");
+    await adminClient.lifecycle("work-vm-a1", { action: "shutdown" });
+    ok("route: lifecycle POST with the action", last().method === "POST" && last().url === "/api/v1/vms/work-vm-a1/lifecycle" && last().body.action === "shutdown");
+    await adminClient.deleteVm("work-vm");
+    ok("route: deleteVm without a body is unchanged", last().method === "DELETE" && last().url === "/api/v1/vms/work-vm" && last().body === null);
+    await adminClient.deleteVm("work-vm", { cascade: { token: "abc" } });
+    ok("route: deleteVm with the cascade token", last().method === "DELETE" && last().body.cascade.token === "abc");
+    await adminClient.overrides("work-vm");        eq("route: overrides", last().url, "/api/v1/vms/work-vm/overrides");
+    await adminClient.putOverrides("work-vm", { allowSharing: false }); eq("route: overrides PUT", last().method, "PUT");
+    await adminClient.deleteOverrides("work-vm");  eq("route: overrides DELETE", last().method, "DELETE");
+    await adminClient.rotateVmToken("work-vm", { kind: "primary" });
+    ok("route: rotate token", last().method === "POST" && last().url === "/api/v1/vms/work-vm/token" && last().body.kind === "primary");
+    await adminClient.revokeVmToken("work-vm");    eq("route: revoke vm token", last().method + " " + last().url, "DELETE /api/v1/vms/work-vm/token");
+    await adminClient.media({ owner: "all" });     eq("route: media inventory", last().url, "/api/v1/media?owner=all");
+    await adminClient.mediaItem("m1");             eq("route: media item", last().url, "/api/v1/media/m1");
+    await adminClient.mediaReferences("m1");       eq("route: media references", last().url, "/api/v1/media/m1/references");
+    await adminClient.deleteMedia("m1");           eq("route: media delete", last().method + " " + last().url, "DELETE /api/v1/media/m1");
+    await adminClient.mediaCleanup();              eq("route: media cleanup", last().method + " " + last().url, "POST /api/v1/media/cleanup");
+    await adminClient.jobs({ state: "failed", limit: 50 }); eq("route: jobs", last().url, "/api/v1/jobs?state=failed&limit=50");
+    await adminClient.cancelJob("j1");             eq("route: cancel job", last().method + " " + last().url, "POST /api/v1/jobs/j1/cancel");
+    await adminClient.audit({ actor: "bob" });     eq("route: audit", last().url, "/api/v1/audit?actor=bob");
+    await adminClient.forwardsVia("work-vm");      eq("route: forwards via this primary", last().url, "/api/v1/vms/work-vm/forwards?via=work-vm");
+    await adminClient.updatesStatus();             eq("route: update status", last().url, "/api/v1/host/updates/status");
+    await adminClient.updatesCheck();              ok("route: update check with an empty body", last().method === "POST" && last().url === "/api/v1/host/updates/check" && JSON.stringify(last().body) === "{}");
+    await adminClient.updatesStage({ releaseTag: "v1" }); ok("route: stage", last().url === "/api/v1/host/updates/stage" && last().body.releaseTag === "v1");
+    await adminClient.updatesApply({ updateId: "u1" }); ok("route: apply", last().url === "/api/v1/host/updates/apply" && last().body.updateId === "u1");
+    await adminClient.updatesCancel({ updateId: "u1" }); eq("route: cancel", last().url, "/api/v1/host/updates/cancel");
+    await adminClient.updatesResolve({ updateId: "u1", action: "commit" }); ok("route: resolve", last().url === "/api/v1/host/updates/resolve" && last().body.action === "commit");
+    ok("existing: whoami/listVms/getVm/getState/getEndpoint/power/createVm/getJob are all still there",
+      ["whoami", "listVms", "getVm", "getState", "getEndpoint", "power", "createVm", "getJob"].every((k) => typeof adminClient[k] === "function"));
+  }
+
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
   console.log(`\n  remote-host client tests — ${pass}/${pass + fail} passed`);
   if (fail) process.exitCode = 1;
