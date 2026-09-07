@@ -207,6 +207,9 @@ param(
     [string]$ServiceUrl = "",
     [string]$InstanceName = "",
     [string]$VmTokenB64 = "",
+    [switch]$RotateVmToken,
+    [ValidateSet('provisioned','reinstalled')][string]$ProvisionEvent = 'provisioned',
+    [hashtable]$ServiceApiAuth = $null,
     # The name this VM's WEB endpoints are reachable under (plan section 4.12): the host
     # service's rendered Constructd:PublicHostPattern, which the installer read from
     # GET /vms/{name}/endpoint and recorded in the instance registry. It becomes
@@ -2325,6 +2328,14 @@ if ($ServiceUrl) {
         }
     }
 }
+# Explicit upgrade only; deliver the response through the existing stdin-only secret path.
+if ($RotateVmToken) {
+    if (-not $ServiceUrl -or -not $InstanceName) { throw '-RotateVmToken requires a remote service and instance.' }
+    . (Join-Path $PSScriptRoot 'lib/AgentVm.Remote.ps1')
+    $rotatedCredential = Request-ConstructVmTokenRotation -BaseUrl $ServiceUrl -VmName $InstanceName -Auth $ServiceApiAuth
+    $VmTokenB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$rotatedCredential.vmToken))
+    $rotatedCredential = $null
+}
 $serviceEnv = Get-ServiceEnvSuffix -ServiceUrl $ServiceUrl -InstanceName $guestInstanceName -VmTokenB64 "" -ServiceCaB64 $serviceCaB64
 if ($ServiceUrl) {
     # Say WHAT was sent, never the token itself.
@@ -2357,6 +2368,18 @@ Write-Host "  --- end provisioning output ---" -ForegroundColor DarkGray
 $script:ProvisionRawLines = @($provisionStream.Lines)
 $script:ProvisionResult = ConvertFrom-ConstructProvisionResult -Lines $provisionStream.Lines
 $global:ConstructProvisionErrors = @($script:ProvisionResult.Errors)
+# Advisory report from the existing PC workflow. No local call, retry or fatal failure.
+if ($ServiceUrl) {
+    try {
+        if (-not (Get-Command Send-ConstructGuestReport -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'lib/AgentVm.Remote.ps1') }
+        if ($script:ProvisionResult.IsValid -and $provisionStream.ExitCode -eq 0 -and $script:ProvisionResult.ErrorCount -eq 0) {
+            [void](Send-ConstructGuestReport -BaseUrl $ServiceUrl -VmName $InstanceName -Event $ProvisionEvent -ConstructCommit $constructVersion -Auth $ServiceApiAuth)
+        } else {
+            [void](Send-ConstructGuestReport -BaseUrl $ServiceUrl -VmName $InstanceName -Event attempt -Outcome failed -Auth $ServiceApiAuth)
+        }
+    } catch { } # Reporting never changes the provisioner's result.
+}
+
 if (-not $script:ProvisionResult.IsValid) {
     throw "VM provisioner did not emit a valid result sentinel (remote exit $($provisionStream.ExitCode))."
 }

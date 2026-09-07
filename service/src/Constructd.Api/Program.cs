@@ -107,7 +107,11 @@ app.MapGroup("/api/v1")
     .MapVmEndpoints()
     .MapForwardEndpoints()
     .MapIdleEndpoints()
-    .MapJobEndpoints();
+    .MapJobEndpoints()
+    // Host administration feature routes: one hook per implementation pair.
+    .MapHealthEndpoints()
+    .MapHostAdminEndpoints()
+    .MapDelegationEndpoints();
 
 await Bootstrap.RunAsync(app.Services, CancellationToken.None);
 

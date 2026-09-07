@@ -111,13 +111,13 @@ Everything lives under `/api/v1`, speaks JSON with camelCase properties and came
 | Route | Who | What it does |
 |---|---|---|
 | `GET /whoami` | any authenticated user identity | Resolved identity, role, quota. Answers for identities that are *not* enrolled too (`known: false`), which is how enrollment tells "wrong credential" from "ask your admin to add you". VM tokens are refused. |
-| `POST /users` | admin | Creates a user `{name, role, maxVms, allowHostForwards?}`. There is no self-registration. |
+| `POST /users` | admin | Creates a user `{name, role, maxVms, allowHostForwards?, allowance?}`. With `allowance` supplied, omitted `maxVms` uses the host default; the legacy request still requires `maxVms`. There is no self-registration. |
 | `DELETE /users/{name}` | admin | Removes a user and revokes their tokens. Refused while they still own VMs, and for the caller's own account. |
 | `POST /users/{name}/tokens` | admin | Issues an API token `{label}`; the plaintext is in the response **once** and is never stored or logged. |
 | `GET /audit` | admin | Audit trail, newest first, `?limit=`. |
-| `GET /vms` | user | The caller's VMs; all of them for an admin. |
+| `GET /vms` | user or primary token | Owned VMs (token: its primary and children); all for admin. Optional `kind=primary|child|all`, `parent`, and admin-only `owner` filters. |
 | `POST /vms` | user | `{name, cpu, ramGb, diskGb, opts:{nested?, automaticCheckpoints?, idlePolicy?}}` → `202 {jobId}`. Name uniqueness and the quota are enforced by the insert itself. |
-| `GET /vms/{name}` | owner/admin | The VM including its `publicHost` and its forwards. Never exposes the VM token hash. |
+| `GET /vms/{name}` | owner/admin | The VM including its `publicHost`, forwards and host-administration metadata. Never exposes the VM token hash. |
 | `DELETE /vms/{name}` | owner/admin | → `202 {jobId}`; accepting it fences the VM (see below) and the job removes the VM, its forwards and its SSH port. |
 | `POST /vms/{name}/power` | owner/admin | `{action: start\|stop\|save}`, synchronous, returns the new state. `save` needs the driver's suspend capability. |
 | `GET /vms/{name}/state` | owner/admin | Live state from the driver (and refreshes the registry). |
@@ -130,6 +130,42 @@ Everything lives under `/api/v1`, speaks JSON with camelCase properties and came
 | `POST /vms/{name}/activity` | owner/admin **or that VM's own token** | Guest heartbeat `{busy, reasons[]}`. |
 | `GET /jobs/{id}` | job submitter/admin | Job state, progress lines, result, error. The first retrieval of a succeeded creation job also gets `result.vmToken`. |
 | `GET /jobs/{id}/events` | job submitter/admin | `text/event-stream`. |
+
+### Host administration foundation
+
+| Route | Who | What it does |
+|---|---|---|
+| `GET /health` | anonymous | Status, schema versions and feature names; authenticated callers also receive installed commit/version. |
+| `GET /host/status` | admin | Installed release, health, capacity snapshot, maintenance phase, active jobs and overdue leases. Incomplete capacity is reported honestly until its backend lands. |
+| `GET /host/capabilities` | user or primary token | Backend capabilities and current host policy. Later-stage features are `unsupported`. |
+| `GET` / `PUT /host/config` | admin | Read defaults/stored sections; atomically validate and replace supplied sections, optionally comparing each `expectedUpdatedAt`. |
+| `GET /users`, `GET /users/{name}` | admin | Enabled state, allowances, effective policy, VM counts and token count; no hashes. |
+| `PUT /users/{name}` | admin | Patch `role`, `enabled`, `maxVms`, `allowHostForwards`. Self-demotion/disable and removal of the last enabled admin are refused. |
+| `GET` / `PUT /users/{name}/allowance` | admin | Read stored/effective allowance; replace nullable stored allowance fields. Null inherits host defaults. |
+| `GET /users/{name}/tokens`, `DELETE /users/{name}/tokens/{id}` | admin | List credential metadata or revoke one token. Existing create/delete-user and issue-token routes remain. |
+| `GET /vms/{name}/identity` | owner/admin or that VM's token | Kind, parent, owner, token kind, effective delegation, service version/features. Legacy tokens receive no delegation. |
+| `POST /vms/{name}/guest-report` | owner/admin or that VM's token | `{event, reporter, at?, constructCommit?, outcome?}`. Independent success (`provisioned`, `reinstalled`) and `attempt` fields. Children are refused. |
+| `POST` / `DELETE /vms/{name}/token` | owner/admin user | Rotate (one-time plaintext) or revoke the primary's credential. Children never receive tokens. |
+| `GET` / `PUT` / `DELETE /vms/{name}/overrides` | admin | Per-primary restrictions, combined with current owner and host policy. |
+| `GET /vms/{name}/children` | owner/admin or parent primary token | Classified children inventory. |
+| `GET /vms/shared` | user or primary token | Accessible host-shared children; disabled owners' children are hidden from shared callers. |
+| `GET /vms/{name}/capabilities` | owner/admin/parent or shared caller | Per-VM capability view, lowered by backend availability and current policy. |
+
+`whoami` adds `enabled`, `effective` and `apiFeatures`. VM inventory adds `kind`, `parent`, sharing,
+lease/resources, guest reports and separate host observations, reservations, operation metadata and
+`allowedActions`. These describe current policy; authorization reads current user state on every
+request. Disabling a user immediately rejects their Bearer tokens and their VMs' credentials. Legacy
+VM tokens retain only the existing forwards/activity scope plus identity and guest-report intake.
+New primary creation issues a `primary` token; it never grants user identity or admin access.
+
+Only `host-admin` is advertised in stage 1. Child lifecycle, console input, media acquisition,
+capacity enforcement, updater execution and child network forwarding are later-stage features.
+Their Core contracts, fake implementations and composition/map hooks exist; unavailable production
+operations throw unsupported and no routes acknowledge these operations. SQLite atomic admission
+and the persisted child-job runner await their owning feature migrations/implementation. The fake
+admission store commits or rolls back participating stores under one lock, including readers; its
+scope accepts only the synchronously completing in-memory store calls. No Hyper-V validation has
+been performed for these additions.
 
 ### Jobs, the event stream and the one-time secret
 
@@ -167,13 +203,12 @@ restart sees `vmToken: null` while `name` and `endpoint` stay.
 client acknowledges it, so a response lost in transit loses the token. That is deliberate: nothing
 about the delivery is retriable without weakening "once".
 
-**There is currently no way to re-issue one.** `ITokenService.IssueVmTokenAsync` is called from
-exactly one place — the VM creation job — and no route or admin verb exposes it. A VM whose token
-was lost (or whose guest file was destroyed) therefore keeps a token nothing can replace: its
-`construct expose` and its idle heartbeat stay broken until the VM is **deleted and created
-again** (`DELETE /vms/{name}` → `POST /vms` → provision, which is what the installer's *Reinstall*
-does). A rotation endpoint — `POST /vms/{name}/token`, invalidating the previous hash — is the
-obvious follow-up; see *Open points* below.
+**An owner or admin can rotate a VM token.** `POST /vms/{name}/token {kind?: "primary"|"legacy"}`
+returns `{vmToken, kind, issuedAt}` once and immediately invalidates the previous hash. The default
+kind is `primary`; existing migrated tokens remain `legacy` until explicitly rotated. `DELETE` on
+the same route revokes the credential. VM tokens themselves cannot rotate it. Reprovision with
+`Provision-AgentVM.ps1 -RotateVmToken` to rotate and deliver the replacement through the existing
+SSH stdin secret channel; ordinary reprovisioning does not rotate.
 
 If any creation step fails, the job rolls back: the partially created VM is removed from the
 hypervisor (an orphan VM would keep consuming disk while its name was handed back), the ports are
@@ -448,15 +483,39 @@ Bound from the `Constructd` section of `appsettings.json`, from environment vari
 | `Iso:Sha256` | – | Expected SHA-256 of the source ISO. Empty skips the check; when set it is verified on **every** use, not only after the download. |
 | `Iso:CacheDir` | `C:\ProgramData\Construct\service\iso` | Holds the downloaded source ISO and the ISO catalog (versioned media, sidecars, `current.pointer`). |
 | `Iso:SourceId` | `ubuntu-server-minimal` | `SOURCE_ID` of `bin/build-autoinstall-iso.sh` (`ubuntu-server` for the standard set). |
+| `HostAdmin:Capacity:Mode` | `Observe` | Bootstrap capacity policy when no stored section exists. Stage 1 reports an incomplete inventory; enforcement backend follows separately. |
+| `HostAdmin:Updates:ManifestPublicKey` | – | Bootstrap signature-verification public key; updater execution is not installed in stage 1. |
+| `HostAdmin:Media:RootDir` | – | Media root used by health discovery; media acquisition follows separately. |
 | `BootstrapAdmin` | – | Identity seeded as the first admin when the user store is empty. |
 | `BootstrapAdminMaxVms` | `10` | Quota for that admin. |
 | `BootstrapAdminToken` | – | Optional plaintext token for the bootstrap admin (hashed at startup). Only for hosts that cannot use Negotiate; remove it once a real token has been issued. |
 
+Host policy is stored separately in `host_config` and takes precedence over bootstrap defaults.
+`GET /host/config` returns each section's fields plus `source` and `updatedAt`. `PUT` accepts one or
+more complete sections (all required fields present); optional fields omitted become null. Invalid
+sections roll back the entire request. `expectedUpdatedAt: null` requires that no stored section
+exists; a timestamp requires an exact match. A conflict returns `409 config-conflict`.
+
+| Section | Configuration fields |
+|---|---|
+| `capacity` | `mode`, `ramHeadroomBytes`, `storageHeadroomBytes`, `cpuBudget`, `maxVcpusPerVm`, `reconcileSeconds`, `orphanReservationTimeoutSeconds` |
+| `userDefaults` | `maxPrimaries`, `allowChildCreation`, `maxRetainedChildren`, `cpuBudget`, `ramBudgetBytes`, `storageBudgetBytes`, `maxChildLifetimeSeconds`, `allowNeverLifetime`, `allowSharing` |
+| `userCaps` | Caps on retained children, CPU/RAM/storage, lifetime, never-lifetime and sharing; null leaves the value uncapped. |
+| `lifecycle` | `gracefulShutdownTimeoutSeconds`, `leaseTickSeconds`, `leaseRetrySeconds` |
+| `media` | `maxBytes`, `maxItemsPerUser`, `uploadChunkBytes`, `uploadTtlHours`, `acquireTimeoutMinutes`, `allowHttp`, `unreferencedTtlHours` |
+| `network` | `hostForwardsEnabled`, `directAddressReporting` |
+| `updates` | `repository`, `channel`, `drainTimeoutMinutes`, `healthTimeoutSeconds`, `requireSignature`, `manifestPublicKey` |
+
+Disabling `network.hostForwardsEnabled` refuses new primary host forwards immediately; the default
+preserves existing behavior. Stored user allowances override defaults, host caps narrow them, and
+per-primary overrides can only restrict the result. Lowered limits do not delete existing VMs.
+
 ## Persistence
 
-One SQLite file, hand-written SQL, no ORM and no migration machinery yet (the schema is created if
-missing; evolving it is a deliberate decision to make when the first change comes). Tables: `users`,
-`tokens`, `vms`, `activity`, `forwards`, `audit`, `jobs`. Name columns are `COLLATE NOCASE`, because identities
+One SQLite file, hand-written SQL and no ORM. `SqliteMigrationRunner` applies additive feature
+migrations and records each version in `schema_migrations`; the base schema is created if missing.
+Core tables include `users`, `tokens`, `vms`, `activity`, `forwards`, `audit`, `jobs`, with host
+configuration, allowances, overrides and cascades added by M100. Name columns are `COLLATE NOCASE`, because identities
 (`DOMAIN\user`) and VM names are compared case-insensitively everywhere else too.
 
 - **Only hashes are stored.** A persistence test reads the raw database file and asserts that neither
@@ -1281,15 +1340,11 @@ deleting a colleague's VM is not an uninstall step.
 - The `url` on a forward is advisory (`http://<publicHost>:<port>/` for a host target, the client's
   reported link for a client target). Per-VM hostnames for cookie-sensitive services stay out of
   scope (plan §4.9).
-- **No VM-token rotation.** `IssueVmTokenAsync` is only ever called by the VM creation job, so a
-  lost VM token cannot be replaced — the VM has to be deleted and re-created. A
-  `POST /vms/{name}/token` route (issue, invalidate the previous hash, hand the plaintext out once
-  under the same rules as the create job) is a contained addition.
 - Quota semantics: `maxVms` is a plain cap and `0` means "may not create VMs"; "unlimited" has to be
   expressed as a large number.
-- Schema evolution is `SqliteDatabase.AddColumnIfMissing` and nothing more: additive nullable
-  columns, applied on every start, introduced by the forward ack (B8). A rename, a drop or a data
-  backfill still needs a real migration story — and a version stamp to decide when to run it.
+- Schema evolution now uses the additive feature migration runner and `schema_migrations`.
+  M100 backfills existing VMs as primaries with legacy credentials. Breaking migrations remain
+  outside this delivery; per-feature ranges and compatibility rules are in the host-admin contract.
 - The capability's console **kind** (`vmconnect`, a URL, none) is read from the driver and carried on
   `DriverCapabilities`, but **no endpoint exposes it**. It has no consumer either: the extension's
   `hyperv-remote` driver hardcodes `console: "none"` (there is no `vmconnect` to a machine you are not

@@ -3172,3 +3172,37 @@ Stage 1 foundation:
   column scope (plus `User.Enabled`), consistently in both stores. Reports,
   observations, leases, token kinds and allowances use explicit seams, so an
   old lifecycle snapshot cannot silently erase newer metadata.
+
+- Added `IJobQueryStore` and `IUserTokenRevoker` alongside the legacy stores to
+  expose active jobs and per-user credential revocation without changing the
+  frozen legacy interfaces or third-party decorators.
+- The user-PC report hook lives in `Provision-AgentVM.ps1` and
+  `lib/AgentVm.Remote.ps1`, as explicitly required by this stage's task. The
+  later guest-CLI pair may add the `provision.sh` hook; both reporters are
+  accepted. Completion reporting is advisory and only occurs after the final
+  guest result; earlier transport failures leave success facts unchanged.
+- `ForwardEndpoints.cs` has a minimal stage-1 hook checking the stored host
+  forwarding switch and refusing the new optional destination fields until the
+  network pair implements validation. The default primary path is unchanged.
+- The legacy create-user request still requires `maxVms` when `allowance` is
+  omitted (the existing implementation never defaulted it to zero). The new
+  allowance shape permits omission and uses `userDefaults.maxPrimaries`.
+- Stage-1 fake capacity uses a supplied inventory epoch and conservatively
+  retains reservations without absence evidence. Full reconciliation/owner
+  accounting follows in the capacity stage. Fake child exposure refuses an
+  unverifiable address until the network stage supplies destination validation.
+- SQLite admission and `IPersistedJobRunner` are explicitly unsupported until
+  the later per-feature transaction helpers and child-job runner exist. The
+  real in-memory admission seam is implemented now, with atomic rollback over
+  all participating stores; database-only callbacks must complete synchronously
+  because its store operations perform no I/O. Feature route-map hooks exist
+  without mapping future routes or advertising success.
+
+- Ordinary VM snapshot updates preserve the current credential hash and can
+  only set, never reopen, the deletion fence. Credential issuance/revocation
+  uses `IVmMetadataStore`; setting a deletion fence clears the hash. This
+  prevents an in-flight state/idle refresh from resurrecting a rotated or
+  revoked credential (or undoing a concurrent deletion).
+  The existing enqueue-failure rollback is retained through the explicit
+  `RestoreUnqueuedDeletionAsync` metadata method under the same VM operation
+  gate as rotation; ordinary snapshot writes cannot invoke that rollback.

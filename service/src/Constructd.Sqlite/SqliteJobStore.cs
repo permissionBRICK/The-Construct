@@ -13,7 +13,7 @@ namespace Constructd.Sqlite;
 /// the engine serves jobs of the running process from memory. No secret is ever written: the
 /// one-time secret of a job lives only in the engine, so a restart loses it (by design).
 /// </summary>
-public sealed class SqliteJobStore(SqliteDatabase database) : IJobStore
+public sealed class SqliteJobStore(SqliteDatabase database) : IJobStore, IJobQueryStore
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
@@ -88,5 +88,10 @@ public sealed class SqliteJobStore(SqliteDatabase database) : IJobStore
             SqliteDatabase.ReadTime(reader.GetString("created")),
             SqliteDatabase.ReadTimeOrNull(reader.GetStringOrNull("finished")),
             reader.GetStringOrNull("initiator"), reader.GetStringOrNull("operation_key"), reader.GetStringOrNull("phase"));
+    }
+    public async Task<IReadOnlyList<Job>> ListAsync(CancellationToken ct)
+    {
+        await using var c = await database.OpenAsync(ct); await using var cmd = c.CreateCommand(); cmd.CommandText = "SELECT * FROM jobs ORDER BY created DESC";
+        await using var r = await cmd.ExecuteReaderAsync(ct); var jobs = new List<Job>(); while (await r.ReadAsync(ct)) jobs.Add(Read(r)); return jobs;
     }
 }

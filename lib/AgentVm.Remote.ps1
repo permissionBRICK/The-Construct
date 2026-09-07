@@ -950,3 +950,42 @@ function Wait-ConstructJob {
         Start-Sleep -Seconds ([Math]::Max(1, $PollSeconds))
     }
 }
+
+# Host-administration client hooks. Reports are advisory; rotation is explicit.
+function Send-ConstructGuestReport {
+    [CmdletBinding()]
+    param([string]$BaseUrl, [string]$VmName, [ValidateSet('provisioned','reinstalled','attempt')][string]$Event,
+          [ValidateSet('succeeded','failed')][string]$Outcome, [string]$ConstructCommit, $Auth,
+          [string]$Pin, [string]$StoreDir)
+    if (-not $BaseUrl -or -not $VmName) { return $false }
+    try {
+        $body = @{ event = $Event; reporter = 'Provision-AgentVM.ps1'; at = [DateTimeOffset]::UtcNow.ToString('o') }
+        if ($Event -eq 'attempt') { $body['outcome'] = $Outcome }
+        elseif ($ConstructCommit -match '^[0-9a-fA-F]{7,64}$') { $body['constructCommit'] = $ConstructCommit }
+        if (-not $Auth) {
+            $savedToken = Get-ConstructRemoteToken -BaseUrl $BaseUrl -StoreDir $StoreDir
+            if ($savedToken) { $Auth = New-ConstructApiAuth -Mode token -Token $savedToken }
+            else { $Auth = New-ConstructApiAuth -Mode negotiate }
+        }
+        $path = '/vms/' + [Uri]::EscapeDataString($VmName) + '/guest-report'
+        $null = Invoke-ConstructApi -BaseUrl $BaseUrl -Method POST -Path $path -Body $body -Auth $Auth -Pin $Pin -StoreDir $StoreDir -TimeoutSec 5 -NoThrow
+        return [bool]((Get-ConstructApiLastStatus) -ge 200 -and (Get-ConstructApiLastStatus) -lt 300)
+    } catch { return $false } # Never render a transport exception or affect provisioning.
+}
+
+function Request-ConstructVmTokenRotation {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$BaseUrl, [Parameter(Mandatory)][string]$VmName,
+          [ValidateSet('primary','legacy')][string]$Kind = 'primary', $Auth, [string]$Pin, [string]$StoreDir)
+    if (-not $Auth) {
+        $savedToken = Get-ConstructRemoteToken -BaseUrl $BaseUrl -StoreDir $StoreDir
+        if ($savedToken) { $Auth = New-ConstructApiAuth -Mode token -Token $savedToken }
+        else { $Auth = New-ConstructApiAuth -Mode negotiate }
+    }
+    $path = '/vms/' + [Uri]::EscapeDataString($VmName) + '/token'
+    try {
+        $result = Invoke-ConstructApi -BaseUrl $BaseUrl -Method POST -Path $path -Body @{ kind = $Kind } -Auth $Auth -Pin $Pin -StoreDir $StoreDir
+        if (-not $result -or -not $result.vmToken) { throw 'Missing credential.' }
+        return $result
+    } catch { throw 'The host service could not rotate this VM credential.' }
+}

@@ -33,6 +33,7 @@ public static class AdminEndpoints
         HttpContext http,
         IUserStore users,
         IClock clock,
+        IHostConfigStore config,
         CancellationToken cancellationToken)
     {
         var name = request?.Name?.Trim();
@@ -48,12 +49,17 @@ public static class AdminEndpoints
             return Problems.BadRequest($"'role' must be one of: {ApiHelpers.Options<Role>()}.");
         }
 
+        if (request.Allowance is { } allowance)
+        {
+            if (HostConfigValidation.Allowance(allowance) is { } error) return CodedProblems.Validation("allowance", error);
+            if (request.MaxVms is null) request = request with { MaxVms = (await config.GetAsync<UserDefaultsConfig>("userDefaults", cancellationToken) ?? HostAdminDefaults.UserDefaults).MaxPrimaries };
+        }
         if (request.MaxVms is not int maxVms || maxVms < 0)
         {
             return Problems.BadRequest("'maxVms' must be a non-negative number.");
         }
 
-        var user = new User(name, role, maxVms, clock.UtcNow, request.AllowHostForwards ?? true);
+        var user = new User(name, role, maxVms, clock.UtcNow, request.AllowHostForwards ?? true, Allowance: request.Allowance);
 
         if (!await users.CreateAsync(user, cancellationToken).ConfigureAwait(false))
         {

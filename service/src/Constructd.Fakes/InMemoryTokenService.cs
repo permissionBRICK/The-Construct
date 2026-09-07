@@ -10,7 +10,7 @@ namespace Constructd.Fakes;
 /// response" discipline are the real ones (<see cref="TokenHasher"/>); only the storage is a
 /// dictionary. VM tokens are authoritative on the VM record, so re-issuing one invalidates the old.
 /// </summary>
-public sealed class InMemoryTokenService(IClock clock, IUserStore users, IVmRepository vms) : ITokenService, IVmTokenIssuer
+public sealed class InMemoryTokenService(IClock clock, IUserStore users, IVmRepository vms) : ITokenService, IVmTokenIssuer, IUserTokenRevoker
 {
     private readonly ConcurrentDictionary<string, ApiToken> _byHash = new(StringComparer.Ordinal);
 
@@ -44,9 +44,7 @@ public sealed class InMemoryTokenService(IClock clock, IUserStore users, IVmRepo
     private async Task<bool> WriteTokenAsync(string vmName, string? hash, VmTokenKind kind, CancellationToken ct)
     {
         if (vms is IVmMetadataStore memory) return await memory.SetTokenAsync(vmName, hash, kind, ct);
-        if (kind != VmTokenKind.Legacy) throw new NotSupportedException("The repository must implement IVmMetadataStore for primary tokens.");
-        var vm = await vms.GetAsync(vmName, ct);
-        return vm is { Kind: VmKind.Primary, Deleting: false } && await vms.UpdateAsync(vm with { VmTokenHash = hash, TokenKind = kind }, ct);
+        throw new NotSupportedException("Credential writes require IVmMetadataStore.");
     }
 
     public async Task<TokenPrincipal?> ValidateAsync(string plaintext, CancellationToken cancellationToken)
@@ -125,5 +123,10 @@ public sealed class InMemoryTokenService(IClock clock, IUserStore users, IVmRepo
 
         _byHash[token.TokenHash] = token;
         return Task.FromResult(token);
+    }
+    public Task<bool> RevokeAsync(string userName, string id, CancellationToken ct)
+    {
+        var token = _byHash.Values.FirstOrDefault(t => t.Id == id && Ownership.SameName(t.UserName, userName));
+        return Task.FromResult(token is not null && _byHash.TryRemove(token.TokenHash, out _));
     }
 }

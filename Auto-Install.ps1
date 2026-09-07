@@ -2231,6 +2231,7 @@ if ($RemoteInstall) {
                             -Projects $reprovProjects -GitName $reprovGit.Name -GitEmail $reprovGit.Email `
                             -CloneCredB64 $reprovCloneCredB64 `
                             -PublicHost (Get-ConstructEndpointPublicHost -Endpoint $endpoint)
+            if ($script:RemoteProvCmd.Parameters.ContainsKey('ServiceApiAuth')) { $provArgs['ServiceApiAuth'] = $remoteAuth }
             if ($PSBoundParameters.ContainsKey('AgentPassword')) { $provArgs['AgentPassword'] = $AgentPassword }
             try {
                 Write-Step "Reprovisioning '$instName'"
@@ -2505,6 +2506,8 @@ if ($RemoteInstall) {
                     -Projects $chosenProjects -GitName $gitId.Name -GitEmail $gitId.Email `
                     -CloneCredB64 $chosenCloneCredB64 -VmToken $vmToken `
                     -PublicHost (Get-ConstructEndpointPublicHost -Endpoint $endpoint)
+    if ($script:RemoteProvCmd.Parameters.ContainsKey('ServiceApiAuth')) { $provArgs['ServiceApiAuth'] = $remoteAuth }
+    if ($existingEntry -and $script:RemoteProvCmd.Parameters.ContainsKey('ProvisionEvent')) { $provArgs['ProvisionEvent'] = 'reinstalled' }
     $provArgs['AgentPassword'] = $chosenAgentPassword
     if ($restoreDir) { $provArgs['RestoreDir'] = $restoreDir }
 

@@ -10,7 +10,7 @@ namespace Constructd.Sqlite;
 /// in the issuing response and nowhere else, which the persistence tests assert against the raw file.
 /// </summary>
 public sealed class SqliteTokenService(SqliteDatabase database, IClock clock, IUserStore users, IVmRepository vms)
-    : ITokenService, IVmTokenIssuer
+    : ITokenService, IVmTokenIssuer, IUserTokenRevoker
 {
     public async Task<IssuedToken> IssueAsync(string userName, string label, CancellationToken cancellationToken)
     {
@@ -38,7 +38,7 @@ public sealed class SqliteTokenService(SqliteDatabase database, IClock clock, IU
     public Task<bool> RevokeVmTokenAsync(string vmName, CancellationToken ct) => WriteTokenAsync(vmName, null, VmTokenKind.Legacy, ct);
     private Task<bool> WriteTokenAsync(string vmName, string? hash, VmTokenKind kind, CancellationToken ct) =>
         (vms as IVmMetadataStore ?? throw new InvalidOperationException("VM repository must implement IVmMetadataStore."))
-            .SetTokenAsync(vmName,hash,kind,ct);
+            .SetTokenAsync(vmName, hash, kind, ct);
 
     public async Task<TokenPrincipal?> ValidateAsync(string plaintext, CancellationToken cancellationToken)
     {
@@ -152,4 +152,10 @@ public sealed class SqliteTokenService(SqliteDatabase database, IClock clock, IU
         SqliteDatabase.ReadTime(reader.GetString("created")),
         SqliteDatabase.ReadTimeOrNull(reader.GetStringOrNull("last_used")),
         reader.GetString("label"));
+    public async Task<bool> RevokeAsync(string userName, string id, CancellationToken ct)
+    {
+        await using var c = await database.OpenAsync(ct); await using var cmd = c.CreateCommand();
+        cmd.CommandText = "DELETE FROM tokens WHERE id=@id AND user_name=@user"; cmd.With("@id", id).With("@user", userName);
+        return await cmd.ExecuteNonQueryAsync(ct) == 1;
+    }
 }

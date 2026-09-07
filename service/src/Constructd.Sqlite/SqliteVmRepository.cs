@@ -106,8 +106,9 @@ public sealed partial class SqliteVmRepository(SqliteDatabase database, IClock? 
         command.CommandText = """
             UPDATE vms
                SET owner = @owner, cpu = @cpu, ram_gb = @ramGb, disk_gb = @diskGb, state = @state,
-                   ssh_forward_port = @sshForwardPort, vm_token_hash = @vmTokenHash,
-                   idle_timeout_minutes = @idleTimeout, idle_action = @idleAction, deleting = @deleting
+                   ssh_forward_port = @sshForwardPort,
+                   vm_token_hash = CASE WHEN @deleting = 1 THEN NULL ELSE vm_token_hash END,
+                   idle_timeout_minutes = @idleTimeout, idle_action = @idleAction, deleting = MAX(deleting, @deleting)
              WHERE name = @name;
             """;
         Bind(command, vm);

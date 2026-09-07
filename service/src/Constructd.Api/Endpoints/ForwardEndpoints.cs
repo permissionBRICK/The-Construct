@@ -65,6 +65,7 @@ public static class ForwardEndpoints
         HttpContext http,
         IVmRepository repository,
         IUserStore users,
+        IHostConfigStore hostConfig,
         IAuthorizationService authorization,
         IPortForwardManager forwards,
         ConstructdOptions options,
@@ -79,6 +80,8 @@ public static class ForwardEndpoints
         }
 
         var vm = lookup.Vm!;
+        if (vm.Kind == VmKind.Child || request?.ConnectPort is not null || request?.Via is not null)
+            return CodedProblems.Create(409, "unsupported-capability", "Child destination forwarding is not installed.");
 
         if (ApiHelpers.FenceDeleting(vm) is { } fenced)
         {
@@ -103,6 +106,8 @@ public static class ForwardEndpoints
 
         if (target == ForwardTarget.Host)
         {
+            if ((await hostConfig.GetAsync<NetworkConfig>("network", cancellationToken)) is { HostForwardsEnabled: false })
+                return CodedProblems.Create(403, "host-forwards-disabled", "Host-target forwards are disabled on this host.");
             // The policy follows the VM's OWNER, not the caller: an admin acting on someone else's VM
             // must not be able to route around that user's restriction.
             var owner = await users.GetAsync(vm.Owner, cancellationToken).ConfigureAwait(false);

@@ -147,9 +147,9 @@ public sealed partial class SqliteVmRepository
             .With("@children", WireJson.Serialize(preview.Children)).With("@state", WireJson.Enum(preview.State)).With("@job", preview.JobId).With("@outcomes", WireJson.Serialize(preview.Outcomes));
         await cmd.ExecuteNonQueryAsync(ct); return preview;
     }
-    private static CascadePreview ReadCascade(SqliteDataReader r) => new(r.GetString("parent"),r.GetStringOrNull("parent_incarnation"),r.GetString("token"),
-        r.GetTime("issued_at")!.Value,r.GetTime("expires_at")!.Value,WireJson.Read<IReadOnlyList<CascadeChild>>(r.GetString("children_json"))!,
-        r.GetEnum<CascadeState>("state"),r.GetStringOrNull("job_id"),WireJson.Read<IReadOnlyDictionary<string,string>>(r.GetString("outcomes_json"))!);
+    private static CascadePreview ReadCascade(SqliteDataReader r) => new(r.GetString("parent"), r.GetStringOrNull("parent_incarnation"), r.GetString("token"),
+        r.GetTime("issued_at")!.Value, r.GetTime("expires_at")!.Value, WireJson.Read<IReadOnlyList<CascadeChild>>(r.GetString("children_json"))!,
+        r.GetEnum<CascadeState>("state"), r.GetStringOrNull("job_id"), WireJson.Read<IReadOnlyDictionary<string, string>>(r.GetString("outcomes_json"))!);
     public async Task<CascadePreview?> GetCascadePreviewAsync(string parent, CancellationToken ct)
     {
         await using var c = await database.OpenAsync(ct); await using var cmd = c.CreateCommand();
@@ -163,50 +163,65 @@ public sealed partial class SqliteVmRepository
         var children = new List<Vm>();
         await using (var cmd = c.CreateCommand())
         {
-            cmd.Transaction=tx; cmd.CommandText="SELECT * FROM vms WHERE parent=@parent"; cmd.With("@parent",parent);
-            await using var r=await cmd.ExecuteReaderAsync(ct); while(await r.ReadAsync(ct)) children.Add(Read(r));
+            cmd.Transaction = tx; cmd.CommandText = "SELECT * FROM vms WHERE parent=@parent"; cmd.With("@parent", parent);
+            await using var r = await cmd.ExecuteReaderAsync(ct); while (await r.ReadAsync(ct)) children.Add(Read(r));
         }
         CascadePreview? preview;
-        await using (var cmd=c.CreateCommand())
+        await using (var cmd = c.CreateCommand())
         {
-            cmd.Transaction=tx; cmd.CommandText="SELECT * FROM cascades WHERE parent=@parent"; cmd.With("@parent",parent);
-            await using var r=await cmd.ExecuteReaderAsync(ct); preview=await r.ReadAsync(ct) ? ReadCascade(r) : null;
+            cmd.Transaction = tx; cmd.CommandText = "SELECT * FROM cascades WHERE parent=@parent"; cmd.With("@parent", parent);
+            await using var r = await cmd.ExecuteReaderAsync(ct); preview = await r.ReadAsync(ct) ? ReadCascade(r) : null;
         }
-        var current=CascadeRules.Children(children);
+        var current = CascadeRules.Children(children);
         await using (var live = c.CreateCommand())
         {
-            live.Transaction=tx;
-            live.CommandText="""
+            live.Transaction = tx;
+            live.CommandText = """
                 SELECT COUNT(*) FROM vms v JOIN jobs j ON j.id=v.current_job_id
                 WHERE (v.name=@parent OR v.parent=@parent) AND j.state IN ('Queued','Running')
                 """;
-            live.With("@parent",parent);
-            if(Convert.ToInt64(await live.ExecuteScalarAsync(ct))>0) return new(false,"operation-in-progress",current,null);
+            live.With("@parent", parent);
+            if (Convert.ToInt64(await live.ExecuteScalarAsync(ct)) > 0) return new(false, "operation-in-progress", current, null);
         }
 
-        if(vm is null || preview is null || !CascadeRules.Matches(preview,vm,current,token,(clock?.UtcNow ?? DateTimeOffset.UtcNow)))
-            return new(false,"cascade-mismatch",current,null);
-        await using var fence=c.CreateCommand(); fence.Transaction=tx;
-        fence.CommandText="""
+        if (vm is null || preview is null || !CascadeRules.Matches(preview, vm, current, token, (clock?.UtcNow ?? DateTimeOffset.UtcNow)))
+            return new(false, "cascade-mismatch", current, null);
+        await using var fence = c.CreateCommand(); fence.Transaction = tx;
+        fence.CommandText = """
             UPDATE vms SET deleting=1,vm_token_hash=NULL,current_job_id=@job,
               child_creation_closed=CASE WHEN name=@parent THEN 1 ELSE child_creation_closed END
             WHERE name=@parent OR parent=@parent;
             UPDATE cascades SET state='accepted',job_id=@job WHERE parent=@parent;
             """;
-        fence.With("@parent",parent).With("@job",jobId); await fence.ExecuteNonQueryAsync(ct);
-        await tx.CommitAsync(ct); return new(true,null,current,null);
+        fence.With("@parent", parent).With("@job", jobId); await fence.ExecuteNonQueryAsync(ct);
+        await tx.CommitAsync(ct); return new(true, null, current, null);
     }
     public async Task<bool> UpdateIncarnationAsync(string name, string incarnation, CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(incarnation);
-        await using var c=await database.OpenAsync(ct);await using var cmd=c.CreateCommand();
-        cmd.CommandText="UPDATE vms SET incarnation=@id WHERE name=@name AND (incarnation IS NULL OR incarnation=@id)";
-        cmd.With("@name",name).With("@id",incarnation);return await cmd.ExecuteNonQueryAsync(ct)==1;
+        await using var c = await database.OpenAsync(ct); await using var cmd = c.CreateCommand();
+        cmd.CommandText = "UPDATE vms SET incarnation=@id WHERE name=@name AND (incarnation IS NULL OR incarnation=@id)";
+        cmd.With("@name", name).With("@id", incarnation); return await cmd.ExecuteNonQueryAsync(ct) == 1;
     }
-    public async Task<bool> SetTokenAsync(string name,string? hash,VmTokenKind kind,CancellationToken ct)
+    public async Task<bool> SetTokenAsync(string name, string? hash, VmTokenKind kind, CancellationToken ct)
     {
-        await using var c=await database.OpenAsync(ct);await using var cmd=c.CreateCommand();
-        cmd.CommandText="UPDATE vms SET vm_token_hash=@hash,vm_token_kind=@kind WHERE name=@name AND kind='primary' AND deleting=0";
-        cmd.With("@name",name).With("@hash",hash).With("@kind",WireJson.Enum(kind));return await cmd.ExecuteNonQueryAsync(ct)==1;
+        await using var c = await database.OpenAsync(ct); await using var cmd = c.CreateCommand();
+        cmd.CommandText = "UPDATE vms SET vm_token_hash=@hash,vm_token_kind=@kind WHERE name=@name AND kind='primary' AND deleting=0";
+        cmd.With("@name", name).With("@hash", hash).With("@kind", WireJson.Enum(kind)); return await cmd.ExecuteNonQueryAsync(ct) == 1;
+    }
+
+    public async Task<bool> RestoreUnqueuedDeletionAsync(Vm original, CancellationToken ct)
+    {
+        if (original.Deleting) return false;
+        await using var connection = await database.OpenAsync(ct);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE vms SET deleting=0, vm_token_hash=@hash, vm_token_kind=@kind
+            WHERE name=@name AND kind='primary' AND deleting=1 AND child_creation_closed=0
+              AND current_job_id IS NULL AND incarnation IS @incarnation;
+            """;
+        command.With("@name", original.Name).With("@hash", original.VmTokenHash)
+            .With("@kind", original.TokenKind.ToString().ToLowerInvariant()).With("@incarnation", original.Incarnation);
+        return await command.ExecuteNonQueryAsync(ct) == 1;
     }
 }
