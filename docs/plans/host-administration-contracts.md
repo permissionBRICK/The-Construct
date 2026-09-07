@@ -3206,3 +3206,134 @@ Stage 1 foundation:
   The existing enqueue-failure rollback is retained through the explicit
   `RestoreUnqueuedDeletionAsync` metadata method under the same VM operation
   gate as rotation; ordinary snapshot writes cannot invoke that rollback.
+
+## Integration notes (stage 1)
+
+Integrated on 2026-09-07 in `ha/integ-1`, after resetting to `feat/host-admin`
+(`143d016`). Merged `ha/s1-foundation` (`54d7ca1`, `7c91f26`) with `--no-ff`
+as `b3e067d`. The branch had two commits beyond the base; no branch was skipped.
+The merge had **no conflicts** and retained all 157 incoming changed files. No
+production or test fixes were required; this integration adds only these notes.
+
+The foundation adds the Core contracts and fakes, feature composition hooks,
+M100 and the migration runner, host/user administration and VM inventory,
+current-policy credential checks and rotation, and advisory provisioning reports
+through the existing PowerShell workflow. Its implementation deviations remain
+listed above under **Deviations**; integration changed no frozen design decision.
+Only `host-admin` is advertised. Child execution, media, capacity enforcement,
+console, network enforcement and host updates await their implementation stages;
+SQLite admission and the persisted child-job runner remain explicitly unsupported.
+
+### Validation and environment
+
+All **59 test suites plus the solution build** ran once, sequentially, on Linux.
+`dotnet build service/Constructd.sln` completed with **0 warnings, 0 errors**.
+`dotnet test service/Constructd.sln` passed **706 tests**, 68 above the 638-test
+baseline. Core still has zero package references. `git diff --check` passed.
+
+The stage-0 fixture prerequisites were supplied on the first run, without changing
+repository/global Git settings or test sources:
+
+- Node `configsync` and PowerShell `config-sync`: process-only
+  `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=init.defaultBranch GIT_CONFIG_VALUE_0=main`.
+- Bash `idle-report`: `T3CODE_BUILD_SOURCE=prebuilt` and
+  `SYSTEMD_UNIT_PATH=/usr/lib/systemd/system`.
+- Bash `provision-diskcheck`: an empty `/home/agent` created only for that suite
+  and removed immediately afterward.
+- Fake-service end-to-end: `CONSTRUCT_E2E_PORT=17923`; all 38 checks passed, the
+  test stopped its service, and the port was verified closed afterward.
+- MSBuild server/node reuse and shared compilation were disabled for this run to
+  avoid leaving compiler processes running. No test-owned dotnet/node/pwsh
+  processes remained after the matrix.
+
+These results are Linux tests with fakes/recording runners, **not Hyper-V or
+Windows PowerShell 5.1 execution**. No real host service or VM was touched. The
+stage-0 feasibility report remains separately attributed probe evidence.
+
+### Per-suite results
+
+Counts are reported checks, except `provision-seed-user` (seven successful
+scenario groups) and `t3-desktop-handoff` / `t3-reprovision-host` (one group each,
+with no reported internal assertion count). The host-installer suite also runs
+inside the .NET suite, so family totals are not unique cross-language assertions.
+
+| Family | Suites | Passed checks/groups | Failed | Explicit skips |
+|---|---:|---:|---:|---:|
+| .NET | 1 | 706 | 0 | 0 |
+| Node | 22 | 4686 | 0 | 1 |
+| PowerShell | 17 | 3014 | 0 | 1 |
+| Bash | 19 | 801 | 0 | 0 |
+
+The two explicit skips are the Node forwarder's unwritable-spool case under root
+and PowerShell's Windows-only DPAPI round-trip. As in stage 0,
+`t3-reprovision-host` ran without `-DownloadBase`: its optional HTTP-download
+checks and native Windows launch branch were not exercised.
+
+| Suite | Passed checks/groups | Failed | Explicit skips |
+|---|---:|---:|---:|
+| `dotnet-test` | 706 | 0 | 0 |
+| `extension/test/audio.test.js` | 233 | 0 | 0 |
+| `extension/test/configsync.test.js` | 475 | 0 | 0 |
+| `extension/test/drivers.test.js` | 66 | 0 | 0 |
+| `extension/test/forwarder.test.js` | 673 | 0 | 1 |
+| `extension/test/host.test.js` | 118 | 0 | 0 |
+| `extension/test/importui.test.js` | 24 | 0 | 0 |
+| `extension/test/instances.test.js` | 1528 | 0 | 0 |
+| `extension/test/instancestate.test.js` | 105 | 0 | 0 |
+| `extension/test/lifecycle.test.js` | 265 | 0 | 0 |
+| `extension/test/notify.test.js` | 103 | 0 | 0 |
+| `extension/test/probe.test.js` | 98 | 0 | 0 |
+| `extension/test/project-set.test.js` | 63 | 0 | 0 |
+| `extension/test/projects.test.js` | 167 | 0 | 0 |
+| `extension/test/remote.test.js` | 71 | 0 | 0 |
+| `extension/test/remotehost.test.js` | 150 | 0 | 0 |
+| `extension/test/repatch.test.js` | 39 | 0 | 0 |
+| `extension/test/t3code.test.js` | 89 | 0 | 0 |
+| `extension/test/themes.test.js` | 43 | 0 | 0 |
+| `extension/test/updates.test.js` | 143 | 0 | 0 |
+| `extension/test/usage.test.js` | 131 | 0 | 0 |
+| `extension/test/vmpower.test.js` | 81 | 0 | 0 |
+| `extension/test/zip.test.js` | 21 | 0 | 0 |
+| `test/config-sync.test.ps1` | 568 | 0 | 0 |
+| `test/driver-contract.test.ps1` | 99 | 0 | 0 |
+| `test/host-admin-client.test.ps1` | 19 | 0 | 0 |
+| `test/host-lib.test.ps1` | 309 | 0 | 0 |
+| `test/instance-cleanup.test.ps1` | 124 | 0 | 0 |
+| `test/instance-identity.test.ps1` | 242 | 0 | 0 |
+| `test/instance-state.test.ps1` | 64 | 0 | 0 |
+| `test/instances.test.ps1` | 781 | 0 | 0 |
+| `test/native-iso-host.test.ps1` | 23 | 0 | 0 |
+| `test/notify-toast.test.ps1` | 22 | 0 | 0 |
+| `test/provision-seed-user.test.ps1` | 7 | 0 | 0 |
+| `test/remote-client.test.ps1` | 93 | 0 | 1 |
+| `test/remote-driver.test.ps1` | 87 | 0 | 0 |
+| `test/remote-install.test.ps1` | 206 | 0 | 0 |
+| `test/t3-desktop-handoff.test.ps1` | 1 | 0 | 0 |
+| `test/t3-reprovision-host.test.ps1` | 1 | 0 | 0 |
+| `service/tests/host-installer.test.ps1` | 368 | 0 | 0 |
+| `test/autoinstall-iso.test.sh` | 59 | 0 | 0 |
+| `test/construct-expose.test.sh` | 170 | 0 | 0 |
+| `test/construct-notify.test.sh` | 36 | 0 | 0 |
+| `test/contracts-compile.test.sh` | 5 | 0 | 0 |
+| `test/export-config.test.sh` | 12 | 0 | 0 |
+| `test/external-host.test.sh` | 61 | 0 | 0 |
+| `test/idle-report.test.sh` | 100 | 0 | 0 |
+| `test/opencode-install.test.sh` | 20 | 0 | 0 |
+| `test/partial-streaming.test.sh` | 6 | 0 | 0 |
+| `test/patch-status.test.sh` | 12 | 0 | 0 |
+| `test/provision-diskcheck.test.sh` | 24 | 0 | 0 |
+| `test/provision-hostname.test.sh` | 28 | 0 | 0 |
+| `test/provision-marker.test.sh` | 32 | 0 | 0 |
+| `test/provision-steprunner.test.sh` | 17 | 0 | 0 |
+| `test/remote-e2e.test.sh` | 38 | 0 | 0 |
+| `test/restore-config.test.sh` | 25 | 0 | 0 |
+| `test/systemprompt-install.test.sh` | 17 | 0 | 0 |
+| `test/t3-https.test.sh` | 133 | 0 | 0 |
+| `test/vscode-download.test.sh` | 6 | 0 | 0 |
+
+### Defects
+
+No merge-induced defects or test failures were found, and no branch defects were
+recorded for deferral. The existing fixture prerequisites and platform coverage
+limits above still apply; passing this matrix does not establish host rollout
+readiness.
