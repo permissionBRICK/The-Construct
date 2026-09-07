@@ -1,0 +1,48 @@
+# Host administration field fixes, 2026-09-07
+
+Release `25fbb3ccfb5fd305ecc7a7f6708944705bdc072e` is installed on the
+haus-pc host and main-pc VS Code client.
+
+## Causes and behavior
+
+- Windows PowerShell enumerated the parsed API response at the authentication
+  delegate boundary. A single registered VM became an object, which the panel
+  silently treated as an empty list; the single user caused `.map is not a
+  function`. The delegate now requests raw response JSON, preserving arrays of
+  every size without changing existing PowerShell callers' parsed responses.
+- Windows inventory includes unlettered EFI/recovery partitions. Overview omits
+  GUID-only volumes without growth reservations; drive and directory mount paths
+  remain readable, and GUID volumes with growth reservations remain visible with
+  a descriptive label. Server capacity accounting remains intact.
+- CPU capacity represents allocated vCPUs, not sampled CPU utilization. Without a
+  configured budget the panel now shows allocation text and no percentage bar.
+- Successful activity heartbeats no longer create audit entries. Failed and
+  denied heartbeats remain audited. Existing history is retained.
+
+## Verification and rollout
+
+All 24 extension suites passed. The PowerShell remote-client suite passed 97
+checks (one platform-specific skip on Linux); a Windows PowerShell 5.1 probe also
+verified raw empty/singleton/multiple arrays. Release CI run `34154740118` passed
+all 1,236 server tests, including the real HTTPS/SQLite/CLI end-to-end story.
+
+main-pc's ordinary Update-Construct installed the release and reloaded VS Code.
+A probe using the actual installed modules, Windows identity and stored TLS pin
+loaded Overview, VMs, Users and Operations. It showed `haus-vm`, admin
+`HOME\permissionBRICK`, C:/D:/E: storage, and 8 allocated vCPUs without a budget.
+
+The host's normal check/stage/apply API installed the immutable release. Update
+`1f5db482b6f84f909937f7a11e1b11fc` succeeded in phase `commit` at
+2026-09-07 19:17:42 UTC. Health was `ok`, schema 700, maintenance open; production
+settings stayed byte-identical, VM uptime remained continuous, and T3 HTTPS on
+port 2301 returned 200.
+
+A fresh guest activity report completed at 19:18:02 without error output or a new
+successful heartbeat audit entry. The last heartbeat audit was the expected 503
+during updater maintenance at 19:17:11, confirming failures are still retained.
+
+The previously recorded ReleaseInfo cache issue also affects the first real
+cross-version update: the running process identifies the new commit but may
+show fallback package version/source/time until a later normal restart. The
+persisted successful update is authoritative. This remains tracked by the
+existing Jarvis metadata-refresh todo; no extra service restart was performed.
