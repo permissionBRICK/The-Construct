@@ -749,6 +749,7 @@ function readForwardList(list) {
   const acks = [];
   const host = [];
   const closes = [];
+  const pending = [];
   const entries = Array.isArray(list) ? list : [];
   for (const raw of entries) {
     if (!raw || typeof raw !== "object") continue;
@@ -776,19 +777,82 @@ function readForwardList(list) {
       continue;
     }
 
-    requests.push({ id, vmPort, label, target });
+    // A CHILD-VM destination (host-administration contract §8.11/§12.2): the forward
+    // targets a child and rides this primary's SSH. Without a usable address yet there is
+    // nothing to tunnel to — the service holds it as an error ("guest address unknown
+    // yet") and it becomes a request the moment an address appears.
+    const destination = readDestination(raw.destination, vmPort);
+    if (raw.destination != null && !destination) {
+      // A destination that names no usable child is dropped whole: a row for it could
+      // only be acked/closed on the WRONG route (the primary's), so it must not exist.
+      const child = childNameOf(raw.destination);
+      if (!child) continue;
+      pending.push({ id, vmPort, label, target, child, message: sanitizeText(raw.message, MAX_MESSAGE) });
+      continue;
+    }
+
+    const request = { id, vmPort, label, target };
+    if (destination) request.destination = destination;
+    requests.push(request);
     const status = String(raw.status == null ? "" : raw.status).toLowerCase();
     if (status === "open" || status === "error") {
+      const message = sanitizeText(raw.message, MAX_MESSAGE);
+      // The SERVICE writes address-state errors on child-target entries ("guest address
+      // unknown yet", "guest address changed"); those are not this window's final answer
+      // and must not stop the re-open the contract asks for once an address is usable.
+      if (destination && status === "error" && isAddressStateMessage(message)) continue;
       acks.push({
         id,
         status,
         localPort: toPort(raw.localPort),
         hostLabel: sanitizeHostLabel(raw.hostLabel),
-        message: sanitizeText(raw.message, MAX_MESSAGE),
+        message,
       });
     }
   }
-  return { requests, acks, host, closes };
+  return { requests, acks, host, closes, pending };
+}
+
+/**
+ * The `destination` of a child-target forward as the tunnel needs it, or null when it
+ * carries no usable connect address yet. The address is guest-reported and unverified
+ * (contract §12.5): it is validated as an address SHAPE here and again by ssh.js before it
+ * reaches an argv, never trusted for anything else. Pure.
+ */
+function readDestination(raw, vmPort) {
+  if (!raw || typeof raw !== "object") return null;
+  const vmName = String(raw.vmName == null ? "" : raw.vmName).trim();
+  if (!isSafeId(vmName)) return null;
+  const address = String(raw.connectAddress == null ? "" : raw.connectAddress).trim();
+  if (!address || !isAddressShape(address)) return null;
+  const connectPort = toPort(raw.connectPort) != null ? toPort(raw.connectPort) : vmPort;
+  const via = String(raw.via == null ? "" : raw.via).trim();
+  return {
+    vmName,
+    via: isSafeId(via) ? via : "",
+    connectAddress: address.startsWith("[") && address.endsWith("]") ? address.slice(1, -1) : address,
+    connectPort,
+    verified: raw.verified === true,
+  };
+}
+
+/** The child a destination names, for presentation, or "". Pure. */
+function childNameOf(raw) {
+  const name = raw && typeof raw === "object" ? String(raw.vmName == null ? "" : raw.vmName).trim() : "";
+  return isSafeId(name) ? name : "";
+}
+
+/** An IP literal (bracketed or bare) or a plain host name — the only shapes a tunnel
+ *  destination may take. Pure. */
+function isAddressShape(value) {
+  const bare = value.startsWith("[") && value.endsWith("]") ? value.slice(1, -1) : value;
+  if (net.isIP(bare)) return true;
+  return bare.length <= 253 && /^[A-Za-z0-9]([A-Za-z0-9-]{0,62}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,62}[A-Za-z0-9])?)*$/.test(bare);
+}
+
+/** The service's own address-state error messages on a child-target forward. Pure. */
+function isAddressStateMessage(message) {
+  return /guest address (unknown|changed)/i.test(String(message == null ? "" : message));
 }
 
 // ── The planner ──────────────────────────────────────────────────────────────
@@ -888,17 +952,19 @@ function planActions(input = {}) {
       // An acked forward on a spool that is not ours alone: reclaim it only if the exact
       // port it promised is still free here — see the note above.
       if (promised !== null && input.reopenAcked !== true) {
-        actions.push({
+        const open = {
           kind: "open",
           id: request.id,
           vmPort: request.vmPort,
           label: request.label,
           requirePort: promised,
           taken: busy.slice(),
-        });
+        };
+        if (request.destination) open.destination = request.destination;
+        actions.push(open);
         continue;
       }
-      actions.push({
+      const open = {
         kind: "open",
         id: request.id,
         vmPort: request.vmPort,
@@ -906,7 +972,11 @@ function planActions(input = {}) {
         // Keep the promise the existing ack already made to the guest, if we can.
         preferPort: promised,
         taken: busy.slice(),
-      });
+      };
+      // A child destination rides along so the tunnel is dialled to the child's address
+      // (over this primary's SSH), not to the primary's own loopback.
+      if (request.destination) open.destination = request.destination;
+      actions.push(open);
       continue;
     }
 
@@ -1060,6 +1130,9 @@ function toSnapshot(input = {}) {
       message: "",
       owned: true,
     };
+    // A child-target forward names its child, so the panel can say what the link reaches
+    // (and that the address is guest-reported, unverified — contract §12.5).
+    if (request.destination) item.child = request.destination.vmName;
     if (ack && ack.status === "error") {
       item.status = "error";
       item.message = ack.message;
@@ -1093,6 +1166,24 @@ function toSnapshot(input = {}) {
       url: record.url || null,
       message: "",
       owned: false,
+    });
+  }
+
+  // Child-target forwards with no usable guest address yet (remote mode only): shown as
+  // errors with the service's own reason, never tunnelled.
+  for (const record of (Array.isArray(input.pending) ? input.pending : [])) {
+    if (!record || !isSafeId(record.id) || closes.has(record.id)) continue;
+    items.push({
+      id: record.id,
+      vmPort: record.vmPort,
+      label: sanitizeText(record.label, MAX_LABEL),
+      target: "client",
+      status: "error",
+      localPort: null,
+      url: null,
+      message: record.message || "guest address unknown yet",
+      owned: true,
+      child: record.child || "",
     });
   }
 
@@ -1139,6 +1230,12 @@ class Forwarder {
     this._now = opts.now || (() => Date.now());
     this._settleMs = opts._settleMs != null ? opts._settleMs : TUNNEL_SETTLE_MS;
     this._reconcileMs = opts.reconcileMs || (this.mode === "remote" ? REMOTE_POLL_MS : RECONCILE_MS);
+    // Poll `?via=<self>` for child-target forwards (§12.2) only when the transport says
+    // the service has the network feature; default off, so an older service is asked
+    // exactly what it always was. `opts.pollVia` overrides (tests).
+    this._pollVia = opts.pollVia != null ? !!opts.pollVia : this.transport.viaSupported === true;
+    /** id -> child VM name, for forwards whose ack/close route is the child's (§8.11). */
+    this._targets = new Map();
     this._debounceMs = opts.debounceMs != null ? opts.debounceMs : EVENT_DEBOUNCE_MS;
     // An explicit base/count (tests, a future setting) wins; otherwise this instance's
     // own slice, which is the historical range for the default VM.
@@ -1151,7 +1248,7 @@ class Forwarder {
     /** id -> tunnel record. THE module's state, and it is per-instance by construction. */
     this._tunnels = new Map();
     /** Last reconcile's view, for the snapshot. */
-    this._view = { owner: this.mode === "remote", requests: [], acks: [], closes: [], host: [] };
+    this._view = { owner: this.mode === "remote", requests: [], acks: [], closes: [], host: [], pending: [] };
 
     /** Does this VM have the spool contract? null until the capability check has answered
      *  (and back to null when it could not be established at all). */
@@ -1302,7 +1399,7 @@ class Forwarder {
     if (child) { try { child.kill(); } catch (_) {} }
     for (const id of [...this._tunnels.keys()]) this._killTunnel(id);
     this._releaseClaim();
-    this._view = { owner: this.mode === "remote", requests: [], acks: [], closes: [], host: [] };
+    this._view = { owner: this.mode === "remote", requests: [], acks: [], closes: [], host: [], pending: [] };
   }
 
   /**
@@ -1333,6 +1430,7 @@ class Forwarder {
       acks: this._view.acks,
       closes: this._view.closes,
       host: this._view.host,
+      pending: this._view.pending,
       tunnels: this._tunnelViews(),
     });
   }
@@ -1419,7 +1517,7 @@ class Forwarder {
     this._killTunnel(id);
     try {
       if (this.mode === "remote") {
-        await this._fetch("DELETE", `/vms/${encodeURIComponent(this.vmName || this.name)}/forwards/${encodeURIComponent(id)}`);
+        await this._fetch("DELETE", `/vms/${encodeURIComponent(this._targetVmOf(id))}/forwards/${encodeURIComponent(id)}`);
       } else {
         await this._runScript(buildRemoveScript(
           [{ sub: "requests", id }, { sub: "acks", id }, { sub: "close", id }],
@@ -1551,16 +1649,51 @@ class Forwarder {
   }
 
   async _readRemote() {
-    const list = await this._fetch("GET", `/vms/${encodeURIComponent(this.vmName || this.name)}/forwards`);
+    const self = encodeURIComponent(this.vmName || this.name);
+    const list = await this._fetch("GET", `/vms/${self}/forwards`);
     if (!Array.isArray(list)) return null;
-    const read = readForwardList(list);
+    let entries = list;
+    // Child-target forwards that ride THIS primary (contract §12.2): `?via=<self>` lists
+    // every forward whose `destination.via` is this VM. Polled only when the transport
+    // says the service has the network feature (an older service would answer the plain
+    // list again), and merged by id so an entry present in both is one entry.
+    if (this._pollVia) {
+      let via;
+      try {
+        via = await this._fetch("GET", `/vms/${self}/forwards?via=${self}`);
+      } catch (e) {
+        // The SAME rule as a failed plain-list poll: a round that could not read the
+        // world does not act on it. Treating the child entries as absent would close
+        // every live child tunnel (planActions step 2) over one timed-out request.
+        this.log(`forwarder[${this.name}]: via-list poll failed — ${errText(e)}; keeping this round's tunnels`);
+        return null;
+      }
+      if (Array.isArray(via)) {
+        const seen = new Set(list.filter((e) => e && typeof e === "object").map((e) => String(e.id)));
+        entries = list.concat(via.filter((e) => e && typeof e === "object" && !seen.has(String(e.id))));
+      }
+    }
+    const read = readForwardList(entries);
+    // The VM a child-target forward's ack/close route names is the CHILD, not this
+    // primary (§8.11): remember the target per id for _writeAck and closeForward.
+    this._targets = new Map();
+    for (const req of read.requests) if (req.destination) this._targets.set(req.id, req.destination.vmName);
+    for (const rec of read.pending) if (rec.child) this._targets.set(rec.id, rec.child);
     return {
       owner: true,
       requests: read.requests,
       acks: read.acks,
       closes: read.closes,
       host: read.host,
+      pending: read.pending,
     };
+  }
+
+  /** The VM whose forward routes an id belongs to: the child for a child-target forward,
+   *  this VM otherwise. */
+  _targetVmOf(id) {
+    const child = this._targets && this._targets.get(id);
+    return child || this.vmName || this.name;
   }
 
   // ── Tunnels ────────────────────────────────────────────────────────────────
@@ -1583,7 +1716,7 @@ class Forwarder {
     if (action.requirePort != null) {
       const port = toPort(action.requirePort);
       if (port === null || taken.has(port) || !(await this._probe(port))) return;
-      const record = this._newTunnel(action.id, action.vmPort, port);
+      const record = this._newTunnel(action.id, action.vmPort, port, action.destination);
       await this._spawnTunnel(record);
       return;
     }
@@ -1609,18 +1742,21 @@ class Forwarder {
       return;
     }
 
-    const record = this._newTunnel(action.id, action.vmPort, localPort);
+    const record = this._newTunnel(action.id, action.vmPort, localPort, action.destination);
     await this._spawnTunnel(record);
   }
 
   /** A tunnel record, registered in the table before anything is spawned so a concurrent
-   *  plan cannot hand the same local port to a second forward. */
-  _newTunnel(id, vmPort, localPort) {
+   *  plan cannot hand the same local port to a second forward. `destination` (a child
+   *  target's address, §12.2) is carried on the record so every restart dials the same
+   *  far end. */
+  _newTunnel(id, vmPort, localPort, destination) {
     const record = {
       id, vmPort, localPort, bindHost: this.bindHost(),
       state: "starting", acked: false, message: "",
       attempt: 0, child: null, startedAt: 0, restartTimer: null,
     };
+    if (destination) record.destination = destination;
     this._tunnels.set(id, record);
     return record;
   }
@@ -1630,9 +1766,14 @@ class Forwarder {
     return new Promise((resolve) => {
       let child;
       try {
-        child = this.transport.spawnTunnel({
-          localPort: record.localPort, vmPort: record.vmPort, bindHost: record.bindHost,
-        });
+        const spec = { localPort: record.localPort, vmPort: record.vmPort, bindHost: record.bindHost };
+        // Only a child-target forward names a far end other than the VM's loopback; a
+        // plain forward's spec is exactly what it always was.
+        if (record.destination) {
+          spec.connectAddress = record.destination.connectAddress;
+          spec.connectPort = record.destination.connectPort;
+        }
+        child = this.transport.spawnTunnel(spec);
       } catch (e) {
         record.state = "failed";
         record.message = errText(e);
@@ -1735,7 +1876,7 @@ class Forwarder {
       if (doc.hostLabel) body.hostLabel = doc.hostLabel;
       if (doc.message) body.message = doc.message;
       await this._fetch("POST",
-        `/vms/${encodeURIComponent(this.vmName || this.name)}/forwards/${encodeURIComponent(id)}/ack`, body);
+        `/vms/${encodeURIComponent(this._targetVmOf(id))}/forwards/${encodeURIComponent(id)}/ack`, body);
     } else {
       const res = await this._runScript(buildAckScript(id, doc, { dir: this.dir }));
       if (!res || res.code !== 0) {
@@ -1931,7 +2072,7 @@ module.exports = {
   isSafeId, sanitizeText, sanitizeHostLabel, urlHostFor, toPort, portCandidates, instancePortSlice, reconnectDelayMs,
   splitLines, shQuote,
   isV1Document, parseRequest, parseAck, parseClose, ackDocument, parseDump,
-  isClosedEntry, readForwardList,
+  isClosedEntry, readForwardList, readDestination, isAddressStateMessage,
   buildReconcileScript, buildAckScript, buildRemoveScript, buildWatchScript,
   buildCapabilityScript, parseCapability,
   planActions, planLifecycle, planStartOutcome, toSnapshot,

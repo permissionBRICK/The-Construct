@@ -226,6 +226,77 @@ ok("facade: getDriver is re-exported", vmpower.getDriver === drivers.getDriver);
   ok("driver: an instance's vmName reaches the Start-VM command",
     hypervLocal.buildStartCommand(WORK_INSTANCE.vmName).includes("Start-VM -Name 'Work-VM'"));
 
+  // ── the remote driver's lazy features + children (host-administration contract §10.1) ──
+  console.log("\n  -- hyperv-remote: features and children --");
+  const eq = (name, got, want) => ok(name, got === want, `got ${JSON.stringify(got)} want ${JSON.stringify(want)}`);
+  ok("caps: hyperv-remote's static table says children: false", hypervRemote.capabilities.children === false);
+  const REMOTE = { name: "work-vm", backend: "hyperv-remote", vmName: "work-vm", service: { url: "http://127.0.0.1:7999", auth: "token" } };
+  const fakeFetch = (routes) => async (url, init) => {
+    const path = url.replace(/^http:\/\/127\.0\.0\.1:7999/, "");
+    const r = routes[path];
+    if (!r) return { status: 404, text: '{"title":"Not found"}' };
+    if (typeof r === "function") return r(init);
+    return { status: 200, text: JSON.stringify(r) };
+  };
+  {
+    hypervRemote.resetFeatureCache();
+    let healthCalls = 0;
+    const fetchImpl = fakeFetch({
+      "/api/v1/health": () => { healthCalls++; return { status: 200, text: JSON.stringify({ status: "ok", apiFeatures: ["host-admin", "children"] }) }; },
+      "/api/v1/vms/work-vm/children": [{ name: "work-vm-a1", kind: "child", state: "running" }],
+    });
+    const opts = { auth: { kind: "token", token: "t" }, fetchImpl, now: () => 1000 };
+    const caps = await hypervRemote.capabilitiesFor(REMOTE, opts);
+    ok("features: children resolves to true when /health lists it", caps.children === true);
+    ok("features: ...and the rest of the table is unchanged", caps.checkpoints === false && caps.hostLifecycle === true);
+    const kids = await hypervRemote.queryChildren(REMOTE, opts);
+    ok("children: supported, one row", kids.supported === true && kids.items.length === 1 && kids.items[0].name === "work-vm-a1");
+    eq("features: the probe is cached per host (one /health for two questions)", healthCalls, 1);
+    await hypervRemote.queryFeatures(REMOTE, { ...opts, now: () => 1000 + hypervRemote.FEATURE_TTL_MS + 1 });
+    eq("features: ...and re-asked after the TTL", healthCalls, 2);
+  }
+  {
+    hypervRemote.resetFeatureCache();
+    const fetchImpl = fakeFetch({ "/api/v1/vms/work-vm/children": [] });   // no /health at all: an OLD service
+    const opts = { auth: { kind: "token", token: "t" }, fetchImpl };
+    const probe = await hypervRemote.queryFeatures(REMOTE, opts);
+    ok("features: an old service (404 on /health) is reported old, not failed", probe.old === true && probe.features === null);
+    const kids = await hypervRemote.queryChildren(REMOTE, opts);
+    ok("children: an old service is unsupported (the card hides) and its children route is never asked",
+      kids.supported === false && kids.items.length === 0);
+  }
+  {
+    hypervRemote.resetFeatureCache();
+    const fetchImpl = fakeFetch({ "/api/v1/health": { status: "ok", apiFeatures: ["host-admin"] } });
+    const kids = await hypervRemote.queryChildren(REMOTE, { auth: { kind: "token", token: "t" }, fetchImpl });
+    ok("children: a host-admin-only service (stage 1) is unsupported too", kids.supported === false);
+  }
+  {
+    hypervRemote.resetFeatureCache();
+    const fetchImpl = fakeFetch({
+      "/api/v1/health": { status: "ok", apiFeatures: ["host-admin", "children"] },
+      "/api/v1/vms/work-vm/children": () => ({ status: 500, text: '{"title":"boom"}' }),
+    });
+    const kids = await hypervRemote.queryChildren(REMOTE, { auth: { kind: "token", token: "t" }, fetchImpl });
+    ok("children: a failed read on a supporting host is supported with items:null and a problem (not 'no children')",
+      kids.supported === true && kids.items === null && /boom/.test(kids.problem) && kids.status === 500);
+  }
+  {
+    hypervRemote.resetFeatureCache();
+    let calls = 0;
+    const fetchImpl = async () => { calls++; throw new Error("ECONNREFUSED"); };
+    const first = await hypervRemote.queryFeatures(REMOTE, { auth: { kind: "token", token: "t" }, fetchImpl });
+    const second = await hypervRemote.queryFeatures(REMOTE, { auth: { kind: "token", token: "t" }, fetchImpl });
+    ok("features: a transport failure is not cached (asked again)", first.features === null && !first.old && calls === 2 && second.features === null);
+    const kids = await hypervRemote.queryChildren(REMOTE, { auth: { kind: "token", token: "t" }, fetchImpl });
+    ok("children: unreachable is unsupported (hidden), never a fabricated empty list", kids.supported === false);
+  }
+  {
+    hypervRemote.resetFeatureCache();
+    const kids = await hypervRemote.queryChildren(REMOTE, { auth: { kind: "token", token: "" }, fetchImpl: async () => ({ status: 200, text: "{}" }) });
+    ok("children: a missing token is a problem, not a Negotiate fallback", kids.supported === false && /API token/.test(kids.problem));
+  }
+
   console.log(`\n  drivers unit tests — ${pass}/${pass + fail} passed\n`);
   process.exit(fail ? 1 : 0);
 })();

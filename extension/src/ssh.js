@@ -8,6 +8,7 @@ const { spawn } = require("child_process");
 const os = require("os");
 const path = require("path");
 const fs = require("fs");
+const net = require("net");
 
 const DEFAULTS = {
   vmHost: "agent-vm.mshome.net",
@@ -84,8 +85,15 @@ function resolveCfg(opts) {
  * reachable; a link naming this PC that only this PC can open is a dead link, which is
  * worse than no setting at all.
  *
- * The far end is always the VM's own `127.0.0.1:<vmPort>`, so a dev server bound to the
- * VM's loopback is reachable and nothing on the VM's own network is exposed.
+ * The far end is the VM's own `127.0.0.1:<vmPort>` by default, so a dev server bound to the
+ * VM's loopback is reachable and nothing on the VM's own network is exposed. The ONE
+ * exception is a CHILD-VM destination (host-administration contract §12.2): a forward the
+ * service recorded with `destination.connectAddress`/`connectPort` is tunnelled THROUGH
+ * this primary to that guest-reported address (`opts.connectAddress`, `opts.connectPort`).
+ * The address is validated as an IP literal or a plain host name — it is guest-reported
+ * and unverified, so it may not carry anything ssh would read as syntax — and an IPv6
+ * literal is bracketed the way `-L` expects. Absent both options, the argv is byte-for-byte
+ * the one it always was.
  *
  * `hasKey` is threaded in rather than probed, and `-p` is emitted ONLY for a non-22 port,
  * exactly as buildSshArgs does — a default instance's argv stays what it always was. Pure.
@@ -98,6 +106,14 @@ function buildLocalForwardArgs(cfg, localPort, vmPort, hasKey, opts = {}) {
     throw new Error(`invalid port for a local forward: ${localPort} -> ${vmPort}`);
   }
   const bind = normalizeBindHost(opts.bindHost);
+  const far = normalizeConnectAddress(opts.connectAddress);
+  if (far === null) {
+    throw new Error(`invalid destination address for a local forward: ${opts.connectAddress}`);
+  }
+  const cp = opts.connectPort == null ? vp : normalizeForwardPort(opts.connectPort);
+  if (cp === null) {
+    throw new Error(`invalid destination port for a local forward: ${opts.connectPort}`);
+  }
   const common = [
     "-N",
     "-o", "BatchMode=yes",
@@ -106,7 +122,7 @@ function buildLocalForwardArgs(cfg, localPort, vmPort, hasKey, opts = {}) {
     "-o", "ServerAliveInterval=15",
     "-o", "ServerAliveCountMax=3",
     "-o", "ExitOnForwardFailure=yes",
-    "-L", `${bind}:${lp}:127.0.0.1:${vp}`,
+    "-L", `${bind}:${lp}:${far}:${cp}`,
   ];
   const port = normalizeSshPort(c.sshPort);
   if (port !== 22) common.push("-p", String(port));
@@ -139,6 +155,23 @@ const FORWARD_BIND_ALL = "0.0.0.0";
  * a listening address must never be. Anything unrecognised — including undefined — is
  * loopback, so the safe answer is also the default. Pure.
  */
+/**
+ * The far end of a `-L` forward: an IPv4/IPv6 literal (IPv6 bracketed, as ssh wants it)
+ * or a plain host name; `127.0.0.1` for an empty value; null for anything else. Strict on
+ * purpose: the value comes from a guest's own report, so it must be an address and nothing
+ * that could be read as an option or a second forward. Pure.
+ */
+function normalizeConnectAddress(value) {
+  const s = String(value == null ? "" : value).trim();
+  if (!s) return FORWARD_BIND_LOOPBACK;
+  const bare = s.startsWith("[") && s.endsWith("]") ? s.slice(1, -1) : s;
+  const kind = net.isIP(bare);
+  if (kind === 6) return "[" + bare + "]";
+  if (kind === 4) return bare;
+  if (/^[A-Za-z0-9]([A-Za-z0-9-]{0,62}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,62}[A-Za-z0-9])?)*$/.test(bare) && bare.length <= 253) return bare;
+  return null;
+}
+
 function normalizeBindHost(value) {
   const s = String(value == null ? "" : value).trim();
   return s === FORWARD_BIND_ALL || s === "*" || s === "::" ? FORWARD_BIND_ALL : FORWARD_BIND_LOOPBACK;
@@ -207,4 +240,4 @@ async function isReachable(opts = {}) {
   return r.code === 0;
 }
 
-module.exports = { DEFAULTS, keyPath, normalizeSshPort, normalizeForwardPort, normalizeBindHost, FORWARD_BIND_LOOPBACK, FORWARD_BIND_ALL, buildSshArgs, buildLocalForwardArgs, wrapScriptCommand, runRemote, runRemoteScript, isReachable, resolveCfg };
+module.exports = { DEFAULTS, keyPath, normalizeSshPort, normalizeForwardPort, normalizeBindHost, normalizeConnectAddress, FORWARD_BIND_LOOPBACK, FORWARD_BIND_ALL, buildSshArgs, buildLocalForwardArgs, wrapScriptCommand, runRemote, runRemoteScript, isReachable, resolveCfg };

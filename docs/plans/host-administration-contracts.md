@@ -3324,6 +3324,34 @@ Stage 1 foundation:
   Owner/admin create access is implemented with the existing delegation-policy
   hook; primary-token creation remains for stage 3 as scoped by the task.
 
+Stage 2, extension (branch `ha/s2-extension`):
+
+- `extension.js` carries the single registration block of §10.1 (`hostAdminFeature()`,
+  the `construct.openHostAdmin` command) plus four one-line hooks it cannot avoid:
+  `postState` attaching `children`/`hostAdminOffer`, `refreshAll` calling
+  `readHostAdminExtras`, the `command` branch forwarding four ids to the feature, and
+  `runSwitchInstance` appending the feature's picker rows; `buildForwarderTransport`
+  passes `apiFeatures` to the forwarder transport (the §12.2 `?via=` poll is gated on
+  `network`). `runNewRemoteVm` gained an optional `preferred` host so the first-VM
+  offer skips the host question; the flow is otherwise unchanged. Reason: the contract's
+  "one block, no other edits" cannot deliver the panel card and the picker button,
+  which must ride the existing state push and picker.
+- The VS Code adapter lives in a new `extension/src/hostadmin-ui.js` (the
+  `forwarder-ui.js` pattern) rather than inside `extension.js`, so every modal, the
+  cascade retry loop and the secret display are unit-tested against a fake `vscode`.
+- Feature detection is cached per host for 60 s (`hyperv-remote.queryFeatures`,
+  `hostadmin-ui` offers) to keep the 30 s status refresh at one extra `/health` per
+  minute; a failed probe is never cached. §10.3's "re-run on every panel open and on
+  host switch" holds for the admin panel (which always re-detects on open and refresh).
+- The `?via=` list of child-target forwards is polled only when `/health` lists
+  `network`; an older service answers the plain list to unknown query strings, and
+  merging by id makes that harmless, but not polling it keeps the old-service request
+  pattern byte-for-byte.
+- A child-target forward entry whose service-written error ack reads "guest address
+  unknown yet"/"guest address changed" is not treated as the window's final error ack
+  (§8.11 "re-acked by the extension when an address appears" needs the re-open that a
+  final error ack would suppress).
+
 ## Integration notes (stage 1)
 
 Integrated on 2026-09-07 in `ha/integ-1`, after resetting to `feat/host-admin`
