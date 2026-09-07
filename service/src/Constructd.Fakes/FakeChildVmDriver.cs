@@ -14,6 +14,9 @@ public sealed class FakeChildVmDriver(FakeHypervisorDriver hypervisor) : IChildV
     public Exception? Failure { get; set; }
     public Exception? RemoveFailure { get; set; }
     public Exception? FailureAfterCreate { get; set; }
+    public Exception? FailureAfterHardware { get; set; }
+    public Action<string>? HardwareApplied { get; set; }
+    public Exception? FailureAfterMedia { get; set; }
     public GracefulShutdownOutcome ShutdownOutcome { get; set; } = GracefulShutdownOutcome.Completed;
     public BackendCapabilities Capabilities { get; set; } = UnsupportedCapabilities.Backend(new(false, true, DriverConsole.None)) with
     {
@@ -34,6 +37,7 @@ public sealed class FakeChildVmDriver(FakeHypervisorDriver hypervisor) : IChildV
     };
     public Task<string?> GetCreationOperationAsync(string name, CancellationToken ct)
     { Check(ct); return Task.FromResult(_creationOperations.GetValueOrDefault(name)); }
+    public Task<ChildStoragePlacement> ResolvePrimaryStorageAsync(string name, CancellationToken ct) => ResolveStorageAsync(name, ct);
     public Task<ChildStoragePlacement> ResolveStorageAsync(string name, CancellationToken ct)
     { Check(ct); return Task.FromResult(new ChildStoragePlacement(@"C:\VMs\" + name + ".vhdx", @"C:\", @"C:\")); }
     public Task<BackendCapabilities> GetCapabilitiesAsync(CancellationToken ct) => Task.FromResult(Capabilities);
@@ -55,10 +59,10 @@ public sealed class FakeChildVmDriver(FakeHypervisorDriver hypervisor) : IChildV
         if (_templateLocked.GetValueOrDefault(name) && resendTemplate) throw new InvalidOperationException("Secure Boot template is locked.");
         if (old.Descriptor.Hardware.Generation != hardware.Generation || old.Descriptor.Hardware.DiskGb != hardware.DiskGb || old.Descriptor.Hardware.NetworkAttached != hardware.NetworkAttached) throw new ChildValidationException("unsupported-capability", "hardware");
         _templateLocked[name] = _templateLocked.GetValueOrDefault(name) || hardware.Tpm;
-        _vms[name] = (old.Descriptor with { Hardware = hardware }, old.Id); Calls.Enqueue("hardware:" + name); return Task.CompletedTask;
+        _vms[name] = (old.Descriptor with { Hardware = hardware }, old.Id); Calls.Enqueue("hardware:" + name); HardwareApplied?.Invoke(name); if (FailureAfterHardware is not null) throw FailureAfterHardware; return Task.CompletedTask;
     }
     public Task SetMediaAsync(string name, string? installMediaPath, string? auxiliaryMediaPath, IReadOnlyList<BootDevice> bootOrder, CancellationToken ct)
-    { Check(ct); var old = _vms[name]; _vms[name] = (old.Descriptor with { InstallMediaPath = installMediaPath, AuxiliaryMediaPath = auxiliaryMediaPath, Hardware = old.Descriptor.Hardware with { BootOrder = bootOrder.ToArray() } }, old.Id); Calls.Enqueue("media:" + name); return Task.CompletedTask; }
+    { Check(ct); var old = _vms[name]; _vms[name] = (old.Descriptor with { InstallMediaPath = installMediaPath, AuxiliaryMediaPath = auxiliaryMediaPath, Hardware = old.Descriptor.Hardware with { BootOrder = bootOrder.ToArray() } }, old.Id); Calls.Enqueue("media:" + name); if (FailureAfterMedia is not null) throw FailureAfterMedia; return Task.CompletedTask; }
     public Task<AttachedMedia> GetAttachedMediaAsync(string name, CancellationToken ct)
     { Check(ct); var d = _vms[name].Descriptor; return Task.FromResult(new AttachedMedia(d.InstallMediaPath, d.AuxiliaryMediaPath, true)); }
     public Task<GracefulShutdownOutcome> ShutdownGracefulAsync(string name, TimeSpan timeout, IProgress<string>? progress, CancellationToken ct)

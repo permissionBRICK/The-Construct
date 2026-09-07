@@ -881,7 +881,7 @@ writers), not by taking media gates; media completion holds its media gate and t
 | Rule | Detail |
 |---|---|
 | Attach at create | the admission plan inserts the `media_references` rows together with the child row (items must be `ready` and not `deleting`; `TryAddReferenceAsync` semantics inside the plan) **before** anything touches the hypervisor. A failed create keeps the references until the rollback (`RemoveAsync` of the VM) is **confirmed** (`GetVmIdAsync` → null); only then are they removed. If the rollback fails, the row stays `Deleting` with its references and the owner's `DELETE` retries. An item in `deleting` can never gain a reference, and an item with a reference can never enter `deleting`: both checks are inside the same media gate. |
-| Replace (`PUT /vms/{child}/media`, VM Off) | under the VM gate then the media gates: add references for the new items → `IChildVmDriver.SetMediaAsync` → `GetAttachedMediaAsync` → references are reconciled to **what is really attached** (old items no longer attached lose their reference; anything still attached keeps it). On a driver failure the same query runs; if it fails too (`Complete=false`), the references stay as the **superset** of old and new items and the VM is flagged `observed.storageProblem = "media-unverified"`; the reconciliation pass (§4.4) re-queries and settles the references later. A reference is therefore never removed while the hypervisor might still hold the file. |
+| Replace (`PUT /vms/{child}/media`, VM Off) | under the VM gate then the media gates: add references for the new items → `IChildVmDriver.SetMediaAsync` → `GetAttachedMediaAsync` → references are reconciled to **what is really attached** (old items no longer attached lose their reference; anything still attached keeps it). On a driver failure or unconfirmed readback, the references stay as the **superset** of old and new items and the persisted configuration intent flags the VM's inventory response with `observed.storageProblem = "media-unverified"`. **S3 implementation deviation:** only a retry of the same media request re-applies the intended configuration and settles references after exact readback; capacity reconciliation does not settle attachments. The durable intent's flag survives capacity reconciliation until successful retry or VM deletion. A reference is therefore never removed while the hypervisor might still hold the file. |
 | Detach on delete | `child-delete` removes references **after** the VM is confirmed removed. |
 | Dedicated media | items with `dedicatedTo = <vm>` are deleted by `child-delete`/cascade after the reference is gone (state `deleting`, file removed, reservation released after confirmation). A dedicated item that is also referenced by another VM (admin attach) is only dereferenced. |
 | Delete (`DELETE /media/{id}`) | under the media gate: `409 media-in-use { references }` while any row exists; otherwise CAS `ready\|failed → deleting` (blocks new references), file removed; a "held open" result keeps `deleting` + `error` and storage charged, retried by cleanup; storage released after the file is confirmed gone, row removed. |
@@ -1432,6 +1432,10 @@ their `guest.*` stays unknown and `observed.lastBootAt` is the only boot evidenc
 | `update-in-progress`, `update-not-staged`, `update-not-cancellable`, `update-not-interrupted`, `update-not-resolvable`, `updater-running`, `unsupported-downgrade`, `signing-key-missing` | 409 | `updateId?`, `state?` |
 | `update-not-commitable` | 409 | `reason`, `mismatches?` |
 | `vm-state-unknown` | 409 | |
+| `configuration-incomplete` | 409 | none; a current-incarnation configuration intent must be completed before start or a different configuration |
+| `configuration-unverified` | 409 | none; the VM was no longer confirmed Off after a configuration driver call |
+| `vm-incarnation-conflict` | 409 | none; recorded and hypervisor VM identities differ |
+| `media-unverified` | 409 | none; attachment readback is incomplete or differs from the intended set |
 | `intent-expired` | 409 | `activationBase`, `lifetime` |
 | `console-session-expired` | 410 | |
 | `media-too-large`, `screenshot-too-large` | 413 | `maxBytes` |
@@ -2393,6 +2397,7 @@ namespace Constructd.Core.Abstractions
         /// <summary>InFlight → Completed with the response, atomically with the database-only mutation it answers (§7.3).</summary>
         Task<bool> CompleteAsync(string owner, string kind, string key, string responseJson, CancellationToken ct);
         Task<bool> RemoveAsync(string owner, string kind, string key, CancellationToken ct);
+        Task<IReadOnlyList<OperationKeyRecord>> ListInFlightAsync(string vmName, CancellationToken ct);
         Task<int> SweepAsync(DateTimeOffset olderThan, CancellationToken ct);
     }
 
@@ -2414,7 +2419,9 @@ namespace Constructd.Core.Abstractions
         Job? JobToInsert,
         string? VmToFence,
         string? FenceJobId,
-        bool CloseChildCreation);
+        bool CloseChildCreation,
+        string? VmToAssignJob = null,
+        int? OwnerChildrenLimit = null);
 
     public enum AdmissionOutcome { Accepted, Replay, KeyConflict, VersionConflict, NameTaken, QuotaExceeded, ParentClosed, ParentMissing, MediaNotReady, CapacityRefused, CascadeMismatch }
 
@@ -2456,6 +2463,8 @@ namespace Constructd.Core.Abstractions
         Task<bool> SetAllowanceAsync(string userName, UserAllowance allowance);
         /// <summary>Compare-and-bump of the VM's power generation (§5.3b); false when it moved.</summary>
         Task<bool> BumpPowerGenerationAsync(string vmName, long expected);
+        Task<bool> UpdateHardwareAsync(string vmName, ChildHardware hardware, long expectedGeneration);
+        Task<bool> UpdatePowerStateAsync(string vmName, VmState state, long expectedGeneration);
         /// <summary>The VM row as it is INSIDE this transaction (fresh, gate-protected read for §4.4 staleness checks).</summary>
         Task<Vm?> ReadVmAsync(string vmName);
         /// <summary>Re-admission of a start whose reservations were swept (§7.3): same rules as AdmitAsync, inside this transaction.</summary>
@@ -2657,6 +2666,7 @@ namespace Constructd.Core.Abstractions
         bool Remove(string id);
         int RemoveExpired(DateTimeOffset now);
         int RemoveForVm(string vmName);
+        int RemoveForVmExcept(string vmName, IReadOnlyList<string> principals);
         int RemoveForPrincipal(string principal);
         bool TryTakeRate(string id, string bucket, int perSecond, DateTimeOffset now);
     }
@@ -2985,7 +2995,7 @@ must keep running throughout; `capacity.mode` switched to `enforce` for items 7�
 | 12 | Delete the parent primary with one private and one shared child; interrupt the cascade once (stop the service mid-job) | preview lists both with the shared flag and expiry; typed name required; after the interruption the parent is a tombstone with the remaining child, a repeated `DELETE` finishes; all three gone; media references released; dedicated media removed; no orphan files under the media root; unrelated `haus-vm` untouched |
 | 13 | Stage an update from a real `host-*` release; apply while a media acquire is running; use the documented nested layout | `draining` waits for the acquire; new child creates and chunk writes get `503 maintenance`; existing VMs keep running; the new binary answers `maintenance` until the updater commits; clients reconnect; `install.json` and `/host/updates/status` report the pinned commit; `service\publish` and `service\host` both intact |
 | 14 | Apply a deliberately broken package (tampered SHA256SUMS; then a build whose health check fails); kill the updater once mid-`replace` and resume | first refused at verify; second rolls back automatically, status `rolledBack`, DB intact; the resumed run reuses the backup and completes; `last-update.json` readable with the service stopped |
-| 15 | Old client (pre-change extension/PS) against the new service | every existing flow (create, provision, expose, idle, remove) behaves identically; `GET /vms/{self}/forwards` is byte-compatible for the guest CLI |
+| 15 | Old client (pre-change extension/PS) against the new service; induce an unreadable state probe and delayed start on a disposable primary | existing create/provision/expose/idle/remove and `GET /vms/{self}/forwards` remain compatible; verify the S3 documented exceptions: Unknown create/start refuses safely even in Observe; start waits for confirmed Running (up to 30 seconds) |
 
 Record the outcome of each item, the release commit, and any capability that had to be
 downgraded to `unsupported`, in `docs/plans/host-administration-field-test.md`.
@@ -3919,3 +3929,144 @@ dotnet/node/pwsh/browser/service processes remained. `git diff --check` passed.
 | `test/t3-https.test.sh` | 133 | 0 | 0 |
 | `test/vscode-download.test.sh` | 6 | 0 | 0 |
 | `extension/test/ui-smoke.js` | 311 | 0 | 0 |
+
+### Deviations — Phase 3 admission integration (ha/s3-delegation)
+
+- A partially swept child-create start re-admits missing reservations under
+  `<jobId>:resume:<random id>`, and intent recovery includes those derived operation
+  rows. The capacity ledger requires each operation's resource request to remain
+  immutable; reusing the original create id for only missing RAM/CPU would conflict
+  with its retained storage rows. The original start intent and activation time remain
+  unchanged. SQLite and memory recovery tests pin this behavior.
+- The SQL write helpers are internal to Constructd.Sqlite. The coordinator uses the
+  existing ledger transaction and shared VM, job, media, key and audit SQL helpers;
+  public Core seam signatures remain unchanged in this increment.
+
+### S3 delegation implementation — atomic state and job binding
+
+`AdmissionPlan.VmToAssignJob` is an optional additive field for shutdown/restart admission:
+current job assignment and queued job insertion commit together, refusing a live job or
+deleting VM. `IAdmissionScope.UpdatePowerStateAsync` adds a compare-and-set state write
+and generation increment in the same transaction, implementing §5.3b without a separate
+unfenced metadata update. Existing callers retain their defaults. The operation-key
+store adds `ListInFlightAsync(vmName)` for reconciliation of persisted start intents;
+console session storage adds filtered `RemoveForVmExcept` for §2.4 revocation.
+
+Restart start-intent payloads additionally retain their required reservation lines and
+operation identifier. This allows recovery after the runtime rows were swept without
+changing the existing lease. No restart path activates or renews a lease. Reconciliation
+continues accounting for a running VM with a start intent but preserves its generation
+until that intent completes; it does not classify the accepted start as external.
+
+S3 review clarifications:
+
+- Lease expiry now uses `ListLeasesDueAsync`; `IChildLeaseReconciler` is the additive
+  per-VM lease callback inside capacity reconciliation, using its already observed state
+  under its existing VM gate. It completes interrupted start intents before deciding
+  whether an external start is overdue. Memory mode, which has no capacity reconciler,
+  runs that callback at the capacity reconciliation interval. Expiry ticks perform no
+  inventory probes. The operation-key in-flight query is required, never an empty default.
+- A new start may supersede an abandoned start intent under the VM gate when the driver
+  confirms Off/Saved/Paused. The previous key records `superseded` and releases only the
+  reservations whose observed state permits release. An already Running intent completes
+  from its original clock; the new request receives `already-running`. Unknown remains
+  a refusal. Restart recovery past the original deadline reports `lease-due`.
+- Childless primary deletion reuses `VmJobs.RemoveAsync`, including unchanged text
+  progress, result shape and success/failure audit actions, with no phase events. Its
+  optional pre-registry-removal callback settles new delegation/capacity artifacts. The
+  additive closed-parent fence and confirmed-Absent check remain intentional deviations
+  from the old deletion path: they prevent new dependent creation and releasing capacity
+  without removal evidence. A failed check retains the registry for retry. Filling an
+  initially null primary incarnation does not itself reject deletion.
+- Dedicated child media cleanup includes install media as well as auxiliary media,
+  matched case-insensitively, implementing §2.4's all-dedicated-media removal rule.
+- Parent relationship authorization precedes policy/state diagnostics on child creation,
+  so another owner's allowance and parent fence are not disclosed to strangers.
+
+### Deviations — S3 primary admission and accounting integration
+
+- Existing primary create provisioning remains in `VmJobs.CreateAsync`. A new admission
+  wrapper atomically reserves its VM, queued job and owner-charged resources, then confirms
+  them after the existing workflow succeeds. The primary disk placement resolver is an
+  additive required `IChildVmStorage.ResolvePrimaryStorageAsync` member; it matches the
+  original provisioner's configured path or historical default, not the child default.
+  A preflight refuses an existing unmanaged VM before invoking the provisioner, preventing
+  its legacy rollback from deleting a same-name VM. Failure retains storage reservations
+  without explicit artifact-absence evidence; the original registry rollback remains intact.
+- Existing primary `/power` start keeps its idempotent Running response; Off/Saved/Paused
+  admission uses the common ledger, so a primary cannot bypass an owner's child resource
+  budget. Stop/save keep the original driver operations and settle accounting from observed
+  state under the VM gate. Memory composition uses the same default Observe mode as SQLite.
+- `AdmissionPlan.OwnerChildrenLimit` separates the owner's aggregate retained-child limit
+  from a tightened primary override. Both counts are checked inside the admission transaction;
+  private, shared and retained cleanup records count. An override on one parent does not
+  incorrectly consume the entire owner's allowance.
+- Saved-state reservations created before incarnation discovery keep their identity. The
+  ledger recognizes their VM-name alias during reconciliation and start recovery, counting
+  one liability and the actual VMRS allocation. Existing VM storage lookup uses its own
+  configuration location, avoiding incorrect volume admission after host defaults change.
+- Scheduler expiry jobs have no initiating principal (audit actor remains `system`). Job
+  access grants for `vm:<name>` initiators require a VM-token principal. A human username
+  matching a reserved actor label cannot claim another actor's job.
+
+S3 review round 5 clarifications against §0.1's zero-change primary default:
+
+- A primary create or start with an unreadable (`Unknown`) state probe now refuses with
+  `409 vm-state-unknown`, including in Observe mode. This is an intentional safety
+  exception: it is not an inventory-capacity refusal; the service cannot establish the
+  operation's starting state or exclude a same-name VM which the legacy create rollback
+  could delete. Confirmed existing/absent/Off/Saved/Paused behavior remains covered by
+  regression tests. The primary start route also waits up to 30 seconds for Running and
+  answers `start-failed` on unconfirmed start, instead of returning an immediate 200 Off.
+  Field-test item 15 must exercise unreadable state probes and delayed startup on a
+  disposable primary before rollout; no such host validation happened in this run.
+- A same-name primary-create retry may atomically adopt retained storage from its own
+  failed/cancelled create job when that operation is dead and the registry name was absent.
+  Adoption requires the same owner, VM name, artifact and volume, and cannot shrink a
+  retained liability. The failed operation's storage and the replacement plan commit as
+  one transaction; refusal rolls back the adoption. Conflicting reservation requests
+  through the admission seam return coded 409 rather than leaking an internal exception.
+
+### Deviations — S3 child configuration recovery
+
+The §8.9 hardware/media routes use durable `child-hardware` / `child-media` intents.
+`IAdmissionScope.UpdateHardwareAsync` atomically updates hardware and its resource columns,
+compares/bumps the power generation, and completes the intent. Both require Off and the
+recorded incarnation. New starts refuse `configuration-incomplete` while an unfinished
+configuration intent remains; retry the same request to finish it. Media references cover
+both old and intended attachments until readback confirms the intended set, so a partial
+attachment cannot make a referenced ISO deletable. Hardware changes take effect in runtime
+admission on the next start, which resolves the owner's then-current budget.
+
+Disk growth returns `unsupported-capability` on the current driver (the existing stage-2
+restriction); disk shrink is validation failure. No disk-resize implementation is claimed.
+Secure Boot template changes are refused when already locked. An interrupted intent that
+initialized the TPM retries without resending the template: the driver's ordered template
+write precedes key-protector initialization. The original intent and incarnation remain
+required. Changes never alter leases, ownership or sharing.
+
+Configuration intents additionally bind the VM incarnation: an unfinished intent for a
+deleted VM cannot block or mutate a replacement of the same name. The primary adoption
+rollback is pinned in both stores, including preservation of the original reservation id
+and operation id after a refused retry. Only expected artifact/operation reservation
+conflicts are mapped to 409; ledger ownership and transaction invariants still surface as
+internal failures.
+
+S3 configuration review clarifications:
+
+- Configuration recovery requires the same incarnation and observed Off under the VM
+  gate, but ignores the intent's old power generation. An already-off shutdown, lease
+  expiry or intervening power transition may legitimately advance it. Completion still
+  compares and bumps the fresh VM generation atomically. Tests pin shutdown interference
+  on both stores.
+- A pending media intent projects `observed.storageProblem = "media-unverified"` from
+  durable state, so capacity reconciliation cannot erase it. Attachment settlement is by
+  retry only, as amended in §6.5; there is no background attachment settlement in S3.
+- Recovery currently accepts the same request only. If it cannot succeed after resolving
+  the backend failure, the supported escape is owner/admin deletion and recreation of
+  the child. There is no abandon/supersede configuration API. Different requested firmware
+  can conflict with TPM initialization already performed by the first attempt, so this
+  implementation keeps the original complete intent rather than guessing.
+- Off-VM RAM changes leave any pre-existing saved-state hold at its previous size until
+  the next start re-admits the actual target requirement. Off carries no runtime RAM/CPU
+  charge; no save allocation can occur through the API before that admission.

@@ -22,10 +22,17 @@ public sealed class SqliteJobStore(SqliteDatabase database) : IJobStore, IJobQue
         ArgumentNullException.ThrowIfNull(job);
 
         await using var connection = await database.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await WriteInTransaction(connection, null, job, false, cancellationToken);
+    }
+    internal static async Task WriteInTransaction(SqliteConnection connection, SqliteTransaction? transaction, Job job, bool insertOnly, CancellationToken cancellationToken)
+    {
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = """
             INSERT INTO jobs (id, kind, vm_name, owner, state, progress, result, error, created, finished, initiator, operation_key, phase)
             VALUES (@id, @kind, @vmName, @owner, @state, @progress, @result, @error, @created, @finished, @initiator, @operationKey, @phase)
+            """;
+        if (!insertOnly) command.CommandText += """
             ON CONFLICT(id) DO UPDATE
                SET state = excluded.state, progress = excluded.progress, result = excluded.result,
                    error = excluded.error, finished = excluded.finished, initiator = excluded.initiator, operation_key = excluded.operation_key, phase = excluded.phase;

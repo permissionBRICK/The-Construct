@@ -207,6 +207,7 @@ public sealed class MediaApiTests
     public async Task Item_limit_serializes_concurrent_begins_and_capacity_refusal_rolls_back()
     {
         await using var app=new TestApp(); using var alice=await app.CreateUserClientAsync("alice");
+        app.Service<InMemoryCapacityLedger>().Mode=CapacityMode.Enforce;
         var refused=await alice.PostAsJsonAsync(Root+"/uploads",new {name="refused",role="install",sizeBytes=40000,operationKey="refused-key"}); Assert.Equal(HttpStatusCode.Conflict,refused.StatusCode);
         Assert.Empty(await app.Service<IMediaStore>().ListAsync(null,default)); Assert.Null(await app.Service<IOperationKeyStore>().GetAsync("alice","media-upload","refused-key",default));
         await Configure(app); await app.Service<IHostConfigStore>().SetAsync("media",HostAdminDefaults.Media with {MaxItemsPerUser=1},"admin",default);
@@ -314,15 +315,18 @@ public sealed class MediaApiTests
         Assert.Empty((await app.Service<ICapacityLedger>().SnapshotAsync(false,default)).Reservations);
     }
     [Fact]
-    public async Task Unsupported_sqlite_admission_returns_coded_refusal()
+    public async Task Sqlite_admission_persists_upload_and_storage()
     {
         var root=Path.Combine(Path.GetTempPath(),"media-admission-"+Guid.NewGuid().ToString("n")); Directory.CreateDirectory(root);
         try
         {
             await using var app=TestApp.WithSqlite(Path.Combine(root,"db")); using var alice=await app.CreateUserClientAsync("alice");
             var response=await alice.PostAsJsonAsync(Root+"/uploads",new {name="upload.iso",role="install",sizeBytes=40000});
-            Assert.Equal(HttpStatusCode.Conflict,response.StatusCode); Assert.Equal("unsupported-capability",(await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("code").GetString());
-            Assert.Empty(await app.Service<IMediaStore>().ListAsync(null,default));
+            Assert.Equal(HttpStatusCode.Created,response.StatusCode);
+            var item=Assert.Single(await app.Service<IMediaStore>().ListAsync(null,default));
+            Assert.Equal("alice",item.Owner);
+            Assert.Single((await app.Service<ICapacityLedger>().SnapshotAsync(false,default)).Reservations);
+
         }
         finally {Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); Directory.Delete(root,true);}
     }

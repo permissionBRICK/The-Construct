@@ -14,38 +14,6 @@ namespace Constructd.Tests.Api;
 /// </summary>
 public class RollbackTests
 {
-    /// <summary>An in-memory job store that can be broken and repaired between requests.</summary>
-    private sealed class SwitchableJobStore : IJobStore
-    {
-        private readonly InMemoryJobStore _inner = new();
-
-        public bool Broken { get; set; }
-
-        public Task UpsertAsync(Job job, CancellationToken cancellationToken) =>
-            Broken
-                ? throw new IOException("the job database is unavailable")
-                : _inner.UpsertAsync(job, cancellationToken);
-
-        public Task<Job?> GetAsync(string id, CancellationToken cancellationToken) =>
-            _inner.GetAsync(id, cancellationToken);
-
-        public Task<int> MarkInterruptedAsync(DateTimeOffset now, CancellationToken cancellationToken) =>
-            _inner.MarkInterruptedAsync(now, cancellationToken);
-    }
-
-    /// <summary>A store that refuses to record anything, so job submission fails.</summary>
-    private sealed class BrokenJobStore : IJobStore
-    {
-        public Task UpsertAsync(Job job, CancellationToken cancellationToken) =>
-            throw new IOException("the job database is unavailable");
-
-        public Task<Job?> GetAsync(string id, CancellationToken cancellationToken) =>
-            Task.FromResult<Job?>(null);
-
-        public Task<int> MarkInterruptedAsync(DateTimeOffset now, CancellationToken cancellationToken) =>
-            Task.FromResult(0);
-    }
-
     [Fact]
     public async Task A_failing_forward_manager_does_not_keep_the_name_and_quota_reserved()
     {
@@ -81,7 +49,8 @@ public class RollbackTests
     public async Task A_job_that_cannot_be_queued_releases_the_reservation()
     {
         using var app = new TestApp(
-            configureServices: services => services.AddSingleton<IJobStore>(new BrokenJobStore()));
+            configureServices: services => services.AddSingleton<IAdmissionStore>(provider => new SwitchableAdmissionStore
+                { Broken = true, Inner = ActivatorUtilities.CreateInstance<InMemoryAdmissionStore>(provider) }));
 
         using var bob = await app.CreateUserClientAsync("bob", maxVms: 1);
 
@@ -181,9 +150,13 @@ public class RollbackTests
     [Fact]
     public async Task A_deletion_whose_job_cannot_be_queued_unfences_the_vm()
     {
-        var store = new SwitchableJobStore();
+        var store = new SwitchableAdmissionStore();
         using var app = new TestApp(configureServices: services =>
-            services.AddSingleton<IJobStore>(store));
+            services.AddSingleton<IAdmissionStore>(provider =>
+            {
+                store.Inner = ActivatorUtilities.CreateInstance<Constructd.Fakes.InMemoryAdmissionStore>(provider);
+                return store;
+            }));
 
         using var bob = await app.CreateUserClientAsync("bob");
         var created = await bob.CreateVmAsync("work-vm");
@@ -238,5 +211,14 @@ public class RollbackTests
         // Only the exception type is persisted, never a dependency's message.
         Assert.Equal("InvalidOperationException", job.Error);
         Assert.NotNull(await app.Vms.GetAsync("work-vm", CancellationToken.None));
+    }
+    private sealed class SwitchableAdmissionStore : IAdmissionStore
+    {
+        public bool Broken { get; set; }
+        public IAdmissionStore Inner { get; set; } = null!;
+        public Task<AdmissionResult> AdmitAsync(AdmissionPlan plan, CancellationToken ct) =>
+            Broken ? throw new InvalidOperationException("Admission unavailable") : Inner.AdmitAsync(plan, ct);
+        public Task<AdmissionResult> MutateAsync(OperationKeyRecord? key, Func<IAdmissionScope, Task<bool>> mutation, CancellationToken ct) => Inner.MutateAsync(key, mutation, ct);
+        public Task MarkStartFailedAsync(string id, string error, CancellationToken ct) => Inner.MarkStartFailedAsync(id, error, ct);
     }
 }

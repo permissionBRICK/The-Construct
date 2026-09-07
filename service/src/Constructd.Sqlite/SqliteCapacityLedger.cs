@@ -144,6 +144,25 @@ public sealed partial class SqliteCapacityLedger(SqliteDatabase database, IClock
                 Min(r.GetLongOrNull("ram_budget_bytes") ?? defaults.RamBudgetBytes, caps.RamBudgetBytes),
                 Min(r.GetLongOrNull("storage_budget_bytes") ?? defaults.StorageBudgetBytes, caps.StorageBudgetBytes), null, true, true, true);
         }
+        // Only primary-create admission calls this, after proving the registry name was absent.
+        // A failed create may leave a disk hold after its unchanged registry rollback. Reuse that
+        // liability for the same owner/path; never take it from a live job or shrink unknown storage.
+        internal void AdoptAbandonedPrimaryStorage(ReservationRequest request)
+        {
+            foreach (var row in Rows.Where(r => r.Resource == ReservationResource.Storage && r.OperationId is not null &&
+                Ownership.SameName(r.ScopeOwner, request.Owner) && Ownership.SameName(r.VmName, request.VmName)))
+            {
+                if (!request.Lines.Any(l => l.Resource == row.Resource && l.Amount >= row.Amount &&
+                    StringComparer.OrdinalIgnoreCase.Equals(l.Artifact, row.Artifact) && StringComparer.OrdinalIgnoreCase.Equals(l.Volume, row.Volume))) continue;
+                if (_ledger.Operations?.IsAlive(row.OperationId!) == true) continue;
+                using var job = Connection.CreateCommand(); job.Transaction = Sql;
+                job.CommandText = "SELECT COUNT(*) FROM jobs WHERE id=@id AND kind='create-vm' AND state IN ('Failed','Cancelled')";
+                job.With("@id", row.OperationId);
+                if (Convert.ToInt64(job.ExecuteScalar()) != 1) continue;
+                Delete(row.Id);
+                Audit("capacity.adopt", request.Owner, request.VmName!, "failed-primary-create");
+            }
+        }
         public CapacityDecision ReserveInTransaction(ReservationRequest request)
         {
             Check();
@@ -163,10 +182,10 @@ public sealed partial class SqliteCapacityLedger(SqliteDatabase database, IClock
                     var index = lines.FindIndex(l => l.Resource == row.Resource && l.Amount == row.Amount &&
                         StringComparer.OrdinalIgnoreCase.Equals(l.Artifact, row.Artifact) && StringComparer.OrdinalIgnoreCase.Equals(l.Volume, row.Volume));
                     if (index < 0 || !Ownership.SameName(row.ScopeOwner, request.Owner) || !StringComparer.OrdinalIgnoreCase.Equals(row.VmName, request.VmName))
-                        throw new InvalidOperationException("Operation reservation conflict.");
+                        throw new ReservationConflictException();
                     lines.RemoveAt(index);
                 }
-                if (lines.Count != 0) throw new InvalidOperationException("Operation reservation conflict.");
+                if (lines.Count != 0) throw new ReservationConflictException();
                 return new(true, prior.Select(r => r.Id).ToArray(), null, null, 0, 0, 0, null, _inventory.Epoch);
             }
             // The VM gate remains the structural concurrency fence. In observe mode this ledger
@@ -175,7 +194,7 @@ public sealed partial class SqliteCapacityLedger(SqliteDatabase database, IClock
                 rows.Any(r => r.Resource != ReservationResource.Storage && Ownership.SameName(r.VmName, request.VmName));
             if (request.Lines.Where(l => l.Resource == ReservationResource.Storage).Any(l => rows.Any(r => r.Resource == ReservationResource.Storage &&
                 r.Artifact is not null && CapacityMath.Key(r.Artifact) == CapacityMath.Key(l.Artifact!))))
-                throw new InvalidOperationException("Artifact already reserved.");
+                throw new ReservationConflictException();
             var config = _ledger.Config(Connection, Sql);
             var decision = runtimeConflict
                 ? new CapacityDecision(config.Mode == CapacityMode.Observe, [], null, null, 0, 0, 0,
@@ -233,3 +252,5 @@ public sealed partial class SqliteCapacityLedger(SqliteDatabase database, IClock
         }
     }
 }
+
+internal sealed class ReservationConflictException : InvalidOperationException { }

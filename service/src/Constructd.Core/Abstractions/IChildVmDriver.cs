@@ -35,6 +35,7 @@ public sealed record ChildStoragePlacement(string DiskPath, string DiskVolume, s
 public interface IChildVmStorage
 {
     Task<ChildStoragePlacement> ResolveStorageAsync(string name, CancellationToken ct);
+    Task<ChildStoragePlacement> ResolvePrimaryStorageAsync(string name, CancellationToken ct);
 }
 
 /// <summary>Creation ownership survives a partial driver failure; rollback must match the admitted job.</summary>

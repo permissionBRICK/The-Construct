@@ -117,4 +117,17 @@ public class CapacityMathTests
     [InlineData(ArtifactPresence.Unknown, OrphanResolution.Kept)]
     public void OrphanStorageUsesArtifactEvidence(ArtifactPresence presence, OrphanResolution expected) => Assert.Equal(expected,
         ReservationRules.Resolve(Row(ReservationResource.Storage, artifact: "disk:C:\\a.vhdx"), VmState.Absent, false, presence, Now.AddDays(1)).Resolution);
+    [Theory]
+    [InlineData("saved-state:a")]
+    [InlineData("saved-state:a-id")]
+    public void SavedStateNameAndIncarnationReferToTheSameLiability(string artifact)
+    {
+        var amount = 8 * Gb + CapacityMath.SavedStateOverhead;
+        var row = Row(ReservationResource.Storage, amount, ReservationPhase.Held, artifact: artifact);
+        var inventory = Inventory(28 * Gb, Actual(state: VmState.Saved) with { SavedStateBytes = 8 * Gb });
+        var accounted = CapacityMath.AccountedReservations(inventory, [row], [Vm(state: VmState.Saved)]);
+        Assert.Single(accounted);
+        var result = CapacityMath.Calculate(inventory, Config, [row], [Vm(state: VmState.Saved)]);
+        Assert.True(result.Complete); Assert.Equal(CapacityMath.SavedStateOverhead, Assert.Single(result.Volumes).GrowthReservedBytes);
+    }
 }

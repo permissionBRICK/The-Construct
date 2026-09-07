@@ -2,10 +2,14 @@ namespace Constructd.Api.Infrastructure;
 
 public static class CodedProblems
 {
-    public static IResult Create(int status, string code, string detail, string? field = null) => Results.Problem(
-        statusCode: status, title: code, detail: detail, type: "urn:construct:problem:" + code,
-        extensions: field is null ? new Dictionary<string, object?> { ["code"] = code } :
-            new Dictionary<string, object?> { ["code"] = code, ["field"] = field, ["reason"] = detail });
+    public static IResult Create(int status, string code, string detail, string? field = null, Dictionary<string, object?>? extra = null)
+    {
+        var extensions = extra is null ? new Dictionary<string, object?>() : new(extra);
+        extensions["code"] = code;
+        if (field is not null) { extensions["field"] = field; extensions["reason"] = detail; }
+        return Results.Problem(statusCode: status, title: code, detail: detail,
+            type: "urn:construct:problem:" + code, extensions: extensions);
+    }
     public static IResult Validation(string field, string reason) => Create(400, "validation", reason, field);
     public static void Audit(HttpContext http, string operation, string owner, string? parent = null, string? target = null, string? extra = null)
     {

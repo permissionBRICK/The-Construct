@@ -389,7 +389,9 @@ function Get-ConstructChildVmCapabilities {
 function Get-ConstructChildStorage {
     param([string]$Name, [string]$VhdPath)
     $disk = Get-ConstructChildDiskPath -Name $Name -VhdPath $VhdPath
-    $config = (Get-VMHost -ErrorAction Stop).VirtualMachinePath
+    $existing = Get-ConstructChildVmObject $Name
+    $config = if ($existing) { [string]$existing.ConfigurationLocation } else { [string](Get-VMHost -ErrorAction Stop).VirtualMachinePath }
+    if (-not $config) { throw 'storage-placement-unavailable' }
     @{ diskPath = $disk; diskVolume = [IO.Path]::GetPathRoot($disk); configVolume = [IO.Path]::GetPathRoot($config) }
 }
 

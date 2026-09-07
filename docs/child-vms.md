@@ -242,3 +242,44 @@ The Linux contract tests use a fake HTTP client. They validate request shapes, c
 hygiene, progress and exit behavior; they do not exercise Hyper-V or the Windows host
 service. See the frozen [host-administration contract](plans/host-administration-contracts.md#9-guest-cli-contract-construct-vm-)
 for the complete wire shapes and documented backend limitations.
+
+## Service semantics
+
+The host service supports owner delegation through rotated primary tokens. A legacy
+VM token cannot create children, and a child receives no Construct credential. Discovery
+reports current limits; each mutation resolves the owner's policy again.
+
+Every child creation and start supplies `lifetime`: `never` when allowed, or a positive
+number followed by `m`, `h` or `d`, at least five minutes. Powered-off creation stores an
+inactive lease. Start/resume replaces it with the newly requested lifetime; explicit
+renewal extends a running lease. Restart, guest reboot, save and host/service downtime
+never renew it. Expiry requests graceful shutdown, never force-off or deletion. Guest
+shutdown failure leaves an overdue lease and retained resource charges for retry.
+
+Host sharing permits registered users and their primary tokens to inspect, start/resume,
+restart, gracefully shut down, save and request console/forward access under the owner's
+policy. Shared callers cannot delete, renew leases, change sharing, or administer hardware
+and media. Resource charges always belong to the child's owner. Revoking sharing removes
+shared console sessions and requests exposure cleanup immediately; new operations check
+current scope. Open job event streams may finish after access is revoked.
+
+Primary deletion previews **all** private and shared children. The exact scope must be
+confirmed with its short-lived token. Acceptance fences the complete scope and revokes
+primary delegation atomically. Cleanup failures retain ownership and remaining storage
+liability; retry from a fresh preview. Expiry never initiates this deletion workflow.
+
+Owner/admin and the owning primary token may update an off child's hardware or media with
+`PUT /vms/{child}/hardware` and `PUT /vms/{child}/media`. Shared callers are refused.
+CPU/RAM and supported firmware settings are applied through the child driver; disk growth
+currently returns `unsupported-capability`. Media null values detach the corresponding
+slot. References protect both sides of a partial attachment. If configuration is
+interrupted, startup returns `configuration-incomplete`; retry the same configuration
+request to complete it. Runtime capacity is evaluated using the updated hardware on start.
+
+An unresolved media change appears as `observed.storageProblem = "media-unverified"`
+in inventory and retains both old and intended media references. Settlement requires
+retrying the same media request; capacity reconciliation does not settle attachments.
+An already-off shutdown or expiry does not prevent that retry. Configuration recovery
+currently accepts the same request only. Resolve the backend failure and retry; if that
+request cannot succeed, the supported escape is owner/admin deletion and recreation of
+the child. There is no abandon/supersede configuration API.

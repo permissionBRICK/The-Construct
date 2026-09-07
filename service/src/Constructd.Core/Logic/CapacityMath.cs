@@ -24,7 +24,9 @@ public static class CapacityMath
             void Hold(ReservationResource resource, long amount, string? artifact = null, string? volume = null)
             {
                 var used = artifact is null ? accounted.Where(r => r.Resource == resource && Ownership.SameName(r.VmName, vm.Name)).Sum(r => r.Amount)
-                    : accounted.Where(r => r.Resource == resource && r.Artifact is not null && Key(r.Artifact) == Key(artifact)).Sum(r => r.Amount);
+                    : accounted.Where(r => r.Resource == resource && r.Artifact is not null &&
+                        (Key(r.Artifact) == Key(artifact) || artifact.StartsWith("saved-state:", StringComparison.OrdinalIgnoreCase) &&
+                         ReservationRules.SavedState(r) && Ownership.SameName(r.VmName, vm.Name))).Sum(r => r.Amount);
                 if (amount <= used) return;
                 accounted.Add(new("observed:" + vm.Name + ":" + resource + ":" + artifact, resource, vm.Owner, vm.Name,
                     artifact, volume, amount - used, ReservationPhase.Held, ReservationOrigin.External, null, inventory.ObservedAt, null, inventory.ObservedAt));
@@ -81,7 +83,9 @@ public static class CapacityMath
             var diskPath = row.Artifact?.StartsWith("disk:", StringComparison.OrdinalIgnoreCase) == true ? row.Artifact[5..] : null;
             var key = ReservationRules.SavedState(row) ? row.Artifact! : evidence?.Path is { } path ? "path:" + Key(path) : diskPath is not null ? "path:" + Key(diskPath) : row.Artifact ?? row.Id;
             var observedDisk = diskPath is null ? null : inventory.Vms.SelectMany(v => v.Disks).FirstOrDefault(d => Key(d.Path) == Key(diskPath));
-            var observedSaved = ReservationRules.SavedState(row) ? inventory.Vms.FirstOrDefault(v => Key("saved-state:" + v.Id) == Key(row.Artifact!)) : null;
+            var observedSaved = ReservationRules.SavedState(row) ? inventory.Vms.FirstOrDefault(v => Key("saved-state:" + v.Id) == Key(row.Artifact!) ||
+                Ownership.SameName(v.Name, row.VmName) && managed.Any(m => Ownership.SameName(m.Name, row.VmName) && Matches(m, v))) : null;
+            if (observedSaved is not null) key = "saved-state:" + observedSaved.Id;
             // Running/paused/transient VMs reserve future saved-state growth; no VMRS is required yet.
             // Off VMs may retain a stale hold until confirmed-stop reconciliation releases it.
             var savedGrowthOnly = observedSaved?.State is VmState.Running or VmState.Paused or VmState.Unknown or VmState.Off;

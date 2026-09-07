@@ -15,5 +15,6 @@ public interface IOperationKeyStore
     /// <summary>InFlight → Completed with the response, atomically with the database-only mutation it answers (§7.3).</summary>
     Task<bool> CompleteAsync(string owner, string kind, string key, string responseJson, CancellationToken ct);
     Task<bool> RemoveAsync(string owner, string kind, string key, CancellationToken ct);
+    Task<IReadOnlyList<OperationKeyRecord>> ListInFlightAsync(string vmName, CancellationToken ct);
     Task<int> SweepAsync(DateTimeOffset olderThan, CancellationToken ct);
 }

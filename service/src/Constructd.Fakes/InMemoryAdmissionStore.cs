@@ -36,10 +36,24 @@ public sealed class InMemoryAdmissionStore(InMemoryVmRepository vms, InMemoryUse
     public Task<AdmissionResult> AdmitAsync(AdmissionPlan plan, CancellationToken ct) => Task.FromResult(Transaction(() =>
     {
         if (InsertKey(plan.OperationKey, ct) is { } replay) return replay;
+        var newPrimary = plan.VmToInsert is { Kind: VmKind.Primary } candidate && Done(vms.GetAsync(candidate.Name, ct)) is null;
         if (plan.VmToInsert is { } vm)
         {
             if (plan.Allowance is null) throw new ArgumentException("VM admission requires an effective allowance.");
-            var added = Done(vms.AddAsync(vm, plan.Allowance, ct));
+            var allowance = plan.Allowance;
+            if (vm.Kind == VmKind.Child && plan.OwnerChildrenLimit is int ownerLimit)
+            {
+                var parentCount = Done(vms.ListChildrenAsync(vm.Parent!, ct)).Count;
+                if (parentCount >= allowance.MaxRetainedChildren)
+                    return Result(AdmissionOutcome.QuotaExceeded, capacity: new(false, [], "children", "user", 1,
+                        allowance.MaxRetainedChildren, Math.Max(0, allowance.MaxRetainedChildren - parentCount), "parent-child-limit", capacity.Inventory.Epoch));
+                var ownerCount = Done(vms.CountByOwnerAsync(vm.Owner, VmKind.Child, ct));
+                if (ownerCount >= ownerLimit)
+                    return Result(AdmissionOutcome.QuotaExceeded, capacity: new(false, [], "children", "user", 1,
+                        ownerLimit, Math.Max(0, ownerLimit - ownerCount), "owner-child-limit", capacity.Inventory.Epoch));
+                allowance = allowance with { MaxRetainedChildren = ownerLimit };
+            }
+            var added = Done(vms.AddAsync(vm, allowance, ct));
             if (added != VmAddDecision.Added) return Result(added switch
             {
                 VmAddDecision.NameTaken => AdmissionOutcome.NameTaken,
@@ -54,7 +68,8 @@ public sealed class InMemoryAdmissionStore(InMemoryVmRepository vms, InMemoryUse
             if (!Done(media.TryAddReferenceAsync(reference, ct))) return Result(AdmissionOutcome.MediaNotReady);
         CapacityDecision? decision = null;
         if (plan.Reservation is { } request)
-        { decision = Done(capacity.TryReserveAsync(request, ct)); if (!decision.Allowed) return Result(AdmissionOutcome.CapacityRefused, capacity: decision); }
+        { if (newPrimary && plan.JobToInsert is { Kind: "create-vm" }) capacity.AdoptAbandonedPrimaryStorage(request, jobs);
+          decision = Done(capacity.TryReserveAsync(request, ct)); if (!decision.Allowed) return Result(AdmissionOutcome.CapacityRefused, capacity: decision); }
         CascadeAcceptance? cascade = null;
         if (plan.CascadeToAccept is { } preview)
         {
@@ -63,6 +78,8 @@ public sealed class InMemoryAdmissionStore(InMemoryVmRepository vms, InMemoryUse
             if (!cascade.Accepted) return Result(AdmissionOutcome.CascadeMismatch, cascade: cascade);
         }
         else if (plan.VmToFence is { } name && (plan.FenceJobId is null || !Done(vms.TryFenceAsync(name, plan.FenceJobId, plan.CloseChildCreation, ct))))
+            return Result(AdmissionOutcome.VersionConflict);
+        if (plan.VmToAssignJob is { } target && (plan.JobToInsert is null || !Done(vms.AssignJobAsync(target, plan.JobToInsert.Id))))
             return Result(AdmissionOutcome.VersionConflict);
         if (plan.JobToInsert is { } job)
         {
@@ -91,6 +108,7 @@ public sealed class InMemoryAdmissionStore(InMemoryVmRepository vms, InMemoryUse
             var job = Done(jobs.GetAsync(jobId, ct)) ?? throw new KeyNotFoundException("Unknown queued job.");
             // There is no hypervisor absence evidence here. Retain tombstones/fences/liabilities for
             // reconciliation rather than releasing a disk or RAM hold on an assumed rollback.
+            if (job.State != JobState.Queued) return Task.CompletedTask;
             return jobs.UpsertAsync(job with { State = JobState.Failed, Error = "Persisted job could not start.", Finished = clock.UtcNow }, ct);
         }
     }
@@ -105,6 +123,8 @@ public sealed class InMemoryAdmissionStore(InMemoryVmRepository vms, InMemoryUse
         public Task<bool> UpdateSharingAsync(string vmName, SharingScope scope) => Cas(() => vms.ChangeSharingAsync(vmName, scope));
         public Task SetOverrideAsync(VmOverride value) { Check(); return vms.SetOverrideAsync(value, ct); }
         public Task<bool> SetAllowanceAsync(string userName, UserAllowance allowance) => Cas(() => users.SetAllowanceAsync(userName, allowance, ct));
+        public Task<bool> UpdateHardwareAsync(string vmName, ChildHardware hardware, long expectedGeneration) => Cas(() => vms.UpdateHardwareAsync(vmName, hardware, expectedGeneration));
+        public Task<bool> UpdatePowerStateAsync(string vmName, VmState state, long expectedGeneration) => Cas(() => vms.UpdatePowerStateAsync(vmName, state, expectedGeneration));
         public Task<bool> BumpPowerGenerationAsync(string vmName, long expected) => Cas(() => vms.BumpPowerGenerationAsync(vmName, expected));
         public Task<Vm?> ReadVmAsync(string vmName) { Check(); return vms.GetAsync(vmName, ct); }
         public Task<CapacityDecision> ReserveAsync(ReservationRequest request) { Check(); var result = Done(capacity.TryReserveAsync(request, ct)); return Task.FromResult(result); }
