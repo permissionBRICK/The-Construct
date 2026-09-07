@@ -35,6 +35,7 @@ public sealed class HostAdminApiTests
         var full = await admin.GetFromJsonAsync<JsonElement>("/api/v1/health"); Assert.True(full.TryGetProperty("commit", out _));
         var who = await (await admin.GetAsync("/api/v1/whoami")).ReadAsync<WhoAmIResponse>(); Assert.True(who.Enabled); Assert.NotNull(who.Effective); Assert.Contains("host-admin", who.ApiFeatures!);
         Assert.Contains("console", who.ApiFeatures!); Assert.Contains("updates", who.ApiFeatures!);
+        Assert.Contains("children", who.ApiFeatures!); Assert.Contains("media", who.ApiFeatures!); Assert.Contains("network", who.ApiFeatures!);
         Assert.Equal(new Constructd.Api.Composition.ReleaseInfo().ApiFeatures, who.ApiFeatures);
         var status = await admin.GetFromJsonAsync<JsonElement>("/api/v1/host/status"); Assert.Equal("observe", status.GetProperty("capacityMode").GetString());
         Assert.False(status.GetProperty("capacity").GetProperty("complete").GetBoolean()); Assert.Equal(JsonValueKind.Array, status.GetProperty("activeJobs").ValueKind);

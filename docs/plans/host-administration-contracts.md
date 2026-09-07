@@ -4142,3 +4142,179 @@ Final round-2-fix validation: full .NET **1018/1018** (42 added), build **0 warn
 PowerShell **131**, contract compile/reflection **5**, and fresh fake end-to-end
 **38** all pass. The new per-VM failure tests preserve sibling reports, keep host
 facts, skip known absent rows, and reject untrusted error text in diagnostics.
+
+## Integration notes (stage 4)
+
+Integrated on 2026-09-07 in `ha/integ-4`, reset to stage-3 `feat/host-admin`
+(`e37831a`). Merged in order with `--no-ff`: `ha/s3-delegation` (`62b8474`,
+four commits) and `ha/s3-network` (`f75b3b7`, one commit). Both branches had
+commits beyond the base; neither was skipped. Merge commits are `993a008`
+and `19576fa`. Handover moves only the local `feat/host-admin` ref to the final
+integration commit; no push or deployment.
+
+### Merge resolutions and integration coverage
+
+- Delegation merged cleanly. Network conflicted in five files:
+  this contract, `service/README.md`, production `Composition/ReleaseInfo.cs`,
+  `FakeReleaseInfo.cs` and `Program.cs`. Both documentation appendices remain.
+  Production/fake discovery advertises the union: `host-admin`, `children`,
+  `media`, `console`, `updates`, `network`. The route chain retains lifecycle,
+  child hardware/media configuration, updates and networking, followed by the
+  existing startup update recovery. No feature was discarded.
+- Migrations 100, 200, 300, 400, 600 and 700 remain registered in ascending order.
+  SQLite admission, capacity accounting, child lease scheduling, console,
+  update and network adapters resolve together. The child PowerShell file
+  automatically merged the primary-storage resolver and template-retry guard
+  with network snapshot collection.
+- Strengthened discovery coverage to assert children/media/network as well as
+  production/fake parity. Added two real-HTTP integration cases (memory and
+  SQLite) spanning child creation, sharing, shared client forwards and acks,
+  immediate private revocation, re-sharing and parent cascade deletion. They
+  verify that owner forwards survive private revocation, shared forwards and
+  peer intents disappear, and cascade cleanup removes forwards, network intent,
+  media references and capacity while preserving the unrelated consumer primary.
+  These tests invoke no manual network callbacks or reconciliation ticks.
+- Updated the service overview and networking documentation to describe the
+  integrated feature flags and sharing hook. Branch-local historical validation
+  notes above remain historical evidence, not the result of this integration.
+- `VmJobs.CreateAsync`, the local primary driver, `Auto-Install.ps1` and
+  `Provision-AgentVM.ps1` retain the stage-3 provisioning flow. The delegation
+  branch adds only an optional pre-registry-removal callback to `VmJobs.RemoveAsync`
+  for confirmed cleanup/accounting. Core still has zero package references.
+
+### Decisions and limitations
+
+The earlier stage-2/3 gaps for SQLite VM/media admission, primary capacity
+admission and delegated lifecycle/sharing/cascade/network wiring are superseded
+by these branches. Primary create/start admission retains Observe by default.
+The delegation branch's documented safety deviations remain: unreadable primary
+state refuses create/start, start waits up to 30 seconds for observed Running,
+and primary state reads no longer overwrite stored inventory. These require
+later field validation; this integration does not silently undo them.
+
+Hyper-V child addresses remain unverified, child host forwards are refused,
+and network rules record intended access without packet isolation. Interrupted
+child configuration requires the same-request retry or deletion/recreation;
+disk growth remains unsupported. The production update signing key remains
+empty pending the owner's trust root. First rollout is manual.
+
+This run made no Windows-host probe or service change and performed no Hyper-V,
+Windows PowerShell 5.1 or LocalSystem execution. Existing field-test requirements
+for actual installers, console input, service updates/rollback, network reachability
+and VM continuity remain. Linux fakes and recording runners do not prove those.
+
+### Validation and per-suite results
+
+No merge regression or unresolved integration defect was found. All **68 requested
+suites** and the additional browser smoke suite passed on Linux. The initial .NET
+run passed **1176/1176**; the final full run, including the two new integration
+cases, passed **1178/1178** (**540** above the original 638-test baseline).
+Both explicit solution builds reported **0 warnings, 0 errors**. No test suite
+failed during this integration. Other passing suites were not repeated after the
+isolated integration-test and documentation additions.
+
+| Family | Suites | Passed checks/groups | Failed | Explicit skips |
+|---|---:|---:|---:|---:|
+| .NET | 1 | 1178 | 0 | 0 |
+| Node | 24 | 5148 | 0 | 1 |
+| PowerShell | 22 | 3318 | 0 | 1 |
+| Bash | 21 | 1070 | 0 | 0 |
+| Browser | 1 | 311 | 0 | 0 |
+
+Counts are reported assertions except `provision-seed-user` (seven scenario
+groups) and the two T3 host suites (one successful group each, no internal
+assertion count). Some .NET tests also invoke PowerShell suites, so cross-family
+counts are not unique assertions. Explicit skips: Node's unwritable-spool case
+under root and PowerShell's Windows-only DPAPI round trip. `t3-reprovision-host`
+ran without `-DownloadBase`; optional HTTP-download/native Windows launch checks
+were not exercised. PowerShell ran under Linux pwsh **7.4.6**, Node **26.8.1**,
+and .NET SDK **10.0.301**. The browser smoke used the default classic theme.
+
+Environment fixtures match prior integrations: process-only Git
+`init.defaultBranch=main`, `T3CODE_BUILD_SOURCE=prebuilt`,
+`SYSTEMD_UNIT_PATH=/usr/lib/systemd/system`, and an empty temporary `/home/agent`
+only during `provision-diskcheck` (removed afterwards). .NET used
+`DOTNET_PROCESSOR_COUNT=2`, disabled MSBuild server/node reuse and disabled shared
+compilation; builds/tests were serialized. Browser dependencies were installed
+with `npm ci --ignore-scripts` in `extension/test` from its existing lockfile;
+no lockfile changed. An initial invocation in `extension` found no lockfile and
+was corrected before running the browser test.
+
+Fake end-to-end ran on **17936** and passed **45/45**, including the new delegated
+child CLI round trip. It stopped its own service and the port was verified closed.
+The signed-package fixture passed **87** checks over **77 payload files**; its
+executable is a fixture, not a Windows publish or execution. No workspace-owned
+dotnet/node/pwsh/browser/service processes remained after validation.
+`git diff --check` passed.
+
+| Suite | Passed checks/groups | Failed | Explicit skips |
+|---|---:|---:|---:|
+| `dotnet test service/Constructd.sln` | 1178 | 0 | 0 |
+| `extension/test/audio.test.js` | 233 | 0 | 0 |
+| `extension/test/configsync.test.js` | 475 | 0 | 0 |
+| `extension/test/drivers.test.js` | 79 | 0 | 0 |
+| `extension/test/forwarder.test.js` | 715 | 0 | 1 |
+| `extension/test/host.test.js` | 118 | 0 | 0 |
+| `extension/test/hostadmin-ui.test.js` | 84 | 0 | 0 |
+| `extension/test/hostadmin.test.js` | 267 | 0 | 0 |
+| `extension/test/importui.test.js` | 24 | 0 | 0 |
+| `extension/test/instances.test.js` | 1528 | 0 | 0 |
+| `extension/test/instancestate.test.js` | 105 | 0 | 0 |
+| `extension/test/lifecycle.test.js` | 265 | 0 | 0 |
+| `extension/test/notify.test.js` | 103 | 0 | 0 |
+| `extension/test/probe.test.js` | 98 | 0 | 0 |
+| `extension/test/project-set.test.js` | 63 | 0 | 0 |
+| `extension/test/projects.test.js` | 167 | 0 | 0 |
+| `extension/test/remote.test.js` | 71 | 0 | 0 |
+| `extension/test/remotehost.test.js` | 206 | 0 | 0 |
+| `extension/test/repatch.test.js` | 39 | 0 | 0 |
+| `extension/test/t3code.test.js` | 89 | 0 | 0 |
+| `extension/test/themes.test.js` | 43 | 0 | 0 |
+| `extension/test/updates.test.js` | 143 | 0 | 0 |
+| `extension/test/usage.test.js` | 131 | 0 | 0 |
+| `extension/test/vmpower.test.js` | 81 | 0 | 0 |
+| `extension/test/zip.test.js` | 21 | 0 | 0 |
+| `service/tests/Constructd.Tests/Capacity/inventory.test.ps1` | 16 | 0 | 0 |
+| `service/tests/Constructd.Tests/Console/console-script.test.ps1` | 163 | 0 | 0 |
+| `service/tests/Constructd.Tests/Network/network-script.test.ps1` | 29 | 0 | 0 |
+| `service/tests/host-installer.test.ps1` | 368 | 0 | 0 |
+| `service/tests/host-release-installer.test.ps1` | 14 | 0 | 0 |
+| `service/tests/host-updater.test.ps1` | 49 | 0 | 0 |
+| `test/config-sync.test.ps1` | 568 | 0 | 0 |
+| `test/driver-contract.test.ps1` | 132 | 0 | 0 |
+| `test/host-admin-client.test.ps1` | 19 | 0 | 0 |
+| `test/host-lib.test.ps1` | 309 | 0 | 0 |
+| `test/instance-cleanup.test.ps1` | 124 | 0 | 0 |
+| `test/instance-identity.test.ps1` | 242 | 0 | 0 |
+| `test/instance-state.test.ps1` | 64 | 0 | 0 |
+| `test/instances.test.ps1` | 781 | 0 | 0 |
+| `test/native-iso-host.test.ps1` | 23 | 0 | 0 |
+| `test/notify-toast.test.ps1` | 22 | 0 | 0 |
+| `test/provision-seed-user.test.ps1` | 7 | 0 | 0 |
+| `test/remote-client.test.ps1` | 93 | 0 | 1 |
+| `test/remote-driver.test.ps1` | 87 | 0 | 0 |
+| `test/remote-install.test.ps1` | 206 | 0 | 0 |
+| `test/t3-desktop-handoff.test.ps1` | 1 | 0 | 0 |
+| `test/t3-reprovision-host.test.ps1` | 1 | 0 | 0 |
+| `test/autoinstall-iso.test.sh` | 59 | 0 | 0 |
+| `test/construct-expose.test.sh` | 170 | 0 | 0 |
+| `test/construct-notify.test.sh` | 36 | 0 | 0 |
+| `test/construct-vm.test.sh` | 172 | 0 | 0 |
+| `test/contracts-compile.test.sh` | 5 | 0 | 0 |
+| `test/export-config.test.sh` | 12 | 0 | 0 |
+| `test/external-host.test.sh` | 61 | 0 | 0 |
+| `test/host-package.test.sh` | 87 | 0 | 0 |
+| `test/idle-report.test.sh` | 103 | 0 | 0 |
+| `test/opencode-install.test.sh` | 20 | 0 | 0 |
+| `test/partial-streaming.test.sh` | 6 | 0 | 0 |
+| `test/patch-status.test.sh` | 12 | 0 | 0 |
+| `test/provision-diskcheck.test.sh` | 24 | 0 | 0 |
+| `test/provision-hostname.test.sh` | 28 | 0 | 0 |
+| `test/provision-marker.test.sh` | 32 | 0 | 0 |
+| `test/provision-steprunner.test.sh` | 17 | 0 | 0 |
+| `test/remote-e2e.test.sh` | 45 | 0 | 0 |
+| `test/restore-config.test.sh` | 25 | 0 | 0 |
+| `test/systemprompt-install.test.sh` | 17 | 0 | 0 |
+| `test/t3-https.test.sh` | 133 | 0 | 0 |
+| `test/vscode-download.test.sh` | 6 | 0 | 0 |
+| `extension/test/ui-smoke.js` | 311 | 0 | 0 |

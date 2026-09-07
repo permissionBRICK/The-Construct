@@ -159,12 +159,11 @@ request. Disabling a user immediately rejects their Bearer tokens and their VMs'
 VM tokens retain only the existing forwards/activity scope plus identity and guest-report intake.
 New primary creation issues a `primary` token; it never grants user identity or admin access.
 
-`host-admin` and `console` are advertised; other feature flags await their integration.
-The child driver and create/delete jobs are implemented (see the stage 2 section below),
-with executable API coverage using in-memory admission. Production SQLite admission,
-media/capacity adapters and later update and network operations still await
-integration. The fake admission store commits or rolls back participating stores under
-one lock, including readers; its scope accepts only synchronously completing store calls.
+Discovery advertises `host-admin`, `children`, `media`, `console`, `updates` and `network`
+in production and fake mode. SQLite admission, media/capacity adapters, child lifecycle,
+console, updates and child connectivity are integrated. The fake admission store commits
+or rolls back participating stores under one lock, including readers; its scope accepts
+only synchronously completing store calls.
 The persisted child runner owns operation and maintenance handles through completion.
 These additions have Linux coverage; the current host probe attempt is blocked as
 recorded below.
@@ -1854,10 +1853,10 @@ only for a verified destination (a future-authority seam tested with synthetic i
 
 `INetworkPolicyReconciler` has `OnVmCreatedAsync`, `OnSharingChangedAsync`,
 `OnAddressChangedAsync`, `OnVmDeletedAsync`, periodic `ReconcileAsync` and rule listing.
-Create/delete jobs already invoke their hooks. The separately delivered sharing
-mutation must call its hook after committing: it revokes shared exposure and updates
-intended rules. Periodic reconciliation also repairs missed sharing events, missing
-VMs and disabled consumers. `NoIsolationNetworkPolicy` persists `parent-child` and
+Create/delete jobs invoke their hooks. The sharing endpoint calls its hook after
+committing: it revokes shared exposure and updates intended rules. Periodic
+reconciliation also repairs missed sharing events, missing VMs and disabled consumers.
+`NoIsolationNetworkPolicy` persists `parent-child` and
 `shared-consumer` peers with `state: intended`, returns `IsolationLevel = "none"`,
 and audits changes. It does **not** enforce packet isolation.
 
