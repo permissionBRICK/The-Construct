@@ -53,6 +53,7 @@ public sealed class UnsupportedFeaturePlatform : IMediaStore, IMediaTransfer, IH
     Task<int> IAccessExposure.RevokeForRequesterAsync(string targetVm, string requesterPrincipal, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
     Task<int> IAccessExposure.RevokeNonOwnerAsync(string targetVm, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
     Task<IReadOnlyList<PortForward>> IAccessExposure.ListViaAsync(string viaVm, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<IReadOnlyList<OperationKeyRecord>> IOperationKeyStore.ListInFlightAsync(string vmName, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
     Task<OperationKeyRecord?> IOperationKeyStore.GetAsync(string owner, string kind, string key, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
     Task<(OperationKeyOutcome Outcome, OperationKeyRecord? Existing)> IOperationKeyStore.TryInsertAsync(OperationKeyRecord record, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
     Task<bool> IOperationKeyStore.CompleteAsync(string owner, string kind, string key, string responseJson, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");

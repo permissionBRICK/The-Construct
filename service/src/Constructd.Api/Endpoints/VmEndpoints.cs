@@ -32,7 +32,7 @@ public static class VmEndpoints
             .RequireAuthorization(Policies.UserOrPrimaryToken).WithName("GetVm");
 
         api.MapDelete("/vms/{name}", DeleteAsync)
-            .RequireAuthorization(Policies.User).Audited("vm.delete").WithName("DeleteVm");
+            .RequireAuthorization(Policies.UserOrPrimaryToken).Audited("vm.delete").WithName("DeleteVm");
 
         api.MapPost("/vms/{name}/power", PowerAsync)
             .RequireAuthorization(Policies.User).Audited("vm.power").WithName("PowerVm");
@@ -203,50 +203,23 @@ public static class VmEndpoints
         IServiceScopeFactory scopes,
         CancellationToken cancellationToken)
     {
-        var lookup = await ApiHelpers.ResolveVmAsync(http, repository, authorization, name,
-            Policies.VmOwnerOrAdmin, cancellationToken).ConfigureAwait(false);
-
-        if (!lookup.Ok)
+        var initial = await repository.GetAsync(name, cancellationToken);
+        if (initial is null) return Problems.NotFound("Unknown VM.");
+        var policy = initial.Kind == VmKind.Child ? Policies.ChildOwnerOrAdmin : Policies.VmOwnerOrAdmin;
+        if (!(await authorization.AuthorizeAsync(http.User, initial, policy)).Succeeded) return LifecycleEndpoints.Problem("not-owner", 403);
+        await using var handle = await gate.TryAcquireAsync(name, http.TraceIdentifier, cancellationToken);
+        if (handle is null)
         {
-            return lookup.Failure!;
+            var latest = await repository.GetAsync(name, cancellationToken);
+            if (latest is { Deleting: true } && await LifecycleEndpoints.LiveAsync(latest, http.RequestServices, cancellationToken))
+                return Results.Ok(new { jobId = latest.CurrentJobId, replayed = true });
+            gate.IsHeld(name, out var currentOperation); return LifecycleEndpoints.Busy(currentOperation);
         }
-
-        await using var handle = await gate.AcquireAsync(name, http.TraceIdentifier, cancellationToken);
-        var actor = http.User.NameOrEmpty();
         var vm = await repository.GetAsync(name, cancellationToken);
         if (vm is null) return Problems.NotFound("Unknown VM.");
-        var vmName = vm.Name;
-        if (vm.Kind == VmKind.Child) return await ChildVmEndpoints.DeleteAsync(vm, http, cancellationToken);
-        if ((await repository.ListAsync(null, cancellationToken)).Any(v => Ownership.SameName(v.Parent, vm.Name)))
-            return CodedProblems.Create(409, "unsupported-capability", "Child and cascade deletion are not installed.");
-
-        // Fence the VM the moment the removal is accepted, and revoke its scoped token in the same
-        // write: nothing may be attached to it behind the job that is tearing it down, and the guest
-        // stops being able to authenticate at all.
-        await repository.UpdateAsync(vm with { Deleting = true, VmTokenHash = null }, cancellationToken)
-            .ConfigureAwait(false);
-
-        Job job;
-        try
-        {
-            job = await jobs.SubmitAsync(
-                JobKinds.RemoveVm,
-                vmName,
-                actor,
-                (progress, jobToken) => VmJobs.RemoveAsync(scopes, vmName, actor, progress, jobToken),
-                cancellationToken).ConfigureAwait(false);
-        }
-        catch
-        {
-            // The fence was an advance on a job that does not exist: nothing will ever remove this VM,
-            // so put it back the way it was — including its scoped token — instead of leaving a VM that
-            // is refused every mutation and whose guest can no longer authenticate.
-            await metadata.RestoreUnqueuedDeletionAsync(vm, CancellationToken.None).ConfigureAwait(false);
-            throw;
-        }
-
-        http.SetAuditDetail($"job={job.Id}");
-        return TypedResults.Accepted($"/api/v1/jobs/{job.Id}", new JobAcceptedResponse(job.Id));
+        if (!(await authorization.AuthorizeAsync(http.User, vm, policy)).Succeeded) return LifecycleEndpoints.Problem("not-owner", 403);
+        return vm.Kind == VmKind.Child ? await ChildVmEndpoints.DeleteAsync(vm, http, cancellationToken) :
+            await CascadeEndpoints.DeleteAsync(vm, http, cancellationToken);
     }
 
     private static async Task<IResult> PowerAsync(
@@ -267,7 +240,7 @@ public static class VmEndpoints
         }
 
         var vm = lookup.Vm!;
-        if (vm.Kind == VmKind.Child) return CodedProblems.Create(409, "not-a-primary", "Use the child lifecycle route.");
+        if (vm.Kind == VmKind.Child) return CodedProblems.Create(400, "child-lifecycle-route", "Use the child lifecycle route.");
 
         if (ApiHelpers.FenceDeleting(vm) is { } fenced)
         {

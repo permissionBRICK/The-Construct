@@ -27,6 +27,7 @@ public sealed class InMemoryConsoleSessionStore : IConsoleSessionStore
     { lock (_gate) { var ids = _sessions.Values.Where(predicate).Select(s => s.Id).ToArray(); foreach (var id in ids) Remove(id); return ids.Length; } }
     public int RemoveExpired(DateTimeOffset now) => RemoveWhere(s => s.ExpiresAt <= now);
     public int RemoveForVm(string vmName) => RemoveWhere(s => Ownership.SameName(s.VmName, vmName));
+    public int RemoveForVmExcept(string vmName, IReadOnlyList<string> principals) => RemoveWhere(s => Ownership.SameName(s.VmName, vmName) && !principals.Contains(s.Principal, Ownership.NameComparer));
     public int RemoveForPrincipal(string principal) => RemoveWhere(s => Ownership.SameName(s.Principal, principal));
     public bool TryTakeRate(string id, string bucket, int perSecond, DateTimeOffset now)
     {

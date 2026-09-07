@@ -181,9 +181,13 @@ public class RollbackTests
     [Fact]
     public async Task A_deletion_whose_job_cannot_be_queued_unfences_the_vm()
     {
-        var store = new SwitchableJobStore();
+        var store = new SwitchableAdmissionStore();
         using var app = new TestApp(configureServices: services =>
-            services.AddSingleton<IJobStore>(store));
+            services.AddSingleton<IAdmissionStore>(provider =>
+            {
+                store.Inner = ActivatorUtilities.CreateInstance<Constructd.Fakes.InMemoryAdmissionStore>(provider);
+                return store;
+            }));
 
         using var bob = await app.CreateUserClientAsync("bob");
         var created = await bob.CreateVmAsync("work-vm");
@@ -238,5 +242,14 @@ public class RollbackTests
         // Only the exception type is persisted, never a dependency's message.
         Assert.Equal("InvalidOperationException", job.Error);
         Assert.NotNull(await app.Vms.GetAsync("work-vm", CancellationToken.None));
+    }
+    private sealed class SwitchableAdmissionStore : IAdmissionStore
+    {
+        public bool Broken { get; set; }
+        public IAdmissionStore Inner { get; set; } = null!;
+        public Task<AdmissionResult> AdmitAsync(AdmissionPlan plan, CancellationToken ct) =>
+            Broken ? throw new InvalidOperationException("Admission unavailable") : Inner.AdmitAsync(plan, ct);
+        public Task<AdmissionResult> MutateAsync(OperationKeyRecord? key, Func<IAdmissionScope, Task<bool>> mutation, CancellationToken ct) => Inner.MutateAsync(key, mutation, ct);
+        public Task MarkStartFailedAsync(string id, string error, CancellationToken ct) => Inner.MarkStartFailedAsync(id, error, ct);
     }
 }

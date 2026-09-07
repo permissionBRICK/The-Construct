@@ -31,6 +31,7 @@ public interface IConsoleSessionStore
     bool Remove(string id);
     int RemoveExpired(DateTimeOffset now);
     int RemoveForVm(string vmName);
+    int RemoveForVmExcept(string vmName, IReadOnlyList<string> principals);
     int RemoveForPrincipal(string principal);
     bool TryTakeRate(string id, string bucket, int perSecond, DateTimeOffset now);
 }

@@ -33,6 +33,14 @@ public static class HostAdminComposition
         services.AddMediaPlatform(options);
         services.AddCapacityPlatform(options);
         services.AddChildVmPlatform(options);
+        services.AddSingleton<Constructd.Api.Jobs.LifecycleStart>();
+        services.AddSingleton<Constructd.Api.Jobs.ChildLifecycleJobs>();
+        services.AddSingleton<Constructd.Api.Jobs.LifecycleJobAdmission>();
+        services.AddSingleton<Constructd.Api.Jobs.CascadeJobs>();
+        services.AddSingleton<IChildLeaseReconciler, Constructd.Api.Hosting.ChildLeaseReconciler>();
+        if (options.EffectivePersistence == PersistenceMode.Memory) services.AddHostedService<Constructd.Api.Hosting.MemoryLeaseReconciliationService>();
+        services.AddSingleton<Constructd.Api.Hosting.LeaseSchedulerService>();
+        services.AddHostedService(sp => sp.GetRequiredService<Constructd.Api.Hosting.LeaseSchedulerService>());
         services.AddConsolePlatform(options);
         services.AddUpdatePlatform(options);
         services.AddNetworkPlatform(options);

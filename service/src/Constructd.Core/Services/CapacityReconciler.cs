@@ -4,7 +4,7 @@ namespace Constructd.Core.Services;
 
 /// <summary>No ledger gate while acquiring a VM gate or calling the hypervisor. A busy VM is skipped.</summary>
 public sealed class CapacityReconciler(IHypervisorInventory inventory, IVmRepository vms, IHypervisorDriver driver,
-    IVmOperationGate gates, ICapacityReconciliationStore store)
+    IVmOperationGate gates, ICapacityReconciliationStore store, IChildLeaseReconciler? leases = null)
 {
     private readonly SemaphoreSlim _pass = new(1, 1);
     public async Task<IReadOnlyList<OrphanOutcome>> ReconcileAsync(CancellationToken ct)
@@ -26,6 +26,7 @@ public sealed class CapacityReconciler(IHypervisorInventory inventory, IVmReposi
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch { state = VmState.Unknown; }
                 outcomes.AddRange(await store.ApplyVmAsync(vm, state, snapshot, captured, ct));
+                if (leases is not null) await leases.ReconcileAsync(vm, state, ct);
             }
             outcomes.AddRange(await store.ApplyHostAsync(snapshot, captured, ct));
             return outcomes;

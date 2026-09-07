@@ -117,6 +117,7 @@ app.MapGroup("/api/v1")
     .MapMediaEndpoints()
     .MapConsoleEndpoints()
     .MapChildVmEndpoints()
+    .MapLifecycleEndpoints()
     .MapUpdateEndpoints();
 
 await app.Services.GetRequiredService<UpdateRecoveryService>().ReconcileAsync(CancellationToken.None);

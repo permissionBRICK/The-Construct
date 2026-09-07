@@ -66,7 +66,7 @@ public sealed class ChildDeleteJob(IVmRepository vms, IVmDelegationRepository me
         if (deleteDedicated)
         {
             // DedicatedTo remains discoverable after references are removed (including retries).
-            foreach (var item in (await media.ListAsync(vm.Owner, ct)).Where(x => x.DedicatedTo == vm.Name && x.Role == MediaRole.Auxiliary))
+            foreach (var item in (await media.ListAsync(vm.Owner, ct)).Where(x => Ownership.SameName(x.DedicatedTo, vm.Name)))
             {
                 await using var handle = await mediaGate.AcquireAsync(item.Id, "delete:" + vm.Name, ct);
                 var current = await media.GetAsync(item.Id, ct);

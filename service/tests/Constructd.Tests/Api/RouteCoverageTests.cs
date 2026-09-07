@@ -80,6 +80,11 @@ public class RouteCoverageTests
         "GET /api/v1/vms/{name}/idle-policy",
         "PUT /api/v1/vms/{name}/idle-policy",
         "POST /api/v1/vms/{name}/activity",
+        "GET /api/v1/jobs",
+        "POST /api/v1/jobs/{id}/cancel",
+        "POST /api/v1/vms/{name}/lifecycle",
+        "POST /api/v1/vms/{name}/lease",
+        "PUT /api/v1/vms/{name}/sharing",
         "GET /api/v1/jobs/{id}",
         "GET /api/v1/jobs/{id}/events",
     ];

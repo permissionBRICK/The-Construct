@@ -55,6 +55,22 @@ public sealed partial class InMemoryVmRepository
 
         }
     }
+    internal Task<bool> AssignJobAsync(string name, string jobId)
+    {
+        lock (InMemoryTransaction.Gate)
+        {
+            if (!_vms.TryGetValue(name, out var vm) || vm.Deleting || HasLiveJob(vm)) return Task.FromResult(false);
+            _vms[name] = vm with { CurrentJobId = jobId }; return Task.FromResult(true);
+        }
+    }
+    internal Task<bool> UpdatePowerStateAsync(string name, VmState state, long expected)
+    {
+        lock (InMemoryTransaction.Gate)
+        {
+            if (!_vms.TryGetValue(name, out var vm) || vm.PowerGeneration != expected) return Task.FromResult(false);
+            _vms[name] = vm with { PowerGeneration = expected + 1, State = state }; return Task.FromResult(true);
+        }
+    }
     public Task<bool> TryFenceAsync(string name, string jobId, bool closeChildCreation, CancellationToken ct)
     {
         lock (InMemoryTransaction.Gate)
@@ -83,8 +99,7 @@ public sealed partial class InMemoryVmRepository
         lock (InMemoryTransaction.Gate)
         {
             return Task.FromResult<IReadOnlyList<Vm>>(
-        _vms.Values.Where(v => v.Kind == VmKind.Child && !v.Deleting && v.Lease is { State: LeaseState.Active or LeaseState.Overdue, ExpiresAt: not null } l &&
-            l.ExpiresAt <= now && (l.LastExpiryAttemptAt is null || l.LastExpiryAttemptAt <= now - retryAfter)).ToArray());
+        _vms.Values.Where(v => v.Kind == VmKind.Child && !v.Deleting && LeaseRules.RetryDue(v.Lease, now, retryAfter)).ToArray());
         }
     }
     public Task<VmOverride?> GetOverrideAsync(string vmName, CancellationToken ct)

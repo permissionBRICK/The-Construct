@@ -2414,7 +2414,8 @@ namespace Constructd.Core.Abstractions
         Job? JobToInsert,
         string? VmToFence,
         string? FenceJobId,
-        bool CloseChildCreation);
+        bool CloseChildCreation,
+        string? VmToAssignJob = null);
 
     public enum AdmissionOutcome { Accepted, Replay, KeyConflict, VersionConflict, NameTaken, QuotaExceeded, ParentClosed, ParentMissing, MediaNotReady, CapacityRefused, CascadeMismatch }
 
@@ -2456,6 +2457,7 @@ namespace Constructd.Core.Abstractions
         Task<bool> SetAllowanceAsync(string userName, UserAllowance allowance);
         /// <summary>Compare-and-bump of the VM's power generation (§5.3b); false when it moved.</summary>
         Task<bool> BumpPowerGenerationAsync(string vmName, long expected);
+        Task<bool> UpdatePowerStateAsync(string vmName, VmState state, long expectedGeneration);
         /// <summary>The VM row as it is INSIDE this transaction (fresh, gate-protected read for §4.4 staleness checks).</summary>
         Task<Vm?> ReadVmAsync(string vmName);
         /// <summary>Re-admission of a start whose reservations were swept (§7.3): same rules as AdmitAsync, inside this transaction.</summary>
@@ -3931,3 +3933,44 @@ dotnet/node/pwsh/browser/service processes remained. `git diff --check` passed.
 - The SQL write helpers are internal to Constructd.Sqlite. The coordinator uses the
   existing ledger transaction and shared VM, job, media, key and audit SQL helpers;
   public Core seam signatures remain unchanged in this increment.
+
+### S3 delegation implementation — atomic state and job binding
+
+`AdmissionPlan.VmToAssignJob` is an optional additive field for shutdown/restart admission:
+current job assignment and queued job insertion commit together, refusing a live job or
+deleting VM. `IAdmissionScope.UpdatePowerStateAsync` adds a compare-and-set state write
+and generation increment in the same transaction, implementing §5.3b without a separate
+unfenced metadata update. Existing callers retain their defaults. The operation-key
+store adds `ListInFlightAsync(vmName)` for reconciliation of persisted start intents;
+console session storage adds filtered `RemoveForVmExcept` for §2.4 revocation.
+
+Restart start-intent payloads additionally retain their required reservation lines and
+operation identifier. This allows recovery after the runtime rows were swept without
+changing the existing lease. No restart path activates or renews a lease. Reconciliation
+continues accounting for a running VM with a start intent but preserves its generation
+until that intent completes; it does not classify the accepted start as external.
+
+S3 review clarifications:
+
+- Lease expiry now uses `ListLeasesDueAsync`; `IChildLeaseReconciler` is the additive
+  per-VM lease callback inside capacity reconciliation, using its already observed state
+  under its existing VM gate. It completes interrupted start intents before deciding
+  whether an external start is overdue. Memory mode, which has no capacity reconciler,
+  runs that callback at the capacity reconciliation interval. Expiry ticks perform no
+  inventory probes. The operation-key in-flight query is required, never an empty default.
+- A new start may supersede an abandoned start intent under the VM gate when the driver
+  confirms Off/Saved/Paused. The previous key records `superseded` and releases only the
+  reservations whose observed state permits release. An already Running intent completes
+  from its original clock; the new request receives `already-running`. Unknown remains
+  a refusal. Restart recovery past the original deadline reports `lease-due`.
+- Childless primary deletion reuses `VmJobs.RemoveAsync`, including unchanged text
+  progress, result shape and success/failure audit actions, with no phase events. Its
+  optional pre-registry-removal callback settles new delegation/capacity artifacts. The
+  additive closed-parent fence and confirmed-Absent check remain intentional deviations
+  from the old deletion path: they prevent new dependent creation and releasing capacity
+  without removal evidence. A failed check retains the registry for retry. Filling an
+  initially null primary incarnation does not itself reject deletion.
+- Dedicated child media cleanup includes install media as well as auxiliary media,
+  matched case-insensitively, implementing §2.4's all-dedicated-media removal rule.
+- Parent relationship authorization precedes policy/state diagnostics on child creation,
+  so another owner's allowance and parent fence are not disclosed to strangers.

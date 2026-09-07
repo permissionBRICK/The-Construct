@@ -7,6 +7,14 @@ public sealed partial class InMemoryOperationKeyStore(InMemoryJobStore? jobs = n
     private readonly Dictionary<(string Owner, string Kind, string Key), OperationKeyRecord> _keys = new();
     private readonly Dictionary<(string Owner, string Kind, string Key), DateTimeOffset> _completed = new();
     private static (string, string, string) Key(string owner, string kind, string key) => (owner.ToUpperInvariant(), kind, key);
+    public Task<IReadOnlyList<OperationKeyRecord>> ListInFlightAsync(string vmName, CancellationToken ct)
+    {
+        lock (InMemoryTransaction.Gate)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IReadOnlyList<OperationKeyRecord>>(_keys.Values.Where(k => k.State == OperationKeyState.InFlight && StringComparer.OrdinalIgnoreCase.Equals(k.Target, vmName)).ToArray());
+        }
+    }
     public Task<OperationKeyRecord?> GetAsync(string owner, string kind, string key, CancellationToken ct)
     {
         lock (InMemoryTransaction.Gate)

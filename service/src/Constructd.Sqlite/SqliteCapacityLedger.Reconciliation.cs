@@ -18,6 +18,14 @@ public sealed partial class SqliteCapacityLedger : ICapacityReconciliationStore
         if (current is null || current.PowerGeneration != expected.PowerGeneration || current.CurrentJobId != expected.CurrentJobId || current.Incarnation != expected.Incarnation)
             return [];
         if (Operations?.Alive().Any(op => Ownership.SameName(op.VmName, current.Name)) == true) return [];
+        var preserveStartGeneration = false;
+        using (var intent = tx.Connection.CreateCommand())
+        {
+            intent.Transaction = tx.Sql;
+            intent.CommandText = "SELECT COUNT(*) FROM job_operation_keys WHERE target=@name COLLATE NOCASE AND state='inFlight' AND power_generation=@generation AND kind IN ('child-start','lifecycle-start','restart-start')";
+            intent.With("@name", current.Name).With("@generation", current.PowerGeneration);
+            preserveStartGeneration = freshState == VmState.Running && Convert.ToInt64(intent.ExecuteScalar()) > 0;
+        }
         var actual = inventory.Vms.FirstOrDefault(v => CapacityMath.Matches(current, v));
         var mismatch = inventory.Vms.Any(v => Ownership.SameName(v.Name, current.Name) && !CapacityMath.Matches(current, v));
         // A renamed incarnation remains a liability. Incomplete enumeration is never absence evidence.
@@ -78,9 +86,9 @@ public sealed partial class SqliteCapacityLedger : ICapacityReconciliationStore
                 WHERE name=@name AND power_generation=@generation
                 """;
             cmd.With("@name", current.Name).With("@generation", current.PowerGeneration).With("@problem", storageProblem)
-                .With("@known", freshState != VmState.Unknown).With("@state", WireJson.Enum(freshState)); cmd.ExecuteNonQuery();
+                .With("@known", freshState != VmState.Unknown && !preserveStartGeneration).With("@state", WireJson.Enum(freshState)); cmd.ExecuteNonQuery();
         }
-        if (freshState != VmState.Unknown && freshState != current.State) tx.Audit("capacity.external-state", current.Owner, current.Name, WireJson.Enum(freshState));
+        if (!preserveStartGeneration && freshState != VmState.Unknown && freshState != current.State) tx.Audit("capacity.external-state", current.Owner, current.Name, WireJson.Enum(freshState));
         tx.Commit();
         // Never publish the pre-gate snapshot after observing a power transition.
         return outcomes;

@@ -1528,10 +1528,9 @@ header (which overrides the body key) and use the shared atomic admission seam.
 
 Integration boundary: this media branch supplies `SqliteMediaStore.InsertInTransaction`
 overloads for media, uploads and references, and consumes `IAdmissionStore`,
-`ICapacityLedger` and `IPersistedJobRunner`. The stage-1 production admission and
-persisted-job implementations are still explicit placeholders; the integrator,
-capacity and child-jobs branches must supply them before production acquisition
-or admission works. Linux tests exercise the real media routes with the in-memory
+`ICapacityLedger` and `IPersistedJobRunner`. Production now uses the integrated
+SQLite admission transaction and persisted job runner. Linux tests exercise the
+real media routes with both SQLite and in-memory admission, and with the in-memory
 admission/capacity stores, a recording persisted runner, simulated DNS/connections,
 and both SQLite and in-memory media stores. No new Hyper-V or Windows execution
 is claimed here.
@@ -1568,8 +1567,8 @@ initiators and honors runner cancellation without editing those shared routes.
 `POST /api/v1/vms/{parent}/children` accepts explicit `cpus`, `ramMb`, `diskGb`,
 `lifetime` and ready media ids. Optional `windows`/`linux` presets supply firmware
 hints only; `start:false` leaves hardware Off with an inactive lease. Owner/admin
-access uses the foundation's `ParentDelegate` policy hook; primary-token create
-access remains deferred to the delegation stage. Existing child list/read and
+access uses the foundation's `ParentDelegate` policy hook; rotated primary tokens
+can create their own children under the owner's current allowance. Existing child list/read and
 capability routes project the new records. `DELETE /vms/{child}` runs `child-delete`.
 Primary creation and ISO patching are unchanged.
 
@@ -1598,13 +1597,11 @@ storage before admission when `VmStorageRoot` is empty. It writes an exclusive
 ownership sidecar at the canonical configured/default VHD location for partial-create
 and partial-delete retries, including when the descriptor overrides the disk path.
 
-Integration boundary: this branch does not implement the separately owned SQLite
-admission transaction, media registry/transfer, capacity inventory/reconciliation,
-or guest-address adapters. The in-memory admission path exercises jobs against
-those seams. Production admission still refuses until the integrator wires the
-owning pairs; `children` is therefore not yet advertised in discovery. Lease
-scheduling, cascade deletion and delegated creation remain stage 3 work. Linux
-recording-runner tests establish command construction, not Hyper-V execution.
+The integrated service supplies SQLite admission, media registry/transfer and
+capacity inventory/reconciliation. Lease scheduling, cascade deletion and delegated
+creation are described below. Guest-address adapters remain separately owned;
+network capability reports remain authoritative. Linux recording-runner tests
+establish command construction, not Hyper-V execution.
 
 Probe attempts on 2026-09-07: the relay returned Windows PowerShell
 5.1.26100.9168. Initial attempts failed to start because of host thread/paging-file
@@ -1758,3 +1755,50 @@ start-intent replay includes those derived holds and keeps the original activati
 Linux tests exercise both persistence modes, including SQLite child creation, partial
 runtime recovery, cascade acceptance/refusal and synchronous mutation rollback. No
 Hyper-V execution is implied by these tests.
+
+### Child delegation, leases and lifecycle
+
+A rotated **primary** VM token can create and manage children of its own primary.
+Legacy VM tokens retain their existing scope; child VMs receive no service credential.
+Identity discovery returns the owner's effective delegation allowance. Requests resolve
+that allowance again, including host caps and primary overrides.
+
+`POST /vms/{name}/lifecycle` accepts `start`, `restart`, `shutdown`, or `save`.
+Child `start` requires a new allowed `lifetime` (`5m` or longer, in minutes/hours/days;
+`never` requires policy permission). Off, Saved and Paused can start; Running answers
+`already-running`. Starts reserve capacity against the **owner**, even for shared callers.
+`POST /vms/{child}/lease` explicitly renews a running child's lease. Restart and save do
+not renew it. Shutdown/restart return jobs, whose graceful shutdown uses
+`lifecycle.gracefulShutdownTimeoutSeconds` (default 300). Unsupported guest integration
+and timeout are structured job failures; neither triggers force-off.
+
+The lease scheduler selects only persisted due deadlines and uses an injectable
+clock. Capacity reconciliation performs external-start detection and completes
+interrupted start intents using its existing per-VM observation; memory mode runs
+that work at the configured capacity reconciliation interval. Powered-off
+creation stays inactive until a start supplies its lifetime. Service/host downtime never
+extends a deadline. Expiry shuts down gracefully and never deletes. Failed expiry marks
+the lease overdue, retains capacity, and retries after `lifecycle.leaseRetrySeconds`.
+A start intent that reached Running before an interruption completes from its original
+clock; stale generations cannot start again. An external start without an active lease
+becomes overdue. Primaries are excluded from lease expiry and children from primary idle
+policy. `Constructd:Lease:SchedulerEnabled=false` disables background ticks for tests.
+
+`PUT /vms/{child}/sharing` accepts only `private` and `host`. Registered users and primary
+tokens may operate host-shared children, subject to the owner's policy. Delete, sharing,
+lease renewal and hardware/media administration remain owner/admin operations. Switching
+back to private removes shared console sessions and invokes exposure/network revocation;
+new requests reauthorize immediately. Already-open job event streams continue. Jobs
+are readable/cancellable by owner/admin or their initiating user/primary token; primary
+tokens cannot consume primary provisioning secrets.
+
+Deleting a primary with children first returns `cascade-confirmation-required`, the
+exact private/shared child list and a ten-minute confirmation token. Submit that token
+as `{ "cascade": { "token": "..." } }` on DELETE. A changed child scope requires a new
+confirmation. Acceptance atomically closes the primary to new children, clears its token,
+fences every child and persists the job. Failed cleanup retains ownership and remaining
+storage charges; repeat deletion with a fresh preview to retry. Disk capacity is released
+only after confirmed artifact removal. The primary is removed only after child cleanup.
+
+These service paths are tested on Linux using the fake hypervisor and real SQLite;
+this stage does not add Hyper-V field-test evidence.

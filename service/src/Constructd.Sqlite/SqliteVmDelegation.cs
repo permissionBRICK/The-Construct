@@ -102,8 +102,7 @@ public sealed partial class SqliteVmRepository
     }
     public async Task<IReadOnlyList<Vm>> ListLeasesDueAsync(DateTimeOffset now, TimeSpan retryAfter, CancellationToken ct) =>
         (await ListAsync(null, ct)).Where(v => v.Kind == VmKind.Child && !v.Deleting &&
-            v.Lease is { State: LeaseState.Active or LeaseState.Overdue, ExpiresAt: not null } l && l.ExpiresAt <= now &&
-            (l.LastExpiryAttemptAt is null || l.LastExpiryAttemptAt <= now - retryAfter)).ToArray();
+            LeaseRules.RetryDue(v.Lease, now, retryAfter)).ToArray();
 
     public async Task<bool> UpdateGuestReportAsync(string name, GuestReport report, CancellationToken ct)
     {

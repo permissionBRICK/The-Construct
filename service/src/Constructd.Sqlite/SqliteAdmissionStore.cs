@@ -59,6 +59,16 @@ public sealed class SqliteAdmissionStore(SqliteCapacityLedger ledger, IClock clo
             if (!await SqliteVmRepository.TryFenceInTransaction(tx.Connection, tx.Sql, name, plan.FenceJobId, plan.CloseChildCreation, ct))
                 return Result(AdmissionOutcome.VersionConflict);
         }
+        if (plan.VmToAssignJob is { } target)
+        {
+            if (plan.JobToInsert is null) return Result(AdmissionOutcome.VersionConflict);
+            using var command = Command(tx, """
+                UPDATE vms SET current_job_id=@job WHERE name=@name AND deleting=0 AND
+                (current_job_id IS NULL OR NOT EXISTS(SELECT 1 FROM jobs WHERE id=vms.current_job_id AND state IN ('Queued','Running')))
+                """);
+            command.With("@name", target).With("@job", plan.JobToInsert.Id);
+            if (command.ExecuteNonQuery() != 1) return Result(AdmissionOutcome.VersionConflict);
+        }
         if (plan.JobToInsert is { } job)
         {
             using var exists = Command(tx, "SELECT COUNT(*) FROM jobs WHERE id=@id"); exists.With("@id", job.Id);
@@ -115,6 +125,12 @@ public sealed class SqliteAdmissionStore(SqliteCapacityLedger ledger, IClock clo
         { Check(); return SqliteVmRepository.SetOverrideInTransaction(tx.Connection, tx.Sql, value, ct); }
         public async Task<bool> SetAllowanceAsync(string userName, UserAllowance allowance)
         { Check(); return Cas(await SqliteUserStore.SetAllowanceInTransaction(tx.Connection, tx.Sql, userName, allowance, ct)); }
+        public Task<bool> UpdatePowerStateAsync(string vmName, VmState state, long expectedGeneration)
+        {
+            Check(); using var cmd = Command(tx, "UPDATE vms SET state=@state,power_generation=power_generation+1 WHERE name=@name AND power_generation=@expected");
+            cmd.With("@name", vmName).With("@state", state.ToString()).With("@expected", expectedGeneration);
+            return Task.FromResult(Cas(cmd.ExecuteNonQuery() == 1));
+        }
         public Task<bool> BumpPowerGenerationAsync(string vmName, long expected)
         {
             Check(); using var cmd = Command(tx, "UPDATE vms SET power_generation=power_generation+1 WHERE name=@name AND power_generation=@expected");

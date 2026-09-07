@@ -64,6 +64,8 @@ public sealed class InMemoryAdmissionStore(InMemoryVmRepository vms, InMemoryUse
         }
         else if (plan.VmToFence is { } name && (plan.FenceJobId is null || !Done(vms.TryFenceAsync(name, plan.FenceJobId, plan.CloseChildCreation, ct))))
             return Result(AdmissionOutcome.VersionConflict);
+        if (plan.VmToAssignJob is { } target && (plan.JobToInsert is null || !Done(vms.AssignJobAsync(target, plan.JobToInsert.Id))))
+            return Result(AdmissionOutcome.VersionConflict);
         if (plan.JobToInsert is { } job)
         {
             if (job.State != JobState.Queued || Done(jobs.GetAsync(job.Id, ct)) is not null) return Result(AdmissionOutcome.VersionConflict);
@@ -106,6 +108,7 @@ public sealed class InMemoryAdmissionStore(InMemoryVmRepository vms, InMemoryUse
         public Task<bool> UpdateSharingAsync(string vmName, SharingScope scope) => Cas(() => vms.ChangeSharingAsync(vmName, scope));
         public Task SetOverrideAsync(VmOverride value) { Check(); return vms.SetOverrideAsync(value, ct); }
         public Task<bool> SetAllowanceAsync(string userName, UserAllowance allowance) => Cas(() => users.SetAllowanceAsync(userName, allowance, ct));
+        public Task<bool> UpdatePowerStateAsync(string vmName, VmState state, long expectedGeneration) => Cas(() => vms.UpdatePowerStateAsync(vmName, state, expectedGeneration));
         public Task<bool> BumpPowerGenerationAsync(string vmName, long expected) => Cas(() => vms.BumpPowerGenerationAsync(vmName, expected));
         public Task<Vm?> ReadVmAsync(string vmName) { Check(); return vms.GetAsync(vmName, ct); }
         public Task<CapacityDecision> ReserveAsync(ReservationRequest request) { Check(); var result = Done(capacity.TryReserveAsync(request, ct)); return Task.FromResult(result); }

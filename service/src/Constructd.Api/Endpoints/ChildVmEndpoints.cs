@@ -42,7 +42,9 @@ public static class ChildVmEndpoints
         if (key is not null && !OperationFingerprint.ValidKey(key)) return CodedProblems.Validation("operationKey", "Expected 8–128 operation-key characters.");
         var parentVm = await vms.GetAsync(parent, ct);
         if (parentVm is null) return Problems.NotFound("Unknown parent VM.");
-        if (!http.User.IsAdmin() && !Ownership.SameName(http.User.NameOrEmpty(), parentVm.Owner)) return Problems.Forbidden("Only the owner or an administrator may create children in this stage.");
+
+        var relationship = await DelegationAuthorization.RelationshipAsync(http.User, parentVm, vms, http.RequestServices.GetRequiredService<IUserStore>(), ct);
+        if (relationship is null or ForwardRelationship.Shared) return Problems.Forbidden("Parent delegation refused.");
         if (parentVm.Kind != VmKind.Primary) return CodedProblems.Create(409, "not-a-primary", "Children require a primary parent.");
         if (admission is UnsupportedFeaturePlatform || media is UnsupportedFeaturePlatform) return CodedProblems.Create(409, "unsupported-capability", "Child VM admission and media storage are unavailable.");
         var allowance = await policy.ResolveAsync(parentVm.Owner, parentVm.Name, ct);
@@ -66,6 +68,13 @@ public static class ChildVmEndpoints
         try
         {
             await using var parentGate = await vmGate.AcquireAsync(parentVm.Name, job.Id, ct);
+            parentVm = (await vms.GetAsync(parentVm.Name, ct))!;
+            if (parentVm is null || parentVm.Deleting || parentVm.ChildCreationClosed) return CodedProblems.Create(409, "parent-closed", "Parent is closed to child creation.");
+            if (!(await authorization.AuthorizeAsync(http.User, parentVm, Policies.ParentDelegate)).Succeeded) return Problems.Forbidden("Parent delegation refused.");
+            if (await LifecycleEndpoints.LiveAsync(parentVm, http.RequestServices, ct)) return LifecycleEndpoints.Busy(parentVm.CurrentJobId);
+            allowance = await policy.ResolveAsync(parentVm.Owner, parentVm.Name, ct);
+            if (seconds is null ? !allowance.AllowNeverLifetime : allowance.MaxChildLifetimeSeconds is long currentMax && seconds > currentMax)
+                return CodedProblems.Create(403, "lifetime-not-allowed", "Requested lifetime exceeds the effective allowance.");
             foreach (var id in new[] { request.Media!.InstallMediaId, request.Media.AuxiliaryMediaId }.OfType<string>().Distinct().Order(StringComparer.Ordinal))
                 mediaHandles.Add(await mediaGate.AcquireAsync(id, job.Id, ct));
             var references = new List<MediaReference>();
@@ -121,6 +130,7 @@ public static class ChildVmEndpoints
         var clock = services.GetRequiredService<IClock>();
         var admission = services.GetRequiredService<IAdmissionStore>();
         if (admission is UnsupportedFeaturePlatform || services.GetRequiredService<IMediaStore>() is UnsupportedFeaturePlatform) return CodedProblems.Create(409, "unsupported-capability", "Child VM admission and media storage are unavailable.");
+        if (await LifecycleEndpoints.LiveAsync(vm, services, ct)) return Results.Ok(new { jobId = vm.CurrentJobId, replayed = true });
         var runner = services.GetRequiredService<IPersistedJobRunner>();
         var worker = services.GetRequiredService<ChildDeleteJob>();
         var key = http.Request.Headers["X-Construct-Operation-Key"].FirstOrDefault();
@@ -139,6 +149,7 @@ public static class ChildVmEndpoints
             var accepted = await admission.AdmitAsync(new(operation, null, null, [], [], [], null, null, job, vm.Name, job.Id, false), ct);
             if (accepted.Outcome == AdmissionOutcome.Replay) return Replay(accepted.ExistingKey!, fingerprint, vm.Name);
             if (accepted.Outcome != AdmissionOutcome.Accepted) return AdmissionProblem(accepted);
+            services.GetRequiredService<IConsoleSessionStore>().RemoveForVm(vm.Name);
             try
             {
                 await runner.StartPersistedAsync(job, handle, (progress, token) => worker.RunAsync(job, vm, progress, token), CancellationToken.None);
@@ -160,14 +171,7 @@ public static class ChildVmEndpoints
         public void Dispose() { try { operation.Dispose(); } finally { maintenance.Dispose(); } }
     }
 
-    internal static long? ParseLifetime(string input, DateTimeOffset now)
-    {
-        if (input == "never") return null;
-        if (!Regex.IsMatch(input, @"\A[1-9][0-9]*[mhd]\z") || !long.TryParse(input[..^1], out var count)) throw new ChildValidationException("validation", "lifetime");
-        var factor = input[^1] switch { 'm' => 60L, 'h' => 3600L, _ => 86400L };
-        if (count > (long)(DateTimeOffset.MaxValue - now).TotalSeconds / factor || count * factor < 300) throw new ChildValidationException("validation", "lifetime");
-        return count * factor;
-    }
+    internal static long? ParseLifetime(string input, DateTimeOffset now) => LifetimeParser.Parse(input, now);
     private static IResult Replay(OperationKeyRecord existing, string fingerprint, string target) => existing.Fingerprint == fingerprint && Ownership.SameName(existing.Target, target)
         ? Results.Ok(new { jobId = existing.JobId, replayed = true }) : CodedProblems.Create(409, "operation-key-conflict", "Operation key was already used for another request.");
     private static IResult Problem(ChildValidationException ex) => CodedProblems.Create(ex.Code == "validation" ? 400 : 409, ex.Code, ex.Message, ex.Field);

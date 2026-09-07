@@ -179,7 +179,8 @@ public static class VmJobs
         string name,
         string actor,
         IProgress<string> progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeRegistryRemoval = null)
     {
         await using var scope = scopes.CreateAsyncScope();
         var services = scope.ServiceProvider;
@@ -197,6 +198,7 @@ public static class VmJobs
             await forwards.ReleaseSshForwardAsync(name, cancellationToken).ConfigureAwait(false);
             progress.Report($"released {removed} forward(s) and the ssh forward");
 
+            if (beforeRegistryRemoval is not null) await beforeRegistryRemoval(cancellationToken).ConfigureAwait(false);
             await vms.RemoveAsync(name, cancellationToken).ConfigureAwait(false);
             progress.Report($"vm {name} removed");
 
