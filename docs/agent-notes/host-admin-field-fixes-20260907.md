@@ -74,3 +74,17 @@ credential rather than expanding its authority. Existing heartbeat and own-VM
 forwarding continue; child management from within the guest needs a primary
 credential. Credential rotation is separate from VM rebuilding and was not
 performed during this repair. See remote-host.md section 9 for the upgrade path.
+
+## Explicit credential upgrade, 2026-09-08
+
+At Christoph's request, haus-vm's credential was upgraded from legacy to primary
+at approximately 16:21 UTC. main-pc authenticated as the owner through the shared
+`Request-ConstructVmTokenRotation` helper. Delivery was preflighted over SSH stdin;
+the returned credential stayed in process memory on Windows and was atomically
+installed at `/etc/construct/vm-token` with root ownership and mode 0600. No full
+reprovision or VM/service restart was involved.
+
+Guest verification: `construct vm identity --json` reports primary/primary,
+`allowChildCreation: true`, and `maxRetainedChildren: 1`. `construct vm list --json`
+succeeds with an empty child inventory. A fresh activity heartbeat completed
+successfully at 16:21:25 UTC. No child was created during verification.
