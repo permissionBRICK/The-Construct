@@ -46,3 +46,31 @@ cross-version update: the running process identifies the new commit but may
 show fallback package version/source/time until a later normal restart. The
 persisted successful update is authoritative. This remains tracked by the
 existing Jarvis metadata-refresh todo; no extra service restart was performed.
+
+## Recurrence on main-pc, 2026-09-08
+
+Installed `5b8830f99511d74f9b497d839bd41b4c0610c7c3` through the ordinary
+main-pc updater. Registry discovery and host admin authentication were still
+correct (Kerberos, HOME\permissionBRICK, active haus-vm). The initial
+`refreshState` never ran admin discovery, while the periodic `refreshAll` ran it
+only after VM, update, usage, idle-policy and child-inventory reads. The sidebar
+also had no administration entry.
+
+Both refresh paths now launch admin discovery immediately, independently of
+those reads, and send an instance-scoped message to the sidebar and full panel.
+The sidebar has a Host Administration button below Open Control Panel. Authority
+still comes from the live host classification. A delayed response after an
+instance switch is discarded.
+
+All 25 extension test suites passed, including execution of the actual startup
+function while the VM probe is held pending, switching instances mid-probe, and
+running the sidebar controller. A live probe of the installed startup function
+on main-pc returned admin offers for both surfaces using the real host identity
+and existing TLS pin. The updater reloaded VS Code.
+
+The VM's `primary · legacy` badge describes two independent fields: VM kind is
+primary; its credential predates child delegation. Migration retained that
+credential rather than expanding its authority. Existing heartbeat and own-VM
+forwarding continue; child management from within the guest needs a primary
+credential. Credential rotation is separate from VM rebuilding and was not
+performed during this repair. See remote-host.md section 9 for the upgrade path.
