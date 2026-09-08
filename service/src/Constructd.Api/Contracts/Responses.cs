@@ -134,7 +134,7 @@ public sealed record VmResponse(
     bool Shared = false, string? Incarnation = null, VmTokenKind? TokenKind = null, bool ChildCreationClosed = false,
     LeaseResponse? Lease = null, ChildHardware? Hardware = null, IReadOnlyList<object>? Media = null,
     GuestReport? Guest = null, HostObservation? Observed = null, VmReservationsResponse? Reservations = null,
-    CurrentOperationResponse? CurrentOperation = null, IReadOnlyList<string>? Children = null, IReadOnlyList<ChildAction>? AllowedActions = null);
+    CurrentOperationResponse? CurrentOperation = null, IReadOnlyList<string>? Children = null, IReadOnlyList<ChildAction>? AllowedActions = null, VmResourceUsageResponse? ResourceUsage = null);
 
 /// <param name="PublicHost">
 /// The name this VM's web forwards are advertised under (plan §4.12). Equal to
@@ -237,3 +237,8 @@ public sealed record AuditResponse(
     public static AuditResponse From(AuditEntry entry) =>
         new(entry.At, entry.Actor, entry.Action, entry.Target, entry.Outcome, entry.Detail);
 }
+
+/// <summary>Host-observed usage. Disk bytes are VHD/checkpoint files, not guest filesystem usage.</summary>
+public sealed record VmResourceUsageResponse(DateTimeOffset? ObservedAt, bool Stale, VmState? State,
+    double? CpuUsagePercent, long? MemoryAssignedBytes, long? MemoryDemandBytes,
+    long? DiskFileBytes, double? UptimeSeconds);

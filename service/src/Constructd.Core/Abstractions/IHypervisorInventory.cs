@@ -17,7 +17,8 @@ public sealed record HypervisorVmInfo(
     IReadOnlyList<HypervisorDiskInfo> Disks,
     long? SavedStateBytes,
     string ConfigVolume,
-    bool Complete);
+    bool Complete,
+    double? CpuUsagePercent = null, long? MemoryDemandBytes = null, double? UptimeSeconds = null);
 public sealed record VolumeInfo(string Root, long TotalBytes, long FreeBytes);
 public sealed record HostResourcesInfo(int LogicalCpus, long TotalRamBytes, long FreeRamBytes, IReadOnlyList<VolumeInfo> Volumes, DateTimeOffset ObservedAt);
 /// <summary>ONE epoch: VMs, host resources and volume free space read in the same pass; Complete=false ⇒ admission fails closed.</summary>

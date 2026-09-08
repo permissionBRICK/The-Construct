@@ -57,7 +57,12 @@ public sealed class DelegationPolicy(IUserStore users, IVmRepository vms, IVmDel
             actions.Add(ChildAction.ForwardClient);
             if (effective.AllowHostForwards) actions.Add(ChildAction.ForwardHost);
             if (!token) actions.AddRange([ChildAction.Start, ChildAction.Delete, ChildAction.RotateToken]);
-            if (!token && (await capabilities.GetAsync(ct)).Legacy.Suspend) actions.Add(ChildAction.Save);
+            if (!token)
+            {
+                var primaryCaps = await capabilities.GetAsync(ct);
+                if (primaryCaps.Legacy.Suspend) actions.Add(ChildAction.Save);
+                if (primaryCaps.GracefulShutdown != CapabilityLevel.Unsupported) actions.Add(ChildAction.Shutdown);
+            }
             if (admin) actions.Add(ChildAction.Overrides);
             return actions;
         }

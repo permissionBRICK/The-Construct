@@ -175,29 +175,35 @@
     if (!v || !table) return;
     clear(table);
     show($("vmsEmpty"), !v.rows.length);
-    text("vmsMeta", `${v.rows.length} VM${v.rows.length === 1 ? "" : "s"}${v.childrenFeature ? "" : " · child VMs not available on this host version"}`);
-    if (v.rows.length) table.appendChild(headRow(["name", "kind", "owner", "state", "resources", "lease", "operation", "guest", ""]));
+    text("vmsMeta", `${v.rows.length} VM${v.rows.length === 1 ? "" : "s"} · refreshes every 10 s${v.childrenFeature ? "" : " · child VMs not available on this host version"}`);
+    if (v.rows.length) table.appendChild(headRow(["VM", "state", "live usage", "allocated", "actions"]));
     v.rows.forEach((r) => {
       const row = el("div", "ha-row " + (r.kind === "child" ? "child" : "") + (r.overdue ? " overdue" : "") + (r.deleting ? " disabled" : ""));
-      const name = cell(r.name, "name");
+      const name = cell("", "name");
+      name.appendChild(el("div", "", r.name));
+      name.appendChild(el("div", "ha-vm-owner", r.owner || "—"));
       if (r.kind === "child" && r.parent) name.title = "child of " + r.parent;
       row.appendChild(name);
-      const kind = cell("", "");
-      kind.appendChild(el("span", "ha-badge " + (r.kind === "child" ? "child" : ""), r.kind + (r.tokenKind ? " · " + r.tokenKind : "")));
+      const kind = el("div", "ha-vm-kind");
+      kind.appendChild(el("span", "ha-badge " + (r.kind === "child" ? "child" : ""), r.kind + (r.tokenKind === "legacy" ? " · legacy credential" : "")));
       if (r.sharing === "host") kind.appendChild(el("span", "ha-badge shared", "shared host-wide"));
       if (r.deleting) kind.appendChild(el("span", "ha-badge off", "deleting"));
       if (r.childCreationClosed) kind.appendChild(el("span", "ha-badge off", "closed"));
-      row.appendChild(kind);
-      row.appendChild(cell(r.owner || "—"));
+      name.appendChild(kind);
       row.appendChild(cell(r.state, "ha-state-cell"));
-      row.appendChild(cell(r.resources, ""));
-      row.appendChild(cell(r.lease || (r.kind === "child" ? "—" : ""), "ha-lease"));
-      row.appendChild(cell(r.operation || "", "mono"));
-      // A child guest holds no credential (§2.1) so it can never report; the honest value is
-      // "unknown", not a categorical negative.
-      const guest = cell(r.kind === "child" ? "unknown — a child guest cannot report to the service" : r.guest, "wide");
-      guest.title = r.reservations;
-      row.appendChild(guest);
+      const usage = cell("", "ha-vm-usage");
+      for (const [label, percent] of [[r.usage.cpu, r.usage.cpuPercent], [r.usage.ram, r.usage.ramPercent]]) {
+        usage.appendChild(el("div", "", label));
+        if (percent !== null) {
+          const meter = el("div", "ha-bar");
+          const fill = el("span"); fill.style.width = Math.max(0, Math.min(100, percent)) + "%";
+          meter.appendChild(fill); usage.appendChild(meter);
+        }
+      }
+      usage.appendChild(el("div", "", r.usage.disk));
+      usage.appendChild(el("div", "ha-vm-sample" + (r.usage.stale ? " stale" : ""), r.usage.sample));
+      row.appendChild(usage);
+      row.appendChild(cell(r.resources, "ha-vm-allocation"));
       const actions = cell("", "actions");
       const busy = !!r.operation || r.deleting;
       if (r.allowedActions.indexOf("shutdown") >= 0 && (r.state === "running" || r.state === "paused")) {
@@ -215,6 +221,14 @@
         actions.appendChild(btn("Rotate token", "ghost", () => act("rotateVmToken", { name: r.name }), "Issue a new VM token (primary kind); the old one stops working"));
       }
       row.appendChild(actions);
+      const details = el("div", "ha-vm-details");
+      const facts = [];
+      if (r.lease) facts.push("Lease: " + r.lease);
+      if (r.operation) facts.push("Operation: " + r.operation);
+      if (r.kind !== "child") facts.push(r.guest);
+      details.textContent = facts.join(" · ");
+      details.title = r.reservations;
+      if (facts.length) row.appendChild(details);
       table.appendChild(row);
     });
   }
