@@ -88,7 +88,7 @@
         <div class="mhead"><h2 class="seclabel">Virtual machines · all users</h2><span class="meta" id="vmsMeta"></span></div>
         <div class="ha-table" id="vmsTable"></div>
         <p class="cost-note" id="vmsEmpty" hidden>No VMs are registered on this host.</p>
-        <p class="cost-note">Guest facts are reports from the provisioner; "unknown" means nothing was reported. Shut down is a graceful guest shutdown request, never a force-off. No guest update, provision or reinstall action exists here — those stay in each instance's own panel.</p>
+        <p class="cost-note">Usage is sampled from the host. RAM demand is the host’s estimate; disk usage is the size of virtual-disk files, including checkpoints. Shut down requests a graceful guest shutdown.</p>
       </section>
       <section class="module" id="vmOverridesCard" hidden>
         <div class="mhead"><h2 class="seclabel">Overrides · <span id="ovrName"></span></h2><button class="btn ghost" id="ovrClose">close</button></div>

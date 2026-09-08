@@ -57,3 +57,20 @@
 .ha-section .problem { color: var(--crit); font-size: 11px; margin: 3px 0 0; white-space: pre-wrap; }
 .ha-pre { font-family: var(--mono); font-size: 11px; color: var(--dim); background: rgba(0,0,0,0.35); border: 1px solid var(--line); border-radius: 4px; padding: 8px; white-space: pre-wrap; max-height: 240px; overflow: auto; }
 .ha-new-user { align-items: end; }
+
+/* VM headers and records share one column definition; details get their own line. */
+#tab-vms { overflow-x: auto; }
+#vmsTable { min-width: 880px; }
+#vmsTable .ha-row { display: grid; grid-template-columns: minmax(180px, 1fr) 80px minmax(250px, 1.6fr) minmax(130px, .8fr) minmax(170px, 1fr); align-items: start; gap: 12px 18px; padding: 14px 0; }
+#vmsTable .ha-cell { min-width: 0; overflow-wrap: anywhere; }
+#vmsTable .ha-row.child { padding-left: 0; }
+#vmsTable .ha-row.child .name { padding-left: 16px; }
+#vmsTable .actions { margin: 0; flex-wrap: wrap; justify-content: flex-end; }
+#vmsTable .head .ha-cell:last-child { text-align: right; }
+.ha-vm-owner, .ha-vm-kind { margin-top: 6px; color: var(--dim); font-size: 11px; font-weight: normal; }
+.ha-vm-kind { display: flex; flex-wrap: wrap; gap: 4px; }
+.ha-vm-usage { display: flex; flex-direction: column; gap: 5px; }
+.ha-vm-usage .ha-bar { height: 5px; margin-bottom: 3px; }
+.ha-vm-sample { color: var(--dim); font-size: 10px; }
+.ha-vm-sample.stale { color: var(--warn); }
+.ha-vm-details { grid-column: 1 / -1; color: var(--dim); font-size: 11px; overflow-wrap: anywhere; }
