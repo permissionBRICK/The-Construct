@@ -58,8 +58,18 @@
     else btn.removeAttribute("data-cmd");
   }
 
+  let shownInstance = "";
+  function renderHostAdminOffer(offer) {
+    const button = $("lHostAdmin");
+    if (!button) return;
+    button.hidden = !offer;
+    button.title = offer ? "Administer " + (offer.host || "this host") : "";
+  }
+
   function render(s) {
     if (!s) return;
+    if (s.instance) shownInstance = s.instance;
+    if (s.hostAdminOffer !== undefined) renderHostAdminOffer(s.hostAdminOffer);
     const online = s.online !== false;
     const dot = $("lDot"); if (dot) dot.classList.toggle("offline", !online);
     const st = $("lStatusText");
@@ -112,6 +122,12 @@
     $("lMeta").textContent = meta.join("  ·  ");
   }
 
-  window.addEventListener("message", (ev) => { const m = ev.data; if (m && m.type === "state") render(m.state); });
+  window.addEventListener("message", (ev) => {
+    const m = ev.data;
+    if (!m) return;
+    if (m.type === "state") { render(m.state); return; }
+    if (m.instance && shownInstance && m.instance !== shownInstance) return;
+    if (m.type === "hostAdminOffer") renderHostAdminOffer(m.offer);
+  });
   vscode.postMessage({ type: "ready" });
 })();

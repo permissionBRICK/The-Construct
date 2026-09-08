@@ -710,6 +710,7 @@ async function refreshState(webview) {
   const inst = activeInstance();
   const target = instances.captureTarget(instanceGate, inst);
   const gate = target.token;
+  void refreshHostAdminOffer(inst);
   const probed = await probeOnce(inst);
   if (!instanceGate.valid(gate)) return;
   backfillVmFacts(inst, probed);
@@ -745,6 +746,7 @@ async function refreshAll() {
   const inst = activeInstance();
   const refreshTarget = instances.captureTarget(instanceGate, inst);
   const gate = refreshTarget.token;
+  void refreshHostAdminOffer(inst);
   const probed = await probeOnce(inst);
   if (!instanceGate.valid(gate)) return;
   backfillVmFacts(inst, probed);
@@ -1370,31 +1372,37 @@ function hostAdminFeature() {
   return hostAdmin;
 }
 
-/**
- * The Child VMs card and the "Host administration" offer for the ACTIVE instance (null
- * for a local instance, for a host without the feature, and while unresolved). Cached per
- * instance and re-resolved on every refresh — identity is per host and re-evaluated on
- * every host switch (§10.3). Best-effort: a failure leaves the last values.
- */
+/** Resolve host administration independently of SSH, usage and child inventory.
+ * Initial paint and manual refresh must discover the entry too. Narrow messages
+ * avoid blanking the rest of either dashboard while its VM probe is still pending. */
+async function refreshHostAdminOffer(inst) {
+  const target = inst || activeInstance();
+  const token = instanceGate.token();
+  if (cachedHostAdminInstance !== target.name) {
+    cachedChildren = null; cachedHostAdminOffer = null; cachedHostAdminInstance = target.name;
+  }
+  try {
+    const offer = String(target.backend || "").trim().toLowerCase() === "hyperv-remote"
+      ? await hostAdminFeature().hostAdminOfferFor(target) : null;
+    if (!instanceGate.valid(token)) return;
+    cachedHostAdminOffer = offer;
+    for (const webview of liveWebviews) safePost(webview, { type: "hostAdminOffer", instance: target.name, offer });
+  } catch (e) { logLine(`hostadmin: offer for "${target.name}" — ${(e && e.message) || e}`); }
+}
+
+/** Child inventory stays on the normal status refresh; it cannot delay host discovery. */
 async function readHostAdminExtras(inst) {
   const target = inst || activeInstance();
   if (String(target.backend || "").trim().toLowerCase() !== "hyperv-remote") {
-    cachedChildren = null; cachedHostAdminOffer = null; cachedHostAdminInstance = target.name;
+    cachedChildren = null;
     return;
   }
-  if (cachedHostAdminInstance !== target.name) { cachedChildren = null; cachedHostAdminOffer = null; cachedHostAdminInstance = target.name; }
   const token = instanceGate.token();
-  const feature = hostAdminFeature();
   try {
-    const children = await feature.childrenStateFor(target);
+    const children = await hostAdminFeature().childrenStateFor(target);
     if (!instanceGate.valid(token)) return;
     cachedChildren = children;
   } catch (e) { logLine(`hostadmin: children of "${target.name}" — ${(e && e.message) || e}`); }
-  try {
-    const offer = await feature.hostAdminOfferFor(target);
-    if (!instanceGate.valid(token)) return;
-    cachedHostAdminOffer = offer;
-  } catch (e) { logLine(`hostadmin: offer for "${target.name}" — ${(e && e.message) || e}`); }
 }
 
 /** The panel's "apply" on the idle-policy card. Clamps to the admin cap first, so the
