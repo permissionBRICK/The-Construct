@@ -16,7 +16,7 @@ function Get-CimInstance {
     }
 }
 function Get-Volume { param($FilePath) @{ DriveLetter = 'C'; Path = 'C:\' } }
-function Get-VM { @([pscustomobject]@{ Name = 'unmanaged'; Id = [guid]'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'; State = 'Running'; Generation = 2; ProcessorCount = 4; MemoryAssigned = 4GB; ConfigurationLocation = 'C:\config' }) }
+function Get-VM { @([pscustomobject]@{ Name = 'unmanaged'; Id = [guid]'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'; State = 'Running'; CPUUsage = 17; MemoryDemand = 3GB; Uptime = [TimeSpan]::FromSeconds(42); Generation = 2; ProcessorCount = 4; MemoryAssigned = 4GB; ConfigurationLocation = 'C:\config' }) }
 function Get-VMMemory { param($VM) @{ Startup = 4GB; Maximum = 8GB; DynamicMemoryEnabled = $true } }
 function Get-VMSnapshot { param($VM) @([pscustomobject]@{ Name = 'snapshot' }) }
 function Get-VMHardDiskDrive { param($VM, $VMSnapshot) @([pscustomobject]@{ Path = 'C:\child.vhdx' }) }
@@ -32,6 +32,9 @@ Check ($r.host.totalRamBytes -eq 32GB) 'RAM KiB conversion'
 Check ($r.host.freeRamBytes -eq 24GB) 'Physical free RAM'
 Check ($r.host.volumes[0].freeBytes -eq 80GB) 'Physical volume free'
 Check ($r.vms.Count -eq 1) 'Enumerates unmanaged VM'
+Check ($r.vms[0].cpuUsagePercent -eq 17) 'Observed CPU percentage'
+Check ($r.vms[0].memoryDemandBytes -eq 3GB) 'Observed RAM demand'
+Check ($r.vms[0].uptimeSeconds -eq 42) 'Observed uptime'
 Check ($r.vms[0].disks.Count -eq 2) 'Deduplicates checkpoint and parent chains'
 Check ($r.vms[0].dynamicMemory -eq $true) 'Dynamic memory flag'
 Check ($r.vms[0].memoryMaximumBytes -eq 8GB) 'Dynamic maximum'

@@ -123,14 +123,14 @@ function createHostAdminFeature(deps = {}) {
     schedulePoll(entry);
   }
 
-  /** The 5 s `/health` poll while the host is updating (§10.3); cleared otherwise. */
+  /** Poll active VM usage and maintenance; pause when the panel is hidden. */
   function schedulePoll(entry) {
     if (entry.pollTimer) { timers.clearTimeout(entry.pollTimer); entry.pollTimer = null; }
     const ms = hostadmin.pollIntervalMs(entry.model.state);
-    if (!ms || entry.disposed) return;
+    if (!ms || entry.disposed || entry.panel.visible === false) return;
     entry.pollTimer = timers.setTimeout(() => {
       entry.pollTimer = null;
-      void refreshEntry(entry);
+      void serialize(entry, () => refreshEntry(entry));
     }, ms);
     if (entry.pollTimer && typeof entry.pollTimer.unref === "function") entry.pollTimer.unref();
   }
@@ -170,6 +170,10 @@ function createHostAdminFeature(deps = {}) {
     panel.webview.html = buildHtml(panel.webview, extensionUri);
     // The promise is returned for the tests (VS Code ignores it); nothing awaits it live.
     panel.webview.onDidReceiveMessage((m) => handleWebviewMessage(entry, m));
+    if (panel.onDidChangeViewState) panel.onDidChangeViewState(() => {
+      if (panel.visible) void serialize(entry, () => refreshEntry(entry));
+      else schedulePoll(entry);
+    });
     panel.onDidDispose(() => {
       entry.disposed = true;
       if (entry.pollTimer) timers.clearTimeout(entry.pollTimer);

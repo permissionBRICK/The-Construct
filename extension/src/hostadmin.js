@@ -255,9 +255,10 @@ function tabsFor(state) {
   });
 }
 
-/** How often the panel should re-probe by itself: the maintenance poll, else nothing. Pure. */
+/** Refresh VM usage while its tab is active; keep editable tabs stable. Pure. */
 function pollIntervalMs(state) {
-  return state && state.maintenance ? MAINTENANCE_POLL_MS : null;
+  if (state && state.maintenance) return MAINTENANCE_POLL_MS;
+  return state && state.mode === "admin" && state.activeTab === "vms" ? 10000 : null;
 }
 
 // ── View-models ──────────────────────────────────────────────────────────────
@@ -316,6 +317,28 @@ function operationText(op) {
   return kind + (op.phase ? ` (${str(op.phase)})` : "") + (op.initiator ? ` by ${str(op.initiator)}` : "");
 }
 
+/** Host readings, keeping unknown values distinct from zero and allocation. */
+function resourceUsageView(usage, now) {
+  const u = usage || {};
+  const at = Date.parse(u.observedAt);
+  const known = Number.isFinite(at);
+  const stale = !!u.stale || (known && now - at > 30000);
+  const rawCpu = num(u.cpuUsagePercent);
+  const cpu = rawCpu !== null && rawCpu >= 0 && rawCpu <= 100 ? rawCpu : null;
+  const demand = num(u.memoryDemandBytes);
+  const assigned = num(u.memoryAssignedBytes);
+  return {
+    cpuPercent: cpu,
+    ramPercent: demand !== null && assigned > 0 ? pct(demand, assigned) : null,
+    cpu: cpu !== null ? `${Math.round(cpu * 10) / 10}% CPU` : "CPU usage unavailable",
+    ram: demand !== null ? `${formatBytes(demand)} RAM demand / ${formatBytes(assigned)} assigned`
+      : assigned !== null ? `${formatBytes(assigned)} RAM assigned · demand unavailable` : "RAM usage unavailable",
+    disk: num(u.diskFileBytes) !== null ? `${formatBytes(u.diskFileBytes)} disk on host` : "Disk usage unavailable",
+    sample: known ? `${stale ? "Stale · last sample" : "Sampled"} ${new Date(at).toISOString().slice(11, 19)} UTC` : "Usage unavailable on this host",
+    stale,
+  };
+}
+
 /** One inventory row (`VmResponse` with the §8.3 additive fields). Pure. */
 function toVmRow(vm, now) {
   const v = vm && typeof vm === "object" ? vm : {};
@@ -332,7 +355,8 @@ function toVmRow(vm, now) {
     tokenKind: str(v.tokenKind) || null,
     deleting: v.deleting === true,
     childCreationClosed: v.childCreationClosed === true,
-    resources: resourcesText(v.hardware),
+    resources: resourcesText(v.hardware || { cpus: v.cpu, ramMb: num(v.ramGb) === null ? null : v.ramGb * 1024, diskGb: v.diskGb }),
+    usage: resourceUsageView(v.resourceUsage, now),
     lease: leaseText(v.lease, now),
     overdue: !!(v.lease && (v.lease.overdue === true || str(v.lease.state).toLowerCase() === "overdue")),
     operation: operationText(v.currentOperation),
@@ -1372,5 +1396,5 @@ module.exports = {
   childRows, childrenCardState, shutdownOutcome, awaitJob,
   cascadeKindOf, cascadeConfirmation, childDeleteConfirmation,
   firstVmOffers, discoverHosts, hostEntryFor,
-  createHostAdminModel,
+  resourceUsageView, createHostAdminModel,
 };

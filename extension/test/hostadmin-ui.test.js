@@ -76,7 +76,7 @@ function fakeVscode(script = {}) {
       createWebviewPanel: (viewType, title) => {
         const listeners = [];
         const panel = {
-          viewType, title, disposed: false, revealed: 0, posted: [],
+          viewType, title, disposed: false, visible: true, revealed: 0, posted: [],
           webview: {
             html: "", cspSource: "vscode-webview://x",
             asWebviewUri: (u) => u,
@@ -86,6 +86,8 @@ function fakeVscode(script = {}) {
           reveal: () => { panel.revealed++; },
           dispose: () => { panel.disposed = true; (panel._onDispose || []).forEach((f) => f()); },
           onDidDispose: (cb) => { (panel._onDispose = panel._onDispose || []).push(cb); return { dispose() {} }; },
+          onDidChangeViewState: (cb) => { panel._viewState = cb; return { dispose() {} }; },
+          setVisible: (visible) => { panel.visible = visible; panel._viewState?.(); },
           send: (m) => Promise.all(listeners.map((cb) => cb(m))),
         };
         rec.panels.push(panel);
@@ -189,6 +191,26 @@ const lastState = (entry) => [...entry.panel.posted].reverse().find((m) => m.typ
   }
 
   console.log("\n=== maintenance ===");
+  {
+    const t = makeFeature();
+    const entry = await openReady(t);
+    await entry.panel.send({ type: "hostadmin.tab", tab: "vms" });
+    eq("usage: VM tab starts ten-second polling", t.timers.calls.at(-1).ms, 10000);
+    const reads = () => t.client.calls.filter(c => c.method === "vms").length;
+    const before = reads();
+    t.timers.calls.at(-1).fn();
+    await new Promise(resolve => setImmediate(resolve));
+    ok("usage: timer reads fresh VM inventory", reads() > before);
+    entry.panel.setVisible(false);
+    eq("usage: hidden panel has no poll timer", entry.pollTimer, null);
+    const hiddenReads = reads();
+    entry.panel.setVisible(true);
+    await new Promise(resolve => setImmediate(resolve));
+    ok("usage: revealing panel immediately refreshes", reads() > hiddenReads);
+    await entry.panel.send({ type: "hostadmin.tab", tab: "users" });
+    eq("usage: leaving VM tab stops polling", entry.pollTimer, null);
+    entry.panel.dispose();
+  }
   {
     const t = makeFeature({ client: fakeClient({ health: { ...HEALTH, status: "maintenance", maintenance: { phase: "draining", retryAfterSeconds: 5 } }, whoami: ME_ADMIN }) });
     const entry = await openReady(t);

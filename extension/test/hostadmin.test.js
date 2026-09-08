@@ -150,6 +150,8 @@ function fakeClient(answers = {}) {
   }
   eq("poll: 5 s while updating", ha.pollIntervalMs({ maintenance: { phase: "draining" } }), 5000);
   eq("poll: nothing otherwise", ha.pollIntervalMs({ maintenance: null }), null);
+  eq("poll: live VMs every 10 s", ha.pollIntervalMs({ mode: "admin", activeTab: "vms" }), 10000);
+  eq("poll: no refresh over editable users", ha.pollIntervalMs({ mode: "admin", activeTab: "users" }), null);
 
   console.log("\n=== formatting ===");
   eq("bytes: GiB", ha.formatBytes(8 * ha.GIB), "8.0 GiB");
@@ -178,6 +180,21 @@ function fakeClient(answers = {}) {
   ok("guest: a failed attempt never overwrites the facts", /provisioned 2026-09-01 08:00 UTC.*last attempt failed/.test(ha.guestText({ provisionedAt: "2026-09-01T08:00:00Z", lastAttemptOutcome: "failed", lastAttemptAt: "2026-09-02T08:00:00Z" })));
   eq("resources: cpus, ram, disk", ha.resourcesText({ cpus: 4, ramMb: 8192, diskGb: 80 }), "4 vCPU · 8.0 GiB · 80 GB disk");
   eq("resources: unknown", ha.resourcesText(null), "—");
+  eq("resources: migrated primary uses original allocation", ha.toVmRow({ name: "primary", cpu: 8, ramGb: 16, diskGb: 150 }, NOW).resources,
+    "8 vCPU · 16 GiB · 150 GB disk");
+  {
+    const live = ha.resourceUsageView({ observedAt: new Date(NOW).toISOString(), cpuUsagePercent: 0,
+      memoryAssignedBytes: 16 * 2 ** 30, memoryDemandBytes: 5 * 2 ** 30, diskFileBytes: 40 * 2 ** 30 }, NOW);
+    eq("usage: idle CPU is measured zero", live.cpuPercent, 0);
+    eq("usage: demand divided by assignment", live.ramPercent, 31);
+    eq("usage: allocation isn't demand", live.ram, "5.0 GiB RAM demand / 16 GiB assigned");
+    eq("usage: disk is explicitly host space", live.disk, "40 GiB disk on host");
+    ok("usage: current sample is fresh", !live.stale);
+    ok("usage: old sample is stale", ha.resourceUsageView({ observedAt: new Date(NOW - 31000).toISOString() }, NOW).stale);
+    eq("usage: older server isn't zero", ha.resourceUsageView(null, NOW).cpuPercent, null);
+    eq("usage: missing RAM isn't zero", ha.resourceUsageView(null, NOW).ramPercent, null);
+    eq("usage: invalid CPU isn't shown", ha.resourceUsageView({ cpuUsagePercent: 101 }, NOW).cpu, "CPU usage unavailable");
+  }
   eq("operation: kind, phase, initiator", ha.operationText({ jobId: "j", kind: "vm-shutdown", phase: "wait", initiator: "vm:work-vm" }), "vm-shutdown (wait) by vm:work-vm");
 
   console.log("\n=== VM rows ===");

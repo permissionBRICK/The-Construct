@@ -80,7 +80,10 @@ function Get-ConstructHostInventory {
             generation = [int]$vm.Generation; cpus = [int]$vm.ProcessorCount; memoryStartupBytes = [int64]$mem.Startup;
             memoryAssignedBytes = [int64]$vm.MemoryAssigned; dynamicMemory = [bool]$mem.DynamicMemoryEnabled;
             memoryMaximumBytes = [int64]$mem.Maximum; disks = @($disks.Values); savedStateBytes = $savedBytes;
-            configVolume = $configVolume; complete = $complete })
+            configVolume = $configVolume; complete = $complete;
+            cpuUsagePercent = $(if ($null -ne $vm.CPUUsage) { [double]$vm.CPUUsage } else { $null });
+            memoryDemandBytes = $(if ($null -ne $vm.MemoryDemand) { [int64]$vm.MemoryDemand } else { $null });
+            uptimeSeconds = $(if ($null -ne $vm.Uptime) { [double]$vm.Uptime.TotalSeconds } else { $null }) })
     }
     foreach ($artifact in $Artifacts) {
         $path = [string]$artifact.path
