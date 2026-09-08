@@ -1067,6 +1067,7 @@
     // Narrow live updates, like {type:'audio'}: a tunnel coming up or an applied idle
     // policy repaints one card without going through render(), which would read every
     // absent field of a partial state as "no reading" and blank the rest of the panel.
+    else if (m.type === "hostAdminOffer") renderHostAdminOffer(m.offer);
     else if (m.type === "forwards") renderForwards(m.forwards);
     else if (m.type === "idlePolicy") renderIdlePolicy(m.idlePolicy);
     else if (m.type === "children") renderChildren(m.children);

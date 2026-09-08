@@ -466,3 +466,6 @@ body.launcher { font-size: 12px; }
 .lupdate:focus-visible { outline: 2px solid var(--warn); outline-offset: 2px; }
 .lupdate small { color: var(--dim); font-size: 10px; margin-left: auto; }
 .lupd-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 8px var(--warn); flex: none; }
+
+/* The launcher button uses flex layout; hidden must still win. */
+#lHostAdmin[hidden] { display: none; }
