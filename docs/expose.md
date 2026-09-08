@@ -322,6 +322,10 @@ What matters from the guest's side is only this:
 - **When nothing is listening.** No VS Code attached means no ack, which is exit code 6 and
   a request that stays queued — not an error. The extension re-opens everything still
   queued as soon as a window connects, which is why the spool lives under `/etc`.
+- **Errors recover without recreating requests.** Failed tunnel starts and reconnects
+  retry with delays capped at 60 seconds. A saved error does not prevent a new VS Code
+  window from reopening the forward. If no local port is available, selection is retried
+  once per minute. An explicit close still removes the request.
 - **A forward lives as long as VS Code does.** Closing the window kills the tunnels and
   releases the claim. The request stays in the spool, so the next window re-opens it — on
   the same port if it can, so an already-printed link keeps working.

@@ -1993,11 +1993,16 @@ lazy trigger simply starts the poll instead of a watcher.
 
 ### Tunnel supervision
 
-Copied wholesale from `audio.js`, because the failure modes are the same: a settle window
-(an `ssh` that dies within 1.2 s never opened the port, so it is a failure and not a
-restart), restart with a 2 s → 60 s doubling backoff, and `dispose()` kills every child.
-After `MAX_TUNNEL_ATTEMPTS` consecutive failures the guest is told with an `error` ack, so
-`construct expose` stops waiting and says why.
+A settle window distinguishes a failed open from a later disconnect: an `ssh` that
+exits within 1.2 s reports an error immediately. Both failures retry with a 2 s → 60 s
+doubling backoff, including a thrown spawn or a reconnect that fails before settling.
+After `MAX_TUNNEL_ATTEMPTS` consecutive later drops the guest also receives an error ack.
+`dispose()` kills every child and cancels retries.
+
+An error ack describes the latest attempt; the durable request still asks for a forward.
+A new window retries saved errors, retaining the recorded local port where possible.
+A lack of available local ports is retried no more than once per minute, so watcher
+notifications cannot cause a tight retry loop. Explicit closes still cancel the request.
 
 **Only a connection that lasted `CONNECTION_HEALTHY_MS` (60 s) clears the failure streak.**
 Surviving the settle window merely means the port opened; it says nothing about the link

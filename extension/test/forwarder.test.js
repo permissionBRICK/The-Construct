@@ -796,8 +796,16 @@ async function claimProtocol() {
       acks: [{ id: "1-a", status: "error", message: "port busy" }],
       tunnels: [{ id: "1-a", state: "failed", message: "port busy" }],
     }), []);
-  deep("plan: an error ack is a FINAL answer — no re-open churn",
-    f.planActions({ requests: [request], acks: [{ id: "1-a", status: "error", message: "x" }] }), []);
+  deep("plan: a new window retries a durable request with a stale error ack",
+    f.planActions({ requests: [request], acks: [{ id: "1-a", status: "error", message: "x" }] }).map(a => a.kind), ["open"]);
+
+  const savedError = { id: "1-a", status: "error", localPort: 18800, message: "SSH disconnected" };
+  eq("plan: a restored local error prefers its previous port", f.planActions({
+    requests: [request], acks: [savedError], reopenAcked: true,
+  })[0].preferPort, 18800);
+  eq("plan: a restored remote error requires its previous port", f.planActions({
+    requests: [request], acks: [savedError], reopenAcked: false,
+  })[0].requirePort, 18800);
 
   const closed = f.planActions({ closes: ["1-a"], tunnels: [{ id: "1-a", localPort: 18800, state: "up" }] });
   deep("plan: a close document kills the tunnel and removes itself",
@@ -915,6 +923,12 @@ async function localFlow() {
     eq("local: the error ack says error", doc.status, "error");
     ok("local: ...and names the ports it tried", doc.message.indexOf("5173") >= 0 && doc.message.indexOf("18800") >= 0);
     eq("local: the snapshot shows the failure", fwd.snapshot().items[0].status, "error");
+    await timers.advance(30000);
+    eq("local: no-port failures do not churn error writes", transport.acks.length, 1);
+    transport.freePorts = [5173];
+    await timers.advance(30000 + f.TUNNEL_SETTLE_MS + 100);
+    eq("local: freeing a port recovers the existing request", transport.tunnels.length, 1);
+    eq("local: recovered no-port failure is open", fwd.snapshot().items[0].status, "open");
     fwd.dispose();
   }
 
@@ -1313,12 +1327,30 @@ async function supervision() {
     transport.tunnels[0].child.die(255);
     await timers.advance(5000);
 
-    eq("supervision: an immediate death is a failure, not a restart", transport.tunnels.length, 1);
-    eq("supervision: ...reported as an error ack", transport.acks.length, 1);
+    eq("supervision: an immediate death retries automatically", transport.tunnels.length, 2);
+    eq("supervision: failure and recovery both acknowledged", transport.acks.length, 2);
     const b64 = /printf %s '([A-Za-z0-9+/=]+)'/.exec(transport.acks[0])[1];
     const doc = JSON.parse(Buffer.from(b64, "base64").toString("utf8"));
     eq("supervision: the ack says error", doc.status, "error");
     ok("supervision: ...and carries ssh's own reason", doc.message.indexOf("Address already in use") >= 0);
+    fwd.dispose();
+  }
+
+  // A reconnect that itself dies before settling used to stop retries forever.
+  {
+    const { fwd, transport, timers } = makeForwarder();
+    transport.dump = dump("self", [["R", "1-a", { v: 1, id: "1-a", vmPort: 5173, target: "client" }]]);
+    await settle(fwd, timers);
+    transport.tunnels[0].child.die(255);
+    await timers.advance(f.RECONNECT_BASE_MS + 10);
+    eq("recovery: reconnect attempted", transport.tunnels.length, 2);
+    transport.tunnels[1].child.die(255);
+    await timers.advance(f.reconnectDelayMs(2) - 100);
+    eq("recovery: failed reconnect respects backoff", transport.tunnels.length, 2);
+    await timers.advance(100 + f.TUNNEL_SETTLE_MS + 50);
+    eq("recovery: failed reconnect is retried without a new request", transport.tunnels.length, 3);
+    ok("recovery: retries keep the existing local port", transport.tunnels.every(t => t.localPort === 5173));
+    eq("recovery: original request is open again", fwd.snapshot().items[0].status, "open");
     fwd.dispose();
   }
 
@@ -1416,15 +1448,21 @@ async function supervision() {
     const timers = makeTimers();
     const transport = makeTransport();
     transport.dump = dump("self", [["R", "1-a", { v: 1, id: "1-a", vmPort: 5173, target: "client" }]]);
-    transport.spawnTunnel = () => { throw new Error("ENOENT ssh"); };
+    const spawnTunnel = transport.spawnTunnel;
+    let failedSpawns = 0;
+    transport.spawnTunnel = () => { failedSpawns++; throw new Error("ENOENT ssh"); };
     const fwd = f.createForwarder({
       instance: { name: "agent-vm" }, transport, timers: timers.api, now: timers.now, windowId: "w",
     });
     await settle(fwd, timers);
-    eq("supervision: a spawn failure becomes an error ack", transport.acks.length, 1);
+    ok("supervision: a spawn failure becomes an error ack", transport.acks.length >= 1);
+    eq("supervision: a thrown spawn is retried with backoff", failedSpawns, 2);
     const b64 = /printf %s '([A-Za-z0-9+/=]+)'/.exec(transport.acks[0])[1];
     ok("supervision: ...naming the spawn error",
       JSON.parse(Buffer.from(b64, "base64").toString("utf8")).message.indexOf("ENOENT") >= 0);
+    transport.spawnTunnel = spawnTunnel;
+    await timers.advance(4000 + f.TUNNEL_SETTLE_MS);
+    eq("supervision: spawn availability recovers the original forward", fwd.snapshot().items[0].status, "open");
     fwd.dispose();
   }
 }
@@ -1584,8 +1622,8 @@ async function remoteFlow() {
     });
     transport.lists = [[entry({ status: "error", message: "no free port" })]];
     await settle(fwd, timers);
-    eq("remote: an error-acked entry is not retried", transport.tunnels.length, 0);
-    eq("remote: ...and is rendered as the failure it is", fwd.snapshot().items[0].status, "error");
+    eq("remote: a stale error-acked entry is retried", transport.tunnels.length, 1);
+    eq("remote: ...and recovery replaces the stale error", fwd.snapshot().items[0].status, "open");
     fwd.dispose();
   }
 
@@ -1712,7 +1750,7 @@ async function remoteFlow() {
     ok("destination: the SERVICE's address-state error ack is not this window's final answer",
       svcErr.requests.length === 1 && svcErr.acks.length === 0);
     const ownErr = f.readForwardList([childEntry({ status: "error", message: "no free port on this PC" })]);
-    ok("destination: an ordinary error ack is still final", ownErr.acks.length === 1 && ownErr.acks[0].status === "error");
+    ok("destination: an ordinary error ack remains visible", ownErr.acks.length === 1 && ownErr.acks[0].status === "error");
     ok("destination: a plain entry has none (unchanged shape)", f.readForwardList([entry()]).requests[0].destination === undefined);
     const plan = f.planActions({ requests: read.requests, acks: [], tunnels: [], owner: true });
     ok("destination: the open action carries the destination", plan.length === 1 && plan[0].kind === "open" && plan[0].destination.connectAddress === "172.31.5.9");

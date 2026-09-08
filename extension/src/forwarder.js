@@ -96,8 +96,8 @@ const PORT_COUNT = 16;
  */
 const PORT_SLICE_COUNT = 32;
 
-/** An `ssh -L` that dies within this window never opened the port: that is a failure to
- *  report, not a restart to schedule (same rule, and same number, as audio.js). */
+/** An `ssh -L` that dies within this window never opened the port. Report the
+ *  failure immediately, and retry with backoff while its request remains. */
 const TUNNEL_SETTLE_MS = 1200;
 /** Restart backoff for a tunnel that dies later: quick first retry, doubling to a minute. */
 const RECONNECT_BASE_MS = 2000;
@@ -943,12 +943,9 @@ function planActions(input = {}) {
     const ack = ackMap.get(request.id);
 
     if (!tunnel) {
-      // An error ack already reported is a FINAL answer to the guest: it has stopped
-      // waiting, so re-opening on every 30 s tick would churn tunnels nobody is watching.
-      // A retry comes from a fresh request (or a window switch, which clears the acks
-      // this instance knows about along with the tunnels).
-      if (ack && ack.status === "error") continue;
-      const promised = ack && ack.status === "open" ? toPort(ack.localPort) : null;
+      // The request is durable intent; an error ack reports a failed attempt, not
+      // cancellation. A new window must retry it just like a stale open ack.
+      const promised = ack ? toPort(ack.localPort) : null;
       // An acked forward on a spool that is not ours alone: reclaim it only if the exact
       // port it promised is still free here — see the note above.
       if (promised !== null && input.reopenAcked !== true) {
@@ -983,7 +980,7 @@ function planActions(input = {}) {
     if (tunnel.state === "failed") {
       const message = sanitizeText(tunnel.message, MAX_MESSAGE) || "the tunnel to the VM could not be opened";
       if (!ack || ack.status !== "error" || ack.message !== message) {
-        actions.push({ kind: "error", id: request.id, message });
+        actions.push({ kind: "error", id: request.id, message, localPort: toPort(tunnel.localPort) });
       }
       continue;
     }
@@ -1247,6 +1244,9 @@ class Forwarder {
 
     /** id -> tunnel record. THE module's state, and it is per-instance by construction. */
     this._tunnels = new Map();
+    // No port available: retry selection slowly, without rewriting the same error
+    // on every watcher event or planner round. A new window starts fresh.
+    this._openRetryAfter = new Map();
     /** Last reconcile's view, for the snapshot. */
     this._view = { owner: this.mode === "remote", requests: [], acks: [], closes: [], host: [], pending: [] };
 
@@ -1561,6 +1561,8 @@ class Forwarder {
     const view = this.mode === "remote" ? await this._readRemote() : await this._readLocal();
     if (this._stopped || !view) return;
     this._view = view;
+    const requested = new Set(view.requests.map(r => r.id));
+    for (const id of this._openRetryAfter.keys()) if (!requested.has(id)) this._openRetryAfter.delete(id);
 
     for (let round = 0; round < 3; round++) {
       const actions = planActions({
@@ -1613,7 +1615,7 @@ class Forwarder {
   async _apply(action) {
     if (action.kind === "open") return this._openTunnel(action);
     if (action.kind === "ack") return this._writeAck(action.id, { status: "open", localPort: action.localPort, hostLabel: action.hostLabel });
-    if (action.kind === "error") return this._writeAck(action.id, { status: "error", message: action.message });
+    if (action.kind === "error") return this._writeAck(action.id, { status: "error", message: action.message, localPort: action.localPort });
     if (action.kind === "close" || action.kind === "adopt") { this._killTunnel(action.id); return; }
     if (action.kind === "sweep") return this._sweep(action.sub, action.id);
   }
@@ -1706,7 +1708,8 @@ class Forwarder {
   }
 
   async _openTunnel(action) {
-    if (this._tunnels.has(action.id)) return;
+    if (this._tunnels.has(action.id) || this._now() < (this._openRetryAfter.get(action.id) || 0)) return;
+    this._openRetryAfter.delete(action.id);
     const taken = new Set([...(action.taken || []), ...this._tunnelViews().map((t) => t.localPort)]);
 
     // A CONDITIONAL reclaim (remote mode, an entry that already carries an ack): the only
@@ -1735,6 +1738,7 @@ class Forwarder {
       // Nothing free: an explicit error ack, so `construct expose` stops waiting and says
       // why instead of timing out into "no client attached", which would be a lie.
       this.log(`forwarder[${this.name}]: no free local port for VM port ${action.vmPort}`);
+      this._openRetryAfter.set(action.id, this._now() + RECONNECT_MAX_MS);
       await this._writeAck(action.id, {
         status: "error",
         message: `no free port on this PC for VM port ${action.vmPort} (tried ${action.vmPort} and ${PORT_BASE}-${PORT_BASE + PORT_COUNT - 1})`,
@@ -1777,6 +1781,7 @@ class Forwarder {
       } catch (e) {
         record.state = "failed";
         record.message = errText(e);
+        this._scheduleRestart(record, record.message, true);
         return resolve();
       }
       record.child = child;
@@ -1806,6 +1811,7 @@ class Forwarder {
         } else {
           record.state = "failed";
           record.message = why;
+          this._scheduleRestart(record, why, true);
         }
         resolve();
       };
@@ -1834,15 +1840,15 @@ class Forwarder {
     });
   }
 
-  _scheduleRestart(record, detail) {
-    if (this._stopped || !this._tunnels.has(record.id)) return;
+  _scheduleRestart(record, detail, failedAttempt = false) {
+    if (this._stopped || this._tunnels.get(record.id) !== record || record.restartTimer) return;
     record.attempt += 1;
-    if (record.attempt > MAX_TUNNEL_ATTEMPTS) {
-      // Persistently broken: tell the guest, and keep retrying at the slowest cadence so
-      // it recovers by itself if the VM comes back.
+    if (failedAttempt || record.attempt > MAX_TUNNEL_ATTEMPTS) {
+      // Report failed opens immediately and repeated drops after the attempt budget.
+      // Both keep retrying with capped backoff until their request is removed.
       record.state = "failed";
       record.message = detail || "the SSH tunnel keeps dropping";
-      this._safeReconcile();
+      if (!failedAttempt) this._safeReconcile();
     } else {
       record.state = "starting";
     }
@@ -1857,6 +1863,7 @@ class Forwarder {
   }
 
   _killTunnel(id) {
+    this._openRetryAfter.delete(id);
     const record = this._tunnels.get(id);
     if (!record) return;
     this._tunnels.delete(id);
