@@ -484,6 +484,17 @@ function fakeClient(answers = {}) {
     ok("catalog failure is reported separately", !!m.state.media.catalogProblem && !m.state.media.mediaProblem);
   }
 
+  {
+    const inventory = [{ id: "alpine", owner: "alice", references: 0 }, { id: "windows", owner: "bob", references: 1 }];
+    const c = fakeClient({ health: HEALTH_FULL, whoami: ME_ADMIN,
+      media: (query) => inventory.filter((item) => !query || !query.owner || item.owner === query.owner) });
+    const m = ha.createHostAdminModel({ client: c, host: H, backend: "hyperv-remote" });
+    await m.detect(); await m.load("media");
+    deep("media: admin inventory includes different owners", m.state.media.items.map((item) => item.id), ["alpine", "windows"]);
+    ok("media: retained unreferenced ISO remains deletable", m.state.media.items[0].deletable);
+    ok("media: referenced ISO remains protected", !m.state.media.items[1].deletable);
+  }
+
   console.log("\n=== the model ===");
   {
     const c = fakeClient({

@@ -642,7 +642,8 @@ ok("pin: a malformed fingerprint is refused",
     await adminClient.rotateVmToken("work-vm", { kind: "primary" });
     ok("route: rotate token", last().method === "POST" && last().url === "/api/v1/vms/work-vm/token" && last().body.kind === "primary");
     await adminClient.revokeVmToken("work-vm");    eq("route: revoke vm token", last().method + " " + last().url, "DELETE /api/v1/vms/work-vm/token");
-    await adminClient.media({ owner: "all" });     eq("route: media inventory", last().url, "/api/v1/media?owner=all");
+    await adminClient.media();                     eq("route: media inventory", last().url, "/api/v1/media");
+    await adminClient.media({ owner: "alice" });  eq("route: media owner filter", last().url, "/api/v1/media?owner=alice");
     await adminClient.mediaItem("m1");             eq("route: media item", last().url, "/api/v1/media/m1");
     await adminClient.mediaReferences("m1");       eq("route: media references", last().url, "/api/v1/media/m1/references");
     await adminClient.deleteMedia("m1");           eq("route: media delete", last().method + " " + last().url, "DELETE /api/v1/media/m1");
