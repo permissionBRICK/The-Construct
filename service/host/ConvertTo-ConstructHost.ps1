@@ -66,6 +66,26 @@ function Invoke-Guest([string]$Command, [string]$InputText = '') {
         $text.Trim()
     } finally { $process.Dispose() }
 }
+function Assert-GuestVmIdentity($Vm) {
+    # KVP IPAddresses can be empty even while SSH works. Match the guest's
+    # SMBIOS UUID to this VM's realized firmware settings instead. BIOSGUID is
+    # distinct from the Hyper-V management ID and is exposed as product_uuid
+    # by Linux: https://learn.microsoft.com/windows/win32/hyperv_v2/msvm-virtualsystemsettingdata
+    $identity = @((Invoke-Guest 'cat /etc/machine-id /sys/class/dmi/id/product_uuid') -split '\r?\n')
+    if ($identity.Count -ne 2 -or $identity[0].Trim() -ne $plan.machineId) {
+        throw 'The SSH guest identity changed or could not be read.'
+    }
+    $vmId = ([guid]$Vm.Id).ToString('D')
+    $settings = @(Get-CimInstance -Namespace 'root/virtualization/v2' -ClassName Msvm_VirtualSystemSettingData `
+        -Filter ("VirtualSystemIdentifier='$vmId' AND VirtualSystemType='Microsoft:Hyper-V:System:Realized'") -ErrorAction Stop)
+    $expected = [guid]::Empty; $actual = [guid]::Empty
+    if ($settings.Count -ne 1 -or
+        -not [guid]::TryParse([string]$settings[0].BIOSGUID, [ref]$expected) -or $expected -eq [guid]::Empty -or
+        -not [guid]::TryParse($identity[1].Trim(), [ref]$actual) -or $actual -eq [guid]::Empty) {
+        throw 'Could not verify the selected VM firmware identity. No VM was adopted.'
+    }
+    if ($actual -ne $expected) { throw 'The SSH guest firmware identity does not match the selected Hyper-V VM.' }
+}
 function Expand-VerifiedPackage($Zip, $Destination) {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $archive = [IO.Compression.ZipFile]::OpenRead($Zip)
@@ -101,11 +121,7 @@ try {
     $vm = Get-VM -Name $plan.vmName
     if ($vm.Name.ToLowerInvariant() -ne $plan.name -or $vm.State -ne 'Running') { throw 'The selected local VM must be running.' }
     if ($journal -and $journal.vmId -ne $vm.Id.ToString()) { throw 'The Hyper-V VM was replaced since conversion began.' }
-    if ((Invoke-Guest 'cat /etc/machine-id') -ne $plan.machineId) { throw 'The SSH guest identity changed.' }
-    # Cross-check the SSH destination against the selected VM's reported addresses.
-    $addresses = @((Get-VMNetworkAdapter -VM $vm).IPAddresses)
-    $resolved = @([Net.Dns]::GetHostAddresses($plan.sshHost) | ForEach-Object { $_.ToString() })
-    if (-not @($resolved | Where-Object { $addresses -contains $_ }).Count) { throw 'The SSH destination does not match the selected Hyper-V VM.' }
+    Assert-GuestVmIdentity $vm
     $switches = @((Get-VMNetworkAdapter -VM $vm).SwitchName | Where-Object { $_ } | Select-Object -Unique)
     if ($switches.Count -ne 1) { throw 'Automatic conversion requires one VM network switch.' }
     $disks = @(Get-VMHardDiskDrive -VM $vm | ForEach-Object { Get-VHD -Path $_.Path })
@@ -192,8 +208,8 @@ try {
     # Installation can take minutes. Re-read identity and resources at the handoff,
     # so a concurrent local reinstall cannot substitute another VM under this name.
     $vm = Get-VM -Name $plan.vmName
-    if ($vm.Id.ToString() -ne $journal.vmId -or $vm.State -ne 'Running' -or
-        (Invoke-Guest 'cat /etc/machine-id') -ne $plan.machineId) { throw 'The selected VM changed while the host was being installed.' }
+    if ($vm.Id.ToString() -ne $journal.vmId -or $vm.State -ne 'Running') { throw 'The selected VM changed while the host was being installed.' }
+    Assert-GuestVmIdentity $vm
     $disks = @(Get-VMHardDiskDrive -VM $vm | ForEach-Object { Get-VHD -Path $_.Path })
     if ($disks.Count -eq 0) { throw 'The selected VM no longer has a disk.' }
     $adopt = Invoke-Admin @('vms','adopt',$plan.name,'--owner',$plan.adminUser,'--cpu',([string]$vm.ProcessorCount),
