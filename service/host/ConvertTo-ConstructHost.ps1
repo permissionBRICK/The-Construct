@@ -49,6 +49,32 @@ function Quote-Argument([string]$Value) {
     # Windows argv quoting, including backslashes before quotes and the closing quote.
     '"' + [regex]::Replace([regex]::Replace($Value, '(\\*)"', '$1$1\"'), '(\\+)$', '$1$1') + '"'
 }
+function Write-GuestInput($Process, [string]$InputText) {
+    # .NET Framework uses the console OEM code page for StandardInput.Write.
+    # Enrollment contains Unicode helper scripts; Python requires UTF-8 JSON.
+    # Write raw bytes to avoid both that code page and a StreamWriter BOM.
+    $bytes = [Text.Encoding]::UTF8.GetBytes($InputText)
+    try { $Process.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length) }
+    finally { $Process.StandardInput.BaseStream.Close() }
+}
+function Format-GuestFailure([string]$Stderr, [int]$ExitCode, [string]$InputText = '') {
+    $detail = $Stderr
+    if ($InputText) {
+        try {
+            $payload = $InputText | ConvertFrom-Json
+            foreach ($property in $payload.PSObject.Properties) {
+                if ($property.Name -match 'token|secret|password' -and $property.Value -is [string] -and $property.Value) {
+                    $detail = $detail.Replace($property.Value, '[redacted]')
+                }
+            }
+        } catch { } # Non-JSON SSH probes have no enrollment credential.
+    }
+    $detail = [regex]::Replace($detail, '(?i)Bearer[ \t]+[^\s"'']+', 'Bearer [redacted]')
+    $detail = [regex]::Replace($detail, '[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '').Trim()
+    if ($detail.Length -gt 4096) { $detail = '...' + $detail.Substring($detail.Length - 4096) }
+    if (-not $detail) { $detail = 'SSH returned no diagnostic output.' }
+    "Guest SSH/enrollment failed (exit $ExitCode):`n$detail"
+}
 function Invoke-Guest([string]$Command, [string]$InputText = '') {
     $argv = @('-F','NUL','-o','BatchMode=yes','-o','IdentitiesOnly=yes','-o','StrictHostKeyChecking=yes','-o',('UserKnownHostsFile="' + $plan.knownHosts.Replace('\','/') + '"'),
         '-o','ConnectTimeout=15','-o','ServerAliveInterval=15','-o','ServerAliveCountMax=3','-i',$plan.keyPath,'-p',([string]$plan.sshPort),('root@' + $plan.sshHost),$Command)
@@ -56,13 +82,16 @@ function Invoke-Guest([string]$Command, [string]$InputText = '') {
     $start.FileName = 'ssh.exe'; $start.UseShellExecute = $false
     $start.Arguments = ($argv | ForEach-Object { Quote-Argument $_ }) -join ' '
     $start.RedirectStandardInput = $true; $start.RedirectStandardOutput = $true; $start.RedirectStandardError = $true
+    $start.StandardOutputEncoding = $utf8; $start.StandardErrorEncoding = $utf8
     $process = [Diagnostics.Process]::Start($start)
     try {
         $out = $process.StandardOutput.ReadToEndAsync(); $err = $process.StandardError.ReadToEndAsync()
-        $process.StandardInput.Write($InputText); $process.StandardInput.Close()
+        $inputFailure = $null
+        try { Write-GuestInput $process $InputText } catch { $inputFailure = $_.Exception }
         if (-not $process.WaitForExit(120000)) { $process.Kill(); throw 'Guest enrollment timed out.' }
-        $text = $out.GetAwaiter().GetResult(); $null = $err.GetAwaiter().GetResult()
-        if ($process.ExitCode -ne 0) { throw 'Could not verify or enroll the guest over its existing SSH connection.' }
+        $text = $out.GetAwaiter().GetResult(); $diagnostic = $err.GetAwaiter().GetResult()
+        if ($process.ExitCode -ne 0) { throw (Format-GuestFailure $diagnostic $process.ExitCode $InputText) }
+        if ($inputFailure) { throw 'Could not send the guest enrollment input over SSH.' }
         $text.Trim()
     } finally { $process.Dispose() }
 }
@@ -256,7 +285,7 @@ try {
     foreach ($file in @('construct','construct-vm.sh','construct-expose.sh','construct-idle-report.sh')) { $files[$file] = [IO.File]::ReadAllText((Join-Path $scripts ('bin\' + $file))) }
     $payload = @{name=$plan.name;owner=$plan.adminUser;machineId=$plan.machineId;serviceUrl=('https://' + $plan.publicHost + ':7462');
         publicHost=$plan.publicHost;sshPort=$adopt.sshPort;vmToken=$adopt.vmToken;certificate=$pem;files=$files}
-    $guestCode = [Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $scripts 'bin\adopt-host.py')))
+    $guestCode = [Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $PSScriptRoot '..\..\bin\adopt-host.py')))
     $command = 'python3 -c "import base64;exec(base64.b64decode(' + "'" + $guestCode + "'" + '))"'
     Write-Host (Invoke-Guest $command ($payload | ConvertTo-Json -Depth 8 -Compress))
     $admin = Invoke-Admin @('tokens','issue',$plan.adminUser,'--label',('conversion-' + $plan.id))
