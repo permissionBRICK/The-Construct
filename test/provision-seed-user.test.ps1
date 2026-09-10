@@ -19,8 +19,9 @@ $script:wireCommand = ''
 function Invoke-Ssh {
     param([string]$Command)
     $script:wireCommand = $Command
-    return "construct`n"
+    return $script:seedResponse
 }
+$script:seedResponse = "construct`n"
 $SeedUser = 'agent'
 foreach ($name in @('seedQuery', 'seedQueryB64', 'guestSeed')) {
     Invoke-Expression $assignments[$name]
@@ -33,6 +34,40 @@ if ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($seedQueryB64)) 
     throw 'Seed query changed during encoding'
 }
 Write-Host 'PASS: quote-free SSH transport and exact query round trip'
+
+# Run the WHOLE production root-key branch, including logging and assignment.
+# Query-only tests missed an undefined Write-Note that prevented the new user
+# from being applied after local-to-host adoption.
+$writeOk = $ast.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Write-Ok'}, $true)
+Invoke-Expression $writeOk.Extent.Text
+$rootBranch = $ast.Find({param($n) $n -is [Management.Automation.Language.IfStatementAst] -and $n.Clauses[0].Item1.Extent.Text -eq 'Enter-RootKeyFastPath'}, $true)
+if (-not $rootBranch) { throw 'Missing production root-key branch.' }
+$rootBody = ($rootBranch.Clauses[0].Item2.Statements | ForEach-Object { $_.Extent.Text }) -join "`n"
+foreach ($case in @(
+    @{Default='construct';Actual='agent'},
+    @{Default='agent';Actual='construct'},
+    @{Default='construct';Actual='custom-seed'},
+    @{Default='agent';Actual='agent'}
+)) {
+    $SeedUser=$case.Default; $script:seedResponse=$case.Actual + "`n"
+    Invoke-Expression $rootBody
+    if ($SeedUser -cne $case.Actual) { throw "Root-key reprovision retained wrong seed account: $SeedUser" }
+    Write-Host "PASS: complete root-key branch selects $SeedUser from default $($case.Default)"
+}
+foreach ($response in @('', 'invalid;name')) {
+    $SeedUser='construct'; $script:seedResponse=$response
+    $refused=$false
+    try { Invoke-Expression $rootBody } catch {
+        if ($_.Exception.Message -notmatch 'before replacing the guest repository') { throw }
+        $refused=$true
+    }
+    if (-not $refused) { throw 'Unknown seed account continued toward repository replacement.' }
+}
+Write-Host 'PASS: missing/invalid seed detection stops before guest repository replacement'
+$script:seedResponse="construct`n"
+$SeedUser='agent'
+# Restore the agent-default query for the existing shell fixtures below.
+Invoke-Expression $assignments['seedQuery']
 
 if ($env:OS -eq 'Windows_NT') { exit 0 }
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ('construct-seed-' + [guid]::NewGuid().ToString('N'))
