@@ -82,6 +82,16 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
 
   await page.click("#gearBtn");
   check("settings shows on gear", (await page.locator("#settingsView").isVisible()) && !(await page.locator("#mainView").isVisible()));
+  check("host conversion is hidden before local connection is confirmed", !(await page.locator("#hostConversionSettings").isVisible()));
+  await page.evaluate(() => window.postMessage({ type: "state", state: { canConvertHost: true } }, "*"));
+  await page.locator("#hostConversionSettings").waitFor({ state: "visible" });
+  await page.click('[data-cmd="convertToHost"]');
+  check("host conversion posts its command", await page.evaluate(() => window.__posted.some(m => m.type === "command" && m.id === "convertToHost")));
+  check("host conversion shows preparation", await page.locator('[data-cmd="convertToHost"] .prepare-spinner').count() === 1);
+  await page.evaluate(() => window.postMessage({ type: "lifecyclePrepared", id: "convertToHost" }, "*"));
+  await page.evaluate(() => window.postMessage({ type: "state", state: { canConvertHost: false } }, "*"));
+  await page.locator("#hostConversionSettings").waitFor({ state: "hidden" });
+  check("host conversion disappears for ineligible instances", !(await page.locator("#hostConversionSettings").isVisible()));
   await page.click("#backBtn");
   check("back returns to console", (await page.locator("#mainView").isVisible()) && !(await page.locator("#settingsView").isVisible()));
 

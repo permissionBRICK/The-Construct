@@ -38,7 +38,7 @@ public static class AdminExitCode
 ///
 /// Every verb also speaks <c>--json</c>, because the installer script consumes it.
 /// </summary>
-public static class AdminCli
+public static partial class AdminCli
 {
     /// <summary>The first argument that switches the executable into CLI mode.</summary>
     public const string Verb = "admin";
@@ -49,6 +49,7 @@ public static class AdminCli
           users add <name> --role Admin|User --max-vms <n> [--no-host-forwards]
           users remove <name>
           users list
+          vms adopt <name> --owner <user> --cpu <n> --ram-mb <n> --disk-gb <n> --incarnation <guid>
           tokens issue <user> --label <label>
           tokens revoke-all <user>
           forwards reconcile
@@ -92,6 +93,7 @@ public static class AdminCli
                 ("users", "add") => await AddUserAsync(positional, services, writer, cancellationToken).ConfigureAwait(false),
                 ("users", "remove") => await RemoveUserAsync(positional, services, writer, cancellationToken).ConfigureAwait(false),
                 ("users", "list") => await ListUsersAsync(positional, services, writer, cancellationToken).ConfigureAwait(false),
+                ("vms", "adopt") => await AdoptVmAsync(positional, services, writer, cancellationToken),
                 ("tokens", "issue") => await IssueTokenAsync(positional, services, writer, cancellationToken).ConfigureAwait(false),
                 ("tokens", "revoke-all") => await RevokeTokensAsync(positional, services, writer, cancellationToken).ConfigureAwait(false),
                 ("forwards", "reconcile") => await ReconcileAsync(positional, services, writer, cancellationToken).ConfigureAwait(false),

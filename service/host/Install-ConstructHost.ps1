@@ -101,6 +101,10 @@
     creates no new credential -- otherwise every reinstall would leave another
     permanent token behind.
 
+.PARAMETER SkipAdminToken
+    Create the admin account without printing a token. The guided host conversion
+    uses this and returns its own encrypted credential to the initiating client.
+
 .PARAMETER KeepHostAwake
     Set this host's AC sleep, hibernate and unattended-sleep timeouts to "never" on
     the active power scheme. Without it the installer only PRINTS them and, in an
@@ -177,6 +181,9 @@ param(
     [switch]$IsoBuildOnly,
 
     [switch]$RotateAdminToken,
+
+    # Guided conversion securely returns its own token to the initiating client.
+    [switch]$SkipAdminToken,
 
     [switch]$KeepHostAwake,
 
@@ -1053,7 +1060,13 @@ function Resolve-ConstructCertificate {
 
     if (-not $PSCmdlet.ShouldProcess($DnsName, "Create a self-signed TLS certificate")) { return $null }
 
-    return New-SelfSignedCertificate -DnsName $DnsName `
+    # IP literals need an IP SAN, not a DNS SAN, for Linux HTTPS clients.
+    # https://learn.microsoft.com/powershell/module/pki/new-selfsignedcertificate (example 9)
+    $address = $null
+    $subject = if ([Net.IPAddress]::TryParse($DnsName, [ref]$address)) {
+        @{ Subject=$DnsName; TextExtension=@("2.5.29.17={text}IPAddress=$DnsName") }
+    } else { @{ DnsName=$DnsName } }
+    return New-SelfSignedCertificate @subject `
         -CertStoreLocation Cert:\LocalMachine\My `
         -FriendlyName $friendly `
         -KeyExportPolicy NonExportable `
@@ -1497,13 +1510,15 @@ if ($PSCmdlet.ShouldProcess($AdminUser, "Create the admin user and issue a token
 
     # A token per reinstall would leave a pile of permanent credentials behind, so a
     # re-run issues nothing unless asked.
-    if ($created -or $RotateAdminToken) {
+    if (-not $SkipAdminToken -and ($created -or $RotateAdminToken)) {
         $issue = Invoke-ConstructdAdmin -Exe $exe -Arguments @("admin", "tokens", "issue", $AdminUser, "--label", "install", "--json")
         if ($issue.ExitCode -ne 0) {
             throw "Could not issue an API token (exit $($issue.ExitCode))."
         }
         $token = (ConvertFrom-Json $issue.Output).token
         Write-Ok "Issued an API token (printed once, below)"
+    } elseif ($SkipAdminToken) {
+        Write-Note "The guided installer manages the admin token handoff."
     } else {
         Write-Note "No new token issued (the admin already existed). Pass -RotateAdminToken for a fresh one."
     }
