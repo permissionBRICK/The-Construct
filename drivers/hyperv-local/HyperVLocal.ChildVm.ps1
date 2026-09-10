@@ -183,8 +183,10 @@ function Set-ConstructChildHardware {
     if ([string]$vm.State -ne 'Off') { throw 'vm-not-off' }
     if ($vm.Generation -ne $Hardware.generation) { throw 'unsupported-capability' }
     $security = Get-VMSecurity -VMName $Name -ErrorAction Stop
-    $protector = @(Get-VMKeyProtector -VMName $Name -ErrorAction Stop)
-    $hasProtector = $protector.Count -gt 0
+    # Hyper-V emits a byte array as one pipeline object, including when it is
+    # empty. Counting an @() wrapper would report a protector on a fresh VM.
+    $protector = Get-VMKeyProtector -VMName $Name -ErrorAction Stop
+    $hasProtector = $null -ne $protector -and $protector.Length -gt 0
     if ($ResendTemplate -and $hasProtector) { throw 'secure-boot-template-locked' }
     $disks = @(Get-VMHardDiskDrive -VMName $Name -ErrorAction Stop)
     if ($disks.Count -gt 0 -and (Get-VHD -Path $disks[0].Path -ErrorAction Stop).Size -ne ([long]$Hardware.diskGb * 1GB)) { throw 'unsupported-capability' }
@@ -383,11 +385,12 @@ function Get-ConstructChildVmCapabilities {
     if ($video.Count -gt 0) { $width = $video[0].CurrentHorizontalResolution; $height = $video[0].CurrentVerticalResolution }
     $shutdown = 'unsupported'
     if (@($system.GetRelated('Msvm_ShutdownComponent')).Count -gt 0) { $shutdown = 'conditional' }
+    $protector = Get-VMKeyProtector -VMName $Name -ErrorAction Stop
     @{
         vmName = $Name; state = (Get-ConstructVmState -Name $Name); generation = $vm.Generation
         videoHeadPresent = ($video.Count -gt 0); keyboardPresent = (@($system.GetRelated('Msvm_Keyboard')).Count -gt 0)
         syntheticMousePresent = (@($system.GetRelated('Msvm_SyntheticMouse')).Count -gt 0); ps2MousePresent = (@($system.GetRelated('Msvm_Ps2Mouse')).Count -gt 0)
-        nativeWidth = $width; nativeHeight = $height; secureBootTemplateLocked = (@(Get-VMKeyProtector -VMName $Name -ErrorAction Stop).Count -gt 0)
+        nativeWidth = $width; nativeHeight = $height; secureBootTemplateLocked = ($null -ne $protector -and $protector.Length -gt 0)
         gracefulShutdown = $shutdown
         network = @{ clientForward = 'supported'; hostForward = 'unsupported'; addressVerification = 'unsupported' }
     }

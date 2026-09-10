@@ -16,7 +16,15 @@
     function Set-VM { param($Name,$AutomaticCheckpointsEnabled,$AutomaticStopAction,$AutomaticStartAction) }
     function Get-VMSwitch { param($Name) }
     function Get-VMSecurity { param($VMName) [pscustomobject]@{TpmEnabled=$false} }
-    function Get-VMKeyProtector { param($VMName) }
+    function Get-WmiObject {
+        param($Namespace,$Class,$Filter)
+        $system = [pscustomobject]@{}
+        $system | Add-Member -MemberType ScriptMethod -Name GetRelated -Value { param($class) }
+        $system
+    }
+    function Get-ConstructVmState { param($Name) 'Off' }
+    $script:probeProtector = [byte[]]@()
+    function Get-VMKeyProtector { param($VMName) Write-Output -NoEnumerate $script:probeProtector }
     function Set-VMKeyProtector { param($VMName,[switch]$NewLocalKeyProtector) }
     function Enable-VMTPM { param($VMName) }
     function Get-VMHardDiskDrive { param($VMName,$VMSnapshot) $script:probeDrives }
@@ -48,6 +56,13 @@
         $script:probeHostFailure=$false
         New-ConstructChildVm $d
         ok 'real create allocates fixed hardware and dual media' ($script:probeVm -and (Test-Path $disk) -and $script:probeDvds.Count -eq 2 -and $script:probeOrder.Count -eq 4)
+        ok 'fresh VM capabilities allow template changes for an empty byte array' (-not (Get-ConstructChildVmCapabilities -Name child).secureBootTemplateLocked)
+        $script:probeProtector = [byte[]]@(1,2,3)
+        ok 'VM capabilities lock template changes for a nonempty byte array' (Get-ConstructChildVmCapabilities -Name child).secureBootTemplateLocked
+        $refused=$false
+        try { Set-ConstructChildHardware -Name child -Hardware $h -ResendTemplate $true } catch { $refused=$_.Exception.Message -eq 'secure-boot-template-locked' }
+        ok 'nonempty key protector still prevents template changes' $refused
+        $script:probeProtector = [byte[]]@()
         $script:probeHostFailure=$true
         try {
             $placement=Get-ConstructChildStorage -Name child -VhdPath $disk

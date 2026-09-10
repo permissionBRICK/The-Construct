@@ -7,6 +7,15 @@ namespace Constructd.Tests.Media;
 
 public sealed class MediaStorageTests
 {
+    [Fact]
+    public async Task Deleting_absent_media_succeeds_before_root_is_created()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "media-test-" + Guid.NewGuid().ToString("n"));
+        var files = new MediaFileStore(Path.Combine(root, "media"));
+        Assert.True(await files.DeleteAsync(files.PathFor(new string('a', 32), true), default));
+        Assert.False(Directory.Exists(root));
+    }
+
     public static MediaItem Item(string? id = null) => new(id ?? Guid.NewGuid().ToString("n"), "alice", "install.iso", MediaRole.Install, MediaSource.Upload, null, "unused.iso", MediaState.Pending, 40000, 40000, null, null, null, null, null, DateTimeOffset.UtcNow, null, null);
     [Theory]
     [InlineData(false)] [InlineData(true)]

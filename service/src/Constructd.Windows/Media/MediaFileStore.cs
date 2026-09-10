@@ -40,6 +40,7 @@ public sealed class MediaFileStore(string root, IReadOnlyList<string>? protected
     {
         ct.ThrowIfCancellationRequested(); var full = Confine(path);
         try { File.Delete(full); return Task.FromResult(!File.Exists(full)); }
+        catch (DirectoryNotFoundException) { return Task.FromResult(true); }
         catch (IOException) { return Task.FromResult(false); }
     }
     public Task<IReadOnlyList<(string Path, DateTimeOffset Modified)>> ListAsync(CancellationToken ct)
