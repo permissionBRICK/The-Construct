@@ -186,3 +186,25 @@ token still receives 401. No authentication checks were relaxed. Run locally wit
 The prior guest unit tests bypassed HTTPS verification and therefore missed this
 contract mismatch. WS009 still needs Update Construct and a conversion retry;
 its already-installed service does not require replacement for this fix.
+
+The next WS009 handoff reached the VS Code `/whoami` check, then failed with Node's
+certificate-chain error. The result was already successful, so retry goes directly
+to client completion. VS Code's default `http.proxySupport=override` replaces custom
+HTTPS agents for hostnames even with a DIRECT proxy resolution, discarding the
+Construct certificate-pin gate. The earlier TLS tests used 127.0.0.1, which VS Code
+specifically exempts from that replacement. The pinned host transport now uses
+VS Code's saved original Node HTTPS module (`https.__vscodeOriginal`) when available.
+It preserves the existing direct TLS/pin check without changing editor-wide proxy
+or certificate settings. Plain Node continues using the normal HTTPS module.
+
+`extension/test/remotehost-proxy.test.js` checks hostname requests through an agent
+override, including matching/wrong/missing pins and withholding credentials until
+a match. Setting `CONSTRUCT_VSCODE_PROXY_AGENT` to an installed @vscode/proxy-agent
+path also runs Microsoft's actual patch; both cases reproduced chain rejection
+before the fix and passed afterward. The 218 remote-host checks and four client
+conversion checks pass. Apply with Update Construct, reload the VS Code window,
+and retry conversion to finish the saved handoff; no new host installation or
+VM enrollment is required.
+
+Upstream behavior: [VS Code module patching](https://github.com/microsoft/vscode/blob/main/src/vs/workbench/api/node/proxyResolver.ts),
+[proxy agent replacement](https://github.com/microsoft/vscode-proxy-agent/blob/main/src/index.ts).
