@@ -244,7 +244,7 @@ function fakeClient(answers = {}) {
     eq("overview: CPU without a budget has no percentage", ov.capacity[1].pct, null);
     ok("overview: CPU text says no budget", /no budget/.test(ov.capacity[1].text));
     eq("overview: one volume bar", ov.capacity.length, 3);
-    eq("overview: volume pct", ov.capacity[2].pct, 62);
+    eq("overview: volume pct counts physical usage and headroom, excluding future growth", ov.capacity[2].pct, 52);
     eq("overview: open maintenance is null", ov.maintenance, null);
     eq("overview: active jobs", ov.activeJobs.length, 1);
     eq("overview: overdue count", ov.leaseOverdueCount, 1);
