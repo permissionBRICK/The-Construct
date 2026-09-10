@@ -72,6 +72,19 @@ def atomic_write(path, data, mode):
             os.unlink(temporary)
 
 
+def verify_host(payload):
+    context = ssl.create_default_context(cadata=payload["certificate"])
+    request = urllib.request.Request(payload["serviceUrl"] + "/api/v1/vms/" + payload["name"] + "/identity",
+                                     headers={"Authorization": "VmToken " + payload["vmToken"]})
+    with urllib.request.urlopen(request, context=context, timeout=20) as response:
+        try:
+            identity = json.load(response)
+        except (json.JSONDecodeError, UnicodeError):
+            raise EnrollmentError("Host identity API returned invalid JSON.") from None
+    if identity.get("vmName") != payload["name"] or identity.get("owner", "").lower() != payload["owner"].lower():
+        raise EnrollmentError("host returned a different VM identity")
+
+
 def enroll(payload, root=Path("/"), verify=None, run=subprocess.run):
     name = payload["name"]
     if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", name):
@@ -82,21 +95,12 @@ def enroll(payload, root=Path("/"), verify=None, run=subprocess.run):
     if not re.fullmatch(r"https://[A-Za-z0-9.-]+:7462", url):
         raise EnrollmentError("invalid service URL")
     if verify is None:
-        context = ssl.create_default_context(cadata=payload["certificate"])
-        request = urllib.request.Request(url + "/api/v1/vms/" + name + "/identity",
-                                         headers={"Authorization": "Bearer " + payload["vmToken"]})
-        with urllib.request.urlopen(request, context=context, timeout=20) as response:
-            try:
-                identity = json.load(response)
-            except (json.JSONDecodeError, UnicodeError):
-                raise EnrollmentError("Host identity API returned invalid JSON.") from None
-        if identity.get("vmName") != name or identity.get("owner", "").lower() != payload["owner"].lower():
-            raise EnrollmentError("host returned a different VM identity")
+        verify_host(payload)
     else:
         verify(payload)
     config = root / "etc/construct/config.env"
     original = config.read_bytes()
-    values = {"CONSTRUCT_SERVICE_URL": url, "CONSTRUCT_SERVICE_CA_FILE": "/etc/construct/service-ca.pem",
+    values = {"CONSTRUCT_SERVICE_URL": url, "CONSTRUCT_SERVICE_AUTH_SCHEME": "VmToken", "CONSTRUCT_SERVICE_CA_FILE": "/etc/construct/service-ca.pem",
               "CONSTRUCT_INSTANCE_NAME": name, "CONSTRUCT_EXTERNAL_HOST": payload["publicHost"],
               "CONSTRUCT_EXTERNAL_SSH_PORT": payload["sshPort"]}
     backups = {}
