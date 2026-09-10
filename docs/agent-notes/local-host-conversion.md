@@ -14,6 +14,15 @@ The option is available only in a Windows UI extension attached to the selected
 added afterward through Host administration and receive their own VMs; adopting
 the existing VM does not share its contents.
 
+Find it in the **Construct panel → gear → Share this PC as a host** section,
+not VS Code's global settings. Installed extensions can lack access to the
+proposed `vscode.env.remoteAuthority` API. The client now falls back to the
+stable remote workspace URI authority to identify the connected VM; otherwise
+the old detection incorrectly hid this section even in Remote-SSH windows.
+The fallback requires one unambiguous authority and never guesses a host from
+`remoteName` alone. This correction requires a client update and window reload;
+the published host package is unchanged.
+
 ## Installation and adoption
 
 `extension/src/hostconversion.js` captures the target and verifies guest SSH before

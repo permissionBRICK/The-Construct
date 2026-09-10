@@ -383,12 +383,10 @@ function debugEnabled() {
   try { return !!vscode.workspace.getConfiguration("construct").get("debug"); } catch (_) { return false; }
 }
 
-/** Read vscode.env.remoteAuthority DEFENSIVELY. On some VS Code builds it's gated behind
- *  the `resolvers` proposed API and its getter THROWS for a normally-installed extension —
- *  a raw access in activate() would crash the whole extension. Everywhere we read it, degrade
- *  to undefined (treated as "local / not connected") instead of letting activation die. */
+/** Resolve the connected window through stable workspace URIs when VS Code's
+ * proposed remoteAuthority API is unavailable to the installed extension. */
 function safeRemoteAuthority() {
-  try { return vscode.env.remoteAuthority; } catch (_) { return undefined; }
+  return remote.currentRemoteAuthority(vscode);
 }
 
 /** Post to a webview, surviving both a synchronous throw and an async rejection
