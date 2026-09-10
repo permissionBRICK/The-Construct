@@ -10,6 +10,17 @@ function ok(name, cond, detail) {
 }
 
 // ── isConnectedToVm ───────────────────────────────────────────────────────────
+const remoteFolder = { uri: { scheme: "vscode-remote", authority: "ssh-remote+agent-vm" } };
+const stableWindow = { env: { remoteName: "ssh-remote" }, workspace: { workspaceFolders: [remoteFolder] } };
+ok("authority: stable workspace identifies a remote without proposed API", remote.currentRemoteAuthority(stableWindow) === "ssh-remote+agent-vm");
+const throwingEnv = { get remoteAuthority() { throw new Error("proposed API disabled"); } };
+ok("authority: proposed API denial falls back to workspace", remote.currentRemoteAuthority({ ...stableWindow, env: throwingEnv }) === "ssh-remote+agent-vm");
+ok("authority: fallback restores connected local VM detection", remote.isConnectedToVm(remote.currentRemoteAuthority({ ...stableWindow, env: throwingEnv })));
+ok("authority: explicit authority wins over workspace inference", remote.currentRemoteAuthority({ ...stableWindow, env: { remoteAuthority: "ssh-remote+other" } }) === "ssh-remote+other");
+ok("authority: a local workspace is not a remote connection", remote.currentRemoteAuthority({ env: {}, workspace: { workspaceFolders: [{ uri: { scheme: "file", authority: "" } }] } }) === undefined);
+ok("authority: remoteName alone cannot identify the VM", remote.currentRemoteAuthority({ env: { remoteName: "ssh-remote" }, workspace: {} }) === undefined);
+ok("authority: conflicting workspace hosts are refused", remote.currentRemoteAuthority({ env: {}, workspace: { workspaceFolders: [remoteFolder, { uri: { scheme: "vscode-remote", authority: "ssh-remote+other" } }] } }) === undefined);
+ok("authority: saved remote workspace without folders is identified", remote.currentRemoteAuthority({ env: {}, workspace: { workspaceFile: remoteFolder.uri } }) === "ssh-remote+agent-vm");
 ok("connected: matches the host alias", remote.isConnectedToVm("ssh-remote+agent-vm") === true);
 ok("connected: matches the full hostname", remote.isConnectedToVm("ssh-remote+agent-vm.mshome.net") === true);
 ok("connected: case-insensitive", remote.isConnectedToVm("ssh-remote+AGENT-VM") === true);
