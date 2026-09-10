@@ -127,18 +127,19 @@ function createHostAdminFeature(deps = {}) {
   function schedulePoll(entry) {
     if (entry.pollTimer) { timers.clearTimeout(entry.pollTimer); entry.pollTimer = null; }
     const ms = hostadmin.pollIntervalMs(entry.model.state);
-    if (!ms || entry.disposed || entry.panel.visible === false) return;
+    if (!ms || entry.disposed || (entry.panel.visible === false && !entry.model.state.updatePending)) return;
     entry.pollTimer = timers.setTimeout(() => {
       entry.pollTimer = null;
-      void serialize(entry, () => refreshEntry(entry));
+      void serialize(entry, () => refreshEntry(entry, true));
     }, ms);
     if (entry.pollTimer && typeof entry.pollTimer.unref === "function") entry.pollTimer.unref();
   }
 
-  async function refreshEntry(entry) {
+  async function refreshEntry(entry, background = false) {
     if (entry.disposed) return;
     await entry.model.detect();
-    if (entry.model.state.mode === "admin") await entry.model.load(entry.model.state.activeTab);
+    if (entry.model.state.mode === "admin" && (!background || ["overview", "vms", "maintenance"].includes(entry.model.state.activeTab))) await entry.model.load(entry.model.state.activeTab);
+    if (entry.model.state.activeTab !== "maintenance") await entry.model.refreshUpdates();
     postState(entry);
   }
 
@@ -147,7 +148,11 @@ function createHostAdminFeature(deps = {}) {
     let client = null, problem = "";
     try { client = await deps.clientFor(hostEntry); } catch (e) { problem = errText(e); }
     if (!client && !problem) problem = `the credential for ${hostOf(hostEntry.url)} is not available on this PC (run "The Construct: Add Remote Host" again)`;
-    return hostadmin.createHostAdminModel({ client, host: hostOf(hostEntry.url), url: hostEntry.url, backend: "hyperv-remote", now, log, problem });
+    const pendingKey = "construct.hostUpdate:" + key(hostEntry.url);
+    return hostadmin.createHostAdminModel({ client, host: hostOf(hostEntry.url), url: hostEntry.url, backend: "hyperv-remote", now, log, problem,
+      pendingUpdate: deps.context.globalState?.get(pendingKey),
+      savePendingUpdate: (value) => deps.context.globalState?.update(pendingKey, value || undefined),
+    });
   }
 
   /** Open (or reveal) the administration panel of one enrolled host. */
@@ -166,6 +171,7 @@ function createHostAdminFeature(deps = {}) {
     );
     if (vscode.Uri.joinPath) panel.iconPath = vscode.Uri.joinPath(extensionUri, "media", "icon.svg");
     const entry = { panel, hostEntry, model: await buildModel(hostEntry), pollTimer: null, disposed: false, busy: null };
+    entry.model.changed = () => { if (!entry.disposed) postState(entry); };
     panels.set(k, entry);
     panel.webview.html = buildHtml(panel.webview, extensionUri);
     // The promise is returned for the tests (VS Code ignores it); nothing awaits it live.
@@ -301,6 +307,11 @@ function createHostAdminFeature(deps = {}) {
           if (!r.ok && r.problems) { reloadTab = false; safePost(entry, { type: "hostadmin.allowanceProblems", name, problems: r.problems }); }
           break;
         }
+        case "updatesUpdate":
+          model.state.busy = true;
+          postState(entry);
+          await model.perform(action, args);
+          break;
         case "updateUser": case "createUser": case "capacityRefresh": case "mediaCleanup": case "updatesCheck": case "updatesStage":
           await model.perform(action, args);
           break;

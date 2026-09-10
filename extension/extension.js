@@ -462,7 +462,7 @@ function withLocalState(state, inst) {
   const target = inst || activeInstance();
   let connected = false;
   try { connected = remote.isConnectedToVm(safeRemoteAuthority(), instances.toSshCfg(target)); } catch (_) { /* default false */ }
-  return { ...state, connected, canConvertHost: hostconversion.eligible(target, connected), ...instanceState(target) };
+  return { ...state, connected, canConvertHost: hostconversion.eligible(target, connected), hostConversionStatus: hostconversion.pendingStatus(target.name), ...instanceState(target) };
 }
 
 /** The instance fields every state push carries: which instance this window drives and
@@ -3984,7 +3984,7 @@ async function runAddRemoteHost() {
 }
 
 function hostConversionOptions() {
-  return { vscode, context: extensionContext, saveRemoteHost, refresh: () => refreshAll() };
+  return { vscode, context: extensionContext, saveRemoteHost, refresh: () => refreshAll(), review: () => runConvertToHost() };
 }
 async function runConvertToHost() {
   const target = actionTarget();

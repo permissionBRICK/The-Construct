@@ -3,6 +3,42 @@ const assert = require("node:assert/strict");
 const { test } = require("node:test");
 const conversion = require("../src/hostconversion");
 const instances = require("../src/instances");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+
+test("opening VS Code only reports saved conversion results; dismissing never enrolls", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "conversion-notice-"));
+  const prior = process.env.LOCALAPPDATA;
+  process.env.LOCALAPPDATA = dir;
+  try {
+    fs.mkdirSync(path.dirname(conversion.pendingPath()), { recursive: true });
+    const resultPath = path.join(dir, "result.json");
+    fs.writeFileSync(conversion.pendingPath(), JSON.stringify({ id: "pending", name: "agent-vm", resultPath }));
+    fs.writeFileSync(resultPath, JSON.stringify({ ok: true }));
+    let tick;
+    const notices = [];
+    const watch = conversion.watchPending({ refresh() {}, vscode: { window: {
+      showInformationMessage: async (...args) => { notices.push(args); },
+      showErrorMessage: async (...args) => { notices.push(args); },
+    } }, context: { secrets: { get() { throw new Error("must not enroll silently"); } } } },
+    { platform: "win32", setInterval: cb => { tick = cb; }, clearInterval() {} });
+    await tick(); await tick();
+    assert.equal(notices.length, 1);
+    assert.equal(notices[0][1], "Finish host conversion");
+    assert.equal(conversion.pendingStatus("agent-vm").ready, true);
+    assert.equal(conversion.pendingStatus("other-vm"), null);
+    fs.writeFileSync(resultPath, JSON.stringify({ ok: false, error: "Guest enrollment failed" }));
+    await tick();
+    assert.match(notices[1][0], /Guest enrollment failed/);
+    assert.equal(conversion.pendingStatus("agent-vm").ready, false);
+    assert.equal(fs.existsSync(conversion.pendingPath()), true);
+    watch.dispose();
+  } finally {
+    if (prior === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = prior;
+    fs.rmSync(dir, { recursive: true });
+  }
+});
 
 test("conversion is only offered on the connected local Windows VM", () => {
   assert.equal(conversion.eligible(instances.DEFAULT_INSTANCE, true, "win32"), true);

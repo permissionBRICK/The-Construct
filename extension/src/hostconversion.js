@@ -120,7 +120,8 @@ async function run(opts) {
   try {
     let plan = readPending();
     if (plan && plan.name !== opts.instance.name) throw new Error(`Finish the pending host setup for ${plan.name} first.`);
-    if (plan && fs.existsSync(plan.resultPath) && JSON.parse(fs.readFileSync(plan.resultPath, "utf8")).ok) return await complete(opts, plan);
+    if (plan && fs.existsSync(plan.resultPath) && JSON.parse(fs.readFileSync(plan.resultPath, "utf8")).ok)
+      return await opts.vscode.window.withProgress({ location: opts.vscode.ProgressLocation.Notification, title: "Finishing host conversion…", cancellable: false }, () => complete(opts, plan));
     if (!plan) {
       const cfg = instances.toSshCfg(opts.instance);
       const machine = await ssh.runRemote("cat /etc/machine-id", { cfg });
@@ -164,21 +165,38 @@ async function run(opts) {
     });
   } finally { running = false; }
 }
-function watchPending(opts) {
-  if (process.platform !== "win32") return { dispose() {} };
+function pendingStatus(name) {
+  const plan = readPending();
+  if (!plan || plan.name !== name) return null;
+  try {
+    const result = JSON.parse(fs.readFileSync(plan.resultPath, "utf8"));
+    return result.ok ? { ready: true, message: "Host installation finished. Finish conversion to verify access and connect this window." }
+      : { ready: false, message: result.error || "Host setup stopped. Review and retry setup." };
+  } catch (_) { return { ready: false, message: "Host setup is pending. Its PowerShell window shows installation progress." }; }
+}
+function watchPending(opts, runtime = {}) {
+  if ((runtime.platform || process.platform) !== "win32") return { dispose() {} };
   let attempted = "";
-  const timer = setInterval(async () => {
+  const timer = (runtime.setInterval || setInterval)(async () => {
     if (running) return;
     const plan = readPending();
-    if (!plan || plan.id === attempted || !fs.existsSync(plan.resultPath)) return;
+    if (!plan || !fs.existsSync(plan.resultPath)) return;
     let result;
     try { result = JSON.parse(fs.readFileSync(plan.resultPath, "utf8")); } catch (_) { return; }
-    if (!result.ok) return;
-    attempted = plan.id; running = true;
-    try { await complete(opts, plan); }
+    if (attempted === plan.id + ":" + String(result.ok)) return;
+    attempted = plan.id + ":" + String(result.ok);
+    opts.refresh();
+    const action = result.ok ? "Finish host conversion" : "Review host setup";
+    const text = result.ok ? `Host installation finished for ${plan.name}. Finish conversion to verify access and connect VS Code.`
+      : `Host setup for ${plan.name} stopped: ${result.error || "See the installer console for details."}`;
+    const pick = await opts.vscode.window[result.ok ? "showInformationMessage" : "showErrorMessage"](text, action);
+    if (pick !== action || running) return;
+    if (!result.ok) { if (opts.review) await opts.review(); return; }
+    running = true;
+    try { await opts.vscode.window.withProgress({ location: opts.vscode.ProgressLocation.Notification, title: "Finishing host conversion…", cancellable: false }, () => complete(opts, plan)); }
     catch (error) { opts.vscode.window.showErrorMessage("Host setup needs attention: " + error.message); }
     finally { running = false; }
   }, 2000);
-  return { dispose() { clearInterval(timer); } };
+  return { dispose() { (runtime.clearInterval || clearInterval)(timer); } };
 }
-module.exports = { eligible, validHost, launchScript, convertedRegistry, pendingPath, run, watchPending };
+module.exports = { eligible, validHost, launchScript, convertedRegistry, pendingPath, pendingStatus, run, watchPending };

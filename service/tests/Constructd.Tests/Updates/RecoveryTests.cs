@@ -33,6 +33,24 @@ public sealed class RecoveryTests
         Assert.Equal(FenceDisposition.Closed,app.Service<FakeUpdaterLauncher>().Fence!.Disposition);
         Assert.Equal(MaintenanceState.Open,app.Service<IMaintenanceGate>().State);
     }
+    [Fact] public async Task Failed_launch_in_the_same_process_does_not_rerun_bootstrap_or_interrupt_live_jobs()
+    {
+        var forwards=new RecoveryForwards();
+        using var app=new TestApp(null,s=>s.AddSingleton<IPortForwardManager>(forwards));
+        var jobs=app.Service<IJobStore>();
+        var calls=forwards.Calls;
+        var live=new Job("still-live","host-update",null,"admin",JobState.Running,[],null,null,DateTimeOffset.UtcNow,null);
+        await jobs.UpsertAsync(live,default);
+        var h=Handoff(app.Service<IReleaseInfo>().Installed.Commit);
+        await app.Service<IHostUpdateStore>().TryStartAsync(UpdateTests.Row(h.UpdateId) with {Commit=h.Commit,State=HostUpdateState.HandedOff},default);
+        await app.Service<IUpdaterLauncher>().LaunchAsync(h,default);
+        app.Service<IMaintenanceGate>().Enter(MaintenanceState.Maintenance,h.UpdateId);
+        await app.Service<UpdateRecoveryService>().ReconcileAsync(default);
+        Assert.Equal(MaintenanceState.Open,app.Service<IMaintenanceGate>().State);
+        Assert.Equal(calls,forwards.Calls);
+        Assert.Equal(JobState.Running,(await jobs.GetAsync(live.Id,default))!.State);
+        Assert.Equal("updater-did-not-start",(await app.Service<IHostUpdateStore>().GetAsync(h.UpdateId,default))!.Error);
+    }
     [Fact] public async Task Mixed_old_binary_never_reopens_and_resolution_refuses_wrong_binary()
     {
         using var app=new TestApp();var h=Handoff(app.Service<IReleaseInfo>().Installed.Commit);
@@ -87,7 +105,8 @@ public sealed class RecoveryTests
     private sealed class RecoveryForwards : IPortForwardManager
     {
         public bool Fail {get;set;}
-        public Task<int> ReconcileAsync(CancellationToken ct)=>Fail ? Task.FromException<int>(new IOException("test failure")) : Task.FromResult(0);
+        public int Calls {get;private set;}
+        public Task<int> ReconcileAsync(CancellationToken ct) {Calls++;return Fail ? Task.FromException<int>(new IOException("test failure")) : Task.FromResult(0);}
         public Task<int> AllocateSshForwardAsync(string vm,CancellationToken ct)=>Task.FromResult(2200);
         public Task<bool> ReleaseSshForwardAsync(string vm,CancellationToken ct)=>Task.FromResult(false);
         public Task<AddForwardResult> TryAddForwardAsync(string vm,int port,ForwardTarget target,string label,int max,CancellationToken ct)=>throw new NotSupportedException();
