@@ -8,10 +8,11 @@ or another OS supported by the host backend.
 This command is for the guest shell. Host administrators use the host administration
 API/UI, while the existing primary provisioning flow remains unchanged.
 
-> **Validation status:** the CLI/API flow is implemented and tested on Linux against the
-> fake service and recording runners. It has not yet created or operated a child through
-> the production service on Hyper-V; follow the
-> [host-administration field test](field-test-host-admin.md) before rollout.
+> **Validation status:** a [live Alpine smoke test](agent-notes/child-vm-alpine-field-test-20260910.md)
+> on STANDPC verified delegated creation, ISO boot, screenshots, raw keyboard input and
+> graceful shutdown through the production Hyper-V service. Broader Windows, sharing,
+> networking and recovery coverage still requires the
+> [host-administration field test](field-test-host-admin.md).
 
 ## Before the first command
 
@@ -175,6 +176,10 @@ support works independently of guest networking where the backend provides it. T
 initial Hyper-V backend does not provide an interactive video/VNC session, and mouse
 input can truthfully return unavailable with a fallback hint.
 
+In the Alpine text-console field test, Hyper-V's `TypeText` produced escape sequences;
+raw `--scancodes` input worked. Scancode requests accept at most 64 bytes. Split longer
+input at complete key sequences and release any modifiers before ending a request.
+
 ## Child forwards
 
 `construct expose` always targets the current primary. To ask for a connection to a
@@ -298,7 +303,8 @@ the child. There is no abandon/supersede configuration API.
   `unsupported-capability`.
 - Interactive VMConnect/RDP/VNC video is not exposed. Screenshot and keyboard are
   supported by the bounded WMI transport; mouse is conditional and may return
-  `applied:false`. LocalSystem execution and visible guest input still need the field test.
+  `applied:false`. LocalSystem screenshot capture and raw scancode input were verified
+  on Alpine; other guest/input combinations still need field testing.
 - Child addresses are guest-reported and unverified. Client forwarding may use such an
   address with a warning; host forwarding to a child is refused. Recorded network rules
   are intended relationships only—this delivery enforces no packet isolation.
