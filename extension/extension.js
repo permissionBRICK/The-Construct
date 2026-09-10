@@ -40,6 +40,7 @@ const forwarder = require("./src/forwarder");
 const forwarderui = require("./src/forwarder-ui");
 const hypervRemote = require("./src/drivers/hyperv-remote");
 const hostadminui = require("./src/hostadmin-ui");
+const hostconversion = require("./src/hostconversion");
 
 /** The single editor-tab panel instance, if open. */
 let panel; // vscode.WebviewPanel | undefined
@@ -463,7 +464,7 @@ function withLocalState(state, inst) {
   const target = inst || activeInstance();
   let connected = false;
   try { connected = remote.isConnectedToVm(safeRemoteAuthority(), instances.toSshCfg(target)); } catch (_) { /* default false */ }
-  return { ...state, connected, ...instanceState(target) };
+  return { ...state, connected, canConvertHost: hostconversion.eligible(target, connected), ...instanceState(target) };
 }
 
 /** The instance fields every state push carries: which instance this window drives and
@@ -3984,6 +3985,21 @@ async function runAddRemoteHost() {
   );
 }
 
+function hostConversionOptions() {
+  return { vscode, context: extensionContext, saveRemoteHost, refresh: () => refreshAll() };
+}
+async function runConvertToHost() {
+  const target = actionTarget();
+  const scriptsDir = resolveScriptsDir();
+  if (!scriptsDir) { warnNoScriptsDir(); return; }
+  try {
+    await hostconversion.run({ ...hostConversionOptions(), instance: target.instance, scriptsDir,
+      connected: remote.isConnectedToVm(safeRemoteAuthority(), target.cfg),
+      ubuntu: host.readRawSettings(scriptsDir).ubuntuRelease,
+      stillCurrent: () => !targetSuperseded(target, "Convert to host") });
+  } catch (error) { vscode.window.showErrorMessage("Host conversion: " + error.message); }
+}
+
 /**
  * "The Construct: New VM on Remote Host" — pick a host, ask name/CPU/RAM/disk, then
  * launch Auto-Install.ps1's remote path in a host console.
@@ -4315,6 +4331,7 @@ function handleMessage(message, webview, context) {
 
     case "command": {
       const id = message.id;
+      if (id === "convertToHost") return preparePanelLifecycle(webview, id, runConvertToHost);
       logLine(`command: ${id}${message.project ? " (" + message.project + ")" : ""}`);
       if (id === "showLogs") { showLogs(); return; }
       if (id === "refresh") { refreshState(webview); return; }
@@ -5052,6 +5069,7 @@ async function activate(context) {
   // Reload this window by itself when Update-Construct.ps1 (run from the T3 Code Desktop
   // app, another window, or by hand) installs a newer panel.
   watchInstalledMarker(context);
+  context.subscriptions.push(hostconversion.watchPending(hostConversionOptions()));
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider("construct.panel", new ConstructViewProvider(context), {
       webviewOptions: { retainContextWhenHidden: true },
