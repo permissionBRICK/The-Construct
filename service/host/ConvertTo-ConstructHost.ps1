@@ -189,6 +189,13 @@ try {
     $service = Get-Service constructd -ErrorAction SilentlyContinue
     if ($service -and $service.Status -ne 'Stopped') { Stop-Service constructd; (Get-Service constructd).WaitForStatus('Stopped',[TimeSpan]::FromSeconds(30)) }
     Step 'Adopting the existing VM without rebuilding it'
+    # Installation can take minutes. Re-read identity and resources at the handoff,
+    # so a concurrent local reinstall cannot substitute another VM under this name.
+    $vm = Get-VM -Name $plan.vmName
+    if ($vm.Id.ToString() -ne $journal.vmId -or $vm.State -ne 'Running' -or
+        (Invoke-Guest 'cat /etc/machine-id') -ne $plan.machineId) { throw 'The selected VM changed while the host was being installed.' }
+    $disks = @(Get-VMHardDiskDrive -VM $vm | ForEach-Object { Get-VHD -Path $_.Path })
+    if ($disks.Count -eq 0) { throw 'The selected VM no longer has a disk.' }
     $adopt = Invoke-Admin @('vms','adopt',$plan.name,'--owner',$plan.adminUser,'--cpu',([string]$vm.ProcessorCount),
         '--ram-mb',([string][int]($vm.MemoryStartup / 1MB)),'--disk-gb',([string][int][Math]::Ceiling(($disks | Measure-Object Size -Sum).Sum / 1GB)),
         '--incarnation',$vm.Id.ToString())
