@@ -56,9 +56,9 @@
     <section class="actionbar">
       <div class="label-row"><h2 class="seclabel">Lifecycle</h2><span class="meta" id="constructRev">—</span></div>
       <div class="action-grid">
-        <button class="act primary" data-cmd="reprovision" title="Reprovision — re-run setup, keep all data"><span class="t"><span class="gl">&#x27F3;</span><span class="lbl">Reprovision</span></span><small>re-run setup &middot; keep all data</small></button>
-        <button class="act danger" data-cmd="reinstall" title="Reinstall — rebuild from current ISO"><span class="t"><span class="gl">&#x21BB;</span><span class="lbl">Reinstall</span></span><small>rebuild from current ISO</small></button>
-        <button class="act danger" data-cmd="redownload" title="Redownload — fresh Ubuntu ISO, then rebuild"><span class="t"><span class="gl">&#x2913;</span><span class="lbl">Redownload</span></span><small>fresh Ubuntu ISO, then rebuild</small></button>
+        <button class="act primary" data-cmd="reprovision" title="Reprovision — re-run setup, keep all data"><span class="t"><span class="gl action-icon" aria-hidden="true"><span class="action-symbol">&#x27F3;</span></span><span class="lbl">Reprovision</span></span><small>re-run setup &middot; keep all data</small></button>
+        <button class="act danger" data-cmd="reinstall" title="Reinstall — rebuild from current ISO"><span class="t"><span class="gl action-icon" aria-hidden="true"><span class="action-symbol"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8.5 7 11 2.8a1.2 1.2 0 0 1 2 0L16 8m-4-1 4 1 1-4M17 11l3.6 6.2a1.2 1.2 0 0 1-1 1.8H14m2-3-3 3 3 3M10 19H3.8a1.2 1.2 0 0 1-1-1.8L6 11m1 4-1-4-4 1"/></svg></span></span><span class="lbl">Reinstall</span></span><small>rebuild from current ISO</small></button>
+        <button class="act danger" data-cmd="redownload" title="Redownload — fresh Ubuntu ISO, then rebuild"><span class="t"><span class="gl action-icon" aria-hidden="true"><span class="action-symbol">&#x2913;</span></span><span class="lbl">Redownload</span></span><small>fresh Ubuntu ISO, then rebuild</small></button>
       </div>
     </section>
 
@@ -225,7 +225,7 @@
     <section class="setgroup" id="hostConversionSettings" hidden>
       <div class="gh"><h2 class="seclabel">Share this PC as a host</h2></div>
       <p class="lead">Set up a Construct host for other users and adopt this VM with its existing data and settings. You become the host administrator.</p>
-      <button class="btn" data-cmd="convertToHost">Make this PC a Construct host…</button>
+      <button class="btn" data-cmd="convertToHost"><span class="action-icon" aria-hidden="true"><span class="action-symbol">&#x2197;</span></span> Make this PC a Construct host…</button>
     </section>
 
     <section class="setgroup">
@@ -273,8 +273,8 @@
       <div class="backup-pick"><span>using:</span><select id="backupPick" style="max-width:320px"><option>(no backups found)</option></select></div>
       <div class="radio-card danger" data-backup="wipe" style="margin-top:8px"><span class="rdot"></span><div><div class="rc-t">Clean wipe</div><div class="rc-d">Reinstall completely blank — no backup, no restore. All settings, auth and history are lost.</div></div></div>
       <div class="settings-actions" style="margin-top:14px">
-        <button class="btn danger" data-cmd="customRedownload">&#x21BB; Redownload with these settings</button>
-        <button class="btn danger" data-cmd="customReinstall">&#x2297; Reinstall with these settings</button>
+        <button class="btn danger" data-cmd="customRedownload"><span class="action-icon" aria-hidden="true"><span class="action-symbol">&#x2913;</span></span> Redownload with these settings</button>
+        <button class="btn danger" data-cmd="customReinstall"><span class="action-icon" aria-hidden="true"><span class="action-symbol"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8.5 7 11 2.8a1.2 1.2 0 0 1 2 0L16 8m-4-1 4 1 1-4M17 11l3.6 6.2a1.2 1.2 0 0 1-1 1.8H14m2-3-3 3 3 3M10 19H3.8a1.2 1.2 0 0 1-1-1.8L6 11m1 4-1-4-4 1"/></svg></span></span> Reinstall with these settings</button>
       </div>
     </section>
 

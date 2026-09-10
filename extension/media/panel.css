@@ -470,8 +470,12 @@ body.launcher { font-size: 12px; }
 /* The launcher button uses flex layout; hidden must still win. */
 #lHostAdmin[hidden] { display: none; }
 
-/* Lifecycle preparation: retain the action label while showing immediate activity. */
+/* Reserve the same icon slot for the glyph and its loading replacement. */
+.action-icon { display: inline-grid; position: relative; width: 1.2em; height: 1.2em; line-height: 1.2; vertical-align: middle; place-items: center; flex-shrink: 0; }
+.action-symbol { display: inline-flex; align-items: center; justify-content: center; width: 100%; height: 100%; }
+.action-symbol svg { display: block; width: 100%; height: 100%; }
+[data-cmd].preparing .action-symbol { visibility: hidden; }
 [data-cmd].preparing { opacity: .65; cursor: wait; }
-.prepare-spinner { display: inline-block; width: .85em; height: .85em; margin-right: .5em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: prepare-spin .8s linear infinite; }
+.prepare-spinner { position: absolute; box-sizing: border-box; width: 1em; height: 1em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: prepare-spin .8s linear infinite; }
 @keyframes prepare-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .prepare-spinner { animation: none; } }
