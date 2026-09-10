@@ -3454,61 +3454,37 @@ if ($IsoPath) {
     }
 
     $srcIso = Join-Path $PSScriptRoot $isoName
-    # The Redownload choice (or -Redownload) forces a fresh fetch: drop any local
-    # copy so the reuse branch below doesn't short-circuit it.
-    if ($forceDownload -and (Test-Path -LiteralPath $srcIso)) {
-        Write-Note "Re-downloading the source ISO (overwriting the local copy): $srcIso"
-        Remove-Item -LiteralPath $srcIso -Force -ErrorAction SilentlyContinue
-    }
-    if (Test-Path -LiteralPath $srcIso) {
-        Write-Ok "ISO already downloaded: $srcIso"
-    } else {
-        Write-Note "Downloading $IsoUrl"
-        Write-Note "(this is ~2-3 GB; using BITS if available)"
-        $downloaded = $false
-        $bits = Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue
-        if ($bits) {
-            try {
-                Start-BitsTransfer -Source $IsoUrl -Destination $srcIso -Description "Ubuntu Server $UbuntuRelease" -ErrorAction Stop
-                $downloaded = $true
-            } catch {
-                # BITS can fail at runtime even when present — e.g. "The handle is
-                # invalid (E_HANDLE)" in non-interactive / remoting / detached
-                # sessions, or when the BITS service is disabled. Fall back below.
-                Write-Warning "BITS transfer failed ($($_.Exception.Message)); falling back to Invoke-WebRequest."
-                if (Test-Path -LiteralPath $srcIso) { Remove-Item -LiteralPath $srcIso -Force -ErrorAction SilentlyContinue }
-            }
-        }
-        if (-not $downloaded) {
-            # Fallback: disable the progress bar (it cripples Invoke-WebRequest throughput).
-            $oldPref = $ProgressPreference; $ProgressPreference = "SilentlyContinue"
-            try { Invoke-WebRequest -Uri $IsoUrl -OutFile $srcIso -UseBasicParsing }
-            finally { $ProgressPreference = $oldPref }
-        }
-        Write-Ok "Downloaded: $srcIso"
-    }
-
-    # Verify SHA256 against the release SHA256SUMS file.
+    $expectedIsoSha256 = ''
     if (-not $SkipChecksum) {
+        Write-Note "Looking up the release SHA256 checksum..."
         try {
-            $sums = (Invoke-WebRequest -Uri ($baseUrl + "SHA256SUMS") -UseBasicParsing).Content
-            $line = ($sums -split "`n") | Where-Object { $_ -match [regex]::Escape($isoName) } | Select-Object -First 1
-            if ($line) {
-                $want = ($line -split '\s+')[0].Trim().ToLower()
-                Write-Note "Verifying SHA256 ($want)"
-                $got = (Get-FileHash -LiteralPath $srcIso -Algorithm SHA256).Hash.ToLower()
-                if ($got -ne $want) {
-                    throw "SHA256 mismatch for $isoName`n  expected $want`n  got      $got`n  Delete the file and retry, or pass -SkipChecksum."
-                }
-                Write-Ok "Checksum verified"
-            } else {
-                Write-Warning "Could not find $isoName in SHA256SUMS; skipping verification."
+            $sums = (Invoke-WebRequest -Uri ($baseUrl + "SHA256SUMS") -UseBasicParsing -TimeoutSec 20).Content
+            $pattern = '^([a-fA-F0-9]{64})\s+\*?' + [regex]::Escape($isoName) + '\s*$'
+            foreach ($line in ($sums -split "`n")) {
+                if ($line -match $pattern) { $expectedIsoSha256 = $Matches[1].ToLower(); break }
             }
+            if (-not $expectedIsoSha256) { Write-Warning "Could not find $isoName in SHA256SUMS; skipping verification." }
         } catch {
-            if ($_.Exception.Message -match "SHA256 mismatch") { throw }
             Write-Warning "Checksum verification skipped (couldn't fetch SHA256SUMS): $($_.Exception.Message)"
         }
     }
+    # Keep a previous complete ISO until its replacement passes download and checksum checks.
+    if ((Test-Path -LiteralPath $srcIso) -and -not $forceDownload) {
+        Write-Ok "ISO already downloaded: $srcIso"
+        if ($expectedIsoSha256) {
+            Write-Note "Verifying SHA256 ($expectedIsoSha256)"
+            $got = (Get-FileHash -LiteralPath $srcIso -Algorithm SHA256).Hash.ToLower()
+            if ($got -ne $expectedIsoSha256) { throw "SHA256 mismatch for $isoName. Delete the file and retry, or pass -SkipChecksum." }
+            Write-Ok "Checksum verified"
+        }
+    } else {
+        Write-Note "Downloading $IsoUrl"
+        . (Join-Path $PSScriptRoot 'lib\Construct.Download.ps1')
+        Receive-ConstructIso -Uri $IsoUrl -OutFile $srcIso -ExpectedSha256 $expectedIsoSha256
+        Write-Ok "Downloaded: $srcIso"
+        if ($expectedIsoSha256) { Write-Ok "Checksum verified" }
+    }
+
 }
 
 # ── 3. Build the autoinstall ISO natively ────────────────────────────────────
