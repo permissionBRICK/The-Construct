@@ -41,8 +41,8 @@
   ],
   "hostPackages": [],
   "provisionCommands": [
-    "npm ci",
-    "cp -n .env.example .env || true"
+    "npm install",
+    "if [ ! -e .env ]; then cp .env.example .env; fi"
   ],
   "tests": {
     "web": {

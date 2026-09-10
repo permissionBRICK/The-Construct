@@ -110,7 +110,7 @@ Per-project setup is declared once in `projects/*.json` and reused on every (re)
   "repos": [{ "url": "git@github.com:acme/customer-portal.git", "directory": "customer-portal" }],
   "sdks": { "node": "22" },
   "mcp": [{ "name": "context7", "type": "stdio", "command": "npx", "args": ["-y", "@upstash/context7-mcp"] }],
-  "provisionCommands": ["npm ci", "cp -n .env.example .env || true"]
+  "provisionCommands": ["npm install", "if [ ! -e .env ]; then cp .env.example .env; fi"]
 }
 ```
 
