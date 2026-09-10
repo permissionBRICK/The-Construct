@@ -1763,12 +1763,16 @@ if (Enter-RootKeyFastPath) {
             $seedQuery = "u=`$(sed -n 's/^SSH_USER=//p' /etc/construct/config.env 2>/dev/null | head -1 | tr -d `"'`\`"`"); if [ -n `"`$u`" ] && id -u `"`$u`" >/dev/null 2>&1; then echo `"`$u`"; elif id -u '$SeedUser' >/dev/null 2>&1; then echo '$SeedUser'; elif id -u construct >/dev/null 2>&1; then echo construct; fi"
             $seedQueryB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($seedQuery))
             $guestSeed = (Invoke-Ssh -Command "printf %s '$seedQueryB64' | base64 -d | bash").Trim()
-            if ($guestSeed -and $guestSeed -ne $SeedUser -and $guestSeed -match '^[a-z_][a-z0-9_-]*$') {
-                Write-Note "Seed user on this VM is '$guestSeed' (not '$SeedUser'); using it."
+            if (-not $guestSeed -or $guestSeed -notmatch '^[a-z_][a-z0-9_-]*$') {
+                throw 'The guest did not return an existing seed account.'
+            }
+            if ($guestSeed -ne $SeedUser) {
+                $previousSeed = $SeedUser
                 $SeedUser = $guestSeed
+                Write-Ok "Seed user on this VM is '$SeedUser' (not '$previousSeed'); using it."
             }
         } catch {
-            Write-Warning "Could not read the VM's seed user ($($_.Exception.Message)); keeping '$SeedUser'."
+            throw "Could not determine the VM's seed user: $($_.Exception.Message) Reprovision stopped before replacing the guest repository."
         }
     }
 } else {
