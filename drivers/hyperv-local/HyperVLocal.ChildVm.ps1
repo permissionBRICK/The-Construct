@@ -175,6 +175,15 @@ function Get-ConstructChildVmObject {
     return $null
 }
 
+function Test-ConstructChildKeyProtectorPresent {
+    param([byte[]]$Protector)
+    if ($null -eq $Protector -or $Protector.Length -eq 0) { return $false }
+    # A fresh Hyper-V VM returns the four-byte empty blob 00 00 00 04.
+    # Other nonempty values stay locked, including unknown blob formats.
+    return -not ($Protector.Length -eq 4 -and $Protector[0] -eq 0 -and
+        $Protector[1] -eq 0 -and $Protector[2] -eq 0 -and $Protector[3] -eq 4)
+}
+
 function Set-ConstructChildHardware {
     param([string]$Name, $Hardware, [bool]$ResendTemplate = $false)
     Assert-ConstructChildVmName $Name
@@ -186,7 +195,7 @@ function Set-ConstructChildHardware {
     # Hyper-V emits a byte array as one pipeline object, including when it is
     # empty. Counting an @() wrapper would report a protector on a fresh VM.
     $protector = Get-VMKeyProtector -VMName $Name -ErrorAction Stop
-    $hasProtector = $null -ne $protector -and $protector.Length -gt 0
+    $hasProtector = Test-ConstructChildKeyProtectorPresent -Protector $protector
     if ($ResendTemplate -and $hasProtector) { throw 'secure-boot-template-locked' }
     $disks = @(Get-VMHardDiskDrive -VMName $Name -ErrorAction Stop)
     if ($disks.Count -gt 0 -and (Get-VHD -Path $disks[0].Path -ErrorAction Stop).Size -ne ([long]$Hardware.diskGb * 1GB)) { throw 'unsupported-capability' }
@@ -390,7 +399,7 @@ function Get-ConstructChildVmCapabilities {
         vmName = $Name; state = (Get-ConstructVmState -Name $Name); generation = $vm.Generation
         videoHeadPresent = ($video.Count -gt 0); keyboardPresent = (@($system.GetRelated('Msvm_Keyboard')).Count -gt 0)
         syntheticMousePresent = (@($system.GetRelated('Msvm_SyntheticMouse')).Count -gt 0); ps2MousePresent = (@($system.GetRelated('Msvm_Ps2Mouse')).Count -gt 0)
-        nativeWidth = $width; nativeHeight = $height; secureBootTemplateLocked = ($null -ne $protector -and $protector.Length -gt 0)
+        nativeWidth = $width; nativeHeight = $height; secureBootTemplateLocked = (Test-ConstructChildKeyProtectorPresent -Protector $protector)
         gracefulShutdown = $shutdown
         network = @{ clientForward = 'supported'; hostForward = 'unsupported'; addressVerification = 'unsupported' }
     }
