@@ -137,6 +137,7 @@ Recognized variables:
 | `INSTALL_SDKS` | `true` | Install the merged project runtimes |
 | `CHECKOUT_PROJECTS` | `false` | Clone the selected projects' repos |
 | `CHECKOUT_JOBS` | `0` | Simultaneous project checkouts: `0` = all independent repos; positive number = concurrency limit |
+| `PROVISION_JOBS` | `0` | Simultaneous project command groups after checkout: `0` = all independent profiles; `1` = sequential; commands within each profile stay ordered |
 | `START_SERVICE` | `true` | Start the `construct` service |
 | `VSCODE_SERVER` | `true` | Install the VS Code CLI / server for Remote-SSH |
 | `VSCODE_SERVE_WEB` | `true` | Autostart browser-based `code serve-web` |
