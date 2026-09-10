@@ -311,3 +311,9 @@ the child. There is no abandon/supersede configuration API.
 - Secure Boot templates are `microsoftWindows` and
   `microsoftUefiCertificateAuthority`. Hyper-V locks the template after TPM
   initialization, so later template changes are refused.
+
+## Browser console
+
+An opt-in browser viewer is available with `construct vm console NAME --web`.
+It connects through Guacamole to Hyper-V VMConnect and supports boot/installer
+consoles. See [gateway installation and session boundaries](../console-viewer/README.md).

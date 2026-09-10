@@ -15,6 +15,9 @@ public static class ConsoleComposition
         }
         else services.AddSingleton<IConsoleTransport, HyperVConsoleTransport>();
         services.AddSingleton<IConsoleSessionStore, InMemoryConsoleSessionStore>();
+        if (options.Fake) services.AddSingleton<IInteractiveConsole, Constructd.Core.Services.UnsupportedInteractiveConsole>();
+        else services.AddSingleton<IInteractiveConsole, HyperVInteractiveConsole>();
+        services.AddHostedService<Constructd.Api.Hosting.ConsoleCredentialCleanup>();
         return services;
     }
 }

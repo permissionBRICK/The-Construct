@@ -1,0 +1,101 @@
+# Browser console for Hyper-V guests
+
+`construct vm console NAME --web` opens a VM-scoped browser viewer through Apache
+Guacamole 1.6.0 and Hyper-V VMConnect. It works at boot and in ISO installers,
+without guest networking or a guest remote-desktop agent. The guest VM continues
+to run directly on the Windows Hyper-V host.
+
+## Installation
+
+On the Windows Construct host, after installing a release containing this feature:
+
+```powershell
+.\service\host\Enable-ConstructBrowserConsole.ps1
+```
+
+The `Constructd:BrowserConsoleEnabled` setting is opt-in and takes effect on the
+next host update or service restart. The service identity needs its existing
+LocalSystem privileges to create temporary local accounts. TCP 2179 must be
+reachable from the trusted primary VM. The gateway obtains the VMConnect
+certificate fingerprint through the authenticated host API; no certificate bypass
+or hardcoded machine-specific fingerprint is needed.
+
+On the Linux primary VM, with Docker installed and running:
+
+```bash
+bash /path/to/construct/console-viewer/install.sh
+construct vm console alpine-viewer --web --minutes 30
+```
+
+The command uses `construct expose` to print a working client-forwarded link.
+The viewer listens on port 6080. Link lifetimes range from 5 to 120 minutes;
+default 30. This does not extend the guest's VM lease. Opening a new link after a
+page refresh is intentional: the fragment is removed from browser history once
+redeemed. Reconnect works from the current page while its link remains valid.
+
+The gateway is installed under `/opt/construct/console-viewer` and managed by
+`construct-console-viewer.service`. guacd is a separate, digest-pinned container,
+bound **only to 127.0.0.1:4822**, without guest-supplied connection settings.
+The `construct-browser-console` project profile records the repository, Docker,
+and gateway setup for reprovisioning; select it alongside your other profiles.
+
+Optional machine-local settings in `/etc/construct/console-viewer.env`:
+
+```sh
+CONSTRUCT_CONSOLE_PORT='6080'
+CONSTRUCT_CONSOLE_KEYBOARD_LAYOUT='en-us-qwerty'
+# For a direct HTTPS deployment, provide both certificate and key:
+# CONSTRUCT_CONSOLE_TLS_CERT='/etc/construct/console-cert.pem'
+# CONSTRUCT_CONSOLE_TLS_KEY='/etc/construct/console-key.pem'
+```
+
+Use the client-forwarded localhost link, or configure HTTPS for direct remote
+access. The link grants control of exactly one VM until it expires. The optional
+settings must be provisioned from machine-local configuration, not fixed values
+in a profile shared between different hosts.
+
+## Session and credential boundaries
+
+- Only the root-only Unix control socket can mint links. The browser never sees
+  the primary VM token or Windows password. Link secrets arrive in a URL fragment
+  and are exchanged for an HttpOnly, SameSite cookie scoped to that connection.
+- The gateway creates an ordinary host console session and calls the new
+  `POST /api/v1/vms/{name}/console/sessions/{sid}/connection` endpoint. All existing
+  console authorization, principal binding, parent fences, and session caps apply.
+  Primary-token gateways may connect only to themselves and their own children.
+- The host creates a random-password local account, with no group membership,
+  and grants VMConnect access only to the selected native VM GUID. Credentials
+  are sent over the pinned host API to the trusted primary gateway, then over
+  pinned TLS to VMConnect. They are never logged or written to a credential file.
+- The gateway renews the 60-second host session every 20 seconds and closes the
+  stream if authorization/renewal fails or the link expires. Disconnect deletes
+  the host session, revokes VMConnect permission, and removes the account.
+- Accounts expire 30 seconds after their last session expiry. A host cleanup loop
+  reaps revoked/expired sessions and expired orphan accounts every 30 seconds.
+  Account expiry alone is not a forced disconnect for an existing RDP connection;
+  the trusted gateway enforces stream lifetime. The primary VM is therefore part
+  of the trusted console infrastructure, not an untrusted public gateway.
+- File transfer, clipboard transfer, and audio are disabled for this initial
+  console. Keyboard uses Guacamole's RDP key mapping rather than WMI TypeText.
+  Mouse behavior still depends on the guest integration/boot environment.
+
+## Validation
+
+```bash
+/usr/bin/python3 -m unittest discover -s console-viewer -p 'test_*.py' -v
+dotnet test service/tests/Constructd.Tests/Constructd.Tests.csproj
+```
+
+Tests cover ticket/origin rejection, VM targeting, secret exclusion from browser
+traffic, forbidden protocol instructions, active-stream expiry, disconnect
+cleanup, host authorization and credential lifecycle. See the dated field-test
+notes for the real STANDPC browser test.
+
+## Third-party assets
+
+`static/guacamole-1.6.0.min.js` is Apache's `guacamole-common-js/all.min.js`, extracted
+unmodified from the official 1.6.0 WAR. Apache license/notice files are included.
+WAR: https://archive.apache.org/dist/guacamole/1.6.0/binary/guacamole-1.6.0.war
+SHA-256: `b41ceb1e2df010b54db563e0b00edb8d5fe9f073c6168462e4c978df0fc6e716`
+JS SHA-256: `cc89f710ecc544477dbe6bfea453fab752dafa1b1ab9770f523676e7b744b44a`
+guacd image: `guacamole/guacd@sha256:8974eaa9ba32f713daf311e7cc8cd7e4cdfba1edea39eed75524e78ef4b08f4f`

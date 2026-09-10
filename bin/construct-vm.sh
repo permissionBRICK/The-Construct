@@ -58,7 +58,9 @@ Media:
   media detach NAME (--install | --aux) [--json]
   media delete ID --yes [--json]
 
-Console (one short-lived session per invocation):
+Console:
+  console NAME --web [--minutes 30]  Browser viewer (requires gateway installation)
+  Other actions use one short-lived session per invocation:
   console NAME --screenshot FILE.png [--width W --height H]
   console NAME (--type-stdin | --type-file FILE | --key CODE [--press|--release]
                | --scancodes HEX,... | --ctrl-alt-del)
@@ -821,6 +823,12 @@ require_mouse_applied() {
 
 cmd_console() {
   local name="${1:-}"; shift || true
+  if [[ "${1:-}" == --web ]]; then
+    shift
+    local viewer=/opt/construct/console-viewer/open.py
+    [[ -f "${viewer}" ]] || die 'browser gateway is not installed; run console-viewer/install.sh from the Construct checkout'
+    exec /usr/bin/python3 "${viewer}" "${name}" "$@"
+  fi
   local mode="" value="" width="" height="" press_state=null operation_id="" key session base body response query="" file
   [[ -n "${name}" ]] || die 'console requires a VM name'
   while [[ $# -gt 0 ]]; do
