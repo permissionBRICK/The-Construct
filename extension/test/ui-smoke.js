@@ -93,6 +93,14 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await page.click('[data-cmd="reprovision"]');
   posted = await page.evaluate(() => window.__posted);
   check("reprovision posts command", posted.some((m) => m.type === "command" && m.id === "reprovision"));
+  check("preparation disables the clicked action immediately", await page.locator('[data-cmd="reprovision"]').isDisabled());
+  check("preparation shows a spinner", await page.locator('[data-cmd="reprovision"] .prepare-spinner').count() === 1);
+  check("preparation blocks a competing rebuild", await page.locator('[data-cmd="redownload"]').isDisabled());
+  await page.evaluate(() => window.postMessage({ type: "lifecyclePrepared", id: "reprovision" }, "*"));
+  await page.waitForTimeout(30);
+  check("preparation completion restores buttons", await page.locator('[data-cmd="reprovision"]').isEnabled());
+  check("preparation completion removes spinner", await page.locator('.prepare-spinner').count() === 0);
+
 
   await page.click("#openTabBtn");
   posted = await page.evaluate(() => window.__posted);
@@ -518,6 +526,11 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await page.click('.laction[data-cmd="reinstall"]');
   lposted = await page.evaluate(() => window.__posted);
   check("launcher: reinstall posts command", lposted.some((m) => m.type === "command" && m.id === "reinstall"));
+  check("launcher: reinstall shows preparation", await page.locator('.laction[data-cmd="reinstall"]').isDisabled() && await page.locator('.prepare-spinner').count() === 1);
+  await page.evaluate(() => window.postMessage({ type: "lifecyclePrepared", id: "reinstall" }, "*"));
+  await page.waitForTimeout(30);
+  check("launcher: preparation completion restores action", await page.locator('.laction[data-cmd="reinstall"]').isEnabled());
+
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h.example.net", agents: [{ name: "Claude Code", version: "2.1.196", updateAvailable: true }], installed: "2026-06-12", reprovisioned: "1d ago" } }, "*"));
   await page.waitForTimeout(80);
   check("launcher: host rendered", (await page.locator("#lHost").innerText()) === "h.example.net");
@@ -1106,6 +1119,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     config: { sections: [{ key: "capacity", source: "stored", updatedAt: "2026-09-07 09:00 UTC", expectedUpdatedAt: "2026-09-07T09:00:00Z", text: "{\n  \"mode\": \"observe\"\n}", present: true }], capabilities: { backend: "hyperv-local", rows: [{ key: "console.interactive", value: "unsupported" }], notes: [] }, problems: [{ field: "capacity.mode", reason: "must be observe or enforce" }] },
     maintenanceTab: null,
   };
+  for (const row of ADMIN_STATE.vms.rows) row.usage = require("../src/hostadmin").toVmRow({}).usage;
   await pushAdmin(ADMIN_STATE);
   await admin.waitForTimeout(80);
   check("admin: the module renders for an admin", await admin.locator("#haAdmin").isVisible() && !(await admin.locator("#haState").isVisible()));

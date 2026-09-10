@@ -4154,6 +4154,12 @@ const webviewOptions = (extensionUri) => ({
  * the same webview. `webview` is the surface that sent the message so replies
  * land in the right place.
  */
+async function preparePanelLifecycle(webview, id, work) {
+  try { await work(); }
+  catch (e) { vscode.window.showErrorMessage("Could not prepare " + id + ": " + (e && e.message ? e.message : e)); }
+  finally { safePost(webview, { type: "lifecyclePrepared", id }); }
+}
+
 function handleMessage(message, webview, context) {
   if (!message || typeof message.type !== "string") return;
 
@@ -4262,11 +4268,12 @@ function handleMessage(message, webview, context) {
     }
 
     case "customRebuild": {
-      const scriptsDir = resolveScriptsDir();
-      if (!scriptsDir) { warnNoScriptsDir(); return; }
-      const action = message.mode === "redownload" ? "redownload" : "reinstall";
-      const rebuildTarget = actionTarget();
-      (async () => {
+      const buttonId = message.mode === "redownload" ? "customRedownload" : "customReinstall";
+      return preparePanelLifecycle(webview, buttonId, async () => {
+        const scriptsDir = resolveScriptsDir();
+        if (!scriptsDir) { warnNoScriptsDir(); return; }
+        const action = message.mode === "redownload" ? "redownload" : "reinstall";
+        const rebuildTarget = actionTarget();
         var pf = await lifecyclePreFlight(action === "redownload" ? "redownloading" : "reinstalling", rebuildTarget);
         if (!pf.ok) { showPreFlightBlock(pf); return; }
         // A rebuild DELETES a VM, so it must land on the instance the button was
@@ -4280,8 +4287,7 @@ function handleMessage(message, webview, context) {
           // side of it, or an accept given for this instance rebuilds another one.
           stillCurrent: () => !targetSuperseded(rebuildTarget, action === "redownload" ? "Redownload" : "Reinstall"),
         });
-      })();
-      return;
+      });
     }
 
     case "setUsagePeriod": {
@@ -4376,10 +4382,10 @@ function handleMessage(message, webview, context) {
         return;
       }
       if (id === "reprovision" || id === "reinstall" || id === "redownload") {
-        const scriptsDir = resolveScriptsDir();
-        if (!scriptsDir) { warnNoScriptsDir(); return; }
-        const lifeTarget = actionTarget();
-        (async () => {
+        return preparePanelLifecycle(webview, id, async () => {
+          const scriptsDir = resolveScriptsDir();
+          if (!scriptsDir) { warnNoScriptsDir(); return; }
+          const lifeTarget = actionTarget();
           var pf = await lifecyclePreFlight(id === "reprovision" ? "reprovisioning" : id === "reinstall" ? "reinstalling" : "redownloading", lifeTarget);
           if (!pf.ok) { showPreFlightBlock(pf); return; }
           const projects = await effectiveProjects(lifeTarget.instance);
@@ -4392,8 +4398,7 @@ function handleMessage(message, webview, context) {
             // The EXACT store the launch used (see startConstructReprovision).
             beginReprovisionFastRefresh(stateStore(lifeTarget.instance, scriptsDir));
           }
-        })();
-        return;
+        });
       }
       if (id === "updateConstruct") { runUpdateConstruct(); return; }
       // ── Config-sync commands (C6) ─────────────────────────────────────

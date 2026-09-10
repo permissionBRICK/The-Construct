@@ -83,11 +83,33 @@
   };
   const backupId = () => { const e = $("backupPick"); return e ? e.value : ""; };
 
+  // Give immediate feedback while the extension preserves configuration before its modal.
+  const preparingCommands = new Set(["reprovision", "reinstall", "redownload", "customReinstall", "customRedownload"]);
+  function setPreparing(id, busy) {
+    document.querySelectorAll("[data-cmd]").forEach((button) => {
+      if (!preparingCommands.has(button.dataset.cmd)) return;
+      button.disabled = busy;
+      button.setAttribute("aria-disabled", String(busy));
+      const active = busy && button.dataset.cmd === id;
+      button.classList.toggle("preparing", active);
+      button.setAttribute("aria-busy", String(active));
+      if (active) {
+        const spinner = document.createElement("span");
+        spinner.className = "prepare-spinner";
+        spinner.setAttribute("aria-label", "Preparing");
+        button.prepend(spinner);
+      } else {
+        button.querySelectorAll(".prepare-spinner").forEach((spinner) => spinner.remove());
+      }
+    });
+  }
+
   // ── Action buttons ──────────────────────────────────────────────────────────
   document.querySelectorAll("[data-cmd]").forEach((el) => {
     el.addEventListener("click", () => {
       const id = el.getAttribute("data-cmd");
       if (!id || el.disabled) return;
+      if (preparingCommands.has(id)) setPreparing(id, true);
       if (id === "customReinstall" || id === "customRedownload") {
         post({
           type: "customRebuild",
@@ -1050,6 +1072,7 @@
   }
 
   window.addEventListener("message", (ev) => {
+    if (ev.data && ev.data.type === "lifecyclePrepared") { setPreparing(ev.data.id, false); return; }
     const m = ev.data;
     if (!m) return;
     if (m.type === "state") { render(m.state); return; }

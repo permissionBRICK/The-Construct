@@ -1,0 +1,25 @@
+name: ISO downloader
+on:
+  push:
+    paths: ['Auto-Install.ps1', 'lib/Construct.Download.*', 'test/iso-download.test.py', '.github/workflows/iso-download.yml']
+  pull_request:
+    paths: ['Auto-Install.ps1', 'lib/Construct.Download.*', 'test/iso-download.test.py', '.github/workflows/iso-download.yml']
+jobs:
+  faults:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            powershell: pwsh
+          - os: windows-latest
+            powershell: powershell
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: HTTP fault tests and cancellation
+        env:
+          POWERSHELL_EXE: ${{ matrix.powershell }}
+        run: python test/iso-download.test.py
