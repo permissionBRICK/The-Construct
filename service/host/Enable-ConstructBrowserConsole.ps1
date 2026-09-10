@@ -11,7 +11,7 @@ $config.Constructd | Add-Member -NotePropertyName BrowserConsoleEnabled -NotePro
 $temp = $SettingsPath + '.console-' + [Guid]::NewGuid().ToString('N') + '.tmp'
 try {
     [IO.File]::WriteAllText($temp, ($config | ConvertTo-Json -Depth 50), (New-Object Text.UTF8Encoding($false)))
-    [IO.File]::Replace($temp, $SettingsPath, $null)
+    [IO.File]::Replace($temp, $SettingsPath, [System.Management.Automation.Language.NullString]::Value)
 } finally {
     if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp }
 }
