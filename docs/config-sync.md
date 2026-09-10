@@ -743,7 +743,9 @@ for steady state.
   [`bin/install-ai-tools.sh`](../bin/install-ai-tools.sh)). It must say: record a
   project's repos/SDKs/setup in `/opt/construct/projects/<name>.json`
   (preferably via `construct project set`) or it is lost on reinstall;
-  `provisionCommands` run on **every** provision and must be idempotent.
+  `provisionCommands` run on **every** provision: install all requirements on a
+  fresh VM, reuse satisfied installations on reprovision, and update only under
+  the project's intended version policy (see [Provisioning commands](projects.md#provisioning-commands)).
 
 ## 16. Security notes
 

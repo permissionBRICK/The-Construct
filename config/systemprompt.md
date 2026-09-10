@@ -53,7 +53,7 @@ When you need a decision from the user, ask in this chat as usual.
 ## Recording project requirements
 
 This VM is reinstalled from scratch when the user rebuilds it. To preserve a
-project's repos, SDK versions, one-time setup commands, and MCP servers across
+project's repos, SDK versions, setup commands, and MCP servers across
 reinstalls, record them in a project profile under
 `/opt/construct/projects/<name>.json`. Prefer the CLI:
 
@@ -64,8 +64,28 @@ The CLI validates the JSON and writes the canonical form. You can also edit the
 file directly; changes sync to the host on the next cycle. Anything NOT recorded
 in a profile is lost on reinstall.
 
-`provisionCommands` run on EVERY provision (including reprovisions) and must be
-idempotent. `default` is a reserved name — create a named profile instead.
+`default` is a reserved name — create a named profile instead.
+
+Write profiles so a fresh VM installs everything needed to build, test, and run
+the project. Declare runtimes in `sdks`, system packages in `hostPackages` where
+applicable, and the remaining setup in `provisionCommands`.
+
+`provisionCommands` run on EVERY provision, including reprovisions. Make them
+complete on a fresh install and incremental when run again:
+
+- Reuse installed dependencies, caches, environments, and build outputs. Skip
+  work when the required state is already satisfied; install or repair only
+  what is missing or out of date. Check required versions and changed manifests
+  or lockfiles, not just whether a directory or executable exists.
+- Prefer `npm install` over `npm ci` for ordinary project provisioning so an
+  existing dependency tree can be reused instead of deleted and reinstalled.
+  Keep the project's version constraints and lockfile policy; use a clean
+  install only when the project actually requires one.
+- Update to the latest intended version only when that project is meant to
+  track updates and a newer version is available. Respect pinned versions;
+  do not turn reprovision into an unconditional upgrade or reinstall.
+- Preserve existing user configuration and data. Let real setup failures be
+  reported instead of hiding them with blanket `|| true` guards.
 
 ## Changing these instructions
 
