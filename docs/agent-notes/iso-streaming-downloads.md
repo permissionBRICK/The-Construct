@@ -29,8 +29,12 @@ loading state; no provisioning or destructive action is started by the spinner.
 Validation: `python test/iso-download.test.py` exercises eight concurrent streams,
 resume after stalls/truncation, redirects, single-stream and unknown-length
 responses, changed resources, malformed ranges, checksum failures, exhausted
-retries, and cancellation against a local HTTP fixture. The CI workflow runs it
-under PowerShell 7 on Linux and Windows PowerShell 5.1. Native STANDPC PowerShell
+retries, and cancellation against a local HTTP fixture with generated data.
+Keep these tests local and manual: Christoph requested removal of the GitHub
+downloader workflow on 2026-09-10 because recurring CI is unnecessary for this
+component. Run with Python 3 and PowerShell installed; set `POWERSHELL_EXE=pwsh`
+for PowerShell 7 or `POWERSHELL_EXE=powershell` for Windows PowerShell 5.1.
+Native STANDPC PowerShell
 5.1 tests also passed parallel downloads, stall recovery, single-stream fallback,
 unknown length, bad ranges, and changed validators. UI smoke tests passed 318
 checks; lifecycle launcher checks passed 265 cases.
@@ -58,7 +62,8 @@ started within 14 ms; the first completed after 1,932 ms and the last after 2,07
 Thus all eight overlapped. This verifies real Ubuntu-origin parallel range support
 from Windows using 8 MiB of traffic; it is not a full-image throughput benchmark.
 
-Final fault-injection CI passed all 12 cases on both Linux/PowerShell 7 and
-Windows/PowerShell 5.1 (run 34513759658). The host release build also passed.
+Before the workflow was removed, fault-injection CI passed all 12 cases on both
+Linux/PowerShell 7 and Windows/PowerShell 5.1 (run 34513759658).
+The host release build also passed.
 Activation on main-pc remains through Update Construct; its relay did not respond
 to the final discovery probe.
