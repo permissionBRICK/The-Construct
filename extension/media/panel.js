@@ -84,7 +84,7 @@
   const backupId = () => { const e = $("backupPick"); return e ? e.value : ""; };
 
   // Give immediate feedback while the extension preserves configuration before its modal.
-  const preparingCommands = new Set(["reprovision", "reinstall", "redownload", "customReinstall", "customRedownload"]);
+  const preparingCommands = new Set(["reprovision", "reinstall", "redownload", "customReinstall", "customRedownload", "convertToHost"]);
   function setPreparing(id, busy) {
     document.querySelectorAll("[data-cmd]").forEach((button) => {
       if (!preparingCommands.has(button.dataset.cmd)) return;
@@ -743,6 +743,8 @@
     // Backend + host service: registry-derived, so render them before the offline
     // early-return too — which backend a VM is on doesn't depend on it answering.
     renderBackend(s);
+    const conversion = $("hostConversionSettings");
+    if (conversion) conversion.hidden = s.canConvertHost !== true;
 
     const online = s.online !== false;
     setOnline(online);

@@ -203,7 +203,7 @@ function Ensure-HyperV {
              firmware. The script can't turn that on -- only the user can, in
              BIOS/UEFI -- so abort with guidance if it's positively off.
           2. Enable any of the required Windows features that aren't already on:
-             Hyper-V, Virtual Machine Platform, Windows Hypervisor Platform.
+             Hyper-V. Native ISO construction does not require WSL components.
           3. If a feature can't be enabled, point Windows 10/11 Home users at a
              community workaround (Hyper-V isn't officially supported there);
              other editions get generic guidance. Either way it throws.
@@ -246,9 +246,7 @@ function Ensure-HyperV {
 
     # 2. Required Windows features. -All also pulls in each feature's parents.
     $requiredFeatures = @(
-        @{ Name = "Microsoft-Hyper-V";      Label = "Hyper-V" },
-        @{ Name = "VirtualMachinePlatform"; Label = "Virtual Machine Platform" },
-        @{ Name = "HypervisorPlatform";     Label = "Windows Hypervisor Platform" }
+        @{ Name = "Microsoft-Hyper-V"; Label = "Hyper-V" }
     )
     $rebootNeeded  = $false
     $installFailed = $false

@@ -6,7 +6,7 @@ namespace Constructd.Api.Admin;
 public static class AdminMaintenance
 {
     public static bool IsMutation(IReadOnlyList<string> args) => (args.ElementAtOrDefault(0)?.ToLowerInvariant(), args.ElementAtOrDefault(1)?.ToLowerInvariant()) is
-        ("users", "add" or "remove") or ("tokens", "issue" or "revoke-all") or ("forwards", "reconcile") or ("iso", "build" or "prune");
+        ("users", "add" or "remove") or ("tokens", "issue" or "revoke-all") or ("vms", "adopt") or ("forwards", "reconcile") or ("iso", "build" or "prune");
     public static async Task<IAsyncDisposable?> EnterAsync(IServiceProvider services, IReadOnlyList<string> args, CancellationToken ct)
     {
         var options = services.GetService<ConstructdOptions>();

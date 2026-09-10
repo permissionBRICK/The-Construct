@@ -49,7 +49,7 @@ try {
     }
     if (-not (Test-Path (Join-Path $payload 'service/Constructd.Api.exe'))) { throw 'Self-contained win-x64 publish output is required.' }
     # Only tracked files from this checkout; never working-tree data, build output or credentials.
-    $tracked = @(& git -C $RepositoryRoot ls-files -- drivers lib bin config docs Provision-AgentVM.ps1 service/host)
+    $tracked = @(& git -C $RepositoryRoot ls-files -- drivers lib bin config docs Create-AgentVM.ps1 Provision-AgentVM.ps1 service/host)
     if ($LASTEXITCODE -ne 0) { throw 'Cannot enumerate scripts.' }
     foreach ($rel in ($tracked | Sort-Object -Unique)) {
         if ($rel.StartsWith('docs/') -and $rel -notmatch '\.(md|txt|json|yml|yaml)$') { continue }
@@ -69,6 +69,7 @@ try {
     $databaseMetadata = Get-ConstructHostMigrationMetadata $RepositoryRoot
     $manifest = [ordered]@{
         schemaVersion=1; commit=$Commit; ref='refs/heads/main'; packageVersion=($BuiltAt.ToString('yyyy.MM.dd') + '+' + $Commit.Substring(0,7)); builtAt=$BuiltAt.ToString('o')
+        features=@('local-vm-adoption-v1')
         repository='permissionBRICK/The-Construct'; releaseTag=('host-' + $Commit); payloadAsset=$asset
         payloadSha256=(Get-FileHash (Join-Path $OutputDir $asset) -Algorithm SHA256).Hash.ToLowerInvariant()
         sumsSha256=(Get-FileHash (Join-Path $payload 'SHA256SUMS') -Algorithm SHA256).Hash.ToLowerInvariant()
