@@ -13,7 +13,10 @@ namespace Constructd.Tests.Updates;
 
 public sealed class UpdateFlowTests
 {
-    [Fact] public async Task Verified_package_stage_apply_reconnect_completes_the_persisted_job()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Verified_package_stage_apply_reconnect_completes_the_persisted_job(bool autoApply)
     {
         using var fixture=new PackageTests();var(m,zip)=fixture.Package();
         var root=Path.Combine(Path.GetTempPath(),"update-flow-"+Guid.NewGuid().ToString("n"));Directory.CreateDirectory(root);
@@ -27,14 +30,25 @@ public sealed class UpdateFlowTests
             var assets=new[]{("manifest.json",JsonSerializer.SerializeToUtf8Bytes(m,UpdateFiles.Json)),(m.PayloadAsset,zip)}.Select(a=>{
                 var uri=new Uri("https://github.com/permissionBRICK/The-Construct/releases/download/"+m.ReleaseTag+"/"+a.Item1);source.Assets[uri]=a.Item2;return new ReleaseAsset(a.Item1,uri,a.Item2.Length);}).ToArray();
             source.Releases.Add(new(m.ReleaseTag,m.Commit,DateTimeOffset.UtcNow,assets));
-            var stage=await admin.PostAsJsonAsync("/api/v1/host/updates/stage",new{operationKey="flow-stage"});Assert.Equal(HttpStatusCode.Accepted,stage.StatusCode);
+            var stage=await admin.PostAsJsonAsync("/api/v1/host/updates/stage",new{operationKey="flow-stage",autoApply});Assert.Equal(HttpStatusCode.Accepted,stage.StatusCode);
             var staged=await stage.Content.ReadFromJsonAsync<JsonElement>();var id=staged.GetProperty("updateId").GetString()!;
             await Finish(app,staged.GetProperty("jobId").GetString()!);
             var stagedRow=(await app.Service<IHostUpdateStore>().GetAsync(id,default))!;
-            Assert.Equal(HostUpdateState.Staged,stagedRow.State);
+            if(!autoApply) Assert.Equal(HostUpdateState.Staged,stagedRow.State);
             Assert.Contains(stagedRow.Phases,phase=>phase.Name=="download");
-            var apply=await admin.PostAsJsonAsync("/api/v1/host/updates/apply",new{updateId=id,operationKey="flow-apply"});Assert.Equal(HttpStatusCode.Accepted,apply.StatusCode);
-            var applied=await apply.Content.ReadFromJsonAsync<JsonElement>();var jobId=applied.GetProperty("jobId").GetString()!;await Finish(app,jobId);
+            string jobId;
+            if(autoApply)
+            {
+                Assert.True((await config.GetAsync<Constructd.Api.Jobs.UpdateAutoApply>("update-auto-apply:"+id,default))!.Enabled);
+                await app.Service<UpdateRecoveryService>().ReconcileAsync(default);
+                jobId=(await config.GetAsync<Constructd.Api.Jobs.UpdateJobLink>("update-job:"+id,default))!.JobId;
+            }
+            else
+            {
+                var apply=await admin.PostAsJsonAsync("/api/v1/host/updates/apply",new{updateId=id,operationKey="flow-apply"});Assert.Equal(HttpStatusCode.Accepted,apply.StatusCode);
+                var applied=await apply.Content.ReadFromJsonAsync<JsonElement>();jobId=applied.GetProperty("jobId").GetString()!;
+            }
+            await Finish(app,jobId);
             Assert.Equal(MaintenanceState.Maintenance,app.Service<IMaintenanceGate>().State);
             var launcher=app.Service<FakeUpdaterLauncher>();Assert.Equal(1,launcher.LaunchCount);
             var h=(await launcher.ReadHandoffAsync(default))!;
@@ -44,7 +58,12 @@ public sealed class UpdateFlowTests
             var job=(await app.Service<IJobEngine>().GetAsync(jobId,default))!;
             Assert.Equal(JobState.Succeeded,job.State);Assert.Equal("commit",job.Phase);
             var status=await admin.GetFromJsonAsync<JsonElement>("/api/v1/host/updates/status");Assert.Equal("succeeded",status.GetProperty("current").GetProperty("state").GetString());
-            var replay=await admin.PostAsJsonAsync("/api/v1/host/updates/apply",new{updateId=id,operationKey="flow-apply"});Assert.Equal(HttpStatusCode.OK,replay.StatusCode);Assert.True((await replay.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("replayed").GetBoolean());Assert.Equal(1,launcher.LaunchCount);
+            if(!autoApply)
+            {
+                var replay=await admin.PostAsJsonAsync("/api/v1/host/updates/apply",new{updateId=id,operationKey="flow-apply"});Assert.Equal(HttpStatusCode.OK,replay.StatusCode);Assert.True((await replay.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("replayed").GetBoolean());
+            }
+            await app.Service<UpdateRecoveryService>().ReconcileAsync(default);
+            Assert.Equal(1,launcher.LaunchCount);
         }
         finally{Directory.Delete(root,true);}
     }
@@ -102,6 +121,8 @@ public sealed class UpdateFlowTests
         using var blocker=app.Service<IMaintenanceGate>().TryEnter("iso-build","blocking-job",null);
         var apply=await admin.PostAsJsonAsync("/api/v1/host/updates/apply",new{updateId=id});Assert.Equal(HttpStatusCode.Accepted,apply.StatusCode);
         var body=await apply.Content.ReadFromJsonAsync<JsonElement>();var jobId=body.GetProperty("jobId").GetString()!;
+        var status=await admin.GetFromJsonAsync<JsonElement>("/api/v1/host/updates/status");
+        Assert.Equal("blocking-job",status.GetProperty("current").GetProperty("blockingJobs")[0].GetString());
         var cancel=await admin.PostAsJsonAsync("/api/v1/host/updates/cancel",new{updateId=id});Assert.Equal(HttpStatusCode.OK,cancel.StatusCode);
         await Finish(app,jobId);
         Assert.Equal(JobState.Cancelled,(await app.Service<IJobEngine>().GetAsync(jobId,default))!.State);

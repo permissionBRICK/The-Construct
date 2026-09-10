@@ -74,3 +74,8 @@
 .ha-vm-sample { color: var(--dim); font-size: 10px; }
 .ha-vm-sample.stale { color: var(--warn); }
 .ha-vm-details { grid-column: 1 / -1; color: var(--dim); font-size: 11px; overflow-wrap: anywhere; }
+/* Update status stays visible while navigating between administration tabs. */
+#haUpdateStatus { white-space: normal; max-width: 32rem; text-align: right; }
+#haUpdate.ha-updating::before { content: ""; display: inline-block; width: .8em; height: .8em; margin-right: .5em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: prepare-spin .8s linear infinite; }
+@media (prefers-reduced-motion: reduce) { #haUpdate.ha-updating::before { animation: none; } }
+#tab-maintenance summary { cursor: pointer; margin: 1rem 0; }

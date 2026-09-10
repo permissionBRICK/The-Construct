@@ -16,6 +16,12 @@ from aiohttp import web, ClientSession, ClientTimeout, WSMsgType
 STATIC = Path(__file__).parent / 'static'
 
 
+class HostApiError(RuntimeError):
+    def __init__(self, status):
+        self.status = status
+        super().__init__(f'Host refused console operation (HTTP {status})')
+
+
 def read_config(path):
     # Construct's config file contains shell-quoted values, not executable code.
     import shlex
@@ -98,7 +104,7 @@ class Gateway:
         async with self.http.request(method, self.api_url + path, json={} if method == 'POST' else None,
                                      ssl=self.api_ssl, headers={'Authorization': f'{scheme} {token}'}) as response:
             if response.status >= 300:
-                raise RuntimeError(f'Host refused console operation (HTTP {response.status})')
+                raise HostApiError(response.status)
             return await response.json() if response.status != 204 else None
 
     async def mint(self, request):
@@ -138,14 +144,18 @@ class Gateway:
         if ticket['active']:
             raise web.HTTPConflict(text='Console is already connected')
         ticket['active'] = True
+        ticket['phase'], ticket['error'] = 'Opening browser connection', None
         ws = web.WebSocketResponse(protocols=['guacamole'], max_msg_size=65536, heartbeat=20)
         session_path, writer, tasks = None, None, []
         try:
             await ws.prepare(request)
             root = f'/api/v1/vms/{quote(ticket["name"])}/console/sessions'
+            ticket['phase'] = 'Creating a console session on the Windows host'
             session = await self.api('POST', root)
             session_path = root + '/' + session['sessionId']
+            ticket['phase'] = 'Waiting for Windows to grant console access'
             connection = await self.api('POST', session_path + '/connection')
+            ticket['phase'] = 'Connecting to the local console gateway'
             reader, writer = await asyncio.wait_for(asyncio.open_connection(self.guacd_host, self.guacd_port), 10)
             params = {
                 'VERSION_1_5_0': 'VERSION_1_5_0', 'hostname': urlsplit(self.api_url).hostname, 'port': '2179', 'security': 'vmconnect',
@@ -169,11 +179,13 @@ class Gateway:
             await writer.drain()
             connection.clear()
             params.clear()
+            ticket['phase'] = 'Connecting to Hyper-V VMConnect on the Windows host (port 2179)'
             ready = await asyncio.wait_for(read_instruction(reader), 30)
             if ready[0] != 'ready':
                 raise RuntimeError('Hyper-V console connection failed')
             # Guacamole WebSocketTunnel expects its UUID as the first internal instruction.
             await ws.send_str(instruction('', ready[1]).decode())
+            ticket['phase'] = 'Waiting for the guest display'
 
             async def receive_browser():
                 async for message in ws:
@@ -206,10 +218,12 @@ class Gateway:
 
             tasks = [asyncio.create_task(fn()) for fn in (receive_browser, receive_display, renew)]
             await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        except Exception:
+        except Exception as error:
             # Neither host credentials nor guacd error output enter logs or browser errors.
+            reason = f'Host returned HTTP {error.status}' if isinstance(error, HostApiError) else 'Timed out' if isinstance(error, asyncio.TimeoutError) else 'Connection failed'
+            ticket['error'] = f'{reason}: {ticket["phase"]}.'
             if ws.prepared and not ws.closed:
-                await ws.send_str(instruction('error', 'Console connection ended or could not be established.', '519').decode())
+                await ws.send_str(instruction('error', ticket['error'], '519').decode())
         finally:
             async def cleanup():
                 for task in tasks:
@@ -232,6 +246,14 @@ class Gateway:
             # Account revocation must survive that cancellation.
             await asyncio.shield(cleanup())
         return ws
+
+    async def status(self, request):
+        # Same cookie path as the WebSocket. Status contains only fixed stage
+        # descriptions, never host credentials, link secrets or raw exceptions.
+        ticket = self.tickets.get(request.match_info['ident'])
+        if not ticket or ticket['expires'] <= time.monotonic() or not hmac.compare_digest(ticket['token'], request.cookies.get('console-ticket', '')):
+            raise web.HTTPGone(text='This console link has expired. Create a new link with Construct.')
+        return web.json_response({'phase': ticket.get('phase', 'Opening browser connection'), 'error': ticket.get('error')})
 
 
 @web.middleware
@@ -259,6 +281,7 @@ async def main():
         app = web.Application(middlewares=[headers], client_max_size=4096)
         app.router.add_post('/redeem', gateway.redeem)
         app.router.add_get('/ws/{ident}', gateway.websocket)
+        app.router.add_get('/ws/{ident}/status', gateway.status)
         app.router.add_get('/', lambda r: web.FileResponse(STATIC / 'index.html'))
         app.router.add_static('/static/', STATIC)
         control = web.Application(middlewares=[headers], client_max_size=4096)

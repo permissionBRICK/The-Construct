@@ -11,6 +11,7 @@ public sealed class InMemoryMaintenanceGate : IMaintenanceGate
     private static TaskCompletionSource NewSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
     public MaintenanceState State { get { lock (_gate) return _state; } }
     public int LiveHandles { get { lock (_gate) return _live.Count; } }
+    public IReadOnlyList<string> BlockingOperations { get { lock (_gate) return _live.Where(x => !x.Value.Kind.StartsWith("mutation:", StringComparison.Ordinal)).Select(x => x.Key).ToArray(); } }
     public IDisposable? TryEnter(string kind, string operationId, string? vmName)
     {
         lock (_gate)
