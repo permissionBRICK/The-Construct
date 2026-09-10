@@ -121,3 +121,14 @@ was verified against the tested source. Deployment to the user's VS Code on
 `haus-vm` answered discovery. The user can apply it through Update Construct or
 start the main-pc relay. The ISO belongs in Child media, separate from the primary
 Construct autoinstall ISO catalog.
+
+## Follow-up: enabling the console on UI-installed hosts
+
+`Enable-ConstructBrowserConsole.ps1` now discovers the settings beside the
+registered `constructd` executable via the Windows service registry entry. The old
+hard-coded `C:\Construct` default missed UI installs under
+`C:\ProgramData\ConstructHost\scripts\service\publish`. `-SettingsPath` still
+overrides discovery; the script prints the file changed and leaves activation to
+the next service restart/update. Local PowerShell smoke checks used a registry
+double with real JSON writes for UI, legacy and custom layouts, enable/disable,
+explicit override and missing-service errors. Windows deployment is pending.
