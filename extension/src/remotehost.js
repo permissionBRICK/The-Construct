@@ -350,9 +350,16 @@ function parseBody(text) {
  * `tlsConnect` is the test seam; `maxSockets: 1, keepAlive: false` because an agent is
  * built per request and must not outlive it.
  */
+// VS Code's default http.proxySupport=override replaces custom HTTPS agents for
+// hostnames, even when its proxy resolver returns DIRECT. That would discard the
+// pin gate below. Use its saved Node HTTPS module for this direct host connection;
+// leave the shared module and all editor proxy/CA settings unchanged.
+// https://github.com/microsoft/vscode/blob/main/src/vs/workbench/api/node/proxyResolver.ts
+function pinnedHttpsTransport() { return https.__vscodeOriginal || https; }
+
 function pinnedHttpsAgent(pin, opts = {}) {
   const connect = opts.tlsConnect || tls.connect;
-  const agent = new https.Agent({ keepAlive: false, maxSockets: 1 });
+  const agent = new (pinnedHttpsTransport().Agent)({ keepAlive: false, maxSockets: 1 });
   agent.createConnection = (connOpts, cb) => {
     let settled = false;
     const done = (err, socket) => {
@@ -425,7 +432,7 @@ function nodeHttp(url, init = {}) {
     if (isHttps) {
       options.agent = pinnedHttpsAgent(pin, init);
     }
-    const req = (isHttps ? https : http).request(options, (res) => {
+    const req = (isHttps ? pinnedHttpsTransport() : http).request(options, (res) => {
       let data = "";
       res.setEncoding("utf8");
       res.on("data", (d) => { if (data.length < 1024 * 1024) data += d; });
