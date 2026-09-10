@@ -413,7 +413,9 @@ function toCapacityBars(summary) {
     // on the server, but don't present unmounted, unused partitions as VM storage.
     const unmounted = /^\\\\\?\\Volume\{[^}]+\}\\?$/i.test(str(v.root));
     if (unmounted && !(num(v.growthReservedBytes) > 0)) continue;
-    const used = (num(v.totalBytes) || 0) - (num(v.availableBytes) || 0);
+    // Show physical usage plus OS headroom. Future VM growth affects admission
+    // availability, but has not consumed disk space and must not fill this bar.
+    const used = (num(v.totalBytes) || 0) - (num(v.freeBytes) || 0) + (num(v.headroomBytes) || 0);
     bars.push({
       id: "vol:" + str(v.root), label: unmounted ? "Storage (unmounted volume)" : `Storage ${str(v.root)}`,
       pct: pct(used, v.totalBytes),
