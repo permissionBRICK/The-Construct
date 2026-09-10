@@ -55,72 +55,153 @@ fetch_existing_repo() {
   return "${failed}"
 }
 
-# Parse the repo list up front into a temp file. Doing this as a plain command
-# (not in a pipe or process substitution) keeps a jq/config failure FATAL under
-# `set -e` -- malformed/unreadable generated.json must abort, not silently check
-# out zero repos. The loop then reads the file in the CURRENT shell so the
-# failure counter survives it. From there a single clone/fetch failure must not
-# abort the whole checkout: report it, keep going, and exit non-zero at the end
-# so the caller still sees that something went wrong.
-repos_tsv="$(mktemp)"
-trap 'rm -f "${repos_tsv}"' EXIT
+# Each repository has its own worker. Its remotes remain sequential: concurrent
+# fetches inside one Git repository can race over refs and FETCH_HEAD.
+checkout_repo() {
+  local url="$1" target="$2" status upstream
+  if [[ -e "${target}/.git" ]]; then
+    echo "Already cloned: ${target}"
+    if ! fetch_existing_repo "${target}"; then
+      echo "ERROR: fetch failed for ${target}"
+      return 1
+    fi
+    if ! status="$(git -C "${target}" status --porcelain 2>&1)"; then
+      printf 'ERROR: cannot inspect working tree: %s\n' "${status}"
+      return 1
+    fi
+    if [[ -n "${status}" ]]; then
+      echo "NOTE: ${target} has local changes; fetched only (working tree untouched)"
+    elif upstream="$(git -C "${target}" rev-parse --verify '@{upstream}' 2>/dev/null)" &&
+        git -C "${target}" merge --ff-only -- "${upstream}" 2>&1; then
+      # The remote was already fetched. A pull here would download refs again.
+      echo "Updated: ${target}"
+    else
+      echo "NOTE: ${target} not fast-forwarded (diverged or no upstream); fetched only"
+    fi
+  else
+    echo "Cloning ${url} -> ${target}"
+    if ! git clone -- "${url}" "${target}" 2>&1; then
+      echo "ERROR: clone failed for ${url}"
+      return 1
+    fi
+  fi
+}
+export -f fetch_existing_repo checkout_repo
+
+# Zero means all independent repositories at once. Set CHECKOUT_JOBS to a
+# positive number to cap simultaneous workers on a constrained host.
+checkout_jobs="${CHECKOUT_JOBS:-0}"
+if [[ ! "${checkout_jobs}" =~ ^(0|[1-9][0-9]{0,5})$ ]]; then
+  echo "ERROR: CHECKOUT_JOBS must be an integer from 0 to 999999 (0 = all)" >&2
+  exit 1
+fi
+
+# Parse before starting ANY worker: corrupt runtime configuration stays fatal.
+# Keep worker logs private (Git can include authenticated URLs in diagnostics).
+checkout_tmp="$(mktemp -d)"
+declare -A active=() active_targets=() active_storage=()
+cleanup() {
+  local pid
+  for pid in "${!active[@]}"; do
+    # setsid gives each worker its own process group, including Git/transports.
+    kill -TERM -- "-${pid}" 2>/dev/null || kill -TERM "${pid}" 2>/dev/null || true
+  done
+  for pid in "${!active[@]}"; do wait "${pid}" 2>/dev/null || true; done
+  rm -r -- "${checkout_tmp}"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+repos_tsv="${checkout_tmp}/repos.tsv"
 jq -r '.repos[] | [.url, (.directory // "")] | @tsv' "${GENERATED_JSON}" >"${repos_tsv}"
 
-# An empty repo list is worth stating explicitly: it usually means the selected
-# profile never reached the VM store (sync/seed gap) or declares no repos[],
-# and a wordless zero-iteration loop here reads as "cloning silently skipped".
 if [[ ! -s "${repos_tsv}" ]]; then
   echo "No repos to check out: the selected projects (PROJECTS=${PROJECTS:-?}) resolve to zero repos[] entries in ${GENERATED_JSON}."
   echo "If the profile does declare repos, it likely hasn't synced to the VM store (${AGENT_HOME}/projects) yet -- run a config sync from the host, then: bash ${AGENT_HOME}/repo/bin/checkout-projects.sh"
   exit 0
 fi
 
+# Shared/nested targets and linked worktrees must not write simultaneously.
+# realpath also catches alternate spellings and existing directory symlinks.
+paths_overlap() {
+  [[ "$1" == "$2" || "$1/" == "$2/"* || "$2/" == "$1/"* ]]
+}
+conflicts_with_active() {
+  local pid
+  for pid in "${!active[@]}"; do
+    if paths_overlap "$1" "${active_targets[${pid}]}" ||
+        paths_overlap "$2" "${active_storage[${pid}]}"; then
+      return 0
+    fi
+  done
+  return 1
+}
 failed=0
-while IFS=$'\t' read -r url directory; do
-  if [[ -z "${url}" ]]; then
-    continue
-  fi
-
-  if [[ -z "${directory}" ]]; then
-    directory="$(basename "${url}" .git)"
-  fi
-
-  target="${WORKSPACE_ROOT}/${directory}"
-  # NOTE: `2>&1` merges git's own messages (which it writes to stderr) into this
-  # script's stdout, so the reason for any failure rides the SAME stream as the
-  # progress lines below. The provisioning log can drop the separate stderr
-  # channel, which is how a failed checkout previously looked like a success.
-  if [[ -d "${target}/.git" ]]; then
-    echo "Already cloned: ${target}"
-    if ! fetch_existing_repo "${target}"; then
-      echo "ERROR: fetch failed for ${target}"
-      failed=$((failed + 1))
-    elif [[ -z "$(git -C "${target}" status --porcelain 2>/dev/null)" ]]; then
-      # Clean tree: bring the checked-out branch forward so a reprovision leaves
-      # fresh code, not just fresh refs. --ff-only never merges or rewrites local
-      # commits -- a diverged/upstream-less branch is reported and left alone,
-      # and that is not a checkout failure.
-      if git -C "${target}" pull --ff-only 2>&1; then
-        echo "Updated: ${target}"
-      else
-        echo "NOTE: ${target} not fast-forwarded (diverged or no upstream); fetched only"
+completed=0
+started=0
+wait_for_one() {
+  local finished pid rc=0 index
+  # Bash wait -n ignores jobs which completed before it was called. Reap those
+  # by PID first, including their actual exit status; then wait for live jobs.
+  while :; do
+    finished=""
+    rc=0
+    for pid in "${!active[@]}"; do
+      if ! kill -0 "${pid}" 2>/dev/null; then
+        finished="${pid}"
+        wait "${pid}" || rc=$?
+        break
       fi
-    else
-      echo "NOTE: ${target} has local changes; fetched only (working tree untouched)"
+    done
+    if [[ -z "${finished}" ]]; then
+      wait -n -p finished "${!active[@]}" 2>/dev/null || rc=$?
     fi
-  else
-    echo "Cloning ${url} -> ${target}"
-    if ! git clone "${url}" "${target}" 2>&1; then
-      echo "ERROR: clone failed for ${url}"
-      failed=$((failed + 1))
+    # A job can finish between the liveness check and wait -n. Scan again.
+    [[ -n "${finished:-}" ]] && break
+  done
+  index="${active[${finished}]}"
+  completed=$((completed + 1))
+  printf '\n[%s completed] %s\n' "${completed}" "${active_targets[${finished}]}"
+  cat "${checkout_tmp}/${index}.log"
+  if (( rc != 0 )); then
+    failed=$((failed + 1))
+    echo "ERROR: repository worker exited ${rc}"
+  fi
+  unset 'active['"${finished}"']' 'active_targets['"${finished}"']' 'active_storage['"${finished}"']'
+}
+
+echo "Checking out repositories in parallel (CHECKOUT_JOBS=${checkout_jobs}; 0 = all)"
+while IFS=$'\t' read -r url directory; do
+  [[ -n "${url}" ]] || continue
+  if [[ -z "${directory}" ]]; then directory="$(basename "${url}" .git)"; fi
+  target="$(realpath -m -- "${WORKSPACE_ROOT}/${directory}")"
+  storage="${target}/.git"
+  if [[ -e "${target}/.git" ]]; then
+    if common_dir="$(git -C "${target}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"; then
+      storage="$(realpath -m -- "${common_dir}")"
     fi
   fi
+  while (( ${#active[@]} > 0 )) && {
+    (( checkout_jobs > 0 && ${#active[@]} >= checkout_jobs )) ||
+      conflicts_with_active "${target}" "${storage}"
+  }; do
+    wait_for_one
+  done
+  started=$((started + 1))
+  echo "[${started} started] ${target}"
+  setsid bash -c 'set -euo pipefail; checkout_repo "$@"' -- "${url}" "${target}" \
+    < /dev/null >"${checkout_tmp}/${started}.log" 2>&1 &
+  pid=$!
+  active[${pid}]="${started}"
+  active_targets[${pid}]="${target}"
+  active_storage[${pid}]="${storage}"
 done <"${repos_tsv}"
+while (( ${#active[@]} > 0 )); do wait_for_one; done
 
-if [[ "${failed}" -gt 0 ]]; then
-  # On stdout so it shows in the provisioning log; also on stderr so a non-zero
-  # exit carries a reason for any caller capturing the error stream.
+if (( failed > 0 )); then
   echo "ERROR: ${failed} repo(s) failed to check out (see the per-repo errors above)"
   echo "${failed} repo(s) failed to check out" >&2
   exit 1
 fi
+echo "All ${completed} repository checkout(s) completed"
