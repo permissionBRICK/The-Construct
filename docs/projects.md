@@ -99,7 +99,8 @@ from a script) is picked up by the next sync tick exactly the same way. An inval
 host repo — fix it and it's picked up next time.
 
 **`provisionCommands` are idempotent, not one-shot.** They rerun on every provision (not
-just the first), so anything you add there must tolerate being re-run — see
+just the first), so anything you add there must reuse an already-satisfied setup
+and install missing requirements on a fresh VM — see
 [Provisioning commands](#provisioning-commands) below.
 
 ## MCP servers
@@ -155,8 +156,8 @@ seeding a local `.env`, …):
   "name": "customer-portal",
   "repos": [{ "url": "git@github.com:acme/customer-portal.git", "directory": "customer-portal" }],
   "provisionCommands": [
-    "npm ci",
-    "cp -n .env.example .env || true"
+    "npm install",
+    "if [ ! -e .env ]; then cp .env.example .env; fi"
   ]
 }
 ```
@@ -169,11 +170,24 @@ Behaviour:
 - **Order** — commands run top-to-bottom; across several selected profiles they run in
   profile order.
 - **Working directory** — each command runs from the profile's **first repo checkout**
-  (`/root/repos/<directory>`), so `npm ci` / `dotnet restore` just work. Profiles with no
+  (`/root/repos/<directory>`), so `npm install` / `dotnet restore` just work. Profiles with no
   repo (or whose repo isn't on disk — e.g. `CHECKOUT_PROJECTS=false` or a failed clone)
   run from the workspace root instead.
-- **Idempotency** — they run every time, so they must be safe to re-run. Prefer
-  idempotent forms (`npm ci`, `cp -n`, `… || true`).
+- **Incremental setup** — they run every time. Install everything needed on a
+  fresh VM, then reuse installed dependencies, caches, environments, and build
+  outputs on reprovision. Skip satisfied work and install or repair only what
+  is missing or out of date. Check versions and changes to manifests/lockfiles;
+  the presence of `node_modules` or an executable alone does not prove the
+  current requirements are satisfied.
+- **Dependency policy** — prefer `npm install` to `npm ci` for ordinary
+  provisioning: `npm ci` removes the existing dependency tree before installing.
+  Respect the project's version constraints and lockfile policy. A clean install
+  remains appropriate when the project requires one. Only check for and apply
+  newer releases when the project intentionally tracks updates; pinned projects
+  should stay pinned. Avoid unconditional force reinstalls and cache deletion.
+- **Configuration** — create missing config files while preserving existing
+  settings and data. Do not hide real installation failures with blanket
+  `|| true` guards.
 - **Failure** — a command that exits non-zero is logged but does **not** abort the
   provision or the remaining commands (same as repo checkout and MCP setup).
 - **Environment** — runs as root with `config.env` sourced and the merged `AGENT_*`
