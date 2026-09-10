@@ -1035,6 +1035,13 @@ install_construct_cli() {
 }
 run_step optional "Installing construct CLI" install_construct_cli
 
+# The browser console is part of a service-managed primary, alongside its CLI.
+# Configuration/identity have been written and Docker installed by this point.
+if [[ -n "${CONSTRUCT_SERVICE_URL}" ]]; then
+  run_step critical "Installing browser console gateway" \
+    bash "${REPO_DIR}/console-viewer/install.sh"
+fi
+
 # 4c. Notification spool for `construct notify`. On tmpfs (/run) deliberately: a
 #     reboot must not replay stale notifications at the host. The tmpfiles.d entry
 #     recreates it on every boot; --create makes it exist right now too.

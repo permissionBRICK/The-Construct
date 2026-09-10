@@ -1407,7 +1407,27 @@ if ($SkipPowerSettings) {
 
 # ── 5. appsettings.Production.json ───────────────────────────────────────────
 
+function Get-ConstructBrowserConsoleEnabled {
+    param([string]$SettingsPath)
+    if (Test-Path -LiteralPath $SettingsPath) {
+        $saved = Get-Content -LiteralPath $SettingsPath -Raw | ConvertFrom-Json
+        $section = $saved.PSObject.Properties['Constructd']
+        if ($section -and $section.Value) {
+            $configured = $section.Value.PSObject.Properties['BrowserConsoleEnabled']
+            if ($configured) {
+                if ($configured.Value -isnot [bool]) {
+                    throw 'Constructd.BrowserConsoleEnabled must be a JSON boolean.'
+                }
+                return $configured.Value
+            }
+        }
+    }
+    return $true
+}
+
 Write-Step "Writing appsettings.Production.json"
+$settingsPath = Join-Path $PublishDir "appsettings.Production.json"
+$browserConsoleEnabled = Get-ConstructBrowserConsoleEnabled -SettingsPath $settingsPath
 
 $settings = [ordered]@{
     Logging = [ordered]@{
@@ -1417,6 +1437,7 @@ $settings = [ordered]@{
         }
     }
     Constructd = [ordered]@{
+        BrowserConsoleEnabled = $browserConsoleEnabled
         Persistence      = "Sqlite"
         DatabasePath     = (Join-Path $DataDir "constructd.db")
         ListenUrl        = $ListenUrl

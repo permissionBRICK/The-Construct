@@ -8,8 +8,8 @@ namespace Constructd.Core.Configuration;
 /// </summary>
 public sealed class ConstructdOptions
 {
-    /// <summary>Opt in to per-session, unprivileged Hyper-V console accounts for a trusted browser gateway.</summary>
-    public bool BrowserConsoleEnabled { get; set; }
+    /// <summary>Enable per-session, unprivileged Hyper-V console accounts for the trusted browser gateway.</summary>
+    public bool BrowserConsoleEnabled { get; set; } = true;
     public HostAdminOptions HostAdmin { get; set; } = new();
 
     public const string SectionName = "Constructd";
