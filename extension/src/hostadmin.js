@@ -1159,7 +1159,8 @@ function createHostAdminModel(deps = {}) {
         catch (e) { if (refused(e)) return state; catalogProblem = errText(e); }
         let items = null, mediaProblem = "";
         if (state.features.media) {
-          try { items = (await client.media({ owner: "all" })).map(toMediaRow); }
+          // Omitting owner requests the admin inventory; any supplied owner is literal.
+          try { items = (await client.media()).map(toMediaRow); }
           catch (e) { if (refused(e)) return state; mediaProblem = errText(e); }
         } else {
           mediaProblem = "child media is not available on this host version";

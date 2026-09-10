@@ -681,7 +681,7 @@ function createClient(opts = {}) {
     // Token rotation (§8.13). The plaintext is in the answer ONCE and is never logged here.
     rotateVmToken: (name, body) => request("POST", `/vms/${encodeURIComponent(name)}/token`, body || {}),
     revokeVmToken: (name) => request("DELETE", `/vms/${encodeURIComponent(name)}/token`),
-    // Media (§8.10). `media({ owner: "all" })` is the admin inventory.
+    // Media (§8.10). `media()` is the admin inventory; owner filters are literal.
     media: (query) => request("GET", "/media" + buildQuery(query)),
     mediaItem: (id) => request("GET", `/media/${encodeURIComponent(id)}`),
     mediaReferences: (id) => request("GET", `/media/${encodeURIComponent(id)}/references`),
