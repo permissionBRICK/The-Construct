@@ -12,7 +12,11 @@ namespace Constructd.Tests.Api;
 public sealed class VmAdoptionTests : IDisposable
 {
     private readonly string directory = Path.Combine(Path.GetTempPath(), "construct-adoption-" + Guid.NewGuid().ToString("N"));
-    public void Dispose() { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    public void Dispose()
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        if (Directory.Exists(directory)) Directory.Delete(directory, true);
+    }
     private ServiceProvider Services(bool sqlite = false)
     {
         var options = new ConstructdOptions { Fake = true, Persistence = sqlite ? PersistenceMode.Sqlite : PersistenceMode.Memory,
