@@ -23,7 +23,7 @@ class GuestAdoptionTests(unittest.TestCase):
             (self.root / directory).mkdir(parents=True)
         (self.root / "etc/machine-id").write_text("a" * 32)
         self.config = self.root / "etc/construct/config.env"
-        self.config.write_text("T3CODE='true'\nWORKSPACE_ROOT='/root/repos'\n")
+        self.config.write_text("CONSTRUCT_SERVICE_AUTH_SCHEME=Bearer\nT3CODE='true'\nWORKSPACE_ROOT='/root/repos'\n")
         self.payload = dict(name="agent-vm", owner="PC\\alice", machineId="a" * 32,
                             serviceUrl="https://main-pc:7462", publicHost="main-pc", sshPort=2201,
                             certificate="certificate fixture", vmToken="secret fixture", files={"construct": "#!/bin/sh\n"})
@@ -39,6 +39,8 @@ class GuestAdoptionTests(unittest.TestCase):
         self.assertIn("T3CODE='true'", text)
         self.assertIn("WORKSPACE_ROOT='/root/repos'", text)
         self.assertEqual(text.count("CONSTRUCT_SERVICE_URL="), 1)
+        self.assertEqual(text.count("CONSTRUCT_SERVICE_AUTH_SCHEME="), 1)
+        self.assertIn("CONSTRUCT_SERVICE_AUTH_SCHEME=VmToken", text)
         self.assertEqual((self.config.parent / "vm-token").stat().st_mode & 0o777, 0o600)
         self.assertFalse(any("t3code" in " ".join(call) or "reboot" in call for call in self.calls))
 

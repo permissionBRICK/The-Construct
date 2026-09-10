@@ -12,7 +12,7 @@ public sealed class LinuxToolchainFactAttribute : FactAttribute
         }
 
         var directories = (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator);
-        var missing = new[] { "bash", "node", "curl", "jq" }
+        var missing = new[] { "bash", "node", "curl", "jq", "python3" }
             .Where(tool => !directories.Any(directory => File.Exists(Path.Combine(directory, tool)))).ToArray();
         if (missing.Length > 0)
             Skip = "The guest CLI end-to-end story requires tools on PATH: " + string.Join(", ", missing) + ".";

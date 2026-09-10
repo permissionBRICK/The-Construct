@@ -69,7 +69,7 @@ function Format-GuestFailure([string]$Stderr, [int]$ExitCode, [string]$InputText
             }
         } catch { } # Non-JSON SSH probes have no enrollment credential.
     }
-    $detail = [regex]::Replace($detail, '(?i)Bearer[ \t]+[^\s"'']+', 'Bearer [redacted]')
+    $detail = [regex]::Replace($detail, '(?i)(Bearer|VmToken)[ \t]+[^\s"'']+', '$1 [redacted]')
     $detail = [regex]::Replace($detail, '[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '').Trim()
     if ($detail.Length -gt 4096) { $detail = '...' + $detail.Substring($detail.Length - 4096) }
     if (-not $detail) { $detail = 'SSH returned no diagnostic output.' }

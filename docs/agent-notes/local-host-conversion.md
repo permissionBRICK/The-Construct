@@ -168,3 +168,21 @@ and VM remain in place. Local tests cover OEM/UTF-16/BOM defaults, error redacti
 and rollback; the device-specific cause is not confirmed until WS009 retries or
 provides the newly visible diagnostic. Its portable SSH endpoint was not yet
 listening during this investigation.
+
+The subsequent WS009 retry surfaced HTTP 401 from the identity endpoint. This
+was a separate conversion bug: `adopt-host.py` sent its scoped VM credential as
+`Authorization: Bearer`, but Constructd reserves Bearer for user tokens and
+requires `Authorization: VmToken` for guest credentials. The existing guest
+CLI helpers already use VmToken. Enrollment now uses that scheme and records
+it explicitly in the guest config, replacing any stale override. Error redaction
+covers both authentication schemes.
+
+`GuestEnrollmentTests` runs the production Python verifier against the real API
+and authentication handlers over loopback HTTPS with SQLite storage and a fake
+hypervisor. It reproduced the exact HTTP 401 before the header correction;
+afterward initial adoption and retry enrollment succeed, while the rotated old
+token still receives 401. No authentication checks were relaxed. Run locally with:
+`dotnet test service/tests/Constructd.Tests/Constructd.Tests.csproj -c Release --filter FullyQualifiedName~GuestEnrollmentTests`.
+The prior guest unit tests bypassed HTTPS verification and therefore missed this
+contract mismatch. WS009 still needs Update Construct and a conversion retry;
+its already-installed service does not require replacement for this fix.

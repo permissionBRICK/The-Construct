@@ -26,9 +26,9 @@ $oldWriter=New-Object IO.StreamWriter($oldStream, ([Text.Encoding]::GetEncoding(
 $oldWriter.Write($payload); $oldWriter.Flush()
 if ([Convert]::ToBase64String($oldStream.ToArray()) -ceq [Convert]::ToBase64String($expected)) { throw 'The regression fixture did not reproduce the old encoding defect.' }
 $oldWriter.Dispose()
-$raw = "Guest enrollment failed: UnicodeDecodeError`nAuthorization: Bearer sensitive-token-fixture`nJSON token: sensitive-token-fixture"
+$raw = "Guest enrollment failed: UnicodeDecodeError`nAuthorization: Bearer sensitive-token-fixture`nJSON token: sensitive-token-fixture`nAuthorization: VmToken another-token-fixture"
 $detail = Format-GuestFailure $raw 1 $payload
-if ($detail -notmatch 'UnicodeDecodeError' -or $detail -notmatch 'exit 1' -or $detail.Contains('sensitive-token-fixture')) { throw 'Enrollment error was hidden or credential leaked.' }
+if ($detail -notmatch 'UnicodeDecodeError' -or $detail -notmatch 'exit 1' -or ($detail.Contains('sensitive-token-fixture') -or $detail.Contains('another-token-fixture'))) { throw 'Enrollment error was hidden or credential leaked.' }
 if ((Format-GuestFailure 'Permission denied (publickey).' 255) -notmatch 'Permission denied') { throw 'SSH authentication diagnostic lost.' }
 if ((Format-GuestFailure ('a' * 10000) 1).Length -gt 4200) { throw 'Failure output is unbounded.' }
 if ((Format-GuestFailure '' 1) -notmatch 'no diagnostic') { throw 'Empty error has no explanation.' }
