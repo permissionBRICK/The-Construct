@@ -1712,8 +1712,9 @@ for (const [label, needle] of [
 ]) {
   ok(`lifecycle: ${label} passes its captured target into run()`, extSrc.includes(needle));
 }
-ok("lifecycle: EVERY run() call site carries one (none is left unguarded)",
-  extSrc.split("lifecycle.run(").length - 1 === extSrc.split("stillCurrent: () => !targetSuperseded(").length - 1);
+ok("lifecycle: EVERY lifecycle/conversion run() call site carries one (none is left unguarded)",
+  (extSrc.match(/(?:lifecycle|hostconversion)\.run\(/g) || []).length ===
+    extSrc.split("stillCurrent: () => !targetSuperseded(").length - 1);
 
 ok("import: the scan is coalesced through the per-instance coalescer",
   extSrc.includes("instances.createCoalescer({ throttleMs: SYNC_TICK_MIN_MS })") &&

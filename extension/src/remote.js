@@ -15,6 +15,27 @@ function vsc() { return require("vscode"); }
 const REMOTE_SSH_EXT = "ms-vscode-remote.remote-ssh";
 const WORKSPACE_ROOT = "/root/repos"; // WORKSPACE_ROOT in bin/provision.sh
 
+/** Resolve this window's authority without requiring VS Code's proposed resolvers API.
+ * Stable workspace URIs retain the exact authority used by Remote-SSH. Never infer
+ * the host from remoteName alone, or pick one from conflicting workspace authorities.
+ */
+function currentRemoteAuthority(api) {
+  try {
+    const authority = api.env.remoteAuthority;
+    if (typeof authority === "string" && authority) return authority;
+  } catch (_) { /* Proposed API getter can throw in a normally installed extension. */ }
+  const authorities = new Set();
+  const add = uri => {
+    if (uri && uri.scheme === "vscode-remote" && typeof uri.authority === "string" && uri.authority)
+      authorities.add(uri.authority);
+  };
+  try {
+    for (const folder of api.workspace.workspaceFolders || []) add(folder.uri);
+    add(api.workspace.workspaceFile);
+  } catch (_) { return undefined; }
+  return authorities.size === 1 ? [...authorities][0] : undefined;
+}
+
 /**
  * Is the current window already Remote-SSH'd into THIS VM? Pure: takes
  * `vscode.env.remoteAuthority` (e.g. "ssh-remote+agent-vm") and matches the host
@@ -179,6 +200,6 @@ function openOnVm(opts = {}) {
 }
 
 module.exports = {
-  REMOTE_SSH_EXT, WORKSPACE_ROOT, isConnectedToVm, remoteFolderUri, hasRemoteSsh, openOnVm,
+  REMOTE_SSH_EXT, WORKSPACE_ROOT, currentRemoteAuthority, isConnectedToVm, remoteFolderUri, hasRemoteSsh, openOnVm,
   repoNameFromUrl, isLikelyGitUrl, buildCloneScript, projectOpenPath, shouldAutoOpenPanel,
 };
