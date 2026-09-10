@@ -611,12 +611,18 @@ ok "delete explicitly permits hard power-off" ($removeText -match 'Stop-VM -VM \
 ok "child never waits for SSH or injects credentials" ($createText -notmatch 'Reachable|ssh|password|token|autoinstall')
 
 # Execute the real hardware/media functions with recording cmdlet doubles.
+ok 'null protector is absent' (-not (Test-ConstructChildKeyProtectorPresent -Protector $null))
+ok 'empty protector is absent' (-not (Test-ConstructChildKeyProtectorPresent -Protector ([byte[]]@())))
+ok 'native Hyper-V empty blob is absent' (-not (Test-ConstructChildKeyProtectorPresent -Protector ([byte[]]@(0,0,0,4))))
+foreach ($bytes in @(@(0), @(0,0,0,0), @(1,0,0,4), @(0,0,0,4,1))) {
+    ok 'unknown nonempty protector remains protected' (Test-ConstructChildKeyProtectorPresent -Protector ([byte[]]$bytes))
+}
 & {
     $script:childCalls = [Collections.Generic.List[string]]::new()
     $script:childTpm = $false; $script:childProtector = $false
     function Get-VM { param($Name) [pscustomobject]@{Name=$Name;State='Off';Generation=2} }
     function Get-VMSecurity { param($VMName) [pscustomobject]@{TpmEnabled=$script:childTpm} }
-    function Get-VMKeyProtector { param($VMName) if($script:childProtector){[byte[]]@(1,2)} }
+    function Get-VMKeyProtector { param($VMName) if($script:childProtector){Write-Output -NoEnumerate ([byte[]]@(1,2))}else{Write-Output -NoEnumerate ([byte[]]@(0,0,0,4))} }
     function Get-VMHardDiskDrive { param($VMName) }
     function Get-VMNetworkAdapter { param($VMName) [pscustomobject]@{Name='nic'} }
     function Set-VMProcessor { param($VMName,$Count) $script:childCalls.Add('cpu:'+ $Count) }

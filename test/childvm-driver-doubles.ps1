@@ -23,7 +23,7 @@
         $system
     }
     function Get-ConstructVmState { param($Name) 'Off' }
-    $script:probeProtector = [byte[]]@()
+    $script:probeProtector = [byte[]]@(0,0,0,4)
     function Get-VMKeyProtector { param($VMName) Write-Output -NoEnumerate $script:probeProtector }
     function Set-VMKeyProtector { param($VMName,[switch]$NewLocalKeyProtector) }
     function Enable-VMTPM { param($VMName) }
@@ -56,7 +56,9 @@
         $script:probeHostFailure=$false
         New-ConstructChildVm $d
         ok 'real create allocates fixed hardware and dual media' ($script:probeVm -and (Test-Path $disk) -and $script:probeDvds.Count -eq 2 -and $script:probeOrder.Count -eq 4)
-        ok 'fresh VM capabilities allow template changes for an empty byte array' (-not (Get-ConstructChildVmCapabilities -Name child).secureBootTemplateLocked)
+        ok 'fresh VM capabilities allow template changes for the Hyper-V empty blob' (-not (Get-ConstructChildVmCapabilities -Name child).secureBootTemplateLocked)
+        $script:probeProtector = [byte[]]@()
+        ok 'empty byte array also reports no protector' (-not (Get-ConstructChildVmCapabilities -Name child).secureBootTemplateLocked)
         $script:probeProtector = [byte[]]@(1,2,3)
         ok 'VM capabilities lock template changes for a nonempty byte array' (Get-ConstructChildVmCapabilities -Name child).secureBootTemplateLocked
         $refused=$false
