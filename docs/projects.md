@@ -191,12 +191,25 @@ automatically during setup (it passes `CHECKOUT_PROJECTS=true`). To run it by ha
 /opt/construct/repo/bin/checkout-projects.sh
 ```
 
-Repos are cloned under `/root/repos`.
+Repos are cloned under `/root/repos`. Install and reprovision clone/fetch all
+independent repositories in parallel by default. Each repository gets a start
+message and a grouped log on completion; failures are collected while the other
+checkouts finish. Project provisioning commands wait for all checkout workers.
+
+To limit simultaneous repositories, set `CHECKOUT_JOBS=4` in the VM's
+`/etc/construct/config.env`, or prefix a manual checkout with `CHECKOUT_JOBS=4`.
+`0` (the default) means all at once; `1` restores sequential checkout. Shared or
+nested checkout paths, symlink aliases, and linked worktrees sharing Git storage
+are serialized automatically.
 
 Existing checkouts are fetched one remote at a time. If a remote still has a
 narrow fetch refspec for a branch that upstream deleted, checkout restores that
 remote's normal `refs/heads/*` discovery and retries instead of failing every
 subsequent provision.
+
+Clean working trees are fast-forwarded from the already-fetched upstream ref,
+avoiding a second network fetch through `git pull`. Dirty trees, local commits
+that diverge from upstream, and branches without an upstream are left intact.
 
 **Credentials for private repos.** If any selected project's repos use `https://`
 URLs, the installer asks **once** up front for a git username + token (press Enter to

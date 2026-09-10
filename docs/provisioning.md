@@ -136,6 +136,7 @@ Recognized variables:
 | `SETUP_ROOT_SSH_KEY` | `true` | Generate a root SSH key |
 | `INSTALL_SDKS` | `true` | Install the merged project runtimes |
 | `CHECKOUT_PROJECTS` | `false` | Clone the selected projects' repos |
+| `CHECKOUT_JOBS` | `0` | Simultaneous project checkouts: `0` = all independent repos; positive number = concurrency limit |
 | `START_SERVICE` | `true` | Start the `construct` service |
 | `VSCODE_SERVER` | `true` | Install the VS Code CLI / server for Remote-SSH |
 | `VSCODE_SERVE_WEB` | `true` | Autostart browser-based `code serve-web` |
