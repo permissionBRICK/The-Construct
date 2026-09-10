@@ -51,8 +51,11 @@ reports live blocking operations.
 
 ## Pending activation and checks
 
-Host deployment is blocked by Windows' Defender hang. A reboot needs an explicit
-maintenance window because it stops haus-vm and this coding session. After recovery,
+Host deployment is blocked by Windows' Defender hang. Christoph explicitly authorized
+a normal reboot, with a physical power cycle as his fallback. The relay executed
+`shutdown.exe /r /t 0`, but Windows refused with error 1271: the computer is locked
+and requires force. No reboot occurred and no forced command was issued; Christoph
+was informed that he can proceed with his physical power cycle. After recovery,
 verify PowerShell and RDP first, inspect the fenced update, then retry/apply or
 cancel that pre-replacement attempt and install the new release normally. Do not
 delete the handoff/fence/rollback evidence or blindly restart the updater task.
