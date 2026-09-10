@@ -27,3 +27,15 @@ The main-pc installer was patched in place, with its prior file retained as
 `Provision-AgentVM.ps1.before-seed-quote-fix`. Start a new installer process to
 pick up the change; a process already waiting at the failed-save prompt cannot
 retry that export by choosing the blank-reinstall option.
+
+## Adopted local VM reprovision (2026-09-10)
+
+After host conversion, the remote backend defaults to seed account `construct`,
+although the adopted local guest may still use `agent`. The lookup found the guest's
+account but then called undefined `Write-Note` before assigning it. Its catch kept
+the wrong default, and repository unpacking proceeded to `chown construct:construct`.
+Use the existing `Write-Ok` helper and apply the detected account first. Missing,
+invalid or unreadable seed detection now stops before replacing the guest repo.
+The regression test executes the whole production root-key branch, not just the
+query assignments; it fails against the old code and passes with this fix, alongside
+the existing six shell fixtures. No live full reprovision was run from the agent.
