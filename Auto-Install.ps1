@@ -3459,6 +3459,7 @@ if ($IsoPath) {
         Write-Note "Looking up the release SHA256 checksum..."
         try {
             $sums = (Invoke-WebRequest -Uri ($baseUrl + "SHA256SUMS") -UseBasicParsing -TimeoutSec 20).Content
+            if ($sums -is [byte[]]) { $sums = [Text.Encoding]::UTF8.GetString($sums) }
             $pattern = '^([a-fA-F0-9]{64})\s+\*?' + [regex]::Escape($isoName) + '\s*$'
             foreach ($line in ($sums -split "`n")) {
                 if ($line -match $pattern) { $expectedIsoSha256 = $Matches[1].ToLower(); break }

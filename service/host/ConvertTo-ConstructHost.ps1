@@ -86,6 +86,35 @@ function Assert-GuestVmIdentity($Vm) {
     }
     if ($actual -ne $expected) { throw 'The SSH guest firmware identity does not match the selected Hyper-V VM.' }
 }
+function Get-UbuntuSourceIso([string]$Release) {
+    if ($Release -notin @('22.04','24.04')) { throw 'Unsupported Ubuntu release.' }
+    $base = 'https://releases.ubuntu.com/' + $Release + '/'
+    $response = Invoke-WebRequest -Uri ($base + 'SHA256SUMS') -UseBasicParsing -TimeoutSec 30
+    # Without a text Content-Type, Windows PowerShell returns byte[]; casting
+    # that array to string produces decimal byte values, not checksum lines.
+    $body = if ($response.Content -is [byte[]]) { [Text.Encoding]::UTF8.GetString($response.Content) } else { [string]$response.Content }
+    $body = $body.TrimStart([char]0xFEFF)
+    $pattern = '(?m)^([a-fA-F0-9]{64})[ \t]+\*?(ubuntu-(' + [regex]::Escape($Release) + '(?:\.[0-9]+)?)-live-server-amd64\.iso)[ \t]*\r?$'
+    $images = @([regex]::Matches($body, $pattern) | ForEach-Object {
+        [pscustomobject]@{Name=$_.Groups[2].Value;Version=[version]$_.Groups[3].Value;Sha256=$_.Groups[1].Value.ToLowerInvariant()}
+    } | Sort-Object Version -Descending)
+    if (-not $images.Count) { throw ('The Ubuntu ' + $Release + ' checksum list contains no valid amd64 server ISO entry.') }
+    $selected = $images[0]
+    if (@($images | Where-Object { $_.Name -eq $selected.Name -and $_.Sha256 -ne $selected.Sha256 }).Count) {
+        throw 'The Ubuntu checksum list contains conflicting hashes for its source ISO.'
+    }
+    [pscustomobject]@{Name=$selected.Name;Url=($base + $selected.Name);Sha256=$selected.Sha256}
+}
+function Wait-ConversionErrorClose {
+    # The UI starts a visible console with -NonInteractive. Read-Host is forbidden
+    # there, but a console key read works. Redirected/headless callers never wait.
+    try {
+        if (-not [Console]::IsInputRedirected) {
+            Write-Host 'Press any key to close this window.'
+            $null = [Console]::ReadKey($true)
+        }
+    } catch { } # No console input handle: retain the original failure exit code.
+}
 function Expand-VerifiedPackage($Zip, $Destination) {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $archive = [IO.Compression.ZipFile]::OpenRead($Zip)
@@ -171,20 +200,14 @@ try {
         Copy-Item -LiteralPath (Join-Path $plan.scriptsDir 'keys\bootstrap_ed25519.pub') -Destination (Join-Path $scripts 'keys\bootstrap_ed25519.pub') -Force
         Step 'Reusing the Ubuntu source and installing the host service'
         $ubuntu = if ($plan.ubuntu -in @('22.04','24.04')) { $plan.ubuntu } else { '24.04' }
-        $isoBase = 'https://releases.ubuntu.com/' + $ubuntu + '/'
-        $listing = Invoke-WebRequest -Uri $isoBase -UseBasicParsing -TimeoutSec 30
-        $match = [regex]::Match($listing.Content, 'ubuntu-[0-9.]+-live-server-amd64\.iso')
-        if (-not $match.Success) { throw 'Could not discover the Ubuntu source ISO.' }
-        $isoUrl = $isoBase + $match.Value
-        $sums = Invoke-WebRequest -Uri ($isoBase + 'SHA256SUMS') -UseBasicParsing -TimeoutSec 30
-        $checksum = [regex]::Match($sums.Content, ('(?m)^([a-fA-F0-9]{64})\s+\*?' + [regex]::Escape($match.Value) + '\r?$'))
-        if (-not $checksum.Success) { throw 'The Ubuntu release did not provide a checksum for its source ISO.' }
-        $isoSha = $checksum.Groups[1].Value.ToLowerInvariant()
-        $isoPath = ''; $cached = Join-Path $plan.scriptsDir $match.Value
+        $sourceIso = Get-UbuntuSourceIso $ubuntu
+        $isoUrl = $sourceIso.Url
+        $isoSha = $sourceIso.Sha256
+        $isoPath = ''; $cached = Join-Path $plan.scriptsDir $sourceIso.Name
         if (Test-Path -LiteralPath $cached) {
             if ((Get-FileHash -LiteralPath $cached -Algorithm SHA256).Hash -ne $isoSha) { throw 'The cached Ubuntu ISO failed its checksum verification.' }
             [IO.Directory]::CreateDirectory($data) | Out-Null
-            $isoPath = Join-Path $data $match.Value
+            $isoPath = Join-Path $data $sourceIso.Name
             Copy-Item -LiteralPath $cached -Destination $isoPath -Force
         }
         $install = Join-Path $scripts 'service\host\Install-ConstructHost.ps1'
@@ -251,9 +274,14 @@ try {
     Step 'Host installed and VM adopted. VS Code will finish connecting automatically.'
     exit 0
 } catch {
-    Write-Host ('Conversion stopped: ' + $_.Exception.Message) -ForegroundColor Red
-    if ($plan.resultPath) { Write-JsonFile $plan.resultPath @{ok=$false;id=$plan.id;error=$_.Exception.Message;hostInstalled=($journal -and $journal.installed)} }
+    $failureMessage = $_.Exception.Message
+    Write-Host ('Conversion stopped: ' + $failureMessage) -ForegroundColor Red
+    try {
+        if ($plan.resultPath) { Write-JsonFile $plan.resultPath @{ok=$false;id=$plan.id;error=$failureMessage;hostInstalled=($journal -and $journal.installed)} }
+    } catch { Write-Host ('Could not save the error for VS Code: ' + $_.Exception.Message) -ForegroundColor Red }
     Write-Host 'The existing VM and its disks have been preserved. Retry from Construct Settings after correcting the reported issue.'
+    if ($conversionLock) { $conversionLock.Dispose(); $conversionLock = $null }
+    Wait-ConversionErrorClose
     exit 1
 } finally {
     if ($conversionLock) { $conversionLock.Dispose() }
