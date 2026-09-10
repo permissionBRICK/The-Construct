@@ -97,3 +97,13 @@ shutdown/delete actions. Production settings and primary uptime were preserved;
 database integrity passed at schema 700. No extension update was needed. The
 known attached-ISO ACL hardening issue remains separate; this guest's exact VM SID
 read grant was restored after the update.
+
+
+At 17:31:49 UTC the user's VS Code panel deletion completed successfully
+(job `cba9f94ef5ba4e2b82827370c6257add`, result `removed`, no retained artifacts).
+Read-only verification found no Construct record, native Hyper-V VM, VHDX,
+ownership marker, matching configuration files, or capacity reservations.
+The dynamic 2 GiB VHDX had last measured 4 MiB of actual file storage; there was
+no immediate before/after free-space sample to quantify the total reclaimed.
+C: had 3,730,403,328 bytes free afterward. The reusable 69,206,016-byte Alpine
+ISO remained cached with zero references. The primary VM remained running.
