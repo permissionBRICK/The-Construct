@@ -93,12 +93,12 @@
       const active = busy && button.dataset.cmd === id;
       button.classList.toggle("preparing", active);
       button.setAttribute("aria-busy", String(active));
-      if (active) {
+      if (active && !button.querySelector(".prepare-spinner")) {
         const spinner = document.createElement("span");
         spinner.className = "prepare-spinner";
-        spinner.setAttribute("aria-label", "Preparing");
-        button.prepend(spinner);
-      } else {
+        spinner.setAttribute("aria-hidden", "true");
+        button.querySelector(".action-icon").append(spinner);
+      } else if (!active) {
         button.querySelectorAll(".prepare-spinner").forEach((spinner) => spinner.remove());
       }
     });
