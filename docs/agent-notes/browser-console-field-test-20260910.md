@@ -107,3 +107,17 @@ The dynamic 2 GiB VHDX had last measured 4 MiB of actual file storage; there was
 no immediate before/after free-space sample to quantify the total reclaimed.
 C: had 3,730,403,328 bytes free afterward. The reusable 69,206,016-byte Alpine
 ISO remained cached with zero references. The primary VM remained running.
+
+
+## Follow-up: retained ISO hidden in the media panel
+
+The admin panel sent `/media?owner=all`, which the API correctly interprets as a
+literal owner filter. Live `/media` returned `alpine-host-download.iso` (ready,
+zero references) while that filtered request returned nothing. Extension fix
+`fb89bbbf85dde1f51bccabb6c4dc82b8b5a4e8e8` omits the owner filter for the admin
+inventory; 605 panel, adapter, and remote-client checks passed. The packaged VSIX
+was verified against the tested source. Deployment to the user's VS Code on
+`main-pc` is pending: its relay did not respond, while `haus-pc` (STANDPC) and
+`haus-vm` answered discovery. The user can apply it through Update Construct or
+start the main-pc relay. The ISO belongs in Child media, separate from the primary
+Construct autoinstall ISO catalog.
