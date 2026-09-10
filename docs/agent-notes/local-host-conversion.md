@@ -7,7 +7,10 @@ prefilled review page. The original Windows identity becomes the host admin, eve
 if UAC is approved with another administrator's account. The editable LAN/VPN
 address prefers the PC's DNS name and falls back to a LAN IPv4 address when the
 guest cannot resolve that name. Keeping the host awake on AC is an upfront option;
-unchecked preserves the current power plan. No inputs are requested after UAC.
+unchecked preserves the current power plan. No setup inputs are requested after
+UAC. On failure the visible console retains the error until a key is pressed;
+successful conversions close automatically. Redirected/headless callers do not
+pause, and the conversion lock is released before the error console waits.
 
 The option is available only in a Windows UI extension attached to the selected
 `hyperv-local` instance. This initial flow adopts that one VM. Other users are
@@ -93,6 +96,7 @@ node --test extension/test/hostconversion.test.js
 python3 test/host-conversion.test.py
 pwsh -NoProfile -File test/host-conversion.test.ps1
 pwsh -NoProfile -File test/host-conversion-identity.test.ps1
+pwsh -NoProfile -File test/host-conversion-source.test.ps1
 dotnet test service/Constructd.sln -c Release
 node extension/test/ui-smoke.js
 ```
@@ -131,3 +135,17 @@ The fixed verifier passed against the live WS009 guest from the non-admin relay
 with the IP list still empty. Its installed client coordinator was updated after
 checking the old file hash, with a `.before-identity-fix` backup. This was a
 read-only identity test: the VM remained running and no host was installed.
+
+Ubuntu checksum follow-up: PowerShell returns `SHA256SUMS` as `byte[]` when the
+HTTP response lacks a text content type. The old regex therefore saw decimal
+byte values rather than checksum lines. Conversion now decodes the body and
+selects the newest matching server ISO directly from the checksum catalog,
+keeping filename and hash together. The ordinary installer also decodes byte
+responses before checksum lookup. Local fixtures cover text/bytes/BOM, numeric
+version ordering, exact filenames and conflicting hashes; live metadata checks
+for 22.04 and 24.04 pass without downloading either ISO. The error-console key
+wait was verified with a terminal and with redirected input.
+
+WS009's relay was removed by Defender before these follow-up changes could be
+applied there. Use Update Construct and retry conversion; do not claim the full
+conversion has passed until that user test succeeds.
