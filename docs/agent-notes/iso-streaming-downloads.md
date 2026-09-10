@@ -34,3 +34,10 @@ under PowerShell 7 on Linux and Windows PowerShell 5.1. Native STANDPC PowerShel
 5.1 tests also passed parallel downloads, stall recovery, single-stream fallback,
 unknown length, bad ranges, and changed validators. UI smoke tests passed 318
 checks; lifecycle launcher checks passed 265 cases.
+
+A real HTTPS download on STANDPC under Windows PowerShell 5.1 fetched the
+69,206,016-byte Alpine 3.24.1 ISO in 5.3 seconds, displayed eight active streams,
+and verified SHA256 `e73a6241bd5f3c5c2d4d38c02cc52c378c0415a7c888bd292066bf36e0f41a39`.
+The temporary test ISO was deleted afterward. This is a functionality check;
+no comparison against the previous downloader or company-network throughput was
+performed.
