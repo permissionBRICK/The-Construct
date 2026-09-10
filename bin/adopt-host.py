@@ -4,16 +4,53 @@
 The elevated coordinator sends JSON on stdin over the existing, host-key-verified SSH
 connection. Secrets never appear in process arguments or console output.
 """
+import errno
 import json
 import os
 from pathlib import Path
 import re
 import shlex
+import socket
 import ssl
 import subprocess
 import sys
 import tempfile
+import urllib.error
 import urllib.request
+
+
+class EnrollmentError(ValueError):
+    """A fixed, credential-free diagnostic safe to show in the setup console."""
+
+
+def failure_message(error):
+    # Never stringify arbitrary exceptions: URLs, HTTP bodies and subprocess
+    # arguments can contain credentials. Report known categories and numeric codes.
+    if isinstance(error, EnrollmentError):
+        return str(error)
+    if isinstance(error, UnicodeError):
+        return "Enrollment input is not UTF-8. Update the Windows Construct client and retry."
+    if isinstance(error, json.JSONDecodeError):
+        return "Enrollment input is not valid JSON. Update the Windows Construct client and retry."
+    if isinstance(error, urllib.error.HTTPError):
+        return "Host identity API returned HTTP %d; verify host authentication and service logs." % error.code
+    if isinstance(error, urllib.error.URLError):
+        return failure_message(error.reason) if isinstance(error.reason, Exception) else "Guest could not connect to the host API."
+    if isinstance(error, ssl.SSLCertVerificationError):
+        return "Host TLS certificate verification failed (code %s); check its hostname and validity." % getattr(error, "verify_code", "unknown")
+    if isinstance(error, ssl.SSLError):
+        return "TLS negotiation with the host API failed."
+    if isinstance(error, socket.gaierror):
+        return "The guest cannot resolve the host address. Check guest DNS or use a reachable host address."
+    if isinstance(error, TimeoutError):
+        return "The guest connection to the host API timed out. Check routing and the host firewall on TCP 7462."
+    if isinstance(error, ConnectionRefusedError):
+        return "The host refused the guest connection on TCP 7462. Check that constructd is listening."
+    if isinstance(error, subprocess.CalledProcessError):
+        return "Guest heartbeat setup failed (systemctl exit %d). Check the guest systemd logs." % error.returncode
+    if isinstance(error, OSError):
+        return "Guest enrollment encountered an OS error (%s)." % errno.errorcode.get(error.errno, "unknown")
+    return "Guest enrollment failed (%s)." % type(error).__name__
 
 
 def update_config(text, values):
@@ -38,20 +75,23 @@ def atomic_write(path, data, mode):
 def enroll(payload, root=Path("/"), verify=None, run=subprocess.run):
     name = payload["name"]
     if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", name):
-        raise ValueError("invalid instance name")
+        raise EnrollmentError("invalid instance name")
     if (root / "etc/machine-id").read_text().strip() != payload["machineId"]:
-        raise ValueError("guest identity changed; conversion stopped")
+        raise EnrollmentError("guest identity changed; conversion stopped")
     url = payload["serviceUrl"]
     if not re.fullmatch(r"https://[A-Za-z0-9.-]+:7462", url):
-        raise ValueError("invalid service URL")
+        raise EnrollmentError("invalid service URL")
     if verify is None:
         context = ssl.create_default_context(cadata=payload["certificate"])
         request = urllib.request.Request(url + "/api/v1/vms/" + name + "/identity",
                                          headers={"Authorization": "Bearer " + payload["vmToken"]})
         with urllib.request.urlopen(request, context=context, timeout=20) as response:
-            identity = json.load(response)
+            try:
+                identity = json.load(response)
+            except (json.JSONDecodeError, UnicodeError):
+                raise EnrollmentError("Host identity API returned invalid JSON.") from None
         if identity.get("vmName") != name or identity.get("owner", "").lower() != payload["owner"].lower():
-            raise ValueError("host returned a different VM identity")
+            raise EnrollmentError("host returned a different VM identity")
     else:
         verify(payload)
     config = root / "etc/construct/config.env"
@@ -67,7 +107,7 @@ def enroll(payload, root=Path("/"), verify=None, run=subprocess.run):
     }
     for filename, contents in payload.get("files", {}).items():
         if filename not in ("construct", "construct-vm.sh", "construct-expose.sh", "construct-idle-report.sh"):
-            raise ValueError("unexpected guest helper")
+            raise EnrollmentError("unexpected guest helper")
         changes[root / "usr/local/bin" / filename] = (contents.encode(), 0o755)
     units = root / "etc/systemd/system"
     changes[units / "construct-idle-report.service"] = (b"[Unit]\nDescription=Construct activity heartbeat\nAfter=network-online.target\n[Service]\nType=oneshot\nUser=root\nExecStart=/usr/local/bin/construct-idle-report.sh\n", 0o644)
@@ -92,9 +132,10 @@ def enroll(payload, root=Path("/"), verify=None, run=subprocess.run):
 
 if __name__ == "__main__":
     try:
-        enroll(json.load(sys.stdin))
+        # Read strict UTF-8 bytes: Python stdin may otherwise use surrogateescape
+        # and defer a damaged payload failure until helper files are encoded.
+        enroll(json.loads(sys.stdin.buffer.read().decode("utf-8")))
         print("Guest enrolled; existing applications remain running.")
     except Exception as error:
-        # No exception payload: HTTP/process exceptions may carry credentials.
-        print("Guest enrollment failed: " + type(error).__name__, file=sys.stderr)
+        print("Guest enrollment failed: " + failure_message(error), file=sys.stderr)
         sys.exit(1)

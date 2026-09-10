@@ -2,6 +2,10 @@
 import importlib.util
 from pathlib import Path
 import subprocess
+import json
+import socket
+import ssl
+import urllib.error
 import tempfile
 import unittest
 
@@ -50,6 +54,33 @@ class GuestAdoptionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             adopt.enroll(self.payload, self.root, verify=refuse, run=self.run_command)
         self.assertEqual(list(self.config.parent.iterdir()), [self.config])
+
+    def test_diagnostics_distinguish_failures_without_credentials(self):
+        secret = "sensitive-token-fixture"
+        errors = [
+            (UnicodeDecodeError("utf-8", b"\xff", 0, 1, secret), "UTF-8"),
+            (json.JSONDecodeError(secret, secret, 0), "JSON"),
+            (urllib.error.HTTPError("https://host/" + secret, 401, secret, {}, None), "HTTP 401"),
+            (urllib.error.URLError(socket.gaierror(-2, secret)), "resolve"),
+            (urllib.error.URLError(TimeoutError(secret)), "timed out"),
+            (urllib.error.URLError(ConnectionRefusedError(secret)), "refused"),
+            (ssl.SSLCertVerificationError(secret), "certificate verification"),
+            (subprocess.CalledProcessError(5, ["systemctl", secret], stderr=secret), "systemctl exit 5"),
+            (RuntimeError(secret), "RuntimeError"),
+        ]
+        for error, expected in errors:
+            with self.subTest(kind=type(error).__name__):
+                message = adopt.failure_message(error)
+                self.assertIn(expected, message)
+                self.assertNotIn(secret, message)
+
+    def test_command_line_reports_bad_utf8_without_echoing_payload(self):
+        script = Path(__file__).resolve().parents[1] / "bin/adopt-host.py"
+        result = subprocess.run(["python3", str(script)], input=b'{"vmToken":"sensitive-token-fixture", "files":"\xf5"}', capture_output=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(b"UTF-8", result.stderr)
+        self.assertNotIn(b"sensitive-token-fixture", result.stderr)
+        self.assertEqual(result.stdout, b"")
 
     def test_failed_timer_setup_restores_old_configuration_and_credentials(self):
         token = self.config.parent / "vm-token"

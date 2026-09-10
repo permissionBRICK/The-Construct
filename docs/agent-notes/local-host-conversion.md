@@ -97,6 +97,7 @@ python3 test/host-conversion.test.py
 pwsh -NoProfile -File test/host-conversion.test.ps1
 pwsh -NoProfile -File test/host-conversion-identity.test.ps1
 pwsh -NoProfile -File test/host-conversion-source.test.ps1
+pwsh -NoProfile -File test/host-conversion-transport.test.ps1
 dotnet test service/Constructd.sln -c Release
 node extension/test/ui-smoke.js
 ```
@@ -149,3 +150,21 @@ wait was verified with a terminal and with redirected input.
 WS009's relay was removed by Defender before these follow-up changes could be
 applied there. Use Update Construct and retry conversion; do not claim the full
 conversion has passed until that user test succeeds.
+
+Enrollment follow-up (2026-09-10): WS009 now reaches adoption after the host
+installer succeeds, then reports a generic SSH/enrollment failure. The coordinator
+was writing its Unicode JSON payload through `Process.StandardInput.Write`, which
+uses the Windows console code page in .NET Framework. The bundled shell helpers
+contain non-ASCII characters; a CP850 regression reproduces corrupted UTF-8. The
+coordinator now writes UTF-8 bytes directly to stdin, explicitly decodes UTF-8
+output, and includes bounded stderr in errors after removing enrollment tokens.
+The guest provides fixed diagnostics for encoding/JSON, DNS, timeout, refusal,
+TLS, HTTP authentication, and systemd failures without printing exception payloads.
+
+On an installed-host retry, guest enrollment code comes from the current client
+coordinator checkout, so Update Construct picks up these fixes even though the
+protected host release is intentionally not reinstalled. The original journal
+and VM remain in place. Local tests cover OEM/UTF-16/BOM defaults, error redaction,
+and rollback; the device-specific cause is not confirmed until WS009 retries or
+provides the newly visible diagnostic. Its portable SSH endpoint was not yet
+listening during this investigation.
