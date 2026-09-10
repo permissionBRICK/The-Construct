@@ -92,6 +92,16 @@ Windows PowerShell 5.1 checks also run through STANDPC's relay, including refusa
 to overwrite its already-running host. This does not constitute a full conversion
 of a fresh local Windows installation; that end-to-end user test is still required.
 
+The implementation is published in host release
+`host-73b3f01c8fe2c30d3ba85930d44b2e019b5b96e7`; the existing host release workflow
+completed successfully (run `34518500368`). Local validation passed 322 UI smoke
+checks, 368 host installer checks, four client conversion tests, four guest
+enrollment tests, and six adoption cases including SQLite persistence. Native
+STANDPC PowerShell `5.1.26100.9168` passed the manual conversion checks and the
+existing-host refusal. Its service was preserved. main-pc's relay was unavailable;
+activate the new client with Update Construct there, then run the guided conversion
+on its local VM. Existing installed hosts do not need conversion.
+
 IP-address certificates use an IP subject alternative name, following
 [Microsoft's certificate example 9](https://learn.microsoft.com/powershell/module/pki/new-selfsignedcertificate),
 so the Linux guest can verify the host when an IPv4 address is used.
