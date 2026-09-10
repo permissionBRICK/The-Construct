@@ -41,7 +41,7 @@ public sealed class ConsoleApiTests
         using var app = new TestApp(); using var owner = await app.CreateUserClientAsync("owner", Role.Admin);
         await owner.CreateVmAsync("probe-vm");
         var caps = await (await owner.GetAsync(Root + "/capabilities")).ReadAsync<JsonElement>();
-        Assert.Equal("unsupported", caps.GetProperty("interactive").GetString());
+        Assert.Equal("conditional", caps.GetProperty("interactive").GetString());
         Assert.False(string.IsNullOrWhiteSpace(caps.GetProperty("interactiveReason").GetString()));
         var path = await Session(owner);
         using var image = await owner.GetAsync(path + "/screenshot");

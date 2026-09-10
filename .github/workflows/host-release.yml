@@ -2,7 +2,7 @@ name: Host release
 on:
   push:
     branches: [main]
-    paths: ['console-viewer/**', 'service/**', 'drivers/**', 'lib/**', 'bin/**', 'Provision-AgentVM.ps1', 'config/**', '.github/workflows/host-release.yml']
+    paths: ['console-viewer/**', 'service/**', 'drivers/**', 'lib/**', 'bin/**', 'Provision-AgentVM.ps1', 'config/**', 'test/browser-console-install.test.ps1', '.github/workflows/host-release.yml']
   workflow_dispatch:
 permissions:
   contents: write
@@ -24,7 +24,8 @@ jobs:
           sudo apt-get install -y -qq python3-aiohttp
           /usr/bin/python3 -m unittest discover -s console-viewer -p 'test_*.py' -v
           node --check console-viewer/static/viewer.js
-          bash -n console-viewer/install.sh bin/construct-vm.sh
+          bash -n console-viewer/install.sh bin/construct-vm.sh bin/provision.sh
+          pwsh -NoProfile -File test/browser-console-install.test.ps1
       - run: dotnet test service/Constructd.sln -c Release
       - run: dotnet publish service/src/Constructd.Api -c Release -r win-x64 --self-contained true -p:InformationalVersion=1.0.0+${{ github.sha }} -p:IncludeSourceRevisionInInformationalVersion=false -o /tmp/host-publish
       - name: Package pinned commit

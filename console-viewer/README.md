@@ -7,25 +7,24 @@ to run directly on the Windows Hyper-V host.
 
 ## Installation
 
-On the Windows Construct host, after installing a release containing this feature:
-
-```powershell
-.\service\host\Enable-ConstructBrowserConsole.ps1
-```
-
-The `Constructd:BrowserConsoleEnabled` setting is opt-in and takes effect on the
-next host update or service restart. The service identity needs its existing
-LocalSystem privileges to create temporary local accounts. TCP 2179 must be
-reachable from the trusted primary VM. The gateway obtains the VMConnect
-certificate fingerprint through the authenticated host API; no certificate bypass
-or hardcoded machine-specific fingerprint is needed.
-
-On the Linux primary VM, with Docker installed and running:
+The browser console is enabled by default on the Windows host. Normal primary
+VM provisioning installs the Linux gateway and its pinned guacd container;
+no separate project profile or enable command is needed.
 
 ```bash
-bash /path/to/construct/console-viewer/install.sh
-construct vm console alpine-viewer --web --minutes 30
+construct vm console NAME --web --minutes 30
 ```
+
+Existing hosts without a `Constructd:BrowserConsoleEnabled` setting gain the
+default at the next host service update. An explicit `false` remains disabled,
+including when rerunning the host installer. Administrators can still use
+`service/host/Enable-ConstructBrowserConsole.ps1 -Disable` (and restart the
+service) to disable it, or omit `-Disable` to re-enable it.
+
+For an existing primary, reprovision to install the gateway, or run
+`bash /path/to/construct/console-viewer/install.sh` with Docker running. TCP
+2179 must be reachable from the primary. The gateway obtains the VMConnect
+certificate fingerprint through the authenticated host API.
 
 The command uses `construct expose` to print a working client-forwarded link.
 The viewer listens on port 6080. Link lifetimes range from 5 to 120 minutes;
@@ -36,8 +35,8 @@ redeemed. Reconnect works from the current page while its link remains valid.
 The gateway is installed under `/opt/construct/console-viewer` and managed by
 `construct-console-viewer.service`. guacd is a separate, digest-pinned container,
 bound **only to 127.0.0.1:4822**, without guest-supplied connection settings.
-The `construct-browser-console` project profile records the repository, Docker,
-and gateway setup for reprovisioning; select it alongside your other profiles.
+The optional `construct-browser-console` profile remains available for older
+provisioners; current service-managed primaries install the gateway automatically.
 
 Optional machine-local settings in `/etc/construct/console-viewer.env`:
 

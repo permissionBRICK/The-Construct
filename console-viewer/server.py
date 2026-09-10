@@ -116,7 +116,9 @@ class Gateway:
         if len(self.tickets) >= 32:
             raise web.HTTPTooManyRequests(text='Too many viewer links')
         # Authorize the name before issuing any link. Connection reauthorizes when opened.
-        await self.api('GET', f'/api/v1/vms/{quote(name)}/console/capabilities')
+        capabilities = await self.api('GET', f'/api/v1/vms/{quote(name)}/console/capabilities')
+        if capabilities.get('interactive') == 'unsupported':
+            raise web.HTTPConflict(text=capabilities.get('interactiveReason', 'Browser console is unavailable on this host.'))
         ident, token = secrets.token_hex(16), secrets.token_urlsafe(32)
         self.tickets[ident] = dict(token=token, name=name, expires=time.monotonic() + minutes * 60, active=False)
         return web.json_response({'fragment': ident + '.' + token, 'minutes': minutes})

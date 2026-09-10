@@ -25,7 +25,8 @@ public sealed class InteractiveConsoleTests
     public async Task Credentials_require_enabled_host_and_matching_authorized_session_and_are_not_logged()
     {
         var backend = new FakeInteractive();
-        using var app = new TestApp(configureServices: s => s.AddSingleton<IInteractiveConsole>(backend));
+        using var app = new TestApp(new Dictionary<string, string?> { ["Constructd:BrowserConsoleEnabled"] = "false" },
+            configureServices: s => s.AddSingleton<IInteractiveConsole>(backend));
         using var owner = await app.CreateUserClientAsync("owner");
         using var other = await app.CreateUserClientAsync("other");
         await owner.CreateVmAsync("viewer-vm");
@@ -49,6 +50,22 @@ public sealed class InteractiveConsoleTests
         Assert.Equal(HttpStatusCode.NoContent, (await owner.DeleteAsync(path)).StatusCode);
         Assert.Equal(1, backend.Removed);
         Assert.Equal(HttpStatusCode.Gone, (await owner.PostJsonAsync(path + "/connection", new { })).StatusCode);
+    }
+
+    [Fact]
+    public async Task Browser_console_works_without_an_opt_in_setting()
+    {
+        var backend = new FakeInteractive();
+        using var app = new TestApp(configureServices: s => s.AddSingleton<IInteractiveConsole>(backend));
+        using var owner = await app.CreateUserClientAsync("owner");
+        await owner.CreateVmAsync("viewer-default");
+        var root = "/api/v1/vms/viewer-default/console";
+        var created = await (await owner.PostJsonAsync(root + "/sessions", new { })).ReadAsync<JsonElement>();
+        var path = root + "/sessions/" + created.GetProperty("sessionId").GetString();
+        Assert.Equal(HttpStatusCode.OK, (await owner.PostJsonAsync(path + "/connection", new { })).StatusCode);
+        Assert.Equal(1, backend.Connections);
+        Assert.Equal(HttpStatusCode.NoContent, (await owner.DeleteAsync(path)).StatusCode);
+        Assert.Equal(1, backend.Removed);
     }
 
     [Fact]
