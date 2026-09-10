@@ -1172,6 +1172,8 @@ if [[ -n "${_clone_creds_file}" ]]; then rm -f "${_clone_creds_file}" || true; f
 #     after the checkout so each command runs from inside its project's cloned
 #     repo, and after the SDKs (step 5b) so build/install steps find their
 #     runtimes. Runs every provision; a failing command warns but never aborts.
+#     The runner parallelizes profiles internally and waits for all of them:
+#     keep this synchronous call between checkout and the following stages.
 run_step optional "Running project provisioning commands" \
   env WORKSPACE_ROOT="${WORKSPACE_ROOT}" AGENT_HOME="${AGENT_HOME:-/opt/construct}" \
   bash "${REPO_DIR}/bin/run-provision-commands.sh"
