@@ -80,6 +80,39 @@
     }
     const refresh = $("haRefresh");
     if (refresh) refresh.disabled = !!s.busy;
+    const u = s.maintenanceTab;
+    const cur = u && u.current;
+    const active = cur && ["checking", "draining", "handedOff", "applying"].includes(cur.state);
+    const recovery = cur && ["interrupted", "recoveryFailed"].includes(cur.state);
+    const failed = cur && ["stageFailed", "applyFailed", "rolledBack", "rolledBackWithDatabase"].includes(cur.state);
+    const phases = { check: "Checking release…", download: "Downloading update…", verify: "Verifying update…",
+      drain: "Waiting for host jobs to finish…", handoff: "Starting installer…", backup: "Backing up host service…",
+      replace: "Installing update…", health: "Checking the updated service…", commit: "Finishing update…" };
+    const message = s.updateError ? "Update check or request failed: " + s.updateError
+      : s.mode === "unavailable" && s.updatePending ? "Reconnecting to host…"
+      : recovery ? "Update needs recovery — open update details"
+      : active ? (phases[cur.phase] || "Updating host…") + (cur.blockingJobs.length ? " Waiting for: " + cur.blockingJobs.join(", ") : "")
+      : s.updatePending ? "Preparing update…"
+      : s.updateChecking ? "Checking for updates…"
+      : failed ? "Update failed" + (cur.error ? ": " + cur.error : " — previous version restored")
+      : cur?.state === "staged" ? "Update downloaded — click Update host to install"
+      : u?.latestKnown?.compatible === false ? "Latest release is incompatible with this host"
+      : u?.updateAvailable ? "Update available"
+      : u?.latestKnown ? "Up to date" : "Update status not checked";
+    const visible = (!!s.features?.updates && s.mode === "admin") || !!s.updatePending;
+    const badge = $("haUpdateStatus");
+    show(badge, visible);
+    text("haUpdateStatus", message);
+    if (badge) badge.className = "tag " + (u?.updateAvailable || failed || recovery || s.updateError ? "upd" : "ok");
+    text("updProgress", message);
+    const update = $("haUpdate");
+    show(update, visible);
+    if (update) {
+      update.disabled = !!s.busy || s.mode !== "admin" || !!s.maintenance || !!active || !!recovery || !!s.updatePending || !!s.updateChecking || (!s.updateError && !!u?.latestKnown && !u.updateAvailable && cur?.state !== "staged") || u?.latestKnown?.compatible === false;
+      update.textContent = active || s.updatePending ? "Updating…" : "Update host";
+      update.classList.toggle("ha-updating", !!active || !!s.updatePending || !!s.updateChecking);
+      update.setAttribute("aria-busy", String(!!active || !!s.updatePending || !!s.updateChecking));
+    }
   }
 
   const STATE_TITLES = {
@@ -468,10 +501,10 @@
     show($("updCheckResult"), !!u.checkResult);
     text("updCheckResult", u.checkResult || "");
     const a = u.actions;
-    const set = (id, on) => { const b = $(id); if (b) { b.disabled = !on || !!s.maintenance; b.hidden = false; } };
+    const set = (id, on) => { const b = $(id); if (b) { b.disabled = !on || !!s.busy || (!!s.maintenance && id !== "updResume"); b.hidden = !on; } };
     set("updCheck", a.check); set("updStage", a.stage); set("updApply", a.apply); set("updResume", a.resume); set("updCancel", a.cancel);
     show($("updResolveRow"), a.resolve);
-    document.querySelectorAll("#updResolveRow [data-resolve]").forEach((b) => { b.disabled = !!s.maintenance; });
+    document.querySelectorAll("#updResolveRow [data-resolve]").forEach((b) => { b.disabled = !!s.busy; });
     const rec = $("updRecovery");
     show(rec, !!u.recoveryRecord);
     if (rec) rec.textContent = u.recoveryRecord || "";
@@ -501,12 +534,12 @@
       row.appendChild(cell(r.error, "wide"));
       h.appendChild(row);
     });
-    document.querySelectorAll("#tab-maintenance .ha-inline-actions .btn").forEach((b) => { if (s.maintenance) b.disabled = true; });
   }
 
   // ── Render everything ───────────────────────────────────────────────────────
   function render(s) {
     if (!s) return;
+    const previous = state;
     state = s;
     renderHeader(s);
     renderStateCard(s);
@@ -514,14 +547,15 @@
     renderTabs(s);
     renderOverview(s);
     renderVms(s);
-    renderUsers(s);
+    const refreshForms = !previous || previous.activeTab !== s.activeTab || !!previous.maintenance !== !!s.maintenance;
+    if (refreshForms || JSON.stringify(previous.users) !== JSON.stringify(s.users)) renderUsers(s);
     renderMedia(s);
     renderOperations(s);
-    renderConfig(s);
+    if (refreshForms || JSON.stringify(previous.config) !== JSON.stringify(s.config)) renderConfig(s);
     renderMaintenance(s);
     // Every mutation is disabled while the host is updating (§10.3).
     document.querySelectorAll("#haAdmin .btn, #haAdmin .save-btn").forEach((b) => {
-      if (s.maintenance && !b.closest(".ha-tabs")) b.disabled = true;
+      if (s.maintenance && !b.closest(".ha-tabs") && b.id !== "updResume" && !b.hasAttribute("data-resolve")) b.disabled = true;
     });
   }
 

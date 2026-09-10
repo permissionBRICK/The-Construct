@@ -28,7 +28,7 @@ public sealed class HostUpdateJob(IHostUpdateStore store, IReleaseSource source,
             $"op={row.Id}, initiator={row.Actor}, phase={phase}, state={state}"),CancellationToken.None);
         return row;
     }
-    public async Task<object> StageAsync(string? tag, string actor, CancellationToken ct, OperationKeyRecord? operation=null)
+    public async Task<object> StageAsync(string? tag, string actor, CancellationToken ct, OperationKeyRecord? operation=null, bool autoApply=false)
     {
         var id=Guid.NewGuid().ToString("n");
         var row=new HostUpdateRecord(id,"",tag,null,HostUpdateState.Checking,"check",[],clock.UtcNow,null,null,release.Installed.Commit,actor,[]);
@@ -48,6 +48,9 @@ public sealed class HostUpdateJob(IHostUpdateStore store, IReleaseSource source,
                 try {staged=await stager.StageAsync(id,latest,progress,token);}
                 finally {await progress.CompleteAsync();}
                 await config.SetAsync("update-staged:"+id,staged,actor,token);
+                // Persist consent before publishing Staged. Recovery can continue the
+                // install even after the requesting client disconnects or a restart.
+                if(autoApply) await config.SetAsync("update-auto-apply:"+id,new UpdateAutoApply(true),actor,token);
                 row=await PhaseAsync(row with { PackageVersion=staged.Manifest.PackageVersion },HostUpdateState.Staged,"verify");
                 await runner.SetPhaseAsync(jobId,"verify",token);
                 return new JobOutcome(row);
@@ -189,3 +192,4 @@ public sealed class HostUpdateJob(IHostUpdateStore store, IReleaseSource source,
     private sealed class EmptyHandle:IDisposable {public void Dispose() {}}
 }
 public sealed record UpdateJobLink(string JobId,string Action);
+public sealed record UpdateAutoApply(bool Enabled);

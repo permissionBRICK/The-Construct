@@ -208,7 +208,11 @@ const lastState = (entry) => [...entry.panel.posted].reverse().find((m) => m.typ
     await new Promise(resolve => setImmediate(resolve));
     ok("usage: revealing panel immediately refreshes", reads() > hiddenReads);
     await entry.panel.send({ type: "hostadmin.tab", tab: "users" });
-    eq("usage: leaving VM tab stops polling", entry.pollTimer, null);
+    eq("usage: leaving VM tab keeps a slower update-status poll", t.timers.calls.at(-1).ms, 60000);
+    const userReads = t.client.calls.filter(c => c.method === "users").length;
+    t.timers.calls.at(-1).fn();
+    await new Promise(resolve => setImmediate(resolve));
+    eq("update polling does not reload editable user data", t.client.calls.filter(c => c.method === "users").length, userReads);
     entry.panel.dispose();
   }
   {

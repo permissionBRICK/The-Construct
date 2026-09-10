@@ -209,11 +209,16 @@ VM enrollment is required.
 Upstream behavior: [VS Code module patching](https://github.com/microsoft/vscode/blob/main/src/vs/workbench/api/node/proxyResolver.ts),
 [proxy agent replacement](https://github.com/microsoft/vscode-proxy-agent/blob/main/src/index.ts).
 
-After a successful elevated result, `watchPending` automatically retries client
-completion once per VS Code session. Thus updating/reloading after the TLS fix can
-finish conversion without another click. Once the registry is `hyperv-remote`, the
-local-only conversion button disappears. This is the expected transition; current
-WS009 registry state has not been read directly. A subsequent reprovision exposed
+Earlier builds automatically retried client completion once per VS Code session;
+this explained the conversion button disappearing after the TLS fix. Christoph
+rejected completion triggered merely by opening VS Code because the outcome was
+too easy to miss. The watcher now only shows the saved result and a **Finish host
+conversion** action. Settings retain the pending result, saved error, and a
+finish/retry button. Completion runs with visible progress only after that action;
+a conversion explicitly launched in the current session still runs end to end.
+Successful completion explicitly reports the host URL and administrator status.
+Once the registry is `hyperv-remote`, the local-only conversion button disappears.
+Current WS009 registry state has not been read directly. A subsequent reprovision exposed
 the undefined `Write-Note` seed-selection bug described in
 [reinstall-seed-user-20260906.md](reinstall-seed-user-20260906.md); host management
 does not change the adopted Linux guest's original seed account.

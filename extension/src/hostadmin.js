@@ -258,7 +258,9 @@ function tabsFor(state) {
 /** Refresh VM usage while its tab is active; keep editable tabs stable. Pure. */
 function pollIntervalMs(state) {
   if (state && state.maintenance) return MAINTENANCE_POLL_MS;
-  return state && state.mode === "admin" && state.activeTab === "vms" ? 10000 : null;
+  if (state && (state.updatePending || ["checking", "draining", "handedOff", "applying"].includes(state.maintenanceTab?.current?.state))) return MAINTENANCE_POLL_MS;
+  if (state?.mode !== "admin") return null;
+  return state.activeTab === "vms" ? 10000 : state.features?.updates ? 60000 : null;
 }
 
 // ── View-models ──────────────────────────────────────────────────────────────
@@ -604,7 +606,7 @@ function toCapabilityRows(body) {
 }
 
 /** The non-terminal update states (§11.8). */
-const OPEN_UPDATE_STATES = ["checking", "staged", "draining", "handedOff", "applying", "interrupted"];
+const OPEN_UPDATE_STATES = ["checking", "staged", "draining", "handedOff", "applying", "interrupted", "recoveryFailed"];
 
 /** Which update buttons apply to a status (§8.15). Pure. */
 function updateActionsFor(status) {
@@ -636,10 +638,12 @@ function toUpdateView(status) {
     blockingJobs: (Array.isArray(r.blockingJobs) ? r.blockingJobs : []).map((b) => (typeof b === "object" ? str(b.id || b.jobId) : str(b))),
   });
   return {
+    supportsAutoApply: s.supportsAutoApply === true,
+    updateAvailable: !!latest?.commit && !!inst.commit && latest.commit !== inst.commit,
     installed: { commit: str(inst.commit) || "unknown", packageVersion: str(inst.packageVersion) || "unknown", installedAt: formatWhen(inst.installedAt), previousCommit: str(inst.previousCommit), source: str(inst.source) || "unknown" },
     current: cur ? row(cur) : null,
     history: (Array.isArray(s.history) ? s.history : []).map(row),
-    latestKnown: latest ? { commit: str(latest.commit).slice(0, 12), packageVersion: str(latest.packageVersion), publishedAt: formatWhen(latest.publishedAt), checkedAt: formatWhen(latest.checkedAt) } : null,
+    latestKnown: latest ? { commit: str(latest.commit).slice(0, 12), packageVersion: str(latest.packageVersion), publishedAt: formatWhen(latest.publishedAt), checkedAt: formatWhen(latest.checkedAt), compatible: latest.compatible, reasons: latest.reasons } : null,
     recoveryRecord: s.recoveryRecord && typeof s.recoveryRecord === "object" ? JSON.stringify(s.recoveryRecord, null, 2) : "",
     actions: updateActionsFor(s),
   };
@@ -1103,6 +1107,22 @@ function createHostAdminModel(deps = {}) {
   };
 
   const model = { state };
+  const updater = require("./hostupdate").createHostUpdater({ client, now,
+    pending: deps.pendingUpdate, save: deps.savePendingUpdate,
+    changed: () => {
+      state.updatePending = updater.state.pending;
+      state.updateChecking = updater.state.checking;
+      state.updateError = updater.state.error;
+      if (updater.state.status) state.maintenanceTab = toUpdateView(updater.state.status);
+      if (model.changed) model.changed();
+    },
+  });
+  state.updatePending = updater.state.pending;
+  model.refreshUpdates = async () => {
+    if (state.mode !== "admin" || !state.features.updates) return;
+    try { await updater.refresh({ checkLatest: !state.maintenance }); }
+    catch (e) { refused(e); }
+  };
 
   function setState(next) {
     Object.assign(state, next);
@@ -1180,7 +1200,7 @@ function createHostAdminModel(deps = {}) {
         try { capabilities = toCapabilityRows(await client.hostCapabilities()); } catch (e) { if (refused(e)) return state; }
         state.config = { sections, capabilities, problems: [] };
       } else if (id === "maintenance") {
-        state.maintenanceTab = { ...toUpdateView(await client.updatesStatus()), checkResult: state.maintenanceTab ? state.maintenanceTab.checkResult : "" };
+        await model.refreshUpdates();
       }
       state.lastKnownAt = new Date(now()).toISOString();
     } catch (e) {
@@ -1202,7 +1222,7 @@ function createHostAdminModel(deps = {}) {
       notice("error", `not an administrator of ${host}`);
       return { ok: false, error: `not an administrator of ${host}` };
     }
-    if (state.maintenance && a !== "refresh") {
+    if (state.maintenance && !["refresh", "updatesApply", "updatesResolve"].includes(a)) {
       const text = `${host} is updating (${state.maintenance.phase}); mutations are disabled until it is back.`;
       notice("error", text);
       return { ok: false, error: text };
@@ -1211,6 +1231,10 @@ function createHostAdminModel(deps = {}) {
     notice(null, "");
     try {
       switch (a) {
+        case "updatesUpdate": {
+          await updater.start();
+          return { ok: true };
+        }
         case "refresh": {
           await model.detect();
           if (state.mode === "admin") await model.load(state.activeTab);

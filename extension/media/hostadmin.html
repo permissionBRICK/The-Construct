@@ -20,6 +20,8 @@
       </div>
       <div class="header-right">
         <div class="header-tools">
+          <span class="tag" id="haUpdateStatus" role="status" aria-live="polite" hidden></span>
+          <button class="btn start" id="haUpdate" data-act="updatesUpdate" hidden>Update host</button>
           <button class="gear" id="haRefresh" title="Re-read the host">&#x27F3; Refresh</button>
         </div>
         <!-- Maintenance banner (§10.3): the host is updating; mutations are disabled and
@@ -185,8 +187,12 @@
     <section class="ha-tab" id="tab-maintenance" hidden>
       <section class="module">
         <div class="mhead"><h2 class="seclabel">Host service update</h2></div>
+        <p class="lead" id="updProgress" role="status" aria-live="polite">Checking for updates…</p>
+        <p class="cost-note">Update host downloads and verifies the latest release, installs it, and reconnects automatically. The host service briefly restarts; your VMs keep running.</p>
         <div class="row"><span class="k">Installed</span><span class="v" id="updInstalled">—</span></div>
         <div class="row"><span class="k">Latest known</span><span class="v" id="updLatest">—</span></div>
+        <details>
+        <summary>Update details and recovery</summary>
         <div class="row"><span class="k">Current update</span><span class="v" id="updCurrent">—</span></div>
         <p class="cost-note" id="updCheckResult" hidden></p>
         <div class="settings-actions ha-inline-actions">
@@ -205,11 +211,12 @@
         </div>
         <pre class="ha-pre" id="updRecovery" hidden></pre>
         <div class="ha-table" id="updPhases"></div>
+        </details>
       </section>
       <section class="module">
         <div class="mhead"><h2 class="seclabel">Update history</h2></div>
         <div class="ha-table" id="updHistory"></div>
-        <p class="cost-note">Stage downloads and verifies the signed release; Apply drains host jobs, hands off to the updater and restarts the service. Active guest VMs keep running throughout. Guest provisioning is never touched from here.</p>
+        <p class="cost-note">Update history includes successful updates, failed attempts and rollbacks.</p>
       </section>
     </section>
   </div>

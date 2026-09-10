@@ -13,6 +13,7 @@ public sealed class UpdateRecoveryService(HostUpdateJob work,IHostUpdateStore st
     private bool _initialized;
     private string? _settledUpdate;
     private bool _wasFrozen;
+    private bool _resumeBootstrap;
     public override async Task StartAsync(CancellationToken ct) { await ReconcileAsync(ct); await base.StartAsync(ct); }
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -25,13 +26,14 @@ public sealed class UpdateRecoveryService(HostUpdateJob work,IHostUpdateStore st
         if(!await work.Acceptance.WaitAsync(0,ct)) return;
         try
         {
+            var starting=!_initialized;
             if (_settledUpdate is not null && gate.State == MaintenanceState.Open && await store.GetActiveAsync(ct) is null) return;
             var marker=await config.GetAsync<MaintenanceMarker>("maintenance",ct);
             if(!_initialized && marker?.State==MaintenanceState.Maintenance)
-            {gate.Enter(MaintenanceState.Maintenance,marker.UpdateId);_wasFrozen=true;}
+            {gate.Enter(MaintenanceState.Maintenance,marker.UpdateId);_wasFrozen=true;_resumeBootstrap=true;}
             var pending=await store.GetActiveAsync(ct);
             if(!_initialized && pending?.State is HostUpdateState.HandedOff or HostUpdateState.Applying or HostUpdateState.Interrupted or HostUpdateState.RecoveryFailed)
-            {gate.Enter(MaintenanceState.Maintenance,pending.Id);_wasFrozen=true;}
+            {gate.Enter(MaintenanceState.Maintenance,pending.Id);_wasFrozen=true;_resumeBootstrap=true;}
             var h=await launcher.ReadHandoffAsync(ct);
             if(!_initialized)
             {
@@ -41,6 +43,16 @@ public sealed class UpdateRecoveryService(HostUpdateJob work,IHostUpdateStore st
                     await work.PhaseAsync(pending,pending.State==HostUpdateState.Checking ? HostUpdateState.StageFailed : HostUpdateState.ApplyFailed,"recovery","interrupted");
                     await OpenAsync(ct);pending=null;
                 }
+            }
+            if(pending is {State:HostUpdateState.Staged} && (await config.GetAsync<UpdateAutoApply>("update-auto-apply:"+pending.Id,ct))?.Enabled==true)
+            {
+                // Let normal startup mark old jobs interrupted before admitting
+                // a fresh apply job; otherwise bootstrap could fail that new job.
+                if(starting) return;
+                try { await work.ApplyAsync(pending.Id,pending.Actor,ct); }
+                catch(Exception ex) when(ex is not OperationCanceledException)
+                { await work.PhaseAsync(pending,HostUpdateState.ApplyFailed,"apply",HostUpdateJob.SafeCode(ex)); }
+                return;
             }
             if(pending is not null && h is not null && pending.Id!=h.UpdateId) return;
             if(h is null)
@@ -101,7 +113,7 @@ public sealed class UpdateRecoveryService(HostUpdateJob work,IHostUpdateStore st
             }
             else state=HostUpdateState.Interrupted;
             if(state is {} next && (row.State!=next || (record is not null && row.Phase!=record.Phase)))
-                row=await work.PhaseAsync(row,next,record?.Phase ?? "recovery",record?.Error);
+                row=await work.PhaseAsync(row,next,record?.Phase ?? "recovery",record?.Error ?? (next==HostUpdateState.Interrupted && record?.ReplaceStarted!=true ? "updater-did-not-start" : null));
             if(open)
             {
                 await OpenAsync(ct);
@@ -138,9 +150,15 @@ public sealed class UpdateRecoveryService(HostUpdateJob work,IHostUpdateStore st
         var marker=await config.GetAsync<MaintenanceMarker>("maintenance",ct);
         if(_wasFrozen || gate.State!=MaintenanceState.Open || marker is not null && marker.State!=MaintenanceState.Open)
         {
-            // Initialize persisted forwards and finish interrupted jobs before accepting writes.
+            // Only a new service process needs startup reconciliation. A failed
+            // task launch did not restart us: reconciling here can block on the
+            // same unavailable PowerShell and incorrectly fail still-live jobs.
             _wasFrozen=true;
-            await Constructd.Api.Composition.Bootstrap.RunAsync(services,ct,resumeAfterUpdate:true);
+            if(_resumeBootstrap)
+            {
+                await Constructd.Api.Composition.Bootstrap.RunAsync(services,ct,resumeAfterUpdate:true);
+                _resumeBootstrap=false;
+            }
             await work.ReopenAsync("system");
             _wasFrozen=false;
         }

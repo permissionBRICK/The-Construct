@@ -13,4 +13,5 @@ public interface IMaintenanceGate
     void Enter(MaintenanceState state, string? updateId);
     void Reopen();
     int LiveHandles { get; }
+    IReadOnlyList<string> BlockingOperations { get; }
 }

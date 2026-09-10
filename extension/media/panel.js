@@ -745,6 +745,9 @@
     renderBackend(s);
     const conversion = $("hostConversionSettings");
     if (conversion) conversion.hidden = s.canConvertHost !== true;
+    text("hostConversionLabel", s.hostConversionStatus?.ready ? "Finish host conversion" : s.hostConversionStatus ? "Review / retry host setup…" : "Make this PC a Construct host…");
+    const conversionStatus = $("hostConversionStatus");
+    if (conversionStatus) { conversionStatus.hidden = !s.hostConversionStatus; conversionStatus.textContent = s.hostConversionStatus?.message || ""; }
 
     const online = s.online !== false;
     setOnline(online);

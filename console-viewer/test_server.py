@@ -67,6 +67,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         app = web.Application(middlewares=[viewer.headers])
         app.router.add_post('/redeem', self.gateway.redeem)
         app.router.add_get('/ws/{ident}', self.gateway.websocket)
+        app.router.add_get('/ws/{ident}/status', self.gateway.status)
         self.client = TestClient(TestServer(app), cookie_jar=CookieJar(unsafe=True))
         await self.client.start_server()
         self.origin = str(self.client.make_url('/')).rstrip('/')
@@ -109,6 +110,23 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(.02)
         self.assertIn(('DELETE', '/api/v1/vms/test-vm/console/sessions/host-session'), self.calls)
         self.assertFalse(self.gateway.tickets['id']['active'])
+
+    async def test_connection_status_requires_the_ticket_cookie_and_redacts_failures(self):
+        response = await self.client.get('/ws/id/status')
+        self.assertEqual(response.status, 410)
+        await self.redeem()
+
+        async def broken_api(method, path):
+            raise RuntimeError('PRIVATE-HOST-PASSWORD and other internal details')
+        self.gateway.api = broken_api
+        ws = await self.client.ws_connect('/ws/id', protocols=['guacamole'], headers={'Origin': self.origin})
+        failure = await ws.receive(timeout=2)
+        self.assertIn('Creating a console session', failure.data)
+        self.assertNotIn('PRIVATE', failure.data)
+        status = await (await self.client.get('/ws/id/status')).json()
+        self.assertIn('Creating a console session', status['error'])
+        self.assertNotIn('PRIVATE', str(status))
+        await ws.close()
 
     async def test_expired_ticket_cannot_connect_or_start_a_host_session(self):
         await self.redeem()
