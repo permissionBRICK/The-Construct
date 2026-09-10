@@ -72,6 +72,18 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         await self.client.start_server()
         self.origin = str(self.client.make_url('/')).rstrip('/')
 
+    async def test_disabled_host_refuses_link_before_issuing_a_ticket(self):
+        async def disabled_api(method, path):
+            return {'interactive': 'unsupported', 'interactiveReason': 'Browser console is disabled on this host.'}
+        self.gateway.api = disabled_api
+        class Request:
+            async def json(self):
+                return {'name': 'test-vm', 'minutes': 5}
+        with self.assertRaises(web.HTTPConflict) as failure:
+            await self.gateway.mint(Request())
+        self.assertIn('disabled on this host', failure.exception.text)
+        self.assertEqual(['id'], list(self.gateway.tickets))
+
     async def asyncTearDown(self):
         await self.client.close()
         self.daemon.close()
