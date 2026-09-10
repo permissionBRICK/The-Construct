@@ -41,3 +41,24 @@ and verified SHA256 `e73a6241bd5f3c5c2d4d38c02cc52c378c0415a7c888bd292066bf36e0f
 The temporary test ISO was deleted afterward. This is a functionality check;
 no comparison against the previous downloader or company-network throughput was
 performed.
+
+## Ubuntu minimal-install source: real range verification
+
+On 2026-09-10, the installer's release-directory lookup selected
+`https://releases.ubuntu.com/24.04/ubuntu-24.04.5-live-server-amd64.iso`.
+Construct's `ubuntu-server-minimal` option selects content from this server ISO;
+it does not use a separate miniature download. The origin returned a total size
+of 4,080,486,400 bytes and a strong ETag to the one-byte probe.
+
+Windows PowerShell 5.1 on STANDPC then issued eight simultaneous 1 MiB requests
+at offsets 0, 510060800, 1020121600, 1530182400, 2040243200, 2550304000,
+3060364800, and 3570425600. Every response was HTTP 206, carried the exact requested
+Content-Range, matched the probe's ETag, and delivered 1,048,576 bytes. All requests
+started within 14 ms; the first completed after 1,932 ms and the last after 2,077 ms.
+Thus all eight overlapped. This verifies real Ubuntu-origin parallel range support
+from Windows using 8 MiB of traffic; it is not a full-image throughput benchmark.
+
+Final fault-injection CI passed all 12 cases on both Linux/PowerShell 7 and
+Windows/PowerShell 5.1 (run 34513759658). The host release build also passed.
+Activation on main-pc remains through Update Construct; its relay did not respond
+to the final discovery probe.
