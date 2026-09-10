@@ -33,6 +33,7 @@ public class RouteCoverageTests
         "GET /api/v1/vms/{name}/console/capabilities",
         "POST /api/v1/vms/{name}/console/sessions",
         "POST /api/v1/vms/{name}/console/sessions/{sid}/renew",
+        "POST /api/v1/vms/{name}/console/sessions/{sid}/connection",
         "DELETE /api/v1/vms/{name}/console/sessions/{sid}",
         "GET /api/v1/vms/{name}/console/sessions/{sid}/screenshot",
         "POST /api/v1/vms/{name}/console/sessions/{sid}/keyboard",
