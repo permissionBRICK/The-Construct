@@ -31,8 +31,11 @@ noninteractive PowerShell console. Cancellation and errors return to the UI.
 The console outlives the VS Code window; a persisted handoff lets the extension
 finish connecting after it is reopened.
 
-The installer validates the selected Hyper-V VM against the SSH destination and
-guest machine ID. It installs a verified, self-contained `host-<commit>` release
+The installer validates the selected Hyper-V VM against the SSH guest's saved
+machine ID and SMBIOS UUID. The UUID must match `BIOSGUID` in that VM's realized
+`Msvm_VirtualSystemSettingData` record (not its management ID or a snapshot).
+Both checks run again immediately before adoption. It installs a verified,
+self-contained `host-<commit>` release
 under `%ProgramData%\ConstructHost\scripts`, with the executable under
 `scripts\service\publish` and database under `ConstructHost\data`. These protected
 service files are separate from the existing client checkout. The package includes
@@ -89,6 +92,7 @@ Manual local commands (no new GitHub workflow):
 node --test extension/test/hostconversion.test.js
 python3 test/host-conversion.test.py
 pwsh -NoProfile -File test/host-conversion.test.ps1
+pwsh -NoProfile -File test/host-conversion-identity.test.ps1
 dotnet test service/Constructd.sln -c Release
 node extension/test/ui-smoke.js
 ```
@@ -114,3 +118,16 @@ on its local VM. Existing installed hosts do not need conversion.
 IP-address certificates use an IP subject alternative name, following
 [Microsoft's certificate example 9](https://learn.microsoft.com/powershell/module/pki/new-selfsignedcertificate),
 so the Linux guest can verify the host when an IPv4 address is used.
+
+WS009 conversion diagnosis (2026-09-10): its non-elevated Windows relay is
+`work-pc`. The saved request failed before installation because Hyper-V returned
+an empty `IPAddresses` array although the selected guest answered SSH. The guest
+KVP daemon was inactive. Direct CIM and SSH reads confirmed that Hyper-V's
+`BIOSGUID` and Linux `/sys/class/dmi/id/product_uuid` match. Conversion now uses
+that identity instead of treating absent KVP IP reporting as a different VM;
+the strict SSH host-key check and saved machine ID remain required. No KVP
+daemon or host setting change is needed for this identity check.
+The fixed verifier passed against the live WS009 guest from the non-admin relay
+with the IP list still empty. Its installed client coordinator was updated after
+checking the old file hash, with a `.before-identity-fix` backup. This was a
+read-only identity test: the VM remained running and no host was installed.
