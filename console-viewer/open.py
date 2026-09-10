@@ -9,6 +9,25 @@ from aiohttp import ClientSession, UnixConnector
 from server import read_config
 
 
+def expose_viewer(port):
+    # Reuse the advertised open client forward for this gateway. Repeated viewer
+    # links must not consume the primary VM's finite forwarding allowance.
+    listed = subprocess.run(['construct', 'expose', '--list'], text=True, capture_output=True)
+    if listed.returncode == 0:
+        for line in reversed(listed.stdout.splitlines()):
+            fields = line.split()
+            if len(fields) >= 6 and fields[1:4] == [str(port), 'client', 'open'] and fields[4:-1] == ['Guest', 'console']:
+                if fields[-1].startswith(('http://', 'https://')):
+                    return fields[-1]
+    exposed = subprocess.run(['construct', 'expose', str(port), '--label', 'Guest console'], text=True, capture_output=True)
+    if exposed.returncode:
+        raise RuntimeError(exposed.stderr or exposed.stdout or 'Construct could not expose the console')
+    urls = [line.strip() for line in exposed.stdout.splitlines() if line.strip().startswith(('http://', 'https://'))]
+    if len(urls) != 1:
+        raise RuntimeError('Construct did not return one viewer URL')
+    return urls[0]
+
+
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('name')
@@ -21,14 +40,7 @@ async def main():
             if response.status != 200:
                 raise RuntimeError(await response.text())
             ticket = await response.json()
-    exposed = subprocess.run(['construct', 'expose', port, '--label', 'Guest console'], text=True, capture_output=True)
-    if exposed.returncode:
-        sys.stderr.write(exposed.stderr or exposed.stdout)
-        return exposed.returncode
-    urls = [line.strip() for line in exposed.stdout.splitlines() if line.strip().startswith(('http://', 'https://'))]
-    if len(urls) != 1:
-        raise RuntimeError('Construct did not return one viewer URL')
-    url = urls[0]
+    url = expose_viewer(port)
     if config.get('CONSTRUCT_CONSOLE_TLS_CERT'):
         url = url.replace('http://', 'https://', 1)
     print(url.rstrip('/') + '/#' + ticket['fragment'])
