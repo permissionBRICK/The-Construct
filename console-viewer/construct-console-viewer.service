@@ -1,0 +1,22 @@
+[Unit]
+Description=Construct guest browser console
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/construct/console-viewer/server.py
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=construct-console
+RuntimeDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/run/construct-console
+
+[Install]
+WantedBy=multi-user.target

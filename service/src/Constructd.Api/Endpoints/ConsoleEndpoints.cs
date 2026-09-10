@@ -35,12 +35,14 @@ public static class ConsoleEndpoints
         group.MapGet("/capabilities", Capabilities);
         group.MapPost("/sessions", Create).Audited("console.session-create");
         group.MapPost("/sessions/{sid}/renew", Renew).Audited("console.session-renew");
+        group.MapPost("/sessions/{sid}/connection", Connection).Audited("console.connection");
         group.MapDelete("/sessions/{sid}", Remove).Audited("console.session-delete");
         group.MapGet("/sessions/{sid}/screenshot", Screenshot);
         group.MapPost("/sessions/{sid}/keyboard", Keyboard).Audited("console.keyboard");
         group.MapPost("/sessions/{sid}/mouse", Mouse).Audited("console.mouse");
         return api;
     }
+    private static bool BrowserEnabled(HttpContext http) => http.RequestServices.GetRequiredService<Constructd.Core.Configuration.ConstructdOptions>().BrowserConsoleEnabled;
     private static Vm Vm(HttpContext http) => (Vm)http.Items[VmKey]!;
     private static string Principal(HttpContext http) => http.User.IsPrimaryToken() ? "vm:" + http.User.VmTokenName() : http.User.NameOrEmpty();
     private static void Audit(HttpContext http, string action, string? extra = null)
@@ -71,7 +73,7 @@ public static class ConsoleEndpoints
         return JsonSerializer.Deserialize<T>(buffer.ToArray(), ApiJson.Options);
     }
     private static async Task<IResult> Capabilities(HttpContext http, IConsoleTransport transport, CancellationToken ct) =>
-        Results.Ok(ConsoleCapabilitiesResponse.From(transport.Capabilities, await transport.GetScreenAsync(Vm(http).Name, ct)));
+        Results.Ok(ConsoleCapabilitiesResponse.From(transport.Capabilities, await transport.GetScreenAsync(Vm(http).Name, ct), BrowserEnabled(http)));
     private static bool Usable(ConsoleScreen s) => s.VideoHeadPresent && s.NativeWidth > 0 && s.NativeHeight > 0;
     private static async Task<IResult> Create(HttpContext http, IConsoleTransport transport, IConsoleSessionStore sessions, IClock clock, CancellationToken ct)
     {
@@ -83,21 +85,39 @@ public static class ConsoleEndpoints
         if (s is null) return Rate(http, 60);
         Audit(http, "console-session-create");
         return Results.Created($"/api/v1/vms/{s.VmName}/console/sessions/{s.Id}", new { sessionId = s.Id, expiresAt = s.ExpiresAt,
-            screen = new { width = screen.NativeWidth, height = screen.NativeHeight }, capabilities = ConsoleCapabilitiesResponse.From(transport.Capabilities, screen) });
+            screen = new { width = screen.NativeWidth, height = screen.NativeHeight }, capabilities = ConsoleCapabilitiesResponse.From(transport.Capabilities, screen, BrowserEnabled(http)) });
     }
-    private static async Task<IResult> Renew(string sid, HttpContext http, IConsoleTransport transport, IConsoleSessionStore sessions, IClock clock, CancellationToken ct)
+    private static async Task<IResult> Connection(string sid, HttpContext http, IConsoleSessionStore sessions,
+        IClock clock, IInteractiveConsole interactive, Constructd.Core.Configuration.ConstructdOptions options, CancellationToken ct)
+    {
+        var session = Session(http, sid, sessions, clock);
+        if (session is null) return Expired();
+        if (!options.BrowserConsoleEnabled) return Problem(409, "browser-console-disabled", "Browser console is not enabled on this host.");
+        if (!sessions.TryTakeRate(sid, "connection", 1, clock.UtcNow)) return Rate(http);
+        // A primary token can only obtain credentials for itself and its own children. Shared-VM
+        // access remains available through the host-user API, never through another VM's gateway.
+        if (http.User.IsPrimaryToken() && !Ownership.SameName(Vm(http).Name, http.User.VmTokenName()) &&
+            !Ownership.SameName(Vm(http).Parent, http.User.VmTokenName())) return Results.Forbid();
+        http.Response.Headers.CacheControl = "no-store";
+        var result = await interactive.ConnectAsync(session, ct);
+        if (Session(http, sid, sessions, clock) is null)
+        { await interactive.RemoveAsync(sid, ct); return Expired(); }
+        return Results.Ok(result);
+    }
+    private static async Task<IResult> Renew(string sid, HttpContext http, IConsoleTransport transport, IConsoleSessionStore sessions, IClock clock, IInteractiveConsole interactive, CancellationToken ct)
     {
         if (Session(http, sid, sessions, clock) is null) return Expired();
         var screen = await transport.GetScreenAsync(Vm(http).Name, ct);
         if (!Usable(screen) || transport.Capabilities.Screenshot == CapabilityLevel.Unsupported) return Unavailable("videoHead");
         var s = sessions.Renew(sid, ConsoleSessionRules.Ttl, clock.UtcNow, screen.NativeWidth, screen.NativeHeight);
+        if (s is not null) await interactive.RenewAsync(s, ct);
         Audit(http, "console-session-renew");
         return s is null ? Expired() : Results.Ok(new { expiresAt = s.ExpiresAt });
     }
-    private static IResult Remove(string sid, HttpContext http, IConsoleSessionStore sessions, IClock clock)
+    private static async Task<IResult> Remove(string sid, HttpContext http, IConsoleSessionStore sessions, IClock clock, IInteractiveConsole interactive, CancellationToken ct)
     {
         if (Session(http, sid, sessions, clock) is null) return Expired();
-        sessions.Remove(sid); Audit(http, "console-session-delete"); return Results.NoContent();
+        sessions.Remove(sid); await interactive.RemoveAsync(sid, ct); Audit(http, "console-session-delete"); return Results.NoContent();
     }
     private static async Task<IResult> Screenshot(string sid, HttpContext http, IConsoleTransport transport, IConsoleSessionStore sessions, IClock clock, CancellationToken ct)
     {

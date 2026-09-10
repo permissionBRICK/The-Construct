@@ -151,7 +151,8 @@ public static class DelegationEndpoints
             vm = vm.Name,
             state = runtime?.State ?? vm.State,
             console = ConsoleCapabilitiesResponse.From(caps.Console, new ConsoleScreen(runtime?.NativeWidth ?? 0, runtime?.NativeHeight ?? 0,
-                runtime?.VideoHeadPresent ?? false, runtime?.KeyboardPresent ?? false, runtime?.SyntheticMousePresent ?? false, runtime?.Ps2MousePresent ?? false)),
+                runtime?.VideoHeadPresent ?? false, runtime?.KeyboardPresent ?? false, runtime?.SyntheticMousePresent ?? false, runtime?.Ps2MousePresent ?? false),
+                http.RequestServices.GetRequiredService<Constructd.Core.Configuration.ConstructdOptions>().BrowserConsoleEnabled),
             hardware = new { generation = runtime?.Generation ?? vm.Hardware?.Generation, secureBootTemplateLocked = runtime?.SecureBootTemplateLocked ?? false },
             gracefulShutdown = runtime?.GracefulShutdown ?? CapabilityLevel.Unsupported,
             network = new { clientForward = caps.Network.ClientForward, hostForward, addressVerification = caps.Network.AddressVerification }

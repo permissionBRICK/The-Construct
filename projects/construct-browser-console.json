@@ -1,0 +1,11 @@
+{
+  "name": "construct-browser-console",
+  "repos": [{"url": "https://github.com/permissionBRICK/The-Construct.git", "directory": "construct"}],
+  "sdks": {},
+  "mcp": [],
+  "hostPackages": [],
+  "provisionCommands": [
+    "command -v docker >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y docker.io; }; systemctl enable --now docker; bash /root/repos/construct/console-viewer/install.sh"
+  ],
+  "tests": {}
+}
