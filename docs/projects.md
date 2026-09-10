@@ -167,8 +167,15 @@ Behaviour:
 - **When** — `bin/run-provision-commands.sh` runs late in the provision, **after** the
   profile's repos are checked out **and** after the SDKs/runtimes (`node`, `python`,
   `dotnet`) are installed, so build steps find both their source and their toolchains.
-- **Order** — commands run top-to-bottom; across several selected profiles they run in
-  profile order.
+- **Order and concurrency** — all repository checkouts and SDK installation finish
+  before this stage starts. Profiles run in parallel by default, with commands
+  inside each profile running top-to-bottom. The next provisioning stage waits
+  for every profile to finish. Set `PROVISION_JOBS=4` in the VM's
+  `/etc/construct/config.env` to cap simultaneous profiles; `0` means all and `1`
+  restores sequential profile order. The runner serializes shared/nested working
+  directories and linked worktrees; profiles falling back to the workspace root
+  run exclusively. Older runtime configs without profile identity run sequentially
+  until regenerated.
 - **Working directory** — each command runs from the profile's **first repo checkout**
   (`/root/repos/<directory>`), so `npm install` / `dotnet restore` just work. Profiles with no
   repo (or whose repo isn't on disk — e.g. `CHECKOUT_PROJECTS=false` or a failed clone)
@@ -193,6 +200,13 @@ Behaviour:
 - **Environment** — runs as root with `config.env` sourced and the merged `AGENT_*`
   vars derived from `generated.json`, so `WORKSPACE_ROOT`, `AGENT_PROJECTS`,
   `AGENT_REPOS_JSON` (valid JSON), `AGENT_SDKS_JSON`, etc. are available.
+
+Keep dependent commands in the same profile. Declare shared system packages in
+`hostPackages` where applicable, so they are installed before parallel commands.
+Arbitrary scripts can access resources outside their checkout: use explicit locks
+for those resources or `PROVISION_JOBS=1` when profiles depend on each other or
+perform conflicting global setup. Each profile prints a start message and its
+grouped command log on completion; command failures do not cancel other profiles.
 
 Run them by hand with `sudo /opt/construct/repo/bin/run-provision-commands.sh`.
 

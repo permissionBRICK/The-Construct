@@ -87,6 +87,12 @@ complete on a fresh install and incremental when run again:
 - Preserve existing user configuration and data. Let real setup failures be
   reported instead of hiding them with blanket `|| true` guards.
 
+Project command groups run in parallel after ALL repository checkouts finish;
+commands within each profile run in their listed order. Keep dependent commands
+in the same profile. Use `hostPackages` for shared system dependencies where
+applicable; scripts that mutate other shared resources need their own locking,
+or set `PROVISION_JOBS=1` in the VM config to run profiles sequentially.
+
 ## Changing these instructions
 
 This file is generated: Construct rewrites it from its template on every
