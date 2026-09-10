@@ -23,6 +23,9 @@ public sealed class VmInventoryProjection(IVmRepository vms, IVmDelegationReposi
             if (await media.GetAsync(reference.MediaId, ct) is { } item)
                 mediaProjection.Add(new { item.Id, item.Role, item.Name, item.SizeBytes, item.State, dedicated = item.DedicatedTo is not null });
         var job = vm.CurrentJobId is null ? null : await jobs.GetAsync(vm.CurrentJobId, ct);
+        // The stored pointer survives job completion. Only live jobs hold the VM busy;
+        // completed history remains available through the jobs API.
+        if (job?.State is not (JobState.Queued or JobState.Running)) job = null;
         var l = vm.Lease;
         var observed = vm.Observed ?? new(null, null, [], null);
         // The durable intent is the flag: capacity observation cannot erase an unresolved attachment.
