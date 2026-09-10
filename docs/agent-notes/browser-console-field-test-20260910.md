@@ -80,3 +80,20 @@ from these notes.
 
 The child lease was renewed for two hours at handoff; the exact lease response
 reported expiry `2026-09-10T16:23:54.759173+00:00`.
+
+
+## Follow-up: admin panel actions after lease expiry
+
+At 17:16 UTC, the restarted `alpine-viewer` still exposed its completed lease
+shutdown job as `currentOperation` (`phase: done`). Both VS Code panels interpret
+any current operation as busy, disabling shutdown and delete despite the actions
+being authorized. Host fix `cf5c77f9226492916b834850309145a9f68335a2` projects only
+Queued/Running jobs while retaining the persisted pointer and job history. Five
+regression cases cover all job states through inspect, inventory, and child-list
+routes; 1,251 host tests and 384 admin-panel checks passed, as did release CI.
+Update `4025e8ca07c148d6b8c21533d8f34408` succeeded at 17:24:11 UTC. All three live
+admin routes then returned `currentOperation: null`, a running child, and allowed
+shutdown/delete actions. Production settings and primary uptime were preserved;
+database integrity passed at schema 700. No extension update was needed. The
+known attached-ISO ACL hardening issue remains separate; this guest's exact VM SID
+read grant was restored after the update.
