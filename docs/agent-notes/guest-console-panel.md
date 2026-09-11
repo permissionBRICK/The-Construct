@@ -20,5 +20,6 @@ Settings, with the same immediate Apply action as before.
 
 Delivery requires **Update Construct** on the user PC. No host service change or
 guest reinstall is needed when the existing browser-console gateway is installed.
-The Control panel regressions workflow covers command authorization, fresh links,
-SSH targeting, independent discovery and actual browser layout/interactions.
+Local panel checks cover command authorization, fresh links, SSH targeting,
+independent discovery and actual browser layout/interactions. See
+[local checks](../local-checks.md).
