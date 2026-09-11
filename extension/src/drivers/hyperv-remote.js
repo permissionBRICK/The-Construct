@@ -28,8 +28,12 @@ const remotehost = require("../remotehost");
  *                          own scripts really can create and delete this backend's VMs
  *                          (`-Backend hyperv-remote -ServiceUrl … -InstanceName …`).
  *                          That is what re-enables Reinstall/Redownload in the panel.
+ *   resources: false       Set-AgentVmResources.ps1 drives the LOCAL Hyper-V. A remote
+ *                          primary's vCPU count is changed through the service instead
+ *                          (PUT /vms/{name}/cpu + a lifecycle restart, which applies it
+ *                          on the way back up); the extension takes that path itself.
  */
-const CAPABILITIES = { checkpoints: false, console: "none", suspend: true, hostLifecycle: true, children: false };
+const CAPABILITIES = { checkpoints: false, console: "none", suspend: true, hostLifecycle: true, children: false, resources: false };
 
 /**
  * `children: false` above is the STATIC answer — the host-administration contract §10.1
