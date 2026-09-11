@@ -534,6 +534,8 @@ extension methods in their own files), `extension/extension.js` (S2a extension o
 ## Deviations
 
 (Recorded by implementers; one line each: what, why, where.)
+- S2b app: adds IMessageSink (host-admin scope `host:<slug>`), native data-protection/CIM/detached-process and UI/selftest seams in new Abstractions files; Windows stays net10.0 using explicit SDK projection references for in-process WinRT.
+- S2b app: extracts themes.js picker template into shared media/theme-picker.html, retaining byte-identical JS output with golden fixtures; CIM maps EnabledState (EnabledStateDetail is not defined by the documented v2 schema); the existing VmPower.QueryLocalAsync owns the single Get-VM fallback.
 - S2a state: adds `IStateFileSystem` (extends `IFileSystem`) for marker timestamps, directory existence and atomic create-if-absent profile writes; these host.js requirements cannot be expressed by the S1 seam.
 - S2a state: adds `IUpdateSource` for public release JSON under normal CA validation; `IRemoteApi` remains the credentialed certificate-pinned host-service transport.
 - S2a state: registry parse/read failures report stable diagnostics rather than copying Node-version-specific parser or OS-specific exception text; fallback and rejection behavior are unchanged.
