@@ -30,8 +30,8 @@ public static partial class HostAdminProtocol
         var name = Text(args["name"]); var id = Text(args["id"]); var update = Text(args["updateId"]);
         return action switch
         {
-            "restartVm" => ($"Restart \"{name}\"?", "Construct will ask Ubuntu to shut down, apply any pending CPU count, then start the VM. Running work will be interrupted."),
-            "startVm" => ($"Start \"{name}\"?", "Construct will apply any pending CPU count before starting this powered-off VM."),
+            "restartVm" => ($"Restart \"{name}\"?", "Construct will ask Ubuntu to shut down, apply any pending CPU and RAM settings, then start the VM. Running work will be interrupted."),
+            "startVm" => ($"Start \"{name}\"?", "Construct will apply any pending CPU and RAM settings before starting this powered-off VM."),
             "shutdownVm" => ($"Request a graceful shutdown of \"{name}\"?", "The guest is asked to shut down (like the instance panel's Shutdown). The service never forces it off; if the guest offers no shutdown integration, that is reported."),
             "cancelJob" => ($"Cancel job {id}?", "A job that has already reached a point of no return finishes anyway; the service answers whether it was cancelled."),
             "deleteMedia" => ($"Delete the media item \"{(name.Length == 0 ? id : name)}\"?", "The file is removed from the host and its storage reservation released. Items referenced by a VM are refused by the service."),

@@ -17,7 +17,7 @@ namespace Construct.Companion.Host.Dispatch;
 
 // The port of hostadmin.js + hostadmin-ui.js: enrolment, per-host admin models driven by
 // hostadmin.* messages, the host extras of an instance (children, offer, idle policy) and polling.
-public sealed class HostAdministration(IStateFileSystem files, ITokenStore tokens, IRemoteApi api,
+public sealed partial class HostAdministration(IStateFileSystem files, ITokenStore tokens, IRemoteApi api,
     IPrompts prompts, ILauncher launcher, IClock clock, IpcSettings settings, IpcEvents events, RuntimeMessageBus bus, CompanionInstances instances)
 {
     private readonly ConcurrentDictionary<string, JsonArray> childCache = new(StringComparer.Ordinal);
@@ -242,6 +242,8 @@ public sealed class HostAdministration(IStateFileSystem files, ITokenStore token
     }
     private async Task Action(Model m, RemoteHostClient client, string action, JsonObject args, CancellationToken ct)
     {
+        if (action is "loadVmSettings" or "setVmSettings")
+        { await VmSettingsAction(m, client, action, args, ct); return; }
         if (Text(m.State["mode"]) != "admin" && action is not ("shutdownVm" or "deleteVm" or "cancelJob")) { Notice(m, "Not an administrator of this host."); return; }
         if (m.State["maintenance"] is not null && action is not ("refresh" or "updatesApply" or "updatesResolve")) { Notice(m, "The host is updating; mutations are disabled until it is back."); return; }
         var name = Text(args["name"]); var id = Text(args["id"]); JsonNode? result = null;

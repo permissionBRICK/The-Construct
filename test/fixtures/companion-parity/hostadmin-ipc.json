@@ -296,6 +296,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": false
       },
       "identity": null,
@@ -325,6 +326,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": false
       },
       "identity": null,
@@ -353,6 +355,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": false
       },
       "identity": null,
@@ -381,6 +384,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": false
       },
       "identity": null,
@@ -414,6 +418,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": false
       },
       "identity": null,
@@ -447,6 +452,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": false
       },
       "identity": null,
@@ -479,6 +485,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": false
       },
       "identity": null,
@@ -511,6 +518,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": false
       },
       "identity": null,
@@ -550,6 +558,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": false
       },
       "identity": null,
@@ -589,6 +598,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": false
       },
       "identity": null,
@@ -627,6 +637,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": false
       },
       "identity": null,
@@ -665,6 +676,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": false
       },
       "identity": null,
@@ -694,6 +706,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": false
       },
       "identity": null,
@@ -723,6 +736,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": false
       },
       "identity": null,
@@ -751,6 +765,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": false
       },
       "identity": null,
@@ -779,6 +794,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": false
       },
       "identity": null,
@@ -812,6 +828,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": false
       },
       "identity": {
@@ -852,6 +869,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": false
       },
       "identity": {
@@ -891,6 +909,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": false
       },
       "identity": {
@@ -930,6 +949,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": false
       },
       "identity": {
@@ -976,6 +996,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": true
       },
       "identity": {
@@ -1026,6 +1047,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": true
       },
       "identity": {
@@ -1075,6 +1097,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": true
       },
       "identity": {
@@ -1124,6 +1147,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": true
       },
       "identity": {
@@ -1168,6 +1192,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": false
       },
       "identity": null,
@@ -1201,6 +1226,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": false
       },
       "identity": null,
@@ -1234,6 +1260,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": false
       },
       "identity": null,
@@ -1267,6 +1294,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": false
       },
       "identity": null,
@@ -1300,6 +1328,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": false
       },
       "identity": null,
@@ -1333,6 +1362,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": false
       },
       "identity": null,
@@ -1366,6 +1396,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": false
       },
       "identity": null,
@@ -1399,6 +1430,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": false
       },
       "identity": null,
@@ -1432,6 +1464,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": false
       },
       "identity": {
@@ -1476,6 +1509,7 @@
         "media": false,
         "network": false,
         "primaryCpu": false,
+        "primaryMemory": false,
         "updates": false
       },
       "identity": {
@@ -1686,6 +1720,7 @@
       "media": false,
       "network": false,
       "primaryCpu": false,
+      "primaryMemory": false,
       "updates": false
     }
   },
@@ -1755,6 +1790,7 @@
       "media": false,
       "network": false,
       "primaryCpu": false,
+      "primaryMemory": false,
       "updates": false
     }
   },
@@ -1828,6 +1864,7 @@
       "media": false,
       "network": false,
       "primaryCpu": false,
+      "primaryMemory": false,
       "updates": true
     }
   },
@@ -1895,7 +1932,8 @@
         "updates",
         "network",
         "console",
-        "primary-cpu"
+        "primary-cpu",
+        "primary-memory"
       ]
     },
     "kind": "features",
@@ -1907,6 +1945,7 @@
       "media": true,
       "network": true,
       "primaryCpu": true,
+      "primaryMemory": true,
       "updates": true
     }
   },
@@ -1919,7 +1958,8 @@
         "updates",
         "network",
         "console",
-        "primary-cpu"
+        "primary-cpu",
+        "primary-memory"
       ]
     },
     "kind": "tabs",
@@ -3309,6 +3349,7 @@
       "owner": "",
       "parent": "",
       "pendingCpu": null,
+      "pendingRamGb": null,
       "reservations": "—",
       "resources": "—",
       "shared": false,
@@ -3367,6 +3408,7 @@
       "owner": "alice",
       "parent": "agent-vm",
       "pendingCpu": 8,
+      "pendingRamGb": 12,
       "resourceUsage": {
         "cpuUsagePercent": 25.5,
         "diskFileBytes": 123456789,
@@ -3399,6 +3441,7 @@
       "owner": "alice",
       "parent": "agent-vm",
       "pendingCpu": 8,
+      "pendingRamGb": 12,
       "reservations": "—",
       "resources": "4 vCPU · 2.0 GiB · 80 GB disk",
       "shared": false,
@@ -3438,6 +3481,7 @@
       "owner": "alice",
       "parent": "agent-vm",
       "pendingCpu": 8,
+      "pendingRamGb": 12,
       "resourceUsage": {
         "cpuUsagePercent": 25.5,
         "diskFileBytes": 123456789,
@@ -3480,6 +3524,7 @@
         "owner": "alice",
         "parent": "agent-vm",
         "pendingCpu": 8,
+        "pendingRamGb": 12,
         "resourceUsage": {
           "cpuUsagePercent": 25.5,
           "diskFileBytes": 123456789,
@@ -3531,6 +3576,7 @@
       "owner": "alice",
       "parent": "agent-vm",
       "pendingCpu": 8,
+      "pendingRamGb": 12,
       "resourceUsage": {
         "cpuUsagePercent": 25.5,
         "diskFileBytes": 123456789,
@@ -3563,6 +3609,7 @@
       "owner": "alice",
       "parent": "agent-vm",
       "pendingCpu": 8,
+      "pendingRamGb": 12,
       "reservations": "—",
       "resources": "4 vCPU · 2.0 GiB · 80 GB disk",
       "shared": false,
@@ -3602,6 +3649,7 @@
       "owner": "alice",
       "parent": "agent-vm",
       "pendingCpu": 8,
+      "pendingRamGb": 12,
       "resourceUsage": {
         "cpuUsagePercent": 25.5,
         "diskFileBytes": 123456789,
@@ -3644,6 +3692,7 @@
         "owner": "alice",
         "parent": "agent-vm",
         "pendingCpu": 8,
+        "pendingRamGb": 12,
         "resourceUsage": {
           "cpuUsagePercent": 25.5,
           "diskFileBytes": 123456789,
@@ -3706,6 +3755,7 @@
       "owner": "",
       "parent": "",
       "pendingCpu": null,
+      "pendingRamGb": null,
       "reservations": "—",
       "resources": "—",
       "shared": false,
@@ -3799,6 +3849,7 @@
         "owner": "alice",
         "parent": "agent-vm",
         "pendingCpu": 8,
+        "pendingRamGb": 12,
         "resourceUsage": {
           "cpuUsagePercent": 25.5,
           "diskFileBytes": 123456789,
@@ -3838,6 +3889,7 @@
         "owner": "",
         "parent": "",
         "pendingCpu": null,
+        "pendingRamGb": null,
         "reservations": "—",
         "resources": "—",
         "shared": false,
@@ -3874,6 +3926,7 @@
         "owner": "alice",
         "parent": "agent-vm",
         "pendingCpu": 8,
+        "pendingRamGb": 12,
         "reservations": "—",
         "resources": "4 vCPU · 2.0 GiB · 80 GB disk",
         "shared": false,
@@ -3907,6 +3960,7 @@
         "owner": "",
         "parent": "gone",
         "pendingCpu": null,
+        "pendingRamGb": null,
         "reservations": "—",
         "resources": "—",
         "shared": false,
@@ -5786,6 +5840,7 @@
           "owner": "alice",
           "parent": "agent-vm",
           "pendingCpu": 8,
+          "pendingRamGb": 12,
           "resourceUsage": {
             "cpuUsagePercent": 25.5,
             "diskFileBytes": 123456789,
@@ -5850,6 +5905,7 @@
           "owner": "alice",
           "parent": "agent-vm",
           "pendingCpu": 8,
+          "pendingRamGb": 12,
           "resourceUsage": {
             "cpuUsagePercent": 25.5,
             "diskFileBytes": 123456789,
@@ -5895,6 +5951,7 @@
           "owner": "alice",
           "parent": "agent-vm",
           "pendingCpu": 8,
+          "pendingRamGb": 12,
           "resourceUsage": {
             "cpuUsagePercent": 25.5,
             "diskFileBytes": 123456789,
@@ -5959,6 +6016,7 @@
           "owner": "alice",
           "parent": "agent-vm",
           "pendingCpu": 8,
+          "pendingRamGb": 12,
           "resourceUsage": {
             "cpuUsagePercent": 25.5,
             "diskFileBytes": 123456789,

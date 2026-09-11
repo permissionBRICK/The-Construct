@@ -239,8 +239,8 @@
       row.appendChild(cell(r.resources, "ha-vm-allocation"));
       const actions = cell("", "actions");
       const busy = !!r.operation || r.deleting;
-      if (r.kind === "primary" && s.features.primaryCpu) {
-        const cpu = btn("CPU count", "ghost", () => act("changeVmCpu", { name: r.name }));
+      if (r.kind === "primary") {
+        const cpu = btn("VM settings…", "ghost", () => openVmSettings(r.name));
         cpu.disabled = busy;
         actions.appendChild(cpu);
         if ((r.state === "running" && r.allowedActions.includes("restart")) || (r.state === "off" && r.allowedActions.includes("start"))) {
@@ -280,7 +280,8 @@
       row.appendChild(actions);
       const details = el("div", "ha-vm-details");
       const facts = [];
-      if (r.pendingCpu !== null) facts.push(`Pending: ${r.pendingCpu} vCPUs on next full stop/start`);
+      if (r.pendingRamGb != null) facts.push(`Pending: ${r.pendingRamGb} GB RAM on next full stop/start`);
+      if (r.pendingCpu != null) facts.push(`Pending: ${r.pendingCpu} vCPUs on next full stop/start`);
       if (r.lease) facts.push("Lease: " + r.lease);
       if (r.operation) facts.push("Operation: " + r.operation);
       if (r.kind !== "child") facts.push(r.guest);
@@ -620,10 +621,90 @@
   document.querySelectorAll("#updResolveRow [data-resolve]").forEach((b) => b.addEventListener("click", () =>
     act("updatesResolve", { updateId: state && state.maintenanceTab && state.maintenanceTab.current ? state.maintenanceTab.current.updateId : "", action: b.getAttribute("data-resolve") })));
 
+  let vmSettingsRequest = null;
+  let vmSettingsSerial = 0;
+  let vmSettingsData = null;
+  let vmSettingsSaving = false;
+  let vmSettingsServerError = "";
+  const vmDialog = $("haVmSettings");
+  function requestVmSettings() {
+    vmSettingsData = null;
+    vmSettingsRequest.requestId = String(++vmSettingsSerial);
+    $("haVmSettingsFields").disabled = true;
+    $("haVmSettingsApply").disabled = true;
+    text("haVmSettingsError", "Loading settings…");
+    act("loadVmSettings", vmSettingsRequest);
+  }
+  function openVmSettings(name) {
+    vmSettingsRequest = { name };
+    text("haVmSettingsTitle", `VM settings — ${name}`);
+    text("haVmSettingsCurrent", ""); text("haVmSettingsLimits", "");
+    vmDialog.showModal(); requestVmSettings();
+  }
+  function closeVmSettings() { if (!vmSettingsSaving) vmDialog.close(); }
+  function validateVmSettings() {
+    const allowed = state?.mode === "admin" && !state.maintenance;
+    for (const [id, data, desired, maximum, label] of [
+      ["haVmCpus", vmSettingsData?.cpu, "desiredCpus", "maximumCpus", "CPU count"],
+      ["haVmRam", vmSettingsData?.memory, "desiredRamGb", "maximumRamGb", "RAM (GB)"]]) {
+      const input = $(id); input.setCustomValidity("");
+      if (data && input.valueAsNumber !== data[desired] && (!Number.isInteger(input.valueAsNumber) || input.valueAsNumber < 1 || input.valueAsNumber > data[maximum]))
+        input.setCustomValidity(`${label} must be between 1 and ${data[maximum]}. Leave the saved value unchanged to edit idle policy only.`);
+    }
+    const forcedOff = vmSettingsData?.idle.forceEnabled && $("haVmIdleAction").value === "off";
+    $("haVmIdleAction").setCustomValidity(forcedOff ? "The host requires idle handling." : "");
+    const invalid = [...$("haVmSettingsForm").elements].find(input => input.willValidate && !input.validity.valid);
+    $("haVmSettingsApply").disabled = !vmSettingsData || vmSettingsSaving || !allowed || !!invalid;
+    if (vmSettingsData && !vmSettingsSaving) text("haVmSettingsError", invalid ? invalid.validationMessage : !allowed ? "Editing is unavailable while host administration is disabled or updating." : vmSettingsServerError);
+  }
+  function receiveVmSettings(m) {
+    if (!vmSettingsRequest || m.name !== vmSettingsRequest.name || m.requestId !== vmSettingsRequest.requestId) return;
+    vmSettingsSaving = false;
+    $("haVmSettingsCancel").disabled = false; $("haVmSettingsReload").disabled = false;
+    if (m.saved) { vmDialog.close(); return; }
+    vmSettingsData = m.settings;
+    $("haVmSettingsFields").disabled = !m.settings;
+    vmSettingsServerError = m.error ? `${m.error} ${m.settings ? "Some changes may already be saved. Review the reloaded values before retrying." : "Reload to retry reading settings."}` : "";
+    text("haVmSettingsError", vmSettingsServerError);
+    if (m.settings) {
+      const { cpu, memory, idle } = m.settings;
+      $("haVmCpus").disabled = !cpu; $("haVmRam").disabled = !memory;
+      $("haVmCpus").value = cpu ? cpu.desiredCpus : "";
+      $("haVmCpus").max = cpu ? Math.max(cpu.maximumCpus, cpu.desiredCpus) : 64;
+      $("haVmRam").value = memory ? memory.desiredRamGb : "";
+      $("haVmRam").max = memory ? Math.max(memory.maximumRamGb, memory.desiredRamGb) : 1024;
+      $("haVmTimeout").value = idle.timeoutMinutes;
+      $("haVmTimeout").min = idle.forceEnabled ? 1 : 0;
+      $("haVmTimeout").max = idle.maxTimeoutMinutes > 0 ? idle.maxTimeoutMinutes : 2147483647;
+      $("haVmIdleAction").value = idle.action;
+      $("haVmIdleAction").querySelector('[value="off"]').disabled = !!idle.forceEnabled;
+      text("haVmSettingsCurrent", [cpu ? `Current CPU: ${cpu.currentCpus}${cpu.pending ? `; pending: ${cpu.desiredCpus}` : ""}` : "CPU editing unavailable on this host version",
+        memory ? `Current RAM: ${memory.currentRamGb} GB${memory.pending ? `; pending: ${memory.desiredRamGb} GB` : ""}` : "RAM editing unavailable on this host version"].join(". "));
+      text("haVmSettingsLimits", `Owner/host maxima: CPU ${cpu ? cpu.maximumCpus : "unavailable"}, RAM ${memory ? memory.maximumRamGb + " GB" : "unavailable"}. Idle cap: ${idle.maxTimeoutMinutes > 0 ? idle.maxTimeoutMinutes + " minutes" : "none"}${idle.forceEnabled ? "; idle handling required" : ""}. Capacity is checked again at start.`);
+    }
+    validateVmSettings();
+  }
+  vmDialog.addEventListener("close", () => { vmSettingsRequest = null; vmSettingsData = null; });
+  vmDialog.addEventListener("cancel", (e) => { if (vmSettingsSaving) e.preventDefault(); });
+  $("haVmSettingsCancel").addEventListener("click", closeVmSettings);
+  $("haVmSettingsReload").addEventListener("click", requestVmSettings);
+  $("haVmSettingsForm").addEventListener("input", () => { vmSettingsServerError = ""; validateVmSettings(); });
+  $("haVmSettingsForm").addEventListener("submit", (e) => {
+    e.preventDefault(); validateVmSettings();
+    if ($("haVmSettingsApply").disabled) return;
+    vmSettingsSaving = true;
+    const args = { ...vmSettingsRequest, cpus: Number($("haVmCpus").value), ramGb: Number($("haVmRam").value), timeoutMinutes: Number($("haVmTimeout").value), action: $("haVmIdleAction").value };
+    $("haVmSettingsFields").disabled = true; $("haVmSettingsApply").disabled = true;
+    $("haVmSettingsCancel").disabled = true; $("haVmSettingsReload").disabled = true;
+    text("haVmSettingsError", "Saving settings…");
+    act("setVmSettings", args);
+  });
+
   window.addEventListener("message", (e) => {
     const m = e.data;
     if (!m || typeof m.type !== "string") return;
-    if (m.type === "hostadmin.state") render(m.state);
+    if (m.type === "hostadmin.state") { render(m.state); if (vmSettingsRequest) validateVmSettings(); }
+    else if (m.type === "hostadmin.vmSettings") receiveVmSettings(m);
     else if (m.type === "hostadmin.tokens") renderTokens(m.name, m.tokens);
     else if (m.type === "hostadmin.overrides") renderOverrides(m);
     else if (m.type === "hostadmin.allowanceProblems") {

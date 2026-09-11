@@ -656,6 +656,10 @@ ok("pin: a malformed fingerprint is refused",
     await adminClient.cancelJob("j1");             eq("route: cancel job", last().method + " " + last().url, "POST /api/v1/jobs/j1/cancel");
     await adminClient.audit({ actor: "bob" });     eq("route: audit", last().url, "/api/v1/audit?actor=bob");
     await adminClient.forwardsVia("work-vm");      eq("route: forwards via this primary", last().url, "/api/v1/vms/work-vm/forwards?via=work-vm");
+    await adminClient.vmMemory("vm /?"); eq("route: VM memory read encodes name", last().method + " " + last().url, "GET /api/v1/vms/vm%20%2F%3F/memory");
+    await adminClient.setVmMemory("vm", { ramGb: 12 }); ok("route: VM memory write", last().method === "PUT" && last().url === "/api/v1/vms/vm/memory" && last().body.ramGb === 12);
+    await adminClient.vmIdlePolicy("vm /?"); eq("route: idle read encodes name", last().method + " " + last().url, "GET /api/v1/vms/vm%20%2F%3F/idle-policy");
+    await adminClient.setVmIdlePolicy("vm", { timeoutMinutes: 60, action: "shutdown" }); ok("route: idle write", last().method === "PUT" && last().url === "/api/v1/vms/vm/idle-policy" && last().body.action === "shutdown");
     await adminClient.updatesStatus();             eq("route: update status", last().url, "/api/v1/host/updates/status");
     await adminClient.updatesCheck();              ok("route: update check with an empty body", last().method === "POST" && last().url === "/api/v1/host/updates/check" && JSON.stringify(last().body) === "{}");
     await adminClient.updatesStage({ releaseTag: "v1" }); ok("route: stage", last().url === "/api/v1/host/updates/stage" && last().body.releaseTag === "v1");
