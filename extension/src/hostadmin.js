@@ -882,6 +882,7 @@ function childRows(children, now) {
         operation: c.deleting === true && !op ? "deleting" : op,
         // Presentation only (§2.2): the two panel actions, offered when the service says
         // the caller may, and greyed while an operation holds the VM.
+        canConsole: c.deleting !== true && (state === "running" || state === "paused") && allows(c, "console"),
         canShutdown: !op && c.deleting !== true && (state === "running" || state === "paused") && allows(c, "shutdown"),
         canDelete: !op && c.deleting !== true && allows(c, "delete"),
       };
