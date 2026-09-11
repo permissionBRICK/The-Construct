@@ -240,7 +240,7 @@ function Install-ConstructCompanion {
         [IO.Directory]::CreateDirectory($work) | Out-Null
         $app=Join-Path $work 'app'
         if ($plan.source -eq 'local-build') {
-            $result=& $Seams.Native 'dotnet' @('publish',(Join-Path $ScriptsDir 'companion/src/Construct.Companion/Construct.Companion.csproj'),'-c','Release','-r','win-x64','--self-contained','true',('-p:InformationalVersion=1.0.0+'+$plan.commit),'-p:IncludeSourceRevisionInInformationalVersion=false','--artifacts-path',(Join-Path $work 'artifacts'),'-o',$app)
+            $result=& $Seams.Native 'dotnet' @('publish',(Join-Path $ScriptsDir 'companion/src/Construct.Companion/Construct.Companion.csproj'),'-c','Release','-r','win-x64','--self-contained','true',('-p:InformationalVersion=1.0.0+'+$plan.commit),'-p:IncludeSourceRevisionInInformationalVersion=false','-nodeReuse:false','-p:UseSharedCompilation=false','--artifacts-path',(Join-Path $work 'artifacts'),'-o',$app)
             if ($result.exitCode -ne 0) {
                 # Dependency diagnostics can include credentials (for example NuGet
                 # source URLs). Expose their error codes, never arbitrary output.
@@ -328,7 +328,15 @@ function Invoke-ConstructCompanionInstallHook {
     param([string]$ScriptsDir,[switch]$SkipCompanion,[switch]$SkipWhenElevated)
     # An elevated reprovision is the installer's own child; the non-elevated client pre-step owns the Companion.
     if (-not $SkipCompanion -and $SkipWhenElevated -and (Test-ConstructCompanionElevated)) { return }
-    try { Install-ConstructCompanion -ScriptsDir $ScriptsDir -SkipCompanion:$SkipCompanion | Out-Host }
+    try {
+        $outcome = Install-ConstructCompanion -ScriptsDir $ScriptsDir -SkipCompanion:$SkipCompanion
+        switch ([string]$outcome) {
+            'installed' { Write-Host '==> Construct Companion installed and started.' -ForegroundColor Green }
+            'unchanged' { Write-Host '==> Construct Companion already current.' -ForegroundColor DarkGray }
+            'skipped'   { Write-Host '==> Construct Companion skipped.' -ForegroundColor DarkGray }
+            default     { if ($outcome) { Write-Host ('==> Construct Companion: ' + $outcome) -ForegroundColor DarkGray } }
+        }
+    }
     catch {
         $reason='An unexpected dependency failure occurred. Retry Install-ConstructCompanion in a non-elevated PowerShell window for diagnostics.'
         if ($_.Exception.Data['constructCompanionDiagnostic']) { $reason=$_.Exception.Message }
