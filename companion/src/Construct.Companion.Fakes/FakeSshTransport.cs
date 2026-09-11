@@ -29,6 +29,8 @@ public sealed class ScriptedGuestSpool
 
 public sealed class FakeSshTransport : ISshTransport
 {
+    public Func<string, CancellationToken, Task<ProcessResult>>? ScriptHandler { get; set; }
+    public Action<FakeRunningProcess>? TunnelStarted { get; set; }
     public ScriptedGuestSpool Spool { get; } = new();
     public List<string> Scripts { get; } = [];
     public List<(string Script, FakeRunningProcess Process)> Watches { get; } = [];
@@ -36,7 +38,7 @@ public sealed class FakeSshTransport : ISshTransport
     public HashSet<(int Port, string BindHost)> BusyPorts { get; } = [];
     public Task<ProcessResult> RunRemoteScriptAsync(string script, TimeSpan? timeout = null, CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested(); Scripts.Add(script); return Task.FromResult(Spool.Run(script));
+        cancellationToken.ThrowIfCancellationRequested(); Scripts.Add(script); return ScriptHandler is null ? Task.FromResult(Spool.Run(script)) : ScriptHandler(script, cancellationToken);
     }
     public IRunningProcess SpawnWatch(string script, CancellationToken cancellationToken = default)
     {
@@ -46,7 +48,7 @@ public sealed class FakeSshTransport : ISshTransport
     public IRunningProcess SpawnTunnel(TunnelSpec tunnel, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var child = new FakeRunningProcess(cancellationToken); Tunnels.Add((tunnel, child)); return child;
+        var child = new FakeRunningProcess(cancellationToken); Tunnels.Add((tunnel, child)); TunnelStarted?.Invoke(child); return child;
     }
     public Task<bool> ProbePortAsync(int port, string bindHost = "127.0.0.1", CancellationToken cancellationToken = default)
     {
