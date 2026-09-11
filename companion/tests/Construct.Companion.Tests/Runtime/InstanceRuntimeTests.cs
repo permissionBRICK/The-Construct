@@ -66,10 +66,11 @@ public sealed class InstanceRuntimeTests
         await using var runtime = new InstanceRuntime(new("dev", "1", ForwardsEnabled: false, NotificationsEnabled: false), probe, clock,
             _ => throw new InvalidOperationException(), () => throw new InvalidOperationException(), _ => throw new InvalidOperationException(), new RepatchJob(ssh), bus);
         runtime.Start(); await Eventually(() => probe.Calls == 1 && clock.PendingDelays == 2);
-        clock.Advance(TimeSpan.FromSeconds(29)); Assert.Equal(1, probe.Calls); clock.Advance(TimeSpan.FromSeconds(1)); await Eventually(() => probe.Calls == 2);
-        runtime.BeginFastRefresh(); await Eventually(() => probe.Calls == 3); await Task.Delay(10);
-        clock.Advance(TimeSpan.FromSeconds(5)); await Eventually(() => probe.Calls == 4);
-        clock.Advance(TimeSpan.FromMinutes(5)); await Eventually(() => probe.Calls == 5); await Task.Delay(10);
+        clock.Advance(TimeSpan.FromSeconds(29)); Assert.Equal(1, probe.Calls); clock.Advance(TimeSpan.FromSeconds(1)); await Eventually(() => probe.Calls == 2 && clock.PendingDelays == 2);
+        runtime.BeginFastRefresh(); await Eventually(() => probe.Calls == 3 && clock.PendingDelays == 2);
+        // Calls increments at probe entry; wait for the next delay before advancing time.
+        clock.Advance(TimeSpan.FromSeconds(5)); await Eventually(() => probe.Calls == 4 && clock.PendingDelays == 2);
+        clock.Advance(TimeSpan.FromMinutes(5)); await Eventually(() => probe.Calls == 5 && clock.PendingDelays == 1);
         clock.Advance(TimeSpan.FromSeconds(5)); Assert.Equal(5, probe.Calls); clock.Advance(TimeSpan.FromSeconds(25)); await Eventually(() => probe.Calls == 6);
         Assert.Null(bus.Snapshot("dev")["state"].GetProperty("connectedInstance").GetString());
     }

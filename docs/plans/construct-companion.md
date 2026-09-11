@@ -1,10 +1,11 @@
 # Construct Companion: the per-user host agent and tray app
 
-Status: design frozen 2026-09-11 (project owner decisions recorded below). Implementation
-runs on Linux; Windows behaviour is compile-checked and unit-tested here and must be field
-tested on a real Windows host afterwards. Nothing in this document claims a Windows run.
-Stage 3 branch integration is recorded below; production desktop/runtime composition
-and the listed D11 workflows remain incomplete.
+Status: design frozen 2026-09-11 (owner decisions D1–D11). S3 binds the production
+Windows app to the real IPC dispatcher and per-instance runtimes, including the client
+install offer and local/remote/reprovision hooks. Linux build and fake-mode integration
+are verified below. Native Windows build/selftest and field operation remain pending:
+the relay answered SDK queries, but source transfer failed; no executable ran there.
+Explicit unsupported workflows remain in companion/README.md.
 
 Author: Fable (design). Implementers: see [Work packages](#13-work-packages).
 
@@ -472,7 +473,7 @@ delivery. Construct side: nothing beyond the command-line contract in §6.
   (a) `Auto-Install.ps1` non-elevated pre-step, right next to the VSIX install; that step runs
   before the local/remote decision and before any elevation, so it covers fresh local installs,
   fresh remote installs (`-Backend hyperv-remote`) and further remote VMs added on a PC that
-  already has a registry. (b) `Update-Construct.ps1`. (c) The `install.ps1` one-liner reaches (a).
+  already has a registry. (b) `Update-Construct.ps1` and `Provision-AgentVM.ps1`. (c) The `install.ps1` one-liner reaches (a).
   (d) A root script `Install-ConstructCompanion.ps1 [-Uninstall] [-Source auto|local|release] [-Force]`
   (same convention as `Update-T3Code.ps1`) wrapping the library, for manual runs and for the
   extension's offer in §10 on PCs that only ever added a remote host from VS Code. Both hooks
@@ -525,6 +526,14 @@ extension methods in their own files), `extension/extension.js` (S2a extension o
 
 ## 14. Testing and parity
 
+S3 verification (2026-09-11): Linux build 0 warnings/0 errors; Companion 4,725/4,725
+and service 1,261/1,261 tests. Real Kestrel/dispatcher/runtime tests cover mixed and
+remote-only registries, forwarding, notifications, audio, settings bytes, host-admin,
+activation and shutdown; Node exercises detection/proxy/SSE against the spawned fake Host.
+Parity regeneration preserves existing areas and adds actual JS settings-writer bytes
+and refresh-cache TTL decisions (4,456 rows across 31 areas). See the S3 notes below
+for regression suite results, retries, unsupported workflows and Windows limitations.
+
 - Linux gates: `dotnet build companion/Construct.Companion.sln -warnaserror` (0 warnings),
   `dotnet test companion/Construct.Companion.sln`, `for f in extension/test/*.test.js; do node "$f"; done`,
   `pwsh -NoProfile -File test/companion-install.test.ps1`, existing suites unchanged.
@@ -537,7 +546,9 @@ extension methods in their own files), `extension/extension.js` (S2a extension o
   answers (`node /root/repos/jarvis/scripts/jarvis-relay.mjs run --target haus-pc --shell powershell --timeout 300 -- '<cmd>'`,
   exit 125 or a cancelled run means it does not; do not retry endlessly), workers may run
   `dotnet build`/`--selftest --json` there read-only and must never install, register or start
-  the Companion on that host in this run. The relay was not answering on 2026-09-11.
+  the Companion on that host in this run. During S3 on 2026-09-11 the relay answered read-only SDK queries (10.0.401), but
+  source transfer failed. The temporary `C:\Temp\companion-probe` directory was removed;
+  no native build, selftest, installation or registration ran.
 - Field test checklist (owner, later): install through `Update-Construct.ps1`, tray states,
   `construct expose` with VS Code closed, toast click, mic in Claude Code over Remote-SSH,
   panel parity with the VS Code tab, host-admin window, T3 Settings button, update swap.
@@ -552,6 +563,8 @@ extension methods in their own files), `extension/extension.js` (S2a extension o
 - T3 gets a launch button only; no IPC consumption in this delivery.
 
 ## Deviations
+
+- owner amendment 2026-09-11: plain reprovision installs or updates the client Companion through the same non-blocking opt-out-aware hook in `Provision-AgentVM.ps1`, covering panel and T3 Desktop reprovision entry paths.
 
 - S2b ipc: automatic checkpoint apply and lifecycle preflight/live-project fallback remain documented unsupported subflows; S2a has the pieces but not the complete dialog/result workflow, so users must sync/select explicitly and apply checkpoints through VS Code/installer.
 - S2b ipc: project modal saves use the existing S2a strict validation/canonicalization gate instead of legacy JS coercion; invalid/reserved profiles fail before writes.
@@ -604,7 +617,7 @@ extension methods in their own files), `extension/extension.js` (S2a extension o
 - No unresolved merge-induced defect found. S2b/S3 still own IPC/dispatcher, application composition, Windows adapters/UI, install/release, and T3 launch integration; the app's failing `--selftest` remains a documented scaffold stub.
 
 
-## Integration notes (stage 3)
+## Integration notes (stage 3 input merge; superseded by S3 below)
 
 - Reset `cc/integ-3` to `feat/companion` (`73f838c`), then merged `cc/s2-ipc`, `cc/s2-app`, and `cc/s2-install` in order with `--no-ff`; none skipped. README/exporter conflicts preserve both packages and every async fixture export; the plan conflict preserves every deviation, including the starting branch's D11. No T3 repository work was merged. Full validation and branch details: [stage 3 integration results](construct-companion-stage-3-integration.md).
 - Fixed app/installer compatibility: `Stop-ConstructCompanionForInstall` now discovers both `endpoint.json` and the standalone app's `ui-endpoint.json`, including a dead full-host PID followed by a live bootstrap PID. Four added assertions cover bootstrap uninstall reason, stale endpoint fallback, timeout refusal, and no swap on timeout. No process is killed.
@@ -614,3 +627,13 @@ extension methods in their own files), `extension/extension.js` (S2a extension o
 - Linux validation: Companion build 0 warnings/0 errors; Companion 4,681/4,681; service 1,261/1,261; Node 31/31 suites; PowerShell 29/29 after the existing config-sync retry (561/568 initially, 568/568 with process-local `init.defaultBranch=main` and the documented `CONSTRUCT_*` variables unset); Bash 20/22. Installer 75 assertions and package 34 assertions passed. Regenerated 4,426 parity rows across 29 areas without drift.
 - Existing Bash defects remain: `contracts-compile.test.sh` 4/5 (`HypervisorVmInfo` frozen signature mismatch), `idle-report.test.sh` 100/103 (service-key count/URL/instance). Both match prior integration baseline evidence; tests and production code are unchanged. No unresolved merge-induced regression remained after the quit fix.
 - No Windows build, selftest, installation, tray, WASAPI, WinRT, Hyper-V or field runtime execution was performed. The Windows target only compiled on Linux; the native behavior remains for Windows field validation.
+
+## Integration notes (S3 implementation)
+
+- Production composition now binds the WinForms app to `AddCompanionHost`, the dispatcher and per-instance runtimes. Tray/window subscriptions use aggregated state; IPC and desktop share settings and publish changes. Registry retargeting, active selection, host catalog, config watchers/ticks, cached update enrichment, on-demand cached usage, host-admin close/unsubscribe, URI activation and graceful endpoint/claim cleanup are wired. Selftest starts only the real IPC diagnostic path, suppresses runtime jobs/endpoint writes and interactive prompts, and treats remote-only registries without requiring local Hyper-V.
+- D11 is implemented through the root installer, pure/tested once-per-session extension offer and `construct.installCompanion`; hooks cover fresh local, fresh remote, additional remote, Update and plain Provision entry paths. Export/scan/elevated provision calls skip installation; version-guarded opt-out propagation prevents duplicate child attempts. The extra Provision hook is the owner amendment recorded above.
+- Linux validation: build 0 warnings/0 errors; Companion 4,725/4,725; service 1,261/1,261; Node 33/33 suite files. PowerShell 24/24 suite files after the existing config-sync default-branch retry (561/568 initially, 568/568 with process-local `init.defaultBranch=main` and the documented `CONSTRUCT_*` variables unset). Installer 75, entrypoint 33 and remote-install 206 assertions pass. Bash 20/22 suites: unchanged baseline failures remain `contracts-compile.test.sh` 4/5 (frozen `HypervisorVmInfo` signature) and `idle-report.test.sh` 100/103 (service-key count/URL/instance). No service or guest-script behavior changed.
+- Added real TLS adapter tests reject a mismatched pin before authenticated HTTP, accept a matching pin, disable redirects, record Negotiate default credentials and map public-update 404s. Fake-clock tests verify shared update TTLs and per-period usage caching without background usage or duplicate probes. The settings fixture compares HTTP-dispatch writes byte-for-byte with the real JS writer. Regenerated all 4,456 parity rows across 31 areas without drift.
+- Two timing-only ProcessSupervisor tests now wait for their actual signals. A round-2 rerun exposed the same test-ordering issue in the fast-probe test: it advanced the fake clock before the next delay was scheduled. It now waits for that delay rather than sleeping ten milliseconds. An AudioSession cancellation race now checks the owning lifetime before creating the server. Review round 1 observed an inherited ForwarderRuntime cancellation test failure under load (supported versus stood-down); six isolated reruns and the final complete suite pass. That observation is retained rather than claiming the first run was green.
+- The explicit unsupported commands/subflows in `companion/README.md` remain: attached-window registration/conversion, project creation, removal, first-VM wizard, install-wide update orchestration, one-time token display, automatic checkpoint apply and lifecycle preflight/result monitoring. They report visible refusals where applicable; Linux wiring tests do not establish parity for these workflows. Earlier stage-3 input-merge notes describe the starting state, not the current composition.
+- Windows relay read-only queries succeeded (SDK 10.0.401); source transfer failed twice, including a smaller-chunk attempt. `C:\Temp\companion-probe` was removed successfully after the last attempt. No Windows build, selftest, installation, registration, autostart or native runtime/UI exercise ran. Field validation remains pending.

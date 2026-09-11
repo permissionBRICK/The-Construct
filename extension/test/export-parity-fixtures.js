@@ -394,7 +394,31 @@ function desktopWebviews() {
   }
   return rows;
 }
-async function exportAll() { return { "desktop-webviews": desktopWebviews(), "hostadmin-ipc": hostAdminIpc(), "config-sync": configSync(), "notify-runtime": notifyRuntime(), "audio-runtime": audioRuntime(), "repatch-runtime": repatchRuntime(), "forward-runtime": forwardRuntime(), "guest-scripts": guestScripts(), "ssh-args": sshArgs(), "host-label": hostLabel(), "shell-quoting": shellQuoting(), "settings-mapping": settingsMapping(), "instance-identity": instanceIdentity(), "registry-state": registryState(), "lifecycle-invocations": lifecycleInvocations(), "lifecycle-launches": lifecycleLaunches(), "vm-power": vmPower(), "probe-parsing": probeParsing(), "usage-parsing": usageParsing(), "updates-planning": updatesPlanning(), "remote-identity": remoteIdentity(), "t3-pure": t3Pure(), "remote-routes": remoteRoutes(), "t3-discovery": await t3Discovery(), "state-json-bytes": stateJsonBytes(), "agent-updates": await agentUpdates(), "agent-update-scripts": agentUpdateScripts(), "usage-exports": usageExports(), "instance-fingerprints": instanceFingerprints() }; }
+function refreshCachePolicy() {
+  const rows = [];
+  for (const area of ['updates', 'usage']) {
+    const module = require('../src/' + area);
+    for (const success of [false, true]) for (const age of [0, 59999, 60000, 299999, 300000, 599999, 600000])
+      rows.push({ area, success, age, output: age < (success ? module.TTL_MS : module.NEG_TTL_MS) });
+  }
+  return rows;
+}
+function integrationSettings() {
+  const state = require('../src/instancestate');
+  const root = fs.mkdtempSync(path.join(require('os').tmpdir(), 'companion-settings-parity-'));
+  try {
+    const rows = [];
+    for (const name of ['agent-vm', 'remote-vm']) {
+      const scripts = path.join(root, name); fs.mkdirSync(scripts);
+      const input = { gitName: 'Demo 🧱', gitEmail: 'demo@example.test', ram: '8', mic: false, partialStreaming: true, t3code: false };
+      state.saveSettings(state.store(name, scripts, { LOCALAPPDATA: root }), input);
+      rows.push({ name, input, install: fs.readFileSync(path.join(scripts, '.construct-settings.json'), 'utf8'),
+        instance: name === 'agent-vm' ? null : fs.readFileSync(state.statePath(name, { LOCALAPPDATA: root }), 'utf8') });
+    }
+    return rows;
+  } finally { fs.rmSync(root, {recursive:true}); }
+}
+async function exportAll() { return { "refresh-cache": refreshCachePolicy(), "integration-settings": integrationSettings(), "desktop-webviews": desktopWebviews(), "hostadmin-ipc": hostAdminIpc(), "config-sync": configSync(), "notify-runtime": notifyRuntime(), "audio-runtime": audioRuntime(), "repatch-runtime": repatchRuntime(), "forward-runtime": forwardRuntime(), "guest-scripts": guestScripts(), "ssh-args": sshArgs(), "host-label": hostLabel(), "shell-quoting": shellQuoting(), "settings-mapping": settingsMapping(), "instance-identity": instanceIdentity(), "registry-state": registryState(), "lifecycle-invocations": lifecycleInvocations(), "lifecycle-launches": lifecycleLaunches(), "vm-power": vmPower(), "probe-parsing": probeParsing(), "usage-parsing": usageParsing(), "updates-planning": updatesPlanning(), "remote-identity": remoteIdentity(), "t3-pure": t3Pure(), "remote-routes": remoteRoutes(), "t3-discovery": await t3Discovery(), "state-json-bytes": stateJsonBytes(), "agent-updates": await agentUpdates(), "agent-update-scripts": agentUpdateScripts(), "usage-exports": usageExports(), "instance-fingerprints": instanceFingerprints() }; }
 if (require.main === module) (async () => {
   fs.mkdirSync(directory, { recursive: true });
   for (const [area, value] of Object.entries(await exportAll())) fs.writeFileSync(path.join(directory, area + ".json"), serialize(value));
