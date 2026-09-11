@@ -35,6 +35,7 @@ public sealed class DesktopModelTests
     }
     [Theory]
     [InlineData(true, "off", false, false, 0, TrayColor.Green)]
+    [InlineData(true, "running", false, true, 0, TrayColor.Red)]
     [InlineData(true, "off", true, false, 0, TrayColor.Yellow)]
     [InlineData(false, "running", false, false, 0, TrayColor.Yellow)]
     [InlineData(false, "saved", false, false, 0, TrayColor.Grey)]
