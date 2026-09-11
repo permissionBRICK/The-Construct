@@ -18,6 +18,12 @@ public sealed class CompanionBackend(CompanionInstances instances, StateAggregat
             e => { logs.Failure("instance dispatch", e); dispatcher.Refuse(name, MessageDispatcher.Text(message, "id"), e is IpcFailure ? e.Message : "The accepted operation failed. Check Companion logs."); });
         return Task.CompletedTask;
     }
+    public Task RefreshOpenedSurfaceAsync(string? name, CancellationToken token)
+    {
+        name ??= settings.Read().ActiveInstance;
+        if (name is null || !instances.Names.Contains(name)) name = instances.Names.FirstOrDefault();
+        return name is null ? Task.CompletedTask : DispatchAsync(name, new() { ["type"] = "ready", ["surfaceOpened"] = true }, token);
+    }
     public Task SelectAsync(string name, CancellationToken token) => dispatcher.SelectAsync(name, token);
     public Task<IReadOnlyList<RemoteHost>> HostsAsync(CancellationToken token) => Task.FromResult(hosts.List());
     public Task<JsonObject> HostSnapshotAsync(string slug, CancellationToken token) => Task.FromResult(hosts.Snapshot(slug));

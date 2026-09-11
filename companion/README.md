@@ -84,7 +84,7 @@ share the settings store; theme and active-instance updates reach the desktop.
 
 Config project watchers start with their areas. Automatic config sync is throttled
 by its five-minute runtime policy. Host and update metadata refresh periodically without
-duplicating the runtime probe. Public update results are shared and cached for ten minutes
+duplicating the runtime probe. Public update results are shared and cached for five minutes
 (one minute on failure); usage is collected on demand per instance/period and cached for
 five minutes (one minute on failure), matching the JavaScript TTL fixtures.
 Construct update detection uses the complete published main release manifest;
@@ -134,31 +134,24 @@ the same non-blocking, opt-out-aware hook. Installation always targets the clien
 
 ## Unsupported messages
 
-The dispatcher implements all ten top-level panel message types. Unknown types/commands
+The dispatcher implements all top-level panel message types. Unknown types/commands
 return `{type:"lifecyclePrepared", id, error}`; both shared webviews display `error`.
-These specific workflows remain explicit refusals:
+No known panel or host-administration workflow remains unsupported. These legacy input differences are intentional:
 
 | Command | Reason / alternative |
 |---|---|
-| `registerThisVm` | Companion has no attached Remote-SSH window identity. Use the VS Code registration command (which stays local in client mode). |
-| `addProject` | Profile storage is available, but not the clone/register/open project workflow. Save a profile or use Add Project in VS Code fallback mode. |
-| `removeInstance` | Registry edits and launch builders exist, but not the removal planner/confirmation workflow. Use the local VS Code removal command. |
-| `convertToHost` | Initiation depends on the attached VM identity; pending VS Code conversions keep their RSA private key in that VS Code profile's SecretStorage. Companion shows pending status and never finishes it automatically. Review/finish in that profile. |
-| `createFirstVm` | The service-backed creation wizard is not exposed. Use New Remote VM in VS Code. |
-| `hostadmin.action: issueToken`, `rotateVmToken` | `IPrompts` has no one-time secret display operation. Refused before requesting any new token; use the host CLI. |
-| `hostadmin.action: createFirstVm` | Same missing creation wizard as the panel command above. |
-| `applyVmResources` | The restart-to-resize workflow (elevated `Set-AgentVmResources.ps1` with its result file, or the service CPU route plus restart) is not ported. The RAM/vCPU values are saved; apply them from the VS Code control panel or by Reinstall. |
-| `saveSettings` automatic checkpoint apply | The preference is saved, but the elevated apply/result workflow is not wired. A visible refusal directs the user to VS Code or the installer checkpoint action. |
-| Lifecycle preflight / live project fallback | The dispatcher uses the persisted project selection. The extension's import-scan/config-sync/continue-anyway preflight and probe fallback are not wired; sync and select projects explicitly before launching lifecycle actions. |
+| Lifecycle import malformed legacy names | Scanned profiles use the strict profile validation gate; invalid/reserved names are reported as failed writes before the continue-anyway prompt. |
 | `saveProject` malformed legacy values | Uses the strict validation and canonicalization gate rather than the extension modal's legacy schema coercion. Invalid or reserved profiles are refused before writing. |
 
 Other panel command IDs are routed in `Host/Dispatch/MessageDispatcher.cs`; host-admin
 messages/actions are routed in `Host/Dispatch/HostAdministration.cs`. Bad names, form
 values and routes return RFC 7807 problems. Host-admin refusals also publish a visible
-`state.notice`; ordinary unsupported panel operations publish the visible error above.
+`state.notice`; unknown panel operations publish the visible error above.
 
 
 ## Message matrix
+
+Opening surfaces tag `ready` with `surfaceOpened` for one manifest bypass; `snapshotOnly` replays an already refreshed snapshot. Ordinary selection/refresh messages retain the cache.
 
 The known dispatcher sets (`MessageDispatcher.KnownMessages`/`KnownCommands`) are checked
 against this table and the extension source by `ProtocolMatrixTests`. Panel messages and
@@ -168,7 +161,7 @@ views and runtime messages use IPC). The limitations of the implemented rows are
 
 | Kind | Message or command | Status |
 |---|---|---|
-| message | `applyVmResources` | unsupported: apply the saved VM size from VS Code or by Reinstall. |
+| message | `applyVmResources` | implemented |
 | message | `command` | implemented |
 | message | `customRebuild` | implemented |
 | message | `openPanel` | implemented |
@@ -180,7 +173,7 @@ views and runtime messages use IPC). The limitations of the implemented rows are
 | message | `setInstance` | implemented |
 | message | `setUsagePeriod` | implemented |
 | command | `addConfigRemote` | implemented |
-| command | `addProject` | unsupported: Clone/register wizard remains in VS Code. |
+| command | `addProject` | implemented |
 | command | `addRemoteAndPublish` | implemented |
 | command | `childConsole` | implemented |
 | command | `childDelete` | implemented |
@@ -189,8 +182,8 @@ views and runtime messages use IPC). The limitations of the implemented rows are
 | command | `chooseTheme` | implemented |
 | command | `closeForward` | implemented |
 | command | `connect` | implemented |
-| command | `convertToHost` | unsupported: Review and explicitly finish in the originating VS Code profile. |
-| command | `createFirstVm` | unsupported: Use the VS Code remote VM creation wizard. |
+| command | `convertToHost` | implemented |
+| command | `createFirstVm` | implemented |
 | command | `deleteProject` | implemented |
 | command | `editProject` | implemented |
 | command | `exportConfig` | implemented |
@@ -207,10 +200,10 @@ views and runtime messages use IPC). The limitations of the implemented rows are
 | command | `pushConfigUpstream` | implemented |
 | command | `redownload` | implemented |
 | command | `refresh` | implemented |
-| command | `registerThisVm` | unsupported: Requires an attached VS Code Remote-SSH identity. |
+| command | `registerThisVm` | implemented |
 | command | `reinstall` | implemented |
 | command | `removeConfigRemote` | implemented |
-| command | `removeInstance` | unsupported: Use the local VS Code removal command. |
+| command | `removeInstance` | implemented |
 | command | `reprovision` | implemented |
 | command | `selectProfiles` | implemented |
 | command | `shareConfigs` | implemented |

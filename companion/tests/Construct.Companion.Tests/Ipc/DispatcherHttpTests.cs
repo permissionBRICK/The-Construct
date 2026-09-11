@@ -81,13 +81,13 @@ public sealed class DispatcherHttpTests
         var refusal = await Until(reader, d => d["message"]?["error"] is not null); Assert.Contains("Idle policy", refusal["message"]!["error"]!.GetValue<string>());
     }
     [Fact]
-    public async Task CheckpointPreferenceProducesVisibleUnsupportedApplyNotice()
+    public async Task CheckpointPreferenceExplainsMissingInstalledScript()
     {
         await using var h = await Harness.Start();
         using var stream = await h.Client.GetAsync("/v1/events?instance=agent-vm", HttpCompletionOption.ResponseHeadersRead); using var reader = new StreamReader(await stream.Content.ReadAsStreamAsync()); await reader.ReadLineAsync(); await reader.ReadLineAsync();
         using var save = await h.Post("/v1/instances/agent-vm/messages", new { type = "saveSettings", settings = new { autoCheckpoints = true } }); Assert.Equal(HttpStatusCode.Accepted, save.StatusCode);
-        var notice = await Until(reader, d => d["message"]?["error"] is not null);
-        Assert.Contains("checkpoint", notice["message"]!["error"]!.GetValue<string>()); Assert.Empty(h.Get<FakeLauncher, ILauncher>().Elevated);
+        var notice = await Until(reader, d => d["text"] is not null);
+        Assert.Contains("checkpoint", notice["text"]!.GetValue<string>()); Assert.Empty(h.Get<FakeLauncher, ILauncher>().Elevated);
     }
     [Fact]
     public async Task AcceptedDialogSurvivesDisconnectAndReadyDoesNotWait()
@@ -189,7 +189,7 @@ public sealed class DispatcherHttpTests
     public async Task UnknownCommandsProduceVisibleRefusalsAndNoLaunches()
     {
         await using var h = await Harness.Start(); using var stream = await h.Client.GetAsync("/v1/events", HttpCompletionOption.ResponseHeadersRead); using var reader = new StreamReader(await stream.Content.ReadAsStreamAsync()); await reader.ReadLineAsync(); await reader.ReadLineAsync();
-        foreach (var id in new[] { "unknown", "addProject", "registerThisVm", "removeInstance", "convertToHost", "createFirstVm", "updateConstruct" })
+        foreach (var id in new[] { "unknown", "updateConstruct" })
         {
             using var response = await h.Post("/v1/instances/agent-vm/messages", new { type = "command", id }); Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
             var message = await Until(reader, d => d["message"]?["id"]?.GetValue<string>() == id); Assert.NotEmpty(message["message"]!["error"]!.GetValue<string>());
