@@ -84,6 +84,7 @@ public sealed class RemoteApiException(int status, string message, string code =
 {
     public int Status { get; } = status;
     public string Code { get; } = code;
+    public JsonNode? Body { get; init; }
 }
 
 public sealed partial class RemoteHostClient
@@ -118,7 +119,7 @@ public sealed partial class RemoteHostClient
         if (response.StatusCode is >= 200 and < 300) return result;
         // Host errors may echo credentials; retain useful details after redaction.
         var errorBody = result is null ? null : JsonNode.Parse(Redact(result.ToJsonString(), secrets, json: true));
-        throw new RemoteApiException(response.StatusCode, RemoteHost.MapError(response.StatusCode, errorBody, method + " " + path), StateJson.Text((errorBody as JsonObject)?["code"]) ?? "");
+        throw new RemoteApiException(response.StatusCode, RemoteHost.MapError(response.StatusCode, errorBody, method + " " + path), StateJson.Text((errorBody as JsonObject)?["code"]) ?? "") { Body = errorBody };
     }
     private static string[] RequestSecrets(Secret? token, JsonNode? body)
     {

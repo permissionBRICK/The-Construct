@@ -1,0 +1,5283 @@
+[
+  {
+    "input": null,
+    "kind": "projectOpenPath",
+    "now": 1789128000000,
+    "output": "/root/repos"
+  },
+  {
+    "input": {},
+    "kind": "projectOpenPath",
+    "now": 1789128000000,
+    "output": "/root/repos"
+  },
+  {
+    "input": {
+      "repos": []
+    },
+    "kind": "projectOpenPath",
+    "now": 1789128000000,
+    "output": "/root/repos"
+  },
+  {
+    "input": {
+      "repos": [
+        {
+          "url": "https://example.test/a.git"
+        }
+      ]
+    },
+    "kind": "projectOpenPath",
+    "now": 1789128000000,
+    "output": "/root/repos/a"
+  },
+  {
+    "input": {
+      "repos": [
+        {
+          "url": "git@host:repo.git"
+        }
+      ]
+    },
+    "kind": "projectOpenPath",
+    "now": 1789128000000,
+    "output": "/root/repos/git@host:repo"
+  },
+  {
+    "input": {
+      "repos": [
+        {
+          "directory": "a/b",
+          "url": "x"
+        }
+      ]
+    },
+    "kind": "projectOpenPath",
+    "now": 1789128000000,
+    "output": "/root/repos/a/b"
+  },
+  {
+    "input": {
+      "repos": [
+        {
+          "directory": "../escape",
+          "url": "x"
+        }
+      ]
+    },
+    "kind": "projectOpenPath",
+    "now": 1789128000000,
+    "output": "/root/repos"
+  },
+  {
+    "input": {
+      "repos": [
+        {
+          "directory": "a#b",
+          "url": "x"
+        }
+      ]
+    },
+    "kind": "projectOpenPath",
+    "now": 1789128000000,
+    "output": "/root/repos/a#b"
+  },
+  {
+    "input": {
+      "repos": [
+        {
+          "url": "a"
+        },
+        {
+          "url": "b"
+        }
+      ]
+    },
+    "kind": "projectOpenPath",
+    "now": 1789128000000,
+    "output": "/root/repos"
+  },
+  {
+    "input": {
+      "code": "cascade-confirmation-required",
+      "status": 409
+    },
+    "kind": "cascadeKind",
+    "now": 1789128000000,
+    "output": "required"
+  },
+  {
+    "input": {
+      "code": "cascade-confirmation-required",
+      "status": 400
+    },
+    "kind": "cascadeKind",
+    "now": 1789128000000,
+    "output": null
+  },
+  {
+    "input": {
+      "code": "cascade-scope-changed",
+      "status": 409
+    },
+    "kind": "cascadeKind",
+    "now": 1789128000000,
+    "output": "scope-changed"
+  },
+  {
+    "input": {
+      "code": "cascade-scope-changed",
+      "status": 400
+    },
+    "kind": "cascadeKind",
+    "now": 1789128000000,
+    "output": null
+  },
+  {
+    "input": {
+      "code": "cascade-token-expired",
+      "status": 409
+    },
+    "kind": "cascadeKind",
+    "now": 1789128000000,
+    "output": "expired"
+  },
+  {
+    "input": {
+      "code": "cascade-token-expired",
+      "status": 400
+    },
+    "kind": "cascadeKind",
+    "now": 1789128000000,
+    "output": null
+  },
+  {
+    "input": {
+      "code": "other",
+      "status": 409
+    },
+    "kind": "cascadeKind",
+    "now": 1789128000000,
+    "output": null
+  },
+  {
+    "input": {
+      "code": "other",
+      "status": 400
+    },
+    "kind": "cascadeKind",
+    "now": 1789128000000,
+    "output": null
+  },
+  {
+    "input": {
+      "primary": "agent-vm",
+      "problem": {}
+    },
+    "kind": "cascade",
+    "now": 1789128000000,
+    "output": {
+      "cascadeToken": "",
+      "children": [],
+      "confirmLabel": "Delete agent-vm",
+      "detail": "Deleting \"agent-vm\" also deletes ALL of its 0 child VMs, including shared ones.\nTheir virtual disks, saved state and dedicated media are removed permanently.\n\n\nType the instance name to confirm.",
+      "expiresAt": "",
+      "kind": "required",
+      "requireTypedName": true,
+      "sharedCount": 0,
+      "title": "Delete \"agent-vm\" and its 0 child VMs?",
+      "typedName": "agent-vm"
+    }
+  },
+  {
+    "input": {
+      "primary": "agent-vm",
+      "problem": {
+        "children": [
+          "child"
+        ],
+        "code": "cascade-scope-changed"
+      }
+    },
+    "kind": "cascade",
+    "now": 1789128000000,
+    "output": {
+      "cascadeToken": "",
+      "children": [
+        {
+          "diskGb": null,
+          "mediaCount": 0,
+          "name": "child",
+          "shared": false,
+          "sharing": "private",
+          "state": "unknown"
+        }
+      ],
+      "confirmLabel": "Delete agent-vm and 1 child VM",
+      "detail": "Deleting \"agent-vm\" also deletes ALL of its 1 child VM, including shared ones.\nTheir virtual disks, saved state and dedicated media are removed permanently.\n\n  child   unknown   private\n\nType the instance name to confirm.",
+      "expiresAt": "",
+      "kind": "scope-changed",
+      "requireTypedName": true,
+      "sharedCount": 0,
+      "title": "Delete \"agent-vm\" and its 1 child VM?",
+      "typedName": "agent-vm"
+    }
+  },
+  {
+    "input": {
+      "primary": "agent-vm",
+      "problem": {
+        "cascadeToken": "fake",
+        "children": [
+          {
+            "diskGb": 4,
+            "mediaCount": 2,
+            "name": "one",
+            "sharing": "host",
+            "state": "Running"
+          },
+          {
+            "name": "two",
+            "sharing": "private"
+          }
+        ],
+        "expiresAt": "2026-09-11T13:00:00Z"
+      }
+    },
+    "kind": "cascade",
+    "now": 1789128000000,
+    "output": {
+      "cascadeToken": "fake",
+      "children": [
+        {
+          "diskGb": 4,
+          "mediaCount": 2,
+          "name": "one",
+          "shared": true,
+          "sharing": "host",
+          "state": "running"
+        },
+        {
+          "diskGb": null,
+          "mediaCount": 0,
+          "name": "two",
+          "shared": false,
+          "sharing": "private",
+          "state": "unknown"
+        }
+      ],
+      "confirmLabel": "Delete agent-vm and 2 child VMs",
+      "detail": "Deleting \"agent-vm\" also deletes ALL of its 2 child VMs, including shared ones.\nTheir virtual disks, saved state and dedicated media are removed permanently.\n\n  one   running   SHARED HOST-WIDE (other users may be using it)   4 GB disk   2 dedicated media\n  two   unknown   private\n\nType the instance name to confirm. (This confirmation expires at 2026-09-11 13:00 UTC.)",
+      "expiresAt": "2026-09-11T13:00:00Z",
+      "kind": "required",
+      "requireTypedName": true,
+      "sharedCount": 1,
+      "title": "Delete \"agent-vm\" and its 2 child VMs?",
+      "typedName": "agent-vm"
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-local",
+      "health": {},
+      "host": "host.example",
+      "whoami": {
+        "name": "alice",
+        "role": "admin"
+      }
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": false,
+        "media": false,
+        "network": false,
+        "updates": false
+      },
+      "identity": null,
+      "maintenance": null,
+      "message": "This instance runs on this PC's Hyper-V; there is no host service to administer.",
+      "mode": "local",
+      "retryable": false
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-local",
+      "health": {},
+      "host": "host.example",
+      "whoami": {
+        "name": "bob",
+        "role": "user"
+      }
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": false,
+        "media": false,
+        "network": false,
+        "updates": false
+      },
+      "identity": null,
+      "maintenance": null,
+      "message": "This instance runs on this PC's Hyper-V; there is no host service to administer.",
+      "mode": "local",
+      "retryable": false
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-local",
+      "health": {},
+      "host": "host.example",
+      "whoami": {
+        "known": false
+      }
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": false,
+        "media": false,
+        "network": false,
+        "updates": false
+      },
+      "identity": null,
+      "maintenance": null,
+      "message": "This instance runs on this PC's Hyper-V; there is no host service to administer.",
+      "mode": "local",
+      "retryable": false
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-local",
+      "health": {},
+      "host": "host.example",
+      "whoami": {
+        "enabled": false
+      }
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": false,
+        "media": false,
+        "network": false,
+        "updates": false
+      },
+      "identity": null,
+      "maintenance": null,
+      "message": "This instance runs on this PC's Hyper-V; there is no host service to administer.",
+      "mode": "local",
+      "retryable": false
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-local",
+      "health": {
+        "apiFeatures": [
+          "host-admin"
+        ]
+      },
+      "host": "host.example",
+      "whoami": {
+        "name": "alice",
+        "role": "admin"
+      }
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": false,
+        "media": false,
+        "network": false,
+        "updates": false
+      },
+      "identity": null,
+      "maintenance": null,
+      "message": "This instance runs on this PC's Hyper-V; there is no host service to administer.",
+      "mode": "local",
+      "retryable": false
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-local",
+      "health": {
+        "apiFeatures": [
+          "host-admin"
+        ]
+      },
+      "host": "host.example",
+      "whoami": {
+        "name": "bob",
+        "role": "user"
+      }
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": false,
+        "media": false,
+        "network": false,
+        "updates": false
+      },
+      "identity": null,
+      "maintenance": null,
+      "message": "This instance runs on this PC's Hyper-V; there is no host service to administer.",
+      "mode": "local",
+      "retryable": false
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-local",
+      "health": {
+        "apiFeatures": [
+          "host-admin"
+        ]
+      },
+      "host": "host.example",
+      "whoami": {
+        "known": false
+      }
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": false,
+        "media": false,
+        "network": false,
+        "updates": false
+      },
+      "identity": null,
+      "maintenance": null,
+      "message": "This instance runs on this PC's Hyper-V; there is no host service to administer.",
+      "mode": "local",
+      "retryable": false
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-local",
+      "health": {
+        "apiFeatures": [
+          "host-admin"
+        ]
+      },
+      "host": "host.example",
+      "whoami": {
+        "enabled": false
+      }
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": false,
+        "media": false,
+        "network": false,
+        "updates": false
+      },
+      "identity": null,
+      "maintenance": null,
+      "message": "This instance runs on this PC's Hyper-V; there is no host service to administer.",
+      "mode": "local",
+      "retryable": false
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-local",
+      "health": {
+        "apiFeatures": [
+          "host-admin",
+          "updates"
+        ],
+        "maintenance": {
+          "phase": "draining",
+          "retryAfterSeconds": 5
+        },
+        "status": "maintenance"
+      },
+      "host": "host.example",
+      "whoami": {
+        "name": "alice",
+        "role": "admin"
+      }
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": false,
+        "media": false,
+        "network": false,
+        "updates": false
+      },
+      "identity": null,
+      "maintenance": null,
+      "message": "This instance runs on this PC's Hyper-V; there is no host service to administer.",
+      "mode": "local",
+      "retryable": false
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-local",
+      "health": {
+        "apiFeatures": [
+          "host-admin",
+          "updates"
+        ],
+        "maintenance": {
+          "phase": "draining",
+          "retryAfterSeconds": 5
+        },
+        "status": "maintenance"
+      },
+      "host": "host.example",
+      "whoami": {
+        "name": "bob",
+        "role": "user"
+      }
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": false,
+        "media": false,
+        "network": false,
+        "updates": false
+      },
+      "identity": null,
+      "maintenance": null,
+      "message": "This instance runs on this PC's Hyper-V; there is no host service to administer.",
+      "mode": "local",
+      "retryable": false
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-local",
+      "health": {
+        "apiFeatures": [
+          "host-admin",
+          "updates"
+        ],
+        "maintenance": {
+          "phase": "draining",
+          "retryAfterSeconds": 5
+        },
+        "status": "maintenance"
+      },
+      "host": "host.example",
+      "whoami": {
+        "known": false
+      }
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": false,
+        "media": false,
+        "network": false,
+        "updates": false
+      },
+      "identity": null,
+      "maintenance": null,
+      "message": "This instance runs on this PC's Hyper-V; there is no host service to administer.",
+      "mode": "local",
+      "retryable": false
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-local",
+      "health": {
+        "apiFeatures": [
+          "host-admin",
+          "updates"
+        ],
+        "maintenance": {
+          "phase": "draining",
+          "retryAfterSeconds": 5
+        },
+        "status": "maintenance"
+      },
+      "host": "host.example",
+      "whoami": {
+        "enabled": false
+      }
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": false,
+        "media": false,
+        "network": false,
+        "updates": false
+      },
+      "identity": null,
+      "maintenance": null,
+      "message": "This instance runs on this PC's Hyper-V; there is no host service to administer.",
+      "mode": "local",
+      "retryable": false
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-remote",
+      "health": {},
+      "host": "host.example",
+      "whoami": {
+        "name": "alice",
+        "role": "admin"
+      }
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": false,
+        "media": false,
+        "network": false,
+        "updates": false
+      },
+      "identity": null,
+      "maintenance": null,
+      "message": "This host's service answers, but does not offer host administration (its apiFeatures lack \"host-admin\"). Update it on the host; no update can be driven from here.",
+      "mode": "old-service",
+      "retryable": false
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-remote",
+      "health": {},
+      "host": "host.example",
+      "whoami": {
+        "name": "bob",
+        "role": "user"
+      }
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": false,
+        "media": false,
+        "network": false,
+        "updates": false
+      },
+      "identity": null,
+      "maintenance": null,
+      "message": "This host's service answers, but does not offer host administration (its apiFeatures lack \"host-admin\"). Update it on the host; no update can be driven from here.",
+      "mode": "old-service",
+      "retryable": false
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-remote",
+      "health": {},
+      "host": "host.example",
+      "whoami": {
+        "known": false
+      }
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": false,
+        "media": false,
+        "network": false,
+        "updates": false
+      },
+      "identity": null,
+      "maintenance": null,
+      "message": "This host's service answers, but does not offer host administration (its apiFeatures lack \"host-admin\"). Update it on the host; no update can be driven from here.",
+      "mode": "old-service",
+      "retryable": false
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-remote",
+      "health": {},
+      "host": "host.example",
+      "whoami": {
+        "enabled": false
+      }
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": false,
+        "media": false,
+        "network": false,
+        "updates": false
+      },
+      "identity": null,
+      "maintenance": null,
+      "message": "This host's service answers, but does not offer host administration (its apiFeatures lack \"host-admin\"). Update it on the host; no update can be driven from here.",
+      "mode": "old-service",
+      "retryable": false
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-remote",
+      "health": {
+        "apiFeatures": [
+          "host-admin"
+        ]
+      },
+      "host": "host.example",
+      "whoami": {
+        "name": "alice",
+        "role": "admin"
+      }
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": true,
+        "media": false,
+        "network": false,
+        "updates": false
+      },
+      "identity": {
+        "effective": null,
+        "enabled": true,
+        "known": true,
+        "maxVms": null,
+        "name": "alice",
+        "role": "admin"
+      },
+      "maintenance": null,
+      "message": "",
+      "mode": "admin",
+      "retryable": false
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-remote",
+      "health": {
+        "apiFeatures": [
+          "host-admin"
+        ]
+      },
+      "host": "host.example",
+      "whoami": {
+        "name": "bob",
+        "role": "user"
+      }
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": true,
+        "media": false,
+        "network": false,
+        "updates": false
+      },
+      "identity": {
+        "effective": null,
+        "enabled": true,
+        "known": true,
+        "maxVms": null,
+        "name": "bob",
+        "role": "user"
+      },
+      "maintenance": null,
+      "message": "bob is not an administrator of host.example.",
+      "mode": "user",
+      "retryable": false
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-remote",
+      "health": {
+        "apiFeatures": [
+          "host-admin"
+        ]
+      },
+      "host": "host.example",
+      "whoami": {
+        "known": false
+      }
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": true,
+        "media": false,
+        "network": false,
+        "updates": false
+      },
+      "identity": {
+        "effective": null,
+        "enabled": true,
+        "known": false,
+        "maxVms": null,
+        "name": "",
+        "role": ""
+      },
+      "maintenance": null,
+      "message": "This identity is not enrolled (or is disabled) on host.example; ask its administrator.",
+      "mode": "denied",
+      "retryable": false
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-remote",
+      "health": {
+        "apiFeatures": [
+          "host-admin"
+        ]
+      },
+      "host": "host.example",
+      "whoami": {
+        "enabled": false
+      }
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": true,
+        "media": false,
+        "network": false,
+        "updates": false
+      },
+      "identity": {
+        "effective": null,
+        "enabled": false,
+        "known": true,
+        "maxVms": null,
+        "name": "",
+        "role": ""
+      },
+      "maintenance": null,
+      "message": "This identity is not enrolled (or is disabled) on host.example; ask its administrator.",
+      "mode": "denied",
+      "retryable": false
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-remote",
+      "health": {
+        "apiFeatures": [
+          "host-admin",
+          "updates"
+        ],
+        "maintenance": {
+          "phase": "draining",
+          "retryAfterSeconds": 5
+        },
+        "status": "maintenance"
+      },
+      "host": "host.example",
+      "whoami": {
+        "name": "alice",
+        "role": "admin"
+      }
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": true,
+        "media": false,
+        "network": false,
+        "updates": true
+      },
+      "identity": {
+        "effective": null,
+        "enabled": true,
+        "known": true,
+        "maxVms": null,
+        "name": "alice",
+        "role": "admin"
+      },
+      "maintenance": {
+        "phase": "draining",
+        "retryAfterSeconds": 5,
+        "updateId": null
+      },
+      "message": "",
+      "mode": "admin",
+      "retryable": false
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-remote",
+      "health": {
+        "apiFeatures": [
+          "host-admin",
+          "updates"
+        ],
+        "maintenance": {
+          "phase": "draining",
+          "retryAfterSeconds": 5
+        },
+        "status": "maintenance"
+      },
+      "host": "host.example",
+      "whoami": {
+        "name": "bob",
+        "role": "user"
+      }
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": true,
+        "media": false,
+        "network": false,
+        "updates": true
+      },
+      "identity": {
+        "effective": null,
+        "enabled": true,
+        "known": true,
+        "maxVms": null,
+        "name": "bob",
+        "role": "user"
+      },
+      "maintenance": {
+        "phase": "draining",
+        "retryAfterSeconds": 5,
+        "updateId": null
+      },
+      "message": "bob is not an administrator of host.example.",
+      "mode": "user",
+      "retryable": false
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-remote",
+      "health": {
+        "apiFeatures": [
+          "host-admin",
+          "updates"
+        ],
+        "maintenance": {
+          "phase": "draining",
+          "retryAfterSeconds": 5
+        },
+        "status": "maintenance"
+      },
+      "host": "host.example",
+      "whoami": {
+        "known": false
+      }
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": true,
+        "media": false,
+        "network": false,
+        "updates": true
+      },
+      "identity": {
+        "effective": null,
+        "enabled": true,
+        "known": false,
+        "maxVms": null,
+        "name": "",
+        "role": ""
+      },
+      "maintenance": {
+        "phase": "draining",
+        "retryAfterSeconds": 5,
+        "updateId": null
+      },
+      "message": "This identity is not enrolled (or is disabled) on host.example; ask its administrator.",
+      "mode": "denied",
+      "retryable": false
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-remote",
+      "health": {
+        "apiFeatures": [
+          "host-admin",
+          "updates"
+        ],
+        "maintenance": {
+          "phase": "draining",
+          "retryAfterSeconds": 5
+        },
+        "status": "maintenance"
+      },
+      "host": "host.example",
+      "whoami": {
+        "enabled": false
+      }
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": true,
+        "media": false,
+        "network": false,
+        "updates": true
+      },
+      "identity": {
+        "effective": null,
+        "enabled": false,
+        "known": true,
+        "maxVms": null,
+        "name": "",
+        "role": ""
+      },
+      "maintenance": {
+        "phase": "draining",
+        "retryAfterSeconds": 5,
+        "updateId": null
+      },
+      "message": "This identity is not enrolled (or is disabled) on host.example; ask its administrator.",
+      "mode": "denied",
+      "retryable": false
+    }
+  },
+  {
+    "input": {
+      "health": {
+        "apiFeatures": [
+          "host-admin"
+        ]
+      },
+      "healthError": {
+        "code": "",
+        "message": "Host request failed.",
+        "status": 0
+      },
+      "host": "host.example"
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": false,
+        "media": false,
+        "network": false,
+        "updates": false
+      },
+      "identity": null,
+      "maintenance": null,
+      "message": "Cannot reach host.example: Host request failed.",
+      "mode": "unavailable",
+      "retryable": true
+    }
+  },
+  {
+    "input": {
+      "health": {
+        "apiFeatures": [
+          "host-admin"
+        ]
+      },
+      "host": "host.example",
+      "whoamiError": {
+        "code": "",
+        "message": "Host request failed.",
+        "status": 0
+      }
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": true,
+        "media": false,
+        "network": false,
+        "updates": false
+      },
+      "identity": null,
+      "maintenance": null,
+      "message": "Cannot reach host.example: Host request failed.",
+      "mode": "unavailable",
+      "retryable": true
+    }
+  },
+  {
+    "input": {
+      "health": {
+        "apiFeatures": [
+          "host-admin"
+        ]
+      },
+      "healthError": {
+        "code": "",
+        "message": "Host request failed.",
+        "status": 401
+      },
+      "host": "host.example"
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": false,
+        "media": false,
+        "network": false,
+        "updates": false
+      },
+      "identity": null,
+      "maintenance": null,
+      "message": "Cannot reach host.example: Host request failed.",
+      "mode": "unavailable",
+      "retryable": true
+    }
+  },
+  {
+    "input": {
+      "health": {
+        "apiFeatures": [
+          "host-admin"
+        ]
+      },
+      "host": "host.example",
+      "whoamiError": {
+        "code": "",
+        "message": "Host request failed.",
+        "status": 401
+      }
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": true,
+        "media": false,
+        "network": false,
+        "updates": false
+      },
+      "identity": null,
+      "maintenance": null,
+      "message": "host.example rejected the stored credential. Sign in again with \"The Construct: Add Remote Host\".",
+      "mode": "sign-in",
+      "retryable": false
+    }
+  },
+  {
+    "input": {
+      "health": {
+        "apiFeatures": [
+          "host-admin"
+        ]
+      },
+      "healthError": {
+        "code": "",
+        "message": "Host request failed.",
+        "status": 403
+      },
+      "host": "host.example"
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": false,
+        "media": false,
+        "network": false,
+        "updates": false
+      },
+      "identity": null,
+      "maintenance": null,
+      "message": "Cannot reach host.example: Host request failed.",
+      "mode": "unavailable",
+      "retryable": true
+    }
+  },
+  {
+    "input": {
+      "health": {
+        "apiFeatures": [
+          "host-admin"
+        ]
+      },
+      "host": "host.example",
+      "whoamiError": {
+        "code": "",
+        "message": "Host request failed.",
+        "status": 403
+      }
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": true,
+        "media": false,
+        "network": false,
+        "updates": false
+      },
+      "identity": null,
+      "maintenance": null,
+      "message": "You are not enrolled on host.example; ask its administrator.",
+      "mode": "denied",
+      "retryable": false
+    }
+  },
+  {
+    "input": {
+      "health": {
+        "apiFeatures": [
+          "host-admin"
+        ]
+      },
+      "healthError": {
+        "code": "",
+        "message": "Host request failed.",
+        "status": 404
+      },
+      "host": "host.example"
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": false,
+        "media": false,
+        "network": false,
+        "updates": false
+      },
+      "identity": null,
+      "maintenance": null,
+      "message": "This host's service predates host administration. Update it on the host (service/host/Install-ConstructHost.ps1); no update can be driven from here.",
+      "mode": "old-service",
+      "retryable": false
+    }
+  },
+  {
+    "input": {
+      "health": {
+        "apiFeatures": [
+          "host-admin"
+        ]
+      },
+      "host": "host.example",
+      "whoamiError": {
+        "code": "",
+        "message": "Host request failed.",
+        "status": 404
+      }
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": true,
+        "media": false,
+        "network": false,
+        "updates": false
+      },
+      "identity": null,
+      "maintenance": null,
+      "message": "Cannot reach host.example: Host request failed.",
+      "mode": "unavailable",
+      "retryable": true
+    }
+  },
+  {
+    "input": {
+      "health": {
+        "apiFeatures": [
+          "host-admin"
+        ]
+      },
+      "healthError": {
+        "code": "maintenance",
+        "message": "Host request failed.",
+        "status": 503
+      },
+      "host": "host.example"
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": false,
+        "media": false,
+        "network": false,
+        "updates": false
+      },
+      "identity": {
+        "effective": null,
+        "enabled": true,
+        "known": true,
+        "maxVms": null,
+        "name": "",
+        "role": ""
+      },
+      "maintenance": {
+        "phase": "maintenance",
+        "retryAfterSeconds": null,
+        "updateId": null
+      },
+      "message": "This identity is not an administrator of host.example.",
+      "mode": "user",
+      "retryable": false
+    }
+  },
+  {
+    "input": {
+      "health": {
+        "apiFeatures": [
+          "host-admin"
+        ]
+      },
+      "host": "host.example",
+      "whoamiError": {
+        "code": "maintenance",
+        "message": "Host request failed.",
+        "status": 503
+      }
+    },
+    "kind": "classify",
+    "now": 1789128000000,
+    "output": {
+      "features": {
+        "children": false,
+        "console": false,
+        "hostAdmin": true,
+        "media": false,
+        "network": false,
+        "updates": false
+      },
+      "identity": {
+        "effective": null,
+        "enabled": true,
+        "known": true,
+        "maxVms": null,
+        "name": "",
+        "role": ""
+      },
+      "maintenance": {
+        "phase": "maintenance",
+        "retryAfterSeconds": null,
+        "updateId": null
+      },
+      "message": "host.example is updating (maintenance); reconnecting…",
+      "mode": "unavailable",
+      "retryable": true
+    }
+  },
+  {
+    "input": {},
+    "kind": "poll",
+    "now": 1789128000000,
+    "output": null
+  },
+  {
+    "input": {
+      "activeTab": "vms",
+      "mode": "admin"
+    },
+    "kind": "poll",
+    "now": 1789128000000,
+    "output": 10000
+  },
+  {
+    "input": {
+      "features": {
+        "updates": true
+      },
+      "mode": "admin"
+    },
+    "kind": "poll",
+    "now": 1789128000000,
+    "output": 60000
+  },
+  {
+    "input": {
+      "mode": "user"
+    },
+    "kind": "poll",
+    "now": 1789128000000,
+    "output": null
+  },
+  {
+    "input": {
+      "maintenance": {
+        "phase": "draining"
+      }
+    },
+    "kind": "poll",
+    "now": 1789128000000,
+    "output": 5000
+  },
+  {
+    "input": {
+      "updatePending": {
+        "id": "one"
+      }
+    },
+    "kind": "poll",
+    "now": 1789128000000,
+    "output": 5000
+  },
+  {
+    "input": null,
+    "kind": "lifetime",
+    "now": 1789128000000,
+    "output": {
+      "ok": false,
+      "reason": "a lifetime is required (e.g. 12h, 3d, or never)"
+    }
+  },
+  {
+    "input": "",
+    "kind": "lifetime",
+    "now": 1789128000000,
+    "output": {
+      "ok": false,
+      "reason": "a lifetime is required (e.g. 12h, 3d, or never)"
+    }
+  },
+  {
+    "input": "5m",
+    "kind": "lifetime",
+    "now": 1789128000000,
+    "output": {
+      "ok": true,
+      "seconds": 300,
+      "text": "5m"
+    }
+  },
+  {
+    "input": "4m",
+    "kind": "lifetime",
+    "now": 1789128000000,
+    "output": {
+      "ok": false,
+      "reason": "the minimum lifetime is 5m"
+    }
+  },
+  {
+    "input": "24h",
+    "kind": "lifetime",
+    "now": 1789128000000,
+    "output": {
+      "ok": true,
+      "seconds": 86400,
+      "text": "24h"
+    }
+  },
+  {
+    "input": "2d",
+    "kind": "lifetime",
+    "now": 1789128000000,
+    "output": {
+      "ok": true,
+      "seconds": 172800,
+      "text": "2d"
+    }
+  },
+  {
+    "input": "never",
+    "kind": "lifetime",
+    "now": 1789128000000,
+    "output": {
+      "ok": true,
+      "seconds": null,
+      "text": "never"
+    }
+  },
+  {
+    "input": "NEVER",
+    "kind": "lifetime",
+    "now": 1789128000000,
+    "output": {
+      "ok": true,
+      "seconds": null,
+      "text": "never"
+    }
+  },
+  {
+    "input": " 12h ",
+    "kind": "lifetime",
+    "now": 1789128000000,
+    "output": {
+      "ok": true,
+      "seconds": 43200,
+      "text": "12h"
+    }
+  },
+  {
+    "input": "0m",
+    "kind": "lifetime",
+    "now": 1789128000000,
+    "output": {
+      "ok": false,
+      "reason": "\"0m\" is not a lifetime: use <n>m, <n>h, <n>d or never"
+    }
+  },
+  {
+    "input": "-5h",
+    "kind": "lifetime",
+    "now": 1789128000000,
+    "output": {
+      "ok": false,
+      "reason": "\"-5h\" is not a lifetime: use <n>m, <n>h, <n>d or never"
+    }
+  },
+  {
+    "input": "99999999999999999999d",
+    "kind": "lifetime",
+    "now": 1789128000000,
+    "output": {
+      "ok": false,
+      "reason": "the lifetime is too large"
+    }
+  },
+  {
+    "input": "five",
+    "kind": "lifetime",
+    "now": 1789128000000,
+    "output": {
+      "ok": false,
+      "reason": "\"five\" is not a lifetime: use <n>m, <n>h, <n>d or never"
+    }
+  },
+  {
+    "input": {
+      "apiFeatures": []
+    },
+    "kind": "features",
+    "now": 1789128000000,
+    "output": {
+      "children": false,
+      "console": false,
+      "hostAdmin": false,
+      "media": false,
+      "network": false,
+      "updates": false
+    }
+  },
+  {
+    "input": {
+      "apiFeatures": []
+    },
+    "kind": "tabs",
+    "now": 1789128000000,
+    "output": [
+      {
+        "available": false,
+        "id": "overview",
+        "label": "Overview",
+        "reason": "not available on this host version"
+      },
+      {
+        "available": false,
+        "id": "vms",
+        "label": "VMs",
+        "reason": "not available on this host version"
+      },
+      {
+        "available": false,
+        "id": "users",
+        "label": "Users",
+        "reason": "not available on this host version"
+      },
+      {
+        "available": false,
+        "id": "media",
+        "label": "Media",
+        "reason": "not available on this host version"
+      },
+      {
+        "available": false,
+        "id": "operations",
+        "label": "Operations",
+        "reason": "not available on this host version"
+      },
+      {
+        "available": false,
+        "id": "config",
+        "label": "Configuration",
+        "reason": "not available on this host version"
+      },
+      {
+        "available": false,
+        "id": "maintenance",
+        "label": "Maintenance",
+        "reason": "not available on this host version"
+      }
+    ]
+  },
+  {
+    "input": {
+      "apiFeatures": [
+        "host-admin"
+      ]
+    },
+    "kind": "features",
+    "now": 1789128000000,
+    "output": {
+      "children": false,
+      "console": false,
+      "hostAdmin": true,
+      "media": false,
+      "network": false,
+      "updates": false
+    }
+  },
+  {
+    "input": {
+      "apiFeatures": [
+        "host-admin"
+      ]
+    },
+    "kind": "tabs",
+    "now": 1789128000000,
+    "output": [
+      {
+        "available": true,
+        "id": "overview",
+        "label": "Overview",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "vms",
+        "label": "VMs",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "users",
+        "label": "Users",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "media",
+        "label": "Media",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "operations",
+        "label": "Operations",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "config",
+        "label": "Configuration",
+        "reason": ""
+      },
+      {
+        "available": false,
+        "id": "maintenance",
+        "label": "Maintenance",
+        "reason": "not available on this host version"
+      }
+    ]
+  },
+  {
+    "input": {
+      "apiFeatures": [
+        "host-admin",
+        "children",
+        "updates"
+      ]
+    },
+    "kind": "features",
+    "now": 1789128000000,
+    "output": {
+      "children": true,
+      "console": false,
+      "hostAdmin": true,
+      "media": false,
+      "network": false,
+      "updates": true
+    }
+  },
+  {
+    "input": {
+      "apiFeatures": [
+        "host-admin",
+        "children",
+        "updates"
+      ]
+    },
+    "kind": "tabs",
+    "now": 1789128000000,
+    "output": [
+      {
+        "available": true,
+        "id": "overview",
+        "label": "Overview",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "vms",
+        "label": "VMs",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "users",
+        "label": "Users",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "media",
+        "label": "Media",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "operations",
+        "label": "Operations",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "config",
+        "label": "Configuration",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "maintenance",
+        "label": "Maintenance",
+        "reason": ""
+      }
+    ]
+  },
+  {
+    "input": {
+      "apiFeatures": [
+        "host-admin",
+        "children",
+        "media",
+        "updates",
+        "network",
+        "console"
+      ]
+    },
+    "kind": "features",
+    "now": 1789128000000,
+    "output": {
+      "children": true,
+      "console": true,
+      "hostAdmin": true,
+      "media": true,
+      "network": true,
+      "updates": true
+    }
+  },
+  {
+    "input": {
+      "apiFeatures": [
+        "host-admin",
+        "children",
+        "media",
+        "updates",
+        "network",
+        "console"
+      ]
+    },
+    "kind": "tabs",
+    "now": 1789128000000,
+    "output": [
+      {
+        "available": true,
+        "id": "overview",
+        "label": "Overview",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "vms",
+        "label": "VMs",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "users",
+        "label": "Users",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "media",
+        "label": "Media",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "operations",
+        "label": "Operations",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "config",
+        "label": "Configuration",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "maintenance",
+        "label": "Maintenance",
+        "reason": ""
+      }
+    ]
+  },
+  {
+    "input": {},
+    "kind": "allowance",
+    "now": 1789128000000,
+    "output": {
+      "body": {
+        "allowChildCreation": null,
+        "allowNeverLifetime": null,
+        "allowSharing": null,
+        "cpuBudget": null,
+        "maxChildLifetimeSeconds": null,
+        "maxRetainedChildren": null,
+        "ramBudgetBytes": null,
+        "storageBudgetBytes": null
+      },
+      "ok": true,
+      "problems": []
+    }
+  },
+  {
+    "input": {},
+    "kind": "overrides",
+    "now": 1789128000000,
+    "output": {
+      "body": {
+        "allowChildCreation": null,
+        "allowNeverLifetime": null,
+        "allowSharing": null,
+        "maxChildLifetimeSeconds": null,
+        "maxRetainedChildren": null
+      },
+      "ok": true,
+      "problems": []
+    }
+  },
+  {
+    "input": {},
+    "kind": "userForm",
+    "now": 1789128000000,
+    "output": {
+      "body": {},
+      "ok": false,
+      "problems": [
+        {
+          "field": "",
+          "reason": "nothing to change"
+        }
+      ]
+    }
+  },
+  {
+    "input": {},
+    "kind": "newUser",
+    "now": 1789128000000,
+    "output": {
+      "body": {
+        "name": "",
+        "role": "user"
+      },
+      "ok": false,
+      "problems": [
+        {
+          "field": "name",
+          "reason": "a user name is required (DOMAIN\\user or a plain name)"
+        }
+      ]
+    }
+  },
+  {
+    "input": {
+      "allowHostForwards": "true",
+      "enabled": "false",
+      "maxVms": "3",
+      "name": "alice",
+      "role": "admin"
+    },
+    "kind": "allowance",
+    "now": 1789128000000,
+    "output": {
+      "body": {
+        "allowChildCreation": null,
+        "allowNeverLifetime": null,
+        "allowSharing": null,
+        "cpuBudget": null,
+        "maxChildLifetimeSeconds": null,
+        "maxRetainedChildren": null,
+        "ramBudgetBytes": null,
+        "storageBudgetBytes": null
+      },
+      "ok": true,
+      "problems": []
+    }
+  },
+  {
+    "input": {
+      "allowHostForwards": "true",
+      "enabled": "false",
+      "maxVms": "3",
+      "name": "alice",
+      "role": "admin"
+    },
+    "kind": "overrides",
+    "now": 1789128000000,
+    "output": {
+      "body": {
+        "allowChildCreation": null,
+        "allowNeverLifetime": null,
+        "allowSharing": null,
+        "maxChildLifetimeSeconds": null,
+        "maxRetainedChildren": null
+      },
+      "ok": true,
+      "problems": []
+    }
+  },
+  {
+    "input": {
+      "allowHostForwards": "true",
+      "enabled": "false",
+      "maxVms": "3",
+      "name": "alice",
+      "role": "admin"
+    },
+    "kind": "userForm",
+    "now": 1789128000000,
+    "output": {
+      "body": {
+        "allowHostForwards": true,
+        "enabled": false,
+        "maxVms": 3,
+        "role": "admin"
+      },
+      "ok": true,
+      "problems": []
+    }
+  },
+  {
+    "input": {
+      "allowHostForwards": "true",
+      "enabled": "false",
+      "maxVms": "3",
+      "name": "alice",
+      "role": "admin"
+    },
+    "kind": "newUser",
+    "now": 1789128000000,
+    "output": {
+      "body": {
+        "allowHostForwards": true,
+        "maxVms": 3,
+        "name": "alice",
+        "role": "admin"
+      },
+      "ok": true,
+      "problems": []
+    }
+  },
+  {
+    "input": {
+      "enabled": "invalid",
+      "maxVms": "-1",
+      "name": "",
+      "role": "root"
+    },
+    "kind": "allowance",
+    "now": 1789128000000,
+    "output": {
+      "body": {
+        "allowChildCreation": null,
+        "allowNeverLifetime": null,
+        "allowSharing": null,
+        "cpuBudget": null,
+        "maxChildLifetimeSeconds": null,
+        "maxRetainedChildren": null,
+        "ramBudgetBytes": null,
+        "storageBudgetBytes": null
+      },
+      "ok": true,
+      "problems": []
+    }
+  },
+  {
+    "input": {
+      "enabled": "invalid",
+      "maxVms": "-1",
+      "name": "",
+      "role": "root"
+    },
+    "kind": "overrides",
+    "now": 1789128000000,
+    "output": {
+      "body": {
+        "allowChildCreation": null,
+        "allowNeverLifetime": null,
+        "allowSharing": null,
+        "maxChildLifetimeSeconds": null,
+        "maxRetainedChildren": null
+      },
+      "ok": true,
+      "problems": []
+    }
+  },
+  {
+    "input": {
+      "enabled": "invalid",
+      "maxVms": "-1",
+      "name": "",
+      "role": "root"
+    },
+    "kind": "userForm",
+    "now": 1789128000000,
+    "output": {
+      "body": {},
+      "ok": false,
+      "problems": [
+        {
+          "field": "role",
+          "reason": "must be admin or user"
+        },
+        {
+          "field": "enabled",
+          "reason": "must be true, false or empty (inherit)"
+        },
+        {
+          "field": "maxVms",
+          "reason": "must be a whole number ≥ 0, or empty (inherit)"
+        }
+      ]
+    }
+  },
+  {
+    "input": {
+      "enabled": "invalid",
+      "maxVms": "-1",
+      "name": "",
+      "role": "root"
+    },
+    "kind": "newUser",
+    "now": 1789128000000,
+    "output": {
+      "body": {
+        "name": "",
+        "role": "root"
+      },
+      "ok": false,
+      "problems": [
+        {
+          "field": "name",
+          "reason": "a user name is required (DOMAIN\\user or a plain name)"
+        },
+        {
+          "field": "role",
+          "reason": "must be admin or user"
+        },
+        {
+          "field": "maxVms",
+          "reason": "must be a whole number ≥ 0, or empty (inherit)"
+        }
+      ]
+    }
+  },
+  {
+    "input": {
+      "allowChildCreation": "true",
+      "allowNeverLifetime": "false",
+      "allowSharing": "inherit",
+      "cpuBudget": "8",
+      "maxChildLifetime": "24h",
+      "maxRetainedChildren": "4",
+      "ramBudgetGiB": "1.5",
+      "storageBudgetGiB": "100"
+    },
+    "kind": "allowance",
+    "now": 1789128000000,
+    "output": {
+      "body": {
+        "allowChildCreation": true,
+        "allowNeverLifetime": false,
+        "allowSharing": null,
+        "cpuBudget": 8,
+        "maxChildLifetimeSeconds": 86400,
+        "maxRetainedChildren": 4,
+        "ramBudgetBytes": 1610612736,
+        "storageBudgetBytes": 107374182400
+      },
+      "ok": true,
+      "problems": []
+    }
+  },
+  {
+    "input": {
+      "allowChildCreation": "true",
+      "allowNeverLifetime": "false",
+      "allowSharing": "inherit",
+      "cpuBudget": "8",
+      "maxChildLifetime": "24h",
+      "maxRetainedChildren": "4",
+      "ramBudgetGiB": "1.5",
+      "storageBudgetGiB": "100"
+    },
+    "kind": "overrides",
+    "now": 1789128000000,
+    "output": {
+      "body": {
+        "allowChildCreation": true,
+        "allowNeverLifetime": false,
+        "allowSharing": null,
+        "maxChildLifetimeSeconds": 86400,
+        "maxRetainedChildren": 4
+      },
+      "ok": true,
+      "problems": []
+    }
+  },
+  {
+    "input": {
+      "allowChildCreation": "true",
+      "allowNeverLifetime": "false",
+      "allowSharing": "inherit",
+      "cpuBudget": "8",
+      "maxChildLifetime": "24h",
+      "maxRetainedChildren": "4",
+      "ramBudgetGiB": "1.5",
+      "storageBudgetGiB": "100"
+    },
+    "kind": "userForm",
+    "now": 1789128000000,
+    "output": {
+      "body": {},
+      "ok": false,
+      "problems": [
+        {
+          "field": "",
+          "reason": "nothing to change"
+        }
+      ]
+    }
+  },
+  {
+    "input": {
+      "allowChildCreation": "true",
+      "allowNeverLifetime": "false",
+      "allowSharing": "inherit",
+      "cpuBudget": "8",
+      "maxChildLifetime": "24h",
+      "maxRetainedChildren": "4",
+      "ramBudgetGiB": "1.5",
+      "storageBudgetGiB": "100"
+    },
+    "kind": "newUser",
+    "now": 1789128000000,
+    "output": {
+      "body": {
+        "name": "",
+        "role": "user"
+      },
+      "ok": false,
+      "problems": [
+        {
+          "field": "name",
+          "reason": "a user name is required (DOMAIN\\user or a plain name)"
+        }
+      ]
+    }
+  },
+  {
+    "input": {
+      "maxChildLifetime": "never",
+      "maxRetainedChildren": "1.5",
+      "ramBudgetGiB": "bad"
+    },
+    "kind": "allowance",
+    "now": 1789128000000,
+    "output": {
+      "body": {
+        "allowChildCreation": null,
+        "allowNeverLifetime": null,
+        "allowSharing": null,
+        "cpuBudget": null,
+        "maxChildLifetimeSeconds": null,
+        "maxRetainedChildren": null,
+        "ramBudgetBytes": null,
+        "storageBudgetBytes": null
+      },
+      "ok": false,
+      "problems": [
+        {
+          "field": "maxRetainedChildren",
+          "reason": "must be a whole number ≥ 0, or empty (inherit)"
+        },
+        {
+          "field": "ramBudgetGiB",
+          "reason": "must be a number of GiB ≥ 0, or empty (inherit)"
+        },
+        {
+          "field": "maxChildLifetime",
+          "reason": "a maximum cannot be 'never'; leave it empty for no maximum"
+        }
+      ]
+    }
+  },
+  {
+    "input": {
+      "maxChildLifetime": "never",
+      "maxRetainedChildren": "1.5",
+      "ramBudgetGiB": "bad"
+    },
+    "kind": "overrides",
+    "now": 1789128000000,
+    "output": {
+      "body": {
+        "allowChildCreation": null,
+        "allowNeverLifetime": null,
+        "allowSharing": null,
+        "maxChildLifetimeSeconds": null,
+        "maxRetainedChildren": null
+      },
+      "ok": false,
+      "problems": [
+        {
+          "field": "maxRetainedChildren",
+          "reason": "must be a whole number ≥ 0, or empty (inherit)"
+        },
+        {
+          "field": "maxChildLifetime",
+          "reason": "a maximum cannot be 'never'; leave it empty for no maximum"
+        }
+      ]
+    }
+  },
+  {
+    "input": {
+      "maxChildLifetime": "never",
+      "maxRetainedChildren": "1.5",
+      "ramBudgetGiB": "bad"
+    },
+    "kind": "userForm",
+    "now": 1789128000000,
+    "output": {
+      "body": {},
+      "ok": false,
+      "problems": [
+        {
+          "field": "",
+          "reason": "nothing to change"
+        }
+      ]
+    }
+  },
+  {
+    "input": {
+      "maxChildLifetime": "never",
+      "maxRetainedChildren": "1.5",
+      "ramBudgetGiB": "bad"
+    },
+    "kind": "newUser",
+    "now": 1789128000000,
+    "output": {
+      "body": {
+        "name": "",
+        "role": "user"
+      },
+      "ok": false,
+      "problems": [
+        {
+          "field": "name",
+          "reason": "a user name is required (DOMAIN\\user or a plain name)"
+        }
+      ]
+    }
+  },
+  {
+    "input": {
+      "max": 30,
+      "policy": {
+        "action": "shutdown",
+        "timeoutMinutes": 0
+      }
+    },
+    "kind": "idleClamp",
+    "now": 1789128000000,
+    "output": {
+      "action": "shutdown",
+      "clamped": false,
+      "timeoutMinutes": 0
+    }
+  },
+  {
+    "input": {
+      "action": "shutdown",
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 0
+    },
+    "kind": "idle",
+    "now": 1789128000000,
+    "output": {
+      "action": "shutdown",
+      "clamped": false,
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 0
+    }
+  },
+  {
+    "input": {
+      "max": 30,
+      "policy": {
+        "action": "save",
+        "timeoutMinutes": 0
+      }
+    },
+    "kind": "idleClamp",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "timeoutMinutes": 0
+    }
+  },
+  {
+    "input": {
+      "action": "save",
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 0
+    },
+    "kind": "idle",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 0
+    }
+  },
+  {
+    "input": {
+      "max": 30,
+      "policy": {
+        "action": "SAVE",
+        "timeoutMinutes": 0
+      }
+    },
+    "kind": "idleClamp",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "timeoutMinutes": 0
+    }
+  },
+  {
+    "input": {
+      "action": "SAVE",
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 0
+    },
+    "kind": "idle",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 0
+    }
+  },
+  {
+    "input": {
+      "max": 30,
+      "policy": {
+        "action": "unknown",
+        "timeoutMinutes": 0
+      }
+    },
+    "kind": "idleClamp",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "timeoutMinutes": 0
+    }
+  },
+  {
+    "input": {
+      "action": "unknown",
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 0
+    },
+    "kind": "idle",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 0
+    }
+  },
+  {
+    "input": {
+      "max": 30,
+      "policy": {
+        "action": "shutdown",
+        "timeoutMinutes": 1
+      }
+    },
+    "kind": "idleClamp",
+    "now": 1789128000000,
+    "output": {
+      "action": "shutdown",
+      "clamped": false,
+      "timeoutMinutes": 1
+    }
+  },
+  {
+    "input": {
+      "action": "shutdown",
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 1
+    },
+    "kind": "idle",
+    "now": 1789128000000,
+    "output": {
+      "action": "shutdown",
+      "clamped": false,
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 1
+    }
+  },
+  {
+    "input": {
+      "max": 30,
+      "policy": {
+        "action": "save",
+        "timeoutMinutes": 1
+      }
+    },
+    "kind": "idleClamp",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "timeoutMinutes": 1
+    }
+  },
+  {
+    "input": {
+      "action": "save",
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 1
+    },
+    "kind": "idle",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 1
+    }
+  },
+  {
+    "input": {
+      "max": 30,
+      "policy": {
+        "action": "SAVE",
+        "timeoutMinutes": 1
+      }
+    },
+    "kind": "idleClamp",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "timeoutMinutes": 1
+    }
+  },
+  {
+    "input": {
+      "action": "SAVE",
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 1
+    },
+    "kind": "idle",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 1
+    }
+  },
+  {
+    "input": {
+      "max": 30,
+      "policy": {
+        "action": "unknown",
+        "timeoutMinutes": 1
+      }
+    },
+    "kind": "idleClamp",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "timeoutMinutes": 1
+    }
+  },
+  {
+    "input": {
+      "action": "unknown",
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 1
+    },
+    "kind": "idle",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 1
+    }
+  },
+  {
+    "input": {
+      "max": 30,
+      "policy": {
+        "action": "shutdown",
+        "timeoutMinutes": 5.8
+      }
+    },
+    "kind": "idleClamp",
+    "now": 1789128000000,
+    "output": {
+      "action": "shutdown",
+      "clamped": false,
+      "timeoutMinutes": 5
+    }
+  },
+  {
+    "input": {
+      "action": "shutdown",
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 5.8
+    },
+    "kind": "idle",
+    "now": 1789128000000,
+    "output": {
+      "action": "shutdown",
+      "clamped": false,
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 5
+    }
+  },
+  {
+    "input": {
+      "max": 30,
+      "policy": {
+        "action": "save",
+        "timeoutMinutes": 5.8
+      }
+    },
+    "kind": "idleClamp",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "timeoutMinutes": 5
+    }
+  },
+  {
+    "input": {
+      "action": "save",
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 5.8
+    },
+    "kind": "idle",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 5
+    }
+  },
+  {
+    "input": {
+      "max": 30,
+      "policy": {
+        "action": "SAVE",
+        "timeoutMinutes": 5.8
+      }
+    },
+    "kind": "idleClamp",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "timeoutMinutes": 5
+    }
+  },
+  {
+    "input": {
+      "action": "SAVE",
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 5.8
+    },
+    "kind": "idle",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 5
+    }
+  },
+  {
+    "input": {
+      "max": 30,
+      "policy": {
+        "action": "unknown",
+        "timeoutMinutes": 5.8
+      }
+    },
+    "kind": "idleClamp",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "timeoutMinutes": 5
+    }
+  },
+  {
+    "input": {
+      "action": "unknown",
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 5.8
+    },
+    "kind": "idle",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 5
+    }
+  },
+  {
+    "input": {
+      "max": 30,
+      "policy": {
+        "action": "shutdown",
+        "timeoutMinutes": 99
+      }
+    },
+    "kind": "idleClamp",
+    "now": 1789128000000,
+    "output": {
+      "action": "shutdown",
+      "clamped": true,
+      "timeoutMinutes": 30
+    }
+  },
+  {
+    "input": {
+      "action": "shutdown",
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 99
+    },
+    "kind": "idle",
+    "now": 1789128000000,
+    "output": {
+      "action": "shutdown",
+      "clamped": false,
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 99
+    }
+  },
+  {
+    "input": {
+      "max": 30,
+      "policy": {
+        "action": "save",
+        "timeoutMinutes": 99
+      }
+    },
+    "kind": "idleClamp",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": true,
+      "timeoutMinutes": 30
+    }
+  },
+  {
+    "input": {
+      "action": "save",
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 99
+    },
+    "kind": "idle",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 99
+    }
+  },
+  {
+    "input": {
+      "max": 30,
+      "policy": {
+        "action": "SAVE",
+        "timeoutMinutes": 99
+      }
+    },
+    "kind": "idleClamp",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": true,
+      "timeoutMinutes": 30
+    }
+  },
+  {
+    "input": {
+      "action": "SAVE",
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 99
+    },
+    "kind": "idle",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 99
+    }
+  },
+  {
+    "input": {
+      "max": 30,
+      "policy": {
+        "action": "unknown",
+        "timeoutMinutes": 99
+      }
+    },
+    "kind": "idleClamp",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": true,
+      "timeoutMinutes": 30
+    }
+  },
+  {
+    "input": {
+      "action": "unknown",
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 99
+    },
+    "kind": "idle",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 99
+    }
+  },
+  {
+    "input": {
+      "max": 30,
+      "policy": {
+        "action": "shutdown",
+        "timeoutMinutes": -5
+      }
+    },
+    "kind": "idleClamp",
+    "now": 1789128000000,
+    "output": {
+      "action": "shutdown",
+      "clamped": false,
+      "timeoutMinutes": 0
+    }
+  },
+  {
+    "input": {
+      "action": "shutdown",
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": -5
+    },
+    "kind": "idle",
+    "now": 1789128000000,
+    "output": {
+      "action": "shutdown",
+      "clamped": false,
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 0
+    }
+  },
+  {
+    "input": {
+      "max": 30,
+      "policy": {
+        "action": "save",
+        "timeoutMinutes": -5
+      }
+    },
+    "kind": "idleClamp",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "timeoutMinutes": 0
+    }
+  },
+  {
+    "input": {
+      "action": "save",
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": -5
+    },
+    "kind": "idle",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 0
+    }
+  },
+  {
+    "input": {
+      "max": 30,
+      "policy": {
+        "action": "SAVE",
+        "timeoutMinutes": -5
+      }
+    },
+    "kind": "idleClamp",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "timeoutMinutes": 0
+    }
+  },
+  {
+    "input": {
+      "action": "SAVE",
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": -5
+    },
+    "kind": "idle",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 0
+    }
+  },
+  {
+    "input": {
+      "max": 30,
+      "policy": {
+        "action": "unknown",
+        "timeoutMinutes": -5
+      }
+    },
+    "kind": "idleClamp",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "timeoutMinutes": 0
+    }
+  },
+  {
+    "input": {
+      "action": "unknown",
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": -5
+    },
+    "kind": "idle",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 0
+    }
+  },
+  {
+    "input": {
+      "max": 30,
+      "policy": {
+        "action": "shutdown",
+        "timeoutMinutes": "bad"
+      }
+    },
+    "kind": "idleClamp",
+    "now": 1789128000000,
+    "output": {
+      "action": "shutdown",
+      "clamped": false,
+      "timeoutMinutes": 0
+    }
+  },
+  {
+    "input": {
+      "action": "shutdown",
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": "bad"
+    },
+    "kind": "idle",
+    "now": 1789128000000,
+    "output": null
+  },
+  {
+    "input": {
+      "max": 30,
+      "policy": {
+        "action": "save",
+        "timeoutMinutes": "bad"
+      }
+    },
+    "kind": "idleClamp",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "timeoutMinutes": 0
+    }
+  },
+  {
+    "input": {
+      "action": "save",
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": "bad"
+    },
+    "kind": "idle",
+    "now": 1789128000000,
+    "output": null
+  },
+  {
+    "input": {
+      "max": 30,
+      "policy": {
+        "action": "SAVE",
+        "timeoutMinutes": "bad"
+      }
+    },
+    "kind": "idleClamp",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "timeoutMinutes": 0
+    }
+  },
+  {
+    "input": {
+      "action": "SAVE",
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": "bad"
+    },
+    "kind": "idle",
+    "now": 1789128000000,
+    "output": null
+  },
+  {
+    "input": {
+      "max": 30,
+      "policy": {
+        "action": "unknown",
+        "timeoutMinutes": "bad"
+      }
+    },
+    "kind": "idleClamp",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "timeoutMinutes": 0
+    }
+  },
+  {
+    "input": {
+      "action": "unknown",
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": "bad"
+    },
+    "kind": "idle",
+    "now": 1789128000000,
+    "output": null
+  },
+  {
+    "input": {
+      "max": 30,
+      "policy": {
+        "action": "shutdown",
+        "timeoutMinutes": "45"
+      }
+    },
+    "kind": "idleClamp",
+    "now": 1789128000000,
+    "output": {
+      "action": "shutdown",
+      "clamped": true,
+      "timeoutMinutes": 30
+    }
+  },
+  {
+    "input": {
+      "action": "shutdown",
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": "45"
+    },
+    "kind": "idle",
+    "now": 1789128000000,
+    "output": {
+      "action": "shutdown",
+      "clamped": false,
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 45
+    }
+  },
+  {
+    "input": {
+      "max": 30,
+      "policy": {
+        "action": "save",
+        "timeoutMinutes": "45"
+      }
+    },
+    "kind": "idleClamp",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": true,
+      "timeoutMinutes": 30
+    }
+  },
+  {
+    "input": {
+      "action": "save",
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": "45"
+    },
+    "kind": "idle",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 45
+    }
+  },
+  {
+    "input": {
+      "max": 30,
+      "policy": {
+        "action": "SAVE",
+        "timeoutMinutes": "45"
+      }
+    },
+    "kind": "idleClamp",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": true,
+      "timeoutMinutes": 30
+    }
+  },
+  {
+    "input": {
+      "action": "SAVE",
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": "45"
+    },
+    "kind": "idle",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 45
+    }
+  },
+  {
+    "input": {
+      "max": 30,
+      "policy": {
+        "action": "unknown",
+        "timeoutMinutes": "45"
+      }
+    },
+    "kind": "idleClamp",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": true,
+      "timeoutMinutes": 30
+    }
+  },
+  {
+    "input": {
+      "action": "unknown",
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": "45"
+    },
+    "kind": "idle",
+    "now": 1789128000000,
+    "output": {
+      "action": "save",
+      "clamped": false,
+      "maxTimeoutMinutes": 30,
+      "timeoutMinutes": 45
+    }
+  },
+  {
+    "input": {},
+    "kind": "vm",
+    "now": 1789128000000,
+    "output": {
+      "allowedActions": [],
+      "childCreationClosed": false,
+      "children": [],
+      "deleting": false,
+      "guest": "Construct unknown · provisioned unknown · reinstalled unknown",
+      "kind": "primary",
+      "lease": "",
+      "lifetime": "",
+      "media": 0,
+      "name": "",
+      "operation": "",
+      "operationJobId": "",
+      "overdue": false,
+      "owner": "",
+      "parent": "",
+      "reservations": "—",
+      "resources": "—",
+      "shared": false,
+      "sharing": "private",
+      "state": "unknown",
+      "tokenKind": null,
+      "usage": {
+        "cpu": "CPU usage unavailable",
+        "cpuPercent": null,
+        "disk": "Disk usage unavailable",
+        "ram": "RAM usage unavailable",
+        "ramPercent": null,
+        "sample": "Usage unavailable on this host",
+        "stale": false
+      }
+    }
+  },
+  {
+    "input": {},
+    "kind": "childDelete",
+    "now": 1789128000000,
+    "output": {
+      "confirmLabel": "Delete this child VM",
+      "detail": "this child VM is of unknown sharing scope — other users may be using it.\n\nIts disk, saved state and dedicated media are removed permanently. A running VM is powered off for deletion.",
+      "shared": false,
+      "title": "Delete the child VM \"this child VM\"?"
+    }
+  },
+  {
+    "input": [
+      {}
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": []
+  },
+  {
+    "input": {
+      "allowedActions": [
+        "shutdown",
+        "delete",
+        "invented"
+      ],
+      "hardware": {
+        "cpus": 4,
+        "diskGb": 80,
+        "ramMb": 2048
+      },
+      "kind": "child",
+      "lease": {
+        "expiresAt": "2026-09-11T13:00:00Z",
+        "requested": "12h",
+        "state": "active"
+      },
+      "name": "build",
+      "owner": "alice",
+      "parent": "agent-vm",
+      "resourceUsage": {
+        "cpuUsagePercent": 25.5,
+        "diskFileBytes": 123456789,
+        "memoryAssignedBytes": 2147483648,
+        "memoryDemandBytes": 1073741824,
+        "observedAt": "2026-09-11T11:59:55Z"
+      },
+      "sharing": "host",
+      "state": "running"
+    },
+    "kind": "vm",
+    "now": 1789128000000,
+    "output": {
+      "allowedActions": [
+        "shutdown",
+        "delete"
+      ],
+      "childCreationClosed": false,
+      "children": [],
+      "deleting": false,
+      "guest": "Construct unknown · provisioned unknown · reinstalled unknown",
+      "kind": "child",
+      "lease": "expires in 1h 0m (2026-09-11 13:00 UTC)",
+      "lifetime": "12h",
+      "media": 0,
+      "name": "build",
+      "operation": "",
+      "operationJobId": "",
+      "overdue": false,
+      "owner": "alice",
+      "parent": "agent-vm",
+      "reservations": "—",
+      "resources": "4 vCPU · 2.0 GiB · 80 GB disk",
+      "shared": false,
+      "sharing": "host",
+      "state": "running",
+      "tokenKind": null,
+      "usage": {
+        "cpu": "25.5% CPU",
+        "cpuPercent": 25.5,
+        "disk": "118 MiB disk on host",
+        "ram": "1.0 GiB RAM demand / 2.0 GiB assigned",
+        "ramPercent": 50,
+        "sample": "Sampled 11:59:55 UTC",
+        "stale": false
+      }
+    }
+  },
+  {
+    "input": {
+      "allowedActions": [
+        "shutdown",
+        "delete",
+        "invented"
+      ],
+      "hardware": {
+        "cpus": 4,
+        "diskGb": 80,
+        "ramMb": 2048
+      },
+      "kind": "child",
+      "lease": {
+        "expiresAt": "2026-09-11T13:00:00Z",
+        "requested": "12h",
+        "state": "active"
+      },
+      "name": "build",
+      "owner": "alice",
+      "parent": "agent-vm",
+      "resourceUsage": {
+        "cpuUsagePercent": 25.5,
+        "diskFileBytes": 123456789,
+        "memoryAssignedBytes": 2147483648,
+        "memoryDemandBytes": 1073741824,
+        "observedAt": "2026-09-11T11:59:55Z"
+      },
+      "sharing": "host",
+      "state": "running"
+    },
+    "kind": "childDelete",
+    "now": 1789128000000,
+    "output": {
+      "confirmLabel": "Delete build",
+      "detail": "build is SHARED HOST-WIDE — other users may be using it and currently running.\n\nIts disk, saved state and dedicated media are removed permanently. A running VM is powered off for deletion.",
+      "shared": true,
+      "title": "Delete the child VM \"build\"?"
+    }
+  },
+  {
+    "input": [
+      {
+        "allowedActions": [
+          "shutdown",
+          "delete",
+          "invented"
+        ],
+        "hardware": {
+          "cpus": 4,
+          "diskGb": 80,
+          "ramMb": 2048
+        },
+        "kind": "child",
+        "lease": {
+          "expiresAt": "2026-09-11T13:00:00Z",
+          "requested": "12h",
+          "state": "active"
+        },
+        "name": "build",
+        "owner": "alice",
+        "parent": "agent-vm",
+        "resourceUsage": {
+          "cpuUsagePercent": 25.5,
+          "diskFileBytes": 123456789,
+          "memoryAssignedBytes": 2147483648,
+          "memoryDemandBytes": 1073741824,
+          "observedAt": "2026-09-11T11:59:55Z"
+        },
+        "sharing": "host",
+        "state": "running"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": false,
+        "canDelete": true,
+        "canShutdown": true,
+        "lease": "expires in 1h 0m (2026-09-11 13:00 UTC)",
+        "name": "build",
+        "operation": "",
+        "overdue": false,
+        "shared": true,
+        "sharing": "host",
+        "state": "running"
+      }
+    ]
+  },
+  {
+    "input": {
+      "allowedActions": [
+        "shutdown",
+        "delete",
+        "invented"
+      ],
+      "deleting": true,
+      "hardware": {
+        "cpus": 4,
+        "diskGb": 80,
+        "ramMb": 2048
+      },
+      "kind": "child",
+      "lease": {
+        "lastOutcome": "no integration",
+        "state": "overdue"
+      },
+      "name": "build",
+      "owner": "alice",
+      "parent": "agent-vm",
+      "resourceUsage": {
+        "cpuUsagePercent": 25.5,
+        "diskFileBytes": 123456789,
+        "memoryAssignedBytes": 2147483648,
+        "memoryDemandBytes": 1073741824,
+        "observedAt": "2026-09-11T11:59:55Z"
+      },
+      "sharing": "host",
+      "state": "paused"
+    },
+    "kind": "vm",
+    "now": 1789128000000,
+    "output": {
+      "allowedActions": [
+        "shutdown",
+        "delete"
+      ],
+      "childCreationClosed": false,
+      "children": [],
+      "deleting": true,
+      "guest": "Construct unknown · provisioned unknown · reinstalled unknown",
+      "kind": "child",
+      "lease": "OVERDUE — no integration (shutdown due; retried)",
+      "lifetime": "",
+      "media": 0,
+      "name": "build",
+      "operation": "",
+      "operationJobId": "",
+      "overdue": true,
+      "owner": "alice",
+      "parent": "agent-vm",
+      "reservations": "—",
+      "resources": "4 vCPU · 2.0 GiB · 80 GB disk",
+      "shared": false,
+      "sharing": "host",
+      "state": "paused",
+      "tokenKind": null,
+      "usage": {
+        "cpu": "25.5% CPU",
+        "cpuPercent": 25.5,
+        "disk": "118 MiB disk on host",
+        "ram": "1.0 GiB RAM demand / 2.0 GiB assigned",
+        "ramPercent": 50,
+        "sample": "Sampled 11:59:55 UTC",
+        "stale": false
+      }
+    }
+  },
+  {
+    "input": {
+      "allowedActions": [
+        "shutdown",
+        "delete",
+        "invented"
+      ],
+      "deleting": true,
+      "hardware": {
+        "cpus": 4,
+        "diskGb": 80,
+        "ramMb": 2048
+      },
+      "kind": "child",
+      "lease": {
+        "lastOutcome": "no integration",
+        "state": "overdue"
+      },
+      "name": "build",
+      "owner": "alice",
+      "parent": "agent-vm",
+      "resourceUsage": {
+        "cpuUsagePercent": 25.5,
+        "diskFileBytes": 123456789,
+        "memoryAssignedBytes": 2147483648,
+        "memoryDemandBytes": 1073741824,
+        "observedAt": "2026-09-11T11:59:55Z"
+      },
+      "sharing": "host",
+      "state": "paused"
+    },
+    "kind": "childDelete",
+    "now": 1789128000000,
+    "output": {
+      "confirmLabel": "Delete build",
+      "detail": "build is SHARED HOST-WIDE — other users may be using it and currently paused.\n\nIts disk, saved state and dedicated media are removed permanently. A running VM is powered off for deletion.",
+      "shared": true,
+      "title": "Delete the child VM \"build\"?"
+    }
+  },
+  {
+    "input": [
+      {
+        "allowedActions": [
+          "shutdown",
+          "delete",
+          "invented"
+        ],
+        "deleting": true,
+        "hardware": {
+          "cpus": 4,
+          "diskGb": 80,
+          "ramMb": 2048
+        },
+        "kind": "child",
+        "lease": {
+          "lastOutcome": "no integration",
+          "state": "overdue"
+        },
+        "name": "build",
+        "owner": "alice",
+        "parent": "agent-vm",
+        "resourceUsage": {
+          "cpuUsagePercent": 25.5,
+          "diskFileBytes": 123456789,
+          "memoryAssignedBytes": 2147483648,
+          "memoryDemandBytes": 1073741824,
+          "observedAt": "2026-09-11T11:59:55Z"
+        },
+        "sharing": "host",
+        "state": "paused"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": true,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "OVERDUE — no integration (shutdown due; retried)",
+        "name": "build",
+        "operation": "deleting",
+        "overdue": true,
+        "shared": true,
+        "sharing": "host",
+        "state": "paused"
+      }
+    ]
+  },
+  {
+    "input": {
+      "children": [
+        "build"
+      ],
+      "guest": {
+        "constructCommit": "abcdef0123456789",
+        "provisionedAt": "2026-09-11T11:30:00Z"
+      },
+      "kind": "primary",
+      "name": "agent-vm"
+    },
+    "kind": "vm",
+    "now": 1789128000000,
+    "output": {
+      "allowedActions": [],
+      "childCreationClosed": false,
+      "children": [
+        "build"
+      ],
+      "deleting": false,
+      "guest": "Construct abcdef012345 · provisioned 2026-09-11 11:30 UTC · reinstalled unknown",
+      "kind": "primary",
+      "lease": "",
+      "lifetime": "",
+      "media": 0,
+      "name": "agent-vm",
+      "operation": "",
+      "operationJobId": "",
+      "overdue": false,
+      "owner": "",
+      "parent": "",
+      "reservations": "—",
+      "resources": "—",
+      "shared": false,
+      "sharing": "private",
+      "state": "unknown",
+      "tokenKind": null,
+      "usage": {
+        "cpu": "CPU usage unavailable",
+        "cpuPercent": null,
+        "disk": "Disk usage unavailable",
+        "ram": "RAM usage unavailable",
+        "ramPercent": null,
+        "sample": "Usage unavailable on this host",
+        "stale": false
+      }
+    }
+  },
+  {
+    "input": {
+      "children": [
+        "build"
+      ],
+      "guest": {
+        "constructCommit": "abcdef0123456789",
+        "provisionedAt": "2026-09-11T11:30:00Z"
+      },
+      "kind": "primary",
+      "name": "agent-vm"
+    },
+    "kind": "childDelete",
+    "now": 1789128000000,
+    "output": {
+      "confirmLabel": "Delete agent-vm",
+      "detail": "agent-vm is of unknown sharing scope — other users may be using it.\n\nIts disk, saved state and dedicated media are removed permanently. A running VM is powered off for deletion.",
+      "shared": false,
+      "title": "Delete the child VM \"agent-vm\"?"
+    }
+  },
+  {
+    "input": [
+      {
+        "children": [
+          "build"
+        ],
+        "guest": {
+          "constructCommit": "abcdef0123456789",
+          "provisionedAt": "2026-09-11T11:30:00Z"
+        },
+        "kind": "primary",
+        "name": "agent-vm"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": false,
+        "canDelete": true,
+        "canShutdown": false,
+        "lease": "",
+        "name": "agent-vm",
+        "operation": "",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "unknown"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "allowedActions": [
+          "shutdown",
+          "delete",
+          "invented"
+        ],
+        "hardware": {
+          "cpus": 4,
+          "diskGb": 80,
+          "ramMb": 2048
+        },
+        "kind": "child",
+        "lease": {
+          "expiresAt": "2026-09-11T13:00:00Z",
+          "requested": "12h",
+          "state": "active"
+        },
+        "name": "build",
+        "owner": "alice",
+        "parent": "agent-vm",
+        "resourceUsage": {
+          "cpuUsagePercent": 25.5,
+          "diskFileBytes": 123456789,
+          "memoryAssignedBytes": 2147483648,
+          "memoryDemandBytes": 1073741824,
+          "observedAt": "2026-09-11T11:59:55Z"
+        },
+        "sharing": "host",
+        "state": "running"
+      },
+      {
+        "name": "agent-vm"
+      },
+      {
+        "kind": "child",
+        "name": "orphan",
+        "parent": "gone"
+      }
+    ],
+    "kind": "vms",
+    "now": 1789128000000,
+    "output": [
+      {
+        "allowedActions": [],
+        "childCreationClosed": false,
+        "children": [],
+        "deleting": false,
+        "guest": "Construct unknown · provisioned unknown · reinstalled unknown",
+        "kind": "primary",
+        "lease": "",
+        "lifetime": "",
+        "media": 0,
+        "name": "agent-vm",
+        "operation": "",
+        "operationJobId": "",
+        "overdue": false,
+        "owner": "",
+        "parent": "",
+        "reservations": "—",
+        "resources": "—",
+        "shared": false,
+        "sharing": "private",
+        "state": "unknown",
+        "tokenKind": null,
+        "usage": {
+          "cpu": "CPU usage unavailable",
+          "cpuPercent": null,
+          "disk": "Disk usage unavailable",
+          "ram": "RAM usage unavailable",
+          "ramPercent": null,
+          "sample": "Usage unavailable on this host",
+          "stale": false
+        }
+      },
+      {
+        "allowedActions": [
+          "shutdown",
+          "delete"
+        ],
+        "childCreationClosed": false,
+        "children": [],
+        "deleting": false,
+        "guest": "Construct unknown · provisioned unknown · reinstalled unknown",
+        "kind": "child",
+        "lease": "expires in 1h 0m (2026-09-11 13:00 UTC)",
+        "lifetime": "12h",
+        "media": 0,
+        "name": "build",
+        "operation": "",
+        "operationJobId": "",
+        "overdue": false,
+        "owner": "alice",
+        "parent": "agent-vm",
+        "reservations": "—",
+        "resources": "4 vCPU · 2.0 GiB · 80 GB disk",
+        "shared": false,
+        "sharing": "host",
+        "state": "running",
+        "tokenKind": null,
+        "usage": {
+          "cpu": "25.5% CPU",
+          "cpuPercent": 25.5,
+          "disk": "118 MiB disk on host",
+          "ram": "1.0 GiB RAM demand / 2.0 GiB assigned",
+          "ramPercent": 50,
+          "sample": "Sampled 11:59:55 UTC",
+          "stale": false
+        }
+      },
+      {
+        "allowedActions": [],
+        "childCreationClosed": false,
+        "children": [],
+        "deleting": false,
+        "guest": "Construct unknown · provisioned unknown · reinstalled unknown",
+        "kind": "child",
+        "lease": "",
+        "lifetime": "",
+        "media": 0,
+        "name": "orphan",
+        "operation": "",
+        "operationJobId": "",
+        "overdue": false,
+        "owner": "",
+        "parent": "gone",
+        "reservations": "—",
+        "resources": "—",
+        "shared": false,
+        "sharing": "private",
+        "state": "unknown",
+        "tokenKind": null,
+        "usage": {
+          "cpu": "CPU usage unavailable",
+          "cpuPercent": null,
+          "disk": "Disk usage unavailable",
+          "ram": "RAM usage unavailable",
+          "ramPercent": null,
+          "sample": "Usage unavailable on this host",
+          "stale": false
+        }
+      }
+    ]
+  },
+  {
+    "input": {},
+    "kind": "overview",
+    "now": 1789128000000,
+    "output": {
+      "activeJobs": [],
+      "capacity": [
+        {
+          "id": "ram",
+          "label": "RAM",
+          "pct": 0,
+          "text": "— available of — (reserved —, unmanaged —, headroom —)"
+        },
+        {
+          "id": "cpu",
+          "label": "CPU allocation",
+          "pct": null,
+          "text": "— allocated vCPU on — logical CPUs (no budget)"
+        }
+      ],
+      "capacityEpoch": {
+        "complete": true,
+        "epoch": "",
+        "observedAt": "—"
+      },
+      "capacityMode": "observe",
+      "health": {
+        "database": "unknown",
+        "hypervisor": "unknown",
+        "inventory": "unknown",
+        "media": "unknown"
+      },
+      "leaseOverdueCount": 0,
+      "maintenance": null,
+      "problems": [],
+      "unmanagedVmCount": 0,
+      "version": {
+        "commit": "unknown",
+        "installedAt": "—",
+        "packageVersion": "unknown",
+        "source": "unknown"
+      }
+    }
+  },
+  {
+    "input": {},
+    "kind": "capacity",
+    "now": 1789128000000,
+    "output": [
+      {
+        "id": "ram",
+        "label": "RAM",
+        "pct": 0,
+        "text": "— available of — (reserved —, unmanaged —, headroom —)"
+      },
+      {
+        "id": "cpu",
+        "label": "CPU allocation",
+        "pct": null,
+        "text": "— allocated vCPU on — logical CPUs (no budget)"
+      }
+    ]
+  },
+  {
+    "input": {},
+    "kind": "media",
+    "now": 1789128000000,
+    "output": {
+      "created": "—",
+      "dedicatedTo": "",
+      "deletable": true,
+      "error": "",
+      "id": "",
+      "jobId": "",
+      "name": "",
+      "owner": "",
+      "readyAt": "—",
+      "references": 0,
+      "reserved": "—",
+      "role": "",
+      "size": "—",
+      "source": "",
+      "sourceUrl": "",
+      "state": "unknown"
+    }
+  },
+  {
+    "input": {},
+    "kind": "iso",
+    "now": 1789128000000,
+    "output": {
+      "current": null,
+      "entries": [],
+      "lastBuild": null,
+      "mode": "unknown",
+      "source": {
+        "path": "",
+        "present": false,
+        "sha256Configured": false,
+        "size": "—",
+        "url": ""
+      }
+    }
+  },
+  {
+    "input": {},
+    "kind": "job",
+    "now": 1789128000000,
+    "output": {
+      "cancellable": true,
+      "completed": "—",
+      "created": "—",
+      "error": "",
+      "id": "",
+      "initiator": "",
+      "kind": "",
+      "owner": "",
+      "phase": "",
+      "retry": null,
+      "state": "unknown",
+      "terminal": false,
+      "vmName": ""
+    }
+  },
+  {
+    "input": {},
+    "kind": "audit",
+    "now": 1789128000000,
+    "output": {
+      "action": "",
+      "actor": "",
+      "at": "—",
+      "detail": "",
+      "target": ""
+    }
+  },
+  {
+    "input": {},
+    "kind": "config",
+    "now": 1789128000000,
+    "output": [
+      {
+        "expectedUpdatedAt": null,
+        "key": "capacity",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "key": "userDefaults",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "key": "userCaps",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "key": "lifecycle",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "key": "media",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "key": "network",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "key": "updates",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      }
+    ]
+  },
+  {
+    "input": {},
+    "kind": "capabilities",
+    "now": 1789128000000,
+    "output": {
+      "backend": "",
+      "notes": [],
+      "rows": []
+    }
+  },
+  {
+    "input": {},
+    "kind": "updates",
+    "now": 1789128000000,
+    "output": {
+      "actions": {
+        "apply": false,
+        "cancel": false,
+        "check": true,
+        "resolve": false,
+        "resume": false,
+        "stage": true
+      },
+      "current": null,
+      "history": [],
+      "installed": {
+        "commit": "unknown",
+        "installedAt": "—",
+        "packageVersion": "unknown",
+        "previousCommit": "",
+        "source": "unknown"
+      },
+      "latestKnown": null,
+      "recoveryRecord": "",
+      "supportsAutoApply": false,
+      "updateAvailable": false
+    }
+  },
+  {
+    "input": {},
+    "kind": "updateActions",
+    "now": 1789128000000,
+    "output": {
+      "apply": false,
+      "cancel": false,
+      "check": true,
+      "resolve": false,
+      "resume": false,
+      "stage": true
+    }
+  },
+  {
+    "input": {},
+    "kind": "user",
+    "now": 1789128000000,
+    "output": {
+      "allowHostForwards": true,
+      "allowance": {
+        "allowChildCreation": "",
+        "allowNeverLifetime": "",
+        "allowSharing": "",
+        "cpuBudget": "",
+        "maxChildLifetime": "",
+        "maxRetainedChildren": "",
+        "ramBudgetGiB": "",
+        "storageBudgetGiB": ""
+      },
+      "children": 0,
+      "created": "—",
+      "effective": "—",
+      "enabled": true,
+      "maxVms": null,
+      "name": "",
+      "primaries": 0,
+      "role": "user",
+      "tokens": 0
+    }
+  },
+  {
+    "input": {},
+    "kind": "allowanceForm",
+    "now": 1789128000000,
+    "output": {
+      "allowChildCreation": "",
+      "allowNeverLifetime": "",
+      "allowSharing": "",
+      "cpuBudget": "",
+      "maxChildLifetime": "",
+      "maxRetainedChildren": "",
+      "ramBudgetGiB": "",
+      "storageBudgetGiB": ""
+    }
+  },
+  {
+    "input": {},
+    "kind": "allowanceText",
+    "now": 1789128000000,
+    "output": "— primaries · — children · CPU no budget · RAM no budget · storage no budget · lifetime ≤ unlimited · sharing · host forwards"
+  },
+  {
+    "input": {
+      "current": {
+        "id": "u1",
+        "state": "checking"
+      },
+      "installed": {
+        "commit": "1234567"
+      },
+      "latestKnown": {
+        "commit": "abcdef0",
+        "compatible": true,
+        "reasons": []
+      }
+    },
+    "kind": "updates",
+    "now": 1789128000000,
+    "output": {
+      "actions": {
+        "apply": false,
+        "cancel": true,
+        "check": true,
+        "resolve": false,
+        "resume": false,
+        "stage": false
+      },
+      "current": {
+        "actor": "",
+        "blockingJobs": [],
+        "commit": "",
+        "error": "",
+        "finished": "—",
+        "packageVersion": "",
+        "phase": "",
+        "phases": [],
+        "started": "—",
+        "state": "checking",
+        "updateId": "u1"
+      },
+      "history": [],
+      "installed": {
+        "commit": "1234567",
+        "installedAt": "—",
+        "packageVersion": "unknown",
+        "previousCommit": "",
+        "source": "unknown"
+      },
+      "latestKnown": {
+        "checkedAt": "—",
+        "commit": "abcdef0",
+        "compatible": true,
+        "packageVersion": "",
+        "publishedAt": "—",
+        "reasons": []
+      },
+      "recoveryRecord": "",
+      "supportsAutoApply": false,
+      "updateAvailable": true
+    }
+  },
+  {
+    "input": {
+      "current": {
+        "id": "u1",
+        "state": "checking"
+      },
+      "installed": {
+        "commit": "1234567"
+      },
+      "latestKnown": {
+        "commit": "abcdef0",
+        "compatible": true,
+        "reasons": []
+      }
+    },
+    "kind": "updateActions",
+    "now": 1789128000000,
+    "output": {
+      "apply": false,
+      "cancel": true,
+      "check": true,
+      "resolve": false,
+      "resume": false,
+      "stage": false
+    }
+  },
+  {
+    "input": {
+      "id": "j1",
+      "kind": "child-delete",
+      "state": "checking",
+      "vmName": "build"
+    },
+    "kind": "job",
+    "now": 1789128000000,
+    "output": {
+      "cancellable": true,
+      "completed": "—",
+      "created": "—",
+      "error": "",
+      "id": "j1",
+      "initiator": "",
+      "kind": "child-delete",
+      "owner": "",
+      "phase": "",
+      "retry": null,
+      "state": "checking",
+      "terminal": false,
+      "vmName": "build"
+    }
+  },
+  {
+    "input": {
+      "current": {
+        "id": "u1",
+        "state": "staged"
+      },
+      "installed": {
+        "commit": "1234567"
+      },
+      "latestKnown": {
+        "commit": "abcdef0",
+        "compatible": true,
+        "reasons": []
+      }
+    },
+    "kind": "updates",
+    "now": 1789128000000,
+    "output": {
+      "actions": {
+        "apply": true,
+        "cancel": true,
+        "check": true,
+        "resolve": false,
+        "resume": false,
+        "stage": false
+      },
+      "current": {
+        "actor": "",
+        "blockingJobs": [],
+        "commit": "",
+        "error": "",
+        "finished": "—",
+        "packageVersion": "",
+        "phase": "",
+        "phases": [],
+        "started": "—",
+        "state": "staged",
+        "updateId": "u1"
+      },
+      "history": [],
+      "installed": {
+        "commit": "1234567",
+        "installedAt": "—",
+        "packageVersion": "unknown",
+        "previousCommit": "",
+        "source": "unknown"
+      },
+      "latestKnown": {
+        "checkedAt": "—",
+        "commit": "abcdef0",
+        "compatible": true,
+        "packageVersion": "",
+        "publishedAt": "—",
+        "reasons": []
+      },
+      "recoveryRecord": "",
+      "supportsAutoApply": false,
+      "updateAvailable": true
+    }
+  },
+  {
+    "input": {
+      "current": {
+        "id": "u1",
+        "state": "staged"
+      },
+      "installed": {
+        "commit": "1234567"
+      },
+      "latestKnown": {
+        "commit": "abcdef0",
+        "compatible": true,
+        "reasons": []
+      }
+    },
+    "kind": "updateActions",
+    "now": 1789128000000,
+    "output": {
+      "apply": true,
+      "cancel": true,
+      "check": true,
+      "resolve": false,
+      "resume": false,
+      "stage": false
+    }
+  },
+  {
+    "input": {
+      "id": "j1",
+      "kind": "child-delete",
+      "state": "staged",
+      "vmName": "build"
+    },
+    "kind": "job",
+    "now": 1789128000000,
+    "output": {
+      "cancellable": true,
+      "completed": "—",
+      "created": "—",
+      "error": "",
+      "id": "j1",
+      "initiator": "",
+      "kind": "child-delete",
+      "owner": "",
+      "phase": "",
+      "retry": null,
+      "state": "staged",
+      "terminal": false,
+      "vmName": "build"
+    }
+  },
+  {
+    "input": {
+      "current": {
+        "id": "u1",
+        "state": "draining"
+      },
+      "installed": {
+        "commit": "1234567"
+      },
+      "latestKnown": {
+        "commit": "abcdef0",
+        "compatible": true,
+        "reasons": []
+      }
+    },
+    "kind": "updates",
+    "now": 1789128000000,
+    "output": {
+      "actions": {
+        "apply": false,
+        "cancel": true,
+        "check": true,
+        "resolve": false,
+        "resume": false,
+        "stage": false
+      },
+      "current": {
+        "actor": "",
+        "blockingJobs": [],
+        "commit": "",
+        "error": "",
+        "finished": "—",
+        "packageVersion": "",
+        "phase": "",
+        "phases": [],
+        "started": "—",
+        "state": "draining",
+        "updateId": "u1"
+      },
+      "history": [],
+      "installed": {
+        "commit": "1234567",
+        "installedAt": "—",
+        "packageVersion": "unknown",
+        "previousCommit": "",
+        "source": "unknown"
+      },
+      "latestKnown": {
+        "checkedAt": "—",
+        "commit": "abcdef0",
+        "compatible": true,
+        "packageVersion": "",
+        "publishedAt": "—",
+        "reasons": []
+      },
+      "recoveryRecord": "",
+      "supportsAutoApply": false,
+      "updateAvailable": true
+    }
+  },
+  {
+    "input": {
+      "current": {
+        "id": "u1",
+        "state": "draining"
+      },
+      "installed": {
+        "commit": "1234567"
+      },
+      "latestKnown": {
+        "commit": "abcdef0",
+        "compatible": true,
+        "reasons": []
+      }
+    },
+    "kind": "updateActions",
+    "now": 1789128000000,
+    "output": {
+      "apply": false,
+      "cancel": true,
+      "check": true,
+      "resolve": false,
+      "resume": false,
+      "stage": false
+    }
+  },
+  {
+    "input": {
+      "id": "j1",
+      "kind": "child-delete",
+      "state": "draining",
+      "vmName": "build"
+    },
+    "kind": "job",
+    "now": 1789128000000,
+    "output": {
+      "cancellable": true,
+      "completed": "—",
+      "created": "—",
+      "error": "",
+      "id": "j1",
+      "initiator": "",
+      "kind": "child-delete",
+      "owner": "",
+      "phase": "",
+      "retry": null,
+      "state": "draining",
+      "terminal": false,
+      "vmName": "build"
+    }
+  },
+  {
+    "input": {
+      "current": {
+        "id": "u1",
+        "state": "handedOff"
+      },
+      "installed": {
+        "commit": "1234567"
+      },
+      "latestKnown": {
+        "commit": "abcdef0",
+        "compatible": true,
+        "reasons": []
+      }
+    },
+    "kind": "updates",
+    "now": 1789128000000,
+    "output": {
+      "actions": {
+        "apply": false,
+        "cancel": false,
+        "check": true,
+        "resolve": false,
+        "resume": false,
+        "stage": false
+      },
+      "current": {
+        "actor": "",
+        "blockingJobs": [],
+        "commit": "",
+        "error": "",
+        "finished": "—",
+        "packageVersion": "",
+        "phase": "",
+        "phases": [],
+        "started": "—",
+        "state": "handedOff",
+        "updateId": "u1"
+      },
+      "history": [],
+      "installed": {
+        "commit": "1234567",
+        "installedAt": "—",
+        "packageVersion": "unknown",
+        "previousCommit": "",
+        "source": "unknown"
+      },
+      "latestKnown": {
+        "checkedAt": "—",
+        "commit": "abcdef0",
+        "compatible": true,
+        "packageVersion": "",
+        "publishedAt": "—",
+        "reasons": []
+      },
+      "recoveryRecord": "",
+      "supportsAutoApply": false,
+      "updateAvailable": true
+    }
+  },
+  {
+    "input": {
+      "current": {
+        "id": "u1",
+        "state": "handedOff"
+      },
+      "installed": {
+        "commit": "1234567"
+      },
+      "latestKnown": {
+        "commit": "abcdef0",
+        "compatible": true,
+        "reasons": []
+      }
+    },
+    "kind": "updateActions",
+    "now": 1789128000000,
+    "output": {
+      "apply": false,
+      "cancel": false,
+      "check": true,
+      "resolve": false,
+      "resume": false,
+      "stage": false
+    }
+  },
+  {
+    "input": {
+      "id": "j1",
+      "kind": "child-delete",
+      "state": "handedOff",
+      "vmName": "build"
+    },
+    "kind": "job",
+    "now": 1789128000000,
+    "output": {
+      "cancellable": true,
+      "completed": "—",
+      "created": "—",
+      "error": "",
+      "id": "j1",
+      "initiator": "",
+      "kind": "child-delete",
+      "owner": "",
+      "phase": "",
+      "retry": null,
+      "state": "handedoff",
+      "terminal": false,
+      "vmName": "build"
+    }
+  },
+  {
+    "input": {
+      "current": {
+        "id": "u1",
+        "state": "applying"
+      },
+      "installed": {
+        "commit": "1234567"
+      },
+      "latestKnown": {
+        "commit": "abcdef0",
+        "compatible": true,
+        "reasons": []
+      }
+    },
+    "kind": "updates",
+    "now": 1789128000000,
+    "output": {
+      "actions": {
+        "apply": false,
+        "cancel": false,
+        "check": true,
+        "resolve": false,
+        "resume": false,
+        "stage": false
+      },
+      "current": {
+        "actor": "",
+        "blockingJobs": [],
+        "commit": "",
+        "error": "",
+        "finished": "—",
+        "packageVersion": "",
+        "phase": "",
+        "phases": [],
+        "started": "—",
+        "state": "applying",
+        "updateId": "u1"
+      },
+      "history": [],
+      "installed": {
+        "commit": "1234567",
+        "installedAt": "—",
+        "packageVersion": "unknown",
+        "previousCommit": "",
+        "source": "unknown"
+      },
+      "latestKnown": {
+        "checkedAt": "—",
+        "commit": "abcdef0",
+        "compatible": true,
+        "packageVersion": "",
+        "publishedAt": "—",
+        "reasons": []
+      },
+      "recoveryRecord": "",
+      "supportsAutoApply": false,
+      "updateAvailable": true
+    }
+  },
+  {
+    "input": {
+      "current": {
+        "id": "u1",
+        "state": "applying"
+      },
+      "installed": {
+        "commit": "1234567"
+      },
+      "latestKnown": {
+        "commit": "abcdef0",
+        "compatible": true,
+        "reasons": []
+      }
+    },
+    "kind": "updateActions",
+    "now": 1789128000000,
+    "output": {
+      "apply": false,
+      "cancel": false,
+      "check": true,
+      "resolve": false,
+      "resume": false,
+      "stage": false
+    }
+  },
+  {
+    "input": {
+      "id": "j1",
+      "kind": "child-delete",
+      "state": "applying",
+      "vmName": "build"
+    },
+    "kind": "job",
+    "now": 1789128000000,
+    "output": {
+      "cancellable": true,
+      "completed": "—",
+      "created": "—",
+      "error": "",
+      "id": "j1",
+      "initiator": "",
+      "kind": "child-delete",
+      "owner": "",
+      "phase": "",
+      "retry": null,
+      "state": "applying",
+      "terminal": false,
+      "vmName": "build"
+    }
+  },
+  {
+    "input": {
+      "current": {
+        "id": "u1",
+        "state": "interrupted"
+      },
+      "installed": {
+        "commit": "1234567"
+      },
+      "latestKnown": {
+        "commit": "abcdef0",
+        "compatible": true,
+        "reasons": []
+      }
+    },
+    "kind": "updates",
+    "now": 1789128000000,
+    "output": {
+      "actions": {
+        "apply": false,
+        "cancel": false,
+        "check": true,
+        "resolve": true,
+        "resume": true,
+        "stage": false
+      },
+      "current": {
+        "actor": "",
+        "blockingJobs": [],
+        "commit": "",
+        "error": "",
+        "finished": "—",
+        "packageVersion": "",
+        "phase": "",
+        "phases": [],
+        "started": "—",
+        "state": "interrupted",
+        "updateId": "u1"
+      },
+      "history": [],
+      "installed": {
+        "commit": "1234567",
+        "installedAt": "—",
+        "packageVersion": "unknown",
+        "previousCommit": "",
+        "source": "unknown"
+      },
+      "latestKnown": {
+        "checkedAt": "—",
+        "commit": "abcdef0",
+        "compatible": true,
+        "packageVersion": "",
+        "publishedAt": "—",
+        "reasons": []
+      },
+      "recoveryRecord": "",
+      "supportsAutoApply": false,
+      "updateAvailable": true
+    }
+  },
+  {
+    "input": {
+      "current": {
+        "id": "u1",
+        "state": "interrupted"
+      },
+      "installed": {
+        "commit": "1234567"
+      },
+      "latestKnown": {
+        "commit": "abcdef0",
+        "compatible": true,
+        "reasons": []
+      }
+    },
+    "kind": "updateActions",
+    "now": 1789128000000,
+    "output": {
+      "apply": false,
+      "cancel": false,
+      "check": true,
+      "resolve": true,
+      "resume": true,
+      "stage": false
+    }
+  },
+  {
+    "input": {
+      "id": "j1",
+      "kind": "child-delete",
+      "state": "interrupted",
+      "vmName": "build"
+    },
+    "kind": "job",
+    "now": 1789128000000,
+    "output": {
+      "cancellable": true,
+      "completed": "—",
+      "created": "—",
+      "error": "",
+      "id": "j1",
+      "initiator": "",
+      "kind": "child-delete",
+      "owner": "",
+      "phase": "",
+      "retry": null,
+      "state": "interrupted",
+      "terminal": false,
+      "vmName": "build"
+    }
+  },
+  {
+    "input": {
+      "current": {
+        "id": "u1",
+        "state": "recoveryFailed"
+      },
+      "installed": {
+        "commit": "1234567"
+      },
+      "latestKnown": {
+        "commit": "abcdef0",
+        "compatible": true,
+        "reasons": []
+      }
+    },
+    "kind": "updates",
+    "now": 1789128000000,
+    "output": {
+      "actions": {
+        "apply": false,
+        "cancel": false,
+        "check": true,
+        "resolve": true,
+        "resume": false,
+        "stage": false
+      },
+      "current": {
+        "actor": "",
+        "blockingJobs": [],
+        "commit": "",
+        "error": "",
+        "finished": "—",
+        "packageVersion": "",
+        "phase": "",
+        "phases": [],
+        "started": "—",
+        "state": "recoveryFailed",
+        "updateId": "u1"
+      },
+      "history": [],
+      "installed": {
+        "commit": "1234567",
+        "installedAt": "—",
+        "packageVersion": "unknown",
+        "previousCommit": "",
+        "source": "unknown"
+      },
+      "latestKnown": {
+        "checkedAt": "—",
+        "commit": "abcdef0",
+        "compatible": true,
+        "packageVersion": "",
+        "publishedAt": "—",
+        "reasons": []
+      },
+      "recoveryRecord": "",
+      "supportsAutoApply": false,
+      "updateAvailable": true
+    }
+  },
+  {
+    "input": {
+      "current": {
+        "id": "u1",
+        "state": "recoveryFailed"
+      },
+      "installed": {
+        "commit": "1234567"
+      },
+      "latestKnown": {
+        "commit": "abcdef0",
+        "compatible": true,
+        "reasons": []
+      }
+    },
+    "kind": "updateActions",
+    "now": 1789128000000,
+    "output": {
+      "apply": false,
+      "cancel": false,
+      "check": true,
+      "resolve": true,
+      "resume": false,
+      "stage": false
+    }
+  },
+  {
+    "input": {
+      "id": "j1",
+      "kind": "child-delete",
+      "state": "recoveryFailed",
+      "vmName": "build"
+    },
+    "kind": "job",
+    "now": 1789128000000,
+    "output": {
+      "cancellable": true,
+      "completed": "—",
+      "created": "—",
+      "error": "",
+      "id": "j1",
+      "initiator": "",
+      "kind": "child-delete",
+      "owner": "",
+      "phase": "",
+      "retry": null,
+      "state": "recoveryfailed",
+      "terminal": false,
+      "vmName": "build"
+    }
+  },
+  {
+    "input": {
+      "current": {
+        "id": "u1",
+        "state": "succeeded"
+      },
+      "installed": {
+        "commit": "1234567"
+      },
+      "latestKnown": {
+        "commit": "abcdef0",
+        "compatible": true,
+        "reasons": []
+      }
+    },
+    "kind": "updates",
+    "now": 1789128000000,
+    "output": {
+      "actions": {
+        "apply": false,
+        "cancel": false,
+        "check": true,
+        "resolve": false,
+        "resume": false,
+        "stage": true
+      },
+      "current": {
+        "actor": "",
+        "blockingJobs": [],
+        "commit": "",
+        "error": "",
+        "finished": "—",
+        "packageVersion": "",
+        "phase": "",
+        "phases": [],
+        "started": "—",
+        "state": "succeeded",
+        "updateId": "u1"
+      },
+      "history": [],
+      "installed": {
+        "commit": "1234567",
+        "installedAt": "—",
+        "packageVersion": "unknown",
+        "previousCommit": "",
+        "source": "unknown"
+      },
+      "latestKnown": {
+        "checkedAt": "—",
+        "commit": "abcdef0",
+        "compatible": true,
+        "packageVersion": "",
+        "publishedAt": "—",
+        "reasons": []
+      },
+      "recoveryRecord": "",
+      "supportsAutoApply": false,
+      "updateAvailable": true
+    }
+  },
+  {
+    "input": {
+      "current": {
+        "id": "u1",
+        "state": "succeeded"
+      },
+      "installed": {
+        "commit": "1234567"
+      },
+      "latestKnown": {
+        "commit": "abcdef0",
+        "compatible": true,
+        "reasons": []
+      }
+    },
+    "kind": "updateActions",
+    "now": 1789128000000,
+    "output": {
+      "apply": false,
+      "cancel": false,
+      "check": true,
+      "resolve": false,
+      "resume": false,
+      "stage": true
+    }
+  },
+  {
+    "input": {
+      "id": "j1",
+      "kind": "child-delete",
+      "state": "succeeded",
+      "vmName": "build"
+    },
+    "kind": "job",
+    "now": 1789128000000,
+    "output": {
+      "cancellable": false,
+      "completed": "—",
+      "created": "—",
+      "error": "",
+      "id": "j1",
+      "initiator": "",
+      "kind": "child-delete",
+      "owner": "",
+      "phase": "",
+      "retry": null,
+      "state": "succeeded",
+      "terminal": true,
+      "vmName": "build"
+    }
+  },
+  {
+    "input": {
+      "current": {
+        "id": "u1",
+        "state": "failed"
+      },
+      "installed": {
+        "commit": "1234567"
+      },
+      "latestKnown": {
+        "commit": "abcdef0",
+        "compatible": true,
+        "reasons": []
+      }
+    },
+    "kind": "updates",
+    "now": 1789128000000,
+    "output": {
+      "actions": {
+        "apply": false,
+        "cancel": false,
+        "check": true,
+        "resolve": false,
+        "resume": false,
+        "stage": true
+      },
+      "current": {
+        "actor": "",
+        "blockingJobs": [],
+        "commit": "",
+        "error": "",
+        "finished": "—",
+        "packageVersion": "",
+        "phase": "",
+        "phases": [],
+        "started": "—",
+        "state": "failed",
+        "updateId": "u1"
+      },
+      "history": [],
+      "installed": {
+        "commit": "1234567",
+        "installedAt": "—",
+        "packageVersion": "unknown",
+        "previousCommit": "",
+        "source": "unknown"
+      },
+      "latestKnown": {
+        "checkedAt": "—",
+        "commit": "abcdef0",
+        "compatible": true,
+        "packageVersion": "",
+        "publishedAt": "—",
+        "reasons": []
+      },
+      "recoveryRecord": "",
+      "supportsAutoApply": false,
+      "updateAvailable": true
+    }
+  },
+  {
+    "input": {
+      "current": {
+        "id": "u1",
+        "state": "failed"
+      },
+      "installed": {
+        "commit": "1234567"
+      },
+      "latestKnown": {
+        "commit": "abcdef0",
+        "compatible": true,
+        "reasons": []
+      }
+    },
+    "kind": "updateActions",
+    "now": 1789128000000,
+    "output": {
+      "apply": false,
+      "cancel": false,
+      "check": true,
+      "resolve": false,
+      "resume": false,
+      "stage": true
+    }
+  },
+  {
+    "input": {
+      "id": "j1",
+      "kind": "child-delete",
+      "state": "failed",
+      "vmName": "build"
+    },
+    "kind": "job",
+    "now": 1789128000000,
+    "output": {
+      "cancellable": false,
+      "completed": "—",
+      "created": "—",
+      "error": "",
+      "id": "j1",
+      "initiator": "",
+      "kind": "child-delete",
+      "owner": "",
+      "phase": "",
+      "retry": {
+        "action": "deleteVm",
+        "kind": "child",
+        "name": "build"
+      },
+      "state": "failed",
+      "terminal": true,
+      "vmName": "build"
+    }
+  },
+  {
+    "input": {
+      "current": {
+        "id": "u1",
+        "state": "cancelled"
+      },
+      "installed": {
+        "commit": "1234567"
+      },
+      "latestKnown": {
+        "commit": "abcdef0",
+        "compatible": true,
+        "reasons": []
+      }
+    },
+    "kind": "updates",
+    "now": 1789128000000,
+    "output": {
+      "actions": {
+        "apply": false,
+        "cancel": false,
+        "check": true,
+        "resolve": false,
+        "resume": false,
+        "stage": true
+      },
+      "current": {
+        "actor": "",
+        "blockingJobs": [],
+        "commit": "",
+        "error": "",
+        "finished": "—",
+        "packageVersion": "",
+        "phase": "",
+        "phases": [],
+        "started": "—",
+        "state": "cancelled",
+        "updateId": "u1"
+      },
+      "history": [],
+      "installed": {
+        "commit": "1234567",
+        "installedAt": "—",
+        "packageVersion": "unknown",
+        "previousCommit": "",
+        "source": "unknown"
+      },
+      "latestKnown": {
+        "checkedAt": "—",
+        "commit": "abcdef0",
+        "compatible": true,
+        "packageVersion": "",
+        "publishedAt": "—",
+        "reasons": []
+      },
+      "recoveryRecord": "",
+      "supportsAutoApply": false,
+      "updateAvailable": true
+    }
+  },
+  {
+    "input": {
+      "current": {
+        "id": "u1",
+        "state": "cancelled"
+      },
+      "installed": {
+        "commit": "1234567"
+      },
+      "latestKnown": {
+        "commit": "abcdef0",
+        "compatible": true,
+        "reasons": []
+      }
+    },
+    "kind": "updateActions",
+    "now": 1789128000000,
+    "output": {
+      "apply": false,
+      "cancel": false,
+      "check": true,
+      "resolve": false,
+      "resume": false,
+      "stage": true
+    }
+  },
+  {
+    "input": {
+      "id": "j1",
+      "kind": "child-delete",
+      "state": "cancelled",
+      "vmName": "build"
+    },
+    "kind": "job",
+    "now": 1789128000000,
+    "output": {
+      "cancellable": false,
+      "completed": "—",
+      "created": "—",
+      "error": "",
+      "id": "j1",
+      "initiator": "",
+      "kind": "child-delete",
+      "owner": "",
+      "phase": "",
+      "retry": null,
+      "state": "cancelled",
+      "terminal": true,
+      "vmName": "build"
+    }
+  }
+]
