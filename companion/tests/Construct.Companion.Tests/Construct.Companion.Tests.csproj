@@ -10,6 +10,7 @@
     <ProjectReference Include="../../src/Construct.Companion.Windows/Construct.Companion.Windows.csproj" />
     <ProjectReference Include="../../src/Construct.Companion.Fakes/Construct.Companion.Fakes.csproj" />
     <Content Include="../../../extension/media/theme-picker.html" Link="Media/theme-picker.html" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../../extension/media/*.css;../../../extension/media/*.js;../../../extension/media/*.html;../../../extension/media/themes/*.css" Link="Media/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../../test/fixtures/companion-parity/*.json" Link="Parity/Fixtures/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
