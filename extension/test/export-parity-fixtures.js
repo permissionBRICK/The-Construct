@@ -70,15 +70,143 @@ function hostLabel() {
 function shellQuoting() {
   return [null, "", "plain", "a'b", "'", "a\nline\r\n", "$(id); `id` \\ \"", "ü🧱", "{{dir}}"].map(input => ({ input, output: q(input) }));
 }
+function settingsMapping() {
+  const host = require("../src/host");
+  const rows = [];
+  const raw = { gitUserName: " ü ", gitEmail: "a@b", gitCredentialStore: false, vmMemoryGB: 8, vmDiskGB: 80, vmCpuCount: 4, ubuntuRelease: "24.04", vsCodeServeWeb: true, vsCodeTunnel: false, smbShare: true, micPassthrough: false, claudePartialStreaming: true, opencodeBackgroundWatcher: true, t3code: true, t3codeChannel: "nightly", t3codeLimitResume: true, vmAutoCheckpoints: false };
+  for (const input of [null, {}, raw, Object.fromEntries(Object.keys(raw).map(k => [k, null])), Object.fromEntries(Object.keys(raw).map(k => [k, "wrong"])), { gitUserName: [1, null, "x"], vmMemoryGB: {}, t3codeChannel: "future" }]) rows.push({ kind: "to", input, output: host.mapToForm(input), outputJson: JSON.stringify(host.mapToForm(input)) });
+  for (const input of [null, {}, host.mapToForm(raw), { password: "DO-NOT-PERSIST", ram: " 1e3 ", disk: "+8", cpu: "-4", gitName: " ", gitCred: "false" }, { ram: ".5", disk: "bad", cpu: "1e999", t3codeChannel: "future" }, { ram: "0x10", disk: "", cpu: null, mic: false }]) rows.push({ kind: "from", input, output: host.mapFromForm(input) });
+  for (const previous of [{}, {t3codeLimitResume:true,t3code:true,t3codeChannel:" "}, { t3codeLimitResume: true, t3code: true, t3codeChannel: "stable" }]) for (const next of [{}, { t3codeLimitResume: true, t3code: true, t3codeChannel: "nightly" }, { opencodeBackgroundWatcher: true }]) rows.push({ kind: "patch", previous, next, output: host.patchReprovisionChanges(previous, next) });
+  return rows;
+}
+function instanceIdentity() {
+  const m = require("../src/instances");
+  const rows = [];
+  for (const name of ["agent-vm", "dev", "constructor", "a".repeat(63), "a".repeat(64), "bad-", "Construct-x", "construct-x", "../x"]) {
+    for (const raw of [{}, { backend: "hyperv-remote", sshHost: "host.example", sshPort: "2222", vmName: name }, { backend: "HYPERV-LOCAL", vmName: "other", sshHost: "-x", hostAlias: "../bad", keyName: "CON.txt", configBranch: "main" }, { backend: 42, vmName: 42, sshPort: "1e3" }, { backend: "hyperv-remote" }, { backend: "proxmox", sshHost: "::1", keyName: "key.", publicHost: "web.example" }]) {
+      const output = m.deriveDefaults(name, raw);
+      rows.push({ name, raw, output, valid: m.isValidName(name), problems: m.identityProblems(output, raw), local: m.localIdentityProblems(output), remote: m.remoteIdentityProblems(output, raw), backend: m.backendProblems(raw.backend), fingerprint: m.targetFingerprint(output) });
+    }
+  }
+  return rows;
+}
+function registryState() {
+  const m = require("../src/instances");
+  const docs = [null, {}, {version:2}, {version:"1"}, {instances:[]}, {defaultInstance:"constructor",instances:{}}, {defaultInstance:"dev",instances:{dev:{}, "agent-vm":null}}, {instances:{a:{configBranch:"same"},b:{configBranch:"same"}}}, {instances:{bad:{backend:"hyperv-remote"},a:{backend:"proxmox",publicHost:"bad/host"}}}, {instances:{dev:{sshPort:"wrong",service:{auth:"wrong",url:42},scriptsDir:42}}}];
+  return docs.map(input => { const text = input === null ? "" : JSON.stringify(input); const p=m.parseRegistry(text); return {text, problems:p.problems, document:m.toFileDocument(p.registry), active:m.resolveActive({registry:p.registry,setting:"missing",workspaceValue:"dev"})}; });
+}
+function lifecycleInvocations() {
+  const m=require("../src/lifecycle"), i=require("../src/instances"); const rows=[];
+  const settings={gitName:"-someone 'ü'",gitEmail:"a@b",ram:"12",disk:"100",cpu:"6",ubuntu:"24.04",serveWeb:true,tunnel:false,smb:false,partialStreaming:true,mic:false,opencodeBackgroundWatcher:true,t3code:true,t3codeChannel:"nightly",t3codeLimitResume:false,autoCheckpoints:false};
+  const targets=[null,i.deriveDefaults("agent-vm",{}),i.deriveDefaults("dev",{}),i.deriveDefaults("dev",{configBranch:"custom"}),i.deriveDefaults("dev",{backend:"hyperv-remote",sshHost:"host",service:{url:"https://host:7462",auth:"token"}}),i.deriveDefaults("dev",{backend:"hyperv-remote",sshHost:"host"}),i.deriveDefaults("dev",{backend:"unknown"})];
+  for(const action of ["reprovision","exportConfig","reinstall","redownload","setCheckpoints","removeInstance","unknown"]) for(const instance of targets) for(const declared of [null,[],["VmName"],["VmHost","HostAlias","SshPort","LocalKeyName"],["VmHost","HostAlias","SshPort","LocalKeyName","VmName","ConfigBranch"],["InstanceName"],["InstanceName","ConfigBranch"],["Backend","ServiceUrl","InstanceName"],["Backend","ServiceUrl","InstanceName","ConfigBranch"]]) for(const legacy of [false,true]) {
+    const opts={instance,instanceParams:declared,settings,projects:["api","ui"],backupDir:"C:/Backup dir",backupMode:legacy?"wipe":"save",enabled:!legacy,confirmation:"dev",supportsCheckpoints:!legacy,supportsVmCpuCount:!legacy,supportsT3CodeChannel:!legacy,supportsT3CodeLimitResume:!legacy,supportsOpenCodeBackgroundWatcher:!legacy};
+    rows.push({action,opts,output:m.buildInvocation(action,opts),args:m.instanceArgs(action,instance,declared),params:m.paramsForAction(action,instance,declared)||[]});
+  }
+  return rows;
+}
+function lifecycleLaunches() {
+  const m=require("../src/lifecycle");const rows=[];
+  for(const script of ["C:\\Construct dir\\script.ps1","C:/it's here/script.ps1"])for(const elevate of [false,true])for(const keepOpen of [false,true])for(const argSpec of [null,[{flag:"-FromPanel"},{flag:"-GitUserName",value:"-user 'quote' \"double\""},{flag:"-Path",value:"C:\\space here\\"}]]){
+    const args=argSpec?m.flattenArgPairs(argSpec):["-FromPanel","-Name","a'b", "", "C:\\space here\\"];
+    const opts={elevate,keepOpen,argSpec}; rows.push({script,args,opts,output:m.buildHostLaunch(script,args,opts),child:m.buildChildCommandLine(script,args,opts)});
+  }return rows;
+}
+function vmPower() {
+  const m=require("../src/vmpower");const rows=[];
+  for(const name of [null,"Agent-VM","dev","a'b", "name with space"])for(const kind of ["state","checkpoints","start"]){const output=kind==="state"?m.buildStateProbeLaunch(name):kind==="checkpoints"?m.buildAutoCheckpointProbeLaunch(name):m.buildElevatedCommandLaunch(m.buildStartCommand(name));rows.push({kind,name,output});}
+  for(const input of ["","noise\nVMSTATE=Running\n","VMSTATE=Off","VMSTATE=Saved","VMSTATE=Paused","VMSTATE=Starting","VMSTATE=absent","VMSTATE=unknown","VMAUTOCHK=True","VMAUTOCHK=False","VMAUTOCHK=unsupported","VMAUTOCHK=absent"]) rows.push({kind:"parse",input,state:m.parseVmState(input),checkpoints:m.parseAutoCheckpoints(input)});
+  return rows;
+}
+function probeParsing() {
+  const m=require("../src/probe");
+  const texts=["", "AGENT_NAME\tdev\nAI_TOOLS\tclaude-code,codex,opencode\nV_CLAUDE\tClaude 2.1.3\nMEM_GB\t7.6\nDISK_DEV_BYTES\t85899345920\nVM_CPUS\t6\nDISK_PCT\t41%\nPROJECTS\tapi, ui\nCONSTRUCT_COMMIT\t'ABCDEF1234'\nINSTALLED_AT\t2026-09-11T00:00:00Z", "T3CODE\ttrue\nV_T3\t0.0.12-nightly.1.2\nT3CODE_CHANNEL\tnightly\nT3CODE_PUBLIC_BASE_URL\t'https://[::1]:5178'\nT3_INSTALLATION_MODE\tprebuilt\nT3_BUILD_HASH\tabc\nT3_ACTIVE\tactive\nT3CODE_LIMIT_RESUME\t'TRUE'", "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://bad/path\nMEM_GB\t-1\nVM_CPUS\twrong\nDISK_PCT\t101%\nOPENCODE_BACKGROUND_WATCHER\tfalse", "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://host\nT3CODE_HTTPS_PORT\t\nMEM_GB\t0x10\nPROJECTS\ta,a\nUBUNTU\told\nUBUNTU\t24.04"];
+  return texts.flatMap(input=>[null,"vm.example","::1"].map(host=>{const map=m.parseProbe(input);return{input,host,map,output:m.toState(map,{host})};}));
+}
+function usageParsing() {
+ const m=require("../src/usage"); const rows=[];
+ for(const input of [null,{}, {tools:{claude:{error:0,totals:{totalTokens:123}}}}, {tools:{}},{tools:{claude:{totals:{totalTokens:12345,totalCost:12.34}},codex:{totals:{totalTokens:"2000000",costUSD:2000.1}},opencode:{totals:{totalTokens:42,totalCost:-1}}}},{tools:{claude:{error:"no",totals:{totalTokens:1}},codex:{totals:{totalTokens:0}},opencode:{totals:{totalTokens:"bad"}}}}]) rows.push({kind:"parse",input,output:m.parseUsage(input)});
+ for(const input of [0,-1,1,999,1000,1500,999999,1000000,1e9,1234.567,1.005,2.675])rows.push({kind:"format",input,tokens:m.formatTokens(input),cost:m.formatCost(input)});
+ return rows;
+}
+function updatesPlanning() {
+ const m=require("../src/updates");const rows=[];
+ for(const raw of [{},{installedCommit:false,constructRepo:0,constructRef:false,provisionedCommit:0},{installedCommit:"abcdef1234",provisionedCommit:"old",constructRef:"dev",constructRepo:"owner/repo"}])for(const state of [null,{provisionedCommit:"abcdef1234"},{provisionedCommit:"1234567"}])for(const guest of [null,"ABCDEF1234","bad"]){const markers=m.readMarkers(raw,state);rows.push({kind:"markers",raw,state,guest,markers,stale:m.isProvisionStale(markers,guest),effective:m.effectiveProvisionedCommit(markers,guest),args:m.constructRefreshArgs(markers)});}
+ for(const input of [null,{}, {notFound:true},{ahead_by:0},{ahead_by:5},{ahead_by:-1},{ahead_by:"4"}]) rows.push({kind:"compare",input,output:m.constructUpdateFromCompare(input)});
+ for(const latest of ["1.2.3","1.3.0","1.2.3-nightly.2.1","1.2.3-beta.2","bad"])for(const installed of ["1.2.3","1.2.2","1.2.3-nightly.1.9","1.2.3-beta.1","bad"])rows.push({kind:"version",latest,installed,newer:m.isNewer(latest,installed),nightly:m.isNewerNightly(latest,installed)});
+ return rows;
+}
+function remoteIdentity() {
+ const m=require("../src/remotehost");const rows=[];
+ for(const input of [null,{}, {sshHost:"host",sshPort:"1e3"},{sshHost:"host",sshPort:true},{sshHost:"host",sshPort:65536},{sshHost:"host",sshPort:"2222",publicHost:"web"}])rows.push({kind:"endpoint",input,output:m.readEndpoint(input)});
+ for(const input of ["host.example","HTTPS://HOST.EXAMPLE/path","https://host:443","http://localhost:8080","https://[::1]:7462","https://[2001:db8::1]:7443"]) rows.push({kind:"url",input,normalized:m.normalizeServiceUrl(input),slug:m.hostSlug(input),pin:m.pinPath(input,{LOCALAPPDATA:"/local"})});
+ for(const input of [null,"", "ab".repeat(32),"AB:".repeat(31)+"AB","aa".repeat(31),"zz".repeat(32)]) rows.push({kind:"fingerprint",input,output:m.formatFingerprint(input)});
+ return rows;
+}
+function t3Pure() {
+ const m=require("../src/t3code");const rows=[];
+ for(const channel of ["stable","nightly","bad"])rows.push({kind:"install",channel,output:m.buildInstallScript(channel)});
+ rows.push({kind:"disable",output:m.buildDisableScript()});
+ for(const input of [null,"",'{"pairUrl":"https://host/pair?token=example"}','noise {"pairUrl":"https://host"}'])rows.push({kind:"pair",input,output:m.extractPairUrl(input)});
+ return rows;
+}
+function remoteRoutes() {
+ const m=require("../src/remotehost"), rows=[]; const value="name /?ü";
+ const calls=[
+ ["whoami"],["listVms"],["getVm",value],["getState",value],["getEndpoint",value],["power",value,"start"],["createVm",{name:"dev"}],["deleteVm",value,{force:true}],["getJob",value],["health"],["hostCapabilities"],["vmIdentity",value],["vmCapabilities",value],["hostStatus"],["hostCapacity",true],["hostConfig"],["putHostConfig",{mode:"x"}],["isoCatalog"],
+ ["users"],["getUser",value],["createUser",{name:"x"}],["updateUser",value,{role:"admin"}],["deleteUser",value],["userAllowance",value],["putUserAllowance",value,{maxVms:2}],["userTokens",value],["issueUserToken",value,null],["revokeUserToken",value,"id /"],
+ ["vms",{all:true,empty:"",owner:value}],["sharedVms"],["children",value],["overrides",value],["putOverrides",value,{ram:8}],["deleteOverrides",value],["lifecycle",value,{action:"reprovision"}],["setVmSharing",value,{shared:true}],["renewVmLease",value,{minutes:30}],["rotateVmToken",value,null],["revokeVmToken",value],
+ ["media",{type:"iso"}],["mediaItem",value],["mediaReferences",value],["deleteMedia",value],["mediaCleanup"],["jobs",{state:"running"}],["cancelJob",value],["audit",{limit:20}],["forwardsVia",value],["updatesStatus"],["updatesCheck",null],["updatesStage",{releaseTag:"x"}],["updatesApply",{updateId:"x"}],["updatesCancel",{updateId:"x"}],["updatesResolve",{updateId:"x"}]];
+ for(const [method,...args] of calls){let captured;const client=m.createClient({baseUrl:"https://host:7462",pin:"ab".repeat(32),auth:{kind:"token",token:"fixture"},fetchImpl:(url,init)=>{captured={url,method:init.method,body:init.body?JSON.parse(init.body):null};return Promise.resolve({status:200,text:"{}"});}});client[method](...args);rows.push({method,args,output:captured});}
+ return rows;
+}
+async function t3Discovery() {
+ const m=require("../src/updates"), rows=[];
+ const hash="a".repeat(64), other="b".repeat(64);
+ const assets=["manifest.json","SHA256SUMS","T3Code-Construct-Setup.exe","t3code-server-linux-x64.tar.gz"].map(name=>({name}));
+ const release={draft:false,prerelease:true,tag_name:"t3-1.2.3-nightly.1.2-"+hash,published_at:"2026-09-11",assets};
+ for(const channel of ["stable","nightly"])for(const scenario of ["new","same","invalid","missing","page2"]){
+  const agent={id:"t3code",version:"1.2.2",channel,installationMode:"prebuilt",buildHash:hash};
+  const manifest={channel,version:"1.2.3",buildHash:scenario==="same"?hash:other}; if(scenario==="invalid")manifest.channel="wrong";
+  const replies=channel==="nightly"?(scenario==="missing"?[[]]:scenario==="page2"?[Array.from({length:100},()=>({draft:true})),[release],manifest]:[[release],manifest]):[scenario==="missing"?null:manifest];
+  const queue=replies.slice(),requests=[];const output=(await m.augmentAgents([agent],{noCache:true,fetchJson:async url=>{requests.push(url);return queue.shift();}}))[0];
+  rows.push({channel,scenario,agent,replies,requests,output});
+ }return rows;
+}
 function sortKeys(value) {
   if (Array.isArray(value)) return value.map(sortKeys);
   if (value && typeof value === "object") return Object.fromEntries(Object.keys(value).sort().map(key => [key, sortKeys(value[key])]));
   return value;
 }
 function serialize(value) { return JSON.stringify(sortKeys(value), null, 2) + "\n"; }
-function exportAll() { return { "guest-scripts": guestScripts(), "ssh-args": sshArgs(), "host-label": hostLabel(), "shell-quoting": shellQuoting() }; }
-if (require.main === module) {
-  fs.mkdirSync(directory, { recursive: true });
-  for (const [area, value] of Object.entries(exportAll())) fs.writeFileSync(path.join(directory, area + ".json"), serialize(value));
+async function agentUpdates() {
+ const m=require("../src/updates"),rows=[];
+ for(const id of ["claude-code","codex","opencode","t3code"])for(const channel of id==="t3code"?["stable","nightly"]:[null])for(const scenario of ["new","same","old","invalid","missing"]){
+  const nightly=channel==="nightly"; const version=nightly?"1.2.3-nightly.1.2":"1.2.3";
+  const latest=scenario==="new"?(nightly?"1.2.3-nightly.2.1":"1.3.0"):scenario==="same"?version:scenario==="old"?(nightly?"1.2.3-nightly.1.1":"1.2.2"):"invalid";
+  const agent={id,version,channel,updateAvailable:false},reply=scenario==="missing"?null:{version:latest,tag_name:"v"+latest},requests=[];
+  const output=await m.augmentAgents([agent],{noCache:true,fetchJson:async url=>{requests.push(url);return reply;}}); rows.push({agents:[agent],reply,requests,output});
+ }
+ for(const agent of [null,{}, {id:"unknown",version:"1.2.3"},{id:"codex",version:"—"},{id:"opencode"}]){const requests=[];const output=await m.augmentAgents([agent],{noCache:true,fetchJson:async url=>{requests.push(url);return null;}});rows.push({agents:[agent],reply:null,requests,output});}
+ return rows;
 }
+function agentUpdateScripts() {
+ const m=require("../src/updates"),ids=["claude-code","codex","opencode","t3code"];
+ return [null,["unknown"],...Array.from({length:16},(_,mask)=>ids.filter((_,i)=>mask&(1<<i)))].map(input=>({input,output:m.buildAgentUpdateScript(input)}));
+}
+function usageExports() {
+ const m=require("../src/usage"),savedAt="2026-09-11T12:00:00.000Z";
+ return [JSON.stringify({report:"daily🧱\u2028",tools:{claude:{totals:{totalTokens:1234,totalCost:1.23},note:"\u001f"}}}),"invalid",null].map(input=>({input,savedAt,output:m.buildExportPayload(input,{savedAt})}));
+}
+function instanceFingerprints() {
+ const m=require("../src/instances");return ["1e3",0,"bad",true].map(port=>{const input={...m.deriveDefaults("dev",{}),sshPort:port,service:{url:42,auth:false}};return{input,output:m.targetFingerprint(input)};});
+}
+function stateJsonBytes() {
+ return [{z:"🧱ü\u2028",a:"\u0001\n\t\\\""},{values:[1e-7,1e-6,1e20,1e21,-0,1.0,123.45]}, {"10":"ten","2":"two",version:1,instance:"dev"}].map(value=>{const input=sortKeys(value);return{input,output:JSON.stringify(input,null,2)+"\n"};});
+}
+async function exportAll() { return { "guest-scripts": guestScripts(), "ssh-args": sshArgs(), "host-label": hostLabel(), "shell-quoting": shellQuoting(), "settings-mapping": settingsMapping(), "instance-identity": instanceIdentity(), "registry-state": registryState(), "lifecycle-invocations": lifecycleInvocations(), "lifecycle-launches": lifecycleLaunches(), "vm-power": vmPower(), "probe-parsing": probeParsing(), "usage-parsing": usageParsing(), "updates-planning": updatesPlanning(), "remote-identity": remoteIdentity(), "t3-pure": t3Pure(), "remote-routes": remoteRoutes(), "t3-discovery": await t3Discovery(), "state-json-bytes": stateJsonBytes(), "agent-updates": await agentUpdates(), "agent-update-scripts": agentUpdateScripts(), "usage-exports": usageExports(), "instance-fingerprints": instanceFingerprints() }; }
+if (require.main === module) (async () => {
+  fs.mkdirSync(directory, { recursive: true });
+  for (const [area, value] of Object.entries(await exportAll())) fs.writeFileSync(path.join(directory, area + ".json"), serialize(value));
+})().catch(error => { console.error(error); process.exitCode = 1; });
 module.exports = { guestScripts, sshArgs, hostLabel, shellQuoting, exportAll, serialize, directory };
