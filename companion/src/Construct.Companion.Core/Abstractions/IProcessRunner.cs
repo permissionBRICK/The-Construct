@@ -18,9 +18,14 @@ public interface IRunningProcess : IAsyncDisposable
     Task StopAsync(CancellationToken cancellationToken = default);
 }
 
-public sealed partial record ProcessInvocation(string FileName, IReadOnlyList<string> Arguments,
+public sealed record ProcessInvocation(string FileName, IReadOnlyList<string> Arguments,
     string? WorkingDirectory = null, Secret? StandardInput = null, TimeSpan? Timeout = null)
 {
+    // Lifecycle consoles must stay visible; Electron/Desktop background starts opt in.
+    public bool CreateNoWindow { get; init; }
+    // Inherit the parent environment, then apply overrides (null removes a key).
+    // Values must never enter diagnostics.
+    public IReadOnlyDictionary<string, string?>? EnvironmentOverrides { get; init; }
     public override string ToString() => FileName;
 }
 public sealed record ProcessResult(int Code, string Stdout = "", string Stderr = "")

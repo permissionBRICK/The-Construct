@@ -27,7 +27,7 @@ public sealed record CommandLine(bool Background = false, bool Panel = false, bo
                 "--uri" => result with { Uri = Value() },
                 "--quit" => result with { Quit = true },
                 "--selftest" => result with { SelfTest = true },
-                "--json" => result with { Json = true },
+                "--json" => result with { Json = true }, // accepted for the documented CLI; the report is always JSON
                 "--version" => result with { Version = true },
                 _ => throw new ArgumentException("Unknown command-line option.")
             };
@@ -36,12 +36,4 @@ public sealed record CommandLine(bool Background = false, bool Panel = false, bo
             throw new ArgumentException("Expected a construct URI.");
         return result;
     }
-}
-
-public sealed record SelfTestCheck(string Name, string Status, bool Required = true);
-public sealed record SelfTestReport(bool Ok, IReadOnlyList<SelfTestCheck> Checks)
-{
-    public int ExitCode => Ok ? 0 : 1;
-    public static SelfTestReport Create(IReadOnlyList<SelfTestCheck> checks) => new(
-        checks.All(c => !c.Required || c.Status is "passed" or "none" or "muted"), checks);
 }

@@ -277,6 +277,8 @@ function configSync() {
   for (const name of ['', 'vm', 'VM', 'main', 'master', 'HEAD', 'WORK', 'vm-other', 'CON.txt', 'con-work', 'a..b', 'a.lock', 'a.', 'topic/x', 'topic/.hidden', '-bad']) {
     add('vmBranch', name, c.isValidVmBranch(name)); add('publishBranch', name, c.isValidPublishBranch(name)); add('safeName', name, c.isSafeProfileName(name));
   }
+  // Edge whitespace follows String.prototype.trim (U+FEFF trimmed, U+0085 not), which the C# port must mirror.
+  for (const name of [' ', '\u0085', '\ufeff', '\u0085x', 'x\u0085', '\ufeffx', 'x\ufeff', '\u3000x', 'x\u3000', 'a b']) add('safeName', name, c.isSafeProfileName(name));
   for (const url of ['', ' https://alice:fixture-secret@host/x ', 'https://alice@host/x', 'ssh://git@host/x', 'git@host:x', '--upload-pack=x', 'https://ggpat_fixture@host/x', 'https://gitgud-project.long.name@host/x']) {
     add('credentials', url, c.urlHasCredentials(url)); add('url', url, c.validateConfigRemoteUrl(url, require('../src/remote').isLikelyGitUrl)); add('redact', url, c.redactGitOutput(url)); add('slug', url, c.remoteSlug(url));
   }

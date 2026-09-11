@@ -2,10 +2,11 @@ using Construct.Companion.Core.Abstractions;
 
 namespace Construct.Companion.Fakes;
 
-public sealed class FakeFileSystem : IFileSystem
+public sealed class FakeFileSystem : IStateFileSystem
 {
     private readonly object gate = new();
     public Dictionary<FileSystemRoot, string> Roots { get; } = [];
+    public Dictionary<string, DateTimeOffset> Modified { get; } = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, byte[]> files = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> directories = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<(string Directory, Action Changed)> watches = [];
@@ -26,6 +27,12 @@ public sealed class FakeFileSystem : IFileSystem
     }
     public IReadOnlyList<string> EnumerateFiles(string directory) { lock (gate) return files.Keys.Where(p => string.Equals(Parent(p), Key(directory), StringComparison.OrdinalIgnoreCase)).Order().ToArray(); }
     public IReadOnlyList<string> EnumerateDirectories(string directory) { lock (gate) return directories.Where(p => string.Equals(Parent(p), Key(directory), StringComparison.OrdinalIgnoreCase)).Order().ToArray(); }
+    public bool DirectoryExists(string path) { lock (gate) return directories.Contains(Key(path)); }
+    public DateTimeOffset? LastWriteTime(string path) => FileExists(path) ? Modified.GetValueOrDefault(path, DateTimeOffset.UnixEpoch) : null;
+    public bool WriteFileIfAbsent(string path, ReadOnlySpan<byte> contents)
+    {
+        lock (gate) { if (FileExists(path)) return false; WriteFileAtomic(path, contents); return true; }
+    }
     public IDisposable Watch(string directory, Action changed)
     {
         var watch = (Key(directory), changed); lock (gate) watches.Add(watch); return new Subscription(() => { lock (gate) watches.Remove(watch); });

@@ -564,6 +564,7 @@ for regression suite results, retries, unsupported workflows and Windows limitat
 
 ## Deviations
 
+- S4 cleanup: `ConfigSyncRules.IsSafeProfileName` now shares `HostState.SafeProfileName` (the `configsync.js` formulation, ECMAScript `trim`), so edge U+0085 is accepted and edge U+FEFF rejected exactly as in JS; the `config-sync` fixture gained those cases (Core/ConfigSync/ConfigSyncRules.cs).
 - owner amendment 2026-09-11: plain reprovision installs or updates the client Companion through the same non-blocking opt-out-aware hook in `Provision-AgentVM.ps1`, covering panel and T3 Desktop reprovision entry paths.
 
 - S2b ipc: automatic checkpoint apply and lifecycle preflight/live-project fallback remain documented unsupported subflows; S2a has the pieces but not the complete dialog/result workflow, so users must sync/select explicitly and apply checkpoints through VS Code/installer.

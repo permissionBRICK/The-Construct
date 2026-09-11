@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Text.Encodings.Web;
 using System.Text.Json.Serialization;
+using Construct.Companion.Core.State;
 
 namespace Construct.Companion.Core.ConfigSync;
 
@@ -26,15 +27,8 @@ public static class ConfigSyncRules
     }
     internal static IEnumerable<string> JsKeys(IEnumerable<string> keys) => keys.Select((key,index) => (key,index,number: uint.TryParse(key,System.Globalization.NumberStyles.None,System.Globalization.CultureInfo.InvariantCulture,out var n) && n < uint.MaxValue && n.ToString(System.Globalization.CultureInfo.InvariantCulture) == key ? (long)n : -1)).OrderBy(p=>p.number < 0 ? 1 : 0).ThenBy(p=>p.number < 0 ? p.index : p.number).Select(p=>p.key);
     public static bool IsReserved(string name) => new[] { "default", "project.schema" }.Contains(name.Trim().ToLowerInvariant());
-    public static bool IsSafeProfileName(string name) => name.Length > 0 && name == name.Trim() && !name.Contains("..", StringComparison.Ordinal) && !Regex.IsMatch(name, "[/\\\\:*?\"<>|\\x00-\\x1f]");
-    public static bool IsValidVmBranch(string? name)
-    {
-        if (string.IsNullOrEmpty(name) || !Regex.IsMatch(name, "^[A-Za-z0-9][A-Za-z0-9._-]*$", RegexOptions.ECMAScript) || name.Contains("..", StringComparison.Ordinal) || name.EndsWith('.') || name.EndsWith(".lock", StringComparison.Ordinal)) return false;
-        var stem = name.Split('.')[0].ToLowerInvariant();
-        if (Regex.IsMatch(stem, "^(con|prn|aux|nul|com[1-9]|lpt[1-9])$")) return false;
-        var lower = name.ToLowerInvariant();
-        return !new[] { "main", "master", "head", "fetch_head", "orig_head", "merge_head", "cherry_pick_head", "revert_head", "bisect_head", "rebase_head", "auto_merge", "stash" }.Contains(lower) && (lower != "vm" || name == "vm");
-    }
+    public static bool IsSafeProfileName(string name) => name.Length > 0 && HostState.SafeProfileName(name) == name;
+    public static bool IsValidVmBranch(string? name) => Instances.IsValidConfigBranch(name);
     public static string ResolveVmBranch(string? name, Action<string>? warn = null)
     {
         if (string.IsNullOrEmpty(name)) return "vm";

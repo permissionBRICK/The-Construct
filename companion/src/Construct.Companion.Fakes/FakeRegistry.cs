@@ -12,8 +12,4 @@ public sealed class FakeRegistry : IRegistry
         values[name ?? ""] = value;
     }
     public void DeleteValue(string key, string? name) { if (keys.TryGetValue(key, out var values)) values.Remove(name ?? ""); }
-    public void DeleteTree(string key)
-    {
-        foreach (var path in keys.Keys.Where(p => p.Equals(key, StringComparison.OrdinalIgnoreCase) || p.StartsWith(key + "\\", StringComparison.OrdinalIgnoreCase)).ToArray()) keys.Remove(path);
-    }
 }

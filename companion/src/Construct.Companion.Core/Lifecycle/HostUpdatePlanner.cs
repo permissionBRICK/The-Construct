@@ -9,7 +9,6 @@ public static class HostUpdatePlanner
     public static readonly string[] Active = ["checking", "staged", "draining", "handedOff", "applying"];
     public static readonly string[] Terminal = ["succeeded", "cancelled", "stageFailed", "applyFailed", "rolledBack", "rolledBackWithDatabase", "resolvedByAdmin"];
     public static bool ClearPendingOnError(int status) => status is >= 400 and < 500 and not (408 or 429);
-    public static bool ShouldCheck(long now, long? lastCheck, bool force = false) => force || lastCheck is null || now - lastCheck >= 15 * 60 * 1000;
     public static JsonObject PlanAdvance(JsonObject? pending, JsonObject? status)
     {
         if (pending is null) return new JsonObject { ["action"] = "none" };

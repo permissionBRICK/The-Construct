@@ -15,7 +15,7 @@ public sealed class Forwarder(string instance, IForwardTransport transport, IRun
     private readonly Channel<bool> invalidated = Channel.CreateBounded<bool>(new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropWrite });
     private readonly Dictionary<string, Tunnel> tunnels = [];
     private readonly Dictionary<string, DateTimeOffset> retryAfter = [];
-    private JsonObject view = new() { ["owner"] = transport.IsRemote, ["requests"] = new JsonArray(), ["acks"] = new JsonArray(), ["closes"] = new JsonArray() };
+    private JsonObject view = EmptyView(transport.IsRemote);
     private JsonObject snapshot = new() { ["mode"] = transport.IsRemote ? "remote" : "local", ["owner"] = transport.IsRemote, ["items"] = new JsonArray() };
     private string label = ForwardHost.Normalize(hostLabel);
     private bool started;
@@ -220,11 +220,12 @@ public sealed class Forwarder(string instance, IForwardTransport transport, IRun
             if (watcher is not null) await watcher.DisposeAsync().ConfigureAwait(false); watcher = null;
             foreach (var id in tunnels.Keys.ToArray()) await KillAsync(id).ConfigureAwait(false);
             try { await transport.ReleaseAsync(CancellationToken.None).ConfigureAwait(false); } catch { /* TTL recovers an unreachable guest. */ }
-            view = new() { ["owner"] = transport.IsRemote, ["requests"] = new JsonArray(), ["acks"] = new JsonArray(), ["closes"] = new JsonArray() };
+            view = EmptyView(transport.IsRemote);
             Push();
         }
         finally { serial.Release(); }
     }
+    private static JsonObject EmptyView(bool owner) => new() { ["owner"] = owner, ["requests"] = new JsonArray(), ["acks"] = new JsonArray(), ["closes"] = new JsonArray() };
     private sealed class Tunnel(TunnelSpec spec, ISupervisedProcess process, IDisposable reservation, JsonObject? destination)
     {
         public TunnelSpec Spec = spec;

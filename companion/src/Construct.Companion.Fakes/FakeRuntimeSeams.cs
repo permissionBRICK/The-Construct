@@ -11,14 +11,6 @@ public sealed class FakePortProbe : IPortProbe
     public Task<bool> IsFreeAsync(int port, string bindHost, CancellationToken cancellationToken)
     { cancellationToken.ThrowIfCancellationRequested(); Probes.Add((port, bindHost)); return Task.FromResult(!Busy.Contains(port)); }
 }
-public sealed class FakePortReservations : IPortReservations
-{
-    private readonly HashSet<int> ports = [];
-    public IDisposable? TryReserve(int port)
-    { lock (ports) return ports.Add(port) ? new Release(() => { lock (ports) ports.Remove(port); }) : null; }
-    private sealed class Release(Action release) : IDisposable
-    { private int disposed; public void Dispose() { if (Interlocked.Exchange(ref disposed, 1) == 0) release(); } }
-}
 public sealed class FakeRuntimeRegistry : IRuntimeRegistry
 {
     public IReadOnlyList<RuntimeInstance> Instances { get; set; } = [];

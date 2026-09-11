@@ -7,5 +7,5 @@ public interface IToastRaiser
     Task<ToastAvailability> GetAvailabilityAsync(CancellationToken cancellationToken = default);
     Task RaiseAsync(ToastDocument toast, CancellationToken cancellationToken = default);
 }
-public enum ToastAvailability { Available, Muted, Unregistered, Unsupported }
+public enum ToastAvailability { Available, Muted, Unregistered }
 public sealed record ToastDocument(string Xml);

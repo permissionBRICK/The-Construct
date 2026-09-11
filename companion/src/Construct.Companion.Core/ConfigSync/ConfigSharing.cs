@@ -1,9 +1,13 @@
+using Construct.Companion.Core.State;
+using static Construct.Companion.Core.Lifecycle.PowerShellLaunch;
 namespace Construct.Companion.Core.ConfigSync;
+
+// The one-liners handed to other PCs: an install.ps1 bootstrap that imports shared profiles.
 public static class ConfigSharing
 {
-    public const string DefaultRepo = "permissionBRICK/The-Construct";
-    public const string DefaultRef = "main";
-    private static string Quote(string text) => "'"+text.Replace("'","''",StringComparison.Ordinal)+"'";
+    public const string DefaultRepo = UpdatePlanner.DefaultRepository;
+    public const string DefaultRef = UpdatePlanner.DefaultRef;
+    private static string Quote(string text) => SingleQuote(text);
     private static string Start(string repo, string @ref) => "& ([scriptblock]::Create((irm "+Quote("https://raw.githubusercontent.com/"+repo+"/"+@ref+"/install.ps1")+")))";
     private static string Suffix(string repo, string @ref) => (repo != DefaultRepo ? " -Repo "+Quote(repo) : "")+(@ref != DefaultRef ? " -Ref "+Quote(@ref) : "");
     public static string BuildShareCommand(string url, IEnumerable<string> names, string installRepo = DefaultRepo, string installRef = DefaultRef)

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Construct.Companion.Core;
+using Construct.Companion.Core.Desktop;
 using Construct.Companion.Core.Ipc;
 
 namespace Construct.Companion.Tests;

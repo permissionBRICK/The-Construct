@@ -1,5 +1,4 @@
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 using Construct.Companion.Core.Abstractions;
 
 namespace Construct.Companion.Core.State;
@@ -77,20 +76,4 @@ public sealed class InstanceStateStore(IStateFileSystem files, string? name, str
     }
     public JsonObject ReadMarkers() => UpdatePlanner.ReadMarkers(ReadInstallWide(), ReadState());
     public string ProvisionedCommit => StateJson.Text(ReadMarkers()["provisionedCommit"]) ?? "";
-    public static int CountStale(IEnumerable<InstanceStateStore> stores) => stores.Count(s => UpdatePlanner.IsProvisionStale(s.ReadMarkers()));
-    public ProvisionWatch CreateProvisionWatch(IClock clock, TimeSpan maximum) => new(this, clock, maximum);
-}
-
-public sealed class ProvisionWatch
-{
-    private readonly InstanceStateStore store;
-    private readonly IClock clock;
-    public string Baseline { get; }
-    public DateTimeOffset Deadline { get; }
-    public ProvisionWatch(InstanceStateStore store, IClock clock, TimeSpan maximum)
-    {
-        this.store = store; this.clock = clock; Baseline = store.ProvisionedCommit; Deadline = clock.UtcNow + maximum;
-    }
-    public string Current => store.ProvisionedCommit;
-    public bool Done => Current is { Length: > 0 } current && current != Baseline || clock.UtcNow >= Deadline;
 }
