@@ -685,6 +685,8 @@ function createClient(opts = {}) {
     // Lifecycle (§8.7): `{ action: "start"|"shutdown"|"save"|"restart", lifetime?, operationKey? }`.
     // `shutdown` is the GRACEFUL guest shutdown (job `vm-shutdown`), never a force-off.
     lifecycle: (name, body) => request("POST", `/vms/${encodeURIComponent(name)}/lifecycle`, body),
+    setVmSharing: (name, body) => request("PUT", `/vms/${encodeURIComponent(name)}/sharing`, body),
+    renewVmLease: (name, body) => request("POST", `/vms/${encodeURIComponent(name)}/lease`, body),
     // Token rotation (§8.13). The plaintext is in the answer ONCE and is never logged here.
     rotateVmToken: (name, body) => request("POST", `/vms/${encodeURIComponent(name)}/token`, body || {}),
     revokeVmToken: (name) => request("DELETE", `/vms/${encodeURIComponent(name)}/token`),

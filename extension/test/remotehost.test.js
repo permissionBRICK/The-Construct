@@ -632,6 +632,10 @@ ok("pin: a malformed fingerprint is refused",
     await adminClient.vmCapabilities("work-vm");   eq("route: vm capabilities", last().url, "/api/v1/vms/work-vm/capabilities");
     await adminClient.lifecycle("work-vm-a1", { action: "shutdown" });
     ok("route: lifecycle POST with the action", last().method === "POST" && last().url === "/api/v1/vms/work-vm-a1/lifecycle" && last().body.action === "shutdown");
+    await adminClient.renewVmLease("child a", { lifetime: "24h" });
+    ok("route: child lease renewal", last().method === "POST" && last().url === "/api/v1/vms/child%20a/lease" && last().body.lifetime === "24h");
+    await adminClient.setVmSharing("child a", { scope: "host" });
+    ok("route: child sharing", last().method === "PUT" && last().url === "/api/v1/vms/child%20a/sharing" && last().body.scope === "host");
     await adminClient.deleteVm("work-vm");
     ok("route: deleteVm without a body is unchanged", last().method === "DELETE" && last().url === "/api/v1/vms/work-vm" && last().body === null);
     await adminClient.deleteVm("work-vm", { cascade: { token: "abc" } });

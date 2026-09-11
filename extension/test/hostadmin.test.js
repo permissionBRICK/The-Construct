@@ -36,7 +36,7 @@ function fakeClient(answers = {}) {
   const methods = [
     "health", "whoami", "hostStatus", "hostCapacity", "hostConfig", "putHostConfig", "hostCapabilities", "isoCatalog",
     "users", "getUser", "createUser", "updateUser", "deleteUser", "userAllowance", "putUserAllowance", "userTokens", "issueUserToken", "revokeUserToken",
-    "vms", "sharedVms", "children", "lifecycle", "deleteVm", "getJob", "overrides", "putOverrides", "deleteOverrides",
+    "vms", "sharedVms", "children", "lifecycle", "setVmSharing", "renewVmLease", "deleteVm", "getJob", "overrides", "putOverrides", "deleteOverrides",
     "rotateVmToken", "revokeVmToken", "media", "deleteMedia", "mediaCleanup", "jobs", "cancelJob", "audit",
     "updatesStatus", "updatesCheck", "updatesStage", "updatesApply", "updatesCancel", "updatesResolve",
   ];
@@ -496,6 +496,39 @@ function fakeClient(answers = {}) {
   }
 
   console.log("\n=== the model ===");
+  {
+    const c = fakeClient({ health: HEALTH_FULL, whoami: ME_ADMIN,
+      renewVmLease: { state: "unlimited" } });
+    const m = ha.createHostAdminModel({ client: c, host: H, backend: "hyperv-remote" });
+    await m.detect();
+    ok("child: never lifetime accepted", (await m.perform("renewVmLease", { name: "child", lifetime: "NEVER" })).ok);
+    deep("child: renewal uses normalized lifetime", c.calls.at(-1), { method: "renewVmLease", args: ["child", { lifetime: "never" }] });
+    ok("child: no expiry reported", /no expiry/.test(m.state.notice.text));
+    const before = c.calls.length;
+    for (const lifetime of ["", "4m", "bad", "999999999999999999999999d"]) {
+      ok("child: invalid lifetime refused " + lifetime, !(await m.perform("renewVmLease", { name: "child", lifetime })).ok);
+    }
+    eq("child: invalid lifetime never reaches service", c.calls.length, before);
+    for (const scope of ["host", "private"]) {
+      ok("child: sharing changes to " + scope, (await m.perform("shareVm", { name: "child", scope })).ok);
+      deep("child: sharing body " + scope, c.calls.at(-1), { method: "setVmSharing", args: ["child", { scope }] });
+    }
+    ok("child: unsupported sharing rejected", !(await m.perform("shareVm", { name: "child", scope: "internet" })).ok);
+    m.state.maintenance = { phase: "draining" };
+    const count = c.calls.length;
+    ok("child: maintenance blocks renew", !(await m.perform("renewVmLease", { name: "child", lifetime: "24h" })).ok);
+    ok("child: maintenance blocks sharing", !(await m.perform("shareVm", { name: "child", scope: "host" })).ok);
+    eq("child: maintenance performs no mutation", c.calls.length, count);
+    m.state.maintenance = null;
+    c.renewVmLease = async () => { throw apiErr(403, { code: "lifetime-not-allowed" }); };
+    ok("child: lifetime policy refusal surfaced", !(await m.perform("renewVmLease", { name: "child", lifetime: "24h" })).ok);
+    eq("child: lifetime policy does not demote admin", m.state.mode, "admin");
+    c.setVmSharing = async () => { throw apiErr(403, { code: "sharing-not-allowed" }); };
+    ok("child: sharing policy refusal surfaced", !(await m.perform("shareVm", { name: "child", scope: "host" })).ok);
+    eq("child: sharing policy does not demote admin", m.state.mode, "admin");
+    m.state.mode = "user";
+    ok("child: non-admin cannot change sharing in admin panel", !(await m.perform("shareVm", { name: "child", scope: "host" })).ok);
+  }
   {
     const c = fakeClient({
       health: HEALTH_FULL, whoami: ME_ADMIN,
