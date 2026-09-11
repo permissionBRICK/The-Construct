@@ -119,7 +119,7 @@ public sealed class DesktopModelTests
         Assert.True(menu.Single(m => m.Id == "mic").Checked);
         Assert.False(menu.Single(m => m.Id == "autostart").Checked);
         Assert.DoesNotContain(menu, m => m.Id == "hostadmin");
-        Assert.True(menu.Single(m => m.Id == "registerVm").Enabled);
+        Assert.True(menu.Single(m => m.Id == "registerVm").Enabled); Assert.True(menu.Single(m => m.Id == "createRemoteVm").Enabled);
         Assert.False(menu.Single(m => m.Id == "forwards").Children!.Single().Enabled);
     }
     [Theory]

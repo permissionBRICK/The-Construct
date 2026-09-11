@@ -216,6 +216,7 @@ internal sealed class TrayContext : ApplicationContext
                 var enabled = !platform.Registration.Autostart; platform.Registration.SetAutostart(enabled); settings.Merge(new JsonObject { ["autostart"] = enabled }); return;
             case "logs": await platform.Launcher.OpenAsync(platform.Log.PathName); return;
             case "registerVm": await PostCommandAsync("registerThisVm"); return;
+            case "createRemoteVm": await PostCommandAsync("createFirstVm"); return;
             case "about": MessageBox.Show("Construct Companion\n" + platform.Version, "About Construct Companion"); return;
             case "openT3": if (await platform.Launcher.OpenT3DesktopAsync()) return; await PostCommandAsync("openAgentWeb", new JsonObject { ["agent"] = "t3code" }); return;
         }
