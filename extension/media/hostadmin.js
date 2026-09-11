@@ -219,7 +219,7 @@
       row.appendChild(name);
       const kind = el("div", "ha-vm-kind");
       kind.appendChild(el("span", "ha-badge " + (r.kind === "child" ? "child" : ""), r.kind + (r.tokenKind === "legacy" ? " · legacy credential" : "")));
-      if (r.sharing === "host") kind.appendChild(el("span", "ha-badge shared", "shared host-wide"));
+      if (r.kind === "child") kind.appendChild(el("span", "ha-badge" + (r.sharing === "host" ? " shared" : ""), r.sharing === "host" ? "public · host users" : "private"));
       if (r.deleting) kind.appendChild(el("span", "ha-badge off", "deleting"));
       if (r.childCreationClosed) kind.appendChild(el("span", "ha-badge off", "closed"));
       name.appendChild(kind);
@@ -239,6 +239,19 @@
       row.appendChild(cell(r.resources, "ha-vm-allocation"));
       const actions = cell("", "actions");
       const busy = !!r.operation || r.deleting;
+      if (r.kind === "child" && r.allowedActions.includes("renew")) {
+        const b = btn("Change lifetime", "ghost", () => act("changeVmLifetime", { name: r.name }),
+          r.state === "running" ? "Restart the expiry countdown from now, or choose never" : "Start this child VM before renewing its lifetime");
+        b.disabled = busy || r.state !== "running";
+        actions.appendChild(b);
+      }
+      if (r.kind === "child" && r.allowedActions.includes("share")) {
+        const shared = r.sharing === "host";
+        const b = btn(shared ? "Make private" : "Make public", "ghost", () => act("shareVm", { name: r.name, scope: shared ? "private" : "host" }),
+          shared ? "Remove access for other host users" : "Allow other users of this Construct host to access this VM");
+        b.disabled = busy;
+        actions.appendChild(b);
+      }
       if (r.allowedActions.indexOf("shutdown") >= 0 && (r.state === "running" || r.state === "paused")) {
         const b = btn("Shut down", "", () => act("shutdownVm", { name: r.name }), "Graceful guest shutdown request");
         b.disabled = busy;

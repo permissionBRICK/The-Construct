@@ -246,6 +246,20 @@ function createHostAdminFeature(deps = {}) {
           if (r.ok && r.jobId) await followShutdown(entry, r.jobId, name);
           break;
         }
+        case "changeVmLifetime": {
+          if (!name) return;
+          const row = model.state.vms?.rows.find((vm) => vm.name === name);
+          const lifetime = await vscode.window.showInputBox({
+            title: `Change lifetime of ${name}`,
+            prompt: "The expiry countdown starts again from now. Use 30m, 24h, 7d, or never. Host limits still apply.",
+            value: row?.lifetime || "24h",
+            ignoreFocusOut: true,
+            validateInput: (value) => { const parsed = hostadmin.parseLifetime(value); return parsed.ok ? null : parsed.reason; },
+          });
+          if (lifetime === undefined) return;
+          await model.perform("renewVmLease", { name, lifetime });
+          break;
+        }
         case "deleteVm":
           await deleteVmFlow(entry, name, str(args.kind), str(args.cascadeToken));
           break;
@@ -312,7 +326,7 @@ function createHostAdminFeature(deps = {}) {
           postState(entry);
           await model.perform(action, args);
           break;
-        case "updateUser": case "createUser": case "capacityRefresh": case "mediaCleanup": case "updatesCheck": case "updatesStage":
+        case "shareVm": case "updateUser": case "createUser": case "capacityRefresh": case "mediaCleanup": case "updatesCheck": case "updatesStage":
           await model.perform(action, args);
           break;
         case "saveConfig": {

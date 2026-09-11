@@ -238,6 +238,8 @@ async function resolveHostState(client, opts = {}) {
 function applyRefusal(state, error, host) {
   const status = errStatus(error);
   const h = str(host || (state && state.host)) || "the host";
+  // Child policy limits apply to administrators too; refusal is not a role change.
+  if (status === 403 && ["lifetime-not-allowed", "sharing-not-allowed"].includes(errCode(error))) return state;
   if (status === 403) return { ...state, mode: "user", message: `${h} refused an administrator action: your role has changed. Ask its administrator.` };
   if (status === 401) return { ...state, mode: "sign-in", message: `${h} rejected the stored credential. Sign in again with "The Construct: Add Remote Host".` };
   if (isMaintenanceError(error)) return { ...state, maintenance: maintenanceOf(null, error) };
@@ -360,6 +362,7 @@ function toVmRow(vm, now) {
     resources: resourcesText(v.hardware || { cpus: v.cpu, ramMb: num(v.ramGb) === null ? null : v.ramGb * 1024, diskGb: v.diskGb }),
     usage: resourceUsageView(v.resourceUsage, now),
     lease: leaseText(v.lease, now),
+    lifetime: str(v.lease && v.lease.requested),
     overdue: !!(v.lease && (v.lease.overdue === true || str(v.lease.state).toLowerCase() === "overdue")),
     operation: operationText(v.currentOperation),
     operationJobId: v.currentOperation && v.currentOperation.jobId ? str(v.currentOperation.jobId) : "",
@@ -679,6 +682,7 @@ function parseLifetime(text) {
   if (!m) return { ok: false, reason: `"${text}" is not a lifetime: use <n>m, <n>h, <n>d or never` };
   const n = Number(m[1]);
   const seconds = n * (m[2] === "m" ? 60 : m[2] === "h" ? 3600 : 86400);
+  if (!Number.isSafeInteger(seconds)) return { ok: false, reason: "the lifetime is too large" };
   if (seconds < 300) return { ok: false, reason: "the minimum lifetime is 5m" };
   return { ok: true, seconds, text: s };
 }
@@ -1250,6 +1254,20 @@ function createHostAdminModel(deps = {}) {
           const res = await client.lifecycle(name, { action: "shutdown" });
           notice("info", `Graceful shutdown of ${name} requested (job ${str(res && res.jobId) || "?"}).`);
           return { ok: true, jobId: str(res && res.jobId) };
+        }
+        case "shareVm": {
+          const name = str(args.name), scope = str(args.scope);
+          if (!name || !["private", "host"].includes(scope)) throw new Error("Choose private or public on this host.");
+          await client.setVmSharing(name, { scope });
+          notice("info", `${name} is now ${scope === "host" ? "public to other users of this Construct host" : "private"}.`);
+          return { ok: true };
+        }
+        case "renewVmLease": {
+          const name = str(args.name), lifetime = parseLifetime(args.lifetime);
+          if (!name || !lifetime.ok) throw new Error(lifetime.reason || "A child VM name is required.");
+          const lease = await client.renewVmLease(name, { lifetime: lifetime.text });
+          notice("info", `${name}: ${leaseText(lease, now()) || (lifetime.text === "never" ? "no expiry" : `lifetime set to ${lifetime.text} from now`)}.`);
+          return { ok: true };
         }
         case "deleteVm": {
           const name = str(args.name);
