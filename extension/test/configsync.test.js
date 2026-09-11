@@ -2411,9 +2411,12 @@ async function runTests() {
       ok("publishToRemote: ...and clears the pending marker",
         !fs.existsSync(path.join(retryClone.dir, ".git", "construct-publish-pending")));
 
+      // Model a host whose default branch is main. A plain local bare init may
+      // leave HEAD at master even after main is pushed (init.defaultBranch is
+      // user configuration); subsequent HEAD/clone checks require a valid HEAD.
       // The real thing: an empty bare repo, created lazily.
       const bare = path.join(root, "remote.git");
-      execSync(`git init --bare "${bare}"`, { stdio: "ignore" });
+      execSync(`git -c init.defaultBranch=main init --bare "${bare}"`, { stdio: "ignore" });
       const url = "file://" + bare;
 
       const clone = await cs.ensurePublishClone(runGit, staging, url);
@@ -2490,7 +2493,7 @@ async function runTests() {
     try {
       const staging = mk(root, "staging");
       const bare = path.join(root, "remote.git");
-      execSync(`git init --bare "${bare}"`, { stdio: "ignore" });
+      execSync(`git -c init.defaultBranch=main init --bare "${bare}"`, { stdio: "ignore" });
       const url = "file://" + bare;
       const clone = await cs.ensurePublishClone(runGit, staging, url);
       await cs.checkoutPublishBranch(runGit, clone.dir, "main");

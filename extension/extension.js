@@ -41,6 +41,152 @@ const forwarderui = require("./src/forwarder-ui");
 const hypervRemote = require("./src/drivers/hyperv-remote");
 const hostadminui = require("./src/hostadmin-ui");
 const hostconversion = require("./src/hostconversion");
+const companion = require("./src/companion");
+
+let companionClient = null;
+let companionStarting = false;
+let companionReady = Promise.resolve();
+const companionMigrationChildren = new Set();
+let companionDisposed = false;
+let fallbackStarted = false;
+const fallbackStartupTimers = new Set();
+function companionDeferred() { return companionStarting || !!(companionClient && companionClient.deferred); }
+// Host jobs (probe, forwards, notify, audio, repatch, config sync) run only in the fallback mode of a live window.
+function hostJobsSuspended() { return companionDeferred() || companionDisposed; }
+
+function companionError() {
+  vscode.window.showWarningMessage("Construct Companion is unavailable. Retry after it reconnects or fallback resumes.");
+}
+function connectedInstance() {
+  return instances.connectedInstanceName(registryNow(), safeRemoteAuthority()) || null;
+}
+function postCompanionMessage(message, webview) {
+  const value = companion.overlayMessage(message, connectedInstance());
+  if (webview) safePost(webview, value, true);
+  else for (const w of liveWebviews) safePost(w, value, true);
+}
+async function refreshCompanion(webview) {
+  if (!companionClient || companionClient.status !== "alive") return;
+  const inst = activeInstance();
+  const token = instanceGate.token();
+  try {
+    const snapshot = await companionClient.snapshot(inst.name);
+    if (!companionClient.deferred || !instanceGate.valid(token)) return;
+    for (const message of companion.snapshotMessages(snapshot, connectedInstance())) postCompanionMessage(message, webview);
+  } catch (_) { /* detection rechecks; keep the last reading during grace */ }
+}
+async function proxyCompanion(message, webview) {
+  const name = activeInstance().name;
+  try {
+    if (message.type === "ready") return await refreshCompanion(webview);
+    if (message.type === "openPanel") return await companionClient.activate("panel", name);
+    if (message.type === "command" && message.id === "openHostAdmin") return await activateCompanionView("hostadmin");
+    await companionClient.proxy(name, message);
+    // Selection belongs to this window as well as to the Companion dispatcher.
+    if (message.type === "setInstance") await switchInstance(message.name);
+  } catch (_) { companionError(); }
+}
+function activateCompanionView(view) {
+  const inst = activeInstance();
+  const hostSlug = view === "hostadmin" && inst.service && inst.service.url ? remotehost.hostSlug(inst.service.url) : undefined;
+  return companionClient.activate(view, inst.name, hostSlug).catch(companionError);
+}
+function runCompanionMigration(file, args, input) {
+  return new Promise((resolve) => {
+    let child, timer, done = false;
+    const finish = (code) => { if (done) return; done = true; clearTimeout(timer); if (child) companionMigrationChildren.delete(child); resolve({ code }); };
+    try {
+      if (companionDisposed) { finish(-1); return; }
+      child = require("child_process").spawn(file, args, { windowsHide: true, stdio: ["pipe", "ignore", "ignore"] });
+      companionMigrationChildren.add(child);
+      child.on("error", () => finish(-1));
+      child.on("close", (code) => finish(code));
+      child.stdin.on("error", () => { child.kill(); finish(-1); });
+      timer = setTimeout(() => { child.kill(); finish(-1); }, 15000);
+      child.stdin.end(input);
+    } catch (_) { finish(-1); }
+  });
+}
+async function migrateCompanion() {
+  const cfg = vscode.workspace.getConfiguration("construct");
+  const settings = Object.fromEntries(Object.keys(companion.SETTING_DEFAULTS).map((key) => [key, cfg.get(key)]));
+  try {
+    await companion.migrate({ globalState: extensionContext.globalState, settings,
+      putSettings: (patch) => companionClient.putSettings(patch), hosts: remoteHosts(),
+      secrets: extensionContext.secrets, fs, env: process.env, libPath: remoteLibPath(), run: runCompanionMigration });
+  } catch (_) { logLine("companion: migration incomplete; will retry on the next connection."); }
+}
+let companionInstallOffered = false;
+function installCompanion() {
+  const scriptsDir = resolveScriptsDir();
+  if (!scriptsDir || !fs.existsSync(path.join(scriptsDir, "Install-ConstructCompanion.ps1"))) {
+    vscode.window.showWarningMessage("Update Construct to obtain Install-ConstructCompanion.ps1, then run Install Construct Companion again.");
+    return;
+  }
+  return lifecycle.launchHostScript({ scriptsDir, script: "Install-ConstructCompanion.ps1",
+    label: "Install Construct Companion", elevate: false });
+}
+async function maybeOfferCompanionInstall() {
+  const scriptsDir = resolveScriptsDir();
+  const registry = registryNow();
+  const manifest = companion.installManifestPath(process.env);
+  if (!companion.shouldOfferInstall({ platform: process.platform, deferred: companionDeferred(),
+    offered: companionInstallOffered, installed: !manifest || fs.existsSync(manifest),
+    setting: vscode.workspace.getConfiguration("construct").get("companion", "auto"),
+    preference: scriptsDir ? host.readRawSettings(scriptsDir).companion : undefined,
+    registered: registry.exists ? instances.list(registry).length : 0 })) return;
+  companionInstallOffered = true;
+  const choice = await vscode.window.showInformationMessage(
+    "Install Construct Companion on this PC to keep forwards, notifications and microphone passthrough available with VS Code closed.",
+    "Install Construct Companion", "Not now");
+  if (choice === "Install Construct Companion") installCompanion();
+}
+function startFallback(context) {
+  if (companionDisposed || companionDeferred() || fallbackStarted) return;
+  fallbackStarted = true;
+  void maybeOfferCompanionInstall().catch(companionError);
+  audioTargetInstance = activeInstance().name;
+  void requestAudioEnable(context, undefined, { auto: true });
+  const later = (work) => {
+    const timer = setTimeout(() => { fallbackStartupTimers.delete(timer); if (!hostJobsSuspended()) work(); }, 3000);
+    fallbackStartupTimers.add(timer);
+  };
+  later(startNotifyWatch);
+  later(noteForwarderConnected);
+  scheduleStartupRepatch(context);
+  try {
+    cfgDir = host.configDir(process.env) || null;
+    if (cfgDir) {
+      runGit = configsync.makeGitRunner({ spawn: require("child_process").spawn });
+      configsync.ensureConfigTree(cfgDir);
+      startConfigWatcher();
+    }
+  } catch (_) {}
+  syncAutoRefresh();
+}
+async function companionPresenceChanged(status, previous) {
+  if (companionDisposed) return;
+  if (status === "alive") {
+    // Invalidate pre-handoff refresh/import tokens, even for the same instance.
+    const inst = activeInstance();
+    instanceGate.set(inst.name, "companion-handoff");
+    instanceGate.set(inst.name, instances.targetFingerprint(inst));
+    fallbackStarted = false;
+    stopAutoRefresh(); stopNotifyWatch(); stopConfigWatcher();
+    for (const timer of fallbackStartupTimers) clearTimeout(timer);
+    fallbackStartupTimers.clear();
+    if (repatchTimer) clearTimeout(repatchTimer);
+    repatchTimer = null;
+    if (hostAdmin) { hostAdmin.dispose(); hostAdmin = null; }
+    await Promise.all([requestForwarderStop(), requestAudioDisable(), syncTickPromise]);
+    await migrateCompanion();
+    await refreshCompanion();
+  } else if (status === "absent" && previous !== "absent") {
+    startFallback(extensionContext);
+    for (const w of liveWebviews) pushSettings(w);
+    await refreshAll();
+  }
+}
 
 /** The single editor-tab panel instance, if open. */
 let panel; // vscode.WebviewPanel | undefined
@@ -184,6 +330,7 @@ function registryNow(force) {
   }
   registryCache = { at: now, registry: reg };
   reportRegistryProblems(reg);
+  if (force && !companionStarting && !companionDisposed) void Promise.resolve().then(maybeOfferCompanionInstall).catch(companionError);
   return reg;
 }
 
@@ -297,6 +444,7 @@ function captureTargetFull(target) {
  *  it logs why a captured flow stopped instead of toasting, for the background steps
  *  (a sync tick, an import's profile auto-enable) the user never explicitly started. */
 function targetStale(target, what) {
+  if (companionDeferred()) return true;
   if (!instances.targetSuperseded(instanceGate, target)) return false;
   logLine(`instances: ${what} for "${target.name}" finished after the window switched to ` +
     `"${activeInstance().name}" — discarded (nothing was written for either instance)`);
@@ -391,7 +539,8 @@ function safeRemoteAuthority() {
 
 /** Post to a webview, surviving both a synchronous throw and an async rejection
  *  if it was disposed mid-flight (postMessage returns a Thenable<boolean>). */
-function safePost(webview, msg) {
+function safePost(webview, msg, fromCompanion = false) {
+  if (companionDeferred() && !fromCompanion) return;
   try {
     const p = webview.postMessage(msg);
     if (p && typeof p.then === "function") p.then(undefined, () => {});
@@ -702,6 +851,7 @@ async function effectiveProjects(inst) {
 /** Probe the VM and push fresh state to one webview, then push the update-augmented
  *  state once the (cached, best-effort) GitHub check resolves. */
 async function refreshState(webview) {
+  if (companionDeferred()) return refreshCompanion(webview);
   if (!webview) return;
   // Bind the whole pipeline to the instance it starts under. Every await below is
   // followed by a gate check, so a stage that outlives a switch is dropped rather than
@@ -735,6 +885,7 @@ async function refreshState(webview) {
 /** Probe once and broadcast the same state to every live webview, then broadcast
  *  the update-augmented state. */
 async function refreshAll() {
+  if (companionDeferred()) { syncInstanceStatusItem(); return refreshCompanion(); }
   // Keep the status-bar indicator honest even when the registry gains/loses an
   // instance behind our back (another window, a hand edit, a future installer).
   syncInstanceStatusItem();
@@ -857,6 +1008,7 @@ function refreshTick() {
  *  applies (5s while a reprovision is in flight, else 30s). Started when the first webview
  *  goes live, stopped when the last closes, recreated when the cadence changes. */
 function syncAutoRefresh() {
+  if (hostJobsSuspended()) { stopAutoRefresh(); return; }
   if (liveWebviews.size === 0) { stopAutoRefresh(); return; }
   const wantMs = fastRefreshActive() ? FAST_REFRESH_MS : AUTO_REFRESH_MS;
   if (!autoRefreshTimer || autoRefreshMs !== wantMs) {
@@ -936,6 +1088,7 @@ function notificationsEnabled() {
 
 /** Open the watcher connection, or schedule a retry if it can't be opened. */
 function startNotifyWatch() {
+  if (hostJobsSuspended()) return;
   if (notifyChild || notifyRestartTimer) return;
   notifyStopped = false;
   if (!notificationsEnabled()) return;
@@ -982,6 +1135,7 @@ function startNotifyWatch() {
 
 /** Reconnect after a backoff (2s doubling to 60s), unless we've been told to stop. */
 function scheduleNotifyRestart() {
+  if (hostJobsSuspended()) return;
   if (notifyStopped || notifyRestartTimer || !notificationsEnabled()) return;
   notifyAttempt += 1;
   const delay = notify.reconnectDelayMs(notifyAttempt);
@@ -1099,6 +1253,7 @@ function forwarderSlotState() {
  * has moved on from is dropped rather than painted over the current VM's card.
  */
 async function startForwarder(target) {
+  if (hostJobsSuspended()) return;
   const t = target || actionTarget();
   const inst = targetInstance(t);
   const plan = instances.planEnable(forwarderSlotState(), t.name);
@@ -1240,6 +1395,7 @@ function requestForwarderStop() {
  * chain. See extension/ARCHITECTURE.md §Forwards.
  */
 function noteForwarderPresence(target, state) {
+  if (hostJobsSuspended()) return;
   if (!target) return;
   const plan = forwarder.planLifecycle({
     enabled: forwardsEnabled(),
@@ -1272,6 +1428,7 @@ function noteForwarderPresence(target, state) {
  * status flow.
  */
 function noteForwarderConnected() {
+  if (hostJobsSuspended()) return;
   try {
     if (!remote.isConnectedToVm(safeRemoteAuthority(), activeCfg())) return;
     noteForwarderPresence(actionTarget(), { online: true, vmState: "running" });
@@ -1493,10 +1650,11 @@ async function onNotifyLines(lines) {
  *  notification when that isn't possible (non-Windows host, blocked execution
  *  policy, notifications switched off in Windows). Never rejects. */
 async function deliverNotification(entry) {
+  if (hostJobsSuspended()) return;
   logLine(notify.logLineFor(entry));
   if (process.platform === "win32") {
     const reason = await raiseWindowsToast(entry);
-    if (!reason) return;
+    if (!reason || hostJobsSuspended()) return;
     logLine("notify: falling back to a VS Code notification (" + reason + ")");
   }
   const text = entry.title ? `${entry.title}: ${entry.body}` : entry.body;
@@ -1517,6 +1675,7 @@ async function deliverNotification(entry) {
  *  note, because "the toast worked but here is why it may look wrong" is exactly the
  *  information that was missing when this path failed in the field. */
 function raiseWindowsToast(entry) {
+  if (hostJobsSuspended()) return;
   const cmd = notify.buildToastCommand(entry, {
     file: notify.powershellPath(process.env, (p) => { try { return fs.existsSync(p); } catch (_) { return false; } }),
   });
@@ -1670,6 +1829,7 @@ async function buildConfigSyncState(target) {
  * follow-up starts, and after the tick's own awaits before either follow-on step.
  */
 async function runConfigSync(target) {
+  if (hostJobsSuspended()) return;
   // BEFORE the first await: instance, cfg, scripts dir and generation. Everything below
   // belongs to this one capture and nothing re-reads "the active instance".
   var syncTarget = captureTargetFull(target);
@@ -1707,6 +1867,7 @@ async function runConfigSync(target) {
     var syncInstance = targetInstance(syncTarget);
     var syncCfg = syncTarget.cfg;
     var readStore = async function () {
+      if (companionDeferred()) return null;
       try {
         var r = await ssh.runRemoteScript(configsync.buildReadStoreScript(), { timeoutMs: 30000, cfg: syncCfg });
         if (r.code < 0) return null;
@@ -1714,6 +1875,7 @@ async function runConfigSync(target) {
       } catch (_) { return null; }
     };
     var writeStore = async function (script) {
+      if (companionDeferred()) return null;
       try {
         var r = await ssh.runRemoteScript(script, { timeoutMs: 30000, cfg: syncCfg });
         if (r.code < 0) return null;
@@ -2002,22 +2164,23 @@ function coalescedImport(force, target) {
  *  sync tick. Coalesces concurrent attempts (per instance) so offline/hanging SSH
  *  doesn't cause unbounded overlapping scans. */
 function maybeAutoImport(target) {
+  if (hostJobsSuspended()) return;
   return coalescedImport(false, target);
 }
 
 /** Set up fs.watch on cfgDir/projects (debounced 2s). Tolerates watcher errors. */
 function startConfigWatcher() {
+  if (hostJobsSuspended()) return;
   if (configWatcher) return;
   var dir = resolveCfgDir();
   if (!dir) return;
   var projDir = path.join(dir, "projects");
   try { fs.mkdirSync(projDir, { recursive: true }); } catch (_) {}
-  var debounce = null;
   try {
     configWatcher = fs.watch(projDir, { persistent: false }, function () {
-      if (debounce) clearTimeout(debounce);
-      debounce = setTimeout(function () {
-        debounce = null;
+      if (configWatcherDebounce) clearTimeout(configWatcherDebounce);
+      configWatcherDebounce = setTimeout(function () {
+        configWatcherDebounce = null;
         // Capture at fire time, before the tick's first await: a debounced file change
         // syncs the instance this window drives NOW, and keeps it for the whole tick.
         runConfigSync(actionTarget()).then(function () { refreshAll(); });
@@ -2027,7 +2190,10 @@ function startConfigWatcher() {
   } catch (_) {}
 }
 
+let configWatcherDebounce = null;
 function stopConfigWatcher() {
+  if (configWatcherDebounce) clearTimeout(configWatcherDebounce);
+  configWatcherDebounce = null;
   if (configWatcher) { try { configWatcher.close(); } catch (_) {} configWatcher = null; }
 }
 
@@ -2774,6 +2940,7 @@ function makeMicProvider() {
  *  reflects the result; a down VM or a second window that already holds the tunnel
  *  shouldn't nag on every launch). A manual toggle keeps the progress spinner + toasts. */
 function enableAudio(context, webview, opts = {}) {
+  if (hostJobsSuspended()) return;
   // `opts.target` is a target the CALLER captured before its own awaits (the auto-arm
   // reads a preference and probes the VM first). Its generation is re-checked below,
   // immediately before the tunnel is created: A's "yes, reachable, mic wanted" must not
@@ -2917,6 +3084,7 @@ function reportAudioState(webview) {
  * VM first); a manual enable enables unconditionally and keeps its toasts.
  */
 function requestAudioEnable(context, webview, opts = {}) {
+  if (hostJobsSuspended()) return;
   // The target is captured HERE — at the user's click / at activation — not when the
   // queued step finally runs, so an enable can never be applied to a VM the window moved
   // to in between (the chain re-checks it and aborts instead).
@@ -2937,6 +3105,7 @@ function requestAudioDisable() {
  *  Best-effort and QUIET: gated on the VM being reachable so a down VM never toasts;
  *  the user can still toggle manually. */
 async function maybeAutoEnableAudio(context, target) {
+  if (hostJobsSuspended()) return;
   try {
     if (hostAudio && hostAudio.enabled) return;
     // Instance, cfg, scripts dir and generation are captured BEFORE the preference is
@@ -2982,6 +3151,7 @@ function repatchDelayMs() {
 /** Arm the one-shot startup patch-verification pass. Best-effort and unref'd so it
  *  never keeps the host alive on its own; cancelled by deactivate(). */
 function scheduleStartupRepatch(context) {
+  if (hostJobsSuspended()) return;
   const delay = repatchDelayMs();
   if (delay === 0) { logLine("repatch: startup verification disabled (construct.repatchDelaySeconds<=0)."); return; }
   logLine(`repatch: scheduling startup patch verification in ${Math.round(delay / 1000)}s.`);
@@ -3002,6 +3172,7 @@ function scheduleStartupRepatch(context) {
  *  Quiet by design — like the mic auto-arm, a startup housekeeping pass shouldn't
  *  toast on every launch; everything is recorded to the Construct output channel. */
 async function verifyPatchesOnStartup(context) {
+  if (hostJobsSuspended()) return;
   // One target for the whole pass: the settings that say WHICH patches are wanted, the
   // SSH repair that applies them and the auto-arm retry all belong to one VM. Captured
   // before the first await; a switch during the pass discards the rest of it.
@@ -3025,7 +3196,10 @@ async function verifyPatchesOnStartup(context) {
   // below still runs and does its own reachability check.
   if (plan.runPass) {
     const res = await repatch.runStartupRepatch({
-      ssh,
+      ssh: {
+        isReachable: (opts) => companionDeferred() ? Promise.resolve(false) : ssh.isReachable(opts),
+        runRemoteScript: (script, opts) => companionDeferred() ? Promise.resolve({ code: -1, stdout: "" }) : ssh.runRemoteScript(script, opts),
+      },
       cfg: t.cfg,
       readVmScript: audio.defaultReadScript,
       streamingOn,
@@ -3233,6 +3407,9 @@ function disableAudio() {
   hostAudioInstance = null;
   hostAudioSession = null;
   hostAudioEnable = null;
+  if (companionDeferred()) {
+    return Promise.resolve(pendingEnable).then(() => { inst.dispose(); });
+  }
   return Promise.resolve(vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: "Disabling microphone passthrough…", cancellable: false },
     async () => {
@@ -3454,6 +3631,7 @@ function retargetIfChanged(why) {
 
 /** Re-target everything that holds a per-VM connection or cache, then re-render. */
 async function onInstanceChanged() {
+  if (companionDeferred()) { syncInstanceStatusItem(); return refreshCompanion(); }
   const inst = activeInstance();   // also bumps instanceGate, invalidating live tokens
   // The IDENTITY, not the name, is what the live sessions are bound to: a notification
   // stream, a mic tunnel and a forwarding transport all terminate on an ENDPOINT. A
@@ -4184,7 +4362,9 @@ async function preparePanelLifecycle(webview, id, work) {
 }
 
 function handleMessage(message, webview, context) {
-  if (!message || typeof message.type !== "string") return;
+  if (!message || typeof message.type !== "string" || companionDisposed) return;
+  if (companionStarting) return companionReady.then(() => handleMessage(message, webview, context));
+  if (companionDeferred()) return proxyCompanion(message, webview);
 
   switch (message.type) {
     case "ready":
@@ -5035,6 +5215,13 @@ function openThemePicker(context) {
 
 /** Open (or reveal) the full control panel as a wide editor tab. */
 function openPanel(context) {
+  if (companionDisposed) return;
+  if (companionStarting) return companionReady.then(() => openPanel(context));
+  if (companionDeferred()) return activateCompanionView("panel");
+  return openPanelHere(context);
+}
+
+function openPanelHere(context) {
   if (panel) {
     // Bring the EXISTING panel to the front. Use reveal() with no column so it surfaces
     // in the column it already occupies — `reveal(ViewColumn.Active)` MOVES the panel to
@@ -5059,6 +5246,9 @@ function openPanel(context) {
 // bootstrap) must see the adopted selection, not the one it replaced. VS Code waits on
 // the returned promise before treating the extension as active.
 async function activate(context) {
+  companionStarting = true;
+  let finishDetection;
+  companionReady = new Promise(resolve => { finishDetection = resolve; });
   extensionContext = context;
   // Route lifecycle/update launch logging into the Construct Output channel, and let
   // `construct.debug` keep launched consoles open so errors are readable.
@@ -5082,7 +5272,9 @@ async function activate(context) {
       webviewOptions: { retainContextWhenHidden: true },
     }),
     vscode.commands.registerCommand("construct.openPanel", () => openPanel(context)),
-    vscode.commands.registerCommand("construct.refresh", () => refreshAll()),
+    vscode.commands.registerCommand("construct.installCompanion", installCompanion),
+    vscode.commands.registerCommand("construct.openPanelHere", () => openPanelHere(context)),
+    vscode.commands.registerCommand("construct.refresh", () => companionReady.then(() => companionDeferred() ? proxyCompanion({ type: "command", id: "refresh" }) : refreshAll())),
     vscode.commands.registerCommand("construct.showLogs", () => showLogs()),
     vscode.commands.registerCommand("construct.chooseTheme", () => openThemePicker(context)),
     vscode.commands.registerCommand("construct.switchInstance", () => runSwitchInstance()),
@@ -5091,7 +5283,7 @@ async function activate(context) {
     vscode.commands.registerCommand("construct.registerThisVm", () => runRegisterThisVm()),
     vscode.commands.registerCommand("construct.removeInstance", () => runRemoveInstance()),
     vscode.commands.registerCommand("construct.removeRemoteHost", () => runRemoveRemoteHost()),
-    vscode.commands.registerCommand("construct.openHostAdmin", () => hostAdminFeature().runOpenHostAdmin()),
+    vscode.commands.registerCommand("construct.openHostAdmin", () => companionReady.then(() => companionDeferred() ? activateCompanionView("hostadmin") : hostAdminFeature().runOpenHostAdmin())),
     // Clicking a VM notification's toast opens the control panel: Windows launches
     // the toast's vscode:// URI, which lands here. Data-free by design — the URI is
     // fixed in src/notify.js, so nothing VM-authored ever reaches this handler.
@@ -5099,7 +5291,13 @@ async function activate(context) {
     vscode.workspace.onDidChangeConfiguration((e) => {
       // Live-swap the design when construct.uiTheme changes (picker, settings UI,
       // or a synced settings.json edit) — re-render both surfaces in place.
-      if (e.affectsConfiguration("construct.uiTheme")) reapplyTheme(context);
+      if (e.affectsConfiguration("construct.companion") && companionClient) {
+        void companionClient.setMode(vscode.workspace.getConfiguration("construct").get("companion", "auto"));
+      }
+      if (e.affectsConfiguration("construct.uiTheme")) {
+        reapplyTheme(context);
+        if (companionDeferred()) void companionClient.putSettings({ uiTheme: currentThemeId() }).catch(companionError);
+      }
       // Open or tear down the notification watcher when it's switched on/off.
       if (e.affectsConfiguration("construct.notifications")) {
         stopNotifyWatch();
@@ -5133,6 +5331,24 @@ async function activate(context) {
       })
     );
   }
+  companionClient = companion.createClient({
+    onState: companionPresenceChanged,
+    onConnect: () => refreshCompanion(),
+    onEvent: (type, event) => {
+      if (type === "message" && event && event.instance === activeInstance().name && event.message) postCompanionMessage(event.message);
+      if (type === "companion" && event && event.type === "instances") {
+        registryNow(true);
+        void queueInstanceTransition(onInstanceChanged);
+      }
+    },
+  });
+  try {
+    await companionClient.start(vscode.workspace.getConfiguration("construct").get("companion", "auto"));
+  } finally {
+    companionStarting = false;
+    finishDetection();
+  }
+  context.subscriptions.push(companionClient);
   maybeAutoOpenPanel(context);
   // The startup arm is the first evaluation of the mic preference; record which instance
   // it was for, so onInstanceChanged only re-evaluates when the destination REALLY
@@ -5145,33 +5361,7 @@ async function activate(context) {
   // Only when a registry exists (see startRegistryWatch): a single-VM install opens no
   // watcher and behaves exactly as before.
   startRegistryWatch();
-  void requestAudioEnable(context, undefined, { auto: true });
-  // Notification watcher: independent of any open dashboard, so an agent can reach
-  // the user who never opened the panel. Delayed slightly so the SSH connect doesn't
-  // compete with startup work.
-  setTimeout(() => { if (!notifyStopped) startNotifyWatch(); }, 3000);
-  // Client port forwards: LAZY and guest-gated, unlike the notification watcher.
-  // Activation spawns nothing — no watcher, no reconcile, no probe of its own. It only
-  // asks the question this window can already answer for free: is it ATTACHED to the VM
-  // over Remote-SSH? If it is, that VM is up by construction and a request queued while
-  // VS Code was closed opens right away, whether or not anybody looks at the panel; if it
-  // is not, the forwarder waits for the status flow (noteForwarderPresence). The delay is
-  // the notification watcher's, for the same reason: don't compete with activation for the
-  // SSH connection.
-  setTimeout(() => { noteForwarderConnected(); }, 3000);
-  // A short while after start, re-apply any claude-code patch (streaming / mic gate)
-  // that a background extension auto-update reverted — patches are otherwise only
-  // applied at provision time. Delayed so the update has landed first (see repatch.js).
-  scheduleStartupRepatch(context);
-  // Config-sync engine bootstrap (D8).
-  try {
-    cfgDir = host.configDir(process.env) || null;
-    if (cfgDir) {
-      runGit = configsync.makeGitRunner({ spawn: require("child_process").spawn });
-      configsync.ensureConfigTree(cfgDir);
-      startConfigWatcher();
-    }
-  } catch (_) {}
+  startFallback(context);
 }
 
 /** When a window comes up attached to the VM (the installer's end-of-install deep
@@ -5191,6 +5381,12 @@ function maybeAutoOpenPanel(context) {
 }
 
 function deactivate() {
+  companionDisposed = true;
+  if (companionClient) companionClient.dispose();
+  for (const child of companionMigrationChildren) { try { child.kill(); } catch (_) {} }
+  companionMigrationChildren.clear();
+  for (const timer of fallbackStartupTimers) clearTimeout(timer);
+  fallbackStartupTimers.clear();
   // CLOSE THE SESSION CHAIN FIRST. Everything still queued on it is refused, and every
   // step already RUNNING — an auto-arm sitting in its reachability probe, an enable that
   // has not reached `new audio.HostAudio` yet — asks instances.planEnable on the way

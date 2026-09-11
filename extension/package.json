@@ -39,6 +39,15 @@
     },
     "commands": [
       {
+        "command": "construct.installCompanion",
+        "title": "Construct: Install Construct Companion"
+      },
+      {
+        "command": "construct.openPanelHere",
+        "title": "Open Control Panel Here",
+        "category": "The Construct"
+      },
+      {
         "command": "construct.openPanel",
         "title": "Open Control Panel",
         "category": "The Construct"
@@ -97,6 +106,12 @@
     "configuration": {
       "title": "The Construct",
       "properties": {
+        "construct.companion": {
+          "type": "string",
+          "enum": ["auto", "off"],
+          "default": "auto",
+          "markdownDescription": "Use a running Construct Companion for host jobs and the control panel. Set to `off` to keep this VS Code window in fallback mode."
+        },
         "construct.scriptsDir": {
           "type": "string",
           "default": "",

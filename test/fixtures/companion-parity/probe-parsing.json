@@ -1,0 +1,577 @@
+[
+  {
+    "host": null,
+    "input": "",
+    "map": {},
+    "output": {
+      "agents": [],
+      "projects": [],
+      "resources": "",
+      "ubuntu": "",
+      "vmName": ""
+    }
+  },
+  {
+    "host": "vm.example",
+    "input": "",
+    "map": {},
+    "output": {
+      "agents": [],
+      "projects": [],
+      "resources": "",
+      "ubuntu": "",
+      "vmName": ""
+    }
+  },
+  {
+    "host": "::1",
+    "input": "",
+    "map": {},
+    "output": {
+      "agents": [],
+      "projects": [],
+      "resources": "",
+      "ubuntu": "",
+      "vmName": ""
+    }
+  },
+  {
+    "host": null,
+    "input": "AGENT_NAME\tdev\nAI_TOOLS\tclaude-code,codex,opencode\nV_CLAUDE\tClaude 2.1.3\nMEM_GB\t7.6\nDISK_DEV_BYTES\t85899345920\nVM_CPUS\t6\nDISK_PCT\t41%\nPROJECTS\tapi, ui\nCONSTRUCT_COMMIT\t'ABCDEF1234'\nINSTALLED_AT\t2026-09-11T00:00:00Z",
+    "map": {
+      "AGENT_NAME": "dev",
+      "AI_TOOLS": "claude-code,codex,opencode",
+      "CONSTRUCT_COMMIT": "'ABCDEF1234'",
+      "DISK_DEV_BYTES": "85899345920",
+      "DISK_PCT": "41%",
+      "INSTALLED_AT": "2026-09-11T00:00:00Z",
+      "MEM_GB": "7.6",
+      "PROJECTS": "api, ui",
+      "VM_CPUS": "6",
+      "V_CLAUDE": "Claude 2.1.3"
+    },
+    "output": {
+      "agents": [
+        {
+          "detail": "CLI + VS Code extension",
+          "id": "claude-code",
+          "name": "Claude Code",
+          "updateAvailable": false,
+          "version": "2.1.3"
+        },
+        {
+          "detail": "app-server :4500",
+          "id": "codex",
+          "name": "Codex",
+          "updateAvailable": false,
+          "version": "—"
+        },
+        {
+          "detail": "serve :4096",
+          "id": "opencode",
+          "name": "OpenCode",
+          "updateAvailable": false,
+          "version": "—"
+        }
+      ],
+      "diskPct": 41,
+      "installed": "2026-09-11",
+      "projects": [
+        {
+          "name": "api",
+          "selected": true
+        },
+        {
+          "name": "ui",
+          "selected": true
+        }
+      ],
+      "provisionedCommit": "abcdef1234",
+      "resources": "7.6 GB RAM",
+      "ubuntu": "",
+      "vmName": "dev",
+      "vmSpec": {
+        "cpus": 6,
+        "diskGb": 80,
+        "ramGb": 8
+      }
+    }
+  },
+  {
+    "host": "vm.example",
+    "input": "AGENT_NAME\tdev\nAI_TOOLS\tclaude-code,codex,opencode\nV_CLAUDE\tClaude 2.1.3\nMEM_GB\t7.6\nDISK_DEV_BYTES\t85899345920\nVM_CPUS\t6\nDISK_PCT\t41%\nPROJECTS\tapi, ui\nCONSTRUCT_COMMIT\t'ABCDEF1234'\nINSTALLED_AT\t2026-09-11T00:00:00Z",
+    "map": {
+      "AGENT_NAME": "dev",
+      "AI_TOOLS": "claude-code,codex,opencode",
+      "CONSTRUCT_COMMIT": "'ABCDEF1234'",
+      "DISK_DEV_BYTES": "85899345920",
+      "DISK_PCT": "41%",
+      "INSTALLED_AT": "2026-09-11T00:00:00Z",
+      "MEM_GB": "7.6",
+      "PROJECTS": "api, ui",
+      "VM_CPUS": "6",
+      "V_CLAUDE": "Claude 2.1.3"
+    },
+    "output": {
+      "agents": [
+        {
+          "detail": "CLI + VS Code extension",
+          "id": "claude-code",
+          "name": "Claude Code",
+          "updateAvailable": false,
+          "version": "2.1.3"
+        },
+        {
+          "detail": "app-server :4500",
+          "id": "codex",
+          "name": "Codex",
+          "updateAvailable": false,
+          "version": "—"
+        },
+        {
+          "detail": "serve :4096",
+          "id": "opencode",
+          "name": "OpenCode",
+          "updateAvailable": false,
+          "version": "—"
+        }
+      ],
+      "diskPct": 41,
+      "installed": "2026-09-11",
+      "projects": [
+        {
+          "name": "api",
+          "selected": true
+        },
+        {
+          "name": "ui",
+          "selected": true
+        }
+      ],
+      "provisionedCommit": "abcdef1234",
+      "resources": "7.6 GB RAM",
+      "ubuntu": "",
+      "vmName": "dev",
+      "vmSpec": {
+        "cpus": 6,
+        "diskGb": 80,
+        "ramGb": 8
+      }
+    }
+  },
+  {
+    "host": "::1",
+    "input": "AGENT_NAME\tdev\nAI_TOOLS\tclaude-code,codex,opencode\nV_CLAUDE\tClaude 2.1.3\nMEM_GB\t7.6\nDISK_DEV_BYTES\t85899345920\nVM_CPUS\t6\nDISK_PCT\t41%\nPROJECTS\tapi, ui\nCONSTRUCT_COMMIT\t'ABCDEF1234'\nINSTALLED_AT\t2026-09-11T00:00:00Z",
+    "map": {
+      "AGENT_NAME": "dev",
+      "AI_TOOLS": "claude-code,codex,opencode",
+      "CONSTRUCT_COMMIT": "'ABCDEF1234'",
+      "DISK_DEV_BYTES": "85899345920",
+      "DISK_PCT": "41%",
+      "INSTALLED_AT": "2026-09-11T00:00:00Z",
+      "MEM_GB": "7.6",
+      "PROJECTS": "api, ui",
+      "VM_CPUS": "6",
+      "V_CLAUDE": "Claude 2.1.3"
+    },
+    "output": {
+      "agents": [
+        {
+          "detail": "CLI + VS Code extension",
+          "id": "claude-code",
+          "name": "Claude Code",
+          "updateAvailable": false,
+          "version": "2.1.3"
+        },
+        {
+          "detail": "app-server :4500",
+          "id": "codex",
+          "name": "Codex",
+          "updateAvailable": false,
+          "version": "—"
+        },
+        {
+          "detail": "serve :4096",
+          "id": "opencode",
+          "name": "OpenCode",
+          "updateAvailable": false,
+          "version": "—"
+        }
+      ],
+      "diskPct": 41,
+      "installed": "2026-09-11",
+      "projects": [
+        {
+          "name": "api",
+          "selected": true
+        },
+        {
+          "name": "ui",
+          "selected": true
+        }
+      ],
+      "provisionedCommit": "abcdef1234",
+      "resources": "7.6 GB RAM",
+      "ubuntu": "",
+      "vmName": "dev",
+      "vmSpec": {
+        "cpus": 6,
+        "diskGb": 80,
+        "ramGb": 8
+      }
+    }
+  },
+  {
+    "host": null,
+    "input": "T3CODE\ttrue\nV_T3\t0.0.12-nightly.1.2\nT3CODE_CHANNEL\tnightly\nT3CODE_PUBLIC_BASE_URL\t'https://[::1]:5178'\nT3_INSTALLATION_MODE\tprebuilt\nT3_BUILD_HASH\tabc\nT3_ACTIVE\tactive\nT3CODE_LIMIT_RESUME\t'TRUE'",
+    "map": {
+      "T3CODE": "true",
+      "T3CODE_CHANNEL": "nightly",
+      "T3CODE_LIMIT_RESUME": "'TRUE'",
+      "T3CODE_PUBLIC_BASE_URL": "'https://[::1]:5178'",
+      "T3_ACTIVE": "active",
+      "T3_BUILD_HASH": "abc",
+      "T3_INSTALLATION_MODE": "prebuilt",
+      "V_T3": "0.0.12-nightly.1.2"
+    },
+    "output": {
+      "agents": [
+        {
+          "buildHash": "abc",
+          "channel": "nightly",
+          "detail": "web GUI :5178 · https · nightly",
+          "id": "t3code",
+          "installationMode": "prebuilt",
+          "name": "T3 Code",
+          "updateAvailable": false,
+          "url": "https://[::1]:5178",
+          "version": "0.0.12-nightly.1.2",
+          "webui": true
+        }
+      ],
+      "projects": [],
+      "resources": "",
+      "ubuntu": "",
+      "vmConfig": {
+        "t3code": true,
+        "t3codeChannel": "nightly",
+        "t3codeLimitResume": true
+      },
+      "vmName": ""
+    }
+  },
+  {
+    "host": "vm.example",
+    "input": "T3CODE\ttrue\nV_T3\t0.0.12-nightly.1.2\nT3CODE_CHANNEL\tnightly\nT3CODE_PUBLIC_BASE_URL\t'https://[::1]:5178'\nT3_INSTALLATION_MODE\tprebuilt\nT3_BUILD_HASH\tabc\nT3_ACTIVE\tactive\nT3CODE_LIMIT_RESUME\t'TRUE'",
+    "map": {
+      "T3CODE": "true",
+      "T3CODE_CHANNEL": "nightly",
+      "T3CODE_LIMIT_RESUME": "'TRUE'",
+      "T3CODE_PUBLIC_BASE_URL": "'https://[::1]:5178'",
+      "T3_ACTIVE": "active",
+      "T3_BUILD_HASH": "abc",
+      "T3_INSTALLATION_MODE": "prebuilt",
+      "V_T3": "0.0.12-nightly.1.2"
+    },
+    "output": {
+      "agents": [
+        {
+          "buildHash": "abc",
+          "channel": "nightly",
+          "detail": "web GUI :5178 · https · nightly",
+          "id": "t3code",
+          "installationMode": "prebuilt",
+          "name": "T3 Code",
+          "updateAvailable": false,
+          "url": "https://[::1]:5178",
+          "version": "0.0.12-nightly.1.2",
+          "webui": true
+        }
+      ],
+      "projects": [],
+      "resources": "",
+      "ubuntu": "",
+      "vmConfig": {
+        "t3code": true,
+        "t3codeChannel": "nightly",
+        "t3codeLimitResume": true
+      },
+      "vmName": ""
+    }
+  },
+  {
+    "host": "::1",
+    "input": "T3CODE\ttrue\nV_T3\t0.0.12-nightly.1.2\nT3CODE_CHANNEL\tnightly\nT3CODE_PUBLIC_BASE_URL\t'https://[::1]:5178'\nT3_INSTALLATION_MODE\tprebuilt\nT3_BUILD_HASH\tabc\nT3_ACTIVE\tactive\nT3CODE_LIMIT_RESUME\t'TRUE'",
+    "map": {
+      "T3CODE": "true",
+      "T3CODE_CHANNEL": "nightly",
+      "T3CODE_LIMIT_RESUME": "'TRUE'",
+      "T3CODE_PUBLIC_BASE_URL": "'https://[::1]:5178'",
+      "T3_ACTIVE": "active",
+      "T3_BUILD_HASH": "abc",
+      "T3_INSTALLATION_MODE": "prebuilt",
+      "V_T3": "0.0.12-nightly.1.2"
+    },
+    "output": {
+      "agents": [
+        {
+          "buildHash": "abc",
+          "channel": "nightly",
+          "detail": "web GUI :5178 · https · nightly",
+          "id": "t3code",
+          "installationMode": "prebuilt",
+          "name": "T3 Code",
+          "updateAvailable": false,
+          "url": "https://[::1]:5178",
+          "version": "0.0.12-nightly.1.2",
+          "webui": true
+        }
+      ],
+      "projects": [],
+      "resources": "",
+      "ubuntu": "",
+      "vmConfig": {
+        "t3code": true,
+        "t3codeChannel": "nightly",
+        "t3codeLimitResume": true
+      },
+      "vmName": ""
+    }
+  },
+  {
+    "host": null,
+    "input": "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://bad/path\nMEM_GB\t-1\nVM_CPUS\twrong\nDISK_PCT\t101%\nOPENCODE_BACKGROUND_WATCHER\tfalse",
+    "map": {
+      "DISK_PCT": "101%",
+      "MEM_GB": "-1",
+      "OPENCODE_BACKGROUND_WATCHER": "false",
+      "T3CODE": "true",
+      "T3CODE_PUBLIC_BASE_URL": "https://bad/path",
+      "VM_CPUS": "wrong"
+    },
+    "output": {
+      "agents": [
+        {
+          "channel": "stable",
+          "detail": "web GUI :5177",
+          "id": "t3code",
+          "name": "T3 Code",
+          "updateAvailable": false,
+          "version": "—",
+          "webui": false
+        }
+      ],
+      "projects": [],
+      "resources": "-1 GB RAM",
+      "ubuntu": "",
+      "vmConfig": {
+        "opencodeBackgroundWatcher": false,
+        "t3code": true
+      },
+      "vmName": ""
+    }
+  },
+  {
+    "host": "vm.example",
+    "input": "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://bad/path\nMEM_GB\t-1\nVM_CPUS\twrong\nDISK_PCT\t101%\nOPENCODE_BACKGROUND_WATCHER\tfalse",
+    "map": {
+      "DISK_PCT": "101%",
+      "MEM_GB": "-1",
+      "OPENCODE_BACKGROUND_WATCHER": "false",
+      "T3CODE": "true",
+      "T3CODE_PUBLIC_BASE_URL": "https://bad/path",
+      "VM_CPUS": "wrong"
+    },
+    "output": {
+      "agents": [
+        {
+          "channel": "stable",
+          "detail": "web GUI :5177",
+          "id": "t3code",
+          "name": "T3 Code",
+          "updateAvailable": false,
+          "url": "http://vm.example:5177",
+          "version": "—",
+          "webui": false
+        }
+      ],
+      "projects": [],
+      "resources": "-1 GB RAM",
+      "ubuntu": "",
+      "vmConfig": {
+        "opencodeBackgroundWatcher": false,
+        "t3code": true
+      },
+      "vmName": ""
+    }
+  },
+  {
+    "host": "::1",
+    "input": "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://bad/path\nMEM_GB\t-1\nVM_CPUS\twrong\nDISK_PCT\t101%\nOPENCODE_BACKGROUND_WATCHER\tfalse",
+    "map": {
+      "DISK_PCT": "101%",
+      "MEM_GB": "-1",
+      "OPENCODE_BACKGROUND_WATCHER": "false",
+      "T3CODE": "true",
+      "T3CODE_PUBLIC_BASE_URL": "https://bad/path",
+      "VM_CPUS": "wrong"
+    },
+    "output": {
+      "agents": [
+        {
+          "channel": "stable",
+          "detail": "web GUI :5177",
+          "id": "t3code",
+          "name": "T3 Code",
+          "updateAvailable": false,
+          "url": "http://[::1]:5177",
+          "version": "—",
+          "webui": false
+        }
+      ],
+      "projects": [],
+      "resources": "-1 GB RAM",
+      "ubuntu": "",
+      "vmConfig": {
+        "opencodeBackgroundWatcher": false,
+        "t3code": true
+      },
+      "vmName": ""
+    }
+  },
+  {
+    "host": null,
+    "input": "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://host\nT3CODE_HTTPS_PORT\t\nMEM_GB\t0x10\nPROJECTS\ta,a\nUBUNTU\told\nUBUNTU\t24.04",
+    "map": {
+      "MEM_GB": "0x10",
+      "PROJECTS": "a,a",
+      "T3CODE": "true",
+      "T3CODE_HTTPS_PORT": "",
+      "T3CODE_PUBLIC_BASE_URL": "https://host",
+      "UBUNTU": "24.04"
+    },
+    "output": {
+      "agents": [
+        {
+          "channel": "stable",
+          "detail": "web GUI :5178 · https",
+          "id": "t3code",
+          "name": "T3 Code",
+          "updateAvailable": false,
+          "url": "https://host",
+          "version": "—",
+          "webui": false
+        }
+      ],
+      "projects": [
+        {
+          "name": "a",
+          "selected": true
+        },
+        {
+          "name": "a",
+          "selected": true
+        }
+      ],
+      "resources": "0x10 GB RAM",
+      "ubuntu": "24.04",
+      "vmConfig": {
+        "t3code": true
+      },
+      "vmName": "",
+      "vmSpec": {
+        "ramGb": 16
+      }
+    }
+  },
+  {
+    "host": "vm.example",
+    "input": "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://host\nT3CODE_HTTPS_PORT\t\nMEM_GB\t0x10\nPROJECTS\ta,a\nUBUNTU\told\nUBUNTU\t24.04",
+    "map": {
+      "MEM_GB": "0x10",
+      "PROJECTS": "a,a",
+      "T3CODE": "true",
+      "T3CODE_HTTPS_PORT": "",
+      "T3CODE_PUBLIC_BASE_URL": "https://host",
+      "UBUNTU": "24.04"
+    },
+    "output": {
+      "agents": [
+        {
+          "channel": "stable",
+          "detail": "web GUI :5178 · https",
+          "id": "t3code",
+          "name": "T3 Code",
+          "updateAvailable": false,
+          "url": "https://host",
+          "version": "—",
+          "webui": false
+        }
+      ],
+      "projects": [
+        {
+          "name": "a",
+          "selected": true
+        },
+        {
+          "name": "a",
+          "selected": true
+        }
+      ],
+      "resources": "0x10 GB RAM",
+      "ubuntu": "24.04",
+      "vmConfig": {
+        "t3code": true
+      },
+      "vmName": "",
+      "vmSpec": {
+        "ramGb": 16
+      }
+    }
+  },
+  {
+    "host": "::1",
+    "input": "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://host\nT3CODE_HTTPS_PORT\t\nMEM_GB\t0x10\nPROJECTS\ta,a\nUBUNTU\told\nUBUNTU\t24.04",
+    "map": {
+      "MEM_GB": "0x10",
+      "PROJECTS": "a,a",
+      "T3CODE": "true",
+      "T3CODE_HTTPS_PORT": "",
+      "T3CODE_PUBLIC_BASE_URL": "https://host",
+      "UBUNTU": "24.04"
+    },
+    "output": {
+      "agents": [
+        {
+          "channel": "stable",
+          "detail": "web GUI :5178 · https",
+          "id": "t3code",
+          "name": "T3 Code",
+          "updateAvailable": false,
+          "url": "https://host",
+          "version": "—",
+          "webui": false
+        }
+      ],
+      "projects": [
+        {
+          "name": "a",
+          "selected": true
+        },
+        {
+          "name": "a",
+          "selected": true
+        }
+      ],
+      "resources": "0x10 GB RAM",
+      "ubuntu": "24.04",
+      "vmConfig": {
+        "t3code": true
+      },
+      "vmName": "",
+      "vmSpec": {
+        "ramGb": 16
+      }
+    }
+  }
+]

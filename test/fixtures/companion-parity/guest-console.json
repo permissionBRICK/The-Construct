@@ -1,0 +1,122 @@
+[
+  {
+    "input": "guest",
+    "kind": "script",
+    "output": "construct vm console 'guest' --web\n"
+  },
+  {
+    "input": "A.b_c-1",
+    "kind": "script",
+    "output": "construct vm console 'A.b_c-1' --web\n"
+  },
+  {
+    "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "kind": "script",
+    "output": "construct vm console 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' --web\n"
+  },
+  {
+    "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "kind": "script",
+    "output": null
+  },
+  {
+    "input": "",
+    "kind": "script",
+    "output": null
+  },
+  {
+    "input": "-bad",
+    "kind": "script",
+    "output": null
+  },
+  {
+    "input": "bad'",
+    "kind": "script",
+    "output": null
+  },
+  {
+    "input": "a\nb",
+    "kind": "script",
+    "output": null
+  },
+  {
+    "input": "a/b",
+    "kind": "script",
+    "output": null
+  },
+  {
+    "input": "https://host/console#ticket",
+    "kind": "url",
+    "output": "https://host/console#ticket"
+  },
+  {
+    "input": "http://127.0.0.1:8080/#ticket",
+    "kind": "url",
+    "output": "http://127.0.0.1:8080/#ticket"
+  },
+  {
+    "input": "https://host#ticket",
+    "kind": "url",
+    "output": "https://host/#ticket"
+  },
+  {
+    "input": " HTTPS://HOST:443/a#ticket\r\n",
+    "kind": "url",
+    "output": "https://host/a#ticket"
+  },
+  {
+    "input": "https://[::1]/#ticket",
+    "kind": "url",
+    "output": "https://[::1]/#ticket"
+  },
+  {
+    "input": "https://host/",
+    "kind": "url",
+    "output": null
+  },
+  {
+    "input": "https://host/#",
+    "kind": "url",
+    "output": null
+  },
+  {
+    "input": "https://user@host/#ticket",
+    "kind": "url",
+    "output": null
+  },
+  {
+    "input": "https://user:pass@host/#ticket",
+    "kind": "url",
+    "output": null
+  },
+  {
+    "input": "ftp://host/#ticket",
+    "kind": "url",
+    "output": null
+  },
+  {
+    "input": "javascript:alert(1)#ticket",
+    "kind": "url",
+    "output": null
+  },
+  {
+    "input": "not a url",
+    "kind": "url",
+    "output": null
+  },
+  {
+    "input": "",
+    "kind": "url",
+    "output": null
+  },
+  {
+    "input": "https://host/#one\nhttps://host/#two",
+    "kind": "url",
+    "output": null
+  },
+  {
+    "input": "noise\nhttps://host/#ticket",
+    "kind": "url",
+    "output": null
+  }
+]

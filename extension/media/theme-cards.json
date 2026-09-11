@@ -1,0 +1,17 @@
+[
+  {
+    "id": "classic",
+    "label": "Classic Matrix",
+    "blurb": "The original green operator console — rain, glow and all."
+  },
+  {
+    "id": "terminal",
+    "label": "Terminal, Refined",
+    "blurb": "The Matrix identity with discipline: a real phosphor scale, glow reserved for live things."
+  },
+  {
+    "id": "native",
+    "label": "VS Code Native",
+    "blurb": "Looks like a built-in VS Code panel and follows your editor theme, light or dark."
+  }
+]

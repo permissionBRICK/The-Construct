@@ -1,0 +1,133 @@
+[
+  {
+    "input": null,
+    "kind": "endpoint",
+    "output": null
+  },
+  {
+    "input": {},
+    "kind": "endpoint",
+    "output": null
+  },
+  {
+    "input": {
+      "sshHost": "host",
+      "sshPort": "1e3"
+    },
+    "kind": "endpoint",
+    "output": {
+      "publicHost": "host",
+      "sshHost": "host",
+      "sshPort": 1000
+    }
+  },
+  {
+    "input": {
+      "sshHost": "host",
+      "sshPort": true
+    },
+    "kind": "endpoint",
+    "output": {
+      "publicHost": "host",
+      "sshHost": "host",
+      "sshPort": 1
+    }
+  },
+  {
+    "input": {
+      "sshHost": "host",
+      "sshPort": 65536
+    },
+    "kind": "endpoint",
+    "output": {
+      "publicHost": "host",
+      "sshHost": "host",
+      "sshPort": 22
+    }
+  },
+  {
+    "input": {
+      "publicHost": "web",
+      "sshHost": "host",
+      "sshPort": "2222"
+    },
+    "kind": "endpoint",
+    "output": {
+      "publicHost": "web",
+      "sshHost": "host",
+      "sshPort": 2222
+    }
+  },
+  {
+    "input": "host.example",
+    "kind": "url",
+    "normalized": "https://host.example:7462",
+    "pin": "/local/The-Construct/remote/host.example_7462.pin",
+    "slug": "host.example_7462"
+  },
+  {
+    "input": "HTTPS://HOST.EXAMPLE/path",
+    "kind": "url",
+    "normalized": "https://host.example:7462",
+    "pin": "/local/The-Construct/remote/host.example_7462.pin",
+    "slug": "host.example_7462"
+  },
+  {
+    "input": "https://host:443",
+    "kind": "url",
+    "normalized": "https://host:7462",
+    "pin": "/local/The-Construct/remote/host_7462.pin",
+    "slug": "host_7462"
+  },
+  {
+    "input": "http://localhost:8080",
+    "kind": "url",
+    "normalized": "http://localhost:8080",
+    "pin": "/local/The-Construct/remote/localhost_8080.pin",
+    "slug": "localhost_8080"
+  },
+  {
+    "input": "https://[::1]:7462",
+    "kind": "url",
+    "normalized": "https://[::1]:7462",
+    "pin": "/local/The-Construct/remote/__1_7462.pin",
+    "slug": "__1_7462"
+  },
+  {
+    "input": "https://[2001:db8::1]:7443",
+    "kind": "url",
+    "normalized": "https://[2001:db8::1]:7443",
+    "pin": "/local/The-Construct/remote/2001_db8__1_7443.pin",
+    "slug": "2001_db8__1_7443"
+  },
+  {
+    "input": null,
+    "kind": "fingerprint",
+    "output": ""
+  },
+  {
+    "input": "",
+    "kind": "fingerprint",
+    "output": ""
+  },
+  {
+    "input": "abababababababababababababababababababababababababababababababab",
+    "kind": "fingerprint",
+    "output": "AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB"
+  },
+  {
+    "input": "AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB",
+    "kind": "fingerprint",
+    "output": "AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB"
+  },
+  {
+    "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "kind": "fingerprint",
+    "output": ""
+  },
+  {
+    "input": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+    "kind": "fingerprint",
+    "output": ""
+  }
+]
