@@ -1,0 +1,170 @@
+[
+  {
+    "age": 0,
+    "area": "updates",
+    "output": true,
+    "success": false
+  },
+  {
+    "age": 59999,
+    "area": "updates",
+    "output": true,
+    "success": false
+  },
+  {
+    "age": 60000,
+    "area": "updates",
+    "output": false,
+    "success": false
+  },
+  {
+    "age": 299999,
+    "area": "updates",
+    "output": false,
+    "success": false
+  },
+  {
+    "age": 300000,
+    "area": "updates",
+    "output": false,
+    "success": false
+  },
+  {
+    "age": 599999,
+    "area": "updates",
+    "output": false,
+    "success": false
+  },
+  {
+    "age": 600000,
+    "area": "updates",
+    "output": false,
+    "success": false
+  },
+  {
+    "age": 0,
+    "area": "updates",
+    "output": true,
+    "success": true
+  },
+  {
+    "age": 59999,
+    "area": "updates",
+    "output": true,
+    "success": true
+  },
+  {
+    "age": 60000,
+    "area": "updates",
+    "output": true,
+    "success": true
+  },
+  {
+    "age": 299999,
+    "area": "updates",
+    "output": true,
+    "success": true
+  },
+  {
+    "age": 300000,
+    "area": "updates",
+    "output": true,
+    "success": true
+  },
+  {
+    "age": 599999,
+    "area": "updates",
+    "output": true,
+    "success": true
+  },
+  {
+    "age": 600000,
+    "area": "updates",
+    "output": false,
+    "success": true
+  },
+  {
+    "age": 0,
+    "area": "usage",
+    "output": true,
+    "success": false
+  },
+  {
+    "age": 59999,
+    "area": "usage",
+    "output": true,
+    "success": false
+  },
+  {
+    "age": 60000,
+    "area": "usage",
+    "output": false,
+    "success": false
+  },
+  {
+    "age": 299999,
+    "area": "usage",
+    "output": false,
+    "success": false
+  },
+  {
+    "age": 300000,
+    "area": "usage",
+    "output": false,
+    "success": false
+  },
+  {
+    "age": 599999,
+    "area": "usage",
+    "output": false,
+    "success": false
+  },
+  {
+    "age": 600000,
+    "area": "usage",
+    "output": false,
+    "success": false
+  },
+  {
+    "age": 0,
+    "area": "usage",
+    "output": true,
+    "success": true
+  },
+  {
+    "age": 59999,
+    "area": "usage",
+    "output": true,
+    "success": true
+  },
+  {
+    "age": 60000,
+    "area": "usage",
+    "output": true,
+    "success": true
+  },
+  {
+    "age": 299999,
+    "area": "usage",
+    "output": true,
+    "success": true
+  },
+  {
+    "age": 300000,
+    "area": "usage",
+    "output": false,
+    "success": true
+  },
+  {
+    "age": 599999,
+    "area": "usage",
+    "output": false,
+    "success": true
+  },
+  {
+    "age": 600000,
+    "area": "usage",
+    "output": false,
+    "success": true
+  }
+]

@@ -10,6 +10,10 @@ using Construct.Companion.Host.Desktop;
 using Construct.Companion.Host.Runtime;
 using Construct.Companion.Windows;
 using Microsoft.Web.WebView2.Core;
+using Construct.Companion.Host.Composition;
+using Construct.Companion.Host.Ipc;
+using Construct.Companion.Core.Audio;
+using Microsoft.Extensions.DependencyInjection;
 namespace Construct.Companion;
 
 internal static class Program
@@ -27,22 +31,54 @@ internal static class Program
         var files=new DesktopFileSystem(); var clock=new SystemClock(); var keys=new CurrentUserRegistry();
         var desktop=new DesktopProcess(); var launcher=new DesktopLauncher(desktop,files);
         var hypervisor=new HypervisorQuery(new CimVmQuery()); var capture=new WasapiAudioCapture(); var toast=new WinRtToastRaiser(keys);
-        if (command.SelfTest)
-        {
-            var platform=new DesktopSelfTestPlatform(files,new RuntimeProcessRunner(),hypervisor,desktop,()=>CoreWebView2Environment.GetAvailableBrowserVersionString());
-            var report=new SelfTest(files,platform,capture,toast).RunAsync(command.Instance).GetAwaiter().GetResult();
-            Console.WriteLine(JsonSerializer.Serialize(report,IpcJson.Options)); return report.ExitCode;
-        }
         var local=new HostState(files).LocalAppData;
         if (local is null) { Console.Error.WriteLine("No local application data path."); return 1; }
         var stateDirectory=Path.Combine(local,"The-Construct","companion");
         var settings=new SettingsStore(files,Path.Combine(stateDirectory,"settings.json"));
         var log=new RollingLog(files,clock,Path.Combine(stateDirectory,"logs"));
+        Microsoft.AspNetCore.Builder.WebApplication BuildHost(DesktopHostBridge bridge, bool runtimeJobs = true) => IpcServer.Build(services =>
+            {
+                services.AddSingleton<IStateFileSystem>(files).AddSingleton<IFileSystem>(files);
+                services.AddSingleton<IClock>(clock).AddSingleton(settings);
+                services.AddSingleton<ILauncher>(launcher).AddSingleton<IHypervisorState>(hypervisor);
+                services.AddSingleton<IAudioCapture>(capture).AddSingleton<IToastRaiser>(toast);
+                services.AddSingleton(new SharedAudioCapture(capture, selectDevice:()=>settings.Read().MicDevice));
+                services.AddSingleton<ITokenStore>(new ProtectedTokenStore(files,new DpapiProtection(),Path.Combine(local,"The-Construct","remote")));
+                services.AddSingleton<IRemoteApi,HttpRemoteApi>().AddSingleton<IUpdateSource,HttpUpdateSource>();
+                services.AddSingleton<IPrompts>(bridge.Prompts).AddSingleton<IClipboard>(bridge).AddSingleton<ICompanionDesktop>(bridge);
+                services.AddCompanionHost(runtimeJobs);
+            },new(version, PublishEndpoint:runtimeJobs));
+        if (command.SelfTest)
+        {
+            using var diagnosticBridge=new DesktopHostBridge(diagnostic:true);
+            var platform=new DesktopSelfTestPlatform(files,new RuntimeProcessRunner(),hypervisor,desktop,()=>CoreWebView2Environment.GetAvailableBrowserVersionString(), async (definition,ct)=>
+            {
+                var service=definition["service"]!;
+                var tokens=new ProtectedTokenStore(files,new DpapiProtection(),Path.Combine(new HostState(files).LocalAppData!,"The-Construct","remote"));
+                var client=new Core.Remote.RemoteHostClient(new HttpRemoteApi(),files,tokens,StateJson.String(service["url"]),StateJson.Text(service["auth"])=="token" ? RemoteAuthentication.Token : RemoteAuthentication.Negotiate);
+                var state=await Core.Drivers.VmPower.QueryRemoteAsync(client,StateJson.String(definition["vmName"]),ct);
+                return Enum.TryParse<HypervisorState>(state,true,out var result) ? result : HypervisorState.Unknown;
+            }, async ct =>
+            {
+                await using var probeHost=BuildHost(diagnosticBridge, runtimeJobs:false);
+                await probeHost.StartAsync(ct);
+                try
+                {
+                    using var http=new HttpClient(new HttpClientHandler { UseProxy=false,AllowAutoRedirect=false });
+                    var response=await http.GetAsync(probeHost.Urls.Single()+"/v1/health",ct);
+                    using var body=JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+                    return response.IsSuccessStatusCode && body.RootElement.GetProperty("ok").GetBoolean();
+                }
+                finally { await probeHost.StopAsync(ct); }
+            });
+            var report=Task.Run(()=>new SelfTest(files,platform,capture,toast).RunAsync(command.Instance)).GetAwaiter().GetResult();
+            Console.WriteLine(JsonSerializer.Serialize(report,IpcJson.Options)); return report.ExitCode;
+        }
         try
         {
             var registry=InstanceRegistry.Load(files);
             if (registry.Synthesized && new HostState(files).ResolveScriptsDirectory(overrideDirectory:settings.Read().ScriptsDir) is null) registry.ByName.Clear();
-            var hosts=registry.List().Select(i=>StateJson.Text(i["service"]?["url"])).Where(u=>u is not null).Select(u=>RemoteHost.HostSlug(u!)).ToArray();
+            var hosts=registry.List().Select(i=>StateJson.Text(i["service"]?["url"])).Where(u=>u is not null).Concat((StateJson.ReadObject(files,Path.Combine(stateDirectory,"hosts.json"))?["hosts"] as System.Text.Json.Nodes.JsonArray ?? []).Select(h=>StateJson.Text(h?["url"])).Where(u=>u is not null)).Select(u=>RemoteHost.HostSlug(u!)).Distinct().ToArray();
             var plan=Activation.Resolve(command,registry.ByName.Keys.ToArray(),hosts);
             using var instance=new SingleInstance();
             if (!instance.IsPrimary)
@@ -55,31 +91,17 @@ internal static class Program
             if (command.Quit) return 0;
             ApplicationConfiguration.Initialize();
             var registration=new DesktopRegistration(keys,Application.ExecutablePath,Application.ExecutablePath);
-            // S3 replaces this single factory call with its dispatcher-backed sink.
-            var bus=new RuntimeMessageBus();
-            TrayContext? context=null;
-            var sink=new InProcessMessageSink(bus,async (scope,message,cancellationToken)=>
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (scope.Length>0 && !scope.StartsWith("host:",StringComparison.Ordinal) && !registry.ByName.ContainsKey(scope)) throw new ArgumentException("Instance is not registered.");
-                if (message.TryGetProperty("type",out var type) && type.GetString()=="hostadmin.ready")
-                    bus.Publish(scope,new {type="hostadmin.state",state=new {mode="unavailable",message="Runtime services are not connected in this build."}});
-                else if (type.ValueKind==JsonValueKind.String && type.GetString()=="ready")
-                    bus.Publish(scope,new { type="state",state=new { instance=scope,online=false,vmState="unknown",connectedInstance=(string?)null } });
-                else
-                {
-                    bus.Publish(scope,new { type="lifecyclePrepared",ok=false,id=message.TryGetProperty("id",out var id) ? id.GetString() : "",error="Runtime services are not connected in this build." });
-                    if (context is not null) await context.ShowRuntimeUnavailableAsync(cancellationToken);
-                }
-            });
-            using var tray=new TrayContext(files,sink,settings,launcher,registration,log,clock,capture,stateDirectory,version,plan);
-            context=tray;
-            var server=DesktopActivationServer.StartAsync(files,Path.Combine(stateDirectory,"ui-endpoint.json"),tray,version,messages:sink).GetAwaiter().GetResult();
+            using var bridge=new DesktopHostBridge();
+            var server=BuildHost(bridge);
+            using var tray=new TrayContext(files,server.Services.GetRequiredService<IMessageSink>(),settings,launcher,registration,log,clock,capture,stateDirectory,version,plan);
+            bridge.Tray=tray;
+            server.Lifetime.ApplicationStopping.Register(()=> { _=tray.QuitAsync(); });
+            Task.Run(()=>server.StartAsync()).GetAwaiter().GetResult();
             Application.ThreadException+=(_,e)=>log.Write(DesktopLogEvent.UnhandledException,e.Exception);
             AppDomain.CurrentDomain.UnhandledException+=(_,e)=>log.Write(DesktopLogEvent.UnhandledException,e.ExceptionObject as Exception);
             log.Write(DesktopLogEvent.Started);
             try { Application.Run(tray); }
-            finally { server.DisposeAsync().AsTask().GetAwaiter().GetResult(); log.Write(DesktopLogEvent.Stopped); }
+            finally { Task.Run(async ()=> { await server.StopAsync(); await server.DisposeAsync(); }).GetAwaiter().GetResult(); log.Write(DesktopLogEvent.Stopped); }
             return 0;
         }
         catch (ArgumentException) { Console.Error.WriteLine("Invalid Construct activation."); return 2; }

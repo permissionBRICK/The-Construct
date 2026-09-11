@@ -2943,3 +2943,19 @@ Messages arriving while initial detection is pending wait for the mode decision.
 Extension shutdown terminates a pending token-migration child; a failed native toast
 cannot raise a late VS Code fallback notification after handoff. Host-admin activation
 includes the current remote host slug when the selected instance supplies one.
+
+The S3 desktop entry point now supplies native platform seams to `AddCompanionHost`,
+and the tray/WebView2 windows use the same dispatcher and aggregated events as HTTP
+clients. [The message matrix](../companion/README.md#message-matrix) is checked against
+`handleMessage` and the dispatcher's known sets. `companion-host.test.js` starts the
+real portable Host and checks detection, proxying, SSE, activation and quit for both
+mixed and remote-only registries (build the Companion solution first).
+
+`construct.installCompanion` launches the root `Install-ConstructCompanion.ps1` via
+`lifecycle.launchHostScript`, visible and non-elevated. In fallback mode a pure
+`shouldOfferInstall` decision permits one offer per session only on Windows, with
+an actual registered instance, no install manifest, no `construct.companion=off`,
+and no install-wide `companion:false`. Registry changes re-evaluate eligibility;
+choosing either button suppresses further offers for the session. Local and remote
+VMs use the same client install rule. Auto-Install, Update-Construct and
+Provision-AgentVM use the shared non-blocking installation hook.

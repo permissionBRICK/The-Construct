@@ -3,7 +3,7 @@ namespace Construct.Companion.Core.Audio;
 
 // One host capture across every instance; the last subscription releases the device before
 // a new capture is allowed to start. Individual slow consumers are disconnected.
-public sealed class SharedAudioCapture(IAudioCapture capture, string? deviceId = null) : IAsyncDisposable
+public sealed class SharedAudioCapture(IAudioCapture capture, string? deviceId = null, Func<string?>? selectDevice = null) : IAsyncDisposable
 {
     private readonly SemaphoreSlim serial = new(1);
     private readonly object gate = new();
@@ -43,7 +43,7 @@ public sealed class SharedAudioCapture(IAudioCapture capture, string? deviceId =
         try
         {
             token.ThrowIfCancellationRequested();
-            await foreach (var frame in capture.CaptureAsync(deviceId, token).WithCancellation(token).ConfigureAwait(false))
+            await foreach (var frame in capture.CaptureAsync(selectDevice is null ? deviceId : selectDevice(), token).WithCancellation(token).ConfigureAwait(false))
             {
                 IAudioConnection[] active; lock (gate) active = clients.ToArray();
                 foreach (var client in active)

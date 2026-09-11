@@ -393,6 +393,7 @@ try {
 # Get one of these wrong and the provisioner aims at the DEFAULT LOCAL VM.
 Write-Host ""
 Write-Host "=== Remote provisioning arguments ===" -ForegroundColor Cyan
+$SkipCompanion = $false
 $ClaudePartialStreaming = "on"; $MicPassthrough = "off"; $OpenCodeBackgroundWatcher = "on"
 $T3Code = "on"; $T3CodeChannel = "stable"; $T3CodeLimitResume = "off"
 $AutoResolve = $false; $Repo = "owner/repo"; $Ref = "main"

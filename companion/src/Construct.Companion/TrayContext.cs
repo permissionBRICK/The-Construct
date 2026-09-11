@@ -28,6 +28,8 @@ internal sealed class TrayContext : ApplicationContext,IUiActivation
     private readonly string stateDirectory;
     private readonly string version;
     private readonly IDisposable registryWatch;
+    private readonly CancellationTokenSource lifetime=new();
+    private string theme="";
     private CancellationTokenSource subscription=new();
     private InstanceRegistry registry;
     private Icon? icon;
@@ -60,9 +62,26 @@ internal sealed class TrayContext : ApplicationContext,IUiActivation
         refreshTimer.Tick+=(_,_)=>RefreshIcon(); refreshTimer.Start();
         files.CreateDirectory(Path.Combine(new HostState(files).LocalAppData!,"The-Construct"));
         registryWatch=files.Watch(Path.Combine(new HostState(files).LocalAppData!,"The-Construct"),()=>
-        { if (!disposed) dispatcher.BeginInvoke(()=> { registry=LoadRegistry(); if (Active is not null && !registry.ByName.ContainsKey(Active)) Select(null); }); });
+        { if (!disposed) dispatcher.BeginInvoke(()=> { registry=LoadRegistry(); if (Active is null && registry.ByName.Count > 0 || Active is not null && !registry.ByName.ContainsKey(Active)) Select(settings.Read().ActiveInstance); }); });
+        theme=settings.Read().UiTheme;
+        settings.Changed+=SettingsChanged;
         Select(settings.Read().ActiveInstance);
+        _=ListenCompanionAsync(lifetime.Token);
         dispatcher.BeginInvoke(async ()=> { try { await ApplyPlanAsync(initial); } catch (Exception e) { ShowFailure(e); } });
+    }
+    private void SettingsChanged(CompanionSettings value)
+    {
+        if (!disposed) dispatcher.BeginInvoke(()=>
+        {
+            if (value.ActiveInstance!=Active) Select(value.ActiveInstance);
+            if (theme!=value.UiTheme) { theme=value.UiTheme; foreach (var window in windows.Values) window.ReloadTheme(); }
+        });
+    }
+    private async Task ListenCompanionAsync(CancellationToken token)
+    {
+        try { await foreach (var message in sink.Subscribe("companion",token))
+            if (message.GetProperty("type").GetString()=="settings") SettingsChanged(settings.Read()); }
+        catch (OperationCanceledException) { }
     }
     private InstanceRegistry LoadRegistry()
     {
@@ -71,7 +90,7 @@ internal sealed class TrayContext : ApplicationContext,IUiActivation
         return loaded;
     }
     private string? Active=>snapshot.State.Instance;
-    private string[] Hosts()=>registry.List().Select(i=>StateJson.Text(i["service"]?["url"])).Where(u=>u is not null).Select(u=>RemoteHost.HostSlug(u!)).Distinct(StringComparer.Ordinal).ToArray();
+    private string[] Hosts()=>registry.List().Select(i=>StateJson.Text(i["service"]?["url"])).Where(u=>u is not null).Concat((StateJson.ReadObject(files,Path.Combine(stateDirectory,"hosts.json"))?["hosts"] as JsonArray ?? []).Select(h=>StateJson.Text(h?["url"])).Where(u=>u is not null)).Select(u=>RemoteHost.HostSlug(u!)).Distinct(StringComparer.Ordinal).ToArray();
     private void Select(string? requested)
     {
         if (requested is not null && !registry.ByName.ContainsKey(requested)) requested=null;
@@ -79,7 +98,7 @@ internal sealed class TrayContext : ApplicationContext,IUiActivation
         subscription.Cancel(); subscription.Dispose(); subscription=new();
         var scripts=name is not null ? new HostState(files).ResolveScriptsDirectory(StateJson.Text(registry.ByName[name]["scriptsDir"]),settings.Read().ScriptsDir) : null;
         snapshot.Select(name,scripts is not null);
-        settings.Update(new JsonObject { ["activeInstance"]=name });
+        if (settings.Read().ActiveInstance!=name) settings.Update(new JsonObject { ["activeInstance"]=name });
         if (windows.TryGetValue("popup",out var popup)) _=popup.ChangeScopeAsync(name ?? "");
         if (name is not null) _=ListenAsync(name,subscription.Token);
         RefreshIcon();
@@ -210,6 +229,7 @@ internal sealed class TrayContext : ApplicationContext,IUiActivation
     {
         foreach (var activation in activations)
         {
+            if (activation.View=="theme") { Open("theme",activation.Instance); continue; }
             var command=new CommandLine(Panel:activation.View=="panel",Settings:activation.View=="settings",HostAdmin:activation.View=="hostadmin",Popup:activation.View=="popup",Instance:activation.Instance,Host:activation.Host);
             var plan=Activation.Resolve(command,registry.ByName.Keys.ToArray(),Hosts());
             foreach (var view in plan.Views) Open(view.View,view.View=="hostadmin" ? view.Host : view.Instance);
@@ -226,7 +246,7 @@ internal sealed class TrayContext : ApplicationContext,IUiActivation
     {
         if (disposing && !disposed)
         {
-            disposed=true; registryWatch.Dispose(); subscription.Cancel(); subscription.Dispose(); refreshTimer.Dispose(); clickTimer.Dispose();
+            disposed=true; settings.Changed-=SettingsChanged; lifetime.Cancel(); lifetime.Dispose(); registryWatch.Dispose(); subscription.Cancel(); subscription.Dispose(); refreshTimer.Dispose(); clickTimer.Dispose();
             foreach (var window in windows.Values) window.Dispose(); menu.Dispose(); tray.Dispose(); icon?.Dispose(); dispatcher.Dispose();
         }
         base.Dispose(disposing);

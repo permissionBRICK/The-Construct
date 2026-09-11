@@ -14,9 +14,9 @@ using Construct.Companion.Host.Ipc;
 using Construct.Companion.Host.Runtime;
 namespace Construct.Companion.Host.Dispatch;
 
-public sealed class MessageDispatcher(CompanionInstances instances, StateAggregation state, IpcSettings settings,
+public sealed partial class MessageDispatcher(CompanionInstances instances, StateAggregation state, IpcSettings settings,
     IpcEvents events, IpcLogs logs, IStateFileSystem files, IPrompts prompts, ILauncher launcher,
-    ICompanionDesktop desktop, IClock clock, HostAdministration hosts, IUpdateSource updates)
+    ICompanionDesktop desktop, IClock clock, HostAdministration hosts, CachedUpdateSource updates, IAudioCapture capture)
 {
     public static bool IsRefresh(JsonObject message) => Text(message, "type") == "ready" || Text(message, "type") == "command" && Text(message, "id") == "refresh";
     public void Validate(string name, JsonObject message)
@@ -84,6 +84,12 @@ public sealed class MessageDispatcher(CompanionInstances instances, StateAggrega
         switch (id)
         {
             case "refresh": await RefreshAsync(entry, ct); break;
+            case "chooseTheme": await desktop.ActivateAsync(new("theme", name), ct); break;
+            case "chooseMicDevice":
+                var devices = await capture.EnumerateDevicesAsync(ct);
+                var pickedDevice = await prompts.PickAsync(new("Microphone device", [new("", "System default"), .. devices.Select(d => new PickItem(d.Id, d.Name))]), ct);
+                if (pickedDevice?.FirstOrDefault() is {} device) settings.Merge(new() { ["micDevice"] = device });
+                break;
             case "showLogs": await launcher.OpenAsync(logs.PathName, ct); break;
             case "connect": await Connect(entry, "/root/repos", ct); break;
             case "startConnect":
@@ -168,12 +174,24 @@ public sealed class MessageDispatcher(CompanionInstances instances, StateAggrega
             default: Refuse(name, id, "This command is not supported by Construct Companion."); break;
         }
     }
-    public async Task RefreshAsync(CompanionInstance entry, CancellationToken ct)
+    public async Task RefreshAsync(CompanionInstance entry, CancellationToken ct, bool probe = true, bool collectUsage = true)
     {
-        if (entry.Runtime is { } runtime) await runtime.ProbeOnceAsync(ct);
+        await entry.EnrichmentSerial.WaitAsync(ct);
+        try
+        {
+        if (probe && entry.Runtime is { } runtime) await runtime.ProbeOnceAsync(ct);
         await hosts.RefreshExtrasAsync(entry, ct);
-        var usage = await entry.Ssh.RunRemoteScriptAsync(UsageParser.BuildUsageScript(entry.UsagePeriod), TimeSpan.FromSeconds(60), ct);
-        if (usage.Code == 0) { entry.UsageRaw = usage.Stdout; entry.Usage = UsageParser.ParseUsage(StateJson.ParseObject(usage.Stdout)); }
+        if (collectUsage)
+        {
+            var period = entry.UsagePeriod;
+            if (!entry.UsageCache.TryGetValue(period, out var cached) || !RefreshCachePolicy.Fresh("usage", cached.Raw is not null, (clock.UtcNow-cached.At).TotalMilliseconds))
+            {
+                var usage = await entry.Ssh.RunRemoteScriptAsync(UsageParser.BuildUsageScript(period), TimeSpan.FromSeconds(60), ct);
+                cached = (clock.UtcNow, usage.Code == 0 && StateJson.ParseObject(usage.Stdout) is not null ? usage.Stdout : null);
+                entry.UsageCache[period] = cached;
+            }
+            entry.UsageRaw = cached.Raw; entry.Usage = cached.Raw is null ? null : UsageParser.ParseUsage(StateJson.ParseObject(cached.Raw));
+        }
         if (entry.ConfigSync is { } configArea)
         {
             entry.ConfigState = JsonSerializer.SerializeToNode(await configArea.Runtime.BuildStateAsync(ct), IpcJson.Options);
@@ -184,8 +202,11 @@ public sealed class MessageDispatcher(CompanionInstances instances, StateAggrega
         data["provisionStale"] = UpdatePlanner.IsProvisionStale(markers, Text(data, "provisionedCommit"));
         data["constructUpdate"] = await UpdatePlanner.CheckConstructAsync(updates, markers, ct);
         if (data["agents"] is JsonArray agents) data["agents"] = await UpdatePlanner.AugmentAgentsAsync(updates, agents, ct);
+        entry.Enrichment = new JsonObject { ["constructUpdate"] = data["constructUpdate"]?.DeepClone(), ["provisionStale"] = data["provisionStale"]?.DeepClone() };
         state.Publish(entry.Name, full);
         state.PublishSnapshot(entry.Name);
+        }
+        finally { entry.EnrichmentSerial.Release(); }
     }
     private async Task SaveSettings(CompanionInstance entry, JsonObject form, CancellationToken ct)
     {
@@ -216,7 +237,7 @@ public sealed class MessageDispatcher(CompanionInstances instances, StateAggrega
             var script = Path.Combine(directory, Text(invocation, "script"));
             if (!files.FileExists(script)) { Refuse(entry.Name, action, "The installed lifecycle script is missing."); return; }
             var args = invocation["args"]!.AsArray().Select(StateJson.String).ToArray();
-            var launch = new ProcessInvocation("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-File", script, .. args], directory);
+            var launch = PowerShellLaunch.BuildHostLaunch(script, args, elevate: StateJson.Boolean(invocation["elevate"]) == true, keepOpen: settings.Read().Debug, argSpec: invocation["argSpec"] as JsonArray).Invocation(directory);
             if (StateJson.Boolean(invocation["elevate"]) == true) await launcher.LaunchElevatedAsync(launch, ct); else await launcher.StartDetachedAsync(launch, ct);
             entry.Runtime?.BeginFastRefresh(); events.Companion(new { type = "lifecycle", instance = entry.Name, action, status = "launched" });
         }
