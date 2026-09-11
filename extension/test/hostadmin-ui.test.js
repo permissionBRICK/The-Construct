@@ -30,7 +30,7 @@ function fakeClient(answers = {}) {
   const calls = [];
   const c = { host: "buildbox.example.local", calls };
   for (const m of ["health", "whoami", "hostStatus", "hostCapacity", "hostConfig", "putHostConfig", "hostCapabilities", "isoCatalog", "users", "createUser", "updateUser", "deleteUser",
-    "putUserAllowance", "userTokens", "issueUserToken", "revokeUserToken", "vms", "children", "lifecycle", "deleteVm", "getJob", "overrides", "putOverrides", "deleteOverrides",
+    "putUserAllowance", "userTokens", "issueUserToken", "revokeUserToken", "vms", "children", "lifecycle", "setVmSharing", "renewVmLease", "deleteVm", "getJob", "overrides", "putOverrides", "deleteOverrides",
     "rotateVmToken", "revokeVmToken", "media", "deleteMedia", "mediaCleanup", "jobs", "cancelJob", "audit", "updatesStatus", "updatesCheck", "updatesStage", "updatesApply", "updatesCancel", "updatesResolve"]) {
     c[m] = async (...args) => {
       calls.push({ method: m, args });
@@ -136,6 +136,31 @@ const lastState = (entry) => [...entry.panel.posted].reverse().find((m) => m.typ
 
 (async () => {
   console.log("\n=== the panel ===");
+  {
+    const child = { name: "child", kind: "child", state: "running", sharing: "private", lease: { requested: "12h", state: "active" }, allowedActions: ["renew", "share"] };
+    const client = fakeClient({ health: HEALTH, whoami: ME_ADMIN, vms: () => [child],
+      renewVmLease: (_name, body) => { child.lease = { requested: body.lifetime, state: "unlimited" }; return child.lease; },
+      setVmSharing: (_name, body) => { child.sharing = body.scope; return { scope: body.scope }; } });
+    const t = makeFeature({ client, script: { input: "never" } });
+    const entry = await openReady(t);
+    await entry.panel.send({ type: "hostadmin.tab", tab: "vms" });
+    await entry.panel.send({ type: "hostadmin.action", action: "changeVmLifetime", args: { name: "child" } });
+    eq("lifetime: prompt starts with current value", t.vscode.rec.inputs.at(-1).value, "12h");
+    ok("lifetime: prompt explains renewal starts now", /from now/.test(t.vscode.rec.inputs.at(-1).prompt));
+    eq("lifetime: refreshed row shows unlimited", lastState(entry).vms.rows[0].lease, "no expiry");
+    await entry.panel.send({ type: "hostadmin.action", action: "shareVm", args: { name: "child", scope: "host" } });
+    eq("sharing: public result reloaded", lastState(entry).vms.rows[0].sharing, "host");
+    await entry.panel.send({ type: "hostadmin.action", action: "shareVm", args: { name: "child", scope: "private" } });
+    eq("sharing: private result reloaded", lastState(entry).vms.rows[0].sharing, "private");
+    entry.panel.dispose();
+    const cancelled = makeFeature({ client });
+    const other = await openReady(cancelled);
+    await other.panel.send({ type: "hostadmin.tab", tab: "vms" });
+    const before = client.calls.filter((c) => c.method === "renewVmLease").length;
+    await other.panel.send({ type: "hostadmin.action", action: "changeVmLifetime", args: { name: "child" } });
+    eq("lifetime: dismissing prompt does not renew", client.calls.filter((c) => c.method === "renewVmLease").length, before);
+    other.panel.dispose();
+  }
   {
     const t = makeFeature();
     const entry = await openReady(t);
