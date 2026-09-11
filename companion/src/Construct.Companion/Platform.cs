@@ -17,10 +17,12 @@ internal sealed class Platform(HostFileSystem files, string localAppData, string
     public DesktopLauncher Launcher { get; } = new(new DesktopProcess(), files);
     public HypervisorQuery Hypervisor { get; } = new(new CimVmQuery());
     public WasapiAudioCapture Capture { get; } = new();
-    public DesktopRegistration Registration { get; } = new(new CurrentUserRegistry(), Application.ExecutablePath);
+    public CurrentUserRegistry Registry { get; } = new();
+    public DesktopRegistration Registration => new(Registry, Application.ExecutablePath);
     public ProtectedTokenStore Tokens { get; } = new(files, new DpapiProtection(), Path.Combine(localAppData, "The-Construct", "remote"));
     public RollingLog Log { get; } = new(files, new SystemClock(), Path.Combine(localAppData, "The-Construct", "companion", "logs"));
     public WinRtToastRaiser Toast => new(Registration);
+    public bool IsDarkAppTheme => DesktopPalette.IsDark(Registry);
     // Loopback only: proxies and redirects must never see the bearer token.
     public static HttpClient LoopbackClient(TimeSpan timeout) => new(new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false }) { Timeout = timeout };
 }
