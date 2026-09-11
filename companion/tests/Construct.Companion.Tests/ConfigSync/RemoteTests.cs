@@ -29,7 +29,7 @@ public sealed class RemoteTests
     }
     [Fact] public async Task ImportCreatesMergesConflictsAndRenamesWithProvenance()
     {
-        using var w=new GitTestWorkspace(); var remote=new ConfigRemotes(w.Repo,w.Cache); var prompts=new FakePrompts(); var actions=new ConfigSyncActions(w.Repo,remote,w.Lock,prompts,new FakeClipboard(),w.Clock);
+        using var w=new GitTestWorkspace(); var remote=new ConfigRemotes(w.Repo,w.Cache); var prompts=new FakePrompts(); var actions=new ConfigSyncActions(w.Repo,remote,w.Lock,prompts,new FakeClipboard(),w.Clock,new(1,1));
         var selection=new ImportSelection("https://host/config","HEAD","projects/a.json","a",GitTestWorkspace.Profile("a")); Assert.Equal(1,(await actions.ImportSelectedAsync([selection])).Count);
         Assert.Equal(selection.Content,System.IO.File.ReadAllText(w.Repo.FilePath("bases","a"))); Assert.Equal(selection.RemoteUrl,remote.ReadImportManifest()["a"].RemoteUrl);
         var update=selection with { Content=GitTestWorkspace.Profile("a","upstream") }; Assert.Equal(1,(await actions.ImportSelectedAsync([update])).Count); Assert.Contains("upstream",w.Repo.ReadMainProfiles()["a"]);
@@ -39,14 +39,14 @@ public sealed class RemoteTests
     [Fact] public async Task PublishFlowAdoptsOnlyAfterPushAndKeepsTrackedProfilesOut()
     {
         using var w=new GitTestWorkspace(); var url=await Bare(w); var remote=new ConfigRemotes(w.Repo,w.Cache); remote.WriteRemotes([new(url)]); w.Host("a");
-        var clone=await remote.EnsurePublishCloneAsync(url); await Identity(w,clone.Dir); var actions=new ConfigSyncActions(w.Repo,remote,w.Lock,new FakePrompts(),new FakeClipboard(),w.Clock);
+        var clone=await remote.EnsurePublishCloneAsync(url); await Identity(w,clone.Dir); var actions=new ConfigSyncActions(w.Repo,remote,w.Lock,new FakePrompts(),new FakeClipboard(),w.Clock,new(1,1));
         var result=await actions.PublishSelectedAsync(url,["a"]); Assert.True(result.Ok,result.Message); var entry=remote.ReadImportManifest()["a"]; Assert.Equal(40,entry.BaseCommit!.Length); Assert.Equal(40,entry.BaseBlobSha!.Length); Assert.Equal(w.Repo.ReadMainProfiles()["a"],System.IO.File.ReadAllText(w.Repo.FilePath("bases","a")));
         Assert.False((await actions.PublishSelectedAsync(url,["a"])).Ok);
     }
     [Fact] public async Task PublishFailureDoesNotAdoptAndRejectsRemoteConflict()
     {
         using var w=new GitTestWorkspace(); var url=Path.Combine(w.Root,"missing.git"); var remote=new ConfigRemotes(w.Repo,w.Cache); var clone=await remote.EnsurePublishCloneAsync(url); await Identity(w,clone.Dir); w.Host("a");
-        var actions=new ConfigSyncActions(w.Repo,remote,w.Lock,new FakePrompts(),new FakeClipboard(),w.Clock); Assert.False((await actions.PublishSelectedAsync(url,["a"])).Ok); Assert.Empty(remote.ReadImportManifest());
+        var actions=new ConfigSyncActions(w.Repo,remote,w.Lock,new FakePrompts(),new FakeClipboard(),w.Clock,new(1,1)); Assert.False((await actions.PublishSelectedAsync(url,["a"])).Ok); Assert.Empty(remote.ReadImportManifest());
     }
     [Fact] public async Task StagingRefreshAndPushBackUseReviewBranch()
     {
@@ -59,7 +59,7 @@ public sealed class RemoteTests
     [Theory] [InlineData("../../outside")] [InlineData("projects/../../outside")] [InlineData(".git/config")] public void PushPathsCannotEscapeClone(string path) => Assert.Throws<ConfigSyncException>(()=>ConfigRemotes.ContainedPath("/staging",path));
     [Fact] public async Task ShareProducesClipboardCommandOrZipThroughSeams()
     {
-        using var w=new GitTestWorkspace(); w.Host("a"); var remote=new ConfigRemotes(w.Repo,w.Cache); var prompts=new FakePrompts(); var clipboard=new FakeClipboard(); var actions=new ConfigSyncActions(w.Repo,remote,w.Lock,prompts,clipboard,w.Clock);
+        using var w=new GitTestWorkspace(); w.Host("a"); var remote=new ConfigRemotes(w.Repo,w.Cache); var prompts=new FakePrompts(); var clipboard=new FakeClipboard(); var actions=new ConfigSyncActions(w.Repo,remote,w.Lock,prompts,clipboard,w.Clock,new(1,1));
         prompts.Picks.Enqueue(["a"]); prompts.SaveFiles.Enqueue(Path.Combine(w.Root,"bundle.zip")); var shared=await actions.ShareAsync(); Assert.True(shared.Ok);
         using(var zip=ZipFile.OpenRead(Path.Combine(w.Root,"bundle.zip"))) { Assert.Equal(new[]{"deploy.ps1","projects/a.json"},zip.Entries.Select(e=>e.FullName)); using var reader=new StreamReader(zip.GetEntry("deploy.ps1")!.Open()); Assert.Equal(ConfigSharing.BuildDeployPs1(),await reader.ReadToEndAsync()); }
         remote.Adopt("a",GitTestWorkspace.Profile("a"),new("https://host/config","main","projects/a.json","a"),GitTestWorkspace.Profile("a")); prompts.Picks.Enqueue(["a"]); Assert.True((await actions.ShareAsync()).Ok); Assert.Equal(ConfigSharing.BuildShareCommand("https://host/config",["a"]),clipboard.Text);

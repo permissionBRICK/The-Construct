@@ -29,13 +29,6 @@ public sealed class FakeDesktopProcess : IDesktopProcess
     public string? FindOnPath(string executable) => Executables.GetValueOrDefault(executable);
     public string? EnvironmentValue(string name) => Environment.GetValueOrDefault(name);
 }
-public sealed class FakeUiActivation : IUiActivation
-{
-    public List<UiActivation> Activations { get; } = [];
-    public bool Quit { get; private set; }
-    public Task ActivateAsync(IReadOnlyList<UiActivation> activations, CancellationToken cancellationToken = default) { Activations.AddRange(activations); return Task.CompletedTask; }
-    public Task QuitAsync(CancellationToken cancellationToken = default) { Quit = true; return Task.CompletedTask; }
-}
 public sealed class FakeMessageSink : IMessageSink
 {
     public List<InstanceMessage> Posted { get; } = [];

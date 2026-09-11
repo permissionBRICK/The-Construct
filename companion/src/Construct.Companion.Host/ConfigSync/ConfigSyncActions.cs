@@ -8,7 +8,7 @@ namespace Construct.Companion.Host.ConfigSync;
 
 // Dialogs are outside the repo lock. After each dialog the action re-reads mutable
 // state under the lock, so a long-open picker cannot overwrite another engine's work.
-public sealed class ConfigSyncActions(ConfigRepository repo, ConfigRemotes remotes, SyncLock syncLock, IPrompts prompts, IClipboard clipboard, IClock clock, SemaphoreSlim? repositoryQueue = null)
+public sealed class ConfigSyncActions(ConfigRepository repo, ConfigRemotes remotes, SyncLock syncLock, IPrompts prompts, IClipboard clipboard, IClock clock, SemaphoreSlim repositoryQueue)
 {
     public async Task<ActionResult> AddRemoteAsync(bool publish = false, CancellationToken ct = default)
     {
@@ -199,11 +199,11 @@ public sealed class ConfigSyncActions(ConfigRepository repo, ConfigRemotes remot
     private Task<ActionResult> Locked(Func<Task<ActionResult>> action,CancellationToken ct) => Queued(()=>LockedCore(action,ct),ct);
     private async Task<ActionResult> Queued(Func<Task<ActionResult>> action, CancellationToken ct)
     {
-        if(repositoryQueue!=null) await repositoryQueue.WaitAsync(ct);
+        await repositoryQueue.WaitAsync(ct);
         try { return await action(); }
         catch(ConfigSyncException e) { return new(false,e.Message); }
         catch(Exception e) when(e is IOException or UnauthorizedAccessException or ArgumentException) { return new(false,"Could not access the config repository or profile."); }
-        finally { repositoryQueue?.Release(); }
+        finally { repositoryQueue.Release(); }
     }
     private async Task<ActionResult> LockedCore(Func<Task<ActionResult>> action,CancellationToken ct)
     {
@@ -215,8 +215,6 @@ public sealed class ConfigSyncActions(ConfigRepository repo, ConfigRemotes remot
             var state=await repo.StateAsync(ct); if (state.Conflict || state.MergeInProgress) return new(false,"unresolved merge in config repo");
             return await action();
         }
-        catch (ConfigSyncException e) { return new(false,e.Message); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException) { return new(false,"Could not access the config repository or profile."); }
         finally { syncLock.Release(token); }
     }
 }

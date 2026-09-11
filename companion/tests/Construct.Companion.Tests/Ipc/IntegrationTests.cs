@@ -92,7 +92,7 @@ public sealed class IntegrationTests
     public async Task RemoteOnlySelfTestDoesNotRequireLocalHyperV()
     {
         await using var h = await Harness.Start(s => s.AddCompanionFakes(true, true));
-        var platform = new DesktopSelfTestPlatform((IStateFileSystem)h.Files, new FakeProcessRunner(), new FakeHypervisorState(), new FakeDesktopProcess(), () => "fixture",
+        var platform = new DesktopSelfTestPlatform((IStateFileSystem)h.Files, new FakeProcessRunner(), new FakeHypervisorState(), () => "fixture", _ => Task.FromResult(true),
             (_, _) => Task.FromResult(HypervisorState.Running));
         var report = await new SelfTest((IStateFileSystem)h.Files, platform, new FakeAudioCapture(), new FakeToastRaiser()).RunAsync();
         Assert.Equal(0, report.ExitCode);

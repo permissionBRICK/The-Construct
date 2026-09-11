@@ -10,6 +10,7 @@ using Construct.Companion.Fakes;
 using Construct.Companion.Host.Composition;
 using Construct.Companion.Host.Desktop;
 using Construct.Companion.Host.Ipc;
+using Construct.Companion.Host.Runtime;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -112,7 +113,7 @@ public sealed class CompositionAdapterTests
     public async Task DesktopWatcherSeesNestedSettingsReplacement()
     {
         var root = Path.Combine(Path.GetTempPath(),"companion-watch-"+Guid.NewGuid().ToString("N"));
-        var files = new DesktopFileSystem(); files.CreateDirectory(Path.Combine(root,"companion"));
+        var files = new HostFileSystem(); files.CreateDirectory(Path.Combine(root,"companion"));
         var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         try
         {

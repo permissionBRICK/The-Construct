@@ -51,12 +51,3 @@ public sealed class LoopbackAudioServerFactory : IAudioServerFactory
         public async ValueTask DisposeAsync() { await stop.CancelAsync().ConfigureAwait(false); client.Dispose(); await run.ConfigureAwait(false); }
     }
 }
-public sealed class SocketPortProbe : IPortProbe
-{
-    public Task<bool> IsFreeAsync(int port, string bindHost, CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        var listener = new TcpListener(IPAddress.Parse(bindHost), port);
-        try { listener.Start(); return Task.FromResult(true); } catch (SocketException) { return Task.FromResult(false); } finally { listener.Stop(); }
-    }
-}

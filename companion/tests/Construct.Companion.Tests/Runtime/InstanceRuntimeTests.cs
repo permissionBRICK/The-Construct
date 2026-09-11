@@ -23,7 +23,7 @@ public sealed class InstanceRuntimeTests
             created[definition.Name] = runtime; return runtime;
         }
         async Task<IAsyncDisposable?> Acquire(string name, CancellationToken ct) => await lease.WaitAsync(0, ct) ? new TestLease(lease) : null;
-        await using var supervisor = new RuntimeSupervisor(registry, Create, bus, Acquire, clock);
+        await using var supervisor = new RuntimeSupervisor(registry, Create, bus, clock, Acquire);
         await supervisor.StartAsync(); await lease.WaitAsync();
         registry.Instances = [registry.Instances[0] with { Revision = "2" }, new("b", "1", ForwardsEnabled: false, NotificationsEnabled: false)];
         await supervisor.RefreshAsync().WaitAsync(TimeSpan.FromSeconds(2));
@@ -48,7 +48,7 @@ public sealed class InstanceRuntimeTests
                 changed => new AudioSession(ssh, processes, new FakeAudioServerFactory(), capture, changed), new RepatchJob(ssh), bus);
             created.Add((runtime, transport)); return runtime;
         }
-        await using var supervisor = new RuntimeSupervisor(registry, Create, bus); await supervisor.StartAsync(); await Eventually(() => created.Count == 2 && bus.Snapshot("a").ContainsKey("state"));
+        await using var supervisor = new RuntimeSupervisor(registry, Create, bus, clock); await supervisor.StartAsync(); await Eventually(() => created.Count == 2 && bus.Snapshot("a").ContainsKey("state"));
         registry.Instances = [registry.Instances[0] with { HostLabel = "pc" }, registry.Instances[1]];
         await supervisor.RefreshAsync(); Assert.Equal(2, created.Count); Assert.False(created[0].Transport.Released); Assert.Equal("pc", created[0].Runtime.Instance.HostLabel);
         registry.Instances = [registry.Instances[0] with { Revision = "2" }, registry.Instances[1]];

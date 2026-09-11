@@ -3,8 +3,8 @@
 The Windows tray app and the portable IPC Host form one program. `Program.cs` supplies
 native filesystem, DPAPI, pinned HTTP, launch, toast, microphone, prompt and clipboard
 adapters to `AddCompanionHost`. The same dispatcher handles authenticated HTTP clients,
-WebView2 windows and tray runtime actions. The bootstrap activation server remains only
-for compatibility tests; the production app publishes `endpoint.json`.
+WebView2 windows and tray runtime actions; a second process hands its command line to the
+running one through the same authenticated routes (`endpoint.json`).
 
 ## Layout
 

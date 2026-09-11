@@ -28,7 +28,7 @@ internal static class Program
         catch (ArgumentException error) { Console.Error.WriteLine(error.Message); return 2; }
         var version=typeof(Program).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "0.0.0";
         if (command.Version) { Console.WriteLine(version); return 0; }
-        var files=new DesktopFileSystem(); var clock=new SystemClock(); var keys=new CurrentUserRegistry();
+        var files=new HostFileSystem(); var clock=new SystemClock(); var keys=new CurrentUserRegistry();
         var desktop=new DesktopProcess(); var launcher=new DesktopLauncher(desktop,files);
         var hypervisor=new HypervisorQuery(new CimVmQuery()); var capture=new WasapiAudioCapture(); var toast=new WinRtToastRaiser(keys);
         var local=new HostState(files).LocalAppData;
@@ -51,14 +51,7 @@ internal static class Program
         if (command.SelfTest)
         {
             using var diagnosticBridge=new DesktopHostBridge(diagnostic:true);
-            var platform=new DesktopSelfTestPlatform(files,new RuntimeProcessRunner(),hypervisor,desktop,()=>CoreWebView2Environment.GetAvailableBrowserVersionString(), async (definition,ct)=>
-            {
-                var service=definition["service"]!;
-                var tokens=new ProtectedTokenStore(files,new DpapiProtection(),Path.Combine(new HostState(files).LocalAppData!,"The-Construct","remote"));
-                var client=new Core.Remote.RemoteHostClient(new HttpRemoteApi(),files,tokens,StateJson.String(service["url"]),StateJson.Text(service["auth"])=="token" ? RemoteAuthentication.Token : RemoteAuthentication.Negotiate);
-                var state=await Core.Drivers.VmPower.QueryRemoteAsync(client,StateJson.String(definition["vmName"]),ct);
-                return Enum.TryParse<HypervisorState>(state,true,out var result) ? result : HypervisorState.Unknown;
-            }, async ct =>
+            var platform=new DesktopSelfTestPlatform(files,new RuntimeProcessRunner(),hypervisor,()=>CoreWebView2Environment.GetAvailableBrowserVersionString(), async ct =>
             {
                 await using var probeHost=BuildHost(diagnosticBridge, runtimeJobs:false);
                 await probeHost.StartAsync(ct);
@@ -70,6 +63,13 @@ internal static class Program
                     return response.IsSuccessStatusCode && body.RootElement.GetProperty("ok").GetBoolean();
                 }
                 finally { await probeHost.StopAsync(ct); }
+            }, async (definition,ct)=>
+            {
+                var service=definition["service"]!;
+                var tokens=new ProtectedTokenStore(files,new DpapiProtection(),Path.Combine(new HostState(files).LocalAppData!,"The-Construct","remote"));
+                var client=new Core.Remote.RemoteHostClient(new HttpRemoteApi(),files,tokens,StateJson.String(service["url"]),StateJson.Text(service["auth"])=="token" ? RemoteAuthentication.Token : RemoteAuthentication.Negotiate);
+                var state=await Core.Drivers.VmPower.QueryRemoteAsync(client,StateJson.String(definition["vmName"]),ct);
+                return Enum.TryParse<HypervisorState>(state,true,out var result) ? result : HypervisorState.Unknown;
             });
             var report=Task.Run(()=>new SelfTest(files,platform,capture,toast).RunAsync(command.Instance)).GetAwaiter().GetResult();
             Console.WriteLine(JsonSerializer.Serialize(report,IpcJson.Options)); return report.ExitCode;
@@ -83,10 +83,8 @@ internal static class Program
             using var instance=new SingleInstance();
             if (!instance.IsPrimary)
             {
-                var published=Path.Combine(stateDirectory,"endpoint.json");
-                var endpoints=new[] { published,Path.Combine(stateDirectory,"ui-endpoint.json") };
                 using var client=new HttpClient(new HttpClientHandler { UseProxy=false,AllowAutoRedirect=false }) { Timeout=TimeSpan.FromSeconds(2) };
-                new ActivationClient(files,client,clock).SendAsync(endpoints,plan,command.Quit).GetAwaiter().GetResult(); return 0;
+                new ActivationClient(files,client,clock).SendAsync(Path.Combine(stateDirectory,"endpoint.json"),plan,command.Quit).GetAwaiter().GetResult(); return 0;
             }
             if (command.Quit) return 0;
             ApplicationConfiguration.Initialize();

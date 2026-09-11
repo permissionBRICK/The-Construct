@@ -22,7 +22,7 @@ public sealed class RuntimeProcessRunner : IProcessRunner
         finally
         {
             await process.DisposeAsync().ConfigureAwait(false);
-            try { await Task.WhenAll(stdout, stderr).ConfigureAwait(false); } catch { }
+            try { await Task.WhenAll(stdout, stderr).ConfigureAwait(false); } catch { } // the pumps only fault after the child is gone
         }
     }
     private static async Task<string> CollectAsync(IAsyncEnumerable<string> source, int limit)
@@ -53,6 +53,7 @@ public sealed class RuntimeProcessRunner : IProcessRunner
                     if (pair.Value is null) info.Environment.Remove(pair.Key);
                     else info.Environment[pair.Key] = pair.Value;
             process = new Process { StartInfo = info };
+            // The original message can echo argv (paths, key names); callers get a fixed text.
             try { process.Start(); }
             catch { process.Dispose(); throw new InvalidOperationException("Could not start runtime child process."); }
             registration = token.Register(Kill);
@@ -73,7 +74,7 @@ public sealed class RuntimeProcessRunner : IProcessRunner
             }
             catch { Kill(); throw new InvalidOperationException("Runtime child process I/O failed."); }
             finally
-            {
+            {   // Reap whatever Kill left behind; the exit code is already decided above.
                 try { await process.WaitForExitAsync().ConfigureAwait(false); } catch { }
                 try { await Task.WhenAll(output, error).ConfigureAwait(false); } catch { }
             }
@@ -96,7 +97,7 @@ public sealed class RuntimeProcessRunner : IProcessRunner
             try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
         }
         public async Task StopAsync(CancellationToken cancellationToken = default)
-        { Kill(); try { await completion.ConfigureAwait(false); } catch { } }
+        { Kill(); try { await completion.ConfigureAwait(false); } catch { } } // a stop never reports the child's failure
         public async ValueTask DisposeAsync()
         {
             await StopAsync().ConfigureAwait(false);

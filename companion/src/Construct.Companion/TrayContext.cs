@@ -9,7 +9,7 @@ using Construct.Companion.Core.State;
 using Construct.Companion.Windows;
 namespace Construct.Companion;
 
-internal sealed class TrayContext : ApplicationContext,IUiActivation
+internal sealed class TrayContext : ApplicationContext
 {
     private readonly Control dispatcher=new();
     private readonly NotifyIcon tray=new() { Visible=true };
@@ -235,7 +235,6 @@ internal sealed class TrayContext : ApplicationContext,IUiActivation
             foreach (var view in plan.Views) Open(view.View,view.View=="hostadmin" ? view.Host : view.Instance);
         }
     },cancellationToken);
-    public Task ShowRuntimeUnavailableAsync(CancellationToken cancellationToken=default) => dispatcher.InvokeAsync(()=> { MessageBox.Show("Runtime services are not connected in this build.","Construct Companion",MessageBoxButtons.OK,MessageBoxIcon.Information); },cancellationToken);
     public Task QuitAsync(CancellationToken cancellationToken=default) => dispatcher.InvokeAsync(ExitThread,cancellationToken);
     protected override void ExitThreadCore()
     {

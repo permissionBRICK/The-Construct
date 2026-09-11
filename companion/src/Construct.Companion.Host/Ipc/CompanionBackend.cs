@@ -3,7 +3,8 @@ using Construct.Companion.Core.Ipc;
 using Construct.Companion.Host.Composition;
 using Construct.Companion.Host.Dispatch;
 namespace Construct.Companion.Host.Ipc;
-public sealed class CompanionBackend(CompanionInstances instances, StateAggregation state, MessageDispatcher dispatcher, HostAdministration hosts, IpcSettings settings, DispatchQueue queue, IpcEvents events, IpcLogs logs) : IIpcBackend
+// What the routes and the in-process desktop sink share: validate synchronously, then queue per instance.
+public sealed class CompanionBackend(CompanionInstances instances, StateAggregation state, MessageDispatcher dispatcher, HostAdministration hosts, IpcSettings settings, DispatchQueue queue, IpcEvents events, IpcLogs logs)
 {
     public Task<CompanionState> StateAsync(CancellationToken token)
     { var names = instances.Names; var active = settings.Read().ActiveInstance; return Task.FromResult(new CompanionState(names.Contains(active) ? active : names.FirstOrDefault(), names, names.ToDictionary(n => n, state.Snapshot))); }

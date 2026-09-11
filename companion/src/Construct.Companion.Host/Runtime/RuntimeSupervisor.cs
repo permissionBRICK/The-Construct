@@ -2,7 +2,10 @@ using System.Threading.Channels;
 using Construct.Companion.Core.Abstractions;
 namespace Construct.Companion.Host.Runtime;
 
-public sealed class RuntimeSupervisor(IRuntimeRegistry registry, Func<RuntimeInstance, InstanceRuntime> createRuntime, RuntimeMessageBus bus, Func<string, CancellationToken, Task<IAsyncDisposable?>>? acquireRetarget = null, IClock? retryClock = null) : IAsyncDisposable
+// One runtime per registry entry. A retarget (definition change) needs the instance's dispatch
+// lease so an in-flight command keeps its target; a busy lease is retried shortly after.
+public sealed class RuntimeSupervisor(IRuntimeRegistry registry, Func<RuntimeInstance, InstanceRuntime> createRuntime, RuntimeMessageBus bus, IClock clock,
+    Func<string, CancellationToken, Task<IAsyncDisposable?>>? acquireRetarget = null) : IAsyncDisposable
 {
     private readonly SemaphoreSlim serial = new(1);
     private readonly CancellationTokenSource stop = new();
@@ -25,7 +28,7 @@ public sealed class RuntimeSupervisor(IRuntimeRegistry registry, Func<RuntimeIns
     {
         try
         {
-            await (retryClock ?? new SystemClock()).DelayAsync(TimeSpan.FromMilliseconds(250), stop.Token).ConfigureAwait(false);
+            await clock.DelayAsync(TimeSpan.FromMilliseconds(250), stop.Token).ConfigureAwait(false);
             lock (retryGate) retryScheduled = false;
             changes.Writer.TryWrite(true);
         }
@@ -84,12 +87,4 @@ public sealed class RuntimeSupervisor(IRuntimeRegistry registry, Func<RuntimeIns
         try { foreach (var runtime in runtimes.Values) await runtime.DisposeAsync().ConfigureAwait(false); runtimes.Clear(); }
         finally { serial.Release(); }
     }
-}
-
-// State's registry parser/projector remains the single owner of its normalization rules.
-public sealed class FileRuntimeRegistry(IFileSystem files, string directory,
-    Func<CancellationToken, Task<IReadOnlyList<RuntimeInstance>>> read) : IRuntimeRegistry
-{
-    public Task<IReadOnlyList<RuntimeInstance>> ReadAsync(CancellationToken cancellationToken) => read(cancellationToken);
-    public IDisposable Watch(Action changed) => files.Watch(directory, changed);
 }
