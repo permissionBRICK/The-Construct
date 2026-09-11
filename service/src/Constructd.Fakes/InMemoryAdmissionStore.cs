@@ -130,7 +130,7 @@ public sealed class InMemoryAdmissionStore(InMemoryVmRepository vms, InMemoryUse
             return vm is { Kind: VmKind.Primary, Deleting: false } && vm.PowerGeneration == expectedGeneration &&
                 await vms.UpdateAsync(vm with { RamGb = ramGb }, ct);
         });
-        public Task<bool> UpdatePrimaryIdleAsync(string vmName, IdlePolicy policy, long expectedGeneration) => Cas(async () =>
+        public Task<bool> UpdateIdlePolicyAsync(string vmName, IdlePolicy policy, long expectedGeneration) => Cas(async () =>
         {
             var vm = await vms.GetAsync(vmName, ct);
             return vm is { Deleting: false } && vm.PowerGeneration == expectedGeneration &&

@@ -24,7 +24,7 @@ function buildPage(htmlFile, scriptFile) {
   html = html.replace(/{{cspSource}}/g, "").replace(/{{styleUri}}/g, "panel.css")
              .replace(/{{themeUri}}/g, "themes/" + THEME + ".css")
              .replace(/{{adminStyleUri}}/g, "hostadmin.css")
-             .replace(/{{scriptUri}}/g, scriptFile).replace(/{{nonce}}/g, "test");
+             .replace(/{{paletteUri}}/g, "palette.js").replace(/{{scriptUri}}/g, scriptFile).replace(/{{nonce}}/g, "test");
   const mock =
     '<script>window.__posted=[];window.acquireVsCodeApi=function(){return{' +
     'postMessage:function(m){window.__posted.push(m);},getState:function(){},setState:function(){}};};</script>';
@@ -55,6 +55,41 @@ function serve() {
   return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve({ server, port: server.address().port })));
 }
 
+// Exercise the actual Companion colour pairs, including changing a live native palette.
+const paletteSource = fs.readFileSync(path.join(__dirname, "../../companion/src/Construct.Companion.Core/Desktop/DesktopPalette.cs"), "utf8");
+async function checkPaletteControls(view, label) {
+  for (const dark of [true, false]) {
+    const block = paletteSource.split("private static readonly").find(text => text.includes(dark ? " Dark = " : " Light = "));
+    const variables = Object.fromEntries([...block.matchAll(/\["(--vscode-[^"]+)"\] = "(#[^"]+)"/g)].map(m => [m[1], m[2]]));
+    await view.evaluate(vars => { for (const [key, value] of Object.entries(vars)) document.documentElement.style.setProperty(key, value); }, variables);
+    await view.waitForTimeout(60);
+    const result = await view.evaluate(() => {
+      const rgb = text => (text.match(/[\d.]+/g) || []).slice(0, 3).map(Number);
+      const lum = values => values.map(v => v / 255).map(v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4).reduce((sum, v, i) => sum + v * [.2126, .7152, .0722][i], 0);
+      const controls = [...document.querySelectorAll('select, option, input:not([type]), input[type="text"], input[type="password"], input[type="number"]')];
+      const bad = controls.filter(el => {
+        const style = getComputedStyle(el); const fg = lum(rgb(style.color)), bg = lum(rgb(style.backgroundColor));
+        return (Math.max(fg, bg) + .05) / (Math.min(fg, bg) + .05) < 4.5 || style.backgroundColor === "rgba(0, 0, 0, 0)";
+      }).map(el => el.id || el.tagName);
+      return { scheme: getComputedStyle(document.documentElement).colorScheme, count: controls.length, bad };
+    });
+    check(`${label}: ${dark ? "dark" : "light"} Companion palette controls have readable colours`, result.count > 0 && result.bad.length === 0, result.bad.join(", "));
+    check(`${label}: native popup scheme follows theme/palette (${dark ? "dark" : "light"})`, result.scheme === (THEME === "native" && !dark ? "light" : "dark"), result.scheme);
+    if (label === "admin dialog") await view.screenshot({ path: `/tmp/host-vm-settings-${THEME}-${dark ? "dark" : "light"}.png` });
+  }
+  // Restore the default CSS fallbacks for the remaining functional smoke tests.
+  await view.evaluate(() => { for (const name of [...document.documentElement.style]) if (name.startsWith("--vscode-")) document.documentElement.style.removeProperty(name); });
+  await view.waitForTimeout(30);
+  await view.evaluate(() => { const style = document.createElement("style"); style.id = "smokePalette"; style.textContent = ":root { --vscode-editor-background: #ffffff; }"; document.head.appendChild(style); });
+  await view.waitForTimeout(30);
+  check(`${label}: stylesheet palette injection updates the scheme`, await view.evaluate(() => document.documentElement.style.colorScheme) === (THEME === "native" ? "light" : "dark"));
+  await view.evaluate(() => { document.getElementById("smokePalette").textContent = ":root { --vscode-editor-background: #1e1e1e; }"; });
+  await view.waitForTimeout(30);
+  check(`${label}: stylesheet palette replacement updates the scheme`, await view.evaluate(() => document.documentElement.style.colorScheme) === "dark");
+  await view.evaluate(() => document.getElementById("smokePalette").remove());
+  await view.waitForTimeout(30);
+}
+
 const results = [];
 const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detail || "" });
 
@@ -68,6 +103,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
 
   await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "networkidle" });
   await page.waitForTimeout(150);
+  await checkPaletteControls(page, "panel");
 
   check("no console/page errors on load", errors.length === 0, errors.join(" | "));
   check("title mentions Construct", /Construct/.test(await page.title()));
@@ -1115,6 +1151,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   admin.on("console", (m) => { if (m.type() === "error") adminErrors.push(m.text()); });
   admin.on("pageerror", (e) => adminErrors.push(String(e)));
   await admin.goto(`http://127.0.0.1:${port}/hostadmin`, { waitUntil: "networkidle" });
+  await checkPaletteControls(admin, "admin");
   await admin.waitForTimeout(150);
   check("admin: no console/page errors on load", adminErrors.length === 0, adminErrors.join(" | "));
   let aposted = await admin.evaluate(() => window.__posted);
@@ -1219,6 +1256,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await admin.locator("#haVmRam").fill("10");
   check("admin: changed over-cap hardware shows its validation error", await admin.locator("#haVmSettingsApply").isDisabled() && /RAM.*between 1 and 0/.test(await admin.locator("#haVmSettingsError").innerText()));
   await settingsReply({ settings });
+  await checkPaletteControls(admin, "admin dialog");
   check("admin: current and pending hardware visible", /Current CPU: 4; pending: 6/.test(await admin.locator("#haVmSettingsCurrent").innerText()) && /pending: 12 GB/.test(await admin.locator("#haVmSettingsCurrent").innerText()));
   await admin.locator("#haVmRam").fill("16.5");
   check("admin: fractional RAM blocks Apply", await admin.locator("#haVmSettingsApply").isDisabled());

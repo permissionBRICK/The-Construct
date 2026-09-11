@@ -1585,6 +1585,15 @@ anywhere in the module (those stay per instance), no host filesystem access, no 
 command that assumes the service is local, no child start / resume / console / sharing
 for ordinary users in the panel (the CLI has them).
 
+### Form-control palette
+
+Shared `media/palette.js` sets the root `color-scheme` from the rendered background
+for the native theme and keeps classic/terminal dark. It follows live palette/style
+changes in VS Code and the Companion; both documents include it through `paletteUri`.
+Inputs use `--vscode-input-*`, and selects/options use `--vscode-dropdown-*`, including
+the panel header/idle selectors and host-admin forms. Browser smoke applies both actual
+Companion palettes and checks control contrast and the native popup scheme.
+
 ### Primary VM settings
 
 `media/hostadmin.html` owns the **VM settings…** modal; its controller posts

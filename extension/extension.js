@@ -4548,6 +4548,7 @@ function buildHtml(webview, extensionUri, htmlFile, scriptFile) {
     .replace(/{{cspSource}}/g, webview.cspSource)
     .replace(/{{styleUri}}/g, mediaUri("panel.css").toString())
     .replace(/{{themeUri}}/g, mediaUri(themes.cssFileFor(currentThemeId())).toString())
+    .replace(/{{paletteUri}}/g, mediaUri("palette.js").toString())
     .replace(/{{scriptUri}}/g, mediaUri(scriptFile).toString())
     .replace(/{{nonce}}/g, nonce);
 }

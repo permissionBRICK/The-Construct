@@ -120,7 +120,7 @@ public sealed class PrimaryMemoryTests
                 var admission = app.Service<IAdmissionStore>();
                 Assert.Equal(AdmissionOutcome.Accepted, (await admission.MutateAsync(null, s => s.UpdatePrimaryRamAsync(vm.Name, 12, 0), default)).Outcome);
                 Assert.NotEqual(AdmissionOutcome.Accepted, (await admission.MutateAsync(null, s => s.UpdatePrimaryRamAsync(vm.Name, 1, 99), default)).Outcome);
-                Assert.Equal(AdmissionOutcome.Accepted, (await admission.MutateAsync(null, s => s.UpdatePrimaryIdleAsync(vm.Name, new(60, IdleAction.Shutdown), 0), default)).Outcome);
+                Assert.Equal(AdmissionOutcome.Accepted, (await admission.MutateAsync(null, s => s.UpdateIdlePolicyAsync(vm.Name, new(60, IdleAction.Shutdown), 0), default)).Outcome);
                 var changed = (await app.Vms.GetAsync(vm.Name, default))!;
                 Assert.Equal(12, changed.RamGb); Assert.Equal(vm.Cpu, changed.Cpu); Assert.Equal(vm.DiskGb, changed.DiskGb);
                 Assert.Equal(vm.SshForwardPort, changed.SshForwardPort); Assert.Equal(60, changed.IdlePolicy.TimeoutMinutes);
@@ -191,6 +191,27 @@ public sealed class PrimaryMemoryTests
         Assert.True(reply.GetProperty("clamped").GetBoolean());
         Assert.Equal(60, reply.GetProperty("timeoutMinutes").GetInt32());
         Assert.Equal("save", reply.GetProperty("action").GetString());
+    }
+
+    [Fact]
+    public async Task MemoryApiUsesUnclippedReclaimableBoundFromTheLedgerEpoch()
+    {
+        using var app = App(); using var owner = await app.CreateUserClientAsync("alice");
+        await owner.CreateVmAsync("parent");
+        var vm = (await app.Vms.GetAsync("parent", default))!;
+        var ledger = app.Service<InMemoryCapacityLedger>();
+        var actual = new HypervisorVmInfo(vm.Name, "id", VmState.Running, "Running", 2, vm.Cpu,
+            vm.RamBytes, vm.RamBytes, false, null,
+            [new(@"C:\VMs\parent.vhdx", vm.DiskGb * Gib, Gib, null, @"C:\", true)], 0, @"C:\", true);
+        ledger.ReadInventory = () => new(42, app.Clock.UtcNow,
+            new(8, 32 * Gib, 0, [new(@"C:\", 1000 * Gib, 900 * Gib)], app.Clock.UtcNow), [actual], true, []);
+        ledger.ReadManagedVms = () => [vm];
+        ledger.ReadConfig = () => new(CapacityMode.Enforce, 4 * Gib, 0, null, null, 60, 600);
+        var result = await owner.GetFromJsonAsync<JsonElement>("/api/v1/vms/parent/memory");
+        // 0 free - 4 headroom + 8 assigned = 4. Adding own RAM to the clipped
+        // generic available=0 would incorrectly advertise 8 instead.
+        Assert.Equal(4, result.GetProperty("maximumRamGb").GetInt32());
+        Assert.Equal(8, result.GetProperty("currentRamGb").GetInt32());
     }
 
     [Theory]

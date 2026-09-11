@@ -9,7 +9,7 @@ All routes live below `/api/v1`. Retain GET/PUT `/vms/{name}/cpu`
 1–1024 GiB). The memory response is `{currentRamGb, desiredRamGb, pending,
 maximumRamGb, recommendedRamGb, appliesOn:"next-stop-start"}`. Inventory adds
 nullable `pendingRamGb`. Advertise `primary-memory`. `/vm-defaults` keeps its
-CPU fields and adds `maximumRamGb` and `recommendedRamGb`.
+CPU fields and adds `maximumRamGb` and `recommendedRamGb` (min(8, maximumRamGb)).
 
 Separate routes preserve CPU clients and reuse the existing idle-policy route;
 a combined route would duplicate its authorization and clamping behavior.
