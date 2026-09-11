@@ -155,8 +155,4 @@ public sealed class InstanceRegistry
         if (ByName.Count <= 1) throw new InvalidOperationException($"\"{name}\" is the only instance on this PC and cannot be removed");
         var next = Clone(); next.ByName.Remove(name); if (name == Instances.DefaultName) next.Removed.Add(name); next.RepairDefault(); return next;
     }
-    public InstanceRegistry SetDefault(string name)
-    {
-        if (!ByName.ContainsKey(name)) throw new ArgumentException($"Unknown instance \"{name}\""); var next = Clone(); next.DefaultInstance = name; return next;
-    }
 }

@@ -20,7 +20,7 @@ public static class RuntimeJson
     public static JsonArray Array(this JsonNode? node, string key) => (node as JsonObject)?[key] as JsonArray ?? [];
     public static JsonObject Copy(this JsonObject node) => (JsonObject)node.DeepClone();
     public static JsonArray List(IEnumerable<JsonNode?> nodes) => new(nodes.Select(n => n?.DeepClone()).ToArray());
-    public static string Trim(string s) => ForwardHost.TrimWhitespace(s);
+    public static string Trim(string s) => State.StateJson.Trim(s);
     public static string Sanitize(string? text, int max = 300, bool ellipsis = false)
     {
         var clean = Regex.Replace(Regex.Replace(text ?? "", "[\\u0000-\\u001F\\u007F\\u2028\\u2029]", " "),

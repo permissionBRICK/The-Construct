@@ -3,12 +3,12 @@ using Construct.Companion.Core.State;
 namespace Construct.Companion.Core.HostAdmin;
 public static partial class HostAdminProtocol
 {
-    private static double? Num(JsonNode? n) => n is null || Text(n) == "" || !double.IsFinite(StateJson.CoerceNumber(n)) ? null : StateJson.CoerceNumber(n);
+    internal static double? Number(JsonNode? n) => n is null || Text(n) == "" || !double.IsFinite(StateJson.CoerceNumber(n)) ? null : StateJson.CoerceNumber(n);
     public static bool IsMaintenance(JsonNode? error) => StateJson.Number(error?["status"]) == 503 && Text(error?["code"] ?? error?["body"]?["code"]) is "" or "maintenance";
     public static JsonObject? Maintenance(JsonNode? health, JsonNode? error)
     {
         JsonObject? body = Text(health?["status"]).ToLowerInvariant() == "maintenance" ? health?["maintenance"] as JsonObject ?? [] : IsMaintenance(error) ? error?["body"] as JsonObject ?? [] : null;
-        return body is null ? null : new() { ["phase"] = Text(body["phase"]).Length > 0 ? Text(body["phase"]) : "maintenance", ["retryAfterSeconds"] = Num(body["retryAfterSeconds"]), ["updateId"] = Text(body["updateId"]).Length > 0 ? Text(body["updateId"]) : null };
+        return body is null ? null : new() { ["phase"] = Text(body["phase"]).Length > 0 ? Text(body["phase"]) : "maintenance", ["retryAfterSeconds"] = Number(body["retryAfterSeconds"]), ["updateId"] = Text(body["updateId"]).Length > 0 ? Text(body["updateId"]) : null };
     }
     public static JsonObject Classify(JsonObject input)
     {
@@ -37,7 +37,7 @@ public static partial class HostAdminProtocol
             else return Done("unavailable", $"Cannot reach {host}: {Text(we["message"])}", true);
         }
         var me = input["whoami"] as JsonObject ?? [];
-        var identity = new JsonObject { ["name"] = Text(me["name"]), ["role"] = Text(me["role"]).ToLowerInvariant(), ["known"] = StateJson.Boolean(me["known"]) != false, ["enabled"] = StateJson.Boolean(me["enabled"]) != false, ["maxVms"] = Num(me["maxVms"]), ["effective"] = me["effective"] is JsonObject effective ? effective.DeepClone() : null }; result["identity"] = identity;
+        var identity = new JsonObject { ["name"] = Text(me["name"]), ["role"] = Text(me["role"]).ToLowerInvariant(), ["known"] = StateJson.Boolean(me["known"]) != false, ["enabled"] = StateJson.Boolean(me["enabled"]) != false, ["maxVms"] = Number(me["maxVms"]), ["effective"] = me["effective"] is JsonObject effective ? effective.DeepClone() : null }; result["identity"] = identity;
         if (we is not null && IsMaintenance(we)) return Done("unavailable", $"{host} is updating ({Text(result["maintenance"]?["phase"])}); reconnecting…", true);
         var name = Text(identity["name"]); if (name.Length == 0) name = "This identity";
         if (StateJson.Boolean(identity["known"]) == false || StateJson.Boolean(identity["enabled"]) == false) return Done("denied", $"{name} is not enrolled (or is disabled) on {host}; ask its administrator.");
