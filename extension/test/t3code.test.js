@@ -136,22 +136,15 @@ cfgset() {
 T3CODE_HOST="$(cfgget T3CODE_HOST)"; T3CODE_HOST="\${T3CODE_HOST:-0.0.0.0}"
 T3CODE_PORT="$(cfgget T3CODE_PORT)"; T3CODE_PORT="\${T3CODE_PORT:-5177}"
 WORKSPACE_ROOT="$(cfgget WORKSPACE_ROOT)"; WORKSPACE_ROOT="\${WORKSPACE_ROOT:-/root/repos}"
-T3CODE_PUBLIC_BASE_URL="$(cfgget T3CODE_PUBLIC_BASE_URL)"
-# The origin the pairing link is minted against, given the client-reachable host in $1.
-t3base() {
-  if [ -n "$T3CODE_PUBLIC_BASE_URL" ]; then printf '%s' "$T3CODE_PUBLIC_BASE_URL"; return 0; fi
-  printf 'http://%s:%s' "$1" "$T3CODE_PORT"
-}
-
+` + fs.readFileSync(path.join(repoRoot, "extension/vm/construct-t3-pairing-base.sh"), "utf8") + `
 command -v t3 >/dev/null 2>&1 || { echo "t3 is not installed" >&2; exit 1; }
-base="$(t3base "$(hostname).mshome.net")"
+base="$(t3base "$(hostname).mshome.net")" || exit 7
 t3 auth pairing create --json --ttl 10m --label "construct-control-panel" --base-url "$base" --log-level none
 `;
 ok("pairing(default): the WHOLE script matches the pin",
   pair === PAIRING_DEFAULT_SCRIPT,
   JSON.stringify(pair));
-ok("pairing(default): ...and is still the expected 1559 bytes",
-  Buffer.byteLength(pair, "utf8") === 1559, String(Buffer.byteLength(pair, "utf8")));
+ok("pairing: desktop and extension embed the same forwarding helper", pairingScript.includes("construct-t3-pairing-base.sh"));
 ok("pairing(default): reads NO CONSTRUCT_EXTERNAL_HOST", !/CONSTRUCT_EXTERNAL_HOST/.test(pair));
 
 // ── HTTPS-aware pairing URL ──────────────────────────────────────────────────

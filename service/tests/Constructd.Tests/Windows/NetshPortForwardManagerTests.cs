@@ -1,4 +1,7 @@
 using System.Net.NetworkInformation;
+using System.Net;
+using System.Net.Sockets;
+using Constructd.Core.Logic;
 using Constructd.Core.Abstractions;
 using Constructd.Core.Configuration;
 using Constructd.Core.Domain;
@@ -15,6 +18,43 @@ namespace Constructd.Tests.Windows;
 /// </summary>
 public sealed class NetshPortForwardManagerTests
 {
+    [Fact]
+    public async Task Host_forward_skips_occupied_ports_and_can_reuse_them_once_free()
+    {
+        var busy = new HashSet<int> { 2300, 2301 };
+        var world = new World(portAvailable: port => !busy.Contains(port));
+        await world.AddVmAsync("work-vm");
+        var first = await world.Manager.TryAddForwardAsync("work-vm", 5178, ForwardTarget.Host, "T3", 16, default);
+        Assert.Equal(2302, first.Forward!.PublicPort);
+        Assert.Contains("listenport=2302", world.Runner[0].Arguments);
+        busy.Clear();
+        var second = await world.Manager.TryAddForwardAsync("work-vm", 5177, ForwardTarget.Host, "other", 16, default);
+        Assert.Equal(2300, second.Forward!.PublicPort);
+    }
+
+    [Fact]
+    public async Task Fully_occupied_host_range_fails_without_records_or_netsh_calls_but_client_forward_works()
+    {
+        var world = new World(portAvailable: _ => false);
+        await world.AddVmAsync("work-vm");
+        await Assert.ThrowsAsync<PortRangeExhaustedException>(() => world.Manager.TryAddForwardAsync("work-vm", 5178, ForwardTarget.Host, "T3", 16, default));
+        Assert.Empty(await world.Manager.ListAsync(null, default));
+        Assert.Empty(world.Runner.Calls);
+        Assert.Equal(AddForwardStatus.Added, (await world.Manager.TryAddForwardAsync("work-vm", 5178, ForwardTarget.Client, "T3", 16, default)).Status);
+    }
+
+    [Fact]
+    public void Bind_probe_detects_a_real_occupied_socket()
+    {
+        using var occupied = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        occupied.ExclusiveAddressUse = true;
+        occupied.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+        occupied.Listen();
+        var port = ((IPEndPoint)occupied.LocalEndPoint!).Port;
+        Assert.False(NetshPortForwardManager.CanBindPort("127.0.0.1", port));
+        Assert.False(NetshPortForwardManager.CanBindPort("0.0.0.0", port));
+    }
+
     [Fact]
     public async Task Allocating_the_ssh_forward_adds_the_rule_the_vm_needs()
     {
@@ -678,7 +718,7 @@ public sealed class NetshPortForwardManagerTests
 
     private sealed class World
     {
-        public World(Action<ConstructdOptions>? configure = null, LogSink? logs = null, IHostAddressResolver? resolverOverride = null)
+        public World(Action<ConstructdOptions>? configure = null, LogSink? logs = null, IHostAddressResolver? resolverOverride = null, Func<int, bool>? portAvailable = null)
         {
             var options = PlatformOptions.Create(configure);
             Clock = new MutableClock();
@@ -693,7 +733,7 @@ public sealed class NetshPortForwardManagerTests
                 Clock, Vms, Forwards, Driver, Runner, resolverOverride ?? Resolver, TcpTable, options,
                 logs is null
                     ? NullLogger<NetshPortForwardManager>.Instance
-                    : logs.Logger<NetshPortForwardManager>());
+                    : logs.Logger<NetshPortForwardManager>(), portAvailable ?? (_ => true));
         }
 
         public MutableClock Clock { get; }

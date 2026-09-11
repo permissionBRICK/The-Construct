@@ -60,15 +60,15 @@ public sealed class PortAllocator
         }
     }
 
-    /// <summary>Takes the lowest free port.</summary>
+    /// <summary>Takes the lowest free port accepted by the optional platform probe.</summary>
     /// <exception cref="PortRangeExhaustedException">The range is full.</exception>
-    public int Allocate()
+    public int Allocate(Func<int, bool>? isAvailable = null)
     {
         lock (_gate)
         {
             for (var port = Start; port <= End; port++)
             {
-                if (_allocated.Add(port))
+                if (!_allocated.Contains(port) && (isAvailable?.Invoke(port) ?? true) && _allocated.Add(port))
                 {
                     return port;
                 }
