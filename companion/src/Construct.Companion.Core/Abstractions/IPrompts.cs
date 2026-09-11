@@ -13,6 +13,6 @@ public sealed record InputPrompt(string Title, string Prompt, string? Value = nu
 {
     public override string ToString() => "InputPrompt";
 }
-public sealed record PickItem(string Id, string Label, string? Description = null, bool Picked = false);
-public sealed record PickPrompt(string Title, IReadOnlyList<PickItem> Items, bool Multiple = false);
+public sealed partial record PickItem(string Id, string Label, string? Description = null, bool Picked = false);
+public sealed partial record PickPrompt(string Title, IReadOnlyList<PickItem> Items, bool Multiple = false);
 public sealed record SaveFilePrompt(string Title, string? DefaultPath = null, string? Filter = null);
