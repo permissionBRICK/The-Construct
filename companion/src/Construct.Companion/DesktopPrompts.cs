@@ -42,7 +42,7 @@ internal sealed class DesktopPrompts(Control dispatcher) : IPrompts
             if (!prompt.Multiple && item.Picked && !item.Disabled && !item.Separator) row.Selected=true;
         }
         var ok=new Button { Text="OK",DialogResult=DialogResult.OK,AutoSize=true,Enabled=prompt.Multiple };
-        list.ItemCheck+=(_,e)=> { var item=(PickItem)list.Items[e.Index].Tag!; if (item.Disabled || item.Separator) e.NewValue=CheckState.Unchecked; };
+        list.ItemCheck+=(_,e)=> { if (list.Items[e.Index].Tag is PickItem { Disabled:true } or PickItem { Separator:true }) e.NewValue=CheckState.Unchecked; };
         list.SelectedIndexChanged+=(_,_)=>ok.Enabled=prompt.Multiple || list.SelectedItems.Cast<ListViewItem>().Any(r=>r.Tag is PickItem { Disabled:false,Separator:false });
         list.DoubleClick+=(_,_)=> { if (!prompt.Multiple && ok.Enabled) { form.DialogResult=DialogResult.OK; form.Close(); } };
         form.Controls.Add(list);

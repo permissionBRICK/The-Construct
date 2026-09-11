@@ -7,7 +7,9 @@ namespace Construct.Companion.Core.State;
 public sealed class HostState(IStateFileSystem files)
 {
     public const string SettingsFile = ".construct-settings.json";
-    public string? LocalAppData => new[] { FileSystemRoot.LocalAppData, FileSystemRoot.Temp }.Select(files.GetRoot).FirstOrDefault(r => !string.IsNullOrEmpty(r));
+    public string? LocalAppData => LocalAppDataRoot(files);
+    // host.js localAppData: %LOCALAPPDATA%, else %TEMP%; an empty variable counts as absent.
+    public static string? LocalAppDataRoot(IFileSystem files) => new[] { FileSystemRoot.LocalAppData, FileSystemRoot.Temp }.Select(files.GetRoot).FirstOrDefault(r => !string.IsNullOrEmpty(r));
     public string? ConfigDirectory => LocalAppData is {} root ? Path.Combine(root, "The-Construct", "config") : null;
     public string? FindScriptsDirectory(string? root)
     {

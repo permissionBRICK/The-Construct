@@ -4,7 +4,7 @@ internal sealed class RadioMenuRenderer : ToolStripProfessionalRenderer
 {
     protected override void OnRenderItemCheck(ToolStripItemImageRenderEventArgs e)
     {
-        if (e.Item.Tag is string id && id.StartsWith("instance:",StringComparison.Ordinal))
+        if (e.Item.Tag is string id && id.StartsWith(Core.Desktop.TrayModel.InstancePrefix,StringComparison.Ordinal))
         {
             var rect=e.ImageRectangle; var diameter=Math.Max(4,rect.Width/2);
             using var brush=new SolidBrush(e.Item.ForeColor);

@@ -110,6 +110,15 @@ public sealed class DesktopHostTests
         Assert.Equal(expected,actual.Arguments); Assert.DoesNotContain("-N",actual.Arguments); Assert.DoesNotContain("-L",actual.Arguments); Assert.DoesNotContain("-R",actual.Arguments);
     }
     [Fact]
+    public void RollingLogIsBestEffortWhenTheDirectoryIsDenied()
+    {
+        var files = new FakeFileSystem { WriteFailure = new UnauthorizedAccessException("denied") }; var log = new RollingLog(files, new FakeClock(), "/logs");
+        log.Write(DesktopLogEvent.SettingsFailed, new UnauthorizedAccessException("denied"));
+        files.WriteFailure = new IOException("disk full"); log.Write(DesktopLogEvent.Stopped);
+        Assert.Empty(files.EnumerateFiles("/logs"));
+        files.WriteFailure = null; log.Write(DesktopLogEvent.Started); Assert.Single(files.EnumerateFiles("/logs"));
+    }
+    [Fact]
     public void RollingLogKeepsFiveFilesAndNeverFormatsExceptionMessage()
     {
         var files=new FakeFileSystem(); var log=new RollingLog(files,new FakeClock(),"/logs",100);

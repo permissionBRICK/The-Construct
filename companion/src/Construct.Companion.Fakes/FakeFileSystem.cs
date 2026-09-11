@@ -9,6 +9,8 @@ public sealed class FakeFileSystem(IClock? clock = null) : IStateFileSystem
     private readonly object gate = new();
     public Dictionary<FileSystemRoot, string> Roots { get; } = [];
     public Dictionary<string, DateTimeOffset> Modified { get; } = new(StringComparer.OrdinalIgnoreCase);
+    // When set, every write throws it (a read-only or ACL-denied state directory).
+    public Exception? WriteFailure { get; set; }
     private readonly Dictionary<string, byte[]> files = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> directories = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<(string Directory, Action Changed)> watches = [];
@@ -19,6 +21,7 @@ public sealed class FakeFileSystem(IClock? clock = null) : IStateFileSystem
     public byte[]? ReadFile(string path) { lock (gate) return files.TryGetValue(Key(path), out var value) ? value.ToArray() : null; }
     public void WriteFileAtomic(string path, ReadOnlySpan<byte> contents)
     {
+        if (WriteFailure is { } failure) throw failure;
         var key = Key(path); lock (gate) { CreateDirectory(Parent(key)); files[key] = contents.ToArray(); if (clock is not null) Modified[path] = clock.UtcNow; } Changed(key);
     }
     public void DeleteFile(string path) { bool removed; lock (gate) removed = files.Remove(Key(path)); if (removed) Changed(Key(path)); }

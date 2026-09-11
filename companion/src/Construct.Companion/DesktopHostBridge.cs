@@ -2,9 +2,11 @@ using Construct.Companion.Core.Abstractions;
 using Construct.Companion.Core.Ipc;
 namespace Construct.Companion;
 
+// The Host's view of the desktop: UI-thread marshalling for activation, prompts and the clipboard.
 internal sealed class DesktopHostBridge : ICompanionDesktop, IClipboard, IDisposable
 {
     private readonly Control dispatcher = new();
+    // Set after the Host is built: the tray needs the Host's message sink, the Host needs this bridge.
     public TrayContext? Tray { get; set; }
     public IPrompts Prompts { get; }
     public DesktopHostBridge(bool diagnostic = false)
