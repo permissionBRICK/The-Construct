@@ -6687,6 +6687,50 @@ function Write-ConstructSourceManifest {
     }
 }
 
+# Files a checkout may carry that the release archive does not: local settings and tools,
+# build outputs, and the repository-only folders the archive leaves out (.gitattributes
+# export-ignore). Both the identity check and the update's pruning use this one pattern.
+$script:ConstructSourceLocalArtifactPattern = '(^|/)(\.construct-settings\.json|[^/]*\.iso|\.env|[^/]*\.local)$|(^|/)(\.construct-backup|\.construct-tools|runtime|__pycache__|bin|obj|node_modules|TestResults|\.vs)/|(^|/)\.claude/worktrees/|^(test|extension/test|service/(src|tests)|companion/(src|tests)|docs/(plans|agent-notes)|\.github|scripts|assets)/|^(service/Constructd\.sln|companion/Construct\.Companion\.sln|console-viewer/test_server\.py)$'
+function Test-ConstructSourceLocalArtifact { param([Parameter(Mandatory)][string]$Relative) return [bool]($Relative -match $script:ConstructSourceLocalArtifactPattern) }
+
+function Remove-ConstructStaleSourceFiles {
+    <#
+        After a release archive was expanded over an existing checkout, delete the files
+        the archive no longer carries (an older archive shipped tests and .NET sources),
+        so the checkout equals the release again. Local artifacts survive. Returns the
+        number of files removed. Never throws: a stale file is reported by the identity
+        check later, not a failed update.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Root, [Parameter(Mandatory)][string]$Zip)
+    $removed = 0
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+        $keep = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        $archive = [IO.Compression.ZipFile]::OpenRead($Zip)
+        try {
+            foreach ($entry in $archive.Entries) {
+                if (-not $entry.Name) { continue }
+                $slash = $entry.FullName.IndexOf('/')
+                if ($slash -lt 0) { continue }
+                [void]$keep.Add($entry.FullName.Substring($slash + 1))
+            }
+        } finally { $archive.Dispose() }
+        if ($keep.Count -eq 0) { return 0 }
+        $prefix = [IO.Path]::GetFullPath($Root).TrimEnd([char[]]@('/', '\')) + [IO.Path]::DirectorySeparatorChar
+        foreach ($file in Get-ChildItem -LiteralPath $Root -File -Force -Recurse) {
+            $relative = $file.FullName.Substring($prefix.Length).Replace('\', '/')
+            if ($keep.Contains($relative) -or (Test-ConstructSourceLocalArtifact -Relative $relative)) { continue }
+            Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
+            if (-not (Test-Path -LiteralPath $file.FullName)) { $removed++ }
+        }
+        foreach ($dir in Get-ChildItem -LiteralPath $Root -Directory -Force -Recurse | Sort-Object { $_.FullName.Length } -Descending) {
+            if (-not (Get-ChildItem -LiteralPath $dir.FullName -Force | Select-Object -First 1)) { Remove-Item -LiteralPath $dir.FullName -Force -ErrorAction SilentlyContinue }
+        }
+    } catch { }
+    return $removed
+}
+
 function Get-ConstructSourceIdentity {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Root, [scriptblock]$GitRunner, [string]$ManifestDir)
@@ -6733,7 +6777,7 @@ function Get-ConstructSourceIdentity {
         foreach ($file in Get-ChildItem -LiteralPath $Root -File -Force -Recurse) {
             $relative = $file.FullName.Substring($prefix.Length).Replace('\', '/')
             if ($files.ContainsKey($relative)) { continue }
-            if ($relative -match '(^|/)(\.construct-settings\.json|[^/]*\.iso|\.env|[^/]*\.local)$|(^|/)(\.construct-backup|\.construct-tools|runtime|__pycache__|bin|obj|node_modules|TestResults|\.vs)/|(^|/)\.claude/worktrees/') { continue }
+            if (Test-ConstructSourceLocalArtifact -Relative $relative) { continue }
             $count++
         }
         $result.Divergence = $count; $result.TreeState = $(if ($count) { 'divergent' } else { 'equivalent' })
