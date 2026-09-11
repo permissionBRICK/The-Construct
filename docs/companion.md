@@ -43,18 +43,21 @@ For a manual install, from your downloaded Construct scripts directory:
 .\Install-ConstructCompanion.ps1
 ```
 
-The installer uses a local build when the Companion solution and a .NET 10 SDK
-are present; otherwise it downloads the newest published `companion-<commit40>`
+The installer downloads the newest published `companion-<commit40>`
 GitHub release from `constructRepo` in `.construct-settings.json` (default
 `permissionBRICK/The-Construct`). Releases are filtered independently of host
 releases and prereleases. Discovery is bounded to 20 pages (2,000 releases); if
 the last page is full, it refuses an incomplete result with a clear diagnostic.
-`-Source local` requires the SDK/solution; `-Source release`
-forces a download. A source archive without `.git` needs the `installedCommit`
+Both the default and `-Source release` prefer the framework-dependent ZIP when
+`dotnet --list-runtimes` lists every shared framework at the manifest's major version.
+The current app requires .NET 10's `Microsoft.NETCore.App`,
+`Microsoft.WindowsDesktop.App` and `Microsoft.AspNetCore.App`. Missing dotnet or any
+required runtime selects the self-contained ZIP. An installed SDK never triggers a
+build automatically. Only `-Source local` builds and requires the SDK/solution. A source archive without `.git` needs the `installedCommit`
 marker written by the Construct install/update step for a local build.
 
 An identical installed commit is a no-op. `-Force` rebuilds/reinstalls it. Downloads
-stream to disk; the detached manifest, ZIP SHA-256, checksum-list hash and every
+stream to disk; the detached manifest, ZIP size and SHA-256, checksum-list hash and every
 payload file are checked before asking the app to quit. The installer waits at
 most 15 seconds for graceful exit and never kills a process. It swaps the install
 through `.previous`, restores the prior files/registration values on replacement
@@ -69,7 +72,8 @@ stop or uninstall an existing app. `-Force` does not override the opt-out.
 ## Files and settings
 
 - App: `%LOCALAPPDATA%\Programs\ConstructCompanion\` (`install.json` records the
-  commit, version, source, release tag, installation time and IPC API version).
+  commit, version, source (`framework-dependent`, `self-contained`, or `local-build`),
+  release tag, installation time and IPC API version).
 - State: `%LOCALAPPDATA%\The-Construct\companion\settings.json` and `endpoint.json`.
   The latter contains a bearer credential: do not paste it into reports or logs.
 - Logs: `%LOCALAPPDATA%\The-Construct\companion\logs\companion.log`, five rotating
@@ -165,7 +169,7 @@ launch. There is no self-update; Update Construct replaces the app.
 `companion/host/New-ConstructCompanionPackage.ps1 -PublishDir <publish>
 -OutputDir <new-output> -Commit <sha40> [-Repository owner/repo]` packages a clean,
 self-contained win-x64 publish. It emits `construct-companion-<sha7>-win-x64.zip`,
-`manifest.json`, and a detached `SHA256SUMS`. The stored ZIP contains `app/` (including
+`manifest.json`, and a detached `SHA256SUMS`. Each compressed ZIP contains `app/` (including
 `media/`) and `SHA256SUMS`. The manifest binds the repository, main ref, commit,
 version, immutable release tag, executable path, API version, and hashes.
 
@@ -175,3 +179,21 @@ with the ZIP and manifest. It never overwrites a release. Production packaging m
 use the clean checkout of the supplied commit; the packager cannot establish source
 provenance from arbitrary publish files. The Linux layout test uses a fixture exe,
 not a runnable Windows binary.
+
+Releases include `construct-companion-<commit7>-win-x64.zip` and
+`construct-companion-<commit7>-win-x64-fdd.zip`. Both archives use Optimal ZIP compression. Both contain `app/` and a per-file `SHA256SUMS`; the detached sums file
+also lists both ZIPs. Legacy manifest fields continue to describe the self-contained
+archive. Additive `frameworkDependentAsset`, `frameworkDependentSha256`,
+`frameworkDependentSizeBytes`, `frameworkDependentUncompressedSizeBytes`, and `frameworkDependentSumsSha256` describe FDD.
+`runtimes` lists `{name, majorVersion}` requirements derived from the FDD publish's
+runtimeconfig, including transitive framework references. Old releases without FDD
+metadata still install self-contained; their missing size field retains hash-only
+verification.
+
+`payloadUncompressedSizeBytes` and `frameworkDependentUncompressedSizeBytes`
+declare each archive's total inflated bytes, including `SHA256SUMS`. Extraction
+checks the central directory before writing, limits each entry to 256 MiB and the
+total to 1 GiB, and requires the total to match the manifest. A bounded validation
+pass also rejects entries whose inflated length differs from their declaration
+before creating destination files. Older manifests without totals retain the
+absolute limits. Preview runtimes do not satisfy the stable runtime probe.

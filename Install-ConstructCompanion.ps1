@@ -2,6 +2,7 @@
 [CmdletBinding()]
 param(
     [switch]$Uninstall,
+    # auto/release select by shared runtimes; only local invokes an SDK build.
     [ValidateSet('auto', 'local', 'release')]
     [string]$Source = 'auto',
     [switch]$Force
