@@ -59,7 +59,7 @@ Media:
   media delete ID --yes [--json]
 
 Console:
-  console NAME --web [--minutes 30]  Browser viewer (requires gateway installation)
+  console NAME --web [--minutes 1440]  Browser viewer (default link lifetime: 24 hours)
   Other actions use one short-lived session per invocation:
   console NAME --screenshot FILE.png [--width W --height H]
   console NAME (--type-stdin | --type-file FILE | --key CODE [--press|--release]

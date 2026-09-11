@@ -31,7 +31,7 @@ def expose_viewer(port):
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('name')
-    parser.add_argument('--minutes', type=int, default=30)
+    parser.add_argument('--minutes', type=int, default=1440, help='Link lifetime in minutes (5–1440; default: 1440 / 24 hours)')
     args = parser.parse_args()
     config = read_config('/etc/construct/console-viewer.env') if Path('/etc/construct/console-viewer.env').exists() else {}
     port = config.get('CONSTRUCT_CONSOLE_PORT', '6080')
