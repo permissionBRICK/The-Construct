@@ -133,6 +133,7 @@ public sealed class HostAdminApiTests
             using var admin = await app.CreateUserClientAsync("admin", Role.Admin);
             using var owner = await app.CreateUserClientAsync("alice"); using var other = await app.CreateUserClientAsync("bob");
             var job = await owner.CreateVmAsync("parent"); using var guest = app.CreateVmTokenClient(job.VmToken());
+            var otherJob = await other.CreateVmAsync("other-parent"); using var otherGuest = app.CreateVmTokenClient(otherJob.VmToken());
             var primary = (await app.Vms.GetAsync("parent", default))!;
             var child = primary with
             {
@@ -147,18 +148,38 @@ public sealed class HostAdminApiTests
                 Lease = new("never", null, null, null, LeaseState.Inactive, 0, null, null)
             };
             Assert.Equal(VmAddDecision.Added, await app.Service<IVmDelegationRepository>().AddAsync(child, new(5, true, 5, null, null, null, null, true, true, true), default));
+            Assert.Equal(VmAddDecision.Added, await app.Service<IVmDelegationRepository>().AddAsync(child with { Name = "private-child", Sharing = SharingScope.Private }, new(5, true, 5, null, null, null, null, true, true, true), default));
+            Assert.Equal(VmAddDecision.Added, await app.Service<IVmDelegationRepository>().AddAsync(child with { Name = "deleting-child", Deleting = true }, new(5, true, 5, null, null, null, null, true, true, true), default));
             Assert.Equal(HttpStatusCode.OK, (await other.GetAsync("/api/v1/vms/shared")).StatusCode);
             var shared = await other.GetFromJsonAsync<JsonElement>("/api/v1/vms/shared"); Assert.Single(shared.EnumerateArray());
             var adminShared = await admin.GetFromJsonAsync<JsonElement>("/api/v1/vms/shared"); Assert.Single(adminShared.EnumerateArray()); Assert.True(adminShared[0].GetProperty("shared").GetBoolean());
             Assert.Empty((await owner.GetFromJsonAsync<JsonElement>("/api/v1/vms/shared")).EnumerateArray());
             Assert.Equal(HttpStatusCode.Forbidden, (await other.GetAsync("/api/v1/vms/parent/children")).StatusCode);
             Assert.Equal(HttpStatusCode.Forbidden, (await other.PostAsJsonAsync("/api/v1/vms/shared/token", new { })).StatusCode);
-            var listed = await other.GetFromJsonAsync<JsonElement>("/api/v1/vms?kind=child"); Assert.Empty(listed.EnumerateArray());
+            foreach (var caller in new[] { other, otherGuest })
+            {
+                var listed = await caller.GetFromJsonAsync<JsonElement>("/api/v1/vms?kind=child");
+                var visible = Assert.Single(listed.EnumerateArray());
+                Assert.Equal("shared", visible.GetProperty("name").GetString());
+                Assert.True(visible.GetProperty("shared").GetBoolean());
+                Assert.DoesNotContain(visible.GetProperty("allowedActions").EnumerateArray(), action => action.GetString() == "delete");
+                var all = await caller.GetFromJsonAsync<JsonElement>("/api/v1/vms");
+                Assert.Equal(new[] { "other-parent", "shared" }, all.EnumerateArray().Select(vm => vm.GetProperty("name").GetString()).Order().ToArray());
+                Assert.Empty((await caller.GetFromJsonAsync<JsonElement>("/api/v1/vms?parent=other-parent")).EnumerateArray());
+                Assert.Equal("other-parent", Assert.Single((await caller.GetFromJsonAsync<JsonElement>("/api/v1/vms?kind=primary")).EnumerateArray()).GetProperty("name").GetString());
+                Assert.Equal(HttpStatusCode.Forbidden, (await caller.GetAsync("/api/v1/vms?owner=alice")).StatusCode);
+            }
+            var adminFiltered = await admin.GetFromJsonAsync<JsonElement>("/api/v1/vms?owner=bob");
+            Assert.Equal("other-parent", Assert.Single(adminFiltered.EnumerateArray()).GetProperty("name").GetString());
+            var owned = await owner.GetFromJsonAsync<JsonElement>("/api/v1/vms?kind=child");
+            Assert.Single(owned.EnumerateArray().Where(vm => vm.GetProperty("name").GetString() == "shared"));
             Assert.Equal(HttpStatusCode.OK, (await admin.PutAsJsonAsync("/api/v1/host/config", new { network = new { hostForwardsEnabled = false, directAddressReporting = true } })).StatusCode);
             Assert.Equal(HttpStatusCode.Forbidden, (await guest.PostAsJsonAsync("/api/v1/vms/parent/forwards", new { vmPort = 8080, target = "host" })).StatusCode);
             Assert.Equal(HttpStatusCode.Created, (await guest.PostAsJsonAsync("/api/v1/vms/parent/forwards", new { vmPort = 8080, target = "client" })).StatusCode);
             Assert.Equal(HttpStatusCode.OK, (await admin.PutAsJsonAsync("/api/v1/users/alice", new { enabled = false })).StatusCode);
             Assert.Empty((await other.GetFromJsonAsync<JsonElement>("/api/v1/vms/shared")).EnumerateArray());
+            Assert.Empty((await other.GetFromJsonAsync<JsonElement>("/api/v1/vms?kind=child")).EnumerateArray());
+            Assert.Empty((await otherGuest.GetFromJsonAsync<JsonElement>("/api/v1/vms?kind=child")).EnumerateArray());
             Assert.Equal(HttpStatusCode.Unauthorized, (await guest.GetAsync("/api/v1/vms/parent/identity")).StatusCode);
             var audit = await app.Service<IAuditLog>().QueryAsync(100, default);
             Assert.Contains(audit, a => a.Action == "host.config" && a.Outcome == AuditOutcome.Success);

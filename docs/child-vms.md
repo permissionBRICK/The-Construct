@@ -92,7 +92,8 @@ arbitrary guest OS finished installing.
 
 ```bash
 construct vm list
-construct vm list --all-shared --json
+construct vm list --json
+construct vm list --owned-only
 construct vm inspect CHILD
 construct vm addresses CHILD --json
 
@@ -102,6 +103,14 @@ construct vm shutdown CHILD      # graceful guest shutdown; no forced fallback
 construct vm save CHILD
 construct vm renew CHILD --lifetime 4h
 ```
+
+`list` includes this primary's children and accessible host-shared guests by default.
+Use `--owned-only` to restrict it to this primary's children. The older `--all-shared`
+flag remains accepted. The extension's Child VMs card also includes shared guests,
+including when the current primary has no children. The normal `/api/v1/vms` list
+uses the same access rules as individual VM reads; explicit parent/kind filters still
+apply. Private guests, deleting shared guests and shared guests of disabled owners
+are excluded from other users' lists. Sharing does not grant owner-only actions.
 
 `start` handles Off, Saved and Paused children and always requires a new lifetime.
 `restart` is intentionally not a renewal. A finite lease expiry requests the same

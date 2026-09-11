@@ -46,17 +46,19 @@ public static class VmEndpoints
         return api;
     }
 
-    private static async Task<IResult> ListAsync(HttpContext http, IVmRepository repository, VmInventoryProjection projection, CancellationToken cancellationToken)
+    private static async Task<IResult> ListAsync(HttpContext http, IVmRepository repository, IUserStore users, VmInventoryProjection projection, CancellationToken cancellationToken)
     {
         var kind = http.Request.Query["kind"].ToString(); var ownerFilter = http.Request.Query["owner"].ToString(); var parent = http.Request.Query["parent"].ToString();
         if (kind is not ("" or "all" or "primary" or "child")) return CodedProblems.Validation("kind", "Expected primary, child or all.");
         if (ownerFilter.Length > 0 && !http.User.IsAdmin()) return Problems.Forbidden("Only admins may filter by owner.");
-        var owner = http.User.IsAdmin() ? (ownerFilter.Length > 0 ? ownerFilter : null) : http.User.IsVmToken() ? null : http.User.NameOrEmpty();
+        var owner = ownerFilter.Length > 0 ? ownerFilter : null;
         var all = await repository.ListAsync(owner, cancellationToken); var result = new List<VmResponse>();
         foreach (var vm in all)
         {
-            if (http.User.IsVmToken() && !Ownership.SameName(vm.Name, http.User.VmTokenName()) && !Ownership.SameName(vm.Parent, http.User.VmTokenName())) continue;
             if (kind == "primary" && vm.Kind != VmKind.Primary || kind == "child" && vm.Kind != VmKind.Child || parent.Length > 0 && !Ownership.SameName(vm.Parent, parent)) continue;
+            // Inventory must use the same access rules as inspecting/operating a VM,
+            // including host-shared children owned by another user.
+            if (await DelegationAuthorization.RelationshipAsync(http.User, vm, repository, users, cancellationToken) is null) continue;
             result.Add(await projection.ProjectAsync(vm, http.User, cancellationToken));
         }
         return Results.Ok(result);

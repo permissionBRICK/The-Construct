@@ -225,8 +225,9 @@ async function capabilitiesFor(instance, opts = {}) {
 }
 
 /**
- * The children of this primary (host-administration contract §8.3, `GET
- * /vms/{parent}/children`), for the panel's minimal user view. Never rejects:
+ * This primary's children plus accessible host-shared guests, for the panel's
+ * user view. Separate routes also support hosts with the older owned-only list.
+ * Never rejects:
  *
  *   { supported: false, items: [], problem }   the host lacks the feature (or is old,
  *                                              unreachable, or the credential is gone)
@@ -246,8 +247,13 @@ async function queryChildren(instance, opts = {}) {
   const { client, problem } = resolveClient(instance, opts);
   if (!client) return { supported: false, items: [], problem };
   try {
-    const list = await client.children(vmNameOf(instance));
-    return { supported: true, items: Array.isArray(list) ? list : [], problem: "" };
+    const [list, shared] = await Promise.all([client.children(vmNameOf(instance)), client.sharedVms()]);
+    const rows = new Map();
+    for (const vm of [...(Array.isArray(list) ? list : []), ...(Array.isArray(shared) ? shared : [])]) {
+      const key = String(vm.name).toLowerCase();
+      if (!rows.has(key)) rows.set(key, vm);
+    }
+    return { supported: true, items: [...rows.values()], problem: "" };
   } catch (e) {
     (opts.log || (() => {}))(`hyperv-remote: children read failed — ${e && e.message ? e.message : e}`);
     return { supported: true, items: null, problem: (e && e.message) || String(e), status: e && e.status };
