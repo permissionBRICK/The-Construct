@@ -93,14 +93,10 @@ WORKSPACE_ROOT="$(cfgget WORKSPACE_ROOT)"; WORKSPACE_ROOT="\${WORKSPACE_ROOT:-/r
 // retry preference. Reading the PREFERENCE here would mint pairing links to a
 // port nothing listens on after exactly the failure that is meant to degrade to
 // plain http. T3's DPoP proofs are bound to the origin the browser dialled, so
-// the link must name the same one the server was told to advertise.
-const PAIRING_PRELUDE = PRELUDE + `T3CODE_PUBLIC_BASE_URL="$(cfgget T3CODE_PUBLIC_BASE_URL)"
-# The origin the pairing link is minted against, given the client-reachable host in $1.
-t3base() {
-  if [ -n "$T3CODE_PUBLIC_BASE_URL" ]; then printf '%s' "$T3CODE_PUBLIC_BASE_URL"; return 0; fi
-  printf 'http://%s:%s' "$1" "$T3CODE_PORT"
-}
-`;
+// the link must name the actual forwarded endpoint. The TLS proxy preserves
+// the request Host (including its port) for T3 to validate those proofs.
+const PAIRING_PRELUDE = PRELUDE + require("fs").readFileSync(
+  require("path").join(__dirname, "..", "vm", "construct-t3-pairing-base.sh"), "utf8");
 
 /** Bash: install/update t3, persist the opt-in + bind keys, deploy + start the
  *  systemd service. Self-contained; exits non-zero on a real failure.
@@ -267,7 +263,7 @@ function buildPairingScript(instance) {
   if (!instance || instances.isDefaultInstance(instance)) {
     return PAIRING_PRELUDE + `
 command -v t3 >/dev/null 2>&1 || { echo "t3 is not installed" >&2; exit 1; }
-base="$(t3base "$(hostname).mshome.net")"
+base="$(t3base "$(hostname).mshome.net")" || exit 7
 t3 auth pairing create --json --ttl 10m --label "construct-control-panel" --base-url "$base" --log-level none
 `;
   }
@@ -277,7 +273,7 @@ command -v t3 >/dev/null 2>&1 || { echo "t3 is not installed" >&2; exit 1; }
 # CONSTRUCT_EXTERNAL_HOST (a remote/forwarded instance is not reachable at its own
 # mshome name); absent, fall back to the local $(hostname).mshome.net.
 ext="$(cfgget CONSTRUCT_EXTERNAL_HOST)"
-base="$(t3base "\${ext:-$(hostname).mshome.net}")"
+base="$(t3base "\${ext:-$(hostname).mshome.net}")" || exit 7
 t3 auth pairing create --json --ttl 10m --label "construct-${instance.name}" --base-url "$base" --log-level none
 `;
 }
@@ -314,7 +310,11 @@ function baseUrl(cfg, probedUrl) {
 async function openWebUi(opts = {}) {
   const vscode = opts._vscode || vsc();
   const _ssh = opts._ssh || ssh;
-  const r = await _ssh.runRemoteScript(buildPairingScript(opts.instance), { ...opts, timeoutMs: opts.timeoutMs || 30000 });
+  const r = await _ssh.runRemoteScript(buildPairingScript(opts.instance), { ...opts, timeoutMs: opts.timeoutMs || 90000 });
+  if (r.code === 7) {
+    vscode.window.showErrorMessage("T3 Code's port forward is not ready. Keep the Construct client connected and retry. " + (r.stderr || "").trim().slice(-240));
+    return "";
+  }
   let url = r.code === 0 ? extractPairUrl(r.stdout) : "";
   if (!url) {
     url = baseUrl(opts.cfg, opts.webUrl);
