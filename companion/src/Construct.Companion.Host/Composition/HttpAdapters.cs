@@ -32,18 +32,30 @@ public sealed class HttpRemoteApi(Func<HttpClientHandler>? createHandler = null)
 }
 public sealed class HttpUpdateSource(HttpClient? http = null) : IUpdateSource, IDisposable
 {
+    private const int MaxRedirects = 5;
     private readonly HttpClient client = http ?? new(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(30) };
+    // GitHub's releases/latest/download/... answers with redirects; they are followed here so every hop is checked to stay on https.
     public async Task<JsonNode?> GetJsonAsync(Uri url, CancellationToken cancellationToken = default)
     {
         if (url.Scheme != "https") return null;
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, url);
-            request.Headers.UserAgent.ParseAdd("ConstructCompanion/1");
-            using var response = await client.SendAsync(request, cancellationToken);
-            if (response.StatusCode == HttpStatusCode.NotFound) return new JsonObject { ["notFound"] = true };
-            if (!response.IsSuccessStatusCode) return null;
-            return JsonNode.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+            for (var hop = 0; ; hop++)
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                request.Headers.UserAgent.ParseAdd("ConstructCompanion/1");
+                using var response = await client.SendAsync(request, cancellationToken);
+                if (response.StatusCode is HttpStatusCode.Moved or HttpStatusCode.Found or HttpStatusCode.SeeOther or HttpStatusCode.TemporaryRedirect or HttpStatusCode.PermanentRedirect)
+                {
+                    if (hop >= MaxRedirects || response.Headers.Location is not { } location) return null;
+                    url = location.IsAbsoluteUri ? location : new Uri(url, location);
+                    if (url.Scheme != "https") return null;
+                    continue;
+                }
+                if (response.StatusCode == HttpStatusCode.NotFound) return new JsonObject { ["notFound"] = true };
+                if (!response.IsSuccessStatusCode) return null;
+                return JsonNode.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+            }
         }
         catch (Exception e) when (e is HttpRequestException or JsonException || e is OperationCanceledException && !cancellationToken.IsCancellationRequested) { return null; }
     }

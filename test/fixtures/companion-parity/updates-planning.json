@@ -1,5 +1,172 @@
 [
   {
+    "count": null,
+    "kind": "behind",
+    "output": ""
+  },
+  {
+    "count": 0,
+    "kind": "behind",
+    "output": ""
+  },
+  {
+    "count": 1,
+    "kind": "behind",
+    "output": "1 behind"
+  },
+  {
+    "count": 2,
+    "kind": "behind",
+    "output": "2 behind"
+  },
+  {
+    "count": 12,
+    "kind": "behind",
+    "output": "12 behind"
+  },
+  {
+    "count": -1,
+    "kind": "behind",
+    "output": ""
+  },
+  {
+    "count": 1.5,
+    "kind": "behind",
+    "output": "1.5 behind"
+  },
+  {
+    "kind": "fold",
+    "output": {
+      "online": true
+    },
+    "raw": {},
+    "state": {
+      "online": true
+    }
+  },
+  {
+    "kind": "fold",
+    "output": {
+      "online": true,
+      "provisionedCommit": "abcdef1234567890"
+    },
+    "raw": {},
+    "state": {
+      "online": true,
+      "provisionedCommit": "abcdef1234567890"
+    }
+  },
+  {
+    "kind": "fold",
+    "output": {
+      "online": false,
+      "provisionedCommit": "1234567"
+    },
+    "raw": {},
+    "state": {
+      "online": false,
+      "provisionedCommit": "1234567"
+    }
+  },
+  {
+    "kind": "fold",
+    "output": {
+      "constructRev": "main@abcdef1",
+      "online": true
+    },
+    "raw": {
+      "constructRef": "main",
+      "installedCommit": "abcdef1234567890"
+    },
+    "state": {
+      "online": true
+    }
+  },
+  {
+    "kind": "fold",
+    "output": {
+      "constructRev": "main@abcdef1",
+      "online": true,
+      "provisionedCommit": "abcdef1234567890"
+    },
+    "raw": {
+      "constructRef": "main",
+      "installedCommit": "abcdef1234567890"
+    },
+    "state": {
+      "online": true,
+      "provisionedCommit": "abcdef1234567890"
+    }
+  },
+  {
+    "kind": "fold",
+    "output": {
+      "constructRev": "main@abcdef1",
+      "online": false,
+      "provisionStale": true,
+      "provisionedCommit": "1234567"
+    },
+    "raw": {
+      "constructRef": "main",
+      "installedCommit": "abcdef1234567890"
+    },
+    "state": {
+      "online": false,
+      "provisionedCommit": "1234567"
+    }
+  },
+  {
+    "kind": "fold",
+    "output": {
+      "constructRev": "dev@abc",
+      "online": true
+    },
+    "raw": {
+      "constructRef": "dev",
+      "constructRepo": "owner/repo",
+      "installedCommit": "abc"
+    },
+    "state": {
+      "online": true
+    }
+  },
+  {
+    "kind": "fold",
+    "output": {
+      "constructRev": "dev@abc",
+      "online": true,
+      "provisionStale": true,
+      "provisionedCommit": "abcdef1234567890"
+    },
+    "raw": {
+      "constructRef": "dev",
+      "constructRepo": "owner/repo",
+      "installedCommit": "abc"
+    },
+    "state": {
+      "online": true,
+      "provisionedCommit": "abcdef1234567890"
+    }
+  },
+  {
+    "kind": "fold",
+    "output": {
+      "constructRev": "dev@abc",
+      "online": false,
+      "provisionStale": true,
+      "provisionedCommit": "1234567"
+    },
+    "raw": {
+      "constructRef": "dev",
+      "constructRepo": "owner/repo",
+      "installedCommit": "abc"
+    },
+    "state": {
+      "online": false,
+      "provisionedCommit": "1234567"
+    }
+  },
+  {
     "args": [
       "-Repo",
       "permissionBRICK/The-Construct",

@@ -54,6 +54,33 @@ public sealed class CompositionAdapterTests
     }
     private sealed class NotFoundHandler : HttpMessageHandler
     { protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)); }
+    private sealed class RedirectHandler(string target, int hops) : HttpMessageHandler
+    {
+        public List<string> Requested { get; } = [];
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Requested.Add(request.RequestUri!.AbsoluteUri);
+            if (Requested.Count <= hops) return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Found) { Headers = { Location = new Uri(target + Requested.Count) } });
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{\"commit\":\"ok\"}") });
+        }
+    }
+    [Fact]
+    public async Task PublicUpdateFollowsHttpsRedirects()
+    {
+        var handler = new RedirectHandler("https://objects.example.test/manifest", 2);
+        using var source = new HttpUpdateSource(new HttpClient(handler));
+        var result = await source.GetJsonAsync(new Uri("https://github.example.test/releases/latest/download/manifest.json"));
+        Assert.Equal("ok", result!["commit"]!.GetValue<string>());
+        Assert.Equal(3, handler.Requested.Count);
+    }
+    [Fact]
+    public async Task PublicUpdateRefusesRedirectsOffHttpsAndRedirectLoops()
+    {
+        using var downgrade = new HttpUpdateSource(new HttpClient(new RedirectHandler("http://plain.example.test/", 1)));
+        Assert.Null(await downgrade.GetJsonAsync(new Uri("https://github.example.test/manifest.json")));
+        using var loop = new HttpUpdateSource(new HttpClient(new RedirectHandler("https://loop.example.test/", 50)));
+        Assert.Null(await loop.GetJsonAsync(new Uri("https://github.example.test/manifest.json")));
+    }
     [Fact]
     public async Task PublicUpdateNotFoundIsMappedWithoutThrowing()
     {

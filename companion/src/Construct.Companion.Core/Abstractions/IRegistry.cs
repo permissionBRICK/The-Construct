@@ -5,6 +5,7 @@ namespace Construct.Companion.Core.Abstractions;
 public interface IRegistry
 {
     string? ReadString(string key, string? name);
+    int? ReadInt32(string key, string? name);
     void WriteString(string key, string? name, string value);
     void DeleteValue(string key, string? name);
 }
