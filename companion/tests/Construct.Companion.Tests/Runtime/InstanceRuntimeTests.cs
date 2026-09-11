@@ -12,6 +12,28 @@ namespace Construct.Companion.Tests.Runtime;
 public sealed class InstanceRuntimeTests
 {
     [Fact]
+    public async Task BusyRetargetDoesNotBlockAnotherInstanceAndRetriesAfterRelease()
+    {
+        var registry = new FakeRuntimeRegistry { Instances = [new("a", "1", ForwardsEnabled: false, NotificationsEnabled: false)] };
+        var clock = new FakeClock(); var bus = new RuntimeMessageBus(); using var lease = new SemaphoreSlim(1, 1);
+        var created = new System.Collections.Concurrent.ConcurrentDictionary<string, InstanceRuntime>();
+        InstanceRuntime Create(RuntimeInstance definition)
+        {
+            var runtime = new InstanceRuntime(definition, new FakeRuntimeProbe(), clock, _ => throw new InvalidOperationException(), () => throw new InvalidOperationException(), _ => throw new InvalidOperationException(), new RepatchJob(new FakeSshTransport()), bus);
+            created[definition.Name] = runtime; return runtime;
+        }
+        async Task<IAsyncDisposable?> Acquire(string name, CancellationToken ct) => await lease.WaitAsync(0, ct) ? new TestLease(lease) : null;
+        await using var supervisor = new RuntimeSupervisor(registry, Create, bus, Acquire, clock);
+        await supervisor.StartAsync(); await lease.WaitAsync();
+        registry.Instances = [registry.Instances[0] with { Revision = "2" }, new("b", "1", ForwardsEnabled: false, NotificationsEnabled: false)];
+        await supervisor.RefreshAsync().WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(created.ContainsKey("b")); Assert.Equal("1", created["a"].Instance.Revision);
+        lease.Release(); clock.Advance(TimeSpan.FromMilliseconds(250));
+        await Eventually(() => created["a"].Instance.Revision == "2");
+    }
+    private sealed class TestLease(SemaphoreSlim semaphore) : IAsyncDisposable
+    { public ValueTask DisposeAsync() { semaphore.Release(); return ValueTask.CompletedTask; } }
+    [Fact]
     public async Task RegistryAddRetargetRemoveAreSerializedAndOldRuntimeStops()
     {
         var registry = new FakeRuntimeRegistry { Instances = [new("a", "1", NotificationsEnabled: false), new("b", "1", NotificationsEnabled: false)] };

@@ -1,0 +1,264 @@
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Construct.Companion.Core;
+using Construct.Companion.Core.Abstractions;
+using Construct.Companion.Core.ConfigSync;
+using Construct.Companion.Core.Drivers;
+using Construct.Companion.Core.Forwards;
+using Construct.Companion.Core.Ipc;
+using Construct.Companion.Core.Lifecycle;
+using Construct.Companion.Core.State;
+using Construct.Companion.Host.Composition;
+using Construct.Companion.Host.Ipc;
+using Construct.Companion.Host.Runtime;
+namespace Construct.Companion.Host.Dispatch;
+
+public sealed class MessageDispatcher(CompanionInstances instances, StateAggregation state, IpcSettings settings,
+    IpcEvents events, IpcLogs logs, IStateFileSystem files, IPrompts prompts, ILauncher launcher,
+    ICompanionDesktop desktop, IClock clock, HostAdministration hosts, IUpdateSource updates)
+{
+    public static bool IsRefresh(JsonObject message) => Text(message, "type") == "ready" || Text(message, "type") == "command" && Text(message, "id") == "refresh";
+    public void Validate(string name, JsonObject message)
+    {
+        instances.Get(name);
+        var type = Text(message, "type"); var id = Text(message, "id");
+        if (type.Length == 0 || type == "command" && id.Length == 0) throw new IpcFailure(400, "invalidMessage", "A message type and command id are required.");
+        if (type == "setAudio" && StateJson.Boolean(message["enabled"]) is null) throw new IpcFailure(400, "invalidMessage", "enabled must be a boolean.");
+        if (type == "saveSettings" && message["settings"] is not JsonObject) throw new IpcFailure(400, "invalidSettings", "A settings object is required.");
+        if (type == "setInstance") instances.Get(Text(message, "name"));
+        if (type == "customRebuild" && (Text(message, "mode") is not ("reinstall" or "redownload") || Text(message, "backup") is not ("save" or "existing" or "wipe"))) throw new IpcFailure(400, "invalidRebuild", "Invalid rebuild mode or backup selection.");
+        if (type == "saveProject")
+        {
+            var project = Text(message, "name");
+            if (message["profile"] is not JsonObject profile || !EditableProject(project) || ProfileCodec.ValidateProfile(project, profile).Count > 0) throw new IpcFailure(400, "invalidProject", "The project profile is invalid or reserved.");
+        }
+        if (type == "command" && id is "editProject" or "deleteProject" && !EditableProject(Text(message, "project"))) throw new IpcFailure(400, "invalidProject", "The project name is invalid or reserved.");
+        if (type == "command" && id is "openForward" or "closeForward" && !ForwardProtocol.IsSafeId(Text(message, "forward"))) throw new IpcFailure(400, "invalidForward", "Invalid forward id.");
+        if (type == "command" && id == "updateAgent" && Text(message, "agent") is not ("claude-code" or "codex" or "opencode" or "t3code")) throw new IpcFailure(400, "invalidAgent", "Unknown agent.");
+    }
+    private static bool EditableProject(string name) => HostState.SafeProfileName(name).Length > 0 && name is not ("default" or "project.schema");
+    public async Task DispatchAsync(string name, JsonObject message, CancellationToken ct)
+    {
+        var entry = instances.Get(name);
+        var type = Text(message, "type");
+        if (type.Length == 0) throw new IpcFailure(400, "invalidMessage", "A message type is required.");
+        var serialize = !IsRefresh(message);
+        if (serialize) await entry.Serial.WaitAsync(ct);
+        try
+        {
+            switch (type)
+            {
+                case "ready": await RefreshAsync(entry, ct); return;
+                case "openPanel": await desktop.ActivateAsync(new("panel", name), ct); return;
+                case "setInstance": await SelectAsync(Text(message, "name"), ct); return;
+                case "setAudio":
+                    if (StateJson.Boolean(message["enabled"]) is not bool enabled) throw new IpcFailure(400, "invalidMessage", "enabled must be a boolean.");
+                    entry.Store.SaveState(new() { ["micPassthrough"] = enabled });
+                    if (entry.Runtime is { } audioRuntime) await audioRuntime.SetAudioAsync(enabled, ct);
+                    state.Publish(name, new { type = "settings", instance = name, settings = entry.Store.ReadSettings() }); return;
+                case "saveSettings": await SaveSettings(entry, message["settings"] as JsonObject ?? throw new IpcFailure(400, "invalidSettings", "A settings object is required."), ct); return;
+                case "customRebuild":
+                    if (Text(message, "mode") is not ("reinstall" or "redownload") || Text(message, "backup") is not ("save" or "existing" or "wipe")) throw new IpcFailure(400, "invalidRebuild", "Invalid rebuild mode or backup selection.");
+                    await Lifecycle(entry, Text(message, "mode"), message, ct); return;
+                case "setUsagePeriod": entry.UsagePeriod = UsageParser.NormalizeReport(Text(message, "period")); await RefreshAsync(entry, ct); return;
+                case "saveProject":
+                    var project = Text(message, "name"); var profile = message["profile"] as JsonObject;
+                    if (profile is null || HostState.SafeProfileName(project).Length == 0 || ProfileCodec.ValidateProfile(project, profile).Count > 0) throw new IpcFailure(400, "invalidProject", "The project profile is invalid.");
+                    instances.Host.WriteProjectProfile(ProjectRoot(entry), project, JsonNode.Parse(ProfileCodec.CanonicalizeProfileText(project, profile.ToJsonString()).Content!)!.AsObject()); await RefreshAsync(entry, ct); return;
+                case "saveIdlePolicy": await SaveIdle(entry, message["policy"] as JsonObject ?? [], ct); return;
+                case "command": await Command(entry, message, ct); return;
+                default: Refuse(name, type, "This message is not supported by Construct Companion."); return;
+            }
+        }
+        catch (IpcFailure) { throw; }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception e) { logs.Failure("instance dispatch", e); Refuse(name, type == "command" ? Text(message, "id") : type, "The operation could not be completed. Check the instance connection and configuration."); }
+        finally { if (serialize) entry.Serial.Release(); }
+    }
+    public Task SelectAsync(string name, CancellationToken ct)
+    { instances.Get(name); settings.Merge(new() { ["activeInstance"] = name }); events.Companion(new { type = "activeInstance", instance = name }); return Task.CompletedTask; }
+    private async Task Command(CompanionInstance entry, JsonObject m, CancellationToken ct)
+    {
+        var name = entry.Name; var id = Text(m, "id");
+        switch (id)
+        {
+            case "refresh": await RefreshAsync(entry, ct); break;
+            case "showLogs": await launcher.OpenAsync(logs.PathName, ct); break;
+            case "connect": await Connect(entry, "/root/repos", ct); break;
+            case "startConnect":
+                if (instances.Remote(entry) is { } remote) await remote.PowerAsync(Text(entry.Definition, "vmName"), "start", ct);
+                else await launcher.StartDetachedAsync(VmPower.BuildElevatedCommandLaunch(VmPower.BuildStartCommand(Text(entry.Definition, "vmName"))).Invocation(), ct);
+                entry.Runtime?.BeginFastRefresh();
+                for (var attempt = 0; attempt < 90; attempt++)
+                {
+                    var reply = await entry.Ssh.RunRemoteScriptAsync("true", TimeSpan.FromSeconds(8), ct);
+                    if (reply.Code == 0) { await Connect(entry, "/root/repos", ct); return; }
+                    await clock.DelayAsync(TimeSpan.FromSeconds(2), ct);
+                }
+                Refuse(name, id, "The VM did not become reachable. Refresh and connect when it is ready."); break;
+            case "shutdown":
+                if (await prompts.ConfirmAsync("Shutdown", "Shut down the Construct VM?", ct))
+                {
+                    var shutdown = await entry.Ssh.RunRemoteScriptAsync(VmPower.ShutdownCommand, TimeSpan.FromSeconds(20), ct);
+                    events.Companion(new { type = "notification", level = shutdown.Code == 0 ? "info" : "warning", text = shutdown.Code == 0 ? "Shutdown command sent." : "Shutdown command sent; SSH disconnected or reported failure. Refresh to check the VM." });
+                    entry.Runtime?.BeginFastRefresh();
+                } break;
+            case "reprovision": case "reinstall": case "redownload": case "exportConfig": await Lifecycle(entry, id, m, ct); break;
+            case "openForward": case "closeForward":
+                var forward = Text(m, "forward");
+                if (!ForwardProtocol.IsSafeId(forward)) throw new IpcFailure(400, "invalidForward", "Invalid forward id.");
+                if (entry.Runtime?.Forwarder is not { } forwarder) { Refuse(name, id, "The forward is no longer active."); break; }
+                if (id == "closeForward") { if (!await forwarder.CloseAsync(forward, ct)) Refuse(name, id, "The forward is no longer active."); }
+                else
+                {
+                    var item = forwarder.Snapshot["items"]?.AsArray().OfType<JsonObject>().FirstOrDefault(x => Text(x, "id") == forward);
+                    var link = item is null ? "" : Text(item, "url");
+                    if (Uri.TryCreate(link, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https") await launcher.OpenAsync(link, ct);
+                    else Refuse(name, id, "The forward has no open link.");
+                }
+                break;
+            case "openAgentWeb":
+                if (Text(m, "agent") != "t3code") { Refuse(name, id, "Only T3 Code exposes a web UI."); break; }
+                var pairing = await entry.Ssh.RunRemoteScriptAsync(T3Code.BuildPairingScript(entry.Definition), cancellationToken: ct);
+                var pairUrl = T3Code.ExtractPairUrl(pairing.Stdout);
+                if (pairing.Code != 0 || !Uri.TryCreate(pairUrl, UriKind.Absolute, out var pairUri) || pairUri.Scheme is not ("http" or "https")) Refuse(name, id, "T3 Code did not return a pairing link.");
+                else await launcher.OpenAsync(pairUrl, ct); break;
+            case "updateAgents": case "updateAgent":
+                var agent = Text(m, "agent");
+                if (id == "updateAgent" && agent is not ("claude-code" or "codex" or "opencode" or "t3code")) throw new IpcFailure(400, "invalidAgent", "Unknown agent.");
+                await CheckedScript(entry, AgentUpdateScript.Build(id == "updateAgent" ? [agent] : null), ct, TimeSpan.FromMinutes(10)); await RefreshAsync(entry, ct); break;
+            case "openProjectFolder": await launcher.OpenAsync(Path.Combine(ProjectRoot(entry), "projects"), ct); break;
+            case "openProject":
+                var projectName = Text(m, "project");
+                if (!instances.Host.ListProjectProfiles(ProjectRoot(entry)).Contains(projectName)) throw new IpcFailure(404, "projectNotFound", "Unknown project.");
+                await Connect(entry, ProjectNavigation.OpenPath(instances.Host.ReadProjectProfile(ProjectRoot(entry), projectName)), ct); break;
+            case "editProject":
+                var profile = instances.Host.ReadProjectProfile(ProjectRoot(entry), Text(m, "project"));
+                if (profile is null) throw new IpcFailure(404, "projectNotFound", "Unknown project.");
+                events.Message(name, new { type = "editProject", name = Text(m, "project"), profile }); break;
+            case "deleteProject":
+                var delete = Text(m, "project");
+                if (!instances.Host.ListProjectProfiles(ProjectRoot(entry)).Contains(delete)) throw new IpcFailure(404, "projectNotFound", "Unknown project.");
+                if (await prompts.ConfirmAsync("Delete project", $"Delete the project profile \"{delete}\"? The repository on the VM is kept.", ct))
+                { instances.Host.DeleteProjectProfile(ProjectRoot(entry), delete); entry.Store.SaveSelectedProjects(new JsonArray(entry.Store.ReadSelectedProjects().Where(n => StateJson.String(n) != delete).Select(n => n?.DeepClone()).ToArray())); await RefreshAsync(entry, ct); } break;
+            case "selectProfiles":
+                var selected = entry.Store.ReadSelectedProjects().Select(StateJson.String).ToHashSet();
+                var picked = await prompts.PickAsync(new("Construct projects", instances.Host.ListProjectProfiles(ProjectRoot(entry)).Select(p => new PickItem(p, p, Picked: selected.Contains(p))).ToArray(), true), ct);
+                if (picked is not null) { entry.Store.SaveSelectedProjects(JsonSerializer.SerializeToNode(instances.Host.ListProjectProfiles(ProjectRoot(entry)).Where(picked.Contains))); await RefreshAsync(entry, ct); } break;
+            case "exportUsage":
+                var path = await prompts.SaveFileAsync(new("Export token usage", "construct-usage.json", "JSON (*.json)|*.json"), ct);
+                if (path is not null) files.WriteFileAtomic(path, Encoding.UTF8.GetBytes(UsageParser.BuildExportPayload(entry.UsageRaw, clock.UtcNow.ToString("O")))); break;
+            case "openHostAdmin":
+                var client = instances.Remote(entry);
+                if (client is null) { Refuse(name, id, "This instance has no remote host service."); break; }
+                var slug = Core.Remote.RemoteHost.HostSlug(client.BaseUrl);
+                await hosts.DispatchAsync(slug, new() { ["type"] = "hostadmin.ready" }, ct);
+                await desktop.ActivateAsync(new("hostadmin", Host: slug), ct); break;
+            case "childShutdown": case "childDelete": await hosts.ChildActionAsync(entry, id, Text(m, "child"), ct); break;
+            case "syncConfigNow": case "addConfigRemote": case "removeConfigRemote": case "importRemoteConfigs": case "shareConfigs": case "pushConfigUpstream": case "publishConfigProfiles": case "addRemoteAndPublish": case "openConfigRepo":
+                await ConfigCommand(entry, id, m, ct); break;
+            case "installGit": await launcher.StartDetachedAsync(PowerShellLaunch.BuildInstallGitLaunch().Invocation(), ct); break;
+            case "registerThisVm": Refuse(name, id, "Registration requires an attached Remote-SSH window. Use Register this VM in VS Code."); break;
+            case "addProject": Refuse(name, id, "Clone-and-register project creation is not yet ported. Save a project profile or use Add Project in VS Code fallback mode."); break;
+            case "removeInstance": Refuse(name, id, "Instance removal needs the installer removal planner. Use Remove Instance in VS Code."); break;
+            case "convertToHost": Refuse(name, id, "Host conversion requires the attached VM identity and explicit finish workflow. Review or finish it in VS Code; Companion never finishes a pending conversion automatically."); break;
+            case "createFirstVm": Refuse(name, id, "The remote VM creation wizard is not yet ported. Use New Remote VM in VS Code."); break;
+            case "updateConstruct": Refuse(name, id, "The host update result workflow is not yet ported. Run Update-Construct.ps1 from the installed scripts."); break;
+            default: Refuse(name, id, "This command is not supported by Construct Companion."); break;
+        }
+    }
+    public async Task RefreshAsync(CompanionInstance entry, CancellationToken ct)
+    {
+        if (entry.Runtime is { } runtime) await runtime.ProbeOnceAsync(ct);
+        await hosts.RefreshExtrasAsync(entry, ct);
+        var usage = await entry.Ssh.RunRemoteScriptAsync(UsageParser.BuildUsageScript(entry.UsagePeriod), TimeSpan.FromSeconds(60), ct);
+        if (usage.Code == 0) { entry.UsageRaw = usage.Stdout; entry.Usage = UsageParser.ParseUsage(StateJson.ParseObject(usage.Stdout)); }
+        if (entry.ConfigSync is { } configArea)
+        {
+            entry.ConfigState = JsonSerializer.SerializeToNode(await configArea.Runtime.BuildStateAsync(ct), IpcJson.Options);
+        }
+        var full = state.State(entry.Name);
+        var data = full["state"]!.AsObject();
+        var markers = entry.Store.ReadMarkers();
+        data["provisionStale"] = UpdatePlanner.IsProvisionStale(markers, Text(data, "provisionedCommit"));
+        data["constructUpdate"] = await UpdatePlanner.CheckConstructAsync(updates, markers, ct);
+        if (data["agents"] is JsonArray agents) data["agents"] = await UpdatePlanner.AugmentAgentsAsync(updates, agents, ct);
+        state.Publish(entry.Name, full);
+        state.PublishSnapshot(entry.Name);
+    }
+    private async Task SaveSettings(CompanionInstance entry, JsonObject form, CancellationToken ct)
+    {
+        var previous = entry.Store.ReadSettings(); entry.Store.SaveSettings(form); var merged = entry.Store.ReadSettings();
+        state.Publish(entry.Name, new { type = "settings", instance = entry.Name, settings = merged });
+        if (entry.Runtime is { } runtime) await runtime.SetAudioAsync(StateJson.Boolean(merged["mic"]) == true, ct);
+        if (StateJson.Boolean(previous["autoCheckpoints"]) != StateJson.Boolean(merged["autoCheckpoints"])) Refuse(entry.Name, "saveSettings", "Automatic checkpoint preference was saved. Applying it to the existing VM is not yet supported; use VS Code or the installer checkpoint action.");
+        var changes = SettingsMapping.PatchReprovisionChanges(previous, merged);
+        var t3 = T3Code.PlanLiveAction(StateJson.Boolean(merged["t3code"]) == true, StateJson.Boolean(previous["t3code"]) == true, Text(merged, "t3codeChannel"), Text(previous, "t3codeChannel"));
+        if (t3 is not null && (Text(t3, "action") == "disable" || StateJson.Boolean(merged["t3codeLimitResume"]) != true))
+            await CheckedScript(entry, Text(t3, "action") == "disable" ? T3Code.BuildDisableScript() : T3Code.BuildInstallScript(Text(t3, "channel")), ct, TimeSpan.FromMinutes(10));
+        if (changes.Length > 0 && await prompts.ConfirmAsync("Reprovision required", "Saved settings need reprovisioning to take effect: " + string.Join(", ", changes) + ". Reprovision now?", ct)) await Lifecycle(entry, "reprovision", [], ct);
+    }
+    private async Task Lifecycle(CompanionInstance entry, string action, JsonObject message, CancellationToken ct)
+    {
+        try
+        {
+            var directory = RequireDirectory(entry);
+            var invocation = LifecycleBuilder.BuildInvocation(action, new()
+            {
+                ["instance"] = entry.Definition.DeepClone(), ["settings"] = entry.Store.ReadSettings(),
+                ["instanceParams"] = JsonSerializer.SerializeToNode(LifecycleBuilder.InstanceParameterSupport(files, directory, action, entry.Definition)),
+                ["projects"] = entry.Store.ReadSelectedProjects(), ["backupMode"] = message["backup"]?.DeepClone(),
+                ["backupDir"] = Path.Combine(directory, "config")
+            });
+            if (invocation is null || StateJson.Boolean(invocation["blocked"]) == true) { Refuse(entry.Name, action, invocation is null ? "This lifecycle action is unavailable." : Text(invocation, "reason")); return; }
+            if (StateJson.Boolean(invocation["destructive"]) == true && !await prompts.ConfirmAsync(Text(invocation, "label"), $"{Text(invocation, "label")} \"{entry.Name}\"? This deletes and recreates its VM.", ct)) return;
+            var script = Path.Combine(directory, Text(invocation, "script"));
+            if (!files.FileExists(script)) { Refuse(entry.Name, action, "The installed lifecycle script is missing."); return; }
+            var args = invocation["args"]!.AsArray().Select(StateJson.String).ToArray();
+            var launch = new ProcessInvocation("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-File", script, .. args], directory);
+            if (StateJson.Boolean(invocation["elevate"]) == true) await launcher.LaunchElevatedAsync(launch, ct); else await launcher.StartDetachedAsync(launch, ct);
+            entry.Runtime?.BeginFastRefresh(); events.Companion(new { type = "lifecycle", instance = entry.Name, action, status = "launched" });
+        }
+        finally { events.Message(entry.Name, new { type = "lifecyclePrepared", id = Text(message, "type") == "customRebuild" ? action == "redownload" ? "customRedownload" : "customReinstall" : action }); }
+    }
+    private async Task SaveIdle(CompanionInstance entry, JsonObject policy, CancellationToken ct)
+    {
+        var client = instances.Remote(entry) ?? throw new IpcFailure(409, "localInstance", "Idle policy is enforced by the remote host service.");
+        var route = "/vms/" + Core.Remote.RemoteHost.Encode(Text(entry.Definition, "vmName")) + "/idle-policy";
+        var current = await client.RequestAsync("GET", route, cancellationToken: ct);
+        var wanted = Core.HostAdmin.HostAdminProtocol.ClampIdlePolicy(policy, StateJson.Number(current?["maxTimeoutMinutes"]) ?? 0);
+        wanted.Remove("clamped");
+        var applied = await client.RequestAsync("PUT", route, wanted, ct);
+        state.Publish(entry.Name, new { type = "idlePolicy", instance = entry.Name, idlePolicy = Core.HostAdmin.HostAdminProtocol.IdlePolicy(applied as JsonObject) });
+    }
+    private async Task ConfigCommand(CompanionInstance entry, string id, JsonObject message, CancellationToken ct)
+    {
+        var area = entry.ConfigSync ?? throw new IpcFailure(409, "configUnavailable", "Config sync is not configured for this instance.");
+        if (id == "openConfigRepo") { await launcher.OpenAsync(area.Repository.Directory, ct); return; }
+        if (id == "syncConfigNow") { await area.Runtime.SyncNowAsync(ct); await area.Actions.ImportAsync(ct); }
+        else
+        {
+            var result = id switch
+            {
+                "addConfigRemote" => await area.Actions.AddRemoteAsync(false, ct),
+                "addRemoteAndPublish" => await area.Actions.AddRemoteAsync(true, ct),
+                "removeConfigRemote" => await area.Actions.RemoveRemoteAsync(Text(message, "url"), ct),
+                "importRemoteConfigs" => await area.Actions.ImportAsync(ct),
+                "shareConfigs" => await area.Actions.ShareAsync(Text(entry.Store.ReadInstallWide(), "constructRepo"), Text(entry.Store.ReadInstallWide(), "constructRef"), ct),
+                "pushConfigUpstream" => await area.Actions.PushUpstreamAsync(Text(message, "url"), ct),
+                _ => await area.Actions.PublishAsync(Text(message, "url"), ct)
+            };
+            if (!result.Ok) Refuse(entry.Name, id, result.Message);
+            else if (id == "importRemoteConfigs") await area.Runtime.SyncNowAsync(ct);
+        }
+        entry.ConfigState = JsonSerializer.SerializeToNode(await area.Runtime.BuildStateAsync(ct), IpcJson.Options); var full = state.State(entry.Name); full["state"]!["configSync"] = entry.ConfigState?.DeepClone(); events.Message(entry.Name, full);
+    }
+    private Task Connect(CompanionInstance entry, string path, CancellationToken ct) => launcher.OpenAsync("vscode://vscode-remote/ssh-remote+" + Uri.EscapeDataString(Text(entry.Definition, "hostAlias")) + string.Join('/', path.Split('/').Select(Uri.EscapeDataString)), ct);
+    private string ProjectRoot(CompanionInstance entry) => instances.Host.ConfigDirectory ?? RequireDirectory(entry);
+    private static string RequireDirectory(CompanionInstance entry) => entry.Store.ScriptsDirectory ?? throw new IpcFailure(409, "scriptsUnavailable", "No Construct scripts directory resolved.");
+    private static async Task CheckedScript(CompanionInstance entry, string script, CancellationToken ct, TimeSpan? timeout = null)
+    { if ((await entry.Ssh.RunRemoteScriptAsync(script, timeout ?? TimeSpan.FromSeconds(30), ct)).Code != 0) throw new IpcFailure(502, "guestOperationFailed", "The guest operation failed."); }
+    public void Refuse(string name, string id, string reason) => events.Message(name, new { type = "lifecyclePrepared", id, error = reason });
+    internal static string Text(JsonObject value, string key) => StateJson.Text(value[key]) ?? "";
+}

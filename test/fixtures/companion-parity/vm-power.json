@@ -330,5 +330,9 @@
     "input": "VMAUTOCHK=absent",
     "kind": "parse",
     "state": "unknown"
+  },
+  {
+    "kind": "shutdown",
+    "output": "systemctl poweroff --no-block"
   }
 ]

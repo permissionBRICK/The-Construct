@@ -26,8 +26,8 @@ of URI query values belong to S2. The default instance is not inferred by the pa
 The scaffold uses `Local\ConstructCompanion` for its mutex and a temporary named event
 for quit. A second launch exits 0. HTTP activation forwarding and `/v1/quit` are pending
 S2 IPC/app integration. The app entry point does not yet create endpoint files, listeners,
-tunnels, registrations, or runtime timers. The Host project is currently a library; its fake-mode
-console entry belongs with the runtime/IPC composition root.
+tunnels, registrations, or runtime timers. The Host project provides an independently runnable fake-mode console entry and reusable
+IPC composition root; wiring it into the Windows entry point remains app integration.
 
 ## Layering rules
 
@@ -127,10 +127,79 @@ renders it; its former assertion searched the JavaScript builder's internal sour
 
 ## Unsupported messages
 
-Placeholder for the S2/S3 dispatcher message matrix. All webview messages and command IDs
-are currently unsupported because S1 has no dispatcher, webview windows, or HTTP listener.
-S2/S3 must implement each protocol entry or list its reason here and return the panel's
-existing refusal message; messages must never be silently ignored by an active dispatcher.
+The dispatcher implements all ten top-level panel message types. Unknown types/commands
+return `{type:"lifecyclePrepared", id, error}`; both shared webviews display `error`.
+These specific workflows remain explicit refusals:
+
+| Command | Reason / alternative |
+|---|---|
+| `registerThisVm` | Companion has no attached Remote-SSH window identity. Use the VS Code registration command (which stays local in client mode). |
+| `addProject` | S2a exposes profile storage but does not expose the clone/register/open project workflow. Save a profile or use Add Project in VS Code fallback mode. |
+| `removeInstance` | S2a has registry edits and launch builders, but no complete removal planner/confirmation workflow. Use the local VS Code removal command. |
+| `convertToHost` | Initiation depends on the attached VM identity; pending VS Code conversions keep their RSA private key in that VS Code profile's SecretStorage. Companion shows pending status and never finishes it automatically. Review/finish in that profile. |
+| `createFirstVm` | The service-backed creation wizard is not exposed by S2a. Use New Remote VM in VS Code. |
+| `updateConstruct` | The install-wide result-file/update/reload workflow is not yet wired. Run the installed `Update-Construct.ps1`. |
+| `hostadmin.action: issueToken`, `rotateVmToken` | `IPrompts` has no one-time secret display operation. Refused before requesting any new token; use the host CLI. |
+| `hostadmin.action: createFirstVm` | Same missing creation wizard as the panel command above. |
+| `saveSettings` automatic checkpoint apply | The preference is saved, but the elevated apply/result workflow is not wired. A visible refusal directs the user to VS Code or the installer checkpoint action. |
+| Lifecycle preflight / live project fallback | The dispatcher uses the persisted project selection. The extension's import-scan/config-sync/continue-anyway preflight and probe fallback are not wired; sync and select projects explicitly before launching lifecycle actions. |
+| `saveProject` malformed legacy values | Uses S2a strict validation and canonicalization rather than the extension modal's legacy schema coercion. Invalid or reserved profiles are refused before writing. |
+
+Other panel command IDs are routed in `Host/Dispatch/MessageDispatcher.cs`; host-admin
+messages/actions are routed in `Host/Dispatch/HostAdministration.cs`. Bad names, form
+values and routes return RFC 7807 problems. Host-admin refusals also publish a visible
+`state.notice`; ordinary unsupported panel operations publish the visible error above.
+
+## S2b IPC host
+
+`IpcServer.Build(services => services.AddCompanionFakes().AddCompanionHost())` creates
+a reusable `WebApplication`. Start it with `StartAsync`, stop it with `StopAsync`, and
+await disposal. Tests exercise real Kestrel, including port binding and shutdown, with
+fake platform seams. `dotnet run --project companion/src/Construct.Companion.Host -- --fake`
+runs that composition as a console host (its filesystem, including endpoint.json, is
+in memory; it prints its fake endpoint document once to stdout for manual clients, and
+in-process tests read the endpoint through `IFileSystem`). No Windows runtime
+execution is claimed.
+
+The Windows app supplies `IStateFileSystem`/`IFileSystem`, `ITokenStore`, `IRemoteApi`,
+`IPrompts`, `ICompanionDesktop`, `ILauncher`, `IHypervisorState`, `IAudioCapture`,
+`IToastRaiser`, `IClipboard`, and `IUpdateSource` before `AddCompanionHost()`. Existing
+registrations win. Runtime and config-sync register through their S2a `AddRuntime()` and
+`AddConfigSync()` methods. `IInstanceConnections` joins S2a SSH/forward transports to the
+normalized registry. `ICompanionDesktop` is the UI-thread activation adapter; it belongs
+to the app. The Host assembly has an executable entry for fake mode and is referenced
+as a library by the self-contained app (`ShouldBeValidatedAsExecutableReference=false`).
+
+The server binds only IPv4 loopback on an ephemeral HTTP/1 port, writes a fresh 32-byte
+hex bearer token to endpoint.json atomically after binding, and removes that file after
+shutdown. Host checks apply even to health. It serves every section 7.1 route, bounded
+SSE queues with instance filters and 15-second comments, and the installer quit response
+before requesting shutdown. Logs contain fixed operational text and roll at 1 MiB, with
+four archived files plus the current log. Host enrollment confirms pins without credentials
+first, verifies whoami with the selected credential, then persists through the token seam.
+The host list merges registry services with `companion/hosts.json` (VS Code's enrollment
+list itself lives in extension globalState). Removal refuses hosts still referenced by
+registered instances. Pending host updates use one `host-update-<slug>.json` per host.
+
+Message POSTs validate before acceptance, enqueue under the Host shutdown token, and return
+202 immediately. Long actions survive client disconnects; ready/refresh publish a cached
+snapshot immediately and run in a separate refresh queue. Results arrive through SSE.
+
+State aggregation wraps the S2a runtime probe in the panel's nested `state` envelope,
+adds registry/settings/usage/config-sync data, and replays the seven snapshot messages.
+The runtime supervisor continues owning probes, forwards, notifications, audio and repatch.
+Host administration detects identity per host, projects all seven tabs, validates forms,
+uses desktop confirmations, retains update intent for retry/recovery, and polls updates
+at five seconds. Cascade delete requests use the service's fresh child list/token and a
+typed name; no cascade token from a panel message is trusted.
+
+Remaining integration limitations: config-sync automatic ticks and watching are not started
+by this composition yet (explicit commands work); usage/update enrichment runs on explicit
+refresh/ready; lifecycle result-file and checkpoint-result monitoring are not yet connected.
+The app must register its real platform seams and activation adapter. New host-admin
+projections, detection, forms and idle-policy mapping have JavaScript-generated parity
+fixtures in `hostadmin-ipc.json`. HTTP tests additionally cover auth/Host/problems, all routes,
+SSE delivery/filtering, forward open/close, host action round trips, argv/UAC and quit.
 
 ## S2a state
 
@@ -239,3 +308,10 @@ S2a Linux validation: Companion build 0 warnings/errors; Companion tests 412/412
 service tests 1,261/1,261; Node suites 30/30; PowerShell config-sync 568/568; parity
 333 rows across five areas. Node/PowerShell use the process-local default-branch override
 described above. No extension implementation, installer, guest script, or service code changed.
+
+
+S2b Linux validation: Companion build 0 warnings/0 errors; Companion tests 4,608/4,608;
+Node suites 31/31; service tests 1,261/1,261. HTTP tests include pending prompts after
+client disconnect, complete error states, retarget contention, and spool-to-SSE-to-close.
+The app still needs to signal host-admin window closure: after an actual admin window
+opens, its polling currently continues until Host shutdown. No Windows execution occurred.
