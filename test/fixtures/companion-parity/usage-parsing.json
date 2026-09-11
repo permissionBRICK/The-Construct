@@ -1,0 +1,193 @@
+[
+  {
+    "input": null,
+    "kind": "parse",
+    "output": null
+  },
+  {
+    "input": {},
+    "kind": "parse",
+    "output": null
+  },
+  {
+    "input": {
+      "tools": {
+        "claude": {
+          "error": 0,
+          "totals": {
+            "totalTokens": 123
+          }
+        }
+      }
+    },
+    "kind": "parse",
+    "output": {
+      "tools": [
+        {
+          "costText": "$0.00",
+          "id": "claude",
+          "label": "Claude Code",
+          "tokens": 123,
+          "tokensText": "123"
+        }
+      ],
+      "totalCostText": "$0.00",
+      "totalTokensText": "123"
+    }
+  },
+  {
+    "input": {
+      "tools": {}
+    },
+    "kind": "parse",
+    "output": null
+  },
+  {
+    "input": {
+      "tools": {
+        "claude": {
+          "totals": {
+            "totalCost": 12.34,
+            "totalTokens": 12345
+          }
+        },
+        "codex": {
+          "totals": {
+            "costUSD": 2000.1,
+            "totalTokens": "2000000"
+          }
+        },
+        "opencode": {
+          "totals": {
+            "totalCost": -1,
+            "totalTokens": 42
+          }
+        }
+      }
+    },
+    "kind": "parse",
+    "output": {
+      "tools": [
+        {
+          "costText": "$12.34",
+          "id": "claude",
+          "label": "Claude Code",
+          "tokens": 12345,
+          "tokensText": "12.3K"
+        },
+        {
+          "costText": "$2,000.10",
+          "id": "codex",
+          "label": "Codex",
+          "tokens": 2000000,
+          "tokensText": "2M"
+        },
+        {
+          "costText": "$0.00",
+          "id": "opencode",
+          "label": "OpenCode",
+          "tokens": 42,
+          "tokensText": "42"
+        }
+      ],
+      "totalCostText": "$2,012.44",
+      "totalTokensText": "2M"
+    }
+  },
+  {
+    "input": {
+      "tools": {
+        "claude": {
+          "error": "no",
+          "totals": {
+            "totalTokens": 1
+          }
+        },
+        "codex": {
+          "totals": {
+            "totalTokens": 0
+          }
+        },
+        "opencode": {
+          "totals": {
+            "totalTokens": "bad"
+          }
+        }
+      }
+    },
+    "kind": "parse",
+    "output": null
+  },
+  {
+    "cost": "$0.00",
+    "input": 0,
+    "kind": "format",
+    "tokens": "0"
+  },
+  {
+    "cost": "$0.00",
+    "input": -1,
+    "kind": "format",
+    "tokens": "0"
+  },
+  {
+    "cost": "$1.00",
+    "input": 1,
+    "kind": "format",
+    "tokens": "1"
+  },
+  {
+    "cost": "$999.00",
+    "input": 999,
+    "kind": "format",
+    "tokens": "999"
+  },
+  {
+    "cost": "$1,000.00",
+    "input": 1000,
+    "kind": "format",
+    "tokens": "1K"
+  },
+  {
+    "cost": "$1,500.00",
+    "input": 1500,
+    "kind": "format",
+    "tokens": "1.5K"
+  },
+  {
+    "cost": "$999,999.00",
+    "input": 999999,
+    "kind": "format",
+    "tokens": "1000K"
+  },
+  {
+    "cost": "$1,000,000.00",
+    "input": 1000000,
+    "kind": "format",
+    "tokens": "1M"
+  },
+  {
+    "cost": "$1,000,000,000.00",
+    "input": 1000000000,
+    "kind": "format",
+    "tokens": "1B"
+  },
+  {
+    "cost": "$1,234.57",
+    "input": 1234.567,
+    "kind": "format",
+    "tokens": "1.2K"
+  },
+  {
+    "cost": "$1.00",
+    "input": 1.005,
+    "kind": "format",
+    "tokens": "1"
+  },
+  {
+    "cost": "$2.67",
+    "input": 2.675,
+    "kind": "format",
+    "tokens": "3"
+  }
+]
