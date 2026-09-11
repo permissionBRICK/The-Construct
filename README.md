@@ -93,9 +93,9 @@ Ports go the other way too. When an agent starts a dev server it runs `construct
 which opens that port on **your** PC and prints the link. See [`construct expose`](docs/expose.md).
 
 More in [Remote access & services](docs/remote-access.md). The addresses above belong to the
-default VM; a second local VM follows the same pattern under its own name. For a VM on a
+default VM. A second local VM follows the same pattern under its own name. For a VM on a
 [remote host](docs/remote-host.md), the host service publishes the SSH port, so `ssh <name>`,
-Remote-SSH and the Codex App work under that instance's alias. Its web ports are reached with
+Remote-SSH and the Codex App work under that instance's alias. You reach its web ports with
 `construct expose`. The SMB share exists for local VMs only.
 
 ## ⚙️ Configure
@@ -114,9 +114,9 @@ Per-project setup is declared once in `projects/*.json` and reused on every (re)
 
 VM-level settings live in `/etc/construct/config.env` (agent name, projects, tools,
 workspace root). Reference: [Project profiles & configuration](docs/projects.md) and
-[Provisioning](docs/provisioning.md). Optional features such as microphone passthrough and
-the patched T3 Code build are switched on in the
-[control panel](docs/control-panel.md#patched-t3-code-server--desktop-build).
+[Provisioning](docs/provisioning.md). You switch optional features on in the
+[control panel](docs/control-panel.md#patched-t3-code-server--desktop-build), for example
+microphone passthrough and the patched T3 Code build.
 
 ## 🖧 Run it on a remote host
 
@@ -136,21 +136,21 @@ On a fresh machine the installer asks: local Hyper-V, or remote host. With a rem
 - No administrator rights are needed on your PC.
 - The VM keeps running with your laptop closed.
 
-Administrators get **The Construct: Host Administration** in VS Code and in the Companion:
-users and their allowances (VM count, CPU, RAM, storage, lifetime, sharing), every VM with
-its settings, media, jobs, configuration and host updates. Host updates come from the
-published `main` releases in the Maintenance tab; guest provisioning stays per instance.
-From a VM on such a host, `construct vm` creates [child VMs](docs/child-vms.md) for tests.
+The Host Administration view, in VS Code and in the Companion, covers users and their
+allowances (VM count, CPU, RAM, storage, lifetime, sharing), every VM with its settings,
+media, jobs, configuration and host updates. The Maintenance tab installs host updates from
+the published `main` releases. Guest provisioning stays per instance. From a VM on such a
+host, `construct vm` creates [child VMs](docs/child-vms.md) for tests.
 
 Several VMs, local or remote, are instances in a small registry on your PC
 (`%LOCALAPPDATA%\The-Construct\instances.json`). The control panel and the Companion switch
-between them. A single local VM never sees any of this.
+between them. With a single local VM the registry is not needed.
 
-Admin setup, authentication (Kerberos or admin-issued tokens), certificate pinning and the
-idle policy: [Remote host](docs/remote-host.md). First run on a domain:
-[Field test](docs/field-test-remote-host.md). Host administration and child VMs are tested
-on Linux and still need the [Hyper-V field test](docs/field-test-host-admin.md) before
-rollout.
+[Remote host](docs/remote-host.md) covers the admin setup, authentication (Kerberos or
+admin-issued tokens), certificate pinning and the idle policy.
+[Field test](docs/field-test-remote-host.md) walks through the first run on a domain. Host
+administration and child VMs have Linux tests and still need the
+[Hyper-V field test](docs/field-test-host-admin.md) before rollout.
 
 ## 🔐 Know the trade
 
