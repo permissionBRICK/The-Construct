@@ -185,19 +185,22 @@ function Expand-ConstructCompanionPayload {
 
 function Stop-ConstructCompanionForInstall {
     param([string]$StateDir,[hashtable]$Seams,[ValidateSet('update','user')][string]$Reason='update')
-    $endpoint=Read-ConstructCompanionJson (Join-Path $StateDir 'endpoint.json')
-    if (-not $endpoint) { return }
-    if ($endpoint.v -ne 1 -or $endpoint.ipcApiVersion -ne 1 -or ($endpoint.port -isnot [int] -and $endpoint.port -isnot [long]) -or $endpoint.port -lt 1 -or $endpoint.port -gt 65535 -or
-        ($endpoint.pid -isnot [int] -and $endpoint.pid -isnot [long]) -or $endpoint.pid -le 0 -or $endpoint.pid -gt [int]::MaxValue -or $endpoint.token -cnotmatch '^[0-9a-fA-F]{64}$') { Throw-ConstructCompanionError 'Invalid Companion endpoint; close the Companion from its tray menu and retry.' }
-    if (-not (& $Seams.Alive $endpoint.pid)) { return }
-    $timer=[Diagnostics.Stopwatch]::StartNew()
-    & $Seams.Quit $endpoint $Reason
-    # Poll count also bounds injected clocks; wall time includes the HTTP request.
-    for ($i=0; $i -lt 60 -and $timer.Elapsed.TotalSeconds -lt 15; $i++) {
-        if (-not (& $Seams.Alive $endpoint.pid)) { return }
-        & $Seams.Sleep ([Math]::Min(250,[Math]::Max(1,15000-[int]$timer.Elapsed.TotalMilliseconds)))
+    # The standalone desktop uses a private endpoint until full runtime composition.
+    foreach ($endpointName in @('endpoint.json','ui-endpoint.json')) {
+        $endpoint=Read-ConstructCompanionJson (Join-Path $StateDir $endpointName)
+        if (-not $endpoint) { continue }
+        if ($endpoint.v -ne 1 -or $endpoint.ipcApiVersion -ne 1 -or ($endpoint.port -isnot [int] -and $endpoint.port -isnot [long]) -or $endpoint.port -lt 1 -or $endpoint.port -gt 65535 -or
+            ($endpoint.pid -isnot [int] -and $endpoint.pid -isnot [long]) -or $endpoint.pid -le 0 -or $endpoint.pid -gt [int]::MaxValue -or $endpoint.token -cnotmatch '^[0-9a-fA-F]{64}$') { Throw-ConstructCompanionError 'Invalid Companion endpoint; close the Companion from its tray menu and retry.' }
+        if (-not (& $Seams.Alive $endpoint.pid)) { continue }
+        $timer=[Diagnostics.Stopwatch]::StartNew()
+        & $Seams.Quit $endpoint $Reason
+        # Poll count also bounds injected clocks; wall time includes the HTTP request.
+        for ($i=0; $i -lt 60 -and $timer.Elapsed.TotalSeconds -lt 15; $i++) {
+            if (-not (& $Seams.Alive $endpoint.pid)) { return }
+            & $Seams.Sleep ([Math]::Min(250,[Math]::Max(1,15000-[int]$timer.Elapsed.TotalMilliseconds)))
+        }
+        Throw-ConstructCompanionError 'Companion did not exit within 15 seconds; close it from the tray and retry. No process was killed.'
     }
-    Throw-ConstructCompanionError 'Companion did not exit within 15 seconds; close it from the tray and retry. No process was killed.'
 }
 
 function Get-ConstructCompanionRegistrations {
