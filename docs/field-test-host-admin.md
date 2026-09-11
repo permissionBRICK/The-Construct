@@ -360,3 +360,14 @@ bundle is what turns those simulations into a defensible Hyper-V field result.
 - [ ] `[FIELD]` Verify handoff ACLs exclude ordinary users and that its credential fails
       outside loopback maintenance. Verify host-local release trust cannot be changed
       through the remote configuration API.
+
+## Remote source reprovisioning
+
+- [ ] `[FIELD]` First provision on a real Windows host: released ZIP downloaded once and verified,
+      token delivered without appearing in argv/logs, guest layout/modes correct, config and
+      project profiles applied; test Windows PowerShell 5.1 and installer directory ACLs.
+- [ ] `[FIELD]` Reprovision the same and another VM at the same commit: source retained/reused,
+      no checkout pack/scp, settings still applied; record archive equivalence-check time and
+      total timing against upload. Verify real GitHub redirects, service CA and hash checking.
+- [ ] `[FIELD]` Reprovision against an old service without `source-cache`: warning followed by
+      the original upload; verify local Hyper-V output/env unchanged and `-SourceMode upload`.
