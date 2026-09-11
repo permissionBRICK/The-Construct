@@ -37,7 +37,11 @@ public sealed record AddRemoteHost(string Url, string? Token = null, string? Fin
 }
 public sealed record UiActivation(string View,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Instance = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Host = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Host = null)
+{
+    // In-process only: the IPC route already queued the opening refresh.
+    [JsonIgnore] public bool RefreshScheduled { get; init; }
+}
 public sealed record QuitRequest(string Reason);
 public sealed record Problem(string Type, string Title, int Status, string Code, string? Detail = null);
 public sealed record ForwardSettings(bool Enabled = true, string HostLabel = "");

@@ -35,7 +35,10 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
         {
             switch (type)
             {
-                case "ready": await RefreshAsync(entry, ct); return;
+                case "ready":
+                    if (StateJson.Boolean(message["snapshotOnly"]) == true) state.PublishSnapshot(name);
+                    else await RefreshAsync(entry, ct, bypassManifest: StateJson.Boolean(message["surfaceOpened"]) == true);
+                    return;
                 case "openPanel": await desktop.ActivateAsync(new("panel", name), ct); return;
                 case "setInstance": await SelectAsync(Text(message, "name"), ct); return;
                 case "setAudio":
@@ -159,7 +162,7 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
     }
     // Recomputes and publishes the full state message (probe, host extras, usage, config sync,
     // update enrichment). The enrichment service calls it with probe:false and collectUsage:false.
-    public async Task RefreshAsync(CompanionInstance entry, CancellationToken ct, bool probe = true, bool collectUsage = true)
+    public async Task RefreshAsync(CompanionInstance entry, CancellationToken ct, bool probe = true, bool collectUsage = true, bool bypassManifest = false)
     {
         await entry.EnrichmentSerial.WaitAsync(ct);
         try
@@ -184,7 +187,7 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
             var data = full["state"]!.AsObject();
             var markers = entry.Store.ReadMarkers();
             data["provisionStale"] = UpdatePlanner.IsProvisionStale(markers, Text(data, "provisionedCommit"));
-            data["constructUpdate"] = await UpdatePlanner.CheckConstructAsync(updates, markers, ct);
+            data["constructUpdate"] = await UpdatePlanner.CheckConstructAsync(bypassManifest ? updates.Bypass() : updates, markers, ct);
             UpdatePlanner.Fold(data, markers, data["constructUpdate"] as JsonObject);
             if (data["agents"] is JsonArray agents) data["agents"] = await UpdatePlanner.AugmentAgentsAsync(updates, agents, ct);
             // Everything the enrichment adds must survive the next probe-driven rebuild of the state (StateAggregation.State copies Enrichment).
