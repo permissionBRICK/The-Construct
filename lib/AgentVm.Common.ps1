@@ -6388,3 +6388,106 @@ function Publish-ConstructConfigProfiles {
 
     return (& $emit)
 }
+
+function Test-ConstructSourceRelativePath {
+    param([string]$Path)
+    if (-not $Path -or $Path.Length -gt 240 -or $Path -match '[\\\x00-\x1f:*?"<>|]' -or $Path.StartsWith('/')) { return $false }
+    foreach ($part in ($Path -split '/')) {
+        if (-not $part -or $part -eq '.' -or $part -eq '..' -or $part.EndsWith('.') -or $part.EndsWith(' ')) { return $false }
+    }
+    return $true
+}
+
+function Write-ConstructSourceManifest {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Zip, [Parameter(Mandatory)][string]$Commit, [string]$ManifestDir)
+    $archive = $null; $temporary = $null
+    try {
+        if ($Commit -cnotmatch '^[0-9a-f]{40}$') { throw 'Invalid source commit.' }
+        if (-not $ManifestDir) { $ManifestDir = Join-Path (Split-Path -Parent (Get-ConstructConfigDir)) 'source-manifests' }
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $archive = [IO.Compression.ZipFile]::OpenRead($Zip)
+        $files = [Collections.Generic.SortedDictionary[string,string]]::new([StringComparer]::Ordinal)
+        $prefix = ''
+        foreach ($entry in $archive.Entries) {
+            $name = $entry.FullName; $top = ($name -split '/')[0]
+            if (-not $prefix) { $prefix = $top }
+            if ($top -cne $prefix -or $top -notmatch '^[A-Za-z0-9_.-]+-main$') { throw 'Invalid archive prefix.' }
+            if ($name.EndsWith('/')) { continue }
+            if ($name.Length -le ($prefix.Length + 1)) { throw 'Invalid archive file.' }
+            $relative = $name.Substring($prefix.Length + 1)
+            if (-not (Test-ConstructSourceRelativePath $relative) -or $files.ContainsKey($relative)) { throw 'Invalid archive file.' }
+            $inputStream = $entry.Open(); $sha = [Security.Cryptography.SHA256]::Create()
+            try { $digest = [BitConverter]::ToString($sha.ComputeHash($inputStream)).Replace('-', '').ToLowerInvariant() }
+            finally { $sha.Dispose(); $inputStream.Dispose() }
+            $files.Add($relative, $digest)
+        }
+        if ($files.Count -eq 0) { throw 'Empty source archive.' }
+        [IO.Directory]::CreateDirectory($ManifestDir) | Out-Null
+        $temporary = Join-Path $ManifestDir ('.source-' + [guid]::NewGuid().ToString('N'))
+        $lines = @($files.Keys | ForEach-Object { $files[$_] + '  ' + $_ })
+        [IO.File]::WriteAllLines($temporary, [string[]]$lines, [Text.UTF8Encoding]::new($false))
+        Move-Item -LiteralPath $temporary -Destination (Join-Path $ManifestDir ($Commit + '.sha256')) -Force
+        return $true
+    } catch {
+        Write-Warning "Could not record the source manifest ($($_.Exception.GetType().Name)); the host cache is unavailable until the next update."
+        return $false
+    } finally {
+        if ($archive) { $archive.Dispose() }
+        if ($temporary -and (Test-Path -LiteralPath $temporary)) { Remove-Item -LiteralPath $temporary -Force }
+    }
+}
+
+function Get-ConstructSourceIdentity {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Root, [scriptblock]$GitRunner, [string]$ManifestDir)
+    $result = @{ Commit = ''; TreeState = 'unknown'; Divergence = 0 }
+    if (Test-Path -LiteralPath (Join-Path $Root '.git')) {
+        try {
+            if (-not $GitRunner) {
+                $GitRunner = { param($SourceRoot, $Arguments)
+                    $lines = @(& git -C $SourceRoot @Arguments 2>$null)
+                    return @{ ExitCode = $LASTEXITCODE; Lines = $lines }
+                }
+            }
+            $head = & $GitRunner $Root @('rev-parse', 'HEAD')
+            $commit = ([string]($head.Lines -join '')).Trim().ToLowerInvariant()
+            if ($head.ExitCode -ne 0 -or $commit -cnotmatch '^[0-9a-f]{40}$') { return $result }
+            $status = & $GitRunner $Root @('status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none')
+            if ($status.ExitCode -ne 0) { return $result }
+            $count = @($status.Lines | Where-Object { [string]$_ -ne '' }).Count
+            return @{ Commit = $commit; TreeState = $(if ($count) { 'divergent' } else { 'equivalent' }); Divergence = $count }
+        } catch { return $result }
+    }
+    try {
+        $commit = ([IO.File]::ReadAllText((Join-Path $Root '.construct-revision'))).Trim().ToLowerInvariant()
+        if ($commit -cnotmatch '^[0-9a-f]{40}$') { return $result }
+        $result.Commit = $commit; $result.TreeState = 'unverified'
+        if (-not $ManifestDir) { $ManifestDir = Join-Path (Split-Path -Parent (Get-ConstructConfigDir)) 'source-manifests' }
+        $manifest = Join-Path $ManifestDir ($commit + '.sha256')
+        if (-not (Test-Path -LiteralPath $manifest)) { return $result }
+        $files = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]::OrdinalIgnoreCase)
+        foreach ($line in [IO.File]::ReadAllLines($manifest)) {
+            if ($line -cnotmatch '^[0-9a-f]{64}  \S.*$') { return $result }
+            $relative = $line.Substring(66)
+            if (-not (Test-ConstructSourceRelativePath $relative) -or $files.ContainsKey($relative)) { return $result }
+            $files.Add($relative, $line.Substring(0,64))
+        }
+        if ($files.Count -eq 0) { return $result }
+        $count = 0
+        foreach ($relative in $files.Keys) {
+            $path = Join-Path $Root $relative
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { $count++; continue }
+            if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $files[$relative]) { $count++ }
+        }
+        $prefix = [IO.Path]::GetFullPath($Root).TrimEnd([char[]]@('/', '\')) + [IO.Path]::DirectorySeparatorChar
+        foreach ($file in Get-ChildItem -LiteralPath $Root -File -Force -Recurse) {
+            $relative = $file.FullName.Substring($prefix.Length).Replace('\', '/')
+            if ($files.ContainsKey($relative)) { continue }
+            if ($relative -match '(^|/)(\.construct-settings\.json|[^/]*\.iso|\.env|[^/]*\.local)$|(^|/)(\.construct-backup|\.construct-tools|runtime|__pycache__)/|(^|/)\.claude/worktrees/') { continue }
+            $count++
+        }
+        $result.Divergence = $count; $result.TreeState = $(if ($count) { 'divergent' } else { 'equivalent' })
+    } catch { if ($result.Commit) { $result.TreeState = 'unverified' } }
+    return $result
+}

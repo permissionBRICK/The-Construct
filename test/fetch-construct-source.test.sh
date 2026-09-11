@@ -76,6 +76,9 @@ with tempfile.TemporaryDirectory(prefix='source-fetch-test-') as temp:
             ('two roots',badzip('repo-main/a',second='other-main/b')),('absolute',badzip('/repo-main/a')),
             ('directory type mismatch',badzip('repo-main/file',0x41ed)),('file collision',badzip('repo-main/a',second='repo-main/a/b'))]:
             reset();state['bytes']=data;run(5);ok(label+' refused')
+        reset();bomb=io.BytesIO()
+        with zipfile.ZipFile(bomb,'w',compression=zipfile.ZIP_DEFLATED) as z:z.writestr('repo-main/bomb',b'0'*100000)
+        state['bytes']=bomb.getvalue();run(5);ok('compression ratio refused')
         for n in (1,2):
             reset();stub('chown',f'''n=$(cat '{counter}'); n=$((n+1)); printf '%s' "$n" > '{counter}'
 if [[ "$n" == {n} ]]; then exit 1; fi

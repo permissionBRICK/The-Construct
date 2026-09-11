@@ -688,3 +688,7 @@ Fake mode reads `HostAdmin:Source:FakeReleaseDir`: `FakeReleaseSource.GetSourceA
 - The stale-inventory admission test uses the existing `IHypervisorInventory` seam; the contract calls it `IHostInventory`.
 - The host installer did not have the stated media directory/settings block; source settings now preserve the existing HostAdmin section and add Source.RootDir alongside the existing ISO setup.
 - Source ZIP checks also reject duplicate paths and file/directory collisions, matching safe extraction on Windows and Linux.
+
+- The orchestration helper also exposes `-Pack`, so begin-time packing and fallback packing can be asserted independently from upload.
+- Source API calls opt into a bounded preflight/request budget; legacy callers retain preflight exception behavior and existing status/error accessors.
+- Byte-identity checks compare the unchanged local archive algorithm, upload commands, transcript on identical inputs and downstream environment; naturally the new tracked feature files join future source archives, while no generated manifest enters the checkout.

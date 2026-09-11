@@ -211,6 +211,8 @@ param(
     [switch]$RotateVmToken,
     [ValidateSet('provisioned','reinstalled')][string]$ProvisionEvent = 'provisioned',
     [hashtable]$ServiceApiAuth = $null,
+    [ValidateSet('auto','cache','upload')][string]$SourceMode = 'auto',
+    [ValidateRange(1,86400)][int]$SourceEnsureTimeoutSec = 900,
     # The name this VM's WEB endpoints are reachable under (plan section 4.12): the host
     # service's rendered Constructd:PublicHostPattern, which the installer read from
     # GET /vms/{name}/endpoint and recorded in the instance registry. It becomes
@@ -1741,8 +1743,29 @@ foreach ($f in @((Join-Path $HOME ".ssh\config"), (Join-Path $HOME ".ssh\$LocalK
     if (Test-Path -LiteralPath $f) { Protect-SshFile $f }
 }
 
-$archivePath = New-RepoArchive
+if (-not $ServiceUrl) { $archivePath = New-RepoArchive } else {
+    . (Join-Path $PSScriptRoot 'lib/AgentVm.Remote.ps1')
+    $sourceRef = $Ref
+    if (-not $PSBoundParameters.ContainsKey('Ref')) {
+        $sourceSettings = Read-ConstructSettings -Dir $PSScriptRoot
+        if ($sourceSettings.constructRef) { $sourceRef = [string]$sourceSettings.constructRef }
+    }
+    $sourceIdentity = Get-ConstructSourceIdentity -Root $PSScriptRoot
+    $sourceFeature = $false
+    if ($SourceMode -ne 'upload' -and -not $IncludeGit) {
+        $sourceFeature = Test-ConstructApiFeature -BaseUrl $ServiceUrl -Auth $ServiceApiAuth -TimeoutSec 10
+    }
+    $sourcePlan = Get-ConstructSourceTransportPlan -ServiceManaged $true -Mode $SourceMode -IncludeGit ([bool]$IncludeGit) `
+        -FeatureAvailable $sourceFeature -Ref $sourceRef -Commit $sourceIdentity.Commit -TreeState $sourceIdentity.TreeState -Divergence $sourceIdentity.Divergence
+}
 Ensure-VmReachable
+if ($ServiceUrl) {
+    $sourceDeadline = [datetime]::UtcNow.AddSeconds($SourceEnsureTimeoutSec)
+    $sourceState = Invoke-ConstructSourceTransport -Phase begin -Plan $sourcePlan -Pack { New-RepoArchive } -Ensure {
+        param($commit, $operationKey)
+        Request-ConstructSourceEnsure -BaseUrl $ServiceUrl -VmName $InstanceName -Commit $commit -OperationKey $operationKey -Auth $ServiceApiAuth
+    }
+}
 
 # Accept the VM's host key before any SSH operations (overwrite to clear stale keys from previous VMs).
 Write-Step "Accepting VM host key"
@@ -1805,6 +1828,52 @@ if (Enter-RootKeyFastPath) {
     Ensure-Sudo
 }
 
+if ($ServiceUrl) {
+    $script:SourceFetchTokenPath = ''
+    $sourceResult = Invoke-ConstructSourceTransport -Phase complete -State $sourceState -Deadline $sourceDeadline -TimeoutSeconds $SourceEnsureTimeoutSec `
+        -Pack { New-RepoArchive } -WaitJob {
+            param($jobId, $deadline)
+            Wait-ConstructSourceJob -BaseUrl $ServiceUrl -JobId $jobId -Auth $ServiceApiAuth -Deadline $deadline -OnProgress { param($line) Write-Host "    $line" }
+        } -StageToken {
+            if (-not $VmTokenB64) { return $true }
+            $script:SourceFetchTokenPath = '/tmp/.construct-vm-token-fetch.' + [guid]::NewGuid().ToString('N')
+            $plainToken = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($VmTokenB64))
+            $staged = $false
+            try { $staged = Send-GuestSecret -Content $plainToken -RemotePath $script:SourceFetchTokenPath; return $staged }
+            finally {
+                $plainToken = $null
+                if (-not $staged) {
+                    try { Invoke-Ssh -Sudo -Command ('if [ -f {0} ]; then rm -r -- {0}; fi' -f $script:SourceFetchTokenPath) | Out-Null } catch { }
+                }
+            }
+        } -RunGuestFetch {
+            param($state)
+            $fetchPath = '/tmp/.construct-source-script.' + [guid]::NewGuid().ToString('N')
+            try {
+                $fetchScript = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'bin/fetch-construct-source.sh')) -replace "`r`n", "`n"
+                $fetchB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($fetchScript))
+                if (-not (Send-GuestSecret -Content $fetchB64 -RemotePath $fetchPath)) { return @{ ExitCode = 255; Lines = @() } }
+                $fetchEnv = [ordered]@{
+                    CONSTRUCT_SERVICE_URL = $ServiceUrl; CONSTRUCT_INSTANCE_NAME = $InstanceName
+                    CONSTRUCT_SOURCE_COMMIT = $state.Commit; CONSTRUCT_SOURCE_SHA256 = $state.Sha256
+                    CONSTRUCT_SOURCE_SIZE = $state.SizeBytes; CONSTRUCT_SEED_USER = $SeedUser
+                }
+                if ($script:SourceFetchTokenPath) { $fetchEnv.CONSTRUCT_VM_TOKEN_FILE = $script:SourceFetchTokenPath }
+                $fetchPem = Get-ConstructRemoteCertificatePem -BaseUrl $ServiceUrl -TimeoutMs 10000
+                if ($fetchPem) { $fetchEnv.CONSTRUCT_SERVICE_CA_B64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($fetchPem)) }
+                $fetchAssignments = @($fetchEnv.Keys | ForEach-Object { $_ + "='" + ([string]$fetchEnv[$_]).Replace("'", "'\''") + "'" }) -join ' '
+                $fetchCleanup = "rm -r -- $fetchPath $fetchPath.sh"
+                if ($script:SourceFetchTokenPath) { $fetchCleanup += ' ' + $script:SourceFetchTokenPath }
+                $fetchCommand = "umask 077; trap '$fetchCleanup' EXIT; base64 -di < '$fetchPath' > '$fetchPath.sh' && env $fetchAssignments bash '$fetchPath.sh'; rc=`$?; exit `$rc"
+                return (Invoke-SshStream -Sudo -PassThru -NoThrow -Command $fetchCommand)
+            } finally {
+                # Covers failures before the remote EXIT trap was installed as well.
+                $leftovers = "$fetchPath $fetchPath.sh"
+                if ($script:SourceFetchTokenPath) { $leftovers += ' ' + $script:SourceFetchTokenPath }
+                try { Invoke-Ssh -Sudo -Command ('for f in {0}; do if [ -f "$f" ]; then rm -r -- "$f"; fi; done' -f $leftovers) | Out-Null } catch { }
+            }
+        } -Upload {
+            param($archivePath)
 # Upload the archive via SCP (remove any stale copy owned by root from a previous run).
 Write-Step "Uploading repo archive to $RemoteArchive"
 Invoke-Ssh -Sudo -Command "rm -f $RemoteArchive"
@@ -1815,6 +1884,21 @@ Write-Ok "Uploaded"
 Write-Step "Unpacking repo on the VM"
 Invoke-Ssh -Sudo -Command "mkdir -p /opt/construct && rm -rf /opt/construct/repo && mkdir -p /opt/construct/repo && tar -xzf $RemoteArchive -C /opt/construct/repo && chown -R ${SeedUser}:${SeedUser} /opt/construct"
 Write-Ok "Repo in place at /opt/construct/repo"
+
+        }
+} else {
+# Upload the archive via SCP (remove any stale copy owned by root from a previous run).
+Write-Step "Uploading repo archive to $RemoteArchive"
+Invoke-Ssh -Sudo -Command "rm -f $RemoteArchive"
+Invoke-Scp -LocalPath $archivePath -RemotePath "/tmp/construct-repo.tar.gz"
+Write-Ok "Uploaded"
+
+# Unpack into /opt/construct/repo.
+Write-Step "Unpacking repo on the VM"
+Invoke-Ssh -Sudo -Command "mkdir -p /opt/construct && rm -rf /opt/construct/repo && mkdir -p /opt/construct/repo && tar -xzf $RemoteArchive -C /opt/construct/repo && chown -R ${SeedUser}:${SeedUser} /opt/construct"
+Write-Ok "Repo in place at /opt/construct/repo"
+
+}
 
 # ── -Action export: pull the current config back to the host, then stop ──────
 # The repo (with the current export/scan scripts) is now on the VM. We connected

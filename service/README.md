@@ -129,6 +129,11 @@ Everything lives under `/api/v1`, speaks JSON with camelCase properties and came
 | `POST /vms/{name}/forwards/{id}/ack` | owner/admin — **not** the VM's own token | `{status: open\|error, localPort?, hostLabel?, message?}` → the updated forward. The extension reporting that it opened the port on the user's PC. |
 | `GET`/`PUT /vms/{name}/idle-policy` | owner/admin | `{timeoutMinutes, action}`; the response also carries the admin cap and whether the request was clamped. |
 | `POST /vms/{name}/activity` | owner/admin **or that VM's own token** | Guest heartbeat `{busy, reasons[]}`. |
+| `POST /vms/{name}/source` | owner/admin user | `{commit}` (40 lowercase hex) → `200` ready metadata or `202 {jobId,commit,state:"downloading"}`. Atomic VM pin and operation-key replay; primary service-managed VMs only. |
+| `GET /vms/{name}/source/{commit}` | owner/admin or that VM's token | Verified original ZIP with length, ETag, `X-Construct-Source-Commit` and `X-Construct-Source-Sha256`. Another VM's token is refused. |
+| `GET /host/source-cache` | admin | Items, `pinnedBy`, active readers, `committedBytes`, `maxItemBytes`, `maxTotalBytes`. |
+| `POST /host/source-cache/cleanup` | admin | `202 {jobId}` for housekeeping; never evicts ready source. |
+| `DELETE /host/source-cache/{commit}` | admin | `202 {jobId}`; `409 source-pinned` unless `?force=true`, `409 source-in-use` during download. |
 | `GET /jobs/{id}` | job submitter/admin | Job state, progress lines, result, error. The first retrieval of a succeeded creation job also gets `result.vmToken`. |
 | `GET /jobs/{id}/events` | job submitter/admin | `text/event-stream`. |
 
@@ -159,7 +164,7 @@ request. Disabling a user immediately rejects their Bearer tokens and their VMs'
 VM tokens retain only the existing forwards/activity scope plus identity and guest-report intake.
 New primary creation issues a `primary` token; it never grants user identity or admin access.
 
-Discovery advertises `host-admin`, `children`, `media`, `console`, `updates` and `network`
+Discovery advertises `host-admin`, `children`, `media`, `console`, `updates`, `network` and (when enabled) `source-cache`
 in production and fake mode. SQLite admission, media/capacity adapters, child lifecycle,
 console, updates and child connectivity are integrated. The fake admission store commits
 or rolls back participating stores under one lock, including readers; its scope accepts
@@ -214,7 +219,7 @@ finished job, after which the stream ends.
 
 Current job kinds are `create-vm`, `remove-vm`, `parent-cascade-delete`, `child-create`,
 `child-delete`, `vm-shutdown`, `vm-restart`, `media-acquire`, `media-verify`,
-`media-cleanup` and `host-update`. Child/update jobs persist their latest `phase`; SSE
+`media-cleanup`, `source-fetch`, `source-cleanup` and `host-update`. Child/update jobs persist their latest `phase`; SSE
 clients receive `phase` events in addition to progress and terminal state. Job results
 never contain credentials. `GET /jobs` accepts `kind`, `state`, `vm`, `since` and `limit`;
 cancel is best-effort and cannot undo an external action that already completed.
@@ -526,6 +531,11 @@ Bound from the `Constructd` section of `appsettings.json`, from environment vari
 | `Iso:SourceId` | `ubuntu-server-minimal` | `SOURCE_ID` of `bin/build-autoinstall-iso.sh` (`ubuntu-server` for the standard set). |
 | `HostAdmin:Capacity:Mode` | `Observe` | Bootstrap capacity policy when no stored section exists. Used when no stored capacity section exists; migrated hosts remain in observe mode. |
 | `HostAdmin:Media:RootDir` | `C:\ProgramData\Construct\service\media` | Private child-media files and partial uploads; the installer hardens it with the data directory. |
+| `HostAdmin:Source:Enabled` | `true` | Advertise `source-cache`; when false, source routes return `409 unsupported-capability`. |
+| `HostAdmin:Source:RootDir` | `<data>\source` | Private flat ZIP/part cache, hardened by the installer; existing settings survive upgrades. Must not overlap ISO, media or updates roots. |
+| `HostAdmin:Source:MaxItemBytes` | `268435456` | Maximum declared size of one source ZIP (256 MiB). |
+| `HostAdmin:Source:MaxTotalBytes` | `2147483648` | Hard host-wide byte cap (2 GiB), at least MaxItemBytes; no eviction. |
+| `HostAdmin:Source:FakeReleaseDir` | empty | Fake mode only: `host-<commit>/manifest.json` plus its source ZIP. Ignored in production. |
 | `BootstrapAdmin` | – | Identity seeded as the first admin when the user store is empty. |
 | `BootstrapAdminMaxVms` | `10` | Quota for that admin. |
 | `BootstrapAdminToken` | – | Optional plaintext token for the bootstrap admin (hashed at startup). Only for hosts that cannot use Negotiate; remove it once a real token has been issued. |
@@ -1971,3 +1981,35 @@ evidence-based abandoned admission recovery and stricter host-local update trust
 See [review dispositions](../docs/plans/host-administration-final-review.md) for
 regressions, explicit compatibility deviations and remaining Windows field checks.
 Unenrolled identities receive only the reduced health response.
+
+## Source cache
+
+Remote reprovisioning reuses the original `construct-source-<commit40>.zip` from the immutable
+`host-<commit40>` release in the trusted `updates.repository`. The service validates the tagged
+manifest, `sourceSha256`, declared length and ZIP structure before publishing it. It never
+extracts the ZIP. Guests pull it with their own VM token and independently verify the size/hash
+supplied by the PC over its pinned service connection.
+
+Migration M800 adds `source_cache` and `vms.source_commit`. Files are flat `<commit>.part` and
+`<commit>.zip` under Source.RootDir. States are `downloading → ready`, or `downloading/ready →
+deleting → failed`. Downloading, ready and deleting rows retain their byte reservation until
+both files are confirmed absent. Admission pins the VM, operation key and queued job in one
+transaction without capacity inventory I/O. Guest-reported commits also pin items, including
+abbreviated commit prefixes. Deleting a VM removes its pin only.
+
+Ready source stays indefinitely: the daily and admin cleanup jobs only retry deleting rows,
+remove failed rows older than 24 hours and orphan files older than one hour. At the hard cap,
+`source-cache-full` makes clients upload as before; an admin must delete unused entries to
+make room. Pins require explicit forced deletion. Restart recovery removes interrupted
+parts/renamed ZIPs and demotes missing ready files; failed removal retains the reservation.
+
+Lock order is per-commit gate, catalog lock, SQLite. Catalog sections contain no file I/O or
+gate waits. Downloads for one commit coalesce, while different commits can download in parallel.
+Every serve checks size and SHA-256 before sending bytes. Readers hold an open stream;
+deletion waits for zero readers and a closed handle, including on aborted HTTP transfers.
+
+Audit actions are `vm.source.ensure`, `vm.source.fetch`, `source.fetch.completed`,
+`source.fetch.failed`, `source.corrupt`, `source.removed`, `source.recover`,
+`host.source.cleanup` and `host.source.delete`. Job errors are bare safe codes, and neither
+job results nor audit details contain tokens. See the [source contract](../docs/plans/remote-reprovision-source-cache.md)
+for response headers, failure codes and concurrency details.
