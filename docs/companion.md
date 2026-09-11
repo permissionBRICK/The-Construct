@@ -143,6 +143,17 @@ repository; never bypass verification. For unavailable local builds, install a
 are reported by the app/selftest; Hyper-V state still requires membership in Hyper-V
 Administrators. The Run key starts at login and does not restart a crashed app.
 
+Update checks: the Companion, the VS Code panel and T3 Desktop all compare the
+installed commit (`installedCommit` in the scripts folder's `.construct-settings.json`)
+with the commit in the published release manifest at
+`https://github.com/<repo>/releases/latest/download/manifest.json`. A banner or offer
+means a newer published commit exists, not a commit count; it disappears after Update
+Construct records the new commit. No banner while a newer release exists means the
+manifest could not be fetched (offline, a redirect blocked by a proxy) or the checkout
+tracks a ref other than `main`, which never receives automatic offers. T3 Desktop
+additionally offers Reprovision while a VM's provisioned commit is older than the
+installed one; reprovisioning after an update clears it.
+
 The executable is **unsigned**. HTTPS, control of the selected GitHub repository
 and SHA-256 are the trust model, as with [host releases](host-release.md); hashes
 detect corruption and are not signatures. SmartScreen may warn on manual first
