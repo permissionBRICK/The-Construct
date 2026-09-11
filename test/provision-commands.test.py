@@ -4,6 +4,7 @@ Run: python3 test/provision-commands.test.py
 """
 import json
 import os
+import re
 from pathlib import Path
 import shlex
 import signal
@@ -95,6 +96,15 @@ record('end')
                               (profile+'2', 'start'), (profile+'2', 'end')])
             self.assertTrue(all(e['cwd'] == str(self.workspace / profile) for e in events))
             self.assertTrue(all(e['projects'] == 'one,two' and e['repos'] == [] for e in events))
+
+    def test_command_numbers_follow_completion_order(self):
+        # Plan order: slow1, slow2, fast. The fast group finishes first and must print as 1/3;
+        # the slow group's two commands follow as 2/3 and 3/3, never their plan positions.
+        self.plan([('slow', 'slow', [self.command('slow1', .6), self.command('slow2')]),
+                   ('fast', 'fast', [self.command('fast')])])
+        output = re.sub(r'\x1b\[[0-9;]*m', '', self.run_commands())
+        self.assertEqual(re.findall(r'\[(\d+)/3\]', output), ['1', '1', '2', '2', '3', '3'])
+        self.assertLess(output.index('[1/3]'), output.index('slow1'))
 
     def test_concurrency_limit_and_sequential_profile_order(self):
         self.plan([(p, p, [self.command(p, .3)]) for p in ['z', 'b', 'a']])
