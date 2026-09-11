@@ -18,7 +18,7 @@ public interface IRunningProcess : IAsyncDisposable
     Task StopAsync(CancellationToken cancellationToken = default);
 }
 
-public sealed record ProcessInvocation(string FileName, IReadOnlyList<string> Arguments,
+public sealed partial record ProcessInvocation(string FileName, IReadOnlyList<string> Arguments,
     string? WorkingDirectory = null, Secret? StandardInput = null, TimeSpan? Timeout = null)
 {
     public override string ToString() => FileName;

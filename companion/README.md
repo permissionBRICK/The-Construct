@@ -1,6 +1,6 @@
 # Construct Companion
 
-Per-user Windows host agent: S1 scaffold plus the S2a runtime package. The frozen design
+Per-user Windows host agent: S1 scaffold plus the S2a state, runtime and config-sync packages. The frozen design
 is [construct-companion.md](../docs/plans/construct-companion.md). HTTP IPC, Windows
 platform adapters, and webview dispatch remain with subsequent work packages.
 
@@ -9,7 +9,7 @@ platform adapters, and webview dispatch remain with subsequent work packages.
 | Project | Responsibility |
 |---|---|
 | `src/Construct.Companion.Core` | Package-free interfaces and runtime logic, IPC records, command-line grammar, shared scripts, planners and argv builders |
-| `src/Construct.Companion.Host` | Process/socket adapters, instance supervision and outbound message bus; references `Microsoft.AspNetCore.App` |
+| `src/Construct.Companion.Host` | Process/socket adapters, instance supervision, outbound message bus and config-sync Git transactions; references `Microsoft.AspNetCore.App` |
 | `src/Construct.Companion.Windows` | `net10.0` Windows adapters; currently single-instance/quit signaling and icon handle cleanup |
 | `src/Construct.Companion` | `net10.0-windows10.0.17763.0` WinForms WinExe, self-contained `win-x64`, WebView2, linked `extension/media/**` |
 | `src/Construct.Companion.Fakes` | In-memory implementation of every Core seam; recording processes and scripted guest spool |
@@ -103,7 +103,7 @@ node extension/test/export-parity-fixtures.js
 ```
 
 One exported function owns each area: guest scripts, SSH argv, host-label matrix, shell
-quoting, forward runtime, notification runtime, audio runtime, and repatch runtime. Fixtures live in `test/fixtures/companion-parity/*.json`. SSH fixture key paths use
+quoting, state/lifecycle decisions, config-sync planners/scripts/sharing, forward runtime, notification runtime, audio runtime, and repatch runtime. Fixtures live in `test/fixtures/companion-parity/*.json`. SSH fixture key paths use
 an explicit `/fixture/home` root rather than the machine's home. JS re-exports in memory and
 diffs the committed bytes; C# consumes the same files copied into test output. Guest tests
 also compare actual JS builder outputs with rendered fixtures. Add future areas to this
@@ -122,6 +122,8 @@ Placeholder for the S2/S3 dispatcher message matrix. All webview messages and co
 are currently unsupported because S1 has no dispatcher, webview windows, or HTTP listener.
 S2/S3 must implement each protocol entry or list its reason here and return the panel's
 existing refusal message; messages must never be silently ignored by an active dispatcher.
+
+## S2a state
 
 S2a state APIs are under `Core/State`, `Core/Lifecycle`, `Core/Probe`,
 `Core/Drivers`, and `Core/Remote`. `HostState` discovers the scripts directory and
@@ -152,6 +154,7 @@ exporter (including remote routes and paginated stable/nightly T3 discovery).
 This package provides pure planners and seam-driven reads/writes. Runtime polling,
 IPC dispatch (including usage export dialog titles/file names from describeExport/exportFileName), production filesystem/HTTP adapters and UI wiring remain with their
 respective work packages. No Windows runtime behavior has been field-validated.
+
 ## S2a runtime
 
 The runtime package implements the forward wire/planner and local/remote transports,
@@ -192,3 +195,38 @@ S2a Linux validation: build 0 warnings/0 errors; Companion 2,870/2,870 tests; No
 suites with only the documented configsync HEAD baseline (also reproduced with the
 CONSTRUCT variables unset). Targeted regressions pass: expose 170/170, notify 36/36,
 patch-status 12/12, partial-streaming 6/6, and PowerShell toast 22/22.
+
+## Config sync integration (S2a)
+
+`AddConfigSync()` registers portable Git/filesystem adapters and
+`ConfigSyncFactory`. Create one area per instance with its captured SSH transport and
+config branch. All areas share the host config directory and staging-cache root.
+The factory queues local work per config directory; `.sync.lock` coordinates repo writes
+with the extension and PowerShell. Remote network calls never hold that disk lock.
+The runtime exposes `TickAutoAsync()` for the supervisor's poll (five-minute per-instance
+throttle), `SyncNowAsync()` for explicit/preflight sync, `StartWatching()` for the two-second
+projects-folder debounce, `BuildStateAsync()` for the exact `configSync` wire block, and
+`Synced` for state/profile-discovery follow-up. Dispose the area when removing a runtime.
+The dispatcher should call `Actions` for link/remove/import/share/push/publish; after a
+successful import, call that captured instance's `SyncNowAsync()`. For sharing, callers must
+pass `constructRepo`/`constructRef` from the captured scripts directory's raw settings to
+`Actions.ShareAsync(installRepo, installRef)`; these produce fork-correct installer links. Profile discovery and
+selection remain the projects/runtime integration's responsibility. `DeletedProfileIdentitiesAsync`
+provides the history-based suppression set for discovery.
+
+Supply `IClock`, `IPrompts`, and `IClipboard` from host/app composition. Publish picker
+items carry `Disabled` and `Separator`, and pickers carry `Placeholder`; the dialog adapter
+must honor them. Action results carry display messages and warnings for the UI. Windows
+clipboard/dialog implementations and dispatcher wiring belong to S2b/S3. No Windows runtime
+validation has been performed. Real-Git config-sync tests run on Linux and require `git`,
+`bash`, `printf`, and `sleep` on PATH; each uses and deletes its own temporary repositories.
+
+The port rejects legacy credential-bearing remote URLs before git argv; re-link those URLs
+without credentials and use a credential helper. Reserved seed profiles are ignored in the
+shared repo, including for subsequent extension/PowerShell staging. New/renamed imports are
+strictly validated before writing. These small differences are recorded in the frozen plan.
+
+S2a Linux validation: Companion build 0 warnings/errors; Companion tests 412/412;
+service tests 1,261/1,261; Node suites 30/30; PowerShell config-sync 568/568; parity
+333 rows across five areas. Node/PowerShell use the process-local default-branch override
+described above. No extension implementation, installer, guest script, or service code changed.
