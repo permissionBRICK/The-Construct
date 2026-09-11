@@ -146,6 +146,20 @@
     "values": {}
   },
   {
+    "name": "project-scan",
+    "output": "set -u\nroot='/root/repos'\nif [ -d \"$root\" ]; then\n  for repo in \"$root\"/*/; do\n    [ -d \"${repo}.git\" ] || continue\n    name=$(basename \"$repo\")\n    url=$(git -C \"$repo\" remote get-url origin 2>/dev/null || true)\n    branch=$(git -C \"$repo\" rev-parse --abbrev-ref HEAD 2>/dev/null || true)\n    printf '%s\\t%s\\t%s\\n' \"$name\" \"$url\" \"$branch\"\n  done\nfi\nprintf 'END\\n'",
+    "values": {
+      "root": "/root/repos"
+    }
+  },
+  {
+    "name": "project-scan",
+    "output": "set -u\nroot='/tmp/a'\\''b'\nif [ -d \"$root\" ]; then\n  for repo in \"$root\"/*/; do\n    [ -d \"${repo}.git\" ] || continue\n    name=$(basename \"$repo\")\n    url=$(git -C \"$repo\" remote get-url origin 2>/dev/null || true)\n    branch=$(git -C \"$repo\" rev-parse --abbrev-ref HEAD 2>/dev/null || true)\n    printf '%s\\t%s\\t%s\\n' \"$name\" \"$url\" \"$branch\"\n  done\nfi\nprintf 'END\\n'",
+    "values": {
+      "root": "/tmp/a'\\''b"
+    }
+  },
+  {
     "name": "audio-enable",
     "output": "set -eu\nexport CONSTRUCT_VM_PORT_BASE=8767\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_SHIM_B64=''\nexport CONSTRUCT_SHIM_B64\nCONSTRUCT_ENABLE_B64=''\nf=$(mktemp) && printf %s \"$CONSTRUCT_ENABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc",
     "values": {

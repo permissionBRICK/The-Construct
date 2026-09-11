@@ -38,28 +38,7 @@ const MCP_AGENTS = ["claude", "claude-code", "codex", "opencode"];
  * it for transport). `root` overrides WORKSPACE_ROOT (tests / non-default layouts).
  */
 function buildScanScript(root) {
-  const r = root || WORKSPACE_ROOT;
-  // The root is a fixed, trusted constant (or a test override), never user data, so
-  // it is embedded directly — unlike the add-project clone, which base64s a
-  // user-supplied URL. Kept single-quoted so an unusual (test) path is still literal.
-  return [
-    "set -u",
-    "root='" + String(r).replace(/'/g, "'\\''") + "'",
-    'if [ -d "$root" ]; then',
-    '  for repo in "$root"/*/; do',
-    '    [ -d "${repo}.git" ] || continue',
-    '    name=$(basename "$repo")',
-    '    url=$(git -C "$repo" remote get-url origin 2>/dev/null || true)',
-    "    branch=$(git -C \"$repo\" rev-parse --abbrev-ref HEAD 2>/dev/null || true)",
-    // printf with an explicit format string: the fields are DATA to printf's %s, so
-    // a repo dir/URL/branch containing a % or a backslash can't be read as a format
-    // directive or an escape. A tab/newline inside a field would corrupt the line
-    // grid, but git ref/dir names can't contain either, so this is safe in practice.
-    '    printf \'%s\\t%s\\t%s\\n\' "$name" "$url" "$branch"',
-    "  done",
-    "fi",
-    "printf 'END\\n'",
-  ].join("\n");
+  return require("./guest-scripts").render("project-scan", { root: String(root || WORKSPACE_ROOT).replace(/'/g, "'\\''") });
 }
 
 /**

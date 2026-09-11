@@ -44,6 +44,7 @@ function guestScripts() {
     add("notify-watch", { dir: q(dir), claim, heartbeat: "60", fallback: "3" }, notify.buildWatchScript({ dir }));
   }
   add("probe", {}, probe.REMOTE_PROBE);
+  for (const root of ["/root/repos", "/tmp/a'b"]) add("project-scan", {root:root.replace(/'/g, "'\\''")}, require("../src/projects").buildScanScript(root));
   for (const text of ["", "#!/bin/bash\necho 'hello'\n# Unicode: ü\n"]) {
     add("audio-enable", { port: "8767", count: "8", shim: q(Buffer.from(text).toString("base64")), enable: q(Buffer.from(text).toString("base64")) }, audio.buildEnableScript(text, text));
     add("audio-disable", { self: "0", port: "8767", count: "8", disable: q(Buffer.from(text).toString("base64")) }, audio.buildDisableScript(text));
@@ -111,8 +112,9 @@ function lifecycleInvocations() {
   const m=require("../src/lifecycle"), i=instances; const rows=[];
   const settings={gitName:"-someone 'ü'",gitEmail:"a@b",ram:"12",disk:"100",cpu:"6",ubuntu:"24.04",serveWeb:true,tunnel:false,smb:false,partialStreaming:true,mic:false,opencodeBackgroundWatcher:true,t3code:true,t3codeChannel:"nightly",t3codeLimitResume:false,autoCheckpoints:false};
   const targets=[null,i.deriveDefaults("agent-vm",{}),i.deriveDefaults("dev",{}),i.deriveDefaults("dev",{configBranch:"custom"}),i.deriveDefaults("dev",{backend:"hyperv-remote",sshHost:"host",service:{url:"https://host:7462",auth:"token"}}),i.deriveDefaults("dev",{backend:"hyperv-remote",sshHost:"host"}),i.deriveDefaults("dev",{backend:"unknown"})];
-  for(const action of ["reprovision","exportConfig","reinstall","redownload","setCheckpoints","removeInstance","unknown"]) for(const instance of targets) for(const declared of [null,[],["VmName"],["VmHost","HostAlias","SshPort","LocalKeyName"],["VmHost","HostAlias","SshPort","LocalKeyName","VmName","ConfigBranch"],["InstanceName"],["InstanceName","ConfigBranch"],["Backend","ServiceUrl","InstanceName"],["Backend","ServiceUrl","InstanceName","ConfigBranch"]]) for(const legacy of [false,true]) {
+  for(const action of ["reprovision","exportConfig","reinstall","redownload","setCheckpoints","setResources","removeInstance","unknown"]) for(const instance of targets) for(const declared of [null,[],["VmName"],["VmHost","HostAlias","SshPort","LocalKeyName"],["VmHost","HostAlias","SshPort","LocalKeyName","VmName","ConfigBranch"],["InstanceName"],["InstanceName","ConfigBranch"],["Backend","ServiceUrl","InstanceName"],["Backend","ServiceUrl","InstanceName","ConfigBranch"]]) for(const legacy of [false,true]) {
     const opts={instance,instanceParams:declared,settings,projects:["api","ui"],backupDir:"C:/Backup dir",backupMode:legacy?"wipe":"save",enabled:!legacy,confirmation:"dev",supportsCheckpoints:!legacy,supportsVmCpuCount:!legacy,supportsT3CodeChannel:!legacy,supportsT3CodeLimitResume:!legacy,supportsOpenCodeBackgroundWatcher:!legacy};
+    if (action === "setResources") Object.assign(opts, {ram:legacy?null:"16.5",cpu:legacy?"bad":4});
     rows.push({action,opts,output:m.buildInvocation(action,opts),args:m.instanceArgs(action,instance,declared),params:m.paramsForAction(action,instance,declared)||[]});
   }
   return rows;
@@ -124,10 +126,21 @@ function lifecycleLaunches() {
     const opts={elevate,keepOpen,argSpec}; rows.push({script,args,opts,output:m.buildHostLaunch(script,args,opts),child:m.buildChildCommandLine(script,args,opts)});
   }rows.push({kind:"installGit",output:{file:"cmd.exe",spawnArgs:["/c","start","","powershell.exe","-EncodedCommand",Buffer.from("winget install --id Git.Git -e --source winget","utf16le").toString("base64")],command:"winget install --id Git.Git -e --source winget"}});return rows;
 }
+function projectImport() {
+  const m = require("../src/projects"), rows = [];
+  for (const stdout of ["", "END\n", "api\thttps://example.test/api.git\tmain\nEND\n", "api\t\tmain\n", "a\tu\tb\nEND\r\n"])
+    rows.push({kind:"parse",stdout,output:m.parseScan(stdout)});
+  const scan = [{name:"api",url:"https://example.test/api.git",branch:"main"},{name:"API",url:"ssh://example.test/other",branch:"main"},{name:"ui",url:"https://example.test/api.git",branch:"main"},{name:"local",url:"",branch:"main"}];
+  for (const existing of [{}, {api:m.buildDiscoveredProfile(scan[0])}]) for (const options of [{},{ignoredNames:["api"]},{ignoredUrls:["https://example.test/api.git"]}])
+    rows.push({kind:"plan",scan,existing,options,output:m.planImport(scan,existing,options)});
+  return rows;
+}
 function vmPower() {
   const m=require("../src/vmpower");const rows=[];
   for(const name of [null,"Agent-VM","dev","a'b", "name with space"])for(const kind of ["state","checkpoints","start"]){const output=kind==="state"?m.buildStateProbeLaunch(name):kind==="checkpoints"?m.buildAutoCheckpointProbeLaunch(name):m.buildElevatedCommandLaunch(m.buildStartCommand(name));rows.push({kind,name,output});}
   for(const input of ["","noise\nVMSTATE=Running\n","VMSTATE=Off","VMSTATE=Saved","VMSTATE=Paused","VMSTATE=Starting","VMSTATE=absent","VMSTATE=unknown","VMAUTOCHK=True","VMAUTOCHK=False","VMAUTOCHK=unsupported","VMAUTOCHK=absent"]) rows.push({kind:"parse",input,state:m.parseVmState(input),checkpoints:m.parseAutoCheckpoints(input)});
+  for (const saved of [{}, {ram:"16",cpu:"8"}, {ram:"16.5",cpu:1}, {ram:0,cpu:"max"}, {ram:true,cpu:1.5}, {ram:"0x10",cpu:"4"}])
+    for (const live of [null, {}, {ramGb:16,cpus:8}, {ramGb:8,cpus:4}, {ramGb:16.5,cpus:1}]) rows.push({kind:"resources",saved,live,output:m.planResourceApply(saved,live)});
   rows.push({kind:"shutdown",output:m.SHUTDOWN_CMD}); return rows;
 }
 function probeParsing() {
@@ -480,6 +493,7 @@ async function exportAll() {
     "lifecycle-invocations": lifecycleInvocations(),
     "lifecycle-launches": lifecycleLaunches(),
     "vm-power": vmPower(),
+    "project-import": projectImport(),
     "probe-parsing": probeParsing(),
     "usage-parsing": usageParsing(),
     "updates-planning": await updatesPlanning(),

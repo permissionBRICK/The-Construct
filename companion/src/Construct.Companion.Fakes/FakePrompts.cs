@@ -16,6 +16,8 @@ public sealed class FakePrompts : IPrompts
     { cancellationToken.ThrowIfCancellationRequested(); Shown.Add(prompt); return Task.FromResult(Picks.Dequeue()); }
     public Task<bool> ConfirmAsync(string title, string message, CancellationToken cancellationToken = default)
     { cancellationToken.ThrowIfCancellationRequested(); Shown.Add((title, message)); return ConfirmationHandler is null ? Task.FromResult(Confirmations.Dequeue()) : ConfirmationHandler(cancellationToken); }
+    public Task<bool> ConfirmAsync(ConfirmationPrompt prompt, CancellationToken cancellationToken = default)
+    { cancellationToken.ThrowIfCancellationRequested(); Shown.Add(prompt); return ConfirmationHandler is null ? Task.FromResult(Confirmations.Dequeue()) : ConfirmationHandler(cancellationToken); }
     public Task<string?> SaveFileAsync(SaveFilePrompt prompt, CancellationToken cancellationToken = default)
     { cancellationToken.ThrowIfCancellationRequested(); Shown.Add(prompt); return Task.FromResult(SaveFiles.Dequeue()); }
 }

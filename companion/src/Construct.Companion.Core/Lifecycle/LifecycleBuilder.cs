@@ -8,13 +8,13 @@ namespace Construct.Companion.Core.Lifecycle;
 
 public static class LifecycleBuilder
 {
-    public static string? ScriptForAction(string action) => action switch { "reprovision" or "exportConfig" => "Provision-AgentVM.ps1", "reinstall" or "redownload" => "Auto-Install.ps1", "setCheckpoints" => "Set-AgentVmCheckpoints.ps1", _ => null };
-    private static string Label(string action) => action switch { "reprovision" => "Reprovision", "exportConfig" => "Export config", "reinstall" => "Reinstall", "redownload" => "Redownload", "setCheckpoints" => "Automatic checkpoints", "removeInstance" => "Remove instance", _ => action };
+    public static string? ScriptForAction(string action) => action switch { "reprovision" or "exportConfig" => "Provision-AgentVM.ps1", "reinstall" or "redownload" => "Auto-Install.ps1", "setCheckpoints" => "Set-AgentVmCheckpoints.ps1", "setResources" => "Set-AgentVmResources.ps1", _ => null };
+    private static string Label(string action) => action switch { "reprovision" => "Reprovision", "exportConfig" => "Export config", "reinstall" => "Reinstall", "redownload" => "Redownload", "setCheckpoints" => "Automatic checkpoints", "setResources" => "Apply VM resources", "removeInstance" => "Remove instance", _ => action };
     public static string[] ParamsForAction(string action, JsonObject? instance, string[]? declared = null)
     {
         if (Instances.IsRemoteBackend(StateJson.Text(instance?["backend"])) && action is "reinstall" or "redownload") return ["Backend", "ServiceUrl", "InstanceName", "ConfigBranch"];
-        if (declared?.Contains("InstanceName", StringComparer.Ordinal) == true) return action switch { "reprovision" or "reinstall" or "redownload" => ["InstanceName", "ConfigBranch"], "exportConfig" or "setCheckpoints" => ["InstanceName"], _ => [] };
-        return action switch { "reprovision" => ["VmHost", "HostAlias", "SshPort", "LocalKeyName", "ConfigBranch"], "exportConfig" => ["VmHost", "HostAlias", "SshPort", "LocalKeyName"], "reinstall" or "redownload" => ["VmName", "ConfigBranch"], "setCheckpoints" => ["VmName"], _ => [] };
+        if (declared?.Contains("InstanceName", StringComparer.Ordinal) == true) return action switch { "reprovision" or "reinstall" or "redownload" => ["InstanceName", "ConfigBranch"], "exportConfig" or "setCheckpoints" or "setResources" => ["InstanceName"], _ => [] };
+        return action switch { "reprovision" => ["VmHost", "HostAlias", "SshPort", "LocalKeyName", "ConfigBranch"], "exportConfig" => ["VmHost", "HostAlias", "SshPort", "LocalKeyName"], "reinstall" or "redownload" => ["VmName", "ConfigBranch"], "setCheckpoints" or "setResources" => ["VmName"], _ => [] };
     }
     public static string DerivedConfigBranch(string? alias)
     {
@@ -83,6 +83,12 @@ public static class LifecycleBuilder
             case "setCheckpoints":
                 if (StateJson.Boolean(options["enabled"]) is not bool enabled) return null;
                 Pair("-Enabled", JsonValue.Create(enabled ? "true" : "false")); return Done("Set-AgentVmCheckpoints.ps1", false, true, enabled ? "Enable automatic checkpoints" : "Disable automatic checkpoints");
+            case "setResources":
+                var ram = VmResourcePlan.Number(options["ram"], false); var cpu = VmResourcePlan.Number(options["cpu"], true);
+                if (ram is null && cpu is null) return null;
+                if (ram is not null) Pair("-VmMemoryGB", JsonValue.Create(StateJson.String(JsonValue.Create(ram))));
+                if (cpu is not null) Pair("-VmCpuCount", JsonValue.Create(StateJson.String(JsonValue.Create(cpu))));
+                return Done("Set-AgentVmResources.ps1", false, true, "Apply VM resources");
             case "removeInstance":
                 if (instance is null || StateJson.Nonempty(instance["name"]) is null) return null;
                 Pair("-Action", JsonValue.Create("remove-instance")); Pair("-InstanceName", instance["name"]); if (options["confirmation"] is {} confirmation && StateJson.String(confirmation).Length > 0) Pair("-ConfirmInstanceName", JsonValue.Create(StateJson.String(confirmation))); return Done("Auto-Install.ps1", false, false, "Remove instance");
@@ -108,6 +114,7 @@ public sealed record ResultPollingPlan(string File, string EnvironmentKey, TimeS
     public static ResultPollingPlan Create(string tempDirectory, string action, long timestamp) => action switch
     {
         "update" => new(Path.Combine(tempDirectory, $"construct-update-{timestamp}.result"), "CONSTRUCT_UPDATE_RESULT", TimeSpan.FromMilliseconds(1500), TimeSpan.FromMinutes(10)),
+        "setResources" => new(Path.Combine(tempDirectory, $"construct-resources-{timestamp}.result"), "CONSTRUCT_RESOURCES_RESULT", TimeSpan.FromMilliseconds(1500), TimeSpan.FromMinutes(20)),
         "setCheckpoints" => new(Path.Combine(tempDirectory, $"construct-checkpoints-{timestamp}.result"), "CONSTRUCT_CHECKPOINT_RESULT", TimeSpan.FromMilliseconds(1500), TimeSpan.FromMinutes(10)),
         _ => throw new ArgumentException("Unknown result-file action")
     };

@@ -12,7 +12,7 @@ namespace Construct.Companion.Tests.Parity;
 
 public sealed class PlanningParityTests
 {
-    public static IEnumerable<object[]> Rows => new[] { "registry-state", "lifecycle-invocations", "lifecycle-launches", "vm-power", "probe-parsing", "usage-parsing", "updates-planning", "remote-identity", "t3-pure", "state-json-bytes", "agent-update-scripts", "usage-exports", "instance-fingerprints" }.SelectMany(area => ParityTests.Rows(area).Select(row => new object[] { area, row[0] }));
+    public static IEnumerable<object[]> Rows => new[] { "registry-state", "lifecycle-invocations", "lifecycle-launches", "vm-power", "project-import", "probe-parsing", "usage-parsing", "updates-planning", "remote-identity", "t3-pure", "state-json-bytes", "agent-update-scripts", "usage-exports", "instance-fingerprints" }.SelectMany(area => ParityTests.Rows(area).Select(row => new object[] { area, row[0] }));
     [Theory, MemberData(nameof(Rows))]
     public async Task MatchesJavaScript(string area, JsonElement element)
     {
@@ -39,8 +39,13 @@ public sealed class PlanningParityTests
                 Equal("output", new JsonObject { ["file"] = launch.File, ["spawnArgs"] = JsonSerializer.SerializeToNode(launch.SpawnArgs), ["command"] = launch.Command });
                 Value("child", PowerShellLaunch.BuildChildCommandLine(S("script"), args, StateJson.Boolean(launchOpts["keepOpen"]) == true));
                 var runner = new FakeProcessRunner(); await runner.RunAsync(launch.Invocation()); Assert.Equal(launch.SpawnArgs, runner.Invocations.Single().Arguments); break;
+            case "project-import":
+                if (S("kind") == "parse") Equal("output", ProjectImport.ParseScan(S("stdout")));
+                else Equal("output", ProjectImport.Plan(row["scan"]!.AsArray(), O("existing")!, (row["options"]?["ignoredNames"] as JsonArray)?.Select(StateJson.String), (row["options"]?["ignoredUrls"] as JsonArray)?.Select(StateJson.String)));
+                break;
             case "vm-power":
                 if (S("kind") == "shutdown") Value("output", VmPower.ShutdownCommand);
+                else if (S("kind") == "resources") Equal("output", VmResourcePlan.Create(O("saved"), O("live")));
                 else if (S("kind") == "parse") { Value("state", VmPower.ParseVmState(S("input"))); Value("checkpoints", VmPower.ParseAutoCheckpoints(S("input"))); }
                 else
                 {

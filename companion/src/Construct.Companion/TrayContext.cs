@@ -86,6 +86,9 @@ internal sealed class TrayContext : ApplicationContext
         {
             await foreach (var message in sink.Subscribe("companion", token))
                 if (message.GetProperty("type").GetString() == "settings") SettingsChanged(settings.Read());
+                else if (message.GetProperty("type").GetString() == "notification" && message.TryGetProperty("text", out var text))
+                    await dispatcher.InvokeAsync(() => tray.ShowBalloonTip(10000, "Construct Companion", text.GetString() ?? "",
+                        message.TryGetProperty("level", out var level) && level.GetString() == "warning" ? ToolTipIcon.Warning : ToolTipIcon.Info), token);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
     }
