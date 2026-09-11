@@ -310,3 +310,7 @@ present (the latter match the pinned SDK package), and all 17 media files match
 source bytes. The reviewer observed an intermittent failure in unchanged S2a
 `ProbeFastWindowUsesFiveSecondsAndRevertsToThirty`; it passed three isolated reruns.
 That runtime timing test remains a follow-up for S3/S4.
+
+A nonempty `probeError` also overrides an SSH-online state in the tray icon, as
+§9.1 requires. The extension's probe can report `online:true` with `probeError`
+when SSH responds but its detailed status script fails; that combination is tested.
