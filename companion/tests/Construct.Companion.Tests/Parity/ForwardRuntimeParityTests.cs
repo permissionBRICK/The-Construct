@@ -20,7 +20,7 @@ public sealed class ForwardRuntimeParityTests
         {
             "wire" => new JsonObject { ["request"] = ForwardProtocol.ParseRequest(obj.Str("id"), obj["doc"] as JsonObject),
                 ["ack"] = ForwardProtocol.ParseAck(obj.Str("id"), obj["doc"] as JsonObject), ["close"] = ForwardProtocol.ParseClose(obj.Str("id"), obj["doc"] as JsonObject) },
-            "plan" => ForwardPlanner.PlanActions(obj), "snapshot" => ForwardPlanner.ToSnapshot(obj),
+            "panel" => ForwardPlanner.ToPanelForwards(obj), "plan" => ForwardPlanner.PlanActions(obj), "snapshot" => ForwardPlanner.ToSnapshot(obj),
             "remote" => RemoteForwardList.Read((JsonArray)input!), "lifecycle" => ForwardPlanner.PlanLifecycle(obj),
             "outcome" => ForwardPlanner.PlanStartOutcome(obj), "ack" => ForwardProtocol.AckDocument(obj.Str("id"), (JsonObject)obj["ack"]!),
             "delay" => JsonValue.Create(ForwardProtocol.ReconnectDelayMs(input!.GetValue<double>())),
