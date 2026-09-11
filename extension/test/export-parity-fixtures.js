@@ -170,7 +170,7 @@ function t3Pure() {
 function remoteRoutes() {
  const m=remotehost, rows=[]; const value="name /?ü";
  const calls=[
- ["vmDefaults"],["vmCpu",value],["setVmCpu",value,{cpus:8}],["whoami"],["listVms"],["getVm",value],["getState",value],["getEndpoint",value],["power",value,"start"],["createVm",{name:"dev"}],["deleteVm",value,{force:true}],["getJob",value],["health"],["hostCapabilities"],["vmIdentity",value],["vmCapabilities",value],["hostStatus"],["hostCapacity",true],["hostConfig"],["putHostConfig",{mode:"x"}],["isoCatalog"],
+ ["vmMemory",value],["setVmMemory",value,{ramGb:12}],["vmIdlePolicy",value],["setVmIdlePolicy",value,{timeoutMinutes:60,action:"shutdown"}],["vmDefaults"],["vmCpu",value],["setVmCpu",value,{cpus:8}],["whoami"],["listVms"],["getVm",value],["getState",value],["getEndpoint",value],["power",value,"start"],["createVm",{name:"dev"}],["deleteVm",value,{force:true}],["getJob",value],["health"],["hostCapabilities"],["vmIdentity",value],["vmCapabilities",value],["hostStatus"],["hostCapacity",true],["hostConfig"],["putHostConfig",{mode:"x"}],["isoCatalog"],
  ["users"],["getUser",value],["createUser",{name:"x"}],["updateUser",value,{role:"admin"}],["deleteUser",value],["userAllowance",value],["putUserAllowance",value,{maxVms:2}],["userTokens",value],["issueUserToken",value,null],["revokeUserToken",value,"id /"],
  ["vms",{all:true,empty:"",owner:value}],["sharedVms"],["children",value],["overrides",value],["putOverrides",value,{ram:8}],["deleteOverrides",value],["lifecycle",value,{action:"reprovision"}],["setVmSharing",value,{shared:true}],["renewVmLease",value,{minutes:30}],["rotateVmToken",value,null],["revokeVmToken",value],
  ["media",{type:"iso"}],["mediaItem",value],["mediaReferences",value],["deleteMedia",value],["mediaCleanup"],["jobs",{state:"running"}],["cancelJob",value],["audit",{limit:20}],["forwardsVia",value],["updatesStatus"],["updatesCheck",null],["updatesStage",{releaseTag:"x"}],["updatesApply",{updateId:"x"}],["updatesCancel",{updateId:"x"}],["updatesResolve",{updateId:"x"}]];
@@ -366,7 +366,7 @@ function hostAdminIpc() {
  for(const input of [{},{mode:"admin",activeTab:"vms"},{mode:"admin",features:{updates:true}},{mode:"user"},{maintenance:{phase:"draining"}},{updatePending:{id:"one"}}])add("poll",input,m.pollIntervalMs(input));
  for(const input of [null,"", "5m", "4m", "24h", "2d", "never", "NEVER", " 12h ", "0m", "-5h", "99999999999999999999d", "five"])
   add("lifetime",input,m.parseLifetime(input));
- for(const features of [[],["host-admin"],["host-admin","children","updates"],["host-admin","children","media","updates","network","console","primary-cpu"]]) {
+ for(const features of [[],["host-admin"],["host-admin","children","updates"],["host-admin","children","media","updates","network","console","primary-cpu","primary-memory"]]) {
   const input={apiFeatures:features}; add("features",input,m.featureSet(input)); add("tabs",input,m.tabsFor({features:m.featureSet(input)}));
  }
  for(const form of [{},{name:"alice",role:"admin",enabled:"false",maxVms:"3",allowHostForwards:"true"},{name:"",role:"root",enabled:"invalid",maxVms:"-1"},{allowChildCreation:"true",maxRetainedChildren:"4",cpuBudget:"8",ramBudgetGiB:"1.5",storageBudgetGiB:"100",maxChildLifetime:"24h",allowNeverLifetime:"false",allowSharing:"inherit"},{maxChildLifetime:"never",ramBudgetGiB:"bad",maxRetainedChildren:"1.5"}])
@@ -374,7 +374,7 @@ function hostAdminIpc() {
  for(const timeoutMinutes of [0,1,5.8,99,-5,"bad","45"])for(const action of ["shutdown","save","SAVE","unknown"]) {
   const input={policy:{timeoutMinutes,action},max:30}; add("idleClamp",input,f.clampIdlePolicy(input.policy,input.max)); add("idle",{timeoutMinutes,action,maxTimeoutMinutes:30},f.toPanelIdlePolicy({timeoutMinutes,action,maxTimeoutMinutes:30}));
  }
- const vm={pendingCpu:8,name:"build",kind:"child",parent:"agent-vm",owner:"alice",sharing:"host",state:"running",hardware:{cpus:4,ramMb:2048,diskGb:80},lease:{state:"active",requested:"12h",expiresAt:"2026-09-11T13:00:00Z"},allowedActions:["shutdown","delete","invented"],resourceUsage:{cpuUsagePercent:25.5,memoryDemandBytes:1073741824,memoryAssignedBytes:2147483648,diskFileBytes:123456789,observedAt:"2026-09-11T11:59:55Z"}};
+ const vm={pendingRamGb:12,pendingCpu:8,name:"build",kind:"child",parent:"agent-vm",owner:"alice",sharing:"host",state:"running",hardware:{cpus:4,ramMb:2048,diskGb:80},lease:{state:"active",requested:"12h",expiresAt:"2026-09-11T13:00:00Z"},allowedActions:["shutdown","delete","invented"],resourceUsage:{cpuUsagePercent:25.5,memoryDemandBytes:1073741824,memoryAssignedBytes:2147483648,diskFileBytes:123456789,observedAt:"2026-09-11T11:59:55Z"}};
  for(const input of [{},vm,{...vm,state:"paused",deleting:true,lease:{state:"overdue",lastOutcome:"no integration"}},{name:"agent-vm",kind:"primary",children:["build"],guest:{constructCommit:"abcdef0123456789",provisionedAt:"2026-09-11T11:30:00Z"}}]) {
   add("vm",input,m.toVmRow(input,now)); add("childDelete",input,m.childDeleteConfirmation(input)); add("children",[input],m.childRows([input],now));
  }

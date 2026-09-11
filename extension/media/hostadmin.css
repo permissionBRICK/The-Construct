@@ -79,3 +79,11 @@
 #haUpdate.ha-updating::before { content: ""; display: inline-block; width: .8em; height: .8em; margin-right: .5em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: prepare-spin .8s linear infinite; }
 @media (prefers-reduced-motion: reduce) { #haUpdate.ha-updating::before { animation: none; } }
 #tab-maintenance summary { cursor: pointer; margin: 1rem 0; }
+
+/* One settings surface for both VS Code and the Companion. */
+#haVmSettings { width: min(34rem, calc(100vw - 3rem)); max-height: 85vh; overflow: auto; background: var(--ground); color: var(--text); border: 1px solid var(--line-strong); border-radius: 8px; padding: 1.5rem; }
+#haVmSettings::backdrop { background: rgb(0 0 0 / 55%); }
+#haVmSettings fieldset { border: 0; padding: 0; display: grid; gap: 1rem; }
+#haVmSettings label { display: grid; gap: .35rem; }
+#haVmSettings input, #haVmSettings select { box-sizing: border-box; width: 100%; padding: .5rem; }
+#haVmSettings .ha-form-actions { display: flex; justify-content: flex-end; gap: .5rem; }
