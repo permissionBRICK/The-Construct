@@ -1,4 +1,5 @@
 #Requires -Version 5.1
+. (Join-Path $PSScriptRoot 'Construct.Runtime.ps1')
 # Dot-sourcing performs no installation. Seams may be replaced individually in tests.
 function Throw-ConstructCompanionError {
     param([string]$Message)
@@ -106,7 +107,7 @@ function Resolve-ConstructCompanionSource {
     if ($settings.constructRepo) { $repo=[string]$settings.constructRepo }
     if ($repo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') { Throw-ConstructCompanionError 'Invalid Companion release repository.' }
     $local=$false
-    if ($Source -ne 'release' -and (Test-Path -LiteralPath (Join-Path $ScriptsDir 'companion/Construct.Companion.sln'))) {
+    if ($Source -eq 'local' -and (Test-Path -LiteralPath (Join-Path $ScriptsDir 'companion/Construct.Companion.sln'))) {
         $sdks=& $Seams.Native 'dotnet' @('--list-sdks')
         $local=$sdks.exitCode -eq 0 -and @($sdks.output | Where-Object { $_ -is [string] -and $_ -match '^10\.' }).Count -gt 0
     }
@@ -136,7 +137,8 @@ function Resolve-ConstructCompanionSource {
     $base="https://github.com/$repo/releases/download/$tag"
     $manifest=& $Seams.Json "$base/manifest.json"
     Assert-ConstructCompanionManifest $manifest $repo $tag
-    return @{source='release'; commit=$manifest.commit; packageVersion=$manifest.packageVersion; releaseTag=$tag; manifest=$manifest; payloadUri="$base/$($manifest.payloadAsset)"}
+    $payload=Select-ConstructReleasePayload $manifest $Seams.Native
+    return @{source=$payload.source; commit=$manifest.commit; packageVersion=$manifest.packageVersion; releaseTag=$tag; manifest=$manifest; payload=$payload; payloadUri="$base/$($payload.asset)"}
 }
 
 function Assert-ConstructCompanionManifest {
@@ -147,27 +149,51 @@ function Assert-ConstructCompanionManifest {
         $Manifest.payloadAsset -cne ('construct-companion-'+$Tag.Substring(10,7)+'-win-x64.zip') -or
         $Manifest.payloadSha256 -cnotmatch '^[0-9a-f]{64}$' -or $Manifest.sumsSha256 -cnotmatch '^[0-9a-f]{64}$' -or
         $Manifest.packageVersion -cnotmatch ('^\d{4}\.\d{2}\.\d{2}\+'+$Tag.Substring(10,7)+'$')) { Throw-ConstructCompanionError 'Invalid Companion release manifest.' }
+    try { Assert-ConstructFrameworkDependentManifest $Manifest ('construct-companion-'+$Tag.Substring(10,7)+'-win-x64-fdd.zip') }
+    catch { Throw-ConstructCompanionError 'Invalid Companion framework-dependent manifest.' }
+    if ($null -ne $Manifest.payloadSizeBytes -and (($Manifest.payloadSizeBytes -isnot [int] -and $Manifest.payloadSizeBytes -isnot [long]) -or $Manifest.payloadSizeBytes -le 0 -or $Manifest.payloadSizeBytes -gt 1GB)) { Throw-ConstructCompanionError 'Invalid Companion payload size.' }
+    if ($null -ne $Manifest.payloadUncompressedSizeBytes -and (($Manifest.payloadUncompressedSizeBytes -isnot [int] -and $Manifest.payloadUncompressedSizeBytes -isnot [long]) -or $Manifest.payloadUncompressedSizeBytes -le 0 -or $Manifest.payloadUncompressedSizeBytes -gt 1GB)) { Throw-ConstructCompanionError 'Invalid Companion uncompressed size.' }
     $date=[DateTimeOffset]::MinValue
     if (-not [DateTimeOffset]::TryParse([string]$Manifest.builtAt,[ref]$date)) { Throw-ConstructCompanionError 'Invalid Companion manifest build date.' }
 }
 
 function Expand-ConstructCompanionPayload {
-    param([string]$Zip,[string]$Destination,$Manifest)
-    if ((Get-FileHash -LiteralPath $Zip -Algorithm SHA256).Hash -ne $Manifest.payloadSha256) { Throw-ConstructCompanionError 'Companion payload checksum mismatch.' }
+    param([string]$Zip,[string]$Destination,$Manifest,$Payload)
+    if (-not $Payload) { $Payload=@{sha256=$Manifest.payloadSha256;sizeBytes=$Manifest.payloadSizeBytes;sumsSha256=$Manifest.sumsSha256;uncompressedSizeBytes=$Manifest.payloadUncompressedSizeBytes} }
+    if ($null -ne $Payload.sizeBytes -and (Get-Item -LiteralPath $Zip).Length -ne $Payload.sizeBytes) { Throw-ConstructCompanionError 'Companion payload size mismatch.' }
+    if ((Get-FileHash -LiteralPath $Zip -Algorithm SHA256).Hash -ne $Payload.sha256) { Throw-ConstructCompanionError 'Companion payload checksum mismatch.' }
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $archive=[IO.Compression.ZipFile]::OpenRead($Zip)
     try {
+        Assert-ConstructArchiveLengths $archive $Payload.uncompressedSizeBytes
         $seen=@{}
         foreach ($entry in $archive.Entries) {
             $name=$entry.FullName.Replace('\','/')
-            if ($name -notmatch '^(app/.+|SHA256SUMS)$' -or $name -match '(^|/)(\.|\.\.)(/|$)|[:\x00-\x1f]' -or
+            if ($name.EndsWith('/') -or $name -notmatch '^(app/.+|SHA256SUMS)$' -or $name -match '(^|/)(\.|\.\.)(/|$)|[:\x00-\x1f]' -or
                 $name -match '(^|/)[^/]*[. ](/|$)' -or $seen.ContainsKey($name)) { Throw-ConstructCompanionError 'Unsafe Companion archive layout.' }
             $seen[$name]=$true
         }
+        # Validate inflated lengths before creating any destination files.
+        $hashes=@{}
+        foreach ($entry in $archive.Entries) { $hashes[$entry.FullName.Replace('\','/')]=Expand-ConstructBoundedEntry $entry $null -Hash }
+        if ($hashes['SHA256SUMS'] -ne $Payload.sumsSha256) { Throw-ConstructCompanionError 'Companion file list checksum mismatch.' }
+        $reader=New-Object IO.StreamReader($archive.GetEntry('SHA256SUMS').Open())
+        try {
+            $covered=@{}
+            while ($null -ne ($line=$reader.ReadLine())) {
+                if ($line -cnotmatch '^([0-9a-f]{64})  (app/.+)$' -or $covered.ContainsKey($Matches[2]) -or $hashes[$Matches[2]] -ne $Matches[1]) { Throw-ConstructCompanionError 'Companion file checksum mismatch.' }
+                $covered[$Matches[2]]=$true
+            }
+            if ($covered.Count -ne $hashes.Count-1) { Throw-ConstructCompanionError 'Unlisted Companion payload file.' }
+        } finally { $reader.Dispose() }
+        foreach ($entry in $archive.Entries) {
+            $target=Join-Path $Destination $entry.FullName.Replace('\','/')
+            [IO.Directory]::CreateDirectory((Split-Path $target -Parent)) | Out-Null
+            Expand-ConstructBoundedEntry $entry $target
+        }
     } finally { $archive.Dispose() }
-    [IO.Compression.ZipFile]::ExtractToDirectory($Zip,$Destination)
     $sums=Join-Path $Destination 'SHA256SUMS'
-    if (-not (Test-Path -LiteralPath $sums) -or (Get-FileHash -LiteralPath $sums -Algorithm SHA256).Hash -ne $Manifest.sumsSha256) { Throw-ConstructCompanionError 'Companion file list checksum mismatch.' }
+    if (-not (Test-Path -LiteralPath $sums) -or (Get-FileHash -LiteralPath $sums -Algorithm SHA256).Hash -ne $Payload.sumsSha256) { Throw-ConstructCompanionError 'Companion file list checksum mismatch.' }
     $checked=@{}
     foreach ($line in [IO.File]::ReadAllLines($sums)) {
         if ($line -cnotmatch '^([0-9a-f]{64})  (app/.+)$') { Throw-ConstructCompanionError 'Invalid Companion checksum list.' }
@@ -254,7 +280,7 @@ function Install-ConstructCompanion {
             $zip=Join-Path $work 'payload.zip'
             & $Seams.Download $plan.payloadUri $zip $ScriptsDir
             $unpacked=Join-Path $work 'unpacked'
-            Expand-ConstructCompanionPayload $zip $unpacked $plan.manifest
+            Expand-ConstructCompanionPayload $zip $unpacked $plan.manifest $plan.payload
             $app=Join-Path $unpacked 'app'
         }
         if (-not (Test-Path -LiteralPath (Join-Path $app 'ConstructCompanion.exe')) -or -not (Test-Path -LiteralPath (Join-Path $app 'media/panel.html'))) { Throw-ConstructCompanionError 'Companion publish output is missing its executable or media.' }
