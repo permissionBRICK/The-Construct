@@ -33,6 +33,7 @@ $touchedScripts = @(
     "drivers/hyperv-local/HyperVLocal.ChildVm.ps1",
     "Create-AgentVM.ps1",
     "Set-AgentVmCheckpoints.ps1",
+    "Set-AgentVmResources.ps1",
     "Auto-Install.ps1"
 )
 foreach ($rel in $touchedScripts) {
@@ -138,6 +139,7 @@ Write-Host ""
 Write-Host "=== Capabilities ===" -ForegroundColor Cyan
 $caps = Get-ConstructDriverCapabilities
 ok "caps: Checkpoints = true"      ($caps.Checkpoints -eq $true)
+ok "caps: Resources = true (in-place RAM/vCPU resize)" ($caps.Resources -eq $true)
 ok "caps: Console = vmconnect"     ($caps.Console -eq 'vmconnect')
 ok "caps: Suspend = true"          ($caps.Suspend -eq $true)
 ok "caps: Backend = hyperv-local"  ($caps.Backend -eq 'hyperv-local')
@@ -486,7 +488,7 @@ function Get-InvokedCommandNames {
     $cmds = $ast.FindAll({ param($a) $a -is [System.Management.Automation.Language.CommandAst] }, $true)
     return @($cmds | ForEach-Object { $_.GetCommandName() } | Where-Object { $_ })
 }
-foreach ($rel in @("Create-AgentVM.ps1", "Auto-Install.ps1", "Set-AgentVmCheckpoints.ps1")) {
+foreach ($rel in @("Create-AgentVM.ps1", "Auto-Install.ps1", "Set-AgentVmCheckpoints.ps1", "Set-AgentVmResources.ps1")) {
     $invoked = Get-InvokedCommandNames -Path (Join-Path $repoRoot $rel)
     $leaks = @($invoked | Where-Object { $hypervCommands -contains $_ } | Sort-Object -Unique)
     ok "purity: $rel invokes no hypervisor cmdlet directly" ($leaks.Count -eq 0)
@@ -532,6 +534,15 @@ ok "Set-AgentVmCheckpoints: capability-gated + every checkpoint op is a driver o
     $chkSrc -match 'Set-ConstructVmAutoCheckpointPolicy -Name \$VmName -Enabled \$wantEnabled' -and
     $chkSrc -match 'Get-ConstructVmAutomaticCheckpoint -Name \$VmName' -and
     $chkSrc -match 'Remove-ConstructVmCheckpoint -Name \$VmName -Checkpoint \$snap')
+$resSrc = Get-Content -LiteralPath (Join-Path $repoRoot "Set-AgentVmResources.ps1") -Raw
+ok "Set-AgentVmResources: capability-gated + every hypervisor touch is a driver op" (
+    $resSrc -match 'Get-ConstructDriverCapabilities' -and
+    $resSrc -match 'if \(-not \$caps\.Resources\)' -and
+    $resSrc -match 'Get-ConstructVmState -Name \$Name' -and
+    $resSrc -match 'Stop-ConstructVm -Name \$Name' -and
+    $resSrc -match 'Start-ConstructVm -Name \$Name' -and
+    $resSrc -match 'Set-ConstructVmMemory -Name \$Name -MemoryGB \$MemoryGB' -and
+    $resSrc -match 'Set-ConstructVmCpuCount -Name \$Name -ProcessorCount \$CpuCount')
 ok "Set-AgentVmCheckpoints: the safe-delete contract is intact (per-checkpoint prompt, loud unreadable list)" (
     $chkSrc -match 'Read-Host "      Remove this checkpoint\?' -and
     $chkSrc -match 'if \(-not \$found\.Enumerated\)')

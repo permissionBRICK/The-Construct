@@ -38,6 +38,7 @@ function configsync() { return require("./configsync"); }
 const PROVISION = "Provision-AgentVM.ps1";   // reprovision + export (no admin)
 const AUTO_INSTALL = "Auto-Install.ps1";     // reinstall + redownload (self/explicitly elevated)
 const CHECKPOINTS = "Set-AgentVmCheckpoints.ps1"; // apply the checkpoint policy to the LIVE VM (elevated)
+const RESOURCES = "Set-AgentVmResources.ps1";     // restart the LIVE VM with a new RAM size / vCPU count (elevated)
 const BACKUP_DIR_NAME = ".construct-backup"; // mirrors Get-ConstructBackupDir
 // The CAPABILITY MARKER for name-only targeting (B11): the adapter every host script
 // resolves -InstanceName through. See NAME_TARGET_PARAMS for why its PRESENCE, and not
@@ -72,6 +73,9 @@ function normalizeBackupMode(bm) {
 //   Set-AgentVmCheckpoints.ps1 (setCheckpoints)
 //       -VmName <name> — it only talks to Hyper-V.
 //
+//   Set-AgentVmResources.ps1 (setResources)
+//       -VmName <name> — same shape as setCheckpoints: Hyper-V only.
+//
 // For the DEFAULT instance NOTHING is emitted at all, so argv is byte-identical to
 // what shipped before instances existed. That is the regression bar these lists exist
 // to keep provable.
@@ -85,6 +89,7 @@ const INSTANCE_PARAMS = {
   reinstall: ["VmName", "ConfigBranch"],
   redownload: ["VmName", "ConfigBranch"],
   setCheckpoints: ["VmName"],
+  setResources: ["VmName"],
 };
 
 // ── …and the REMOTE backend's rebuild arguments ──────────────────────────────
@@ -130,6 +135,7 @@ const NAME_TARGET_PARAMS = {
   reinstall: ["InstanceName", "ConfigBranch"],
   redownload: ["InstanceName", "ConfigBranch"],
   setCheckpoints: ["InstanceName"],
+  setResources: ["InstanceName"],
 };
 
 /** Is `declared` (the probe result) the NAME-ONLY set? instanceParamSupport only ever
@@ -182,6 +188,7 @@ const REQUIRED_INSTANCE_PARAMS = {
   reinstall: ["VmName"],
   redownload: ["VmName"],
   setCheckpoints: ["VmName"],
+  setResources: ["VmName"],
 };
 
 /** The same rule for a REMOTE instance's rebuild. An Auto-Install.ps1 that predates the
@@ -201,6 +208,7 @@ const REQUIRED_NAME_TARGET_PARAMS = {
   reinstall: ["InstanceName"],
   redownload: ["InstanceName"],
   setCheckpoints: ["InstanceName"],
+  setResources: ["InstanceName"],
 };
 
 /** What an action MUST be able to state for this instance. Pure. */
@@ -222,6 +230,7 @@ const ACTION_LABELS = {
   reinstall: "Reinstall",
   redownload: "Redownload",
   setCheckpoints: "Automatic checkpoints",
+  setResources: "Apply VM resources",
   removeInstance: "Remove instance",
 };
 
@@ -565,6 +574,25 @@ function buildInvocation(action, opts = {}) {
       });
     }
 
+    // Restart the EXISTING VM with a new RAM size and/or vCPU count, right now — the
+    // "restart to apply" path for the two VM-resources settings that don't need a
+    // rebuild (the disk stays a reinstall/redownload job). Elevated like setCheckpoints
+    // (Hyper-V cmdlets); not `destructive` in the confirm-modal sense because the
+    // extension has already confirmed the restart with the user.
+    case "setResources": {
+      // STRICT numbers, and at least one of them: this action powers a VM off, so a
+      // malformed request (strings, NaN, nothing set) must be refused, never defaulted.
+      const ram = resourceNumber(opts.ram, false);
+      const cpu = resourceNumber(opts.cpu, true);
+      if (ram === null && cpu === null) return null;
+      if (ram !== null) addPair("-VmMemoryGB", String(ram));
+      if (cpu !== null) addPair("-VmCpuCount", String(cpu));
+      return done(RESOURCES, {
+        destructive: false, elevate: true,
+        label: "Apply VM resources",
+      });
+    }
+
     // Remove THIS PC's record of one VM (B14, plan section 4.12 "Cleanup"): the ssh
     // block, the key, the remotePlatform entry, the OpenCode server, the T3 certificate
     // authority, the per-instance state file and the registry entry -- and, for a remote
@@ -602,6 +630,20 @@ function buildInvocation(action, opts = {}) {
     default:
       return null;
   }
+}
+
+/**
+ * A resource value for setResources: a finite positive number (an integer when
+ * `integer`), or null for anything else — absent, empty, a non-number, zero. Strings are
+ * accepted because the settings form stores them as strings. Pure.
+ */
+function resourceNumber(value, integer) {
+  if (value === undefined || value === null || typeof value === "boolean") return null;
+  if (typeof value === "string" && value.trim() === "") return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  if (integer && !Number.isInteger(n)) return null;
+  return n;
 }
 
 /**
@@ -733,6 +775,7 @@ function scriptForAction(action) {
   if (action === "reprovision" || action === "exportConfig") return PROVISION;
   if (action === "reinstall" || action === "redownload") return AUTO_INSTALL;
   if (action === "setCheckpoints") return CHECKPOINTS;
+  if (action === "setResources") return RESOURCES;
   return null;
 }
 
@@ -1014,8 +1057,8 @@ function launchHostScript(opts) {
 }
 
 /**
- * Run a lifecycle action. `opts`: { scriptsDir, backupMode?, projects?, enabled?, env?,
- * instance?, stillCurrent? }. `instance` is the active instance (src/instances.js);
+ * Run a lifecycle action. `opts`: { scriptsDir, backupMode?, projects?, enabled?, ram?,
+ * cpu?, env?, instance?, stillCurrent? }. `instance` is the active instance (src/instances.js);
  * omitted or default => the launched argv is byte-identical to before instances existed.
  * `stillCurrent` is the caller's captured-target predicate, re-asked AFTER the destructive
  * confirmation and immediately before anything is cleared or launched (see below) — it is
@@ -1056,6 +1099,8 @@ function run(action, opts = {}) {
     backupMode: opts.backupMode,
     projects,
     enabled: opts.enabled,
+    ram: opts.ram,
+    cpu: opts.cpu,
     instance: opts.instance,
     instanceParams: instanceParamSupport(scriptsDir, action, opts.instance),
     supportsCheckpoints: scriptSupportsCheckpoints(scriptsDir),
@@ -1135,7 +1180,7 @@ let runPending = Promise.resolve();
 function runSettled() { return runPending; }
 
 module.exports = {
-  PROVISION, AUTO_INSTALL, CHECKPOINTS, BACKUP_DIR_NAME,
+  PROVISION, AUTO_INSTALL, CHECKPOINTS, RESOURCES, BACKUP_DIR_NAME,
   INSTANCE_PARAMS, REQUIRED_INSTANCE_PARAMS, ACTION_LABELS,
   REMOTE_INSTANCE_PARAMS, REQUIRED_REMOTE_INSTANCE_PARAMS,
   NAME_TARGET_PARAMS, REQUIRED_NAME_TARGET_PARAMS, INSTANCE_TARGET_LIB,
@@ -1144,7 +1189,7 @@ module.exports = {
   instanceArgs, instanceArgPairs, flattenArgPairs, checkInstanceSupport,
   derivedConfigBranch, configBranchOverride,
   scriptSupportsParam, scriptForAction, instanceParamSupport,
-  normalizeBackupMode, buildInvocation, scriptSupportsCheckpoints, scriptSupportsVmCpuCount, scriptSupportsT3CodeChannel,
+  normalizeBackupMode, resourceNumber, buildInvocation, scriptSupportsCheckpoints, scriptSupportsVmCpuCount, scriptSupportsT3CodeChannel,
   scriptSupportsRemoveInstance,
   scriptSupportsT3CodeLimitResume,
   scriptSupportsOpenCodeBackgroundWatcher,

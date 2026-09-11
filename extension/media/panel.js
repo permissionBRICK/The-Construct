@@ -407,6 +407,49 @@
   }
   $("saveBtn") && $("saveBtn").addEventListener("click", () => post({ type: "saveSettings", settings: gatherSettings() }));
 
+  // ── "Restart to apply" for RAM + vCPUs ──────────────────────────────────────
+  // The extension applies what the settings FILE says, so the button saves first (the
+  // same saveSettings message as the Save button, handled before the apply) and then asks
+  // for the restart. The note mirrors vmpower.planResourceApply — the canonical, unit-tested
+  // definition; this copy can't require() it — against the VM's last probed size.
+  let liveVmSpec = null;
+  function resourceNumber(v, integer) {
+    if (v == null || typeof v === "boolean") return null;
+    if (typeof v === "string" && v.trim() === "") return null;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    if (integer && !Number.isInteger(n)) return null;
+    return n;
+  }
+  function renderResourcePending() {
+    const btn = $("resApplyBtn"), note = $("resApplyNote");
+    if (!btn || !note) return;
+    const ram = resourceNumber(val("setRam"), false), cpu = resourceNumber(val("setCpu"), true);
+    const none = ram === null && cpu === null;
+    const liveRam = liveVmSpec ? resourceNumber(liveVmSpec.ramGb, false) : null;
+    const liveCpu = liveVmSpec ? resourceNumber(liveVmSpec.cpus, true) : null;
+    const checks = [];
+    if (ram !== null) checks.push(liveRam === null ? null : ram !== liveRam);
+    if (cpu !== null) checks.push(liveCpu === null ? null : cpu !== liveCpu);
+    const pending = none ? null : checks.some((c) => c === true) ? true : checks.every((c) => c === false) ? false : null;
+    const fmt = (r, c) => [r !== null ? r + " GB RAM" : "", c !== null ? c + " vCPU" + (c === 1 ? "" : "s") : ""].filter(Boolean).join(", ");
+    btn.disabled = none;
+    btn.setAttribute("aria-disabled", none ? "true" : "false");
+    btn.classList.toggle("start", pending === true);
+    note.textContent = none ? "enter a RAM size or vCPU count first"
+      : pending === true ? "differs from the running VM (" + fmt(liveRam, liveCpu) + ")"
+      : pending === false ? "the VM already has this size"
+      : "";
+  }
+  ["setRam", "setCpu"].forEach((id) => { const e = $(id); if (e) e.addEventListener("input", renderResourcePending); });
+  $("resApplyBtn") && $("resApplyBtn").addEventListener("click", () => {
+    const s = gatherSettings();
+    if (resourceNumber(s.ram, false) === null && resourceNumber(s.cpu, true) === null) { renderResourcePending(); return; }
+    post({ type: "saveSettings", settings: s });
+    post({ type: "applyVmResources" });
+  });
+  renderResourcePending();
+
   // ── Render state pushed from the extension ──────────────────────────────────
   function text(id, v) { const e = $(id); if (e && v != null) e.textContent = v; }
 
@@ -485,6 +528,8 @@
   // stale values from a previous successful probe on screen.
   function clearLiveVmData() {
     text("sysVm", "—"); text("sysResources", "—"); text("sysUbuntu", "—"); setDiskWarn(null);
+    // An offline VM's size is "can't tell", never the number from before.
+    liveVmSpec = null; renderResourcePending();
     // The install/reprovision markers are VM-derived too, so drop them back to the
     // "—" placeholder when we have no trustworthy VM data (offline / probe failed).
     text("pillInstalled", "installed —"); text("pillReprovisioned", "reprovisioned —");
@@ -815,6 +860,8 @@
     // Unreachable, or reachable but the probe script failed: we have no trustworthy
     // VM data, so clear it rather than show stale values.
     if (!online || s.probeError) { clearLiveVmData(); return; }
+    // The VM's real size backs the "restart to apply" note (see renderResourcePending).
+    if (s.vmSpec) { liveVmSpec = s.vmSpec; renderResourcePending(); }
 
     if (s.vmName != null) text("sysVm", s.vmName || "—");
     if (s.resources != null) text("sysResources", s.resources || "—");
@@ -1140,6 +1187,7 @@
     if (s.t3codeChannel) setVal("setT3Channel", s.t3codeChannel);
     setSw("setT3Park", s.t3codeLimitResume);
     setSw("setAutoCheckpoints", s.autoCheckpoints);
+    renderResourcePending();
   }
 
   // Ask the extension for the current state once the webview is live.
