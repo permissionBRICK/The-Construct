@@ -59,6 +59,7 @@ internal sealed class TrayContext : ApplicationContext
         platform.Files.CreateDirectory(platform.StateRoot);
         registryWatch = platform.Files.Watch(platform.StateRoot, () => { if (!disposed) dispatcher.BeginInvoke(RegistryChanged); });
         settings.Changed += SettingsChanged;
+        ListenOnlineAll();
         Select(settings.Read().ActiveInstance);
         _ = ListenCompanionAsync(lifetime.Token);
         dispatcher.BeginInvoke(async () => { try { await OpenPlanAsync(initial); } catch (Exception e) { ShowFailure(e); } }); // startup must never kill the tray
@@ -68,7 +69,7 @@ internal sealed class TrayContext : ApplicationContext
     private string[] Hosts() => RemoteHost.KnownHostSlugs(registry, RemoteHost.EnrolledHosts(platform.Files, platform.StateDirectory));
     private void RegistryChanged()
     {
-        registry = LoadRegistry();
+        registry = LoadRegistry(); ListenOnlineAll();
         var selectionStale = Active is null ? registry.ByName.Count > 0 : !registry.ByName.ContainsKey(Active);
         if (selectionStale) Select(settings.Read().ActiveInstance);
     }
@@ -103,6 +104,36 @@ internal sealed class TrayContext : ApplicationContext
         if (windows.TryGetValue("popup", out var popup)) _ = popup.ChangeScopeAsync(name ?? "");
         if (name is not null) _ = ListenAsync(name, subscription.Token);
         RefreshIcon();
+    }
+    // One listener per registered instance keeps the tooltip's online count current, whichever instance is active.
+    private CancellationTokenSource onlineSubscription = new();
+    private void ListenOnlineAll()
+    {
+        var names = registry.List().Select(i => StateJson.Text(i["name"])).OfType<string>().ToArray();
+        snapshot.SetInstances(names);
+        onlineSubscription.Cancel(); onlineSubscription.Dispose(); onlineSubscription = new();
+        foreach (var name in names) _ = ListenOnlineAsync(name, onlineSubscription.Token);
+        RefreshIcon();
+    }
+    private async Task ListenOnlineAsync(string name, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await foreach (var message in sink.Subscribe(name, cancellationToken))
+            {
+                var type = message.GetProperty("type").GetString();
+                if (type == "audio") snapshot.ApplyMic(name, message.TryGetProperty("capturing", out var capturing) && capturing.ValueKind == JsonValueKind.True);
+                else if (type == "state")
+                {
+                    var data = message.TryGetProperty("state", out var inner) ? inner : message;
+                    snapshot.ApplyOnline(name, data.TryGetProperty("online", out var online) && online.ValueKind == JsonValueKind.True);
+                }
+                else continue;
+                RefreshIcon();
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception e) { platform.Log.Write(DesktopLogEvent.BridgeFailed, e); }
     }
     private async Task ListenAsync(string name, CancellationToken cancellationToken)
     {
