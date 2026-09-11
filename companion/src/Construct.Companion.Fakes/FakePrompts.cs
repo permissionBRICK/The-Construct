@@ -5,6 +5,10 @@ namespace Construct.Companion.Fakes;
 public sealed class FakePrompts : IPrompts
 {
     public Func<CancellationToken, Task<bool>>? ConfirmationHandler { get; set; }
+    public sealed record SecretDisplay(string Title, Secret Value, string Note);
+    public List<SecretDisplay> Secrets { get; } = [];
+    public Task ShowSecretOnceAsync(string title, Secret value, string note, CancellationToken cancellationToken = default)
+    { cancellationToken.ThrowIfCancellationRequested(); Secrets.Add(new(title,value,note)); return Task.CompletedTask; }
     public List<object> Shown { get; } = [];
     public Queue<string?> Inputs { get; } = new();
     public Queue<IReadOnlyList<string>?> Picks { get; } = new();
