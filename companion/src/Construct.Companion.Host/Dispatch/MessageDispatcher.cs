@@ -185,6 +185,7 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
             var markers = entry.Store.ReadMarkers();
             data["provisionStale"] = UpdatePlanner.IsProvisionStale(markers, Text(data, "provisionedCommit"));
             data["constructUpdate"] = await UpdatePlanner.CheckConstructAsync(updates, markers, ct);
+            UpdatePlanner.Fold(data, markers, data["constructUpdate"] as JsonObject);
             if (data["agents"] is JsonArray agents) data["agents"] = await UpdatePlanner.AugmentAgentsAsync(updates, agents, ct);
             entry.Enrichment = new JsonObject { ["constructUpdate"] = data["constructUpdate"]?.DeepClone(), ["provisionStale"] = data["provisionStale"]?.DeepClone() };
             state.Publish(entry.Name, full);

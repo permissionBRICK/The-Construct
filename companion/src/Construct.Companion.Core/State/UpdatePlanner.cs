@@ -36,6 +36,15 @@ public static class UpdatePlanner
     {
         var url = ConstructManifestUrl(markers); return url is null ? null : ConstructUpdateFromManifest(await source.GetJsonAsync(new Uri(url), cancellationToken) as JsonObject, markers);
     }
+    public static string BehindText(double? count) => count > 0 ? $"{count.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)} behind" : "";
+    // updates.js augment(): the version label from the installed marker and the panel's update banner fields.
+    public static JsonObject Fold(JsonObject state, JsonObject markers, JsonObject? constructUpdate)
+    {
+        var installed = StateJson.String(markers["installedCommit"]);
+        if (installed.Length > 0) state["constructRev"] = $"{StateJson.String(markers["ref"])}@{installed[..Math.Min(7, installed.Length)]}";
+        if (constructUpdate is not null) state["update"] = new JsonObject { ["available"] = StateJson.Truthy(constructUpdate["available"]), ["behind"] = BehindText(StateJson.Number(constructUpdate["count"])) };
+        return state;
+    }
     public static string[] ConstructRefreshArgs(JsonObject markers) => ["-Repo", StateJson.String(markers["repo"]), "-Ref", StateJson.String(markers["ref"])];
     public static string T3CodeUrl(string? channel) => "https://registry.npmjs.org/t3/" + (channel == "nightly" ? "nightly" : "latest");
     private static double[]? Semver(string? value)
