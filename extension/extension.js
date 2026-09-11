@@ -45,6 +45,8 @@ const companion = require("./src/companion");
 
 let companionClient = null;
 let companionStarting = false;
+let companionReady = Promise.resolve();
+const companionMigrationChildren = new Set();
 let companionDisposed = false;
 let fallbackStarted = false;
 const fallbackStartupTimers = new Set();
@@ -76,21 +78,25 @@ async function proxyCompanion(message, webview) {
   try {
     if (message.type === "ready") return await refreshCompanion(webview);
     if (message.type === "openPanel") return await companionClient.activate("panel", name);
-    if (message.type === "command" && message.id === "openHostAdmin") return await companionClient.activate("hostadmin", name);
+    if (message.type === "command" && message.id === "openHostAdmin") return await activateCompanionView("hostadmin");
     await companionClient.proxy(name, message);
     // Selection belongs to this window as well as to the Companion dispatcher.
     if (message.type === "setInstance") await switchInstance(message.name);
   } catch (_) { companionError(); }
 }
 function activateCompanionView(view) {
-  return companionClient.activate(view, activeInstance().name).catch(companionError);
+  const inst = activeInstance();
+  const hostSlug = view === "hostadmin" && inst.service && inst.service.url ? remotehost.hostSlug(inst.service.url) : undefined;
+  return companionClient.activate(view, inst.name, hostSlug).catch(companionError);
 }
 function runCompanionMigration(file, args, input) {
   return new Promise((resolve) => {
     let child, timer, done = false;
-    const finish = (code) => { if (done) return; done = true; clearTimeout(timer); resolve({ code }); };
+    const finish = (code) => { if (done) return; done = true; clearTimeout(timer); companionMigrationChildren.delete(child); resolve({ code }); };
     try {
+      if (companionDisposed) { finish(-1); return; }
       child = require("child_process").spawn(file, args, { windowsHide: true, stdio: ["pipe", "ignore", "ignore"] });
+      companionMigrationChildren.add(child);
       child.on("error", () => finish(-1));
       child.on("close", (code) => finish(code));
       child.stdin.on("error", () => { child.kill(); finish(-1); });
@@ -1622,7 +1628,7 @@ async function deliverNotification(entry) {
   logLine(notify.logLineFor(entry));
   if (process.platform === "win32") {
     const reason = await raiseWindowsToast(entry);
-    if (!reason) return;
+    if (!reason || companionDeferred() || companionDisposed) return;
     logLine("notify: falling back to a VS Code notification (" + reason + ")");
   }
   const text = entry.title ? `${entry.title}: ${entry.body}` : entry.body;
@@ -4318,7 +4324,8 @@ async function preparePanelLifecycle(webview, id, work) {
 }
 
 function handleMessage(message, webview, context) {
-  if (!message || typeof message.type !== "string") return;
+  if (!message || typeof message.type !== "string" || companionDisposed) return;
+  if (companionStarting) return companionReady.then(() => handleMessage(message, webview, context));
   if (companionDeferred()) return proxyCompanion(message, webview);
 
   switch (message.type) {
@@ -5170,6 +5177,8 @@ function openThemePicker(context) {
 
 /** Open (or reveal) the full control panel as a wide editor tab. */
 function openPanel(context) {
+  if (companionDisposed) return;
+  if (companionStarting) return companionReady.then(() => openPanel(context));
   if (companionDeferred()) return activateCompanionView("panel");
   return openPanelHere(context);
 }
@@ -5200,6 +5209,8 @@ function openPanelHere(context) {
 // the returned promise before treating the extension as active.
 async function activate(context) {
   companionStarting = true;
+  let finishDetection;
+  companionReady = new Promise(resolve => { finishDetection = resolve; });
   extensionContext = context;
   // Route lifecycle/update launch logging into the Construct Output channel, and let
   // `construct.debug` keep launched consoles open so errors are readable.
@@ -5224,7 +5235,7 @@ async function activate(context) {
     }),
     vscode.commands.registerCommand("construct.openPanel", () => openPanel(context)),
     vscode.commands.registerCommand("construct.openPanelHere", () => openPanelHere(context)),
-    vscode.commands.registerCommand("construct.refresh", () => companionDeferred() ? proxyCompanion({ type: "command", id: "refresh" }) : refreshAll()),
+    vscode.commands.registerCommand("construct.refresh", () => companionReady.then(() => companionDeferred() ? proxyCompanion({ type: "command", id: "refresh" }) : refreshAll())),
     vscode.commands.registerCommand("construct.showLogs", () => showLogs()),
     vscode.commands.registerCommand("construct.chooseTheme", () => openThemePicker(context)),
     vscode.commands.registerCommand("construct.switchInstance", () => runSwitchInstance()),
@@ -5233,7 +5244,7 @@ async function activate(context) {
     vscode.commands.registerCommand("construct.registerThisVm", () => runRegisterThisVm()),
     vscode.commands.registerCommand("construct.removeInstance", () => runRemoveInstance()),
     vscode.commands.registerCommand("construct.removeRemoteHost", () => runRemoveRemoteHost()),
-    vscode.commands.registerCommand("construct.openHostAdmin", () => companionDeferred() ? activateCompanionView("hostadmin") : hostAdminFeature().runOpenHostAdmin()),
+    vscode.commands.registerCommand("construct.openHostAdmin", () => companionReady.then(() => companionDeferred() ? activateCompanionView("hostadmin") : hostAdminFeature().runOpenHostAdmin())),
     // Clicking a VM notification's toast opens the control panel: Windows launches
     // the toast's vscode:// URI, which lands here. Data-free by design — the URI is
     // fixed in src/notify.js, so nothing VM-authored ever reaches this handler.
@@ -5292,8 +5303,12 @@ async function activate(context) {
       }
     },
   });
-  await companionClient.start(vscode.workspace.getConfiguration("construct").get("companion", "auto"));
-  companionStarting = false;
+  try {
+    await companionClient.start(vscode.workspace.getConfiguration("construct").get("companion", "auto"));
+  } finally {
+    companionStarting = false;
+    finishDetection();
+  }
   context.subscriptions.push(companionClient);
   maybeAutoOpenPanel(context);
   // The startup arm is the first evaluation of the mic preference; record which instance
@@ -5329,6 +5344,8 @@ function maybeAutoOpenPanel(context) {
 function deactivate() {
   companionDisposed = true;
   if (companionClient) companionClient.dispose();
+  for (const child of companionMigrationChildren) { try { child.kill(); } catch (_) {} }
+  companionMigrationChildren.clear();
   for (const timer of fallbackStartupTimers) clearTimeout(timer);
   fallbackStartupTimers.clear();
   // CLOSE THE SESSION CHAIN FIRST. Everything still queued on it is refused, and every

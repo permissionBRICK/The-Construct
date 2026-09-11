@@ -2938,3 +2938,8 @@ output suppressed. Success markers live in local `globalState`, one settings mar
 and one token marker per remote host; failed migrations remain retryable. Existing
 DPAPI files and SecretStorage are preserved. No Windows runtime validation is
 implied by the Linux HTTP/seam tests in `test/companion.test.js`.
+
+Messages arriving while initial detection is pending wait for the mode decision.
+Extension shutdown terminates a pending token-migration child; a failed native toast
+cannot raise a late VS Code fallback notification after handoff. Host-admin activation
+includes the current remote host slug when the selected instance supplies one.
