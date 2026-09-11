@@ -2542,7 +2542,7 @@ async function lifecycleWiring() {
   console.log("\n  -- extension.js wiring (source-pinned) --");
   const extSrc = fs.readFileSync(path.join(__dirname, "..", "extension.js"), "utf8");
   ok("activation: nothing forwarding-related is started at activation",
-    extSrc.indexOf("setTimeout(() => { noteForwarderConnected(); }, 3000);") >= 0 &&
+    extSrc.indexOf("later(noteForwarderConnected);") >= 0 &&
     extSrc.indexOf("void startForwarder(); }, 3000)") < 0);
   ok("activation: the only free reachability fact is the window's own Remote-SSH attachment",
     extSrc.indexOf("if (!remote.isConnectedToVm(safeRemoteAuthority(), activeCfg())) return;") >= 0 &&
