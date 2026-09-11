@@ -6,6 +6,7 @@ using Constructd.Core.Domain;
 using Constructd.Fakes;
 using Constructd.Sqlite;
 using Constructd.Tests.Support;
+using Constructd.Windows.Updates;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
@@ -14,6 +15,35 @@ namespace Constructd.Tests.Updates;
 public sealed class RecoveryTests
 {
     private static UpdateHandoff Handoff(string previous)=>new(new string('a',32),new string('b',40),"stage","publish","scripts","data","constructd",previous,"https://127.0.0.1:7462/api/v1/health",new string('c',40),"cli",new string('e',64),DateTimeOffset.UtcNow);
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Recovery_uses_backup_file_list_when_installer_ledger_has_none(bool emptyArray)
+    {
+        var root=Path.Combine(Path.GetTempPath(),"recovery-ledger-"+Guid.NewGuid().ToString("n"));
+        var h=Handoff(new string('c',40)) with {DataDir=root,PublishDir=Path.Combine(root,"publish"),ScriptsDir=Path.Combine(root,"scripts"),StagedPath=Path.Combine(root,"stage")};
+        var backup=Path.Combine(root,"updates","backup-"+h.UpdateId);
+        foreach(var dir in new[]{h.PublishDir,h.ScriptsDir,h.StagedPath,backup}) Directory.CreateDirectory(dir);
+        try
+        {
+            var exe=Path.Combine(h.PublishDir,"Constructd.Api.exe"); var obsolete=Path.Combine(h.ScriptsDir,"old.ps1");
+            await File.WriteAllTextAsync(exe,"old"); await File.WriteAllTextAsync(obsolete,"old script");
+            await File.WriteAllTextAsync(Path.Combine(backup,"previous-install.json"),emptyArray ? """{"source":"self-contained","files":[]}""" : """{"source":"self-contained"}""");
+            await UpdateFiles.WriteAsync(Path.Combine(backup,"files.json"),new[]{new UpdateFile("service/Constructd.Api.exe",UpdateFiles.Sha256(exe)),
+                new UpdateFile("scripts/old.ps1",UpdateFiles.Sha256(obsolete)),new UpdateFile("previous-install.json",new string('a',64))},default);
+            Assert.True(await UpdateRecoveryService.VerifyInstalledAsync(h,false,default));
+            Assert.False(await UpdateRecoveryService.VerifyInstalledAsync(h,false,default,requireLedger:true));
+            await File.WriteAllTextAsync(exe,"new"); File.Delete(obsolete);
+            await UpdateFiles.WriteAsync(Path.Combine(h.StagedPath,"verified.json"),new VerifiedFiles(h.UpdateId,h.Commit,DateTimeOffset.UtcNow,
+                [new("service/Constructd.Api.exe",UpdateFiles.Sha256(exe))]),default);
+            Assert.True(await UpdateRecoveryService.VerifyInstalledAsync(h,true,default));
+            await File.WriteAllTextAsync(obsolete,"old script");
+            Assert.False(await UpdateRecoveryService.VerifyInstalledAsync(h,true,default));
+            File.Delete(obsolete); await File.WriteAllTextAsync(exe,"tampered");
+            Assert.False(await UpdateRecoveryService.VerifyInstalledAsync(h,true,default));
+        }
+        finally { Directory.Delete(root,true); }
+    }
     [Fact]
     public async Task InitialReadFailureWithoutRecoveryEvidenceDoesNotSuppressBootstrap()
     {

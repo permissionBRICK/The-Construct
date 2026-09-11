@@ -67,16 +67,62 @@ function Get-UpdateTarget([string]$Path, $H, $Settings) {
     Assert-UpdateNoLinks $target
     return $target
 }
+function Invoke-UpdateRuntimeProbe {
+    if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) { return @{exitCode=127;output=@()} }
+    $prior=$ErrorActionPreference
+    try {
+        $ErrorActionPreference='Continue'
+        $arguments=@('--list-runtimes')
+        $output=@(& dotnet @arguments 2>&1)
+        return @{exitCode=$LASTEXITCODE;output=$output}
+    } catch { return @{exitCode=127;output=@()} }
+    finally { $ErrorActionPreference=$prior }
+}
 function Test-UpdateManifest([string]$StagedPath, [string]$Commit) {
     Assert-UpdateNoLinks $StagedPath
     $m = Read-UpdateJson (Join-Path $StagedPath 'manifest.json')
     $v = Read-UpdateJson (Join-Path $StagedPath 'verified.json')
     if (-not $m -or -not $v -or $m.schemaVersion -ne 1 -or $m.commit -ne $Commit -or $v.commit -ne $Commit -or
         $m.ref -ne 'refs/heads/main' -or $m.releaseTag -ne ('host-' + $Commit)) { throw 'Staged identity mismatch.' }
-    if ((Get-FileHash (Join-Path $StagedPath 'package.zip') -Algorithm SHA256).Hash -ne $m.payloadSha256) { throw 'Payload hash mismatch.' }
+    $source='self-contained'; if ($v.source) { $source=[string]$v.source }
+    if ($source -notin @('self-contained','framework-dependent')) { throw 'Invalid staged source.' }
+    $hash=$m.payloadSha256; $size=$m.payloadSizeBytes; $sumsHash=$m.sumsSha256; $declared=$m.payloadUncompressedSizeBytes
+    if ($source -eq 'framework-dependent') {
+        if ($m.frameworkDependentAsset -cne ('construct-host-'+$Commit.Substring(0,7)+'-win-x64-fdd.zip') -or
+            $m.frameworkDependentSha256 -cnotmatch '^[0-9a-f]{64}$' -or $m.frameworkDependentSumsSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+            $m.frameworkDependentSizeBytes -le 0 -or $m.frameworkDependentUncompressedSizeBytes -le 0 -or @($m.runtimes).Count -eq 0) { throw 'Invalid framework-dependent manifest.' }
+        $hash=$m.frameworkDependentSha256; $size=$m.frameworkDependentSizeBytes; $sumsHash=$m.frameworkDependentSumsSha256; $declared=$m.frameworkDependentUncompressedSizeBytes
+        $runtimeResult=Invoke-UpdateRuntimeProbe
+        if ($runtimeResult.exitCode -ne 0) { throw 'Required shared runtimes are unavailable.' }
+        foreach ($runtime in $m.runtimes) {
+            if ($runtime.name -cnotmatch '^Microsoft\.(NETCore|WindowsDesktop|AspNetCore)\.App$' -or $runtime.majorVersion -le 0) { throw 'Invalid shared runtime requirement.' }
+            $pattern='^'+[regex]::Escape($runtime.name)+' '+[regex]::Escape([string]$runtime.majorVersion)+'\.\d+\.\d+ \[.+\]$'
+            if (@($runtimeResult.output | Where-Object { $_ -is [string] -and $_ -cmatch $pattern }).Count -eq 0) { throw 'Required shared runtimes are unavailable.' }
+        }
+    }
+    $zip=Join-Path $StagedPath 'package.zip'
+    if ($null -ne $size -and ((Get-Item -LiteralPath $zip).Length -ne $size -or $size -le 0 -or $size -gt 1GB)) { throw 'Payload size mismatch.' }
+    if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $hash) { throw 'Payload hash mismatch.' }
+    if ($null -ne $declared -and (($declared -isnot [int] -and $declared -isnot [long]) -or $declared -le 0 -or $declared -gt 1GB)) { throw 'Invalid uncompressed size.' }
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive=[IO.Compression.ZipFile]::OpenRead($zip)
+    try {
+        if ($archive.Entries.Count -gt 20000) { throw 'Archive extraction limit exceeded.' }
+        $total=0L; $archiveNames=@{}
+        foreach ($entry in $archive.Entries) {
+            if (-not (Test-UpdatePath $entry.FullName) -or $archiveNames.ContainsKey($entry.FullName) -or $entry.Length -gt 256MB) { throw 'Archive extraction limit exceeded.' }
+            $archiveNames[$entry.FullName]=$true
+            $total+=$entry.Length
+            if ($total -gt 1GB -or ($null -ne $declared -and $total -gt $declared)) { throw 'Archive extraction limit exceeded.' }
+            $file=Join-Path (Join-Path $StagedPath 'extracted') $entry.FullName
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf) -or (Get-Item -LiteralPath $file).Length -ne $entry.Length) { throw 'Extracted entry size mismatch.' }
+        }
+        if ($null -ne $declared -and $total -ne $declared) { throw 'Uncompressed size mismatch.' }
+    } finally { $archive.Dispose() }
+    $m | Add-Member -NotePropertyName installedSource -NotePropertyValue $source -Force
     $extracted = Join-Path $StagedPath 'extracted'
     $sums = Join-Path $extracted 'SHA256SUMS'
-    if ((Get-FileHash $sums -Algorithm SHA256).Hash -ne $m.sumsSha256) { throw 'Hash list mismatch.' }
+    if ((Get-FileHash $sums -Algorithm SHA256).Hash -ne $sumsHash) { throw 'Hash list mismatch.' }
     $listed = @{}
     foreach ($line in [IO.File]::ReadAllLines($sums)) {
         if ($line -notmatch '^([0-9a-f]{64})  (.+)$') { throw 'Invalid hash list.' }
@@ -220,7 +266,7 @@ function Invoke-ConstructHostUpdate([string]$HandoffPath, [bool]$IsResume, [bool
                     if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Recurse -Force }
                     [IO.Directory]::CreateDirectory($backup) | Out-Null
                     $copyFiles = @()
-                    if ($previous) { $copyFiles = @($previous.files) }
+                    if ($previous.files -is [array] -and $previous.files.Count -gt 0) { $copyFiles = @($previous.files) }
                     else {
                         foreach ($pair in @(@('service',$h.publishDir), @('scripts',$h.scriptsDir))) {
                             foreach ($file in Get-ChildItem -LiteralPath $pair[1] -Recurse -File -Force) {
@@ -259,16 +305,18 @@ function Invoke-ConstructHostUpdate([string]$HandoffPath, [bool]$IsResume, [bool
                     $dest = Get-UpdateTarget $file.path $h $settings; [IO.Directory]::CreateDirectory((Split-Path $dest -Parent)) | Out-Null
                     [IO.File]::Copy((Join-Path (Join-Path $h.stagedPath 'extracted') $file.path),$dest,$true)
                 }
-                if ($previous) { foreach ($file in $previous.files) {
+                # The verified backup records the old file set even when the installer
+                # ledger had no file list. Reuse it on resume; never scan replaced files.
+                foreach ($file in @($backupFiles | Where-Object { $_.path.StartsWith('service/') -or $_.path.StartsWith('scripts/') })) {
                     if ($file.path -notin $newFiles.path) { $dest=Get-UpdateTarget $file.path $h $settings; if (Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest -Force } }
-                } }
+                }
                 & (Join-Path $h.scriptsDir 'service/host/Install-ConstructHost.ps1') -ScriptsDir $h.scriptsDir -PublishDir $h.publishDir -DataDir $h.dataDir -AclOnly
                 Set-Phase 'start'; Start-UpdateService $h.serviceName
                 Set-Phase 'health'
                 if (-not (Test-UpdateHealth $h $h.commit $manifest.database.schemaVersion $h.healthTimeoutSeconds {$r.healthAttempts++; Write-UpdateJson $recordPath $r})) { throw 'Update health failed.' }
             }
             Set-Phase 'commit'
-            Write-UpdateJson (Join-Path $h.publishDir 'install.json') @{commit=$h.commit;packageVersion=$manifest.packageVersion;installedAt=[DateTimeOffset]::UtcNow.ToString('o');previousCommit=$h.previousCommit;updateId=$h.updateId;files=$newFiles}
+            Write-UpdateJson (Join-Path $h.publishDir 'install.json') @{source=$manifest.installedSource;commit=$h.commit;packageVersion=$manifest.packageVersion;installedAt=[DateTimeOffset]::UtcNow.ToString('o');previousCommit=$h.previousCommit;updateId=$h.updateId;files=$newFiles}
             $r.outcome='succeeded'; Write-UpdateJson $recordPath $r
             & schtasks.exe /Delete /TN Construct-HostUpdate /F 2>$null | Out-Null
             # Pruning only after successful health and a durable terminal outcome.

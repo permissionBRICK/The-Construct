@@ -25,8 +25,8 @@ public sealed class PackageTests : IDisposable
         using(var archive=new ZipArchive(output,ZipArchiveMode.Create,true))
         {
             foreach(var file in files.Append(new("SHA256SUMS",sums)))
-            {var entry=archive.CreateEntry(file.Key,CompressionLevel.NoCompression);entry.ExternalAttributes=file.Key==extra ? attributes : 0;using var stream=entry.Open();stream.Write(file.Value);}
-            if(extra is not null&&!listed){var entry=archive.CreateEntry(extra,CompressionLevel.NoCompression);using var stream=entry.Open();stream.WriteByte(1);}
+            {var entry=archive.CreateEntry(file.Key,CompressionLevel.Optimal);entry.ExternalAttributes=file.Key==extra ? attributes : 0;using var stream=entry.Open();stream.Write(file.Value);}
+            if(extra is not null&&!listed){var entry=archive.CreateEntry(extra,CompressionLevel.Optimal);using var stream=entry.Open();stream.WriteByte(1);}
         }
         var zip=output.ToArray();var commit=new string('a',40);
         var m=new ReleaseManifest(1,commit,"refs/heads/main","test",DateTimeOffset.UtcNow,"permissionBRICK/The-Construct","host-"+commit,
@@ -106,19 +106,23 @@ public sealed class PackageTests : IDisposable
         Assert.False(await launcher.TryWriteFenceAsync(new("update",FenceDisposition.Closed,"system",DateTimeOffset.UtcNow),default));
         Assert.False(File.Exists(Path.Combine(_root,"updates","fence.json")));
     }
-    [Fact] public async Task Local_packager_without_signing_passes_the_production_extractor()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Local_packager_without_signing_passes_the_production_extractor(bool fdd)
     {
         var repo=new DirectoryInfo(AppContext.BaseDirectory);
         while(repo is not null && !File.Exists(Path.Combine(repo.FullName,"service/host/New-ConstructHostPackage.ps1"))) repo=repo.Parent;
         Assert.NotNull(repo);
         var publish=Path.Combine(_root,"publish");Directory.CreateDirectory(publish);
         await File.WriteAllBytesAsync(Path.Combine(publish,"Constructd.Api.exe"),RandomNumberGenerator.GetBytes(4096));
+        await File.WriteAllTextAsync(Path.Combine(publish,"Constructd.Api.runtimeconfig.json"), """{"runtimeOptions":{"frameworks":[{"name":"Microsoft.NETCore.App","version":"10.0.0"},{"name":"Microsoft.AspNetCore.App","version":"10.0.0"}]}}""");
         var output=Path.Combine(_root,"output");
-        await Run("pwsh","-NoProfile","-File",Path.Combine(repo.FullName,"service/host/New-ConstructHostPackage.ps1"),"-PublishDir",publish,"-OutputDir",output,"-Commit",new string('a',40));
+        await Run("pwsh","-NoProfile","-File",Path.Combine(repo.FullName,"service/host/New-ConstructHostPackage.ps1"),"-PublishDir",publish,"-FrameworkDependentPublishDir",publish,"-OutputDir",output,"-Commit",new string('a',40));
         var bytes=await File.ReadAllBytesAsync(Path.Combine(output,"manifest.json"));
         var manifest=JsonSerializer.Deserialize<ReleaseManifest>(bytes,UpdateFiles.Json)!;
-        File.Copy(Path.Combine(output,manifest.PayloadAsset),Path.Combine(_root,"package.zip"));
-        var files=PackageStager.ExtractAndVerify(_root,manifest);
+        File.Copy(Path.Combine(output,fdd ? manifest.FrameworkDependentAsset! : manifest.PayloadAsset),Path.Combine(_root,"package.zip"));
+        var files=PackageStager.ExtractAndVerify(_root,manifest,fdd ? "framework-dependent" : "self-contained");
         Assert.Contains(files,f=>f.Path=="scripts/service/host/Update-ConstructHost.ps1");
         Assert.Contains(files,f=>f.Path=="service/Constructd.Api.exe");
     }

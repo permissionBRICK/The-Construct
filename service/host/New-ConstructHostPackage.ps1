@@ -7,9 +7,11 @@ param(
     [Parameter(Mandatory=$true)][ValidatePattern('^[0-9a-f]{40}$')][string]$Commit,
     [string]$RepositoryRoot = (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent),
     [string]$Repository = 'permissionBRICK/The-Construct',
-    [DateTimeOffset]$BuiltAt = [DateTimeOffset]::UtcNow
+    [DateTimeOffset]$BuiltAt = [DateTimeOffset]::UtcNow,
+    [string]$FrameworkDependentPublishDir
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot '../../lib/Construct.Runtime.ps1')
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $utf8 = New-Object System.Text.UTF8Encoding($false)
@@ -48,7 +50,7 @@ try {
         $relative = $file.FullName.Substring($publishRoot.Length + 1).Replace('\','/')
         Copy-PayloadFile $file.FullName ('service/' + $relative)
     }
-    if (-not (Test-Path (Join-Path $payload 'service/Constructd.Api.exe'))) { throw 'Self-contained win-x64 publish output is required.' }
+    if (-not (Test-Path (Join-Path $payload 'service/Constructd.Api.exe'))) { throw 'Windows x64 publish output is required.' }
     # Only tracked files from this checkout; never working-tree data, build output or credentials.
     $tracked = @(& git -C $RepositoryRoot ls-files -- drivers lib bin config docs Create-AgentVM.ps1 Provision-AgentVM.ps1 service/host)
     if ($LASTEXITCODE -ne 0) { throw 'Cannot enumerate scripts.' }
@@ -66,8 +68,7 @@ try {
     }
     [IO.File]::WriteAllText((Join-Path $payload 'SHA256SUMS'), (($lines -join "`n") + "`n"), $utf8)
     $asset = 'construct-host-' + $Commit.Substring(0,7) + '-win-x64.zip'
-    # Stored entries keep the contract's 4x extraction bound true even for highly compressible scripts.
-    [IO.Compression.ZipFile]::CreateFromDirectory($payload, (Join-Path $OutputDir $asset), [IO.Compression.CompressionLevel]::NoCompression, $false)
+    [IO.Compression.ZipFile]::CreateFromDirectory($payload, (Join-Path $OutputDir $asset), [IO.Compression.CompressionLevel]::Optimal, $false)
     $databaseMetadata = Get-ConstructHostMigrationMetadata $RepositoryRoot
     $manifest = [ordered]@{
         schemaVersion=1; commit=$Commit; ref='refs/heads/main'; packageVersion=($BuiltAt.ToString('yyyy.MM.dd') + '+' + $Commit.Substring(0,7)); builtAt=$BuiltAt.ToString('o')
@@ -80,7 +81,28 @@ try {
         config=@{settingsSchemaVersion=1;minReadableBy=1;requiredKeys=@();newKeysWithDefaults=@('Constructd:HostAdmin:*')}
         compat=@{minInstalledCommitDate='2026-08-01';minSchemaVersionToUpdateFrom=0}
     }
+    $manifest.payloadSizeBytes=(Get-Item -LiteralPath (Join-Path $OutputDir $asset)).Length
+    $manifest.payloadUncompressedSizeBytes=[long](Get-ChildItem -LiteralPath $payload -Recurse -File -Force | Measure-Object Length -Sum).Sum
+    $archive=[IO.Compression.ZipFile]::OpenRead((Join-Path $OutputDir $asset))
+    try { Assert-ConstructArchiveLengths $archive $manifest.payloadUncompressedSizeBytes } finally { $archive.Dispose() }
+    if ($FrameworkDependentPublishDir) {
+        $fddOutput=Join-Path $OutputDir 'fdd-package'
+        try {
+            & $PSCommandPath -PublishDir $FrameworkDependentPublishDir -OutputDir $fddOutput -Commit $Commit -RepositoryRoot $RepositoryRoot -Repository $Repository -BuiltAt $BuiltAt
+            $fdd=Get-Content -LiteralPath (Join-Path $fddOutput 'manifest.json') -Raw | ConvertFrom-Json
+            $manifest.frameworkDependentAsset='construct-host-'+$Commit.Substring(0,7)+'-win-x64-fdd.zip'
+            Move-Item -LiteralPath (Join-Path $fddOutput $fdd.payloadAsset) -Destination (Join-Path $OutputDir $manifest.frameworkDependentAsset)
+            $manifest.frameworkDependentSha256=$fdd.payloadSha256
+            $manifest.frameworkDependentSizeBytes=$fdd.payloadSizeBytes
+            $manifest.frameworkDependentSumsSha256=$fdd.sumsSha256
+            $manifest.frameworkDependentUncompressedSizeBytes=$fdd.payloadUncompressedSizeBytes
+            $manifest.runtimes=@(Get-ConstructRequiredRuntimes (Join-Path $FrameworkDependentPublishDir 'Constructd.Api.runtimeconfig.json'))
+        } finally { if (Test-Path -LiteralPath $fddOutput) { Remove-Item -LiteralPath $fddOutput -Recurse -Force } }
+    }
     $manifestPath = Join-Path $OutputDir 'manifest.json'
     [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 10), $utf8)
     Copy-Item -LiteralPath (Join-Path $payload 'SHA256SUMS') -Destination (Join-Path $OutputDir 'SHA256SUMS')
+    $archiveSums=$manifest.payloadSha256+'  '+$asset+"`n"
+    if ($FrameworkDependentPublishDir) { $archiveSums+=$manifest.frameworkDependentSha256+'  '+$manifest.frameworkDependentAsset+"`n" }
+    [IO.File]::AppendAllText((Join-Path $OutputDir 'SHA256SUMS'),$archiveSums,$utf8)
 } finally { if (Test-Path -LiteralPath $payload) { Remove-Item -LiteralPath $payload -Recurse -Force } }

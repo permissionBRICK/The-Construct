@@ -16,6 +16,7 @@ public sealed record ManifestDatabase(int SchemaVersion, int MinReadableBy, IRea
 public sealed record ManifestCompat(string MinInstalledCommitDate, int MinSchemaVersionToUpdateFrom);
 /// <summary>Configuration compatibility (§11.2): appsettings is additive and never rewritten; a release that needs a new mandatory key lists it.</summary>
 public sealed record ManifestConfig(int SettingsSchemaVersion, int MinReadableBy, IReadOnlyList<string> RequiredKeys, IReadOnlyList<string> NewKeysWithDefaults);
+public sealed record SharedRuntime(string Name, int MajorVersion);
 public sealed record ReleaseManifest(
     int SchemaVersion,
     string Commit,
@@ -31,8 +32,16 @@ public sealed record ReleaseManifest(
     string UpdaterSha256,
     ManifestDatabase Database,
     ManifestConfig Config,
-    ManifestCompat Compat);
-public sealed record StagedUpdate(string UpdateId, ReleaseManifest Manifest, string StagedPath, IReadOnlyList<string> Files);
+    ManifestCompat Compat,
+    long? PayloadSizeBytes = null,
+    long? PayloadUncompressedSizeBytes = null,
+    string? FrameworkDependentAsset = null,
+    string? FrameworkDependentSha256 = null,
+    long? FrameworkDependentSizeBytes = null,
+    string? FrameworkDependentSumsSha256 = null,
+    long? FrameworkDependentUncompressedSizeBytes = null,
+    IReadOnlyList<SharedRuntime>? Runtimes = null);
+public sealed record StagedUpdate(string UpdateId, ReleaseManifest Manifest, string StagedPath, IReadOnlyList<string> Files, string Source = "self-contained");
 public interface IUpdateStager
 {
     Task<StagedUpdate> StageAsync(string updateId, ReleaseDescriptor release, IProgress<string>? progress, CancellationToken ct);

@@ -53,8 +53,13 @@ public sealed class GitHubReleaseSource(HttpClient client, long maxSourceBytes =
                  !Regex.IsMatch(row.GetProperty("sourceSha256").GetString()!, "^[0-9a-f]{64}$") ||
                  row.GetProperty("sourceSizeBytes").GetInt64() is <= 0 or > 1073741824))
                 throw new UpdateException("release-source-invalid-metadata");
-            ReleaseAsset[] assets = [new("manifest.json", new Uri(baseUrl + "manifest.json"), bytes.Length),
+            var manifest = JsonSerializer.Deserialize<ReleaseManifest>(bytes.ToArray(), UpdateFiles.Json) ?? throw new UpdateException("release-source-invalid-metadata");
+            try { ManifestRules.ValidateVariants(manifest); }
+            catch (UpdateException) { throw new UpdateException("release-source-invalid-metadata"); }
+            List<ReleaseAsset> assets = [new("manifest.json", new Uri(baseUrl + "manifest.json"), bytes.Length),
                                      new(payload, new Uri(baseUrl + payload), size)];
+            if (manifest.FrameworkDependentAsset is { } fdd)
+                assets.Add(new(fdd, new Uri(baseUrl + fdd), manifest.FrameworkDependentSizeBytes!.Value));
             foreach (var asset in assets) _allowed[asset.Url] = asset.SizeBytes;
             return [new(tag, commit, row.GetProperty("builtAt").GetDateTimeOffset(), assets)];
         }

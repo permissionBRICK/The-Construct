@@ -2,7 +2,7 @@
 
 Construct uses one published commit for source, the control panel, and the Windows
 host. Every push to `main` runs `.github/workflows/host-release.yml`: build the
-self-contained Windows x64 executable, package its scripts and the source archive,
+self-contained and framework-dependent Windows x64 executables, package their scripts and the source archive,
 generate the manifest, then publish. **No tests run in GitHub Actions.** Run the
 regression checks locally before pushing. The ISO builder retains its separate
 `config/iso-builder.json` dependency pin.
@@ -14,8 +14,17 @@ remains at the latest-release URL. Companion discovery still selects its own tag
 
 
 The immutable tag remains `host-<40-character commit>` for compatibility. Its assets
-are `construct-host-<commit7>-win-x64.zip`, `construct-source-<commit40>.zip`, and
-`manifest.json`. Both the panel and Windows host discover the current release at:
+are:
+
+| Asset | Contents |
+|---|---|
+| `construct-host-<commit7>-win-x64.zip` | Self-contained host, scripts and updater |
+| `construct-host-<commit7>-win-x64-fdd.zip` | Framework-dependent host, same scripts and updater |
+| `construct-source-<commit40>.zip` | Pinned Construct source archive |
+| `manifest.json` | Identity, compatibility, runtime requirements, hashes and sizes |
+| `SHA256SUMS` | Host payload file hashes and the three archive hashes |
+
+Both the panel and Windows host discover the current release at:
 
 ```
 https://github.com/permissionBRICK/The-Construct/releases/latest/download/manifest.json
@@ -23,7 +32,7 @@ https://github.com/permissionBRICK/The-Construct/releases/latest/download/manife
 
 This direct asset download does not use GitHub's REST API quota. The manifest
 includes the repository, main ref, commit, immutable tag, build time, package
-version, both archive names, sizes and SHA-256 hashes, plus host database/config
+version, archive names, sizes and SHA-256 hashes, plus host database/config
 compatibility. Clients validate the identity and use `/releases/download/<tag>/...`
 for subsequent downloads, even when another release becomes latest mid-update.
 Installed source markers come from the downloaded revision or local checkout, never
@@ -42,13 +51,52 @@ on retry. GitHub may coalesce pending runs during rapid pushes; clients get the 
 successfully published commit rather than every intermediate push.
 
 The host ZIP contains `service/`, `scripts/`, `updater/Update-ConstructHost.ps1`, and
-`SHA256SUMS`; the detached manifest avoids a circular ZIP hash. Stored compression
-guarantees the host extraction ratio bound. `SHA256SUMS` covers every host payload
+`SHA256SUMS`; the detached manifest avoids a circular ZIP hash. Both host ZIPs use Optimal
+compression. `payloadUncompressedSizeBytes` and
+`frameworkDependentUncompressedSizeBytes` declare the respective total inflated
+bytes, including `SHA256SUMS`. Extractors replace the former 4× ratio rule with
+absolute limits: 256 MiB per entry, 1 GiB total, at most 20,000 files, and an exact
+match to the manifest total. They check central-directory lengths and bounded
+inflated data before creating destination files. File hashes also catch ZIP readers
+that truncate a dishonest entry to its declared length. The updater checks the
+archive's entry lengths against staged files before replacement. Legacy manifests
+without totals retain the absolute limits. `SHA256SUMS` covers every host payload
 file. The source ZIP uses compressed tracked files and carries `.construct-revision`.
 The control panel packages its VSIX locally without Node or dependency installation.
 Releases never include live settings, data, private keys, or the separately downloaded
 ISO executable. Agent tool version checks (Codex, OpenCode, T3 nightly) are independent
 and can still use their upstream APIs.
+
+Guided host conversion and service staging prefer the FDD package when
+`dotnet --list-runtimes` lists all manifest requirements at the required major
+version. The current host needs `Microsoft.NETCore.App` and
+`Microsoft.AspNetCore.App` at major 10; the Companion additionally needs
+`Microsoft.WindowsDesktop.App`. Requirements come from each FDD publish's
+runtimeconfig, which reflects its target framework and transitive framework
+references. Missing dotnet, missing frameworks, and preview-only runtimes select
+the self-contained asset. An SDK never triggers an automatic Companion build.
+
+The existing `payloadAsset`, `payloadSha256`, `payloadSizeBytes` and `sumsSha256`
+continue to describe the self-contained package. Additive
+`frameworkDependentAsset`, `frameworkDependentSha256`,
+`frameworkDependentSizeBytes`, `frameworkDependentSumsSha256`,
+`frameworkDependentUncompressedSizeBytes` and `runtimes` describe the alternative.
+Each `runtimes` entry has `name` and `majorVersion`. Manifests without these fields
+keep self-contained selection. Publication verifies both packages and uploads
+both before making the draft public.
+
+Staging pins the selected variant in its verified record and staged descriptor.
+Re-verification and the independent updater use that variant's hashes and sizes.
+If its runtimes disappear before apply, verification refuses the update before
+stopping the service. Successful install records `source` as `framework-dependent`
+or `self-contained` in `install.json`. `Install-ConstructHost.ps1` consumes an
+already-published directory; it validates FDD runtime availability and records the
+variant for a fresh installation. It preserves an existing updater-owned ledger
+byte for byte, including ISO timestamp strings on Windows PowerShell 5.1. It does
+not download or build the service. When a previous ledger has no non-empty file
+array, the updater scans the service/scripts trees for its backup and uses that
+verified backup's file list for stale-file removal and rollback. Health and rollback rules are
+unchanged.
 
 Host updates use GitHub Releases over HTTPS, matching the other Construct update paths.
 No signing keys or signing secrets are required on hosts, development VMs or CI.
@@ -88,6 +136,7 @@ For a local package, publish to a new directory, then invoke:
 
 ```powershell
 .\service\host\New-ConstructHostPackage.ps1 -PublishDir C:\Temp\publish `
+  -FrameworkDependentPublishDir C:\Temp\publish-fdd `
   -OutputDir C:\Temp\host-release -Commit <commit40>
 python scripts/package-construct-release.py --output C:\Temp\host-release --commit <commit40> --repository permissionBRICK/The-Construct
 ```

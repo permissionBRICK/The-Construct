@@ -144,23 +144,37 @@ function Wait-ConversionErrorClose {
         }
     } catch { } # No console input handle: retain the original failure exit code.
 }
-function Expand-VerifiedPackage($Zip, $Destination) {
+function Expand-VerifiedPackage($Zip, $Destination, $Payload) {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $archive = [IO.Compression.ZipFile]::OpenRead($Zip)
-    $seen = @{}; $total = 0L
+    $seen = @{}
     try {
+        Assert-ConstructArchiveLengths $archive $Payload.uncompressedSizeBytes
         foreach ($entry in $archive.Entries) {
             $rel = $entry.FullName.Replace('\','/')
-            if ($rel.EndsWith('/')) { continue }
+            if ($rel.EndsWith('/')) { throw 'Directory entries are not supported.' }
             if ($rel -notmatch '^(service|scripts|updater)/' -and $rel -ne 'SHA256SUMS') { throw 'Unexpected package path.' }
-            if ($rel -match '(^|/)\.\.?(/|$)|:|^/' -or $seen.ContainsKey($rel)) { throw 'Unsafe package path.' }
-            $total += $entry.Length
-            if ($total -gt 1GB) { throw 'Host package exceeds extraction limit.' }
+            if ($rel.Length -gt 240 -or $rel -match '(^|/)\.\.?(/|$)|[:*?"<>|\x00-\x1f]|^/|(^|/)[^/]*[. ](/|$)|(^|/)(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.|/|$)' -or $seen.ContainsKey($rel)) { throw 'Unsafe package path.' }
             $seen[$rel] = $true
+        }
+        $hashes=@{}
+        foreach ($entry in $archive.Entries) { $hashes[$entry.FullName.Replace('\','/')]=Expand-ConstructBoundedEntry $entry $null -Hash }
+        if ($hashes['SHA256SUMS'] -ne $Payload.sumsSha256) { throw 'Host checksum list mismatch.' }
+        $reader=New-Object IO.StreamReader($archive.GetEntry('SHA256SUMS').Open())
+        try {
+            $covered=@{}
+            while ($null -ne ($line=$reader.ReadLine())) {
+                if ($line -cnotmatch '^([0-9a-f]{64})  (.+)$' -or $covered.ContainsKey($Matches[2]) -or $hashes[$Matches[2]] -ne $Matches[1]) { throw 'Host file checksum mismatch.' }
+                $covered[$Matches[2]]=$true
+            }
+            if ($covered.Count -ne $hashes.Count-1) { throw 'Host package contains unlisted files.' }
+        } finally { $reader.Dispose() }
+        foreach ($entry in $archive.Entries) {
+            $rel=$entry.FullName.Replace('\','/')
             $target = Join-Path $Destination $rel
             Assert-NoLinks $target
             [IO.Directory]::CreateDirectory((Split-Path -Parent $target)) | Out-Null
-            [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $target, $true)
+            Expand-ConstructBoundedEntry $entry $target
         }
     } finally { $archive.Dispose() }
 }
@@ -216,11 +230,14 @@ try {
             $manifest.payloadSha256 -notmatch '^[a-f0-9]{64}$' -or $manifest.features -notcontains 'local-vm-adoption-v1') {
             throw 'The published host package does not yet support guided conversion. Update Construct after the host release finishes.'
         }
+        . (Join-Path $PSScriptRoot '../../lib/Construct.Runtime.ps1')
+        Assert-ConstructFrameworkDependentManifest $manifest ('construct-host-'+$manifest.commit.Substring(0,7)+'-win-x64-fdd.zip')
+        $payload=Select-ConstructReleasePayload $manifest
         $zip = Join-Path $root 'package.zip'; $stage = Join-Path $root 'package'
         $web = New-Object Net.WebClient
-        try { $web.DownloadFile(($base + $manifest.payloadAsset), $zip) } finally { $web.Dispose() }
-        if ((Get-Item -LiteralPath $zip).Length -ne $manifest.payloadSizeBytes -or (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash -ne $manifest.payloadSha256) { throw 'Host package checksum mismatch.' }
-        Expand-VerifiedPackage $zip $stage
+        try { $web.DownloadFile(($base + $payload.asset), $zip) } finally { $web.Dispose() }
+        if ((Get-Item -LiteralPath $zip).Length -ne $payload.sizeBytes -or (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash -ne $payload.sha256) { throw 'Host package checksum mismatch.' }
+        Expand-VerifiedPackage $zip $stage $payload
         [IO.Directory]::CreateDirectory($scripts) | Out-Null
         Copy-Item -Path (Join-Path $stage 'scripts\*') -Destination $scripts -Recurse -Force
         [IO.Directory]::CreateDirectory($publish) | Out-Null
@@ -247,7 +264,7 @@ try {
         if ($plan.keepAwake) { $installArgs += '-KeepHostAwake' } else { $installArgs += '-SkipPowerSettings' }
         & powershell.exe @installArgs
         if ($LASTEXITCODE -ne 0) { throw 'Host installation failed; fix the reported issue and retry conversion.' }
-        Write-JsonFile (Join-Path $publish 'install.json') @{commit=$manifest.commit;packageVersion=$manifest.packageVersion;installedAt=[DateTimeOffset]::UtcNow.ToString('o');files=@()}
+        Write-JsonFile (Join-Path $publish 'install.json') @{source=$payload.source;commit=$manifest.commit;packageVersion=$manifest.packageVersion;installedAt=[DateTimeOffset]::UtcNow.ToString('o');files=@()}
         $journal | Add-Member -NotePropertyName publicHost -NotePropertyValue $plan.publicHost -Force
         $journal.installed = $true; Write-JsonFile $journalPath $journal
         Remove-Item -LiteralPath $zip

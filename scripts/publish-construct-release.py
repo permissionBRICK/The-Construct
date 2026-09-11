@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Publish complete immutable assets; call only under the workflow's shared lock."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -39,9 +40,18 @@ def publish(output):
     manifest = json.loads((output / 'manifest.json').read_text())
     if manifest['commit'] != commit or manifest['repository'] != os.environ['GITHUB_REPOSITORY']:
         raise ValueError('Release identity mismatch')
-    assets = [output / name for name in ('manifest.json', manifest['payloadAsset'], manifest['sourceAsset'])]
+    expected = {'payload': f'construct-host-{commit[:7]}-win-x64.zip',
+                'frameworkDependent': f'construct-host-{commit[:7]}-win-x64-fdd.zip',
+                'source': f'construct-source-{commit}.zip'}
+    if manifest.get('releaseTag') != 'host-' + commit or any(manifest.get(key + 'Asset') != name for key, name in expected.items()):
+        raise ValueError('Invalid release asset identity')
+    assets = [output / name for name in ('manifest.json', *expected.values(), 'SHA256SUMS')]
     if not all(p.is_file() for p in assets):
         raise ValueError('Incomplete release')
+    for key, name in expected.items():
+        asset = output / name
+        if asset.stat().st_size != manifest[key + 'SizeBytes'] or hashlib.sha256(asset.read_bytes()).hexdigest() != manifest[key + 'Sha256']:
+            raise ValueError('Release asset checksum mismatch')
     tag = 'host-' + commit
     latest = api('/releases/latest')
     latest_tag = latest['tag_name'] if latest else ''

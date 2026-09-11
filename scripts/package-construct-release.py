@@ -18,6 +18,13 @@ def package(root, output, commit, repository):
     manifest = json.loads(manifest_path.read_text())
     if manifest['commit'] != commit or manifest['releaseTag'] != 'host-' + commit or manifest['repository'] != repository:
         raise ValueError('Host package identity does not match source')
+    for prefix, expected in [('payload', f'construct-host-{commit[:7]}-win-x64.zip'),
+                             ('frameworkDependent', f'construct-host-{commit[:7]}-win-x64-fdd.zip')]:
+        if manifest[prefix + 'Asset'] != expected:
+            raise ValueError('Invalid host asset identity')
+        asset = output / expected
+        if asset.stat().st_size != manifest[prefix + 'SizeBytes'] or hashlib.sha256(asset.read_bytes()).hexdigest() != manifest[prefix + 'Sha256']:
+            raise ValueError('Host asset checksum mismatch')
     source = output / f'construct-source-{commit}.zip'
     prefix = repository.split('/')[1] + '-main/'
     subprocess.run(['git', '-C', str(root), 'archive', '--format=zip', '--prefix=' + prefix,
@@ -33,6 +40,8 @@ def package(root, output, commit, repository):
     manifest.update(sourceAsset=source.name, sourceSha256=source_hash,
                     sourceSizeBytes=source.stat().st_size,
                     payloadSizeBytes=(output / manifest['payloadAsset']).stat().st_size)
+    with (output / 'SHA256SUMS').open('a') as sums:
+        sums.write(f'{source_hash}  {source.name}\n')
     manifest_path.write_text(json.dumps(manifest, indent=2) + '\n')
 
 

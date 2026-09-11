@@ -10,8 +10,23 @@ public sealed class UpdateException(string code, string? detail = null) : Except
 public static class ManifestRules
 {
     public static bool Hash(string? value) => value is not null && Regex.IsMatch(value, "^[0-9a-f]{64}$");
+    public static void ValidateVariants(ReleaseManifest m)
+    {
+        if (m.PayloadSizeBytes is <= 0 or > 1073741824 || m.PayloadUncompressedSizeBytes is <= 0 or > 1073741824)
+            throw new UpdateException("incompatible");
+        if (m.FrameworkDependentAsset is null && m.FrameworkDependentSha256 is null && m.FrameworkDependentSizeBytes is null &&
+            m.FrameworkDependentSumsSha256 is null && m.FrameworkDependentUncompressedSizeBytes is null && m.Runtimes is null) return;
+        if (m.Commit is null || m.Commit.Length != 40 || m.FrameworkDependentAsset != $"construct-host-{m.Commit[..7]}-win-x64-fdd.zip" ||
+            !Hash(m.FrameworkDependentSha256) || !Hash(m.FrameworkDependentSumsSha256) ||
+            m.FrameworkDependentSizeBytes is not (> 0 and <= 1073741824) || m.FrameworkDependentUncompressedSizeBytes is not (> 0 and <= 1073741824) ||
+            m.Runtimes is not { Count: > 0 } || m.Runtimes.Any(r => r is null || r.MajorVersion <= 0 ||
+                r.Name is not ("Microsoft.NETCore.App" or "Microsoft.AspNetCore.App" or "Microsoft.WindowsDesktop.App")) ||
+            m.Runtimes.Select(r => r.Name).Distinct(StringComparer.Ordinal).Count() != m.Runtimes.Count)
+            throw new UpdateException("incompatible");
+    }
     public static void Validate(ReleaseManifest m, string repository, ReleaseDescriptor release)
     {
+        ValidateVariants(m);
         if (m.SchemaVersion != 1) throw new UpdateException("incompatible");
         if (!Regex.IsMatch(m.Commit ?? "", "^[0-9a-f]{40}$") || m.Ref != "refs/heads/main" ||
             m.Repository != repository || m.ReleaseTag != "host-" + m.Commit || release.Tag != m.ReleaseTag ||

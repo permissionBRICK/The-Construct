@@ -2,6 +2,10 @@
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot '../host/Update-ConstructHost.ps1') -LibraryOnly
 $script:passed=0
+function dotnet { $script:runtimeArgv=@($args); $global:LASTEXITCODE=0; 'Microsoft.NETCore.App 10.0.1 [/shared]' }
+$probe=Invoke-UpdateRuntimeProbe
+if (($script:runtimeArgv -join '|') -ne '--list-runtimes' -or $probe.exitCode -ne 0) { throw 'Updater runtime argv changed.' }
+Remove-Item Function:dotnet
 function Assert($Condition,[string]$Message) { if(-not $Condition){throw $Message};$script:passed++ }
 foreach($path in @('../bad','/bad','C:/bad','service/CON.txt','service/foo.','service/foo ','service/a:ads','scripts/a\b')) {
     Assert (-not (Test-UpdatePath $path)) ('unsafe path accepted: '+$path)
@@ -44,7 +48,8 @@ function New-Fixture([string]$Name) {
         $files+=@{path=$pair[0];sha256=(Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant()}
     }
     $sums=Join-Path $extracted 'SHA256SUMS';[IO.File]::WriteAllText($sums,(($files|ForEach-Object {$_.sha256+'  '+$_.path}) -join "`n")+"`n")
-    [IO.File]::WriteAllText((Join-Path $stage 'package.zip'),'verified-package-fixture')
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [IO.Compression.ZipFile]::CreateFromDirectory($extracted,(Join-Path $stage 'package.zip'),[IO.Compression.CompressionLevel]::Optimal,$false)
     Write-UpdateJson (Join-Path $stage 'manifest.json') @{schemaVersion=1;commit=('a'*40);ref='refs/heads/main';releaseTag=('host-'+('a'*40));packageVersion='test';payloadSha256=(Get-FileHash (Join-Path $stage 'package.zip') -Algorithm SHA256).Hash.ToLowerInvariant();sumsSha256=(Get-FileHash $sums -Algorithm SHA256).Hash.ToLowerInvariant();updaterPath='updater/Update-ConstructHost.ps1';updaterSha256=$files[3].sha256;database=@{schemaVersion=600;minReadableBy=0;breakingMigrations=@()}}
     Write-UpdateJson (Join-Path $stage 'verified.json') @{updateId=$id;commit=('a'*40);files=$files}
     $h=@{updateId=$id;commit=('a'*40);previousCommit=('b'*40);stagedPath=$stage;publishDir=$publish;scriptsDir=$scripts;dataDir=$data;serviceName='test-only';previousSchemaVersion=100;healthTimeoutSeconds=30}
@@ -52,6 +57,28 @@ function New-Fixture([string]$Name) {
     return @{h=$h;path=$hp;record=(Join-Path (Join-Path $data 'updates') 'last-update.json')}
 }
 try {
+    # FDD apply uses the staged variant, validates runtimes before stopping, and records its source.
+    $f=New-Fixture 'fdd-success'
+    $m=Read-UpdateJson (Join-Path $f.h.stagedPath 'manifest.json')
+    $total=[long](Get-ChildItem (Join-Path $f.h.stagedPath 'extracted') -Recurse -File | Measure-Object Length -Sum).Sum
+    $m | Add-Member -NotePropertyMembers @{frameworkDependentAsset='construct-host-aaaaaaa-win-x64-fdd.zip';frameworkDependentSha256=$m.payloadSha256;frameworkDependentSumsSha256=$m.sumsSha256;frameworkDependentSizeBytes=(Get-Item (Join-Path $f.h.stagedPath 'package.zip')).Length;frameworkDependentUncompressedSizeBytes=$total;runtimes=@(@{name='Microsoft.NETCore.App';majorVersion=10},@{name='Microsoft.AspNetCore.App';majorVersion=10})}
+    $m.payloadSha256='0'*64; $m.sumsSha256='0'*64
+    Write-UpdateJson (Join-Path $f.h.stagedPath 'manifest.json') $m
+    $v=Read-UpdateJson (Join-Path $f.h.stagedPath 'verified.json'); $v | Add-Member -NotePropertyName source -NotePropertyValue 'framework-dependent'
+    Write-UpdateJson (Join-Path $f.h.stagedPath 'verified.json') $v
+    $script:runtimeLines=@('Microsoft.NETCore.App 10.0.1 [/shared]','Microsoft.AspNetCore.App 10.0.1 [/shared]')
+    function Invoke-UpdateRuntimeProbe { return @{exitCode=0;output=$script:runtimeLines} }
+    Assert ((Test-UpdateManifest $f.h.stagedPath $f.h.commit).installedSource -eq 'framework-dependent') 'FDD hashes selected independently of legacy fields'
+    $script:runtimeLines=@('Microsoft.NETCore.App 10.0.1 [/shared]')
+    $rejected=$false; try { Test-UpdateManifest $f.h.stagedPath $f.h.commit | Out-Null } catch { $rejected=$true }
+    Assert $rejected 'Missing ASP.NET runtime refused before apply'
+    $script:runtimeLines+=@('Microsoft.AspNetCore.App 10.0.1 [/shared]')
+    $m.frameworkDependentUncompressedSizeBytes=1; Write-UpdateJson (Join-Path $f.h.stagedPath 'manifest.json') $m
+    $rejected=$false; try { Test-UpdateManifest $f.h.stagedPath $f.h.commit | Out-Null } catch { $rejected=$true }
+    Assert $rejected 'Updater checks declared inflated total'
+    $m.frameworkDependentUncompressedSizeBytes=$total; Write-UpdateJson (Join-Path $f.h.stagedPath 'manifest.json') $m
+    Assert ((Invoke-ConstructHostUpdate $f.path $false $false) -eq 0) 'FDD apply succeeds with runtime fakes'
+    Assert ((Read-UpdateJson (Join-Path $f.h.publishDir 'install.json')).source -eq 'framework-dependent') 'FDD source recorded'
     $single=Join-Path $root 'single.json';Write-UpdateJson $single @(@{path='service/one.dll';sha256=('a'*64)})
     Assert ([IO.File]::ReadAllText($single).TrimStart().StartsWith('[')) 'single-file ledger lost array shape'
     $f=New-Fixture 'success';$settingsBefore=[IO.File]::ReadAllText((Join-Path $f.h.publishDir 'appsettings.Production.json'))
@@ -82,6 +109,37 @@ try {
     Assert ([IO.File]::ReadAllText((Join-Path $f.h.publishDir 'Constructd.Api.exe')) -eq 'old') 'old binary not restored'
     Assert (-not (Test-Path (Join-Path $f.h.publishDir 'new.dll'))) 'added DLL not removed'
     Assert (Test-Path (Join-Path $f.h.publishDir 'removed.dll')) 'old owned DLL missing'
+    # First updates from manual installs/conversion have no owned-file ledger yet.
+    foreach ($shape in @('source-only','empty-files')) {
+        foreach ($rollback in @($false,$true)) {
+            $f=New-Fixture ($shape+'-'+$rollback)
+            $ledger=@{source='self-contained'}
+            if ($shape -eq 'empty-files') { $ledger.files=@() }
+            $ledgerPath=Join-Path $f.h.publishDir 'install.json'; Write-UpdateJson $ledgerPath $ledger
+            $ledgerBytes=[IO.File]::ReadAllBytes($ledgerPath)
+            $oldScript=Join-Path $f.h.scriptsDir 'lib/old.ps1'
+            [IO.Directory]::CreateDirectory((Split-Path $oldScript -Parent)) | Out-Null
+            [IO.File]::WriteAllText($oldScript,'old script')
+            $script:failNew=$rollback
+            Assert ((Invoke-ConstructHostUpdate $f.path $false $false) -eq 0) 'First update has a complete backup and recoverable apply'
+            $record=Read-UpdateJson $f.record
+            $expected='succeeded'; if ($rollback) { $expected='rolledBack' }
+            Assert ($record.outcome -eq $expected) 'First update outcome'
+            Assert ([IO.File]::ReadAllText((Join-Path $record.backupPath 'service/Constructd.Api.exe')) -eq 'old') 'Fallback scan backed up old executable'
+            Assert ([IO.File]::ReadAllText((Join-Path $record.backupPath 'service/removed.dll')) -eq 'old-owned') 'Fallback scan backed up old DLL'
+            Assert ([IO.File]::ReadAllText((Join-Path $record.backupPath 'scripts/lib/old.ps1')) -eq 'old script') 'Fallback scan backed up old scripts'
+            if ($rollback) {
+                Assert ([IO.File]::ReadAllText((Join-Path $f.h.publishDir 'Constructd.Api.exe')) -eq 'old') 'First-update rollback restores executable'
+                Assert ([IO.File]::ReadAllText((Join-Path $f.h.publishDir 'removed.dll')) -eq 'old-owned') 'First-update rollback restores removed DLL'
+                Assert ([IO.File]::ReadAllText($oldScript) -eq 'old script') 'First-update rollback restores removed scripts'
+                Assert ([Convert]::ToBase64String([IO.File]::ReadAllBytes($ledgerPath)) -ceq [Convert]::ToBase64String($ledgerBytes)) 'First-update rollback restores original ledger bytes'
+                Assert (-not (Test-Path (Join-Path $f.h.publishDir 'new.dll'))) 'First-update rollback removes new files'
+            } else {
+                Assert (-not (Test-Path (Join-Path $f.h.publishDir 'removed.dll')) -and -not (Test-Path $oldScript)) 'Fallback backup file set drives stale-file removal'
+            }
+        }
+    }
+    $script:failNew=$true
     $f=New-Fixture 'recovery-failure';$script:failAll=$true
     Assert ((Invoke-ConstructHostUpdate $f.path $false $false) -eq 1) 'bad rollback reported success'
     Assert ((Read-UpdateJson $f.record).outcome -eq 'recoveryFailed') 'recovery record missing'
