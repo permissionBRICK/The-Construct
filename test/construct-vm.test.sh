@@ -86,9 +86,11 @@ case "${path}" in
     if [[ "${VM_SCENARIO:-}" == inventory ]]; then
       body='[{"name":"kid-one","state":"running","cpu":2,"ramGb":1,"diskGb":20,"hardware":null,"lease":{"state":"active","expiresAt":"2026-09-07T10:00:00Z","overdue":true},"currentOperation":{"jobId":"job-active","kind":"vm-shutdown"}}]'
     fi
+    if [[ "${VM_SCENARIO:-}" == shared-only ]]; then body='[]'; fi
     ;;
   /api/v1/vms/shared)
     body='[{"name":"shared-one","state":"running","sharing":"host","hardware":{"cpus":1,"ramMb":512,"diskGb":8},"lease":{"expiresAt":"2026-09-08T00:00:00Z"}}]'
+    if [[ "${VM_SCENARIO:-}" == shared-duplicate ]]; then body='[{"name":"KID-ONE","sharing":"host"},{"name":"shared-one","sharing":"host"}]'; fi
     ;;
   /api/v1/vms/kid-one)
     if [[ "${method}" == DELETE ]]; then code=202; body='{"jobId":"job-life"}'
@@ -239,7 +241,7 @@ ok 'identity preserves the token kind' jq -e '.tokenKind=="legacy"' "${tmp}/iden
 
 reset_stub
 vm list --json >"${tmp}/list.json" 2>"${tmp}/list.err"
-ok 'list returns the API array as JSON' jq -e 'length==1 and .[0].name=="kid-one"' "${tmp}/list.json"
+ok 'list includes owned and shared guests by default' jq -e 'length==2 and (map(.name)|sort)==["kid-one","shared-one"]' "${tmp}/list.json"
 ok 'every command discovers identity first' test "$(head -n 1 "${stub}/state/requests")" = $'GET\t/api/v1/vms/parent-vm/identity'
 ok 'list uses the parent filter' grep -q $'GET\t/api/v1/vms?parent=parent-vm' "${stub}/state/requests"
 ok 'the token is sent through a header file' grep -q '^Authorization: VmToken sentinel-vm-token$' "${stub}/state/headers"
@@ -247,8 +249,19 @@ ok 'the token never appears in curl argv' sh -c "! tr '\0' '\n' <'${stub}/state/
 ok 'the pinned CA is always passed to curl' sh -c "tr '\0' '\n' <'${stub}/state/argv' | grep -A1 -- --cacert | grep -q '${ca_file}'"
 
 reset_stub
+vm list --owned-only --json >"${tmp}/owned.json" 2>/dev/null
+ok '--owned-only lists only this primary children' jq -e 'length==1 and .[0].name=="kid-one"' "${tmp}/owned.json"
+ok '--owned-only does not request the shared inventory' sh -c "! grep -q '/api/v1/vms/shared' '${stub}/state/requests'"
+
+reset_stub
 vm list --all-shared --json >"${tmp}/shared.json" 2>/dev/null
 ok '--all-shared combines owned and shared children' jq -e 'length==2 and ((map(.name)|index("shared-one"))!=null)' "${tmp}/shared.json"
+
+reset_stub
+VM_SCENARIO=shared-only vm list --json >"${tmp}/shared-only.json" 2>/dev/null
+ok 'shared guests appear even without any owned children' jq -e 'length==1 and .[0].name=="shared-one"' "${tmp}/shared-only.json"
+VM_SCENARIO=shared-duplicate vm list --json >"${tmp}/shared-duplicate.json" 2>/dev/null
+ok 'merging inventory deduplicates VM names case insensitively' jq -e 'length==2 and ([.[]|select(.name|ascii_downcase=="kid-one")]|length)==1' "${tmp}/shared-duplicate.json"
 
 reset_stub
 vm inspect kid-one --json >"${tmp}/inspect.json" 2>/dev/null

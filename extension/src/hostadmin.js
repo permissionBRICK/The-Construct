@@ -911,7 +911,7 @@ function childrenCardState(input = {}) {
     visible: true,
     items: items || [],
     // A read that failed on a host that HAS the feature: say so, keep the last rows.
-    problem: items ? "" : (str(input.problem) || "could not read the child VMs"),
+    problem: str(input.problem) || (items ? "" : "could not read the child VMs"),
   };
 }
 

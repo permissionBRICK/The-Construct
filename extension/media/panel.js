@@ -604,7 +604,7 @@
   }
 
   // ── Child VMs (host-administration contract §10.2) ──────────────────────────
-  // The minimal user view: this primary's children with EXACTLY two actions. `null`
+  // The user view: this primary's children and accessible shared guests. `null`
   // hides the card (a local instance, or a host whose service has no child VMs); the
   // extension validates every child name against what it listed, so the buttons only
   // carry the name. Shut down is a graceful request — never a save or a force-off — and
@@ -615,7 +615,7 @@
     if (!c || !c.visible) { mod.hidden = true; return; }
     mod.hidden = false;
     const items = Array.isArray(c.items) ? c.items : [];
-    text("childrenMeta", c.primary ? "under " + c.primary : "");
+    text("childrenMeta", c.primary ? c.primary + " + shared guests" : "");
     const problem = $("childrenProblem");
     if (problem) { problem.hidden = !c.problem; problem.textContent = c.problem ? "Could not read the child VMs: " + c.problem : ""; }
     const empty = $("childrenEmpty");

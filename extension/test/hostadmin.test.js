@@ -410,6 +410,8 @@ function fakeClient(answers = {}) {
     const card = ha.childrenCardState({ backend: "hyperv-remote", supported: true, primary: "work-vm", items: [{ name: "work-vm-a1", state: "running" }], now: NOW });
     ok("card: supported renders the rows", card.visible && card.items.length === 1 && card.primary === "work-vm" && card.problem === "");
     const failed = ha.childrenCardState({ backend: "hyperv-remote", supported: true, primary: "work-vm", items: null, problem: "HTTP 500" });
+    const stale = ha.childrenCardState({ backend: "hyperv-remote", supported: true, primary: "work-vm", items: [{ name: "cached-child" }], problem: "shared inventory unavailable" });
+    ok("card: cached rows retain a failed shared-inventory warning", stale.items.length === 1 && stale.problem === "shared inventory unavailable");
     ok("card: a failed read on a supporting host keeps the card with the problem", failed.visible && failed.items.length === 0 && failed.problem === "HTTP 500");
   }
   {
