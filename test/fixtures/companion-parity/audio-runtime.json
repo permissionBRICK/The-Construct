@@ -1,0 +1,884 @@
+[
+  {
+    "input": {
+      "count": 0,
+      "port": 0,
+      "text": ""
+    },
+    "kind": "enable",
+    "output": "set -eu\nexport CONSTRUCT_VM_PORT_BASE=0\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_SHIM_B64=''\nexport CONSTRUCT_SHIM_B64\nCONSTRUCT_ENABLE_B64=''\nf=$(mktemp) && printf %s \"$CONSTRUCT_ENABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 0,
+      "port": 0,
+      "self": 8770,
+      "text": ""
+    },
+    "kind": "disable",
+    "output": "set -eu\nexport CONSTRUCT_TUNNEL_SELF_PORT=8770\nexport CONSTRUCT_VM_PORT_BASE=0\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_DISABLE_B64=''\nf=$(mktemp) && printf %s \"$CONSTRUCT_DISABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 8,
+      "port": 0,
+      "text": ""
+    },
+    "kind": "enable",
+    "output": "set -eu\nexport CONSTRUCT_VM_PORT_BASE=0\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_SHIM_B64=''\nexport CONSTRUCT_SHIM_B64\nCONSTRUCT_ENABLE_B64=''\nf=$(mktemp) && printf %s \"$CONSTRUCT_ENABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 8,
+      "port": 0,
+      "self": 8770,
+      "text": ""
+    },
+    "kind": "disable",
+    "output": "set -eu\nexport CONSTRUCT_TUNNEL_SELF_PORT=8770\nexport CONSTRUCT_VM_PORT_BASE=0\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_DISABLE_B64=''\nf=$(mktemp) && printf %s \"$CONSTRUCT_DISABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 17,
+      "port": 0,
+      "text": ""
+    },
+    "kind": "enable",
+    "output": "set -eu\nexport CONSTRUCT_VM_PORT_BASE=0\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_SHIM_B64=''\nexport CONSTRUCT_SHIM_B64\nCONSTRUCT_ENABLE_B64=''\nf=$(mktemp) && printf %s \"$CONSTRUCT_ENABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 17,
+      "port": 0,
+      "self": 8770,
+      "text": ""
+    },
+    "kind": "disable",
+    "output": "set -eu\nexport CONSTRUCT_TUNNEL_SELF_PORT=8770\nexport CONSTRUCT_VM_PORT_BASE=0\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_DISABLE_B64=''\nf=$(mktemp) && printf %s \"$CONSTRUCT_DISABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 0,
+      "port": 8767,
+      "text": ""
+    },
+    "kind": "enable",
+    "output": "set -eu\nexport CONSTRUCT_VM_PORT_BASE=8767\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_SHIM_B64=''\nexport CONSTRUCT_SHIM_B64\nCONSTRUCT_ENABLE_B64=''\nf=$(mktemp) && printf %s \"$CONSTRUCT_ENABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 0,
+      "port": 8767,
+      "self": 8770,
+      "text": ""
+    },
+    "kind": "disable",
+    "output": "set -eu\nexport CONSTRUCT_TUNNEL_SELF_PORT=8770\nexport CONSTRUCT_VM_PORT_BASE=8767\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_DISABLE_B64=''\nf=$(mktemp) && printf %s \"$CONSTRUCT_DISABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 8,
+      "port": 8767,
+      "text": ""
+    },
+    "kind": "enable",
+    "output": "set -eu\nexport CONSTRUCT_VM_PORT_BASE=8767\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_SHIM_B64=''\nexport CONSTRUCT_SHIM_B64\nCONSTRUCT_ENABLE_B64=''\nf=$(mktemp) && printf %s \"$CONSTRUCT_ENABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 8,
+      "port": 8767,
+      "self": 8770,
+      "text": ""
+    },
+    "kind": "disable",
+    "output": "set -eu\nexport CONSTRUCT_TUNNEL_SELF_PORT=8770\nexport CONSTRUCT_VM_PORT_BASE=8767\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_DISABLE_B64=''\nf=$(mktemp) && printf %s \"$CONSTRUCT_DISABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 17,
+      "port": 8767,
+      "text": ""
+    },
+    "kind": "enable",
+    "output": "set -eu\nexport CONSTRUCT_VM_PORT_BASE=8767\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_SHIM_B64=''\nexport CONSTRUCT_SHIM_B64\nCONSTRUCT_ENABLE_B64=''\nf=$(mktemp) && printf %s \"$CONSTRUCT_ENABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 17,
+      "port": 8767,
+      "self": 8770,
+      "text": ""
+    },
+    "kind": "disable",
+    "output": "set -eu\nexport CONSTRUCT_TUNNEL_SELF_PORT=8770\nexport CONSTRUCT_VM_PORT_BASE=8767\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_DISABLE_B64=''\nf=$(mktemp) && printf %s \"$CONSTRUCT_DISABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 0,
+      "port": 65535,
+      "text": ""
+    },
+    "kind": "enable",
+    "output": "set -eu\nexport CONSTRUCT_VM_PORT_BASE=65535\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_SHIM_B64=''\nexport CONSTRUCT_SHIM_B64\nCONSTRUCT_ENABLE_B64=''\nf=$(mktemp) && printf %s \"$CONSTRUCT_ENABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 0,
+      "port": 65535,
+      "self": 8770,
+      "text": ""
+    },
+    "kind": "disable",
+    "output": "set -eu\nexport CONSTRUCT_TUNNEL_SELF_PORT=8770\nexport CONSTRUCT_VM_PORT_BASE=65535\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_DISABLE_B64=''\nf=$(mktemp) && printf %s \"$CONSTRUCT_DISABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 8,
+      "port": 65535,
+      "text": ""
+    },
+    "kind": "enable",
+    "output": "set -eu\nexport CONSTRUCT_VM_PORT_BASE=65535\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_SHIM_B64=''\nexport CONSTRUCT_SHIM_B64\nCONSTRUCT_ENABLE_B64=''\nf=$(mktemp) && printf %s \"$CONSTRUCT_ENABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 8,
+      "port": 65535,
+      "self": 8770,
+      "text": ""
+    },
+    "kind": "disable",
+    "output": "set -eu\nexport CONSTRUCT_TUNNEL_SELF_PORT=8770\nexport CONSTRUCT_VM_PORT_BASE=65535\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_DISABLE_B64=''\nf=$(mktemp) && printf %s \"$CONSTRUCT_DISABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 17,
+      "port": 65535,
+      "text": ""
+    },
+    "kind": "enable",
+    "output": "set -eu\nexport CONSTRUCT_VM_PORT_BASE=65535\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_SHIM_B64=''\nexport CONSTRUCT_SHIM_B64\nCONSTRUCT_ENABLE_B64=''\nf=$(mktemp) && printf %s \"$CONSTRUCT_ENABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 17,
+      "port": 65535,
+      "self": 8770,
+      "text": ""
+    },
+    "kind": "disable",
+    "output": "set -eu\nexport CONSTRUCT_TUNNEL_SELF_PORT=8770\nexport CONSTRUCT_VM_PORT_BASE=65535\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_DISABLE_B64=''\nf=$(mktemp) && printf %s \"$CONSTRUCT_DISABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 0,
+      "port": -1,
+      "text": ""
+    },
+    "kind": "enable",
+    "output": "set -eu\nexport CONSTRUCT_VM_PORT_BASE=8767\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_SHIM_B64=''\nexport CONSTRUCT_SHIM_B64\nCONSTRUCT_ENABLE_B64=''\nf=$(mktemp) && printf %s \"$CONSTRUCT_ENABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 0,
+      "port": -1,
+      "self": 8770,
+      "text": ""
+    },
+    "kind": "disable",
+    "output": "set -eu\nexport CONSTRUCT_TUNNEL_SELF_PORT=8770\nexport CONSTRUCT_VM_PORT_BASE=8767\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_DISABLE_B64=''\nf=$(mktemp) && printf %s \"$CONSTRUCT_DISABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 8,
+      "port": -1,
+      "text": ""
+    },
+    "kind": "enable",
+    "output": "set -eu\nexport CONSTRUCT_VM_PORT_BASE=8767\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_SHIM_B64=''\nexport CONSTRUCT_SHIM_B64\nCONSTRUCT_ENABLE_B64=''\nf=$(mktemp) && printf %s \"$CONSTRUCT_ENABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 8,
+      "port": -1,
+      "self": 8770,
+      "text": ""
+    },
+    "kind": "disable",
+    "output": "set -eu\nexport CONSTRUCT_TUNNEL_SELF_PORT=8770\nexport CONSTRUCT_VM_PORT_BASE=8767\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_DISABLE_B64=''\nf=$(mktemp) && printf %s \"$CONSTRUCT_DISABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 17,
+      "port": -1,
+      "text": ""
+    },
+    "kind": "enable",
+    "output": "set -eu\nexport CONSTRUCT_VM_PORT_BASE=8767\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_SHIM_B64=''\nexport CONSTRUCT_SHIM_B64\nCONSTRUCT_ENABLE_B64=''\nf=$(mktemp) && printf %s \"$CONSTRUCT_ENABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 17,
+      "port": -1,
+      "self": 8770,
+      "text": ""
+    },
+    "kind": "disable",
+    "output": "set -eu\nexport CONSTRUCT_TUNNEL_SELF_PORT=8770\nexport CONSTRUCT_VM_PORT_BASE=8767\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_DISABLE_B64=''\nf=$(mktemp) && printf %s \"$CONSTRUCT_DISABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 0,
+      "port": 0,
+      "text": "#!/bin/bash\necho 'ü'\n"
+    },
+    "kind": "enable",
+    "output": "set -eu\nexport CONSTRUCT_VM_PORT_BASE=0\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_SHIM_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nexport CONSTRUCT_SHIM_B64\nCONSTRUCT_ENABLE_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nf=$(mktemp) && printf %s \"$CONSTRUCT_ENABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 0,
+      "port": 0,
+      "self": 8770,
+      "text": "#!/bin/bash\necho 'ü'\n"
+    },
+    "kind": "disable",
+    "output": "set -eu\nexport CONSTRUCT_TUNNEL_SELF_PORT=8770\nexport CONSTRUCT_VM_PORT_BASE=0\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_DISABLE_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nf=$(mktemp) && printf %s \"$CONSTRUCT_DISABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 8,
+      "port": 0,
+      "text": "#!/bin/bash\necho 'ü'\n"
+    },
+    "kind": "enable",
+    "output": "set -eu\nexport CONSTRUCT_VM_PORT_BASE=0\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_SHIM_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nexport CONSTRUCT_SHIM_B64\nCONSTRUCT_ENABLE_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nf=$(mktemp) && printf %s \"$CONSTRUCT_ENABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 8,
+      "port": 0,
+      "self": 8770,
+      "text": "#!/bin/bash\necho 'ü'\n"
+    },
+    "kind": "disable",
+    "output": "set -eu\nexport CONSTRUCT_TUNNEL_SELF_PORT=8770\nexport CONSTRUCT_VM_PORT_BASE=0\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_DISABLE_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nf=$(mktemp) && printf %s \"$CONSTRUCT_DISABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 17,
+      "port": 0,
+      "text": "#!/bin/bash\necho 'ü'\n"
+    },
+    "kind": "enable",
+    "output": "set -eu\nexport CONSTRUCT_VM_PORT_BASE=0\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_SHIM_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nexport CONSTRUCT_SHIM_B64\nCONSTRUCT_ENABLE_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nf=$(mktemp) && printf %s \"$CONSTRUCT_ENABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 17,
+      "port": 0,
+      "self": 8770,
+      "text": "#!/bin/bash\necho 'ü'\n"
+    },
+    "kind": "disable",
+    "output": "set -eu\nexport CONSTRUCT_TUNNEL_SELF_PORT=8770\nexport CONSTRUCT_VM_PORT_BASE=0\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_DISABLE_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nf=$(mktemp) && printf %s \"$CONSTRUCT_DISABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 0,
+      "port": 8767,
+      "text": "#!/bin/bash\necho 'ü'\n"
+    },
+    "kind": "enable",
+    "output": "set -eu\nexport CONSTRUCT_VM_PORT_BASE=8767\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_SHIM_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nexport CONSTRUCT_SHIM_B64\nCONSTRUCT_ENABLE_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nf=$(mktemp) && printf %s \"$CONSTRUCT_ENABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 0,
+      "port": 8767,
+      "self": 8770,
+      "text": "#!/bin/bash\necho 'ü'\n"
+    },
+    "kind": "disable",
+    "output": "set -eu\nexport CONSTRUCT_TUNNEL_SELF_PORT=8770\nexport CONSTRUCT_VM_PORT_BASE=8767\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_DISABLE_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nf=$(mktemp) && printf %s \"$CONSTRUCT_DISABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 8,
+      "port": 8767,
+      "text": "#!/bin/bash\necho 'ü'\n"
+    },
+    "kind": "enable",
+    "output": "set -eu\nexport CONSTRUCT_VM_PORT_BASE=8767\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_SHIM_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nexport CONSTRUCT_SHIM_B64\nCONSTRUCT_ENABLE_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nf=$(mktemp) && printf %s \"$CONSTRUCT_ENABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 8,
+      "port": 8767,
+      "self": 8770,
+      "text": "#!/bin/bash\necho 'ü'\n"
+    },
+    "kind": "disable",
+    "output": "set -eu\nexport CONSTRUCT_TUNNEL_SELF_PORT=8770\nexport CONSTRUCT_VM_PORT_BASE=8767\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_DISABLE_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nf=$(mktemp) && printf %s \"$CONSTRUCT_DISABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 17,
+      "port": 8767,
+      "text": "#!/bin/bash\necho 'ü'\n"
+    },
+    "kind": "enable",
+    "output": "set -eu\nexport CONSTRUCT_VM_PORT_BASE=8767\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_SHIM_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nexport CONSTRUCT_SHIM_B64\nCONSTRUCT_ENABLE_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nf=$(mktemp) && printf %s \"$CONSTRUCT_ENABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 17,
+      "port": 8767,
+      "self": 8770,
+      "text": "#!/bin/bash\necho 'ü'\n"
+    },
+    "kind": "disable",
+    "output": "set -eu\nexport CONSTRUCT_TUNNEL_SELF_PORT=8770\nexport CONSTRUCT_VM_PORT_BASE=8767\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_DISABLE_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nf=$(mktemp) && printf %s \"$CONSTRUCT_DISABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 0,
+      "port": 65535,
+      "text": "#!/bin/bash\necho 'ü'\n"
+    },
+    "kind": "enable",
+    "output": "set -eu\nexport CONSTRUCT_VM_PORT_BASE=65535\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_SHIM_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nexport CONSTRUCT_SHIM_B64\nCONSTRUCT_ENABLE_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nf=$(mktemp) && printf %s \"$CONSTRUCT_ENABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 0,
+      "port": 65535,
+      "self": 8770,
+      "text": "#!/bin/bash\necho 'ü'\n"
+    },
+    "kind": "disable",
+    "output": "set -eu\nexport CONSTRUCT_TUNNEL_SELF_PORT=8770\nexport CONSTRUCT_VM_PORT_BASE=65535\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_DISABLE_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nf=$(mktemp) && printf %s \"$CONSTRUCT_DISABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 8,
+      "port": 65535,
+      "text": "#!/bin/bash\necho 'ü'\n"
+    },
+    "kind": "enable",
+    "output": "set -eu\nexport CONSTRUCT_VM_PORT_BASE=65535\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_SHIM_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nexport CONSTRUCT_SHIM_B64\nCONSTRUCT_ENABLE_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nf=$(mktemp) && printf %s \"$CONSTRUCT_ENABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 8,
+      "port": 65535,
+      "self": 8770,
+      "text": "#!/bin/bash\necho 'ü'\n"
+    },
+    "kind": "disable",
+    "output": "set -eu\nexport CONSTRUCT_TUNNEL_SELF_PORT=8770\nexport CONSTRUCT_VM_PORT_BASE=65535\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_DISABLE_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nf=$(mktemp) && printf %s \"$CONSTRUCT_DISABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 17,
+      "port": 65535,
+      "text": "#!/bin/bash\necho 'ü'\n"
+    },
+    "kind": "enable",
+    "output": "set -eu\nexport CONSTRUCT_VM_PORT_BASE=65535\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_SHIM_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nexport CONSTRUCT_SHIM_B64\nCONSTRUCT_ENABLE_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nf=$(mktemp) && printf %s \"$CONSTRUCT_ENABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 17,
+      "port": 65535,
+      "self": 8770,
+      "text": "#!/bin/bash\necho 'ü'\n"
+    },
+    "kind": "disable",
+    "output": "set -eu\nexport CONSTRUCT_TUNNEL_SELF_PORT=8770\nexport CONSTRUCT_VM_PORT_BASE=65535\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_DISABLE_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nf=$(mktemp) && printf %s \"$CONSTRUCT_DISABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 0,
+      "port": -1,
+      "text": "#!/bin/bash\necho 'ü'\n"
+    },
+    "kind": "enable",
+    "output": "set -eu\nexport CONSTRUCT_VM_PORT_BASE=8767\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_SHIM_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nexport CONSTRUCT_SHIM_B64\nCONSTRUCT_ENABLE_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nf=$(mktemp) && printf %s \"$CONSTRUCT_ENABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 0,
+      "port": -1,
+      "self": 8770,
+      "text": "#!/bin/bash\necho 'ü'\n"
+    },
+    "kind": "disable",
+    "output": "set -eu\nexport CONSTRUCT_TUNNEL_SELF_PORT=8770\nexport CONSTRUCT_VM_PORT_BASE=8767\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_DISABLE_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nf=$(mktemp) && printf %s \"$CONSTRUCT_DISABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 8,
+      "port": -1,
+      "text": "#!/bin/bash\necho 'ü'\n"
+    },
+    "kind": "enable",
+    "output": "set -eu\nexport CONSTRUCT_VM_PORT_BASE=8767\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_SHIM_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nexport CONSTRUCT_SHIM_B64\nCONSTRUCT_ENABLE_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nf=$(mktemp) && printf %s \"$CONSTRUCT_ENABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 8,
+      "port": -1,
+      "self": 8770,
+      "text": "#!/bin/bash\necho 'ü'\n"
+    },
+    "kind": "disable",
+    "output": "set -eu\nexport CONSTRUCT_TUNNEL_SELF_PORT=8770\nexport CONSTRUCT_VM_PORT_BASE=8767\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_DISABLE_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nf=$(mktemp) && printf %s \"$CONSTRUCT_DISABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 17,
+      "port": -1,
+      "text": "#!/bin/bash\necho 'ü'\n"
+    },
+    "kind": "enable",
+    "output": "set -eu\nexport CONSTRUCT_VM_PORT_BASE=8767\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_SHIM_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nexport CONSTRUCT_SHIM_B64\nCONSTRUCT_ENABLE_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nf=$(mktemp) && printf %s \"$CONSTRUCT_ENABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": {
+      "count": 17,
+      "port": -1,
+      "self": 8770,
+      "text": "#!/bin/bash\necho 'ü'\n"
+    },
+    "kind": "disable",
+    "output": "set -eu\nexport CONSTRUCT_TUNNEL_SELF_PORT=8770\nexport CONSTRUCT_VM_PORT_BASE=8767\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_DISABLE_B64='IyEvYmluL2Jhc2gKZWNobyAnw7wnCg=='\nf=$(mktemp) && printf %s \"$CONSTRUCT_DISABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+  },
+  {
+    "input": "",
+    "kind": "parse",
+    "output": {
+      "busy": [],
+      "patched": false
+    }
+  },
+  {
+    "input": "CONSTRUCT_PORTS_BUSY=8767,8769,8774",
+    "kind": "parse",
+    "output": {
+      "busy": [
+        8767,
+        8769,
+        8774
+      ],
+      "patched": false
+    }
+  },
+  {
+    "input": "CONSTRUCT_PORTS_BUSY=0,99999,42,42,bad",
+    "kind": "parse",
+    "output": {
+      "busy": [
+        0,
+        42,
+        42
+      ],
+      "patched": false
+    }
+  },
+  {
+    "input": "CONSTRUCT_GATE_PATCHED=10",
+    "kind": "parse",
+    "output": {
+      "busy": [],
+      "patched": false
+    }
+  },
+  {
+    "input": "CONSTRUCT_GATE_PATCHED=1",
+    "kind": "parse",
+    "output": {
+      "busy": [],
+      "patched": true
+    }
+  },
+  {
+    "input": [],
+    "kind": "ports",
+    "output": [
+      8767,
+      8768,
+      8769,
+      8770,
+      8771,
+      8772,
+      8773,
+      8774
+    ]
+  },
+  {
+    "input": [
+      8767,
+      8768
+    ],
+    "kind": "ports",
+    "output": [
+      8769,
+      8770,
+      8771,
+      8772,
+      8773,
+      8774
+    ]
+  },
+  {
+    "input": [
+      8767,
+      8768,
+      8769,
+      8770,
+      8771,
+      8772,
+      8773,
+      8774
+    ],
+    "kind": "ports",
+    "output": []
+  },
+  {
+    "input": {
+      "cfg": {
+        "connectTimeout": 12,
+        "hostAlias": "vm-alias",
+        "keyName": "test key",
+        "sshPort": 22,
+        "user": "root",
+        "vmHost": "vm.example"
+      },
+      "keyPath": null
+    },
+    "kind": "tunnel",
+    "output": [
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-R",
+      "8767:127.0.0.1:30000",
+      "vm-alias"
+    ]
+  },
+  {
+    "input": {
+      "cfg": {
+        "connectTimeout": 12,
+        "hostAlias": "vm-alias",
+        "keyName": "test key",
+        "sshPort": 22,
+        "user": "root",
+        "vmHost": "vm.example"
+      },
+      "keyPath": null
+    },
+    "kind": "watchArgs",
+    "output": [
+      "-T",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=20",
+      "-o",
+      "ServerAliveCountMax=3",
+      "vm-alias",
+      "f=$(mktemp) && printf %s 'ZWNobyB0ZXN0' | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+    ]
+  },
+  {
+    "input": {
+      "cfg": {
+        "connectTimeout": 12,
+        "hostAlias": "vm-alias",
+        "keyName": "test key",
+        "sshPort": 2222,
+        "user": "root",
+        "vmHost": "vm.example"
+      },
+      "keyPath": null
+    },
+    "kind": "tunnel",
+    "output": [
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-R",
+      "8767:127.0.0.1:30000",
+      "-p",
+      "2222",
+      "vm-alias"
+    ]
+  },
+  {
+    "input": {
+      "cfg": {
+        "connectTimeout": 12,
+        "hostAlias": "vm-alias",
+        "keyName": "test key",
+        "sshPort": 2222,
+        "user": "root",
+        "vmHost": "vm.example"
+      },
+      "keyPath": null
+    },
+    "kind": "watchArgs",
+    "output": [
+      "-T",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=20",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-p",
+      "2222",
+      "vm-alias",
+      "f=$(mktemp) && printf %s 'ZWNobyB0ZXN0' | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+    ]
+  },
+  {
+    "input": {
+      "cfg": {
+        "connectTimeout": 12,
+        "hostAlias": "vm-alias",
+        "keyName": "test key",
+        "sshPort": 22,
+        "user": "root",
+        "vmHost": "vm.example"
+      },
+      "keyPath": "/fixture/home/.ssh/test key"
+    },
+    "kind": "tunnel",
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-R",
+      "8767:127.0.0.1:30000",
+      "root@vm.example"
+    ]
+  },
+  {
+    "input": {
+      "cfg": {
+        "connectTimeout": 12,
+        "hostAlias": "vm-alias",
+        "keyName": "test key",
+        "sshPort": 22,
+        "user": "root",
+        "vmHost": "vm.example"
+      },
+      "keyPath": "/fixture/home/.ssh/test key"
+    },
+    "kind": "watchArgs",
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-T",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=20",
+      "-o",
+      "ServerAliveCountMax=3",
+      "root@vm.example",
+      "f=$(mktemp) && printf %s 'ZWNobyB0ZXN0' | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+    ]
+  },
+  {
+    "input": {
+      "cfg": {
+        "connectTimeout": 12,
+        "hostAlias": "vm-alias",
+        "keyName": "test key",
+        "sshPort": 2222,
+        "user": "root",
+        "vmHost": "vm.example"
+      },
+      "keyPath": "/fixture/home/.ssh/test key"
+    },
+    "kind": "tunnel",
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-R",
+      "8767:127.0.0.1:30000",
+      "-p",
+      "2222",
+      "root@vm.example"
+    ]
+  },
+  {
+    "input": {
+      "cfg": {
+        "connectTimeout": 12,
+        "hostAlias": "vm-alias",
+        "keyName": "test key",
+        "sshPort": 2222,
+        "user": "root",
+        "vmHost": "vm.example"
+      },
+      "keyPath": "/fixture/home/.ssh/test key"
+    },
+    "kind": "watchArgs",
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-T",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=20",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-p",
+      "2222",
+      "root@vm.example",
+      "f=$(mktemp) && printf %s 'ZWNobyB0ZXN0' | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+    ]
+  },
+  {
+    "input": {
+      "instance": "dev",
+      "status": {}
+    },
+    "kind": "message",
+    "output": {
+      "capturing": false,
+      "enabled": false,
+      "instance": "dev",
+      "type": "audio"
+    }
+  },
+  {
+    "input": {
+      "instance": "dev",
+      "status": {
+        "capturing": false,
+        "enabled": true
+      }
+    },
+    "kind": "message",
+    "output": {
+      "capturing": false,
+      "enabled": true,
+      "instance": "dev",
+      "type": "audio"
+    }
+  },
+  {
+    "input": {
+      "instance": "dev",
+      "status": {
+        "capturing": true,
+        "enabled": true,
+        "gatePatched": true,
+        "tunnel": "vm:8767 → host mic (:30000)"
+      }
+    },
+    "kind": "message",
+    "output": {
+      "capturing": true,
+      "enabled": true,
+      "gatePatched": true,
+      "instance": "dev",
+      "tunnel": "vm:8767 → host mic (:30000)",
+      "type": "audio"
+    }
+  },
+  {
+    "input": {
+      "instance": "dev",
+      "status": {
+        "capturing": false,
+        "enabled": false,
+        "gatePatched": false
+      }
+    },
+    "kind": "message",
+    "output": {
+      "capturing": false,
+      "enabled": false,
+      "gatePatched": false,
+      "instance": "dev",
+      "type": "audio"
+    }
+  }
+]
