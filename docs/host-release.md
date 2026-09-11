@@ -61,7 +61,11 @@ inflated data before creating destination files. File hashes also catch ZIP read
 that truncate a dishonest entry to its declared length. The updater checks the
 archive's entry lengths against staged files before replacement. Legacy manifests
 without totals retain the absolute limits. `SHA256SUMS` covers every host payload
-file. The source ZIP uses compressed tracked files and carries `.construct-revision`.
+file. The source ZIP uses compressed tracked files and carries `.construct-revision`. It leaves
+out what only the repository needs (tests and fixtures, the .NET sources of the host service
+and the Companion, design notes, CI, release scripts), listed as `export-ignore` in
+`.gitattributes`; `Update-Construct.ps1` removes files an older archive shipped so the
+checkout matches the release.
 The control panel packages its VSIX locally without Node or dependency installation.
 Releases never include live settings, data, private keys, or the separately downloaded
 ISO executable. Agent tool version checks (Codex, OpenCode, T3 nightly) are independent

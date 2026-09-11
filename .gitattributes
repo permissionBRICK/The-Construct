@@ -13,3 +13,22 @@ bootstrap.sh   text eol=lf
 
 # Archives carry the actual source commit without a GitHub API lookup.
 /.construct-revision export-subst
+
+# The release source archive (git archive) carries only what the client PC and the VM run.
+# Tests, fixtures, the .NET sources (published separately as releases), design notes and
+# CI belong to the repository, not to an install. Keep this list in step with the
+# local-artifact pattern in lib/AgentVm.Common.ps1 (Get-ConstructSourceIdentity).
+/test              export-ignore
+/extension/test    export-ignore
+/service/src       export-ignore
+/service/tests     export-ignore
+/service/Constructd.sln export-ignore
+/companion/src     export-ignore
+/companion/tests   export-ignore
+/companion/Construct.Companion.sln export-ignore
+/docs/plans        export-ignore
+/docs/agent-notes  export-ignore
+/.github           export-ignore
+/scripts           export-ignore
+/assets            export-ignore
+/console-viewer/test_server.py export-ignore
