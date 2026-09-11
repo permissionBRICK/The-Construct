@@ -48,8 +48,7 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
                     state.Publish(name, new { type = "settings", instance = name, settings = entry.Store.ReadSettings() }); return;
                 case "saveSettings": await SaveSettings(entry, message["settings"] as JsonObject ?? throw new IpcFailure(400, "invalidSettings", "A settings object is required."), ct); return;
                 case "customRebuild": RequireRebuild(message); await Lifecycle(entry, Text(message, "mode"), message, ct); return;
-                // Saved by saveSettings; the restart-to-resize workflow (elevated Set-AgentVmResources.ps1 with a result file, or the service's CPU route plus restart) is not ported yet.
-                case "applyVmResources": Refuse(name, type, "Applying the VM size is not available from Construct Companion yet. The values are saved; use Apply in the VS Code control panel, or Reinstall."); return;
+                case "applyVmResources": await ApplyVmResources(entry, ct); return;
                 case "setUsagePeriod": entry.UsagePeriod = UsageParser.NormalizeReport(Text(message, "period")); await RefreshAsync(entry, ct); return;
                 case "saveProject":
                     var project = Text(message, "name"); var profile = RequireProject(project, message["profile"]);
@@ -205,7 +204,7 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
         var previous = entry.Store.ReadSettings(); entry.Store.SaveSettings(form); var merged = entry.Store.ReadSettings();
         state.Publish(entry.Name, new { type = "settings", instance = entry.Name, settings = merged });
         if (entry.Runtime is { } runtime) await runtime.SetAudioAsync(StateJson.Boolean(merged["mic"]) == true, ct);
-        if (StateJson.Boolean(previous["autoCheckpoints"]) != StateJson.Boolean(merged["autoCheckpoints"])) Refuse(entry.Name, "saveSettings", "Automatic checkpoint preference was saved. Applying it to the existing VM is not yet supported; use VS Code or the installer checkpoint action.");
+        if (StateJson.Boolean(form["autoCheckpoints"]) is not null) await ApplyCheckpoints(entry, StateJson.Boolean(merged["autoCheckpoints"]) == true, ct);
         var changes = SettingsMapping.PatchReprovisionChanges(previous, merged);
         var t3 = T3Code.PlanLiveAction(StateJson.Boolean(merged["t3code"]) == true, StateJson.Boolean(previous["t3code"]) == true, Text(merged, "t3codeChannel"), Text(previous, "t3codeChannel"));
         if (t3 is not null && (Text(t3, "action") == "disable" || StateJson.Boolean(merged["t3codeLimitResume"]) != true))
@@ -217,11 +216,12 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
         try
         {
             var directory = RequireDirectory(entry);
+            if (action is "reprovision" or "reinstall" or "redownload" && !await LifecyclePreflight(entry, action, ct)) return;
             var invocation = LifecycleBuilder.BuildInvocation(action, new()
             {
                 ["instance"] = entry.Definition.DeepClone(), ["settings"] = entry.Store.ReadSettings(),
                 ["instanceParams"] = JsonSerializer.SerializeToNode(LifecycleBuilder.InstanceParameterSupport(files, directory, action, entry.Definition)),
-                ["projects"] = entry.Store.ReadSelectedProjects(), ["backupMode"] = message["backup"]?.DeepClone(),
+                ["projects"] = await EffectiveProjects(entry, ct), ["backupMode"] = message["backup"]?.DeepClone(),
                 ["backupDir"] = Path.Combine(directory, "config")
             });
             if (invocation is null || StateJson.Boolean(invocation["blocked"]) == true) { Refuse(entry.Name, action, invocation is null ? "This lifecycle action is unavailable." : Text(invocation, "reason")); return; }

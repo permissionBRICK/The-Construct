@@ -52,10 +52,11 @@ internal sealed class DesktopPrompts(Control dispatcher) : IPrompts
         var chosen=prompt.Multiple ? list.CheckedItems.Cast<ListViewItem>() : list.SelectedItems.Cast<ListViewItem>();
         return chosen.Select(r=>(PickItem)r.Tag!).Where(i=>!i.Disabled && !i.Separator).Select(i=>i.Id).ToArray();
     },cancellationToken);
-    public Task<bool> ConfirmAsync(string title,string message,CancellationToken cancellationToken=default) => OnUi(()=>
+    public Task<bool> ConfirmAsync(string title,string message,CancellationToken cancellationToken=default) => ConfirmAsync(new ConfirmationPrompt(title, message, "Confirm"), cancellationToken);
+    public Task<bool> ConfirmAsync(ConfirmationPrompt prompt,CancellationToken cancellationToken=default) => OnUi(()=>
     {
-        using var form=Dialog(title); form.Controls.Add(new Label { Dock=DockStyle.Fill,Text=message,Padding=new Padding(14) });
-        Buttons(form,new Button { Text="Confirm",DialogResult=DialogResult.OK,AutoSize=true }); return Show(form,cancellationToken)==DialogResult.OK;
+        using var form=Dialog(prompt.Title); form.Controls.Add(new Label { Dock=DockStyle.Fill,Text=prompt.Message,Padding=new Padding(14) });
+        Buttons(form,new Button { Text=prompt.Action,DialogResult=DialogResult.OK,AutoSize=true }); return Show(form,cancellationToken)==DialogResult.OK;
     },cancellationToken);
     public Task<string?> SaveFileAsync(SaveFilePrompt prompt,CancellationToken cancellationToken=default) => OnUi(()=>
     {
