@@ -166,6 +166,10 @@ function Get-ConstructDriverCapabilities {
           Console     : 'none'  -- there is no vmconnect to a machine you aren't at.
           Suspend     : $true   -- the service's idle policy saves VMs (state 'saved')
                         and any power start resumes them.
+          Resources   : $false  -- the host service resizes its own VMs (the vCPU
+                        count through PUT /vms/{name}/cpu, applied on the next
+                        stop/start); Set-AgentVmResources.ps1 drives the LOCAL
+                        Hyper-V and must not touch a VM that merely shares the name.
     #>
     [CmdletBinding()]
     param()
@@ -173,6 +177,7 @@ function Get-ConstructDriverCapabilities {
         Checkpoints = $false
         Console     = 'none'
         Suspend     = $true
+        Resources   = $false
         Backend     = 'hyperv-remote'
     }
 }
