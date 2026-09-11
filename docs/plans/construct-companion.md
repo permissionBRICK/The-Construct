@@ -534,6 +534,11 @@ extension methods in their own files), `extension/extension.js` (S2a extension o
 ## Deviations
 
 (Recorded by implementers; one line each: what, why, where.)
+- S2a configsync: remote links are committed immediately and staging clones are fetched on use; push-back branch stamps use UTC through IClock; invalid zip profiles are skipped with returned warnings instead of JS coercion.
+- S2a configsync: new/renamed imports use the strict validation gate (JS creates coerce malformed schema); rejected imports leave local data unchanged, satisfying §8.0/8.6 validation requirements. PickItem adds Disabled/Separator and PickPrompt adds Placeholder for the JS publish dialog model.
+- S2a configsync: reserved seed paths are locally ignored (also affecting JS/PS `add -A`) to enforce the frozen never-track rule even on unborn HEAD; legacy credential-bearing remotes must be re-linked before any Companion git operation to satisfy the no-secrets-in-argv rule.
+- S2a configsync: add IConfigSyncStorage/IClipboard and ProcessInvocation.EnvironmentOverrides for atomic shared locks, clipboard sharing and temporary Git indexes; store writes reject unsafe/reserved names and tick reports invalid names rather than allowing Windows path failures.
+- S2a configsync: malformed JSON uses the stable reason `cannot be parsed as JSON` instead of V8-specific parser details; schema validation reasons and canonical bytes remain parity-tested in Core/ConfigSync/ProfileCodec.cs.
 - S1: repatch already reads `construct-patch-status.sh`/`construct-partial-streaming-enable.sh`; embed and fixture those originals instead of creating redundant `repatch.sh`; pairing keeps separate default/instance templates, and validated numeric/ID fragments retain their byte-identical spelling.
 - S1: the app scaffold uses a named quit event until S2 supplies authenticated HTTP quit/activation; secondary view launches currently exit 0 without opening a view (documented in `companion/README.md`).
 - S1: notify keeps `claim()` in `notify-claim-function.sh`, composed into both claim/watch templates through `{{claim}}`; C# callers render that shared function first, preserving the existing single-source composition and bytes.
