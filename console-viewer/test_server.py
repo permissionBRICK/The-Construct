@@ -140,6 +140,26 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('PRIVATE', str(status))
         await ws.close()
 
+    async def test_connection_refusal_reports_host_authorization_and_cleans_up_session(self):
+        host_api = self.gateway.api
+
+        async def refused_api(method, path):
+            if path.endswith('/connection'):
+                raise viewer.HostApiError(403)
+            return await host_api(method, path)
+
+        self.gateway.api = refused_api
+        await self.redeem()
+        ws = await self.client.ws_connect('/ws/id', protocols=['guacamole'], headers={'Origin': self.origin})
+        failure = await ws.receive(timeout=2)
+        self.assertIn('Host returned HTTP 403', failure.data)
+        self.assertIn('Requesting console access from the host', failure.data)
+        self.assertNotIn('Waiting for Windows', failure.data)
+        await ws.close()
+        await asyncio.sleep(.02)
+        self.assertIn(('DELETE', '/api/v1/vms/test-vm/console/sessions/host-session'), self.calls)
+        self.assertEqual(self.params, {})
+
     async def test_expired_ticket_cannot_connect_or_start_a_host_session(self):
         await self.redeem()
         self.gateway.tickets['id']['expires'] = time.monotonic() - 1
