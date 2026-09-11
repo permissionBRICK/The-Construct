@@ -9,8 +9,18 @@ namespace Constructd.Fakes;
 /// so the API, the creation job and the idle engine can be tested on Linux. The real driver (B7)
 /// implements the same interface by invoking PowerShell.
 /// </summary>
-public sealed class FakeHypervisorDriver : IHypervisorDriver
+public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver
 {
+    public ConcurrentDictionary<string, int> CpuCounts { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public Task SetCpuCountAsync(string name, int cpus, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (StateOf(name) != VmState.Off) throw new InvalidOperationException("VM must be off.");
+        if (PowerFailure is not null) throw PowerFailure;
+        Calls.Enqueue($"cpu:{name}:{cpus}");
+        CpuCounts[name] = cpus;
+        return Task.CompletedTask;
+    }
     private readonly ConcurrentDictionary<string, VmState> _states = new(StringComparer.OrdinalIgnoreCase);
 
     public DriverCapabilities Capabilities { get; set; } =

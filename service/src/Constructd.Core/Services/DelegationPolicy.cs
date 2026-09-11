@@ -61,7 +61,7 @@ public sealed class DelegationPolicy(IUserStore users, IVmRepository vms, IVmDel
             {
                 var primaryCaps = await capabilities.GetAsync(ct);
                 if (primaryCaps.Legacy.Suspend) actions.Add(ChildAction.Save);
-                if (primaryCaps.GracefulShutdown != CapabilityLevel.Unsupported) actions.Add(ChildAction.Shutdown);
+                if (primaryCaps.GracefulShutdown != CapabilityLevel.Unsupported) actions.AddRange([ChildAction.Shutdown, ChildAction.Restart]);
             }
             if (admin) actions.Add(ChildAction.Overrides);
             return actions;

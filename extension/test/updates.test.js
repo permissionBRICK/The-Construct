@@ -27,20 +27,23 @@ function ok(name, cond, detail) {
   ok("markers: empty installedCommit -> no marker (banner hidden), repo/ref kept",
     cleared.installedCommit === "" && cleared.repo === "me/fork" && cleared.ref === "dev");
 
-  // ── constructUpdateFromCompare ──────────────────────────────────────────────
-  ok("compare: ahead_by>0 -> available", (() => { const r = updates.constructUpdateFromCompare({ ahead_by: 6 }); return r.available === true && r.count === 6; })());
-  ok("compare: ahead_by 0 -> not available", (() => { const r = updates.constructUpdateFromCompare({ ahead_by: 0 }); return r.available === false && r.count === 0; })());
-  ok("compare: missing field -> null", updates.constructUpdateFromCompare({}) === null);
-  ok("compare: null -> null", updates.constructUpdateFromCompare(null) === null);
-  // A 404 on compare = the installed commit no longer exists upstream (history rewrite).
-  // That must read as "update available" with no distance, never as "no info".
-  ok("compare: NOT_FOUND -> available, unknown distance", (() => {
-    const r = updates.constructUpdateFromCompare(updates.NOT_FOUND);
-    return r && r.available === true && r.count === null && r.unknownBase === true;
-  })());
-  ok("compare: NOT_FOUND shows an empty behind-text", updates.behindText(updates.constructUpdateFromCompare(updates.NOT_FOUND).count) === "");
-  ok("compare: an ordinary object without ahead_by is still null (no false positives)", updates.constructUpdateFromCompare({ message: "x" }) === null);
-  ok("compare: NOT_FOUND is frozen", Object.isFrozen(updates.NOT_FOUND));
+  const published = (repository = updates.DEFAULT_REPO, commit = 'f'.repeat(40)) => ({
+    schemaVersion: 1, repository, ref: 'refs/heads/main', commit, releaseTag: `host-${commit}`,
+    sourceAsset: `construct-source-${commit}.zip`, sourceSha256: 'a'.repeat(64), sourceSizeBytes: 100,
+    payloadAsset: `construct-host-${commit.slice(0, 7)}-win-x64.zip`, payloadSha256: 'b'.repeat(64), payloadSizeBytes: 200,
+  });
+  const marker = { repo: 'a/b', ref: 'main', installedCommit: 'deadbeef' };
+  const valid = published('a/b');
+  for (const bad of [null, {}, updates.NOT_FOUND, { ...valid, repository: 'evil/repo' },
+    { ...valid, commit: 'bad' }, { ...valid, releaseTag: 'moving' }, { ...valid, sourceSizeBytes: 0 },
+    { ...valid, sourceSha256: 'bad' }, { ...valid, payloadSizeBytes: 1073741825 },
+    { ...valid, sourceAsset: '../source.zip' }, { ...valid, ref: 'refs/heads/dev' }]) {
+    ok('manifest: incomplete or mismatched release rejected', updates.constructUpdateFromManifest(bad, marker) === null);
+  }
+  ok('manifest: matching abbreviated commit is current', !updates.constructUpdateFromManifest(published('a/b', 'deadbeef' + 'a'.repeat(32)), marker).available);
+  let called = false;
+  const dev = await updates.checkConstruct({ ...marker, ref: 'dev' }, { fetchJson: async () => { called = true; return valid; } });
+  ok('custom branch: no main release lookup or offer', dev === null && !called);
 
   // ── behindText ──────────────────────────────────────────────────────────────
   ok("behindText: positive", updates.behindText(6) === "6 behind");
@@ -51,20 +54,20 @@ function ok(name, cond, detail) {
   const fakeFetch = (json) => async (url) => { calledUrl = url; return json; };
 
   calledUrl = null;
-  const noMarker = await updates.checkConstruct({ repo: "a/b", ref: "main", installedCommit: "" }, { fetchJson: fakeFetch({ ahead_by: 9 }) });
+  const noMarker = await updates.checkConstruct({ repo: "a/b", ref: "main", installedCommit: "" }, { fetchJson: fakeFetch(published()) });
   ok("check: no installedCommit -> null without fetching", noMarker === null && calledUrl === null);
 
   calledUrl = null;
-  const hit = await updates.checkConstruct({ repo: "a/b", ref: "main", installedCommit: "deadbeef" }, { fetchJson: fakeFetch({ ahead_by: 3 }) });
-  ok("check: builds compare URL base...head", calledUrl === "https://api.github.com/repos/a/b/compare/deadbeef...main", calledUrl);
-  ok("check: returns update info", hit && hit.available === true && hit.count === 3);
+  const hit = await updates.checkConstruct({ repo: "a/b", ref: "main", installedCommit: "deadbeef" }, { fetchJson: fakeFetch(published("a/b")) });
+  ok("check: builds direct release manifest URL", calledUrl === "https://github.com/a/b/releases/latest/download/manifest.json", calledUrl);
+  ok("check: returns update info", hit && hit.available === true && hit.count === null);
 
   const netFail = await updates.checkConstruct({ repo: "a/b", ref: "main", installedCommit: "deadbeef" }, { fetchJson: async () => null });
   ok("check: network failure -> null", netFail === null);
   const gone = await updates.checkConstruct({ repo: "a/b", ref: "main", installedCommit: "deadbeef" }, { fetchJson: async () => updates.NOT_FOUND });
-  ok("checkConstruct: 404 (installed commit rewritten away) -> update available", gone && gone.available === true && gone.count === null);
+  ok("checkConstruct: missing published manifest is not an update offer", gone === null);
   const aGone = await updates.augment({ agents: [] }, { installedCommit: "abc1234567", constructRef: "main" }, { fetchJson: async () => updates.NOT_FOUND, noCache: true });
-  ok("augment: 404 -> banner shown (available) with no count", aGone.update && aGone.update.available === true && aGone.update.behind === "");
+  ok("augment: 404 -> no update offer", !aGone.update);
   // fetchJson maps a real HTTP 404 to NOT_FOUND, other non-2xx to null.
   const fakeGet = (status) => (u, o, cb) => {
     const res = new EventEmitter(); res.statusCode = status; res.headers = {}; res.resume = () => {}; res.setEncoding = () => {};
@@ -77,15 +80,15 @@ function ok(name, cond, detail) {
   // ── augment ─────────────────────────────────────────────────────────────────
   const base = { online: true, host: "h" };
 
-  const a1 = await updates.augment(base, { installedCommit: "abc1234567", constructRef: "main" }, { fetchJson: fakeFetch({ ahead_by: 6 }), noCache: true });
-  ok("augment: folds update.available + behind", a1.update && a1.update.available === true && a1.update.behind === "6 behind");
+  const a1 = await updates.augment(base, { installedCommit: "abc1234567", constructRef: "main" }, { fetchJson: fakeFetch(published()), noCache: true });
+  ok("augment: folds update.available + behind", a1.update && a1.update.available === true && a1.update.behind === "");
   ok("augment: sets constructRev label from marker", a1.constructRev === "main@abc1234");
   ok("augment: does not mutate input", base.update === undefined && a1 !== base);
 
-  const a2 = await updates.augment(base, { installedCommit: "abc1234567", constructRef: "main" }, { fetchJson: fakeFetch({ ahead_by: 0 }), noCache: true });
+  const a2 = await updates.augment(base, { installedCommit: "abc1234567", constructRef: "main" }, { fetchJson: fakeFetch(published(updates.DEFAULT_REPO, 'abc1234567' + '0'.repeat(30))), noCache: true });
   ok("augment: up-to-date -> available false, blank behind", a2.update.available === false && a2.update.behind === "");
 
-  const a3 = await updates.augment(base, {}, { fetchJson: fakeFetch({ ahead_by: 6 }), noCache: true });
+  const a3 = await updates.augment(base, {}, { fetchJson: fakeFetch(published()), noCache: true });
   ok("augment: no marker -> unchanged (same ref, no update/constructRev)", a3 === base);
 
   // ── provisionStale (installedCommit vs provisionedCommit) ────────────────────
@@ -95,9 +98,9 @@ function ok(name, cond, detail) {
   ok("stale: missing installed -> not stale", updates.isProvisionStale({ installedCommit: "", provisionedCommit: "bbb" }) === false);
   ok("markers: reads provisionedCommit", updates.readMarkers({ provisionedCommit: " ccc " }).provisionedCommit === "ccc");
   // augment folds provisionStale ONLY when stale (so the no-marker fast path above holds).
-  const aStale = await updates.augment(base, { installedCommit: "aaaaaaa", provisionedCommit: "bbbbbbb", constructRef: "main" }, { fetchJson: fakeFetch({ ahead_by: 0 }), noCache: true });
+  const aStale = await updates.augment(base, { installedCommit: "aaaaaaa", provisionedCommit: "bbbbbbb", constructRef: "main" }, { fetchJson: fakeFetch(published(updates.DEFAULT_REPO, 'abc1234567' + '0'.repeat(30))), noCache: true });
   ok("augment: stale VM -> provisionStale true", aStale.provisionStale === true);
-  const aFresh = await updates.augment(base, { installedCommit: "aaaaaaa", provisionedCommit: "aaaaaaa", constructRef: "main" }, { fetchJson: fakeFetch({ ahead_by: 0 }), noCache: true });
+  const aFresh = await updates.augment(base, { installedCommit: "aaaaaaa", provisionedCommit: "aaaaaaa", constructRef: "main" }, { fetchJson: fakeFetch(published(updates.DEFAULT_REPO, 'abc1234567' + '0'.repeat(30))), noCache: true });
   ok("augment: in-sync VM -> no provisionStale key", aFresh.provisionStale === undefined);
 
   // ── B12: two markers from two files, and the guest's own marker on top ───────
@@ -150,29 +153,29 @@ function ok(name, cond, detail) {
   const aGuest = await updates.augment(
     { ...base, provisionedCommit: "bbbbbbb" },
     { installedCommit: "aaaaaaa", provisionedCommit: "aaaaaaa", constructRef: "main" },
-    { fetchJson: fakeFetch({ ahead_by: 0 }), noCache: true });
+    { fetchJson: fakeFetch(published(updates.DEFAULT_REPO, 'abc1234567' + '0'.repeat(30))), noCache: true });
   ok("augment: a probed guest marker decides staleness", aGuest.provisionStale === true);
   const aInstanceRaw = await updates.augment(base,
     { installedCommit: "aaaaaaa", provisionedCommit: "aaaaaaa", constructRef: "main" },
-    { instanceRaw: { provisionedCommit: "bbbbbbb" }, fetchJson: fakeFetch({ ahead_by: 0 }), noCache: true });
+    { instanceRaw: { provisionedCommit: "bbbbbbb" }, fetchJson: fakeFetch(published(updates.DEFAULT_REPO, 'abc1234567' + '0'.repeat(30))), noCache: true });
   ok("augment: opts.instanceRaw supplies the per-instance marker", aInstanceRaw.provisionStale === true);
 
   // ── RESET REPO: the installed commit no longer exists upstream ───────────────
-  // A history rewrite (or a force-push) makes the compare API 404, so the DISTANCE is
-  // unknowable — but the update itself is real, and the VM is still behind. Both signals
+  // A published release after a history rewrite still offers the new commit.
+  // Commit distance is unknown, and the VM is still behind. Both signals
   // must survive: the banner ("update available, unknown number of commits") AND the
   // yellow Reprovision button. This is exactly the case a history/compare-based staleness
   // rule would get wrong, which is why the rule is plain string inequality.
   const aReset = await updates.augment(base,
     { installedCommit: "aaaaaaa", constructRepo: "o/r", constructRef: "main" },
-    { instanceRaw: { provisionedCommit: "bbbbbbb" }, fetchJson: async () => updates.NOT_FOUND, noCache: true });
+    { instanceRaw: { provisionedCommit: "bbbbbbb" }, fetchJson: fakeFetch(published("o/r")), noCache: true });
   ok("reset repo: the update banner still shows", aReset.update && aReset.update.available === true);
   ok("reset repo: ...with no commit distance to claim", aReset.update.behind === "");
   ok("reset repo: ...AND the yellow reprovision flag is set from the markers alone",
     aReset.provisionStale === true);
   const aResetGuest = await updates.augment({ ...base, provisionedCommit: "bbbbbbb" },
     { installedCommit: "aaaaaaa", constructRepo: "o/r", constructRef: "main" },
-    { fetchJson: async () => updates.NOT_FOUND, noCache: true });
+    { fetchJson: fakeFetch(published("o/r")), noCache: true });
   ok("reset repo: the guest's own marker reaches the same verdict offline of any compare",
     aResetGuest.update.available === true && aResetGuest.provisionStale === true);
 
@@ -181,7 +184,7 @@ function ok(name, cond, detail) {
 
   // constructRev must reflect the MARKER's ref, not the default — a non-default ref
   // catches a regression that hardcodes "main".
-  const a5 = await updates.augment(base, { installedCommit: "abc1234567", constructRef: "dev" }, { fetchJson: fakeFetch({ ahead_by: 0 }), noCache: true });
+  const a5 = await updates.augment(base, { installedCommit: "abc1234567", constructRef: "dev" }, { fetchJson: fakeFetch(published(updates.DEFAULT_REPO, 'abc1234567' + '0'.repeat(30))), noCache: true });
   ok("augment: constructRev uses the marker's (non-default) ref", a5.constructRev === "dev@abc1234");
 
   // ── cache: negative results expire fast; successes are trusted longer ────────
@@ -194,19 +197,19 @@ function ok(name, cond, detail) {
   calls = 0;
   const r1 = await updates.checkConstructCached(cm, { fetchJson: async () => null, now: () => 1000 });
   ok("cache: first call returns (and stores) the null failure", r1 === null);
-  const r2 = await updates.checkConstructCached(cm, { fetchJson: countingFetch({ ahead_by: 5 }), now: () => 1000 + 30 * 1000 });
+  const r2 = await updates.checkConstructCached(cm, { fetchJson: countingFetch(published("c/d")), now: () => 1000 + 30 * 1000 });
   ok("cache: failure served within negative TTL (no refetch at +30s)", r2 === null && calls === 0);
-  const r3 = await updates.checkConstructCached(cm, { fetchJson: countingFetch({ ahead_by: 5 }), now: () => 1000 + 90 * 1000 });
+  const r3 = await updates.checkConstructCached(cm, { fetchJson: countingFetch(published("c/d")), now: () => 1000 + 90 * 1000 });
   ok("cache: failure expires after negative TTL (refetch at +90s)", r3 && r3.available === true && calls === 1);
 
   const cm2 = { repo: "c/d", ref: "main", installedCommit: "cachekey2" };
   let calls2 = 0;
-  const succFetch = async () => { calls2++; return { ahead_by: 2 }; };
+  const succFetch = async () => { calls2++; return published("c/d"); };
   const s1 = await updates.checkConstructCached(cm2, { fetchJson: succFetch, now: () => 5000 });
   const s2 = await updates.checkConstructCached(cm2, { fetchJson: succFetch, now: () => 5000 + 5 * 60 * 1000 });
-  ok("cache: success served for the full TTL (no refetch at +5min)", s1.count === 2 && s2.count === 2 && calls2 === 1);
+  ok("cache: success served for the full TTL (no refetch at +5min)", s1.available && s2.available && calls2 === 1);
   const s3 = await updates.checkConstructCached(cm2, { fetchJson: succFetch, now: () => 5000 + 11 * 60 * 1000 });
-  ok("cache: success refetched after TTL (+11min)", s3.count === 2 && calls2 === 2);
+  ok("cache: success refetched after TTL (+11min)", s3.available && calls2 === 2);
 
   // ── fetchJson redirect following + per-host Accept (mocked https.get) ────────
   // routes: { url: { statusCode, headers?, body? } }; seenAccept records the Accept

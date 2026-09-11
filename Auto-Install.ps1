@@ -2400,7 +2400,10 @@ if ($RemoteInstall) {
     # RAM", and the machine that matters here is the host's -- which we cannot see, and
     # which has a per-user quota of its own. So the remote prompts recommend a sensible
     # fixed size and say where the real limit lives.
-    $remoteCpu = if ($VmCpuCount -gt 0) { $VmCpuCount } else { 4 }
+    $remoteCpu = if ($VmCpuCount -gt 0) { $VmCpuCount } else {
+        Get-ConstructRemoteCpuDefault -BaseUrl $svcUrl -Auth $remoteAuth
+    }
+    Write-Ok "VM CPUs: $remoteCpu (on the host)"
     $chosenMemGB  = $VmMemoryGB
     $chosenDiskGB = $VmDiskGB
     if (-not $PSBoundParameters.ContainsKey('VmMemoryGB') -or $chosenMemGB -le 0) {

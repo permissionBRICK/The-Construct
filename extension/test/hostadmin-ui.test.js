@@ -31,7 +31,7 @@ function fakeClient(answers = {}) {
   const c = { host: "buildbox.example.local", calls };
   for (const m of ["health", "whoami", "hostStatus", "hostCapacity", "hostConfig", "putHostConfig", "hostCapabilities", "isoCatalog", "users", "createUser", "updateUser", "deleteUser",
     "putUserAllowance", "userTokens", "issueUserToken", "revokeUserToken", "vms", "children", "lifecycle", "setVmSharing", "renewVmLease", "deleteVm", "getJob", "overrides", "putOverrides", "deleteOverrides",
-    "rotateVmToken", "revokeVmToken", "media", "deleteMedia", "mediaCleanup", "jobs", "cancelJob", "audit", "updatesStatus", "updatesCheck", "updatesStage", "updatesApply", "updatesCancel", "updatesResolve"]) {
+    "vmCpu", "setVmCpu", "rotateVmToken", "revokeVmToken", "media", "deleteMedia", "mediaCleanup", "jobs", "cancelJob", "audit", "updatesStatus", "updatesCheck", "updatesStage", "updatesApply", "updatesCancel", "updatesResolve"]) {
     c[m] = async (...args) => {
       calls.push({ method: m, args });
       const a = answers[m];
@@ -111,6 +111,7 @@ function makeFeature(opts = {}) {
     remoteHosts: () => opts.hosts || [HOST],
     clientFor: async () => (opts.noClient ? null : client),
     instanceClient: async () => (opts.noClient ? { client: null, problem: "the API token is gone" } : { client, problem: "" }),
+    openGuestConsole: async (inst, name) => { logs.push("console " + inst.name + " " + name); },
     queryChildren: async () => opts.children || { supported: true, items: [], problem: "" },
     registryList: () => opts.instances || [INST],
     activeInstance: () => INST,
@@ -136,6 +137,32 @@ const lastState = (entry) => [...entry.panel.posted].reverse().find((m) => m.typ
 
 (async () => {
   console.log("\n=== the panel ===");
+  {
+    const vm = { name: "work-vm", kind: "primary", state: "running", cpu: 4, allowedActions: ["restart"] };
+    const client = fakeClient({ health: HEALTH, whoami: ME_ADMIN, vms: () => [vm],
+      vmCpu: { currentCpus: 4, desiredCpus: 4, recommendedCpus: 12, maximumCpus: 12, pending: false },
+      setVmCpu: (_name, body) => { vm.pendingCpu = body.cpus; return { currentCpus: 4, desiredCpus: body.cpus, pending: true }; },
+      lifecycle: { jobId: "restart-cpu" } });
+    const t = makeFeature({ client, script: { input: "max", warning: true } });
+    const entry = await openReady(t);
+    await entry.panel.send({ type: "hostadmin.tab", tab: "vms" });
+    await entry.panel.send({ type: "hostadmin.action", action: "changeVmCpu", args: { name: "work-vm" } });
+    eq("CPU: max resolves to the owner's recommendation", client.calls.find((c) => c.method === "setVmCpu").args[1].cpus, 12);
+    eq("CPU: pending value survives refresh", lastState(entry).vms.rows[0].pendingCpu, 12);
+    ok("CPU: changing the setting does not restart the VM", !client.calls.some((c) => c.method === "lifecycle"));
+    ok("CPU: prompt explains full stop/start", /full stop\/start/.test(t.vscode.rec.inputs.at(-1).prompt));
+    await entry.panel.send({ type: "hostadmin.action", action: "restartVm", args: { name: "work-vm" } });
+    eq("CPU: confirmed restart uses the host lifecycle route", client.calls.find((c) => c.method === "lifecycle").args[1].action, "restart");
+    ok("CPU: restart confirmation mentions interruption", /interrupted/.test(t.vscode.rec.warnings.at(-1).detail));
+    t.feature.dispose();
+    const dismissed = makeFeature({ client, script: { input: undefined, warning: false } });
+    const other = await openReady(dismissed);
+    const before = client.calls.filter((c) => c.method === "setVmCpu" || c.method === "lifecycle").length;
+    await other.panel.send({ type: "hostadmin.action", action: "changeVmCpu", args: { name: "work-vm" } });
+    await other.panel.send({ type: "hostadmin.action", action: "restartVm", args: { name: "work-vm" } });
+    eq("CPU: dismissing dialogs changes nothing", client.calls.filter((c) => c.method === "setVmCpu" || c.method === "lifecycle").length, before);
+    dismissed.feature.dispose();
+  }
   {
     const child = { name: "child", kind: "child", state: "running", sharing: "private", lease: { requested: "12h", state: "active" }, allowedActions: ["renew", "share"] };
     const client = fakeClient({ health: HEALTH, whoami: ME_ADMIN, vms: () => [child],
@@ -363,6 +390,19 @@ const lastState = (entry) => [...entry.panel.posted].reverse().find((m) => m.typ
     const dlg = t.vscode.rec.warnings.find((x) => /Delete the child VM "work-vm-a1"\?/.test(x.message));
     ok("children: Delete confirms with the child's sharing and the permanent removal", handled && dlg && /SHARED HOST-WIDE/.test(dlg.detail) && /removed permanently/.test(dlg.detail));
     ok("children: ...then DELETEs the child and refreshes", client.calls.some((c) => c.method === "deleteVm" && c.args[0] === "work-vm-a1") && t.logs.indexOf("refreshAll") >= 0);
+    await t.feature.handlePanelCommand("childConsole", { child: "not-listed" }, INST);
+    await t.feature.handlePanelCommand("childConsole", { child: "work-vm-a1" }, INST);
+    ok("console: unlisted and denied guests never reach SSH", !t.logs.some(x => x.startsWith("console ")));
+    client.calls.length = 0;
+    const guest = t.feature.knownChild(INST, "work-vm-a1");
+    guest.allowedActions.push("console");
+    await t.feature.handlePanelCommand("childConsole", { child: guest.name }, INST);
+    await t.feature.handlePanelCommand("childConsole", { child: guest.name }, INST);
+    eq("console: every click mints a new link through the captured primary", t.logs.filter(x => x === "console work-vm work-vm-a1").length, 2);
+    ok("console: no lifecycle or deletion call", client.calls.length === 0);
+    guest.state = "off";
+    await t.feature.handlePanelCommand("childConsole", { child: guest.name }, INST);
+    eq("console: stopped guests cannot connect", t.logs.filter(x => x.startsWith("console ")).length, 2);
     eq("children: other command ids are not ours", await t.feature.handlePanelCommand("reprovision", {}, INST), false);
     ok("children: openHostAdmin opens the instance's host panel", await t.feature.handlePanelCommand("openHostAdmin", {}, INST) && t.vscode.rec.panels.length === 1);
   }
@@ -430,8 +470,7 @@ const lastState = (entry) => [...entry.panel.posted].reverse().find((m) => m.typ
     ok("wiring: one feature block builds the adapter with injected deps", /hostadminui\.createHostAdminFeature\(\{/.test(extSrc) && /clientFor: \(entry\) => remoteClientFor\(entry\)/.test(extSrc));
     ok("wiring: the offer probe gets the silent driverOpts-based factory", /offerClient: async \(entry\) => \{[\s\S]*?await driverOpts\(inst\)[\s\S]*?hypervRemote\.resolveClient\(inst/.test(extSrc));
     ok("wiring: the state push carries children + hostAdminOffer like idlePolicy", /extra\.children = cachedChildren;/.test(extSrc) && /extra\.hostAdminOffer = cachedHostAdminOffer;/.test(extSrc));
-    ok("wiring: the refresh reads them after the idle policy", /await readHostAdminExtras\(inst\);/.test(extSrc));
-    ok("wiring: the four panel commands are forwarded to the feature", /id === "openHostAdmin" \|\| id === "createFirstVm" \|\| id === "childShutdown" \|\| id === "childDelete"/.test(extSrc));
+    ok("wiring: the guest and host panel commands are forwarded to the feature", /id === "openHostAdmin" \|\| id === "createFirstVm" \|\| id === "childShutdown" \|\| id === "childDelete" \|\| id === "childConsole"/.test(extSrc));
     ok("wiring: the picker appends the feature's rows and lets it handle them", /\.concat\(hostRows\)/.test(extSrc) && /handlePickerItem\(pick\)/.test(extSrc));
     ok("wiring: the forwarder transport gets the service's features", /createRemoteTransport\(\{ ssh, cfg, client, features \}\)/.test(extSrc));
     ok("wiring: a switch clears the caches", /cachedChildren = null; cachedHostAdminOffer = null; cachedHostAdminInstance = null;/.test(extSrc));

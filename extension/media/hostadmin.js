@@ -239,6 +239,17 @@
       row.appendChild(cell(r.resources, "ha-vm-allocation"));
       const actions = cell("", "actions");
       const busy = !!r.operation || r.deleting;
+      if (r.kind === "primary" && s.features.primaryCpu) {
+        const cpu = btn("CPU count", "ghost", () => act("changeVmCpu", { name: r.name }));
+        cpu.disabled = busy;
+        actions.appendChild(cpu);
+        if ((r.state === "running" && r.allowedActions.includes("restart")) || (r.state === "off" && r.allowedActions.includes("start"))) {
+          const restart = r.state === "running";
+          const power = btn(restart ? "Restart" : "Start", "", () => act(restart ? "restartVm" : "startVm", { name: r.name }));
+          power.disabled = busy;
+          actions.appendChild(power);
+        }
+      }
       if (r.kind === "child" && r.allowedActions.includes("renew")) {
         const b = btn("Change lifetime", "ghost", () => act("changeVmLifetime", { name: r.name }),
           r.state === "running" ? "Restart the expiry countdown from now, or choose never" : "Start this child VM before renewing its lifetime");
@@ -269,6 +280,7 @@
       row.appendChild(actions);
       const details = el("div", "ha-vm-details");
       const facts = [];
+      if (r.pendingCpu !== null) facts.push(`Pending: ${r.pendingCpu} vCPUs on next full stop/start`);
       if (r.lease) facts.push("Lease: " + r.lease);
       if (r.operation) facts.push("Operation: " + r.operation);
       if (r.kind !== "child") facts.push(r.guest);
@@ -386,7 +398,8 @@
       row.appendChild(cell(x.size));
       row.appendChild(cell(x.builtAt));
       if (x.isCurrent) row.appendChild(el("span", "ha-badge child", "current"));
-      if (!x.sidecarReadable) row.appendChild(el("span", "ha-badge off", "sidecar unreadable"));
+      if (x.unpublished) row.appendChild(el("span", "ha-badge", "not yet published"));
+      else if (!x.sidecarReadable) row.appendChild(el("span", "ha-badge off", "sidecar unreadable"));
       e.appendChild(row);
     });
     show($("mediaProblem"), !!m.mediaProblem);

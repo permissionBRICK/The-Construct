@@ -8,13 +8,21 @@ head -c 131072 /dev/urandom > "$task_dir/publish/Constructd.Api.exe"
 printf '{}\n' > "$task_dir/publish/appsettings.json"
 commit=$(git rev-parse HEAD)
 pwsh -NoProfile -File service/host/New-ConstructHostPackage.ps1 -PublishDir "$task_dir/publish" -OutputDir "$task_dir/output" -Commit "$commit"
+python3 scripts/package-construct-release.py --output "$task_dir/output" --commit "$commit" --repository permissionBRICK/The-Construct
 python3 - "$task_dir/output" "$commit" <<'PY'
 import hashlib,json,pathlib,sys,zipfile
 root=pathlib.Path(sys.argv[1]);m=json.loads((root/'manifest.json').read_text());checks=0
 assert not (root/'manifest.json.sig').exists();checks+=1
 assert m['commit']==sys.argv[2] and m['releaseTag']=='host-'+sys.argv[2];checks+=1
 assert m['ref']=='refs/heads/main' and m['database']['schemaVersion']>=600;checks+=1
+source=root/m['sourceAsset']
+assert source.stat().st_size==m['sourceSizeBytes'];checks+=1
+assert hashlib.sha256(source.read_bytes()).hexdigest()==m['sourceSha256'];checks+=1
+with zipfile.ZipFile(source) as z:
+    assert z.read('The-Construct-main/.construct-revision').decode().strip()==m['commit'];checks+=1
+    assert 'The-Construct-main/Auto-Install.ps1' in z.namelist();checks+=1
 zip_path=root/m['payloadAsset']
+assert zip_path.stat().st_size==m['payloadSizeBytes'];checks+=1
 assert hashlib.sha256(zip_path.read_bytes()).hexdigest()==m['payloadSha256'];checks+=1
 with zipfile.ZipFile(zip_path) as z:
     sums=z.read('SHA256SUMS');assert hashlib.sha256(sums).hexdigest()==m['sumsSha256'];checks+=1

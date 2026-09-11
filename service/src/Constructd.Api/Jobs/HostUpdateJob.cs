@@ -39,7 +39,7 @@ public sealed class HostUpdateJob(IHostUpdateStore store, IReleaseSource source,
             {
                 await runner.SetPhaseAsync(jobId,"check",token);
                 var settings=await checker.SettingsAsync(token);
-                var latest=(await source.ListHostReleasesAsync(settings.Repository,token)).OrderByDescending(r=>r.PublishedAt).FirstOrDefault(r=>tag is null || r.Tag==tag)
+                var latest=(await source.ListHostReleasesAsync(settings.Repository,token,tag)).OrderByDescending(r=>r.PublishedAt).FirstOrDefault(r=>tag is null || r.Tag==tag)
                     ?? throw new UpdateException("release-source-unreachable");
                 row=await PhaseAsync(row with { Commit=latest.Commit, ReleaseTag=latest.Tag },HostUpdateState.Checking,"check");
                 var progress=new PhaseProgress(async phase=>
@@ -56,7 +56,7 @@ public sealed class HostUpdateJob(IHostUpdateStore store, IReleaseSource source,
                 return new JobOutcome(row);
             }
             catch (Exception ex)
-            { row=await PhaseAsync(row, ex is OperationCanceledException ? HostUpdateState.Cancelled : HostUpdateState.StageFailed,"verify",SafeCode(ex)); if(ex is OperationCanceledException) throw; throw new UpdateException(SafeCode(ex)); }
+            { row=await PhaseAsync(row, ex is OperationCanceledException ? HostUpdateState.Cancelled : HostUpdateState.StageFailed,row.Phase,SafeCode(ex)); if(ex is OperationCanceledException or UpdateException) throw; throw new UpdateException(SafeCode(ex)); }
         },ct,operation);
     }
     private sealed class PhaseProgress(Func<string,Task> update) : IProgress<string>

@@ -74,7 +74,7 @@ public static class UpdateEndpoints
         {
             var code=ex.Code;
             if(code=="maintenance") { http.Response.Headers.RetryAfter="30"; return Results.Problem(statusCode:503,title:code,type:"urn:construct:problem:"+code,extensions:new Dictionary<string,object?>{["code"]=code,["phase"]="maintenance",["retryAfterSeconds"]=30,["updateId"]=request.UpdateId}); }
-            var status=code=="release-source-unreachable" ? 502 : code == "coverage-failed" ? 422 : 409;
+            var status=code.StartsWith("release-source-",StringComparison.Ordinal) ? 502 : code == "coverage-failed" ? 422 : 409;
             if(code is "wrong-binary" or "health-failed" or "backup-incomplete" or "installation-mixed")
                 return Results.Problem(statusCode:409,title:"update-not-commitable",type:"urn:construct:problem:update-not-commitable",extensions:new Dictionary<string,object?>{["code"]="update-not-commitable",["reason"]=code});
             if(code=="update-not-resolvable")
@@ -82,7 +82,7 @@ public static class UpdateEndpoints
                 var row=await http.RequestServices.GetRequiredService<IHostUpdateStore>().GetAsync(request.UpdateId ?? "",ct);
                 return Results.Problem(statusCode:409,title:code,type:"urn:construct:problem:"+code,extensions:new Dictionary<string,object?>{["code"]=code,["state"]=row?.State});
             }
-            return CodedProblems.Create(status,code,code);
+            return CodedProblems.Create(status,code,ex.Message);
         }
         finally {work.Acceptance.Release();}
     }

@@ -155,7 +155,7 @@ class Gateway:
             ticket['phase'] = 'Creating a console session on the Windows host'
             session = await self.api('POST', root)
             session_path = root + '/' + session['sessionId']
-            ticket['phase'] = 'Waiting for Windows to grant console access'
+            ticket['phase'] = 'Requesting console access from the host'
             connection = await self.api('POST', session_path + '/connection')
             ticket['phase'] = 'Connecting to the local console gateway'
             reader, writer = await asyncio.wait_for(asyncio.open_connection(self.guacd_host, self.guacd_port), 10)

@@ -257,9 +257,10 @@ exit 0
 // plain http. T3's DPoP proofs are bound to the origin the browser dialled, so
 // the link must name the same one the server was told to advertise.
 function buildPairingScript(instance) {
+  const values = { pairingBase: guestScripts.render("construct-t3-pairing-base") };
   return !instance || instances.isDefaultInstance(instance)
-    ? guestScripts.render("t3-pairing")
-    : guestScripts.render("t3-pairing-instance", { instance: instance.name });
+    ? guestScripts.render("t3-pairing", values)
+    : guestScripts.render("t3-pairing-instance", { ...values, instance: instance.name });
 }
 
 /** Pull the pairing URL out of the pairing script's stdout. The CLI prints clean
@@ -294,7 +295,11 @@ function baseUrl(cfg, probedUrl) {
 async function openWebUi(opts = {}) {
   const vscode = opts._vscode || vsc();
   const _ssh = opts._ssh || ssh;
-  const r = await _ssh.runRemoteScript(buildPairingScript(opts.instance), { ...opts, timeoutMs: opts.timeoutMs || 30000 });
+  const r = await _ssh.runRemoteScript(buildPairingScript(opts.instance), { ...opts, timeoutMs: opts.timeoutMs || 90000 });
+  if (r.code === 7) {
+    vscode.window.showErrorMessage("T3 Code's port forward is not ready. Keep the Construct client connected and retry. " + (r.stderr || "").trim().slice(-240));
+    return "";
+  }
   let url = r.code === 0 ? extractPairUrl(r.stdout) : "";
   if (!url) {
     url = baseUrl(opts.cfg, opts.webUrl);

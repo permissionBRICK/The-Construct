@@ -11,9 +11,9 @@
 
     It connects to the VM over SSH as root -- with the key provisioning wrote to
     ~\.ssh\<LocalKeyName>, falling back to the ~\.ssh\config Host alias -- and asks the
-    VM's own t3 CLI for a pairing link bound to the origin the VM advertises
-    (T3CODE_PUBLIC_BASE_URL when Construct's TLS proxy is up, else the client-reachable
-    host and the plain port). The link carries the ADMINISTRATIVE scope set when the
+    VM's own t3 CLI for a pairing link bound to the reachable forwarded endpoint.
+    Managed VMs use a host forward when allowed, otherwise a client forward; the
+    effective TLS state selects HTTPS or HTTP. The link carries the ADMINISTRATIVE scope set when the
     VM's T3 build understands `--scopes` (Construct's patched build); a stock T3 issues
     its standard client scopes.
 
@@ -143,6 +143,9 @@ try {
         '${ext:-$(hostname).mshome.net}'
     }
     $wantScopes = $Scopes
+    # Send the installed client helper over SSH as well, so this works before a
+    # guest reprovision and stays identical to VS Code's forwarding fallback.
+    $pairingBaseScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'extension\vm\construct-t3-pairing-base.sh') -Raw
     # Both land inside single quotes on the VM's command line.
     if ($Ttl -notmatch '^[0-9A-Za-z ]{1,32}$') { Fail "-Ttl must be a t3 duration such as 10m or 1h" }
     $bash = @"
@@ -159,7 +162,8 @@ command -v t3 >/dev/null 2>&1 || { echo "t3 is not installed on the VM" >&2; exi
 T3CODE_PORT="`$(cfgget T3CODE_PORT)"; T3CODE_PORT="`${T3CODE_PORT:-5177}"
 T3CODE_PUBLIC_BASE_URL="`$(cfgget T3CODE_PUBLIC_BASE_URL)"
 ext="`$(cfgget CONSTRUCT_EXTERNAL_HOST)"
-if [ -n "`$T3CODE_PUBLIC_BASE_URL" ]; then base="`$T3CODE_PUBLIC_BASE_URL"; else base="http://${hostExpr}:`$T3CODE_PORT"; fi
+$pairingBaseScript
+base="`$(t3base "${hostExpr}")" || exit 3
 scopes=standard
 extra=""
 if [ "$wantScopes" = "administrative" ] && t3 auth pairing create --help 2>&1 | grep -q -- '--scopes'; then

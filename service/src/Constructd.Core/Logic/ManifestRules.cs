@@ -2,7 +2,7 @@ using System.Text.RegularExpressions;
 using Constructd.Core.Abstractions;
 namespace Constructd.Core.Logic;
 
-public sealed class UpdateException(string code) : Exception(code), IConstructdError
+public sealed class UpdateException(string code, string? detail = null) : Exception(detail ?? code), IConstructdError
 {
     public string Code { get; } = code;
 }

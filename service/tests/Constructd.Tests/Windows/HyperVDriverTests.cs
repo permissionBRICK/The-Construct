@@ -18,6 +18,15 @@ namespace Constructd.Tests.Windows;
 /// </summary>
 public sealed class HyperVDriverTests
 {
+    [Fact]
+    public async Task Cpu_change_uses_the_guarded_shared_driver_contract()
+    {
+        var (driver, runner) = Driver(new RecordingProcessRunner().Respond(Ok("null")));
+        await driver.SetCpuCountAsync("work-vm", 12, default);
+        Assert.Contains("Set-ConstructVmCpuCount -Name 'work-vm' -ProcessorCount 12", Script(runner[0]));
+        await Assert.ThrowsAnyAsync<ArgumentException>(() => driver.SetCpuCountAsync("work-vm", 0, default));
+        Assert.Single(runner.Calls);
+    }
     private static readonly VmDescriptor Descriptor =
         new("work-vm", Cpu: 4, RamGb: 8, DiskGb: 100, IsoPath: @"C:\isos\work-vm-autoinstall.iso",
             Nested: true, AutomaticCheckpoints: false);

@@ -98,32 +98,14 @@
         </section>
 
         <!-- Child VMs (host-administration contract §10.2, the minimal user view): the
-             children of this primary with exactly two actions, Shut down (a graceful guest
-             shutdown request) and Delete (confirmed extension-side). Hidden entirely for a
+             children and shared guests, with browser console access, graceful shutdown
+             and confirmed deletion. Hidden entirely for a
              local instance and for a host whose service has no child VMs. -->
         <section class="module" id="childrenModule" hidden>
           <div class="mhead"><h2 class="seclabel">Child VMs</h2><span class="meta" id="childrenMeta"></span></div>
           <p class="cost-note" id="childrenProblem" hidden></p>
           <div class="fwd-list" id="childrenList"></div>
           <p class="cost-note" id="childrenEmpty">No child VMs. Create one from inside the VM with <span class="sans-dim">construct vm create</span>.</p>
-        </section>
-
-        <!-- Idle policy (B8, plan §4.7): remote instances only — the host service enforces
-             it, so a local VM has nothing to configure here. -->
-        <section class="module" id="idleModule" hidden>
-          <div class="mhead"><h2 class="seclabel">Idle policy</h2><span class="meta" id="idleHint"></span></div>
-          <div class="idle-row">
-            <label class="idle-lbl" for="idleTimeout">Idle for</label>
-            <input class="idle-num" id="idleTimeout" type="number" min="0" max="10080" step="5" value="0" aria-describedby="idleHint" />
-            <span class="idle-unit">minutes &rarr;</span>
-            <select class="idle-sel" id="idleAction" aria-label="What to do when the VM is idle">
-              <option value="save">save (RAM to disk)</option>
-              <option value="shutdown">shut down</option>
-              <option value="off">never</option>
-            </select>
-            <button class="btn" id="idleSave">apply</button>
-          </div>
-          <p class="cost-note">The host service decides, so it works with this PC switched off. A VM stays alive while an agent is working, even with nobody connected.</p>
         </section>
 
         <section class="module voice">
@@ -221,6 +203,24 @@
       </div>
       <button class="btn ghost" id="backBtn">&larr; back to console</button>
     </div>
+
+        <!-- Idle policy (B8, plan §4.7): remote instances only — the host service enforces
+             it, so a local VM has nothing to configure here. -->
+        <section class="setgroup" id="idleModule" hidden>
+          <div class="mhead"><h2 class="seclabel">Idle policy</h2><span class="meta" id="idleHint"></span></div>
+          <div class="idle-row">
+            <label class="idle-lbl" for="idleTimeout">Idle for</label>
+            <input class="idle-num" id="idleTimeout" type="number" min="0" max="10080" step="5" value="0" aria-describedby="idleHint" />
+            <span class="idle-unit">minutes &rarr;</span>
+            <select class="idle-sel" id="idleAction" aria-label="What to do when the VM is idle">
+              <option value="save">save (RAM to disk)</option>
+              <option value="shutdown">shut down</option>
+              <option value="off">never</option>
+            </select>
+            <button class="btn" id="idleSave">apply</button>
+          </div>
+          <p class="cost-note">The host service decides, so it works with this PC switched off. A VM stays alive while an agent is working, even with nobody connected.</p>
+        </section>
 
     <section class="setgroup" id="hostConversionSettings" hidden>
       <div class="gh"><h2 class="seclabel">Share this PC as a host</h2></div>

@@ -479,3 +479,13 @@ body.launcher { font-size: 12px; }
 .prepare-spinner { position: absolute; box-sizing: border-box; width: 1em; height: 1em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: prepare-spin .8s linear infinite; }
 @keyframes prepare-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .prepare-spinner { animation: none; } }
+
+/* Guest identity and expiry retain room; actions wrap together on narrow panels. */
+.child-row { flex-wrap: wrap; align-items: flex-start; gap: 10px 16px; padding: 12px 0; }
+.child-info { flex: 1 1 240px; min-width: 0; }
+.child-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.child-heading .fwd-port { overflow-wrap: anywhere; }
+.child-info .fwd-label { display: block; margin-top: 5px; line-height: 1.5; word-break: normal; overflow-wrap: break-word; }
+.child-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.child-actions button { white-space: nowrap; padding: 6px 8px; }
+#childrenModule .mhead { flex-wrap: wrap; gap: 6px 12px; }

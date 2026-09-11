@@ -206,20 +206,20 @@ try {
     if (-not $journal.installed) {
         Step 'Downloading the verified Construct host release'
         $headers = @{'User-Agent'='Construct-Host-Conversion/1'}
-        $releases = Invoke-RestMethod -Uri 'https://api.github.com/repos/permissionBRICK/The-Construct/releases?per_page=100' -Headers $headers -TimeoutSec 30
-        $release = $releases | Where-Object { $_.tag_name -match '^host-[0-9a-f]{40}$' -and -not $_.draft -and -not $_.prerelease } | Sort-Object published_at -Descending | Select-Object -First 1
-        if (-not $release) { throw 'No published Construct host package is available.' }
-        $base = 'https://github.com/permissionBRICK/The-Construct/releases/download/' + $release.tag_name + '/'
-        $manifest = Invoke-RestMethod -Uri ($base + 'manifest.json') -Headers $headers -TimeoutSec 30
-        if ($manifest.repository -ne 'permissionBRICK/The-Construct' -or $manifest.releaseTag -ne $release.tag_name -or
-            $manifest.commit -ne $release.tag_name.Substring(5) -or $manifest.payloadAsset -notmatch '^construct-host-[a-f0-9]{7}-win-x64\.zip$' -or
+        $manifest = Invoke-RestMethod -Uri 'https://github.com/permissionBRICK/The-Construct/releases/latest/download/manifest.json' -Headers $headers -TimeoutSec 30
+        if ($manifest.commit -cnotmatch '^[0-9a-f]{40}$' -or $manifest.releaseTag -cne ('host-' + $manifest.commit) -or
+            $manifest.sourceAsset -cne ('construct-source-' + $manifest.commit + '.zip') -or $manifest.sourceSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+            $manifest.sourceSizeBytes -le 0 -or $manifest.sourceSizeBytes -gt 1GB -or $manifest.payloadSizeBytes -le 0 -or $manifest.payloadSizeBytes -gt 1GB) { throw 'No complete published Construct release is available.' }
+        $base = 'https://github.com/permissionBRICK/The-Construct/releases/download/' + $manifest.releaseTag + '/'
+        if ($manifest.schemaVersion -ne 1 -or $manifest.ref -cne 'refs/heads/main' -or $manifest.repository -cne 'permissionBRICK/The-Construct' -or $manifest.releaseTag -ne ('host-' + $manifest.commit) -or
+            $manifest.payloadAsset -cne ('construct-host-' + $manifest.commit.Substring(0,7) + '-win-x64.zip') -or
             $manifest.payloadSha256 -notmatch '^[a-f0-9]{64}$' -or $manifest.features -notcontains 'local-vm-adoption-v1') {
             throw 'The published host package does not yet support guided conversion. Update Construct after the host release finishes.'
         }
         $zip = Join-Path $root 'package.zip'; $stage = Join-Path $root 'package'
         $web = New-Object Net.WebClient
         try { $web.DownloadFile(($base + $manifest.payloadAsset), $zip) } finally { $web.Dispose() }
-        if ((Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash -ne $manifest.payloadSha256) { throw 'Host package checksum mismatch.' }
+        if ((Get-Item -LiteralPath $zip).Length -ne $manifest.payloadSizeBytes -or (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash -ne $manifest.payloadSha256) { throw 'Host package checksum mismatch.' }
         Expand-VerifiedPackage $zip $stage
         [IO.Directory]::CreateDirectory($scripts) | Out-Null
         Copy-Item -Path (Join-Path $stage 'scripts\*') -Destination $scripts -Recurse -Force
