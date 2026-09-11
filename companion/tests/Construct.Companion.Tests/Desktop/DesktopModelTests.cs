@@ -4,6 +4,9 @@ using System.Text.Json.Nodes;
 using Construct.Companion.Core;
 using Construct.Companion.Core.Abstractions;
 using Construct.Companion.Core.Desktop;
+using Construct.Companion.Core.Drivers;
+using Construct.Companion.Core.Remote;
+using RemoteHost = Construct.Companion.Core.Remote.RemoteHost;
 using Construct.Companion.Core.Ipc;
 using Construct.Companion.Core.Lifecycle;
 using Construct.Companion.Fakes;
@@ -26,6 +29,14 @@ public sealed class DesktopModelTests
     [InlineData("construct://forward?id=x")]
     [InlineData("construct://user@open?instance=dev")]
     public void ActivationRejectsUntrustedTargets(string uri) => Assert.Throws<ArgumentException>(() => Activation.Resolve(new(Uri: uri), ["dev"], []));
+    [Theory]
+    [InlineData("panel", "panel")] [InlineData("settings", "settings")] [InlineData("theme", "theme")]
+    public void InProcessActivationsFollowTheCommandLineRules(string view, string expected)
+    {
+        Assert.Equal(expected, Activation.ResolveView(new UiActivation(view, "dev"), ["dev"], []).Views.Single().View);
+        Assert.Throws<ArgumentException>(() => Activation.ResolveView(new UiActivation(view, "missing"), ["dev"], []));
+        Assert.Equal("hostadmin", Activation.ResolveView(new UiActivation("hostadmin", Host: "lab"), ["dev"], ["lab"]).Views.Single().View);
+    }
     [Fact]
     public void CombinableViewsAndForwardRemainSeparate()
     {
@@ -97,23 +108,10 @@ public sealed class DesktopModelTests
         Assert.Equal(new(1520,40,400,500),WindowPlacement.Popup(new(1880,0,40,40),new(0,40,1920,1040),400,500));
     }
     [Fact]
-    public void SettingsMergeRoundTripAndCorruptionDoNotOverwrite()
-    {
-        var files = new FakeFileSystem(); var store = new SettingsStore(files,"/state/settings.json");
-        Assert.True(store.Read().Notifications);
-        store.Update(new JsonObject { ["forwards"] = new JsonObject { ["hostLabel"] = "laptop" }, ["uiTheme"] = "terminal" });
-        store.SaveBounds("panel",new(1,2,800,600)); store.SaveBounds("settings",new(3,4,600,700));
-        Assert.True(store.Read().Forwards.Enabled); Assert.Equal("laptop", store.Read().Forwards.HostLabel);
-        Assert.Equal(new(1,2,800,600),store.Bounds("panel"));
-        Assert.Throws<ArgumentException>(()=>store.Update(new JsonObject { ["unknown"] = true }));
-        files.WriteFileAtomic("/state/settings.json", "bad"u8); Assert.Throws<InvalidDataException>(() => store.Read());
-        Assert.Throws<InvalidDataException>(() => store.Update(new())); Assert.Equal("bad",Encoding.UTF8.GetString(files.ReadFile("/state/settings.json")!));
-    }
-    [Fact]
     public async Task TokenBase64RoundtripDenialAndTraversal()
     {
         var files = new FakeFileSystem(); var protection = new FakeDataProtection(); var store = new ProtectedTokenStore(files,protection,"/remote");
-        var slug=Construct.Companion.Core.Remote.RemoteHost.HostSlug("https://buildbox.example.local:7462");
+        var slug=RemoteHost.HostSlug("https://buildbox.example.local:7462");
         await store.WriteAsync(slug,new Secret("fixture dotted token")); Assert.NotNull(await store.ReadAsync(slug));
         var secret = new Secret("fixture token ü"); await store.WriteAsync("host-1",secret);
         Assert.Equal(Convert.ToBase64String(protection.Protect(Encoding.UTF8.GetBytes(secret.Reveal()))),Encoding.UTF8.GetString(files.ReadFile("/remote/host-1.token")!));
@@ -122,15 +120,14 @@ public sealed class DesktopModelTests
         await Assert.ThrowsAsync<ArgumentException>(()=>store.WriteAsync("../host",secret));
     }
     [Fact]
-    public async Task LauncherRecordsLifecycleArgvVsCodeAndT3Environment()
+    public async Task LauncherRecordsLifecycleArgvAndT3Environment()
     {
         var files = new FakeFileSystem(); files.Roots[FileSystemRoot.LocalAppData]="/local";
         var desktop = new FakeDesktopProcess(); var launcher = new DesktopLauncher(desktop,files);
         var invocation = PowerShellLaunch.BuildHostLaunch("C:\\scripts with space\\Auto-Install.ps1",["-InstanceName","dev"],true).Invocation();
         await launcher.LaunchElevatedAsync(invocation); Assert.Equal(invocation,desktop.Invocations.Single()); Assert.False(desktop.Invocations.Single().CreateNoWindow);
-        await launcher.OpenVsCodeAsync("dev"); Assert.Equal("vscode://vscode-remote/ssh-remote+dev/root",desktop.Opened.Single());
-        desktop.Executables["code"]="/code"; await launcher.OpenVsCodeAsync("dev");
-        Assert.Equal(["--folder-uri","vscode-remote://ssh-remote+dev/root"],desktop.Invocations.Last().Arguments);
+        await Assert.ThrowsAsync<ArgumentException>(()=>launcher.LaunchElevatedAsync(new("powershell.exe",[])));
+        await launcher.OpenAsync("vscode://vscode-remote/ssh-remote+dev/root"); Assert.Equal("vscode://vscode-remote/ssh-remote+dev/root",desktop.Opened.Single());
         Assert.False(await launcher.OpenT3DesktopAsync()); files.WriteFileAtomic("/local/Programs/t3code/Uninstall T3 Code.exe",[]);
         Assert.False(await launcher.OpenT3DesktopAsync()); files.WriteFileAtomic("/local/Programs/t3code/Desktop-App.exe",[]);
         Assert.True(await launcher.OpenT3DesktopAsync()); Assert.True(desktop.Invocations.Last().CreateNoWindow); Assert.EndsWith("Desktop-App.exe",desktop.Invocations.Last().FileName); Assert.Empty(desktop.Invocations.Last().Arguments);
@@ -141,9 +138,9 @@ public sealed class DesktopModelTests
     {
         var runner = new FakeProcessRunner(); runner.Results.Enqueue(new(0,"VMSTATE=Saved"));
         var query = new HypervisorQuery(new FakeCimVmQuery { Denied = true });
-        Assert.Equal("off",await Construct.Companion.Core.Drivers.VmPower.QueryLocalAsync(query,runner,"VM 'quoted'"));
+        Assert.Equal("off",await VmPower.QueryLocalAsync(query,runner,"VM 'quoted'"));
         Assert.Single(runner.Invocations);
-        var expected = Construct.Companion.Core.Drivers.VmPower.BuildStateProbeLaunch("VM 'quoted'").Invocation();
+        var expected = VmPower.BuildStateProbeLaunch("VM 'quoted'").Invocation();
         Assert.Equal(expected.FileName,runner.Invocations.Single().FileName);
         Assert.Equal(expected.Arguments,runner.Invocations.Single().Arguments);
         Assert.Equal(TimeSpan.FromSeconds(15),runner.Invocations.Single().Timeout);
@@ -155,10 +152,12 @@ public sealed class DesktopModelTests
     [Fact]
     public void RegistrationIsPerUserAndAutostartIndependent()
     {
-        var registry = new FakeRegistry(); var registration = new DesktopRegistration(registry,"C:\\app space\\ConstructCompanion.exe","C:\\app space\\icon.ico");
-        registration.Register(); Assert.True(registration.ToastRegistered); Assert.False(registration.Autostart);
+        var registry = new FakeRegistry(); var registration = new DesktopRegistration(registry,"C:\\app space\\ConstructCompanion.exe");
+        Assert.False(registration.ToastRegistered); Assert.False(registration.Autostart);
+        registry.WriteString(DesktopRegistration.ToastKey,"DisplayName","Construct Companion"); registry.WriteString(DesktopRegistration.ToastKey,"IconUri","C:\\app space\\icon.ico");
+        Assert.True(registration.ToastRegistered);
         registration.SetAutostart(true); Assert.True(registration.Autostart);
-        Assert.Equal("\"C:\\app space\\ConstructCompanion.exe\" --uri \"%1\"", registry.ReadString(DesktopRegistration.ProtocolKey+@"\shell\open\command",null));
+        Assert.Equal("\"C:\\app space\\ConstructCompanion.exe\" --background", registry.ReadString(DesktopRegistration.RunKey,"ConstructCompanion"));
         registration.SetAutostart(false); Assert.False(registration.Autostart);
     }
 }

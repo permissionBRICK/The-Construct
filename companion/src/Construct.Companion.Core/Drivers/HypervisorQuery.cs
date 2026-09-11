@@ -1,6 +1,7 @@
 using Construct.Companion.Core.Abstractions;
-namespace Construct.Companion.Core.Desktop;
+namespace Construct.Companion.Core.Drivers;
 
+// Maps the raw CIM EnabledState; a denied query surfaces as an exception and VmPower falls back to Get-VM.
 public sealed class HypervisorQuery(ICimVmQuery cim) : IHypervisorState
 {
     public static HypervisorState Map(CimVmState? state) => state?.EnabledState switch

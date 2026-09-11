@@ -15,6 +15,4 @@ public interface IDesktopProcess
 {
     Task OpenAsync(string target, CancellationToken cancellationToken = default);
     Task StartAsync(ProcessInvocation invocation, CancellationToken cancellationToken = default);
-    string? FindOnPath(string executable);
-    string? EnvironmentValue(string name);
 }

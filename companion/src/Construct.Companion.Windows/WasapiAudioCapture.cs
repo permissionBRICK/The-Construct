@@ -9,6 +9,8 @@ namespace Construct.Companion.Windows;
 [SupportedOSPlatform("windows")]
 public sealed class WasapiAudioCapture : IAudioCapture
 {
+    private const int QueueDepth = 64;
+    private const int FrameBytes = 3200; // 100 ms of S16LE 16 kHz mono
     public Task<IReadOnlyList<AudioDevice>> EnumerateDevicesAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -29,8 +31,8 @@ public sealed class WasapiAudioCapture : IAudioCapture
         // Keep the MFT stream open between callbacks. A temporary empty queue must
         // block rather than return zero (which means end-of-stream to the resampler).
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var input = Channel.CreateBounded<byte[]>(64);
-        var output = Channel.CreateBounded<ReadOnlyMemory<byte>>(64);
+        var input = Channel.CreateBounded<byte[]>(QueueDepth);
+        var output = Channel.CreateBounded<ReadOnlyMemory<byte>>(QueueDepth);
         capture.DataAvailable += (_, args) =>
         {
             if (args.BytesRecorded==0) return;
@@ -44,13 +46,13 @@ public sealed class WasapiAudioCapture : IAudioCapture
             try
             {
                 using var resampler = new MediaFoundationResampler(new CaptureInput(input.Reader,capture.WaveFormat,stop.Token),new WaveFormat(16000,16,1)) { ResamplerQuality=60 };
-                var buffer = new byte[3200]; int read;
+                var buffer = new byte[FrameBytes]; int read;
                 while ((read=resampler.Read(buffer,0,buffer.Length))>0)
                     if (!output.Writer.TryWrite(buffer.AsMemory(0,read).ToArray())) throw new IOException("Audio consumer fell behind.");
                 output.Writer.TryComplete();
             }
             catch (OperationCanceledException) { output.Writer.TryComplete(); }
-            catch (Exception) { output.Writer.TryComplete(new IOException("Audio conversion failed.")); }
+            catch (Exception e) { output.Writer.TryComplete(new IOException("Audio conversion failed.", e)); }
         },CancellationToken.None);
         try
         {

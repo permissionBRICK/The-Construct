@@ -360,7 +360,7 @@ public sealed class HostAdministration(IStateFileSystem files, ITokenStore token
     }
     private string HostsPath => Path.Combine(settings.Directory, "hosts.json");
     private string PendingPath(string slug) => Path.Combine(settings.Directory, "host-update-" + slug + ".json");
-    private JsonArray Enrolled => StateJson.ReadObject(files, HostsPath)?["hosts"] as JsonArray ?? [];
+    private JsonArray Enrolled => HostIdentity.EnrolledHosts(files, settings.Directory);
     private HostRecord Find(string slug) => List().FirstOrDefault(h => h.Slug == slug) ?? throw new IpcFailure(404, "hostNotFound", "Unknown enrolled host.");
     private RemoteHostClient Client(HostRecord host) => new(api, files, tokens, host.Url, host.Auth == "token" ? RemoteAuthentication.Token : RemoteAuthentication.Negotiate);
     private Model Get(string slug)

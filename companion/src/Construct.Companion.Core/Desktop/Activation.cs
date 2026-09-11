@@ -6,6 +6,17 @@ namespace Construct.Companion.Core.Desktop;
 public sealed record ActivationPlan(IReadOnlyList<UiActivation> Views, string? ForwardInstance = null, string? ForwardId = null);
 public static class Activation
 {
+    // In-process activations (tray, panel messages) reuse the command-line rules; "theme" exists only here.
+    public static ActivationPlan ResolveView(UiActivation activation, IReadOnlyCollection<string> instances, IReadOnlyCollection<string> hosts)
+    {
+        if (activation.View == "theme")
+        {
+            if (activation.Instance is not null && !instances.Contains(activation.Instance, StringComparer.Ordinal)) throw new ArgumentException("Instance is not registered.");
+            return new([activation]);
+        }
+        return Resolve(new CommandLine(Panel: activation.View == "panel", Settings: activation.View == "settings", HostAdmin: activation.View == "hostadmin",
+            Popup: activation.View == "popup", Instance: activation.Instance, Host: activation.Host), instances, hosts);
+    }
     public static ActivationPlan Resolve(CommandLine command, IReadOnlyCollection<string> instances,
         IReadOnlyCollection<string> hosts)
     {
