@@ -13,43 +13,30 @@ They cannot touch your host PC.
 [![Guest](https://img.shields.io/badge/Guest-Ubuntu%20Server%20%28latest%29-e95420.svg?style=flat-square)](docs/installation.md)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-00cc66.svg?style=flat-square)](https://github.com/permissionBRICK/The-Construct/pulls)
 
-[Features](#features) · [Install](#load-the-construct) · [Connect](#jack-in) ·
-[Configure](#configure) · [Docs](#documentation)
+[Features](#-features) · [Install](#-load-the-construct) · [Connect](#-jack-in) ·
+[Configure](#-configure) · [Docs](#-documentation)
 
 </div>
 
 ---
 
-## Features
+## ✨ Features
 
-- **Agents with full access.** Claude Code, Codex and Opencode run as root in bypass mode,
+- 🤖 **Agents with full access.** Claude Code, Codex and Opencode run as root in bypass mode,
   with no permission prompts.
-- **Sandboxed.** A throwaway Hyper-V VM sits between the agents and your PC.
-- **One control panel.** A VS Code extension on your PC runs the VM: status, power,
-  lifecycle, projects, updates and token usage.
-- **[Construct Companion](docs/companion.md).** A Windows tray app that keeps port forwards,
-  notifications and the microphone working with VS Code closed. It carries the same control
-  panel.
-- **Disposable, not amnesiac.** Reinstall the VM and the agent configuration comes back:
-  instructions, memory, skills, subscription auth, git and MCP credentials.
-- **Project profiles.** Repos, SDKs, MCP servers and setup commands in one JSON file, applied
-  on every provision.
-- **Config sync.** Project requirements an agent records on the VM survive a reinstall. They
-  are versioned in git on your PC and can be shared with a teammate as a one-liner or a zip.
-- **Microphone passthrough.** Voice input in the Claude Code extension works over Remote-SSH.
-- **Agents hand you links.** `construct expose 5173` on the VM opens that port on your PC and
-  prints the URL.
-- **Disposable child VMs.** On a shared host, `construct vm create` gives an agent a
-  short-lived Windows or Linux test machine booted from an ISO. No host credentials go into it.
-- **Shared-host administration.** Admins manage users, allowances, VMs, media, jobs,
-  configuration and host updates from one VS Code view. Users see their own VMs.
-- **T3 Code, patched.** The VM and the Windows client get a patched T3 Code build with voice
+- 🔒 **Sandboxed.** A throwaway Hyper-V VM sits between the agents and your PC.
+- ♻️ **Disposable.** Reinstall the VM and the agent configuration, auth and memory come back.
+- 📦 **Project profiles.** Repos, SDKs, MCP servers and setup commands in one JSON file,
+  applied on every provision.
+- 🖧 **Local or hosted.** Run the VM on your own PC, or on a shared Hyper-V host and use it
+  from anywhere.
+- 🖥️ **T3 Code, patched.** The VM and the Windows client get a patched T3 Code build with voice
   input, automatic resume after a session limit and Construct integration.
-- **It just works.** The agents are told to install whatever tool a task needs.
+- 🤷 **It just works.** The agents are told to install whatever tool a task needs.
 
 <sub>Also: MCP servers deploy to all three agents · the Claude Code extension is patched for faster UI updates · no AI attribution in commits by default.</sub>
 
-## Load the Construct
+## ⚡ Load the Construct
 
 Open PowerShell on Windows and paste:
 
@@ -71,7 +58,7 @@ a few questions at the start and then runs on its own.
 
 </div>
 
-## Jack in
+## 🔌 Jack in
 
 The VM answers as `agent-vm.mshome.net` (alias `agent-vm`). The installer sets up every
 target below:
@@ -96,7 +83,7 @@ default VM. A second local VM follows the same pattern under its own name. For a
 Remote-SSH and the Codex App work under that instance's alias. You reach its web ports with
 `construct expose`. The SMB share exists for local VMs only.
 
-## Configure
+## ⚙️ Configure
 
 Each project is declared once in `projects/*.json` and applied on every provision:
 
@@ -116,7 +103,7 @@ workspace root). Reference: [Project profiles & configuration](docs/projects.md)
 [control panel](docs/control-panel.md#patched-t3-code-server--desktop-build), for example
 microphone passthrough and the patched T3 Code build.
 
-## Run it on a remote host
+## 🖧 Run it on a remote host
 
 The VM can live on a shared Hyper-V machine instead of your PC. An admin installs the
 `constructd` service there once. After that, everyone creates and manages their own VMs on
@@ -150,20 +137,7 @@ admin-issued tokens), certificate pinning and the idle policy.
 administration and child VMs have Linux tests and still need the
 [Hyper-V field test](docs/field-test-host-admin.md) before rollout.
 
-## Know the trade
-
-The Construct trades guardrails for isolation.
-
-- **Bypass mode belongs in the sandbox.** Root and no prompts is fine in a throwaway VM. Do
-  not run it anywhere that holds real credentials or data.
-- **The bootstrap key is public.** A keypair committed to this repo authorizes the first
-  contact. Provisioning removes it, but anyone with the repo can reach a VM that has not been
-  provisioned yet.
-- **Backups hold plaintext secrets.** Treat the git-ignored `.construct-backup/` folder as a
-  secret.
-- **`code serve-web` is a root IDE over HTTP.** It is token-gated. Keep it on trusted networks.
-
-## Documentation
+## 📚 Documentation
 
 | Guide | What's inside |
 |-------|---------------|
@@ -183,10 +157,10 @@ The Construct trades guardrails for isolation.
 | [Backup & restore](docs/backup-restore.md) | Carrying agent configuration and auth across reinstalls |
 | [Config sync](docs/config-sync.md) | How project profiles survive a reinstall and sync between VM and PC |
 
-## License
+## 📄 License
 
 [MIT](LICENSE.md) © permissionBRICK
 
 <div align="center">
-<sub><i>Unfortunately, no one can be told what the Construct is. You have to <a href="#load-the-construct">see it for yourself</a>.</i></sub>
+<sub><i>Unfortunately, no one can be told what the Construct is. You have to <a href="#-load-the-construct">see it for yourself</a>.</i></sub>
 </div>
