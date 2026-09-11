@@ -1167,7 +1167,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("admin: the VMs tab is shown and the notice cleared", await admin.locator("#tab-vms").isVisible() && !(await admin.locator("#haNotice").isVisible()));
   check("admin: one row per VM, the child indented under its parent",
     (await admin.locator("#vmsTable .ha-row").count()) === 3 && (await admin.locator("#vmsTable .ha-row").nth(2).getAttribute("class")).includes("child"));
-  check("admin: the shared child is badged", /shared host-wide/i.test(await admin.locator("#vmsTable .ha-row").nth(2).innerText()));
+  check("admin: the shared child is badged", /public · host users/i.test(await admin.locator("#vmsTable .ha-row").nth(2).innerText()));
   check("admin: unknown guest facts print unknown", (await admin.locator("#vmsTable .ha-row").nth(1).innerText()).includes("provisioned unknown"));
   check("admin: a busy child's buttons are disabled", await admin.locator("#vmsTable .ha-row").nth(2).locator("button").first().isDisabled());
   const buttonLabels = await admin.locator("#haAdmin button").allInnerTexts();
