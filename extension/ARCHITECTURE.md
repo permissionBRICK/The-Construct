@@ -2893,3 +2893,48 @@ Verify with `node --check`, the test suites, and `pwsh` parse for any .ps1 edits
   for the plain-node units.
 - Auto-review: single reviewer, serial; only the main agent calls `request_review`.
   Pre-review every batch with parallel adversarial subagents (Workflow) first.
+
+## Companion mode
+
+`construct.companion` defaults to `auto`; `off` keeps the extension's existing
+host runtime. `src/companion.js` implements the version-1 loopback IPC contract in
+[the frozen Companion design](../docs/plans/construct-companion.md#7-ipc-contract)
+without a VS Code dependency. Filesystem, HTTP, PID checks and timers are injected
+for tests. Detection reads `%LOCALAPPDATA%\The-Construct\companion\endpoint.json`
+(`%TEMP%` fallback), validates the document, checks process liveness and matches the
+health response's PID, start time and API version. A directory watch and 30-second
+check discover arrivals and endpoint replacements. An unsupported API uses fallback.
+
+Presence is `absent`, `alive`, or `lost`. Startup waits for detection before arming
+host jobs. On arrival, the extension cancels probe/repatch/startup/config watcher
+timers, kills the notification watcher, releases its forwarder claim and closes
+its tunnels. Audio handoff disposes local capture/tunneling after any pending enable
+settles, preserving the shared guest shim. An in-flight config-sync tick finishes
+under its existing cross-process lock; new ticks and guest follow-ups are gated.
+Already issued finite SSH operations may finish, but their old generation cannot
+publish state or schedule more runtime work. Loss keeps jobs deferred for ten
+seconds; recovery cancels fallback, otherwise the existing runtime resumes.
+
+Launcher and editor-tab messages are proxied verbatim to the selected window
+instance. `ready` fetches the snapshot's existing webview messages. SSE `message`
+events are filtered to that instance, and `state.connectedInstance` is overlaid
+with the window's Remote-SSH attachment. Reconnect uses bounded backoff and fetches
+a new snapshot because the stream has no replay contract. Failures do not replay
+mutating messages automatically. During grace the last snapshot remains visible;
+a failed action asks the user to retry after reconnection/fallback.
+
+`construct.openPanel` and the launcher button activate the Companion panel;
+`construct.openPanelHere` opens the proxied VS Code editor tab. Host Administration
+activates the Companion window. Registry/file commands remain local, and a local
+theme change also sends `PUT /v1/settings`. Webview instance selection is proxied
+and also updates this window's selection.
+
+On connection, non-default mic device, notification, forward and repatch settings
+are copied once via partial settings PUT. The migration compares against the
+extension's defaults (including its existing 20-second repatch delay). Remote tokens
+are copied from SecretStorage only when the DPAPI token file is absent, through
+`powershell.exe` and `Save-ConstructRemoteToken`, with the token on stdin and all
+output suppressed. Success markers live in local `globalState`, one settings marker
+and one token marker per remote host; failed migrations remain retryable. Existing
+DPAPI files and SecretStorage are preserved. No Windows runtime validation is
+implied by the Linux HTTP/seam tests in `test/companion.test.js`.
