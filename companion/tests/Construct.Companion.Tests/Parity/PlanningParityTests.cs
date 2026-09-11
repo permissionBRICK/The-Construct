@@ -12,7 +12,7 @@ namespace Construct.Companion.Tests.Parity;
 
 public sealed class PlanningParityTests
 {
-    public static IEnumerable<object[]> Rows => new[] { "registry-state", "lifecycle-invocations", "lifecycle-launches", "vm-power", "project-import", "probe-parsing", "usage-parsing", "updates-planning", "remote-identity", "t3-pure", "state-json-bytes", "agent-update-scripts", "usage-exports", "instance-fingerprints" }.SelectMany(area => ParityTests.Rows(area).Select(row => new object[] { area, row[0] }));
+    public static IEnumerable<object[]> Rows => new[] { "instance-workflows", "registry-state", "lifecycle-invocations", "lifecycle-launches", "vm-power", "project-import", "probe-parsing", "usage-parsing", "updates-planning", "remote-identity", "t3-pure", "state-json-bytes", "agent-update-scripts", "usage-exports", "instance-fingerprints" }.SelectMany(area => ParityTests.Rows(area).Select(row => new object[] { area, row[0] }));
     [Theory, MemberData(nameof(Rows))]
     public async Task MatchesJavaScript(string area, JsonElement element)
     {
@@ -27,6 +27,10 @@ public sealed class PlanningParityTests
             case "usage-exports": Value("output", UsageParser.BuildExportPayload(StateJson.Text(row["input"]), S("savedAt"))); break;
             case "instance-fingerprints": Value("output", Instances.TargetFingerprint(O("input"))); break;
             case "state-json-bytes": Value("output", System.Text.Encoding.UTF8.GetString(StateJson.Bytes(row["input"]!))); break;
+            case "instance-workflows":
+                if (S("kind") == "git") { Value("valid", InstanceWorkflowPlans.IsGitUrl(S("url"))); Value("name", InstanceWorkflowPlans.RepoName(S("url"))); }
+                else Equal("output", S("kind") == "register" ? InstanceWorkflowPlans.Register(InstanceRegistry.Parse(S("text")), S("name"), S("host")) : InstanceWorkflowPlans.Remove(InstanceRegistry.Parse(S("text")), S("name"), S("confirmation")));
+                break;
             case "registry-state":
                 var registry = InstanceRegistry.Parse(S("text")); Value("problems", registry.Problems); Equal("document", registry.ToFileDocument()); Equal("active", registry.ResolveActive("missing", "dev")); break;
             case "lifecycle-invocations":

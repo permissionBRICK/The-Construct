@@ -560,6 +560,20 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   const launcherPowerTopLongHost = await page.locator("#lPowerBtn").evaluate((el) => el.getBoundingClientRect().top);
   check("launcher: hostname render does not shift power button", Math.abs(launcherPowerTopLongHost - launcherPowerTop) <= 1,
     `before=${launcherPowerTop}, after=${launcherPowerTopLongHost}`);
+  check("launcher: fallback instance selector hidden", !(await page.locator("#lInstanceLabel").isVisible()));
+  await page.evaluate(() => window.postMessage({type:"state",state:{companion:true,instance:"b",instances:["a","b"],registerOffer:{}}},"*"));
+  await page.waitForTimeout(60);
+  check("popup: instance selector visible", await page.locator("#lInstanceLabel").isVisible());
+  check("popup: two instances and current selection", await page.locator("#lInstanceSelect option").count() === 2 && await page.locator("#lInstanceSelect").inputValue() === "b");
+  await page.selectOption("#lInstanceSelect","a");
+  check("popup: selection posts setInstance", await page.evaluate(() => window.__posted.some(m=>m.type==="setInstance" && m.name==="a")));
+  check("popup: register offer visible", await page.locator("#lRegister").isVisible());
+  await page.click("#lRegister");
+  check("popup: register posts command", await page.evaluate(() => window.__posted.some(m=>m.type==="command" && m.id==="registerThisVm")));
+  await page.evaluate(() => window.postMessage({type:"state",state:{companion:true,instance:"a",registerOffer:null}},"*"));
+  await page.waitForTimeout(60);
+  check("popup: no offer hides registration", !(await page.locator("#lRegister").isVisible()));
+  check("popup: one instance hides selector", !(await page.locator("#lInstanceLabel").isVisible()));
   await page.click("#lOpen");
   let lposted = await page.evaluate(() => window.__posted);
   check("launcher: open posts openPanel", lposted.some((m) => m.type === "openPanel"));

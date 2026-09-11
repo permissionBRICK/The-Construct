@@ -376,3 +376,18 @@ test("opening a panel or visible sidebar bypasses exactly the next Construct aug
   sidebar.visible = false; visibility(); assert.equal(refreshes, 2);
   sidebar.visible = true; visibility(); assert.equal(refreshes, 3); await consumedOnce();
 });
+
+test("Companion popup switches instance scope and fallback keeps the selector hidden", () => {
+  const elements = new Map(), messages = []; let receive;
+  function element() { return { hidden:true, children:[], handlers:{}, style:{}, classList:{toggle(){}}, setAttribute(){}, addEventListener(k,f){this.handlers[k]=f;}, appendChild(v){this.children.push(v);}, set textContent(v){this.text=v;this.children=[];}, get textContent(){return this.text;} }; }
+  const document = { getElementById(id){ if (!elements.has(id)) elements.set(id,element()); return elements.get(id); }, querySelector(){return null;}, querySelectorAll(){return [];}, createElement:element };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,"../media/launcher.js"),"utf8"), {document, window:{addEventListener(k,f){receive=f;}}, acquireVsCodeApi:()=>({postMessage:m=>messages.push(m)})});
+  receive({data:{type:"state",state:{instance:"a",instances:["a","b"],online:false}}});
+  assert.equal(document.getElementById("lInstanceLabel").hidden,true);
+  receive({data:{type:"state",state:{companion:true,instance:"b",instances:["a","b"],online:false,registerOffer:{}}}});
+  assert.equal(elements.get("lInstanceLabel").hidden,false);
+  assert.deepEqual(elements.get("lInstanceSelect").children.map(o=>[o.value,o.selected]),[["a",false],["b",true]]);
+  elements.get("lInstanceSelect").value="a"; elements.get("lInstanceSelect").handlers.change();
+  assert.deepEqual(JSON.parse(JSON.stringify(messages.at(-1))),{type:"setInstance",name:"a"});
+  assert.equal(elements.get("lRegister").hidden,false);
+});
