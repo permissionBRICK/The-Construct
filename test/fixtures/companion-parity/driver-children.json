@@ -1,0 +1,102 @@
+[
+  {
+    "children": [],
+    "output": {
+      "items": [],
+      "problem": "",
+      "supported": true
+    },
+    "requests": [
+      "/api/v1/health",
+      "/api/v1/vms/primary/children",
+      "/api/v1/vms/shared"
+    ],
+    "shared": []
+  },
+  {
+    "children": [
+      {
+        "name": "own"
+      }
+    ],
+    "output": {
+      "items": [
+        {
+          "name": "own"
+        },
+        {
+          "name": "shared"
+        }
+      ],
+      "problem": "",
+      "supported": true
+    },
+    "requests": [
+      "/api/v1/health",
+      "/api/v1/vms/primary/children",
+      "/api/v1/vms/shared"
+    ],
+    "shared": [
+      {
+        "name": "shared"
+      }
+    ]
+  },
+  {
+    "children": [
+      {
+        "name": "BUILD",
+        "state": "running"
+      }
+    ],
+    "output": {
+      "items": [
+        {
+          "name": "BUILD",
+          "state": "running"
+        },
+        {
+          "name": "shared"
+        }
+      ],
+      "problem": "",
+      "supported": true
+    },
+    "requests": [
+      "/api/v1/health",
+      "/api/v1/vms/primary/children",
+      "/api/v1/vms/shared"
+    ],
+    "shared": [
+      {
+        "name": "build",
+        "state": "off"
+      },
+      {
+        "name": "shared"
+      }
+    ]
+  },
+  {
+    "children": {},
+    "output": {
+      "items": [
+        {
+          "name": "shared"
+        }
+      ],
+      "problem": "",
+      "supported": true
+    },
+    "requests": [
+      "/api/v1/health",
+      "/api/v1/vms/primary/children",
+      "/api/v1/vms/shared"
+    ],
+    "shared": [
+      {
+        "name": "shared"
+      }
+    ]
+  }
+]

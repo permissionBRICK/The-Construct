@@ -33,12 +33,13 @@ public sealed class FakeSshTransport : ISshTransport
     public Action<FakeRunningProcess>? TunnelStarted { get; set; }
     public ScriptedGuestSpool Spool { get; } = new();
     public List<string> Scripts { get; } = [];
+    public List<TimeSpan?> ScriptTimeouts { get; } = [];
     public List<(string Script, FakeRunningProcess Process)> Watches { get; } = [];
     public List<(TunnelSpec Spec, FakeRunningProcess Process)> Tunnels { get; } = [];
     public HashSet<(int Port, string BindHost)> BusyPorts { get; } = [];
     public Task<ProcessResult> RunRemoteScriptAsync(string script, TimeSpan? timeout = null, CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested(); Scripts.Add(script); return ScriptHandler is null ? Task.FromResult(Spool.Run(script)) : ScriptHandler(script, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested(); Scripts.Add(script); ScriptTimeouts.Add(timeout); return ScriptHandler is null ? Task.FromResult(Spool.Run(script)) : ScriptHandler(script, cancellationToken);
     }
     public IRunningProcess SpawnWatch(string script, CancellationToken cancellationToken = default)
     {

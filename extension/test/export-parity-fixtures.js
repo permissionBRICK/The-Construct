@@ -48,8 +48,8 @@ function guestScripts() {
     add("audio-enable", { port: "8767", count: "8", shim: q(Buffer.from(text).toString("base64")), enable: q(Buffer.from(text).toString("base64")) }, audio.buildEnableScript(text, text));
     add("audio-disable", { self: "0", port: "8767", count: "8", disable: q(Buffer.from(text).toString("base64")) }, audio.buildDisableScript(text));
   }
-  add("t3-pairing", {}, t3.buildPairingScript());
-  for (const name of ["dev", "build-2"]) add("t3-pairing-instance", { instance: name }, t3.buildPairingScript({ name }));
+  add("t3-pairing", { pairingBase: scripts.render("construct-t3-pairing-base") }, t3.buildPairingScript());
+  for (const name of ["dev", "build-2"]) add("t3-pairing-instance", { instance: name, pairingBase: scripts.render("construct-t3-pairing-base") }, t3.buildPairingScript({ name }));
   for (const report of ["daily", "monthly", "total"]) add("usage", { report }, usage.buildUsageScript(report));
   for (const name of scripts.names.filter(name => name.startsWith("construct-"))) add(name, {});
   return rows;
@@ -144,7 +144,10 @@ function usageParsing() {
 function updatesPlanning() {
  const m=updates;const rows=[];
  for(const raw of [{},{installedCommit:false,constructRepo:0,constructRef:false,provisionedCommit:0},{installedCommit:"abcdef1234",provisionedCommit:"old",constructRef:"dev",constructRepo:"owner/repo"}])for(const state of [null,{provisionedCommit:"abcdef1234"},{provisionedCommit:"1234567"}])for(const guest of [null,"ABCDEF1234","bad"]){const markers=m.readMarkers(raw,state);rows.push({kind:"markers",raw,state,guest,markers,stale:m.isProvisionStale(markers,guest),effective:m.effectiveProvisionedCommit(markers,guest),args:m.constructRefreshArgs(markers)});}
- for(const input of [null,{}, {notFound:true},{ahead_by:0},{ahead_by:5},{ahead_by:-1},{ahead_by:"4"}]) rows.push({kind:"compare",input,output:m.constructUpdateFromCompare(input)});
+ const commit="a".repeat(40), manifest={schemaVersion:1,repository:"owner/repo",ref:"refs/heads/main",commit,releaseTag:`host-${commit}`,sourceAsset:`construct-source-${commit}.zip`,sourceSha256:"b".repeat(64),sourceSizeBytes:1024,payloadAsset:`construct-host-${commit.slice(0,7)}-win-x64.zip`,payloadSha256:"c".repeat(64),payloadSizeBytes:2048};
+ const invalid=[null,{}, {notFound:true}, ...Object.keys(manifest).map(key=>({...manifest,[key]:null})), ...["sourceSizeBytes","payloadSizeBytes"].flatMap(key=>[0,-1,1.5,1073741825,"1024"].map(value=>({...manifest,[key]:value}))), {...manifest,commit:commit.toUpperCase()}, {...manifest,repository:"other/repo"}, ...["sourceSha256","payloadSha256","commit"].map(key=>({...manifest,[key]:manifest[key]+"\n"}))];
+ for(const installedCommit of ["a".repeat(7),commit,"b".repeat(40)]) for(const input of [manifest,...invalid]) {const markers={repo:"owner/repo",ref:"main",installedCommit}; rows.push({kind:"manifest",input,markers,output:m.constructUpdateFromManifest(input,markers)});}
+
  for(const latest of ["1.2.3","1.3.0","1.2.3-nightly.2.1","1.2.3-beta.2","bad"])for(const installed of ["1.2.3","1.2.2","1.2.3-nightly.1.9","1.2.3-beta.1","bad"])rows.push({kind:"version",latest,installed,newer:m.isNewer(latest,installed),nightly:m.isNewerNightly(latest,installed)});
  return rows;
 }
@@ -165,7 +168,7 @@ function t3Pure() {
 function remoteRoutes() {
  const m=remotehost, rows=[]; const value="name /?ü";
  const calls=[
- ["whoami"],["listVms"],["getVm",value],["getState",value],["getEndpoint",value],["power",value,"start"],["createVm",{name:"dev"}],["deleteVm",value,{force:true}],["getJob",value],["health"],["hostCapabilities"],["vmIdentity",value],["vmCapabilities",value],["hostStatus"],["hostCapacity",true],["hostConfig"],["putHostConfig",{mode:"x"}],["isoCatalog"],
+ ["vmDefaults"],["vmCpu",value],["setVmCpu",value,{cpus:8}],["whoami"],["listVms"],["getVm",value],["getState",value],["getEndpoint",value],["power",value,"start"],["createVm",{name:"dev"}],["deleteVm",value,{force:true}],["getJob",value],["health"],["hostCapabilities"],["vmIdentity",value],["vmCapabilities",value],["hostStatus"],["hostCapacity",true],["hostConfig"],["putHostConfig",{mode:"x"}],["isoCatalog"],
  ["users"],["getUser",value],["createUser",{name:"x"}],["updateUser",value,{role:"admin"}],["deleteUser",value],["userAllowance",value],["putUserAllowance",value,{maxVms:2}],["userTokens",value],["issueUserToken",value,null],["revokeUserToken",value,"id /"],
  ["vms",{all:true,empty:"",owner:value}],["sharedVms"],["children",value],["overrides",value],["putOverrides",value,{ram:8}],["deleteOverrides",value],["lifecycle",value,{action:"reprovision"}],["setVmSharing",value,{shared:true}],["renewVmLease",value,{minutes:30}],["rotateVmToken",value,null],["revokeVmToken",value],
  ["media",{type:"iso"}],["mediaItem",value],["mediaReferences",value],["deleteMedia",value],["mediaCleanup"],["jobs",{state:"running"}],["cancelJob",value],["audit",{limit:20}],["forwardsVia",value],["updatesStatus"],["updatesCheck",null],["updatesStage",{releaseTag:"x"}],["updatesApply",{updateId:"x"}],["updatesCancel",{updateId:"x"}],["updatesResolve",{updateId:"x"}]];
@@ -361,7 +364,7 @@ function hostAdminIpc() {
  for(const input of [{},{mode:"admin",activeTab:"vms"},{mode:"admin",features:{updates:true}},{mode:"user"},{maintenance:{phase:"draining"}},{updatePending:{id:"one"}}])add("poll",input,m.pollIntervalMs(input));
  for(const input of [null,"", "5m", "4m", "24h", "2d", "never", "NEVER", " 12h ", "0m", "-5h", "99999999999999999999d", "five"])
   add("lifetime",input,m.parseLifetime(input));
- for(const features of [[],["host-admin"],["host-admin","children","updates"],["host-admin","children","media","updates","network","console"]]) {
+ for(const features of [[],["host-admin"],["host-admin","children","updates"],["host-admin","children","media","updates","network","console","primary-cpu"]]) {
   const input={apiFeatures:features}; add("features",input,m.featureSet(input)); add("tabs",input,m.tabsFor({features:m.featureSet(input)}));
  }
  for(const form of [{},{name:"alice",role:"admin",enabled:"false",maxVms:"3",allowHostForwards:"true"},{name:"",role:"root",enabled:"invalid",maxVms:"-1"},{allowChildCreation:"true",maxRetainedChildren:"4",cpuBudget:"8",ramBudgetGiB:"1.5",storageBudgetGiB:"100",maxChildLifetime:"24h",allowNeverLifetime:"false",allowSharing:"inherit"},{maxChildLifetime:"never",ramBudgetGiB:"bad",maxRetainedChildren:"1.5"}])
@@ -369,7 +372,7 @@ function hostAdminIpc() {
  for(const timeoutMinutes of [0,1,5.8,99,-5,"bad","45"])for(const action of ["shutdown","save","SAVE","unknown"]) {
   const input={policy:{timeoutMinutes,action},max:30}; add("idleClamp",input,f.clampIdlePolicy(input.policy,input.max)); add("idle",{timeoutMinutes,action,maxTimeoutMinutes:30},f.toPanelIdlePolicy({timeoutMinutes,action,maxTimeoutMinutes:30}));
  }
- const vm={name:"build",kind:"child",parent:"agent-vm",owner:"alice",sharing:"host",state:"running",hardware:{cpus:4,ramMb:2048,diskGb:80},lease:{state:"active",requested:"12h",expiresAt:"2026-09-11T13:00:00Z"},allowedActions:["shutdown","delete","invented"],resourceUsage:{cpuUsagePercent:25.5,memoryDemandBytes:1073741824,memoryAssignedBytes:2147483648,diskFileBytes:123456789,observedAt:"2026-09-11T11:59:55Z"}};
+ const vm={pendingCpu:8,name:"build",kind:"child",parent:"agent-vm",owner:"alice",sharing:"host",state:"running",hardware:{cpus:4,ramMb:2048,diskGb:80},lease:{state:"active",requested:"12h",expiresAt:"2026-09-11T13:00:00Z"},allowedActions:["shutdown","delete","invented"],resourceUsage:{cpuUsagePercent:25.5,memoryDemandBytes:1073741824,memoryAssignedBytes:2147483648,diskFileBytes:123456789,observedAt:"2026-09-11T11:59:55Z"}};
  for(const input of [{},vm,{...vm,state:"paused",deleting:true,lease:{state:"overdue",lastOutcome:"no integration"}},{name:"agent-vm",kind:"primary",children:["build"],guest:{constructCommit:"abcdef0123456789",provisionedAt:"2026-09-11T11:30:00Z"}}]) {
   add("vm",input,m.toVmRow(input,now)); add("childDelete",input,m.childDeleteConfirmation(input)); add("children",[input],m.childRows([input],now));
  }
@@ -377,9 +380,37 @@ function hostAdminIpc() {
  for(const [kind,fn] of [["overview","toOverview"],["capacity","toCapacityBars"],["media","toMediaRow"],["iso","toIsoCatalogView"],["job","toJobRow"],["audit","toAuditRow"],["config","toConfigView"],["capabilities","toCapabilityRows"],["updates","toUpdateView"],["updateActions","updateActionsFor"],["user","toUserRow"],["allowanceForm","allowanceForm"],["allowanceText","allowanceText"]]) {
   add(kind,{},m[fn]({}));
  }
+ for (const sizeBytes of [0,1,"0",null]) for (const sidecarReadable of [true,false,null]) { const input={entries:[{fileName:"test.iso",sizeBytes,sidecarReadable}]}; add("iso",input,m.toIsoCatalogView(input)); }
+ for (const state of ["running","paused","off"]) for(const deleting of [true,false]) for(const allowedActions of [undefined,[],["console"]]) for(const currentOperation of [null,{kind:"provision"}]) {
+   const input=[{name:"guest",state,deleting,allowedActions,currentOperation}]; add("children",input,m.childRows(input,now));
+ }
+ for(const items of [[],[vm],null]) for(const problem of ["","read failed"]) for(const supported of [true,false]) {
+   const input={backend:"hyperv-remote",primary:"agent-vm",supported,items,problem,now}; add("childrenCard",input,m.childrenCardState(input));
+ }
  for(const state of ["checking","staged","draining","handedOff","applying","interrupted","recoveryFailed","succeeded","failed","cancelled"]) {
   const input={current:{id:"u1",state},installed:{commit:"1234567"},latestKnown:{commit:"abcdef0",compatible:true,reasons:[]}}; add("updates",input,m.toUpdateView(input)); add("updateActions",input,m.updateActionsFor(input));
   const job={id:"j1",kind:"child-delete",state,vmName:"build"};add("job",job,m.toJobRow(job));
+ }
+ return rows;
+}
+async function guestConsole() {
+ const m=require("../src/guest-console"), rows=[];
+ for(const name of ["guest","A.b_c-1","a".repeat(64),"a".repeat(65),"","-bad","bad'", "a\nb", "a/b"]) {
+   let output=null; try { output=m.buildConsoleScript(name); } catch (_) {} rows.push({kind:"script",input:name,output});
+ }
+ for(const input of ["https://host/console#ticket","http://127.0.0.1:8080/#ticket","https://host#ticket"," HTTPS://HOST:443/a#ticket\r\n", "https://[::1]/#ticket","https://host/", "https://host/#", "https://user@host/#ticket", "https://user:pass@host/#ticket", "ftp://host/#ticket", "javascript:alert(1)#ticket", "not a url", "", "https://host/#one\nhttps://host/#two", "noise\nhttps://host/#ticket"]) {
+   let output=null; const vscode={ProgressLocation:{Notification:1},window:{withProgress:(_,fn)=>fn()},env:{openExternal:async uri=>{output=uri;return true;}},Uri:{parse:x=>x}};
+   try { await m.openGuestConsole({name:"agent-vm"},"guest",{_vscode:vscode,_ssh:{runRemoteScript:async()=>({code:0,stdout:input})}}); } catch (_) {}
+   rows.push({kind:"url",input,output});
+ }
+ return rows;
+}
+async function driverChildren() {
+ const driver=require("../src/drivers/hyperv-remote"), rows=[];
+ for(const [children,shared] of [[[],[]],[[{name:"own"}],[{name:"shared"}]],[ [{name:"BUILD",state:"running"}], [{name:"build",state:"off"},{name:"shared"}] ],[{},[{name:"shared"}]]]) {
+   driver.resetFeatureCache(); const requests=[];
+   const output=await driver.queryChildren({name:"agent-vm",vmName:"primary",service:{url:"https://host:7462",auth:"negotiate"}}, {auth:{kind:"token",token:"fixture"},pin:"a".repeat(64),fetchImpl:async(url)=>{requests.push(new URL(url).pathname+new URL(url).search); return {status:200,text:JSON.stringify(url.endsWith("/health")?{apiFeatures:["children"]}:url.includes("/children")?children:shared)};}});
+   rows.push({children,shared,output,requests});
  }
  return rows;
 }
@@ -430,6 +461,8 @@ async function exportAll() {
     "integration-settings": integrationSettings(),
     "desktop-webviews": desktopWebviews(),
     "hostadmin-ipc": hostAdminIpc(),
+    "guest-console": await guestConsole(),
+    "driver-children": await driverChildren(),
     "config-sync": configSync(),
     "notify-runtime": notifyRuntime(),
     "audio-runtime": audioRuntime(),

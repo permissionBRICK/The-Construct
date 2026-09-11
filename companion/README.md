@@ -40,6 +40,12 @@ running one through the same authenticated routes (`endpoint.json`).
 
 ## Build and test
 
+Run only the groups for affected features; reserve `all` for integration merges and release preparation (see [local checks](../docs/local-checks.md)).
+
+Run `bash test/run-local-checks.sh companion` for the full Companion gate (also
+included in `all`). GitHub Actions only builds and publishes the self-contained
+Windows release; regression checks run locally. Individual commands:
+
 ```sh
 dotnet build companion/Construct.Companion.sln -warnaserror
 dotnet test companion/Construct.Companion.sln
@@ -81,6 +87,14 @@ by its five-minute runtime policy. Host and update metadata refresh periodically
 duplicating the runtime probe. Public update results are shared and cached for ten minutes
 (one minute on failure); usage is collected on demand per instance/period and cached for
 five minutes (one minute on failure), matching the JavaScript TTL fixtures.
+Construct update detection uses the complete published main release manifest;
+custom refs remain manual. Guest inventory includes accessible shared VMs and emits
+`{type:"children", instance, children}` independently of the SSH status refresh.
+Host administration supports CPU counts (including `max`) and confirmed full
+restart/start to apply pending CPU changes. CPU input gets one attempt; invalid input
+shows a notice and the user can reopen the action (`IPrompts` has no live validator).
+Guest browser consoles and T3 pairing
+allow 90 seconds for gateway forwarding. Console tickets are never logged or stored.
 Per-instance command queues keep long operations alive after client disconnects.
 State aggregation supplies the existing nested panel state and snapshot messages.
 Host-admin windows subscribe by host slug and release their polling subscription when
@@ -164,6 +178,7 @@ views and runtime messages use IPC). The limitations of the implemented rows are
 | command | `addConfigRemote` | implemented |
 | command | `addProject` | unsupported: Clone/register wizard remains in VS Code. |
 | command | `addRemoteAndPublish` | implemented |
+| command | `childConsole` | implemented |
 | command | `childDelete` | implemented |
 | command | `childShutdown` | implemented |
 | command | `chooseMicDevice` | implemented |

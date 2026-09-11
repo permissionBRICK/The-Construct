@@ -7,6 +7,10 @@ function Assert($Condition,[string]$Message) { if (-not $Condition) { throw $Mes
 function Reject([scriptblock]$Action,[string]$Message) { $failed=$false; try { & $Action | Out-Null } catch { $failed=$true }; Assert $failed $Message }
 $dir=Join-Path ([IO.Path]::GetTempPath()) ('companion-package-'+[guid]::NewGuid().ToString('N'))
 try {
+    $workflow = Get-Content -Raw (Join-Path $root '.github/workflows/companion-release.yml')
+    Assert ($workflow -notmatch 'test-linux:|needs:|dotnet test|Headless no-instances selftest|actions/setup-node@') 'Release workflow only produces deliverables'
+    Assert ($workflow -match 'dotnet publish.*-r win-x64 --self-contained true') 'Self-contained Windows publish retained'
+    Assert ($workflow -match 'gh release create "companion-\$env:GITHUB_SHA" --latest=false') 'Companion cannot displace the complete Construct latest manifest'
     $publish=Join-Path $dir 'publish'; $out=Join-Path $dir 'package'; $sha='a'*40
     [IO.Directory]::CreateDirectory((Join-Path $publish 'media/themes')) | Out-Null
     [IO.File]::WriteAllText((Join-Path $publish 'ConstructCompanion.exe'),'fixture exe, not runnable')

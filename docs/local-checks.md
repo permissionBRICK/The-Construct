@@ -25,9 +25,25 @@ Then, from the repository root, choose the checks relevant to the change:
 bash test/run-local-checks.sh panel
 bash test/run-local-checks.sh t3
 bash test/run-local-checks.sh service
-# Or run all three groups:
+bash test/run-local-checks.sh companion
+# Or run all four groups:
 bash test/run-local-checks.sh all
 ```
+
+Run only the checks for the features a change affects. Use `all` for integration
+merges and release preparation, not for ordinary changes.
+
+| Change area | Checks |
+|---|---|
+| `companion/**`, `test/fixtures/companion-parity/**` | `companion` |
+| `extension/src/**`, `extension/media/**` | `panel`, plus `companion` when it ports the changed module |
+| T3, pairing, updates | `t3` |
+| `service/**`, `drivers/**`, `lib/**`, `bin/**` | `service` |
+| Installers | Companion PowerShell suites plus the touched script's own tests |
+
+The `companion` group builds with warnings as errors, runs Companion .NET tests,
+Node parity and Companion suites, and the three Companion PowerShell suites. It
+is included in `all`; the Companion workflow only publishes its Windows deliverable.
 
 The panel defaults to the native theme; set `UI_SMOKE_THEME=classic` or `terminal`
 to check another theme. These runners group the former workflow checks; other
