@@ -231,6 +231,50 @@ ok("SHUTDOWN_CMD returns immediately (--no-block)", vm.SHUTDOWN_CMD === "systemc
     chkFn.includes("queryAutoCheckpoints") && chkFn.includes("readAppliedAutoCheckpoints") &&
     chkFn.includes("shouldOfferCheckpointApply"));
 
+  // ── planResourceApply: "restart to apply" for RAM + vCPUs ─────────────────
+  const rplan = (saved, live) => vm.planResourceApply(saved, live);
+  ok("resources: nothing set -> none, no pending, empty summary",
+    (() => { const p = rplan({ ram: "", cpu: "" }, { ramGb: 8, cpus: 4 }); return p.none === true && p.pending === null && p.summary === "" && p.ram === null && p.cpu === null; })());
+  ok("resources: no saved object at all -> none", rplan(null, null).none === true && rplan(undefined, {}).none === true);
+  ok("resources: form strings become numbers", (() => { const p = rplan({ ram: "16", cpu: "8" }, null); return p.ram === 16 && p.cpu === 8; })());
+  ok("resources: a differing RAM is pending", rplan({ ram: "16", cpu: "" }, { ramGb: 8, cpus: 4 }).pending === true);
+  ok("resources: a differing CPU count is pending", rplan({ ram: "", cpu: "8" }, { ramGb: 8, cpus: 4 }).pending === true);
+  ok("resources: one matching + one differing is pending", rplan({ ram: "8", cpu: "8" }, { ramGb: 8, cpus: 4 }).pending === true);
+  ok("resources: everything matching is NOT pending", rplan({ ram: "8", cpu: "4" }, { ramGb: 8, cpus: 4 }).pending === false);
+  ok("resources: a matching RAM alone is not pending even with an unset CPU", rplan({ ram: "8" }, { ramGb: 8, cpus: 4 }).pending === false);
+  ok("resources: the VM's size unknown (offline) -> can't tell (null), values still returned",
+    (() => { const p = rplan({ ram: "16", cpu: "8" }, null); return p.pending === null && p.ram === 16 && p.cpu === 8 && p.current === ""; })());
+  ok("resources: a partially known live size: the unknown half can't tell, the known half decides only when it differs",
+    rplan({ ram: "16", cpu: "4" }, { cpus: 4 }).pending === null && rplan({ ram: "16", cpu: "8" }, { cpus: 4 }).pending === true);
+  ok("resources: a fractional RAM against the probe's whole-GB reading is pending", rplan({ ram: "16.5" }, { ramGb: 16 }).pending === true);
+  ok("resources: a fractional CPU count is not a value", (() => { const p = rplan({ ram: "", cpu: "2.5" }, { cpus: 2 }); return p.cpu === null && p.none === true; })());
+  ok("resources: zero / negative / garbage are not values",
+    rplan({ ram: "0", cpu: "-1" }, null).none === true && rplan({ ram: "lots", cpu: "x" }, null).none === true && rplan({ ram: true, cpu: false }, null).none === true);
+  ok("resources: summary + current wording", (() => {
+    const p = rplan({ ram: "16", cpu: "1" }, { ramGb: 8, cpus: 4 });
+    return p.summary === "16 GB RAM, 1 vCPU" && p.current === "8 GB RAM, 4 vCPUs";
+  })());
+  ok("resources: CPU-only summary", rplan({ cpu: "8" }, { ramGb: 8, cpus: 4 }).summary === "8 vCPUs");
+  // The webview inlines the same rule (media/panel.js renderResourcePending) — pin the
+  // two copies to each other on the cases that matter: pending / matching / unknown.
+  const panelSrc = require("fs").readFileSync(require("path").join(__dirname, "..", "media", "panel.js"), "utf8");
+  ok("resources: the webview mirrors the planner (resourceNumber + the pending rule)",
+    panelSrc.includes("function resourceNumber(v, integer)") && panelSrc.includes("checks.some((c) => c === true)") &&
+    panelSrc.includes("checks.every((c) => c === false)") && panelSrc.includes("liveVmSpec = null"));
+  // extension.js wiring: the apply passes the result file, only sends the guest poweroff
+  // after the console reported "running" (a declined UAC must not shut the VM down), and
+  // the remote path goes through the service's CPU route + a lifecycle restart.
+  const resFn = extSrc.slice(extSrc.indexOf("async function runApplyVmResources"), extSrc.indexOf("async function startConstructReprovision"));
+  ok("wiring: the local apply runs setResources with the result-file env var",
+    resFn.includes('lifecycle.run("setResources"') && resFn.includes("CONSTRUCT_RESOURCES_RESULT"));
+  ok("wiring: the guest poweroff waits for the console's running report",
+    resFn.indexOf('res === "running"') > 0 && resFn.indexOf("vmpower.SHUTDOWN_CMD") > resFn.indexOf('res === "running"') &&
+    resFn.indexOf("vmpower.SHUTDOWN_CMD") < resFn.indexOf('res === "ok"'));
+  ok("wiring: the decision is the pure planner's", resFn.includes("vmpower.planResourceApply"));
+  ok("wiring: the remote path records the count on the service and restarts through its lifecycle route",
+    resFn.includes("client.setVmCpu(") && resFn.includes('{ action: "restart" }') && resFn.includes("hostadmin.awaitJob("));
+  ok("wiring: the panel message is handled", extSrc.includes('case "applyVmResources"'));
+
   console.log(`\n  vmpower unit tests — ${pass}/${pass + fail} passed\n`);
   process.exit(fail ? 1 : 0);
 })();

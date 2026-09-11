@@ -11,6 +11,9 @@ if [[ "$group" == panel || "$group" == all ]]; then
   node extension/test/hostadmin.test.js
   node extension/test/hostadmin-ui.test.js
   node extension/test/hostadmin-discovery.test.js
+  node extension/test/vmpower.test.js
+  node extension/test/lifecycle.test.js
+  pwsh -NoProfile -File test/vm-resources.test.ps1
   UI_SMOKE_THEME="${UI_SMOKE_THEME:-native}" node extension/test/ui-smoke.js
 fi
 if [[ "$group" == t3 || "$group" == all ]]; then

@@ -12,7 +12,7 @@
 //   {
 //     backend: string,
 //     capabilities: { checkpoints: bool, console: "vmconnect"|"none"|<url>, suspend: bool,
-//                     hostLifecycle: bool },
+//                     hostLifecycle: bool, resources: bool },
 //     queryVmState(instance, opts)        -> Promise<'running'|'off'|'absent'|'unknown'>
 //     queryAutoCheckpoints(instance, opts) -> Promise<'on'|'off'|'absent'|'unsupported'|'unknown'>
 //     startVm(instance, opts)             -> bool (spawned?)
@@ -45,7 +45,7 @@ function unknownDriver(backend) {
     `for this instance. Update The Construct if this instance was created by a newer version.`;
   return {
     backend: name,
-    capabilities: { checkpoints: false, console: "none", suspend: false, hostLifecycle: false },
+    capabilities: { checkpoints: false, console: "none", suspend: false, hostLifecycle: false, resources: false },
     unknown: true,
     queryVmState() { return Promise.resolve("unknown"); },
     queryAutoCheckpoints() { return Promise.resolve("unknown"); },
@@ -88,7 +88,7 @@ function listBackends() {
 // name checked in lifecycle.js: the remote driver re-enabled these actions in B7 by
 // declaring what it can do — Auto-Install.ps1 gained a `-Backend hyperv-remote` path —
 // without a line of lifecycle.js changing.
-const HYPERVISOR_ACTIONS = Object.freeze(["reinstall", "redownload", "setCheckpoints"]);
+const HYPERVISOR_ACTIONS = Object.freeze(["reinstall", "redownload", "setCheckpoints", "setResources"]);
 
 // setCheckpoints asks a SECOND question on top of hostLifecycle, because the two are
 // genuinely different: "can the host scripts drive this backend's VMs at all?" and
@@ -97,7 +97,10 @@ const HYPERVISOR_ACTIONS = Object.freeze(["reinstall", "redownload", "setCheckpo
 // refusal would now be a lie. Stated as a per-action capability requirement rather than
 // as a special case, so a Proxmox driver (snapshots, but a different lifecycle story)
 // slots in the same way.
-const ACTION_CAPABILITY = Object.freeze({ setCheckpoints: "checkpoints" });
+// setResources (Set-AgentVmResources.ps1) is the same story with `resources`: the script
+// resizes the LOCAL Hyper-V VM, while a remote instance is resized by its host service
+// through the API — a different code path in the extension, not this script.
+const ACTION_CAPABILITY = Object.freeze({ setCheckpoints: "checkpoints", setResources: "resources" });
 
 /** Does `action` touch the hypervisor (rather than just SSH into the VM)? Pure. */
 function isHypervisorAction(action) {
@@ -126,7 +129,9 @@ function lifecycleSupport(backend, action) {
   if (needed && caps[needed] !== true) {
     return {
       ok: false,
-      reason: `the "${name}" backend has no ${needed} — that setting applies to VMs on this PC's Hyper-V only.`,
+      reason: needed === "resources"
+        ? `the "${name}" backend is not resized by the host scripts — a VM on a host service is resized through that service.`
+        : `the "${name}" backend has no ${needed} — that setting applies to VMs on this PC's Hyper-V only.`,
     };
   }
   return { ok: true };
