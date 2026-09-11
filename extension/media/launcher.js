@@ -145,7 +145,7 @@
   }
 
   window.addEventListener("message", (ev) => {
-    if (ev.data && ev.data.type === "lifecyclePrepared") { setPreparing(ev.data.id, false); return; }
+    if (ev.data && ev.data.type === "lifecyclePrepared") { setPreparing(ev.data.id, false); if (ev.data.error) window.alert(String(ev.data.error)); return; }
     const m = ev.data;
     if (!m) return;
     if (m.type === "state") { render(m.state); return; }

@@ -2,8 +2,10 @@
 # Run from any directory. Dependencies are documented in docs/local-checks.md.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# A configured guest environment must not alter host-side fixtures or tests.
+unset CONSTRUCT_SERVICE_URL CONSTRUCT_SERVICE_CA_FILE CONSTRUCT_EXTERNAL_HOST CONSTRUCT_EXTERNAL_SSH_PORT CONSTRUCT_INSTANCE_NAME CONSTRUCT_T3_VOICE_INPUT
 group="${1:-all}"
-case "$group" in panel|t3|service|all) ;; *) echo 'Usage: bash test/run-local-checks.sh [panel|t3|service|all]' >&2; exit 2 ;; esac
+case "$group" in panel|t3|service|companion|all) ;; *) echo 'Usage: bash test/run-local-checks.sh [panel|t3|service|companion|all]' >&2; exit 2 ;; esac
 if [[ "$group" == panel || "$group" == all ]]; then
   node extension/test/guest-console.test.js
   node extension/test/hostadmin.test.js
@@ -30,4 +32,14 @@ if [[ "$group" == service || "$group" == all ]]; then
   node extension/test/t3code.test.js
   python3 test/t3-pairing-forward.test.py
   dotnet test service/Constructd.sln -c Release
+fi
+
+if [[ "$group" == companion || "$group" == all ]]; then
+  dotnet build companion/Construct.Companion.sln -warnaserror
+  dotnet test companion/Construct.Companion.sln --no-build
+  node extension/test/parity.test.js
+  for suite in extension/test/companion*.test.js; do node "$suite"; done
+  pwsh -NoProfile -File test/companion-install.test.ps1
+  pwsh -NoProfile -File test/companion-entrypoints.test.ps1
+  pwsh -NoProfile -File test/companion-package.test.ps1
 fi

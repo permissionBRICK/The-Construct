@@ -1,0 +1,1934 @@
+[
+  {
+    "input": "",
+    "kind": "parse",
+    "output": {
+      "gate": null,
+      "partial": null
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": null,
+        "partial": null
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": null,
+        "partial": null
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": null,
+        "partial": null
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": null,
+        "partial": null
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": "CONSTRUCT_GATE_STATUS=stock\n",
+    "kind": "parse",
+    "output": {
+      "gate": "stock",
+      "partial": null
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "stock",
+        "partial": null
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "stock",
+        "partial": null
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": true,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "stock",
+        "partial": null
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "stock",
+        "partial": null
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": true,
+      "streaming": false
+    }
+  },
+  {
+    "input": "CONSTRUCT_GATE_STATUS=patched\n",
+    "kind": "parse",
+    "output": {
+      "gate": "patched",
+      "partial": null
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "patched",
+        "partial": null
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "patched",
+        "partial": null
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "patched",
+        "partial": null
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "patched",
+        "partial": null
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": "CONSTRUCT_GATE_STATUS=unknown\n",
+    "kind": "parse",
+    "output": {
+      "gate": "unknown",
+      "partial": null
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "unknown",
+        "partial": null
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "unknown",
+        "partial": null
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "unknown",
+        "partial": null
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "unknown",
+        "partial": null
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": "CONSTRUCT_GATE_STATUS=absent\n",
+    "kind": "parse",
+    "output": {
+      "gate": "absent",
+      "partial": null
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "absent",
+        "partial": null
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "absent",
+        "partial": null
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "absent",
+        "partial": null
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "absent",
+        "partial": null
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": "CONSTRUCT_PARTIAL_STATUS=stock\n",
+    "kind": "parse",
+    "output": {
+      "gate": null,
+      "partial": "stock"
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": null,
+        "partial": "stock"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": null,
+        "partial": "stock"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": null,
+        "partial": "stock"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": true
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": null,
+        "partial": "stock"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": true
+    }
+  },
+  {
+    "input": "CONSTRUCT_PARTIAL_STATUS=stock\nCONSTRUCT_GATE_STATUS=stock\n",
+    "kind": "parse",
+    "output": {
+      "gate": "stock",
+      "partial": "stock"
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "stock",
+        "partial": "stock"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "stock",
+        "partial": "stock"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": true,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "stock",
+        "partial": "stock"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": true
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "stock",
+        "partial": "stock"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": true,
+      "streaming": true
+    }
+  },
+  {
+    "input": "CONSTRUCT_PARTIAL_STATUS=stock\nCONSTRUCT_GATE_STATUS=patched\n",
+    "kind": "parse",
+    "output": {
+      "gate": "patched",
+      "partial": "stock"
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "patched",
+        "partial": "stock"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "patched",
+        "partial": "stock"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "patched",
+        "partial": "stock"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": true
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "patched",
+        "partial": "stock"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": true
+    }
+  },
+  {
+    "input": "CONSTRUCT_PARTIAL_STATUS=stock\nCONSTRUCT_GATE_STATUS=unknown\n",
+    "kind": "parse",
+    "output": {
+      "gate": "unknown",
+      "partial": "stock"
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "unknown",
+        "partial": "stock"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "unknown",
+        "partial": "stock"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "unknown",
+        "partial": "stock"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": true
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "unknown",
+        "partial": "stock"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": true
+    }
+  },
+  {
+    "input": "CONSTRUCT_PARTIAL_STATUS=stock\nCONSTRUCT_GATE_STATUS=absent\n",
+    "kind": "parse",
+    "output": {
+      "gate": "absent",
+      "partial": "stock"
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "absent",
+        "partial": "stock"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "absent",
+        "partial": "stock"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "absent",
+        "partial": "stock"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": true
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "absent",
+        "partial": "stock"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": true
+    }
+  },
+  {
+    "input": "CONSTRUCT_PARTIAL_STATUS=patched\n",
+    "kind": "parse",
+    "output": {
+      "gate": null,
+      "partial": "patched"
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": null,
+        "partial": "patched"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": null,
+        "partial": "patched"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": null,
+        "partial": "patched"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": null,
+        "partial": "patched"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": "CONSTRUCT_PARTIAL_STATUS=patched\nCONSTRUCT_GATE_STATUS=stock\n",
+    "kind": "parse",
+    "output": {
+      "gate": "stock",
+      "partial": "patched"
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "stock",
+        "partial": "patched"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "stock",
+        "partial": "patched"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": true,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "stock",
+        "partial": "patched"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "stock",
+        "partial": "patched"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": true,
+      "streaming": false
+    }
+  },
+  {
+    "input": "CONSTRUCT_PARTIAL_STATUS=patched\nCONSTRUCT_GATE_STATUS=patched\n",
+    "kind": "parse",
+    "output": {
+      "gate": "patched",
+      "partial": "patched"
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "patched",
+        "partial": "patched"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "patched",
+        "partial": "patched"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "patched",
+        "partial": "patched"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "patched",
+        "partial": "patched"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": "CONSTRUCT_PARTIAL_STATUS=patched\nCONSTRUCT_GATE_STATUS=unknown\n",
+    "kind": "parse",
+    "output": {
+      "gate": "unknown",
+      "partial": "patched"
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "unknown",
+        "partial": "patched"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "unknown",
+        "partial": "patched"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "unknown",
+        "partial": "patched"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "unknown",
+        "partial": "patched"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": "CONSTRUCT_PARTIAL_STATUS=patched\nCONSTRUCT_GATE_STATUS=absent\n",
+    "kind": "parse",
+    "output": {
+      "gate": "absent",
+      "partial": "patched"
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "absent",
+        "partial": "patched"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "absent",
+        "partial": "patched"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "absent",
+        "partial": "patched"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "absent",
+        "partial": "patched"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": "CONSTRUCT_PARTIAL_STATUS=unknown\n",
+    "kind": "parse",
+    "output": {
+      "gate": null,
+      "partial": "unknown"
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": null,
+        "partial": "unknown"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": null,
+        "partial": "unknown"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": null,
+        "partial": "unknown"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": null,
+        "partial": "unknown"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": "CONSTRUCT_PARTIAL_STATUS=unknown\nCONSTRUCT_GATE_STATUS=stock\n",
+    "kind": "parse",
+    "output": {
+      "gate": "stock",
+      "partial": "unknown"
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "stock",
+        "partial": "unknown"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "stock",
+        "partial": "unknown"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": true,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "stock",
+        "partial": "unknown"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "stock",
+        "partial": "unknown"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": true,
+      "streaming": false
+    }
+  },
+  {
+    "input": "CONSTRUCT_PARTIAL_STATUS=unknown\nCONSTRUCT_GATE_STATUS=patched\n",
+    "kind": "parse",
+    "output": {
+      "gate": "patched",
+      "partial": "unknown"
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "patched",
+        "partial": "unknown"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "patched",
+        "partial": "unknown"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "patched",
+        "partial": "unknown"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "patched",
+        "partial": "unknown"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": "CONSTRUCT_PARTIAL_STATUS=unknown\nCONSTRUCT_GATE_STATUS=unknown\n",
+    "kind": "parse",
+    "output": {
+      "gate": "unknown",
+      "partial": "unknown"
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "unknown",
+        "partial": "unknown"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "unknown",
+        "partial": "unknown"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "unknown",
+        "partial": "unknown"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "unknown",
+        "partial": "unknown"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": "CONSTRUCT_PARTIAL_STATUS=unknown\nCONSTRUCT_GATE_STATUS=absent\n",
+    "kind": "parse",
+    "output": {
+      "gate": "absent",
+      "partial": "unknown"
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "absent",
+        "partial": "unknown"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "absent",
+        "partial": "unknown"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "absent",
+        "partial": "unknown"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "absent",
+        "partial": "unknown"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": "CONSTRUCT_PARTIAL_STATUS=absent\n",
+    "kind": "parse",
+    "output": {
+      "gate": null,
+      "partial": "absent"
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": null,
+        "partial": "absent"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": null,
+        "partial": "absent"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": null,
+        "partial": "absent"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": null,
+        "partial": "absent"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": "CONSTRUCT_PARTIAL_STATUS=absent\nCONSTRUCT_GATE_STATUS=stock\n",
+    "kind": "parse",
+    "output": {
+      "gate": "stock",
+      "partial": "absent"
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "stock",
+        "partial": "absent"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "stock",
+        "partial": "absent"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": true,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "stock",
+        "partial": "absent"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "stock",
+        "partial": "absent"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": true,
+      "streaming": false
+    }
+  },
+  {
+    "input": "CONSTRUCT_PARTIAL_STATUS=absent\nCONSTRUCT_GATE_STATUS=patched\n",
+    "kind": "parse",
+    "output": {
+      "gate": "patched",
+      "partial": "absent"
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "patched",
+        "partial": "absent"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "patched",
+        "partial": "absent"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "patched",
+        "partial": "absent"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "patched",
+        "partial": "absent"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": "CONSTRUCT_PARTIAL_STATUS=absent\nCONSTRUCT_GATE_STATUS=unknown\n",
+    "kind": "parse",
+    "output": {
+      "gate": "unknown",
+      "partial": "absent"
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "unknown",
+        "partial": "absent"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "unknown",
+        "partial": "absent"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "unknown",
+        "partial": "absent"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "unknown",
+        "partial": "absent"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": "CONSTRUCT_PARTIAL_STATUS=absent\nCONSTRUCT_GATE_STATUS=absent\n",
+    "kind": "parse",
+    "output": {
+      "gate": "absent",
+      "partial": "absent"
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "absent",
+        "partial": "absent"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "absent",
+        "partial": "absent"
+      },
+      "streamingOn": false
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": false,
+      "status": {
+        "gate": "absent",
+        "partial": "absent"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "micOn": true,
+      "status": {
+        "gate": "absent",
+        "partial": "absent"
+      },
+      "streamingOn": true
+    },
+    "kind": "repairs",
+    "output": {
+      "mic": false,
+      "streaming": false
+    }
+  },
+  {
+    "input": {
+      "hasHostAudio": false,
+      "micLive": false,
+      "micOn": false,
+      "streamingOn": false
+    },
+    "kind": "startup",
+    "output": {
+      "passMicOn": false,
+      "retryAutoArm": false,
+      "runPass": false
+    }
+  },
+  {
+    "input": {
+      "hasHostAudio": true,
+      "micLive": false,
+      "micOn": false,
+      "streamingOn": false
+    },
+    "kind": "startup",
+    "output": {
+      "passMicOn": false,
+      "retryAutoArm": false,
+      "runPass": false
+    }
+  },
+  {
+    "input": {
+      "hasHostAudio": false,
+      "micLive": true,
+      "micOn": false,
+      "streamingOn": false
+    },
+    "kind": "startup",
+    "output": {
+      "passMicOn": false,
+      "retryAutoArm": false,
+      "runPass": false
+    }
+  },
+  {
+    "input": {
+      "hasHostAudio": true,
+      "micLive": true,
+      "micOn": false,
+      "streamingOn": false
+    },
+    "kind": "startup",
+    "output": {
+      "passMicOn": false,
+      "retryAutoArm": false,
+      "runPass": false
+    }
+  },
+  {
+    "input": {
+      "hasHostAudio": false,
+      "micLive": false,
+      "micOn": true,
+      "streamingOn": false
+    },
+    "kind": "startup",
+    "output": {
+      "passMicOn": false,
+      "retryAutoArm": true,
+      "runPass": false
+    }
+  },
+  {
+    "input": {
+      "hasHostAudio": true,
+      "micLive": false,
+      "micOn": true,
+      "streamingOn": false
+    },
+    "kind": "startup",
+    "output": {
+      "passMicOn": false,
+      "retryAutoArm": false,
+      "runPass": false
+    }
+  },
+  {
+    "input": {
+      "hasHostAudio": false,
+      "micLive": true,
+      "micOn": true,
+      "streamingOn": false
+    },
+    "kind": "startup",
+    "output": {
+      "passMicOn": true,
+      "retryAutoArm": true,
+      "runPass": true
+    }
+  },
+  {
+    "input": {
+      "hasHostAudio": true,
+      "micLive": true,
+      "micOn": true,
+      "streamingOn": false
+    },
+    "kind": "startup",
+    "output": {
+      "passMicOn": true,
+      "retryAutoArm": false,
+      "runPass": true
+    }
+  },
+  {
+    "input": {
+      "hasHostAudio": false,
+      "micLive": false,
+      "micOn": false,
+      "streamingOn": true
+    },
+    "kind": "startup",
+    "output": {
+      "passMicOn": false,
+      "retryAutoArm": false,
+      "runPass": true
+    }
+  },
+  {
+    "input": {
+      "hasHostAudio": true,
+      "micLive": false,
+      "micOn": false,
+      "streamingOn": true
+    },
+    "kind": "startup",
+    "output": {
+      "passMicOn": false,
+      "retryAutoArm": false,
+      "runPass": true
+    }
+  },
+  {
+    "input": {
+      "hasHostAudio": false,
+      "micLive": true,
+      "micOn": false,
+      "streamingOn": true
+    },
+    "kind": "startup",
+    "output": {
+      "passMicOn": false,
+      "retryAutoArm": false,
+      "runPass": true
+    }
+  },
+  {
+    "input": {
+      "hasHostAudio": true,
+      "micLive": true,
+      "micOn": false,
+      "streamingOn": true
+    },
+    "kind": "startup",
+    "output": {
+      "passMicOn": false,
+      "retryAutoArm": false,
+      "runPass": true
+    }
+  },
+  {
+    "input": {
+      "hasHostAudio": false,
+      "micLive": false,
+      "micOn": true,
+      "streamingOn": true
+    },
+    "kind": "startup",
+    "output": {
+      "passMicOn": false,
+      "retryAutoArm": true,
+      "runPass": true
+    }
+  },
+  {
+    "input": {
+      "hasHostAudio": true,
+      "micLive": false,
+      "micOn": true,
+      "streamingOn": true
+    },
+    "kind": "startup",
+    "output": {
+      "passMicOn": false,
+      "retryAutoArm": false,
+      "runPass": true
+    }
+  },
+  {
+    "input": {
+      "hasHostAudio": false,
+      "micLive": true,
+      "micOn": true,
+      "streamingOn": true
+    },
+    "kind": "startup",
+    "output": {
+      "passMicOn": true,
+      "retryAutoArm": true,
+      "runPass": true
+    }
+  },
+  {
+    "input": {
+      "hasHostAudio": true,
+      "micLive": true,
+      "micOn": true,
+      "streamingOn": true
+    },
+    "kind": "startup",
+    "output": {
+      "passMicOn": true,
+      "retryAutoArm": false,
+      "runPass": true
+    }
+  },
+  {
+    "input": "CONSTRUCT_GATE_STATUS=stock\nCONSTRUCT_GATE_STATUS=patched\n",
+    "kind": "parse",
+    "output": {
+      "gate": "patched",
+      "partial": null
+    }
+  }
+]

@@ -1,0 +1,333 @@
+[
+  {
+    "input": "/run/construct/notify",
+    "kind": "claim",
+    "output": "set -u\nd='/run/construct/notify'\nclaim() {\n  [ -d \"$d\" ] || return 0\n  for c in \"$d\"/*.claimed.*; do\n    [ -e \"$c\" ] || continue\n    [ -n \"$(find \"$c\" -maxdepth 0 -mmin +1 2>/dev/null)\" ] || continue\n    mv -- \"$c\" \"${c%.claimed.*}\" 2>/dev/null || rm -f -- \"$c\"\n  done\n  for f in \"$d\"/*.json; do\n    [ -e \"$f\" ] || continue\n    c=\"$f.claimed.$$\"\n    mv -- \"$f\" \"$c\" 2>/dev/null || continue\n    head -c 8192 -- \"$c\" | tr -d '\\r\\n'\n    printf '\\n'\n    rm -f -- \"$c\"\n  done\n}\nclaim\n"
+  },
+  {
+    "input": "/run/construct/notify",
+    "kind": "watch",
+    "output": "set -u\nd='/run/construct/notify'\nclaim() {\n  [ -d \"$d\" ] || return 0\n  for c in \"$d\"/*.claimed.*; do\n    [ -e \"$c\" ] || continue\n    [ -n \"$(find \"$c\" -maxdepth 0 -mmin +1 2>/dev/null)\" ] || continue\n    mv -- \"$c\" \"${c%.claimed.*}\" 2>/dev/null || rm -f -- \"$c\"\n  done\n  for f in \"$d\"/*.json; do\n    [ -e \"$f\" ] || continue\n    c=\"$f.claimed.$$\"\n    mv -- \"$f\" \"$c\" 2>/dev/null || continue\n    head -c 8192 -- \"$c\" | tr -d '\\r\\n'\n    printf '\\n'\n    rm -f -- \"$c\"\n  done\n}\n# Leave nothing behind when this watcher ends: the host closing the connection sends\n# a SIGHUP (or breaks the pipe under our next write), and without this the inotifywait\n# we started would linger on the VM claiming entries into a dead pipe.\niw=\"\"\ncleanup() { if [ -n \"$iw\" ]; then kill \"$iw\" 2>/dev/null || true; fi; }\ntrap 'cleanup; exit 0' EXIT HUP INT TERM PIPE\nlast=$SECONDS\nbeat() {\n  if [ $((SECONDS - last)) -ge 60 ]; then last=$SECONDS; printf '#\\n'; fi\n}\n# inotifywait in MONITOR mode (-m), not one-shot: it keeps watching WHILE we drain, so\n# an entry queued during a claim pass waits in the pipe instead of being missed. A\n# wait-then-claim loop has exactly that blind spot, and the entry then sits unseen\n# until some later event happens to wake us. Read through a process substitution\n# rather than a pipeline so the loop runs in THIS shell (a pipeline's subshell would\n# hide the watcher's pid from cleanup and survive the parent's death as an orphan).\nwatch_events() {\n  command -v inotifywait >/dev/null 2>&1 || return 1\n  [ -d \"$d\" ] || return 1\n  exec 3< <(inotifywait -m -q -e close_write,moved_to --format '' \"$d\" 2>/dev/null)\n  iw=$!\n  while :; do\n    IFS= read -r -t 60 -u 3 _\n    rc=$?\n    # >128 = read timed out (no events): beat and keep waiting.\n    # non-zero and <=128 = EOF: inotifywait died; hand back to the caller.\n    if [ \"$rc\" -ne 0 ] && [ \"$rc\" -le 128 ]; then break; fi\n    claim\n    beat\n  done\n  cleanup\n  iw=\"\"\n  exec 3<&-\n  return 0\n}\nclaim\nwhile :; do\n  watch_events || true\n  # Reached when there is no inotify (older VM), the spool dir isn't there yet, or the\n  # watch ended: degrade to a slow poll ON THE VM. Still one connection, still no SSH\n  # handshakes — just seconds of latency instead of milliseconds.\n  sleep 3\n  claim\n  beat\ndone\n"
+  },
+  {
+    "input": "/tmp/a'b",
+    "kind": "claim",
+    "output": "set -u\nd='/tmp/a'\\''b'\nclaim() {\n  [ -d \"$d\" ] || return 0\n  for c in \"$d\"/*.claimed.*; do\n    [ -e \"$c\" ] || continue\n    [ -n \"$(find \"$c\" -maxdepth 0 -mmin +1 2>/dev/null)\" ] || continue\n    mv -- \"$c\" \"${c%.claimed.*}\" 2>/dev/null || rm -f -- \"$c\"\n  done\n  for f in \"$d\"/*.json; do\n    [ -e \"$f\" ] || continue\n    c=\"$f.claimed.$$\"\n    mv -- \"$f\" \"$c\" 2>/dev/null || continue\n    head -c 8192 -- \"$c\" | tr -d '\\r\\n'\n    printf '\\n'\n    rm -f -- \"$c\"\n  done\n}\nclaim\n"
+  },
+  {
+    "input": "/tmp/a'b",
+    "kind": "watch",
+    "output": "set -u\nd='/tmp/a'\\''b'\nclaim() {\n  [ -d \"$d\" ] || return 0\n  for c in \"$d\"/*.claimed.*; do\n    [ -e \"$c\" ] || continue\n    [ -n \"$(find \"$c\" -maxdepth 0 -mmin +1 2>/dev/null)\" ] || continue\n    mv -- \"$c\" \"${c%.claimed.*}\" 2>/dev/null || rm -f -- \"$c\"\n  done\n  for f in \"$d\"/*.json; do\n    [ -e \"$f\" ] || continue\n    c=\"$f.claimed.$$\"\n    mv -- \"$f\" \"$c\" 2>/dev/null || continue\n    head -c 8192 -- \"$c\" | tr -d '\\r\\n'\n    printf '\\n'\n    rm -f -- \"$c\"\n  done\n}\n# Leave nothing behind when this watcher ends: the host closing the connection sends\n# a SIGHUP (or breaks the pipe under our next write), and without this the inotifywait\n# we started would linger on the VM claiming entries into a dead pipe.\niw=\"\"\ncleanup() { if [ -n \"$iw\" ]; then kill \"$iw\" 2>/dev/null || true; fi; }\ntrap 'cleanup; exit 0' EXIT HUP INT TERM PIPE\nlast=$SECONDS\nbeat() {\n  if [ $((SECONDS - last)) -ge 60 ]; then last=$SECONDS; printf '#\\n'; fi\n}\n# inotifywait in MONITOR mode (-m), not one-shot: it keeps watching WHILE we drain, so\n# an entry queued during a claim pass waits in the pipe instead of being missed. A\n# wait-then-claim loop has exactly that blind spot, and the entry then sits unseen\n# until some later event happens to wake us. Read through a process substitution\n# rather than a pipeline so the loop runs in THIS shell (a pipeline's subshell would\n# hide the watcher's pid from cleanup and survive the parent's death as an orphan).\nwatch_events() {\n  command -v inotifywait >/dev/null 2>&1 || return 1\n  [ -d \"$d\" ] || return 1\n  exec 3< <(inotifywait -m -q -e close_write,moved_to --format '' \"$d\" 2>/dev/null)\n  iw=$!\n  while :; do\n    IFS= read -r -t 60 -u 3 _\n    rc=$?\n    # >128 = read timed out (no events): beat and keep waiting.\n    # non-zero and <=128 = EOF: inotifywait died; hand back to the caller.\n    if [ \"$rc\" -ne 0 ] && [ \"$rc\" -le 128 ]; then break; fi\n    claim\n    beat\n  done\n  cleanup\n  iw=\"\"\n  exec 3<&-\n  return 0\n}\nclaim\nwhile :; do\n  watch_events || true\n  # Reached when there is no inotify (older VM), the spool dir isn't there yet, or the\n  # watch ended: degrade to a slow poll ON THE VM. Still one connection, still no SSH\n  # handshakes — just seconds of latency instead of milliseconds.\n  sleep 3\n  claim\n  beat\ndone\n"
+  },
+  {
+    "input": "{}",
+    "kind": "parse",
+    "output": []
+  },
+  {
+    "input": {
+      "entry": {},
+      "launchUri": "vscode://permissionbrick.construct-control-panel/open"
+    },
+    "kind": "toast",
+    "output": "<toast activationType=\"protocol\" launch=\"vscode://permissionbrick.construct-control-panel/open\"><visual><binding template=\"ToastGeneric\"><text>The Construct</text><text></text></binding></visual></toast>"
+  },
+  {
+    "input": {
+      "entry": {},
+      "launchUri": "construct://open?instance=dev%202"
+    },
+    "kind": "toast",
+    "output": "<toast activationType=\"protocol\" launch=\"construct://open?instance=dev%202\"><visual><binding template=\"ToastGeneric\"><text>The Construct</text><text></text></binding></visual></toast>"
+  },
+  {
+    "input": "{\"body\":\"hello\",\"title\":\"title\",\"source\":\"build\"}",
+    "kind": "parse",
+    "output": [
+      {
+        "body": "hello",
+        "level": "info",
+        "source": "build",
+        "title": "title",
+        "ts": 0
+      }
+    ]
+  },
+  {
+    "input": {
+      "entry": {
+        "body": "hello",
+        "source": "build",
+        "title": "title"
+      },
+      "launchUri": "vscode://permissionbrick.construct-control-panel/open"
+    },
+    "kind": "toast",
+    "output": "<toast activationType=\"protocol\" launch=\"vscode://permissionbrick.construct-control-panel/open\"><visual><binding template=\"ToastGeneric\"><text>title</text><text>hello</text><text placement=\"attribution\">build</text></binding></visual></toast>"
+  },
+  {
+    "input": {
+      "entry": {
+        "body": "hello",
+        "source": "build",
+        "title": "title"
+      },
+      "launchUri": "construct://open?instance=dev%202"
+    },
+    "kind": "toast",
+    "output": "<toast activationType=\"protocol\" launch=\"construct://open?instance=dev%202\"><visual><binding template=\"ToastGeneric\"><text>title</text><text>hello</text><text placement=\"attribution\">build</text></binding></visual></toast>"
+  },
+  {
+    "input": "{\"body\":\"<>&\\\"'\",\"level\":\"critical\",\"title\":\" <error> \",\"source\":\"a&b\"}",
+    "kind": "parse",
+    "output": [
+      {
+        "body": "<>&\"'",
+        "level": "error",
+        "source": "a&b",
+        "title": "<error>",
+        "ts": 0
+      }
+    ]
+  },
+  {
+    "input": {
+      "entry": {
+        "body": "<>&\"'",
+        "level": "critical",
+        "source": "a&b",
+        "title": " <error> "
+      },
+      "launchUri": "vscode://permissionbrick.construct-control-panel/open"
+    },
+    "kind": "toast",
+    "output": "<toast activationType=\"protocol\" launch=\"vscode://permissionbrick.construct-control-panel/open\" duration=\"long\"><visual><binding template=\"ToastGeneric\"><text>&lt;error&gt;</text><text>&lt;&gt;&amp;&quot;&apos;</text><text placement=\"attribution\">a&amp;b</text></binding></visual></toast>"
+  },
+  {
+    "input": {
+      "entry": {
+        "body": "<>&\"'",
+        "level": "critical",
+        "source": "a&b",
+        "title": " <error> "
+      },
+      "launchUri": "construct://open?instance=dev%202"
+    },
+    "kind": "toast",
+    "output": "<toast activationType=\"protocol\" launch=\"construct://open?instance=dev%202\" duration=\"long\"><visual><binding template=\"ToastGeneric\"><text>&lt;error&gt;</text><text>&lt;&gt;&amp;&quot;&apos;</text><text placement=\"attribution\">a&amp;b</text></binding></visual></toast>"
+  },
+  {
+    "input": "{\"body\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"title\":\"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\",\"source\":\"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\"}",
+    "kind": "parse",
+    "output": [
+      {
+        "body": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…",
+        "level": "info",
+        "source": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz…",
+        "title": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy…",
+        "ts": 0
+      }
+    ]
+  },
+  {
+    "input": {
+      "entry": {
+        "body": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "source": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+        "title": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+      },
+      "launchUri": "vscode://permissionbrick.construct-control-panel/open"
+    },
+    "kind": "toast",
+    "output": "<toast activationType=\"protocol\" launch=\"vscode://permissionbrick.construct-control-panel/open\"><visual><binding template=\"ToastGeneric\"><text>yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy…</text><text>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…</text><text placement=\"attribution\">zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz…</text></binding></visual></toast>"
+  },
+  {
+    "input": {
+      "entry": {
+        "body": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "source": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+        "title": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+      },
+      "launchUri": "construct://open?instance=dev%202"
+    },
+    "kind": "toast",
+    "output": "<toast activationType=\"protocol\" launch=\"construct://open?instance=dev%202\"><visual><binding template=\"ToastGeneric\"><text>yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy…</text><text>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…</text><text placement=\"attribution\">zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz…</text></binding></visual></toast>"
+  },
+  {
+    "input": "{\"body\":\" a\\n bc﻿d \",\"level\":\"warn\",\"ts\":4}",
+    "kind": "parse",
+    "output": [
+      {
+        "body": "a bc d",
+        "level": "warning",
+        "source": "",
+        "title": "The Construct",
+        "ts": 4
+      }
+    ]
+  },
+  {
+    "input": {
+      "entry": {
+        "body": " a\n bc﻿d ",
+        "level": "warn",
+        "ts": 4
+      },
+      "launchUri": "vscode://permissionbrick.construct-control-panel/open"
+    },
+    "kind": "toast",
+    "output": "<toast activationType=\"protocol\" launch=\"vscode://permissionbrick.construct-control-panel/open\" duration=\"long\"><visual><binding template=\"ToastGeneric\"><text>The Construct</text><text>a bc d</text></binding></visual></toast>"
+  },
+  {
+    "input": {
+      "entry": {
+        "body": " a\n bc﻿d ",
+        "level": "warn",
+        "ts": 4
+      },
+      "launchUri": "construct://open?instance=dev%202"
+    },
+    "kind": "toast",
+    "output": "<toast activationType=\"protocol\" launch=\"construct://open?instance=dev%202\" duration=\"long\"><visual><binding template=\"ToastGeneric\"><text>The Construct</text><text>a bc d</text></binding></visual></toast>"
+  },
+  {
+    "input": {
+      "entries": [
+        {
+          "body": "message 0",
+          "ts": 0
+        },
+        {
+          "body": "message 1",
+          "ts": 1000000
+        },
+        {
+          "body": "message 2",
+          "ts": 2000000
+        },
+        {
+          "body": "message 3",
+          "ts": 3000000
+        },
+        {
+          "body": "message 4",
+          "ts": 4000000
+        },
+        {
+          "body": "message 5",
+          "ts": 5000000
+        },
+        {
+          "body": "message 6",
+          "ts": 6000000
+        },
+        {
+          "body": "message 7",
+          "ts": 7000000
+        },
+        {
+          "body": "message 8",
+          "ts": 8000000
+        },
+        {
+          "body": "message 9",
+          "ts": 9000000
+        }
+      ],
+      "opts": {
+        "max": 1,
+        "now": 9000000,
+        "ttlMs": 3600000
+      }
+    },
+    "kind": "select",
+    "output": {
+      "deliver": [
+        {
+          "body": "message 0",
+          "ts": 0
+        }
+      ],
+      "extra": 4,
+      "stale": 5
+    }
+  },
+  {
+    "input": {
+      "entries": [
+        {
+          "body": "message 0",
+          "ts": 0
+        },
+        {
+          "body": "message 1",
+          "ts": 1000000
+        },
+        {
+          "body": "message 2",
+          "ts": 2000000
+        },
+        {
+          "body": "message 3",
+          "ts": 3000000
+        },
+        {
+          "body": "message 4",
+          "ts": 4000000
+        },
+        {
+          "body": "message 5",
+          "ts": 5000000
+        },
+        {
+          "body": "message 6",
+          "ts": 6000000
+        },
+        {
+          "body": "message 7",
+          "ts": 7000000
+        },
+        {
+          "body": "message 8",
+          "ts": 8000000
+        },
+        {
+          "body": "message 9",
+          "ts": 9000000
+        }
+      ],
+      "opts": {
+        "max": 5,
+        "now": 9000000,
+        "ttlMs": 3600000
+      }
+    },
+    "kind": "select",
+    "output": {
+      "deliver": [
+        {
+          "body": "message 0",
+          "ts": 0
+        },
+        {
+          "body": "message 6",
+          "ts": 6000000
+        },
+        {
+          "body": "message 7",
+          "ts": 7000000
+        },
+        {
+          "body": "message 8",
+          "ts": 8000000
+        },
+        {
+          "body": "message 9",
+          "ts": 9000000
+        }
+      ],
+      "extra": 0,
+      "stale": 5
+    }
+  }
+]

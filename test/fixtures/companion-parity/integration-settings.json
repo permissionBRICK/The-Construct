@@ -1,0 +1,28 @@
+[
+  {
+    "input": {
+      "gitEmail": "demo@example.test",
+      "gitName": "Demo 🧱",
+      "mic": false,
+      "partialStreaming": true,
+      "ram": "8",
+      "t3code": false
+    },
+    "install": "{\n  \"gitUserName\": \"Demo 🧱\",\n  \"gitEmail\": \"demo@example.test\",\n  \"vmMemoryGB\": 8,\n  \"claudePartialStreaming\": true,\n  \"micPassthrough\": false,\n  \"t3code\": false\n}\n",
+    "instance": null,
+    "name": "agent-vm"
+  },
+  {
+    "input": {
+      "gitEmail": "demo@example.test",
+      "gitName": "Demo 🧱",
+      "mic": false,
+      "partialStreaming": true,
+      "ram": "8",
+      "t3code": false
+    },
+    "install": "{\n  \"gitUserName\": \"Demo 🧱\",\n  \"gitEmail\": \"demo@example.test\"\n}\n",
+    "instance": "{\n  \"version\": 1,\n  \"instance\": \"remote-vm\",\n  \"claudePartialStreaming\": true,\n  \"micPassthrough\": false,\n  \"t3code\": false,\n  \"vmMemoryGB\": 8\n}\n",
+    "name": "remote-vm"
+  }
+]

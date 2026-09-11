@@ -1,0 +1,338 @@
+[
+  {
+    "kind": "state",
+    "name": null,
+    "output": {
+      "command": "try { $vm = Get-VM -Name 'Agent-VM' -ErrorAction Stop; Write-Output ('VMSTATE=' + $vm.State) } catch { if ($_.FullyQualifiedErrorId -like 'InvalidParameter*') { Write-Output 'VMSTATE=absent' } else { Write-Output 'VMSTATE=unknown' } }",
+      "file": "powershell.exe",
+      "spawnArgs": [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "dAByAHkAIAB7ACAAJAB2AG0AIAA9ACAARwBlAHQALQBWAE0AIAAtAE4AYQBtAGUAIAAnAEEAZwBlAG4AdAAtAFYATQAnACAALQBFAHIAcgBvAHIAQQBjAHQAaQBvAG4AIABTAHQAbwBwADsAIABXAHIAaQB0AGUALQBPAHUAdABwAHUAdAAgACgAJwBWAE0AUwBUAEEAVABFAD0AJwAgACsAIAAkAHYAbQAuAFMAdABhAHQAZQApACAAfQAgAGMAYQB0AGMAaAAgAHsAIABpAGYAIAAoACQAXwAuAEYAdQBsAGwAeQBRAHUAYQBsAGkAZgBpAGUAZABFAHIAcgBvAHIASQBkACAALQBsAGkAawBlACAAJwBJAG4AdgBhAGwAaQBkAFAAYQByAGEAbQBlAHQAZQByACoAJwApACAAewAgAFcAcgBpAHQAZQAtAE8AdQB0AHAAdQB0ACAAJwBWAE0AUwBUAEEAVABFAD0AYQBiAHMAZQBuAHQAJwAgAH0AIABlAGwAcwBlACAAewAgAFcAcgBpAHQAZQAtAE8AdQB0AHAAdQB0ACAAJwBWAE0AUwBUAEEAVABFAD0AdQBuAGsAbgBvAHcAbgAnACAAfQAgAH0A"
+      ]
+    }
+  },
+  {
+    "kind": "checkpoints",
+    "name": null,
+    "output": {
+      "command": "try { $vm = Get-VM -Name 'Agent-VM' -ErrorAction Stop; $p = $vm.PSObject.Properties['AutomaticCheckpointsEnabled']; if ($p -and $null -ne $p.Value) { Write-Output ('VMAUTOCHK=' + [bool]$p.Value) } else { Write-Output 'VMAUTOCHK=unsupported' } } catch { if ($_.FullyQualifiedErrorId -like 'InvalidParameter*') { Write-Output 'VMAUTOCHK=absent' } else { Write-Output 'VMAUTOCHK=unknown' } }",
+      "file": "powershell.exe",
+      "spawnArgs": [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "dAByAHkAIAB7ACAAJAB2AG0AIAA9ACAARwBlAHQALQBWAE0AIAAtAE4AYQBtAGUAIAAnAEEAZwBlAG4AdAAtAFYATQAnACAALQBFAHIAcgBvAHIAQQBjAHQAaQBvAG4AIABTAHQAbwBwADsAIAAkAHAAIAA9ACAAJAB2AG0ALgBQAFMATwBiAGoAZQBjAHQALgBQAHIAbwBwAGUAcgB0AGkAZQBzAFsAJwBBAHUAdABvAG0AYQB0AGkAYwBDAGgAZQBjAGsAcABvAGkAbgB0AHMARQBuAGEAYgBsAGUAZAAnAF0AOwAgAGkAZgAgACgAJABwACAALQBhAG4AZAAgACQAbgB1AGwAbAAgAC0AbgBlACAAJABwAC4AVgBhAGwAdQBlACkAIAB7ACAAVwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIAAoACcAVgBNAEEAVQBUAE8AQwBIAEsAPQAnACAAKwAgAFsAYgBvAG8AbABdACQAcAAuAFYAYQBsAHUAZQApACAAfQAgAGUAbABzAGUAIAB7ACAAVwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIAAnAFYATQBBAFUAVABPAEMASABLAD0AdQBuAHMAdQBwAHAAbwByAHQAZQBkACcAIAB9ACAAfQAgAGMAYQB0AGMAaAAgAHsAIABpAGYAIAAoACQAXwAuAEYAdQBsAGwAeQBRAHUAYQBsAGkAZgBpAGUAZABFAHIAcgBvAHIASQBkACAALQBsAGkAawBlACAAJwBJAG4AdgBhAGwAaQBkAFAAYQByAGEAbQBlAHQAZQByACoAJwApACAAewAgAFcAcgBpAHQAZQAtAE8AdQB0AHAAdQB0ACAAJwBWAE0AQQBVAFQATwBDAEgASwA9AGEAYgBzAGUAbgB0ACcAIAB9ACAAZQBsAHMAZQAgAHsAIABXAHIAaQB0AGUALQBPAHUAdABwAHUAdAAgACcAVgBNAEEAVQBUAE8AQwBIAEsAPQB1AG4AawBuAG8AdwBuACcAIAB9ACAAfQA="
+      ]
+    }
+  },
+  {
+    "kind": "start",
+    "name": null,
+    "output": {
+      "command": "Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Normal -ArgumentList '-NoProfile -ExecutionPolicy Bypass -Command \"Start-VM -Name ''Agent-VM''; if ($?) { Write-Host ''Construct VM started.'' -ForegroundColor Green } else { Write-Host ''Failed to start the Construct VM.'' -ForegroundColor Red; if (-not [Console]::IsInputRedirected) { [void](Read-Host ''Press Enter to close'') } }\"'",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "UwB0AGEAcgB0AC0AUAByAG8AYwBlAHMAcwAgAC0ARgBpAGwAZQBQAGEAdABoACAAJwBwAG8AdwBlAHIAcwBoAGUAbABsAC4AZQB4AGUAJwAgAC0AVgBlAHIAYgAgAFIAdQBuAEEAcwAgAC0AVwBpAG4AZABvAHcAUwB0AHkAbABlACAATgBvAHIAbQBhAGwAIAAtAEEAcgBnAHUAbQBlAG4AdABMAGkAcwB0ACAAJwAtAE4AbwBQAHIAbwBmAGkAbABlACAALQBFAHgAZQBjAHUAdABpAG8AbgBQAG8AbABpAGMAeQAgAEIAeQBwAGEAcwBzACAALQBDAG8AbQBtAGEAbgBkACAAIgBTAHQAYQByAHQALQBWAE0AIAAtAE4AYQBtAGUAIAAnACcAQQBnAGUAbgB0AC0AVgBNACcAJwA7ACAAaQBmACAAKAAkAD8AKQAgAHsAIABXAHIAaQB0AGUALQBIAG8AcwB0ACAAJwAnAEMAbwBuAHMAdAByAHUAYwB0ACAAVgBNACAAcwB0AGEAcgB0AGUAZAAuACcAJwAgAC0ARgBvAHIAZQBnAHIAbwB1AG4AZABDAG8AbABvAHIAIABHAHIAZQBlAG4AIAB9ACAAZQBsAHMAZQAgAHsAIABXAHIAaQB0AGUALQBIAG8AcwB0ACAAJwAnAEYAYQBpAGwAZQBkACAAdABvACAAcwB0AGEAcgB0ACAAdABoAGUAIABDAG8AbgBzAHQAcgB1AGMAdAAgAFYATQAuACcAJwAgAC0ARgBvAHIAZQBnAHIAbwB1AG4AZABDAG8AbABvAHIAIABSAGUAZAA7ACAAaQBmACAAKAAtAG4AbwB0ACAAWwBDAG8AbgBzAG8AbABlAF0AOgA6AEkAcwBJAG4AcAB1AHQAUgBlAGQAaQByAGUAYwB0AGUAZAApACAAewAgAFsAdgBvAGkAZABdACgAUgBlAGEAZAAtAEgAbwBzAHQAIAAnACcAUAByAGUAcwBzACAARQBuAHQAZQByACAAdABvACAAYwBsAG8AcwBlACcAJwApACAAfQAgAH0AIgAnAA=="
+      ]
+    }
+  },
+  {
+    "kind": "state",
+    "name": "Agent-VM",
+    "output": {
+      "command": "try { $vm = Get-VM -Name 'Agent-VM' -ErrorAction Stop; Write-Output ('VMSTATE=' + $vm.State) } catch { if ($_.FullyQualifiedErrorId -like 'InvalidParameter*') { Write-Output 'VMSTATE=absent' } else { Write-Output 'VMSTATE=unknown' } }",
+      "file": "powershell.exe",
+      "spawnArgs": [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "dAByAHkAIAB7ACAAJAB2AG0AIAA9ACAARwBlAHQALQBWAE0AIAAtAE4AYQBtAGUAIAAnAEEAZwBlAG4AdAAtAFYATQAnACAALQBFAHIAcgBvAHIAQQBjAHQAaQBvAG4AIABTAHQAbwBwADsAIABXAHIAaQB0AGUALQBPAHUAdABwAHUAdAAgACgAJwBWAE0AUwBUAEEAVABFAD0AJwAgACsAIAAkAHYAbQAuAFMAdABhAHQAZQApACAAfQAgAGMAYQB0AGMAaAAgAHsAIABpAGYAIAAoACQAXwAuAEYAdQBsAGwAeQBRAHUAYQBsAGkAZgBpAGUAZABFAHIAcgBvAHIASQBkACAALQBsAGkAawBlACAAJwBJAG4AdgBhAGwAaQBkAFAAYQByAGEAbQBlAHQAZQByACoAJwApACAAewAgAFcAcgBpAHQAZQAtAE8AdQB0AHAAdQB0ACAAJwBWAE0AUwBUAEEAVABFAD0AYQBiAHMAZQBuAHQAJwAgAH0AIABlAGwAcwBlACAAewAgAFcAcgBpAHQAZQAtAE8AdQB0AHAAdQB0ACAAJwBWAE0AUwBUAEEAVABFAD0AdQBuAGsAbgBvAHcAbgAnACAAfQAgAH0A"
+      ]
+    }
+  },
+  {
+    "kind": "checkpoints",
+    "name": "Agent-VM",
+    "output": {
+      "command": "try { $vm = Get-VM -Name 'Agent-VM' -ErrorAction Stop; $p = $vm.PSObject.Properties['AutomaticCheckpointsEnabled']; if ($p -and $null -ne $p.Value) { Write-Output ('VMAUTOCHK=' + [bool]$p.Value) } else { Write-Output 'VMAUTOCHK=unsupported' } } catch { if ($_.FullyQualifiedErrorId -like 'InvalidParameter*') { Write-Output 'VMAUTOCHK=absent' } else { Write-Output 'VMAUTOCHK=unknown' } }",
+      "file": "powershell.exe",
+      "spawnArgs": [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "dAByAHkAIAB7ACAAJAB2AG0AIAA9ACAARwBlAHQALQBWAE0AIAAtAE4AYQBtAGUAIAAnAEEAZwBlAG4AdAAtAFYATQAnACAALQBFAHIAcgBvAHIAQQBjAHQAaQBvAG4AIABTAHQAbwBwADsAIAAkAHAAIAA9ACAAJAB2AG0ALgBQAFMATwBiAGoAZQBjAHQALgBQAHIAbwBwAGUAcgB0AGkAZQBzAFsAJwBBAHUAdABvAG0AYQB0AGkAYwBDAGgAZQBjAGsAcABvAGkAbgB0AHMARQBuAGEAYgBsAGUAZAAnAF0AOwAgAGkAZgAgACgAJABwACAALQBhAG4AZAAgACQAbgB1AGwAbAAgAC0AbgBlACAAJABwAC4AVgBhAGwAdQBlACkAIAB7ACAAVwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIAAoACcAVgBNAEEAVQBUAE8AQwBIAEsAPQAnACAAKwAgAFsAYgBvAG8AbABdACQAcAAuAFYAYQBsAHUAZQApACAAfQAgAGUAbABzAGUAIAB7ACAAVwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIAAnAFYATQBBAFUAVABPAEMASABLAD0AdQBuAHMAdQBwAHAAbwByAHQAZQBkACcAIAB9ACAAfQAgAGMAYQB0AGMAaAAgAHsAIABpAGYAIAAoACQAXwAuAEYAdQBsAGwAeQBRAHUAYQBsAGkAZgBpAGUAZABFAHIAcgBvAHIASQBkACAALQBsAGkAawBlACAAJwBJAG4AdgBhAGwAaQBkAFAAYQByAGEAbQBlAHQAZQByACoAJwApACAAewAgAFcAcgBpAHQAZQAtAE8AdQB0AHAAdQB0ACAAJwBWAE0AQQBVAFQATwBDAEgASwA9AGEAYgBzAGUAbgB0ACcAIAB9ACAAZQBsAHMAZQAgAHsAIABXAHIAaQB0AGUALQBPAHUAdABwAHUAdAAgACcAVgBNAEEAVQBUAE8AQwBIAEsAPQB1AG4AawBuAG8AdwBuACcAIAB9ACAAfQA="
+      ]
+    }
+  },
+  {
+    "kind": "start",
+    "name": "Agent-VM",
+    "output": {
+      "command": "Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Normal -ArgumentList '-NoProfile -ExecutionPolicy Bypass -Command \"Start-VM -Name ''Agent-VM''; if ($?) { Write-Host ''Construct VM started.'' -ForegroundColor Green } else { Write-Host ''Failed to start the Construct VM.'' -ForegroundColor Red; if (-not [Console]::IsInputRedirected) { [void](Read-Host ''Press Enter to close'') } }\"'",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "UwB0AGEAcgB0AC0AUAByAG8AYwBlAHMAcwAgAC0ARgBpAGwAZQBQAGEAdABoACAAJwBwAG8AdwBlAHIAcwBoAGUAbABsAC4AZQB4AGUAJwAgAC0AVgBlAHIAYgAgAFIAdQBuAEEAcwAgAC0AVwBpAG4AZABvAHcAUwB0AHkAbABlACAATgBvAHIAbQBhAGwAIAAtAEEAcgBnAHUAbQBlAG4AdABMAGkAcwB0ACAAJwAtAE4AbwBQAHIAbwBmAGkAbABlACAALQBFAHgAZQBjAHUAdABpAG8AbgBQAG8AbABpAGMAeQAgAEIAeQBwAGEAcwBzACAALQBDAG8AbQBtAGEAbgBkACAAIgBTAHQAYQByAHQALQBWAE0AIAAtAE4AYQBtAGUAIAAnACcAQQBnAGUAbgB0AC0AVgBNACcAJwA7ACAAaQBmACAAKAAkAD8AKQAgAHsAIABXAHIAaQB0AGUALQBIAG8AcwB0ACAAJwAnAEMAbwBuAHMAdAByAHUAYwB0ACAAVgBNACAAcwB0AGEAcgB0AGUAZAAuACcAJwAgAC0ARgBvAHIAZQBnAHIAbwB1AG4AZABDAG8AbABvAHIAIABHAHIAZQBlAG4AIAB9ACAAZQBsAHMAZQAgAHsAIABXAHIAaQB0AGUALQBIAG8AcwB0ACAAJwAnAEYAYQBpAGwAZQBkACAAdABvACAAcwB0AGEAcgB0ACAAdABoAGUAIABDAG8AbgBzAHQAcgB1AGMAdAAgAFYATQAuACcAJwAgAC0ARgBvAHIAZQBnAHIAbwB1AG4AZABDAG8AbABvAHIAIABSAGUAZAA7ACAAaQBmACAAKAAtAG4AbwB0ACAAWwBDAG8AbgBzAG8AbABlAF0AOgA6AEkAcwBJAG4AcAB1AHQAUgBlAGQAaQByAGUAYwB0AGUAZAApACAAewAgAFsAdgBvAGkAZABdACgAUgBlAGEAZAAtAEgAbwBzAHQAIAAnACcAUAByAGUAcwBzACAARQBuAHQAZQByACAAdABvACAAYwBsAG8AcwBlACcAJwApACAAfQAgAH0AIgAnAA=="
+      ]
+    }
+  },
+  {
+    "kind": "state",
+    "name": "dev",
+    "output": {
+      "command": "try { $vm = Get-VM -Name 'dev' -ErrorAction Stop; Write-Output ('VMSTATE=' + $vm.State) } catch { if ($_.FullyQualifiedErrorId -like 'InvalidParameter*') { Write-Output 'VMSTATE=absent' } else { Write-Output 'VMSTATE=unknown' } }",
+      "file": "powershell.exe",
+      "spawnArgs": [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "dAByAHkAIAB7ACAAJAB2AG0AIAA9ACAARwBlAHQALQBWAE0AIAAtAE4AYQBtAGUAIAAnAGQAZQB2ACcAIAAtAEUAcgByAG8AcgBBAGMAdABpAG8AbgAgAFMAdABvAHAAOwAgAFcAcgBpAHQAZQAtAE8AdQB0AHAAdQB0ACAAKAAnAFYATQBTAFQAQQBUAEUAPQAnACAAKwAgACQAdgBtAC4AUwB0AGEAdABlACkAIAB9ACAAYwBhAHQAYwBoACAAewAgAGkAZgAgACgAJABfAC4ARgB1AGwAbAB5AFEAdQBhAGwAaQBmAGkAZQBkAEUAcgByAG8AcgBJAGQAIAAtAGwAaQBrAGUAIAAnAEkAbgB2AGEAbABpAGQAUABhAHIAYQBtAGUAdABlAHIAKgAnACkAIAB7ACAAVwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIAAnAFYATQBTAFQAQQBUAEUAPQBhAGIAcwBlAG4AdAAnACAAfQAgAGUAbABzAGUAIAB7ACAAVwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIAAnAFYATQBTAFQAQQBUAEUAPQB1AG4AawBuAG8AdwBuACcAIAB9ACAAfQA="
+      ]
+    }
+  },
+  {
+    "kind": "checkpoints",
+    "name": "dev",
+    "output": {
+      "command": "try { $vm = Get-VM -Name 'dev' -ErrorAction Stop; $p = $vm.PSObject.Properties['AutomaticCheckpointsEnabled']; if ($p -and $null -ne $p.Value) { Write-Output ('VMAUTOCHK=' + [bool]$p.Value) } else { Write-Output 'VMAUTOCHK=unsupported' } } catch { if ($_.FullyQualifiedErrorId -like 'InvalidParameter*') { Write-Output 'VMAUTOCHK=absent' } else { Write-Output 'VMAUTOCHK=unknown' } }",
+      "file": "powershell.exe",
+      "spawnArgs": [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "dAByAHkAIAB7ACAAJAB2AG0AIAA9ACAARwBlAHQALQBWAE0AIAAtAE4AYQBtAGUAIAAnAGQAZQB2ACcAIAAtAEUAcgByAG8AcgBBAGMAdABpAG8AbgAgAFMAdABvAHAAOwAgACQAcAAgAD0AIAAkAHYAbQAuAFAAUwBPAGIAagBlAGMAdAAuAFAAcgBvAHAAZQByAHQAaQBlAHMAWwAnAEEAdQB0AG8AbQBhAHQAaQBjAEMAaABlAGMAawBwAG8AaQBuAHQAcwBFAG4AYQBiAGwAZQBkACcAXQA7ACAAaQBmACAAKAAkAHAAIAAtAGEAbgBkACAAJABuAHUAbABsACAALQBuAGUAIAAkAHAALgBWAGEAbAB1AGUAKQAgAHsAIABXAHIAaQB0AGUALQBPAHUAdABwAHUAdAAgACgAJwBWAE0AQQBVAFQATwBDAEgASwA9ACcAIAArACAAWwBiAG8AbwBsAF0AJABwAC4AVgBhAGwAdQBlACkAIAB9ACAAZQBsAHMAZQAgAHsAIABXAHIAaQB0AGUALQBPAHUAdABwAHUAdAAgACcAVgBNAEEAVQBUAE8AQwBIAEsAPQB1AG4AcwB1AHAAcABvAHIAdABlAGQAJwAgAH0AIAB9ACAAYwBhAHQAYwBoACAAewAgAGkAZgAgACgAJABfAC4ARgB1AGwAbAB5AFEAdQBhAGwAaQBmAGkAZQBkAEUAcgByAG8AcgBJAGQAIAAtAGwAaQBrAGUAIAAnAEkAbgB2AGEAbABpAGQAUABhAHIAYQBtAGUAdABlAHIAKgAnACkAIAB7ACAAVwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIAAnAFYATQBBAFUAVABPAEMASABLAD0AYQBiAHMAZQBuAHQAJwAgAH0AIABlAGwAcwBlACAAewAgAFcAcgBpAHQAZQAtAE8AdQB0AHAAdQB0ACAAJwBWAE0AQQBVAFQATwBDAEgASwA9AHUAbgBrAG4AbwB3AG4AJwAgAH0AIAB9AA=="
+      ]
+    }
+  },
+  {
+    "kind": "start",
+    "name": "dev",
+    "output": {
+      "command": "Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Normal -ArgumentList '-NoProfile -ExecutionPolicy Bypass -Command \"Start-VM -Name ''dev''; if ($?) { Write-Host ''Construct VM started.'' -ForegroundColor Green } else { Write-Host ''Failed to start the Construct VM.'' -ForegroundColor Red; if (-not [Console]::IsInputRedirected) { [void](Read-Host ''Press Enter to close'') } }\"'",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "UwB0AGEAcgB0AC0AUAByAG8AYwBlAHMAcwAgAC0ARgBpAGwAZQBQAGEAdABoACAAJwBwAG8AdwBlAHIAcwBoAGUAbABsAC4AZQB4AGUAJwAgAC0AVgBlAHIAYgAgAFIAdQBuAEEAcwAgAC0AVwBpAG4AZABvAHcAUwB0AHkAbABlACAATgBvAHIAbQBhAGwAIAAtAEEAcgBnAHUAbQBlAG4AdABMAGkAcwB0ACAAJwAtAE4AbwBQAHIAbwBmAGkAbABlACAALQBFAHgAZQBjAHUAdABpAG8AbgBQAG8AbABpAGMAeQAgAEIAeQBwAGEAcwBzACAALQBDAG8AbQBtAGEAbgBkACAAIgBTAHQAYQByAHQALQBWAE0AIAAtAE4AYQBtAGUAIAAnACcAZABlAHYAJwAnADsAIABpAGYAIAAoACQAPwApACAAewAgAFcAcgBpAHQAZQAtAEgAbwBzAHQAIAAnACcAQwBvAG4AcwB0AHIAdQBjAHQAIABWAE0AIABzAHQAYQByAHQAZQBkAC4AJwAnACAALQBGAG8AcgBlAGcAcgBvAHUAbgBkAEMAbwBsAG8AcgAgAEcAcgBlAGUAbgAgAH0AIABlAGwAcwBlACAAewAgAFcAcgBpAHQAZQAtAEgAbwBzAHQAIAAnACcARgBhAGkAbABlAGQAIAB0AG8AIABzAHQAYQByAHQAIAB0AGgAZQAgAEMAbwBuAHMAdAByAHUAYwB0ACAAVgBNAC4AJwAnACAALQBGAG8AcgBlAGcAcgBvAHUAbgBkAEMAbwBsAG8AcgAgAFIAZQBkADsAIABpAGYAIAAoAC0AbgBvAHQAIABbAEMAbwBuAHMAbwBsAGUAXQA6ADoASQBzAEkAbgBwAHUAdABSAGUAZABpAHIAZQBjAHQAZQBkACkAIAB7ACAAWwB2AG8AaQBkAF0AKABSAGUAYQBkAC0ASABvAHMAdAAgACcAJwBQAHIAZQBzAHMAIABFAG4AdABlAHIAIAB0AG8AIABjAGwAbwBzAGUAJwAnACkAIAB9ACAAfQAiACcA"
+      ]
+    }
+  },
+  {
+    "kind": "state",
+    "name": "a'b",
+    "output": {
+      "command": "try { $vm = Get-VM -Name 'a''b' -ErrorAction Stop; Write-Output ('VMSTATE=' + $vm.State) } catch { if ($_.FullyQualifiedErrorId -like 'InvalidParameter*') { Write-Output 'VMSTATE=absent' } else { Write-Output 'VMSTATE=unknown' } }",
+      "file": "powershell.exe",
+      "spawnArgs": [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "dAByAHkAIAB7ACAAJAB2AG0AIAA9ACAARwBlAHQALQBWAE0AIAAtAE4AYQBtAGUAIAAnAGEAJwAnAGIAJwAgAC0ARQByAHIAbwByAEEAYwB0AGkAbwBuACAAUwB0AG8AcAA7ACAAVwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIAAoACcAVgBNAFMAVABBAFQARQA9ACcAIAArACAAJAB2AG0ALgBTAHQAYQB0AGUAKQAgAH0AIABjAGEAdABjAGgAIAB7ACAAaQBmACAAKAAkAF8ALgBGAHUAbABsAHkAUQB1AGEAbABpAGYAaQBlAGQARQByAHIAbwByAEkAZAAgAC0AbABpAGsAZQAgACcASQBuAHYAYQBsAGkAZABQAGEAcgBhAG0AZQB0AGUAcgAqACcAKQAgAHsAIABXAHIAaQB0AGUALQBPAHUAdABwAHUAdAAgACcAVgBNAFMAVABBAFQARQA9AGEAYgBzAGUAbgB0ACcAIAB9ACAAZQBsAHMAZQAgAHsAIABXAHIAaQB0AGUALQBPAHUAdABwAHUAdAAgACcAVgBNAFMAVABBAFQARQA9AHUAbgBrAG4AbwB3AG4AJwAgAH0AIAB9AA=="
+      ]
+    }
+  },
+  {
+    "kind": "checkpoints",
+    "name": "a'b",
+    "output": {
+      "command": "try { $vm = Get-VM -Name 'a''b' -ErrorAction Stop; $p = $vm.PSObject.Properties['AutomaticCheckpointsEnabled']; if ($p -and $null -ne $p.Value) { Write-Output ('VMAUTOCHK=' + [bool]$p.Value) } else { Write-Output 'VMAUTOCHK=unsupported' } } catch { if ($_.FullyQualifiedErrorId -like 'InvalidParameter*') { Write-Output 'VMAUTOCHK=absent' } else { Write-Output 'VMAUTOCHK=unknown' } }",
+      "file": "powershell.exe",
+      "spawnArgs": [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "dAByAHkAIAB7ACAAJAB2AG0AIAA9ACAARwBlAHQALQBWAE0AIAAtAE4AYQBtAGUAIAAnAGEAJwAnAGIAJwAgAC0ARQByAHIAbwByAEEAYwB0AGkAbwBuACAAUwB0AG8AcAA7ACAAJABwACAAPQAgACQAdgBtAC4AUABTAE8AYgBqAGUAYwB0AC4AUAByAG8AcABlAHIAdABpAGUAcwBbACcAQQB1AHQAbwBtAGEAdABpAGMAQwBoAGUAYwBrAHAAbwBpAG4AdABzAEUAbgBhAGIAbABlAGQAJwBdADsAIABpAGYAIAAoACQAcAAgAC0AYQBuAGQAIAAkAG4AdQBsAGwAIAAtAG4AZQAgACQAcAAuAFYAYQBsAHUAZQApACAAewAgAFcAcgBpAHQAZQAtAE8AdQB0AHAAdQB0ACAAKAAnAFYATQBBAFUAVABPAEMASABLAD0AJwAgACsAIABbAGIAbwBvAGwAXQAkAHAALgBWAGEAbAB1AGUAKQAgAH0AIABlAGwAcwBlACAAewAgAFcAcgBpAHQAZQAtAE8AdQB0AHAAdQB0ACAAJwBWAE0AQQBVAFQATwBDAEgASwA9AHUAbgBzAHUAcABwAG8AcgB0AGUAZAAnACAAfQAgAH0AIABjAGEAdABjAGgAIAB7ACAAaQBmACAAKAAkAF8ALgBGAHUAbABsAHkAUQB1AGEAbABpAGYAaQBlAGQARQByAHIAbwByAEkAZAAgAC0AbABpAGsAZQAgACcASQBuAHYAYQBsAGkAZABQAGEAcgBhAG0AZQB0AGUAcgAqACcAKQAgAHsAIABXAHIAaQB0AGUALQBPAHUAdABwAHUAdAAgACcAVgBNAEEAVQBUAE8AQwBIAEsAPQBhAGIAcwBlAG4AdAAnACAAfQAgAGUAbABzAGUAIAB7ACAAVwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIAAnAFYATQBBAFUAVABPAEMASABLAD0AdQBuAGsAbgBvAHcAbgAnACAAfQAgAH0A"
+      ]
+    }
+  },
+  {
+    "kind": "start",
+    "name": "a'b",
+    "output": {
+      "command": "Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Normal -ArgumentList '-NoProfile -ExecutionPolicy Bypass -Command \"Start-VM -Name ''a''''b''; if ($?) { Write-Host ''Construct VM started.'' -ForegroundColor Green } else { Write-Host ''Failed to start the Construct VM.'' -ForegroundColor Red; if (-not [Console]::IsInputRedirected) { [void](Read-Host ''Press Enter to close'') } }\"'",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "UwB0AGEAcgB0AC0AUAByAG8AYwBlAHMAcwAgAC0ARgBpAGwAZQBQAGEAdABoACAAJwBwAG8AdwBlAHIAcwBoAGUAbABsAC4AZQB4AGUAJwAgAC0AVgBlAHIAYgAgAFIAdQBuAEEAcwAgAC0AVwBpAG4AZABvAHcAUwB0AHkAbABlACAATgBvAHIAbQBhAGwAIAAtAEEAcgBnAHUAbQBlAG4AdABMAGkAcwB0ACAAJwAtAE4AbwBQAHIAbwBmAGkAbABlACAALQBFAHgAZQBjAHUAdABpAG8AbgBQAG8AbABpAGMAeQAgAEIAeQBwAGEAcwBzACAALQBDAG8AbQBtAGEAbgBkACAAIgBTAHQAYQByAHQALQBWAE0AIAAtAE4AYQBtAGUAIAAnACcAYQAnACcAJwAnAGIAJwAnADsAIABpAGYAIAAoACQAPwApACAAewAgAFcAcgBpAHQAZQAtAEgAbwBzAHQAIAAnACcAQwBvAG4AcwB0AHIAdQBjAHQAIABWAE0AIABzAHQAYQByAHQAZQBkAC4AJwAnACAALQBGAG8AcgBlAGcAcgBvAHUAbgBkAEMAbwBsAG8AcgAgAEcAcgBlAGUAbgAgAH0AIABlAGwAcwBlACAAewAgAFcAcgBpAHQAZQAtAEgAbwBzAHQAIAAnACcARgBhAGkAbABlAGQAIAB0AG8AIABzAHQAYQByAHQAIAB0AGgAZQAgAEMAbwBuAHMAdAByAHUAYwB0ACAAVgBNAC4AJwAnACAALQBGAG8AcgBlAGcAcgBvAHUAbgBkAEMAbwBsAG8AcgAgAFIAZQBkADsAIABpAGYAIAAoAC0AbgBvAHQAIABbAEMAbwBuAHMAbwBsAGUAXQA6ADoASQBzAEkAbgBwAHUAdABSAGUAZABpAHIAZQBjAHQAZQBkACkAIAB7ACAAWwB2AG8AaQBkAF0AKABSAGUAYQBkAC0ASABvAHMAdAAgACcAJwBQAHIAZQBzAHMAIABFAG4AdABlAHIAIAB0AG8AIABjAGwAbwBzAGUAJwAnACkAIAB9ACAAfQAiACcA"
+      ]
+    }
+  },
+  {
+    "kind": "state",
+    "name": "name with space",
+    "output": {
+      "command": "try { $vm = Get-VM -Name 'name with space' -ErrorAction Stop; Write-Output ('VMSTATE=' + $vm.State) } catch { if ($_.FullyQualifiedErrorId -like 'InvalidParameter*') { Write-Output 'VMSTATE=absent' } else { Write-Output 'VMSTATE=unknown' } }",
+      "file": "powershell.exe",
+      "spawnArgs": [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "dAByAHkAIAB7ACAAJAB2AG0AIAA9ACAARwBlAHQALQBWAE0AIAAtAE4AYQBtAGUAIAAnAG4AYQBtAGUAIAB3AGkAdABoACAAcwBwAGEAYwBlACcAIAAtAEUAcgByAG8AcgBBAGMAdABpAG8AbgAgAFMAdABvAHAAOwAgAFcAcgBpAHQAZQAtAE8AdQB0AHAAdQB0ACAAKAAnAFYATQBTAFQAQQBUAEUAPQAnACAAKwAgACQAdgBtAC4AUwB0AGEAdABlACkAIAB9ACAAYwBhAHQAYwBoACAAewAgAGkAZgAgACgAJABfAC4ARgB1AGwAbAB5AFEAdQBhAGwAaQBmAGkAZQBkAEUAcgByAG8AcgBJAGQAIAAtAGwAaQBrAGUAIAAnAEkAbgB2AGEAbABpAGQAUABhAHIAYQBtAGUAdABlAHIAKgAnACkAIAB7ACAAVwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIAAnAFYATQBTAFQAQQBUAEUAPQBhAGIAcwBlAG4AdAAnACAAfQAgAGUAbABzAGUAIAB7ACAAVwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIAAnAFYATQBTAFQAQQBUAEUAPQB1AG4AawBuAG8AdwBuACcAIAB9ACAAfQA="
+      ]
+    }
+  },
+  {
+    "kind": "checkpoints",
+    "name": "name with space",
+    "output": {
+      "command": "try { $vm = Get-VM -Name 'name with space' -ErrorAction Stop; $p = $vm.PSObject.Properties['AutomaticCheckpointsEnabled']; if ($p -and $null -ne $p.Value) { Write-Output ('VMAUTOCHK=' + [bool]$p.Value) } else { Write-Output 'VMAUTOCHK=unsupported' } } catch { if ($_.FullyQualifiedErrorId -like 'InvalidParameter*') { Write-Output 'VMAUTOCHK=absent' } else { Write-Output 'VMAUTOCHK=unknown' } }",
+      "file": "powershell.exe",
+      "spawnArgs": [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "dAByAHkAIAB7ACAAJAB2AG0AIAA9ACAARwBlAHQALQBWAE0AIAAtAE4AYQBtAGUAIAAnAG4AYQBtAGUAIAB3AGkAdABoACAAcwBwAGEAYwBlACcAIAAtAEUAcgByAG8AcgBBAGMAdABpAG8AbgAgAFMAdABvAHAAOwAgACQAcAAgAD0AIAAkAHYAbQAuAFAAUwBPAGIAagBlAGMAdAAuAFAAcgBvAHAAZQByAHQAaQBlAHMAWwAnAEEAdQB0AG8AbQBhAHQAaQBjAEMAaABlAGMAawBwAG8AaQBuAHQAcwBFAG4AYQBiAGwAZQBkACcAXQA7ACAAaQBmACAAKAAkAHAAIAAtAGEAbgBkACAAJABuAHUAbABsACAALQBuAGUAIAAkAHAALgBWAGEAbAB1AGUAKQAgAHsAIABXAHIAaQB0AGUALQBPAHUAdABwAHUAdAAgACgAJwBWAE0AQQBVAFQATwBDAEgASwA9ACcAIAArACAAWwBiAG8AbwBsAF0AJABwAC4AVgBhAGwAdQBlACkAIAB9ACAAZQBsAHMAZQAgAHsAIABXAHIAaQB0AGUALQBPAHUAdABwAHUAdAAgACcAVgBNAEEAVQBUAE8AQwBIAEsAPQB1AG4AcwB1AHAAcABvAHIAdABlAGQAJwAgAH0AIAB9ACAAYwBhAHQAYwBoACAAewAgAGkAZgAgACgAJABfAC4ARgB1AGwAbAB5AFEAdQBhAGwAaQBmAGkAZQBkAEUAcgByAG8AcgBJAGQAIAAtAGwAaQBrAGUAIAAnAEkAbgB2AGEAbABpAGQAUABhAHIAYQBtAGUAdABlAHIAKgAnACkAIAB7ACAAVwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIAAnAFYATQBBAFUAVABPAEMASABLAD0AYQBiAHMAZQBuAHQAJwAgAH0AIABlAGwAcwBlACAAewAgAFcAcgBpAHQAZQAtAE8AdQB0AHAAdQB0ACAAJwBWAE0AQQBVAFQATwBDAEgASwA9AHUAbgBrAG4AbwB3AG4AJwAgAH0AIAB9AA=="
+      ]
+    }
+  },
+  {
+    "kind": "start",
+    "name": "name with space",
+    "output": {
+      "command": "Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Normal -ArgumentList '-NoProfile -ExecutionPolicy Bypass -Command \"Start-VM -Name ''name with space''; if ($?) { Write-Host ''Construct VM started.'' -ForegroundColor Green } else { Write-Host ''Failed to start the Construct VM.'' -ForegroundColor Red; if (-not [Console]::IsInputRedirected) { [void](Read-Host ''Press Enter to close'') } }\"'",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "UwB0AGEAcgB0AC0AUAByAG8AYwBlAHMAcwAgAC0ARgBpAGwAZQBQAGEAdABoACAAJwBwAG8AdwBlAHIAcwBoAGUAbABsAC4AZQB4AGUAJwAgAC0AVgBlAHIAYgAgAFIAdQBuAEEAcwAgAC0AVwBpAG4AZABvAHcAUwB0AHkAbABlACAATgBvAHIAbQBhAGwAIAAtAEEAcgBnAHUAbQBlAG4AdABMAGkAcwB0ACAAJwAtAE4AbwBQAHIAbwBmAGkAbABlACAALQBFAHgAZQBjAHUAdABpAG8AbgBQAG8AbABpAGMAeQAgAEIAeQBwAGEAcwBzACAALQBDAG8AbQBtAGEAbgBkACAAIgBTAHQAYQByAHQALQBWAE0AIAAtAE4AYQBtAGUAIAAnACcAbgBhAG0AZQAgAHcAaQB0AGgAIABzAHAAYQBjAGUAJwAnADsAIABpAGYAIAAoACQAPwApACAAewAgAFcAcgBpAHQAZQAtAEgAbwBzAHQAIAAnACcAQwBvAG4AcwB0AHIAdQBjAHQAIABWAE0AIABzAHQAYQByAHQAZQBkAC4AJwAnACAALQBGAG8AcgBlAGcAcgBvAHUAbgBkAEMAbwBsAG8AcgAgAEcAcgBlAGUAbgAgAH0AIABlAGwAcwBlACAAewAgAFcAcgBpAHQAZQAtAEgAbwBzAHQAIAAnACcARgBhAGkAbABlAGQAIAB0AG8AIABzAHQAYQByAHQAIAB0AGgAZQAgAEMAbwBuAHMAdAByAHUAYwB0ACAAVgBNAC4AJwAnACAALQBGAG8AcgBlAGcAcgBvAHUAbgBkAEMAbwBsAG8AcgAgAFIAZQBkADsAIABpAGYAIAAoAC0AbgBvAHQAIABbAEMAbwBuAHMAbwBsAGUAXQA6ADoASQBzAEkAbgBwAHUAdABSAGUAZABpAHIAZQBjAHQAZQBkACkAIAB7ACAAWwB2AG8AaQBkAF0AKABSAGUAYQBkAC0ASABvAHMAdAAgACcAJwBQAHIAZQBzAHMAIABFAG4AdABlAHIAIAB0AG8AIABjAGwAbwBzAGUAJwAnACkAIAB9ACAAfQAiACcA"
+      ]
+    }
+  },
+  {
+    "checkpoints": "unknown",
+    "input": "",
+    "kind": "parse",
+    "state": "unknown"
+  },
+  {
+    "checkpoints": "unknown",
+    "input": "noise\nVMSTATE=Running\n",
+    "kind": "parse",
+    "state": "running"
+  },
+  {
+    "checkpoints": "unknown",
+    "input": "VMSTATE=Off",
+    "kind": "parse",
+    "state": "off"
+  },
+  {
+    "checkpoints": "unknown",
+    "input": "VMSTATE=Saved",
+    "kind": "parse",
+    "state": "off"
+  },
+  {
+    "checkpoints": "unknown",
+    "input": "VMSTATE=Paused",
+    "kind": "parse",
+    "state": "off"
+  },
+  {
+    "checkpoints": "unknown",
+    "input": "VMSTATE=Starting",
+    "kind": "parse",
+    "state": "unknown"
+  },
+  {
+    "checkpoints": "unknown",
+    "input": "VMSTATE=absent",
+    "kind": "parse",
+    "state": "absent"
+  },
+  {
+    "checkpoints": "unknown",
+    "input": "VMSTATE=unknown",
+    "kind": "parse",
+    "state": "unknown"
+  },
+  {
+    "checkpoints": "on",
+    "input": "VMAUTOCHK=True",
+    "kind": "parse",
+    "state": "unknown"
+  },
+  {
+    "checkpoints": "off",
+    "input": "VMAUTOCHK=False",
+    "kind": "parse",
+    "state": "unknown"
+  },
+  {
+    "checkpoints": "unsupported",
+    "input": "VMAUTOCHK=unsupported",
+    "kind": "parse",
+    "state": "unknown"
+  },
+  {
+    "checkpoints": "absent",
+    "input": "VMAUTOCHK=absent",
+    "kind": "parse",
+    "state": "unknown"
+  },
+  {
+    "kind": "shutdown",
+    "output": "systemctl poweroff --no-block"
+  }
+]

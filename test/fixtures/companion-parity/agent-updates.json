@@ -1,0 +1,683 @@
+[
+  {
+    "agents": [
+      {
+        "channel": null,
+        "id": "claude-code",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "output": [
+      {
+        "channel": null,
+        "id": "claude-code",
+        "latest": "1.3.0",
+        "updateAvailable": true,
+        "version": "1.2.3"
+      }
+    ],
+    "reply": {
+      "tag_name": "v1.3.0",
+      "version": "1.3.0"
+    },
+    "requests": [
+      "https://registry.npmjs.org/@anthropic-ai/claude-code/latest"
+    ]
+  },
+  {
+    "agents": [
+      {
+        "channel": null,
+        "id": "claude-code",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "output": [
+      {
+        "channel": null,
+        "id": "claude-code",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "reply": {
+      "tag_name": "v1.2.3",
+      "version": "1.2.3"
+    },
+    "requests": [
+      "https://registry.npmjs.org/@anthropic-ai/claude-code/latest"
+    ]
+  },
+  {
+    "agents": [
+      {
+        "channel": null,
+        "id": "claude-code",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "output": [
+      {
+        "channel": null,
+        "id": "claude-code",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "reply": {
+      "tag_name": "v1.2.2",
+      "version": "1.2.2"
+    },
+    "requests": [
+      "https://registry.npmjs.org/@anthropic-ai/claude-code/latest"
+    ]
+  },
+  {
+    "agents": [
+      {
+        "channel": null,
+        "id": "claude-code",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "output": [
+      {
+        "channel": null,
+        "id": "claude-code",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "reply": {
+      "tag_name": "vinvalid",
+      "version": "invalid"
+    },
+    "requests": [
+      "https://registry.npmjs.org/@anthropic-ai/claude-code/latest"
+    ]
+  },
+  {
+    "agents": [
+      {
+        "channel": null,
+        "id": "claude-code",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "output": [
+      {
+        "channel": null,
+        "id": "claude-code",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "reply": null,
+    "requests": [
+      "https://registry.npmjs.org/@anthropic-ai/claude-code/latest"
+    ]
+  },
+  {
+    "agents": [
+      {
+        "channel": null,
+        "id": "codex",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "output": [
+      {
+        "channel": null,
+        "id": "codex",
+        "latest": "1.3.0",
+        "updateAvailable": true,
+        "version": "1.2.3"
+      }
+    ],
+    "reply": {
+      "tag_name": "v1.3.0",
+      "version": "1.3.0"
+    },
+    "requests": [
+      "https://api.github.com/repos/openai/codex/releases/latest"
+    ]
+  },
+  {
+    "agents": [
+      {
+        "channel": null,
+        "id": "codex",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "output": [
+      {
+        "channel": null,
+        "id": "codex",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "reply": {
+      "tag_name": "v1.2.3",
+      "version": "1.2.3"
+    },
+    "requests": [
+      "https://api.github.com/repos/openai/codex/releases/latest"
+    ]
+  },
+  {
+    "agents": [
+      {
+        "channel": null,
+        "id": "codex",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "output": [
+      {
+        "channel": null,
+        "id": "codex",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "reply": {
+      "tag_name": "v1.2.2",
+      "version": "1.2.2"
+    },
+    "requests": [
+      "https://api.github.com/repos/openai/codex/releases/latest"
+    ]
+  },
+  {
+    "agents": [
+      {
+        "channel": null,
+        "id": "codex",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "output": [
+      {
+        "channel": null,
+        "id": "codex",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "reply": {
+      "tag_name": "vinvalid",
+      "version": "invalid"
+    },
+    "requests": [
+      "https://api.github.com/repos/openai/codex/releases/latest"
+    ]
+  },
+  {
+    "agents": [
+      {
+        "channel": null,
+        "id": "codex",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "output": [
+      {
+        "channel": null,
+        "id": "codex",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "reply": null,
+    "requests": [
+      "https://api.github.com/repos/openai/codex/releases/latest"
+    ]
+  },
+  {
+    "agents": [
+      {
+        "channel": null,
+        "id": "opencode",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "output": [
+      {
+        "channel": null,
+        "id": "opencode",
+        "latest": "1.3.0",
+        "updateAvailable": true,
+        "version": "1.2.3"
+      }
+    ],
+    "reply": {
+      "tag_name": "v1.3.0",
+      "version": "1.3.0"
+    },
+    "requests": [
+      "https://api.github.com/repos/sst/opencode/releases/latest"
+    ]
+  },
+  {
+    "agents": [
+      {
+        "channel": null,
+        "id": "opencode",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "output": [
+      {
+        "channel": null,
+        "id": "opencode",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "reply": {
+      "tag_name": "v1.2.3",
+      "version": "1.2.3"
+    },
+    "requests": [
+      "https://api.github.com/repos/sst/opencode/releases/latest"
+    ]
+  },
+  {
+    "agents": [
+      {
+        "channel": null,
+        "id": "opencode",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "output": [
+      {
+        "channel": null,
+        "id": "opencode",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "reply": {
+      "tag_name": "v1.2.2",
+      "version": "1.2.2"
+    },
+    "requests": [
+      "https://api.github.com/repos/sst/opencode/releases/latest"
+    ]
+  },
+  {
+    "agents": [
+      {
+        "channel": null,
+        "id": "opencode",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "output": [
+      {
+        "channel": null,
+        "id": "opencode",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "reply": {
+      "tag_name": "vinvalid",
+      "version": "invalid"
+    },
+    "requests": [
+      "https://api.github.com/repos/sst/opencode/releases/latest"
+    ]
+  },
+  {
+    "agents": [
+      {
+        "channel": null,
+        "id": "opencode",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "output": [
+      {
+        "channel": null,
+        "id": "opencode",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "reply": null,
+    "requests": [
+      "https://api.github.com/repos/sst/opencode/releases/latest"
+    ]
+  },
+  {
+    "agents": [
+      {
+        "channel": "stable",
+        "id": "t3code",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "output": [
+      {
+        "channel": "stable",
+        "id": "t3code",
+        "latest": "1.3.0",
+        "updateAvailable": true,
+        "version": "1.2.3"
+      }
+    ],
+    "reply": {
+      "tag_name": "v1.3.0",
+      "version": "1.3.0"
+    },
+    "requests": [
+      "https://registry.npmjs.org/t3/latest"
+    ]
+  },
+  {
+    "agents": [
+      {
+        "channel": "stable",
+        "id": "t3code",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "output": [
+      {
+        "channel": "stable",
+        "id": "t3code",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "reply": {
+      "tag_name": "v1.2.3",
+      "version": "1.2.3"
+    },
+    "requests": [
+      "https://registry.npmjs.org/t3/latest"
+    ]
+  },
+  {
+    "agents": [
+      {
+        "channel": "stable",
+        "id": "t3code",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "output": [
+      {
+        "channel": "stable",
+        "id": "t3code",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "reply": {
+      "tag_name": "v1.2.2",
+      "version": "1.2.2"
+    },
+    "requests": [
+      "https://registry.npmjs.org/t3/latest"
+    ]
+  },
+  {
+    "agents": [
+      {
+        "channel": "stable",
+        "id": "t3code",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "output": [
+      {
+        "channel": "stable",
+        "id": "t3code",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "reply": {
+      "tag_name": "vinvalid",
+      "version": "invalid"
+    },
+    "requests": [
+      "https://registry.npmjs.org/t3/latest"
+    ]
+  },
+  {
+    "agents": [
+      {
+        "channel": "stable",
+        "id": "t3code",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "output": [
+      {
+        "channel": "stable",
+        "id": "t3code",
+        "updateAvailable": false,
+        "version": "1.2.3"
+      }
+    ],
+    "reply": null,
+    "requests": [
+      "https://registry.npmjs.org/t3/latest"
+    ]
+  },
+  {
+    "agents": [
+      {
+        "channel": "nightly",
+        "id": "t3code",
+        "updateAvailable": false,
+        "version": "1.2.3-nightly.1.2"
+      }
+    ],
+    "output": [
+      {
+        "channel": "nightly",
+        "id": "t3code",
+        "latest": "1.2.3-nightly.2.1",
+        "updateAvailable": true,
+        "version": "1.2.3-nightly.1.2"
+      }
+    ],
+    "reply": {
+      "tag_name": "v1.2.3-nightly.2.1",
+      "version": "1.2.3-nightly.2.1"
+    },
+    "requests": [
+      "https://registry.npmjs.org/t3/nightly"
+    ]
+  },
+  {
+    "agents": [
+      {
+        "channel": "nightly",
+        "id": "t3code",
+        "updateAvailable": false,
+        "version": "1.2.3-nightly.1.2"
+      }
+    ],
+    "output": [
+      {
+        "channel": "nightly",
+        "id": "t3code",
+        "updateAvailable": false,
+        "version": "1.2.3-nightly.1.2"
+      }
+    ],
+    "reply": {
+      "tag_name": "v1.2.3-nightly.1.2",
+      "version": "1.2.3-nightly.1.2"
+    },
+    "requests": [
+      "https://registry.npmjs.org/t3/nightly"
+    ]
+  },
+  {
+    "agents": [
+      {
+        "channel": "nightly",
+        "id": "t3code",
+        "updateAvailable": false,
+        "version": "1.2.3-nightly.1.2"
+      }
+    ],
+    "output": [
+      {
+        "channel": "nightly",
+        "id": "t3code",
+        "updateAvailable": false,
+        "version": "1.2.3-nightly.1.2"
+      }
+    ],
+    "reply": {
+      "tag_name": "v1.2.3-nightly.1.1",
+      "version": "1.2.3-nightly.1.1"
+    },
+    "requests": [
+      "https://registry.npmjs.org/t3/nightly"
+    ]
+  },
+  {
+    "agents": [
+      {
+        "channel": "nightly",
+        "id": "t3code",
+        "updateAvailable": false,
+        "version": "1.2.3-nightly.1.2"
+      }
+    ],
+    "output": [
+      {
+        "channel": "nightly",
+        "id": "t3code",
+        "updateAvailable": false,
+        "version": "1.2.3-nightly.1.2"
+      }
+    ],
+    "reply": {
+      "tag_name": "vinvalid",
+      "version": "invalid"
+    },
+    "requests": [
+      "https://registry.npmjs.org/t3/nightly"
+    ]
+  },
+  {
+    "agents": [
+      {
+        "channel": "nightly",
+        "id": "t3code",
+        "updateAvailable": false,
+        "version": "1.2.3-nightly.1.2"
+      }
+    ],
+    "output": [
+      {
+        "channel": "nightly",
+        "id": "t3code",
+        "updateAvailable": false,
+        "version": "1.2.3-nightly.1.2"
+      }
+    ],
+    "reply": null,
+    "requests": [
+      "https://registry.npmjs.org/t3/nightly"
+    ]
+  },
+  {
+    "agents": [
+      null
+    ],
+    "output": [
+      null
+    ],
+    "reply": null,
+    "requests": []
+  },
+  {
+    "agents": [
+      {}
+    ],
+    "output": [
+      {}
+    ],
+    "reply": null,
+    "requests": []
+  },
+  {
+    "agents": [
+      {
+        "id": "unknown",
+        "version": "1.2.3"
+      }
+    ],
+    "output": [
+      {
+        "id": "unknown",
+        "version": "1.2.3"
+      }
+    ],
+    "reply": null,
+    "requests": []
+  },
+  {
+    "agents": [
+      {
+        "id": "codex",
+        "version": "—"
+      }
+    ],
+    "output": [
+      {
+        "id": "codex",
+        "version": "—"
+      }
+    ],
+    "reply": null,
+    "requests": []
+  },
+  {
+    "agents": [
+      {
+        "id": "opencode"
+      }
+    ],
+    "output": [
+      {
+        "id": "opencode"
+      }
+    ],
+    "reply": null,
+    "requests": []
+  }
+]

@@ -40,6 +40,7 @@
 #>
 [CmdletBinding()]
 param(
+    [switch]$SkipCompanion,
     [string]$VmHost       = "agent-vm.mshome.net",
     [string]$HostAlias    = "agent-vm",
     # Client-reachable SSH port for the VM. Thread into every ssh/scp/ssh-keyscan
@@ -270,6 +271,12 @@ if ($ReadyFile) {
         Write-Warning "Could not publish ready handshake: $($_.Exception.Message)"
         exit 1
     }
+}
+
+# Per-user client runtime, including plain reprovision and T3 Desktop entry paths.
+if ($Action -eq 'provision' -and -not $ScanReposOnly -and -not $SkipCompanion) {
+    try { . (Join-Path $PSScriptRoot 'lib/Construct.Companion.ps1'); Invoke-ConstructCompanionInstallHook -ScriptsDir $PSScriptRoot -SkipWhenElevated }
+    catch { Write-Warning 'Could not load Companion installer helpers; continuing provisioning.' }
 }
 
 # ── NAME-ONLY TARGETING (-InstanceName; B11, plan section 4.12) ──────────────

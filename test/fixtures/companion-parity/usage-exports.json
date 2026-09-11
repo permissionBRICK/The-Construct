@@ -1,0 +1,17 @@
+[
+  {
+    "input": "{\"report\":\"daily🧱 \",\"tools\":{\"claude\":{\"totals\":{\"totalTokens\":1234,\"totalCost\":1.23},\"note\":\"\\u001f\"}}}",
+    "output": "{\n  \"savedAt\": \"2026-09-11T12:00:00.000Z\",\n  \"source\": \"construct-control-panel\",\n  \"summary\": {\n    \"tools\": [\n      {\n        \"id\": \"claude\",\n        \"label\": \"Claude Code\",\n        \"tokens\": 1234,\n        \"tokensText\": \"1.2K\",\n        \"costText\": \"$1.23\"\n      }\n    ],\n    \"totalTokensText\": \"1.2K\",\n    \"totalCostText\": \"$1.23\"\n  },\n  \"report\": \"daily🧱 \",\n  \"ccusage\": {\n    \"report\": \"daily🧱 \",\n    \"tools\": {\n      \"claude\": {\n        \"totals\": {\n          \"totalTokens\": 1234,\n          \"totalCost\": 1.23\n        },\n        \"note\": \"\\u001f\"\n      }\n    }\n  }\n}",
+    "savedAt": "2026-09-11T12:00:00.000Z"
+  },
+  {
+    "input": "invalid",
+    "output": "{\n  \"savedAt\": \"2026-09-11T12:00:00.000Z\",\n  \"source\": \"construct-control-panel\",\n  \"summary\": null,\n  \"report\": null,\n  \"ccusage\": null\n}",
+    "savedAt": "2026-09-11T12:00:00.000Z"
+  },
+  {
+    "input": null,
+    "output": "{\n  \"savedAt\": \"2026-09-11T12:00:00.000Z\",\n  \"source\": \"construct-control-panel\",\n  \"summary\": null,\n  \"report\": null,\n  \"ccusage\": null\n}",
+    "savedAt": "2026-09-11T12:00:00.000Z"
+  }
+]

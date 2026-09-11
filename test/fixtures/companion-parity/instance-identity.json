@@ -1,0 +1,1751 @@
+[
+  {
+    "backend": [],
+    "fingerprint": "[\"agent-vm\",\"hyperv-local\",\"Agent-VM\",\"agent-vm.mshome.net\",22,\"agent-vm\",\"agent_vm_ed25519\",\"vm\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "agent-vm",
+    "output": {
+      "backend": "hyperv-local",
+      "configBranch": "vm",
+      "hostAlias": "agent-vm",
+      "keyName": "agent_vm_ed25519",
+      "name": "agent-vm",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "agent-vm.mshome.net",
+      "vmName": "Agent-VM"
+    },
+    "problems": [],
+    "raw": {},
+    "remote": [],
+    "valid": true
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"agent-vm\",\"hyperv-remote\",\"agent-vm\",\"host.example\",2222,\"agent-vm\",\"agent_vm_ed25519\",\"vm\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "agent-vm",
+    "output": {
+      "backend": "hyperv-remote",
+      "configBranch": "vm",
+      "hostAlias": "agent-vm",
+      "keyName": "agent_vm_ed25519",
+      "name": "agent-vm",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 2222,
+      "vmHost": "host.example",
+      "vmName": "agent-vm"
+    },
+    "problems": [],
+    "raw": {
+      "backend": "hyperv-remote",
+      "sshHost": "host.example",
+      "sshPort": "2222",
+      "vmName": "agent-vm"
+    },
+    "remote": [],
+    "valid": true
+  },
+  {
+    "backend": [
+      "\"backend\" \"HYPERV-LOCAL\" is not spelled \"hyperv-local\" (the backend id is case-sensitive, but the driver lookup is not — a value the two read differently must not drive a VM)"
+    ],
+    "fingerprint": "[\"agent-vm\",\"hyperv-local\",\"other\",\"-x\",22,\"../bad\",\"CON.txt\",\"main\",\"\",\"\",\"\",\"\"]",
+    "local": [
+      "\"vmName\" \"other\" must be \"Agent-VM\" for instance \"agent-vm\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)",
+      "\"sshHost\" \"-x\" must be \"agent-vm.mshome.net\" for instance \"agent-vm\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)",
+      "\"hostAlias\" \"../bad\" must be \"agent-vm\" for instance \"agent-vm\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)",
+      "\"keyName\" \"CON.txt\" must be \"agent_vm_ed25519\" for instance \"agent-vm\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)"
+    ],
+    "name": "agent-vm",
+    "output": {
+      "backend": "HYPERV-LOCAL",
+      "configBranch": "main",
+      "hostAlias": "../bad",
+      "keyName": "CON.txt",
+      "name": "agent-vm",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "-x",
+      "vmName": "other"
+    },
+    "problems": [
+      "\"sshHost\" \"-x\" is not a host name or IP address",
+      "\"hostAlias\" \"../bad\" is not a usable ssh alias (letters, digits, '.', '_' and '-', max 64)",
+      "\"keyName\" \"CON.txt\" is not a usable key file name (letters, digits, '.', '_' and '-', max 128; no trailing dot and not a reserved Windows device name)",
+      "\"configBranch\" \"main\" is not a usable config-sync branch name"
+    ],
+    "raw": {
+      "backend": "HYPERV-LOCAL",
+      "configBranch": "main",
+      "hostAlias": "../bad",
+      "keyName": "CON.txt",
+      "sshHost": "-x",
+      "vmName": "other"
+    },
+    "remote": [],
+    "valid": true
+  },
+  {
+    "backend": [
+      "\"backend\" 42 is not a usable backend id (omit it for \"hyperv-local\", or name one of: hyperv-local, hyperv-remote)"
+    ],
+    "fingerprint": "[\"agent-vm\",\"42\",\"Agent-VM\",\"agent-vm.mshome.net\",22,\"agent-vm\",\"agent_vm_ed25519\",\"vm\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "agent-vm",
+    "output": {
+      "backend": 42,
+      "configBranch": "vm",
+      "hostAlias": "agent-vm",
+      "keyName": "agent_vm_ed25519",
+      "name": "agent-vm",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "agent-vm.mshome.net",
+      "vmName": "Agent-VM"
+    },
+    "problems": [],
+    "raw": {
+      "backend": 42,
+      "sshPort": "1e3",
+      "vmName": 42
+    },
+    "remote": [],
+    "valid": true
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"agent-vm\",\"hyperv-remote\",\"Agent-VM\",\"agent-vm.mshome.net\",22,\"agent-vm\",\"agent_vm_ed25519\",\"vm\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "agent-vm",
+    "output": {
+      "backend": "hyperv-remote",
+      "configBranch": "vm",
+      "hostAlias": "agent-vm",
+      "keyName": "agent_vm_ed25519",
+      "name": "agent-vm",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "agent-vm.mshome.net",
+      "vmName": "Agent-VM"
+    },
+    "problems": [],
+    "raw": {
+      "backend": "hyperv-remote"
+    },
+    "remote": [
+      "\"sshHost\" is missing (no sshHost) — a \"hyperv-remote\" instance's endpoint is the one its host service allocated, so it cannot be derived from the instance name",
+      "\"vmName\" \"Agent-VM\" must be \"agent-vm\" for a \"hyperv-remote\" instance (the host service addresses the VM by that name, so the power state, Start and a rebuild would otherwise act on two different VMs)"
+    ],
+    "valid": true
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"agent-vm\",\"proxmox\",\"Agent-VM\",\"::1\",22,\"agent-vm\",\"key.\",\"vm\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "agent-vm",
+    "output": {
+      "backend": "proxmox",
+      "configBranch": "vm",
+      "hostAlias": "agent-vm",
+      "keyName": "key.",
+      "name": "agent-vm",
+      "owner": null,
+      "publicHost": "web.example",
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "::1",
+      "vmName": "Agent-VM"
+    },
+    "problems": [
+      "\"keyName\" \"key.\" is not a usable key file name (letters, digits, '.', '_' and '-', max 128; no trailing dot and not a reserved Windows device name)"
+    ],
+    "raw": {
+      "backend": "proxmox",
+      "keyName": "key.",
+      "publicHost": "web.example",
+      "sshHost": "::1"
+    },
+    "remote": [],
+    "valid": true
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"dev\",\"hyperv-local\",\"dev\",\"dev.mshome.net\",22,\"dev\",\"construct_dev_ed25519\",\"vm-dev\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "dev",
+    "output": {
+      "backend": "hyperv-local",
+      "configBranch": "vm-dev",
+      "hostAlias": "dev",
+      "keyName": "construct_dev_ed25519",
+      "name": "dev",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "dev.mshome.net",
+      "vmName": "dev"
+    },
+    "problems": [],
+    "raw": {},
+    "remote": [],
+    "valid": true
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"dev\",\"hyperv-remote\",\"dev\",\"host.example\",2222,\"dev\",\"construct_dev_ed25519\",\"vm-dev\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "dev",
+    "output": {
+      "backend": "hyperv-remote",
+      "configBranch": "vm-dev",
+      "hostAlias": "dev",
+      "keyName": "construct_dev_ed25519",
+      "name": "dev",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 2222,
+      "vmHost": "host.example",
+      "vmName": "dev"
+    },
+    "problems": [],
+    "raw": {
+      "backend": "hyperv-remote",
+      "sshHost": "host.example",
+      "sshPort": "2222",
+      "vmName": "dev"
+    },
+    "remote": [],
+    "valid": true
+  },
+  {
+    "backend": [
+      "\"backend\" \"HYPERV-LOCAL\" is not spelled \"hyperv-local\" (the backend id is case-sensitive, but the driver lookup is not — a value the two read differently must not drive a VM)"
+    ],
+    "fingerprint": "[\"dev\",\"hyperv-local\",\"other\",\"-x\",22,\"../bad\",\"CON.txt\",\"main\",\"\",\"\",\"\",\"\"]",
+    "local": [
+      "\"vmName\" \"other\" must be \"dev\" for instance \"dev\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)",
+      "\"sshHost\" \"-x\" must be \"dev.mshome.net\" for instance \"dev\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)",
+      "\"hostAlias\" \"../bad\" must be \"dev\" for instance \"dev\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)",
+      "\"keyName\" \"CON.txt\" must be \"construct_dev_ed25519\" for instance \"dev\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)"
+    ],
+    "name": "dev",
+    "output": {
+      "backend": "HYPERV-LOCAL",
+      "configBranch": "main",
+      "hostAlias": "../bad",
+      "keyName": "CON.txt",
+      "name": "dev",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "-x",
+      "vmName": "other"
+    },
+    "problems": [
+      "\"sshHost\" \"-x\" is not a host name or IP address",
+      "\"hostAlias\" \"../bad\" is not a usable ssh alias (letters, digits, '.', '_' and '-', max 64)",
+      "\"keyName\" \"CON.txt\" is not a usable key file name (letters, digits, '.', '_' and '-', max 128; no trailing dot and not a reserved Windows device name)",
+      "\"configBranch\" \"main\" is not a usable config-sync branch name"
+    ],
+    "raw": {
+      "backend": "HYPERV-LOCAL",
+      "configBranch": "main",
+      "hostAlias": "../bad",
+      "keyName": "CON.txt",
+      "sshHost": "-x",
+      "vmName": "other"
+    },
+    "remote": [],
+    "valid": true
+  },
+  {
+    "backend": [
+      "\"backend\" 42 is not a usable backend id (omit it for \"hyperv-local\", or name one of: hyperv-local, hyperv-remote)"
+    ],
+    "fingerprint": "[\"dev\",\"42\",\"dev\",\"dev.mshome.net\",22,\"dev\",\"construct_dev_ed25519\",\"vm-dev\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "dev",
+    "output": {
+      "backend": 42,
+      "configBranch": "vm-dev",
+      "hostAlias": "dev",
+      "keyName": "construct_dev_ed25519",
+      "name": "dev",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "dev.mshome.net",
+      "vmName": "dev"
+    },
+    "problems": [],
+    "raw": {
+      "backend": 42,
+      "sshPort": "1e3",
+      "vmName": 42
+    },
+    "remote": [],
+    "valid": true
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"dev\",\"hyperv-remote\",\"dev\",\"dev.mshome.net\",22,\"dev\",\"construct_dev_ed25519\",\"vm-dev\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "dev",
+    "output": {
+      "backend": "hyperv-remote",
+      "configBranch": "vm-dev",
+      "hostAlias": "dev",
+      "keyName": "construct_dev_ed25519",
+      "name": "dev",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "dev.mshome.net",
+      "vmName": "dev"
+    },
+    "problems": [],
+    "raw": {
+      "backend": "hyperv-remote"
+    },
+    "remote": [
+      "\"sshHost\" is missing (no sshHost) — a \"hyperv-remote\" instance's endpoint is the one its host service allocated, so it cannot be derived from the instance name"
+    ],
+    "valid": true
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"dev\",\"proxmox\",\"dev\",\"::1\",22,\"dev\",\"key.\",\"vm-dev\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "dev",
+    "output": {
+      "backend": "proxmox",
+      "configBranch": "vm-dev",
+      "hostAlias": "dev",
+      "keyName": "key.",
+      "name": "dev",
+      "owner": null,
+      "publicHost": "web.example",
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "::1",
+      "vmName": "dev"
+    },
+    "problems": [
+      "\"keyName\" \"key.\" is not a usable key file name (letters, digits, '.', '_' and '-', max 128; no trailing dot and not a reserved Windows device name)"
+    ],
+    "raw": {
+      "backend": "proxmox",
+      "keyName": "key.",
+      "publicHost": "web.example",
+      "sshHost": "::1"
+    },
+    "remote": [],
+    "valid": true
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"constructor\",\"hyperv-local\",\"constructor\",\"constructor.mshome.net\",22,\"constructor\",\"construct_constructor_ed25519\",\"vm-constructor\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "constructor",
+    "output": {
+      "backend": "hyperv-local",
+      "configBranch": "vm-constructor",
+      "hostAlias": "constructor",
+      "keyName": "construct_constructor_ed25519",
+      "name": "constructor",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "constructor.mshome.net",
+      "vmName": "constructor"
+    },
+    "problems": [],
+    "raw": {},
+    "remote": [],
+    "valid": true
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"constructor\",\"hyperv-remote\",\"constructor\",\"host.example\",2222,\"constructor\",\"construct_constructor_ed25519\",\"vm-constructor\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "constructor",
+    "output": {
+      "backend": "hyperv-remote",
+      "configBranch": "vm-constructor",
+      "hostAlias": "constructor",
+      "keyName": "construct_constructor_ed25519",
+      "name": "constructor",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 2222,
+      "vmHost": "host.example",
+      "vmName": "constructor"
+    },
+    "problems": [],
+    "raw": {
+      "backend": "hyperv-remote",
+      "sshHost": "host.example",
+      "sshPort": "2222",
+      "vmName": "constructor"
+    },
+    "remote": [],
+    "valid": true
+  },
+  {
+    "backend": [
+      "\"backend\" \"HYPERV-LOCAL\" is not spelled \"hyperv-local\" (the backend id is case-sensitive, but the driver lookup is not — a value the two read differently must not drive a VM)"
+    ],
+    "fingerprint": "[\"constructor\",\"hyperv-local\",\"other\",\"-x\",22,\"../bad\",\"CON.txt\",\"main\",\"\",\"\",\"\",\"\"]",
+    "local": [
+      "\"vmName\" \"other\" must be \"constructor\" for instance \"constructor\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)",
+      "\"sshHost\" \"-x\" must be \"constructor.mshome.net\" for instance \"constructor\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)",
+      "\"hostAlias\" \"../bad\" must be \"constructor\" for instance \"constructor\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)",
+      "\"keyName\" \"CON.txt\" must be \"construct_constructor_ed25519\" for instance \"constructor\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)"
+    ],
+    "name": "constructor",
+    "output": {
+      "backend": "HYPERV-LOCAL",
+      "configBranch": "main",
+      "hostAlias": "../bad",
+      "keyName": "CON.txt",
+      "name": "constructor",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "-x",
+      "vmName": "other"
+    },
+    "problems": [
+      "\"sshHost\" \"-x\" is not a host name or IP address",
+      "\"hostAlias\" \"../bad\" is not a usable ssh alias (letters, digits, '.', '_' and '-', max 64)",
+      "\"keyName\" \"CON.txt\" is not a usable key file name (letters, digits, '.', '_' and '-', max 128; no trailing dot and not a reserved Windows device name)",
+      "\"configBranch\" \"main\" is not a usable config-sync branch name"
+    ],
+    "raw": {
+      "backend": "HYPERV-LOCAL",
+      "configBranch": "main",
+      "hostAlias": "../bad",
+      "keyName": "CON.txt",
+      "sshHost": "-x",
+      "vmName": "other"
+    },
+    "remote": [],
+    "valid": true
+  },
+  {
+    "backend": [
+      "\"backend\" 42 is not a usable backend id (omit it for \"hyperv-local\", or name one of: hyperv-local, hyperv-remote)"
+    ],
+    "fingerprint": "[\"constructor\",\"42\",\"constructor\",\"constructor.mshome.net\",22,\"constructor\",\"construct_constructor_ed25519\",\"vm-constructor\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "constructor",
+    "output": {
+      "backend": 42,
+      "configBranch": "vm-constructor",
+      "hostAlias": "constructor",
+      "keyName": "construct_constructor_ed25519",
+      "name": "constructor",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "constructor.mshome.net",
+      "vmName": "constructor"
+    },
+    "problems": [],
+    "raw": {
+      "backend": 42,
+      "sshPort": "1e3",
+      "vmName": 42
+    },
+    "remote": [],
+    "valid": true
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"constructor\",\"hyperv-remote\",\"constructor\",\"constructor.mshome.net\",22,\"constructor\",\"construct_constructor_ed25519\",\"vm-constructor\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "constructor",
+    "output": {
+      "backend": "hyperv-remote",
+      "configBranch": "vm-constructor",
+      "hostAlias": "constructor",
+      "keyName": "construct_constructor_ed25519",
+      "name": "constructor",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "constructor.mshome.net",
+      "vmName": "constructor"
+    },
+    "problems": [],
+    "raw": {
+      "backend": "hyperv-remote"
+    },
+    "remote": [
+      "\"sshHost\" is missing (no sshHost) — a \"hyperv-remote\" instance's endpoint is the one its host service allocated, so it cannot be derived from the instance name"
+    ],
+    "valid": true
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"constructor\",\"proxmox\",\"constructor\",\"::1\",22,\"constructor\",\"key.\",\"vm-constructor\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "constructor",
+    "output": {
+      "backend": "proxmox",
+      "configBranch": "vm-constructor",
+      "hostAlias": "constructor",
+      "keyName": "key.",
+      "name": "constructor",
+      "owner": null,
+      "publicHost": "web.example",
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "::1",
+      "vmName": "constructor"
+    },
+    "problems": [
+      "\"keyName\" \"key.\" is not a usable key file name (letters, digits, '.', '_' and '-', max 128; no trailing dot and not a reserved Windows device name)"
+    ],
+    "raw": {
+      "backend": "proxmox",
+      "keyName": "key.",
+      "publicHost": "web.example",
+      "sshHost": "::1"
+    },
+    "remote": [],
+    "valid": true
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"hyperv-local\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mshome.net\",22,\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"construct_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_ed25519\",\"vm-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "output": {
+      "backend": "hyperv-local",
+      "configBranch": "vm-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "hostAlias": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "keyName": "construct_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_ed25519",
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mshome.net",
+      "vmName": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "problems": [],
+    "raw": {},
+    "remote": [],
+    "valid": true
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"hyperv-remote\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"host.example\",2222,\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"construct_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_ed25519\",\"vm-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "output": {
+      "backend": "hyperv-remote",
+      "configBranch": "vm-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "hostAlias": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "keyName": "construct_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_ed25519",
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 2222,
+      "vmHost": "host.example",
+      "vmName": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "problems": [],
+    "raw": {
+      "backend": "hyperv-remote",
+      "sshHost": "host.example",
+      "sshPort": "2222",
+      "vmName": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "remote": [],
+    "valid": true
+  },
+  {
+    "backend": [
+      "\"backend\" \"HYPERV-LOCAL\" is not spelled \"hyperv-local\" (the backend id is case-sensitive, but the driver lookup is not — a value the two read differently must not drive a VM)"
+    ],
+    "fingerprint": "[\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"hyperv-local\",\"other\",\"-x\",22,\"../bad\",\"CON.txt\",\"main\",\"\",\"\",\"\",\"\"]",
+    "local": [
+      "\"vmName\" \"other\" must be \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" for instance \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)",
+      "\"sshHost\" \"-x\" must be \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mshome.net\" for instance \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)",
+      "\"hostAlias\" \"../bad\" must be \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" for instance \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)",
+      "\"keyName\" \"CON.txt\" must be \"construct_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_ed25519\" for instance \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)"
+    ],
+    "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "output": {
+      "backend": "HYPERV-LOCAL",
+      "configBranch": "main",
+      "hostAlias": "../bad",
+      "keyName": "CON.txt",
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "-x",
+      "vmName": "other"
+    },
+    "problems": [
+      "\"sshHost\" \"-x\" is not a host name or IP address",
+      "\"hostAlias\" \"../bad\" is not a usable ssh alias (letters, digits, '.', '_' and '-', max 64)",
+      "\"keyName\" \"CON.txt\" is not a usable key file name (letters, digits, '.', '_' and '-', max 128; no trailing dot and not a reserved Windows device name)",
+      "\"configBranch\" \"main\" is not a usable config-sync branch name"
+    ],
+    "raw": {
+      "backend": "HYPERV-LOCAL",
+      "configBranch": "main",
+      "hostAlias": "../bad",
+      "keyName": "CON.txt",
+      "sshHost": "-x",
+      "vmName": "other"
+    },
+    "remote": [],
+    "valid": true
+  },
+  {
+    "backend": [
+      "\"backend\" 42 is not a usable backend id (omit it for \"hyperv-local\", or name one of: hyperv-local, hyperv-remote)"
+    ],
+    "fingerprint": "[\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"42\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mshome.net\",22,\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"construct_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_ed25519\",\"vm-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "output": {
+      "backend": 42,
+      "configBranch": "vm-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "hostAlias": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "keyName": "construct_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_ed25519",
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mshome.net",
+      "vmName": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "problems": [],
+    "raw": {
+      "backend": 42,
+      "sshPort": "1e3",
+      "vmName": 42
+    },
+    "remote": [],
+    "valid": true
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"hyperv-remote\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mshome.net\",22,\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"construct_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_ed25519\",\"vm-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "output": {
+      "backend": "hyperv-remote",
+      "configBranch": "vm-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "hostAlias": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "keyName": "construct_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_ed25519",
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mshome.net",
+      "vmName": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "problems": [],
+    "raw": {
+      "backend": "hyperv-remote"
+    },
+    "remote": [
+      "\"sshHost\" is missing (no sshHost) — a \"hyperv-remote\" instance's endpoint is the one its host service allocated, so it cannot be derived from the instance name"
+    ],
+    "valid": true
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"proxmox\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"::1\",22,\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"key.\",\"vm-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "output": {
+      "backend": "proxmox",
+      "configBranch": "vm-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "hostAlias": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "keyName": "key.",
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "owner": null,
+      "publicHost": "web.example",
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "::1",
+      "vmName": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "problems": [
+      "\"keyName\" \"key.\" is not a usable key file name (letters, digits, '.', '_' and '-', max 128; no trailing dot and not a reserved Windows device name)"
+    ],
+    "raw": {
+      "backend": "proxmox",
+      "keyName": "key.",
+      "publicHost": "web.example",
+      "sshHost": "::1"
+    },
+    "remote": [],
+    "valid": true
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"hyperv-local\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mshome.net\",22,\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"construct_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_ed25519\",\"vm-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "output": {
+      "backend": "hyperv-local",
+      "configBranch": "vm-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "hostAlias": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "keyName": "construct_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_ed25519",
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mshome.net",
+      "vmName": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "problems": [
+      "\"name\" \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" is not a usable instance name (1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved.)",
+      "\"vmName\" \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" is not a usable VM/host name (letters, digits and hyphens, starting alphanumeric, max 63)",
+      "\"sshHost\" \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mshome.net\" is not a host name or IP address"
+    ],
+    "raw": {},
+    "remote": [],
+    "valid": false
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"hyperv-remote\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"host.example\",2222,\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"construct_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_ed25519\",\"vm-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "output": {
+      "backend": "hyperv-remote",
+      "configBranch": "vm-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "hostAlias": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "keyName": "construct_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_ed25519",
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 2222,
+      "vmHost": "host.example",
+      "vmName": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "problems": [
+      "\"name\" \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" is not a usable instance name (1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved.)",
+      "\"vmName\" \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" is not a usable VM/host name (letters, digits and hyphens, starting alphanumeric, max 63)"
+    ],
+    "raw": {
+      "backend": "hyperv-remote",
+      "sshHost": "host.example",
+      "sshPort": "2222",
+      "vmName": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "remote": [],
+    "valid": false
+  },
+  {
+    "backend": [
+      "\"backend\" \"HYPERV-LOCAL\" is not spelled \"hyperv-local\" (the backend id is case-sensitive, but the driver lookup is not — a value the two read differently must not drive a VM)"
+    ],
+    "fingerprint": "[\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"hyperv-local\",\"other\",\"-x\",22,\"../bad\",\"CON.txt\",\"main\",\"\",\"\",\"\",\"\"]",
+    "local": [
+      "\"vmName\" \"other\" must be \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" for instance \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)",
+      "\"sshHost\" \"-x\" must be \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mshome.net\" for instance \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)",
+      "\"hostAlias\" \"../bad\" must be \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" for instance \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)",
+      "\"keyName\" \"CON.txt\" must be \"construct_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_ed25519\" for instance \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)"
+    ],
+    "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "output": {
+      "backend": "HYPERV-LOCAL",
+      "configBranch": "main",
+      "hostAlias": "../bad",
+      "keyName": "CON.txt",
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "-x",
+      "vmName": "other"
+    },
+    "problems": [
+      "\"sshHost\" \"-x\" is not a host name or IP address",
+      "\"name\" \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" is not a usable instance name (1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved.)",
+      "\"hostAlias\" \"../bad\" is not a usable ssh alias (letters, digits, '.', '_' and '-', max 64)",
+      "\"keyName\" \"CON.txt\" is not a usable key file name (letters, digits, '.', '_' and '-', max 128; no trailing dot and not a reserved Windows device name)",
+      "\"configBranch\" \"main\" is not a usable config-sync branch name"
+    ],
+    "raw": {
+      "backend": "HYPERV-LOCAL",
+      "configBranch": "main",
+      "hostAlias": "../bad",
+      "keyName": "CON.txt",
+      "sshHost": "-x",
+      "vmName": "other"
+    },
+    "remote": [],
+    "valid": false
+  },
+  {
+    "backend": [
+      "\"backend\" 42 is not a usable backend id (omit it for \"hyperv-local\", or name one of: hyperv-local, hyperv-remote)"
+    ],
+    "fingerprint": "[\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"42\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mshome.net\",22,\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"construct_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_ed25519\",\"vm-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "output": {
+      "backend": 42,
+      "configBranch": "vm-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "hostAlias": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "keyName": "construct_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_ed25519",
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mshome.net",
+      "vmName": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "problems": [
+      "\"name\" \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" is not a usable instance name (1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved.)",
+      "\"vmName\" \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" is not a usable VM/host name (letters, digits and hyphens, starting alphanumeric, max 63)",
+      "\"sshHost\" \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mshome.net\" is not a host name or IP address"
+    ],
+    "raw": {
+      "backend": 42,
+      "sshPort": "1e3",
+      "vmName": 42
+    },
+    "remote": [],
+    "valid": false
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"hyperv-remote\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mshome.net\",22,\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"construct_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_ed25519\",\"vm-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "output": {
+      "backend": "hyperv-remote",
+      "configBranch": "vm-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "hostAlias": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "keyName": "construct_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_ed25519",
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mshome.net",
+      "vmName": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "problems": [
+      "\"name\" \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" is not a usable instance name (1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved.)",
+      "\"vmName\" \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" is not a usable VM/host name (letters, digits and hyphens, starting alphanumeric, max 63)",
+      "\"sshHost\" \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mshome.net\" is not a host name or IP address"
+    ],
+    "raw": {
+      "backend": "hyperv-remote"
+    },
+    "remote": [
+      "\"sshHost\" is missing (no sshHost) — a \"hyperv-remote\" instance's endpoint is the one its host service allocated, so it cannot be derived from the instance name"
+    ],
+    "valid": false
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"proxmox\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"::1\",22,\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"key.\",\"vm-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "output": {
+      "backend": "proxmox",
+      "configBranch": "vm-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "hostAlias": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "keyName": "key.",
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "owner": null,
+      "publicHost": "web.example",
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "::1",
+      "vmName": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "problems": [
+      "\"name\" \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" is not a usable instance name (1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved.)",
+      "\"vmName\" \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" is not a usable VM/host name (letters, digits and hyphens, starting alphanumeric, max 63)",
+      "\"keyName\" \"key.\" is not a usable key file name (letters, digits, '.', '_' and '-', max 128; no trailing dot and not a reserved Windows device name)"
+    ],
+    "raw": {
+      "backend": "proxmox",
+      "keyName": "key.",
+      "publicHost": "web.example",
+      "sshHost": "::1"
+    },
+    "remote": [],
+    "valid": false
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"bad-\",\"hyperv-local\",\"bad-\",\"bad-.mshome.net\",22,\"bad-\",\"construct_bad-_ed25519\",\"vm-bad-\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "bad-",
+    "output": {
+      "backend": "hyperv-local",
+      "configBranch": "vm-bad-",
+      "hostAlias": "bad-",
+      "keyName": "construct_bad-_ed25519",
+      "name": "bad-",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "bad-.mshome.net",
+      "vmName": "bad-"
+    },
+    "problems": [
+      "\"name\" \"bad-\" is not a usable instance name (1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved.)",
+      "\"sshHost\" \"bad-.mshome.net\" is not a host name or IP address"
+    ],
+    "raw": {},
+    "remote": [],
+    "valid": false
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"bad-\",\"hyperv-remote\",\"bad-\",\"host.example\",2222,\"bad-\",\"construct_bad-_ed25519\",\"vm-bad-\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "bad-",
+    "output": {
+      "backend": "hyperv-remote",
+      "configBranch": "vm-bad-",
+      "hostAlias": "bad-",
+      "keyName": "construct_bad-_ed25519",
+      "name": "bad-",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 2222,
+      "vmHost": "host.example",
+      "vmName": "bad-"
+    },
+    "problems": [
+      "\"name\" \"bad-\" is not a usable instance name (1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved.)"
+    ],
+    "raw": {
+      "backend": "hyperv-remote",
+      "sshHost": "host.example",
+      "sshPort": "2222",
+      "vmName": "bad-"
+    },
+    "remote": [],
+    "valid": false
+  },
+  {
+    "backend": [
+      "\"backend\" \"HYPERV-LOCAL\" is not spelled \"hyperv-local\" (the backend id is case-sensitive, but the driver lookup is not — a value the two read differently must not drive a VM)"
+    ],
+    "fingerprint": "[\"bad-\",\"hyperv-local\",\"other\",\"-x\",22,\"../bad\",\"CON.txt\",\"main\",\"\",\"\",\"\",\"\"]",
+    "local": [
+      "\"vmName\" \"other\" must be \"bad-\" for instance \"bad-\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)",
+      "\"sshHost\" \"-x\" must be \"bad-.mshome.net\" for instance \"bad-\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)",
+      "\"hostAlias\" \"../bad\" must be \"bad-\" for instance \"bad-\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)",
+      "\"keyName\" \"CON.txt\" must be \"construct_bad-_ed25519\" for instance \"bad-\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)"
+    ],
+    "name": "bad-",
+    "output": {
+      "backend": "HYPERV-LOCAL",
+      "configBranch": "main",
+      "hostAlias": "../bad",
+      "keyName": "CON.txt",
+      "name": "bad-",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "-x",
+      "vmName": "other"
+    },
+    "problems": [
+      "\"sshHost\" \"-x\" is not a host name or IP address",
+      "\"name\" \"bad-\" is not a usable instance name (1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved.)",
+      "\"hostAlias\" \"../bad\" is not a usable ssh alias (letters, digits, '.', '_' and '-', max 64)",
+      "\"keyName\" \"CON.txt\" is not a usable key file name (letters, digits, '.', '_' and '-', max 128; no trailing dot and not a reserved Windows device name)",
+      "\"configBranch\" \"main\" is not a usable config-sync branch name"
+    ],
+    "raw": {
+      "backend": "HYPERV-LOCAL",
+      "configBranch": "main",
+      "hostAlias": "../bad",
+      "keyName": "CON.txt",
+      "sshHost": "-x",
+      "vmName": "other"
+    },
+    "remote": [],
+    "valid": false
+  },
+  {
+    "backend": [
+      "\"backend\" 42 is not a usable backend id (omit it for \"hyperv-local\", or name one of: hyperv-local, hyperv-remote)"
+    ],
+    "fingerprint": "[\"bad-\",\"42\",\"bad-\",\"bad-.mshome.net\",22,\"bad-\",\"construct_bad-_ed25519\",\"vm-bad-\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "bad-",
+    "output": {
+      "backend": 42,
+      "configBranch": "vm-bad-",
+      "hostAlias": "bad-",
+      "keyName": "construct_bad-_ed25519",
+      "name": "bad-",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "bad-.mshome.net",
+      "vmName": "bad-"
+    },
+    "problems": [
+      "\"name\" \"bad-\" is not a usable instance name (1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved.)",
+      "\"sshHost\" \"bad-.mshome.net\" is not a host name or IP address"
+    ],
+    "raw": {
+      "backend": 42,
+      "sshPort": "1e3",
+      "vmName": 42
+    },
+    "remote": [],
+    "valid": false
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"bad-\",\"hyperv-remote\",\"bad-\",\"bad-.mshome.net\",22,\"bad-\",\"construct_bad-_ed25519\",\"vm-bad-\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "bad-",
+    "output": {
+      "backend": "hyperv-remote",
+      "configBranch": "vm-bad-",
+      "hostAlias": "bad-",
+      "keyName": "construct_bad-_ed25519",
+      "name": "bad-",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "bad-.mshome.net",
+      "vmName": "bad-"
+    },
+    "problems": [
+      "\"name\" \"bad-\" is not a usable instance name (1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved.)",
+      "\"sshHost\" \"bad-.mshome.net\" is not a host name or IP address"
+    ],
+    "raw": {
+      "backend": "hyperv-remote"
+    },
+    "remote": [
+      "\"sshHost\" is missing (no sshHost) — a \"hyperv-remote\" instance's endpoint is the one its host service allocated, so it cannot be derived from the instance name"
+    ],
+    "valid": false
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"bad-\",\"proxmox\",\"bad-\",\"::1\",22,\"bad-\",\"key.\",\"vm-bad-\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "bad-",
+    "output": {
+      "backend": "proxmox",
+      "configBranch": "vm-bad-",
+      "hostAlias": "bad-",
+      "keyName": "key.",
+      "name": "bad-",
+      "owner": null,
+      "publicHost": "web.example",
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "::1",
+      "vmName": "bad-"
+    },
+    "problems": [
+      "\"name\" \"bad-\" is not a usable instance name (1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved.)",
+      "\"keyName\" \"key.\" is not a usable key file name (letters, digits, '.', '_' and '-', max 128; no trailing dot and not a reserved Windows device name)"
+    ],
+    "raw": {
+      "backend": "proxmox",
+      "keyName": "key.",
+      "publicHost": "web.example",
+      "sshHost": "::1"
+    },
+    "remote": [],
+    "valid": false
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"Construct-x\",\"hyperv-local\",\"Construct-x\",\"Construct-x.mshome.net\",22,\"Construct-x\",\"construct_Construct-x_ed25519\",\"vm-Construct-x\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "Construct-x",
+    "output": {
+      "backend": "hyperv-local",
+      "configBranch": "vm-Construct-x",
+      "hostAlias": "Construct-x",
+      "keyName": "construct_Construct-x_ed25519",
+      "name": "Construct-x",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "Construct-x.mshome.net",
+      "vmName": "Construct-x"
+    },
+    "problems": [
+      "\"name\" \"Construct-x\" is not a usable instance name (1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved.)"
+    ],
+    "raw": {},
+    "remote": [],
+    "valid": false
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"Construct-x\",\"hyperv-remote\",\"Construct-x\",\"host.example\",2222,\"Construct-x\",\"construct_Construct-x_ed25519\",\"vm-Construct-x\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "Construct-x",
+    "output": {
+      "backend": "hyperv-remote",
+      "configBranch": "vm-Construct-x",
+      "hostAlias": "Construct-x",
+      "keyName": "construct_Construct-x_ed25519",
+      "name": "Construct-x",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 2222,
+      "vmHost": "host.example",
+      "vmName": "Construct-x"
+    },
+    "problems": [
+      "\"name\" \"Construct-x\" is not a usable instance name (1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved.)"
+    ],
+    "raw": {
+      "backend": "hyperv-remote",
+      "sshHost": "host.example",
+      "sshPort": "2222",
+      "vmName": "Construct-x"
+    },
+    "remote": [],
+    "valid": false
+  },
+  {
+    "backend": [
+      "\"backend\" \"HYPERV-LOCAL\" is not spelled \"hyperv-local\" (the backend id is case-sensitive, but the driver lookup is not — a value the two read differently must not drive a VM)"
+    ],
+    "fingerprint": "[\"Construct-x\",\"hyperv-local\",\"other\",\"-x\",22,\"../bad\",\"CON.txt\",\"main\",\"\",\"\",\"\",\"\"]",
+    "local": [
+      "\"vmName\" \"other\" must be \"Construct-x\" for instance \"Construct-x\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)",
+      "\"sshHost\" \"-x\" must be \"Construct-x.mshome.net\" for instance \"Construct-x\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)",
+      "\"hostAlias\" \"../bad\" must be \"Construct-x\" for instance \"Construct-x\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)",
+      "\"keyName\" \"CON.txt\" must be \"construct_Construct-x_ed25519\" for instance \"Construct-x\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)"
+    ],
+    "name": "Construct-x",
+    "output": {
+      "backend": "HYPERV-LOCAL",
+      "configBranch": "main",
+      "hostAlias": "../bad",
+      "keyName": "CON.txt",
+      "name": "Construct-x",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "-x",
+      "vmName": "other"
+    },
+    "problems": [
+      "\"sshHost\" \"-x\" is not a host name or IP address",
+      "\"name\" \"Construct-x\" is not a usable instance name (1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved.)",
+      "\"hostAlias\" \"../bad\" is not a usable ssh alias (letters, digits, '.', '_' and '-', max 64)",
+      "\"keyName\" \"CON.txt\" is not a usable key file name (letters, digits, '.', '_' and '-', max 128; no trailing dot and not a reserved Windows device name)",
+      "\"configBranch\" \"main\" is not a usable config-sync branch name"
+    ],
+    "raw": {
+      "backend": "HYPERV-LOCAL",
+      "configBranch": "main",
+      "hostAlias": "../bad",
+      "keyName": "CON.txt",
+      "sshHost": "-x",
+      "vmName": "other"
+    },
+    "remote": [],
+    "valid": false
+  },
+  {
+    "backend": [
+      "\"backend\" 42 is not a usable backend id (omit it for \"hyperv-local\", or name one of: hyperv-local, hyperv-remote)"
+    ],
+    "fingerprint": "[\"Construct-x\",\"42\",\"Construct-x\",\"Construct-x.mshome.net\",22,\"Construct-x\",\"construct_Construct-x_ed25519\",\"vm-Construct-x\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "Construct-x",
+    "output": {
+      "backend": 42,
+      "configBranch": "vm-Construct-x",
+      "hostAlias": "Construct-x",
+      "keyName": "construct_Construct-x_ed25519",
+      "name": "Construct-x",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "Construct-x.mshome.net",
+      "vmName": "Construct-x"
+    },
+    "problems": [
+      "\"name\" \"Construct-x\" is not a usable instance name (1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved.)"
+    ],
+    "raw": {
+      "backend": 42,
+      "sshPort": "1e3",
+      "vmName": 42
+    },
+    "remote": [],
+    "valid": false
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"Construct-x\",\"hyperv-remote\",\"Construct-x\",\"Construct-x.mshome.net\",22,\"Construct-x\",\"construct_Construct-x_ed25519\",\"vm-Construct-x\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "Construct-x",
+    "output": {
+      "backend": "hyperv-remote",
+      "configBranch": "vm-Construct-x",
+      "hostAlias": "Construct-x",
+      "keyName": "construct_Construct-x_ed25519",
+      "name": "Construct-x",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "Construct-x.mshome.net",
+      "vmName": "Construct-x"
+    },
+    "problems": [
+      "\"name\" \"Construct-x\" is not a usable instance name (1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved.)"
+    ],
+    "raw": {
+      "backend": "hyperv-remote"
+    },
+    "remote": [
+      "\"sshHost\" is missing (no sshHost) — a \"hyperv-remote\" instance's endpoint is the one its host service allocated, so it cannot be derived from the instance name"
+    ],
+    "valid": false
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"Construct-x\",\"proxmox\",\"Construct-x\",\"::1\",22,\"Construct-x\",\"key.\",\"vm-Construct-x\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "Construct-x",
+    "output": {
+      "backend": "proxmox",
+      "configBranch": "vm-Construct-x",
+      "hostAlias": "Construct-x",
+      "keyName": "key.",
+      "name": "Construct-x",
+      "owner": null,
+      "publicHost": "web.example",
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "::1",
+      "vmName": "Construct-x"
+    },
+    "problems": [
+      "\"name\" \"Construct-x\" is not a usable instance name (1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved.)",
+      "\"keyName\" \"key.\" is not a usable key file name (letters, digits, '.', '_' and '-', max 128; no trailing dot and not a reserved Windows device name)"
+    ],
+    "raw": {
+      "backend": "proxmox",
+      "keyName": "key.",
+      "publicHost": "web.example",
+      "sshHost": "::1"
+    },
+    "remote": [],
+    "valid": false
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"construct-x\",\"hyperv-local\",\"construct-x\",\"construct-x.mshome.net\",22,\"construct-x\",\"construct_construct-x_ed25519\",\"vm-construct-x\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "construct-x",
+    "output": {
+      "backend": "hyperv-local",
+      "configBranch": "vm-construct-x",
+      "hostAlias": "construct-x",
+      "keyName": "construct_construct-x_ed25519",
+      "name": "construct-x",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "construct-x.mshome.net",
+      "vmName": "construct-x"
+    },
+    "problems": [
+      "\"name\" \"construct-x\" is not a usable instance name (1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved.)"
+    ],
+    "raw": {},
+    "remote": [],
+    "valid": false
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"construct-x\",\"hyperv-remote\",\"construct-x\",\"host.example\",2222,\"construct-x\",\"construct_construct-x_ed25519\",\"vm-construct-x\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "construct-x",
+    "output": {
+      "backend": "hyperv-remote",
+      "configBranch": "vm-construct-x",
+      "hostAlias": "construct-x",
+      "keyName": "construct_construct-x_ed25519",
+      "name": "construct-x",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 2222,
+      "vmHost": "host.example",
+      "vmName": "construct-x"
+    },
+    "problems": [
+      "\"name\" \"construct-x\" is not a usable instance name (1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved.)"
+    ],
+    "raw": {
+      "backend": "hyperv-remote",
+      "sshHost": "host.example",
+      "sshPort": "2222",
+      "vmName": "construct-x"
+    },
+    "remote": [],
+    "valid": false
+  },
+  {
+    "backend": [
+      "\"backend\" \"HYPERV-LOCAL\" is not spelled \"hyperv-local\" (the backend id is case-sensitive, but the driver lookup is not — a value the two read differently must not drive a VM)"
+    ],
+    "fingerprint": "[\"construct-x\",\"hyperv-local\",\"other\",\"-x\",22,\"../bad\",\"CON.txt\",\"main\",\"\",\"\",\"\",\"\"]",
+    "local": [
+      "\"vmName\" \"other\" must be \"construct-x\" for instance \"construct-x\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)",
+      "\"sshHost\" \"-x\" must be \"construct-x.mshome.net\" for instance \"construct-x\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)",
+      "\"hostAlias\" \"../bad\" must be \"construct-x\" for instance \"construct-x\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)",
+      "\"keyName\" \"CON.txt\" must be \"construct_construct-x_ed25519\" for instance \"construct-x\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)"
+    ],
+    "name": "construct-x",
+    "output": {
+      "backend": "HYPERV-LOCAL",
+      "configBranch": "main",
+      "hostAlias": "../bad",
+      "keyName": "CON.txt",
+      "name": "construct-x",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "-x",
+      "vmName": "other"
+    },
+    "problems": [
+      "\"sshHost\" \"-x\" is not a host name or IP address",
+      "\"name\" \"construct-x\" is not a usable instance name (1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved.)",
+      "\"hostAlias\" \"../bad\" is not a usable ssh alias (letters, digits, '.', '_' and '-', max 64)",
+      "\"keyName\" \"CON.txt\" is not a usable key file name (letters, digits, '.', '_' and '-', max 128; no trailing dot and not a reserved Windows device name)",
+      "\"configBranch\" \"main\" is not a usable config-sync branch name"
+    ],
+    "raw": {
+      "backend": "HYPERV-LOCAL",
+      "configBranch": "main",
+      "hostAlias": "../bad",
+      "keyName": "CON.txt",
+      "sshHost": "-x",
+      "vmName": "other"
+    },
+    "remote": [],
+    "valid": false
+  },
+  {
+    "backend": [
+      "\"backend\" 42 is not a usable backend id (omit it for \"hyperv-local\", or name one of: hyperv-local, hyperv-remote)"
+    ],
+    "fingerprint": "[\"construct-x\",\"42\",\"construct-x\",\"construct-x.mshome.net\",22,\"construct-x\",\"construct_construct-x_ed25519\",\"vm-construct-x\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "construct-x",
+    "output": {
+      "backend": 42,
+      "configBranch": "vm-construct-x",
+      "hostAlias": "construct-x",
+      "keyName": "construct_construct-x_ed25519",
+      "name": "construct-x",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "construct-x.mshome.net",
+      "vmName": "construct-x"
+    },
+    "problems": [
+      "\"name\" \"construct-x\" is not a usable instance name (1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved.)"
+    ],
+    "raw": {
+      "backend": 42,
+      "sshPort": "1e3",
+      "vmName": 42
+    },
+    "remote": [],
+    "valid": false
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"construct-x\",\"hyperv-remote\",\"construct-x\",\"construct-x.mshome.net\",22,\"construct-x\",\"construct_construct-x_ed25519\",\"vm-construct-x\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "construct-x",
+    "output": {
+      "backend": "hyperv-remote",
+      "configBranch": "vm-construct-x",
+      "hostAlias": "construct-x",
+      "keyName": "construct_construct-x_ed25519",
+      "name": "construct-x",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "construct-x.mshome.net",
+      "vmName": "construct-x"
+    },
+    "problems": [
+      "\"name\" \"construct-x\" is not a usable instance name (1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved.)"
+    ],
+    "raw": {
+      "backend": "hyperv-remote"
+    },
+    "remote": [
+      "\"sshHost\" is missing (no sshHost) — a \"hyperv-remote\" instance's endpoint is the one its host service allocated, so it cannot be derived from the instance name"
+    ],
+    "valid": false
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"construct-x\",\"proxmox\",\"construct-x\",\"::1\",22,\"construct-x\",\"key.\",\"vm-construct-x\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "construct-x",
+    "output": {
+      "backend": "proxmox",
+      "configBranch": "vm-construct-x",
+      "hostAlias": "construct-x",
+      "keyName": "key.",
+      "name": "construct-x",
+      "owner": null,
+      "publicHost": "web.example",
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "::1",
+      "vmName": "construct-x"
+    },
+    "problems": [
+      "\"name\" \"construct-x\" is not a usable instance name (1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved.)",
+      "\"keyName\" \"key.\" is not a usable key file name (letters, digits, '.', '_' and '-', max 128; no trailing dot and not a reserved Windows device name)"
+    ],
+    "raw": {
+      "backend": "proxmox",
+      "keyName": "key.",
+      "publicHost": "web.example",
+      "sshHost": "::1"
+    },
+    "remote": [],
+    "valid": false
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"../x\",\"hyperv-local\",\"../x\",\"../x.mshome.net\",22,\"../x\",\"construct_../x_ed25519\",\"vm-../x\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "../x",
+    "output": {
+      "backend": "hyperv-local",
+      "configBranch": "vm-../x",
+      "hostAlias": "../x",
+      "keyName": "construct_../x_ed25519",
+      "name": "../x",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "../x.mshome.net",
+      "vmName": "../x"
+    },
+    "problems": [
+      "\"name\" \"../x\" is not a usable instance name (1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved.)",
+      "\"vmName\" \"../x\" is not a usable VM/host name (letters, digits and hyphens, starting alphanumeric, max 63)",
+      "\"sshHost\" \"../x.mshome.net\" is not a host name or IP address",
+      "\"hostAlias\" \"../x\" is not a usable ssh alias (letters, digits, '.', '_' and '-', max 64)",
+      "\"keyName\" \"construct_../x_ed25519\" is not a usable key file name (letters, digits, '.', '_' and '-', max 128; no trailing dot and not a reserved Windows device name)",
+      "\"configBranch\" \"vm-../x\" is not a usable config-sync branch name"
+    ],
+    "raw": {},
+    "remote": [],
+    "valid": false
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"../x\",\"hyperv-remote\",\"../x\",\"host.example\",2222,\"../x\",\"construct_../x_ed25519\",\"vm-../x\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "../x",
+    "output": {
+      "backend": "hyperv-remote",
+      "configBranch": "vm-../x",
+      "hostAlias": "../x",
+      "keyName": "construct_../x_ed25519",
+      "name": "../x",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 2222,
+      "vmHost": "host.example",
+      "vmName": "../x"
+    },
+    "problems": [
+      "\"name\" \"../x\" is not a usable instance name (1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved.)",
+      "\"vmName\" \"../x\" is not a usable VM/host name (letters, digits and hyphens, starting alphanumeric, max 63)",
+      "\"hostAlias\" \"../x\" is not a usable ssh alias (letters, digits, '.', '_' and '-', max 64)",
+      "\"keyName\" \"construct_../x_ed25519\" is not a usable key file name (letters, digits, '.', '_' and '-', max 128; no trailing dot and not a reserved Windows device name)",
+      "\"configBranch\" \"vm-../x\" is not a usable config-sync branch name"
+    ],
+    "raw": {
+      "backend": "hyperv-remote",
+      "sshHost": "host.example",
+      "sshPort": "2222",
+      "vmName": "../x"
+    },
+    "remote": [],
+    "valid": false
+  },
+  {
+    "backend": [
+      "\"backend\" \"HYPERV-LOCAL\" is not spelled \"hyperv-local\" (the backend id is case-sensitive, but the driver lookup is not — a value the two read differently must not drive a VM)"
+    ],
+    "fingerprint": "[\"../x\",\"hyperv-local\",\"other\",\"-x\",22,\"../bad\",\"CON.txt\",\"main\",\"\",\"\",\"\",\"\"]",
+    "local": [
+      "\"vmName\" \"other\" must be \"../x\" for instance \"../x\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)",
+      "\"sshHost\" \"-x\" must be \"../x.mshome.net\" for instance \"../x\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)",
+      "\"hostAlias\" \"../bad\" must be \"../x\" for instance \"../x\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)",
+      "\"keyName\" \"CON.txt\" must be \"construct_../x_ed25519\" for instance \"../x\" (a \"hyperv-local\" instance's identity is derived from its name — Auto-Install.ps1 rebuilds it that way, so anything else targets another VM)"
+    ],
+    "name": "../x",
+    "output": {
+      "backend": "HYPERV-LOCAL",
+      "configBranch": "main",
+      "hostAlias": "../bad",
+      "keyName": "CON.txt",
+      "name": "../x",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "-x",
+      "vmName": "other"
+    },
+    "problems": [
+      "\"sshHost\" \"-x\" is not a host name or IP address",
+      "\"name\" \"../x\" is not a usable instance name (1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved.)",
+      "\"hostAlias\" \"../bad\" is not a usable ssh alias (letters, digits, '.', '_' and '-', max 64)",
+      "\"keyName\" \"CON.txt\" is not a usable key file name (letters, digits, '.', '_' and '-', max 128; no trailing dot and not a reserved Windows device name)",
+      "\"configBranch\" \"main\" is not a usable config-sync branch name"
+    ],
+    "raw": {
+      "backend": "HYPERV-LOCAL",
+      "configBranch": "main",
+      "hostAlias": "../bad",
+      "keyName": "CON.txt",
+      "sshHost": "-x",
+      "vmName": "other"
+    },
+    "remote": [],
+    "valid": false
+  },
+  {
+    "backend": [
+      "\"backend\" 42 is not a usable backend id (omit it for \"hyperv-local\", or name one of: hyperv-local, hyperv-remote)"
+    ],
+    "fingerprint": "[\"../x\",\"42\",\"../x\",\"../x.mshome.net\",22,\"../x\",\"construct_../x_ed25519\",\"vm-../x\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "../x",
+    "output": {
+      "backend": 42,
+      "configBranch": "vm-../x",
+      "hostAlias": "../x",
+      "keyName": "construct_../x_ed25519",
+      "name": "../x",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "../x.mshome.net",
+      "vmName": "../x"
+    },
+    "problems": [
+      "\"name\" \"../x\" is not a usable instance name (1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved.)",
+      "\"vmName\" \"../x\" is not a usable VM/host name (letters, digits and hyphens, starting alphanumeric, max 63)",
+      "\"sshHost\" \"../x.mshome.net\" is not a host name or IP address",
+      "\"hostAlias\" \"../x\" is not a usable ssh alias (letters, digits, '.', '_' and '-', max 64)",
+      "\"keyName\" \"construct_../x_ed25519\" is not a usable key file name (letters, digits, '.', '_' and '-', max 128; no trailing dot and not a reserved Windows device name)",
+      "\"configBranch\" \"vm-../x\" is not a usable config-sync branch name"
+    ],
+    "raw": {
+      "backend": 42,
+      "sshPort": "1e3",
+      "vmName": 42
+    },
+    "remote": [],
+    "valid": false
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"../x\",\"hyperv-remote\",\"../x\",\"../x.mshome.net\",22,\"../x\",\"construct_../x_ed25519\",\"vm-../x\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "../x",
+    "output": {
+      "backend": "hyperv-remote",
+      "configBranch": "vm-../x",
+      "hostAlias": "../x",
+      "keyName": "construct_../x_ed25519",
+      "name": "../x",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "../x.mshome.net",
+      "vmName": "../x"
+    },
+    "problems": [
+      "\"name\" \"../x\" is not a usable instance name (1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved.)",
+      "\"vmName\" \"../x\" is not a usable VM/host name (letters, digits and hyphens, starting alphanumeric, max 63)",
+      "\"sshHost\" \"../x.mshome.net\" is not a host name or IP address",
+      "\"hostAlias\" \"../x\" is not a usable ssh alias (letters, digits, '.', '_' and '-', max 64)",
+      "\"keyName\" \"construct_../x_ed25519\" is not a usable key file name (letters, digits, '.', '_' and '-', max 128; no trailing dot and not a reserved Windows device name)",
+      "\"configBranch\" \"vm-../x\" is not a usable config-sync branch name"
+    ],
+    "raw": {
+      "backend": "hyperv-remote"
+    },
+    "remote": [
+      "\"sshHost\" is missing (no sshHost) — a \"hyperv-remote\" instance's endpoint is the one its host service allocated, so it cannot be derived from the instance name"
+    ],
+    "valid": false
+  },
+  {
+    "backend": [],
+    "fingerprint": "[\"../x\",\"proxmox\",\"../x\",\"::1\",22,\"../x\",\"key.\",\"vm-../x\",\"\",\"\",\"\",\"\"]",
+    "local": [],
+    "name": "../x",
+    "output": {
+      "backend": "proxmox",
+      "configBranch": "vm-../x",
+      "hostAlias": "../x",
+      "keyName": "key.",
+      "name": "../x",
+      "owner": null,
+      "publicHost": "web.example",
+      "scriptsDir": null,
+      "service": null,
+      "sshPort": 22,
+      "vmHost": "::1",
+      "vmName": "../x"
+    },
+    "problems": [
+      "\"name\" \"../x\" is not a usable instance name (1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved.)",
+      "\"vmName\" \"../x\" is not a usable VM/host name (letters, digits and hyphens, starting alphanumeric, max 63)",
+      "\"hostAlias\" \"../x\" is not a usable ssh alias (letters, digits, '.', '_' and '-', max 64)",
+      "\"keyName\" \"key.\" is not a usable key file name (letters, digits, '.', '_' and '-', max 128; no trailing dot and not a reserved Windows device name)",
+      "\"configBranch\" \"vm-../x\" is not a usable config-sync branch name"
+    ],
+    "raw": {
+      "backend": "proxmox",
+      "keyName": "key.",
+      "publicHost": "web.example",
+      "sshHost": "::1"
+    },
+    "remote": [],
+    "valid": false
+  }
+]

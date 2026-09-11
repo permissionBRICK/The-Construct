@@ -149,6 +149,7 @@ param(
     # can also apply it to an existing VM via Set-AgentVmCheckpoints.ps1. "true"/"false".
     [ValidateSet("true", "false")]
     [string]$AutomaticCheckpoints = "false",
+    [switch]$SkipCompanion,
     [switch]$SkipChecksum,
     [switch]$SkipCreateVm,
     [switch]$Force,
@@ -771,6 +772,11 @@ if (-not $SkipCreateVm -and $Action -ne 'remove-instance') {
         } catch {
             Write-Warning "Could not set up the control panel on the host (continuing): $($_.Exception.Message)"
         }
+        try { . (Join-Path $PSScriptRoot 'lib/Construct.Companion.ps1'); Invoke-ConstructCompanionInstallHook -ScriptsDir $PSScriptRoot -SkipCompanion:$SkipCompanion }
+        catch { Write-Warning 'Could not load Companion installer helpers; continuing VM installation.' }
+        # The client pre-step owns this attempt; descendants must not install twice.
+        $SkipCompanion = $true
+        $PSBoundParameters['SkipCompanion'] = $true
         # ── Local or remote? Decided BEFORE the relaunch ──────────────────────
         # A REMOTE install creates no local VM, so it needs no administrator rights --
         # and elevating would be actively harmful where UAC switches to a different
@@ -2026,6 +2032,7 @@ function New-ConstructRemoteProvisionArgs {
     if ($script:RemoteBound -and ($script:RemoteBound.ContainsKey('Repo') -or $script:RemoteBound.ContainsKey('Ref'))) {
         $a['Repo'] = $Repo; $a['Ref'] = $Ref
     }
+    if ($SkipCompanion -and $script:RemoteProvCmd -and $script:RemoteProvCmd.Parameters.ContainsKey('SkipCompanion')) { $a['SkipCompanion'] = $true }
     foreach ($opt in @('T3CodeChannel', 'T3CodeLimitResume', 'OpenCodeBackgroundWatcher')) {
         if ($script:RemoteProvCmd -and -not $script:RemoteProvCmd.Parameters.ContainsKey($opt)) { $a.Remove($opt) }
     }
@@ -2722,6 +2729,7 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
         if ($PSBoundParameters.ContainsKey('AutoResolve')) { $reprovArgs['AutoResolve'] = $AutoResolve }
         try {
             $reprovCmd = Get-Command -Name $provisionScript -CommandType ExternalScript -ErrorAction Stop
+            if ($SkipCompanion -and $reprovCmd.Parameters.ContainsKey('SkipCompanion')) { $reprovArgs['SkipCompanion'] = $true }
             if (-not $reprovCmd.Parameters.ContainsKey('T3CodeChannel')) {
                 $reprovArgs.Remove('T3CodeChannel')
             }
@@ -3076,6 +3084,7 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
             if ($PSBoundParameters.ContainsKey('AutoResolve')) { $acReprovArgs['AutoResolve'] = $AutoResolve }
             try {
                 $acProvCmd = Get-Command -Name $provisionScript -CommandType ExternalScript -ErrorAction Stop
+                if ($SkipCompanion -and $acProvCmd.Parameters.ContainsKey('SkipCompanion')) { $acReprovArgs['SkipCompanion'] = $true }
                 if (-not $acProvCmd.Parameters.ContainsKey('T3CodeChannel')) {
                     $acReprovArgs.Remove('T3CodeChannel')
                 }
@@ -3564,6 +3573,7 @@ Save-ConstructVmSpec -Dir $PSScriptRoot -InstanceName $VmInstanceName -MemoryGB 
 # script's own default stands) and say so loudly, rather than fail the rebuild.
 try {
     $createCmd = Get-Command -Name $createScript -CommandType ExternalScript -ErrorAction Stop
+    if ($SkipCompanion -and $createCmd.Parameters.ContainsKey('SkipCompanion')) { $createArgs['SkipCompanion'] = $true }
     if (-not $createCmd.Parameters.ContainsKey('AutomaticCheckpoints')) {
         $createArgs.Remove('AutomaticCheckpoints')
         Write-Warning "Create-AgentVM.ps1 in this folder is older than Auto-Install.ps1 and doesn't support -AutomaticCheckpoints."
@@ -3660,6 +3670,7 @@ try {
     # -T3CodeChannel; splatting it would fail parameter binding.
     try {
         $provCmd = Get-Command -Name $provisionScript -CommandType ExternalScript -ErrorAction Stop
+        if ($SkipCompanion -and $provCmd.Parameters.ContainsKey('SkipCompanion')) { $provArgs['SkipCompanion'] = $true }
         if (-not $provCmd.Parameters.ContainsKey('T3CodeChannel')) {
             $provArgs.Remove('T3CodeChannel')
         }

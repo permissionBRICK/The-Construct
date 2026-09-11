@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../Construct.Companion.Core/Construct.Companion.Core.csproj" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />
+    <PackageReference Include="System.Management" Version="10.0.0" />
+    <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
+    <PackageReference Include="Microsoft.Windows.SDK.NET.Ref" Version="10.0.17763.57" GeneratePathProperty="true" ExcludeAssets="all" />
+    <Reference Include="Microsoft.Windows.SDK.NET"><HintPath>$(PkgMicrosoft_Windows_SDK_NET_Ref)/lib/net8.0/Microsoft.Windows.SDK.NET.dll</HintPath></Reference>
+    <Reference Include="WinRT.Runtime"><HintPath>$(PkgMicrosoft_Windows_SDK_NET_Ref)/lib/net8.0/WinRT.Runtime.dll</HintPath></Reference>
+  </ItemGroup>
+</Project>

@@ -1,4 +1,5 @@
 "use strict";
+const guestScripts = require("./guest-scripts");
 // T3 Code (the `t3` npm package — pingdotgg's web GUI for coding agents), driven
 // live from the control panel:
 //   - enable  : install + start it on the VM NOW (the settings toggle's first
@@ -85,18 +86,6 @@ T3CODE_HOST="$(cfgget T3CODE_HOST)"; T3CODE_HOST="\${T3CODE_HOST:-${DEFAULT_HOST
 T3CODE_PORT="$(cfgget T3CODE_PORT)"; T3CODE_PORT="\${T3CODE_PORT:-${DEFAULT_PORT}}"
 WORKSPACE_ROOT="$(cfgget WORKSPACE_ROOT)"; WORKSPACE_ROOT="\${WORKSPACE_ROOT:-/root/repos}"
 `;
-
-// Pairing scripts additionally need the HTTPS front end's EFFECTIVE state, which
-// is T3CODE_PUBLIC_BASE_URL and nothing else: bin/setup-t3-https.sh writes that
-// key only when the TLS proxy actually came up, and clears it on every failure
-// path (offline apt, nginx refused to start) while keeping T3CODE_HTTPS as the
-// retry preference. Reading the PREFERENCE here would mint pairing links to a
-// port nothing listens on after exactly the failure that is meant to degrade to
-// plain http. T3's DPoP proofs are bound to the origin the browser dialled, so
-// the link must name the actual forwarded endpoint. The TLS proxy preserves
-// the request Host (including its port) for T3 to validate those proofs.
-const PAIRING_PRELUDE = PRELUDE + require("fs").readFileSync(
-  require("path").join(__dirname, "..", "vm", "construct-t3-pairing-base.sh"), "utf8");
 
 /** Bash: install/update t3, persist the opt-in + bind keys, deploy + start the
  *  systemd service. Self-contained; exits non-zero on a real failure.
@@ -259,23 +248,19 @@ exit 0
  * without the TLS proxy every key is absent and the produced URL is exactly
  * today's http one.
  */
+// Pairing scripts additionally need the HTTPS front end's EFFECTIVE state, which
+// is T3CODE_PUBLIC_BASE_URL and nothing else: bin/setup-t3-https.sh writes that
+// key only when the TLS proxy actually came up, and clears it on every failure
+// path (offline apt, nginx refused to start) while keeping T3CODE_HTTPS as the
+// retry preference. Reading the PREFERENCE here would mint pairing links to a
+// port nothing listens on after exactly the failure that is meant to degrade to
+// plain http. T3's DPoP proofs are bound to the origin the browser dialled, so
+// the link must name the same one the server was told to advertise.
 function buildPairingScript(instance) {
-  if (!instance || instances.isDefaultInstance(instance)) {
-    return PAIRING_PRELUDE + `
-command -v t3 >/dev/null 2>&1 || { echo "t3 is not installed" >&2; exit 1; }
-base="$(t3base "$(hostname).mshome.net")" || exit 7
-t3 auth pairing create --json --ttl 10m --label "construct-control-panel" --base-url "$base" --log-level none
-`;
-  }
-  return PAIRING_PRELUDE + `
-command -v t3 >/dev/null 2>&1 || { echo "t3 is not installed" >&2; exit 1; }
-# The client-reachable name of THIS VM. B2 records it in config.env as
-# CONSTRUCT_EXTERNAL_HOST (a remote/forwarded instance is not reachable at its own
-# mshome name); absent, fall back to the local $(hostname).mshome.net.
-ext="$(cfgget CONSTRUCT_EXTERNAL_HOST)"
-base="$(t3base "\${ext:-$(hostname).mshome.net}")" || exit 7
-t3 auth pairing create --json --ttl 10m --label "construct-${instance.name}" --base-url "$base" --log-level none
-`;
+  const values = { pairingBase: guestScripts.render("construct-t3-pairing-base") };
+  return !instance || instances.isDefaultInstance(instance)
+    ? guestScripts.render("t3-pairing", values)
+    : guestScripts.render("t3-pairing-instance", { ...values, instance: instance.name });
 }
 
 /** Pull the pairing URL out of the pairing script's stdout. The CLI prints clean

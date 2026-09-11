@@ -1,0 +1,689 @@
+[
+  {
+    "args": [],
+    "method": "vmDefaults",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/vm-defaults"
+    }
+  },
+  {
+    "args": [
+      "name /?ü"
+    ],
+    "method": "vmCpu",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC/cpu"
+    }
+  },
+  {
+    "args": [
+      "name /?ü",
+      {
+        "cpus": 8
+      }
+    ],
+    "method": "setVmCpu",
+    "output": {
+      "body": {
+        "cpus": 8
+      },
+      "method": "PUT",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC/cpu"
+    }
+  },
+  {
+    "args": [],
+    "method": "whoami",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/whoami"
+    }
+  },
+  {
+    "args": [],
+    "method": "listVms",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/vms"
+    }
+  },
+  {
+    "args": [
+      "name /?ü"
+    ],
+    "method": "getVm",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC"
+    }
+  },
+  {
+    "args": [
+      "name /?ü"
+    ],
+    "method": "getState",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC/state"
+    }
+  },
+  {
+    "args": [
+      "name /?ü"
+    ],
+    "method": "getEndpoint",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC/endpoint"
+    }
+  },
+  {
+    "args": [
+      "name /?ü",
+      "start"
+    ],
+    "method": "power",
+    "output": {
+      "body": {
+        "action": "start"
+      },
+      "method": "POST",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC/power"
+    }
+  },
+  {
+    "args": [
+      {
+        "name": "dev"
+      }
+    ],
+    "method": "createVm",
+    "output": {
+      "body": {
+        "name": "dev"
+      },
+      "method": "POST",
+      "url": "https://host:7462/api/v1/vms"
+    }
+  },
+  {
+    "args": [
+      "name /?ü",
+      {
+        "force": true
+      }
+    ],
+    "method": "deleteVm",
+    "output": {
+      "body": {
+        "force": true
+      },
+      "method": "DELETE",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC"
+    }
+  },
+  {
+    "args": [
+      "name /?ü"
+    ],
+    "method": "getJob",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/jobs/name%20%2F%3F%C3%BC"
+    }
+  },
+  {
+    "args": [],
+    "method": "health",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/health"
+    }
+  },
+  {
+    "args": [],
+    "method": "hostCapabilities",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/host/capabilities"
+    }
+  },
+  {
+    "args": [
+      "name /?ü"
+    ],
+    "method": "vmIdentity",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC/identity"
+    }
+  },
+  {
+    "args": [
+      "name /?ü"
+    ],
+    "method": "vmCapabilities",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC/capabilities"
+    }
+  },
+  {
+    "args": [],
+    "method": "hostStatus",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/host/status"
+    }
+  },
+  {
+    "args": [
+      true
+    ],
+    "method": "hostCapacity",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/host/capacity?refresh=true"
+    }
+  },
+  {
+    "args": [],
+    "method": "hostConfig",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/host/config"
+    }
+  },
+  {
+    "args": [
+      {
+        "mode": "x"
+      }
+    ],
+    "method": "putHostConfig",
+    "output": {
+      "body": {
+        "mode": "x"
+      },
+      "method": "PUT",
+      "url": "https://host:7462/api/v1/host/config"
+    }
+  },
+  {
+    "args": [],
+    "method": "isoCatalog",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/host/iso-catalog"
+    }
+  },
+  {
+    "args": [],
+    "method": "users",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/users"
+    }
+  },
+  {
+    "args": [
+      "name /?ü"
+    ],
+    "method": "getUser",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/users/name%20%2F%3F%C3%BC"
+    }
+  },
+  {
+    "args": [
+      {
+        "name": "x"
+      }
+    ],
+    "method": "createUser",
+    "output": {
+      "body": {
+        "name": "x"
+      },
+      "method": "POST",
+      "url": "https://host:7462/api/v1/users"
+    }
+  },
+  {
+    "args": [
+      "name /?ü",
+      {
+        "role": "admin"
+      }
+    ],
+    "method": "updateUser",
+    "output": {
+      "body": {
+        "role": "admin"
+      },
+      "method": "PUT",
+      "url": "https://host:7462/api/v1/users/name%20%2F%3F%C3%BC"
+    }
+  },
+  {
+    "args": [
+      "name /?ü"
+    ],
+    "method": "deleteUser",
+    "output": {
+      "body": null,
+      "method": "DELETE",
+      "url": "https://host:7462/api/v1/users/name%20%2F%3F%C3%BC"
+    }
+  },
+  {
+    "args": [
+      "name /?ü"
+    ],
+    "method": "userAllowance",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/users/name%20%2F%3F%C3%BC/allowance"
+    }
+  },
+  {
+    "args": [
+      "name /?ü",
+      {
+        "maxVms": 2
+      }
+    ],
+    "method": "putUserAllowance",
+    "output": {
+      "body": {
+        "maxVms": 2
+      },
+      "method": "PUT",
+      "url": "https://host:7462/api/v1/users/name%20%2F%3F%C3%BC/allowance"
+    }
+  },
+  {
+    "args": [
+      "name /?ü"
+    ],
+    "method": "userTokens",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/users/name%20%2F%3F%C3%BC/tokens"
+    }
+  },
+  {
+    "args": [
+      "name /?ü",
+      null
+    ],
+    "method": "issueUserToken",
+    "output": {
+      "body": {},
+      "method": "POST",
+      "url": "https://host:7462/api/v1/users/name%20%2F%3F%C3%BC/tokens"
+    }
+  },
+  {
+    "args": [
+      "name /?ü",
+      "id /"
+    ],
+    "method": "revokeUserToken",
+    "output": {
+      "body": null,
+      "method": "DELETE",
+      "url": "https://host:7462/api/v1/users/name%20%2F%3F%C3%BC/tokens/id%20%2F"
+    }
+  },
+  {
+    "args": [
+      {
+        "all": true,
+        "empty": "",
+        "owner": "name /?ü"
+      }
+    ],
+    "method": "vms",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/vms?all=true&owner=name%20%2F%3F%C3%BC"
+    }
+  },
+  {
+    "args": [],
+    "method": "sharedVms",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/vms/shared"
+    }
+  },
+  {
+    "args": [
+      "name /?ü"
+    ],
+    "method": "children",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC/children"
+    }
+  },
+  {
+    "args": [
+      "name /?ü"
+    ],
+    "method": "overrides",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC/overrides"
+    }
+  },
+  {
+    "args": [
+      "name /?ü",
+      {
+        "ram": 8
+      }
+    ],
+    "method": "putOverrides",
+    "output": {
+      "body": {
+        "ram": 8
+      },
+      "method": "PUT",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC/overrides"
+    }
+  },
+  {
+    "args": [
+      "name /?ü"
+    ],
+    "method": "deleteOverrides",
+    "output": {
+      "body": null,
+      "method": "DELETE",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC/overrides"
+    }
+  },
+  {
+    "args": [
+      "name /?ü",
+      {
+        "action": "reprovision"
+      }
+    ],
+    "method": "lifecycle",
+    "output": {
+      "body": {
+        "action": "reprovision"
+      },
+      "method": "POST",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC/lifecycle"
+    }
+  },
+  {
+    "args": [
+      "name /?ü",
+      {
+        "shared": true
+      }
+    ],
+    "method": "setVmSharing",
+    "output": {
+      "body": {
+        "shared": true
+      },
+      "method": "PUT",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC/sharing"
+    }
+  },
+  {
+    "args": [
+      "name /?ü",
+      {
+        "minutes": 30
+      }
+    ],
+    "method": "renewVmLease",
+    "output": {
+      "body": {
+        "minutes": 30
+      },
+      "method": "POST",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC/lease"
+    }
+  },
+  {
+    "args": [
+      "name /?ü",
+      null
+    ],
+    "method": "rotateVmToken",
+    "output": {
+      "body": {},
+      "method": "POST",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC/token"
+    }
+  },
+  {
+    "args": [
+      "name /?ü"
+    ],
+    "method": "revokeVmToken",
+    "output": {
+      "body": null,
+      "method": "DELETE",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC/token"
+    }
+  },
+  {
+    "args": [
+      {
+        "type": "iso"
+      }
+    ],
+    "method": "media",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/media?type=iso"
+    }
+  },
+  {
+    "args": [
+      "name /?ü"
+    ],
+    "method": "mediaItem",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/media/name%20%2F%3F%C3%BC"
+    }
+  },
+  {
+    "args": [
+      "name /?ü"
+    ],
+    "method": "mediaReferences",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/media/name%20%2F%3F%C3%BC/references"
+    }
+  },
+  {
+    "args": [
+      "name /?ü"
+    ],
+    "method": "deleteMedia",
+    "output": {
+      "body": null,
+      "method": "DELETE",
+      "url": "https://host:7462/api/v1/media/name%20%2F%3F%C3%BC"
+    }
+  },
+  {
+    "args": [],
+    "method": "mediaCleanup",
+    "output": {
+      "body": {},
+      "method": "POST",
+      "url": "https://host:7462/api/v1/media/cleanup"
+    }
+  },
+  {
+    "args": [
+      {
+        "state": "running"
+      }
+    ],
+    "method": "jobs",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/jobs?state=running"
+    }
+  },
+  {
+    "args": [
+      "name /?ü"
+    ],
+    "method": "cancelJob",
+    "output": {
+      "body": {},
+      "method": "POST",
+      "url": "https://host:7462/api/v1/jobs/name%20%2F%3F%C3%BC/cancel"
+    }
+  },
+  {
+    "args": [
+      {
+        "limit": 20
+      }
+    ],
+    "method": "audit",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/audit?limit=20"
+    }
+  },
+  {
+    "args": [
+      "name /?ü"
+    ],
+    "method": "forwardsVia",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC/forwards?via=name%20%2F%3F%C3%BC"
+    }
+  },
+  {
+    "args": [],
+    "method": "updatesStatus",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/host/updates/status"
+    }
+  },
+  {
+    "args": [
+      null
+    ],
+    "method": "updatesCheck",
+    "output": {
+      "body": {},
+      "method": "POST",
+      "url": "https://host:7462/api/v1/host/updates/check"
+    }
+  },
+  {
+    "args": [
+      {
+        "releaseTag": "x"
+      }
+    ],
+    "method": "updatesStage",
+    "output": {
+      "body": {
+        "releaseTag": "x"
+      },
+      "method": "POST",
+      "url": "https://host:7462/api/v1/host/updates/stage"
+    }
+  },
+  {
+    "args": [
+      {
+        "updateId": "x"
+      }
+    ],
+    "method": "updatesApply",
+    "output": {
+      "body": {
+        "updateId": "x"
+      },
+      "method": "POST",
+      "url": "https://host:7462/api/v1/host/updates/apply"
+    }
+  },
+  {
+    "args": [
+      {
+        "updateId": "x"
+      }
+    ],
+    "method": "updatesCancel",
+    "output": {
+      "body": {
+        "updateId": "x"
+      },
+      "method": "POST",
+      "url": "https://host:7462/api/v1/host/updates/cancel"
+    }
+  },
+  {
+    "args": [
+      {
+        "updateId": "x"
+      }
+    ],
+    "method": "updatesResolve",
+    "output": {
+      "body": {
+        "updateId": "x"
+      },
+      "method": "POST",
+      "url": "https://host:7462/api/v1/host/updates/resolve"
+    }
+  }
+]
