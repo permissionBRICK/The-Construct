@@ -1,0 +1,606 @@
+[
+  {
+    "args": [
+      "-FromPanel",
+      "-Name",
+      "a'b",
+      "",
+      "C:\\space here\\"
+    ],
+    "child": "-NoProfile -ExecutionPolicy Bypass -File \"C:\\Construct dir\\script.ps1\" -FromPanel -Name a'b \"\" \"C:\\space here\\\\\"",
+    "opts": {
+      "argSpec": null,
+      "elevate": false,
+      "keepOpen": false
+    },
+    "output": {
+      "command": "& 'C:\\Construct dir\\script.ps1' -FromPanel -Name 'a''b' '' 'C:\\space here\\'",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "JgAgACcAQwA6AFwAQwBvAG4AcwB0AHIAdQBjAHQAIABkAGkAcgBcAHMAYwByAGkAcAB0AC4AcABzADEAJwAgAC0ARgByAG8AbQBQAGEAbgBlAGwAIAAtAE4AYQBtAGUAIAAnAGEAJwAnAGIAJwAgACcAJwAgACcAQwA6AFwAcwBwAGEAYwBlACAAaABlAHIAZQBcACcA"
+      ]
+    },
+    "script": "C:\\Construct dir\\script.ps1"
+  },
+  {
+    "args": [
+      "-FromPanel",
+      "-GitUserName",
+      "-user 'quote' \"double\"",
+      "-Path",
+      "C:\\space here\\"
+    ],
+    "child": "-NoProfile -ExecutionPolicy Bypass -File \"C:\\Construct dir\\script.ps1\" -FromPanel -GitUserName \"-user 'quote' \\\"double\\\"\" -Path \"C:\\space here\\\\\"",
+    "opts": {
+      "argSpec": [
+        {
+          "flag": "-FromPanel"
+        },
+        {
+          "flag": "-GitUserName",
+          "value": "-user 'quote' \"double\""
+        },
+        {
+          "flag": "-Path",
+          "value": "C:\\space here\\"
+        }
+      ],
+      "elevate": false,
+      "keepOpen": false
+    },
+    "output": {
+      "command": "& 'C:\\Construct dir\\script.ps1' -FromPanel -GitUserName '-user ''quote'' \"double\"' -Path 'C:\\space here\\'",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "JgAgACcAQwA6AFwAQwBvAG4AcwB0AHIAdQBjAHQAIABkAGkAcgBcAHMAYwByAGkAcAB0AC4AcABzADEAJwAgAC0ARgByAG8AbQBQAGEAbgBlAGwAIAAtAEcAaQB0AFUAcwBlAHIATgBhAG0AZQAgACcALQB1AHMAZQByACAAJwAnAHEAdQBvAHQAZQAnACcAIAAiAGQAbwB1AGIAbABlACIAJwAgAC0AUABhAHQAaAAgACcAQwA6AFwAcwBwAGEAYwBlACAAaABlAHIAZQBcACcA"
+      ]
+    },
+    "script": "C:\\Construct dir\\script.ps1"
+  },
+  {
+    "args": [
+      "-FromPanel",
+      "-Name",
+      "a'b",
+      "",
+      "C:\\space here\\"
+    ],
+    "child": "-NoProfile -ExecutionPolicy Bypass -NoExit -File \"C:\\Construct dir\\script.ps1\" -FromPanel -Name a'b \"\" \"C:\\space here\\\\\"",
+    "opts": {
+      "argSpec": null,
+      "elevate": false,
+      "keepOpen": true
+    },
+    "output": {
+      "command": "& 'C:\\Construct dir\\script.ps1' -FromPanel -Name 'a''b' '' 'C:\\space here\\'",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-NoExit",
+        "-EncodedCommand",
+        "JgAgACcAQwA6AFwAQwBvAG4AcwB0AHIAdQBjAHQAIABkAGkAcgBcAHMAYwByAGkAcAB0AC4AcABzADEAJwAgAC0ARgByAG8AbQBQAGEAbgBlAGwAIAAtAE4AYQBtAGUAIAAnAGEAJwAnAGIAJwAgACcAJwAgACcAQwA6AFwAcwBwAGEAYwBlACAAaABlAHIAZQBcACcA"
+      ]
+    },
+    "script": "C:\\Construct dir\\script.ps1"
+  },
+  {
+    "args": [
+      "-FromPanel",
+      "-GitUserName",
+      "-user 'quote' \"double\"",
+      "-Path",
+      "C:\\space here\\"
+    ],
+    "child": "-NoProfile -ExecutionPolicy Bypass -NoExit -File \"C:\\Construct dir\\script.ps1\" -FromPanel -GitUserName \"-user 'quote' \\\"double\\\"\" -Path \"C:\\space here\\\\\"",
+    "opts": {
+      "argSpec": [
+        {
+          "flag": "-FromPanel"
+        },
+        {
+          "flag": "-GitUserName",
+          "value": "-user 'quote' \"double\""
+        },
+        {
+          "flag": "-Path",
+          "value": "C:\\space here\\"
+        }
+      ],
+      "elevate": false,
+      "keepOpen": true
+    },
+    "output": {
+      "command": "& 'C:\\Construct dir\\script.ps1' -FromPanel -GitUserName '-user ''quote'' \"double\"' -Path 'C:\\space here\\'",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-NoExit",
+        "-EncodedCommand",
+        "JgAgACcAQwA6AFwAQwBvAG4AcwB0AHIAdQBjAHQAIABkAGkAcgBcAHMAYwByAGkAcAB0AC4AcABzADEAJwAgAC0ARgByAG8AbQBQAGEAbgBlAGwAIAAtAEcAaQB0AFUAcwBlAHIATgBhAG0AZQAgACcALQB1AHMAZQByACAAJwAnAHEAdQBvAHQAZQAnACcAIAAiAGQAbwB1AGIAbABlACIAJwAgAC0AUABhAHQAaAAgACcAQwA6AFwAcwBwAGEAYwBlACAAaABlAHIAZQBcACcA"
+      ]
+    },
+    "script": "C:\\Construct dir\\script.ps1"
+  },
+  {
+    "args": [
+      "-FromPanel",
+      "-Name",
+      "a'b",
+      "",
+      "C:\\space here\\"
+    ],
+    "child": "-NoProfile -ExecutionPolicy Bypass -File \"C:\\Construct dir\\script.ps1\" -FromPanel -Name a'b \"\" \"C:\\space here\\\\\"",
+    "opts": {
+      "argSpec": null,
+      "elevate": true,
+      "keepOpen": false
+    },
+    "output": {
+      "command": "Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Normal -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File \"C:\\Construct dir\\script.ps1\" -FromPanel -Name a''b \"\" \"C:\\space here\\\\\"'",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "UwB0AGEAcgB0AC0AUAByAG8AYwBlAHMAcwAgAC0ARgBpAGwAZQBQAGEAdABoACAAJwBwAG8AdwBlAHIAcwBoAGUAbABsAC4AZQB4AGUAJwAgAC0AVgBlAHIAYgAgAFIAdQBuAEEAcwAgAC0AVwBpAG4AZABvAHcAUwB0AHkAbABlACAATgBvAHIAbQBhAGwAIAAtAEEAcgBnAHUAbQBlAG4AdABMAGkAcwB0ACAAJwAtAE4AbwBQAHIAbwBmAGkAbABlACAALQBFAHgAZQBjAHUAdABpAG8AbgBQAG8AbABpAGMAeQAgAEIAeQBwAGEAcwBzACAALQBGAGkAbABlACAAIgBDADoAXABDAG8AbgBzAHQAcgB1AGMAdAAgAGQAaQByAFwAcwBjAHIAaQBwAHQALgBwAHMAMQAiACAALQBGAHIAbwBtAFAAYQBuAGUAbAAgAC0ATgBhAG0AZQAgAGEAJwAnAGIAIAAiACIAIAAiAEMAOgBcAHMAcABhAGMAZQAgAGgAZQByAGUAXABcACIAJwA="
+      ]
+    },
+    "script": "C:\\Construct dir\\script.ps1"
+  },
+  {
+    "args": [
+      "-FromPanel",
+      "-GitUserName",
+      "-user 'quote' \"double\"",
+      "-Path",
+      "C:\\space here\\"
+    ],
+    "child": "-NoProfile -ExecutionPolicy Bypass -File \"C:\\Construct dir\\script.ps1\" -FromPanel -GitUserName \"-user 'quote' \\\"double\\\"\" -Path \"C:\\space here\\\\\"",
+    "opts": {
+      "argSpec": [
+        {
+          "flag": "-FromPanel"
+        },
+        {
+          "flag": "-GitUserName",
+          "value": "-user 'quote' \"double\""
+        },
+        {
+          "flag": "-Path",
+          "value": "C:\\space here\\"
+        }
+      ],
+      "elevate": true,
+      "keepOpen": false
+    },
+    "output": {
+      "command": "Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Normal -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File \"C:\\Construct dir\\script.ps1\" -FromPanel -GitUserName \"-user ''quote'' \\\"double\\\"\" -Path \"C:\\space here\\\\\"'",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "UwB0AGEAcgB0AC0AUAByAG8AYwBlAHMAcwAgAC0ARgBpAGwAZQBQAGEAdABoACAAJwBwAG8AdwBlAHIAcwBoAGUAbABsAC4AZQB4AGUAJwAgAC0AVgBlAHIAYgAgAFIAdQBuAEEAcwAgAC0AVwBpAG4AZABvAHcAUwB0AHkAbABlACAATgBvAHIAbQBhAGwAIAAtAEEAcgBnAHUAbQBlAG4AdABMAGkAcwB0ACAAJwAtAE4AbwBQAHIAbwBmAGkAbABlACAALQBFAHgAZQBjAHUAdABpAG8AbgBQAG8AbABpAGMAeQAgAEIAeQBwAGEAcwBzACAALQBGAGkAbABlACAAIgBDADoAXABDAG8AbgBzAHQAcgB1AGMAdAAgAGQAaQByAFwAcwBjAHIAaQBwAHQALgBwAHMAMQAiACAALQBGAHIAbwBtAFAAYQBuAGUAbAAgAC0ARwBpAHQAVQBzAGUAcgBOAGEAbQBlACAAIgAtAHUAcwBlAHIAIAAnACcAcQB1AG8AdABlACcAJwAgAFwAIgBkAG8AdQBiAGwAZQBcACIAIgAgAC0AUABhAHQAaAAgACIAQwA6AFwAcwBwAGEAYwBlACAAaABlAHIAZQBcAFwAIgAnAA=="
+      ]
+    },
+    "script": "C:\\Construct dir\\script.ps1"
+  },
+  {
+    "args": [
+      "-FromPanel",
+      "-Name",
+      "a'b",
+      "",
+      "C:\\space here\\"
+    ],
+    "child": "-NoProfile -ExecutionPolicy Bypass -NoExit -File \"C:\\Construct dir\\script.ps1\" -FromPanel -Name a'b \"\" \"C:\\space here\\\\\"",
+    "opts": {
+      "argSpec": null,
+      "elevate": true,
+      "keepOpen": true
+    },
+    "output": {
+      "command": "Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Normal -ArgumentList '-NoProfile -ExecutionPolicy Bypass -NoExit -File \"C:\\Construct dir\\script.ps1\" -FromPanel -Name a''b \"\" \"C:\\space here\\\\\"'",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "UwB0AGEAcgB0AC0AUAByAG8AYwBlAHMAcwAgAC0ARgBpAGwAZQBQAGEAdABoACAAJwBwAG8AdwBlAHIAcwBoAGUAbABsAC4AZQB4AGUAJwAgAC0AVgBlAHIAYgAgAFIAdQBuAEEAcwAgAC0AVwBpAG4AZABvAHcAUwB0AHkAbABlACAATgBvAHIAbQBhAGwAIAAtAEEAcgBnAHUAbQBlAG4AdABMAGkAcwB0ACAAJwAtAE4AbwBQAHIAbwBmAGkAbABlACAALQBFAHgAZQBjAHUAdABpAG8AbgBQAG8AbABpAGMAeQAgAEIAeQBwAGEAcwBzACAALQBOAG8ARQB4AGkAdAAgAC0ARgBpAGwAZQAgACIAQwA6AFwAQwBvAG4AcwB0AHIAdQBjAHQAIABkAGkAcgBcAHMAYwByAGkAcAB0AC4AcABzADEAIgAgAC0ARgByAG8AbQBQAGEAbgBlAGwAIAAtAE4AYQBtAGUAIABhACcAJwBiACAAIgAiACAAIgBDADoAXABzAHAAYQBjAGUAIABoAGUAcgBlAFwAXAAiACcA"
+      ]
+    },
+    "script": "C:\\Construct dir\\script.ps1"
+  },
+  {
+    "args": [
+      "-FromPanel",
+      "-GitUserName",
+      "-user 'quote' \"double\"",
+      "-Path",
+      "C:\\space here\\"
+    ],
+    "child": "-NoProfile -ExecutionPolicy Bypass -NoExit -File \"C:\\Construct dir\\script.ps1\" -FromPanel -GitUserName \"-user 'quote' \\\"double\\\"\" -Path \"C:\\space here\\\\\"",
+    "opts": {
+      "argSpec": [
+        {
+          "flag": "-FromPanel"
+        },
+        {
+          "flag": "-GitUserName",
+          "value": "-user 'quote' \"double\""
+        },
+        {
+          "flag": "-Path",
+          "value": "C:\\space here\\"
+        }
+      ],
+      "elevate": true,
+      "keepOpen": true
+    },
+    "output": {
+      "command": "Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Normal -ArgumentList '-NoProfile -ExecutionPolicy Bypass -NoExit -File \"C:\\Construct dir\\script.ps1\" -FromPanel -GitUserName \"-user ''quote'' \\\"double\\\"\" -Path \"C:\\space here\\\\\"'",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "UwB0AGEAcgB0AC0AUAByAG8AYwBlAHMAcwAgAC0ARgBpAGwAZQBQAGEAdABoACAAJwBwAG8AdwBlAHIAcwBoAGUAbABsAC4AZQB4AGUAJwAgAC0AVgBlAHIAYgAgAFIAdQBuAEEAcwAgAC0AVwBpAG4AZABvAHcAUwB0AHkAbABlACAATgBvAHIAbQBhAGwAIAAtAEEAcgBnAHUAbQBlAG4AdABMAGkAcwB0ACAAJwAtAE4AbwBQAHIAbwBmAGkAbABlACAALQBFAHgAZQBjAHUAdABpAG8AbgBQAG8AbABpAGMAeQAgAEIAeQBwAGEAcwBzACAALQBOAG8ARQB4AGkAdAAgAC0ARgBpAGwAZQAgACIAQwA6AFwAQwBvAG4AcwB0AHIAdQBjAHQAIABkAGkAcgBcAHMAYwByAGkAcAB0AC4AcABzADEAIgAgAC0ARgByAG8AbQBQAGEAbgBlAGwAIAAtAEcAaQB0AFUAcwBlAHIATgBhAG0AZQAgACIALQB1AHMAZQByACAAJwAnAHEAdQBvAHQAZQAnACcAIABcACIAZABvAHUAYgBsAGUAXAAiACIAIAAtAFAAYQB0AGgAIAAiAEMAOgBcAHMAcABhAGMAZQAgAGgAZQByAGUAXABcACIAJwA="
+      ]
+    },
+    "script": "C:\\Construct dir\\script.ps1"
+  },
+  {
+    "args": [
+      "-FromPanel",
+      "-Name",
+      "a'b",
+      "",
+      "C:\\space here\\"
+    ],
+    "child": "-NoProfile -ExecutionPolicy Bypass -File \"C:/it's here/script.ps1\" -FromPanel -Name a'b \"\" \"C:\\space here\\\\\"",
+    "opts": {
+      "argSpec": null,
+      "elevate": false,
+      "keepOpen": false
+    },
+    "output": {
+      "command": "& 'C:/it''s here/script.ps1' -FromPanel -Name 'a''b' '' 'C:\\space here\\'",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "JgAgACcAQwA6AC8AaQB0ACcAJwBzACAAaABlAHIAZQAvAHMAYwByAGkAcAB0AC4AcABzADEAJwAgAC0ARgByAG8AbQBQAGEAbgBlAGwAIAAtAE4AYQBtAGUAIAAnAGEAJwAnAGIAJwAgACcAJwAgACcAQwA6AFwAcwBwAGEAYwBlACAAaABlAHIAZQBcACcA"
+      ]
+    },
+    "script": "C:/it's here/script.ps1"
+  },
+  {
+    "args": [
+      "-FromPanel",
+      "-GitUserName",
+      "-user 'quote' \"double\"",
+      "-Path",
+      "C:\\space here\\"
+    ],
+    "child": "-NoProfile -ExecutionPolicy Bypass -File \"C:/it's here/script.ps1\" -FromPanel -GitUserName \"-user 'quote' \\\"double\\\"\" -Path \"C:\\space here\\\\\"",
+    "opts": {
+      "argSpec": [
+        {
+          "flag": "-FromPanel"
+        },
+        {
+          "flag": "-GitUserName",
+          "value": "-user 'quote' \"double\""
+        },
+        {
+          "flag": "-Path",
+          "value": "C:\\space here\\"
+        }
+      ],
+      "elevate": false,
+      "keepOpen": false
+    },
+    "output": {
+      "command": "& 'C:/it''s here/script.ps1' -FromPanel -GitUserName '-user ''quote'' \"double\"' -Path 'C:\\space here\\'",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "JgAgACcAQwA6AC8AaQB0ACcAJwBzACAAaABlAHIAZQAvAHMAYwByAGkAcAB0AC4AcABzADEAJwAgAC0ARgByAG8AbQBQAGEAbgBlAGwAIAAtAEcAaQB0AFUAcwBlAHIATgBhAG0AZQAgACcALQB1AHMAZQByACAAJwAnAHEAdQBvAHQAZQAnACcAIAAiAGQAbwB1AGIAbABlACIAJwAgAC0AUABhAHQAaAAgACcAQwA6AFwAcwBwAGEAYwBlACAAaABlAHIAZQBcACcA"
+      ]
+    },
+    "script": "C:/it's here/script.ps1"
+  },
+  {
+    "args": [
+      "-FromPanel",
+      "-Name",
+      "a'b",
+      "",
+      "C:\\space here\\"
+    ],
+    "child": "-NoProfile -ExecutionPolicy Bypass -NoExit -File \"C:/it's here/script.ps1\" -FromPanel -Name a'b \"\" \"C:\\space here\\\\\"",
+    "opts": {
+      "argSpec": null,
+      "elevate": false,
+      "keepOpen": true
+    },
+    "output": {
+      "command": "& 'C:/it''s here/script.ps1' -FromPanel -Name 'a''b' '' 'C:\\space here\\'",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-NoExit",
+        "-EncodedCommand",
+        "JgAgACcAQwA6AC8AaQB0ACcAJwBzACAAaABlAHIAZQAvAHMAYwByAGkAcAB0AC4AcABzADEAJwAgAC0ARgByAG8AbQBQAGEAbgBlAGwAIAAtAE4AYQBtAGUAIAAnAGEAJwAnAGIAJwAgACcAJwAgACcAQwA6AFwAcwBwAGEAYwBlACAAaABlAHIAZQBcACcA"
+      ]
+    },
+    "script": "C:/it's here/script.ps1"
+  },
+  {
+    "args": [
+      "-FromPanel",
+      "-GitUserName",
+      "-user 'quote' \"double\"",
+      "-Path",
+      "C:\\space here\\"
+    ],
+    "child": "-NoProfile -ExecutionPolicy Bypass -NoExit -File \"C:/it's here/script.ps1\" -FromPanel -GitUserName \"-user 'quote' \\\"double\\\"\" -Path \"C:\\space here\\\\\"",
+    "opts": {
+      "argSpec": [
+        {
+          "flag": "-FromPanel"
+        },
+        {
+          "flag": "-GitUserName",
+          "value": "-user 'quote' \"double\""
+        },
+        {
+          "flag": "-Path",
+          "value": "C:\\space here\\"
+        }
+      ],
+      "elevate": false,
+      "keepOpen": true
+    },
+    "output": {
+      "command": "& 'C:/it''s here/script.ps1' -FromPanel -GitUserName '-user ''quote'' \"double\"' -Path 'C:\\space here\\'",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-NoExit",
+        "-EncodedCommand",
+        "JgAgACcAQwA6AC8AaQB0ACcAJwBzACAAaABlAHIAZQAvAHMAYwByAGkAcAB0AC4AcABzADEAJwAgAC0ARgByAG8AbQBQAGEAbgBlAGwAIAAtAEcAaQB0AFUAcwBlAHIATgBhAG0AZQAgACcALQB1AHMAZQByACAAJwAnAHEAdQBvAHQAZQAnACcAIAAiAGQAbwB1AGIAbABlACIAJwAgAC0AUABhAHQAaAAgACcAQwA6AFwAcwBwAGEAYwBlACAAaABlAHIAZQBcACcA"
+      ]
+    },
+    "script": "C:/it's here/script.ps1"
+  },
+  {
+    "args": [
+      "-FromPanel",
+      "-Name",
+      "a'b",
+      "",
+      "C:\\space here\\"
+    ],
+    "child": "-NoProfile -ExecutionPolicy Bypass -File \"C:/it's here/script.ps1\" -FromPanel -Name a'b \"\" \"C:\\space here\\\\\"",
+    "opts": {
+      "argSpec": null,
+      "elevate": true,
+      "keepOpen": false
+    },
+    "output": {
+      "command": "Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Normal -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File \"C:/it''s here/script.ps1\" -FromPanel -Name a''b \"\" \"C:\\space here\\\\\"'",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "UwB0AGEAcgB0AC0AUAByAG8AYwBlAHMAcwAgAC0ARgBpAGwAZQBQAGEAdABoACAAJwBwAG8AdwBlAHIAcwBoAGUAbABsAC4AZQB4AGUAJwAgAC0AVgBlAHIAYgAgAFIAdQBuAEEAcwAgAC0AVwBpAG4AZABvAHcAUwB0AHkAbABlACAATgBvAHIAbQBhAGwAIAAtAEEAcgBnAHUAbQBlAG4AdABMAGkAcwB0ACAAJwAtAE4AbwBQAHIAbwBmAGkAbABlACAALQBFAHgAZQBjAHUAdABpAG8AbgBQAG8AbABpAGMAeQAgAEIAeQBwAGEAcwBzACAALQBGAGkAbABlACAAIgBDADoALwBpAHQAJwAnAHMAIABoAGUAcgBlAC8AcwBjAHIAaQBwAHQALgBwAHMAMQAiACAALQBGAHIAbwBtAFAAYQBuAGUAbAAgAC0ATgBhAG0AZQAgAGEAJwAnAGIAIAAiACIAIAAiAEMAOgBcAHMAcABhAGMAZQAgAGgAZQByAGUAXABcACIAJwA="
+      ]
+    },
+    "script": "C:/it's here/script.ps1"
+  },
+  {
+    "args": [
+      "-FromPanel",
+      "-GitUserName",
+      "-user 'quote' \"double\"",
+      "-Path",
+      "C:\\space here\\"
+    ],
+    "child": "-NoProfile -ExecutionPolicy Bypass -File \"C:/it's here/script.ps1\" -FromPanel -GitUserName \"-user 'quote' \\\"double\\\"\" -Path \"C:\\space here\\\\\"",
+    "opts": {
+      "argSpec": [
+        {
+          "flag": "-FromPanel"
+        },
+        {
+          "flag": "-GitUserName",
+          "value": "-user 'quote' \"double\""
+        },
+        {
+          "flag": "-Path",
+          "value": "C:\\space here\\"
+        }
+      ],
+      "elevate": true,
+      "keepOpen": false
+    },
+    "output": {
+      "command": "Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Normal -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File \"C:/it''s here/script.ps1\" -FromPanel -GitUserName \"-user ''quote'' \\\"double\\\"\" -Path \"C:\\space here\\\\\"'",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "UwB0AGEAcgB0AC0AUAByAG8AYwBlAHMAcwAgAC0ARgBpAGwAZQBQAGEAdABoACAAJwBwAG8AdwBlAHIAcwBoAGUAbABsAC4AZQB4AGUAJwAgAC0AVgBlAHIAYgAgAFIAdQBuAEEAcwAgAC0AVwBpAG4AZABvAHcAUwB0AHkAbABlACAATgBvAHIAbQBhAGwAIAAtAEEAcgBnAHUAbQBlAG4AdABMAGkAcwB0ACAAJwAtAE4AbwBQAHIAbwBmAGkAbABlACAALQBFAHgAZQBjAHUAdABpAG8AbgBQAG8AbABpAGMAeQAgAEIAeQBwAGEAcwBzACAALQBGAGkAbABlACAAIgBDADoALwBpAHQAJwAnAHMAIABoAGUAcgBlAC8AcwBjAHIAaQBwAHQALgBwAHMAMQAiACAALQBGAHIAbwBtAFAAYQBuAGUAbAAgAC0ARwBpAHQAVQBzAGUAcgBOAGEAbQBlACAAIgAtAHUAcwBlAHIAIAAnACcAcQB1AG8AdABlACcAJwAgAFwAIgBkAG8AdQBiAGwAZQBcACIAIgAgAC0AUABhAHQAaAAgACIAQwA6AFwAcwBwAGEAYwBlACAAaABlAHIAZQBcAFwAIgAnAA=="
+      ]
+    },
+    "script": "C:/it's here/script.ps1"
+  },
+  {
+    "args": [
+      "-FromPanel",
+      "-Name",
+      "a'b",
+      "",
+      "C:\\space here\\"
+    ],
+    "child": "-NoProfile -ExecutionPolicy Bypass -NoExit -File \"C:/it's here/script.ps1\" -FromPanel -Name a'b \"\" \"C:\\space here\\\\\"",
+    "opts": {
+      "argSpec": null,
+      "elevate": true,
+      "keepOpen": true
+    },
+    "output": {
+      "command": "Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Normal -ArgumentList '-NoProfile -ExecutionPolicy Bypass -NoExit -File \"C:/it''s here/script.ps1\" -FromPanel -Name a''b \"\" \"C:\\space here\\\\\"'",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "UwB0AGEAcgB0AC0AUAByAG8AYwBlAHMAcwAgAC0ARgBpAGwAZQBQAGEAdABoACAAJwBwAG8AdwBlAHIAcwBoAGUAbABsAC4AZQB4AGUAJwAgAC0AVgBlAHIAYgAgAFIAdQBuAEEAcwAgAC0AVwBpAG4AZABvAHcAUwB0AHkAbABlACAATgBvAHIAbQBhAGwAIAAtAEEAcgBnAHUAbQBlAG4AdABMAGkAcwB0ACAAJwAtAE4AbwBQAHIAbwBmAGkAbABlACAALQBFAHgAZQBjAHUAdABpAG8AbgBQAG8AbABpAGMAeQAgAEIAeQBwAGEAcwBzACAALQBOAG8ARQB4AGkAdAAgAC0ARgBpAGwAZQAgACIAQwA6AC8AaQB0ACcAJwBzACAAaABlAHIAZQAvAHMAYwByAGkAcAB0AC4AcABzADEAIgAgAC0ARgByAG8AbQBQAGEAbgBlAGwAIAAtAE4AYQBtAGUAIABhACcAJwBiACAAIgAiACAAIgBDADoAXABzAHAAYQBjAGUAIABoAGUAcgBlAFwAXAAiACcA"
+      ]
+    },
+    "script": "C:/it's here/script.ps1"
+  },
+  {
+    "args": [
+      "-FromPanel",
+      "-GitUserName",
+      "-user 'quote' \"double\"",
+      "-Path",
+      "C:\\space here\\"
+    ],
+    "child": "-NoProfile -ExecutionPolicy Bypass -NoExit -File \"C:/it's here/script.ps1\" -FromPanel -GitUserName \"-user 'quote' \\\"double\\\"\" -Path \"C:\\space here\\\\\"",
+    "opts": {
+      "argSpec": [
+        {
+          "flag": "-FromPanel"
+        },
+        {
+          "flag": "-GitUserName",
+          "value": "-user 'quote' \"double\""
+        },
+        {
+          "flag": "-Path",
+          "value": "C:\\space here\\"
+        }
+      ],
+      "elevate": true,
+      "keepOpen": true
+    },
+    "output": {
+      "command": "Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Normal -ArgumentList '-NoProfile -ExecutionPolicy Bypass -NoExit -File \"C:/it''s here/script.ps1\" -FromPanel -GitUserName \"-user ''quote'' \\\"double\\\"\" -Path \"C:\\space here\\\\\"'",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "UwB0AGEAcgB0AC0AUAByAG8AYwBlAHMAcwAgAC0ARgBpAGwAZQBQAGEAdABoACAAJwBwAG8AdwBlAHIAcwBoAGUAbABsAC4AZQB4AGUAJwAgAC0AVgBlAHIAYgAgAFIAdQBuAEEAcwAgAC0AVwBpAG4AZABvAHcAUwB0AHkAbABlACAATgBvAHIAbQBhAGwAIAAtAEEAcgBnAHUAbQBlAG4AdABMAGkAcwB0ACAAJwAtAE4AbwBQAHIAbwBmAGkAbABlACAALQBFAHgAZQBjAHUAdABpAG8AbgBQAG8AbABpAGMAeQAgAEIAeQBwAGEAcwBzACAALQBOAG8ARQB4AGkAdAAgAC0ARgBpAGwAZQAgACIAQwA6AC8AaQB0ACcAJwBzACAAaABlAHIAZQAvAHMAYwByAGkAcAB0AC4AcABzADEAIgAgAC0ARgByAG8AbQBQAGEAbgBlAGwAIAAtAEcAaQB0AFUAcwBlAHIATgBhAG0AZQAgACIALQB1AHMAZQByACAAJwAnAHEAdQBvAHQAZQAnACcAIABcACIAZABvAHUAYgBsAGUAXAAiACIAIAAtAFAAYQB0AGgAIAAiAEMAOgBcAHMAcABhAGMAZQAgAGgAZQByAGUAXABcACIAJwA="
+      ]
+    },
+    "script": "C:/it's here/script.ps1"
+  }
+]

@@ -122,3 +122,33 @@ Placeholder for the S2/S3 dispatcher message matrix. All webview messages and co
 are currently unsupported because S1 has no dispatcher, webview windows, or HTTP listener.
 S2/S3 must implement each protocol entry or list its reason here and return the panel's
 existing refusal message; messages must never be silently ignored by an active dispatcher.
+
+S2a state APIs are under `Core/State`, `Core/Lifecycle`, `Core/Probe`,
+`Core/Drivers`, and `Core/Remote`. `HostState` discovers the scripts directory and
+manages shared profiles; `InstanceRegistry` validates schema v1 and produces the
+shared registry document; `InstanceStateStore` preserves the legacy default store
+and isolates named VM state. `SettingsMapping`, `ProbeParser`, `UsageParser`,
+`UpdatePlanner`, `AgentUpdateScript`, `T3Code`, `LifecycleBuilder`, `PowerShellLaunch`, `HostConversion`
+and `HostUpdatePlanner` expose decisions without timers or UI. `ResultPollingPlan`
+and `ProvisionWatch` capture the launched operation's target and deadline.
+
+`RemoteHostClient` exposes all 54 methods from remotehost.js over `IRemoteApi`,
+with tokens read from `ITokenStore`, an explicit Negotiate flag, and certificate
+pin verification before the transport sends credentials. `VmPower` collapses
+saved/paused states for actions, keeps the remote saved label through refinement,
+and falls back from the local hypervisor seam to the fixture-pinned Get-VM argv.
+`IStateFileSystem` extends the scaffold seam with timestamps and atomic profile
+creation; `IUpdateSource` fetches public release metadata with normal CA validation.
+Both have in-memory fakes; production adapters belong to the Host/Windows packages.
+
+State JSON writes use BOM-less UTF-8, a final newline, and JavaScript-compatible
+quoting, number formatting and integer-key ordering. Reads tolerate a PowerShell
+UTF-8 BOM. Named state files retain the version/instance header and ordinal VM-key
+ordering; install-wide values never leak from another VM's legacy settings.
+The state tests include a real temporary LOCALAPPDATA tree as well as in-memory
+stores. New parity fixtures are generated asynchronously by the existing Node
+exporter (including remote routes and paginated stable/nightly T3 discovery).
+
+This package provides pure planners and seam-driven reads/writes. Runtime polling,
+IPC dispatch (including usage export dialog titles/file names from describeExport/exportFileName), production filesystem/HTTP adapters and UI wiring remain with their
+respective work packages. No Windows runtime behavior has been field-validated.
