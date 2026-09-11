@@ -109,6 +109,8 @@ function planTokenMigration({ url, libPath, tokenExists, env }) {
   if (tokenExists) return null;
   const dir = remotehost.remoteStoreDir(env);
   if (!libPath || !dir) throw new Error("Companion token migration requires the installed remote library");
+  // Canonicalize away URL userinfo/query before any value reaches argv.
+  url = remotehost.normalizeServiceUrl(url);
   const slug = remotehost.hostSlug(url);
   // Only the fixed script and non-secret paths/URL enter argv. Catch in PowerShell
   // too: even an unexpected library error must never print its token argument.
