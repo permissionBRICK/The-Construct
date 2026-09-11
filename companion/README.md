@@ -142,7 +142,6 @@ These specific workflows remain explicit refusals:
 | `removeInstance` | Registry edits and launch builders exist, but not the removal planner/confirmation workflow. Use the local VS Code removal command. |
 | `convertToHost` | Initiation depends on the attached VM identity; pending VS Code conversions keep their RSA private key in that VS Code profile's SecretStorage. Companion shows pending status and never finishes it automatically. Review/finish in that profile. |
 | `createFirstVm` | The service-backed creation wizard is not exposed. Use New Remote VM in VS Code. |
-| `updateConstruct` | The install-wide result-file/update/reload workflow is not yet wired. Run the installed `Update-Construct.ps1`. |
 | `hostadmin.action: issueToken`, `rotateVmToken` | `IPrompts` has no one-time secret display operation. Refused before requesting any new token; use the host CLI. |
 | `hostadmin.action: createFirstVm` | Same missing creation wizard as the panel command above. |
 | `applyVmResources` | The restart-to-resize workflow (elevated `Set-AgentVmResources.ps1` with its result file, or the service CPU route plus restart) is not ported. The RAM/vCPU values are saved; apply them from the VS Code control panel or by Reinstall. |
@@ -218,7 +217,7 @@ views and runtime messages use IPC). The limitations of the implemented rows are
 | command | `syncConfigNow` | implemented |
 | command | `updateAgent` | implemented |
 | command | `updateAgents` | implemented |
-| command | `updateConstruct` | unsupported: Run Update-Construct.ps1; update/reload result workflow remains in VS Code. |
+| command | `updateConstruct` | implemented |
 | host message | `hostadmin.ready` | implemented |
 | host message | `hostadmin.refresh` | implemented |
 | host message | `hostadmin.tab` | implemented |

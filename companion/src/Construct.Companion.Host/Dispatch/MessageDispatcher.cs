@@ -153,7 +153,7 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
             case "removeInstance": Refuse(name, id, "Instance removal needs the installer removal planner. Use Remove Instance in VS Code."); break;
             case "convertToHost": Refuse(name, id, "Host conversion requires the attached VM identity and explicit finish workflow. Review or finish it in VS Code; Companion never finishes a pending conversion automatically."); break;
             case "createFirstVm": Refuse(name, id, "The remote VM creation wizard is not yet ported. Use New Remote VM in VS Code."); break;
-            case "updateConstruct": Refuse(name, id, "The host update result workflow is not yet ported. Run Update-Construct.ps1 from the installed scripts."); break;
+            case "updateConstruct": await UpdateConstruct(entry, ct); break;
             default: Refuse(name, id, "This command is not supported by Construct Companion."); break;
         }
     }
@@ -232,6 +232,52 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
         }
         // The panel keeps its spinner until lifecyclePrepared arrives, whatever happened above.
         finally { events.Message(entry.Name, new { type = "lifecyclePrepared", id = Text(message, "type") == "customRebuild" ? action == "redownload" ? "customRedownload" : "customReinstall" : action }); }
+    }
+    // Update-Construct.ps1 is install-wide: it refreshes the scripts, the VS Code extension and this Companion
+    // (its hook asks this process to quit and restarts it), so the console runs detached and the outcome is read
+    // from the result file exactly as the extension does. A completed update usually ends this process first.
+    private async Task UpdateConstruct(CompanionInstance entry, CancellationToken ct)
+    {
+        try
+        {
+            var directory = RequireDirectory(entry);
+            var script = Path.Combine(directory, "Update-Construct.ps1");
+            if (!files.FileExists(script)) { Refuse(entry.Name, "updateConstruct", "Update-Construct.ps1 is missing from the installed scripts."); return; }
+            var markers = entry.Store.ReadMarkers();
+            var plan = ResultPollingPlan.Create(files.GetRoot(FileSystemRoot.Temp) ?? directory, "update", clock.UtcNow.ToUnixTimeMilliseconds());
+            if (files.FileExists(plan.File)) files.DeleteFile(plan.File);
+            var argSpec = new JsonArray(new JsonObject { ["flag"] = "-Repo", ["value"] = StateJson.String(markers["repo"]) }, new JsonObject { ["flag"] = "-Ref", ["value"] = StateJson.String(markers["ref"]) });
+            var launch = PowerShellLaunch.BuildHostLaunch(script, UpdatePlanner.ConstructRefreshArgs(markers), elevate: false, keepOpen: settings.Read().Debug, argSpec: argSpec).Invocation(directory)
+                with { EnvironmentOverrides = new Dictionary<string, string?> { [plan.EnvironmentKey] = plan.File } };
+            await launcher.StartDetachedAsync(launch, ct);
+            events.Companion(new { type = "lifecycle", instance = entry.Name, action = "updateConstruct", status = "launched" });
+            _ = WatchUpdateResultAsync(entry.Name, plan);
+        }
+        finally { events.Message(entry.Name, new { type = "lifecyclePrepared", id = "updateConstruct" }); }
+    }
+    private async Task WatchUpdateResultAsync(string name, ResultPollingPlan plan)
+    {
+        try
+        {
+            var outcome = await PollResultAsync(files, clock, plan, CancellationToken.None);
+            events.Companion(new { type = "lifecycle", instance = name, action = "updateConstruct", status = outcome });
+            if (outcome == "fail") Refuse(name, "updateConstruct", "Construct update didn't complete. See the update console, then retry.");
+            else if (outcome == "timeout") logs.Failure("Construct update", new TimeoutException("No result was written within the update timeout; the console shows the outcome."));
+        }
+        catch (Exception e) { logs.Failure("Construct update", e); }
+    }
+    public static async Task<string> PollResultAsync(IStateFileSystem files, IClock clock, ResultPollingPlan plan, CancellationToken ct)
+    {
+        var started = clock.UtcNow;
+        while (true)
+        {
+            await clock.DelayAsync(plan.Interval, ct);
+            var text = files.ReadFile(plan.File) is { } bytes ? System.Text.Encoding.UTF8.GetString(bytes) : null;
+            var outcome = plan.Evaluate(text, clock.UtcNow - started);
+            if (outcome == "pending") continue;
+            if (files.FileExists(plan.File)) files.DeleteFile(plan.File);
+            return outcome;
+        }
     }
     private async Task SaveIdle(CompanionInstance entry, JsonObject policy, CancellationToken ct)
     {
