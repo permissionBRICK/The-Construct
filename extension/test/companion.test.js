@@ -213,7 +213,7 @@ test("failed settings/token migrations leave markers unset and discard runner di
 function extensionHarness(overrides = {}) {
   const filename = path.resolve(__dirname, "../extension.js"), realRequire = createRequire(filename);
   const timers = fakeClock(), commands = new Map(), webviews = [], warnings = [], config = { companion: "auto", ...overrides.config };
-  let configurationChanged;
+  let configurationChanged, viewProvider;
   const disposable = { dispose() {} };
   const values = new Map();
   const state = { get: k => values.get(k), update: async (k, v) => values.set(k, v) };
@@ -223,11 +223,11 @@ function extensionHarness(overrides = {}) {
     Uri: { joinPath: (base, ...parts) => ({ fsPath: path.join(base.fsPath, ...parts), toString() { return this.fsPath; } }) },
     commands: { registerCommand: (id, fn) => { commands.set(id, fn); return disposable; }, executeCommand: id => commands.get(id)() },
     window: { createOutputChannel: () => ({ appendLine() {} }), createStatusBarItem: () => ({ ...disposable, show() {}, hide() {} }),
-      registerWebviewViewProvider: () => disposable, registerUriHandler: () => disposable,
+      registerWebviewViewProvider: (_id, provider) => { viewProvider = provider; return disposable; }, registerUriHandler: () => disposable,
       registerWebviewPanelSerializer: () => disposable, showWarningMessage: text => warnings.push(text),
       createWebviewPanel: () => {
         const webview = { options: {}, cspSource: "test", asWebviewUri: uri => uri, postMessage: message => { webview.messages.push(message); }, messages: [], onDidReceiveMessage: fn => { webview.receive = fn; } };
-        const p = { webview, onDidDispose() {}, reveal() {} }; webviews.push(webview); return p;
+        const p = { webview, active: true, onDidDispose() {}, onDidChangeViewState(cb) { webview.activate = () => { p.active = true; cb(); }; }, reveal() { if (!p.active) webview.activate(); } }; webview.hide = () => { p.active = false; }; webviews.push(webview); return p;
       },
     },
   };
@@ -237,6 +237,9 @@ function extensionHarness(overrides = {}) {
   vm.runInNewContext(fs.readFileSync(filename, "utf8") + `\nmodule.exports.test = {
     handleMessage, refreshAll, syncAutoRefresh, startNotifyWatch, startForwarder, runCompanionMigration, deliverNotification,
     requestAudioEnable, scheduleStartupRepatch, runConfigSync, companionPresenceChanged,
+    openPanelHere, setupPanel, augmentUpdates,
+    surfaceTest: callback => { refreshState = callback; syncAutoRefresh = () => {}; resolveScriptsDirFor = () => null; },
+    sidebar: context => new ConstructViewProvider(context),
     setClient: value => { companionClient = value; },
     setActiveInstance: value => { activeInstance = () => value; },
     attach: webview => liveWebviews.add(webview),
@@ -350,4 +353,26 @@ test("messages posted during startup detection wait and then proxy exactly once"
 test("independent children messages cross the proxy unchanged", () => {
   const inventory = { type: "children", instance: "remote-vm", children: { primary: "remote-vm", visible: true, items: [{ name: "shared", canConsole: true }], problem: "" } };
   assert.strictEqual(c.overlayMessage(inventory, "agent-vm"), inventory);
+});
+
+test("opening a panel or visible sidebar bypasses exactly the next Construct augmentation", async () => {
+  const calls = [];
+  const h = extensionHarness({ modules: { "./src/updates": { augment: async (state, _raw, opts) => { calls.push(opts.constructNoCache); return state; } } } });
+  const api = h.extension.test;
+  let refreshes = 0;
+  api.surfaceTest(() => { refreshes++; });
+  const instance = require("../src/instances").DEFAULT_INSTANCE;
+  api.setActiveInstance(instance);
+  async function consumedOnce() {
+    await api.augmentUpdates({}, instance); await api.augmentUpdates({}, instance);
+    assert.deepEqual(calls.splice(0), [true, false]);
+  }
+  api.openPanelHere(h.context); await consumedOnce();
+  api.openPanelHere(h.context); assert.equal(refreshes, 1); await consumedOnce();
+  h.webviews[0].hide(); api.openPanelHere(h.context); assert.equal(refreshes, 2); await consumedOnce();
+  let visibility;
+  const sidebar = { webview: h.webviews[0], visible: true, onDidChangeVisibility: cb => { visibility = cb; return { dispose() {} }; }, onDidDispose: () => ({ dispose() {} }) };
+  api.sidebar(h.context).resolveWebviewView(sidebar); await consumedOnce();
+  sidebar.visible = false; visibility(); assert.equal(refreshes, 2);
+  sidebar.visible = true; visibility(); assert.equal(refreshes, 3); await consumedOnce();
 });
