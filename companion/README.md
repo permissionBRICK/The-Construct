@@ -84,7 +84,7 @@ share the settings store; theme and active-instance updates reach the desktop.
 
 Config project watchers start with their areas. Automatic config sync is throttled
 by its five-minute runtime policy. Host and update metadata refresh periodically without
-duplicating the runtime probe. Public update results are shared and cached for ten minutes
+duplicating the runtime probe. Public update results are shared and cached for five minutes
 (one minute on failure); usage is collected on demand per instance/period and cached for
 five minutes (one minute on failure), matching the JavaScript TTL fixtures.
 Construct update detection uses the complete published main release manifest;
