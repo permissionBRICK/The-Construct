@@ -62,7 +62,7 @@ function connectedInstance() {
   return instances.connectedInstanceName(registryNow(), safeRemoteAuthority()) || null;
 }
 function postCompanionMessage(message, webview) {
-  const value = companion.overlayMessage(message, connectedInstance());
+  const value = companion.overlayMessage(message, connectedInstance(), registerThisVmOffer());
   if (webview) safePost(webview, value, true);
   else for (const w of liveWebviews) safePost(w, value, true);
 }
@@ -73,7 +73,7 @@ async function refreshCompanion(webview) {
   try {
     const snapshot = await companionClient.snapshot(inst.name);
     if (!companionClient.deferred || !instanceGate.valid(token)) return;
-    for (const message of companion.snapshotMessages(snapshot, connectedInstance())) postCompanionMessage(message, webview);
+    for (const message of companion.snapshotMessages(snapshot, connectedInstance(), registerThisVmOffer())) postCompanionMessage(message, webview);
   } catch (_) { /* detection rechecks; keep the last reading during grace */ }
 }
 async function proxyCompanion(message, webview) {
@@ -590,6 +590,11 @@ function backfillVmFacts(inst, probed) {
 
 /** Fold host-side update info (GitHub) into a probed state. Best-effort: returns
  *  the same object reference when nothing was added, so callers can skip a re-push. */
+const instantConstructChecks = new Set();
+function refreshOpenedSurface(webview) {
+  instantConstructChecks.add(activeInstance().name);
+  void refreshState(webview);
+}
 async function augmentUpdates(state, inst) {
   try {
     const target = inst || activeInstance();
@@ -599,7 +604,8 @@ async function augmentUpdates(state, inst) {
     // VM, so it comes from that instance's own state (and, when the probe brought one
     // back, from the guest's marker on `state.provisionedCommit`, which outranks both).
     const instanceRaw = instancestate.readState(stateStore(target, scriptsDir));
-    return await updates.augment(state, raw, { instanceRaw });
+    const constructNoCache = instantConstructChecks.delete(target.name);
+    return await updates.augment(state, raw, { instanceRaw, constructNoCache });
   } catch (_) { return state; }
 }
 
@@ -4548,6 +4554,7 @@ function buildHtml(webview, extensionUri, htmlFile, scriptFile) {
     .replace(/{{cspSource}}/g, webview.cspSource)
     .replace(/{{styleUri}}/g, mediaUri("panel.css").toString())
     .replace(/{{themeUri}}/g, mediaUri(themes.cssFileFor(currentThemeId())).toString())
+    .replace(/{{paletteUri}}/g, mediaUri("palette.js").toString())
     .replace(/{{scriptUri}}/g, mediaUri(scriptFile).toString())
     .replace(/{{nonce}}/g, nonce);
 }
@@ -5359,6 +5366,10 @@ class ConstructViewProvider {
     // The listener is tied to the webview's own lifetime (not context.subscriptions);
     // its disposable is released when the view is destroyed.
     webviewView.webview.onDidReceiveMessage((m) => handleMessage(m, webviewView.webview, this.context));
+    this.context.subscriptions.push(webviewView.onDidChangeVisibility(() => {
+      if (webviewView.visible) refreshOpenedSurface(webview);
+    }));
+    if (webviewView.visible) instantConstructChecks.add(activeInstance().name);
     launcherView = webviewView;
     liveWebviews.add(webviewView.webview);
     syncAutoRefresh();
@@ -5385,6 +5396,8 @@ function setupPanel(p, context) {
   p.webview.onDidReceiveMessage((m) => handleMessage(m, p.webview, context));
   liveWebviews.add(p.webview);
   syncAutoRefresh();
+  p.onDidChangeViewState(() => { if (p.active) refreshOpenedSurface(webview); });
+  instantConstructChecks.add(activeInstance().name);
   p.onDidDispose(() => { liveWebviews.delete(webview); if (panel === p) panel = undefined; syncAutoRefresh(); });
 }
 
@@ -5454,7 +5467,7 @@ function openPanelHere(context) {
     // the active column, which fails to surface a hidden panel when focus is on the
     // sidebar (the reported "no window appears on second open"). If the reference is
     // stale/disposed (a dispose that raced a reload), recreate it below.
-    try { panel.reveal(); return; }
+    try { const wasActive = panel.active; panel.reveal(); if (wasActive) refreshOpenedSurface(panel.webview); return; }
     catch (_) { panel = undefined; }
   }
   const p = vscode.window.createWebviewPanel(

@@ -362,3 +362,8 @@ footer a:hover { color: var(--text); text-decoration: underline; }
 /* ── 19. Motion ───────────────────────────────────────────────────────────
    This theme adds no new animation (scanlines are static); the base already
    stills .cursor and .dot.live under prefers-reduced-motion. */
+
+:root { color-scheme: dark; --construct-native-palette: 0; }
+
+input[type=text], input[type=password], input[type=number], textarea { color: var(--vscode-input-foreground, var(--text)); background-color: var(--vscode-input-background, var(--void)); border-color: var(--vscode-input-border, var(--line-strong)); }
+select, select[class], select[class]:hover, option { color: var(--vscode-dropdown-foreground, var(--text)); background-color: var(--vscode-dropdown-background, var(--void)); border-color: var(--vscode-dropdown-border, var(--line-strong)); }

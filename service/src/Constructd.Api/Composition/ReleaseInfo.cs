@@ -9,7 +9,7 @@ public sealed class ReleaseInfo : IReleaseInfo
     public InstalledRelease Installed { get; }
     public int SchemaVersion => SqliteMigrations.SchemaVersion;
     public int SchemaMinReadableBy => SqliteMigrations.MinReadableBy;
-    public IReadOnlyList<string> ApiFeatures => ["host-admin", "children", "media", "console", "updates", "network", "primary-cpu", .. (options?.HostAdmin.Source.Enabled != false ? new[] { "source-cache" } : [])];
+    public IReadOnlyList<string> ApiFeatures => ["host-admin", "children", "media", "console", "updates", "network", "primary-cpu", "primary-memory", .. (options?.HostAdmin.Source.Enabled != false ? new[] { "source-cache" } : [])];
     private readonly Constructd.Core.Configuration.ConstructdOptions? options;
     public ReleaseInfo(Constructd.Core.Configuration.ConstructdOptions? options = null)
     {

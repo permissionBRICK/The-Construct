@@ -171,6 +171,55 @@ Recognized variables:
 | `CONSTRUCT_VM_TOKEN_B64` | *(empty)* | The VM-scoped token, base64. Written to `/etc/construct/vm-token` (`0600`); never echoed, logged or stored in `config.env` |
 | `CONSTRUCT_IDLE_REPORT_INTERVAL_SEC` | `60` | Period of the activity heartbeat (`construct-idle-report.timer`). Must be 5–3600; anything else falls back to 60 |
 
+### Git credential preflight
+
+On an initial install, the Windows installer first checks HTTP(S) repositories
+with anonymous `git ls-remote` (20-second timeout). Public repositories need no
+credential prompt. A `-ConfigRepo` source is checked and cloned before project
+selection, so imported profiles contribute their repositories to the same
+credential session. SSH repositories do not use this username/token flow.
+
+For each host that refuses anonymous access, the **Git credentials for cloning
+project repos** screen accepts a username and token, verifies them live, and
+shows pass/fail. Rejected credentials show Git's stderr with secrets redacted and
+this hint: “Possibly a wrong password. GitLab and GitHub with two-factor or SSO
+require a personal access token instead of the password.” You can retry
+immediately or press Enter at the username prompt to **skip this host**. Each
+entry is tried against all remaining hosts. Successful hosts retain that
+credential; retries only target the remainder, allowing different credentials
+per host. Skipped
+hosts' project clones are omitted for that provision; other hosts continue.
+A skipped config repository cannot supply profiles until it is accessible.
+Credentials verified for a config host are reused and checked against its
+selected project repositories, too.
+
+Reinstall, reprovision and add-config on an existing VM do not prompt for clone
+credentials. Add-config without a VM is an initial install and can prompt.
+Only an anonymous HTTP(S) refusal prints a note that checkout will use the VM's
+stored credentials and the panel will report missing credentials. Restoring a
+backup with `.git-credentials` continues to reuse it. An inaccessible config
+source is linked for later PC sync, but its profiles cannot be imported on the
+PC without access; the installer continues with available profiles. There is
+no transfer from Windows Credential Manager into the VM.
+
+For unattended runs, `-GitCloneCredentialsB64` uses the same live verification;
+a rejected or missing credential for a required host is a clear error, never a
+prompt. Only verified entries for private repositories encountered in this run are
+forwarded; unused entries for public or unselected repositories are omitted. The payload remains UTF-8, newline-separated
+`<proto>://<url-encoded-user>:<url-encoded-token>@<host>`, base64-encoded in
+`GIT_CLONE_CREDENTIALS_B64`. Explicit skips travel separately as
+`GIT_CLONE_SKIP_HOSTS_B64` (base64 newline-separated HTTP(S) origins).
+
+The PC runs Git with terminal prompting and inherited authentication settings
+disabled. TLS trust/backend and Git-configured proxy settings are preserved in
+a protected temporary file; credentials reach Git through a child-process-only
+`GIT_ASKPASS`.
+The guest's temporary credential-store file stays mode `0600`, and the one-shot
+checkout helper resets inherited helpers before reading that file. Persistence
+inside the VM still follows the existing `GIT_CREDENTIAL_STORE` setting. No token
+is saved to Windows Credential Manager. See [config sync](config-sync.md) for
+later PC authentication.
+
 ### Free-disk preflight
 
 The first step of every (re)provision reports free space on each filesystem it writes to and

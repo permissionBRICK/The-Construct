@@ -33,7 +33,7 @@ public sealed record UserResponse(string Name, Role Role, int MaxVms, bool Allow
 /// <param name="Token">The plaintext secret — returned exactly once, never stored, never logged.</param>
 public sealed record TokenIssuedResponse(string Id, string Label, string Token, DateTimeOffset Created);
 
-public sealed record IdlePolicyResponse(int TimeoutMinutes, IdleAction Action, int MaxTimeoutMinutes, bool Clamped);
+public sealed record IdlePolicyResponse(int TimeoutMinutes, IdleAction Action, int MaxTimeoutMinutes, bool Clamped, bool ForceEnabled = false);
 
 /// <summary>
 /// One forward on the wire. The ack fields are INLINE and the record stays FLAT on purpose:
@@ -134,7 +134,7 @@ public sealed record VmResponse(
     bool Shared = false, string? Incarnation = null, VmTokenKind? TokenKind = null, bool ChildCreationClosed = false,
     LeaseResponse? Lease = null, ChildHardware? Hardware = null, IReadOnlyList<object>? Media = null,
     GuestReport? Guest = null, HostObservation? Observed = null, VmReservationsResponse? Reservations = null,
-    CurrentOperationResponse? CurrentOperation = null, IReadOnlyList<string>? Children = null, IReadOnlyList<ChildAction>? AllowedActions = null, VmResourceUsageResponse? ResourceUsage = null, int? PendingCpu = null,
+    CurrentOperationResponse? CurrentOperation = null, IReadOnlyList<string>? Children = null, IReadOnlyList<ChildAction>? AllowedActions = null, VmResourceUsageResponse? ResourceUsage = null, int? PendingCpu = null, int? PendingRamGb = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? SourceCommit = null);
 
 /// <param name="PublicHost">

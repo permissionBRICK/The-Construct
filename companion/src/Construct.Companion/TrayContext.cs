@@ -59,6 +59,7 @@ internal sealed class TrayContext : ApplicationContext
         platform.Files.CreateDirectory(platform.StateRoot);
         registryWatch = platform.Files.Watch(platform.StateRoot, () => { if (!disposed) dispatcher.BeginInvoke(RegistryChanged); });
         settings.Changed += SettingsChanged;
+        ListenOnlineAll();
         Select(settings.Read().ActiveInstance);
         _ = ListenCompanionAsync(lifetime.Token);
         dispatcher.BeginInvoke(async () => { try { await OpenPlanAsync(initial); } catch (Exception e) { ShowFailure(e); } }); // startup must never kill the tray
@@ -68,7 +69,7 @@ internal sealed class TrayContext : ApplicationContext
     private string[] Hosts() => RemoteHost.KnownHostSlugs(registry, RemoteHost.EnrolledHosts(platform.Files, platform.StateDirectory));
     private void RegistryChanged()
     {
-        registry = LoadRegistry();
+        registry = LoadRegistry(); ListenOnlineAll();
         var selectionStale = Active is null ? registry.ByName.Count > 0 : !registry.ByName.ContainsKey(Active);
         if (selectionStale) Select(settings.Read().ActiveInstance);
     }
@@ -86,6 +87,9 @@ internal sealed class TrayContext : ApplicationContext
         {
             await foreach (var message in sink.Subscribe("companion", token))
                 if (message.GetProperty("type").GetString() == "settings") SettingsChanged(settings.Read());
+                else if (message.GetProperty("type").GetString() == "notification" && message.TryGetProperty("text", out var text))
+                    await dispatcher.InvokeAsync(() => tray.ShowBalloonTip(10000, "Construct Companion", text.GetString() ?? "",
+                        message.TryGetProperty("level", out var level) && level.GetString() == "warning" ? ToolTipIcon.Warning : ToolTipIcon.Info), token);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
     }
@@ -100,6 +104,36 @@ internal sealed class TrayContext : ApplicationContext
         if (windows.TryGetValue("popup", out var popup)) _ = popup.ChangeScopeAsync(name ?? "");
         if (name is not null) _ = ListenAsync(name, subscription.Token);
         RefreshIcon();
+    }
+    // One listener per registered instance keeps the tooltip's online count current, whichever instance is active.
+    private CancellationTokenSource onlineSubscription = new();
+    private void ListenOnlineAll()
+    {
+        var names = registry.List().Select(i => StateJson.Text(i["name"])).OfType<string>().ToArray();
+        snapshot.SetInstances(names);
+        onlineSubscription.Cancel(); onlineSubscription.Dispose(); onlineSubscription = new();
+        foreach (var name in names) _ = ListenOnlineAsync(name, onlineSubscription.Token);
+        RefreshIcon();
+    }
+    private async Task ListenOnlineAsync(string name, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await foreach (var message in sink.Subscribe(name, cancellationToken))
+            {
+                var type = message.GetProperty("type").GetString();
+                if (type == "audio") snapshot.ApplyMic(name, message.TryGetProperty("capturing", out var capturing) && capturing.ValueKind == JsonValueKind.True);
+                else if (type == "state")
+                {
+                    var data = message.TryGetProperty("state", out var inner) ? inner : message;
+                    snapshot.ApplyOnline(name, data.TryGetProperty("online", out var online) && online.ValueKind == JsonValueKind.True);
+                }
+                else continue;
+                RefreshIcon();
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception e) { platform.Log.Write(DesktopLogEvent.BridgeFailed, e); }
     }
     private async Task ListenAsync(string name, CancellationToken cancellationToken)
     {
@@ -143,7 +177,7 @@ internal sealed class TrayContext : ApplicationContext
         platform.Log.Write(DesktopLogEvent.ActivationFailed, e);
         MessageBox.Show("The Companion could not complete this request. See the Companion log for the event code.", "Construct Companion", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
-    private void Open(string view, string? scope)
+    private void Open(string view, string? scope, bool refreshScheduled = false)
     {
         scope ??= view == "hostadmin" ? Hosts().FirstOrDefault() : Active;
         if (view == "hostadmin" && scope is null) { MessageBox.Show("No remote host is registered.", "Host Administration"); return; }
@@ -165,7 +199,7 @@ internal sealed class TrayContext : ApplicationContext
             var bounds = WindowPlacement.Popup(new(point.X - size / 2, point.Y - size / 2, size, size), new(work.X, work.Y, work.Width, work.Height), width, height);
             window.Bounds = new(bounds.X, bounds.Y, bounds.Width, bounds.Height);
         }
-        _ = window.ChangeScopeAsync(sinkScope); window.Present();
+        _ = window.ChangeScopeAsync(sinkScope, notify: false); window.Present(refreshScheduled);
     }
     private void HidePopup() { if (windows.TryGetValue("popup", out var popup)) popup.Hide(); }
     private async Task CommandAsync(string id)
@@ -181,6 +215,8 @@ internal sealed class TrayContext : ApplicationContext
                 // The Run key is the truth; settings.autostart mirrors it so the installer can keep an explicit "off".
                 var enabled = !platform.Registration.Autostart; platform.Registration.SetAutostart(enabled); settings.Merge(new JsonObject { ["autostart"] = enabled }); return;
             case "logs": await platform.Launcher.OpenAsync(platform.Log.PathName); return;
+            case "registerVm": await PostCommandAsync("registerThisVm"); return;
+            case "createRemoteVm": await PostCommandAsync("createFirstVm"); return;
             case "about": MessageBox.Show("Construct Companion\n" + platform.Version, "About Construct Companion"); return;
             case "openT3": if (await platform.Launcher.OpenT3DesktopAsync()) return; await PostCommandAsync("openAgentWeb", new JsonObject { ["agent"] = "t3code" }); return;
         }
@@ -222,14 +258,14 @@ internal sealed class TrayContext : ApplicationContext
         return false;
     }
     private string? HostForScope(string scope) => registry.ByName.TryGetValue(scope, out var instance) && StateJson.Text(instance["service"]?["url"]) is { } url ? RemoteHost.HostSlug(url) : null;
-    private async Task OpenPlanAsync(ActivationPlan plan)
+    private async Task OpenPlanAsync(ActivationPlan plan, bool refreshScheduled = false)
     {
-        foreach (var view in plan.Views) Open(view.View, view.View == "hostadmin" ? view.Host : view.Instance);
+        foreach (var view in plan.Views) Open(view.View, view.View == "hostadmin" ? view.Host : view.Instance, refreshScheduled);
         if (plan.ForwardId is not null) await PostCommandAsync("openForward", new JsonObject { ["forward"] = plan.ForwardId }, plan.ForwardInstance);
     }
     public Task ActivateAsync(IReadOnlyList<UiActivation> activations, CancellationToken cancellationToken = default) => dispatcher.InvokeAsync(async ct =>
     {
-        foreach (var activation in activations) await OpenPlanAsync(Activation.ResolveView(activation, registry.ByName.Keys.ToArray(), Hosts()));
+        foreach (var activation in activations) await OpenPlanAsync(Activation.ResolveView(activation, registry.ByName.Keys.ToArray(), Hosts()), activation.RefreshScheduled);
     }, cancellationToken);
     public Task QuitAsync(CancellationToken cancellationToken = default) => dispatcher.InvokeAsync(ExitThread, cancellationToken);
     protected override void ExitThreadCore()

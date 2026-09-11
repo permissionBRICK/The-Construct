@@ -31,7 +31,7 @@ function fakeClient(answers = {}) {
   const c = { host: "buildbox.example.local", calls };
   for (const m of ["health", "whoami", "hostStatus", "hostCapacity", "hostConfig", "putHostConfig", "hostCapabilities", "isoCatalog", "users", "createUser", "updateUser", "deleteUser",
     "putUserAllowance", "userTokens", "issueUserToken", "revokeUserToken", "vms", "children", "lifecycle", "setVmSharing", "renewVmLease", "deleteVm", "getJob", "overrides", "putOverrides", "deleteOverrides",
-    "vmCpu", "setVmCpu", "rotateVmToken", "revokeVmToken", "media", "deleteMedia", "mediaCleanup", "jobs", "cancelJob", "audit", "updatesStatus", "updatesCheck", "updatesStage", "updatesApply", "updatesCancel", "updatesResolve"]) {
+    "vmMemory", "setVmMemory", "vmIdlePolicy", "setVmIdlePolicy", "vmCpu", "setVmCpu", "rotateVmToken", "revokeVmToken", "media", "deleteMedia", "mediaCleanup", "jobs", "cancelJob", "audit", "updatesStatus", "updatesCheck", "updatesStage", "updatesApply", "updatesCancel", "updatesResolve"]) {
     c[m] = async (...args) => {
       calls.push({ method: m, args });
       const a = answers[m];
@@ -139,29 +139,60 @@ const lastState = (entry) => [...entry.panel.posted].reverse().find((m) => m.typ
   console.log("\n=== the panel ===");
   {
     const vm = { name: "work-vm", kind: "primary", state: "running", cpu: 4, allowedActions: ["restart"] };
-    const client = fakeClient({ health: HEALTH, whoami: ME_ADMIN, vms: () => [vm],
-      vmCpu: { currentCpus: 4, desiredCpus: 4, recommendedCpus: 12, maximumCpus: 12, pending: false },
-      setVmCpu: (_name, body) => { vm.pendingCpu = body.cpus; return { currentCpus: 4, desiredCpus: body.cpus, pending: true }; },
-      lifecycle: { jobId: "restart-cpu" } });
-    const t = makeFeature({ client, script: { input: "max", warning: true } });
-    const entry = await openReady(t);
+    const cpu = { currentCpus: 4, desiredCpus: 4, maximumCpus: 12, pending: false };
+    const memory = { currentRamGb: 8, desiredRamGb: 8, maximumRamGb: 16, pending: false };
+    const idle = { timeoutMinutes: 60, action: "save", maxTimeoutMinutes: 120, forceEnabled: false };
+    let failMemory = false;
+    const client = fakeClient({ health: { ...HEALTH, apiFeatures: [...HEALTH.apiFeatures, "primary-cpu", "primary-memory"] }, whoami: ME_ADMIN, vms: () => [vm],
+      vmCpu: cpu, vmMemory: memory, vmIdlePolicy: idle,
+      setVmCpu: (_name, body) => { cpu.desiredCpus = body.cpus; vm.pendingCpu = body.cpus; return cpu; },
+      setVmMemory: (_name, body) => { if (failMemory) throw apiErr(400, { code: "validation" }, "RAM allowance changed"); memory.desiredRamGb = body.ramGb; vm.pendingRamGb = body.ramGb; return memory; },
+      setVmIdlePolicy: (_name, body) => Object.assign(idle, body), lifecycle: { jobId: "restart-settings" } });
+    const t = makeFeature({ client, script: { warning: true } }); const entry = await openReady(t);
     await entry.panel.send({ type: "hostadmin.tab", tab: "vms" });
-    await entry.panel.send({ type: "hostadmin.action", action: "changeVmCpu", args: { name: "work-vm" } });
-    eq("CPU: max resolves to the owner's recommendation", client.calls.find((c) => c.method === "setVmCpu").args[1].cpus, 12);
-    eq("CPU: pending value survives refresh", lastState(entry).vms.rows[0].pendingCpu, 12);
-    ok("CPU: changing the setting does not restart the VM", !client.calls.some((c) => c.method === "lifecycle"));
-    ok("CPU: prompt explains full stop/start", /full stop\/start/.test(t.vscode.rec.inputs.at(-1).prompt));
-    await entry.panel.send({ type: "hostadmin.action", action: "restartVm", args: { name: "work-vm" } });
-    eq("CPU: confirmed restart uses the host lifecycle route", client.calls.find((c) => c.method === "lifecycle").args[1].action, "restart");
-    ok("CPU: restart confirmation mentions interruption", /interrupted/.test(t.vscode.rec.warnings.at(-1).detail));
+    const send = (action, args = {}) => entry.panel.send({ type: "hostadmin.action", action, args: { name: "work-vm", requestId: "request", ...args } });
+    const result = () => entry.panel.posted.filter(m => m.type === "hostadmin.vmSettings").at(-1);
+    await send("loadVmSettings");
+    eq("settings: sends RAM to the webview", result().settings.memory.currentRamGb, 8);
+    eq("settings: correlates dialog replies", result().requestId, "request");
+    eq("settings: uses no input boxes", t.vscode.rec.inputs.length, 0);
+    const values = { cpus: 6, ramGb: 12, timeoutMinutes: 90, action: "shutdown" };
+    await send("setVmSettings", { ...values, ramGb: 16.5 });
+    ok("settings: validates all fields before any mutation", !client.calls.some(c => c.method.startsWith("setVm")));
+    await send("setVmSettings", { ...values, action: "delete" });
+    ok("settings: refuses invalid idle action before mutation", !client.calls.some(c => c.method.startsWith("setVm")));
+    failMemory = true; await send("setVmSettings", values);
+    ok("settings: partial save stays failed", !result().saved && !!result().error);
+    eq("settings: partial failure reloads successful CPU value", result().settings.cpu.desiredCpus, 6);
+    eq("settings: partial failure reloads unchanged RAM", result().settings.memory.desiredRamGb, 8);
+    ok("settings: partial failure does not save idle", !client.calls.some(c => c.method === "setVmIdlePolicy"));
+    failMemory = false; await send("setVmSettings", values);
+    ok("settings: successful Apply acknowledged", result().saved);
+    eq("settings: retry skips already-saved CPU", client.calls.filter(c => c.method === "setVmCpu").length, 1);
+    eq("settings: pending RAM survives refresh", lastState(entry).vms.rows[0].pendingRamGb, 12);
+    ok("settings: Apply never restarts", !client.calls.some(c => c.method === "lifecycle"));
+    await send("restartVm");
+    eq("settings: confirmed restart uses lifecycle", client.calls.find(c => c.method === "lifecycle").args[1].action, "restart");
+    ok("settings: confirmation mentions RAM and interruption", /RAM/.test(t.vscode.rec.warnings.at(-1).detail) && /interrupted/.test(t.vscode.rec.warnings.at(-1).detail));
+    cpu.maximumCpus = 0; memory.maximumRamGb = 0;
+    const beforeIdle = client.calls.filter(c => c.method === "setVmIdlePolicy").length;
+    const beforeHardware = client.calls.filter(c => c.method === "setVmCpu" || c.method === "setVmMemory").length;
+    await send("setVmSettings", { cpus: 6, ramGb: 12, timeoutMinutes: 100, action: "save" });
+    ok("settings: unchanged hardware over lowered caps permits idle edit", result().saved);
+    eq("settings: lowered caps still permit idle route", client.calls.filter(c => c.method === "setVmIdlePolicy").length, beforeIdle + 1);
+    eq("settings: unchanged over-cap hardware is never written", client.calls.filter(c => c.method === "setVmCpu" || c.method === "setVmMemory").length, beforeHardware);
     t.feature.dispose();
-    const dismissed = makeFeature({ client, script: { input: undefined, warning: false } });
-    const other = await openReady(dismissed);
-    const before = client.calls.filter((c) => c.method === "setVmCpu" || c.method === "lifecycle").length;
-    await other.panel.send({ type: "hostadmin.action", action: "changeVmCpu", args: { name: "work-vm" } });
-    await other.panel.send({ type: "hostadmin.action", action: "restartVm", args: { name: "work-vm" } });
-    eq("CPU: dismissing dialogs changes nothing", client.calls.filter((c) => c.method === "setVmCpu" || c.method === "lifecycle").length, before);
-    dismissed.feature.dispose();
+  }
+  {
+    const client = fakeClient({ health: HEALTH, whoami: ME_ADMIN, vmIdlePolicy: { timeoutMinutes: 60, action: "save", maxTimeoutMinutes: 60, forceEnabled: true } });
+    const t = makeFeature({ client }); const entry = await openReady(t);
+    await entry.panel.send({ type: "hostadmin.action", action: "loadVmSettings", args: { name: "old-vm" } });
+    const result = entry.panel.posted.filter(m => m.type === "hostadmin.vmSettings").at(-1);
+    eq("settings: older host has unavailable memory", result.settings.memory, null);
+    ok("settings: older host never calls missing routes", !client.calls.some(c => c.method === "vmMemory" || c.method === "vmCpu"));
+    await entry.panel.send({ type: "hostadmin.action", action: "setVmSettings", args: { name: "old-vm", timeoutMinutes: 0, action: "off" } });
+    ok("settings: forced idle cannot be disabled", !client.calls.some(c => c.method === "setVmIdlePolicy"));
+    t.feature.dispose();
   }
   {
     const child = { name: "child", kind: "child", state: "running", sharing: "private", lease: { requested: "12h", state: "active" }, allowedActions: ["renew", "share"] };
