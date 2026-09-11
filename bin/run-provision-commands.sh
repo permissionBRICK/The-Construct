@@ -183,6 +183,7 @@ conflicts_with_active() {
 }
 failed=0
 completed=0
+commands_printed=0
 wait_for_one() {
   local finished pid rc=0 index
   # Bash wait -n ignores jobs which completed before it was called. Reap those
@@ -206,7 +207,17 @@ wait_for_one() {
   index="${active[${finished}]}"
   completed=$((completed + 1))
   printf '\n[%s completed] %s\n' "${completed}" "${active_targets[${finished}]}"
-  cat "${commands_tmp}/${index}.log"
+  # Workers number their commands by plan position, but groups finish in any order.
+  # Renumber each finished group's lines in completion order so the log counts 1..N.
+  awk -v start="${commands_printed}" -v total="${count}" '
+    match($0, /\[[0-9]+\/[0-9]+\]/) {
+      key = substr($0, RSTART + 1, RLENGTH - 2); sub(/\/.*/, "", key)
+      if (!(key in seen)) seen[key] = ++n + start
+      $0 = substr($0, 1, RSTART - 1) "[" seen[key] "/" total "]" substr($0, RSTART + RLENGTH)
+    }
+    { print }
+    END { print n > "/dev/stderr" }' "${commands_tmp}/${index}.log" 2>"${commands_tmp}/${index}.n"
+  commands_printed=$((commands_printed + $(cat "${commands_tmp}/${index}.n")))
   if (( rc != 0 )); then
     failed=$((failed + 1))
     echo "ERROR: project command worker exited ${rc}"
