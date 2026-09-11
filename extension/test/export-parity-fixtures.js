@@ -141,8 +141,10 @@ function usageParsing() {
  for(const input of [0,-1,1,999,1000,1500,999999,1000000,1e9,1234.567,1.005,2.675])rows.push({kind:"format",input,tokens:m.formatTokens(input),cost:m.formatCost(input)});
  return rows;
 }
-function updatesPlanning() {
+async function updatesPlanning() {
  const m=updates;const rows=[];
+ for(const count of [null,0,1,2,12,-1,1.5])rows.push({kind:"behind",count,output:m.behindText(count)});
+ for(const raw of [{},{installedCommit:"abcdef1234567890",constructRef:"main"},{installedCommit:"abc",constructRef:"dev",constructRepo:"owner/repo"}])for(const state of [{online:true},{online:true,provisionedCommit:"abcdef1234567890"},{online:false,provisionedCommit:"1234567"}])rows.push({kind:"fold",raw,state,output:await m.augment(state,raw,{fetchJson:async()=>null,noCache:true})});
  for(const raw of [{},{installedCommit:false,constructRepo:0,constructRef:false,provisionedCommit:0},{installedCommit:"abcdef1234",provisionedCommit:"old",constructRef:"dev",constructRepo:"owner/repo"}])for(const state of [null,{provisionedCommit:"abcdef1234"},{provisionedCommit:"1234567"}])for(const guest of [null,"ABCDEF1234","bad"]){const markers=m.readMarkers(raw,state);rows.push({kind:"markers",raw,state,guest,markers,stale:m.isProvisionStale(markers,guest),effective:m.effectiveProvisionedCommit(markers,guest),args:m.constructRefreshArgs(markers)});}
  const commit="a".repeat(40), manifest={schemaVersion:1,repository:"owner/repo",ref:"refs/heads/main",commit,releaseTag:`host-${commit}`,sourceAsset:`construct-source-${commit}.zip`,sourceSha256:"b".repeat(64),sourceSizeBytes:1024,payloadAsset:`construct-host-${commit.slice(0,7)}-win-x64.zip`,payloadSha256:"c".repeat(64),payloadSizeBytes:2048};
  const invalid=[null,{}, {notFound:true}, ...Object.keys(manifest).map(key=>({...manifest,[key]:null})), ...["sourceSizeBytes","payloadSizeBytes"].flatMap(key=>[0,-1,1.5,1073741825,"1024"].map(value=>({...manifest,[key]:value}))), {...manifest,commit:commit.toUpperCase()}, {...manifest,repository:"other/repo"}, ...["sourceSha256","payloadSha256","commit"].map(key=>({...manifest,[key]:manifest[key]+"\n"}))];
@@ -480,7 +482,7 @@ async function exportAll() {
     "vm-power": vmPower(),
     "probe-parsing": probeParsing(),
     "usage-parsing": usageParsing(),
-    "updates-planning": updatesPlanning(),
+    "updates-planning": await updatesPlanning(),
     "remote-identity": remoteIdentity(),
     "t3-pure": t3Pure(),
     "remote-routes": remoteRoutes(),

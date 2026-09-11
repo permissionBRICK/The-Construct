@@ -26,6 +26,8 @@ internal sealed class WebViewWindow : Form
     private CancellationTokenSource subscription = new();
     private string scope;
     private string document = ""; // the rendered document, written into the mapped folder on every (re)load
+    private string? paletteScriptId;
+    private bool darkPalette;
     private bool initialized;
     private bool ready;
     private bool exiting;
@@ -103,19 +105,8 @@ internal sealed class WebViewWindow : Form
             platform.Files.CreateDirectory(documentDirectory);
             web.CoreWebView2.SetVirtualHostNameToFolderMapping(WebViewDocument.AppHost, documentDirectory, CoreWebView2HostResourceAccessKind.DenyCors);
             await web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(WebViewDocument.BridgeScript);
-            await web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(WebViewDocument.PaletteScript(new Dictionary<string, string>
-            {
-                ["--vscode-editor-background"] = ColorTranslator.ToHtml(SystemColors.Window),
-                ["--vscode-editor-foreground"] = ColorTranslator.ToHtml(SystemColors.WindowText),
-                ["--vscode-foreground"] = ColorTranslator.ToHtml(SystemColors.WindowText),
-                ["--vscode-descriptionForeground"] = ColorTranslator.ToHtml(SystemColors.GrayText),
-                ["--vscode-button-background"] = ColorTranslator.ToHtml(SystemColors.Highlight),
-                ["--vscode-button-foreground"] = ColorTranslator.ToHtml(SystemColors.HighlightText),
-                ["--vscode-input-background"] = ColorTranslator.ToHtml(SystemColors.Window),
-                ["--vscode-input-foreground"] = ColorTranslator.ToHtml(SystemColors.WindowText),
-                ["--vscode-editorWidget-background"] = ColorTranslator.ToHtml(SystemColors.Control),
-                ["--vscode-widget-border"] = ColorTranslator.ToHtml(SystemColors.ControlDark)
-            }));
+            await ApplyPaletteAsync();
+            Microsoft.Win32.SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
             // The window shows exactly one document; every other navigation is an external link for the browser.
             web.CoreWebView2.NavigationStarting += async (_, e) => { if (e.Uri == DocumentUrl) return; e.Cancel = true; await OpenExternalAsync(e.Uri); };
             web.CoreWebView2.NewWindowRequested += async (_, e) => { e.Handled = true; await OpenExternalAsync(e.Uri); };
@@ -161,6 +152,21 @@ internal sealed class WebViewWindow : Form
         catch (Exception e) { platform.Log.Write(DesktopLogEvent.ActivationFailed, e); } // a broken browser association must not close the window
     }
     private string DocumentUrl => WebViewDocument.DocumentUrl(view);
+    // The palette follows the Windows app theme; the media's own CSS fallbacks are VS Code's dark values
+    // and must never be mixed with a light system palette, so every variable is injected.
+    private async Task ApplyPaletteAsync()
+    {
+        darkPalette = platform.IsDarkAppTheme;
+        web.CoreWebView2.Profile.PreferredColorScheme = darkPalette ? CoreWebView2PreferredColorScheme.Dark : CoreWebView2PreferredColorScheme.Light;
+        if (paletteScriptId is not null) web.CoreWebView2.RemoveScriptToExecuteOnDocumentCreated(paletteScriptId);
+        paletteScriptId = await web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(WebViewDocument.PaletteScript(DesktopPalette.Variables(darkPalette)));
+    }
+    private async void OnUserPreferenceChanged(object sender, Microsoft.Win32.UserPreferenceChangedEventArgs e)
+    {
+        if (e.Category != Microsoft.Win32.UserPreferenceCategory.General || IsDisposed || web.CoreWebView2 is null || darkPalette == platform.IsDarkAppTheme) return;
+        try { await ApplyPaletteAsync(); ReloadTheme(); }
+        catch (Exception ex) { platform.Log.Write(DesktopLogEvent.WindowFailed, ex); }
+    }
     public void ReloadTheme()
     {
         if (web.CoreWebView2 is null || web.IsDisposed) return;
@@ -199,6 +205,7 @@ internal sealed class WebViewWindow : Form
     public void Shutdown() { exiting = true; SaveBounds(); subscription.Cancel(); Close(); }
     protected override void Dispose(bool disposing)
     {
+        if (disposing) Microsoft.Win32.SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
         if (disposing) { subscription.Cancel(); subscription.Dispose(); web.Dispose(); }
         base.Dispose(disposing);
     }

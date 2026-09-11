@@ -56,6 +56,8 @@ public sealed class PlanningParityTests
             case "updates-planning":
                 if (S("kind") == "markers") { var markers = UpdatePlanner.ReadMarkers(O("raw"), O("state")); Equal("markers", markers); Value("stale", UpdatePlanner.IsProvisionStale(markers, StateJson.Text(row["guest"]))); Value("effective", UpdatePlanner.EffectiveProvisionedCommit(markers, StateJson.Text(row["guest"]))); Value("args", UpdatePlanner.ConstructRefreshArgs(markers)); }
                 else if (S("kind") == "manifest") Equal("output", UpdatePlanner.ConstructUpdateFromManifest(O("input"), O("markers")!));
+                else if (S("kind") == "behind") Value("output", UpdatePlanner.BehindText(StateJson.Number(row["count"])));
+                else if (S("kind") == "fold") { var markers = UpdatePlanner.ReadMarkers(O("raw"), O("raw")); var folded = UpdatePlanner.Fold(O("state")!, markers, null); if (UpdatePlanner.IsProvisionStale(markers, StateJson.Text(folded["provisionedCommit"]))) folded["provisionStale"] = true; Equal("output", folded); }
                 else { Value("newer", UpdatePlanner.IsNewer(S("latest"), S("installed"))); Value("nightly", UpdatePlanner.IsNewerNightly(S("latest"), S("installed"))); } break;
             case "remote-identity":
                 if (S("kind") == "endpoint") Equal("output", RemoteHost.ReadEndpoint(row["input"]));
