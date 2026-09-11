@@ -15,6 +15,13 @@ desk, a lab server, a build machine — instead of your own PC. An admin install
 manages **their own** VMs on it from the same `Auto-Install.ps1` and the same VS Code
 control panel.
 
+Remote installs also install [Construct Companion](companion.md) on the **user's PC**.
+The VM runs on the remote host; client forwards, notifications and microphone
+capture run on the user's desktop. Auto-Install performs this per-user step before
+choosing local or remote mode. Updates and plain reprovision refresh it too. A PC
+that only added a VM through VS Code gets a session install offer, with the same
+`construct.installCompanion` command available manually. No local Hyper-V is required.
+
 The point is **PC-independence**: once the VM runs on the remote host, nothing it needs
 lives on your laptop. Close the lid, reboot, go home — the VM, its SSH forward and its
 idle policy keep running, because the host service owns them

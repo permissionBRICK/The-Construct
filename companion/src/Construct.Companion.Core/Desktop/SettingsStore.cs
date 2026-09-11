@@ -8,6 +8,7 @@ namespace Construct.Companion.Core.Desktop;
 public sealed class SettingsStore(IFileSystem files, string path)
 {
     private readonly object gate = new();
+    public event Action<CompanionSettings>? Changed;
     public CompanionSettings Read()
     {
         lock (gate)
@@ -34,13 +35,14 @@ public sealed class SettingsStore(IFileSystem files, string path)
             try { settings = Validate(current.Deserialize<CompanionSettings>(IpcJson.Options) ?? throw new JsonException()); }
             catch (JsonException) { throw new ArgumentException("Invalid Companion setting type."); }
             files.WriteFileAtomic(path, JsonSerializer.SerializeToUtf8Bytes(settings, IpcJson.Options));
+            Changed?.Invoke(settings);
             return settings;
         }
     }
     private static CompanionSettings Validate(CompanionSettings value)
     {
         if (value.V != 1 || value.UiTheme is not ("" or "classic" or "terminal" or "native") || value.RepatchDelaySeconds < 0 ||
-            value.MicDevice is null || value.ScriptsDir is null || value.Forwards.HostLabel is null ||
+            value.MicDevice is null || value.ScriptsDir is null || value.Forwards is null || value.Forwards.HostLabel is null ||
             value.Windows is { ValueKind: not (JsonValueKind.Object or JsonValueKind.Null) })
             throw new InvalidDataException("Companion settings contain unsupported values.");
         return value;
