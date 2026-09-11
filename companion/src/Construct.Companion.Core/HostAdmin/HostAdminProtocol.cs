@@ -12,7 +12,7 @@ public static partial class HostAdminProtocol
     public static JsonObject Features(JsonNode? health)
     {
         var flags = (health?["apiFeatures"] as JsonArray ?? []).Select(Text).ToHashSet();
-        return new() { ["hostAdmin"] = flags.Contains("host-admin"), ["children"] = flags.Contains("children"), ["media"] = flags.Contains("media"), ["console"] = flags.Contains("console"), ["updates"] = flags.Contains("updates"), ["network"] = flags.Contains("network"), ["primaryCpu"] = flags.Contains("primary-cpu") };
+        return new() { ["hostAdmin"] = flags.Contains("host-admin"), ["children"] = flags.Contains("children"), ["media"] = flags.Contains("media"), ["console"] = flags.Contains("console"), ["updates"] = flags.Contains("updates"), ["network"] = flags.Contains("network"), ["primaryCpu"] = flags.Contains("primary-cpu"), ["primaryMemory"] = flags.Contains("primary-memory") };
     }
     public static JsonArray TabsFor(JsonObject features) => new(Tabs.Select((id, i) => (JsonNode)new JsonObject
     { ["id"] = id, ["label"] = new[] { "Overview", "VMs", "Users", "Media", "Operations", "Configuration", "Maintenance" }[i], ["available"] = StateJson.Boolean(features[id == "maintenance" ? "updates" : "hostAdmin"]) == true, ["reason"] = StateJson.Boolean(features[id == "maintenance" ? "updates" : "hostAdmin"]) == true ? "" : "not available on this host version" }).ToArray());

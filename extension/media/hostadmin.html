@@ -223,6 +223,27 @@
 
   <footer>THE CONSTRUCT &middot; host administration &nbsp;&middot;&nbsp; <a href="https://github.com/permissionBRICK/The-Construct/blob/main/docs/remote-host.md">remote host guide</a></footer>
 </div>
-<script nonce="{{nonce}}" src="{{scriptUri}}"></script>
+  <dialog id="haVmSettings" aria-labelledby="haVmSettingsTitle">
+    <form id="haVmSettingsForm">
+      <h2 id="haVmSettingsTitle">VM settings</h2>
+      <p id="haVmSettingsCurrent"></p>
+      <p>CPU and RAM apply on the next full stop/start. Resuming saved state or rebooting Ubuntu keeps them pending. Idle policy applies immediately.</p>
+      <fieldset id="haVmSettingsFields" disabled>
+        <label>CPU count <input id="haVmCpus" type="number" min="1" max="64" step="1" required></label>
+        <label>RAM (GB) <input id="haVmRam" type="number" min="1" max="1024" step="1" required></label>
+        <label>Idle timeout (minutes; 0 disables) <input id="haVmTimeout" type="number" min="0" max="2147483647" step="1" required></label>
+        <label>Idle action <select id="haVmIdleAction"><option value="save">Save</option><option value="shutdown">Shut down</option><option value="off">Off — disable idle handling</option></select></label>
+      </fieldset>
+      <p id="haVmSettingsLimits"></p>
+      <p id="haVmSettingsError" class="problem" role="alert"></p>
+      <div class="ha-form-actions">
+        <button type="button" id="haVmSettingsCancel" class="btn ghost">Cancel</button>
+        <button type="button" id="haVmSettingsReload" class="btn ghost">Reload</button>
+        <button type="submit" id="haVmSettingsApply" class="btn" disabled>Apply</button>
+      </div>
+    </form>
+  </dialog>
+<script nonce="{{nonce}}" src="{{paletteUri}}"></script>
+  <script nonce="{{nonce}}" src="{{scriptUri}}"></script>
 </body>
 </html>

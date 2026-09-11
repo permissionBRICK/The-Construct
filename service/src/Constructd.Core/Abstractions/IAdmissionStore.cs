@@ -63,6 +63,10 @@ public interface IAdmissionScope
     Task<bool> SetAllowanceAsync(string userName, UserAllowance allowance);
     /// <summary>Updates child hardware/resource columns and bumps its generation atomically.</summary>
     Task<bool> UpdateHardwareAsync(string vmName, ChildHardware hardware, long expectedGeneration);
+    /// <summary>Updates only a primary's RAM after an Off-only driver change.</summary>
+    Task<bool> UpdatePrimaryRamAsync(string vmName, int ramGb, long expectedGeneration);
+    /// <summary>Updates only idle policy for a non-deleting VM at the expected power generation.</summary>
+    Task<bool> UpdateIdlePolicyAsync(string vmName, IdlePolicy policy, long expectedGeneration);
     /// <summary>Updates only a primary's CPU count after an Off-only driver change.</summary>
     Task<bool> UpdatePrimaryCpuAsync(string vmName, int cpus, long expectedGeneration);
     /// <summary>Compare-and-bump of the VM's power generation (§5.3b); false when it moved.</summary>

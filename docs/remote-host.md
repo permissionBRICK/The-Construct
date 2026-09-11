@@ -609,6 +609,17 @@ shows a catalog-specific problem while child media remains usable. Source URLs o
 credentials, query strings and fragments. `constructd admin iso status` remains available
 locally on the host.
 
+**VM settings.** Each primary VM row offers **VM settings…**: CPU count, fixed RAM
+(whole GB), idle timeout and idle action in one dialog, with current/pending hardware,
+owner/host maxima and the idle cap. Apply saves changes; CPU/RAM require the row's
+confirmed **Restart**, or a full stop followed by **Start**. Resuming saved state or
+rebooting Ubuntu does not apply them. The guest sees its new RAM/CPU after the cold boot.
+Idle changes take effect immediately; **Off** disables idle handling, and is unavailable
+when the host forces it. Admins obey the owner's resource allowance and the host idle cap.
+Capacity is checked again at start. If one save fails, already-saved fields remain saved;
+the dialog reloads actual values and stays open for review/retry. Older hosts keep idle
+editing and disable hardware fields they do not support. The Companion shares this dialog.
+
 **What it deliberately lacks.** No guest update, provision, reinstall or redownload —
 those stay in each instance's own panel and console. No child start/resume, console or
 sharing for ordinary users in the panel; `construct vm …` inside the primary has them.

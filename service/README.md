@@ -132,6 +132,42 @@ Everything lives under `/api/v1`, speaks JSON with camelCase properties and came
 | `GET /jobs/{id}` | job submitter/admin | Job state, progress lines, result, error. The first retrieval of a succeeded creation job also gets `result.vmToken`. |
 | `GET /jobs/{id}/events` | job submitter/admin | `text/event-stream`. |
 
+### Primary VM settings
+
+Owner/admin user credentials can read and save desired hardware with
+`GET`/`PUT /vms/{name}/cpu` (`{cpus}`) and
+`GET`/`PUT /vms/{name}/memory` (`{ramGb}`, whole GiB, 1–1024).
+Memory replies contain `currentRamGb`, `desiredRamGb`, `pending`, `maximumRamGb`,
+`recommendedRamGb` and `appliesOn: "next-stop-start"`. CPU uses corresponding
+`currentCpus`/`desiredCpus`/`maximumCpus` fields. Inventory includes nullable
+`pendingCpu` and `pendingRamGb`. `/vm-defaults` supplies recommended/maximum CPU
+and RAM for a new VM (`recommendedRamGb = min(8, maximumRamGb)`). Feature discovery advertises `primary-cpu` and `primary-memory`.
+
+Saving reserves no RAM and does not alter the running guest. Both settings are durable,
+bound to the VM creation identity, and applied CPU then RAM at confirmed Off before
+start admission. Start from Saved/Paused and an Ubuntu reboot do not apply them.
+A full Construct Restart applies both; the guest sees the new CPU count and fixed
+RAM after boot. RAM uses `Set-ConstructVmMemory -MemoryGB` through the shared
+PowerShell driver (Off-only, dynamic memory disabled, read-back verified).
+
+Admins obey the VM owner's allowance. RAM maxima credit that VM's existing reservation
+and assigned RAM using both model and physical-free bounds from one inventory epoch.
+They are advisory; allowance is rechecked on application and capacity is checked again
+by start admission. A restart atomically replaces changed CPU/RAM and saved-state
+storage reservations, for increases and decreases. Unchanged holds are retained.
+Hardware can already be configured while the VM remains Off if admission fails;
+current values report each successful driver operation. Retry never starts after a
+failed driver call. A reduced RAM allowance yields `memoryAllowanceExceeded` at apply
+(synchronous start: 409; restart: job failure); PUT uses `validation`/`ramGb`.
+Existing error codes and observe/enforce capacity behavior remain unchanged.
+
+`GET`/`PUT /vms/{name}/idle-policy` applies immediately and keeps the same host timeout
+cap and ForceEnabled constraint for owners and admins. There is no separate per-user
+idle cap. Replies additionally expose `forceEnabled`; `off` disables idle handling,
+not VM power. Idle writes change only idle fields and cannot overwrite hardware updates.
+Writes retain `vm.cpu`, `vm.memory` and `vm.idle-policy` audit entries.
+See [the settings contract](../docs/plans/host-vm-settings.md) for dialog/partial-save semantics.
+
 ### Host administration foundation
 
 | Route | Who | What it does |

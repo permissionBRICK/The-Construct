@@ -27,7 +27,7 @@
 //                  tab, perform an action — every step re-classifying on refusal
 
 /** The `apiFeatures` names a current service advertises (§3.4). */
-const FEATURE_NAMES = ["host-admin", "children", "media", "console", "updates", "network", "primary-cpu"];
+const FEATURE_NAMES = ["host-admin", "children", "media", "console", "updates", "network", "primary-cpu", "primary-memory"];
 
 /** The exhaustive `ChildAction` enum of §2.2, for rendering `allowedActions`. */
 const CHILD_ACTIONS = [
@@ -116,6 +116,7 @@ function featureSet(health) {
     updates: list.indexOf("updates") >= 0,
     network: list.indexOf("network") >= 0,
     primaryCpu: list.indexOf("primary-cpu") >= 0,
+    primaryMemory: list.indexOf("primary-memory") >= 0,
   };
 }
 
@@ -361,6 +362,7 @@ function toVmRow(vm, now) {
     deleting: v.deleting === true,
     childCreationClosed: v.childCreationClosed === true,
     pendingCpu: num(v.pendingCpu),
+    pendingRamGb: num(v.pendingRamGb),
     resources: resourcesText(v.hardware || { cpus: v.cpu, ramMb: num(v.ramGb) === null ? null : v.ramGb * 1024, diskGb: v.diskGb }),
     usage: resourceUsageView(v.resourceUsage, now),
     lease: leaseText(v.lease, now),
@@ -1239,6 +1241,32 @@ function createHostAdminModel(deps = {}) {
     notice(null, "");
     try {
       switch (a) {
+        case "loadVmSettings": {
+          const name = str(args.name);
+          const cpu = state.features.primaryCpu ? await client.vmCpu(name) : null;
+          const memory = state.features.primaryMemory ? await client.vmMemory(name) : null;
+          const idle = await client.vmIdlePolicy(name);
+          return { ok: true, settings: { cpu, memory, idle } };
+        }
+        case "setVmSettings": {
+          const name = str(args.name);
+          // Read policy again before any write; the webview is not an authority.
+          const cpu = state.features.primaryCpu ? await client.vmCpu(name) : null;
+          const memory = state.features.primaryMemory ? await client.vmMemory(name) : null;
+          const idle = await client.vmIdlePolicy(name);
+          const whole = (value, min, max) => typeof value === "number" && Number.isInteger(value) && value >= min && value <= max;
+          if (cpu && args.cpus !== cpu.desiredCpus && !whole(args.cpus, 1, cpu.maximumCpus)) throw new Error(`CPU count must be between 1 and ${cpu.maximumCpus}.`);
+          if (memory && args.ramGb !== memory.desiredRamGb && !whole(args.ramGb, 1, memory.maximumRamGb)) throw new Error(`RAM (GB) must be between 1 and ${memory.maximumRamGb}.`);
+          if (!whole(args.timeoutMinutes, idle.forceEnabled ? 1 : 0, idle.maxTimeoutMinutes > 0 ? idle.maxTimeoutMinutes : 2147483647) ||
+              !["save", "shutdown", "off"].includes(args.action) || (idle.forceEnabled && args.action === "off"))
+            throw new Error("Choose an idle timeout and action within the host cap.");
+          if (cpu && args.cpus !== cpu.desiredCpus) await client.setVmCpu(name, { cpus: args.cpus });
+          if (memory && args.ramGb !== memory.desiredRamGb) await client.setVmMemory(name, { ramGb: args.ramGb });
+          if (args.timeoutMinutes !== idle.timeoutMinutes || args.action !== idle.action)
+            await client.setVmIdlePolicy(name, { timeoutMinutes: args.timeoutMinutes, action: args.action });
+          notice("info", `${name}: settings saved. CPU and RAM apply on the next full stop/start; idle policy applies immediately.`);
+          return { ok: true };
+        }
         case "loadVmCpu": {
           return { ok: true, cpu: await client.vmCpu(str(args.name)) };
         }

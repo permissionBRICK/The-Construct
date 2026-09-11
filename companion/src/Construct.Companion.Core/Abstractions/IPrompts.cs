@@ -7,9 +7,12 @@ public interface IPrompts
     Task<string?> InputAsync(InputPrompt prompt, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<string>?> PickAsync(PickPrompt prompt, CancellationToken cancellationToken = default);
     Task<bool> ConfirmAsync(string title, string message, CancellationToken cancellationToken = default);
+    Task<bool> ConfirmAsync(ConfirmationPrompt prompt, CancellationToken cancellationToken = default) => ConfirmAsync(prompt.Title, prompt.Message, cancellationToken);
+    Task ShowSecretOnceAsync(string title, Secret value, string note, CancellationToken cancellationToken = default);
     Task<string?> SaveFileAsync(SaveFilePrompt prompt, CancellationToken cancellationToken = default);
 }
-public sealed record InputPrompt(string Title, string Prompt, string? Value = null, bool Password = false)
+public sealed record ConfirmationPrompt(string Title, string Message, string Action);
+public sealed record InputPrompt(string Title, string Prompt, string? Value = null, bool Password = false, string? Placeholder = null)
 {
     public override string ToString() => "InputPrompt";
 }
