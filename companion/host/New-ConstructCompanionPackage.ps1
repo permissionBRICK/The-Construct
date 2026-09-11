@@ -18,7 +18,7 @@ if ($OutputDir.StartsWith($publishRoot+[IO.Path]::DirectorySeparatorChar,[String
 if (-not (Test-Path -LiteralPath (Join-Path $publishRoot 'ConstructCompanion.exe')) -or -not (Test-Path -LiteralPath (Join-Path $publishRoot 'media/panel.html'))) { throw 'Publish output must contain ConstructCompanion.exe and media/panel.html.' }
 [IO.Directory]::CreateDirectory($OutputDir) | Out-Null
 $payload=Join-Path $OutputDir 'payload'
-[IO.Directory]::CreateDirectory((Join-Path $payload 'app')) | Out-Null
+[IO.Directory]::CreateDirectory($payload) | Out-Null
 try {
     foreach ($item in Get-ChildItem -LiteralPath $publishRoot -Recurse -Force) {
         if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Package cannot contain links.' }

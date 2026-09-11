@@ -1,7 +1,9 @@
 "use strict";
 
-// Section 7 client. No VS Code dependency; all I/O can be replaced by tests.
+// The extension's client of the Companion IPC contract (docs/plans/construct-companion.md §7).
+// No VS Code dependency; all I/O can be replaced by tests.
 const path = require("path");
+const host = require("./host");
 const remotehost = require("./remotehost");
 const IPC_API_VERSION = 1;
 const GRACE_MS = 10000;
@@ -10,14 +12,14 @@ const TOKEN_MARKER = "construct.companion.tokenMigrated.v1:";
 
 function shouldOfferInstall({ platform, deferred, offered, installed, setting, preference, registered }) {
   return platform === "win32" && !deferred && !offered && !installed &&
-    setting !== "off" && setting !== false && preference !== false && registered > 0;
+    setting !== "off" && preference !== false && registered > 0;
 }
 function installManifestPath(env) {
-  const base = env.LOCALAPPDATA || env.TEMP;
+  const base = host.localAppData(env);
   return base ? path.join(base, "Programs", "ConstructCompanion", "install.json") : null;
 }
 function endpointPath(env) {
-  const base = env.LOCALAPPDATA || env.TEMP;
+  const base = host.localAppData(env);
   return base ? path.join(base, "The-Construct", "companion", "endpoint.json") : null;
 }
 function parseEndpoint(text) {
@@ -105,9 +107,9 @@ const SETTING_DEFAULTS = Object.freeze({
   micDevice: "", notifications: true, "forwards.enabled": true,
   "forwards.hostLabel": "", repatchDelaySeconds: 20,
 });
-function planSettingsMigration(values, defaults = SETTING_DEFAULTS) {
+function planSettingsMigration(values) {
   const patch = {};
-  for (const [key, fallback] of Object.entries(defaults)) {
+  for (const [key, fallback] of Object.entries(SETTING_DEFAULTS)) {
     const value = values[key];
     if (value === undefined || value === fallback || typeof value !== typeof fallback) continue;
     if (typeof value === "number" && (!Number.isFinite(value) || value < 0 || value > 600)) continue;
@@ -116,9 +118,8 @@ function planSettingsMigration(values, defaults = SETTING_DEFAULTS) {
   }
   return patch;
 }
-const psQuote = (s) => "'" + String(s).replace(/'/g, "''") + "'";
-function planTokenMigration({ url, libPath, tokenExists, env }) {
-  if (tokenExists) return null;
+const psQuote = remotehost.psSingleQuote;
+function planTokenMigration({ url, libPath, env }) {
   const dir = remotehost.remoteStoreDir(env);
   if (!libPath || !dir) throw new Error("Companion token migration requires the installed remote library");
   // Canonicalize away URL userinfo/query before any value reaches argv.
@@ -147,15 +148,13 @@ async function migrate({ globalState, settings, putSettings, hosts, secrets, fs,
     if (globalState.get(marker)) continue;
     const dir = remotehost.remoteStoreDir(env);
     if (!dir) continue;
-    const tokenExists = fs.existsSync(path.join(dir, slug + ".token"));
-    if (!tokenExists) {
+    if (!fs.existsSync(path.join(dir, slug + ".token"))) {
       const token = await secrets.get(remotehost.tokenSecretKey(h.url));
       if (!token) continue;
-      const plan = planTokenMigration({ url: h.url, libPath, tokenExists, env });
-      try {
-        const result = await run(plan.file, plan.args, token);
-        if (result.code !== 0 || !fs.existsSync(plan.tokenPath)) throw new Error();
-      } catch (_) { throw new Error("Companion token migration failed"); }
+      const plan = planTokenMigration({ url: h.url, libPath, env });
+      // A rejection may carry the token; report a fixed message only.
+      const result = await run(plan.file, plan.args, token).catch(() => null);
+      if (!result || result.code !== 0 || !fs.existsSync(plan.tokenPath)) throw new Error("Companion token migration failed");
     }
     await globalState.update(marker, true);
   }
@@ -167,7 +166,7 @@ function createClient(options = {}) {
   const timers = options.timers || { setTimeout, clearTimeout, setInterval, clearInterval };
   const now = options.now || Date.now;
   const pidAlive = options.pidAlive || ((pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; } });
-  const file = options.endpointPath || endpointPath(options.env || process.env);
+  const file = options.endpointPath || endpointPath(process.env);
   const onState = options.onState || (() => {});
   let state = { status: "absent", lostAt: null }, endpoint = null, stopped = false, enabled = true;
   let checkPromise, interval, watcher, graceTimer, reconnectTimer, stream, streamResponse;
@@ -219,7 +218,7 @@ function createClient(options = {}) {
         });
         requests.add(req);
         req.on("error", () => finish(true));
-        deadline = timers.setTimeout(() => { finish(true); req.destroy(); }, options.timeoutMs || 3000);
+        deadline = timers.setTimeout(() => { finish(true); req.destroy(); }, 3000);
         req.end(payload);
       } catch (_) { finish(true); }
     });
@@ -311,9 +310,10 @@ function createClient(options = {}) {
     if (mode !== "off") { enabled = true; if (checkPromise) await checkPromise; await start(); return; }
     enabled = false; generation++;
     closeStream();
-    if (watcher) watcher.close(); watcher = null;
-    if (interval) timers.clearInterval(interval); interval = null;
-    if (graceTimer) timers.clearTimeout(graceTimer); graceTimer = null;
+    if (watcher) watcher.close();
+    if (interval) timers.clearInterval(interval);
+    if (graceTimer) timers.clearTimeout(graceTimer);
+    watcher = null; interval = null; graceTimer = null;
     const previous = state.status;
     state = { status: "absent", lostAt: null }; endpoint = null;
     if (previous !== "absent") { transition = transition.then(() => onState("absent", previous)); await transition; }
@@ -338,6 +338,6 @@ function createClient(options = {}) {
   };
 }
 
-module.exports = { IPC_API_VERSION, GRACE_MS, SETTINGS_MARKER, TOKEN_MARKER, SETTING_DEFAULTS,
+module.exports = { TOKEN_MARKER, SETTING_DEFAULTS,
   shouldOfferInstall, installManifestPath, endpointPath, parseEndpoint, validHealth, presence, createSseParser, overlayMessage, snapshotMessages,
   planSettingsMigration, planTokenMigration, migrate, createClient };
