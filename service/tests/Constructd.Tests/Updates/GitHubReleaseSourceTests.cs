@@ -80,13 +80,8 @@ public sealed class GitHubReleaseSourceTests
     [Fact]
     public async Task Asset_http_failure_is_distinguished_from_metadata_failure()
     {
-        var tag = "host-" + new string('a', 40);
-        var url = $"https://github.com/owner/repo/releases/download/{tag}/manifest.json";
-        using var client = new HttpClient(new Handler(request => request.RequestUri!.Host == "api.github.com"
-            ? new(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(new[] { new
-                { tag_name = tag, draft = false, prerelease = false, published_at = DateTimeOffset.UtcNow,
-                    assets = new[] { new { name = "manifest.json", browser_download_url = url, size = 123 } } }
-                }), Encoding.UTF8, "application/json") }
+        using var client = new HttpClient(new Handler(request => request.RequestUri!.AbsolutePath.Contains("/latest/")
+            ? new(HttpStatusCode.OK) { Content = JsonContent.Create(Manifest()) }
             : new(HttpStatusCode.Forbidden)));
         var source = new GitHubReleaseSource(client);
         var releases = await source.ListHostReleasesAsync("owner/repo", default);
@@ -102,6 +97,105 @@ public sealed class GitHubReleaseSourceTests
         cancelled.Cancel();
         using var client = new HttpClient(new Handler(_ => throw new OperationCanceledException(cancelled.Token)));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new GitHubReleaseSource(client).ListHostReleasesAsync("owner/repo", cancelled.Token));
+    }
+
+    private static object Manifest(string commit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") => new
+    {
+        schemaVersion = 1, repository = "owner/repo", @ref = "refs/heads/main", commit,
+        releaseTag = "host-" + commit, builtAt = DateTimeOffset.UtcNow,
+        payloadAsset = $"construct-host-{commit[..7]}-win-x64.zip", payloadSha256 = new string('a', 64), payloadSizeBytes = 123,
+        sourceAsset = $"construct-source-{commit}.zip", sourceSha256 = new string('b', 64), sourceSizeBytes = 234
+    };
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+    public async Task Discovery_uses_direct_manifest_and_pins_every_asset(string? pin)
+    {
+        var urls = new List<string>();
+        using var client = new HttpClient(new Handler(request =>
+        {
+            urls.Add(request.RequestUri!.ToString());
+            return new(HttpStatusCode.OK) { Content = JsonContent.Create(Manifest()) };
+        }));
+        var source = new GitHubReleaseSource(client);
+        var releases = await source.ListHostReleasesAsync("owner/repo", default, pin);
+        Assert.Single(releases);
+        Assert.Equal($"https://github.com/owner/repo/releases/{(pin is null ? "latest/download" : "download/" + pin)}/manifest.json", Assert.Single(urls));
+        Assert.All(releases[0].Assets, asset => Assert.StartsWith("https://github.com/owner/repo/releases/download/host-" + new string('a', 40) + "/", asset.Url.ToString()));
+        Assert.Contains(releases[0].Assets, a => a.SizeBytes == 123);
+    }
+
+    [Fact]
+    public async Task Legacy_recovery_pin_uses_asset_head_without_rest()
+    {
+        var row = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(Manifest()))!.AsObject();
+        row.Remove("payloadSizeBytes"); row.Remove("sourceAsset"); row.Remove("sourceSha256"); row.Remove("sourceSizeBytes");
+        var requests = new List<HttpMethod>();
+        using var client = new HttpClient(new Handler(request =>
+        {
+            Assert.Equal("github.com", request.RequestUri!.Host);
+            Assert.Contains("/download/host-", request.RequestUri.AbsolutePath);
+            requests.Add(request.Method);
+            var response = new HttpResponseMessage(HttpStatusCode.OK);
+            if (request.Method == HttpMethod.Head)
+            {
+                response.Content = new ByteArrayContent([]);
+                response.Content.Headers.ContentLength = 123;
+            }
+            else response.Content = new StringContent(row.ToJsonString());
+            return response;
+        }));
+        var release = Assert.Single(await new GitHubReleaseSource(client).ListHostReleasesAsync("owner/repo", default, "host-" + new string('a', 40)));
+        Assert.Equal(new[] { HttpMethod.Get, HttpMethod.Head }, requests);
+        Assert.Contains(release.Assets, a => a.SizeBytes == 123);
+    }
+
+    [Fact]
+    public async Task Explicit_pin_rejects_a_different_manifest_commit()
+    {
+        using var client = new HttpClient(new Handler(_ => new(HttpStatusCode.OK) { Content = JsonContent.Create(Manifest()) }));
+        var error = await Assert.ThrowsAsync<UpdateException>(() => new GitHubReleaseSource(client).ListHostReleasesAsync("owner/repo", default, "host-" + new string('b', 40)));
+        Assert.Equal("release-source-invalid-metadata", error.Code);
+    }
+
+    [Theory]
+    [InlineData("repository", "evil/repo")]
+    [InlineData("commit", "bad")]
+    [InlineData("releaseTag", "moving")]
+    [InlineData("payloadAsset", "../secret")]
+    [InlineData("sourceSha256", "bad")]
+    [InlineData("ref", "refs/heads/dev")]
+    public async Task Inconsistent_manifest_is_rejected(string field, string value)
+    {
+        var row = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(Manifest()))!;
+        row[field] = value;
+        using var client = new HttpClient(new Handler(_ => new(HttpStatusCode.OK) { Content = new StringContent(row.ToJsonString()) }));
+        var error = await Assert.ThrowsAsync<UpdateException>(() => new GitHubReleaseSource(client).ListHostReleasesAsync("owner/repo", default));
+        Assert.Equal("release-source-invalid-metadata", error.Code);
+    }
+
+    [Theory]
+    [InlineData("http://github.com/unsafe")]
+    [InlineData("https://evil.example/manifest.json")]
+    [InlineData("https://user@github.com/private")]
+    public async Task Manifest_redirects_cannot_escape_trusted_hosts(string target)
+    {
+        using var client = new HttpClient(new Handler(_ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.Redirect);
+            response.Headers.Location = new Uri(target);
+            return response;
+        }));
+        await Assert.ThrowsAsync<UpdateException>(() => new GitHubReleaseSource(client).ListHostReleasesAsync("owner/repo", default));
+    }
+
+    [Fact]
+    public async Task Oversized_manifest_is_rejected()
+    {
+        using var client = new HttpClient(new Handler(_ => new(HttpStatusCode.OK) { Content = new StringContent(new string(' ', 1024 * 1024 + 1)) }));
+        var error = await Assert.ThrowsAsync<UpdateException>(() => new GitHubReleaseSource(client).ListHostReleasesAsync("owner/repo", default));
+        Assert.Equal("release-source-invalid-metadata", error.Code);
     }
 
     private sealed class Handler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler

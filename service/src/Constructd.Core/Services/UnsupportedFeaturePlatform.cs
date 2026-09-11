@@ -27,7 +27,7 @@ public sealed class UnsupportedFeaturePlatform : IMediaStore, IMediaTransfer, IH
     Task<bool> IMediaTransfer.TryDeleteAsync(string path, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
     Task<IReadOnlyList<string>> IMediaTransfer.ListFilesAsync(CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
     Task<InventorySnapshot> IHypervisorInventory.ReadAsync(CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
-    Task<IReadOnlyList<ReleaseDescriptor>> IReleaseSource.ListHostReleasesAsync(string repository, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
+    Task<IReadOnlyList<ReleaseDescriptor>> IReleaseSource.ListHostReleasesAsync(string repository, CancellationToken ct, string? releaseTag) => throw new NotSupportedException("This host-administration backend is not installed.");
     Task IReleaseSource.DownloadAsync(ReleaseAsset asset, string destinationPath, IProgress<string>? progress, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
     Task<StagedUpdate> IUpdateStager.StageAsync(string updateId, ReleaseDescriptor release, IProgress<string>? progress, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
     Task<bool> IUpdateStager.VerifyStagedAsync(StagedUpdate staged, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");

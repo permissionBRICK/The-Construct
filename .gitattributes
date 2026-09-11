@@ -10,3 +10,6 @@ bootstrap.sh   text eol=lf
 /extension/vm/construct-t3*-patch.mjs text eol=lf
 /patches/t3code-release/** text eol=lf
 /patches/t3code-nightly/** text eol=lf
+
+# Archives carry the actual source commit without a GitHub API lookup.
+/.construct-revision export-subst
