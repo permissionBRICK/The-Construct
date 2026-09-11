@@ -24,7 +24,7 @@ function buildPage(htmlFile, scriptFile) {
   html = html.replace(/{{cspSource}}/g, "").replace(/{{styleUri}}/g, "panel.css")
              .replace(/{{themeUri}}/g, "themes/" + THEME + ".css")
              .replace(/{{adminStyleUri}}/g, "hostadmin.css")
-             .replace(/{{scriptUri}}/g, scriptFile).replace(/{{nonce}}/g, "test");
+             .replace(/{{paletteUri}}/g, "palette.js").replace(/{{scriptUri}}/g, scriptFile).replace(/{{nonce}}/g, "test");
   const mock =
     '<script>window.__posted=[];window.acquireVsCodeApi=function(){return{' +
     'postMessage:function(m){window.__posted.push(m);},getState:function(){},setState:function(){}};};</script>';
@@ -55,6 +55,41 @@ function serve() {
   return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve({ server, port: server.address().port })));
 }
 
+// Exercise the actual Companion colour pairs, including changing a live native palette.
+const paletteSource = fs.readFileSync(path.join(__dirname, "../../companion/src/Construct.Companion.Core/Desktop/DesktopPalette.cs"), "utf8");
+async function checkPaletteControls(view, label) {
+  for (const dark of [true, false]) {
+    const block = paletteSource.split("private static readonly").find(text => text.includes(dark ? " Dark = " : " Light = "));
+    const variables = Object.fromEntries([...block.matchAll(/\["(--vscode-[^"]+)"\] = "(#[^"]+)"/g)].map(m => [m[1], m[2]]));
+    await view.evaluate(vars => { for (const [key, value] of Object.entries(vars)) document.documentElement.style.setProperty(key, value); }, variables);
+    await view.waitForTimeout(60);
+    const result = await view.evaluate(() => {
+      const rgb = text => (text.match(/[\d.]+/g) || []).slice(0, 3).map(Number);
+      const lum = values => values.map(v => v / 255).map(v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4).reduce((sum, v, i) => sum + v * [.2126, .7152, .0722][i], 0);
+      const controls = [...document.querySelectorAll('select, option, input:not([type]), input[type="text"], input[type="password"], input[type="number"]')];
+      const bad = controls.filter(el => {
+        const style = getComputedStyle(el); const fg = lum(rgb(style.color)), bg = lum(rgb(style.backgroundColor));
+        return (Math.max(fg, bg) + .05) / (Math.min(fg, bg) + .05) < 4.5 || style.backgroundColor === "rgba(0, 0, 0, 0)";
+      }).map(el => el.id || el.tagName);
+      return { scheme: getComputedStyle(document.documentElement).colorScheme, count: controls.length, bad };
+    });
+    check(`${label}: ${dark ? "dark" : "light"} Companion palette controls have readable colours`, result.count > 0 && result.bad.length === 0, result.bad.join(", "));
+    check(`${label}: native popup scheme follows theme/palette (${dark ? "dark" : "light"})`, result.scheme === (THEME === "native" && !dark ? "light" : "dark"), result.scheme);
+    if (label === "admin dialog") await view.screenshot({ path: `/tmp/host-vm-settings-${THEME}-${dark ? "dark" : "light"}.png` });
+  }
+  // Restore the default CSS fallbacks for the remaining functional smoke tests.
+  await view.evaluate(() => { for (const name of [...document.documentElement.style]) if (name.startsWith("--vscode-")) document.documentElement.style.removeProperty(name); });
+  await view.waitForTimeout(30);
+  await view.evaluate(() => { const style = document.createElement("style"); style.id = "smokePalette"; style.textContent = ":root { --vscode-editor-background: #ffffff; }"; document.head.appendChild(style); });
+  await view.waitForTimeout(30);
+  check(`${label}: stylesheet palette injection updates the scheme`, await view.evaluate(() => document.documentElement.style.colorScheme) === (THEME === "native" ? "light" : "dark"));
+  await view.evaluate(() => { document.getElementById("smokePalette").textContent = ":root { --vscode-editor-background: #1e1e1e; }"; });
+  await view.waitForTimeout(30);
+  check(`${label}: stylesheet palette replacement updates the scheme`, await view.evaluate(() => document.documentElement.style.colorScheme) === "dark");
+  await view.evaluate(() => document.getElementById("smokePalette").remove());
+  await view.waitForTimeout(30);
+}
+
 const results = [];
 const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detail || "" });
 
@@ -68,6 +103,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
 
   await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "networkidle" });
   await page.waitForTimeout(150);
+  await checkPaletteControls(page, "panel");
 
   check("no console/page errors on load", errors.length === 0, errors.join(" | "));
   check("title mentions Construct", /Construct/.test(await page.title()));
@@ -1134,6 +1170,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   admin.on("console", (m) => { if (m.type() === "error") adminErrors.push(m.text()); });
   admin.on("pageerror", (e) => adminErrors.push(String(e)));
   await admin.goto(`http://127.0.0.1:${port}/hostadmin`, { waitUntil: "networkidle" });
+  await checkPaletteControls(admin, "admin");
   await admin.waitForTimeout(150);
   check("admin: no console/page errors on load", adminErrors.length === 0, adminErrors.join(" | "));
   let aposted = await admin.evaluate(() => window.__posted);
@@ -1227,6 +1264,43 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await admin.locator("#vmsTable .ha-row").nth(1).locator("button", { hasText: "Delete" }).click();
   aposted = await admin.evaluate(() => window.__posted);
   check("admin: Shut down posts shutdownVm with the name", aposted.some((m) => m.type === "hostadmin.action" && m.action === "shutdownVm" && m.args.name === "work-vm"));
+  await admin.getByRole("button", { name: "VM settings…", exact: true }).click();
+  check("admin: VM settings is a modal", await admin.locator("#haVmSettings").isVisible());
+  let settingsRequest = await admin.evaluate(() => window.__posted.filter(m => m.action === "loadVmSettings").at(-1));
+  const settings = { cpu: { currentCpus: 4, desiredCpus: 6, maximumCpus: 8, pending: true }, memory: { currentRamGb: 8, desiredRamGb: 12, maximumRamGb: 16, pending: true }, idle: { timeoutMinutes: 60, action: "save", maxTimeoutMinutes: 120, forceEnabled: false } };
+  const settingsReply = async (reply) => { await admin.evaluate(m => window.postMessage(m, "*"), { type: "hostadmin.vmSettings", ...settingsRequest.args, ...reply }); await admin.waitForTimeout(20); };
+  await settingsReply({ settings: { ...settings, cpu: { ...settings.cpu, maximumCpus: 0 }, memory: { ...settings.memory, maximumRamGb: 0 } } });
+  await admin.locator("#haVmTimeout").fill("90");
+  check("admin: unchanged hardware above current maxima permits idle edit", !await admin.locator("#haVmSettingsApply").isDisabled());
+  await admin.locator("#haVmRam").fill("10");
+  check("admin: changed over-cap hardware shows its validation error", await admin.locator("#haVmSettingsApply").isDisabled() && /RAM.*between 1 and 0/.test(await admin.locator("#haVmSettingsError").innerText()));
+  await settingsReply({ settings });
+  await checkPaletteControls(admin, "admin dialog");
+  check("admin: current and pending hardware visible", /Current CPU: 4; pending: 6/.test(await admin.locator("#haVmSettingsCurrent").innerText()) && /pending: 12 GB/.test(await admin.locator("#haVmSettingsCurrent").innerText()));
+  await admin.locator("#haVmRam").fill("16.5");
+  check("admin: fractional RAM blocks Apply", await admin.locator("#haVmSettingsApply").isDisabled());
+  await admin.locator("#haVmRam").fill("17");
+  check("admin: allowance maximum blocks Apply", await admin.locator("#haVmSettingsApply").isDisabled());
+  await admin.locator("#haVmRam").fill("14");
+  await pushAdmin({ ...ADMIN_STATE, activeTab: "vms" });
+  check("admin: polling preserves modal edits", await admin.locator("#haVmRam").inputValue() === "14");
+  await admin.locator("#haVmIdleAction").selectOption("shutdown");
+  await admin.locator("#haVmSettingsApply").click();
+  let appliedSettings = await admin.evaluate(() => window.__posted.filter(m => m.action === "setVmSettings").at(-1));
+  check("admin: one Apply carries all settings", appliedSettings.args.cpus === 6 && appliedSettings.args.ramGb === 14 && appliedSettings.args.timeoutMinutes === 60 && appliedSettings.args.action === "shutdown");
+  check("admin: Apply disabled while saving", await admin.locator("#haVmSettingsApply").isDisabled());
+  await settingsReply({ error: "RAM allowance changed", settings });
+  check("admin: partial failure keeps dialog open with actual values", await admin.locator("#haVmSettings").isVisible() && await admin.locator("#haVmRam").inputValue() === "12");
+  await admin.locator("#haVmSettingsApply").click();
+  await settingsReply({ saved: true });
+  check("admin: successful Apply closes modal", !await admin.locator("#haVmSettings").isVisible());
+  await admin.getByRole("button", { name: "VM settings…", exact: true }).click();
+  settingsRequest = await admin.evaluate(() => window.__posted.filter(m => m.action === "loadVmSettings").at(-1));
+  await settingsReply({ settings: { cpu: null, memory: null, idle: { timeoutMinutes: 60, action: "save", maxTimeoutMinutes: 60, forceEnabled: true } } });
+  check("admin: older hosts disable unsupported hardware fields", await admin.locator("#haVmRam").isDisabled() && await admin.locator("#haVmCpus").isDisabled());
+  check("admin: forced idle disables Off", await admin.locator('#haVmIdleAction option[value="off"]').evaluate(e => e.disabled), await admin.locator("#haVmSettingsForm").innerHTML());
+  await admin.locator("#haVmSettingsCancel").click();
+
   check("admin: Delete posts deleteVm with name and kind", aposted.some((m) => m.action === "deleteVm" && m.args.name === "work-vm" && m.args.kind === "primary"));
   await pushAdmin({ ...ADMIN_STATE, activeTab: "users" });
   await admin.waitForTimeout(60);

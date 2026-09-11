@@ -263,6 +263,8 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
     }
     private async Task Action(Model m, RemoteHostClient client, string action, JsonObject args, CancellationToken ct)
     {
+        if (action is "loadVmSettings" or "setVmSettings")
+        { await VmSettingsAction(m, client, action, args, ct); return; }
         if (Text(m.State["mode"]) != "admin" && action is not ("shutdownVm" or "deleteVm" or "cancelJob" or "createFirstVm")) { Notice(m, "Not an administrator of this host."); return; }
         if (m.State["maintenance"] is not null && action is not ("refresh" or "updatesApply" or "updatesResolve")) { Notice(m, "The host is updating; mutations are disabled until it is back."); return; }
         var name = Text(args["name"]); var id = Text(args["id"]); JsonNode? result = null;
