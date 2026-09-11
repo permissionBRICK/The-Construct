@@ -81,6 +81,12 @@ public sealed class InMemoryAdmissionStore(InMemoryVmRepository vms, InMemoryUse
             return Result(AdmissionOutcome.VersionConflict);
         if (plan.VmToAssignJob is { } target && (plan.JobToInsert is null || !Done(vms.AssignJobAsync(target, plan.JobToInsert.Id))))
             return Result(AdmissionOutcome.VersionConflict);
+        if (plan.VmSourceCommit is { } source)
+        {
+            var pinned = Done(vms.GetAsync(source.VmName, ct));
+            if (pinned is null || pinned.Deleting || !Done(vms.SetSourceCommitAsync(source.VmName, source.Commit, ct)))
+                return Result(AdmissionOutcome.VersionConflict);
+        }
         if (plan.JobToInsert is { } job)
         {
             if (job.State != JobState.Queued || Done(jobs.GetAsync(job.Id, ct)) is not null) return Result(AdmissionOutcome.VersionConflict);
@@ -109,7 +115,7 @@ public sealed class InMemoryAdmissionStore(InMemoryVmRepository vms, InMemoryUse
             // There is no hypervisor absence evidence here. Retain tombstones/fences/liabilities for
             // reconciliation rather than releasing a disk or RAM hold on an assumed rollback.
             if (job.State != JobState.Queued) return Task.CompletedTask;
-            return jobs.UpsertAsync(job with { State = JobState.Failed, Error = "Persisted job could not start.", Finished = clock.UtcNow }, ct);
+            return jobs.UpsertAsync(job with { State = JobState.Failed, Error = job.Kind == "source-fetch" ? "job-start-failed" : "Persisted job could not start.", Finished = clock.UtcNow }, ct);
         }
     }
     private sealed class Scope(InMemoryVmRepository vms, InMemoryUserStore users, InMemoryCapacityLedger capacity,

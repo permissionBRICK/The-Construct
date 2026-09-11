@@ -4,9 +4,11 @@ namespace Constructd.Core.Abstractions;
 
 public sealed record ReleaseAsset(string Name, Uri Url, long SizeBytes);
 public sealed record ReleaseDescriptor(string Tag, string Commit, DateTimeOffset PublishedAt, IReadOnlyList<ReleaseAsset> Assets);
+public sealed record SourceAssetDescriptor(string Commit, string Tag, Uri Url, long SizeBytes, string Sha256);
 public interface IReleaseSource
 {
     Task<IReadOnlyList<ReleaseDescriptor>> ListHostReleasesAsync(string repository, CancellationToken ct, string? releaseTag = null);
+    Task<SourceAssetDescriptor> GetSourceAssetAsync(string repository, string commit, CancellationToken ct);
     Task DownloadAsync(ReleaseAsset asset, string destinationPath, IProgress<string>? progress, CancellationToken ct);
 }
 

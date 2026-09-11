@@ -34,6 +34,7 @@ public sealed class HostAdminApiTests
         Assert.False(health.TryGetProperty("commit", out _)); Assert.False(health.TryGetProperty("packageVersion", out _));
         var full = await admin.GetFromJsonAsync<JsonElement>("/api/v1/health"); Assert.True(full.TryGetProperty("commit", out _));
         var who = await (await admin.GetAsync("/api/v1/whoami")).ReadAsync<WhoAmIResponse>(); Assert.True(who.Enabled); Assert.NotNull(who.Effective); Assert.Contains("host-admin", who.ApiFeatures!);
+        Assert.Contains("source-cache", who.ApiFeatures!);
         Assert.Contains("console", who.ApiFeatures!); Assert.Contains("updates", who.ApiFeatures!);
         Assert.Contains("children", who.ApiFeatures!); Assert.Contains("media", who.ApiFeatures!); Assert.Contains("network", who.ApiFeatures!);
         Assert.Equal(new Constructd.Api.Composition.ReleaseInfo().ApiFeatures, who.ApiFeatures);
@@ -172,7 +173,7 @@ public sealed class HostAdminApiTests
             var adminFiltered = await admin.GetFromJsonAsync<JsonElement>("/api/v1/vms?owner=bob");
             Assert.Equal("other-parent", Assert.Single(adminFiltered.EnumerateArray()).GetProperty("name").GetString());
             var owned = await owner.GetFromJsonAsync<JsonElement>("/api/v1/vms?kind=child");
-            Assert.Single(owned.EnumerateArray().Where(vm => vm.GetProperty("name").GetString() == "shared"));
+            Assert.Single(owned.EnumerateArray(), vm => vm.GetProperty("name").GetString() == "shared");
             Assert.Equal(HttpStatusCode.OK, (await admin.PutAsJsonAsync("/api/v1/host/config", new { network = new { hostForwardsEnabled = false, directAddressReporting = true } })).StatusCode);
             Assert.Equal(HttpStatusCode.Forbidden, (await guest.PostAsJsonAsync("/api/v1/vms/parent/forwards", new { vmPort = 8080, target = "host" })).StatusCode);
             Assert.Equal(HttpStatusCode.Created, (await guest.PostAsJsonAsync("/api/v1/vms/parent/forwards", new { vmPort = 8080, target = "client" })).StatusCode);

@@ -3,9 +3,10 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Constructd.Core.Abstractions;
 using Constructd.Core.Logic;
+using Constructd.Core.Domain;
 namespace Constructd.Windows.Updates;
 
-public sealed class GitHubReleaseSource(HttpClient client) : IReleaseSource
+public sealed class GitHubReleaseSource(HttpClient client, long maxSourceBytes = 268435456) : IReleaseSource
 {
     private readonly ConcurrentDictionary<Uri, long> _allowed = new();
     public async Task<IReadOnlyList<ReleaseDescriptor>> ListHostReleasesAsync(string repository, CancellationToken ct, string? releaseTag = null)
@@ -62,6 +63,29 @@ public sealed class GitHubReleaseSource(HttpClient client) : IReleaseSource
         { throw new UpdateException("release-source-timeout", "Timed out retrieving the GitHub release manifest."); }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException or FormatException or ArgumentException)
         { throw new UpdateException("release-source-invalid-metadata", "GitHub returned an invalid release manifest."); }
+    }
+
+    public async Task<SourceAssetDescriptor> GetSourceAssetAsync(string repository, string commit, CancellationToken ct)
+    {
+        if (!SourceZipRules.ValidCommit(commit) || !Regex.IsMatch(repository, "\\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\\z"))
+            throw new SourceException("release-source-invalid-metadata");
+        try
+        {
+            using var response = await OpenAsync(new Uri($"https://github.com/{repository}/releases/download/host-{commit}/manifest.json"), HttpMethod.Get, "release manifest", ct);
+            await using var input = await response.Content.ReadAsStreamAsync(ct);
+            using var bytes = new MemoryStream(); var buffer = new byte[8192]; int read;
+            while ((read = await input.ReadAsync(buffer, ct)) > 0)
+            {
+                if (bytes.Length + read > 1024 * 1024) throw new SourceException("release-source-invalid-metadata");
+                bytes.Write(buffer, 0, read);
+            }
+            var asset = SourceManifestRules.Parse(bytes.ToArray(), repository, commit, maxSourceBytes);
+            _allowed[asset.Url] = asset.SizeBytes;
+            return asset;
+        }
+        catch (UpdateException ex) when (ex.Code == "release-source-http-404") { throw new SourceException("source-unavailable"); }
+        catch (HttpRequestException ex) { throw NetworkFailure(ex, "release manifest"); }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { throw new SourceException("release-source-timeout"); }
     }
 
     private async Task<HttpResponseMessage> OpenAsync(Uri uri, HttpMethod method, string operation, CancellationToken ct)

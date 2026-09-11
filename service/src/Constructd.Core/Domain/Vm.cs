@@ -42,7 +42,8 @@ public sealed record Vm(
     GuestReport? Guest = null,
     HostObservation? Observed = null,
     bool ChildCreationClosed = false,
-    string? CurrentJobId = null)
+    string? CurrentJobId = null,
+    string? SourceCommit = null)
 {
     public long RamBytes => RamMb is int mb ? mb * 1048576L : RamGb * 1073741824L;
 

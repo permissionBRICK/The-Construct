@@ -954,6 +954,12 @@ ok "an unattended run reaches the elevated copy as -KeepHostAwake:`$false" (
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 Write-Host ""
+$sourceInstaller = Get-Content -Raw -LiteralPath $installer
+ok 'source cache directory is created' ($sourceInstaller -match 'foreach \([\s\S]*?\$sourceRootDir\)\)')
+ok 'source cache receives Data ACL hardening' ($sourceInstaller.Contains('@{ Path = $sourceRootDir; Kind = ''Data''; Name = "construct source cache" }'))
+ok 'source root setting preserves operator value' ($sourceInstaller -match '\$sourceRootDir = \[string\]\$savedHostAdmin.Source.RootDir')
+ok 'source configuration is written' ($sourceInstaller -match 'HostAdmin\s*= \$savedHostAdmin')
+
 Write-Host "=== $script:pass passed, $script:fail failed ===" -ForegroundColor $(if ($script:fail -eq 0) { "Green" } else { "Red" })
 if ($script:fail -gt 0) { exit 1 }
 exit 0
