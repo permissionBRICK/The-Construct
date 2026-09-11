@@ -17,6 +17,7 @@ public sealed class StateAggregation(CompanionInstances instances, RuntimeMessag
         var cached = bus.Snapshot(name);
         probe ??= cached.TryGetValue("state", out var state) ? JsonNode.Parse(state.GetRawText())!.AsObject() : new() { ["online"] = false, ["vmState"] = "unknown" };
         var data = (probe["state"] as JsonObject ?? probe).DeepClone().AsObject(); data.Remove("type");
+        foreach (var (key, value) in entry.Enrichment) data[key] = value?.DeepClone();
         data["instance"] = name; data["backend"] = entry.Definition["backend"]?.DeepClone(); data["connected"] = false; data["connectedInstance"] = null;
         data["canConvertHost"] = false;
         var pending = StateJson.ReadObject(files, HostConversion.PendingPath(instances.Host.LocalAppData));

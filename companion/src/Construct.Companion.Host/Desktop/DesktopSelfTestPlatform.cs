@@ -11,10 +11,11 @@ namespace Construct.Companion.Host.Desktop;
 
 public sealed class DesktopSelfTestPlatform(IStateFileSystem files,IProcessRunner runner,IHypervisorState hypervisor,
     IDesktopProcess desktop,Func<string?> webViewVersion,
-    Func<JsonObject,CancellationToken,Task<HypervisorState>>? remoteState=null) : ISelfTestPlatform
+    Func<JsonObject,CancellationToken,Task<HypervisorState>>? remoteState=null, Func<CancellationToken,Task<bool>>? healthProbe=null) : ISelfTestPlatform
 {
     public async Task<bool> IpcHealthAsync(CancellationToken cancellationToken)
     {
+        if (healthProbe is not null) return await healthProbe(cancellationToken);
         await using var server=await DesktopActivationServer.StartAsync(files,null,new DiagnosticUi(),"selftest",cancellationToken);
         using var client=new HttpClient(new HttpClientHandler { UseProxy=false,AllowAutoRedirect=false }) { Timeout=TimeSpan.FromSeconds(5) };
         var health=await client.GetFromJsonAsync<Health>($"http://127.0.0.1:{server.Endpoint.Port}/v1/health",IpcJson.Options,cancellationToken);

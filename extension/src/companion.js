@@ -8,6 +8,14 @@ const GRACE_MS = 10000;
 const SETTINGS_MARKER = "construct.companion.settingsMigrated.v1";
 const TOKEN_MARKER = "construct.companion.tokenMigrated.v1:";
 
+function shouldOfferInstall({ platform, deferred, offered, installed, setting, preference, registered }) {
+  return platform === "win32" && !deferred && !offered && !installed &&
+    setting !== "off" && setting !== false && preference !== false && registered > 0;
+}
+function installManifestPath(env) {
+  const base = env.LOCALAPPDATA || env.TEMP;
+  return base ? path.join(base, "Programs", "ConstructCompanion", "install.json") : null;
+}
 function endpointPath(env) {
   const base = env.LOCALAPPDATA || env.TEMP;
   return base ? path.join(base, "The-Construct", "companion", "endpoint.json") : null;
@@ -81,7 +89,11 @@ function snapshotMessages(snapshot, connectedInstance) {
     if (key === "state") {
       const state = { ...m.state };
       for (const field of ["children", "idlePolicy", "hostAdminOffer"]) {
-        if (Object.prototype.hasOwnProperty.call(snapshot, field)) state[field] = snapshot[field];
+        if (Object.prototype.hasOwnProperty.call(snapshot, field)) {
+          const value = snapshot[field];
+          state[field] = value && value.type === field
+            ? value[field === "hostAdminOffer" ? "offer" : field] : value;
+        }
       }
       out.push(overlayMessage({ ...m, state }, connectedInstance));
     } else out.push(m);
@@ -327,5 +339,5 @@ function createClient(options = {}) {
 }
 
 module.exports = { IPC_API_VERSION, GRACE_MS, SETTINGS_MARKER, TOKEN_MARKER, SETTING_DEFAULTS,
-  endpointPath, parseEndpoint, validHealth, presence, createSseParser, overlayMessage, snapshotMessages,
+  shouldOfferInstall, installManifestPath, endpointPath, parseEndpoint, validHealth, presence, createSseParser, overlayMessage, snapshotMessages,
   planSettingsMigration, planTokenMigration, migrate, createClient };

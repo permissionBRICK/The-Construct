@@ -94,10 +94,10 @@ public sealed class DispatcherHttpTests
         await using var h = await Harness.Start(); h.Get<FakePrompts, IPrompts>().Confirmations.Enqueue(true);
         using var response = await h.Post("/v1/instances/agent-vm/messages", new { type = "command", id = action }); Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
         var launcher = h.Get<FakeLauncher, ILauncher>(); var invocation = Assert.Single(elevated ? launcher.Elevated : launcher.Detached);
-        Assert.Empty(elevated ? launcher.Detached : launcher.Elevated); Assert.Equal("powershell.exe", invocation.FileName);
-        Assert.Equal(new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-File", "/fake/scripts/" + script }, invocation.Arguments.Take(6));
+        Assert.Empty(elevated ? launcher.Detached : launcher.Elevated); Assert.Equal("cmd.exe", invocation.FileName);
         var expected = Core.Lifecycle.LifecycleBuilder.BuildInvocation(action, new() { ["instance"] = h.App.Services.GetRequiredService<CompanionInstances>().Get("agent-vm").Definition.DeepClone(), ["settings"] = new InstanceStateStore((IStateFileSystem)h.Files, "agent-vm", "/fake/scripts").ReadSettings(), ["projects"] = new JsonArray(), ["backupDir"] = "/fake/scripts/config", ["instanceParams"] = new JsonArray("InstanceName", "ConfigBranch") })!;
-        Assert.Equal(expected["args"]!.AsArray().Select(StateJson.String), invocation.Arguments.Skip(6));
+        var expectedLaunch = PowerShellLaunch.BuildHostLaunch("/fake/scripts/" + script, expected["args"]!.AsArray().Select(StateJson.String), elevate: elevated, argSpec: expected["argSpec"] as JsonArray).Invocation("/fake/scripts");
+        Assert.Equal(expectedLaunch.Arguments, invocation.Arguments); Assert.False(invocation.CreateNoWindow);
     }
     [Fact]
     public async Task RebuildCancelledBeforeLaunchAndCustomBackupPinned()
@@ -107,7 +107,8 @@ public sealed class DispatcherHttpTests
         Assert.Empty(h.Get<FakeLauncher, ILauncher>().Elevated);
         prompts.Confirmations.Enqueue(true);
         using var accepted = await h.Post("/v1/instances/agent-vm/messages", new { type = "customRebuild", mode = "reinstall", backup = "existing" }); Assert.Equal(HttpStatusCode.Accepted, accepted.StatusCode);
-        var args = Assert.Single(h.Get<FakeLauncher, ILauncher>().Elevated).Arguments.ToArray(); Assert.Equal("existing", args[Array.IndexOf(args, "-BackupMode") + 1]);
+        var args = Assert.Single(h.Get<FakeLauncher, ILauncher>().Elevated).Arguments.ToArray();
+        var command = System.Text.Encoding.Unicode.GetString(Convert.FromBase64String(args[^1])); Assert.Contains("-BackupMode existing", command);
     }
     [Fact]
     public async Task ProjectRoundTripAndSelectionAreInstanceScoped()

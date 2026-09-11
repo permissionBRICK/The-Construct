@@ -11,18 +11,21 @@ namespace Construct.Companion.Host.Composition;
 public static class CompanionComposition
 {
     // The Windows app registers its platform seams before calling this method.
-    public static IServiceCollection AddCompanionHost(this IServiceCollection services)
+    public static IServiceCollection AddCompanionHost(this IServiceCollection services, bool runtimeJobs = true)
     {
         services.AddRuntime().AddConfigSync();
         services.TryAddSingleton(new CompanionProcessEnvironment((Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator), Environment.GetEnvironmentVariable("SystemRoot"), OperatingSystem.IsWindows()));
+        services.TryAddSingleton<IMessageSink, Construct.Companion.Host.Desktop.DispatcherMessageSink>();
         services.TryAddSingleton<IInstanceConnections, InstanceConnections>();
         services.TryAddSingleton<IpcEvents>(); services.TryAddSingleton<IpcSettings>(); services.TryAddSingleton<IpcLogs>();
         services.TryAddSingleton<CompanionInstances>(); services.TryAddSingleton<StateAggregation>();
+        services.TryAddSingleton<Construct.Companion.Core.State.CachedUpdateSource>();
         services.TryAddSingleton<HostAdministration>(); services.TryAddSingleton<MessageDispatcher>();
         services.TryAddSingleton<DispatchQueue>(); services.AddHostedService(p => p.GetRequiredService<DispatchQueue>());
         services.TryAddSingleton<IIpcBackend, CompanionBackend>();
         services.TryAddSingleton(p => new RuntimeSupervisor(p.GetRequiredService<CompanionInstances>(), p.GetRequiredService<CompanionInstances>().CreateRuntime, p.GetRequiredService<RuntimeMessageBus>(), p.GetRequiredService<CompanionInstances>().AcquireRetargetAsync, p.GetRequiredService<IClock>()));
-        services.AddHostedService<CompanionRuntimeService>(); return services;
+        if (runtimeJobs) { services.AddHostedService<CompanionEnrichmentService>(); services.AddHostedService<CompanionRuntimeService>(); }
+        return services;
     }
 }
 internal sealed class CompanionRuntimeService(RuntimeMessageBus bus, StateAggregation aggregation, RuntimeSupervisor supervisor, HostAdministration hosts) : BackgroundService
