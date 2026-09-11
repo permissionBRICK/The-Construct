@@ -139,11 +139,15 @@ try {
         [IO.File]::WriteAllText((Join-Path $tree $devOnly),'dev-only')
     }
     Check 'repository-only folders left over from an older archive are not local changes' ((Get-ConstructSourceIdentity -Root $tree -ManifestDir $manifests).TreeState -eq 'equivalent')
+    [IO.Directory]::CreateDirectory((Join-Path $tree 'projects')) | Out-Null
+    [IO.File]::WriteAllText((Join-Path $tree 'projects/my-app.json'),'{"name":"my-app"}')
+    Check 'user project profiles in the legacy projects folder are not local changes' ((Get-ConstructSourceIdentity -Root $tree -ManifestDir $manifests).TreeState -eq 'equivalent')
     [IO.File]::WriteAllText((Join-Path $tree 'stale.txt'),'from an older release')
     [IO.File]::WriteAllText((Join-Path $tree 'keep.local'),'mine')
     $pruned = Remove-ConstructStaleSourceFiles -Root $tree -Zip $zip
     Check 'pruning removes files the archive no longer ships' ($pruned -eq 1 -and -not (Test-Path (Join-Path $tree 'stale.txt')))
     Check 'pruning keeps archive files and local artifacts' ((Test-Path (Join-Path $tree 'file')) -and (Test-Path (Join-Path $tree 'keep.local')) -and (Test-Path (Join-Path $tree 'companion/src/App/obj/x.dll')))
+    Check 'pruning keeps user project profiles' (Test-Path (Join-Path $tree 'projects/my-app.json'))
     [IO.File]::WriteAllText((Join-Path $tree 'extra'),'extra')
     Check 'archive extra divergent' ((Get-ConstructSourceIdentity -Root $tree -ManifestDir $manifests).TreeState -eq 'divergent')
     Remove-Item -LiteralPath (Join-Path $tree 'extra');[IO.File]::WriteAllText((Join-Path $tree 'file'),'changed')
