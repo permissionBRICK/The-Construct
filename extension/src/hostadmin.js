@@ -536,6 +536,7 @@ function toIsoCatalogView(catalog) {
     entries: (Array.isArray(c.entries) ? c.entries : []).map((e) => ({
       fileName: str(e.fileName), size: formatBytes(e.sizeBytes), isCurrent: e.isCurrent === true,
       builtAt: formatWhen(e.builtAt), sidecarReadable: e.sidecarReadable !== false,
+      unpublished: e.sizeBytes === 0 && e.sidecarReadable === false,
     })),
     lastBuild: last ? { at: formatWhen(last.at), outcome: str(last.outcome), jobId: str(last.jobId) } : null,
   };

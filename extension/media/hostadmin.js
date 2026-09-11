@@ -386,7 +386,8 @@
       row.appendChild(cell(x.size));
       row.appendChild(cell(x.builtAt));
       if (x.isCurrent) row.appendChild(el("span", "ha-badge child", "current"));
-      if (!x.sidecarReadable) row.appendChild(el("span", "ha-badge off", "sidecar unreadable"));
+      if (x.unpublished) row.appendChild(el("span", "ha-badge", "not yet published"));
+      else if (!x.sidecarReadable) row.appendChild(el("span", "ha-badge off", "sidecar unreadable"));
       e.appendChild(row);
     });
     show($("mediaProblem"), !!m.mediaProblem);
