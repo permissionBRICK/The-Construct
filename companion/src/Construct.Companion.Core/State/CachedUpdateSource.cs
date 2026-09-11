@@ -6,7 +6,7 @@ namespace Construct.Companion.Core.State;
 public static class RefreshCachePolicy
 {
     public static bool Fresh(string area, bool success, double ageMilliseconds) =>
-        ageMilliseconds < (success ? area == "usage" ? 300000 : 600000 : 60000);
+        ageMilliseconds < (success ? 300000 : 60000);
 }
 
 // URLs encode the JS cache identities: Construct repo/ref/installed commit and
@@ -20,7 +20,13 @@ public sealed class CachedUpdateSource(IUpdateSource source, IClock clock) : IUp
         public JsonNode? Value;
     }
     private readonly ConcurrentDictionary<string, Entry> cache = new(StringComparer.Ordinal);
-    public async Task<JsonNode?> GetJsonAsync(Uri url, CancellationToken cancellationToken = default)
+    public IUpdateSource Bypass() => new BypassingSource(this);
+    private sealed class BypassingSource(CachedUpdateSource owner) : IUpdateSource
+    {
+        public Task<JsonNode?> GetJsonAsync(Uri url, CancellationToken cancellationToken = default) => owner.GetJsonAsync(url, true, cancellationToken);
+    }
+    public Task<JsonNode?> GetJsonAsync(Uri url, CancellationToken cancellationToken = default) => GetJsonAsync(url, false, cancellationToken);
+    public async Task<JsonNode?> GetJsonAsync(Uri url, bool noCache, CancellationToken cancellationToken = default)
     {
         var entry = cache.GetOrAdd(url.AbsoluteUri, _ => new());
         await entry.Serial.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -28,7 +34,7 @@ public sealed class CachedUpdateSource(IUpdateSource source, IClock clock) : IUp
         {
             var now = clock.UtcNow;
             var success = entry.Value is not null && !(entry.Value is JsonObject value && StateJson.Boolean(value["notFound"]) == true);
-            if (entry.At is {} at && RefreshCachePolicy.Fresh("updates", success, (now - at).TotalMilliseconds)) return entry.Value?.DeepClone();
+            if (!noCache && entry.At is {} at && RefreshCachePolicy.Fresh("updates", success, (now - at).TotalMilliseconds)) return entry.Value?.DeepClone();
             entry.Value = (await source.GetJsonAsync(url, cancellationToken).ConfigureAwait(false))?.DeepClone();
             entry.At = now; return entry.Value?.DeepClone();
         }

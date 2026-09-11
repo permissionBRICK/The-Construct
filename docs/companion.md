@@ -9,9 +9,10 @@ neither administrator rights nor a separately installed .NET runtime.
 **Delivery status:** the desktop app runs against the authenticated IPC host, the real
 dispatcher and per-instance runtimes; Linux fake-mode tests cover mixed local/remote and
 remote-only registries, forwards, notifications, audio and settings. See the
-[message matrix](../companion/README.md#message-matrix) for the workflows that are still
-refused. Windows tray, microphone and toast behaviour has not been field-validated; a
+[message matrix](../companion/README.md#message-matrix) for the implemented workflows. Windows tray, microphone and toast behaviour has not been field-validated; a
 successful Linux build is not a Windows runtime test.
+
+The popup can switch instances, register a VM, run lifecycle actions, and open the full panel. The panel also clones and opens projects, removes instances with an option to keep remote VMs, applies CPU/RAM and automatic checkpoint settings, preserves configuration before reprovisioning, creates remote VMs, and starts or explicitly finishes host conversion. Host administration issues and rotates tokens in a native one-time dialog with a copy button. Opening a control surface manually refreshes the Construct update check immediately; successful checks are cached for five minutes and failures for one minute. A host conversion started in VS Code must be finished in its original VS Code profile.
 
 ## Install and update
 

@@ -43,6 +43,13 @@ public sealed class CompanionInstances(IStateFileSystem files, IpcSettings setti
             entry.ConfigSync = config.Create(cfg, Path.Combine(Host.LocalAppData!, "The-Construct", "cache", "config-remotes"), entry.Ssh, StateJson.String(definition["configBranch"]));
         return entry;
     }
+    public async Task<string> AutomaticCheckpointPolicyAsync(CompanionInstance entry, CancellationToken ct)
+    {
+        if (StateJson.Text(entry.Definition["backend"]) is not (null or "" or "hyperv-local")) return "unsupported";
+        try { return VmPower.ParseAutoCheckpoints((await processes.RunAsync(VmPower.BuildAutoCheckpointProbeLaunch(StateJson.Text(entry.Definition["vmName"])).Invocation() with { Timeout = TimeSpan.FromSeconds(15) }, ct)).Stdout); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception) { return "unknown"; }
+    }
     public RemoteHostClient? Remote(CompanionInstance instance)
     {
         var service = instance.Definition["service"] as JsonObject;

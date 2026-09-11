@@ -116,6 +116,7 @@ internal static class Program
         services.AddSingleton<ILauncher>(platform.Launcher).AddSingleton<IHypervisorState>(platform.Hypervisor);
         services.AddSingleton<IAudioCapture>(platform.Capture).AddSingleton<IToastRaiser>(platform.Toast);
         services.AddSingleton(p => new SharedAudioCapture(platform.Capture, selectDevice: () => p.GetRequiredService<IpcSettings>().Read().MicDevice));
+        services.AddSingleton<IHostConversionCrypto, HostConversionCrypto>();
         services.AddSingleton<ITokenStore>(platform.Tokens);
         services.AddSingleton<IRemoteApi, HttpRemoteApi>().AddSingleton<IUpdateSource, HttpUpdateSource>();
         services.AddSingleton<IPrompts>(bridge.Prompts).AddSingleton<IClipboard>(bridge).AddSingleton<ICompanionDesktop>(bridge);
