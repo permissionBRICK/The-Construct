@@ -39,8 +39,9 @@
     here, so it stays on disk after the install.
 
 .PARAMETER PublishDir
-    Directory holding the published constructd executable (dotnet publish, ideally
-    self-contained so no runtime install is needed).
+    Directory holding the published constructd executable from dotnet publish.
+    Self-contained needs no runtime install; framework-dependent requires the
+    shared runtimes declared by Constructd.Api.runtimeconfig.json.
 
 .PARAMETER ListenUrl
     What the service listens on. The port from this URL is the one opened in the
@@ -449,6 +450,28 @@ function Get-ListenPort {
     }
     if ($uri.Port -le 0) { throw "-ListenUrl must include a port; got '$Url'." }
     return $uri.Port
+}
+
+function Initialize-ConstructHostInstallRecord {
+    param([string]$Dir,[ValidateSet('self-contained','framework-dependent')][string]$Source)
+    $ledgerPath=Join-Path $Dir 'install.json'
+    # The updater owns existing records. In PS 5.1 a JSON round trip can turn
+    # ISO timestamp strings into /Date(...)/ values that the service cannot read.
+    if (Test-Path -LiteralPath $ledgerPath) { return }
+    [IO.File]::WriteAllText($ledgerPath,(@{source=$Source} | ConvertTo-Json),(New-Object Text.UTF8Encoding($false)))
+}
+
+function Get-ConstructHostPublishSource {
+    param([string]$Dir,[scriptblock]$Native)
+    if (-not (Get-Command Test-ConstructSharedRuntimes -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot '../../lib/Construct.Runtime.ps1') }
+    $runtimeConfig=Join-Path $Dir 'Constructd.Api.runtimeconfig.json'
+    if (-not (Test-Path -LiteralPath $runtimeConfig)) { return 'self-contained' }
+    $config=Get-Content -LiteralPath $runtimeConfig -Raw | ConvertFrom-Json
+    if (-not $config.runtimeOptions.framework -and -not $config.runtimeOptions.frameworks) { return 'self-contained' }
+    $required=@(Get-ConstructRequiredRuntimes $runtimeConfig)
+    if (-not $Native) { $Native=${function:Invoke-ConstructRuntimeNative} }
+    if (-not (Test-ConstructSharedRuntimes $required $Native)) { throw 'The framework-dependent host needs its declared shared runtimes. Install them or use the self-contained package.' }
+    return 'framework-dependent'
 }
 
 function Get-ConstructdExe {
@@ -1176,6 +1199,7 @@ Write-Ok "Construct checkout: $ScriptsDir"
 . (Join-Path $ScriptsDir "lib\Construct.Iso.ps1")
 
 $exe = Get-ConstructdExe -Dir $PublishDir
+$installedSource = Get-ConstructHostPublishSource -Dir $PublishDir
 Write-Ok "Service executable: $exe"
 
 # Every invocation of the service executable below -- the ISO build and the admin CLI --
@@ -1650,3 +1674,8 @@ Write-Host "    powercfg /q SCHEME_CURRENT SUB_SLEEP      # this host's sleep ti
 Write-Host ""
 Write-Host "  Logs: Get-EventLog -LogName Application -Source $ServiceName -Newest 50"
 Write-Host ""
+
+# The installer consumes a pre-published directory; conversion/staging chooses the download.
+if ($PSCmdlet.ShouldProcess((Join-Path $PublishDir 'install.json'), 'Record installed package variant')) {
+    Initialize-ConstructHostInstallRecord -Dir $PublishDir -Source $installedSource
+}

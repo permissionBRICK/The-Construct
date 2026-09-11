@@ -20,9 +20,10 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - run: dotnet publish service/src/Constructd.Api -c Release -r win-x64 --self-contained true -p:InformationalVersion=1.0.0+${{ github.sha }} -p:IncludeSourceRevisionInInformationalVersion=false -o /tmp/host-publish
+      - run: dotnet publish service/src/Constructd.Api -c Release -r win-x64 --self-contained false -p:InformationalVersion=1.0.0+${{ github.sha }} -p:IncludeSourceRevisionInInformationalVersion=false -o /tmp/host-publish-fdd
       - name: Package pinned commit
         shell: pwsh
-        run: ./service/host/New-ConstructHostPackage.ps1 -PublishDir /tmp/host-publish -OutputDir /tmp/host-release -Commit "${{ github.sha }}" -Repository "$env:GITHUB_REPOSITORY"
+        run: ./service/host/New-ConstructHostPackage.ps1 -PublishDir /tmp/host-publish -FrameworkDependentPublishDir /tmp/host-publish-fdd -OutputDir /tmp/host-release -Commit "${{ github.sha }}" -Repository "$env:GITHUB_REPOSITORY"
       - name: Package source and generate shared manifest
         run: python3 scripts/package-construct-release.py --output /tmp/host-release --commit "$GITHUB_SHA" --repository "$GITHUB_REPOSITORY"
       - name: Publish complete release and advance latest

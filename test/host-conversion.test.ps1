@@ -2,6 +2,7 @@
 # Run manually on Windows PowerShell 5.1 or pwsh. No host installation or ISO download.
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
+. (Join-Path $repo 'lib/Construct.Runtime.ps1')
 function Import-Function($File, $Name) {
     $t=$null; $e=$null
     $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $repo $File),[ref]$t,[ref]$e)
@@ -29,11 +30,29 @@ try {
         # Separate archives cover valid extraction and path traversal rejection.
         $zip = Join-Path $work ([guid]::NewGuid().ToString('N') + '.zip')
         $archive=[IO.Compression.ZipFile]::Open($zip,[IO.Compression.ZipArchiveMode]::Create)
-        $entry=$archive.CreateEntry($relative); $out=New-Object IO.StreamWriter($entry.Open()); $out.Write('fixture'); $out.Dispose(); $archive.Dispose()
+        $entry=$archive.CreateEntry($relative); $out=New-Object IO.StreamWriter($entry.Open()); $out.Write('fixture'); $out.Dispose()
+        $sha=[Security.Cryptography.SHA256]::Create()
+        try { $hash=([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes('fixture')))).Replace('-','').ToLowerInvariant() } finally { $sha.Dispose() }
+        $sums=$hash+'  '+$relative+"`n"
+        $entry=$archive.CreateEntry('SHA256SUMS'); $out=New-Object IO.StreamWriter($entry.Open()); $out.Write($sums); $out.Dispose(); $archive.Dispose()
+        $sha=[Security.Cryptography.SHA256]::Create()
+        try { $sumsHash=([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($sums)))).Replace('-','').ToLowerInvariant() } finally { $sha.Dispose() }
+        $payload=@{sumsSha256=$sumsHash;uncompressedSizeBytes=(7+[Text.Encoding]::UTF8.GetByteCount($sums))}
         $refused=$false
-        try { Expand-VerifiedPackage $zip (Join-Path $work 'unpacked') } catch { $refused=$true }
+        try { Expand-VerifiedPackage $zip (Join-Path $work 'unpacked') $payload } catch { $refused=$true }
         if ($relative.Contains('..') -ne $refused) { throw "Wrong extraction decision: $relative" }
     }
+    $payload.uncompressedSizeBytes=1
+    $refused=$false; try { Expand-VerifiedPackage $zip (Join-Path $work 'bad-total') $payload } catch { $refused=$true }
+    if (-not $refused -or (Test-Path (Join-Path $work 'bad-total'))) { throw 'Declared extraction total was not checked before writing.' }
+    $bytes=[IO.File]::ReadAllBytes($zip)
+    for ($i=0; $i -lt $bytes.Length-46; $i++) {
+        if ([BitConverter]::ToUInt32($bytes,$i) -eq 0x02014b50) { [BitConverter]::GetBytes([uint32]1).CopyTo($bytes,$i+24); break }
+    }
+    $lying=Join-Path $work 'lying.zip'; [IO.File]::WriteAllBytes($lying,$bytes)
+    $payload.Remove('uncompressedSizeBytes')
+    $refused=$false; try { Expand-VerifiedPackage $lying (Join-Path $work 'lying') $payload } catch { $refused=$true }
+    if (-not $refused -or (Test-Path (Join-Path $work 'lying'))) { throw 'Dishonest entry was not checked before writing.' }
     $source = Get-Content -Raw (Join-Path $repo 'lib/AgentVm.Common.ps1')
     if ($source -match 'Name\s*=\s*"(VirtualMachinePlatform|HypervisorPlatform|Microsoft-Windows-Subsystem-Linux)"') { throw 'Obsolete WSL feature prerequisite remains.' }
     $rsa=New-Object Security.Cryptography.RSACryptoServiceProvider(2048)
