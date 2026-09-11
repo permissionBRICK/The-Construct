@@ -2,7 +2,7 @@ using System.Threading.Channels;
 using Construct.Companion.Core.Abstractions;
 namespace Construct.Companion.Host.Runtime;
 
-public sealed class RuntimeSupervisor(IRuntimeRegistry registry, Func<RuntimeInstance, InstanceRuntime> createRuntime, RuntimeMessageBus bus) : IAsyncDisposable
+public sealed class RuntimeSupervisor(IRuntimeRegistry registry, Func<RuntimeInstance, InstanceRuntime> createRuntime, RuntimeMessageBus bus, Func<string, CancellationToken, Task<IAsyncDisposable?>>? acquireRetarget = null, IClock? retryClock = null) : IAsyncDisposable
 {
     private readonly SemaphoreSlim serial = new(1);
     private readonly CancellationTokenSource stop = new();
@@ -10,6 +10,27 @@ public sealed class RuntimeSupervisor(IRuntimeRegistry registry, Func<RuntimeIns
     private readonly Dictionary<string, InstanceRuntime> runtimes = [];
     private IDisposable? watch;
     private Task loop = Task.CompletedTask;
+    private readonly object retryGate = new();
+    private bool retryScheduled;
+    private Task retry = Task.CompletedTask;
+    private void ScheduleRetry()
+    {
+        lock (retryGate)
+        {
+            if (retryScheduled || stop.IsCancellationRequested) return;
+            retryScheduled = true; retry = RetryAsync();
+        }
+    }
+    private async Task RetryAsync()
+    {
+        try
+        {
+            await (retryClock ?? new SystemClock()).DelayAsync(TimeSpan.FromMilliseconds(250), stop.Token).ConfigureAwait(false);
+            lock (retryGate) retryScheduled = false;
+            changes.Writer.TryWrite(true);
+        }
+        catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+    }
     public async Task StartAsync(CancellationToken token = default)
     {
         await serial.WaitAsync(token).ConfigureAwait(false);
@@ -42,7 +63,10 @@ public sealed class RuntimeSupervisor(IRuntimeRegistry registry, Func<RuntimeIns
                 {
                     if (definition is not null && runtimes[name].Instance with { HostLabel = definition.HostLabel } == definition)
                     { await runtimes[name].SetHostLabelAsync(definition.HostLabel, linked.Token).ConfigureAwait(false); continue; }
+                    await using var lease = acquireRetarget is null ? null : await acquireRetarget(name, linked.Token).ConfigureAwait(false);
+                    if (acquireRetarget is not null && lease is null) { ScheduleRetry(); continue; }
                     var old = runtimes[name]; runtimes.Remove(name); await old.DisposeAsync().ConfigureAwait(false); bus.RemoveInstance(name);
+                    if (definition is not null) { var replacement = createRuntime(definition); runtimes.Add(name, replacement); replacement.Start(); }
                 }
             foreach (var definition in entries)
             {
@@ -55,7 +79,7 @@ public sealed class RuntimeSupervisor(IRuntimeRegistry registry, Func<RuntimeIns
     }
     public async ValueTask DisposeAsync()
     {
-        await stop.CancelAsync().ConfigureAwait(false); watch?.Dispose(); watch = null; await loop.ConfigureAwait(false);
+        await stop.CancelAsync().ConfigureAwait(false); watch?.Dispose(); watch = null; await loop.ConfigureAwait(false); await retry.ConfigureAwait(false);
         await serial.WaitAsync().ConfigureAwait(false);
         try { foreach (var runtime in runtimes.Values) await runtime.DisposeAsync().ConfigureAwait(false); runtimes.Clear(); }
         finally { serial.Release(); }

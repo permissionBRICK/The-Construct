@@ -110,13 +110,13 @@ function lifecycleLaunches() {
   for(const script of ["C:\\Construct dir\\script.ps1","C:/it's here/script.ps1"])for(const elevate of [false,true])for(const keepOpen of [false,true])for(const argSpec of [null,[{flag:"-FromPanel"},{flag:"-GitUserName",value:"-user 'quote' \"double\""},{flag:"-Path",value:"C:\\space here\\"}]]){
     const args=argSpec?m.flattenArgPairs(argSpec):["-FromPanel","-Name","a'b", "", "C:\\space here\\"];
     const opts={elevate,keepOpen,argSpec}; rows.push({script,args,opts,output:m.buildHostLaunch(script,args,opts),child:m.buildChildCommandLine(script,args,opts)});
-  }return rows;
+  }rows.push({kind:"installGit",output:{file:"cmd.exe",spawnArgs:["/c","start","","powershell.exe","-EncodedCommand",Buffer.from("winget install --id Git.Git -e --source winget","utf16le").toString("base64")],command:"winget install --id Git.Git -e --source winget"}});return rows;
 }
 function vmPower() {
   const m=require("../src/vmpower");const rows=[];
   for(const name of [null,"Agent-VM","dev","a'b", "name with space"])for(const kind of ["state","checkpoints","start"]){const output=kind==="state"?m.buildStateProbeLaunch(name):kind==="checkpoints"?m.buildAutoCheckpointProbeLaunch(name):m.buildElevatedCommandLaunch(m.buildStartCommand(name));rows.push({kind,name,output});}
   for(const input of ["","noise\nVMSTATE=Running\n","VMSTATE=Off","VMSTATE=Saved","VMSTATE=Paused","VMSTATE=Starting","VMSTATE=absent","VMSTATE=unknown","VMAUTOCHK=True","VMAUTOCHK=False","VMAUTOCHK=unsupported","VMAUTOCHK=absent"]) rows.push({kind:"parse",input,state:m.parseVmState(input),checkpoints:m.parseAutoCheckpoints(input)});
-  return rows;
+  rows.push({kind:"shutdown",output:m.SHUTDOWN_CMD}); return rows;
 }
 function probeParsing() {
   const m=require("../src/probe");
@@ -340,7 +340,44 @@ function instanceFingerprints() {
 function stateJsonBytes() {
  return [{z:"🧱ü\u2028",a:"\u0001\n\t\\\""},{values:[1e-7,1e-6,1e20,1e21,-0,1.0,123.45]}, {"10":"ten","2":"two",version:1,instance:"dev"}].map(value=>{const input=sortKeys(value);return{input,output:JSON.stringify(input,null,2)+"\n"};});
 }
-async function exportAll() { return { "config-sync": configSync(), "notify-runtime": notifyRuntime(), "audio-runtime": audioRuntime(), "repatch-runtime": repatchRuntime(), "forward-runtime": forwardRuntime(), "guest-scripts": guestScripts(), "ssh-args": sshArgs(), "host-label": hostLabel(), "shell-quoting": shellQuoting(), "settings-mapping": settingsMapping(), "instance-identity": instanceIdentity(), "registry-state": registryState(), "lifecycle-invocations": lifecycleInvocations(), "lifecycle-launches": lifecycleLaunches(), "vm-power": vmPower(), "probe-parsing": probeParsing(), "usage-parsing": usageParsing(), "updates-planning": updatesPlanning(), "remote-identity": remoteIdentity(), "t3-pure": t3Pure(), "remote-routes": remoteRoutes(), "t3-discovery": await t3Discovery(), "state-json-bytes": stateJsonBytes(), "agent-updates": await agentUpdates(), "agent-update-scripts": agentUpdateScripts(), "usage-exports": usageExports(), "instance-fingerprints": instanceFingerprints() }; }
+function hostAdminIpc() {
+ const m=require("../src/hostadmin"), f=require("../src/forwarder-ui"), rows=[], now=Date.parse("2026-09-11T12:00:00Z");
+ const add=(kind,input,output)=>rows.push({kind,input,output,now});
+ for(const input of [null,{}, {repos:[]},{repos:[{url:"https://example.test/a.git"}]},{repos:[{url:"git@host:repo.git"}]},{repos:[{directory:"a/b",url:"x"}]},{repos:[{directory:"../escape",url:"x"}]},{repos:[{directory:"a#b",url:"x"}]},{repos:[{url:"a"},{url:"b"}]}])add("projectOpenPath",input,require("../src/remote").projectOpenPath(input));
+ for(const code of ["cascade-confirmation-required","cascade-scope-changed","cascade-token-expired","other"])for(const status of [409,400]) add("cascadeKind",{code,status},m.cascadeKindOf({code,status}));
+ for(const problem of [{},{code:"cascade-scope-changed",children:["child"]},{children:[{name:"one",sharing:"host",state:"Running",diskGb:4,mediaCount:2},{name:"two",sharing:"private"}],cascadeToken:"fake",expiresAt:"2026-09-11T13:00:00Z"}])add("cascade",{primary:"agent-vm",problem},m.cascadeConfirmation({primary:"agent-vm",problem}));
+ for(const backend of ["hyperv-local","hyperv-remote"]) for(const health of [{},{apiFeatures:["host-admin"]},{apiFeatures:["host-admin","updates"],status:"maintenance",maintenance:{phase:"draining",retryAfterSeconds:5}}]) for(const whoami of [{name:"alice",role:"admin"},{name:"bob",role:"user"},{known:false},{enabled:false}]) {
+  const input={backend,host:"host.example",health,whoami};add("classify",input,m.classifyHost(input));
+ }
+ for(const status of [0,401,403,404,503])for(const source of ["healthError","whoamiError"]) {
+  const input={host:"host.example",health:{apiFeatures:["host-admin"]},[source]:{status,message:"Host request failed.",code:status===503?"maintenance":""}};add("classify",input,m.classifyHost(input));
+ }
+ for(const input of [{},{mode:"admin",activeTab:"vms"},{mode:"admin",features:{updates:true}},{mode:"user"},{maintenance:{phase:"draining"}},{updatePending:{id:"one"}}])add("poll",input,m.pollIntervalMs(input));
+ for(const input of [null,"", "5m", "4m", "24h", "2d", "never", "NEVER", " 12h ", "0m", "-5h", "99999999999999999999d", "five"])
+  add("lifetime",input,m.parseLifetime(input));
+ for(const features of [[],["host-admin"],["host-admin","children","updates"],["host-admin","children","media","updates","network","console"]]) {
+  const input={apiFeatures:features}; add("features",input,m.featureSet(input)); add("tabs",input,m.tabsFor({features:m.featureSet(input)}));
+ }
+ for(const form of [{},{name:"alice",role:"admin",enabled:"false",maxVms:"3",allowHostForwards:"true"},{name:"",role:"root",enabled:"invalid",maxVms:"-1"},{allowChildCreation:"true",maxRetainedChildren:"4",cpuBudget:"8",ramBudgetGiB:"1.5",storageBudgetGiB:"100",maxChildLifetime:"24h",allowNeverLifetime:"false",allowSharing:"inherit"},{maxChildLifetime:"never",ramBudgetGiB:"bad",maxRetainedChildren:"1.5"}])
+  for(const [kind,fn] of [["allowance","parseAllowanceForm"],["overrides","parseOverridesForm"],["userForm","parseUserForm"],["newUser","parseNewUserForm"]]) add(kind,form,m[fn](form));
+ for(const timeoutMinutes of [0,1,5.8,99,-5,"bad","45"])for(const action of ["shutdown","save","SAVE","unknown"]) {
+  const input={policy:{timeoutMinutes,action},max:30}; add("idleClamp",input,f.clampIdlePolicy(input.policy,input.max)); add("idle",{timeoutMinutes,action,maxTimeoutMinutes:30},f.toPanelIdlePolicy({timeoutMinutes,action,maxTimeoutMinutes:30}));
+ }
+ const vm={name:"build",kind:"child",parent:"agent-vm",owner:"alice",sharing:"host",state:"running",hardware:{cpus:4,ramMb:2048,diskGb:80},lease:{state:"active",requested:"12h",expiresAt:"2026-09-11T13:00:00Z"},allowedActions:["shutdown","delete","invented"],resourceUsage:{cpuUsagePercent:25.5,memoryDemandBytes:1073741824,memoryAssignedBytes:2147483648,diskFileBytes:123456789,observedAt:"2026-09-11T11:59:55Z"}};
+ for(const input of [{},vm,{...vm,state:"paused",deleting:true,lease:{state:"overdue",lastOutcome:"no integration"}},{name:"agent-vm",kind:"primary",children:["build"],guest:{constructCommit:"abcdef0123456789",provisionedAt:"2026-09-11T11:30:00Z"}}]) {
+  add("vm",input,m.toVmRow(input,now)); add("childDelete",input,m.childDeleteConfirmation(input)); add("children",[input],m.childRows([input],now));
+ }
+ add("vms",[vm,{name:"agent-vm"},{name:"orphan",kind:"child",parent:"gone"}],m.toVmRows([vm,{name:"agent-vm"},{name:"orphan",kind:"child",parent:"gone"}],now));
+ for(const [kind,fn] of [["overview","toOverview"],["capacity","toCapacityBars"],["media","toMediaRow"],["iso","toIsoCatalogView"],["job","toJobRow"],["audit","toAuditRow"],["config","toConfigView"],["capabilities","toCapabilityRows"],["updates","toUpdateView"],["updateActions","updateActionsFor"],["user","toUserRow"],["allowanceForm","allowanceForm"],["allowanceText","allowanceText"]]) {
+  add(kind,{},m[fn]({}));
+ }
+ for(const state of ["checking","staged","draining","handedOff","applying","interrupted","recoveryFailed","succeeded","failed","cancelled"]) {
+  const input={current:{id:"u1",state},installed:{commit:"1234567"},latestKnown:{commit:"abcdef0",compatible:true,reasons:[]}}; add("updates",input,m.toUpdateView(input)); add("updateActions",input,m.updateActionsFor(input));
+  const job={id:"j1",kind:"child-delete",state,vmName:"build"};add("job",job,m.toJobRow(job));
+ }
+ return rows;
+}
+async function exportAll() { return { "hostadmin-ipc": hostAdminIpc(), "config-sync": configSync(), "notify-runtime": notifyRuntime(), "audio-runtime": audioRuntime(), "repatch-runtime": repatchRuntime(), "forward-runtime": forwardRuntime(), "guest-scripts": guestScripts(), "ssh-args": sshArgs(), "host-label": hostLabel(), "shell-quoting": shellQuoting(), "settings-mapping": settingsMapping(), "instance-identity": instanceIdentity(), "registry-state": registryState(), "lifecycle-invocations": lifecycleInvocations(), "lifecycle-launches": lifecycleLaunches(), "vm-power": vmPower(), "probe-parsing": probeParsing(), "usage-parsing": usageParsing(), "updates-planning": updatesPlanning(), "remote-identity": remoteIdentity(), "t3-pure": t3Pure(), "remote-routes": remoteRoutes(), "t3-discovery": await t3Discovery(), "state-json-bytes": stateJsonBytes(), "agent-updates": await agentUpdates(), "agent-update-scripts": agentUpdateScripts(), "usage-exports": usageExports(), "instance-fingerprints": instanceFingerprints() }; }
 if (require.main === module) (async () => {
   fs.mkdirSync(directory, { recursive: true });
   for (const [area, value] of Object.entries(await exportAll())) fs.writeFileSync(path.join(directory, area + ".json"), serialize(value));

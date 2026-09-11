@@ -33,13 +33,15 @@ public sealed class PlanningParityTests
                 var opts = O("opts")!; var instance = opts["instance"] as JsonObject; var declared = opts["instanceParams"] is JsonArray d ? d.Select(StateJson.String).ToArray() : null;
                 Equal("output", LifecycleBuilder.BuildInvocation(S("action"), opts)); Value("args", LifecycleBuilder.InstanceArgs(S("action"), instance, declared)); Value("params", LifecycleBuilder.ParamsForAction(S("action"), instance, declared)); break;
             case "lifecycle-launches":
+                if (S("kind") == "installGit") { var git = PowerShellLaunch.BuildInstallGitLaunch(); Equal("output", new JsonObject { ["file"] = git.File, ["spawnArgs"] = JsonSerializer.SerializeToNode(git.SpawnArgs), ["command"] = git.Command }); break; }
                 var launchOpts = O("opts")!; var args = row["args"]!.AsArray().Select(StateJson.String).ToArray();
                 var launch = PowerShellLaunch.BuildHostLaunch(S("script"), args, StateJson.Boolean(launchOpts["elevate"]) == true, StateJson.Boolean(launchOpts["keepOpen"]) == true, launchOpts["argSpec"] as JsonArray);
                 Equal("output", new JsonObject { ["file"] = launch.File, ["spawnArgs"] = JsonSerializer.SerializeToNode(launch.SpawnArgs), ["command"] = launch.Command });
                 Value("child", PowerShellLaunch.BuildChildCommandLine(S("script"), args, StateJson.Boolean(launchOpts["keepOpen"]) == true));
                 var runner = new FakeProcessRunner(); await runner.RunAsync(launch.Invocation()); Assert.Equal(launch.SpawnArgs, runner.Invocations.Single().Arguments); break;
             case "vm-power":
-                if (S("kind") == "parse") { Value("state", VmPower.ParseVmState(S("input"))); Value("checkpoints", VmPower.ParseAutoCheckpoints(S("input"))); }
+                if (S("kind") == "shutdown") Value("output", VmPower.ShutdownCommand);
+                else if (S("kind") == "parse") { Value("state", VmPower.ParseVmState(S("input"))); Value("checkpoints", VmPower.ParseAutoCheckpoints(S("input"))); }
                 else
                 {
                     var probeLaunch = S("kind") == "state" ? VmPower.BuildStateProbeLaunch(StateJson.Text(row["name"])) : S("kind") == "checkpoints" ? VmPower.BuildAutoCheckpointProbeLaunch(StateJson.Text(row["name"])) : VmPower.BuildElevatedCommandLaunch(VmPower.BuildStartCommand(StateJson.Text(row["name"])));
