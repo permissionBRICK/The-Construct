@@ -20,6 +20,7 @@ internal sealed class DesktopHostBridge : ICompanionDesktop, IClipboard, IDispos
         public Task<string?> InputAsync(InputPrompt prompt, CancellationToken cancellationToken = default) => throw new InvalidOperationException("Selftest cannot prompt.");
         public Task<IReadOnlyList<string>?> PickAsync(PickPrompt prompt, CancellationToken cancellationToken = default) => throw new InvalidOperationException("Selftest cannot prompt.");
         public Task<bool> ConfirmAsync(string title, string message, CancellationToken cancellationToken = default) => throw new InvalidOperationException("Selftest cannot prompt.");
+        public Task ShowSecretOnceAsync(string title, Secret value, string note, CancellationToken cancellationToken = default) => throw new InvalidOperationException("Selftest cannot prompt.");
         public Task<string?> SaveFileAsync(SaveFilePrompt prompt, CancellationToken cancellationToken = default) => throw new InvalidOperationException("Selftest cannot prompt.");
     }
     public Task ActivateAsync(UiActivation activation, CancellationToken cancellationToken = default) =>

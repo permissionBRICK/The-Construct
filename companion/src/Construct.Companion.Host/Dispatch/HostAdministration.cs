@@ -18,7 +18,7 @@ namespace Construct.Companion.Host.Dispatch;
 // The port of hostadmin.js + hostadmin-ui.js: enrolment, per-host admin models driven by
 // hostadmin.* messages, the host extras of an instance (children, offer, idle policy) and polling.
 public sealed partial class HostAdministration(IStateFileSystem files, ITokenStore tokens, IRemoteApi api,
-    IPrompts prompts, ILauncher launcher, IClock clock, IpcSettings settings, IpcEvents events, RuntimeMessageBus bus, CompanionInstances instances)
+    IPrompts prompts, ILauncher launcher, IClock clock, IpcSettings settings, IpcEvents events, RuntimeMessageBus bus, CompanionInstances instances, RemoteVmWizard vmWizard)
 {
     private readonly ConcurrentDictionary<string, JsonArray> childCache = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim enrollment = new(1, 1);
@@ -31,6 +31,27 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
         foreach (var definition in instances.Registry.List())
             if (definition["service"] is JsonObject service && Text(service["url"]).Length > 0) hosts.TryAdd(HostIdentity.HostSlug(Text(service["url"])), service);
         return hosts.Select(h => new HostRecord(h.Key, HostIdentity.NormalizeServiceUrl(Text(h.Value["url"])), Text(h.Value["auth"]) == "token" ? "token" : "negotiate", HostIdentity.ReadPin(files, Text(h.Value["url"])).Length > 0, models.TryGetValue(h.Key, out var model) ? Text(model.View["mode"]) == "admin" : null)).ToArray();
+    }
+    public async Task CreateFirstVmAsync(string? preferred, CancellationToken ct)
+    {
+        var available = List();
+        if (available.Count == 0)
+        {
+            if (await prompts.ConfirmAsync(new ConfirmationPrompt("No Construct remote host is configured yet.", "", "Add a remote host"), ct))
+            {
+                var url = await prompts.InputAsync(new("Add remote host", "Construct host URL"), ct); if (string.IsNullOrWhiteSpace(url)) return;
+                var token = await prompts.InputAsync(new("Add remote host", "API token (leave empty for Windows sign-in)", Password: true), ct); if (token is null) return;
+                await AddAsync(new(url, token.Length == 0 ? null : token), ct);
+            }
+            return;
+        }
+        var host = preferred is null ? available[0] : available.FirstOrDefault(h => h.Slug == preferred) ?? throw new IpcFailure(404, "hostNotFound", "Unknown host.");
+        if (preferred is null && available.Count > 1)
+        {
+            var choice = await prompts.PickAsync(new("Create a VM on which host?", available.Select(h => new PickItem(h.Slug, new Uri(h.Url).Host, h.Url)).ToArray()), ct);
+            if (choice?.FirstOrDefault() is not {} slug) return; host = available.Single(h => h.Slug == slug);
+        }
+        await vmWizard.RunAsync(host, ct);
     }
     public JsonObject Snapshot(string slug) => new() { ["type"] = "hostadmin.state", ["state"] = Get(slug).View.DeepClone() };
     public async Task<HostRecord> AddAsync(AddRemoteHost input, CancellationToken ct)
@@ -244,7 +265,7 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
     {
         if (action is "loadVmSettings" or "setVmSettings")
         { await VmSettingsAction(m, client, action, args, ct); return; }
-        if (Text(m.State["mode"]) != "admin" && action is not ("shutdownVm" or "deleteVm" or "cancelJob")) { Notice(m, "Not an administrator of this host."); return; }
+        if (Text(m.State["mode"]) != "admin" && action is not ("shutdownVm" or "deleteVm" or "cancelJob" or "createFirstVm")) { Notice(m, "Not an administrator of this host."); return; }
         if (m.State["maintenance"] is not null && action is not ("refresh" or "updatesApply" or "updatesResolve")) { Notice(m, "The host is updating; mutations are disabled until it is back."); return; }
         var name = Text(args["name"]); var id = Text(args["id"]); JsonNode? result = null;
         m.State["notice"] = null;
@@ -300,8 +321,8 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
             case "loadOverrides":
                 result = await client.OverridesAsync(name, ct); events.HostAdmin(m.Host.Slug, new { type = "hostadmin.overrides", name, stored = HostAdminViews.AllowanceForm(result?["stored"]), effective = HostAdminViews.AllowanceText(result?["effective"]), problems = Array.Empty<object>() }); return;
             case "listTokens":
-                result = await client.UserTokensAsync(name, ct); events.HostAdmin(m.Host.Slug, new { type = "hostadmin.tokens", name, tokens = result }); return;
-            case "issueToken": case "rotateVmToken": Notice(m, "One-time secret display is not implemented by the desktop prompt seam. Use the host CLI to issue or rotate tokens."); return;
+                await PushTokens(m, client, name, ct); return;
+            case "issueToken": case "rotateVmToken": await SecretAction(m, client, action, args, ct); return;
             case "revokeToken": result = await client.RevokeUserTokenAsync(name, id, ct); break;
             case "revokeVmToken": result = await client.RevokeVmTokenAsync(name, ct); break;
             case "saveConfig": result = await client.PutHostConfigAsync(RequireSections(args), ct); events.HostAdmin(m.Host.Slug, new { type = "hostadmin.configSaved" }); break;
@@ -311,7 +332,7 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
             case "updatesCancel": result = await client.UpdatesCancelAsync(new JsonObject { ["updateId"] = args["updateId"]?.DeepClone() }, ct); break;
             case "updatesResolve": RequireResolve(args); result = await client.UpdatesResolveAsync(new JsonObject { ["updateId"] = args["updateId"]?.DeepClone(), ["action"] = args["action"]?.DeepClone() }, ct); break;
             case "updatesUpdate": await StartUpdate(m, client, ct); break;
-            case "createFirstVm": Notice(m, "Use New Remote VM in VS Code; the creation wizard is not yet ported."); return;
+            case "createFirstVm": await CreateFirstVmAsync(m.Host.Slug, ct); await Load(m, client, ct); return;
             default: Notice(m, "Unknown host-administration action."); return;
         }
         m.State["notice"] = new JsonObject { ["level"] = "info", ["text"] = "Host action completed." };

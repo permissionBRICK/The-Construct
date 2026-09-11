@@ -37,6 +37,48 @@ public sealed class RefreshCacheTests
         finally { await host.StopAsync(); }
     }
     [Theory]
+    [InlineData("panel", true)] [InlineData("popup", true)] [InlineData("settings", true)]
+    [InlineData("panel", false)] [InlineData("popup", false)] [InlineData("settings", false)]
+    public async Task HttpOpeningBypassesOnceAndPublishesTheCompletedSnapshot(string view, bool explicitInstance)
+    {
+        var clock = new FakeClock(); var source = new FakeUpdateSource();
+        await using var host = await HttpTests.Harness.Start(s => { s.AddSingleton<IClock>(clock); s.AddSingleton<IUpdateSource>(source); }, runtimeJobs: false);
+        host.Files.WriteFileAtomic("/fake/scripts/.construct-settings.json", "{\"installedCommit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}"u8);
+        JsonObject Manifest(char commit) => new() { ["schemaVersion"] = 1, ["repository"] = UpdatePlanner.DefaultRepository, ["ref"] = "refs/heads/main",
+            ["commit"] = new string(commit, 40), ["releaseTag"] = "host-" + new string(commit, 40),
+            ["sourceAsset"] = "construct-source-" + new string(commit, 40) + ".zip", ["sourceSha256"] = new string('c', 64), ["sourceSizeBytes"] = 100,
+            ["payloadAsset"] = "construct-host-" + new string(commit, 7) + "-win-x64.zip", ["payloadSha256"] = new string('d', 64), ["payloadSizeBytes"] = 100 };
+        var entry = host.App.Services.GetRequiredService<CompanionInstances>().Get("agent-vm");
+        ((FakeSshTransport)entry.Ssh).ScriptHandler = (_, _) => Task.FromResult(new ProcessResult(0, "{}"));
+        source.Responses.Enqueue(Manifest('a'));
+        using var first = await host.Post("/v1/instances/agent-vm/messages", new { type = "ready" });
+        Assert.Single(source.Requests);
+        source.Responses.Enqueue(Manifest('b'));
+        using var opened = await host.Post("/v1/ui/activate", new { view, instance = explicitInstance ? "agent-vm" : null });
+        Assert.Equal(2, source.Requests.Count);
+        var snapshot = System.Text.Json.Nodes.JsonNode.Parse(await host.Client.GetStringAsync("/v1/instances/agent-vm/snapshot"));
+        Assert.True(snapshot!["state"]!["state"]!["update"]!["available"]!.GetValue<bool>());
+        using var ordinary = await host.Post("/v1/instances/agent-vm/messages", new { type = "ready" });
+        Assert.Equal(2, source.Requests.Count);
+        var desktop = host.Get<FakeCompanionDesktop, ICompanionDesktop>();
+        Assert.True(Assert.Single(desktop.Activations).RefreshScheduled);
+        using var admin = await host.Post("/v1/ui/activate", new { view = "hostadmin" });
+        Assert.Equal(2, source.Requests.Count);
+    }
+    [Fact]
+    public async Task BypassRefreshesTheSharedCacheWithoutAdvancingTheClock()
+    {
+        var source = new FakeUpdateSource(); var cache = new CachedUpdateSource(source, new FakeClock());
+        var url = new Uri("https://example.test/manifest.json");
+        source.Responses.Enqueue(new JsonObject { ["version"] = 1 });
+        source.Responses.Enqueue(new JsonObject { ["version"] = 2 });
+        await cache.GetJsonAsync(url);
+        await cache.Bypass().GetJsonAsync(url);
+        var result = await cache.GetJsonAsync(url);
+        Assert.Equal(2, source.Requests.Count);
+        Assert.Equal(2, result!["version"]!.GetValue<int>());
+    }
+    [Theory]
     [InlineData(false)] [InlineData(true)]
     public async Task ManyTicksShareOneUpstreamLookupUntilItsTtl(bool success)
     {
@@ -44,7 +86,7 @@ public sealed class RefreshCacheTests
         source.Responses.Enqueue(success ? new JsonObject { ["version"] = "1" } : null);
         source.Responses.Enqueue(new JsonObject { ["version"] = "2" });
         var cache = new CachedUpdateSource(source,clock); var url = new Uri("https://example.test/agent/stable");
-        for (var i=0;i<10;i++) { await cache.GetJsonAsync(url); clock.Advance(TimeSpan.FromSeconds(success ? 59 : 5)); }
+        for (var i=0;i<10;i++) { await cache.GetJsonAsync(url); clock.Advance(TimeSpan.FromSeconds(success ? 29 : 5)); }
         Assert.Single(source.Requests);
         clock.Advance(TimeSpan.FromSeconds(10)); await cache.GetJsonAsync(url); Assert.Equal(2,source.Requests.Count);
         await cache.GetJsonAsync(url); Assert.Equal(2,source.Requests.Count);
@@ -70,6 +112,14 @@ public sealed class UpdateBannerStateTests
             var entry = host.Services.GetRequiredService<CompanionInstances>().Get("agent-vm");
             ((FakeSshTransport)entry.Ssh).ScriptHandler = (_,_) => Task.FromResult(new ProcessResult(0,"{}"));
             await host.Services.GetRequiredService<MessageDispatcher>().RefreshAsync(entry,CancellationToken.None,probe:false);
+            Assert.Single(source.Requests);
+            await host.Services.GetRequiredService<MessageDispatcher>().RefreshAsync(entry,CancellationToken.None,probe:false);
+            Assert.Single(source.Requests);
+            // A freshly shown window bypasses the cache even at the same clock tick.
+            source.Responses.Enqueue(null);
+            await host.Services.GetRequiredService<MessageDispatcher>().DispatchAsync(entry.Name,new() { ["type"] = "ready", ["surfaceOpened"] = true },CancellationToken.None);
+            Assert.Equal(2, source.Requests.Count);
+            Assert.Null(host.Services.GetRequiredService<StateAggregation>().State(entry.Name)["state"]!["constructUpdate"]);
             // The next probe publishes a bare state message; the aggregation rebuilds from it plus the stored enrichment.
             host.Services.GetRequiredService<Host.Runtime.RuntimeMessageBus>().Publish("agent-vm", new { type = "state", instance = "agent-vm", state = new { online = true, vmState = "running" } });
             var rebuilt = host.Services.GetRequiredService<StateAggregation>().State("agent-vm")["state"]!.AsObject();
