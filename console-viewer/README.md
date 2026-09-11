@@ -90,11 +90,25 @@ traffic, forbidden protocol instructions, active-stream expiry, disconnect
 cleanup, host authorization and credential lifecycle. See the dated field-test
 notes for the real STANDPC browser test.
 
+Optional local rendering checks use Playwright with Chromium:
+`python console-viewer/test_rendering.py -v`. Set `CONSTRUCT_TEST_CHROMIUM` to an
+existing Chromium executable if needed. These exercise native image decoding,
+frame cleanup, failed images, cancellation, reconnect and the non-WebCodecs
+fallback without a host or VM. Ordinary Python test discovery skips them when
+Playwright is unavailable.
+
 ## Third-party assets
 
 `static/guacamole-1.6.0.min.js` is Apache's `guacamole-common-js/all.min.js`, extracted
-unmodified from the official 1.6.0 WAR. Apache license/notice files are included.
+from the official 1.6.0 WAR with one marked, readable Construct patch to
+`Display.drawStream`. Upstream leaves decoded `VideoFrame` objects open and decode
+rejections block its display queue. The patch closes frames after drawing or
+cancellation, closes decoders, stops feeding closed streams, and surfaces errors
+through `display.onerror`. The viewer cancels queued rendering on disconnect.
+Apache license/notice files are included. Keep this patch when replacing the
+bundle unless upstream has fixed these paths; run the rendering checks above.
 WAR: https://archive.apache.org/dist/guacamole/1.6.0/binary/guacamole-1.6.0.war
 SHA-256: `b41ceb1e2df010b54db563e0b00edb8d5fe9f073c6168462e4c978df0fc6e716`
-JS SHA-256: `cc89f710ecc544477dbe6bfea453fab752dafa1b1ab9770f523676e7b744b44a`
+Original JS SHA-256: `cc89f710ecc544477dbe6bfea453fab752dafa1b1ab9770f523676e7b744b44a`
+Patched JS SHA-256: `89657877ac1c06f958f6f8f83b0b1811f464389c5c054c0f55d634639aa64fd5`
 guacd image: `guacamole/guacd@sha256:8974eaa9ba32f713daf311e7cc8cd7e4cdfba1edea39eed75524e78ef4b08f4f`
